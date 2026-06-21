@@ -1874,6 +1874,200 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
   }
 
+  // ── Snapshot crossfade / morph (round-2 #1) ───────────────────────────
+  //
+  // morphToLook(look, durationMs) is the RAMPED sibling of recallLook(): it
+  // brings the live mix to `look` by ANIMATING current→target over durationMs
+  // instead of the instant teardown+rebuild recallLook does. It reuses the
+  // engine's existing animation machinery wholesale — per-channel fadeChannel
+  // transitions[], the grand-master _masterFade, and the morph group fades
+  // (_groupFades) — and owns the build (T channels) + CPC bookkeeping. The
+  // mixer's _morph descriptor + _tickMorph drive the single completion
+  // finalizer (onMorphComplete, wired below) that CPC-unregisters the
+  // faded-out channels, persists, and broadcasts.
+  //
+  // Channel semantics (match by channel ID), v1 RAMP LEVELS ONLY:
+  //   M (id in both):    SNAP structural/chroma (rebuild content so a changed
+  //                      pattern/mode/view/faderMax/color/hue/group takes
+  //                      effect at kickoff), but RAMP the fader current→target.
+  //   T (target only):   build at fader 0 + enabled, then ramp 0→target fader.
+  //   C (current only):  ramp fader →0 with destroyOnComplete; the finalizer
+  //                      CPC-unregisters the id (removeChannel does NOT).
+  // Master: startMasterFade. Groups: ramp the fader of groups present in BOTH;
+  // snap (no ramp) groups that are target-only (they didn't exist to ramp
+  // from). Deck: SNAP content (mission-critical never-dark), RAMP its fader.
+  //
+  // v1 DEFERRALS (documented, additive-safe): hue/color/faderMax are SNAPPED
+  // at kickoff, not ramped — color is metadata (no render), faderMax is a
+  // non-linear ceiling, hue is angular (needs short-arc interpolation). See
+  // docs/39 §10.8. Fader-locked channels are skipped by fadeChannel (their
+  // parked level is sacred); their structural snap still applies.
+  //
+  // Throws on a structurally invalid look (over-cap UNION, deck rebuild
+  // failure) so the route surfaces a real error instead of half-applying.
+  // The UNION cap check is the transient-cap guard: while a morph is in
+  // flight the current-only (C) channels still exist (fading out) WHILE the
+  // target-only (T) channels are added, so the peak channel count is the
+  // union, not the target count. Over-cap ⇒ fail-loud SNAPSHOT_OVER_CAP, no
+  // silent truncation (Codex P0).
+  function morphToLook(look, durationMs) {
+    if (!look || typeof look !== 'object') {
+      throw new Error('morphToLook: look must be an object');
+    }
+    if (!Number.isFinite(durationMs) || durationMs <= 0) {
+      // Defensive re-validation — the route validates first, but never mutate
+      // on a bad duration.
+      const err = new Error(`morphToLook: durationMs must be finite > 0, got ${durationMs}`);
+      err.code = 'MORPH_BAD_DURATION';
+      throw err;
+    }
+
+    const targetOverlays = (Array.isArray(look.channels) ? look.channels : [])
+      .filter(s => s && !(typeof s.id === 'string' && s.id.startsWith('ch_base')));
+    const currentOverlays = mixer.getMixerChannels();
+
+    // ── Transient UNION cap check (BEFORE any mutation) ──────────────────
+    const unionIds = new Set();
+    for (const c of currentOverlays) unionIds.add(c.id);
+    for (const s of targetOverlays) if (s && typeof s.id === 'string') unionIds.add(s.id);
+    if (unionIds.size > mixer.maxChannels) {
+      const err = new Error(
+        `Morph would peak at ${unionIds.size} overlays (current ∪ target) but the ` +
+        `mixer cap is ${mixer.maxChannels}`);
+      err.code = 'SNAPSHOT_OVER_CAP';
+      throw err;
+    }
+
+    // Classify by id. M = in both, T = target-only, C = current-only.
+    const targetById = new Map();
+    for (const s of targetOverlays) if (s && typeof s.id === 'string') targetById.set(s.id, s);
+    const currentById = new Map();
+    for (const c of currentOverlays) currentById.set(c.id, c);
+
+    // ── Arm the morph descriptor + cancel any conflicting in-flight state ─
+    // Kickoff cancels/replaces a prior morph, the grand-master fade (auto via
+    // startMasterFade below), per-channel transitions (auto via fadeChannel's
+    // cancelChannelTransition), the deck swap, and clears solo (transient —
+    // a stuck solo would gate the morph's losers to black mid-ramp).
+    mixer.cancelMorph();
+    mixer.cancelAllGroupFades();
+    mixer.cancelDeckPatternSwap();
+    mixer.soloedChannelIds.clear();
+    if (typeof mixer.clearBumps === 'function') mixer.clearBumps();
+
+    // ── C: current-only channels ramp to 0 + are removed on completion ───
+    // Schedule the fade-out FIRST (before rebuilds) so destroyOnComplete +
+    // the finalizer CPC-unregister own the teardown. fadeChannel refuses
+    // fader-locked channels (returns false) — those stay put; document.
+    const fadeOutIds = [];
+    for (const c of currentOverlays) {
+      if (targetById.has(c.id)) continue; // M handled below
+      c.enabled = true; // ensure it's visible so the fade-out actually reads
+      const scheduled = mixer.fadeChannel(c.id, 0, durationMs, {
+        curve: 'smoothstep',
+        destroyOnComplete: true,
+      });
+      // Track every current-only id for finalizer CPC cleanup. Even a
+      // fader-locked channel (scheduled=false, won't auto-remove) is left
+      // alone — it's not part of the target, but ripping it out mid-morph
+      // would be a silent structural change; v1 leaves locked C channels in
+      // place and documents it. Only push ids we actually fade out.
+      if (scheduled) fadeOutIds.push(c.id);
+    }
+
+    // ── M: id in both — SNAP structural by rebuild, RAMP the fader ───────
+    // We rebuild the channel from the target's saved shape so a changed
+    // pattern/mode/view/chroma takes effect at kickoff, then anchor the
+    // rebuilt channel's fader at the CURRENT (pre-morph) value and ramp it to
+    // the target fader. Rebuild = remove (CPC unregister + destroy handle) +
+    // re-add through the same degrade-tolerant restoreChannel path recall
+    // uses. The fader is the only thing that animates.
+    for (const [id, saved] of targetById) {
+      if (!currentById.has(id)) continue; // T handled below
+      const startFader = currentById.get(id).fader;
+      const targetFader = (typeof saved.fader === 'number' && Number.isFinite(saved.fader))
+        ? Math.max(0, Math.min(1, saved.fader))
+        : 1.0;
+      if (paramCenter) paramCenter.unregisterChannel(id);
+      mixer.removeMixerChannel(id);
+      restoreChannel(saved, 'mixer');
+      const rebuilt = mixer.getMixerChannel(id);
+      if (rebuilt) {
+        rebuilt.enabled = true;
+        rebuilt.fader = startFader; // anchor at the pre-morph level
+        mixer.fadeChannel(id, targetFader, durationMs, { curve: 'smoothstep' });
+      }
+    }
+
+    // ── T: target-only — build at fader 0, then ramp 0→target fader ─────
+    for (const [id, saved] of targetById) {
+      if (currentById.has(id)) continue; // M handled above
+      const targetFader = (typeof saved.fader === 'number' && Number.isFinite(saved.fader))
+        ? Math.max(0, Math.min(1, saved.fader))
+        : 1.0;
+      restoreChannel(saved, 'mixer');
+      const built = mixer.getMixerChannel(id);
+      if (built) {
+        built.enabled = true;
+        built.fader = 0; // start dark, ramp up
+        mixer.fadeChannel(id, targetFader, durationMs, { curve: 'smoothstep' });
+      }
+    }
+
+    // ── Deck: SNAP content (never-dark), RAMP the fader ─────────────────
+    // Rebuild the deck from the snapshot (mission-critical never-dark
+    // fallback inside restoreChannel), anchored at the current deck fader,
+    // then ramp to the snapshot's deck fader. If the snapshot carried no
+    // deck, leave the live deck untouched (don't go dark).
+    if (look.deck) {
+      const liveDeck = mixer.getDeckChannel();
+      const deckStartFader = liveDeck ? liveDeck.fader : 0;
+      const deckTargetFader = (typeof look.deck.fader === 'number' && Number.isFinite(look.deck.fader))
+        ? Math.max(0, Math.min(1, look.deck.fader))
+        : 1.0;
+      const deckId = look.deck.id;
+      if (liveDeck) {
+        if (paramCenter) paramCenter.unregisterChannel(liveDeck.id);
+        mixer.removeDeckChannel();
+      }
+      restoreChannel(look.deck, 'deck');
+      const rebuiltDeck = mixer.getDeckChannel();
+      if (rebuiltDeck && rebuiltDeck.id === deckId && !rebuiltDeck.faderLocked) {
+        rebuiltDeck.enabled = true;
+        rebuiltDeck.fader = deckStartFader;
+        mixer.fadeChannel(deckId, deckTargetFader, durationMs, { curve: 'smoothstep' });
+      }
+    }
+
+    // ── Groups: ramp groups in BOTH, snap target-only groups ────────────
+    // Capture the live group faders by id, install the target group registry
+    // (restoreMixGroups replaces it wholesale, preserving the saved id so
+    // member pointers resolve), then for any group that existed BEFORE too,
+    // rewind its fader to the pre-morph value and ramp it to the target.
+    // Target-only groups stay at their snapshot fader (nothing to ramp from).
+    const priorGroupFaders = new Map();
+    for (const g of mixer.getMixGroups()) priorGroupFaders.set(g.id, g.fader);
+    restoreMixGroups(Array.isArray(look.mixGroups) ? look.mixGroups : []);
+    for (const g of mixer.getMixGroups()) {
+      if (!priorGroupFaders.has(g.id)) continue; // target-only → snap
+      const startF = priorGroupFaders.get(g.id);
+      const targetF = g.fader;
+      if (startF === targetF) continue; // already there, no ramp needed
+      g.fader = startF; // rewind to pre-morph level
+      mixer.startGroupFade(g.id, targetF, durationMs);
+    }
+
+    // ── Master: ramp current→target ────────────────────────────────────
+    if (typeof look.master === 'number' && Number.isFinite(look.master)) {
+      mixer.startMasterFade(look.master, durationMs);
+    }
+
+    // ── Arm the completion window. The ramps above all share durationMs, so
+    // they land on the same wall-clock boundary _tickMorph watches; the
+    // finalizer then CPC-unregisters the faded-out ids + persists.
+    mixer.beginMorph(durationMs, fadeOutIds);
+  }
+
   // ── Channel serialization (post-split) ────────────────────────────
   //
   // After the May 2026 channel split, /mixer surfaces ONLY overlay
@@ -2164,6 +2358,30 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       type: 'mixerTransitionComplete',
       transitionId: transitionId || null,
     });
+    broadcastMixerState();
+  };
+
+  // ── Snapshot morph finalizer (round-2 #1) ──────────────────────────────
+  // The mixer's _tickMorph() fires this exactly once when a morph's wall-clock
+  // window elapses (the descriptor is already cleared by the time we run).
+  // The per-channel/master/group ramps have all landed by this boundary; our
+  // job is the bookkeeping recallLook does synchronously but a morph defers:
+  //   - CPC-unregister the faded-out (current-only) channel ids. The mixer's
+  //     destroyOnComplete + removeChannel already destroyed their handles +
+  //     spliced them out of the stack, but removeChannel does NOT touch the
+  //     ParamCenter registry (recallLook unregisters explicitly at its
+  //     teardown); without this the registry would leak a ghost id.
+  //   - Persist (we deliberately did NOT saveAllState at kickoff — the morph
+  //     is a transient animation, like /mixer/master/fade; the settled look
+  //     is the canonical state).
+  //   - Broadcast the settled mixer + a recall-fade-complete signal so the
+  //     iPad reconciles the strips on the look it landed on.
+  mixer.onMorphComplete = ({ fadeOutIds = [] } = {}) => {
+    if (paramCenter) {
+      for (const id of fadeOutIds) paramCenter.unregisterChannel(id);
+    }
+    saveAllState();
+    broadcastWs({ type: 'snapshots', action: 'recall-fade-complete', snapshots: snapshotManager.list() });
     broadcastMixerState();
   };
 
@@ -3566,6 +3784,64 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       broadcastWs({ type: 'snapshots', action: 'recalled', name, snapshots: snapshotManager.list() });
       broadcastMixerState();
       res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name }));
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/snapshots\/[^\/]+\/recall-fade$/)) {
+      // ── SNAPSHOT CROSSFADE / MORPH (round-2 #1, docs/39 §10.8) ──────────
+      // Recall a saved look by RAMPING current→target over durationMs instead
+      // of the instant cut /recall does. Body: { durationMs } (finite > 0).
+      // Validate (404 missing, 400 malformed, 400 bad duration, 400 over-cap
+      // UNION) BEFORE any mutation; no saveAllState at kickoff (transient,
+      // like /mixer/master/fade — persisted by the morph finalizer on
+      // completion). Broadcasts {type:'snapshots',action:'recall-fade'} now +
+      // a recall-fade-complete from the finalizer when the ramps land.
+      const name = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        // Validate durationMs FIRST — never load/mutate on a bad duration.
+        const durationMs = (typeof data.durationMs === 'number')
+          ? data.durationMs
+          : Number(data.durationMs);
+        if (!Number.isFinite(durationMs) || durationMs <= 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `durationMs must be a finite number > 0, got '${data.durationMs}'`,
+          }));
+        }
+        let look;
+        try {
+          look = snapshotManager.load(name);
+        } catch (e) {
+          // Malformed snapshot ⇒ fail loud with a structured error.
+          if (e instanceof SnapshotLoadError) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: e.message, code: e.code }));
+          }
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: e.message }));
+        }
+        if (!look) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `snapshot '${name}' not found` }));
+        }
+        try {
+          morphToLook(look, durationMs);
+        } catch (e) {
+          // An over-cap UNION (or other structural failure) is a real error,
+          // not a silent truncation — surface it (transient-cap fail-loud).
+          const status = e.code === 'SNAPSHOT_OVER_CAP' ? 400 : 500;
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: e.message, code: e.code || 'SNAPSHOT_MORPH_FAILED' }));
+        }
+        // Transient animation: do NOT saveAllState() here (the finalizer
+        // persists the settled look). Broadcast the kickoff so the iPad
+        // knows a morph is in flight; the mixer broadcast carries the
+        // current (ramping) faders.
+        broadcastWs({ type: 'snapshots', action: 'recall-fade', name, snapshots: snapshotManager.list() });
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({
+          status: 'ok',
+          name,
+          morph: mixer.getMorph(),
+        }));
+      });
     } else if (req.method === 'POST' && req.url === '/mixer/channels') {
       // Add a mixer channel. Two ways to call this, both are playlist-driven:
       //  1. {playlist:'<name>', playlistEntryId?:'<id>'} — load that playlist

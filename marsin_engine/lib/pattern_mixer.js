@@ -224,6 +224,28 @@ export class PatternMixer {
     // operator's hand always wins (no animation fighting a manual set).
     //   { from, to, startMs, durationMs }
     this._masterFade = null;
+    // ── Group-fader timed fades (snapshot morph, round-2 #1) ─────────────
+    // Parallel to `_masterFade`: an in-flight group fade animates a mix
+    // group's `fader` from a start value toward a target over a fixed
+    // wall-clock duration on the 40 Hz tick. Used by the snapshot
+    // crossfade/morph to ramp gang-fader levels current→target alongside
+    // the per-channel `transitions[]` and the grand-master `_masterFade`.
+    // An array (not a single descriptor) because a morph may ramp several
+    // groups at once. Each entry: { groupId, from, to, startMs, durationMs }.
+    // Empty when no group fade is in flight. A direct updateMixGroup() fader
+    // write cancels any in-flight fade for that group (operator's hand wins).
+    this._groupFades = [];
+    // ── Snapshot crossfade / morph descriptor (round-2 #1) ───────────────
+    // Non-null while a snapshot morph is animating current→target. The morph
+    // itself owns no per-frame interpolation — it RIDES the existing
+    // transitions[] (per-channel fader ramps), _masterFade, and _groupFades
+    // ticks. This descriptor only carries the wall-clock window + the set of
+    // channel ids that are fading OUT (current-only channels) so the
+    // finalizer can CPC-unregister + structurally remove them exactly once on
+    // completion. Shape: { startMs, durationMs, fadeOutIds: string[] }.
+    // The api_server owns build + CPC + the onMorphComplete finalizer.
+    this._morph = null;
+    this.onMorphComplete = null; // Callback: () => void — fired once when a morph's wall-clock window elapses
     this.deckFocusChannelId = null; // When set, deck view renders this channel instead of the deck channel
     // maxChannels comes from config.yaml `mixer.maxChannels`. Default 3 — the
     // CaptainPad iPad strip layout doesn't fit more than that without
@@ -898,7 +920,13 @@ export class PatternMixer {
     const group = this.getMixGroup(groupId);
     if (!group) return null;
     if (patch.name !== undefined) group.name = patch.name;
-    if (patch.fader !== undefined) group.fader = Math.max(0, Math.min(1, patch.fader));
+    if (patch.fader !== undefined) {
+      // A direct fader write cancels any in-flight morph group fade for this
+      // group — the operator's hand wins, no animation fights a manual set
+      // (mirrors setMaster cancelling _masterFade).
+      this.cancelGroupFade(groupId);
+      group.fader = Math.max(0, Math.min(1, patch.fader));
+    }
     if (patch.muted !== undefined) group.muted = !!patch.muted;
     if (patch.color !== undefined) group.color = patch.color === null ? null : patch.color;
     return group;
@@ -914,6 +942,9 @@ export class PatternMixer {
     for (const c of this.mixerChannels) {
       if (c.mixGroupId === groupId) c.mixGroupId = null;
     }
+    // Drop any in-flight morph fade targeting this group so _tickGroupFades
+    // never animates a ghost.
+    this.cancelGroupFade(groupId);
     this.mixGroups.splice(index, 1);
     return true;
   }
@@ -1238,6 +1269,166 @@ export class PatternMixer {
     }
     const t = elapsed <= 0 ? 0 : elapsed / f.durationMs;
     this.master = f.from + (f.to - f.from) * t;
+  }
+
+  // ── Group-fader timed fades (snapshot morph, round-2 #1) ───────────────
+  // Animate a mix group's `fader` current→target over `durationMs`, parallel
+  // to the grand-master `_masterFade` and the per-channel `transitions[]`.
+  // Used by the snapshot morph to ramp gang-fader levels smoothly instead of
+  // snapping them. Linear over wall-clock time (frame-rate independent),
+  // lands EXACTLY on the target, and self-clears the descriptor on
+  // completion — exactly like _tickMasterFade. Starting a fade for a group
+  // replaces any in-flight fade for the SAME group (last-write-wins).
+  //
+  // Caller (api_server morph) MUST have validated target ∈ [0,1] finite and
+  // durationMs finite > 0; this re-validates and THROWS on bad input rather
+  // than silently no-opping (Codex P0: fail loud). A missing/unknown groupId
+  // also throws — never silently animate a ghost group.
+  startGroupFade(groupId, target, durationMs) {
+    const group = this.getMixGroup(groupId);
+    if (!group) {
+      throw new Error(`startGroupFade: unknown group '${groupId}'`);
+    }
+    if (!Number.isFinite(target) || target < 0 || target > 1) {
+      throw new Error(`startGroupFade: target must be finite in [0,1], got ${target}`);
+    }
+    if (!Number.isFinite(durationMs) || durationMs <= 0) {
+      throw new Error(`startGroupFade: durationMs must be finite > 0, got ${durationMs}`);
+    }
+    // Last-write-wins: drop any in-flight fade for this same group first.
+    this.cancelGroupFade(groupId);
+    this._groupFades.push({
+      groupId,
+      from: group.fader,
+      to: target,
+      startMs: Date.now(),
+      durationMs,
+    });
+  }
+
+  /** Cancel an in-flight fade for `groupId`. Returns true iff one was removed.
+   *  Does NOT touch the group's current fader — the caller (a direct fader
+   *  write) owns the new value. */
+  cancelGroupFade(groupId) {
+    const before = this._groupFades.length;
+    if (before === 0) return false;
+    this._groupFades = this._groupFades.filter(gf => gf.groupId !== groupId);
+    return this._groupFades.length !== before;
+  }
+
+  /** Cancel ALL in-flight group fades (morph kickoff / teardown helper).
+   *  Returns true iff the list was non-empty. */
+  cancelAllGroupFades() {
+    const changed = this._groupFades.length > 0;
+    this._groupFades = [];
+    return changed;
+  }
+
+  /**
+   * Advance every in-flight group fade one render tick. Linear interpolation
+   * over wall-clock time (frame-rate independent). Lands EXACTLY on the
+   * target and drops the descriptor when complete, so a steady-state group
+   * never carries a dangling fade. Called from beginFrame() alongside the
+   * master fade + per-channel transitions. Allocation-free on the steady
+   * path (empty array → single length read, no iteration).
+   */
+  _tickGroupFades() {
+    if (this._groupFades.length === 0) return;
+    const now = Date.now();
+    for (let i = this._groupFades.length - 1; i >= 0; i--) {
+      const f = this._groupFades[i];
+      const group = this.getMixGroup(f.groupId);
+      if (!group) {
+        // Group deleted out from under the fade — drop it rather than animate
+        // a ghost. (deleteMixGroup doesn't know about fades; this is the
+        // belt-and-braces cleanup.)
+        this._groupFades.splice(i, 1);
+        continue;
+      }
+      const elapsed = now - f.startMs;
+      if (elapsed >= f.durationMs) {
+        group.fader = f.to < 0 ? 0 : (f.to > 1 ? 1 : f.to);
+        this._groupFades.splice(i, 1);
+        continue;
+      }
+      const t = elapsed <= 0 ? 0 : elapsed / f.durationMs;
+      group.fader = f.from + (f.to - f.from) * t;
+    }
+  }
+
+  // ── Snapshot crossfade / morph (round-2 #1) ────────────────────────────
+  // The morph descriptor only owns the wall-clock completion WINDOW + the
+  // fade-out id set; the actual interpolation rides transitions[] /
+  // _masterFade / _groupFades (already ticked in beginFrame). beginMorph()
+  // installs the descriptor; _tickMorph() (called from beginFrame) is an
+  // O(1) wall-clock check that fires onMorphComplete exactly once when the
+  // window elapses. The api_server's finalizer (onMorphComplete) does the
+  // CPC-unregister of the faded-out ids, clears _morph, persists, broadcasts.
+
+  /**
+   * Arm a snapshot morph. `fadeOutIds` is the set of current-only channel
+   * ids that are ramping to 0 and must be CPC-unregistered + removed on
+   * completion (the api_server schedules their destroyOnComplete fades so
+   * updateTransitions removes the channel objects; the finalizer cleans CPC).
+   * Replacing an in-flight morph is the caller's responsibility (it cancels
+   * the prior one at kickoff). durationMs MUST be finite > 0 (re-validated).
+   */
+  beginMorph(durationMs, fadeOutIds = []) {
+    if (!Number.isFinite(durationMs) || durationMs <= 0) {
+      throw new Error(`beginMorph: durationMs must be finite > 0, got ${durationMs}`);
+    }
+    this._morph = {
+      startMs: Date.now(),
+      durationMs,
+      fadeOutIds: Array.isArray(fadeOutIds) ? fadeOutIds.slice() : [],
+    };
+  }
+
+  /** Snapshot of the in-flight morph for /status + /mixer, or null. */
+  getMorph() {
+    if (!this._morph) return null;
+    const m = this._morph;
+    const elapsed = Math.max(0, Date.now() - m.startMs);
+    return {
+      active: true,
+      durationMs: m.durationMs,
+      elapsedMs: Math.min(elapsed, m.durationMs),
+      remainingMs: Math.max(0, m.durationMs - elapsed),
+      fadeOutIds: m.fadeOutIds.slice(),
+    };
+  }
+
+  /** Drop the in-flight morph descriptor WITHOUT firing the finalizer.
+   *  Used at kickoff to replace a prior morph (the new morph's build path
+   *  takes over). Returns true iff a morph was cleared. */
+  cancelMorph() {
+    if (!this._morph) return false;
+    this._morph = null;
+    return true;
+  }
+
+  /**
+   * Advance the morph one render tick. O(1), allocation-free: a single
+   * wall-clock comparison. When the window has elapsed, clears `_morph`
+   * BEFORE firing `onMorphComplete` (so a re-entrant morph started inside
+   * the callback sees a clean descriptor) and invokes the finalizer exactly
+   * once. The per-channel/master/group ramps that drove the visible morph
+   * have already landed on their targets by this same wall-clock boundary
+   * (they share the identical durationMs), so the finalizer's job is purely
+   * bookkeeping: CPC-unregister the faded-out ids, persist, broadcast.
+   */
+  _tickMorph() {
+    if (!this._morph) return;
+    if (Date.now() - this._morph.startMs < this._morph.durationMs) return;
+    // Capture the fade-out id set BEFORE clearing the descriptor so the
+    // finalizer can CPC-unregister them. Clear FIRST so a re-entrant morph
+    // started inside the callback sees a clean descriptor.
+    const fadeOutIds = this._morph.fadeOutIds;
+    this._morph = null;
+    if (this.onMorphComplete) {
+      try { this.onMorphComplete({ fadeOutIds }); }
+      catch (e) { console.warn('[Mixer] onMorphComplete threw:', e.message); }
+    }
   }
 
   async transitionBaseTo(patternName, options = {}) {
@@ -1971,6 +2162,14 @@ export class PatternMixer {
   beginFrame(elapsedSeconds) {
     const now = performance.now();
     this.updateTransitions(now);
+    // Snapshot morph (round-2 #1): the group-fader ramps tick alongside the
+    // per-channel transitions (above) and the grand-master fade (in
+    // renderAll6ch). _tickGroupFades is allocation-free + a no-op when no
+    // group fade is in flight. The morph COMPLETION check runs AFTER the
+    // ramps so the final landed values are committed before the finalizer
+    // CPC-unregisters the faded-out channels and persists.
+    this._tickGroupFades();
+    this._tickMorph();
     // Deck-swap shadow runs on the same clock so its fader animation
     // visibly matches the existing overlay-fade animations.
     this.updateDeckSwapTransition(now);
