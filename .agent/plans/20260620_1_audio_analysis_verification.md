@@ -259,3 +259,16 @@ Proof entry template:
 - ALSO fixed this round (cross-slice regressions the FULL suite caught): audio_config AUDIO_LIVE_FIELDS contract (E1 keys), 3 new_derived_signals drop tests (inject canonical drop), 3 audio_analysis_validation tests (TUNED_CFG disables E1 precision gates to prove the detector mechanism on clean synthetic drops).
 - Command(s) BY INSTIGATOR: COMPLETE suite `node --test tests/*.test.js tests/*.test.mjs tests/integration/*.test.mjs` → **923 pass / 0 fail** (baseline pre-G1 was 918/918). Restored test-residue states.
 - Verdict: G1 crossed off. ✅ — ENTIRE audio + engine test suite green (923).
+
+### H1 — chroma-reactive patterns (69–72) + harness chroma-mirror fix  [PASS]  2026-06-21T01:00Z
+- Branch `dev/h1_chroma_patterns` @ `8100cbc` → merged @ `fd9d854` (--no-ff, clean, additive).
+- 4 patterns USING the G1 chroma signals: 69 harmonic_warmth (chromaTilt→warm/cool 0.85 sweep), 70 tonal_shimmer (tonalStability held↔grain), 71 harmonic_sparkle (chromaFlux + noteHue), 72 chroma_phrase_bloom (phrase 0.82 + chroma). All silence-safe (peaks 96–168 ≥60/255 on titanic 970px). manifest 72.
+- Harness fix: `tools/pattern_derived_harness.mjs` now mirrors micTonalStabilityRaw/micChromaFluxRaw/micChromaTiltRaw (it stopped at micSubRaw) → chroma patterns validatable via the committed tool (verified: chromaFlux→bri corr 0.65 FIRED, was flat 0).
+- Command(s) BY INSTIGATOR: dry-run 69 exit 0; harness drives chroma (non-flat); COMPLETE suite `node --test tests/*.test.js tests/*.test.mjs tests/integration/*.test.mjs` → **923 pass / 0 fail** (patterns are harness-validated, add no unit tests). Restored test residue → tree clean.
+- Verdict: H1 crossed off. ✅ — CAPSTONE: chroma signals now drive looks on the rig; entire suite 923 green.
+
+## ───────────── RUN COMPLETE ─────────────
+All verifiable-here audio work done. `feat/audio_analysis_2` pushed, tree clean, 923/923
+green across the ENTIRE suite. Remaining (documented in 20260620_29): live-`dt` fix +
+recall-capable/stems detector — both need OPERATOR live-mic validation / direction, the
+honest boundary of what's verifiable in this datacenter. Cron remains as safety net.
