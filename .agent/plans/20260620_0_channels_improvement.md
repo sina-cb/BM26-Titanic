@@ -561,3 +561,16 @@ new per-channel hue control lands into an already-decluttered strip.
     mixer.tsx + channelExtrasApi helpers (pairs with the merged #9 engine). CaptainPad-only.
   Disjoint: engine (invert) vs CaptainPad (param-presets UI).
   NEXT: invert UI, #2 auto-cycle, #6 follow/link, #10 undo. Deliverable c4763da.
+
+## STATUS LOG (cont. 18)
+- invert ENGINE #8 MERGED (e19e661): per-channel RGB invert, RGB-only (W/A/UV safe), gated,
+  3 apply sites after hue (hue+invert commute within 1/255). Suite 1033/0; invert HIL 11/11.
+- param-presets UI #9 MERGED (5e2f1cc): ParamPresetMenu (capture/recall/list/delete), 409
+  mismatch → friendly Alert, strip uncramped. tsc 0 / lint 11 / web:build OK. #9 cluster COMPLETE.
+- Launched 2 parallel (DISJOINT):
+  * dev/follow_link_engine — #6 channel follow/link (follower fader tracks leader effective ×
+    scale; cycle detection fail-loud; leader-delete clears followers). Engine-only.
+  * dev/invert_ui — #8 UI: per-channel INVERT toggle in mixer ChannelStrip + channelExtrasApi
+    setChannelInvert (pairs with merged #8 engine). CaptainPad-only.
+  Disjoint: engine (follow) vs CaptainPad (invert UI).
+  Round-2 remaining after these: #2 auto-cycle, #10 undo, follow UI. Deliverable 5e2f1cc.
