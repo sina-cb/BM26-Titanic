@@ -1439,6 +1439,120 @@ from 0 on boot.
 
 ---
 
+## 6.v §auto-cycle — Overlay AUTO-CYCLE (round-2 #2, 2026-06-21, engine-side)
+
+Generalizes the deck Autopilot daemon to ANY mixer overlay: a channel whose
+per-channel `playlist.autopilot.active` is true auto-advances its playlist on a
+timer. Before this wave, mixer overlays already CARRIED the `autopilot
+{active, delay_s, shuffle}` field (constructed by `loadPlaylistEntry`), but
+NOTHING ticked them — the only runner was the single `Autopilot` daemon, hard-
+bound to the deck channel. This wave makes overlays cycle too.
+
+### The mechanism (why a render-loop tick, not N setTimeouts)
+
+Auto-cycle is driven from the engine render loop's per-frame `beforeFrame`
+hook (`engine.js`), NOT a `setTimeout` per channel. One source of time (the
+wall clock via `Date.now()`), no timer sprawl, no drift: each channel anchors
+to `_autoCycleLastAdvanceMs` and the tick measures wall-clock deltas against it
+(self-correcting). The tick (`autoCycleTick` in `api_server.js`) is cheap and
+synchronous — it only DECIDES whether an advance is due; it never compiles
+inline.
+
+### Off-hot-path advance (CRITICAL)
+
+Overlay `loadPlaylistEntry` is an **instant hard handle destroy+compile**
+(50-200 ms) — overlays have NO double-buffer (unlike the deck). Awaiting that
+compile inside `beforeFrame` would darken the composite for a frame or two.
+So the actual advance is dispatched **off the hot path via `setImmediate`**,
+drained after the frame returns. A per-channel `_autoCycleInFlight` guard
+prevents a slow compile from stacking two advances. A compile error is
+**logged loudly** (`[AutoCycle] advance failed …`) and the channel **keeps its
+current pattern** — NOT a silent swap, NOT a silent swallow (Codex P0).
+
+### v1 ships a HARD-CUT on overlays (documented limitation)
+
+Because overlays have no double-buffer, the v1 auto-cycle advance is a visible
+**instant hard-cut** (the same cut a manual entry tap produces). This is an
+accepted v1 limitation. A v2 could fade the channel `fader` down → swap → up
+via the existing `fadeChannel` path; that is out of scope for the engine-only
+wave.
+
+### Safety contract — EXTERIOR IMMUNITY is FREE (opt-in)
+
+`autopilot.active` defaults **false** (set by `loadPlaylistEntry`). So a
+mission-critical exterior channel **never auto-changes** unless an operator
+explicitly arms it via the PATCH below — exactly mirroring the `followsTempo`
+opt-in immunity. There is no separate exclude flag and none is needed.
+
+### Per-channel transient field (`PatternChannel`)
+
+- `_autoCycleLastAdvanceMs` — wall-clock ms of the last auto-advance, or
+  `null` = "not yet seeded". **TRANSIENT — never serialized** (re-seeds to
+  `now` on the first active frame post-boot, like `_phaseSeconds`). The first
+  active frame seeds it and does NOT advance, so the first auto-advance lands a
+  full `delay_s` later. A manual entry tap (`loadPlaylistEntry`) resets it to
+  `null`, so the next tick measures from the manual change — the timer
+  re-anchors cleanly.
+
+### Tick algorithm (mirrors the deck advance)
+
+Per active overlay, once `delay_s` has elapsed: pick the next entry —
+`shuffle` = a random OTHER usable entry; else sequential, walking forward and
+skipping `_missing`; per-entry `hold` parks (no advance), `loop` replays the
+same entry (overrides shuffle) — then advance via the existing
+`loadPlaylistEntry` choke. Pure decision helpers `autoCycleDueDecision` and
+`pickNextAutoCycleEntry` are exported from `api_server.js` and unit-tested with
+a fake clock. If a snapshot morph / recall-fade is rebuilding overlays
+(`mixer.getMorph()`), auto-advance is skipped that frame.
+
+### API surface (NEW — for the follow-on UI wave)
+
+- `PATCH /mixer/channels/:id` accepts `{ autopilot: { active?, delay_s?,
+  shuffle? } }`, merged into `channel.playlist.autopilot` (mirrors the deck
+  `POST /deck/playlist/autopilot`, but stricter on `delay_s`).
+  - `delay_s` is validated by `validateAutoCycleDelay`: finite + `> 0`, then
+    **floored to 1 s**; a non-finite or `<= 0` value is rejected with
+    **400 `AUTOCYCLE_BAD_DELAY`** (Codex P0 — no silent coerce, unlike the
+    deck handler's legacy `parseInt||30`).
+  - `active` / `shuffle` coerce via `!!`.
+  - A channel with no `playlist.name` is rejected **400 `AUTOCYCLE_NO_PLAYLIST`**
+    (nothing to cycle); a non-object `autopilot` is **400
+    `AUTOCYCLE_BAD_PAYLOAD`**.
+  - On success: `saveAllState` + `broadcastMixerState`; the anchor is re-seeded
+    so the timer measures a full `delay_s` from the arm/change.
+- **WS:** rides the existing `mixer` broadcast — `autopilot` lives inside the
+  serialized per-channel `playlist`, so there is **NO new WS type**.
+
+### Serialize / restore
+
+`playlist` already round-trips whole (`serializeChannel` copies
+`playlist: ch.playlist`), so `autopilot` persists with no new serializer field;
+`autopilot` defaults fill on the next `loadPlaylistEntry` if an old state
+file's playlist lacks them. `_autoCycleLastAdvanceMs` / `_autoCycleInFlight`
+are transient and never persisted.
+
+### Implementation map (this wave)
+
+- `lib/pattern_channel.js` — transient `_autoCycleLastAdvanceMs = null` field +
+  docs.
+- `lib/api_server.js` — `validateAutoCycleDelay`; exported pure helpers
+  `autoCycleDueDecision` + `pickNextAutoCycleEntry`; the `autoCycleTick`
+  closure (dispatches the advance via `setImmediate`); the PATCH
+  `autopilot` merge block; `loadPlaylistEntry` resets the anchor; `server.
+  autoCycleTick` export.
+- `engine.js` — composes `apiServer.autoCycleTick()` into the render loop's
+  `beforeFrame` hook alongside `modulationController.applyFrame`.
+- Tests: `tests/auto_cycle.test.js` (unit, fake clock),
+  `tests/hil/hil_mixer_autocycle_test.mjs` (HIL).
+
+### Deferred to the UI wave (not in scope here)
+
+- CaptainPad: an AUTO toggle + delay / shuffle pills on the mixer channel strip
+  (mirror the DeckTopBar autopilot button); `channelExtrasApi.setChannelAutoCycle`;
+  `MixerChannel` type += `playlist.autopilot`. v2: a fade-on-advance for overlays.
+
+---
+
 ## 7. Discrepancies / follow-ups
 
 - **`docs/19_playlists.md` §8.3 / §3.2 mark mixer-channel playlist routes as
