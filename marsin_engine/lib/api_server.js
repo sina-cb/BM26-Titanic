@@ -282,6 +282,29 @@ export function validatePhaseOffsetMs(raw) {
   return { ok: true, value: Math.max(-10000, Math.min(10000, n)) };
 }
 
+// ── Per-channel FOLLOW SCALE validation (docs/39 §F-follow, round-2 #6) ─
+// A follower's followScale multiplies the leader's effective level before the
+// follower's own caps. Same accept/reject contract as validateSpeed: a
+// NON-FINITE value (NaN / Infinity, non-number / unparseable string) is
+// REJECTED with 400 (Codex P0 — never coerce a broken payload to a default);
+// a finite value is CLAMPED into [0,2] (a follower may run hotter than its
+// leader up to 2×, but never negative — that would be a phase flip the follow
+// semantics don't model). Mirrors the PatternChannel constructor clamp.
+export function validateFollowScale(raw) {
+  let n;
+  if (typeof raw === 'number') {
+    n = raw;
+  } else if (typeof raw === 'string' && raw.trim() !== '') {
+    n = Number(raw);
+  } else {
+    return { ok: false, error: `followScale must be a finite number in [0,2], got '${raw}'` };
+  }
+  if (!Number.isFinite(n)) {
+    return { ok: false, error: `followScale must be a finite number in [0,2], got '${raw}'` };
+  }
+  return { ok: true, value: Math.max(0, Math.min(2, n)) };
+}
+
 // ── Deck transition durationMs bounds (single source of truth) ─────────
 // The /deck/transition-config POST, the per-call swap override, and the
 // internal loadPlaylistEntryWithTransition resolve all clamp to this same
@@ -1709,6 +1732,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       speed: typeof saved.speed === 'number' ? saved.speed : 1.0,
       phaseOffsetMs: typeof saved.phaseOffsetMs === 'number' ? saved.phaseOffsetMs : 0,
       followsTempo: !!saved.followsTempo,
+      // F-follow restore (docs/39 §F-follow, round-2 #6). An old state file
+      // without these restores to the documented defaults (followLeaderId null
+      // = not following; followScale 1.0). The leader the pointer names is
+      // restored as its own channel separately; if that leader no longer exists
+      // after a restore, _effFader reads a missing prev-frame cache entry as 0
+      // (the follower tracks down, never crashes) — but the operator should
+      // re-link. The PatternChannel ctor types/clamps both defensively.
+      followLeaderId: typeof saved.followLeaderId === 'string' ? saved.followLeaderId : null,
+      followScale: typeof saved.followScale === 'number' ? saved.followScale : 1.0,
     };
     const ch = role === 'deck'
       ? mixer.setDeckChannel(config)
@@ -2199,6 +2231,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       speed: typeof c.speed === 'number' ? c.speed : 1.0,
       phaseOffsetMs: typeof c.phaseOffsetMs === 'number' ? c.phaseOffsetMs : 0,
       followsTempo: !!c.followsTempo,
+      // F-follow (docs/39 §F-follow, round-2 #6): channel FOLLOW/LINK. Surfaced
+      // so CaptainPad can render the follow picker + scale. followLeaderId is
+      // the leader channel id (null = not following). followScale multiplies
+      // the leader's effective level [0,2]. A channel without the fields (old
+      // engine) serializes null / 1.0 = no follow.
+      followLeaderId: typeof c.followLeaderId === 'string' ? c.followLeaderId : null,
+      followScale: typeof c.followScale === 'number' ? c.followScale : 1.0,
       // CPC-matched exports are tagged with `cpcOwned`/`cpcKey`/
       // `cpcLabel` so the iPad can show a disabled "MATCHED · SPEED"
       // badge instead of silently hiding them — see notes in the
@@ -2313,6 +2352,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         speed: typeof c.speed === 'number' ? c.speed : 1.0,
         phaseOffsetMs: typeof c.phaseOffsetMs === 'number' ? c.phaseOffsetMs : 0,
         followsTempo: !!c.followsTempo,
+        // F-follow (docs/39 §F-follow, round-2 #6): FOLLOW/LINK. See
+        // serializeChannel above for semantics. null / 1.0 = no follow.
+        followLeaderId: typeof c.followLeaderId === 'string' ? c.followLeaderId : null,
+        followScale: typeof c.followScale === 'number' ? c.followScale : 1.0,
         // CPC-matched exports used to be filtered out here. As of
         // May 2026 they're SURFACED with a `cpcOwned` / `cpcKey` /
         // `cpcLabel` tag so the UI can show a disabled "MATCHED ·
@@ -4561,6 +4604,58 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.followsTempo !== undefined) {
           channel.followsTempo = !!data.followsTempo;
         }
+        // FOLLOW/LINK (round-2 #6, docs/39 §F-follow): set/clear this
+        // channel's leader. A null/empty value CLEARS the link (revert to the
+        // follower's own manual fader). A non-empty string id must name an
+        // EXISTING channel (mixer overlay or the deck — a mixer overlay may
+        // follow the deck), else 404. Self-follow and any cycle (A→B→A, longer
+        // chains) are REJECTED with 400 FOLLOW_CYCLE (Codex P0: fail loud — a
+        // cyclic follow would be an undefined render). Non-string/non-null is a
+        // malformed payload ⇒ 400. Validated BEFORE mutation so a bad payload
+        // never half-applies.
+        if (data.followLeaderId !== undefined) {
+          if (data.followLeaderId === null || data.followLeaderId === '') {
+            channel.followLeaderId = null;
+          } else if (typeof data.followLeaderId !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `followLeaderId must be a channel id string or null, got ${typeof data.followLeaderId}`,
+            }));
+          } else {
+            const leaderId = data.followLeaderId;
+            // Leader must exist (mixer overlay OR the deck channel).
+            if (!mixer.getChannel(leaderId)) {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({
+                error: `follow leader '${leaderId}' not found`,
+                code: 'FOLLOW_LEADER_NOT_FOUND',
+              }));
+            }
+            // Self-follow + cycle rejection (walks the existing chain at PATCH
+            // time so the live follow graph can never contain a loop).
+            if (mixer.wouldCreateFollowCycle(id, leaderId)) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({
+                error: leaderId === id
+                  ? `channel '${id}' cannot follow itself`
+                  : `following '${leaderId}' would create a follow cycle`,
+                code: 'FOLLOW_CYCLE',
+              }));
+            }
+            channel.followLeaderId = leaderId;
+          }
+        }
+        // FOLLOW/LINK scale: validateFollowScale — non-finite ⇒ 400 (Codex
+        // P0); a finite value is clamped to [0,2]. Independent of
+        // followLeaderId (an operator can pre-set the scale before linking).
+        if (data.followScale !== undefined) {
+          const fsv = validateFollowScale(data.followScale);
+          if (!fsv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: fsv.error }));
+          }
+          channel.followScale = fsv.value;
+        }
         if (data.transitionMode !== undefined) channel.transitionMode = data.transitionMode;
         if (data.transitionTime !== undefined) channel.transitionTime = data.transitionTime;
         // View-selection update: validate first so a typo can't brick
@@ -4618,6 +4713,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       const reject = rejectIfWrongRole(id, 'mixer');
       if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
       if (paramCenter) paramCenter.unregisterChannel(id);
+      // FOLLOW/LINK (round-2 #6, docs/39 §F-follow): fail-safe leader DELETE.
+      // BEFORE removing the channel, clear followLeaderId on every channel that
+      // followed it so no follower is left pointing at a ghost (which _effFader
+      // would read as a 0-level missing leader, freezing the follower dark — a
+      // silent dangling reference the codex forbids). A cleared follower reverts
+      // to its OWN manual fader (still lit, never silent). removeMixerChannel
+      // also clears followers belt-and-braces, but doing it here lets the single
+      // broadcast below carry the cleared followLeaderId values.
+      mixer.clearFollowersOf(id);
       mixer.removeMixerChannel(id);
       saveAllState();
       broadcastMixerState();

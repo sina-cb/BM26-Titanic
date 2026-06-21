@@ -131,6 +131,10 @@ test('serializeChannel emits exactly the fields the engine restores', () => {
     // Additive (phase-clock wave, 2026-06): appended AFTER invert. Per-channel
     // phase clock (F-phase): speed/phaseOffsetMs/followsTempo.
     'speed', 'phaseOffsetMs', 'followsTempo',
+    // Additive (follow/link wave, round-2 #6, 2026-06): appended AFTER the
+    // phase-clock fields. Channel FOLLOW/LINK (F-follow): followLeaderId/
+    // followScale.
+    'followLeaderId', 'followScale',
   ]);
 });
 
@@ -252,6 +256,9 @@ test('saveMixerState preserves on-disk key order and overlay-only fields', () =>
     'invert',
     // Additive (phase-clock wave, 2026-06): appended after invert.
     'speed', 'phaseOffsetMs', 'followsTempo',
+    // Additive (follow/link wave, round-2 #6, 2026-06): appended after the
+    // phase-clock fields. Channel FOLLOW/LINK (F-follow).
+    'followLeaderId', 'followScale',
   ]);
 });
 

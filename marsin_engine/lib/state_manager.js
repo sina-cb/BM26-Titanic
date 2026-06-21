@@ -78,6 +78,19 @@ export function serializeChannel(ch) {
       ? Math.max(-10000, Math.min(10000, ch.phaseOffsetMs))
       : 0,
     followsTempo: !!ch.followsTempo,
+    // ── Additive fields (follow/link wave, round-2 #6, 2026-06) ───────
+    // Appended AFTER the phase-clock fields so earlier on-disk key order is
+    // unchanged — an old state file (no followLeaderId/followScale) loads and
+    // restores to the documented defaults (null = not following; 1.0). Channel
+    // FOLLOW/LINK (F-follow, docs/39): the follower tracks the leader's
+    // effective level × followScale. followLeaderId is a channel→leader
+    // POINTER; if the leader is gone on reload _effFader fails safe (reads 0,
+    // never crashes). The TRANSIENT prev-frame effective cache is never
+    // persisted — it is rebuilt frame-by-frame from 0 on boot.
+    followLeaderId: (typeof ch.followLeaderId === 'string' && ch.followLeaderId.length > 0) ? ch.followLeaderId : null,
+    followScale: (typeof ch.followScale === 'number' && Number.isFinite(ch.followScale))
+      ? Math.max(0, Math.min(2, ch.followScale))
+      : 1.0,
   };
 }
 
@@ -365,6 +378,12 @@ export class StateManager {
           speed: core.speed,
           phaseOffsetMs: core.phaseOffsetMs,
           followsTempo: core.followsTempo,
+          // Additive (follow/link wave, round-2 #6): channel FOLLOW/LINK
+          // round-trips so a restart restores the operator's link.
+          // serializeChannel already typed/clamped these — reuse verbatim. The
+          // transient prev-frame effective cache is never persisted.
+          followLeaderId: core.followLeaderId,
+          followScale: core.followScale,
         };
       }),
       // Group registry (WAVE 15). Persisted alongside master so member
