@@ -1400,7 +1400,15 @@ export async function deletePlaylist(name: string): Promise<ApiResult<any>> {
 // mixer tab, so it accepts a `role` prop and we dispatch the playlist
 // API call to the matching endpoint here.
 
-export type ChannelRole = 'deck' | 'mixer';
+// 'deckOverlay' is a deck dynamic VIEW OVERRIDE (engine #deck-overlays):
+// a view-scoped overlay deck layered over the main deck. Its playlist
+// routes mirror the deck's (/deck/overlays/:id/playlist + /entry + /swap),
+// so the polymorphic helpers below dispatch a third branch for it and the
+// reused PlaylistPanel can drive an overlay's playlist exactly like the
+// deck's. There is intentionally NO GET /deck/overlays/:id/playlist on the
+// engine — the overlay's assignment rides the `deck` WS message's
+// `overlays[]` array, so fetchChannelPlaylist reads the list for the role.
+export type ChannelRole = 'deck' | 'mixer' | 'deckOverlay';
 
 // Polymorphic playlist GET. Use this instead of fetchMixerChannelPlaylist
 // from any consumer that may be wired to the deck channel.
@@ -1413,6 +1421,21 @@ export async function fetchChannelPlaylist(
       const res = await fetchWithTimeout(`${api_base}/deck/playlist`);
       const data = await res.json();
       return { ok: res.ok, data: data ?? null };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  }
+  if (role === 'deckOverlay') {
+    // No per-overlay playlist GET on the engine: read the overlay's
+    // assignment out of the /deck/overlays list (the same shape the WS
+    // `deck` message folds in). Fail loud on a non-2xx / missing overlay.
+    try {
+      const res = await fetchWithTimeout(`${api_base}/deck/overlays`);
+      const data = await res.json();
+      if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+      const list = Array.isArray(data?.overlays) ? data.overlays : [];
+      const ov = list.find((o: any) => o && o.id === channelId);
+      return { ok: true, data: (ov && ov.playlist) || null };
     } catch (err: any) {
       return { ok: false, error: err.message };
     }
@@ -1443,6 +1466,19 @@ export async function setChannelPlaylist(
       return { ok: false, error: err.message };
     }
   }
+  if (role === 'deckOverlay') {
+    try {
+      const res = await fetchWithTimeout(`${api_base}/deck/overlays/${encodeURIComponent(channelId)}/playlist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      return { ok: res.ok, data, error: res.ok ? undefined : data?.error };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  }
   return setMixerChannelPlaylist(channelId, name);
 }
 
@@ -1457,6 +1493,22 @@ export async function setChannelPlaylistEntry(
   if (role === 'deck') {
     try {
       const res = await fetchWithTimeout(`${api_base}/deck/playlist/entry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entryId }),
+      });
+      const data = await res.json();
+      const code = !res.ok && data && data.code
+        ? String(data.code)
+        : (!res.ok && res.status === 409 ? 'EBUSY' : undefined);
+      return { ok: res.ok, data, code, error: !res.ok ? (data && data.error) : undefined };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  }
+  if (role === 'deckOverlay') {
+    try {
+      const res = await fetchWithTimeout(`${api_base}/deck/overlays/${encodeURIComponent(channelId)}/playlist/entry`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ entryId }),
@@ -1562,6 +1614,18 @@ export async function swapChannelPlaylist(
   entryId?: string,
 ): Promise<ApiResult<any> & { code?: string }> {
   if (role === 'deck') return swapDeckPlaylist(name, entryId);
+  // Deck overlays have NO dedicated /swap route (no double-buffer
+  // transition machinery on an overlay layer); a hot swap is just a plain
+  // playlist re-assignment via POST /deck/overlays/:id/playlist. Bust the
+  // caches like the dedicated swap helpers do so the next fetch is canonical.
+  if (role === 'deckOverlay') {
+    const res = await setChannelPlaylist('deckOverlay', channelId, name);
+    if (res.ok) {
+      invalidatePlaylistCache(name);
+      invalidatePlaylistsCache();
+    }
+    return res;
+  }
   return swapMixerChannelPlaylist(channelId, name, entryId);
 }
 
