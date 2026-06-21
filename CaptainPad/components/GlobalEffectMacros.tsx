@@ -51,6 +51,7 @@ import {
   dispatchGlobalEffectSlotAction,
   patchGlobalEffectSlot,
   setGlobalEffectBlackout,
+  setGlobalInvert,
   fetchGlobals,
   GlobalEffectSlot,
   GlobalEffectSlotStatus,
@@ -58,12 +59,6 @@ import {
 import { setGlobalHue } from '@/utils/channelExtrasApi';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { engineEvents } from '@/utils/engineEvents';
-
-// Global hue shifter (docs/39 §F-hue). Auto-rotate speed slider range. The
-// engine clamps autoRotateDegPerSec into [-360,360]; ±180 °/s (a half-turn
-// per second) is a comfortable operator range — fast enough to read as a
-// continuous spin, slow enough to dial in. 0 = off (no spin).
-const HUE_ROTATE_MAX_DPS = 180;
 
 // Hard UI contract (operator review May 2026): the rig surface shows
 // EXACTLY this many slots. The engine can persist up to MAX_SLOTS (16)
@@ -137,17 +132,29 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   const [optimisticActive, setOptimisticActive] = useState<Record<number, boolean>>({});
   const optimisticTimersRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
 
-  // Global hue shifter (docs/39 §F-hue). `degrees` is the live rig hue offset
-  // (the engine advances it itself when auto-rotating, so we ALWAYS show the
-  // engine-reported value rather than fighting the spin). `autoRotateDegPerSec`
-  // is the spin rate. Both reflect the engine's `globalHueShift` broadcast.
-  const [hueShift, setHueShift] = useState<{ degrees: number; autoRotateDegPerSec: number }>(
-    { degrees: 0, autoRotateDegPerSec: 0 },
-  );
+  // Global hue shifter (docs/39 §F-hue). `degrees` is the live rig hue offset,
+  // reflecting the engine's `globalHueShift` broadcast. The SPIN (auto-rotate)
+  // control was removed (June 2026), so we no longer track a spin rate in
+  // state — every hue write forces it to 0 and the mount clear zeroes any
+  // persisted spin.
+  const [hueShift, setHueShift] = useState<{ degrees: number }>({ degrees: 0 });
   // While the operator is dragging the degrees fader the engine may also be
   // auto-rotating — we don't want the incoming broadcast to yank the thumb out
   // from under their finger. This holds the live drag target; cleared on release.
   const hueDraggingRef = useRef(false);
+
+  // Global color INVERT (docs/39 §F-invert). A first-class boolean toggle,
+  // sibling of blackout — seeded from /globals.invert at mount, kept live by
+  // the `globalInvert` WS broadcast. Mirrors how `blackout` is plumbed.
+  const [invert, setInvert] = useState(false);
+
+  // SPIN was removed from the hue section (June 2026). The auto-rotate rate is
+  // persisted engine-side, so a previously-set spin would keep silently
+  // rotating the hue with no visible control to stop it. Guard so we send
+  // exactly ONE setGlobalHue(degrees, 0) at mount to force spin off — once the
+  // seeded degrees have landed, not while the operator is dragging the hue
+  // fader, and never more than once per mount.
+  const spinClearedRef = useRef(false);
 
   const refresh = useCallback(async () => {
     const r = await fetchGlobalEffectSlotsStatus();
@@ -221,10 +228,32 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       // Seed the global hue knob from /globals (the engine's persisted
       // hueShift). The globalHueShift WS broadcast keeps it live afterwards.
       const globals = await fetchGlobals();
-      if (alive && globals.ok && globals.data?.hueShift && !hueDraggingRef.current) {
-        const hs = globals.data.hueShift;
-        if (typeof hs.degrees === 'number' && typeof hs.autoRotateDegPerSec === 'number') {
-          setHueShift({ degrees: hs.degrees, autoRotateDegPerSec: hs.autoRotateDegPerSec });
+      if (alive && globals.ok && globals.data) {
+        // Seed the global color INVERT toggle from /globals.invert (mirror of
+        // the blackout/hue seed). The `globalInvert` WS broadcast keeps it
+        // live afterwards.
+        if (typeof globals.data.invert === 'boolean') {
+          setInvert(globals.data.invert);
+        }
+        if (globals.data.hueShift && !hueDraggingRef.current) {
+          const hs = globals.data.hueShift;
+          if (typeof hs.degrees === 'number') {
+            setHueShift({ degrees: hs.degrees });
+          }
+          // SPIN control was removed (June 2026): force any persisted
+          // auto-rotate off exactly once at mount so the hue can't keep
+          // spinning invisibly. We use the SEEDED degrees as the start
+          // offset and only fire if there's actually a residual spin and
+          // the operator isn't mid-drag. The ref guards against a second
+          // fire on any later re-run of this effect.
+          if (!spinClearedRef.current && !hueDraggingRef.current
+              && typeof hs.autoRotateDegPerSec === 'number' && Math.round(hs.autoRotateDegPerSec) !== 0) {
+            spinClearedRef.current = true;
+            const seededDegrees = typeof hs.degrees === 'number' ? hs.degrees : 0;
+            setGlobalHue(seededDegrees, 0).then(r => {
+              if (!r.ok) console.warn('[GEM] failed to clear persisted hue spin:', r.error);
+            });
+          }
         }
       }
       refresh().then(() => { slotsLoadedRef.current = true; });
@@ -260,17 +289,17 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       } else if (msg?.type === 'mixer' && typeof msg.blackout === 'boolean') {
         onBlackoutChangeRef.current?.(msg.blackout);
       } else if (msg?.type === 'globalHueShift' && msg.hueShift) {
-        // The engine is authoritative for the live degrees (it advances them
-        // while auto-rotating). Reflect them UNLESS the operator is mid-drag
-        // on the degrees fader, in which case we'd be fighting their finger —
-        // still take the autoRotateDegPerSec (it's not what they're dragging).
+        // The engine is authoritative for the live degrees. Reflect them
+        // UNLESS the operator is mid-drag on the degrees fader, in which case
+        // we'd be fighting their finger. SPIN was removed (June 2026), so we
+        // no longer reconcile autoRotateDegPerSec — only the hue degrees.
         const hs = msg.hueShift;
         const degrees = typeof hs.degrees === 'number' ? hs.degrees : 0;
-        const rot = typeof hs.autoRotateDegPerSec === 'number' ? hs.autoRotateDegPerSec : 0;
-        setHueShift(prev => ({
-          degrees: hueDraggingRef.current ? prev.degrees : degrees,
-          autoRotateDegPerSec: rot,
-        }));
+        setHueShift(prev => ({ degrees: hueDraggingRef.current ? prev.degrees : degrees }));
+      } else if (msg?.type === 'globalInvert' && typeof msg.invert === 'boolean') {
+        // Engine is authoritative for the INVERT toggle (mirror of the
+        // blackout reconciliation). Reflect every broadcast.
+        setInvert(msg.invert);
       }
     });
     return () => {
@@ -381,29 +410,37 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     if (r.ok) onBlackoutChange?.(next);
   }, [blackout, onBlackoutChange]);
 
+  // Single-tap INVERT toggle (mirror of onPressBlackout). Optimistic flip so
+  // the cell responds instantly; the `globalInvert` WS broadcast reconciles
+  // the authoritative state. Fail-loud: roll back + surface a rejection.
+  const onPressInvert = useCallback(async () => {
+    const next = !invert;
+    setInvert(next);
+    const r = await setGlobalInvert(next);
+    if (!r.ok) {
+      console.warn('[GEM] global invert rejected:', r.error);
+      setInvert(invert);
+      Alert.alert('Invert not applied', r.error || 'The engine rejected the global invert.');
+    }
+  }, [invert]);
+
   // Global hue degrees fader (0-360°). Optimistic local set + POST. The
   // HorizontalFader throttles onChange to ~50 ms during a drag, so each POST
-  // is naturally rate-limited. We keep the current auto-rotate rate so dialing
-  // the offset never silently disables a spin. Fail-loud: surface a rejection.
+  // is naturally rate-limited. Fail-loud: surface a rejection.
+  //
+  // SPIN removed (June 2026): the auto-rotate control is gone, so EVERY hue
+  // write now FORCES autoRotateDegPerSec: 0. Without this, a previously
+  // persisted spin would survive (the engine keeps the last rate) and the hue
+  // would keep rotating invisibly with no control to stop it. Pairs with the
+  // one-shot mount clear in the boot effect.
   const onHueDegreesChange = useCallback(async (deg: number) => {
-    setHueShift(prev => ({ ...prev, degrees: deg }));
-    const r = await setGlobalHue(deg, hueShift.autoRotateDegPerSec);
+    setHueShift({ degrees: deg });
+    const r = await setGlobalHue(deg, 0);
     if (!r.ok) {
       console.warn('[GEM] global hue degrees rejected:', r.error);
       Alert.alert('Hue not applied', r.error || 'The engine rejected the global hue.');
     }
-  }, [hueShift.autoRotateDegPerSec]);
-
-  // Global hue auto-rotate fader (-180..180 °/s, 0 = off). Optimistic local
-  // set + POST, keeping the current degrees as the spin's start offset.
-  const onHueRotateChange = useCallback(async (rot: number) => {
-    setHueShift(prev => ({ ...prev, autoRotateDegPerSec: rot }));
-    const r = await setGlobalHue(hueShift.degrees, rot);
-    if (!r.ok) {
-      console.warn('[GEM] global hue auto-rotate rejected:', r.error);
-      Alert.alert('Hue spin not applied', r.error || 'The engine rejected the auto-rotate rate.');
-    }
-  }, [hueShift.degrees]);
+  }, []);
 
   // Always deactivate a slot before mutating its binding. Without
   // this an operator who swaps an active legacy effect (e.g.
@@ -536,6 +573,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           return (
             <View style={{ flexDirection: 'row', gap }}>
               {visibleSlots.map(renderCell)}
+              <InvertButton invert={invert} height={btnHeight} fontSize={btnFont} onPress={onPressInvert} />
               <BlackoutButton blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} />
             </View>
           );
@@ -553,6 +591,9 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
                 ))
               : null}
             {ri === 1 ? (
+              <InvertButton invert={invert} height={btnHeight} fontSize={btnFont} onPress={onPressInvert} />
+            ) : null}
+            {ri === 1 ? (
               <BlackoutButton blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} />
             ) : null}
           </View>
@@ -568,9 +609,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       {!isStrip && (
         <HueShiftSection
           degrees={hueShift.degrees}
-          autoRotateDegPerSec={hueShift.autoRotateDegPerSec}
           onDegreesChange={onHueDegreesChange}
-          onRotateChange={onHueRotateChange}
           onDegreesDragStart={() => { hueDraggingRef.current = true; }}
           onDegreesRelease={() => { hueDraggingRef.current = false; }}
         />
@@ -592,25 +631,25 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   );
 };
 
-// Global hue shifter UI (docs/39 §F-hue). Two faders:
-//   - HUE 0-360° — the rig-wide chroma offset. Always reflects the engine's
-//     reported degrees (so an auto-rotating spin animates the thumb), but the
-//     parent suppresses the broadcast while the operator is dragging.
-//   - SPIN -180..180 °/s — the auto-rotate rate (0 = off, centred thumb).
-// Both faders are normalized 0..1 (HorizontalFader's contract); we map the
-// engineering units across that range at the boundary. Each row is ≥44pt tall
-// for a comfortable touch target. A live swatch previews the current hue.
+// Global hue shifter UI (docs/39 §F-hue). A single HUE 0-360° fader — the
+// rig-wide chroma offset. Always reflects the engine's reported degrees, but
+// the parent suppresses the broadcast while the operator is dragging.
+//
+// SPIN removed (June 2026): the auto-rotate fader was deleted. Every hue write
+// now forces autoRotateDegPerSec: 0 (see onHueDegreesChange) and the component
+// clears any persisted spin once at mount, so the hue can never rotate
+// invisibly without a control to stop it.
+//
+// The fader is normalized 0..1 (HorizontalFader's contract); engineering units
+// map across that range at the boundary. The row is ≥44pt tall for a
+// comfortable touch target. A live swatch previews the current hue.
 const HueShiftSection: React.FC<{
   degrees: number;
-  autoRotateDegPerSec: number;
   onDegreesChange: (deg: number) => void;
-  onRotateChange: (rot: number) => void;
   onDegreesDragStart: () => void;
   onDegreesRelease: () => void;
-}> = ({ degrees, autoRotateDegPerSec, onDegreesChange, onRotateChange, onDegreesDragStart, onDegreesRelease }) => {
+}> = ({ degrees, onDegreesChange, onDegreesDragStart, onDegreesRelease }) => {
   const C = usePalette();
-  const rot = autoRotateDegPerSec;
-  const spinOff = Math.round(rot) === 0;
   return (
     <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: C.ghostBorder }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -643,21 +682,6 @@ const HueShiftSection: React.FC<{
           thumbStyle={{ position: 'absolute', width: 16, height: 22, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -8 }] }}
         />
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, width: 44, textAlign: 'right' }}>{Math.round(degrees)}°</Text>
-      </View>
-
-      {/* SPIN -180..180 °/s (0 = off) */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44 }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 40, textTransform: 'uppercase' }}>SPIN</Text>
-        <HorizontalFader
-          value={Math.max(0, Math.min(1, (rot + HUE_ROTATE_MAX_DPS) / (2 * HUE_ROTATE_MAX_DPS)))}
-          onChange={(v: number) => onRotateChange(Math.round(v * 2 * HUE_ROTATE_MAX_DPS - HUE_ROTATE_MAX_DPS))}
-          trackStyle={{ flex: 1, height: 12, marginHorizontal: 8, backgroundColor: C.surfaceContainerHigh, borderRadius: 6, justifyContent: 'center' }}
-          fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: spinOff ? C.icon : C.primary, borderRadius: 6 }}
-          thumbStyle={{ position: 'absolute', width: 16, height: 22, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -8 }] }}
-        />
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: spinOff ? C.secondary : C.text, width: 44, textAlign: 'right' }}>
-          {spinOff ? 'OFF' : `${rot > 0 ? '+' : ''}${Math.round(rot)}`}
-        </Text>
       </View>
     </View>
   );
@@ -857,6 +881,49 @@ const BlackoutButton: React.FC<{
         style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, letterSpacing: 0.5 }}
       >
         {isOn ? 'RELEASE' : 'BLACKOUT'}
+      </Text>
+    </TouchableOpacity>
+  );
+};
+
+// Global color INVERT toggle. Sibling of BlackoutButton, same size/style
+// language (single-tap toggle, 1 px ghost border when OFF, filled accent
+// when ON). Uses the palette's `tertiary` accent — a DISTINCT colour from
+// blackout's e-stop `error` red AND from the hue knob's `primary` cyan — so
+// the operator never confuses a colour-invert with the e-stop.
+//   - OFF → flat ghost-bordered surface, tertiary-accent text
+//   - ON  → filled tertiary cell, white text (unambiguous "inverted" state)
+const InvertButton: React.FC<{
+  invert: boolean;
+  height: number;
+  fontSize: number;
+  onPress: () => void;
+}> = ({ invert, height, fontSize, onPress }) => {
+  const C = usePalette();
+  const isOn = !!invert;
+  const bg = isOn ? C.tertiary : C.surfaceContainerHigh;
+  const fg = isOn ? '#FFF' : C.tertiary;
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={1}
+      style={{
+        flex: 1, height, paddingHorizontal: 6, borderRadius: 6,
+        backgroundColor: bg,
+        borderWidth: 1,
+        borderColor: isOn ? 'transparent' : C.ghostBorder,
+        justifyContent: 'center', alignItems: 'center',
+        ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
+      }}
+      accessibilityLabel={isOn ? 'Disable global color invert' : 'Enable global color invert'}
+    >
+      <Text
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
+        style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, letterSpacing: 0.5 }}
+      >
+        INVERT
       </Text>
     </TouchableOpacity>
   );
