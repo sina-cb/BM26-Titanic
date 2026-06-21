@@ -852,6 +852,68 @@ Finite number (or finite-parseable string) required; non-finite / non-number =>
 
 ---
 
+## 6.y §F-cue — Cue-to-deck (audition a mixer overlay on the deck preview)
+
+Operator-requested (2026-06, round-2 backlog #7). Lets the operator **audition
+a MIXER overlay's pattern on the DECK preview buffer at 100% (PFL)** before
+pushing it live on the mixer — the classic console "cue / PFL" affordance.
+
+The render path **already honoured** `PatternMixer.deckFocusChannelId`: when set
+(in `renderAll6ch`, the "Render Deck" step), the deck buffer renders THAT
+channel instead of the canonical deck channel, via `getChannel(id)` (which
+resolves an overlay OR the deck). This wave was pure plumbing + UI around that
+existing field.
+
+### API surface
+
+- **`POST /deck/focus { channelId }`** — arm a cue. `channelId` is a MIXER
+  overlay id to preview on the deck, or `null` to clear (restore the canonical
+  deck view). Validation (fail-loud, Codex P0, no silent fallback):
+  - `null`/absent ⇒ clear ⇒ 200 `{ status:'ok', deckFocusChannelId:null }`.
+  - non-string `channelId` ⇒ **400**.
+  - the deck channel's own id ⇒ **400** (the deck cannot cue itself; clearing is
+    the default state).
+  - an unknown id (not an existing overlay) ⇒ **404**.
+  - a valid overlay ⇒ set `mixer.deckFocusChannelId` ⇒ 200 `{ status:'ok',
+    deckFocusChannelId:<id> }`.
+  - Placed as a `/deck/*` EXACT-match router arm BEFORE the
+    `/mixer/channels/:id` regex arms, away from that regex hazard.
+- **`deckFocusChannelId` surfaced** on `GET /deck/channel` and on the **deck WS
+  broadcast** (`serializeDeckState`, fired by `broadcastMixerState` /
+  `broadcastDeckState`) so CaptainPad reconciles the active cue.
+
+### Transient by design
+
+`deckFocusChannelId` is **NOT persisted** — it is a live audition affordance,
+not show state. It **clears on engine restart** (and `state_manager` never reads
+or writes it). This is intentional: an operator should never reboot into a
+preview override they forgot about.
+
+### CaptainPad (deck tab)
+
+A **CUE** affordance in the deck preview header: tap `◎ CUE` to pick a mixer
+overlay (modal lists the live overlays from the `mixer` WS broadcast / a one-time
+`/mixer` seed — the deck tab does not otherwise track overlays); the active cue
+shows as a `CUE · <name>` chip + a `CLEAR` button. Optimistic local apply,
+reconciled from the deck broadcast's `deckFocusChannelId`; a rejected arm reverts
++ Alerts with the engine's error verbatim. ≥44pt targets; the header reserves
+height so arming/clearing causes no layout shift. The cued pattern is visible on
+the **simulation / sACN output** (the deck buffer), not the CaptainPad mini-strip
+(which is keyed by the deck channel's own render).
+
+### Implementation map (this wave)
+
+| File | Change |
+|---|---|
+| `lib/api_server.js` | `POST /deck/focus` arm (validate overlay / 400 deck-self / 404 unknown / null clear); `deckFocusChannelId` on `GET /deck/channel` + `serializeDeckState` |
+| `lib/pattern_mixer.js` | none (render already honours `deckFocusChannelId`; field set directly from the route) |
+| `CaptainPad/utils/deckFocusApi.ts` (NEW) | `setDeckFocus(channelId|null)` client, fail-loud `ApiResult` |
+| `CaptainPad/app/(tabs)/index.tsx` | CUE control + overlay-picker modal + active-cue chip + CLEAR; optimistic + reconcile from the `deck` broadcast |
+| `tests/deck_focus_cue.test.js` (NEW) | Unit: field defaults null, set/clear, `getMixerChannel` contract (overlay resolves / deck→null→400 / unknown→undefined→404) — 6 tests |
+| `tests/hil/hil_deck_focus_cue_test.mjs` (NEW) | HIL (slot 2 :31268): arm overlay → GET + WS reflect id + rendered deck buffer == overlay render; clear → back to deck render; 404/400/400 error paths — 18 checks |
+
+---
+
 ## 7. Discrepancies / follow-ups
 
 - **`docs/19_playlists.md` §8.3 / §3.2 mark mixer-channel playlist routes as

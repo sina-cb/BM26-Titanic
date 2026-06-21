@@ -1955,6 +1955,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // F-B: in-flight grand-master fade descriptor, or null when steady.
       // Lets the deck tab show a fade-in-progress affordance.
       masterFade: mixer.getMasterFade ? mixer.getMasterFade() : null,
+      // F-cue (docs/39 §F-cue): id of the mixer overlay currently being
+      // auditioned on the deck preview buffer at 100% (PFL), or null when
+      // the deck shows its own canonical channel. Transient (not persisted);
+      // clears on engine restart. Lets CaptainPad reconcile the active cue.
+      deckFocusChannelId: mixer.deckFocusChannelId || null,
       channel: serializeDeckChannel(),
     };
   }
@@ -4659,6 +4664,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.end(JSON.stringify({
         master: mixer.master,
         blackout: globalsState.blackout,
+        // F-cue (docs/39 §F-cue): the mixer overlay currently auditioned on
+        // the deck preview buffer (PFL @ 100%), or null for the canonical
+        // deck view. Mirrors the deck WS broadcast's deckFocusChannelId.
+        deckFocusChannelId: mixer.deckFocusChannelId || null,
         channel: serializeDeckChannel(),
       }));
     } else if (req.method === 'PATCH' && req.url === '/deck/channel') {
@@ -5118,6 +5127,58 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastWs({ type: 'deckTransitionConfig', ...deckTransitionConfig });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(deckTransitionConfig));
+      });
+    }
+    // ── DECK CUE / FOCUS (cue-to-deck, docs/39 §F-cue) ───────────────────
+    // Audition a MIXER overlay's pattern on the deck preview buffer at 100%
+    // (PFL) before pushing it live. The render path already honors
+    // `mixer.deckFocusChannelId` (pattern_mixer.js: when set, the deck buffer
+    // renders that channel instead of the canonical deck channel). This route
+    // is pure plumbing: validate the target is a real mixer overlay, set the
+    // field, and broadcast.
+    //
+    // Placed here as a `/deck/*` EXACT-match arm — BEFORE the
+    // `/mixer/channels/:id` regex arms below — so it can never be shadowed by
+    // (or shadow) the channel-id regex routes.
+    //
+    // Transient by design: NOT persisted, clears on engine restart.
+    else if (req.method === 'POST' && req.url === '/deck/focus') {
+      readBody(data => {
+        // Clearing: explicit null channelId restores the canonical deck view.
+        if (data.channelId === null || data.channelId === undefined) {
+          mixer.deckFocusChannelId = null;
+          broadcastDeckState();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ status: 'ok', deckFocusChannelId: null }));
+        }
+        if (typeof data.channelId !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `channelId must be a string or null, got ${typeof data.channelId}`,
+          }));
+        }
+        // Reject the deck channel itself with 400 — the deck cannot cue
+        // itself, and PFL of the deck is the default (cleared) state.
+        const deck = mixer.getDeckChannel();
+        if (deck && data.channelId === deck.id) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `cannot cue the deck channel onto itself (clear with channelId: null instead)`,
+          }));
+        }
+        // Must be an existing MIXER overlay. getMixerChannel rejects the deck
+        // id and returns undefined for unknown ids.
+        const overlay = mixer.getMixerChannel(data.channelId);
+        if (!overlay) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `mixer overlay '${data.channelId}' not found`,
+          }));
+        }
+        mixer.deckFocusChannelId = overlay.id;
+        broadcastDeckState();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', deckFocusChannelId: overlay.id }));
       });
     }
     // ── MIXER CHANNEL PLAYLIST ASSIGNMENT ────────────────────────────────
