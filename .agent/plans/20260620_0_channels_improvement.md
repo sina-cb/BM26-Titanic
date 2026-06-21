@@ -618,3 +618,19 @@ new per-channel hue control lands into an already-decluttered strip.
   its OWN transport/autopilot; (2) UNIQUE view per overlay (reject 2nd overlay on a taken view,
   fail loud); (3) deck-specific cap ~4; (4) PERSIST across restart. Engine writer launched
   (dev/deck_overlays_engine); UI after. Deliverable 2948983.
+
+## STATUS LOG (cont. 22) — deck view-overrides COMPLETE end-to-end
+- deck view-overrides ENGINE MERGED (2185d64): deckOverlays[] composited into deckBuffer
+  bottom→top masked per view (before deck→mixer crossfade), reusing mixer blend/view-mask
+  machinery. Refinements verified: shared/unison overlay timer (one clock), shared globals
+  (global params + global hue/invert reach overlays), unique-view 409, cap 4, persist,
+  never-dark (exterior outside any view byte-identical). Suite 1095/0; HIL 17/17.
+- deck view-overrides UI MERGED (a98a05a): DeckOverlayStack — shared OVERLAYS auto-cycle
+  header + ADD OVERLAY flow (view picker omits 'all') + collapsible color-tagged cards
+  (view/blend pickers, fader, reorder, remove, own PlaylistPanel). Error codes → friendly
+  Alerts; ADD hidden at cap 4. tsc 0 / lint 11 / web:build OK. Clean aesthetic preserved.
+  Live screenshots (collapsed + expanded) sent to operator. Deliverable a98a05a.
+- Operator UI-direction work this session: removed #3 speed/#11 chase (ca69693), invert→global
+  (ca69693), mixer declutter to LEVEL+thin HUE+pattern list (2948983), deck view-overrides
+  (engine 2185d64 + UI a98a05a). Still pending (engine done, UI not built): global invert
+  toggle in GLOBAL EFFECTS bar + global tap-tempo control placement.
