@@ -945,6 +945,16 @@ export interface MixerChannel {
   // soloSafe/hue — no new WS type): when true this channel's RGB contribution
   // is inverted PRE-blend, AFTER the per-channel hue. Default false = no-op.
   invert?: boolean;
+  // FOLLOW / LINK (round-2 #6, docs/39 §F-follow). When `followLeaderId` names
+  // another channel, THIS channel becomes a FOLLOWER: its effective level is
+  // the leader's effective level × `followScale` (the follower's own manual
+  // fader is ignored while linked). Both ride the existing mixer-state
+  // broadcast (no new WS type). `followLeaderId` is the leader channel id, or
+  // null when not following — the engine CLEARS a follower's `followLeaderId`
+  // (and broadcasts) when its leader is deleted, so the UI can go unfollowed
+  // without local action. `followScale` is clamped to [0,2] (default 1.0).
+  followLeaderId?: string | null;
+  followScale?: number;
   [key: string]: any;
 }
 

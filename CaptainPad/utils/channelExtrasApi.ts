@@ -354,6 +354,71 @@ export async function setChannelInvert(
   }
 }
 
+// ── Per-channel FOLLOW / LINK (round-2 #6, docs/39 §F-follow; engine #6) ───
+// Make THIS channel a FOLLOWER of another channel (the leader): its effective
+// level becomes the leader's effective level × `followScale` (the follower's
+// own manual fader is ignored while linked). Both fields ride the SAME PATCH
+// /mixer/channels/:id (or /deck/channel when { deck: true }) the rest of the
+// channel metadata uses, and both ride back on the existing mixer-state WS
+// broadcast (no new WS type).
+//   - followLeaderId: another channel's id, or null to UNFOLLOW. The engine
+//                     rejects self-follow and any cycle (A→B→A, longer chains)
+//                     with 400 code:'FOLLOW_CYCLE', and an unknown leader with
+//                     404 code:'FOLLOW_LEADER_NOT_FOUND'. A non-string/non-null
+//                     payload ⇒ 400. Validated BEFORE mutation (no half-apply).
+//   - followScale:    finite number clamped [0,2] (default 1.0); non-finite ⇒
+//                     400. Independent of followLeaderId — an operator can
+//                     pre-set the scale before linking.
+//
+// Codex P0 — fail loud: the client honours res.ok and returns { ok:false,
+// error, data } carrying the engine error body (incl. the 4xx `code`) verbatim
+// so the caller can Alert on FOLLOW_CYCLE / FOLLOW_LEADER_NOT_FOUND specifically.
+
+/** The engine's 400 cycle/self-follow code. */
+export const FOLLOW_CYCLE = 'FOLLOW_CYCLE';
+/** The engine's 404 unknown-leader code. */
+export const FOLLOW_LEADER_NOT_FOUND = 'FOLLOW_LEADER_NOT_FOUND';
+
+/**
+ * Set this channel's follow link and/or follow scale in one PATCH. Pass only
+ * the fields you want to change:
+ *   - { followLeaderId: '<id>' }  → follow that channel
+ *   - { followLeaderId: null }    → unfollow (revert to own manual fader)
+ *   - { followScale: 1.5 }        → set the scale (engine clamps [0,2])
+ * Returns { ok:false, error, data } on a non-2xx; `data.code` carries
+ * FOLLOW_CYCLE / FOLLOW_LEADER_NOT_FOUND when present.
+ */
+export async function setChannelFollow(
+  channelId: string,
+  fields: { followLeaderId?: string | null; followScale?: number },
+  opts?: { deck?: boolean },
+): Promise<ApiResult<any>> {
+  try {
+    const path = opts?.deck
+      ? `${api_base}/deck/channel`
+      : `${api_base}/mixer/channels/${encodeURIComponent(channelId)}`;
+    const body: { followLeaderId?: string | null; followScale?: number } = {};
+    if (Object.prototype.hasOwnProperty.call(fields, 'followLeaderId')) {
+      body.followLeaderId = fields.followLeaderId ?? null;
+    }
+    if (Object.prototype.hasOwnProperty.call(fields, 'followScale')) {
+      body.followScale = fields.followScale;
+    }
+    const res = await fetchWithTimeout(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
 // ── Global tap-tempo (round-2 #4) ─────────────────────────────────────────
 // The client computes BPM from tap intervals and posts the resolved BPM. The
 // engine validates finite [20,400] (else 400), sets _tempoMultiplier =
