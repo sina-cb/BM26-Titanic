@@ -173,3 +173,65 @@ export async function setChannelColor(
     return { ok: false, error: err.message };
   }
 }
+
+// ── Per-channel hue (F-hue, docs/39 §F-hue) ───────────────────────────────
+// A luminance-preserving RGB-only hue rotation applied PRE-blend on this
+// channel's own contribution (W/A/UV are never touched). `hue` is degrees;
+// the engine's `validateHue` normalizes into [0,360) (370⇒10, -30⇒330) and
+// returns 400 on a non-finite value. Same PATCH /mixer/channels/:id (or
+// /deck/channel when { deck: true }) the rest of the channel metadata uses.
+
+export async function setChannelHue(
+  channelId: string,
+  hue: number,
+  opts?: { deck?: boolean },
+): Promise<ApiResult<any>> {
+  try {
+    const path = opts?.deck
+      ? `${api_base}/deck/channel`
+      : `${api_base}/mixer/channels/${encodeURIComponent(channelId)}`;
+    const res = await fetchWithTimeout(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hue }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── Global hue shifter (F-hue, docs/39 §F-hue) ────────────────────────────
+// A first-class rig knob (NOT a GEM slot): a continuous hue rotation applied
+// POST-composite on the whole output buffer, plus an optional auto-rotate
+// (deg/sec). RGB-only, leaves W/A/UV byte-for-byte. POST /global-effect-hue
+// { degrees, autoRotateDegPerSec? } → validates (400 on non-finite), persists
+// `globalsState.hueShift`, and broadcasts { type:'globalHueShift', hueShift }
+// on /ws/control. `degrees` normalizes into [0,360); `autoRotateDegPerSec`
+// clamps to [-360,360].
+
+export async function setGlobalHue(
+  degrees: number,
+  autoRotateDegPerSec?: number,
+): Promise<ApiResult<{ status: string; hueShift: { degrees: number; autoRotateDegPerSec: number } }>> {
+  try {
+    const body: { degrees: number; autoRotateDegPerSec?: number } = { degrees };
+    if (autoRotateDegPerSec !== undefined) body.autoRotateDegPerSec = autoRotateDegPerSec;
+    const res = await fetchWithTimeout(`${api_base}/global-effect-hue`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}

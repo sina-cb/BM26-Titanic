@@ -51,10 +51,19 @@ import {
   dispatchGlobalEffectSlotAction,
   patchGlobalEffectSlot,
   setGlobalEffectBlackout,
+  fetchGlobals,
   GlobalEffectSlot,
   GlobalEffectSlotStatus,
 } from '@/utils/api';
+import { setGlobalHue } from '@/utils/channelExtrasApi';
+import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { engineEvents } from '@/utils/engineEvents';
+
+// Global hue shifter (docs/39 §F-hue). Auto-rotate speed slider range. The
+// engine clamps autoRotateDegPerSec into [-360,360]; ±180 °/s (a half-turn
+// per second) is a comfortable operator range — fast enough to read as a
+// continuous spin, slow enough to dial in. 0 = off (no spin).
+const HUE_ROTATE_MAX_DPS = 180;
 
 // Hard UI contract (operator review May 2026): the rig surface shows
 // EXACTLY this many slots. The engine can persist up to MAX_SLOTS (16)
@@ -128,6 +137,18 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   const [optimisticActive, setOptimisticActive] = useState<Record<number, boolean>>({});
   const optimisticTimersRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
 
+  // Global hue shifter (docs/39 §F-hue). `degrees` is the live rig hue offset
+  // (the engine advances it itself when auto-rotating, so we ALWAYS show the
+  // engine-reported value rather than fighting the spin). `autoRotateDegPerSec`
+  // is the spin rate. Both reflect the engine's `globalHueShift` broadcast.
+  const [hueShift, setHueShift] = useState<{ degrees: number; autoRotateDegPerSec: number }>(
+    { degrees: 0, autoRotateDegPerSec: 0 },
+  );
+  // While the operator is dragging the degrees fader the engine may also be
+  // auto-rotating — we don't want the incoming broadcast to yank the thumb out
+  // from under their finger. This holds the live drag target; cleared on release.
+  const hueDraggingRef = useRef(false);
+
   const refresh = useCallback(async () => {
     const r = await fetchGlobalEffectSlotsStatus();
     if (r.ok && r.data?.slots) {
@@ -197,6 +218,15 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       }
       const lib = await fetchGlobalEffectLibrary();
       if (alive && lib.ok && lib.data?.effects) setLibrary(lib.data.effects as Library);
+      // Seed the global hue knob from /globals (the engine's persisted
+      // hueShift). The globalHueShift WS broadcast keeps it live afterwards.
+      const globals = await fetchGlobals();
+      if (alive && globals.ok && globals.data?.hueShift && !hueDraggingRef.current) {
+        const hs = globals.data.hueShift;
+        if (typeof hs.degrees === 'number' && typeof hs.autoRotateDegPerSec === 'number') {
+          setHueShift({ degrees: hs.degrees, autoRotateDegPerSec: hs.autoRotateDegPerSec });
+        }
+      }
       refresh().then(() => { slotsLoadedRef.current = true; });
     })();
     const unsub = engineEvents.subscribe((msg: any) => {
@@ -229,6 +259,18 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         refresh();
       } else if (msg?.type === 'mixer' && typeof msg.blackout === 'boolean') {
         onBlackoutChangeRef.current?.(msg.blackout);
+      } else if (msg?.type === 'globalHueShift' && msg.hueShift) {
+        // The engine is authoritative for the live degrees (it advances them
+        // while auto-rotating). Reflect them UNLESS the operator is mid-drag
+        // on the degrees fader, in which case we'd be fighting their finger —
+        // still take the autoRotateDegPerSec (it's not what they're dragging).
+        const hs = msg.hueShift;
+        const degrees = typeof hs.degrees === 'number' ? hs.degrees : 0;
+        const rot = typeof hs.autoRotateDegPerSec === 'number' ? hs.autoRotateDegPerSec : 0;
+        setHueShift(prev => ({
+          degrees: hueDraggingRef.current ? prev.degrees : degrees,
+          autoRotateDegPerSec: rot,
+        }));
       }
     });
     return () => {
@@ -338,6 +380,30 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     const r = await setGlobalEffectBlackout(next);
     if (r.ok) onBlackoutChange?.(next);
   }, [blackout, onBlackoutChange]);
+
+  // Global hue degrees fader (0-360°). Optimistic local set + POST. The
+  // HorizontalFader throttles onChange to ~50 ms during a drag, so each POST
+  // is naturally rate-limited. We keep the current auto-rotate rate so dialing
+  // the offset never silently disables a spin. Fail-loud: surface a rejection.
+  const onHueDegreesChange = useCallback(async (deg: number) => {
+    setHueShift(prev => ({ ...prev, degrees: deg }));
+    const r = await setGlobalHue(deg, hueShift.autoRotateDegPerSec);
+    if (!r.ok) {
+      console.warn('[GEM] global hue degrees rejected:', r.error);
+      Alert.alert('Hue not applied', r.error || 'The engine rejected the global hue.');
+    }
+  }, [hueShift.autoRotateDegPerSec]);
+
+  // Global hue auto-rotate fader (-180..180 °/s, 0 = off). Optimistic local
+  // set + POST, keeping the current degrees as the spin's start offset.
+  const onHueRotateChange = useCallback(async (rot: number) => {
+    setHueShift(prev => ({ ...prev, autoRotateDegPerSec: rot }));
+    const r = await setGlobalHue(hueShift.degrees, rot);
+    if (!r.ok) {
+      console.warn('[GEM] global hue auto-rotate rejected:', r.error);
+      Alert.alert('Hue spin not applied', r.error || 'The engine rejected the auto-rotate rate.');
+    }
+  }, [hueShift.degrees]);
 
   // Always deactivate a slot before mutating its binding. Without
   // this an operator who swaps an active legacy effect (e.g.
@@ -493,6 +559,23 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         ));
       })()}
 
+      {/* Global hue shifter (docs/39 §F-hue). A first-class rig knob (NOT a
+          GEM slot): a continuous RGB-only hue rotation applied post-composite
+          on the whole output, plus an optional auto-rotate spin. W/A/UV
+          (mission-critical exterior whites) are never touched. Rendered below
+          the slot grid on the deck surface; omitted on the constrained
+          mixer-strip variant (a single-row strip has no vertical room). */}
+      {!isStrip && (
+        <HueShiftSection
+          degrees={hueShift.degrees}
+          autoRotateDegPerSec={hueShift.autoRotateDegPerSec}
+          onDegreesChange={onHueDegreesChange}
+          onRotateChange={onHueRotateChange}
+          onDegreesDragStart={() => { hueDraggingRef.current = true; }}
+          onDegreesRelease={() => { hueDraggingRef.current = false; }}
+        />
+      )}
+
       <SwapSheet
         slotId={swapTargetId}
         slot={swapTargetId !== null ? visibleSlots.find(s => s.slotId === swapTargetId) ?? null : null}
@@ -505,6 +588,77 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           if (swapTargetId !== null) onClearSlot(swapTargetId);
         }}
       />
+    </View>
+  );
+};
+
+// Global hue shifter UI (docs/39 §F-hue). Two faders:
+//   - HUE 0-360° — the rig-wide chroma offset. Always reflects the engine's
+//     reported degrees (so an auto-rotating spin animates the thumb), but the
+//     parent suppresses the broadcast while the operator is dragging.
+//   - SPIN -180..180 °/s — the auto-rotate rate (0 = off, centred thumb).
+// Both faders are normalized 0..1 (HorizontalFader's contract); we map the
+// engineering units across that range at the boundary. Each row is ≥44pt tall
+// for a comfortable touch target. A live swatch previews the current hue.
+const HueShiftSection: React.FC<{
+  degrees: number;
+  autoRotateDegPerSec: number;
+  onDegreesChange: (deg: number) => void;
+  onRotateChange: (rot: number) => void;
+  onDegreesDragStart: () => void;
+  onDegreesRelease: () => void;
+}> = ({ degrees, autoRotateDegPerSec, onDegreesChange, onRotateChange, onDegreesDragStart, onDegreesRelease }) => {
+  const C = usePalette();
+  const rot = autoRotateDegPerSec;
+  const spinOff = Math.round(rot) === 0;
+  return (
+    <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: C.ghostBorder }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary,
+          letterSpacing: 1.2, textTransform: 'uppercase',
+        }}>
+          Hue Shift
+        </Text>
+        <View
+          style={{
+            width: 20, height: 20, borderRadius: 4,
+            borderWidth: 1, borderColor: C.ghostBorder,
+            backgroundColor: `hsl(${Math.round(degrees)}, 80%, 55%)`,
+          }}
+          accessibilityLabel={`Current global hue ${Math.round(degrees)} degrees`}
+        />
+      </View>
+
+      {/* HUE 0-360° */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44 }}>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 40, textTransform: 'uppercase' }}>HUE</Text>
+        <HorizontalFader
+          value={Math.max(0, Math.min(1, degrees / 360))}
+          onChange={(v: number) => onDegreesChange(Math.round(v * 360))}
+          onDragStart={onDegreesDragStart}
+          onRelease={onDegreesRelease}
+          trackStyle={{ flex: 1, height: 12, marginHorizontal: 8, backgroundColor: C.surfaceContainerHigh, borderRadius: 6, justifyContent: 'center' }}
+          fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 6 }}
+          thumbStyle={{ position: 'absolute', width: 16, height: 22, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -8 }] }}
+        />
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, width: 44, textAlign: 'right' }}>{Math.round(degrees)}°</Text>
+      </View>
+
+      {/* SPIN -180..180 °/s (0 = off) */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44 }}>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 40, textTransform: 'uppercase' }}>SPIN</Text>
+        <HorizontalFader
+          value={Math.max(0, Math.min(1, (rot + HUE_ROTATE_MAX_DPS) / (2 * HUE_ROTATE_MAX_DPS)))}
+          onChange={(v: number) => onRotateChange(Math.round(v * 2 * HUE_ROTATE_MAX_DPS - HUE_ROTATE_MAX_DPS))}
+          trackStyle={{ flex: 1, height: 12, marginHorizontal: 8, backgroundColor: C.surfaceContainerHigh, borderRadius: 6, justifyContent: 'center' }}
+          fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: spinOff ? C.icon : C.primary, borderRadius: 6 }}
+          thumbStyle={{ position: 'absolute', width: 16, height: 22, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -8 }] }}
+        />
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: spinOff ? C.secondary : C.text, width: 44, textAlign: 'right' }}>
+          {spinOff ? 'OFF' : `${rot > 0 ? '+' : ''}${Math.round(rot)}`}
+        </Text>
+      </View>
     </View>
   );
 };

@@ -28,7 +28,7 @@ import { TimerWheel } from '@/components/ui/TimerWheel';
 import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { SnapshotBar } from '@/components/SnapshotBar';
-import { setChannelFaderMax, setChannelColor } from '@/utils/channelExtrasApi';
+import { setChannelFaderMax, setChannelColor, setChannelHue } from '@/utils/channelExtrasApi';
 import { duplicateMixerChannel, reorderMixerChannels, panicMixer } from '@/utils/channelOpsApi';
 import {
   type MixGroup,
@@ -213,7 +213,7 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -572,6 +572,36 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           />
           <Text style={[styles.displayMono, { width: 32, textAlign: 'right', fontSize: 13, color: '#F5A623' }]}>
             {Math.round((channel.faderMax ?? 1) * 100)}
+          </Text>
+        </View>
+      )}
+
+      {/* Per-channel HUE (docs/39 §F-hue). A luminance-preserving RGB-only
+          hue rotation applied PRE-blend on THIS channel's contribution —
+          W/A/UV (mission-critical exterior whites) are never touched. The
+          0-360° fader maps onto the engine's `hue` field (default 0 = no
+          rotation, zero render cost). Same lock gate as the CAP/level rows.
+          The fader is normalized 0..1 (HorizontalFader's contract), so the
+          display ×360 round-trips degrees. A small swatch on the left
+          previews the rotation tint. Rendered unconditionally so the strip
+          never shifts when hue returns to 0. */}
+      {onHueChange && (
+        <View style={styles.hueRow}>
+          <Text style={[styles.labelCaps, { width: 36 }]}>HUE</Text>
+          <View
+            style={[
+              styles.hueSwatch,
+              { backgroundColor: `hsl(${Math.round(channel.hue ?? 0)}, 80%, 55%)` },
+            ]}
+          />
+          <HorizontalFader
+            value={(channel.hue ?? 0) / 360}
+            onChange={(v: number) => { if (!locked) onHueChange(channel.id, Math.round(v * 360)); }}
+            trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6, opacity: locked ? 0.5 : 1 }]}
+            fillStyle={styles.hueFill}
+          />
+          <Text style={[styles.displayMono, { width: 32, textAlign: 'right', fontSize: 13, color: C.secondary }]}>
+            {Math.round(channel.hue ?? 0)}
           </Text>
         </View>
       )}
@@ -1418,6 +1448,26 @@ export default function MixerScreen() {
     }
   }, []);
 
+  // Per-channel hue (docs/39 §F-hue). A luminance-preserving RGB-only hue
+  // rotation applied PRE-blend on this channel's own contribution; W/A/UV are
+  // never touched (mission-critical exterior whites). Same optimistic + PATCH
+  // + reconcile-from-broadcast + fail-loud revert shape as faderMax/color. The
+  // engine's validateHue normalizes degrees into [0,360); a non-finite ⇒ 400.
+  const handleHueChange = useCallback(async (channelId: string, hue: number) => {
+    const prev = channelsRef.current.find(c => c.id === channelId)?.hue;
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, hue } : c));
+    const res = await setChannelHue(channelId, hue);
+    if (!res.ok) {
+      console.error(`[Mixer] hue change rejected for ${channelId}:`, res.error);
+      // Revert to the prior hue; the next mixer broadcast re-syncs too.
+      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, hue: prev ?? 0 } : c));
+      Alert.alert(
+        'Hue not applied',
+        `The engine rejected this hue. ${res.error || ''} The channel kept its previous hue.`.trim(),
+      );
+    }
+  }, []);
+
   const handleControlChange = useCallback((channelId: string, controlId: number, val: number) => {
     setChannels(chs => chs.map(c => {
       if (c.id !== channelId) return c;
@@ -1935,6 +1985,7 @@ export default function MixerScreen() {
               onFaderChange={handleFaderChange}
               onFaderMaxChange={handleFaderMaxChange}
               onColorChange={handleColorChange}
+              onHueChange={handleHueChange}
               onMuteToggle={handleMuteToggle}
               onSoloToggle={handleSoloToggle}
               onSoloSafeToggle={handleSoloSafeToggle}
@@ -2353,6 +2404,27 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     left: 0, top: 0, bottom: 0,
     backgroundColor: '#F5A623',
     borderRadius: 4,
+  },
+  // Per-channel hue row (docs/39 §F-hue) — same geometry as the LEVEL/CAP
+  // rows. The fill is a neutral magenta-ish accent so the operator reads it
+  // as a distinct chroma control; the live tint is shown in the swatch.
+  hueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: C.ghostBorder,
+  },
+  hueFill: {
+    position: 'absolute',
+    left: 0, top: 0, bottom: 0,
+    backgroundColor: '#B36AE2',
+    borderRadius: 4,
+  },
+  hueSwatch: {
+    width: 16, height: 16, borderRadius: 4,
+    borderWidth: 1, borderColor: C.ghostBorder,
   },
   // Channel color picker swatch grid.
   swatchGrid: {
