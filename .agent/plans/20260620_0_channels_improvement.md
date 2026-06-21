@@ -591,3 +591,17 @@ new per-channel hue control lands into an already-decluttered strip.
   mixer, CaptainPad) ‖ dev/auto_cycle_engine (#2 engine, design _0). Engine vs CaptainPad.
   NEXT after auto-cycle: #10 undo engine (serial on engine files), then follow/auto-cycle UI.
   Deliverable 0aca767.
+
+## STATUS LOG (cont. 20)
+- auto-cycle ENGINE #2 MERGED (38343c3): overlay playlist auto-advance ticked from render-loop
+  clock, advance via setImmediate (off hot path, never darkens), opt-in (active=false → exterior
+  immune), 400 AUTOCYCLE_BAD_DELAY fail-loud. Suite 1070/0; auto-cycle HIL 9/9.
+- follow/link UI #6 MERGED (375d841): leader picker + scale fader, FOLLOW_CYCLE/leader-delete
+  surfaced live. tsc 0 / lint 11 / web:build OK. #6 cluster COMPLETE.
+- auto-cycle UI #2 MERGED (7a22a46): AUTO toggle + delay stepper/pills + SHUFFLE, playlist-scoped,
+  AUTOCYCLE_BAD_DELAY → friendly Alert. tsc 0 / lint 11 / web:build OK. #2 cluster COMPLETE.
+- dev/undo_engine RUNNING — #10 undo (session-only captureLook ring + recallLook restore,
+  morph-cancel race, UNDO_EMPTY fail-loud, new undoState WS type). Engine-only.
+- ROUND-2 STATUS: #1 morph, #3/#4/#11 phase-clock, #5 flash/bump, #6 follow, #7 cue-to-deck,
+  #8 invert, #9 param-presets, #2 auto-cycle — ALL complete end-to-end. Only #10 undo (engine
+  in flight; UI after) remains to close the entire round-2 backlog. Deliverable 7a22a46.
