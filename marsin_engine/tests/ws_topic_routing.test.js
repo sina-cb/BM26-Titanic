@@ -95,6 +95,8 @@ test('UI/state events ride /ws/control', () => {
     'mixerTransitionRejected',
     'globalEffectSlots',
     'globalEffectMacroStatus',
+    // docs/39 §F-hue: global hue shifter knob broadcast.
+    'globalHueShift',
     'scheduledTasks',
     'playlistLibrary',
     'playlistSaved',

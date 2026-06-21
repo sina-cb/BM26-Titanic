@@ -212,6 +212,33 @@ export function validateFader(raw) {
   return { ok: true, value: Math.max(0, Math.min(1, n)) };
 }
 
+// ── Hue value validation (single source of truth) ──────────────────────
+// A hue is an angle in degrees. Every write path (per-channel PATCH, deck
+// PATCH, POST /global-effect-hue) routes through this. Codex P0 (no silent
+// fallback): a NON-FINITE value (NaN / Infinity, or a non-number /
+// unparseable string) is REJECTED with 400 — we never coerce a broken
+// payload to 0. A finite value (any magnitude, including negatives like
+// -30 or wrap-arounds like 370) is NORMALIZED into the canonical [0,360)
+// range via ((n % 360) + 360) % 360 — that's a real, benign intent (the
+// hue wheel wraps), not a malformed input.
+//
+// Returns { ok: true, value } with the normalized angle on success, or
+// { ok: false, error } (human-readable, suitable for a 400 body).
+export function validateHue(raw) {
+  let n;
+  if (typeof raw === 'number') {
+    n = raw;
+  } else if (typeof raw === 'string' && raw.trim() !== '') {
+    n = Number(raw);
+  } else {
+    return { ok: false, error: `hue must be a finite number of degrees, got '${raw}'` };
+  }
+  if (!Number.isFinite(n)) {
+    return { ok: false, error: `hue must be a finite number of degrees, got '${raw}'` };
+  }
+  return { ok: true, value: ((n % 360) + 360) % 360 };
+}
+
 // ── Deck transition durationMs bounds (single source of truth) ─────────
 // The /deck/transition-config POST, the per-call swap override, and the
 // internal loadPlaylistEntryWithTransition resolve all clamp to this same
@@ -1617,6 +1644,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // membership resolves. The PatternChannel ctor types both defensively.
       mixGroupId: typeof saved.mixGroupId === 'string' ? saved.mixGroupId : null,
       soloSafe: !!saved.soloSafe,
+      // F-hue restore (docs/39). An old state file without this restores
+      // to 0 = no shift (documented schema default). The PatternChannel
+      // ctor normalizes into [0,360).
+      hue: typeof saved.hue === 'number' ? saved.hue : 0,
     };
     const ch = role === 'deck'
       ? mixer.setDeckChannel(config)
@@ -1887,6 +1918,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // chip + the solo-safe toggle. See docs/39 §F-group/§F-solo.
       mixGroupId: typeof c.mixGroupId === 'string' ? c.mixGroupId : null,
       soloSafe: !!c.soloSafe,
+      // F-hue (docs/39): per-channel hue rotation in degrees [0,360).
+      // Surfaced so CaptainPad can render the per-channel HUE control. A
+      // channel without the field (old engine) serializes 0 = no shift.
+      hue: typeof c.hue === 'number' ? c.hue : 0,
       // CPC-matched exports are tagged with `cpcOwned`/`cpcKey`/
       // `cpcLabel` so the iPad can show a disabled "MATCHED · SPEED"
       // badge instead of silently hiding them — see notes in the
@@ -1983,6 +2018,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // serializeChannel above for semantics. docs/39 §F-group/§F-solo.
         mixGroupId: typeof c.mixGroupId === 'string' ? c.mixGroupId : null,
         soloSafe: !!c.soloSafe,
+        // F-hue (docs/39): per-channel hue rotation. See serializeChannel
+        // above for semantics. 0 = no shift.
+        hue: typeof c.hue === 'number' ? c.hue : 0,
         // CPC-matched exports used to be filtered out here. As of
         // May 2026 they're SURFACED with a `cpcOwned` / `cpcKey` /
         // `cpcLabel` tag so the UI can show a disabled "MATCHED ·
@@ -2909,6 +2947,45 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', blackout: data.enabled }));
       });
+    // POST /global-effect-hue (docs/39 §F-hue) — the GLOBAL hue shifter.
+    // A first-class continuous knob (like blackout), NOT a GEM slot.
+    // Rotates the RGB hue of the WHOLE post-mixer buffer (W/A/UV
+    // untouched); stacks additively with any per-channel hue.
+    //   Body: { degrees, autoRotateDegPerSec? }
+    //     - degrees             required, finite ⇒ normalized [0,360),
+    //                           else 400 (Codex P0, no silent fallback).
+    //     - autoRotateDegPerSec optional (default 0), finite + clamped
+    //                           [-360,360]; else 400.
+    // Persists globalsState.hueShift so the next boot honours it, and
+    // broadcasts { type: 'globalHueShift', hueShift } + mixer state.
+    } else if (req.method === 'POST' && req.url === '/global-effect-hue') {
+      readBody(data => {
+        if (!globalEffectsController) {
+          res.writeHead(503); return res.end(JSON.stringify({ error: 'global effects controller not initialized' }));
+        }
+        const hv = validateHue(data.degrees);
+        if (!hv.ok) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: hv.error.replace(/^hue/, 'degrees') }));
+        }
+        let rot = 0;
+        if (data.autoRotateDegPerSec !== undefined) {
+          if (typeof data.autoRotateDegPerSec !== 'number' || !Number.isFinite(data.autoRotateDegPerSec)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: `autoRotateDegPerSec must be a finite number, got '${data.autoRotateDegPerSec}'` }));
+          }
+          rot = Math.max(-360, Math.min(360, data.autoRotateDegPerSec));
+        }
+        // setHueShift re-validates + normalizes (degrees [0,360), rot
+        // clamped) and throws on non-finite — defence in depth.
+        globalEffectsController.setHueShift(hv.value, rot);
+        globalsState.hueShift = { ...globalEffectsController.hueShift };
+        stateManager.saveGlobalsState(globalsState, paramCenter);
+        broadcastWs({ type: 'globalHueShift', hueShift: { ...globalEffectsController.hueShift } });
+        broadcastMixerState();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', hueShift: { ...globalEffectsController.hueShift } }));
+      });
     } else if (req.method === 'PATCH' && req.url.startsWith('/global-effect-slots/')) {
       // PATCH /global-effect-slots/:slotId
       const m = req.url.match(/^\/global-effect-slots\/(\d+)$/);
@@ -3789,6 +3866,19 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.soloSafe !== undefined) {
           channel.soloSafe = !!data.soloSafe;
         }
+        // F-hue: per-channel hue rotation (docs/39). Validated via
+        // validateHue — non-finite ⇒ 400 (Codex P0, no silent coercion);
+        // a finite value is normalized into [0,360). Rotates this layer's
+        // RGB BEFORE blend (W/A/U untouched). Stacks additively with the
+        // global hue. The render loop gates on non-zero, so hue=0 = no-op.
+        if (data.hue !== undefined) {
+          const hv = validateHue(data.hue);
+          if (!hv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: hv.error }));
+          }
+          channel.hue = hv.value;
+        }
         if (data.transitionMode !== undefined) channel.transitionMode = data.transitionMode;
         if (data.transitionTime !== undefined) channel.transitionTime = data.transitionTime;
         // View-selection update: validate first so a typo can't brick
@@ -4625,6 +4715,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
           }
           channel.color = data.color === null ? null : data.color;
+        }
+        // F-hue: per-channel hue on the deck channel. Same validation +
+        // semantics as the mixer PATCH (docs/39 §F-hue).
+        if (data.hue !== undefined) {
+          const hv = validateHue(data.hue);
+          if (!hv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: hv.error }));
+          }
+          channel.hue = hv.value;
         }
         if (data.locked !== undefined) {
           const becameLocked = !channel.locked && !!data.locked;

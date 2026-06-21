@@ -107,6 +107,50 @@ function copyPixel6(dst, src, pixelIndex) {
   dst[o + 5] = src[o + 5];
 }
 
+// Per-channel Hue shift (docs/39 §F-hue). Rotates the RGB hue of an
+// interleaved 6ch RGBWAU Uint8Array (0-255) IN PLACE, leaving the W/A/U
+// bytes BYTE-FOR-BYTE untouched (mission-critical exterior whites carry no
+// hue concept and must not be tinted/dimmed). Same luminance-preserving
+// YIQ rotation as effects/hue_shift.js, expressed on 0-255 bytes:
+// precompute cos/sin + the 3x3 matrix ONCE, ~9 mults/pixel, clamp 0-255.
+// Allocation-free. Caller MUST gate on `degrees !== 0` so the default
+// channel pays nothing.
+const HUE_DEG_TO_RAD = Math.PI / 180;
+function applyHueShift6chU8(buf, pixelCount, degrees) {
+  if (!degrees) return; // defensive no-op (caller also gates)
+  const theta = degrees * HUE_DEG_TO_RAD;
+  const c = Math.cos(theta);
+  const s = Math.sin(theta);
+
+  const m00 = 0.299 + 0.701 * c + 0.168 * s;
+  const m01 = 0.587 - 0.587 * c + 0.330 * s;
+  const m02 = 0.114 - 0.114 * c - 0.497 * s;
+  const m10 = 0.299 - 0.299 * c - 0.328 * s;
+  const m11 = 0.587 + 0.413 * c + 0.035 * s;
+  const m12 = 0.114 - 0.114 * c + 0.292 * s;
+  const m20 = 0.299 - 0.300 * c + 1.250 * s;
+  const m21 = 0.587 - 0.588 * c - 1.050 * s;
+  const m22 = 0.114 + 0.886 * c - 0.203 * s;
+
+  for (let i = 0; i < pixelCount; i++) {
+    const o = i * 6;
+    const r = buf[o];
+    const g = buf[o + 1];
+    const b = buf[o + 2];
+    // Bytes 3,4,5 (W,A,U) are deliberately never read or written.
+    let nr = m00 * r + m01 * g + m02 * b;
+    let ng = m10 * r + m11 * g + m12 * b;
+    let nb = m20 * r + m21 * g + m22 * b;
+    // Round + clamp into the 0-255 byte range.
+    nr = nr < 0 ? 0 : (nr > 255 ? 255 : (nr + 0.5) | 0);
+    ng = ng < 0 ? 0 : (ng > 255 ? 255 : (ng + 0.5) | 0);
+    nb = nb < 0 ? 0 : (nb > 255 ? 255 : (nb + 0.5) | 0);
+    buf[o] = nr;
+    buf[o + 1] = ng;
+    buf[o + 2] = nb;
+  }
+}
+
 // Commit a blended-layer result onto mixerBuffer ONLY at selected pixels.
 // The unselected pixels keep whatever the previous layer painted, which
 // is the whole point of view-selection: it lets a sparkle pattern on
@@ -1964,6 +2008,11 @@ export class PatternMixer {
       if (this.deckChannel) {
         this.channelBuffer.fill(0);
         this.deckChannel.renderInto(this.wasmHost, this.channelBuffer, true);
+        // Mirror the composite-loop hue shift so the vis meter/preview
+        // shows the recolored layer (docs/39 §F-hue). Gated on non-zero.
+        if (this.deckChannel.hue) {
+          applyHueShift6chU8(this.channelBuffer, this.pixelCount, this.deckChannel.hue);
+        }
         this._visData[this.deckChannel.id] = this._extractVisInto(this.deckChannel.id, this.channelBuffer);
         const d = this.deckChannel;
         let deckEff = 0;
@@ -1978,6 +2027,11 @@ export class PatternMixer {
       for (const channel of this.mixerChannels) {
         this.channelBuffer.fill(0);
         channel.renderInto(this.wasmHost, this.channelBuffer, true);
+        // Mirror the composite-loop hue shift so meter + vis match what
+        // actually blends into the mix (docs/39 §F-hue). Gated on non-zero.
+        if (channel.hue) {
+          applyHueShift6chU8(this.channelBuffer, this.pixelCount, channel.hue);
+        }
         this._visData[channel.id] = this._extractVisInto(channel.id, this.channelBuffer);
         this._visLevels[channel.id] =
           this._bufferMeanLevel(this.channelBuffer) * this._effFader(channel, soloActive);
@@ -1997,6 +2051,13 @@ export class PatternMixer {
     if (deck) {
       this.channelBuffer.fill(0);
       deck.renderInto(this.wasmHost, this.deckBuffer, true);
+
+      // Per-channel Hue shift on the live deck/PFL output (docs/39
+      // §F-hue): rotate the previewed channel's RGB hue (W/A/U untouched)
+      // so the deck buffer matches the composite. Gated on non-zero.
+      if (deck.hue) {
+        applyHueShift6chU8(this.deckBuffer, this.pixelCount, deck.hue);
+      }
 
       // View-selection blackout for the deck preview. PFL means "show
       // me exactly what THIS channel covers" — unselected pixels go
@@ -2151,6 +2212,14 @@ export class PatternMixer {
       // Re-render into channelBuffer for blend compositing.
       this.channelBuffer.fill(0);
       channel.renderInto(this.wasmHost, this.channelBuffer, true);
+
+      // Per-channel Hue shift (docs/39 §F-hue): rotate THIS layer's RGB
+      // hue BEFORE it is blended into the mix (W/A/U untouched). Gated on
+      // a non-zero hue so the default channel pays nothing. Stacks
+      // additively with the global hue applied post-composite in engine.js.
+      if (channel.hue) {
+        applyHueShift6chU8(this.channelBuffer, this.pixelCount, channel.hue);
+      }
 
       // Blend (mixerBuffer + channelBuffer) → blended. We blend the
       // WHOLE buffer (no mask) so the blend mode sees the existing

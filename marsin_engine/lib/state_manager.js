@@ -49,6 +49,14 @@ export function serializeChannel(ch) {
     // mixer and is cleared on restart.
     mixGroupId: (typeof ch.mixGroupId === 'string' && ch.mixGroupId.length > 0) ? ch.mixGroupId : null,
     soloSafe: !!ch.soloSafe,
+    // ── Additive field (hue shifter wave, 2026-06) ────────────────────
+    // Appended AFTER mixGroupId/soloSafe so earlier on-disk key order is
+    // unchanged — an old state file (no hue) loads and restores to the
+    // documented default (0 = no shift). Per-channel hue rotation in
+    // degrees [0,360) (F-hue, docs/39).
+    hue: (typeof ch.hue === 'number' && Number.isFinite(ch.hue))
+      ? ((ch.hue % 360) + 360) % 360
+      : 0,
   };
 }
 
@@ -189,7 +197,13 @@ export class StateManager {
   }
 
   loadGlobalsState() {
-    return this.load('globals_state.yaml', { blackout: false, effects: {}, params: {}, dimmers: {} });
+    // hueShift (F-hue, docs/39): persistent global hue knob. Default
+    // { degrees: 0, autoRotateDegPerSec: 0 } = no shift — an old file
+    // without the key loads to this documented default.
+    return this.load('globals_state.yaml', {
+      blackout: false, effects: {}, params: {}, dimmers: {},
+      hueShift: { degrees: 0, autoRotateDegPerSec: 0 },
+    });
   }
 
   /**
@@ -247,6 +261,18 @@ export class StateManager {
         intensityController.setSectionBrightness(parseInt(sId, 10), bright);
       }
     }
+    if (globalEffectsController && globalsState.hueShift) {
+      // F-hue restore (docs/39): re-apply the persisted global hue knob
+      // through the validating setter so a hand-edited bad YAML value
+      // fails loudly here (caught + logged by the boot caller) instead of
+      // silently half-applying. A missing field stays at the controller's
+      // 0/0 default (handled by loadGlobalsState's default).
+      const hs = globalsState.hueShift;
+      globalEffectsController.setHueShift(
+        typeof hs.degrees === 'number' ? hs.degrees : 0,
+        typeof hs.autoRotateDegPerSec === 'number' ? hs.autoRotateDegPerSec : 0,
+      );
+    }
     if (globalEffectsController && globalsState.groupFixedColors) {
       // Route through the validating setter so a hand-edited bad YAML
       // entry fails loudly here (caught + logged by the boot caller)
@@ -303,6 +329,10 @@ export class StateManager {
           // rig-config. Solo itself is transient (mixer-level, not persisted).
           mixGroupId: core.mixGroupId,
           soloSafe: core.soloSafe,
+          // Additive (hue shifter wave): per-channel hue round-trips so a
+          // restart restores the operator's recolor. serializeChannel
+          // already normalized it — reuse verbatim.
+          hue: core.hue,
         };
       }),
       // Group registry (WAVE 15). Persisted alongside master so member

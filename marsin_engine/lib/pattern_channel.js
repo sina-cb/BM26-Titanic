@@ -1,5 +1,5 @@
 export class PatternChannel {
-  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null, faderMax = 1.0, color = null, mixGroupId = null, soloSafe = false }) {
+  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null, faderMax = 1.0, color = null, mixGroupId = null, soloSafe = false, hue = 0 }) {
     this.id = id;
     this.name = name;
     this.pattern = pattern;
@@ -66,6 +66,21 @@ export class PatternChannel {
     // Default false (an old state file restores to false — documented
     // schema default).
     this.soloSafe = !!soloSafe;
+
+    // ── Per-channel Hue shift (docs/39 §F-hue) ───────────────────────────
+    // Rotates THIS channel's RGB hue (W/A/UV untouched) BEFORE it is
+    // blended into the composite — so the operator can recolor one layer
+    // without touching the rest of the mix. Applied on the interleaved
+    // RGBWAU channelBuffer in pattern_mixer (applyHueShift6chU8), gated on
+    // a non-zero value so the default channel pays nothing. Stacks
+    // ADDITIVELY with the GLOBAL hue (which rotates the whole buffer
+    // post-composite). Normalized into [0,360) — an old state file without
+    // this field restores to 0 (documented schema default, not a silent
+    // fallback). Constrained at the API boundary (validateHue) and
+    // defensively here.
+    this.hue = (typeof hue === 'number' && Number.isFinite(hue))
+      ? ((hue % 360) + 360) % 360
+      : 0;
 
     this.transitionMode = transitionMode;
     this.transitionTime = transitionTime;

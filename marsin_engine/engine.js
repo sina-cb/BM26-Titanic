@@ -648,6 +648,15 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       });
     }
 
+    // Global Hue Shifter (docs/39 §F-hue): rotate the RGB hue of the
+    // whole post-mixer buffer (W/A/UV untouched). Runs AFTER the show
+    // macros but BEFORE group color-locks + intensity/blackout, so a
+    // locked group's color and the e-stop safety always have the final
+    // say. Zero-cost at the default (hue=0, no auto-rotate).
+    if (globalEffectsController && globalEffectsController.applyHueShift) {
+      globalEffectsController.applyHueShift(model.pixels, now);
+    }
+
     // Group fixed-color locks (docs/32): repaint operator-locked groups
     // AFTER all macros (a locked group must not flicker with the show)
     // but BEFORE intensity/blackout below, so the master cutoffs always
