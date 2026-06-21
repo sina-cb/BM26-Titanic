@@ -29,7 +29,7 @@ import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { SnapshotBar } from '@/components/SnapshotBar';
 import { ParamPresetMenu } from '@/components/ParamPresetMenu';
-import { setChannelFaderMax, setChannelColor, setChannelHue, setChannelSpeed, setChannelPhaseOffset, setChannelFollowsTempo, setChannelInvert } from '@/utils/channelExtrasApi';
+import { setChannelFaderMax, setChannelColor, setChannelHue, setChannelSpeed, setChannelPhaseOffset, setChannelFollowsTempo, setChannelInvert, setChannelFollow, FOLLOW_CYCLE, FOLLOW_LEADER_NOT_FOUND } from '@/utils/channelExtrasApi';
 import { duplicateMixerChannel, reorderMixerChannels, panicMixer } from '@/utils/channelOpsApi';
 import {
   type MixGroup,
@@ -61,6 +61,14 @@ const SPEED_MIN = 0.05;
 const SPEED_MAX = 8;
 const OFFSET_MIN = -10000;
 const OFFSET_MAX = 10000;
+
+// FOLLOW / LINK scale domain (round-2 #6, docs/39 §F-follow). The follower's
+// effective level = leader's effective level × followScale; the engine clamps
+// followScale to [0,2] (default 1.0). The normalized 0..1 HorizontalFader maps
+// onto [SCALE_MIN, SCALE_MAX] at the UI boundary (same pattern as HUE's ×360 /
+// SPEED's [0.05,8]).
+const FOLLOW_SCALE_MIN = 0;
+const FOLLOW_SCALE_MAX = 2;
 
 // Per-channel color accent palette (docs/39 §8.4 — channel `color` metadata,
 // no render effect). A small fixed set of high-contrast hex accents so the
@@ -224,7 +232,7 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onHueChange, onInvertChange, onSpeedChange, onPhaseOffsetChange, onFollowsTempoChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onHueChange, onInvertChange, onSpeedChange, onPhaseOffsetChange, onFollowsTempoChange, onFollowChange, followCandidates, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -232,6 +240,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
   const [showTransPicker, setShowTransPicker] = useState(false);
   const [showViewPicker, setShowViewPicker] = useState(false);
   const [showColorPicker, setShowColorPicker] = useState(false);
+  const [showFollowPicker, setShowFollowPicker] = useState(false);
   // Transition duration is stored as ms-integers (matching the deck's
   // TRANSITION_DURATION_PRESETS_MS) so the wheel's centered-row preset
   // equality lights up consistently. Engine wire format is seconds
@@ -727,6 +736,142 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             </Text>
           </TouchableOpacity>
         </View>
+      )}
+
+      {/* FOLLOW / LINK (round-2 #6, docs/39 §F-follow; engine #6). Make THIS
+          channel a FOLLOWER of another channel (the leader): its effective
+          level becomes the leader's effective level × followScale, and its own
+          manual fader is ignored while linked. Placement: ONE compact FOLLOW
+          button that opens a small picker (the closest precedent is the
+          view-selection / group "pick another entity" modal) — NOT an
+          always-on row of leader choices — so the already-dense strip keeps the
+          a5ee521 readability layout. When the channel IS following, a SCALE
+          fader appears under the button (domain [0,2], default 1.0, mapped at
+          the boundary like HUE/SPEED). followLeaderId is server-authoritative:
+          the leader name shown reflects the WS-broadcast value, so a leader
+          delete that the engine clears (it nulls its followers' followLeaderId
+          and broadcasts) shows up live as UNFOLLOWED without local action. */}
+      {onFollowChange && (
+        <>
+          {(() => {
+            const leaderId: string | null = channel.followLeaderId ?? null;
+            const leader = leaderId
+              ? (followCandidates || []).find((c: any) => c.id === leaderId)
+              : null;
+            // The leader rode out of the broadcast but isn't in our candidate
+            // list (e.g. it's the deck). Show the id so the operator still sees
+            // SOMETHING rather than a blank "following nothing".
+            const leaderLabel = leaderId
+              ? (leader?.name || leader?.label || leaderId)
+              : null;
+            const following = !!leaderId;
+            return (
+              <>
+                <View style={styles.followRow}>
+                  <Text style={[styles.labelCaps, { width: 36 }]}>FOLLOW</Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.followBtn,
+                      following && { backgroundColor: '#3D6BE5', borderColor: '#3D6BE5' },
+                      locked && { opacity: 0.5 },
+                    ]}
+                    hitSlop={ICON_BTN_HIT_SLOP}
+                    disabled={locked}
+                    onPress={() => { if (!locked) setShowFollowPicker(true); }}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      following
+                        ? `Following ${leaderLabel}. Tap to change or unfollow.`
+                        : 'Not following. Tap to follow another channel.'
+                    }
+                    accessibilityState={{ selected: following, disabled: locked }}
+                  >
+                    <Text
+                      style={[styles.labelCaps, following && { color: '#FFF' }]}
+                      numberOfLines={1}
+                    >
+                      {following ? `▸ ${String(leaderLabel).toUpperCase()}` : 'NONE ▾'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* SCALE fader — only while linked. The follower's effective
+                    level = leader's effective level × followScale. */}
+                {following && (
+                  <View style={styles.followScaleRow}>
+                    <Text style={[styles.labelCaps, { width: 36 }]}>SCALE</Text>
+                    <HorizontalFader
+                      value={(((channel.followScale ?? 1) - FOLLOW_SCALE_MIN) / (FOLLOW_SCALE_MAX - FOLLOW_SCALE_MIN))}
+                      onChange={(v: number) => {
+                        if (!locked) {
+                          const sc = Math.round((FOLLOW_SCALE_MIN + v * (FOLLOW_SCALE_MAX - FOLLOW_SCALE_MIN)) * 100) / 100;
+                          onFollowChange(channel.id, { followScale: sc });
+                        }
+                      }}
+                      trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6, opacity: locked ? 0.5 : 1 }]}
+                      fillStyle={styles.followFill}
+                    />
+                    <Text style={[styles.displayMono, { width: 40, textAlign: 'right', fontSize: 13, color: '#3D6BE5' }]}>
+                      {(channel.followScale ?? 1).toFixed(2)}×
+                    </Text>
+                  </View>
+                )}
+
+                {/* Leader picker — lists the OTHER channels by name + a
+                    NONE/UNFOLLOW option. Never lists self. Mirrors the
+                    view-selection modal interaction so it reads as native. */}
+                <Modal transparent visible={showFollowPicker} animationType="fade" onRequestClose={() => setShowFollowPicker(false)}>
+                  <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowFollowPicker(false)}>
+                    <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+                      <View style={styles.modalContent}>
+                        <Text style={[styles.labelCaps, { marginBottom: 4 }]}>FOLLOW CHANNEL</Text>
+                        <Text style={styles.followHint}>
+                          THIS CHANNEL&apos;S LEVEL FOLLOWS THE LEADER&apos;S (× SCALE). ITS OWN FADER IS IGNORED WHILE LINKED.
+                        </Text>
+                        <ScrollView style={{ maxHeight: 360 }}>
+                          {/* NONE / UNFOLLOW */}
+                          <TouchableOpacity
+                            style={[styles.modalRow, !following && styles.modalRowActive]}
+                            onPress={() => { onFollowChange(channel.id, { followLeaderId: null }); setShowFollowPicker(false); }}
+                            accessibilityRole="button"
+                            accessibilityLabel="Unfollow — use this channel's own fader"
+                          >
+                            <Text style={[styles.valueReadout, !following && { color: C.primary }]}>NONE (OWN FADER)</Text>
+                          </TouchableOpacity>
+
+                          {(followCandidates || [])
+                            .filter((c: any) => c.id !== channel.id)
+                            .map((c: any) => {
+                              const active = leaderId === c.id;
+                              const name = c.name || c.label || c.id;
+                              return (
+                                <TouchableOpacity
+                                  key={c.id}
+                                  style={[styles.modalRow, active && styles.modalRowActive]}
+                                  onPress={() => { onFollowChange(channel.id, { followLeaderId: c.id }); setShowFollowPicker(false); }}
+                                  accessibilityRole="button"
+                                  accessibilityLabel={`Follow ${name}`}
+                                  accessibilityState={{ selected: active }}
+                                >
+                                  <Text style={[styles.valueReadout, active && { color: C.primary }]} numberOfLines={1}>
+                                    {String(name).toUpperCase()}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+
+                          {(followCandidates || []).filter((c: any) => c.id !== channel.id).length === 0 && (
+                            <Text style={[styles.labelCaps, { textAlign: 'center', marginTop: 8 }]}>NO OTHER CHANNELS TO FOLLOW</Text>
+                          )}
+                        </ScrollView>
+                      </View>
+                    </TouchableOpacity>
+                  </TouchableOpacity>
+                </Modal>
+              </>
+            );
+          })()}
+        </>
       )}
 
       {/* Per-channel PARAM PRESETS (#9 engine). Compact button → modal sheet
@@ -1783,6 +1928,46 @@ export default function MixerScreen() {
     }
   }, []);
 
+  // FOLLOW / LINK (round-2 #6, docs/39 §F-follow; engine #6). Set/clear this
+  // channel's leader and/or its follow scale. Same optimistic + PATCH +
+  // reconcile-from-broadcast + fail-loud revert shape as hue/speed, but the
+  // 4xx codes get FRIENDLY Alerts: FOLLOW_CYCLE (self-follow / loop) and
+  // FOLLOW_LEADER_NOT_FOUND (leader vanished mid-pick). `fields` carries only
+  // the keys being changed ({followLeaderId} from the picker, {followScale}
+  // from the scale fader) so the two controls never clobber each other.
+  const handleFollowChange = useCallback(async (
+    channelId: string,
+    fields: { followLeaderId?: string | null; followScale?: number },
+  ) => {
+    const cur = channelsRef.current.find(c => c.id === channelId);
+    const prevLeader = cur?.followLeaderId ?? null;
+    const prevScale = cur?.followScale ?? 1.0;
+    // Optimistic apply of just the changed fields.
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, ...fields } : c));
+    const res = await setChannelFollow(channelId, fields);
+    if (!res.ok) {
+      console.error(`[Mixer] follow change rejected for ${channelId}:`, res.error);
+      // Revert both fields to their prior values; the next mixer broadcast
+      // re-syncs the authoritative state too.
+      setChannels(chs => chs.map(c => c.id === channelId
+        ? { ...c, followLeaderId: prevLeader, followScale: prevScale }
+        : c));
+      const code = (res.data as { code?: string } | undefined)?.code;
+      if (code === FOLLOW_CYCLE) {
+        Alert.alert('Can’t follow', 'Can’t follow — that would create a loop.');
+        return;
+      }
+      if (code === FOLLOW_LEADER_NOT_FOUND) {
+        Alert.alert('Can’t follow', 'That channel no longer exists.');
+        return;
+      }
+      Alert.alert(
+        'Follow not applied',
+        `The engine rejected this change. ${res.error || ''} The channel kept its previous link.`.trim(),
+      );
+    }
+  }, []);
+
   const handleControlChange = useCallback((channelId: string, controlId: number, val: number) => {
     setChannels(chs => chs.map(c => {
       if (c.id !== channelId) return c;
@@ -2310,6 +2495,8 @@ export default function MixerScreen() {
               onSpeedChange={handleSpeedChange}
               onPhaseOffsetChange={handlePhaseOffsetChange}
               onFollowsTempoChange={handleFollowsTempoChange}
+              onFollowChange={handleFollowChange}
+              followCandidates={channels}
               onMuteToggle={handleMuteToggle}
               onSoloToggle={handleSoloToggle}
               onSoloSafeToggle={handleSoloSafeToggle}
@@ -2781,6 +2968,51 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     left: 0, top: 0, bottom: 0,
     backgroundColor: '#BA68C8',
     borderRadius: 4,
+  },
+  // FOLLOW / LINK (round-2 #6, docs/39 §F-follow). A compact button that opens
+  // the leader picker (modal). Blue = following (distinct from the green tempo
+  // toggle / amber cap so the operator never confuses level-link with the other
+  // per-channel knobs). The optional SCALE fader below uses the same blue.
+  followRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: C.ghostBorder,
+  },
+  followBtn: {
+    flex: 1,
+    marginLeft: 6,
+    minHeight: 32,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    backgroundColor: C.surfaceContainerLowest,
+  },
+  followScaleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: C.ghostBorder,
+  },
+  followFill: {
+    position: 'absolute',
+    left: 0, top: 0, bottom: 0,
+    backgroundColor: '#3D6BE5',
+    borderRadius: 4,
+  },
+  followHint: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    lineHeight: 15,
+    color: C.icon,
+    marginBottom: 10,
   },
   // FOLLOW TEMPO toggle row (round-2 #4). The button mirrors the Mute/Solo
   // toggle visual language (green = on).
