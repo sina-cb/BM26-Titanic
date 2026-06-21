@@ -498,3 +498,12 @@ new per-channel hue control lands into an already-decluttered strip.
   (engine /deck/focus + index.tsx CUE). When hue_ui lands → operator's 3 requests ALL done
   (readability a5ee521 + hue engine 5d3df52 + hue UI) → live screenshot showcase.
   Suite 954 pass/0 fail; deliverable 5d3df52.
+
+## STATUS LOG (cont. 12) — ALL 3 OPERATOR REQUESTS DONE
+- HUE UI MERGED (36b1186): global HUE+SPIN in GLOBAL EFFECTS bar + per-channel HUE row.
+  Operator's 3 requests COMPLETE end-to-end:
+  (1) mixer readability a5ee521; (2)+(3) hue shifter global+per-channel: engine 5d3df52 + UI 36b1186.
+  Suite 954 pass/0 fail; CaptainPad tsc 0 / lint 11 / web:build 21. Deliverable 36b1186.
+- Building live screenshot showcase (mixer legible rows + per-channel HUE + global HUE; deck;
+  sim showing hue rotation). cue-to-deck #7 still running (own worktree). After showcase:
+  merge cue-to-deck, then resume round-2 backlog (flash/bump, param presets, speed/tap/chase, etc.).
