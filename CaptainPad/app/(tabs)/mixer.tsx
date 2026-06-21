@@ -29,6 +29,7 @@ import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { SnapshotBar } from '@/components/SnapshotBar';
 import { setChannelFaderMax, setChannelColor } from '@/utils/channelExtrasApi';
+import { duplicateMixerChannel, reorderMixerChannels, panicMixer } from '@/utils/channelOpsApi';
 import {
   type MixGroup,
   postSolo, deleteSolo, clearAllSolo, setChannelSoloSafe,
@@ -212,7 +213,7 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -462,6 +463,60 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           >
             <Text style={[styles.valueReadout, { color: locked ? C.secondary : C.primary, fontSize: 11 }]}>{(channel.mode || 'normal').replace('blend_', '').toUpperCase()}{locked ? '' : ' ▾'}</Text>
           </TouchableOpacity>
+          {/* Reorder chevrons (docs/39 §6b #7). Up = toward the TOP of the
+              mix (last in the engine's overlay order); down = toward the
+              bottom. Each tap recomputes the full id order locally and POSTs
+              /mixer/channels/reorder; the `mixer` broadcast reconciles. The
+              chevrons are disabled at the ends of the stack. A ≥44pt hitSlop
+              keeps the 28×28 squircles within the operator-safety touch floor
+              (28 + 8 + 8 = 44). Reorder is non-destructive and not gated by the
+              channel lock — a locked layer can still be restacked. */}
+          {onMoveUp && (
+            <TouchableOpacity
+              style={[styles.titleBtn, !canMoveUp && { opacity: 0.3 }]}
+              hitSlop={ICON_BTN_HIT_SLOP}
+              disabled={!canMoveUp}
+              onPress={() => onMoveUp(channel.id)}
+              accessibilityLabel="Move channel up (toward top of mix)"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !canMoveUp }}
+            >
+              <IconSymbol name="chevron.up" size={14} color={C.secondary} />
+            </TouchableOpacity>
+          )}
+          {onMoveDown && (
+            <TouchableOpacity
+              style={[styles.titleBtn, !canMoveDown && { opacity: 0.3 }]}
+              hitSlop={ICON_BTN_HIT_SLOP}
+              disabled={!canMoveDown}
+              onPress={() => onMoveDown(channel.id)}
+              accessibilityLabel="Move channel down (toward bottom of mix)"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !canMoveDown }}
+            >
+              <IconSymbol name="chevron.down" size={14} color={C.secondary} />
+            </TouchableOpacity>
+          )}
+          {/* Duplicate (docs/39 §6b #6) — clones this overlay onto the TOP of
+              the stack. Non-destructive, so NO ConfirmSheet (matches the
+              design doc). The new channel arrives via the `mixer` broadcast.
+              An over-cap attempt surfaces the engine's 400 as an Alert in the
+              parent handler. */}
+          {onDuplicate && (
+            <TouchableOpacity
+              style={styles.titleBtn}
+              hitSlop={ICON_BTN_HIT_SLOP}
+              onPress={() => onDuplicate(channel.id)}
+              accessibilityLabel="Duplicate channel"
+              accessibilityRole="button"
+            >
+              {/* A glyph (not an SF-symbol) keeps this within owned files —
+                  the shared icon-symbol mapping isn't this slice's to edit, so
+                  no `plus.square.on.square` entry exists. "⧉" reads as
+                  "duplicate / overlapping copy". */}
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.secondary }}>⧉</Text>
+            </TouchableOpacity>
+          )}
           {!locked && (
             <TouchableOpacity
               style={[styles.titleBtn, { borderColor: 'rgba(217, 48, 37, 0.4)' }]}
@@ -1533,6 +1588,105 @@ export default function MixerScreen() {
     }
   }, [deletePrompt]);
 
+  // ── Channel ops cluster (docs/39 §6b) ──────────────────────────────────
+  // Duplicate · Reorder · Panic/Home. All three reconcile from the engine's
+  // `mixer` broadcast (the engine is the authority); the handlers are
+  // useCallback'd with empty deps + read channelsRef so ChannelStrip's
+  // React.memo holds across re-renders.
+
+  // #6 Duplicate — clone an overlay onto the TOP of the stack. The new
+  // channel id arrives on the next `mixer` broadcast (same WS-driven
+  // reconcile path the add button already uses), so no optimistic insert
+  // here — that would risk a phantom strip if the engine rejected the dup.
+  // Fail loud: an over-cap (400) / missing-source (404) / deck (400) is
+  // surfaced as an Alert. Cap uses the engine-reported max so the operator
+  // sees the real number.
+  const handleDuplicateChannel = useCallback(async (channelId: string) => {
+    const res = await duplicateMixerChannel(channelId);
+    if (!res.ok) {
+      console.error(`[Mixer] Duplicate channel failed for ${channelId}:`, res.error);
+      Alert.alert(
+        'Duplicate channel failed',
+        `${res.error || 'The engine did not accept the duplicate.'} `
+          + `(Up to ${maxChannelsRef.current} mixer channels are allowed.)`,
+      );
+      return;
+    }
+    // Synchronously stash the inline playlist payload for the freshly-minted
+    // copy (same race protection as the add path) so its PlaylistPanel paints
+    // entries on first mount even on a slow iPad link.
+    const pd = (res.data as any)?.playlistData as PlaylistData | undefined;
+    const cid = (res.data as any)?.channelId as string | undefined;
+    if (cid && pd && pd.name) {
+      setInlinePlaylist(cid, pd);
+    }
+  }, [setInlinePlaylist]);
+
+  // #7 Reorder — move a channel one slot toward the TOP (up) or BOTTOM (down)
+  // of the mix. The engine's overlay array is ordered [0]=bottom … [last]=top,
+  // and the mixer renders `channels` in that same array order, so "up = toward
+  // top of mix" means swapping with the NEXT-higher index. We compute the full
+  // new id order locally, POST it, and reconcile from the broadcast (no
+  // optimistic local reorder — the engine's atomic reassignment is the truth
+  // and a rejected REORDER_BAD_SET must not leave the strips visually shuffled).
+  // direction: +1 = up/top, -1 = down/bottom.
+  const moveChannel = useCallback(async (channelId: string, direction: 1 | -1) => {
+    const cur = channelsRef.current;
+    const idx = cur.findIndex(c => c.id === channelId);
+    if (idx < 0) return;
+    const target = idx + direction;
+    if (target < 0 || target >= cur.length) return; // at an end — no-op
+    const orderIds = cur.map(c => c.id as string);
+    // Swap the two ids.
+    const tmp = orderIds[idx];
+    orderIds[idx] = orderIds[target];
+    orderIds[target] = tmp;
+    const res = await reorderMixerChannels(orderIds);
+    if (!res.ok) {
+      console.error(`[Mixer] Reorder rejected (${res.error}); order=`, orderIds);
+      Alert.alert(
+        'Reorder not applied',
+        `The engine rejected this reorder. ${res.error || ''} The stack kept its previous order.`.trim(),
+      );
+    }
+  }, []);
+  const handleMoveUp = useCallback((channelId: string) => { void moveChannel(channelId, 1); }, [moveChannel]);
+  const handleMoveDown = useCallback((channelId: string) => { void moveChannel(channelId, -1); }, [moveChannel]);
+
+  // #9 Panic / Home — mission-critical safe LIT reset, ConfirmSheet-gated
+  // (it cancels in-flight fades / transitions / swaps and clears blackout, so
+  // it must never fire on an accidental tap). Recalls the `home` snapshot when
+  // present, else a safe LIT default. The engine broadcasts fresh mixer/deck/
+  // globals — every strip + the master + the rig bar reconcile from those.
+  // Fail loud: a malformed/over-cap `home` is the ONE sanctioned loud fallback
+  // (400, but the rig is STILL lit). We Alert so the operator knows the home
+  // look couldn't load while reassuring them the rig is lit.
+  const [panicPrompt, setPanicPrompt] = useState(false);
+  const [panicBusy, setPanicBusy] = useState(false);
+  const confirmPanic = useCallback(async () => {
+    setPanicPrompt(false);
+    setPanicBusy(true);
+    try {
+      const res = await panicMixer(true);
+      if (!res.ok) {
+        console.error('[Mixer] Panic reported a loud fallback:', res.error, res.data);
+        const rigLit = (res.data as any)?.rigLit === true;
+        Alert.alert(
+          'Panic — home look not loaded',
+          `${res.error || 'The "home" snapshot could not be recalled.'} `
+            + (rigLit
+              ? 'The rig is still LIT (blackout cleared, master up).'
+              : 'Check the engine and re-run panic.'),
+        );
+      }
+    } catch (err: any) {
+      console.error('[Mixer] Panic request failed:', err);
+      Alert.alert('Panic failed', `Could not reach the engine. ${err?.message || ''}`.trim());
+    } finally {
+      setPanicBusy(false);
+    }
+  }, []);
+
   const handleTransitionSettingsChange = useCallback(async (channelId: string, updates: { transitionMode?: string; transitionTime?: number }) => {
     // Codex P0 — no silent swallow. The transition mode/time live in the
     // child ChannelStrip's local state (re-synced from the engine on the
@@ -1787,6 +1941,11 @@ export default function MixerScreen() {
               onModeChange={handleModeChange}
               onControlChange={handleControlChange}
               onDelete={handleDeleteChannel}
+              onDuplicate={handleDuplicateChannel}
+              onMoveUp={handleMoveUp}
+              onMoveDown={handleMoveDown}
+              canMoveUp={idx < channels.length - 1}
+              canMoveDown={idx > 0}
               onLockToggle={handleLockToggle}
               onFaderLockToggle={handleFaderLockToggle}
               onTransition={handleTransition}
@@ -1806,6 +1965,22 @@ export default function MixerScreen() {
 
       {/* ── Global Rig Controls (Bottom) ───────────────────────────── */}
       <View style={styles.globalRigBar}>
+        {/* PANIC / HOME (docs/39 §6b #9) — mission-critical safe LIT reset.
+            Distinct AMBER so it reads as the rig's "get me back to safe" button,
+            visually separate from the GEM grid + the e-stop BLACKOUT inside it.
+            ConfirmSheet-gated (it cancels in-flight fades/transitions/swaps and
+            clears blackout). Reconciles from the engine's broadcasts. */}
+        <TouchableOpacity
+          style={[styles.panicBtn, panicBusy && { opacity: 0.5 }]}
+          onPress={() => setPanicPrompt(true)}
+          disabled={panicBusy}
+          accessibilityRole="button"
+          accessibilityLabel="Panic — reset rig to a safe lit state"
+          accessibilityState={{ disabled: panicBusy }}
+        >
+          <Text style={styles.panicBtnText}>{panicBusy ? 'PANIC…' : 'PANIC'}</Text>
+          <Text style={styles.panicBtnHint}>HOME / SAFE LIT</Text>
+        </TouchableOpacity>
         <RigGlobals variant="mixer" />
       </View>
 
@@ -1840,6 +2015,17 @@ export default function MixerScreen() {
         cancelLabel="CANCEL"
         onConfirm={confirmDeleteChannel}
         onCancel={() => setDeletePrompt(null)}
+      />
+
+      {/* ── Panic / Home confirmation (docs/39 §6b #9) ──────────────── */}
+      <ConfirmSheet
+        visible={panicPrompt}
+        title="Panic to safe state?"
+        message={'Resets the rig to a safe LIT state: cancels in-flight fades, transitions and deck swaps, clears solo, un-mutes groups, brings the master up, and clears blackout. Recalls the "home" look if one is saved, otherwise a safe default. The exterior stays lit throughout.'}
+        confirmLabel="PANIC"
+        cancelLabel="CANCEL"
+        onConfirm={confirmPanic}
+        onCancel={() => setPanicPrompt(false)}
       />
 
       {/* ── Unlock-dirty prompt ─────────────────────────────────────── */}
@@ -1946,6 +2132,39 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     minWidth: 100,
     alignItems: 'center',
     ...globalStyles.ambientShadow,
+  },
+  // PANIC / HOME (docs/39 §6b #9) — amber so it reads as the rig's
+  // mission-critical "back to safe" action, distinct from the teal GEM grid
+  // and the red BLACKOUT e-stop inside it. Pinned at the left of the global
+  // rig bar where the operator's thumb can find it without hunting. Min 44pt
+  // touch target (production-console safety floor).
+  panicBtn: {
+    minWidth: 96,
+    minHeight: 52,
+    paddingHorizontal: 14,
+    marginRight: 10,
+    borderRadius: 8,
+    backgroundColor: 'rgba(245,166,35,0.18)',
+    borderWidth: 1.5,
+    borderColor: '#F5A623',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'stretch',
+    ...globalStyles.ambientShadow,
+  },
+  panicBtnText: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 14,
+    letterSpacing: 1.2,
+    color: '#F5A623',
+  },
+  panicBtnHint: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 8,
+    letterSpacing: 0.6,
+    color: '#F5A623',
+    opacity: 0.8,
+    marginTop: 1,
   },
   brandText: {
     color: C.primary,
