@@ -124,6 +124,8 @@ test('serializeChannel emits exactly the fields the engine restores', () => {
     'faderMax', 'color',
     // Additive (groups + solo wave, WAVE 15): appended AFTER faderMax/color.
     'mixGroupId', 'soloSafe',
+    // Additive (hue shifter wave, 2026-06): appended AFTER mixGroupId/soloSafe.
+    'hue',
   ]);
 });
 
@@ -239,6 +241,8 @@ test('saveMixerState preserves on-disk key order and overlay-only fields', () =>
     'faderMax', 'color',
     // Additive (groups + solo wave, WAVE 15): appended after faderMax/color.
     'mixGroupId', 'soloSafe',
+    // Additive (hue shifter wave, 2026-06): appended after mixGroupId/soloSafe.
+    'hue',
   ]);
 });
 

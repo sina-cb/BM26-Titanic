@@ -779,6 +779,79 @@ deleting groups or resetting their faders); reset `targetViewFader` to 1.0.
 
 ---
 
+## 6.x §F-hue — Hue Shifter (global + per-channel)
+
+Operator-requested (2026-06). Two independent hue rotations, **both RGB-only**:
+the **GLOBAL** hue rotates the whole post-mixer buffer; the **PER-CHANNEL** hue
+rotates one layer before it blends. **W / A / UV are never touched** — those
+channels carry no hue concept and the mission-critical exterior whites must
+never be tinted or dimmed by a hue knob. Both use a luminance-preserving **YIQ
+rotation** (NTSC luma weights), precomputing `cos`/`sin` + the 3×3 matrix once
+per frame (~9 mults/pixel), **gated on a non-zero angle so the default rig pays
+zero cost**, allocation-free hot path.
+
+### Pipeline order
+
+```
+mixer composite -> applyMacros -> [GLOBAL hue] -> applyGroupFixedColors -> intensity/blackout
+                                   (engine.js, on model.pixels floats)
+per-channel render -> [PER-CHANNEL hue] -> blend into composite
+                       (pattern_mixer.js, on channelBuffer Uint8 0-255, PRE-blend)
+```
+
+The two **stack additively** per pixel: a channel with `hue=30` under a global
+`hue=90` reads as a net +120 deg rotation on that channel's contribution. Global
+hue runs **before** group-fixed-color locks and intensity/blackout, so color
+locks and the e-stop safety stay authoritative. `effFader` (level) and the
+`color` metadata tag are orthogonal — no conflict.
+
+### Global hue (first-class knob, NOT a GEM slot)
+
+- `GlobalEffectsController.hueShift = { degrees, autoRotateDegPerSec }` —
+  PERSISTENT rig state (`globals_state.yaml`). `setHueShift(deg, rot)` validates
+  finite (throws on NaN/Inf — Codex P0), normalizes `degrees` into `[0,360)`,
+  clamps `rot` into `[-360,360]`. `applyHueShift(pixels, nowMs)` advances the
+  phase by `rot * dt` (wall-clock, frame-rate-independent, wrap 360) then rotates
+  RGB. **Left alone by `panicStop()`** (hue is a chroma offset, not a
+  brightness/flash hazard; blackout still zeroes output).
+- **`POST /global-effect-hue`** `{ degrees, autoRotateDegPerSec? }` -> validates
+  (400 on non-finite), persists `globalsState.hueShift`, broadcasts
+  `{ type: 'globalHueShift', hueShift }` (-> `/ws/control`) + mixer state.
+  `GET /globals` reflects `hueShift`.
+
+### Per-channel hue
+
+- `PatternChannel.hue` (default `0`, normalized `[0,360)`). Applied on the
+  interleaved `channelBuffer` via `applyHueShift6chU8(buf, pixelCount, degrees)`
+  in the composite loop **and** the vis/deck pre-passes (so meter + preview
+  match the rendered output).
+- **`PATCH /mixer/channels/:id`** and **`PATCH /deck/channel`** accept a `hue`
+  field via `validateHue` (non-finite -> 400, normalized into `[0,360)`).
+  Serialized in all four serializers (api_server `serializeChannel` +
+  `serializeMixerState`; state_manager `serializeChannel` + `saveMixerState`
+  overlay) and the restore path. An old state file without `hue` restores to `0`.
+
+### Validation — `validateHue(raw)` (api_server.js)
+
+Finite number (or finite-parseable string) required; non-finite / non-number =>
+`{ ok:false }` -> **400** (no silent coercion to 0). Finite => normalized into
+`[0,360)` via `((n%360)+360)%360` (the hue wheel wraps — `370->10`, `-30->330`).
+
+| Site | What |
+|---|---|
+| `effects/hue_shift.js` (NEW) | `applyHueShift({pixels,degrees})` — float `model.pixels`, RGB-only, no-op at 0, header documents W/A/UV untouched |
+| `lib/global_effects_controller.js` | `hueShift` state + `setHueShift` + per-frame `applyHueShift` (auto-rotate) + `getStatus`; panicStop leaves it alone |
+| `engine.js` | calls `applyHueShift(model.pixels, now)` between `applyMacros` and `applyGroupFixedColors` |
+| `lib/pattern_channel.js` | `hue=0` field, normalized `[0,360)` |
+| `lib/pattern_mixer.js` | `applyHueShift6chU8` helper; applied pre-blend in composite loop + vis pre-pass + deck pre-pass, gated `if(channel.hue)` |
+| `lib/api_server.js` | `validateHue`; `POST /global-effect-hue`; `hue` on both channel PATCHes; serialized in 4 serializers + restore |
+| `lib/state_manager.js` | `globalsState.hueShift` default + restore (validating setter); channel `hue` in `serializeChannel` + `saveMixerState` |
+| `lib/ws_topic_routing.js` | `globalHueShift` -> `/ws/control` |
+| `tests/hue_shift.test.js`, `tests/hue_serialize.test.js` | Unit: rotation @120/240 deg, W/A/U unchanged, no-op@0, clamp, validateHue NaN->400 + normalize 370->10, auto-rotate dt advance + wrap, panicStop preserves, per-channel round-trip (25 tests) |
+| `tests/hil/hil_hue_shift_test.mjs` | HIL: validateHue 400/normalize; global hue rotates `rig` RGB while W/A/U unchanged (POST-composite); per-channel deck hue rotates the channel vis buffer while W/A/U unchanged (PRE-blend); serialize round-trip (17 checks) |
+
+---
+
 ## 7. Discrepancies / follow-ups
 
 - **`docs/19_playlists.md` §8.3 / §3.2 mark mixer-channel playlist routes as
