@@ -932,19 +932,11 @@ export interface MixerChannel {
   exports?: any[];
   playlist?: PlaylistAssignment | null;
   viewSelection?: { type: string; target: string | number | null; invert?: boolean } | null;
-  // Per-channel phase clock (round-2 #3/#11, design 20260620_33). The engine
-  // serializes these on every mixer-state broadcast: `speed` is a multiplier
-  // on this channel's phase accumulator (clamp [0.05,8], default 1), `phaseOffsetMs`
-  // is a constant phase shift (clamp [-10000,10000] ms, default 0), and
-  // `followsTempo` opts the channel into the global tap-tempo multiplier.
-  speed?: number;
-  phaseOffsetMs?: number;
+  // Global tap-tempo opt-in: `followsTempo` opts the channel into the global
+  // tap-tempo multiplier. The engine still serializes this on every mixer-state
+  // broadcast; its per-channel STRIP UI was removed (mixer declutter, the
+  // operator's marked-up screenshot) but the engine endpoint remains.
   followsTempo?: boolean;
-  // Per-channel color INVERT (F-invert, docs/39 §F-invert; engine #8). A pure
-  // boolean the engine serializes on every mixer-state broadcast (same path as
-  // soloSafe/hue — no new WS type): when true this channel's RGB contribution
-  // is inverted PRE-blend, AFTER the per-channel hue. Default false = no-op.
-  invert?: boolean;
   // FOLLOW / LINK (round-2 #6, docs/39 §F-follow). When `followLeaderId` names
   // another channel, THIS channel becomes a FOLLOWER: its effective level is
   // the leader's effective level × `followScale` (the follower's own manual

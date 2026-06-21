@@ -28,8 +28,7 @@ import { TimerWheel } from '@/components/ui/TimerWheel';
 import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { SnapshotBar } from '@/components/SnapshotBar';
-import { ParamPresetMenu } from '@/components/ParamPresetMenu';
-import { setChannelFaderMax, setChannelColor, setChannelHue, setChannelSpeed, setChannelPhaseOffset, setChannelFollowsTempo, setChannelInvert, setChannelFollow, setChannelAutoCycle, FOLLOW_CYCLE, FOLLOW_LEADER_NOT_FOUND, AUTOCYCLE_BAD_DELAY, AUTOCYCLE_NO_PLAYLIST } from '@/utils/channelExtrasApi';
+import { setChannelColor, setChannelHue } from '@/utils/channelExtrasApi';
 import { duplicateMixerChannel, reorderMixerChannels, panicMixer } from '@/utils/channelOpsApi';
 import {
   type MixGroup,
@@ -52,29 +51,6 @@ import {
 // floor. An 8pt hitSlop on every edge expands the *interactive* area to
 // 44×44 without changing the visual footprint (28 + 8 + 8 = 44).
 const ICON_BTN_HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
-
-// Per-channel phase-clock domain bounds (round-2 #3/#11, design 20260620_33).
-// These mirror the engine's clamp ranges (speed [0.05,8], phaseOffsetMs
-// [-10000,10000] ms) and define how the normalized 0..1 HorizontalFader maps
-// onto the engine's domain at the UI boundary (same pattern as HUE's ×360).
-const SPEED_MIN = 0.05;
-const SPEED_MAX = 8;
-const OFFSET_MIN = -10000;
-const OFFSET_MAX = 10000;
-
-// FOLLOW / LINK scale domain (round-2 #6, docs/39 §F-follow). The follower's
-// effective level = leader's effective level × followScale; the engine clamps
-// followScale to [0,2] (default 1.0). The normalized 0..1 HorizontalFader maps
-// onto [SCALE_MIN, SCALE_MAX] at the UI boundary (same pattern as HUE's ×360 /
-// SPEED's [0.05,8]).
-const FOLLOW_SCALE_MIN = 0;
-const FOLLOW_SCALE_MAX = 2;
-
-// AUTO-CYCLE preset intervals (seconds) — common auto-advance dwell times the
-// operator can one-tap. The engine floors delay_s to 1s; the stepper +/- moves
-// in 5s steps and clamps to ≥1 client-side, but a sub-1 value still surfaces
-// the engine's 400 AUTOCYCLE_BAD_DELAY fail-loud (defence in depth).
-const AUTO_CYCLE_PRESETS_S = [10, 30, 60, 120];
 
 // Per-channel color accent palette (docs/39 §8.4 — channel `color` metadata,
 // no render effect). A small fixed set of high-contrast hex accents so the
@@ -238,7 +214,7 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onHueChange, onInvertChange, onSpeedChange, onPhaseOffsetChange, onFollowsTempoChange, onFollowChange, onAutoCycleChange, followCandidates, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onColorChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -246,7 +222,6 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
   const [showTransPicker, setShowTransPicker] = useState(false);
   const [showViewPicker, setShowViewPicker] = useState(false);
   const [showColorPicker, setShowColorPicker] = useState(false);
-  const [showFollowPicker, setShowFollowPicker] = useState(false);
   // Transition duration is stored as ms-integers (matching the deck's
   // TRANSITION_DURATION_PRESETS_MS) so the wheel's centered-row preset
   // equality lights up consistently. Engine wire format is seconds
@@ -580,40 +555,23 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
         </Text>
       </View>
 
-      {/* Intensity ceiling (faderMax, docs/39 §8.3). A hard cap on this
-          channel's OWN contribution — the level fader (and scripted
-          transitions) can ride up to this ceiling but never above it.
-          faderMax defaults to 1.0; faderMax=0 fully suppresses the channel.
-          Disabled while locked (matches the level fader / blend-mode lock
-          behaviour). The cap slider's fill is amber to distinguish it from
-          the teal level fader. */}
-      {onFaderMaxChange && (
-        <View style={styles.capRow}>
-          <Text style={[styles.labelCaps, { width: 36 }]}>CAP</Text>
-          <HorizontalFader
-            value={channel.faderMax ?? 1}
-            onChange={(v: number) => { if (!locked) onFaderMaxChange(channel.id, v); }}
-            trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6, opacity: locked ? 0.5 : 1 }]}
-            fillStyle={styles.capFill}
-          />
-          <Text style={[styles.displayMono, { width: 32, textAlign: 'right', fontSize: 13, color: '#F5A623' }]}>
-            {Math.round((channel.faderMax ?? 1) * 100)}
-          </Text>
-        </View>
-      )}
-
       {/* Per-channel HUE (docs/39 §F-hue). A luminance-preserving RGB-only
           hue rotation applied PRE-blend on THIS channel's contribution —
           W/A/UV (mission-critical exterior whites) are never touched. The
           0-360° fader maps onto the engine's `hue` field (default 0 = no
-          rotation, zero render cost). Same lock gate as the CAP/level rows.
-          The fader is normalized 0..1 (HorizontalFader's contract), so the
+          rotation, zero render cost). Same lock gate as the level row. The
+          fader is normalized 0..1 (HorizontalFader's contract), so the
           display ×360 round-trips degrees. A small swatch on the left
           previews the rotation tint. Rendered unconditionally so the strip
-          never shifts when hue returns to 0. */}
+          never shifts when hue returns to 0.
+          DECLUTTER (mixer declutter, operator's marked-up screenshot): with
+          CAP/SPEED/OFFSET/etc. gone, LEVEL + HUE are the only two faders on
+          the strip. HUE is rendered SLIM (thin track + tight row + small
+          swatch + 11pt label/readout) so LEVEL reads as the primary control
+          and HUE as a clearly secondary trim. */}
       {onHueChange && (
         <View style={styles.hueRow}>
-          <Text style={[styles.labelCaps, { width: 36 }]}>HUE</Text>
+          <Text style={[styles.labelCaps, { width: 36, fontSize: 10 }]}>HUE</Text>
           <View
             style={[
               styles.hueSwatch,
@@ -623,394 +581,14 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           <HorizontalFader
             value={(channel.hue ?? 0) / 360}
             onChange={(v: number) => { if (!locked) onHueChange(channel.id, Math.round(v * 360)); }}
-            trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6, opacity: locked ? 0.5 : 1 }]}
+            trackStyle={[styles.hueTrack, { flex: 1, marginHorizontal: 6, opacity: locked ? 0.5 : 1 }]}
             fillStyle={styles.hueFill}
           />
-          <Text style={[styles.displayMono, { width: 32, textAlign: 'right', fontSize: 13, color: C.secondary }]}>
+          <Text style={[styles.displayMono, { width: 32, textAlign: 'right', fontSize: 11, color: C.secondary }]}>
             {Math.round(channel.hue ?? 0)}
           </Text>
         </View>
       )}
-
-      {/* Per-channel color INVERT (F-invert, docs/39 §F-invert; engine #8).
-          A pure-boolean chroma op: inverts THIS channel's RGB contribution
-          PRE-blend, AFTER the per-channel hue (hue-then-invert). W/A/UV
-          (mission-critical exterior whites) are never touched; invert=false
-          is a no-op. Sits right under HUE since it's part of the same chroma
-          cluster. Modeled on the FOLLOW TEMPO / SAFE toggle (a labeled button
-          that flips state), NOT a fader. Server-authoritative; the next
-          mixer-state broadcast reconciles. Same lock gate. State carried by
-          the ✓ glyph + accessibilityState (not color-only). Purple-lit when
-          on, matching the hue fill so it reads as a chroma control. */}
-      {onInvertChange && (
-        <View style={styles.invertRow}>
-          <Text style={[styles.labelCaps, { width: 36 }]}>INV</Text>
-          <TouchableOpacity
-            style={[
-              styles.invertBtn,
-              !!channel.invert && { backgroundColor: '#B36AE2', borderColor: '#B36AE2' },
-              locked && { opacity: 0.5 },
-            ]}
-            disabled={locked}
-            onPress={() => { if (!locked) onInvertChange(channel.id, !channel.invert); }}
-            accessibilityRole="switch"
-            accessibilityLabel="Invert channel color"
-            accessibilityState={{ checked: !!channel.invert, disabled: locked }}
-          >
-            <Text style={[styles.labelCaps, !!channel.invert && { color: '#FFF' }]}>
-              {channel.invert ? '✓ INVERT' : 'INVERT'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Per-channel SPEED (round-2 #3, design 20260620_33). A multiplier on
-          THIS channel's own phase accumulator — the engine accumulates each
-          channel's phase from the shared global delta scaled by `speed`, so a
-          speed change never makes absolute-time patterns jump. Engine clamps
-          [0.05,8] (0.05 floor = anti-silent-failure; 0 would freeze). The
-          0..1 fader maps onto [SPEED_MIN, SPEED_MAX] at the boundary; the
-          display reads the resolved multiplier (e.g. 1.00×). Same lock gate as
-          the CAP/HUE rows. */}
-      {onSpeedChange && (
-        <View style={styles.speedRow}>
-          <Text style={[styles.labelCaps, { width: 36 }]}>SPEED</Text>
-          <HorizontalFader
-            value={(((channel.speed ?? 1) - SPEED_MIN) / (SPEED_MAX - SPEED_MIN))}
-            onChange={(v: number) => {
-              if (!locked) {
-                const sp = Math.round((SPEED_MIN + v * (SPEED_MAX - SPEED_MIN)) * 100) / 100;
-                onSpeedChange(channel.id, sp);
-              }
-            }}
-            trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6, opacity: locked ? 0.5 : 1 }]}
-            fillStyle={styles.speedFill}
-          />
-          <Text style={[styles.displayMono, { width: 40, textAlign: 'right', fontSize: 13, color: '#4FC3F7' }]}>
-            {(channel.speed ?? 1).toFixed(2)}×
-          </Text>
-        </View>
-      )}
-
-      {/* Per-channel phase OFFSET (round-2 #11, design 20260620_33). A constant
-          shift added to this channel's phase (in ms). Same-pattern channels
-          with staggered offsets ({0,250,500}ms) chase/ripple. Engine clamps
-          [-10000,10000] ms (default 0). The 0..1 fader maps onto that signed
-          range; the display reads ms (signed). Same lock gate. */}
-      {onPhaseOffsetChange && (
-        <View style={styles.offsetRow}>
-          <Text style={[styles.labelCaps, { width: 36 }]}>OFFSET</Text>
-          <HorizontalFader
-            value={(((channel.phaseOffsetMs ?? 0) - OFFSET_MIN) / (OFFSET_MAX - OFFSET_MIN))}
-            onChange={(v: number) => {
-              if (!locked) {
-                const ms = Math.round(OFFSET_MIN + v * (OFFSET_MAX - OFFSET_MIN));
-                onPhaseOffsetChange(channel.id, ms);
-              }
-            }}
-            trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6, opacity: locked ? 0.5 : 1 }]}
-            fillStyle={styles.offsetFill}
-          />
-          <Text style={[styles.displayMono, { width: 52, textAlign: 'right', fontSize: 13, color: '#BA68C8' }]}>
-            {`${(channel.phaseOffsetMs ?? 0) > 0 ? '+' : ''}${Math.round(channel.phaseOffsetMs ?? 0)}ms`}
-          </Text>
-        </View>
-      )}
-
-      {/* FOLLOW TEMPO toggle (round-2 #4). Opts this channel into the global
-          tap-tempo multiplier (120 BPM = 1×) — opt-in so the mission-critical
-          exterior is immune unless explicitly enabled. Server-authoritative;
-          the next mixer broadcast reconciles. Same lock gate. State carried by
-          the ✓ glyph + accessibilityState (not color-only). */}
-      {onFollowsTempoChange && (
-        <View style={styles.followTempoRow}>
-          <Text style={[styles.labelCaps, { width: 36 }]}>TEMPO</Text>
-          <TouchableOpacity
-            style={[
-              styles.followTempoBtn,
-              !!channel.followsTempo && { backgroundColor: '#00a86b', borderColor: '#00a86b' },
-              locked && { opacity: 0.5 },
-            ]}
-            disabled={locked}
-            onPress={() => { if (!locked) onFollowsTempoChange(channel.id, !channel.followsTempo); }}
-            accessibilityRole="switch"
-            accessibilityLabel="Follow global tempo"
-            accessibilityState={{ checked: !!channel.followsTempo, disabled: locked }}
-          >
-            <Text style={[styles.labelCaps, !!channel.followsTempo && { color: '#FFF' }]}>
-              {channel.followsTempo ? '✓ FOLLOW TEMPO' : 'FOLLOW TEMPO'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* FOLLOW / LINK (round-2 #6, docs/39 §F-follow; engine #6). Make THIS
-          channel a FOLLOWER of another channel (the leader): its effective
-          level becomes the leader's effective level × followScale, and its own
-          manual fader is ignored while linked. Placement: ONE compact FOLLOW
-          button that opens a small picker (the closest precedent is the
-          view-selection / group "pick another entity" modal) — NOT an
-          always-on row of leader choices — so the already-dense strip keeps the
-          a5ee521 readability layout. When the channel IS following, a SCALE
-          fader appears under the button (domain [0,2], default 1.0, mapped at
-          the boundary like HUE/SPEED). followLeaderId is server-authoritative:
-          the leader name shown reflects the WS-broadcast value, so a leader
-          delete that the engine clears (it nulls its followers' followLeaderId
-          and broadcasts) shows up live as UNFOLLOWED without local action. */}
-      {onFollowChange && (
-        <>
-          {(() => {
-            const leaderId: string | null = channel.followLeaderId ?? null;
-            const leader = leaderId
-              ? (followCandidates || []).find((c: any) => c.id === leaderId)
-              : null;
-            // The leader rode out of the broadcast but isn't in our candidate
-            // list (e.g. it's the deck). Show the id so the operator still sees
-            // SOMETHING rather than a blank "following nothing".
-            const leaderLabel = leaderId
-              ? (leader?.name || leader?.label || leaderId)
-              : null;
-            const following = !!leaderId;
-            return (
-              <>
-                <View style={styles.followRow}>
-                  <Text style={[styles.labelCaps, { width: 36 }]}>FOLLOW</Text>
-                  <TouchableOpacity
-                    style={[
-                      styles.followBtn,
-                      following && { backgroundColor: '#3D6BE5', borderColor: '#3D6BE5' },
-                      locked && { opacity: 0.5 },
-                    ]}
-                    hitSlop={ICON_BTN_HIT_SLOP}
-                    disabled={locked}
-                    onPress={() => { if (!locked) setShowFollowPicker(true); }}
-                    accessibilityRole="button"
-                    accessibilityLabel={
-                      following
-                        ? `Following ${leaderLabel}. Tap to change or unfollow.`
-                        : 'Not following. Tap to follow another channel.'
-                    }
-                    accessibilityState={{ selected: following, disabled: locked }}
-                  >
-                    <Text
-                      style={[styles.labelCaps, following && { color: '#FFF' }]}
-                      numberOfLines={1}
-                    >
-                      {following ? `▸ ${String(leaderLabel).toUpperCase()}` : 'NONE ▾'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* SCALE fader — only while linked. The follower's effective
-                    level = leader's effective level × followScale. */}
-                {following && (
-                  <View style={styles.followScaleRow}>
-                    <Text style={[styles.labelCaps, { width: 36 }]}>SCALE</Text>
-                    <HorizontalFader
-                      value={(((channel.followScale ?? 1) - FOLLOW_SCALE_MIN) / (FOLLOW_SCALE_MAX - FOLLOW_SCALE_MIN))}
-                      onChange={(v: number) => {
-                        if (!locked) {
-                          const sc = Math.round((FOLLOW_SCALE_MIN + v * (FOLLOW_SCALE_MAX - FOLLOW_SCALE_MIN)) * 100) / 100;
-                          onFollowChange(channel.id, { followScale: sc });
-                        }
-                      }}
-                      trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6, opacity: locked ? 0.5 : 1 }]}
-                      fillStyle={styles.followFill}
-                    />
-                    <Text style={[styles.displayMono, { width: 40, textAlign: 'right', fontSize: 13, color: '#3D6BE5' }]}>
-                      {(channel.followScale ?? 1).toFixed(2)}×
-                    </Text>
-                  </View>
-                )}
-
-                {/* Leader picker — lists the OTHER channels by name + a
-                    NONE/UNFOLLOW option. Never lists self. Mirrors the
-                    view-selection modal interaction so it reads as native. */}
-                <Modal transparent visible={showFollowPicker} animationType="fade" onRequestClose={() => setShowFollowPicker(false)}>
-                  <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowFollowPicker(false)}>
-                    <TouchableOpacity activeOpacity={1} onPress={() => {}}>
-                      <View style={styles.modalContent}>
-                        <Text style={[styles.labelCaps, { marginBottom: 4 }]}>FOLLOW CHANNEL</Text>
-                        <Text style={styles.followHint}>
-                          THIS CHANNEL&apos;S LEVEL FOLLOWS THE LEADER&apos;S (× SCALE). ITS OWN FADER IS IGNORED WHILE LINKED.
-                        </Text>
-                        <ScrollView style={{ maxHeight: 360 }}>
-                          {/* NONE / UNFOLLOW */}
-                          <TouchableOpacity
-                            style={[styles.modalRow, !following && styles.modalRowActive]}
-                            onPress={() => { onFollowChange(channel.id, { followLeaderId: null }); setShowFollowPicker(false); }}
-                            accessibilityRole="button"
-                            accessibilityLabel="Unfollow — use this channel's own fader"
-                          >
-                            <Text style={[styles.valueReadout, !following && { color: C.primary }]}>NONE (OWN FADER)</Text>
-                          </TouchableOpacity>
-
-                          {(followCandidates || [])
-                            .filter((c: any) => c.id !== channel.id)
-                            .map((c: any) => {
-                              const active = leaderId === c.id;
-                              const name = c.name || c.label || c.id;
-                              return (
-                                <TouchableOpacity
-                                  key={c.id}
-                                  style={[styles.modalRow, active && styles.modalRowActive]}
-                                  onPress={() => { onFollowChange(channel.id, { followLeaderId: c.id }); setShowFollowPicker(false); }}
-                                  accessibilityRole="button"
-                                  accessibilityLabel={`Follow ${name}`}
-                                  accessibilityState={{ selected: active }}
-                                >
-                                  <Text style={[styles.valueReadout, active && { color: C.primary }]} numberOfLines={1}>
-                                    {String(name).toUpperCase()}
-                                  </Text>
-                                </TouchableOpacity>
-                              );
-                            })}
-
-                          {(followCandidates || []).filter((c: any) => c.id !== channel.id).length === 0 && (
-                            <Text style={[styles.labelCaps, { textAlign: 'center', marginTop: 8 }]}>NO OTHER CHANNELS TO FOLLOW</Text>
-                          )}
-                        </ScrollView>
-                      </View>
-                    </TouchableOpacity>
-                  </TouchableOpacity>
-                </Modal>
-              </>
-            );
-          })()}
-        </>
-      )}
-
-      {/* Per-channel PARAM PRESETS (#9 engine). Compact button → modal sheet
-          (capture this channel's params under a name, recall/delete the global
-          preset list). Kept as ONE row so the already-dense strip doesn't
-          re-cramp (the readability fix a5ee521 must not regress). The menu is
-          self-contained (seeds via GET, stays live off the WS `paramPresets`
-          event), so it needs no extra ChannelStrip callbacks — just the id,
-          the running pattern (to grey out mismatched recalls), and the lock
-          gate the sibling rows use. */}
-      <ParamPresetMenu channelId={channel.id} channelPattern={channel.pattern ?? null} locked={locked} />
-
-      {/* AUTO-CYCLE / autopilot (engine #2, docs/39 §6.v). Arms THIS overlay's
-          playlist to auto-advance its active entry every `delay_s` seconds.
-          Placement: directly ABOVE the playlist body since autopilot is
-          playlist-scoped (the engine rejects arming a channel with no playlist).
-          Layout follows the FOLLOW/LINK precedent — ONE compact AUTO button
-          that REVEALS the delay stepper + SHUFFLE toggle only while armed, so
-          the already-dense strip keeps the a5ee521 readability layout when off.
-          Lit amber when armed. All three fields are server-authoritative and
-          ride the existing mixer-state broadcast, so an auto-advance shows up
-          live as the PlaylistPanel's active entry changes. Same lock gate as the
-          sibling rows. delay_s is clamped to ≥1 client-side AND still surfaces
-          the engine's 400 AUTOCYCLE_BAD_DELAY fail-loud. */}
-      {onAutoCycleChange && (() => {
-        const ap = channel.playlist?.autopilot;
-        const armed = !!ap?.active;
-        const delay = Math.max(1, Math.round(ap?.delay_s ?? 30));
-        const shuffle = !!ap?.shuffle;
-        const hasPlaylist = !!channel.playlist?.name;
-        return (
-          <>
-            <View style={styles.autoCycleRow}>
-              <Text style={[styles.labelCaps, { width: 36 }]}>AUTO</Text>
-              <TouchableOpacity
-                style={[
-                  styles.autoCycleBtn,
-                  armed && { backgroundColor: '#F5A623', borderColor: '#F5A623' },
-                  (locked || !hasPlaylist) && { opacity: 0.5 },
-                ]}
-                disabled={locked || !hasPlaylist}
-                onPress={() => { if (!locked && hasPlaylist) onAutoCycleChange(channel.id, { active: !armed }); }}
-                accessibilityRole="switch"
-                accessibilityLabel="Auto-cycle playlist entries"
-                accessibilityState={{ checked: armed, disabled: locked || !hasPlaylist }}
-              >
-                <Text style={[styles.labelCaps, armed && { color: '#FFF' }]} numberOfLines={1}>
-                  {!hasPlaylist
-                    ? 'NO PLAYLIST'
-                    : armed
-                      ? `✓ AUTO · ${delay}s`
-                      : 'AUTO-CYCLE'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* DELAY stepper + SHUFFLE — revealed only while armed. The stepper
-                clamps to ≥1s client-side; the preset pills jump to common
-                intervals. Both still fail loud on the engine's 400. */}
-            {armed && (
-              <>
-                <View style={styles.autoCycleDelayRow}>
-                  <Text style={[styles.labelCaps, { width: 36 }]}>EVERY</Text>
-                  <TouchableOpacity
-                    style={[styles.autoStepBtn, locked && { opacity: 0.5 }]}
-                    disabled={locked}
-                    onPress={() => { if (!locked) onAutoCycleChange(channel.id, { delay_s: Math.max(1, delay - 5) }); }}
-                    accessibilityRole="button"
-                    accessibilityLabel="Decrease auto-cycle interval by 5 seconds"
-                  >
-                    <Text style={[styles.labelCaps, { fontSize: 16 }]}>−</Text>
-                  </TouchableOpacity>
-                  <Text style={[styles.displayMono, { flex: 1, textAlign: 'center', fontSize: 14, color: '#F5A623' }]}>
-                    {`${delay}s`}
-                  </Text>
-                  <TouchableOpacity
-                    style={[styles.autoStepBtn, locked && { opacity: 0.5 }]}
-                    disabled={locked}
-                    onPress={() => { if (!locked) onAutoCycleChange(channel.id, { delay_s: delay + 5 }); }}
-                    accessibilityRole="button"
-                    accessibilityLabel="Increase auto-cycle interval by 5 seconds"
-                  >
-                    <Text style={[styles.labelCaps, { fontSize: 16 }]}>+</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.autoCyclePillRow}>
-                  {AUTO_CYCLE_PRESETS_S.map((p) => {
-                    const active = delay === p;
-                    return (
-                      <TouchableOpacity
-                        key={p}
-                        style={[
-                          styles.autoPill,
-                          active && { backgroundColor: '#F5A623', borderColor: '#F5A623' },
-                          locked && { opacity: 0.5 },
-                        ]}
-                        disabled={locked}
-                        onPress={() => { if (!locked) onAutoCycleChange(channel.id, { delay_s: p }); }}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Set auto-cycle interval to ${p} seconds`}
-                        accessibilityState={{ selected: active }}
-                      >
-                        <Text style={[styles.labelCaps, { fontSize: 10 }, active && { color: '#FFF' }]}>{`${p}s`}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-
-                <View style={styles.autoCycleShuffleRow}>
-                  <Text style={[styles.labelCaps, { width: 36 }]}>RAND</Text>
-                  <TouchableOpacity
-                    style={[
-                      styles.autoCycleBtn,
-                      shuffle && { backgroundColor: '#F5A623', borderColor: '#F5A623' },
-                      locked && { opacity: 0.5 },
-                    ]}
-                    disabled={locked}
-                    onPress={() => { if (!locked) onAutoCycleChange(channel.id, { shuffle: !shuffle }); }}
-                    accessibilityRole="switch"
-                    accessibilityLabel="Shuffle auto-cycle order"
-                    accessibilityState={{ checked: shuffle, disabled: locked }}
-                  >
-                    <Text style={[styles.labelCaps, shuffle && { color: '#FFF' }]}>
-                      {shuffle ? '✓ SHUFFLE' : 'SHUFFLE'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </>
-            )}
-          </>
-        );
-      })()}
 
       <View style={styles.channelBody}>
         {/* Left column = the playlist (this IS the pattern list — "1 list to
@@ -1932,26 +1510,6 @@ export default function MixerScreen() {
     }
   }, []);
 
-  // Per-channel intensity clamp (faderMax, docs/39 §8.3). A hard ceiling
-  // on this channel's OWN contribution: effectiveFader = min(fader, faderMax).
-  // WAVE 5 pattern: optimistic local apply + PATCH, reconcile from the next
-  // mixer broadcast, revert + Alert on a fail-loud rejection. Validated by the
-  // engine identically to a fader (finite, clamped to [0,1]; non-finite ⇒ 400).
-  const handleFaderMaxChange = useCallback(async (channelId: string, faderMax: number) => {
-    const prev = channelsRef.current.find(c => c.id === channelId)?.faderMax;
-    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, faderMax } : c));
-    const res = await setChannelFaderMax(channelId, faderMax);
-    if (!res.ok) {
-      console.error(`[Mixer] faderMax change rejected for ${channelId}:`, res.error);
-      // Revert to the prior ceiling; the next mixer broadcast re-syncs too.
-      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, faderMax: prev ?? 1.0 } : c));
-      Alert.alert(
-        'Intensity ceiling not applied',
-        `The engine rejected this ceiling. ${res.error || ''} The channel kept its previous limit.`.trim(),
-      );
-    }
-  }, []);
-
   // Per-channel color metadata (docs/39 §8.4). Pure operator-facing accent
   // (no render effect). Same optimistic + reconcile + fail-loud shape. A
   // null color clears the accent; the engine requires a string or null.
@@ -1985,164 +1543,6 @@ export default function MixerScreen() {
       Alert.alert(
         'Hue not applied',
         `The engine rejected this hue. ${res.error || ''} The channel kept its previous hue.`.trim(),
-      );
-    }
-  }, []);
-
-  // Per-channel phase clock (round-2 #3/#11, design 20260620_33). SPEED scales
-  // this channel's phase accumulator (engine clamps [0.05,8], default 1×);
-  // OFFSET adds a constant phase shift (clamp [-10000,10000] ms, default 0) so
-  // same-pattern channels with staggered offsets chase/ripple. Same optimistic
-  // + PATCH + reconcile-from-broadcast + fail-loud revert shape as hue/faderMax.
-  const handleSpeedChange = useCallback(async (channelId: string, speed: number) => {
-    const prev = channelsRef.current.find(c => c.id === channelId)?.speed;
-    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, speed } : c));
-    const res = await setChannelSpeed(channelId, speed);
-    if (!res.ok) {
-      console.error(`[Mixer] speed change rejected for ${channelId}:`, res.error);
-      // Revert to the prior speed; the next mixer broadcast re-syncs too.
-      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, speed: prev ?? 1.0 } : c));
-      Alert.alert(
-        'Speed not applied',
-        `The engine rejected this speed. ${res.error || ''} The channel kept its previous speed.`.trim(),
-      );
-    }
-  }, []);
-
-  const handlePhaseOffsetChange = useCallback(async (channelId: string, phaseOffsetMs: number) => {
-    const prev = channelsRef.current.find(c => c.id === channelId)?.phaseOffsetMs;
-    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, phaseOffsetMs } : c));
-    const res = await setChannelPhaseOffset(channelId, phaseOffsetMs);
-    if (!res.ok) {
-      console.error(`[Mixer] phaseOffset change rejected for ${channelId}:`, res.error);
-      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, phaseOffsetMs: prev ?? 0 } : c));
-      Alert.alert(
-        'Phase offset not applied',
-        `The engine rejected this offset. ${res.error || ''} The channel kept its previous offset.`.trim(),
-      );
-    }
-  }, []);
-
-  // FOLLOW TEMPO toggle: opts this channel into the global tap-tempo
-  // multiplier. Boolean PATCH, same optimistic + fail-loud revert shape.
-  const handleFollowsTempoChange = useCallback(async (channelId: string, followsTempo: boolean) => {
-    const prev = channelsRef.current.find(c => c.id === channelId)?.followsTempo ?? false;
-    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, followsTempo } : c));
-    const res = await setChannelFollowsTempo(channelId, followsTempo);
-    if (!res.ok) {
-      console.error(`[Mixer] followsTempo toggle rejected for ${channelId}:`, res.error);
-      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, followsTempo: prev } : c));
-      Alert.alert(
-        'Follow-tempo not applied',
-        `The engine rejected this change. ${res.error || ''} The channel kept its previous setting.`.trim(),
-      );
-    }
-  }, []);
-
-  // INVERT toggle (F-invert, engine #8): flips this channel's color-invert
-  // flag. Boolean PATCH, same optimistic + fail-loud revert shape as
-  // handleFollowsTempoChange. The next mixer-state broadcast reconciles.
-  const handleInvertChange = useCallback(async (channelId: string, invert: boolean) => {
-    const prev = channelsRef.current.find(c => c.id === channelId)?.invert ?? false;
-    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, invert } : c));
-    const res = await setChannelInvert(channelId, invert);
-    if (!res.ok) {
-      console.error(`[Mixer] invert toggle rejected for ${channelId}:`, res.error);
-      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, invert: prev } : c));
-      Alert.alert(
-        'Invert not applied',
-        `The engine rejected this change. ${res.error || ''} The channel kept its previous setting.`.trim(),
-      );
-    }
-  }, []);
-
-  // FOLLOW / LINK (round-2 #6, docs/39 §F-follow; engine #6). Set/clear this
-  // channel's leader and/or its follow scale. Same optimistic + PATCH +
-  // reconcile-from-broadcast + fail-loud revert shape as hue/speed, but the
-  // 4xx codes get FRIENDLY Alerts: FOLLOW_CYCLE (self-follow / loop) and
-  // FOLLOW_LEADER_NOT_FOUND (leader vanished mid-pick). `fields` carries only
-  // the keys being changed ({followLeaderId} from the picker, {followScale}
-  // from the scale fader) so the two controls never clobber each other.
-  const handleFollowChange = useCallback(async (
-    channelId: string,
-    fields: { followLeaderId?: string | null; followScale?: number },
-  ) => {
-    const cur = channelsRef.current.find(c => c.id === channelId);
-    const prevLeader = cur?.followLeaderId ?? null;
-    const prevScale = cur?.followScale ?? 1.0;
-    // Optimistic apply of just the changed fields.
-    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, ...fields } : c));
-    const res = await setChannelFollow(channelId, fields);
-    if (!res.ok) {
-      console.error(`[Mixer] follow change rejected for ${channelId}:`, res.error);
-      // Revert both fields to their prior values; the next mixer broadcast
-      // re-syncs the authoritative state too.
-      setChannels(chs => chs.map(c => c.id === channelId
-        ? { ...c, followLeaderId: prevLeader, followScale: prevScale }
-        : c));
-      const code = (res.data as { code?: string } | undefined)?.code;
-      if (code === FOLLOW_CYCLE) {
-        Alert.alert('Can’t follow', 'Can’t follow — that would create a loop.');
-        return;
-      }
-      if (code === FOLLOW_LEADER_NOT_FOUND) {
-        Alert.alert('Can’t follow', 'That channel no longer exists.');
-        return;
-      }
-      Alert.alert(
-        'Follow not applied',
-        `The engine rejected this change. ${res.error || ''} The channel kept its previous link.`.trim(),
-      );
-    }
-  }, []);
-
-  // AUTO-CYCLE / autopilot (engine #2, docs/39 §6.v). Merge the changed
-  // autopilot field(s) into this channel's playlist.autopilot. Same optimistic
-  // + PATCH + reconcile-from-broadcast + fail-loud revert shape as the sibling
-  // handlers, but the autopilot fields live nested under playlist. The engine's
-  // 400 codes get FRIENDLY Alerts: AUTOCYCLE_BAD_DELAY (interval ≤0 / non-finite)
-  // and AUTOCYCLE_NO_PLAYLIST (arming a channel with no playlist). `fields`
-  // carries only the keys being changed ({active} from the AUTO button,
-  // {delay_s} from the stepper/pills, {shuffle} from the SHUFFLE toggle) so the
-  // controls never clobber each other. delay_s is clamped to ≥1 here AND the
-  // engine still validates, so a stray sub-1 surfaces the 400 fail-loud.
-  const handleAutoCycleChange = useCallback(async (
-    channelId: string,
-    fields: { active?: boolean; delay_s?: number; shuffle?: boolean },
-  ) => {
-    const cur = channelsRef.current.find(c => c.id === channelId);
-    const prevPlaylist = cur?.playlist ?? null;
-    const prevAp = prevPlaylist?.autopilot ?? { active: false, delay_s: 30, shuffle: false };
-    // Clamp delay client-side to the engine's ≥1s floor for an honest optimistic
-    // readout; the engine still validates and floors authoritatively.
-    const clamped = { ...fields };
-    if (clamped.delay_s !== undefined) {
-      clamped.delay_s = Math.max(1, Math.round(clamped.delay_s));
-    }
-    // Optimistic merge into playlist.autopilot (no-op if there is no playlist —
-    // the engine rejects that and we Alert below).
-    setChannels(chs => chs.map(c => {
-      if (c.id !== channelId || !c.playlist) return c;
-      return { ...c, playlist: { ...c.playlist, autopilot: { ...prevAp, ...clamped } } };
-    }));
-    const res = await setChannelAutoCycle(channelId, fields);
-    if (!res.ok) {
-      console.error(`[Mixer] auto-cycle change rejected for ${channelId}:`, res.error);
-      // Revert to the prior playlist (and thus prior autopilot); the next mixer
-      // broadcast re-syncs the authoritative state too.
-      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, playlist: prevPlaylist } : c));
-      const code = (res.data as { code?: string } | undefined)?.code;
-      if (code === AUTOCYCLE_BAD_DELAY) {
-        Alert.alert('Auto-cycle not applied', 'Auto-cycle interval must be at least 1 second.');
-        return;
-      }
-      if (code === AUTOCYCLE_NO_PLAYLIST) {
-        Alert.alert('Auto-cycle not applied', 'Assign a playlist to this channel before enabling auto-cycle.');
-        return;
-      }
-      Alert.alert(
-        'Auto-cycle not applied',
-        `The engine rejected this change. ${res.error || ''} The channel kept its previous setting.`.trim(),
       );
     }
   }, []);
@@ -2667,16 +2067,8 @@ export default function MixerScreen() {
               playlistLibrary={playlistLibrary}
               initialPlaylist={channelInlinePlaylist}
               onFaderChange={handleFaderChange}
-              onFaderMaxChange={handleFaderMaxChange}
               onColorChange={handleColorChange}
               onHueChange={handleHueChange}
-              onInvertChange={handleInvertChange}
-              onSpeedChange={handleSpeedChange}
-              onPhaseOffsetChange={handlePhaseOffsetChange}
-              onFollowsTempoChange={handleFollowsTempoChange}
-              onFollowChange={handleFollowChange}
-              onAutoCycleChange={handleAutoCycleChange}
-              followCandidates={channels}
               onMuteToggle={handleMuteToggle}
               onSoloToggle={handleSoloToggle}
               onSoloSafeToggle={handleSoloSafeToggle}
@@ -3079,33 +2471,25 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     backgroundColor: C.primaryFixedDim,
     borderRadius: 4,
   },
-  // Intensity-ceiling (faderMax) row — same geometry as the LEVEL row but
-  // amber fill so the operator reads it as a distinct "cap" control, not a
-  // second level fader.
-  capRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: C.ghostBorder,
-  },
-  capFill: {
-    position: 'absolute',
-    left: 0, top: 0, bottom: 0,
-    backgroundColor: '#F5A623',
-    borderRadius: 4,
-  },
-  // Per-channel hue row (docs/39 §F-hue) — same geometry as the LEVEL/CAP
-  // rows. The fill is a neutral magenta-ish accent so the operator reads it
-  // as a distinct chroma control; the live tint is shown in the swatch.
+  // Per-channel hue row (docs/39 §F-hue). DECLUTTER (mixer declutter): HUE is
+  // now the only secondary fader on the strip and is rendered SLIM so LEVEL
+  // reads as the primary control. Tighter vertical padding than the LEVEL row,
+  // a thin track (hueTrack), and a small swatch keep its visual weight low.
   hueRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 3,
     borderBottomWidth: 1,
     borderBottomColor: C.ghostBorder,
+  },
+  // Slim HUE track — half the LEVEL fader's height so HUE reads as a secondary
+  // trim. The fill is a neutral magenta-ish accent (the live tint shows in the
+  // swatch).
+  hueTrack: {
+    height: 8,
+    backgroundColor: C.surfaceContainerHigh,
+    borderRadius: 4,
   },
   hueFill: {
     position: 'absolute',
@@ -3114,198 +2498,8 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     borderRadius: 4,
   },
   hueSwatch: {
-    width: 16, height: 16, borderRadius: 4,
+    width: 12, height: 12, borderRadius: 3,
     borderWidth: 1, borderColor: C.ghostBorder,
-  },
-  // Per-channel phase-clock rows (round-2 #3/#11) — same geometry as the
-  // LEVEL/CAP/HUE rows. SPEED fill is cyan (time/motion), OFFSET fill is
-  // purple (phase shift); both distinct from the level/cap/hue fills so the
-  // operator reads them as their own cluster of time controls.
-  speedRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: C.ghostBorder,
-  },
-  speedFill: {
-    position: 'absolute',
-    left: 0, top: 0, bottom: 0,
-    backgroundColor: '#4FC3F7',
-    borderRadius: 4,
-  },
-  offsetRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: C.ghostBorder,
-  },
-  offsetFill: {
-    position: 'absolute',
-    left: 0, top: 0, bottom: 0,
-    backgroundColor: '#BA68C8',
-    borderRadius: 4,
-  },
-  // FOLLOW / LINK (round-2 #6, docs/39 §F-follow). A compact button that opens
-  // the leader picker (modal). Blue = following (distinct from the green tempo
-  // toggle / amber cap so the operator never confuses level-link with the other
-  // per-channel knobs). The optional SCALE fader below uses the same blue.
-  followRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: C.ghostBorder,
-  },
-  followBtn: {
-    flex: 1,
-    marginLeft: 6,
-    minHeight: 32,
-    paddingHorizontal: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: C.ghostBorder,
-    backgroundColor: C.surfaceContainerLowest,
-  },
-  followScaleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: C.ghostBorder,
-  },
-  followFill: {
-    position: 'absolute',
-    left: 0, top: 0, bottom: 0,
-    backgroundColor: '#3D6BE5',
-    borderRadius: 4,
-  },
-  followHint: {
-    fontFamily: 'Inter_400Regular',
-    fontSize: 11,
-    lineHeight: 15,
-    color: C.icon,
-    marginBottom: 10,
-  },
-  // FOLLOW TEMPO toggle row (round-2 #4). The button mirrors the Mute/Solo
-  // toggle visual language (green = on).
-  followTempoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: C.ghostBorder,
-  },
-  followTempoBtn: {
-    flex: 1,
-    marginLeft: 6,
-    minHeight: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: C.ghostBorder,
-    backgroundColor: C.surfaceContainerLowest,
-  },
-  // Per-channel INVERT toggle (F-invert, engine #8) — same geometry as the
-  // FOLLOW TEMPO toggle; lit purple (the hue-cluster color) when on so it
-  // reads as a chroma control, not a time control.
-  invertRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: C.ghostBorder,
-  },
-  invertBtn: {
-    flex: 1,
-    marginLeft: 6,
-    minHeight: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: C.ghostBorder,
-    backgroundColor: C.surfaceContainerLowest,
-  },
-  // AUTO-CYCLE / autopilot (engine #2). The AUTO toggle mirrors the FOLLOW
-  // TEMPO / INVERT toggle geometry; lit amber when armed (a distinct accent
-  // from the green TEMPO / purple chroma / blue FOLLOW so the time-automation
-  // control reads as its own thing). The delay stepper + pills + SHUFFLE rows
-  // only render while armed, so the strip stays compact when auto is off.
-  autoCycleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: C.ghostBorder,
-  },
-  autoCycleBtn: {
-    flex: 1,
-    marginLeft: 6,
-    minHeight: 32,
-    paddingHorizontal: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: C.ghostBorder,
-    backgroundColor: C.surfaceContainerLowest,
-  },
-  autoCycleDelayRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: C.ghostBorder,
-  },
-  autoStepBtn: {
-    width: 36,
-    minHeight: 32,
-    marginHorizontal: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: C.ghostBorder,
-    backgroundColor: C.surfaceContainerLowest,
-  },
-  autoCyclePillRow: {
-    flexDirection: 'row',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingBottom: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: C.ghostBorder,
-  },
-  autoPill: {
-    flex: 1,
-    minHeight: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: C.ghostBorder,
-    backgroundColor: C.surfaceContainerLowest,
-  },
-  autoCycleShuffleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: C.ghostBorder,
   },
   // Channel color picker swatch grid.
   swatchGrid: {
