@@ -531,3 +531,18 @@ new per-channel hue control lands into an already-decluttered strip.
   per-channel accumulated _phaseSeconds). Sole engine writer. UI deferred (pair with next engine
   feature). NEXT: phase-clock UI ‖ param-presets engine (#9 new-file). Then #2 cycle, #6 follow,
   #8 invert, #10 undo. Suite 987 pass/0 fail; deliverable 4f64391.
+
+## STATUS LOG (cont. 16)
+- phase-clock ENGINE #3/#4/#11 MERGED (888a800): per-channel accumulated _phaseSeconds,
+  speed/phaseOffsetMs/followsTempo + POST /mixer/tempo. Suite 1009 pass/0 fail; phase-clock
+  HIL 13/13 on merged tip (2× diverges from 1×, chase offset staggers, tempo halves followers
+  only, bad bpm/speed/offset→400). Worktree+dev branch removed; origin pruned (only feat/
+  optimize_channels remains — no dev/ no claude/). Deliverable 888a800.
+- Launched 2 parallel (DISJOINT): 
+  * dev/phase_clock_ui — SPEED/OFFSET HorizontalFader rows + FOLLOW TEMPO toggle in mixer.tsx
+    ChannelStrip; TAP TEMPO button in DeckTopBar; channelExtrasApi setChannelSpeed/PhaseOffset/
+    FollowsTempo + postTapTempo (design _33). CaptainPad-only.
+  * dev/param_presets_engine — #9 named param-preset capture/recall per channel (new file
+    lib/param_preset_manager.js + api_server routes). Engine-only.
+  Disjoint: CaptainPad (mixer.tsx/DeckTopBar/channelExtrasApi) vs engine (new file + api_server.js).
+  NEXT: #2 auto-cycle, #6 follow/link, #8 invert, #10 undo. Deliverable 888a800.
