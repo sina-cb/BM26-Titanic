@@ -605,3 +605,16 @@ new per-channel hue control lands into an already-decluttered strip.
 - ROUND-2 STATUS: #1 morph, #3/#4/#11 phase-clock, #5 flash/bump, #6 follow, #7 cue-to-deck,
   #8 invert, #9 param-presets, #2 auto-cycle — ALL complete end-to-end. Only #10 undo (engine
   in flight; UI after) remains to close the entire round-2 backlog. Deliverable 7a22a46.
+
+## STATUS LOG (cont. 21) — operator UI revisions + new deck feature
+- Operator reviewed feature list and directed: remove #3 per-channel speed + #11 chase (engine
+  ca69693), move #8 invert to a GLOBAL effect (engine ca69693), and DECLUTTER the mixer strip to
+  ONLY: LEVEL fader + thin HUE fader + pattern list (unchanged) + MUTE/SOLO/BUMP/SAFE/VIEW +
+  TRANSITION (UI 2948983). All 8 struck-out rows removed (CAP/INVERT/SPEED/OFFSET/FOLLOW TEMPO/
+  FOLLOW/PARAMS/AUTO). undo UI agent cancelled per operator. Verified live + screenshots sent.
+- Still-pending UI (engine done, UI not built): global invert toggle (GLOBAL EFFECTS bar) +
+  global tap-tempo control placement (mixer header). Deferred pending operator nod.
+- NEW FEATURE: deck dynamic view overrides (design _2). Operator decisions: (1) each overlay has
+  its OWN transport/autopilot; (2) UNIQUE view per overlay (reject 2nd overlay on a taken view,
+  fail loud); (3) deck-specific cap ~4; (4) PERSIST across restart. Engine writer launched
+  (dev/deck_overlays_engine); UI after. Deliverable 2948983.
