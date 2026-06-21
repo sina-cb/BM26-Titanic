@@ -121,6 +121,7 @@ export const PULSE_KEY_TOKENS: readonly string[] = [
   'chesthit',   // audioChestHit    — sub-bass chest thump
   'dropcountdown', // audioDropCountdown — drop imminent
   'beat',       // audioBeat        — beat tick
+  'downbeat',   // audioDownbeat    — fires true only on the hop beat-1 lands
   'phraseboundary', // audioPhraseBoundary — 4/8/16-bar phrase edge
   'trackchange',    // audioTrackChange    — new track detected
   'switchcolor',    // audioSwitchColor    — auto colour-switch cue
@@ -172,11 +173,16 @@ export function isGenreKey(key: string): boolean {
  * Identity colour (resolved hex) for a dynamic audio signal. Match the
  * Companion's source colour when we recognise the band token; KICK red,
  * dominant-frequency violet, otherwise the live-green auto accent.
+ *
+ * Matching is by band TOKEN as a WORD SEGMENT of the camelCase/lower key
+ * (via keyHasBandToken) — NOT a bare substring. A bare `includes('low')`
+ * mis-coloured `audioSlowZone` (which contains "low" inside "s-low-zone")
+ * as the LOW band's teal; the word-segment match resolves it to its own
+ * `slow` cyan instead. Same fragility applied to mid/high.
  */
 export function audioAccentHex(signal: AudioSignalDescriptor): string {
-  const k = signal.key.toLowerCase();
   for (const token of Object.keys(COMPANION_ACCENT)) {
-    if (k.includes(token)) return COMPANION_ACCENT[token];
+    if (keyHasBandToken(signal.key, token)) return COMPANION_ACCENT[token];
   }
   if (/kick/i.test(signal.key)) return '#ff5d6c';
   if (signal.kind === 'frequency') return '#c084fc';
