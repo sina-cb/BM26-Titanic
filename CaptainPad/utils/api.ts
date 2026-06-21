@@ -1838,6 +1838,31 @@ export async function setGlobalEffectBlackout(enabled: boolean): Promise<ApiResu
   }
 }
 
+// Global color INVERT toggle (docs/39 §F-invert). A first-class boolean
+// toggle (sibling of blackout, NOT a GEM slot): inverts the RGB triad of
+// the whole post-mixer buffer (1 - v), leaving W/A/UV untouched so the
+// mission-critical exterior whites never flip. POST /global-effect-invert
+// { enabled: boolean } → { status:'ok', invert } and broadcasts
+// { type:'globalInvert', invert } on /ws/control. Mirrors
+// setGlobalEffectBlackout's shape + fail-loud error handling exactly.
+export async function setGlobalInvert(enabled: boolean): Promise<ApiResult<{ status: string; invert: boolean }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-invert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('global-effect-invert', 'Failed to set global effect invert:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
 // PATCH a single slot binding. Sub-helper of the GlobalEffectMacros
 // hold-to-swap sheet — operator long-presses a slot, picks a new
 // effect/preset, and we round-trip the change here. The engine
