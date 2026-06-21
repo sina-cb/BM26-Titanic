@@ -87,6 +87,9 @@ const EXPECTED_TOPIC_BY_TYPE = {
   mixerTransitionRejected:     'control',
   globalEffectSlots:           'control',
   globalEffectMacroStatus:     'control',
+  // docs/39 §F-hue / §F-invert: global hue shifter knob + color-invert toggle.
+  globalHueShift:              'control',
+  globalInvert:                'control',
   playlistLibrary:             'control',
   playlistSaved:               'control',
   playlistDeleted:             'control',

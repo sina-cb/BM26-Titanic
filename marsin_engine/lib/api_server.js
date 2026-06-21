@@ -241,51 +241,9 @@ export function validateHue(raw) {
   return { ok: true, value: ((n % 360) + 360) % 360 };
 }
 
-// ── Per-channel phase-clock SPEED validation (docs/39 §F-phase #3) ─────
-// A per-channel time multiplier. Codex P0 (no silent fallback): a
-// NON-FINITE value (NaN / Infinity, non-number / unparseable string) is
-// REJECTED with 400 — we never coerce a broken payload to a default. A
-// finite value is CLAMPED into [0.05, 8] (a benign slider saturation; 0
-// or negative would FREEZE the pattern, which we forbid — the 0.05 floor
-// keeps it visibly-slow, not dead). Mirrors validateFader's accept/reject
-// contract exactly.
-export function validateSpeed(raw) {
-  let n;
-  if (typeof raw === 'number') {
-    n = raw;
-  } else if (typeof raw === 'string' && raw.trim() !== '') {
-    n = Number(raw);
-  } else {
-    return { ok: false, error: `speed must be a finite number in [0.05,8], got '${raw}'` };
-  }
-  if (!Number.isFinite(n)) {
-    return { ok: false, error: `speed must be a finite number in [0.05,8], got '${raw}'` };
-  }
-  return { ok: true, value: Math.max(0.05, Math.min(8, n)) };
-}
-
-// ── Per-channel phase OFFSET validation (docs/39 §F-phase #11 chase) ───
-// A constant phase shift in milliseconds. Same accept/reject contract as
-// validateSpeed: non-finite ⇒ 400; a finite value is clamped to the
-// documented ±10000 ms window (a 10 s chase spread is already extreme).
-export function validatePhaseOffsetMs(raw) {
-  let n;
-  if (typeof raw === 'number') {
-    n = raw;
-  } else if (typeof raw === 'string' && raw.trim() !== '') {
-    n = Number(raw);
-  } else {
-    return { ok: false, error: `phaseOffsetMs must be a finite number in [-10000,10000], got '${raw}'` };
-  }
-  if (!Number.isFinite(n)) {
-    return { ok: false, error: `phaseOffsetMs must be a finite number in [-10000,10000], got '${raw}'` };
-  }
-  return { ok: true, value: Math.max(-10000, Math.min(10000, n)) };
-}
-
 // ── Per-channel FOLLOW SCALE validation (docs/39 §F-follow, round-2 #6) ─
 // A follower's followScale multiplies the leader's effective level before the
-// follower's own caps. Same accept/reject contract as validateSpeed: a
+// follower's own caps. Accept/reject contract: a
 // NON-FINITE value (NaN / Infinity, non-number / unparseable string) is
 // REJECTED with 400 (Codex P0 — never coerce a broken payload to a default);
 // a finite value is CLAMPED into [0,2] (a follower may run hotter than its
@@ -314,8 +272,8 @@ export function validateFollowScale(raw) {
 // (a 0 / negative interval would advance every frame = a strobe storm, which
 // the codex forbids as a silent failure). A finite POSITIVE value is FLOORED
 // to 1s (the only mutation — a benign floor, never a reject of an in-range
-// number) so the cycle can never out-run a 50-200ms overlay compile. Mirrors
-// validateSpeed's accept/reject shape, but rejects ≤0 instead of clamping it.
+// number) so the cycle can never out-run a 50-200ms overlay compile. Rejects
+// ≤0 instead of clamping it.
 export function validateAutoCycleDelay(raw) {
   let n;
   if (typeof raw === 'number') {
@@ -1884,18 +1842,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // to 0 = no shift (documented schema default). The PatternChannel
       // ctor normalizes into [0,360).
       hue: typeof saved.hue === 'number' ? saved.hue : 0,
-      // F-invert restore (docs/39 §F-invert). An old state file without this
-      // restores to false = no invert (documented schema default). The
-      // PatternChannel ctor coerces via !! defensively.
-      invert: !!saved.invert,
-      // F-phase restore (docs/39 §F-phase #3/#4/#11). An old state file
-      // without these restores to the documented defaults (speed 1.0 = run
-      // at the global rate; phaseOffsetMs 0 = no chase; followsTempo false
-      // = immune to tap-tempo). The PatternChannel ctor clamps speed to
-      // [0.05,8] and phaseOffsetMs to ±10000 defensively. _phaseSeconds is
-      // TRANSIENT — never restored (the accumulator starts at 0 on boot).
-      speed: typeof saved.speed === 'number' ? saved.speed : 1.0,
-      phaseOffsetMs: typeof saved.phaseOffsetMs === 'number' ? saved.phaseOffsetMs : 0,
+      // F-phase #4 restore (docs/39 §F-phase). An old state file without this
+      // restores to the documented default (followsTempo false = immune to
+      // tap-tempo). The transient _phaseSeconds accumulator is NEVER restored
+      // (it starts at 0 on boot).
       followsTempo: !!saved.followsTempo,
       // F-follow restore (docs/39 §F-follow, round-2 #6). An old state file
       // without these restores to the documented defaults (followLeaderId null
@@ -2415,18 +2365,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // Surfaced so CaptainPad can render the per-channel HUE control. A
       // channel without the field (old engine) serializes 0 = no shift.
       hue: typeof c.hue === 'number' ? c.hue : 0,
-      // F-invert (docs/39): per-channel color INVERT flag. Surfaced so
-      // CaptainPad can render the per-channel INVERT toggle. A channel
-      // without the field (old engine) serializes false = no invert.
-      invert: !!c.invert,
-      // F-phase (docs/39 §F-phase): per-channel phase clock. speed (#3,
-      // [0.05,8]), phaseOffsetMs (#11 chase, [-10000,10000]), followsTempo
-      // (#4 opt-in to the global tap-tempo). Surfaced so CaptainPad can
-      // render the SPEED / OFFSET faders + FOLLOW TEMPO toggle. The
-      // transient _phaseSeconds accumulator is NEVER surfaced. Defaults
-      // 1.0 / 0 / false for an old engine without the fields.
-      speed: typeof c.speed === 'number' ? c.speed : 1.0,
-      phaseOffsetMs: typeof c.phaseOffsetMs === 'number' ? c.phaseOffsetMs : 0,
+      // F-phase (docs/39 §F-phase #4): tap-tempo opt-in. Surfaced so CaptainPad
+      // can render the FOLLOW TEMPO toggle. The transient _phaseSeconds
+      // accumulator is NEVER surfaced. Default false for an old engine without
+      // the field.
       followsTempo: !!c.followsTempo,
       // F-follow (docs/39 §F-follow, round-2 #6): channel FOLLOW/LINK. Surfaced
       // so CaptainPad can render the follow picker + scale. followLeaderId is
@@ -2539,15 +2481,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // F-hue (docs/39): per-channel hue rotation. See serializeChannel
         // above for semantics. 0 = no shift.
         hue: typeof c.hue === 'number' ? c.hue : 0,
-        // F-invert (docs/39): per-channel color INVERT flag. See
-        // serializeChannel above for semantics. false = no invert.
-        invert: !!c.invert,
-        // F-phase (docs/39 §F-phase): per-channel phase clock — speed (#3),
-        // phaseOffsetMs (#11 chase), followsTempo (#4). See serializeChannel
-        // above for semantics. Defaults 1.0 / 0 / false. _phaseSeconds is
-        // transient and never surfaced.
-        speed: typeof c.speed === 'number' ? c.speed : 1.0,
-        phaseOffsetMs: typeof c.phaseOffsetMs === 'number' ? c.phaseOffsetMs : 0,
+        // F-phase (docs/39 §F-phase #4): tap-tempo opt-in. See serializeChannel
+        // above for semantics. Default false. _phaseSeconds is transient and
+        // never surfaced.
         followsTempo: !!c.followsTempo,
         // F-follow (docs/39 §F-follow, round-2 #6): FOLLOW/LINK. See
         // serializeChannel above for semantics. null / 1.0 = no follow.
@@ -3642,6 +3578,30 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastMixerState();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', hueShift: { ...globalEffectsController.hueShift } }));
+      });
+    // POST /global-effect-invert (docs/39 §F-invert) — the GLOBAL color
+    // invert. A first-class boolean toggle (like blackout), NOT a GEM slot.
+    // Inverts the RGB of the WHOLE post-mixer buffer (1 - v; W/A/UV
+    // untouched) in the pipeline AFTER the global hue rotation. Mirrors the
+    // global-hue route's shape.
+    //   Body: { enabled }
+    //     - enabled  coerced via !! (pure boolean toggle — no fail-loud
+    //                contract, matching the legacy effect toggles).
+    // Persists globalsState.invert so the next boot honours it, and
+    // broadcasts { type: 'globalInvert', invert } + mixer state.
+    } else if (req.method === 'POST' && req.url === '/global-effect-invert') {
+      readBody(data => {
+        if (!globalEffectsController) {
+          res.writeHead(503); return res.end(JSON.stringify({ error: 'global effects controller not initialized' }));
+        }
+        const enabled = !!(data && data.enabled);
+        globalEffectsController.setInvert(enabled);
+        globalsState.invert = globalEffectsController.invert;
+        stateManager.saveGlobalsState(globalsState, paramCenter);
+        broadcastWs({ type: 'globalInvert', invert: globalEffectsController.invert });
+        broadcastMixerState();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', invert: globalEffectsController.invert }));
       });
     } else if (req.method === 'PATCH' && req.url.startsWith('/global-effect-slots/')) {
       // PATCH /global-effect-slots/:slotId
@@ -4810,41 +4770,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
           channel.hue = hv.value;
         }
-        // F-invert: per-channel color INVERT (docs/39 §F-invert). Pure
-        // boolean flag (coerced via !! like soloSafe/followsTempo above — any
-        // value coerces, so there is no validation-error contract here).
-        // Flips this layer's RGB BEFORE blend (W/A/U untouched), applied
-        // AFTER the per-channel hue (hue-then-invert). The render loop gates
-        // on the flag, so invert=false = no-op.
-        if (data.invert !== undefined) {
-          channel.invert = !!data.invert;
-        }
-        // F-phase #3: per-channel speed. validateSpeed — non-finite ⇒ 400
-        // (Codex P0); a finite value is clamped to [0.05,8]. Changing speed
-        // does NOT jump the phase (the accumulator stays continuous — only
-        // the future rate changes). No render-loop poke needed; beginFrame
-        // reads channel.speed each frame.
-        if (data.speed !== undefined) {
-          const sv = validateSpeed(data.speed);
-          if (!sv.ok) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: sv.error }));
-          }
-          channel.speed = sv.value;
-        }
-        // F-phase #11: per-channel phase offset (chase). validatePhaseOffsetMs
-        // — non-finite ⇒ 400; clamped to ±10000 ms. A constant added in
-        // beginFrame; a change is an intended one-frame step.
-        if (data.phaseOffsetMs !== undefined) {
-          const pv = validatePhaseOffsetMs(data.phaseOffsetMs);
-          if (!pv.ok) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: pv.error }));
-          }
-          channel.phaseOffsetMs = pv.value;
-        }
         // F-phase #4: opt this channel in/out of the global tap-tempo. Pure
-        // boolean flag (coerced via !! like soloSafe/faderLocked).
+        // boolean flag (coerced via !! like soloSafe/faderLocked). The render
+        // loop reads channel.followsTempo each frame via _effectiveSpeed.
         if (data.followsTempo !== undefined) {
           channel.followsTempo = !!data.followsTempo;
         }
@@ -5815,30 +5743,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
           channel.hue = hv.value;
         }
-        // F-invert: per-channel color INVERT on the deck channel. Same
-        // semantics as the mixer PATCH (docs/39 §F-invert) — pure boolean,
-        // coerced via !!.
-        if (data.invert !== undefined) {
-          channel.invert = !!data.invert;
-        }
-        // F-phase #3/#11/#4 on the deck channel — same validation +
-        // semantics as the mixer PATCH (docs/39 §F-phase).
-        if (data.speed !== undefined) {
-          const sv = validateSpeed(data.speed);
-          if (!sv.ok) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: sv.error }));
-          }
-          channel.speed = sv.value;
-        }
-        if (data.phaseOffsetMs !== undefined) {
-          const pv = validatePhaseOffsetMs(data.phaseOffsetMs);
-          if (!pv.ok) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: pv.error }));
-          }
-          channel.phaseOffsetMs = pv.value;
-        }
+        // F-phase #4 on the deck channel — tap-tempo opt-in, same semantics
+        // as the mixer PATCH (docs/39 §F-phase).
         if (data.followsTempo !== undefined) {
           channel.followsTempo = !!data.followsTempo;
         }

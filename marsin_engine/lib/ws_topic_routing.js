@@ -80,6 +80,10 @@ const TOPIC_BY_TYPE = Object.freeze({
   // rotate. Operator-driven, low volume → /ws/control next to the GEM
   // macro/blackout messages it semantically relates to.
   globalHueShift:              TOPICS.CONTROL,
+  // docs/39 §F-invert: GLOBAL color-invert toggle. Broadcast on every POST
+  // /global-effect-invert so CaptainPad mirrors the global invert state.
+  // Same topic as globalHueShift (operator-driven, low volume → /ws/control).
+  globalInvert:                TOPICS.CONTROL,
   // docs/32: per-group fixed-color override table. Broadcast on every
   // PUT/DELETE so all connected CaptainPads mirror the Dimmer Rack's
   // FIXED COLORS chips. Low volume, operator-driven.

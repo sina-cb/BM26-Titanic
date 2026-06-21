@@ -151,33 +151,6 @@ function applyHueShift6chU8(buf, pixelCount, degrees) {
   }
 }
 
-// Per-channel color INVERT (docs/39 §F-invert). Inverts the R,G,B bytes
-// (255 - v) of an interleaved 6ch RGBWAU Uint8Array (0-255) IN PLACE,
-// leaving the W/A/UV bytes BYTE-FOR-BYTE untouched (same rule as
-// applyHueShift6chU8 above — mission-critical exterior whites carry no color
-// concept and must never be flipped/dimmed). Allocation-free, ~3 ops/pixel.
-// Caller MUST gate on `channel.invert` so the default channel pays nothing.
-//
-// ORDER vs hue: when a channel has BOTH hue and invert set, the call sites
-// below invoke applyHueShift6chU8 FIRST, then applyInvert6chU8 — i.e. the
-// IMPLEMENTED composition is HUE-THEN-INVERT in buffer order (hue rotates the
-// chroma, then the rotated RGB is flipped). The two ops actually COMMUTE
-// within ±1/255 rounding (the luminance-preserving YIQ rotation distributes
-// over the chroma negation that `255 - v` is, and the luminance constant is
-// rotation-invariant), so the output is order-independent — we still pin a
-// single documented order for predictability. Applied identically at all
-// three sites (composite loop, vis pre-pass, deck pre-pass) so meter/vis/deck
-// match.
-function applyInvert6chU8(buf, pixelCount) {
-  for (let i = 0; i < pixelCount; i++) {
-    const o = i * 6;
-    buf[o] = 255 - buf[o];
-    buf[o + 1] = 255 - buf[o + 1];
-    buf[o + 2] = 255 - buf[o + 2];
-    // Bytes 3,4,5 (W,A,U) are deliberately never read or written.
-  }
-}
-
 // Commit a blended-layer result onto mixerBuffer ONLY at selected pixels.
 // The unselected pixels keep whatever the previous layer painted, which
 // is the whole point of view-selection: it lets a sparkle pattern on
@@ -1219,19 +1192,15 @@ export class PatternMixer {
    * channel's OWN fader FIRST (per-fixture ceiling), then the group scales
    * it (gang scale ≠ a fader write, so it still attenuates a locked channel).
    */
-  // ── Per-channel effective phase-clock speed (docs/39 §F-phase) ────────
+  // ── Per-channel effective phase-clock speed (docs/39 §F-phase #4) ─────
   // O(1), allocation-free — called once per channel per frame from
-  // beginFrame, right next to _effFader. The channel's own `speed` times
-  // the global tap-tempo multiplier IF the channel opted in (followsTempo),
-  // clamped to the same [0.05, 8] window the channel constructor enforces
-  // (so speed × tempo can never push the accumulator to 0 / freeze or run
-  // away). Channels that don't follow tempo get their raw `speed`.
+  // beginFrame, right next to _effFader. TEMPO-ONLY: a channel that opted
+  // in (followsTempo) runs at the global tap-tempo multiplier; every other
+  // channel runs at 1× (the global clock rate). Clamped to the [0.05, 8]
+  // window so an extreme tap can never push the accumulator to 0 (freeze)
+  // or run away.
   _effectiveSpeed(channel) {
-    const base = (typeof channel.speed === 'number' && Number.isFinite(channel.speed))
-      ? channel.speed
-      : 1.0;
-    const mult = channel.followsTempo ? this._tempoMultiplier : 1;
-    const eff = base * mult;
+    const eff = channel.followsTempo ? this._tempoMultiplier : 1;
     return eff < 0.05 ? 0.05 : (eff > 8 ? 8 : eff);
   }
 
@@ -2482,12 +2451,6 @@ export class PatternMixer {
         if (this.deckChannel.hue) {
           applyHueShift6chU8(this.channelBuffer, this.pixelCount, this.deckChannel.hue);
         }
-        // Mirror the composite-loop invert (docs/39 §F-invert). Applied
-        // AFTER hue (hue-then-invert order) so the vis meter/preview matches
-        // what blends. Gated on the flag. RGB only; W/A/U untouched.
-        if (this.deckChannel.invert) {
-          applyInvert6chU8(this.channelBuffer, this.pixelCount);
-        }
         this._visData[this.deckChannel.id] = this._extractVisInto(this.deckChannel.id, this.channelBuffer);
         const d = this.deckChannel;
         let deckEff = 0;
@@ -2506,11 +2469,6 @@ export class PatternMixer {
         // actually blends into the mix (docs/39 §F-hue). Gated on non-zero.
         if (channel.hue) {
           applyHueShift6chU8(this.channelBuffer, this.pixelCount, channel.hue);
-        }
-        // Mirror the composite-loop invert (docs/39 §F-invert), AFTER hue
-        // (hue-then-invert) so meter + vis match what blends. RGB only.
-        if (channel.invert) {
-          applyInvert6chU8(this.channelBuffer, this.pixelCount);
         }
         this._visData[channel.id] = this._extractVisInto(channel.id, this.channelBuffer);
         this._visLevels[channel.id] =
@@ -2537,12 +2495,6 @@ export class PatternMixer {
       // so the deck buffer matches the composite. Gated on non-zero.
       if (deck.hue) {
         applyHueShift6chU8(this.deckBuffer, this.pixelCount, deck.hue);
-      }
-      // Per-channel color INVERT on the live deck/PFL output (docs/39
-      // §F-invert): flip the previewed channel's RGB (W/A/U untouched), AFTER
-      // hue (hue-then-invert) so the deck buffer matches the composite. Gated.
-      if (deck.invert) {
-        applyInvert6chU8(this.deckBuffer, this.pixelCount);
       }
 
       // View-selection blackout for the deck preview. PFL means "show
@@ -2705,15 +2657,6 @@ export class PatternMixer {
       // additively with the global hue applied post-composite in engine.js.
       if (channel.hue) {
         applyHueShift6chU8(this.channelBuffer, this.pixelCount, channel.hue);
-      }
-
-      // Per-channel color INVERT (docs/39 §F-invert): flip THIS layer's RGB
-      // (255 - v; W/A/U untouched) BEFORE it is blended into the mix. Applied
-      // AFTER the hue shift above so the documented composition is HUE-THEN-
-      // INVERT in buffer order. Gated on the flag so the default channel pays
-      // nothing.
-      if (channel.invert) {
-        applyInvert6chU8(this.channelBuffer, this.pixelCount);
       }
 
       // Blend (mixerBuffer + channelBuffer) → blended. We blend the

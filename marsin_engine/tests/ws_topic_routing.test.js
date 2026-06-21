@@ -97,6 +97,8 @@ test('UI/state events ride /ws/control', () => {
     'globalEffectMacroStatus',
     // docs/39 §F-hue: global hue shifter knob broadcast.
     'globalHueShift',
+    // docs/39 §F-invert: global color-invert toggle broadcast.
+    'globalInvert',
     'scheduledTasks',
     'playlistLibrary',
     'playlistSaved',

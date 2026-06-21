@@ -1093,49 +1093,60 @@ Finite number (or finite-parseable string) required; non-finite / non-number =>
 
 ---
 
-## 6.x2 §F-invert — Per-channel color INVERT
+## 6.x2 §F-invert — GLOBAL color INVERT
 
-Operator-requested (round 2, 2026-06). A per-channel boolean that **inverts the
-channel's RGB output** (`255 - v` per byte) **before** it is blended into the
-mix. Structurally a sibling of the per-channel hue: a per-channel chroma op
-applied to the channel buffer pre-blend, **RGB-only**, gated, serialized in all
-paths. W / A / UV are **never** touched — the mission-critical exterior whites
-carry no color concept and must never be flipped or dimmed by an invert toggle.
+Operator-requested (round 2, 2026-06; **converted from per-channel to GLOBAL**
+in the channels-optimization campaign, 2026-06). A single **global** boolean
+toggle that **inverts the RGB of the WHOLE post-mixer buffer** (`1 - v` on the
+float `model.pixels`) in the engine pipeline. Modeled exactly on the global hue
+shifter: a first-class chroma op (like blackout), **RGB-only**, gated,
+persisted, broadcast. W / A / UV are **never** touched — the mission-critical
+exterior whites carry no color concept and must never be flipped dark by an
+invert toggle.
 
-### Per-channel invert
+> The earlier per-channel invert (`PatternChannel.invert` + the mixer's
+> `applyInvert6chU8` pre-blend helper + the `{invert}` PATCH on both channel
+> handlers + the per-channel serializers) was **removed entirely** — no dead
+> code remains. Per-channel chroma is still available via the per-channel hue.
 
-- `PatternChannel.invert` (default `false`, coerced via `!!`). Applied on the
-  interleaved `channelBuffer` via `applyInvert6chU8(buf, pixelCount)` in the
-  composite loop **and** the vis/deck pre-passes (so meter + preview match the
-  rendered output), gated `if (channel.invert)` so the default channel pays
-  nothing.
-- **`PATCH /mixer/channels/:id`** and **`PATCH /deck/channel`** accept an
-  `invert` field, coerced via `!!` (a pure boolean like `soloSafe` /
-  `followsTempo` — any value coerces, so there is no validation-error contract;
-  no 400). Serialized in all four serializers (api_server `serializeChannel` +
-  `serializeMixerState`; state_manager `serializeChannel` + `saveMixerState`
-  overlay) and the restore path. An old state file without `invert` restores to
-  `false`. No new WS type — `invert` rides the existing mixer-state broadcast.
+### Global invert
 
-### Composition with hue (order)
+- `GlobalEffectsController.invert` (default `false`, coerced via `setInvert`’s
+  `!!`). Applied post-composite by `applyInvert(pixels)`, which delegates to
+  `effects/invert.js applyInvert({pixels, enabled})` (RGB-only float `1 - v`;
+  W/A/UV untouched). Gated `if (this.invert)` so the default rig pays nothing.
+  `panicStop()` LEAVES it alone (a static chroma op, not a brightness/flash
+  hazard, and blackout still zeroes the output — same rationale as the global
+  hue).
+- **`POST /global-effect-invert { enabled }`** — mirrors `POST
+  /global-effect-hue`. `enabled` coerced via `!!` (a pure boolean toggle — any
+  value coerces, no validation-error contract / no 400). Calls `setInvert`,
+  persists `globalsState.invert`, broadcasts `{ type: 'globalInvert', invert }`
+  on `/ws/control`, and also re-broadcasts mixer state.
+- **Persistence**: `globalsState.invert` in `state_manager` (`loadGlobalsState`
+  default `false`; `applyGlobalsState` restores through `setInvert` on boot).
+  An old globals file without `invert` loads to `false`.
+- **WS routing**: `globalInvert` → `/ws/control` (same topic as
+  `globalHueShift`), pinned in `ws_topic_routing.js` + both routing tests.
 
-When a channel has **both** `hue` and `invert` set, the mixer applies the hue
-shift **first**, then the invert (`applyHueShift6chU8` then `applyInvert6chU8`)
-— the **implemented order is HUE-THEN-INVERT** in buffer order, applied
-identically at all three sites so meter/vis/deck match. The two ops in fact
-**commute within ±1/255 rounding**: the luminance-preserving YIQ rotation
-distributes over the chroma negation that `255 - v` is, and the luminance
-constant is rotation-invariant — so the output is order-independent. We still
-pin a single documented order for predictability.
+### Pipeline order
+
+The engine applies the global hue **first**, then the global invert
+(`applyHueShift(model.pixels)` then `applyInvert(model.pixels)`) — documented
+order **global HUE then global INVERT** — AFTER the show macros and BEFORE the
+group color-locks + intensity/blackout, so locks and the e-stop keep the final
+say.
 
 | Site | What |
 |---|---|
-| `lib/pattern_channel.js` | `invert=false` boolean field, coerced `!!` |
-| `lib/pattern_mixer.js` | `applyInvert6chU8` helper (R,G,B only; W/A/UV untouched); applied pre-blend in composite loop + vis pre-pass + deck pre-pass, gated `if(channel.invert)`, AFTER the hue shift |
-| `lib/api_server.js` | `invert` on both channel PATCHes (`!!`); serialized in 4 serializers + restore |
-| `lib/state_manager.js` | channel `invert` in `serializeChannel` + `saveMixerState` overlay (appended after `hue`) |
-| `tests/invert.test.js` | Unit: 255-v flip, W/A/UV untouched, double-invert identity, no-op@false, ctor + PATCH `!!` coercion, serialize round-trip + missing->false, hue+invert composition (hue-then-invert) + commutativity (10 tests) |
-| `tests/hil/hil_invert_test.mjs` | HIL: PATCH invert flips deck channel vis-buffer RGB to 255-baseline while W/A/U unchanged (PRE-blend); invert=false restores baseline; PATCH `!!` truthy/falsy coercion; serialize round-trip (11 checks) |
+| `effects/invert.js` (NEW) | `applyInvert({pixels, enabled})` float `1 - v`, RGB-only (W/A/UV untouched), early-return when disabled (gated zero-cost). Header mirrors `hue_shift.js` |
+| `lib/global_effects_controller.js` | `this.invert=false`; `setInvert(enabled)` (`!!`); `applyInvert(pixels)` (gated, delegates to the effect); surfaced in `getStatus()`; LEFT ALONE in `panicStop()` |
+| `engine.js` | `globalEffectsController.applyInvert(model.pixels)` AFTER `applyHueShift`, BEFORE `applyGroupFixedColors` + intensity/blackout |
+| `lib/api_server.js` | `POST /global-effect-invert {enabled}` (`!!`); persists `globalsState.invert`; broadcasts `{type:'globalInvert', invert}` + mixer state |
+| `lib/ws_topic_routing.js` | `globalInvert` → `control` (same topic as `globalHueShift`) |
+| `lib/state_manager.js` | `globalsState.invert` default false (`loadGlobalsState`) + restore (`applyGlobalsState`) |
+| `tests/global_invert.test.js` (NEW) | Unit: `1-v` flip + W/A/U untouched, double-invert identity, disabled no-op (gated), `setInvert` `!!` coercion, `getStatus`, `panicStop` preserves, globalsState round-trip + missing→false, pipeline order (hue-then-invert) |
+| `tests/hil/hil_global_invert_test.mjs` (NEW) | HIL (slot 2 :31268): `POST /global-effect-invert {enabled:true}` flips the post-composite `rig` RGB to 255-baseline while W/A/U unchanged; toggle off restores baseline; `globalInvert` broadcast observed on `/ws/control`; payload coercion |
 
 ---
 
@@ -1201,12 +1212,21 @@ the **simulation / sACN output** (the deck buffer), not the CaptainPad mini-stri
 
 ---
 
-## 6.z §F-phase — Per-channel phase clock (#3 SPEED · #4 TAP-TEMPO · #11 CHASE/offset, 2026-06-21, engine-side)
+## 6.z §F-phase — Per-channel phase clock: TAP-TEMPO core (#4, 2026-06-21, engine-side)
 
-Round-2 cluster. ONE shared per-channel **phase clock** powers three
-operator features. Engine-side only; the CaptainPad UI is a separate later
-wave (the API surface below is the contract for it). Design:
+Round-2 cluster, **trimmed** in the channels-optimization campaign (2026-06).
+The original cluster carried three features on one per-channel phase clock:
+**#3 per-channel SPEED**, **#4 TAP-TEMPO**, **#11 CHASE/phaseOffsetMs**. The
+**per-channel SPEED knob (#3) and the CHASE / phaseOffsetMs (#11) features were
+REMOVED entirely** — only the minimal **tap-tempo** core remains. Design:
 `.agent/02_reports/202606/20260620_33_speed_tap_chase_design.md`.
+
+> Removed (no dead code remains): `PatternChannel.speed` /
+> `PatternChannel.phaseOffsetMs` fields; `validateSpeed` /
+> `validatePhaseOffsetMs` in `api_server`; the `{speed}` / `{phaseOffsetMs}`
+> PATCH handling on both channel handlers; the `speed` / `phaseOffsetMs`
+> serializer + restore fields. The phase accumulator, `followsTempo`, and the
+> tap-tempo machinery were KEPT.
 
 ### The mechanism (why an accumulator, not a dt-scale)
 
@@ -1221,25 +1241,23 @@ knob) and fans the SAME `elapsed` UNCHANGED to every channel via
 dt = max(0, elapsed - _lastPhaseElapsed)   // first frame ⇒ 0; backwards ⇒ 0
 _lastPhaseElapsed = elapsed
 _phaseSeconds += dt * effectiveSpeed        // ACCUMULATE — never re-scale a raw dt
-phase = _phaseSeconds + phaseOffsetMs / 1000
+phase = _phaseSeconds
 wasmHost.beginFrame(handle, phase)
 ```
 
 We **accumulate** (not multiply the absolute `elapsed`) so an absolute-time
 pattern (`time(...)`, `triangle(t)`, etc.) **never JUMPS** when the operator
-changes speed mid-show — the accumulator stays continuous across the change;
-only the future rate changes. No reset on handle swap (continuity is fine);
-**no modulo** (f64 has ample precision for a multi-day show, and wrapping
-would visibly glitch an absolute-time pattern). `globalDt` is ALREADY
+taps a new tempo mid-show — the accumulator stays continuous across the
+change; only the future rate changes. No reset on handle swap (continuity is
+fine); **no modulo** (f64 has ample precision for a multi-day show, and
+wrapping would visibly glitch an absolute-time pattern). `globalDt` is ALREADY
 global-speed-scaled by `engine.js` — the per-channel multiply does NOT
 re-read / re-apply the global speed (no double-count).
 
-### Per-channel fields (`PatternChannel`)
+### Per-channel field (`PatternChannel`)
 
 | Field | Default | Clamp | Meaning |
 |---|---|---|---|
-| `speed` (#3) | `1.0` | `[0.05, 8]` | per-channel time multiplier. 0/negative would FREEZE = broken, so the floor is 0.05 (visibly-slow, not dead — anti-silent-failure) |
-| `phaseOffsetMs` (#11) | `0` | `[-10000, 10000]` | constant phase shift in ms. Staggered offsets on same-pattern channels → chase / ripple |
 | `followsTempo` (#4) | `false` | bool | opt-in to the global tap-tempo. Default false ⇒ the mission-critical exterior is immune unless opted in |
 
 TRANSIENT (NEVER serialized): `_phaseSeconds` (running accumulator),
@@ -1252,53 +1270,54 @@ The CLIENT computes BPM from tap intervals; the engine stores the resolved
 tempo and derives the multiplier. `tempoBpm` (null = no tempo set —
 distinct from a tapped value), `_tempoMultiplier` (derived, never
 serialized). `setTempoBpm(bpm)` → `_tempoMultiplier = clamp(bpm/120, 0.05, 8)`
-(**120 BPM = 1×**). `_effectiveSpeed(ch) = clamp(ch.speed *
-(ch.followsTempo ? _tempoMultiplier : 1), 0.05, 8)` — O(1), allocation-free,
-called once per channel per frame next to `_effFader`. The inactive deck
-sibling is ticked with the active DECK's effectiveSpeed (keeps the ping-pong
-time-sync contract).
+(**120 BPM = 1×**). `_effectiveSpeed(ch) = clamp(ch.followsTempo ?
+_tempoMultiplier : 1, 0.05, 8)` — **TEMPO-ONLY** (no per-channel speed factor):
+a `followsTempo` channel runs at the tempo multiplier, every other channel at
+1×. O(1), allocation-free, called once per channel per frame next to
+`_effFader`. The inactive deck sibling is ticked with the active DECK's
+effectiveSpeed (keeps the ping-pong time-sync contract).
 
 ### Composition / orthogonality
 
-`effectiveSpeed = clamp(speed * (followsTempo ? tempoMult : 1), 0.05, 8)`;
-`phase = _phaseSeconds + phaseOffsetMs/1000`. Orthogonal to
-fader/faderMax/group/solo/bump (level), hue (chroma), viewSelection
-(spatial). Scripted transitions ramp `channel.fader` ONLY — never time —
-so a speed/offset change can't perturb a fade-in-flight, and vice versa.
+`effectiveSpeed = clamp(followsTempo ? tempoMult : 1, 0.05, 8)`;
+`phase = _phaseSeconds`. Orthogonal to fader/faderMax/group/solo/bump (level),
+hue (chroma), viewSelection (spatial). Scripted transitions ramp
+`channel.fader` ONLY — never time — so a tempo change can't perturb a
+fade-in-flight, and vice versa.
 
-### API surface (NEW — for the follow-on UI wave)
+### API surface
 
 - `PATCH /mixer/channels/:id` and `PATCH /deck/channel` accept:
-  - `{ speed }` — `validateSpeed`: non-finite ⇒ **400**; finite clamped `[0.05, 8]`.
-  - `{ phaseOffsetMs }` — `validatePhaseOffsetMs`: non-finite ⇒ **400**; finite clamped `[-10000, 10000]`.
   - `{ followsTempo }` — coerced via `!!` (boolean flag).
 - `POST /mixer/tempo { bpm }` — finite `[20, 400]` else **400**; sets the
   global tempo; `saveAllState`; broadcasts mixer state. Response:
   `{ status, tempoBpm, tempoMultiplier }`. **No new WS message type** — `tempoBpm`
   rides the existing `mixer`-state broadcast (`serializeMixerState`).
-- All three per-channel fields are surfaced in ALL 4 serializers
+- `followsTempo` is surfaced in ALL 4 serializers
   (`state_manager.serializeChannel`, `api_server.serializeChannel`,
   inline `serializeMixerState`, restored by `buildChannelFromSaved`);
   `tempoBpm` is a mixer-state global (serialized + restored on boot via
-  `setTempoBpm`). `_phaseSeconds` is NEVER serialized. Missing fields restore
-  to defaults (1.0 / 0 / false; tempoBpm null).
+  `setTempoBpm`). `_phaseSeconds` is NEVER serialized. Missing field restores
+  to default (false; tempoBpm null).
 
-### Implementation map (this wave)
+### Implementation map (this wave, post-trim)
 
 | File | Change |
 |---|---|
-| `lib/pattern_channel.js` | `speed`/`phaseOffsetMs`/`followsTempo` fields (+ clamps) + transient `_phaseSeconds`/`_lastPhaseElapsed`; rewrote `beginFrame(host, elapsed, force, effectiveSpeed=1)` to accumulate per-channel phase |
-| `lib/pattern_mixer.js` | `tempoBpm`/`_tempoMultiplier`; `_effectiveSpeed(ch)`; `setTempoBpm(bpm)`; pass effectiveSpeed to all 3 `beginFrame` call sites (inactive sibling gets the deck's) |
-| `lib/api_server.js` | `validateSpeed` + `validatePhaseOffsetMs`; `{speed}`/`{phaseOffsetMs}`/`{followsTempo}` in BOTH channel PATCH handlers; `POST /mixer/tempo`; serialize in `serializeChannel` + inline `serializeMixerState` (+ `tempoBpm` global) + `buildChannelFromSaved` restore + boot `setTempoBpm` |
-| `lib/state_manager.js` | `serializeChannel` emits speed/phaseOffsetMs/followsTempo (additive, after hue); `saveMixerState` overlay copy + `tempoBpm` global |
-| `tests/phase_clock.test.js` (NEW) | Unit: accumulate-monotonic, no-jump-on-speed-change, constant offset diff, tempo 60→0.5× on followers only, clamp speed×tempo→8, validators 400/clamp, serialize round-trip + missing→defaults, `_phaseSeconds` never serialized, orthogonality — 22 tests |
-| `tests/hil/hil_phase_clock_test.mjs` (NEW) | HIL (slot 2 :31268): two channels same pattern speed 1× vs 2× → vis buffers DIVERGE; offsets {0,500ms} staggered; `POST /mixer/tempo {60}` halves follower only + `serializeMixerState` reports `tempoBpm:60`; bad bpm/speed/offset → 400 — 13 checks |
+| `lib/pattern_channel.js` | `followsTempo` field + transient `_phaseSeconds`/`_lastPhaseElapsed`; `beginFrame(host, elapsed, force, effectiveSpeed=1)` accumulates per-channel phase (`phase = _phaseSeconds`). speed/phaseOffsetMs removed |
+| `lib/pattern_mixer.js` | `tempoBpm`/`_tempoMultiplier`; `_effectiveSpeed(ch)` **tempo-only**; `setTempoBpm(bpm)`; pass effectiveSpeed to all 3 `beginFrame` call sites (inactive sibling gets the deck's) |
+| `lib/api_server.js` | `{followsTempo}` in BOTH channel PATCH handlers; `POST /mixer/tempo`; `followsTempo` in `serializeChannel` + inline `serializeMixerState` (+ `tempoBpm` global) + `buildChannelFromSaved` restore + boot `setTempoBpm`. validateSpeed/validatePhaseOffsetMs + speed/phaseOffsetMs PATCH removed |
+| `lib/state_manager.js` | `serializeChannel` emits followsTempo (additive, after hue); `saveMixerState` overlay copy + `tempoBpm` global. speed/phaseOffsetMs removed |
+| `tests/tap_tempo.test.js` (renamed from `phase_clock.test.js`, trimmed) | Unit: accumulate-monotonic, no-jump-on-tempo-change, negative-dt floor, tempo 60→0.5× on followers only (tempo-only `_effectiveSpeed`), clamp, `setTempoBpm` rejects non-finite, `followsTempo` serialize round-trip + missing→false, `_phaseSeconds` never serialized, orthogonality, removed-field assertion |
+| `tests/hil/hil_tap_tempo_test.mjs` (renamed from `hil_phase_clock_test.mjs`, trimmed) | HIL (slot 2 :31268): `POST /mixer/tempo {60}` → multiplier 0.5 + `serializeMixerState` reports `tempoBpm:60`; followsTempo halves follower only; bad bpm → 400 |
 
 ### Deferred to the UI wave (not in scope here)
 
-- CaptainPad: SPEED + OFFSET fader rows + FOLLOW TEMPO toggle on the channel
-  strip; a TAP TEMPO button (client computes BPM from tap intervals →
-  `POST /mixer/tempo`); `MixerChannel` type += `speed`/`phaseOffsetMs`/`followsTempo`.
+- CaptainPad: a FOLLOW TEMPO toggle on the channel strip; a TAP TEMPO button
+  (client computes BPM from tap intervals → `POST /mixer/tempo`); `MixerChannel`
+  type += `followsTempo`. (The per-channel SPEED + CHASE/OFFSET UI is NOT in
+  scope — those engine features were removed in the channels-optimization
+  campaign.)
 - Audio-derived BPM (auto tap from the audio companion) is explicitly
   out-of-scope — #4 is manual tap only this wave.
 
@@ -1348,7 +1367,7 @@ independent and is **still applied on top**, in this order (see
    scales it.
 6. **own solo gate** — the follower's own solo/solo-safe state still applies.
 
-The follower keeps its **own** pattern, hue, invert, group, and solo. Following
+The follower keeps its **own** pattern, hue, group, and solo. Following
 **only ever affects the FOLLOWER's level — it can NEVER alter the leader** (the
 resolution only *reads* the leader's cached effective value). Mission rule
 satisfied: a follower can never force a mission-critical leader dark.
@@ -1589,7 +1608,7 @@ validation, so a 404/400/409 never leaves a phantom undo entry:
 | `POST /mixer/channels/reorder` | `reorder channels` |
 | `POST /mixer/channels/:id/param-presets/:name/recall` | `param-preset '<name>'` |
 
-Non-destructive, high-frequency writes (fader / hue / speed / etc. PATCH) do
+Non-destructive, high-frequency writes (fader / hue / etc. PATCH) do
 **NOT** push — undoing them is not what the operator wants and they would flood
 the ring and bury the structural action. Undo scope is STRUCTURAL mutations
 only. A future `/mixer/clear` becomes another `pushUndo` site.
