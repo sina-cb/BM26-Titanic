@@ -1,5 +1,5 @@
 /**
- * party_mode_ref.js — boolean "is LOUD music playing right now".
+ * party_mode.js — boolean "is LOUD music playing right now".
  *
  * ── What it is ────────────────────────────────────────────────────────────
  * A debounced on/off flag that is ON only when loud, full-band music is

@@ -1,5 +1,5 @@
 /**
- * switch_signals_ref.js — derived "switch pattern" and "switch color" events
+ * switch_signals.js — derived "switch pattern" and "switch color" events
  * for the lighting director. Both are EVENTS (edge booleans) plus a 0..1
  * "urge" level, derived purely from signals the engine already publishes.
  *
