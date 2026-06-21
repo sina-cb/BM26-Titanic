@@ -7,6 +7,7 @@ import yaml from 'js-yaml';
 import { Autopilot } from './autopilot.js';
 import { StateManager, serializeChannel as serializeChannelForState } from './state_manager.js';
 import { SnapshotManager, SnapshotLoadError } from './snapshot_manager.js';
+import { ParamPresetManager, ParamPresetError } from './param_preset_manager.js';
 import { PlaylistManager, PlaylistLoadError } from './playlist_manager.js';
 import {
   validateModulationMapping,
@@ -739,6 +740,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // Named mixer snapshots / look recall (F-A). Lives in <stateDir>/snapshots
   // and reuses the StateManager's atomic writer for torn-write safety.
   const snapshotManager = new SnapshotManager(stateDir, stateManager);
+  // Named per-channel parameter presets (round-2 #9). Lives in
+  // <stateDir>/param_presets and reuses the StateManager's atomic writer for
+  // torn-write safety. Captures one channel's localControls; recall is
+  // pattern-scoped (see param_preset_manager.js + docs/39).
+  const paramPresetManager = new ParamPresetManager(stateDir, stateManager);
 
   // Playlist library lives in simulation/scenes/<scene>/playlists/
   const playlistsDir = path.join(
@@ -3956,6 +3962,121 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           morph: mixer.getMorph(),
         }));
       });
+    }
+    // ── NAMED PER-CHANNEL PARAM PRESETS (round-2 #9) ─────────────────────
+    // Capture one channel's live localControls (its pattern slider/knob/color
+    // values) under a name, and recall them later. NARROWER than a mixer
+    // snapshot (whole-mixer look): a param preset is ONE channel's pattern
+    // params. Recall is PATTERN-SCOPED — recalling onto a channel running a
+    // different pattern is a fail-loud 409 (the control ids are pattern-
+    // specific export slots; replaying them onto another pattern would set
+    // the wrong knobs). Works on ANY channel (deck or mixer) via
+    // mixer.getChannel — disjoint from the snapshot routes above. See docs/39.
+    else if (req.method === 'GET' && req.url === '/mixer/param-presets') {
+      try {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ paramPresets: paramPresetManager.listParamPresets() }));
+      } catch (e) {
+        // A corrupt preset file surfaces here (listParamPresets reads each
+        // header) — fail loud rather than hiding the bad preset from the list.
+        if (e instanceof ParamPresetError) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: e.message, code: e.code }));
+        }
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/param-presets$/)) {
+      // Capture the addressed channel's current params under a name.
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        if (typeof data.name !== 'string' || data.name.trim() === '') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'name (non-empty string) required' }));
+        }
+        const channel = mixer.getChannel(id);
+        if (!channel) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `channel '${id}' not found` }));
+        }
+        try {
+          const saved = paramPresetManager.captureParamPreset(data.name, channel);
+          broadcastWs({ type: 'paramPresets', action: 'captured', name: saved.name, pattern: saved.pattern, paramPresets: paramPresetManager.listParamPresets() });
+          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name: saved.name, pattern: saved.pattern }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/param-presets\/[^\/]+\/recall$/)) {
+      // Recall a named preset onto the addressed channel. Validate everything
+      // (404 missing channel/preset, 400 malformed preset, 409 pattern
+      // mismatch) BEFORE applying any control. On success, replay every saved
+      // control through paramRouter.setChannelControl — the SAME path
+      // boot/snapshot-recall uses — which writes both channel.localControls
+      // AND the live WASM handle, so the running pattern picks the values up
+      // on the NEXT frame.
+      const parts = req.url.split('/');
+      const id = decodeURIComponent(parts[3]);
+      const name = decodeURIComponent(parts[5]);
+      const channel = mixer.getChannel(id);
+      if (!channel) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: `channel '${id}' not found` }));
+      }
+      let preset;
+      try {
+        preset = paramPresetManager.loadParamPreset(name);
+      } catch (e) {
+        // Malformed preset ⇒ fail loud with a structured error.
+        if (e instanceof ParamPresetError) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: e.message, code: e.code }));
+        }
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+      if (!preset) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: `param preset '${name}' not found` }));
+      }
+      // Pattern-scope guard: refuse to apply a preset onto a channel running a
+      // different pattern. The control ids are pattern-specific export slots.
+      if (preset.pattern !== channel.pattern) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          error: `param preset '${name}' was captured on pattern '${preset.pattern}' ` +
+            `but channel '${id}' is running '${channel.pattern}' — pattern mismatch`,
+          code: 'PARAM_PRESET_PATTERN_MISMATCH',
+        }));
+      }
+      // Replay each saved control. setChannelControl ignores CPC-owned /
+      // blocked / non-local ids defensively; getReplayableLocalExport mirrors
+      // that gate so we don't even attempt those (same as the boot restore
+      // path). Numeric control ids round-trip as YAML string keys — parseInt
+      // them back, just as restoreChannel does.
+      for (const [idStr, cv] of Object.entries(preset.controls)) {
+        const controlId = parseInt(idStr, 10);
+        if (!getReplayableLocalExport(channel, controlId)) continue;
+        paramRouter.setChannelControl(channel.id, controlId, cv.v0, cv.v1, cv.v2);
+      }
+      scheduleEntryCapture(channel.id);
+      markChannelDirtyIfLocked(channel.id);
+      saveAllState();
+      broadcastWs({ type: 'paramPresets', action: 'recalled', name, channelId: channel.id, paramPresets: paramPresetManager.listParamPresets() });
+      broadcastMixerState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name, channelId: channel.id }));
+    } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/param-presets\/[^\/]+$/)) {
+      const name = decodeURIComponent(req.url.split('/')[3]);
+      try {
+        const removed = paramPresetManager.deleteParamPreset(name);
+        if (!removed) { res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: `param preset '${name}' not found` })); }
+        broadcastWs({ type: 'paramPresets', action: 'deleted', name, paramPresets: paramPresetManager.listParamPresets() });
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
     } else if (req.method === 'POST' && req.url === '/mixer/channels') {
       // Add a mixer channel. Two ways to call this, both are playlist-driven:
       //  1. {playlist:'<name>', playlistEntryId?:'<id>'} — load that playlist

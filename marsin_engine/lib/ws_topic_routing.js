@@ -99,6 +99,11 @@ const TOPIC_BY_TYPE = Object.freeze({
   // recall so every CaptainPad mirrors the snapshot library + a recalled
   // look. Operator-driven, low volume → /ws/control next to mixer/deck.
   snapshots:                   TOPICS.CONTROL,
+  // round-2 #9: named per-channel parameter presets. Broadcast on capture /
+  // delete / recall so every CaptainPad mirrors the preset library + a
+  // recalled channel's params. Operator-driven, low volume → /ws/control next
+  // to the snapshot library it semantically relates to.
+  paramPresets:                TOPICS.CONTROL,
   paramRejected:               TOPICS.CONTROL,
   // round-2 #5 FLASH/BUMP (docs/39 §10.7): the engine pushes back a typed
   // rejection on a bad bump/unbump id (bad/non-mixer/deck channel), mirroring

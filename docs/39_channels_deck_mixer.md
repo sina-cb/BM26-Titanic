@@ -836,6 +836,68 @@ broadcast reconciles the strips as the ramp progresses); `Alert` on any 4xx
 | `tests/snapshot_morph.test.js` | Unit (11): group-fade lerp/exact-land/cancel-on-write/delete-drop/validation; fadeChannel M midpoint≈smoothstep + T 0→target + C→0+removed; changed-pattern structural-snap + level-ramp; morph descriptor fires finalizer once with fadeOutIds; beginMorph duration validation; cancelMorph (replace mid-flight, no double-fire) |
 | `tests/hil/hil_snapshot_morph_test.mjs` | HIL (18): recall-fade ramps master+fader MONOTONICALLY toward target, converges to target, and the settled mix EQUALS an instant recall of the same snapshot EXACTLY (lands exactly on target look); 404/400 (durationMs 0/neg/non-finite/missing) error paths |
 
+### 10.9 NAMED PER-CHANNEL PARAM PRESETS — capture/recall one channel's params (round-2 #9, 2026-06-21)
+
+A **param preset** captures the LIVE local-control parameter values of a SINGLE
+channel (its `localControls` map — the pattern's slider/knob/color values, keyed
+by export control id → `{v0,v1,v2}`) under a name, so the operator can recall the
+exact look of one channel's pattern later. This is NARROWER than a §8.1 mixer
+snapshot (which captures the whole mixer + deck + groups + faders): a param
+preset is ONE channel's pattern params, nothing else. ENGINE-ONLY this wave (no
+CaptainPad surface yet).
+
+Presets persist as YAML in `states/<model>/param_presets/<name>.yaml` via the
+SAME atomic temp+fsync+rename writer the snapshot/state/playlist managers use
+(`StateManager.writeFileAtomic`). Manager: `lib/param_preset_manager.js`
+(`ParamPresetManager`, `ParamPresetError`), modelled on `SnapshotManager`.
+
+**API.**
+
+| Method | Route | Body | Result |
+|---|---|---|---|
+| `GET` | `/mixer/param-presets` | — | `{ paramPresets: [{ name, pattern, savedAt }] }` (sorted) |
+| `POST` | `/mixer/channels/:id/param-presets` | `{ name }` | `{ status:'ok', name, pattern }` — captures the channel's current params |
+| `POST` | `/mixer/channels/:id/param-presets/:name/recall` | — | `{ status:'ok', name, channelId }` — replays the preset onto the channel |
+| `DELETE` | `/mixer/param-presets/:name` | — | `{ status:'ok' }`, or `404` |
+
+**Channel scope.** `:id` is resolved with `mixer.getChannel(id)`, so BOTH the deck
+channel and any mixer overlay can capture/recall — the routes are disjoint from
+the §8.1 whole-mixer snapshot routes, so supporting the deck cost nothing extra.
+
+**Pattern scoping (fail loud, the key rule).** The pattern a preset was captured
+on is stamped into the preset. Recalling onto a channel running a DIFFERENT
+pattern is rejected `409 code:PARAM_PRESET_PATTERN_MISMATCH` — the control ids are
+pattern-specific export slots, so replaying them onto another pattern would set
+the wrong knobs or silently no-op on missing exports. We refuse rather than
+degrade (Codex P0).
+
+**Recall application.** For each saved control, recall replays it via
+`paramRouter.setChannelControl(channelId, controlId, v0, v1, v2)` — the SAME path
+boot/snapshot-recall uses — gated by `getReplayableLocalExport` (skips
+CPC-owned/blocked/non-local ids, same as the boot restore). `setChannelControl` →
+`channel.setControl` writes BOTH `channel.localControls` AND the live WASM handle,
+so the running pattern picks the values up on the NEXT frame. Recall then
+`saveAllState()` + `broadcastMixerState()`.
+
+**Fail loud.** Unknown preset on recall ⇒ `404`; unknown channel ⇒ `404`; corrupt
+preset YAML / bad shape ⇒ `400 code:PARAM_PRESET_MALFORMED` (never a silent empty
+preset — a corrupt file even fails `listParamPresets` loudly); malformed/empty
+name ⇒ `400`; pattern mismatch ⇒ `409`.
+
+**WS.** Broadcasts `{ type:'paramPresets', action:'captured'|'recalled'|'deleted',
+name, paramPresets }` on `/ws/control` (new type registered in
+`ws_topic_routing.js`, next to `snapshots`).
+
+**Implementation map (round-2 #9).**
+
+| Site | What |
+|---|---|
+| `lib/param_preset_manager.js` | `ParamPresetManager` (`captureParamPreset`/`listParamPresets`/`loadParamPreset`/`deleteParamPreset`, atomic write, name safety, deep-copy + numeric coercion on capture, pattern + controls shape validation), `ParamPresetError` |
+| `lib/api_server.js` | `ParamPresetManager` construction; the 4 routes (capture/list/recall/delete); recall replays via `paramRouter.setChannelControl` + `getReplayableLocalExport` gate; 404/400/409 fail-loud handling |
+| `lib/ws_topic_routing.js` | `paramPresets` → `/ws/control` |
+| `tests/param_preset.test.js` | Unit (14): capture→list (pattern scope); load round-trips exact controls; deep-copy isolation; non-finite coercion; missing→null; malformed name→throw; corrupt YAML/shape→`ParamPresetError`; list fails loud on corrupt file; persist+reload; delete; sort; overwrite |
+| `tests/hil/hil_param_preset_test.mjs` | HIL (21): capture→list; set param A→capture→change to B→recall restores A on the LIVE channel's serialized export; recall unknown preset→404, missing channel→404; malformed/empty name→400; pattern mismatch→409 (with code); delete→404-on-second |
+
 ---
 
 ## 11. Per-channel output METERING (2026-06-20)
