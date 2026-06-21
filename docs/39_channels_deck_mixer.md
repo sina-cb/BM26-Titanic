@@ -1304,6 +1304,141 @@ so a speed/offset change can't perturb a fade-in-flight, and vice versa.
 
 ---
 
+## 6.w §F-follow — Channel FOLLOW / LINK (round-2 #6, 2026-06-21, engine-side)
+
+Operator-requested (round-2 backlog #6). A mixer channel can be set to
+**FOLLOW** another channel (the **leader**) so the **follower**'s fader tracks
+the leader's *effective* level. Lets the operator gang two layers' brightness
+without grouping them (groups scale members; follow makes one layer's input
+*equal* another's output × a scale) — e.g. a UV accent layer that always rides
+at half the brightness of the main wash.
+
+Engine-only this wave (no CaptainPad). Lives in `PatternChannel` (two fields),
+`PatternMixer` (`_effFader` resolution + the prev-frame effective cache + the
+cycle/cleanup helpers), `api_server` (PATCH `followLeaderId`/`followScale`,
+DELETE cleanup, serializers, restore), and `state_manager` (persistence).
+
+### Per-channel fields (`PatternChannel`)
+
+- `followLeaderId` — id of the leader channel, or `null` = "not following"
+  (the follower uses its own manual `fader`). Default `null`. An old state file
+  without the field restores to `null` (documented schema default, NOT a silent
+  fallback).
+- `followScale` — multiplier applied to the leader's effective level before the
+  follower's own caps. Default `1.0` (track 1:1). Clamped to `[0,2]`
+  (`validateFollowScale` at the API boundary + the ctor defensively). A
+  non-finite value restores to `1.0`.
+
+### Semantics + precedence (THE EXACT RULE)
+
+Follow replaces **only** the follower's manual `fader` **INPUT** with
+`leaderEffective × followScale`. Everything else about the follower stays
+independent and is **still applied on top**, in this order (see
+`PatternMixer._effFader`):
+
+1. **enabled gate** — a disabled follower contributes 0 (mute always wins).
+2. **bump override** — a held FLASH/BUMP still forces the follower to
+   `min(1, faderMax)` and short-circuits before the follow resolution (bump is
+   the operator's momentary accent; it overrides the followed input).
+3. **follow input** — if `followLeaderId` is set, the input becomes
+   `leaderEffectivePrevFrame × followScale` (else the follower's own `fader`).
+4. **own `faderMax` cap** — `min(input, faderMax)` (the follower's per-fixture
+   ceiling is the last word on its own output; a follower can never exceed it).
+5. **own group scale** — the follower's own `mixGroupId` gang-fader still
+   scales it.
+6. **own solo gate** — the follower's own solo/solo-safe state still applies.
+
+The follower keeps its **own** pattern, hue, invert, group, and solo. Following
+**only ever affects the FOLLOWER's level — it can NEVER alter the leader** (the
+resolution only *reads* the leader's cached effective value). Mission rule
+satisfied: a follower can never force a mission-critical leader dark.
+
+### Resolution = PREVIOUS-FRAME effective (the documented choice)
+
+The follower reads the leader's effective level from the **previous frame**,
+snapshotted into a reused `PatternMixer._prevEffFaderCache` Map at the END of
+every `renderAll6ch`. This was chosen DELIBERATELY over a per-frame topological
+resolve because it is the simplest correct approach that is **O(1) per channel
+and allocation-free** (mirrors the `_groupScaleCache` precedent): no ordering
+pass, the multiple `_effFader` calls within one frame (vis pre-pass AND
+composite loop) all read the same frozen snapshot so they return identical
+values, and a **chain** (A→B→C) resolves naturally with **one frame of latency
+PER HOP**. One frame at 40 fps is 25 ms — imperceptible for lighting. A missing
+cache entry (first frame, or a leader added this frame) reads as **0** (the
+follower tracks down for one frame, then catches up — fail-safe, never a
+spurious flash). The deck channel is included in the snapshot (a mixer overlay
+may follow the deck); the deck is PFL so its effective level is its own
+enabled-gated, `faderMax`-clamped fader.
+
+### Cycle prevention (CRITICAL — fail loud)
+
+Setting `followLeaderId` **rejects** any link that would create a cycle, at
+PATCH time (the live follow graph can therefore never contain a loop):
+
+- **self-follow** (A→A) → **400 `FOLLOW_CYCLE`**.
+- **any cycle** (A→B→A, or longer A→B→C→A) → **400 `FOLLOW_CYCLE`**. Resolved by
+  `PatternMixer.wouldCreateFollowCycle(followerId, leaderId)`, which walks the
+  existing chain from the proposed leader up through each leader's own leader; a
+  cycle exists iff the walk reaches the follower. A `seen` guard makes the walk
+  terminate even against pre-existing bad data.
+- **unknown leader** (id names no existing channel) → **404
+  `FOLLOW_LEADER_NOT_FOUND`**. The leader may be a mixer overlay OR the deck.
+- **non-finite `followScale`** → **400** (`validateFollowScale`, Codex P0 — no
+  silent coercion).
+- `followLeaderId: null` (or `""`) **clears** the link (revert to own fader).
+
+### Missing / deleted leader = FAIL SAFE (not dark, not silent)
+
+On channel **DELETE**, the api_server calls
+`PatternMixer.clearFollowersOf(leaderId)` **before** removing the channel,
+clearing `followLeaderId` on every follower so each reverts to its **own manual
+fader** — it does NOT freeze and does NOT go dark, and the single mixer-state
+broadcast carries the cleared values so CaptainPad re-syncs. `removeMixerChannel`
+also clears followers belt-and-braces, so the mixer is self-consistent for any
+direct/legacy caller. A dangling reference that somehow survives (e.g. a leader
+missing after a restore) reads as a 0 prev-frame entry in `_effFader` — the
+follower tracks down safely, never crashes; the operator should re-link.
+
+### Persistence
+
+`followLeaderId`/`followScale` round-trip through `serializeChannel`
+(state_manager + the api_server serializers) and `buildChannelFromSaved`
+restore. Appended AFTER the phase-clock fields so the on-disk key order for all
+earlier fields is unchanged (old files load to the `null` / `1.0` defaults). The
+transient `_prevEffFaderCache` is NEVER persisted — it is rebuilt frame-by-frame
+from 0 on boot.
+
+### API surface (NEW — for the follow-on UI wave)
+
+- `PATCH /mixer/channels/:id` accepts `{ followLeaderId?, followScale? }`.
+  Validated then applied; rides the existing mixer-state broadcast (no new WS
+  type). Both fields surface in `serializeChannel` + `serializeMixerState`
+  (`followLeaderId` null = not following; `followScale` 1.0 = 1:1).
+
+### Implementation map (this wave)
+
+- `lib/pattern_channel.js` — `followLeaderId` (string|null) + `followScale`
+  (clamped [0,2]) fields + docs.
+- `lib/pattern_mixer.js` — `_prevEffFaderCache` (reused Map); `_effFader` follow
+  resolution (prev-frame leader effective × scale, before faderMax/group/solo);
+  end-of-`renderAll6ch` snapshot pass (deck + mixer); `wouldCreateFollowCycle`;
+  `clearFollowersOf`; `removeMixerChannel`/`destroy` cleanup.
+- `lib/api_server.js` — `validateFollowScale`; PATCH `followLeaderId`/
+  `followScale` (cycle/self/unknown/finite checks); DELETE `clearFollowersOf`
+  + broadcast; serializers (both) + `buildChannelFromSaved` restore.
+- `lib/state_manager.js` — `serializeChannel` + `saveMixerState` round-trip.
+- Tests: `tests/follow_link.test.js` (unit), `tests/hil/hil_follow_link_test.mjs`
+  (HIL).
+
+### Deferred to the UI wave (not in scope here)
+
+- CaptainPad: a FOLLOW picker (choose leader / "none") + a follow-scale fader on
+  the channel strip; `MixerChannel` type += `followLeaderId`/`followScale`; a
+  visual cue that a strip is following (and a guard that hides cyclic leader
+  choices client-side, the engine still being the fail-loud source of truth).
+
+---
+
 ## 7. Discrepancies / follow-ups
 
 - **`docs/19_playlists.md` §8.3 / §3.2 mark mixer-channel playlist routes as

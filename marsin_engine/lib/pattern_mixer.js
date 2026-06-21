@@ -426,6 +426,26 @@ export class PatternMixer {
     // (group.muted ? 0 : group.fader). Never aliased outside renderAll6ch.
     this._groupScaleCache = new Map();
 
+    // ── Channel FOLLOW/LINK previous-frame effective cache (round-2 #6) ──
+    // A follower's composite INPUT is its leader's EFFECTIVE level (the value
+    // the leader actually renders at) × the follower's followScale. We resolve
+    // that by reading the leader's effective value from the PREVIOUS frame,
+    // snapshotted into this reused Map at the END of every renderAll6ch (one
+    // allocation-free clear()+set() pass over deck + mixer channels, mirroring
+    // _groupScaleCache). This previous-frame resolution is chosen DELIBERATELY
+    // over a per-frame topological resolve because it is the simplest correct
+    // approach that is O(1) per channel and allocation-free: it needs no
+    // ordering pass, makes the multiple _effFader calls within a single frame
+    // (vis pre-pass AND composite loop) return IDENTICAL values (they all read
+    // the same frozen prev-frame snapshot), and a chain (A→B→C) resolves
+    // naturally with one frame of latency PER HOP. One-frame latency (25 ms at
+    // 40 fps) is imperceptible for lighting and acceptable per the spec. Maps
+    // channel id -> effective fader [0,1] from the previous frame; a missing
+    // entry (first frame, or a leader added this frame) reads as 0 (follower
+    // tracks down to 0 for one frame, then catches up — fail-safe, never a
+    // spurious flash). Never aliased outside the mixer.
+    this._prevEffFaderCache = new Map();
+
     this.transitions = []; // Active per-channel fader transitions
     this.blendHandles = {}; // Cache: blendName -> WASM handle
     this._patternsDir = null; // Backing field for the patternsDir setter below.
@@ -805,6 +825,14 @@ export class PatternMixer {
     // channel is gone) but a leak; clearing it keeps the Set honest.
     this._bumpedChannelIds.delete(channelId);
     channel.mixGroupId = null;
+    // FOLLOW/LINK (round-2 #6): any channel that followed the removed channel
+    // must have its followLeaderId cleared so it reverts to its OWN fader
+    // rather than tracking a ghost leader (which _effFader would read as a
+    // missing cache entry = 0, silently freezing the follower dark). Belt-and-
+    // braces: the api_server DELETE path also calls clearFollowersOf + broadcasts
+    // BEFORE removal, but clearing here keeps the mixer self-consistent for any
+    // direct/legacy caller.
+    this.clearFollowersOf(channelId);
     return true;
   }
 
@@ -1025,6 +1053,66 @@ export class PatternMixer {
     return { ok: true };
   }
 
+  // ── Channel FOLLOW / LINK (round-2 #6, docs/39 §F-follow) ──────────────
+  // A follower's `followLeaderId` points at another channel whose effective
+  // level it tracks. The render-time resolution lives in _effFader (prev-frame
+  // effective × followScale); these helpers own the CONFIG-time graph
+  // invariants (cycle prevention, dangling-leader cleanup) so the hot path
+  // never has to. Followers may live in mixerChannels OR be the deck (the deck
+  // is leader-only — it has no follow field surfaced — but a mixer channel can
+  // follow it, so the chain walk consults getChannel()).
+
+  /**
+   * Would setting `followerId`'s leader to `leaderId` create a cycle (or a
+   * self-follow)? Walks the existing follow chain starting AT `leaderId` and
+   * up through each leader's own leader; a cycle exists iff that walk reaches
+   * `followerId` (or `leaderId === followerId`, the self-follow). O(chain
+   * length) — the chain is at most maxChannels+1 deep, and a `seen` guard
+   * makes the walk terminate even against a pre-existing cycle in the data
+   * (defensive — the API never lets one form). Pure read; mutates nothing.
+   *
+   * @param {string} followerId the channel that wants to follow
+   * @param {string} leaderId the proposed leader
+   * @returns {boolean} true iff the link would be self/cyclic (must be rejected)
+   */
+  wouldCreateFollowCycle(followerId, leaderId) {
+    if (followerId === leaderId) return true; // self-follow
+    const seen = new Set();
+    let cursor = leaderId;
+    while (cursor) {
+      if (cursor === followerId) return true; // chain loops back to the follower
+      if (seen.has(cursor)) return false; // pre-existing loop NOT involving followerId — terminate
+      seen.add(cursor);
+      const leaderChannel = this.getChannel(cursor);
+      cursor = leaderChannel ? leaderChannel.followLeaderId : null;
+    }
+    return false;
+  }
+
+  /**
+   * Clear `followLeaderId` on every channel that currently follows `leaderId`
+   * (fail-safe leader-DELETE behavior, docs/39 §F-follow). Called by the
+   * api_server BEFORE removing a channel so no follower is left pointing at a
+   * ghost leader. A cleared follower reverts to its OWN manual fader — it does
+   * NOT freeze and does NOT go dark (the codex's "no silent dangling
+   * reference" rule). Returns the array of follower ids that were cleared so
+   * the caller can broadcast the change. Scans mixer channels only (the deck
+   * has no followLeaderId).
+   *
+   * @param {string} leaderId the leader being removed
+   * @returns {string[]} ids of followers whose follow was cleared
+   */
+  clearFollowersOf(leaderId) {
+    const cleared = [];
+    for (const c of this.mixerChannels) {
+      if (c.followLeaderId === leaderId) {
+        c.followLeaderId = null;
+        cleared.push(c.id);
+      }
+    }
+    return cleared;
+  }
+
   // ── Server-authoritative solo ──────────────────────────────────────────
   // soloedChannelIds is the sole truth. setSolo/clearSolo never mutate any
   // sibling's enabled/fader — parked levels survive a solo unchanged (the
@@ -1181,7 +1269,26 @@ export class PatternMixer {
       const capped = faderMax < 1.0 ? faderMax : 1.0;
       return capped < 0 ? 0 : capped;
     }
-    let eff = channel.fader < faderMax ? channel.fader : faderMax;
+    // FOLLOW/LINK (round-2 #6, docs/39 §F-follow): if this channel follows a
+    // leader, its composite INPUT is the leader's EFFECTIVE level from the
+    // PREVIOUS frame × this follower's followScale, REPLACING its own manual
+    // fader. Everything below this line (faderMax cap, group scale, solo gate,
+    // enabled gate handled above) STILL applies to the follower — follow only
+    // swaps the input, never escapes the follower's own caps. Following NEVER
+    // touches the leader (we only READ the leader's cached effective value).
+    // A missing cache entry (first frame / leader just added) reads 0 — the
+    // follower tracks down for one frame, never a spurious flash. O(1) Map get,
+    // allocation-free; the common case (no leader) pays one `followLeaderId`
+    // truthiness check.
+    let inputFader = channel.fader;
+    if (channel.followLeaderId) {
+      const leaderEff = this._prevEffFaderCache.get(channel.followLeaderId);
+      const scale = (typeof channel.followScale === 'number' && Number.isFinite(channel.followScale))
+        ? channel.followScale
+        : 1.0;
+      inputFader = (leaderEff === undefined ? 0 : leaderEff) * scale;
+    }
+    let eff = inputFader < faderMax ? inputFader : faderMax;
     if (eff < 0) eff = 0;
     // Group scale (gang fader / mute). Cache miss = no group => scale 1.
     if (channel.mixGroupId) {
@@ -2679,6 +2786,35 @@ export class PatternMixer {
       this._visLevels['master'] = this._bufferMeanLevel(this.outputBuffer);
     }
 
+    // FOLLOW/LINK (round-2 #6): snapshot THIS frame's effective fader for every
+    // channel into the prev-frame cache that next frame's followers read. One
+    // allocation-free clear()+set() pass (mirrors the group-scale cache). We
+    // recompute effFader here rather than caching it inside the composite loop
+    // because the composite loop only runs effFader for channels it doesn't
+    // skip — and a leader sitting at fader 0 (skipped) must still publish its
+    // 0 so a follower tracks it correctly. The deck channel is included (a
+    // mixer overlay may follow the deck): the deck is PFL, never grouped/soloed,
+    // so its effective level is its own enabled-gated, faderMax-clamped fader
+    // (matching the deck meter in the vis pre-pass). This recompute reads the
+    // SAME prev-frame snapshot we're about to overwrite, so a chain advances
+    // exactly one hop per frame — the documented one-frame-per-hop latency.
+    this._prevEffFaderCache.clear();
+    if (this.deckChannel) {
+      const d = this.deckChannel;
+      let deckEff = 0;
+      if (d.enabled) {
+        const fMax = (typeof d.faderMax === 'number' && Number.isFinite(d.faderMax)) ? d.faderMax : 1.0;
+        let f = d.fader < fMax ? d.fader : fMax;
+        if (f < 0) f = 0;
+        deckEff = f;
+      }
+      this._prevEffFaderCache.set(d.id, deckEff);
+    }
+    for (let i = 0; i < this.mixerChannels.length; i++) {
+      const c = this.mixerChannels[i];
+      this._prevEffFaderCache.set(c.id, this._effFader(c, soloActive));
+    }
+
     return this.outputBuffer;
   }
 
@@ -2772,6 +2908,10 @@ export class PatternMixer {
     this.soloedChannelIds.clear();
     this._bumpedChannelIds.clear();
     this._groupScaleCache.clear();
+    // FOLLOW/LINK (round-2 #6): drop the prev-frame effective cache so a
+    // re-init doesn't have a follower read a stale leader level from a
+    // previous mixer lifetime.
+    this._prevEffFaderCache.clear();
   }
 
   getBlendHandle(blendName) {

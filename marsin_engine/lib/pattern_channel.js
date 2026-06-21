@@ -1,5 +1,5 @@
 export class PatternChannel {
-  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null, faderMax = 1.0, color = null, mixGroupId = null, soloSafe = false, hue = 0, invert = false, speed = 1.0, phaseOffsetMs = 0, followsTempo = false }) {
+  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null, faderMax = 1.0, color = null, mixGroupId = null, soloSafe = false, hue = 0, invert = false, speed = 1.0, phaseOffsetMs = 0, followsTempo = false, followLeaderId = null, followScale = 1.0 }) {
     this.id = id;
     this.name = name;
     this.pattern = pattern;
@@ -133,6 +133,42 @@ export class PatternChannel {
       ? Math.max(-10000, Math.min(10000, phaseOffsetMs))
       : 0;
     this.followsTempo = !!followsTempo;
+
+    // ── Channel FOLLOW / LINK (round-2 #6, docs/39 §F-follow) ────────────
+    // When `followLeaderId` is set to another channel's id (the "leader"),
+    // THIS channel (the "follower") stops using its own manual `fader` as
+    // its composite INPUT and instead tracks the leader's EFFECTIVE level
+    // (the value the leader actually renders at, post group/solo/faderMax/
+    // bump) times this follower's own `followScale`. Everything else about
+    // the follower stays independent: its own pattern/hue/invert/group/solo
+    // and — critically — its OWN faderMax ceiling, solo gate, enabled gate,
+    // and bump are STILL applied on top of the followed input. i.e. follow
+    // replaces only the follower's manual fader INPUT; it never escapes the
+    // follower's own safety caps. Following only ever affects the FOLLOWER's
+    // level — it can NEVER alter the leader (a follower can never force a
+    // mission-critical leader dark). See PatternMixer._effFader for the exact
+    // precedence and the previous-frame resolution.
+    //
+    //   followLeaderId  id of the leader channel, or null = "not following"
+    //                   (the follower uses its own manual fader). Cycle/self
+    //                   rejection lives at the API boundary (validateFollow,
+    //                   400 FOLLOW_CYCLE). On leader DELETE the api_server
+    //                   clears this on every follower so a dangling reference
+    //                   can never render unpredictably (fail safe → revert to
+    //                   own fader, NOT dark, NOT silent). Default null
+    //                   (documented schema default — an old state file without
+    //                   this field restores to null, not a silent fallback).
+    //   followScale     multiplier applied to the leader's effective level
+    //                   before the follower's own caps. Default 1.0 = track
+    //                   the leader 1:1. Clamped to [0,2] (defensively here and
+    //                   at the API boundary via validateFollowScale) — a
+    //                   non-finite value restores to 1.0 (documented default).
+    this.followLeaderId = (typeof followLeaderId === 'string' && followLeaderId.length > 0)
+      ? followLeaderId
+      : null;
+    this.followScale = (typeof followScale === 'number' && Number.isFinite(followScale))
+      ? Math.max(0, Math.min(2, followScale))
+      : 1.0;
 
     // TRANSIENT phase-clock accumulator state — NEVER serialized (the
     // accumulator is rebuilt from zero on boot; persisting it would pin a
