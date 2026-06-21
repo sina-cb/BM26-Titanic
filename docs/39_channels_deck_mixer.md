@@ -1553,6 +1553,107 @@ are transient and never persisted.
 
 ---
 
+## 6.u §F-undo — Mixer UNDO (round-2 #10, 2026-06-21, engine-side)
+
+Undo the last DESTRUCTIVE mixer action — an operator safety net for "I didn't
+mean to do that" on the playa. ENGINE-ONLY this wave; the CaptainPad UNDO
+button is a follow-on.
+
+### The mechanism (a bounded ring of full looks, restored via recallLook)
+
+Undo is a bounded ring (`UndoStack`, `lib/undo_stack.js`, `UNDO_MAX = 10`,
+oldest dropped) of full `captureLook()` snapshots taken BEFORE each destructive
+mutation. Undo pops the most recent look and restores it via the proven,
+never-dark `recallLook()` path — the same primitive snapshot recall uses. We
+chose a ring of full looks over a command/inverse-op log because `recallLook`
+already rebuilds the deck explicitly (never-dark) and re-registers every
+overlay's CPC through the boot-identical `buildChannelFromSaved`→
+`registerChannel` path; an inverse-op log would need a bespoke inverse per
+route (un-delete-with-CPC, un-reorder, un-recall) — strictly more code + bug
+surface for a live show. A captured look is plain serialized JS (no live WASM
+handles), so holding `UNDO_MAX` of them is allocation-light; restore pays the
+normal compile cost OFF the render hot path (same as an operator recall).
+
+### Choke point (`pushUndo`) — STRUCTURAL mutations only
+
+`function pushUndo(label)` is the single hook: it pushes
+`{label, look: captureLook(), atMs}`, trims to `UNDO_MAX`, and broadcasts. It is
+called BEFORE the mutation in each destructive route — but AFTER that route's
+validation, so a 404/400/409 never leaves a phantom undo entry:
+
+| Route | Label |
+|---|---|
+| `DELETE /mixer/channels/:id` | `delete '<id>'` |
+| `POST /mixer/snapshots/:name/recall` | `recall '<name>'` |
+| `POST /mixer/snapshots/:name/recall-fade` | `recall-fade '<name>'` |
+| `POST /mixer/channels/reorder` | `reorder channels` |
+| `POST /mixer/channels/:id/param-presets/:name/recall` | `param-preset '<name>'` |
+
+Non-destructive, high-frequency writes (fader / hue / speed / etc. PATCH) do
+**NOT** push — undoing them is not what the operator wants and they would flood
+the ring and bury the structural action. Undo scope is STRUCTURAL mutations
+only. A future `/mixer/clear` becomes another `pushUndo` site.
+
+### API
+
+- `POST /mixer/undo` → empty ring ⇒ **400 `UNDO_EMPTY`** (fail loud, NOT a
+  silent no-op — Codex P0). Else pop, `recallLook(popped.look)`, `saveAllState`,
+  broadcast `mixer` + `undoState`, **200 `{status, label}`**.
+- `GET /mixer/undo` → `{depth, top}` (top = most-recent label or `null`) for the
+  UI button enable/label.
+- `POST /mixer/redo` is DEFERRED to v2 (a redo stack needs invalidation on any
+  new destructive op — a stale-redo footgun not worth it for v1).
+
+### Morph-cancel race (CRITICAL)
+
+If a recall-fade `_morph` is mid-flight when undo fires, the handler calls
+`mixer.cancelMorph()` BEFORE `recallLook` — `cancelMorph` drops the morph
+descriptor WITHOUT firing its completion finalizer (`onMorphComplete`), so the
+finalizer can't fire its CPC-unregister/persist against the torn-down +
+rebuilt state undo is about to install. The C (fading-out) channels the morph
+would have removed are still present and `recallLook` tears them down and
+rebuilds the captured look wholesale.
+
+### Scope boundary (documented)
+
+- **SESSION-ONLY**: the ring is in-memory and NOT persisted. An engine restart
+  is itself a clean undo boundary (nothing sensible to undo back to across a
+  reboot), and persisting would race the on-disk mixer state. Lost on restart
+  by design.
+- **LIVE mixer look only**: undo restores the live mixer state. It does NOT
+  resurrect deleted snapshot / param-preset FILES on disk — those are separate
+  libraries with their own delete routes. Undoing a snapshot DELETE is out of
+  scope; undoing a snapshot RECALL (the live-look swap) is in scope.
+
+### WS
+
+One new type `undoState {type:'undoState', depth, top}`, routed to
+`/ws/control` in `ws_topic_routing.js` (`TOPIC_BY_TYPE`; there is no default
+topic — an unregistered type throws, and the unit + HIL pins guard the table).
+Broadcast on every push + every undo, and replayed on `/ws/control` connect
+(like autopilot) so a late-joining CaptainPad paints its UNDO button without
+waiting for the next change.
+
+### Implementation map (this wave)
+
+- `lib/undo_stack.js` — pure `UndoStack` ring (push/pop/depth/topLabel/isEmpty,
+  cap trim, loud validation). `UNDO_MAX = 10`.
+- `lib/api_server.js` — `undoStack` instance, `pushUndo` / `broadcastUndoState`,
+  `pushUndo` wired into the 5 destructive routes, `POST`/`GET /mixer/undo`,
+  morph-cancel in the undo handler, `undoState` connect-replay.
+- `lib/ws_topic_routing.js` — `undoState → CONTROL`.
+- Tests: `tests/mixer_undo.test.js` (ring + capture-detachment),
+  `tests/hil/hil_mixer_undo_test.mjs` (delete/recall/reorder undo end-to-end,
+  empty→400, non-destructive-no-push, deck never dark), routing pins updated.
+
+### Deferred to the UI wave (not in scope here)
+
+- CaptainPad: a global UNDO button (enabled iff `depth>0`, labeled with
+  `top`), `GET /mixer/undo` on mount + `undoState` WS to keep it live.
+- `POST /mixer/redo` (v2).
+
+---
+
 ## 7. Discrepancies / follow-ups
 
 - **`docs/19_playlists.md` §8.3 / §3.2 mark mixer-channel playlist routes as
