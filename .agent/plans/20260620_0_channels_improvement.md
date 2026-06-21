@@ -574,3 +574,20 @@ new per-channel hue control lands into an already-decluttered strip.
     setChannelInvert (pairs with merged #8 engine). CaptainPad-only.
   Disjoint: engine (follow) vs CaptainPad (invert UI).
   Round-2 remaining after these: #2 auto-cycle, #10 undo, follow UI. Deliverable 5e2f1cc.
+
+## STATUS LOG (cont. 19)
+- follow/link ENGINE #6 MERGED (0aca767): follower fader = leader effective × scale (own caps
+  intact), prev-frame resolution (alloc-free Map, _groupScaleCache precedent), self/cycle → 400
+  FOLLOW_CYCLE, unknown leader → 404, leader-delete clears followers fail-safe. Suite 1050/0;
+  follow HIL 16/16.
+- Designs landed for the last 2 round-2 items (read-only Plan agent):
+  * _20260621_0_auto_cycle: reuse existing autopilot schema; tick from engine render-loop
+    accumulated clock (NOT per-channel setTimeout); advance via existing loadPlaylistEntry choke;
+    opt-in (active=false default → exterior immune); v1 documents overlay hard-cut.
+  * _20260621_1_undo: bounded session-only ring (~10) of captureLook() snapshots at a single
+    pushUndo() choke BEFORE destructive routes; restore via recallLook() (never-dark + CPC
+    re-register); empty → 400 UNDO_EMPTY; must also cancel _morph on undo.
+- Launched 2 parallel (DISJOINT): dev/follow_link_ui (#6 UI: leader picker + scale fader in
+  mixer, CaptainPad) ‖ dev/auto_cycle_engine (#2 engine, design _0). Engine vs CaptainPad.
+  NEXT after auto-cycle: #10 undo engine (serial on engine files), then follow/auto-cycle UI.
+  Deliverable 0aca767.
