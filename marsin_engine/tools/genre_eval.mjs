@@ -126,7 +126,8 @@ export function runWav(samples, sampleRate, { forceParty, fftSize }) {
     sampleRate, fftSize, hopSize: HOP_SIZE, bands: BANDS, kick: KICK, sub: SUB,
     nowFn: () => clockMs,
     onAnalysis: ({ low, mid, high, kick, flux, domFreq1, domEnergy1, domFreq2, domEnergy2,
-                  onsetLow, onsetMid, onsetHigh, micSub }) => {
+                  onsetLow, onsetMid, onsetHigh, micSub,
+                  tonalStability, chromaFlux, chromaTilt }) => {
       const nowMs = clockMs;
       const dt = lastAtMs === 0 ? 0 : Math.max(0, (nowMs - lastAtMs) / 1000);
       lastAtMs = nowMs;
@@ -146,6 +147,9 @@ export function runWav(samples, sampleRate, { forceParty, fftSize }) {
         { kind: 'scalar', key: 'micDomFreq2', value: domFreq2 }, { kind: 'scalar', key: 'micDomEnergy2', value: domEnergy2 },
         { kind: 'scalar', key: 'micOnsetLowRaw', value: onsetLow }, { kind: 'scalar', key: 'micOnsetMidRaw', value: onsetMid },
         { kind: 'scalar', key: 'micOnsetHighRaw', value: onsetHigh }, { kind: 'scalar', key: 'micSubRaw', value: micSub },
+        { kind: 'scalar', key: 'micTonalStabilityRaw', value: tonalStability },
+        { kind: 'scalar', key: 'micChromaFluxRaw', value: chromaFlux },
+        { kind: 'scalar', key: 'micChromaTiltRaw', value: chromaTilt },
       ], 'audio', 'audio:mic');
       detector.tick(nowMs, dt);
       derived.tick(nowMs, dt);
@@ -230,7 +234,8 @@ function main() {
 
   // Measured per-genre feature centroids (mean of per-track tail centroids) —
   // the empirical target the sibling should re-tune PROFILES toward.
-  const FEAT_LABELS = ['bpm', 'kickReg', 'kickDens', 'lowMid', 'sparkle', 'sparkleVar', 'melodic', 'flux'];
+  const FEAT_LABELS = ['bpm', 'kickReg', 'kickDens', 'lowMid', 'sparkle', 'sparkleVar', 'melodic', 'flux',
+    'bassW', 'midW', 'tilt', 'fluxVar', 'tonalStab', 'chromaFlux', 'chromaTilt'];
   const centroids = {};
   for (const genre of scoredGenres) {
     const grp = rows.filter((r) => r.genre === genre);

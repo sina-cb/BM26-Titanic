@@ -106,6 +106,15 @@ const DOM_FREQ_PARAMS = Object.freeze({
 // see on the meter.
 const PRE_CLAMP_GAIN = 8.0;
 
+// ── CHROMA band (harmonic/timbre feature, report 20260620_30) ───────────────
+// Fundamental-pitch window for the 12-bin pitch-class chroma. Lower bound above
+// the kick/sub-bass thump (octave-ambiguous, would saturate one class); upper
+// bound below the cymbal/air hiss (unpitched HF noise). 65 Hz ≈ C2, 2000 Hz ≈
+// B6 — covers bass roots, chords, and lead/vocal fundamentals on dance music.
+const CHROMA_LO_HZ = 65;
+const CHROMA_HI_HZ = 2000;
+const N_CHROMA = 12;
+
 function softCompress(x) {
   // Maps [0, +∞) → [0, 1). Identity-ish near zero, asymptotes at 1.
   return x / (1 + x);
@@ -206,6 +215,15 @@ export class AudioAnalyzer {
     // detector can use it without re-scaling. `null` until the first
     // hop fills it (first flux is 0 — no prior spectrum to diff against).
     this._prevMag = null;
+
+    // ── CHROMA state (additive harmonic/timbre feature) ─────────────────────
+    // `_chroma` is the current 12-bin pitch-class energy vector (reused, no
+    // per-hop alloc); `_prevChromaNorm` holds the previous hop's L1-normalized
+    // chroma so each hop can compute chromaFlux (harmonic-change rate). Both
+    // are filled lazily on the first hop. The bin→class map is built in
+    // reconfigure (`_chromaBinClass`).
+    this._chroma = new Float64Array(N_CHROMA);
+    this._prevChromaNorm = null;
 
     // Kick state. EMA is "what does the kick band typically look
     // like right now"; we compare the instant read against it. To
@@ -377,6 +395,41 @@ export class AudioAnalyzer {
     this._binMid  = [hzToBin(lowMaxHz,   this.sampleRate, this.fftSize), hzToBin(midMaxHz, this.sampleRate, this.fftSize)];
     this._binHigh = [hzToBin(midMaxHz,   this.sampleRate, this.fftSize), Math.floor(this.fftSize / 2)];
     this._binKick = [hzToBin(kMin,       this.sampleRate, this.fftSize), hzToBin(kMax,     this.sampleRate, this.fftSize)];
+
+    // ── CHROMA (12-bin pitch-class) bin→class map ───────────────────────────
+    // ADDITIVE harmonic/timbre feature (report 20260620_30). For each FFT bin
+    // whose centre frequency falls in a musical fundamental band we precompute
+    // its pitch class (0=C..11=B) so the hot loop just does one array index +
+    // accumulate — no per-hop log2/mod. The band is CHROMA_LO_HZ..CHROMA_HI_HZ:
+    // we skip sub-bass (octave-ambiguous, and the kick/bass thump would dominate
+    // a single class) and skip the HF hiss above ~2 kHz (mostly cymbal/air noise
+    // with no clear pitch). Bins outside the band get class -1 (ignored).
+    this._chromaBinClass = this._buildChromaMap();
+    // Bass/treble split for the chroma-band spectral tilt (~500 Hz, the
+    // low-mid hinge): bins below this are "bass" energy, at/above are "treble".
+    this._chromaSplitBin = hzToBin(500, this.sampleRate, this.fftSize);
+  }
+
+  /**
+   * @private Build a per-positive-bin pitch-class map (Int8Array, length
+   * fftSize/2). Bin k centre = k·sampleRate/fftSize. Bins in
+   * [CHROMA_LO_HZ, CHROMA_HI_HZ] → 0..11 (0=C), others → -1. Octave-invariant
+   * pitch class = round(12·log2(f/C0)) mod 12, C0 = 16.3516 Hz.
+   */
+  _buildChromaMap() {
+    const half = this.fftSize >> 1;
+    const map = new Int8Array(half).fill(-1);
+    const C0 = 16.3515978313; // MIDI note 0 (C-1), the pitch-class reference
+    const binHz = this.sampleRate / this.fftSize;
+    for (let k = 1; k < half; k++) {
+      const hz = k * binHz;
+      if (hz < CHROMA_LO_HZ || hz > CHROMA_HI_HZ) continue;
+      const semis = Math.round(12 * Math.log2(hz / C0));
+      let pc = semis % 12;
+      if (pc < 0) pc += 12;
+      map[k] = pc;
+    }
+    return map;
   }
 
   /** Push a chunk of Int16 mono samples; emits analyses as hops fill. */
@@ -466,6 +519,8 @@ export class AudioAnalyzer {
     this._kickValue = 0;
     this._lastKickAt = -Infinity;
     this._prevMag = null;
+    this._chroma.fill(0);
+    this._prevChromaNorm = null;
     this._srcLp = 0;
     if (this._domTracker) this._domTracker.reset();
   }
@@ -519,6 +574,17 @@ export class AudioAnalyzer {
     const [loL, loH] = this._binLow;
     const [miL, miH] = this._binMid;
     const [hiL, hiH] = this._binHigh;
+    // CHROMA accumulation (additive harmonic/timbre feature): zero the reused
+    // 12-bin vector, then fold each in-band bin's magnitude into its pitch
+    // class in the SAME single pass (one Int8Array lookup + add per bin). The
+    // five existing outputs stay byte-identical (chroma reads `mag`, writes
+    // only `_chroma`). `chromaTreble` / `chromaBass` sum the in-band magnitude
+    // split at CHROMA_SPLIT_BIN for a level-robust spectral-tilt timbre.
+    const chroma = this._chroma;
+    chroma.fill(0);
+    const binClass = this._chromaBinClass;
+    let chromaBassE = 0, chromaTrebleE = 0;
+    const splitBin = this._chromaSplitBin;
     let fluxE = 0, onLowE = 0, onMidE = 0, onHighE = 0;
     for (let k = 0; k < halfBins; k++) {
       const re = out[k * 2];
@@ -535,12 +601,60 @@ export class AudioAnalyzer {
         else if (k >= miL && k < miH) onMidE += diff;
         else if (k >= hiL && k < hiH) onHighE += diff;
       }
+      const pc = binClass[k];
+      if (pc >= 0) {
+        chroma[pc] += mag;
+        if (k < splitBin) chromaBassE += mag; else chromaTrebleE += mag;
+      }
       prevMag[k] = mag;
     }
     fluxE   /= this.fftSize;
     onLowE  /= this.fftSize;
     onMidE  /= this.fftSize;
     onHighE /= this.fftSize;
+
+    // ── CHROMA-derived scalar features (harmonic/timbre axis) ───────────────
+    // All three are level-robust (built on the L1-NORMALIZED chroma or a ratio),
+    // so loudness doesn't move them — they characterize harmonic CONTENT.
+    //
+    //   tonalStability — concentration of the normalized chroma. A clear chord/
+    //     bassline puts most energy in a few classes (high concentration → high
+    //     stability); an atonal/percussive wash spreads flat (low). Measured as
+    //     1 − normalizedEntropy(chroma): 1 = a single pitch class, 0 = perfectly
+    //     flat across all 12.
+    //   chromaFlux — L1 distance between this hop's and the previous hop's
+    //     normalized chroma = harmonic-CHANGE rate. A harmonically static loop
+    //     (techno) barely moves; a chord-progressing melodic track moves a lot.
+    //   spectralTilt — treble/(bass+treble) of the in-CHROMA-band magnitude,
+    //     split at ~500 Hz. Brightness/timbre independent of absolute level.
+    let chromaSum = 0;
+    for (let i = 0; i < N_CHROMA; i++) chromaSum += chroma[i];
+    let tonalStability = 0, chromaFlux = 0;
+    if (this._prevChromaNorm === null) this._prevChromaNorm = new Float64Array(N_CHROMA);
+    const prevNorm = this._prevChromaNorm;
+    if (chromaSum > 1e-9) {
+      // Normalized-entropy → concentration. H = -Σ p·log p, max = log(12).
+      let h = 0;
+      for (let i = 0; i < N_CHROMA; i++) {
+        const p = chroma[i] / chromaSum;
+        if (p > 1e-12) h -= p * Math.log(p);
+        // chromaFlux: |p_now − p_prev|, accumulated; reuse prevNorm in place.
+        const d = p - prevNorm[i];
+        chromaFlux += d < 0 ? -d : d;
+        prevNorm[i] = p;
+      }
+      tonalStability = 1 - h / Math.log(N_CHROMA);
+      if (tonalStability < 0) tonalStability = 0;
+      // chromaFlux L1 over a probability vector lands in [0,2]; halve → [0,1].
+      chromaFlux *= 0.5;
+    } else {
+      // Silence / out-of-band: decay the previous norm toward 0 so the next
+      // onset's flux isn't measured against a stale chord. Not a fallback —
+      // there is genuinely no harmonic content this hop.
+      for (let i = 0; i < N_CHROMA; i++) prevNorm[i] = 0;
+    }
+    const chromaTilt = (chromaBassE + chromaTrebleE) > 1e-9
+      ? chromaTrebleE / (chromaBassE + chromaTrebleE) : 0;
 
     // Dominant-frequency tracking on THIS hop's magnitude spectrum — the flux
     // loop just refilled `prevMag` with it, so we reuse it (zero extra FFT,
@@ -708,6 +822,15 @@ export class AudioAnalyzer {
         onsetMid:   onsetMidOut,
         onsetHigh:  onsetHighOut,
         micSub:     subOut,
+        // Chroma-derived harmonic/timbre scalars (report 20260620_30). Additive,
+        // level-robust, already in [0,1]. The genre classifier reads these to
+        // separate harmonically-static genres (techno) from chord-moving ones.
+        //   tonalStability — chroma concentration (1 = single pitch class)
+        //   chromaFlux      — harmonic-change rate (0 = static loop)
+        //   chromaTilt      — treble/(bass+treble) timbre brightness
+        tonalStability: clamp01(tonalStability),
+        chromaFlux:     clamp01(chromaFlux),
+        chromaTilt:     clamp01(chromaTilt),
       });
     } catch (e) {
       console.warn(`[AudioAnalyzer] onAnalysis threw: ${e && e.message}`);
