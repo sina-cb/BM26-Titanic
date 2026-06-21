@@ -1142,7 +1142,16 @@ async function main() {
   const loop = createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, paramCenter, (stats) => {
     broadcastStatsRef.publish(stats);
   }, engineConfig.vis || {}, {
-    beforeFrame: (nowMs) => modulationController.applyFrame(nowMs),
+    beforeFrame: (nowMs) => {
+      modulationController.applyFrame(nowMs);
+      // AUTO-CYCLE (round-2 #2): advance any mixer overlay whose playlist
+      // autopilot is active + due. Cheap synchronous decision; the actual
+      // overlay compile is dispatched off the hot path (setImmediate) inside
+      // the tick so it never darkens this frame.
+      if (apiServer && typeof apiServer.autoCycleTick === 'function') {
+        apiServer.autoCycleTick();
+      }
+    },
   });
   // Now that the loop exists, give engineCore a way to read the live
   // frame counter (used by /global-effect-slots/:id/activate so the

@@ -178,6 +178,19 @@ export class PatternChannel {
     this._phaseSeconds = 0;
     this._lastPhaseElapsed = null;
 
+    // TRANSIENT auto-cycle anchor (round-2 #2 AUTO-CYCLE, docs/39 §auto-cycle)
+    // — NEVER serialized. Wall-clock ms (Date.now) of the last auto-advance
+    // for this channel's playlist. null = "not yet seeded": the first frame on
+    // which autopilot.active is true SEEDS this to now and does NOT advance, so
+    // the first auto-advance lands a full delay_s after activation (and after a
+    // boot, since the field re-seeds to now). The tick measures wall-clock
+    // deltas against this anchor (self-correcting, no accumulated drift). A
+    // manual entry tap (loadPlaylistEntry) RESETS this to null so the next
+    // tick measures from the manual change, not the stale pre-tap baseline.
+    // Persisting it would pin a stale absolute time that means nothing after a
+    // restart — hence transient, like _phaseSeconds.
+    this._autoCycleLastAdvanceMs = null;
+
     this.transitionMode = transitionMode;
     this.transitionTime = transitionTime;
 

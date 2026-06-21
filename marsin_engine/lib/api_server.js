@@ -305,6 +305,85 @@ export function validateFollowScale(raw) {
   return { ok: true, value: Math.max(0, Math.min(2, n)) };
 }
 
+// ── Auto-cycle DELAY validation (docs/39 §auto-cycle, round-2 #2) ──────
+// The interval (seconds) between automatic playlist advances on a mixer
+// overlay channel. Codex P0 (no silent fallback): a NON-FINITE value (NaN /
+// Infinity, non-number / unparseable string) OR a value ≤ 0 is REJECTED with
+// 400 AUTOCYCLE_BAD_DELAY — we never coerce a broken/zero delay to a default
+// (a 0 / negative interval would advance every frame = a strobe storm, which
+// the codex forbids as a silent failure). A finite POSITIVE value is FLOORED
+// to 1s (the only mutation — a benign floor, never a reject of an in-range
+// number) so the cycle can never out-run a 50-200ms overlay compile. Mirrors
+// validateSpeed's accept/reject shape, but rejects ≤0 instead of clamping it.
+export function validateAutoCycleDelay(raw) {
+  let n;
+  if (typeof raw === 'number') {
+    n = raw;
+  } else if (typeof raw === 'string' && raw.trim() !== '') {
+    n = Number(raw);
+  } else {
+    return { ok: false, error: `delay_s must be a finite number > 0, got '${raw}'` };
+  }
+  if (!Number.isFinite(n) || n <= 0) {
+    return { ok: false, error: `delay_s must be a finite number > 0, got '${raw}'` };
+  }
+  return { ok: true, value: Math.max(1, n) };
+}
+
+// ── Auto-cycle DUE decision (pure, fake-clock unit-tested) ────────────
+// Decides what the per-frame auto-cycle tick should do for ONE channel at
+// wall-clock `nowMs`. Pure (no Date.now / no side effects) so a test can
+// inject a fake clock instead of sleeping real seconds. Returns:
+//   'skip' — not an active overlay (no playlist.name, autopilot absent or
+//            inactive). Exterior immunity rides here: active defaults false.
+//   'seed' — autopilot is active but the wall-clock anchor is not yet set
+//            (first active frame, or post manual-tap / post-advance re-seed).
+//            The caller seeds `_autoCycleLastAdvanceMs = nowMs` and does NOT
+//            advance, so the first auto-advance lands a full delay_s later.
+//   'wait' — active + seeded, but delay_s has not elapsed yet.
+//   'due'  — active + seeded + delay_s elapsed: the caller picks the next
+//            entry and advances. delay_s is floored to 1s (mirrors the
+//            validator) so a stale/zero on-disk value can't strobe.
+export function autoCycleDueDecision(channel, nowMs) {
+  const ap = channel.playlist && channel.playlist.autopilot;
+  if (!ap || !ap.active) return 'skip';
+  if (!channel.playlist.name) return 'skip';
+  if (channel._autoCycleLastAdvanceMs === null
+      || channel._autoCycleLastAdvanceMs === undefined) return 'seed';
+  const delayMs = Math.max(1, ap.delay_s) * 1000;
+  return (nowMs - channel._autoCycleLastAdvanceMs >= delayMs) ? 'due' : 'wait';
+}
+
+// ── Auto-cycle next-entry pick (pure, unit-tested) ────────────────────
+// MIRRORS the deck Autopilot advance pick (api_server deck daemon): per-entry
+// hold parks (return null), loop replays the same entry (overrides shuffle),
+// else shuffle picks a random OTHER usable entry, else sequential walks
+// forward skipping `_missing`. `usable` excludes `_missing` entries. Returns
+// the chosen entry, or null when there is nothing to advance to (no usable
+// entries, or the current entry is held).
+export function pickNextAutoCycleEntry(pl, autopilot, curEntryId) {
+  if (!pl || !Array.isArray(pl.entries) || pl.entries.length === 0) return null;
+  const usable = pl.entries.filter(e => !e._missing);
+  if (usable.length === 0) return null;
+  const curEntry = pl.entries.find(e => e.id === curEntryId);
+  if (curEntry) {
+    if (curEntry.hold) return null;        // parked until released
+    if (curEntry.loop) return curEntry;    // replay same entry
+  }
+  if (autopilot && autopilot.shuffle) {
+    const others = usable.filter(e => e.id !== curEntryId);
+    return others.length ? others[Math.floor(Math.random() * others.length)] : usable[0];
+  }
+  // Sequential: walk forward from the current index, skipping _missing.
+  const idx = pl.entries.findIndex(e => e.id === curEntryId);
+  let nextIdx = (idx + 1) % pl.entries.length;
+  for (let i = 0; i < pl.entries.length; i++) {
+    if (!pl.entries[nextIdx]._missing) return pl.entries[nextIdx];
+    nextIdx = (nextIdx + 1) % pl.entries.length;
+  }
+  return null;
+}
+
 // ── Deck transition durationMs bounds (single source of truth) ─────────
 // The /deck/transition-config POST, the per-call swap override, and the
 // internal loadPlaylistEntryWithTransition resolve all clamp to this same
@@ -1295,6 +1374,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     channel.playlist.cursor = idx;
     channel.playlist.autopilot = channel.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
 
+    // Auto-cycle baseline reset (round-2 #2): EVERY load through this choke —
+    // whether an operator's manual entry tap OR an auto-cycle advance itself —
+    // re-seeds the wall-clock anchor to null so the next auto-cycle tick
+    // measures a full delay_s from THIS load, not from a stale pre-load
+    // baseline. (The tick re-seeds null→now on its next active frame, so a
+    // manual tap mid-cycle restarts the timer cleanly. Transient, never saved.)
+    channel._autoCycleLastAdvanceMs = null;
+
     // Switching to a new entry resets the "dirty since lock" state — the
     // new entry's own defaults are now the canonical reference, and any
     // edits made in the previous entry are no longer relevant here.
@@ -1309,6 +1396,83 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return { entry, index: idx, total: playlist.entries.length };
   }
 
+  // ── AUTO-CYCLE tick (round-2 #2, docs/39 §auto-cycle) ─────────────────
+  //
+  // Generalizes the deck Autopilot daemon to ANY mixer overlay: a channel
+  // with `playlist.autopilot.active` auto-advances its playlist on a timer.
+  // Called ONCE PER FRAME from the engine render loop's beforeFrame hook
+  // (engine.js), so there is ONE source of time (the wall clock) and NO
+  // per-channel setTimeout sprawl — naturally paused by a stopped loop.
+  //
+  // The tick itself is cheap + synchronous: for each active overlay it reads
+  // the wall-clock anchor and decides whether an advance is DUE. It never
+  // compiles inline — overlay `loadPlaylistEntry` is an INSTANT hard handle
+  // destroy+compile (50-200ms) with no double-buffer, so awaiting it in the
+  // frame would darken the composite. Instead the actual advance is dispatched
+  // OFF THE HOT PATH via setImmediate (drained after the frame returns), with
+  // an in-flight guard so a slow compile can never stack two advances. A
+  // compile error is logged LOUDLY and the channel keeps its current pattern
+  // (Codex P0 — NOT a silent swap, NOT a silent swallow).
+  //
+  // Mirrors the deck advance pick logic — see the module-level exported
+  // `pickNextAutoCycleEntry` / `autoCycleDueDecision` (pure, unit-tested with
+  // a fake clock). Exterior immunity is free: active defaults false (opt-in).
+  // v1 ships the visible hard-cut on overlays (no overlay double-buffer exists
+  // today — documented in docs/39); a v2 fade is out of scope.
+  function autoCycleTick() {
+    // If a snapshot morph / recall-fade is rebuilding overlays this frame,
+    // skip auto-advance entirely — a handle swap mid-morph would fight the
+    // morph's per-channel ramps. (Deck-swap in-flight only affects the deck,
+    // not overlays, so we don't gate on it here.)
+    if (mixer.getMorph && mixer.getMorph()) return;
+
+    const now = Date.now();
+    const overlays = mixer.getMixerChannels ? mixer.getMixerChannels() : [];
+    for (const channel of overlays) {
+      if (channel._autoCycleInFlight) continue; // a compile is still draining
+
+      // Pure decision (fake-clock unit-tested): 'skip' | 'seed' | 'wait' |
+      // 'due'. Seeds the anchor on the first active frame (no advance), waits
+      // until delay_s elapses, then reports 'due'.
+      const decision = autoCycleDueDecision(channel, now);
+      if (decision === 'skip') continue;
+      if (decision === 'seed') { channel._autoCycleLastAdvanceMs = now; continue; }
+      if (decision === 'wait') continue;
+
+      // Due. Resolve the playlist + next entry synchronously (cheap), then
+      // dispatch the compile off the hot path.
+      const ap = channel.playlist.autopilot;
+      const pl = playlistManager.load(channel.playlist.name);
+      if (!pl || pl.entries.length === 0) { channel._autoCycleLastAdvanceMs = now; continue; }
+      const next = pickNextAutoCycleEntry(pl, ap, channel.playlist.activeEntryId);
+      if (!next) {
+        // Held / no usable target — re-anchor so we re-check after delay_s,
+        // not every frame (mirrors the deck daemon re-checking each beat).
+        channel._autoCycleLastAdvanceMs = now;
+        continue;
+      }
+      // Anchor BEFORE dispatch so the next due-check counts from this beat
+      // even while the compile is draining. (loadPlaylistEntry will reset
+      // the anchor to null on success → re-seeded next frame; on failure the
+      // anchor we set here keeps the cadence so we don't hammer a bad entry.)
+      channel._autoCycleLastAdvanceMs = now;
+      channel._autoCycleInFlight = true;
+      const targetId = next.id;
+      const plName = channel.playlist.name;
+      setImmediate(() => {
+        try {
+          loadPlaylistEntry(channel, plName, targetId);
+          saveAllState();
+          broadcastMixerState();
+        } catch (e) {
+          // Fail LOUD; keep the current pattern (NOT a silent swallow).
+          console.warn(`[AutoCycle] advance failed on channel ${channel.id} → ${targetId}: ${e.message}`);
+        } finally {
+          channel._autoCycleInFlight = false;
+        }
+      });
+    }
+  }
   // ── Deck pattern transitions (double-buffer via mixer shadow channel) ──
   //
   // `loadPlaylistEntryWithTransition` is the soft-swap sibling of
@@ -4703,6 +4867,56 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             console.warn(`[Mixer] Pattern swap FAILED: ${patternName} compile error:`, comp.error);
           }
         }
+        // AUTO-CYCLE (round-2 #2, docs/39 §auto-cycle): merge a partial
+        // autopilot patch into this overlay's playlist.autopilot. Mirrors the
+        // deck `/deck/playlist/autopilot` handler, but stricter on delay_s
+        // (Codex P0 — no silent parseInt||30 coerce; validateAutoCycleDelay
+        // rejects ≤0 / non-finite with 400 AUTOCYCLE_BAD_DELAY). Auto-cycle
+        // requires an assigned playlist to advance through — a channel with no
+        // playlist.name has nothing to cycle, so we 400 rather than arm a
+        // no-op timer (fail loud). active/shuffle coerce via !! like the other
+        // boolean flags. Validated BEFORE any mutation so a bad payload never
+        // half-applies; the autopilot rides the existing `mixer` broadcast (no
+        // new WS type) since it lives inside the serialized per-channel
+        // playlist. Exterior immunity is free: autopilot.active defaults false
+        // (opt-in), so a mission-critical channel never auto-changes unless an
+        // operator explicitly flips it here.
+        if (data.autopilot !== undefined) {
+          if (data.autopilot === null || typeof data.autopilot !== 'object') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `autopilot must be an object {active?,delay_s?,shuffle?}, got ${data.autopilot === null ? 'null' : typeof data.autopilot}`,
+              code: 'AUTOCYCLE_BAD_PAYLOAD',
+            }));
+          }
+          if (!channel.playlist || !channel.playlist.name) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `channel '${id}' has no playlist assigned; cannot enable auto-cycle`,
+              code: 'AUTOCYCLE_NO_PLAYLIST',
+            }));
+          }
+          // Validate delay_s FIRST (before mutating) so an invalid delay can't
+          // half-apply active/shuffle.
+          let nextDelay;
+          if (data.autopilot.delay_s !== undefined) {
+            const dv = validateAutoCycleDelay(data.autopilot.delay_s);
+            if (!dv.ok) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({ error: dv.error, code: 'AUTOCYCLE_BAD_DELAY' }));
+            }
+            nextDelay = dv.value;
+          }
+          const ap = channel.playlist.autopilot = channel.playlist.autopilot
+            || { active: false, delay_s: 30, shuffle: false };
+          if (data.autopilot.active !== undefined) ap.active = !!data.autopilot.active;
+          if (nextDelay !== undefined) ap.delay_s = nextDelay;
+          if (data.autopilot.shuffle !== undefined) ap.shuffle = !!data.autopilot.shuffle;
+          // Re-seed the wall-clock anchor so the next auto-cycle tick measures
+          // a full delay_s from THIS arm/change, not a stale pre-patch baseline
+          // (the tick re-seeds null→now on its next active frame).
+          channel._autoCycleLastAdvanceMs = null;
+        }
         // PATCH might target ch_base, so persist deck state too.
         saveAllState();
         broadcastMixerState();
@@ -6711,6 +6925,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // fetched from /model/view-selection-options at mount, which reads
   // the live model object and is therefore fresh on the next reload.)
   server.broadcastMixerState = broadcastMixerState;
+
+  // AUTO-CYCLE (round-2 #2): the per-frame auto-cycle tick. engine.js composes
+  // this into the render loop's beforeFrame hook so overlay playlists advance
+  // on their timer. One source of time (wall clock), no per-channel timers.
+  server.autoCycleTick = autoCycleTick;
 
   // Forceful close for the scene-switch restart path: terminate every live
   // WS client (they hold the connection open, which would otherwise delay
