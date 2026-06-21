@@ -488,3 +488,13 @@ new per-channel hue control lands into an already-decluttered strip.
   * dev/channel_ops_ui (re-do) — dup/reorder/panic UI in mixer.tsx + channelOpsApi.ts.
   Disjoint: engine files (hue) vs mixer.tsx (ops-UI). NEXT: hue UI (mixer.tsx + GlobalEffectMacros,
   after both land) + re-queue cue-to-deck #7 (api_server, after hue_engine).
+
+## STATUS LOG (cont. 11)
+- 2026-06-21: ops-UI MERGED (2e482d8, dup/reorder/panic controls — ops cluster complete).
+  HUE ENGINE MERGED (5d3df52): global + per-channel hue, 954 pass/0 fail, HIL 17/17 (RGB rotates,
+  W/A/UV untouched, fail-loud, round-trip). Operator hue request now half-done (engine).
+  Launched 2 parallel (disjoint): dev/hue_ui (global hue control in GlobalEffectMacros + per-channel
+  HUE row in mixer.tsx + channelExtrasApi setChannelHue/setGlobalHue) ‖ dev/cue_to_deck #7
+  (engine /deck/focus + index.tsx CUE). When hue_ui lands → operator's 3 requests ALL done
+  (readability a5ee521 + hue engine 5d3df52 + hue UI) → live screenshot showcase.
+  Suite 954 pass/0 fail; deliverable 5d3df52.
