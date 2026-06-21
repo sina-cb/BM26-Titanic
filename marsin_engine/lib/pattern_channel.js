@@ -1,5 +1,5 @@
 export class PatternChannel {
-  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null, faderMax = 1.0, color = null, mixGroupId = null, soloSafe = false, hue = 0, invert = false, speed = 1.0, phaseOffsetMs = 0, followsTempo = false, followLeaderId = null, followScale = 1.0 }) {
+  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null, faderMax = 1.0, color = null, mixGroupId = null, soloSafe = false, hue = 0, followsTempo = false, followLeaderId = null, followScale = 1.0 }) {
     this.id = id;
     this.name = name;
     this.pattern = pattern;
@@ -82,56 +82,25 @@ export class PatternChannel {
       ? ((hue % 360) + 360) % 360
       : 0;
 
-    // ── Per-channel color INVERT (docs/39 §F-invert) ─────────────────────
-    // Inverts THIS channel's RGB output (255 - v per byte) BEFORE it is
-    // blended into the composite — a per-channel chroma op, structurally a
-    // sibling of `hue`. Leaves W/A/UV BYTE-FOR-BYTE untouched (the
-    // mission-critical exterior whites carry no color concept and must never
-    // be flipped/dimmed). Applied on the interleaved RGBWAU channelBuffer in
-    // pattern_mixer (applyInvert6chU8), gated on the flag so the default
-    // channel pays nothing. When BOTH hue and invert are set the IMPLEMENTED
-    // buffer-order composition is HUE-THEN-INVERT (hue rotates first, then the
-    // rotated RGB is flipped); the two ops commute within rounding, so the
-    // output is order-independent — see pattern_mixer for the rationale. Pure
-    // boolean (coerced via !! like soloSafe/followsTempo). An old state file
-    // without this field restores to false (documented schema default, not a
-    // silent fallback).
-    this.invert = !!invert;
-
-    // ── Per-channel phase clock (docs/39 §F-phase: #3 speed / #4 tap-tempo
-    //    / #11 chase) ──────────────────────────────────────────────────
+    // ── Per-channel phase clock — TAP-TEMPO opt-in (docs/39 §F-phase #4) ──
     // The VM consumes ABSOLUTE per-handle time (wasm_host.beginFrame).
     // The engine already accumulates one GLOBAL scaled phase (engine.js
     // patternClockSeconds) and fans the SAME `elapsed` to every channel.
     // We give each channel its OWN accumulated phase derived from that
-    // same global elapsed DELTA, scaled by this channel's effectiveSpeed.
+    // same global elapsed DELTA, scaled by this channel's effectiveSpeed
+    // (the mixer's tap-tempo multiplier when this channel opts in, else 1×).
     // CRITICAL: we ACCUMULATE (never re-scale a raw dt at the call site)
-    // so an absolute-time pattern never JUMPS when the operator changes
-    // speed mid-show — the accumulator stays continuous across the change.
+    // so an absolute-time pattern never JUMPS when the operator taps a new
+    // tempo mid-show — the accumulator stays continuous across the change.
     //
-    //   speed         per-channel time multiplier. Default 1.0 = run at
-    //                 the global clock rate. Clamped [0.05, 8] — a 0 or
-    //                 negative would FREEZE the pattern (frozen = broken),
-    //                 which the codex forbids as a silent failure, so the
-    //                 floor is 0.05 (visibly-slow, not dead).
-    //   phaseOffsetMs constant phase shift in ms added on top of the
-    //                 accumulator. Default 0. Clamped [-10000, 10000].
-    //                 Same-pattern channels with staggered offsets produce
-    //                 chase / ripple (#11). A change is an intended
-    //                 one-frame step, not a glitch.
     //   followsTempo  opt-in: when true this channel's effectiveSpeed is
-    //                 multiplied by the mixer's tap-tempo multiplier (#4).
-    //                 Default false so the mission-critical exterior is
-    //                 immune to a tempo tap unless the operator opts in.
+    //                 the mixer's tap-tempo multiplier (#4); otherwise it
+    //                 runs at 1× (the global clock rate). Default false so
+    //                 the mission-critical exterior is immune to a tempo tap
+    //                 unless the operator opts in.
     //
-    // An old state file without these fields restores to the documented
-    // schema defaults (1.0 / 0 / false) — NOT a silent fallback.
-    this.speed = (typeof speed === 'number' && Number.isFinite(speed))
-      ? Math.max(0.05, Math.min(8, speed))
-      : 1.0;
-    this.phaseOffsetMs = (typeof phaseOffsetMs === 'number' && Number.isFinite(phaseOffsetMs))
-      ? Math.max(-10000, Math.min(10000, phaseOffsetMs))
-      : 0;
+    // An old state file without this field restores to the documented schema
+    // default (false) — NOT a silent fallback.
     this.followsTempo = !!followsTempo;
 
     // ── Channel FOLLOW / LINK (round-2 #6, docs/39 §F-follow) ────────────
@@ -234,6 +203,8 @@ export class PatternChannel {
     // would double-count it). We difference consecutive globals to get the
     // global dt, scale by THIS channel's effectiveSpeed, and accumulate.
     //
+    // `effectiveSpeed` is the mixer's tap-tempo multiplier when this channel
+    // opted in (followsTempo), else 1× — see PatternMixer._effectiveSpeed.
     // First frame: _lastPhaseElapsed is null ⇒ dt = 0 (no spurious jump
     // from a cold accumulator). A negative dt (clock went backwards — e.g.
     // the engine reset patternClockSeconds) is floored to 0 rather than
@@ -250,8 +221,7 @@ export class PatternChannel {
       this._phaseSeconds += dt * effectiveSpeed;
     }
     if ((this.enabled || forceRender) && this.handle) {
-      const phase = this._phaseSeconds + this.phaseOffsetMs / 1000;
-      wasmHost.beginFrame(this.handle, phase);
+      wasmHost.beginFrame(this.handle, this._phaseSeconds);
     }
   }
 

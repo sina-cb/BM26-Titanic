@@ -57,26 +57,13 @@ export function serializeChannel(ch) {
     hue: (typeof ch.hue === 'number' && Number.isFinite(ch.hue))
       ? ((ch.hue % 360) + 360) % 360
       : 0,
-    // ── Additive field (invert wave, 2026-06) ─────────────────────────
-    // Appended AFTER hue so earlier on-disk key order is unchanged — an old
-    // state file (no invert) loads and restores to the documented default
-    // (false = no invert). Per-channel color INVERT flag (F-invert, docs/39):
-    // flips RGB before blend, W/A/UV untouched.
-    invert: !!ch.invert,
-    // ── Additive fields (phase-clock wave, 2026-06) ───────────────────
+    // ── Additive field (phase-clock wave, 2026-06) ────────────────────
     // Appended AFTER hue so earlier on-disk key order is unchanged — an
-    // old state file (no speed/phaseOffsetMs/followsTempo) loads and
-    // restores to the documented defaults (1.0 / 0 / false). Per-channel
-    // phase clock (F-phase, docs/39): speed (#3, clamped [0.05,8]),
-    // phaseOffsetMs (#11 chase, clamped ±10000), followsTempo (#4 tap
-    // opt-in). The TRANSIENT _phaseSeconds accumulator is deliberately
-    // NEVER persisted — it is rebuilt from 0 on boot.
-    speed: (typeof ch.speed === 'number' && Number.isFinite(ch.speed))
-      ? Math.max(0.05, Math.min(8, ch.speed))
-      : 1.0,
-    phaseOffsetMs: (typeof ch.phaseOffsetMs === 'number' && Number.isFinite(ch.phaseOffsetMs))
-      ? Math.max(-10000, Math.min(10000, ch.phaseOffsetMs))
-      : 0,
+    // old state file (no followsTempo) loads and restores to the documented
+    // default (false). Per-channel TAP-TEMPO opt-in (F-phase #4, docs/39):
+    // followsTempo channels run at the global tap-tempo multiplier. The
+    // TRANSIENT _phaseSeconds accumulator is deliberately NEVER persisted —
+    // it is rebuilt from 0 on boot.
     followsTempo: !!ch.followsTempo,
     // ── Additive fields (follow/link wave, round-2 #6, 2026-06) ───────
     // Appended AFTER the phase-clock fields so earlier on-disk key order is
@@ -234,9 +221,13 @@ export class StateManager {
     // hueShift (F-hue, docs/39): persistent global hue knob. Default
     // { degrees: 0, autoRotateDegPerSec: 0 } = no shift — an old file
     // without the key loads to this documented default.
+    // invert (F-invert, docs/39): persistent global color-invert toggle.
+    // Default false = no invert — an old file without the key loads to this
+    // documented default.
     return this.load('globals_state.yaml', {
       blackout: false, effects: {}, params: {}, dimmers: {},
       hueShift: { degrees: 0, autoRotateDegPerSec: 0 },
+      invert: false,
     });
   }
 
@@ -307,6 +298,12 @@ export class StateManager {
         typeof hs.autoRotateDegPerSec === 'number' ? hs.autoRotateDegPerSec : 0,
       );
     }
+    if (globalEffectsController && globalsState.invert !== undefined) {
+      // F-invert restore (docs/39): re-apply the persisted global invert
+      // toggle through the coercing setter. A missing field stays at the
+      // controller's false default (handled by loadGlobalsState's default).
+      globalEffectsController.setInvert(globalsState.invert);
+    }
     if (globalEffectsController && globalsState.groupFixedColors) {
       // Route through the validating setter so a hand-edited bad YAML
       // entry fails loudly here (caught + logged by the boot caller)
@@ -367,16 +364,10 @@ export class StateManager {
           // restart restores the operator's recolor. serializeChannel
           // already normalized it — reuse verbatim.
           hue: core.hue,
-          // Additive (invert wave): per-channel INVERT flag round-trips so a
-          // restart restores the operator's flip. serializeChannel already
-          // coerced it — reuse verbatim.
-          invert: core.invert,
-          // Additive (phase-clock wave): per-channel speed/offset/follows-
-          // tempo round-trip so a restart restores the operator's clock.
-          // serializeChannel already clamped/typed these — reuse verbatim.
-          // The transient _phaseSeconds accumulator is never persisted.
-          speed: core.speed,
-          phaseOffsetMs: core.phaseOffsetMs,
+          // Additive (phase-clock wave): per-channel tap-tempo opt-in round-
+          // trips so a restart restores the operator's clock. serializeChannel
+          // already coerced it — reuse verbatim. The transient _phaseSeconds
+          // accumulator is never persisted.
           followsTempo: core.followsTempo,
           // Additive (follow/link wave, round-2 #6): channel FOLLOW/LINK
           // round-trips so a restart restores the operator's link.

@@ -657,6 +657,15 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       globalEffectsController.applyHueShift(model.pixels, now);
     }
 
+    // Global color Invert (docs/39 §F-invert): flip the RGB of the whole
+    // post-mixer buffer (W/A/UV untouched). Runs AFTER the global hue
+    // rotation (documented order: global hue THEN global invert) but BEFORE
+    // group color-locks + intensity/blackout, so a locked group's color and
+    // the e-stop safety always have the final say. Zero-cost when off.
+    if (globalEffectsController && globalEffectsController.applyInvert) {
+      globalEffectsController.applyInvert(model.pixels);
+    }
+
     // Group fixed-color locks (docs/32): repaint operator-locked groups
     // AFTER all macros (a locked group must not flicker with the show)
     // but BEFORE intensity/blackout below, so the master cutoffs always

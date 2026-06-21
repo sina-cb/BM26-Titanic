@@ -126,13 +126,13 @@ test('serializeChannel emits exactly the fields the engine restores', () => {
     'mixGroupId', 'soloSafe',
     // Additive (hue shifter wave, 2026-06): appended AFTER mixGroupId/soloSafe.
     'hue',
-    // Additive (invert wave, 2026-06): appended AFTER hue.
-    'invert',
-    // Additive (phase-clock wave, 2026-06): appended AFTER invert. Per-channel
-    // phase clock (F-phase): speed/phaseOffsetMs/followsTempo.
-    'speed', 'phaseOffsetMs', 'followsTempo',
+    // Additive (phase-clock wave, 2026-06): appended AFTER hue. Per-channel
+    // TAP-TEMPO opt-in (F-phase #4). The per-channel speed (#3) and
+    // phaseOffsetMs (#11 chase) fields were removed in the channels-
+    // optimization campaign; only followsTempo remains.
+    'followsTempo',
     // Additive (follow/link wave, round-2 #6, 2026-06): appended AFTER the
-    // phase-clock fields. Channel FOLLOW/LINK (F-follow): followLeaderId/
+    // phase-clock field. Channel FOLLOW/LINK (F-follow): followLeaderId/
     // followScale.
     'followLeaderId', 'followScale',
   ]);
@@ -252,12 +252,12 @@ test('saveMixerState preserves on-disk key order and overlay-only fields', () =>
     'mixGroupId', 'soloSafe',
     // Additive (hue shifter wave, 2026-06): appended after mixGroupId/soloSafe.
     'hue',
-    // Additive (invert wave, 2026-06): appended after hue.
-    'invert',
-    // Additive (phase-clock wave, 2026-06): appended after invert.
-    'speed', 'phaseOffsetMs', 'followsTempo',
+    // Additive (phase-clock wave, 2026-06): appended after hue. Per-channel
+    // TAP-TEMPO opt-in (F-phase #4) only — speed (#3) + phaseOffsetMs (#11)
+    // were removed in the channels-optimization campaign.
+    'followsTempo',
     // Additive (follow/link wave, round-2 #6, 2026-06): appended after the
-    // phase-clock fields. Channel FOLLOW/LINK (F-follow).
+    // phase-clock field. Channel FOLLOW/LINK (F-follow).
     'followLeaderId', 'followScale',
   ]);
 });
