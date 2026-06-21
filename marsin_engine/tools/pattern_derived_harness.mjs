@@ -144,6 +144,11 @@ const analyzer = new AudioAnalyzer({
       { kind: 'scalar', key: 'micDomFreq2', value: a.domFreq2 }, { kind: 'scalar', key: 'micDomEnergy2', value: a.domEnergy2 },
       { kind: 'scalar', key: 'micOnsetLowRaw', value: a.onsetLow }, { kind: 'scalar', key: 'micOnsetMidRaw', value: a.onsetMid },
       { kind: 'scalar', key: 'micOnsetHighRaw', value: a.onsetHigh }, { kind: 'scalar', key: 'micSubRaw', value: a.micSub },
+      // chroma harmonic/timbre raw mirrors (G1) — mirror engine.js so chroma-reactive
+      // patterns (69–72) can be validated through the committed harness.
+      { kind: 'scalar', key: 'micTonalStabilityRaw', value: a.tonalStability || 0 },
+      { kind: 'scalar', key: 'micChromaFluxRaw', value: a.chromaFlux || 0 },
+      { kind: 'scalar', key: 'micChromaTiltRaw', value: a.chromaTilt || 0 },
     ], 'audio', 'audio:mic');
     structureDetector.tick(nowMs, dt);
     derived.tick(nowMs, dt);
