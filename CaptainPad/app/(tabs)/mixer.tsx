@@ -28,6 +28,7 @@ import { TimerWheel } from '@/components/ui/TimerWheel';
 import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { SnapshotBar } from '@/components/SnapshotBar';
+import { ParamPresetMenu } from '@/components/ParamPresetMenu';
 import { setChannelFaderMax, setChannelColor, setChannelHue, setChannelSpeed, setChannelPhaseOffset, setChannelFollowsTempo } from '@/utils/channelExtrasApi';
 import { duplicateMixerChannel, reorderMixerChannels, panicMixer } from '@/utils/channelOpsApi';
 import {
@@ -695,6 +696,16 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           </TouchableOpacity>
         </View>
       )}
+
+      {/* Per-channel PARAM PRESETS (#9 engine). Compact button → modal sheet
+          (capture this channel's params under a name, recall/delete the global
+          preset list). Kept as ONE row so the already-dense strip doesn't
+          re-cramp (the readability fix a5ee521 must not regress). The menu is
+          self-contained (seeds via GET, stays live off the WS `paramPresets`
+          event), so it needs no extra ChannelStrip callbacks — just the id,
+          the running pattern (to grey out mismatched recalls), and the lock
+          gate the sibling rows use. */}
+      <ParamPresetMenu channelId={channel.id} channelPattern={channel.pattern ?? null} locked={locked} />
 
       <View style={styles.channelBody}>
         {/* Left column = the playlist (this IS the pattern list — "1 list to

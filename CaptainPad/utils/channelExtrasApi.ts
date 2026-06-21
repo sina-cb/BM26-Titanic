@@ -377,3 +377,130 @@ export async function setGlobalHue(
     return { ok: false, error: err.message };
   }
 }
+
+// ── Per-channel param presets (#9 engine, merged at 8ec8a7d) ──────────────
+// A param preset is a NAMED capture of ONE channel's current local pattern
+// params, scoped to the pattern it was captured on. Unlike a snapshot (the
+// full mixer look), a preset is the per-channel analogue: capture this
+// channel's knobs under a name, then recall those knobs onto any channel
+// *running the same pattern*. The list is GLOBAL (GET /mixer/param-presets
+// returns every preset, each carrying its `name` + the `pattern` it is scoped
+// to); recall/capture/delete are the writes. The WS control-plane
+// `paramPresets` event ({ action:'captured'|'recalled'|'deleted', name,
+// paramPresets:[{name,pattern,savedAt}] }) reconciles the list on every
+// mutation — these REST clients are the seed + the writes.
+//
+// Codex P0 — fail loud: every client honours `res.ok`; a non-2xx returns
+// { ok:false, error, data } carrying the engine error body (incl. the 409
+// `code:'PARAM_PRESET_PATTERN_MISMATCH'`) verbatim so the caller can Alert on
+// the pattern mismatch specifically.
+
+/** One entry in the global param-preset list (header only; not the controls). */
+export interface ParamPresetInfo {
+  name: string;
+  pattern: string;
+  savedAt?: string;
+}
+
+/** The engine's 409 mismatch code — recall onto a channel running a
+ *  different pattern than the preset was captured on. */
+export const PARAM_PRESET_PATTERN_MISMATCH = 'PARAM_PRESET_PATTERN_MISMATCH';
+
+/**
+ * List every saved param preset (sorted by the engine).
+ * GET /mixer/param-presets → { paramPresets: [{ name, pattern, savedAt }] }.
+ */
+export async function listParamPresets(): Promise<ApiResult<ParamPresetInfo[]>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/mixer/param-presets`);
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    }
+    const list = Array.isArray(data?.paramPresets) ? (data.paramPresets as ParamPresetInfo[]) : null;
+    if (!list) {
+      return { ok: false, error: 'Malformed /mixer/param-presets response (expected { paramPresets: [] })' };
+    }
+    return { ok: true, data: list };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Capture the addressed channel's current pattern params under `name`.
+ * POST /mixer/channels/:id/param-presets { name } → { status:'ok', name, pattern }.
+ * A bad/empty name ⇒ 400; an unknown channel ⇒ 404.
+ */
+export async function captureParamPreset(
+  channelId: string,
+  name: string,
+): Promise<ApiResult<{ status: string; name: string; pattern: string }>> {
+  try {
+    const res = await fetchWithTimeout(
+      `${api_base}/mixer/channels/${encodeURIComponent(channelId)}/param-presets`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      },
+    );
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Recall a named preset onto the addressed channel.
+ * POST /mixer/channels/:id/param-presets/:name/recall → { status:'ok', name, channelId }.
+ * The engine guards everything BEFORE applying: an unknown channel/preset ⇒
+ * 404, a malformed preset ⇒ 400, and — critically — a preset captured on a
+ * DIFFERENT pattern than the channel is running ⇒ 409 with
+ * code:'PARAM_PRESET_PATTERN_MISMATCH'. Recall does NOT optimistically flip
+ * local state — the WS mixer broadcast reconciles the strips after the engine
+ * replays the saved controls. The caller inspects `data.code` to surface the
+ * friendly pattern-mismatch Alert.
+ */
+export async function recallParamPreset(
+  channelId: string,
+  name: string,
+): Promise<ApiResult<{ status: string; name: string; channelId: string }>> {
+  try {
+    const res = await fetchWithTimeout(
+      `${api_base}/mixer/channels/${encodeURIComponent(channelId)}/param-presets/${encodeURIComponent(name)}/recall`,
+      { method: 'POST' },
+    );
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Delete a param preset by name (global — not channel-scoped).
+ * DELETE /mixer/param-presets/:name → { status:'ok' }, or 404 unknown name.
+ */
+export async function deleteParamPreset(name: string): Promise<ApiResult<{ status: string }>> {
+  try {
+    const res = await fetchWithTimeout(
+      `${api_base}/mixer/param-presets/${encodeURIComponent(name)}`,
+      { method: 'DELETE' },
+    );
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
