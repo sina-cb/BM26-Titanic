@@ -22,6 +22,7 @@ import {
 } from './scheduled_tasks.js';
 import { topicForType, TOPICS } from './ws_topic_routing.js';
 import { parsePatternDefaults } from './pattern_defaults.js';
+import { UndoStack, UNDO_MAX } from './undo_stack.js';
 
 /**
  * Validate a `viewSelection` payload before it reaches the mixer.
@@ -2334,6 +2335,38 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     mixer.beginMorph(durationMs, fadeOutIds);
   }
 
+  // ── Mixer UNDO (round-2 #10, docs/39 §F-undo) ─────────────────────────
+  //
+  // A bounded, SESSION-ONLY ring of full captureLook() snapshots taken
+  // BEFORE each DESTRUCTIVE mixer mutation. Undo pops the most recent look
+  // and restores it through the proven never-dark recallLook() path. See
+  // lib/undo_stack.js for the rationale (ring of looks vs inverse-op log;
+  // session-only vs persisted). pushUndo() is the single choke point: it is
+  // called as the FIRST line — BEFORE the mutation — in each destructive
+  // route, so the captured look is always the PRE-mutation state.
+  //
+  // NOT pushed: fader/hue/speed/etc PATCH writes (non-destructive,
+  // high-frequency — pushing them would flood the ring and bury the
+  // structural action the operator actually wants to undo). Undo scope is
+  // STRUCTURAL mutations only.
+  const undoStack = new UndoStack(UNDO_MAX);
+
+  // Broadcast the undo button's enable/label state. ONE typed message on
+  // /ws/control (registered in ws_topic_routing TOPIC_BY_TYPE), emitted on
+  // every push + every undo so CaptainPad mirrors depth/top live. Replayed
+  // on /ws/control connect (see wssControl 'connection' below).
+  function broadcastUndoState() {
+    broadcastWs({ type: 'undoState', depth: undoStack.depth, top: undoStack.topLabel });
+  }
+
+  // The choke point. Call as the FIRST line of a destructive route, BEFORE
+  // mutating the mixer, so captureLook() records the PRE-mutation look. The
+  // ring is bounded (oldest dropped at UNDO_MAX) inside UndoStack.push.
+  function pushUndo(label) {
+    undoStack.push({ label, look: captureLook(), atMs: Date.now() });
+    broadcastUndoState();
+  }
+
   // ── Channel serialization (post-split) ────────────────────────────
   //
   // After the May 2026 channel split, /mixer surfaces ONLY overlay
@@ -4109,6 +4142,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(404, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: `snapshot '${name}' not found` }));
       }
+      // UNDO: snapshot the live look AFTER validation (no phantom entry on a
+      // 404/malformed snapshot) but BEFORE recallLook destructively swaps it.
+      pushUndo(`recall '${name}'`);
       try {
         recallLook(look);
       } catch (e) {
@@ -4159,6 +4195,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(404, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ error: `snapshot '${name}' not found` }));
         }
+        // UNDO: snapshot the PRE-morph live look (captures it before the ramp
+        // begins) AFTER validation so a 404/400 leaves no phantom entry.
+        pushUndo(`recall-fade '${name}'`);
         try {
           morphToLook(look, durationMs);
         } catch (e) {
@@ -4180,6 +4219,42 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           morph: mixer.getMorph(),
         }));
       });
+    }
+    // ── MIXER UNDO (round-2 #10, docs/39 §F-undo) ────────────────────────
+    // POST /mixer/undo → pop the most recent destructive-action snapshot and
+    // restore it via recallLook (never-dark). Empty ring → 400 UNDO_EMPTY
+    // (fail loud, NOT a silent no-op — Codex P0). GET /mixer/undo → {depth,
+    // top} for the UI button enable/label.
+    else if (req.method === 'POST' && req.url === '/mixer/undo') {
+      if (undoStack.isEmpty) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'nothing to undo', code: 'UNDO_EMPTY' }));
+      }
+      // MORPH RACE (CRITICAL): if a recall-fade/morph is mid-flight, cancel it
+      // BEFORE recallLook so its completion finalizer (onMorphComplete) can't
+      // fire against the torn-down/rebuilt state we're about to install.
+      // cancelMorph() drops the descriptor WITHOUT firing the finalizer; the
+      // C channels it would have removed are still present and recallLook tears
+      // them down + rebuilds the captured look wholesale.
+      if (typeof mixer.cancelMorph === 'function') mixer.cancelMorph();
+      const popped = undoStack.pop();
+      try {
+        recallLook(popped.look);
+      } catch (e) {
+        // A self-captured look should never be over-cap, but surface any
+        // structural failure loud rather than half-applying silently.
+        const status = e.code === 'SNAPSHOT_OVER_CAP' ? 400 : 500;
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message, code: e.code || 'UNDO_RECALL_FAILED' }));
+      }
+      saveAllState();
+      broadcastMixerState();
+      broadcastUndoState();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', label: popped.label }));
+    } else if (req.method === 'GET' && req.url === '/mixer/undo') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ depth: undoStack.depth, top: undoStack.topLabel }));
     }
     // ── NAMED PER-CHANNEL PARAM PRESETS (round-2 #9) ─────────────────────
     // Capture one channel's live localControls (its pattern slider/knob/color
@@ -4268,6 +4343,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           code: 'PARAM_PRESET_PATTERN_MISMATCH',
         }));
       }
+      // UNDO: snapshot the live look AFTER all validation (404/400/409) but
+      // BEFORE replaying the preset's controls onto the channel.
+      pushUndo(`param-preset '${name}'`);
       // Replay each saved control. setChannelControl ignores CPC-owned /
       // blocked / non-local ids defensively; getReplayableLocalExport mirrors
       // that gate so we don't even attempt those (same as the boot restore
@@ -4537,6 +4615,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         // Set equality is now guaranteed (same length, no dups, every order id
         // is a current id) — every current id is therefore covered too.
+        // UNDO: snapshot the current order AFTER validation, BEFORE reordering.
+        pushUndo('reorder channels');
         try {
           mixer.reorderMixerChannels(order);
         } catch (e) {
@@ -4926,6 +5006,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       const id = req.url.split('/')[3];
       const reject = rejectIfWrongRole(id, 'mixer');
       if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      // UNDO: snapshot the full look (incl. this channel + its CPC registration,
+      // playlist, follow/group membership) BEFORE we tear it down. recallLook
+      // rebuilds the deleted channel through buildChannelFromSaved→registerChannel
+      // so undo restores it never-dark with CPC re-registered.
+      pushUndo(`delete '${id}'`);
       if (paramCenter) paramCenter.unregisterChannel(id);
       // FOLLOW/LINK (round-2 #6, docs/39 §F-follow): fail-safe leader DELETE.
       // BEFORE removing the channel, clear followLeaderId on every channel that
@@ -6522,6 +6607,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }));
     } catch (e) {
       // never let a snapshot send break a fresh WS handshake
+    }
+    // UNDO state replay (round-2 #10): a late-joining CaptainPad sees the
+    // current undo depth/top immediately, so its UNDO button paints enabled/
+    // labeled without waiting for the next push.
+    try {
+      ws.send(JSON.stringify({
+        type: 'undoState',
+        depth: undoStack.depth,
+        top: undoStack.topLabel,
+      }));
+    } catch (e) {
+      // ignore — never break the handshake on a replay send
     }
     try {
       ws.send(JSON.stringify({

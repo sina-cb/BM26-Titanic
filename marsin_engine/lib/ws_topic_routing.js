@@ -104,6 +104,12 @@ const TOPIC_BY_TYPE = Object.freeze({
   // recalled channel's params. Operator-driven, low volume → /ws/control next
   // to the snapshot library it semantically relates to.
   paramPresets:                TOPICS.CONTROL,
+  // round-2 #10: mixer UNDO ring depth/top. Broadcast on every push (a
+  // destructive action snapshotted) + every undo so CaptainPad's global UNDO
+  // button mirrors enable/label live. Operator-driven, low volume → /ws/control
+  // next to the snapshot/preset libraries it semantically relates to. Replayed
+  // on /ws/control connect.
+  undoState:                   TOPICS.CONTROL,
   paramRejected:               TOPICS.CONTROL,
   // round-2 #5 FLASH/BUMP (docs/39 §10.7): the engine pushes back a typed
   // rejection on a bad bump/unbump id (bad/non-mixer/deck channel), mirroring
