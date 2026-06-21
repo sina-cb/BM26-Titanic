@@ -33,7 +33,12 @@ import { HealthChip } from '@/components/ui/HealthChip';
 import { useMaster, useActiveModel } from '@/hooks/useEngineState';
 import { updateMixerMaster } from '@/utils/api';
 import { fadeMaster } from '@/utils/masterApi';
-import { postTapTempo } from '@/utils/channelExtrasApi';
+import {
+  useTempoState,
+  useTempoTap,
+  tempoSourceTag,
+  tempoSourceHasOverride,
+} from '@/hooks/use_tempo_tap';
 import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
 
 interface Props {
@@ -58,40 +63,6 @@ interface MasterFade {
 // operator can always drag the master directly for anything bespoke.
 const FADE_SECONDS = [1, 3, 5, 10] as const;
 const DEFAULT_FADE_SECONDS = 3;
-
-// Tap-tempo (round-2 #4, design 20260620_33). The client computes BPM from the
-// intervals between the last few taps, averages them, clamps the DISPLAY to the
-// engine's accepted range [20,400] BPM, and POSTs the resolved BPM. Taps older
-// than TAP_RESET_MS start a fresh series (the operator has stopped tapping).
-const TAP_BPM_MIN = 20;
-const TAP_BPM_MAX = 400;
-const TAP_MAX_SAMPLES = 5; // average over the last few intervals
-const TAP_RESET_MS = 2500; // gap longer than this ⇒ new series
-
-/**
- * Read the global `tempoBpm` off the SAME control-bus broadcasts that drive
- * the master value (no new polling path — `mixer`/`deck` are existing push
- * events). `null` until the engine reports a tempo.
- */
-function useTempoBpm(): number | null {
-  const [bpm, setBpm] = useState<number | null>(null);
-  useEffect(() => {
-    const onMessage = (msg: EngineMessage) => {
-      if (msg.type !== 'mixer' && msg.type !== 'deck') return;
-      const raw = (msg as unknown as { tempoBpm?: unknown }).tempoBpm;
-      if (typeof raw === 'number' && Number.isFinite(raw)) {
-        setBpm(raw);
-      } else if (raw === null) {
-        setBpm((prev) => (prev === null ? prev : null));
-      }
-    };
-    const unsubscribe = engineEvents.subscribe(onMessage);
-    return () => {
-      if (typeof unsubscribe === 'function') unsubscribe();
-    };
-  }, []);
-  return bpm;
-}
 
 /**
  * Read the in-flight `masterFade` descriptor off the SAME control-bus
@@ -143,48 +114,18 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
   // Selected fade duration (seconds). Local UI state only.
   const [fadeSeconds, setFadeSeconds] = useState<number>(DEFAULT_FADE_SECONDS);
 
-  // ── Tap tempo (round-2 #4) ────────────────────────────────────────────
-  // The engine owns `tempoBpm` (broadcast on the mixer/deck bus); the deck
-  // computes a BPM from the operator's taps and POSTs it. `tempoBpm` is the
-  // resolved value the button shows.
-  const tempoBpm = useTempoBpm();
-  // Tap timestamps (ms). Kept in a ref so taps don't re-render the bar; only
-  // the resolved-BPM label (engine-authoritative `tempoBpm`) drives re-render.
-  const tapTimesRef = useRef<number[]>([]);
-
-  const handleTap = () => {
-    const now = Date.now();
-    const times = tapTimesRef.current;
-    // A long gap means a new series — drop the stale taps.
-    if (times.length > 0 && now - times[times.length - 1] > TAP_RESET_MS) {
-      times.length = 0;
-    }
-    times.push(now);
-    // Keep only the most recent samples (need N taps ⇒ N-1 intervals).
-    if (times.length > TAP_MAX_SAMPLES + 1) {
-      times.splice(0, times.length - (TAP_MAX_SAMPLES + 1));
-    }
-    // Need at least two taps to derive an interval.
-    if (times.length < 2) return;
-    let sum = 0;
-    for (let i = 1; i < times.length; i++) sum += times[i] - times[i - 1];
-    const avgIntervalMs = sum / (times.length - 1);
-    if (!(avgIntervalMs > 0)) return;
-    const rawBpm = 60000 / avgIntervalMs;
-    // Clamp the DISPLAY to the engine's accepted range; the engine validates
-    // [20,400] and 400s anything out of band, so clamping here matches.
-    const bpm = Math.round(Math.max(TAP_BPM_MIN, Math.min(TAP_BPM_MAX, rawBpm)));
-    void sendTempo(bpm);
-  };
-
-  const sendTempo = async (bpm: number) => {
-    const res = await postTapTempo(bpm);
-    if (!res.ok) {
-      // Codex P0 — fail loud: a rejected tempo must be visible.
-      console.error('Tap tempo failed:', res.error);
-      Alert.alert('Tap tempo failed', res.error || 'The engine rejected the tempo.');
-    }
-  };
+  // ── Tap tempo + tempo arbitration (engine feat/optimize_channels) ──────
+  // The engine arbitrates "OSC auto-drives, tap overrides". We read the
+  // applied BPM AND its source off the same mixer/deck control bus, and route
+  // taps + the SYNC ("hand it back to OSC") action through the shared hook so
+  // the deck and the globals bar behave identically. The source tag makes the
+  // readout coherent: "128 · OSC" (auto-following) vs "128 · TAP" (operator
+  // override, SYNC to rejoin OSC) vs "128 · HELD" (OSC idle, last value holds).
+  const tempo = useTempoState();
+  const tempoBpm = tempo.bpm;
+  const tempoTag = tempoSourceTag(tempo.source);
+  const showSync = tempoSourceHasOverride(tempo.source);
+  const { tap: handleTap, sync: handleTempoSync } = useTempoTap();
 
   const handleMasterChange = (val: number) => {
     const now = Date.now();
@@ -286,27 +227,54 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
             </TouchableOpacity>
           </View>
         )}
-        {/* TAP TEMPO (round-2 #4) — tap in time; the client averages the
-            tap intervals into a BPM and POSTs it. The resolved engine
-            `tempoBpm` is shown beneath the label (— until set). Affects only
-            channels with FOLLOW TEMPO enabled. Shown in both orientations
-            (compact) — tempo is a performance affordance the deck always wants.*/}
-        <TouchableOpacity
-          onPress={handleTap}
-          hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-          style={styles.tapTempoBtn}
-          accessibilityRole="button"
-          accessibilityLabel={
-            typeof tempoBpm === 'number'
-              ? `Tap tempo, currently ${Math.round(tempoBpm)} beats per minute`
-              : 'Tap tempo, not set'
-          }
-        >
-          <Text style={styles.tapTempoLabel}>TAP</Text>
-          <Text style={styles.tapTempoBpm}>
-            {typeof tempoBpm === 'number' ? `${Math.round(tempoBpm)} BPM` : '— BPM'}
-          </Text>
-        </TouchableOpacity>
+        {/* TAP TEMPO + source (tempo arbitration). Tap in time; the client
+            averages the tap intervals into a BPM and POSTs it (which also arms
+            the engine's ~12s manual override). The readout shows the APPLIED
+            engine `tempoBpm` plus a source tag — OSC (auto-following) / TAP
+            (operator override) / HELD (OSC idle). When a tap override is
+            active, a small SYNC button hands control back to OSC. Affects only
+            channels with FOLLOW TEMPO enabled. Shown in both orientations. */}
+        <View style={styles.tapCluster}>
+          <TouchableOpacity
+            onPress={handleTap}
+            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+            style={[styles.tapTempoBtn, tempo.source === 'manual' && styles.tapTempoBtnManual]}
+            accessibilityRole="button"
+            accessibilityLabel={
+              typeof tempoBpm === 'number'
+                ? `Tap tempo, currently ${Math.round(tempoBpm)} beats per minute, source ${tempoTag}`
+                : 'Tap tempo, not set'
+            }
+          >
+            <Text style={styles.tapTempoLabel}>TAP</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
+              <Text style={styles.tapTempoBpm}>
+                {typeof tempoBpm === 'number' ? `${Math.round(tempoBpm)}` : '—'}
+              </Text>
+              <Text style={[
+                styles.tapTempoSource,
+                tempo.source === 'osc' && { color: '#00a86b' },
+                tempo.source === 'manual' && { color: palette.tertiary },
+              ]}>
+                {tempoTag}
+              </Text>
+            </View>
+          </TouchableOpacity>
+          {/* SYNC — only while a manual tap override is active (drops it so
+              OSC reclaims). Renders nothing otherwise, so the resting row has
+              no extra control to scan past. */}
+          {showSync ? (
+            <TouchableOpacity
+              onPress={handleTempoSync}
+              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+              style={styles.tapSyncBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Sync tempo back to OSC"
+            >
+              <Text style={styles.tapSyncText}>SYNC</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
         {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}
         <HorizontalFader
           value={master}
@@ -480,10 +448,16 @@ function makeStyles(C: Palette) {
       color: C.primary,
       textTransform: 'uppercase' as const,
     },
-    // ── Tap tempo ─────────────────────────────────────────────────────
-    // A two-line pill (TAP / "<n> BPM") so the operator both triggers and
-    // reads the resolved tempo in one spot. 36pt visible height + 8pt
-    // vertical hitSlop ⇒ ≥44pt effective touch target.
+    // ── Tap tempo + source ────────────────────────────────────────────
+    // The TAP pill + an optional SYNC button form one cluster. A two-line
+    // pill (TAP / "<n> SRC") so the operator triggers, reads the resolved
+    // tempo, AND sees what's driving it in one spot. 36pt visible height +
+    // 8pt vertical hitSlop ⇒ ≥44pt effective touch target.
+    tapCluster: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: 4,
+    },
     tapTempoBtn: {
       height: 36,
       minWidth: 64,
@@ -494,6 +468,11 @@ function makeStyles(C: Palette) {
       backgroundColor: C.surfaceContainerHigh,
       alignItems: 'center' as const,
       justifyContent: 'center' as const,
+    },
+    // Tint the TAP pill while a manual override owns the tempo so the
+    // operator can tell "I'm holding this" from "OSC is driving" at a glance.
+    tapTempoBtnManual: {
+      borderColor: C.tertiary,
     },
     tapTempoLabel: {
       fontFamily: 'SpaceGrotesk_700Bold',
@@ -507,6 +486,34 @@ function makeStyles(C: Palette) {
       fontSize: 12,
       letterSpacing: 0.4,
       color: C.primary,
+    },
+    // The source tag (OSC / TAP / HELD) sits right of the BPM number. The
+    // base colour is the muted secondary (held); osc/manual override it inline.
+    tapTempoSource: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 8,
+      letterSpacing: 0.8,
+      color: C.secondary,
+      textTransform: 'uppercase' as const,
+    },
+    // SYNC — small bordered button that drops the manual override (rejoin OSC).
+    // 36pt visible height matches the TAP pill so the cluster is flush.
+    tapSyncBtn: {
+      height: 36,
+      paddingHorizontal: 8,
+      borderRadius: 6,
+      borderWidth: 1,
+      borderColor: C.tertiary,
+      backgroundColor: C.surfaceContainerHigh,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+    },
+    tapSyncText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 9,
+      letterSpacing: 1.0,
+      color: C.tertiary,
+      textTransform: 'uppercase' as const,
     },
     // Same fixed 36pt slot as the master readout so swapping in the hint
     // keeps the row width stable — no layout shift when a fade starts.

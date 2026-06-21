@@ -513,6 +513,37 @@ export async function postTapTempo(
   }
 }
 
+// ── Tempo re-sync to OSC (tempo arbitration, engine feat/optimize_channels) ─
+// A manual tap (postTapTempo) OVERRIDES the OSC auto-follow for a fixed hold
+// window (the engine's MANUAL_HOLD_MS, ~12s) so the operator's deliberate tap
+// can't be reclaimed by the live OSC BPM on the very next frame. This is the
+// explicit "hand it back to OSC NOW" affordance: it drops the manual-override
+// hold immediately, so the live OSC BPM reclaims the tempo on the next tick
+// (if OSC is live; otherwise the last value just holds). No body.
+// POST /mixer/tempo/sync → { status:'ok', tempoBpm, tempoSource, oscTempoBpm }.
+//
+// Codex P0 — fail loud: the engine returns 500 when the arbiter is missing
+// (it cannot drop an override that doesn't exist); the client surfaces that
+// error verbatim rather than fabricating a success. The new state rides the
+// existing mixer-state WS broadcast — no optimistic local flip needed.
+
+export async function postTempoSync(): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/mixer/tempo/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
 // ── Global hue shifter (F-hue, docs/39 §F-hue) ────────────────────────────
 // A first-class rig knob (NOT a GEM slot): a continuous hue rotation applied
 // POST-composite on the whole output buffer, plus an optional auto-rotate
