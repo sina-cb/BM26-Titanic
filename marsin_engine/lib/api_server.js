@@ -2672,6 +2672,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       tempoBpm: (typeof mixer.tempoBpm === 'number' && Number.isFinite(mixer.tempoBpm))
         ? mixer.tempoBpm
         : null,
+      // TEMPO ARBITRATION: how the current tempoBpm is being driven, so the UI
+      // can render "128 · OSC" vs "128 · TAP" vs "128 · held":
+      //   'osc'    — OSC live, auto-following.
+      //   'manual' — a recent tap owns it (inside the override hold window).
+      //   'held'   — OSC stale/off, the last value just holding.
+      // `oscTempoBpm` is the RAW live OSC value (clamped) or null when stale —
+      // distinct from the applied `tempoBpm`. Both ride the existing
+      // mixer-state broadcast; the legacy `tempoBpm` field is unchanged.
+      tempoSource: engineCore.tempoArbiter
+        ? engineCore.tempoArbiter.deriveSource()
+        : 'held',
+      oscTempoBpm: engineCore.tempoArbiter
+        ? engineCore.tempoArbiter.oscTempoBpm()
+        : null,
     };
   }
 
@@ -4031,12 +4045,44 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }));
         }
         mixer.setTempoBpm(bpm);
+        // TEMPO ARBITRATION: a manual tap OVERRIDES the OSC auto-follow for a
+        // fixed hold window (MANUAL_HOLD_MS). Arm it so the live OSC BPM can't
+        // immediately reclaim the operator's deliberate tap on the next frame.
+        // (No arbiter ⇒ a tapped tempo simply has no override; still honored.)
+        if (engineCore.tempoArbiter) {
+          engineCore.tempoArbiter.noteManualTap();
+        }
         saveAllState();
         broadcastMixerState();
         res.writeHead(200); res.end(JSON.stringify({
           status: 'ok',
           tempoBpm: mixer.tempoBpm,
           tempoMultiplier: mixer._tempoMultiplier,
+          tempoSource: engineCore.tempoArbiter
+            ? engineCore.tempoArbiter.deriveSource()
+            : 'manual',
+        }));
+      });
+    } else if (req.method === 'POST' && req.url === '/mixer/tempo/sync') {
+      // TEMPO ARBITRATION: explicit "re-sync to OSC". Drops the manual-override
+      // hold immediately so the live OSC BPM reclaims the tempo on the next
+      // render tick (if OSC is live; otherwise the last value just holds).
+      // Codex P0 — fail loud if the arbiter (and thus the mixer) is missing.
+      readBody(() => {
+        if (!engineCore.tempoArbiter) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'tempo arbiter unavailable — cannot drop manual override',
+          }));
+        }
+        engineCore.tempoArbiter.clearOverride();
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({
+          status: 'ok',
+          tempoBpm: mixer.tempoBpm,
+          tempoSource: engineCore.tempoArbiter.deriveSource(),
+          oscTempoBpm: engineCore.tempoArbiter.oscTempoBpm(),
         }));
       });
     }

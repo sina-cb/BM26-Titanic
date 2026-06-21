@@ -35,6 +35,7 @@ import { OscListener } from './lib/osc_listener.js';
 import { AudioCapture } from './audio/capture/audio_capture.js';
 import { AudioAnalyzer } from './audio/analyzer/audio_analyzer.js';
 import { BpmSpeedSync } from './lib/bpm_speed_sync.js';
+import { TempoArbiter } from './lib/tempo_arbiter.js';
 import { mergeAudioConfig, pickLiveFields } from './audio/config/audio_config.js';
 import {
   loadSceneAudio, saveSceneAudio,
@@ -1146,6 +1147,20 @@ async function main() {
     // Cleared on the next successful hot reload.
     modelSync: { stale: false, message: null },
   };
+
+  // TEMPO ARBITER (docs/39 §tempo-arbitration): coherent arbitration of the
+  // GLOBAL pattern tempo (mixer.tempoBpm) between the live OSC/audio BPM
+  // (auto-follow) and the operator's manual TAP (override hold). Constructed
+  // BEFORE startApiServer so the /mixer/tempo + /mixer/tempo/sync routes and
+  // serializeMixerState can reach it via engineCore.tempoArbiter. attach()
+  // below subscribes it to the CPC so it tracks `audioBpm` freshness. Its
+  // per-frame auto-follow runs in the render loop's beforeFrame hook. NOTE: it
+  // drives ONLY mixer.tempoBpm; bpm_speed_sync independently drives the SPEED
+  // knob from the same audioBpm — different mechanism/target, both may be on.
+  const tempoArbiter = new TempoArbiter({ mixer, paramCenter });
+  tempoArbiter.attach();
+  engineCore.tempoArbiter = tempoArbiter;
+
   const apiServer = startApiServer(opts, engineCore, './patterns', broadcastStatsRef, intensityController, globalEffectsController);
 
   const loop = createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, paramCenter, (stats) => {
@@ -1167,6 +1182,14 @@ async function main() {
       if (apiServer && typeof apiServer.deckOverlayAutoCycleTick === 'function') {
         apiServer.deckOverlayAutoCycleTick();
       }
+      // TEMPO AUTO-FOLLOW (tempo-arbitration): when a fresh OSC BPM is live and
+      // no manual-tap override is in flight, continuously set mixer.tempoBpm
+      // from it (clamped, only-on-change). Date.now() — NOT nowMs — because the
+      // arbiter's `audioBpm` freshness timestamps are recorded with Date.now()
+      // in its CPC subscription; performance.now() (what nowMs carries) is a
+      // different epoch and would never compare correctly. Hot-path safe: two
+      // field reads + one timestamp compare, no allocation.
+      tempoArbiter.tick(Date.now());
     },
   });
   // Now that the loop exists, give engineCore a way to read the live
