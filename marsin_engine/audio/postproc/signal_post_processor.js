@@ -739,7 +739,7 @@ export class SignalPostProcessor {
    *
    * Signals absent from the block keep whatever chain they had (which
    * is the DEFAULT_CHAIN after construction). Saves the operator from
-   * having to write all 7 signals out every time they tweak one.
+   * having to write every signal out every time they tweak one.
    */
   loadChains(yamlChainsBlock) {
     if (yamlChainsBlock == null) return;
@@ -905,9 +905,10 @@ export class SignalPostProcessor {
     const runtime = this._runtime[signalKey];
     const recordPreview = this._editorSubscribed;
 
-    // Defensive clamp at the entry — even though the contract says raw
-    // arrives in [0,1], a misbehaving upstream shouldn't poison the
-    // chain state with NaN/Infinity.
+    // Defensive NaN/Infinity guard at the entry — even though the contract
+    // says raw arrives in the signal's domain ([0,1] in intensity mode, Hz in
+    // frequency mode), a misbehaving upstream shouldn't poison the chain state
+    // with NaN/Infinity. (This only rejects non-finite; it does not clamp.)
     let val = isFiniteNumber(rawValue) ? rawValue : 0;
     for (const op of chain) {
       if (!op.enabled) {

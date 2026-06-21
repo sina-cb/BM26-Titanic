@@ -9,9 +9,9 @@
  * OBSERVE-AND-PUBLISH ONLY. This module watches the music (via the
  * ParamCenter live keys the analyzer + OSC stems publish), runs a small
  * 3-state machine (THIN → BUILD → SUSTAIN), and:
- *   - publishes five live keys back to CPC
+ *   - publishes six live keys back to CPC
  *     (audioStructure / audioBuildScore / audioEnergyRatio /
- *      audioVocalsHot / audioDropPulse), and
+ *      audioVocalsHot / audioDropPulse / audioSlowZone), and
  *   - emits a sparse `dropFired` WS event on the broadcast hook the
  *     instant a drop lands.
  * It NEVER triggers an irreversible action — no deck swaps, blackouts,
@@ -218,7 +218,12 @@ const BUILD_GAIN    = 4.0;   // maps per-hop flux into the build-score EMA
 
 // Kalman+NIS drop detector (adopted from the offline corpus experiment —
 // local-level model, χ² 99% AND-gate on micLow ∧ micFlux, with a warmup).
-const KALMAN_Q       = 0.01;   // process noise (level random-walk) — tuned winner
+// Unreached default for `_kalmanNis`'s Q param: the live edge ALWAYS passes
+// `cfg.dropKalmanQ` (default 0.001, see DETECTOR_DEFAULTS), so this 0.01 only
+// applies if `_kalmanNis` is ever called without a Q. NOTE: 0.01 is the value
+// that FLOORED NIS / under-fired (see dropKalmanQ comment) — it is NOT the
+// shipped tuning, despite this constant's name.
+const KALMAN_Q       = 0.01;   // process noise (level random-walk)
 const KALMAN_R_FLOOR = 1e-6;   // measurement-noise floor (just keeps NIS finite on flat
                                // input; must stay BELOW the envelope-smoothed low band's
                                // real noise ~5e-5, else it crushes the sub's NIS — the
@@ -333,7 +338,7 @@ export class AudioStructureDetector {
 
   /**
    * Hard reset — state machine to THIN, all envelopes + trend trackers
-   * zeroed, five live keys zeroed, drop bookkeeping cleared. Called on
+   * zeroed, six live keys zeroed, drop bookkeeping cleared. Called on
    * construction and whenever the detector is disabled (no half-state).
    */
   reset() {
@@ -533,8 +538,9 @@ export class AudioStructureDetector {
     // 2b. Kalman+NIS drop edge + slow-zone signal.
     //   Each of micLow / micFlux is tracked by a local-level Kalman filter;
     //   the Normalized Innovation Squared (NIS = innovation² / S) spikes when
-    //   the signal steps. A drop = BOTH NIS clear the χ² gate on the same hop
-    //   AND both innovations are RISING (a drop slams energy UP — a breakdown
+    //   the signal steps. A drop = BOTH NIS clear the χ² gate within
+    //   dropCoWindowMs (see below) AND both innovations are RISING (a drop slams
+    //   energy UP — a breakdown
     //   ENTRANCE steps down and must not qualify). Self-normalising, so unlike
     //   buildScore it can't saturate; the AND-gate kills most false fires.
     const kLow  = this._kalmanNis(this._kfLow,  micLow,     dt, cfg.dropKalmanQ);
@@ -588,9 +594,15 @@ export class AudioStructureDetector {
     // 3. Stems booleans (only meaningful when fresh).
     let stemsBass = 0, stemsDrums = 0, stemsVocals = 0;
     if (stemsFresh) {
-      stemsBass   = this.paramCenter.get('stemsBassRaw');
-      stemsDrums  = this.paramCenter.get('stemsDrumsRaw');
-      stemsVocals = this.paramCenter.get('stemsVocalsRaw');
+      // Finite guard, same fail-loud-but-isolated contract as micLow/micFlux
+      // above: a non-finite stem value must not silently make the stems
+      // booleans false (NaN comparisons are false) — warn once, treat as 0.
+      const sB = this.paramCenter.get('stemsBassRaw');
+      const sD = this.paramCenter.get('stemsDrumsRaw');
+      const sV = this.paramCenter.get('stemsVocalsRaw');
+      stemsBass   = Number.isFinite(sB) ? sB : (this._warnNonFinite('stemsBassRaw', sB), 0);
+      stemsDrums  = Number.isFinite(sD) ? sD : (this._warnNonFinite('stemsDrumsRaw', sD), 0);
+      stemsVocals = Number.isFinite(sV) ? sV : (this._warnNonFinite('stemsVocalsRaw', sV), 0);
     }
     const stemsFull = stemsFresh && stemsBass > 0.4 && stemsDrums > 0.4;
     const stemsThin = stemsFresh && stemsBass < 0.15 && stemsDrums < 0.15;
@@ -838,7 +850,7 @@ export class AudioStructureDetector {
     this._lastEnergyRatio = energyRatio;
 
     // 7. Publish — single setMany so the onChange fan-out (which
-    //    deep-copies the CPC store) fires ONCE per hop for all five keys,
+    //    deep-copies the CPC store) fires ONCE per hop for all six keys,
     //    matching the mic path's batching right beside us in engine.js.
     this.paramCenter.setMany([
       { kind: 'scalar', key: 'audioStructure',   value: this._state },
@@ -994,7 +1006,7 @@ export class AudioStructureDetector {
     this._tickP99Ms = sorted[idx];
   }
 
-  /** @private zero all five live keys (disable / reset / boot). */
+  /** @private zero all six live keys (disable / reset / boot). */
   _zeroLiveKeys() {
     if (this._fatal) return;
     try {

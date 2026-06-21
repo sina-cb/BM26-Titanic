@@ -2,7 +2,7 @@
  * DominantFreqTracker — tracks the N most dominant frequencies in a
  * magnitude spectrum across hops, emitting per-track {freqHz, energy}.
  *
- * Drop-in reference for marsin_engine/audio/analyzer/audio_analyzer.js.
+ * Used by marsin_engine/audio/analyzer/audio_analyzer.js.
  * It consumes the SAME positive-frequency magnitude array the analyzer
  * already computes (length fftSize/2, mag[k] = hypot(re,im)), so it adds
  * zero extra FFT cost. Pure: depends only on Math. No per-hop heap
@@ -18,9 +18,9 @@
  *      at the shipped fftSize=2048 one bin is ~21.5 Hz, and the interpolation +
  *      cluster centroid take the residual error to <1 Hz on pure bass roots.
  *      (All tuning here is in Hz / per-hop, so the tracker is fftSize-agnostic.)
- *   3. Main-lobe energy: integrate magnitude over +-mainLobeBins around
- *      the peak bin so the reported energy is the partial's lobe, not a
- *      single bin (a Hann lobe is ~4 bins wide).
+ *   3. Lobe energy: integrate magnitude over a dynamic, frequency-
+ *      proportional (constant-Q-ish) window around the peak bin so the
+ *      reported energy is the partial's lobe, not a single bin.
  *   4. Track association: greedy nearest-frequency match of this hop's
  *      peaks to existing tracks within `maxJumpHz`. Unmatched strong
  *      peaks BIRTH a new track (replacing the weakest/dead track if all
@@ -86,7 +86,6 @@ export class DominantFreqTracker {
    * @param {number} opts.fftSize        — FFT length the mag array came from
    * @param {number} [opts.numTracks=2]  — how many partials to report
    * @param {number} [opts.numPeaks]     — candidate peaks picked per hop
-   * @param {number} [opts.mainLobeBins] — half-width of lobe energy window
    * @param {number} [opts.relFloor]     — peak floor as fraction of hop max
    * @param {number} [opts.absFloor]     — absolute mag floor (post /fftSize style off; raw mag)
    * @param {number} [opts.maxJumpHz]    — association gate
@@ -125,7 +124,6 @@ export class DominantFreqTracker {
 
     this.numTracks    = opts.numTracks    ?? 2;
     this.numPeaks     = opts.numPeaks     ?? 6;
-    this.mainLobeBins = opts.mainLobeBins ?? 2;       // (legacy; energy now uses a dynamic window)
     // Dynamic energy window — frequency-proportional band summed around the
     // peak (constant-Q-ish), so dom energy tracks the partial's loudness.
     this.energyWindowFrac  = opts.energyWindowFrac  ?? 0.12;  // ±12% of the freq …

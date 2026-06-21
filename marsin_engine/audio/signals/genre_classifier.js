@@ -125,8 +125,9 @@ const N_FEAT = 15;
 // Profiles below ARE the measured centroids; one shared weight vector encodes
 // the measured separability (see GENRE_WEIGHTS).
 //
-// Feature order: [bpm,kickReg,kickDens,lowMid,sparkle,sparkleVar,melodic,flux,
-//                 bassW,midW,tilt,fluxVar]
+// Feature order (15): [bpm,kickReg,kickDens,lowMid,sparkle,sparkleVar,melodic,
+//                 flux,bassW,midW,tilt,fluxVar, tonalStab,chromaFlux,chromaTilt]
+//                 (the last 3 are the v3 chroma axes appended below).
 // Weights from an in-engine corpus search (faithful replay of the smoothing +
 // hysteresis + tail-vote decision over the 36 scored tracks at fft 2048). The
 // search zeroed BPM (noisy/octave-doubled), kickDens (saturated), and
@@ -400,10 +401,13 @@ export class GenreClassifier {
   _updateChroma(tonalStability, chromaFlux, chromaTilt, dt) {
     const a = 1 - Math.exp(-dt / this.p.featTau);
     // Coerce missing/non-finite to 0 — the analyzer always supplies finite
-    // [0,1] values; this only guards a unit harness that omits them.
-    const ts = tonalStability >= 0 ? tonalStability : 0;
-    const cf = chromaFlux >= 0 ? chromaFlux : 0;
-    const ct = chromaTilt >= 0 ? chromaTilt : 0;
+    // [0,1] values; this only guards a unit harness that omits them. Use
+    // Number.isFinite so +Infinity is also rejected (a plain `>= 0` let it
+    // through, contradicting the "non-finite → 0" contract); the features are
+    // clamp01'd downstream so genre output is unchanged for valid input.
+    const ts = Number.isFinite(tonalStability) ? tonalStability : 0;
+    const cf = Number.isFinite(chromaFlux) ? chromaFlux : 0;
+    const ct = Number.isFinite(chromaTilt) ? chromaTilt : 0;
     this._emaTonalStab  += a * (ts - this._emaTonalStab);
     this._emaChromaFlux += a * (cf - this._emaChromaFlux);
     this._emaChromaTilt += a * (ct - this._emaChromaTilt);

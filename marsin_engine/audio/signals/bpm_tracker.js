@@ -1,12 +1,12 @@
 /**
- * bpm_tracker_v2_ref.js — STABLE realtime BPM tracker for Burning Man EDM.
+ * bpm_tracker.js — STABLE realtime BPM tracker for Burning Man EDM.
  *
- * Drop-in replacement for bpm_tracker.js: same constructor shape and
- * `update(flux, kick, dt)` signature. Returns:
+ * Constructor shape + `update(flux, kick, dt)` signature. Returns:
  *   { bpm, beat, beatEdge, confidence, locked, barPhase, beatInBar, downbeat }
  *
- * ── Why v2 ────────────────────────────────────────────────────────────────
- * v1 was accurate ~90% of the time but "moved too fast": its raw
+ * ── Why this design ("v2") ─────────────────────────────────────────────────
+ * The original v1 tracker was accurate ~90% of the time but "moved too fast":
+ * its raw
  * autocorrelation measurement is bimodal/noisy (e.g. flips 132↔178↔116 on a
  * real 132-BPM track, or 87↔173 on a half/double-time track). v1's Kalman
  * filter simply *chased the running average* of that noisy stream, so the
@@ -238,10 +238,26 @@ export class BpmTracker {
     this.downbeat = false;
 
     this._lastConf = 0;
-    this._dbgRawMeas = 0;
   }
 
+  /**
+   * Advance the tracker one hop.
+   * @param {number} flux  spectral-flux onset strength this hop, [0,1]
+   * @param {number} kick  kick-band onset strength this hop, [0,1]
+   * @param {number} dt    seconds since the previous hop
+   * @returns {{bpm:number, beat:number, beatEdge:boolean, confidence:number,
+   *            locked:boolean, barPhase:number, beatInBar:number, downbeat:boolean}}
+   */
   update(flux, kick, dt) {
+    // Fail loud on non-finite input (codex P0): a NaN/Inf flux/kick/dt would
+    // silently poison the whitening EMA, the autocorrelation ring, and the
+    // Kalman state for the rest of the session. The caller (DerivedSignals)
+    // already finite-guards its CPC reads, so a non-finite here is a real
+    // upstream contract violation — surface it, don't swallow it.
+    if (!Number.isFinite(flux) || !Number.isFinite(kick) || !Number.isFinite(dt)) {
+      throw new TypeError(
+        `BpmTracker.update: non-finite input (flux=${flux}, kick=${kick}, dt=${dt})`);
+    }
     const p = this.p;
     this._hopCount++;
 
@@ -356,7 +372,6 @@ export class BpmTracker {
     const absStrength = Math.min(1, Math.max(0, bestScore));
     const conf = Math.min(1, p.confPeakW * peakRatio + (1 - p.confPeakW) * absStrength);
 
-    this._dbgRawMeas = measBpm;
     this._applyMeasurement(measBpm, conf);
   }
 
@@ -584,7 +599,7 @@ export class BpmTracker {
    * the autocorrelation chose — the perceptual preference is NOT used here
    * (it is already baked into `_chooseTempoOctave`), which is what lets a
    * genuinely slow ~70-90 BPM track recover from a double even though the faster
-   * octave is nearer the 115-BPM perceptual centre.
+   * octave is nearer the 128-BPM perceptual centre.
    */
   _accumulateOctaveMigration(measBpm, conf) {
     const p = this.p;

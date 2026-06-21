@@ -2,12 +2,13 @@
  * AudioAnalyzer — FFT, band energy + kick detection. PURE DATA SOURCE.
  *
  * Reads Int16 PCM frames via `pushSamples(int16)` and emits per-hop
- * analysis results to `onAnalysis({ low, mid, high, kick, flux })` —
+ * analysis results to `onAnalysis({ low, mid, high, kick, flux, … })` —
  * RAW post-envelope band values in [0, 1] plus half-wave-rectified
- * spectral flux (`flux`). No per-band gain, no chain
+ * spectral flux (`flux`), plus the additive dom-freq / onset / sub /
+ * chroma fields (see the constructor JSDoc). No per-band gain, no chain
  * processing here. The engine wraps each value through the per-signal
- * post-processing chain (`lib/signal_post_processor.js`, docs/29) in
- * its `onAnalysis` callback before writing to CPC.
+ * post-processing chain (`audio/postproc/signal_post_processor.js`, docs/29)
+ * in its `onAnalysis` callback before writing to CPC.
  *
  * Architectural rationale (operator brief, 2026-05-26 + docs/29):
  *   - The analyzer is the canonical "raw mic" source. Per-band gain,
@@ -106,6 +107,10 @@ const DOM_FREQ_PARAMS = Object.freeze({
 // see on the meter.
 const PRE_CLAMP_GAIN = 8.0;
 
+// Hops used to seed the kick EMA before it can fire, so a single loud first
+// frame doesn't trigger a phantom kick before "normal" has any context.
+const KICK_WARMUP_HOPS = 50;
+
 // ── CHROMA band (harmonic/timbre feature, report 20260620_30) ───────────────
 // Fundamental-pitch window for the 12-bin pitch-class chroma. Lower bound above
 // the kick/sub-bass thump (octave-ambiguous, would saturate one class); upper
@@ -152,12 +157,17 @@ export class AudioAnalyzer {
    *        (~30–60 Hz, distinct from the kick window). Optional: absent → the
    *        sub-band outputs are emitted as 0 (the feature is off, NOT a silent
    *        fallback for the existing bands). Present → validated like kick.
-   * @param {(r: {low, mid, high, kick, flux}) => void} opts.onAnalysis
+   * @param {(r: object) => void} opts.onAnalysis
    *        Each callback receives the RAW post-envelope band values
-   *        in [0, 1], plus `flux` (half-wave-rectified spectral flux,
-   *        same scale). The engine wraps the bands/kick through the
-   *        per-signal post-processing chain (lib/signal_post_processor.js)
-   *        before writing them to CPC.
+   *        `{ low, mid, high, kick, flux }` in [0, 1] (flux =
+   *        half-wave-rectified spectral flux, same scale), PLUS the additive
+   *        fields the analyzer also emits each hop: dominant-frequency tracks
+   *        (`domFreq1/2`, `domEnergy1/2`, `domLo1/Hi1`, `domLo2/Hi2`), per-band
+   *        onsets (`onsetLow/Mid/High`), the sub-bass `micSub`, and the chroma
+   *        scalars (`tonalStability`, `chromaFlux`, `chromaTilt`). See the emit
+   *        block in `_process()` for the authoritative shape. The engine wraps
+   *        the bands/kick through the per-signal post-processing chain
+   *        (audio/postproc/signal_post_processor.js) before writing them to CPC.
    * @param {() => number} [opts.nowFn] — DI hook for tests (default: Date.now)
    */
   constructor(opts) {
@@ -345,14 +355,18 @@ export class AudioAnalyzer {
         `kick band invalid: require 0 < minHz (${kMin}) < maxHz (${kMax}) <= nyquist (${nyquist})`,
       );
     }
-    if (!(next.kick.threshold > 1)) {
-      throw new RangeError(`kick.threshold must be > 1; got ${next.kick.threshold}`);
+    // Finite bounds (codex P0 fail-loud): Infinity passes a bare `> 1` / `>= 0`
+    // guard and then silently breaks the detector (decayMs=Infinity → the kick
+    // never decays). The PATCH validator already rejects non-finite, this is the
+    // analyzer's defensive re-check on the boot path.
+    if (!(Number.isFinite(next.kick.threshold) && next.kick.threshold > 1)) {
+      throw new RangeError(`kick.threshold must be a finite number > 1; got ${next.kick.threshold}`);
     }
-    if (!(next.kick.refractoryMs >= 0)) {
-      throw new RangeError(`kick.refractoryMs must be >= 0`);
+    if (!(Number.isFinite(next.kick.refractoryMs) && next.kick.refractoryMs >= 0)) {
+      throw new RangeError(`kick.refractoryMs must be a finite number >= 0; got ${next.kick.refractoryMs}`);
     }
-    if (!(next.kick.decayMs > 0)) {
-      throw new RangeError(`kick.decayMs must be > 0`);
+    if (!(Number.isFinite(next.kick.decayMs) && next.kick.decayMs > 0)) {
+      throw new RangeError(`kick.decayMs must be a finite number > 0; got ${next.kick.decayMs}`);
     }
 
     // Sub-bass "chest hit" window (~30–60 Hz), distinct from the kick window.
@@ -738,7 +752,7 @@ export class AudioAnalyzer {
       // Seed EMA with the running mean of the first warmup hops.
       this._kickEmaWarmupSum += kickLin;
       this._kickEmaWarmupHops++;
-      if (this._kickEmaWarmupHops >= 50) {
+      if (this._kickEmaWarmupHops >= KICK_WARMUP_HOPS) {
         const seed = this._kickEmaWarmupSum / this._kickEmaWarmupHops;
         this._kickEma = seed;
         this._kickEmaTrail = seed;
@@ -763,15 +777,6 @@ export class AudioAnalyzer {
       if (this._kickValue < 1e-3) this._kickValue = 0;
     }
 
-    // RAW (pre-gain) values: same envelope / compression / noise-gate
-    // path as the post-gain values, just BEFORE the operator gain is
-    // applied. Emitted alongside the gained values so engine.js can
-    // publish them to `*Raw` CPC mirrors (see param_center.js). Lets
-    // CaptainPad SIGNAL DIAGNOSTICS show raw vs post side-by-side; we
-    // can't derive raw client-side from `post / gain` because that
-    // can't recover clipped post=1.0 cases. Operator brief 2026-05-26
-    // "show raw + post" + scope clarification "RAW = pre-gain,
-    // pre-post-processing analyzer output".
     // Emit RAW post-envelope band values. The engine's onAnalysis
     // callback runs each through `signalPostProcessor.process()` before
     // writing to CPC (the chain is the new single source of truth for

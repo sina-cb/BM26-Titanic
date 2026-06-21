@@ -117,3 +117,14 @@ test('the histogram fold boundary (80, just above histFoldLo) is preserved', () 
   assert.ok(Math.abs(meas - 80) / 80 <= 0.05,
     `expected ~80 BPM at the fold boundary, got ${meas.toFixed(1)}`);
 });
+
+test('update() FAILS LOUD on non-finite flux/kick/dt (codex P0, no silent poison)', () => {
+  // A NaN/Inf input must throw, not silently corrupt the whitening EMA /
+  // autocorrelation ring / Kalman for the rest of the session.
+  const tracker = new BpmTracker();
+  assert.throws(() => tracker.update(NaN, 0, 0.01), /non-finite/);
+  assert.throws(() => tracker.update(0, Infinity, 0.01), /non-finite/);
+  assert.throws(() => tracker.update(0, 0, NaN), /non-finite/);
+  // A finite hop still works after the guard rejects bad input.
+  assert.doesNotThrow(() => tracker.update(0.2, 0.1, 0.01));
+});
