@@ -100,6 +100,14 @@ const TOPIC_BY_TYPE = Object.freeze({
   // look. Operator-driven, low volume → /ws/control next to mixer/deck.
   snapshots:                   TOPICS.CONTROL,
   paramRejected:               TOPICS.CONTROL,
+  // round-2 #5 FLASH/BUMP (docs/39 §10.7): the engine pushes back a typed
+  // rejection on a bad bump/unbump id (bad/non-mixer/deck channel), mirroring
+  // soloRejected. Today it's sent point-to-point via ws.send (no fan-out
+  // needed for a per-client reject), but it's registered here so the type is
+  // documented on the wire and routes to /ws/control if ever broadcast. Bump
+  // STATE itself rides the existing `mixer` broadcast's bumpedChannelIds[] —
+  // no separate broadcast type (same as solo's soloedChannelIds[]).
+  bumpRejected:                TOPICS.CONTROL,
   audioStatus:                 TOPICS.CONTROL,
   oscStats:                    TOPICS.CONTROL,
   stats:                       TOPICS.CONTROL,

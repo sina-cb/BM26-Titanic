@@ -2057,6 +2057,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         id: g.id, name: g.name, fader: g.fader, muted: g.muted, color: g.color,
       })),
       soloedChannelIds: [...mixer.soloedChannelIds],
+      // FLASH / BUMP (round-2 #5, docs/39 §10.7): the transient momentary-full
+      // set. ARRAY snapshot of the Set — the client reconciles its "held" button
+      // display from this on every broadcast. NOT persisted (transient, like
+      // solo); empty after a restart.
+      bumpedChannelIds: [...mixer._bumpedChannelIds],
     };
   }
 
@@ -2272,6 +2277,93 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   function controlLockLeaseRemainingMs() {
     if (controlLockLeaseExpiresAtMs === null) return 0;
     return Math.max(0, controlLockLeaseExpiresAtMs - Date.now());
+  }
+
+  // ── FLASH / BUMP release-on-disconnect lease (round-2 #5, docs/39 §10.7) ──
+  //
+  // A held bump pins a channel to FULL. If the iPad that's holding the bump
+  // drops off (walks out of wifi range, app force-quit, link dies), the
+  // channel must NOT stay pinned full forever. Two independent safety nets,
+  // both belt-and-braces:
+  //
+  //   1. LEASE: every `bump` (REST or WS) stamps `bumpLeaseExpiry[channelId]`
+  //      = now + BUMP_LEASE_MS. The client RENEWS by re-sending the bump
+  //      while the button is held (CaptainPad re-sends every BUMP_RENEW_MS).
+  //      A periodic sweep (BUMP_SWEEP_MS) auto-releases any bump whose lease
+  //      has lapsed. So a dropped client's bump self-heals within ~one lease.
+  //   2. WS-CLOSE: each /ws/control socket tracks the channels IT bumped
+  //      (`ws._bumpedByThisWs`). On close we release exactly those — instant
+  //      cleanup for the common "tab closed / reconnect" case, without
+  //      waiting out the lease. (REST bumps have no socket to close, so they
+  //      rely solely on the lease — that's why the lease exists at all.)
+  //
+  // The lease window is short (2 s) so a stuck channel recovers fast; the
+  // renew cadence (~700 ms) is comfortably inside it so a healthy hold never
+  // flickers. unbump (release) clears the lease entry immediately.
+  const BUMP_LEASE_MS = 2_000;
+  const bumpLeaseExpiry = new Map(); // channelId -> expiry ms (Date.now()-based)
+  let bumpSweepTimer = null;
+  const BUMP_SWEEP_MS = 500;
+
+  function touchBumpLease(channelId) {
+    bumpLeaseExpiry.set(channelId, Date.now() + BUMP_LEASE_MS);
+  }
+  function clearBumpLease(channelId) {
+    bumpLeaseExpiry.delete(channelId);
+  }
+
+  // Periodic sweep: release any bump whose lease has lapsed (dropped client).
+  // Runs only while at least one bump is held — the timer is armed on the
+  // first bump and disarmed when the set empties, so an idle engine pays zero.
+  function sweepExpiredBumps() {
+    const now = Date.now();
+    let releasedAny = false;
+    for (const id of [...mixer._bumpedChannelIds]) {
+      const exp = bumpLeaseExpiry.get(id);
+      if (exp === undefined || exp <= now) {
+        const r = mixer.unbumpChannel(id);
+        if (r.ok && r.changed) releasedAny = true;
+        bumpLeaseExpiry.delete(id);
+        console.log(`[bump] lease expired — auto-released '${id}'`);
+      }
+    }
+    if (releasedAny) {
+      saveAllState();
+      broadcastMixerState();
+    }
+    if (mixer._bumpedChannelIds.size === 0) {
+      disarmBumpSweep();
+    }
+  }
+  function armBumpSweep() {
+    if (bumpSweepTimer !== null) return;
+    bumpSweepTimer = setInterval(sweepExpiredBumps, BUMP_SWEEP_MS);
+    // Don't keep the event loop alive solely for the bump sweep.
+    if (typeof bumpSweepTimer.unref === 'function') bumpSweepTimer.unref();
+  }
+  function disarmBumpSweep() {
+    if (bumpSweepTimer !== null) {
+      clearInterval(bumpSweepTimer);
+      bumpSweepTimer = null;
+    }
+  }
+
+  // Apply a bump (on=true) / release (on=false) with full validation + lease
+  // bookkeeping. Returns the mixer result ({ ok, changed } | { ok:false,
+  // status, error }). The caller broadcasts/saves on ok. Shared by REST + WS.
+  function applyBump(channelId, on) {
+    if (on) {
+      const r = mixer.bumpChannel(channelId);
+      if (r.ok) { touchBumpLease(channelId); armBumpSweep(); }
+      return r;
+    }
+    const r = mixer.unbumpChannel(channelId);
+    if (r.ok) {
+      if (channelId === null || channelId === undefined) bumpLeaseExpiry.clear();
+      else clearBumpLease(channelId);
+      if (mixer._bumpedChannelIds.size === 0) disarmBumpSweep();
+    }
+    return r;
   }
 
   function broadcastViewOverride() {
@@ -3603,6 +3695,31 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       });
     }
     // ── CHANNEL OPS #6 — DUPLICATE ───────────────────────────────────────
+    // POST /mixer/channels/:id/bump { on: true|false }. FLASH / BUMP (round-2
+    // #5, docs/39 §10.7): momentary full-while-held accent. on:true bumps the
+    // channel to FULL (capped by faderMax); on:false releases it to its parked
+    // level. The REST mirror of the WS bump/unbump (low-latency path is WS).
+    // Armed BEFORE the `^/mixer/channels/[^/]+$` PATCH/DELETE regexes so the
+    // literal `/bump` segment isn't swallowed as a channel id. Each `on:true`
+    // RENEWS the disconnect-safety lease (see applyBump / sweepExpiredBumps).
+    else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/bump$/)) {
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      // Decks never bump via /mixer routes (deck is PFL, never in the composite).
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      readBody(data => {
+        if (typeof data.on !== 'boolean') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'on (boolean) required' }));
+        }
+        const r = applyBump(id, data.on);
+        if (!r.ok) { res.writeHead(r.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: r.error })); }
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200);
+        res.end(JSON.stringify({ status: 'ok', bumpedChannelIds: [...mixer._bumpedChannelIds] }));
+      });
+    }
     // POST /mixer/channels/:id/duplicate. Deep-copies a mixer overlay into a
     // NEW overlay landing on TOP of the stack. MUST be armed BEFORE the
     // `^/mixer/channels/[^/]+$` PATCH/DELETE regexes so the literal
@@ -5731,6 +5848,39 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
           saveAllState();
           broadcastMixerState();
+        } else if (d.type === 'bump' && d.channelId) {
+          // FLASH / BUMP over WS (low-latency mirror of POST
+          // /mixer/channels/:id/bump {on:true}). Same dual-path as setSolo.
+          // Each `bump` RENEWS the disconnect lease, so a held button that
+          // re-sends every BUMP_RENEW_MS keeps the channel pinned; stop
+          // re-sending (or drop off wifi) and the sweep auto-releases. We
+          // ALSO track which channels THIS socket bumped so ws-close releases
+          // them instantly (belt-and-braces beside the lease). A bad / non-
+          // mixer id is pushed back as a typed rejection.
+          const r = applyBump(d.channelId, true);
+          if (!r.ok) {
+            ws.send(JSON.stringify({ type: 'bumpRejected', channelId: d.channelId, reason: r.error }));
+            return;
+          }
+          if (!ws._bumpedByThisWs) ws._bumpedByThisWs = new Set();
+          ws._bumpedByThisWs.add(d.channelId);
+          // Broadcast only when the set actually changed — a renew (already
+          // bumped) is a no-op for every other client, so skip the fan-out
+          // to keep the hold-renew cadence off the wire.
+          if (r.changed) { saveAllState(); broadcastMixerState(); }
+        } else if (d.type === 'unbump') {
+          // Release one channel's bump (d.channelId present) or ALL (absent).
+          const r = applyBump(d.channelId !== undefined ? d.channelId : null, false);
+          if (!r.ok) {
+            ws.send(JSON.stringify({ type: 'bumpRejected', channelId: d.channelId, reason: r.error }));
+            return;
+          }
+          if (ws._bumpedByThisWs) {
+            if (d.channelId !== undefined) ws._bumpedByThisWs.delete(d.channelId);
+            else ws._bumpedByThisWs.clear();
+          }
+          saveAllState();
+          broadcastMixerState();
         } else if (d.type === 'setSharedParam') {
           if (!paramCenter) return;
           const res = paramCenter.set(d.key, d.value, 'ws', d.origin);
@@ -5752,6 +5902,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
         }
       } catch(e) {}
+    });
+
+    // FLASH / BUMP release-on-disconnect (docs/39 §10.7): when this /ws/control
+    // socket closes (tab closed, app backgrounded long enough to drop the
+    // socket, wifi dropout the OS noticed), release every bump THIS socket was
+    // holding — instant cleanup so a channel can't stay pinned full. The lease
+    // sweep is the backstop for the case where close never fires (hard link
+    // loss); this is the fast path for clean disconnects.
+    ws.on('close', () => {
+      if (!ws._bumpedByThisWs || ws._bumpedByThisWs.size === 0) return;
+      let releasedAny = false;
+      for (const id of ws._bumpedByThisWs) {
+        const r = applyBump(id, false);
+        if (r.ok && r.changed) releasedAny = true;
+      }
+      ws._bumpedByThisWs.clear();
+      if (releasedAny) {
+        saveAllState();
+        broadcastMixerState();
+        console.log('[bump] /ws/control closed — released held bumps');
+      }
     });
   });
 

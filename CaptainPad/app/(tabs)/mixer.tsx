@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { Palette } from '@/constants/theme';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, TextInput, Modal, useWindowDimensions, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, Pressable, ScrollView, StyleSheet, TextInput, Modal, useWindowDimensions, Alert } from 'react-native';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { usePalette } from '@/hooks/use-theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
@@ -34,6 +34,7 @@ import {
   type MixGroup,
   postSolo, deleteSolo, clearAllSolo, setChannelSoloSafe,
 } from '@/utils/groupsSoloApi';
+import { postBump } from '@/utils/bumpApi';
 import { GroupRail } from '@/components/GroupRail';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
@@ -213,7 +214,7 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -662,6 +663,27 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           accessibilityState={{ selected: !!isSolo }}>
           <Text style={[styles.labelCaps, isSolo && { color: '#FFF' }]}>{isSolo ? 'Solo ✓' : 'Solo'}</Text>
         </TouchableOpacity>
+        {/* FLASH / BUMP (docs/39 §10.7) — momentary "full while held" accent.
+            HOLD the button → this channel slams to full output (capped by
+            faderMax); RELEASE → snaps back to its parked level. Server-
+            authoritative: onPressIn sends the WS bump (+ REST mirror + a hold-
+            renew heartbeat so a dropped iPad can't pin it full); onPressOut
+            releases. `isBumped` (held display) reconciles from the broadcast's
+            bumpedChannelIds[]. A muted channel won't bump (engine enforces).
+            44pt+ touch target via the 32pt button + 8pt hitSlop. Held state is
+            not color-only: the ✓ glyph + accessibilityState carry it. */}
+        {onBumpOn && (
+          <Pressable
+            style={[styles.toggleBtn, isBumped && styles.toggleBtnBump]}
+            onPressIn={() => onBumpOn(channel.id)}
+            onPressOut={() => onBumpOff(channel.id)}
+            hitSlop={ICON_BTN_HIT_SLOP}
+            accessibilityRole="button"
+            accessibilityLabel={isBumped ? 'Bump held' : 'Bump (hold for full)'}
+            accessibilityState={{ selected: !!isBumped }}>
+            <Text style={[styles.labelCaps, isBumped && { color: '#1a1a1a' }]}>{isBumped ? 'Bump ✓' : 'Bump'}</Text>
+          </Pressable>
+        )}
         {/* SOLO-SAFE (docs/39 §10) — rig-config flag: protects this channel
             from being gated off by ANOTHER channel's solo (mission-critical
             exterior). When a solo is active the protected strip shows a teal
@@ -807,7 +829,11 @@ export default function MixerScreen() {
   const isPortrait = width < height;
   const [channels, setChannels] = useState<any[]>([]);
   const channelsRef = useRef<any[]>([]);
-  
+  // FLASH / BUMP renew timers (docs/39 §10.7) — per held channel. While a BUMP
+  // button is held we re-send the WS `bump` every BUMP_RENEW_MS so the engine's
+  // ~2 s disconnect lease never lapses under our finger; pressOut clears it.
+  const bumpRenewTimersRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
+
   // Sync channels to ref
   useEffect(() => { channelsRef.current = channels; }, [channels]);
 
@@ -819,6 +845,11 @@ export default function MixerScreen() {
   // channel `mixGroupId`/`soloSafe` ride on the channel objects themselves.
   const [mixGroups, setMixGroups] = useState<MixGroup[]>([]);
   const [soloedIds, setSoloedIds] = useState<Set<string>>(new Set());
+  // FLASH / BUMP (round-2 #5, docs/39 §10.7) — momentary "full while held".
+  // Reconciled DISPLAY-ONLY from the `mixer` broadcast's `bumpedChannelIds[]`
+  // (the engine's transient Set is the authority). A Set<string> for O(1)
+  // per-strip "held" lookup.
+  const [bumpedIds, setBumpedIds] = useState<Set<string>>(new Set());
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   // Active model name (GET /status → activeModel), from the shared
   // engine-state cache. Null until the first /status probe lands /
@@ -951,6 +982,13 @@ export default function MixerScreen() {
         if (Array.isArray(msg.mixGroups)) setMixGroups(msg.mixGroups as MixGroup[]);
         if (Array.isArray(msg.soloedChannelIds)) {
           setSoloedIds(new Set(msg.soloedChannelIds as string[]));
+        }
+        // FLASH / BUMP (docs/39 §10.7) — reconcile the "held" display from the
+        // authoritative broadcast. The engine auto-releases a bump on the
+        // holder's disconnect (lease / ws-close), so this also catches another
+        // operator's release + our own lease lapse.
+        if (Array.isArray(msg.bumpedChannelIds)) {
+          setBumpedIds(new Set(msg.bumpedChannelIds as string[]));
         }
         if (msg.baseChannelId) baseChannelIdRef.current = msg.baseChannelId as string;
         if (typeof msg.maxChannels === 'number') maxChannelsRef.current = msg.maxChannels;
@@ -1108,6 +1146,12 @@ export default function MixerScreen() {
       if (Array.isArray((mRes.data as any).mixGroups)) setMixGroups((mRes.data as any).mixGroups as MixGroup[]);
       if (Array.isArray((mRes.data as any).soloedChannelIds)) {
         setSoloedIds(new Set((mRes.data as any).soloedChannelIds as string[]));
+      }
+      // FLASH / BUMP seed (docs/39 §10.7). GET /mixer carries bumpedChannelIds[]
+      // (transient — usually empty on a fresh connect, but seed it anyway so a
+      // bump held by ANOTHER operator shows as held on this iPad immediately).
+      if (Array.isArray((mRes.data as any).bumpedChannelIds)) {
+        setBumpedIds(new Set((mRes.data as any).bumpedChannelIds as string[]));
       }
       if (mRes.data.baseChannelId) baseChannelIdRef.current = mRes.data.baseChannelId;
       if (typeof mRes.data.maxChannels === 'number') maxChannelsRef.current = mRes.data.maxChannels;
@@ -1269,6 +1313,78 @@ export default function MixerScreen() {
       setChannels(chs => chs.map(c => c.id === channelId ? { ...c, soloSafe: prev } : c));
       Alert.alert('Solo-safe not applied', `The engine rejected this change. ${res.error || ''}`.trim());
     }
+  }, []);
+
+  // FLASH / BUMP (round-2 #5, docs/39 §10.7) — SERVER-AUTHORITATIVE momentary
+  // "full while held". The engine's `_bumpedChannelIds` Set is the SOLE truth;
+  // the strip "held" state is DISPLAY-ONLY, reconciled from the broadcast's
+  // `bumpedChannelIds[]`. pressIn → bump on; pressOut → bump off.
+  //
+  //   - WS `{ type:'bump'|'unbump', channelId }` is the low-latency path (same
+  //     dual-path as solo/mute). On press we also fire a REST mirror for
+  //     durability + as the lease seed.
+  //   - HOLD RENEW: the engine auto-releases a bump if its ~2 s lease lapses
+  //     (so a dropped iPad can't pin a channel full forever). We keep a held
+  //     bump alive by re-sending the WS `bump` every BUMP_RENEW_MS — well
+  //     inside the lease window — until pressOut.
+  //   - Optimistic local flip for instant button feedback; the broadcast
+  //     reconciles the truth. We never mutate the channel's fader.
+  const BUMP_RENEW_MS = 700;
+
+  const handleBumpOn = useCallback((channelId: string) => {
+    // Optimistic "held" feedback.
+    setBumpedIds(prev => {
+      if (prev.has(channelId)) return prev;
+      const next = new Set(prev);
+      next.add(channelId);
+      return next;
+    });
+    // Low-latency WS bump (also renews the lease on the engine).
+    engineEvents.send({ type: 'bump', channelId });
+    // REST durability mirror. Fail-loud: a rejected bump (404 unknown / 400
+    // deck) is logged + Alerted — bump is an accent, but a silent failure
+    // would leave the button "held" with no effect.
+    postBump(channelId, true).then((res) => {
+      if (!res.ok) {
+        console.error(`[Mixer] Bump REST mirror rejected for ${channelId}:`, res.error);
+        // Roll back the optimistic flip — the engine never accepted it.
+        setBumpedIds(prev => { const n = new Set(prev); n.delete(channelId); return n; });
+        Alert.alert('Bump not applied', `The engine rejected this bump. ${res.error || ''}`.trim());
+      }
+    }).catch((err) => console.error(`[Mixer] Bump REST mirror failed for ${channelId}:`, err));
+    // Start the hold-renew heartbeat (idempotent — replace any prior timer).
+    const timers = bumpRenewTimersRef.current;
+    const existing = timers.get(channelId);
+    if (existing) clearInterval(existing);
+    timers.set(channelId, setInterval(() => {
+      engineEvents.send({ type: 'bump', channelId });
+    }, BUMP_RENEW_MS));
+  }, []);
+
+  const handleBumpOff = useCallback((channelId: string) => {
+    // Stop the renew heartbeat first so we don't re-bump after releasing.
+    const timers = bumpRenewTimersRef.current;
+    const existing = timers.get(channelId);
+    if (existing) { clearInterval(existing); timers.delete(channelId); }
+    setBumpedIds(prev => { const n = new Set(prev); n.delete(channelId); return n; });
+    engineEvents.send({ type: 'unbump', channelId });
+    postBump(channelId, false).then((res) => {
+      if (!res.ok) console.error(`[Mixer] Unbump REST mirror rejected for ${channelId}:`, res.error);
+    }).catch((err) => console.error(`[Mixer] Unbump REST mirror failed for ${channelId}:`, err));
+  }, []);
+
+  // Safety: on unmount, clear every renew heartbeat AND release any held bump
+  // so navigating away from the tab can't pin a channel full (the engine's
+  // lease/ws-close would catch it eventually, but release eagerly).
+  useEffect(() => {
+    const timers = bumpRenewTimersRef.current;
+    return () => {
+      for (const [channelId, t] of timers) {
+        clearInterval(t);
+        engineEvents.send({ type: 'unbump', channelId });
+      }
+      timers.clear();
+    };
   }, []);
 
   const handleModeChange = useCallback(async (channelId: string, newMode: string) => {
@@ -1957,6 +2073,8 @@ export default function MixerScreen() {
           // contribution — we dim the strip to match (never mutating state).
           const isSoloActive = soloedIds.has(channel.id);
           const anySolo = soloedIds.size > 0;
+          // FLASH / BUMP held-state (docs/39 §10.7) — display-only.
+          const isBumped = bumpedIds.has(channel.id);
           const soloProtected = !!channel.soloSafe || !!channel.faderLocked;
           const dimmedBySolo = anySolo && !isSoloActive && !soloProtected;
           // Group this channel belongs to (single-membership pointer), for the
@@ -1976,6 +2094,9 @@ export default function MixerScreen() {
               isSolo={isSoloActive}
               soloActive={anySolo}
               dimmedBySolo={dimmedBySolo}
+              isBumped={isBumped}
+              onBumpOn={handleBumpOn}
+              onBumpOff={handleBumpOff}
               group={group}
               isDeck={false}
               blends={blends}
@@ -2508,6 +2629,12 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   toggleBtnSafe: {
     backgroundColor: 'rgba(0,104,117,0.12)',
     borderColor: 'rgba(0,104,117,0.5)',
+  },
+  // FLASH / BUMP held state (docs/39 §10.7) — bright amber, distinct from
+  // solo green + mute red so a held accent is unmistakable on the surface.
+  toggleBtnBump: {
+    backgroundColor: '#ffb300',
+    borderColor: '#ffb300',
   },
   toggleBtnSafeLit: {
     backgroundColor: 'rgba(0,104,117,0.28)',
