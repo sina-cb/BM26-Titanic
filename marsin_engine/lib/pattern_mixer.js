@@ -187,6 +187,33 @@ function applyPreviewMaskBlackout(buffer, pixelMask, pixelCount) {
   }
 }
 
+// ── Deck dynamic view overrides (deck overlays) ─────────────────────────
+// Layered, view-scoped overlay decks composited OVER the main deck inside
+// the deck buffer (NOT through the mixer overlay stack — that feeds the
+// other side of the deck/mixer crossfade). See docs/39 §deck-overlays.
+//
+// Cap is a hard 4 (operator ruling): a 5th add is rejected 400
+// DECK_OVERLAY_OVER_CAP at the API boundary; addDeckOverlay also throws as a
+// belt-and-braces fail-loud so a buggy callsite can't sneak past the cap.
+export const DECK_OVERLAY_MAX = 4;
+
+// Engine-side accent palette for deck overlays. The CaptainPad swatch list
+// (CHANNEL_COLOR_SWATCHES, index.tsx) is UI-only; the engine owns this copy
+// so auto-color assignment works headlessly (HIL, unit tests) and offline.
+// 8 curated high-contrast hex colors — addDeckOverlay cycles through them,
+// skipping any color already in use by a sibling overlay or the main deck so
+// adjacent layers never collide.
+export const DECK_OVERLAY_COLOR_SWATCHES = Object.freeze([
+  '#FF5252', // red
+  '#FFB300', // amber
+  '#FFEB3B', // yellow
+  '#69F0AE', // green
+  '#40C4FF', // cyan
+  '#448AFF', // blue
+  '#B388FF', // violet
+  '#FF80AB', // pink
+]);
+
 export class PatternMixer {
   constructor({ wasmHost, pixelCount, maxChannels, pixels = [], viewMasks = [] }) {
     this.wasmHost = wasmHost;
@@ -214,6 +241,26 @@ export class PatternMixer {
     // become mixer channels) so internal callers don't break.
     this.deckChannel = null;
     this.mixerChannels = [];
+    // ── Deck dynamic view overrides (deck overlays) ──────────────────────
+    // Layered, view-scoped overlay decks composited OVER the main deck into
+    // `deckBuffer` (NOT through `mixerChannels`). Each overlay IS a
+    // PatternChannel (reuse the overlay-channel construction path) targeting
+    // a UNIQUE view (at most one overlay per equivalent viewSelection). Order
+    // = array index: deckOverlays[0] = bottom, deckOverlays[last] = top.
+    // Owned by /deck/overlays/* routes. See docs/39 §deck-overlays.
+    this.deckOverlays = [];
+    // SHARED deck-overlay auto-advance clock (operator refinement #1): a
+    // SINGLE anchor + a SINGLE delay for the ENTIRE overlay group. When the
+    // shared timer crosses its delay boundary EVERY auto-advancing overlay
+    // advances its own playlist cursor at the SAME instant (each to its own
+    // next entry) — they never drift apart. An overlay may be individually
+    // paused via its own enabled flag, but when it auto-advances it uses this
+    // shared cadence + phase. `active` defaults false (opt-in; exterior
+    // immunity). `_anchorMs` is the TRANSIENT wall-clock anchor (null = not
+    // yet seeded; re-seeds to now on the first active tick and after each
+    // advance) — never serialized. `delay_s`/`shuffle` ARE persisted.
+    this.deckOverlayAutopilot = { active: false, delay_s: 30, shuffle: false };
+    this._deckOverlayAnchorMs = null;
     this.master = 1.0;
     // ── Tap-tempo (docs/39 §F-phase #4) ──────────────────────────────────
     // A single GLOBAL tempo the operator taps in. `tempoBpm` is the
@@ -726,7 +773,7 @@ export class PatternMixer {
     this.viewMasks = Array.isArray(viewMasks)
       ? viewMasks.filter(vm => vm && typeof vm.name === 'string' && vm.name.length > 0 && Number.isInteger(vm.bit))
       : [];
-    for (const channel of [this.deckChannel, ...this.mixerChannels]) {
+    for (const channel of [this.deckChannel, ...this.mixerChannels, ...this.deckOverlays]) {
       if (!channel) continue;
       try {
         this.recompileChannelMask(channel);
@@ -863,6 +910,174 @@ export class PatternMixer {
     // (handles, masks, groups, solo set) is touched.
     this.mixerChannels = reordered;
     return this.mixerChannels;
+  }
+
+  // ── Deck dynamic view overrides (deck overlays) ──────────────────────────
+  //
+  // A deck overlay IS a PatternChannel (reuse the overlay construction path),
+  // composited OVER the main deck into `deckBuffer` inside renderAll6ch. The
+  // deck overlay machinery deliberately MIRRORS the mixer-overlay add/remove/
+  // reorder semantics (cap check, mask compile, handle destroy on remove,
+  // permutation validation that THROWS) but keeps a SEPARATE array so deck
+  // overlays never leak into the deck/mixer crossfade. Order = array index:
+  // deckOverlays[0] = bottom, deckOverlays[last] = top (top wins within its
+  // view). See docs/39 §deck-overlays.
+
+  getDeckOverlays() {
+    return this.deckOverlays;
+  }
+
+  getDeckOverlay(overlayId) {
+    return this.deckOverlays.find(o => o.id === overlayId) || null;
+  }
+
+  /**
+   * Normalize a viewSelection to its canonical {type,target,invert} shape for
+   * uniqueness comparison. Two selections are "equivalent" iff their compiled
+   * masks would be identical — we compare the normalized tuple (cheap, exact
+   * for the validated shapes) so a second overlay can't target a taken view.
+   */
+  _normalizedViewKey(viewSelection) {
+    const vs = viewSelection || { type: 'all', target: null, invert: false };
+    const target = (vs.target === undefined) ? null : vs.target;
+    return JSON.stringify({ type: vs.type, target, invert: !!vs.invert });
+  }
+
+  /**
+   * True iff a deck overlay (other than `exceptId`) already targets an
+   * equivalent viewSelection. Used to enforce the unique-view rule (at most
+   * one overlay per view) at the API boundary (409 DECK_OVERLAY_VIEW_TAKEN).
+   */
+  deckOverlayViewTaken(viewSelection, exceptId = null) {
+    const key = this._normalizedViewKey(viewSelection);
+    return this.deckOverlays.some(o => o.id !== exceptId && this._normalizedViewKey(o.viewSelection) === key);
+  }
+
+  /**
+   * Pick an auto accent color for a NEW deck overlay: cycle the 8-swatch
+   * palette, skipping any color already in use by a sibling overlay or the
+   * main deck so adjacent layers never collide. Falls back to the next
+   * palette slot if every swatch is somehow taken (>8 distinct colors in use,
+   * which the cap of 4 makes impossible — but never returns null).
+   */
+  _pickDeckOverlayColor() {
+    const inUse = new Set();
+    if (this.deckChannel && typeof this.deckChannel.color === 'string') inUse.add(this.deckChannel.color);
+    for (const o of this.deckOverlays) {
+      if (typeof o.color === 'string') inUse.add(o.color);
+    }
+    for (const swatch of DECK_OVERLAY_COLOR_SWATCHES) {
+      if (!inUse.has(swatch)) return swatch;
+    }
+    // Every swatch taken — cycle by current count (deterministic, never null).
+    return DECK_OVERLAY_COLOR_SWATCHES[this.deckOverlays.length % DECK_OVERLAY_COLOR_SWATCHES.length];
+  }
+
+  /**
+   * Add a deck overlay. Throws (fail loud) on: cap reached
+   * (DECK_OVERLAY_MAX), a colliding id (deck or a sibling overlay), an empty
+   * viewSelection (whole-rig / nothing-selected — never-dark guard), or a
+   * taken view. The API layer maps these to 400/409; the throw is a
+   * belt-and-braces so a buggy callsite can't bypass the rules. Compiles the
+   * overlay's view mask immediately so the first frame composites correctly.
+   * `config.color` is honored if provided (restore path); otherwise an auto
+   * accent is assigned.
+   */
+  addDeckOverlay(channelConfig) {
+    if (this.deckOverlays.length >= DECK_OVERLAY_MAX) {
+      throw new Error(`Maximum of ${DECK_OVERLAY_MAX} deck overlays allowed`);
+    }
+    const cfg = channelConfig || {};
+    if (this.deckChannel && cfg.id && cfg.id === this.deckChannel.id) {
+      throw new Error(`deck overlay id '${cfg.id}' collides with the deck channel id`);
+    }
+    if (cfg.id && this.deckOverlays.some(o => o.id === cfg.id)) {
+      throw new Error(`deck overlay id '${cfg.id}' already exists`);
+    }
+    // Never-dark guard: a deck overlay MUST target an explicit, non-empty,
+    // non-whole-rig view. An 'all' selection (or anything compiling to the
+    // whole rig / empty) is REFUSED — an overlay can never target everything,
+    // so the exterior the deck covers can never be blacked out by overlays.
+    const vs = cfg.viewSelection || { type: 'all', target: null, invert: false };
+    if (!vs || vs.type === 'all') {
+      throw new Error('deck overlay viewSelection must target a specific view (not type "all")');
+    }
+    if (this.deckOverlayViewTaken(vs, cfg.id || null)) {
+      throw new Error(`a deck overlay already targets this view`);
+    }
+    const overlay = new PatternChannel({
+      ...cfg,
+      // Deck overlays only use steady channel-blend modes (blend_screen
+      // default; blend_add | blend_over). trans_* transition modes are
+      // excluded — the constructor default already covers an omitted mode.
+      mode: cfg.mode || 'blend_screen',
+      viewSelection: vs,
+      color: (typeof cfg.color === 'string') ? cfg.color : this._pickDeckOverlayColor(),
+    });
+    this.deckOverlays.push(overlay);
+    this.recompileChannelMask(overlay);
+    return overlay;
+  }
+
+  /** Remove a deck overlay by id. Returns true iff something was removed. */
+  removeDeckOverlay(overlayId) {
+    const index = this.deckOverlays.findIndex(o => o.id === overlayId);
+    if (index === -1) return false;
+    const overlay = this.deckOverlays[index];
+    if (this.onChannelRemoved) this.onChannelRemoved(overlayId);
+    overlay.destroy(this.wasmHost);
+    this.deckOverlays.splice(index, 1);
+    return true;
+  }
+
+  /**
+   * Reorder the deck-overlay stack to exactly `orderedIds`. EXACT mirror of
+   * reorderMixerChannels: permutation validation (array, exact length, no
+   * dups, exact same id set) all THROW (fail loud, no partial apply), then a
+   * SINGLE atomic reassignment of the SAME overlay objects in the new order
+   * (handles, masks, color all preserved by reference). order[0] = bottom,
+   * order[last] = top.
+   */
+  reorderDeckOverlays(orderedIds) {
+    if (!Array.isArray(orderedIds)) {
+      throw new Error('reorderDeckOverlays: orderedIds must be an array');
+    }
+    if (orderedIds.length !== this.deckOverlays.length) {
+      throw new Error(
+        `reorderDeckOverlays: orderedIds length (${orderedIds.length}) must equal ` +
+        `the current deck overlay count (${this.deckOverlays.length})`);
+    }
+    const byId = new Map();
+    for (const o of this.deckOverlays) byId.set(o.id, o);
+    const seen = new Set();
+    const reordered = orderedIds.map(id => {
+      if (seen.has(id)) {
+        throw new Error(`reorderDeckOverlays: duplicate id '${id}' in orderedIds`);
+      }
+      seen.add(id);
+      const o = byId.get(id);
+      if (!o) {
+        throw new Error(`reorderDeckOverlays: id '${id}' is not a current deck overlay`);
+      }
+      return o;
+    });
+    this.deckOverlays = reordered;
+    return this.deckOverlays;
+  }
+
+  /**
+   * Replace a deck overlay's view selection and recompile its mask. Returns
+   * true on success, false on unknown id. The viewSelection MUST be
+   * pre-validated by the API layer AND pre-checked for view-uniqueness +
+   * non-empty (the API path enforces 409 DECK_OVERLAY_VIEW_TAKEN and the
+   * never-dark 'all' refusal before calling this).
+   */
+  setDeckOverlayViewSelection(overlayId, viewSelection) {
+    const overlay = this.getDeckOverlay(overlayId);
+    if (!overlay) return false;
+    overlay.viewSelection = viewSelection || { type: 'all', target: null, invert: false };
+    this.recompileChannelMask(overlay);
+    return true;
   }
 
   /**
@@ -2333,6 +2548,15 @@ export class PatternMixer {
     for (const channel of this.mixerChannels) {
       channel.beginFrame(this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(channel));
     }
+    // Deck overlays (deck dynamic view overrides) tick on the SAME shared
+    // global clock + params as every other channel — they call beginFrame
+    // with the SAME `elapsedSeconds` and go through `_effectiveSpeed`, so the
+    // global speed/tap-tempo apply to them identically to the deck and mixer
+    // overlays (operator refinement #2: shared globals). forceRender=true so a
+    // muted overlay still advances its phase (vis + ping-pong smoothness).
+    for (const overlay of this.deckOverlays) {
+      overlay.beginFrame(this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(overlay));
+    }
     // Tick the inactive deck sibling too so its pattern stays warm —
     // its time advances alongside the active channel even when its
     // fader is 0. This is what makes ping-pong "smoothness" work: the
@@ -2505,6 +2729,75 @@ export class PatternMixer {
       // See docs/27 §2 / §4.2 applyPreviewMaskBlackout.
       if (deck.compiledPixelMask) {
         applyPreviewMaskBlackout(this.deckBuffer, deck.compiledPixelMask, this.pixelCount);
+      }
+    }
+
+    // 2a. Deck dynamic view overrides (deck overlays) — composite OVER the
+    //     deck buffer, bottom→top, into `deckBuffer` (NOT mixerBuffer). Each
+    //     overlay is masked to its own view, so pixels OUTSIDE every overlay's
+    //     view stay EXACTLY at the deckChannel value (commitBlendedLayerWithMask
+    //     leaves them untouched) — the never-dark mission rule: overlays can
+    //     never blackout the exterior the deck covers. Overlays deliberately do
+    //     NOT receive the deck PFL blackout (applied above to the deck channel
+    //     only); they preserve the background exactly like mixer overlays.
+    //
+    //     deckOverlays[0] = bottom, deckOverlays[last] = top → top wins WITHIN
+    //     its view. The composited deckBuffer then feeds the EXISTING deck-swap
+    //     block + lerp(deck, mixer, viewFader) + applyMaster unchanged, so the
+    //     global master and the deck/mixer crossfade apply uniformly; and since
+    //     global hue/invert/macros run POST-composite on model.pixels in
+    //     engine.js, they apply to overlays automatically (shared globals,
+    //     operator refinement #2). Reuses the existing scratch buffers
+    //     (channelBuffer / blendedScratch) — no new per-frame allocation.
+    for (const overlay of this.deckOverlays) {
+      // Overlay-effective fader: enabled gate × per-overlay faderMax clamp.
+      // Deck overlays are NOT subject to the mixer's solo/group/follow gates
+      // (those are mixer-stack concepts) — they layer over the deck directly.
+      const effFader = overlay.enabled
+        ? Math.min(overlay.fader, (typeof overlay.faderMax === 'number' ? overlay.faderMax : 1.0))
+        : 0;
+      // Skip-dark gate (mirrors the mixer loop): a disabled / zeroed overlay
+      // costs ~one length read. A zero-fader overlay contributes nothing.
+      if (effFader <= 0.001) continue;
+
+      this.channelBuffer.fill(0);
+      overlay.renderInto(this.wasmHost, this.channelBuffer, true);
+
+      // Per-overlay hue rotation BEFORE blend (W/A/U untouched), gated on
+      // non-zero so a hue=0 overlay pays nothing. Stacks additively with the
+      // GLOBAL hue applied post-composite in engine.js.
+      if (overlay.hue) {
+        applyHueShift6chU8(this.channelBuffer, this.pixelCount, overlay.hue);
+      }
+
+      // Blend the WHOLE buffer (overlay over deckBuffer) then commit ONLY at
+      // the overlay's selected pixels — exactly the mixer-overlay contract.
+      let blended;
+      const blendHandle = this.getBlendHandle(overlay.mode);
+      if (blendHandle) {
+        blended = this.wasmHost.renderBlend6ch(
+          blendHandle, this.pixelCount,
+          this.deckBuffer, this.channelBuffer, effFader
+        );
+      } else {
+        // DEGRADED PATH (Codex P0 visibility): no compiled blend handle for
+        // this mode. We do NOT crash the 40 Hz loop; composite a host-side
+        // linear interpolation and record the error loudly (once per mode).
+        this._recordBlendError(
+          overlay.mode || '(empty mode)',
+          `No compiled blend handle for mode '${overlay.mode}' on deck overlay '${overlay.id}'`,
+        );
+        blended = this.blendedScratch;
+        for (let i = 0; i < blended.length; i++) {
+          blended[i] = Math.round(this.deckBuffer[i] + (this.channelBuffer[i] - this.deckBuffer[i]) * effFader);
+        }
+      }
+
+      commitBlendedLayerWithMask(this.deckBuffer, blended, overlay.compiledPixelMask, this.pixelCount);
+
+      if (wantVis) {
+        this._visData[overlay.id] = this._extractVisInto(overlay.id, this.channelBuffer);
+        this._visLevels[overlay.id] = this._bufferMeanLevel(this.channelBuffer) * effFader;
       }
     }
 
@@ -2830,6 +3123,11 @@ export class PatternMixer {
     for (const channel of this.mixerChannels) {
       channel.destroy(this.wasmHost);
     }
+    // Deck overlays own their own WASM handles — free them at teardown.
+    for (const overlay of this.deckOverlays) {
+      overlay.destroy(this.wasmHost);
+    }
+    this.deckOverlays = [];
     // Clean up the hidden inactive deck sibling too — without this a
     // warm inactive handle (kept alive across normal swap completions
     // for ping-pong reuse) would leak at engine shutdown.
