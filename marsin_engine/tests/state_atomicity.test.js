@@ -126,7 +126,9 @@ test('serializeChannel emits exactly the fields the engine restores', () => {
     'mixGroupId', 'soloSafe',
     // Additive (hue shifter wave, 2026-06): appended AFTER mixGroupId/soloSafe.
     'hue',
-    // Additive (phase-clock wave, 2026-06): appended AFTER hue. Per-channel
+    // Additive (invert wave, 2026-06): appended AFTER hue.
+    'invert',
+    // Additive (phase-clock wave, 2026-06): appended AFTER invert. Per-channel
     // phase clock (F-phase): speed/phaseOffsetMs/followsTempo.
     'speed', 'phaseOffsetMs', 'followsTempo',
   ]);
@@ -246,7 +248,9 @@ test('saveMixerState preserves on-disk key order and overlay-only fields', () =>
     'mixGroupId', 'soloSafe',
     // Additive (hue shifter wave, 2026-06): appended after mixGroupId/soloSafe.
     'hue',
-    // Additive (phase-clock wave, 2026-06): appended after hue.
+    // Additive (invert wave, 2026-06): appended after hue.
+    'invert',
+    // Additive (phase-clock wave, 2026-06): appended after invert.
     'speed', 'phaseOffsetMs', 'followsTempo',
   ]);
 });

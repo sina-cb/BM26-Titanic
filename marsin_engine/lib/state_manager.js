@@ -57,6 +57,12 @@ export function serializeChannel(ch) {
     hue: (typeof ch.hue === 'number' && Number.isFinite(ch.hue))
       ? ((ch.hue % 360) + 360) % 360
       : 0,
+    // ── Additive field (invert wave, 2026-06) ─────────────────────────
+    // Appended AFTER hue so earlier on-disk key order is unchanged — an old
+    // state file (no invert) loads and restores to the documented default
+    // (false = no invert). Per-channel color INVERT flag (F-invert, docs/39):
+    // flips RGB before blend, W/A/UV untouched.
+    invert: !!ch.invert,
     // ── Additive fields (phase-clock wave, 2026-06) ───────────────────
     // Appended AFTER hue so earlier on-disk key order is unchanged — an
     // old state file (no speed/phaseOffsetMs/followsTempo) loads and
@@ -348,6 +354,10 @@ export class StateManager {
           // restart restores the operator's recolor. serializeChannel
           // already normalized it — reuse verbatim.
           hue: core.hue,
+          // Additive (invert wave): per-channel INVERT flag round-trips so a
+          // restart restores the operator's flip. serializeChannel already
+          // coerced it — reuse verbatim.
+          invert: core.invert,
           // Additive (phase-clock wave): per-channel speed/offset/follows-
           // tempo round-trip so a restart restores the operator's clock.
           // serializeChannel already clamped/typed these — reuse verbatim.

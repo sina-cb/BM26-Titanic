@@ -1696,6 +1696,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // to 0 = no shift (documented schema default). The PatternChannel
       // ctor normalizes into [0,360).
       hue: typeof saved.hue === 'number' ? saved.hue : 0,
+      // F-invert restore (docs/39 §F-invert). An old state file without this
+      // restores to false = no invert (documented schema default). The
+      // PatternChannel ctor coerces via !! defensively.
+      invert: !!saved.invert,
       // F-phase restore (docs/39 §F-phase #3/#4/#11). An old state file
       // without these restores to the documented defaults (speed 1.0 = run
       // at the global rate; phaseOffsetMs 0 = no chase; followsTempo false
@@ -2182,6 +2186,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // Surfaced so CaptainPad can render the per-channel HUE control. A
       // channel without the field (old engine) serializes 0 = no shift.
       hue: typeof c.hue === 'number' ? c.hue : 0,
+      // F-invert (docs/39): per-channel color INVERT flag. Surfaced so
+      // CaptainPad can render the per-channel INVERT toggle. A channel
+      // without the field (old engine) serializes false = no invert.
+      invert: !!c.invert,
       // F-phase (docs/39 §F-phase): per-channel phase clock. speed (#3,
       // [0.05,8]), phaseOffsetMs (#11 chase, [-10000,10000]), followsTempo
       // (#4 opt-in to the global tap-tempo). Surfaced so CaptainPad can
@@ -2295,6 +2303,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // F-hue (docs/39): per-channel hue rotation. See serializeChannel
         // above for semantics. 0 = no shift.
         hue: typeof c.hue === 'number' ? c.hue : 0,
+        // F-invert (docs/39): per-channel color INVERT flag. See
+        // serializeChannel above for semantics. false = no invert.
+        invert: !!c.invert,
         // F-phase (docs/39 §F-phase): per-channel phase clock — speed (#3),
         // phaseOffsetMs (#11 chase), followsTempo (#4). See serializeChannel
         // above for semantics. Defaults 1.0 / 0 / false. _phaseSeconds is
@@ -4512,6 +4523,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
           channel.hue = hv.value;
         }
+        // F-invert: per-channel color INVERT (docs/39 §F-invert). Pure
+        // boolean flag (coerced via !! like soloSafe/followsTempo above — any
+        // value coerces, so there is no validation-error contract here).
+        // Flips this layer's RGB BEFORE blend (W/A/U untouched), applied
+        // AFTER the per-channel hue (hue-then-invert). The render loop gates
+        // on the flag, so invert=false = no-op.
+        if (data.invert !== undefined) {
+          channel.invert = !!data.invert;
+        }
         // F-phase #3: per-channel speed. validateSpeed — non-finite ⇒ 400
         // (Codex P0); a finite value is clamped to [0.05,8]. Changing speed
         // does NOT jump the phase (the accumulator stays continuous — only
@@ -5391,6 +5411,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             return res.end(JSON.stringify({ error: hv.error }));
           }
           channel.hue = hv.value;
+        }
+        // F-invert: per-channel color INVERT on the deck channel. Same
+        // semantics as the mixer PATCH (docs/39 §F-invert) — pure boolean,
+        // coerced via !!.
+        if (data.invert !== undefined) {
+          channel.invert = !!data.invert;
         }
         // F-phase #3/#11/#4 on the deck channel — same validation +
         // semantics as the mixer PATCH (docs/39 §F-phase).

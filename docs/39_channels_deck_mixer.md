@@ -1093,6 +1093,52 @@ Finite number (or finite-parseable string) required; non-finite / non-number =>
 
 ---
 
+## 6.x2 §F-invert — Per-channel color INVERT
+
+Operator-requested (round 2, 2026-06). A per-channel boolean that **inverts the
+channel's RGB output** (`255 - v` per byte) **before** it is blended into the
+mix. Structurally a sibling of the per-channel hue: a per-channel chroma op
+applied to the channel buffer pre-blend, **RGB-only**, gated, serialized in all
+paths. W / A / UV are **never** touched — the mission-critical exterior whites
+carry no color concept and must never be flipped or dimmed by an invert toggle.
+
+### Per-channel invert
+
+- `PatternChannel.invert` (default `false`, coerced via `!!`). Applied on the
+  interleaved `channelBuffer` via `applyInvert6chU8(buf, pixelCount)` in the
+  composite loop **and** the vis/deck pre-passes (so meter + preview match the
+  rendered output), gated `if (channel.invert)` so the default channel pays
+  nothing.
+- **`PATCH /mixer/channels/:id`** and **`PATCH /deck/channel`** accept an
+  `invert` field, coerced via `!!` (a pure boolean like `soloSafe` /
+  `followsTempo` — any value coerces, so there is no validation-error contract;
+  no 400). Serialized in all four serializers (api_server `serializeChannel` +
+  `serializeMixerState`; state_manager `serializeChannel` + `saveMixerState`
+  overlay) and the restore path. An old state file without `invert` restores to
+  `false`. No new WS type — `invert` rides the existing mixer-state broadcast.
+
+### Composition with hue (order)
+
+When a channel has **both** `hue` and `invert` set, the mixer applies the hue
+shift **first**, then the invert (`applyHueShift6chU8` then `applyInvert6chU8`)
+— the **implemented order is HUE-THEN-INVERT** in buffer order, applied
+identically at all three sites so meter/vis/deck match. The two ops in fact
+**commute within ±1/255 rounding**: the luminance-preserving YIQ rotation
+distributes over the chroma negation that `255 - v` is, and the luminance
+constant is rotation-invariant — so the output is order-independent. We still
+pin a single documented order for predictability.
+
+| Site | What |
+|---|---|
+| `lib/pattern_channel.js` | `invert=false` boolean field, coerced `!!` |
+| `lib/pattern_mixer.js` | `applyInvert6chU8` helper (R,G,B only; W/A/UV untouched); applied pre-blend in composite loop + vis pre-pass + deck pre-pass, gated `if(channel.invert)`, AFTER the hue shift |
+| `lib/api_server.js` | `invert` on both channel PATCHes (`!!`); serialized in 4 serializers + restore |
+| `lib/state_manager.js` | channel `invert` in `serializeChannel` + `saveMixerState` overlay (appended after `hue`) |
+| `tests/invert.test.js` | Unit: 255-v flip, W/A/UV untouched, double-invert identity, no-op@false, ctor + PATCH `!!` coercion, serialize round-trip + missing->false, hue+invert composition (hue-then-invert) + commutativity (10 tests) |
+| `tests/hil/hil_invert_test.mjs` | HIL: PATCH invert flips deck channel vis-buffer RGB to 255-baseline while W/A/U unchanged (PRE-blend); invert=false restores baseline; PATCH `!!` truthy/falsy coercion; serialize round-trip (11 checks) |
+
+---
+
 ## 6.y §F-cue — Cue-to-deck (audition a mixer overlay on the deck preview)
 
 Operator-requested (2026-06, round-2 backlog #7). Lets the operator **audition
