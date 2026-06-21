@@ -546,3 +546,18 @@ new per-channel hue control lands into an already-decluttered strip.
     lib/param_preset_manager.js + api_server routes). Engine-only.
   Disjoint: CaptainPad (mixer.tsx/DeckTopBar/channelExtrasApi) vs engine (new file + api_server.js).
   NEXT: #2 auto-cycle, #6 follow/link, #8 invert, #10 undo. Deliverable 888a800.
+
+## STATUS LOG (cont. 17)
+- param-presets ENGINE #9 MERGED (8ec8a7d): named per-channel param capture/recall, new
+  param_preset_manager.js + 4 routes + paramPresets WS type. Cross-pattern recall → 409 fail-loud.
+  Suite 1023/0; param-preset HIL 21/21 on merged tip.
+- phase-clock UI #3/#11/#4 MERGED (c4763da): SPEED/OFFSET rows + FOLLOW TEMPO toggle in mixer
+  ChannelStrip, TAP TEMPO button in DeckTopBar, channelExtrasApi helpers. tsc 0 / lint 11
+  (baseline) / web:build OK on merged tip. Phase-clock cluster now COMPLETE end-to-end.
+- Launched 2 parallel (DISJOINT):
+  * dev/invert_engine — #8 per-channel RGB invert (engine vertical, models the hue precedent;
+    RGB-only, W/A/UV untouched, gated, 3 apply sites + 4 serializers). Engine-only.
+  * dev/param_presets_ui — #9 UI: capture/recall/list/delete param presets per channel in
+    mixer.tsx + channelExtrasApi helpers (pairs with the merged #9 engine). CaptainPad-only.
+  Disjoint: engine (invert) vs CaptainPad (param-presets UI).
+  NEXT: invert UI, #2 auto-cycle, #6 follow/link, #10 undo. Deliverable c4763da.
