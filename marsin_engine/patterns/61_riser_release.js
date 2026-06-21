@@ -45,7 +45,7 @@
 export var localSpeed = 0.5;   // idle chase rate
 export var charge = 0.0;       // BUILD score -> wind-up + brightness (audio audioBuildScore)
 export var release = 0.0;      // DROP pulse  -> discharge flash      (audio audioDropPulse)
-export var base = 0.16;        // calm base floor (always-on)
+export var base = 0.25;        // calm base floor (always-on; never fully dark — visibility floor)
 export var decay = 0.5;        // release-flash fall rate
 
 export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // palette 1 — cool cyan (charging)
@@ -56,7 +56,7 @@ export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderCharge(v) { charge = v; }
 export function sliderRelease(v) { release = v; }
-export function sliderBase(v) { base = v * 0.3; }
+export function sliderBase(v) { base = 0.25 + v * 0.20; }  // clamped: never below the visibility floor (codex: never fully dark)
 export function sliderDecay(v) { decay = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
