@@ -1320,6 +1320,107 @@ fade-in-flight, and vice versa.
   campaign.)
 - Audio-derived BPM (auto tap from the audio companion) is explicitly
   out-of-scope — #4 is manual tap only this wave.
+  **(Delivered as the follow-up below: §F-tempo-arbitration.)**
+
+---
+
+## 6.za §F-tempo-arbitration — OSC auto-drives, tap overrides (2026-06-21, engine-side)
+
+The tap-tempo core above (§F-phase) is *manual only*: nothing fed the live
+OSC/audio BPM into `mixer.tempoBpm`. This wave adds the arbiter that makes the
+manual TAP and the live OSC BPM coherent. The operator's rule:
+**"OSC auto-drives, tap overrides."**
+
+### The arbiter (`lib/tempo_arbiter.js`, `TempoArbiter`)
+
+A small object constructed at boot (engine.js, before `startApiServer`,
+exposed as `engineCore.tempoArbiter`) and `attach()`-ed to the ParamCenter.
+It drives **only** `mixer.tempoBpm` (which in turn affects `followsTempo`
+channels via the §F-phase multiplier). State lives on the arbiter, not module
+globals: `_manualOverrideUntilMs`, `_lastOscBpm` / `_lastOscBpmMs`,
+`_lastAppliedOscBpm`.
+
+**Named constants (documented):**
+
+| Const | Value | Meaning |
+|---|---|---|
+| `MANUAL_HOLD_MS` | `12000` | how long a manual tap suppresses OSC auto-follow |
+| `OSC_STALENESS_MS` | `1500` | a received `audioBpm` is "live" only within this window |
+| `TEMPO_MIN_BPM` / `TEMPO_MAX_BPM` | `20` / `400` | the supported musical window OSC-driven values clamp into |
+
+### The four ruled behaviours
+
+1. **OSC live → auto-follow.** A render-loop `beforeFrame` tick
+   (`tempoArbiter.tick(Date.now())`, composed in the SAME hook as
+   `autoCycleTick` / `deckOverlayAutoCycleTick`) continuously sets
+   `mixer.tempoBpm` from the live OSC BPM (clamped `[20,400]`), but **only when
+   the value actually changes** — no per-frame `setTempoBpm` churn / log spam.
+   Hot-path safe: two field reads + one timestamp compare, no allocation.
+2. **Manual tap overrides for a hold window.** `POST /mixer/tempo {bpm}` sets
+   the tempo immediately (as before) AND calls
+   `tempoArbiter.noteManualTap()` → `_manualOverrideUntilMs = now +
+   MANUAL_HOLD_MS`. While `now < _manualOverrideUntilMs` the auto-follow tick
+   is a no-op, so OSC cannot overwrite the tapped value. After the window, if
+   OSC is still live, auto-follow resumes (OSC reclaims).
+3. **Idle OSC → last value holds.** If OSC is stale/off the tick never fires,
+   so the last `tempoBpm` (tapped or last OSC) simply persists. No clobber.
+4. **Explicit re-sync.** `POST /mixer/tempo/sync` (no body / `{}`) →
+   `tempoArbiter.clearOverride()` (`_manualOverrideUntilMs = 0`) so OSC
+   reclaims on the next tick if live. **Fails loud (500)** if the arbiter /
+   mixer is missing (codex P0 — no silent fallback).
+
+### OSC liveness (how it's read)
+
+The engine ParamCenter has **no per-key timestamp**. The arbiter therefore
+`subscribe()`s to the CPC (same multi-subscriber API `bpm_speed_sync` uses) and
+records the wall-clock instant (`Date.now()`) that `audioBpm` was last written
+with a **finite, positive** value. A `0` / non-finite `audioBpm` is "no signal"
+(the Companion emits 0 when it can't resolve a tempo) and does NOT refresh the
+liveness clock — fail SAFE, never follow a stale/absent tempo. This is a
+**BPM-specific** liveness signal, NOT generic OSC traffic (`oscStats.lastSeenMs`),
+so unrelated OSC messages can't masquerade as a fresh tempo. The auto-follow
+tick passes `Date.now()` (NOT the loop's `performance.now()` — different epoch
+from the recorded timestamps).
+
+### `tempoSource` (display) + new WS fields
+
+`serializeMixerState` now emits two NEW fields ALONGSIDE the unchanged
+`tempoBpm` (so the UI can render `128 · OSC` / `128 · TAP` / `128 · held`):
+
+- **`tempoSource`** — `tempoArbiter.deriveSource()`:
+  - `'osc'` — OSC live AND not in a manual-override window (auto-driving).
+  - `'manual'` — inside the manual-override window (the tap owns it).
+  - `'held'` — OSC stale/off; the last value is just holding.
+- **`oscTempoBpm`** — the raw live OSC value (clamped to `[20,400]`) or `null`
+  when OSC is stale/off. Distinct from the applied `tempoBpm`.
+
+Both ride the existing `mixer`-state broadcast — no new WS message type. The
+`POST /mixer/tempo` and `POST /mixer/tempo/sync` responses also include
+`tempoSource` (and sync includes `oscTempoBpm`).
+
+### Independence from `bpm_speed_sync` (do NOT unify)
+
+`lib/bpm_speed_sync.js` separately maps `audioBpm` → the **SPEED knob** (CPC
+`speed`). That is a **different mechanism with a different target**. The
+TempoArbiter drives **only** `mixer.tempoBpm`; it never touches `speed`. Both
+may be enabled at once — that is acceptable and intended. They are NOT unified
+and do NOT double-apply (different write targets).
+
+### Implementation + test map (this wave)
+
+| File | Change |
+|---|---|
+| `marsin_engine/lib/tempo_arbiter.js` | NEW — `TempoArbiter` (attach/detach, `tick`, `noteManualTap`, `clearOverride`, `deriveSource`, `oscTempoBpm`, `isOscLive`, `isManualOverrideActive`) + the exported constants |
+| `marsin_engine/engine.js` | import + construct `TempoArbiter` before `startApiServer`, `attach()`, expose on `engineCore.tempoArbiter`; compose `tempoArbiter.tick(Date.now())` into the `beforeFrame` hook |
+| `marsin_engine/lib/api_server.js` | `POST /mixer/tempo` now arms `noteManualTap()` + returns `tempoSource`; NEW `POST /mixer/tempo/sync` (drops override, 500 if no arbiter); `serializeMixerState` emits `tempoSource` + `oscTempoBpm` |
+| `marsin_engine/tests/tempo_arbitration.test.js` | NEW unit suite (21 tests): OSC-drive, tap-override hold, post-window reclaim, stale-hold, sync, source derivation, clamp, no-churn |
+| `marsin_engine/tests/hil/hil_tempo_arbitration_test.mjs` | NEW HIL (slot :31268): simulates OSC via `POST /param-center {audioBpm}`; asserts manual/osc/held transitions + clamp on the live `mixer` WS broadcast |
+
+### Deferred to the UI wave (not in scope here)
+
+- CaptainPad: render `tempoSource` (`OSC` / `TAP` / `held` badge next to the
+  BPM), a re-sync button → `POST /mixer/tempo/sync`, and add `tempoSource` +
+  `oscTempoBpm` to the `MixerState` type. Engine side is complete.
 
 ---
 
