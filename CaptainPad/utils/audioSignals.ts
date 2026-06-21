@@ -153,7 +153,12 @@ export function isPulseKey(key: string): boolean {
     .replace(/[_-]+/g, ' ')
     .toLowerCase()
     .replace(/\s+/g, '');
-  return PULSE_KEY_TOKENS.some((token) => joined.includes(token));
+  // A key is a pulse iff its joined form ENDS WITH a known pulse token. Suffix
+  // (not substring) matching keeps the mic/audio prefix flexibility while
+  // EXCLUDING continuous keys that merely contain a token mid-word — notably
+  // `audioBeatInBar` (a 1–4 bar counter) ends with "inbar", not "beat", so it
+  // correctly stays a bar; `audioBeat`/`audioDownbeat` still match.
+  return PULSE_KEY_TOKENS.some((token) => joined.endsWith(token));
 }
 
 /**
