@@ -215,6 +215,18 @@ export class PatternMixer {
     this.deckChannel = null;
     this.mixerChannels = [];
     this.master = 1.0;
+    // ── Tap-tempo (docs/39 §F-phase #4) ──────────────────────────────────
+    // A single GLOBAL tempo the operator taps in. `tempoBpm` is the
+    // operator-facing value (null = "no tempo set", a documented schema
+    // default — distinct from a tapped tempo). `_tempoMultiplier` is the
+    // derived speed multiplier applied to channels that OPT IN
+    // (followsTempo). 120 BPM = 1× by convention (setTempoBpm). Channels
+    // that don't follow tempo are unaffected — the mission-critical
+    // exterior stays on its own clock unless the operator opts it in.
+    // tempoBpm is serialized as a mixer global; _tempoMultiplier is derived
+    // (never serialized — recomputed from tempoBpm on restore).
+    this.tempoBpm = null;
+    this._tempoMultiplier = 1;
     // ── Grand-master timed fade (F-B) ────────────────────────────────
     // An in-flight master fade animates `master` from a start value toward
     // a target over a fixed wall-clock duration on the 40 Hz render tick.
@@ -1092,6 +1104,39 @@ export class PatternMixer {
    * channel's OWN fader FIRST (per-fixture ceiling), then the group scales
    * it (gang scale ≠ a fader write, so it still attenuates a locked channel).
    */
+  // ── Per-channel effective phase-clock speed (docs/39 §F-phase) ────────
+  // O(1), allocation-free — called once per channel per frame from
+  // beginFrame, right next to _effFader. The channel's own `speed` times
+  // the global tap-tempo multiplier IF the channel opted in (followsTempo),
+  // clamped to the same [0.05, 8] window the channel constructor enforces
+  // (so speed × tempo can never push the accumulator to 0 / freeze or run
+  // away). Channels that don't follow tempo get their raw `speed`.
+  _effectiveSpeed(channel) {
+    const base = (typeof channel.speed === 'number' && Number.isFinite(channel.speed))
+      ? channel.speed
+      : 1.0;
+    const mult = channel.followsTempo ? this._tempoMultiplier : 1;
+    const eff = base * mult;
+    return eff < 0.05 ? 0.05 : (eff > 8 ? 8 : eff);
+  }
+
+  // ── Set the global tap-tempo (docs/39 §F-phase #4) ───────────────────
+  // 120 BPM = 1× by convention. The derived multiplier is clamped to the
+  // phase-clock window [0.05, 8] so an extreme tap can't freeze or run away
+  // the followers. Caller validated `bpm` finite + in range at the API
+  // boundary; we defensively guard a non-finite here too (codex P0 — never
+  // poison _tempoMultiplier with NaN, which would silently freeze every
+  // follower).
+  setTempoBpm(bpm) {
+    if (typeof bpm !== 'number' || !Number.isFinite(bpm)) {
+      throw new Error(`setTempoBpm requires a finite bpm, got '${bpm}'`);
+    }
+    this.tempoBpm = bpm;
+    const mult = bpm / 120;
+    this._tempoMultiplier = mult < 0.05 ? 0.05 : (mult > 8 ? 8 : mult);
+    return this._tempoMultiplier;
+  }
+
   _effFader(channel, soloActive) {
     if (!channel.enabled) return 0;
     const faderMax = (typeof channel.faderMax === 'number' && Number.isFinite(channel.faderMax))
@@ -2174,19 +2219,28 @@ export class PatternMixer {
     // visibly matches the existing overlay-fade animations.
     this.updateDeckSwapTransition(now);
     // Tick both deck and mixer overlays — muted patterns still need to
-    // advance their internal time so vis previews stay live.
-    if (this.deckChannel) this.deckChannel.beginFrame(this.wasmHost, elapsedSeconds, true);
+    // advance their internal time so vis previews stay live. Each channel
+    // accumulates its OWN phase from the shared `elapsedSeconds` delta,
+    // scaled by its effectiveSpeed (own speed × tempo-mult if it follows
+    // tempo). _effectiveSpeed is O(1) / allocation-free.
+    if (this.deckChannel) {
+      this.deckChannel.beginFrame(
+        this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(this.deckChannel));
+    }
     for (const channel of this.mixerChannels) {
-      channel.beginFrame(this.wasmHost, elapsedSeconds, true);
+      channel.beginFrame(this.wasmHost, elapsedSeconds, true, this._effectiveSpeed(channel));
     }
     // Tick the inactive deck sibling too so its pattern stays warm —
     // its time advances alongside the active channel even when its
     // fader is 0. This is what makes ping-pong "smoothness" work: the
     // moment we promote it, its pattern is already on the same time
     // base as the active. Without this, the new pattern would freeze
-    // at its first frame whenever it wasn't being faded in.
+    // at its first frame whenever it wasn't being faded in. It MUST share
+    // the active DECK's effectiveSpeed (not its own) so the ping-pong
+    // time-sync contract holds — a swap must not jump-cut the clock rate.
     if (this._inactiveDeckChannel && this._inactiveDeckChannel.handle) {
-      this._inactiveDeckChannel.beginFrame(this.wasmHost, elapsedSeconds, true);
+      const deckSpeed = this.deckChannel ? this._effectiveSpeed(this.deckChannel) : 1;
+      this._inactiveDeckChannel.beginFrame(this.wasmHost, elapsedSeconds, true, deckSpeed);
     }
   }
 

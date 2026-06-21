@@ -1093,6 +1093,109 @@ the **simulation / sACN output** (the deck buffer), not the CaptainPad mini-stri
 
 ---
 
+## 6.z §F-phase — Per-channel phase clock (#3 SPEED · #4 TAP-TEMPO · #11 CHASE/offset, 2026-06-21, engine-side)
+
+Round-2 cluster. ONE shared per-channel **phase clock** powers three
+operator features. Engine-side only; the CaptainPad UI is a separate later
+wave (the API surface below is the contract for it). Design:
+`.agent/02_reports/202606/20260620_33_speed_tap_chase_design.md`.
+
+### The mechanism (why an accumulator, not a dt-scale)
+
+The WASM VM consumes **ABSOLUTE per-handle time** (`wasm_host.beginFrame(handle,
+elapsedSeconds)`). The engine already owns a GLOBAL scaled clock
+(`engine.js` `patternClockSeconds` — each wall dt scaled by the global speed
+knob) and fans the SAME `elapsed` UNCHANGED to every channel via
+`PatternChannel.beginFrame`. The phase clock gives each channel its OWN
+**accumulated** phase derived from that same global elapsed DELTA:
+
+```
+dt = max(0, elapsed - _lastPhaseElapsed)   // first frame ⇒ 0; backwards ⇒ 0
+_lastPhaseElapsed = elapsed
+_phaseSeconds += dt * effectiveSpeed        // ACCUMULATE — never re-scale a raw dt
+phase = _phaseSeconds + phaseOffsetMs / 1000
+wasmHost.beginFrame(handle, phase)
+```
+
+We **accumulate** (not multiply the absolute `elapsed`) so an absolute-time
+pattern (`time(...)`, `triangle(t)`, etc.) **never JUMPS** when the operator
+changes speed mid-show — the accumulator stays continuous across the change;
+only the future rate changes. No reset on handle swap (continuity is fine);
+**no modulo** (f64 has ample precision for a multi-day show, and wrapping
+would visibly glitch an absolute-time pattern). `globalDt` is ALREADY
+global-speed-scaled by `engine.js` — the per-channel multiply does NOT
+re-read / re-apply the global speed (no double-count).
+
+### Per-channel fields (`PatternChannel`)
+
+| Field | Default | Clamp | Meaning |
+|---|---|---|---|
+| `speed` (#3) | `1.0` | `[0.05, 8]` | per-channel time multiplier. 0/negative would FREEZE = broken, so the floor is 0.05 (visibly-slow, not dead — anti-silent-failure) |
+| `phaseOffsetMs` (#11) | `0` | `[-10000, 10000]` | constant phase shift in ms. Staggered offsets on same-pattern channels → chase / ripple |
+| `followsTempo` (#4) | `false` | bool | opt-in to the global tap-tempo. Default false ⇒ the mission-critical exterior is immune unless opted in |
+
+TRANSIENT (NEVER serialized): `_phaseSeconds` (running accumulator),
+`_lastPhaseElapsed`. Rebuilt from 0 on boot — persisting a stale absolute
+time would mean nothing after a restart.
+
+### Global tap-tempo (#4, `PatternMixer`)
+
+The CLIENT computes BPM from tap intervals; the engine stores the resolved
+tempo and derives the multiplier. `tempoBpm` (null = no tempo set —
+distinct from a tapped value), `_tempoMultiplier` (derived, never
+serialized). `setTempoBpm(bpm)` → `_tempoMultiplier = clamp(bpm/120, 0.05, 8)`
+(**120 BPM = 1×**). `_effectiveSpeed(ch) = clamp(ch.speed *
+(ch.followsTempo ? _tempoMultiplier : 1), 0.05, 8)` — O(1), allocation-free,
+called once per channel per frame next to `_effFader`. The inactive deck
+sibling is ticked with the active DECK's effectiveSpeed (keeps the ping-pong
+time-sync contract).
+
+### Composition / orthogonality
+
+`effectiveSpeed = clamp(speed * (followsTempo ? tempoMult : 1), 0.05, 8)`;
+`phase = _phaseSeconds + phaseOffsetMs/1000`. Orthogonal to
+fader/faderMax/group/solo/bump (level), hue (chroma), viewSelection
+(spatial). Scripted transitions ramp `channel.fader` ONLY — never time —
+so a speed/offset change can't perturb a fade-in-flight, and vice versa.
+
+### API surface (NEW — for the follow-on UI wave)
+
+- `PATCH /mixer/channels/:id` and `PATCH /deck/channel` accept:
+  - `{ speed }` — `validateSpeed`: non-finite ⇒ **400**; finite clamped `[0.05, 8]`.
+  - `{ phaseOffsetMs }` — `validatePhaseOffsetMs`: non-finite ⇒ **400**; finite clamped `[-10000, 10000]`.
+  - `{ followsTempo }` — coerced via `!!` (boolean flag).
+- `POST /mixer/tempo { bpm }` — finite `[20, 400]` else **400**; sets the
+  global tempo; `saveAllState`; broadcasts mixer state. Response:
+  `{ status, tempoBpm, tempoMultiplier }`. **No new WS message type** — `tempoBpm`
+  rides the existing `mixer`-state broadcast (`serializeMixerState`).
+- All three per-channel fields are surfaced in ALL 4 serializers
+  (`state_manager.serializeChannel`, `api_server.serializeChannel`,
+  inline `serializeMixerState`, restored by `buildChannelFromSaved`);
+  `tempoBpm` is a mixer-state global (serialized + restored on boot via
+  `setTempoBpm`). `_phaseSeconds` is NEVER serialized. Missing fields restore
+  to defaults (1.0 / 0 / false; tempoBpm null).
+
+### Implementation map (this wave)
+
+| File | Change |
+|---|---|
+| `lib/pattern_channel.js` | `speed`/`phaseOffsetMs`/`followsTempo` fields (+ clamps) + transient `_phaseSeconds`/`_lastPhaseElapsed`; rewrote `beginFrame(host, elapsed, force, effectiveSpeed=1)` to accumulate per-channel phase |
+| `lib/pattern_mixer.js` | `tempoBpm`/`_tempoMultiplier`; `_effectiveSpeed(ch)`; `setTempoBpm(bpm)`; pass effectiveSpeed to all 3 `beginFrame` call sites (inactive sibling gets the deck's) |
+| `lib/api_server.js` | `validateSpeed` + `validatePhaseOffsetMs`; `{speed}`/`{phaseOffsetMs}`/`{followsTempo}` in BOTH channel PATCH handlers; `POST /mixer/tempo`; serialize in `serializeChannel` + inline `serializeMixerState` (+ `tempoBpm` global) + `buildChannelFromSaved` restore + boot `setTempoBpm` |
+| `lib/state_manager.js` | `serializeChannel` emits speed/phaseOffsetMs/followsTempo (additive, after hue); `saveMixerState` overlay copy + `tempoBpm` global |
+| `tests/phase_clock.test.js` (NEW) | Unit: accumulate-monotonic, no-jump-on-speed-change, constant offset diff, tempo 60→0.5× on followers only, clamp speed×tempo→8, validators 400/clamp, serialize round-trip + missing→defaults, `_phaseSeconds` never serialized, orthogonality — 22 tests |
+| `tests/hil/hil_phase_clock_test.mjs` (NEW) | HIL (slot 2 :31268): two channels same pattern speed 1× vs 2× → vis buffers DIVERGE; offsets {0,500ms} staggered; `POST /mixer/tempo {60}` halves follower only + `serializeMixerState` reports `tempoBpm:60`; bad bpm/speed/offset → 400 — 13 checks |
+
+### Deferred to the UI wave (not in scope here)
+
+- CaptainPad: SPEED + OFFSET fader rows + FOLLOW TEMPO toggle on the channel
+  strip; a TAP TEMPO button (client computes BPM from tap intervals →
+  `POST /mixer/tempo`); `MixerChannel` type += `speed`/`phaseOffsetMs`/`followsTempo`.
+- Audio-derived BPM (auto tap from the audio companion) is explicitly
+  out-of-scope — #4 is manual tap only this wave.
+
+---
+
 ## 7. Discrepancies / follow-ups
 
 - **`docs/19_playlists.md` §8.3 / §3.2 mark mixer-channel playlist routes as
