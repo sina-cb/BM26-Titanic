@@ -57,6 +57,21 @@ export function serializeChannel(ch) {
     hue: (typeof ch.hue === 'number' && Number.isFinite(ch.hue))
       ? ((ch.hue % 360) + 360) % 360
       : 0,
+    // ── Additive fields (phase-clock wave, 2026-06) ───────────────────
+    // Appended AFTER hue so earlier on-disk key order is unchanged — an
+    // old state file (no speed/phaseOffsetMs/followsTempo) loads and
+    // restores to the documented defaults (1.0 / 0 / false). Per-channel
+    // phase clock (F-phase, docs/39): speed (#3, clamped [0.05,8]),
+    // phaseOffsetMs (#11 chase, clamped ±10000), followsTempo (#4 tap
+    // opt-in). The TRANSIENT _phaseSeconds accumulator is deliberately
+    // NEVER persisted — it is rebuilt from 0 on boot.
+    speed: (typeof ch.speed === 'number' && Number.isFinite(ch.speed))
+      ? Math.max(0.05, Math.min(8, ch.speed))
+      : 1.0,
+    phaseOffsetMs: (typeof ch.phaseOffsetMs === 'number' && Number.isFinite(ch.phaseOffsetMs))
+      ? Math.max(-10000, Math.min(10000, ch.phaseOffsetMs))
+      : 0,
+    followsTempo: !!ch.followsTempo,
   };
 }
 
@@ -333,6 +348,13 @@ export class StateManager {
           // restart restores the operator's recolor. serializeChannel
           // already normalized it — reuse verbatim.
           hue: core.hue,
+          // Additive (phase-clock wave): per-channel speed/offset/follows-
+          // tempo round-trip so a restart restores the operator's clock.
+          // serializeChannel already clamped/typed these — reuse verbatim.
+          // The transient _phaseSeconds accumulator is never persisted.
+          speed: core.speed,
+          phaseOffsetMs: core.phaseOffsetMs,
+          followsTempo: core.followsTempo,
         };
       }),
       // Group registry (WAVE 15). Persisted alongside master so member
@@ -341,6 +363,13 @@ export class StateManager {
       mixGroups: Array.isArray(mixer.getMixGroups && mixer.getMixGroups())
         ? mixer.getMixGroups().map(serializeMixGroup)
         : [],
+      // Global tap-tempo (phase-clock wave, F-phase #4). Persisted alongside
+      // master so a restart restores the operator's tempo; the derived
+      // _tempoMultiplier is recomputed from it on boot. null = no tempo set
+      // (documented default — an old file without this key loads to null).
+      tempoBpm: (typeof mixer.tempoBpm === 'number' && Number.isFinite(mixer.tempoBpm))
+        ? mixer.tempoBpm
+        : null,
     };
     this.save('mixer_state.yaml', state);
   }

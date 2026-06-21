@@ -1,5 +1,5 @@
 export class PatternChannel {
-  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null, faderMax = 1.0, color = null, mixGroupId = null, soloSafe = false, hue = 0 }) {
+  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null, faderMax = 1.0, color = null, mixGroupId = null, soloSafe = false, hue = 0, speed = 1.0, phaseOffsetMs = 0, followsTempo = false }) {
     this.id = id;
     this.name = name;
     this.pattern = pattern;
@@ -82,6 +82,50 @@ export class PatternChannel {
       ? ((hue % 360) + 360) % 360
       : 0;
 
+    // ── Per-channel phase clock (docs/39 §F-phase: #3 speed / #4 tap-tempo
+    //    / #11 chase) ──────────────────────────────────────────────────
+    // The VM consumes ABSOLUTE per-handle time (wasm_host.beginFrame).
+    // The engine already accumulates one GLOBAL scaled phase (engine.js
+    // patternClockSeconds) and fans the SAME `elapsed` to every channel.
+    // We give each channel its OWN accumulated phase derived from that
+    // same global elapsed DELTA, scaled by this channel's effectiveSpeed.
+    // CRITICAL: we ACCUMULATE (never re-scale a raw dt at the call site)
+    // so an absolute-time pattern never JUMPS when the operator changes
+    // speed mid-show — the accumulator stays continuous across the change.
+    //
+    //   speed         per-channel time multiplier. Default 1.0 = run at
+    //                 the global clock rate. Clamped [0.05, 8] — a 0 or
+    //                 negative would FREEZE the pattern (frozen = broken),
+    //                 which the codex forbids as a silent failure, so the
+    //                 floor is 0.05 (visibly-slow, not dead).
+    //   phaseOffsetMs constant phase shift in ms added on top of the
+    //                 accumulator. Default 0. Clamped [-10000, 10000].
+    //                 Same-pattern channels with staggered offsets produce
+    //                 chase / ripple (#11). A change is an intended
+    //                 one-frame step, not a glitch.
+    //   followsTempo  opt-in: when true this channel's effectiveSpeed is
+    //                 multiplied by the mixer's tap-tempo multiplier (#4).
+    //                 Default false so the mission-critical exterior is
+    //                 immune to a tempo tap unless the operator opts in.
+    //
+    // An old state file without these fields restores to the documented
+    // schema defaults (1.0 / 0 / false) — NOT a silent fallback.
+    this.speed = (typeof speed === 'number' && Number.isFinite(speed))
+      ? Math.max(0.05, Math.min(8, speed))
+      : 1.0;
+    this.phaseOffsetMs = (typeof phaseOffsetMs === 'number' && Number.isFinite(phaseOffsetMs))
+      ? Math.max(-10000, Math.min(10000, phaseOffsetMs))
+      : 0;
+    this.followsTempo = !!followsTempo;
+
+    // TRANSIENT phase-clock accumulator state — NEVER serialized (the
+    // accumulator is rebuilt from zero on boot; persisting it would pin a
+    // stale absolute time that means nothing after a restart). _phaseSeconds
+    // is the running per-channel phase; _lastPhaseElapsed is the previous
+    // global elapsed we differenced against (null = first frame ⇒ dt 0).
+    this._phaseSeconds = 0;
+    this._lastPhaseElapsed = null;
+
     this.transitionMode = transitionMode;
     this.transitionTime = transitionTime;
 
@@ -118,9 +162,31 @@ export class PatternChannel {
     this.playlist = null;
   }
 
-  beginFrame(wasmHost, elapsedSeconds, forceRender = false) {
+  beginFrame(wasmHost, elapsedSeconds, forceRender = false, effectiveSpeed = 1) {
+    // Advance the per-channel phase accumulator from the GLOBAL elapsed
+    // delta. `elapsedSeconds` is the engine's already-global-speed-scaled
+    // patternClockSeconds (do NOT re-apply the global speed here — that
+    // would double-count it). We difference consecutive globals to get the
+    // global dt, scale by THIS channel's effectiveSpeed, and accumulate.
+    //
+    // First frame: _lastPhaseElapsed is null ⇒ dt = 0 (no spurious jump
+    // from a cold accumulator). A negative dt (clock went backwards — e.g.
+    // the engine reset patternClockSeconds) is floored to 0 rather than
+    // rewinding the phase. NO modulo: f64 has ample precision for a
+    // multi-day show, and wrapping would visibly glitch an absolute-time
+    // pattern. We accumulate every frame the handle exists so a muted /
+    // inactive channel's pattern stays time-synced (vis previews + ping-
+    // pong smoothness), mirroring the existing forceRender contract.
+    if (this.handle) {
+      const dt = this._lastPhaseElapsed === null
+        ? 0
+        : Math.max(0, elapsedSeconds - this._lastPhaseElapsed);
+      this._lastPhaseElapsed = elapsedSeconds;
+      this._phaseSeconds += dt * effectiveSpeed;
+    }
     if ((this.enabled || forceRender) && this.handle) {
-      wasmHost.beginFrame(this.handle, elapsedSeconds);
+      const phase = this._phaseSeconds + this.phaseOffsetMs / 1000;
+      wasmHost.beginFrame(this.handle, phase);
     }
   }
 

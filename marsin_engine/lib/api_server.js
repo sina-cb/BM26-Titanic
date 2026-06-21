@@ -239,6 +239,48 @@ export function validateHue(raw) {
   return { ok: true, value: ((n % 360) + 360) % 360 };
 }
 
+// ── Per-channel phase-clock SPEED validation (docs/39 §F-phase #3) ─────
+// A per-channel time multiplier. Codex P0 (no silent fallback): a
+// NON-FINITE value (NaN / Infinity, non-number / unparseable string) is
+// REJECTED with 400 — we never coerce a broken payload to a default. A
+// finite value is CLAMPED into [0.05, 8] (a benign slider saturation; 0
+// or negative would FREEZE the pattern, which we forbid — the 0.05 floor
+// keeps it visibly-slow, not dead). Mirrors validateFader's accept/reject
+// contract exactly.
+export function validateSpeed(raw) {
+  let n;
+  if (typeof raw === 'number') {
+    n = raw;
+  } else if (typeof raw === 'string' && raw.trim() !== '') {
+    n = Number(raw);
+  } else {
+    return { ok: false, error: `speed must be a finite number in [0.05,8], got '${raw}'` };
+  }
+  if (!Number.isFinite(n)) {
+    return { ok: false, error: `speed must be a finite number in [0.05,8], got '${raw}'` };
+  }
+  return { ok: true, value: Math.max(0.05, Math.min(8, n)) };
+}
+
+// ── Per-channel phase OFFSET validation (docs/39 §F-phase #11 chase) ───
+// A constant phase shift in milliseconds. Same accept/reject contract as
+// validateSpeed: non-finite ⇒ 400; a finite value is clamped to the
+// documented ±10000 ms window (a 10 s chase spread is already extreme).
+export function validatePhaseOffsetMs(raw) {
+  let n;
+  if (typeof raw === 'number') {
+    n = raw;
+  } else if (typeof raw === 'string' && raw.trim() !== '') {
+    n = Number(raw);
+  } else {
+    return { ok: false, error: `phaseOffsetMs must be a finite number in [-10000,10000], got '${raw}'` };
+  }
+  if (!Number.isFinite(n)) {
+    return { ok: false, error: `phaseOffsetMs must be a finite number in [-10000,10000], got '${raw}'` };
+  }
+  return { ok: true, value: Math.max(-10000, Math.min(10000, n)) };
+}
+
 // ── Deck transition durationMs bounds (single source of truth) ─────────
 // The /deck/transition-config POST, the per-call swap override, and the
 // internal loadPlaylistEntryWithTransition resolve all clamp to this same
@@ -1648,6 +1690,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // to 0 = no shift (documented schema default). The PatternChannel
       // ctor normalizes into [0,360).
       hue: typeof saved.hue === 'number' ? saved.hue : 0,
+      // F-phase restore (docs/39 §F-phase #3/#4/#11). An old state file
+      // without these restores to the documented defaults (speed 1.0 = run
+      // at the global rate; phaseOffsetMs 0 = no chase; followsTempo false
+      // = immune to tap-tempo). The PatternChannel ctor clamps speed to
+      // [0.05,8] and phaseOffsetMs to ±10000 defensively. _phaseSeconds is
+      // TRANSIENT — never restored (the accumulator starts at 0 on boot).
+      speed: typeof saved.speed === 'number' ? saved.speed : 1.0,
+      phaseOffsetMs: typeof saved.phaseOffsetMs === 'number' ? saved.phaseOffsetMs : 0,
+      followsTempo: !!saved.followsTempo,
     };
     const ch = role === 'deck'
       ? mixer.setDeckChannel(config)
@@ -1753,6 +1804,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
     if (mixerState.master !== undefined) {
       mixer.setMaster(mixerState.master);
+    }
+
+    // F-phase #4 (tap-tempo) restore: rebuild the derived _tempoMultiplier
+    // from the persisted global tempoBpm. A finite saved value goes through
+    // setTempoBpm (which clamps the multiplier); a missing/null/non-finite
+    // value leaves the default null tempo (no tempo set) untouched — a
+    // documented schema default, not a silent fallback.
+    if (typeof mixerState.tempoBpm === 'number' && Number.isFinite(mixerState.tempoBpm)) {
+      mixer.setTempoBpm(mixerState.tempoBpm);
     }
 
     const base = mixer.getDeckChannel();
@@ -2116,6 +2176,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // Surfaced so CaptainPad can render the per-channel HUE control. A
       // channel without the field (old engine) serializes 0 = no shift.
       hue: typeof c.hue === 'number' ? c.hue : 0,
+      // F-phase (docs/39 §F-phase): per-channel phase clock. speed (#3,
+      // [0.05,8]), phaseOffsetMs (#11 chase, [-10000,10000]), followsTempo
+      // (#4 opt-in to the global tap-tempo). Surfaced so CaptainPad can
+      // render the SPEED / OFFSET faders + FOLLOW TEMPO toggle. The
+      // transient _phaseSeconds accumulator is NEVER surfaced. Defaults
+      // 1.0 / 0 / false for an old engine without the fields.
+      speed: typeof c.speed === 'number' ? c.speed : 1.0,
+      phaseOffsetMs: typeof c.phaseOffsetMs === 'number' ? c.phaseOffsetMs : 0,
+      followsTempo: !!c.followsTempo,
       // CPC-matched exports are tagged with `cpcOwned`/`cpcKey`/
       // `cpcLabel` so the iPad can show a disabled "MATCHED · SPEED"
       // badge instead of silently hiding them — see notes in the
@@ -2220,6 +2289,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // F-hue (docs/39): per-channel hue rotation. See serializeChannel
         // above for semantics. 0 = no shift.
         hue: typeof c.hue === 'number' ? c.hue : 0,
+        // F-phase (docs/39 §F-phase): per-channel phase clock — speed (#3),
+        // phaseOffsetMs (#11 chase), followsTempo (#4). See serializeChannel
+        // above for semantics. Defaults 1.0 / 0 / false. _phaseSeconds is
+        // transient and never surfaced.
+        speed: typeof c.speed === 'number' ? c.speed : 1.0,
+        phaseOffsetMs: typeof c.phaseOffsetMs === 'number' ? c.phaseOffsetMs : 0,
+        followsTempo: !!c.followsTempo,
         // CPC-matched exports used to be filtered out here. As of
         // May 2026 they're SURFACED with a `cpcOwned` / `cpcKey` /
         // `cpcLabel` tag so the UI can show a disabled "MATCHED ·
@@ -2256,6 +2332,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // display from this on every broadcast. NOT persisted (transient, like
       // solo); empty after a restart.
       bumpedChannelIds: [...mixer._bumpedChannelIds],
+      // F-phase #4 (tap-tempo): the GLOBAL operator-tapped tempo. null =
+      // no tempo set (documented default — distinct from a tapped value).
+      // Affects only channels that opted in (followsTempo). The derived
+      // _tempoMultiplier is NOT surfaced (recomputed from bpm on the
+      // client / on restore). Rides the mixer-state broadcast — no new WS
+      // message type needed.
+      tempoBpm: (typeof mixer.tempoBpm === 'number' && Number.isFinite(mixer.tempoBpm))
+        ? mixer.tempoBpm
+        : null,
     };
   }
 
@@ -3570,6 +3655,35 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           masterFade: mixer.getMasterFade(),
         }));
       });
+    } else if (req.method === 'POST' && req.url === '/mixer/tempo') {
+      // F-phase #4 (tap-tempo). The CLIENT computes BPM from tap intervals;
+      // the engine just stores the resolved tempo and derives the global
+      // multiplier (120 BPM = 1×). Affects ONLY channels that opted in via
+      // followsTempo — the mission-critical exterior stays immune unless the
+      // operator opts it in. Rides the existing mixer-state broadcast (the
+      // serialized payload carries tempoBpm); no new WS message type.
+      readBody(data => {
+        // Codex P0: reject a non-finite or out-of-musical-range bpm with
+        // 400 BEFORE touching the mixer. [20,400] BPM is the supported
+        // musical window; outside it is a malformed tap, not a clamp.
+        const bpm = (typeof data.bpm === 'number') ? data.bpm : Number(data.bpm);
+        if (data.bpm === null || data.bpm === undefined || typeof data.bpm === 'boolean'
+            || (typeof data.bpm === 'string' && data.bpm.trim() === '')
+            || !Number.isFinite(bpm) || bpm < 20 || bpm > 400) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `bpm must be a finite number in [20,400], got '${data.bpm}'`,
+          }));
+        }
+        mixer.setTempoBpm(bpm);
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({
+          status: 'ok',
+          tempoBpm: mixer.tempoBpm,
+          tempoMultiplier: mixer._tempoMultiplier,
+        }));
+      });
     }
     // ── MIXER CHANNEL GROUPS (gang-faders) + SOLO (WAVE 15) ──────────────
     //
@@ -4276,6 +4390,35 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             return res.end(JSON.stringify({ error: hv.error }));
           }
           channel.hue = hv.value;
+        }
+        // F-phase #3: per-channel speed. validateSpeed — non-finite ⇒ 400
+        // (Codex P0); a finite value is clamped to [0.05,8]. Changing speed
+        // does NOT jump the phase (the accumulator stays continuous — only
+        // the future rate changes). No render-loop poke needed; beginFrame
+        // reads channel.speed each frame.
+        if (data.speed !== undefined) {
+          const sv = validateSpeed(data.speed);
+          if (!sv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: sv.error }));
+          }
+          channel.speed = sv.value;
+        }
+        // F-phase #11: per-channel phase offset (chase). validatePhaseOffsetMs
+        // — non-finite ⇒ 400; clamped to ±10000 ms. A constant added in
+        // beginFrame; a change is an intended one-frame step.
+        if (data.phaseOffsetMs !== undefined) {
+          const pv = validatePhaseOffsetMs(data.phaseOffsetMs);
+          if (!pv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: pv.error }));
+          }
+          channel.phaseOffsetMs = pv.value;
+        }
+        // F-phase #4: opt this channel in/out of the global tap-tempo. Pure
+        // boolean flag (coerced via !! like soloSafe/faderLocked).
+        if (data.followsTempo !== undefined) {
+          channel.followsTempo = !!data.followsTempo;
         }
         if (data.transitionMode !== undefined) channel.transitionMode = data.transitionMode;
         if (data.transitionTime !== undefined) channel.transitionTime = data.transitionTime;
@@ -5127,6 +5270,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             return res.end(JSON.stringify({ error: hv.error }));
           }
           channel.hue = hv.value;
+        }
+        // F-phase #3/#11/#4 on the deck channel — same validation +
+        // semantics as the mixer PATCH (docs/39 §F-phase).
+        if (data.speed !== undefined) {
+          const sv = validateSpeed(data.speed);
+          if (!sv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: sv.error }));
+          }
+          channel.speed = sv.value;
+        }
+        if (data.phaseOffsetMs !== undefined) {
+          const pv = validatePhaseOffsetMs(data.phaseOffsetMs);
+          if (!pv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: pv.error }));
+          }
+          channel.phaseOffsetMs = pv.value;
+        }
+        if (data.followsTempo !== undefined) {
+          channel.followsTempo = !!data.followsTempo;
         }
         if (data.locked !== undefined) {
           const becameLocked = !channel.locked && !!data.locked;
