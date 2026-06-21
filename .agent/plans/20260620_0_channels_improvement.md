@@ -524,3 +524,10 @@ new per-channel hue control lands into an already-decluttered strip.
   * speed/tap/chase design (read-only) — #3/#4/#11 shared phase-clock spec.
   Remaining round-2: #9 param presets, #3/#4/#11 (after design), #2 auto-cycle (after morph),
   #6 follow, #8 invert, #10 undo. Suite 976 pass/0 fail; deliverable 7a9f113.
+
+## STATUS LOG (cont. 15)
+- snapshot-morph #1 MERGED (4f64391): 987 pass/0 fail, HIL 18/18 (lands exactly on target).
+  Launched dev/phase_clock_engine — #3 speed + #4 tap-tempo + #11 chase ENGINE (design _33,
+  per-channel accumulated _phaseSeconds). Sole engine writer. UI deferred (pair with next engine
+  feature). NEXT: phase-clock UI ‖ param-presets engine (#9 new-file). Then #2 cycle, #6 follow,
+  #8 invert, #10 undo. Suite 987 pass/0 fail; deliverable 4f64391.
