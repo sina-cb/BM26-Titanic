@@ -44,7 +44,9 @@
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // calm base wash breathing rate
 export var thump = 0.0;        // CHEST-HIT trigger -> full-rig slam (audio audioChestHit)
-export var base = 0.28;        // calm base brightness floor (always-on)
+export var base = 0.42;        // calm base brightness floor (always-on; never near-dark) —
+                               //   the idle wash reads clearly at silence (mission-critical
+                               //   night-visibility), matching the 64/65/66 reference floor.
 export var decay = 0.5;        // slam envelope fall rate
 
 export var cp1H = 0.62, cp1S = 1.0, cp1V = 1.0; // palette 1 — deep blue (calm)
@@ -54,7 +56,7 @@ export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderThump(v) { thump = v; }
-export function sliderBase(v) { base = v; }          // mapped 0.18..0.70 by the engine
+export function sliderBase(v) { base = 0.18 + v * 0.42; } // 0.18..0.60; never near-dark
 export function sliderDecay(v) { decay = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
