@@ -252,3 +252,10 @@ Proof entry template:
   2. 3 `new_derived_signals.test.js` tests assumed the detector fires on synthetic edm_drop, but E1's precision-first detector no longer does → decoupled via an injected canonical drop event (signals validated; detector precision covered by detector_eval).
 - Command BY INSTIGATOR: `node --test tests/audio_*.test.js tests/bpm_tracker_octave.test.js tests/genre_classifier.test.js tests/new_derived_signals.test.js tests/switch_color_note.test.js tests/band_onsets.test.js tests/note_estimator_synthetic.test.js tests/companion_*.test.js tests/derived_signals_perf_finiteness.test.js` → **300 pass / 0 fail**. (detector_eval real-corpus test verified separately green; perf p99 deterministic per E3.)
 - LESSON LOGGED: always run the FULL audio suite after a wave of merges — per-slice subset runs miss cross-slice interactions (precision-first detector ↔ signal/test assumptions; config-contract snapshots).
+
+### G1 — chroma harmonic feature (honest null on genre; shipped as building block)  [PASS]  2026-06-21T00:35Z
+- Branch `dev/g1_genre_chroma` @ `8957cca` → merged (--no-ff, clean, additive).
+- 3 new analyzer signals (micTonalStabilityRaw/micChromaFluxRaw/micChromaTiltRaw) from a 12-bin chroma folded into the existing flux loop (no extra FFT/alloc; legacy outputs byte-identical-guarded). Genre feature vector 12→15, classifier weights for chroma = 0 → genre UNCHANGED 63.9% (ceiling confirmed a 3rd independent way).
+- ALSO fixed this round (cross-slice regressions the FULL suite caught): audio_config AUDIO_LIVE_FIELDS contract (E1 keys), 3 new_derived_signals drop tests (inject canonical drop), 3 audio_analysis_validation tests (TUNED_CFG disables E1 precision gates to prove the detector mechanism on clean synthetic drops).
+- Command(s) BY INSTIGATOR: COMPLETE suite `node --test tests/*.test.js tests/*.test.mjs tests/integration/*.test.mjs` → **923 pass / 0 fail** (baseline pre-G1 was 918/918). Restored test-residue states.
+- Verdict: G1 crossed off. ✅ — ENTIRE audio + engine test suite green (923).
