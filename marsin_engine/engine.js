@@ -1458,6 +1458,9 @@ async function main() {
         { kind: 'scalar', key: 'micOnsetMidRaw',  value: 0 },
         { kind: 'scalar', key: 'micOnsetHighRaw', value: 0 },
         { kind: 'scalar', key: 'micSubRaw',       value: 0 },
+        { kind: 'scalar', key: 'micTonalStabilityRaw', value: 0 },
+        { kind: 'scalar', key: 'micChromaFluxRaw',     value: 0 },
+        { kind: 'scalar', key: 'micChromaTiltRaw',     value: 0 },
       ];
       audioState.analyzer = new AudioAnalyzer({
         sampleRate: cfg.capture.sampleRate,
@@ -1467,7 +1470,8 @@ async function main() {
         kick:       cfg.kick,
         sub:        cfg.sub,   // analyzer_features (slot 3): sub-bass chest-hit window (optional)
         onAnalysis: ({ low, mid, high, kick, flux, domFreq1, domEnergy1, domFreq2, domEnergy2,
-                       onsetLow, onsetMid, onsetHigh, micSub }) => {
+                       onsetLow, onsetMid, onsetHigh, micSub,
+                       tonalStability, chromaFlux, chromaTilt }) => {
           const nowMs = Date.now();
           const dt = lastAnalysisAtMs === 0 ? 0 : Math.max(0, (nowMs - lastAnalysisAtMs) / 1000);
           lastAnalysisAtMs = nowMs;
@@ -1504,6 +1508,9 @@ async function main() {
           micWrites[15].value = onsetMid;
           micWrites[16].value = onsetHigh;
           micWrites[17].value = micSub;
+          micWrites[18].value = tonalStability;
+          micWrites[19].value = chromaFlux;
+          micWrites[20].value = chromaTilt;
           paramCenter.setMany(micWrites, 'audio', 'audio:mic');
           // docs/30: run the structure detector at the analyzer hop rate
           // (lowest latency, auto-pauses when the analyzer is off). It

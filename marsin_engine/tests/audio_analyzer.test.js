@@ -679,3 +679,72 @@ test('sub window validation throws on invalid edges (codex P0)', () => {
   assert.throws(() => new AudioAnalyzer({ ...base, sub: { minHz: 60, maxHz: 30 } }), /sub band invalid/);
   assert.throws(() => new AudioAnalyzer({ ...base, sub: { minHz: -1, maxHz: 60 } }), /sub band invalid/);
 });
+
+// ── CHROMA harmonic/timbre features (report 20260620_30) ────────────────────
+// Additive analyzer outputs: tonalStability (chroma concentration), chromaFlux
+// (harmonic-change rate), chromaTilt (treble/bass timbre). All in [0,1].
+
+test('chroma outputs are present and in [0,1]', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  an.pushSamples(sineInt16(220, 1.0));   // A3 — well inside the chroma band
+  for (const r of results) {
+    for (const k of ['tonalStability', 'chromaFlux', 'chromaTilt']) {
+      assert.ok(typeof r[k] === 'number', `${k} should be a number`);
+      assert.ok(r[k] >= 0 && r[k] <= 1, `${k} out of [0,1]: ${r[k]}`);
+    }
+  }
+});
+
+test('a single steady tone reads high tonalStability + low chromaFlux', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  an.pushSamples(sineInt16(330, 1.2));   // E4 — one clear pitch class
+  const tail = results.slice(Math.floor(results.length * 0.5));   // post-settle
+  const meanTonal = tail.reduce((s, r) => s + r.tonalStability, 0) / tail.length;
+  const meanFlux  = tail.reduce((s, r) => s + r.chromaFlux, 0) / tail.length;
+  // One sine concentrates the chroma in ~1 class → high concentration, and once
+  // the spectrum is steady the harmonic-change rate is near zero.
+  assert.ok(meanTonal > 0.4, `steady tone should be tonally concentrated, got ${meanTonal}`);
+  assert.ok(meanFlux < 0.05, `steady tone should have near-zero chromaFlux, got ${meanFlux}`);
+});
+
+test('an alternating two-tone reads higher chromaFlux than a steady tone', () => {
+  const steadyR = [];
+  makeAnalyzer({}, steadyR).pushSamples(sineInt16(262, 1.5));   // steady C4
+  const steadyFlux = steadyR.slice(steadyR.length >> 1)
+    .reduce((s, r) => s + r.chromaFlux, 0) / (steadyR.length >> 1);
+
+  // Alternate C4 and G4 every 0.15 s → the dominant pitch class keeps flipping.
+  const altR = [];
+  const an = makeAnalyzer({}, altR);
+  for (let seg = 0; seg < 10; seg++) {
+    an.pushSamples(sineInt16(seg % 2 ? 392 : 262, 0.15));
+  }
+  const altFlux = altR.slice(altR.length >> 1)
+    .reduce((s, r) => s + r.chromaFlux, 0) / (altR.length >> 1);
+  assert.ok(altFlux > steadyFlux,
+    `alternating tones (${altFlux}) should move chromaFlux above a steady tone (${steadyFlux})`);
+});
+
+test('chromaTilt rises with a bright tone vs a dark one', () => {
+  const lowR = [], highR = [];
+  makeAnalyzer({}, lowR).pushSamples(sineInt16(98, 1.0));    // G2 — bass (below 500 Hz split)
+  makeAnalyzer({}, highR).pushSamples(sineInt16(1318, 1.0)); // E6 — treble (above split)
+  const lowTilt  = lowR[lowR.length - 1].chromaTilt;
+  const highTilt = highR[highR.length - 1].chromaTilt;
+  assert.ok(highTilt > lowTilt,
+    `a treble tone (${highTilt}) should read brighter than a bass tone (${lowTilt})`);
+});
+
+test('chroma adds no NaN and the band sum is finite under silence', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  an.pushSamples(new Int16Array(SR));   // 1 s of digital silence
+  for (const r of results) {
+    assert.ok(Number.isFinite(r.tonalStability) && Number.isFinite(r.chromaFlux) && Number.isFinite(r.chromaTilt),
+      'chroma outputs must stay finite in silence');
+    // No harmonic content → flat/zero features, never negative.
+    assert.equal(r.chromaTilt, 0, 'silence chromaTilt should be 0');
+  }
+});

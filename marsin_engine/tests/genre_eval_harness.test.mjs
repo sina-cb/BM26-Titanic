@@ -62,10 +62,11 @@ test('genre-eval harness: force-party latches and publishes a valid party genre'
     `genre out of party range: ${r.tailVoteGenre} (${GENRE_NAMES[r.tailVoteGenre]})`);
 
   // Feature centroid must be finite and in [0,1] (normalized features).
-  // The classifier's feature vector is the v2 12-dim layout: 8 original
-  // (bpm,kickReg,kickDens,lowMid,sparkle,sparkleVar,melodic,flux) + 4
-  // engineered (bassW,midW,tilt,fluxVar) added in the real-audio retune.
-  assert.equal(r.meanFeat.length, 12, 'feature vector should have 12 dims (v2)');
+  // The classifier's feature vector is the v3 15-dim layout: 8 original
+  // (bpm,kickReg,kickDens,lowMid,sparkle,sparkleVar,melodic,flux) + 4 v2
+  // engineered (bassW,midW,tilt,fluxVar) + 3 v3 chroma harmonic-axis features
+  // (tonalStab,chromaFlux,chromaTilt) added in the chroma building-block slice.
+  assert.equal(r.meanFeat.length, 15, 'feature vector should have 15 dims (v3 chroma)');
   for (const f of r.meanFeat) {
     assert.ok(Number.isFinite(f), `non-finite feature: ${f}`);
     assert.ok(f >= -1e-6 && f <= 1 + 1e-6, `feature out of [0,1]: ${f}`);

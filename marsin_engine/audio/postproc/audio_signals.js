@@ -152,6 +152,18 @@ const ONSET_PULSE = [
   { key: 'audioChestHit', label: 'Audio · Chest Hit', hz: 30 },
 ];
 
+// genre_chroma (report 20260620_30): RAW analyzer chroma/timbre mirrors. The
+// analyzer folds the FFT magnitude into a 12-bin pitch-class chroma each hop and
+// derives three level-robust scalars (tonalStability = chroma concentration,
+// chromaFlux = harmonic-change rate, chromaTilt = treble/bass timbre). The genre
+// classifier reads these to separate harmonically-static genres (techno) from
+// chord-moving ones. Engine-internal, live, [0,1], not chain-processed.
+const CHROMA_RAW = [
+  { key: 'micTonalStabilityRaw', label: 'Mic · Tonal Stability (raw)' },
+  { key: 'micChromaFluxRaw',     label: 'Mic · Chroma Flux (raw)' },
+  { key: 'micChromaTiltRaw',     label: 'Mic · Chroma Tilt (raw)' },
+];
+
 function onsetPulseDescriptor(d) {
   return {
     key: d.key, label: d.label, type: 'float',
@@ -282,6 +294,12 @@ function buildDescriptors() {
   }
   for (const d of ONSET_PULSE) {
     out.push(onsetPulseDescriptor(d));
+  }
+
+  // 12) genre_chroma (report 20260620_30): RAW chroma/timbre analyzer mirrors
+  //     the genre classifier reads (engine-internal, no shaped pulse).
+  for (const d of CHROMA_RAW) {
+    out.push(rawMirrorDescriptor(d.key, d.label, 15));
   }
 
   return out;

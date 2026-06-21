@@ -252,6 +252,10 @@ export class DerivedSignals {
       bpm: b.bpm, low: g('micLowRaw'), mid: g('micMidRaw'), high: g('micHighRaw'),
       flux: g('micFluxRaw'), kick: g('micKickRaw'),
       pitchClass: n.pitchClass, noteStable: n.stable,
+      // genre_chroma (report 20260620_30): the analyzer's RAW chroma/timbre
+      // mirrors — the harmonic axis the 8 original features lacked.
+      tonalStability: g('micTonalStabilityRaw'), chromaFlux: g('micChromaFluxRaw'),
+      chromaTilt: g('micChromaTiltRaw'),
     }), SAFE_GENRE);
     // ── new_derived_signals: riser/anticipation, track-change/silence, ──────
     //    climax, phrase, drop-countdown (report 20260620_2 #1/#3/#8/#6/#7).

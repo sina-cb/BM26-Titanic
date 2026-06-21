@@ -107,6 +107,11 @@ const EXPECTED_AUDIO_ENTRIES = [
   { key: 'micOnsetMid', label: 'Mic · Onset Mid', ...LIVE({ broadcastHz: 30, sharedFnName: 'micOnsetMid' }) },
   { key: 'micOnsetHigh', label: 'Mic · Onset High', ...LIVE({ broadcastHz: 30, sharedFnName: 'micOnsetHigh' }) },
   { key: 'audioChestHit', label: 'Audio · Chest Hit', ...LIVE({ broadcastHz: 30, sharedFnName: 'audioChestHit' }) },
+  // genre_chroma (2026-06-20, report 20260620_30): RAW chroma/timbre analyzer
+  // mirrors the genre classifier reads. Engine-internal derived, [0,1], no OSC.
+  { key: 'micTonalStabilityRaw', label: 'Mic · Tonal Stability (raw)', ...LIVE({ broadcastHz: 15, sharedFnName: 'micTonalStabilityRaw' }) },
+  { key: 'micChromaFluxRaw', label: 'Mic · Chroma Flux (raw)', ...LIVE({ broadcastHz: 15, sharedFnName: 'micChromaFluxRaw' }) },
+  { key: 'micChromaTiltRaw', label: 'Mic · Chroma Tilt (raw)', ...LIVE({ broadcastHz: 15, sharedFnName: 'micChromaTiltRaw' }) },
 ];
 
 // Normalize: sort object keys so deep-equal ignores literal key ORDER (the

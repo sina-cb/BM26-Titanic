@@ -76,10 +76,20 @@ const LAST_PARTY_GENRE = 6;
 //   fluxVar     : short-window variance of spectral flux — "busyness
 //                 dynamics" (techno-family high, deep/downtempo low).
 //                 ENGINEERED v2.
+//   tonalStab   : chroma CONCENTRATION (1 = a single pitch class, 0 = flat) —
+//                 the analyzer's 12-bin pitch-class chroma folded each hop, then
+//                 1 − normalizedEntropy. tech_house/techno (static loops) read
+//                 HIGH, melodic_house/downtempo LOW. HARMONIC AXIS v3 (chroma).
+//   chromaFlux  : harmonic-CHANGE rate (L1 distance between successive
+//                 normalized chroma vectors). HARMONIC AXIS v3 (chroma).
+//   chromaTilt  : treble/(bass+treble) of the in-chroma-band magnitude (~split
+//                 at 500 Hz) — a level-robust brightness/timbre. melodic_house/
+//                 melodic_techno BRIGHT, techno DARKEST. HARMONIC AXIS v3.
 const F_BPM = 0, F_KICKREG = 1, F_KICKDENS = 2, F_LOWMID = 3,
       F_SPARKLE = 4, F_SPARKLEVAR = 5, F_MELODIC = 6, F_FLUX = 7,
-      F_BASSW = 8, F_MIDW = 9, F_TILT = 10, F_FLUXVAR = 11;
-const N_FEAT = 12;
+      F_BASSW = 8, F_MIDW = 9, F_TILT = 10, F_FLUXVAR = 11,
+      F_TONALSTAB = 12, F_CHROMAFLUX = 13, F_CHROMATILT = 14;
+const N_FEAT = 15;
 
 // Per-genre prior PROFILES (target feature vectors) + per-feature WEIGHTS
 // (how discriminating each feature is for the match). Index 0 (ambient) has no
@@ -122,28 +132,52 @@ const N_FEAT = 12;
 // search zeroed BPM (noisy/octave-doubled), kickDens (saturated), and
 // sparkle/sparkleVar (lost polarity on real audio) and leaned on the separable
 // axes: kickReg, melodic (relative ordering), the engineered midW + bassW, flux.
+// v3 (chroma) appends three HARMONIC-AXIS features [tonalStab, chromaFlux,
+// chromaTilt] from the analyzer's new 12-bin pitch-class chroma. The first 12
+// weights are the v2 corpus-search result (UNCHANGED).
+//
+// ════════════════════════════════════════════════════════════════════════
+// HONEST RESULT (report 20260620_30): the chroma harmonic axis is a real,
+// well-separated FEATURE (Fisher chromaTilt ~1.9, chromaFlux ~7.5 on the
+// corpus), but on these 36 noisy-label CC tracks it does NOT beat the 63.9%
+// ceiling (independently reproduced again here: a faithful in-engine weight
+// search over the 3 new axes + the v2 axes they could augment found NO
+// combination above 23/36 — the only 63.9% routes that USE chroma trade
+// melodic_techno for downtempo, a lateral move, not a net gain). The
+// within-genre variance of the hard genres swamps the between-genre
+// separation: techno scatters across chromaTilt 0.20–0.41 (overlapping
+// tech_house/melodic_house), and downtempo is BRIGHT (0.40–0.61) so chromaTilt
+// pulls it TOWARD melodic_house, its main confuser — see report §technodiag.
+// We therefore SHIP THE FEATURE (analyzer chroma + full CPC plumbing) as a
+// documented building block but set its classifier weights to 0, so the
+// deployed genre accuracy and its exact per-genre breakdown are UNCHANGED at
+// 63.9% (no overfit, no fabricated gain). The chroma CPC keys
+// (micTonalStabilityRaw / micChromaFluxRaw / micChromaTiltRaw) are live and
+// available to patterns + future work (e.g. a BPM-octave fix that recovers
+// downtempo would let chromaTilt finally separate it).
 const GENRE_WEIGHTS = Object.freeze(
-  [0.00, 1.01, 0.00, 0.36, 0.00, 0.00, 1.40, 0.69, 0.46, 1.20, 0.11, 0.32]);
+  [0.00, 1.01, 0.00, 0.36, 0.00, 0.00, 1.40, 0.69, 0.46, 1.20, 0.11, 0.32,
+   0.00, 0.00, 0.00]);
 
 const PROFILES = Object.freeze([
   // 1 deep_house: brightest (high tilt/sparkle), low bassW, low fluxVar.
   { genre: 1, w: GENRE_WEIGHTS,
-    p: [0.447, 0.599, 0.877, 0.541, 0.514, 0.503, 0.178, 0.367, 0.288, 0.398, 0.464, 0.154] },
+    p: [0.447, 0.599, 0.877, 0.541, 0.514, 0.503, 0.178, 0.367, 0.288, 0.398, 0.464, 0.154, 0.128, 0.111, 0.373] },
   // 2 melodic_house: low kickReg, high midW (chord/melody weight), low fluxVar.
   { genre: 2, w: GENRE_WEIGHTS,
-    p: [0.609, 0.285, 0.633, 0.520, 0.372, 0.549, 0.297, 0.348, 0.277, 0.487, 0.339, 0.137] },
+    p: [0.609, 0.285, 0.633, 0.520, 0.372, 0.549, 0.297, 0.348, 0.277, 0.487, 0.339, 0.137, 0.108, 0.078, 0.460] },
   // 3 tech_house: high bassW, LOW flux, lowest melodic — groovy and dry.
   { genre: 3, w: GENRE_WEIGHTS,
-    p: [0.779, 0.588, 0.909, 0.445, 0.329, 0.615, 0.104, 0.226, 0.376, 0.370, 0.367, 0.181] },
-  // 4 techno: high fluxVar + high lowMid + high sparkleVar — driving, busy.
+    p: [0.779, 0.588, 0.909, 0.445, 0.329, 0.615, 0.104, 0.226, 0.376, 0.370, 0.367, 0.181, 0.157, 0.124, 0.338] },
+  // 4 techno: high fluxVar + high lowMid + DARKEST chromaTilt — driving, dark.
   { genre: 4, w: GENRE_WEIGHTS,
-    p: [0.722, 0.497, 0.912, 0.556, 0.381, 0.716, 0.201, 0.301, 0.335, 0.416, 0.351, 0.191] },
-  // 5 melodic_techno: highest kickReg + kickDens — relentless + melodic.
+    p: [0.722, 0.497, 0.912, 0.556, 0.381, 0.716, 0.201, 0.301, 0.335, 0.416, 0.351, 0.191, 0.153, 0.094, 0.302] },
+  // 5 melodic_techno: high kickReg + BRIGHT chromaTilt — relentless + melodic.
   { genre: 5, w: GENRE_WEIGHTS,
-    p: [0.703, 0.691, 0.967, 0.525, 0.381, 0.693, 0.170, 0.308, 0.310, 0.442, 0.354, 0.182] },
-  // 6 downtempo: darkest (low tilt), low kickDens, low fluxVar — organic.
+    p: [0.703, 0.691, 0.967, 0.525, 0.381, 0.693, 0.170, 0.308, 0.310, 0.442, 0.354, 0.182, 0.107, 0.097, 0.460] },
+  // 6 downtempo: low kickDens, low fluxVar, low tonalStab — organic, mellow.
   { genre: 6, w: GENRE_WEIGHTS,
-    p: [0.713, 0.465, 0.686, 0.520, 0.326, 0.609, 0.252, 0.339, 0.356, 0.432, 0.296, 0.137] },
+    p: [0.713, 0.465, 0.686, 0.520, 0.326, 0.609, 0.252, 0.339, 0.356, 0.432, 0.296, 0.137, 0.107, 0.086, 0.416] },
 ]);
 
 // Map a BPM onto the dance band [85,140] → [0,1] (clamped). Defined as a
@@ -247,6 +281,8 @@ export class GenreClassifier {
     this._emaBassW = 0; this._emaMidW = 0; this._emaTilt = 0;
     //  Flux-variance estimator (fast mean + EMA of squared deviation).
     this._fluxMean = 0; this._fluxVar = 0;
+    // v3 (chroma) HARMONIC-AXIS EMAs — section-window smoothed like the bands.
+    this._emaTonalStab = 0; this._emaChromaFlux = 0; this._emaChromaTilt = 0;
     // Kick edge detection + interval ring.
     this._prevKick = 0; this._lastKickMs = -Infinity;
     this._kickIntervals.fill(0); this._kickFilled = 0; this._kickHead = 0;
@@ -301,6 +337,11 @@ export class GenreClassifier {
     this._updateBands(s.low, s.mid, s.high, s.flux, dt);
     this._updateKick(s.kick, now, dt);
     this._updateNoteRate(s.pitchClass, s.noteStable, dt);
+    // v3 (chroma): slow-EMA the analyzer's harmonic-axis scalars over the
+    // section window (same featTau as the bands) so they characterize the
+    // genre, not a single transient hop. Absent (undefined) → treated as 0
+    // (the analyzer always supplies them; this guards a partial test harness).
+    this._updateChroma(s.tonalStability, s.chromaFlux, s.chromaTilt, dt);
 
     // ── Warmup: hold ambient until the window has had time to fill AND the
     // kick-regularity ring is full. The kick-ring gate is the real cold-start
@@ -349,6 +390,23 @@ export class GenreClassifier {
     this._emaBassW += a * (0 - this._emaBassW);
     this._emaMidW += a * (0 - this._emaMidW);
     this._emaTilt += a * (0 - this._emaTilt);
+    // v3 (chroma) harmonic-axis EMAs decay too.
+    this._emaTonalStab  += a * (0 - this._emaTonalStab);
+    this._emaChromaFlux += a * (0 - this._emaChromaFlux);
+    this._emaChromaTilt += a * (0 - this._emaChromaTilt);
+  }
+
+  /** @private slow-EMA the analyzer's chroma harmonic-axis scalars. */
+  _updateChroma(tonalStability, chromaFlux, chromaTilt, dt) {
+    const a = 1 - Math.exp(-dt / this.p.featTau);
+    // Coerce missing/non-finite to 0 — the analyzer always supplies finite
+    // [0,1] values; this only guards a unit harness that omits them.
+    const ts = tonalStability >= 0 ? tonalStability : 0;
+    const cf = chromaFlux >= 0 ? chromaFlux : 0;
+    const ct = chromaTilt >= 0 ? chromaTilt : 0;
+    this._emaTonalStab  += a * (ts - this._emaTonalStab);
+    this._emaChromaFlux += a * (cf - this._emaChromaFlux);
+    this._emaChromaTilt += a * (ct - this._emaChromaTilt);
   }
 
   /** @private slow band + flux EMAs and the high-band variance estimator. */
@@ -453,6 +511,10 @@ export class GenreClassifier {
     f[F_MIDW] = clamp01(this._emaMidW);
     f[F_TILT] = clamp01(this._emaTilt);
     f[F_FLUXVAR] = clamp01(Math.sqrt(this._fluxVar) * this.p.fluxVarScale);
+    // v3 (chroma) harmonic-axis features (already [0,1] from the analyzer).
+    f[F_TONALSTAB]  = clamp01(this._emaTonalStab);
+    f[F_CHROMAFLUX] = clamp01(this._emaChromaFlux);
+    f[F_CHROMATILT] = clamp01(this._emaChromaTilt);
   }
 
   /** @private score the profile bank, smooth, argmax-with-hysteresis. */
