@@ -272,3 +272,10 @@ All verifiable-here audio work done. `feat/audio_analysis_2` pushed, tree clean,
 green across the ENTIRE suite. Remaining (documented in 20260620_29): live-`dt` fix +
 recall-capable/stems detector — both need OPERATOR live-mic validation / direction, the
 honest boundary of what's verifiable in this datacenter. Cron remains as safety net.
+
+### R-wave — adversarial review + autonomous fix (R1 engine-audio, R2 companion/patterns, R3 CaptainPad/docs)  [PASS]  2026-06-21T15:10Z
+- Branches dev/r1_engine_audio (`9947369`), r2_companion_patterns (`7f0b013`), r3_captainpad_docs (`682a737`) → all merged.
+- FIXED (autonomous, ~29 items): R1 23 trivial (stale *_ref header filenames, ~12 doc/code mismatches, 2 dead-code, 1 named const, 4 fail-loud Number.isFinite guards); R2 60_chest_thump silence floor 42→60 + companion CSS hex→theme tokens (5 themes); R3 audioAccentHex band-token collision (audioSlowZone painting LOW's colour) + audioDownbeat pulse key; INSTIGATOR 61_riser_release never-dark floor (52→64) + isPulseKey endsWith fix (audioBeatInBar render).
+- Command BY INSTIGATOR: full-suite gate `node --test tests/*.test.js tests/*.test.mjs tests/integration/*.test.mjs` on merged R1 tip → **924 pass / 0 fail**; CaptainPad tsc/lint exit 0; companion 72; 61 silence peak 64 + reactivity corr 0.98.
+- FLAGS triaged: B (beatInBar dual-path) INVESTIGATED → not a bug (identical formula, shared anchor). A/E (fail-loud vs graceful at config/error boundaries) + C (octave magic numbers) + D (genre weights) → surfaced to operator as genuine policy/tuning decisions (recs: E fail-loud, A graceful+loud-log, B/C/D leave).
+- Verdict: R-wave crossed off. ✅ — entire suite 924 green; only operator policy/tuning decisions remain.
