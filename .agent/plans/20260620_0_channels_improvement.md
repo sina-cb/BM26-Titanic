@@ -517,3 +517,10 @@ new per-channel hue control lands into an already-decluttered strip.
   * snapshot-morph design (read-only) — #1 recall-fade spec.
   Remaining round-2: #9 param presets, #3 speed→#4 tap→#11 chase, #1 morph, #2 cycle, #6 follow,
   #8 invert, #10 undo. Suite 960 pass/0 fail; deliverable 44825b9.
+
+## STATUS LOG (cont. 14)
+- flash/bump #5 MERGED (7a9f113): 976 pass/0 fail, HIL 19/19 (auto-release, faderMax cap). Launched:
+  * dev/snapshot_morph — #1 recall-fade morph (vertical engine+UI, design _31).
+  * speed/tap/chase design (read-only) — #3/#4/#11 shared phase-clock spec.
+  Remaining round-2: #9 param presets, #3/#4/#11 (after design), #2 auto-cycle (after morph),
+  #6 follow, #8 invert, #10 undo. Suite 976 pass/0 fail; deliverable 7a9f113.
