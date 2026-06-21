@@ -1160,6 +1160,13 @@ async function main() {
       if (apiServer && typeof apiServer.autoCycleTick === 'function') {
         apiServer.autoCycleTick();
       }
+      // DECK OVERLAYS (deck dynamic view overrides): advance every
+      // auto-advancing deck overlay in UNISON on ONE shared clock (operator
+      // refinement #1). Same wall-clock source as autoCycleTick; the overlay
+      // compiles are dispatched off the hot path inside the tick.
+      if (apiServer && typeof apiServer.deckOverlayAutoCycleTick === 'function') {
+        apiServer.deckOverlayAutoCycleTick();
+      }
     },
   });
   // Now that the loop exists, give engineCore a way to read the live

@@ -1673,6 +1673,169 @@ waiting for the next change.
 
 ---
 
+## 6.o §deck-overlays — Deck dynamic view overrides (2026-06-21, engine-side)
+
+Layered, view-scoped overlay decks composited OVER the main deck. Each overlay
+owns its own VIEW + its own PLAYLIST/cursor/content, blended over the deck
+within its view, stacked + reorderable, with an auto accent color. ENGINE-only
+in this wave (UI follows). REUSES the overlay-channel + blend + view-mask
+machinery — it is NOT a deck-local stack.
+
+### Model
+
+`PatternMixer.deckOverlays = []` lives beside `deckChannel` / `mixerChannels`.
+A deck overlay IS a `PatternChannel` (same construction path as a mixer
+overlay). Per layer: `id`, `viewSelection` (REQUIRED, validated, never an
+all/whole-rig selection), `playlist`, `mode` (`blend_screen` default; only
+`blend_screen | blend_add | blend_over` — `trans_*` excluded), `enabled`,
+`fader`, `faderMax`, `color` (auto accent), `hue`. Order = array index:
+`deckOverlays[0]` = bottom, `deckOverlays[last]` = top.
+
+- Cap: `DECK_OVERLAY_MAX = 4` (exported from `pattern_mixer.js`). A 5th add is
+  rejected **400 `DECK_OVERLAY_OVER_CAP`** at the API; `addDeckOverlay` also
+  throws as a belt-and-braces fail-loud.
+- Auto accent color: `DECK_OVERLAY_COLOR_SWATCHES` (engine-side 8-swatch
+  palette constant — the CaptainPad swatch list is UI-only). `addDeckOverlay`
+  cycles it, skipping any color in use by a sibling overlay or the main deck so
+  adjacent layers never collide. A restored overlay keeps its saved color.
+- `add/remove/reorder` mirror `addMixerChannel` / `removeMixerChannel` /
+  `reorderMixerChannels`: cap check, mask compile (`recompileChannelMask` →
+  `compileViewSelectionMask`), handle destroy on remove, and a permutation
+  validation that **THROWS** on a bad set (length / dup / membership). The
+  reorder is a single atomic array reassignment of the same objects (handles,
+  masks, color all preserved by reference).
+
+### Compositing (renderAll6ch — into `deckBuffer`)
+
+After the deck channel renders into `deckBuffer` (with its PFL blackout) and
+BEFORE the deck-swap inactive-sibling block, the overlays composite bottom→top
+INTO `deckBuffer` (NOT `mixerBuffer` — that feeds the other side of the
+deck/mixer crossfade). Per overlay: an effective-fader gate (`enabled ?
+min(fader, faderMax) : 0`) + skip-dark (`effFader <= 0.001`); render into the
+reused `channelBuffer`; per-overlay hue (`applyHueShift6chU8`, gated on
+non-zero); `renderBlend6ch(getBlendHandle(mode), …, deckBuffer, channelBuffer,
+effFader)`; then `commitBlendedLayerWithMask(deckBuffer, blended,
+overlay.compiledPixelMask, …)`. The composited `deckBuffer` then feeds the
+EXISTING `lerp(deck, mixer, viewFader)` + `applyMaster` UNCHANGED — so the
+deck/mixer crossfade, blackout, and grand-master all still apply uniformly.
+Reuses the existing scratch buffers (`channelBuffer` / `blendedScratch`) — NO
+new per-frame allocation. Overlays do NOT receive the deck PFL blackout (that
+applies to the deck channel only); they preserve the background exactly like
+mixer overlays.
+
+### Never-dark (mission rule)
+
+Pixels OUTSIDE every overlay's view stay EXACTLY at the `deckChannel` value —
+`commitBlendedLayerWithMask` leaves unselected pixels untouched, so the
+exterior the deck covers can NEVER be blacked out by overlays. WITHIN a chosen
+view the operator's selected overlay + mode governs and MAY dim (`blend_over`
+is a lerp) — that is intended operator override and acceptable. Structural
+guard: a `viewSelection` that compiles to `all`/whole-rig/empty is REFUSED
+(`addDeckOverlay` and PATCH of `viewSelection` throw / return **400
+`DECK_OVERLAY_VIEW_REQUIRED`**), so no overlay can ever target everything. The
+unit assertion "no pixel below deck" is scoped to the monotone modes
+(`blend_add` / `blend_screen`); for `blend_over` the assertion is only that
+pixels OUTSIDE the view are untouched.
+
+### Unique view per overlay (REFINEMENT)
+
+At most one overlay per view. `addDeckOverlay` and a `viewSelection` PATCH
+REJECT (**409 `DECK_OVERLAY_VIEW_TAKEN`**) if another overlay already targets an
+equivalent selection — compared via the normalized `{type, target, invert}`
+tuple (`deckOverlayViewTaken`).
+
+### Shared / matching auto-advance timer (REFINEMENT)
+
+Each overlay owns its OWN playlist + cursor + content, BUT the auto-advance
+TIMERS are SYNCHRONIZED across all deck overlays: ONE shared clock — a single
+anchor (`PatternMixer._deckOverlayAnchorMs`, transient) + a single shared delay
+(`PatternMixer.deckOverlayAutopilot = {active, delay_s, shuffle}`) for the whole
+group, NOT an independent per-overlay anchor. When the shared timer crosses its
+delay boundary EVERY auto-advancing overlay advances its OWN cursor at the same
+instant (each to its own next entry, honoring the shared `shuffle`). An overlay
+may be individually paused via its own `enabled` flag — a disabled overlay does
+not advance, but the shared cadence is unaffected so the others stay in step.
+Driven from the SAME render-loop `beforeFrame` hook as the per-channel
+`autoCycleTick` (`api_server.deckOverlayAutoCycleTick`), wired in `engine.js`
+right after `autoCycleTick` — one source of time (the wall clock). Advances are
+dispatched off the hot path via `setImmediate` (overlay `loadPlaylistEntry` is a
+50-200ms hard handle swap) with a per-overlay in-flight guard; a compile error
+is logged loudly and the overlay keeps its pattern (Codex P0). Set the shared
+cadence with **`POST /deck/overlays/autopilot {active?, delay_s?, shuffle?}`**
+(`delay_s` validated by `validateAutoCycleDelay`).
+
+### Shared globals (REFINEMENT)
+
+Deck overlays are subject to the SAME globals as the main deck — the GLOBAL
+PARAMS (speed / size / colors / BPM / macros) and the GLOBAL EFFECTS (global
+hue, global invert). Confirmed in code two ways:
+1. **Params / clock:** overlays tick via `overlay.beginFrame(wasmHost,
+   elapsedSeconds, true, this._effectiveSpeed(overlay))` in `PatternMixer.
+   beginFrame` — the SAME global `elapsedSeconds` and `_effectiveSpeed`
+   pipeline as the deck and mixer overlays. There are NO per-overlay isolated
+   globals.
+2. **Global effects:** global hue / invert / macros run POST-composite on
+   `model.pixels` in `engine.js` (`applyHueShift` / `applyInvert` /
+   `applyMacros`) AFTER `renderAll6ch()` returns. Because overlays are
+   composited INTO `deckBuffer` BEFORE that pass, the global effects apply to
+   overlays automatically.
+
+### Persistence (across restart)
+
+Overlays + the shared autopilot cadence serialize into `deck_state.yaml`
+(`overlays: [...]` via `serializeChannel`, `overlayAutopilot: {active, delay_s,
+shuffle}`) in `saveDeckState`'s `extras`. The boot restore loops
+`deckState.overlays` → `buildChannelFromSaved(saved, 'deckOverlay', …)` +
+`loadPlaylistEntry` (mirroring the mixer restore loop), then restores
+`deckOverlayAutopilot` (delay floored to 1s). An old file without `overlays`
+loads to `[]` (documented default, no fallback); the transient shared anchor
+stays `null` and re-seeds on the first active tick.
+
+### API surface (mirror mixer routes, fail loud)
+
+- `GET /deck/overlays` — `{ overlays: [serializeChannel], overlayAutopilot }`.
+- `POST /deck/overlays { viewSelection(REQUIRED), playlist|pattern, mode,
+  enabled }` → add (auto-color, `loadPlaylistEntry`); cap (400 OVER_CAP),
+  unique view (409 VIEW_TAKEN), all/empty view (400 VIEW_REQUIRED).
+- `PATCH /deck/overlays/:id { mode, fader, enabled, faderLocked, faderMax,
+  color, hue, viewSelection, pattern }` — role guard rejects the deck id and
+  any mixer-overlay id (`WRONG_ROLE`); a `viewSelection` change re-checks the
+  never-dark + unique-view rules.
+- `DELETE /deck/overlays/:id` — frees the WASM handle.
+- `POST /deck/overlays/reorder { order }` — permutation (400 REORDER_BAD_SET).
+- `POST /deck/overlays/:id/playlist` + `/playlist/entry` — swap playlist / load
+  an entry.
+- `POST /deck/overlays/autopilot { active?, delay_s?, shuffle? }` — the SHARED
+  cadence (one timer for the group).
+
+Validators reused: `validateViewSelection`, `VALID_CHANNEL_BLEND_MODES` /
+`isValidBlendMode` (trans_* excluded for overlays), `validateFader`,
+`validateHue`, `validateAutoCycleDelay`.
+
+### WS / broadcast
+
+`serializeDeckState` folds `overlays: [...]` + `overlayAutopilot` into the
+existing `deck` message — existing `deck` subscribers get them free, NO new WS
+type. `broadcastDeckState()` fires on every overlay mutation.
+
+### Implementation map (this wave)
+
+- `lib/pattern_mixer.js`: `DECK_OVERLAY_MAX`, `DECK_OVERLAY_COLOR_SWATCHES`,
+  `deckOverlays` + `deckOverlayAutopilot` + `_deckOverlayAnchorMs` fields,
+  `getDeckOverlays` / `getDeckOverlay` / `deckOverlayViewTaken` /
+  `_pickDeckOverlayColor` / `addDeckOverlay` / `removeDeckOverlay` /
+  `reorderDeckOverlays` / `setDeckOverlayViewSelection`, the compositing loop in
+  `renderAll6ch`, the `beginFrame` overlay tick, `setModelViewMasks` +
+  `destroy` extended.
+- `lib/api_server.js`: the `/deck/overlays*` routes, `deckOverlayAutoCycleTick`,
+  `serializeDeckState` + `saveAllState` extension, `buildChannelFromSaved`
+  `deckOverlay` role + the boot restore loop, `import { DECK_OVERLAY_MAX }`.
+- `engine.js`: `deckOverlayAutoCycleTick` wired into the `beforeFrame` hook.
+- Tests: `tests/deck_overlays.test.js` (15 unit tests),
+  `tests/hil/hil_deck_overlays_test.mjs` (self-contained HIL).
+
+---
+
 ## 7. Discrepancies / follow-ups
 
 - **`docs/19_playlists.md` §8.3 / §3.2 mark mixer-channel playlist routes as

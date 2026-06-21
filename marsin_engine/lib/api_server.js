@@ -23,6 +23,7 @@ import {
 import { topicForType, TOPICS } from './ws_topic_routing.js';
 import { parsePatternDefaults } from './pattern_defaults.js';
 import { UndoStack, UNDO_MAX } from './undo_stack.js';
+import { DECK_OVERLAY_MAX } from './pattern_mixer.js';
 
 /**
  * Validate a `viewSelection` payload before it reaches the mixer.
@@ -1191,7 +1192,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
   function saveAllState() {
     stateManager.saveMixerState(mixer);
-    stateManager.saveDeckState(mixer, { transitionConfig: { ...deckTransitionConfig } });
+    stateManager.saveDeckState(mixer, {
+      transitionConfig: { ...deckTransitionConfig },
+      // Deck dynamic view overrides: persist the overlay stack + the SHARED
+      // overlay autopilot cadence so they survive an engine restart (operator
+      // ruling #5). Each overlay is serialized with the same channel shape the
+      // mixer overlays use (serializeChannelForState) so the restore path can
+      // rebuild them via buildChannelFromSaved + loadPlaylistEntry. order is
+      // array order (bottom→top). The transient shared anchor is not persisted.
+      overlays: (mixer.getDeckOverlays ? mixer.getDeckOverlays() : []).map(serializeChannelForState),
+      overlayAutopilot: {
+        active: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.active),
+        delay_s: (mixer.deckOverlayAutopilot && typeof mixer.deckOverlayAutopilot.delay_s === 'number')
+          ? mixer.deckOverlayAutopilot.delay_s : 30,
+        shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
+      },
+    });
   }
 
   function getReplayableLocalExport(channel, controlId) {
@@ -1428,6 +1444,82 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           console.warn(`[AutoCycle] advance failed on channel ${channel.id} → ${targetId}: ${e.message}`);
         } finally {
           channel._autoCycleInFlight = false;
+        }
+      });
+    }
+  }
+
+  // ── SHARED deck-overlay auto-cycle tick (deck dynamic view overrides) ─────
+  //
+  // Operator refinement #1: deck overlays auto-advance on ONE SHARED clock, in
+  // UNISON — a single anchor + a single delay for the whole overlay group, NOT
+  // an independent per-overlay anchor. When the shared timer crosses its delay
+  // boundary EVERY auto-advancing overlay advances its OWN playlist cursor at
+  // the same instant (each to its own next entry/content). An overlay may be
+  // individually paused (its own `enabled` flag); a disabled overlay does not
+  // advance, but the SHARED cadence/phase is unaffected so the others stay in
+  // step.
+  //
+  // Driven from the SAME render-loop beforeFrame hook as autoCycleTick (one
+  // source of time, the wall clock). The shared autopilot state lives on
+  // `mixer.deckOverlayAutopilot` ({active,delay_s,shuffle}) and the transient
+  // anchor on `mixer._deckOverlayAnchorMs` (null = not yet seeded; first active
+  // tick seeds it without advancing, so the first advance lands a full delay_s
+  // later — mirrors the per-channel seed semantics). Actual advances are
+  // dispatched OFF the hot path via setImmediate (overlay loadPlaylistEntry is
+  // a 50-200ms hard handle swap; awaiting it in-frame would darken the deck).
+  // A per-overlay in-flight guard prevents stacking. Compile errors are logged
+  // LOUDLY and the overlay keeps its current pattern (Codex P0 — never silent).
+  function deckOverlayAutoCycleTick() {
+    // Mirror autoCycleTick: skip while a snapshot morph is rebuilding state.
+    if (mixer.getMorph && mixer.getMorph()) return;
+
+    const ap = mixer.deckOverlayAutopilot;
+    if (!ap || !ap.active) return;
+    const overlays = mixer.getDeckOverlays ? mixer.getDeckOverlays() : [];
+    if (overlays.length === 0) return;
+
+    const now = Date.now();
+    // Seed the SHARED anchor on the first active tick (no advance), then wait
+    // until delay_s elapses. delay_s floored to 1s (mirrors the validator) so a
+    // stale/zero on-disk value can't strobe.
+    if (mixer._deckOverlayAnchorMs === null || mixer._deckOverlayAnchorMs === undefined) {
+      mixer._deckOverlayAnchorMs = now;
+      return;
+    }
+    const delayMs = Math.max(1, ap.delay_s) * 1000;
+    if (now - mixer._deckOverlayAnchorMs < delayMs) return; // shared 'wait'
+
+    // Due on the SHARED clock: advance the SHARED anchor ONCE for the whole
+    // group (single cadence, no drift), then advance EVERY auto-advancing
+    // overlay's own cursor in unison. Re-anchor BEFORE dispatch so the next
+    // due-check counts from this beat even while compiles drain.
+    mixer._deckOverlayAnchorMs = now;
+    for (const overlay of overlays) {
+      // Individually-paused overlays don't advance, but the shared cadence is
+      // unaffected (the anchor already moved above) so the rest stay in step.
+      if (!overlay.enabled) continue;
+      if (overlay._autoCycleInFlight) continue;
+      if (!overlay.playlist || !overlay.playlist.name) continue;
+      const pl = playlistManager.load(overlay.playlist.name);
+      if (!pl || pl.entries.length === 0) continue;
+      // Each overlay picks its OWN next entry from its OWN playlist + cursor,
+      // honoring the SHARED shuffle flag (per-overlay content, shared timer).
+      const next = pickNextAutoCycleEntry(pl, ap, overlay.playlist.activeEntryId);
+      if (!next) continue; // held / no usable target — stays put this beat
+      overlay._autoCycleInFlight = true;
+      const targetId = next.id;
+      const plName = overlay.playlist.name;
+      setImmediate(() => {
+        try {
+          loadPlaylistEntry(overlay, plName, targetId);
+          saveAllState();
+          broadcastDeckState();
+        } catch (e) {
+          // Fail LOUD; keep the current pattern (NOT a silent swallow).
+          console.warn(`[DeckOverlayAutoCycle] advance failed on overlay ${overlay.id} → ${targetId}: ${e.message}`);
+        } finally {
+          overlay._autoCycleInFlight = false;
         }
       });
     }
@@ -1859,7 +1951,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     };
     const ch = role === 'deck'
       ? mixer.setDeckChannel(config)
-      : mixer.addMixerChannel(config);
+      : role === 'deckOverlay'
+        ? mixer.addDeckOverlay(config)
+        : mixer.addMixerChannel(config);
     if (saved.playlist) ch.playlist = saved.playlist;
     onChannelCompiled(ch);
 
@@ -1957,6 +2051,34 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (saved.id && saved.id.startsWith('ch_base')) continue;
         restoreChannel(saved, 'mixer');
       }
+    }
+
+    // Deck dynamic view overrides restore (operator ruling #5): rebuild the
+    // deck overlays from deck_state.yaml in saved order (bottom→top), mirroring
+    // the mixer restore loop. A dead overlay degrades + warns (the deck + other
+    // overlays stay live — never crashes the boot). An old file without
+    // `overlays` loads to [] (documented default). The shared overlay autopilot
+    // cadence is restored afterward; the transient shared anchor stays null
+    // (re-seeds on the first active tick).
+    if (Array.isArray(deckState.overlays)) {
+      for (const saved of deckState.overlays) {
+        try {
+          buildChannelFromSaved(saved, 'deckOverlay', saved.pattern);
+        } catch (e) {
+          console.warn(`Failed to restore deck overlay ${saved && saved.id} (${saved && saved.pattern}):`, e.message);
+        }
+      }
+    }
+    if (deckState.overlayAutopilot && typeof deckState.overlayAutopilot === 'object') {
+      const oap = deckState.overlayAutopilot;
+      mixer.deckOverlayAutopilot = {
+        active: !!oap.active,
+        // delay floored to 1s (mirrors validateAutoCycleDelay) so a stale/zero
+        // on-disk value can't strobe.
+        delay_s: (typeof oap.delay_s === 'number' && Number.isFinite(oap.delay_s)) ? Math.max(1, oap.delay_s) : 30,
+        shuffle: !!oap.shuffle,
+      };
+      mixer._deckOverlayAnchorMs = null;
     }
 
     if (mixerState.master !== undefined) {
@@ -2416,6 +2538,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // clears on engine restart. Lets CaptainPad reconcile the active cue.
       deckFocusChannelId: mixer.deckFocusChannelId || null,
       channel: serializeDeckChannel(),
+      // Deck dynamic view overrides (deck overlays). Folded into the `deck`
+      // WS message (the deck tab already subscribes) so existing subscribers
+      // get them free — NO new WS type. order[0] = bottom, order[last] = top.
+      // Each overlay serialized with the full channel shape (serializeChannel)
+      // PLUS its compiled view + the overlay-specific color accent.
+      overlays: (mixer.getDeckOverlays ? mixer.getDeckOverlays() : []).map(serializeChannel),
+      // SHARED deck-overlay autopilot cadence (operator refinement #1): ONE
+      // clock for the whole overlay group. The transient anchor
+      // (_deckOverlayAnchorMs) is NOT surfaced. delay_s/shuffle persist;
+      // active is the live arm flag.
+      overlayAutopilot: {
+        active: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.active),
+        delay_s: (mixer.deckOverlayAutopilot && typeof mixer.deckOverlayAutopilot.delay_s === 'number')
+          ? mixer.deckOverlayAutopilot.delay_s : 30,
+        shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
+      },
     };
   }
 
@@ -5663,6 +5801,356 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
       res.writeHead(405); res.end(JSON.stringify({ error: 'method not allowed' }));
     }
+    // ── DECK DYNAMIC VIEW OVERRIDES (deck overlays) ──────────────────────
+    // Layered, view-scoped overlay decks composited OVER the main deck. Mirror
+    // the mixer overlay routes (fail loud, no silent fallback). Literal-segment
+    // routes (/deck/overlays/reorder, /deck/overlays/autopilot) are armed
+    // BEFORE the `:id` regexes so the literal segment isn't read as an id.
+    // Operator rulings: unique view per overlay (409 DECK_OVERLAY_VIEW_TAKEN),
+    // cap 4 (400 DECK_OVERLAY_OVER_CAP), SHARED autopilot timer, SHARED globals,
+    // persist across restart. order[0]=bottom, order[last]=top.
+    else if (req.method === 'GET' && req.url === '/deck/overlays') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        overlays: (mixer.getDeckOverlays ? mixer.getDeckOverlays() : []).map(serializeChannel),
+        overlayAutopilot: {
+          active: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.active),
+          delay_s: (mixer.deckOverlayAutopilot && typeof mixer.deckOverlayAutopilot.delay_s === 'number')
+            ? mixer.deckOverlayAutopilot.delay_s : 30,
+          shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
+        },
+      }));
+    }
+    // POST /deck/overlays { viewSelection(required), playlist|pattern, mode,
+    // enabled } — add a deck overlay. Mirrors POST /mixer/channels but targets
+    // the deck-overlay stack: REQUIRES an explicit, non-'all' view (never-dark
+    // guard), rejects a taken view (409), and the cap (400 over 4).
+    else if (req.method === 'POST' && req.url === '/deck/overlays') {
+      readBody(data => {
+        // viewSelection is REQUIRED (an all-view overlay would defeat the
+        // feature AND violate never-dark). Validate first (fail loud).
+        if (data.viewSelection === undefined || data.viewSelection === null) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'viewSelection is required for a deck overlay', code: 'DECK_OVERLAY_VIEW_REQUIRED' }));
+        }
+        const v = validateViewSelection(data.viewSelection);
+        if (!v.ok) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: v.error }));
+        }
+        if (v.value.type === 'all') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'deck overlay viewSelection must target a specific view (not "all")', code: 'DECK_OVERLAY_VIEW_REQUIRED' }));
+        }
+        // Cap check BEFORE we burn a WASM handle (fail loud, distinct code).
+        if ((mixer.getDeckOverlays ? mixer.getDeckOverlays() : []).length >= DECK_OVERLAY_MAX) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `Maximum of ${DECK_OVERLAY_MAX} deck overlays allowed`, code: 'DECK_OVERLAY_OVER_CAP' }));
+        }
+        // Unique-view check (409) BEFORE compile.
+        if (mixer.deckOverlayViewTaken(v.value, null)) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'a deck overlay already targets this view', code: 'DECK_OVERLAY_VIEW_TAKEN' }));
+        }
+        // Optional blend mode (default blend_screen). trans_* excluded for
+        // overlays — only steady channel-blend modes are valid.
+        let mode = 'blend_screen';
+        if (data.mode !== undefined) {
+          if (!VALID_CHANNEL_BLEND_MODES.has(data.mode)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `Invalid deck-overlay blend mode '${data.mode}' (expected one of ${[...VALID_CHANNEL_BLEND_MODES].join(', ')})`,
+            }));
+          }
+          mode = data.mode;
+        }
+        // Resolve playlist + pattern (mirror POST /mixer/channels).
+        let playlistName = data.playlist;
+        let entryId = data.playlistEntryId;
+        let patternName;
+        if (playlistName) {
+          const pl = playlistManager.load(playlistName);
+          if (!pl) { res.writeHead(400); return res.end(JSON.stringify({ error: `Playlist not found: ${playlistName}` })); }
+          const usable = pl.entries.filter(e => !e._missing);
+          if (usable.length === 0) { res.writeHead(400); return res.end(JSON.stringify({ error: `Playlist ${playlistName} has no usable entries` })); }
+          const entry = entryId ? (pl.entries.find(e => e.id === entryId && !e._missing) || usable[0]) : usable[0];
+          entryId = entry.id;
+          patternName = entry.pattern;
+        } else if (data.pattern) {
+          patternName = path.basename(data.pattern, '.js');
+          playlistName = 'default';
+        } else {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'playlist or pattern required' }));
+        }
+        const src = loadPattern(patternsDir, patternName);
+        const comp = wasmHost.compile(src);
+        if (!comp.ok) { res.writeHead(400); return res.end(JSON.stringify({ error: comp.error })); }
+
+        let overlay;
+        try {
+          overlay = mixer.addDeckOverlay({
+            id: 'do_' + Date.now() + '_' + (channelIdCounter++),
+            name: data.name || 'Overlay',
+            pattern: patternName,
+            handle: comp.handle,
+            mode,
+            fader: data.fader !== undefined ? data.fader : 1.0,
+            enabled: data.enabled !== undefined ? !!data.enabled : true,
+            viewSelection: v.value,
+          });
+        } catch (addErr) {
+          // Belt-and-braces (the API checks above should have caught these).
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: String(addErr.message || addErr) }));
+        }
+        onChannelCompiled(overlay);
+        try {
+          if (data.playlist) {
+            loadPlaylistEntry(overlay, playlistName, entryId);
+          } else {
+            overlay.playlist = { name: playlistName, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+          }
+        } catch (e) {
+          console.warn(`[DeckOverlay] Could not attach playlist ${playlistName} to new overlay:`, e.message);
+        }
+        finalizeCpcValues(overlay);
+        saveAllState();
+        broadcastChannelPlaylistData(overlay);
+        broadcastDeckState();
+        let inlinePlaylistData = null;
+        try {
+          if (overlay.playlist && overlay.playlist.name) {
+            const pl = playlistManager.load(overlay.playlist.name);
+            if (pl) inlinePlaylistData = pl;
+          }
+        } catch (_) {}
+        res.writeHead(200); res.end(JSON.stringify({
+          status: 'ok',
+          overlayId: overlay.id,
+          pattern: overlay.pattern,
+          color: overlay.color,
+          playlist: overlay.playlist,
+          playlistData: inlinePlaylistData,
+        }));
+      });
+    }
+    // POST /deck/overlays/reorder { order:[ids] } (armed before :id regexes).
+    else if (req.method === 'POST' && req.url === '/deck/overlays/reorder') {
+      readBody(data => {
+        const order = data && data.order;
+        const current = mixer.getDeckOverlays ? mixer.getDeckOverlays() : [];
+        const currentIds = current.map(o => o.id);
+        const bad = (msg) => {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: msg, code: 'REORDER_BAD_SET' }));
+        };
+        if (!Array.isArray(order)) return bad('order must be an array of overlay ids');
+        if (order.length !== currentIds.length) {
+          return bad(`order has ${order.length} ids but there are ${currentIds.length} deck overlays`);
+        }
+        const orderSet = new Set(order);
+        if (orderSet.size !== order.length) return bad('order contains duplicate ids');
+        const currentSet = new Set(currentIds);
+        for (const oid of order) {
+          if (!currentSet.has(oid)) return bad(`order contains unknown overlay id '${oid}'`);
+        }
+        try {
+          mixer.reorderDeckOverlays(order);
+        } catch (e) {
+          return bad(String(e.message || e));
+        }
+        saveAllState();
+        broadcastDeckState();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', order: mixer.getDeckOverlays().map(o => o.id) }));
+      });
+    }
+    // POST /deck/overlays/autopilot { active?, delay_s?, shuffle? } — set the
+    // SHARED overlay autopilot cadence (operator refinement #1: ONE clock for
+    // the whole group). Armed before the :id regexes. delay_s validated by
+    // validateAutoCycleDelay (reject ≤0 / non-finite 400 AUTOCYCLE_BAD_DELAY).
+    else if (req.method === 'POST' && req.url === '/deck/overlays/autopilot') {
+      readBody(data => {
+        if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'body must be an object {active?,delay_s?,shuffle?}', code: 'AUTOCYCLE_BAD_PAYLOAD' }));
+        }
+        let nextDelay;
+        if (data.delay_s !== undefined) {
+          const dv = validateAutoCycleDelay(data.delay_s);
+          if (!dv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: dv.error, code: 'AUTOCYCLE_BAD_DELAY' }));
+          }
+          nextDelay = dv.value;
+        }
+        const ap = mixer.deckOverlayAutopilot = mixer.deckOverlayAutopilot
+          || { active: false, delay_s: 30, shuffle: false };
+        if (data.active !== undefined) ap.active = !!data.active;
+        if (nextDelay !== undefined) ap.delay_s = nextDelay;
+        if (data.shuffle !== undefined) ap.shuffle = !!data.shuffle;
+        // Re-seed the SHARED anchor so the next tick measures a full delay_s
+        // from THIS arm/change, not a stale pre-patch baseline.
+        mixer._deckOverlayAnchorMs = null;
+        saveAllState();
+        broadcastDeckState();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', overlayAutopilot: { ...ap } }));
+      });
+    }
+    // POST /deck/overlays/:id/playlist { name } — swap the overlay's playlist.
+    else if (req.method === 'POST' && req.url.match(/^\/deck\/overlays\/[^\/]+\/playlist$/)) {
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        const overlay = mixer.getDeckOverlay(id);
+        if (!overlay) { res.writeHead(404); return res.end(JSON.stringify({ error: 'deck overlay not found' })); }
+        try {
+          if (data.name === null) {
+            overlay.playlist = null;
+            saveAllState();
+            res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: null, playlistData: null }));
+            broadcastDeckState(); return;
+          }
+          const pl = playlistManager.load(data.name);
+          if (!pl) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+          const firstEntry = pl.entries.find(e => !e._missing) || pl.entries[0];
+          if (!firstEntry) {
+            overlay.playlist = { name: pl.name, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+            saveAllState();
+            res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: overlay.playlist, playlistData: pl }));
+            broadcastChannelPlaylistData(overlay);
+            broadcastDeckState(); return;
+          }
+          loadPlaylistEntry(overlay, pl.name, firstEntry.id);
+          saveAllState();
+          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: overlay.playlist, playlistData: pl }));
+          broadcastChannelPlaylistData(overlay);
+          broadcastDeckState();
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    }
+    // POST /deck/overlays/:id/playlist/entry { entryId } — load a specific entry.
+    else if (req.method === 'POST' && req.url.match(/^\/deck\/overlays\/[^\/]+\/playlist\/entry$/)) {
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        const overlay = mixer.getDeckOverlay(id);
+        if (!overlay) { res.writeHead(404); return res.end(JSON.stringify({ error: 'deck overlay not found' })); }
+        if (!overlay.playlist || !overlay.playlist.name) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'no playlist loaded' }));
+        }
+        if (!data.entryId) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'entryId required' }));
+        }
+        try {
+          loadPlaylistEntry(overlay, overlay.playlist.name, data.entryId);
+          saveAllState();
+          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: overlay.playlist, pattern: overlay.pattern }));
+          broadcastDeckState();
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    }
+    // PATCH /deck/overlays/:id { mode, fader, enabled, faderLocked, faderMax,
+    // color, hue, viewSelection } — mutate one overlay. The role guard rejects
+    // the deck id and any mixer overlay id (must be a deck-overlay id).
+    else if (req.method === 'PATCH' && req.url.match(/^\/deck\/overlays\/[^\/]+$/)) {
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        // Role guard: :id must be a deck overlay — not the deck channel,
+        // not a mixer overlay (fail loud, mirrors rejectIfWrongRole).
+        if (mixer.deckChannel && id === mixer.deckChannel.id) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'deck channel cannot be addressed via /deck/overlays routes', code: 'WRONG_ROLE', useInstead: '/deck/channel' }));
+        }
+        if (mixer.getMixerChannel && mixer.getMixerChannel(id)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'mixer overlay cannot be addressed via /deck/overlays routes', code: 'WRONG_ROLE', useInstead: `/mixer/channels/${encodeURIComponent(id)}` }));
+        }
+        const overlay = mixer.getDeckOverlay(id);
+        if (!overlay) { res.writeHead(404); return res.end(JSON.stringify({ error: 'deck overlay not found' })); }
+        if (data.name !== undefined) overlay.name = data.name;
+        if (data.mode !== undefined) {
+          // Overlays only accept steady channel-blend modes (no trans_*).
+          if (!VALID_CHANNEL_BLEND_MODES.has(data.mode)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `Invalid deck-overlay blend mode '${data.mode}' (expected one of ${[...VALID_CHANNEL_BLEND_MODES].join(', ')})`,
+            }));
+          }
+          overlay.mode = data.mode;
+          mixer.getBlendHandle(data.mode);
+        }
+        if (data.fader !== undefined) {
+          const fv = validateFader(data.fader);
+          if (!fv.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: fv.error })); }
+          if (!overlay.faderLocked) overlay.fader = fv.value;
+        }
+        if (data.enabled !== undefined) overlay.enabled = !!data.enabled;
+        if (data.faderLocked !== undefined) overlay.faderLocked = !!data.faderLocked;
+        if (data.faderMax !== undefined) {
+          const fm = validateFader(data.faderMax);
+          if (!fm.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: fm.error.replace('fader', 'faderMax') })); }
+          overlay.faderMax = fm.value;
+        }
+        if (data.color !== undefined) {
+          if (data.color !== null && typeof data.color !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
+          }
+          overlay.color = data.color === null ? null : data.color;
+        }
+        if (data.hue !== undefined) {
+          const hv = validateHue(data.hue);
+          if (!hv.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: hv.error })); }
+          overlay.hue = hv.value;
+        }
+        if (data.viewSelection !== undefined) {
+          const v = validateViewSelection(data.viewSelection);
+          if (!v.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: v.error })); }
+          // Never-dark guard + unique-view rule (409) on view change too.
+          if (v.value.type === 'all') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'deck overlay viewSelection must target a specific view (not "all")', code: 'DECK_OVERLAY_VIEW_REQUIRED' }));
+          }
+          if (mixer.deckOverlayViewTaken(v.value, id)) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'a deck overlay already targets this view', code: 'DECK_OVERLAY_VIEW_TAKEN' }));
+          }
+          mixer.setDeckOverlayViewSelection(id, v.value);
+        }
+        if (data.pattern !== undefined && data.pattern !== overlay.pattern) {
+          const patternName = path.basename(data.pattern, '.js');
+          const src = loadPattern(patternsDir, patternName);
+          const comp = wasmHost.compile(src);
+          if (comp.ok) {
+            if (overlay.handle) wasmHost.destroy(overlay.handle);
+            overlay.handle = comp.handle;
+            overlay.pattern = patternName;
+            overlay.localControls = {};
+            onChannelCompiled(overlay);
+            finalizeCpcValues(overlay);
+          } else {
+            console.warn(`[DeckOverlay] Pattern swap FAILED: ${patternName} compile error:`, comp.error);
+          }
+        }
+        saveAllState();
+        broadcastDeckState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+      });
+    }
+    // DELETE /deck/overlays/:id — remove an overlay (free its WASM handle).
+    else if (req.method === 'DELETE' && req.url.match(/^\/deck\/overlays\/[^\/]+$/)) {
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      if (paramCenter) paramCenter.unregisterChannel(id);
+      const removed = mixer.removeDeckOverlay(id);
+      if (!removed) { res.writeHead(404); return res.end(JSON.stringify({ error: 'deck overlay not found' })); }
+      saveAllState();
+      broadcastDeckState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+    }
     // ── DECK CHANNEL (post-split) ────────────────────────────────────────
     // Replaces the deck-via-/mixer/channels/<baseId>/... access pattern.
     // The deck is a singleton (no id needed in the URL) and these routes
@@ -6933,6 +7421,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // this into the render loop's beforeFrame hook so overlay playlists advance
   // on their timer. One source of time (wall clock), no per-channel timers.
   server.autoCycleTick = autoCycleTick;
+
+  // SHARED deck-overlay auto-cycle tick (deck dynamic view overrides). engine.js
+  // composes this into the SAME beforeFrame hook as autoCycleTick so deck
+  // overlays auto-advance in UNISON on one shared clock (operator refinement #1).
+  server.deckOverlayAutoCycleTick = deckOverlayAutoCycleTick;
 
   // Forceful close for the scene-switch restart path: terminate every live
   // WS client (they hold the connection open, which would otherwise delay
