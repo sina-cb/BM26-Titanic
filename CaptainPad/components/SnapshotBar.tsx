@@ -23,11 +23,16 @@ import { Palette } from '@/constants/theme';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
 import {
-  fetchSnapshots, saveSnapshot, recallSnapshot, deleteSnapshot,
+  fetchSnapshots, saveSnapshot, recallSnapshot, recallSnapshotFade, deleteSnapshot,
 } from '@/utils/channelExtrasApi';
 
 // Production-console touch target: expand small chips to the 44pt floor.
 const HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
+
+// Snapshot morph (round-2 #1, docs/39 §10.8): MORPH ramps the recall over a
+// chosen duration instead of the instant cut. These are the offered durations
+// (seconds); 3s is the default. The engine validates finite > 0.
+const MORPH_DURATIONS_S = [1, 3, 5, 10] as const;
 
 // Engine snapshot name rule (docs/39 §8.1): `^[a-z0-9][a-z0-9_-]{0,63}$`.
 // We lowercase + strip illegal chars locally so the prompt can preview the
@@ -51,6 +56,8 @@ export function SnapshotBar() {
   const [nameDraft, setNameDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [deletePrompt, setDeletePrompt] = useState<string | null>(null);
+  // Which row has its MORPH duration pills expanded (snapshot name), or null.
+  const [morphRow, setMorphRow] = useState<string | null>(null);
 
   // Initial seed + WS reconcile. The engine emits `snapshots` on every
   // mutation (save/delete/recall) carrying the fresh sorted list, so we
@@ -102,6 +109,24 @@ export function SnapshotBar() {
     }
   }, []);
 
+  const handleMorph = useCallback(async (name: string, durationS: number) => {
+    setMorphRow(null);
+    setListOpen(false);
+    // Like recall, the morph does NOT optimistically flip local state — the WS
+    // `mixer` broadcast reconciles the strips as the ramp progresses and a
+    // recall-fade-complete fires on landing (docs/39 §10.8). Fire + surface
+    // failures (404 unknown, 400 over-cap/malformed/bad-duration).
+    const res = await recallSnapshotFade(name, Math.round(durationS * 1000));
+    if (!res.ok) {
+      console.error(`[SnapshotBar] Morph rejected for "${name}":`, res.error);
+      Alert.alert(
+        'Look not morphed',
+        `The engine rejected morphing to "${name}". ${res.error || ''} `.trim() +
+          'A look with more overlays than the channel cap, or a malformed snapshot, cannot be recalled.',
+      );
+    }
+  }, []);
+
   const confirmDelete = useCallback(async () => {
     const name = deletePrompt;
     if (!name) return;
@@ -140,35 +165,64 @@ export function SnapshotBar() {
       </TouchableOpacity>
 
       {/* ── Recall / delete list ─────────────────────────────────────── */}
-      <Modal transparent visible={listOpen} animationType="fade" onRequestClose={() => setListOpen(false)}>
-        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setListOpen(false)}>
+      <Modal transparent visible={listOpen} animationType="fade" onRequestClose={() => { setMorphRow(null); setListOpen(false); }}>
+        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => { setMorphRow(null); setListOpen(false); }}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}}>
             <View style={styles.card}>
               <Text style={styles.cardTitle}>RECALL A LOOK</Text>
+              <Text style={styles.cardHint}>TAP A NAME FOR AN INSTANT CUT, OR ⮕ MORPH TO CROSSFADE OVER N SECONDS.</Text>
               {snapshots.length === 0 ? (
                 <Text style={styles.emptyText}>NO SAVED LOOKS — TAP &quot;+ CAPTURE&quot; TO SAVE THE CURRENT MIX</Text>
               ) : (
                 <ScrollView style={{ maxHeight: 360 }}>
                   {snapshots.map((name) => (
-                    <View key={name} style={styles.row}>
-                      <TouchableOpacity
-                        style={styles.rowRecall}
-                        hitSlop={HIT_SLOP}
-                        onPress={() => handleRecall(name)}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Recall look ${name}`}
-                      >
-                        <Text style={styles.rowName} numberOfLines={1}>{name}</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.rowDelete}
-                        hitSlop={HIT_SLOP}
-                        onPress={() => setDeletePrompt(name)}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Delete look ${name}`}
-                      >
-                        <Text style={styles.rowDeleteText}>DELETE</Text>
-                      </TouchableOpacity>
+                    <View key={name}>
+                      <View style={styles.row}>
+                        <TouchableOpacity
+                          style={styles.rowRecall}
+                          hitSlop={HIT_SLOP}
+                          onPress={() => handleRecall(name)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Recall look ${name} (instant cut)`}
+                        >
+                          <Text style={styles.rowName} numberOfLines={1}>{name}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.rowMorph, morphRow === name && styles.rowMorphActive]}
+                          hitSlop={HIT_SLOP}
+                          onPress={() => setMorphRow(morphRow === name ? null : name)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Morph (crossfade) to look ${name}`}
+                        >
+                          <Text style={styles.rowMorphText}>MORPH</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.rowDelete}
+                          hitSlop={HIT_SLOP}
+                          onPress={() => setDeletePrompt(name)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Delete look ${name}`}
+                        >
+                          <Text style={styles.rowDeleteText}>DELETE</Text>
+                        </TouchableOpacity>
+                      </View>
+                      {morphRow === name ? (
+                        <View style={styles.morphPills}>
+                          <Text style={styles.morphPillsLabel}>CROSSFADE OVER</Text>
+                          {MORPH_DURATIONS_S.map((d) => (
+                            <TouchableOpacity
+                              key={d}
+                              style={styles.morphPill}
+                              hitSlop={HIT_SLOP}
+                              onPress={() => handleMorph(name, d)}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Morph to ${name} over ${d} seconds`}
+                            >
+                              <Text style={styles.morphPillText}>{d}s</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      ) : null}
                     </View>
                   ))}
                 </ScrollView>
@@ -362,6 +416,66 @@ function makeStyles(C: Palette) {
       fontSize: 10,
       letterSpacing: 0.8,
       color: C.error,
+    },
+    cardHint: {
+      fontFamily: 'Inter_400Regular',
+      fontSize: 11,
+      lineHeight: 15,
+      color: C.icon,
+      marginBottom: 10,
+    },
+    rowMorph: {
+      minHeight: 44,
+      minWidth: 72,
+      justifyContent: 'center' as const,
+      alignItems: 'center' as const,
+      paddingHorizontal: 12,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+      backgroundColor: C.surfaceContainerHigh,
+    },
+    rowMorphActive: {
+      borderColor: C.primary,
+      backgroundColor: C.surfaceContainerHigh,
+    },
+    rowMorphText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 10,
+      letterSpacing: 0.8,
+      color: C.primary,
+      textTransform: 'uppercase' as const,
+    },
+    morphPills: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: 8,
+      marginBottom: 8,
+      marginTop: -2,
+      paddingLeft: 4,
+      flexWrap: 'wrap' as const,
+    },
+    morphPillsLabel: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 9,
+      letterSpacing: 0.8,
+      color: C.secondary,
+      textTransform: 'uppercase' as const,
+    },
+    morphPill: {
+      minHeight: 36,
+      minWidth: 44,
+      justifyContent: 'center' as const,
+      alignItems: 'center' as const,
+      paddingHorizontal: 12,
+      borderRadius: 8,
+      backgroundColor: C.primary,
+    },
+    morphPillText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 12,
+      letterSpacing: 0.5,
+      color: '#FFF',
     },
     hint: {
       fontFamily: 'Inter_400Regular',

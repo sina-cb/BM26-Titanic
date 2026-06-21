@@ -747,6 +747,97 @@ renew timer AND eagerly releases held bumps.
 
 ---
 
+### 10.8 SNAPSHOT CROSSFADE / MORPH — ramp a recall over N seconds (round-2 #1, 2026-06-21)
+
+Recall a saved look by **ramping** the live mix current→target over a chosen
+duration instead of the instant cut `/recall` does. Additive — `/recall` is
+untouched; this is its animated sibling, built ENTIRELY on the engine's
+existing animation machinery (per-channel `transitions[]`, the grand-master
+`_masterFade`, and a new parallel group-fade array) so there is no second
+interpolation system.
+
+**API.** `POST /mixer/snapshots/:name/recall-fade { durationMs }`
+(finite > 0). `404` unknown name · `400 SNAPSHOT_MALFORMED` (corrupt snapshot)
+· `400` `durationMs <= 0` / non-finite / missing (validated BEFORE any load or
+mutation) · `400 SNAPSHOT_OVER_CAP` (the **UNION** `current ∪ target` overlay
+count exceeds `maxChannels`). The route is armed with the regex
+`^/mixer/snapshots/[^/]+/recall-fade$`, which the `…/recall$` regex cannot
+shadow (it ends at `recall`, not `recall-fade`). **No `saveAllState` at
+kickoff** (transient animation, exactly like `/mixer/master/fade`); the look
+is persisted by the morph finalizer on completion. Broadcasts
+`{type:'snapshots', action:'recall-fade', name}` at kickoff and
+`{type:'snapshots', action:'recall-fade-complete'}` when the ramps land (both
+on the existing `snapshots` CONTROL topic — no routing change).
+
+**Transient UNION cap (fail-loud, the key risk).** While a morph is in flight
+the current-only (C) channels still exist (fading out) WHILE the target-only
+(T) channels are added, so the peak channel count is `|current ∪ target|`, not
+the target count. We validate that union vs `maxChannels` BEFORE mutating and
+reject over-cap with `SNAPSHOT_OVER_CAP` — never a silent truncation (Codex
+P0). Because peak = union ≤ cap, the mixer's per-add cap is never tripped mid-
+build.
+
+**Channel semantics (match by channel ID).**
+
+| Class | Condition | Behavior |
+|---|---|---|
+| **M** | id in BOTH | SNAP structural/chroma (rebuild content so a changed `pattern`/`mode`/`viewSelection`/`faderMax`/`color`/`hue`/`mixGroupId` takes effect at kickoff), anchor the rebuilt fader at the PRE-morph level, then `fadeChannel` current→target (smoothstep). A changed-pattern M is the structural-snap + level-ramp case. |
+| **T** | target-only | `restoreChannel('mixer')` then force `fader=0`+`enabled`, then `fadeChannel` 0→target. |
+| **C** | current-only | `fadeChannel(id, 0, { destroyOnComplete })` → `updateTransitions` removes the channel object; the finalizer `paramCenter.unregisterChannel(id)` (because `removeChannel` does NOT — `/recall` unregisters explicitly at teardown). Fader-locked C channels are left in place (not in target) — documented, not ripped out mid-morph. |
+
+**Master / groups / deck.** Master ramps via `startMasterFade(look.master,
+durationMs)`. Groups ramp the **fader** of groups present in BOTH (capture
+prior faders, `restoreMixGroups`, rewind to prior + `startGroupFade` to target
+via the new `_groupFades` array — parallel to `_masterFade`, linear wall-clock,
+lands exactly, self-clears); target-only groups SNAP (nothing to ramp from).
+The deck SNAPS content (mission-critical never-dark via `restoreChannel`'s
+fallback) and RAMPS its fader.
+
+**v1 deferrals (documented).** RAMP **levels only** (per-channel fader, group
+fader, master). `hue`/`color`/`faderMax` are **SNAPPED** at kickoff:
+`color` is metadata (no render), `faderMax` is a non-linear ceiling (ramping it
+would warp the level ramp), `hue` is angular and needs short-arc interpolation
+(v2). The deck/T never-dark rule means deck/T **content** snaps, only the level
+animates.
+
+**Descriptor + completion (allocation-free hot path).** `PatternMixer._morph =
+{ startMs, durationMs, fadeOutIds }`. The descriptor owns NO interpolation — it
+rides the existing `transitions[]` / `_masterFade` / `_groupFades` ticks
+already in `beginFrame`. `_tickMorph()` (added to `beginFrame`, AFTER the
+ramps) is a single O(1) wall-clock comparison: when `now - startMs >=
+durationMs` it clears `_morph` and fires `onMorphComplete({ fadeOutIds })`
+EXACTLY once. The finalizer CPC-unregisters the faded-out ids, `saveAllState()`,
+and broadcasts the settled mix + `recall-fade-complete`. Because every ramp
+shares the identical `durationMs`, the settled mix EQUALS an instant `/recall`
+of the same snapshot exactly (proven in HIL).
+
+**Kickoff cancels/replaces** a prior morph (`cancelMorph` — no finalizer, no
+double-free), the grand-master fade (auto via `startMasterFade`), per-channel
+transitions (auto via `fadeChannel`'s `cancelChannelTransition`), all group
+fades (`cancelAllGroupFades`), the deck swap (`cancelDeckPatternSwap`), and
+clears solo + bump (transient — a stuck solo would gate the morph's losers to
+black mid-ramp). A direct `updateMixGroup` fader write cancels that group's
+in-flight fade (operator's hand wins, mirroring `setMaster`).
+
+**CaptainPad.** `SnapshotBar.tsx` per recall-list row gains a **MORPH** button
+that expands inline duration pills **1 / 3 / 5 / 10 s** (default 3) →
+`recallSnapshotFade(name, durationMs)`. No optimistic flip (the WS `mixer`
+broadcast reconciles the strips as the ramp progresses); `Alert` on any 4xx
+(mirrors the instant `handleRecall`). The plain name tap stays the instant cut.
+
+**Implementation map (round-2 #1).**
+
+| Site | What |
+|---|---|
+| `lib/pattern_mixer.js` | `_groupFades` array + `startGroupFade`/`cancelGroupFade`/`cancelAllGroupFades`/`_tickGroupFades`; `_morph` descriptor + `beginMorph`/`getMorph`/`cancelMorph`/`_tickMorph` + `onMorphComplete`; both ticks wired into `beginFrame`; `updateMixGroup` fader write cancels in-flight group fade; `deleteMixGroup` drops fade |
+| `lib/api_server.js` | `morphToLook(look, durationMs)` (union-cap, M/T/C build, master/group/deck ramps, arms `_morph`); `POST /mixer/snapshots/:name/recall-fade` route (validate→morph→broadcast, no kickoff save); `onMorphComplete` finalizer (CPC-unregister faded-out ids + save + broadcast complete) |
+| `CaptainPad/utils/channelExtrasApi.ts` | `recallSnapshotFade(name, durationMs)` (mirrors `recallSnapshot` + master-fade body shape, fail-loud) |
+| `CaptainPad/components/SnapshotBar.tsx` | per-row MORPH button + inline 1/3/5/10 s duration pills → `recallSnapshotFade`; no optimistic flip; Alert on 4xx |
+| `tests/snapshot_morph.test.js` | Unit (11): group-fade lerp/exact-land/cancel-on-write/delete-drop/validation; fadeChannel M midpoint≈smoothstep + T 0→target + C→0+removed; changed-pattern structural-snap + level-ramp; morph descriptor fires finalizer once with fadeOutIds; beginMorph duration validation; cancelMorph (replace mid-flight, no double-fire) |
+| `tests/hil/hil_snapshot_morph_test.mjs` | HIL (18): recall-fade ramps master+fader MONOTONICALLY toward target, converges to target, and the settled mix EQUALS an instant recall of the same snapshot EXACTLY (lands exactly on target look); 404/400 (durationMs 0/neg/non-finite/missing) error paths |
+
+---
+
 ## 11. Per-channel output METERING (2026-06-20)
 
 A cheap effective-output **level** per channel, surfaced as a bar/percent

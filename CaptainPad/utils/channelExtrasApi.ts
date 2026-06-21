@@ -113,6 +113,40 @@ export async function recallSnapshot(name: string): Promise<ApiResult<{ status: 
   }
 }
 
+/**
+ * Recall (morph to) a snapshot's full look by RAMPING current→target over
+ * `durationMs` instead of the instant cut `recallSnapshot` does (round-2 #1,
+ * docs/39 §10.8). POST /mixer/snapshots/:name/recall-fade { durationMs }.
+ * The engine validates durationMs (finite > 0 ⇒ else 400), the UNION channel
+ * cap (over-cap ⇒ 400 code:SNAPSHOT_OVER_CAP), an unknown name (404), and a
+ * malformed snapshot (400 code:SNAPSHOT_MALFORMED). Like recall, this does NOT
+ * optimistically flip local state — the WS mixer broadcast reconciles the
+ * strips as the ramp progresses, and a `snapshots` recall-fade-complete event
+ * fires when it lands.
+ */
+export async function recallSnapshotFade(
+  name: string,
+  durationMs: number,
+): Promise<ApiResult<{ status: string; name: string }>> {
+  try {
+    const res = await fetchWithTimeout(
+      `${api_base}/mixer/snapshots/${encodeURIComponent(name)}/recall-fade`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ durationMs }),
+      },
+    );
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
 // ── Per-channel intensity clamp (F-C) + color (F-D) ───────────────────────
 // Both are channel metadata set through the SAME PATCH /mixer/channels/:id
 // the rest of the mixer uses (updateMixerChannel). These thin wrappers pin
