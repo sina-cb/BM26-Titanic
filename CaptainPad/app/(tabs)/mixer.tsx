@@ -29,7 +29,7 @@ import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { SnapshotBar } from '@/components/SnapshotBar';
 import { ParamPresetMenu } from '@/components/ParamPresetMenu';
-import { setChannelFaderMax, setChannelColor, setChannelHue, setChannelSpeed, setChannelPhaseOffset, setChannelFollowsTempo } from '@/utils/channelExtrasApi';
+import { setChannelFaderMax, setChannelColor, setChannelHue, setChannelSpeed, setChannelPhaseOffset, setChannelFollowsTempo, setChannelInvert } from '@/utils/channelExtrasApi';
 import { duplicateMixerChannel, reorderMixerChannels, panicMixer } from '@/utils/channelOpsApi';
 import {
   type MixGroup,
@@ -224,7 +224,7 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onHueChange, onSpeedChange, onPhaseOffsetChange, onFollowsTempoChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onHueChange, onInvertChange, onSpeedChange, onPhaseOffsetChange, onFollowsTempoChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -614,6 +614,38 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           <Text style={[styles.displayMono, { width: 32, textAlign: 'right', fontSize: 13, color: C.secondary }]}>
             {Math.round(channel.hue ?? 0)}
           </Text>
+        </View>
+      )}
+
+      {/* Per-channel color INVERT (F-invert, docs/39 §F-invert; engine #8).
+          A pure-boolean chroma op: inverts THIS channel's RGB contribution
+          PRE-blend, AFTER the per-channel hue (hue-then-invert). W/A/UV
+          (mission-critical exterior whites) are never touched; invert=false
+          is a no-op. Sits right under HUE since it's part of the same chroma
+          cluster. Modeled on the FOLLOW TEMPO / SAFE toggle (a labeled button
+          that flips state), NOT a fader. Server-authoritative; the next
+          mixer-state broadcast reconciles. Same lock gate. State carried by
+          the ✓ glyph + accessibilityState (not color-only). Purple-lit when
+          on, matching the hue fill so it reads as a chroma control. */}
+      {onInvertChange && (
+        <View style={styles.invertRow}>
+          <Text style={[styles.labelCaps, { width: 36 }]}>INV</Text>
+          <TouchableOpacity
+            style={[
+              styles.invertBtn,
+              !!channel.invert && { backgroundColor: '#B36AE2', borderColor: '#B36AE2' },
+              locked && { opacity: 0.5 },
+            ]}
+            disabled={locked}
+            onPress={() => { if (!locked) onInvertChange(channel.id, !channel.invert); }}
+            accessibilityRole="switch"
+            accessibilityLabel="Invert channel color"
+            accessibilityState={{ checked: !!channel.invert, disabled: locked }}
+          >
+            <Text style={[styles.labelCaps, !!channel.invert && { color: '#FFF' }]}>
+              {channel.invert ? '✓ INVERT' : 'INVERT'}
+            </Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -1734,6 +1766,23 @@ export default function MixerScreen() {
     }
   }, []);
 
+  // INVERT toggle (F-invert, engine #8): flips this channel's color-invert
+  // flag. Boolean PATCH, same optimistic + fail-loud revert shape as
+  // handleFollowsTempoChange. The next mixer-state broadcast reconciles.
+  const handleInvertChange = useCallback(async (channelId: string, invert: boolean) => {
+    const prev = channelsRef.current.find(c => c.id === channelId)?.invert ?? false;
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, invert } : c));
+    const res = await setChannelInvert(channelId, invert);
+    if (!res.ok) {
+      console.error(`[Mixer] invert toggle rejected for ${channelId}:`, res.error);
+      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, invert: prev } : c));
+      Alert.alert(
+        'Invert not applied',
+        `The engine rejected this change. ${res.error || ''} The channel kept its previous setting.`.trim(),
+      );
+    }
+  }, []);
+
   const handleControlChange = useCallback((channelId: string, controlId: number, val: number) => {
     setChannels(chs => chs.map(c => {
       if (c.id !== channelId) return c;
@@ -2257,6 +2306,7 @@ export default function MixerScreen() {
               onFaderMaxChange={handleFaderMaxChange}
               onColorChange={handleColorChange}
               onHueChange={handleHueChange}
+              onInvertChange={handleInvertChange}
               onSpeedChange={handleSpeedChange}
               onPhaseOffsetChange={handlePhaseOffsetChange}
               onFollowsTempoChange={handleFollowsTempoChange}
@@ -2743,6 +2793,28 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     borderBottomColor: C.ghostBorder,
   },
   followTempoBtn: {
+    flex: 1,
+    marginLeft: 6,
+    minHeight: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    backgroundColor: C.surfaceContainerLowest,
+  },
+  // Per-channel INVERT toggle (F-invert, engine #8) — same geometry as the
+  // FOLLOW TEMPO toggle; lit purple (the hue-cluster color) when on so it
+  // reads as a chroma control, not a time control.
+  invertRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: C.ghostBorder,
+  },
+  invertBtn: {
     flex: 1,
     marginLeft: 6,
     minHeight: 32,
