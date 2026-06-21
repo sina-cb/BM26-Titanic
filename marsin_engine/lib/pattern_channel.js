@@ -1,5 +1,5 @@
 export class PatternChannel {
-  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null, faderMax = 1.0, color = null, mixGroupId = null, soloSafe = false, hue = 0, speed = 1.0, phaseOffsetMs = 0, followsTempo = false }) {
+  constructor({ id, name, pattern, handle = 0, mode = 'blend_screen', fader = 1.0, enabled = true, locked = false, faderLocked = false, transitionMode = 'trans_crossfade', transitionTime = 1.0, viewSelection = null, faderMax = 1.0, color = null, mixGroupId = null, soloSafe = false, hue = 0, invert = false, speed = 1.0, phaseOffsetMs = 0, followsTempo = false }) {
     this.id = id;
     this.name = name;
     this.pattern = pattern;
@@ -81,6 +81,22 @@ export class PatternChannel {
     this.hue = (typeof hue === 'number' && Number.isFinite(hue))
       ? ((hue % 360) + 360) % 360
       : 0;
+
+    // ── Per-channel color INVERT (docs/39 §F-invert) ─────────────────────
+    // Inverts THIS channel's RGB output (255 - v per byte) BEFORE it is
+    // blended into the composite — a per-channel chroma op, structurally a
+    // sibling of `hue`. Leaves W/A/UV BYTE-FOR-BYTE untouched (the
+    // mission-critical exterior whites carry no color concept and must never
+    // be flipped/dimmed). Applied on the interleaved RGBWAU channelBuffer in
+    // pattern_mixer (applyInvert6chU8), gated on the flag so the default
+    // channel pays nothing. When BOTH hue and invert are set the IMPLEMENTED
+    // buffer-order composition is HUE-THEN-INVERT (hue rotates first, then the
+    // rotated RGB is flipped); the two ops commute within rounding, so the
+    // output is order-independent — see pattern_mixer for the rationale. Pure
+    // boolean (coerced via !! like soloSafe/followsTempo). An old state file
+    // without this field restores to false (documented schema default, not a
+    // silent fallback).
+    this.invert = !!invert;
 
     // ── Per-channel phase clock (docs/39 §F-phase: #3 speed / #4 tap-tempo
     //    / #11 chase) ──────────────────────────────────────────────────
