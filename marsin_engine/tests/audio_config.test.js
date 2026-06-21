@@ -175,7 +175,8 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
   // (windowed-ratio novelty vs recent median) — they cut real-corpus false-fires
   // from 1.48 to 0.12/min.
   assert.deepEqual(AUDIO_LIVE_FIELDS, {
-    bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz'],
+    bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz',
+      'lowGate', 'midGate', 'highGate'],
     kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
     // analyzer_features (slot 3): sub-bass "chest hit" window (~30–60 Hz).
     sub:     ['minHz', 'maxHz'],
@@ -200,6 +201,19 @@ test('validateLivePatch accepts a valid sub window, rejects bad edges (analyzer_
   assert.equal(validateLivePatch({ sub: { maxHz: 30000 } }).ok, false);
   // Unknown sub field is rejected (no silent acceptance).
   assert.equal(validateLivePatch({ sub: { threshold: 1.2 } }).ok, false);
+});
+
+test('validateLivePatch accepts per-band gates, rejects out-of-range (on-playa hardening)', () => {
+  const ok = validateLivePatch({ bands: { lowGate: 0.05, midGate: 0.09, highGate: 0.2 } });
+  assert.equal(ok.ok, true, ok.error);
+  assert.equal(ok.live.bands.lowGate, 0.05);
+  assert.equal(ok.live.bands.midGate, 0.09);
+  assert.equal(ok.live.bands.highGate, 0.2);
+  // A gate must be in [0, 1) — 1.0 and negatives 400 at the field validator.
+  assert.equal(validateLivePatch({ bands: { highGate: 1 } }).ok, false);
+  assert.equal(validateLivePatch({ bands: { lowGate: -0.1 } }).ok, false);
+  // Non-finite is rejected before the range check (codex P0: no silent coercion).
+  assert.equal(validateLivePatch({ bands: { midGate: 'loud' } }).ok, false);
 });
 
 test('validateLivePatch accepts dropEdgeMode enum + dropDeltaWindowMs, rejects bad values', () => {

@@ -274,6 +274,29 @@ test('noiseGate preserves dynamic range above the floor', () => {
   assert.ok(gatedVal > 0.3, `loud signal with gate should still ride > 0.3; got ${gatedVal}`);
 });
 
+test('per-band gate suppresses only its own band (on-playa hardening)', () => {
+  // highGate gates the HIGH band but must leave LOW untouched — the whole point
+  // of per-band gates on a noisy venue (lift the noisy high band's floor without
+  // dimming the lows). An 8 kHz sine lights HIGH; a 0.5 highGate suppresses it,
+  // while the same highGate does nothing to a 100 Hz sine's LOW band.
+  const hiDefault = [], hiGated = [], loWithHiGate = [];
+  makeAnalyzer({ bands: { noiseGate: 0.0 } }, hiDefault).pushSamples(sineInt16(8000, 0.5, 0.05));
+  makeAnalyzer({ bands: { noiseGate: 0.0, highGate: 0.5 } }, hiGated).pushSamples(sineInt16(8000, 0.5, 0.05));
+  makeAnalyzer({ bands: { noiseGate: 0.0, highGate: 0.5 } }, loWithHiGate).pushSamples(sineInt16(100, 0.5, 0.05));
+  assert.ok(lastResult(hiDefault).high > 0, `ungated high should be > 0; got ${lastResult(hiDefault).high}`);
+  assert.equal(lastResult(hiGated).high, 0, `highGate 0.5 should zero a sub-floor high; got ${lastResult(hiGated).high}`);
+  assert.ok(lastResult(loWithHiGate).low > 0, `highGate must NOT touch the low band; got ${lastResult(loWithHiGate).low}`);
+});
+
+test('an absent per-band gate falls back to the global noiseGate (byte-identical default)', () => {
+  // No per-band gate set → every band gated at the global noiseGate, exactly the
+  // legacy single-gate path. A 0.3 global gate zeros a quiet 100 Hz sine just as
+  // it did before per-band gates existed.
+  const globalOnly = [];
+  makeAnalyzer({ bands: { noiseGate: 0.3 } }, globalOnly).pushSamples(sineInt16(100, 0.5, 0.02));
+  assert.equal(lastResult(globalOnly).low, 0, `global gate 0.3 should zero the quiet low; got ${lastResult(globalOnly).low}`);
+});
+
 // ── Kick detector ────────────────────────────────────────────────────────
 
 test('repeated kick-band impulses fire kicks with refractory respected', () => {

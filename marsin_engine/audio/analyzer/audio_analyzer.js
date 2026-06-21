@@ -348,6 +348,16 @@ export class AudioAnalyzer {
         throw new RangeError(`bands.inputGain must be in [0, 64]; got ${ig}`);
       }
     }
+    // Per-band noise gates (on-playa hardening). Each is OPTIONAL — an absent
+    // band-gate uses the global noiseGate (validated above). When present it
+    // must be a valid gate in [0, 1) (codex P0: validate explicitly, no silent
+    // clamp of a malformed value).
+    for (const fld of ['lowGate', 'midGate', 'highGate']) {
+      if (next.bands[fld] !== undefined) {
+        const v = +next.bands[fld];
+        if (!(v >= 0 && v < 1)) throw new RangeError(`bands.${fld} must be in [0, 1); got ${v}`);
+      }
+    }
 
     const kMin = +next.kick.minHz, kMax = +next.kick.maxHz;
     if (!(kMin > 0 && kMin < kMax && kMax <= nyquist)) {
@@ -403,6 +413,13 @@ export class AudioAnalyzer {
     // (denoise). bands.sourceSmoothHz = cutoff in Hz; 0 / absent / invalid = off.
     const fc = +next.bands.sourceSmoothHz;
     this._srcSmoothAlpha = (fc > 0 && fc < nyquist) ? (1 - Math.exp(-2 * Math.PI * fc / this.sampleRate)) : 0;
+
+    // Per-band noise gates, precomputed (the hot path reads scalars only). An
+    // absent per-band gate uses the global noiseGate, so a config that sets none
+    // is byte-identical to the legacy single-gate path. (report 20260621_4)
+    this._lowGate  = next.bands.lowGate  !== undefined ? +next.bands.lowGate  : noiseGate;
+    this._midGate  = next.bands.midGate  !== undefined ? +next.bands.midGate  : noiseGate;
+    this._highGate = next.bands.highGate !== undefined ? +next.bands.highGate : noiseGate;
 
     // Pre-compute bin ranges so the hot path doesn't multiply.
     this._binLow  = [hzToBin(20,         this.sampleRate, this.fftSize), hzToBin(lowMaxHz, this.sampleRate, this.fftSize)];
@@ -691,18 +708,19 @@ export class AudioAnalyzer {
     // "how visible is this band". Values above the gate are
     // rescaled so the operator's [0, 1] meter still uses the full
     // range above the gate (otherwise raising the gate would just
-    // dim the whole band).
+    // dim the whole band). Each band uses its own gate (this._lowGate /
+    // _midGate / _highGate), which defaults to the global noiseGate when the
+    // operator hasn't specialized that band — on a noisy venue the high band's
+    // gate can be lifted (its noise floor is higher) without dimming the lows.
     const frameMs = (this.hopSize * 1000) / this.sampleRate;
-    const gate = this.bands.noiseGate;
-    const gateScale = 1 - gate;
-    const applyGate = (v) => (v <= gate ? 0 : (v - gate) / gateScale);
+    const applyGate = (v, g) => (v <= g ? 0 : (v - g) / (1 - g));
     // INPUT GAIN is now applied at the SOURCE (to the PCM in pushSamples),
     // BEFORE the FFT, so it already scales lowE/midE/highE/kickE/fluxE here —
     // no per-band gain multiply needed (and the kick is no longer a special
     // case). Gain-on-PCM ≡ gain-on-band-energy for the bands (FFT linear).
-    const lowTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * lowE));
-    const midTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * midE));
-    const highTarget = applyGate(softCompress(PRE_CLAMP_GAIN * highE));
+    const lowTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * lowE),  this._lowGate);
+    const midTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * midE),  this._midGate);
+    const highTarget = applyGate(softCompress(PRE_CLAMP_GAIN * highE), this._highGate);
     const attackAlpha  = 1 - Math.exp(-frameMs / this.bands.attackMs);
     const releaseAlpha = 1 - Math.exp(-frameMs / this.bands.releaseMs);
     const env = (prev, target) => {
@@ -733,7 +751,9 @@ export class AudioAnalyzer {
     // (`kickGated > 0`) stays as a SILENCE FLOOR, and the source-stage
     // smoothing + the operator's gain manage the amplified-noise-floor case.
     const kickLin   = PRE_CLAMP_GAIN * kickE;          // source-conditioned (gain applied pre-FFT)
-    const kickGated = applyGate(softCompress(kickLin)); // silence floor only
+    // Kick uses the GLOBAL noiseGate as its silence floor (not a per-band gate —
+    // the kick is its own window, and the per-band gates specialize low/mid/high).
+    const kickGated = applyGate(softCompress(kickLin), this.bands.noiseGate); // silence floor only
     if (this._kickEmaWarmedUp) {
       const alpha = kickLin > this._kickEma
         ? this._kickEmaAlphaUp     // slow attack — lag loud baselines

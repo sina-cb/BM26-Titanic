@@ -40,7 +40,19 @@ import yaml from 'js-yaml';
 // behaviors", the analyzer rejects a `bands` payload that's missing
 // any of these — config.yaml supplies them at boot.
 export const AUDIO_LIVE_FIELDS = Object.freeze({
-  bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz'],
+  // lowGate/midGate/highGate (on-playa hardening, report 20260621_4): PER-BAND
+  // noise gates. The single global `noiseGate` is the gate for every band that
+  // does NOT specialize one of these. On a loud/dusty/windy night the ambient
+  // bed lights the bands unevenly — measured: the HIGH band reads ~0.17 and MID
+  // ~0.07 from pure noise (capsule hiss + wind), while the global gate sits at
+  // 0.04, so mid/high stay lit during silence/breakdowns. Raising the global
+  // gate would also kill quiet musical hats; a per-band gate lets the operator
+  // set highGate≈0.18 / midGate≈0.08 (from tools/audio_calibrate.js, which
+  // measures exactly these post-compress per-band floors) WITHOUT dimming the
+  // low band. Absent → that band uses the global noiseGate (so the shipped
+  // config, which sets none, is byte-identical to the legacy single-gate path).
+  bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz',
+    'lowGate', 'midGate', 'highGate'],
   kick:  ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
   // analyzer_features (slot 3): sub-bass "chest hit" window (~30–60 Hz). Live-
   // tunable like kick; analyzer.reconfigure rebinds the sub bin in place.
@@ -109,6 +121,13 @@ const LIVE_FIELD_VALIDATORS = Object.freeze({
     inputGain: (v) => (v >= 0 && v <= 64) ? null : `must be in [0, 64]; got ${v}`,
     // Source-stage smoothing LP cutoff (Hz); 0 = off. Up to ~Nyquist.
     sourceSmoothHz: (v) => (v >= 0 && v <= 22050) ? null : `must be in [0, 22050]; got ${v}`,
+    // Per-band noise gates (on-playa hardening). Same [0, 1) post-compression
+    // domain as the global noiseGate — a band value at/below its gate reads 0,
+    // values above are rescaled to use the full range above it. Each OPTIONAL;
+    // an absent band-gate uses the global noiseGate.
+    lowGate:  (v) => (v >= 0 && v < 1) ? null : `must be in [0, 1); got ${v}`,
+    midGate:  (v) => (v >= 0 && v < 1) ? null : `must be in [0, 1); got ${v}`,
+    highGate: (v) => (v >= 0 && v < 1) ? null : `must be in [0, 1); got ${v}`,
   }),
   // analyzer_features (slot 3): sub-bass window edges (Hz). Validated like the
   // kick window — both positive, below Nyquist; the analyzer enforces min<max.

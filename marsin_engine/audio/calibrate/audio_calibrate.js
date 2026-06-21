@@ -237,10 +237,25 @@ function printSummary(summary, cfg) {
   console.log('    → Run this in the QUIET room to seed the gate.');
   console.log('    → Run again WITH music to read the per-band ceiling (max column) for a gain.');
   console.log('');
+  // PER-BAND gates (on-playa hardening, report 20260621_4). On a loud/dusty/
+  // windy night the ambient bed lights the bands UNEVENLY — the high band's
+  // noise floor sits well above the low's. A single global noiseGate can't gate
+  // the noisy high band without also dimming quiet low content. Each band's p90
+  // in the QUIET room IS that band's gate: it rejects ~90% of that band's
+  // ambient floor while leaving headroom for music to clear it.
+  console.log('  Suggested PER-BAND gates (p90 per band — for a noisy/windy venue):');
+  console.log(`    lowGate:  ${fmt(perBand.low.p90)}`);
+  console.log(`    midGate:  ${fmt(perBand.mid.p90)}`);
+  console.log(`    highGate: ${fmt(perBand.high.p90)}`);
+  console.log('');
   console.log('  Copy-pasteable into states/<scene>/audio_state.yaml:');
   console.log('');
   console.log('    bands:');
   console.log(`      noiseGate: ${fmt(suggestedNoiseGate)}`);
+  console.log('      # per-band gates — set these for a loud/windy night (see above):');
+  console.log(`      lowGate:  ${fmt(perBand.low.p90)}`);
+  console.log(`      midGate:  ${fmt(perBand.mid.p90)}`);
+  console.log(`      highGate: ${fmt(perBand.high.p90)}`);
   console.log('');
 }
 

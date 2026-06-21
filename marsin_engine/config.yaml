@@ -55,6 +55,16 @@ audio:
     noiseGate: 0.04
     inputGain: 1
     sourceSmoothHz: 12000
+    # Per-band noise gates (report 20260621_4). UNSET by default → every band
+    # uses the global noiseGate above, so the shipped config is byte-identical to
+    # the legacy single-gate path. On a loud/dusty/windy night the ambient bed
+    # lights the bands unevenly (measured: high ~0.17, mid ~0.07 from noise
+    # alone); the operator runs tools/audio_calibrate.js with the music OFF and
+    # sets the per-band gates to the measured per-band floor so silence/breakdowns
+    # go dark again without dimming quiet musical content in the other bands, e.g.
+    #   lowGate: 0.05
+    #   midGate: 0.09
+    #   highGate: 0.20
   kick:
     minHz: 50
     maxHz: 110

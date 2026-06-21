@@ -279,3 +279,37 @@ honest boundary of what's verifiable in this datacenter. Cron remains as safety 
 - Command BY INSTIGATOR: full-suite gate `node --test tests/*.test.js tests/*.test.mjs tests/integration/*.test.mjs` on merged R1 tip → **924 pass / 0 fail**; CaptainPad tsc/lint exit 0; companion 72; 61 silence peak 64 + reactivity corr 0.98.
 - FLAGS triaged: B (beatInBar dual-path) INVESTIGATED → not a bug (identical formula, shared anchor). A/E (fail-loud vs graceful at config/error boundaries) + C (octave magic numbers) + D (genre weights) → surfaced to operator as genuine policy/tuning decisions (recs: E fail-loud, A graceful+loud-log, B/C/D leave).
 - Verdict: R-wave crossed off. ✅ — entire suite 924 green; only operator policy/tuning decisions remain.
+
+---
+
+## 20260621_4 — On-playa audio hardening (per-band noise gates) ✅
+
+- **Task:** operator pre-Burning-Man request — ways to tune/threshold/filter
+  mic noise on the loud/dusty/windy playa. Report `20260621_4`.
+- **Built:** (1) virtual-mic `playa` tier = heavy + **wind gusts** + **neighbor
+  bleed** (`tests/integration/mic_model.mjs`, legacy tiers byte-identical);
+  (2) `tools/playa_noise_eval.mjs` — real corpus degraded through the playa mic;
+  (3) **per-band noise gates** `bands.lowGate/midGate/highGate` (absent → global
+  noiseGate, so default byte-identical); (4) `audio_calibrate.js` prints
+  per-band gate suggestions.
+- **GROUND TRUTH measured (this machine):** ambient bed lights bands unevenly —
+  silence through the playa/heavy mic reads HIGH ≈ **0.165–0.171**, MID ≈
+  **0.065–0.072**, vs the global gate **0.04** → mid/high stay lit with no music.
+- **PROOF (band level, gates = bed p90):** HEAVY bed mid **0.065→0.040**, high
+  **0.165→0.040**; MUSIC mid **0.170→0.148** (preserved). PLAYA bed mid
+  **0.065→0.040**; MUSIC mid **0.162→0.139**. Mid-band separation 3.7×. High
+  band SNR-limited at heavy/playa (music HF ≈ hiss) — documented physical limit.
+- **Commands:** `node tools/playa_noise_eval.mjs --tiers moderate` → SYNTH R=0.83
+  (matches detection_eval baseline, harness validated); `node --test
+  'tests/**/*.test.js' 'tests/**/*.test.mjs'` → **# tests 927 · # pass 927 ·
+  # fail 0** (924 + 3 new: per-band gate suppresses own band, absent→global
+  fallback byte-identical, per-band gate validators).
+- **HONEST NEGATIVE (recorded, not crossed off):** first design = adaptive
+  minimum-statistics floor SUBTRACTION on raw band energies — validation showed
+  it nulls continuous basslines (low mean 0.107→0.000), min-stats is wrong for
+  gap-free music. Replaced with the static per-band gate. Dead end logged.
+- **Deliberate non-builds:** drop-detector wind guard (no demonstrated phantom
+  problem — playa drop recall already 0 from saturation, 0 phantom drops);
+  CaptainPad preset surface (gates already live via PATCH /audio/config).
+- **Verdict:** per-band gate crossed off — mechanism proven, suite 927 green,
+  byte-identical default. Live-mic calibration loop awaits real capsule.
