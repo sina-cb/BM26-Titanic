@@ -657,6 +657,94 @@ optimistic WS `setSolo` + REST mirror + reconcile-from-broadcast; `api.ts`
 group/solo clients. The engine is the authority; the client render dim/active is
 display-only.
 
+### 10.7 FLASH / BUMP — momentary "full while held" (round-2 #5, 2026-06-21)
+
+The defining live-busking accent: HOLD a channel's **BUMP** button → that
+channel slams to FULL output; RELEASE → it snaps back to its parked level.
+Directly analogous to solo — a transient server-authoritative `Set` read on the
+hot path.
+
+**Source of truth.** `PatternMixer._bumpedChannelIds` (a `Set`) is the SOLE
+truth. `bumpChannel(id)` / `unbumpChannel(id?)` (no arg = release all) /
+`clearBumps()` mutate it; a bad / non-mixer id is a fail-loud `404`. Bump
+**never** mutates a channel's `enabled`/`fader` — the parked level survives
+untouched; release just drops the id. **TRANSIENT** — never persisted; empty
+after restart; cleared on teardown, on a scripted mixer transition
+(`triggerMixerTransition`), on `removeMixerChannel` (no phantom bump), and on
+`panicToSafeDefault`.
+
+**Precedence (extends §10.2).** The bump override is the FIRST thing
+`_effFader` checks after the hard-mute gate:
+
+```
+if (!enabled) return 0;                       // hard mute STILL wins
+if (bumped)   return min(1.0, faderMax ?? 1); // bump: full, capped by faderMax
+... normal clamp(fader, faderMax) * groupScale * soloGate ...
+```
+
+So bump **overrides** the channel's own fader, its group scale, AND the
+solo-dimming gate (the accent always reads) — **but** a hard mute
+(`enabled=false`) still wins (bump is an "up" gesture, mute is the operator's
+explicit "off"), and the per-fixture **`faderMax` safety ceiling STILL holds**:
+a bumped channel goes to `min(1.0, faderMax)` so a CAP-protected fixture is
+never over-driven, even on a bump. Hot path stays allocation-free: a gated
+`_bumpedChannelIds.size > 0` check short-circuits the override before any group/
+solo arithmetic; the common (no-bumps) case pays one `size` read.
+
+**Release-on-disconnect (mission safety).** A held bump from a dropped iPad
+must NOT pin a channel full forever. TWO independent nets in `api_server.js`:
+
+1. **Lease (`BUMP_LEASE_MS = 2000`).** Every `bump` (REST or WS) stamps a
+   per-channel expiry. The client RENEWS by re-sending the WS `bump` every
+   ~700 ms while the button is held. A periodic sweep
+   (`BUMP_SWEEP_MS = 500`, armed only while bumps are held, `unref()`'d)
+   auto-releases any lapsed bump. This is the backstop for hard link loss
+   (and the ONLY net for REST-only bumps, which have no socket to close).
+2. **WS-close.** Each `/ws/control` socket tracks the channels it bumped
+   (`ws._bumpedByThisWs`); on close it releases exactly those — instant
+   cleanup for the clean "tab closed / reconnect" case.
+
+**API surface.**
+
+| Method + path | Body | Result |
+|---|---|---|
+| `POST /mixer/channels/:id/bump` | `{ on: true\|false }` | `200 { status, bumpedChannelIds }`; `404` unknown / `400` deck (`WRONG_ROLE`) / `400` missing-or-non-boolean `on`. Armed BEFORE the `^/mixer/channels/[^/]+$` regexes (next to `/duplicate`) so `/bump` isn't swallowed as a channel id. Each `on:true` renews the lease. |
+
+WS (low-latency mirrors on `/ws/control`, same dual-path as solo):
+`{ type:'bump', channelId }`, `{ type:'unbump', channelId? }` (channelId absent
+= release all). A bad id pushes back `{ type:'bumpRejected', channelId, reason }`
+(point-to-point `ws.send`; the type is registered in `ws_topic_routing.js` →
+`/ws/control` for documentation + safety). A WS `bump` re-send is a no-op renew
+(no broadcast); only a CHANGE broadcasts.
+
+**Broadcast / serializer.** `serializeMixerState` gains top-level
+`bumpedChannelIds: [...]` (array snapshot of the Set, alongside
+`soloedChannelIds`) — the client reconciles its **display-only** "held" state
+from it on every `mixer` broadcast. Bump state rides the existing `mixer`
+broadcast (no separate broadcast type), exactly like solo. **NOT persisted**
+(transient).
+
+**CaptainPad.** `mixer.tsx` ChannelStrip gains a **BUMP** `Pressable`
+(`onPressIn` → bump on, `onPressOut` → bump off; amber held state; ✓ glyph +
+`accessibilityState` so it's not color-only; 44 pt+ via 32 pt button + 8 pt
+hitSlop). The handler sends the WS `bump`/`unbump` (low-latency) + a REST
+mirror (`utils/bumpApi.ts` `postBump`, fail-loud), runs a `BUMP_RENEW_MS = 700`
+hold-renew heartbeat, optimistically flips local held state, and reconciles
+from the broadcast's `bumpedChannelIds[]`. An unmount cleanup clears every
+renew timer AND eagerly releases held bumps.
+
+**Implementation map (round-2 #5).**
+
+| Site | What |
+|---|---|
+| `lib/pattern_mixer.js` | `_bumpedChannelIds` Set; `bumpChannel`/`unbumpChannel`/`clearBumps`; bump override in `_effFader` (gated, allocation-free, `min(1.0, faderMax)`, mute-wins); clear-bumps in `removeMixerChannel` + `triggerMixerTransition` + teardown + `panicToSafeDefault` |
+| `lib/api_server.js` | `POST /mixer/channels/:id/bump` (armed pre-regex); WS `bump`/`unbump` handlers + `bumpRejected`; `bumpedChannelIds[]` in `serializeMixerState`; `BUMP_LEASE_MS` lease + sweep + `ws._bumpedByThisWs` close-release |
+| `lib/ws_topic_routing.js` | `bumpRejected` → CONTROL |
+| `CaptainPad/utils/bumpApi.ts` | NEW — `postBump` REST mirror (WS-first dual-path), fail-loud |
+| `CaptainPad/app/(tabs)/mixer.tsx` | BUMP Pressable + `handleBumpOn`/`handleBumpOff` (WS + REST + renew heartbeat) + `bumpedIds` reconcile/seed + unmount cleanup |
+| `tests/bump_flash.test.js` | Unit (16): override-to-full, faderMax cap, mute-wins, group/solo override, transient lifecycle (transition/remove/teardown/panic), 404, allocation-free/gated |
+| `tests/hil/hil_flash_bump_test.mjs` | HIL (19): REST+WS bump/release with RENDER proof (bumped full vs sibling parked), faderMax ceiling, AUTO-RELEASE on ws-close AND lease-expiry, 404/400 validation |
+
 ---
 
 ## 11. Per-channel output METERING (2026-06-20)

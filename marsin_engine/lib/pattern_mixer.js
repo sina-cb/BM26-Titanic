@@ -345,6 +345,19 @@ export class PatternMixer {
     // tests are O(1) on the hot path.
     this.soloedChannelIds = new Set();
 
+    // `_bumpedChannelIds` is the SOLE server-side source of truth for FLASH /
+    // BUMP — the momentary "full while held" busking accent (round-2 #5,
+    // docs/39 §10.7). DIRECTLY analogous to the solo Set: a channel in this Set
+    // has its effective output OVERRIDDEN to FULL (capped only by faderMax — see
+    // _effFader) for as long as it's held, then snaps back to its parked level
+    // on release. TRANSIENT — never persisted; cleared on restart, on teardown,
+    // at the start of a scripted mixer transition, and when a channel is
+    // removed. A Set so membership tests are O(1) on the hot path. Bump
+    // overrides fader + group-scale + solo-dimming so the accent ALWAYS reads;
+    // it does NOT override a hard mute (enabled=false) — a muted channel never
+    // bumps (mute is the operator's explicit "off", bump is an "up" gesture).
+    this._bumpedChannelIds = new Set();
+
     // Per-frame group-scale cache (allocation-free hot path). Precomputed
     // ONCE per render frame into this reused Map (clear()+set(), never
     // realloc — mirrors _renderOrderScratch) so _effFader is pure O(1)
@@ -726,6 +739,10 @@ export class PatternMixer {
     // object (gone with the splice), but clearing it here is belt-and-braces
     // for any retained reference.
     this.soloedChannelIds.delete(channelId);
+    // FLASH / BUMP: drop any held bump on the removed channel too. A lingering
+    // id in _bumpedChannelIds would be a PHANTOM bump — harmless to render (the
+    // channel is gone) but a leak; clearing it keeps the Set honest.
+    this._bumpedChannelIds.delete(channelId);
     channel.mixGroupId = null;
     return true;
   }
@@ -835,6 +852,9 @@ export class PatternMixer {
 
     // Solo: drop the gate entirely (a stuck solo darkens everyone else).
     this.soloedChannelIds.clear();
+    // FLASH / BUMP: drop any held bump (panic forces full anyway; a stale bump
+    // from a dropped client must not survive the operator's panic recovery).
+    this._bumpedChannelIds.clear();
 
     // Groups: un-mute (do NOT delete or reset faders). A muted group would
     // gate its members to 0 at composite time.
@@ -981,6 +1001,53 @@ export class PatternMixer {
     return { ok: true, changed };
   }
 
+  // ── FLASH / BUMP (momentary full-while-held) ───────────────────────────
+  // `_bumpedChannelIds` is the sole truth (docs/39 §10.7). bumpChannel/
+  // unbumpChannel never mutate any channel's enabled/fader — the parked level
+  // survives the bump untouched (the render gate reads the Set; release simply
+  // drops the id). Both return { ok, changed } iff the set changed (caller
+  // decides whether to broadcast). A bad / non-mixer id is a fail-loud 404 —
+  // never bump a non-existent or deck id.
+
+  /**
+   * Bump (flash to full) a channel. Returns { ok:true, changed } or
+   * { ok:false, status:404, error } if the id is not a mixer channel.
+   */
+  bumpChannel(channelId) {
+    if (!this.getMixerChannel(channelId)) {
+      return { ok: false, status: 404, error: `mixer channel '${channelId}' not found` };
+    }
+    const had = this._bumpedChannelIds.has(channelId);
+    this._bumpedChannelIds.add(channelId);
+    return { ok: true, changed: !had };
+  }
+
+  /**
+   * Release a bump. With a channelId → un-bump just that channel; without →
+   * release ALL bumps. Returns { ok:true, changed }. A bad channelId (not a
+   * mixer channel) is a fail-loud 404; releasing all is always ok.
+   */
+  unbumpChannel(channelId = null) {
+    if (channelId === null || channelId === undefined) {
+      const changed = this._bumpedChannelIds.size > 0;
+      this._bumpedChannelIds.clear();
+      return { ok: true, changed };
+    }
+    if (!this.getMixerChannel(channelId)) {
+      return { ok: false, status: 404, error: `mixer channel '${channelId}' not found` };
+    }
+    const changed = this._bumpedChannelIds.delete(channelId);
+    return { ok: true, changed };
+  }
+
+  /** Release ALL bumps (transition / teardown / panic helper). Returns true
+   *  iff the set was non-empty. */
+  clearBumps() {
+    const changed = this._bumpedChannelIds.size > 0;
+    this._bumpedChannelIds.clear();
+    return changed;
+  }
+
   /**
    * Effective fader for a channel at composite time (WAVE 15 precedence).
    * Pure O(1) arithmetic — no allocation, no closures. `soloActive` and the
@@ -999,6 +1066,18 @@ export class PatternMixer {
     const faderMax = (typeof channel.faderMax === 'number' && Number.isFinite(channel.faderMax))
       ? channel.faderMax
       : 1.0;
+    // FLASH / BUMP (docs/39 §10.7): a held bump OVERRIDES the channel's own
+    // fader, its group scale, and the solo-dimming gate so the accent always
+    // reads — BUT a hard mute (enabled=false, handled above) still wins, and
+    // the per-fixture faderMax safety ceiling STILL holds (a CAP-protected
+    // fixture is never over-driven, even on a bump). So a bumped channel goes
+    // to min(1.0, faderMax). O(1) Set membership check; the override short-
+    // circuits BEFORE the group/solo arithmetic. The common case (no bumps)
+    // pays one extra `_bumpedChannelIds.size` read — gated, allocation-free.
+    if (this._bumpedChannelIds.size > 0 && this._bumpedChannelIds.has(channel.id)) {
+      const capped = faderMax < 1.0 ? faderMax : 1.0;
+      return capped < 0 ? 0 : capped;
+    }
     let eff = channel.fader < faderMax ? channel.fader : faderMax;
     if (eff < 0) eff = 0;
     // Group scale (gang fader / mute). Cache miss = no group => scale 1.
@@ -1341,6 +1420,9 @@ export class PatternMixer {
     // crossfade. Clear it at the START so the transition animates against a
     // clean, un-soloed mix. (Solo is transient anyway — never persisted.)
     this.soloedChannelIds.clear();
+    // FLASH / BUMP: likewise drop any held bump — a re-cue of the whole stack
+    // shouldn't carry a momentary accent into the new look (bump is transient).
+    this._bumpedChannelIds.clear();
 
     const id = transitionId || `g_${++this.transitionGroupCounter}_${Date.now()}`;
     this.activeTransitionGroupId = id;
@@ -2382,6 +2464,7 @@ export class PatternMixer {
     // re-init doesn't inherit ghost groups / phantom solos.
     this.mixGroups = [];
     this.soloedChannelIds.clear();
+    this._bumpedChannelIds.clear();
     this._groupScaleCache.clear();
   }
 
