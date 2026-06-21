@@ -47,9 +47,21 @@ import { runClip, runClipViaWav, dropMetrics } from './run_analysis.mjs';
 import { readWavMono, encodeWavMono } from './wav_io.mjs';
 
 // Tuned config used for the AFFIRMATIVE deterministic assertions (see the
-// CONFIG NOTE above). `enabled` plus the longer refractory; every other
-// field stays at DETECTOR_DEFAULTS via the detector's own merge.
-const TUNED_CFG = Object.freeze({ enabled: true, eventRefractoryMs: 4000 });
+// CONFIG NOTE above): proves the detector MECHANISM cleanly detects a labeled
+// synthetic drop (clean_drop → 1, double_drop → 2, reaching SUSTAIN). It
+// disables the Wave-E1 PRECISION-FIRST gates (`dropBuildRise`/`dropNoveltyRatio`
+// + the lifted `dropEnergyJump 4.0`/`dropSlowZoneMax 0.30`) because those were
+// deliberately tuned to UNDER-fire on real continuous music (real false-fires
+// 1.48→0.12/min) and consequently also don't fire on these clean synthetic
+// drops. The shipped precision-first DEFAULT behaviour is validated on the REAL
+// corpus by tools/detection_eval.mjs + tests/detector_eval.mjs, and the negative
+// controls below still use DEFAULT_CFG. So this file proves "the detector CAN
+// detect a clean drop" while detector_eval proves "it won't false-fire on real
+// music" — the two halves of the honest precision/recall story.
+const TUNED_CFG = Object.freeze({
+  enabled: true, eventRefractoryMs: 4000,
+  dropEnergyJump: 1.9, dropBuildRise: 0, dropNoveltyRatio: 0, dropSlowZoneMax: 0.4,
+});
 // The product defaults, used to PROVE the negative controls pass without
 // any tuning at all.
 const DEFAULT_CFG = Object.freeze({ enabled: true });
