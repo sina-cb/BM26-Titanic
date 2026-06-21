@@ -507,3 +507,13 @@ new per-channel hue control lands into an already-decluttered strip.
 - Building live screenshot showcase (mixer legible rows + per-channel HUE + global HUE; deck;
   sim showing hue rotation). cue-to-deck #7 still running (own worktree). After showcase:
   merge cue-to-deck, then resume round-2 backlog (flash/bump, param presets, speed/tap/chase, etc.).
+
+## STATUS LOG (cont. 13)
+- cue-to-deck #7 MERGED (44825b9): 960 pass/0 fail, HIL 18/18. ALL 3 operator requests proven
+  with live showcase (hue_mixer.png + hue_deck.png sent): readability 2-line names, per-channel
+  HUE rows (CH3=200), global HUE SHIFT 60° + SPIN +20. Round-2 continuing:
+  * dev/flash_bump — #5 momentary full-while-held (bump Set in _effFader, WS+REST, auto-release
+    on disconnect, faderMax-capped) engine+UI vertical.
+  * snapshot-morph design (read-only) — #1 recall-fade spec.
+  Remaining round-2: #9 param presets, #3 speed→#4 tap→#11 chase, #1 morph, #2 cycle, #6 follow,
+  #8 invert, #10 undo. Suite 960 pass/0 fail; deliverable 44825b9.
