@@ -614,6 +614,21 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           console.log(`[PLAYLIST_DBG] deck event triggers refresh: local=${local?.activeEntryId} next=${next?.activeEntryId}`);
           refresh();
         }
+      } else if (role === 'deckOverlay' && msg.type === 'deck') {
+        // Deck dynamic VIEW OVERRIDE event: this overlay's assignment rides
+        // the `deck` message's `overlays[]` array (engine #deck-overlays
+        // folds it in — no new WS type). Find our overlay by id and adopt
+        // its playlist exactly like the deck channel does above.
+        const overlays = (msg.overlays as { id?: string; playlist?: PlaylistAssignment | null }[]) || [];
+        const ovCh = overlays.find((o) => o && o.id === channelId);
+        if (!ovCh) return;
+        const next = ovCh.playlist || null;
+        if (shouldSuppressReconcile(next?.activeEntryId ?? null, 'deckOverlay')) return;
+        const local = assignmentRef.current;
+        const changed =
+          (local?.name ?? null) !== (next?.name ?? null) ||
+          (local?.activeEntryId ?? null) !== (next?.activeEntryId ?? null);
+        if (changed) refresh();
       } else if (msg.type === 'channelPlaylistData') {
         // Engine emits this whenever a channel's playlist is set or
         // swapped (before the mixer event that announces the

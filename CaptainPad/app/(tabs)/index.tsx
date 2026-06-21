@@ -26,6 +26,8 @@ import {
 } from '@/utils/api';
 import { setChannelFaderMax, setChannelColor } from '@/utils/channelExtrasApi';
 import { setDeckFocus } from '@/utils/deckFocusApi';
+import { DeckOverlayStack } from '@/components/DeckOverlayStack';
+import type { DeckOverlay, DeckOverlayAutopilot } from '@/utils/deckOverlaysApi';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
 
@@ -206,6 +208,21 @@ export default function ControlDeckScreen() {
   // (in the mixer; same fetch path here for consistency).
   const [playlistLibrary, setPlaylistLibrary] = useState<string[]>([]);
 
+  // ── Deck dynamic VIEW OVERRIDES (engine #deck-overlays) ────────────────
+  // View-scoped overlay decks layered OVER the main deck. Both the list and
+  // the SHARED auto-cycle cadence ride the existing `deck` WS message (folded
+  // in by the engine — no new WS type), so we read them in the `deck` branch
+  // of onControl below and render the DeckOverlayStack beneath the deck
+  // surface. The list IS the source of truth; we keep it in state only to
+  // drive the cards (PlaylistPanel reconciles its own playlist off the same
+  // `deck` message via role="deckOverlay").
+  const [deckOverlays, setDeckOverlaysState] = useState<DeckOverlay[]>([]);
+  const [overlayAutopilot, setOverlayAutopilot] = useState<DeckOverlayAutopilot>({
+    active: false,
+    delay_s: 30,
+    shuffle: false,
+  });
+
   // Pre-May-2026 the deck tab owned its own WS. The topic split
   // moved that into singleton buses (utils/engineEvents +
   // utils/engineVizEvents). This tab now just subscribes — no per-tab
@@ -242,6 +259,20 @@ export default function ControlDeckScreen() {
       // the engine refused). Absent field (old engine) ⇒ no cue.
       const focus = (msg as { deckFocusChannelId?: unknown }).deckFocusChannelId;
       setActiveCueId(typeof focus === 'string' ? focus : null);
+      // Deck dynamic VIEW OVERRIDES ride the same `deck` message: the
+      // overlay stack + the SHARED auto-cycle cadence. Reconcile both off
+      // the broadcast (the engine is the source of truth — every add /
+      // patch / reorder / autopilot change re-broadcasts).
+      const ovs = (msg as { overlays?: unknown }).overlays;
+      setDeckOverlaysState(Array.isArray(ovs) ? (ovs as DeckOverlay[]) : []);
+      const ap = (msg as { overlayAutopilot?: any }).overlayAutopilot;
+      if (ap && typeof ap === 'object') {
+        setOverlayAutopilot({
+          active: !!ap.active,
+          delay_s: typeof ap.delay_s === 'number' ? ap.delay_s : 30,
+          shuffle: !!ap.shuffle,
+        });
+      }
     } else if (msg.type === 'mixer') {
       // F-cue: the deck tab doesn't otherwise track overlays, but the cue
       // picker needs the live overlay list. The mixer broadcast carries
@@ -615,6 +646,23 @@ export default function ControlDeckScreen() {
               durationMs={deckTxConfig.durationMs}
               shuffle={deckTxConfig.shuffle}
               onChange={handleDeckTxChange}
+            />
+
+            {/* ── DECK DYNAMIC VIEW OVERRIDES (engine #deck-overlays) ──────
+                View-scoped overlay decks layered OVER the main deck. Each
+                overlay is a CLEAN, self-contained, color-tagged card that
+                collapses to a one-line header and expands on tap; a single
+                shared header drives the unison auto-cycle cadence for the
+                whole group, and a "+ ADD OVERLAY" affordance (hidden at the
+                4-overlay cap) opens a view + playlist picker. Reads the
+                overlay list + shared autopilot off the same `deck` WS message
+                this tab already consumes; PlaylistPanel (role="deckOverlay")
+                drives each overlay's playlist. */}
+            <DeckOverlayStack
+              overlays={deckOverlays}
+              overlayAutopilot={overlayAutopilot}
+              playlistLibrary={playlistLibrary}
+              disabled={isConnected === false}
             />
 
             {/* Channel parameters for the deck (base) channel. The deck is
