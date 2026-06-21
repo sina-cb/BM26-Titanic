@@ -419,6 +419,74 @@ export async function setChannelFollow(
   }
 }
 
+// ── Per-channel auto-cycle / autopilot (engine #2, docs/39 §6.v) ──────────
+// Arm an overlay channel's playlist to AUTO-ADVANCE its active entry every
+// `delay_s` seconds. All three fields live inside the channel's
+// `playlist.autopilot` and ride the SAME PATCH /mixer/channels/:id (or
+// /deck/channel when { deck: true }) the rest of the channel metadata uses;
+// they ride back on the existing mixer-state WS broadcast (no new WS type).
+//   - active:   bool — arms/disarms auto-advance. Engine coerces with `!!`.
+//   - delay_s:  finite number, floored to 1s by the engine. A non-finite or
+//               ≤0 value ⇒ 400 code:'AUTOCYCLE_BAD_DELAY'. The UI also clamps
+//               to ≥1 client-side, but still surfaces the engine 400 fail-loud.
+//   - shuffle:  bool — random next entry instead of in-order. `!!` coerced.
+// The engine rejects arming a channel with no assigned playlist
+// (no playlist.name) ⇒ 400 code:'AUTOCYCLE_NO_PLAYLIST', and a non-object
+// autopilot payload ⇒ 400 code:'AUTOCYCLE_BAD_PAYLOAD'.
+//
+// Codex P0 — fail loud: the client honours res.ok and returns { ok:false,
+// error, data } carrying the engine error body (incl. the 4xx `code`) verbatim
+// so the caller can Alert on AUTOCYCLE_BAD_DELAY / _NO_PLAYLIST specifically.
+
+/** The engine's 400 bad-delay code (delay_s non-finite or ≤0). */
+export const AUTOCYCLE_BAD_DELAY = 'AUTOCYCLE_BAD_DELAY';
+/** The engine's 400 no-playlist code (arming a channel with no playlist). */
+export const AUTOCYCLE_NO_PLAYLIST = 'AUTOCYCLE_NO_PLAYLIST';
+
+/**
+ * Set this channel's auto-cycle (autopilot) fields in one PATCH. Pass only
+ * the fields you want to change — they are merged into playlist.autopilot:
+ *   - { active: true }    → arm auto-advance
+ *   - { active: false }   → disarm
+ *   - { delay_s: 30 }     → interval seconds (engine floors to 1)
+ *   - { shuffle: true }   → random next entry
+ * Returns { ok:false, error, data } on a non-2xx; `data.code` carries
+ * AUTOCYCLE_BAD_DELAY / AUTOCYCLE_NO_PLAYLIST when present.
+ */
+export async function setChannelAutoCycle(
+  channelId: string,
+  fields: { active?: boolean; delay_s?: number; shuffle?: boolean },
+  opts?: { deck?: boolean },
+): Promise<ApiResult<any>> {
+  try {
+    const path = opts?.deck
+      ? `${api_base}/deck/channel`
+      : `${api_base}/mixer/channels/${encodeURIComponent(channelId)}`;
+    const autopilot: { active?: boolean; delay_s?: number; shuffle?: boolean } = {};
+    if (Object.prototype.hasOwnProperty.call(fields, 'active')) {
+      autopilot.active = !!fields.active;
+    }
+    if (Object.prototype.hasOwnProperty.call(fields, 'delay_s')) {
+      autopilot.delay_s = fields.delay_s;
+    }
+    if (Object.prototype.hasOwnProperty.call(fields, 'shuffle')) {
+      autopilot.shuffle = !!fields.shuffle;
+    }
+    const res = await fetchWithTimeout(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autopilot }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
 // ── Global tap-tempo (round-2 #4) ─────────────────────────────────────────
 // The client computes BPM from tap intervals and posts the resolved BPM. The
 // engine validates finite [20,400] (else 400), sets _tempoMultiplier =

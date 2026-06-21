@@ -29,7 +29,7 @@ import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { SnapshotBar } from '@/components/SnapshotBar';
 import { ParamPresetMenu } from '@/components/ParamPresetMenu';
-import { setChannelFaderMax, setChannelColor, setChannelHue, setChannelSpeed, setChannelPhaseOffset, setChannelFollowsTempo, setChannelInvert, setChannelFollow, FOLLOW_CYCLE, FOLLOW_LEADER_NOT_FOUND } from '@/utils/channelExtrasApi';
+import { setChannelFaderMax, setChannelColor, setChannelHue, setChannelSpeed, setChannelPhaseOffset, setChannelFollowsTempo, setChannelInvert, setChannelFollow, setChannelAutoCycle, FOLLOW_CYCLE, FOLLOW_LEADER_NOT_FOUND, AUTOCYCLE_BAD_DELAY, AUTOCYCLE_NO_PLAYLIST } from '@/utils/channelExtrasApi';
 import { duplicateMixerChannel, reorderMixerChannels, panicMixer } from '@/utils/channelOpsApi';
 import {
   type MixGroup,
@@ -69,6 +69,12 @@ const OFFSET_MAX = 10000;
 // SPEED's [0.05,8]).
 const FOLLOW_SCALE_MIN = 0;
 const FOLLOW_SCALE_MAX = 2;
+
+// AUTO-CYCLE preset intervals (seconds) — common auto-advance dwell times the
+// operator can one-tap. The engine floors delay_s to 1s; the stepper +/- moves
+// in 5s steps and clamps to ≥1 client-side, but a sub-1 value still surfaces
+// the engine's 400 AUTOCYCLE_BAD_DELAY fail-loud (defence in depth).
+const AUTO_CYCLE_PRESETS_S = [10, 30, 60, 120];
 
 // Per-channel color accent palette (docs/39 §8.4 — channel `color` metadata,
 // no render effect). A small fixed set of high-contrast hex accents so the
@@ -232,7 +238,7 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onHueChange, onInvertChange, onSpeedChange, onPhaseOffsetChange, onFollowsTempoChange, onFollowChange, followCandidates, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onFaderMaxChange, onColorChange, onHueChange, onInvertChange, onSpeedChange, onPhaseOffsetChange, onFollowsTempoChange, onFollowChange, onAutoCycleChange, followCandidates, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -883,6 +889,128 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           the running pattern (to grey out mismatched recalls), and the lock
           gate the sibling rows use. */}
       <ParamPresetMenu channelId={channel.id} channelPattern={channel.pattern ?? null} locked={locked} />
+
+      {/* AUTO-CYCLE / autopilot (engine #2, docs/39 §6.v). Arms THIS overlay's
+          playlist to auto-advance its active entry every `delay_s` seconds.
+          Placement: directly ABOVE the playlist body since autopilot is
+          playlist-scoped (the engine rejects arming a channel with no playlist).
+          Layout follows the FOLLOW/LINK precedent — ONE compact AUTO button
+          that REVEALS the delay stepper + SHUFFLE toggle only while armed, so
+          the already-dense strip keeps the a5ee521 readability layout when off.
+          Lit amber when armed. All three fields are server-authoritative and
+          ride the existing mixer-state broadcast, so an auto-advance shows up
+          live as the PlaylistPanel's active entry changes. Same lock gate as the
+          sibling rows. delay_s is clamped to ≥1 client-side AND still surfaces
+          the engine's 400 AUTOCYCLE_BAD_DELAY fail-loud. */}
+      {onAutoCycleChange && (() => {
+        const ap = channel.playlist?.autopilot;
+        const armed = !!ap?.active;
+        const delay = Math.max(1, Math.round(ap?.delay_s ?? 30));
+        const shuffle = !!ap?.shuffle;
+        const hasPlaylist = !!channel.playlist?.name;
+        return (
+          <>
+            <View style={styles.autoCycleRow}>
+              <Text style={[styles.labelCaps, { width: 36 }]}>AUTO</Text>
+              <TouchableOpacity
+                style={[
+                  styles.autoCycleBtn,
+                  armed && { backgroundColor: '#F5A623', borderColor: '#F5A623' },
+                  (locked || !hasPlaylist) && { opacity: 0.5 },
+                ]}
+                disabled={locked || !hasPlaylist}
+                onPress={() => { if (!locked && hasPlaylist) onAutoCycleChange(channel.id, { active: !armed }); }}
+                accessibilityRole="switch"
+                accessibilityLabel="Auto-cycle playlist entries"
+                accessibilityState={{ checked: armed, disabled: locked || !hasPlaylist }}
+              >
+                <Text style={[styles.labelCaps, armed && { color: '#FFF' }]} numberOfLines={1}>
+                  {!hasPlaylist
+                    ? 'NO PLAYLIST'
+                    : armed
+                      ? `✓ AUTO · ${delay}s`
+                      : 'AUTO-CYCLE'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* DELAY stepper + SHUFFLE — revealed only while armed. The stepper
+                clamps to ≥1s client-side; the preset pills jump to common
+                intervals. Both still fail loud on the engine's 400. */}
+            {armed && (
+              <>
+                <View style={styles.autoCycleDelayRow}>
+                  <Text style={[styles.labelCaps, { width: 36 }]}>EVERY</Text>
+                  <TouchableOpacity
+                    style={[styles.autoStepBtn, locked && { opacity: 0.5 }]}
+                    disabled={locked}
+                    onPress={() => { if (!locked) onAutoCycleChange(channel.id, { delay_s: Math.max(1, delay - 5) }); }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Decrease auto-cycle interval by 5 seconds"
+                  >
+                    <Text style={[styles.labelCaps, { fontSize: 16 }]}>−</Text>
+                  </TouchableOpacity>
+                  <Text style={[styles.displayMono, { flex: 1, textAlign: 'center', fontSize: 14, color: '#F5A623' }]}>
+                    {`${delay}s`}
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.autoStepBtn, locked && { opacity: 0.5 }]}
+                    disabled={locked}
+                    onPress={() => { if (!locked) onAutoCycleChange(channel.id, { delay_s: delay + 5 }); }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Increase auto-cycle interval by 5 seconds"
+                  >
+                    <Text style={[styles.labelCaps, { fontSize: 16 }]}>+</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.autoCyclePillRow}>
+                  {AUTO_CYCLE_PRESETS_S.map((p) => {
+                    const active = delay === p;
+                    return (
+                      <TouchableOpacity
+                        key={p}
+                        style={[
+                          styles.autoPill,
+                          active && { backgroundColor: '#F5A623', borderColor: '#F5A623' },
+                          locked && { opacity: 0.5 },
+                        ]}
+                        disabled={locked}
+                        onPress={() => { if (!locked) onAutoCycleChange(channel.id, { delay_s: p }); }}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Set auto-cycle interval to ${p} seconds`}
+                        accessibilityState={{ selected: active }}
+                      >
+                        <Text style={[styles.labelCaps, { fontSize: 10 }, active && { color: '#FFF' }]}>{`${p}s`}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                <View style={styles.autoCycleShuffleRow}>
+                  <Text style={[styles.labelCaps, { width: 36 }]}>RAND</Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.autoCycleBtn,
+                      shuffle && { backgroundColor: '#F5A623', borderColor: '#F5A623' },
+                      locked && { opacity: 0.5 },
+                    ]}
+                    disabled={locked}
+                    onPress={() => { if (!locked) onAutoCycleChange(channel.id, { shuffle: !shuffle }); }}
+                    accessibilityRole="switch"
+                    accessibilityLabel="Shuffle auto-cycle order"
+                    accessibilityState={{ checked: shuffle, disabled: locked }}
+                  >
+                    <Text style={[styles.labelCaps, shuffle && { color: '#FFF' }]}>
+                      {shuffle ? '✓ SHUFFLE' : 'SHUFFLE'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </>
+        );
+      })()}
 
       <View style={styles.channelBody}>
         {/* Left column = the playlist (this IS the pattern list — "1 list to
@@ -1968,6 +2096,57 @@ export default function MixerScreen() {
     }
   }, []);
 
+  // AUTO-CYCLE / autopilot (engine #2, docs/39 §6.v). Merge the changed
+  // autopilot field(s) into this channel's playlist.autopilot. Same optimistic
+  // + PATCH + reconcile-from-broadcast + fail-loud revert shape as the sibling
+  // handlers, but the autopilot fields live nested under playlist. The engine's
+  // 400 codes get FRIENDLY Alerts: AUTOCYCLE_BAD_DELAY (interval ≤0 / non-finite)
+  // and AUTOCYCLE_NO_PLAYLIST (arming a channel with no playlist). `fields`
+  // carries only the keys being changed ({active} from the AUTO button,
+  // {delay_s} from the stepper/pills, {shuffle} from the SHUFFLE toggle) so the
+  // controls never clobber each other. delay_s is clamped to ≥1 here AND the
+  // engine still validates, so a stray sub-1 surfaces the 400 fail-loud.
+  const handleAutoCycleChange = useCallback(async (
+    channelId: string,
+    fields: { active?: boolean; delay_s?: number; shuffle?: boolean },
+  ) => {
+    const cur = channelsRef.current.find(c => c.id === channelId);
+    const prevPlaylist = cur?.playlist ?? null;
+    const prevAp = prevPlaylist?.autopilot ?? { active: false, delay_s: 30, shuffle: false };
+    // Clamp delay client-side to the engine's ≥1s floor for an honest optimistic
+    // readout; the engine still validates and floors authoritatively.
+    const clamped = { ...fields };
+    if (clamped.delay_s !== undefined) {
+      clamped.delay_s = Math.max(1, Math.round(clamped.delay_s));
+    }
+    // Optimistic merge into playlist.autopilot (no-op if there is no playlist —
+    // the engine rejects that and we Alert below).
+    setChannels(chs => chs.map(c => {
+      if (c.id !== channelId || !c.playlist) return c;
+      return { ...c, playlist: { ...c.playlist, autopilot: { ...prevAp, ...clamped } } };
+    }));
+    const res = await setChannelAutoCycle(channelId, fields);
+    if (!res.ok) {
+      console.error(`[Mixer] auto-cycle change rejected for ${channelId}:`, res.error);
+      // Revert to the prior playlist (and thus prior autopilot); the next mixer
+      // broadcast re-syncs the authoritative state too.
+      setChannels(chs => chs.map(c => c.id === channelId ? { ...c, playlist: prevPlaylist } : c));
+      const code = (res.data as { code?: string } | undefined)?.code;
+      if (code === AUTOCYCLE_BAD_DELAY) {
+        Alert.alert('Auto-cycle not applied', 'Auto-cycle interval must be at least 1 second.');
+        return;
+      }
+      if (code === AUTOCYCLE_NO_PLAYLIST) {
+        Alert.alert('Auto-cycle not applied', 'Assign a playlist to this channel before enabling auto-cycle.');
+        return;
+      }
+      Alert.alert(
+        'Auto-cycle not applied',
+        `The engine rejected this change. ${res.error || ''} The channel kept its previous setting.`.trim(),
+      );
+    }
+  }, []);
+
   const handleControlChange = useCallback((channelId: string, controlId: number, val: number) => {
     setChannels(chs => chs.map(c => {
       if (c.id !== channelId) return c;
@@ -2496,6 +2675,7 @@ export default function MixerScreen() {
               onPhaseOffsetChange={handlePhaseOffsetChange}
               onFollowsTempoChange={handleFollowsTempoChange}
               onFollowChange={handleFollowChange}
+              onAutoCycleChange={handleAutoCycleChange}
               followCandidates={channels}
               onMuteToggle={handleMuteToggle}
               onSoloToggle={handleSoloToggle}
@@ -3056,6 +3236,76 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     borderWidth: 1,
     borderColor: C.ghostBorder,
     backgroundColor: C.surfaceContainerLowest,
+  },
+  // AUTO-CYCLE / autopilot (engine #2). The AUTO toggle mirrors the FOLLOW
+  // TEMPO / INVERT toggle geometry; lit amber when armed (a distinct accent
+  // from the green TEMPO / purple chroma / blue FOLLOW so the time-automation
+  // control reads as its own thing). The delay stepper + pills + SHUFFLE rows
+  // only render while armed, so the strip stays compact when auto is off.
+  autoCycleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: C.ghostBorder,
+  },
+  autoCycleBtn: {
+    flex: 1,
+    marginLeft: 6,
+    minHeight: 32,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    backgroundColor: C.surfaceContainerLowest,
+  },
+  autoCycleDelayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: C.ghostBorder,
+  },
+  autoStepBtn: {
+    width: 36,
+    minHeight: 32,
+    marginHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    backgroundColor: C.surfaceContainerLowest,
+  },
+  autoCyclePillRow: {
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: C.ghostBorder,
+  },
+  autoPill: {
+    flex: 1,
+    minHeight: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    backgroundColor: C.surfaceContainerLowest,
+  },
+  autoCycleShuffleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: C.ghostBorder,
   },
   // Channel color picker swatch grid.
   swatchGrid: {

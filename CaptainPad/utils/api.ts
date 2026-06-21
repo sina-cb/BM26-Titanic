@@ -1153,6 +1153,13 @@ export interface PlaylistAssignment {
   name: string;
   activeEntryId: string | null;
   cursor: number;
+  // Auto-cycle / autopilot (engine #2, docs/39 §6.v). When `active`, the engine
+  // auto-advances `activeEntryId` every `delay_s` seconds (floored to 1s;
+  // `shuffle` picks a random next entry instead of in-order). Set via
+  // PATCH /mixer/channels/:id { autopilot:{...} } (utils/channelExtrasApi
+  // setChannelAutoCycle); rides back on the existing mixer-state WS broadcast
+  // inside this `playlist` object (no new WS type), so an auto-advance shows up
+  // live as `activeEntryId` changes. Absent on playlists never armed.
   autopilot?: { active: boolean; delay_s: number; shuffle: boolean };
 }
 
