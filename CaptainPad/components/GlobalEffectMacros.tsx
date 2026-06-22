@@ -537,6 +537,22 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   return (
     <View style={{ paddingTop: 6, borderTopWidth: 1, borderTopColor: C.ghostBorder, flex: isStrip ? 1 : undefined }}>
       <Header variant={variant} />
+      {/* Global hue shifter (docs/39 §F-hue). A first-class rig knob (NOT a GEM
+          slot): a continuous RGB-only hue rotation applied post-composite on
+          the whole output. W/A/UV (mission-critical exterior whites) are never
+          touched. June 2026: collapsed to a single inline row and MOVED to the
+          TOP of GLOBAL EFFECTS (above the slot grid) per operator request.
+          Omitted on the constrained mixer-strip variant — that single-row
+          strip is pinned to the bottom of the mixer surface and has no room
+          for an extra control. */}
+      {!isStrip && (
+        <HueShiftSection
+          degrees={hueShift.degrees}
+          onDegreesChange={onHueDegreesChange}
+          onDegreesDragStart={() => { hueDraggingRef.current = true; }}
+          onDegreesRelease={() => { hueDraggingRef.current = false; }}
+        />
+      )}
       {error ? (
         <Text style={{ color: C.error, fontSize: 10, marginBottom: 4 }}>{error}</Text>
       ) : null}
@@ -600,21 +616,6 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         ));
       })()}
 
-      {/* Global hue shifter (docs/39 §F-hue). A first-class rig knob (NOT a
-          GEM slot): a continuous RGB-only hue rotation applied post-composite
-          on the whole output, plus an optional auto-rotate spin. W/A/UV
-          (mission-critical exterior whites) are never touched. Rendered below
-          the slot grid on the deck surface; omitted on the constrained
-          mixer-strip variant (a single-row strip has no vertical room). */}
-      {!isStrip && (
-        <HueShiftSection
-          degrees={hueShift.degrees}
-          onDegreesChange={onHueDegreesChange}
-          onDegreesDragStart={() => { hueDraggingRef.current = true; }}
-          onDegreesRelease={() => { hueDraggingRef.current = false; }}
-        />
-      )}
-
       <SwapSheet
         slotId={swapTargetId}
         slot={swapTargetId !== null ? visibleSlots.find(s => s.slotId === swapTargetId) ?? null : null}
@@ -640,6 +641,11 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
 // clears any persisted spin once at mount, so the hue can never rotate
 // invisibly without a control to stop it.
 //
+// ONE-ROW LAYOUT (June 2026): the section is now a single horizontal row —
+// HUE label + fader + degree readout + live hue swatch, all inline — matching
+// the app's one-row control idiom (cf. the old CAP row / mixer strips). It is
+// rendered at the TOP of the GLOBAL EFFECTS area (above the slot grid).
+//
 // The fader is normalized 0..1 (HorizontalFader's contract); engineering units
 // map across that range at the boundary. The row is ≥44pt tall for a
 // comfortable touch target. A live swatch previews the current hue.
@@ -651,38 +657,26 @@ const HueShiftSection: React.FC<{
 }> = ({ degrees, onDegreesChange, onDegreesDragStart, onDegreesRelease }) => {
   const C = usePalette();
   return (
-    <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: C.ghostBorder }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-        <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary,
-          letterSpacing: 1.2, textTransform: 'uppercase',
-        }}>
-          Hue Shift
-        </Text>
-        <View
-          style={{
-            width: 20, height: 20, borderRadius: 4,
-            borderWidth: 1, borderColor: C.ghostBorder,
-            backgroundColor: `hsl(${Math.round(degrees)}, 80%, 55%)`,
-          }}
-          accessibilityLabel={`Current global hue ${Math.round(degrees)} degrees`}
-        />
-      </View>
-
-      {/* HUE 0-360° */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44 }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 40, textTransform: 'uppercase' }}>HUE</Text>
-        <HorizontalFader
-          value={Math.max(0, Math.min(1, degrees / 360))}
-          onChange={(v: number) => onDegreesChange(Math.round(v * 360))}
-          onDragStart={onDegreesDragStart}
-          onRelease={onDegreesRelease}
-          trackStyle={{ flex: 1, height: 12, marginHorizontal: 8, backgroundColor: C.surfaceContainerHigh, borderRadius: 6, justifyContent: 'center' }}
-          fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 6 }}
-          thumbStyle={{ position: 'absolute', width: 16, height: 22, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -8 }] }}
-        />
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, width: 44, textAlign: 'right' }}>{Math.round(degrees)}°</Text>
-      </View>
+    <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44, marginBottom: 6 }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 40, letterSpacing: 0.5, textTransform: 'uppercase' }}>HUE</Text>
+      <HorizontalFader
+        value={Math.max(0, Math.min(1, degrees / 360))}
+        onChange={(v: number) => onDegreesChange(Math.round(v * 360))}
+        onDragStart={onDegreesDragStart}
+        onRelease={onDegreesRelease}
+        trackStyle={{ flex: 1, height: 12, marginHorizontal: 8, backgroundColor: C.surfaceContainerHigh, borderRadius: 6, justifyContent: 'center' }}
+        fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 6 }}
+        thumbStyle={{ position: 'absolute', width: 16, height: 22, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -8 }] }}
+      />
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, width: 40, textAlign: 'right' }}>{Math.round(degrees)}°</Text>
+      <View
+        style={{
+          width: 20, height: 20, borderRadius: 4, marginLeft: 8,
+          borderWidth: 1, borderColor: C.ghostBorder,
+          backgroundColor: `hsl(${Math.round(degrees)}, 80%, 55%)`,
+        }}
+        accessibilityLabel={`Current global hue ${Math.round(degrees)} degrees`}
+      />
     </View>
   );
 };
