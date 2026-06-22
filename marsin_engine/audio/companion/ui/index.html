@@ -17,6 +17,7 @@
       <span id="flash" class="flash"></span>
       <div class="nav-seg" id="nav-seg">
         <button class="nav-btn active" data-page="design">DESIGN</button>
+        <button class="nav-btn" data-page="mic">MIC TUNE</button>
         <button class="nav-btn" data-page="osc">OSC OUT</button>
       </div>
       <label class="theme-pick" title="UI theme">
@@ -182,6 +183,99 @@
       <div class="osc-internal-title">ENGINE-INTERNAL DERIVED <span class="osc-internal-tag">computed in-engine, NOT OSC-routed</span></div>
       <div class="osc-internal-note" id="osc-internal-note">The marsin engine computes a richer set of second-tier signals in-process (AudioStructureDetector + DerivedSignals) that drive patterns 59–68 and never touch the OSC bus. The companion does not send these — the engine has its own audio intelligence.</div>
       <div class="osc-internal-grid" id="osc-internal-grid"></div>
+    </div>
+  </section>
+
+  <!-- MIC TUNE page (report 20260621_5): tune/threshold/filter the mic for the
+       loud, dusty, windy playa. Designed automatic-first — one tap calibrates
+       the noise floor and sets all gates; everything else is manual override. -->
+  <section class="mic-page" id="page-mic" style="display:none">
+    <div class="mic-head">
+      <div class="mic-title">MIC TUNE <span class="mic-sub">quiet the noise, keep the music — for the loud/dusty/windy playa</span></div>
+      <div class="mic-link" id="mic-link">engine sync: <span id="mic-link-state" class="mic-link-state">—</span></div>
+    </div>
+
+    <!-- AUTO hero: the two one-tap calibrations. Noise floor first (the new,
+         playa-critical one), then gain. -->
+    <div class="mic-auto">
+      <div class="mic-auto-card noise">
+        <div class="mac-step">①</div>
+        <div class="mac-body">
+          <div class="mac-title">Calibrate noise floor</div>
+          <div class="mac-hint">Turn the music <b>OFF</b> first. Listens to the ambient room (wind, hiss, neighbor bleed) for ~4&nbsp;s, then sets each band's gate so silence goes dark but the music still shows.</div>
+          <div class="mac-actions">
+            <button id="noisecal-btn" class="primary big">▶ Calibrate noise floor</button>
+            <span id="noisecal-status" class="mac-status"></span>
+          </div>
+          <div id="noisecal-result" class="mac-result" style="display:none">
+            <span class="mac-rec">recommended → <b id="nc-low">—</b> low · <b id="nc-mid">—</b> mid · <b id="nc-high">—</b> high</span>
+            <button id="noisecal-apply" class="primary">✓ Apply these gates</button>
+          </div>
+        </div>
+      </div>
+      <div class="mic-auto-card gain">
+        <div class="mac-step">②</div>
+        <div class="mac-body">
+          <div class="mac-title">Calibrate gain</div>
+          <div class="mac-hint">Play the music at a <b>typical loud</b> level. Measures the peak and recommends an input gain so the signal sits healthy (not too quiet, not clipping).</div>
+          <div class="mac-actions">
+            <button id="gaincal-btn" class="primary big">▶ Calibrate gain</button>
+            <span id="gaincal-status" class="mac-status"></span>
+          </div>
+          <div id="gaincal-result" class="mac-result" style="display:none">
+            <span class="mac-rec">peak <b id="gc-peak">—</b> · <b id="gc-verdict">—</b> · recommend ×<b id="gc-rec">—</b></span>
+            <button id="gaincal-apply" class="primary">✓ Apply gain</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live per-band meters with gate lines + sliders. -->
+    <div class="mic-bands" id="mic-bands">
+      <div class="mic-bands-title">PER-BAND LEVEL &amp; GATE <span class="mic-bands-sub">live level (bar) vs gate threshold (line) — anything below the line reads as silence</span></div>
+      <div class="band-row" data-band="low">
+        <span class="band-name">LOW</span>
+        <div class="band-meter"><i class="band-fill" id="bm-low-fill"></i><span class="band-gateline" id="bm-low-gate"></span></div>
+        <span class="band-val" id="bm-low-val">0.00</span>
+        <input class="band-slider" id="bs-low" type="range" min="0" max="0.6" step="0.005" />
+        <span class="band-gateval" id="bg-low">0.04</span>
+        <button class="band-clear" id="bc-low" title="use global gate">⟲</button>
+      </div>
+      <div class="band-row" data-band="mid">
+        <span class="band-name">MID</span>
+        <div class="band-meter"><i class="band-fill" id="bm-mid-fill"></i><span class="band-gateline" id="bm-mid-gate"></span></div>
+        <span class="band-val" id="bm-mid-val">0.00</span>
+        <input class="band-slider" id="bs-mid" type="range" min="0" max="0.6" step="0.005" />
+        <span class="band-gateval" id="bg-mid">0.04</span>
+        <button class="band-clear" id="bc-mid" title="use global gate">⟲</button>
+      </div>
+      <div class="band-row" data-band="high">
+        <span class="band-name">HIGH</span>
+        <div class="band-meter"><i class="band-fill" id="bm-high-fill"></i><span class="band-gateline" id="bm-high-gate"></span></div>
+        <span class="band-val" id="bm-high-val">0.00</span>
+        <input class="band-slider" id="bs-high" type="range" min="0" max="0.6" step="0.005" />
+        <span class="band-gateval" id="bg-high">0.04</span>
+        <button class="band-clear" id="bc-high" title="use global gate">⟲</button>
+      </div>
+    </div>
+
+    <!-- Global controls + presets. -->
+    <div class="mic-globals">
+      <div class="mic-global">
+        <div class="mg-head"><span class="mg-name">GLOBAL GATE</span><span class="mg-val" id="mg-gate-val">0.04</span></div>
+        <input id="mg-gate" class="mic-range" type="range" min="0" max="0.6" step="0.005" />
+        <div class="mg-hint">the floor every band uses unless overridden above</div>
+      </div>
+      <div class="mic-global">
+        <div class="mg-head"><span class="mg-name">INPUT GAIN</span><span class="mg-val" id="mg-gain-val">×1.0</span></div>
+        <input id="mg-gain" class="mic-range" type="range" min="0" max="16" step="0.1" />
+        <div class="mg-hint">software mic preamp — raise on a distant/quiet capture</div>
+      </div>
+      <div class="mic-presets">
+        <div class="mg-head"><span class="mg-name">PRESETS</span></div>
+        <div class="preset-btns" id="preset-btns"></div>
+        <div class="mg-hint">starting points — then fine-tune with the bars above</div>
+      </div>
     </div>
   </section>
 

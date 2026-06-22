@@ -444,6 +444,12 @@ const source = {
 let inputGain = 1.0;
 // Source-stage smoothing (gentle one-pole LP on the PCM before the FFT).
 let sourceSmoothHz = 12000;
+// Noise gates (on-playa mic tuning, report 20260621_5). The global noiseGate is
+// the floor every band uses unless an explicit per-band gate specializes it.
+// null per-band → that band falls back to the global gate. The MIC TUNE page
+// reads/writes these and the noise-floor auto-calibration recommends them.
+let noiseGate = 0.04;
+let lowGate = null, midGate = null, highGate = null;
 // Realtime/smoothness diagnostic.
 const diag = { lastWall: 0, startWall: 0, frames: 0, samples: 0, deltas: [] };
 function recordFrame(n) {
@@ -499,6 +505,29 @@ function applySmooth(v) {
   analyzer.reconfigure({ bands: { ...analyzer.bands, sourceSmoothHz }, kick: analyzer.kick });
   specAnalyzer.reconfigure({ bands: { ...specAnalyzer.bands, sourceSmoothHz }, kick: specAnalyzer.kick });
 }
+// Re-apply the full gate set to both analyzers. A null per-band gate means
+// "use the global gate", which we realise by setting that band's gate equal to
+// noiseGate (numerically identical to the analyzer's own fallback, and it can't
+// leave a stale override behind in the analyzer's retained bands).
+function applyGates() {
+  const gateFields = {
+    noiseGate,
+    lowGate:  lowGate  === null ? noiseGate : lowGate,
+    midGate:  midGate  === null ? noiseGate : midGate,
+    highGate: highGate === null ? noiseGate : highGate,
+  };
+  analyzer.reconfigure({ bands: { ...analyzer.bands, ...gateFields }, kick: analyzer.kick });
+  specAnalyzer.reconfigure({ bands: { ...specAnalyzer.bands, ...gateFields }, kick: specAnalyzer.kick });
+}
+function applyNoiseGate(v) { noiseGate = Math.max(0, Math.min(0.999, +v)); applyGates(); }
+// band ∈ {'low','mid','high'}; v null → clear the override (use global gate).
+function applyBandGate(band, v) {
+  const val = v === null ? null : Math.max(0, Math.min(0.999, +v));
+  if (band === 'low') lowGate = val; else if (band === 'mid') midGate = val; else if (band === 'high') highGate = val;
+  applyGates();
+}
+// The current gate state as the client/CaptainPad see it (null → "uses global").
+function gateState() { return { noiseGate, lowGate, midGate, highGate }; }
 
 // ── Engine config link (single source of truth for SHARED audio TUNING) ──────
 // The engine config is authoritative for input gain / source smoothing /
@@ -538,6 +567,15 @@ function applyEngineSharedTuning(config) {
       applySmooth(bands.sourceSmoothHz);
       broadcast({ type: 'smooth', value: sourceSmoothHz });
     }
+    // Noise gates from the engine/CaptainPad (report 20260621_5). Reconcile any
+    // that changed, then echo the full gate state to UI clients. Per-band gates
+    // are optional in the engine config; only adopt finite values.
+    let gateChanged = false;
+    if (Number.isFinite(bands.noiseGate) && bands.noiseGate !== noiseGate) { noiseGate = bands.noiseGate; gateChanged = true; }
+    if (Number.isFinite(bands.lowGate)  && bands.lowGate  !== lowGate)  { lowGate  = bands.lowGate;  gateChanged = true; }
+    if (Number.isFinite(bands.midGate)  && bands.midGate  !== midGate)  { midGate  = bands.midGate;  gateChanged = true; }
+    if (Number.isFinite(bands.highGate) && bands.highGate !== highGate) { highGate = bands.highGate; gateChanged = true; }
+    if (gateChanged) { applyGates(); broadcast({ type: 'gates', ...gateState() }); }
   }
   const cap = config.capture && typeof config.capture === 'object' ? config.capture : null;
   if (cap && cap.device !== undefined) applyEngineCaptureDevice(cap.device);
@@ -638,6 +676,14 @@ const CAL_TARGET = 0.7;
 const CAL_MAX_MS = 5000;
 const cal = { recording: false, replaying: false, chunks: [], startClock: 0, peakBand: 0, replayTimer: null };
 
+// Noise-floor auto-calibration (on-playa mic tuning, report 20260621_5). The
+// operator runs this with the music OFF; we collect per-band post-envelope
+// levels of the ambient bed for NOISECAL_MS, then recommend each band's gate as
+// its p90 (rejects ~90% of that band's floor while leaving headroom). This is
+// the "as automatic as possible" path — one tap sets all three gates.
+const NOISECAL_MS = 4000;
+const noiseCal = { recording: false, startClock: 0, low: [], mid: [], high: [] };
+
 // ── DSP wiring (real engine objects) ──────────────────────────────────────
 const clients = new Set();
 function broadcast(obj) { const m = JSON.stringify(obj); for (const c of clients) if (c.readyState === 1) c.send(m); }
@@ -729,6 +775,10 @@ const analyzer = new AudioAnalyzer({
     const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000; lastMs = clockMs;
     recordAnalysis(r.low ?? 0);
     if (cal.recording) cal.peakBand = Math.max(cal.peakBand, r.low ?? 0, r.mid ?? 0, r.high ?? 0);
+    if (noiseCal.recording) {
+      noiseCal.low.push(r.low ?? 0); noiseCal.mid.push(r.mid ?? 0); noiseCal.high.push(r.high ?? 0);
+      if (clockMs - noiseCal.startClock >= NOISECAL_MS) finishNoiseCal();
+    }
     const signals = processDesignedSignals(r, dt);   // designed chains + OSC out
     // Publish the raw-mirror CPC keys BEFORE the observers tick — the detector
     // + derived signals read them back from the ParamCenter (not from `r`).
@@ -756,6 +806,9 @@ const analyzer = new AudioAnalyzer({
     const danceF2 = danceFromOp.dom2 != null ? danceFromOp.dom2 : dance.f2;
     pendingFrames.push({
       type: 'frame', t: clockMs, signals,
+      // Live post-envelope band levels — drive the MIC TUNE page meters so the
+      // operator SEES each band's level against its gate line in real time.
+      bands: { low: r.low ?? 0, mid: r.mid ?? 0, high: r.high ?? 0 },
       dom: {
         f1: r.domFreq1, e1: r.domEnergy1, lo1: r.domLo1, hi1: r.domHi1,
         f2: r.domFreq2, e2: r.domEnergy2, lo2: r.domLo2, hi2: r.domHi2,
@@ -895,6 +948,38 @@ function pushFrame(int16) {
   clockMs += (int16.length / SR) * 1000;
   specAnalyzer.pushSamples(int16);
   analyzer.pushSamples(int16);
+}
+
+// ── noise-floor calibration: record ambient → recommend per-band gates ───────
+function startNoiseCal() {
+  noiseCal.recording = true; noiseCal.startClock = clockMs;
+  noiseCal.low = []; noiseCal.mid = []; noiseCal.high = [];
+  broadcast({ type: 'noiseCalStatus', phase: 'recording', durationMs: NOISECAL_MS });
+}
+function _p90(arr) {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.floor(s.length * 0.9)];
+}
+function finishNoiseCal() {
+  noiseCal.recording = false;
+  // Each band's gate = its p90 in the quiet room, floored at the global gate
+  // (never recommend BELOW the existing global floor) and rounded to 3 dp.
+  const rec = {
+    low:  +Math.max(noiseGate, _p90(noiseCal.low)).toFixed(3),
+    mid:  +Math.max(noiseGate, _p90(noiseCal.mid)).toFixed(3),
+    high: +Math.max(noiseGate, _p90(noiseCal.high)).toFixed(3),
+  };
+  const hops = noiseCal.low.length;
+  broadcast({
+    type: 'noiseCalResult', recommended: rec, hops,
+    seconds: +(hops * HOP / SR).toFixed(1),
+    observed: {
+      low:  +_p90(noiseCal.low).toFixed(3),
+      mid:  +_p90(noiseCal.mid).toFixed(3),
+      high: +_p90(noiseCal.high).toFixed(3),
+    },
+  });
 }
 
 // ── calibration: record → measure → recommend gain → replay ─────────────────
@@ -1116,6 +1201,44 @@ function handleMessage(ws, raw) {
     );
   }
   else if (m.type === 'calibrate') startCalibration();
+  // ── MIC TUNE: noise gates (on-playa, report 20260621_5) ────────────────────
+  else if (m.type === 'setNoiseGate') {
+    const v = m.value;
+    writeThroughShared(
+      () => { applyNoiseGate(v); broadcast({ type: 'gates', ...gateState() }); },
+      { bands: { noiseGate: Math.max(0, Math.min(0.999, +v)) } },
+    );
+  }
+  else if (m.type === 'setBandGate' && ['low', 'mid', 'high'].includes(m.band)) {
+    // value null → clear the override (band uses the global gate). The engine
+    // PATCH realises "clear" as "= global gate" (PATCH can't unset a field).
+    const clear = m.value === null;
+    const v = clear ? noiseGate : Math.max(0, Math.min(0.999, +m.value));
+    writeThroughShared(
+      () => { applyBandGate(m.band, clear ? null : v); broadcast({ type: 'gates', ...gateState() }); },
+      { bands: { [`${m.band}Gate`]: v } },
+    );
+  }
+  else if (m.type === 'startNoiseCal') startNoiseCal();
+  else if (m.type === 'applyNoiseGates' && m.gates && typeof m.gates === 'object') {
+    // Apply a full recommended/preset gate bundle in one shot (the automatic
+    // path). Each provided band is written through; absent bands are left as-is.
+    const g = m.gates;
+    const partial = { bands: {} };
+    for (const b of ['low', 'mid', 'high']) {
+      if (Number.isFinite(g[b])) {
+        const v = Math.max(0, Math.min(0.999, +g[b]));
+        applyBandGate(b, v);
+        partial.bands[`${b}Gate`] = v;
+      }
+    }
+    if (Number.isFinite(g.noiseGate)) {
+      const v = Math.max(0, Math.min(0.999, +g.noiseGate));
+      applyNoiseGate(v); partial.bands.noiseGate = v;
+    }
+    broadcast({ type: 'gates', ...gateState() });
+    writeThroughShared(() => {}, partial);
+  }
   else if (m.type === 'diag') ws.send(JSON.stringify(diagReport()));
   else if (m.type === 'setMode') {
     // SOURCE is now fully two-way (2026-06-17 contract §"Source-mode sync"):
@@ -1246,6 +1369,9 @@ wss.on('connection', (ws) => {
     synths: SYNTH_NAMES.map(n => ({ name: n, label: SYNTHS[n].label, description: SYNTHS[n].description })),
     source, inputGain, sourceSmoothHz, mode, datasetsDir: DATASETS_DIR,
     device: configDevice,
+    // Current noise-gate state for the MIC TUNE page (global + per-band; null
+    // per-band → uses the global gate).
+    gates: gateState(),
     // Engine SHARED-tuning link state so the UI can show whether gain /
     // smooth / device are mirrored to the engine (single source of truth)
     // or running local-only (engine offline → graceful degradation).

@@ -62,9 +62,27 @@ const S = {
   countdownFlash: 0, boundaryFlash: 0, trackChangeFlash: 0,
   onsetLowFlash: 0, onsetMidFlash: 0, onsetHighFlash: 0, chestFlash: 0,
   genreNames: [],      // index-aligned GENRE name list (from the server)
-  page: 'design',      // 'design' | 'osc' — top-bar nav
+  page: 'design',      // 'design' | 'mic' | 'osc' — top-bar nav
   oscAcc: null,        // latest OSC OUT accounting snapshot { target, totalSent, outputs }
+  // MIC TUNE page (report 20260621_5): noise gate state (global + per-band; null
+  // per-band → uses the global gate), live band levels for the meters, and the
+  // noise-floor auto-calibration phase/result.
+  gates: { noiseGate: 0.04, lowGate: null, midGate: null, highGate: null },
+  liveBands: { low: 0, mid: 0, high: 0 },
+  noiseCal: { phase: 'idle', result: null },
+  micBuilt: false,
 };
+
+// MIC TUNE presets — sensible per-band gate starting points for common playa
+// conditions. null = use the global gate for that band. The operator taps one,
+// then fine-tunes. (Gates are post-compression [0,1); higher = more rejection.)
+const MIC_PRESETS = [
+  { id: 'indoor',   label: 'Indoor / quiet',  gates: { noiseGate: 0.04, low: null, mid: null, high: null } },
+  { id: 'night',    label: 'Quiet night',     gates: { noiseGate: 0.05, low: 0.05, mid: 0.07, high: 0.12 } },
+  { id: 'loud',     label: 'Loud day',        gates: { noiseGate: 0.06, low: 0.06, mid: 0.09, high: 0.18 } },
+  { id: 'windy',    label: 'Windy',           gates: { noiseGate: 0.05, low: 0.10, mid: 0.08, high: 0.16 } },
+  { id: 'neighbor', label: 'Neighbor bleed',  gates: { noiseGate: 0.06, low: 0.12, mid: 0.10, high: 0.14 } },
+];
 
 // ── THEME (TASK 2) ───────────────────────────────────────────────────────────
 // The companion mirrors CaptainPad's theme set (CaptainPad/constants/theme.ts).
@@ -162,6 +180,7 @@ function connect() {
       if (m.datasetsDir) { S.datasetsDir = m.datasetsDir; S.browseDir = m.datasetsDir; }
       if (m.inputGain != null) S.inputGain = m.inputGain;
       if (m.sourceSmoothHz != null) S.sourceSmoothHz = m.sourceSmoothHz;
+      if (m.gates) S.gates = { ...S.gates, ...m.gates };
       if (m.engineLink) S.engineLinkConnected = !!m.engineLink.connected;
       seedTraces();
       frameQueue.length = 0;
@@ -185,6 +204,7 @@ function connect() {
       if (m.status && m.status.error) flash((m.status.needsDevice ? 'pick an input device — ' : 'source: ') + m.status.error, true);
     } else if (m.type === 'inputGain') {
       S.inputGain = m.value; buildGainBar();
+      if (S.page === 'mic') refreshMicControls();
     } else if (m.type === 'smooth') {
       S.sourceSmoothHz = m.value; if (S.selected === 'input') renderChain();
     } else if (m.type === 'engineLink') {
@@ -204,8 +224,19 @@ function connect() {
       flash(m.text, !!m.error);
     } else if (m.type === 'calStatus') {
       S.cal.phase = m.phase; if (m.phase === 'recording') S.cal.result = null; renderCal();
+      if (S.page === 'mic') renderGainCal();
     } else if (m.type === 'calResult') {
       S.cal.result = m; renderCal();
+      if (S.page === 'mic') renderGainCal();
+    } else if (m.type === 'gates') {
+      S.gates = { noiseGate: m.noiseGate, lowGate: m.lowGate, midGate: m.midGate, highGate: m.highGate };
+      if (S.page === 'mic') refreshMicControls();
+    } else if (m.type === 'noiseCalStatus') {
+      S.noiseCal.phase = m.phase; if (m.phase === 'recording') S.noiseCal.result = null;
+      if (S.page === 'mic') renderNoiseCal();
+    } else if (m.type === 'noiseCalResult') {
+      S.noiseCal.phase = 'done'; S.noiseCal.result = m;
+      if (S.page === 'mic') renderNoiseCal();
     } else if (m.type === 'devices') {
       S.devices = m.devices || [];
       if (m.error) flash('devices: ' + m.error, true);
@@ -1155,15 +1186,147 @@ function renderOscPage() {
 }
 
 // ── top-bar page nav (DESIGN / OSC OUT) ──────────────────────────────────────
+// ── MIC TUNE page (report 20260621_5) ───────────────────────────────────────
+const METER_MAX = 0.6;   // meter + slider full-scale (so the gate line aligns)
+const BANDS3 = ['low', 'mid', 'high'];
+// Effective gate for a band = its per-band override, or the global gate.
+function effGate(band) {
+  const v = S.gates[band + 'Gate'];
+  return (v === null || v === undefined) ? S.gates.noiseGate : v;
+}
+// Whether a band currently has an explicit override (vs. inheriting the global).
+function hasOverride(band) {
+  const v = S.gates[band + 'Gate'];
+  return !(v === null || v === undefined);
+}
+
+function buildMicPage() {
+  if (!S.micBuilt) {
+    // One-time wiring. Calibrations.
+    $('noisecal-btn').onclick = () => send({ type: 'startNoiseCal' });
+    $('noisecal-apply').onclick = () => {
+      const r = S.noiseCal.result; if (!r) return;
+      send({ type: 'applyNoiseGates', gates: { low: r.recommended.low, mid: r.recommended.mid, high: r.recommended.high } });
+    };
+    $('gaincal-btn').onclick = () => send({ type: 'calibrate' });
+    $('gaincal-apply').onclick = () => {
+      const r = S.cal.result; if (!r) return;
+      send({ type: 'setInputGain', value: r.recommendedGain });
+    };
+    // Per-band gate sliders + clear buttons.
+    for (const b of BANDS3) {
+      const sl = $('bs-' + b);
+      sl.oninput = () => send({ type: 'setBandGate', band: b, value: +sl.value });
+      $('bc-' + b).onclick = () => send({ type: 'setBandGate', band: b, value: null });
+    }
+    // Global gate + input gain.
+    $('mg-gate').oninput = () => send({ type: 'setNoiseGate', value: +$('mg-gate').value });
+    $('mg-gain').oninput = () => send({ type: 'setInputGain', value: +$('mg-gain').value });
+    // Presets.
+    const pb = $('preset-btns'); pb.innerHTML = '';
+    for (const p of MIC_PRESETS) {
+      const btn = el('button', 'preset-btn', p.label);
+      btn.onclick = () => {
+        const g = p.gates;
+        const gates = { noiseGate: g.noiseGate };
+        for (const b of BANDS3) gates[b] = (g[b] === null || g[b] === undefined) ? g.noiseGate : g[b];
+        send({ type: 'applyNoiseGates', gates });
+      };
+      pb.appendChild(btn);
+    }
+    S.micBuilt = true;
+  }
+  refreshMicControls();
+  renderNoiseCal();
+  renderGainCal();
+}
+
+// Reflect S.gates / S.inputGain into the sliders + labels + gate lines.
+function refreshMicControls() {
+  if (!$('mg-gate')) return;
+  $('mg-gate').value = S.gates.noiseGate;
+  $('mg-gate-val').textContent = S.gates.noiseGate.toFixed(3);
+  $('mg-gain').value = S.inputGain;
+  $('mg-gain-val').textContent = '×' + S.inputGain.toFixed(1);
+  for (const b of BANDS3) {
+    const g = effGate(b);
+    $('bs-' + b).value = g;
+    const lab = $('bg-' + b);
+    lab.textContent = g.toFixed(3);
+    lab.classList.toggle('inherit', !hasOverride(b));
+    $('bc-' + b).classList.toggle('active', hasOverride(b));
+    const line = $('bm-' + b + '-gate');
+    if (line) line.style.left = (100 * Math.min(1, g / METER_MAX)) + '%';
+  }
+  const ls = $('mic-link-state');
+  if (ls) {
+    ls.textContent = S.engineLinkConnected ? '● mirrored to engine' : '○ local only (engine offline)';
+    ls.className = 'mic-link-state ' + (S.engineLinkConnected ? 'ok' : 'warn');
+  }
+}
+
+function renderNoiseCal() {
+  const st = $('noisecal-status'), res = $('noisecal-result'), btn = $('noisecal-btn');
+  if (!st) return;
+  const phase = S.noiseCal.phase;
+  if (phase === 'recording') { st.textContent = '● listening to the room… keep the music OFF'; st.className = 'mac-status rec'; btn.disabled = true; }
+  else { st.textContent = ''; btn.disabled = false; }
+  if (S.noiseCal.result && phase !== 'recording') {
+    const r = S.noiseCal.result;
+    res.style.display = 'flex';
+    $('nc-low').textContent = r.recommended.low.toFixed(3);
+    $('nc-mid').textContent = r.recommended.mid.toFixed(3);
+    $('nc-high').textContent = r.recommended.high.toFixed(3);
+  } else {
+    res.style.display = 'none';
+  }
+}
+
+function renderGainCal() {
+  const st = $('gaincal-status'), res = $('gaincal-result'), btn = $('gaincal-btn');
+  if (!st) return;
+  const phase = S.cal.phase;
+  if (phase === 'recording') { st.textContent = '● measuring peak… play the music LOUD'; st.className = 'mac-status rec'; btn.disabled = true; }
+  else if (phase === 'replaying') { st.textContent = '↻ replaying capture…'; st.className = 'mac-status'; btn.disabled = true; }
+  else { st.textContent = ''; btn.disabled = false; }
+  if (S.cal.result) {
+    const r = S.cal.result;
+    res.style.display = 'flex';
+    $('gc-peak').textContent = r.peak != null ? r.peak.toFixed(2) : '—';
+    $('gc-verdict').textContent = r.verdict || '—';
+    $('gc-rec').textContent = r.recommendedGain != null ? r.recommendedGain.toFixed(1) : '—';
+  } else {
+    res.style.display = 'none';
+  }
+}
+
+// Per-frame meter update (called from draw when the mic page is visible).
+function updateMicMeters() {
+  for (const b of BANDS3) {
+    const lvl = clamp01(S.liveBands[b] || 0);
+    const fill = $('bm-' + b + '-fill');
+    if (fill) {
+      fill.style.width = (100 * Math.min(1, lvl / METER_MAX)) + '%';
+      // Colour the bar by whether it's currently above its gate (passing) or
+      // below (gated to silence) — instant visual of what the gate is doing.
+      fill.classList.toggle('passing', lvl > effGate(b));
+    }
+    const val = $('bm-' + b + '-val');
+    if (val) val.textContent = lvl.toFixed(2);
+  }
+}
+
 function setPage(page) {
-  S.page = (page === 'osc') ? 'osc' : 'design';
-  const design = $('page-design'), osc = $('page-osc');
+  S.page = (page === 'osc' || page === 'mic') ? page : 'design';
+  const design = $('page-design'), osc = $('page-osc'), mic = $('page-mic');
   if (design) design.style.display = S.page === 'design' ? '' : 'none';
   if (osc) osc.style.display = S.page === 'osc' ? 'flex' : 'none';
+  if (mic) mic.style.display = S.page === 'mic' ? 'flex' : 'none';
   for (const b of document.querySelectorAll('.nav-btn')) {
     b.classList.toggle('active', b.dataset.page === S.page);
   }
   if (S.page === 'osc') renderOscPage();
+  if (S.page === 'mic') buildMicPage();
 }
 function buildNav() {
   for (const b of document.querySelectorAll('.nav-btn')) {
@@ -1220,6 +1383,7 @@ function draw() {
     const m = frameQueue.shift();
     for (const id in m.signals) { const v = m.signals[id]; if (v) S.live[id] = v; }
     if (m.dom) S.dom = m.dom;
+    if (m.bands) S.liveBands = m.bands;
     if (m.struct) S.struct = m.struct;
     if (m.spectrum) S.spectrum = m.spectrum;
     if (m.wave) S.wave = m.wave;
@@ -1289,6 +1453,7 @@ function draw() {
     }
   }
   renderLive();
+  if (S.page === 'mic') updateMicMeters();
   requestAnimationFrame(draw);
 }
 function trLine(ctx, buf, W, H, lw, alpha) {
