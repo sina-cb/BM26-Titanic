@@ -63,10 +63,14 @@ import { engineEvents } from '@/utils/engineEvents';
 // Hard UI contract (operator review May 2026): the rig surface shows
 // EXACTLY this many slots. The engine can persist up to MAX_SLOTS (16)
 // — anything beyond this is hidden from the strip. The operator
-// re-binds the visible 6 via long-press swap; the engine's library
+// re-binds the visible slots via long-press swap; the engine's library
 // still contains every preset so swapping in vintageWhite, fogger,
 // blastWhite, etc. is one tap of the SWAP modal.
-const VISIBLE_SLOT_COUNT = 6;
+// 8 slots (operator request 2026-06-22): the engine supports up to MAX_SLOTS=16
+// and ships 12 default bindings, so slots 7–8 surface real effects (Vintage
+// Wht / Blast Wht) — or empty + assignable if the engine returns fewer. Shared
+// by BOTH the deck and mixer bottom bars (same GlobalEffectMacros instance).
+const VISIBLE_SLOT_COUNT = 8;
 
 type LibPreset = { id: string; label: string; defaultBehavior: string; safetyTier?: string; params: any };
 type LibEffect = { id: string; name: string; category: string; behaviorTypes: string[]; presets: Record<string, LibPreset>; legacyEffectId?: string | null };
@@ -173,8 +177,8 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   }, []);
 
   // Always render exactly VISIBLE_SLOT_COUNT cells. Engine slots beyond
-  // 6 are hidden; if engine has fewer than 6 we pad with empty cells
-  // (the operator taps the + to bind something to that slotId).
+  // VISIBLE_SLOT_COUNT are hidden; if engine has fewer we pad with empty
+  // cells (the operator taps the + to bind something to that slotId).
   //
   // Empty cells get a synthesized slotId = (i + 1) so PATCH /global-effect-
   // slots/:id can fill them in. The engine creates a slot record on first
