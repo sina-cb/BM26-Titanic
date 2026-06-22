@@ -7,7 +7,6 @@ import { useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, 
 import {
   useTempoState,
   useTempoTap,
-  tempoSourceTag,
   tempoSourceHasOverride,
   type TempoSource,
 } from '@/hooks/use_tempo_tap';
@@ -169,7 +168,6 @@ export const CPCControls = () => {
   // deck TAP button, so a tap from either surface means exactly the same
   // thing. `tempo.source` drives the source tag + the SYNC affordance.
   const { tap: onTap, sync: onTempoSync } = useTempoTap();
-  const tempoTag    = tempoSourceTag(tempo.source);
   const showSync    = tempoSourceHasOverride(tempo.source);
   const bpmSyncOn  = (params.bpmSpeedSync ?? 0) >= 0.5;
   const bpmMin     = params.bpmSpeedMin ?? 60;
@@ -242,7 +240,6 @@ export const CPCControls = () => {
             h1={params.colorPalette1?.h ?? 0}
             h2={params.colorPalette2?.h ?? 0.5}
             bpm={bpm}
-            tempoTag={tempoTag}
             onEditColors={() => setColorPickerOpen(true)}
           />
         ) : (
@@ -301,7 +298,6 @@ export const CPCControls = () => {
               isPortrait={isPortrait}
               synced={bpmSyncOn}
               source={tempo.source}
-              tag={tempoTag}
               showSync={showSync}
               onSync={onTempoSync}
             />
@@ -698,15 +694,15 @@ function GlobalTapTile({ onTap, source, isPortrait }: {
 // BPM gets its own compact tile (no operator gain — it's a tempo
 // reference, not a level to scale). The big numeric readout makes
 // it easy to glance at from across the venue. Now source-aware: a small
-// OSC/TAP/HELD tag under the BPM number tells the operator what's actually
-// driving the clock, and a SYNC affordance appears only while a manual tap
-// override is active (tap → hand control back to OSC).
-function BpmTile({ bpm, isPortrait, synced, source, tag, showSync, onSync }: {
+// source-based border colour tells the operator what's driving the clock
+// (green = OSC auto-follow, tertiary = manual override), and a SYNC affordance
+// appears only while a manual tap override is active (tap → hand control back
+// to OSC).
+function BpmTile({ bpm, isPortrait, synced, source, showSync, onSync }: {
   bpm: number;
   isPortrait: boolean;
   synced?: boolean;
   source: TempoSource;
-  tag: string;
   showSync: boolean;
   onSync: () => void;
 }) {
@@ -735,18 +731,12 @@ function BpmTile({ bpm, isPortrait, synced, source, tag, showSync, onSync }: {
           </Text>
           <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: hasSignal ? accent : C.ghostBorder }} />
         </View>
-        <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'center', gap: 3 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'center' }}>
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18,
             color: hasSignal ? C.text : C.icon, lineHeight: 20,
           }}>
             {hasSignal ? Math.round(bpm) : '—'}
-          </Text>
-          <Text style={{
-            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 7,
-            color: accent, textTransform: 'uppercase', letterSpacing: 0.5,
-          }}>
-            {tag}
           </Text>
         </View>
       </View>
@@ -782,10 +772,10 @@ function BpmTile({ bpm, isPortrait, synced, source, tag, showSync, onSync }: {
 // 2026-05-26). Sized so the row fits in ~24px regardless of orientation.
 
 function CollapsedGlobalsSummary({
-  speed, speedBadge, speedFill, size, h1, h2, bpm, tempoTag, onEditColors,
+  speed, speedBadge, speedFill, size, h1, h2, bpm, onEditColors,
 }: {
   speed: number; speedBadge?: string; speedFill?: string;
-  size: number; h1: number; h2: number; bpm: number; tempoTag: string;
+  size: number; h1: number; h2: number; bpm: number;
   onEditColors: () => void;
 }) {
   const C = usePalette();
@@ -797,11 +787,8 @@ function CollapsedGlobalsSummary({
         <DualSwatch h1={h1} h2={h2} size={18} />
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>COLORS</Text>
       </TouchableOpacity>
-      {/* BPM + source tag stay together even in the collapsed strip so the
-          operator never reads a number without knowing what's driving it. */}
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>
         BPM <Text style={{ color: bpm > 0 ? C.text : C.icon }}>{bpm > 0 ? Math.round(bpm) : '—'}</Text>
-        {bpm > 0 ? <Text style={{ color: C.secondary, fontSize: 7 }}> {tempoTag}</Text> : null}
       </Text>
       <View style={{ flex: 1 }} />
       <OscStatusPill compact />

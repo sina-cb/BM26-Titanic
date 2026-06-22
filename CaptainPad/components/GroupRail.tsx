@@ -314,7 +314,11 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
       borderBottomWidth: 1,
       borderBottomColor: C.ghostBorder,
       paddingHorizontal: 12,
-      paddingVertical: 6,
+      // Tight vertical padding (2026-06-22 UI cleanup): the collapsed rail
+      // header was eating a chunk of vertical space on narrow widths. The
+      // header's touch targets keep their ≥44pt effective size via hitSlop
+      // (32pt visible + 8pt × 2), so this only trims dead space.
+      paddingVertical: 2,
     },
     railHeader: {
       flexDirection: 'row' as const,
@@ -325,7 +329,7 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
       gap: 8,
-      minHeight: 44,
+      minHeight: 32,
       paddingRight: 12,
     },
     countBadge: {
@@ -343,7 +347,7 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
       color: '#FFF',
     },
     newGroupBtn: {
-      minHeight: 44,
+      minHeight: 32,
       paddingHorizontal: 12,
       justifyContent: 'center' as const,
     },

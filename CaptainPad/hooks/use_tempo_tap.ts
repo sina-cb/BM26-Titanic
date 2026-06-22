@@ -158,16 +158,10 @@ export function useTempoTap(): TempoTap {
 }
 
 // ── Source-tag presentation ───────────────────────────────────────────────
-// One place both surfaces read so the deck TAP button and the globals cluster
-// render the same short tag for each source. Kept tiny + colour-agnostic;
-// callers pick the accent (TAP/manual highlights, OSC reads as auto-driven).
-
-/** Short uppercase tag for a tempo source: OSC / TAP / HELD. */
-export function tempoSourceTag(source: TempoSource): string {
-  if (source === 'osc') return 'OSC';
-  if (source === 'manual') return 'TAP';
-  return 'HELD';
-}
+// The short OSC/TAP/HELD source tag was retired (2026-06-22 UI cleanup) — the
+// readout is now just the BPM number, with SYNC + the source-based tint
+// carrying the "what's driving the clock" signal. Only the override predicate
+// remains, since SYNC depends on it.
 
 /** True only when a manual override is active (⇒ show the SYNC affordance). */
 export function tempoSourceHasOverride(source: TempoSource): boolean {

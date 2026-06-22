@@ -36,7 +36,6 @@ import { fadeMaster } from '@/utils/masterApi';
 import {
   useTempoState,
   useTempoTap,
-  tempoSourceTag,
   tempoSourceHasOverride,
 } from '@/hooks/use_tempo_tap';
 import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
@@ -123,7 +122,6 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
   // override, SYNC to rejoin OSC) vs "128 · HELD" (OSC idle, last value holds).
   const tempo = useTempoState();
   const tempoBpm = tempo.bpm;
-  const tempoTag = tempoSourceTag(tempo.source);
   const showSync = tempoSourceHasOverride(tempo.source);
   const { tap: handleTap, sync: handleTempoSync } = useTempoTap();
 
@@ -242,23 +240,14 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
             accessibilityRole="button"
             accessibilityLabel={
               typeof tempoBpm === 'number'
-                ? `Tap tempo, currently ${Math.round(tempoBpm)} beats per minute, source ${tempoTag}`
+                ? `Tap tempo, currently ${Math.round(tempoBpm)} beats per minute, source ${tempo.source}`
                 : 'Tap tempo, not set'
             }
           >
             <Text style={styles.tapTempoLabel}>TAP</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
-              <Text style={styles.tapTempoBpm}>
-                {typeof tempoBpm === 'number' ? `${Math.round(tempoBpm)}` : '—'}
-              </Text>
-              <Text style={[
-                styles.tapTempoSource,
-                tempo.source === 'osc' && { color: '#00a86b' },
-                tempo.source === 'manual' && { color: palette.tertiary },
-              ]}>
-                {tempoTag}
-              </Text>
-            </View>
+            <Text style={styles.tapTempoBpm}>
+              {typeof tempoBpm === 'number' ? `${Math.round(tempoBpm)}` : '—'}
+            </Text>
           </TouchableOpacity>
           {/* SYNC — only while a manual tap override is active (drops it so
               OSC reclaims). Renders nothing otherwise, so the resting row has
@@ -458,10 +447,13 @@ function makeStyles(C: Palette) {
       alignItems: 'center' as const,
       gap: 4,
     },
+    // Compact now that the source tag is gone: TAP label over the bare BPM
+    // number. A fixed 48pt width keeps the cluster geometry stable whether or
+    // not the SYNC button is present — the number swap can't jiggle the row.
     tapTempoBtn: {
       height: 36,
-      minWidth: 64,
-      paddingHorizontal: 10,
+      width: 48,
+      paddingHorizontal: 6,
       borderRadius: 6,
       borderWidth: 1,
       borderColor: C.primary,
@@ -486,15 +478,6 @@ function makeStyles(C: Palette) {
       fontSize: 12,
       letterSpacing: 0.4,
       color: C.primary,
-    },
-    // The source tag (OSC / TAP / HELD) sits right of the BPM number. The
-    // base colour is the muted secondary (held); osc/manual override it inline.
-    tapTempoSource: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 8,
-      letterSpacing: 0.8,
-      color: C.secondary,
-      textTransform: 'uppercase' as const,
     },
     // SYNC — small bordered button that drops the manual override (rejoin OSC).
     // 36pt visible height matches the TAP pill so the cluster is flush.

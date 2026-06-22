@@ -348,7 +348,10 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           28×28 + pinned to the right. Operator feedback "make them
           look exactly the same" drove this unification. */}
       <View style={styles.channelHeader}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+        {/* Name + badges claim the full first line (flexBasis 100%) so the
+            control row below always gets the strip's full width to lay out
+            its buttons without clipping. */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexGrow: 1, flexBasis: '100%', minWidth: 0 }}>
           <View style={styles.channelBadge}>
             <Text style={[styles.valueReadout, { color: C.primary }]}>{index}</Text>
           </View>
@@ -377,7 +380,12 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             placeholderTextColor={C.icon}
           />
         </View>
-        <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+        {/* Channel-control button row. Wraps to a second line on narrow
+            (phone) widths instead of cramming/clipping the 9 controls into one
+            overflowing strip (2026-06-22 UI cleanup). `rowGap` keeps the
+            wrapped second line clear of the first; the per-button 28pt
+            squircles + their ICON_BTN_HIT_SLOP keep every target ≥44pt. */}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: 8, rowGap: 8, alignItems: 'center', justifyContent: 'flex-end' }}>
           {/* Color swatch (docs/39 §8.4) — taps open the accent picker.
               The swatch fill IS the channel's current color (or a neutral
               "no color" outline when null). Pure metadata; it tints the
@@ -2012,12 +2020,16 @@ export default function MixerScreen() {
           and reports edits up through the typed groupsSoloApi clients. */}
       <GroupRail mixGroups={mixGroups} channels={channels} />
 
-      {/* ── Master Visualization ────────────────────────────────────── */}
-      <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+      {/* ── Master Visualization ──────────────────────────────────────
+          Tight band (2026-06-22 UI cleanup): the label sits inline with no
+          extra top padding and the viz is a slim 12px strip, so the channel
+          strip below moves up and reclaims the vertical space the operator
+          flagged as wasted on narrow (phone) widths. */}
+      <View style={{ paddingHorizontal: 16 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 }}>
           <Text style={[styles.labelCaps, { fontSize: 9 }]}>MASTER OUTPUT</Text>
         </View>
-        <ChannelVizStrip vizKey="master" height={18} style={{ borderRadius: 6 }} />
+        <ChannelVizStrip vizKey="master" height={12} style={{ borderRadius: 6 }} />
       </View>
 
       {/* ── Channel Strips ─────────────────────────────────────────── */}
@@ -2391,8 +2403,15 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   },
   channelHeader: {
     flexDirection: 'row',
+    // Wrap (2026-06-22 UI cleanup): on narrow strips the 9-button control
+    // row no longer fits beside the channel name, so the whole header is
+    // allowed to wrap — the name+badge keep the first line and the button
+    // row drops to a full-width second line (where it wraps internally too)
+    // instead of clipping off the right edge.
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
     alignItems: 'center',
+    rowGap: 8,
     padding: 12,
     backgroundColor: C.surfaceContainerHigh,
     borderBottomWidth: 1,
