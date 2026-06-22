@@ -534,8 +534,12 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // landscape, so we use fewer columns AND a smaller font there. The taller
   // chip (52px in portrait) guarantees a 2-line wrapped label
   // ("5 Hz\nPunch", "Vintage\nWhite") fits without clipping.
+  // Strip (mixer + deck bottom bar): ONE flat row of 8 controls in both
+  // orientations (operator request 2026-06-22). Portrait chips are narrower,
+  // so they're made TALLER (60px) to give a 2-line wrapped label room without
+  // truncating; landscape bumps to 44px to match the beefier touch target.
   const btnHeight = isStrip
-    ? (isPortrait ? 42 : 36)
+    ? (isPortrait ? 60 : 44)
     : (isPortrait ? 52 : 48);
   // Deck portrait left-pane is the tightest 3-up width, so it drops to 9px to
   // guarantee a 7-char word ("Vintage", "Iceberg") fits a wrapped line clear of
@@ -548,10 +552,6 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // portrait left-pane needs 3-up so each chip is wide enough for its full
   // wrapped label (QA round3: 4-up portrait chips were ~90px and truncated).
   const deckCols  = isPortrait ? 3 : 4;
-  // Mixer strip: landscape keeps the single 8-chip row (it fits). Portrait
-  // wraps that row to two rows of 4 — eight chips cannot fit one narrow row
-  // without truncating two-word names (QA round3).
-  const stripPerRow = isPortrait ? 4 : 8;
 
   // While we wait for the first /global-effect-slots response render
   // a thin skeleton row (matches final layout so the deck doesn't
@@ -629,38 +629,14 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
             <InvertButton key="invert" invert={invert} height={btnHeight} fontSize={btnFont} onPress={onPressInvert} />,
             <BlackoutButton key="blackout" blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} />,
           ];
-          // Landscape: one flat row, every cell flex:1 (fits fine — QA confirms).
-          if (!isPortrait) {
-            return (
-              <View style={{ flexDirection: 'row', gap }}>
-                {stripCells}
-              </View>
-            );
-          }
-          // Portrait: WRAP to rows of `stripPerRow`. The cells render flex:1
-          // internally, so we wrap each in a fixed-basis box to force the row
-          // break — this is what lets two-word names ("5 Hz Punch", "UV Blast")
-          // render at a real font on two lines instead of truncating in one
-          // cramped row (QA round3). Blackout is the last cell, so it stays
-          // bottom-right and fully legible.
-          const stripRows: React.ReactNode[][] = [];
-          for (let i = 0; i < stripCells.length; i += stripPerRow) {
-            stripRows.push(stripCells.slice(i, i + stripPerRow));
-          }
+          // ONE flat row in BOTH orientations (operator request 2026-06-22):
+          // every cell is flex:1 so the 8 controls share the full bar width on
+          // a single line. Portrait chips are narrower but TALLER (btnHeight
+          // 60px) so a 2-line wrapped label still fits without truncation;
+          // Blackout stays the last cell, bottom-right.
           return (
-            <View>
-              {stripRows.map((row, ri) => (
-                <View key={ri} style={{ flexDirection: 'row', gap, marginBottom: ri < stripRows.length - 1 ? gap : 0 }}>
-                  {row.map((cell, ci) => (
-                    <View key={ci} style={{ flex: 1 }}>{cell}</View>
-                  ))}
-                  {row.length < stripPerRow
-                    ? Array.from({ length: stripPerRow - row.length }).map((_, i) => (
-                        <View key={`spad-${i}`} style={{ flex: 1 }} />
-                      ))
-                    : null}
-                </View>
-              ))}
+            <View style={{ flexDirection: 'row', gap }}>
+              {stripCells}
             </View>
           );
         }
