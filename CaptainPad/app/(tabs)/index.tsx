@@ -3,7 +3,6 @@ import { View, Text, TouchableOpacity, ScrollView, Alert, Modal, StyleSheet } fr
 import { useGlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { RigGlobals } from '@/components/RigGlobals';
 import { GlobalParams, DeckSavedFlash } from '@/components/GlobalParams';
 import { CPCControls } from '@/components/CPCControls';
@@ -131,6 +130,13 @@ export default function ControlDeckScreen() {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
   const [deckChannel, setDeckChannel] = useState<any | null>(null);
+  // One-shot guard for the mount-time CAP clear (June 2026). The deck CAP
+  // (faderMax) fader UI was removed; any residual/persisted faderMax < 1.0
+  // would silently cap exterior brightness with no visible control to undo
+  // it — a mission-critical "never dark" hazard. On the first deck-channel
+  // seed we send exactly ONE faderMax:1.0 write to neutralize a stored cap.
+  // Guarded so it fires once per mount, never mid-interaction.
+  const capClearedRef = useRef(false);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [connectionError, setConnectionError] = useState<string>('');
   // D6: floating ALL MODULATIONS overlay state. Placed at the screen
@@ -344,11 +350,35 @@ export default function ControlDeckScreen() {
     // Load initial deck channel state.
     const deckRes = await fetchDeckChannel();
     if (deckRes.ok && deckRes.data) {
-      setDeckChannel(deckRes.data.channel || null);
+      const ch = deckRes.data.channel || null;
+      setDeckChannel(ch);
       // F-cue: seed the active cue from /deck/channel's deckFocusChannelId.
       // The top-level api type doesn't pin this field, so read it loosely.
       const focus = (deckRes.data as { deckFocusChannelId?: unknown }).deckFocusChannelId;
       setActiveCueId(typeof focus === 'string' ? focus : null);
+
+      // CAP-removal cleanup (June 2026): the deck CAP (faderMax) fader was
+      // removed from the UI. A persisted faderMax < 1.0 would silently limit
+      // the deck's exterior brightness with no control left to clear it —
+      // mission-critical "never dark" hazard. Fire exactly ONE guarded
+      // faderMax:1.0 write (same PATCH /deck/channel route the old CAP fader
+      // used, via setChannelFaderMax {deck:true}) to neutralize any stored
+      // cap. Guarded by capClearedRef so it fires once per mount, never
+      // mid-interaction. faderMax stays a valid engine field — we only force
+      // it open here.
+      const seededMax = typeof ch?.faderMax === 'number' ? ch.faderMax : 1.0;
+      if (!capClearedRef.current && ch?.id && seededMax < 1.0) {
+        capClearedRef.current = true;
+        setChannelFaderMax(ch.id, 1.0, { deck: true }).then((r) => {
+          if (r.ok) {
+            setDeckChannel((c: any) => (c ? { ...c, faderMax: 1.0 } : c));
+          } else {
+            console.warn('[Deck] failed to clear residual faderMax cap:', r.error);
+          }
+        });
+      } else {
+        capClearedRef.current = true;
+      }
     }
 
     // F-cue: seed the mixer overlay list for the cue picker. The deck tab
@@ -404,28 +434,10 @@ export default function ControlDeckScreen() {
     });
   }, []);
 
-  // Per-channel intensity clamp (faderMax, docs/39 §8.3) on the DECK channel.
-  // A hard ceiling on the deck's OWN contribution — the level fader and
-  // scripted transitions can ride up to this ceiling but never above it
-  // (effectiveFader = min(fader, faderMax)). WAVE 5 pattern: optimistic local
-  // apply + PATCH /deck/channel (via setChannelFaderMax {deck:true}), then the
-  // engine's `deck` WS broadcast reconciles canonical state (onControl above).
-  // Fail loud (Codex P0): a rejected ceiling reverts locally + Alerts; the
-  // next deck broadcast re-syncs too. Validated by the engine identically to a
-  // fader (finite, clamped to [0,1]; non-finite ⇒ 400).
-  const handleDeckFaderMax = useCallback(async (channelId: string, faderMax: number) => {
-    const prev = deckChannel?.faderMax;
-    setDeckChannel((c: any) => (c ? { ...c, faderMax } : c));
-    const res = await setChannelFaderMax(channelId, faderMax, { deck: true });
-    if (!res.ok) {
-      console.error(`[Deck] faderMax change rejected for ${channelId}:`, res.error);
-      setDeckChannel((c: any) => (c ? { ...c, faderMax: prev ?? 1.0 } : c));
-      Alert.alert(
-        'Intensity ceiling not applied',
-        `The engine rejected this ceiling. ${res.error || ''} The deck kept its previous limit.`.trim(),
-      );
-    }
-  }, [deckChannel?.faderMax]);
+  // (Removed June 2026: handleDeckFaderMax + the deck CAP fader UI. The
+  // per-deck intensity ceiling was a "never dark" hazard. faderMax stays a
+  // valid engine field but is no longer operator-adjustable here; it is forced
+  // open to 1.0 once at mount in seed() — see capClearedRef.)
 
   // Per-channel color metadata (docs/39 §8.4) on the DECK channel. Pure
   // operator-facing accent (no render effect) — tints the deck card for
@@ -768,27 +780,13 @@ export default function ControlDeckScreen() {
                       <GlobalParams variant="deck" channelId={channel.id} exports={exports} />
                     </View>
 
-                    {/* Intensity ceiling (faderMax, docs/39 §8.3). A hard cap on
-                        the deck channel's OWN contribution — the level fader (on
-                        DeckTopBar) and scripted transitions can ride up to this
-                        ceiling but never above it. faderMax defaults to 1.0;
-                        faderMax=0 fully suppresses the deck. Disabled while the
-                        deck is locked (matches the mixer CAP lock behaviour). The
-                        cap slider's fill is amber to distinguish it from a level
-                        fader. Mirrors the mixer strip's CAP row. */}
-                    <View style={[styles.capRow, { borderBottomColor: C.ghostBorder }]}>
-                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', width: 36 }}>CAP</Text>
-                      <HorizontalFader
-                        value={channel.faderMax ?? 1}
-                        onChange={(v: number) => { if (!channel.locked) handleDeckFaderMax(channel.id, v); }}
-                        trackStyle={[styles.faderTrack, { backgroundColor: C.surfaceContainerHigh, flex: 1, marginHorizontal: 6, opacity: channel.locked ? 0.5 : 1 }]}
-                        fillStyle={styles.capFill}
-                      />
-                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: '#F5A623', width: 32, textAlign: 'right' }}>
-                        {Math.round((channel.faderMax ?? 1) * 100)}
-                      </Text>
-                    </View>
-
+                    {/* CAP (faderMax) fader removed June 2026 — the per-deck
+                        intensity ceiling UI was a "never dark" hazard (a stored
+                        cap < 1.0 silently dimmed the exterior with no visible
+                        control to undo it). faderMax remains a valid engine
+                        field, forced open to 1.0 once at mount (see the seed's
+                        capClearedRef one-shot). Mirrors the already-removed
+                        mixer-strip CAP row. */}
                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 16, gap: 8 }}>
                       {toggles.map((e: any) => (
                         <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => triggerChannelControl(channel.id, id, v)} />
@@ -901,10 +899,11 @@ export default function ControlDeckScreen() {
   );
 }
 
-// Local styles mirror the mixer strip's CAP row + color-picker recipe (docs/39
-// §8.3/§8.4). Palette-dependent colors are applied inline at the call site
-// (this screen reads the palette via the usePalette hook, not a StyleSheet
-// factory), keeping these to layout + the fixed amber cap fill.
+// Local styles for the cue header + color-picker recipe (docs/39 §8.4).
+// Palette-dependent colors are applied inline at the call site (this screen
+// reads the palette via the usePalette hook, not a StyleSheet factory).
+// (The CAP row styles — capRow/faderTrack/capFill — were removed June 2026
+// alongside the deck CAP fader.)
 const styles = StyleSheet.create({
   deckSwatchBtn: {
     width: 44, height: 44, borderRadius: 8,
@@ -932,22 +931,6 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     borderRadius: 8, borderWidth: 1,
-  },
-  capRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    marginBottom: 16,
-  },
-  faderTrack: {
-    height: 16,
-    borderRadius: 4,
-  },
-  capFill: {
-    position: 'absolute',
-    left: 0, top: 0, bottom: 0,
-    backgroundColor: '#F5A623',
-    borderRadius: 4,
   },
   modalOverlay: {
     flex: 1,
