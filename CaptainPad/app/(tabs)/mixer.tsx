@@ -396,7 +396,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             overflowing strip (2026-06-22 UI cleanup). `rowGap` keeps the
             wrapped second line clear of the first; the per-button 28pt
             squircles + their ICON_BTN_HIT_SLOP keep every target ≥44pt. */}
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', flexBasis: '100%', flexShrink: 1, minWidth: 0, columnGap: 6, rowGap: 8, alignItems: 'center', justifyContent: 'flex-end' }}>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', flexBasis: '100%', flexShrink: 1, minWidth: 0, columnGap: 4, rowGap: 8, alignItems: 'center', justifyContent: 'flex-start' }}>
           {/* Color swatch (docs/39 §8.4) — taps open the accent picker.
               The swatch fill IS the channel's current color (or a neutral
               "no color" outline when null). Pure metadata; it tints the
@@ -637,7 +637,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             chrome). The card also makes the "modulation active" green
             ring on individual rows pop against a neutral container. */}
         <View style={[styles.paramsPanel, isPortrait && styles.paramsPanelPortrait]}>
-          <ScrollView nestedScrollEnabled style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 4 }}>
+          <ScrollView nestedScrollEnabled style={{ flex: 1, minHeight: 0 }} contentContainerStyle={{ paddingBottom: 8 }}>
             <View style={styles.localParamsCard}>
               {/* numberOfLines + adjustsFontSizeToFit keep the header on one
                   line on the narrower 2nd strip instead of clipping (QA
@@ -2077,8 +2077,14 @@ export default function MixerScreen() {
           <Text style={[styles.labelCaps, { fontSize: 9 }]}>MASTER OUTPUT</Text>
           <Text style={[styles.labelCaps, { fontSize: 9, color: C.primary }]}>{Math.round(master * 100)}%</Text>
         </View>
+        {/* QA round3 #5: the header above already shows MASTER OUTPUT <n>%, so
+            ChannelVizStrip's own in-track meter row (a duplicate bar + a
+            right-hugging `<n>%` label) was redundant — and its level sidecar
+            read 0% while the header read 100%, so the stray `0%` looked like a
+            bug. showMeter={false} drops the in-strip meter row, leaving just
+            the pixel strip under the single authoritative header value. */}
         <View style={styles.masterVizTrack}>
-          <ChannelVizStrip vizKey="master" height={12} style={{ borderRadius: 6 }} />
+          <ChannelVizStrip vizKey="master" height={12} style={{ borderRadius: 6 }} showMeter={false} />
         </View>
       </View>
 
@@ -2088,7 +2094,14 @@ export default function MixerScreen() {
           iterate the array directly — no `.slice(1)` skip-the-deck
           dance. The engine's HIL test (hil_channel_isolation_test)
           guards this invariant. */}
-      <ScrollView horizontal scrollEnabled={false} contentContainerStyle={[{ padding: 16, gap: 16, flexGrow: 1 }, !isPortrait && { justifyContent: 'center' }]} style={{ flex: 1 }}>
+      {/* QA round3 #3: a centered single (or double) card at the 560px cap
+          left a ~520px empty gutter on either side in landscape, reading as
+          lopsided dead space. Center ONLY when the row is full (3 layers,
+          which fills the viewport); with fewer layers left-align the column so
+          the cards anchor to the left edge and the unused width sits as a
+          single trailing margin instead of two symmetric gutters that frame
+          the emptiness. Portrait is untouched (always a single fixed column).*/}
+      <ScrollView horizontal scrollEnabled={false} contentContainerStyle={[{ padding: 16, gap: 16, flexGrow: 1 }, !isPortrait && { justifyContent: channels.length >= 3 ? 'center' : 'flex-start' }]} style={{ flex: 1 }}>
         {channels.map((channel, idx) => {
           // Landscape width distribution (QA round1 #7): the strips used to be
           // a fixed 320px each and hugged the left edge, leaving ~2/3 of the
@@ -2101,9 +2114,15 @@ export default function MixerScreen() {
           // `width: undefined` explicitly overrides channelCard's fixed 320
           // (RN style-merge keeps the earlier width unless it's reset), letting
           // `flex: 1` distribute the row width instead.
+          // QA round3 #3: lift the per-card width ceiling when the row isn't
+          // full so 1-2 layers widen to use the freed landscape width instead
+          // of capping at 560 and leaving a gutter. A 3-layer row keeps the
+          // 560 cap (it already fills evenly); 1-2 layers may grow to 760 each
+          // so the column reads filled, not stranded at the left.
+          const landscapeMaxWidth = channels.length >= 3 ? 560 : 760;
           const cardStyle = isPortrait
             ? null
-            : { width: undefined, flex: 1, minWidth: 320, maxWidth: 560 };
+            : { width: undefined, flex: 1, minWidth: 320, maxWidth: landscapeMaxWidth };
           // Solo display (docs/39 §10) — DISPLAY-ONLY, derived from the
           // authoritative soloedIds Set. `isSolo` = this channel is soloed.
           // `soloActive` = ANY solo is engaged. `dimmedBySolo` mirrors the
@@ -2659,6 +2678,13 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   paramsPanel: {
     width: '40%',
     padding: 8,
+    // QA round3 #4: the LOCAL PARAMS column's last slider (e.g. a pattern's
+    // `LEVEL` export) was sliced by the pinned MUTE/SOLO/BUMP footer — only its
+    // right-aligned value peeked out. `minHeight:0` lets the inner ScrollView
+    // actually bound itself to the flex-distributed body space and scroll its
+    // contents, instead of growing to its full intrinsic content height and
+    // pushing the tail of the list under the footer band.
+    minHeight: 0,
   },
   // Portrait: params sit BELOW the playlist at full width.
   paramsPanelPortrait: {
@@ -2766,11 +2792,28 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     alignItems: 'center',
     gap: 4,
   },
+  // Full-screen backdrop for every Modal on this screen (blend / transition
+  // / color / view / add-channel pickers). QA round3 #1: when a picker's
+  // <Modal> is mounted INSIDE a width-constrained channel column (landscape
+  // hands each card `flex:1, maxWidth:560`), a `flex:1` overlay fills the
+  // COLUMN, not the viewport — so the centered card drifts left-of-screen.
+  // Pinning the overlay to the Modal host with `position:'absolute'` inset 0
+  // makes it a true full-viewport layer regardless of where the <Modal> tag
+  // sits in the tree, so the card centers on the whole screen (verified for
+  // an 834-wide iPad-portrait viewport). Backdrop raised to 0.7 (was 0.4) to
+  // match PlaylistPanel's HOT SWAP picker so the busy playlist rows behind
+  // can't bleed through.
   modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.7)',
     justifyContent: 'center',
     alignItems: 'center',
+    paddingVertical: 24,
+    paddingHorizontal: 16,
   },
   modalContent: {
     backgroundColor: C.surfaceContainerLowest,

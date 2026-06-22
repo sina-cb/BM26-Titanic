@@ -1880,7 +1880,14 @@ const SwapPlaylistModal: React.FC<SwapPlaylistModalProps> = ({
       accessibilityLabel="Close hot-swap picker"
     >
       <TouchableOpacity activeOpacity={1} onPress={() => {}} style={modalStyles.cardWrap}>
-        <View style={[modalStyles.card, { maxHeight: '80%' }]}>
+        {/* The card gets a real height budget — capped at 70% of the viewport,
+            but its list area (the flex:1 ScrollView below) carries a minHeight
+            so the card never collapses to a content-fit sliver. The
+            title/subtitle/filter bar sit at their natural height; the list
+            fills whatever's left and scrolls when the playlists overflow.
+            Round-3 fix: previously the card shrank to ~116pt and the single
+            `default (current)` row was clipped + faded at the bottom border. */}
+        <View style={[modalStyles.card, { maxHeight: '70%' }]}>
           <Text style={modalStyles.title}>HOT SWAP PLAYLIST</Text>
           <Text style={{ color: C.icon, fontFamily: 'Inter_400Regular', fontSize: 11, marginBottom: 10, lineHeight: 15 }}>
             {role === 'deck'
@@ -1892,7 +1899,12 @@ const SwapPlaylistModal: React.FC<SwapPlaylistModalProps> = ({
             query={query}
             setQuery={setQuery}
           />
-          <ScrollView style={{ maxHeight: 360 }}>
+          {/* flex:1 so the list fills the card's remaining height; minHeight
+              guarantees ~4 rows are visible even with a single playlist so the
+              picker is never a clipped sliver. The current-playlist row, the
+              mapped other-playlist rows, and the empty/loading state all
+              render in full inside this scroll area. */}
+          <ScrollView style={{ flex: 1, minHeight: 200 }} contentContainerStyle={{ paddingBottom: 4 }}>
             {currentName && (
               <View
                 style={{

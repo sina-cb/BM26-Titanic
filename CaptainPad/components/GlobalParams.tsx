@@ -109,7 +109,7 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
         // frame, CPC would still win.
         const matched = !!e.cpcOwned;
         if (matched) {
-          const niceName = e.name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().substring(0, 15);
+          const niceName = prettySliderName(e.name);
           return (
             <View key={`slider-${e.id}`} style={{ opacity: 0.5 }}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4, alignItems: 'center' }}>

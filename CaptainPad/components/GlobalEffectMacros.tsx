@@ -42,7 +42,7 @@
  *         no fallback behaviors).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, Modal, ScrollView, Alert, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, ScrollView, Alert, Platform, useWindowDimensions } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import {
   fetchGlobalEffectSlots,
@@ -117,6 +117,12 @@ const EMPTY_STENCIL = Object.freeze({
 
 export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange, variant = 'deck' }) => {
   const C = usePalette();
+  // Orientation signal — same pattern as DeckTopBar / CPCControls. Portrait
+  // panes are far narrower, so the deck grid drops to 3 columns and the mixer
+  // strip wraps to two rows. This is what lets every effect label render at a
+  // real, fully-legible font instead of an ellipsis stub (QA round3).
+  const { width, height } = useWindowDimensions();
+  const isPortrait = width < height;
   const [slots, setSlots] = useState<GlobalEffectSlotStatus[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [library, setLibrary] = useState<Library | null>(null);
@@ -519,13 +525,33 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // N-column wrap: every row has the same column count, so every chip is the
   // same width and labels wrap to 2 lines (SlotButton numberOfLines={2}) with
   // NO mid-word truncation. 48px tall so a 2-line label fits.
-  const btnHeight = isStrip ? 36 : 48;
-  const btnFont   = isStrip ? 11 : 11;
+  // QA round3: `adjustsFontSizeToFit` is a NO-OP on react-native-web, so a font
+  // that doesn't fit just truncates with an ellipsis. We no longer rely on it —
+  // every label below picks a REAL fontSize that fits at the column width, and
+  // wraps cleanly to 2 lines (no ellipsis) when a two-word name needs it.
+  //
+  // Portrait panes (deck left-pane, mixer bottom strip) are much narrower than
+  // landscape, so we use fewer columns AND a smaller font there. The taller
+  // chip (52px in portrait) guarantees a 2-line wrapped label
+  // ("5 Hz\nPunch", "Vintage\nWhite") fits without clipping.
+  const btnHeight = isStrip
+    ? (isPortrait ? 42 : 36)
+    : (isPortrait ? 52 : 48);
+  // Deck portrait left-pane is the tightest 3-up width, so it drops to 9px to
+  // guarantee a 7-char word ("Vintage", "Iceberg") fits a wrapped line clear of
+  // the ⋯ gutter. The mixer strip (now 4-up wrapped) keeps 10px.
+  const btnFont   = isStrip
+    ? (isPortrait ? 10 : 11)
+    : (isPortrait ? 9 : 11);
   const gap       = isStrip ? 4 : 5;
-  // Uniform deck grid columns. 4-up keeps each chip wide enough for its full
-  // label on the iPad Pro 11" portrait left-pane while still fitting all 8
-  // cells (6 slots + INVERT + BLACKOUT) in 2 rows.
-  const deckCols  = 4;
+  // Uniform deck grid columns. Landscape fits 4-up comfortably; the narrow
+  // portrait left-pane needs 3-up so each chip is wide enough for its full
+  // wrapped label (QA round3: 4-up portrait chips were ~90px and truncated).
+  const deckCols  = isPortrait ? 3 : 4;
+  // Mixer strip: landscape keeps the single 8-chip row (it fits). Portrait
+  // wraps that row to two rows of 4 — eight chips cannot fit one narrow row
+  // without truncating two-word names (QA round3).
+  const stripPerRow = isPortrait ? 4 : 8;
 
   // While we wait for the first /global-effect-slots response render
   // a thin skeleton row (matches final layout so the deck doesn't
@@ -598,11 +624,43 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         };
 
         if (isStrip) {
+          const stripCells: React.ReactNode[] = [
+            ...visibleSlots.map(renderCell),
+            <InvertButton key="invert" invert={invert} height={btnHeight} fontSize={btnFont} onPress={onPressInvert} />,
+            <BlackoutButton key="blackout" blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} />,
+          ];
+          // Landscape: one flat row, every cell flex:1 (fits fine — QA confirms).
+          if (!isPortrait) {
+            return (
+              <View style={{ flexDirection: 'row', gap }}>
+                {stripCells}
+              </View>
+            );
+          }
+          // Portrait: WRAP to rows of `stripPerRow`. The cells render flex:1
+          // internally, so we wrap each in a fixed-basis box to force the row
+          // break — this is what lets two-word names ("5 Hz Punch", "UV Blast")
+          // render at a real font on two lines instead of truncating in one
+          // cramped row (QA round3). Blackout is the last cell, so it stays
+          // bottom-right and fully legible.
+          const stripRows: React.ReactNode[][] = [];
+          for (let i = 0; i < stripCells.length; i += stripPerRow) {
+            stripRows.push(stripCells.slice(i, i + stripPerRow));
+          }
           return (
-            <View style={{ flexDirection: 'row', gap }}>
-              {visibleSlots.map(renderCell)}
-              <InvertButton invert={invert} height={btnHeight} fontSize={btnFont} onPress={onPressInvert} />
-              <BlackoutButton blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} />
+            <View>
+              {stripRows.map((row, ri) => (
+                <View key={ri} style={{ flexDirection: 'row', gap, marginBottom: ri < stripRows.length - 1 ? gap : 0 }}>
+                  {row.map((cell, ci) => (
+                    <View key={ci} style={{ flex: 1 }}>{cell}</View>
+                  ))}
+                  {row.length < stripPerRow
+                    ? Array.from({ length: stripPerRow - row.length }).map((_, i) => (
+                        <View key={`spad-${i}`} style={{ flex: 1 }} />
+                      ))
+                    : null}
+                </View>
+              ))}
             </View>
           );
         }
@@ -741,11 +799,13 @@ const Header: React.FC<{ variant: 'deck' | 'mixer-strip' }> = ({ variant }) => {
 //     complaint). The tier shows as a tiny coloured dot in the
 //     top-left corner instead, so the operator still has the
 //     "this preset is dangerous" cue at a glance.
-// Width reserved on each side of a bound slot's centred label so the text
-// clears the ⋯ edit affordance (a 16px chip pinned top-right). Used as
-// symmetric horizontal padding on the label so multi-word names stay centred
-// AND never overlap the dots (QA round1 #12).
-const EDIT_AFFORDANCE_GUTTER = 18;
+// Width reserved to the RIGHT of a bound slot's centred label so the text
+// clears the ⋯ edit affordance (a 14px chip pinned top-right). QA round3:
+// previously applied SYMMETRICALLY (paddingLeft AND paddingRight = 18) which
+// burned ~36px on a ~90px chip and forced the ellipsis truncation. It is now
+// right-ONLY (the ⋯ only lives on the right) and smaller, so the label keeps
+// nearly the full chip width and can render its real-font wrapped name.
+const EDIT_AFFORDANCE_GUTTER = 12;
 
 const SlotButton: React.FC<{
   slot: GlobalEffectSlotStatus;
@@ -804,14 +864,15 @@ const SlotButton: React.FC<{
       >
         <Text
           numberOfLines={2}
-          adjustsFontSizeToFit
-          minimumFontScale={0.7}
-          // QA round1 #12: reserve a right gutter the width of the ⋯ edit
-          // affordance (16px chip at right:2) so a multi-word label
-          // ("Vintage White", "Ghost Trails") never renders UNDER the dots.
-          // A matching left pad keeps the centered text visually centred in
-          // the label area rather than shifted off to the left.
-          style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, textAlign: 'center', letterSpacing: 0.3, paddingLeft: EDIT_AFFORDANCE_GUTTER, paddingRight: EDIT_AFFORDANCE_GUTTER }}
+          ellipsizeMode="clip"
+          // QA round3: NO `adjustsFontSizeToFit` — it is a no-op on
+          // react-native-web, so it never shrank the font and the label just
+          // truncated to a 1-2 char ellipsis stub. We now ship a real fit font
+          // (see `btnFont`, smaller in portrait) and wrap to 2 lines with no
+          // ellipsis (ellipsizeMode="clip"). The right-only gutter clears the
+          // ⋯ chip; the label stays effectively centred because only the right
+          // edge is reserved and the text is short relative to chip width.
+          style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, textAlign: 'center', letterSpacing: 0.3, paddingRight: EDIT_AFFORDANCE_GUTTER }}
         >
           {slot.label}
         </Text>
@@ -822,8 +883,12 @@ const SlotButton: React.FC<{
         hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
         accessibilityLabel={`Edit slot ${slot.slotId}`}
         style={{
-          position: 'absolute', top: 2, right: 2,
-          width: 16, height: 16, borderRadius: 8,
+          // QA round3: smaller (14px) + tucked tighter into the corner so it
+          // never sits over the first line of the centred label. The label's
+          // right-only gutter (EDIT_AFFORDANCE_GUTTER) reserves clearance for
+          // exactly this chip.
+          position: 'absolute', top: 1, right: 1,
+          width: 14, height: 14, borderRadius: 7,
           backgroundColor: showOn ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.04)',
           alignItems: 'center', justifyContent: 'center',
         }}
@@ -910,8 +975,10 @@ const BlackoutButton: React.FC<{
     >
       <Text
         numberOfLines={1}
-        adjustsFontSizeToFit
-        minimumFontScale={0.7}
+        ellipsizeMode="clip"
+        // QA round3: dropped `adjustsFontSizeToFit` (no-op on web). "Blackout"
+        // / "Release" fit on one line at `fontSize` in every chip width; the
+        // e-stop label MUST stay fully legible, so no ellipsis.
         style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, letterSpacing: 0.5 }}
       >
         {isOn ? 'Release' : 'Blackout'}
@@ -958,8 +1025,9 @@ const InvertButton: React.FC<{
     >
       <Text
         numberOfLines={1}
-        adjustsFontSizeToFit
-        minimumFontScale={0.7}
+        ellipsizeMode="clip"
+        // QA round3: dropped `adjustsFontSizeToFit` (no-op on web). "Invert"
+        // fits on one line at `fontSize` in every chip width.
         style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, letterSpacing: 0.5 }}
       >
         Invert
