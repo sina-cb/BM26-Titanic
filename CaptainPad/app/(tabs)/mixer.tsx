@@ -13,7 +13,6 @@ import {
   fetchChannelBlends, fetchTransitions, setMixerView,
   fetchPlaylists, fetchViewSelectionOptions,
   captureMixerChannelDefaults, discardMixerChannelDefaults,
-  invalidatePlaylistsCache, invalidatePlaylistCache,
   type PlaylistData,
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
@@ -52,21 +51,8 @@ import {
 // 44×44 without changing the visual footprint (28 + 8 + 8 = 44).
 const ICON_BTN_HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
 
-// Per-channel color accent palette (docs/39 §8.4 — channel `color` metadata,
-// no render effect). A small fixed set of high-contrast hex accents so the
-// operator can tint a strip for at-a-glance identification; the last option
-// clears the accent (color = null). The engine accepts any string or null, so
-// this curated list is purely the UI's tap-to-pick surface.
-const CHANNEL_COLOR_SWATCHES: string[] = [
-  '#E53935', // red
-  '#FB8C00', // orange
-  '#FDD835', // yellow
-  '#43A047', // green
-  '#00ACC1', // cyan
-  '#1E88E5', // blue
-  '#8E24AA', // purple
-  '#EC407A', // pink
-];
+// (Per-channel color-accent palette removed 2026-06-22 — color coding was
+// dropped from the channel strip at operator request.)
 
 // ── Global Rig Buttons moved to RigGlobals ────────────────────────────
 
@@ -215,7 +201,7 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, cardStyle, onFaderChange, onColorChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, cardStyle, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -228,7 +214,13 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showTransPicker, setShowTransPicker] = useState(false);
   const [showViewPicker, setShowViewPicker] = useState(false);
-  const [showColorPicker, setShowColorPicker] = useState(false);
+  // Overflow (⋮) menu for the secondary channel-control actions (pin fader,
+  // delete). The 2026-06-22 toolbar cleanup keeps only lock, the reorder
+  // chevrons, the blend-mode dropdown, and this ⋮ button inline on ONE
+  // non-wrapping row; pin + delete move into a centered modal of LABELED rows
+  // (icon + text). Same modalOverlay/modalContent pattern as the
+  // blend/transition/view pickers for visual consistency.
+  const [showActionsMenu, setShowActionsMenu] = useState(false);
   // Transition duration is stored as ms-integers (matching the deck's
   // TRANSITION_DURATION_PRESETS_MS) so the wheel's centered-row preset
   // equality lights up consistently. Engine wire format is seconds
@@ -240,14 +232,11 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
   }
   const [transTimeMs, setTransTimeMs] = useState<number>(Math.round(channel.transitionTime * 1000));
   const [transMode, setTransMode] = useState(channel.transitionMode || "trans_crossfade");
-  // Per-strip refresh nonce. Tapping the ↻ arrow on the channel name row
-  // bumps this, which propagates to the PlaylistPanel via the
-  // `refreshNonce` prop and forces it to re-fetch the playlist library +
-  // this channel's playlist content (after busting both caches). This is
-  // the operator's one-tap rescue for the "added a 3rd layer and patterns
-  // aren't showing" failure mode — instead of having to delete and re-add
-  // the channel, just tap the arrow next to the name.
-  const [refreshNonce, setRefreshNonce] = useState(0);
+  // Per-strip refresh nonce passed to PlaylistPanel. The manual ↻ refresh
+  // button was removed at operator request (2026-06-22); PlaylistPanel now
+  // refreshes on its own (load-on-open + WS reconcile), so this stays a
+  // stable seed — the panel no longer needs an operator-driven bump.
+  const [refreshNonce] = useState(0);
   const locked = !!channel.locked;
   // Fader-lock (slot 5, independent of `locked`): freezes the fader
   // against scripted transitions and client-side solo. Distinct icon
@@ -288,16 +277,11 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
   return (
     <View style={[
       styles.channelCard,
-      // Channel color accent (docs/39 §8.4): tint the card's left edge so
-      // the operator can identify a strip at a glance. The lock border still
-      // wins (operator-critical state) — only paint the color accent when the
-      // channel isn't locked.
-      !locked && channel.color ? { borderColor: channel.color, borderLeftWidth: 4 } : null,
       // Group tint (docs/39 §10): a member channel takes its group's color on
-      // the left edge so grouped strips read together at a glance. The
-      // channel's own color (above) wins if both are set; the lock border
-      // (operator-critical) wins over both.
-      !locked && !channel.color && group?.color ? { borderColor: group.color, borderLeftWidth: 4 } : null,
+      // the left edge so grouped strips read together at a glance. The lock
+      // border (operator-critical) wins over it. (Per-channel color coding was
+      // removed at operator request 2026-06-22.)
+      !locked && group?.color ? { borderColor: group.color, borderLeftWidth: 4 } : null,
       locked && styles.channelCardLocked,
       // Solo dimming is DISPLAY-ONLY (docs/39 §10): when another channel is
       // soloed and this one isn't soloed / solo-safe / fader-locked, the
@@ -311,48 +295,6 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
     ]}>
       <BlendModePicker visible={showBlendPicker} current={channel.mode} onSelect={(m: string) => onModeChange(channel.id, m)} onClose={() => setShowBlendPicker(false)} blends={blends} />
       <BlendModePicker visible={showTransPicker} current={transMode} onSelect={(m: string) => { setTransMode(m); onTransitionSettingsChange && onTransitionSettingsChange(channel.id, { transitionMode: m }); }} onClose={() => setShowTransPicker(false)} blends={transitions} title="TRANSITION STYLE" />
-      {/* Channel color picker (docs/39 §8.4). A swatch grid + a "NO COLOR"
-          clear option (color = null). Pure metadata — tints the strip for
-          identification, no render effect. */}
-      <Modal transparent visible={showColorPicker} animationType="fade" onRequestClose={() => setShowColorPicker(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowColorPicker(false)}>
-          <TouchableOpacity activeOpacity={1} onPress={() => {}}>
-            <View style={styles.modalContent}>
-              <Text style={[styles.labelCaps, { marginBottom: 12 }]}>CHANNEL COLOR</Text>
-              <View style={styles.swatchGrid}>
-                {CHANNEL_COLOR_SWATCHES.map((hex) => {
-                  const active = channel.color === hex;
-                  return (
-                    <TouchableOpacity
-                      key={hex}
-                      style={[
-                        styles.swatch,
-                        { backgroundColor: hex },
-                        active && styles.swatchActive,
-                      ]}
-                      hitSlop={ICON_BTN_HIT_SLOP}
-                      onPress={() => { onColorChange && onColorChange(channel.id, hex); setShowColorPicker(false); }}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Set channel color ${hex}`}
-                      accessibilityState={{ selected: active }}
-                    >
-                      {active ? <Text style={styles.swatchCheck}>✓</Text> : null}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-              <TouchableOpacity
-                style={styles.clearColorBtn}
-                onPress={() => { onColorChange && onColorChange(channel.id, null); setShowColorPicker(false); }}
-                accessibilityRole="button"
-                accessibilityLabel="Clear channel color"
-              >
-                <Text style={[styles.valueReadout, { color: C.secondary }]}>NO COLOR</Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
       {/* Header — title bar buttons share one geometry (28×28 squircle,
           identical surface / border) so they read as a single toolbar.
           Pre-May-2026 refresh was 22×22 + pinned to the name, lock was
@@ -391,58 +333,14 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             placeholderTextColor={C.icon}
           />
         </View>
-        {/* Channel-control button row. Wraps to a second line on narrow
-            (phone) widths instead of cramming/clipping the 9 controls into one
-            overflowing strip (2026-06-22 UI cleanup). `rowGap` keeps the
-            wrapped second line clear of the first; the per-button 28pt
-            squircles + their ICON_BTN_HIT_SLOP keep every target ≥44pt. */}
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', flexBasis: '100%', flexShrink: 1, minWidth: 0, columnGap: 4, rowGap: 8, alignItems: 'center', justifyContent: 'flex-start' }}>
-          {/* Color swatch (docs/39 §8.4) — taps open the accent picker.
-              The swatch fill IS the channel's current color (or a neutral
-              "no color" outline when null). Pure metadata; it tints the
-              strip for at-a-glance identification, no render effect. */}
-          <TouchableOpacity
-            style={[
-              styles.titleBtn,
-              channel.color
-                ? { backgroundColor: channel.color, borderColor: channel.color }
-                : null,
-            ]}
-            hitSlop={ICON_BTN_HIT_SLOP}
-            onPress={() => setShowColorPicker(true)}
-            accessibilityLabel={channel.color ? `Channel color ${channel.color}` : 'Set channel color'}
-            accessibilityRole="button"
-          >
-            {/* No tinted fill ⇒ a hollow ring reads as "no color set"; a
-                filled swatch shows the chosen accent. A glyph (not an
-                SF-symbol) keeps this within owned files. */}
-            <Text style={{
-              fontFamily: 'SpaceGrotesk_700Bold',
-              fontSize: 13,
-              color: channel.color ? '#FFFFFF' : C.secondary,
-            }}>{channel.color ? '●' : '○'}</Text>
-          </TouchableOpacity>
-          {/* Refresh ↻ — operator's one-tap rescue for a panel that
-              lost its entries to a transient WS / fetch race. Bumps
-              `refreshNonce` so the PlaylistPanel does a hard cache-bust
-              + refetch. With the May 2026 WS topic split this should
-              rarely be needed (control events no longer compete with
-              vis frame parsing), but keeping the button gives the
-              operator a deterministic recovery path. */}
-          <TouchableOpacity
-            style={styles.titleBtn}
-            hitSlop={ICON_BTN_HIT_SLOP}
-            onPress={() => {
-              invalidatePlaylistsCache();
-              const curName = channel.playlist?.name;
-              if (curName) invalidatePlaylistCache(curName);
-              setRefreshNonce(n => n + 1);
-            }}
-            accessibilityLabel="Refresh this channel's playlist + patterns list"
-            accessibilityRole="button"
-          >
-            <IconSymbol name="arrow.clockwise" size={14} color={C.secondary} />
-          </TouchableOpacity>
+        {/* Channel-control button row (2026-06-22 UI cleanup, refined). ONE
+            compact, NON-WRAPPING line of high-frequency controls: the lock
+            toggle, the reorder chevrons (⌃ up / ⌄ down), the SCREEN▾ blend-mode
+            dropdown, and a trailing ⋮ overflow button. Color coding, refresh,
+            and duplicate were removed at operator request; pin-fader and delete
+            live in the ⋮ menu as LABELED rows. The per-button 28pt squircles +
+            their ICON_BTN_HIT_SLOP keep every target ≥44pt. */}
+        <View style={{ flexDirection: 'row', flexBasis: '100%', flexShrink: 1, minWidth: 0, columnGap: 4, alignItems: 'center', justifyContent: 'flex-start' }}>
           {/* Lock (playlist/pattern lock) — amber when engaged. */}
           <TouchableOpacity
             style={[styles.titleBtn, locked && styles.titleBtnAmberActive]}
@@ -453,44 +351,10 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           >
             <IconSymbol name={locked ? 'lock.fill' : 'lock.open.fill'} size={14} color={locked ? '#F5A623' : C.secondary} />
           </TouchableOpacity>
-          {/* Pin (fader-lock, slot 5) — teal when engaged. When ON the
-              engine ignores manual fader writes and skips scripted
-              transitions on this channel; the client-side solo handler
-              also skips it. Independent of the lock above so the two
-              are visually unambiguous. */}
-          {onFaderLockToggle && (
-            <TouchableOpacity
-              style={[styles.titleBtn, faderLocked && styles.titleBtnTealActive]}
-              hitSlop={ICON_BTN_HIT_SLOP}
-              onPress={() => onFaderLockToggle(channel.id, !faderLocked)}
-              accessibilityLabel={faderLocked ? 'Unpin fader' : 'Pin fader'}
-              accessibilityRole="button"
-            >
-              <IconSymbol
-                name={faderLocked ? 'pin.fill' : 'pin.slash.fill'}
-                size={14}
-                color={faderLocked ? C.primary : C.secondary}
-              />
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity
-            style={styles.modeDropdown}
-            hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
-            onPress={() => { if (!locked) setShowBlendPicker(true); }}
-            activeOpacity={locked ? 1.0 : 0.2}
-            accessibilityRole="button"
-            accessibilityLabel={`Blend mode: ${(channel.mode || 'normal').replace('blend_', '')}`}
-          >
-            <Text style={[styles.valueReadout, { color: locked ? C.secondary : C.primary, fontSize: 11 }]}>{(channel.mode || 'normal').replace('blend_', '').toUpperCase()}{locked ? '' : ' ▾'}</Text>
-          </TouchableOpacity>
-          {/* Reorder chevrons (docs/39 §6b #7). Up = toward the TOP of the
-              mix (last in the engine's overlay order); down = toward the
-              bottom. Each tap recomputes the full id order locally and POSTs
-              /mixer/channels/reorder; the `mixer` broadcast reconciles. The
-              chevrons are disabled at the ends of the stack. A ≥44pt hitSlop
-              keeps the 28×28 squircles within the operator-safety touch floor
-              (28 + 8 + 8 = 44). Reorder is non-destructive and not gated by the
-              channel lock — a locked layer can still be restacked. */}
+          {/* Reorder chevrons — kept inline (operator request 2026-06-22):
+              up = toward the TOP of the mix, down = toward the bottom.
+              Disabled at the ends of the stack. Non-destructive, NOT gated
+              by the channel lock. */}
           {onMoveUp && (
             <TouchableOpacity
               style={[styles.titleBtn, !canMoveUp && { opacity: 0.3 }]}
@@ -517,39 +381,77 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
               <IconSymbol name="chevron.down" size={14} color={C.secondary} />
             </TouchableOpacity>
           )}
-          {/* Duplicate (docs/39 §6b #6) — clones this overlay onto the TOP of
-              the stack. Non-destructive, so NO ConfirmSheet (matches the
-              design doc). The new channel arrives via the `mixer` broadcast.
-              An over-cap attempt surfaces the engine's 400 as an Alert in the
-              parent handler. */}
-          {onDuplicate && (
-            <TouchableOpacity
-              style={styles.titleBtn}
-              hitSlop={ICON_BTN_HIT_SLOP}
-              onPress={() => onDuplicate(channel.id)}
-              accessibilityLabel="Duplicate channel"
-              accessibilityRole="button"
-            >
-              {/* A glyph (not an SF-symbol) keeps this within owned files —
-                  the shared icon-symbol mapping isn't this slice's to edit, so
-                  no `plus.square.on.square` entry exists. "⧉" reads as
-                  "duplicate / overlapping copy". */}
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.secondary }}>⧉</Text>
-            </TouchableOpacity>
-          )}
-          {!locked && (
-            <TouchableOpacity
-              style={[styles.titleBtn, { borderColor: 'rgba(217, 48, 37, 0.4)' }]}
-              hitSlop={ICON_BTN_HIT_SLOP}
-              onPress={() => onDelete(channel.id)}
-              accessibilityLabel="Delete channel"
-              accessibilityRole="button"
-            >
-              <IconSymbol name="trash" size={14} color={C.error} />
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity
+            style={styles.modeDropdown}
+            hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
+            onPress={() => { if (!locked) setShowBlendPicker(true); }}
+            activeOpacity={locked ? 1.0 : 0.2}
+            accessibilityRole="button"
+            accessibilityLabel={`Blend mode: ${(channel.mode || 'normal').replace('blend_', '')}`}
+          >
+            <Text style={[styles.valueReadout, { color: locked ? C.secondary : C.primary, fontSize: 11 }]}>{(channel.mode || 'normal').replace('blend_', '').toUpperCase()}{locked ? '' : ' ▾'}</Text>
+          </TouchableOpacity>
+          {/* Overflow ⋮ — vertical three-dot "more" affordance; opens the
+              secondary-actions menu (pin fader, delete). */}
+          <TouchableOpacity
+            style={styles.titleBtn}
+            hitSlop={ICON_BTN_HIT_SLOP}
+            onPress={() => setShowActionsMenu(true)}
+            accessibilityLabel="More channel actions"
+            accessibilityRole="button"
+          >
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.secondary }}>⋮</Text>
+          </TouchableOpacity>
         </View>
       </View>
+
+      {/* ── Channel-actions overflow menu ────────────────────────────────
+          The secondary channel-control actions that used to crowd the
+          toolbar, now as LABELED rows (icon + text) in a centered modal.
+          REUSES the modalOverlay/modalContent pattern (absolute inset-0 +
+          0.7 backdrop) so it reads the same as the blend/transition/view
+          pickers and never clips. Each row is ≥44pt tall and preserves the
+          exact handler + gating of the original icon button. */}
+      <Modal transparent visible={showActionsMenu} animationType="fade" onRequestClose={() => setShowActionsMenu(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowActionsMenu(false)}>
+          <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+            <View style={styles.modalContent}>
+              <Text style={[styles.labelCaps, { marginBottom: 12 }]}>CHANNEL ACTIONS</Text>
+              {/* Pin fader (fader-lock, slot 5). When ON the engine ignores
+                  manual fader writes and skips scripted transitions on this
+                  channel; the client-side solo handler also skips it. */}
+              {onFaderLockToggle && (
+                <TouchableOpacity
+                  style={styles.actionsMenuRow}
+                  onPress={() => { onFaderLockToggle(channel.id, !faderLocked); setShowActionsMenu(false); }}
+                  accessibilityLabel={faderLocked ? 'Unpin fader' : 'Pin fader'}
+                  accessibilityRole="button"
+                >
+                  <IconSymbol
+                    name={faderLocked ? 'pin.fill' : 'pin.slash.fill'}
+                    size={16}
+                    color={faderLocked ? C.primary : C.secondary}
+                  />
+                  <Text style={styles.actionsMenuLabel}>{faderLocked ? 'Unpin fader' : 'Pin fader'}</Text>
+                </TouchableOpacity>
+              )}
+              {/* Delete — destructive, error-red. Hidden when the channel is
+                  locked (same gating as the original icon button). */}
+              {onDelete && !locked && (
+                <TouchableOpacity
+                  style={styles.actionsMenuRow}
+                  onPress={() => { onDelete(channel.id); setShowActionsMenu(false); }}
+                  accessibilityLabel="Delete channel"
+                  accessibilityRole="button"
+                >
+                  <IconSymbol name="trash" size={16} color={C.error} />
+                  <Text style={[styles.actionsMenuLabel, { color: C.error }]}>Delete channel</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Pixel Visualization — self-subscribing per-channel strip so a
           new viz frame re-renders ONLY this tiny component, not the whole
@@ -2841,6 +2743,24 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   modalRowActive: {
     backgroundColor: C.primary,
     borderColor: C.primary,
+  },
+  // Channel-actions overflow menu rows: icon + label, laid out as a left-
+  // aligned row so the action reads as "<glyph> <words>". minHeight 44 keeps
+  // every row at the operator-safety touch floor.
+  actionsMenuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    minHeight: 44,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginBottom: 4,
+  },
+  actionsMenuLabel: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 14,
+    color: C.text,
   },
   unlockPromptBtn: {
     paddingVertical: 12,

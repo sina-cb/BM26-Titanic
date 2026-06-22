@@ -545,7 +545,11 @@ export default function ControlDeckScreen() {
       <View style={globalStyles.container}>
         {/* Left Pane — Playlist (the one and only pattern list).
             Padding is tightened from the default leftPane (24) so the
-            playlist + Rig globals strip get more vertical room. The
+            playlist gets more vertical room. GLOBAL EFFECTS no longer
+            lives in this narrow column — it moved to a full-width bottom
+            bar below the two-pane content (mirrors the mixer tab) so the
+            effect labels render fully legible instead of being squeezed
+            into the cramped left column (QA round2 deck fix). The
             playlist now shows ≥5 entries on 11" iPad landscape and the
             REFRESH/RECONNECT button moved INTO the playlist header
             (top-right ↻ icon, see PlaylistPanel `onRefreshConnection`)
@@ -577,8 +581,6 @@ export default function ControlDeckScreen() {
               Waiting for deck…
             </Text>
           )}
-
-          <RigGlobals />
         </View>
 
         {/* Right Pane - Parameters & Macros (autopilot + channel exports) */}
@@ -802,6 +804,22 @@ export default function ControlDeckScreen() {
           </ScrollView>
         </View>
       </View>
+      {/* ── Global Rig Controls (Bottom) ───────────────────────────────
+          GLOBAL EFFECTS as a full-width horizontal strip pinned at the
+          bottom of the deck — mirrors the mixer tab's bottom bar so the
+          effect labels ("Vintage White", "Iceberg Flash", "Blackout"…)
+          render at full width and stay legible, instead of being crammed
+          into the narrow left playlist column (QA round2 deck fix). The
+          two-pane `container` above is flex:1 so it fills the space above
+          this bar and its right pane scrolls independently; this bar is
+          intrinsic-height so it never overlaps or gets cut off. The deck
+          has no PANIC control (that's a mixer-only safe-reset), so unlike
+          the mixer's bottom bar there is no PANIC button beside it. The
+          HUE shifter is omitted by the strip variant itself (it has its
+          own deck-grid placement) — see GlobalEffectMacros `mixer-strip`. */}
+      <View style={[styles.globalRigBar, { backgroundColor: C.surfaceContainerLow, borderTopColor: C.ghostBorder }]}>
+        <RigGlobals variant="mixer" />
+      </View>
       {/* D6: floating ALL MODULATIONS overlay — rendered at the screen
           level so it draws above every card. */}
       <AllModulationsPanel
@@ -905,6 +923,23 @@ export default function ControlDeckScreen() {
 // (The CAP row styles — capRow/faderTrack/capFill — were removed June 2026
 // alongside the deck CAP fader.)
 const styles = StyleSheet.create({
+  // Bottom-pinned global-effects strip — the deck mirror of the mixer
+  // tab's `globalRigBar`. Full-width, intentionally short (header + a
+  // single ~36px button row + small padding) so it doesn't eat the
+  // playlist / params real-estate above it. alignItems:'stretch' so the
+  // inner GEM (flex:1 in mixer-strip mode) spans edge-to-edge instead of
+  // collapsing to its intrinsic content width and floating left. Palette
+  // colors (surfaceContainerLow bg + ghostBorder top) are applied inline
+  // at the call site — this screen reads the palette via usePalette, not
+  // a StyleSheet factory.
+  globalRigBar: {
+    paddingHorizontal: 12,
+    paddingTop: 4,
+    paddingBottom: 6,
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
   deckSwatchBtn: {
     width: 44, height: 44, borderRadius: 8,
     alignItems: 'center', justifyContent: 'center',
