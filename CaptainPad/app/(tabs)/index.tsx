@@ -8,6 +8,7 @@ import { GlobalParams, DeckSavedFlash } from '@/components/GlobalParams';
 import { CPCControls } from '@/components/CPCControls';
 import { DeckTopBar } from '@/components/DeckTopBar';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
+import { GlobalHueRow } from '@/components/global_hue_row';
 import { EntryLabelEditor } from '@/components/EntryLabelEditor';
 import { PixelStrip } from '@/components/ui/PixelStrip';
 import { AutopilotTimerPills, DeckTransitionControls } from '@/components/DeckTransitionControls';
@@ -562,6 +563,15 @@ export default function ControlDeckScreen() {
               full library and add it as a new entry. */}
           {deckChannelId ? (
             <View key={deckChannelId} style={{ flex: 1, minHeight: 0 }}>
+              {/* Global rig HUE shifter, pinned to the TOP of the deck's
+                  pattern list (operator request June 2026). The deck's
+                  GLOBAL EFFECTS strip (mixer-strip variant, bottom bar) has
+                  no room for a hue row, so the global hue control lives here
+                  — mirroring how the MIXER shows a compact HUE row above each
+                  channel's playlist. Self-contained wiring (own state, seed,
+                  WS reconcile, POST) so it's the deck's ONE-AND-ONLY hue
+                  control; the bottom effects bar stays hue-less. */}
+              <GlobalHueRow />
               <PlaylistPanel
                 channelId={deckChannelId}
                 role="deck"
