@@ -46,14 +46,21 @@ export const HorizontalFader = ({ value, onChange, onRelease, trackStyle, fillSt
   const fillWidth = animVal.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
 
   return (
+    // Outer wrapper sizes to the track and does NOT clip — so a thumb that
+    // overhangs the track ends (the normal slider look at 0/100) stays whole
+    // instead of being sliced in half. The FILL keeps its own overflow:hidden
+    // layer so it still clips to the rounded track; only the thumb escapes the
+    // clip (fader-thumb clipping bug, QA round 11).
     <View
-      style={[trackStyle, { overflow: 'hidden' }]}
+      style={{ position: 'relative', justifyContent: 'center' }}
       onLayout={e => { widthRef.current = Math.max(1, e.nativeEvent.layout.width); }}
       {...panResponder.panHandlers}
     >
-      <Animated.View style={[fillStyle, { width: fillWidth }]} />
+      <View style={[trackStyle, { overflow: 'hidden' }]}>
+        <Animated.View style={[fillStyle, { width: fillWidth }]} />
+      </View>
       {thumbStyle && (
-        <Animated.View style={[thumbStyle, { left: fillWidth }]} />
+        <Animated.View style={[thumbStyle, { position: 'absolute', left: fillWidth }]} />
       )}
     </View>
   );

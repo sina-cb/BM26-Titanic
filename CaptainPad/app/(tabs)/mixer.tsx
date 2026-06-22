@@ -595,7 +595,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           label it "CHANNEL" to disambiguate; LOCAL PARAMS keeps "LEVEL" (the
           pattern's own param). Behavior unchanged — label only. */}
       <View style={styles.levelRow}>
-        <Text style={[styles.labelCaps, { width: 52 }]}>CHANNEL</Text>
+        <Text style={[styles.labelCaps, { width: 66 }]} numberOfLines={1}>CHANNEL</Text>
         <HorizontalFader
           value={channel.fader ?? 0}
           onChange={(v: number) => onFaderChange(channel.id, v)}
@@ -644,6 +644,11 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             onChange={(v: number) => { if (!locked) onHueChange(channel.id, Math.round(v * 360)); }}
             trackStyle={[styles.hueTrack, { flex: 1, marginHorizontal: 6, opacity: locked ? 0.5 : 1 }]}
             fillStyle={styles.hueFill}
+            // QA round 11 fix: a visible grabbable thumb so the HUE fader reads
+            // as draggable at 0° (empty track) instead of looking inert (the
+            // red swatch to its left is a non-interactive status dot, not a
+            // handle). Matches the channel/level fader + deck HUE row.
+            thumbStyle={styles.channelFaderThumb}
           />
           {/* QA round 10 fix #4: HUE is an angle — show the "°" unit so the
               value reads as degrees, matching the deck HUE row + ColorPicker. */}
