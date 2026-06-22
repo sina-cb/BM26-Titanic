@@ -22,7 +22,7 @@
  * component.
  */
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable, useWindowDimensions } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { useGlobalStyles } from '@/styles/globalStyles';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -70,10 +70,51 @@ export function TimerPillBar({
   compact?: boolean;
 }) {
   const C = usePalette();
+  const { width, height } = useWindowDimensions();
+  const isPortrait = width < height;
   const pillMinWidth = compact ? 36 : 48;
   const pillPaddingX = compact ? 8 : 12;
   const pillPaddingY = compact ? 6 : 8;
   const pillFontSize = compact ? 11 : 12;
+
+  // One pill renderer for both orientations so the active-pill fill +
+  // contrast token are identical landscape and portrait (QA #19: the teal
+  // active fill must read the same in both). The active state uses the
+  // primary fill with white text PLUS a thicker primary border so it stays
+  // legible even in the tighter portrait column.
+  const renderPill = (preset: number) => {
+    const active = preset === value;
+    return (
+      <TouchableOpacity
+        key={preset}
+        onPress={() => onChange(preset)}
+        accessibilityRole="button"
+        accessibilityState={{ selected: active }}
+        accessibilityLabel={`Set to ${formatter(preset)}`}
+        style={{
+          minWidth: pillMinWidth,
+          paddingHorizontal: pillPaddingX,
+          paddingVertical: pillPaddingY,
+          borderRadius: 8,
+          borderWidth: active ? 2 : 1,
+          borderColor: active ? C.primary : C.ghostBorder,
+          backgroundColor: active ? C.primary : 'transparent',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold',
+          fontSize: pillFontSize,
+          color: active ? '#FFF' : C.text,
+          letterSpacing: 0.5,
+        }}>
+          {formatter(preset)}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <View style={{ width: '100%' }}>
       {label ? (
@@ -84,43 +125,24 @@ export function TimerPillBar({
           {label}
         </Text>
       ) : null}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ gap: compact ? 4 : 6, paddingRight: 8 }}
-      >
-        {presets.map((preset) => {
-          const active = preset === value;
-          return (
-            <TouchableOpacity
-              key={preset}
-              onPress={() => onChange(preset)}
-              accessibilityRole="button"
-              accessibilityLabel={`Set to ${formatter(preset)}`}
-              style={{
-                minWidth: pillMinWidth,
-                paddingHorizontal: pillPaddingX,
-                paddingVertical: pillPaddingY,
-                borderRadius: 8,
-                borderWidth: 1,
-                borderColor: active ? C.primary : C.ghostBorder,
-                backgroundColor: active ? C.primary : 'transparent',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <Text style={{
-                fontFamily: 'SpaceGrotesk_700Bold',
-                fontSize: pillFontSize,
-                color: active ? '#FFF' : C.text,
-                letterSpacing: 0.5,
-              }}>
-                {formatter(preset)}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+      {/* Portrait: the full preset row is wider than the narrow deck column,
+          so a horizontal ScrollView would slice the rightmost chip into an
+          unreachable sliver (QA #10). Wrap to multiple lines instead — every
+          chip stays fully visible and tappable. Landscape has the width to
+          lay the row out flat, so keep the single-line scroll there. */}
+      {isPortrait ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: compact ? 4 : 6 }}>
+          {presets.map(renderPill)}
+        </View>
+      ) : (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ gap: compact ? 4 : 6, paddingRight: 8 }}
+        >
+          {presets.map(renderPill)}
+        </ScrollView>
+      )}
     </View>
   );
 }
@@ -343,16 +365,38 @@ export function DeckTransitionControls({
         />
       </View>
 
-      {/* Row 2: duration pill-bar */}
-      <View style={{ opacity: enabled ? 1 : 0.5, pointerEvents: enabled ? 'auto' : 'none' }}>
+      {/* Row 2: crossfade-duration pill-bar.
+          When DECK TX is OFF the duration is moot, so the row is disabled.
+          QA #9: the old treatment (a flat 0.5 opacity over the whole row) read
+          as "broken" — the greyed pills were barely distinguishable from a
+          normal enabled-unselected pill elsewhere, and there was no hint that
+          the toggle controls it. We now (a) show an explicit one-line hint in
+          place of the pills when OFF, and (b) only render the pill-bar when ON,
+          so the enabled state is unambiguous (live, full-contrast pills) and
+          the disabled state reads as intentional rather than failed. */}
+      {enabled ? (
         <TimerPillBar
-          label="DURATION"
+          label="CROSSFADE TIME"
           presets={TRANSITION_DURATION_PRESETS_MS}
           value={durationMs}
           onChange={(v) => onChange({ durationMs: v })}
           formatter={formatMs}
         />
-      </View>
+      ) : (
+        <View style={{ paddingVertical: 6 }}>
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.2,
+            color: C.icon, marginBottom: 3, textTransform: 'uppercase',
+          }}>
+            CROSSFADE TIME
+          </Text>
+          <Text style={{
+            fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary,
+          }}>
+            Turn DECK TX on to set crossfade time.
+          </Text>
+        </View>
+      )}
 
       {/* Row 3: shuffle style — paddingVertical 6 is the original spec.
           The IconSymbol + label together stand ~24pt tall; the surrounding
@@ -371,7 +415,11 @@ export function DeckTransitionControls({
         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       >
         <IconSymbol name="shuffle" size={14} color={shuffle ? C.primary : C.icon} />
+        {/* QA #9: the full caption was clipped to an unreadable
+            "…STYLE — …DROP MAP" in the narrow portrait column. Let it wrap
+            (flex + no truncation) so the whole label stays legible. */}
         <Text style={{
+          flex: 1,
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
           color: shuffle ? C.primary : C.icon, letterSpacing: 0.5,
         }}>

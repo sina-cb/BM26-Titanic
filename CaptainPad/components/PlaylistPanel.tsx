@@ -498,6 +498,16 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   // Mixer) so cross-tab edits show up immediately.
   useFocusEffect(useCallback(() => { refresh(); }, [refresh]));
 
+  // Refresh the playlist library the moment the HOT SWAP picker opens so it
+  // never paints against a stale/empty `playlists` list. The picker's own
+  // unconditional empty/loading state covers the in-flight window; this just
+  // makes sure a freshly-opened picker shows the current set of playlists
+  // (the QA "opens to an empty card" bug was partly a not-yet-loaded list).
+  useEffect(() => {
+    if (!showSwap) return;
+    refresh();
+  }, [showSwap, refresh]);
+
   // Parent-driven hard refresh. Bumping `refreshNonce` from the parent
   // (the channel strip's name-row arrow) invalidates BOTH the global
   // playlists library cache AND this channel's playlist cache, then
@@ -1103,7 +1113,11 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           full-width REFRESH/RECONNECT button that used to sit below the
           playlist — putting it inline here frees a chunky vertical
           slot for an extra entry row. */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, minHeight: sz.btnH - 4 }}>
+      {/* minHeight matches the header buttons (lock / refresh are sz.btnH
+          tall) so the icons aren't visually pinched against the panel's top
+          padding — the prior `btnH - 4` was shorter than the icons and read
+          as a clipped header. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, minHeight: sz.btnH }}>
         <Text
           style={{
             fontFamily: 'SpaceGrotesk_700Bold',
@@ -1197,6 +1211,10 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
             onPress={() => setShowLibrary(true)}
             style={{
               flex: 1,
+              // Floor wide enough that a common name like "default" shows
+              // in full instead of clipping to "de…" in the narrow mixer
+              // strip (it still flexes wider when there's room). 2026-06-22.
+              minWidth: 72,
               height: sz.btnH,
               paddingHorizontal: 8,
               borderRadius: 6,
@@ -1342,7 +1360,11 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
             ref={scrollRef}
             nestedScrollEnabled
             style={{ flex: 1, minHeight: 0, opacity: disabled ? 0.55 : 1 }}
-            contentContainerStyle={{ paddingBottom: 4 }}
+            // Reserve a right gutter so the vertical scrollbar (RN-web
+            // overlays it on top of content) doesn't sit over the row's
+            // remove/H/L controls. paddingBottom keeps the last row off the
+            // panel edge.
+            contentContainerStyle={{ paddingBottom: 4, paddingRight: 6 }}
             onLayout={(ev) => { viewportHeightRef.current = ev.nativeEvent.layout.height; }}
             onContentSizeChange={(_w, h) => { contentHeightRef.current = h; }}
           >
@@ -1402,13 +1424,22 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       style={{ flex: 1 }}
                     >
                       <Text
+                        // Underscored pattern names (e.g.
+                        // "05_orbital_attractor_field") have no spaces, so
+                        // RN-web's default `word-break: break-word` chops them
+                        // mid-word leaving orphan letters ("…attracto /
+                        // r_field"). Force single-line tail truncation and pin
+                        // the web word-break to `normal` so the name truncates
+                        // cleanly with "…" instead of breaking per-character.
+                        // `wordBreak` is a web-only CSS prop, hence `as any`.
                         style={{
                           fontFamily: 'SpaceGrotesk_700Bold',
                           fontSize: sz.fontPrimary,
                           color: isActive ? '#FFF' : C.text,
-                        }}
-                        numberOfLines={2}
-                        ellipsizeMode="middle"
+                          wordBreak: 'normal',
+                        } as any}
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
                       >
                         {e.label || patternDisplayName(e.pattern)}
                         {missing ? '  ⚠' : ''}
@@ -1419,9 +1450,10 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                             fontFamily: 'Inter_400Regular',
                             fontSize: sz.fontMicro,
                             color: isActive ? 'rgba(255,255,255,0.7)' : C.icon,
-                          }}
+                            wordBreak: 'normal',
+                          } as any}
                           numberOfLines={1}
-                          ellipsizeMode="middle"
+                          ellipsizeMode="tail"
                         >
                           {e.label ? patternDisplayName(e.pattern) : ''}
                           {e.label && paramCount > 0 ? '  · ' : ''}
@@ -1538,14 +1570,20 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                   {(
                     <TouchableOpacity
                       onPress={() => requestRemoveEntry(e.id)}
-                      // Compact (−) chrome but >= 44pt tap area via
-                      // hitSlop so an operator doesn't fat-finger a
-                      // neighbouring control on the production console.
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      // Destructive remove: spaced away from the H/L
+                      // neighbours (marginLeft gap) and given a visible
+                      // error-tinted box so it reads as "delete" and is
+                      // hard to mis-tap from the adjacent toggle on a
+                      // moving art car. Still >= 44pt tap area via hitSlop.
+                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                       style={{
-                        width: sz.btnH - 4,
+                        width: sz.btnH,
                         height: sz.btnH - 4,
+                        marginLeft: 8,
                         borderRadius: 4,
+                        borderWidth: 1,
+                        borderColor: isActive ? 'rgba(255,255,255,0.5)' : C.error,
+                        backgroundColor: isActive ? 'rgba(255,255,255,0.12)' : 'transparent',
                         alignItems: 'center',
                         justifyContent: 'center',
                       }}
@@ -1867,10 +1905,30 @@ const SwapPlaylistModal: React.FC<SwapPlaylistModalProps> = ({
                 </Text>
               </View>
             )}
+            {/* Empty / loading state — UNCONDITIONAL so the card never paints
+                blank (the QA "opens to an empty card" bug). Three cases:
+                  • library not yet loaded (playlists empty AND no current
+                    assignment): we're mid-fetch → show a "loading…" row.
+                  • library loaded but only the current playlist exists: show
+                    the explicit "no other playlists" message.
+                  • library loaded with others but the search filtered them
+                    all out: show a "no match" message.
+                One of these always renders when `others` is empty, so the
+                user sees a reason for the empty list instead of a blank card. */}
             {others.length === 0 && (
-              <Text style={{ color: C.icon, fontStyle: 'italic', fontSize: 11 }}>
-                No other playlists to swap to.
-              </Text>
+              (playlists.length === 0 && !currentName) ? (
+                <Text style={{ color: C.icon, fontStyle: 'italic', fontSize: 11 }}>
+                  Loading playlists…
+                </Text>
+              ) : query.trim() ? (
+                <Text style={{ color: C.icon, fontStyle: 'italic', fontSize: 11 }}>
+                  No playlists match the current filter.
+                </Text>
+              ) : (
+                <Text style={{ color: C.icon, fontStyle: 'italic', fontSize: 11 }}>
+                  No other playlists to swap to.
+                </Text>
+              )
             )}
             {others.map((name) => (
               <TouchableOpacity
@@ -2103,18 +2161,30 @@ const NewPlaylistNameModal: React.FC<NewPlaylistNameModalProps> = ({
 
 function makeModalStyles(C: Palette) {
   return {
-    // Full-screen tint: tapping this dismisses the modal.
+    // Full-screen tint: tapping this dismisses the modal. flex:1 makes the
+    // backdrop fill the Modal's full viewport (confirmed on RN-web — the
+    // RCTModalHostView the backdrop sits inside is itself full-screen), so
+    // the dim covers the whole screen and the behind-modal content can't
+    // bleed through. Bumped to 0.7 (was 0.5) so the picker reads clearly
+    // against the busy mixer behind it.
     backdrop: {
       flex: 1,
-      // 'rgba(0,0,0,0.5)' — modal-dimmer tint, identical in both themes.
-      backgroundColor: 'rgba(0,0,0,0.5)',
+      backgroundColor: 'rgba(0,0,0,0.7)',
       justifyContent: 'center' as const,
       alignItems: 'center' as const,
+      // Keep the centered card off the screen edges so it never drifts flush
+      // to top/bottom on a short viewport.
+      paddingVertical: 24,
+      paddingHorizontal: 16,
     },
     // Inner wrapper: noop onPress catches taps so the modal stays open when
-    // the user is interacting with content (textbox, list items, …). No
-    // additional style is needed; the wrapper just exists to swallow taps.
-    cardWrap: {},
+    // the user is interacting with content (textbox, list items, …). It also
+    // owns the card's horizontal sizing so the card stays truly centered by
+    // the backdrop's flex centering rather than drifting.
+    cardWrap: {
+      width: '100%' as const,
+      alignItems: 'center' as const,
+    },
     card: {
       backgroundColor: C.surfaceContainerLowest,
       borderRadius: 16,

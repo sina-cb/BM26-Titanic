@@ -33,11 +33,6 @@ import { HealthChip } from '@/components/ui/HealthChip';
 import { useMaster, useActiveModel } from '@/hooks/useEngineState';
 import { updateMixerMaster } from '@/utils/api';
 import { fadeMaster } from '@/utils/masterApi';
-import {
-  useTempoState,
-  useTempoTap,
-  tempoSourceHasOverride,
-} from '@/hooks/use_tempo_tap';
 import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
 
 interface Props {
@@ -113,17 +108,14 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
   // Selected fade duration (seconds). Local UI state only.
   const [fadeSeconds, setFadeSeconds] = useState<number>(DEFAULT_FADE_SECONDS);
 
-  // ── Tap tempo + tempo arbitration (engine feat/optimize_channels) ──────
-  // The engine arbitrates "OSC auto-drives, tap overrides". We read the
-  // applied BPM AND its source off the same mixer/deck control bus, and route
-  // taps + the SYNC ("hand it back to OSC") action through the shared hook so
-  // the deck and the globals bar behave identically. The source tag makes the
-  // readout coherent: "128 · OSC" (auto-following) vs "128 · TAP" (operator
-  // override, SYNC to rejoin OSC) vs "128 · HELD" (OSC idle, last value holds).
-  const tempo = useTempoState();
-  const tempoBpm = tempo.bpm;
-  const showSync = tempoSourceHasOverride(tempo.source);
-  const { tap: handleTap, sync: handleTempoSync } = useTempoTap();
+  // NOTE: tap tempo + tempo arbitration (TAP / BPM / SYNC) live in the GLOBALS
+  // bar (CPCControls), which renders on BOTH the deck and mixer tabs. The
+  // DeckTopBar header used to carry a second TAP pill — a duplicate stacked a
+  // few px above the globals tile, and (worse) it once mis-read the master
+  // level instead of the tempo. It was removed (2026-06-22 QA finding #4): one
+  // canonical tempo readout (`useTempoState().bpm` in the globals BpmTile) and
+  // one SYNC affordance, no redundant header control. The header keeps the
+  // MASTER fader + its readout; tempo belongs to the globals cluster.
 
   const handleMasterChange = (val: number) => {
     const now = Date.now();
@@ -225,45 +217,6 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
             </TouchableOpacity>
           </View>
         )}
-        {/* TAP TEMPO + source (tempo arbitration). Tap in time; the client
-            averages the tap intervals into a BPM and POSTs it (which also arms
-            the engine's ~12s manual override). The readout shows the APPLIED
-            engine `tempoBpm` plus a source tag — OSC (auto-following) / TAP
-            (operator override) / HELD (OSC idle). When a tap override is
-            active, a small SYNC button hands control back to OSC. Affects only
-            channels with FOLLOW TEMPO enabled. Shown in both orientations. */}
-        <View style={styles.tapCluster}>
-          <TouchableOpacity
-            onPress={handleTap}
-            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
-            style={[styles.tapTempoBtn, tempo.source === 'manual' && styles.tapTempoBtnManual]}
-            accessibilityRole="button"
-            accessibilityLabel={
-              typeof tempoBpm === 'number'
-                ? `Tap tempo, currently ${Math.round(tempoBpm)} beats per minute, source ${tempo.source}`
-                : 'Tap tempo, not set'
-            }
-          >
-            <Text style={styles.tapTempoLabel}>TAP</Text>
-            <Text style={styles.tapTempoBpm}>
-              {typeof tempoBpm === 'number' ? `${Math.round(tempoBpm)}` : '—'}
-            </Text>
-          </TouchableOpacity>
-          {/* SYNC — only while a manual tap override is active (drops it so
-              OSC reclaims). Renders nothing otherwise, so the resting row has
-              no extra control to scan past. */}
-          {showSync ? (
-            <TouchableOpacity
-              onPress={handleTempoSync}
-              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-              style={styles.tapSyncBtn}
-              accessibilityRole="button"
-              accessibilityLabel="Sync tempo back to OSC"
-            >
-              <Text style={styles.tapSyncText}>SYNC</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
         {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}
         <HorizontalFader
           value={master}
@@ -435,67 +388,6 @@ function makeStyles(C: Palette) {
       fontSize: 10,
       letterSpacing: 1.0,
       color: C.primary,
-      textTransform: 'uppercase' as const,
-    },
-    // ── Tap tempo + source ────────────────────────────────────────────
-    // The TAP pill + an optional SYNC button form one cluster. A two-line
-    // pill (TAP / "<n> SRC") so the operator triggers, reads the resolved
-    // tempo, AND sees what's driving it in one spot. 36pt visible height +
-    // 8pt vertical hitSlop ⇒ ≥44pt effective touch target.
-    tapCluster: {
-      flexDirection: 'row' as const,
-      alignItems: 'center' as const,
-      gap: 4,
-    },
-    // Compact now that the source tag is gone: TAP label over the bare BPM
-    // number. A fixed 48pt width keeps the cluster geometry stable whether or
-    // not the SYNC button is present — the number swap can't jiggle the row.
-    tapTempoBtn: {
-      height: 36,
-      width: 48,
-      paddingHorizontal: 6,
-      borderRadius: 6,
-      borderWidth: 1,
-      borderColor: C.primary,
-      backgroundColor: C.surfaceContainerHigh,
-      alignItems: 'center' as const,
-      justifyContent: 'center' as const,
-    },
-    // Tint the TAP pill while a manual override owns the tempo so the
-    // operator can tell "I'm holding this" from "OSC is driving" at a glance.
-    tapTempoBtnManual: {
-      borderColor: C.tertiary,
-    },
-    tapTempoLabel: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 10,
-      letterSpacing: 1.2,
-      color: C.secondary,
-      textTransform: 'uppercase' as const,
-    },
-    tapTempoBpm: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 12,
-      letterSpacing: 0.4,
-      color: C.primary,
-    },
-    // SYNC — small bordered button that drops the manual override (rejoin OSC).
-    // 36pt visible height matches the TAP pill so the cluster is flush.
-    tapSyncBtn: {
-      height: 36,
-      paddingHorizontal: 8,
-      borderRadius: 6,
-      borderWidth: 1,
-      borderColor: C.tertiary,
-      backgroundColor: C.surfaceContainerHigh,
-      alignItems: 'center' as const,
-      justifyContent: 'center' as const,
-    },
-    tapSyncText: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 9,
-      letterSpacing: 1.0,
-      color: C.tertiary,
       textTransform: 'uppercase' as const,
     },
     // Same fixed 36pt slot as the master readout so swapping in the hint

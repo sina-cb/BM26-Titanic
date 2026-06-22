@@ -84,7 +84,8 @@ const BlendModePicker = ({ visible, current, onSelect, onClose, blends, title }:
           <Text style={[styles.labelCaps, {marginBottom: 12}]}>{title || 'BLEND MODE'}</Text>
           {(blends || []).map((id: string) => (
             <TouchableOpacity key={id} style={[styles.modalRow, id === current && styles.modalRowActive]} onPress={() => { onSelect(id); onClose(); }}>
-              <Text style={[styles.valueReadout, id === current && {color: C.primary}]}>{id.replace(/^(blend_|trans_)/, '').toUpperCase()}</Text>
+              <Text style={[styles.valueReadout, id === current && {color: C.onPrimary}]}>{id.replace(/^(blend_|trans_)/, '').toUpperCase()}</Text>
+              {id === current ? <Text style={{ color: C.onPrimary, fontSize: 14, fontFamily: 'SpaceGrotesk_700Bold' }}>✓</Text> : null}
             </TouchableOpacity>
           ))}
         </View>
@@ -214,10 +215,16 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, onFaderChange, onColorChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, cardStyle, onFaderChange, onColorChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onDuplicate, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
+  // Orientation drives the strip body layout (QA round1 #2): in PORTRAIT the
+  // playlist + LOCAL PARAMS stack vertically so the playlist (the primary
+  // surface) gets the full strip width and track names stop being squeezed by
+  // the side-by-side params column. Landscape keeps the side-by-side split.
+  const { width: winWidth, height: winHeight } = useWindowDimensions();
+  const isPortrait = winWidth < winHeight;
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showTransPicker, setShowTransPicker] = useState(false);
   const [showViewPicker, setShowViewPicker] = useState(false);
@@ -297,6 +304,10 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
       // engine gates its contribution to 0. We mirror that visually by
       // dimming the strip — we NEVER mutate its enabled/fader.
       dimmedBySolo ? { opacity: 0.45 } : null,
+      // Responsive width override (QA round1 #7): in landscape the parent
+      // hands each strip a flex width so the cards fill the viewport instead
+      // of hugging the left edge with a grey void to the right.
+      cardStyle,
     ]}>
       <BlendModePicker visible={showBlendPicker} current={channel.mode} onSelect={(m: string) => onModeChange(channel.id, m)} onClose={() => setShowBlendPicker(false)} blends={blends} />
       <BlendModePicker visible={showTransPicker} current={transMode} onSelect={(m: string) => { setTransMode(m); onTransitionSettingsChange && onTransitionSettingsChange(channel.id, { transitionMode: m }); }} onClose={() => setShowTransPicker(false)} blends={transitions} title="TRANSITION STYLE" />
@@ -385,7 +396,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             overflowing strip (2026-06-22 UI cleanup). `rowGap` keeps the
             wrapped second line clear of the first; the per-button 28pt
             squircles + their ICON_BTN_HIT_SLOP keep every target ≥44pt. */}
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: 8, rowGap: 8, alignItems: 'center', justifyContent: 'flex-end' }}>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', flexBasis: '100%', flexShrink: 1, minWidth: 0, columnGap: 6, rowGap: 8, alignItems: 'center', justifyContent: 'flex-end' }}>
           {/* Color swatch (docs/39 §8.4) — taps open the accent picker.
               The swatch fill IS the channel's current color (or a neutral
               "no color" outline when null). Pure metadata; it tints the
@@ -598,10 +609,13 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
         </View>
       )}
 
-      <View style={styles.channelBody}>
+      <View style={[styles.channelBody, isPortrait && styles.channelBodyPortrait]}>
         {/* Left column = the playlist (this IS the pattern list — "1 list to
-            rule them all"). Wider than the params column so long names fit. */}
-        <View style={styles.patternListPanel}>
+            rule them all"). Wider than the params column so long names fit.
+            In PORTRAIT this stacks ABOVE the params and spans the full strip
+            width so track names get the room the squeezed side-by-side layout
+            denied them (QA round1 #2). */}
+        <View style={[styles.patternListPanel, isPortrait && styles.patternListPanelPortrait]}>
           <PlaylistPanel
             channelId={channel.id}
             channelLabel={isDeck ? 'DECK MAIN' : `CH ${index}`}
@@ -622,10 +636,17 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             2026-05-26: bare list felt visually merged with the strip
             chrome). The card also makes the "modulation active" green
             ring on individual rows pop against a neutral container. */}
-        <View style={styles.paramsPanel}>
+        <View style={[styles.paramsPanel, isPortrait && styles.paramsPanelPortrait]}>
           <ScrollView nestedScrollEnabled style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 4 }}>
             <View style={styles.localParamsCard}>
-              <Text style={[styles.labelCaps, { marginBottom: 6, fontSize: 9, color: C.secondary }]}>LOCAL PARAMS</Text>
+              {/* numberOfLines + adjustsFontSizeToFit keep the header on one
+                  line on the narrower 2nd strip instead of clipping (QA
+                  round1 #22). */}
+              <Text
+                style={[styles.labelCaps, { marginBottom: 6, fontSize: 9, color: C.secondary }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >LOCAL PARAMS</Text>
               <MixerLocalParams channel={channel} onControlChange={onControlChange} />
             </View>
           </ScrollView>
@@ -709,7 +730,11 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             <TouchableOpacity
               style={[styles.toggleBtn, viewSel.type !== 'all' && { backgroundColor: C.primary, borderColor: C.primary }]}
               onPress={() => setShowViewPicker(true)}>
-              <Text style={[styles.labelCaps, viewSel.type !== 'all' && { color: '#FFF' }, { fontSize: 9 }]}>
+              <Text
+                style={[styles.labelCaps, viewSel.type !== 'all' && { color: '#FFF' }, { fontSize: 9 }]}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
                 VIEW: {viewSelLabel}
               </Text>
             </TouchableOpacity>
@@ -1968,7 +1993,19 @@ export default function MixerScreen() {
               narrow header uncrowded (matches the model chip's behaviour). */}
           {!isPortrait ? <SnapshotBar /> : null}
         </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
+        {/* Right control cluster (QA round1 #5). flexWrap + justify-end lets the
+            MASTER readout and the two add buttons reflow to a second line rather
+            than push `+ FROM PLAYLIST…` past the screen edge. The columnGap is
+            the spacing the cramped landscape header was missing. */}
+        <View style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          justifyContent: 'flex-end',
+          flexShrink: 1,
+          columnGap: isPortrait ? 6 : 12,
+          rowGap: 8,
+        }}>
           {/* CLEAR SOLO — only shown while a server-authoritative solo is
               engaged. Sends WS clearSolo (all) + REST mirror; the broadcast's
               empty soloedChannelIds[] reconciles every strip back to lit. */}
@@ -1984,14 +2021,19 @@ export default function MixerScreen() {
               </Text>
             </TouchableOpacity>
           ) : null}
-          {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}
-          <HorizontalFader 
-            value={master} 
-            onChange={handleMasterChange} 
-            trackStyle={[styles.faderTrack, { width: 180 }]} 
-            fillStyle={styles.faderFill} 
-          />
-          <Text style={[styles.displayMono, {fontSize: 16, width: 36, textAlign: 'right'}, isPortrait && { fontSize: 14, width: 28 }]}>{Math.round(master * 100)}</Text>
+          {/* MASTER label + fader + readout travel together as one cluster so
+              they never split across a wrap and the value keeps a reserved
+              column (no more cramped overlap with the slider). */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 6 : 10 }}>
+            {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}
+            <HorizontalFader
+              value={master}
+              onChange={handleMasterChange}
+              trackStyle={[styles.faderTrack, { width: isPortrait ? 120 : 160 }]}
+              fillStyle={styles.faderFill}
+            />
+            <Text style={[styles.displayMono, {fontSize: 16, width: 36, textAlign: 'right'}, isPortrait && { fontSize: 14, width: 28 }]}>{Math.round(master * 100)}</Text>
+          </View>
           {/* One-tap default add: fastest path. disabled+opacity gives the
               operator visual feedback while the POST is in flight, so they
               don't mash and queue 5 of them. */}
@@ -2007,7 +2049,7 @@ export default function MixerScreen() {
             onPress={openAddChannelPicker}
             disabled={addBusy}
           >
-            <Text style={[styles.labelCaps, {color: C.primary}, isPortrait && { fontSize: 9 }]}>{isPortrait ? '+ PLAYLIST' : '+ FROM PLAYLIST…'}</Text>
+            <Text style={[styles.labelCaps, {color: C.primary}, isPortrait && { fontSize: 9 }]} numberOfLines={1}>{isPortrait ? '+ PLAYLIST' : '+ FROM PLAYLIST…'}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -2024,12 +2066,20 @@ export default function MixerScreen() {
           Tight band (2026-06-22 UI cleanup): the label sits inline with no
           extra top padding and the viz is a slim 12px strip, so the channel
           strip below moves up and reclaims the vertical space the operator
-          flagged as wasted on narrow (phone) widths. */}
+          flagged as wasted on narrow (phone) widths.
+          QA round1 #8: the bare pixel strip read as a "broken black bar" with
+          no scale/value. We now (a) surface the master output % inline with the
+          label, and (b) seat the strip in a bordered light track (matching every
+          other slider's track styling) so an all-dark frame reads as a real
+          meter at idle, not a glitch. */}
       <View style={{ paddingHorizontal: 16 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 }}>
           <Text style={[styles.labelCaps, { fontSize: 9 }]}>MASTER OUTPUT</Text>
+          <Text style={[styles.labelCaps, { fontSize: 9, color: C.primary }]}>{Math.round(master * 100)}%</Text>
         </View>
-        <ChannelVizStrip vizKey="master" height={12} style={{ borderRadius: 6 }} />
+        <View style={styles.masterVizTrack}>
+          <ChannelVizStrip vizKey="master" height={12} style={{ borderRadius: 6 }} />
+        </View>
       </View>
 
       {/* ── Channel Strips ─────────────────────────────────────────── */}
@@ -2038,8 +2088,22 @@ export default function MixerScreen() {
           iterate the array directly — no `.slice(1)` skip-the-deck
           dance. The engine's HIL test (hil_channel_isolation_test)
           guards this invariant. */}
-      <ScrollView horizontal scrollEnabled={false} contentContainerStyle={{ padding: 16, gap: 16, flexGrow: 1 }} style={{ flex: 1 }}>
+      <ScrollView horizontal scrollEnabled={false} contentContainerStyle={[{ padding: 16, gap: 16, flexGrow: 1 }, !isPortrait && { justifyContent: 'center' }]} style={{ flex: 1 }}>
         {channels.map((channel, idx) => {
+          // Landscape width distribution (QA round1 #7): the strips used to be
+          // a fixed 320px each and hugged the left edge, leaving ~2/3 of the
+          // landscape viewport as dead grey space. In landscape we now hand
+          // each strip a flex width so the row fills the viewport — `flex: 1`
+          // splits the available width evenly across the visible strips, with a
+          // 320px floor so a strip never collapses below its usable layout and
+          // a 560px ceiling so a single strip fills sensibly without ballooning.
+          // Portrait keeps the original fixed 320px column.
+          // `width: undefined` explicitly overrides channelCard's fixed 320
+          // (RN style-merge keeps the earlier width unless it's reset), letting
+          // `flex: 1` distribute the row width instead.
+          const cardStyle = isPortrait
+            ? null
+            : { width: undefined, flex: 1, minWidth: 320, maxWidth: 560 };
           // Solo display (docs/39 §10) — DISPLAY-ONLY, derived from the
           // authoritative soloedIds Set. `isSolo` = this channel is soloed.
           // `soloActive` = ANY solo is engaged. `dimmedBySolo` mirrors the
@@ -2078,6 +2142,7 @@ export default function MixerScreen() {
               transitions={transitionsList}
               playlistLibrary={playlistLibrary}
               initialPlaylist={channelInlinePlaylist}
+              cardStyle={cardStyle}
               onFaderChange={handleFaderChange}
               onColorChange={handleColorChange}
               onHueChange={handleHueChange}
@@ -2234,14 +2299,21 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     backgroundColor: C.background,
   },
   header: {
-    height: 64,
+    // minHeight (was a fixed 64) so the right-hand control cluster can wrap to
+    // a second line in landscape instead of clipping `+ FROM PLAYLIST…` off the
+    // screen edge (QA round1 #5). flexWrap lets the brand/status cluster and the
+    // master/add cluster stack when the viewport is too narrow to seat both.
+    minHeight: 64,
     backgroundColor: C.surfaceContainerLow,
     borderBottomWidth: 1,
     borderBottomColor: C.ghostBorder,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
+    rowGap: 8,
     paddingHorizontal: 24,
+    paddingVertical: 8,
   },
   globalParamsBar: {
     backgroundColor: C.surfaceContainerHigh,
@@ -2384,6 +2456,17 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     paddingVertical: 8,
     borderRadius: 8,
     ...globalStyles.ambientShadow,
+  },
+  // MASTER OUTPUT viz track (QA round1 #8). A light, bordered, rounded
+  // container that frames the pixel strip the same way faderTrack frames a
+  // slider — so an idle all-dark frame reads as a meter at rest, not a broken
+  // black bar. overflow:hidden clips the strip's corners to the track radius.
+  masterVizTrack: {
+    backgroundColor: C.surfaceContainerHigh,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    overflow: 'hidden',
   },
   channelCard: {
     width: 320,
@@ -2556,14 +2639,30 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     flexDirection: 'row',
     minHeight: 0,
   },
+  channelBodyPortrait: {
+    // Portrait stacks playlist over params (QA round1 #2).
+    flexDirection: 'column',
+  },
   patternListPanel: {
     // Wider than params (item 1): the list is the channel's primary surface.
     width: '60%',
     padding: 6,
   },
+  // Portrait: full strip width for the playlist so track names stop being
+  // squeezed by the side-by-side params column. A minHeight keeps the
+  // internally-scrolling list usable now that the parent is no longer a
+  // height-distributing flex row.
+  patternListPanelPortrait: {
+    width: '100%',
+    minHeight: 220,
+  },
   paramsPanel: {
     width: '40%',
     padding: 8,
+  },
+  // Portrait: params sit BELOW the playlist at full width.
+  paramsPanelPortrait: {
+    width: '100%',
   },
   // Bordered "LOCAL PARAMS" card inside the right column. Gives each
   // channel's local sliders a distinct visual cluster so the strip
@@ -2574,6 +2673,10 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     borderColor: C.ghostBorder,
     borderRadius: 8,
     padding: 8,
+    // Extra right padding (QA round1 #22): 3-digit values like "100" were
+    // crowding the card's right border / column divider. The roomier right
+    // gutter lets the right-aligned value readouts breathe.
+    paddingRight: 12,
     backgroundColor: C.surfaceContainerLowest,
   },
   // Mute / Solo span the full strip width below the body.
@@ -2679,15 +2782,22 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     ...globalStyles.ambientShadow,
   },
   modalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: 8,
     marginBottom: 4,
-  },
-  modalRowActive: {
-    backgroundColor: 'rgba(0,104,117,0.1)',
     borderWidth: 1,
-    borderColor: 'rgba(0,104,117,0.3)',
+    borderColor: 'transparent',
+  },
+  // Selected option: solid primary fill + onPrimary text + a ✓ so the
+  // active blend/transition reads unambiguously, not as a faint outline
+  // (operator report 2026-06-22).
+  modalRowActive: {
+    backgroundColor: C.primary,
+    borderColor: C.primary,
   },
   unlockPromptBtn: {
     paddingVertical: 12,

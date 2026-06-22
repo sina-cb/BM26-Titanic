@@ -511,9 +511,21 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // The mixer surface is already vertically constrained by the
   // channel strips; a 52 px row was eating fader real-estate.
   const isStrip   = variant === 'mixer-strip';
-  const btnHeight = isStrip ? 36 : 44;
+  // QA round1 #1: the deck grid was 3-up (row1) then 5-up (row2), so the
+  // bottom row's chips (Ghost Trails / UV Blast / Iceberg Flash / INVERT /
+  // BLACKOUT) were squeezed below their legible width and truncated to
+  // unreadable stubs ("Gh o…", "BLA…") in portrait — a clipped destructive
+  // BLACKOUT is a live-show safety problem. The deck grid is now a UNIFORM
+  // N-column wrap: every row has the same column count, so every chip is the
+  // same width and labels wrap to 2 lines (SlotButton numberOfLines={2}) with
+  // NO mid-word truncation. 48px tall so a 2-line label fits.
+  const btnHeight = isStrip ? 36 : 48;
   const btnFont   = isStrip ? 11 : 11;
   const gap       = isStrip ? 4 : 5;
+  // Uniform deck grid columns. 4-up keeps each chip wide enough for its full
+  // label on the iPad Pro 11" portrait left-pane while still fitting all 8
+  // cells (6 slots + INVERT + BLACKOUT) in 2 rows.
+  const deckCols  = 4;
 
   // While we wait for the first /global-effect-slots response render
   // a thin skeleton row (matches final layout so the deck doesn't
@@ -594,24 +606,29 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
             </View>
           );
         }
-        // Deck: 2 rows × 3 cols, BLACKOUT in bottom-right.
-        const half = Math.ceil(visibleSlots.length / 2);
-        const row1 = visibleSlots.slice(0, half);
-        const row2 = visibleSlots.slice(half);
-        return [row1, row2].map((row, ri) => (
+        // Deck: one UNIFORM grid of every control (slots + INVERT + BLACKOUT)
+        // chunked into rows of `deckCols`. Every row carries exactly deckCols
+        // cells (the last row is padded with invisible spacers) so chip widths
+        // are identical across rows — fixing the old 3-up/5-up squeeze that
+        // truncated the bottom-row labels (QA round1 #1). INVERT and BLACKOUT
+        // are the last two cells so the destructive e-stop stays bottom-right.
+        const cells: React.ReactNode[] = [
+          ...visibleSlots.map(renderCell),
+          <InvertButton key="invert" invert={invert} height={btnHeight} fontSize={btnFont} onPress={onPressInvert} />,
+          <BlackoutButton key="blackout" blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} />,
+        ];
+        const rows: React.ReactNode[][] = [];
+        for (let i = 0; i < cells.length; i += deckCols) {
+          rows.push(cells.slice(i, i + deckCols));
+        }
+        return rows.map((row, ri) => (
           <View key={ri} style={{ flexDirection: 'row', gap, marginBottom: 4 }}>
-            {row.map(renderCell)}
-            {ri === 1 && row2.length < row1.length
-              ? Array.from({ length: row1.length - row2.length }).map((_, i) => (
+            {row}
+            {row.length < deckCols
+              ? Array.from({ length: deckCols - row.length }).map((_, i) => (
                   <View key={`pad-${i}`} style={{ flex: 1 }} />
                 ))
               : null}
-            {ri === 1 ? (
-              <InvertButton invert={invert} height={btnHeight} fontSize={btnFont} onPress={onPressInvert} />
-            ) : null}
-            {ri === 1 ? (
-              <BlackoutButton blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} />
-            ) : null}
           </View>
         ));
       })()}
@@ -659,15 +676,23 @@ const HueShiftSection: React.FC<{
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44, marginBottom: 6 }}>
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 40, letterSpacing: 0.5, textTransform: 'uppercase' }}>HUE</Text>
-      <HorizontalFader
-        value={Math.max(0, Math.min(1, degrees / 360))}
-        onChange={(v: number) => onDegreesChange(Math.round(v * 360))}
-        onDragStart={onDegreesDragStart}
-        onRelease={onDegreesRelease}
-        trackStyle={{ flex: 1, height: 12, marginHorizontal: 8, backgroundColor: C.surfaceContainerHigh, borderRadius: 6, justifyContent: 'center' }}
-        fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 6 }}
-        thumbStyle={{ position: 'absolute', width: 16, height: 22, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -8 }] }}
-      />
+      {/* QA round1 #15: the track was given `flex: 1` directly, but the
+          HorizontalFader root's onLayout width didn't grow on react-native-web
+          (the flex shorthand resolved flexBasis:auto and the track sized to
+          content ~28%). Wrap it in a flex:1 / minWidth:0 spacer and let the
+          track fill that wrapper at width:100% so it spans the row; the value
+          stays right-aligned in its fixed column. */}
+      <View style={{ flex: 1, minWidth: 0, marginHorizontal: 8 }}>
+        <HorizontalFader
+          value={Math.max(0, Math.min(1, degrees / 360))}
+          onChange={(v: number) => onDegreesChange(Math.round(v * 360))}
+          onDragStart={onDegreesDragStart}
+          onRelease={onDegreesRelease}
+          trackStyle={{ width: '100%', height: 12, backgroundColor: C.surfaceContainerHigh, borderRadius: 6, justifyContent: 'center' }}
+          fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 6 }}
+          thumbStyle={{ position: 'absolute', width: 16, height: 22, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -8 }] }}
+        />
+      </View>
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, width: 40, textAlign: 'right' }}>{Math.round(degrees)}°</Text>
       <View
         style={{
@@ -716,6 +741,12 @@ const Header: React.FC<{ variant: 'deck' | 'mixer-strip' }> = ({ variant }) => {
 //     complaint). The tier shows as a tiny coloured dot in the
 //     top-left corner instead, so the operator still has the
 //     "this preset is dangerous" cue at a glance.
+// Width reserved on each side of a bound slot's centred label so the text
+// clears the ⋯ edit affordance (a 16px chip pinned top-right). Used as
+// symmetric horizontal padding on the label so multi-word names stay centred
+// AND never overlap the dots (QA round1 #12).
+const EDIT_AFFORDANCE_GUTTER = 18;
+
 const SlotButton: React.FC<{
   slot: GlobalEffectSlotStatus;
   isOn: boolean;
@@ -775,7 +806,12 @@ const SlotButton: React.FC<{
           numberOfLines={2}
           adjustsFontSizeToFit
           minimumFontScale={0.7}
-          style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, textAlign: 'center', letterSpacing: 0.3 }}
+          // QA round1 #12: reserve a right gutter the width of the ⋯ edit
+          // affordance (16px chip at right:2) so a multi-word label
+          // ("Vintage White", "Ghost Trails") never renders UNDER the dots.
+          // A matching left pad keeps the centered text visually centred in
+          // the label area rather than shifted off to the left.
+          style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, textAlign: 'center', letterSpacing: 0.3, paddingLeft: EDIT_AFFORDANCE_GUTTER, paddingRight: EDIT_AFFORDANCE_GUTTER }}
         >
           {slot.label}
         </Text>
@@ -851,6 +887,10 @@ const BlackoutButton: React.FC<{
   // (operator review May 2026: the always-on red border was reading
   // as "this is constantly active / flashing"). When ON the entire
   // cell becomes red — unambiguous e-stop state.
+  //
+  // Label casing (QA round1 #20): Title Case ("Blackout"/"Release") to match
+  // the slot chips — the destructive signal is the error-red fill + bold
+  // weight, NOT all-caps.
   const isOn = !!blackout;
   const bg = isOn ? C.error : C.surfaceContainerHigh;
   const fg = isOn ? '#FFF' : C.error;
@@ -874,7 +914,7 @@ const BlackoutButton: React.FC<{
         minimumFontScale={0.7}
         style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, letterSpacing: 0.5 }}
       >
-        {isOn ? 'RELEASE' : 'BLACKOUT'}
+        {isOn ? 'Release' : 'Blackout'}
       </Text>
     </TouchableOpacity>
   );
@@ -887,6 +927,11 @@ const BlackoutButton: React.FC<{
 // the operator never confuses a colour-invert with the e-stop.
 //   - OFF → flat ghost-bordered surface, tertiary-accent text
 //   - ON  → filled tertiary cell, white text (unambiguous "inverted" state)
+//
+// Label casing (QA round1 #20): Title Case ("Invert") to match the slot-chip
+// convention — the chip group is now ONE casing. Destructiveness/state is
+// flagged by colour + bold weight (tertiary accent, error-red for blackout),
+// NOT by SHOUTING CAPS.
 const InvertButton: React.FC<{
   invert: boolean;
   height: number;
@@ -917,7 +962,7 @@ const InvertButton: React.FC<{
         minimumFontScale={0.7}
         style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, letterSpacing: 0.5 }}
       >
-        INVERT
+        Invert
       </Text>
     </TouchableOpacity>
   );

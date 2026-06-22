@@ -531,7 +531,15 @@ function DynamicAudioRow({ signals, isPortrait, collapsed }: {
   // If NONE of the curated cues are live (an exotic Companion routing that
   // publishes signals we don't recognise), fall back to the first few live
   // signals so the row is never blank while audio IS flowing.
-  const shownSet = curated.length > 0 ? curated : signals.slice(0, isPortrait ? 4 : 6);
+  //
+  // QA round1 #21: the strip is a SINGLE row, so cap how many cells it shows
+  // (4 portrait / 6 landscape) and roll the rest into the "+N on AUDIO tab"
+  // hint. Pre-fix the expanded row pushed every curated cue (up to 6) into a
+  // narrow portrait strip where each cell's 52px minWidth forced the strip to
+  // overflow its right edge.
+  const maxCells = isPortrait ? 4 : 6;
+  const baseSet = curated.length > 0 ? curated : signals;
+  const shownSet = baseSet.slice(0, maxCells);
   const remainder = signals.length - shownSet.length;
 
   if (collapsed) {
@@ -593,6 +601,17 @@ function audioValueText(signal: AudioSignalDescriptor, value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}`;
 }
 
+// Compact meter label for the dense GLOBALS audio strip. The engine ships
+// verbose band names ("ENERGY RATIO") that mid-word-clip in the strip's
+// narrow cells (QA round1 #21: "ENERGY RA…"). Collapse a multi-word label to
+// its first word so the cue stays whole instead of truncating — never an
+// ellipsis on a control label. Single-word labels pass through untouched.
+function audioMeterLabel(label: string): string {
+  const trimmed = label.trim();
+  const space = trimmed.indexOf(' ');
+  return space === -1 ? trimmed : trimmed.slice(0, space);
+}
+
 /**
  * LiveMeterColumn — compact, read-only "what the patterns are seeing right
  * now" display for one dynamic audio signal. Non-interactive (tuning lives
@@ -620,9 +639,13 @@ function LiveMeterColumn({ isPortrait, signal, value }: {
       backgroundColor: C.surface,
       justifyContent: 'center',
     }}>
+      {/* QA round1 #21: bumped 8→9px and secondary→text so the band labels
+          and values read at the edge of the venue; the label is abbreviated
+          to its first word (audioMeterLabel) so it stays whole instead of
+          clipping mid-word ("ENERGY RA…"). */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
-        <Text numberOfLines={1} style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6, flex: 1, marginRight: 4 }}>{signal.label}</Text>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.text }}>{audioValueText(signal, value)}</Text>
+        <Text numberOfLines={1} style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.text, textTransform: 'uppercase', letterSpacing: 0.6, flex: 1, marginRight: 4 }}>{audioMeterLabel(signal.label)}</Text>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.text }}>{audioValueText(signal, value)}</Text>
       </View>
       <View style={{
         height: 8, borderRadius: 4,
@@ -716,6 +739,14 @@ function BpmTile({ bpm, isPortrait, synced, source, showSync, onSync }: {
   // OSC auto-follow keeps the green "beat-locked" border; a manual override
   // tints tertiary; otherwise the resting ghost border.
   const border = source === 'osc' ? ACCENT_AUTO : source === 'manual' ? C.tertiary : C.ghostBorder;
+  // QA round1 #4: a bare BPM number sitting next to an "OSC IDLE" pill reads
+  // as a contradiction ("is the clock running or not?"). Append a MINIMAL
+  // source qualifier so the held/osc case is unambiguous — `· HELD` when a
+  // tempo is held with no live driver, `· OSC` when OSC is auto-following.
+  // Manual override is already signalled by the tertiary tint + SYNC chip, so
+  // it stays bare (no `· TAP`). This is intentionally a one-word qualifier,
+  // NOT the verbose source tag retired on 2026-06-22.
+  const qualifier = hasSignal && source === 'held' ? 'HELD' : hasSignal && source === 'osc' ? 'OSC' : null;
   return (
     <View style={{
       width: w, height: GLOBALS_TILE_HEIGHT,
@@ -727,7 +758,7 @@ function BpmTile({ bpm, isPortrait, synced, source, showSync, onSync }: {
       <View style={{ flex: 1, justifyContent: 'space-between', height: '100%' }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: accent, textTransform: 'uppercase', letterSpacing: 0.8 }}>
-            BPM
+            BPM{qualifier ? <Text style={{ color: C.secondary }}> · {qualifier}</Text> : null}
           </Text>
           <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: hasSignal ? accent : C.ghostBorder }} />
         </View>
