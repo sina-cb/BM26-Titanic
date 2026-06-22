@@ -220,10 +220,15 @@ const OverlayCard: React.FC<{
       style={{
         backgroundColor: C.surfaceContainerLowest,
         borderRadius: 10,
+        // QA round8 #5: the full-perimeter border previously took the
+        // overlay's accent color. With a red accent that read as an
+        // error/alarm. Reserve red for destructive/error — keep the
+        // perimeter NEUTRAL (ghostBorder) and carry the accent ONLY on the
+        // left edge stripe (the established at-a-glance identification cue).
         borderWidth: 1,
-        borderColor: enabled ? accent : C.ghostBorder,
+        borderColor: C.ghostBorder,
         borderLeftWidth: 4,
-        borderLeftColor: accent,
+        borderLeftColor: enabled ? accent : C.ghostBorder,
         marginBottom: 8,
         opacity: enabled ? 1 : 0.65,
         overflow: 'hidden',
@@ -489,10 +494,10 @@ export const DeckOverlayStack: React.FC<{
             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: overlayAutopilot.shuffle ? C.primary : C.icon, letterSpacing: 0.5 }}>SHUFFLE</Text>
           </TouchableOpacity>
         </View>
-        {/* Shared cadence sub-label + timer pills — make clear it's group-wide. */}
-        <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 9, color: C.secondary }}>
-          Shared cadence — all overlays advance together every {overlayAutopilot.delay_s}s
-        </Text>
+        {/* Shared cadence timer pills (one unison clock for ALL overlays).
+            QA round8 #4: the "advance together every Ns" prose duplicated the
+            selected pill right below it, so it was dropped — the one-line hint
+            now lives only in the empty (no-overlay) state below. */}
         <AutopilotTimerPills
           value={overlayAutopilot.delay_s || 30}
           onChange={(v: number) => setAuto({ delay_s: v })}
@@ -502,7 +507,7 @@ export const DeckOverlayStack: React.FC<{
       {/* ── Overlay cards ─────────────────────────────────────────────── */}
       {overlays.length === 0 ? (
         <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary, fontStyle: 'italic', paddingHorizontal: 8, paddingBottom: 8 }}>
-          No deck overlays. Add one to layer a view-scoped look over the main deck.
+          No deck overlays. Add one to layer a view-scoped look over the main deck. When AUTO is on, all overlays share one cadence and advance together.
         </Text>
       ) : (
         // Render top layer first so the visual stack reads top→bottom (the

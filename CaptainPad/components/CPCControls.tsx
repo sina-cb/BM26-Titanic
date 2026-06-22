@@ -151,7 +151,14 @@ export const CPCControls = () => {
     updateParamCenter({ [key]: val });
   };
 
-  const faderMaxWidth = isPortrait ? 90 : 140;
+  // QA round8 #2: the GLOBALS row left a ~40% dead gutter to the right of
+  // the OSC tile in landscape because the SPEED/SIZE faders were capped at
+  // 140 and couldn't grow into the slack. Portrait stays capped (the row is
+  // already tight there); landscape uncaps so the two faders flex-grow to
+  // absorb the gutter — "big but compact". The inter-tile gap also tightens
+  // (20→12) so the cluster reads as intentionally dense rather than sparse.
+  const faderMaxWidth = isPortrait ? 90 : undefined;
+  const globalsRowGap = isPortrait ? 8 : 12;
   // Shared label column for row-1 and row-2 so REACT lines up under
   // SPEED. labelGap is the same number for both rows; widening one
   // requires widening both — that's the whole point of the constants.
@@ -243,7 +250,7 @@ export const CPCControls = () => {
             onEditColors={() => setColorPickerOpen(true)}
           />
         ) : (
-          <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', gap: isPortrait ? 8 : 20, paddingRight: isPortrait ? 4 : 12, flex: 1 }}>
+          <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', gap: globalsRowGap, paddingRight: isPortrait ? 4 : 12, flex: 1 }}>
             <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
               <MiniFader
                 label="SPEED"
@@ -556,7 +563,10 @@ function DynamicAudioRow({ signals, isPortrait, collapsed }: {
           />
         ))}
         {remainder > 0 ? (
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.icon }}>+{remainder}</Text>
+          // QA round8 #4: was 8px / C.icon (faint grey) — below the
+          // legibility floor in a glare environment. Bumped to 9px and the
+          // higher-contrast secondary so the "more signals live" hint reads.
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary }}>+{remainder}</Text>
         ) : null}
       </View>
     );
@@ -573,9 +583,12 @@ function DynamicAudioRow({ signals, isPortrait, collapsed }: {
         />
       ))}
       {remainder > 0 ? (
+        // QA round8 #4: the "+N on AUDIO tab" hint was 8px / C.icon (faint
+        // grey) — sub-legible at the edge of the venue. Bumped to 9px and
+        // C.secondary for readable contrast without out-shouting the meters.
         <Text
           numberOfLines={2}
-          style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.icon, maxWidth: 54, textTransform: 'uppercase', letterSpacing: 0.4 }}
+          style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, maxWidth: 54, textTransform: 'uppercase', letterSpacing: 0.4 }}
         >
           +{remainder} on AUDIO tab
         </Text>
@@ -812,8 +825,8 @@ function CollapsedGlobalsSummary({
   const C = usePalette();
   return (
     <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 14, paddingRight: 8, height: 24 }}>
-      <CollapsedReadout label="SPEED" value={Math.round(speed * 100)} accent={speedFill} badge={speedBadge} />
-      <CollapsedReadout label="SIZE" value={Math.round(size * 100)} />
+      <CollapsedReadout label="SPEED" value={Math.round(speed * 100)} unit="%" accent={speedFill} badge={speedBadge} />
+      <CollapsedReadout label="SIZE" value={Math.round(size * 100)} unit="%" />
       <TouchableOpacity onPress={onEditColors} accessibilityLabel="Open colour picker" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
         <DualSwatch h1={h1} h2={h2} size={18} />
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>COLORS</Text>
@@ -827,12 +840,18 @@ function CollapsedGlobalsSummary({
   );
 }
 
-function CollapsedReadout({ label, value, accent, badge }: { label: string; value: number; accent?: string; badge?: string }) {
+function CollapsedReadout({ label, value, unit, accent, badge }: { label: string; value: number; unit?: string; accent?: string; badge?: string }) {
   const C = usePalette();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: accent || C.text }}>{value}</Text>
+      {/* QA round8 #3: level-like 0–100 params carry a "%" unit so the
+          collapsed GLOBALS readout isn't a bare integer (matches the deck
+          HUE's "°"). The unit is rendered a touch smaller/secondary so the
+          number still leads. */}
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: accent || C.text }}>
+        {value}{unit ? <Text style={{ fontSize: 9, color: C.secondary }}>{unit}</Text> : null}
+      </Text>
       {badge ? (
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 7, color: accent || C.secondary, textTransform: 'uppercase', letterSpacing: 0.5 }}>{badge}</Text>
       ) : null}

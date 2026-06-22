@@ -156,21 +156,41 @@ export function GroupRail({ mixGroups, channels }: GroupRailProps) {
             </View>
           ) : null}
         </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.newGroupBtn}
-          hitSlop={HIT_SLOP}
-          onPress={handleCreate}
-          accessibilityRole="button"
-          accessibilityLabel="Create group"
-        >
-          <Text style={[styles.labelCaps, { color: C.primary }]}>+ NEW GROUP</Text>
-        </TouchableOpacity>
+        {/* Round8 #6: when there are NO groups, the always-on "+ NEW GROUP"
+            header button + the separate MASTER OUTPUT row below read as two
+            near-empty thin rows. We hide this header button while empty and
+            surface creation through the (now tappable) empty-state row inside
+            the expand, so the collapsed rail is a single thin "▸ GROUPS" line.
+            Once at least one group exists the header button returns for quick
+            adds without expanding. */}
+        {mixGroups.length > 0 ? (
+          <TouchableOpacity
+            style={styles.newGroupBtn}
+            hitSlop={HIT_SLOP}
+            onPress={handleCreate}
+            accessibilityRole="button"
+            accessibilityLabel="Create group"
+          >
+            <Text style={[styles.labelCaps, { color: C.primary }]}>+ NEW GROUP</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {expanded ? (
         <ScrollView horizontal contentContainerStyle={styles.groupsRow} showsHorizontalScrollIndicator={false}>
           {mixGroups.length === 0 ? (
-            <Text style={[styles.labelCaps, { padding: 8 }]}>NO GROUPS — TAP &quot;+ NEW GROUP&quot;</Text>
+            // Round8 #6: the header "+ NEW GROUP" button is hidden while empty
+            // (it doubled the rail's empty height), so the empty-state row IS
+            // the create affordance now — tap it to spin up the first group.
+            <TouchableOpacity
+              style={styles.emptyCreateBtn}
+              hitSlop={HIT_SLOP}
+              onPress={handleCreate}
+              accessibilityRole="button"
+              accessibilityLabel="Create group"
+            >
+              <Text style={[styles.labelCaps, { color: C.primary }]}>+ NEW GROUP</Text>
+            </TouchableOpacity>
           ) : null}
           {mixGroups.map((g, idx) => {
             const members = membersByGroup[g.id] || [];
@@ -349,6 +369,20 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     newGroupBtn: {
       minHeight: 32,
       paddingHorizontal: 12,
+      justifyContent: 'center' as const,
+    },
+    // Round8 #6: the empty-state create button inside the expand. A dashed
+    // outline reads as an "add here" affordance now that the header "+ NEW
+    // GROUP" button is hidden while the rail is empty. ≥44pt touch target.
+    emptyCreateBtn: {
+      minHeight: 44,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderStyle: 'dashed' as const,
+      borderColor: C.primary,
+      alignItems: 'center' as const,
       justifyContent: 'center' as const,
     },
     groupsRow: {

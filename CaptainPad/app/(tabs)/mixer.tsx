@@ -54,6 +54,63 @@ const ICON_BTN_HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
 // (Per-channel color-accent palette removed 2026-06-22 — color coding was
 // dropped from the channel strip at operator request.)
 
+// ── Channel title derivation (round8 #1) ───────────────────────────────
+// Every default-added channel was minted with the literal name "New Layer"
+// (see handleAddChannelWithPlaylist), so three fresh strips read three
+// identical "NEW LAYER" headers and the operator couldn't tell them apart.
+// We treat that placeholder (and an empty/whitespace name) as "no operator
+// name set" and derive a meaningful title from the channel's content instead:
+//   1. the active playlist ENTRY's label / pattern name (most specific), then
+//   2. the assigned PLAYLIST name, then
+//   3. "Ch <N>" using the 1-based channel index.
+// A genuine operator-set rename (anything else) always wins — we never
+// override a name the operator typed. `initialPlaylist` is the inline
+// PlaylistData payload (entries[]), used to resolve the active entry's
+// pattern; `playlistAssignment` is the channel's PlaylistAssignment
+// (name + activeEntryId).
+const PLACEHOLDER_CHANNEL_NAMES = new Set(['new layer', 'newlayer']);
+
+function isPlaceholderChannelName(name: string | null | undefined): boolean {
+  if (name == null) return true;
+  const trimmed = String(name).trim();
+  if (trimmed.length === 0) return true;
+  return PLACEHOLDER_CHANNEL_NAMES.has(trimmed.toLowerCase());
+}
+
+function prettyPatternName(raw: string): string {
+  // Strip a leading "NN_" ordering prefix and turn snake/separators into
+  // spaced Title Case so "05_orbital_attractor_field" reads "Orbital
+  // Attractor Field" in the header.
+  const base = raw.replace(/^\d+[_-]/, '').replace(/[_-]+/g, ' ').trim();
+  if (base.length === 0) return raw;
+  return base.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function deriveChannelTitle(
+  channel: { name?: string | null },
+  index: number,
+  playlistAssignment: { name?: string; activeEntryId?: string | null } | null | undefined,
+  initialPlaylist: { entries?: { id: string; pattern: string; label?: string | null }[] } | null | undefined,
+): string {
+  // An operator-set rename always wins.
+  if (!isPlaceholderChannelName(channel.name)) return String(channel.name);
+  // 1. Active playlist entry's pattern / label.
+  const activeId = playlistAssignment?.activeEntryId ?? null;
+  const entries = initialPlaylist?.entries ?? [];
+  if (activeId && entries.length > 0) {
+    const entry = entries.find((e) => e.id === activeId);
+    if (entry) {
+      if (entry.label && entry.label.trim().length > 0) return entry.label.trim();
+      if (entry.pattern && entry.pattern.trim().length > 0) return prettyPatternName(entry.pattern);
+    }
+  }
+  // 2. Assigned playlist name.
+  const plName = playlistAssignment?.name;
+  if (plName && plName.trim().length > 0) return prettyPatternName(plName);
+  // 3. Index fallback.
+  return `Ch ${index}`;
+}
+
 // ── Global Rig Buttons moved to RigGlobals ────────────────────────────
 
 // Mini Fader moved to GlobalParams.tsx
@@ -201,7 +258,7 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, cardStyle, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, cardStyle, isOnlyChannel, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -274,6 +331,14 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
   } else {
     viewSelLabel = String(viewSel.type).toUpperCase();
   }
+  // Round8 #1: derive a distinct header title from the channel's content when
+  // the operator hasn't set a real name (default-added strips are all minted
+  // "New Layer"). A genuine rename always wins (it's a non-placeholder, so
+  // deriveChannelTitle returns it verbatim). Feeds the uncontrolled TextInput's
+  // defaultValue below — same uncontrolled rename behaviour as before, we only
+  // changed what the *initial* value resolves to so the three strips no longer
+  // all read "NEW LAYER".
+  const derivedTitle = deriveChannelTitle(channel, index, channel.playlist, initialPlaylist);
   return (
     <View style={[
       styles.channelCard,
@@ -321,7 +386,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           ) : null}
           <TextInput
             style={[styles.headlineSm, { fontSize: 14, color: C.text, flex: 1, padding: 0 }]}
-            defaultValue={channel.name || 'CH ' + index}
+            defaultValue={derivedTitle}
             onEndEditing={async (e) => {
               // Codex P0 — no silent swallow. Name is cosmetic (not
               // operator-critical), so a rejected rename is logged, not
@@ -435,18 +500,34 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
                   <Text style={styles.actionsMenuLabel}>{faderLocked ? 'Unpin fader' : 'Pin fader'}</Text>
                 </TouchableOpacity>
               )}
-              {/* Delete — destructive, error-red. Hidden when the channel is
-                  locked (same gating as the original icon button). */}
+              {/* Round8 #5: separate the destructive Delete from Pin fader with
+                  a divider + ≥16px gap so it can't be hit by a mis-tap meant for
+                  Pin (they were stacked 4px apart). The engine forbids deleting
+                  the LAST channel, so when this is the only channel we render
+                  Delete greyed + disabled (rather than hidden) so the operator
+                  sees WHY it's unavailable instead of the row silently vanishing.
+                  Still hidden entirely when the channel is locked — same gating
+                  as the original icon button. */}
               {onDelete && !locked && (
-                <TouchableOpacity
-                  style={styles.actionsMenuRow}
-                  onPress={() => { onDelete(channel.id); setShowActionsMenu(false); }}
-                  accessibilityLabel="Delete channel"
-                  accessibilityRole="button"
-                >
-                  <IconSymbol name="trash" size={16} color={C.error} />
-                  <Text style={[styles.actionsMenuLabel, { color: C.error }]}>Delete channel</Text>
-                </TouchableOpacity>
+                <>
+                  <View style={styles.actionsMenuDivider} />
+                  <TouchableOpacity
+                    style={[styles.actionsMenuRow, styles.actionsMenuRowDestructive, isOnlyChannel && { opacity: 0.4 }]}
+                    onPress={() => { if (isOnlyChannel) return; onDelete(channel.id); setShowActionsMenu(false); }}
+                    disabled={!!isOnlyChannel}
+                    accessibilityLabel={isOnlyChannel ? 'Delete channel (unavailable — at least one channel must remain)' : 'Delete channel'}
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: !!isOnlyChannel }}
+                  >
+                    <IconSymbol name="trash" size={16} color={C.error} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.actionsMenuLabel, { color: C.error }]}>Delete channel</Text>
+                      {isOnlyChannel ? (
+                        <Text style={styles.actionsMenuHint}>At least one channel must remain</Text>
+                      ) : null}
+                    </View>
+                  </TouchableOpacity>
+                </>
               )}
             </View>
           </TouchableOpacity>
@@ -456,8 +537,43 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
       {/* Pixel Visualization — self-subscribing per-channel strip so a
           new viz frame re-renders ONLY this tiny component, not the whole
           strip list (see ChannelVizStrip + the perf note on the mixer
-          screen's viz handling). */}
-      <ChannelVizStrip vizKey={channel.id} height={14} style={{ marginBottom: 6 }} />
+          screen's viz handling).
+
+          Round8 #2 — silence readout: the full-saturation rainbow strip read
+          identically at LEVEL 0 or MUTE as it did at full output, so an
+          operator couldn't tell at a glance which layers were actually
+          contributing light. We desaturate + dim THIS strip proportional to
+          effective output (DISPLAY-ONLY — we never touch engine state, the viz
+          frame itself is unchanged). Effective silence = muted, OR fader at 0,
+          OR gated off by another channel's solo (the engine zeroes the
+          contribution in all three cases). A greyscale wash overlay desaturates
+          the colours and the wrapper opacity dims, so a silent layer reads grey
+          + faint while a live layer keeps its true colours. */}
+      {(() => {
+        const effLevel = channel.enabled === false ? 0 : (dimmedBySolo ? 0 : (channel.fader ?? 0));
+        const silent = effLevel <= 0.001;
+        // Map effective level → opacity (0.28 floor so a silent strip is still
+        // visible as a greyed band, not gone) and greyscale-wash strength
+        // (full wash when silent, none at full output).
+        const stripOpacity = silent ? 0.28 : 0.45 + 0.55 * Math.min(1, effLevel);
+        const washAlpha = silent ? 0.62 : 0.62 * (1 - Math.min(1, effLevel));
+        return (
+          <View style={{ marginBottom: 6, opacity: stripOpacity }}>
+            <ChannelVizStrip vizKey={channel.id} height={14} />
+            {washAlpha > 0.001 ? (
+              <View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  left: 0, right: 0, top: 0, height: 14,
+                  borderRadius: 4,
+                  backgroundColor: `rgba(128,128,128,${washAlpha.toFixed(3)})`,
+                }}
+              />
+            ) : null}
+          </View>
+        );
+      })()}
 
       {/* Level Fader. `fader` is null-coalesced to 0 for display ONLY —
           a broadcast that omits it shows an empty fader rather than NaN%
@@ -632,12 +748,16 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             <TouchableOpacity
               style={[styles.toggleBtn, viewSel.type !== 'all' && { backgroundColor: C.primary, borderColor: C.primary }]}
               onPress={() => setShowViewPicker(true)}>
+              {/* Round8 #4: the "VIEW:" prefix pushed "ALL" off the end of the
+                  narrow toggle ("VIEW: A…"). Drop the prefix and show just the
+                  scope + a ▾ caret so it reads as one clean line matching the
+                  MUTE/SOLO/BUMP/SAFE siblings. */}
               <Text
                 style={[styles.labelCaps, viewSel.type !== 'all' && { color: '#FFF' }, { fontSize: 9 }]}
                 numberOfLines={1}
                 ellipsizeMode="tail"
               >
-                VIEW: {viewSelLabel}
+                {viewSelLabel} ▾
               </Text>
             </TouchableOpacity>
             <Modal transparent visible={showViewPicker} animationType="fade" onRequestClose={() => setShowViewPicker(false)}>
@@ -1875,14 +1995,19 @@ export default function MixerScreen() {
               </Text>
             )}
           </View>
-          {/* Active model chip — secondary status, after the connection
-              pill. Hidden until the /status probe resolves and on
-              portrait (matches the CONNECTED label's portrait behaviour)
-              so the narrow header isn't crowded. */}
-          {!isPortrait && activeModel ? (
-            <View style={styles.modelChip}>
-              <Text style={styles.labelCaps}>MODEL</Text>
-              <Text style={styles.modelName} numberOfLines={1}>{activeModel}</Text>
+          {/* Active model chip — secondary status, after the connection pill.
+              Hidden only until the /status probe resolves / while offline (same
+              graceful-degrade posture as the OFFLINE pill).
+              Round8 #7: previously this was landscape-only, so the operator lost
+              the model readout when they rotated to portrait. It's now shown in
+              BOTH orientations for consistency, just de-emphasized in portrait —
+              the "MODEL" caps label is dropped and the chip tightens so it stays
+              subtle in the narrow header while still telling the operator which
+              model is live. */}
+          {activeModel ? (
+            <View style={[styles.modelChip, isPortrait && { paddingHorizontal: 8, paddingVertical: 4, maxWidth: 120 }]}>
+              {!isPortrait && <Text style={styles.labelCaps}>MODEL</Text>}
+              <Text style={[styles.modelName, isPortrait && { fontSize: 10 }]} numberOfLines={1}>{activeModel}</Text>
             </View>
           ) : null}
           {/* Engine-health warning — renders NOTHING when healthy (no layout
@@ -1996,14 +2121,16 @@ export default function MixerScreen() {
           iterate the array directly — no `.slice(1)` skip-the-deck
           dance. The engine's HIL test (hil_channel_isolation_test)
           guards this invariant. */}
-      {/* QA round3 #3: a centered single (or double) card at the 560px cap
-          left a ~520px empty gutter on either side in landscape, reading as
-          lopsided dead space. Center ONLY when the row is full (3 layers,
-          which fills the viewport); with fewer layers left-align the column so
-          the cards anchor to the left edge and the unused width sits as a
-          single trailing margin instead of two symmetric gutters that frame
-          the emptiness. Portrait is untouched (always a single fixed column).*/}
-      <ScrollView horizontal scrollEnabled={false} contentContainerStyle={[{ padding: 16, gap: 16, flexGrow: 1 }, !isPortrait && { justifyContent: channels.length >= 3 ? 'center' : 'flex-start' }]} style={{ flex: 1 }}>
+      {/* Round8 #3: previously 1-2 landscape cards were left-anchored
+          (justifyContent flex-start for <3 layers), so a lone strip hugged the
+          left edge with a big right gutter (the operator-flagged "large
+          left-anchored void"). We now CENTER the row at every count so the
+          unused width sits as symmetric margins instead of one lopsided right
+          gutter, and we let 1-2 cards grow wider (cap raised below) so they
+          fill more of the freed width. A full 3-layer row already fills evenly,
+          so centering it is a visual no-op. Portrait is untouched (always a
+          single fixed column).*/}
+      <ScrollView horizontal scrollEnabled={false} contentContainerStyle={[{ padding: 16, gap: 16, flexGrow: 1 }, !isPortrait && { justifyContent: 'center' }]} style={{ flex: 1 }}>
         {channels.map((channel, idx) => {
           // Landscape width distribution (QA round1 #7): the strips used to be
           // a fixed 320px each and hugged the left edge, leaving ~2/3 of the
@@ -2016,12 +2143,13 @@ export default function MixerScreen() {
           // `width: undefined` explicitly overrides channelCard's fixed 320
           // (RN style-merge keeps the earlier width unless it's reset), letting
           // `flex: 1` distribute the row width instead.
-          // QA round3 #3: lift the per-card width ceiling when the row isn't
-          // full so 1-2 layers widen to use the freed landscape width instead
-          // of capping at 560 and leaving a gutter. A 3-layer row keeps the
-          // 560 cap (it already fills evenly); 1-2 layers may grow to 760 each
-          // so the column reads filled, not stranded at the left.
-          const landscapeMaxWidth = channels.length >= 3 ? 560 : 760;
+          // Round8 #3: lift the per-card width ceiling further when the row
+          // isn't full so 1-2 (now centered) layers fill more of the freed
+          // landscape width instead of leaving a wide void around a 760-capped
+          // card. A 3-layer row keeps the 560 cap (it already fills evenly);
+          // a single layer may grow to 920 and a pair to 760 each, so the
+          // centered row reads filled rather than stranded with a big gutter.
+          const landscapeMaxWidth = channels.length >= 3 ? 560 : (channels.length === 1 ? 920 : 760);
           const cardStyle = isPortrait
             ? null
             : { width: undefined, flex: 1, minWidth: 320, maxWidth: landscapeMaxWidth };
@@ -2064,6 +2192,7 @@ export default function MixerScreen() {
               playlistLibrary={playlistLibrary}
               initialPlaylist={channelInlinePlaylist}
               cardStyle={cardStyle}
+              isOnlyChannel={channels.length === 1}
               onFaderChange={handleFaderChange}
               onColorChange={handleColorChange}
               onHueChange={handleHueChange}
@@ -2761,6 +2890,24 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     fontFamily: 'SpaceGrotesk_700Bold',
     fontSize: 14,
     color: C.text,
+  },
+  // Round8 #5: a hairline divider + the destructive row's extra top margin
+  // put ≥16px of separation between Pin fader and the error-red Delete row so
+  // the destructive action can't be hit by a mis-tap (they were 4px apart).
+  actionsMenuDivider: {
+    height: 1,
+    backgroundColor: C.ghostBorder,
+    marginTop: 12,
+    marginHorizontal: 4,
+  },
+  actionsMenuRowDestructive: {
+    marginTop: 8,
+  },
+  actionsMenuHint: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 11,
+    color: C.icon,
+    marginTop: 1,
   },
   unlockPromptBtn: {
     paddingVertical: 12,

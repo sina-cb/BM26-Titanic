@@ -147,21 +147,24 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
         <Text style={[styles.brandText, isPortrait && { fontSize: 16 }]}>{title}</Text>
         <View style={[styles.statusBadge, isPortrait && { paddingHorizontal: 8, paddingVertical: 4 }]}>
           <View style={[styles.statusDot, !isConnected && { backgroundColor: palette.error }]} />
-          {!isPortrait && (
-            // '#00a86b' (MOD_GREEN) is the "connected/ok" green, intentionally
-            // hardcoded — reads as success on both light and dark surfaces.
-            <Text style={[styles.labelCaps, { color: isConnected ? '#00a86b' : palette.error }]}>
-              {isConnected ? 'CONNECTED' : 'OFFLINE'}
-            </Text>
-          )}
+          {/* Connection label — ALWAYS rendered (both orientations). A bare
+              dot is not an acceptable disconnect indicator: the OFFLINE state
+              especially must read as text, never a single red pixel (QA round 8
+              fix #3). '#00a86b' (MOD_GREEN) is the hardcoded "connected/ok"
+              green — reads as success on both light and dark surfaces. */}
+          <Text style={[styles.labelCaps, { color: isConnected ? '#00a86b' : palette.error }]}>
+            {isConnected ? 'CONNECTED' : 'OFFLINE'}
+          </Text>
         </View>
         {/* Active model chip — secondary status, after the connection
-            pill. Hidden until the /status probe resolves and on
-            portrait (matches the CONNECTED label's portrait behaviour)
-            so the narrow header isn't crowded. */}
-        {!isPortrait && activeModel ? (
+            pill. Hidden only until the /status probe resolves (null while
+            offline / before first probe). Rendered in BOTH orientations for
+            consistency (QA round 8 fix #4); it's a dev-fixture name, so it's
+            kept visually subordinate (the MODEL caps label is dropped in
+            portrait to save width — the name alone is enough). */}
+        {activeModel ? (
           <View style={styles.modelChip}>
-            <Text style={styles.labelCaps}>MODEL</Text>
+            {!isPortrait && <Text style={styles.labelCaps}>MODEL</Text>}
             <Text style={styles.modelName} numberOfLines={1}>{activeModel}</Text>
           </View>
         ) : null}
@@ -171,10 +174,15 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
         <HealthChip compact={isPortrait} />
       </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
-        {/* FADE affordance — duration pills + fade-to-black / fade-up.
-            Hidden on portrait (same crowding posture as the MASTER label /
-            model chip); the master fader + drag is always available. */}
-        {!isPortrait && (
+        {/* FADE affordance — the GENTLE path down (and back up) must be
+            reachable in BOTH orientations (QA round 8 fix #2): without it,
+            portrait left only the HARD blackout cut as a way down.
+            Landscape shows the full duration-pill row; portrait collapses
+            the pills into one compact button that CYCLES through
+            FADE_SECONDS on tap (a dropdown would need a new menu surface and
+            more width than the narrow header has), keeping at least FADE +
+            TO BLACK reachable. */}
+        {!isPortrait ? (
           <View style={styles.fadeGroup}>
             <Text style={styles.labelCaps}>FADE</Text>
             <View style={styles.fadePills}>
@@ -216,13 +224,61 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
               <Text style={styles.fadeActionText}>UP</Text>
             </TouchableOpacity>
           </View>
+        ) : (
+          <View style={styles.fadeGroup}>
+            {/* Compact duration selector: tap to advance to the next
+                FADE_SECONDS value (wraps). Replaces the 4-pill row that
+                won't fit the portrait header. */}
+            <TouchableOpacity
+              onPress={() => {
+                const i = FADE_SECONDS.indexOf(fadeSeconds as (typeof FADE_SECONDS)[number]);
+                const next = FADE_SECONDS[(i + 1) % FADE_SECONDS.length];
+                setFadeSeconds(next);
+              }}
+              hitSlop={{ top: 14, bottom: 14, left: 6, right: 6 }}
+              style={[styles.fadePill, styles.fadePillSelected]}
+              accessibilityRole="button"
+              accessibilityLabel={`Fade duration ${fadeSeconds} seconds. Tap to change.`}
+            >
+              <Text style={[styles.fadePillText, styles.fadePillTextSelected]}>
+                {`${fadeSeconds}s`}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => runFade(0)}
+              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+              style={[styles.fadeAction, styles.fadeActionBlack]}
+              accessibilityRole="button"
+              accessibilityLabel={`Fade master to black over ${fadeSeconds} seconds`}
+            >
+              <Text style={styles.fadeActionText}>TO BLACK</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => runFade(1)}
+              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+              style={[styles.fadeAction, styles.fadeActionUp]}
+              accessibilityRole="button"
+              accessibilityLabel={`Fade master up over ${fadeSeconds} seconds`}
+            >
+              <Text style={styles.fadeActionText}>UP</Text>
+            </TouchableOpacity>
+          </View>
         )}
-        {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}
+        {/* MASTER label — ALWAYS rendered (both orientations). Portrait used
+            to drop it, leaving the fader as an unlabeled bare strip
+            (QA round 8 BLOCKER #1). */}
+        <Text style={styles.labelCaps}>MASTER</Text>
         <HorizontalFader
           value={master}
           onChange={handleMasterChange}
-          trackStyle={[styles.faderTrack, { width: 180 }]}
+          trackStyle={[styles.faderTrack, { width: isPortrait ? 120 : 180 }]}
           fillStyle={[styles.faderFill, fading && styles.faderFillFading]}
+          // Visible, grabbable THUMB (QA round 8 BLOCKER #1) — same pattern as
+          // the global hue fader. Without it the master is a full-width hot
+          // strip: a stray graze anywhere on the bar writes master and can
+          // drive the whole rig toward 0. The thumb gives the operator a
+          // deliberate handle to aim for.
+          thumbStyle={styles.faderThumb}
         />
         {/* FADING… hint — renders ONLY while a fade is in flight so the
             resting header has no layout shift. The master readout sits in
@@ -323,6 +379,20 @@ function makeStyles(C: Palette) {
       left: 0, top: 0, bottom: 0,
       backgroundColor: C.primaryFixedDim,
       borderRadius: 4,
+    },
+    // Grabbable master THUMB (QA round 8 BLOCKER #1) — same visual language
+    // as the global hue fader's thumb (lowest-surface block, ghost border).
+    // Sized to the 16pt track height so it isn't clipped by the track's
+    // overflow:hidden, and centred on the fill edge via translateX:-7.
+    faderThumb: {
+      position: 'absolute' as const,
+      top: 0, bottom: 0,
+      width: 14,
+      backgroundColor: C.surfaceContainerLowest,
+      borderRadius: 4,
+      borderWidth: 1,
+      borderColor: C.primary,
+      transform: [{ translateX: -7 }],
     },
     // While a timed fade is animating, tint the fill so the operator can
     // tell the bar is moving on its own (engine-driven) vs. their drag.

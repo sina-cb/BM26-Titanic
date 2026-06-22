@@ -151,7 +151,11 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase' }}>HUE</Text>
                 {matched ? <MatchedBadge cpcLabel={e.cpcLabel} /> : null}
               </View>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{(e.v0 ?? 0).toFixed(2)}</Text>
+              {/* QA round8 #3: HUE is an angle — show it in degrees ("°")
+                  to match the deck HUE row + ColorPickerModal (Math.round(v*360)°)
+                  instead of a bare normalized 0.00–1.00, which reads as a
+                  cryptic fraction next to the rest of the app's "°" hues. */}
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{Math.round((e.v0 ?? 0) * 360)}°</Text>
             </View>
             <HorizontalFader
               value={e.v0 ?? 0}

@@ -128,6 +128,27 @@ function patternDisplayName(pattern: string): string {
   return i >= 0 ? pattern.slice(i + 1) : pattern;
 }
 
+// Build the panel header title with ONE consistent separator + casing
+// pattern across every place this shared panel is mounted (deck, mixer
+// channel strips, deck overlays). Round-8 fix: the header drifted between
+// uses — "DECK MAIN - PLAYLIST" vs "CH 1 · PLAYLIST" — because callers
+// pass labels in varied shapes and some already embed their own separator
+// (the deck overlay passes "OVERLAY · MASK: PARS"). Normalize ANY of
+// `·`, `-`, `–`, `—`, or `/` separators in the incoming label to the
+// canonical " · " (spaced middot), uppercase the whole thing, then append
+// " · PLAYLIST". Result: a single glyph + casing rule everywhere.
+const HEADER_SEP = ' · ';
+function playlistHeaderTitle(channelLabel?: string): string {
+  if (!channelLabel) return 'PLAYLIST';
+  const normalized = channelLabel
+    .split(/\s*[·\-–—/]\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(HEADER_SEP)
+    .toUpperCase();
+  return `${normalized}${HEADER_SEP}PLAYLIST`;
+}
+
 export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce, playlistLibrary }) => {
   const C = usePalette();
   // playlistLibrary is currently consumed via the local `playlists`
@@ -1128,7 +1149,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           }}
           numberOfLines={1}
         >
-          {(channelLabel ? `${channelLabel.toUpperCase()} · ` : '') + 'PLAYLIST'}
+          {playlistHeaderTitle(channelLabel)}
         </Text>
         {showSaved && (
           <View
@@ -1435,6 +1456,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                         style={{
                           fontFamily: 'SpaceGrotesk_700Bold',
                           fontSize: sz.fontPrimary,
+                          lineHeight: sz.fontPrimary + 4,
                           color: isActive ? '#FFF' : C.text,
                           wordBreak: 'normal',
                         } as any}
@@ -1446,10 +1468,20 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       </Text>
                       {(e.label || paramCount > 0) && (
                         <Text
+                          // Sub-label ("N params" / source pattern). Round-8
+                          // contrast bump: was C.icon (outline-variant — too
+                          // faint to read on the playa). Stepped up to
+                          // C.secondary, which is one tone darker/more saturated
+                          // and reads as a deliberate caption. lineHeight pins
+                          // the baseline rhythm so every row has the same
+                          // title→sub-label gap (the prior default line-height
+                          // varied with the glyphs and looked unevenly spaced).
                           style={{
                             fontFamily: 'Inter_400Regular',
                             fontSize: sz.fontMicro,
-                            color: isActive ? 'rgba(255,255,255,0.7)' : C.icon,
+                            lineHeight: sz.fontMicro + 4,
+                            marginTop: 1,
+                            color: isActive ? 'rgba(255,255,255,0.85)' : C.secondary,
                             wordBreak: 'normal',
                           } as any}
                           numberOfLines={1}
@@ -1467,7 +1499,12 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       control to show (i.e. editable & not deck-edit-locked), so
                       read-only / show-mode rows stay single-line. */}
                   {editable && !(role === 'deck' && playlistEditsLocked) && (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
+                    {/* Reorder chevrons — lowest-weight glyph-only controls so
+                        they recede behind the track name. Tinted to the muted
+                        icon color (not primary) so the row-action cluster
+                        doesn't compete with the title for attention (round-8
+                        hierarchy fix). */}
                     {(
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 0, marginRight: 'auto' }}>
                       <TouchableOpacity
@@ -1486,8 +1523,8 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       >
                         <IconSymbol
                           name="chevron.up"
-                          size={sz.fontPrimary + 2}
-                          color={isActive ? '#FFF' : C.primary}
+                          size={sz.fontPrimary}
+                          color={isActive ? 'rgba(255,255,255,0.8)' : C.icon}
                         />
                       </TouchableOpacity>
                       <TouchableOpacity
@@ -1506,30 +1543,43 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       >
                         <IconSymbol
                           name="chevron.down"
-                          size={sz.fontPrimary + 2}
-                          color={isActive ? '#FFF' : C.primary}
+                          size={sz.fontPrimary}
+                          color={isActive ? 'rgba(255,255,255,0.8)' : C.icon}
                         />
                       </TouchableOpacity>
                     </View>
                     )}
-                  {/* Per-entry HOLD / LOOP toggles (#12). Same editable +
-                      playlist-edits-lock guard as the reorder chevrons.
-                      hold = park autopilot on this entry until released by
-                      a manual tap; loop = repeat this entry (overrides
-                      shuffle). Compact "H"/"L" chrome, >= 44pt tap target
-                      via hitSlop. Honored by the DECK autopilot only —
-                      inert (but persisted) on mixer overlays. */}
+                  {/* Per-entry HOLD / LOOP toggles (#12). H = HOLD, L = LOOP
+                      (deck-autopilot). Grouped together (gap:0, shared rounded
+                      pill outline) so they read as ONE paired toggle group,
+                      visually distinct from the destructive remove which is
+                      separated to the right. Same editable + playlist-edits-
+                      lock guard as the reorder chevrons. hold = park autopilot
+                      on this entry until released by a manual tap; loop =
+                      repeat this entry (overrides shuffle). >= 44pt tap target
+                      via hitSlop. Honored by the DECK autopilot only — inert
+                      (but persisted) on mixer overlays. */}
                   {(
-                    <>
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 0,
+                        borderRadius: 5,
+                        borderWidth: 1,
+                        borderColor: isActive ? 'rgba(255,255,255,0.35)' : C.ghostBorder,
+                        overflow: 'hidden',
+                      }}
+                      accessibilityRole="radiogroup"
+                    >
                       <TouchableOpacity
                         onPress={() => handleToggleEntryFlag(e.id, 'hold')}
-                        hitSlop={{ top: 11, bottom: 11, left: 6, right: 6 }}
+                        hitSlop={{ top: 11, bottom: 11, left: 6, right: 4 }}
                         style={{
-                          width: sz.btnH - 4,
+                          width: sz.btnH - 6,
                           height: sz.btnH - 4,
-                          borderRadius: 4,
-                          borderWidth: 1,
-                          borderColor: e.hold ? C.primary : C.ghostBorder,
+                          borderRightWidth: 1,
+                          borderRightColor: isActive ? 'rgba(255,255,255,0.35)' : C.ghostBorder,
                           backgroundColor: e.hold ? C.primaryContainer : 'transparent',
                           alignItems: 'center',
                           justifyContent: 'center',
@@ -1545,13 +1595,10 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       </TouchableOpacity>
                       <TouchableOpacity
                         onPress={() => handleToggleEntryFlag(e.id, 'loop')}
-                        hitSlop={{ top: 11, bottom: 11, left: 6, right: 6 }}
+                        hitSlop={{ top: 11, bottom: 11, left: 4, right: 6 }}
                         style={{
-                          width: sz.btnH - 4,
+                          width: sz.btnH - 6,
                           height: sz.btnH - 4,
-                          borderRadius: 4,
-                          borderWidth: 1,
-                          borderColor: e.loop ? C.primary : C.ghostBorder,
                           backgroundColor: e.loop ? C.primaryContainer : 'transparent',
                           alignItems: 'center',
                           justifyContent: 'center',
@@ -1565,32 +1612,33 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                           color: e.loop ? C.primary : (isActive ? 'rgba(255,255,255,0.7)' : C.icon),
                         }}>L</Text>
                       </TouchableOpacity>
-                    </>
+                    </View>
                   )}
                   {(
                     <TouchableOpacity
                       onPress={() => requestRemoveEntry(e.id)}
-                      // Destructive remove: spaced away from the H/L
-                      // neighbours (marginLeft gap) and given a visible
-                      // error-tinted box so it reads as "delete" and is
-                      // hard to mis-tap from the adjacent toggle on a
-                      // moving art car. Still >= 44pt tap area via hitSlop.
+                      // Destructive remove — round-8 fix: red on EVERY row was
+                      // a hierarchy inversion (the stop/delete semantic screamed
+                      // down the whole list, competing with track names). Now
+                      // it's a NEUTRAL grey glyph by default — no outline, no
+                      // fill — so the row chrome recedes and the track name
+                      // dominates. The remove only takes on its destructive
+                      // identity at the confirm sheet (which is already armed
+                      // by requestRemoveEntry). Separated from the H/L group so
+                      // it can't be mistaken for a toggle on a moving art car.
+                      // Still >= 44pt tap area via hitSlop.
                       hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                       style={{
-                        width: sz.btnH,
+                        width: sz.btnH - 6,
                         height: sz.btnH - 4,
-                        marginLeft: 8,
                         borderRadius: 4,
-                        borderWidth: 1,
-                        borderColor: isActive ? 'rgba(255,255,255,0.5)' : C.error,
-                        backgroundColor: isActive ? 'rgba(255,255,255,0.12)' : 'transparent',
                         alignItems: 'center',
                         justifyContent: 'center',
                       }}
                       accessibilityLabel={`Remove ${e.pattern} from playlist`}
                       accessibilityRole="button"
                     >
-                      <Text style={{ color: isActive ? '#FFF' : C.error, fontWeight: 'bold', fontSize: sz.fontPrimary }}>−</Text>
+                      <Text style={{ color: isActive ? 'rgba(255,255,255,0.8)' : C.icon, fontWeight: 'bold', fontSize: sz.fontPrimary + 2 }}>−</Text>
                     </TouchableOpacity>
                   )}
                   </View>
@@ -1888,17 +1936,43 @@ const SwapPlaylistModal: React.FC<SwapPlaylistModalProps> = ({
             Round-3 fix: previously the card shrank to ~116pt and the single
             `default (current)` row was clipped + faded at the bottom border. */}
         <View style={[modalStyles.card, { maxHeight: '70%' }]}>
-          <Text style={modalStyles.title}>HOT SWAP PLAYLIST</Text>
+          {/* Header row: title + explicit Close (✕). Round-8 fix: the picker
+              previously had NO close affordance, forcing dismiss-by-guessing-
+              the-backdrop. A labelled ✕ in the top-right makes dismissal
+              obvious without removing the backdrop-tap shortcut. */}
+          <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+            <Text style={[modalStyles.title, { flex: 1, marginBottom: 0 }]}>HOT SWAP PLAYLIST</Text>
+            <TouchableOpacity
+              onPress={onClose}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={{
+                width: 28, height: 28, borderRadius: 6, borderWidth: 1,
+                borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerHigh,
+                alignItems: 'center', justifyContent: 'center',
+              }}
+              accessibilityLabel="Close hot-swap picker"
+              accessibilityRole="button"
+            >
+              <Text style={{ color: C.text, fontSize: 14, fontFamily: 'SpaceGrotesk_700Bold' }}>✕</Text>
+            </TouchableOpacity>
+          </View>
           <Text style={{ color: C.icon, fontFamily: 'Inter_400Regular', fontSize: 11, marginBottom: 10, lineHeight: 15 }}>
             {role === 'deck'
               ? 'Pick a different playlist to crossfade onto. It transitions to that playlist’s first usable entry, riding the active transition.'
               : 'Pick a different playlist to switch onto. It loads that playlist’s first usable entry instantly (no crossfade).'}
           </Text>
-          <PlaylistFilterBar
-            C={C}
-            query={query}
-            setQuery={setQuery}
-          />
+          {/* The search box is only useful when there's something to search.
+              When the library has ≤1 playlist (only the current channel
+              assignment, or none yet), there are no OTHER playlists to filter,
+              so the field is dead chrome — hide it and let the empty state
+              below carry the message. Round-8 fix: "dead search box". */}
+          {swappable.length > 0 && (
+            <PlaylistFilterBar
+              C={C}
+              query={query}
+              setQuery={setQuery}
+            />
+          )}
           {/* flex:1 so the list fills the card's remaining height; minHeight
               guarantees ~4 rows are visible even with a single playlist so the
               picker is never a clipped sliver. The current-playlist row, the
@@ -1922,7 +1996,7 @@ const SwapPlaylistModal: React.FC<SwapPlaylistModalProps> = ({
                   • library not yet loaded (playlists empty AND no current
                     assignment): we're mid-fetch → show a "loading…" row.
                   • library loaded but only the current playlist exists: show
-                    the explicit "no other playlists" message.
+                    the actionable "create one to enable hot-swap" message.
                   • library loaded with others but the search filtered them
                     all out: show a "no match" message.
                 One of these always renders when `others` is empty, so the
@@ -1937,8 +2011,8 @@ const SwapPlaylistModal: React.FC<SwapPlaylistModalProps> = ({
                   No playlists match the current filter.
                 </Text>
               ) : (
-                <Text style={{ color: C.icon, fontStyle: 'italic', fontSize: 11 }}>
-                  No other playlists to swap to.
+                <Text style={{ color: C.icon, fontStyle: 'italic', fontSize: 11, lineHeight: 15 }}>
+                  No other playlists to swap to — create one to enable hot-swap.
                 </Text>
               )
             )}

@@ -25,6 +25,8 @@ import {
   type MixerChannel,
 } from '@/utils/api';
 import { setChannelFaderMax, setChannelColor } from '@/utils/channelExtrasApi';
+import { panicMixer } from '@/utils/channelOpsApi';
+import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { setDeckFocus } from '@/utils/deckFocusApi';
 import { DeckOverlayStack } from '@/components/DeckOverlayStack';
 import type { DeckOverlay, DeckOverlayAutopilot } from '@/utils/deckOverlaysApi';
@@ -487,6 +489,42 @@ export default function ControlDeckScreen() {
     return (typeof name === 'string' && name.length) ? name : id.slice(0, 8);
   }, [cueOverlays]);
 
+  // ── PANIC / HOME (docs/39 §6b #9) — mission-critical safe LIT reset ─────
+  // Mirrors the mixer tab's PANIC tile (same panicMixer api + ConfirmSheet
+  // gating). Previously the deck had NO panic, so recovery forced an
+  // operator to switch to the mixer tab mid-emergency. It cancels in-flight
+  // fades / transitions / deck swaps, clears blackout, brings the master up,
+  // and recalls the `home` look (or a safe LIT default). The engine
+  // broadcasts fresh state — every control on this tab reconciles from those.
+  // Fail loud: a malformed/over-cap `home` is the ONE sanctioned loud
+  // fallback (400, but the rig is STILL lit) and we Alert so the operator
+  // knows while reassuring them the exterior stays lit.
+  const [panicPrompt, setPanicPrompt] = useState(false);
+  const [panicBusy, setPanicBusy] = useState(false);
+  const confirmPanic = useCallback(async () => {
+    setPanicPrompt(false);
+    setPanicBusy(true);
+    try {
+      const res = await panicMixer(true);
+      if (!res.ok) {
+        console.error('[Deck] Panic reported a loud fallback:', res.error, res.data);
+        const rigLit = (res.data as any)?.rigLit === true;
+        Alert.alert(
+          'Panic — home look not loaded',
+          `${res.error || 'The "home" snapshot could not be recalled.'} `
+            + (rigLit
+              ? 'The rig is still LIT (blackout cleared, master up).'
+              : 'Check the engine and re-run panic.'),
+        );
+      }
+    } catch (err: any) {
+      console.error('[Deck] Panic request failed:', err);
+      Alert.alert('Panic failed', `Could not reach the engine. ${err?.message || ''}`.trim());
+    } finally {
+      setPanicBusy(false);
+    }
+  }, []);
+
   const triggerChannelControl = (_channelId: string, id: number, v0: number, v1?: number, v2?: number) => {
     // Deck tab only ever writes to the deck channel — there's a single
     // dedicated route for that now. We ignore the channelId arg (kept
@@ -503,8 +541,11 @@ export default function ControlDeckScreen() {
       {/* ── Channel Preview Visualization ───────────────────────────── */}
       <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4, minHeight: 44 }}>
+          {/* QA round8 #7: the solid bar below read ambiguously. Label it
+              like the mixer's "MASTER OUTPUT" convention so it's clear this
+              strip is the deck's live output preview. */}
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: C.icon }}>
-            DECK MAIN
+            DECK MAIN · LIVE OUTPUT
           </Text>
           {/* ── Cue-to-deck (docs/39 §F-cue) ──────────────────────────
               Audition a mixer overlay on this preview buffer at 100% before
@@ -595,7 +636,12 @@ export default function ControlDeckScreen() {
 
         {/* Right Pane - Parameters & Macros (autopilot + channel exports) */}
         <View style={[globalStyles.rightPane, { padding: 0 }]}>
-          <ScrollView contentContainerStyle={{ padding: 48, paddingBottom: 96 }} showsVerticalScrollIndicator={false}>
+          {/* Padding tightened from 48 → 16 (QA round8 #1): the old 48px
+              gutter plus the cards' inner paddingRight:24 wasted ~72px of the
+              right pane's width, forcing the AUTOPILOT / OVERLAYS pill bars
+              into horizontal scroll. paddingBottom keeps the last card clear
+              of the bottom GLOBAL EFFECTS bar (its intrinsic height ~58px). */}
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
             {/* Offline Banner (right pane) */}
             {isConnected === false && (
               <OfflineBanner error={connectionError} />
@@ -692,7 +738,7 @@ export default function ControlDeckScreen() {
             {/* Channel parameters for the deck (base) channel. The deck is
                 hard-wired to the base channel; CaptainPad's MIXER tab is
                 where multi-channel routing lives. */}
-            <View style={{ gap: 24, paddingRight: 24 }}>
+            <View style={{ gap: 24 }}>
               {(deckChannel ? [deckChannel] : []).map((channel) => {
                 const channelTitle = "DECK MAIN";
                 const exports = channel.exports || [];
@@ -787,8 +833,12 @@ export default function ControlDeckScreen() {
                       </TouchableOpacity>
                     </View>
 
-                    <View style={{ marginBottom: 16 }}>
-                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, marginBottom: 16, textTransform: 'uppercase' }}>PARAMETERS</Text>
+                    {/* QA round8 #3: the PARAMETERS section spent ~32px of
+                        chrome (16 label margin + 16 section margin) on a single
+                        slider. Tightened both to 6 so the header rides compactly
+                        — mirrors the AUTOPILOT card's tight header pattern. */}
+                    <View style={{ marginBottom: 6 }}>
+                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, marginBottom: 6, textTransform: 'uppercase' }}>PARAMETERS</Text>
                       <GlobalParams variant="deck" channelId={channel.id} exports={exports} />
                     </View>
 
@@ -799,7 +849,7 @@ export default function ControlDeckScreen() {
                         field, forced open to 1.0 once at mount (see the seed's
                         capClearedRef one-shot). Mirrors the already-removed
                         mixer-strip CAP row. */}
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 16, gap: 8 }}>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 8, gap: 8 }}>
                       {toggles.map((e: any) => (
                         <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => triggerChannelControl(channel.id, id, v)} />
                       ))}
@@ -822,14 +872,39 @@ export default function ControlDeckScreen() {
           into the narrow left playlist column (QA round2 deck fix). The
           two-pane `container` above is flex:1 so it fills the space above
           this bar and its right pane scrolls independently; this bar is
-          intrinsic-height so it never overlaps or gets cut off. The deck
-          has no PANIC control (that's a mixer-only safe-reset), so unlike
-          the mixer's bottom bar there is no PANIC button beside it. The
+          intrinsic-height so it never overlaps or gets cut off. The PANIC
+          (safe-lit recovery) tile mirrors the mixer's bottom-bar PANIC so an
+          operator never has to switch tabs mid-emergency (QA round8 #2). The
           HUE shifter is omitted by the strip variant itself (it has its
           own deck-grid placement) — see GlobalEffectMacros `mixer-strip`. */}
       <View style={[styles.globalRigBar, { backgroundColor: C.surfaceContainerLow, borderTopColor: C.ghostBorder }]}>
+        {/* PANIC / HOME (docs/39 §6b #9) — same panicMixer handler + ConfirmSheet
+            gating as the mixer tab. Distinct AMBER so it reads as the rig's "get
+            me back to safe" button, visually separate from the GEM grid + the
+            e-stop BLACKOUT inside it. */}
+        <TouchableOpacity
+          style={[styles.panicBtn, panicBusy && { opacity: 0.5 }]}
+          onPress={() => setPanicPrompt(true)}
+          disabled={panicBusy}
+          accessibilityRole="button"
+          accessibilityLabel="Panic — reset rig to a safe lit state"
+          accessibilityState={{ disabled: panicBusy }}
+        >
+          <Text style={styles.panicBtnText}>{panicBusy ? 'PANIC…' : 'PANIC'}</Text>
+          <Text style={styles.panicBtnHint}>HOME / SAFE LIT</Text>
+        </TouchableOpacity>
         <RigGlobals variant="mixer" />
       </View>
+      {/* ── Panic / Home confirmation (docs/39 §6b #9) ──────────────── */}
+      <ConfirmSheet
+        visible={panicPrompt}
+        title="Panic to safe state?"
+        message={'Resets the rig to a safe LIT state: cancels in-flight fades, transitions and deck swaps, clears solo, un-mutes groups, brings the master up, and clears blackout. Recalls the "home" look if one is saved, otherwise a safe default. The exterior stays lit throughout.'}
+        confirmLabel="PANIC"
+        cancelLabel="CANCEL"
+        onConfirm={confirmPanic}
+        onCancel={() => setPanicPrompt(false)}
+      />
       {/* D6: floating ALL MODULATIONS overlay — rendered at the screen
           level so it draws above every card. */}
       <AllModulationsPanel
@@ -949,6 +1024,38 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     flexDirection: 'row',
     alignItems: 'stretch',
+  },
+  // PANIC / HOME (docs/39 §6b #9) — deck mirror of the mixer tab's panicBtn.
+  // AMBER literals (matched to mixer.tsx) so it reads as the rig's
+  // mission-critical "back to safe" action, distinct from the teal GEM grid
+  // and the red BLACKOUT e-stop inside it. Pinned at the left of the bottom
+  // bar where the operator's thumb can find it. Min 44pt touch target.
+  panicBtn: {
+    minWidth: 96,
+    minHeight: 52,
+    paddingHorizontal: 14,
+    marginRight: 10,
+    borderRadius: 8,
+    backgroundColor: 'rgba(245,166,35,0.18)',
+    borderWidth: 1.5,
+    borderColor: '#F5A623',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'stretch',
+  },
+  panicBtnText: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 14,
+    letterSpacing: 1.2,
+    color: '#F5A623',
+  },
+  panicBtnHint: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 8,
+    letterSpacing: 0.6,
+    color: '#F5A623',
+    opacity: 0.8,
+    marginTop: 1,
   },
   deckSwatchBtn: {
     width: 44, height: 44, borderRadius: 8,

@@ -384,9 +384,14 @@ export function DeckTransitionControls({
         />
       ) : (
         <View style={{ paddingVertical: 6 }}>
+          {/* QA round8 #6: the disabled treatment used C.icon (the faint
+              outline-variant token) which dropped below the contrast floor and
+              read as a rendering artifact. Use C.secondary — a dim-but-legible
+              disabled token — for both the label and the hint so the OFF state
+              reads as intentional, not broken. */}
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.2,
-            color: C.icon, marginBottom: 3, textTransform: 'uppercase',
+            color: C.secondary, marginBottom: 3, textTransform: 'uppercase',
           }}>
             CROSSFADE TIME
           </Text>
@@ -410,18 +415,23 @@ export function DeckTransitionControls({
         style={{
           flexDirection: 'row', alignItems: 'center', gap: 8,
           paddingHorizontal: 8, paddingVertical: 6,
-          opacity: enabled ? 1 : 0.5,
+          // QA round8 #6: the old 0.5 opacity on the disabled row dropped it
+          // below the contrast floor and read as an artifact. Lift to 0.8 so
+          // it stays clearly readable (dim, but intentional) when DECK TX is
+          // OFF; the colors below also use C.secondary instead of the faint
+          // C.icon for the same reason.
+          opacity: enabled ? 1 : 0.8,
         }}
         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       >
-        <IconSymbol name="shuffle" size={14} color={shuffle ? C.primary : C.icon} />
+        <IconSymbol name="shuffle" size={14} color={shuffle ? C.primary : C.secondary} />
         {/* QA #9: the full caption was clipped to an unreadable
             "…STYLE — …DROP MAP" in the narrow portrait column. Let it wrap
             (flex + no truncation) so the whole label stays legible. */}
         <Text style={{
           flex: 1,
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-          color: shuffle ? C.primary : C.icon, letterSpacing: 0.5,
+          color: shuffle ? C.primary : C.secondary, letterSpacing: 0.5,
         }}>
           SHUFFLE STYLE — RANDOMIZE EACH SWAP
         </Text>

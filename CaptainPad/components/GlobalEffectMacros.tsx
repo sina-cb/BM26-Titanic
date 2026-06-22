@@ -599,7 +599,11 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         <Text style={{ color: C.error, fontSize: 10, marginBottom: 4 }}>{error}</Text>
       ) : null}
       {(() => {
-        const renderCell = (slot: GlobalEffectSlotStatus) => {
+        // `minWidth` (set only for the portrait scroll strip) switches a
+        // chip from flex:1 (share the bar width) to a fixed minWidth so it
+        // can render a full 2-line label instead of being squeezed to a
+        // mid-word-chopping ~70px (QA round7 BLOCKER).
+        const renderCell = (slot: GlobalEffectSlotStatus, minWidth?: number) => {
           const slotId = slot.slotId as number;
           const isEmpty = !slot.effectId;
           if (isEmpty) {
@@ -608,6 +612,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
                 key={slotId}
                 slotId={slotId}
                 height={btnHeight}
+                minWidth={minWidth}
                 onPress={() => onPressEmpty(slotId)}
               />
             );
@@ -621,6 +626,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
               isOn={!!isOn}
               height={btnHeight}
               fontSize={btnFont}
+              minWidth={minWidth}
               onPress={() => onPressSlot(slot)}
               onEdit={() => onPressEdit(slotId)}
             />
@@ -628,19 +634,61 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         };
 
         if (isStrip) {
-          const stripCells: React.ReactNode[] = [
-            ...visibleSlots.map(renderCell),
-            <InvertButton key="invert" invert={invert} height={btnHeight} fontSize={btnFont} onPress={onPressInvert} />,
-            <BlackoutButton key="blackout" blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} />,
-          ];
-          // ONE flat row in BOTH orientations (operator request 2026-06-22):
-          // every cell is flex:1 so the 8 controls share the full bar width on
-          // a single line. Portrait chips are narrower but TALLER (btnHeight
-          // 60px) so a 2-line wrapped label still fits without truncation;
-          // Blackout stays the last cell, bottom-right.
+          // The 8 slot chips. In LANDSCAPE they flex:1 to fill the bar
+          // (plenty of width per chip — labels already fit, QA round7).
+          // In PORTRAIT the bar is far too narrow for 10 cells: at flex:1
+          // every chip squeezed to ~70px and the 2-word labels chopped
+          // mid-word ("Vint ag…", "Ghos t …" — QA round7 BLOCKER). So in
+          // portrait we drop the flex, give each chip a real minWidth
+          // (~96px), and let the WHOLE row scroll horizontally — the
+          // operator swipes the strip instead of reading mangled stubs. The
+          // minWidth (96px) gives a 2-line label ("Vintage\nWhite",
+          // "Iceberg\nFlash") room to render in full.
+          const SLOT_MIN_WIDTH = 96;
+          const slotChips = visibleSlots.map((slot) =>
+            renderCell(slot, isPortrait ? SLOT_MIN_WIDTH : undefined),
+          );
+          // Invert + Blackout get FIXED widths so they never shrink — the
+          // e-stop must keep a stable, recognisable footprint regardless of
+          // orientation or how many slots are bound.
+          const invertCell = (
+            <InvertButton key="invert" invert={invert} height={btnHeight} fontSize={btnFont} onPress={onPressInvert} fixedWidth={isPortrait ? 78 : undefined} />
+          );
+          const blackoutCell = (
+            <BlackoutButton key="blackout" blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} fixedWidth={isPortrait ? 96 : 112} />
+          );
+          // A small divider/gap separates the destructive BLACKOUT e-stop
+          // from the slot grid so it never reads as "just another slot"
+          // (QA round7 MAJOR). Invert sits with the slots (non-destructive);
+          // the divider is between Invert and Blackout.
+          const Divider = (
+            <View key="divider" style={{ width: 1, alignSelf: 'stretch', marginHorizontal: 4, backgroundColor: C.ghostBorder }} />
+          );
+
+          if (isPortrait) {
+            // ONE row, horizontally scrollable. Slots scroll; Invert +
+            // divider + Blackout are pinned in the scroll content at the end
+            // (operator requirement: keep it a single row — no wrap).
+            return (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator
+                contentContainerStyle={{ flexDirection: 'row', alignItems: 'center', gap, paddingRight: 2 }}
+              >
+                {slotChips}
+                {invertCell}
+                {Divider}
+                {blackoutCell}
+              </ScrollView>
+            );
+          }
+          // Landscape: ONE flat flex row, no scroll — the bar is wide enough.
           return (
-            <View style={{ flexDirection: 'row', gap }}>
-              {stripCells}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap }}>
+              {slotChips}
+              {invertCell}
+              {Divider}
+              {blackoutCell}
             </View>
           );
         }
@@ -651,7 +699,9 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         // truncated the bottom-row labels (QA round1 #1). INVERT and BLACKOUT
         // are the last two cells so the destructive e-stop stays bottom-right.
         const cells: React.ReactNode[] = [
-          ...visibleSlots.map(renderCell),
+          // NB: wrap in an arrow so Array.map's index arg is never passed as
+          // `minWidth` — the deck grid wants flex:1 cells (minWidth undefined).
+          ...visibleSlots.map((slot) => renderCell(slot)),
           <InvertButton key="invert" invert={invert} height={btnHeight} fontSize={btnFont} onPress={onPressInvert} />,
           <BlackoutButton key="blackout" blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} />,
         ];
@@ -779,22 +829,22 @@ const Header: React.FC<{ variant: 'deck' | 'mixer-strip' }> = ({ variant }) => {
 //     complaint). The tier shows as a tiny coloured dot in the
 //     top-left corner instead, so the operator still has the
 //     "this preset is dangerous" cue at a glance.
-// Width reserved to the RIGHT of a bound slot's centred label so the text
-// clears the ⋯ edit affordance (a 14px chip pinned top-right). QA round3:
-// previously applied SYMMETRICALLY (paddingLeft AND paddingRight = 18) which
-// burned ~36px on a ~90px chip and forced the ellipsis truncation. It is now
-// right-ONLY (the ⋯ only lives on the right) and smaller, so the label keeps
-// nearly the full chip width and can render its real-font wrapped name.
-const EDIT_AFFORDANCE_GUTTER = 12;
+// QA round7: the ⋯ edit affordance moved to the BOTTOM-right corner (out of
+// the centred label's text band), so the label no longer reserves any
+// right-side gutter — it uses the full chip width and wraps cleanly to 2
+// lines. (The old EDIT_AFFORDANCE_GUTTER constant was removed with that fix.)
 
 const SlotButton: React.FC<{
   slot: GlobalEffectSlotStatus;
   isOn: boolean;
   height: number;
   fontSize: number;
+  // When set, the chip uses a fixed minWidth (portrait scroll strip) so a
+  // full 2-line label fits; otherwise it flex:1's to share the bar width.
+  minWidth?: number;
   onPress: () => void;
   onEdit: () => void;
-}> = ({ slot, isOn, height, fontSize, onPress, onEdit }) => {
+}> = ({ slot, isOn, height, fontSize, minWidth, onPress, onEdit }) => {
   const C = usePalette();
   const isMomentary = slot.behavior === 'trigger' || slot.behavior === 'burst';
   const [ackAt, setAckAt] = useState<number | null>(null);
@@ -818,8 +868,13 @@ const SlotButton: React.FC<{
       : C.surfaceContainerHigh;
   const fg = showOn ? '#FFF' : C.text;
 
+  // flex:1 (share the bar) vs. fixed minWidth + flexGrow:0 (portrait scroll
+  // strip — the chip must keep a width that fits its full label).
+  const sizing = minWidth !== undefined
+    ? { width: minWidth, minWidth, flexGrow: 0, flexShrink: 0 }
+    : { flex: 1 };
   return (
-    <View style={{ flex: 1, height, position: 'relative' }}>
+    <View style={{ ...sizing, height, position: 'relative' }}>
       <TouchableOpacity
         onPress={onPressInternal}
         // activeOpacity:1 + no transition → no press-time fade and no
@@ -844,15 +899,16 @@ const SlotButton: React.FC<{
       >
         <Text
           numberOfLines={2}
-          ellipsizeMode="clip"
-          // QA round3: NO `adjustsFontSizeToFit` — it is a no-op on
-          // react-native-web, so it never shrank the font and the label just
-          // truncated to a 1-2 char ellipsis stub. We now ship a real fit font
-          // (see `btnFont`, smaller in portrait) and wrap to 2 lines with no
-          // ellipsis (ellipsizeMode="clip"). The right-only gutter clears the
-          // ⋯ chip; the label stays effectively centred because only the right
-          // edge is reserved and the text is short relative to chip width.
-          style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, textAlign: 'center', letterSpacing: 0.3, paddingRight: EDIT_AFFORDANCE_GUTTER }}
+          ellipsizeMode="tail"
+          // QA round7: ellipsizeMode is "tail" (was "clip") so any residual
+          // overflow is a clean trailing "…" at a word boundary — never a
+          // mid-word chop like "Vint ag…". With the portrait scroll strip
+          // giving each chip a real minWidth (~96px) the 2-word labels now
+          // wrap to two full lines and don't overflow at all; "tail" is just
+          // the safety net. The ⋯ edit chip lives in the BOTTOM-right corner
+          // (out of the centred label's band), so the label no longer needs a
+          // right-side gutter and keeps the full chip width.
+          style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, textAlign: 'center', letterSpacing: 0.3 }}
         >
           {slot.label}
         </Text>
@@ -863,21 +919,26 @@ const SlotButton: React.FC<{
         hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
         accessibilityLabel={`Edit slot ${slot.slotId}`}
         style={{
-          // QA round3: smaller (14px) + tucked tighter into the corner so it
-          // never sits over the first line of the centred label. The label's
-          // right-only gutter (EDIT_AFFORDANCE_GUTTER) reserves clearance for
-          // exactly this chip.
-          position: 'absolute', top: 1, right: 1,
-          width: 14, height: 14, borderRadius: 7,
-          backgroundColor: showOn ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.04)',
+          // QA round7: MOVED to the BOTTOM-right corner (was top-right, where
+          // it overlapped the first line of the centred 2-line label). The
+          // label is now vertically centred, so the bottom corner is clear of
+          // its text band. Raised contrast (visible chip background + bolder
+          // glyph colour) and a touch larger (16px) so the edit affordance is
+          // legible, while staying small enough that it never steals label
+          // width (no gutter reserved on the label any more).
+          position: 'absolute', bottom: 1, right: 1,
+          width: 16, height: 16, borderRadius: 8,
+          backgroundColor: showOn ? 'rgba(255,255,255,0.28)' : C.surfaceContainerLowest,
+          borderWidth: 1,
+          borderColor: showOn ? 'transparent' : C.ghostBorder,
           alignItems: 'center', justifyContent: 'center',
         }}
       >
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold',
-          fontSize: 9,
-          color: showOn ? '#FFF' : C.secondary,
-          lineHeight: 9,
+          fontSize: 11,
+          color: showOn ? '#FFF' : C.text,
+          lineHeight: 11,
         }}>⋯</Text>
       </TouchableOpacity>
     </View>
@@ -890,23 +951,36 @@ const SlotButton: React.FC<{
 // extra info. Safety tiers are still exposed via the slot status'
 // `safetyTier` field for HIL tests and future telemetry.)
 
-// Empty slot cell — single full-cell tap opens the swap sheet. Visually
-// distinct (dashed border, faded fill, big +) so the operator knows
-// they're staring at an unbound slot.
+// Empty slot cell — single full-cell tap opens the swap sheet.
+//
+// QA round7 MAJOR: empty slots used `surfaceContainerLowest` (pure WHITE in
+// the light theme) which made the UNBOUND placeholders the BRIGHTEST tiles in
+// the strip — out-contrasting the real bound effects they're meant to sit
+// behind. They are now RECESSED: filled with `surfaceDim` (a notch BELOW the
+// bar background so the cell reads as a depression, not a raised chip), a
+// subtle dashed ghost border, and a DIM centred "+" in the muted icon colour.
+// Bound effect chips are now the clear visual foreground; an empty slot reads
+// as an empty socket.
 const EmptySlotButton: React.FC<{
   slotId: number;
   height: number;
+  // Fixed minWidth for the portrait scroll strip (matches SlotButton);
+  // flex:1 otherwise so the cell shares the bar width.
+  minWidth?: number;
   onPress: () => void;
-}> = ({ slotId, height, onPress }) => {
+}> = ({ slotId, height, minWidth, onPress }) => {
   const C = usePalette();
+  const sizing = minWidth !== undefined
+    ? { width: minWidth, minWidth, flexGrow: 0, flexShrink: 0 }
+    : { flex: 1 };
   return (
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={1}
       accessibilityLabel={`Add effect to slot ${slotId}`}
       style={{
-        flex: 1, height, borderRadius: 6,
-        backgroundColor: C.surfaceContainerLowest,
+        ...sizing, height, borderRadius: 6,
+        backgroundColor: C.surfaceDim,
         borderWidth: 1,
         borderStyle: 'dashed',
         borderColor: C.ghostBorder,
@@ -914,7 +988,7 @@ const EmptySlotButton: React.FC<{
         ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
       }}
     >
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18, color: C.icon, lineHeight: 20 }}>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.icon, lineHeight: 18, opacity: 0.7 }}>
         +
       </Text>
     </TouchableOpacity>
@@ -925,29 +999,40 @@ const BlackoutButton: React.FC<{
   blackout: boolean;
   height: number;
   fontSize: number;
+  // Fixed width (set on the strip variants) so the e-stop keeps a stable,
+  // recognisable footprint and never shrinks below its slot neighbours.
+  fixedWidth?: number;
   onPress: () => void;
-}> = ({ blackout, height, fontSize, onPress }) => {
+}> = ({ blackout, height, fontSize, fixedWidth, onPress }) => {
   const C = usePalette();
-  // When OFF the cell is a flat ghost-bordered surface with red text
-  // (operator review May 2026: the always-on red border was reading
-  // as "this is constantly active / flashing"). When ON the entire
-  // cell becomes red — unambiguous e-stop state.
-  //
-  // Label casing (QA round1 #20): Title Case ("Blackout"/"Release") to match
-  // the slot chips — the destructive signal is the error-red fill + bold
-  // weight, NOT all-caps.
+  // QA round7 MAJOR: the OFF blackout cell was a flat ghost-bordered grey
+  // surface — it BLENDED into the slot grid and was hard to find in a hurry.
+  // The e-stop must be unmistakable at all times, so it now carries a
+  // PERSISTENT 2px red outline even when OFF (red text on a faint red-tinted
+  // surface), and a FULL red fill + white label when ON. The destructive
+  // signal is the error-red outline that is ALWAYS present — distinct from
+  // INVERT (non-destructive, tertiary accent) and from the slot chips (no red
+  // anywhere). Label is ALL CAPS "BLACKOUT" so it reads as a hard control,
+  // not a slot. Single-tap behaviour is unchanged (deliberate prior decision —
+  // no confirm/hold gate).
   const isOn = !!blackout;
-  const bg = isOn ? C.error : C.surfaceContainerHigh;
+  const bg = isOn ? C.error : C.errorContainer;
   const fg = isOn ? '#FFF' : C.error;
+  const sizing = fixedWidth !== undefined
+    ? { width: fixedWidth, minWidth: fixedWidth, flexGrow: 0, flexShrink: 0 }
+    : { flex: 1 };
   return (
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={1}
       style={{
-        flex: 1, height, paddingHorizontal: 6, borderRadius: 6,
+        ...sizing, height, paddingHorizontal: 6, borderRadius: 6,
         backgroundColor: bg,
-        borderWidth: 1,
-        borderColor: isOn ? 'transparent' : C.ghostBorder,
+        // Persistent red outline in BOTH states. When ON the fill is solid
+        // red so the border merges into it; when OFF the 2px error border is
+        // what makes the e-stop pop out of the grid.
+        borderWidth: 2,
+        borderColor: C.error,
         justifyContent: 'center', alignItems: 'center',
         ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
       }}
@@ -955,13 +1040,13 @@ const BlackoutButton: React.FC<{
     >
       <Text
         numberOfLines={1}
-        ellipsizeMode="clip"
-        // QA round3: dropped `adjustsFontSizeToFit` (no-op on web). "Blackout"
-        // / "Release" fit on one line at `fontSize` in every chip width; the
-        // e-stop label MUST stay fully legible, so no ellipsis.
+        ellipsizeMode="tail"
+        // The e-stop label MUST stay fully legible. "BLACKOUT" fits on one
+        // line at `fontSize` in the fixed-width cell; "tail" is a safety net
+        // only (never expected to trigger).
         style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, letterSpacing: 0.5 }}
       >
-        {isOn ? 'Release' : 'Blackout'}
+        BLACKOUT
       </Text>
     </TouchableOpacity>
   );
@@ -983,18 +1068,24 @@ const InvertButton: React.FC<{
   invert: boolean;
   height: number;
   fontSize: number;
+  // Fixed width (set on the strip variants) so INVERT keeps a stable footprint
+  // alongside the fixed-width BLACKOUT and never shrinks below its neighbours.
+  fixedWidth?: number;
   onPress: () => void;
-}> = ({ invert, height, fontSize, onPress }) => {
+}> = ({ invert, height, fontSize, fixedWidth, onPress }) => {
   const C = usePalette();
   const isOn = !!invert;
   const bg = isOn ? C.tertiary : C.surfaceContainerHigh;
   const fg = isOn ? '#FFF' : C.tertiary;
+  const sizing = fixedWidth !== undefined
+    ? { width: fixedWidth, minWidth: fixedWidth, flexGrow: 0, flexShrink: 0 }
+    : { flex: 1 };
   return (
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={1}
       style={{
-        flex: 1, height, paddingHorizontal: 6, borderRadius: 6,
+        ...sizing, height, paddingHorizontal: 6, borderRadius: 6,
         backgroundColor: bg,
         borderWidth: 1,
         borderColor: isOn ? 'transparent' : C.ghostBorder,
@@ -1005,9 +1096,10 @@ const InvertButton: React.FC<{
     >
       <Text
         numberOfLines={1}
-        ellipsizeMode="clip"
-        // QA round3: dropped `adjustsFontSizeToFit` (no-op on web). "Invert"
-        // fits on one line at `fontSize` in every chip width.
+        ellipsizeMode="tail"
+        // "Invert" fits on one line at `fontSize` in every chip width; "tail"
+        // is a safety net only. Title Case keeps INVERT visually distinct from
+        // the ALL-CAPS destructive BLACKOUT e-stop (QA round7).
         style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, letterSpacing: 0.5 }}
       >
         Invert

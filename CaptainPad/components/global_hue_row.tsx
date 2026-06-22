@@ -29,7 +29,7 @@
  * tall for a comfortable touch target; a live swatch previews the hue.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, Alert } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { fetchGlobals } from '@/utils/api';
 import { setGlobalHue } from '@/utils/channelExtrasApi';
@@ -109,6 +109,14 @@ export const GlobalHueRow: React.FC = () => {
     }
   }, []);
 
+  // QA round7: tap the degree readout to reset the hue to 0° ("no shift").
+  // Same wiring/endpoint as the fader — just a one-tap shortcut back to
+  // neutral. No-op if already at 0 to avoid a redundant POST.
+  const onResetDegrees = useCallback(() => {
+    if (Math.round(degrees) === 0) return;
+    onDegreesChange(0);
+  }, [degrees, onDegreesChange]);
+
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44, marginBottom: 6 }}>
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 40, letterSpacing: 0.5, textTransform: 'uppercase' }}>HUE</Text>
@@ -121,15 +129,30 @@ export const GlobalHueRow: React.FC = () => {
           onChange={(v: number) => onDegreesChange(Math.round(v * 360))}
           onDragStart={() => { hueDraggingRef.current = true; }}
           onRelease={() => { hueDraggingRef.current = false; }}
-          trackStyle={{ width: '100%', height: 12, backgroundColor: C.surfaceContainerHigh, borderRadius: 6, justifyContent: 'center' }}
+          // QA round7: at 0° the row read as "broken/empty". The track is a
+          // subtle FULL-WIDTH neutral bar (a 1px ghost border makes the empty
+          // track look intentional, not missing) and the thumb sits FULLY
+          // INSIDE the track's left edge at 0° so it clearly reads "no shift"
+          // rather than an unrendered control. (HorizontalFader clips its
+          // track with overflow:hidden, so the thumb's old translateX:-8 hid
+          // half of it off the left edge at 0° — dropping the negative offset
+          // keeps the whole thumb visible against the left edge.)
+          trackStyle={{ width: '100%', height: 12, backgroundColor: C.surfaceContainerHigh, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, justifyContent: 'center' }}
           fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 6 }}
-          thumbStyle={{ position: 'absolute', width: 16, height: 22, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -8 }] }}
+          thumbStyle={{ position: 'absolute', width: 14, height: 22, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.secondary }}
         />
       </View>
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, width: 40, textAlign: 'right' }}>{Math.round(degrees)}°</Text>
+      {/* Tap the degree readout to reset the hue to 0° ("no shift"). */}
+      <TouchableOpacity onPress={onResetDegrees} accessibilityLabel="Reset global hue to zero degrees" hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, width: 40, textAlign: 'right' }}>{Math.round(degrees)}°</Text>
+      </TouchableOpacity>
+      {/* QA round7: the live-hue preview is now a CIRCLE (was a rounded
+          square that mimicked the destructive Blackout/Invert chips and
+          looked tappable). A circle reads as a non-interactive status dot,
+          not a button. */}
       <View
         style={{
-          width: 20, height: 20, borderRadius: 4, marginLeft: 8,
+          width: 18, height: 18, borderRadius: 9, marginLeft: 8,
           borderWidth: 1, borderColor: C.ghostBorder,
           backgroundColor: `hsl(${Math.round(degrees)}, 80%, 55%)`,
         }}

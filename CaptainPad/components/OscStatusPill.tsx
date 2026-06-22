@@ -35,7 +35,10 @@ import { useOscStatus, OscPillState } from '@/hooks/useEngineState';
 function makeStateStyles(C: Palette): Record<OscPillState['state'], { bg: string; fg: string; border: string }> {
   return {
     off:      { bg: C.surfaceContainerHigh, fg: C.secondary, border: C.ghostBorder },
-    idle:     { bg: '#fff3cd',              fg: '#7a5300',   border: '#e0b400' },
+    // idle is BENIGN (OSC mapped, no values flowing) — render it neutral, not
+    // amber. Amber is reserved for attention/armed (PANIC); amber-for-idle
+    // trained operators to ignore amber on a safety surface (QA R8).
+    idle:     { bg: C.surfaceContainerHigh, fg: C.secondary, border: C.ghostBorder },
     unmapped: { bg: '#f8d7da',              fg: '#842029',   border: C.error },
     live:     { bg: C.primaryContainer,     fg: '#003a44',   border: C.primary },
   };
