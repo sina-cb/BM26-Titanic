@@ -226,9 +226,15 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
           </View>
         ) : (
           <View style={styles.fadeGroup}>
-            {/* Compact duration selector: tap to advance to the next
+            <Text style={styles.labelCaps}>FADE</Text>
+            {/* Compact duration cycler: tap to advance to the next
                 FADE_SECONDS value (wraps). Replaces the 4-pill row that
-                won't fit the portrait header. */}
+                won't fit the portrait header. The trailing ▾ and the
+                accessibilityHint listing every preset make it read as a
+                value picker rather than an opaque one-off chip — the
+                operator can see other durations exist (QA round 10 fix #1).
+                A real popover menu would need a new overlay surface; the
+                cycler keeps the whole control in the header strip. */}
             <TouchableOpacity
               onPress={() => {
                 const i = FADE_SECONDS.indexOf(fadeSeconds as (typeof FADE_SECONDS)[number]);
@@ -236,12 +242,16 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
                 setFadeSeconds(next);
               }}
               hitSlop={{ top: 14, bottom: 14, left: 6, right: 6 }}
-              style={[styles.fadePill, styles.fadePillSelected]}
+              style={[styles.fadePill, styles.fadePillSelected, styles.fadePillCycler]}
               accessibilityRole="button"
-              accessibilityLabel={`Fade duration ${fadeSeconds} seconds. Tap to change.`}
+              accessibilityLabel={`Fade duration ${fadeSeconds} seconds`}
+              accessibilityHint={`Tap to cycle through ${FADE_SECONDS.map((s) => `${s}s`).join(', ')}`}
             >
               <Text style={[styles.fadePillText, styles.fadePillTextSelected]}>
                 {`${fadeSeconds}s`}
+              </Text>
+              <Text style={[styles.fadePillText, styles.fadePillTextSelected, styles.fadeCyclerCaret]}>
+                ▾
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -289,7 +299,11 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck' }: Props) {
         ) : (
           <Text style={[
             styles.displayMono,
-            { fontSize: 16, width: 36, textAlign: 'right' },
+            // marginLeft keeps the readout off the slider track/thumb so the
+            // leading digit never reads as touching the bar (QA round 10
+            // fix #2) — the resting-row `gap` (4pt in portrait) was too tight
+            // against the thumb. Matches the mixer-landscape master spacing.
+            { fontSize: 16, width: 36, textAlign: 'right', marginLeft: 8 },
             isPortrait && { fontSize: 14, width: 28 },
           ]}>
             {Math.round(master * 100)}
@@ -427,6 +441,17 @@ function makeStyles(C: Palette) {
       backgroundColor: C.primary,
       borderColor: C.primary,
     },
+    // Portrait cycler variant: lay the value + ▾ caret out in a row so the
+    // chip reads as a value picker, not a one-off label.
+    fadePillCycler: {
+      flexDirection: 'row' as const,
+      paddingHorizontal: 8,
+    },
+    // Small gap + slightly smaller caret so the ▾ trails the value cleanly.
+    fadeCyclerCaret: {
+      marginLeft: 3,
+      fontSize: 9,
+    },
     fadePillText: {
       fontFamily: 'SpaceGrotesk_700Bold',
       fontSize: 11,
@@ -469,6 +494,9 @@ function makeStyles(C: Palette) {
       color: C.tertiary,
       width: 44,
       textAlign: 'right' as const,
+      // Match the readout's left gap (fix #2) so swapping hint↔value keeps
+      // the same separation from the slider and the row geometry stays put.
+      marginLeft: 8,
     },
   };
 }

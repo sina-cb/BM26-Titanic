@@ -1363,6 +1363,30 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         )}
       </View>
 
+      {/* One-time legend for the cryptic per-row H / L pills (round-10
+          fix). The buttons stay single-letter to keep the dense 2-line
+          row compact; this caption — rendered once just above the list,
+          right where the eye lands before the rows — decodes them for
+          sighted operators. (Screen-reader users already get the full
+          "Set hold / Set loop" via each button's accessibilityLabel.)
+          Only shown when there ARE entries so an empty/loading panel
+          doesn't carry a dangling legend. */}
+      {playlist && playlist.entries.length > 0 && (
+        <Text
+          style={{
+            fontFamily: 'SpaceGrotesk_700Bold',
+            fontSize: sz.fontMicro,
+            color: C.secondary,
+            letterSpacing: 0.4,
+          }}
+          numberOfLines={1}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        >
+          H = HOLD · L = LOOP
+        </Text>
+      )}
+
       {/* ── Entry list (THE one and only pattern queue for this channel) ── */}
       {playlist ? (
         playlist.entries.length === 0 ? (

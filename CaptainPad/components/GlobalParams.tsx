@@ -167,18 +167,24 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
           </View>
         );
       })}
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 16, gap: 8 }}>
-        {toggles.map((e: any) => (
-          e.cpcOwned
-            ? <MatchedButton key={`toggle-${e.id}`} name={e.name} cpcLabel={e.cpcLabel} />
-            : <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => writeLocal(id, v)} />
-        ))}
-        {triggers.map((e: any) => (
-          e.cpcOwned
-            ? <MatchedButton key={`trigger-${e.id}`} name={e.name} cpcLabel={e.cpcLabel} />
-            : <MomentaryButton key={`trigger-${e.id}`} id={e.id} name={e.name} onChange={(id: number, v: number) => writeLocal(id, v)} />
-        ))}
-      </View>
+      {/* Only render the toggle/trigger strip when there's something to
+          show. An always-present empty flex-wrap row (with its 16px top
+          margin) otherwise reserves dead vertical space inside the DECK
+          MAIN PARAMETERS card on a slider-only channel (QA round10). */}
+      {(toggles.length > 0 || triggers.length > 0) ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 16, gap: 8 }}>
+          {toggles.map((e: any) => (
+            e.cpcOwned
+              ? <MatchedButton key={`toggle-${e.id}`} name={e.name} cpcLabel={e.cpcLabel} />
+              : <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => writeLocal(id, v)} />
+          ))}
+          {triggers.map((e: any) => (
+            e.cpcOwned
+              ? <MatchedButton key={`trigger-${e.id}`} name={e.name} cpcLabel={e.cpcLabel} />
+              : <MomentaryButton key={`trigger-${e.id}`} id={e.id} name={e.name} onChange={(id: number, v: number) => writeLocal(id, v)} />
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 };

@@ -125,8 +125,13 @@ const BlendModePicker = ({ visible, current, onSelect, onClose, blends, title }:
       <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={onClose}>
         <View style={styles.modalContent}>
           <Text style={[styles.labelCaps, {marginBottom: 12}]}>{title || 'BLEND MODE'}</Text>
+          {/* QA round 10 fix #7: unselected rows now carry a ghost surface +
+              border (styles.modalRowGhost) so every option reads as tappable —
+              previously only the selected row had a fill, leaving the others as
+              bare text that didn't look interactive. Selection still = solid
+              fill + ✓. */}
           {(blends || []).map((id: string) => (
-            <TouchableOpacity key={id} style={[styles.modalRow, id === current && styles.modalRowActive]} onPress={() => { onSelect(id); onClose(); }}>
+            <TouchableOpacity key={id} style={[styles.modalRow, id === current ? styles.modalRowActive : styles.modalRowGhost]} onPress={() => { onSelect(id); onClose(); }}>
               <Text style={[styles.valueReadout, id === current && {color: C.onPrimary}]}>{id.replace(/^(blend_|trans_)/, '').toUpperCase()}</Text>
               {id === current ? <Text style={{ color: C.onPrimary, fontSize: 14, fontFamily: 'SpaceGrotesk_700Bold' }}>✓</Text> : null}
             </TouchableOpacity>
@@ -492,8 +497,13 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
                   accessibilityLabel={faderLocked ? 'Unpin fader' : 'Pin fader'}
                   accessibilityRole="button"
                 >
+                  {/* QA round 10 fix #5: the icon must agree with the label.
+                      "Pin fader" (action, currently unpinned) → a NON-slashed
+                      pin. The slashed variant reads as "unpin/off", so reserve
+                      it for the toggled-ON "Unpin fader" state (label flips
+                      too). */}
                   <IconSymbol
-                    name={faderLocked ? 'pin.fill' : 'pin.slash.fill'}
+                    name={faderLocked ? 'pin.slash.fill' : 'pin.fill'}
                     size={16}
                     color={faderLocked ? C.primary : C.secondary}
                   />
@@ -579,13 +589,22 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           a broadcast that omits it shows an empty fader rather than NaN%
           (which RN would render as the literal text "NaN"). The engine is
           the source of truth and normally always sends fader. */}
+      {/* QA round 10 fix #3: this top fader and the LOCAL PARAMS "LEVEL" slider
+          both read "LEVEL" in the same card — contradictory (one at 0, one at
+          100). This is the strip's CHANNEL fader (its mix contribution), so we
+          label it "CHANNEL" to disambiguate; LOCAL PARAMS keeps "LEVEL" (the
+          pattern's own param). Behavior unchanged — label only. */}
       <View style={styles.levelRow}>
-        <Text style={[styles.labelCaps, { width: 36 }]}>LEVEL</Text>
+        <Text style={[styles.labelCaps, { width: 52 }]}>CHANNEL</Text>
         <HorizontalFader
           value={channel.fader ?? 0}
           onChange={(v: number) => onFaderChange(channel.id, v)}
           trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6 }]}
           fillStyle={styles.faderFill}
+          // QA round 10 fix #6: visible grabbable thumb so the channel fader
+          // reads as draggable at 0 (empty track) and 100 (solid fill), matching
+          // the HUE fader's handle below and the master/deck thumbs.
+          thumbStyle={styles.channelFaderThumb}
         />
         <Text style={[styles.displayMono, { width: 32, textAlign: 'right', fontSize: 13 }]}>
           {Math.round((channel.fader ?? 0) * 100)}
@@ -608,12 +627,17 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           and HUE as a clearly secondary trim. */}
       {onHueChange && (
         <View style={styles.hueRow}>
-          <Text style={[styles.labelCaps, { width: 36, fontSize: 10 }]}>HUE</Text>
+          <Text style={[styles.labelCaps, { width: 52, fontSize: 10 }]}>HUE</Text>
+          {/* QA round 10 fix #4: the swatch is now a CIRCLE (was a rounded
+              square that mimicked the destructive Blackout/Invert chips and
+              read as tappable). A circle reads as a non-interactive status dot,
+              matching the deck HUE row (global_hue_row.tsx). */}
           <View
             style={[
               styles.hueSwatch,
               { backgroundColor: `hsl(${Math.round(channel.hue ?? 0)}, 80%, 55%)` },
             ]}
+            accessibilityLabel={`Current channel hue ${Math.round(channel.hue ?? 0)} degrees`}
           />
           <HorizontalFader
             value={(channel.hue ?? 0) / 360}
@@ -621,8 +645,10 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             trackStyle={[styles.hueTrack, { flex: 1, marginHorizontal: 6, opacity: locked ? 0.5 : 1 }]}
             fillStyle={styles.hueFill}
           />
+          {/* QA round 10 fix #4: HUE is an angle — show the "°" unit so the
+              value reads as degrees, matching the deck HUE row + ColorPicker. */}
           <Text style={[styles.displayMono, { width: 32, textAlign: 'right', fontSize: 11, color: C.secondary }]}>
-            {Math.round(channel.hue ?? 0)}
+            {Math.round(channel.hue ?? 0)}°
           </Text>
         </View>
       )}
@@ -1989,11 +2015,13 @@ export default function MixerScreen() {
           <Text style={[styles.brandText, isPortrait && { fontSize: 16 }]}>Marsin Mixer</Text>
           <View style={[styles.statusBadge, isPortrait && { paddingHorizontal: 8, paddingVertical: 4 }]}>
             <View style={[styles.statusDot, !isConnected && {backgroundColor: C.error}]} />
-            {!isPortrait && (
-              <Text style={[styles.labelCaps, {color: isConnected ? '#00a86b' : C.error}]}>
-                {isConnected ? 'CONNECTED' : 'OFFLINE'}
-              </Text>
-            )}
+            {/* Connection label — ALWAYS rendered (both orientations), mirroring
+                the deck top bar (DeckTopBar.tsx). A bare dot is not an acceptable
+                disconnect indicator: the OFFLINE state especially must read as a
+                WORD, never a single red pixel (QA round 10 fix #1). */}
+            <Text style={[styles.labelCaps, {color: isConnected ? '#00a86b' : C.error}]}>
+              {isConnected ? 'CONNECTED' : 'OFFLINE'}
+            </Text>
           </View>
           {/* Active model chip — secondary status, after the connection pill.
               Hidden only until the /status probe resolves / while offline (same
@@ -2052,12 +2080,22 @@ export default function MixerScreen() {
               they never split across a wrap and the value keeps a reserved
               column (no more cramped overlap with the slider). */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 6 : 10 }}>
-            {!isPortrait && <Text style={styles.labelCaps}>MASTER</Text>}
+            {/* MASTER label — ALWAYS rendered (both orientations), mirroring the
+                deck top bar (QA round 10 fix #2). Portrait used to drop it,
+                leaving the highest-consequence fader on the surface as an
+                unlabeled bare strip. */}
+            <Text style={styles.labelCaps}>MASTER</Text>
             <HorizontalFader
               value={master}
               onChange={handleMasterChange}
               trackStyle={[styles.faderTrack, { width: isPortrait ? 120 : 160 }]}
               fillStyle={styles.faderFill}
+              // Visible, grabbable THUMB (QA round 10 fix #2) — same pattern as
+              // the deck master (DeckTopBar.tsx faderThumb). Without it the
+              // master is a full-width hot strip: a stray graze anywhere on the
+              // bar writes master and can drive the whole rig toward 0. The
+              // thumb gives the operator a deliberate handle to aim for.
+              thumbStyle={styles.masterFaderThumb}
             />
             <Text style={[styles.displayMono, {fontSize: 16, width: 36, textAlign: 'right'}, isPortrait && { fontSize: 14, width: 28 }]}>{Math.round(master * 100)}</Text>
           </View>
@@ -2623,6 +2661,37 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     backgroundColor: C.primaryFixedDim,
     borderRadius: 4,
   },
+  // Grabbable master THUMB (QA round 10 fix #2) — same visual language as the
+  // deck master thumb (DeckTopBar.tsx faderThumb): lowest-surface block with a
+  // primary border, sized to the 16pt track height and centred on the fill
+  // edge via translateX:-7. The master is the highest-consequence fader on the
+  // surface, so it must have a deliberate handle rather than being a bare
+  // full-width fill bar draggable from anywhere.
+  masterFaderThumb: {
+    position: 'absolute',
+    top: 0, bottom: 0,
+    width: 14,
+    backgroundColor: C.surfaceContainerLowest,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: C.primary,
+    transform: [{ translateX: -7 }],
+  },
+  // Per-channel level/hue fader THUMB (QA round 10 fix #6) — gives the channel
+  // LEVEL fader (and matches the HUE fader's existing handle) a visible,
+  // grabbable block so an empty track at 0 / solid fill at 100 still reads as a
+  // draggable control. Same language as the master/deck thumbs, sized to the
+  // 16pt LEVEL track.
+  channelFaderThumb: {
+    position: 'absolute',
+    top: 0, bottom: 0,
+    width: 14,
+    backgroundColor: C.surfaceContainerLowest,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: C.secondary,
+    transform: [{ translateX: -7 }],
+  },
   // Per-channel hue row (docs/39 §F-hue). DECLUTTER (mixer declutter): HUE is
   // now the only secondary fader on the strip and is rendered SLIM so LEVEL
   // reads as the primary control. Tighter vertical padding than the LEVEL row,
@@ -2649,8 +2718,11 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     backgroundColor: '#B36AE2',
     borderRadius: 4,
   },
+  // QA round 10 fix #4: CIRCLE (borderRadius = half the 12pt box) so the live
+  // hue preview reads as a non-interactive status dot, not a tappable square
+  // chip — matching the deck HUE row swatch (global_hue_row.tsx).
   hueSwatch: {
-    width: 12, height: 12, borderRadius: 3,
+    width: 12, height: 12, borderRadius: 6,
     borderWidth: 1, borderColor: C.ghostBorder,
   },
   // Channel color picker swatch grid.
@@ -2872,6 +2944,13 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   modalRowActive: {
     backgroundColor: C.primary,
     borderColor: C.primary,
+  },
+  // QA round 10 fix #7: unselected blend-mode rows get a subtle surface fill +
+  // ghost border so every option reads as a tappable row (not bare text). The
+  // selected row's solid primary fill (modalRowActive) still stands apart.
+  modalRowGhost: {
+    backgroundColor: C.surfaceContainerHigh,
+    borderColor: C.ghostBorder,
   },
   // Channel-actions overflow menu rows: icon + label, laid out as a left-
   // aligned row so the action reads as "<glyph> <words>". minHeight 44 keeps

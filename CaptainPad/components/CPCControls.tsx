@@ -235,7 +235,12 @@ export const CPCControls = () => {
           style={{ width: labelWidth, marginRight: labelGap, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 4 }}
         >
           <IconSymbol name={globalsCollapsed ? 'chevron.right' : 'chevron.down'} size={10} color={C.secondary} />
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>{isPortrait ? 'GLOBALS' : 'GLOBAL PARAMS'}</Text>
+          {/* One label in BOTH orientations (round-10 fix): portrait used to
+              read "GLOBALS" while landscape read "GLOBAL PARAMS" for the same
+              collapsible group. Standardized to "GLOBALS" — the shorter form
+              fits the compact label cell in both orientations and matches the
+              deck header strip caption. */}
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>GLOBALS</Text>
         </TouchableOpacity>
 
         {globalsCollapsed ? (

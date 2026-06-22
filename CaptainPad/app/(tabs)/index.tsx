@@ -849,14 +849,16 @@ export default function ControlDeckScreen() {
                         field, forced open to 1.0 once at mount (see the seed's
                         capClearedRef one-shot). Mirrors the already-removed
                         mixer-strip CAP row. */}
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 8, gap: 8 }}>
-                      {toggles.map((e: any) => (
-                        <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => triggerChannelControl(channel.id, id, v)} />
-                      ))}
-                      {triggers.map((e: any) => (
-                        <MomentaryButton key={`trigger-${e.id}`} id={e.id} name={e.name} onChange={(id: number, v: number) => triggerChannelControl(channel.id, id, v)} />
-                      ))}
-                    </View>
+                    {(toggles.length > 0 || triggers.length > 0) ? (
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 8, gap: 8 }}>
+                        {toggles.map((e: any) => (
+                          <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => triggerChannelControl(channel.id, id, v)} />
+                        ))}
+                        {triggers.map((e: any) => (
+                          <MomentaryButton key={`trigger-${e.id}`} id={e.id} name={e.name} onChange={(id: number, v: number) => triggerChannelControl(channel.id, id, v)} />
+                        ))}
+                      </View>
+                    ) : null}
                   </View>
                 );
               })}

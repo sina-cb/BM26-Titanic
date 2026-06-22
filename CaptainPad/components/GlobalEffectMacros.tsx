@@ -636,14 +636,15 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         if (isStrip) {
           // The 8 slot chips. In LANDSCAPE they flex:1 to fill the bar
           // (plenty of width per chip — labels already fit, QA round7).
-          // In PORTRAIT the bar is far too narrow for 10 cells: at flex:1
+          // In PORTRAIT the bar is far too narrow for 8 cells: at flex:1
           // every chip squeezed to ~70px and the 2-word labels chopped
           // mid-word ("Vint ag…", "Ghos t …" — QA round7 BLOCKER). So in
           // portrait we drop the flex, give each chip a real minWidth
-          // (~96px), and let the WHOLE row scroll horizontally — the
-          // operator swipes the strip instead of reading mangled stubs. The
-          // minWidth (96px) gives a 2-line label ("Vintage\nWhite",
-          // "Iceberg\nFlash") room to render in full.
+          // (~96px), and let ONLY THE SLOTS scroll horizontally — the
+          // operator swipes to reach slots 7-8. Invert + BLACKOUT are
+          // pinned OUTSIDE the scroller (QA round10 BLOCKER) so the e-stop
+          // never scrolls off-screen. The minWidth (96px) gives a 2-line
+          // label ("Vintage\nWhite", "Iceberg\nFlash") room to render full.
           const SLOT_MIN_WIDTH = 96;
           const slotChips = visibleSlots.map((slot) =>
             renderCell(slot, isPortrait ? SLOT_MIN_WIDTH : undefined),
@@ -658,28 +659,53 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
             <BlackoutButton key="blackout" blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} fixedWidth={isPortrait ? 96 : 112} />
           );
           // A small divider/gap separates the destructive BLACKOUT e-stop
-          // from the slot grid so it never reads as "just another slot"
-          // (QA round7 MAJOR). Invert sits with the slots (non-destructive);
-          // the divider is between Invert and Blackout.
+          // from Invert so it never reads as "just another slot"
+          // (QA round7 MAJOR). In portrait the divider sits inside the fixed
+          // pinned trailing group (between Invert and Blackout); in landscape
+          // it's inline between the two.
           const Divider = (
             <View key="divider" style={{ width: 1, alignSelf: 'stretch', marginHorizontal: 4, backgroundColor: C.ghostBorder }} />
           );
 
           if (isPortrait) {
-            // ONE row, horizontally scrollable. Slots scroll; Invert +
-            // divider + Blackout are pinned in the scroll content at the end
-            // (operator requirement: keep it a single row — no wrap).
+            // QA round10 BLOCKER: the whole strip used to be one horizontal
+            // ScrollView, so Invert + BLACKOUT (the e-stop) scrolled OFF the
+            // right edge with no discoverable cue — a clipped e-stop is a
+            // live-show safety problem. Restructure: the row is a flex
+            // container where ONLY the 8 slot chips live inside a flex:1
+            // horizontal ScrollView, and Invert + divider + BLACKOUT are a
+            // FIXED trailing group pinned at the right edge OUTSIDE the
+            // ScrollView. The operator scrolls to reach slots 7-8, but the
+            // destructive e-stop is ALWAYS on-screen.
             return (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator
-                contentContainerStyle={{ flexDirection: 'row', alignItems: 'center', gap, paddingRight: 2 }}
-              >
-                {slotChips}
-                {invertCell}
-                {Divider}
-                {blackoutCell}
-              </ScrollView>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                {/* Slots-only scroller. A right-edge fade peek hints there's
+                    more to scroll (the chips run under the pinned group). */}
+                <View style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator
+                    contentContainerStyle={{ flexDirection: 'row', alignItems: 'center', gap, paddingRight: 14 }}
+                  >
+                    {slotChips}
+                  </ScrollView>
+                  {/* Subtle right-edge fade so the scroll is discoverable. */}
+                  <View
+                    pointerEvents="none"
+                    style={{
+                      position: 'absolute', right: 0, top: 0, bottom: 0, width: 16,
+                      backgroundColor: C.surfaceContainerHigh, opacity: 0.55,
+                      borderTopRightRadius: 6, borderBottomRightRadius: 6,
+                    }}
+                  />
+                </View>
+                {/* Fixed trailing group — never scrolls. */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: gap }}>
+                  {invertCell}
+                  {Divider}
+                  {blackoutCell}
+                </View>
+              </View>
             );
           }
           // Landscape: ONE flat flex row, no scroll — the bar is wide enough.
@@ -926,7 +952,11 @@ const SlotButton: React.FC<{
           // glyph colour) and a touch larger (16px) so the edit affordance is
           // legible, while staying small enough that it never steals label
           // width (no gutter reserved on the label any more).
-          position: 'absolute', bottom: 1, right: 1,
+          // QA round10 MINOR: was inset bottom/right:1 so the glyph straddled
+          // the chip border and read as a floating sticker. Inset to a
+          // consistent 3px corner padding so it sits fully WITHIN the chip
+          // bounds and reads as an integrated control.
+          position: 'absolute', bottom: 3, right: 3,
           width: 16, height: 16, borderRadius: 8,
           backgroundColor: showOn ? 'rgba(255,255,255,0.28)' : C.surfaceContainerLowest,
           borderWidth: 1,
@@ -988,7 +1018,13 @@ const EmptySlotButton: React.FC<{
         ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
       }}
     >
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.icon, lineHeight: 18, opacity: 0.7 }}>
+      {/* QA round10 MINOR: the "+" was C.icon @ 0.7 opacity — near-invisible
+          (light grey glyph on the recessed grey socket). Raised one contrast
+          step to the muted-but-legible `secondary` colour at full opacity, so
+          it's a clear "add" affordance. The recessed surfaceDim fill + dashed
+          border still keep the cell reading as an empty socket, not a bound
+          chip. */}
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18, color: C.secondary, lineHeight: 20 }}>
         +
       </Text>
     </TouchableOpacity>
@@ -1064,6 +1100,14 @@ const BlackoutButton: React.FC<{
 // convention — the chip group is now ONE casing. Destructiveness/state is
 // flagged by colour + bold weight (tertiary accent, error-red for blackout),
 // NOT by SHOUTING CAPS.
+//
+// QA round10 MINOR: OFF Invert used a faint `ghostBorder` and read like a
+// disabled/empty "+" socket (same grey family as the recessed empty slots).
+// It's an AVAILABLE ACTION, not an empty socket, so the OFF state now carries
+// a solid `tertiary`-accent border on the solid `surfaceContainerHigh` fill —
+// the accent is on the chip EDGE (not just faint label text), so it reads as a
+// raised, tappable accent chip clearly distinct from the dashed recessed empty
+// slots and from the red-bordered BLACKOUT e-stop.
 const InvertButton: React.FC<{
   invert: boolean;
   height: number;
@@ -1088,7 +1132,10 @@ const InvertButton: React.FC<{
         ...sizing, height, paddingHorizontal: 6, borderRadius: 6,
         backgroundColor: bg,
         borderWidth: 1,
-        borderColor: isOn ? 'transparent' : C.ghostBorder,
+        // OFF carries the tertiary accent on its border (not the faint
+        // ghostBorder) so it reads as a raised, available action — distinct
+        // from the dashed/recessed empty "+" sockets (QA round10).
+        borderColor: isOn ? 'transparent' : C.tertiary,
         justifyContent: 'center', alignItems: 'center',
         ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
       }}
