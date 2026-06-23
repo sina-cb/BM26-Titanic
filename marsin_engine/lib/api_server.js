@@ -314,14 +314,52 @@ export function autoCycleDueDecision(channel, nowMs) {
   return (nowMs - channel._autoCycleLastAdvanceMs >= delayMs) ? 'due' : 'wait';
 }
 
+// ── Auto-cycle group-locality clamps (single source of truth) ─────────
+// PATTERN-GROUP LOCALITY (feat/optimize_channels): the autopilot grabs a
+// small WINDOW of adjacent playlist entries, dwells within it for a number of
+// swaps, then releases and grabs a fresh window. The window size and dwell
+// count are clamped here so a stale/garbage on-disk value can't form a
+// degenerate (1-wide) or runaway window. Defaults match the field docs.
+export const AUTO_GROUP_SIZE_MIN = 2;
+export const AUTO_GROUP_SIZE_MAX = 8;
+export const AUTO_GROUP_SIZE_DEFAULT = 3;
+export const AUTO_GROUP_DWELL_MIN = 1;
+export const AUTO_GROUP_DWELL_MAX = 50;
+export const AUTO_GROUP_DWELL_DEFAULT = 6;
+
+const clampInt = (raw, lo, hi, dflt) => {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return dflt;
+  return Math.max(lo, Math.min(hi, Math.trunc(n)));
+};
+
+// Normalize the three group-locality fields off any autopilot-ish object for
+// serialize / broadcast / restore (single shape, single source of clamps).
+// Absent fields default (off / 3 / 6), so an old state file restores clean.
+const autoGroupFields = (ap) => ({
+  groupMode: !!(ap && ap.groupMode),
+  groupSize: clampInt(ap && ap.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX, AUTO_GROUP_SIZE_DEFAULT),
+  groupDwell: clampInt(ap && ap.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT),
+});
+
 // ── Auto-cycle next-entry pick (pure, unit-tested) ────────────────────
 // MIRRORS the deck Autopilot advance pick (api_server deck daemon): per-entry
 // hold parks (return null), loop replays the same entry (overrides shuffle),
-// else shuffle picks a random OTHER usable entry, else sequential walks
-// forward skipping `_missing`. `usable` excludes `_missing` entries. Returns
-// the chosen entry, or null when there is nothing to advance to (no usable
-// entries, or the current entry is held).
-export function pickNextAutoCycleEntry(pl, autopilot, curEntryId) {
+// else — when group-locality is armed — dwell within a window of adjacent
+// entries, else shuffle picks a random OTHER usable entry, else sequential
+// walks forward skipping `_missing`. `usable` excludes `_missing` entries.
+// Returns the chosen entry, or null when there is nothing to advance to (no
+// usable entries, or the current entry is held).
+//
+// PATTERN-GROUP LOCALITY: when `autopilot.groupMode` is true AND there are
+// strictly more usable entries than the window size, dwell state lives in the
+// caller-owned mutable `groupRuntime` ({ windowIds, swapsLeft }) so the window
+// + remaining-swap count persist ACROSS advances. The function reads and
+// MUTATES `groupRuntime` in place (the contract); randomness via Math.random
+// matches shuffle. With group-locality off (default), or too few usable
+// entries, group mode is a no-op and the existing shuffle/sequential logic
+// runs unchanged — `groupRuntime` may be omitted by those callers.
+export function pickNextAutoCycleEntry(pl, autopilot, curEntryId, groupRuntime) {
   if (!pl || !Array.isArray(pl.entries) || pl.entries.length === 0) return null;
   const usable = pl.entries.filter(e => !e._missing);
   if (usable.length === 0) return null;
@@ -329,6 +367,49 @@ export function pickNextAutoCycleEntry(pl, autopilot, curEntryId) {
   if (curEntry) {
     if (curEntry.hold) return null;        // parked until released
     if (curEntry.loop) return curEntry;    // replay same entry
+  }
+  // PATTERN-GROUP LOCALITY: dwell inside a rolling window of adjacent usable
+  // entries. No-op (fall through) unless armed AND the playlist is bigger than
+  // one window — otherwise the "window" would be the whole list, defeating the
+  // point. Needs a mutable runtime to carry dwell state across advances.
+  const groupSize = clampInt(
+    autopilot && autopilot.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX,
+    AUTO_GROUP_SIZE_DEFAULT,
+  );
+  if (autopilot && autopilot.groupMode && groupRuntime && usable.length > groupSize) {
+    const groupDwell = clampInt(
+      autopilot.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX,
+      AUTO_GROUP_DWELL_DEFAULT,
+    );
+    const win = groupRuntime.windowIds;
+    const haveWindow = Array.isArray(win) && win.length > 0;
+    const curInWindow = haveWindow && win.includes(curEntryId);
+    // Form a FRESH window when there is none, the dwell expired, or we've
+    // wandered out of the current window (manual tap / loop release landed
+    // elsewhere). A fresh random start is fine even when re-forming.
+    if (!haveWindow || groupRuntime.swapsLeft <= 0 || !curInWindow) {
+      const start = Math.floor(Math.random() * usable.length);
+      const windowIds = [];
+      for (let i = 0; i < groupSize; i++) {
+        windowIds.push(usable[(start + i) % usable.length].id);
+      }
+      groupRuntime.windowIds = windowIds;
+      groupRuntime.swapsLeft = groupDwell;
+    }
+    // Pick a random entry from the window that is NOT the current one (no
+    // immediate repeat); if the window collapsed to only the current entry,
+    // replay it. Decrement the dwell counter (mutate in place — the contract).
+    const choices = groupRuntime.windowIds.filter(id => id !== curEntryId);
+    const pickId = choices.length
+      ? choices[Math.floor(Math.random() * choices.length)]
+      : curEntryId;
+    groupRuntime.swapsLeft -= 1;
+    const picked = usable.find(e => e.id === pickId);
+    if (picked) return picked;
+    // The chosen id is no longer usable (entry removed mid-dwell) — force a
+    // fresh window next call and fall through to sequential this beat.
+    groupRuntime.windowIds = null;
+    groupRuntime.swapsLeft = 0;
   }
   if (autopilot && autopilot.shuffle) {
     const others = usable.filter(e => e.id !== curEntryId);
@@ -1206,6 +1287,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         delay_s: (mixer.deckOverlayAutopilot && typeof mixer.deckOverlayAutopilot.delay_s === 'number')
           ? mixer.deckOverlayAutopilot.delay_s : 30,
         shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
+        ...autoGroupFields(mixer.deckOverlayAutopilot),
       },
     });
   }
@@ -1356,6 +1438,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // baseline. (The tick re-seeds null→now on its next active frame, so a
     // manual tap mid-cycle restarts the timer cleanly. Transient, never saved.)
     channel._autoCycleLastAdvanceMs = null;
+    // PATTERN-GROUP LOCALITY (feat/optimize_channels): a manual entry tap OR a
+    // (re-)load/assignment change must START A FRESH GROUP — drop any window
+    // we were dwelling in so the next group-mode advance grabs a new one from
+    // the new baseline (mirrors the anchor reset directly above). Transient.
+    if (channel._autoGroup) { channel._autoGroup.windowIds = null; channel._autoGroup.swapsLeft = 0; }
 
     // Switching to a new entry resets the "dirty since lock" state — the
     // new entry's own defaults are now the canonical reference, and any
@@ -1419,7 +1506,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       const ap = channel.playlist.autopilot;
       const pl = playlistManager.load(channel.playlist.name);
       if (!pl || pl.entries.length === 0) { channel._autoCycleLastAdvanceMs = now; continue; }
-      const next = pickNextAutoCycleEntry(pl, ap, channel.playlist.activeEntryId);
+      const next = pickNextAutoCycleEntry(pl, ap, channel.playlist.activeEntryId, channel._autoGroup);
       if (!next) {
         // Held / no usable target — re-anchor so we re-check after delay_s,
         // not every frame (mirrors the deck daemon re-checking each beat).
@@ -1505,7 +1592,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       if (!pl || pl.entries.length === 0) continue;
       // Each overlay picks its OWN next entry from its OWN playlist + cursor,
       // honoring the SHARED shuffle flag (per-overlay content, shared timer).
-      const next = pickNextAutoCycleEntry(pl, ap, overlay.playlist.activeEntryId);
+      const next = pickNextAutoCycleEntry(pl, ap, overlay.playlist.activeEntryId, overlay._autoGroup);
       if (!next) continue; // held / no usable target — stays put this beat
       overlay._autoCycleInFlight = true;
       const targetId = next.id;
@@ -2077,6 +2164,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // on-disk value can't strobe.
         delay_s: (typeof oap.delay_s === 'number' && Number.isFinite(oap.delay_s)) ? Math.max(1, oap.delay_s) : 30,
         shuffle: !!oap.shuffle,
+        // PATTERN-GROUP LOCALITY (feat/optimize_channels): absent fields default
+        // (off / 3 / 6) so an old state file with no group keys restores clean.
+        ...autoGroupFields(oap),
       };
       mixer._deckOverlayAnchorMs = null;
     }
@@ -2553,6 +2643,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         delay_s: (mixer.deckOverlayAutopilot && typeof mixer.deckOverlayAutopilot.delay_s === 'number')
           ? mixer.deckOverlayAutopilot.delay_s : 30,
         shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
+        ...autoGroupFields(mixer.deckOverlayAutopilot),
       },
     };
   }
@@ -3089,33 +3180,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (usable.length === 0) return;
 
         const cur = baseCh.playlist.activeEntryId;
-        let nextEntry;
-        // Per-entry hold/loop (#12) — autopilot-advance gate ONLY. Manual
-        // entry taps (POST /deck/playlist/entry) are NOT gated; that tap is
-        // the release mechanism for a held entry. If curEntry is undefined
-        // (stale/removed activeEntryId) we skip the gate and let the existing
-        // shuffle/sequential logic run — pre-existing behavior.
-        const curEntry = pl.entries.find(e => e.id === cur);
-        if (curEntry) {
-          // hold = park here until released (manual tap / clearing the flag).
-          // Binary, NOT a timed/scheduled hold — return WITHOUT cancelling
-          // the autopilot timer so the daemon keeps re-checking each beat.
-          if (curEntry.hold) return;
-          // loop = replay the same entry every beat (overrides shuffle).
-          if (curEntry.loop) nextEntry = curEntry;
-        }
-        if (!nextEntry && baseCh.playlist.autopilot && baseCh.playlist.autopilot.shuffle) {
-          const others = usable.filter(e => e.id !== cur);
-          nextEntry = others.length ? others[Math.floor(Math.random() * others.length)] : usable[0];
-        } else if (!nextEntry) {
-          const idx = pl.entries.findIndex(e => e.id === cur);
-          // Walk forward until we hit a non-missing entry.
-          let nextIdx = (idx + 1) % pl.entries.length;
-          for (let i = 0; i < pl.entries.length; i++) {
-            if (!pl.entries[nextIdx]._missing) { nextEntry = pl.entries[nextIdx]; break; }
-            nextIdx = (nextIdx + 1) % pl.entries.length;
-          }
-        }
+        // Selection is the SHARED pure picker (hold→loop→group→shuffle→
+        // sequential) — the SAME `pickNextAutoCycleEntry` the mixer overlay
+        // ticks use, so the deck and overlays can never drift. It honors the
+        // per-entry hold (returns null → park WITHOUT cancelling the timer so
+        // the daemon re-checks each beat) and loop gates, then group-locality,
+        // then shuffle/sequential. Group dwell state lives on the deck base
+        // channel's transient `_autoGroup` (reset by loadPlaylistEntry on every
+        // manual tap / (re-)load, so a manual tap starts a fresh group).
+        const nextEntry = pickNextAutoCycleEntry(
+          pl, baseCh.playlist.autopilot, cur, baseCh._autoGroup);
         if (!nextEntry) return;
         // Route through the deck-transition path: if the operator has
         // enabled transitions, the load runs as a smooth double-buffer
@@ -3900,6 +3974,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             if (data.active !== undefined) ap.active = !!data.active;
             if (data.delay_s !== undefined) ap.delay_s = parseInt(data.delay_s, 10) || 30;
             if (data.shuffle !== undefined) ap.shuffle = !!data.shuffle;
+            // PATTERN-GROUP LOCALITY (feat/optimize_channels): mirror the group
+            // fields into the deck playlist autopilot the SAME way as shuffle,
+            // so external writers (PortWatch/LoRa) can drive them too.
+            if (data.groupMode !== undefined) ap.groupMode = !!data.groupMode;
+            if (data.groupSize !== undefined) {
+              ap.groupSize = clampInt(
+                data.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX, AUTO_GROUP_SIZE_DEFAULT);
+            }
+            if (data.groupDwell !== undefined) {
+              ap.groupDwell = clampInt(
+                data.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT);
+            }
+            if (data.groupMode !== undefined || data.groupSize !== undefined || data.groupDwell !== undefined) {
+              if (baseCh._autoGroup) { baseCh._autoGroup.windowIds = null; baseCh._autoGroup.swapsLeft = 0; }
+            }
             saveAllState();
             broadcastMixerState();
           }
@@ -5104,10 +5193,24 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           if (data.autopilot.active !== undefined) ap.active = !!data.autopilot.active;
           if (nextDelay !== undefined) ap.delay_s = nextDelay;
           if (data.autopilot.shuffle !== undefined) ap.shuffle = !!data.autopilot.shuffle;
+          // PATTERN-GROUP LOCALITY (feat/optimize_channels): groupMode/groupSize
+          // /groupDwell mirror `shuffle` — booleans coerce via !!, ints clamp at
+          // the picker (a bad value lands inside the clamp window, not a 400).
+          if (data.autopilot.groupMode !== undefined) ap.groupMode = !!data.autopilot.groupMode;
+          if (data.autopilot.groupSize !== undefined) {
+            ap.groupSize = clampInt(
+              data.autopilot.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX, AUTO_GROUP_SIZE_DEFAULT);
+          }
+          if (data.autopilot.groupDwell !== undefined) {
+            ap.groupDwell = clampInt(
+              data.autopilot.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT);
+          }
           // Re-seed the wall-clock anchor so the next auto-cycle tick measures
           // a full delay_s from THIS arm/change, not a stale pre-patch baseline
-          // (the tick re-seeds null→now on its next active frame).
+          // (the tick re-seeds null→now on its next active frame). Drop the
+          // group window too — an arm/disarm/reconfigure starts a fresh group.
           channel._autoCycleLastAdvanceMs = null;
+          if (channel._autoGroup) { channel._autoGroup.windowIds = null; channel._autoGroup.swapsLeft = 0; }
         }
         // PATCH might target ch_base, so persist deck state too.
         saveAllState();
@@ -5864,6 +5967,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           delay_s: (mixer.deckOverlayAutopilot && typeof mixer.deckOverlayAutopilot.delay_s === 'number')
             ? mixer.deckOverlayAutopilot.delay_s : 30,
           shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
+          ...autoGroupFields(mixer.deckOverlayAutopilot),
         },
       }));
     }
@@ -6035,9 +6139,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.active !== undefined) ap.active = !!data.active;
         if (nextDelay !== undefined) ap.delay_s = nextDelay;
         if (data.shuffle !== undefined) ap.shuffle = !!data.shuffle;
+        // PATTERN-GROUP LOCALITY (feat/optimize_channels): mirror `shuffle`. The
+        // SHARED overlay autopilot drives every overlay's per-overlay picker, so
+        // group config lives on this one object; each overlay keeps its own
+        // window in its own transient `_autoGroup`.
+        if (data.groupMode !== undefined) ap.groupMode = !!data.groupMode;
+        if (data.groupSize !== undefined) {
+          ap.groupSize = clampInt(
+            data.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX, AUTO_GROUP_SIZE_DEFAULT);
+        }
+        if (data.groupDwell !== undefined) {
+          ap.groupDwell = clampInt(
+            data.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT);
+        }
         // Re-seed the SHARED anchor so the next tick measures a full delay_s
-        // from THIS arm/change, not a stale pre-patch baseline.
+        // from THIS arm/change, not a stale pre-patch baseline. Drop each
+        // overlay's group window so a reconfigure starts fresh windows.
         mixer._deckOverlayAnchorMs = null;
+        if (data.groupMode !== undefined || data.groupSize !== undefined || data.groupDwell !== undefined) {
+          for (const overlay of (mixer.getDeckOverlays ? mixer.getDeckOverlays() : [])) {
+            if (overlay._autoGroup) { overlay._autoGroup.windowIds = null; overlay._autoGroup.swapsLeft = 0; }
+          }
+        }
         saveAllState();
         broadcastDeckState();
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -6628,6 +6751,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.active !== undefined) ap.active = !!data.active;
         if (data.delay_s !== undefined) ap.delay_s = parseInt(data.delay_s, 10) || 30;
         if (data.shuffle !== undefined) ap.shuffle = !!data.shuffle;
+        // PATTERN-GROUP LOCALITY (feat/optimize_channels): mirror `shuffle` —
+        // groupMode bool, groupSize/groupDwell ints clamped to their windows.
+        if (data.groupMode !== undefined) ap.groupMode = !!data.groupMode;
+        if (data.groupSize !== undefined) {
+          ap.groupSize = clampInt(
+            data.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX, AUTO_GROUP_SIZE_DEFAULT);
+        }
+        if (data.groupDwell !== undefined) {
+          ap.groupDwell = clampInt(
+            data.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT);
+        }
+        // Reconfiguring group-locality starts a fresh group (drop the window).
+        if (data.groupMode !== undefined || data.groupSize !== undefined || data.groupDwell !== undefined) {
+          if (baseCh._autoGroup) { baseCh._autoGroup.windowIds = null; baseCh._autoGroup.swapsLeft = 0; }
+        }
         saveAllState();
         autopilot.updateState({ active: ap.active, delay_s: String(ap.delay_s), shuffle: ap.shuffle });
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok', autopilot: ap }));

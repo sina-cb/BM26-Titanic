@@ -160,6 +160,17 @@ export class PatternChannel {
     // restart — hence transient, like _phaseSeconds.
     this._autoCycleLastAdvanceMs = null;
 
+    // TRANSIENT pattern-group-locality runtime (feat/optimize_channels) —
+    // NEVER serialized. `windowIds` is the current rolling window of adjacent
+    // playlist-entry ids the autopilot is dwelling within; `swapsLeft` is how
+    // many advances remain before a fresh window is grabbed. null/0 = "no
+    // window yet": the picker forms one on the next group-mode advance. RESET
+    // (windowIds=null, swapsLeft=0) wherever _autoCycleLastAdvanceMs resets —
+    // a manual entry tap or a new playlist must start a fresh group. Like the
+    // anchor above, persisting it would pin stale ids that mean nothing after a
+    // restart, so it is rebuilt from scratch on boot.
+    this._autoGroup = { windowIds: null, swapsLeft: 0 };
+
     this.transitionMode = transitionMode;
     this.transitionTime = transitionTime;
 

@@ -150,6 +150,111 @@ test('stale/removed activeEntryId skips the hold/loop gate (sequential runs)', (
   assert.equal(pickNextAutoCycleEntry(p, { shuffle: false }, 'zzz').id, 'a');
 });
 
+// ── pickNextAutoCycleEntry: PATTERN-GROUP LOCALITY ─────────────────────
+// groupMode dwells inside a window of `groupSize` adjacent usable entries for
+// `groupDwell` swaps, then forms a fresh window. State lives in the mutable
+// `groupRuntime` ({ windowIds, swapsLeft }) passed by the caller.
+function freshGroup() {
+  return { windowIds: null, swapsLeft: 0 };
+}
+
+test('group mode forms a window of K consecutive usable ids', () => {
+  const p = pl([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }, { id: 'f' }]);
+  const gr = freshGroup();
+  const ap = { groupMode: true, groupSize: 3, groupDwell: 6 };
+  pickNextAutoCycleEntry(p, ap, 'a', gr);
+  assert.equal(gr.windowIds.length, 3, 'window should hold groupSize ids');
+  // The window must be 3 CONSECUTIVE entries (wrapping the usable list).
+  const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
+  const starts = [];
+  for (let i = 0; i < ids.length; i++) {
+    starts.push([ids[i], ids[(i + 1) % 6], ids[(i + 2) % 6]].join(','));
+  }
+  assert.ok(starts.includes(gr.windowIds.join(',')), `window ${gr.windowIds} not consecutive`);
+});
+
+test('group mode DWELLS within the window for groupDwell swaps (no immediate repeat)', () => {
+  const p = pl([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }, { id: 'f' }]);
+  const ap = { groupMode: true, groupSize: 3, groupDwell: 4 };
+  const gr = freshGroup();
+  let cur = 'a';
+  let next = pickNextAutoCycleEntry(p, ap, cur, gr); // swap #1 forms the window
+  const win = gr.windowIds.slice();
+  for (let i = 0; i < ap.groupDwell - 1; i++) {
+    assert.ok(win.includes(next.id), `swap ${i} id ${next.id} must stay in window ${win}`);
+    assert.notEqual(next.id, cur, 'no immediate repeat within the dwell');
+    assert.deepEqual(gr.windowIds, win, 'window is held steady through the dwell');
+    cur = next.id;
+    next = pickNextAutoCycleEntry(p, ap, cur, gr);
+  }
+});
+
+test('group mode forms a NEW window after swapsLeft hits 0', () => {
+  // Force determinism: groupSize == usable would be a no-op, so use a 6-entry
+  // list with size 2 and dwell 1 so every call re-forms a window.
+  const p = pl([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }, { id: 'f' }]);
+  const ap = { groupMode: true, groupSize: 2, groupDwell: 1 };
+  const gr = freshGroup();
+  pickNextAutoCycleEntry(p, ap, 'a', gr);
+  assert.equal(gr.swapsLeft, 0, 'dwell of 1 leaves 0 swaps left after one pick');
+  // Next call sees swapsLeft<=0 → re-forms. Run many to confirm it does not throw
+  // and always yields an in-window pick.
+  let cur = 'a';
+  for (let i = 0; i < 50; i++) {
+    const next = pickNextAutoCycleEntry(p, ap, cur, gr);
+    assert.ok(next, 'group advance always returns an entry');
+    assert.ok(gr.windowIds.includes(next.id), 'pick is from the freshly formed window');
+    cur = next.id;
+  }
+});
+
+test('group mode is a NO-OP when usable <= groupSize (falls through to sequential)', () => {
+  const p = pl([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
+  const ap = { groupMode: true, groupSize: 3, groupDwell: 6 };
+  const gr = freshGroup();
+  // usable (3) is NOT > groupSize (3) → fall through → sequential.
+  assert.equal(pickNextAutoCycleEntry(p, ap, 'a', gr).id, 'b');
+  assert.equal(gr.windowIds, null, 'no window formed when group mode is a no-op');
+});
+
+test('group mode HOLD still parks, LOOP still repeats (gates run first)', () => {
+  const ap = { groupMode: true, groupSize: 2, groupDwell: 6 };
+  const held = pl([{ id: 'a', hold: true }, { id: 'b' }, { id: 'c' }, { id: 'd' }]);
+  assert.equal(pickNextAutoCycleEntry(held, ap, 'a', freshGroup()), null);
+  const looped = pl([{ id: 'a', loop: true }, { id: 'b' }, { id: 'c' }, { id: 'd' }]);
+  assert.equal(pickNextAutoCycleEntry(looped, ap, 'a', freshGroup()).id, 'a');
+});
+
+test('group mode handles a FRESH groupRuntime on every call (re-forms each time)', () => {
+  const p = pl([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }]);
+  const ap = { groupMode: true, groupSize: 2, groupDwell: 6 };
+  for (let i = 0; i < 100; i++) {
+    const gr = freshGroup(); // brand-new runtime each call
+    const next = pickNextAutoCycleEntry(p, ap, 'a', gr);
+    assert.ok(next, 'a fresh runtime still yields a pick');
+    assert.equal(gr.windowIds.length, 2, 'a window is formed on the fresh runtime');
+    assert.ok(gr.windowIds.includes(next.id));
+  }
+});
+
+test('group mode no-op when groupRuntime omitted (callers without dwell state)', () => {
+  const p = pl([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]);
+  const ap = { groupMode: true, groupSize: 2, groupDwell: 6 };
+  // No 4th arg → group mode cannot carry state → falls through to sequential.
+  assert.equal(pickNextAutoCycleEntry(p, ap, 'a').id, 'b');
+});
+
+test('group mode clamps groupSize/groupDwell out-of-range values', () => {
+  const p = pl([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }]);
+  const gr = freshGroup();
+  // groupSize 99 clamps to 8, but usable is 5 so 5 > 8 is false → no-op (seq).
+  assert.equal(pickNextAutoCycleEntry(p, { groupMode: true, groupSize: 99, groupDwell: 6 }, 'a', gr).id, 'b');
+  // groupSize 0 clamps to 2 (min) → window of 2 forms (usable 5 > 2).
+  const gr2 = freshGroup();
+  pickNextAutoCycleEntry(p, { groupMode: true, groupSize: 0, groupDwell: 6 }, 'a', gr2);
+  assert.equal(gr2.windowIds.length, 2, 'groupSize floored to 2');
+});
+
 // ── validateAutoCycleDelay: API boundary 400 contract ──────────────────
 test('validateAutoCycleDelay rejects non-finite / ≤0 (→400), floors to 1s', () => {
   assert.equal(validateAutoCycleDelay(NaN).ok, false);
