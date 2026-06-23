@@ -524,19 +524,60 @@ export async function getAutopilot(): Promise<ApiResult<any>> {
   }
 }
 
-export async function setAutopilot(active?: boolean, delay_s?: string, shuffle?: boolean): Promise<ApiResult<any>> {
+// PATTERN-GROUP LOCALITY (feat/optimize_channels): the DECK autopilot can
+// dwell within a window of `groupSize` adjacent playlist entries for
+// `groupDwell` swaps before grabbing a fresh window. These knobs live on the
+// deck base channel's `playlist.autopilot` and are written through
+// `POST /deck/playlist/autopilot` (the active/delay/shuffle fields keep going
+// to `/autopilot` so the autopilot daemon's own state stays authoritative).
+// All three are optional — pass a subset to patch just those keys; the engine
+// coerces groupMode with `!!` and clamps groupSize 2..8 / groupDwell 1..50.
+export type AutopilotGroupFields = {
+  groupMode?: boolean;
+  groupSize?: number;
+  groupDwell?: number;
+};
+
+export async function setAutopilot(
+  active?: boolean,
+  delay_s?: string,
+  shuffle?: boolean,
+  group?: AutopilotGroupFields,
+): Promise<ApiResult<any>> {
   try {
     const payload: any = {};
     if (active !== undefined) payload.active = active;
     if (delay_s !== undefined) payload.delay_s = delay_s;
     if (shuffle !== undefined) payload.shuffle = shuffle;
-    
+
     const res = await fetchWithTimeout(`${api_base}/autopilot`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
     const data = await res.json();
+
+    // Group-locality knobs ride a SECOND POST to the deck-playlist endpoint
+    // (the daemon's /autopilot state has no slot for them). Only fired when
+    // at least one group field is present, so the legacy active/delay/shuffle
+    // call path is byte-for-byte unchanged.
+    if (group && (group.groupMode !== undefined
+        || group.groupSize !== undefined
+        || group.groupDwell !== undefined)) {
+      const groupPayload: AutopilotGroupFields = {};
+      if (group.groupMode !== undefined) groupPayload.groupMode = group.groupMode;
+      if (group.groupSize !== undefined) groupPayload.groupSize = group.groupSize;
+      if (group.groupDwell !== undefined) groupPayload.groupDwell = group.groupDwell;
+      const gRes = await fetchWithTimeout(`${api_base}/deck/playlist/autopilot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(groupPayload),
+      });
+      const gData = await gRes.json();
+      if (!gRes.ok) {
+        return { ok: false, error: gData?.error || `HTTP ${gRes.status}`, data: gData };
+      }
+    }
     return { ok: true, data };
   } catch(err: any) {
     warnThrottled('Set autopilot failed:', 'Set autopilot failed:', err);

@@ -58,6 +58,10 @@ const MAPPING = {
   'checkmark.circle.fill': 'check-circle',
   'wifi.slash': 'wifi-off',
   'shuffle': 'shuffle',
+  // Autopilot pattern-group locality (feat/optimize_channels): the GROUP
+  // toggle next to SHUFFLE. A 2x2 grid reads as "dwell within a window of
+  // adjacent patterns".
+  'square.grid.2x2': 'grid-view',
   // "Load directory" (bulk-add a patterns/ sub-folder into a playlist).
   'folder.fill': 'folder',
 } as IconMapping;

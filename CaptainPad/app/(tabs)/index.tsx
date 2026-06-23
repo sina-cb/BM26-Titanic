@@ -11,7 +11,7 @@ import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { GlobalHueRow } from '@/components/global_hue_row';
 import { EntryLabelEditor } from '@/components/EntryLabelEditor';
 import { PixelStrip } from '@/components/ui/PixelStrip';
-import { AutopilotTimerPills, DeckTransitionControls } from '@/components/DeckTransitionControls';
+import { AutopilotTimerPills, DeckTransitionControls, TimerPillBar } from '@/components/DeckTransitionControls';
 import { AllModulationsPanel } from '@/components/AllModulationsPanel';
 import { useFocusEffect } from 'expo-router';
 import {
@@ -21,6 +21,7 @@ import {
   fetchDeckTransitionConfig, setDeckTransitionConfig,
   fetchPlaylists,
   fetchMixerState,
+  fetchChannelPlaylist,
   type DeckTransitionConfig,
   type MixerChannel,
 } from '@/utils/api';
@@ -180,6 +181,16 @@ export default function ControlDeckScreen() {
   const [isPlaylistActive, setPlaylistActive] = useState<boolean>(false);
   const [playlistDelayStr, setPlaylistDelayStr] = useState<string>('30');
   const [isShuffle, setIsShuffle] = useState<boolean>(false);
+  // PATTERN-GROUP LOCALITY (feat/optimize_channels): the DECK autopilot can
+  // dwell within a window of adjacent playlist entries before grabbing a fresh
+  // one. These three knobs live on the deck base channel's playlist.autopilot
+  // (NOT the autopilot daemon's /autopilot state), so they hydrate from
+  // GET /deck/playlist (see seed) and write through setAutopilot's group arg
+  // (POST /deck/playlist/autopilot). Defaults mirror the engine's
+  // AUTO_GROUP_SIZE_DEFAULT (3) / AUTO_GROUP_DWELL_DEFAULT (6).
+  const [groupMode, setGroupMode] = useState<boolean>(false);
+  const [groupSize, setGroupSize] = useState<number>(3);
+  const [groupDwell, setGroupDwell] = useState<number>(6);
 
   // Deck transition config (soft swap between patterns via server-side
   // double-buffer — see DECK TRANSITIONS in DeckTransitionControls.tsx
@@ -342,6 +353,21 @@ export default function ControlDeckScreen() {
       setPlaylistActive(apResult.data.active);
       setPlaylistDelayStr(apResult.data.delay_s);
       setIsShuffle(apResult.data.shuffle);
+    }
+
+    // PATTERN-GROUP LOCALITY: the group knobs are NOT in the autopilot daemon
+    // state above (the /autopilot GET has no slot for them and the `autopilot`
+    // WS broadcast omits them too). They ride the deck base channel's
+    // playlist.autopilot, so hydrate them off GET /deck/playlist — the same
+    // read-back SHUFFLE/cadence would use if they lived there. Defaults
+    // (false/3/6) match the engine when the fields are absent on an older
+    // playlist.
+    const deckPl = await fetchChannelPlaylist('deck', '');
+    if (deckPl.ok && deckPl.data && (deckPl.data as any).autopilot) {
+      const ap = (deckPl.data as any).autopilot;
+      setGroupMode(!!ap.groupMode);
+      if (typeof ap.groupSize === 'number') setGroupSize(ap.groupSize);
+      if (typeof ap.groupDwell === 'number') setGroupDwell(ap.groupDwell);
     }
 
     // Load deck transition config
@@ -677,15 +703,30 @@ export default function ControlDeckScreen() {
                   </TouchableOpacity>
                 </View>
 
-                <TouchableOpacity
-                  onPress={() => { const nx = !isShuffle; setIsShuffle(nx); setAutopilot(isPlaylistActive, playlistDelayStr, nx); }}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
-                  accessibilityRole="switch"
-                  accessibilityLabel={isShuffle ? 'Disable autopilot shuffle' : 'Enable autopilot shuffle'}
-                >
-                  <IconSymbol name="shuffle" size={16} color={isShuffle ? C.primary : C.icon} />
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isShuffle ? C.primary : C.icon, fontSize: 12, letterSpacing: 0.5 }}>SHUFFLE</Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <TouchableOpacity
+                    onPress={() => { const nx = !isShuffle; setIsShuffle(nx); setAutopilot(isPlaylistActive, playlistDelayStr, nx); }}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
+                    accessibilityRole="switch"
+                    accessibilityLabel={isShuffle ? 'Disable autopilot shuffle' : 'Enable autopilot shuffle'}
+                  >
+                    <IconSymbol name="shuffle" size={16} color={isShuffle ? C.primary : C.icon} />
+                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isShuffle ? C.primary : C.icon, fontSize: 12, letterSpacing: 0.5 }}>SHUFFLE</Text>
+                  </TouchableOpacity>
+                  {/* PATTERN-GROUP LOCALITY: GROUP rides next to SHUFFLE with the
+                      SAME on/off treatment (icon + label tint primary when on,
+                      icon token when off). Toggling it POSTs the group fields to
+                      /deck/playlist/autopilot via setAutopilot's group arg. */}
+                  <TouchableOpacity
+                    onPress={() => { const nx = !groupMode; setGroupMode(nx); setAutopilot(undefined, undefined, undefined, { groupMode: nx }); }}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
+                    accessibilityRole="switch"
+                    accessibilityLabel={groupMode ? 'Disable autopilot pattern groups' : 'Enable autopilot pattern groups'}
+                  >
+                    <IconSymbol name="square.grid.2x2" size={16} color={groupMode ? C.primary : C.icon} />
+                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: groupMode ? C.primary : C.icon, fontSize: 12, letterSpacing: 0.5 }}>GROUP</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
 
               {/* Row 2: timer pill-bar */}
@@ -697,6 +738,36 @@ export default function ControlDeckScreen() {
                   setAutopilot(isPlaylistActive, str, isShuffle);
                 }}
               />
+
+              {/* PATTERN-GROUP LOCALITY: SIZE/DWELL only render while GROUP is
+                  ON, so an OFF group costs no layout beyond the toggle. SIZE =
+                  how many adjacent entries the window spans (→ groupSize);
+                  DWELL = how many swaps to linger in that window before grabbing
+                  a fresh one (→ groupDwell). Reuse the compact TimerPillBar so
+                  the chips match the cadence pills. */}
+              {groupMode ? (
+                <View style={{ gap: 6 }}>
+                  <TimerPillBar
+                    label="SIZE"
+                    compact
+                    presets={[2, 3, 4, 5]}
+                    value={groupSize}
+                    onChange={(v) => { setGroupSize(v); setAutopilot(undefined, undefined, undefined, { groupSize: v }); }}
+                    formatter={(v) => String(v)}
+                  />
+                  <TimerPillBar
+                    label="DWELL"
+                    compact
+                    presets={[4, 6, 8, 12]}
+                    value={groupDwell}
+                    onChange={(v) => { setGroupDwell(v); setAutopilot(undefined, undefined, undefined, { groupDwell: v }); }}
+                    formatter={(v) => String(v)}
+                  />
+                  <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary }}>
+                    dwell = swaps before a new group
+                  </Text>
+                </View>
+              ) : null}
             </View>
 
             {/* ── DECK TRANSITIONS ───────────────────────────────────
