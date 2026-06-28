@@ -25,7 +25,7 @@ import {
   type DeckTransitionConfig,
   type MixerChannel,
 } from '@/utils/api';
-import { setChannelFaderMax, setChannelColor } from '@/utils/channelExtrasApi';
+import { setChannelColor } from '@/utils/channelExtrasApi';
 import { panicMixer } from '@/utils/channelOpsApi';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { setDeckFocus } from '@/utils/deckFocusApi';
@@ -134,13 +134,6 @@ export default function ControlDeckScreen() {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
   const [deckChannel, setDeckChannel] = useState<any | null>(null);
-  // One-shot guard for the mount-time CAP clear (June 2026). The deck CAP
-  // (faderMax) fader UI was removed; any residual/persisted faderMax < 1.0
-  // would silently cap exterior brightness with no visible control to undo
-  // it — a mission-critical "never dark" hazard. On the first deck-channel
-  // seed we send exactly ONE faderMax:1.0 write to neutralize a stored cap.
-  // Guarded so it fires once per mount, never mid-interaction.
-  const capClearedRef = useRef(false);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [connectionError, setConnectionError] = useState<string>('');
   // D6: floating ALL MODULATIONS overlay state. Placed at the screen
@@ -385,29 +378,6 @@ export default function ControlDeckScreen() {
       // The top-level api type doesn't pin this field, so read it loosely.
       const focus = (deckRes.data as { deckFocusChannelId?: unknown }).deckFocusChannelId;
       setActiveCueId(typeof focus === 'string' ? focus : null);
-
-      // CAP-removal cleanup (June 2026): the deck CAP (faderMax) fader was
-      // removed from the UI. A persisted faderMax < 1.0 would silently limit
-      // the deck's exterior brightness with no control left to clear it —
-      // mission-critical "never dark" hazard. Fire exactly ONE guarded
-      // faderMax:1.0 write (same PATCH /deck/channel route the old CAP fader
-      // used, via setChannelFaderMax {deck:true}) to neutralize any stored
-      // cap. Guarded by capClearedRef so it fires once per mount, never
-      // mid-interaction. faderMax stays a valid engine field — we only force
-      // it open here.
-      const seededMax = typeof ch?.faderMax === 'number' ? ch.faderMax : 1.0;
-      if (!capClearedRef.current && ch?.id && seededMax < 1.0) {
-        capClearedRef.current = true;
-        setChannelFaderMax(ch.id, 1.0, { deck: true }).then((r) => {
-          if (r.ok) {
-            setDeckChannel((c: any) => (c ? { ...c, faderMax: 1.0 } : c));
-          } else {
-            console.warn('[Deck] failed to clear residual faderMax cap:', r.error);
-          }
-        });
-      } else {
-        capClearedRef.current = true;
-      }
     }
 
     // F-cue: seed the mixer overlay list for the cue picker. The deck tab
@@ -462,11 +432,6 @@ export default function ControlDeckScreen() {
       Alert.alert('Transition setting not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
     });
   }, []);
-
-  // (Removed June 2026: handleDeckFaderMax + the deck CAP fader UI. The
-  // per-deck intensity ceiling was a "never dark" hazard. faderMax stays a
-  // valid engine field but is no longer operator-adjustable here; it is forced
-  // open to 1.0 once at mount in seed() — see capClearedRef.)
 
   // Per-channel color metadata (docs/39 §8.4) on the DECK channel. Pure
   // operator-facing accent (no render effect) — tints the deck card for
@@ -608,7 +573,17 @@ export default function ControlDeckScreen() {
             </TouchableOpacity>
           )}
         </View>
-        <PixelStrip base64Data={visDataRef.current[deckChannelId || 'master']} height={18} style={{ borderRadius: 6 }} />
+        {/* "LIVE OUTPUT" = what the rig actually emits, so subscribe to the
+            engine's `rig` vis frame — the post-composite hardware-truth buffer
+            that has the GLOBAL rig FX baked in (global HUE shift + invert +
+            section dimmers), sampled from model.pixels AFTER applyHueShift
+            (engine.js render loop). The per-channel deck-id frame and the
+            `master` frame are both captured PRE global-hue (pattern_mixer only
+            mirrors the PER-channel hue into them), so neither recolors when the
+            operator drags the GlobalHueRow above — that was the bug. `rig` is
+            the only key carrying the global hue, matching the GlobalHueRow's
+            promise that the deck preview tracks the global hue. */}
+        <PixelStrip base64Data={visDataRef.current.rig ?? null} height={18} style={{ borderRadius: 6 }} />
       </View>
       <View style={globalStyles.container}>
         {/* Left Pane — Playlist (the one and only pattern list).
@@ -913,13 +888,6 @@ export default function ControlDeckScreen() {
                       <GlobalParams variant="deck" channelId={channel.id} exports={exports} />
                     </View>
 
-                    {/* CAP (faderMax) fader removed June 2026 — the per-deck
-                        intensity ceiling UI was a "never dark" hazard (a stored
-                        cap < 1.0 silently dimmed the exterior with no visible
-                        control to undo it). faderMax remains a valid engine
-                        field, forced open to 1.0 once at mount (see the seed's
-                        capClearedRef one-shot). Mirrors the already-removed
-                        mixer-strip CAP row. */}
                     {(toggles.length > 0 || triggers.length > 0) ? (
                       <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 8, gap: 8 }}>
                         {toggles.map((e: any) => (
@@ -1078,8 +1046,6 @@ export default function ControlDeckScreen() {
 // Local styles for the cue header + color-picker recipe (docs/39 §8.4).
 // Palette-dependent colors are applied inline at the call site (this screen
 // reads the palette via the usePalette hook, not a StyleSheet factory).
-// (The CAP row styles — capRow/faderTrack/capFill — were removed June 2026
-// alongside the deck CAP fader.)
 const styles = StyleSheet.create({
   // Bottom-pinned global-effects strip — the deck mirror of the mixer
   // tab's `globalRigBar`. Full-width, intentionally short (header + a

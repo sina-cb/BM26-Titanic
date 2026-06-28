@@ -1,13 +1,20 @@
-// GroupRail — channel groups (gang-faders) operator surface (docs/39 §10).
+// GroupRailBody — channel groups (gang-faders) operator surface (docs/39 §10).
 //
 // A mix group is a named gang-fader: its `fader` + `muted` scale every member
 // channel's contribution at composite time (engine-side, `_effFader`). Each
-// channel has a SINGLE-membership pointer (`channel.mixGroupId`). This rail:
-//   - lists every group as a row with a gang FADER + a MUTE toggle + a rename
+// channel has a SINGLE-membership pointer (`channel.mixGroupId`). This body:
+//   - lists every group as a card with a gang FADER + a MUTE toggle + a rename
 //     field + a delete (ConfirmSheet-gated), and shows its member chips.
 //   - creates a new (empty) group.
 //   - assigns / unassigns a channel to a group (the assign picker respects
 //     single-membership — the engine 400s a 2nd-group add and we surface it).
+//
+// As of the 2026-06-28 mixer UI refactor this grouping UI lives inside a
+// floating modal launched from a compact "GROUPS" button on the mixer's
+// GLOBALS row (it no longer eats an always-on full-width rail row). The body
+// is rendered already-expanded — the modal IS the expansion — so the old
+// collapsed-rail header/chevron is gone. All grouping functionality and
+// handlers are preserved verbatim; this was a relocation, not a rewrite.
 //
 // The engine is the AUTHORITY: every mutation is validate→saveAllState→
 // broadcastMixerState on the engine. This component is STATELESS w.r.t. the
@@ -44,17 +51,16 @@ interface RailChannel {
   mixGroupId?: string | null;
 }
 
-export interface GroupRailProps {
+export interface GroupRailBodyProps {
   mixGroups: MixGroup[];
   channels: RailChannel[];
 }
 
-export function GroupRail({ mixGroups, channels }: GroupRailProps) {
+export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
 
-  const [expanded, setExpanded] = useState(false);
   const [deletePrompt, setDeletePrompt] = useState<{ id: string; name: string } | null>(null);
   // Assign picker: which group are we adding a channel to.
   const [assignTo, setAssignTo] = useState<MixGroup | null>(null);
@@ -140,29 +146,20 @@ export function GroupRail({ mixGroups, channels }: GroupRailProps) {
   const groupName = (g: MixGroup, idx: number) => g.name || `GROUP ${idx + 1}`;
 
   return (
-    <View style={styles.rail}>
-      <View style={styles.railHeader}>
-        <TouchableOpacity
-          style={styles.railTitleBtn}
-          hitSlop={HIT_SLOP}
-          onPress={() => setExpanded((e) => !e)}
-          accessibilityRole="button"
-          accessibilityLabel={expanded ? 'Collapse groups' : 'Expand groups'}
-        >
-          <Text style={styles.labelCaps}>{expanded ? '▾' : '▸'} GROUPS</Text>
+    <View style={styles.body}>
+      {/* Modal header: a title + a "+ NEW GROUP" quick-add. The old
+          collapsed-rail chevron is gone — this UI now lives in a floating
+          modal launched from the mixer's GROUPS button, so it's always
+          "expanded". */}
+      <View style={styles.bodyHeader}>
+        <View style={styles.railTitleBtn}>
+          <Text style={styles.labelCaps}>GROUPS</Text>
           {mixGroups.length > 0 ? (
             <View style={styles.countBadge}>
               <Text style={styles.countBadgeText}>{mixGroups.length}</Text>
             </View>
           ) : null}
-        </TouchableOpacity>
-        {/* Round8 #6: when there are NO groups, the always-on "+ NEW GROUP"
-            header button + the separate MASTER OUTPUT row below read as two
-            near-empty thin rows. We hide this header button while empty and
-            surface creation through the (now tappable) empty-state row inside
-            the expand, so the collapsed rail is a single thin "▸ GROUPS" line.
-            Once at least one group exists the header button returns for quick
-            adds without expanding. */}
+        </View>
         {mixGroups.length > 0 ? (
           <TouchableOpacity
             style={styles.newGroupBtn}
@@ -176,12 +173,10 @@ export function GroupRail({ mixGroups, channels }: GroupRailProps) {
         ) : null}
       </View>
 
-      {expanded ? (
-        <ScrollView horizontal contentContainerStyle={styles.groupsRow} showsHorizontalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={styles.groupsRow} showsVerticalScrollIndicator={false}>
           {mixGroups.length === 0 ? (
-            // Round8 #6: the header "+ NEW GROUP" button is hidden while empty
-            // (it doubled the rail's empty height), so the empty-state row IS
-            // the create affordance now — tap it to spin up the first group.
+            // Empty state IS the create affordance — tap it to spin up the
+            // first group (mirrors the prior empty-rail behaviour).
             <TouchableOpacity
               style={styles.emptyCreateBtn}
               hitSlop={HIT_SLOP}
@@ -278,8 +273,7 @@ export function GroupRail({ mixGroups, channels }: GroupRailProps) {
               </View>
             );
           })}
-        </ScrollView>
-      ) : null}
+      </ScrollView>
 
       {/* Assign-channel picker — only ungrouped channels + channels already in
           THIS group are sensible to show; the engine 400s a cross-group add so
@@ -329,21 +323,19 @@ export function GroupRail({ mixGroups, channels }: GroupRailProps) {
 
 function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   return {
-    rail: {
-      backgroundColor: C.surfaceContainerLow,
-      borderBottomWidth: 1,
-      borderBottomColor: C.ghostBorder,
-      paddingHorizontal: 12,
-      // Tight vertical padding (2026-06-22 UI cleanup): the collapsed rail
-      // header was eating a chunk of vertical space on narrow widths. The
-      // header's touch targets keep their ≥44pt effective size via hitSlop
-      // (32pt visible + 8pt × 2), so this only trims dead space.
-      paddingVertical: 2,
+    // The grouping UI now renders as the body of a floating modal (the
+    // mixer's GROUPS button opens it), so there's no rail frame/border —
+    // the host modalContent supplies the surface + padding. We cap the
+    // height so a long group list scrolls inside the modal rather than
+    // pushing it off-screen.
+    body: {
+      maxHeight: 520,
     },
-    railHeader: {
+    bodyHeader: {
       flexDirection: 'row' as const,
       alignItems: 'center' as const,
       justifyContent: 'space-between' as const,
+      marginBottom: 4,
     },
     railTitleBtn: {
       flexDirection: 'row' as const,
@@ -385,14 +377,16 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
       alignItems: 'center' as const,
       justifyContent: 'center' as const,
     },
+    // Vertical stack of group cards inside the modal (was a horizontal rail
+    // strip). Each card stretches to the modal width.
     groupsRow: {
-      flexDirection: 'row' as const,
+      flexDirection: 'column' as const,
       gap: 12,
       paddingTop: 8,
       paddingBottom: 4,
     },
     groupCard: {
-      width: 260,
+      width: 300,
       backgroundColor: C.surfaceContainerLowest,
       borderRadius: 12,
       borderWidth: 1,

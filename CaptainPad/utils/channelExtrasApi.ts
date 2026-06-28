@@ -147,42 +147,22 @@ export async function recallSnapshotFade(
   }
 }
 
-// ── Per-channel intensity clamp (F-C) + color (F-D) ───────────────────────
-// Both are channel metadata set through the SAME PATCH /mixer/channels/:id
-// the rest of the mixer uses (updateMixerChannel). These thin wrappers pin
-// the single field + the validation contract so the caller can't accidentally
+// ── Per-channel color (F-D) ───────────────────────────────────────────────
+// Channel `color` metadata set through the SAME PATCH /mixer/channels/:id the
+// rest of the mixer uses (updateMixerChannel). This thin wrapper pins the
+// single field + the validation contract so the caller can't accidentally
 // send the wrong shape:
-//   - faderMax: finite number clamped to [0,1]; non-finite ⇒ engine 400.
-//   - color:    string (e.g. hex) or null; any other type ⇒ engine 400.
+//   - color: string (e.g. hex) or null; any other type ⇒ engine 400.
 //
 // Deck role: pass { deck: true } to route through PATCH /deck/channel instead
 // (the deck channel lives on its own route post channel-split). The mixer
 // screen only renders overlays, but the deck variant keeps the client honest
 // for any future deck-side use.
-
-export async function setChannelFaderMax(
-  channelId: string,
-  faderMax: number,
-  opts?: { deck?: boolean },
-): Promise<ApiResult<any>> {
-  try {
-    const path = opts?.deck
-      ? `${api_base}/deck/channel`
-      : `${api_base}/mixer/channels/${encodeURIComponent(channelId)}`;
-    const res = await fetchWithTimeout(path, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ faderMax }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
-    }
-    return { ok: true, data };
-  } catch (err: any) {
-    return { ok: false, error: err.message };
-  }
-}
+//
+// NOTE (June 2026): the per-channel intensity clamp `faderMax` (F-C) wrapper
+// `setChannelFaderMax` lived here but was removed with the deck CAP control —
+// `faderMax` is still a valid engine field, set via deckOverlaysApi / bump /
+// snapshot inherit, just not through a standalone clamp wrapper here.
 
 export async function setChannelColor(
   channelId: string,

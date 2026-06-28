@@ -25,7 +25,17 @@ const ACCENT_AUTO = '#1b9e77';
 // subscription, so this component has no props. Pre-split it took
 // a `wsRef` prop for sending sharedParam writes; that's now
 // `engineEvents.send(...)` via `updateParamCenter`.
-export const CPCControls = () => {
+//
+// `trailing` is an optional accessory rendered at the RIGHT end of the
+// GLOBALS row (row 1). The mixer uses it to seat its compact GROUPS
+// button next to the globals cluster (the channel-grouping UI moved
+// into a floating modal launched from there); the deck passes nothing,
+// so its globals row is unchanged.
+interface CPCControlsProps {
+  trailing?: React.ReactNode;
+}
+
+export const CPCControls = ({ trailing }: CPCControlsProps = {}) => {
   const C = usePalette();
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
@@ -317,6 +327,17 @@ export const CPCControls = () => {
             <OscStatusPill compact={isPortrait} />
           </View>
         )}
+
+        {/* Optional right-end accessory (mixer-only GROUPS button). Sits at
+            the far right of the GLOBALS row so it reclaims the slack the deck
+            leaves empty; the deck passes no `trailing`, so its row is
+            unchanged. Rendered outside the collapsible body so it stays
+            reachable whether or not GLOBALS is collapsed. */}
+        {trailing ? (
+          <View style={{ marginLeft: globalsRowGap, justifyContent: 'center' }}>
+            {trailing}
+          </View>
+        ) : null}
       </View>
 
       {/* ── Row 2: audio — dynamic live-only signal meters ──────────────

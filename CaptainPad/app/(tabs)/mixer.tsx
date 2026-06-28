@@ -34,7 +34,7 @@ import {
   postSolo, deleteSolo, clearAllSolo, setChannelSoloSafe,
 } from '@/utils/groupsSoloApi';
 import { postBump } from '@/utils/bumpApi';
-import { GroupRail } from '@/components/GroupRail';
+import { GroupRailBody } from '@/components/GroupRail';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
 import {
@@ -1878,6 +1878,10 @@ export default function MixerScreen() {
   // look couldn't load while reassuring them the rig is lit.
   const [panicPrompt, setPanicPrompt] = useState(false);
   const [panicBusy, setPanicBusy] = useState(false);
+  // Channel-grouping UI now lives in a floating modal launched from the
+  // GROUPS button on the GLOBALS row (2026-06-28 UI refactor) instead of an
+  // always-on full-width rail — reclaims the vertical space.
+  const [groupsModalOpen, setGroupsModalOpen] = useState(false);
   const confirmPanic = useCallback(async () => {
     setPanicPrompt(false);
     setPanicBusy(true);
@@ -2124,13 +2128,27 @@ export default function MixerScreen() {
         </View>
       </View>
 
-      <CPCControls />
-
-      {/* ── Channel Groups (gang-faders) rail (docs/39 §10) ──────────── */}
-      {/* Stateless w.r.t. the registry — it renders the parent-owned
-          mixGroups + channels (both reconciled from the `mixer` broadcast)
-          and reports edits up through the typed groupsSoloApi clients. */}
-      <GroupRail mixGroups={mixGroups} channels={channels} />
+      {/* Mixer-only: a compact GROUPS button at the right end of the GLOBALS
+          row opens the channel-grouping modal. The deck renders <CPCControls />
+          with no `trailing`, so its globals row is unchanged. */}
+      <CPCControls
+        trailing={
+          <TouchableOpacity
+            style={styles.groupsButton}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            onPress={() => setGroupsModalOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Open channel groups"
+          >
+            <Text style={[styles.labelCaps, { fontSize: 10, color: C.primary }]}>GROUPS</Text>
+            {mixGroups.length > 0 ? (
+              <View style={styles.groupsButtonBadge}>
+                <Text style={styles.groupsButtonBadgeText}>{mixGroups.length}</Text>
+              </View>
+            ) : null}
+          </TouchableOpacity>
+        }
+      />
 
       {/* ── Master Visualization ──────────────────────────────────────
           Tight band (2026-06-22 UI cleanup): the label sits inline with no
@@ -2307,6 +2325,24 @@ export default function MixerScreen() {
               ))}
             </ScrollView>
           </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ── Channel-groups floating modal (docs/39 §10) ──────────────────
+          The grouping UI (create / name / color / assign / unassign / gang /
+          mute / delete) moved out of the always-on rail into this centered
+          modal, launched from the GROUPS button on the GLOBALS row. REUSES
+          the modalOverlay/modalContent pattern (absolute inset-0 + 0.7
+          backdrop) like every other picker. GroupRailBody is stateless w.r.t.
+          the registry — it renders the parent-owned mixGroups + channels and
+          reports edits up through the typed groupsSoloApi clients. */}
+      <Modal transparent visible={groupsModalOpen} animationType="fade" onRequestClose={() => setGroupsModalOpen(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setGroupsModalOpen(false)}>
+          <TouchableOpacity activeOpacity={1} onPress={() => {}}>
+            <View style={styles.modalContent}>
+              <GroupRailBody mixGroups={mixGroups} channels={channels} />
+            </View>
+          </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
 
@@ -2526,6 +2562,34 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     letterSpacing: 1.2,
     color: C.secondary,
     textTransform: 'uppercase',
+  },
+  // Compact GROUPS button seated at the right end of the GLOBALS row (mixer
+  // only). Matches the GLOBALS tile cluster height (48) so it reads as part
+  // of that strip; carries a small count badge when groups exist.
+  groupsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 48,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: C.primary,
+    backgroundColor: C.surface,
+  },
+  groupsButtonBadge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    backgroundColor: C.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  groupsButtonBadgeText: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 10,
+    color: '#FFF',
   },
   valueReadout: {
     fontFamily: 'SpaceGrotesk_700Bold',
@@ -2908,9 +2972,8 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   // Pinning the overlay to the Modal host with `position:'absolute'` inset 0
   // makes it a true full-viewport layer regardless of where the <Modal> tag
   // sits in the tree, so the card centers on the whole screen (verified for
-  // an 834-wide iPad-portrait viewport). Backdrop raised to 0.7 (was 0.4) to
-  // match PlaylistPanel's HOT SWAP picker so the busy playlist rows behind
-  // can't bleed through.
+  // an 834-wide iPad-portrait viewport). Backdrop raised to 0.7 (was 0.4) so
+  // the busy playlist rows behind can't bleed through.
   modalOverlay: {
     position: 'absolute',
     top: 0,
