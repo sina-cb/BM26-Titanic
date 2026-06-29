@@ -160,10 +160,17 @@ export function render3D(index, wx, wy, wz) {
   var nx = wx; if (nx < 0.0) nx = 0.0; else if (nx > 1.0) nx = 1.0;
 
   // Tail length and head size scale with radius (AUDIO travel feel). Kept fairly
-  // short so the comets are crisp accents, not a brightness flood. The tail
-  // shrinks as the effective velocity eases through a reversal (|vel| factor), so
-  // it re-grows on the new side smoothly — no flip seam.
-  var tailLen = (0.03 + radius * 0.13) * (0.30 + 0.70 * velMag);
+  // short so the comets are crisp accents, not a brightness flood. The tail must
+  // shrink to ZERO through a reversal so the discrete velSgn flip (which mirrors
+  // `along` to the other side of the head in ONE frame) has NO tail left to snap —
+  // the previous `0.30 + 0.70*velMag` kept a 30% residual that snapped sides and
+  // was the strongest disc flag (accelKink ~11k, exactly on the vel zero-crossings).
+  // A smoothstep on velMag (threshold 0.30) collapses the tail only in the brief
+  // reversal zone; in steady flight |vel| settles to 1.0/0.4 (both >= 0.30) so the
+  // tail length — and the visual identity — is unchanged away from the crossing.
+  var velFade = velMag / 0.30; if (velFade > 1.0) velFade = 1.0;
+  velFade = velFade * velFade * (3.0 - 2.0 * velFade);   // 0 at reversal, 1 in flight
+  var tailLen = (0.03 + radius * 0.13) * velFade;
 
   var gain = 0.07 + level * 0.93;
   var kickPop = kick * 0.9;
@@ -220,7 +227,12 @@ export function render3D(index, wx, wy, wz) {
     var halo = 1.0 - dHead / 0.075;
     if (halo > 0.0) {
       var hv = pow(halo, 1.6);
-      if (hv > v) { v = hv; if (along < 0.0) blend = 0.0; }
+      // The head halo is the HEAD glow: always head-coloured (blend = 0). Keying
+      // it on `along < 0.0` made the trailing-side halo keep the tail's blend, so
+      // at the velSgn orientation flip a halo pixel swapped head<->tail colour in
+      // one frame (a red<->orange snap — the ch1 seam). The halo straddles the head
+      // symmetrically, so head colour on both sides is correct and flip-invariant.
+      if (hv > v) { v = hv; blend = 0.0; }
     }
 
     v = v * life * partGate;
@@ -245,6 +257,22 @@ export function render3D(index, wx, wy, wz) {
   // A kick pop lifts the WHOLE star field uniformly (clearly kick-reactive),
   // folded into the level-driven carrier.
   var atmo = star * tw * gain * (1.0 + kickPop * 0.55); // dominant level+kick field
+  // ALWAYS-FORWARD per-pixel creep so the star field is NEVER dead-static between
+  // comet passes. The tw twinkle alone is MULTIPLIED by the (mostly 0.02) star
+  // floor AND shares ONE sin rate across pixels, so on the dark subset it rounds
+  // to <1 LSB and the whole field stalls together at the sin extrema — measured:
+  // ~22% of frames were frozen (per-pixel delta <=1-2 LSB) in the gaps between
+  // comets, with STALL runs up to 130 frames. FIX (mirrors 06's shimmer fix): add
+  // a small ADDITIVE per-pixel-RATE sawtooth ripple. A sawtooth has a constant
+  // non-zero slope every frame (no zero-derivative vertex) and the per-pixel rate
+  // means pixels never hit a rounding boundary in lockstep — every pixel ticks
+  // EVERY frame. Additive (not multiplied by the near-zero floor) so even dark
+  // stars move; tiny + spatially balanced (mean ~0) so the PRIMARY corr is intact.
+  var crawlRate = 14.0 + hashp * 12.0;                // per-pixel sawtooth rate
+  var crawl = lifePhase * crawlRate + hashp * 0.41;
+  crawl = crawl - floor(crawl);                       // 0..1 always-rising sawtooth
+  atmo = atmo + 0.018 * (crawl - 0.5) * gain;
+  if (atmo < 0.0) atmo = 0.0;
   var atmoBlend = hashp;                              // sprinkle both palette ends
 
   // Crisp comet highlight on top — a sharp moving pinpoint that flares on the
