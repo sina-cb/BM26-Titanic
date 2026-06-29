@@ -470,19 +470,16 @@ export default function ControlDeckScreen() {
           </Text>
           <View style={{ flex: 1 }} />
         </View>
-        {/* "LIVE OUTPUT" preview = the engine's `master` composite — the
-            PRE-dimmer composition (operator request 2026-06-29). This matches
-            the MIXER's master strip exactly: it ignores the section dimmer-rack
-            trim (and blackout / global rig FX), so the deck preview shows what
-            the SHOW is producing rather than the dimmed-down hardware output —
-            and a per-channel fader visibly affects this composite without us
-            having to dim the per-channel vis strips (which stay active at 100%
-            so the operator can read each pattern and tune live).
-            Tradeoff: `master` is captured PRE global-hue, so the deck preview
-            no longer recolors when the GlobalHueRow is dragged (that lived only
-            on the now-retired `rig` key). The section dimmers are still applied
-            to the actual sACN/DMX output — this is preview-only. */}
-        <PixelStrip base64Data={visDataRef.current.master ?? null} height={18} style={{ borderRadius: 6 }} />
+        {/* "LIVE OUTPUT" preview = the engine's `preDimmer` composite — the
+            composition AFTER global FX (hue shift / invert / group color-locks)
+            but BEFORE the section dimmer rack + blackout (operator request
+            2026-06-29). So the deck preview (a) recolors with the GlobalHueRow
+            and shows the global effects, while (b) still ignoring the section
+            dimmer-rack trim — it shows what the SHOW is producing, not the
+            dimmed-down hardware output. The section dimmers are still applied to
+            the actual sACN/DMX output — this is preview-only. The mixer master
+            strip uses the same `preDimmer` key for parity. */}
+        <PixelStrip base64Data={visDataRef.current.preDimmer ?? null} height={18} style={{ borderRadius: 6 }} />
       </View>
       <View style={globalStyles.container}>
         {/* Left Pane — Playlist (the one and only pattern list).

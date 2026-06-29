@@ -458,6 +458,13 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
   let startTime = 0;
   let lastStatsTime = 0;
   let lastVisTime = 0;
+  // Pre-dimmer composite snapshot for the deck/mixer master preview: the
+  // composite AFTER global FX (hue / invert / group color-locks) but BEFORE
+  // the section dimmer rack + blackout. So the preview tracks the global hue
+  // and shows the effects while ignoring the hardware dimmer trim. Filled only
+  // on frames that broadcast vis (see the snapshot point in the render loop);
+  // lazily sized to pixelCount*6.
+  let preDimmerVisBuf = null;
   const intervalMs = Math.round(1000 / fps);
   const pixelCount = model.pixels.length;
 
@@ -674,6 +681,26 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // summer-camp djLights hack's duplicated post-intensity path.
     if (globalEffectsController) globalEffectsController.applyGroupFixedColors(model.pixels);
 
+    // Snapshot the PRE-DIMMER composite (after all global FX, before the
+    // section dimmers + blackout) for the deck/mixer master preview. Only on
+    // frames that will broadcast vis (mixer.wantVisThisFrame, set above from
+    // the same vis-due condition), so it costs one O(pixelCount) copy at the
+    // vis cadence — not every frame. The vis block below encodes this as the
+    // `preDimmer` key. Channel order matches rigBuffer: r,g,b,w,a,u.
+    if (mixer.wantVisThisFrame) {
+      if (!preDimmerVisBuf) preDimmerVisBuf = new Uint8Array(pixelCount * 6);
+      for (let i = 0; i < pixelCount; i++) {
+        const off = i * 6;
+        const px = model.pixels[i];
+        preDimmerVisBuf[off] = Math.min(255, Math.max(0, Math.round(px.r * 255)));
+        preDimmerVisBuf[off + 1] = Math.min(255, Math.max(0, Math.round(px.g * 255)));
+        preDimmerVisBuf[off + 2] = Math.min(255, Math.max(0, Math.round(px.b * 255)));
+        preDimmerVisBuf[off + 3] = Math.min(255, Math.max(0, Math.round(px.w * 255)));
+        preDimmerVisBuf[off + 4] = Math.min(255, Math.max(0, Math.round(px.a * 255)));
+        preDimmerVisBuf[off + 5] = Math.min(255, Math.max(0, Math.round(px.u * 255)));
+      }
+    }
+
     // Apply any hardware blackout or section intensity scaling from the API (Master cutoffs)
     if (intensityController) intensityController.apply(model.pixels);
 
@@ -761,6 +788,13 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
           rigBuffer[off + 5] = Math.min(255, Math.max(0, Math.round(px.u * 255)));
         }
         visPayload['rig'] = Buffer.from(subsampleVis(rigBuffer)).toString('base64');
+        // Pre-dimmer composite (after global FX, before dimmers/blackout). The
+        // deck + mixer master preview use this key so they track the global hue
+        // + show the effects while ignoring the section dimmer rack. Encoded
+        // immediately (subsampleVis returns a shared scratch buffer).
+        if (preDimmerVisBuf) {
+          visPayload['preDimmer'] = Buffer.from(subsampleVis(preDimmerVisBuf)).toString('base64');
+        }
         // Per-channel effective-output METER levels (channel metering).
         // Plain { <visKey>: number(0..1) } keyed identically to visPayload —
         // each is the channel's intrinsic brightness scaled by its effFader

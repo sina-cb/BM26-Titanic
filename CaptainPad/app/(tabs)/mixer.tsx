@@ -551,41 +551,17 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           strip list (see ChannelVizStrip + the perf note on the mixer
           screen's viz handling).
 
-          Round8 #2 — silence readout: the full-saturation rainbow strip read
-          identically at LEVEL 0 or MUTE as it did at full output, so an
-          operator couldn't tell at a glance which layers were actually
-          contributing light. We desaturate + dim THIS strip proportional to
-          effective output (DISPLAY-ONLY — we never touch engine state, the viz
-          frame itself is unchanged). Effective silence = muted, OR fader at 0,
-          OR gated off by another channel's solo (the engine zeroes the
-          contribution in all three cases). A greyscale wash overlay desaturates
-          the colours and the wrapper opacity dims, so a silent layer reads grey
-          + faint while a live layer keeps its true colours. */}
-      {(() => {
-        const effLevel = channel.enabled === false ? 0 : (dimmedBySolo ? 0 : (channel.fader ?? 0));
-        const silent = effLevel <= 0.001;
-        // Map effective level → opacity (0.28 floor so a silent strip is still
-        // visible as a greyed band, not gone) and greyscale-wash strength
-        // (full wash when silent, none at full output).
-        const stripOpacity = silent ? 0.28 : 0.45 + 0.55 * Math.min(1, effLevel);
-        const washAlpha = silent ? 0.62 : 0.62 * (1 - Math.min(1, effLevel));
-        return (
-          <View style={{ marginBottom: 6, opacity: stripOpacity }}>
-            <ChannelVizStrip vizKey={channel.id} height={14} />
-            {washAlpha > 0.001 ? (
-              <View
-                pointerEvents="none"
-                style={{
-                  position: 'absolute',
-                  left: 0, right: 0, top: 0, height: 14,
-                  borderRadius: 4,
-                  backgroundColor: `rgba(128,128,128,${washAlpha.toFixed(3)})`,
-                }}
-              />
-            ) : null}
-          </View>
-        );
-      })()}
+          The per-channel strip renders the channel's TRUE pattern at full
+          brightness, INDEPENDENT of the channel fader / solo / mute (operator
+          request 2026-06-29): every layer's vis stays active so the operator
+          can read each pattern and tune live, matching the (perfect) master
+          strip. The fader's effect on the mix is shown by the master/preDimmer
+          preview + the fader value — not by dimming this strip. (Replaces the
+          Round8 effective-output greying, which dimmed/greyed this strip with
+          the fader and read as "the channel vis is affected by the fader".) */}
+      <View style={{ marginBottom: 6 }}>
+        <ChannelVizStrip vizKey={channel.id} height={14} />
+      </View>
 
       {/* Level Fader. `fader` is null-coalesced to 0 for display ONLY —
           a broadcast that omits it shows an empty fader rather than NaN%
@@ -2202,7 +2178,7 @@ export default function MixerScreen() {
             bug. showMeter={false} drops the in-strip meter row, leaving just
             the pixel strip under the single authoritative header value. */}
         <View style={styles.masterVizTrack}>
-          <ChannelVizStrip vizKey="master" height={12} style={{ borderRadius: 6 }} showMeter={false} />
+          <ChannelVizStrip vizKey="preDimmer" height={12} style={{ borderRadius: 6 }} showMeter={false} />
         </View>
       </View>
 
