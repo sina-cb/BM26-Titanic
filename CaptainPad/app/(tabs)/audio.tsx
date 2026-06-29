@@ -52,6 +52,7 @@ import {
   resetAllAudioChains,
 } from '@/utils/api';
 import { useAudioStatus, useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, useAudioSignals, type AudioStatus, type AudioStatusDevice, type OscPillState, type AudioSignalDescriptor } from '@/hooks/useEngineState';
+import { useTempoState } from '@/hooks/use_tempo_tap';
 import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
 import { audioAccentHex } from '@/utils/audioSignals';
 
@@ -515,9 +516,14 @@ function LiveAudioMeters({
     const slot = liveDoc?.params?.[key];
     return slot && typeof slot.value === 'number' ? slot.value : 0;
   }, [liveDoc]);
-  // Prefer the Companion's analyzed tempo (audioBpm); fall back to the
-  // legacy tempoBpm (/lx/tempo/bpm) only when audioBpm is absent.
-  const tempoLive = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 }) as Record<string, number>;
+  // OSC BPM source is the Audio Companion's analyzed `audioBpm`
+  // (/marsin/audio/bpm) — the ONE OSC tempo source (2026-06-29 cleanup: the
+  // LX /lx/tempo/bpm → `tempoBpm` CPC param is no longer read here; no pattern
+  // or the engine clock consumed it). The "is a tempo driving things?" checks
+  // below read the ARBITRATED tempo (OSC OR tap) off the mixer broadcast via
+  // useTempoState(), not a raw OSC param.
+  const tempoLive = useLiveParamValues({ audioBpm: 0 }) as Record<string, number>;
+  const arbitrated = useTempoState();
   // Pull bpmSpeedSync from steady params for the SYNC pill — cheap;
   // changes only when operator toggles it.
   const steady = useSharedParamValues({ bpmSpeedSync: 0 }) as Record<string, number>;
@@ -564,7 +570,9 @@ function LiveAudioMeters({
   // BPM-SYNC warning is SOURCE-AGNOSTIC (sync follows the ARBITRATED tempo —
   // OSC OR TAP), so warn only when sync is armed with NO tempo to follow at all
   // (not merely because OSC isn't live — a tapped tempo is a valid driver).
-  const arbitratedBpm = tempoLive.tempoBpm > 0 ? tempoLive.tempoBpm : tempoLive.audioBpm;
+  // The arbitrated tempo is `mixer.tempoBpm` (via useTempoState); fall back to
+  // the raw OSC reading only before the first mixer broadcast lands.
+  const arbitratedBpm = (arbitrated.bpm ?? 0) > 0 ? (arbitrated.bpm as number) : tempoLive.audioBpm;
   const syncTone: 'on' | 'off' | 'warn' =
     syncOn && !(arbitratedBpm > 0) ? 'warn' :
     syncOn                         ? 'on'   :
@@ -668,13 +676,15 @@ function BpmStaleWarning({ bpmSyncOn }: {
 }) {
   const C = usePalette();
   // Steady-only render path when SYNC is OFF (nothing to warn about).
-  // Sync is SOURCE-AGNOSTIC — it follows the ARBITRATED tempo (`tempoBpm`,
-  // OSC OR TAP); `audioBpm` is the raw OSC readout, used only as a fallback
-  // before the first arbitrated broadcast lands. We warn ONLY when there is no
-  // tempo to follow at all — a tapped tempo with OSC off is still valid.
-  const live = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
+  // Sync is SOURCE-AGNOSTIC — it follows the ARBITRATED tempo (mixer.tempoBpm
+  // via useTempoState, OSC OR TAP); `audioBpm` is the raw OSC readout, used
+  // only as a fallback before the first arbitrated broadcast lands. We warn
+  // ONLY when there is no tempo to follow at all — a tapped tempo with OSC off
+  // is still valid.
+  const live = useLiveParamValues({ audioBpm: 0 } as Record<string, number>) as Record<string, number>;
+  const arbitrated = useTempoState();
   if (!bpmSyncOn) return null;
-  const effectiveBpm = live.tempoBpm > 0 ? live.tempoBpm : live.audioBpm;
+  const effectiveBpm = (arbitrated.bpm ?? 0) > 0 ? (arbitrated.bpm as number) : live.audioBpm;
   const bpmStale = !effectiveBpm || effectiveBpm <= 0;
   if (!bpmStale) return null;
   return (
@@ -700,15 +710,16 @@ function BpmStaleWarning({ bpmSyncOn }: {
 // history if a future card needs the verbose tempo line back.
 
 // Compact inline live read-out for the BPM card header. Single line,
-// quiet typography — just "126 BPM → 0.43" or "—". Subscribes ONLY to
-// audioBpm/tempoBpm + bpmSpeedMin/Max so the rest of the BPM card doesn't
-// re-render on every tempo tick. Prefers the Companion's analyzed tempo
-// (audioBpm); falls back to tempoBpm only when audioBpm is absent.
+// quiet typography — just "126 BPM → 0.43" or "—". Shows the ARBITRATED tempo
+// that actually drives speed-sync (mixer.tempoBpm via useTempoState, OSC OR
+// TAP); falls back to the raw OSC reading (audioBpm) only before the first
+// mixer broadcast lands. Subscribes to bpmSpeedMin/Max for the mapping.
 function BpmInlineReadout() {
   const C = usePalette();
-  const live = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
+  const live = useLiveParamValues({ audioBpm: 0 } as Record<string, number>) as Record<string, number>;
+  const arbitrated = useTempoState();
   const steady = useSharedParamValues({ bpmSpeedMin: 60, bpmSpeedMax: 180 } as Record<string, number>) as Record<string, number>;
-  const bpm = live.audioBpm > 0 ? live.audioBpm : live.tempoBpm;
+  const bpm = (arbitrated.bpm ?? 0) > 0 ? (arbitrated.bpm as number) : live.audioBpm;
   const mapped = useMemo(() => {
     if (!steady.bpmSpeedMin || !steady.bpmSpeedMax || steady.bpmSpeedMin === steady.bpmSpeedMax || !bpm) return null;
     return Math.max(0, Math.min(1, (bpm - steady.bpmSpeedMin) / (steady.bpmSpeedMax - steady.bpmSpeedMin)));

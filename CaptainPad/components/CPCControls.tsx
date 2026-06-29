@@ -92,10 +92,12 @@ export const CPCControls = ({ trailing }: CPCControlsProps = {}) => {
   // is hearing" number; it no longer drives the primary BPM display, so the
   // globals tile and the deck TAP button can never disagree about the clock.
   const tempo = useTempoState();
-  const live = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 });
-  // Primary BPM = the engine-applied pattern clock. Fall back to the live
-  // tempoBpm signal only before the first mixer/deck broadcast lands.
-  const liveBpm = tempo.bpm != null ? tempo.bpm : (live.tempoBpm ?? 0);
+  const live = useLiveParamValues({ audioBpm: 0 });
+  // Primary BPM = the engine-applied pattern clock. Fall back to the raw OSC
+  // reading (audioBpm — the Companion's analyzed tempo, the ONE OSC source)
+  // only before the first mixer/deck broadcast lands. (2026-06-29 cleanup: the
+  // LX /lx/tempo/bpm → `tempoBpm` CPC param is no longer read as a fallback.)
+  const liveBpm = tempo.bpm != null ? tempo.bpm : (live.audioBpm ?? 0);
   const params = useMemo(
     () => ({ ...steadyParams, ...live }),
     [steadyParams, live],
