@@ -4128,6 +4128,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (engineCore.tempoArbiter) {
           engineCore.tempoArbiter.noteManualTap();
         }
+        // BPM → SPEED sync is source-agnostic: a manual tap just moved the
+        // arbitrated tempo (mixer.tempoBpm) WITHOUT a CPC event, so re-evaluate
+        // the speed mapping now so SPEED follows the tapped tempo immediately
+        // (idempotent — only writes when the mapped value changed).
+        if (engineCore.bpmSync) {
+          engineCore.bpmSync.recompute();
+        }
         saveAllState();
         broadcastMixerState();
         res.writeHead(200); res.end(JSON.stringify({

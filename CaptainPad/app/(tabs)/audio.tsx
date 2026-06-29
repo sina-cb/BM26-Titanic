@@ -556,12 +556,16 @@ function LiveAudioMeters({
                               'off';
   const oscLabel  = oscState ? `OSC ${oscState.toUpperCase()}` : 'OSC …';
   const syncOn    = (steady.bpmSpeedSync ?? 0) >= 0.5;
-  const syncTone: 'on' | 'off' | 'warn' =
-    syncOn && oscState !== 'live' ? 'warn' :
-    syncOn                        ? 'on'   :
-                                    'off';
-  const effectiveBpm = tempoLive.audioBpm > 0 ? tempoLive.audioBpm : tempoLive.tempoBpm;
+  // Sync is SOURCE-AGNOSTIC (it follows the ARBITRATED tempo — OSC OR TAP),
+  // so warn only when sync is armed with no tempo to follow at all, NOT merely
+  // because OSC isn't live (a tapped tempo is a valid driver). The arbitrated
+  // applied tempo arrives as `tempoBpm`; `audioBpm` is the raw OSC readout.
+  const effectiveBpm = tempoLive.tempoBpm > 0 ? tempoLive.tempoBpm : tempoLive.audioBpm;
   const bpm = effectiveBpm > 0 ? Math.round(effectiveBpm) : null;
+  const syncTone: 'on' | 'off' | 'warn' =
+    syncOn && bpm == null ? 'warn' :
+    syncOn                ? 'on'   :
+                            'off';
 
   return (
     <View style={{ marginBottom: 24 }}>
@@ -656,18 +660,20 @@ function LiveAudioMeters({
 // the surrounding card (which renders steady-state sliders + the
 // toggle) never re-renders just because tempoBpm ticked.
 
-function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
-  bpmSyncOn: boolean; oscMissing: boolean; oscState: string | null;
+function BpmStaleWarning({ bpmSyncOn }: {
+  bpmSyncOn: boolean;
 }) {
   const C = usePalette();
   // Steady-only render path when SYNC is OFF (nothing to warn about).
-  // Prefer the Companion's analyzed tempo (audioBpm); fall back to
-  // tempoBpm (legacy /lx/tempo/bpm path) only when audioBpm is absent.
+  // Sync is SOURCE-AGNOSTIC — it follows the ARBITRATED tempo (`tempoBpm`,
+  // OSC OR TAP); `audioBpm` is the raw OSC readout, used only as a fallback
+  // before the first arbitrated broadcast lands. We warn ONLY when there is no
+  // tempo to follow at all — a tapped tempo with OSC off is still valid.
   const live = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
   if (!bpmSyncOn) return null;
-  const effectiveBpm = live.audioBpm > 0 ? live.audioBpm : live.tempoBpm;
+  const effectiveBpm = live.tempoBpm > 0 ? live.tempoBpm : live.audioBpm;
   const bpmStale = !effectiveBpm || effectiveBpm <= 0;
-  if (!oscMissing && !bpmStale) return null;
+  if (!bpmStale) return null;
   return (
     <View style={{
       borderRadius: 8, borderWidth: 1, borderColor: C.error,
@@ -678,9 +684,7 @@ function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
         ⚠ NO BPM SIGNAL
       </Text>
       <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 11 }}>
-        {oscMissing
-          ? `OSC listener is ${oscState ?? 'unknown'}; the Audio Companion isn't streaming a BPM. Speed will not move.`
-          : 'OSC is live but no BPM has arrived yet. Confirm the Audio Companion is analyzing tempo and streaming audioBpm.'}
+        Sync is armed but there is no tempo to follow. Tap one in (TAP on the deck/mixer GLOBALS bar) or have the Audio Companion stream one over OSC. Speed will not move until a tempo arrives.
       </Text>
     </View>
   );
@@ -731,12 +735,10 @@ function BpmInlineReadout() {
 // are kept ≥ 1 BPM apart on commit (client-side guard; engine validates).
 
 function CompactBpmCard({
-  sp, bpmSyncOn, oscMissing, oscState,
+  sp, bpmSyncOn,
 }: {
   sp: Record<string, number>;
   bpmSyncOn: boolean;
-  oscMissing: boolean;
-  oscState: string | null;
 }) {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
@@ -762,7 +764,7 @@ function CompactBpmCard({
             paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
             backgroundColor: bpmSyncOn ? ACCENT_AUTO : C.surfaceContainerHigh,
             borderWidth: 1,
-            borderColor: bpmSyncOn ? ACCENT_AUTO : (oscMissing ? C.error : C.ghostBorder),
+            borderColor: bpmSyncOn ? ACCENT_AUTO : C.ghostBorder,
           }}
         >
           <Text style={{
@@ -776,7 +778,7 @@ function CompactBpmCard({
       </View>
       {/* Stale/no-signal banner only when sync is on AND something is
           actually wrong. BpmStaleWarning self-gates and self-subscribes. */}
-      <BpmStaleWarning bpmSyncOn={bpmSyncOn} oscMissing={oscMissing} oscState={oscState} />
+      <BpmStaleWarning bpmSyncOn={bpmSyncOn} />
       {/* Two sliders on one row (min | max). Reuses FaderRow but with
           a compacted column layout — short labels, no per-slider hint
           paragraph. The one-liner hint sits below the pair. */}
@@ -811,7 +813,7 @@ function CompactBpmCard({
         </View>
       </View>
       <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: -4 }}>
-        Maps live tempo ({BPM_MIN_ABS}–{BPM_MAX_ABS} BPM) onto speed 0–1. Sync drives global SPEED from the Audio Companion&apos;s analyzed BPM (audioBpm).
+        Maps live tempo ({BPM_MIN_ABS}–{BPM_MAX_ABS} BPM) onto speed 0–1. Sync drives global SPEED from the arbitrated BPM — whatever is driving the clock, OSC (Audio Companion) OR a tapped tempo (TAP).
       </Text>
     </View>
   );
@@ -1252,8 +1254,6 @@ function AudioConfigBody({
     C.icon;
 
   const bpmSyncOn  = (sp.bpmSpeedSync ?? 0) >= 0.5;
-  const oscState   = oscStatus?.state ?? null;
-  const oscMissing = bpmSyncOn && oscState !== 'live';
 
   // ── Render ─────────────────────────────────────────────────────────
   //
@@ -1315,8 +1315,6 @@ function AudioConfigBody({
         <CompactBpmCard
           sp={sp}
           bpmSyncOn={bpmSyncOn}
-          oscMissing={oscMissing}
-          oscState={oscState}
         />
 
         {/* STRUCTURE DETECTOR — RETIRED (2026-06-17). The dedicated

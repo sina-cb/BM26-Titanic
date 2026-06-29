@@ -1224,6 +1224,15 @@ async function main() {
       // different epoch and would never compare correctly. Hot-path safe: two
       // field reads + one timestamp compare, no allocation.
       tempoArbiter.tick(Date.now());
+      // BPM → SPEED sync (source-agnostic): the arbiter may have just moved
+      // mixer.tempoBpm (OSC auto-follow) WITHOUT a CPC event, so re-evaluate
+      // the speed mapping against the arbitrated tempo. recompute() is
+      // idempotent — it only writes `speed` when the mapped value changed, so
+      // this is hot-path safe (no per-frame CPC churn). Guarded like the other
+      // beforeFrame callees since bpmSync is wired after loop.start().
+      if (engineCore.bpmSync) {
+        engineCore.bpmSync.recompute();
+      }
     },
   });
   // Now that the loop exists, give engineCore a way to read the live
@@ -1376,12 +1385,15 @@ async function main() {
   loop.start();
 
   // 7b. BPM → speed sync. Attaches to the CPC subscriber list and follows
-  // the Audio Companion's analyzed tempo, which arrives over OSC
-  // `/marsin/audio/bpm` → CPC key `audioBpm` (2026-06-17 contract).
-  // Operator gates the behaviour via the `bpmSpeedSync` CPC param
-  // (default off); when `audioBpm` is 0/absent the sync doesn't drive.
-  const bpmSync = new BpmSpeedSync(paramCenter);
+  // the ARBITRATED pattern tempo (mixer.tempoBpm) — i.e. whatever drives the
+  // clock: OSC auto-follow OR a manual TAP override — so SPEED tracks the
+  // tapped tempo too, not only the analyzed OSC `audioBpm`. Source-agnostic
+  // via the injected `getTempoBpm` resolver. Operator gates the behaviour via
+  // the `bpmSpeedSync` CPC param (default off); when the arbitrated tempo is
+  // 0/absent the sync doesn't drive (fail SAFE).
+  const bpmSync = new BpmSpeedSync(paramCenter, { getTempoBpm: () => mixer.tempoBpm });
   bpmSync.attach();
+  engineCore.bpmSync = bpmSync;
 
   // 7c. Microphone audio listener. Disabled by default — opt in via
   // config.yaml `audio.enabled: true`. A bad config / missing

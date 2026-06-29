@@ -3,11 +3,10 @@ import { View, Text, TouchableOpacity, useWindowDimensions } from 'react-native'
 import { usePalette } from '@/hooks/use-theme';
 import { updateParamCenter, getCachedColorPalettes, warmColorPalettesCache } from '@/utils/api';
 import { MiniFader } from '@/components/ui/MiniFader';
-import { useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, useAudioSignals, type AudioSignalDescriptor } from '@/hooks/useEngineState';
+import { useSharedParamValues, useLiveParamValues, useLiveParams, useAudioSignals, type AudioSignalDescriptor } from '@/hooks/useEngineState';
 import {
   useTempoState,
   useTempoTap,
-  tempoSourceHasOverride,
   type TempoSource,
 } from '@/hooks/use_tempo_tap';
 import { OscStatusPill } from '@/components/OscStatusPill';
@@ -175,17 +174,15 @@ export const CPCControls = ({ trailing }: CPCControlsProps = {}) => {
   const labelWidth = isPortrait ? 60 : 110;
   const labelGap   = isPortrait ? 8 : 12;
 
-  // BPM → speed sync surface state (see docs/25 §6 + Audio tab). When
-  // sync is ON we tag the SPEED fader green and pull its display from
-  // the live mapped value so the operator can see "speed is being
-  // auto-driven by tempoBpm" without leaving the Deck. We also surface
-  // a warning if sync expects OSC but OSC isn't flowing.
-  const oscStatus  = useOscStatus();
+  // BPM → speed sync surface state (see bpm_speed_sync.js + Audio tab). When
+  // sync is ON we tag the SPEED fader green and pull its display from the live
+  // mapped value so the operator can see "speed is being auto-driven by the
+  // arbitrated tempo" without leaving the Deck. We surface a warning only when
+  // there is NO tempo to follow at all (source-agnostic — OSC OR TAP counts).
   // Global tap-tempo cluster (tempo arbitration). Same shared tap logic as the
   // deck TAP button, so a tap from either surface means exactly the same
-  // thing. `tempo.source` drives the source tag + the SYNC affordance.
+  // thing. `tempo.source` drives the OSC↔TAP toggle in the BPM tile.
   const { tap: onTap, sync: onTempoSync } = useTempoTap();
-  const showSync    = tempoSourceHasOverride(tempo.source);
   const bpmSyncOn  = (params.bpmSpeedSync ?? 0) >= 0.5;
   const bpmMin     = params.bpmSpeedMin ?? 60;
   const bpmMax     = params.bpmSpeedMax ?? 180;
@@ -204,9 +201,11 @@ export const CPCControls = ({ trailing }: CPCControlsProps = {}) => {
   const speedBadge    = bpmSyncOn
     ? `BPM ${bpm > 0 ? Math.round(bpm) : '—'}`
     : undefined;
-  const bpmSyncStale  = bpmSyncOn && (
-    (oscStatus && oscStatus.state !== 'live') || bpm <= 0
-  );
+  // Sync is now SOURCE-AGNOSTIC (it follows the arbitrated tempo — OSC OR
+  // TAP). So the warning fires only when there is NO usable tempo at all
+  // (bpm <= 0), NOT merely because OSC isn't live — a tapped tempo with OSC
+  // off is a perfectly valid driver for SPEED.
+  const bpmSyncStale  = bpmSyncOn && bpm <= 0;
 
   return (
     <View style={{ backgroundColor: C.surfaceContainerLowest, padding: isPortrait ? 8 : 12, borderBottomWidth: 1, borderBottomColor: C.ghostBorder, gap: isPortrait ? 8 : 10 }}>
@@ -219,9 +218,9 @@ export const CPCControls = ({ trailing }: CPCControlsProps = {}) => {
           borderWidth: 1, borderColor: C.error,
           backgroundColor: 'rgba(255,80,80,0.10)',
         }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 10 }}>⚠ BPM SYNC ON · NO OSC TEMPO</Text>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 10 }}>⚠ BPM SYNC ON · NO TEMPO</Text>
           <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 11, flex: 1 }}>
-            Speed will not move until the Audio Companion streams a tempo (audioBpm). Disable sync on the Audio tab, or fix the OSC source.
+            Speed will not move until there is a tempo to follow — tap one in (TAP) or let the Audio Companion stream one over OSC. Toggle SYNC off to release SPEED.
           </Text>
         </View>
       ) : null}
@@ -266,13 +265,26 @@ export const CPCControls = ({ trailing }: CPCControlsProps = {}) => {
           />
         ) : (
           <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', gap: globalsRowGap, paddingRight: isPortrait ? 4 : 12, flex: 1 }}>
-            <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
-              <MiniFader
-                label="SPEED"
-                value={speedDisplay}
-                fillColor={speedFill}
-                badge={speedBadge}
-                onChange={(v) => update('speed', v)}
+            <View style={{ flex: 1, maxWidth: faderMaxWidth, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={{ flex: 1 }}>
+                <MiniFader
+                  label="SPEED"
+                  value={speedDisplay}
+                  fillColor={speedFill}
+                  badge={speedBadge}
+                  onChange={(v) => update('speed', v)}
+                />
+              </View>
+              {/* SPEED ← BPM sync toggle, on the MAIN UI (operator request
+                  feat/optimize_channels). Toggles the engine `bpmSpeedSync`
+                  param so the engine maps the ARBITRATED tempo (OSC OR TAP)
+                  onto SPEED. Source-agnostic — see bpm_speed_sync.js. When ON
+                  with no tempo available it tints amber (a warning) but stays
+                  toggleable so the operator can arm sync before audio starts. */}
+              <SpeedSyncToggle
+                on={bpmSyncOn}
+                starving={bpmSyncOn && bpm <= 0}
+                onToggle={() => update('bpmSpeedSync', bpmSyncOn ? 0 : 1)}
               />
             </View>
 
@@ -301,26 +313,17 @@ export const CPCControls = ({ trailing }: CPCControlsProps = {}) => {
               isPortrait={isPortrait}
             />
 
-            {/* Global TAP cluster — reachable on every tab that shows the
-                GLOBALS bar (deck + mixer), not only the deck header. Tap to
-                set the clock (arms the engine's manual override); the source
-                tag + SYNC affordance live in the BPM tile to its right. */}
-            <GlobalTapTile
-              onTap={onTap}
-              source={tempo.source}
-              isPortrait={isPortrait}
-            />
-
-            {/* BPM tile sits just before the OSC pill — the "tempo + source
-                health" cluster at the end of the row. Now source-aware: it
-                shows the APPLIED tempo + an OSC/TAP/HELD tag, and a SYNC
-                affordance when a manual tap override is active. */}
+            {/* BPM tile — the tempo + source cluster, reachable on every tab
+                that shows the GLOBALS bar (deck + mixer). Source-aware AND
+                operable: shows the APPLIED tempo + an EXPLICIT OSC↔TAP toggle
+                the operator can flip both ways. OSC side hands the clock back
+                to the live OSC feed (re-sync); TAP side registers a tap that
+                arms the manual override. */}
             <BpmTile
               bpm={bpm}
               isPortrait={isPortrait}
-              synced={bpmSyncOn}
               source={tempo.source}
-              showSync={showSync}
+              onTap={onTap}
               onSync={onTempoSync}
             />
 
@@ -701,7 +704,7 @@ function LiveMeterColumn({ isPortrait, signal, value }: {
   );
 }
 
-// The TAP source-tag accent: OSC reads as auto-driven (green), a manual
+// The BPM source-tag accent: OSC reads as auto-driven (green), a manual
 // override reads as "operator hands on" (tertiary), HELD stays muted.
 function sourceAccent(C: ReturnType<typeof usePalette>, source: TempoSource): string {
   if (source === 'osc') return ACCENT_AUTO;
@@ -710,97 +713,98 @@ function sourceAccent(C: ReturnType<typeof usePalette>, source: TempoSource): st
 }
 
 /**
- * GlobalTapTile — the compact TAP button for the GLOBALS bar. Same tile
- * footprint as COLORS / BPM / OSC so it reads as part of that cluster. Tapping
- * registers a tap (the shared hook averages intervals → POST /mixer/tempo).
- * The applied BPM + source live in the BpmTile to its right, so this tile is
- * just the trigger (keeps the cluster decluttered — one number, not three).
+ * SpeedSyncToggle — a compact SYNC button that sits to the right of the SPEED
+ * fader on the GLOBALS bar. Toggles the engine `bpmSpeedSync` param so SPEED
+ * is auto-driven from the ARBITRATED tempo (OSC OR TAP — see
+ * bpm_speed_sync.js). ON = green (matches the SPEED fader's auto-driven tint).
+ * ON-but-starving (sync armed, no tempo yet) = amber, a warning that speed
+ * won't move until a tempo arrives — but the toggle stays operable so the
+ * operator can arm sync ahead of audio.
  */
-function GlobalTapTile({ onTap, source, isPortrait }: {
-  onTap: () => void;
-  source: TempoSource;
-  isPortrait: boolean;
+function SpeedSyncToggle({ on, starving, onToggle }: {
+  on: boolean;
+  starving: boolean;
+  onToggle: () => void;
 }) {
   const C = usePalette();
-  const w = isPortrait ? GLOBALS_TILE_WIDTH_PORTRAIT : GLOBALS_TILE_WIDTH_LANDSCAPE;
-  // Tint the border when a manual tap override is active so the operator can
-  // see "I'm holding the tempo" from this tile too.
-  const manual = source === 'manual';
+  const accent = on ? (starving ? '#ffc107' : ACCENT_AUTO) : C.secondary;
   return (
     <TouchableOpacity
-      onPress={onTap}
-      accessibilityLabel="Tap tempo"
-      accessibilityRole="button"
+      onPress={onToggle}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: on }}
+      accessibilityLabel={
+        on
+          ? (starving ? 'Speed follows BPM: on, but no tempo yet' : 'Speed follows BPM: on')
+          : 'Speed follows BPM: off'
+      }
+      hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
       style={{
-        width: w, height: GLOBALS_TILE_HEIGHT,
-        paddingVertical: 4, paddingHorizontal: 6,
-        borderRadius: 8, borderWidth: 1,
-        borderColor: manual ? C.tertiary : C.primary,
-        backgroundColor: C.surface,
-        justifyContent: 'space-between',
+        width: 34, height: 44,
+        borderRadius: 7, borderWidth: 1,
+        borderColor: on ? accent : C.ghostBorder,
+        backgroundColor: on ? `${accent}22` : C.surface,
+        alignItems: 'center', justifyContent: 'center',
       }}
     >
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.8 }}>
-        TAP
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: accent, letterSpacing: 0.6 }}>
+        SYNC
       </Text>
-      <Text style={{
-        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18,
-        color: manual ? C.tertiary : C.primary, textAlign: 'center', lineHeight: 20,
-      }}>
-        ⊙
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 7, color: on ? accent : C.icon, letterSpacing: 0.4 }}>
+        {on ? (starving ? 'NO BPM' : 'ON') : 'OFF'}
       </Text>
     </TouchableOpacity>
   );
 }
 
-// BPM gets its own compact tile (no operator gain — it's a tempo
-// reference, not a level to scale). The big numeric readout makes
-// it easy to glance at from across the venue. Now source-aware: a small
-// source-based border colour tells the operator what's driving the clock
-// (green = OSC auto-follow, tertiary = manual override), and a SYNC affordance
-// appears only while a manual tap override is active (tap → hand control back
-// to OSC).
-function BpmTile({ bpm, isPortrait, synced, source, showSync, onSync }: {
+/**
+ * BpmTile — the GLOBALS-bar tempo cluster: the applied BPM readout PLUS an
+ * EXPLICIT, two-way OSC↔TAP source toggle (operator request,
+ * feat/optimize_channels). The implicit "SYNC chip only when manual" is gone —
+ * the operator can now flip the clock source in either direction from one
+ * control:
+ *
+ *   - OSC side  → re-sync to the live OSC feed (drops any manual override via
+ *                 useTempoTap().sync()). Active (green) when source === 'osc'.
+ *   - TAP side  → register a tap (useTempoTap().tap()); once ≥2 taps land the
+ *                 engine arms the manual override and source flips to 'manual'.
+ *                 Active (tertiary) when source === 'manual'.
+ *
+ * `held` (OSC stale/off, no active tap override) lights neither segment fully
+ * but tints TAP-leaning since the last value is usually a held tap/OSC sample;
+ * the operator can tap to re-own it or press OSC to wait for OSC to return.
+ * The big numeric readout stays so the tempo reads from across the venue.
+ */
+function BpmTile({ bpm, isPortrait, source, onTap, onSync }: {
   bpm: number;
   isPortrait: boolean;
-  synced?: boolean;
   source: TempoSource;
-  showSync: boolean;
+  onTap: () => void;
   onSync: () => void;
 }) {
   const C = usePalette();
   const hasSignal = bpm > 0;
-  // The BPM tile widens a touch when it has to carry the SYNC chip so the
-  // number + tag + SYNC don't crowd; otherwise it matches the cluster width.
-  const baseW = isPortrait ? GLOBALS_TILE_WIDTH_PORTRAIT : GLOBALS_TILE_WIDTH_LANDSCAPE;
-  const w = showSync ? baseW + (isPortrait ? 22 : 30) : baseW;
   const accent = sourceAccent(C, source);
+  // Widen the tile to seat the OSC/TAP toggle beside the number.
+  const baseW = isPortrait ? GLOBALS_TILE_WIDTH_PORTRAIT : GLOBALS_TILE_WIDTH_LANDSCAPE;
+  const w = baseW + (isPortrait ? 30 : 40);
   // OSC auto-follow keeps the green "beat-locked" border; a manual override
   // tints tertiary; otherwise the resting ghost border.
   const border = source === 'osc' ? ACCENT_AUTO : source === 'manual' ? C.tertiary : C.ghostBorder;
-  // QA round1 #4: a bare BPM number sitting next to an "OSC IDLE" pill reads
-  // as a contradiction ("is the clock running or not?"). Append a MINIMAL
-  // source qualifier so the held/osc case is unambiguous — `· HELD` when a
-  // tempo is held with no live driver, `· OSC` when OSC is auto-following.
-  // Manual override is already signalled by the tertiary tint + SYNC chip, so
-  // it stays bare (no `· TAP`). This is intentionally a one-word qualifier,
-  // NOT the verbose source tag retired on 2026-06-22.
-  const qualifier = hasSignal && source === 'held' ? 'HELD' : hasSignal && source === 'osc' ? 'OSC' : null;
+  const oscActive = source === 'osc';
+  const tapActive = source === 'manual';
   return (
     <View style={{
       width: w, height: GLOBALS_TILE_HEIGHT,
       paddingVertical: 4, paddingHorizontal: 6,
       borderRadius: 8, borderWidth: 1, borderColor: border,
       backgroundColor: C.surface,
-      flexDirection: 'row', alignItems: 'center',
+      flexDirection: 'row', alignItems: 'center', gap: 5,
     }}>
       <View style={{ flex: 1, justifyContent: 'space-between', height: '100%' }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: accent, textTransform: 'uppercase', letterSpacing: 0.8 }}>
-            BPM{qualifier ? <Text style={{ color: C.secondary }}> · {qualifier}</Text> : null}
-          </Text>
-          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: hasSignal ? accent : C.ghostBorder }} />
-        </View>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: accent, textTransform: 'uppercase', letterSpacing: 0.8 }}>
+          BPM
+        </Text>
         <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'center' }}>
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18,
@@ -810,23 +814,44 @@ function BpmTile({ bpm, isPortrait, synced, source, showSync, onSync }: {
           </Text>
         </View>
       </View>
-      {showSync ? (
+
+      {/* EXPLICIT OSC↔TAP source toggle. Two stacked segments the operator can
+          flip both ways — OSC re-syncs to the live feed, TAP arms a manual
+          override via a tap. The active segment is filled in its source accent
+          so "what's driving the clock" reads at a glance. */}
+      <View style={{ width: 30, height: 40, borderRadius: 6, overflow: 'hidden', borderWidth: 1, borderColor: C.ghostBorder }}>
         <TouchableOpacity
           onPress={onSync}
-          accessibilityLabel="Sync tempo back to OSC"
           accessibilityRole="button"
-          hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+          accessibilityState={{ selected: oscActive }}
+          accessibilityLabel="Follow OSC tempo (re-sync to the live OSC feed)"
+          hitSlop={{ top: 4, left: 4, right: 4, bottom: 0 }}
           style={{
-            marginLeft: 4, height: 40, paddingHorizontal: 5,
-            borderRadius: 6, borderWidth: 1, borderColor: C.tertiary,
-            alignItems: 'center', justifyContent: 'center',
+            flex: 1, alignItems: 'center', justifyContent: 'center',
+            backgroundColor: oscActive ? ACCENT_AUTO : C.surface,
           }}
         >
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.tertiary, letterSpacing: 0.8 }}>
-            SYNC
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, letterSpacing: 0.4, color: oscActive ? '#003a44' : C.secondary }}>
+            OSC
           </Text>
         </TouchableOpacity>
-      ) : null}
+        <TouchableOpacity
+          onPress={onTap}
+          accessibilityRole="button"
+          accessibilityState={{ selected: tapActive }}
+          accessibilityLabel="Tap tempo (arms a manual override)"
+          hitSlop={{ top: 0, left: 4, right: 4, bottom: 4 }}
+          style={{
+            flex: 1, alignItems: 'center', justifyContent: 'center',
+            borderTopWidth: 1, borderTopColor: C.ghostBorder,
+            backgroundColor: tapActive ? C.tertiary : C.surface,
+          }}
+        >
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, letterSpacing: 0.4, color: tapActive ? C.surfaceContainerLowest : C.secondary }}>
+            TAP
+          </Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }

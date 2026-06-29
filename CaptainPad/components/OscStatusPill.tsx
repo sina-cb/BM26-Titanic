@@ -18,29 +18,41 @@ import { Palette } from '@/constants/theme';
 import { useOscStatus, OscPillState } from '@/hooks/useEngineState';
 
 // Visual mapping. We keep these in one place so the pill body and
-// the sheet header agree on color semantics.
+// the sheet header agree on color semantics. Prod traffic-light scheme
+// (operator request feat/optimize_channels): GREEN receiving, YELLOW
+// enabled-but-stalled, GRAY disabled.
 //
-//   off       → muted (listener intentionally disabled)
-//   idle      → amber (enabled but nothing flowing — operator
-//               probably needs to start their sender)
-//   unmapped  → orange/error (packets are arriving but addresses
-//               don't match any binding — config mistake)
-//   live      → green/primary (values are flowing into the CPC)
+//   off       → GRAY (listener intentionally disabled — nothing to watch)
+//   idle      → YELLOW (enabled but no values flowing — the operator
+//               probably needs to start their sender; this is an
+//               actionable "OSC is on but starving" state, so it earns
+//               a clear caution colour rather than blending into chrome)
+//   unmapped  → YELLOW/amber (packets ARE arriving but addresses don't
+//               match any binding — also actionable, a config mistake;
+//               kept distinct from `idle` only by its label, not colour,
+//               so "OSC is enabled but you're not getting data" reads as
+//               ONE caution band)
+//   live      → GREEN (values are flowing into the CPC)
 //
-// '#fff3cd' / '#7a5300' / '#f8d7da' / '#842029' / '#003a44' are
-// semantic-state literals intentionally pinned across both themes — the
-// "OSC unmapped" / "OSC idle" badges should look the same regardless of
-// the operator's light/dark preference so the colour reads as a status
-// signal, not a chrome accent.
+// '#ffc107' (amber/yellow) / '#5a4500' (dark amber text) / '#003a44'
+// (dark teal on the green chip) are semantic-state literals intentionally
+// pinned across both themes — the OSC status badge should look the same
+// regardless of the operator's light/dark preference so the colour reads
+// as a traffic-light status signal, not a chrome accent.
+const OSC_YELLOW_BG = '#ffc107';
+const OSC_YELLOW_FG = '#5a4500';
 function makeStateStyles(C: Palette): Record<OscPillState['state'], { bg: string; fg: string; border: string }> {
   return {
+    // GRAY — listener disabled. Nothing is expected, so it stays neutral.
     off:      { bg: C.surfaceContainerHigh, fg: C.secondary, border: C.ghostBorder },
-    // idle is BENIGN (OSC mapped, no values flowing) — render it neutral, not
-    // amber. Amber is reserved for attention/armed (PANIC); amber-for-idle
-    // trained operators to ignore amber on a safety surface (QA R8).
-    idle:     { bg: C.surfaceContainerHigh, fg: C.secondary, border: C.ghostBorder },
-    unmapped: { bg: '#f8d7da',              fg: '#842029',   border: C.error },
-    live:     { bg: C.primaryContainer,     fg: '#003a44',   border: C.primary },
+    // YELLOW — enabled but nothing flowing. Actionable (start the sender),
+    // so it earns a clear caution colour rather than blending into chrome.
+    idle:     { bg: OSC_YELLOW_BG,          fg: OSC_YELLOW_FG, border: OSC_YELLOW_BG },
+    // YELLOW — packets arriving but unmapped. Same caution band as idle
+    // (enabled, no usable data); the label disambiguates the cause.
+    unmapped: { bg: OSC_YELLOW_BG,          fg: OSC_YELLOW_FG, border: OSC_YELLOW_BG },
+    // GREEN — values flowing into the CPC.
+    live:     { bg: C.primaryContainer,     fg: '#003a44',     border: C.primary },
   };
 }
 
