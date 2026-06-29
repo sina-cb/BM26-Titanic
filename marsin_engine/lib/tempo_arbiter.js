@@ -55,6 +55,16 @@ export const OSC_STALENESS_MS = 1500;
 export const TEMPO_MIN_BPM = 20;
 export const TEMPO_MAX_BPM = 400;
 
+// Stability deadband (BPM). The Companion emits audioBpm on every analysis
+// frame (~50-100/s) and a beat tracker's estimate wobbles a BPM or two even
+// when locked. Without damping, the arbiter rewrote mixer.tempoBpm on every
+// wobble — so the readout "jumped a lot". Once OSC is driving, we ignore moves
+// smaller than this; a genuine tempo change (>= this) still follows. The FIRST
+// follow after (re)acquiring OSC or an explicit sync SNAPS regardless, so OSC
+// is honored immediately. Applied values are also rounded to an integer BPM
+// (the UI shows an integer) so sub-BPM wander never churns the tempo.
+export const TEMPO_DEADBAND_BPM = 3;
+
 export class TempoArbiter {
   /**
    * @param {object} deps
@@ -138,6 +148,10 @@ export class TempoArbiter {
    */
   clearOverride() {
     this._manualOverrideUntilMs = 0;
+    // Forget the last applied OSC value so the next tick SNAPS to the live OSC
+    // tempo (the deadband below only suppresses jitter once we're already
+    // following). This makes "use OSC" / sync land exactly on the OSC bpm.
+    this._lastAppliedOscBpm = null;
   }
 
   /** True if a live OSC BPM landed within the staleness window. */
@@ -192,16 +206,20 @@ export class TempoArbiter {
     if (this.isManualOverrideActive(now)) return;
     // OSC must be live to drive.
     if (!this.isOscLive(now)) return;
-    const target = this._clampBpm(this._lastOscBpm);
-    // No churn: only write when the value actually changes. Compare against
-    // the mixer's current tempo so an externally-set identical value (e.g. the
-    // tap landed on the same BPM) also short-circuits.
-    if (this._lastAppliedOscBpm === target && this._mixer.tempoBpm === target) {
+    // Round to an integer BPM (the UI shows an integer) so sub-BPM tracker
+    // wander never churns the tempo.
+    const target = Math.round(this._clampBpm(this._lastOscBpm));
+    // Already there (tap matched, or restore) — record + skip the setter.
+    if (this._mixer.tempoBpm === target) {
+      this._lastAppliedOscBpm = target;
       return;
     }
-    if (this._mixer.tempoBpm === target) {
-      // Already there (tap matched, or restore) — record + skip the setter.
-      this._lastAppliedOscBpm = target;
+    // STABILITY DEADBAND: once we're following OSC (a prior applied value
+    // exists), ignore jitter smaller than TEMPO_DEADBAND_BPM so the readout
+    // stays steady. The first follow after (re)acquire / sync (no prior applied
+    // value) snaps so OSC is honored immediately.
+    if (this._lastAppliedOscBpm !== null
+        && Math.abs(target - this._mixer.tempoBpm) < TEMPO_DEADBAND_BPM) {
       return;
     }
     this._mixer.setTempoBpm(target);

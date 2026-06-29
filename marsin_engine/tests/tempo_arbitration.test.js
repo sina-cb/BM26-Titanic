@@ -292,6 +292,41 @@ test('(h) a tap that matches the live OSC value ⇒ no extra setTempoBpm on recl
   assert.deepEqual(mixer.setCalls, [128], 'no redundant set when value unchanged');
 });
 
+// ── stability deadband (jitter rejection) ─────────────────────────────
+
+test('deadband: small OSC jitter around the held tempo does NOT churn', () => {
+  const { mixer, pc, arbiter, clock } = makeArbiter();
+  pc.emitAudioBpm(128); arbiter.tick(clock());            // snap to 128
+  assert.deepEqual(mixer.setCalls, [128]);
+  for (const j of [129, 127, 130, 126, 128.4]) {          // all within 3 BPM of 128
+    clock.advance(25); pc.emitAudioBpm(j); arbiter.tick(clock());
+  }
+  assert.deepEqual(mixer.setCalls, [128], 'jitter within the deadband is ignored');
+});
+
+test('deadband: a genuine tempo move (>= deadband) follows', () => {
+  const { mixer, pc, arbiter, clock } = makeArbiter();
+  pc.emitAudioBpm(120); arbiter.tick(clock());            // snap 120
+  clock.advance(25); pc.emitAudioBpm(124); arbiter.tick(clock()); // +4 >= 3
+  assert.deepEqual(mixer.setCalls, [120, 124]);
+});
+
+test('OSC bpm is rounded to an integer (no sub-BPM churn)', () => {
+  const { mixer, pc, arbiter, clock } = makeArbiter();
+  pc.emitAudioBpm(127.6); arbiter.tick(clock());
+  assert.equal(mixer.tempoBpm, 128);
+});
+
+test('sync (clearOverride) snaps to the live OSC even within the deadband', () => {
+  const { mixer, pc, arbiter, clock } = makeArbiter();
+  pc.emitAudioBpm(128); arbiter.tick(clock());            // following 128
+  mixer.setTempoBpm(127); arbiter.noteManualTap(clock()); // tap to 127 (within deadband)
+  pc.emitAudioBpm(128);
+  arbiter.clearOverride();                                 // sync → snap to OSC
+  arbiter.tick(clock());
+  assert.equal(mixer.tempoBpm, 128, 'sync snaps to OSC even though |128-127| < deadband');
+});
+
 // ── Constants are sane named values ────────────────────────────────────
 
 test('MANUAL_HOLD_MS default is 12000ms; OSC_STALENESS_MS is 1500ms', () => {
