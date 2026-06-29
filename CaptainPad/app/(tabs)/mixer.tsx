@@ -36,7 +36,7 @@ import {
   postSolo, deleteSolo, clearAllSolo, setChannelSoloSafe,
 } from '@/utils/groupsSoloApi';
 import { postBump } from '@/utils/bumpApi';
-import { GroupRailBody, MixGroupHeader } from '@/components/GroupRail';
+import { GroupRailBody, MixGroupHeader, tintFromHex } from '@/components/GroupRail';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
 import {
@@ -357,31 +357,39 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
   // are still the parent's useCallback-stable refs). Touch targets stay ≥44pt
   // via the row minHeight + the toggle hitSlops.
   if (collapsed) {
-    // A NARROW thin bar (operator request 2026-06-29: "make the collapsed group
-    // a thin bar, not wide, to save horizontal space"). We deliberately DON'T
-    // apply cardStyle (which forces a ≥320pt column) — channelCardThin sets its
-    // own slim width. The fader is dropped (it's the width hog; collapsed =
-    // "left alone"); just number + name + level% + compact M/S remain. Expand
-    // the group to get the full strip back.
+    // A collapsed group is a NARROW VERTICAL bar (operator request 2026-06-29:
+    // "when collapsed the group becomes a vertical bar — thin horizontally —
+    // with content stacked vertically"). The parent group container supplies
+    // the slim column width; each member renders as ONE tiny vertical cell:
+    //   number (top) → a small level indicator (mini fill bar + %) → stacked
+    //   M / S toggles.
+    // We deliberately DON'T apply cardStyle (which would force a ≥320pt column).
+    // The full level fader / viz / hue / playlist / params chrome is dropped —
+    // collapsed = "left alone, save space". Tapping the group header expands the
+    // whole group back. Touch targets stay ≥44pt via thinVToggle minHeight +
+    // the toggle hitSlops.
+    const levelPct = Math.round((channel.fader ?? 0) * 100);
     return (
       <View
         style={[
-          styles.channelCardThin,
-          group?.color ? { borderColor: group.color, borderLeftWidth: 4 } : null,
+          styles.channelCellV,
           dimmedBySolo ? { opacity: 0.45 } : null,
         ]}
       >
         <View style={[styles.channelBadge, styles.channelBadgeThin]}>
           <Text style={[styles.valueReadout, { color: C.primary, fontSize: 11 }]}>{index}</Text>
         </View>
-        <Text style={[styles.headlineSm, styles.thinName]} numberOfLines={1}>
-          {derivedTitle}
-        </Text>
-        <Text style={[styles.displayMono, { width: 26, textAlign: 'right', fontSize: 11 }]}>
-          {Math.round((channel.fader ?? 0) * 100)}
+        {/* Tiny vertical level indicator: a slim track whose fill height tracks
+            the channel level, plus a compact % readout below it. Read-only here
+            (the full fader returns on expand). */}
+        <View style={styles.cellLevelTrack} accessibilityLabel={`Level ${levelPct} percent`}>
+          <View style={[styles.cellLevelFill, { height: `${levelPct}%` }]} />
+        </View>
+        <Text style={[styles.displayMono, { fontSize: 10, textAlign: 'center' }]}>
+          {levelPct}
         </Text>
         <TouchableOpacity
-          style={[styles.thinToggle, !channel.enabled && styles.toggleBtnMuted]}
+          style={[styles.thinVToggle, !channel.enabled && styles.toggleBtnMuted]}
           hitSlop={ICON_BTN_HIT_SLOP}
           onPress={() => onMuteToggle(channel.id, !channel.enabled)}
           accessibilityRole="button"
@@ -391,7 +399,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           <Text style={[styles.labelCaps, { fontSize: 9 }, !channel.enabled && { color: '#FFF' }]}>M</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.thinToggle, isSolo && { backgroundColor: '#00a86b', borderColor: '#00a86b' }]}
+          style={[styles.thinVToggle, isSolo && { backgroundColor: '#00a86b', borderColor: '#00a86b' }]}
           hitSlop={ICON_BTN_HIT_SLOP}
           onPress={() => onSoloToggle(channel.id)}
           accessibilityRole="button"
@@ -2135,12 +2143,6 @@ export default function MixerScreen() {
     if (!ok) console.warn('[Mixer] Transition queued — control WS not yet open');
   }, []);
 
-  // Render-pass bookkeeping for the in-list group headers: a group's slim
-  // header is emitted exactly once, before its FIRST member in list order
-  // (members can be non-contiguous after reorders). Reset each render; the
-  // channel `.map` below runs synchronously in order so a plain Set is safe.
-  const groupHeaderSeen = new Set<string>();
-
   return (
     <View style={styles.container}>
       {/* ── Top Header Bar ─────────────────────────────────────────── */}
@@ -2333,124 +2335,184 @@ export default function MixerScreen() {
             single header acts as the group's collapse toggle + presence marker.
             This Set is rebuilt every render (cheap, deterministic in map order)
             and is NOT React state — purely a render-pass bookkeeping aid. */}
-        {channels.map((channel, idx) => {
-          // Landscape width distribution (QA round1 #7): the strips used to be
-          // a fixed 320px each and hugged the left edge, leaving ~2/3 of the
-          // landscape viewport as dead grey space. In landscape we now hand
-          // each strip a flex width so the row fills the viewport — `flex: 1`
-          // splits the available width evenly across the visible strips, with a
-          // 320px floor so a strip never collapses below its usable layout and
-          // a 560px ceiling so a single strip fills sensibly without ballooning.
-          // Portrait keeps the original fixed 320px column.
-          // `width: undefined` explicitly overrides channelCard's fixed 320
-          // (RN style-merge keeps the earlier width unless it's reset), letting
-          // `flex: 1` distribute the row width instead.
-          // Round8 #3: lift the per-card width ceiling further when the row
-          // isn't full so 1-2 (now centered) layers fill more of the freed
-          // landscape width instead of leaving a wide void around a 760-capped
-          // card. A 3-layer row keeps the 560 cap (it already fills evenly);
-          // a single layer may grow to 920 and a pair to 760 each, so the
-          // centered row reads filled rather than stranded with a big gutter.
+        {(() => {
+          // ── Render plan (operator request 2026-06-29 #1) ────────────────
+          // A group should VISUALLY SURROUND its member channels. We no longer
+          // emit `header + members` as flat siblings in the strip row; instead
+          // we cluster each group's members into a single render UNIT that is
+          // rendered inside ONE bordered/tinted container (the group color
+          // wraps the header + the member columns). Ungrouped channels stay
+          // standalone units, rendered outside any container.
+          //
+          // Members may not be contiguous in channel order (channels reorder
+          // freely); we cluster by mixGroupId and anchor each group's unit at
+          // the position of its FIRST member, preserving channel order
+          // otherwise. The header is therefore emitted ONCE per group, on top
+          // of (expanded) / above (collapsed) its members.
+          // Landscape width distribution (QA round1 #7): in landscape each
+          // standalone strip / each member column gets a flex width so the row
+          // fills the viewport; portrait keeps the fixed 320 column.
           const landscapeMaxWidth = channels.length >= 3 ? 560 : (channels.length === 1 ? 920 : 760);
           const cardStyle = isPortrait
             ? null
             : { width: undefined, flex: 1, minWidth: 320, maxWidth: landscapeMaxWidth };
-          // Solo display (docs/39 §10) — DISPLAY-ONLY, derived from the
-          // authoritative soloedIds Set. `isSolo` = this channel is soloed.
-          // `soloActive` = ANY solo is engaged. `dimmedBySolo` mirrors the
-          // engine's render gate: when a solo is active and this channel is
-          // NOT soloed / solo-safe / fader-locked, the engine zeroes its
-          // contribution — we dim the strip to match (never mutating state).
-          const isSoloActive = soloedIds.has(channel.id);
-          const anySolo = soloedIds.size > 0;
-          // FLASH / BUMP held-state (docs/39 §10.7) — display-only.
-          const isBumped = bumpedIds.has(channel.id);
-          const soloProtected = !!channel.soloSafe || !!channel.faderLocked;
-          const dimmedBySolo = anySolo && !isSoloActive && !soloProtected;
-          // Group this channel belongs to (single-membership pointer), for the
-          // strip tint + badge.
-          const group = channel.mixGroupId
-            ? mixGroups.find(g => g.id === channel.mixGroupId) || null
-            : null;
-          // Collapse (view-only): a channel renders as a thin strip iff its
-          // group is in the collapsedGroups set. Ungrouped channels are never
-          // collapsed. The slim group header is emitted before this channel
-          // only if this is the FIRST member of its group seen this render.
-          const groupCollapsed = !!group && collapsedGroups.has(group.id);
-          let groupHeader: React.ReactNode = null;
-          if (group && !groupHeaderSeen.has(group.id)) {
-            groupHeaderSeen.add(group.id);
-            const memberCount = channels.reduce(
-              (n: number, c: any) => (c.mixGroupId === group.id ? n + 1 : n),
-              0,
+
+          // Per-channel ChannelStrip element factory — keeps the (large) prop
+          // wiring in one place whether the strip is standalone or a group
+          // member, and whether it's expanded or collapsed.
+          const renderStrip = (channel: any, idx: number, group: any, collapsed: boolean) => {
+            // Solo display (docs/39 §10) — DISPLAY-ONLY, derived from the
+            // authoritative soloedIds Set.
+            const isSoloActive = soloedIds.has(channel.id);
+            const anySolo = soloedIds.size > 0;
+            const isBumped = bumpedIds.has(channel.id);
+            const soloProtected = !!channel.soloSafe || !!channel.faderLocked;
+            const dimmedBySolo = anySolo && !isSoloActive && !soloProtected;
+            // Read inlinePlaylistVersion so this scope re-renders when the Map
+            // changes (Maps aren't structurally compared by React).
+            void inlinePlaylistVersion;
+            const channelInlinePlaylist = inlinePlaylistRef.current.get(channel.id) || null;
+            return (
+              <ChannelStrip
+                key={channel.id}
+                index={idx + 1}
+                channel={channel}
+                isSolo={isSoloActive}
+                soloActive={anySolo}
+                dimmedBySolo={dimmedBySolo}
+                isBumped={isBumped}
+                onBumpOn={handleBumpOn}
+                onBumpOff={handleBumpOff}
+                group={group}
+                collapsed={collapsed}
+                isDeck={false}
+                blends={blends}
+                transitions={transitionsList}
+                playlistLibrary={playlistLibrary}
+                initialPlaylist={channelInlinePlaylist}
+                cardStyle={cardStyle}
+                isOnlyChannel={channels.length === 1}
+                onRename={handleRename}
+                onFaderChange={handleFaderChange}
+                onColorChange={handleColorChange}
+                onHueChange={handleHueChange}
+                onMuteToggle={handleMuteToggle}
+                onSoloToggle={handleSoloToggle}
+                onSoloSafeToggle={handleSoloSafeToggle}
+                onModeChange={handleModeChange}
+                onControlChange={handleControlChange}
+                onDelete={handleDeleteChannel}
+                onDuplicate={handleDuplicateChannel}
+                onMoveUp={handleMoveUp}
+                onMoveDown={handleMoveDown}
+                canMoveUp={idx < channels.length - 1}
+                canMoveDown={idx > 0}
+                onLockToggle={handleLockToggle}
+                onFaderLockToggle={handleFaderLockToggle}
+                onTransition={handleTransition}
+                onTransitionSettingsChange={handleTransitionSettingsChange}
+                viewSelectionGroups={viewSelectionGroups}
+                viewSelectionViewMasks={viewSelectionViewMasks}
+                onViewSelectionChange={handleViewSelectionChange}
+              />
             );
+          };
+
+          // Build the ordered render plan: a list of units, each either a lone
+          // ungrouped channel or a group with its (ordered) members.
+          type Unit =
+            | { kind: 'channel'; channel: any; idx: number }
+            | { kind: 'group'; group: any; members: { channel: any; idx: number }[] };
+          const units: Unit[] = [];
+          const groupUnitByGid = new Map<string, Extract<Unit, { kind: 'group' }>>();
+          channels.forEach((channel, idx) => {
+            const group = channel.mixGroupId
+              ? mixGroups.find(g => g.id === channel.mixGroupId) || null
+              : null;
+            if (!group) {
+              units.push({ kind: 'channel', channel, idx });
+              return;
+            }
+            let unit = groupUnitByGid.get(group.id);
+            if (!unit) {
+              unit = { kind: 'group', group, members: [] };
+              groupUnitByGid.set(group.id, unit);
+              units.push(unit);
+            }
+            unit.members.push({ channel, idx });
+          });
+
+          return units.map((unit) => {
+            if (unit.kind === 'channel') {
+              return renderStrip(unit.channel, unit.idx, null, false);
+            }
+            const { group, members } = unit;
             const groupIndex = mixGroups.findIndex(g => g.id === group.id);
-            groupHeader = (
-              // When collapsed, the header shrinks to the same narrow width as
-              // the thin member bars so the whole collapsed group reads as a
-              // compact row of thin bars (not a full-width column).
-              <View style={[groupCollapsed ? { width: 168 } : cardStyle, { alignSelf: 'flex-start' }]}>
-                <MixGroupHeader
-                  group={group}
-                  index={groupIndex < 0 ? 0 : groupIndex}
-                  memberCount={memberCount}
-                  collapsed={groupCollapsed}
-                  onToggle={toggleGroupCollapse}
-                />
+            const memberCount = members.length;
+            const collapsed = collapsedGroups.has(group.id);
+            const borderColor = group.color || C.ghostBorder;
+            const tint = tintFromHex(group.color, 0.07);
+
+            if (collapsed) {
+              // Collapsed group → one narrow VERTICAL bar: a vertical name +
+              // chevron on top, a divider, then members stacked as tiny cells.
+              // Tapping the header expands the group back.
+              return (
+                <TouchableOpacity
+                  key={group.id}
+                  activeOpacity={0.7}
+                  onPress={() => toggleGroupCollapse(group.id)}
+                  style={[
+                    styles.groupBarV,
+                    { borderColor },
+                    tint ? { backgroundColor: tint } : null,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${(group.name || `GROUP ${groupIndex + 1}`).toUpperCase()} group, ${memberCount} channel${memberCount === 1 ? '' : 's'}, collapsed — tap to expand`}
+                  accessibilityState={{ expanded: false }}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <Text style={styles.groupBarVChevron}>▸</Text>
+                  <View style={[styles.groupDotV, { backgroundColor: group.color || C.secondary }]} />
+                  <View style={{ height: 64, justifyContent: 'center', alignItems: 'center' }}>
+                    <Text style={styles.groupBarVName} numberOfLines={1}>
+                      {(group.name || `GROUP ${groupIndex + 1}`).toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={styles.groupBarVDivider} />
+                  {members.map((m) => renderStrip(m.channel, m.idx, group, true))}
+                </TouchableOpacity>
+              );
+            }
+
+            // Expanded group → a bordered/tinted container that SURROUNDS the
+            // header (banner on top) + the member channel columns (a row).
+            return (
+              <View
+                key={group.id}
+                style={[
+                  styles.groupContainer,
+                  { borderColor },
+                  tint ? { backgroundColor: tint } : null,
+                  cardStyle ? { alignSelf: 'stretch' } : null,
+                ]}
+              >
+                <View style={styles.groupContainerHeader}>
+                  <MixGroupHeader
+                    group={group}
+                    index={groupIndex < 0 ? 0 : groupIndex}
+                    memberCount={memberCount}
+                    collapsed={false}
+                    onToggle={toggleGroupCollapse}
+                  />
+                </View>
+                <View style={styles.groupMembersRow}>
+                  {members.map((m) => renderStrip(m.channel, m.idx, group, false))}
+                </View>
               </View>
             );
-          }
-          // Read inlinePlaylistVersion so this scope re-renders when
-          // the Map changes (Maps aren't structurally compared by React).
-          void inlinePlaylistVersion;
-          const channelInlinePlaylist = inlinePlaylistRef.current.get(channel.id) || null;
-          return (
-            <React.Fragment key={channel.id}>
-            {groupHeader}
-            <ChannelStrip
-              index={idx + 1}
-              channel={channel}
-              isSolo={isSoloActive}
-              soloActive={anySolo}
-              dimmedBySolo={dimmedBySolo}
-              isBumped={isBumped}
-              onBumpOn={handleBumpOn}
-              onBumpOff={handleBumpOff}
-              group={group}
-              collapsed={groupCollapsed}
-              isDeck={false}
-              blends={blends}
-              transitions={transitionsList}
-              playlistLibrary={playlistLibrary}
-              initialPlaylist={channelInlinePlaylist}
-              cardStyle={cardStyle}
-              isOnlyChannel={channels.length === 1}
-              onRename={handleRename}
-              onFaderChange={handleFaderChange}
-              onColorChange={handleColorChange}
-              onHueChange={handleHueChange}
-              onMuteToggle={handleMuteToggle}
-              onSoloToggle={handleSoloToggle}
-              onSoloSafeToggle={handleSoloSafeToggle}
-              onModeChange={handleModeChange}
-              onControlChange={handleControlChange}
-              onDelete={handleDeleteChannel}
-              onDuplicate={handleDuplicateChannel}
-              onMoveUp={handleMoveUp}
-              onMoveDown={handleMoveDown}
-              canMoveUp={idx < channels.length - 1}
-              canMoveDown={idx > 0}
-              onLockToggle={handleLockToggle}
-              onFaderLockToggle={handleFaderLockToggle}
-              onTransition={handleTransition}
-              onTransitionSettingsChange={handleTransitionSettingsChange}
-              viewSelectionGroups={viewSelectionGroups}
-              viewSelectionViewMasks={viewSelectionViewMasks}
-              onViewSelectionChange={handleViewSelectionChange}
-            />
-            </React.Fragment>
-          );
-        })}
+          });
+        })()}
         {channels.length === 0 && (
           <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
             <Text style={[styles.labelCaps, { fontSize: 14 }]}>NO CHANNELS — TAP &quot;+ DEFAULT&quot; OR &quot;+ FROM PLAYLIST&quot;</Text>
@@ -2814,46 +2876,104 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     borderColor: 'rgba(245,166,35,0.4)',
     borderWidth: 2,
   },
-  // Collapsed group member — a single slim row (operator request 2026-06-29:
-  // "collapse the channels to a thin channel with minimal UI elems"). Holds
-  // only the channel number, name, CHANNEL fader + readout, and compact
-  // Mute/Solo. NOT alignSelf:stretch (the full card stretches to fill the
-  // strip column height; a thin strip must hug its own content height) and a
-  // fixed minHeight keeps the row tappable + visually consistent.
-  channelCardThin: {
-    // Narrow thin bar — saves horizontal space so a collapsed group doesn't eat
-    // full ≥320pt columns (operator request 2026-06-29).
-    width: 168,
-    minHeight: 44,
-    // Hug the row's TOP and our own content height — the channel-list row
-    // stretches items to its full height by default (the full cards fill the
-    // column), which would balloon a thin strip into a tall mostly-empty card.
-    // alignSelf:flex-start keeps the collapsed strip genuinely thin.
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: C.surfaceContainerLowest,
-    borderRadius: 10,
+  // ── Group container (operator request 2026-06-29 #1) ──────────────────
+  // A bordered/tinted box that VISUALLY SURROUNDS a group's header + member
+  // channels so the members read as belonging to the group (instead of the
+  // header sitting as a separate full-width column beside flat-sibling
+  // members). The box hugs its members — small padding/gap, no big gutters —
+  // and carries the group color as its border + a faint tint. Ungrouped
+  // channels render outside any container.
+  groupContainer: {
+    alignSelf: 'stretch',
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: C.ghostBorder,
+    padding: 8,
+    gap: 8,
+  },
+  // The header sits on TOP of the member row in the expanded container; we let
+  // it span the container width so the group name + collapse chevron read as a
+  // banner over its members.
+  groupContainerHeader: {
+    alignSelf: 'stretch',
+  },
+  // Horizontal row of the group's member channel columns inside the container.
+  groupMembersRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 12,
+  },
+  // ── Collapsed group: narrow VERTICAL bar (operator request 2026-06-29 #2) ──
+  // The whole collapsed group is one slim vertical column: a vertical/compact
+  // header on top, then its members stacked as tiny vertical cells. Thin
+  // HORIZONTALLY to save space; content stacks vertically. The header tap
+  // expands it back.
+  groupBarV: {
+    alignSelf: 'flex-start',
+    width: 60,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    gap: 6,
+    alignItems: 'center',
     ...globalStyles.ambientShadow,
+  },
+  // Vertical (sideways) group name shown at the top of the collapsed bar.
+  groupBarVName: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 10,
+    letterSpacing: 0.8,
+    color: C.text,
+    transform: [{ rotate: '90deg' }],
+  },
+  groupBarVChevron: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 11,
+    color: C.secondary,
+  },
+  groupDotV: {
+    width: 8, height: 8, borderRadius: 4,
+  },
+  groupBarVDivider: {
+    alignSelf: 'stretch',
+    height: 1,
+    backgroundColor: C.ghostBorder,
+  },
+  // One member in the collapsed vertical bar: number → mini level → M/S, all
+  // stacked. Hugs its own height; the parent bar supplies the narrow width.
+  channelCellV: {
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 4,
   },
   channelBadgeThin: {
     width: 22, height: 22,
   },
-  thinName: {
-    fontSize: 12,
-    color: C.text,
-    maxWidth: 90,
-    flexShrink: 1,
+  // Tiny vertical level indicator for a collapsed member cell — a slim upright
+  // track whose fill grows from the bottom with the channel level.
+  cellLevelTrack: {
+    width: 8,
+    height: 30,
+    borderRadius: 4,
+    backgroundColor: C.surfaceContainerHigh,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    justifyContent: 'flex-end',
+    overflow: 'hidden',
   },
-  // Compact M/S toggles for the thin strip — square, ≥36pt box + hitSlop = the
-  // ≥44pt target. Same surface/border language as the full-strip toggleBtn.
-  thinToggle: {
-    width: 36, height: 32,
+  cellLevelFill: {
+    alignSelf: 'stretch',
+    backgroundColor: C.primary,
+    borderRadius: 4,
+  },
+  // Compact M/S toggles for the collapsed vertical cell — narrow box + hitSlop
+  // expands the interactive area to ≥44pt. Same surface/border as toggleBtn.
+  thinVToggle: {
+    width: 30, minHeight: 22,
+    paddingVertical: 2,
     backgroundColor: C.surfaceContainerHigh,
     borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder,
     alignItems: 'center', justifyContent: 'center',

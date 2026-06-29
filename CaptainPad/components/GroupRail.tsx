@@ -43,6 +43,33 @@ import {
 
 const HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
 
+// ── Group color tint helper ────────────────────────────────────────────────
+// The group container (mixer.tsx) tints its surface with the group color at a
+// low alpha so members read as "belonging to the group" without overpowering
+// the strip chrome. Group colors arrive from the engine as hex strings
+// (`#abc` or `#aabbcc`). This converts one to an `rgba()` string at the given
+// alpha. Returns null when the input isn't a parseable hex (the caller then
+// uses a neutral palette tint for the surface — the colored BORDER is applied
+// from group.color unconditionally, so the group identity is never lost).
+export function tintFromHex(hex: string | null | undefined, alpha: number): string | null {
+  if (typeof hex !== 'string') return null;
+  const m = hex.trim().replace(/^#/, '');
+  let r: number, g: number, b: number;
+  if (m.length === 3) {
+    r = parseInt(m[0] + m[0], 16);
+    g = parseInt(m[1] + m[1], 16);
+    b = parseInt(m[2] + m[2], 16);
+  } else if (m.length === 6) {
+    r = parseInt(m.slice(0, 2), 16);
+    g = parseInt(m.slice(2, 4), 16);
+    b = parseInt(m.slice(4, 6), 16);
+  } else {
+    return null;
+  }
+  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return null;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 // Minimal channel shape the rail needs (the parent passes the full channel
 // objects; we only read id / name / mixGroupId).
 interface RailChannel {
