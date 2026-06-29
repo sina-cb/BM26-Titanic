@@ -301,6 +301,16 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
   // refreshes on its own (load-on-open + WS reconcile), so this stays a
   // stable seed — the panel no longer needs an operator-driven bump.
   const [refreshNonce] = useState(0);
+  // Header collision guard (operator request 2026-06-29): the single-row header
+  // (name + GROUP chip on the left, lock · reorder · blend ▾ · ⋮ cluster on the
+  // right) collides on a NARROW strip — notably a group member, whose column is
+  // split inside the group container and also carries the GROUP chip. We measure
+  // the header width and, ONLY when it's too narrow to seat both clusters on one
+  // line, fall back to a 2-row header (name row over controls row). Wide strips
+  // keep the single row. Threshold ≈ the controls cluster (~190pt) + a usable
+  // name min (~150pt).
+  const [headerWidth, setHeaderWidth] = useState(0);
+  const headerTwoRow = headerWidth > 0 && headerWidth < 340;
   const locked = !!channel.locked;
   // Fader-lock (slot 5, independent of `locked`): freezes the fader
   // against scripted transitions and client-side solo. Distinct icon
@@ -438,11 +448,25 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           Pre-May-2026 refresh was 22×22 + pinned to the name, lock was
           28×28 + pinned to the right. Operator feedback "make them
           look exactly the same" drove this unification. */}
-      <View style={styles.channelHeader}>
+      <View
+        style={[
+          styles.channelHeader,
+          // Narrow strip ⇒ stack into 2 rows so the name and the control
+          // cluster stop colliding (operator request 2026-06-29). Wide strips
+          // keep the single row.
+          headerTwoRow && { flexDirection: 'column', alignItems: 'stretch', gap: 8 },
+        ]}
+        onLayout={(e) => {
+          const w = e.nativeEvent.layout.width;
+          // Hysteresis-free: only update on a real change to avoid layout loops.
+          setHeaderWidth((prev) => (Math.abs(prev - w) > 1 ? w : prev));
+        }}
+      >
         {/* Name + badges take the left of the single header row and flex to
             fill the space left of the control cluster; minWidth:0 lets the
-            name truncate instead of pushing the buttons off the edge. */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
+            name truncate instead of pushing the buttons off the edge. In the
+            2-row fallback this is the FULL-WIDTH first row. */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: headerTwoRow ? undefined : 1, minWidth: 0 }}>
           <View style={styles.channelBadge}>
             <Text style={[styles.valueReadout, { color: C.primary }]}>{index}</Text>
           </View>
@@ -506,7 +530,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             and duplicate were removed at operator request; pin-fader and delete
             live in the ⋮ menu as LABELED rows. The per-button 28pt squircles +
             their ICON_BTN_HIT_SLOP keep every target ≥44pt. */}
-        <View style={{ flexDirection: 'row', flexShrink: 0, columnGap: 4, alignItems: 'center', justifyContent: 'flex-end' }}>
+        <View style={{ flexDirection: 'row', flexShrink: 0, columnGap: 4, alignItems: 'center', justifyContent: headerTwoRow ? 'flex-start' : 'flex-end' }}>
           {/* Lock (playlist/pattern lock) — amber when engaged. */}
           <TouchableOpacity
             style={[styles.titleBtn, locked && styles.titleBtnAmberActive]}
@@ -2903,7 +2927,17 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     alignSelf: 'stretch',
   },
   // Horizontal row of the group's member channel columns inside the container.
+  // flex:1 + minHeight:0 makes the row CLAIM the container's leftover height
+  // under the header (the group container is height-bounded by the strip
+  // ScrollView's alignItems:'stretch'). Without it the row sized to its members'
+  // intrinsic content height, so a member's inner playlist / LOCAL PARAMS
+  // ScrollViews never bounded → they overflowed the card with NO scroll (the
+  // exact bug: grouped channels had no param/pattern scroll). With it, each
+  // member stretches to the bounded row height and its inner lists scroll —
+  // matching a standalone strip.
   groupMembersRow: {
+    flex: 1,
+    minHeight: 0,
     flexDirection: 'row',
     alignItems: 'stretch',
     gap: 12,
