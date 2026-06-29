@@ -274,6 +274,11 @@ export class PatternMixer {
     // (never serialized — recomputed from tempoBpm on restore).
     this.tempoBpm = null;
     this._tempoMultiplier = 1;
+    // STICKY tempo source preference ('osc' | 'tap') — the operator's selector
+    // position, persisted + broadcast so the deck and mixer UIs agree. The
+    // TempoArbiter is the logic owner (reads/writes this); default 'osc' means
+    // OSC auto-drives until the operator taps or selects TAP. (See tempo_arbiter.js.)
+    this.tempoSourcePref = 'osc';
     // ── Grand-master timed fade (F-B) ────────────────────────────────
     // An in-flight master fade animates `master` from a start value toward
     // a target over a fixed wall-clock duration on the 40 Hz render tick.

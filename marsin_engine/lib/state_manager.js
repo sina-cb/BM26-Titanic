@@ -390,6 +390,10 @@ export class StateManager {
       tempoBpm: (typeof mixer.tempoBpm === 'number' && Number.isFinite(mixer.tempoBpm))
         ? mixer.tempoBpm
         : null,
+      // STICKY tempo source selector position ('osc' | 'tap'), persisted so a
+      // restart restores the operator's choice. Default 'osc' (an old file
+      // without this key loads to 'osc').
+      tempoSourcePref: mixer.tempoSourcePref === 'tap' ? 'tap' : 'osc',
     };
     this.save('mixer_state.yaml', state);
   }

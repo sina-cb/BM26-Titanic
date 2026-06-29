@@ -524,6 +524,35 @@ export async function postTempoSync(): Promise<ApiResult<any>> {
   }
 }
 
+// ── Sticky tempo source selector (operator request 2026-06-29) ─────────────
+// Sets the PERSISTED source preference the OSC/TAP selector reflects on BOTH
+// the deck and mixer (one source of truth — no per-surface guess, no OSC↔TAP
+// jumping). 'osc' follows the live OSC BPM; 'tap' holds the current/tapped
+// tempo with OSC auto-follow suppressed. The new state rides the existing
+// mixer-state WS broadcast, so every surface updates together.
+// POST /mixer/tempo/source { source } → { status:'ok', tempoBpm, tempoSource,
+//   tempoSourcePref, oscTempoBpm }. Codex P0 — the engine 400s an invalid
+//   source and 500s a missing arbiter; the client surfaces that verbatim.
+
+export async function postTempoSource(
+  source: 'osc' | 'tap',
+): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/mixer/tempo/source`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    return { ok: false, error: err.message };
+  }
+}
+
 // ── Global hue shifter (F-hue, docs/39 §F-hue) ────────────────────────────
 // A first-class rig knob (NOT a GEM slot): a continuous hue rotation applied
 // POST-composite on the whole output buffer, plus an optional auto-rotate

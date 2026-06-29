@@ -22,7 +22,7 @@
 import { useEffect, useState } from 'react';
 import { Alert } from 'react-native';
 import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
-import { postTapTempo, postTempoSync } from '@/utils/channelExtrasApi';
+import { postTapTempo, postTempoSync, postTempoSource } from '@/utils/channelExtrasApi';
 
 // The engine's accepted tempo window. The client clamps the DISPLAY to match
 // (the engine 400s anything out of [20,400], so clamping here is honest).
@@ -31,22 +31,34 @@ export const TAP_BPM_MAX = 400;
 const TAP_MAX_SAMPLES = 8; // median over the last several intervals (smoother lock-in)
 const TAP_RESET_MS = 2500; // gap longer than this ⇒ a fresh tap series
 
-// How the current tempoBpm is being driven (engine `tempoSource`). We default
-// to 'held' until the first broadcast — the conservative "no live OSC, no
-// recent tap" reading — matching the engine's no-arbiter fallback.
+// How the current tempoBpm is being driven (engine `tempoSource`) — the LIVE
+// status for the colour/liveness accent. We default to 'held' until the first
+// broadcast — the conservative "no live OSC, no recent tap" reading — matching
+// the engine's no-arbiter fallback.
 export type TempoSource = 'osc' | 'manual' | 'held';
+
+// The STICKY operator selection ('osc' | 'tap') the OSC/TAP selector
+// highlights. Distinct from `source`: it does NOT flap with OSC liveness, so a
+// brief OSC dropout never makes the selector jump to TAP.
+export type TempoSourcePref = 'osc' | 'tap';
 
 export interface TempoState {
   /** The applied pattern-clock BPM (mixer.tempoBpm). null = no tempo set. */
   bpm: number | null;
-  /** Which input is driving `bpm` right now. */
+  /** The LIVE status of what's driving `bpm` right now (accent/liveness). */
   source: TempoSource;
+  /** The STICKY operator selection the OSC/TAP selector highlights. */
+  sourcePref: TempoSourcePref;
   /** The RAW live OSC bpm (clamped), or null when OSC is stale/off. */
   oscBpm: number | null;
 }
 
 function isTempoSource(v: unknown): v is TempoSource {
   return v === 'osc' || v === 'manual' || v === 'held';
+}
+
+function isTempoSourcePref(v: unknown): v is TempoSourcePref {
+  return v === 'osc' || v === 'tap';
 }
 
 /**
@@ -65,7 +77,7 @@ function isTempoSource(v: unknown): v is TempoSource {
  * the three strings on a tempo-bearing broadcast, never absent.
  */
 export function useTempoState(): TempoState {
-  const [state, setState] = useState<TempoState>({ bpm: null, source: 'held', oscBpm: null });
+  const [state, setState] = useState<TempoState>({ bpm: null, source: 'held', sourcePref: 'osc', oscBpm: null });
   useEffect(() => {
     const onMessage = (msg: EngineMessage) => {
       if (msg.type !== 'mixer' && msg.type !== 'deck') return;
@@ -75,14 +87,21 @@ export function useTempoState(): TempoState {
       if (!isTempoSource(rawSource)) return;
       const rawBpm = (msg as { tempoBpm?: unknown }).tempoBpm;
       const rawOsc = (msg as { oscTempoBpm?: unknown }).oscTempoBpm;
+      const rawPref = (msg as { tempoSourcePref?: unknown }).tempoSourcePref;
       const bpm =
         typeof rawBpm === 'number' && Number.isFinite(rawBpm) ? rawBpm : null;
       const oscBpm =
         typeof rawOsc === 'number' && Number.isFinite(rawOsc) ? rawOsc : null;
+      // Older engines (pre sticky-source) omit tempoSourcePref — derive it from
+      // the live source ('manual' ⇒ 'tap', else 'osc') so the selector still
+      // tracks coherently. A present pref always wins.
+      const sourcePref: TempoSourcePref = isTempoSourcePref(rawPref)
+        ? rawPref
+        : rawSource === 'manual' ? 'tap' : 'osc';
       setState((prev) =>
-        prev.bpm === bpm && prev.source === rawSource && prev.oscBpm === oscBpm
+        prev.bpm === bpm && prev.source === rawSource && prev.sourcePref === sourcePref && prev.oscBpm === oscBpm
           ? prev
-          : { bpm, source: rawSource, oscBpm },
+          : { bpm, source: rawSource, sourcePref, oscBpm },
       );
     };
     const unsubscribe = engineEvents.subscribe(onMessage);
@@ -96,8 +115,10 @@ export function useTempoState(): TempoState {
 export interface TempoTap {
   /** Register one tap; once ≥2 taps land, POSTs the averaged BPM. */
   tap: () => void;
-  /** Drop the manual override so OSC reclaims (POST /mixer/tempo/sync). */
+  /** Select OSC as the sticky source so OSC reclaims (POST /mixer/tempo/sync). */
   sync: () => void;
+  /** Set the sticky source preference explicitly (POST /mixer/tempo/source). */
+  setSource: (pref: TempoSourcePref) => void;
 }
 
 // Tap timestamps live at MODULE scope, not per-hook-instance, so a tap series
@@ -170,16 +191,19 @@ export function useTempoTap(): TempoTap {
     }
   };
 
-  return { tap, sync: () => void sync() };
+  const setSource = async (pref: TempoSourcePref) => {
+    const res = await postTempoSource(pref);
+    if (!res.ok) {
+      console.error('Tempo source select failed:', res.error);
+      Alert.alert('Tempo source failed', res.error || 'The engine rejected the source change.');
+    }
+  };
+
+  return { tap, sync: () => void sync(), setSource: (pref: TempoSourcePref) => void setSource(pref) };
 }
 
 // ── Source-tag presentation ───────────────────────────────────────────────
-// The short OSC/TAP/HELD source tag was retired (2026-06-22 UI cleanup) — the
-// readout is now just the BPM number, with SYNC + the source-based tint
-// carrying the "what's driving the clock" signal. Only the override predicate
-// remains, since SYNC depends on it.
-
-/** True only when a manual override is active (⇒ show the SYNC affordance). */
-export function tempoSourceHasOverride(source: TempoSource): boolean {
-  return source === 'manual';
-}
+// The short OSC/TAP/HELD source tag was retired (2026-06-22 UI cleanup) and the
+// `tempoSourceHasOverride` predicate with it (2026-06-29): the sticky OSC/TAP
+// selector reads `TempoState.sourcePref` directly, so there is no derived
+// "override active" predicate left to expose.

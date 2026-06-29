@@ -8,12 +8,12 @@ import {
   useTempoState,
   useTempoTap,
   type TempoSource,
+  type TempoSourcePref,
 } from '@/hooks/use_tempo_tap';
 import { OscStatusPill } from '@/components/OscStatusPill';
 import { ColorPickerModal, ColorQueueModal, DualSwatch, type ColorPalettePreset } from '@/components/ColorPickerModal';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { curateDeckSignals, audioAccentHex } from '@/utils/audioSignals';
-import { postTapTempo } from '@/utils/channelExtrasApi';
 
 // BPM-sync "auto-driven" accent (green). Lives here as a local
 // constant so this file doesn't depend on a brand-new theme token
@@ -184,8 +184,9 @@ export const CPCControls = ({ trailing }: CPCControlsProps = {}) => {
   // there is NO tempo to follow at all (source-agnostic — OSC OR TAP counts).
   // Global tap-tempo cluster (tempo arbitration). Same shared tap logic as the
   // deck TAP button, so a tap from either surface means exactly the same
-  // thing. `tempo.source` drives the OSC↔TAP toggle in the BPM tile.
-  const { tap: onTap, sync: onTempoSync } = useTempoTap();
+  // thing. `tempo.sourcePref` (sticky) drives the OSC↔TAP selector highlight;
+  // `setSource` flips it. State rides the mixer broadcast, so deck + mixer agree.
+  const { tap: onTap, setSource: onSetSource } = useTempoTap();
   const bpmSyncOn  = (params.bpmSpeedSync ?? 0) >= 0.5;
   const bpmMin     = params.bpmSpeedMin ?? 60;
   const bpmMax     = params.bpmSpeedMax ?? 180;
@@ -322,18 +323,20 @@ export const CPCControls = ({ trailing }: CPCControlsProps = {}) => {
                 it renders on BOTH deck + mixer, and useTempoTap().tap() feeds a
                 MODULE-GLOBAL tap series — so taps are global and synced across
                 tabs and respected app-wide. */}
-            <GlobalTapTile isPortrait={isPortrait} source={tempo.source} onTap={onTap} />
+            <GlobalTapTile isPortrait={isPortrait} sourcePref={tempo.sourcePref} onTap={onTap} />
 
-            {/* BPM tile — the APPLIED tempo readout + a SOURCE SELECTOR (OSC vs
-                TAP). The selector only CHOOSES the source, it does not tap: OSC
-                re-syncs to the live OSC feed; TAP holds the current tempo under
-                a manual override (then refine it with the TAP button). */}
+            {/* BPM tile — the APPLIED tempo readout + a STICKY SOURCE SELECTOR
+                (OSC vs TAP). The selector only CHOOSES the source, it does not
+                tap: OSC follows the live OSC feed; TAP holds the current tempo
+                (then refine it with the big TAP button). The selection is sticky
+                and shared across deck + mixer — it never bounces OSC↔TAP. */}
             <BpmTile
               bpm={bpm}
               isPortrait={isPortrait}
               source={tempo.source}
-              onSync={onTempoSync}
-              onSelectTap={() => { if (bpm > 0) void postTapTempo(Math.round(bpm)); }}
+              sourcePref={tempo.sourcePref}
+              onSelectOsc={() => onSetSource('osc')}
+              onSelectTap={() => onSetSource('tap')}
             />
 
             <OscStatusPill compact={isPortrait} />
@@ -774,16 +777,16 @@ function SpeedSyncToggle({ on, starving, onToggle }: {
  * Kept SEPARATE from the BPM source selector so the tap target stays big and
  * reliable (the selector only chooses OSC vs TAP, it does not tap).
  */
-function GlobalTapTile({ isPortrait, source, onTap }: {
+function GlobalTapTile({ isPortrait, sourcePref, onTap }: {
   isPortrait: boolean;
-  source: TempoSource;
+  sourcePref: TempoSourcePref;
   onTap: () => void;
 }) {
   const C = usePalette();
   const w = isPortrait ? GLOBALS_TILE_WIDTH_PORTRAIT : GLOBALS_TILE_WIDTH_LANDSCAPE;
-  // Tint when a manual (tapped) override is the active source, so the button
-  // reads as "you are driving the tempo by tapping".
-  const armed = source === 'manual';
+  // Tint when TAP is the (sticky) selected source, so the button reads as
+  // "you are driving the tempo by tapping". Sticky — doesn't flicker with OSC.
+  const armed = sourcePref === 'tap';
   return (
     <TouchableOpacity
       onPress={onTap}
@@ -814,24 +817,27 @@ function GlobalTapTile({ isPortrait, source, onTap }: {
 }
 
 /**
- * BpmTile — the applied BPM readout + a SOURCE SELECTOR (operator request
- * feat/optimize_channels). The selector ONLY chooses where the clock comes
- * from — it is NOT a tap target (the dedicated GlobalTapTile taps):
+ * BpmTile — the applied BPM readout + a STICKY SOURCE SELECTOR (operator
+ * request feat/optimize_channels). The selector ONLY chooses where the clock
+ * comes from — it is NOT a tap target (the dedicated GlobalTapTile taps):
  *
- *   - OSC side → follow the live OSC feed (useTempoTap().sync(), drops any
- *                manual override). Active (green) when source === 'osc'.
- *   - TAP side → hold the CURRENT tempo under a manual override so OSC stops
- *                auto-driving; refine it with the TAP button. Active (tertiary)
- *                when source === 'manual'.
+ *   - OSC side → follow the live OSC feed (setSource('osc')). Highlighted when
+ *                the STICKY pref is 'osc' — and STAYS highlighted through a brief
+ *                OSC dropout (live source 'held'), so it never bounces to TAP.
+ *   - TAP side → hold the CURRENT tempo (setSource('tap')); refine it with the
+ *                big TAP button. Highlighted when the sticky pref is 'tap'.
  *
- * `held` (OSC stale/off, no active override) lights neither fully. The big
- * numeric readout stays so the tempo reads from across the venue.
+ * The SELECTOR highlight tracks the sticky `sourcePref` (no flapping); the
+ * accent/border colour reflects the LIVE `source` (green when OSC is actually
+ * driving, neutral when OSC-selected-but-held). The big numeric readout stays
+ * so the tempo reads from across the venue.
  */
-function BpmTile({ bpm, isPortrait, source, onSync, onSelectTap }: {
+function BpmTile({ bpm, isPortrait, source, sourcePref, onSelectOsc, onSelectTap }: {
   bpm: number;
   isPortrait: boolean;
   source: TempoSource;
-  onSync: () => void;
+  sourcePref: TempoSourcePref;
+  onSelectOsc: () => void;
   onSelectTap: () => void;
 }) {
   const C = usePalette();
@@ -840,9 +846,11 @@ function BpmTile({ bpm, isPortrait, source, onSync, onSelectTap }: {
   // Widen the tile to seat the OSC/TAP selector beside the number.
   const baseW = isPortrait ? GLOBALS_TILE_WIDTH_PORTRAIT : GLOBALS_TILE_WIDTH_LANDSCAPE;
   const w = baseW + (isPortrait ? 30 : 40);
-  const border = source === 'osc' ? ACCENT_AUTO : source === 'manual' ? C.tertiary : C.ghostBorder;
-  const oscActive = source === 'osc';
-  const tapActive = source === 'manual';
+  // Selector highlight = the STICKY preference (never flaps). Border = LIVE
+  // status (green only when OSC is actually driving).
+  const oscActive = sourcePref === 'osc';
+  const tapActive = sourcePref === 'tap';
+  const border = source === 'osc' ? ACCENT_AUTO : tapActive ? C.tertiary : C.ghostBorder;
   return (
     <View style={{
       width: w, height: GLOBALS_TILE_HEIGHT,
@@ -871,7 +879,7 @@ function BpmTile({ bpm, isPortrait, source, onSync, onSelectTap }: {
           glance. */}
       <View style={{ width: 30, height: 40, borderRadius: 6, overflow: 'hidden', borderWidth: 1, borderColor: C.ghostBorder }}>
         <TouchableOpacity
-          onPress={onSync}
+          onPress={onSelectOsc}
           accessibilityRole="button"
           accessibilityState={{ selected: oscActive }}
           accessibilityLabel="Use OSC as the tempo source (follow the live OSC feed)"

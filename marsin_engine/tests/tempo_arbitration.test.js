@@ -1,18 +1,22 @@
 // Unit tests for the TEMPO ARBITER (docs/39 §tempo-arbitration).
 //
-// Behaviour under test ("OSC auto-drives, tap overrides"):
-//   (a) OSC live drives mixer.tempoBpm to the (clamped) OSC value.
-//   (b) a manual tap arms the override hold; OSC does NOT overwrite during it.
-//   (c) after the window, with OSC still live, OSC reclaims.
-//   (d) OSC stale/off ⇒ the last (tapped) value holds — no overwrite.
-//   (e) clearOverride() (the /mixer/tempo/sync route) drops the override so
-//       OSC reclaims on the next tick.
-//   (f) tempoSource derivation: 'osc' / 'manual' / 'held'.
+// Behaviour under test — STICKY SOURCE SWITCH (operator request 2026-06-29).
+// The OSC/TAP selection is a sticky preference (`mixer.tempoSourcePref`) that
+// governs the ONE system-wide tempo (mixer.tempoBpm); it does NOT auto-revert:
+//   (a) pref 'osc' (default) + OSC live ⇒ OSC drives mixer.tempoBpm (clamped).
+//   (b) a manual tap makes TAP the sticky source; OSC NEVER overwrites it
+//       (no time window — it holds until the operator selects OSC).
+//   (c) selecting OSC (clearOverride / setSourcePref('osc')) lets OSC reclaim.
+//   (d) OSC stale/off ⇒ the last value holds — no overwrite.
+//   (e) setSourcePref('tap') suppresses OSC auto-follow even with OSC live.
+//   (f) tempoSource derivation: 'osc' / 'manual' / 'held'; sourcePref tracks
+//       the sticky selection and does NOT flap with OSC liveness.
 //   (g) OSC-driven values are clamped into [20,400].
 //   (h) no churn: setTempoBpm is only called when the value actually changes.
 //
 // Uses a fake/injected clock and a fake ParamCenter + mixer modelled on the
-// real subscribe/getCanonicalState event shape.
+// real subscribe/getCanonicalState event shape. The fake mixer carries a
+// `tempoSourcePref` field (the persisted home the arbiter reads/writes).
 //
 // Run:  cd marsin_engine && node --test tests/tempo_arbitration.test.js
 import { test } from 'node:test';
@@ -20,16 +24,19 @@ import assert from 'node:assert/strict';
 
 import {
   TempoArbiter,
-  MANUAL_HOLD_MS,
   OSC_STALENESS_MS,
+  TEMPO_SOURCE_PREFS,
+  DEFAULT_TEMPO_SOURCE_PREF,
 } from '../lib/tempo_arbiter.js';
 
 // ── Fakes ──────────────────────────────────────────────────────────────
 
-// Minimal mixer: records setTempoBpm calls so we can assert no-churn.
+// Minimal mixer: records setTempoBpm calls so we can assert no-churn. Carries
+// `tempoSourcePref` (the persisted sticky selection the arbiter owns).
 function fakeMixer() {
   return {
     tempoBpm: null,
+    tempoSourcePref: 'osc',
     setCalls: [],
     setTempoBpm(bpm) {
       this.tempoBpm = bpm;
@@ -91,6 +98,14 @@ test('constructor rejects a paramCenter without subscribe()', () => {
   assert.throws(() => new TempoArbiter({ mixer: fakeMixer(), paramCenter: {} }), TypeError);
 });
 
+test('constructor seeds a default sticky pref when the mixer has none', () => {
+  const mixer = fakeMixer();
+  delete mixer.tempoSourcePref;
+  const arbiter = new TempoArbiter({ mixer, paramCenter: fakeParamCenter() });
+  assert.equal(mixer.tempoSourcePref, 'osc');
+  assert.equal(arbiter.sourcePref(), 'osc');
+});
+
 test('attach subscribes to the CPC; detach unsubscribes (idempotent)', () => {
   const { pc, arbiter } = makeArbiter();
   assert.equal(pc.subCount(), 1);
@@ -104,7 +119,7 @@ test('attach subscribes to the CPC; detach unsubscribes (idempotent)', () => {
 
 // ── (a) OSC live drives tempoBpm ───────────────────────────────────────
 
-test('(a) OSC live drives tempoBpm to the OSC value', () => {
+test('(a) OSC live (default pref) drives tempoBpm to the OSC value', () => {
   const { mixer, pc, arbiter, clock } = makeArbiter();
   pc.emitAudioBpm(128);
   arbiter.tick(clock());
@@ -112,51 +127,50 @@ test('(a) OSC live drives tempoBpm to the OSC value', () => {
   assert.deepEqual(mixer.setCalls, [128]);
 });
 
-// ── (b) tap overrides for the hold window ──────────────────────────────
+// ── (b) a tap makes TAP the sticky source; OSC NEVER overwrites ─────────
 
-test('(b) a tap arms the hold; OSC does NOT overwrite during it', () => {
+test('(b) a tap makes TAP sticky; OSC does NOT overwrite (no auto-revert)', () => {
   const { mixer, pc, arbiter, clock } = makeArbiter();
-  // Operator taps 100 (caller sets the mixer itself; arbiter just arms hold).
+  // Operator taps 100 (caller sets the mixer itself; arbiter flips the pref).
   mixer.setTempoBpm(100);
-  arbiter.noteManualTap(clock());
-  // OSC is streaming a different tempo.
+  arbiter.noteManualTap();
+  assert.equal(arbiter.sourcePref(), 'tap');
+  assert.equal(mixer.tempoSourcePref, 'tap');
+  // OSC is streaming a different tempo — and STAYS streaming for a long time.
   pc.emitAudioBpm(128);
-  // Tick mid-window — must NOT overwrite the tapped 100.
-  clock.advance(MANUAL_HOLD_MS - 1);
+  clock.advance(60000); // a full minute later
+  pc.emitAudioBpm(128);
   arbiter.tick(clock());
+  // Must NOT overwrite the tapped 100 — TAP is sticky.
   assert.equal(mixer.tempoBpm, 100);
-  // setTempoBpm was called once (the tap), never by the arbiter.
   assert.deepEqual(mixer.setCalls, [100]);
 });
 
-// ── (c) after the window OSC reclaims (if still live) ──────────────────
+// ── (c) selecting OSC lets OSC reclaim ─────────────────────────────────
 
-test('(c) after the hold window with OSC still live, OSC reclaims', () => {
+test('(c) selecting OSC (after a tap) lets OSC reclaim immediately', () => {
   const { mixer, pc, arbiter, clock } = makeArbiter();
   mixer.setTempoBpm(100);
-  arbiter.noteManualTap(clock());
-  // Keep OSC fresh AFTER the window expires so it is still live at reclaim.
-  clock.advance(MANUAL_HOLD_MS + 1);
-  pc.emitAudioBpm(140); // fresh now
+  arbiter.noteManualTap();
+  pc.emitAudioBpm(140);
+  // Operator selects OSC — drops the sticky tap.
+  arbiter.setSourcePref('osc');
+  assert.equal(arbiter.sourcePref(), 'osc');
   arbiter.tick(clock());
   assert.equal(mixer.tempoBpm, 140);
 });
 
-// ── (d) OSC stale/off ⇒ tapped value holds ─────────────────────────────
+// ── (d) OSC stale/off ⇒ value holds ────────────────────────────────────
 
-test('(d) OSC stale ⇒ tapped value holds, no overwrite', () => {
+test('(d) OSC stale (pref osc) ⇒ last value holds, no overwrite', () => {
   const { mixer, pc, arbiter, clock } = makeArbiter();
-  // An OSC value arrives, then the feed goes silent.
-  pc.emitAudioBpm(128);
-  // Operator taps 100 well after.
-  clock.advance(5000);
-  mixer.setTempoBpm(100);
-  arbiter.noteManualTap(clock());
-  // Let the override expire AND let OSC go stale (no new emit).
-  clock.advance(MANUAL_HOLD_MS + OSC_STALENESS_MS + 1);
+  pc.emitAudioBpm(128); arbiter.tick(clock()); // follow 128
+  assert.deepEqual(mixer.setCalls, [128]);
+  // Feed goes silent — OSC goes stale.
+  clock.advance(OSC_STALENESS_MS + 1);
   arbiter.tick(clock());
-  assert.equal(mixer.tempoBpm, 100); // held — OSC stale, no reclaim
-  assert.deepEqual(mixer.setCalls, [100]);
+  assert.equal(mixer.tempoBpm, 128); // held — OSC stale, no reclaim
+  assert.deepEqual(mixer.setCalls, [128]);
 });
 
 test('(d2) OSC never seen ⇒ tick is a no-op', () => {
@@ -177,53 +191,75 @@ test('(d3) a 0 / non-finite OSC bpm is treated as "no signal" (fail safe)', () =
   assert.equal(mixer.setCalls.length, 0);
 });
 
-// ── (e) sync drops the override ────────────────────────────────────────
+// ── (e) TAP pref suppresses OSC auto-follow ────────────────────────────
 
-test('(e) clearOverride() drops the hold so OSC reclaims next tick', () => {
+test('(e) setSourcePref("tap") suppresses OSC even with OSC live', () => {
+  const { mixer, pc, arbiter, clock } = makeArbiter();
+  mixer.setTempoBpm(95);
+  arbiter.setSourcePref('tap');
+  pc.emitAudioBpm(128);
+  arbiter.tick(clock());
+  assert.equal(mixer.tempoBpm, 95); // OSC suppressed in tap mode
+  assert.deepEqual(mixer.setCalls, [95]);
+});
+
+test('(e2) clearOverride() selects OSC so it reclaims next tick', () => {
   const { mixer, pc, arbiter, clock } = makeArbiter();
   mixer.setTempoBpm(100);
-  arbiter.noteManualTap(clock());
+  arbiter.noteManualTap();
   pc.emitAudioBpm(128);
-  // Still inside the window — without sync, OSC would be blocked.
-  assert.equal(arbiter.isManualOverrideActive(clock()), true);
+  assert.equal(arbiter.isManualOverrideActive(), true);
   arbiter.clearOverride();
-  assert.equal(arbiter.isManualOverrideActive(clock()), false);
+  assert.equal(arbiter.isManualOverrideActive(), false);
+  assert.equal(arbiter.sourcePref(), 'osc');
   arbiter.tick(clock());
   assert.equal(mixer.tempoBpm, 128); // OSC reclaimed immediately
 });
 
-// ── (f) tempoSource derivation ─────────────────────────────────────────
+test('(e3) setSourcePref rejects an invalid source (fail loud)', () => {
+  const { arbiter } = makeArbiter();
+  assert.throws(() => arbiter.setSourcePref('audio'), /requires 'osc' \| 'tap'/);
+  assert.throws(() => arbiter.setSourcePref(null), /requires 'osc' \| 'tap'/);
+});
 
-test('(f) tempoSource: osc when live + no override', () => {
+// ── (f) tempoSource + sourcePref derivation ────────────────────────────
+
+test('(f) tempoSource: osc when pref osc + live', () => {
   const { pc, arbiter, clock } = makeArbiter();
   pc.emitAudioBpm(128);
   assert.equal(arbiter.deriveSource(clock()), 'osc');
+  assert.equal(arbiter.sourcePref(), 'osc');
 });
 
-test('(f) tempoSource: manual inside the override window', () => {
+test('(f) tempoSource: manual whenever the sticky pref is tap', () => {
   const { pc, arbiter, clock } = makeArbiter();
   pc.emitAudioBpm(128);
-  arbiter.noteManualTap(clock());
+  arbiter.noteManualTap();
   assert.equal(arbiter.deriveSource(clock()), 'manual');
+  assert.equal(arbiter.sourcePref(), 'tap');
   // manual wins even while OSC is live
 });
 
-test('(f) tempoSource: held when OSC stale/off', () => {
+test('(f) tempoSource: held when pref osc but OSC stale/off — pref STAYS osc', () => {
   const { pc, arbiter, clock } = makeArbiter();
   assert.equal(arbiter.deriveSource(clock()), 'held'); // never seen OSC
   pc.emitAudioBpm(128);
   clock.advance(OSC_STALENESS_MS + 1); // go stale
   assert.equal(arbiter.deriveSource(clock()), 'held');
+  // The SELECTOR stays on OSC through the dropout — it does NOT flip to tap.
+  assert.equal(arbiter.sourcePref(), 'osc');
 });
 
-test('(f) tempoSource flips osc → manual → osc across a tap + window', () => {
+test('(f) sourcePref is sticky: osc → tap (on tap) → osc (on select)', () => {
   const { pc, arbiter, clock } = makeArbiter();
   pc.emitAudioBpm(128);
-  assert.equal(arbiter.deriveSource(clock()), 'osc');
-  arbiter.noteManualTap(clock());
+  assert.equal(arbiter.sourcePref(), 'osc');
+  arbiter.noteManualTap();
+  assert.equal(arbiter.sourcePref(), 'tap');
   assert.equal(arbiter.deriveSource(clock()), 'manual');
-  clock.advance(MANUAL_HOLD_MS + 1);
+  arbiter.setSourcePref('osc');
   pc.emitAudioBpm(128); // keep fresh
+  assert.equal(arbiter.sourcePref(), 'osc');
   assert.equal(arbiter.deriveSource(clock()), 'osc');
 });
 
@@ -277,16 +313,15 @@ test('(h) changing OSC value drives a new setTempoBpm each change', () => {
   assert.deepEqual(mixer.setCalls, [120, 130, 140]);
 });
 
-test('(h) a tap that matches the live OSC value ⇒ no extra setTempoBpm on reclaim', () => {
+test('(h) selecting OSC after a matching tap ⇒ no redundant setTempoBpm', () => {
   const { mixer, pc, arbiter, clock } = makeArbiter();
   pc.emitAudioBpm(128);
-  // Operator taps the SAME value 128.
+  // Operator taps the SAME value 128 (sticky tap).
   mixer.setTempoBpm(128);
-  arbiter.noteManualTap(clock());
+  arbiter.noteManualTap();
   assert.deepEqual(mixer.setCalls, [128]);
-  // After the window, OSC reclaims — but the value already matches, so the
-  // arbiter must NOT call setTempoBpm again.
-  clock.advance(MANUAL_HOLD_MS + 1);
+  // Select OSC — value already matches, so the arbiter must NOT set again.
+  arbiter.setSourcePref('osc');
   pc.emitAudioBpm(128);
   arbiter.tick(clock());
   assert.deepEqual(mixer.setCalls, [128], 'no redundant set when value unchanged');
@@ -317,19 +352,20 @@ test('OSC bpm is rounded to an integer (no sub-BPM churn)', () => {
   assert.equal(mixer.tempoBpm, 128);
 });
 
-test('sync (clearOverride) snaps to the live OSC even within the deadband', () => {
+test('selecting OSC snaps to the live OSC even within the deadband', () => {
   const { mixer, pc, arbiter, clock } = makeArbiter();
   pc.emitAudioBpm(128); arbiter.tick(clock());            // following 128
-  mixer.setTempoBpm(127); arbiter.noteManualTap(clock()); // tap to 127 (within deadband)
+  mixer.setTempoBpm(127); arbiter.noteManualTap();        // tap to 127 (within deadband)
   pc.emitAudioBpm(128);
-  arbiter.clearOverride();                                 // sync → snap to OSC
+  arbiter.clearOverride();                                 // select OSC → snap
   arbiter.tick(clock());
-  assert.equal(mixer.tempoBpm, 128, 'sync snaps to OSC even though |128-127| < deadband');
+  assert.equal(mixer.tempoBpm, 128, 'select-OSC snaps even though |128-127| < deadband');
 });
 
 // ── Constants are sane named values ────────────────────────────────────
 
-test('MANUAL_HOLD_MS default is 12000ms; OSC_STALENESS_MS is 1500ms', () => {
-  assert.equal(MANUAL_HOLD_MS, 12000);
+test('OSC_STALENESS_MS is 1500ms; source prefs are osc/tap (default osc)', () => {
   assert.equal(OSC_STALENESS_MS, 1500);
+  assert.deepEqual(TEMPO_SOURCE_PREFS, ['osc', 'tap']);
+  assert.equal(DEFAULT_TEMPO_SOURCE_PREF, 'osc');
 });

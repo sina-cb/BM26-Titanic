@@ -1,9 +1,10 @@
 /**
  * hil_tempo_arbitration_test.mjs — HIL test for TEMPO ARBITRATION
- * (docs/39 §tempo-arbitration). Proves "OSC auto-drives, tap overrides"
- * against a LIVE engine: the manual TAP, the OSC auto-follow, the
- * manual-override hold window, the /mixer/tempo/sync re-sync route, and the
- * `tempoSource` / `oscTempoBpm` WS fields on the live `mixer` broadcast.
+ * (docs/39 §tempo-arbitration). Proves the STICKY OSC/TAP source switch
+ * against a LIVE engine: the manual TAP (sticky tap mode), the OSC auto-follow,
+ * the fact that TAP does NOT auto-revert, the /mixer/tempo/sync + /source
+ * routes, and the `tempoSource` / `tempoSourcePref` / `oscTempoBpm` WS fields
+ * on the live `mixer` broadcast.
  *
  * OSC is simulated by writing the CPC key `audioBpm` over the documented
  * `POST /param-center {audioBpm}` route — this drives the engine's REAL
@@ -13,17 +14,18 @@
  *
  * Assertions:
  *   1. TAP: POST /mixer/tempo {bpm:100} → tempoBpm=100 + tempoSource:'manual'
- *      on the live `mixer` WS broadcast (the override hold is armed).
- *   2. OVERRIDE HOLD: with a DIFFERENT live OSC bpm (128) streaming, the tempo
- *      stays at the tapped 100 while inside the hold window (OSC does NOT
- *      reclaim). tempoSource stays 'manual'.
- *   3. SYNC RECLAIM: POST /mixer/tempo/sync drops the override → within a few
- *      render frames the live OSC bpm (128) reclaims: tempoBpm→128,
- *      tempoSource→'osc', oscTempoBpm≈128.
+ *      + tempoSourcePref:'tap' on the live `mixer` WS broadcast.
+ *   2. STICKY TAP: with a DIFFERENT live OSC bpm (128) streaming continuously,
+ *      the tempo stays at the tapped 100 — OSC NEVER reclaims (no time-based
+ *      revert). tempoSource stays 'manual', tempoSourcePref stays 'tap'.
+ *   3. SELECT OSC: POST /mixer/tempo/sync selects OSC → within a few render
+ *      frames the live OSC bpm (128) reclaims: tempoBpm→128, tempoSource→'osc',
+ *      tempoSourcePref→'osc', oscTempoBpm≈128.
  *   4. STALE HOLD: stop feeding OSC; after the staleness window tempoSource
- *      becomes 'held' and the value holds (no clobber).
- *   5. CLAMP: feed an out-of-range OSC bpm (600) → applied tempoBpm clamps to
- *      400 and oscTempoBpm=400.
+ *      becomes 'held' (value holds, no clobber) while tempoSourcePref STAYS
+ *      'osc' (the selector does not flip to tap on a dropout).
+ *   5. CLAMP: feed an out-of-range OSC bpm → applied tempoBpm + oscTempoBpm
+ *      clamp into the engine's musical window.
  *
  * ── How to Run ────────────────────────────────────────────────────────
  *   Terminal 1:
@@ -53,7 +55,6 @@ const ENGINE_BASE = `http://127.0.0.1:${ENGINE_PORT}`;
 const WS_URL = `ws://127.0.0.1:${ENGINE_PORT}/ws/control`;
 
 // Must match the engine constants (lib/tempo_arbiter.js).
-const MANUAL_HOLD_MS = 12000;
 const OSC_STALENESS_MS = 1500;
 
 function httpJson(method, path, body = null) {
@@ -160,55 +161,56 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
   // Let an initial broadcast land.
   await sleep(400);
 
-  // ── TEST 1: TAP → manual ───────────────────────────────────────────
-  console.log('\n[TEST 1] POST /mixer/tempo {bpm:100} → tempoBpm=100, tempoSource=manual');
+  // ── TEST 1: TAP → sticky tap (manual) ───────────────────────────────
+  console.log('\n[TEST 1] POST /mixer/tempo {bpm:100} → tempoBpm=100, tempoSource=manual, pref=tap');
   {
     const r = await httpJson('POST', '/mixer/tempo', { bpm: 100 });
-    check(r.status === 200 && r.body && r.body.tempoBpm === 100,
-      'POST /mixer/tempo {100} → 200 tempoBpm=100',
-      'tap rejected', `status=${r.status} body=${JSON.stringify(r.body).slice(0,160)}`);
+    check(r.status === 200 && r.body && r.body.tempoBpm === 100 && r.body.tempoSourcePref === 'tap',
+      'POST /mixer/tempo {100} → 200 tempoBpm=100 tempoSourcePref=tap',
+      'tap rejected', `status=${r.status} body=${JSON.stringify(r.body).slice(0,180)}`);
     await sleep(300); // let the mixer broadcast arrive
-    check(lastMixer && lastMixer.tempoBpm === 100 && lastMixer.tempoSource === 'manual',
-      `WS mixer: tempoBpm=100 tempoSource=manual`,
-      'WS did not reflect the tap', `mixer=${JSON.stringify(lastMixer && {b: lastMixer.tempoBpm, s: lastMixer.tempoSource})}`);
+    check(lastMixer && lastMixer.tempoBpm === 100 && lastMixer.tempoSource === 'manual' && lastMixer.tempoSourcePref === 'tap',
+      `WS mixer: tempoBpm=100 tempoSource=manual tempoSourcePref=tap`,
+      'WS did not reflect the tap', `mixer=${JSON.stringify(lastMixer && {b: lastMixer.tempoBpm, s: lastMixer.tempoSource, p: lastMixer.tempoSourcePref})}`);
   }
 
-  // ── TEST 2: OVERRIDE HOLD — live OSC 128 must NOT reclaim ───────────
-  console.log('\n[TEST 2] live OSC 128 does NOT overwrite the tapped 100 during the hold');
+  // ── TEST 2: STICKY TAP — live OSC 128 NEVER reclaims ────────────────
+  console.log('\n[TEST 2] live OSC 128 does NOT overwrite the tapped 100 (sticky tap, no auto-revert)');
   const stopFeed = startOscFeed(128);
   {
-    await sleep(2000); // OSC streaming, but well inside the 12s hold window
+    await sleep(3000); // OSC streaming continuously; old model would have reverted by now
     const m = await readMixerRest();
     check(m && m.tempoBpm === 100,
-      `tempoBpm still 100 (~2s into hold, OSC streaming 128)`,
-      'OSC reclaimed too early', `tempoBpm=${m && m.tempoBpm}`);
-    check(m && m.tempoSource === 'manual',
-      `tempoSource still 'manual' inside the hold (oscTempoBpm=${m && m.oscTempoBpm})`,
-      `tempoSource not manual`, `source=${m && m.tempoSource}`);
+      `tempoBpm still 100 after 3s of OSC streaming 128 (sticky tap)`,
+      'OSC reclaimed (no longer sticky)', `tempoBpm=${m && m.tempoBpm}`);
+    check(m && m.tempoSource === 'manual' && m.tempoSourcePref === 'tap',
+      `tempoSource='manual', tempoSourcePref='tap' (oscTempoBpm=${m && m.oscTempoBpm})`,
+      `source/pref not tap`, `source=${m && m.tempoSource} pref=${m && m.tempoSourcePref}`);
     check(m && m.oscTempoBpm === 128,
-      `oscTempoBpm surfaces the live raw OSC value (128) even while held`,
+      `oscTempoBpm surfaces the live raw OSC value (128) even while tap-held`,
       `oscTempoBpm wrong`, `oscTempoBpm=${m && m.oscTempoBpm}`);
   }
 
-  // ── TEST 3: SYNC → OSC reclaims immediately ─────────────────────────
-  console.log('\n[TEST 3] POST /mixer/tempo/sync drops the override → OSC (128) reclaims');
+  // ── TEST 3: SELECT OSC → OSC reclaims immediately ───────────────────
+  console.log('\n[TEST 3] POST /mixer/tempo/sync selects OSC → OSC (128) reclaims');
   {
     const r = await httpJson('POST', '/mixer/tempo/sync', {});
-    check(r.status === 200, 'POST /mixer/tempo/sync → 200',
-      'sync rejected', `status=${r.status} body=${JSON.stringify(r.body).slice(0,160)}`);
+    check(r.status === 200 && r.body && r.body.tempoSourcePref === 'osc',
+      'POST /mixer/tempo/sync → 200 tempoSourcePref=osc',
+      'sync rejected', `status=${r.status} body=${JSON.stringify(r.body).slice(0,180)}`);
     // A few render frames (40fps → ~25ms each) + a re-fed osc.
     await sleep(700);
     const m = await readMixerRest();
     check(m && m.tempoBpm === 128,
-      `tempoBpm reclaimed to OSC value 128 after sync`,
-      'OSC did not reclaim after sync', `tempoBpm=${m && m.tempoBpm}`);
-    check(m && m.tempoSource === 'osc',
-      `tempoSource flipped to 'osc' after sync`,
-      `tempoSource not osc`, `source=${m && m.tempoSource}`);
+      `tempoBpm reclaimed to OSC value 128 after selecting OSC`,
+      'OSC did not reclaim', `tempoBpm=${m && m.tempoBpm}`);
+    check(m && m.tempoSource === 'osc' && m.tempoSourcePref === 'osc',
+      `tempoSource + tempoSourcePref both 'osc' after select`,
+      `not osc`, `source=${m && m.tempoSource} pref=${m && m.tempoSourcePref}`);
   }
 
-  // ── TEST 4: STALE → held ────────────────────────────────────────────
-  console.log('\n[TEST 4] stop OSC → after staleness window tempoSource=held, value holds');
+  // ── TEST 4: STALE → held (pref STAYS osc) ───────────────────────────
+  console.log('\n[TEST 4] stop OSC → tempoSource=held, value holds, pref stays osc');
   {
     stopFeed();
     await sleep(OSC_STALENESS_MS + 800);
@@ -216,6 +218,9 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     check(m && m.tempoSource === 'held',
       `tempoSource='held' once OSC went stale`,
       `tempoSource not held`, `source=${m && m.tempoSource}`);
+    check(m && m.tempoSourcePref === 'osc',
+      `tempoSourcePref STAYS 'osc' on a dropout (selector does not flip to tap)`,
+      `pref flipped on dropout`, `pref=${m && m.tempoSourcePref}`);
     check(m && m.tempoBpm === 128,
       `tempoBpm holds at last value (128) — no clobber when OSC idle`,
       `held value drifted`, `tempoBpm=${m && m.tempoBpm}`);

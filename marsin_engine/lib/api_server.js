@@ -2279,6 +2279,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (typeof mixerState.tempoBpm === 'number' && Number.isFinite(mixerState.tempoBpm)) {
       mixer.setTempoBpm(mixerState.tempoBpm);
     }
+    // STICKY tempo source preference restore (operator request 2026-06-29). The
+    // selector position survives a restart. Absent/invalid ⇒ the mixer default
+    // 'osc' (a documented default, not a silent fallback). The arbiter reads
+    // mixer.tempoSourcePref live, so setting it here is sufficient.
+    if (mixerState.tempoSourcePref === 'osc' || mixerState.tempoSourcePref === 'tap') {
+      mixer.tempoSourcePref = mixerState.tempoSourcePref;
+    }
 
     const base = mixer.getDeckChannel();
     if (base) opts.pattern = base.pattern;
@@ -2854,17 +2861,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       tempoBpm: (typeof mixer.tempoBpm === 'number' && Number.isFinite(mixer.tempoBpm))
         ? mixer.tempoBpm
         : null,
-      // TEMPO ARBITRATION: how the current tempoBpm is being driven, so the UI
-      // can render "128 · OSC" vs "128 · TAP" vs "128 · held":
-      //   'osc'    — OSC live, auto-following.
-      //   'manual' — a recent tap owns it (inside the override hold window).
-      //   'held'   — OSC stale/off, the last value just holding.
+      // TEMPO ARBITRATION: the LIVE status of how tempoBpm is being driven —
+      // for the colour/liveness accent (NOT the selector highlight):
+      //   'osc'    — OSC selected and live, auto-following.
+      //   'manual' — TAP is the sticky source (the tapped tempo owns it).
+      //   'held'   — OSC selected but stale/off, the last value just holding.
+      // `tempoSourcePref` is the STICKY operator selection ('osc' | 'tap') the
+      // OSC/TAP selector highlights — it does NOT flap with OSC liveness, so a
+      // brief OSC dropout reads as 'held' here while the selector stays on OSC.
       // `oscTempoBpm` is the RAW live OSC value (clamped) or null when stale —
-      // distinct from the applied `tempoBpm`. Both ride the existing
-      // mixer-state broadcast; the legacy `tempoBpm` field is unchanged.
+      // distinct from the applied `tempoBpm`. All ride the existing mixer-state
+      // broadcast; the legacy `tempoBpm` field is unchanged.
       tempoSource: engineCore.tempoArbiter
         ? engineCore.tempoArbiter.deriveSource()
         : 'held',
+      tempoSourcePref: engineCore.tempoArbiter
+        ? engineCore.tempoArbiter.sourcePref()
+        : (mixer.tempoSourcePref === 'tap' ? 'tap' : 'osc'),
       oscTempoBpm: engineCore.tempoArbiter
         ? engineCore.tempoArbiter.oscTempoBpm()
         : null,
@@ -4229,10 +4242,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }));
         }
         mixer.setTempoBpm(bpm);
-        // TEMPO ARBITRATION: a manual tap OVERRIDES the OSC auto-follow for a
-        // fixed hold window (MANUAL_HOLD_MS). Arm it so the live OSC BPM can't
-        // immediately reclaim the operator's deliberate tap on the next frame.
-        // (No arbiter ⇒ a tapped tempo simply has no override; still honored.)
+        // TEMPO ARBITRATION: a manual tap means the operator is hand-driving,
+        // so it makes TAP the STICKY source (mixer.tempoSourcePref='tap'). OSC
+        // auto-follow stays suppressed until the operator selects OSC again —
+        // no 12s auto-revert (that revert made the source jump OSC↔TAP).
+        // (No arbiter ⇒ a tapped tempo simply has no preference; still honored.)
         if (engineCore.tempoArbiter) {
           engineCore.tempoArbiter.noteManualTap();
         }
@@ -4252,6 +4266,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           tempoSource: engineCore.tempoArbiter
             ? engineCore.tempoArbiter.deriveSource()
             : 'manual',
+          tempoSourcePref: engineCore.tempoArbiter
+            ? engineCore.tempoArbiter.sourcePref()
+            : 'tap',
         }));
       });
     } else if (req.method === 'POST' && req.url === '/mixer/tempo/sync') {
@@ -4281,6 +4298,43 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           status: 'ok',
           tempoBpm: mixer.tempoBpm,
           tempoSource: engineCore.tempoArbiter.deriveSource(),
+          tempoSourcePref: engineCore.tempoArbiter.sourcePref(),
+          oscTempoBpm: engineCore.tempoArbiter.oscTempoBpm(),
+        }));
+      });
+    } else if (req.method === 'POST' && req.url === '/mixer/tempo/source') {
+      // STICKY tempo source selector (operator request 2026-06-29). Sets the
+      // persisted preference the OSC/TAP selector reflects on BOTH the deck and
+      // mixer (one source of truth, no per-surface guessing):
+      //   'osc' — follow the live OSC BPM (snaps on the next tick if live).
+      //   'tap' — hold the current/tapped tempo; OSC auto-follow suppressed.
+      // Codex P0 — fail loud if the arbiter is missing or the source invalid.
+      readBody(data => {
+        if (!engineCore.tempoArbiter) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'tempo arbiter unavailable — cannot set tempo source',
+          }));
+        }
+        if (data.source !== 'osc' && data.source !== 'tap') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `source must be 'osc' | 'tap', got '${data.source}'`,
+          }));
+        }
+        engineCore.tempoArbiter.setSourcePref(data.source);
+        // On 'osc', apply the auto-follow NOW so the readout snaps to the live
+        // OSC bpm immediately (same rationale as /sync). On 'tap', the current
+        // tempo just holds — tick() is a no-op in tap mode.
+        engineCore.tempoArbiter.tick(Date.now());
+        if (engineCore.bpmSync) engineCore.bpmSync.recompute();
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({
+          status: 'ok',
+          tempoBpm: mixer.tempoBpm,
+          tempoSource: engineCore.tempoArbiter.deriveSource(),
+          tempoSourcePref: engineCore.tempoArbiter.sourcePref(),
           oscTempoBpm: engineCore.tempoArbiter.oscTempoBpm(),
         }));
       });

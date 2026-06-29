@@ -1,26 +1,30 @@
 /**
  * TempoArbiter — coherent arbitration of the GLOBAL pattern tempo
- * (`mixer.tempoBpm`) between two orthogonal input streams:
+ * (`mixer.tempoBpm`) between two input streams, governed by a STICKY operator
+ * source preference (`mixer.tempoSourcePref`, 'osc' | 'tap'):
  *
  *   1. The live OSC / audio BPM (Audio Companion → OSC `/marsin/audio/bpm`
- *      → CPC key `audioBpm`). When fresh, it AUTO-DRIVES the tempo.
- *   2. The operator's manual TAP (`POST /mixer/tempo {bpm}`), which OVERRIDES
- *      the auto-follow for a fixed hold window so a deliberate hand-set tempo
- *      is honored even while audio keeps streaming.
+ *      → CPC key `audioBpm`).
+ *   2. The operator's manual TAP (`POST /mixer/tempo {bpm}`).
  *
- * Operator's ruled behaviour ("OSC auto-drives, tap overrides"):
+ * STICKY-SOURCE behaviour (operator request 2026-06-29 — replaces the old
+ * "tap overrides for 12s then OSC reclaims" auto-revert, which made the source
+ * jump OSC↔TAP whenever a tap landed or OSC liveness flapped):
  *
- *   - OSC live  → the engine continuously sets `mixer.tempoBpm` from the OSC
- *     BPM (clamped to [20,400]), but ONLY when the value actually changes
- *     (no per-frame churn / log spam).
- *   - Manual tap → sets the tempo immediately AND arms a manual-override hold
- *     (`_manualOverrideUntilMs = now + MANUAL_HOLD_MS`). While inside that
- *     window the OSC auto-follow MUST NOT overwrite the tempo. After it, if
- *     OSC is still streaming, auto-follow resumes (OSC reclaims).
- *   - OSC idle/stale → auto-follow never fires, so whatever was last set
- *     (tapped or last OSC value) simply holds. No clobber.
- *   - Explicit re-sync → `clearOverride()` drops the hold immediately so OSC
- *     reclaims on the very next tick if live.
+ *   - pref === 'osc' → the engine continuously sets `mixer.tempoBpm` from the
+ *     live OSC BPM (clamped to [20,400]), but ONLY when the value actually
+ *     changes past the deadband (no per-frame churn). The selection STAYS on
+ *     OSC; a brief OSC dropout reads as `held` (the selector still shows OSC),
+ *     never a flip to TAP.
+ *   - pref === 'tap' → OSC auto-follow is fully suppressed; the manually
+ *     set/tapped tempo HOLDS indefinitely. Stable until the operator picks OSC.
+ *   - A manual TAP (`POST /mixer/tempo`) implies the operator is hand-driving,
+ *     so it sets pref → 'tap' (sticky). "Use OSC" (`clearOverride` / select
+ *     OSC) sets pref → 'osc' and snaps to the live OSC value on the next tick.
+ *
+ * The preference is PERSISTED on the mixer (`mixer.tempoSourcePref`) and rides
+ * the mixer-state broadcast, so the deck and the mixer UIs always agree on the
+ * selected source — there is ONE source of truth, not a per-surface guess.
  *
  * Liveness: the engine ParamCenter has no per-key timestamp, so this arbiter
  * subscribes to the CPC and records the wall-clock instant `audioBpm` was last
@@ -38,11 +42,10 @@
  * channels with `followsTempo:true`); it never touches `speed`.
  */
 
-// Manual TAP override hold: how long a `POST /mixer/tempo` keeps OSC from
-// reclaiming the tempo. 12s — long enough that a deliberate tap "sticks"
-// through a few bars while audio keeps streaming, short enough that the
-// operator isn't surprised when OSC quietly resumes after they walk away.
-export const MANUAL_HOLD_MS = 12000;
+// The two sticky source modes. Default 'osc' (OSC auto-drives until the
+// operator taps or explicitly selects TAP).
+export const TEMPO_SOURCE_PREFS = ['osc', 'tap'];
+export const DEFAULT_TEMPO_SOURCE_PREF = 'osc';
 
 // OSC BPM staleness window: a received `audioBpm` is "live" only if it landed
 // within this many ms. Reuses the OSC staleness notion (~1500ms) so a paused
@@ -89,9 +92,12 @@ export class TempoArbiter {
     this._lastOscBpm = null;
     this._lastOscBpmMs = 0;
 
-    // Manual-override hold expiry (wall-clock ms). now < this ⇒ tap owns the
-    // tempo and OSC auto-follow is suppressed.
-    this._manualOverrideUntilMs = 0;
+    // The STICKY source preference is PERSISTED on the mixer so it survives a
+    // restart and rides the mixer-state broadcast (one source of truth across
+    // the deck + mixer UIs). Seed a sane default if the mixer has none yet.
+    if (this._mixer.tempoSourcePref !== 'osc' && this._mixer.tempoSourcePref !== 'tap') {
+      this._mixer.tempoSourcePref = DEFAULT_TEMPO_SOURCE_PREF;
+    }
 
     // Last value this arbiter pushed into setTempoBpm via auto-follow. Used to
     // suppress redundant setTempoBpm calls (no churn / log spam).
@@ -129,29 +135,46 @@ export class TempoArbiter {
     this._lastOscBpmMs = this._clock();
   }
 
-  /**
-   * Arm the manual-override hold and return the expiry. The caller
-   * (`POST /mixer/tempo`) sets the tempo itself via mixer.setTempoBpm; this
-   * just starts the window during which OSC auto-follow is suppressed.
-   * @param {number} [nowMs] — wall clock; defaults to the injected clock.
-   * @returns {number} the new override expiry (ms).
-   */
-  noteManualTap(nowMs) {
-    const now = Number.isFinite(nowMs) ? nowMs : this._clock();
-    this._manualOverrideUntilMs = now + MANUAL_HOLD_MS;
-    return this._manualOverrideUntilMs;
+  /** The current sticky source preference ('osc' | 'tap'). */
+  sourcePref() {
+    return this._mixer.tempoSourcePref === 'tap' ? 'tap' : 'osc';
   }
 
   /**
-   * Drop the manual override immediately so OSC reclaims on the next tick if
-   * live (the `POST /mixer/tempo/sync` route).
+   * Set the sticky source preference. 'tap' suppresses OSC auto-follow (the
+   * current tempo holds); 'osc' resumes auto-follow and snaps to the live OSC
+   * value on the next tick. Invalid input fails loud (codex P0). Returns the
+   * applied preference.
+   * @param {'osc'|'tap'} pref
+   */
+  setSourcePref(pref) {
+    if (pref !== 'osc' && pref !== 'tap') {
+      throw new Error(`setSourcePref requires 'osc' | 'tap', got '${pref}'`);
+    }
+    this._mixer.tempoSourcePref = pref;
+    // Entering OSC mode: forget the last applied value so the next tick SNAPS
+    // to the live OSC tempo (the deadband only suppresses jitter once we're
+    // already following). Entering TAP mode leaves the current tempo holding.
+    if (pref === 'osc') this._lastAppliedOscBpm = null;
+    return pref;
+  }
+
+  /**
+   * A manual tap (`POST /mixer/tempo`) means the operator is hand-driving the
+   * tempo, so it makes TAP the sticky source. The caller sets the tempo itself
+   * via mixer.setTempoBpm; this just flips the preference.
+   */
+  noteManualTap() {
+    this._mixer.tempoSourcePref = 'tap';
+    return 'tap';
+  }
+
+  /**
+   * "Use OSC" — select OSC as the sticky source so the live OSC BPM reclaims
+   * the tempo on the next tick if live (the `POST /mixer/tempo/sync` route).
    */
   clearOverride() {
-    this._manualOverrideUntilMs = 0;
-    // Forget the last applied OSC value so the next tick SNAPS to the live OSC
-    // tempo (the deadband below only suppresses jitter once we're already
-    // following). This makes "use OSC" / sync land exactly on the OSC bpm.
-    this._lastAppliedOscBpm = null;
+    this.setSourcePref('osc');
   }
 
   /** True if a live OSC BPM landed within the staleness window. */
@@ -161,10 +184,9 @@ export class TempoArbiter {
       && (now - this._lastOscBpmMs) <= OSC_STALENESS_MS;
   }
 
-  /** True while a manual tap still owns the tempo. */
-  isManualOverrideActive(nowMs) {
-    const now = Number.isFinite(nowMs) ? nowMs : this._clock();
-    return now < this._manualOverrideUntilMs;
+  /** True while TAP is the sticky source (OSC auto-follow suppressed). */
+  isManualOverrideActive() {
+    return this.sourcePref() === 'tap';
   }
 
   /**
@@ -177,14 +199,16 @@ export class TempoArbiter {
   }
 
   /**
-   * Tempo source for UI display:
-   *   'osc'    — OSC live AND not in a manual-override window (auto-driving).
-   *   'manual' — inside the manual-override window (the tap owns it).
-   *   'held'   — OSC stale/off (the last value, tapped or OSC, is just holding).
+   * Tempo source for UI display (the LIVE status, distinct from the sticky
+   * `sourcePref()` the selector highlights):
+   *   'manual' — TAP is the sticky source (the tapped tempo owns it).
+   *   'osc'    — OSC selected AND live (auto-driving).
+   *   'held'   — OSC selected but stale/off (the last value just holds; the
+   *              selector still shows OSC — it does NOT flip to TAP).
    */
   deriveSource(nowMs) {
     const now = Number.isFinite(nowMs) ? nowMs : this._clock();
-    if (this.isManualOverrideActive(now)) return 'manual';
+    if (this.sourcePref() === 'tap') return 'manual';
     if (this.isOscLive(now)) return 'osc';
     return 'held';
   }
@@ -202,8 +226,9 @@ export class TempoArbiter {
    */
   tick(nowMs) {
     const now = Number.isFinite(nowMs) ? nowMs : this._clock();
-    // Manual tap owns the tempo for the hold window — never clobber it.
-    if (this.isManualOverrideActive(now)) return;
+    // TAP is the sticky source — OSC auto-follow is suppressed; the tapped
+    // tempo holds until the operator selects OSC. Never clobber it.
+    if (this.sourcePref() === 'tap') return;
     // OSC must be live to drive.
     if (!this.isOscLive(now)) return;
     // Round to an integer BPM (the UI shows an integer) so sub-BPM tracker
