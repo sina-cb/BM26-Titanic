@@ -573,17 +573,19 @@ export default function ControlDeckScreen() {
             </TouchableOpacity>
           )}
         </View>
-        {/* "LIVE OUTPUT" = what the rig actually emits, so subscribe to the
-            engine's `rig` vis frame — the post-composite hardware-truth buffer
-            that has the GLOBAL rig FX baked in (global HUE shift + invert +
-            section dimmers), sampled from model.pixels AFTER applyHueShift
-            (engine.js render loop). The per-channel deck-id frame and the
-            `master` frame are both captured PRE global-hue (pattern_mixer only
-            mirrors the PER-channel hue into them), so neither recolors when the
-            operator drags the GlobalHueRow above — that was the bug. `rig` is
-            the only key carrying the global hue, matching the GlobalHueRow's
-            promise that the deck preview tracks the global hue. */}
-        <PixelStrip base64Data={visDataRef.current.rig ?? null} height={18} style={{ borderRadius: 6 }} />
+        {/* "LIVE OUTPUT" preview = the engine's `master` composite — the
+            PRE-dimmer composition (operator request 2026-06-29). This matches
+            the MIXER's master strip exactly: it ignores the section dimmer-rack
+            trim (and blackout / global rig FX), so the deck preview shows what
+            the SHOW is producing rather than the dimmed-down hardware output —
+            and a per-channel fader visibly affects this composite without us
+            having to dim the per-channel vis strips (which stay active at 100%
+            so the operator can read each pattern and tune live).
+            Tradeoff: `master` is captured PRE global-hue, so the deck preview
+            no longer recolors when the GlobalHueRow is dragged (that lived only
+            on the now-retired `rig` key). The section dimmers are still applied
+            to the actual sACN/DMX output — this is preview-only. */}
+        <PixelStrip base64Data={visDataRef.current.master ?? null} height={18} style={{ borderRadius: 6 }} />
       </View>
       <View style={globalStyles.container}>
         {/* Left Pane — Playlist (the one and only pattern list).
