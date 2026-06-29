@@ -56,6 +56,55 @@ export interface GroupRailBodyProps {
   channels: RailChannel[];
 }
 
+// ── In-list group header ───────────────────────────────────────────────────
+// A SLIM, low-footprint divider rendered in the mixer's channel list directly
+// before a group's first member (operator request 2026-06-29: "make the group
+// container very minimally visible to not waste UI space"). Tapping the header
+// (its NAME is the affordance) collapses ↔ expands that group's member
+// channels — collapsed members render as thin strips, expanded members render
+// as full cards. The header carries the group color tint, the name, a member
+// count, and a chevron that flips with the collapsed state.
+//
+// Collapse is VIEW-ONLY and lives in the mixer screen's state (session-scoped),
+// so this component is a pure controlled affordance: it reports taps up via
+// `onToggle` and reflects `collapsed` — it owns no fold state itself. The full
+// create/rename/assign/gang surface still lives in GroupRailBody (the GROUPS
+// modal); this header is just the in-list presence + collapse toggle.
+export interface MixGroupHeaderProps {
+  group: MixGroup;
+  index: number;
+  memberCount: number;
+  collapsed: boolean;
+  onToggle: (groupId: string) => void;
+}
+
+export function MixGroupHeader({ group, index, memberCount, collapsed, onToggle }: MixGroupHeaderProps) {
+  const C = usePalette();
+  const globalStyles = useGlobalStyles();
+  const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
+  const name = (group.name || `GROUP ${index + 1}`).toUpperCase();
+  return (
+    <TouchableOpacity
+      style={[
+        styles.inlineGroupHeader,
+        group.color ? { borderLeftColor: group.color, borderLeftWidth: 3 } : null,
+      ]}
+      hitSlop={HIT_SLOP}
+      onPress={() => onToggle(group.id)}
+      accessibilityRole="button"
+      accessibilityLabel={`${name} group, ${memberCount} channel${memberCount === 1 ? '' : 's'}, ${collapsed ? 'collapsed — tap to expand' : 'expanded — tap to collapse'}`}
+      accessibilityState={{ expanded: !collapsed }}
+    >
+      <Text style={[styles.inlineGroupChevron, { transform: [{ rotate: collapsed ? '0deg' : '90deg' }] }]}>▸</Text>
+      <View style={[styles.groupDot, { backgroundColor: group.color || C.secondary, width: 8, height: 8, borderRadius: 4 }]} />
+      <Text style={styles.inlineGroupName} numberOfLines={1}>{name}</Text>
+      <View style={styles.inlineGroupCount}>
+        <Text style={styles.inlineGroupCountText}>{memberCount}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
@@ -330,6 +379,52 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     // pushing it off-screen.
     body: {
       maxHeight: 520,
+    },
+    // Slim in-list group header (the collapse affordance in the mixer's
+    // channel list). Low-footprint: a single short row with a subtle tinted
+    // surface + left color accent so members read as "belonging together"
+    // without eating a full card's worth of vertical space.
+    inlineGroupHeader: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: 8,
+      minHeight: 30,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 8,
+      backgroundColor: C.surfaceContainerHigh,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+    },
+    inlineGroupChevron: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 11,
+      color: C.secondary,
+      width: 12,
+      textAlign: 'center' as const,
+    },
+    inlineGroupName: {
+      flex: 1,
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 11,
+      letterSpacing: 0.8,
+      color: C.text,
+    },
+    inlineGroupCount: {
+      minWidth: 18,
+      height: 18,
+      borderRadius: 9,
+      paddingHorizontal: 5,
+      backgroundColor: C.surfaceContainerLowest,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+    },
+    inlineGroupCountText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 10,
+      color: C.secondary,
     },
     bodyHeader: {
       flexDirection: 'row' as const,

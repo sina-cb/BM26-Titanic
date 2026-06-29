@@ -36,7 +36,7 @@ import {
   postSolo, deleteSolo, clearAllSolo, setChannelSoloSafe,
 } from '@/utils/groupsSoloApi';
 import { postBump } from '@/utils/bumpApi';
-import { GroupRailBody } from '@/components/GroupRail';
+import { GroupRailBody, MixGroupHeader } from '@/components/GroupRail';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
 import {
@@ -265,7 +265,7 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, isDeck, playlistLibrary, initialPlaylist, cardStyle, isOnlyChannel, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, cardStyle, isOnlyChannel, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -346,6 +346,66 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
   // changed what the *initial* value resolves to so the three strips no longer
   // all read "NEW LAYER".
   const derivedTitle = deriveChannelTitle(channel, index, channel.playlist, initialPlaylist);
+
+  // ── Collapsed (thin) strip ──────────────────────────────────────────────
+  // When this channel's group is collapsed the operator wants it "left alone":
+  // a slim row that still IDENTIFIES the channel (number + name) and keeps the
+  // essentials reachable (its CHANNEL level fader + value + Mute/Solo) without
+  // the viz / hue / playlist / params / blend / transition chrome. This is a
+  // pure early-return inside React.memo — `collapsed` is just another prop, so
+  // the memo's referential-equality short-circuit is preserved (the handlers
+  // are still the parent's useCallback-stable refs). Touch targets stay ≥44pt
+  // via the row minHeight + the toggle hitSlops.
+  if (collapsed) {
+    return (
+      <View
+        style={[
+          styles.channelCardThin,
+          group?.color ? { borderColor: group.color, borderLeftWidth: 4 } : null,
+          dimmedBySolo ? { opacity: 0.45 } : null,
+          cardStyle,
+        ]}
+      >
+        <View style={[styles.channelBadge, styles.channelBadgeThin]}>
+          <Text style={[styles.valueReadout, { color: C.primary, fontSize: 11 }]}>{index}</Text>
+        </View>
+        <Text style={[styles.headlineSm, styles.thinName]} numberOfLines={1}>
+          {derivedTitle}
+        </Text>
+        <HorizontalFader
+          value={channel.fader ?? 0}
+          onChange={(v: number) => onFaderChange(channel.id, v)}
+          trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6 }]}
+          fillStyle={styles.faderFill}
+          thumbStyle={styles.channelFaderThumb}
+        />
+        <Text style={[styles.displayMono, { width: 28, textAlign: 'right', fontSize: 12 }]}>
+          {Math.round((channel.fader ?? 0) * 100)}
+        </Text>
+        <TouchableOpacity
+          style={[styles.thinToggle, !channel.enabled && styles.toggleBtnMuted]}
+          hitSlop={ICON_BTN_HIT_SLOP}
+          onPress={() => onMuteToggle(channel.id, !channel.enabled)}
+          accessibilityRole="button"
+          accessibilityLabel={channel.enabled ? 'Mute channel' : 'Channel muted'}
+          accessibilityState={{ selected: !channel.enabled }}
+        >
+          <Text style={[styles.labelCaps, { fontSize: 9 }, !channel.enabled && { color: '#FFF' }]}>M</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.thinToggle, isSolo && { backgroundColor: '#00a86b', borderColor: '#00a86b' }]}
+          hitSlop={ICON_BTN_HIT_SLOP}
+          onPress={() => onSoloToggle(channel.id)}
+          accessibilityRole="button"
+          accessibilityLabel={isSolo ? 'Solo on' : 'Solo'}
+          accessibilityState={{ selected: !!isSolo }}
+        >
+          <Text style={[styles.labelCaps, { fontSize: 9 }, isSolo && { color: '#FFF' }]}>S</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <View style={[
       styles.channelCard,
@@ -394,14 +454,42 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           <TextInput
             style={[styles.headlineSm, { fontSize: 14, color: C.text, flex: 1, padding: 0 }]}
             defaultValue={derivedTitle}
-            onEndEditing={async (e) => {
-              // Codex P0 — no silent swallow. Name is cosmetic (not
-              // operator-critical), so a rejected rename is logged, not
-              // alerted; the uncontrolled input keeps the typed text and
-              // the next mixer broadcast re-syncs the committed value.
-              const res = await updateMixerChannel(channel.id, { name: e.nativeEvent.text });
-              if (!res.ok) console.error(`[Mixer] Channel rename rejected for ${channel.id}:`, res.error);
-            }}
+            // Commit the rename on BLUR (and on Enter via onSubmitEditing).
+            //
+            // ROOT CAUSE of the "renamed channels not picked up in the group UI"
+            // bug, confirmed two layers deep:
+            //   1. react-native-web (0.21.2, the CaptainPad web/iPad build)
+            //      DOES NOT wire `onEndEditing` at all — its TextInput only
+            //      forwards onBlur + onSubmitEditing (see RNW
+            //      exports/TextInput/index.js handleBlur/handleKeyDown). So the
+            //      old `onEndEditing` rename handler NEVER FIRED on web: no
+            //      PATCH, no broadcast, nothing — the strip's own field only
+            //      "looked right" because it's an UNCONTROLLED input keeping the
+            //      typed text. onBlur fires on BOTH web and native, so it's the
+            //      portable commit hook.
+            //   2. Even where it did fire (native), there was no optimistic
+            //      update to the parent `channels` state, so every surface that
+            //      derives a display name from it — the group rail member chips,
+            //      the assign picker, the per-strip GROUP badge — stayed stale
+            //      until a broadcast/fetch.
+            // The fix addresses both: commit on onBlur/onSubmitEditing, and hand
+            // the rename UP to the parent (onRename) which applies it
+            // OPTIMISTICALLY to `channels` BEFORE the PATCH (mirroring every
+            // other control) so the new name shows everywhere immediately; the
+            // PATCH stays the persistence path and the next broadcast reconciles.
+            // We register onEndEditing (native iPad — fires with nativeEvent.text),
+            // onSubmitEditing (Enter key, both platforms), AND onBlur (the ONLY
+            // one RNW forwards on the web build). A rename may fire more than one
+            // of these; onRename is idempotent (same setChannels map + PATCH), so
+            // a duplicate commit is harmless. We guard against an undefined text
+            // (native onBlur's nativeEvent may omit it) so we never PATCH a name
+            // of `undefined`.
+            onEndEditing={(e) => { const t = e.nativeEvent?.text; if (t != null) onRename(channel.id, t); }}
+            onSubmitEditing={(e) => { const t = e.nativeEvent?.text; if (t != null) onRename(channel.id, t); }}
+            // RN types `onBlur` as a TargetedEvent (no `text`); RNW DOES set
+            // nativeEvent.text on blur (see RNW TextInput handleBlur), so read it
+            // through a narrowed cast rather than widening the handler to `any`.
+            onBlur={(e) => { const t = (e.nativeEvent as { text?: string })?.text; if (t != null) onRename(channel.id, t); }}
             placeholderTextColor={C.icon}
           />
         </View>
@@ -896,6 +984,21 @@ export default function MixerScreen() {
   // channel `mixGroupId`/`soloSafe` ride on the channel objects themselves.
   const [mixGroups, setMixGroups] = useState<MixGroup[]>([]);
   const [soloedIds, setSoloedIds] = useState<Set<string>>(new Set());
+  // Per-group COLLAPSE state (operator request 2026-06-29: "make the group
+  // name when clicked collapse the channels to a thin channel"). This is a
+  // VIEW-ONLY, session-scoped preference held entirely in the mixer screen —
+  // it never touches the engine (the engine has no concept of a collapsed
+  // group, and the broadcast reconciles the registry, not the operator's
+  // local fold state). A Set<groupId> of the groups whose member channels
+  // should render as thin strips; absent = expanded (full cards).
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const toggleGroupCollapse = useCallback((gid: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(gid)) next.delete(gid); else next.add(gid);
+      return next;
+    });
+  }, []);
   // FLASH / BUMP (round-2 #5, docs/39 §10.7) — momentary "full while held".
   // Reconciled DISPLAY-ONLY from the `mixer` broadcast's `bumpedChannelIds[]`
   // (the engine's transient Set is the authority). A Set<string> for O(1)
@@ -1631,6 +1734,26 @@ export default function MixerScreen() {
     }
   }, []);
 
+  // Channel rename — OPTIMISTIC parent update (bug fix 2026-06-29). Every
+  // other control (fader/mode/soloSafe/lock/hue) writes `channels`
+  // optimistically; rename was the lone exception — it only fired the PATCH
+  // and waited on the WS `mixer` broadcast. The channel STRIP looked correct
+  // because its name field is an UNCONTROLLED TextInput (defaultValue showing
+  // the typed text), but every OTHER surface that derives a display name from
+  // the parent `channels` state — the group rail member chips, the assign
+  // picker, the per-strip GROUP badge — read the stale pre-rename name until a
+  // broadcast/fetch landed (and never re-rendered if the broadcast was missed).
+  // Updating `channels` here makes the new name reflect IMMEDIATELY everywhere
+  // the `groupRailChannels` memo (deriveChannelTitle) and the strips read from;
+  // the PATCH stays the persistence path and the next broadcast reconciles.
+  // Name is cosmetic (not operator-critical) so a rejected PATCH is logged, not
+  // Alerted — matching the old onEndEditing behaviour.
+  const handleRename = useCallback(async (channelId: string, name: string) => {
+    setChannels(chs => chs.map(c => c.id === channelId ? { ...c, name } : c));
+    const res = await updateMixerChannel(channelId, { name });
+    if (!res.ok) console.error(`[Mixer] Channel rename rejected for ${channelId}:`, res.error);
+  }, []);
+
   const handleControlChange = useCallback((channelId: string, controlId: number, val: number) => {
     setChannels(chs => chs.map(c => {
       if (c.id !== channelId) return c;
@@ -2014,6 +2137,12 @@ export default function MixerScreen() {
     if (!ok) console.warn('[Mixer] Transition queued — control WS not yet open');
   }, []);
 
+  // Render-pass bookkeeping for the in-list group headers: a group's slim
+  // header is emitted exactly once, before its FIRST member in list order
+  // (members can be non-contiguous after reorders). Reset each render; the
+  // channel `.map` below runs synchronously in order so a plain Set is safe.
+  const groupHeaderSeen = new Set<string>();
+
   return (
     <View style={styles.container}>
       {/* ── Top Header Bar ─────────────────────────────────────────── */}
@@ -2198,6 +2327,14 @@ export default function MixerScreen() {
           so centering it is a visual no-op. Portrait is untouched (always a
           single fixed column).*/}
       <ScrollView horizontal scrollEnabled={false} contentContainerStyle={[{ padding: 16, gap: 16, flexGrow: 1 }, !isPortrait && { justifyContent: 'center' }]} style={{ flex: 1 }}>
+        {/* Track which groups have already had their slim in-list header
+            rendered, so the header is emitted ONCE — before a group's FIRST
+            member in list order. Group members may not be contiguous (channels
+            reorder freely); collapsing keys off mixGroupId, so every member of
+            a collapsed group renders as a thin strip wherever it sits, and the
+            single header acts as the group's collapse toggle + presence marker.
+            This Set is rebuilt every render (cheap, deterministic in map order)
+            and is NOT React state — purely a render-pass bookkeeping aid. */}
         {channels.map((channel, idx) => {
           // Landscape width distribution (QA round1 #7): the strips used to be
           // a fixed 320px each and hugged the left edge, leaving ~2/3 of the
@@ -2237,13 +2374,39 @@ export default function MixerScreen() {
           const group = channel.mixGroupId
             ? mixGroups.find(g => g.id === channel.mixGroupId) || null
             : null;
+          // Collapse (view-only): a channel renders as a thin strip iff its
+          // group is in the collapsedGroups set. Ungrouped channels are never
+          // collapsed. The slim group header is emitted before this channel
+          // only if this is the FIRST member of its group seen this render.
+          const groupCollapsed = !!group && collapsedGroups.has(group.id);
+          let groupHeader: React.ReactNode = null;
+          if (group && !groupHeaderSeen.has(group.id)) {
+            groupHeaderSeen.add(group.id);
+            const memberCount = channels.reduce(
+              (n: number, c: any) => (c.mixGroupId === group.id ? n + 1 : n),
+              0,
+            );
+            const groupIndex = mixGroups.findIndex(g => g.id === group.id);
+            groupHeader = (
+              <View style={[cardStyle, { alignSelf: 'flex-start' }]}>
+                <MixGroupHeader
+                  group={group}
+                  index={groupIndex < 0 ? 0 : groupIndex}
+                  memberCount={memberCount}
+                  collapsed={groupCollapsed}
+                  onToggle={toggleGroupCollapse}
+                />
+              </View>
+            );
+          }
           // Read inlinePlaylistVersion so this scope re-renders when
           // the Map changes (Maps aren't structurally compared by React).
           void inlinePlaylistVersion;
           const channelInlinePlaylist = inlinePlaylistRef.current.get(channel.id) || null;
           return (
+            <React.Fragment key={channel.id}>
+            {groupHeader}
             <ChannelStrip
-              key={channel.id}
               index={idx + 1}
               channel={channel}
               isSolo={isSoloActive}
@@ -2253,6 +2416,7 @@ export default function MixerScreen() {
               onBumpOn={handleBumpOn}
               onBumpOff={handleBumpOff}
               group={group}
+              collapsed={groupCollapsed}
               isDeck={false}
               blends={blends}
               transitions={transitionsList}
@@ -2260,6 +2424,7 @@ export default function MixerScreen() {
               initialPlaylist={channelInlinePlaylist}
               cardStyle={cardStyle}
               isOnlyChannel={channels.length === 1}
+              onRename={handleRename}
               onFaderChange={handleFaderChange}
               onColorChange={handleColorChange}
               onHueChange={handleHueChange}
@@ -2282,6 +2447,7 @@ export default function MixerScreen() {
               viewSelectionViewMasks={viewSelectionViewMasks}
               onViewSelectionChange={handleViewSelectionChange}
             />
+            </React.Fragment>
           );
         })}
         {channels.length === 0 && (
@@ -2646,6 +2812,48 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   channelCardLocked: {
     borderColor: 'rgba(245,166,35,0.4)',
     borderWidth: 2,
+  },
+  // Collapsed group member — a single slim row (operator request 2026-06-29:
+  // "collapse the channels to a thin channel with minimal UI elems"). Holds
+  // only the channel number, name, CHANNEL fader + readout, and compact
+  // Mute/Solo. NOT alignSelf:stretch (the full card stretches to fill the
+  // strip column height; a thin strip must hug its own content height) and a
+  // fixed minHeight keeps the row tappable + visually consistent.
+  channelCardThin: {
+    width: 320,
+    minHeight: 44,
+    // Hug the row's TOP and our own content height — the channel-list row
+    // stretches items to its full height by default (the full cards fill the
+    // column), which would balloon a thin strip into a tall mostly-empty card.
+    // alignSelf:flex-start keeps the collapsed strip genuinely thin.
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: C.surfaceContainerLowest,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.ghostBorder,
+    ...globalStyles.ambientShadow,
+  },
+  channelBadgeThin: {
+    width: 22, height: 22,
+  },
+  thinName: {
+    fontSize: 12,
+    color: C.text,
+    maxWidth: 90,
+    flexShrink: 1,
+  },
+  // Compact M/S toggles for the thin strip — square, ≥36pt box + hitSlop = the
+  // ≥44pt target. Same surface/border language as the full-strip toggleBtn.
+  thinToggle: {
+    width: 36, height: 32,
+    backgroundColor: C.surfaceContainerHigh,
+    borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder,
+    alignItems: 'center', justifyContent: 'center',
   },
   channelHeader: {
     flexDirection: 'row',
