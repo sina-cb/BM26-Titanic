@@ -20,15 +20,12 @@ import {
   setMixerView,
   fetchDeckTransitionConfig, setDeckTransitionConfig,
   fetchPlaylists,
-  fetchMixerState,
   fetchChannelPlaylist,
   type DeckTransitionConfig,
-  type MixerChannel,
 } from '@/utils/api';
 import { setChannelColor } from '@/utils/channelExtrasApi';
 import { panicMixer } from '@/utils/channelOpsApi';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
-import { setDeckFocus } from '@/utils/deckFocusApi';
 import { DeckOverlayStack } from '@/components/DeckOverlayStack';
 import type { DeckOverlay, DeckOverlayAutopilot } from '@/utils/deckOverlaysApi';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
@@ -146,22 +143,6 @@ export default function ControlDeckScreen() {
   // COLOR) routes through handleDeckColor.
   const [showColorPicker, setShowColorPicker] = useState(false);
 
-  // ── Cue-to-deck (docs/39 §F-cue) ───────────────────────────────────────
-  // Audition a MIXER overlay's pattern on the deck PREVIEW buffer at 100%
-  // (PFL) before pushing it live. The engine render path already honours
-  // `deckFocusChannelId`; the deck tab just arms/clears it via
-  // POST /deck/focus and reconciles the active cue from the `deck` WS event.
-  //
-  // - `cueOverlays`: the mixer overlay list to choose from. The deck tab does
-  //   NOT otherwise call /mixer, so we seed it once and keep it fresh from the
-  //   `mixer` WS broadcast (overlay add/remove/rename while the picker is up).
-  // - `activeCueId`: engine-confirmed deckFocusChannelId (null = no cue).
-  //   Optimistic on tap, reconciled by the `deck` broadcast's deckFocusChannelId.
-  // - `showCuePicker`: the overlay-picker modal visibility.
-  const [cueOverlays, setCueOverlays] = useState<MixerChannel[]>([]);
-  const [activeCueId, setActiveCueId] = useState<string | null>(null);
-  const [showCuePicker, setShowCuePicker] = useState(false);
-
   // Post-channel-split (May 2026): the deck channel comes from its
   // own /deck/channel endpoint and the WS `deck` event. The mixer's
   // `channels[]` array NEVER contains the deck channel anymore — that
@@ -267,11 +248,6 @@ export default function ControlDeckScreen() {
     }
     if (msg.type === 'deck') {
       setDeckChannel((msg.channel as any) || null);
-      // F-cue: reconcile the active cue from the engine's canonical
-      // deckFocusChannelId (source of truth; clears any optimistic value
-      // the engine refused). Absent field (old engine) ⇒ no cue.
-      const focus = (msg as { deckFocusChannelId?: unknown }).deckFocusChannelId;
-      setActiveCueId(typeof focus === 'string' ? focus : null);
       // Deck dynamic VIEW OVERRIDES ride the same `deck` message: the
       // overlay stack + the SHARED auto-cycle cadence. Reconcile both off
       // the broadcast (the engine is the source of truth — every add /
@@ -286,12 +262,6 @@ export default function ControlDeckScreen() {
           shuffle: !!ap.shuffle,
         });
       }
-    } else if (msg.type === 'mixer') {
-      // F-cue: the deck tab doesn't otherwise track overlays, but the cue
-      // picker needs the live overlay list. The mixer broadcast carries
-      // `channels` (overlays only — never the deck channel).
-      const chans = (msg as { channels?: unknown }).channels;
-      if (Array.isArray(chans)) setCueOverlays(chans as MixerChannel[]);
     } else if (msg.type === 'autopilot') {
       if (typeof msg.active === 'boolean') setPlaylistActive(msg.active);
       if (typeof msg.delay_s === 'string' && (msg.delay_s as string).length) {
@@ -374,18 +344,6 @@ export default function ControlDeckScreen() {
     if (deckRes.ok && deckRes.data) {
       const ch = deckRes.data.channel || null;
       setDeckChannel(ch);
-      // F-cue: seed the active cue from /deck/channel's deckFocusChannelId.
-      // The top-level api type doesn't pin this field, so read it loosely.
-      const focus = (deckRes.data as { deckFocusChannelId?: unknown }).deckFocusChannelId;
-      setActiveCueId(typeof focus === 'string' ? focus : null);
-    }
-
-    // F-cue: seed the mixer overlay list for the cue picker. The deck tab
-    // doesn't otherwise call /mixer; the `mixer` WS broadcast keeps this
-    // fresh after the seed.
-    const mixRes = await fetchMixerState();
-    if (mixRes.ok && mixRes.data && Array.isArray(mixRes.data.channels)) {
-      setCueOverlays(mixRes.data.channels);
     }
 
     // Seed the parent-owned playlist library (see comment on the
@@ -452,34 +410,6 @@ export default function ControlDeckScreen() {
     }
   }, [deckChannel?.color]);
 
-  // ── Cue-to-deck handlers (docs/39 §F-cue) ──────────────────────────────
-  // Arm a cue: audition `channelId` (a mixer overlay) on the deck preview
-  // buffer at 100%, or clear (null → restore the canonical deck view).
-  // Optimistic local apply; the `deck` WS broadcast's deckFocusChannelId is
-  // the source of truth and reconciles in onControl. Fail loud (Codex P0):
-  // a rejected arm reverts locally + Alerts with the engine's error verbatim.
-  const handleSetCue = useCallback(async (channelId: string | null) => {
-    const prev = activeCueId;
-    setActiveCueId(channelId);
-    const res = await setDeckFocus(channelId);
-    if (!res.ok) {
-      console.error('[Deck] Cue (deck focus) rejected:', res.error);
-      setActiveCueId(prev);
-      Alert.alert(
-        'Cue not applied',
-        `The engine rejected this cue. ${res.error || ''} The deck preview kept its previous state.`.trim(),
-      );
-    }
-  }, [activeCueId]);
-
-  // Human label for a cued overlay id (its name, or a short id fallback so a
-  // freshly-added overlay the picker hasn't seen yet still reads sensibly).
-  const cueLabelFor = useCallback((id: string): string => {
-    const ov = cueOverlays.find(c => c.id === id);
-    const name = ov?.name;
-    return (typeof name === 'string' && name.length) ? name : id.slice(0, 8);
-  }, [cueOverlays]);
-
   // ── PANIC / HOME (docs/39 §6b #9) — mission-critical safe LIT reset ─────
   // Mirrors the mixer tab's PANIC tile (same panicMixer api + ConfirmSheet
   // gating). Previously the deck had NO panic, so recovery forced an
@@ -538,40 +468,7 @@ export default function ControlDeckScreen() {
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.5, textTransform: 'uppercase', color: C.icon }}>
             DECK MAIN · LIVE OUTPUT
           </Text>
-          {/* ── Cue-to-deck (docs/39 §F-cue) ──────────────────────────
-              Audition a mixer overlay on this preview buffer at 100% before
-              pushing it live. When a cue is armed we show the cued overlay's
-              name + a CLEAR button; otherwise just the CUE button. The row
-              reserves a 44pt min-height so arming/clearing never shifts the
-              preview strip below. */}
           <View style={{ flex: 1 }} />
-          {activeCueId ? (
-            <>
-              <View style={[styles.cueActiveChip, { borderColor: C.primary, backgroundColor: C.surfaceContainerHigh }]}>
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1, color: C.primary }}>
-                  CUE · {cueLabelFor(activeCueId)}
-                </Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => handleSetCue(null)}
-                style={[styles.cueBtn, { borderColor: C.ghostBorder }]}
-                accessibilityRole="button"
-                accessibilityLabel="Clear deck cue"
-              >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.5, color: C.text }}>CLEAR</Text>
-              </TouchableOpacity>
-            </>
-          ) : (
-            <TouchableOpacity
-              onPress={() => setShowCuePicker(true)}
-              disabled={cueOverlays.length === 0}
-              style={[styles.cueBtn, { borderColor: C.ghostBorder, opacity: cueOverlays.length === 0 ? 0.4 : 1 }]}
-              accessibilityRole="button"
-              accessibilityLabel="Cue a mixer overlay onto the deck preview"
-            >
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.5, color: C.text }}>◎ CUE</Text>
-            </TouchableOpacity>
-          )}
         </View>
         {/* "LIVE OUTPUT" preview = the engine's `master` composite — the
             PRE-dimmer composition (operator request 2026-06-29). This matches
@@ -995,57 +892,11 @@ export default function ControlDeckScreen() {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
-      {/* Cue-to-deck picker (docs/39 §F-cue). A list of the live mixer overlays
-          plus a CLEAR option. Tapping an overlay auditions it on the deck
-          preview buffer at 100% (PFL) without pushing it live. Screen-level so
-          it draws above every card. */}
-      <Modal transparent visible={showCuePicker} animationType="fade" onRequestClose={() => setShowCuePicker(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowCuePicker(false)}>
-          <TouchableOpacity activeOpacity={1} onPress={() => {}}>
-            <View style={[styles.modalContent, { backgroundColor: C.surfaceContainerHigh, borderColor: C.ghostBorder, minWidth: 260 }]}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', marginBottom: 12 }}>
-                CUE OVERLAY TO DECK PREVIEW
-              </Text>
-              {cueOverlays.length === 0 ? (
-                <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.secondary, marginBottom: 12 }}>
-                  No mixer overlays to cue. Add one on the Mixer tab.
-                </Text>
-              ) : (
-                cueOverlays.map((ov) => {
-                  const active = activeCueId === ov.id;
-                  const label = (typeof ov.name === 'string' && ov.name.length) ? ov.name : ov.id.slice(0, 8);
-                  return (
-                    <TouchableOpacity
-                      key={ov.id}
-                      style={[styles.cueRow, { borderColor: active ? C.primary : C.ghostBorder, backgroundColor: active ? C.surfaceContainerHigh : 'transparent' }]}
-                      onPress={() => { handleSetCue(ov.id); setShowCuePicker(false); }}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Cue ${label} onto the deck preview`}
-                      accessibilityState={{ selected: active }}
-                    >
-                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: active ? C.primary : C.text }}>{label}</Text>
-                      {active ? <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.primary }}>✓</Text> : null}
-                    </TouchableOpacity>
-                  );
-                })
-              )}
-              <TouchableOpacity
-                style={[styles.clearColorBtn, { borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerHigh, marginTop: 4 }]}
-                onPress={() => { handleSetCue(null); setShowCuePicker(false); }}
-                accessibilityRole="button"
-                accessibilityLabel="Clear deck cue (show the canonical deck view)"
-              >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.secondary }}>CLEAR CUE</Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
     </View>
   );
 }
 
-// Local styles for the cue header + color-picker recipe (docs/39 §8.4).
+// Local styles for the color-picker recipe (docs/39 §8.4).
 // Palette-dependent colors are applied inline at the call site (this screen
 // reads the palette via the usePalette hook, not a StyleSheet factory).
 const styles = StyleSheet.create({
@@ -1102,28 +953,6 @@ const styles = StyleSheet.create({
     width: 44, height: 44, borderRadius: 8,
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 1,
-  },
-  // Cue-to-deck (docs/39 §F-cue): the CUE / CLEAR buttons in the preview
-  // header. 44pt min touch target; the row reserves height so arming a cue
-  // never shifts the preview strip below.
-  cueBtn: {
-    minHeight: 44, minWidth: 44,
-    paddingHorizontal: 12,
-    alignItems: 'center', justifyContent: 'center',
-    borderRadius: 6, borderWidth: 1,
-  },
-  cueActiveChip: {
-    minHeight: 44,
-    paddingHorizontal: 10,
-    alignItems: 'center', justifyContent: 'center',
-    borderRadius: 6, borderWidth: 1,
-  },
-  cueRow: {
-    minHeight: 44,
-    paddingHorizontal: 14, paddingVertical: 8,
-    marginBottom: 8,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    borderRadius: 8, borderWidth: 1,
   },
   modalOverlay: {
     flex: 1,

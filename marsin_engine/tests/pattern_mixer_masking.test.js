@@ -472,38 +472,23 @@ test('renderAll6ch: overlay with invert mask paints the COMPLEMENT', () => {
   }
 });
 
-// ─── PatternMixer: PFL / deck blackout for unselected pixels ──────────
+// ─── PatternMixer: deck PFL blackout for unselected pixels ────────────
 
 test('renderAll6ch: PFL blackout zeroes unselected pixels in deck output', () => {
   const { mixer } = makeMixerWithRedBase();
-  // Force the deck to focus on the overlay (so we see the overlay's
-  // mask in the PFL view).
-  mixer.deckFocusChannelId = 'ch_overlay';
-  mixer.setChannelViewSelection('ch_overlay', { type: 'group', target: 'Wall' });
+  // The canonical deck channel with a Wall view selection: PFL shows the
+  // deck's own output masked to its selection, blacking out the rest.
+  mixer.setChannelViewSelection('ch_deck', { type: 'group', target: 'Wall' });
   mixer.viewFader = 0.0; mixer.targetViewFader = 0.0; // emit deckBuffer
   const out = mixer.renderAll6ch();
-  // Wall pixels = blue (overlay full strength).
+  // Wall pixels = red (deck full strength).
   for (const i of [0, 1]) {
-    assert.equal(out[i * 6 + 2], 255);
+    assert.equal(out[i * 6 + 0], 255);
   }
-  // Non-wall pixels = BLACK in PFL (not red — deck doesn't see the base).
+  // Non-wall pixels = BLACK in PFL (deck blackout masks unselected pixels).
   for (const i of [2, 3]) {
     assert.equal(out[i * 6 + 0], 0);
     assert.equal(out[i * 6 + 1], 0);
     assert.equal(out[i * 6 + 2], 0);
-  }
-});
-
-test('renderAll6ch: PFL blackout does NOT affect mixerBuffer (background preserved)', () => {
-  // Companion to the previous test. Mix output (viewFader=1) must NOT
-  // be black in the masked region — it must show the red background.
-  const { mixer } = makeMixerWithRedBase();
-  mixer.deckFocusChannelId = 'ch_overlay';
-  mixer.setChannelViewSelection('ch_overlay', { type: 'group', target: 'Wall' });
-  mixer.viewFader = 1.0; mixer.targetViewFader = 1.0;
-  const out = mixer.renderAll6ch();
-  // Non-wall pixels = red (base preserved by mask logic, NOT black).
-  for (const i of [2, 3]) {
-    assert.equal(out[i * 6 + 0], 255);
   }
 });

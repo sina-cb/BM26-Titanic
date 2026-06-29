@@ -305,7 +305,6 @@ export class PatternMixer {
     // The api_server owns build + CPC + the onMorphComplete finalizer.
     this._morph = null;
     this.onMorphComplete = null; // Callback: () => void — fired once when a morph's wall-clock window elapses
-    this.deckFocusChannelId = null; // When set, deck view renders this channel instead of the deck channel
     // maxChannels comes from config.yaml `mixer.maxChannels`. Default 3 — the
     // CaptainPad iPad strip layout doesn't fit more than that without
     // horizontal scroll / clipping. Caps `mixerChannels.length` only —
@@ -2700,16 +2699,10 @@ export class PatternMixer {
       }
     }
 
-    // 2. Render Deck (focused channel or deck channel → deckBuffer)
+    // 2. Render Deck (deck channel → deckBuffer)
     //
-    // `deckFocusChannelId` is a debug/preview affordance — if set, the
-    // deck buffer renders THAT channel instead of the canonical deck
-    // channel. It can reference EITHER a mixer overlay or the deck
-    // itself; getChannel() handles both. With nothing set, we render
-    // the deck channel as PFL (Pre-Fade Listen, always 100%).
-    const deck = this.deckFocusChannelId
-      ? this.getChannel(this.deckFocusChannelId)
-      : this.deckChannel;
+    // The deck channel renders as PFL (Pre-Fade Listen, always 100%).
+    const deck = this.deckChannel;
     if (deck) {
       this.channelBuffer.fill(0);
       deck.renderInto(this.wasmHost, this.deckBuffer, true);
