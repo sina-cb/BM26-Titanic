@@ -1688,8 +1688,11 @@ const LoadDirectoryModal: React.FC<LoadDirectoryModalProps> = ({
       style={modalStyles.backdrop}
       accessibilityLabel="Close load-directory picker"
     >
-      <TouchableOpacity activeOpacity={1} onPress={() => {}} style={modalStyles.cardWrap}>
-        <View style={[modalStyles.card, { maxHeight: '90%', minWidth: 420 }]}>
+      {/* Card IS the stop-propagation layer (no full-width cardWrap): taps to
+          the SIDES of the centered card now reach the backdrop and close the
+          picker, so "click outside to cancel" works horizontally too — the old
+          width:100% cardWrap swallowed those side taps. */}
+      <TouchableOpacity activeOpacity={1} onPress={() => {}} style={[modalStyles.card, { maxHeight: '90%', minWidth: 420 }]}>
           <Text style={modalStyles.title}>LOAD DIRECTORY</Text>
           <Text style={{ color: C.icon, fontFamily: 'Inter_400Regular', fontSize: 11, marginBottom: 10, lineHeight: 15 }}>
             <Text style={{ color: C.primary, fontFamily: 'SpaceGrotesk_700Bold' }}>New playlist</Text>
@@ -1733,7 +1736,6 @@ const LoadDirectoryModal: React.FC<LoadDirectoryModalProps> = ({
               </View>
             ))}
           </ScrollView>
-        </View>
       </TouchableOpacity>
     </TouchableOpacity>
   </Modal>
