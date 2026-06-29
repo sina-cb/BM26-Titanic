@@ -1535,6 +1535,63 @@ export class PatternMixer {
     return this.mixerChannels.find(c => c.id === channelId);
   }
 
+  /**
+   * Resolve a channel by id across EVERY role — deck base, mixer overlays,
+   * AND deck overlays. `getChannel` deliberately omits deck overlays (they
+   * live on their own route tree); this accessor is for paths that must reach
+   * any live channel's per-channel local controls regardless of role (e.g.
+   * the ChannelParamRouter writing a propagated per-pattern param onto a deck
+   * overlay). Returns undefined when no channel matches.
+   */
+  getChannelAnyRole(channelId) {
+    const direct = this.getChannel(channelId);
+    if (direct) return direct;
+    return this.deckOverlays.find(o => o.id === channelId);
+  }
+
+  /**
+   * Every LIVE channel the engine renders: the deck base channel, every
+   * mixer overlay, AND every deck overlay. Used by callers (e.g. the
+   * per-pattern param propagation in api_server) that must reach EVERY
+   * channel regardless of role — `getChannel` deliberately only covers
+   * deck + mixer overlays, so a propagation that relied on it would silently
+   * skip deck overlays. Returns a fresh array (deck first, then overlays);
+   * the deck channel is omitted when absent. Do not mutate the channel
+   * objects' role membership through this list.
+   */
+  getAllLiveChannels() {
+    const out = [];
+    if (this.deckChannel) out.push(this.deckChannel);
+    for (const c of this.mixerChannels) out.push(c);
+    for (const o of this.deckOverlays) out.push(o);
+    return out;
+  }
+
+  /**
+   * Find every live channel currently running pattern `patternName` from
+   * playlist `playlistName` (matched on BOTH `channel.playlist.name` and
+   * `channel.pattern`), optionally excluding one channel id. This is the
+   * (playlist, pattern) keying the operator's shared-param feature is built
+   * on: a param edit on one such channel propagates to all the others.
+   *
+   * Strict matching — a channel on a DIFFERENT playlist, or running a
+   * different pattern (even from the same playlist), or with no playlist
+   * assignment at all, is NOT returned. A channel whose playlist has no
+   * active entry (pattern not yet loaded) is excluded because its
+   * `channel.pattern` won't match. Returns a fresh array.
+   */
+  channelsRunningPattern(playlistName, patternName, { excludeId = null } = {}) {
+    if (!playlistName || !patternName) return [];
+    const out = [];
+    for (const c of this.getAllLiveChannels()) {
+      if (!c || c.id === excludeId) continue;
+      if (!c.playlist || c.playlist.name !== playlistName) continue;
+      if (c.pattern !== patternName) continue;
+      out.push(c);
+    }
+    return out;
+  }
+
   addChannel(channelConfig) {
     if (!this.deckChannel) {
       return this.setDeckChannel(channelConfig);

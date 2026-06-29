@@ -265,6 +265,50 @@ export function validateFollowScale(raw) {
   return { ok: true, value: Math.max(0, Math.min(2, n)) };
 }
 
+// ── Per-pattern param SHARING — pure propagation core ─────────────────────
+// (operator request, feat/optimize_channels)
+//
+// Given the SOURCE channel a control was just written on, mirror that SAME
+// exported slider/param onto every OTHER live channel running the SAME pattern
+// from the SAME playlist (deck base, mixer overlays, deck overlays). Extracted
+// as a pure, dependency-injected function (no engine closure) so it is unit-
+// testable in isolation; the api_server factory's `propagatePatternParam`
+// wrapper supplies `mixer`/`wasmHost`/`paramRouter`.
+//
+// Keying is strict (mixer.channelsRunningPattern): playlist.name === L AND
+// channel.pattern === P. Mapping is by export NAME (per-handle controlIds are
+// not guaranteed identical across compiles): resolve the source export's name,
+// then find the same-named export on each target and write THROUGH
+// paramRouter.setChannelControl — which already rejects CPC-owned / CPC-blocked
+// / non-local controls per target, so only the pattern's LOCAL sliders/params
+// ever propagate (never fader/level/hue/mode — those are not pattern exports
+// and never reach here). Returns the array of channel ids that actually
+// received the value (status 'ok'); the source is never included.
+export function propagatePatternParamWith({ source, sourceChannelId, controlId, v0, v1, v2, mixer, wasmHost, paramRouter }) {
+  if (!source || !source.playlist || !source.playlist.name || !source.pattern) {
+    // No (playlist, pattern) context on the source — nothing to share by.
+    return [];
+  }
+  const playlistName = source.playlist.name;
+  const patternName = source.pattern;
+
+  const sourceExports = wasmHost.getExports(source.handle) || [];
+  const sourceExp = sourceExports.find(e => e.id === controlId);
+  if (!sourceExp) return [];
+  const exportName = sourceExp.name;
+
+  const targets = mixer.channelsRunningPattern(playlistName, patternName, { excludeId: sourceChannelId });
+  const applied = [];
+  for (const target of targets) {
+    const targetExports = wasmHost.getExports(target.handle) || [];
+    const targetExp = targetExports.find(e => e.name === exportName);
+    if (!targetExp) continue; // pattern recompiled without this export — skip, never crash
+    const result = paramRouter.setChannelControl(target.id, targetExp.id, v0, v1, v2);
+    if (result && result.status === 'ok') applied.push(target.id);
+  }
+  return applied;
+}
+
 // ── Auto-cycle DELAY validation (docs/39 §auto-cycle, round-2 #2) ──────
 // The interval (seconds) between automatic playlist advances on a mixer
 // overlay channel. Codex P0 (no silent fallback): a NON-FINITE value (NaN /
@@ -1383,6 +1427,64 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   }
   function clearChannelDirty(channel) {
     if (channel && channel._dirty) channel._dirty = false;
+  }
+
+  /**
+   * Per-pattern param SHARING (operator request, feat/optimize_channels).
+   *
+   * A pattern's exported SLIDERS/params are conceptually owned by the
+   * (playlist, pattern) pair, NOT by the one channel the operator happened
+   * to touch. So when a control is written on the SOURCE channel, mirror that
+   * SAME export onto every OTHER live channel currently running the SAME
+   * pattern from the SAME playlist — the deck base channel, every mixer
+   * overlay, AND every deck overlay.
+   *
+   * Keying: matched on (channel.playlist.name === L) AND (channel.pattern === P)
+   * via mixer.channelsRunningPattern. The on-disk source of truth is each
+   * matched channel's playlist-entry `defaults` (captured by
+   * scheduleEntryCapture below), so the shared value ALSO lands on disk and is
+   * re-applied when any channel later (re)loads that (playlist, pattern).
+   *
+   * Mapping is by export NAME, not by raw controlId: each channel has its own
+   * WASM handle, so we resolve the source export's name, then find the
+   * same-named export on each target and write THROUGH paramRouter
+   * (setChannelControl), which already rejects CPC-owned / CPC-blocked /
+   * non-local controls per target. This guarantees we only ever propagate the
+   * pattern's LOCAL sliders/params — never channel-level things (fader, level,
+   * hue, mode, faderMax) which are not pattern exports and never reach here.
+   *
+   * Returns the array of channel ids that actually received the value (so the
+   * caller can schedule their entry-capture too). The source channel is never
+   * in the result — the caller already wrote + captured it.
+   */
+  function propagatePatternParam(sourceChannelId, controlId, v0, v1, v2) {
+    const source = mixer.getChannel(sourceChannelId)
+      || (mixer.getDeckOverlay && mixer.getDeckOverlay(sourceChannelId));
+    return propagatePatternParamWith({
+      source,
+      sourceChannelId,
+      controlId,
+      v0, v1, v2,
+      mixer,
+      wasmHost,
+      paramRouter,
+    });
+  }
+
+  /**
+   * Convenience wrapper used by the runtime control-write routes: write the
+   * control on the source channel's OWN capture+dirty pipeline, then propagate
+   * the same export to every sibling channel running the same (playlist,
+   * pattern), scheduling their capture too. The source channel's own write +
+   * scheduleEntryCapture is done by the caller BEFORE this is invoked.
+   */
+  function propagateAndCapturePatternParam(sourceChannelId, controlId, v0, v1, v2) {
+    const applied = propagatePatternParam(sourceChannelId, controlId, v0, v1, v2);
+    for (const id of applied) {
+      scheduleEntryCapture(id);
+      markChannelDirtyIfLocked(id);
+    }
+    return applied;
   }
 
   /**
@@ -3560,8 +3662,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // its active playlist entry so the deck's playlist stays in sync.
         scheduleEntryCapture(mixer.baseChannelId);
         markChannelDirtyIfLocked(mixer.baseChannelId);
+        // Per-pattern param SHARING: mirror onto siblings on the same
+        // (playlist, pattern).
+        if (mixer.baseChannelId) {
+          propagateAndCapturePatternParam(mixer.baseChannelId, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        }
         saveAllState();
         broadcastMixerState();
+        broadcastDeckState();
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', id: data.id }));
@@ -5253,8 +5361,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         paramRouter.setChannelControl(id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         scheduleEntryCapture(id);
         markChannelDirtyIfLocked(id);
+        // Per-pattern param SHARING: mirror this export onto every other live
+        // channel running the same (playlist, pattern) — deck base, mixer
+        // overlays, deck overlays.
+        propagateAndCapturePatternParam(id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         saveAllState();
         broadcastMixerState();
+        broadcastDeckState();
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
       });
     } else if (req.method === 'POST' && req.url === '/mixer/view') {
@@ -6433,8 +6546,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         paramRouter.setChannelControl(channel.id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         scheduleEntryCapture(channel.id);
         markChannelDirtyIfLocked(channel.id);
+        // Per-pattern param SHARING: mirror onto siblings on the same
+        // (playlist, pattern) — mixer overlays + deck overlays.
+        propagateAndCapturePatternParam(channel.id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         saveAllState();
         broadcastMixerState();
+        broadcastDeckState();
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
       });
     }
@@ -7203,14 +7320,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           paramRouter.setControl(d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
           scheduleEntryCapture(mixer.baseChannelId);
           markChannelDirtyIfLocked(mixer.baseChannelId);
+          // Per-pattern param SHARING (see propagatePatternParam).
+          if (mixer.baseChannelId) {
+            propagateAndCapturePatternParam(mixer.baseChannelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
+          }
           saveAllState();
           broadcastMixerState();
+          broadcastDeckState();
         } else if (d.type === 'setChannelControl' && d.channelId && d.id !== undefined) {
           paramRouter.setChannelControl(d.channelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
           scheduleEntryCapture(d.channelId);
           markChannelDirtyIfLocked(d.channelId);
+          // Per-pattern param SHARING (see propagatePatternParam).
+          propagateAndCapturePatternParam(d.channelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
           saveAllState();
           broadcastMixerState();
+          broadcastDeckState();
         } else if (d.type === 'setChannelFader' && d.channelId && d.fader !== undefined) {
           // Codex P0: reject a non-finite fader loudly over WS too. We have
           // no res to 4xx on a socket, so push back a typed rejection the
