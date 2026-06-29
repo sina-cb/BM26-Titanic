@@ -327,39 +327,43 @@ test('(h) selecting OSC after a matching tap ⇒ no redundant setTempoBpm', () =
   assert.deepEqual(mixer.setCalls, [128], 'no redundant set when value unchanged');
 });
 
-// ── stability deadband (jitter rejection) ─────────────────────────────
+// ── RAW OSC fidelity (no deadband) ────────────────────────────────────
+// With OSC selected the system tempo IS the raw OSC value (operator request
+// 2026-06-29). There is NO deadband: every distinct OSC integer is applied, so
+// mixer.tempoBpm never lags or differs from the OSC readout. (Stability comes
+// from the Companion's Kalman-smoothed integer emit, not from the arbiter.)
 
-test('deadband: small OSC jitter around the held tempo does NOT churn', () => {
+test('raw fidelity: every distinct OSC value is applied (no deadband)', () => {
   const { mixer, pc, arbiter, clock } = makeArbiter();
-  pc.emitAudioBpm(128); arbiter.tick(clock());            // snap to 128
-  assert.deepEqual(mixer.setCalls, [128]);
-  for (const j of [129, 127, 130, 126, 128.4]) {          // all within 3 BPM of 128
+  pc.emitAudioBpm(128); arbiter.tick(clock());            // 128
+  for (const j of [129, 127, 130, 126]) {                 // ±1..2 BPM moves
     clock.advance(25); pc.emitAudioBpm(j); arbiter.tick(clock());
   }
-  assert.deepEqual(mixer.setCalls, [128], 'jitter within the deadband is ignored');
+  assert.deepEqual(mixer.setCalls, [128, 129, 127, 130, 126],
+    'each OSC value is applied verbatim — no deadband suppression');
 });
 
-test('deadband: a genuine tempo move (>= deadband) follows', () => {
+test('raw fidelity: a genuine tempo move follows', () => {
   const { mixer, pc, arbiter, clock } = makeArbiter();
-  pc.emitAudioBpm(120); arbiter.tick(clock());            // snap 120
-  clock.advance(25); pc.emitAudioBpm(124); arbiter.tick(clock()); // +4 >= 3
+  pc.emitAudioBpm(120); arbiter.tick(clock());
+  clock.advance(25); pc.emitAudioBpm(124); arbiter.tick(clock());
   assert.deepEqual(mixer.setCalls, [120, 124]);
 });
 
-test('OSC bpm is rounded to an integer (no sub-BPM churn)', () => {
+test('a non-integer OSC bpm is rounded (safety no-op for the integer emit)', () => {
   const { mixer, pc, arbiter, clock } = makeArbiter();
   pc.emitAudioBpm(127.6); arbiter.tick(clock());
   assert.equal(mixer.tempoBpm, 128);
 });
 
-test('selecting OSC snaps to the live OSC even within the deadband', () => {
+test('selecting OSC applies the raw live OSC value immediately', () => {
   const { mixer, pc, arbiter, clock } = makeArbiter();
   pc.emitAudioBpm(128); arbiter.tick(clock());            // following 128
-  mixer.setTempoBpm(127); arbiter.noteManualTap();        // tap to 127 (within deadband)
+  mixer.setTempoBpm(127); arbiter.noteManualTap();        // tap to 127
   pc.emitAudioBpm(128);
-  arbiter.clearOverride();                                 // select OSC → snap
+  arbiter.clearOverride();                                 // select OSC
   arbiter.tick(clock());
-  assert.equal(mixer.tempoBpm, 128, 'select-OSC snaps even though |128-127| < deadband');
+  assert.equal(mixer.tempoBpm, 128, 'select-OSC applies the raw OSC value (128)');
 });
 
 // ── Constants are sane named values ────────────────────────────────────
