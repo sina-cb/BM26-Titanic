@@ -357,13 +357,18 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
   // are still the parent's useCallback-stable refs). Touch targets stay ≥44pt
   // via the row minHeight + the toggle hitSlops.
   if (collapsed) {
+    // A NARROW thin bar (operator request 2026-06-29: "make the collapsed group
+    // a thin bar, not wide, to save horizontal space"). We deliberately DON'T
+    // apply cardStyle (which forces a ≥320pt column) — channelCardThin sets its
+    // own slim width. The fader is dropped (it's the width hog; collapsed =
+    // "left alone"); just number + name + level% + compact M/S remain. Expand
+    // the group to get the full strip back.
     return (
       <View
         style={[
           styles.channelCardThin,
           group?.color ? { borderColor: group.color, borderLeftWidth: 4 } : null,
           dimmedBySolo ? { opacity: 0.45 } : null,
-          cardStyle,
         ]}
       >
         <View style={[styles.channelBadge, styles.channelBadgeThin]}>
@@ -372,14 +377,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
         <Text style={[styles.headlineSm, styles.thinName]} numberOfLines={1}>
           {derivedTitle}
         </Text>
-        <HorizontalFader
-          value={channel.fader ?? 0}
-          onChange={(v: number) => onFaderChange(channel.id, v)}
-          trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6 }]}
-          fillStyle={styles.faderFill}
-          thumbStyle={styles.channelFaderThumb}
-        />
-        <Text style={[styles.displayMono, { width: 28, textAlign: 'right', fontSize: 12 }]}>
+        <Text style={[styles.displayMono, { width: 26, textAlign: 'right', fontSize: 11 }]}>
           {Math.round((channel.fader ?? 0) * 100)}
         </Text>
         <TouchableOpacity
@@ -2388,7 +2386,10 @@ export default function MixerScreen() {
             );
             const groupIndex = mixGroups.findIndex(g => g.id === group.id);
             groupHeader = (
-              <View style={[cardStyle, { alignSelf: 'flex-start' }]}>
+              // When collapsed, the header shrinks to the same narrow width as
+              // the thin member bars so the whole collapsed group reads as a
+              // compact row of thin bars (not a full-width column).
+              <View style={[groupCollapsed ? { width: 168 } : cardStyle, { alignSelf: 'flex-start' }]}>
                 <MixGroupHeader
                   group={group}
                   index={groupIndex < 0 ? 0 : groupIndex}
@@ -2820,7 +2821,9 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   // strip column height; a thin strip must hug its own content height) and a
   // fixed minHeight keeps the row tappable + visually consistent.
   channelCardThin: {
-    width: 320,
+    // Narrow thin bar — saves horizontal space so a collapsed group doesn't eat
+    // full ≥320pt columns (operator request 2026-06-29).
+    width: 168,
     minHeight: 44,
     // Hug the row's TOP and our own content height — the channel-list row
     // stretches items to its full height by default (the full cards fill the
