@@ -177,9 +177,19 @@ export function render3D(index, x, y, z) {
   var sharp = 4.0 + detail * 6.0;
   var blend = pow(combined, sharp);
 
-  // Crest gate travels/spreads with radius (AUDIO movement RADIUS).
+  // Crest gate travels/spreads with radius (AUDIO movement RADIUS). A hard
+  // (crestField > edge) ? 1 : 0 binary gate teleports the crest on in a single
+  // frame (a real visual seam: px jumps ~140/255 between consecutive frames as
+  // the rising swell crosses the edge). Replace with a STEEP smoothstep over a
+  // narrow band so the crest still reads as a crisp bioluminescent pop (identity
+  // preserved — same edge, same sharpness via pow below) but rises continuously
+  // across the crossing instead of instantaneously.
   var crestField = wave(driftA * 1.4 * spread + pct * dens * spread + pcy * 0.23);
-  var crest = (crestField > (0.84 - radius * 0.14)) ? 1.0 : 0.0;
+  var crestEdge = 0.84 - radius * 0.14;
+  var crestBand = 0.04;                       // narrow -> still a crisp pop
+  var crestU = (crestField - (crestEdge - crestBand)) / (crestBand * 2.0);
+  crestU = clamp01(crestU);
+  var crest = crestU * crestU * (3.0 - 2.0 * crestU); // smoothstep(edge-band, edge+band)
   crest = crest * pow(combined, 2.0);
 
   // Brightness: ambient breathes, crest pops; kick adds a pop. The ambient is

@@ -158,8 +158,17 @@ export function render3D(index, x, y, z) {
   var currentRaw = (longWave * 0.65) + (crossWave * 0.35);
   var current = pow(currentRaw, 1.8);
 
-  // Caustic crest gate — sharpens with shimmer, pops with kick.
-  var crest = (crossWave > (0.86 - shimmer * 0.1)) ? 1.0 : 0.0;
+  // Caustic crest gate — sharpens with shimmer, pops with kick. A hard
+  // (crossWave > edge) ? 1 : 0 gate teleports the caustic on in a single frame
+  // (a real seam: px jumps ~120/255 between consecutive frames as crossWave
+  // crosses the edge in silence). Replace with a STEEP smoothstep over a narrow
+  // band so the caustic still reads as a crisp moonlit crest (same edge, same
+  // pow sharpness below) but rises continuously across the crossing.
+  var crestEdge = 0.86 - shimmer * 0.1;
+  var crestBand = 0.04;                       // narrow -> still a crisp caustic
+  var crestU = (crossWave - (crestEdge - crestBand)) / (crestBand * 2.0);
+  crestU = clamp01(crestU);
+  var crest = crestU * crestU * (3.0 - 2.0 * crestU); // smoothstep(edge-band, edge+band)
   crest = crest * pow(currentRaw, 2.0);
 
   // Upper-head crown weighting.
