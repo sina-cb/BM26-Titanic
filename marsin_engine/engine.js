@@ -1197,6 +1197,12 @@ async function main() {
 
   const apiServer = startApiServer(opts, engineCore, './patterns', broadcastStatsRef, intensityController, globalEffectsController);
 
+  // Tracks the last tempo pushed to clients via the OSC auto-follow path, so the
+  // render loop broadcasts a fresh mixer state ONLY when the live OSC tempo
+  // actually moves (the arbiter's tick() updates mixer.tempoBpm but never
+  // broadcasts) — keeps the BPM readout tracking live OSC without per-frame churn.
+  let lastBroadcastTempoBpm = mixer.tempoBpm;
+
   const loop = createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, paramCenter, (stats) => {
     broadcastStatsRef.publish(stats);
   }, engineConfig.vis || {}, {
@@ -1224,6 +1230,14 @@ async function main() {
       // different epoch and would never compare correctly. Hot-path safe: two
       // field reads + one timestamp compare, no allocation.
       tempoArbiter.tick(Date.now());
+      // When OSC auto-follow actually moved the tempo, push a fresh mixer state
+      // so the BPM readout tracks the live OSC tempo (only-on-change; the
+      // arbiter itself never broadcasts, and a mixer broadcast otherwise only
+      // fires on operator actions — so OSC drift would look frozen).
+      if (mixer.tempoBpm !== lastBroadcastTempoBpm && apiServer && typeof apiServer.broadcastMixerState === 'function') {
+        lastBroadcastTempoBpm = mixer.tempoBpm;
+        apiServer.broadcastMixerState();
+      }
       // BPM → SPEED sync (source-agnostic): the arbiter may have just moved
       // mixer.tempoBpm (OSC auto-follow) WITHOUT a CPC event, so re-evaluate
       // the speed mapping against the arbitrated tempo. recompute() is

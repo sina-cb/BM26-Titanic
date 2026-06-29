@@ -4159,6 +4159,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }));
         }
         engineCore.tempoArbiter.clearOverride();
+        // Apply the OSC auto-follow NOW (before broadcasting) so the readout
+        // immediately shows the OSC bpm on "use OSC". Without this the broadcast
+        // would carry tempoSource='osc' but the STALE tapped tempoBpm (the
+        // per-frame tick hadn't run yet) — which read as "OSC selected but the
+        // number stays on the tapped value". If OSC isn't live, tick() is a
+        // no-op and the last value just holds (source 'held').
+        engineCore.tempoArbiter.tick(Date.now());
+        if (engineCore.bpmSync) engineCore.bpmSync.recompute();
         saveAllState();
         broadcastMixerState();
         res.writeHead(200); res.end(JSON.stringify({
