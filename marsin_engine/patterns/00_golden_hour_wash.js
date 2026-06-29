@@ -95,7 +95,13 @@ var MAX_RATE = 1.05;          // drift turns/sec at localSpeed = 1.0 — tuned s
                               // raised vs 0.55 because the 2-wave blend is gentler than og's
                               // single cubed wave, so a higher phase rate matches the look).
 var BASE_RATE = 0.10;         // creep so motion never fully stops at localSpeed=0
-var PHASE_WRAP = 10000.0;     // wrap accumulators far from any in-frame use (§7)
+// driftA/driftB feed wave() (period 1.0) with integer-coefficient terms, so an
+// INTEGER wrap is seam-free; 1000.0 keeps them far from float-precision breakdown.
+var PHASE_WRAP = 1000.0;
+// dirOsc feeds sin(); wrap it at a MULTIPLE OF 2π (not an arbitrary big number) so
+// sin(dirOsc) is continuous across the wrap — otherwise the wrap injects a phase
+// seam that makes the auto-reverse fire spuriously. 200π ≈ 628.3 (≈22.9 min @0.137).
+var OSC_WRAP = 628.31853071795862;  // 100 * 2π
 
 // ── Palette RGB cache (verbatim from 27_swipe) ───────────────────────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -161,13 +167,18 @@ export function beforeRender(delta) {
   var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
   var rate = (BASE_RATE + MAX_RATE * localMult);
 
-  // Autonomous direction VARIATION: a slow incommensurate oscillator. When it
-  // crosses zero we flip the autonomous sign — clock-driven, irrational period,
-  // so flips feel organic, not metronomic.
+  // Autonomous direction VARIATION: a slow oscillator. When sin(dirOsc) crosses
+  // zero we flip the autonomous sign — clock-driven, ~half-period 22.9s, so flips
+  // feel organic, not metronomic. CRITICAL: prevOsc and curOsc must be sin() of
+  // the SAME continuous phase (dirOsc), and dirOsc must wrap at a multiple of 2π,
+  // or the crossing test fires spuriously and the drift sign churns every few
+  // frames — that is the "hang / glitchy motion after a while" bug. (The old code
+  // compared sin(dirOsc) against sin(dirOsc*1.41421) — two different functions —
+  // so flips burst to ~1200/min once dirOsc grew, stalling and jittering the wash.)
   var prevOsc = sin(dirOsc);
-  dirOsc = dirOsc + dt * 0.137;        // slow, ~0.137 rad/s (incommensurate)
-  if (dirOsc >= PHASE_WRAP) dirOsc = dirOsc - PHASE_WRAP;
-  var curOsc = sin(dirOsc * 1.41421);  // √2 multiplier -> non-repeating crossings
+  dirOsc = dirOsc + dt * 0.137;        // slow, ~0.137 rad/s
+  if (dirOsc >= OSC_WRAP) dirOsc = dirOsc - OSC_WRAP;  // wrap at 100*2π (seam-free)
+  var curOsc = sin(dirOsc);
   if ((prevOsc <= 0.0 && curOsc > 0.0) || (prevOsc >= 0.0 && curOsc < 0.0)) {
     autoSign = -autoSign;
   }
@@ -255,11 +266,24 @@ export function render3D(index, x, y, z) {
   // White stays ADDITIVE on top of the cp1<->cp2 wash — pars/bars keep colour.
   if (sectionId == 2) {
     // MOVING base white: like og line 81 (w = noise * 2.5), the W channel tracks
-    // the drifting `noise` field so the white ANIMATES at silence (no audio).
+    // the drifting `noise` field so the white ANIMATES at silence (no audio). The
+    // keep term is scaled BY noise (not a flat +constant) so it too goes to 0 in
+    // the dark troughs of the wash, instead of holding the W channel always-on.
     var moveW = noise * 1.8;                          // og-style moving white core
-    var ambW  = whiteKeep * (0.18 + 0.20 * noise);   // calm warm white keep (additive)
+    var ambW  = whiteKeep * 0.55 * noise;            // warm white keep — FULLY noise
+                                                      // gated (no flat term) so it
+                                                      // vanishes in the wash troughs
     var hitW  = whiteBite * (0.6 + 0.4 * noise);     // hard blinder pop on kick (additive)
-    w = moveW + ambW + hitW * 2.0;                   // moving base + keep + kick bite
+    var wRaw  = moveW + ambW + hitW * 2.0;           // moving base + keep + kick bite
+    // LOWER THRESHOLD so the white truly reaches 0 at low signal (fixes "white never
+    // fully turns off"). Subtract a floor then clamp >=0: in the wash troughs (and at
+    // low whiteLevel) wRaw < W_FLOOR and W collapses to genuine 0, while a bright wash
+    // core / raised whiteLevel / a kick still drives W up normally. With ambW now
+    // fully noise-gated, the only constant survivor would be hitW, so the resting
+    // (silence, kick=0) state floors to 0 across the dark troughs of the field.
+    var w_floor = 0.28;
+    w = wRaw - w_floor;
+    if (w < 0.0) w = 0.0;
     w = w * (0.35 + 0.65 * levGain);                // still gated by overall level
     if (w > 1.0) w = 1.0;
     // Tint the white: warm amber A when whiteTint low, cool/UV U when high.
