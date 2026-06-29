@@ -145,7 +145,8 @@ function clamp01(v) {
 var driftA = 0.0;      // primary wash drift accumulator
 var driftB = 0.0;      // secondary (incommensurate) drift accumulator
 var dirOsc = 0.0;      // autonomous direction oscillator accumulator
-var autoSign = 1.0;    // current autonomous drift sign (occasionally flips)
+var autoSign = 1.0;    // current autonomous drift sign — CONTINUOUS soft-clipped
+                       // sin(dirOsc) in [-1,1], eases through reversals (no kink)
 var levGain = 1.0;     // resolved overall brightness gain this frame
 var radScale = 0.5;    // resolved radius this frame
 var kickBody = 0.0;    // resolved kick pop on the warm colour body this frame
@@ -167,21 +168,27 @@ export function beforeRender(delta) {
   var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
   var rate = (BASE_RATE + MAX_RATE * localMult);
 
-  // Autonomous direction VARIATION: a slow oscillator. When sin(dirOsc) crosses
-  // zero we flip the autonomous sign — clock-driven, ~half-period 22.9s, so flips
-  // feel organic, not metronomic. CRITICAL: prevOsc and curOsc must be sin() of
-  // the SAME continuous phase (dirOsc), and dirOsc must wrap at a multiple of 2π,
-  // or the crossing test fires spuriously and the drift sign churns every few
-  // frames — that is the "hang / glitchy motion after a while" bug. (The old code
-  // compared sin(dirOsc) against sin(dirOsc*1.41421) — two different functions —
-  // so flips burst to ~1200/min once dirOsc grew, stalling and jittering the wash.)
-  var prevOsc = sin(dirOsc);
+  // Autonomous direction VARIATION: a slow oscillator. The autonomous drift sign
+  // is a CONTINUOUS odd function of sin(dirOsc) — clock-driven, ~half-period 22.9s,
+  // so the wash drifts one way for ~23s then eases back the other way, organically.
+  // CRITICAL #1: dirOsc must wrap at a multiple of 2π so sin(dirOsc) is continuous
+  //   across the wrap (otherwise a phase seam appears at the wrap).
+  // CRITICAL #2: the autonomous sign must change CONTINUOUSLY, never with a discrete
+  //   ±1 flip. A discrete flip leaves brightness continuous but instantly reverses
+  //   the drift VELOCITY — a sharp motion kink the wash visibly jerks through every
+  //   ~917 frames (a 2nd-difference / "accel" spike of ~6× the local median, ~9σ).
+  //   So autoSign is a SOFT-CLIPPED sin: it saturates to ±1 for most of each swing
+  //   (preserving the "drift this way, then that way" identity) but passes smoothly
+  //   through 0 at the reversal, so the velocity reverses without a discontinuity.
+  //   (The old code compared sin(dirOsc) against sin(dirOsc*1.41421) — two different
+  //   functions — so flips burst to ~1200/min once dirOsc grew, stalling/jittering.)
   dirOsc = dirOsc + dt * 0.137;        // slow, ~0.137 rad/s
   if (dirOsc >= OSC_WRAP) dirOsc = dirOsc - OSC_WRAP;  // wrap at 100*2π (seam-free)
-  var curOsc = sin(dirOsc);
-  if ((prevOsc <= 0.0 && curOsc > 0.0) || (prevOsc >= 0.0 && curOsc < 0.0)) {
-    autoSign = -autoSign;
-  }
+  var osc = sin(dirOsc);
+  // Soft clip: osc / sqrt(osc^2 + k^2) is a smooth odd sigmoid in [-1,1]. Small k
+  // (=0.06) makes it saturate near ±1 quickly so the drift spends most of its time
+  // at full speed (matching the old ±1 look) but eases through the reversal.
+  autoSign = osc / sqrt(osc * osc + 0.0036);   // k=0.06 -> k^2=0.0036
 
   // Effective drift sign: user direction (guarded, never 0) * autonomous sign.
   var effDir = direction;
