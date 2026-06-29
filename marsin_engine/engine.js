@@ -1191,7 +1191,14 @@ async function main() {
   // per-frame auto-follow runs in the render loop's beforeFrame hook. NOTE: it
   // drives ONLY mixer.tempoBpm; bpm_speed_sync independently drives the SPEED
   // knob from the same audioBpm — different mechanism/target, both may be on.
-  const tempoArbiter = new TempoArbiter({ mixer, paramCenter });
+  // Optional re-smoothing of the received OSC bpm (config.yaml
+  // `tempo.oscBpmSmoothing: { enabled, tauMs }`). OFF unless set — the Audio
+  // Companion already smooths the BPM before emitting, so this is a safety net
+  // for a jumpy non-Companion OSC sender (enabling it stacks a little lag).
+  const tempoArbiter = new TempoArbiter({
+    mixer, paramCenter,
+    smoothing: engineConfig?.tempo?.oscBpmSmoothing,
+  });
   tempoArbiter.attach();
   engineCore.tempoArbiter = tempoArbiter;
 

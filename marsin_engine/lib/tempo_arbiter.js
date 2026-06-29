@@ -44,6 +44,8 @@
  * channels with `followsTempo:true`); it never touches `speed`.
  */
 
+import { BpmSmoother } from './bpm_smoother.js';
+
 // The two sticky source modes. Default 'osc' (OSC auto-drives until the
 // operator taps or explicitly selects TAP).
 export const TEMPO_SOURCE_PREFS = ['osc', 'tap'];
@@ -74,8 +76,13 @@ export class TempoArbiter {
    * @param {object} deps.paramCenter  — ParamCenter with subscribe(fn)→unsub.
    * @param {() => number} [deps.clock] — wall-clock ms source (default Date.now).
    *                                       Injectable for deterministic tests.
+   * @param {object} [deps.smoothing]  — optional re-smoothing of the RECEIVED
+   *   OSC bpm (same quick EMA the Companion runs before emit). `{ enabled,
+   *   tauMs }`. DEFAULT OFF: the Audio Companion already smooths at the source,
+   *   so this is a SAFETY NET for a jumpy non-Companion OSC sender — enabling it
+   *   on top of the Companion's filter just stacks a little extra lag.
    */
-  constructor({ mixer, paramCenter, clock } = {}) {
+  constructor({ mixer, paramCenter, clock, smoothing } = {}) {
     if (!mixer || typeof mixer.setTempoBpm !== 'function') {
       throw new TypeError('TempoArbiter requires a mixer with setTempoBpm()');
     }
@@ -86,8 +93,14 @@ export class TempoArbiter {
     this._pc = paramCenter;
     this._clock = typeof clock === 'function' ? clock : Date.now;
 
-    // Last finite/positive OSC BPM seen + the wall-clock instant it arrived.
-    // null/0 means "never seen a live tempo".
+    // Optional EMA on the received OSC bpm (replicates the Companion's filter;
+    // off unless explicitly enabled — see the constructor doc above).
+    this._smoother = (smoothing && smoothing.enabled)
+      ? new BpmSmoother({ enabled: true, tauMs: smoothing.tauMs })
+      : null;
+
+    // Last finite/positive OSC BPM seen (after optional smoothing) + the
+    // wall-clock instant it arrived. null/0 means "never seen a live tempo".
     this._lastOscBpm = null;
     this._lastOscBpmMs = 0;
 
@@ -126,8 +139,17 @@ export class TempoArbiter {
     // Non-finite or <= 0 means "no signal" (Companion emits 0 when it can't
     // resolve a tempo) — do NOT refresh the liveness clock. Fail SAFE.
     if (!Number.isFinite(bpm) || bpm <= 0) return;
-    this._lastOscBpm = bpm;
-    this._lastOscBpmMs = this._clock();
+    const now = this._clock();
+    // Optional re-smoothing (off by default — the Companion already smooths).
+    // dt is the gap since the last sample; a long gap (re-acquire after a
+    // dropout) makes alpha→1 so the smoother self-seeds to the fresh value.
+    if (this._smoother) {
+      const dtMs = this._lastOscBpmMs > 0 ? now - this._lastOscBpmMs : 0;
+      this._lastOscBpm = this._smoother.push(bpm, dtMs);
+    } else {
+      this._lastOscBpm = bpm;
+    }
+    this._lastOscBpmMs = now;
   }
 
   /** The current sticky source preference ('osc' | 'tap'). */
