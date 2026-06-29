@@ -80,6 +80,9 @@ var CREEP_RATE = 0.05;     // floor rate so it still moves at localSpeed = 0
 var PHASE_WRAP = 10000.0;  // wrap accumulators far from any in-frame use
 var SQRT2 = 1.41421356;
 var SQRT3 = 1.73205081;
+var FLASH_HALF = 0.10;     // half-width (cycle units) of the symmetric convergence-flash
+                           // bump. Wide enough (~13 frames) that the raised-cosine onset
+                           // is smooth at 40 fps (the old ~3-frame flash was a hard spike).
 var BASE_FLOOR = 0.07;     // non-black floor: keeps the rig lit even at level=0 (the
                            // level² gain otherwise blacks out the whole slider-0 extreme).
                            // Small enough that it barely dilutes the PRIMARY corr.
@@ -90,6 +93,8 @@ var wobbleA = 0.0;         // incommensurate clock term A
 var wobbleB = 0.0;         // incommensurate clock term B
 var flashIntensity = 0.0;
 var invBeamWidth = 2.0;
+var beamPow = 4.0;         // head crispness exponent for the periodic comet (set from
+                           // beamWidth each frame): high = tight crisp head, low = fatter.
 var effDir = 1.0;          // effective signed direction this frame
 var reach = 0.55;          // resolved beam reach this frame
 
@@ -170,17 +175,28 @@ export function beforeRender(delta) {
   // the level PRIMARY correlation). 0.45..0.80 of the half-room.
   reach = 0.45 + radius * 0.35;
 
-  // Beam-width falloff.
+  // Beam-width falloff. bw drives the head->tail COLOR transition rate (via tVal).
   var bw = 0.08 + beamWidth * 0.6;
   invBeamWidth = 1.0 / bw;
+  // Head crispness exponent for the periodic comet envelope: a WIDER beamWidth
+  // gives a fatter, softer head (lower power); a NARROW beamWidth gives a tight
+  // crisp head (higher power). Range ~3..9 keeps the signature crisp head while
+  // the envelope itself stays continuous across the cycle wrap (no spawn step).
+  beamPow = 7.0 - beamWidth * 4.0;
 
   // Center flash when beams converge (once per cycle). Kick audio pops it.
-  // Narrow flash window: brief + bright so the convergence peak hits hard
-  // (peakMaxChan high) while adding few uncorrelated frames (protects level corr).
+  // SYMMETRIC raised-cosine bump CENTERED on the convergence instant (the
+  // attackPos fractional wrap) so it swells in from 0 and back to 0 with zero
+  // slope at both edges (C¹-continuous across the wrap). The old one-sided
+  // sawtooth (peak AT the wrap, ~3-frame instant onset) made a hard
+  // 2nd-derivative kink there — a once-per-cycle motion stutter the detector
+  // flagged in silence. Same peak intensity and convergence timing, just a
+  // smooth (frame-resolvable) onset (§7 wrap alignment).
   var fphase = attackPos - floor(attackPos);
+  var toWrap = fphase; if (toWrap > 0.5) toWrap = 1.0 - toWrap; // 0 at convergence
   flashIntensity = 0.0;
-  if (fphase < 0.06) {
-    var fi = 1.0 - (fphase * 16.6667);
+  if (toWrap < FLASH_HALF) {
+    var fi = 0.5 + 0.5 * cos(toWrap * (3.14159265 / FLASH_HALF)); // 1@center -> 0@edge
     flashIntensity = fi * fi;
   }
   flashIntensity = flashIntensity * (2.2 + kick * 0.9);
@@ -200,9 +216,20 @@ export function render3D(index, x, y, z) {
   var distBehind = cycle * reach;
 
   var tVal = distBehind * invBeamWidth;
-  if (tVal > 1.0) tVal = 1.0;
-  var brightness = 1.0 - tVal;
-  brightness = brightness * brightness;   // crisp head, dark negative space
+  if (tVal > 1.0) tVal = 1.0;            // tVal drives the head->tail COLOR lerp (unchanged)
+
+  // Beam brightness as a PERIODIC raised-cosine comet of the cycle, raised to
+  // beamPow for a crisp head. Continuous in value AND slope across the cycle
+  // wrap by construction (cos is periodic) — so the beam head no longer POPS
+  // into existence at full brightness as it sweeps onto a pixel. The old
+  // profile, (1 - clamp(distBehind))², had a HARD leading edge: brightness
+  // stepped 0 -> 1 in a single frame at the wrap (a moving seam the detector
+  // flagged ~7x local median, in silence, at visible mid-room pixels). The
+  // raised-cosine eases the leading edge in over the same span the tail eases
+  // out, while beamPow keeps the head tight and the negative space dark — so
+  // the crisp-sweeping-comet identity is preserved without the spawn step.
+  var env = 0.5 + 0.5 * cos(cycle * 6.2831853); // 1 at head (cycle 0), 0 at cycle 0.5
+  var brightness = pow(env, beamPow);
 
   // Center flash boosts intensity along the palette (cp2 head) — never white.
   // Wider proximity so the convergence flash reliably lights center pixels.
