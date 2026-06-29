@@ -39,20 +39,28 @@ import { useOscStatus, OscPillState } from '@/hooks/useEngineState';
 // pinned across both themes — the OSC status badge should look the same
 // regardless of the operator's light/dark preference so the colour reads
 // as a traffic-light status signal, not a chrome accent.
-const OSC_YELLOW_BG = '#ffc107';
+// Traffic-light state colours. The PILL keeps a neutral surface and signals
+// state with a coloured DOT + coloured LABEL + coloured BORDER (a flooded
+// bright-yellow tile read as garish / hard to scan — operator feedback). The
+// diagnostic SHEET still uses a soft `bg` tint chip in the modal header.
+//   `dot`/`label` are the on-neutral-surface readable colours; `bg`/`fg` are
+//   the soft-chip pair used only in the sheet header.
+const OSC_GREEN = '#1b9e77';       // matches the BPM "OSC-locked" accent
+const OSC_YELLOW = '#ffc107';      // caution dot/border
+const OSC_YELLOW_TEXT = '#b07d00'; // readable amber on a neutral surface
+const OSC_YELLOW_BG = '#fff6d6';   // soft amber chip (sheet only)
 const OSC_YELLOW_FG = '#5a4500';
-function makeStateStyles(C: Palette): Record<OscPillState['state'], { bg: string; fg: string; border: string }> {
+function makeStateStyles(C: Palette): Record<OscPillState['state'], { bg: string; fg: string; border: string; dot: string; label: string }> {
   return {
     // GRAY — listener disabled. Nothing is expected, so it stays neutral.
-    off:      { bg: C.surfaceContainerHigh, fg: C.secondary, border: C.ghostBorder },
-    // YELLOW — enabled but nothing flowing. Actionable (start the sender),
-    // so it earns a clear caution colour rather than blending into chrome.
-    idle:     { bg: OSC_YELLOW_BG,          fg: OSC_YELLOW_FG, border: OSC_YELLOW_BG },
-    // YELLOW — packets arriving but unmapped. Same caution band as idle
-    // (enabled, no usable data); the label disambiguates the cause.
-    unmapped: { bg: OSC_YELLOW_BG,          fg: OSC_YELLOW_FG, border: OSC_YELLOW_BG },
+    off:      { bg: C.surfaceContainerHigh, fg: C.secondary, border: C.ghostBorder, dot: C.secondary, label: C.secondary },
+    // YELLOW — enabled but nothing flowing (start the sender). Actionable.
+    idle:     { bg: OSC_YELLOW_BG, fg: OSC_YELLOW_FG, border: OSC_YELLOW, dot: OSC_YELLOW, label: OSC_YELLOW_TEXT },
+    // YELLOW — packets arriving but unmapped (a binding/config mistake). Same
+    // caution band as idle; the label disambiguates the cause.
+    unmapped: { bg: OSC_YELLOW_BG, fg: OSC_YELLOW_FG, border: OSC_YELLOW, dot: OSC_YELLOW, label: OSC_YELLOW_TEXT },
     // GREEN — values flowing into the CPC.
-    live:     { bg: C.primaryContainer,     fg: '#003a44',     border: C.primary },
+    live:     { bg: C.primaryContainer, fg: '#003a44', border: OSC_GREEN, dot: OSC_GREEN, label: OSC_GREEN },
   };
 }
 
@@ -111,10 +119,9 @@ export function OscStatusPill({ compact = false }: Props) {
           width: w, height: TILE_HEIGHT,
           paddingVertical: 4, paddingHorizontal: 6,
           borderRadius: 8, borderWidth: 1,
-          // Subtle bg tinted toward the state, but not flooded — keeps
-          // the tile readable next to the other globals-cluster boxes.
-          // The border + dot do the heavy state-signal lifting.
-          backgroundColor: status.state === 'off' ? C.surface : styles.bg,
+          // Neutral surface always; the coloured border + dot + label carry the
+          // traffic-light signal (no flooded-yellow tile).
+          backgroundColor: C.surface,
           borderColor: styles.border,
           justifyContent: 'space-between',
         }}
@@ -122,15 +129,15 @@ export function OscStatusPill({ compact = false }: Props) {
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-            color: styles.fg, textTransform: 'uppercase', letterSpacing: 0.8,
+            color: styles.label, textTransform: 'uppercase', letterSpacing: 0.8,
           }}>OSC</Text>
-          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: styles.border }} />
+          <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: styles.dot }} />
         </View>
         <Text
           numberOfLines={1}
           style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-            color: styles.fg, textAlign: 'center', textTransform: 'uppercase', letterSpacing: 0.6,
+            color: styles.label, textAlign: 'center', textTransform: 'uppercase', letterSpacing: 0.6,
           }}
         >
           {status.label}
