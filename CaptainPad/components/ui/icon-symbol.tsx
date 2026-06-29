@@ -64,6 +64,21 @@ const MAPPING = {
   'square.grid.2x2': 'grid-view',
   // "Load directory" (bulk-add a patterns/ sub-folder into a playlist).
   'folder.fill': 'folder',
+  // Deck overlay stack (feat/optimize_channels): each overlay card header has
+  // an eye (enable toggle) and an ✕ (remove); the expanded body has up/down
+  // reorder arrows, and the ADD OVERLAY button uses a plain plus. These had no
+  // Material-Icon fallback, so on web (and Android) IconSymbol rendered a blank
+  // 0×0 glyph — the ✕ was "nowhere to be found" because it was literally
+  // invisible and un-tappable. Map them so the overlay controls render on web.
+  'xmark': 'close',
+  'eye': 'visibility',
+  'eye.slash': 'visibility-off',
+  'plus': 'add',
+  'arrow.up': 'arrow-upward',
+  'arrow.down': 'arrow-downward',
+  // Studio console + config split-screen toggle, likewise unmapped on web.
+  'terminal': 'terminal',
+  'circle.lefthalf.filled': 'contrast',
 } as IconMapping;
 
 /**

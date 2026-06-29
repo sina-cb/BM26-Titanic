@@ -1,0 +1,203 @@
+// MasterFadeGroup — the timed grand-master FADE affordance (docs/39 §8.2 — F-B),
+// shared by the deck top bar (DeckTopBar) and the mixer header
+// (app/(tabs)/mixer.tsx). Pick a duration pill (1/3/5/10 s), then "TO BLACK"
+// (target 0) or "UP" (target 1); the engine runs the timed fade via
+// POST /mixer/master/fade (utils/masterApi.fadeMaster).
+//
+// This was deck-only and inlined in DeckTopBar; it was extracted here when the
+// mixer gained the same control so the two surfaces share ONE implementation —
+// same pills, same behaviour, no duplicated fade UI to drift apart.
+//
+// Responsive, exactly as the deck header was: landscape shows the full
+// duration-pill row; portrait collapses the pills into one compact button that
+// CYCLES through FADE_SECONDS on tap (a dropdown would need a new menu surface
+// and more width than the narrow header has), keeping FADE + TO BLACK + UP
+// reachable in both orientations (QA round 8 fix #2).
+
+import React, { useMemo, useState } from 'react';
+import { View, Text, TouchableOpacity, Alert } from 'react-native';
+import { usePalette } from '@/hooks/use-theme';
+import { Palette } from '@/constants/theme';
+import { fadeMaster } from '@/utils/masterApi';
+
+// Duration choices for the timed fade, in seconds. Kept short — the operator
+// can always drag the master directly for anything bespoke.
+export const FADE_SECONDS = [1, 3, 5, 10] as const;
+const DEFAULT_FADE_SECONDS = 3;
+
+interface Props {
+  /** Compact (portrait) layout when true — pills collapse to a cycler. */
+  isPortrait: boolean;
+}
+
+export function MasterFadeGroup({ isPortrait }: Props) {
+  const palette = usePalette();
+  const styles = useMemo(() => makeStyles(palette), [palette]);
+  // Selected fade duration (seconds). Local UI state only.
+  const [fadeSeconds, setFadeSeconds] = useState<number>(DEFAULT_FADE_SECONDS);
+
+  const runFade = async (target: number) => {
+    const durationMs = fadeSeconds * 1000;
+    const res = await fadeMaster(target, durationMs);
+    if (!res.ok) {
+      // Codex P0 — fail loud: a rejected fade must be visible, not silently
+      // dropped.
+      const where = target <= 0 ? 'Fade to Black' : 'Fade Up';
+      console.error(`Master ${where} failed:`, res.error);
+      Alert.alert('Master fade failed', res.error || 'The engine rejected the fade request.');
+    }
+  };
+
+  return (
+    <View style={styles.fadeGroup}>
+      <Text style={styles.labelCaps}>FADE</Text>
+      {!isPortrait ? (
+        <View style={styles.fadePills}>
+          {FADE_SECONDS.map((s) => {
+            const selected = s === fadeSeconds;
+            return (
+              <TouchableOpacity
+                key={s}
+                onPress={() => setFadeSeconds(s)}
+                hitSlop={{ top: 14, bottom: 14, left: 6, right: 6 }}
+                style={[styles.fadePill, selected && styles.fadePillSelected]}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                accessibilityLabel={`Fade duration ${s} seconds`}
+              >
+                <Text style={[styles.fadePillText, selected && styles.fadePillTextSelected]}>
+                  {`${s}s`}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ) : (
+        // Compact duration cycler: tap to advance to the next FADE_SECONDS value
+        // (wraps). The trailing ▾ + the accessibilityHint listing every preset
+        // make it read as a value picker rather than an opaque one-off chip
+        // (QA round 10 fix #1).
+        <TouchableOpacity
+          onPress={() => {
+            const i = FADE_SECONDS.indexOf(fadeSeconds as (typeof FADE_SECONDS)[number]);
+            const next = FADE_SECONDS[(i + 1) % FADE_SECONDS.length];
+            setFadeSeconds(next);
+          }}
+          hitSlop={{ top: 14, bottom: 14, left: 6, right: 6 }}
+          style={[styles.fadePill, styles.fadePillSelected, styles.fadePillCycler]}
+          accessibilityRole="button"
+          accessibilityLabel={`Fade duration ${fadeSeconds} seconds`}
+          accessibilityHint={`Tap to cycle through ${FADE_SECONDS.map((s) => `${s}s`).join(', ')}`}
+        >
+          <Text style={[styles.fadePillText, styles.fadePillTextSelected]}>
+            {`${fadeSeconds}s`}
+          </Text>
+          <Text style={[styles.fadePillText, styles.fadePillTextSelected, styles.fadeCyclerCaret]}>
+            ▾
+          </Text>
+        </TouchableOpacity>
+      )}
+      <TouchableOpacity
+        onPress={() => runFade(0)}
+        hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+        style={[styles.fadeAction, styles.fadeActionBlack]}
+        accessibilityRole="button"
+        accessibilityLabel={`Fade master to black over ${fadeSeconds} seconds`}
+      >
+        <Text style={styles.fadeActionText}>TO BLACK</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        onPress={() => runFade(1)}
+        hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+        style={[styles.fadeAction, styles.fadeActionUp]}
+        accessibilityRole="button"
+        accessibilityLabel={`Fade master up over ${fadeSeconds} seconds`}
+      >
+        <Text style={styles.fadeActionText}>UP</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function makeStyles(C: Palette) {
+  return {
+    labelCaps: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 10,
+      letterSpacing: 1.2,
+      color: C.secondary,
+      textTransform: 'uppercase' as const,
+    },
+    fadeGroup: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: 8,
+    },
+    fadePills: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      gap: 4,
+    },
+    // Touch target: 28pt visible height + 14pt vertical hitSlop each side
+    // ⇒ ≥44pt effective. Min width keeps the pills tappable.
+    fadePill: {
+      minWidth: 30,
+      height: 28,
+      paddingHorizontal: 6,
+      borderRadius: 6,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+      backgroundColor: C.surfaceContainerHigh,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+    },
+    fadePillSelected: {
+      backgroundColor: C.primary,
+      borderColor: C.primary,
+    },
+    // Portrait cycler variant: lay the value + ▾ caret out in a row so the
+    // chip reads as a value picker, not a one-off label.
+    fadePillCycler: {
+      flexDirection: 'row' as const,
+      paddingHorizontal: 8,
+    },
+    // Small gap + slightly smaller caret so the ▾ trails the value cleanly.
+    fadeCyclerCaret: {
+      marginLeft: 3,
+      fontSize: 9,
+    },
+    fadePillText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 11,
+      letterSpacing: 0.4,
+      color: C.secondary,
+    },
+    fadePillTextSelected: {
+      color: C.onPrimary,
+    },
+    // Action buttons: 28pt visible height + 8pt vertical hitSlop ⇒ ≥44pt.
+    fadeAction: {
+      height: 28,
+      paddingHorizontal: 10,
+      borderRadius: 6,
+      borderWidth: 1,
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+    },
+    fadeActionBlack: {
+      borderColor: C.error,
+      backgroundColor: C.surfaceContainerHigh,
+    },
+    fadeActionUp: {
+      borderColor: C.primary,
+      backgroundColor: C.surfaceContainerHigh,
+    },
+    fadeActionText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 10,
+      letterSpacing: 1.0,
+      color: C.primary,
+      textTransform: 'uppercase' as const,
+    },
+  };
+}

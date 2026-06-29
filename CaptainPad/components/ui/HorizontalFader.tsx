@@ -1,17 +1,51 @@
 import React, { useRef, useEffect } from 'react';
 import { View, Animated, PanResponder } from 'react-native';
 
-export const HorizontalFader = ({ value, onChange, onRelease, trackStyle, fillStyle, thumbStyle, onDragStart }: any) => {
+export const HorizontalFader = ({ value, onChange, onRelease, trackStyle, fillStyle, thumbStyle, onDragStart, fadingTarget, fadingDurationMs }: any) => {
   const widthRef = useRef(1);
   const animVal = useRef(new Animated.Value(value)).current;
   const draggingRef = useRef(false);
   const startValRef = useRef(value);
   const lastSendRef = useRef(0);
+  // Latest fade duration, read inside the fade effect WITHOUT re-keying it on
+  // every broadcast (remainingMs ticks each push — keying on it would restart
+  // the timing animation ~10×/s and stutter the bar).
+  const fadingDurationRef = useRef(fadingDurationMs);
+  fadingDurationRef.current = fadingDurationMs;
 
-  // Sync from external when not dragging
+  // Sync from external when not dragging — but NOT while a timed fade is in
+  // flight: during a fade the value arrives as coarse, broadcast-rate steps,
+  // and snapping animVal to each one is exactly why the master slider "didn't
+  // animate" on TO BLACK / UP. While fading we let the timing effect below own
+  // animVal; when the fade ends (fadingTarget back to null) we settle on the
+  // latest external value here.
   useEffect(() => {
-    if (!draggingRef.current) animVal.setValue(value);
-  }, [value]);
+    if (draggingRef.current) return;
+    if (fadingTarget == null) animVal.setValue(value);
+  }, [value, fadingTarget]);
+
+  // Smooth timed fade: animate animVal toward the fade target (0 = TO BLACK,
+  // 1 = UP) over the fade's duration. Re-keyed ONLY on the target so per-
+  // broadcast remainingMs updates don't restart the animation. Non-master
+  // faders never pass fadingTarget, so this is inert for them.
+  useEffect(() => {
+    if (draggingRef.current || fadingTarget == null) return;
+    const duration = fadingDurationRef.current;
+    if (!(typeof duration === 'number' && duration > 0)) {
+      animVal.setValue(fadingTarget);
+      return;
+    }
+    const anim = Animated.timing(animVal, {
+      toValue: fadingTarget,
+      duration,
+      useNativeDriver: false,
+    });
+    anim.start();
+    return () => anim.stop();
+    // animVal is a stable ref value; fadingDurationRef is read live by design
+    // (see fadingDurationRef above) — re-key ONLY on the target.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fadingTarget]);
 
   const clamp01 = (v: number) => Math.round(Math.max(0, Math.min(1, v)) * 100) / 100;
 

@@ -19,7 +19,7 @@
 // drop the manual override so OSC reclaims on the next tick. Only meaningful
 // while `tempoSource === 'manual'` (an active override exists to drop).
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert } from 'react-native';
 import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
 import { postTapTempo, postTempoSync } from '@/utils/channelExtrasApi';
@@ -100,6 +100,15 @@ export interface TempoTap {
   sync: () => void;
 }
 
+// Tap timestamps live at MODULE scope, not per-hook-instance, so a tap series
+// is GLOBAL across every surface that taps: the deck TAP button and the mixer
+// TAP cluster are different `useTempoTap()` instances, but the operator
+// experiences one tempo. A component-scoped ref reset the series whenever you
+// switched the deck↔mixer tab (the host unmounts), so a 4-tap series split
+// across the switch lost its history. At module scope the taps accumulate
+// continuously; TAP_RESET_MS still starts a fresh series after a long gap.
+const tapTimes: number[] = [];
+
 /**
  * Tap-tempo behaviour shared by the deck + globals TAP controls. The client
  * computes BPM from the intervals between the last few taps, averages them,
@@ -113,8 +122,6 @@ export interface TempoTap {
  * never swallow the engine's error.
  */
 export function useTempoTap(): TempoTap {
-  const tapTimesRef = useRef<number[]>([]);
-
   const sendTempo = async (bpm: number) => {
     const res = await postTapTempo(bpm);
     if (!res.ok) {
@@ -125,7 +132,7 @@ export function useTempoTap(): TempoTap {
 
   const tap = () => {
     const now = Date.now();
-    const times = tapTimesRef.current;
+    const times = tapTimes;
     // A long gap means a new series — drop the stale taps.
     if (times.length > 0 && now - times[times.length - 1] > TAP_RESET_MS) {
       times.length = 0;

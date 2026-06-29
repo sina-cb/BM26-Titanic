@@ -27,6 +27,8 @@ import { TimerWheel } from '@/components/ui/TimerWheel';
 import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { SnapshotBar } from '@/components/SnapshotBar';
+import { MasterFadeGroup } from '@/components/MasterFadeGroup';
+import { useMasterFade } from '@/hooks/use_master_fade';
 import { setChannelColor, setChannelHue } from '@/utils/channelExtrasApi';
 import { duplicateMixerChannel, reorderMixerChannels, panicMixer } from '@/utils/channelOpsApi';
 import {
@@ -907,6 +909,10 @@ export default function MixerScreen() {
   useEffect(() => { channelsRef.current = channels; }, [channels]);
 
   const [master, setMaster] = useState(1.0);
+  // In-flight grand-master fade (shared hook) — drives the smooth master-slider
+  // animation + the FADING tint while a TO BLACK / UP is running.
+  const masterFade = useMasterFade();
+  const fading = masterFade?.active === true;
   // Channel groups (gang-faders) + server-authoritative solo (docs/39 §10).
   // Both are reconciled DISPLAY-ONLY from the `mixer` broadcast's top-level
   // `mixGroups[]` + `soloedChannelIds[]` — the engine is the authority. The
@@ -2085,6 +2091,10 @@ export default function MixerScreen() {
               </Text>
             </TouchableOpacity>
           ) : null}
+          {/* Timed grand-master FADE (TO BLACK / UP) — the SAME shared
+              MasterFadeGroup the deck top bar renders, so the two surfaces
+              never drift. */}
+          <MasterFadeGroup isPortrait={isPortrait} />
           {/* MASTER label + fader + readout travel together as one cluster so
               they never split across a wrap and the value keeps a reserved
               column (no more cramped overlap with the slider). */}
@@ -2097,8 +2107,12 @@ export default function MixerScreen() {
             <HorizontalFader
               value={master}
               onChange={handleMasterChange}
+              // Smoothly animate the slider during a timed fade (shared with the
+              // deck) instead of snapping to each broadcast value.
+              fadingTarget={fading ? masterFade?.to : null}
+              fadingDurationMs={masterFade?.remainingMs}
               trackStyle={[styles.faderTrack, { width: isPortrait ? 120 : 160 }]}
-              fillStyle={styles.faderFill}
+              fillStyle={[styles.faderFill, fading && { backgroundColor: C.tertiary }]}
               // Visible, grabbable THUMB (QA round 10 fix #2) — same pattern as
               // the deck master (DeckTopBar.tsx faderThumb). Without it the
               // master is a full-width hot strip: a stray graze anywhere on the
