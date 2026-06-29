@@ -556,16 +556,19 @@ function LiveAudioMeters({
                               'off';
   const oscLabel  = oscState ? `OSC ${oscState.toUpperCase()}` : 'OSC …';
   const syncOn    = (steady.bpmSpeedSync ?? 0) >= 0.5;
-  // Sync is SOURCE-AGNOSTIC (it follows the ARBITRATED tempo — OSC OR TAP),
-  // so warn only when sync is armed with no tempo to follow at all, NOT merely
-  // because OSC isn't live (a tapped tempo is a valid driver). The arbitrated
-  // applied tempo arrives as `tempoBpm`; `audioBpm` is the raw OSC readout.
-  const effectiveBpm = tempoLive.tempoBpm > 0 ? tempoLive.tempoBpm : tempoLive.audioBpm;
-  const bpm = effectiveBpm > 0 ? Math.round(effectiveBpm) : null;
+  // OSC BPM readout: ALWAYS the raw LIVE OSC tempo (the Audio Companion's
+  // analyzed `audioBpm`, streamed at the live param rate) — independent of
+  // tap / arbitration / the tempo deadband, so it never shows a stale tapped or
+  // held value (operator request 2026-06-29: "live show the OSC BPM always").
+  const oscBpm = tempoLive.audioBpm > 0 ? Math.round(tempoLive.audioBpm) : null;
+  // BPM-SYNC warning is SOURCE-AGNOSTIC (sync follows the ARBITRATED tempo —
+  // OSC OR TAP), so warn only when sync is armed with NO tempo to follow at all
+  // (not merely because OSC isn't live — a tapped tempo is a valid driver).
+  const arbitratedBpm = tempoLive.tempoBpm > 0 ? tempoLive.tempoBpm : tempoLive.audioBpm;
   const syncTone: 'on' | 'off' | 'warn' =
-    syncOn && bpm == null ? 'warn' :
-    syncOn                ? 'on'   :
-                            'off';
+    syncOn && !(arbitratedBpm > 0) ? 'warn' :
+    syncOn                         ? 'on'   :
+                                     'off';
 
   return (
     <View style={{ marginBottom: 24 }}>
@@ -594,11 +597,11 @@ function LiveAudioMeters({
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
             color: C.secondary, letterSpacing: 0.8, textTransform: 'uppercase',
-          }}>BPM</Text>
+          }}>OSC BPM</Text>
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 22,
-            color: bpm ? C.primary : C.icon,
-          }}>{bpm ?? '—'}</Text>
+            color: oscBpm ? C.primary : C.icon,
+          }}>{oscBpm ?? '—'}</Text>
         </View>
       </View>
       {slots.length === 0 ? (
