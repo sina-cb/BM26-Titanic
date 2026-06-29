@@ -582,7 +582,12 @@ export const DeckOverlayStack: React.FC<{
               >
                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.text }}>DEFAULT</Text>
               </TouchableOpacity>
-              {playlistLibrary.map((name) => (
+              {/* Skip the playlist literally named "default" — the dedicated
+                  DEFAULT option above already represents it, so listing it
+                  again rendered a duplicate "DEFAULT" row. */}
+              {playlistLibrary
+                .filter((name) => name.toLowerCase() !== 'default')
+                .map((name) => (
                 <TouchableOpacity
                   key={name}
                   onPress={() => handleAdd(name)}
