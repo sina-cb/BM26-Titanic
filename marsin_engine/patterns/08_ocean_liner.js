@@ -170,7 +170,7 @@ export function render3D(index, wx, wy, wz) {
   // water visible — never an artificial black hole.
   var ripple = 0.5 + 0.5 * sin((waterPhase + nx * 5.7 + ny * 3.3) * PI2);
   var rippleHD = pow(ripple, 1.7);        // deepen troughs, keep crests bright
-  var waterStruct = 0.20 + 0.40 * rippleHD; // deep dark water, brighter crests
+  var waterStruct = 0.55 + 0.45 * rippleHD; // lit blue wash (og), ripple relief on top
 
   // Portholes (cp2): each pixel twinkles on its own golden-ratio schedule that
   // also drifts with portPhase (radius = travel reach). A per-pixel eligibility
@@ -193,10 +193,15 @@ export function render3D(index, wx, wy, wz) {
   // cores ride HOTTER on top so the bright/dark ratio reads high-def rather than
   // flat. Water gain is trimmed slightly (deeper trough) and the porthole cores
   // are lifted, widening the contrast without carving black holes.
-  var waterV = waterStruct * gain * 0.46 * (0.94 + kickPop * 0.2);
+  // Lit blue wash (og): water carries a bright base on top of the level gain so
+  // the default nocturne reads as lit blue water, not near-black; `level` scales it.
+  var waterBright = 0.55 + 0.45 * gain;
+  var waterV = waterStruct * waterBright * (0.94 + kickPop * 0.2);
   // Porthole cores ride hotter for HD contrast; the kick flare is kept modest so
   // the core brightness budget still tracks `level` (clean PRIMARY correlation).
-  var portV = port * (1.15 + radius * 0.5) * gain * (1.0 + kickPop * 0.55);
+  // Portholes ride HOT so they punch clearly through the lit blue water (og had
+  // bright water AND distinct bright portholes — keep the two-colour contrast).
+  var portV = port * (1.8 + radius * 0.7) * (0.55 + 0.45 * gain) * (1.0 + kickPop * 0.55);
 
   // Two-colour: water = cp1, portholes = cp2, summed channel-wise (RGB blend).
   var r = clamp01(pr1 * waterV + pr2 * portV);

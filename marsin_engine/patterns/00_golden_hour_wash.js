@@ -49,7 +49,9 @@ AUDIO_MODULATION_V1:
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // FIRST: wash drift rate
-export var direction  = 0.5;   // drift direction (0.5 center -> guarded freeze)
+export var direction  = 1.0;   // drift direction. STORED as a signed value (-1..1);
+                               // default 1.0 = full-speed forward. (0.5 was read as a
+                               // half-strength sign and halved the og wash drift rate.)
 export var level      = 0.5;   // overall brightness (PRIMARY) — mid, audio swings up
 export var kick       = 0.0;   // kick brightness pop on the warm colour body —
                                // transient target; a steady lift floods red and
@@ -64,8 +66,8 @@ export var whiteWarmth = 0.25; // WHITE: warm(A) <-> cool/UV(U) tint of the whit
                                // low default keeps golden-hour tungsten-warm; UV at
                                // 1 cools it. (0.5 introduces blue that breaks identity.)
 
-export var cp1H = 0.0,  cp1S = 1.0, cp1V = 1.0;  // deep red
-export var cp2H = 0.18, cp2S = 1.0, cp2V = 1.0;  // sunset amber-gold
+export var cp1H = 0.0,  cp1S = 1.0, cp1V = 1.0;  // deep red (og default)
+export var cp2H = 0.08, cp2S = 1.0, cp2V = 1.0;  // sunset orange (og default cp2H=0.08)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -87,8 +89,12 @@ export function sliderWhiteKick(v)   { whiteKick = v; }
 export function sliderWhiteWarmth(v) { whiteWarmth = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
-var MAX_RATE = 0.55;          // drift turns/sec at localSpeed = 1.0
-var BASE_RATE = 0.06;         // creep so motion never fully stops at localSpeed=0
+var MAX_RATE = 1.05;          // drift turns/sec at localSpeed = 1.0 — tuned so that at
+                              // default sliders (direction=1, localMult=1) the wash drifts
+                              // at og-ballpark per-frame motion (og: tPhase += delta/1310.72;
+                              // raised vs 0.55 because the 2-wave blend is gentler than og's
+                              // single cubed wave, so a higher phase rate matches the look).
+var BASE_RATE = 0.10;         // creep so motion never fully stops at localSpeed=0
 var PHASE_WRAP = 10000.0;     // wrap accumulators far from any in-frame use (§7)
 
 // ── Palette RGB cache (verbatim from 27_swipe) ───────────────────────────────
@@ -248,9 +254,12 @@ export function render3D(index, x, y, z) {
   // white tint between amber (A) for tungsten warmth and UV (U) for a cool punch.
   // White stays ADDITIVE on top of the cp1<->cp2 wash — pars/bars keep colour.
   if (sectionId == 2) {
-    var ambW = whiteKeep * (0.18 + 0.20 * noise);   // calm warm white keep
-    var hitW = whiteBite * (0.6 + 0.4 * noise);     // hard blinder pop on kick
-    w = ambW + hitW * 2.0;                           // drive W HARD on the kick
+    // MOVING base white: like og line 81 (w = noise * 2.5), the W channel tracks
+    // the drifting `noise` field so the white ANIMATES at silence (no audio).
+    var moveW = noise * 1.8;                          // og-style moving white core
+    var ambW  = whiteKeep * (0.18 + 0.20 * noise);   // calm warm white keep (additive)
+    var hitW  = whiteBite * (0.6 + 0.4 * noise);     // hard blinder pop on kick (additive)
+    w = moveW + ambW + hitW * 2.0;                   // moving base + keep + kick bite
     w = w * (0.35 + 0.65 * levGain);                // still gated by overall level
     if (w > 1.0) w = 1.0;
     // Tint the white: warm amber A when whiteTint low, cool/UV U when high.

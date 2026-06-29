@@ -38,8 +38,8 @@ export var detail = 0.5;       // audio: line sharpness / sparkle (micHigh)
 export var latticeScale = 0.5; // base grid density (0..1; scaled in render)
 export var lineSoftness = 0.5; // base line crispness (0..1; scaled in render)
 
-export var cp1H = 0.62, cp1S = 0.95, cp1V = 1.0; // base (blue)
-export var cp2H = 0.90, cp2S = 0.95, cp2V = 1.0; // accent (pink/magenta)
+export var cp1H = 0.68, cp1S = 0.95, cp1V = 1.0; // base (blue)
+export var cp2H = 0.92, cp2S = 0.95, cp2V = 1.0; // accent (pink/magenta)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -115,9 +115,13 @@ export function beforeRender(delta) {
   else if (dirSign < 0.0 && dirSign > -0.06) dirSign = -0.06;
 
   // Autonomous reversal: smooth rate sway easing through zero (no hard flip).
+  // Signed, guaranteed-non-zero base magnitude (like 16/17) so the lattice keeps
+  // drifting at the guarded-center default instead of crawling at half rate.
   autoClock = autoClock + dt * 0.063 * localMultiplier;
   if (autoClock >= PHASE_WRAP) autoClock = autoClock - PHASE_WRAP;
-  var sway = (0.35 + 0.65 * cos(autoClock)) * dirSign;
+  var dirMag = (dirSign < 0.0) ? -1.0 : 1.0;
+  var swayMag = dirSign + dirMag * 0.7;    // never near-zero at center
+  var sway = (0.35 + 0.65 * cos(autoClock)) * swayMag;
 
   // radius (micFlux) boosts the drift rate — lattice travels farther/faster.
   var travelRate = (0.6 + radius * 1.4) * localMultiplier * sway;
@@ -149,19 +153,19 @@ export function render3D(index, x, y, z) {
   var gridY = wave(ny * liveScale * 0.72 - phaseB);
   var diagonal = wave((nx - ny) * liveScale * 0.38 + phaseAd);
 
-  // Crossed grids + diagonal weave. Sum-of-ridges (not pure product) keeps more
-  // of the rig lit so the lattice reads bright and colour spans both palette ends,
-  // while the softness power still sharpens the lines for a high-def look.
-  var ridge = (gridX + gridY) * 0.5;
-  var lattice = max(ridge, diagonal * 0.6);
+  // Crossed grids + diagonal weave. PRODUCT of the two grids (og identity): the
+  // crossed-grid product lights crisp lattice intersections over a near-black void
+  // — that high contrast is what makes the drift read as motion. (A sum-of-ridges
+  // washed the rig and hid the drift.)
+  var lattice = max(gridX * gridY, diagonal * 0.65);
   lattice = pow(lattice, liveSoft);
 
   // Colour depth blends cp1<->cp2 in RGB space (no hsv() hue traversal).
   var depth = wave(nx * 0.6 + ny * 0.9 + phaseDepth);
 
   // Brightness: crisp lattice over a tiny clock-driven base floor so silence is
-  // calm-but-visible and voids read near-black.
-  var bri = 0.02 + lattice * 1.10;
+  // calm-but-visible and voids read near-black (og used 0.04 + lattice*0.9).
+  var bri = 0.02 + lattice * 0.92;
 
   // PRIMARY: overall brightness from micLow. Brightness is dominated by a strong
   // level term so total brightness tracks micLow (corr>=0.5); the lattice shapes
@@ -169,7 +173,10 @@ export function render3D(index, x, y, z) {
   // level^2 keeps micLow dominant (PRIMARY corr) but the curve is lifted so the
   // mid default reads well-lit: 0 -> dim wash (not black), 0.5 -> bright lattice,
   // 1 -> full punch.
-  var levelGain = 0.5 + level * (2.0 + level * 1.7); // 0:0.5 0.5:1.93 1:4.2
+  // Static term kept low so the default look matches the og (crisp lattice over a
+  // near-black void, no static wash): at level=0.5 the gain is ~1.0 (og parity),
+  // while the bass still drives the punch and voids stay near-black.
+  var levelGain = 0.16 + level * (1.0 + level * 1.7); // 0:0.16 0.5:1.09 1:2.86
   var pop = kick * 0.55 * lattice;               // kick pop only on the lattice
   bri = min(1.0, (bri + pop) * levelGain);
 

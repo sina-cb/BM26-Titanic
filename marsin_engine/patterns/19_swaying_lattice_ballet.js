@@ -49,7 +49,7 @@ export var whiteLevel = 0.5;     // WHITE: overall white amount on crest accents
 export var whiteKick = 0.0;      // WHITE: white accent pop on the sway crests (audio: micKick)
 export var whiteSpread = 0.5;    // WHITE: bias toward vintage heads (0) vs. whole rig (1)
 
-export var cp1H = 0.55, cp1S = 0.92, cp1V = 1.0; // base lattice (teal/blue)
+export var cp1H = 0.58, cp1S = 0.92, cp1V = 1.0; // base lattice (teal/blue)
 export var cp2H = 0.84, cp2S = 0.92, cp2V = 1.0; // accent (violet/magenta)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
@@ -133,7 +133,13 @@ export function beforeRender(delta) {
   // Autonomous reversal: smooth rate sway easing through zero (no hard flip).
   autoClock = autoClock + dt * 0.057 * localMultiplier;
   if (autoClock >= PHASE_WRAP) autoClock = autoClock - PHASE_WRAP;
-  var rate = (0.4 + 0.6 * cos(autoClock)) * dirSign * localMultiplier;
+  // Signed, guaranteed-non-zero base sway magnitude (like 16/17): direction
+  // steers the bias but the bow never stalls at the guarded-center default. The
+  // phases are RADIANS, so the rate carries TAU (matching the og time()*TAU rate
+  // of ~5.3 rad/s); without TAU the sway crawled ~15x too slow and looked frozen.
+  var dirMag = (dirSign < 0.0) ? -1.0 : 1.0;
+  var swayMag = dirSign + dirMag * 0.7;     // never near-zero at center
+  var rate = (0.4 + 0.6 * cos(autoClock)) * swayMag * localMultiplier * 6.2831853;
 
   // Two sway phases at an irrational ratio so lattices never re-align.
   phaseA = phaseA + dt * 0.69 * rate;       if (phaseA >= PHASE_WRAP) phaseA -= PHASE_WRAP; else if (phaseA <= -PHASE_WRAP) phaseA += PHASE_WRAP;
@@ -141,7 +147,7 @@ export function beforeRender(delta) {
   // Lissajous pivot walks the sway center on its own incommensurate rates.
   pivotA = pivotA + dt * 0.69 * 0.27 * rate; if (pivotA >= PHASE_WRAP) pivotA -= PHASE_WRAP; else if (pivotA <= -PHASE_WRAP) pivotA += PHASE_WRAP;
   pivotB = pivotB + dt * 0.69 * 0.31 * rate; if (pivotB >= PHASE_WRAP) pivotB -= PHASE_WRAP; else if (pivotB <= -PHASE_WRAP) pivotB += PHASE_WRAP;
-  breathPhase = breathPhase + dt * 0.34 * localMultiplier * dirSign; if (breathPhase >= PHASE_WRAP) breathPhase -= PHASE_WRAP; else if (breathPhase <= -PHASE_WRAP) breathPhase += PHASE_WRAP;
+  breathPhase = breathPhase + dt * 0.34 * localMultiplier * dirMag * 6.2831853; if (breathPhase >= PHASE_WRAP) breathPhase -= PHASE_WRAP; else if (breathPhase <= -PHASE_WRAP) breathPhase += PHASE_WRAP;
 
   liveScale = 2.5 + latticeScale * 11.0;       // 0..1 -> 2.5..13.5
   liveSoft = 1.2 + detail * 4.5;               // node crispness from micHigh
@@ -192,14 +198,14 @@ export function render3D(index, x, y, z) {
 
   // Base floor keeps silence calm-but-visible; nodes sit on top. Kept small so
   // the negative space between nodes reads near-black (high-def contrast).
-  var floorK = floorLevel * 0.14;
+  var floorK = floorLevel * 0.05;
   var bri = floorK + lattice * 1.05 * breath;
 
   // PRIMARY: overall brightness from micLow. level^2 makes the bass the dominant
   // brightness driver (corr>=0.5); the lattice shapes WHERE, the bass HOW BRIGHT.
-  // level^2 keeps micLow the dominant brightness driver (PRIMARY corr) while the
-  // lifted curve makes the mid default read well-lit: 0 -> dim, 0.5 -> bright, 1 -> full.
-  var levelGain = 0.45 + level * (1.9 + level * 1.7); // 0:0.45 0.5:1.83 1:4.05
+  // The static term is kept low so the default look matches the og (no static
+  // wash): at level=0.5 the gain is ~1.0 (og parity), bass still drives the punch.
+  var levelGain = 0.16 + level * (1.0 + level * 1.7); // 0:0.16 0.5:1.09 1:2.86
   var pop = kick * 0.55 * lattice;     // kick pop only on lit nodes
   bri = min(1.0, (bri + pop) * levelGain);
 

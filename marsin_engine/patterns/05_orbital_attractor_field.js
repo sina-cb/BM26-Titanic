@@ -57,7 +57,10 @@ export var level = 0.5;            // PRIMARY overall brightness (micLow) — mi
 export var kick = 0.0;            // kick brightness pop / vintage blinder (micKick) —
                                   // transient; steady lift dilutes the PRIMARY corr.
 export var radius = 0.5;           // movement RADIUS boost (micFlux)
-export var direction = 0.5;        // overall orbit sense (0.5 = neutral, guarded)
+export var direction = 1.0;        // overall orbit sense. Stored 0..1; mapped to a signed
+                                   // -1..1 in beforeRender. Default 1.0 = FULL-speed forward
+                                   // (0.5 mapped to 0 -> guarded to 0.06, crawling the orbits
+                                   // at ~6% speed; og had no direction term and ran full rate).
 export var orbit1 = 0.40;          // internal config (no slider) — per-orbit radius
 export var orbit2 = 0.50;
 export var orbit3 = 0.30;
@@ -75,8 +78,8 @@ export var whiteKick = 0.3;        // WHITE: kick-driven blinder bite (transient
                                    // default so steady white does not wash the hue)
 export var blinderBite = 0.5;      // WHITE: how snappy/hard the blinder attack lands
 
-export var cp1H = 0.92, cp1S = 1.0, cp1V = 1.0; // Classic Red (deep crimson-red)
-export var cp2H = 0.18, cp2S = 1.0, cp2V = 1.0; // Yellow/Orange (gold->yellow)
+export var cp1H = 0.0,  cp1S = 1.0, cp1V = 1.0; // Classic Red (og default cp1H=0.0)
+export var cp2H = 0.15, cp2S = 1.0, cp2V = 1.0; // Yellow/Orange (og default cp2H=0.15)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 

@@ -63,7 +63,7 @@ export var whiteKick = 0.5;      // WHITE: kick-driven vintage blinder bite
 export var blinderBite = 0.5;    // WHITE: blinder attack/decay snap
 
 export var cp1H = 0.5, cp1S = 1.0, cp1V = 1.0; // Bottom floor colour (cyan)
-export var cp2H = 0.85, cp2S = 1.0, cp2V = 1.0; // Top floor colour (magenta)
+export var cp2H = 0.6, cp2S = 1.0, cp2V = 1.0; // Top floor colour (blue)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -264,8 +264,16 @@ export function render3D(index, wx, wy, wz) {
   var shim = 1.0
     + 0.09 * (saw - 0.5)
     + 0.04 * sin((shimPhase * 0.71 + visualY * 2.3 + wx * 5.1) * PI2);
-  var wash = gain * (0.34 + 0.40 * visualY) * shim; // two-colour gradient up shaft
-  var combinedV = clamp01(wash + outV * 0.52 * gain);
+  // FAINT shaft indicator only: a small non-black floor (mission-critical
+  // visibility) carrying the always-forward shimmer so the rig is never static,
+  // but kept low so the crisp car core dominates over a near-black shaft (og
+  // identity). The car core rides at near-full gain as the bright accent.
+  var wash = gain * (BASE_FLOOR + 0.06 * visualY) * shim; // faint dark-shaft floor
+  // Bright crisp car core (og read full-brightness on the floor it occupies). The
+  // car carries its own near-full brightness lift on top of the level gain so the
+  // default look is a bright car over a near-black shaft; `level` still scales it.
+  var carBright = 0.45 + 0.55 * gain;   // bright at default, still level-reactive
+  var combinedV = clamp01(wash + outV * carBright);
 
   var r = (pr1 + (pr2 - pr1) * tColour) * combinedV;
   var g = (pg1 + (pg2 - pg1) * tColour) * combinedV;

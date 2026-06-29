@@ -39,11 +39,11 @@ AUDIO_MODULATION_V1:
 
 // ── Exported controls (UI order = declaration order) ────────────────────────
 export var localSpeed = 0.5;   // collapse rate
-export var level = 0.75;       // PRIMARY overall brightness (micLow). NOT 0.5: the gain
-                               // is level² (so the rig fully darkens with micLow -> tight
-                               // PRIMARY corr); at 0.5 that² = 0.25 reads broken-dim
-                               // (peak~96). 0.75² = 0.56 is the perceptual middle —
-                               // bright collapse at default, micLow still swings it.
+export var level = 1.0;        // PRIMARY overall brightness (micLow). Default 1.0 so the
+                               // NO-AUDIO look matches og's full-brightness collapse
+                               // (gain = level² = 1.0 at default). The level² curve is kept
+                               // so micLow still darkens the whole rig (tight PRIMARY corr)
+                               // when audio is bound; default just sits at the bright top.
 export var kick = 0.0;         // brightness kick on the center flash (micKick) —
                                // transient; a steady lift inflates the autonomous flash
                                // and dilutes the micLow PRIMARY correlation.

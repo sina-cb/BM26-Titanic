@@ -98,8 +98,11 @@ export function sliderWhiteKick(v) { whiteKick = v; }
 export function sliderWhiteWarmth(v) { whiteWarmth = v; }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
-var TRAVEL_RATE = 0.55;   // tunnel turns/sec at localSpeed=1, radius=0.5
-var SPIN_RATE   = 0.21;   // spin turns/sec at localSpeed=1
+var TRAVEL_RATE = 6.0;    // tunnel turns/sec — at default sliders (globalDir=1, localMult=1,
+                          // radScale=1) tunnelZ advances ~0.15/frame, matching og's
+                          // tunnelZ = masterTime*(0.05*localMult*120). The helixPhase also
+                          // multiplies depth*twistFreq, so this drives a lively whole-rig sweep.
+var SPIN_RATE   = 2.0;    // spin turns/sec — matches og spinPhase ~0.05/frame at defaults.
 var BEAT_RATE   = 0.62;   // beat cadence (φ-ish) turns/sec
 var DRIFT_RATE  = 0.07;   // colour drift turns/sec
 var FLIP_RATE   = 0.013;  // autonomous direction flip drift rate
@@ -144,7 +147,9 @@ function clamp01(v) {
 }
 
 // ── Persistent state (each consumer owns its accumulator) ────────────────────
-var globalDir = 0.5;       // resolved heading from direction slider (set in setter)
+var globalDir = 1.0;       // resolved heading from direction slider (set in setter).
+                           // Default 1.0 = FULL-speed forward (0.5 was read as a
+                           // half-strength sign and halved the tunnel/spin rate).
 var tunnelZ = 0.0;         // tunnel-travel accumulator
 var spinPhase = 0.0;       // spin accumulator
 var beatPhase = 0.0;       // beat-cadence accumulator
@@ -198,13 +203,13 @@ export function beforeRender(delta) {
   driftPhase = driftPhase + dt * localMultiplier * DRIFT_RATE;
   if (driftPhase >= PHASE_WRAP) driftPhase = driftPhase - PHASE_WRAP;
 
-  // Beat pulse: fires from the clock alone (keeps the pattern alive with no
-  // audio) but the clock contribution is kept SMALL so it doesn't dominate the
-  // brightness budget and decorrelate the level PRIMARY. The audio KICK is what
-  // makes it slam (and that lands as a separate, kick-correlated dimension).
+  // Beat pulse: fires from the clock ALONE so the beat — and the vintage/par W
+  // flash it drives — ANIMATES at silence like og (og fired a full clock pulse,
+  // outW = v*beatPulse). The clock weight is strong (0.7) so the pulse reads with
+  // no audio; the kick ADDS slam on top (separate, kick-correlated dimension).
   var beatFrac = beatPhase - floor(beatPhase);
   var clockBeat = (beatFrac < 0.14) ? 1.0 : 0.0;
-  beatPulse = clamp01(clockBeat * 0.16 + kick * 0.95);
+  beatPulse = clamp01(clockBeat * 0.7 + kick * 0.95);
 
   // Resolved controls.
   armCount = 1.0 + floor(count * 12.0);        // 1..13 arms (mid 0.5 -> 7)

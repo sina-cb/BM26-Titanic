@@ -47,7 +47,7 @@ export var radius = 0.5;         // AUDIO: tail length / head size
 export var count = 0.5;          // AUDIO: number of chasers
 
 export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0;  // head (red)
-export var cp2H = 0.55, cp2S = 1.0, cp2V = 1.0; // tail (cyan trail)
+export var cp2H = 0.15, cp2S = 1.0, cp2V = 1.0; // tail (warm orange/yellow trail)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -234,7 +234,10 @@ export function render3D(index, wx, wy, wz) {
   var hashp = (index * 0.61803 + nx * 6.0);
   hashp = hashp - floor(hashp);
   var starGate = 0.5 + 0.5 * sin((hashp * 23.0 + 0.17) * PI2);
-  var star = starGate > 0.25 ? (0.35 + 0.65 * pow(starGate, 1.6)) : 0.08;
+  // Comets read over true-dark space (og identity): the carrier is a FAINT,
+  // sparse star sprinkle — a low non-black floor for mission-critical visibility
+  // and a never-static twinkle, NOT a bright field that fills the negative space.
+  var star = starGate > 0.78 ? (0.05 + 0.10 * pow(starGate, 1.6)) : 0.02;
   // A faint per-star twinkle on the always-forward life clock guarantees the rig
   // is never dead-static (even when a comet momentarily pauses at a reversal),
   // and averages out across the field so it barely affects the PRIMARY corr.
@@ -248,7 +251,7 @@ export function render3D(index, wx, wy, wz) {
   // kick and reads at full bright, but covers few pixels so its brightness
   // variance stays small next to the level-driven star budget.
   var headW = (1.0 - bestBlend);                      // brighter near the head
-  var cometV = clamp01(bestV * 1.4) * gain * 0.45 * (1.0 + kickPop * headW);
+  var cometV = clamp01(bestV * 1.4) * gain * 0.95 * (1.0 + kickPop * headW);
 
   // Composite: atmosphere (two-colour sprinkle) + comet (head->tail blend).
   var rA = (pr1 + (pr2 - pr1) * atmoBlend) * atmo;

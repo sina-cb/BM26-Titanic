@@ -40,8 +40,8 @@ export var shimmer = 0.5;      // AUDIO: satin sheen / fine detail
 export var ribbonCount = 0.5;  // number of ribbons across the rig
 export var softness = 0.4;     // ribbon edge softness
 
-export var cp1H = 0.52, cp1S = 1.0, cp1V = 1.0; // Ribbon A (cyan default)
-export var cp2H = 0.86, cp2S = 1.0, cp2V = 1.0; // Ribbon B (magenta default)
+export var cp1H = 0.52, cp1S = 0.92, cp1V = 1.0; // Ribbon A (cyan — og default)
+export var cp2H = 0.86, cp2S = 0.92, cp2V = 1.0; // Ribbon B (magenta — og default)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -55,7 +55,7 @@ export function sliderRibbonCount(v) { ribbonCount = v; }
 export function sliderSoftness(v) { softness = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
-var MAX_RATE = 0.45;         // base ribbon slide turns/sec at localSpeed = 1.0
+var MAX_RATE = 1.0;          // base ribbon slide turns/sec at localSpeed = 1.0 (restored toward og time(0.045/0.014))
 var PHASE_WRAP = 10000.0;
 var AUTO_PERIOD = 79.0;
 var BASE_FLOOR = 0.05;       // small non-black floor (silk never fully dark)
@@ -154,10 +154,10 @@ export function render3D(index, x, y, z) {
   var soft = 1.0 + softness * 5.0;
 
   // Two sliding ribbon fields (φ-ratio) + a slow cross-shadow.
-  var ribA = wave((nx * count * width) + (ny * 1.7) - phaseA * 0.18);
-  var ribB = wave((nx * count * width * 0.5) - (ny * 1.1) + phaseB * 0.18);
+  var ribA = wave((nx * count * width) + (ny * 1.7) - phaseA * 0.7);
+  var ribB = wave((nx * count * width * 0.5) - (ny * 1.1) + phaseB * 0.7);
   var ribbon = ribA * 0.6 + ribB * 0.4;
-  var shadow = wave((ny * count * 0.45) - (nx * 0.9) + shadowPhase * 0.18);
+  var shadow = wave((ny * count * 0.45) - (nx * 0.9) + shadowPhase * 0.7);
 
   // Satin sheen: shimmer (micHigh) adds a fine high-frequency sparkle on the
   // ribbon body — the fine-detail dimension, a measurable sheen lift on highs.

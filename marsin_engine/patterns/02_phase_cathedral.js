@@ -184,10 +184,11 @@ export function render3D(index, x, y, z) {
 
   var field = (f1 + f2 + f3 + f4) * 0.25;
   var magnitude = pow(abs(field), sharpPow);
-  // Small brightness floor: the field crushes to ~0 at nodes and all planes can
-  // hit a zero-crossing at once. Keep a faint glow so the cathedral is NEVER
-  // fully black (mission-critical visibility).
-  magnitude = 0.08 + magnitude * 0.92;
+  // Tiny brightness floor: the field crushes to ~0 at nodes and all planes can
+  // hit a zero-crossing at once. Keep only a faint glow so the cathedral is NEVER
+  // fully black (mission-critical visibility) while RESTORING og's near-black
+  // negative space between the bright interference cores (was 0.08 -> too lifted).
+  magnitude = 0.02 + magnitude * 0.98;
 
   // PRIMARY: overall brightness gain from level (micLow). A clean level->gain,
   // no animation-phase wobble, so corr stays high. Range biased so peaks reach

@@ -70,7 +70,7 @@ export function sliderWhiteKick(v) { whiteKick = v; }
 export function sliderWhiteWarmth(v) { whiteWarmth = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
-var MAX_RATE = 0.55;         // base drift turns/sec at localSpeed = 1.0
+var MAX_RATE = 1.6;          // base drift turns/sec at localSpeed = 1.0 (restored to og time(0.08) cadence)
 var PHASE_WRAP = 10000.0;    // large wrap; far from any in-frame scale (§7)
 var AUTO_PERIOD = 91.0;      // seconds for autonomous direction oscillation
 var BASE_FLOOR = 0.05;       // small non-black floor so silence stays visible
@@ -146,7 +146,7 @@ export function beforeRender(delta) {
   // Drift accumulators advance with localSpeed; √2 ratio = non-repeating.
   driftA = driftA + dt * localMul * MAX_RATE * effDir;
   driftB = driftB + dt * localMul * MAX_RATE * 1.41421 * effDir;
-  driftUV = driftUV + dt * localMul * MAX_RATE * 0.37;
+  driftUV = driftUV + dt * localMul * MAX_RATE * 0.9;
   if (driftA >= PHASE_WRAP) driftA = driftA - PHASE_WRAP;
   else if (driftA <= -PHASE_WRAP) driftA = driftA + PHASE_WRAP;
   if (driftB >= PHASE_WRAP) driftB = driftB - PHASE_WRAP;
@@ -169,8 +169,8 @@ export function render3D(index, x, y, z) {
   // temporal drift weight (0.55) is brisk enough that the swell visibly breathes
   // within a couple of seconds even with NO audio, so the silent wash always
   // animates (never reads static) while the spatial frequency keeps the HD relief.
-  var swell = wave(driftA * 0.55 + pct * dens + pcy * 0.31);
-  var swell2 = wave(driftB * 0.55 + pct * dens * 1.41421 + pcy * 0.17);
+  var swell = wave(driftA * 1.4 + pct * dens + pcy * 0.31);
+  var swell2 = wave(driftB * 1.4 + pct * dens * 1.41421 + pcy * 0.17);
   var combined = swell * 0.62 + swell2 * 0.38;
 
   // Crest sharpness: detail tightens the pow exponent for crisper cores.
@@ -178,7 +178,7 @@ export function render3D(index, x, y, z) {
   var blend = pow(combined, sharp);
 
   // Crest gate travels/spreads with radius (AUDIO movement RADIUS).
-  var crestField = wave(driftA * 0.55 * spread + pct * dens * spread + pcy * 0.23);
+  var crestField = wave(driftA * 1.4 * spread + pct * dens * spread + pcy * 0.23);
   var crest = (crestField > (0.84 - radius * 0.14)) ? 1.0 : 0.0;
   crest = crest * pow(combined, 2.0);
 
@@ -210,7 +210,7 @@ export function render3D(index, x, y, z) {
   var b = (pb1 + (pb2 - pb1) * tcol) * bval;
 
   // Additive UV undertow — the signature blacklight glow (kept on its own knob).
-  var uvGlow = wave(driftUV * 0.55 - pct * 0.5 + pcy * 0.2);
+  var uvGlow = wave(driftUV * 1.4 - pct * 0.5 + pcy * 0.2);
   var outU = uvGlow * uvIntensity * 0.6 * (0.30 + level * 0.70);
 
   // WHITE crest spark (gentle, additive on the crest peaks only). whiteLevel sets
