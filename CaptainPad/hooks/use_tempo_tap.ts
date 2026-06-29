@@ -28,7 +28,7 @@ import { postTapTempo, postTempoSync } from '@/utils/channelExtrasApi';
 // (the engine 400s anything out of [20,400], so clamping here is honest).
 export const TAP_BPM_MIN = 20;
 export const TAP_BPM_MAX = 400;
-const TAP_MAX_SAMPLES = 5; // average over the last few intervals
+const TAP_MAX_SAMPLES = 8; // median over the last several intervals (smoother lock-in)
 const TAP_RESET_MS = 2500; // gap longer than this ⇒ a fresh tap series
 
 // How the current tempoBpm is being driven (engine `tempoSource`). We default
@@ -144,11 +144,20 @@ export function useTempoTap(): TempoTap {
     }
     // Need at least two taps to derive an interval.
     if (times.length < 2) return;
-    let sum = 0;
-    for (let i = 1; i < times.length; i++) sum += times[i] - times[i - 1];
-    const avgIntervalMs = sum / (times.length - 1);
-    if (!(avgIntervalMs > 0)) return;
-    const rawBpm = 60000 / avgIntervalMs;
+    // Intervals between consecutive taps.
+    const intervals: number[] = [];
+    for (let i = 1; i < times.length; i++) intervals.push(times[i] - times[i - 1]);
+    // SMOOTHER tap→BPM (operator request 2026-06-29): use the MEDIAN interval,
+    // not the mean. A single mis-timed tap skews a mean and makes the BPM jump;
+    // the median ignores that outlier, so successive taps converge to a stable
+    // tempo. Over the widened sample window this reads as a smooth lock-in.
+    const sorted = [...intervals].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const medianMs = sorted.length % 2 === 1
+      ? sorted[mid]
+      : (sorted[mid - 1] + sorted[mid]) / 2;
+    if (!(medianMs > 0)) return;
+    const rawBpm = 60000 / medianMs;
     const bpm = Math.round(Math.max(TAP_BPM_MIN, Math.min(TAP_BPM_MAX, rawBpm)));
     void sendTempo(bpm);
   };
