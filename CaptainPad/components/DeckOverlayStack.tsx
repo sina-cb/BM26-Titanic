@@ -262,6 +262,19 @@ const OverlayCard: React.FC<{
         >
           <IconSymbol name={enabled ? 'eye' : 'eye.slash'} size={16} color={enabled ? accent : C.icon} />
         </TouchableOpacity>
+        {/* Remove overlay — always visible in the header (collapsed AND
+            expanded) so the operator can delete without expanding first.
+            Confirms via the ConfirmSheet below. Nested TouchableOpacity so the
+            tap removes rather than toggling the card's expand. */}
+        <TouchableOpacity
+          onPress={() => setConfirmRemove(true)}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          disabled={disabled}
+          accessibilityLabel="Remove overlay"
+          accessibilityRole="button"
+        >
+          <IconSymbol name="xmark" size={15} color={C.error} />
+        </TouchableOpacity>
         <IconSymbol name={expanded ? 'chevron.up' : 'chevron.down'} size={14} color={C.icon} />
       </TouchableOpacity>
 
@@ -304,14 +317,7 @@ const OverlayCard: React.FC<{
             >
               <IconSymbol name="arrow.down" size={16} color={C.text} />
             </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => setConfirmRemove(true)}
-              disabled={disabled}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-              style={{ padding: 6 }}
-            >
-              <IconSymbol name="xmark" size={16} color={C.error} />
-            </TouchableOpacity>
+            {/* (Remove ✕ moved to the always-visible card header.) */}
           </View>
 
           {/* Fader */}
