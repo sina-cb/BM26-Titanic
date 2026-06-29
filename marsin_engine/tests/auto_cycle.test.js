@@ -131,20 +131,7 @@ test('shuffle with only the current entry usable replays it (no other choice)', 
   assert.equal(pickNextAutoCycleEntry(p, { shuffle: true }, 'a').id, 'a');
 });
 
-// ── pickNextAutoCycleEntry: hold / loop (mirror deck gate) ─────────────
-test('hold PARKS — returns null (overrides shuffle/sequential)', () => {
-  const p = pl([{ id: 'a', hold: true }, { id: 'b' }]);
-  assert.equal(pickNextAutoCycleEntry(p, { shuffle: false }, 'a'), null);
-  assert.equal(pickNextAutoCycleEntry(p, { shuffle: true }, 'a'), null);
-});
-
-test('loop REPLAYS the same entry (overrides shuffle)', () => {
-  const p = pl([{ id: 'a', loop: true }, { id: 'b' }, { id: 'c' }]);
-  assert.equal(pickNextAutoCycleEntry(p, { shuffle: false }, 'a').id, 'a');
-  assert.equal(pickNextAutoCycleEntry(p, { shuffle: true }, 'a').id, 'a');
-});
-
-test('stale/removed activeEntryId skips the hold/loop gate (sequential runs)', () => {
+test('stale/removed activeEntryId runs sequential from the start', () => {
   const p = pl([{ id: 'a' }, { id: 'b' }]);
   // curEntryId 'zzz' not in list → findIndex -1 → next is index 0.
   assert.equal(pickNextAutoCycleEntry(p, { shuffle: false }, 'zzz').id, 'a');
@@ -215,14 +202,6 @@ test('group mode is a NO-OP when usable <= groupSize (falls through to sequentia
   // usable (3) is NOT > groupSize (3) → fall through → sequential.
   assert.equal(pickNextAutoCycleEntry(p, ap, 'a', gr).id, 'b');
   assert.equal(gr.windowIds, null, 'no window formed when group mode is a no-op');
-});
-
-test('group mode HOLD still parks, LOOP still repeats (gates run first)', () => {
-  const ap = { groupMode: true, groupSize: 2, groupDwell: 6 };
-  const held = pl([{ id: 'a', hold: true }, { id: 'b' }, { id: 'c' }, { id: 'd' }]);
-  assert.equal(pickNextAutoCycleEntry(held, ap, 'a', freshGroup()), null);
-  const looped = pl([{ id: 'a', loop: true }, { id: 'b' }, { id: 'c' }, { id: 'd' }]);
-  assert.equal(pickNextAutoCycleEntry(looped, ap, 'a', freshGroup()).id, 'a');
 });
 
 test('group mode handles a FRESH groupRuntime on every call (re-forms each time)', () => {

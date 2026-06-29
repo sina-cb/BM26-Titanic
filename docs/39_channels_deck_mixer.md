@@ -502,11 +502,11 @@ channel's own output. `faderMax = 0` fully suppresses the channel.
 
 ---
 
-## 9. Playlist tags + per-entry hold/loop wave (2026-06-20)
+## 9. Playlist tags wave (2026-06-20)
 
-Two additive playlist features, schema'd in `lib/playlist_manager.js` and
-surfaced through CaptainPad's `PlaylistPanel`. Full schema + coercion rules
-live in `docs/19_playlists.md` §2.5; this section is the channels-side summary.
+Additive playlist feature, schema'd in `lib/playlist_manager.js` and surfaced
+through CaptainPad's `PlaylistPanel`. Full schema + coercion rules live in
+`docs/19_playlists.md` §2.5; this section is the channels-side summary.
 
 - **#11 Tags + search/filter.** Playlist-level `tags: string[]` (lenient
   coerce: trim + lowercase + drop empties on load; same + `Set` dedupe on
@@ -517,28 +517,20 @@ live in `docs/19_playlists.md` §2.5; this section is the channels-side summary.
   client-side; tags are fetched lazily per name (reusing the api.ts per-name
   cache) so names render immediately and the filter is additive. A tag-edit
   row on the loaded playlist commits comma-separated tags via `savePlaylist`.
-- **#12 Per-entry hold/loop.** `hold`/`loop: boolean` per entry (strict
-  `=== true` coerce in load + save). **Honored ONLY by the deck autopilot
-  advance** (the `changePattern` closure passed to `new Autopilot`): `hold`
-  → park (return without cancelling the timer — a binary park-until-released
-  flag, not a timed hold); `loop` → repeat the current entry, overriding
-  shuffle; else the existing shuffle/sequential pick. The gate does NOT touch
-  manual `POST /deck/playlist/entry` taps — a tap releases a hold. A
-  stale/undefined current entry skips the gate. `lib/autopilot.js` is
-  unchanged. Mixer overlays persist the flags but have no live autopilot, so
-  they are inert there (CaptainPad toggle buttons render on both panels for
-  symmetry; the panel notes the deck-only honoring).
+
+> Per-entry `hold` / `loop` flags (#12) were part of this wave but were
+> removed (2026-06). The autopilot advance no longer has hold/loop gates; old
+> playlists carrying those keys load fine (keys ignored + stripped on save).
 
 ### 9.1 Implementation map (this wave)
 
 | Site | What |
 |---|---|
-| `lib/playlist_manager.js` | `tags` coerce in `load()`/`save()`; per-entry `hold`/`loop` coerce in both |
-| `lib/api_server.js` | TWO surgical edits: `save({ name, tags, entries })` on `POST /playlists`; hold/loop gate in the autopilot `changePattern` callback |
-| `CaptainPad/utils/api.ts` | `tags?` on `PlaylistData`; `hold?`/`loop?` on `PlaylistEntry`; `savePlaylist` arg includes `tags?` |
-| `CaptainPad/components/PlaylistPanel.tsx` | search + tag chips in both pickers; tag-edit row; per-entry hold/loop toggle buttons |
-| `tests/playlist_tags_holdloop.test.js` | Unit: tags round-trip, hold/loop round-trip, OLD-playlist coercion (byte-compat), junk coercion (7 tests) |
-| `tests/hil/hil_playlist_hold_loop_test.mjs` | HIL: hold parks ≥3 ticks + releases, loop repeats/overrides shuffle, manual tap overrides hold (9 assertions) |
+| `lib/playlist_manager.js` | `tags` coerce in `load()`/`save()` |
+| `lib/api_server.js` | `save({ name, tags, entries })` on `POST /playlists` |
+| `CaptainPad/utils/api.ts` | `tags?` on `PlaylistData`; `savePlaylist` arg includes `tags?` |
+| `CaptainPad/components/PlaylistPanel.tsx` | search + tag chips in both pickers; tag-edit row |
+| `tests/playlist_tags.test.js` | Unit: tags round-trip, OLD-playlist coercion (byte-compat + legacy hold/loop strip), junk coercion |
 
 ---
 
@@ -1618,8 +1610,7 @@ opt-in immunity. There is no separate exclude flag and none is needed.
 
 Per active overlay, once `delay_s` has elapsed: pick the next entry —
 `shuffle` = a random OTHER usable entry; else sequential, walking forward and
-skipping `_missing`; per-entry `hold` parks (no advance), `loop` replays the
-same entry (overrides shuffle) — then advance via the existing
+skipping `_missing` — then advance via the existing
 `loadPlaylistEntry` choke. Pure decision helpers `autoCycleDueDecision` and
 `pickNextAutoCycleEntry` are exported from `api_server.js` and unit-tested with
 a fake clock. If a snapshot morph / recall-fade is rebuilding overlays

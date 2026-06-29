@@ -940,38 +940,6 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     flashSaved();
   }, [flashSaved, refresh]);
 
-  // ── Per-entry hold / loop toggles (#12) ────────────────────────────
-  // Mirror the handleMoveEntry optimistic + rollback template: flip the
-  // flag in local state, persist the whole playlist, and on failure
-  // restore the prior entries + surface the error (Codex P0 — no silent
-  // fallback). `field` is 'hold' or 'loop'; the toggle is independent per
-  // field so an entry may be both held and looping (hold wins at the
-  // engine, but the operator can pre-arm loop).
-  //
-  // NOTE: hold/loop are honored by the DECK autopilot only. Mixer overlays
-  // persist these flags (round-tripped on save) but have no live autopilot
-  // to act on them, so on a mixer panel they are inert metadata.
-  const handleToggleEntryFlag = useCallback(async (entryId: string, field: 'hold' | 'loop') => {
-    const cur = playlistRef.current;
-    if (!cur) return;
-    const idx = cur.entries.findIndex((e) => e.id === entryId);
-    if (idx < 0) throw new Error(`handleToggleEntryFlag: entry not found: ${entryId}`);
-    const prevEntries = cur.entries;
-    const nextEntries = cur.entries.map((e) =>
-      e.id === entryId ? { ...e, [field]: !(e[field] === true) } : e,
-    );
-    // Optimistic: flip the chip instantly.
-    setPlaylist({ ...cur, entries: nextEntries });
-    const res = await savePlaylist({ name: cur.name, entries: nextEntries });
-    if (!res.ok) {
-      setPlaylist({ ...cur, entries: prevEntries });
-      Alert.alert(`Toggle ${field} failed`, res.error || 'Unknown error');
-      await refresh();
-      return;
-    }
-    flashSaved();
-  }, [flashSaved, refresh]);
-
   const handleCreateNew = useCallback(async () => {
     const name = sanitizeName(newPlaylistName);
     if (!name) return;
@@ -1225,30 +1193,6 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         )}
       </View>
 
-      {/* One-time legend for the cryptic per-row H / L pills (round-10
-          fix). The buttons stay single-letter to keep the dense 2-line
-          row compact; this caption — rendered once just above the list,
-          right where the eye lands before the rows — decodes them for
-          sighted operators. (Screen-reader users already get the full
-          "Set hold / Set loop" via each button's accessibilityLabel.)
-          Only shown when there ARE entries so an empty/loading panel
-          doesn't carry a dangling legend. */}
-      {playlist && playlist.entries.length > 0 && (
-        <Text
-          style={{
-            fontFamily: 'SpaceGrotesk_700Bold',
-            fontSize: sz.fontMicro,
-            color: C.secondary,
-            letterSpacing: 0.4,
-          }}
-          numberOfLines={1}
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-        >
-          H = HOLD · L = LOOP
-        </Text>
-      )}
-
       {/* ── Entry list (THE one and only pattern queue for this channel) ── */}
       {playlist ? (
         playlist.entries.length === 0 ? (
@@ -1269,7 +1213,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
             style={{ flex: 1, minHeight: 0, opacity: disabled ? 0.55 : 1 }}
             // Reserve a right gutter so the vertical scrollbar (RN-web
             // overlays it on top of content) doesn't sit over the row's
-            // remove/H/L controls. paddingBottom keeps the last row off the
+            // reorder/remove controls. paddingBottom keeps the last row off the
             // panel edge.
             contentContainerStyle={{ paddingBottom: 4, paddingRight: 6 }}
             onLayout={(ev) => { viewportHeightRef.current = ev.nativeEvent.layout.height; }}
@@ -1296,7 +1240,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                   style={{
                     // 2-line layout (2026-06-20, mixer readability): line 1 is
                     // the index badge + full-width name; line 2 is the compact
-                    // control sub-row (reorder chevrons + H/L + remove). In a
+                    // control sub-row (reorder chevrons + remove). In a
                     // cramped mixer channel-strip the name column used to
                     // collapse to ~60pt and truncate long pattern names to
                     // "tran…"/"0…"; stacking the controls underneath gives the
@@ -1380,8 +1324,8 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       )}
                     </TouchableOpacity>
                   </View>
-                  {/* Line 2: compact control sub-row — reorder chevrons + H/L
-                      toggles + remove. Only rendered when there is at least one
+                  {/* Line 2: compact control sub-row — reorder chevrons +
+                      remove. Only rendered when there is at least one
                       control to show (i.e. editable & not deck-edit-locked), so
                       read-only / show-mode rows stay single-line. */}
                   {editable && !(role === 'deck' && playlistEditsLocked) && (
@@ -1435,71 +1379,6 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       </TouchableOpacity>
                     </View>
                     )}
-                  {/* Per-entry HOLD / LOOP toggles (#12). H = HOLD, L = LOOP
-                      (deck-autopilot). Grouped together (gap:0, shared rounded
-                      pill outline) so they read as ONE paired toggle group,
-                      visually distinct from the destructive remove which is
-                      separated to the right. Same editable + playlist-edits-
-                      lock guard as the reorder chevrons. hold = park autopilot
-                      on this entry until released by a manual tap; loop =
-                      repeat this entry (overrides shuffle). >= 44pt tap target
-                      via hitSlop. Honored by the DECK autopilot only — inert
-                      (but persisted) on mixer overlays. */}
-                  {(
-                    <View
-                      style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        gap: 0,
-                        borderRadius: 5,
-                        borderWidth: 1,
-                        borderColor: isActive ? 'rgba(255,255,255,0.35)' : C.ghostBorder,
-                        overflow: 'hidden',
-                      }}
-                      accessibilityRole="radiogroup"
-                    >
-                      <TouchableOpacity
-                        onPress={() => handleToggleEntryFlag(e.id, 'hold')}
-                        hitSlop={{ top: 11, bottom: 11, left: 6, right: 4 }}
-                        style={{
-                          width: sz.btnH - 6,
-                          height: sz.btnH - 4,
-                          borderRightWidth: 1,
-                          borderRightColor: isActive ? 'rgba(255,255,255,0.35)' : C.ghostBorder,
-                          backgroundColor: e.hold ? C.primaryContainer : 'transparent',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                        accessibilityLabel={`${e.hold ? 'Clear' : 'Set'} hold on ${e.pattern}`}
-                        accessibilityRole="button"
-                      >
-                        <Text style={{
-                          fontFamily: 'SpaceGrotesk_700Bold',
-                          fontSize: sz.fontMicro + 1,
-                          color: e.hold ? C.primary : (isActive ? 'rgba(255,255,255,0.7)' : C.icon),
-                        }}>H</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        onPress={() => handleToggleEntryFlag(e.id, 'loop')}
-                        hitSlop={{ top: 11, bottom: 11, left: 4, right: 6 }}
-                        style={{
-                          width: sz.btnH - 6,
-                          height: sz.btnH - 4,
-                          backgroundColor: e.loop ? C.primaryContainer : 'transparent',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                        accessibilityLabel={`${e.loop ? 'Clear' : 'Set'} loop on ${e.pattern}`}
-                        accessibilityRole="button"
-                      >
-                        <Text style={{
-                          fontFamily: 'SpaceGrotesk_700Bold',
-                          fontSize: sz.fontMicro + 1,
-                          color: e.loop ? C.primary : (isActive ? 'rgba(255,255,255,0.7)' : C.icon),
-                        }}>L</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
                   {(
                     <TouchableOpacity
                       onPress={() => requestRemoveEntry(e.id)}
@@ -1510,9 +1389,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       // fill — so the row chrome recedes and the track name
                       // dominates. The remove only takes on its destructive
                       // identity at the confirm sheet (which is already armed
-                      // by requestRemoveEntry). Separated from the H/L group so
-                      // it can't be mistaken for a toggle on a moving art car.
-                      // Still >= 44pt tap area via hitSlop.
+                      // by requestRemoveEntry). Still >= 44pt tap area via hitSlop.
                       hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                       style={{
                         width: sz.btnH - 6,

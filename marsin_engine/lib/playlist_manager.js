@@ -192,12 +192,6 @@ export class PlaylistManager {
         defaults: (entry.defaults && typeof entry.defaults === 'object') ? entry.defaults : {},
         modulations: this._coerceModulations(name, entry),
         notes: typeof entry.notes === 'string' ? entry.notes : null,
-        // Per-entry hold/loop flags (#12). Strict `=== true` coercion in BOTH
-        // load and save: absent / null / 0 / "false" / any non-boolean all
-        // become false, so an older entry (no flags) reads as hold=false,
-        // loop=false — byte-compatible default behavior.
-        hold: entry.hold === true,
-        loop: entry.loop === true,
       };
       if (!this.patternExists(coerced.pattern)) coerced._missing = true;
       data.entries.push(coerced);
@@ -279,9 +273,6 @@ export class PlaylistManager {
           defaults: e.defaults && typeof e.defaults === 'object' ? e.defaults : {},
           modulations: validatedMods,
           notes: e.notes || null,
-          // Per-entry hold/loop (#12). Strict `=== true` mirror of load().
-          hold: e.hold === true,
-          loop: e.loop === true,
         };
       }),
     };

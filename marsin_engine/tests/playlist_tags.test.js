@@ -1,14 +1,12 @@
-// Unit tests for the playlist Tags (#11) and per-entry Hold/Loop (#12)
-// additive schema fields on PlaylistManager. Run:
-//   node --test tests/playlist_tags_holdloop.test.js
+// Unit tests for the playlist Tags (#11) additive schema field on
+// PlaylistManager. Run:
+//   node --test tests/playlist_tags.test.js
 //
 // Contract under test (see docs/19 §2 + the load()/save() coercion
 // precedent for `defaults`/`modulations`):
 //   - Playlist-level `tags: string[]` — trimmed, lowercased, empties
 //     dropped on load; same + Set-deduped on save; non-array junk → [].
-//   - Per-entry `hold`/`loop: boolean` — strict `=== true` in BOTH load
-//     and save (absent / null / 0 / "false" → false). This keeps an OLD
-//     playlist byte-compatible: no tags → [], entries → hold/loop false.
+//     This keeps an OLD playlist byte-compatible: no tags → [].
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -81,92 +79,47 @@ test('tags: load coerces malformed on-disk tags without throwing', () => {
   assert.deepEqual(b.tags, ['foo', 'bar']);
 });
 
-test('hold/loop round-trip: true persists, strict === true coercion', () => {
+test('OLD playlist coercion: no tags → [] (byte-compat); legacy hold/loop keys are stripped', () => {
   const { playlistsDir, patternsDir } = tmpdirs();
   const pm = new PlaylistManager(playlistsDir, patternsDir);
-  const written = pm.save({
-    name: 'flags',
-    entries: [
-      { id: 'a', pattern: '13_sparkle', hold: true, loop: false },
-      { id: 'b', pattern: '08_ocean_liner', hold: false, loop: true },
-      { id: 'c', pattern: '25_heartbeat', hold: true, loop: true },
-    ],
-  });
-  assert.equal(written.entries[0].hold, true);
-  assert.equal(written.entries[0].loop, false);
-  assert.equal(written.entries[1].hold, false);
-  assert.equal(written.entries[1].loop, true);
-  assert.equal(written.entries[2].hold, true);
-  assert.equal(written.entries[2].loop, true);
-  const reloaded = pm.load('flags');
-  assert.equal(reloaded.entries[0].hold, true);
-  assert.equal(reloaded.entries[0].loop, false);
-  assert.equal(reloaded.entries[1].loop, true);
-  assert.equal(reloaded.entries[2].hold, true);
-  assert.equal(reloaded.entries[2].loop, true);
-});
-
-test('hold/loop: truthy-but-not-true values coerce to false', () => {
-  const { playlistsDir, patternsDir } = tmpdirs();
-  const pm = new PlaylistManager(playlistsDir, patternsDir);
-  const written = pm.save({
-    name: 'coerce',
-    entries: [
-      // 1, "true", "false", 0, null are all NOT === true → false
-      { id: 'a', pattern: '13_sparkle', hold: 1, loop: 'true' },
-      { id: 'b', pattern: '08_ocean_liner', hold: 'false', loop: 0 },
-      { id: 'c', pattern: '25_heartbeat', hold: null, loop: undefined },
-    ],
-  });
-  for (const e of written.entries) {
-    assert.equal(e.hold, false);
-    assert.equal(e.loop, false);
-  }
-});
-
-test('OLD playlist coercion: no tags → [], entries → hold/loop false (byte-compat)', () => {
-  const { playlistsDir, patternsDir } = tmpdirs();
-  const pm = new PlaylistManager(playlistsDir, patternsDir);
-  // Hand-write a pre-feature file: NO tags key, entries with NO hold/loop.
-  // This is exactly what an existing on-disk playlist looks like.
+  // Hand-write a pre-feature file: NO tags key. The entries also carry the
+  // legacy `hold`/`loop` keys from the removed per-entry HOLD/LOOP feature —
+  // an old playlist with those keys must still LOAD without error, and the
+  // keys must be ignored / stripped (no longer part of the entry model).
   fs.writeFileSync(
     path.join(playlistsDir, 'legacy.yaml'),
     yaml.dump({
       schemaVersion: 1,
       name: 'legacy',
       entries: [
-        { id: 'e_1', pattern: '13_sparkle', label: 'Old One', defaults: {}, notes: null },
-        { id: 'e_2', pattern: '08_ocean_liner', label: null, defaults: { foo: 0.5 } },
+        { id: 'e_1', pattern: '13_sparkle', label: 'Old One', defaults: {}, notes: null, hold: true, loop: false },
+        { id: 'e_2', pattern: '08_ocean_liner', label: null, defaults: { foo: 0.5 }, loop: true },
       ],
     }),
   );
   const loaded = pm.load('legacy');
   assert.deepEqual(loaded.tags, []);
   for (const e of loaded.entries) {
-    assert.equal(e.hold, false);
-    assert.equal(e.loop, false);
+    assert.equal('hold' in e, false, 'legacy hold key must be stripped from the model');
+    assert.equal('loop' in e, false, 'legacy loop key must be stripped from the model');
   }
   // Pre-existing fields untouched.
   assert.equal(loaded.entries[0].label, 'Old One');
   assert.deepEqual(loaded.entries[1].defaults, { foo: 0.5 });
 });
 
-test('save preserves tags + flags through a load→save→load cycle', () => {
+test('save preserves tags through a load→save→load cycle', () => {
   const { playlistsDir, patternsDir } = tmpdirs();
   const pm = new PlaylistManager(playlistsDir, patternsDir);
   pm.save({
     name: 'cycle',
     tags: ['Show', 'finale'],
-    entries: [{ id: 'a', pattern: '13_sparkle', hold: true, loop: true }],
+    entries: [{ id: 'a', pattern: '13_sparkle' }],
   });
   const first = pm.load('cycle');
   // Re-save the loaded object verbatim (what the API POST does on edit).
   const resaved = pm.save(first);
   assert.deepEqual(resaved.tags, ['show', 'finale']);
-  assert.equal(resaved.entries[0].hold, true);
-  assert.equal(resaved.entries[0].loop, true);
   const second = pm.load('cycle');
   assert.deepEqual(second.tags, ['show', 'finale']);
-  assert.equal(second.entries[0].hold, true);
-  assert.equal(second.entries[0].loop, true);
 });

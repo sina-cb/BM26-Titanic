@@ -343,13 +343,12 @@ const autoGroupFields = (ap) => ({
 });
 
 // ── Auto-cycle next-entry pick (pure, unit-tested) ────────────────────
-// MIRRORS the deck Autopilot advance pick (api_server deck daemon): per-entry
-// hold parks (return null), loop replays the same entry (overrides shuffle),
-// else — when group-locality is armed — dwell within a window of adjacent
-// entries, else shuffle picks a random OTHER usable entry, else sequential
-// walks forward skipping `_missing`. `usable` excludes `_missing` entries.
+// MIRRORS the deck Autopilot advance pick (api_server deck daemon): when
+// group-locality is armed, dwell within a window of adjacent entries, else
+// shuffle picks a random OTHER usable entry, else sequential walks forward
+// skipping `_missing`. `usable` excludes `_missing` entries.
 // Returns the chosen entry, or null when there is nothing to advance to (no
-// usable entries, or the current entry is held).
+// usable entries).
 //
 // PATTERN-GROUP LOCALITY: when `autopilot.groupMode` is true AND there are
 // strictly more usable entries than the window size, dwell state lives in the
@@ -363,11 +362,6 @@ export function pickNextAutoCycleEntry(pl, autopilot, curEntryId, groupRuntime) 
   if (!pl || !Array.isArray(pl.entries) || pl.entries.length === 0) return null;
   const usable = pl.entries.filter(e => !e._missing);
   if (usable.length === 0) return null;
-  const curEntry = pl.entries.find(e => e.id === curEntryId);
-  if (curEntry) {
-    if (curEntry.hold) return null;        // parked until released
-    if (curEntry.loop) return curEntry;    // replay same entry
-  }
   // PATTERN-GROUP LOCALITY: dwell inside a rolling window of adjacent usable
   // entries. No-op (fall through) unless armed AND the playlist is bigger than
   // one window — otherwise the "window" would be the whole list, defeating the
@@ -3180,11 +3174,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (usable.length === 0) return;
 
         const cur = baseCh.playlist.activeEntryId;
-        // Selection is the SHARED pure picker (hold→loop→group→shuffle→
-        // sequential) — the SAME `pickNextAutoCycleEntry` the mixer overlay
-        // ticks use, so the deck and overlays can never drift. It honors the
-        // per-entry hold (returns null → park WITHOUT cancelling the timer so
-        // the daemon re-checks each beat) and loop gates, then group-locality,
+        // Selection is the SHARED pure picker (group→shuffle→sequential) —
+        // the SAME `pickNextAutoCycleEntry` the mixer overlay ticks use, so
+        // the deck and overlays can never drift. It applies group-locality,
         // then shuffle/sequential. Group dwell state lives on the deck base
         // channel's transient `_autoGroup` (reset by loadPlaylistEntry on every
         // manual tap / (re-)load, so a manual tap starts a fresh group).

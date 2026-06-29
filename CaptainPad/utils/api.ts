@@ -1162,13 +1162,6 @@ export interface PlaylistEntry {
   label: string | null;
   defaults: Record<string, any>;
   notes?: string | null;
-  // Per-entry autopilot flags (#12). Honored by the DECK autopilot only:
-  // hold = park on this entry until released (manual tap clears it);
-  // loop = repeat this entry every beat (overrides shuffle). Both default
-  // false / absent on older playlists. Mixer overlays persist these but
-  // have no live autopilot, so they are inert there.
-  hold?: boolean;
-  loop?: boolean;
   _missing?: boolean;
 }
 
