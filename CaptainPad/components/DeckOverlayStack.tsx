@@ -448,7 +448,11 @@ export const DeckOverlayStack: React.FC<{
     // The engine requires a playlist OR pattern — the "DEFAULT" choice maps
     // to the engine's `default` playlist (passing nothing is a 400). A named
     // pick passes that name through.
-    const res = await addDeckOverlay({ viewSelection: addView, playlist: playlist || 'default' });
+    // Default new overlays to OVER blend (operator request 2026-06-29): an
+    // overlay laid OVER the deck should, by default, replace what's under it
+    // within its view rather than screen-brighten it. The operator can still
+    // switch to SCREEN/ADD per overlay via the blend picker.
+    const res = await addDeckOverlay({ viewSelection: addView, playlist: playlist || 'default', mode: 'blend_over' });
     if (!res.ok) {
       const code = (res.data && res.data.code) as string | undefined;
       if (code === 'DECK_OVERLAY_VIEW_REQUIRED') {

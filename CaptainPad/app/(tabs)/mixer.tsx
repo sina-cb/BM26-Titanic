@@ -373,10 +373,10 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           28×28 + pinned to the right. Operator feedback "make them
           look exactly the same" drove this unification. */}
       <View style={styles.channelHeader}>
-        {/* Name + badges claim the full first line (flexBasis 100%) so the
-            control row below always gets the strip's full width to lay out
-            its buttons without clipping. */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexGrow: 1, flexBasis: '100%', minWidth: 0 }}>
+        {/* Name + badges take the left of the single header row and flex to
+            fill the space left of the control cluster; minWidth:0 lets the
+            name truncate instead of pushing the buttons off the edge. */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
           <View style={styles.channelBadge}>
             <Text style={[styles.valueReadout, { color: C.primary }]}>{index}</Text>
           </View>
@@ -412,7 +412,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             and duplicate were removed at operator request; pin-fader and delete
             live in the ⋮ menu as LABELED rows. The per-button 28pt squircles +
             their ICON_BTN_HIT_SLOP keep every target ≥44pt. */}
-        <View style={{ flexDirection: 'row', flexBasis: '100%', flexShrink: 1, minWidth: 0, columnGap: 4, alignItems: 'center', justifyContent: 'flex-start' }}>
+        <View style={{ flexDirection: 'row', flexShrink: 0, columnGap: 4, alignItems: 'center', justifyContent: 'flex-end' }}>
           {/* Lock (playlist/pattern lock) — amber when engaged. */}
           <TouchableOpacity
             style={[styles.titleBtn, locked && styles.titleBtnAmberActive]}
@@ -986,6 +986,22 @@ export default function MixerScreen() {
     }
     setInlinePlaylistVersion(v => v + 1);
   }, []);
+
+  // Group rail / assign-picker channel list with a DISPLAY name derived the
+  // same way the channel strips do (deriveChannelTitle): a default-added strip
+  // is minted with the literal name "New Layer", so the group chips + the
+  // "ADD CHANNEL" picker used to read three identical "New Layer" rows. We
+  // resolve each to its active playlist entry / playlist name / "Ch N" so the
+  // operator can tell members apart. A genuine rename still wins. Re-derives
+  // when channels or the inline playlists change.
+  const groupRailChannels = useMemo(() => {
+    void inlinePlaylistVersion;
+    return channels.map((ch, idx) => ({
+      id: ch.id,
+      mixGroupId: ch.mixGroupId,
+      name: deriveChannelTitle(ch, idx + 1, ch.playlist, inlinePlaylistRef.current.get(ch.id) || null),
+    }));
+  }, [channels, inlinePlaylistVersion]);
   // globalExports fetching moved to GlobalParams.tsx
   const throttleRef = useRef<{[key: string]: number}>({});
   // Per-channel pixel viz no longer lives at the screen level. Each
@@ -2354,7 +2370,7 @@ export default function MixerScreen() {
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setGroupsModalOpen(false)}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}}>
             <View style={styles.modalContent}>
-              <GroupRailBody mixGroups={mixGroups} channels={channels} />
+              <GroupRailBody mixGroups={mixGroups} channels={groupRailChannels} />
             </View>
           </TouchableOpacity>
         </TouchableOpacity>
@@ -2657,15 +2673,13 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   },
   channelHeader: {
     flexDirection: 'row',
-    // Wrap (2026-06-22 UI cleanup): on narrow strips the 9-button control
-    // row no longer fits beside the channel name, so the whole header is
-    // allowed to wrap — the name+badge keep the first line and the button
-    // row drops to a full-width second line (where it wraps internally too)
-    // instead of clipping off the right edge.
-    flexWrap: 'wrap',
+    // Single row (operator request 2026-06-29): name on the left, the compact
+    // control cluster on the right — NO wrap. The button row was trimmed to a
+    // handful of controls (lock · reorder · blend ▾ · ⋮), so it now fits beside
+    // the name; the name flexes + truncates and the buttons keep their size.
+    flexWrap: 'nowrap',
     justifyContent: 'space-between',
     alignItems: 'center',
-    rowGap: 8,
     padding: 12,
     backgroundColor: C.surfaceContainerHigh,
     borderBottomWidth: 1,
