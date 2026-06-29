@@ -2326,7 +2326,12 @@ export default function MixerScreen() {
           fill more of the freed width. A full 3-layer row already fills evenly,
           so centering it is a visual no-op. Portrait is untouched (always a
           single fixed column).*/}
-      <ScrollView horizontal scrollEnabled={false} contentContainerStyle={[{ padding: 16, gap: 16, flexGrow: 1 }, !isPortrait && { justifyContent: 'center' }]} style={{ flex: 1 }}>
+      {/* Horizontal scroll is enabled ONLY when the strips overflow the row
+          (>3 landscape / >2 portrait) — so the common case has NO scroll
+          container to fight the horizontal faders, and the faders (which now
+          capture-claim their own drags) stay rock-solid. When few channels fit,
+          they center; when many, they left-align and scroll. */}
+      <ScrollView horizontal scrollEnabled={!isPortrait ? channels.length > 3 : channels.length > 2} contentContainerStyle={[{ padding: 16, gap: 16, flexGrow: 1 }, !isPortrait && (channels.length <= 3 ? { justifyContent: 'center' } : { justifyContent: 'flex-start' })]} style={{ flex: 1 }}>
         {/* Track which groups have already had their slim in-list header
             rendered, so the header is emitted ONCE — before a group's FIRST
             member in list order. Group members may not be contiguous (channels

@@ -53,6 +53,14 @@ export const HorizontalFader = ({ value, onChange, onRelease, trackStyle, fillSt
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
+      // CAPTURE the gesture before any ancestor (e.g. a horizontal ScrollView
+      // around the mixer channel strips) can claim it. Without this, dragging a
+      // fader inside a scrollable row scrolled the row instead of moving the
+      // fader. The fader is a leaf interactive control, so it should always own
+      // a drag that starts on it; the ScrollView still scrolls on touches that
+      // begin OUTSIDE any fader (headers, gaps).
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponderCapture: () => true,
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: (evt) => {
         draggingRef.current = true;

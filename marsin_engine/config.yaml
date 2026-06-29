@@ -7,7 +7,7 @@ sacn:
 engine:
   fps: 40
 mixer:
-  maxChannels: 4
+  maxChannels: 8
 vis:
   broadcastHz: 5
   maxPixels: 100
