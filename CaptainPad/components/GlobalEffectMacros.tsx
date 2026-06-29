@@ -51,7 +51,6 @@ import {
   dispatchGlobalEffectSlotAction,
   patchGlobalEffectSlot,
   setGlobalEffectBlackout,
-  setGlobalInvert,
   fetchGlobals,
   GlobalEffectSlot,
   GlobalEffectSlotStatus,
@@ -66,11 +65,13 @@ import { engineEvents } from '@/utils/engineEvents';
 // re-binds the visible slots via long-press swap; the engine's library
 // still contains every preset so swapping in vintageWhite, fogger,
 // blastWhite, etc. is one tap of the SWAP modal.
-// 8 slots (operator request 2026-06-22): the engine supports up to MAX_SLOTS=16
-// and ships 12 default bindings, so slots 7–8 surface real effects (Vintage
-// Wht / Blast Wht) — or empty + assignable if the engine returns fewer. Shared
-// by BOTH the deck and mixer bottom bars (same GlobalEffectMacros instance).
-const VISIBLE_SLOT_COUNT = 8;
+// 9 slots (channels-optimization campaign, 2026-06-29): the engine supports
+// up to MAX_SLOTS=16 and ships 13 default bindings. Invert is no longer a
+// dedicated fixed button — it now lives in an assignable slot (default slot
+// 9), so the visible strip grew 8 → 9 to surface it out of the box. Every
+// visible slot is re-bindable via the long-press SWAP modal. Shared by BOTH
+// the deck and mixer bottom bars (same GlobalEffectMacros instance).
+const VISIBLE_SLOT_COUNT = 9;
 
 type LibPreset = { id: string; label: string; defaultBehavior: string; safetyTier?: string; params: any };
 type LibEffect = { id: string; name: string; category: string; behaviorTypes: string[]; presets: Record<string, LibPreset>; legacyEffectId?: string | null };
@@ -153,10 +154,10 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // from under their finger. This holds the live drag target; cleared on release.
   const hueDraggingRef = useRef(false);
 
-  // Global color INVERT (docs/39 §F-invert). A first-class boolean toggle,
-  // sibling of blackout — seeded from /globals.invert at mount, kept live by
-  // the `globalInvert` WS broadcast. Mirrors how `blackout` is plumbed.
-  const [invert, setInvert] = useState(false);
+  // Global color INVERT (docs/39 §F-invert) is no longer a dedicated control
+  // here — it became an assignable slot effect (default slot 9) in the
+  // channels-optimization campaign (2026-06-29) and rides the standard slot
+  // dispatch + status path. No local invert state is needed in this component.
 
   // SPIN was removed from the hue section (June 2026). The auto-rotate rate is
   // persisted engine-side, so a previously-set spin would keep silently
@@ -239,12 +240,6 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       // hueShift). The globalHueShift WS broadcast keeps it live afterwards.
       const globals = await fetchGlobals();
       if (alive && globals.ok && globals.data) {
-        // Seed the global color INVERT toggle from /globals.invert (mirror of
-        // the blackout/hue seed). The `globalInvert` WS broadcast keeps it
-        // live afterwards.
-        if (typeof globals.data.invert === 'boolean') {
-          setInvert(globals.data.invert);
-        }
         if (globals.data.hueShift && !hueDraggingRef.current) {
           const hs = globals.data.hueShift;
           if (typeof hs.degrees === 'number') {
@@ -306,10 +301,6 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         const hs = msg.hueShift;
         const degrees = typeof hs.degrees === 'number' ? hs.degrees : 0;
         setHueShift(prev => ({ degrees: hueDraggingRef.current ? prev.degrees : degrees }));
-      } else if (msg?.type === 'globalInvert' && typeof msg.invert === 'boolean') {
-        // Engine is authoritative for the INVERT toggle (mirror of the
-        // blackout reconciliation). Reflect every broadcast.
-        setInvert(msg.invert);
       }
     });
     return () => {
@@ -419,20 +410,6 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     const r = await setGlobalEffectBlackout(next);
     if (r.ok) onBlackoutChange?.(next);
   }, [blackout, onBlackoutChange]);
-
-  // Single-tap INVERT toggle (mirror of onPressBlackout). Optimistic flip so
-  // the cell responds instantly; the `globalInvert` WS broadcast reconciles
-  // the authoritative state. Fail-loud: roll back + surface a rejection.
-  const onPressInvert = useCallback(async () => {
-    const next = !invert;
-    setInvert(next);
-    const r = await setGlobalInvert(next);
-    if (!r.ok) {
-      console.warn('[GEM] global invert rejected:', r.error);
-      setInvert(invert);
-      Alert.alert('Invert not applied', r.error || 'The engine rejected the global invert.');
-    }
-  }, [invert]);
 
   // Global hue degrees fader (0-360°). Optimistic local set + POST. The
   // HorizontalFader throttles onChange to ~50 ms during a drag, so each POST
@@ -634,49 +611,46 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         };
 
         if (isStrip) {
-          // The 8 slot chips. In LANDSCAPE they flex:1 to fill the bar
+          // The 9 slot chips. In LANDSCAPE they flex:1 to fill the bar
           // (plenty of width per chip — labels already fit, QA round7).
-          // In PORTRAIT the bar is far too narrow for 8 cells: at flex:1
-          // every chip squeezed to ~70px and the 2-word labels chopped
+          // In PORTRAIT the bar is far too narrow for that many cells: at
+          // flex:1 every chip squeezed to ~70px and the 2-word labels chopped
           // mid-word ("Vint ag…", "Ghos t …" — QA round7 BLOCKER). So in
           // portrait we drop the flex, give each chip a real minWidth
           // (~96px), and let ONLY THE SLOTS scroll horizontally — the
-          // operator swipes to reach slots 7-8. Invert + BLACKOUT are
-          // pinned OUTSIDE the scroller (QA round10 BLOCKER) so the e-stop
-          // never scrolls off-screen. The minWidth (96px) gives a 2-line
-          // label ("Vintage\nWhite", "Iceberg\nFlash") room to render full.
+          // operator swipes to reach the trailing slots. BLACKOUT is pinned
+          // OUTSIDE the scroller (QA round10 BLOCKER) so the e-stop never
+          // scrolls off-screen. Invert is NO LONGER a dedicated button — it
+          // is now an assignable slot (default slot 9), so it scrolls with
+          // the other chips. The minWidth (96px) gives a 2-line label
+          // ("Vintage\nWhite", "Iceberg\nFlash") room to render full.
           const SLOT_MIN_WIDTH = 96;
           const slotChips = visibleSlots.map((slot) =>
             renderCell(slot, isPortrait ? SLOT_MIN_WIDTH : undefined),
           );
-          // Invert + Blackout get FIXED widths so they never shrink — the
-          // e-stop must keep a stable, recognisable footprint regardless of
+          // Blackout gets a FIXED width so it never shrinks — the e-stop
+          // must keep a stable, recognisable footprint regardless of
           // orientation or how many slots are bound.
-          const invertCell = (
-            <InvertButton key="invert" invert={invert} height={btnHeight} fontSize={btnFont} onPress={onPressInvert} fixedWidth={isPortrait ? 78 : undefined} />
-          );
           const blackoutCell = (
             <BlackoutButton key="blackout" blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} fixedWidth={isPortrait ? 96 : 112} />
           );
           // A small divider/gap separates the destructive BLACKOUT e-stop
-          // from Invert so it never reads as "just another slot"
-          // (QA round7 MAJOR). In portrait the divider sits inside the fixed
-          // pinned trailing group (between Invert and Blackout); in landscape
-          // it's inline between the two.
+          // from the slot chips so it never reads as "just another slot"
+          // (QA round7 MAJOR).
           const Divider = (
             <View key="divider" style={{ width: 1, alignSelf: 'stretch', marginHorizontal: 4, backgroundColor: C.ghostBorder }} />
           );
 
           if (isPortrait) {
             // QA round10 BLOCKER: the whole strip used to be one horizontal
-            // ScrollView, so Invert + BLACKOUT (the e-stop) scrolled OFF the
-            // right edge with no discoverable cue — a clipped e-stop is a
-            // live-show safety problem. Restructure: the row is a flex
-            // container where ONLY the 8 slot chips live inside a flex:1
-            // horizontal ScrollView, and Invert + divider + BLACKOUT are a
-            // FIXED trailing group pinned at the right edge OUTSIDE the
-            // ScrollView. The operator scrolls to reach slots 7-8, but the
-            // destructive e-stop is ALWAYS on-screen.
+            // ScrollView, so BLACKOUT (the e-stop) scrolled OFF the right
+            // edge with no discoverable cue — a clipped e-stop is a live-show
+            // safety problem. Restructure: the row is a flex container where
+            // ONLY the slot chips live inside a flex:1 horizontal ScrollView,
+            // and divider + BLACKOUT are a FIXED trailing group pinned at the
+            // right edge OUTSIDE the ScrollView. The operator scrolls to reach
+            // the trailing slots, but the destructive e-stop is ALWAYS
+            // on-screen.
             return (
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 {/* Slots-only scroller. A right-edge fade peek hints there's
@@ -701,7 +675,6 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
                 </View>
                 {/* Fixed trailing group — never scrolls. */}
                 <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: gap }}>
-                  {invertCell}
                   {Divider}
                   {blackoutCell}
                 </View>
@@ -712,23 +685,23 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           return (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap }}>
               {slotChips}
-              {invertCell}
               {Divider}
               {blackoutCell}
             </View>
           );
         }
-        // Deck: one UNIFORM grid of every control (slots + INVERT + BLACKOUT)
-        // chunked into rows of `deckCols`. Every row carries exactly deckCols
-        // cells (the last row is padded with invisible spacers) so chip widths
-        // are identical across rows — fixing the old 3-up/5-up squeeze that
-        // truncated the bottom-row labels (QA round1 #1). INVERT and BLACKOUT
-        // are the last two cells so the destructive e-stop stays bottom-right.
+        // Deck: one UNIFORM grid of every control (slots + BLACKOUT) chunked
+        // into rows of `deckCols`. Every row carries exactly deckCols cells
+        // (the last row is padded with invisible spacers) so chip widths are
+        // identical across rows — fixing the old 3-up/5-up squeeze that
+        // truncated the bottom-row labels (QA round1 #1). BLACKOUT is the
+        // last cell so the destructive e-stop stays bottom-right. Invert is
+        // no longer a dedicated cell — it is an assignable slot now (default
+        // slot 9) and renders as one of the slot chips above.
         const cells: React.ReactNode[] = [
           // NB: wrap in an arrow so Array.map's index arg is never passed as
           // `minWidth` — the deck grid wants flex:1 cells (minWidth undefined).
           ...visibleSlots.map((slot) => renderCell(slot)),
-          <InvertButton key="invert" invert={invert} height={btnHeight} fontSize={btnFont} onPress={onPressInvert} />,
           <BlackoutButton key="blackout" blackout={blackout} height={btnHeight} fontSize={btnFont} onPress={onPressBlackout} />,
         ];
         const rows: React.ReactNode[][] = [];
@@ -1088,72 +1061,13 @@ const BlackoutButton: React.FC<{
   );
 };
 
-// Global color INVERT toggle. Sibling of BlackoutButton, same size/style
-// language (single-tap toggle, 1 px ghost border when OFF, filled accent
-// when ON). Uses the palette's `tertiary` accent — a DISTINCT colour from
-// blackout's e-stop `error` red AND from the hue knob's `primary` cyan — so
-// the operator never confuses a colour-invert with the e-stop.
-//   - OFF → flat ghost-bordered surface, tertiary-accent text
-//   - ON  → filled tertiary cell, white text (unambiguous "inverted" state)
-//
-// Label casing (QA round1 #20): Title Case ("Invert") to match the slot-chip
-// convention — the chip group is now ONE casing. Destructiveness/state is
-// flagged by colour + bold weight (tertiary accent, error-red for blackout),
-// NOT by SHOUTING CAPS.
-//
-// QA round10 MINOR: OFF Invert used a faint `ghostBorder` and read like a
-// disabled/empty "+" socket (same grey family as the recessed empty slots).
-// It's an AVAILABLE ACTION, not an empty socket, so the OFF state now carries
-// a solid `tertiary`-accent border on the solid `surfaceContainerHigh` fill —
-// the accent is on the chip EDGE (not just faint label text), so it reads as a
-// raised, tappable accent chip clearly distinct from the dashed recessed empty
-// slots and from the red-bordered BLACKOUT e-stop.
-const InvertButton: React.FC<{
-  invert: boolean;
-  height: number;
-  fontSize: number;
-  // Fixed width (set on the strip variants) so INVERT keeps a stable footprint
-  // alongside the fixed-width BLACKOUT and never shrinks below its neighbours.
-  fixedWidth?: number;
-  onPress: () => void;
-}> = ({ invert, height, fontSize, fixedWidth, onPress }) => {
-  const C = usePalette();
-  const isOn = !!invert;
-  const bg = isOn ? C.tertiary : C.surfaceContainerHigh;
-  const fg = isOn ? '#FFF' : C.tertiary;
-  const sizing = fixedWidth !== undefined
-    ? { width: fixedWidth, minWidth: fixedWidth, flexGrow: 0, flexShrink: 0 }
-    : { flex: 1 };
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={1}
-      style={{
-        ...sizing, height, paddingHorizontal: 6, borderRadius: 6,
-        backgroundColor: bg,
-        borderWidth: 1,
-        // OFF carries the tertiary accent on its border (not the faint
-        // ghostBorder) so it reads as a raised, available action — distinct
-        // from the dashed/recessed empty "+" sockets (QA round10).
-        borderColor: isOn ? 'transparent' : C.tertiary,
-        justifyContent: 'center', alignItems: 'center',
-        ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
-      }}
-      accessibilityLabel={isOn ? 'Disable global color invert' : 'Enable global color invert'}
-    >
-      <Text
-        numberOfLines={1}
-        ellipsizeMode="tail"
-        // "Invert" fits on one line at `fontSize` in every chip width; "tail"
-        // is a safety net only. Title Case keeps INVERT visually distinct from
-        // the ALL-CAPS destructive BLACKOUT e-stop (QA round7).
-        style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, letterSpacing: 0.5 }}
-      >
-        Invert
-      </Text>
-    </TouchableOpacity>
-  );
-};
+// NOTE (channels-optimization campaign, 2026-06-29): the dedicated
+// InvertButton was REMOVED here. Global color invert is now an assignable
+// slot effect (library id 'invert', default slot 9) rendered as an ordinary
+// SlotButton chip and dispatched through the standard slot action route.
+// The legacy POST /global-effect-invert route + `globalInvert` WS broadcast
+// stay alive engine-side for back-compat; this component no longer owns a
+// fixed invert control.
 
 // Floating swap sheet. Operator can:
 //   - pick any preset from any library effect → binds it to this slot
