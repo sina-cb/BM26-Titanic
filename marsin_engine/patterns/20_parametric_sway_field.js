@@ -197,12 +197,19 @@ export function render3D(index, x, y, z) {
   v = min(1.0, ambient + (v + pop) * gain);
 
   // Colour identity per attractor so BOTH palette ends span the rig (hueSpread):
-  // attractor A pulls toward cp1 (mix 0), B toward cp2 (mix 1), C sits mid. The
-  // nearest attractor dominates the local hue, plus a small positional drift.
-  var mixVal = 0.5;
-  if (dA <= dB && dA <= dC) mixVal = 0.04;
-  else if (dB <= dA && dB <= dC) mixVal = 0.96;
-  else mixVal = 0.5;
+  // attractor A pulls toward cp1 (mix 0.04), B toward cp2 (mix 0.96), C sits mid
+  // (0.5). The nearest attractor dominates the local hue. A hard nearest-of-three
+  // pick used to SNAP the hue instantly whenever a pixel crossed a Voronoi
+  // boundary between two attractors (a real per-pixel colour discontinuity the
+  // detector flagged hundreds of times). Instead, weight the three identities by
+  // a continuous inverse-distance falloff so the dominant attractor still sets the
+  // local hue but the handover across a boundary is smooth (C0/C1) — no snap.
+  var sharp = 14.0;                       // how decisively the nearest one wins
+  var wA = 1.0 / (1.0 + dA * dA * sharp);
+  var wB = 1.0 / (1.0 + dB * dB * sharp);
+  var wC = 1.0 / (1.0 + dC * dC * sharp);
+  var wSum = wA + wB + wC;                 // > 0 always (each term >= small)
+  var mixVal = (wA * 0.04 + wB * 0.96 + wC * 0.5) / wSum;
   mixVal = mixVal + (wave(nx * 0.5 + mixPhase) - 0.5) * 0.18;
   mixVal = max(0.0, min(1.0, mixVal));
 

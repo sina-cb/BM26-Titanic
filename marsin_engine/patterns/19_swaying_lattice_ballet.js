@@ -16,9 +16,10 @@
     rates (0.27 : 0.31). All phases accumulate continuously and wrap at a large
     multiple of TAU (PHASE_WRAP) far from any in-frame use, so no seam (skill 12
     §7). The sway/pivot are read as sin/cos of these phases (C0 across wrap).
-    Autonomous direction: a smooth rate sway (0.4 + 0.6*cos(slowClock))*dirSign
-    eases the sway through reversals on a slow incommensurate clock — never a hard
-    sign flip — so the bow is not one-way and never seams.
+    Autonomous sway: a smooth rate envelope (0.6 + 0.4*cos(slowClock)) on a slow
+    incommensurate clock eases the bow between a slow and a faster swing. The
+    envelope keeps a positive floor so the bow never freezes mid-swing (an
+    earlier zero-crossing envelope stalled the whole corps for ~3s per cycle).
 
   AUDIO_MODULATION_V1:
     sliderLevel      <- micLow  range 0.30..1.00 curve pow2   # PRIMARY brightness (bass)
@@ -130,7 +131,12 @@ export function beforeRender(delta) {
   if (dirSign >= 0.0 && dirSign < 0.06) dirSign = 0.06;
   else if (dirSign < 0.0 && dirSign > -0.06) dirSign = -0.06;
 
-  // Autonomous reversal: smooth rate sway easing through zero (no hard flip).
+  // Autonomous sway: a smooth rate envelope on a slow incommensurate clock eases
+  // the bow between a slow and a faster swing. The envelope keeps a positive
+  // floor (0.20..1.00) so the bow NEVER freezes mid-swing — an earlier
+  // (0.4 + 0.6*cos) envelope reached zero at cos=-0.667 and stalled every sway/
+  // pivot phase (all multiply by `rate`) for ~3s on each cycle, which the
+  // discontinuity detector flagged (a long stall plus breath-only residual pops).
   autoClock = autoClock + dt * 0.057 * localMultiplier;
   if (autoClock >= PHASE_WRAP) autoClock = autoClock - PHASE_WRAP;
   // Signed, guaranteed-non-zero base sway magnitude (like 16/17): direction
@@ -139,7 +145,7 @@ export function beforeRender(delta) {
   // of ~5.3 rad/s); without TAU the sway crawled ~15x too slow and looked frozen.
   var dirMag = (dirSign < 0.0) ? -1.0 : 1.0;
   var swayMag = dirSign + dirMag * 0.7;     // never near-zero at center
-  var rate = (0.4 + 0.6 * cos(autoClock)) * swayMag * localMultiplier * 6.2831853;
+  var rate = (0.6 + 0.4 * cos(autoClock)) * swayMag * localMultiplier * 6.2831853;
 
   // Two sway phases at an irrational ratio so lattices never re-align.
   phaseA = phaseA + dt * 0.69 * rate;       if (phaseA >= PHASE_WRAP) phaseA -= PHASE_WRAP; else if (phaseA <= -PHASE_WRAP) phaseA += PHASE_WRAP;

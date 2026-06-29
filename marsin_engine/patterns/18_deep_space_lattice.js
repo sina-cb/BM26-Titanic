@@ -15,9 +15,10 @@
     Phases wrap at PHASE_WRAP = 10000 turns, far from any in-frame use, and the
     diagonal weave has its OWN accumulator (not a scaled copy of another wrapped
     phase) so no seam appears at a wrap (skill 12 §7).
-    Autonomous direction: a smooth rate sway (0.35 + 0.65*cos(slowClock))*dirSign
-    eases the drift through reversals on a slow incommensurate clock — not a hard
-    sign flip — so motion is never one-way and never seams.
+    Autonomous drift sway: a smooth rate envelope (0.65 + 0.35*cos(slowClock))
+    on a slow incommensurate clock eases the drift between a slow and a faster
+    slide. The envelope keeps a positive floor so the lattice never freezes
+    mid-drift (the og identity is a continuous, never-stalling drift).
 
   AUDIO_MODULATION_V1:
     sliderLevel  <- micLow  range 0.30..1.00 curve pow2   # PRIMARY brightness (bass)
@@ -114,14 +115,19 @@ export function beforeRender(delta) {
   if (dirSign >= 0.0 && dirSign < 0.06) dirSign = 0.06;
   else if (dirSign < 0.0 && dirSign > -0.06) dirSign = -0.06;
 
-  // Autonomous reversal: smooth rate sway easing through zero (no hard flip).
-  // Signed, guaranteed-non-zero base magnitude (like 16/17) so the lattice keeps
-  // drifting at the guarded-center default instead of crawling at half rate.
+  // Autonomous drift sway: a smooth rate envelope on a slow incommensurate clock
+  // eases the lattice between a slow drift and a faster slide. The envelope keeps
+  // a positive floor (0.30..1.00) so the lattice NEVER freezes mid-drift — an
+  // earlier (0.35 + 0.65*cos) envelope reached zero at cos=-0.538 and stalled
+  // every drift phase (all three grids + colour depth multiply by `sway`) for
+  // ~0.5s on each cycle, which the discontinuity detector flagged. Signed,
+  // guaranteed-non-zero base magnitude (like 16/17) so the lattice keeps drifting
+  // at the guarded-center default; direction still sets the drift sense.
   autoClock = autoClock + dt * 0.063 * localMultiplier;
   if (autoClock >= PHASE_WRAP) autoClock = autoClock - PHASE_WRAP;
   var dirMag = (dirSign < 0.0) ? -1.0 : 1.0;
   var swayMag = dirSign + dirMag * 0.7;    // never near-zero at center
-  var sway = (0.35 + 0.65 * cos(autoClock)) * swayMag;
+  var sway = (0.65 + 0.35 * cos(autoClock)) * swayMag;
 
   // radius (micFlux) boosts the drift rate — lattice travels farther/faster.
   var travelRate = (0.6 + radius * 1.4) * localMultiplier * sway;

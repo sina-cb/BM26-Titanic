@@ -15,9 +15,10 @@
     The sweep and undertow are two delta-accumulated phases at an irrational ratio
     (tide rate 0.025 : undertow 0.0145 ≈ 1 : 0.58). Phases accumulate continuously
     and wrap at PHASE_WRAP turns, far from any in-frame use — no seam (skill 12 §7).
-    Autonomous direction: a smooth rate sway (0.4 + 0.6*cos(slowClock))*dirSign
-    eases the tide through reversals on a slow incommensurate clock — never a hard
-    sign flip — so the tide is not one-way and the turn is gradual.
+    Autonomous tidal sway: a smooth rate envelope (0.55 + 0.45*cos(slowClock))
+    on a slow incommensurate clock eases the tide between a slow creep and a
+    faster surge. The envelope keeps a positive floor so the sweep never freezes
+    mid-stroke (the og identity is a continuous, never-stalling tidal sweep).
 
   AUDIO (modulators-only — never read CPC audio globals natively):
   AUDIO_MODULATION_V1:
@@ -105,16 +106,21 @@ export function beforeRender(delta) {
   if (dirSign >= 0.0 && dirSign < 0.06) dirSign = 0.06;
   else if (dirSign < 0.0 && dirSign > -0.06) dirSign = -0.06;
 
-  // Autonomous reversal: smooth rate sway easing through zero (no hard flip).
+  // Autonomous tidal ebb/flow: a smooth rate sway that eases the tide between a
+  // slow creep and a faster surge on a slow incommensurate clock. The envelope
+  // keeps a positive floor (0.10..1.00) so the sweep NEVER freezes mid-stroke —
+  // an earlier (0.4 + 0.6*cos) envelope reached zero at cos=-0.667 and stalled
+  // the whole rig for ~1s on every cycle, which the discontinuity detector
+  // flagged. Direction still sets the sweep sense; the og identity is a
+  // continuous, never-stalling tidal sweep.
   autoClock = autoClock + dt * 0.049 * localMultiplier;
   if (autoClock >= PHASE_WRAP) autoClock = autoClock - PHASE_WRAP;
   // A baseline sweep magnitude (sign from direction) keeps the tide visibly
-  // sweeping even at the guarded-center default; direction still steers the bias
-  // and the autonomous clock still eases it through reversals.
+  // sweeping even at the guarded-center default; direction still steers the bias.
   var dirBias = dirSign;
   var dirMag = (dirBias < 0.0) ? -1.0 : 1.0;
   var sweepRate = dirBias + dirMag * 0.7;   // never near-zero at center
-  var rate = (0.4 + 0.6 * cos(autoClock)) * sweepRate * localMultiplier;
+  var rate = (0.55 + 0.45 * cos(autoClock)) * sweepRate * localMultiplier;
 
   // Two phases at an irrational ratio (1 : 0.58) so the look never re-locks.
   tide = tide + dt * 0.50 * rate;          if (tide >= PHASE_WRAP) tide -= PHASE_WRAP; else if (tide <= -PHASE_WRAP) tide += PHASE_WRAP;
