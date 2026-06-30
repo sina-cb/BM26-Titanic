@@ -205,6 +205,14 @@
       <div class="mic-title">MIC TUNE <span class="mic-sub">quiet the noise, keep the music — for the loud/dusty/windy playa</span></div>
       <div class="mic-link" id="mic-link">engine sync: <span id="mic-link-state" class="mic-link-state">—</span></div>
     </div>
+    <!-- Workflow strip (report 20260621_7): the order that holds on playa —
+         gain for the LOUD state first, noise floor at the QUIET state second,
+         highs nudged when a loud source is near. -->
+    <div class="mic-flow">
+      <span class="mic-flow-step"><b>①</b> Set <b>gain</b> for when an art car / loud source is near (so LOW·MID·HIGH look good, no clipping).</span>
+      <span class="mic-flow-step"><b>②</b> At your <b>quiet baseline</b> (no loud source — needn't be silent) tap <b>Calibrate noise floor</b>: LOW·MID get gated cleanly.</span>
+      <span class="mic-flow-step"><b>③</b> When a loud source returns, nudge the <b>HIGH</b> gate down — highs don't carry over distance, so they need this last touch.</span>
+    </div>
 
     <!-- AUTO hero: the two one-tap calibrations. Noise floor first (the new,
          playa-critical one), then gain. -->
@@ -213,7 +221,7 @@
         <div class="mac-step">①</div>
         <div class="mac-body">
           <div class="mac-title">Calibrate noise floor</div>
-          <div class="mac-hint">Turn the music <b>OFF</b> first. Listens to the ambient room (wind, hiss, neighbor bleed) for ~4&nbsp;s, then sets each band's gate so silence goes dark but the music still shows.</div>
+          <div class="mac-hint">Run this at your <b>quiet baseline</b> — whatever's normal when no loud source (art car) is nearby. It does <b>not</b> need to be silent. Listens for ~4&nbsp;s and sets each band's gate to reject that ambient, so quiet moments stay calm while louder music clears the gate. Set the <b>gain</b> first (→) so the gate matches the level you'll run.</div>
           <div class="mac-actions">
             <button id="noisecal-btn" class="primary big">▶ Calibrate noise floor</button>
             <span id="noisecal-status" class="mac-status"></span>
@@ -228,7 +236,7 @@
         <div class="mac-step">②</div>
         <div class="mac-body">
           <div class="mac-title">Calibrate gain</div>
-          <div class="mac-hint">Play the music at a <b>typical loud</b> level. Measures the peak and recommends an input gain so the signal sits healthy (not too quiet, not clipping).</div>
+          <div class="mac-hint">Do this when a loud source (art car) is near, at a <b>typical loud</b> level. Recommends an input gain so loud music sits healthy (not clipping). Set this <b>before</b> the noise floor — gain and the gates are linked, so changing gain a lot afterward means re-calibrating the floor.</div>
           <div class="mac-actions">
             <button id="gaincal-btn" class="primary big">▶ Calibrate gain</button>
             <span id="gaincal-status" class="mac-status"></span>

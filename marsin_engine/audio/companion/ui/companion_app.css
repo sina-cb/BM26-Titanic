@@ -523,3 +523,9 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .orc-preset:hover{border-color:var(--accent);color:var(--accent)}
 .orc-preset.active{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .orc-hint{color:var(--muted);font-size:10.5px;flex:1 1 100%}
+
+/* MIC TUNE workflow strip (report 20260621_7) — the on-playa tuning order. */
+.mic-flow{display:flex;flex-wrap:wrap;gap:10px}
+.mic-flow-step{flex:1 1 240px;background:var(--panel2);border:1px solid var(--border);border-radius:9px;
+  padding:9px 12px;font-size:11px;line-height:1.5;color:var(--muted)}
+.mic-flow-step b{color:var(--accent)}
