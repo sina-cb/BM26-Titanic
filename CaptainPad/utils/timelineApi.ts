@@ -237,11 +237,25 @@ export interface ActionTransition {
   enabled?: boolean;
 }
 
+// Color-autopilot block on a playlist (deck) action. Cycles the color
+// palette over time, distinct from the pattern `autopilot` above. The
+// engine's validator is strict: when present it requires active + a
+// non-empty `palettes` list + delay_s>0 (+ optional shuffle). Shape matches
+// the engine contract EXACTLY (deck target only).
+export interface ActionColorAutopilot {
+  active: boolean;
+  palettes: string[];
+  delay_s: number;
+  shuffle?: boolean;
+}
+
 export interface ActionPlaylist {
   type: 'playlist';
   name: string;
   target?: PlanTarget;
   autopilot?: PlanAutopilotInline;
+  // Color-autopilot override (deck target only). Absent = no color cycling.
+  colorAutopilot?: ActionColorAutopilot;
   // Deck transition override (deck target only). Absent = inherit the deck's
   // standing transition config.
   transition?: ActionTransition;

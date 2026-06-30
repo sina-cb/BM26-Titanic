@@ -19,6 +19,7 @@ function makeDeps() {
     fireScheduledTask: [],
     setDeckTransition: [],
     setDeckOverlaysEnabled: [],
+    setColorAutopilot: [],
     forceDeckView: [],
   };
   // The real engine deps branch on target.kind ('deck' | 'mixer'); a target
@@ -47,6 +48,7 @@ function makeDeps() {
     listPlaylists: () => [{ name: 'default' }],
     setDeckTransition: (patch) => { calls.setDeckTransition.push(patch); },
     setDeckOverlaysEnabled: (enabled) => { calls.setDeckOverlaysEnabled.push(enabled); },
+    setColorAutopilot: (wire) => { calls.setColorAutopilot.push(wire); },
     forceDeckView: () => { calls.forceDeckView.push(true); viewState.mode = 'deck'; },
     getViewOverrideMode: () => viewState.mode,
   };
@@ -840,5 +842,117 @@ test('§16.9 forceDeckView fails loud when the dep is missing', async () => {
   assert.ok(
     st.lastError && /forceDeckView dep is required/.test(st.lastError),
     `expected a loud forceDeckView dep error, got ${JSON.stringify(st.lastError)}`,
+  );
+});
+
+// ── docs/39 color autopilot on a deck playlist cue ────────────────────────────
+
+test('docs/39 schema: deck playlist cue round-trips colorAutopilot', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    colorAutopilot: { active: true, palettes: ['aurora', 'bass_drop'], delay_s: 2, shuffle: false },
+  });
+  const norm = validateShowPlan(plan);
+  assert.deepEqual(norm.cues[0].action.colorAutopilot, {
+    active: true, palettes: ['aurora', 'bass_drop'], delay_s: 2, shuffle: false,
+  });
+});
+
+test('docs/39 schema: colorAutopilot shuffle defaults to false', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    colorAutopilot: { active: true, palettes: ['aurora'], delay_s: 5 },
+  });
+  const norm = validateShowPlan(plan);
+  assert.equal(norm.cues[0].action.colorAutopilot.shuffle, false);
+});
+
+test('docs/39 schema: colorAutopilot rejects delay_s <= 0', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    colorAutopilot: { active: true, palettes: ['aurora'], delay_s: 0 },
+  });
+  assert.throws(() => validateShowPlan(plan), /colorAutopilot\.delay_s must be a number > 0/);
+});
+
+test('docs/39 schema: colorAutopilot rejects an empty palettes array', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    colorAutopilot: { active: true, palettes: [], delay_s: 3 },
+  });
+  assert.throws(() => validateShowPlan(plan), /palettes must be a non-empty array/);
+});
+
+test('docs/39 schema: colorAutopilot on a non-deck target throws', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'mixer', id: 'ch_a' },
+    colorAutopilot: { active: true, palettes: ['aurora'], delay_s: 3 },
+  });
+  assert.throws(() => validateShowPlan(plan), /colorAutopilot is only valid for a deck target/);
+});
+
+test('docs/39 schema: colorAutopilot rejects a non-boolean active', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    colorAutopilot: { active: 'yes', palettes: ['aurora'], delay_s: 3 },
+  });
+  assert.throws(() => validateShowPlan(plan), /colorAutopilot\.active must be a boolean/);
+});
+
+test('docs/39 apply: deck cue with colorAutopilot calls setColorAutopilot via deps', async () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    colorAutopilot: { active: true, palettes: ['aurora', 'bass_drop'], delay_s: 2, shuffle: true },
+  });
+  const { svc, calls, setMood } = setupWithPlan(plan);
+  await svc.start();
+  calls.setColorAutopilot.length = 0;
+
+  setMood({ party: 0, value: 0 });
+  await svc._tick();
+  setMood({ party: 1, value: 1 });
+  await svc._tick();
+  svc.stop();
+
+  assert.equal(calls.setColorAutopilot.length, 1, 'setColorAutopilot called once for the deck cue');
+  assert.deepEqual(calls.setColorAutopilot[0], {
+    active: true, palettes: ['aurora', 'bass_drop'], delay_s: 2, shuffle: true,
+  });
+});
+
+test('docs/39 apply: absent colorAutopilot leaves the daemon untouched', async () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+  });
+  const { svc, calls, setMood } = setupWithPlan(plan);
+  await svc.start();
+  calls.setColorAutopilot.length = 0;
+
+  setMood({ party: 0, value: 0 });
+  await svc._tick();
+  setMood({ party: 1, value: 1 });
+  await svc._tick();
+  svc.stop();
+
+  assert.equal(calls.setColorAutopilot.length, 0, 'no colorAutopilot field → setColorAutopilot untouched');
+});
+
+test('docs/39 apply: colorAutopilot fails loud when the dep is missing', async () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    colorAutopilot: { active: true, palettes: ['aurora'], delay_s: 2 },
+  });
+  const { svc, deps, setMood } = setupWithPlan(plan);
+  await svc.start();
+  delete deps.setColorAutopilot;
+  setMood({ party: 0, value: 0 });
+  await svc._tick();
+  setMood({ party: 1, value: 1 });
+  await svc._tick();
+  svc.stop();
+  const st = svc.getState();
+  assert.ok(
+    st.lastError && /setColorAutopilot dep is required/.test(st.lastError),
+    `expected a loud setColorAutopilot dep error, got ${JSON.stringify(st.lastError)}`,
   );
 });

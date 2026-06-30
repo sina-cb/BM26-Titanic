@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { Autopilot } from './autopilot.js';
+import { ColorAutopilot } from './color_autopilot.js';
 import { StateManager, serializeChannel as serializeChannelForState } from './state_manager.js';
 import { SnapshotManager, SnapshotLoadError } from './snapshot_manager.js';
 import { ParamPresetManager, ParamPresetError } from './param_preset_manager.js';
@@ -3003,9 +3004,43 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // fader is impossible — we have no record — so we leave the engine
   // wherever its persisted mixerState put it and let the operator
   // release explicitly.
+  // Boot hydration: a persisted deck-pin can come from a real PortWatch device
+  // ('portwatch') or — defensively — a stale plan pin ('plan'). EITHER restores
+  // the deck output pin so the rig keeps the view it had before the restart.
   let viewOverrideMode =
-    (globalsState && globalsState.controlLock === 'portwatch') ? 'deck' : null;
+    (globalsState && (globalsState.controlLock === 'portwatch' || globalsState.controlLock === 'plan'))
+      ? 'deck' : null;
   let savedTargetViewFader = null;       // float pre-override
+
+  // ── controlLock SOURCE — who owns the deck-pin ───────────────────────
+  //
+  // `viewOverrideMode` is the raw output pin ('deck' | null). The
+  // `controlLock` value broadcast to every UI carries WHO forced that pin:
+  //
+  //   'portwatch' — a real PortWatch device holds the rig (HARD lockout:
+  //                 CaptainPad shows "PORTWATCH HAS THE RIG"). Lease-governed.
+  //   'plan'      — the TIMELINE (show plan) forced the deck (SOFT lock:
+  //                 CaptainPad shows a low-key yellow warning, still allows
+  //                 navigation, disables only pattern-select + mixer-activate).
+  //                 NOT lease-governed — the plan releases the pin itself via
+  //                 the timeline, never the PortWatch lease timer.
+  //   null        — nobody owns it.
+  //
+  // We only persist/restore 'portwatch' across a restart (boot hydration
+  // above): a 'plan' pin is re-established by the timeline on start, so
+  // persisting it would strand an orphan lock if the timeline is disabled.
+  // The source is null until something sets it; if we restored a portwatch
+  // deck-pin from disk, seed the source to match.
+  let controlLockSource =
+    (globalsState && globalsState.controlLock === 'portwatch') ? 'portwatch' : null;
+
+  // The single source of truth for the broadcast `controlLock` field. A deck
+  // pin with no recorded source is treated as a PortWatch lock (back-compat:
+  // PortWatch is the only writer of the raw deck-pin besides the plan).
+  function currentControlLock() {
+    if (viewOverrideMode !== 'deck') return null;
+    return controlLockSource || 'portwatch';
+  }
 
   // ── controlLock lease ───────────────────────────────────────────────
   //
@@ -3038,6 +3073,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     viewOverrideMode = null;
     savedTargetViewFader = null;
+    controlLockSource = null;
   }
 
   function disarmControlLockLease() {
@@ -3172,14 +3208,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // namespace it ("controlLock") rather than reusing "viewOverride"
       // so listeners can tell at a glance whether they're looking at
       // raw view-fader state or "who owns the rig right now".
-      controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
+      // 'portwatch' = hard device lock, 'plan' = soft timeline lock, null = free.
+      controlLock: currentControlLock(),
       // Lease metadata — every UI can render a countdown without
       // needing to subscribe to a separate event. expiresAt is an
       // absolute UNIX ms timestamp so clients with skewed clocks
       // can still compute "remaining = max(0, expiresAt - now)" off
-      // a synchronised time source if they care.
-      controlLockLeaseExpiresAtMs: controlLockLeaseExpiresAtMs,
-      controlLockLeaseDurationMs: viewOverrideMode === 'deck'
+      // a synchronised time source if they care. Only a PortWatch lock
+      // is lease-governed; a 'plan' lock carries no lease (the timeline
+      // owns its release), so these are null for it.
+      controlLockLeaseExpiresAtMs: controlLockSource === 'portwatch' ? controlLockLeaseExpiresAtMs : null,
+      controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
         ? CONTROL_LOCK_LEASE_MS
         : null,
       currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
@@ -3194,7 +3233,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // boot to seed the initial value. Idempotent + cheap (saveGlobalsState
   // batches via the same hook the rest of the globals use).
   function syncControlLockToGlobals() {
-    const next = viewOverrideMode === 'deck' ? 'portwatch' : null;
+    const next = currentControlLock();
     if ((globalsState.controlLock || null) !== next) {
       globalsState.controlLock = next;
       try {
@@ -3214,8 +3253,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // fresh lease so the lock doesn't outlive the engine restart by
   // more than CONTROL_LOCK_LEASE_MS. Without this, a crash while
   // someone held the lock would silently strand CaptainPad after
-  // boot until an operator manually cleared the override.
-  if (viewOverrideMode === 'deck') {
+  // boot until an operator manually cleared the override. A 'plan'
+  // pin is NOT lease-governed — the timeline re-pins + releases it
+  // itself — so we never arm the PortWatch lease for it.
+  if (viewOverrideMode === 'deck' && controlLockSource === 'portwatch') {
     armControlLockLease();
   }
 
@@ -3283,6 +3324,65 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
     }
   );
+
+  // ── COLOR autopilot (palette cycling, docs/39) ──────────────────────
+  // Resolve a colorPalette id → CPC params and WRITE it (the SAME path looks /
+  // timeline cues use: hue-only c1/c2 → colorPalette1/2 {h,s,v}). Throws loud on
+  // an unknown id (codex P0 — no silent skip). Shared by the engine ColorAutopilot
+  // daemon AND the timeline's setColorAutopilot dep, so a cue and a manual deck
+  // write resolve palettes identically.
+  function resolveColorPaletteParams(id) {
+    const palettes = Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [];
+    const entry = palettes.find((p) => p && p.id === id);
+    if (!entry) throw new Error(`palette "${id}" not found in colorPalettes config`);
+    return {
+      colorPalette1: { h: entry.c1, s: 1, v: 1 },
+      colorPalette2: { h: entry.c2, s: 1, v: 1 },
+    };
+  }
+  function knownPaletteIds() {
+    const palettes = Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [];
+    return new Set(palettes.map((p) => p && p.id).filter(Boolean));
+  }
+  function applyColorPalette(id) {
+    if (!paramCenter) throw new Error('paramCenter not available for color autopilot');
+    const params = resolveColorPaletteParams(id);
+    for (const k in params) paramCenter.set(k, params[k], 'colorAutopilot');
+    // Surface the change the same way an operator palette write would: persist +
+    // broadcast so every UI mirrors the live palette without polling.
+    saveAllState();
+    broadcastColorAutopilot();
+  }
+
+  // The palette-cycling daemon. Independent timer from the pattern `autopilot`
+  // (they run in parallel; color cycling never changes the pattern). Persists its
+  // {active,palettes,delay_s,shuffle} block into config.yaml under colorAutopilot.
+  const colorAutopilot = new ColorAutopilot(applyColorPalette);
+
+  // Single payload shape for every colorAutopilot writer (REST, timeline cue),
+  // mirroring broadcastAutopilot. CaptainPad's deck tab wires
+  // `if (msg.type === 'colorAutopilot') …`.
+  function colorAutopilotState() {
+    const st = colorAutopilot.state;
+    return {
+      active: !!st.active,
+      palettes: Array.isArray(st.palettes) ? [...st.palettes] : [],
+      delay_s: typeof st.delay_s === 'number' ? st.delay_s : 30,
+      shuffle: !!st.shuffle,
+    };
+  }
+  function broadcastColorAutopilot() {
+    broadcastWs({ type: 'colorAutopilot', ...colorAutopilotState() });
+  }
+  // Configure + (re)start the color autopilot from a validated wire object. Used
+  // by the REST route AND the timeline's setColorAutopilot dep. active:true →
+  // start cycling that set; active:false → stop (the daemon pauses on inactive).
+  function setColorAutopilot(wire) {
+    const validated = ColorAutopilot.validate(wire, knownPaletteIds());
+    colorAutopilot.setState(validated);
+    broadcastColorAutopilot();
+    return colorAutopilotState();
+  }
 
   // ── Timeline service (docs/38 §15) ──────────────────────────────────
   // The Timeline (show director) runs IN the engine now — no separate
@@ -3428,13 +3528,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // own operator-takeover lease governs release. Idempotent: a no-op when
   // already pinned to deck.
   function timelineForceDeckView() {
-    if (viewOverrideMode === 'deck') return;
+    // The plan owns the deck-pin as a SOFT lock ('plan'), distinct from a real
+    // PortWatch device lock ('portwatch'). If already pinned to deck, only the
+    // SOURCE may need upgrading to 'plan' (e.g. boot restored a bare deck pin) —
+    // but never DOWNGRADE a real PortWatch lock that's currently held.
+    if (viewOverrideMode === 'deck') {
+      if (controlLockSource !== 'portwatch' && controlLockSource !== 'plan') {
+        controlLockSource = 'plan';
+        syncControlLockToGlobals();
+        broadcastViewOverride();
+      }
+      return;
+    }
     savedTargetViewFader = mixer.targetViewFader;
     mixer.targetViewFader = 0.0;
     viewOverrideMode = 'deck';
+    // SOFT lock: source 'plan'. We do NOT arm the PortWatch lease here — the
+    // plan releases the pin itself via the timeline (resume/handback).
+    controlLockSource = 'plan';
     syncControlLockToGlobals();
     broadcastViewOverride();
-    console.log('[viewOverride] pinned to deck by timeline (plan owns the deck)');
+    console.log('[viewOverride] pinned to deck by timeline (plan soft-lock)');
   }
 
   const timelineConfigBlock = (engineCore.engineConfig && engineCore.engineConfig.timeline) || {};
@@ -3502,6 +3616,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // internal engine functions (no HTTP self-calls), same style as above.
         setDeckTransition: (patch) => timelineSetDeckTransition(patch),
         setDeckOverlaysEnabled: (enabled) => timelineSetDeckOverlaysEnabled(enabled),
+        // Color autopilot (docs/39): a deck playlist cue's colorAutopilot block
+        // configures + (re)starts / stops the engine palette-cycling daemon.
+        // Bound to the real internal fn (no HTTP self-call).
+        setColorAutopilot: (wire) => setColorAutopilot(wire),
         forceDeckView: () => timelineForceDeckView(),
         // Read-only view of the engine's current view-override pin so getState()
         // can surface `forcingDeckView` (plan active AND output pinned to deck).
@@ -4480,7 +4598,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // have shown.
       const live = {
         ...globalsState,
-        controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
+        controlLock: currentControlLock(),
       };
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(live));
@@ -4532,6 +4650,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // every transition so the existing `engineEvents` bus on the iPad
         // can mirror state without polling.
         broadcastAutopilot();
+      });
+    } else if (req.method === 'GET' && req.url === '/deck/color-autopilot') {
+      // Read the current palette-cycling config (docs/39). Independent of the
+      // pattern /autopilot — they run in parallel.
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(colorAutopilotState()));
+    } else if (req.method === 'POST' && req.url === '/deck/color-autopilot') {
+      // Set the palette-cycling config. Validates STRICTLY (codex P0): palettes
+      // a non-empty array of KNOWN ids, delay_s number>0, active+shuffle booleans.
+      // A bad shape → 400 with a loud message (never coerce / silently skip).
+      readBody(data => {
+        try {
+          const out = setColorAutopilot(data);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(out));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e && e.message ? e.message : String(e) }));
+        }
       });
     }
     // ---- MODEL METADATA ----
@@ -5890,6 +6027,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             mixer.targetViewFader = 0.0;
             viewOverrideMode = 'deck';
           }
+          // This is the REAL PortWatch-device deck-pin path (HARD lock). Mark the
+          // source 'portwatch' — even if the plan had soft-pinned the deck, an
+          // actual device take-over upgrades it to the hard lock.
+          controlLockSource = 'portwatch';
           // (Re)arm the lease on every successful deck-pin POST. This
           // is the renew path: clients holding the lock POST again
           // every ~20s to refresh the 30s lease. Doing it for the
@@ -5920,9 +6061,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({
           status: 'ok',
           override: viewOverrideMode,
-          controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
-          controlLockLeaseExpiresAtMs: controlLockLeaseExpiresAtMs,
-          controlLockLeaseDurationMs: viewOverrideMode === 'deck'
+          controlLock: currentControlLock(),
+          controlLockLeaseExpiresAtMs: controlLockSource === 'portwatch' ? controlLockLeaseExpiresAtMs : null,
+          controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
             ? CONTROL_LOCK_LEASE_MS
             : null,
           currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
@@ -5933,10 +6074,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         override: viewOverrideMode,
-        controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
-        controlLockLeaseExpiresAtMs: controlLockLeaseExpiresAtMs,
-        controlLockLeaseRemainingMs: controlLockLeaseRemainingMs(),
-        controlLockLeaseDurationMs: viewOverrideMode === 'deck'
+        controlLock: currentControlLock(),
+        controlLockLeaseExpiresAtMs: controlLockSource === 'portwatch' ? controlLockLeaseExpiresAtMs : null,
+        controlLockLeaseRemainingMs: controlLockSource === 'portwatch' ? controlLockLeaseRemainingMs() : 0,
+        controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
           ? CONTROL_LOCK_LEASE_MS
           : null,
         currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
@@ -7514,6 +7655,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // restored playlist.autopilot, so any overlay whose autopilot.active === true
   // resumes cycling on boot without an explicit per-channel arm.
   autopilot.start();
+  // Start the COLOR autopilot daemon. Its {active,palettes,delay_s,shuffle} live
+  // in config.yaml (colorAutopilot.state); pauses cleanly when inactive.
+  colorAutopilot.start();
 
   // ── Per-topic replay-on-connect ──────────────────────────────────────
   // Each socket only replays the cached payloads it owns. A fresh
@@ -7544,6 +7688,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } catch (e) {
       // never let a snapshot send break a fresh WS handshake
     }
+    // COLOR autopilot replay (docs/39): a late-joining CaptainPad deck tab sees
+    // the current palette-cycling config immediately.
+    try {
+      ws.send(JSON.stringify({ type: 'colorAutopilot', ...colorAutopilotState() }));
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
     // UNDO state replay (round-2 #10): a late-joining CaptainPad sees the
     // current undo depth/top immediately, so its UNDO button paints enabled/
     // labeled without waiting for the next push.
@@ -7560,9 +7711,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       ws.send(JSON.stringify({
         type: 'viewOverride',
         override: viewOverrideMode,
-        controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
-        controlLockLeaseExpiresAtMs: controlLockLeaseExpiresAtMs,
-        controlLockLeaseDurationMs: viewOverrideMode === 'deck'
+        controlLock: currentControlLock(),
+        controlLockLeaseExpiresAtMs: controlLockSource === 'portwatch' ? controlLockLeaseExpiresAtMs : null,
+        controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
           ? CONTROL_LOCK_LEASE_MS
           : null,
         currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',

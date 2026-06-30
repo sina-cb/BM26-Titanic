@@ -70,6 +70,12 @@ const TOPIC_BY_TYPE = Object.freeze({
   // Operator-driven, low volume — rides /ws/control next to the deck's
   // `autopilot` event.
   mixerAutopilot:              TOPICS.CONTROL,
+  // docs/39: COLOR autopilot (palette cycling). Broadcast on every
+  // POST /deck/color-autopilot + each timer-driven palette apply + timeline
+  // cue, so CaptainPad's deck tab mirrors the palette-cycle config live.
+  // Operator-driven, low volume → /ws/control next to the deck `autopilot`
+  // event it parallels. Replayed on /ws/control connect.
+  colorAutopilot:              TOPICS.CONTROL,
   viewOverride:                TOPICS.CONTROL,
   deckTransitionConfig:        TOPICS.CONTROL,
   deckSwapStarted:             TOPICS.CONTROL,
