@@ -112,15 +112,22 @@ export const CURATED_OUTPUTS = Object.freeze({
  * Throws when slug(name) is empty (Codex P0: fail loud, never substitute a
  * silent fallback key). Callers that want a soft check use slug() directly.
  */
-export function resolveOscOut(name) {
+export function resolveOscOut(name, addressOverride) {
   if (CURATED_OUTPUTS[name]) {
+    // Curated built-ins keep their canonical engine-bound address — an override
+    // is IGNORED (renaming a curated path would orphan the mission-critical
+    // audio→light binding; the UI marks these rows read-only).
     return { name, cpcKey: name, address: CURATED_OUTPUTS[name] };
   }
   const cpcKey = slug(name);
   if (!cpcKey) {
     throw new Error(`osc_out name "${name}" has no usable letters/digits (slug is empty)`);
   }
-  return { name, cpcKey, address: `/marsin/audio/${cpcKey}` };
+  // DYNAMIC output: the operator may rename ONLY the wire path. cpcKey stays
+  // derived from `name`; a non-empty override replaces the derived address.
+  const override = (typeof addressOverride === 'string') ? addressOverride.trim() : '';
+  const address = override !== '' ? override : `/marsin/audio/${cpcKey}`;
+  return { name, cpcKey, address };
 }
 
 /**
@@ -401,9 +408,19 @@ export function validateCompanionConfig(cfg) {
       && (!Number.isInteger(cfg.osc.rateHz) || cfg.osc.rateHz < 1 || cfg.osc.rateHz > 120)) {
     throw new Error(`companion config.osc.rateHz must be an integer in [1, 120], got ${cfg.osc.rateHz}`);
   }
+  // OSC send DISABLE list (per-signal "don't send" toggles, OSC OUT page).
+  // OPTIONAL — absent ⇒ []. When present it must be an array of absolute OSC
+  // address strings (the wire identity sendOsc gates on). (Codex P0: a
+  // present-but-malformed value throws, no silent drop.)
+  if (cfg.osc.disabled !== undefined
+      && (!Array.isArray(cfg.osc.disabled)
+          || cfg.osc.disabled.some(a => typeof a !== 'string' || !a.startsWith('/')))) {
+    throw new Error('companion config.osc.disabled must be an array of absolute OSC address strings');
+  }
   if (!Array.isArray(cfg.signals)) throw new Error('companion config.signals must be an array');
   const seen = new Set();
   const seenCpcKeys = new Map();   // cpcKey → signal id (output uniqueness)
+  const seenAddrs = new Map();     // OSC address → signal id (wire uniqueness)
   const signals = [];
   const signalsById = new Map();
   for (const sig of cfg.signals) {
@@ -412,12 +429,21 @@ export function validateCompanionConfig(cfg) {
     if (seen.has(v.normalized.id)) throw new Error(`companion config: duplicate signal id "${v.normalized.id}"`);
     // Codex P0 — two OUTPUT signals must not resolve to the same cpcKey (it
     // would shadow/clobber each other at the engine). Fail loud, never mangle.
+    const tap = oscOutTapOf(v.normalized);
     const cpcKey = outputCpcKeyOf(v.normalized);
     if (cpcKey !== null) {
       if (seenCpcKeys.has(cpcKey)) {
         throw new Error(`companion config: signals "${seenCpcKeys.get(cpcKey)}" and "${v.normalized.id}" both resolve to cpcKey "${cpcKey}" (name collision)`);
       }
       seenCpcKeys.set(cpcKey, v.normalized.id);
+      // Two outputs must not target the SAME wire address either — an address
+      // override can now collide with another signal's derived/overridden path,
+      // which would silently clobber it on the bus. Fail loud (Codex P0).
+      const address = resolveOscOut(tap.params.name, tap.params.address).address;
+      if (seenAddrs.has(address)) {
+        throw new Error(`companion config: signals "${seenAddrs.get(address)}" and "${v.normalized.id}" both send to OSC address "${address}" (address collision)`);
+      }
+      seenAddrs.set(address, v.normalized.id);
     }
     seen.add(v.normalized.id);
     signalsById.set(v.normalized.id, v.normalized.type);
@@ -439,7 +465,11 @@ export function validateCompanionConfig(cfg) {
     }
   }
   return {
-    osc: { host: cfg.osc.host, port: cfg.osc.port, rateHz: cfg.osc.rateHz !== undefined ? cfg.osc.rateHz : 60 },
+    osc: {
+      host: cfg.osc.host, port: cfg.osc.port,
+      rateHz: cfg.osc.rateHz !== undefined ? cfg.osc.rateHz : 60,
+      disabled: cfg.osc.disabled !== undefined ? [...new Set(cfg.osc.disabled)] : [],
+    },
     signals, views,
   };
 }

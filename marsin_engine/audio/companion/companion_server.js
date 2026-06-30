@@ -150,6 +150,12 @@ const runners = new Map();            // signalId -> SignalPostProcessor
 // analyzer clock domain so a file-replay (faster than wall-clock) throttles by
 // AUDIO time, identically to live.
 let oscRateHz = (design.osc && Number.isInteger(design.osc.rateHz)) ? design.osc.rateHz : 60;
+// Per-signal OSC SEND DISABLE set (OSC OUT page checkboxes). Keyed by the wire
+// ADDRESS — the identity sendOsc gates on — so it applies uniformly to designed
+// signals, the BPM emit, and the derived emits. Seeded from design.osc.disabled
+// and persisted back into it (Export config writes it through). A disabled
+// address sends NOTHING; its reported rate decays to 0, which is honest.
+const oscDisabled = new Set(Array.isArray(design.osc.disabled) ? design.osc.disabled : []);
 // The analyzer emits ~SR/HOP hops/sec (~86). A naive "≥ interval elapsed" gate
 // would quantize the send rate to integer divisors of the hop rate (86, 43, 29…)
 // — set 60 and you'd actually get 43. Instead a PHASE ACCUMULATOR adds
@@ -220,14 +226,22 @@ function recordOscSend(address, value) {
   acc.lastValue = value;
 }
 
-function sendOsc(address, value) {
+function sendOsc(address, value, oscType) {
   // OSC OUTPUT RATE throttle: _oscEmitThisHop is computed once per analyzer hop
   // (see onAnalysis). When this hop isn't a send frame, drop the packet entirely
   // — the value is re-sent on the next frame, and the accounting only counts
   // packets that actually went on the wire. (report 20260621_6)
   if (!_oscEmitThisHop) return;
-  const v = Number.isFinite(value) ? value : 0;
-  const buf = osc.toBuffer({ address, args: [{ type: 'float', value: v }] });
+  // Per-signal SEND DISABLE (OSC OUT page checkbox): a disabled address is muted
+  // on the wire — no packet, no accounting tick (its rate decays to 0).
+  if (oscDisabled.has(address)) return;
+  // CATEGORICAL signals (genre / note / structure index) ship as an INTEGER-typed
+  // OSC arg, ROUNDED — a class index must never arrive as 2.4 nor be lerped
+  // between classes. Everything else is a continuous float. (See INTEGER_OSC_KEYS.)
+  const t = oscType === 'integer' ? 'integer' : 'float';
+  const raw = Number.isFinite(value) ? value : 0;
+  const v = t === 'integer' ? Math.round(raw) : raw;
+  const buf = osc.toBuffer({ address, args: [{ type: t, value: v }] });
   oscSock.send(buf, design.osc.port, design.osc.host, (err) => {
     if (err) console.warn(`[companion OSC] send ${address} failed: ${err.message}`);
   });
@@ -310,10 +324,16 @@ for (const e of DERIVED_OSC_EMITS) {
 // Emit every derived key at its canonical address each hop. Guarded (only finite
 // values; a key not yet registered in this build reads null → skipped, fail-safe)
 // and throttled by the same OSC OUTPUT RATE gate as every other send.
+// CATEGORICAL / INDEX derived keys — values that are a CLASS index, not a
+// continuous quantity. They must travel as ROUNDED INTEGER OSC args so a class
+// (e.g. audioGenre = 2 "techno") is never a fractional float on the wire and is
+// never interpolated between classes by a downstream consumer. (Operator: "the
+// genre is not sent correctly" — the fix is integer-typed, un-smoothed emit.)
+const INTEGER_OSC_KEYS = new Set(['audioGenre', 'audioNote', 'audioStructure']);
 function emitAllDerived() {
   for (const e of DERIVED_OSC_EMITS) {
     const v = safeGet(e.key);
-    if (Number.isFinite(v)) sendOsc(e.address, v);
+    if (Number.isFinite(v)) sendOsc(e.address, v, INTEGER_OSC_KEYS.has(e.key) ? 'integer' : 'float');
   }
 }
 
@@ -340,12 +360,21 @@ function buildOscAccounting() {
   const rows = [];
   const seen = new Set();
   const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-  const push = (address, label, cpcKey, kind) => {
+  const push = (address, label, cpcKey, kind, extra = {}) => {
     if (seen.has(address)) return;
     seen.add(address);
     const acc = oscAccounting.get(address);
     rows.push({
       address, label, cpcKey, kind,
+      // SEND toggle (OSC OUT page checkbox): false ⇒ muted on the wire.
+      enabled: !oscDisabled.has(address),
+      // RENAME eligibility: only DYNAMIC designed outputs (a signal whose cpcKey
+      // is NOT an engine built-in) may rename their path — the engine re-binds
+      // the new address via the manifest. Curated / derived / BPM emits bind at
+      // FIXED canonical addresses compiled into the engine, so their path is
+      // locked (read-only). `id` is the designed-signal id the rename targets.
+      id: extra.id ?? null,
+      editable: extra.editable === true,
       count: acc ? acc.count : 0,
       value: acc ? acc.lastValue : null,
       rateHz: acc ? +effectiveRateHz(acc, now).toFixed(2) : 0,
@@ -355,8 +384,11 @@ function buildOscAccounting() {
   for (const sig of design.signals) {
     const tap = oscOutOf(sig);   // terminal, enabled osc_out or null
     if (!tap) continue;
-    const { cpcKey, address } = resolveOscOut(tap.params.name);
-    push(address, tap.params.name, cpcKey, sig.type);
+    const { cpcKey, address } = resolveOscOut(tap.params.name, tap.params.address);
+    // Dynamic (non-built-in) cpcKey ⇒ the path is renameable (engine follows via
+    // manifest). A curated name resolves to a built-in cpcKey ⇒ locked.
+    const editable = !paramCenter.isRegisteredKey(cpcKey);
+    push(address, tap.params.name, cpcKey, sig.type, { id: sig.id, editable });
   }
   // Always-on built-in emits (BPM, plus anything a sibling registers).
   for (const b of builtinOscOutputs) push(b.address, b.label, b.cpcKey, b.kind);
@@ -422,8 +454,10 @@ function buildManifest() {
     // cpcKey + address are DERIVED from the operator-facing `name` (single-name
     // rehaul). A curated name keeps its canonical engine-bound key/address; any
     // other name slug-derives. The name is also the CaptainPad-visible label.
-    const { cpcKey, address } = resolveOscOut(tap.params.name);
+    const { cpcKey, address } = resolveOscOut(tap.params.name, tap.params.address);
     if (paramCenter.isRegisteredKey(cpcKey)) continue;   // built-in → engine already has it
+    // address carries the operator's rename (if any): the engine binds the NEW
+    // path → the SAME cpcKey, so CaptainPad + modulators follow the rename live.
     signals.push({ cpcKey, address, label: tap.params.name, type: sig.type });
   }
   return { signals };
@@ -858,8 +892,9 @@ function processDesignedSignals(r, dt) {
     }
     const tap = oscOutOf(sig);
     if (tap) {
-      // Each signal emits ONLY its own osc_out value to its derived address.
-      sendOsc(resolveOscOut(tap.params.name).address, post);
+      // Each signal emits ONLY its own osc_out value to its address (the operator
+      // rename, if any, else the derived /marsin/audio/<cpcKey>).
+      sendOsc(resolveOscOut(tap.params.name, tap.params.address).address, post);
     }
   }
   return out;
@@ -1246,6 +1281,46 @@ function setSignalChain(id, chain) {
   return { ok: true, signal: v.normalized };
 }
 
+// Rename ONLY the wire path of a designed output (OSC OUT page). The cpcKey is
+// untouched (it stays derived from the tap `name`); only the osc_out `address`
+// override changes. An empty address REVERTS to the derived /marsin/audio/<key>.
+// Refused for a CURATED/built-in output — those bind at a FIXED engine address
+// (renaming would orphan them). On success the manifest re-push tells the engine
+// to bind the NEW path → the SAME cpcKey, so the rename is picked up live.
+// Returns { ok, address, oldAddress } | { ok:false, error }.
+function setSignalOscAddress(id, address) {
+  const sig = design.signals.find(s => s.id === id);
+  if (!sig) return { ok: false, error: `unknown signal "${id}"` };
+  const tap = oscOutTap(sig);   // terminal osc_out (enabled or not)
+  if (!tap) return { ok: false, error: `signal "${id}" has no OSC output tap` };
+  const { cpcKey } = resolveOscOut(tap.params.name);
+  if (paramCenter.isRegisteredKey(cpcKey)) {
+    return { ok: false, error: `"${tap.params.name}" is a built-in audio output (cpcKey "${cpcKey}") bound to a fixed engine address — its path can't be renamed` };
+  }
+  const oldAddress = resolveOscOut(tap.params.name, tap.params.address).address;
+  const next = (typeof address === 'string') ? address.trim() : '';
+  const newTap = { ...tap, params: { ...tap.params } };
+  if (next === '') delete newTap.params.address;   // revert to derived
+  else newTap.params.address = next;
+  const candidate = { ...sig, chain: sig.chain.slice(0, -1).concat(newTap) };
+  const v = validateSignal(candidate);
+  if (!v.ok) return { ok: false, error: v.error };
+  const resolved = resolveOscOut(tap.params.name, newTap.params.address).address;
+  // Wire uniqueness vs every OTHER output (validateSignal only checks one signal).
+  for (const other of design.signals) {
+    if (other.id === id) continue;
+    const ot = oscOutTap(other);
+    if (!ot) continue;
+    if (resolveOscOut(ot.params.name, ot.params.address).address === resolved) {
+      return { ok: false, error: `OSC address "${resolved}" is already used by signal "${other.id}"` };
+    }
+  }
+  sig.chain = v.normalized.chain;
+  sig.output = v.normalized.output;
+  buildRunners();
+  return { ok: true, address: resolved, oldAddress };
+}
+
 // ── custom VIEWS (mix/share signals; viz types) ──────────────────────────────
 // A view = { id, label, type, signals:[signalId...] } — a VISUALIZER instance
 // that mixes a chosen subset of signals (contract §"Companion custom VIEWS").
@@ -1360,6 +1435,35 @@ function handleMessage(ws, raw) {
       broadcast({ type: 'oscRate', rateHz: oscRateHz });
       broadcast({ type: 'oscAccounting', ...buildOscAccounting() });
     }
+  }
+  // Per-signal OSC SEND toggle (OSC OUT page checkbox). enabled:false mutes the
+  // address on the wire; true re-enables it. Persisted into design.osc.disabled
+  // so Export config keeps it. Keyed by wire ADDRESS (covers designed + derived
+  // + BPM emits uniformly).
+  else if (m.type === 'setOscSend' && typeof m.address === 'string') {
+    if (m.enabled === false) oscDisabled.add(m.address);
+    else oscDisabled.delete(m.address);
+    design.osc.disabled = [...oscDisabled];   // Export config persists the choice
+    broadcast({ type: 'oscAccounting', ...buildOscAccounting() });
+  }
+  // Rename a designed output's OSC path (OSC OUT page). Only DYNAMIC outputs;
+  // the engine re-binds the new path → same cpcKey via the manifest re-push.
+  else if (m.type === 'setOscAddress' && typeof m.id === 'string') {
+    const res = setSignalOscAddress(m.id, m.address);
+    if (res.ok) {
+      // Carry any "muted" flag across the rename so the toggle isn't lost.
+      if (res.oldAddress !== res.address && oscDisabled.has(res.oldAddress)) {
+        oscDisabled.delete(res.oldAddress);
+        oscDisabled.add(res.address);
+        design.osc.disabled = [...oscDisabled];
+      }
+      pushManifest();   // engine binds the NEW address → same cpcKey
+      broadcast({ type: 'signals', signals: design.signals });
+      broadcast({ type: 'oscAccounting', ...buildOscAccounting() });
+    } else {
+      ws.send(JSON.stringify({ type: 'flash', text: `rename: ${res.error}`, error: true }));
+    }
+    ws.send(JSON.stringify({ type: 'oscAddressResult', id: m.id, ...res }));
   }
   else if (m.type === 'applyNoiseGates' && m.gates && typeof m.gates === 'object') {
     // Apply a full recommended/preset gate bundle in one shot (the automatic

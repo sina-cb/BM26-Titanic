@@ -5801,6 +5801,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               error: `cpcKey "${sig.cpcKey}" is a built-in CPC key — cannot be redefined by the manifest`,
             }));
           }
+          // A RENAME re-pushes the same cpcKey at a NEW address. Capture the
+          // key's prior address first so we can drop its stale binding below —
+          // otherwise the old path would keep a dormant binding to this key.
+          const priorEntry = paramCenter.getSchema().find(e => e.key === sig.cpcKey);
+          const priorAddr = priorEntry && priorEntry.oscAddress;
           let result;
           try {
             result = paramCenter.registerDynamicLiveParam({
@@ -5817,6 +5822,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           if (listener) {
             try {
               listener.addDynamicBinding(sig.address, sig.cpcKey);
+              // Rename: the address moved → remove the now-dormant old binding so
+              // the key has exactly one wire path (the engine follows the rename).
+              if (priorAddr && priorAddr !== sig.address) {
+                listener.removeDynamicBinding(priorAddr);
+              }
             } catch (err) {
               res.writeHead(400, { 'Content-Type': 'application/json' });
               return res.end(JSON.stringify({ error: err.message }));

@@ -1192,14 +1192,27 @@ function renderOscPage() {
   if (empty) empty.style.display = acc.outputs.length ? 'none' : 'block';
   // Max rate for the inline rate bar scaling.
   const maxRate = Math.max(1, ...acc.outputs.map(o => o.rateHz || 0));
+  // Don't rebuild the table while the operator is mid-edit in an address field —
+  // a re-render (the accounting broadcasts ~1×/s) would steal focus and discard
+  // the half-typed path. Stats above still refresh; rows refresh after blur.
+  if (document.activeElement && tbody.contains(document.activeElement)) return;
   tbody.innerHTML = '';
   for (const o of acc.outputs) {
     const tr = document.createElement('tr');
+    if (!o.enabled) tr.className = 'osc-off';
     const valTxt = (o.value == null) ? '—'
       : (Math.abs(o.value) >= 100 ? o.value.toFixed(0) : o.value.toFixed(3));
     const barW = ((o.rateHz || 0) / maxRate * 100).toFixed(0);
-    tr.innerHTML = `<td class="osc-sig">${o.label || o.address}</td>`
-      + `<td class="osc-addr">${o.address}</td>`
+    // DYNAMIC outputs (operator-added) can rename their path — editable input;
+    // the engine re-binds the new path to the same CPC key via the manifest.
+    // Built-in / curated / derived paths are bound to FIXED engine addresses, so
+    // they render as locked plain text.
+    const addrCell = o.editable
+      ? `<input class="osc-addr-edit" data-id="${attr(o.id)}" data-addr="${attr(o.address)}" value="${attr(o.address)}" spellcheck="false" title="rename this OSC path — the engine re-binds it to the same CPC key">`
+      : `${o.address}<span class="osc-addr-lock" title="built-in path — bound to a fixed engine address, not renameable">🔒</span>`;
+    tr.innerHTML = `<td class="osc-on"><input type="checkbox" class="osc-send-cb" data-addr="${attr(o.address)}"${o.enabled ? ' checked' : ''} title="send this signal over OSC"></td>`
+      + `<td class="osc-sig">${o.label || o.address}</td>`
+      + `<td class="osc-addr">${addrCell}</td>`
       + `<td class="osc-key">${o.cpcKey || '—'}</td>`
       + `<td class="osc-kind">${o.kind || ''}</td>`
       + `<td class="num osc-val">${valTxt}</td>`
@@ -1207,28 +1220,35 @@ function renderOscPage() {
       + `<td class="num">${(o.count || 0).toLocaleString()}</td>`;
     tbody.appendChild(tr);
   }
-  // ── ENGINE-INTERNAL DERIVED (report 20260620_26) ──────────────────────────
-  // The signals the engine computes in-process and does NOT route over OSC.
-  // Informational chips so the operator sees the engine has its own audio brain.
-  const grid = $('osc-internal-grid'), note = $('osc-internal-note'), wrap = $('osc-internal');
-  const eid = acc.engineInternalDerived;
-  if (grid && wrap) {
-    if (eid && Array.isArray(eid.signals) && eid.signals.length) {
-      if (note && eid.note) note.textContent = eid.note;
-      grid.innerHTML = '';
-      for (const s of eid.signals) {
-        const chip = document.createElement('div');
-        chip.className = 'osc-internal-chip';
-        chip.innerHTML = `<span class="osc-internal-key">${s.cpcKey}</span>`
-          + `<span class="osc-internal-lab">${s.label || ''}</span>`;
-        grid.appendChild(chip);
-      }
-      wrap.style.display = '';
-    } else {
-      // Older server without the field — hide the panel rather than show empty.
-      wrap.style.display = 'none';
-    }
-  }
+  bindOscRowEvents(tbody);
+}
+
+// Attribute-escape a value going into an HTML attribute (operator names/paths).
+const attr = (s) => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Delegate the OSC-row interactions ONCE (rows are rebuilt each broadcast, so
+// per-row handlers would leak; one delegated listener on the tbody survives).
+function bindOscRowEvents(tbody) {
+  if (tbody._oscBound) return;
+  tbody._oscBound = true;
+  // SEND checkbox → mute / unmute this address on the wire.
+  tbody.addEventListener('change', (e) => {
+    const cb = e.target.closest('.osc-send-cb');
+    if (cb) send({ type: 'setOscSend', address: cb.dataset.addr, enabled: cb.checked });
+  });
+  // RENAME path: Enter commits (via blur), Esc reverts to the last value.
+  tbody.addEventListener('keydown', (e) => {
+    const inp = e.target.closest('.osc-addr-edit'); if (!inp) return;
+    if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
+    else if (e.key === 'Escape') { inp.value = inp.dataset.addr; inp.blur(); }
+  });
+  // Commit on blur (capture — blur doesn't bubble). No-op when unchanged.
+  tbody.addEventListener('blur', (e) => {
+    const inp = e.target.closest && e.target.closest('.osc-addr-edit'); if (!inp) return;
+    const next = inp.value.trim();
+    if (next !== inp.dataset.addr) send({ type: 'setOscAddress', id: inp.dataset.id, address: next });
+  }, true);
 }
 
 // ── top-bar page nav (DESIGN / OSC OUT) ──────────────────────────────────────

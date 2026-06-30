@@ -319,9 +319,17 @@ const OP_SCHEMA = Object.freeze({
     // sends each OUTPUT signal's POST value to the derived address; the
     // engine's own process() treats it as a no-op so a chain with osc_out
     // behaves identically whether or not OSC sending is wired.
-    description: 'Terminal OSC output tap: send this signal\'s POST value to the engine. The single editable `name` derives cpcKey=slug(name) and address=/marsin/audio/<cpcKey>. Identity in the DSP chain.',
+    description: 'Terminal OSC output tap: send this signal\'s POST value to the engine. The single editable `name` derives cpcKey=slug(name) and address=/marsin/audio/<cpcKey>. An OPTIONAL `address` overrides ONLY the wire path (cpcKey stays derived from name) — the operator "rename the OSC path". Identity in the DSP chain.',
     params: {
       name: { type: 'string', default: 'out' },
+      // OPTIONAL OSC ADDRESS override (operator "rename the OSC path"). No
+      // default ⇒ when absent the address is DERIVED from `name`
+      // (/marsin/audio/<slug>); the normalizer never injects it, so an osc_out
+      // that doesn't carry it keeps its exact {name}-only shape. When present it
+      // must be an absolute OSC path ('/...'); the cpcKey is STILL derived from
+      // `name` — only the wire address changes. Honored for DYNAMIC (operator-
+      // added) outputs; curated built-ins keep their canonical engine-bound path.
+      address: { type: 'string' },
     },
   },
 });
@@ -580,6 +588,14 @@ function _validateOp(op, indexForMsg, paramCenter = null, hz = false) {
     }
     if (slug(name) === '') {
       return { ok: false, error: `op "${op.id}": osc_out name "${name}" has no usable letters/digits (slug is empty)` };
+    }
+    // OPTIONAL address override: present only when the operator renamed the
+    // path. The generic string check already rejected empty/non-string; here
+    // we enforce it is an ABSOLUTE OSC path (a relative address would never
+    // match an engine binding). cpcKey is unaffected — it stays slug(name).
+    const addr = normalizedParams.address;
+    if (addr !== undefined && !addr.startsWith('/')) {
+      return { ok: false, error: `op "${op.id}": osc_out address "${addr}" must be an absolute OSC path starting with '/'` };
     }
   }
 

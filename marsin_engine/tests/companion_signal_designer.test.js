@@ -32,12 +32,70 @@ function makePc() {
 
 // ── 1) osc_out op ─────────────────────────────────────────────────────────────
 
-test('opCatalog osc_out carries a single name param (no address/cpcKey)', () => {
+test('opCatalog osc_out carries name + optional address override (no cpcKey)', () => {
   const cat = opCatalog();
   assert.ok(cat.osc_out, 'osc_out present in catalog');
   assert.equal(cat.osc_out.params.name.type, 'string');
-  assert.equal(cat.osc_out.params.address, undefined, 'no separate address param');
+  // `address` is the OPTIONAL OSC-path rename override (cpcKey stays derived
+  // from `name`); it has no default so an osc_out without it keeps the {name}
+  // shape and the address is derived.
+  assert.equal(cat.osc_out.params.address.type, 'string');
+  assert.equal(cat.osc_out.params.address.default, undefined, 'address has no default');
   assert.equal(cat.osc_out.params.cpcKey, undefined, 'no separate cpcKey param');
+});
+
+test('osc_out address override: absolute path accepted, relative rejected', () => {
+  const ok = validateChain('micLow', [
+    { id: 'o', type: 'osc_out', params: { name: 'custom', address: '/marsin/custom/thing' } },
+  ]);
+  assert.equal(ok.ok, true, ok.error);
+  assert.equal(ok.normalized[0].params.address, '/marsin/custom/thing');
+  const bad = validateChain('micLow', [
+    { id: 'o', type: 'osc_out', params: { name: 'custom', address: 'no-leading-slash' } },
+  ]);
+  assert.equal(bad.ok, false);
+  assert.match(bad.error, /absolute OSC path/);
+});
+
+test('resolveOscOut: a dynamic name honors the address override; cpcKey stays name-derived', () => {
+  const r = resolveOscOut('crowd Roar', '/marsin/custom/roar');
+  assert.equal(r.cpcKey, 'crowd_roar', 'cpcKey is still slug(name), not derived from the path');
+  assert.equal(r.address, '/marsin/custom/roar', 'address is the override');
+  // No override ⇒ derived address.
+  assert.equal(resolveOscOut('crowd Roar').address, '/marsin/audio/crowd_roar');
+});
+
+test('resolveOscOut: a CURATED name IGNORES an override (canonical engine path is locked)', () => {
+  const r = resolveOscOut('micLow', '/marsin/somewhere/else');
+  assert.equal(r.cpcKey, 'micLow');
+  assert.equal(r.address, '/marsin/mic/low', 'curated path is fixed regardless of override');
+});
+
+test('validateCompanionConfig: two outputs at the same OSC address fail loudly', () => {
+  const cfg = {
+    osc: { host: '127.0.0.1', port: 10000 },
+    signals: [
+      { id: 'a', label: 'a', source: 'rawLow', type: 'intensity',
+        chain: [{ id: 'a_out', type: 'osc_out', params: { name: 'alpha', address: '/marsin/clash/x' } }] },
+      { id: 'b', label: 'b', source: 'rawMid', type: 'intensity',
+        chain: [{ id: 'b_out', type: 'osc_out', params: { name: 'beta', address: '/marsin/clash/x' } }] },
+    ],
+  };
+  assert.throws(() => validateCompanionConfig(cfg), /address collision/);
+});
+
+test('validateCompanionConfig: osc.disabled persists; malformed throws', () => {
+  const norm = validateCompanionConfig({
+    osc: { host: '127.0.0.1', port: 10000, disabled: ['/marsin/audio/foo', '/marsin/audio/foo'] },
+    signals: [],
+  });
+  assert.deepEqual(norm.osc.disabled, ['/marsin/audio/foo'], 'deduped + carried through');
+  // Default config has an empty disabled list.
+  assert.deepEqual(validateCompanionConfig(defaultCompanionConfig()).osc.disabled, []);
+  assert.throws(
+    () => validateCompanionConfig({ osc: { host: '127.0.0.1', port: 10000, disabled: ['no-slash'] }, signals: [] }),
+    /disabled must be an array of absolute OSC address/,
+  );
 });
 
 test('osc_out is identity in the DSP chain (does not alter the value)', () => {
