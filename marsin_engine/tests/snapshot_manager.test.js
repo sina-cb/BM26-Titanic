@@ -64,6 +64,33 @@ test('save then load round-trips a full look', () => {
   assert.ok(loaded.savedAt, 'savedAt timestamp stamped');
 });
 
+test('save then load round-trips the mixGroups registry (gang faders)', () => {
+  const { snap } = makeManager();
+  const look = sampleLook();
+  // A channel that belongs to a group + the group registry the capture carries.
+  look.channels[0].mixGroupId = 'mg_1_1700000000000';
+  look.mixGroups = [
+    { id: 'mg_1_1700000000000', name: 'Stage Left', fader: 0.6, muted: false, color: '#00ff88' },
+  ];
+  snap.save('grouped', look);
+  const loaded = snap.load('grouped');
+  assert.ok(Array.isArray(loaded.mixGroups), 'mixGroups persisted as an array');
+  assert.equal(loaded.mixGroups.length, 1);
+  assert.equal(loaded.mixGroups[0].id, 'mg_1_1700000000000');
+  assert.equal(loaded.mixGroups[0].name, 'Stage Left');
+  assert.equal(loaded.mixGroups[0].fader, 0.6);
+  assert.equal(loaded.mixGroups[0].color, '#00ff88');
+  // The member pointer survives too, so recall reconnects membership.
+  assert.equal(loaded.channels[0].mixGroupId, 'mg_1_1700000000000');
+});
+
+test('a look with no groups loads to an empty mixGroups array', () => {
+  const { snap } = makeManager();
+  snap.save('ungrouped', sampleLook());           // sampleLook has no mixGroups
+  const loaded = snap.load('ungrouped');
+  assert.deepEqual(loaded.mixGroups, [], 'absent groups default to []');
+});
+
 test('list returns saved snapshot names sorted', () => {
   const { snap } = makeManager();
   snap.save('zebra', sampleLook());

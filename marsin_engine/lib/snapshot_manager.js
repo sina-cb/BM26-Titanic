@@ -89,8 +89,8 @@ export class SnapshotManager {
 
   /**
    * Save (or overwrite) a named snapshot. `look` is the captured shape
-   * `{ master, masterFade?, deck, channels }` produced by the API layer
-   * (it owns serializeChannel). Stamps `name` + `savedAt` and writes
+   * `{ master, masterFade?, deck, channels, mixGroups }` produced by the API
+   * layer (it owns serializeChannel). Stamps `name` + `savedAt` and writes
    * atomically. Returns the on-disk shape.
    */
   save(name, look) {
@@ -107,6 +107,12 @@ export class SnapshotManager {
       // look to capture).
       deck: look.deck || null,
       channels: Array.isArray(look.channels) ? look.channels : [],
+      // WAVE 15: the gang-fader GROUP registry. Persisted so a recalled look
+      // reproduces the groups (faders + membership), not just the per-channel
+      // mixGroupId pointers — without this the saved channels point at groups
+      // that no longer exist on recall and the gang-faders vanish. Empty array
+      // when the look has no groups (or an older capture omitted them).
+      mixGroups: Array.isArray(look.mixGroups) ? look.mixGroups : [],
     };
     this.stateManager.writeFileAtomic(this._filePath(safe), yaml.dump(out));
     return out;
