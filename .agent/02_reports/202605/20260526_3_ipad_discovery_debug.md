@@ -22,7 +22,7 @@ The operator's iPad ("FoH iPad 2") on WiFi `<redacted-wifi>` cannot reach the Ma
 - From the Mac itself: `ping -c 1 10.1.1.156` (a peer that DOES have a resolved MAC in our ARP table) -> 100% packet loss. **L2 resolution is not the issue — even known peers cannot be ICMP'd.**
 - `arp -n 10.1.1.211` -> `(incomplete)`. iPad does NOT answer this Mac's L2 ARP request.
 - `route -n get 10.1.1.211` -> contains the `REJECT` flag in the kernel route (`<UP,HOST,REJECT,DONE,LLINFO,WASCLONED,IFSCOPE,IFREF>`), confirming the kernel cached the resolution failure.
-- The gateway `10.1.1.1` is reachable: `ping 10.1.1.1` -> 0% loss, ARP resolved (`94:83:c4:c6:eb:70`), normal RTT ~4 ms.
+- The gateway `10.1.1.1` is reachable: `ping 10.1.1.1` -> 0% loss, ARP resolved (`<router-mac>`), normal RTT ~4 ms.
 - Self LAN IP `10.1.1.177` is reachable (loopback via lo0).
 - **Only the gateway is reachable. Every other LAN host is silently dropped.**
 
@@ -107,10 +107,10 @@ $ route -n get 10.1.1.211
 
 **Reading `arp -an`**, only TWO peers + gateway + self have resolved MACs:
 ```
-? (10.1.1.1)   at 94:83:c4:c6:eb:70    on en0  (gateway)
-? (10.1.1.102) at 2:e5:ca:df:1:a2      on en0
-? (10.1.1.156) at 1e:a2:de:c8:76:cc    on en0
-? (10.1.1.177) at b2:f6:bc:37:b7:cd    on en0 permanent (self)
+? (10.1.1.1)   at <router-mac>    on en0  (gateway)
+? (10.1.1.102) at <peer-mac-a>      on en0
+? (10.1.1.156) at <peer-mac-b>    on en0
+? (10.1.1.177) at <mac-self>    on en0 permanent (self)
 ```
 
 Yet pinging `10.1.1.156` still fails. **This is the single most important diagnostic finding of this session.** The L2 layer has the MAC. The kernel can put a packet on the wire. The packet either never goes out or the reply never comes back — even though both endpoints are on the same physical broadcast domain. This rules out:
@@ -128,7 +128,7 @@ It points decisively at a **packet-layer filter or driver-level intercept** on t
 ### Mac hardware
 
 - Apple Silicon. Darwin 25.5.0 (macOS Sequoia or newer).
-- WiFi `en0`, currently `10.1.1.177/24 broadcast 10.1.1.255`, MAC `b2:f6:bc:37:b7:cd`.
+- WiFi `en0`, currently `10.1.1.177/24 broadcast 10.1.1.255`, MAC `<mac-self>`.
 - WiFi associated with `<redacted-wifi>` (per `ipconfig getsummary en0` DHCP lease from `10.1.1.1`, lease valid 14:32 -> 02:32 next day).
 - `awdl0` active (Apple Wireless Direct Link — used by AirDrop/Continuity, normal).
 - `bridge0` is the macOS-built-in **Thunderbolt Bridge** (`networksetup -listnetworkserviceorder` confirms it under Hardware Port: "Thunderbolt Bridge, Device: bridge0"). Its `member: en1, en2, en3` are the three Thunderbolt ports. They show `PROMISC` because the bridge driver promiscuous-mode-listens on its members; all three have `status: inactive` (no Thunderbolt cable plugged in). **Not the cause.**
@@ -141,8 +141,8 @@ It points decisively at a **packet-layer filter or driver-level intercept** on t
 This Mac is a **managed enterprise device** running:
 
 1. **Palo Alto GlobalProtect 6.2.6-838** — corporate VPN, currently CONNECTED:
-   - Tunnel via `utun5` -> `10.254.161.36/32`. Gateway: `137.83.249.116` (`us-southwest-g-rivianau.gpojssc2sgc5.gw.gpcloudservice.com`).
-   - Portal: `adventurous.gpcloudservice.com`. Prisma Access environment `prod6`. Source region: US.
+   - Tunnel via `utun5` -> `10.254.161.36/32`. Gateway: `<vpn-gateway-ip>` (`us-southwest-g-<vpn-gateway-host>`).
+   - Portal: `<vpn-portal-host>`. Prisma Access environment `prod6`. Source region: US.
    - Default route ordering (`netstat -rn -f inet`):
      ```
      default  10.254.161.36   UGScg     utun5    <- primary
@@ -354,14 +354,14 @@ $ ping -c 3 10.1.1.211      # iPad
 
 ### 11.4 `arp -an` (en0 + en10)
 ```
-? (10.1.1.1)   at 94:83:c4:c6:eb:70    on en0  ifscope [ethernet]
+? (10.1.1.1)   at <router-mac>    on en0  ifscope [ethernet]
 ? (10.1.1.10)  at (incomplete)         on en0  ifscope [ethernet]
 ? (10.1.1.50)  at (incomplete)         on en0  ifscope [ethernet]
 ? (10.1.1.100) at (incomplete)         on en0  ifscope [ethernet]
-? (10.1.1.102) at 2:e5:ca:df:1:a2      on en0  ifscope [ethernet]
+? (10.1.1.102) at <peer-mac-a>      on en0  ifscope [ethernet]
 ? (10.1.1.150) at (incomplete)         on en0  ifscope [ethernet]
-? (10.1.1.156) at 1e:a2:de:c8:76:cc    on en0  ifscope [ethernet]
-? (10.1.1.177) at b2:f6:bc:37:b7:cd    on en0  ifscope permanent [ethernet]
+? (10.1.1.156) at <peer-mac-b>    on en0  ifscope [ethernet]
+? (10.1.1.177) at <mac-self>    on en0  ifscope permanent [ethernet]
 ? (10.1.1.200) at (incomplete)         on en0  ifscope [ethernet]
 ? (10.1.1.211) at (incomplete)         on en0  ifscope [ethernet]
 ? (10.1.1.255) at ff:ff:ff:ff:ff:ff    on en0  ifscope [ethernet]
@@ -388,10 +388,10 @@ destination: 10.1.1.1
 default            10.254.161.36      UGScg               utun5
 default            10.1.1.1           UGScIg                en0
 10.1.1/24          link#14            UCS                   en0
-10.1.1.1           94:83:c4:c6:eb:70  UHLWIir               en0
-10.1.1.102         2:e5:ca:df:1:a2    UHLWIi                en0
-10.1.1.156         1e:a2:de:c8:76:cc  UHLWI                 en0
-10.1.1.177         b2:f6:bc:37:b7:cd  UHLWI                 lo0
+10.1.1.1           <router-mac>  UHLWIir               en0
+10.1.1.102         <peer-mac-a>    UHLWIi                en0
+10.1.1.156         <peer-mac-b>  UHLWI                 en0
+10.1.1.177         <mac-self>  UHLWI                 lo0
 10.1.1.211         link#14            UHLWI                 en0
 10.1.1.255         ff:ff:ff:ff:ff:ff  UHLWbI                en0
 ```
@@ -418,7 +418,7 @@ com.apple.system_extension.endpoint_security
 14:32:35.758  Debug(1033): Set tunnel interface MTU as 1370
 14:32:35.771  RTM_NEWADDR: address being added to iface utun5: 10.254.161.36
 14:32:36.455  Debug(1230): set route success.
-14:32:36.455  Debug(4293): Found specific route to gateway 137.83.249.116.
+14:32:36.455  Debug(4293): Found specific route to gateway <vpn-gateway-ip>.
 14:32:36.457  Debug(2875): DLSA: 1/1 local access routes saved. Size 748
 14:32:36.461  Debug( 514): Start gpsplit
 14:32:36.461  Debug(1742): SPStart is called (tunnel is not in retry mode)
@@ -444,8 +444,8 @@ Debug( 528): DLSA, found no-direct-access-to-local-network tag,
 ### 11.10 `defaults read .../com.paloaltonetworks.GlobalProtect.settings.plist` (key fields)
 ```
 PanSetup: CurrentVersion = "6.2.6-838"
-PanSetup: Portal = "adventurous.gpcloudservice.com"
-DEM:      "gateway-address" = "...rivianau.gpojssc2sgc5.gw.gpcloudservice.com,ipv4=137.83.249.116"
+PanSetup: Portal = "<vpn-portal-host>"
+DEM:      "gateway-address" = "...<vpn-gateway-host>,ipv4=<vpn-gateway-ip>"
 DEM:      "tunnel-ip"      = "ipv4=10.254.161.36"
 DEM:      "tunnel-status"  = connected
 DEM:      "dem-on-off-status" = "dem-portal-admin-enabled"
@@ -473,7 +473,7 @@ Incoming connection is permitted for /opt/homebrew/Cellar/node/26.0.0/bin/node.
 ### 11.13 `ifconfig` summary (relevant interfaces only)
 ```
 en0  flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
-     ether b2:f6:bc:37:b7:cd
+     ether <mac-self>
      inet  10.1.1.177  netmask 0xffffff00  broadcast 10.1.1.255
      inet6 fe80::1cbd:a609:e079:b07a%en0
      status: active
@@ -482,7 +482,7 @@ utun5  flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1370
        inet 10.254.161.36 --> 10.254.161.36  netmask 0xffffffff
 
 bridge0  flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
-         ether 36:62:3c:51:9e:40
+         ether <bridge-mac>
          member: en1 (LEARNING,DISCOVER)
          member: en2 (LEARNING,DISCOVER)
          member: en3 (LEARNING,DISCOVER)

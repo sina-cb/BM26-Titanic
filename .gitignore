@@ -94,6 +94,12 @@ env/
 .piolibdeps/
 .vscode-test/
 
+# LookingGlass control panel — build-time generated config (gitignored).
+# Secrets (WiFi/AP creds) come from a private, external deployment source via
+# $BM26_SECRETS / $STOKER_SECRETS — NOT in this public repo. The generated/
+# header is baked from config.yaml + those env-provided secrets at build time.
+LookingGlass/panel_firmware/include/generated/
+
 # Node caches & logs
 npm-debug.log*
 yarn-debug.log*
