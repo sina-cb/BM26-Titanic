@@ -137,8 +137,6 @@ export function actionSummary(a: CueAction): string {
       return `look · ${a.look}`;
     case 'playlist':
       return `playlist · ${a.name}`;
-    case 'scene':
-      return `scene · ${a.scene}`;
     case 'globals':
       return 'globals';
     default:

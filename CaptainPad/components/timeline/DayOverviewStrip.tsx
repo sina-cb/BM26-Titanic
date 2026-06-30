@@ -19,18 +19,28 @@ import { usePalette } from '@/hooks/use-theme';
 import { OverviewDay, OverviewCue } from '@/utils/timelineApi';
 import { hhmmToMinutes, dayFraction, kindColor, KIND_LABEL } from './timelineTemplate';
 
-const COLUMN_HEIGHT = 240;
+export const COLUMN_HEIGHT = 240;
 const CARD_WIDTH = 150;
 
 // 06:00 at top reads "morning up", midnight at bottom — but a simple 0–24
 // top-to-bottom is more intuitive on a strip. Top = 00:00, bottom = 24:00.
-function yFor(mins: number | null): number | null {
+// Exported so the day editor's NOW playhead reuses the exact same mapping.
+export function yForMinutes(mins: number | null): number | null {
   const f = dayFraction(mins);
   if (f === null) return null;
   return f * COLUMN_HEIGHT;
 }
+const yFor = yForMinutes;
 
-function SunColumn({ day, C, styles }: { day: OverviewDay; C: Palette; styles: Styles }) {
+function SunColumn({
+  day, nowMinutes, C, styles,
+}: {
+  day: OverviewDay;
+  /** Minutes-of-day for the live NOW playhead (only set on today's card). */
+  nowMinutes: number | null;
+  C: Palette;
+  styles: Styles;
+}) {
   const sunriseY = yFor(hhmmToMinutes(day.sun.sunrise));
   const sunsetY = yFor(hhmmToMinutes(day.sun.sunset));
   const ghStartY = yFor(hhmmToMinutes(day.sun.goldenHourStart));
@@ -92,38 +102,70 @@ function SunColumn({ day, C, styles }: { day: OverviewDay; C: Palette; styles: S
           />
         );
       })}
+
+      {/* NOW playhead — only on today's card. A bright thin line + a dot at the
+          current local time (top=00:00, bottom=24:00), driven by a 1s ticker
+          in the parent. Reuses yFor() so it lines up with the sun + cue math. */}
+      {nowMinutes !== null && (() => {
+        const nowY = yFor(nowMinutes);
+        if (nowY === null) return null;
+        return (
+          <React.Fragment key="now-playhead">
+            <View style={[styles.nowLine, { top: nowY, backgroundColor: C.error }]} />
+            <View style={[styles.nowDot, { top: nowY - 3, backgroundColor: C.error, borderColor: C.surfaceContainerLowest }]} />
+          </React.Fragment>
+        );
+      })()}
     </View>
   );
 }
 
 export function DayCard({
-  day, isToday, onPress, C, styles,
+  day, isToday, isSelected, nowMinutes, onPress, onEdit, C, styles,
 }: {
   day: OverviewDay;
   isToday: boolean;
+  /** Operator-selected day (drives the cue filter below the strip). */
+  isSelected: boolean;
+  /** Minutes-of-day for the NOW playhead — non-null only on today's card. */
+  nowMinutes: number | null;
+  /** Single tap: select / view this day. */
   onPress: () => void;
+  /** Explicit EDIT affordance: open the day editor. */
+  onEdit: () => void;
   C: Palette;
   styles: Styles;
 }) {
   const timeless = day.cues.filter((c) => !c.atLocal);
+  // Selection ring takes precedence as the dominant border; today still tints
+  // the background. The two may be different days.
+  const borderColor = isSelected ? C.primary : (isToday ? C.tertiary : C.ghostBorder);
   return (
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={0.85}
       accessibilityRole="button"
-      accessibilityLabel={`Edit ${day.weekday} ${day.date}`}
+      accessibilityLabel={`Select ${day.weekday} ${day.date}`}
       style={[
         styles.card,
-        { borderColor: isToday ? C.primary : C.ghostBorder },
+        { borderColor, borderWidth: isSelected ? 2.5 : 1.5 },
         isToday && { backgroundColor: C.sidebarActiveBackground },
       ]}
     >
       <View style={styles.cardHeader}>
-        <Text style={[styles.cardDay, isToday && { color: C.primary }]}>{`D${day.index + 1} · ${day.weekday.toUpperCase()}`}</Text>
+        <Text style={[styles.cardDay, isSelected && { color: C.primary }]}>{`D${day.index + 1} · ${day.weekday.toUpperCase()}`}</Text>
         <Text style={styles.cardDate}>{day.date.slice(5)}</Text>
       </View>
 
-      <SunColumn day={day} C={C} styles={styles} />
+      {/* TODAY badge — independent of selection so the operator can tell which
+          card is "now" even when viewing another day. */}
+      {isToday ? (
+        <View style={[styles.todayBadge, { borderColor: C.error }]}>
+          <Text style={[styles.todayBadgeText, { color: C.error }]}>● TODAY</Text>
+        </View>
+      ) : null}
+
+      <SunColumn day={day} nowMinutes={nowMinutes} C={C} styles={styles} />
 
       {/* Timed cue count + time-less chips */}
       <View style={styles.cardFooter}>
@@ -136,16 +178,33 @@ export function DayCard({
           </View>
         ))}
       </View>
+
+      {/* Explicit EDIT DAY affordance — single tap selects/views, this opens
+          the day editor so selection no longer collides with editing. */}
+      <TouchableOpacity
+        onPress={onEdit}
+        accessibilityRole="button"
+        accessibilityLabel={`Edit ${day.weekday} ${day.date}`}
+        style={styles.editBtn}
+        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+      >
+        <Text style={styles.editBtnText}>EDIT DAY</Text>
+      </TouchableOpacity>
     </TouchableOpacity>
   );
 }
 
 export function DayOverviewStrip({
-  days, todayIndex, onSelectDay,
+  days, todayIndex, selectedIndex, nowMinutes, onSelectDay, onEditDay,
 }: {
   days: OverviewDay[];
   todayIndex: number | null;
+  /** Operator-selected day index (highlighted, drives the cue filter). */
+  selectedIndex: number | null;
+  /** Live minutes-of-day in the plan tz for the NOW playhead (null when off-festival). */
+  nowMinutes: number | null;
   onSelectDay: (index: number) => void;
+  onEditDay: (index: number) => void;
 }) {
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
@@ -165,7 +224,10 @@ export function DayOverviewStrip({
           key={day.index}
           day={day}
           isToday={todayIndex === day.index}
+          isSelected={selectedIndex === day.index}
+          nowMinutes={todayIndex === day.index ? nowMinutes : null}
           onPress={() => onSelectDay(day.index)}
+          onEdit={() => onEditDay(day.index)}
           C={C}
           styles={styles}
         />
@@ -234,6 +296,21 @@ function makeStyles(C: Palette) {
       width: 8,
       height: 2,
     },
+    nowLine: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      height: 2,
+      opacity: 0.95,
+    },
+    nowDot: {
+      position: 'absolute',
+      left: -1,
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      borderWidth: 1,
+    },
     edgeTime: {
       position: 'absolute',
       fontFamily: 'SpaceGrotesk_700Bold',
@@ -269,6 +346,35 @@ function makeStyles(C: Palette) {
       fontFamily: 'SpaceGrotesk_700Bold',
       fontSize: 9,
       letterSpacing: 0.5,
+    },
+    todayBadge: {
+      alignSelf: 'flex-start',
+      borderWidth: 1,
+      borderRadius: 6,
+      paddingHorizontal: 6,
+      paddingVertical: 1,
+      marginTop: -2,
+    },
+    todayBadgeText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 8.5,
+      letterSpacing: 0.6,
+    },
+    editBtn: {
+      alignSelf: 'stretch',
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+      borderRadius: 6,
+      paddingVertical: 6,
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: 30,
+    },
+    editBtnText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 10,
+      letterSpacing: 0.8,
+      color: C.text,
     },
   });
 }

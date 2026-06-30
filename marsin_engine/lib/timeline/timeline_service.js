@@ -195,6 +195,12 @@ export class TimelineService {
     // Pending-program lease window (docs/38 §16.5). Default 30 s.
     this.programLeaseSec = typeof config.programLeaseSec === 'number' && config.programLeaseSec > 0
       ? config.programLeaseSec : 30;
+    // Operator-takeover lease window (docs/38 §16). Default 120 s. When the
+    // operator takes over (POST /timeline/takeover) the plan is leased to them;
+    // with no UI activity for this many seconds the lease releases and the plan
+    // resumes at the wall-clock time of release (via _catchUp).
+    this.operatorLeaseSec = typeof config.operatorLeaseSec === 'number' && config.operatorLeaseSec > 0
+      ? config.operatorLeaseSec : 120;
     // Palettes are resolved from the engine's colorPalettes config (ported from
     // the old actions.js resolvePalette). Injected so the service has no IO of
     // its own for palette lookup.
@@ -273,6 +279,7 @@ export class TimelineService {
     if (this.state.autopilotEnabled === undefined) this.state.autopilotEnabled = this.plan.autopilot.enabled;
     if (this.state.activeProgram === undefined) this.state.activeProgram = null;
     if (this.state.pendingProgram === undefined) this.state.pendingProgram = null;
+    if (this.state.operatorLease === undefined) this.state.operatorLease = null;
     if (this.state.controller === undefined) this.state.controller = 'autopilot';
   }
 
@@ -584,6 +591,10 @@ export class TimelineService {
     // on boot/scene-switch and re-derive (docs/38 §16.6/I6). A stale lease whose
     // expiry already passed would otherwise auto-start the wrong program.
     this.state.pendingProgram = null;
+    // An operatorLease is ALSO pure runtime state — drop any persisted one on
+    // boot/scene-switch (docs/38 §16/I6). Never resume a stale operator lease;
+    // catchUp re-establishes the correct owner for the current wall-clock.
+    this.state.operatorLease = null;
 
     let best = null;
     for (const cue of dayPlan.cues) {
@@ -639,6 +650,25 @@ export class TimelineService {
     this._ticking = true;
     try {
       const now = this.nowFn();
+
+      // Operator-takeover lease auto-release (docs/38 §16): if the operator
+      // holds a lease (mode 'overridden') and it has expired with no UI
+      // activity, RELEASE it and resume the plan at NOW (catchUp re-derives the
+      // correct owner/look for the current wall-clock). This is the
+      // "continue the plan at the exact time of release" behavior. After a
+      // release the tick falls through to normal ticking on the fresh state.
+      if (this.state.mode === 'overridden' && this.state.operatorLease
+          && now >= this.state.operatorLease.expiresAtMs) {
+        try {
+          await this._releaseOperatorLease();
+        } catch (e) {
+          this.lastError = `operator lease release: ${e && e.message}`;
+          console.warn(`  ⚠ [timeline] operator lease release failed: ${e && e.message}`);
+        }
+        // A scene action inside catchUp could have torn the service down.
+        if (this._tickHandle === null) return;
+      }
+
       const sunEvents = this._sunEventsFor(now);
       // The RUNTIME tick is always "today": build the day's working plan = the
       // full plan with cues restricted to those applicable to today's festival
@@ -719,8 +749,8 @@ export class TimelineService {
       return {
         type: 'timelineState',
         mode: 'armed', scene: this.scene, activePlan: this.activePlan,
-        controller: 'autopilot', autopilotEnabled: true, activeProgram: null,
-        pendingProgram: null,
+        controller: 'autopilot', planActive: false, autopilotEnabled: true, activeProgram: null,
+        pendingProgram: null, operatorLease: null, operatorLeaseSec: this.operatorLeaseSec,
         currentPhase: null, currentMood: 'calm', party: 0, moodValue: 0,
         engineConnected: true,
         waiting: true, nextCue: null,
@@ -773,6 +803,17 @@ export class TimelineService {
     const holding = typeof this.state.manualHoldUntilMs === 'number' && this.state.manualHoldUntilMs > now;
     const mode = holding ? 'holding' : this.state.mode;
 
+    // Surface the operator-takeover lease as {expiresAtMs} (docs/38 §16) so
+    // CaptainPad can render/seed the auto-resume countdown.
+    let operatorLease = null;
+    if (this.state.operatorLease && typeof this.state.operatorLease.expiresAtMs === 'number') {
+      operatorLease = { expiresAtMs: this.state.operatorLease.expiresAtMs };
+    }
+    const controller = this.state.controller || 'autopilot';
+    // planActive (docs/38 §16): the timeline is actively DRIVING the rig.
+    const planActive = (controller === 'autopilot' || controller === 'program')
+      && this.state.mode !== 'paused' && this.state.mode !== 'overridden';
+
     // Surface the pending-program lease as {cueId,label,expiresAtMs} (docs/38
     // §16.7) so CaptainPad can render the "SCHEDULED SHOW PENDING" countdown.
     let pendingProgram = null;
@@ -798,10 +839,13 @@ export class TimelineService {
       mode,
       scene: this.scene,
       activePlan: this.state.activePlan || this.activePlan,
-      controller: this.state.controller || 'autopilot',
+      controller,
+      planActive,
       autopilotEnabled: this.state.autopilotEnabled !== false,
       activeProgram,
       pendingProgram,
+      operatorLease,
+      operatorLeaseSec: this.operatorLeaseSec,
       currentPhase: phaseNow,
       currentMood: mood.party ? 'party' : 'calm',
       party: mood.party,
@@ -905,11 +949,76 @@ export class TimelineService {
     return { manualHoldUntilMs: this.state.manualHoldUntilMs };
   }
 
-  resume() {
+  /**
+   * Explicit operator hand-back (docs/38 §14.5 + §16). Clears pause/override,
+   * clears any operator-takeover lease, and RESUMES THE PLAN AT NOW via catchUp
+   * (re-derives the correct program/look for the current wall-clock and
+   * re-establishes the baseline) — same "resume-at-now" behavior as a lease
+   * auto-release, but triggered by the operator rather than by inactivity.
+   */
+  async resume() {
     this.state.mode = 'armed';
     this.state.manualHoldUntilMs = null;
+    this.state.operatorLease = null;
+    try {
+      await this._catchUp();
+    } catch (e) {
+      this.lastError = `resume catchUp: ${e && e.message}`;
+      console.warn(`  ⚠ [timeline] resume catchUp failed: ${e && e.message}`);
+    }
     this._persistAndBroadcast();
     return { mode: this.state.mode };
+  }
+
+  /**
+   * Operator takeover (docs/38 §16) — UI-DRIVEN: CaptainPad signals that the
+   * operator grabbed manual control. Sets mode 'overridden' (→ controller
+   * 'manual' via the arbiter/baseline reconcile, which FREEZES the deck) and
+   * arms an operator-takeover lease that auto-resumes the plan at now +
+   * operatorLeaseSec unless refreshed by /activity pings or cleared by /resume.
+   * Idempotent: re-calling refreshes the expiry.
+   *
+   * @returns {{ok:true, operatorLease:{expiresAtMs:number}}}
+   */
+  takeover() {
+    const expiresAtMs = this.nowFn() + this.operatorLeaseSec * 1000;
+    this.state.mode = 'overridden';
+    this.state.operatorLease = { expiresAtMs };
+    // Reflect the takeover in the controller immediately (don't read stale
+    // 'autopilot' until the next tick) — overridden is operator manual.
+    this.state.controller = 'manual';
+    this._persistAndBroadcast();
+    return { ok: true, operatorLease: { expiresAtMs: this.state.operatorLease.expiresAtMs } };
+  }
+
+  /**
+   * Activity ping (docs/38 §16) — CaptainPad sends these (~once/10s) while the
+   * operator is interacting. If a takeover lease is held (mode 'overridden'),
+   * refresh its expiry; otherwise a no-op (never arms a lease on its own).
+   *
+   * @returns {{ok:true}}
+   */
+  activity() {
+    if (this.state.mode === 'overridden' && this.state.operatorLease) {
+      this.state.operatorLease.expiresAtMs = this.nowFn() + this.operatorLeaseSec * 1000;
+      this._persistAndBroadcast();
+    }
+    return { ok: true };
+  }
+
+  /**
+   * Release an expired operator-takeover lease (docs/38 §16): clear the lease,
+   * exit manual (mode 'armed'), and RESUME THE PLAN AT NOW via catchUp — the
+   * "continue the plan at the exact time of release" behavior. Called from the
+   * tick when now ≥ operatorLease.expiresAtMs.
+   */
+  async _releaseOperatorLease() {
+    const expiry = this.state.operatorLease && this.state.operatorLease.expiresAtMs;
+    this.state.mode = 'armed';
+    this.state.operatorLease = null;
+    this.state.manualHoldUntilMs = null;
+    console.log(`  🔓 [timeline] operator lease released (expired ${expiry}) — resuming plan at now`);
+    await this._catchUp();
   }
 
   async setAutopilotEnabled(enabled) {

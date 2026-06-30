@@ -39,6 +39,8 @@ import { postBump } from '@/utils/bumpApi';
 import { GroupRailBody, MixGroupHeader, tintFromHex } from '@/components/GroupRail';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
+import { useOperatorTakeover } from '@/hooks/useTimeline';
+import { PlanIndicatorPill, PLAN_INDICATOR_CYAN } from '@/components/timeline/PlanIndicatorPill';
 import {
   ModulationReadonlyBadge, useEntryModulations, useModulationState,
   GhostMarker, prettySliderName,
@@ -1040,6 +1042,14 @@ export default function MixerScreen() {
   // while offline — we hide the chip then, matching the OFFLINE pill's
   // graceful-degrade behaviour.
   const activeModel = useActiveModel();
+  // ── Operator takeover (requests #3/#5) ─────────────────────────────────
+  // A manual touch here while a plan is driving the rig is a takeover:
+  // notifyInteraction() fires the takeover ONCE then keeps the lease alive
+  // (throttled) on continued interaction. The PlanIndicatorPill (globals row,
+  // top-right) reflects plan/lease/countdown; the inline header warning
+  // surfaces the live-plan takeover non-intrusively (no modal).
+  const { planActive, leaseHeld, leaseRemainingSec, notifyInteraction, resumeNow } =
+    useOperatorTakeover();
   const [blends, setBlends] = useState<string[]>([]);
   const [transitionsList, setTransitionsList] = useState<string[]>([]);
   // ─── Playlist library: parent-owned (May 2026 refactor) ───────────
@@ -1391,6 +1401,7 @@ export default function MixerScreen() {
   // module-level event buses + the setState callbacks (which React
   // guarantees are stable), so the empty dep array is correct.
   const handleFaderChange = useCallback(async (channelId: string, level: number) => {
+    notifyInteraction();
     // Stamp BEFORE the WS send so any racing broadcast that arrives
     // during the round-trip is held off the slider's last finger position.
     localFaderWriteRef.current[channelId] = Date.now();
@@ -1415,9 +1426,10 @@ export default function MixerScreen() {
         });
       }
     }
-  }, []);
+  }, [notifyInteraction]);
 
   const handleMuteToggle = useCallback(async (channelId: string, enabled: boolean) => {
+    notifyInteraction();
     // Mute remains interactive at all times — the operator must always be
     // able to drop a channel even during a transition. "Transitions take
     // precedence over mute/solo" is enforced at *transition start* time
@@ -1436,7 +1448,7 @@ export default function MixerScreen() {
       console.error('[Mixer] Mute PATCH failed:', err);
       Alert.alert('Mute may not have applied', `Could not confirm the mute change. ${err?.message || ''}`.trim());
     });
-  }, []);
+  }, [notifyInteraction]);
 
   // Solo (docs/39 §10) — SERVER-AUTHORITATIVE. The engine's
   // PatternMixer.soloedChannelIds Set is the SOLE source of truth. The old
@@ -1457,6 +1469,7 @@ export default function MixerScreen() {
   //   - fader-lock IMPLIES solo-safe on the engine, so a locked layer stays
   //     lit through a solo automatically (no client-side skip needed).
   const handleSoloToggle = useCallback(async (channelId: string) => {
+    notifyInteraction();
     const alreadySolo = soloedIds.has(channelId);
     if (alreadySolo) {
       // Clear this channel's solo. Single-solo is the common case, so a tap on
@@ -1488,7 +1501,7 @@ export default function MixerScreen() {
         console.error(`[Mixer] Solo REST mirror failed for ${channelId}:`, err);
       });
     }
-  }, [soloedIds]);
+  }, [soloedIds, notifyInteraction]);
 
   // Clear ALL solos (header button). Server-authoritative.
   const handleClearAllSolo = useCallback(async () => {
@@ -1532,6 +1545,7 @@ export default function MixerScreen() {
   const BUMP_RENEW_MS = 700;
 
   const handleBumpOn = useCallback((channelId: string) => {
+    notifyInteraction();
     // Optimistic "held" feedback.
     setBumpedIds(prev => {
       if (prev.has(channelId)) return prev;
@@ -1559,7 +1573,7 @@ export default function MixerScreen() {
     timers.set(channelId, setInterval(() => {
       engineEvents.send({ type: 'bump', channelId });
     }, BUMP_RENEW_MS));
-  }, []);
+  }, [notifyInteraction]);
 
   const handleBumpOff = useCallback((channelId: string) => {
     // Stop the renew heartbeat first so we don't re-bump after releasing.
@@ -1588,6 +1602,7 @@ export default function MixerScreen() {
   }, []);
 
   const handleModeChange = useCallback(async (channelId: string, newMode: string) => {
+    notifyInteraction();
     // Capture the prior mode so we can revert if the engine rejects the
     // blend-mode change. The canonical saved mode is the source of truth.
     const prevMode = savedModesRef.current[channelId]
@@ -1611,7 +1626,7 @@ export default function MixerScreen() {
         `The engine rejected this blend mode. ${res.error || ''} The channel kept its previous mode.`.trim(),
       );
     }
-  }, []);
+  }, [notifyInteraction]);
 
   // Unlock-dirty prompt. Engaged when the user toggles lock OFF on a channel
   // whose in-memory params differ from the saved playlist entry. The user
@@ -1750,6 +1765,7 @@ export default function MixerScreen() {
   // + reconcile-from-broadcast + fail-loud revert shape as faderMax/color. The
   // engine's validateHue normalizes degrees into [0,360); a non-finite ⇒ 400.
   const handleHueChange = useCallback(async (channelId: string, hue: number) => {
+    notifyInteraction();
     const prev = channelsRef.current.find(c => c.id === channelId)?.hue;
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, hue } : c));
     const res = await setChannelHue(channelId, hue);
@@ -1762,7 +1778,7 @@ export default function MixerScreen() {
         `The engine rejected this hue. ${res.error || ''} The channel kept its previous hue.`.trim(),
       );
     }
-  }, []);
+  }, [notifyInteraction]);
 
   // Channel rename — OPTIMISTIC parent update (bug fix 2026-06-29). Every
   // other control (fader/mode/soloSafe/lock/hue) writes `channels`
@@ -1785,6 +1801,7 @@ export default function MixerScreen() {
   }, []);
 
   const handleControlChange = useCallback((channelId: string, controlId: number, val: number) => {
+    notifyInteraction();
     setChannels(chs => chs.map(c => {
       if (c.id !== channelId) return c;
       return { ...c, exports: (c.exports || []).map((e: any) => e.id === controlId ? { ...e, v0: val } : e) };
@@ -1792,7 +1809,7 @@ export default function MixerScreen() {
     if (!engineEvents.send({ type: 'setChannelControl', channelId, id: controlId, v0: val, v1: 0, v2: 0 })) {
       setMixerChannelControl(channelId, controlId, val, 0, 0);
     }
-  }, []);
+  }, [notifyInteraction]);
 
   // Adding a channel is playlist-first. The "+ ADD CHANNEL" button opens the
   // picker so the user can spin up a new layer with one tap. The first row is
@@ -1917,6 +1934,7 @@ export default function MixerScreen() {
   };
 
   const handleMasterChange = async (val: number) => {
+    notifyInteraction();
     setMaster(val);
     const now = Date.now();
     if (now - (throttleRef.current['master'] || 0) > 33) {
@@ -2207,6 +2225,47 @@ export default function MixerScreen() {
               from the WS `snapshots` event. Hidden in portrait to keep the
               narrow header uncrowded (matches the model chip's behaviour). */}
           {!isPortrait ? <SnapshotBar /> : null}
+          {/* ── Plan-active takeover warning (request #3) ───────────────────
+              When a plan is live, a manual touch on the mixer is a takeover. A
+              SUBTLE inline warning sits beside the indicator (NOT a modal —
+              never block a live performance). While a lease is held it becomes
+              the "plan resumes in M:SS" countdown + a one-tap RESUME. Landscape
+              only — portrait leans on the compact pill alone to stay uncrowded. */}
+          {!isPortrait && planActive && !leaseHeld ? (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center',
+              paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
+              borderWidth: 1, borderColor: PLAN_INDICATOR_CYAN,
+            }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: PLAN_INDICATOR_CYAN, textTransform: 'uppercase' }}>
+                PLAN LIVE · A TOUCH TAKES OVER
+              </Text>
+            </View>
+          ) : !isPortrait && leaseHeld ? (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', gap: 8,
+              paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
+              borderWidth: 1, borderColor: '#f5a623',
+            }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: '#f5a623', textTransform: 'uppercase' }}>
+                {`TOOK OVER · RESUMES ${leaseRemainingSec === null ? '—' : `${Math.floor(leaseRemainingSec / 60)}:${String(leaseRemainingSec % 60).padStart(2, '0')}`}`}
+              </Text>
+              <TouchableOpacity
+                onPress={() => { void resumeNow(); }}
+                hitSlop={ICON_BTN_HIT_SLOP}
+                accessibilityRole="button"
+                accessibilityLabel="Resume the plan now"
+              >
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: '#f5a623', textTransform: 'uppercase' }}>
+                  RESUME NOW
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          {/* Compact plan-status glyph — rightmost badge of the header status
+              row (request #5). Matches the OscStatusPill idiom (48px tile,
+              coloured border/dot/label). Tapping routes to the Timeline tab. */}
+          <PlanIndicatorPill compact={isPortrait} />
         </View>
         {/* Right control cluster (QA round1 #5). flexWrap + justify-end lets the
             MASTER readout and the two add buttons reflow to a second line rather

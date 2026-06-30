@@ -44,6 +44,7 @@ import {
   TimelineCue,
   TimelineRecentFire,
   TimelineOverview,
+  OverviewCue,
   ShowPlan,
   PlanCue,
 } from '@/utils/timelineApi';
@@ -57,6 +58,36 @@ import {
 
 const HOLD_MINUTES = 30;
 const PREVIEW_DEBOUNCE_MS = 350;
+
+// ── Plan-timezone "now" helpers ─────────────────────────────────────────
+// The overview dates are festival-local (plan tz). To pick "today" and to
+// place the NOW playhead we must read the wall clock IN THE PLAN TZ, not the
+// operator's device tz — they differ if CaptainPad runs off-playa. We use
+// Intl with the plan's IANA tz; on a malformed tz Intl throws, so we fail to
+// null (no today, no playhead) rather than silently using device-local time.
+function nowPartsInTz(tz: string | null | undefined): { dateKey: string; minutes: number } | null {
+  if (!tz) return null;
+  try {
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+    const parts = fmt.formatToParts(new Date());
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+    const year = get('year');
+    const month = get('month');
+    const day = get('day');
+    let hour = Number(get('hour'));
+    const minute = Number(get('minute'));
+    // Intl can emit '24' for midnight under hour12:false on some engines.
+    if (hour === 24) hour = 0;
+    if (!year || !month || !day || Number.isNaN(hour) || Number.isNaN(minute)) return null;
+    return { dateKey: `${year}-${month}-${day}`, minutes: hour * 60 + minute };
+  } catch {
+    return null;
+  }
+}
 
 function formatCountdown(sec: number | null): string {
   if (sec === null || sec === undefined || !Number.isFinite(sec) || sec < 0) return '—';
@@ -128,9 +159,25 @@ export default function TimelineScreen() {
 
   // ── UI sheet state ──
   const [planPickerOpen, setPlanPickerOpen] = useState(false);
+  // The operator-SELECTED day (highlighted in the strip + drives the cue
+  // filter below it). Defaults to today; falls back to day 0. `null` only
+  // until the first overview resolves.
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
+  // Whether the cue list shows the SELECTED day's cues or ALL days. Default =
+  // the selected day (per the brief).
+  const [showAllDays, setShowAllDays] = useState(false);
+  // The day whose editor modal is OPEN (explicit EDIT DAY) — distinct from the
+  // selected/viewed day so a single tap selects without opening the editor.
+  const [editingDay, setEditingDay] = useState<number | null>(null);
   const [cueSheetOpen, setCueSheetOpen] = useState(false);
   const [editingCue, setEditingCue] = useState<PlanCue | null>(null);
+
+  // ── 1s ticker — drives the live NOW playhead (strip + day editor). ──
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   // ── Resource loaders ──
   const refreshPlans = useCallback(() => {
@@ -200,14 +247,44 @@ export default function TimelineScreen() {
   // never by a stale error from an older draft (fix: sticky previewError).
   const saveBlocked = !!previewError && previewError.version === draftVersion;
 
-  // Today's festival index for highlighting (from the overview's dates vs now).
+  // Plan timezone (festival-local). Falls back to the active plan's location if
+  // the overview carries no location, then to the device tz so the playhead
+  // still tracks *something* when a plan omits a tz.
+  const planTz = useMemo(() => {
+    return (
+      overview?.location?.tz
+      ?? draft?.location?.tz
+      ?? (typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : null)
+    );
+  }, [overview?.location?.tz, draft?.location?.tz]);
+
+  // "Now" in the plan tz, recomputed each 1s tick. dateKey picks "today"; the
+  // minutes feed the playhead position.
+  const nowInTz = useMemo(() => nowPartsInTz(planTz), [planTz, nowTick]);
+
+  // Today's festival index (the overview day whose date matches today in the
+  // plan tz). null when today is outside the festival span.
   const todayIndex = useMemo(() => {
-    if (!overview) return null;
-    const now = new Date();
-    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    const d = overview.days.find((day) => day.date === todayKey);
+    if (!overview || !nowInTz) return null;
+    const d = overview.days.find((day) => day.date === nowInTz.dateKey);
     return d ? d.index : null;
-  }, [overview]);
+  }, [overview, nowInTz]);
+
+  // Live minutes-of-day for the playhead (null when no tz could be read).
+  const nowMinutes = nowInTz ? nowInTz.minutes : null;
+
+  // Default the SELECTED day to today (or day 0) once the overview resolves.
+  // Re-applies if the selection points outside the current day range (e.g. a
+  // different plan loaded). Operator taps override this thereafter.
+  useEffect(() => {
+    if (!overview || overview.days.length === 0) return;
+    const validIndexes = new Set(overview.days.map((d) => d.index));
+    setSelectedDay((prev) => {
+      if (prev !== null && validIndexes.has(prev)) return prev;
+      if (todayIndex !== null) return todayIndex;
+      return overview.days[0].index;
+    });
+  }, [overview, todayIndex]);
 
   // ── Draft mutators ──
   const mutateDraft = useCallback((fn: (p: ShowPlan) => void) => {
@@ -291,7 +368,7 @@ export default function TimelineScreen() {
     setPreviewError(null);
     setPreviewTransportError(null);
     setSaveOk(null);
-    setSelectedDay(null);
+    setEditingDay(null);
   }, []);
 
   // ── Cue CRUD (within the draft) ──
@@ -339,11 +416,48 @@ export default function TimelineScreen() {
     return Math.max(0, Math.round((p.untilMs - Date.now()) / 1000));
   }, [state?.activeProgram]);
 
-  // The selected day's overview object.
+  // The day-editor's overview object (the day whose modal is open).
+  const editingDayOverview = useMemo(() => {
+    if (editingDay === null || !overview) return null;
+    return overview.days.find((d) => d.index === editingDay) ?? null;
+  }, [editingDay, overview]);
+
+  // The SELECTED day's overview object (drives the filtered cue list).
   const selectedDayOverview = useMemo(() => {
     if (selectedDay === null || !overview) return null;
     return overview.days.find((d) => d.index === selectedDay) ?? null;
   }, [selectedDay, overview]);
+
+  // Cues shown in the timeline view: the selected day's resolved cues, or all
+  // days' cues flattened (with their day index) when the toggle is ALL DAYS.
+  // These come from the overview (resolved atLocal), time-ordered.
+  const viewCues = useMemo(() => {
+    if (!overview) return [] as { cue: OverviewCue; dayIndex: number }[];
+    const rows: { cue: OverviewCue; dayIndex: number }[] = [];
+    if (showAllDays) {
+      for (const d of overview.days) for (const c of d.cues) rows.push({ cue: c, dayIndex: d.index });
+    } else if (selectedDayOverview) {
+      for (const c of selectedDayOverview.cues) rows.push({ cue: c, dayIndex: selectedDayOverview.index });
+    }
+    const mins = (s: string | null) => {
+      if (!s) return 100000;
+      const m = /^(\d{1,2}):(\d{2})$/.exec(s);
+      return m ? Number(m[1]) * 60 + Number(m[2]) : 100000;
+    };
+    rows.sort((a, b) => {
+      if (a.dayIndex !== b.dayIndex) return a.dayIndex - b.dayIndex;
+      return mins(a.cue.atLocal) - mins(b.cue.atLocal);
+    });
+    return rows;
+  }, [overview, showAllDays, selectedDayOverview]);
+
+  // Map overview cue id → live engine cue (for FIRE + countdown), so the
+  // filtered/resolved rows still drive the real fire path + live status.
+  const liveCueById = useMemo(() => {
+    const m = new Map<string, TimelineCue>();
+    if (state?.cues) for (const c of state.cues) m.set(c.id, c);
+    return m;
+  }, [state?.cues]);
 
   return (
     <View style={styles.container}>
@@ -492,15 +606,25 @@ export default function TimelineScreen() {
             <DayOverviewStrip
               days={overview.days}
               todayIndex={todayIndex}
+              selectedIndex={selectedDay}
+              nowMinutes={nowMinutes}
               onSelectDay={(idx) => {
-                // The day editor needs a draft to edit. If we're viewing the
-                // live plan, load it into the draft first so taps mutate a copy.
-                // Only open the day editor if the load actually succeeded —
-                // a failed / festival-less load must not leave a dangling day.
+                // Single tap: SELECT/VIEW the day (highlight + filter the cue
+                // list to it). This never opens the editor and never touches
+                // the draft, so viewing is non-destructive.
+                setSelectedDay(idx);
+                setShowAllDays(false);
+              }}
+              onEditDay={(idx) => {
+                // Explicit EDIT DAY: open the day editor. It needs a draft to
+                // edit; if we're viewing the live plan, load it into the draft
+                // first so edits mutate a copy. Only open if the load actually
+                // succeeded — a failed / festival-less load must not dangle.
+                setSelectedDay(idx);
                 if (!draft && state?.activePlan) {
-                  loadPlanIntoDraft(state.activePlan).then((ok) => { if (ok) setSelectedDay(idx); });
+                  loadPlanIntoDraft(state.activePlan).then((ok) => { if (ok) setEditingDay(idx); });
                 } else if (draft) {
-                  setSelectedDay(idx);
+                  setEditingDay(idx);
                 } else {
                   setActionError('No active plan to edit — start from the BRC template via PLANS.');
                 }
@@ -513,7 +637,7 @@ export default function TimelineScreen() {
           )}
 
           {!draft ? (
-            <Text style={styles.helperLine}>Tap a day to edit it — the active plan loads into the maker.</Text>
+            <Text style={styles.helperLine}>Tap a day to view its cues; tap EDIT DAY to edit it — the active plan loads into the maker.</Text>
           ) : (
             <Text style={styles.helperLine}>Edits preview live across all days. SAVE writes the plan; ACTIVATE (in PLANS) makes it run.</Text>
           )}
@@ -521,12 +645,49 @@ export default function TimelineScreen() {
           {/* ── D. Cue list + controls (live) ── */}
           {state ? (
             <>
-              <Text style={styles.sectionLabel}>CUES (LIVE)</Text>
-              {state.cues.length === 0 ? (
-                <Text style={styles.emptyHint}>The active plan has no cues.</Text>
+              {/* CUES header with the ALL DAYS / DAY N toggle. The default view
+                  shows the SELECTED day's resolved cues. */}
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionLabel}>
+                  {showAllDays
+                    ? 'CUES (LIVE) · ALL DAYS'
+                    : `CUES (LIVE) · ${selectedDayOverview ? `DAY ${selectedDayOverview.index + 1}` : 'DAY'}`}
+                </Text>
+                <View style={styles.dayToggle}>
+                  <TouchableOpacity
+                    onPress={() => setShowAllDays(false)}
+                    style={[styles.dayToggleBtn, !showAllDays && { backgroundColor: C.primary }]}
+                    accessibilityLabel="Show selected day cues"
+                  >
+                    <Text style={[styles.dayToggleText, { color: !showAllDays ? C.onPrimary : C.text }]} numberOfLines={1}>
+                      {selectedDayOverview ? `DAY ${selectedDayOverview.index + 1}` : 'DAY'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setShowAllDays(true)}
+                    style={[styles.dayToggleBtn, showAllDays && { backgroundColor: C.primary }]}
+                    accessibilityLabel="Show all days cues"
+                  >
+                    <Text style={[styles.dayToggleText, { color: showAllDays ? C.onPrimary : C.text }]}>ALL DAYS</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {viewCues.length === 0 ? (
+                <Text style={styles.emptyHint}>
+                  {showAllDays ? 'The active plan has no cues.' : 'No cues on this day.'}
+                </Text>
               ) : (
-                state.cues.map((cue) => (
-                  <CueRow key={cue.id} cue={cue} onFire={fireCue} styles={styles} C={C} />
+                viewCues.map(({ cue, dayIndex }) => (
+                  <CueRow
+                    key={`${dayIndex}:${cue.id}`}
+                    cue={cue}
+                    dayIndex={showAllDays ? dayIndex : null}
+                    live={liveCueById.get(cue.id) ?? null}
+                    onFire={fireCue}
+                    styles={styles}
+                    C={C}
+                  />
                 ))
               )}
 
@@ -559,13 +720,14 @@ export default function TimelineScreen() {
       />
 
       <DayEditor
-        visible={selectedDay !== null && !!draft}
-        day={selectedDayOverview}
+        visible={editingDay !== null && !!draft}
+        day={editingDayOverview}
         plan={draft ?? brcStarterPlan()}
+        nowMinutes={editingDay !== null && editingDay === todayIndex ? nowMinutes : null}
         onAddCue={openAddCue}
         onEditCue={openEditCue}
         onDeleteCue={handleDeleteCue}
-        onClose={() => setSelectedDay(null)}
+        onClose={() => setEditingDay(null)}
       />
 
       {draft ? (
@@ -574,7 +736,7 @@ export default function TimelineScreen() {
           initialCue={editingCue}
           plan={draft}
           playlists={playlists}
-          dayIndex={selectedDay ?? 0}
+          dayIndex={editingDay ?? 0}
           onSave={handleSaveCue}
           onDelete={editingCue ? () => handleDeleteCue(editingCue.id) : null}
           onClose={() => { setCueSheetOpen(false); setEditingCue(null); }}
@@ -600,24 +762,60 @@ function Banner({ styles, text, tone, C }: { styles: Styles; text: string; tone:
   );
 }
 
-// ── Cue row (live, with FIRE) ──
-function CueRow({ cue, onFire, styles, C }: { cue: TimelineCue; onFire: (id: string) => void; styles: Styles; C: Palette }) {
-  const hasError = !!cue.lastError;
+// ── Cue row (overview-resolved, with live FIRE + countdown) ──
+// Renders a day's resolved cue (atLocal time + kind) and layers the LIVE engine
+// cue (countdown / error / enabled) over it when one matches by id.
+function CueRow({
+  cue, dayIndex, live, onFire, styles, C,
+}: {
+  cue: OverviewCue;
+  /** When set (ALL DAYS view), prefixes the row with its day number. */
+  dayIndex: number | null;
+  /** Matching live engine cue, or null when not live-tracked. */
+  live: TimelineCue | null;
+  onFire: (id: string) => void;
+  styles: Styles;
+  C: Palette;
+}) {
+  const hasError = !!live?.lastError;
+  const triggerText = triggerSummaryText(cue.trigger);
+  const subtitle = dayIndex !== null
+    ? `D${dayIndex + 1} · ${cue.atLocal ?? '—'} · ${triggerText}`
+    : `${cue.atLocal ?? '—'} · ${triggerText}`;
+  const countdown = live
+    ? (live.enabled ? formatCountdown(live.nextInSec) : 'off')
+    : (cue.atLocal ?? '—');
   return (
     <View style={[styles.cueRow, hasError && { borderColor: C.error, backgroundColor: C.errorContainer }]}>
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={[styles.cueLabel, hasError && { color: C.error }]} numberOfLines={1}>{cue.label}</Text>
-        <Text style={styles.cueTrigger} numberOfLines={1}>{cue.trigger}</Text>
-        {hasError ? <Text style={styles.cueError} numberOfLines={2}>{cue.lastError}</Text> : null}
+        <Text style={styles.cueTrigger} numberOfLines={1}>{subtitle}</Text>
+        {hasError ? <Text style={styles.cueError} numberOfLines={2}>{live!.lastError}</Text> : null}
       </View>
-      <Text style={[styles.cueCountdown, !cue.enabled && { color: C.icon }]}>
-        {cue.enabled ? formatCountdown(cue.nextInSec) : 'off'}
-      </Text>
+      <Text style={[styles.cueCountdown, live && !live.enabled && { color: C.icon }]}>{countdown}</Text>
       <TouchableOpacity onPress={() => onFire(cue.id)} style={styles.fireButton} accessibilityLabel={`Fire cue ${cue.label}`}>
         <Text style={styles.fireButtonLabel}>FIRE</Text>
       </TouchableOpacity>
     </View>
   );
+}
+
+// Compact trigger summary for the overview cue subtitle. The live engine
+// cue carries a `trigger` string; the overview cue carries a structured
+// CueTrigger object, so summarise it here (parallels triggerSummary in the
+// template, kept local to avoid importing the maker helper into the live row).
+function triggerSummaryText(t: OverviewCue['trigger']): string {
+  switch (t.type) {
+    case 'clock': return `clock ${t.at}`;
+    case 'sun': {
+      const off = t.offsetMin ? ` ${t.offsetMin > 0 ? '+' : ''}${t.offsetMin}m` : '';
+      return `${t.event}${off}`;
+    }
+    case 'phase': return `phase ${t.phase}`;
+    case 'mood': return `mood ${t.from}→${t.to}`;
+    case 'manual': return 'manual';
+    default: return 'cue';
+  }
 }
 
 function RecentFireRow({ fire, styles }: { fire: TimelineRecentFire; styles: Styles }) {
@@ -668,6 +866,13 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
       textTransform: 'uppercase', marginTop: 8, marginBottom: 10,
     },
     helperLine: { fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary, marginTop: 8, marginBottom: 4 },
+    dayToggle: {
+      flexDirection: 'row', gap: 4, borderWidth: 1, borderColor: C.ghostBorder, borderRadius: 8, padding: 2,
+    },
+    dayToggleBtn: {
+      paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, minHeight: 30, justifyContent: 'center', alignItems: 'center',
+    },
+    dayToggleText: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6 },
     miniBtn: {
       paddingHorizontal: 16, paddingVertical: 8, minHeight: 36, borderRadius: 8,
       backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center',

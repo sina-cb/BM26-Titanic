@@ -30,6 +30,8 @@ import { DeckOverlayStack } from '@/components/DeckOverlayStack';
 import type { DeckOverlay, DeckOverlayAutopilot } from '@/utils/deckOverlaysApi';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
+import { useOperatorTakeover } from '@/hooks/useTimeline';
+import { PlanIndicatorPill, PLAN_INDICATOR_CYAN } from '@/components/timeline/PlanIndicatorPill';
 
 // 8pt hitSlop on every edge → a 28×28 visual button gets a 44×44 interactive
 // area (28 + 8 + 8 = 44), matching the mixer's touch-target floor.
@@ -150,6 +152,16 @@ export default function ControlDeckScreen() {
   // exports" bugs. See docs/16_captain_pad.md and
   // marsin_engine/lib/pattern_mixer.js (channel-split note).
   const deckChannelId: string | null = deckChannel?.id ?? null;
+
+  // ── Operator takeover (requests #3/#5) ─────────────────────────────────
+  // When a plan is driving the rig and the operator touches a manual control
+  // on this surface, they take it over: notifyInteraction() fires the takeover
+  // ONCE then keeps the lease alive (throttled) while they keep working. The
+  // PlanIndicatorPill (globals row, top-right) reflects plan/lease/countdown;
+  // the inline warning strip surfaces the live-plan takeover non-intrusively
+  // (no modal — never block a live performance).
+  const { planActive, leaseHeld, leaseRemainingSec, notifyInteraction, resumeNow } =
+    useOperatorTakeover();
 
   // Autopilot state (cycles through the active playlist on a timer)
   const [isPlaylistActive, setPlaylistActive] = useState<boolean>(false);
@@ -359,6 +371,7 @@ export default function ControlDeckScreen() {
   // already mirror in the WS handler — that's the source of truth, but
   // updating locally first avoids the visible "snap-back" on tap.
   const handleDeckTxChange = useCallback((patch: Partial<DeckTransitionConfig>) => {
+    notifyInteraction();
     // Optimistic apply with rollback (C5). We snapshot the fields the
     // patch touches BEFORE applying so a rejected POST can restore
     // exactly those keys without clobbering any concurrent WS update to
@@ -389,7 +402,7 @@ export default function ControlDeckScreen() {
       setDeckTxConfig((prev) => ({ ...prev, ...prevSnapshot }));
       Alert.alert('Transition setting not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
     });
-  }, []);
+  }, [notifyInteraction]);
 
   // Per-channel color metadata (docs/39 §8.4) on the DECK channel. Pure
   // operator-facing accent (no render effect) — tints the deck card for
@@ -450,6 +463,7 @@ export default function ControlDeckScreen() {
     // Deck tab only ever writes to the deck channel — there's a single
     // dedicated route for that now. We ignore the channelId arg (kept
     // for API compatibility with the previous mixer-routed call).
+    notifyInteraction();
     setDeckChannelControl(id, v0, v1, v2);
   };
 
@@ -469,6 +483,46 @@ export default function ControlDeckScreen() {
             DECK MAIN · LIVE OUTPUT
           </Text>
           <View style={{ flex: 1 }} />
+          {/* ── Plan-active takeover warning (request #3) ───────────────────
+              When a plan is live, a manual touch here is a takeover. We surface
+              a SUBTLE inline warning beside the indicator (NOT a modal — never
+              block a live performance). While a lease is held it becomes the
+              "plan resumes in M:SS" countdown + a one-tap RESUME affordance. */}
+          {planActive && !leaseHeld ? (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', gap: 6,
+              paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
+              borderWidth: 1, borderColor: PLAN_INDICATOR_CYAN,
+            }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: PLAN_INDICATOR_CYAN, textTransform: 'uppercase' }}>
+                PLAN LIVE · A TOUCH TAKES OVER
+              </Text>
+            </View>
+          ) : leaseHeld ? (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', gap: 8,
+              paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
+              borderWidth: 1, borderColor: '#f5a623',
+            }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: '#f5a623', textTransform: 'uppercase' }}>
+                {`TOOK OVER · PLAN RESUMES ${leaseRemainingSec === null ? '—' : `${Math.floor(leaseRemainingSec / 60)}:${String(leaseRemainingSec % 60).padStart(2, '0')}`}`}
+              </Text>
+              <TouchableOpacity
+                onPress={() => { void resumeNow(); }}
+                hitSlop={ICON_BTN_HIT_SLOP}
+                accessibilityRole="button"
+                accessibilityLabel="Resume the plan now"
+              >
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: '#f5a623', textTransform: 'uppercase' }}>
+                  RESUME NOW
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          {/* Compact plan-status glyph — RIGHTMOST in the globals row (request
+              #5). Matches the OscStatusPill idiom (48px tile, coloured
+              border/dot/label). Tapping routes to the Timeline tab. */}
+          <PlanIndicatorPill />
         </View>
         {/* "LIVE OUTPUT" preview = the engine's `preDimmer` composite — the
             composition AFTER global FX (hue shift / invert / group color-locks)
@@ -564,7 +618,7 @@ export default function ControlDeckScreen() {
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
                   <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>AUTOPILOT</Text>
                   <TouchableOpacity
-                    onPress={() => { const nx = !isPlaylistActive; setPlaylistActive(nx); setAutopilot(nx, playlistDelayStr, isShuffle); }}
+                    onPress={() => { notifyInteraction(); const nx = !isPlaylistActive; setPlaylistActive(nx); setAutopilot(nx, playlistDelayStr, isShuffle); }}
                     style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: isPlaylistActive ? C.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: isPlaylistActive ? 'transparent' : C.ghostBorder }}
                   >
                     <IconSymbol name={isPlaylistActive ? "pause.fill" : "play.fill"} size={16} color={isPlaylistActive ? "#FFF" : C.text} />
@@ -576,7 +630,7 @@ export default function ControlDeckScreen() {
 
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                   <TouchableOpacity
-                    onPress={() => { const nx = !isShuffle; setIsShuffle(nx); setAutopilot(isPlaylistActive, playlistDelayStr, nx); }}
+                    onPress={() => { notifyInteraction(); const nx = !isShuffle; setIsShuffle(nx); setAutopilot(isPlaylistActive, playlistDelayStr, nx); }}
                     style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
                     accessibilityRole="switch"
                     accessibilityLabel={isShuffle ? 'Disable autopilot shuffle' : 'Enable autopilot shuffle'}
@@ -589,7 +643,7 @@ export default function ControlDeckScreen() {
                       icon token when off). Toggling it POSTs the group fields to
                       /deck/playlist/autopilot via setAutopilot's group arg. */}
                   <TouchableOpacity
-                    onPress={() => { const nx = !groupMode; setGroupMode(nx); setAutopilot(undefined, undefined, undefined, { groupMode: nx }); }}
+                    onPress={() => { notifyInteraction(); const nx = !groupMode; setGroupMode(nx); setAutopilot(undefined, undefined, undefined, { groupMode: nx }); }}
                     style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
                     accessibilityRole="switch"
                     accessibilityLabel={groupMode ? 'Disable autopilot pattern groups' : 'Enable autopilot pattern groups'}
@@ -604,6 +658,7 @@ export default function ControlDeckScreen() {
               <AutopilotTimerPills
                 value={parseInt(playlistDelayStr, 10) || 30}
                 onChange={(v) => {
+                  notifyInteraction();
                   const str = String(v);
                   setPlaylistDelayStr(str);
                   setAutopilot(isPlaylistActive, str, isShuffle);

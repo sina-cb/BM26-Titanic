@@ -32,6 +32,12 @@ export function defaultTimelineState() {
     // The lease auto-starts the program at expiresAtMs (show goes on, I2), or the
     // operator ENABLEs (start now) / DISMISSes (cancel, latch firedToday) it.
     pendingProgram: null,
+    // Operator-takeover lease (docs/38 §16): non-null WHILE the operator holds
+    // manual control of an active plan. null = no lease. Armed shape:
+    //   { expiresAtMs }
+    // The plan auto-resumes at expiresAtMs (runs catchUp at the wall-clock time
+    // of release). RUNTIME state — dropped on boot, never resumed stale.
+    operatorLease: null,
     currentPhase: null,
     currentMood: 'calm',
     lastFiredCueId: null,

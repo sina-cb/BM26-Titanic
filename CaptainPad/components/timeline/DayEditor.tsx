@@ -39,13 +39,20 @@ const SUN_ROW_DEFS: { key: string; label: string }[] = [
 ];
 
 export function DayEditor({
-  visible, day, plan, onAddCue, onEditCue, onDeleteCue, onClose,
+  visible, day, plan, nowMinutes, onAddCue, onEditCue, onDeleteCue, onClose,
 }: {
   visible: boolean;
   /** Overview for the selected day (resolved sun + cue times). null while loading. */
   day: OverviewDay | null;
   /** Draft plan (source of editable cue objects). */
   plan: ShowPlan;
+  /**
+   * Minutes-of-day for the live NOW playhead, in the plan tz — non-null ONLY
+   * when this editor is showing TODAY. A NOW marker row is then woven into the
+   * time-ordered list at the current time (top=earlier, bottom=later), the same
+   * vertical ordering the strip column uses.
+   */
+  nowMinutes: number | null;
   onAddCue: () => void;
   onEditCue: (cue: PlanCue) => void;
   onDeleteCue: (cueId: string) => void;
@@ -98,9 +105,12 @@ export function DayEditor({
   );
 
   // Merge sun rows + cue rows, time-ordered. Time-less cues sink to bottom.
+  // When viewing TODAY, a NOW marker is woven in at the current minute so the
+  // operator sees the live playhead within the day's vertical timeline.
   type Item =
     | { type: 'sun'; key: string; sortMins: number; row: SunRow }
-    | { type: 'cue'; key: string; sortMins: number; cue: PlanCue };
+    | { type: 'cue'; key: string; sortMins: number; cue: PlanCue }
+    | { type: 'now'; key: string; sortMins: number };
 
   const items: Item[] = useMemo(() => {
     const out: Item[] = [];
@@ -110,9 +120,18 @@ export function DayEditor({
       const mins = hhmmToMinutes(at);
       out.push({ type: 'cue', key: `cue:${cue.id}`, sortMins: mins === null ? 100000 : mins, cue });
     }
+    if (nowMinutes !== null) {
+      // Stable tiebreak (+0.5) keeps NOW just *below* an event at the same
+      // minute, reading as "we've reached/passed it".
+      out.push({ type: 'now', key: 'now-playhead', sortMins: nowMinutes + 0.5 });
+    }
     out.sort((a, b) => a.sortMins - b.sortMins);
     return out;
-  }, [sunRows, draftCuesForDay, atLocalById]);
+  }, [sunRows, draftCuesForDay, atLocalById, nowMinutes]);
+
+  const nowLabel = nowMinutes !== null
+    ? `${String(Math.floor(nowMinutes / 60)).padStart(2, '0')}:${String(nowMinutes % 60).padStart(2, '0')}`
+    : '';
 
   return (
     <Modal transparent visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -144,6 +163,16 @@ export function DayEditor({
                 <Text style={styles.empty}>No sun events or cues for this day yet. Tap ＋ ADD CUE.</Text>
               ) : (
                 items.map((it) => {
+                  if (it.type === 'now') {
+                    return (
+                      <View key={it.key} style={styles.nowRow}>
+                        <Text style={[styles.nowTime, { color: C.error }]}>{nowLabel}</Text>
+                        <View style={[styles.nowLine, { backgroundColor: C.error }]} />
+                        <View style={[styles.nowDot, { backgroundColor: C.error }]} />
+                        <Text style={[styles.nowLabel, { color: C.error }]}>NOW</Text>
+                      </View>
+                    );
+                  }
                   if (it.type === 'sun') {
                     return (
                       <View key={it.key} style={styles.sunRow}>
@@ -342,6 +371,34 @@ function makeStyles(C: Palette) {
       borderColor: C.ghostBorder,
       alignItems: 'center',
       justifyContent: 'center',
+    },
+    nowRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingVertical: 6,
+      paddingHorizontal: 12,
+      marginVertical: 2,
+    },
+    nowTime: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 13,
+      width: 52,
+    },
+    nowDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+    },
+    nowLine: {
+      flex: 1,
+      height: 2,
+      borderRadius: 1,
+    },
+    nowLabel: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 11,
+      letterSpacing: 1,
     },
   });
 }

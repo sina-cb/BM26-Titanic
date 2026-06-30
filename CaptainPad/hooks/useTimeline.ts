@@ -19,7 +19,7 @@
 // seed is unreachable, `connected` is false and `state` is null. The tab
 // renders an offline banner from that — never stale data.
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { engineEvents } from '@/utils/engineEvents';
 import {
   fetchTimelineState,
@@ -32,6 +32,8 @@ import {
   enableTimelineProgram,
   dismissTimelineProgram,
   fireTimelineCue,
+  postTimelineTakeover,
+  postTimelineActivity,
   TimelineState,
   TimelineMode,
 } from '@/utils/timelineApi';
@@ -55,6 +57,10 @@ export interface TimelineActions {
   /** Dismiss the pending-program lease; stay manual (docs/38 §16.5 lease-dismiss). */
   dismissProgram: () => Promise<boolean>;
   fireCue: (id: string) => Promise<boolean>;
+  /** Take the rig over from a running plan; arms the operator lease. */
+  takeover: () => Promise<boolean>;
+  /** Refresh the takeover lease (no-op when none held). Throttle the caller. */
+  activity: () => Promise<boolean>;
 }
 
 export type UseTimelineResult = TimelineHookState & TimelineActions;
@@ -230,6 +236,32 @@ async function _fireCue(id: string): Promise<boolean> {
   return true;
 }
 
+async function _takeover(): Promise<boolean> {
+  const r = await postTimelineTakeover();
+  if (!r.ok) {
+    _emit({ ..._cached, error: r.error || 'Failed to take over plan' });
+    return false;
+  }
+  // Re-seed so the indicator flips to the lease/countdown state immediately —
+  // the engine also broadcasts `timelineState`, this just converges faster.
+  await _reseedAfterAction();
+  return true;
+}
+
+async function _activity(): Promise<boolean> {
+  // A harmless no-op engine-side when no lease is held; only refreshes the
+  // expiry while overridden. We do NOT re-seed here — activity pings are
+  // high-frequency and the next `timelineState` broadcast carries the fresh
+  // `expiresAtMs`. A failure is non-fatal (the countdown still ticks), so we
+  // surface it on the error channel but never throw.
+  const r = await postTimelineActivity();
+  if (!r.ok) {
+    _emit({ ..._cached, error: r.error || 'Failed to refresh lease' });
+    return false;
+  }
+  return true;
+}
+
 export function useTimeline(): UseTimelineResult {
   _ensureInitialized();
   const [state, setState] = useState<TimelineHookState>(_cached);
@@ -251,5 +283,96 @@ export function useTimeline(): UseTimelineResult {
     enableProgram: _enableProgram,
     dismissProgram: _dismissProgram,
     fireCue: _fireCue,
+    takeover: _takeover,
+    activity: _activity,
   };
+}
+
+// ── Operator-takeover interaction hook (DECK/MIXER) ──────────────────────
+//
+// Request #3: when a plan is driving the rig and the operator touches a manual
+// control, they are taking over. This hook packages the takeover/activity
+// wiring + a live countdown so the deck and mixer share ONE implementation
+// (no drift between the two surfaces).
+//
+//   notifyInteraction()  — call on EVERY manual control interaction (fader,
+//     button, pattern select). It:
+//       • fires POST /timeline/takeover ONCE on the first interaction while a
+//         plan is active and no lease is yet held (debounced via a ref so a
+//         fader drag doesn't spam the route), then
+//       • throttles POST /timeline/activity to ~once / ACTIVITY_THROTTLE_MS
+//         while a lease IS held, so the lease stays alive only as long as the
+//         operator keeps working. When they stop, real inactivity expires it.
+//
+//   leaseRemainingSec    — the live "plan resumes in M:SS" countdown derived
+//     from operatorLease.expiresAtMs, ticked every 1s. null when no lease.
+//
+// We deliberately do NOT run any fixed idle timer — pings track real touches so
+// genuine 2-min inactivity actually releases the lease engine-side (catchUp).
+
+export interface OperatorTakeover {
+  /** True when controller ∈ {autopilot,program} and not paused/overridden. */
+  planActive: boolean;
+  /** True while an operator takeover lease is held (mode overridden). */
+  leaseHeld: boolean;
+  /** Live "plan resumes in" seconds, or null when no lease is held. */
+  leaseRemainingSec: number | null;
+  /** Call on any manual control interaction (fader/button/select). */
+  notifyInteraction: () => void;
+  /** Hand the plan back immediately (POST /timeline/resume). */
+  resumeNow: () => Promise<boolean>;
+}
+
+// Throttle window for activity pings — roughly one ping per this many ms of
+// continued interaction (well under the 2-min lease window).
+const ACTIVITY_THROTTLE_MS = 10_000;
+
+export function useOperatorTakeover(): OperatorTakeover {
+  const { state, takeover, activity, resume } = useTimeline();
+  const planActive = state?.planActive === true;
+  const lease = state?.operatorLease ?? null;
+  const leaseHeld = !!lease || state?.mode === 'overridden';
+
+  // Refs so the throttle/debounce survive re-renders without re-subscribing.
+  const lastActivityRef = useRef(0);
+  const takeoverInFlightRef = useRef(false);
+  // Mirror the live state into refs so the stable notifyInteraction callback
+  // reads the latest values without being re-created on every state change.
+  const planActiveRef = useRef(planActive);
+  const leaseHeldRef = useRef(leaseHeld);
+  useEffect(() => { planActiveRef.current = planActive; }, [planActive]);
+  useEffect(() => { leaseHeldRef.current = leaseHeld; }, [leaseHeld]);
+
+  const notifyInteraction = useCallback(() => {
+    if (leaseHeldRef.current) {
+      // Lease already held → keep it alive, throttled to real interaction.
+      const now = Date.now();
+      if (now - lastActivityRef.current >= ACTIVITY_THROTTLE_MS) {
+        lastActivityRef.current = now;
+        void activity();
+      }
+      return;
+    }
+    if (planActiveRef.current && !takeoverInFlightRef.current) {
+      // First interaction against a live plan → take over ONCE.
+      takeoverInFlightRef.current = true;
+      lastActivityRef.current = Date.now();
+      void takeover().finally(() => { takeoverInFlightRef.current = false; });
+    }
+  }, [activity, takeover]);
+
+  // 1s ticker → live countdown. Only runs while a lease is held.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!lease) return;
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [lease]);
+
+  const leaseRemainingSec = (() => {
+    if (!lease || !Number.isFinite(lease.expiresAtMs)) return null;
+    return Math.max(0, Math.round((lease.expiresAtMs - Date.now()) / 1000));
+  })();
+
+  return { planActive, leaseHeld, leaseRemainingSec, notifyInteraction, resumeNow: resume };
 }
