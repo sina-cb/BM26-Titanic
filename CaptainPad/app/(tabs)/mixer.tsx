@@ -2291,6 +2291,7 @@ export default function MixerScreen() {
           row opens the channel-grouping modal. The deck renders <CPCControls />
           with no `trailing`, so its globals row is unchanged. */}
       <CPCControls
+        screen="mixer"
         trailing={
           <TouchableOpacity
             style={styles.groupsButton}
