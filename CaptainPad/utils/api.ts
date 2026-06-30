@@ -1129,6 +1129,13 @@ export async function updateMixerMaster(master: number): Promise<ApiResult<any>>
       body: JSON.stringify({ master }),
     });
     const data = await res.json();
+    // Codex P0 — fail loud: the engine 400s a non-finite master (api_server
+    // /mixer PATCH). Surface that instead of reporting a phantom success, so
+    // the MasterFadeGroup 0s (instant TO BLACK / UP) Alert can actually fire.
+    // Matches the res.ok guard the sibling /mixer writers carry.
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
     return { ok: true, data };
   } catch (err: any) {
     return { ok: false, error: err.message };
