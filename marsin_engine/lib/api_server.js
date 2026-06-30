@@ -3387,6 +3387,55 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     broadcastChannelPlaylistData(ch);
     broadcastMixerState();
   }
+  // Patch the live deckTransitionConfig from a timeline cue (docs/38 §16.9). Same
+  // validate/clamp contract as POST /deck/transition-config so an authored
+  // transition can never push an out-of-range duration to the render loop. The
+  // mode is gated by the show_plan validator (trans_crossfade|flash|dissolve)
+  // but we re-assert the trans_* shape here too — FAIL LOUD, never coerce.
+  function timelineSetDeckTransition(patch) {
+    if (!patch || typeof patch !== 'object') throw new Error('setDeckTransition: patch must be an object');
+    if (patch.enabled !== undefined) deckTransitionConfig.enabled = !!patch.enabled;
+    if (patch.shuffle !== undefined) deckTransitionConfig.shuffle = !!patch.shuffle;
+    if (patch.mode !== undefined) {
+      if (typeof patch.mode !== 'string' || !patch.mode.startsWith('trans_')) {
+        throw new Error(`setDeckTransition: mode must be a trans_* name, got '${patch.mode}'`);
+      }
+      deckTransitionConfig.mode = patch.mode;
+    }
+    if (patch.durationMs !== undefined) {
+      const n = Number(patch.durationMs);
+      if (!Number.isFinite(n)) throw new Error(`setDeckTransition: durationMs must be finite, got '${patch.durationMs}'`);
+      deckTransitionConfig.durationMs = Math.max(DECK_TRANSITION_MIN_MS, Math.min(DECK_TRANSITION_MAX_MS, n));
+    }
+    saveAllState();
+    broadcastWs({ type: 'deckTransitionConfig', ...deckTransitionConfig });
+  }
+  // Enable / disable ALL deck overlays from a timeline cue (docs/38 §16.9).
+  // `enabled:true` honors the deck's configured overlays (flips each overlay's
+  // own enabled flag on); `enabled:false` turns them all off. Mirrors the
+  // PATCH /deck/overlays/:id { enabled } write per overlay, then saves +
+  // broadcasts once.
+  function timelineSetDeckOverlaysEnabled(enabled) {
+    const want = !!enabled;
+    const overlays = mixer.getDeckOverlays ? mixer.getDeckOverlays() : [];
+    for (const overlay of overlays) overlay.enabled = want;
+    saveAllState();
+    broadcastDeckState();
+  }
+  // Pin engine output to the deck via the EXISTING viewOverride machinery
+  // (docs/38 §16.9). The TIMELINE owns this pin while the plan drives the deck —
+  // so we do NOT arm the controlLock (PortWatch 30 s) lease here; the plan's
+  // own operator-takeover lease governs release. Idempotent: a no-op when
+  // already pinned to deck.
+  function timelineForceDeckView() {
+    if (viewOverrideMode === 'deck') return;
+    savedTargetViewFader = mixer.targetViewFader;
+    mixer.targetViewFader = 0.0;
+    viewOverrideMode = 'deck';
+    syncControlLockToGlobals();
+    broadcastViewOverride();
+    console.log('[viewOverride] pinned to deck by timeline (plan owns the deck)');
+  }
 
   const timelineConfigBlock = (engineCore.engineConfig && engineCore.engineConfig.timeline) || {};
   // Gate the in-engine Timeline on config.timeline.enabled. The env escape
@@ -3449,6 +3498,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         fireScheduledTask: (id) => scheduledTaskService.fireNow(id),
         listMixerChannelIds: () => mixer.getMixerChannels().map(c => c.id),
         listPlaylists: () => playlistManager.list(),
+        // docs/38 §16.9 deck knobs + mixer→deck output pin. Bound to the real
+        // internal engine functions (no HTTP self-calls), same style as above.
+        setDeckTransition: (patch) => timelineSetDeckTransition(patch),
+        setDeckOverlaysEnabled: (enabled) => timelineSetDeckOverlaysEnabled(enabled),
+        forceDeckView: () => timelineForceDeckView(),
+        // Read-only view of the engine's current view-override pin so getState()
+        // can surface `forcingDeckView` (plan active AND output pinned to deck).
+        getViewOverrideMode: () => viewOverrideMode,
       },
       broadcast: broadcastWs,
       config: {
@@ -5840,6 +5897,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // a first take always starts the countdown.
           armControlLockLease();
         } else if (requested === null || requested === '' || requested === 'clear') {
+          // docs/38 §16.9: the engine does NOT auto-arm the operator-takeover
+          // lease from a passive view event. When the plan is forcing the deck
+          // view (`forcingDeckView`), a switch to mixer is CONFIRM-GATED in the
+          // CaptainPad UI (confirm prompt + 1-minute auto-revert to deck). On an
+          // explicit operator confirm the UI calls POST /timeline/takeover. So
+          // this route just clears the raw deck-pin — no timeline.takeover() here.
           clearViewOverrideInternal();
           disarmControlLockLease();
         } else {

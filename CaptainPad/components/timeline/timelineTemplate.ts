@@ -20,6 +20,7 @@ import {
   CueTrigger,
   CueAction,
   SunEvent,
+  DECK_TRANSITION_MODE_LABEL,
 } from '@/utils/timelineApi';
 
 // Black Rock City coordinates (matches the existing playa_default plan).
@@ -135,8 +136,14 @@ export function actionSummary(a: CueAction): string {
   switch (a.type) {
     case 'look':
       return `look · ${a.look}`;
-    case 'playlist':
-      return `playlist · ${a.name}`;
+    case 'playlist': {
+      // Compact deck extras: transition mode (or `default` when inheriting) and
+      // overlay state, only shown when set — e.g. `playlist · default · flash · ovl-off`.
+      const parts = [`playlist · ${a.name}`];
+      parts.push(a.transition ? DECK_TRANSITION_MODE_LABEL[a.transition.mode].toLowerCase() : 'default');
+      if (a.overlays) parts.push(a.overlays === 'disable' ? 'ovl-off' : 'ovl-on');
+      return parts.join(' · ');
+    }
     case 'globals':
       return 'globals';
     default:

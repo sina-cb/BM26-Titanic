@@ -1001,6 +1001,80 @@ inactivity window). `/mode {paused}` remains a **separate hard pause** with **no
 auto-resume** — the operator-takeover lease is the auto-resuming concept; a hard
 pause is not.
 
+### 16.9 Deck transition + overlays on a playlist cue, and the mixer→deck output pin
+
+Two capabilities, both bound to the DECK (the plan's job is to drive the deck):
+
+**(a) Two optional `playlist`-action fields (DECK target only).** A `playlist`
+action may now configure how its deck swap looks and whether deck overlays are on:
+
+```yaml
+action:
+  type: playlist
+  name: party_pl
+  target: { channel: deck }          # transition/overlays are DECK-ONLY
+  transition:                         # optional — how the deck swap animates
+    mode: trans_dissolve              # REQUIRED if `transition` present:
+                                      #   trans_crossfade | trans_flash | trans_dissolve
+    durationMs: 1500                  # optional, Int > 0 (clamped 50..30000 ms by the engine)
+    enabled: true                     # optional, default true when a transition is requested
+  overlays: enable                    # optional — 'enable' (honor configured overlays) | 'disable' (all off)
+```
+
+Validation is **throw-style / fail-loud** (`show_plan.js validateCueTransition` +
+the `playlist` case): an empty `transition` (no `mode`) throws; an unknown mode
+throws with the allowed list; a `transition` **or** `overlays` on a non-`deck`
+target throws (`… is only valid for a deck target`). Absent fields → **no change**
+(the deck's existing transition-config / overlay-enabled state is left untouched).
+
+When a deck `playlist` cue fires, `TimelineService._applyAction` applies, in order:
+`setDeckTransition(patch)` → load playlist → `setDeckOverlaysEnabled(bool)` →
+autopilot → `forceDeckView()`. The deps are bound in `api_server.js` to the real
+internal engine functions (`timelineSetDeckTransition`, which shares the
+`/deck/transition-config` validate+clamp contract; `timelineSetDeckOverlaysEnabled`,
+which flips every overlay's `enabled`; `timelineForceDeckView`) — **no HTTP
+self-calls**. A missing dep **fails loud** (the cue records a loud `cueError`).
+
+**(b) Output is FORCED mixer→deck whenever the plan drives the deck.** The plan
+asserts `viewOverrideMode='deck'` through the **existing** viewOverride machinery
+(§ "view override" in `api_server.js`) via the `forceDeckView()` dep — it does
+**not** fork a parallel pin. The plan owns this pin while it drives the deck, so it
+deliberately does **not** arm the §controlLock (PortWatch 30 s) lease. The pin is
+(re-)asserted on every deck-baseline reconcile (`_applyAutopilotBaseline`,
+`_rearmBaselineAutopilot`), on `resume()`/`_catchUp()`, and on every deck-targeted
+playlist/look cue.
+
+**The switch-to-mixer is CONFIRM-GATED — and that lives in the UI, not the engine.**
+The engine does **NOT** infer an operator takeover from a passive view-change
+broadcast. Concretely:
+
+- The engine surfaces a boolean **`forcingDeckView`** on `timelineState` (= `planActive
+  && viewOverrideMode === 'deck'`). CaptainPad reads it to know "the plan is forcing
+  the deck and a switch to mixer needs confirmation".
+- When the operator tries to switch to mixer while `forcingDeckView`, **CaptainPad**
+  (a follow-up agent) shows a confirm prompt and, if unanswered within **1 minute**,
+  **reverts the output to deck**. The engine's `/mixer/view-override` route does
+  **not** call `timelineService.takeover()` on a view event — it only clears the raw
+  deck-pin.
+- On an **explicit operator confirm**, CaptainPad calls `POST /timeline/takeover` →
+  the **operator-takeover lease (§16.8)** arms (`mode='overridden'`, deck FROZEN).
+  After `operatorLeaseSec` (default 120 s) of UI inactivity the §16.8 tick
+  auto-release fires → `_catchUp()` resumes the plan at now → the baseline
+  re-asserts `forceDeckView()` (snaps output back to deck).
+
+So the engine provides **primitives + force-deck-on-active + a clean state surface**;
+the confirm + 1-minute-revert is a UI concern. The two leases never fight: the
+viewOverride pin is owned by the plan while active; the operator-takeover lease
+(armed only by an explicit, UI-confirmed `/timeline/takeover`) governs plan ownership.
+
+**New deps** (constructed in `api_server.js`'s `new TimelineService({deps})`):
+`setDeckTransition(patch)`, `setDeckOverlaysEnabled(bool)`, `forceDeckView()`,
+`getViewOverrideMode()` (read-only, backs `forcingDeckView`).
+
+**State the UI reads** (`timelineState` getState + WS broadcast): `planActive`,
+**`forcingDeckView`** (new), `operatorLease{expiresAtMs}|null`, `operatorLeaseSec`,
+`mode`, `controller`.
+
 ---
 
 ## 17. What this deliberately is **not** (v1)

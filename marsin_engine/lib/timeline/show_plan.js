@@ -33,6 +33,17 @@ const MOOD_VALUES = Object.freeze(['calm', 'party']);
 const TARGET_CHANNELS = Object.freeze(['deck', 'mixer', 'all']);
 const CUE_KINDS = Object.freeze(['program', 'mood', 'ambient']);
 
+// Deck playlist transition styles a 'playlist' action may request (docs/38 §16.9).
+// Mirrors the engine's deck transition-config `mode` (api_server.js) — the swap
+// runs as a soft double-buffer fade in this style. UI drops the rarer wipe/iris
+// styles; the engine accepts exactly these three for an authored cue.
+export const CUE_TRANSITION_MODES = Object.freeze([
+  'trans_crossfade', 'trans_flash', 'trans_dissolve',
+]);
+// A playlist action's `overlays` field: enable (honor configured overlays) or
+// disable (turn ALL deck overlays off). Absent → no change (docs/38 §16.9).
+const CUE_OVERLAY_MODES = Object.freeze(['enable', 'disable']);
+
 // ── small validators (all throw-style; first arg is a context label) ──────────
 
 function isPlainObject(v) {
@@ -311,6 +322,31 @@ function validateTrigger(trigger, label, phaseNames) {
   }
 }
 
+/**
+ * A 'playlist' action's optional `transition` block (docs/38 §16.9) — how the deck
+ * swap that loads this playlist should look. THROW-style; `mode` is REQUIRED when
+ * the block is present (an empty {} is an authoring error). Returns a normalized
+ * { mode, durationMs?, enabled? }.
+ */
+function validateCueTransition(transition, label) {
+  if (!isPlainObject(transition)) throw new Error(`${label} must be an object { mode, durationMs?, enabled? }`);
+  if (transition.mode === undefined) {
+    throw new Error(`${label}.mode is required (one of ${CUE_TRANSITION_MODES.join(', ')})`);
+  }
+  const mode = assertString(transition.mode, `${label}.mode`);
+  if (!CUE_TRANSITION_MODES.includes(mode)) {
+    throw new Error(`${label}.mode must be one of ${CUE_TRANSITION_MODES.join(', ')}, got ${JSON.stringify(transition.mode)}`);
+  }
+  const out = { mode };
+  if (transition.durationMs !== undefined) {
+    const ms = assertInteger(transition.durationMs, `${label}.durationMs`);
+    if (ms <= 0) throw new Error(`${label}.durationMs must be an integer > 0, got ${ms}`);
+    out.durationMs = ms;
+  }
+  if (transition.enabled !== undefined) out.enabled = assertBool(transition.enabled, `${label}.enabled`);
+  return out;
+}
+
 function validateAction(action, label, lookNames) {
   if (!isPlainObject(action)) throw new Error(`${label} must be an object`);
   switch (action.type) {
@@ -318,6 +354,24 @@ function validateAction(action, label, lookNames) {
       const out = { type: 'playlist', name: assertSlug(action.name, `${label}.name`) };
       out.target = validateTarget(action.target, `${label}.target`);
       if (action.autopilot !== undefined) out.autopilot = validateAutopilot(action.autopilot, `${label}.autopilot`);
+      // transition + overlays are DECK-ONLY knobs (docs/38 §16.9): they configure
+      // the deck's soft-swap / overlay layers, which have no meaning on a mixer
+      // channel. A non-deck target with either field is an authoring error.
+      if (action.transition !== undefined) {
+        if (out.target.channel !== 'deck') {
+          throw new Error(`${label}.transition is only valid for a deck target`);
+        }
+        out.transition = validateCueTransition(action.transition, `${label}.transition`);
+      }
+      if (action.overlays !== undefined) {
+        if (out.target.channel !== 'deck') {
+          throw new Error(`${label}.overlays is only valid for a deck target`);
+        }
+        if (!CUE_OVERLAY_MODES.includes(action.overlays)) {
+          throw new Error(`${label}.overlays must be one of ${CUE_OVERLAY_MODES.join(', ')}, got ${JSON.stringify(action.overlays)}`);
+        }
+        out.overlays = action.overlays;
+      }
       return out;
     }
     case 'look': {

@@ -170,6 +170,14 @@ export class TimelineService {
    *   fireScheduledTask(id)                  — scheduled-tasks fire-now
    *   listMixerChannelIds()                  — array of mixer channel ids (for target 'all')
    *   listPlaylists()                        — playlist library listing
+   *   setDeckTransition(patch)               — patch the deck transition-config
+   *                                            ({mode, durationMs?, enabled?}) before a deck swap
+   *   setDeckOverlaysEnabled(bool)           — enable (honor configured) / disable ALL deck overlays
+   *   forceDeckView()                        — PIN engine output to the deck via the existing
+   *                                            viewOverride machinery (docs/38 §16.9) — the plan owns
+   *                                            the deck-pin while it drives the deck
+   *   getViewOverrideMode()                  — read-only: current engine view-override ('deck'|null),
+   *                                            so getState can surface `forcingDeckView`
    * where `target` is { channel:'deck'|'mixer'|'all', id }.
    */
   constructor({ scene, sceneDir, stateDir, getMood, deps, broadcast, config, nowFn }) {
@@ -355,6 +363,44 @@ export class TimelineService {
       : `mixer:${target.id} ← autopilot ${JSON.stringify(state)}`);
   }
 
+  // Patch the deck transition-config (mode/duration/enabled) before a deck
+  // playlist swap so the load animates in the authored style (docs/38 §16.9). A
+  // requested transition implies the operator wants the soft swap → default
+  // `enabled:true` when the cue didn't say otherwise. FAIL LOUD if the dep is
+  // missing (codex P0 — never silently drop an authored transition).
+  async _applyDeckTransition(transition, steps) {
+    if (typeof this.deps.setDeckTransition !== 'function') {
+      throw new Error('setDeckTransition dep is required to apply a deck transition');
+    }
+    const patch = { mode: transition.mode, enabled: transition.enabled !== undefined ? transition.enabled : true };
+    if (transition.durationMs !== undefined) patch.durationMs = transition.durationMs;
+    await this.deps.setDeckTransition(patch);
+    steps.push(`deck ← transition ${JSON.stringify(patch)}`);
+  }
+
+  // Enable (honor the deck's configured overlays) or disable ALL deck overlays
+  // (docs/38 §16.9). FAIL LOUD if the dep is missing.
+  async _applyDeckOverlays(mode, steps) {
+    if (typeof this.deps.setDeckOverlaysEnabled !== 'function') {
+      throw new Error('setDeckOverlaysEnabled dep is required to apply deck overlays');
+    }
+    const enabled = mode === 'enable';
+    await this.deps.setDeckOverlaysEnabled(enabled);
+    steps.push(`deck overlays ← ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  // Pin engine output to the deck through the EXISTING viewOverride machinery
+  // (docs/38 §16.9). The plan OWNS the deck-pin while it drives the deck; an
+  // operator view-change off deck is what arms the operator-takeover lease
+  // (wired in api_server's /mixer/view-override route). FAIL LOUD if missing.
+  async _forceDeckView(steps) {
+    if (typeof this.deps.forceDeckView !== 'function') {
+      throw new Error('forceDeckView dep is required to pin output to the deck');
+    }
+    await this.deps.forceDeckView();
+    if (steps) steps.push('output ← deck (view pinned)');
+  }
+
   async _applyTaskToggles(enable, disable, steps) {
     for (const id of enable || []) {
       await this.deps.patchScheduledTask(id, { enabled: true });
@@ -404,6 +450,10 @@ export class TimelineService {
     const state = { active: true, delay_s: ap.delay_s, shuffle: ap.shuffle };
     for (const target of targets) await this._setAutopilotOnTarget(target, state, steps);
     this._baselineArmed = true;
+    // The plan is active and reconciling its DECK baseline → pin output to the
+    // deck (docs/38 §16.9). Only when the baseline actually drives the deck; a
+    // mixer-only baseline leaves the operator's view choice alone.
+    if (targets.some((t) => t.kind === 'deck')) await this._forceDeckView(steps);
     return { steps };
   }
 
@@ -414,10 +464,20 @@ export class TimelineService {
     switch (action.type) {
       case 'playlist': {
         const targets = await this._resolveTargets(action.target);
+        const onDeck = targets.some((t) => t.kind === 'deck');
+        // Deck transition + overlays are validated DECK-ONLY (show_plan.js), so
+        // they only ever apply when a deck target is in play. Configure the
+        // transition BEFORE the load so the swap that loads the playlist uses
+        // the requested style/duration (docs/38 §16.9).
+        if (action.transition && onDeck) await this._applyDeckTransition(action.transition, steps);
         for (const target of targets) await this._loadPlaylistOnTarget(target, action.name, steps);
+        if (action.overlays && onDeck) await this._applyDeckOverlays(action.overlays, steps);
         if (action.autopilot) {
           for (const target of targets) await this._setAutopilotOnTarget(target, action.autopilot, steps);
         }
+        // The plan is driving the DECK → pin engine output to the deck (docs/38
+        // §16.9). Reuses the existing viewOverride machinery via the injected dep.
+        if (onDeck) await this._forceDeckView(steps);
         break;
       }
       case 'look': {
@@ -503,6 +563,9 @@ export class TimelineService {
     const state = { active: true, delay_s: ap.delay_s, shuffle: ap.shuffle };
     for (const target of targets) await this.deps.setAutopilot({ target, state });
     this._baselineArmed = true;
+    // Resuming the deck baseline (pause/hold → armed) re-pins output to the deck
+    // (docs/38 §16.9) so a stale operator view doesn't leave the plan running off-screen.
+    if (targets.some((t) => t.kind === 'deck')) await this._forceDeckView(null);
   }
 
   // Keep the engine baseline autopilot armed IFF the controller is 'autopilot'.
@@ -749,7 +812,8 @@ export class TimelineService {
       return {
         type: 'timelineState',
         mode: 'armed', scene: this.scene, activePlan: this.activePlan,
-        controller: 'autopilot', planActive: false, autopilotEnabled: true, activeProgram: null,
+        controller: 'autopilot', planActive: false, forcingDeckView: false,
+        autopilotEnabled: true, activeProgram: null,
         pendingProgram: null, operatorLease: null, operatorLeaseSec: this.operatorLeaseSec,
         currentPhase: null, currentMood: 'calm', party: 0, moodValue: 0,
         engineConnected: true,
@@ -813,6 +877,13 @@ export class TimelineService {
     // planActive (docs/38 §16): the timeline is actively DRIVING the rig.
     const planActive = (controller === 'autopilot' || controller === 'program')
       && this.state.mode !== 'paused' && this.state.mode !== 'overridden';
+    // forcingDeckView (docs/38 §16.9): the plan is active AND the engine output
+    // is currently pinned to the deck under plan control. CaptainPad reads this
+    // to know a switch-to-mixer needs the confirm prompt + 1-min auto-revert
+    // (the confirm/revert lives in the UI, NOT the engine).
+    const forcingDeckView = planActive
+      && typeof this.deps.getViewOverrideMode === 'function'
+      && this.deps.getViewOverrideMode() === 'deck';
 
     // Surface the pending-program lease as {cueId,label,expiresAtMs} (docs/38
     // §16.7) so CaptainPad can render the "SCHEDULED SHOW PENDING" countdown.
@@ -841,6 +912,7 @@ export class TimelineService {
       activePlan: this.state.activePlan || this.activePlan,
       controller,
       planActive,
+      forcingDeckView,
       autopilotEnabled: this.state.autopilotEnabled !== false,
       activeProgram,
       pendingProgram,
