@@ -1192,10 +1192,13 @@ function renderOscPage() {
   if (empty) empty.style.display = acc.outputs.length ? 'none' : 'block';
   // Max rate for the inline rate bar scaling.
   const maxRate = Math.max(1, ...acc.outputs.map(o => o.rateHz || 0));
-  // Don't rebuild the table while the operator is mid-edit in an address field —
-  // a re-render (the accounting broadcasts ~1×/s) would steal focus and discard
-  // the half-typed path. Stats above still refresh; rows refresh after blur.
-  if (document.activeElement && tbody.contains(document.activeElement)) return;
+  // Don't rebuild the table while the operator is mid-edit in an ADDRESS FIELD —
+  // a re-render (accounting broadcasts ~4×/s) would steal focus and discard the
+  // half-typed path. SCOPED to the rename input only: a focused checkbox must
+  // NOT freeze the table, or toggling SEND would look dead (the rate would never
+  // fall to 0 and the row would never dim while the checkbox held focus).
+  const ae = document.activeElement;
+  if (ae && ae.classList && ae.classList.contains('osc-addr-edit') && tbody.contains(ae)) return;
   tbody.innerHTML = '';
   for (const o of acc.outputs) {
     const tr = document.createElement('tr');
