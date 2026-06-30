@@ -109,9 +109,9 @@ export const ViewOverrideBanner: React.FC = () => {
       style={{
         pointerEvents: 'box-none',
         position: 'absolute',
-        top: 0,
-        left: 112,
-        right: 0,
+        top: 12,
+        right: 16,
+        maxWidth: 520,
         zIndex: 1000,
         transform: [
           {
@@ -126,10 +126,11 @@ export const ViewOverrideBanner: React.FC = () => {
       <View
         style={{
           backgroundColor: 'rgba(220, 38, 38, 0.96)',
-          borderBottomWidth: 2,
-          borderBottomColor: '#7f1d1d',
-          paddingHorizontal: 24,
-          paddingVertical: 14,
+          borderWidth: 2,
+          borderColor: '#7f1d1d',
+          borderRadius: 10,
+          paddingHorizontal: 18,
+          paddingVertical: 12,
           flexDirection: 'row',
           alignItems: 'center',
           gap: 12,
