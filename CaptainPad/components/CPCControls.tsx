@@ -22,6 +22,10 @@ import { curateDeckSignals, audioAccentHex } from '@/utils/audioSignals';
 // constants/theme.ts → C.tertiary.
 const ACCENT_AUTO = '#1b9e77';
 
+// Max audio-signal plots an operator can pick / the row will show. The row is a
+// single line, so it's capped; the picker disables further selection at this many.
+const AUDIO_PLOTS_MAX = 10;
+
 // Live state flows through the module-level `useEngineState`
 // subscription, so this component has no props. Pre-split it took
 // a `wsRef` prop for sending sharedParam writes; that's now
@@ -620,6 +624,13 @@ function DynamicAudioRow({ signals, isPortrait, collapsed, selectedKeys }: {
   // WHICH plots to show: the operator's saved selection (in their chosen order,
   // only those still live), else the curated best-practice subset. The remainder
   // count drives the "+N on AUDIO tab" hint.
+  // Whether an explicit operator selection is driving the row (vs. the curated
+  // default) — a selection shows up to AUDIO_PLOTS_MAX; the default keeps the
+  // tighter 4/6 best-practice cap.
+  const hasSelection = useMemo(() => {
+    if (!selectedKeys || selectedKeys.length === 0) return false;
+    return selectedKeys.some((k) => signals.find((s) => s.key === k));
+  }, [selectedKeys, signals]);
   const curated = useMemo(() => {
     if (selectedKeys && selectedKeys.length > 0) {
       const live = new Map(signals.map((s) => [s.key, s] as const));
@@ -650,7 +661,9 @@ function DynamicAudioRow({ signals, isPortrait, collapsed, selectedKeys }: {
   // hint. Pre-fix the expanded row pushed every curated cue (up to 6) into a
   // narrow portrait strip where each cell's 52px minWidth forced the strip to
   // overflow its right edge.
-  const maxCells = isPortrait ? 4 : 6;
+  // A custom selection shows every picked plot (up to AUDIO_PLOTS_MAX); the
+  // curated default keeps the tighter single-glance cap.
+  const maxCells = hasSelection ? AUDIO_PLOTS_MAX : (isPortrait ? 4 : 6);
   const baseSet = curated.length > 0 ? curated : signals;
   const shownSet = baseSet.slice(0, maxCells);
   const remainder = signals.length - shownSet.length;
@@ -722,8 +735,11 @@ function AudioPlotPicker({ visible, signals, selected, onChange, onClose }: {
   // The working selection: the saved pick, or the curated default when unset.
   const base = selected && selected.length > 0 ? selected : curatedKeys;
   const sel = useMemo(() => new Set(base), [base]);
+  const atCap = base.length >= AUDIO_PLOTS_MAX;
   const toggle = (key: string) => {
-    const next = base.includes(key) ? base.filter((k) => k !== key) : [...base, key];
+    const has = base.includes(key);
+    if (!has && atCap) return;   // at the cap — must remove one before adding more
+    const next = has ? base.filter((k) => k !== key) : [...base, key];
     onChange(next.length > 0 ? next : []);   // empty array persists as "none shown"
   };
   return (
@@ -734,8 +750,10 @@ function AudioPlotPicker({ visible, signals, selected, onChange, onClose }: {
             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.text, textTransform: 'uppercase', letterSpacing: 0.5 }}>Audio plots</Text>
             <TouchableOpacity onPress={onClose} accessibilityLabel="Close"><Text style={{ color: C.secondary, fontSize: 18 }}>✕</Text></TouchableOpacity>
           </View>
-          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary, marginBottom: 10 }}>
-            Tap to add or remove a plot. Your pick is saved for this screen.
+          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: atCap ? C.primary : C.secondary, marginBottom: 10 }}>
+            {atCap
+              ? `Showing ${base.length}/${AUDIO_PLOTS_MAX} — remove one to add another. Saved for this screen.`
+              : `Tap to add or remove a plot (${base.length}/${AUDIO_PLOTS_MAX}). Your pick is saved for this screen.`}
           </Text>
           <ScrollView style={{ maxHeight: 380 }}>
             {signals.length === 0 ? (
@@ -745,11 +763,15 @@ function AudioPlotPicker({ visible, signals, selected, onChange, onClose }: {
             ) : signals.map((s) => {
               const on = sel.has(s.key);
               const accent = audioAccentHex(s);
+              // At the cap, unselected rows can't be added — dim + block them so
+              // the limit is visible, not a silent no-op tap.
+              const blocked = !on && atCap;
               return (
                 <TouchableOpacity
                   key={s.key}
                   onPress={() => toggle(s.key)}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, paddingHorizontal: 6 }}
+                  disabled={blocked}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, paddingHorizontal: 6, opacity: blocked ? 0.35 : 1 }}
                 >
                   <View style={{ width: 18, height: 18, borderRadius: 5, borderWidth: 2, borderColor: on ? accent : C.ghostBorder, backgroundColor: on ? accent : 'transparent', justifyContent: 'center', alignItems: 'center' }}>
                     {on ? <Text style={{ color: '#000', fontSize: 12, fontFamily: 'SpaceGrotesk_700Bold' }}>✓</Text> : null}
