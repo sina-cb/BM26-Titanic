@@ -66,6 +66,7 @@ import {
 } from './companion_config.js';
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
 import { loadMicProfiles, saveMicProfiles, validateProfile, uniqueProfileId } from './mic_profiles.js';
+import { audioRegistryEntries } from '../postproc/audio_signals.js';
 import { emitDerivedBpm, BPM_OSC_ADDRESS } from './bpm_emit.js';
 import { BpmSmoother } from '../../lib/bpm_smoother.js';
 import { SYNTHS, SYNTH_NAMES, fillFrame } from '../synth/test_synths.js';
@@ -291,6 +292,31 @@ const ENGINE_INTERNAL_DERIVED = Object.freeze([
   { cpcKey: 'audioStructure',     label: 'structure state (detector)' },
 ]);
 
+// ── COMPANION = SOLE ANALYZER: emit EVERY derived signal over OSC ─────────────
+// The Companion computes the full derived/detector set (DerivedSignals +
+// AudioStructureDetector — the SAME modules the engine used) and now SENDS them
+// all over OSC at their canonical addresses, so the engine receives them instead
+// of computing its own (2026-06-21 sole-analyzer move). Address per key comes
+// from the shared audio_signals registry (single source of truth — the engine's
+// inbound bindings and these outbound emits can't drift). Each is registered as
+// a built-in output so the OSC OUT page lists it alongside the designed signals.
+const _audioAddrByKey = new Map(audioRegistryEntries().map((e) => [e.key, e.oscAddress]));
+const DERIVED_OSC_EMITS = ENGINE_INTERNAL_DERIVED
+  .map((s) => ({ key: s.cpcKey, label: s.label, address: _audioAddrByKey.get(s.cpcKey) }))
+  .filter((e) => typeof e.address === 'string' && e.address.length > 0);
+for (const e of DERIVED_OSC_EMITS) {
+  registerBuiltinOscOutput({ address: e.address, label: e.label, cpcKey: e.key, kind: 'derived' });
+}
+// Emit every derived key at its canonical address each hop. Guarded (only finite
+// values; a key not yet registered in this build reads null → skipped, fail-safe)
+// and throttled by the same OSC OUTPUT RATE gate as every other send.
+function emitAllDerived() {
+  for (const e of DERIVED_OSC_EMITS) {
+    const v = safeGet(e.key);
+    if (Number.isFinite(v)) sendOsc(e.address, v);
+  }
+}
+
 // The reported rate must reflect a stream that has STOPPED (a disabled tap, or
 // BPM during silence where emitDerivedBpm returns false), not freeze at the last
 // EWMA forever — a stale rate is observability that LIES (codex P0). At READ time
@@ -342,13 +368,10 @@ function buildOscAccounting() {
     rateHz: oscRateHz,           // the OSC OUTPUT RATE (frames/sec) the operator set
     totalSent: oscSent,
     outputs: rows,
-    // Informational: the rich second-tier signals the ENGINE computes in-process
-    // (detector + DerivedSignals) and does NOT route over OSC. Clearly labelled so
-    // the OSC OUT page can't be read as "the companion is the whole brain".
-    engineInternalDerived: {
-      note: 'Computed IN-ENGINE (AudioStructureDetector + DerivedSignals), NOT OSC-routed — written straight to the engine ParamCenter each analyzer hop. The companion does not send these.',
-      signals: ENGINE_INTERNAL_DERIVED.map(s => ({ ...s })),
-    },
+    // The Companion is now the SOLE analyzer: it computes AND emits the full
+    // derived/detector set over OSC (see DERIVED_OSC_EMITS), so every signal is
+    // in `outputs` above — there is no longer an "engine-internal, not routed"
+    // tier. (Field kept absent so the old UI panel auto-hides.)
   };
 }
 
@@ -890,6 +913,9 @@ const analyzer = new AudioAnalyzer({
     // Companion emits it as a built-in, always-on output right after the
     // derived-signals tick produces audioBpm → engine /marsin/audio/bpm.
     emitDerivedBpm(paramCenter, sendOsc);
+    // Companion = sole analyzer: emit the FULL derived/detector set over OSC so
+    // the engine receives them (instead of computing its own). (report 20260621_11)
+    emitAllDerived();
     // Dom-freq dance: spring-glide toward the current dom freq + cluster width.
     // The `danceMaker` OP is the canonical dance producer (docs/37 §2.2): when
     // an operator frequency signal carries one, its spring-smoothed POST Hz IS

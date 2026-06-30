@@ -94,44 +94,49 @@ const MIC_BANDS = [
 // `osc` (optional) = the inbound OSC address the Audio Companion (sole
 // analyzer, 2026-06-17 contract) feeds this key from. The detector outputs
 // the companion emits carry a binding; the rest stay engine-internal.
+// The Audio Companion is the SOLE analyzer (2026-06-21): it computes the FULL
+// derived/detector set and emits EVERY key over OSC. So every entry below now
+// carries an `osc` inbound binding — the engine receives them instead of
+// computing its own. (Was: only build/energy/slow/bpm/party were bound.)
 const DETECTORS = [
-  { key: 'audioStructure',   label: 'Audio · Structure',    range: [0, 2], hz: 10 },
+  { key: 'audioStructure',   label: 'Audio · Structure',    range: [0, 2], hz: 10, osc: '/marsin/audio/structure' },
   { key: 'audioBuildScore',  label: 'Audio · Build Score',  range: [0, 1], hz: 10, osc: '/marsin/audio/build' },
   { key: 'audioEnergyRatio', label: 'Audio · Energy Ratio', range: [0, 1], hz: 10, osc: '/marsin/audio/energy' },
-  { key: 'audioVocalsHot',   label: 'Audio · Vocals Hot',   range: [0, 1], hz: 5  },
-  { key: 'audioDropPulse',   label: 'Audio · Drop Pulse',   range: [0, 1], hz: 15 },
+  { key: 'audioVocalsHot',   label: 'Audio · Vocals Hot',   range: [0, 1], hz: 5,  osc: '/marsin/audio/vocalshot' },
+  { key: 'audioDropPulse',   label: 'Audio · Drop Pulse',   range: [0, 1], hz: 15, osc: '/marsin/audio/drop' },
   { key: 'audioSlowZone',    label: 'Audio · Slow Zone',    range: [0, 1], hz: 10, osc: '/marsin/audio/slow' },
 ];
 
 // Derived signals (BPM / beat / party / note / switch cues) — observe-and-publish.
+// Every derived signal now carries an OSC inbound binding — the Companion (sole
+// analyzer) computes and emits them all; the engine receives them.
 const DERIVED = [
   { key: 'audioBpm',           label: 'Audio · BPM',            range: [0, 300], hz: 5,  osc: '/marsin/audio/bpm' },
-  { key: 'audioBeat',          label: 'Audio · Beat',           range: [0, 1],   hz: 30 },
+  { key: 'audioBeat',          label: 'Audio · Beat',           range: [0, 1],   hz: 30, osc: '/marsin/audio/beat' },
   { key: 'audioParty',         label: 'Audio · Party',          range: [0, 1],   hz: 5,  osc: '/marsin/audio/party' },
-  { key: 'audioNote',          label: 'Audio · Note',           range: [0, 11],  hz: 10 },
-  { key: 'audioNoteHue',       label: 'Audio · Note Hue',       range: [0, 1],   hz: 10 },
-  { key: 'audioSwitchPattern', label: 'Audio · Switch Pattern', range: [0, 1],   hz: 15 },
-  { key: 'audioSwitchColor',   label: 'Audio · Switch Color',   range: [0, 1],   hz: 15 },
-  { key: 'audioBeatInBar',     label: 'Audio · Beat In Bar',    range: [0, 4],   hz: 30 },
-  { key: 'audioBarPhase',      label: 'Audio · Bar Phase',      range: [0, 1],   hz: 30 },
-  { key: 'audioDownbeat',      label: 'Audio · Downbeat',       range: [0, 1],   hz: 30 },
+  { key: 'audioNote',          label: 'Audio · Note',           range: [0, 11],  hz: 10, osc: '/marsin/audio/note' },
+  { key: 'audioNoteHue',       label: 'Audio · Note Hue',       range: [0, 1],   hz: 10, osc: '/marsin/audio/notehue' },
+  { key: 'audioSwitchPattern', label: 'Audio · Switch Pattern', range: [0, 1],   hz: 15, osc: '/marsin/audio/switchpattern' },
+  { key: 'audioSwitchColor',   label: 'Audio · Switch Color',   range: [0, 1],   hz: 15, osc: '/marsin/audio/switchcolor' },
+  { key: 'audioBeatInBar',     label: 'Audio · Beat In Bar',    range: [0, 4],   hz: 30, osc: '/marsin/audio/beatinbar' },
+  { key: 'audioBarPhase',      label: 'Audio · Bar Phase',      range: [0, 1],   hz: 30, osc: '/marsin/audio/barphase' },
+  { key: 'audioDownbeat',      label: 'Audio · Downbeat',       range: [0, 1],   hz: 30, osc: '/marsin/audio/downbeat' },
   // Coarse dance-genre classifier (party-mode only). audioGenre is an integer
   // index 0..6 (GENRE_NAMES in audio/signals/genre_classifier.js); conf 0..1.
-  { key: 'audioGenre',         label: 'Audio · Genre',          range: [0, 6],   hz: 5 },
-  { key: 'audioGenreConf',     label: 'Audio · Genre Conf',     range: [0, 1],   hz: 5 },
+  { key: 'audioGenre',         label: 'Audio · Genre',          range: [0, 6],   hz: 5,  osc: '/marsin/audio/genre' },
+  { key: 'audioGenreConf',     label: 'Audio · Genre Conf',     range: [0, 1],   hz: 5,  osc: '/marsin/audio/genreconf' },
   // new_derived_signals (2026-06-20): riser/anticipation, track-change/silence,
-  // climax, phrase, drop-countdown (report 20260620_2 #1/#3/#8/#6/#7). All
-  // engine-internal derived (no inbound OSC). audioBuildEta carries SECONDS
-  // (best-effort, 0 when no honest estimate); the rest are [0,1].
-  { key: 'audioRiserScore',     label: 'Audio · Riser Score',     range: [0, 1],  hz: 15 },
-  { key: 'audioBuildEta',       label: 'Audio · Build ETA',       range: [0, 60], hz: 10 },
-  { key: 'audioRiserConf',      label: 'Audio · Riser Conf',      range: [0, 1],  hz: 10 },
-  { key: 'audioSilence',        label: 'Audio · Silence',         range: [0, 1],  hz: 5 },
-  { key: 'audioTrackChange',    label: 'Audio · Track Change',    range: [0, 1],  hz: 15 },
-  { key: 'audioClimax',         label: 'Audio · Climax',          range: [0, 1],  hz: 10 },
-  { key: 'audioPhrasePhase',    label: 'Audio · Phrase Phase',    range: [0, 1],  hz: 15 },
-  { key: 'audioPhraseBoundary', label: 'Audio · Phrase Boundary', range: [0, 1],  hz: 15 },
-  { key: 'audioDropCountdown',  label: 'Audio · Drop Countdown',  range: [0, 1],  hz: 30 },
+  // climax, phrase, drop-countdown. audioBuildEta carries SECONDS (best-effort,
+  // 0 when no honest estimate); the rest are [0,1].
+  { key: 'audioRiserScore',     label: 'Audio · Riser Score',     range: [0, 1],  hz: 15, osc: '/marsin/audio/riser' },
+  { key: 'audioBuildEta',       label: 'Audio · Build ETA',       range: [0, 60], hz: 10, osc: '/marsin/audio/buildeta' },
+  { key: 'audioRiserConf',      label: 'Audio · Riser Conf',      range: [0, 1],  hz: 10, osc: '/marsin/audio/riserconf' },
+  { key: 'audioSilence',        label: 'Audio · Silence',         range: [0, 1],  hz: 5,  osc: '/marsin/audio/silence' },
+  { key: 'audioTrackChange',    label: 'Audio · Track Change',    range: [0, 1],  hz: 15, osc: '/marsin/audio/trackchange' },
+  { key: 'audioClimax',         label: 'Audio · Climax',          range: [0, 1],  hz: 10, osc: '/marsin/audio/climax' },
+  { key: 'audioPhrasePhase',    label: 'Audio · Phrase Phase',    range: [0, 1],  hz: 15, osc: '/marsin/audio/phrasephase' },
+  { key: 'audioPhraseBoundary', label: 'Audio · Phrase Boundary', range: [0, 1],  hz: 15, osc: '/marsin/audio/phraseboundary' },
+  { key: 'audioDropCountdown',  label: 'Audio · Drop Countdown',  range: [0, 1],  hz: 30, osc: '/marsin/audio/dropcountdown' },
 ];
 
 // analyzer_features (slot 3): per-band onset → spatial-chase pulses + sub-bass
@@ -146,10 +151,10 @@ const ONSET_RAW = [
   { key: 'micSubRaw',       label: 'Mic · Sub (raw)' },
 ];
 const ONSET_PULSE = [
-  { key: 'micOnsetLow',  label: 'Mic · Onset Low',  hz: 30 },
-  { key: 'micOnsetMid',  label: 'Mic · Onset Mid',  hz: 30 },
-  { key: 'micOnsetHigh', label: 'Mic · Onset High', hz: 30 },
-  { key: 'audioChestHit', label: 'Audio · Chest Hit', hz: 30 },
+  { key: 'micOnsetLow',  label: 'Mic · Onset Low',  hz: 30, osc: '/marsin/audio/onsetlow' },
+  { key: 'micOnsetMid',  label: 'Mic · Onset Mid',  hz: 30, osc: '/marsin/audio/onsetmid' },
+  { key: 'micOnsetHigh', label: 'Mic · Onset High', hz: 30, osc: '/marsin/audio/onsethigh' },
+  { key: 'audioChestHit', label: 'Audio · Chest Hit', hz: 30, osc: '/marsin/audio/chesthit' },
 ];
 
 // genre_chroma (report 20260620_30): RAW analyzer chroma/timbre mirrors. The
@@ -169,7 +174,8 @@ function onsetPulseDescriptor(d) {
     key: d.key, label: d.label, type: 'float',
     range: [0, 1], default: 0.0, clamp: true,
     persist: false, live: true, broadcastHz: d.hz, portWatch: false,
-    oscAddress: undefined, sharedFnName: d.key,
+    // The Companion (sole analyzer) emits these onset/chest pulses over OSC.
+    oscAddress: d.osc !== undefined ? d.osc : undefined, sharedFnName: d.key,
     processed: false, hasRawMirror: false, gainKey: null, defaultChainKind: null,
   };
 }
