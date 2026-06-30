@@ -42,8 +42,11 @@ import {
 } from './audio/config/audio_config_store.js';
 import { listAudioDevices, findConfiguredDevice } from './audio/capture/audio_devices.js';
 import { SignalPostProcessor, KNOWN_SIGNALS } from './audio/postproc/signal_post_processor.js';
-import { AudioStructureDetector } from './audio/detector/audio_structure_detector.js';
-import { DerivedSignals } from './audio/signals/derived_signals.js';
+// (2026-06-21) The Audio Companion is the SOLE analyzer: it computes the full
+// derived/detector set and emits every key over OSC, which the engine receives
+// via the static /marsin/audio/* bindings (audio/postproc/audio_signals.js). The
+// engine no longer instantiates AudioStructureDetector / DerivedSignals — those
+// calcs MOVED to the companion. The modules still exist (used BY the companion).
 import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './audio/capture/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
@@ -1462,28 +1465,13 @@ async function main() {
     }
   }
 
-  // docs/30: audio structure detector (build / drop / sustain cues).
-  // ALWAYS constructed so its surface exists even when disabled — tick()
-  // no-ops until audio.structureDetector.enabled flips true via PATCH
-  // /audio/config. Reads the live config fresh each tick via getConfig so
-  // a hot enable/disable + threshold tweak takes effect immediately.
-  // Broadcast hook is the same audioStatus publisher used below; the
-  // detector emits the sparse `dropFired` event through it.
-  const audioStructureDetector = new AudioStructureDetector({
-    paramCenter,
-    broadcast: (msg) => broadcastStatsRef.publish(msg),
-    getConfig: () => (audioState.config && audioState.config.structureDetector) || {},
-  });
-  audioState.structureDetector = audioStructureDetector;
-
-  // Derived signals (BPM / beat / party / note / switch cues) — observe-and-
-  // publish, runs right after the detector each hop off the live CPC keys.
-  const derivedSignals = new DerivedSignals({ paramCenter });
-  audioState.derivedSignals = derivedSignals;
-  // Last-broadcast derived-signal health fingerprint (null = healthy, never
-  // broadcast). Used to fire the audioStatus health update only on a real
-  // transition (no per-hop spam) — see the onAnalysis callback.
-  audioState.lastDerivedHealthKey = null;
+  // (2026-06-21) Audio structure detector + derived signals are NO LONGER
+  // computed here — the Audio Companion (sole analyzer) computes them and emits
+  // every key over OSC; the engine receives them via the /marsin/audio/* inbound
+  // bindings. The `structureDetector.*` live-config block is still accepted +
+  // persisted (the operator tunes the COMPANION's detector through it; the
+  // engine just stores/forwards it), and the analyzer below still writes the raw
+  // mic bands for the audio.enabled (engine-mic) path.
 
   // Lifecycle helper so /audio/config PATCH can hot-restart the
   // analyzer with new band/kick settings without juggling state by
@@ -1657,31 +1645,13 @@ async function main() {
           micWrites[19].value = chromaFlux;
           micWrites[20].value = chromaTilt;
           paramCenter.setMany(micWrites, 'audio', 'audio:mic');
-          // docs/30: run the structure detector at the analyzer hop rate
-          // (lowest latency, auto-pauses when the analyzer is off). It
-          // reads the live keys just written above and publishes its own
-          // five keys + the sparse dropFired event. No-ops when disabled.
-          audioStructureDetector.tick(nowMs, dt);
-          // Derived signals read the keys the analyzer + detector just wrote.
-          derivedSignals.tick(nowMs, dt);
-          // Fail-LOUD + VISIBLE (codex P0): a derived sub-module that throws is
-          // isolated (others keep running) but must SURFACE to the operator, not
-          // just stderr. On the transition into a degraded/fatal state, fold the
-          // failing-module status into the audioStatus broadcast ONCE (gated so
-          // there's no per-hop spam — the broadcast only fires when health
-          // actually changes).
-          const dStatus = derivedSignals.getStatus();
-          const dKey = `${dStatus.fatal}|${dStatus.degraded}|${Object.keys(dStatus.moduleErrors).sort().join(',')}`;
-          if (dKey !== audioState.lastDerivedHealthKey) {
-            audioState.lastDerivedHealthKey = dKey;
-            audioState.lastStatus = {
-              ...(audioState.lastStatus || {}),
-              derivedDegraded: dStatus.degraded,
-              derivedFatal: dStatus.fatal,
-              derivedModuleErrors: dStatus.moduleErrors,
-            };
-            broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
-          }
+          // (2026-06-21) The structure detector + derived signals are no longer
+          // ticked here — the Companion (sole analyzer) computes them and emits
+          // every derived key over OSC, which arrives via the /marsin/audio/*
+          // bindings. This engine-mic analyzer now writes only the RAW mic bands
+          // above (the audio.enabled path); the derived layer lives in the
+          // Companion. (`dt` is still consumed by the band writes; `nowMs` is the
+          // analyzer clock used by the capture/visualizer.)
         },
       });
       audioState.capture = new AudioCapture({
