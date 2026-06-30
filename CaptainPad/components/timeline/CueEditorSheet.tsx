@@ -170,9 +170,29 @@ export function CueEditorSheet({
     // same discipline as how the `scene` action was dropped. We force the deck
     // target here so a legacy/mixer cue normalises on save; the wire `PlanTarget`
     // stays permissive for hand-authored plans.
-    const outAction: CueAction = action.type === 'playlist'
-      ? { ...action, target: { channel: 'deck', id: null } }
-      : action;
+    let outAction: CueAction = action;
+    if (action.type === 'playlist') {
+      // Force the deck-only target (mixer authoring removed) and NORMALIZE the
+      // optional autopilot block so the emitted JSON always satisfies the
+      // engine's strict validateAutopilot (active + delay_s>0 + shuffle, no
+      // defaults). We emit `autopilot` ONLY when active===true; an inactive /
+      // absent block is OMITTED (it's optional on a playlist action). When we
+      // do emit it, delay_s is clamped to a positive value (default 30) and
+      // shuffle defaults to false — guaranteeing validity regardless of the
+      // order the operator touched the autopilot controls.
+      const pl = { ...action, target: { channel: 'deck' as const, id: null } };
+      if (pl.autopilot && pl.autopilot.active) {
+        const d = pl.autopilot.delay_s;
+        pl.autopilot = {
+          active: true,
+          delay_s: typeof d === 'number' && d > 0 ? d : 30,
+          shuffle: pl.autopilot.shuffle ?? false,
+        };
+      } else {
+        delete pl.autopilot;
+      }
+      outAction = pl;
+    }
     // Spread the ORIGINAL cue first so fields the editor doesn't surface
     // (e.g. `catchUp`, and any future/unknown keys) survive a round-trip;
     // then overlay only what the editor manages.
@@ -376,7 +396,28 @@ export function CueEditorSheet({
           <View style={{ height: 8 }} />
           <ToggleChip
             on={!!ap.active}
-            onToggle={() => setAction({ ...action, autopilot: { ...ap, active: !ap.active } })}
+            onToggle={() => {
+              if (ap.active) {
+                // Turning OFF: drop the autopilot block entirely so the emitted
+                // action omits the field (it's optional on a playlist action).
+                const next = { ...action };
+                delete next.autopilot;
+                setAction(next);
+              } else {
+                // Turning ON: seed a COMPLETE, valid block. The engine's
+                // validateAutopilot is strict (active + delay_s>0 + shuffle,
+                // no defaults), so we must supply delay_s/shuffle here — not
+                // leave them undefined for the operator to (maybe) fill in.
+                setAction({
+                  ...action,
+                  autopilot: {
+                    active: true,
+                    delay_s: ap.delay_s && ap.delay_s > 0 ? ap.delay_s : 30,
+                    shuffle: ap.shuffle ?? false,
+                  },
+                });
+              }
+            }}
             label={ap.active ? 'AUTOPILOT ON' : 'AUTOPILOT OFF'}
           />
           {ap.active ? (

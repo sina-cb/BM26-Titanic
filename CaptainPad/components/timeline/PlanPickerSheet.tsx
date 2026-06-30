@@ -12,7 +12,7 @@ import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 
 export function PlanPickerSheet({
-  visible, plans, activePlan, draftName, onLoad, onActivate, onDuplicate, onNewTemplate, onClose,
+  visible, plans, activePlan, draftName, onLoad, onActivate, onDuplicate, onNewTemplate, onNewBlank, onClose,
 }: {
   visible: boolean;
   plans: string[];
@@ -22,6 +22,8 @@ export function PlanPickerSheet({
   onActivate: (name: string) => void;
   onDuplicate: (name: string) => void;
   onNewTemplate: () => void;
+  /** Seed a fresh BLANK plan (no BRC cues/looks/phases). */
+  onNewBlank: () => void;
   onClose: () => void;
 }) {
   const C = usePalette();
@@ -37,10 +39,16 @@ export function PlanPickerSheet({
           <View style={styles.sheet}>
             <Text style={styles.title}>PLANS</Text>
 
-            <TouchableOpacity onPress={onNewTemplate} style={styles.newBtn} accessibilityLabel="New plan from BRC template">
-              <IconSymbol name="plus.circle" size={18} color={C.onPrimary} />
-              <Text style={styles.newBtnText}>NEW FROM BRC TEMPLATE</Text>
-            </TouchableOpacity>
+            <View style={styles.newRow}>
+              <TouchableOpacity onPress={onNewTemplate} style={[styles.newBtn, styles.newBtnHalf]} accessibilityLabel="New plan from BRC template">
+                <IconSymbol name="plus.circle" size={18} color={C.onPrimary} />
+                <Text style={styles.newBtnText}>FROM BRC TEMPLATE</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={onNewBlank} style={[styles.newBtnGhost, styles.newBtnHalf]} accessibilityLabel="New blank plan from scratch">
+                <IconSymbol name="plus.circle" size={18} color={C.text} />
+                <Text style={styles.newBtnGhostText}>FROM SCRATCH</Text>
+              </TouchableOpacity>
+            </View>
 
             {plans.length === 0 ? (
               <Text style={styles.empty}>No saved plans yet. Start from the template.</Text>
@@ -109,21 +117,48 @@ function makeStyles(C: Palette) {
       textTransform: 'uppercase',
       marginBottom: 14,
     },
+    newRow: {
+      flexDirection: 'row',
+      gap: 10,
+      marginBottom: 14,
+    },
+    newBtnHalf: {
+      flex: 1,
+      minWidth: 0,
+    },
     newBtn: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
       gap: 8,
       minHeight: 48,
+      paddingHorizontal: 10,
       borderRadius: 8,
       backgroundColor: C.primary,
-      marginBottom: 14,
     },
     newBtnText: {
       fontFamily: 'SpaceGrotesk_700Bold',
       fontSize: 12,
       letterSpacing: 0.8,
       color: C.onPrimary,
+    },
+    newBtnGhost: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      minHeight: 48,
+      paddingHorizontal: 10,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: C.primary,
+      backgroundColor: 'transparent',
+    },
+    newBtnGhostText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 12,
+      letterSpacing: 0.8,
+      color: C.text,
     },
     empty: {
       fontFamily: 'Inter_400Regular',

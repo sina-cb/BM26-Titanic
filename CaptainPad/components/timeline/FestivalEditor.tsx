@@ -10,9 +10,10 @@
  *      sunrise/set": tz + the standing BRC lat/lon drive the engine's sun calc.
  *      A curated US list + free text (the engine validates tz and 400s loudly
  *      on a bad one — Codex P0: no client fallback).
- *   2. START DATE → draft.festival.startDate (YYYY-MM-DD). A ±1-day stepper
- *      (consistent with the maker's stepper idiom). Shifting it moves every
- *      day's calendar date (day i = startDate + i).
+ *   2. START DATE → draft.festival.startDate (YYYY-MM-DD). A tappable chip that
+ *      opens a Year/Month/Day wheel picker (DateWheel) so the operator can jump
+ *      directly to any date instead of clicking a ±1-day stepper repeatedly.
+ *      Setting it moves every day's calendar date (day i = startDate + i).
  *   3. DAYS span → add / remove a festival day (festival.days, capped to the
  *      engine's [1, 31]). Removing a day must keep the draft VALID: the parent's
  *      onRemoveDay cleans any cue `days` target that now points out of range.
@@ -22,11 +23,12 @@
  * the parent bumps draftVersion, which re-previews the overview, so the day
  * strips' sunrise/sunset refresh automatically when tz / start / days change.
  */
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { DateWheel } from '@/components/timeline/DateWheel';
 
 // Engine festival span bounds (marsin_engine/lib/timeline/show_plan.js:
 // festival.days must be an integer in [1, 31]).
@@ -48,7 +50,7 @@ export const TZ_OPTIONS: { id: string; label: string }[] = [
 ];
 
 export function FestivalEditor({
-  startDate, days, tz, onShiftStart, onAddDay, onRemoveDay, onSetTz,
+  startDate, days, tz, onSetStartDate, onAddDay, onRemoveDay, onSetTz,
 }: {
   /** draft.festival.startDate ('YYYY-MM-DD'). */
   startDate: string;
@@ -56,8 +58,8 @@ export function FestivalEditor({
   days: number;
   /** draft.location.tz (IANA), drives the sun estimate. */
   tz: string;
-  /** Step the start date by ±1 day (shifts every day's date). */
-  onShiftStart: (deltaDays: number) => void;
+  /** Set the start date to a chosen 'YYYY-MM-DD' (shifts every day's date). */
+  onSetStartDate: (dateKey: string) => void;
   /** Append a day (no-op past FESTIVAL_MAX_DAYS). */
   onAddDay: () => void;
   /** Drop the last day; the parent cleans out-of-range cue day targets. */
@@ -67,6 +69,9 @@ export function FestivalEditor({
 }) {
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
+  // The date-picker modal's open state lives here — FestivalEditor owns the
+  // wheel sheet and only hands the parent the confirmed 'YYYY-MM-DD'.
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
 
   const canAdd = days < FESTIVAL_MAX_DAYS;
   const canRemove = days > FESTIVAL_MIN_DAYS;
@@ -117,26 +122,17 @@ export function FestivalEditor({
         </View>
 
         <View style={styles.spanControls}>
-          {/* Start-date stepper (±1 day → shifts every day). */}
-          <View style={styles.stepper}>
-            <TouchableOpacity
-              onPress={() => onShiftStart(-1)}
-              style={styles.stepBtn}
-              accessibilityLabel="Move festival start one day earlier"
-            >
-              <Text style={styles.stepBtnText}>−</Text>
-            </TouchableOpacity>
-            <View style={styles.stepValue}>
-              <Text style={styles.stepValueText}>{startDate}</Text>
-            </View>
-            <TouchableOpacity
-              onPress={() => onShiftStart(1)}
-              style={styles.stepBtn}
-              accessibilityLabel="Move festival start one day later"
-            >
-              <Text style={styles.stepBtnText}>+</Text>
-            </TouchableOpacity>
-          </View>
+          {/* Start-date picker trigger — taps open a Year/Month/Day wheel so the
+              operator jumps directly to any date (replaces the ±1-day stepper). */}
+          <TouchableOpacity
+            onPress={() => setDatePickerOpen(true)}
+            style={styles.dateChip}
+            accessibilityLabel="Pick festival start date"
+          >
+            <IconSymbol name="calendar.badge.clock" size={14} color={C.text} />
+            <Text style={styles.dateChipText}>{startDate}</Text>
+            <IconSymbol name="chevron.down" size={12} color={C.secondary} />
+          </TouchableOpacity>
 
           {/* Day-count add / remove. */}
           <View style={styles.stepper}>
@@ -166,6 +162,13 @@ export function FestivalEditor({
       <Text style={styles.spanSummary} numberOfLines={1}>
         {`${startDate} → ${endDate}  ·  sun estimate updates on change`}
       </Text>
+
+      <DateWheel
+        visible={datePickerOpen}
+        initialDate={startDate}
+        onConfirm={(dateKey) => { onSetStartDate(dateKey); setDatePickerOpen(false); }}
+        onClose={() => setDatePickerOpen(false)}
+      />
     </View>
   );
 }
@@ -254,6 +257,24 @@ function makeStyles(C: Palette) {
       gap: 10,
       flexWrap: 'wrap',
       flexShrink: 1,
+    },
+    dateChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+      borderRadius: 8,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      minHeight: 36,
+      backgroundColor: C.surfaceContainerHigh,
+    },
+    dateChipText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 12,
+      letterSpacing: 0.4,
+      color: C.text,
     },
     stepper: {
       flexDirection: 'row',
