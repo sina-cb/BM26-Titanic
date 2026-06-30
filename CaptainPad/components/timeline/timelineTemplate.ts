@@ -198,7 +198,7 @@ export function brcStarterPlan(name = 'brc_2026'): ShowPlan {
       delay_s: 60,
       shuffle: false,
       target: { channel: 'deck', id: null },
-      mood: 'calm',
+      mood: true,
     },
     looks: {
       daytime: {
