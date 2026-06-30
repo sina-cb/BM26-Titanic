@@ -53,6 +53,9 @@ import { DayEditor } from '@/components/timeline/DayEditor';
 import { CueEditorSheet } from '@/components/timeline/CueEditorSheet';
 import { PlanPickerSheet } from '@/components/timeline/PlanPickerSheet';
 import {
+  FestivalEditor, addDaysToDateKey, FESTIVAL_MIN_DAYS, FESTIVAL_MAX_DAYS,
+} from '@/components/timeline/FestivalEditor';
+import {
   brcStarterPlan, clonePlan, duplicatePlan, makeCueId,
 } from '@/components/timeline/timelineTemplate';
 
@@ -371,6 +374,82 @@ export default function TimelineScreen() {
     setEditingDay(null);
   }, []);
 
+  // ── Festival span / estimate-tz mutators (top-of-page FestivalEditor) ──
+  // These edit the DRAFT. When the operator touches them while viewing the LIVE
+  // plan (no draft yet) we first load the active plan into the draft — same
+  // "edit a copy" discipline as onEditDay — then apply the change. If there is
+  // no active plan to load, we surface the error loudly (Codex P0: no fallback)
+  // rather than silently seeding a template the operator didn't ask for.
+  const ensureDraftThen = useCallback(async (fn: (p: ShowPlan) => void) => {
+    if (draft) { mutateDraft(fn); return; }
+    if (!state?.activePlan) {
+      setActionError('No active plan to edit — start from the BRC template via PLANS.');
+      return;
+    }
+    const r = await fetchTimelinePlan(state.activePlan);
+    if (!r.ok || !r.data) { setActionError(r.error || `Could not load plan ${state.activePlan}`); return; }
+    if (!r.data.festival) {
+      setActionError('This plan has no festival span — duplicate from the BRC template to edit on the 8-day grid.');
+      return;
+    }
+    const next = clonePlan(r.data);
+    fn(next);
+    setDraft(next);
+    setDraftVersion((v) => v + 1);
+    setSaveOk(null);
+    setActionError(null);
+    setPreviewTransportError(null);
+  }, [draft, mutateDraft, state?.activePlan]);
+
+  // Step the festival start date by ±1 day. Day i = startDate + i, so shifting
+  // the start shifts every day's calendar date; the engine re-computes sun on
+  // the next preview. No cue cleanup needed (the span length is unchanged).
+  const handleShiftStart = useCallback((deltaDays: number) => {
+    ensureDraftThen((p) => {
+      p.festival = { ...p.festival, startDate: addDaysToDateKey(p.festival.startDate, deltaDays) };
+    });
+  }, [ensureDraftThen]);
+
+  // Append a festival day (date = startDate + (newDays-1)). Capped at the engine
+  // max (31). No cue cleanup: every existing day index/date is still in range.
+  const handleAddDay = useCallback(() => {
+    ensureDraftThen((p) => {
+      if (p.festival.days >= FESTIVAL_MAX_DAYS) return;
+      p.festival = { ...p.festival, days: p.festival.days + 1 };
+    });
+  }, [ensureDraftThen]);
+
+  // Drop the LAST festival day. To keep the draft valid (so validateShowPlan
+  // never rejects it), clean every cue whose `days` references the removed day:
+  //   - index form: drop the now-out-of-range index (newDays..);
+  //   - date form: drop any date outside the new festival span;
+  // a cue whose `days` array becomes empty reverts to 'all'.
+  const handleRemoveDay = useCallback(() => {
+    ensureDraftThen((p) => {
+      if (p.festival.days <= FESTIVAL_MIN_DAYS) return;
+      const newDays = p.festival.days - 1;
+      p.festival = { ...p.festival, days: newDays };
+      // The set of calendar dates that remain in the (shorter) festival span.
+      const validDates = new Set<string>();
+      for (let i = 0; i < newDays; i += 1) validDates.add(addDaysToDateKey(p.festival.startDate, i));
+      p.cues = p.cues.map((c) => {
+        if (!Array.isArray(c.days)) return c; // 'all' or undefined — unaffected.
+        const arr = c.days as (number | string)[];
+        const kept = arr.filter((v) =>
+          typeof v === 'number' ? v >= 0 && v <= newDays - 1 : validDates.has(v));
+        if (kept.length === arr.length) return c; // unchanged
+        if (kept.length === 0) return { ...c, days: 'all' as const };
+        return { ...c, days: kept as number[] | string[] };
+      });
+    });
+  }, [ensureDraftThen]);
+
+  // Set the sun-estimate timezone (IANA). The engine validates it and 400s on a
+  // bad tz; changing it re-previews the overview so the strips' sun updates.
+  const handleSetTz = useCallback((tz: string) => {
+    ensureDraftThen((p) => { p.location = { ...p.location, tz }; });
+  }, [ensureDraftThen]);
+
   // ── Cue CRUD (within the draft) ──
   const handleSaveCue = useCallback((cue: PlanCue) => {
     mutateDraft((p) => {
@@ -415,6 +494,17 @@ export default function TimelineScreen() {
     if (!p || p.untilMs == null) return null;
     return Math.max(0, Math.round((p.untilMs - Date.now()) / 1000));
   }, [state?.activeProgram]);
+
+  // Festival span + estimate-tz shown in the top-of-page FestivalEditor. When a
+  // draft is loaded these read the DRAFT (live, pre-preview); otherwise they
+  // mirror the active plan's overview so the controls show the live span/tz
+  // until the operator edits. Null when neither carries a festival (no editor).
+  const festivalView = useMemo(() => {
+    const festival = draft?.festival ?? overview?.festival ?? null;
+    const tz = draft?.location?.tz ?? overview?.location?.tz ?? null;
+    if (!festival || !tz) return null;
+    return { startDate: festival.startDate, days: festival.days, tz };
+  }, [draft?.festival, draft?.location?.tz, overview?.festival, overview?.location?.tz]);
 
   // The day-editor's overview object (the day whose modal is open).
   const editingDayOverview = useMemo(() => {
@@ -580,6 +670,19 @@ export default function TimelineScreen() {
         </View>
 
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
+          {/* ── Festival span + sun-estimate tz (top of the maker page) ── */}
+          {festivalView ? (
+            <FestivalEditor
+              startDate={festivalView.startDate}
+              days={festivalView.days}
+              tz={festivalView.tz}
+              onShiftStart={handleShiftStart}
+              onAddDay={handleAddDay}
+              onRemoveDay={handleRemoveDay}
+              onSetTz={handleSetTz}
+            />
+          ) : null}
+
           {/* ── B. 8-day overview ── */}
           <View style={styles.sectionHeaderRow}>
             <Text style={styles.sectionLabel}>

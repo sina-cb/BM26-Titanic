@@ -13,7 +13,9 @@
  *               phase → phase dropdown
  *               mood  → from/to segmented + dwell/cooldown steppers + whenPhase
  *   ACTION    segmented   playlist | look       (scene removed — see below)
- *               playlist → dropdown (GET /playlists) + target (deck|mixer) + autopilot
+ *               playlist → dropdown (GET /playlists), deck-only target,
+ *                          TRANSITION (default|crossfade|flash|dissolve),
+ *                          OVERLAYS (leave|enable|disable) + autopilot
  *               look     → dropdown of plan.looks
  *   HOLD      none | minutes stepper            (programs only)
  *   DAYS      This day | All days | Pick…       (Pick = day-index toggles)
@@ -29,18 +31,27 @@ import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import {
   PlanCue, CueKind, CueTrigger, CueAction, SunEvent, CueDays, ShowPlan,
+  DeckTransitionMode, ActionOverlays, DECK_TRANSITION_MODES, DECK_TRANSITION_MODE_LABEL,
 } from '@/utils/timelineApi';
 import {
   hhmmToMinutes, minutesToHHMM, SUN_EVENT_OPTIONS, MOOD_VALUES,
 } from './timelineTemplate';
 import { Segmented, Stepper, Dropdown, ToggleChip, FieldLabel } from './makerControls';
 
-// Playlist target channels the maker offers. DECK or MIXER only — `all` is a
-// hand-authored escape hatch the engine still validates, but it's removed from
-// the maker UI (a mixer target additionally needs a channel id; see below).
-const TARGET_OPTIONS: { id: 'deck' | 'mixer'; label: string }[] = [
-  { id: 'deck', label: 'Deck' },
-  { id: 'mixer', label: 'Mixer' },
+// Deck transition mode options for the playlist action. "Default" means DON'T
+// emit a `transition` field — the cue inherits the deck's standing transition
+// config. Picking a named mode emits `transition: { mode }`.
+const TRANSITION_OPTIONS: { id: 'default' | DeckTransitionMode; label: string }[] = [
+  { id: 'default', label: 'Default' },
+  ...DECK_TRANSITION_MODES.map((m) => ({ id: m, label: DECK_TRANSITION_MODE_LABEL[m] })),
+];
+
+// Cue-level overlay intent. "Leave as-is" emits nothing; the other two emit
+// `overlays: 'enable' | 'disable'` on the playlist action.
+const OVERLAY_OPTIONS: { id: 'asis' | ActionOverlays; label: string }[] = [
+  { id: 'asis', label: 'Leave as-is' },
+  { id: 'enable', label: 'Enable overlays' },
+  { id: 'disable', label: 'Disable overlays' },
 ];
 
 function defaultTrigger(type: CueTrigger['type']): CueTrigger {
@@ -155,6 +166,13 @@ export function CueEditorSheet({
   const festivalDays = plan.festival?.days ?? 8;
 
   const buildCue = (): PlanCue => {
+    // The maker emits a DECK-only playlist target (mixer authoring removed) —
+    // same discipline as how the `scene` action was dropped. We force the deck
+    // target here so a legacy/mixer cue normalises on save; the wire `PlanTarget`
+    // stays permissive for hand-authored plans.
+    const outAction: CueAction = action.type === 'playlist'
+      ? { ...action, target: { channel: 'deck', id: null } }
+      : action;
     // Spread the ORIGINAL cue first so fields the editor doesn't surface
     // (e.g. `catchUp`, and any future/unknown keys) survive a round-trip;
     // then overlay only what the editor manages.
@@ -163,7 +181,7 @@ export function CueEditorSheet({
       id: initialCue?.id ?? '', // parent mints id for new cues
       kind,
       trigger,
-      action,
+      action: outAction,
       days,
     };
     if (label.trim()) cue.label = label.trim();
@@ -298,7 +316,9 @@ export function CueEditorSheet({
   const renderActionBody = () => {
     if (action.type === 'playlist') {
       const ap = action.autopilot ?? {};
-      const target = action.target ?? { channel: 'deck' as const, id: null };
+      // Target is always the main deck now (mixer removed from the maker UI).
+      const transitionMode: 'default' | DeckTransitionMode = action.transition?.mode ?? 'default';
+      const overlayMode: 'asis' | ActionOverlays = action.overlays ?? 'asis';
       return (
         <View style={styles.subBlock}>
           <FieldLabel>PLAYLIST</FieldLabel>
@@ -310,33 +330,49 @@ export function CueEditorSheet({
             emptyHint="Engine reports no playlists."
           />
           <View style={{ height: 8 }} />
+          {/* TARGET is deck-only now — the playlist always drives the main deck.
+              We keep target on the action so the wire shape stays stable. */}
           <FieldLabel>TARGET</FieldLabel>
-          <Segmented
-            options={TARGET_OPTIONS}
-            value={target.channel === 'mixer' ? 'mixer' : 'deck'}
-            onChange={(ch) => setAction({
-              ...action,
-              // Deck targets the main deck (id always null); mixer needs a
-              // channel id (preserve any typed id when re-selecting mixer).
-              target: ch === 'mixer' ? { channel: 'mixer', id: target.id } : { channel: 'deck', id: null },
-            })}
+          <Text style={styles.hint}>Deck — the main deck (mixer authoring removed).</Text>
+          <View style={{ height: 8 }} />
+          {/* TRANSITION — deck transition mode override. "Default" emits no
+              `transition` field, so the cue inherits the deck's standing config. */}
+          <FieldLabel>TRANSITION</FieldLabel>
+          <Dropdown
+            value={transitionMode}
+            options={TRANSITION_OPTIONS}
+            onSelect={(id) => {
+              if (id === 'default') {
+                const next = { ...action };
+                delete next.transition;
+                setAction(next);
+              } else {
+                setAction({ ...action, transition: { mode: id as DeckTransitionMode } });
+              }
+            }}
           />
-          {target.channel === 'mixer' ? (
-            <>
-              <View style={{ height: 8 }} />
-              <FieldLabel>MIXER CHANNEL ID</FieldLabel>
-              <TextInput
-                value={target.id ?? ''}
-                onChangeText={(t) => setAction({ ...action, target: { channel: 'mixer', id: t.trim() || null } })}
-                placeholder="e.g. ch_1"
-                placeholderTextColor={C.icon}
-                autoCapitalize="none"
-                autoCorrect={false}
-                style={styles.textInput}
-                accessibilityLabel="Mixer channel id"
-              />
-            </>
-          ) : null}
+          <Text style={[styles.hint, { marginTop: 8 }]}>
+            How this cue crossfades onto the deck. Default keeps the deck's current setting.
+          </Text>
+          <View style={{ height: 8 }} />
+          {/* OVERLAYS — cue-level overlay intent. "Leave as-is" emits nothing. */}
+          <FieldLabel>OVERLAYS</FieldLabel>
+          <Segmented
+            options={OVERLAY_OPTIONS}
+            value={overlayMode}
+            onChange={(id) => {
+              if (id === 'asis') {
+                const next = { ...action };
+                delete next.overlays;
+                setAction(next);
+              } else {
+                setAction({ ...action, overlays: id as ActionOverlays });
+              }
+            }}
+          />
+          <Text style={[styles.hint, { marginTop: 8 }]}>
+            Overlays = extra pattern layers stacked over the deck; ‘disable’ blacks them out for this cue.
+          </Text>
           <View style={{ height: 8 }} />
           <ToggleChip
             on={!!ap.active}

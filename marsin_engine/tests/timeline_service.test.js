@@ -17,6 +17,9 @@ function makeDeps() {
     requestScene: [],
     patchScheduledTask: [],
     fireScheduledTask: [],
+    setDeckTransition: [],
+    setDeckOverlaysEnabled: [],
+    forceDeckView: [],
   };
   // The real engine deps branch on target.kind ('deck' | 'mixer'); a target
   // missing `kind` would silently fall into the mixer branch. Mirror that
@@ -29,6 +32,10 @@ function makeDeps() {
       throw new Error(`mixer target requires an id, got ${JSON.stringify(t)}`);
     }
   };
+  // Mirror the engine's view-override pin so `forcingDeckView` is testable:
+  // forceDeckView() pins → 'deck'; getViewOverrideMode() reads it back. A test
+  // can clear it (simulating an operator switching the view to mixer).
+  const viewState = { mode: null };
   const deps = {
     loadPlaylist: (a) => { assertTarget(a.target); calls.loadPlaylist.push(a); },
     setAutopilot: (a) => { assertTarget(a.target); calls.setAutopilot.push(a); },
@@ -38,7 +45,12 @@ function makeDeps() {
     fireScheduledTask: (id) => { calls.fireScheduledTask.push(id); },
     listMixerChannelIds: () => [],
     listPlaylists: () => [{ name: 'default' }],
+    setDeckTransition: (patch) => { calls.setDeckTransition.push(patch); },
+    setDeckOverlaysEnabled: (enabled) => { calls.setDeckOverlaysEnabled.push(enabled); },
+    forceDeckView: () => { calls.forceDeckView.push(true); viewState.mode = 'deck'; },
+    getViewOverrideMode: () => viewState.mode,
   };
+  calls.viewState = viewState;
   return { deps, calls };
 }
 
@@ -481,6 +493,7 @@ test('getState surfaces planActive / operatorLease / operatorLeaseSec', async ()
   svc.stop();
   const st = svc.getState();
   assert.ok('planActive' in st, 'has planActive');
+  assert.ok('forcingDeckView' in st, 'has forcingDeckView');
   assert.ok('operatorLease' in st, 'has operatorLease');
   assert.ok('operatorLeaseSec' in st, 'has operatorLeaseSec');
   // No takeover yet → plan is driving (autopilot baseline), lease null.
@@ -606,4 +619,226 @@ test('boot drops a persisted operatorLease (never resume stale)', async () => {
   await svc2.start();
   svc2.stop();
   assert.equal(svc2.state.operatorLease, null, 'persisted operator lease dropped on boot');
+});
+
+// ── docs/38 §17 deck transition + overlays + mixer→deck pin ───────────────────
+
+import { validateShowPlan } from '../lib/timeline/show_plan.js';
+
+// Build a plan whose mood cue loads a DECK playlist with a transition + overlays.
+// (Re-uses makePlan's baseline; only the cue action gains the §17 fields.)
+function makePlanWithDeckKnobs(action) {
+  const plan = makePlan();
+  plan.cues = [
+    {
+      id: 'c_deck',
+      label: 'Deck playlist with knobs',
+      trigger: { type: 'mood', from: 'calm', to: 'party' },
+      action,
+    },
+  ];
+  return plan;
+}
+
+function setupWithPlan(plan, opts = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tlsvc-'));
+  const sceneDir = path.join(dir, 'scene_timeline');
+  const stateDir = path.join(dir, 'state');
+  fs.mkdirSync(sceneDir, { recursive: true });
+  fs.mkdirSync(stateDir, { recursive: true });
+  saveShowPlan(plan, path.join(sceneDir, `${plan.name}.yaml`));
+  const { deps, calls } = makeDeps();
+  let moodState = opts.mood || { party: 0, value: 0 };
+  const svc = new TimelineService({
+    scene: 'summer_camp_dome',
+    sceneDir,
+    stateDir,
+    getMood: () => moodState,
+    deps,
+    broadcast: () => {},
+    config: {
+      enabled: true, activePlan: plan.name, tickMs: 1000,
+      mood: { key: 'audioParty', partyThreshold: 0.5 }, colorPalettes: PALETTES,
+    },
+    nowFn: () => Date.UTC(2026, 7, 30, 2, 0, 0),
+  });
+  return { svc, deps, calls, setMood: (m) => { moodState = m; } };
+}
+
+test('§16.9 schema: playlist action round-trips transition + overlays', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl',
+    target: { channel: 'deck', id: null },
+    transition: { mode: 'trans_dissolve', durationMs: 1500, enabled: true },
+    overlays: 'enable',
+  });
+  const norm = validateShowPlan(plan);
+  const act = norm.cues[0].action;
+  assert.deepEqual(act.transition, { mode: 'trans_dissolve', durationMs: 1500, enabled: true });
+  assert.equal(act.overlays, 'enable');
+});
+
+test('§16.9 schema: rejects an unknown transition mode (allowed list in message)', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    transition: { mode: 'trans_wipe_left' },
+  });
+  assert.throws(() => validateShowPlan(plan), /trans_crossfade, trans_flash, trans_dissolve/);
+});
+
+test('§16.9 schema: transition requires mode when present', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    transition: { durationMs: 1000 },
+  });
+  assert.throws(() => validateShowPlan(plan), /\.mode is required/);
+});
+
+test('§16.9 schema: transition on a non-deck target throws', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'mixer', id: 'ch_a' },
+    transition: { mode: 'trans_flash' },
+  });
+  assert.throws(() => validateShowPlan(plan), /transition is only valid for a deck target/);
+});
+
+test('§16.9 schema: overlays on a non-deck target throws', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'all', id: null },
+    overlays: 'enable',
+  });
+  assert.throws(() => validateShowPlan(plan), /overlays is only valid for a deck target/);
+});
+
+test('§16.9 schema: rejects a bad overlays value', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    overlays: 'toggle',
+  });
+  assert.throws(() => validateShowPlan(plan), /overlays must be one of enable, disable/);
+});
+
+test('§16.9 apply: deck playlist cue calls setDeckTransition + overlays + forceDeckView', async () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    transition: { mode: 'trans_dissolve', durationMs: 1500 },
+    overlays: 'disable',
+  });
+  const { svc, calls, setMood } = setupWithPlan(plan);
+  await svc.start();
+  // Isolate from the boot baseline (which also pins the deck view).
+  calls.setDeckTransition.length = 0;
+  calls.setDeckOverlaysEnabled.length = 0;
+  calls.forceDeckView.length = 0;
+  calls.loadPlaylist.length = 0;
+
+  setMood({ party: 0, value: 0 });
+  await svc._tick();                 // arm at calm
+  setMood({ party: 1, value: 1 });
+  await svc._tick();                 // fire the deck cue under autopilot
+  svc.stop();
+
+  assert.equal(calls.setDeckTransition.length, 1, 'setDeckTransition called once');
+  // enabled defaults true when the cue didn't say otherwise; duration passed through.
+  assert.deepEqual(calls.setDeckTransition[0], { mode: 'trans_dissolve', enabled: true, durationMs: 1500 });
+  assert.deepEqual(calls.setDeckOverlaysEnabled, [false], 'overlays:disable → setDeckOverlaysEnabled(false)');
+  assert.ok(calls.forceDeckView.length >= 1, 'forceDeckView asserted for the deck cue');
+  assert.ok(calls.loadPlaylist.some((c) => c.name === 'party_pl'), 'deck playlist loaded');
+});
+
+test('§16.9 apply: absent transition/overlays leave the deck knobs untouched', async () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+  });
+  const { svc, calls, setMood } = setupWithPlan(plan);
+  await svc.start();
+  calls.setDeckTransition.length = 0;
+  calls.setDeckOverlaysEnabled.length = 0;
+
+  setMood({ party: 0, value: 0 });
+  await svc._tick();
+  setMood({ party: 1, value: 1 });
+  await svc._tick();
+  svc.stop();
+
+  assert.equal(calls.setDeckTransition.length, 0, 'no transition cue → setDeckTransition untouched');
+  assert.equal(calls.setDeckOverlaysEnabled.length, 0, 'no overlays field → setDeckOverlaysEnabled untouched');
+});
+
+test('§16.9 boot baseline pins the deck view (forceDeckView)', async () => {
+  const { svc, calls } = setup();
+  await svc.start();
+  svc.stop();
+  // The plan-level autopilot baseline targets the deck → output pinned to deck.
+  assert.ok(calls.forceDeckView.length >= 1, 'boot baseline forces the deck view');
+});
+
+test('§16.9 getState surfaces forcingDeckView (plan active AND output pinned to deck)', async () => {
+  const { svc, calls } = setup();
+  await svc.start();
+  svc.stop();
+  // Boot baseline pinned the deck view → plan active + pinned = forcingDeckView.
+  let st = svc.getState();
+  assert.equal(st.planActive, true, 'plan is driving the deck on boot');
+  assert.equal(st.forcingDeckView, true, 'forcingDeckView true while plan pins the deck');
+
+  // Simulate the operator switching the view to mixer (UI clears the pin). The
+  // engine does NOT auto-takeover; forcingDeckView simply drops to false because
+  // the output is no longer pinned to deck.
+  calls.viewState.mode = null;
+  st = svc.getState();
+  assert.equal(st.planActive, true, 'plan still active (no engine-side takeover)');
+  assert.equal(st.forcingDeckView, false, 'forcingDeckView false once the pin is cleared');
+
+  // A takeover (operator-confirmed) drops planActive → forcingDeckView false too.
+  calls.viewState.mode = 'deck';
+  svc.takeover();
+  st = svc.getState();
+  assert.equal(st.planActive, false, 'planActive false under overridden takeover');
+  assert.equal(st.forcingDeckView, false, 'forcingDeckView false when plan not active');
+});
+
+test('§16.9 takeover then lease-expiry resume re-asserts the deck pin', async () => {
+  // The engine does NOT auto-arm takeover from a view event (§16.9 confirm-gated
+  // in the UI). This proves the PRIMITIVES the UI drives: an explicit takeover()
+  // (what CaptainPad calls on confirm) → after operatorLeaseSec of inactivity the
+  // tick auto-releases → catchUp → the baseline re-pins the deck view.
+  let nowMs = Date.UTC(2026, 7, 30, 2, 0, 0);
+  const { svc, calls } = setup();
+  svc.nowFn = () => nowMs;
+  await svc.start();
+  // Operator confirmed manual takeover (UI → POST /timeline/takeover).
+  svc.takeover();
+  assert.equal(svc.state.mode, 'overridden');
+  assert.ok(svc.state.operatorLease, 'operator lease armed by takeover');
+  calls.forceDeckView.length = 0;
+
+  // Inactivity past the lease → tick auto-releases + resumes the plan at now.
+  nowMs = svc.state.operatorLease.expiresAtMs + 1000;
+  await svc._tick();
+  svc.stop();
+  assert.equal(svc.state.operatorLease, null, 'lease released on expiry');
+  assert.equal(svc.state.mode, 'armed', 'mode back to armed after release');
+  assert.ok(calls.forceDeckView.length >= 1, 'resume re-asserts the deck pin via the baseline');
+});
+
+test('§16.9 forceDeckView fails loud when the dep is missing', async () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+  });
+  const { svc, deps, setMood } = setupWithPlan(plan);
+  await svc.start();
+  // Drop the dep AFTER boot to prove the per-cue path fails loud, not silently.
+  delete deps.forceDeckView;
+  setMood({ party: 0, value: 0 });
+  await svc._tick();
+  setMood({ party: 1, value: 1 });
+  await svc._tick();
+  svc.stop();
+  // The cue error surfaces (never silent) — the tick records it.
+  const st = svc.getState();
+  assert.ok(
+    st.lastError && /forceDeckView dep is required/.test(st.lastError),
+    `expected a loud forceDeckView dep error, got ${JSON.stringify(st.lastError)}`,
+  );
 });

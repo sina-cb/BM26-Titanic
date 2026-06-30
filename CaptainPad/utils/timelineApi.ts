@@ -198,11 +198,48 @@ export interface TriggerManual { type: 'manual' }
 export type CueTrigger = TriggerClock | TriggerSun | TriggerPhase | TriggerMood | TriggerManual;
 
 export interface ActionLook { type: 'look'; look: string }
+
+// Deck transition modes (mirrors the engine DeckTransitionConfig modes, see
+// CaptainPad/utils/api.ts DeckTransitionConfig). The maker offers these on a
+// playlist action whose target is the deck (the only target now).
+export type DeckTransitionMode = 'trans_crossfade' | 'trans_flash' | 'trans_dissolve';
+
+export const DECK_TRANSITION_MODES: DeckTransitionMode[] = [
+  'trans_crossfade',
+  'trans_flash',
+  'trans_dissolve',
+];
+
+export const DECK_TRANSITION_MODE_LABEL: Record<DeckTransitionMode, string> = {
+  trans_crossfade: 'Crossfade',
+  trans_flash: 'Flash',
+  trans_dissolve: 'Dissolve',
+};
+
+// Cue-level overlay intent on a playlist (deck) action. Absent = leave the
+// deck's overlays as-is; 'enable' honors the deck's configured overlays;
+// 'disable' blacks all overlays out for this cue.
+export type ActionOverlays = 'enable' | 'disable';
+
+// Inline deck transition override on a playlist action. Only the maker's deck
+// target emits this; `mode` is required when present, the rest optional. Shape
+// matches the engine's playlist-action transition contract EXACTLY.
+export interface ActionTransition {
+  mode: DeckTransitionMode;
+  durationMs?: number;
+  enabled?: boolean;
+}
+
 export interface ActionPlaylist {
   type: 'playlist';
   name: string;
   target?: PlanTarget;
   autopilot?: PlanAutopilotInline;
+  // Deck transition override (deck target only). Absent = inherit the deck's
+  // standing transition config.
+  transition?: ActionTransition;
+  // Cue-level overlay intent (deck target only). Absent = leave as-is.
+  overlays?: ActionOverlays;
 }
 export interface ActionGlobals { type: 'globals'; set: Record<string, unknown> }
 // NOTE: the engine also validates a `scene` action, but the maker deliberately
