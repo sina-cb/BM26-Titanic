@@ -1,7 +1,7 @@
 # `LookingGlass/panel_firmware/` — Arcade Control-Panel Firmware
 
-Firmware for the **LookingGlass control panel**: a 6-button arcade box built on a
-Waveshare **ESP32-S3-Pico**. It debounces the buttons and recognizes gestures —
+Firmware for the **LookingGlass control panel**: a 6-button illuminated arcade box
+built on an **ESP32-S3-ETH** (the BM26-Stoker board). It debounces the buttons and recognizes gestures —
 instant **Press/Release**, **single-** and **double-click**, and a full **hold
 lifecycle** — so a button can act as a low-latency trigger *or* a hold control.
 Right now every gesture is just logged to the serial console; the action hooks are
@@ -34,43 +34,125 @@ EVT btn=ARCADE_4 action=LONG_PRESS_STOP t=14850    # HOLD ends (released)
 
 ## Hardware
 
-- **Board:** Waveshare ESP32-S3-Pico — **ESP32-S3R8** (dual-core Xtensa LX7, 16 MB
-  flash, 8 MB octal PSRAM, native USB, onboard WS2812 RGB LED on GPIO21). Same
-  silicon as the BM26 Stoker controller.
-- **Buttons:** 6 momentary, normally-open. Each is wired `GPIO -> switch -> GND` and
-  read with the internal pull-up, so they are **active-low** (pressed = LOW).
-- **Power:** external 24 V → buck → 5 V into VSYS. USB-C is for flashing + serial.
+- **Board:** **ESP32-S3-ETH** — **ESP32-S3R8** (dual-core Xtensa LX7, 16 MB flash,
+  8 MB octal PSRAM, onboard WS2812 RGB LED on GPIO48, onboard **W5500 Ethernet +
+  PoE**). **Same board as the BM26 Stoker controller** — and the panel's button IO
+  mirrors Stoker's control-panel pin map (see below).
+- **Controls:** **6 illuminated buttons**, each = **2 IO** (a switch **and** a PWM
+  LED): four **small** arcade buttons (**SW1–SW4**), one **big** arcade button
+  (**SW5**), and a green **Mode** button with a **status LED** on top. Every switch
+  is wired `GPIO -> switch -> GND` and read with the internal pull-up, so they are
+  **active-low** (pressed = LOW).
+- **Button LEDs:** each button's LED runs off a separate **5 V / 12 V rail** (not
+  the 3.3 V GPIO) and is driven low-side by a **PWM GPIO → N-MOSFET** (150 Ω gate
+  series + 100 kΩ gate pulldown), so firmware can dim or pulse it. (The Mode status
+  LED can instead be a simple `GPIO47 → 330 Ω → LED → GND`, Stoker mirror-LED style.)
+- **Power:** **USB-C 5 V** (VBUS) supplies the board — the same port used for
+  flashing/serial. It also feeds the separate LED rail; share a common GND.
+- **Network:** the panel reaches the LookingGlass **unmanaged switch** over wired
+  **Ethernet** (onboard W5500 → RJ45). See the **System Overview** tab in
+  [`circuit.html`](circuit.html) for the full two-side (LookingGlass ↔ ship) network.
 - **Serial console:** the bench board exposes the ESP32-S3 **native USB Serial/JTAG**
   on its USB-C port (it enumerates under VID `303A`), so it shows up as a normal COM
   port at **115200 baud** — the same port you flash over. (If a board instead routes
   serial through a UART bridge on UART0/GPIO43-44, set `ARDUINO_USB_CDC_ON_BOOT=0` in
   `platformio.ini`.)
 
-### Button → GPIO map
+### Connections — full wiring list
 
-| Net       | GPIO | Direction |
-|-----------|------|-----------|
-| ARCADE_1  | 15   | input, active-low |
-| ARCADE_3  | 16   | input, active-low |
-| ARCADE_4  | 39   | input, active-low — the one wired today |
-| ARCADE_5  | 40   | input, active-low |
-| NO_BUTTON | 41   | input, active-low |
-| *(lamp)*  | 18   | **output** — illuminated-button lamp (PWM): dim at rest, full while ARCADE_4 held |
+Each button is **two independent nets**: a switch input and a PWM LED output (the
+switch and the LED don't touch inside the button). **Switch pins mirror
+BM26-Stoker's control-panel map** so the harness/firmware transfers.
 
-> GPIO18 was previously `ARCADE_2`; it is now the **button-lamp output** (a button
-> input and the lamp output can't share a pin). Configure it via the `lamp.*`
-> keys in `config.yaml`.
+| Button | Size  | Switch → GPIO | LED (PWM) → GPIO | Stoker pin |
+|--------|-------|---------------|------------------|------------|
+| SW1    | small | `IO15`        | `IO41`           | P1-A       |
+| SW2    | small | `IO18`        | `IO1`            | P2-A       |
+| SW3    | small | `IO16`        | `IO2`            | P3-A       |
+| SW4    | small | `IO39`        | `IO42`           | P1-B       |
+| SW5    | **big** | `IO40`      | `IO21`           | P2-B       |
+| Mode   | green | `IO17`        | `IO47`           | MODE / mirror-LED |
+| Status | —     | —             | `IO48` WS2812 (onboard, no wiring) | RGB |
+
+Flat net list:
+
+```
+IO15 -> SW1.SW       IO41 -> SW1.PWM.LED
+IO18 -> SW2.SW       IO1  -> SW2.PWM.LED
+IO16 -> SW3.SW       IO2  -> SW3.PWM.LED
+IO39 -> SW4.SW       IO42 -> SW4.PWM.LED
+IO40 -> SW5.SW       IO21 -> SW5.PWM.LED   (big button)
+IO17 -> MODE.SW      IO47 -> MODE.LED      (status LED on top of Mode)
+IO48 -> WS2812        (onboard board status LED — already wired)
+```
+
+Per button, the **switch** half is always the same:
+
+```
+  <switch GPIO> --[ button switch ]-- GND            pressed = LOW (INPUT_PULLUP)
+```
+
+The **LED** half has **two wiring options** (toggle them in `circuit.html` → Panel
+Wiring → the *Direct drive* / *MOSFET* sub-tabs):
+
+**Option A — Direct drive (no MOSFET — what we can wire today):**
+
+```
+  <LED GPIO> --[330 Ω]--▷|-- GND      GPIO sources the LED · PWM-dimmable
+```
+Only for **low-current** LEDs (≤ ~20 mA @ 3.3 V) — fine for indicator/Mode LEDs,
+but **5 V / 12 V arcade button lamps won't fully light** from a 3.3 V GPIO.
+
+**Option B — Low-side MOSFET (needed for the 5/12 V button lamps):**
+
+```
+  +5V/12V rail --+-- LED+ ( button lamp ) LED- --+
+                 |                            Drain v
+  <LED GPIO> --[150 Ω]-- Gate --| N-MOSFET (2N7000 / AO3400)
+                                |> Source --+
+                 +-- 100 kΩ ----+-----------+---- GND      (gate pulldown)
+```
+
+> **We don't have the MOSFETs yet** — the panel can be brought up on **Option A**
+> (direct drive) for low-current LEDs; switch to **Option B** once the MOSFETs (or a
+> ULN2803A) are in hand and the high-power button lamps need driving.
+
+Shared rails: one common **GND** (board + every switch + every MOSFET source +
+LED-rail GND); one **+5 V / 12 V LED rail** feeding all six LED anodes; board
+power in on **USB-C 5 V (VBUS)**.
+
+> **Stoker compatibility.** Switch pins reuse BM26-Stoker's control-panel GPIOs
+> (`15/18/16/39/40` = P1-A/P2-A/P3-A/P1-B/P2-B, `17` = MODE, `47` = mirror-LED), so
+> a Stoker harness drops onto this panel. **Polarity differs:** LookingGlass buttons
+> are **active-LOW** (`INPUT_PULLUP`, → GND); Stoker FIRE buttons are active-HIGH
+> (`INPUT_PULLDOWN`, → 3V3) for fire safety. These don't actuate fire, so active-low
+> is fine — just don't cross-flash Stoker fire firmware onto this board.
+
+> **Tip:** the six discrete MOSFET drivers can be replaced by one **ULN2803A**
+> 8-channel sink array — wire GPIO→IN, LED+→rail, LED−→OUT, COM→+rail, GND→common;
+> no gate resistor / pulldown needed.
+
+> **⚠ Firmware status:** the shipped firmware (`include/config.h` `BUTTON_TABLE` +
+> `config.yaml` `lamp.*`) predates this map — it declares the older switch set and
+> **one** lamp channel. Driving all **six** button LEDs as independent PWM channels
+> and the Stoker-compatible `SW1–SW5`/`Mode` pins above is **pending firmware work**:
+> the wiring here is the target; update `config.h` / `config.yaml` to match before
+> relying on per-button LED control.
 
 ### ⚠ Reserved pins — never reassign a button to these
 
 | Pins             | Why                                          |
 |------------------|----------------------------------------------|
 | 33,34,35,36,37   | Octal PSRAM                                  |
+| 38, 48           | RGB-LED (48 = onboard WS2812 status)         |
 | 19,20            | Native USB D-/D+ (USB Serial/JTAG console)   |
 | 43,44            | UART0 (secondary UART path)                  |
 | 0,3,45,46        | Strapping pins (boot mode / flash voltage)   |
-| 21               | Onboard WS2812 status LED                    |
-| 18               | Button-lamp output (illuminated button)      |
+| 9–14             | W5500 Ethernet SPI (internal)                |
+| 26–32            | SPI flash (internal)                         |
+
+After this Stoker-compatible map, **nearly every exposed header GPIO is used or
+reserved** — there's no comfortable headroom for more buttons without freeing a pin.
 
 ## Toolchain
 
@@ -143,8 +225,10 @@ PyYAML is required to read the registry.
 
 ## What it does
 
-- Configures the five button-input pins as `INPUT_PULLUP` at boot (GPIO18 is the
-  illuminated-button **lamp output**, ON while its source button is held).
+- Configures the button-switch pins as `INPUT_PULLUP` at boot and drives a single
+  illuminated-button **lamp output** (ON while its source button is held) — wiring
+  the **six** independent PWM LEDs and the Stoker-compatible pin map is pending
+  firmware work (see the **Firmware status** note above).
 - Debounces each button (15 ms default) with `millis()`-based timing, then runs a
   small per-button gesture state machine — the main loop never calls `delay()`, so
   every button is independent, responsive, and simultaneous-safe.
@@ -154,7 +238,7 @@ PyYAML is required to read the registry.
   without a reset or a button press. Set `firmware.serial_heartbeat_ms` to `0` in
   `config.yaml` to disable.
 - Prints a startup banner with the firmware version and the live button → pin map.
-- Optional onboard WS2812 status LED (GPIO21): a slow green heartbeat, plus a brief
+- Optional onboard WS2812 status LED (GPIO48): a slow green heartbeat, plus a brief
   blue flash on any press. Toggle with `status_led.enabled` in `config.yaml`.
 
 ## Where to add real button behavior
