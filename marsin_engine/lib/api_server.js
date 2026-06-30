@@ -5953,7 +5953,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             defaults: e.defaults || {},
             notes: e.notes ?? null,
           }));
-          const saved = playlistManager.save({ name: data.name, tags: data.tags, entries });
+          const saved = playlistManager.save({ name: data.name, entries });
           // Re-sync per-channel cursor for any channel whose playlist
           // points at the saved name (operator reorder, slot 5 May
           // 2026). `cursor` is a display index used in WS broadcasts;

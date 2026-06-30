@@ -159,17 +159,6 @@ export class PlaylistManager {
     const data = {
       name: typeof raw.name === 'string' ? raw.name : name,
       schemaVersion: typeof raw.schemaVersion === 'number' ? raw.schemaVersion : 1,
-      // Playlist-level tags (#11). Lenient like `defaults`/`modulations`:
-      // an Array of strings is trimmed + lowercased (and empties dropped);
-      // any non-array junk (null, scalar, object) coerces to [] without
-      // throwing, so an older file or a hand-edited mistake never crashes a
-      // load. Dedupe happens on save().
-      tags: Array.isArray(raw.tags)
-        ? raw.tags
-          .filter(t => typeof t === 'string')
-          .map(t => t.trim().toLowerCase())
-          .filter(t => t.length > 0)
-        : [],
       entries: [],
     };
     const rawEntries = Array.isArray(raw.entries) ? raw.entries : [];
@@ -225,23 +214,10 @@ export class PlaylistManager {
     this.validateName(playlist.name);
     const entries = Array.isArray(playlist.entries) ? playlist.entries : [];
 
-    // Playlist-level tags (#11). Same lenient coercion as load(), plus a
-    // dedupe pass via Set so a save normalizes whatever the client sent
-    // (trim + lowercase + drop empties + unique). Non-array junk → [].
-    const tags = Array.isArray(playlist.tags)
-      ? [...new Set(
-        playlist.tags
-          .filter(t => typeof t === 'string')
-          .map(t => t.trim().toLowerCase())
-          .filter(t => t.length > 0),
-      )]
-      : [];
-
     const ids = new Set();
     const clean = {
       schemaVersion: 1,
       name: playlist.name,
-      tags,
       entries: entries.map((e, i) => {
         if (!e.id) throw new Error(`Entry ${i} missing id`);
         if (ids.has(e.id)) throw new Error(`Duplicate entry id: ${e.id}`);

@@ -104,25 +104,10 @@ On engine boot, if `simulation/scenes/<scene>/playlists/` is empty:
 2. Create `default.yaml` with one entry per pattern, auto-generated IDs, no labels, empty defaults
 3. Write to disk immediately
 
-### 2.5 Tags (additive, 2026-06)
-
-**Playlist-level `tags: string[]`** (#11) — free-form labels for searching /
-filtering the library in CaptainPad. Follows the same lenient coercion
-precedent as `defaults` / `modulations` (a malformed or older file never throws
-on load): on `load()` a non-array coerces to `[]`; string members are trimmed +
-lowercased + empties dropped. On `save()` the same plus a `Set` dedupe. Old
-playlists (no `tags` key) load as `[]`.
-
-```yaml
-schemaVersion: 1
-name: chill_night
-tags: [chill, ambient, night]   # lowercased, trimmed, deduped on save
-entries: [ ... ]
-```
-
-The `tags` field rides `GET /playlists/:name` for free (it returns the whole
-loaded object). On `POST /playlists`, `save({ name, tags, entries })` persists
-them. No new routes were added.
+> Playlist-level `tags` were removed (2026-06-30): the CaptainPad UI for them
+> was dropped, so the unused engine field + coercion were removed too. Old
+> playlists that still carry a `tags` key load fine — it's ignored and stripped
+> on the next save.
 
 > Per-entry `hold` / `loop` flags were removed (2026-06). Old playlists that
 > still carry those keys load fine — the keys are ignored and stripped from the
