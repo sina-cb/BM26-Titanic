@@ -48,7 +48,7 @@ const CUE_OVERLAY_MODES = Object.freeze(['enable', 'disable']);
 // that configures the engine's palette-cycling daemon when the cue fires. Wire
 // shape: { active, palettes: string[](>=1), delay_s: number>0, shuffle?: bool }.
 export const CUE_COLOR_AUTOPILOT_KEYS = Object.freeze([
-  'active', 'palettes', 'delay_s', 'shuffle',
+  'active', 'palettes', 'delay_s', 'shuffle', 'transitionMs',
 ]);
 
 // ── small validators (all throw-style; first arg is a context label) ──────────
@@ -358,14 +358,17 @@ function validateCueTransition(transition, label) {
  * A 'playlist' action's optional `colorAutopilot` block (docs/39) — configures the
  * engine's palette-cycling daemon when this deck cue fires. THROW-style. The wire
  * shape MUST match the engine ColorAutopilot + the deck REST route:
- *   { active: bool, palettes: string[](>=1), delay_s: number>0, shuffle?: bool }
+ *   { active: bool, palettes: string[](>=1), delay_s: number>0, shuffle?: bool,
+ *     transitionMs?: number>=0 }
  * Palette ids are validated for SHAPE here (non-empty strings); membership in the
  * rig's colorPalettes config is enforced at apply time (the plan validator has no
- * palette catalog). Returns a normalized { active, palettes, delay_s, shuffle }.
+ * palette catalog). `transitionMs` (optional, default 0 = hard cut) is the
+ * crossfade duration on a palette switch. Returns a normalized
+ * { active, palettes, delay_s, shuffle, transitionMs }.
  */
 function validateCueColorAutopilot(ca, label) {
   if (!isPlainObject(ca)) {
-    throw new Error(`${label} must be an object { active, palettes, delay_s, shuffle? }`);
+    throw new Error(`${label} must be an object { active, palettes, delay_s, shuffle?, transitionMs? }`);
   }
   assertBool(ca.active, `${label}.active`);
   if (!Array.isArray(ca.palettes) || ca.palettes.length === 0) {
@@ -376,7 +379,14 @@ function validateCueColorAutopilot(ca, label) {
     throw new Error(`${label}.delay_s must be a number > 0, got ${JSON.stringify(ca.delay_s)}`);
   }
   const shuffle = ca.shuffle !== undefined ? assertBool(ca.shuffle, `${label}.shuffle`) : false;
-  return { active: ca.active, palettes, delay_s: ca.delay_s, shuffle };
+  let transitionMs = 0;
+  if (ca.transitionMs !== undefined) {
+    if (typeof ca.transitionMs !== 'number' || !Number.isFinite(ca.transitionMs) || ca.transitionMs < 0) {
+      throw new Error(`${label}.transitionMs must be a number >= 0, got ${JSON.stringify(ca.transitionMs)}`);
+    }
+    transitionMs = ca.transitionMs;
+  }
+  return { active: ca.active, palettes, delay_s: ca.delay_s, shuffle, transitionMs };
 }
 
 function validateAction(action, label, lookNames) {

@@ -33,25 +33,31 @@ const PLAN_LOCK_AMBER = '#F5A623';
 export const PlanLockBanner: React.FC = () => {
   const { planLocked } = useEngineLock();
   // 0 = hidden, 1 = fully visible. Slide-in from the top, same easing as
-  // the override banner so the two read as one visual family.
+  // the override banner so the two read as one visual family. Purely
+  // cosmetic — visibility is gated DIRECTLY on `planLocked`, never on the
+  // animation's completion callback. (A previous version mounted/unmounted
+  // off `.start(cb)`; that callback is unreliable under react-native-web's
+  // `useNativeDriver` shim and left the banner stuck hidden while a plan
+  // was driving the deck — the exact bug this banner exists to surface.)
   const slide = useRef(new Animated.Value(0)).current;
-  // Keep the View mounted for one slide-out cycle after the lock clears so
-  // the operator sees it retract instead of popping away.
-  const [mounted, setMounted] = React.useState(false);
 
   useEffect(() => {
-    if (planLocked) setMounted(true);
     Animated.timing(slide, {
       toValue: planLocked ? 1 : 0,
       duration: 220,
       easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start(() => {
-      if (!planLocked) setMounted(false);
-    });
+      // false: react-native-web has no native animation thread; forcing the
+      // native driver here silently no-ops the timing on web (and can drop
+      // the completion callback). Match ViewOverrideBanner, which slides
+      // reliably because it never depends on the callback to gate render.
+      useNativeDriver: false,
+    }).start();
   }, [planLocked, slide]);
 
-  if (!mounted) return null;
+  // Gate visibility on the lock itself. While `planLocked` is false the
+  // banner is fully unmounted; the slide value rests at 0 so the next
+  // engage animates in cleanly.
+  if (!planLocked) return null;
 
   return (
     <Animated.View

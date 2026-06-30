@@ -3344,20 +3344,31 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     const palettes = Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [];
     return new Set(palettes.map((p) => p && p.id).filter(Boolean));
   }
-  function applyColorPalette(id) {
+  // Write an already-resolved (or crossfade-interpolated) params object to the
+  // rig, then persist + broadcast. Split out of applyColorPalette so the
+  // ColorAutopilot crossfade tween can push INTERMEDIATE frames through the
+  // exact same path a final/hard-cut write uses.
+  function applyColorPaletteParams(params) {
     if (!paramCenter) throw new Error('paramCenter not available for color autopilot');
-    const params = resolveColorPaletteParams(id);
     for (const k in params) paramCenter.set(k, params[k], 'colorAutopilot');
     // Surface the change the same way an operator palette write would: persist +
     // broadcast so every UI mirrors the live palette without polling.
     saveAllState();
     broadcastColorAutopilot();
   }
+  function applyColorPalette(id) {
+    applyColorPaletteParams(resolveColorPaletteParams(id));
+  }
 
   // The palette-cycling daemon. Independent timer from the pattern `autopilot`
   // (they run in parallel; color cycling never changes the pattern). Persists its
-  // {active,palettes,delay_s,shuffle} block into config.yaml under colorAutopilot.
-  const colorAutopilot = new ColorAutopilot(applyColorPalette);
+  // {active,palettes,delay_s,shuffle,transitionMs} block into config.yaml under
+  // colorAutopilot. The crossfade hooks (resolve + applyParams) let a switch RAMP
+  // the palette params over `transitionMs` instead of hard-cutting (docs/39).
+  const colorAutopilot = new ColorAutopilot(applyColorPalette, undefined, {
+    resolvePaletteFn: resolveColorPaletteParams,
+    applyParamsFn: applyColorPaletteParams,
+  });
 
   // Single payload shape for every colorAutopilot writer (REST, timeline cue),
   // mirroring broadcastAutopilot. CaptainPad's deck tab wires
@@ -3369,6 +3380,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       palettes: Array.isArray(st.palettes) ? [...st.palettes] : [],
       delay_s: typeof st.delay_s === 'number' ? st.delay_s : 30,
       shuffle: !!st.shuffle,
+      // transitionMs (docs/39): crossfade duration on a palette switch. 0 ==
+      // hard cut. Older persisted configs omit it → report 0.
+      transitionMs: typeof st.transitionMs === 'number' ? st.transitionMs : 0,
     };
   }
   function broadcastColorAutopilot() {
@@ -4657,12 +4671,19 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(colorAutopilotState()));
     } else if (req.method === 'POST' && req.url === '/deck/color-autopilot') {
-      // Set the palette-cycling config. Validates STRICTLY (codex P0): palettes
-      // a non-empty array of KNOWN ids, delay_s number>0, active+shuffle booleans.
-      // A bad shape → 400 with a loud message (never coerce / silently skip).
+      // Set the palette-cycling config. PATCH-style: the posted body is MERGED
+      // over the current config, so the deck UI can post a single toggle/stepper
+      // change (e.g. { delay_s } or { transitionMs }) optimistically. The MERGED
+      // object is then validated STRICTLY (codex P0): palettes a non-empty array
+      // of KNOWN ids, delay_s number>0, transitionMs number>=0, active+shuffle
+      // booleans. A bad shape → 400 with a loud message (never coerce / skip).
       readBody(data => {
         try {
-          const out = setColorAutopilot(data);
+          if (!data || typeof data !== 'object' || Array.isArray(data)) {
+            throw new Error('colorAutopilot body must be an object');
+          }
+          const merged = { ...colorAutopilotState(), ...data };
+          const out = setColorAutopilot(merged);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(out));
         } catch (e) {
