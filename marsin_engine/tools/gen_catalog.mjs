@@ -69,7 +69,11 @@ const SUMMARY = `## Summary
   bars and need the same ground-rule pass. The per-group status flags the worklist.
 - Cross-model ④/⑤ items + the \`23\` dark-space decision are tracked in Notion.
 
-*(No 55/56 in the top dir — the sequence is 00–54, 57, 58.)*`;
+**Pattern-number gap 55 & 56 is INTENTIONAL** — the show-pattern sequence runs
+00–54, then 57–68 (no \`55_*\`/\`56_*\` files). Those two numbers were skipped during
+the Round-2 audio batch and are deliberately left vacant; do NOT renumber the
+later patterns to close the gap (it would break manifest order, saved scenes, and
+CaptainPad slot references). A future pattern may simply claim 55/56.`;
 
 // ── index page ────────────────────────────────────────────────────────────────
 let index = INTRO + '\n\n## Pages\n\n';

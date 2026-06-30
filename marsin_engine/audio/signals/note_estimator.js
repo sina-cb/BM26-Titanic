@@ -1,5 +1,5 @@
 /**
- * note_estimator_ref.js — dominant-frequency → musical note / pitch-class,
+ * note_estimator.js — dominant-frequency → musical note / pitch-class,
  * for driving COLOR. Stable enough that hue doesn't strobe.
  *
  * ── What it is ────────────────────────────────────────────────────────────
@@ -26,8 +26,10 @@
  * 2. FREQ → MIDI.  midi = 69 + 12*log2(f/440).
  * 3. SMOOTHING. dom freqs already pass through a Kalman in the analyzer, but
  *    the pitch-class can still flip on transient peaks. We add (a) a short
- *    MEDIAN over the last MEDIAN_N hops of the raw pitch class to reject
- *    single-hop flips, then (b) a scalar Kalman on the *continuous* MIDI
+ *    circular-safe MODE (histogram) over the last `medianN` hops of the raw
+ *    pitch class to reject single-hop flips — a plain numeric median is wrong
+ *    near the B↔C wrap, see `_medianPc` — then (b) a scalar Kalman on the
+ *    *continuous* MIDI
  *    value (circular-aware via unwrapping to the running estimate) so the
  *    colour glides rather than steps. A pitch-class change is only committed
  *    when the median agrees for HOLD_HOPS consecutive hops (hysteresis), so

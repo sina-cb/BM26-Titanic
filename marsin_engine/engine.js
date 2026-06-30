@@ -42,8 +42,11 @@ import {
 } from './audio/config/audio_config_store.js';
 import { listAudioDevices, findConfiguredDevice } from './audio/capture/audio_devices.js';
 import { SignalPostProcessor, KNOWN_SIGNALS } from './audio/postproc/signal_post_processor.js';
-import { AudioStructureDetector } from './audio/detector/audio_structure_detector.js';
-import { DerivedSignals } from './audio/signals/derived_signals.js';
+// (2026-06-21) The Audio Companion is the SOLE analyzer: it computes the full
+// derived/detector set and emits every key over OSC, which the engine receives
+// via the static /marsin/audio/* bindings (audio/postproc/audio_signals.js). The
+// engine no longer instantiates AudioStructureDetector / DerivedSignals — those
+// calcs MOVED to the companion. The modules still exist (used BY the companion).
 import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './audio/capture/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
@@ -1462,24 +1465,13 @@ async function main() {
     }
   }
 
-  // docs/30: audio structure detector (build / drop / sustain cues).
-  // ALWAYS constructed so its surface exists even when disabled — tick()
-  // no-ops until audio.structureDetector.enabled flips true via PATCH
-  // /audio/config. Reads the live config fresh each tick via getConfig so
-  // a hot enable/disable + threshold tweak takes effect immediately.
-  // Broadcast hook is the same audioStatus publisher used below; the
-  // detector emits the sparse `dropFired` event through it.
-  const audioStructureDetector = new AudioStructureDetector({
-    paramCenter,
-    broadcast: (msg) => broadcastStatsRef.publish(msg),
-    getConfig: () => (audioState.config && audioState.config.structureDetector) || {},
-  });
-  audioState.structureDetector = audioStructureDetector;
-
-  // Derived signals (BPM / beat / party / note / switch cues) — observe-and-
-  // publish, runs right after the detector each hop off the live CPC keys.
-  const derivedSignals = new DerivedSignals({ paramCenter });
-  audioState.derivedSignals = derivedSignals;
+  // (2026-06-21) Audio structure detector + derived signals are NO LONGER
+  // computed here — the Audio Companion (sole analyzer) computes them and emits
+  // every key over OSC; the engine receives them via the /marsin/audio/* inbound
+  // bindings. The `structureDetector.*` live-config block is still accepted +
+  // persisted (the operator tunes the COMPANION's detector through it; the
+  // engine just stores/forwards it), and the analyzer below still writes the raw
+  // mic bands for the audio.enabled (engine-mic) path.
 
   // Lifecycle helper so /audio/config PATCH can hot-restart the
   // analyzer with new band/kick settings without juggling state by
@@ -1575,13 +1567,44 @@ async function main() {
       // `*Gain` CPC param live each call, preserving the operator's
       // existing slider-as-source-of-truth contract.
       let lastAnalysisAtMs = 0;
+      // Hoisted analyzer-publish payload (codex: allocation-free hot path). The
+      // {kind,key} shapes are static; only `.value` changes each hop. Allocate
+      // the 19 objects + array ONCE per analyzer build (not ~1640 obj/s at
+      // 86 Hz) and mutate in place in onAnalysis. paramCenter.setMany() reads
+      // each entry synchronously and never retains the array, so reuse is safe.
+      const micWrites = [
+        { kind: 'scalar', key: 'micLow',     value: 0 },
+        { kind: 'scalar', key: 'micMid',     value: 0 },
+        { kind: 'scalar', key: 'micHigh',    value: 0 },
+        { kind: 'scalar', key: 'micKick',    value: 0 },
+        { kind: 'scalar', key: 'micFlux',    value: 0 },
+        { kind: 'scalar', key: 'micLowRaw',  value: 0 },
+        { kind: 'scalar', key: 'micMidRaw',  value: 0 },
+        { kind: 'scalar', key: 'micHighRaw', value: 0 },
+        { kind: 'scalar', key: 'micKickRaw', value: 0 },
+        { kind: 'scalar', key: 'micFluxRaw', value: 0 },
+        { kind: 'scalar', key: 'micDomFreq1',   value: 0 },
+        { kind: 'scalar', key: 'micDomEnergy1', value: 0 },
+        { kind: 'scalar', key: 'micDomFreq2',   value: 0 },
+        { kind: 'scalar', key: 'micDomEnergy2', value: 0 },
+        { kind: 'scalar', key: 'micOnsetLowRaw',  value: 0 },
+        { kind: 'scalar', key: 'micOnsetMidRaw',  value: 0 },
+        { kind: 'scalar', key: 'micOnsetHighRaw', value: 0 },
+        { kind: 'scalar', key: 'micSubRaw',       value: 0 },
+        { kind: 'scalar', key: 'micTonalStabilityRaw', value: 0 },
+        { kind: 'scalar', key: 'micChromaFluxRaw',     value: 0 },
+        { kind: 'scalar', key: 'micChromaTiltRaw',     value: 0 },
+      ];
       audioState.analyzer = new AudioAnalyzer({
         sampleRate: cfg.capture.sampleRate,
         fftSize:    cfg.fftSize,
         hopSize:    cfg.hopSize,
         bands:      cfg.bands,
         kick:       cfg.kick,
-        onAnalysis: ({ low, mid, high, kick, flux, domFreq1, domEnergy1, domFreq2, domEnergy2 }) => {
+        sub:        cfg.sub,   // analyzer_features (slot 3): sub-bass chest-hit window (optional)
+        onAnalysis: ({ low, mid, high, kick, flux, domFreq1, domEnergy1, domFreq2, domEnergy2,
+                       onsetLow, onsetMid, onsetHigh, micSub,
+                       tonalStability, chromaFlux, chromaTilt }) => {
           const nowMs = Date.now();
           const dt = lastAnalysisAtMs === 0 ? 0 : Math.max(0, (nowMs - lastAnalysisAtMs) / 1000);
           lastAnalysisAtMs = nowMs;
@@ -1596,30 +1619,39 @@ async function main() {
           // CaptainPad SIGNAL DIAGNOSTICS uses the *Raw keys to render
           // the raw row of the diagnostics strip. micFlux (docs/30) is
           // the spectral-flux primitive the structure detector reads.
-          paramCenter.setMany([
-            { kind: 'scalar', key: 'micLow',     value: lowPost  },
-            { kind: 'scalar', key: 'micMid',     value: midPost  },
-            { kind: 'scalar', key: 'micHigh',    value: highPost },
-            { kind: 'scalar', key: 'micKick',    value: kickPost },
-            { kind: 'scalar', key: 'micFlux',    value: fluxPost },
-            { kind: 'scalar', key: 'micLowRaw',  value: low      },
-            { kind: 'scalar', key: 'micMidRaw',  value: mid      },
-            { kind: 'scalar', key: 'micHighRaw', value: high     },
-            { kind: 'scalar', key: 'micKickRaw', value: kick     },
-            { kind: 'scalar', key: 'micFluxRaw', value: flux     },
-            // Dominant-frequency analyzer outputs (dom1/dom2 + energy).
-            { kind: 'scalar', key: 'micDomFreq1',   value: domFreq1   },
-            { kind: 'scalar', key: 'micDomEnergy1', value: domEnergy1 },
-            { kind: 'scalar', key: 'micDomFreq2',   value: domFreq2   },
-            { kind: 'scalar', key: 'micDomEnergy2', value: domEnergy2 },
-          ], 'audio', 'audio:mic');
-          // docs/30: run the structure detector at the analyzer hop rate
-          // (lowest latency, auto-pauses when the analyzer is off). It
-          // reads the live keys just written above and publishes its own
-          // five keys + the sparse dropFired event. No-ops when disabled.
-          audioStructureDetector.tick(nowMs, dt);
-          // Derived signals read the keys the analyzer + detector just wrote.
-          derivedSignals.tick(nowMs, dt);
+          // Mutate the hoisted payload in place (order matches micWrites above):
+          // post bands, raw bands, dom1/dom2 + energy, then the slot-3 RAW
+          // per-band onset strengths + sub-bass energy (additive analyzer
+          // outputs the band_onsets/sub_bass shapers read each hop).
+          micWrites[0].value  = lowPost;
+          micWrites[1].value  = midPost;
+          micWrites[2].value  = highPost;
+          micWrites[3].value  = kickPost;
+          micWrites[4].value  = fluxPost;
+          micWrites[5].value  = low;
+          micWrites[6].value  = mid;
+          micWrites[7].value  = high;
+          micWrites[8].value  = kick;
+          micWrites[9].value  = flux;
+          micWrites[10].value = domFreq1;
+          micWrites[11].value = domEnergy1;
+          micWrites[12].value = domFreq2;
+          micWrites[13].value = domEnergy2;
+          micWrites[14].value = onsetLow;
+          micWrites[15].value = onsetMid;
+          micWrites[16].value = onsetHigh;
+          micWrites[17].value = micSub;
+          micWrites[18].value = tonalStability;
+          micWrites[19].value = chromaFlux;
+          micWrites[20].value = chromaTilt;
+          paramCenter.setMany(micWrites, 'audio', 'audio:mic');
+          // (2026-06-21) The structure detector + derived signals are no longer
+          // ticked here — the Companion (sole analyzer) computes them and emits
+          // every derived key over OSC, which arrives via the /marsin/audio/*
+          // bindings. This engine-mic analyzer now writes only the RAW mic bands
+          // above (the audio.enabled path); the derived layer lives in the
+          // Companion. (`dt` is still consumed by the band writes; `nowMs` is the
+          // analyzer clock used by the capture/visualizer.)
         },
       });
       audioState.capture = new AudioCapture({
@@ -1693,9 +1725,9 @@ async function main() {
       // Rebuild from scratch — buildAndStartAudio reads audioState.config.
       await buildAndStartAudio();
     } else if (audioState.analyzer) {
-      // Hot reconfigure path — bands/kick only. Throws on invalid
+      // Hot reconfigure path — bands/kick/sub only. Throws on invalid
       // combinations; caller catches and returns 400.
-      audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick });
+      audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick, sub: next.sub });
       audioState.config = next;
     } else {
       audioState.config = next;
@@ -1741,7 +1773,7 @@ async function main() {
       enabled: audioState.config?.enabled,
     });
     if (audioState.analyzer) {
-      audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick });
+      audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick, sub: next.sub });
     }
     audioState.config = next;
     try {

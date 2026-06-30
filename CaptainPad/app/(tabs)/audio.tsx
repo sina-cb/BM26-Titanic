@@ -54,7 +54,8 @@ import {
 import { useAudioStatus, useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, useAudioSignals, type AudioStatus, type AudioStatusDevice, type OscPillState, type AudioSignalDescriptor } from '@/hooks/useEngineState';
 import { useTempoState } from '@/hooks/use_tempo_tap';
 import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
-import { audioAccentHex } from '@/utils/audioSignals';
+import { PulseFlash } from '@/components/audio/PulseFlash';
+import { audioAccentHex, audioGenreName, isGenreKey, isPulseKey } from '@/utils/audioSignals';
 
 // "Auto-driven" accent — mirrors C.tertiary in theme.ts.
 // Local copy keeps this screen working even when the theme's TS shape
@@ -328,6 +329,12 @@ type SignalSlot = {
   accent: SignalAccent;
   kind: 'intensity' | 'frequency' | 'bpm';
   max: number;
+  // True for one-frame PULSE keys (onset/beat/boundary/switch cues). These
+  // render a hold+decay flashing DOT instead of a flatlined bar — a one-hop
+  // pulse blinks imperceptibly through a [0,1] bar (Adv-D P2-A). Classified
+  // in utils/audioSignals.ts (isPulseKey); only an intensity-kind signal can
+  // be a pulse.
+  isPulse: boolean;
 };
 
 function resolveAccent(accent: SignalAccent, palette: Palette): string {
@@ -356,6 +363,9 @@ function toSignalSlot(sig: AudioSignalDescriptor): SignalSlot {
     accent: accentFor(sig),
     kind: sig.kind,
     max: sig.max,
+    // Only intensity-kind keys can be pulses (genre/Hz/bpm have their own
+    // readouts and are never one-hop transients).
+    isPulse: sig.kind === 'intensity' && isPulseKey(sig.key),
   };
 }
 
@@ -368,6 +378,14 @@ function normalizeSlot(slot: SignalSlot, value: number): number {
 
 // Human-readable value for a slot's header readout.
 function slotValueText(slot: SignalSlot, value: number): string {
+  // Genre classifier: the CPC value is an INDEX, not a level — resolve it
+  // to the genre NAME (UPPER, dashes→spaces) so the column reads
+  // "TECH HOUSE" rather than a meaningless "3". A no-genre / out-of-range
+  // index reads "—" (no fabricated label — Codex P0).
+  if (isGenreKey(slot.key)) {
+    const name = audioGenreName(value);
+    return name ? name.replace(/_/g, ' ').toUpperCase() : '—';
+  }
   if (slot.kind === 'frequency') return `${Math.round(value)}Hz`;
   if (slot.kind === 'bpm') return value > 0 ? `${Math.round(value)}` : '—';
   return Math.max(0, Math.min(1, value)).toFixed(2);
@@ -385,6 +403,16 @@ const PINNED_TRACE_HEIGHT = 40;
 // the wrap; per-cell padding makes the gutters (RN's `gap` on a wrap
 // container is unreliable across cells, so we pad inside each cell).
 const SIGNAL_GRID_COLUMNS = 3;
+
+// Max on-screen height of the AUDIO SIGNALS grid before it scrolls inside
+// its own bounded ScrollView (operator brief 2026-06-17 "scrollable signal
+// grid"). ~3 rows of signal columns (each column ≈ 100 px tall with header +
+// bar + trace + RAW footnote, + the 10 px row gutter) stay visible; beyond
+// that the grid scrolls so the lower rows (dom/energy/note/switch/bar-phase/
+// downbeat/genre/onsets) are reachable without the rest of the page being
+// pushed off-screen. A short signal set never reaches this cap, so the grid
+// keeps its natural height and doesn't scroll.
+const SIGNAL_GRID_MAX_HEIGHT = 340;
 
 // Engine INPUT GAIN bounds for the strip slider (software mic-preamp). This
 // is a REAL gain: it patches audio.bands.inputGain on the engine, so it lifts
@@ -419,6 +447,39 @@ const SignalColumn = React.memo(function SignalColumn({ slot, raw, post, active,
   const hasRaw = slot.rawKey !== null;
   const pv = normalizeSlot(slot, post);
   const rawNorm = hasRaw ? normalizeSlot(slot, raw) : null;
+
+  // ── PULSE keys — a flashing DOT (hold+decay) instead of a flatlined bar.
+  // A one-frame onset/beat/boundary/switch pulse spikes to 1 for a single
+  // analyser hop that almost always lands BETWEEN the ~20 Hz param polls, so
+  // a [0,1] bar reads as dead. PulseFlash arms on the rising edge and decays
+  // over ~150-250 ms so the operator actually SEES the cue (Adv-D P2-A).
+  if (slot.isPulse) {
+    return (
+      <View style={{ flex: 1 }}>
+        {/* header — slot label only; the dot IS the value, a numeric POST
+            readout on a one-hop pulse is meaningless (it reads 0.00 the rest
+            of the time). */}
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'baseline', marginBottom: 3 }}>
+          <Text numberOfLines={1} style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+            color: accentColor, textTransform: 'uppercase',
+            letterSpacing: 0.5, flexShrink: 1,
+          }}>{slot.label}</Text>
+        </View>
+        {/* Flash dot sized to fill the same vertical space the bar+trace block
+            occupied, so the grid rows stay aligned. */}
+        <PulseFlash
+          value={post}
+          color={accentColor}
+          restColor={C.ghostBorder}
+          background={C.surfaceContainerLowest}
+          height={traceHeight + 8}
+          active={active}
+        />
+      </View>
+    );
+  }
+
   return (
     <View style={{ flex: 1 }}>
       {/* header — slot label + live POST value */}
@@ -617,11 +678,29 @@ function LiveAudioMeters({
           No live audio signals yet — design them in the Audio Companion (a raw source → ops → an OSC-out), and they appear here.
         </Text>
       ) : (
-        // Full-height 3×N grid that wraps to new rows. No inner scroll /
-        // height cap — the whole AUDIO tab is ONE page ScrollView, so the
-        // grid simply lays out at full height and scrolls with everything
-        // else (no pinned strip, no nested scroller to fight the page).
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        // 3×N grid that wraps to new rows, inside a HEIGHT-CAPPED vertical
+        // ScrollView (operator brief 2026-06-17 "scrollable signal grid").
+        //
+        // WHY a nested scroller: the Companion now routes many signals
+        // (low/mid/high/kick, dom1/dom2 + energies, energy/slow/build/party,
+        // note/switch/bar-phase/downbeat, genre, per-band onsets, chest-hit …).
+        // At 3 columns that's 4-6+ rows; on the iPad the lower rows pushed the
+        // BPM-sync / settings cards off-screen and, worse, were unreachable
+        // when the grid alone filled the viewport. Capping the grid's height
+        // and letting IT scroll keeps every signal reachable while the rest of
+        // the page (sync, settings) stays in view below.
+        //
+        // The cap only engages when the grid is tall: a short set sits at its
+        // natural height (the ScrollView never scrolls), so a 3-6 signal rig
+        // looks identical to before. nestedScrollEnabled lets the inner
+        // scroller win the vertical gesture inside its bounds (Android); on
+        // web/iOS the bounded height naturally captures the wheel/drag.
+        <ScrollView
+          style={{ maxHeight: SIGNAL_GRID_MAX_HEIGHT }}
+          nestedScrollEnabled
+          showsVerticalScrollIndicator
+          contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' }}
+        >
           {slots.map((slot) => (
             <View key={slot.key} style={{ width: `${100 / SIGNAL_GRID_COLUMNS}%`, paddingHorizontal: 6, marginBottom: 10 }}>
               <SignalColumn
@@ -633,7 +712,7 @@ function LiveAudioMeters({
               />
             </View>
           ))}
-        </View>
+        </ScrollView>
       )}
       {/* INPUT GAIN — software mic-preamp, UNDER the grid. A REAL engine
           gain (patches audio.bands.inputGain): it lifts the mic bands
