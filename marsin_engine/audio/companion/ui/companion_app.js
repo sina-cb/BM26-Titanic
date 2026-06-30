@@ -72,18 +72,10 @@ const S = {
   liveBands: { low: 0, mid: 0, high: 0 },
   noiseCal: { phase: 'idle', result: null },
   micBuilt: false,
+  // MIC TUNE calibration profiles (named venue/condition states) + the active one.
+  profiles: [],
+  activeProfileId: null,
 };
-
-// MIC TUNE presets — sensible per-band gate starting points for common playa
-// conditions. null = use the global gate for that band. The operator taps one,
-// then fine-tunes. (Gates are post-compression [0,1); higher = more rejection.)
-const MIC_PRESETS = [
-  { id: 'indoor',   label: 'Indoor / quiet',  gates: { noiseGate: 0.04, low: null, mid: null, high: null } },
-  { id: 'night',    label: 'Quiet night',     gates: { noiseGate: 0.05, low: 0.05, mid: 0.07, high: 0.12 } },
-  { id: 'loud',     label: 'Loud day',        gates: { noiseGate: 0.06, low: 0.06, mid: 0.09, high: 0.18 } },
-  { id: 'windy',    label: 'Windy',           gates: { noiseGate: 0.05, low: 0.10, mid: 0.08, high: 0.16 } },
-  { id: 'neighbor', label: 'Neighbor bleed',  gates: { noiseGate: 0.06, low: 0.12, mid: 0.10, high: 0.14 } },
-];
 
 // ── THEME (TASK 2) ───────────────────────────────────────────────────────────
 // The companion mirrors CaptainPad's theme set (CaptainPad/constants/theme.ts).
@@ -183,6 +175,7 @@ function connect() {
       if (m.inputGain != null) S.inputGain = m.inputGain;
       if (m.sourceSmoothHz != null) S.sourceSmoothHz = m.sourceSmoothHz;
       if (m.gates) S.gates = { ...S.gates, ...m.gates };
+      if (Array.isArray(m.profiles)) { S.profiles = m.profiles; S.activeProfileId = m.activeProfileId || null; }
       if (m.engineLink) S.engineLinkConnected = !!m.engineLink.connected;
       seedTraces();
       frameQueue.length = 0;
@@ -237,6 +230,9 @@ function connect() {
     } else if (m.type === 'gates') {
       S.gates = { noiseGate: m.noiseGate, lowGate: m.lowGate, midGate: m.midGate, highGate: m.highGate };
       if (S.page === 'mic') refreshMicControls();
+    } else if (m.type === 'profiles') {
+      S.profiles = m.profiles || []; S.activeProfileId = m.activeId || null;
+      if (S.page === 'mic') renderProfiles();
     } else if (m.type === 'noiseCalStatus') {
       S.noiseCal.phase = m.phase; if (m.phase === 'recording') S.noiseCal.result = null;
       if (S.page === 'mic') renderNoiseCal();
@@ -1259,10 +1255,26 @@ function buildMicPage() {
       send({ type: 'applyNoiseGates', gates: { low: r.recommended.low, mid: r.recommended.mid, high: r.recommended.high } });
     };
     $('gaincal-btn').onclick = () => send({ type: 'calibrate' });
+    $('noisecal-save').onclick = () => {
+      const r = S.noiseCal.result; if (!r) return;
+      // Calibrate INTO the active profile: apply the recommended band gates AND
+      // persist them (+ current gain) into the active profile.
+      send({ type: 'saveActiveProfile', gates: {
+        lowGate: r.recommended.low, midGate: r.recommended.mid, highGate: r.recommended.high } });
+    };
     $('gaincal-apply').onclick = () => {
       const r = S.cal.result; if (!r) return;
       send({ type: 'setInputGain', value: r.recommendedGain });
     };
+    // Profiles: add (saves current gates+gain under a name).
+    const nameInp = $('mp-name');
+    $('mp-add-btn').onclick = () => {
+      const name = nameInp.value.trim();
+      if (!name) { flash('name the profile first', true); return; }
+      send({ type: 'addProfile', name });
+      nameInp.value = '';
+    };
+    nameInp.onkeydown = (e) => { if (e.key === 'Enter') $('mp-add-btn').click(); };
     // Per-band gate sliders + clear buttons.
     for (const b of BANDS3) {
       const sl = $('bs-' + b);
@@ -1272,23 +1284,44 @@ function buildMicPage() {
     // Global gate + input gain.
     $('mg-gate').oninput = () => send({ type: 'setNoiseGate', value: +$('mg-gate').value });
     $('mg-gain').oninput = () => send({ type: 'setInputGain', value: +$('mg-gain').value });
-    // Presets.
-    const pb = $('preset-btns'); pb.innerHTML = '';
-    for (const p of MIC_PRESETS) {
-      const btn = el('button', 'preset-btn', p.label);
-      btn.onclick = () => {
-        const g = p.gates;
-        const gates = { noiseGate: g.noiseGate };
-        for (const b of BANDS3) gates[b] = (g[b] === null || g[b] === undefined) ? g.noiseGate : g[b];
-        send({ type: 'applyNoiseGates', gates });
-      };
-      pb.appendChild(btn);
-    }
     S.micBuilt = true;
   }
   refreshMicControls();
   renderNoiseCal();
   renderGainCal();
+  renderProfiles();
+}
+
+// Render the profile chips + the active-profile detail row.
+function renderProfiles() {
+  const chips = $('mp-chips'); if (!chips) return;
+  chips.innerHTML = '';
+  for (const p of S.profiles) {
+    const chip = el('button', 'mp-chip' + (p.id === S.activeProfileId ? ' active' : ''), p.name);
+    chip.title = `apply "${p.name}"`;
+    chip.onclick = () => send({ type: 'applyProfile', id: p.id });
+    chips.appendChild(chip);
+  }
+  const active = S.profiles.find((p) => p.id === S.activeProfileId);
+  const det = $('mp-active');
+  if (det) {
+    if (active) {
+      const g = active.gates;
+      const gv = (v) => (v === null || v === undefined) ? 'global' : (+v).toFixed(3);
+      det.innerHTML = `<span class="mp-active-name">▶ ${active.name}</span>
+        <span class="mp-active-vals">gates ${gv(g.lowGate)}/${gv(g.midGate)}/${gv(g.highGate)} · global ${(+g.noiseGate).toFixed(3)} · gain ×${(+active.inputGain).toFixed(1)}</span>`;
+      const del = el('button', 'mp-del', '× delete');
+      del.title = `delete "${active.name}"`;
+      del.disabled = S.profiles.length <= 1;
+      del.onclick = () => send({ type: 'deleteProfile', id: active.id });
+      det.appendChild(del);
+    } else {
+      det.innerHTML = '<span class="mp-active-vals">no profile selected</span>';
+    }
+  }
+  // Keep the calibration "Save to <profile>" button label current.
+  const sn = $('noisecal-save-name');
+  if (sn) sn.textContent = active ? `"${active.name}"` : 'profile';
 }
 
 // Reflect S.gates / S.inputGain into the sliders + labels + gate lines.

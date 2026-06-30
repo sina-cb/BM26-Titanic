@@ -65,6 +65,7 @@ import {
   resolveOscOut, oscOutTapOf, outputCpcKeyOf,
 } from './companion_config.js';
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
+import { loadMicProfiles, saveMicProfiles, validateProfile, uniqueProfileId } from './mic_profiles.js';
 import { emitDerivedBpm, BPM_OSC_ADDRESS } from './bpm_emit.js';
 import { BpmSmoother } from '../../lib/bpm_smoother.js';
 import { SYNTHS, SYNTH_NAMES, fillFrame } from '../synth/test_synths.js';
@@ -560,6 +561,50 @@ function applyBandGate(band, v) {
 }
 // The current gate state as the client/CaptainPad see it (null → "uses global").
 function gateState() { return { noiseGate, lowGate, midGate, highGate }; }
+
+// ── MIC TUNE calibration profiles (report 20260621_8) ────────────────────────
+// Named venue/condition states (gates + gain) the operator can create, calibrate
+// into, apply, and delete. Loaded from mic_profiles.yaml next to the companion;
+// missing file → the built-in default set. `activeProfileId` is the one the
+// operator is editing/calibrating; null only before the first profile exists.
+let micProfiles = loadMicProfiles(__dirname);
+let activeProfileId = micProfiles.length ? micProfiles[0].id : null;
+
+function findProfile(id) { return micProfiles.find((p) => p.id === id) || null; }
+function persistProfiles() {
+  try { micProfiles = saveMicProfiles(__dirname, micProfiles); }
+  catch (e) { console.warn(`[mic_profiles] save failed: ${e && e.message}`); }
+}
+function broadcastProfiles() {
+  broadcast({ type: 'profiles', profiles: micProfiles, activeId: activeProfileId });
+}
+// The current live gates + gain as a profile-shaped snapshot (for "save current").
+function currentProfileSnapshot() {
+  return { gates: { noiseGate, lowGate, midGate, highGate }, inputGain };
+}
+// Push a profile's gates + gain to the live analyzer + engine (write-through).
+function applyProfile(prof) {
+  if (!prof) return;
+  noiseGate = prof.gates.noiseGate;
+  lowGate = prof.gates.lowGate; midGate = prof.gates.midGate; highGate = prof.gates.highGate;
+  applyInputGain(prof.inputGain);   // sets analyzer gain locally
+  applyGates();                     // re-applies the gate set locally
+  broadcast({ type: 'gates', ...gateState() });
+  broadcast({ type: 'inputGain', value: inputGain });
+  // Write the whole bundle through to the engine (single source of truth).
+  const partial = { bands: {
+    noiseGate, inputGain,
+    lowGate:  lowGate  === null ? noiseGate : lowGate,
+    midGate:  midGate  === null ? noiseGate : midGate,
+    highGate: highGate === null ? noiseGate : highGate,
+  } };
+  if (engineLink && engineLink.connected) {
+    engineLink.patch(partial).catch((e) =>
+      broadcast({ type: 'engineLink', connected: !!(engineLink && engineLink.connected), error: `profile PATCH failed: ${e && e.message}` }));
+  } else {
+    broadcast({ type: 'engineLink', connected: false, note: 'engine offline — profile applied locally only' });
+  }
+}
 
 // ── Engine config link (single source of truth for SHARED audio TUNING) ──────
 // The engine config is authoritative for input gain / source smoothing /
@@ -1309,6 +1354,66 @@ function handleMessage(ws, raw) {
     broadcast({ type: 'gates', ...gateState() });
     writeThroughShared(() => {}, partial);
   }
+  // ── MIC TUNE PROFILES (report 20260621_8) ──────────────────────────────────
+  else if (m.type === 'applyProfile') {
+    const prof = findProfile(m.id);
+    if (prof) { activeProfileId = prof.id; applyProfile(prof); broadcastProfiles(); }
+    else ws.send(JSON.stringify({ type: 'flash', text: `no profile "${m.id}"`, error: true }));
+  }
+  else if (m.type === 'addProfile') {
+    const name = String(m.name || '').trim();
+    if (!name) { ws.send(JSON.stringify({ type: 'flash', text: 'profile needs a name', error: true })); }
+    else {
+      try {
+        const id = uniqueProfileId(name, new Set(micProfiles.map((p) => p.id)));
+        const snap = currentProfileSnapshot();
+        // New profile captures the CURRENT live gates + gain (so "add" = save what
+        // you have now under a name). Then it's the active one to calibrate into.
+        micProfiles.push(validateProfile({ id, name, gates: snap.gates, inputGain: snap.inputGain }));
+        activeProfileId = id;
+        persistProfiles(); broadcastProfiles();
+      } catch (e) { ws.send(JSON.stringify({ type: 'flash', text: `add profile: ${e && e.message}`, error: true })); }
+    }
+  }
+  else if (m.type === 'deleteProfile') {
+    if (micProfiles.length <= 1) { ws.send(JSON.stringify({ type: 'flash', text: 'keep at least one profile', error: true })); }
+    else if (!findProfile(m.id)) { ws.send(JSON.stringify({ type: 'flash', text: `no profile "${m.id}"`, error: true })); }
+    else {
+      micProfiles = micProfiles.filter((p) => p.id !== m.id);
+      if (activeProfileId === m.id) activeProfileId = micProfiles[0].id;
+      persistProfiles(); broadcastProfiles();
+    }
+  }
+  else if (m.type === 'saveActiveProfile') {
+    const prof = findProfile(activeProfileId);
+    if (!prof) { ws.send(JSON.stringify({ type: 'flash', text: 'no active profile to save into', error: true })); }
+    else {
+      // Optionally apply incoming gates first (e.g. the noise-floor calibration
+      // result), live + write-through, THEN snapshot the current state into the
+      // active profile and persist. This is "calibrate INTO a profile".
+      if (m.gates && typeof m.gates === 'object') {
+        const partial = { bands: {} };
+        for (const b of ['low', 'mid', 'high']) {
+          const k = `${b}Gate`;
+          if (m.gates[k] !== undefined) {
+            const v = m.gates[k] === null ? null : Math.max(0, Math.min(0.999, +m.gates[k]));
+            applyBandGate(b, v);
+            partial.bands[k] = v === null ? noiseGate : v;
+          }
+        }
+        if (Number.isFinite(m.gates.noiseGate)) {
+          const v = Math.max(0, Math.min(0.999, +m.gates.noiseGate));
+          applyNoiseGate(v); partial.bands.noiseGate = v;
+        }
+        broadcast({ type: 'gates', ...gateState() });
+        writeThroughShared(() => {}, partial);
+      }
+      prof.gates = { noiseGate, lowGate, midGate, highGate };
+      prof.inputGain = inputGain;
+      persistProfiles(); broadcastProfiles();
+      ws.send(JSON.stringify({ type: 'flash', text: `saved to "${prof.name}"` }));
+    }
+  }
   else if (m.type === 'diag') ws.send(JSON.stringify(diagReport()));
   else if (m.type === 'setMode') {
     // SOURCE is now fully two-way (2026-06-17 contract §"Source-mode sync"):
@@ -1442,6 +1547,8 @@ wss.on('connection', (ws) => {
     // Current noise-gate state for the MIC TUNE page (global + per-band; null
     // per-band → uses the global gate).
     gates: gateState(),
+    // MIC TUNE calibration profiles + the active one.
+    profiles: micProfiles, activeProfileId,
     // Engine SHARED-tuning link state so the UI can show whether gain /
     // smooth / device are mirrored to the engine (single source of truth)
     // or running local-only (engine offline → graceful degradation).

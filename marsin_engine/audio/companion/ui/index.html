@@ -228,7 +228,8 @@
           </div>
           <div id="noisecal-result" class="mac-result" style="display:none">
             <span class="mac-rec">recommended → <b id="nc-low">—</b> low · <b id="nc-mid">—</b> mid · <b id="nc-high">—</b> high</span>
-            <button id="noisecal-apply" class="primary">✓ Apply these gates</button>
+            <button id="noisecal-apply" class="primary">✓ Apply</button>
+            <button id="noisecal-save" class="primary">💾 Save to <span id="noisecal-save-name">profile</span></button>
           </div>
         </div>
       </div>
@@ -278,8 +279,8 @@
       </div>
     </div>
 
-    <!-- Global controls + presets. -->
-    <div class="mic-globals">
+    <!-- Global controls. -->
+    <div class="mic-globals two">
       <div class="mic-global">
         <div class="mg-head"><span class="mg-name">GLOBAL GATE</span><span class="mg-val" id="mg-gate-val">0.04</span></div>
         <input id="mg-gate" class="mic-range" type="range" min="0" max="0.6" step="0.005" />
@@ -290,10 +291,21 @@
         <input id="mg-gain" class="mic-range" type="range" min="0" max="16" step="0.1" />
         <div class="mg-hint">software mic preamp — raise on a distant/quiet capture</div>
       </div>
-      <div class="mic-presets">
-        <div class="mg-head"><span class="mg-name">PRESETS</span></div>
-        <div class="preset-btns" id="preset-btns"></div>
-        <div class="mg-hint">starting points — then fine-tune with the bars above</div>
+    </div>
+
+    <!-- PROFILES (report 20260621_8): named venue/condition calibrations. Click a
+         chip to apply it; the active one is what "Calibrate noise floor → Save"
+         writes into. Add your own; delete the ones you don't use. -->
+    <div class="mic-profiles-card">
+      <div class="mp-head">
+        <span class="mg-name">PROFILES</span>
+        <span class="mp-sub">click to apply · the active profile is what calibration saves into</span>
+      </div>
+      <div class="mp-chips" id="mp-chips"></div>
+      <div class="mp-active" id="mp-active"></div>
+      <div class="mp-add">
+        <input id="mp-name" class="file-input" placeholder="new profile name (e.g. Art car near)" maxlength="40" />
+        <button id="mp-add-btn" class="primary">＋ Add (saves current gates &amp; gain)</button>
       </div>
     </div>
   </section>
