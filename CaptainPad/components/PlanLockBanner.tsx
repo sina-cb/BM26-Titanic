@@ -66,9 +66,9 @@ export const PlanLockBanner: React.FC = () => {
         // touch pass through to the screen below — navigation stays usable.
         pointerEvents: 'box-none',
         position: 'absolute',
-        top: 0,
-        left: 112,
-        right: 0,
+        top: 12,
+        right: 16,
+        maxWidth: 460,
         zIndex: 1000,
         transform: [
           {
@@ -85,10 +85,11 @@ export const PlanLockBanner: React.FC = () => {
           // AMBER wash with a solid amber rule — calmer than the portwatch
           // banner's red, but unmistakably a "hands-off" state.
           backgroundColor: 'rgba(245, 166, 35, 0.96)',
-          borderBottomWidth: 2,
-          borderBottomColor: '#9a6a12',
-          paddingHorizontal: 24,
-          paddingVertical: 12,
+          borderWidth: 2,
+          borderColor: '#9a6a12',
+          borderRadius: 10,
+          paddingHorizontal: 18,
+          paddingVertical: 10,
           flexDirection: 'row',
           alignItems: 'center',
           gap: 12,
