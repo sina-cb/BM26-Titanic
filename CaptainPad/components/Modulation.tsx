@@ -123,6 +123,11 @@ export function prettySliderName(name: string): string {
     .replace(/_v\d+$/, '')
     .replace(/^(slider|toggle|trigger|hsvPicker)/i, '')
     .replace(/([A-Z])/g, ' $1')
+    // Separate a trailing index from its word so e.g. `colorPalette1`
+    // reads "COLOR PALETTE 1", not "COLOR PALETTE1" (operator report
+    // 2026-06-22). Runs after the capital-split so the digit is split
+    // from the (already spaced) word, before the length cap.
+    .replace(/([A-Za-z])(\d)/g, '$1 $2')
     .trim()
     .toUpperCase()
     .substring(0, 15);
@@ -1043,12 +1048,29 @@ export function ModulationPopover({
             {/* ── SECTION 1 · SOURCE + its live trail ─────────────────── */}
             <SectionLabel accent={sourceAccent}>SOURCE</SectionLabel>
 
+            {/* Each candidate is a SourceChip showing its live activity as an
+                accent underline — so the operator can see WHICH signals are
+                hot right now and pick the one that's actually moving, without
+                N animated trails crowding the picker. The selected source then
+                gets the full live trail below. */}
             <PickerRow label="SIGNAL">
-              {sourceOptions.map((opt) => (
-                <Chip key={opt.key} active={source === opt.key} onPress={() => setSource(opt.key)}>
-                  {opt.label}
-                </Chip>
-              ))}
+              {sourceOptions.map((opt) => {
+                const sig = audioSignals.find((s) => s.key === opt.key) ?? null;
+                const slot = liveDoc?.params?.[opt.key];
+                const raw = slot && typeof slot.value === 'number' ? slot.value : null;
+                const liveNorm = raw === null ? null : normalizeSourceValue(sig, raw);
+                return (
+                  <SourceChip
+                    key={opt.key}
+                    active={source === opt.key}
+                    accent={sig ? audioAccentHex(sig) : MOD_GREEN}
+                    liveNorm={liveNorm}
+                    onPress={() => setSource(opt.key)}
+                  >
+                    {opt.label}
+                  </SourceChip>
+                );
+              })}
             </PickerRow>
 
             {/* Live trail of the selected source — what the operator is
@@ -1357,6 +1379,58 @@ function Chip({ active, onPress, children }: { active: boolean; onPress: () => v
       }}>
         {children}
       </Text>
+    </TouchableOpacity>
+  );
+}
+
+// SourceChip — a Chip that also shows a candidate signal's LIVE activity as
+// a thin accent underline (width = the signal's current normalised level).
+// Lets the operator glance the whole source list and pick the one that's
+// actually moving, without rendering N self-animating trails. The selected
+// source still gets the full AudioTraceCanvas trail above. `liveNorm` is the
+// already-normalised [0,1] live value, or null when the source isn't live.
+function SourceChip({ active, accent, liveNorm, onPress, children }: {
+  active: boolean;
+  accent: string;
+  liveNorm: number | null;
+  onPress: () => void;
+  children: React.ReactNode;
+}) {
+  const C = usePalette();
+  const level = liveNorm === null ? 0 : Math.max(0, Math.min(1, liveNorm));
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      style={{
+        paddingHorizontal: 10, paddingTop: 6, paddingBottom: 8,
+        borderRadius: 6,
+        backgroundColor: active ? C.primary : 'transparent',
+        borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
+        overflow: 'hidden',
+      }}
+    >
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+        color: active ? C.surfaceContainerLowest : C.text,
+        letterSpacing: 0.5,
+      }}>
+        {children}
+      </Text>
+      {/* live-level underline — full-width faint track + accent fill so even
+          an idle candidate shows its lane (and a hot one lights up). Hidden
+          for a source that isn't in the live set (liveNorm null). */}
+      {liveNorm !== null ? (
+        <View style={{
+          position: 'absolute', left: 0, right: 0, bottom: 0, height: 2,
+          backgroundColor: active ? 'rgba(255,255,255,0.25)' : C.ghostBorder,
+        }}>
+          <View style={{
+            position: 'absolute', left: 0, top: 0, bottom: 0,
+            width: `${level * 100}%`,
+            backgroundColor: active ? C.surfaceContainerLowest : accent,
+          }} />
+        </View>
+      ) : null}
     </TouchableOpacity>
   );
 }

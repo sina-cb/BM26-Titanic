@@ -23,10 +23,13 @@ const TRAIL = 360;
 
 const S = {
   ops: {}, frequencyOps: [], frequencyOnlyOps: [], rawSources: {}, signalTypes: [],
+  synths: [],          // [{ name, label, description }] — selectable test synths
+
   signals: [],         // [{ id, label, source, type, chain, output }]
   views: [],           // [{ id, label, type, signals:[signalId...] }] — VISUALIZERS
   viewTypes: {},       // { typeId: { label, accepts } } — viz type registry
-  osc: { host: '127.0.0.1', port: 10000 },
+  osc: { host: '127.0.0.1', port: 10000, rateHz: 60 },
+  oscRateBuilt: false,
   selected: 'input',
   trace: {},           // signalId -> {raw:Float32Array, post:Float32Array}
   head: 0,
@@ -47,9 +50,68 @@ const S = {
   dropFlash: 0,
   spectrum: [],
   wave: [],
-  derived: { bpm: 0, beat: 0, party: 0, note: 0, hue: 0, sp: 0, sc: 0 },
+  derived: {
+    bpm: 0, beat: 0, party: 0, note: 0, hue: 0, sp: 0, sc: 0, genre: null, genreConf: null,
+    // NEW Round-2/Wave-D derived signals (null until the server publishes them).
+    riserScore: null, buildEta: null, riserConf: null, dropCountdown: null,
+    climax: null, phrasePhase: null, phraseBoundary: null, silence: null, trackChange: null,
+    onsetLow: null, onsetMid: null, onsetHigh: null, chestHit: null,
+  },
   spFlash: 0, scFlash: 0,
+  // Decaying flash levels for the NEW pulse keys (armed on the rising edge in the
+  // frame drain, decayed each render so a one-hop pulse stays visible).
+  countdownFlash: 0, boundaryFlash: 0, trackChangeFlash: 0,
+  onsetLowFlash: 0, onsetMidFlash: 0, onsetHighFlash: 0, chestFlash: 0,
+  genreNames: [],      // index-aligned GENRE name list (from the server)
+  page: 'design',      // 'design' | 'mic' | 'osc' — top-bar nav
+  oscAcc: null,        // latest OSC OUT accounting snapshot { target, totalSent, outputs }
+  // MIC TUNE page (report 20260621_5): noise gate state (global + per-band; null
+  // per-band → uses the global gate), live band levels for the meters, and the
+  // noise-floor auto-calibration phase/result.
+  gates: { noiseGate: 0.04, lowGate: null, midGate: null, highGate: null },
+  liveBands: { low: 0, mid: 0, high: 0 },
+  noiseCal: { phase: 'idle', result: null },
+  micBuilt: false,
+  // MIC TUNE calibration profiles (named venue/condition states) + the active one.
+  profiles: [],
+  activeProfileId: null,
 };
+
+// ── THEME (TASK 2) ───────────────────────────────────────────────────────────
+// The companion mirrors CaptainPad's theme set (CaptainPad/constants/theme.ts).
+// The palettes themselves live in companion_app.css ([data-theme="…"]); here we
+// only carry the picker order + labels and persist the choice. Default: gruvbox.
+const THEME_ORDER = ['light', 'dark', 'midnight', 'sunset', 'gruvbox'];
+const THEME_LABELS = {
+  light: 'LIGHT', dark: 'DARK', midnight: 'MIDNIGHT', sunset: 'SUNSET', gruvbox: 'GRUVBOX',
+};
+const THEME_KEY = 'companion.theme';
+const DEFAULT_THEME = 'gruvbox';
+function currentTheme() {
+  let t = null;
+  try { t = localStorage.getItem(THEME_KEY); } catch { /* storage blocked */ }
+  return THEME_ORDER.includes(t) ? t : DEFAULT_THEME;
+}
+function applyTheme(t) {
+  const theme = THEME_ORDER.includes(t) ? t : DEFAULT_THEME;
+  document.documentElement.setAttribute('data-theme', theme);
+  document.body.setAttribute('data-theme', theme);
+  try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage blocked */ }
+  const sel = document.getElementById('theme-select');
+  if (sel && sel.value !== theme) sel.value = theme;
+}
+function buildThemePicker() {
+  const sel = document.getElementById('theme-select');
+  if (!sel) return;
+  sel.innerHTML = '';
+  for (const t of THEME_ORDER) {
+    const o = document.createElement('option');
+    o.value = t; o.textContent = THEME_LABELS[t] || t;
+    sel.appendChild(o);
+  }
+  sel.value = currentTheme();
+  sel.onchange = () => applyTheme(sel.value);
+}
 // Per-op-param SANE slider ranges (a UI concern — client-side).
 const UI_RANGE = {
   gain:       { value: { min: 0, max: 4, step: 0.05 } },
@@ -104,12 +166,16 @@ function connect() {
       S.ops = m.ops; S.frequencyOps = m.frequencyOps || []; S.frequencyOnlyOps = m.frequencyOnlyOps || []; S.rawSources = m.rawSources || {};
       S.signalTypes = m.signalTypes || []; S.signals = m.signals || []; S.osc = m.osc || S.osc;
       S.views = m.views || []; S.viewTypes = m.viewTypes || {};
+      S.synths = m.synths || [];
+      S.genreNames = m.genreNames || [];
       S.source = m.source;
       if (m.mode) S.mode = m.mode;
       if (m.device != null) S.device = m.device;
       if (m.datasetsDir) { S.datasetsDir = m.datasetsDir; S.browseDir = m.datasetsDir; }
       if (m.inputGain != null) S.inputGain = m.inputGain;
       if (m.sourceSmoothHz != null) S.sourceSmoothHz = m.sourceSmoothHz;
+      if (m.gates) S.gates = { ...S.gates, ...m.gates };
+      if (Array.isArray(m.profiles)) { S.profiles = m.profiles; S.activeProfileId = m.activeProfileId || null; }
       if (m.engineLink) S.engineLinkConnected = !!m.engineLink.connected;
       seedTraces();
       frameQueue.length = 0;
@@ -122,6 +188,13 @@ function connect() {
       frameQueue.push(m);
     } else if (m.type === 'frames') {
       frameQueue.push(...m.frames);
+    } else if (m.type === 'oscAccounting') {
+      S.oscAcc = m;
+      if (Number.isFinite(m.rateHz)) S.osc.rateHz = m.rateHz;
+      if (S.page === 'osc') renderOscPage();
+    } else if (m.type === 'oscRate') {
+      S.osc.rateHz = m.rateHz;
+      if (S.page === 'osc') syncOscRateControl();
     } else if (m.type === 'dropFired') {
       S.dropFlash = 1; flash('▼ DROP ' + (m.confidence != null ? m.confidence.toFixed(2) : ''));
     } else if (m.type === 'sourceStatus') {
@@ -130,6 +203,7 @@ function connect() {
       if (m.status && m.status.error) flash((m.status.needsDevice ? 'pick an input device — ' : 'source: ') + m.status.error, true);
     } else if (m.type === 'inputGain') {
       S.inputGain = m.value; buildGainBar();
+      if (S.page === 'mic') refreshMicControls();
     } else if (m.type === 'smooth') {
       S.sourceSmoothHz = m.value; if (S.selected === 'input') renderChain();
     } else if (m.type === 'engineLink') {
@@ -149,8 +223,22 @@ function connect() {
       flash(m.text, !!m.error);
     } else if (m.type === 'calStatus') {
       S.cal.phase = m.phase; if (m.phase === 'recording') S.cal.result = null; renderCal();
+      if (S.page === 'mic') renderGainCal();
     } else if (m.type === 'calResult') {
       S.cal.result = m; renderCal();
+      if (S.page === 'mic') renderGainCal();
+    } else if (m.type === 'gates') {
+      S.gates = { noiseGate: m.noiseGate, lowGate: m.lowGate, midGate: m.midGate, highGate: m.highGate };
+      if (S.page === 'mic') refreshMicControls();
+    } else if (m.type === 'profiles') {
+      S.profiles = m.profiles || []; S.activeProfileId = m.activeId || null;
+      if (S.page === 'mic') renderProfiles();
+    } else if (m.type === 'noiseCalStatus') {
+      S.noiseCal.phase = m.phase; if (m.phase === 'recording') S.noiseCal.result = null;
+      if (S.page === 'mic') renderNoiseCal();
+    } else if (m.type === 'noiseCalResult') {
+      S.noiseCal.phase = 'done'; S.noiseCal.result = m;
+      if (S.page === 'mic') renderNoiseCal();
     } else if (m.type === 'devices') {
       S.devices = m.devices || [];
       if (m.error) flash('devices: ' + m.error, true);
@@ -230,7 +318,17 @@ function oscAddressForName(name) {
 }
 function setStatus(t, c) { const e = $('status'); e.textContent = t; e.className = 'status ' + (c || ''); }
 let flashT = 0;
-function flash(t, bad) { const e = $('flash'); e.textContent = t; e.style.color = bad ? '#ff5d6c' : '#34d3b5'; clearTimeout(flashT); flashT = setTimeout(() => e.textContent = '', 1800); }
+// Read a theme CSS var (so flash/canvas colours follow the active theme instead
+// of hardcoded hex — report 20260616_3 §UI: move JS hex accents to CSS vars).
+function cssVar(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+function flash(t, bad) {
+  const e = $('flash'); e.textContent = t;
+  e.style.color = bad ? cssVar('--err', '#ff5d6c') : cssVar('--ok', '#34d3b5');
+  clearTimeout(flashT); flashT = setTimeout(() => e.textContent = '', 1800);
+}
 function seedTraces() {
   const next = {};
   // Dom split (2026-06-17): freq and energy are now SEPARATE ordinary signals,
@@ -363,12 +461,28 @@ function renderAddViewSignals() {
 }
 function removeView(id) {
   // Confirm before destroying a view (parity with removeSignal — an accidental
-  // [×] tap is otherwise unrecoverable).
+  // [×] tap is otherwise unrecoverable). Themed modal, NOT a native dialog.
   const v = viewById(id);
-  if (v && !window.confirm(`Remove view "${v.label}"?`)) return;
-  if (S.selected === id) S.selected = 'input';
-  send({ type: 'removeView', id });
+  const doRemove = () => {
+    if (S.selected === id) S.selected = 'input';
+    send({ type: 'removeView', id });
+  };
+  if (!v) { doRemove(); return; }
+  confirmModal(`Remove view "${v.label}"?`, doRemove);
 }
+
+// Themed confirm dialog — the designer must NEVER use a native window.confirm/
+// alert/prompt (they ignore the theme + block the event loop). Shows the message
+// in the #confirm-modal and runs `onConfirm` only when the operator hits Remove.
+// `_confirmCb` holds the pending action; the buttons are wired once at boot.
+let _confirmCb = null;
+function confirmModal(message, onConfirm, okLabel = 'Remove') {
+  $('confirm-msg').textContent = message;
+  $('confirm-ok').textContent = okLabel;
+  _confirmCb = onConfirm;
+  $('confirm-modal').style.display = 'flex';
+}
+function closeConfirm() { _confirmCb = null; $('confirm-modal').style.display = 'none'; }
 
 // Adding a signal opens a themed picker (no native prompt) — a grid of the raw
 // sources, each card showing its label + type; click adds it and closes.
@@ -387,14 +501,35 @@ function promptAddSignal() {
 }
 function removeSignal(id) {
   const sig = signalById(id);
-  if (sig && !window.confirm(`Remove signal "${signalName(sig)}"?`)) return;
-  if (S.selected === id) S.selected = 'input';
-  send({ type: 'removeSignal', id });
+  const doRemove = () => {
+    if (S.selected === id) S.selected = 'input';
+    send({ type: 'removeSignal', id });
+  };
+  if (!sig) { doRemove(); return; }
+  confirmModal(`Remove signal "${signalName(sig)}"?`, doRemove);
 }
 
 // ── source panel ────────────────────────────────────────────────────────────
 function buildSource() {
   const box = $('source'); box.innerHTML = '';
+  // SYNTH selector — pick which test SYNTHESIZER drives the 'test' source.
+  // Populated from the server catalog (hello.synths); the choice is sent over
+  // the same `setSource` WS path as the param knobs.
+  if (S.synths && S.synths.length) {
+    const cur = (S.source && S.source.synth) || 'tone';
+    const sel = el('div', 'synth-select');
+    sel.innerHTML = '<div class="synth-head">SYNTH</div>';
+    const dd = el('select', 'synth-dd');
+    for (const s of S.synths) {
+      const o = el('option'); o.value = s.name; o.textContent = s.label || s.name;
+      if (s.description) o.title = s.description;
+      if (s.name === cur) o.selected = true;
+      dd.appendChild(o);
+    }
+    dd.onchange = () => { S.source.synth = dd.value; send({ type: 'setSource', source: { synth: dd.value } }); };
+    sel.appendChild(dd);
+    box.appendChild(sel);
+  }
   const knobs = [
     ['subLevel', 'SUB', 0, 1], ['midLevel', 'MID', 0, 1], ['highLevel', 'HIGH', 0, 1],
     ['kickLevel', 'KICK', 0, 1], ['kickHz', 'KICK/s', 0, 8], ['noiseLevel', 'NOISE', 0, 0.2],
@@ -887,14 +1022,426 @@ function renderLive() {
   $('drop-flash').style.opacity = glow.toFixed(2);
   const dv = S.derived;
   if ($('bpm-val')) {
-    $('bpm-val').textContent = dv.bpm > 0 ? dv.bpm.toFixed(0) : '—';
+    // Math.round (NOT toFixed) so this matches CaptainPad's OSC BPM readout
+    // and the rounded value the Companion emits over OSC byte-for-byte — same
+    // source float, same rounding method, same integer (2026-06-29).
+    $('bpm-val').textContent = dv.bpm > 0 ? String(Math.round(dv.bpm)) : '—';
     const pp = $('party-pill'); pp.textContent = dv.party > 0.5 ? 'PARTY' : 'calm'; pp.className = 'party-pill' + (dv.party > 0.5 ? ' on' : '');
     const nn = $('note-val'); const pc = Math.round(dv.note);
-    nn.textContent = NOTE_NAMES[pc] || '—'; nn.style.color = `hsl(${(dv.hue * 360).toFixed(0)},70%,60%)`;
+    const noteColor = `hsl(${(dv.hue * 360).toFixed(0)},70%,60%)`;
+    nn.textContent = NOTE_NAMES[pc] || '—'; nn.style.color = noteColor;
+    // NOTE color SWATCH — the live audioNoteHue rendered as a colour chip so the
+    // operator can see the note→colour mapping the engine is driving.
+    const sw = $('note-swatch'); if (sw) sw.style.background = noteColor;
+    // GENRE — index → human name via the server's GENRE_NAMES. `genre` is null
+    // until the sibling detector publishes audioGenre (then it lights up). An
+    // index-to-name map is display, not a forbidden value fallback.
+    const gv = $('genre-val'), gc = $('genre-conf');
+    if (gv) {
+      const gi = dv.genre;
+      const name = (gi != null && Number.isFinite(gi)) ? S.genreNames[Math.round(gi)] : null;
+      gv.textContent = name ? name.replace(/_/g, ' ') : '—';
+    }
+    if (gc) {
+      gc.textContent = (dv.genreConf != null && Number.isFinite(dv.genreConf))
+        ? clamp01(dv.genreConf).toFixed(2) : '';
+    }
     $('beat-dot').style.opacity = clamp01(dv.beat).toFixed(2);
+    // COLOR/PATTERN switch cues — a visible FLASH when audioSwitchPattern /
+    // audioSwitchColor pulse (operator: the colour-change feedback wasn't
+    // visible). The flash is armed in the frame drain (rising edge) and decays
+    // here; the `.lit` class makes it pop fully opaque while hot.
     S.spFlash *= 0.85; S.scFlash *= 0.85;
-    $('sp-flash').style.opacity = S.spFlash.toFixed(2);
-    $('sc-flash').style.opacity = S.scFlash.toFixed(2);
+    const spEl = $('sp-flash'), scEl = $('sc-flash');
+    if (spEl) { spEl.style.opacity = S.spFlash.toFixed(2); spEl.classList.toggle('lit', S.spFlash > 0.5); }
+    if (scEl) { scEl.style.opacity = S.scFlash.toFixed(2); scEl.classList.toggle('lit', S.scFlash > 0.5); }
+  }
+  renderDerived2(dv);
+}
+
+// ── NEW Round-2/Wave-D derived signals: BUILD · STRUCTURE · ONSETS ───────────
+// `null` for any key means the server didn't publish it (key not registered in
+// this build) → render an honest idle/"—", NOT a value fallback. Continuous keys
+// meter; pulse keys flash (armed on the rising edge in the frame drain, decayed
+// here so a single-hop pulse stays visible).
+const PHRASE_RING_CIRC = 2 * Math.PI * 16;   // r=16 in the SVG viewBox
+
+// Arm a decaying flash when a pulse key rises past 0.5 (a null reads as 0).
+function armPulse(cur, key, flashKey) {
+  const c = cur[key], p = S.derived[key];
+  if ((c || 0) > 0.5 && (p || 0) <= 0.5) S[flashKey] = 1;
+}
+
+// Decay a flash level + drive an element's opacity + .lit (for text cue badges
+// that fade fully out, like the existing PATTERN/COLOR cues).
+function tickFlash(elId, flashKey, decay) {
+  S[flashKey] *= decay; if (S[flashKey] < 0.02) S[flashKey] = 0;
+  const el = $(elId);
+  if (el) { el.style.opacity = S[flashKey].toFixed(2); el.classList.toggle('lit', S[flashKey] > 0.4); }
+}
+
+// Decay a flash level + toggle only `.lit` (for always-visible glyphs like the
+// onset dots / chest thump — they stay dim at rest, light up on a pulse). No
+// opacity drive so the resting glyph never disappears.
+function tickLit(elId, flashKey, decay) {
+  S[flashKey] *= decay; if (S[flashKey] < 0.02) S[flashKey] = 0;
+  const el = $(elId);
+  if (el) el.classList.toggle('lit', S[flashKey] > 0.4);
+}
+
+function renderDerived2(dv) {
+  // BUILD — riser meter + ETA + confidence + countdown flash.
+  const riserBar = $('riser-bar');
+  if (riserBar) riserBar.style.width = (clamp01(dv.riserScore) * 100).toFixed(0) + '%';
+  const etaEl = $('eta-val');
+  if (etaEl) {
+    // audioBuildEta carries SECONDS (0 = no honest estimate). Show "—" when 0/absent.
+    etaEl.textContent = (dv.buildEta != null && dv.buildEta > 0.05)
+      ? dv.buildEta.toFixed(1) + 's' : '—';
+  }
+  const confEl = $('riser-conf');
+  if (confEl) {
+    confEl.textContent = (dv.riserConf != null && Number.isFinite(dv.riserConf))
+      ? clamp01(dv.riserConf).toFixed(2) : '—';
+  }
+  tickFlash('countdown-flash', 'countdownFlash', 0.82);
+
+  // STRUCTURE — phrase ring + climax meter + silence/track-change cues.
+  const ring = $('phrase-ring-fill');
+  if (ring) {
+    const phase = (dv.phrasePhase != null) ? clamp01(dv.phrasePhase) : 0;
+    ring.style.strokeDashoffset = (PHRASE_RING_CIRC * (1 - phase)).toFixed(2);
+  }
+  const climaxBar = $('climax-bar');
+  if (climaxBar) climaxBar.style.width = (clamp01(dv.climax) * 100).toFixed(0) + '%';
+  const silPill = $('silence-pill');
+  if (silPill) {
+    const sil = (dv.silence || 0) > 0.5;
+    silPill.textContent = sil ? 'SILENCE' : 'live';
+    silPill.classList.toggle('on', sil);
+  }
+  tickFlash('boundary-flash', 'boundaryFlash', 0.85);
+  tickFlash('trackchange-flash', 'trackChangeFlash', 0.9);
+
+  // ONSETS — 3 per-band dots + a chest-hit thump (dim at rest, light on a pulse).
+  tickLit('onset-low', 'onsetLowFlash', 0.7);
+  tickLit('onset-mid', 'onsetMidFlash', 0.7);
+  tickLit('onset-high', 'onsetHighFlash', 0.7);
+  tickLit('chest-thump', 'chestFlash', 0.72);
+}
+
+// ── OSC OUT accounting page (TASK 1) ─────────────────────────────────────────
+// Render the live table of every signal the companion sends to the engine. The
+// data is GENERIC — whatever `oscAccounting` the server enumerated (designed
+// output signals + built-in emits like BPM + any sibling-added derived output).
+// OSC OUTPUT RATE control (report 20260621_6). Slider + number + fps presets,
+// all driving setOscRate. Built once; values synced from S.osc.rateHz.
+const OSC_RATE_PRESETS = [30, 60, 86];
+function buildOscRateControl() {
+  if (S.oscRateBuilt) { syncOscRateControl(); return; }
+  const slider = $('osc-rate-slider'), num = $('osc-rate-num'), presets = $('osc-rate-presets');
+  if (!slider || !num) return;
+  const apply = (v) => {
+    let n = Math.round(+v);
+    if (!Number.isFinite(n)) return;
+    n = Math.max(1, Math.min(120, n));
+    S.osc.rateHz = n;
+    syncOscRateControl();
+    send({ type: 'setOscRate', value: n });
+  };
+  slider.oninput = () => apply(slider.value);
+  num.onchange = () => apply(num.value);
+  if (presets) {
+    presets.innerHTML = '';
+    for (const p of OSC_RATE_PRESETS) {
+      const b = el('button', 'orc-preset', p === 86 ? 'MAX' : String(p));
+      b.title = p === 86 ? 'every analyzer hop (~86 fps)' : `${p} fps`;
+      b.onclick = () => apply(p);
+      presets.appendChild(b);
+    }
+  }
+  S.oscRateBuilt = true;
+  syncOscRateControl();
+}
+function syncOscRateControl() {
+  const slider = $('osc-rate-slider'), num = $('osc-rate-num'), presets = $('osc-rate-presets');
+  const r = S.osc.rateHz || 60;
+  if (slider) slider.value = Math.min(90, r);
+  if (num) num.value = r;
+  if (presets) for (const b of presets.children) {
+    const pv = b.textContent === 'MAX' ? 86 : +b.textContent;
+    b.classList.toggle('active', pv === r);
+  }
+}
+
+function renderOscPage() {
+  buildOscRateControl();
+  const acc = S.oscAcc;
+  const tgt = $('osc-target'), cnt = $('osc-count'), tot = $('osc-total'), rate = $('osc-rate');
+  const tbody = $('osc-rows'), empty = $('osc-empty');
+  if (!tbody) return;
+  if (!acc) {
+    if (tgt) tgt.textContent = `${S.osc.host}:${S.osc.port}`;
+    return;
+  }
+  if (tgt) tgt.textContent = `${acc.target.host}:${acc.target.port}`;
+  if (cnt) cnt.textContent = String(acc.outputs.length);
+  if (tot) tot.textContent = acc.totalSent.toLocaleString();
+  const aggRate = acc.outputs.reduce((s, o) => s + (o.rateHz || 0), 0);
+  if (rate) rate.textContent = aggRate.toFixed(0) + '/s';
+  if (empty) empty.style.display = acc.outputs.length ? 'none' : 'block';
+  // Max rate for the inline rate bar scaling.
+  const maxRate = Math.max(1, ...acc.outputs.map(o => o.rateHz || 0));
+  // Don't rebuild the table while the operator is mid-edit in an ADDRESS FIELD —
+  // a re-render (accounting broadcasts ~4×/s) would steal focus and discard the
+  // half-typed path. SCOPED to the rename input only: a focused checkbox must
+  // NOT freeze the table, or toggling SEND would look dead (the rate would never
+  // fall to 0 and the row would never dim while the checkbox held focus).
+  const ae = document.activeElement;
+  if (ae && ae.classList && ae.classList.contains('osc-addr-edit') && tbody.contains(ae)) return;
+  // The per-signal SEND filter is temporarily disabled server-side (all signals
+  // send) — grey the checkboxes out so they don't read as live controls.
+  const filterOn = acc.sendFilterEnabled !== false;
+  const hint = $('osc-list-hint');
+  if (hint) hint.classList.toggle('osc-filter-off', !filterOn);
+  tbody.innerHTML = '';
+  for (const o of acc.outputs) {
+    const tr = document.createElement('tr');
+    if (!o.enabled) tr.className = 'osc-off';
+    const valTxt = (o.value == null) ? '—'
+      : (Math.abs(o.value) >= 100 ? o.value.toFixed(0) : o.value.toFixed(3));
+    const barW = ((o.rateHz || 0) / maxRate * 100).toFixed(0);
+    // DYNAMIC outputs (operator-added) can rename their path — editable input;
+    // the engine re-binds the new path to the same CPC key via the manifest.
+    // Built-in / curated / derived paths are bound to FIXED engine addresses, so
+    // they render as locked plain text.
+    const addrCell = o.editable
+      ? `<input class="osc-addr-edit" data-id="${attr(o.id)}" data-addr="${attr(o.address)}" value="${attr(o.address)}" spellcheck="false" title="rename this OSC path — the engine re-binds it to the same CPC key">`
+      : `${o.address}<span class="osc-addr-lock" title="built-in path — bound to a fixed engine address, not renameable">🔒</span>`;
+    tr.innerHTML = `<td class="osc-on"><input type="checkbox" class="osc-send-cb" data-addr="${attr(o.address)}"${o.enabled ? ' checked' : ''}${filterOn ? '' : ' disabled'} title="${filterOn ? 'send this signal over OSC' : 'send filter temporarily disabled — all signals send'}"></td>`
+      + `<td class="osc-sig">${o.label || o.address}</td>`
+      + `<td class="osc-addr">${addrCell}</td>`
+      + `<td class="osc-key">${o.cpcKey || '—'}</td>`
+      + `<td class="osc-kind">${o.kind || ''}</td>`
+      + `<td class="num osc-val">${valTxt}</td>`
+      + `<td class="num osc-bar-cell"><span class="osc-bar" style="width:${barW}%"></span><span>${(o.rateHz || 0).toFixed(1)}/s</span></td>`
+      + `<td class="num">${(o.count || 0).toLocaleString()}</td>`;
+    tbody.appendChild(tr);
+  }
+  bindOscRowEvents(tbody);
+}
+
+// Attribute-escape a value going into an HTML attribute (operator names/paths).
+const attr = (s) => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Delegate the OSC-row interactions ONCE (rows are rebuilt each broadcast, so
+// per-row handlers would leak; one delegated listener on the tbody survives).
+function bindOscRowEvents(tbody) {
+  if (tbody._oscBound) return;
+  tbody._oscBound = true;
+  // SEND checkbox → mute / unmute this address on the wire.
+  tbody.addEventListener('change', (e) => {
+    const cb = e.target.closest('.osc-send-cb');
+    if (cb) send({ type: 'setOscSend', address: cb.dataset.addr, enabled: cb.checked });
+  });
+  // RENAME path: Enter commits (via blur), Esc reverts to the last value.
+  tbody.addEventListener('keydown', (e) => {
+    const inp = e.target.closest('.osc-addr-edit'); if (!inp) return;
+    if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
+    else if (e.key === 'Escape') { inp.value = inp.dataset.addr; inp.blur(); }
+  });
+  // Commit on blur (capture — blur doesn't bubble). No-op when unchanged.
+  tbody.addEventListener('blur', (e) => {
+    const inp = e.target.closest && e.target.closest('.osc-addr-edit'); if (!inp) return;
+    const next = inp.value.trim();
+    if (next !== inp.dataset.addr) send({ type: 'setOscAddress', id: inp.dataset.id, address: next });
+  }, true);
+}
+
+// ── top-bar page nav (DESIGN / OSC OUT) ──────────────────────────────────────
+// ── MIC TUNE page (report 20260621_5) ───────────────────────────────────────
+const METER_MAX = 0.6;   // meter + slider full-scale (so the gate line aligns)
+const BANDS3 = ['low', 'mid', 'high'];
+// Effective gate for a band = its per-band override, or the global gate.
+function effGate(band) {
+  const v = S.gates[band + 'Gate'];
+  return (v === null || v === undefined) ? S.gates.noiseGate : v;
+}
+// Whether a band currently has an explicit override (vs. inheriting the global).
+function hasOverride(band) {
+  const v = S.gates[band + 'Gate'];
+  return !(v === null || v === undefined);
+}
+
+function buildMicPage() {
+  if (!S.micBuilt) {
+    // One-time wiring. Calibrations.
+    $('noisecal-btn').onclick = () => send({ type: 'startNoiseCal' });
+    $('noisecal-apply').onclick = () => {
+      const r = S.noiseCal.result; if (!r) return;
+      send({ type: 'applyNoiseGates', gates: { low: r.recommended.low, mid: r.recommended.mid, high: r.recommended.high } });
+    };
+    $('gaincal-btn').onclick = () => send({ type: 'calibrate' });
+    $('noisecal-save').onclick = () => {
+      const r = S.noiseCal.result; if (!r) return;
+      // Calibrate INTO the active profile: apply the recommended band gates AND
+      // persist them (+ current gain) into the active profile.
+      send({ type: 'saveActiveProfile', gates: {
+        lowGate: r.recommended.low, midGate: r.recommended.mid, highGate: r.recommended.high } });
+    };
+    $('gaincal-apply').onclick = () => {
+      const r = S.cal.result; if (!r) return;
+      send({ type: 'setInputGain', value: r.recommendedGain });
+    };
+    // Profiles: add (saves current gates+gain under a name).
+    const nameInp = $('mp-name');
+    $('mp-add-btn').onclick = () => {
+      const name = nameInp.value.trim();
+      if (!name) { flash('name the profile first', true); return; }
+      send({ type: 'addProfile', name });
+      nameInp.value = '';
+    };
+    nameInp.onkeydown = (e) => { if (e.key === 'Enter') $('mp-add-btn').click(); };
+    // Per-band gate sliders + clear buttons.
+    for (const b of BANDS3) {
+      const sl = $('bs-' + b);
+      sl.oninput = () => send({ type: 'setBandGate', band: b, value: +sl.value });
+      $('bc-' + b).onclick = () => send({ type: 'setBandGate', band: b, value: null });
+    }
+    // Global gate + input gain.
+    $('mg-gate').oninput = () => send({ type: 'setNoiseGate', value: +$('mg-gate').value });
+    $('mg-gain').oninput = () => send({ type: 'setInputGain', value: +$('mg-gain').value });
+    S.micBuilt = true;
+  }
+  refreshMicControls();
+  renderNoiseCal();
+  renderGainCal();
+  renderProfiles();
+}
+
+// Render the profile chips + the active-profile detail row.
+function renderProfiles() {
+  const chips = $('mp-chips'); if (!chips) return;
+  chips.innerHTML = '';
+  for (const p of S.profiles) {
+    const chip = el('button', 'mp-chip' + (p.id === S.activeProfileId ? ' active' : ''), p.name);
+    chip.title = `apply "${p.name}"`;
+    chip.onclick = () => send({ type: 'applyProfile', id: p.id });
+    chips.appendChild(chip);
+  }
+  const active = S.profiles.find((p) => p.id === S.activeProfileId);
+  const det = $('mp-active');
+  if (det) {
+    if (active) {
+      const g = active.gates;
+      const gv = (v) => (v === null || v === undefined) ? 'global' : (+v).toFixed(3);
+      det.innerHTML = `<span class="mp-active-name">▶ ${active.name}</span>
+        <span class="mp-active-vals">gates ${gv(g.lowGate)}/${gv(g.midGate)}/${gv(g.highGate)} · global ${(+g.noiseGate).toFixed(3)} · gain ×${(+active.inputGain).toFixed(1)}</span>`;
+      const del = el('button', 'mp-del', '× delete');
+      del.title = `delete "${active.name}"`;
+      del.disabled = S.profiles.length <= 1;
+      del.onclick = () => send({ type: 'deleteProfile', id: active.id });
+      det.appendChild(del);
+    } else {
+      det.innerHTML = '<span class="mp-active-vals">no profile selected</span>';
+    }
+  }
+  // Keep the calibration "Save to <profile>" button label current.
+  const sn = $('noisecal-save-name');
+  if (sn) sn.textContent = active ? `"${active.name}"` : 'profile';
+}
+
+// Reflect S.gates / S.inputGain into the sliders + labels + gate lines.
+function refreshMicControls() {
+  if (!$('mg-gate')) return;
+  $('mg-gate').value = S.gates.noiseGate;
+  $('mg-gate-val').textContent = S.gates.noiseGate.toFixed(3);
+  $('mg-gain').value = S.inputGain;
+  $('mg-gain-val').textContent = '×' + S.inputGain.toFixed(1);
+  for (const b of BANDS3) {
+    const g = effGate(b);
+    $('bs-' + b).value = g;
+    const lab = $('bg-' + b);
+    lab.textContent = g.toFixed(3);
+    lab.classList.toggle('inherit', !hasOverride(b));
+    $('bc-' + b).classList.toggle('active', hasOverride(b));
+    const line = $('bm-' + b + '-gate');
+    if (line) line.style.left = (100 * Math.min(1, g / METER_MAX)) + '%';
+  }
+  const ls = $('mic-link-state');
+  if (ls) {
+    ls.textContent = S.engineLinkConnected ? '● mirrored to engine' : '○ local only (engine offline)';
+    ls.className = 'mic-link-state ' + (S.engineLinkConnected ? 'ok' : 'warn');
+  }
+}
+
+function renderNoiseCal() {
+  const st = $('noisecal-status'), res = $('noisecal-result'), btn = $('noisecal-btn');
+  if (!st) return;
+  const phase = S.noiseCal.phase;
+  if (phase === 'recording') { st.textContent = '● listening to the room… keep the music OFF'; st.className = 'mac-status rec'; btn.disabled = true; }
+  else { st.textContent = ''; btn.disabled = false; }
+  if (S.noiseCal.result && phase !== 'recording') {
+    const r = S.noiseCal.result;
+    res.style.display = 'flex';
+    $('nc-low').textContent = r.recommended.low.toFixed(3);
+    $('nc-mid').textContent = r.recommended.mid.toFixed(3);
+    $('nc-high').textContent = r.recommended.high.toFixed(3);
+  } else {
+    res.style.display = 'none';
+  }
+}
+
+function renderGainCal() {
+  const st = $('gaincal-status'), res = $('gaincal-result'), btn = $('gaincal-btn');
+  if (!st) return;
+  const phase = S.cal.phase;
+  if (phase === 'recording') { st.textContent = '● measuring peak… play the music LOUD'; st.className = 'mac-status rec'; btn.disabled = true; }
+  else if (phase === 'replaying') { st.textContent = '↻ replaying capture…'; st.className = 'mac-status'; btn.disabled = true; }
+  else { st.textContent = ''; btn.disabled = false; }
+  if (S.cal.result) {
+    const r = S.cal.result;
+    res.style.display = 'flex';
+    $('gc-peak').textContent = r.peak != null ? r.peak.toFixed(2) : '—';
+    $('gc-verdict').textContent = r.verdict || '—';
+    $('gc-rec').textContent = r.recommendedGain != null ? r.recommendedGain.toFixed(1) : '—';
+  } else {
+    res.style.display = 'none';
+  }
+}
+
+// Per-frame meter update (called from draw when the mic page is visible).
+function updateMicMeters() {
+  for (const b of BANDS3) {
+    const lvl = clamp01(S.liveBands[b] || 0);
+    const fill = $('bm-' + b + '-fill');
+    if (fill) {
+      fill.style.width = (100 * Math.min(1, lvl / METER_MAX)) + '%';
+      // Colour the bar by whether it's currently above its gate (passing) or
+      // below (gated to silence) — instant visual of what the gate is doing.
+      fill.classList.toggle('passing', lvl > effGate(b));
+    }
+    const val = $('bm-' + b + '-val');
+    if (val) val.textContent = lvl.toFixed(2);
+  }
+}
+
+function setPage(page) {
+  S.page = (page === 'osc' || page === 'mic') ? page : 'design';
+  const design = $('page-design'), osc = $('page-osc'), mic = $('page-mic');
+  if (design) design.style.display = S.page === 'design' ? '' : 'none';
+  if (osc) osc.style.display = S.page === 'osc' ? 'flex' : 'none';
+  if (mic) mic.style.display = S.page === 'mic' ? 'flex' : 'none';
+  for (const b of document.querySelectorAll('.nav-btn')) {
+    b.classList.toggle('active', b.dataset.page === S.page);
+  }
+  if (S.page === 'osc') renderOscPage();
+  if (S.page === 'mic') buildMicPage();
+}
+function buildNav() {
+  for (const b of document.querySelectorAll('.nav-btn')) {
+    b.onclick = () => setPage(b.dataset.page);
   }
 }
 
@@ -918,8 +1465,12 @@ $('view-create').onclick = () => {
   send({ type: 'addView', label, viewType: _addViewType, signals: [..._addViewPicked] });
   $('view-modal').style.display = 'none';
 };
+// Themed confirm dialog wiring (Cancel/✕/backdrop dismiss; Remove runs the cb).
+$('confirm-cancel').onclick = closeConfirm;
+$('confirm-x').onclick = closeConfirm;
+$('confirm-ok').onclick = () => { const cb = _confirmCb; closeConfirm(); if (cb) cb(); };
 // Click the dark backdrop (outside the box) to dismiss any modal.
-for (const mid of ['add-modal', 'export-modal', 'browse-modal', 'view-modal']) {
+for (const mid of ['add-modal', 'export-modal', 'browse-modal', 'view-modal', 'confirm-modal']) {
   const m = $(mid); if (m) m.onclick = (e) => { if (e.target === m) m.style.display = 'none'; };
 }
 
@@ -943,12 +1494,22 @@ function draw() {
     const m = frameQueue.shift();
     for (const id in m.signals) { const v = m.signals[id]; if (v) S.live[id] = v; }
     if (m.dom) S.dom = m.dom;
+    if (m.bands) S.liveBands = m.bands;
     if (m.struct) S.struct = m.struct;
     if (m.spectrum) S.spectrum = m.spectrum;
     if (m.wave) S.wave = m.wave;
     if (m.derived) {
       if (m.derived.sp > 0.5 && S.derived.sp <= 0.5) S.spFlash = 1;
       if (m.derived.sc > 0.5 && S.derived.sc <= 0.5) S.scFlash = 1;
+      // Arm the NEW pulse-key flashes on the rising edge (one-hop pulses would
+      // otherwise blink past a 60 fps render). null prev/cur reads as 0 → no arm.
+      armPulse(m.derived, 'dropCountdown', 'countdownFlash');
+      armPulse(m.derived, 'phraseBoundary', 'boundaryFlash');
+      armPulse(m.derived, 'trackChange', 'trackChangeFlash');
+      armPulse(m.derived, 'onsetLow', 'onsetLowFlash');
+      armPulse(m.derived, 'onsetMid', 'onsetMidFlash');
+      armPulse(m.derived, 'onsetHigh', 'onsetHighFlash');
+      armPulse(m.derived, 'chestHit', 'chestFlash');
       S.derived = m.derived;
     }
     // Advance the scrolling trace for EVERY designed signal.
@@ -1003,6 +1564,7 @@ function draw() {
     }
   }
   renderLive();
+  if (S.page === 'mic') updateMicMeters();
   requestAnimationFrame(draw);
 }
 function trLine(ctx, buf, W, H, lw, alpha) {
@@ -1176,6 +1738,12 @@ function drawWave(ctx, wave) {
   ctx.lineTo(W, yOf(wave[n - 1]));
   ctx.stroke();
 }
+
+// Theme + nav are pure client UI — wire them before the socket so the picked
+// theme is applied immediately on load (no flash of the default palette).
+applyTheme(currentTheme());
+buildThemePicker();
+buildNav();
 
 connect();
 requestAnimationFrame(draw);

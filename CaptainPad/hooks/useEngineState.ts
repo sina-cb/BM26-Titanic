@@ -47,6 +47,7 @@ import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import { engineSignalsEvents } from '@/utils/engineSignalsEvents';
 import { fetchParamCenter, fetchMixerState, fetchParamCenterSchema, fetchDeckChannel, testConnection } from '@/utils/api';
+import type { RenderHealth, DeckRestoreDegraded } from '@/utils/api';
 
 export interface SharedParamValue {
   // The engine emits HSV objects for color palettes and plain floats
@@ -219,6 +220,24 @@ export interface EngineLiveState {
    * simply omits the model chip, mirroring the OFFLINE status pill).
    */
   activeModel: string | null;
+  /**
+   * Engine health snapshot from GET /status — the two operator-visibility
+   * degrade signals (Codex P0 "loud, VISIBLE degrade"):
+   *   - `renderHealth`: blend-compositing health (ok:false ⇒ a blend fell
+   *     back to host-side linear interp). See pattern_mixer.getRenderHealth().
+   *   - `deckRestoreDegraded`: non-null iff the saved deck pattern failed to
+   *     restore at boot and the engine fell back to the default to keep the
+   *     exterior LIT. See api_server.js FIX A.
+   * Seeded alongside `activeModel` from the same /status probe (once per
+   * connection; re-seeded on control-bus reconnect). `null` until the first
+   * probe resolves OR when an older engine omits the field — both treated as
+   * healthy by useEngineHealth (a degraded engine reports the degrade
+   * explicitly, so absence == healthy is NOT a silent fallback).
+   */
+  engineHealth: {
+    renderHealth: RenderHealth | null;
+    deckRestoreDegraded: DeckRestoreDegraded | null;
+  } | null;
 }
 
 /**
@@ -294,6 +313,7 @@ const EMPTY_STATE: EngineLiveState = {
   audioStatus: null,
   paramSchema: {},
   activeModel: null,
+  engineHealth: null,
 };
 
 let _cached: EngineLiveState = EMPTY_STATE;
@@ -645,23 +665,51 @@ function _ensureSignalsInitialized() {
   engineSignalsEvents.subscribe(_onMessage);
 }
 
-// The active model name only travels on the REST /status endpoint (the
-// engine has no `status` WS broadcast — see marsin_engine/lib/api_server.js
-// `/status` handler). It is fixed for the lifetime of an engine process,
-// so a single probe per connection is enough — there is deliberately NO
-// polling here. We re-probe whenever the control bus (re)connects, which
-// also covers the operator pointing CaptainPad at a different engine IP.
-function _seedActiveModel() {
+// The active model name + engine health both travel ONLY on the REST /status
+// endpoint (the engine has no `status` WS broadcast — see
+// marsin_engine/lib/api_server.js `/status` handler). The model name is fixed
+// for the engine-process lifetime; renderHealth / deckRestoreDegraded can in
+// principle change at runtime (a hot-edited blend recompiles, a mode is typo'd
+// via the API), but a degrade is rare and loud, so a single probe per
+// connection is the right cost/visibility trade — there is deliberately NO
+// polling here. We re-probe whenever the control bus (re)connects, which also
+// covers the operator pointing CaptainPad at a different engine IP, and is the
+// same cadence the existing model chip uses.
+function _seedFromStatus() {
   testConnection()
     .then((r) => {
       if (!r.ok || !r.data) return;
+      const next: Partial<EngineLiveState> = {};
+      let changed = false;
+
       const model = r.data.activeModel;
-      if (typeof model !== 'string' || model.length === 0) return;
-      // The engine reports 'unknown' when it has no resolved model — treat that
-      // as "no model" so the header chip hides rather than showing "unknown".
-      const normalized = model === 'unknown' ? null : model;
-      if (normalized === _cached.activeModel) return;
-      _emit({ ..._cached, activeModel: normalized });
+      if (typeof model === 'string' && model.length > 0) {
+        // The engine reports 'unknown' when it has no resolved model — treat
+        // that as "no model" so the header chip hides rather than showing it.
+        const normalized = model === 'unknown' ? null : model;
+        if (normalized !== _cached.activeModel) {
+          next.activeModel = normalized;
+          changed = true;
+        }
+      }
+
+      // Health: surface both /status degrade signals. An older engine omits
+      // both fields entirely — we store `null` for the missing ones, which
+      // useEngineHealth reads as healthy (a degraded engine reports the
+      // degrade explicitly; absence is therefore not a silent fallback).
+      const renderHealth = r.data.renderHealth ?? null;
+      const deckRestoreDegraded = r.data.deckRestoreDegraded ?? null;
+      const prev = _cached.engineHealth;
+      if (
+        !prev ||
+        prev.renderHealth !== renderHealth ||
+        prev.deckRestoreDegraded !== deckRestoreDegraded
+      ) {
+        next.engineHealth = { renderHealth, deckRestoreDegraded };
+        changed = true;
+      }
+
+      if (changed) _emit({ ..._cached, ...next });
     })
     .catch(() => undefined);
 }
@@ -673,11 +721,11 @@ function _ensureInitialized() {
   // Control plane: mixer, oscStats, audioStatus, and the ONE-SHOT
   // sharedParams warm-up the engine sends on /ws/control connect.
   engineEvents.subscribe(_onMessage);
-  // Re-probe the active model name on every control-bus (re)connect.
-  // The status event fires immediately with the current state, so this
-  // also drives the initial seed once the socket is up.
+  // Re-probe the active model name + engine health on every control-bus
+  // (re)connect. The status event fires immediately with the current state,
+  // so this also drives the initial seed once the socket is up.
   engineEvents.subscribeStatus((s) => {
-    if (s.connected) _seedActiveModel();
+    if (s.connected) _seedFromStatus();
   });
   // Params plane (post-May-2026 topic split): the canonical CPC
   // updates (sharedParams) arrive here when operators turn knobs.
@@ -778,11 +826,12 @@ function _ensureInitialized() {
     })
     .catch(() => undefined);
 
-  // REST seed for the active model so the first header paint is correct
-  // even before the control WS finishes connecting (the subscribeStatus
-  // hook above re-seeds on every reconnect). Fails silently — the header
-  // simply omits the model chip until a probe lands.
-  _seedActiveModel();
+  // REST seed for the active model + engine health so the first header
+  // paint is correct even before the control WS finishes connecting (the
+  // subscribeStatus hook above re-seeds on every reconnect). Fails silently
+  // — the header simply omits the model chip / health warning until a probe
+  // lands (no warning == treated healthy until proven otherwise).
+  _seedFromStatus();
 }
 
 /**
@@ -1134,6 +1183,80 @@ export function useMaster(): number {
  */
 export function useActiveModel(): string | null {
   return useEngineSlice<string | null>((s) => s.activeModel);
+}
+
+/**
+ * Derived engine-health state for the header DEGRADED warning chip
+ * (Codex P0 operator visibility). Pure function of the two /status degrade
+ * signals — kept separate from the hook so it's unit-testable.
+ *
+ * Degraded (the chip shows) iff EITHER:
+ *   - `renderHealth.ok === false` (one or more channel blends failed to
+ *     compile — compositing is running on the host-side linear-interp
+ *     fallback), OR
+ *   - `deckRestoreDegraded != null` (the saved deck pattern failed to
+ *     restore at boot and the engine fell back to the default).
+ *
+ * A clean engine reports `renderHealth.ok === true` and
+ * `deckRestoreDegraded === null` ⇒ NOT degraded ⇒ the chip renders nothing.
+ * A missing snapshot (pre-probe, offline, or an older engine that omits the
+ * fields) is ALSO treated as healthy — a degraded engine reports the degrade
+ * explicitly, so absence is not a silent fallback.
+ */
+export interface EngineHealthDerived {
+  degraded: boolean;
+  /** One-line operator-facing reason; '' when not degraded. */
+  reason: string;
+}
+
+const HEALTH_OK: EngineHealthDerived = { degraded: false, reason: '' };
+
+export function deriveEngineHealth(
+  health: EngineLiveState['engineHealth'],
+): EngineHealthDerived {
+  if (!health) return HEALTH_OK;
+  const { renderHealth, deckRestoreDegraded } = health;
+  // Prefer the deck-restore degrade in the reason string — it's the
+  // mission-critical exterior signal. Fall back to the blend error.
+  if (deckRestoreDegraded != null) {
+    const fellBackTo = deckRestoreDegraded.fellBackTo || 'default';
+    return { degraded: true, reason: `deck fell back to ${fellBackTo}` };
+  }
+  if (renderHealth && renderHealth.ok === false) {
+    const first = Array.isArray(renderHealth.blendErrors)
+      ? renderHealth.blendErrors[0]
+      : undefined;
+    const blend = first && typeof first.blend === 'string' ? first.blend : 'unknown';
+    return { degraded: true, reason: `blend: ${blend}` };
+  }
+  return HEALTH_OK;
+}
+
+/**
+ * Selector for derived engine health (GET /status → renderHealth /
+ * deckRestoreDegraded). Reference-stable per-slice so the header chrome
+ * stays still through every mixer / vis tick — only re-renders when the
+ * engineHealth snapshot reference changes (once per /status probe). Returns
+ * a healthy { degraded:false } until a degrade is reported.
+ */
+export function useEngineHealth(): EngineHealthDerived {
+  return useEngineSlice<EngineHealthDerived>(useMemo(() => {
+    let lastHealth: EngineLiveState['engineHealth'] | undefined;
+    let lastResult: EngineHealthDerived = HEALTH_OK;
+    return (s: EngineLiveState): EngineHealthDerived => {
+      if (s.engineHealth === lastHealth) return lastResult;
+      lastHealth = s.engineHealth;
+      const next = deriveEngineHealth(s.engineHealth);
+      // Keep reference stability for the common healthy case so consumers
+      // never re-render just because a fresh-but-still-healthy probe landed.
+      if (!next.degraded && !lastResult.degraded) {
+        lastResult = HEALTH_OK;
+      } else {
+        lastResult = next;
+      }
+      return lastResult;
+    };
+  }, []));
 }
 
 /**

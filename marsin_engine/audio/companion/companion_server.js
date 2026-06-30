@@ -65,13 +65,46 @@ import {
   resolveOscOut, oscOutTapOf, outputCpcKeyOf,
 } from './companion_config.js';
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
-import { emitDerivedBpm } from './bpm_emit.js';
-import { emitDerivedMood } from './mood_emit.js';
+import { loadMicProfiles, saveMicProfiles, validateProfile, uniqueProfileId } from './mic_profiles.js';
+import { audioRegistryEntries } from '../postproc/audio_signals.js';
+import { emitDerivedBpm, BPM_OSC_ADDRESS } from './bpm_emit.js';
+import { BpmSmoother } from '../../lib/bpm_smoother.js';
+import { SYNTHS, SYNTH_NAMES, fillFrame } from '../synth/test_synths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, 'ui');
 
-const SR = 44100, FFT = 1024, HOP = 512;
+// FFT must track config.yaml audio.fftSize so the companion's analysis + derived
+// signals (genre / note / dom / sub) match the engine's exactly. (The spectrum
+// visualizer below uses a separate, larger FFT for display only.)
+const SR = 44100, FFT = 2048, HOP = 512;
+
+// Canonical GENRE name list — index-aligned with the sibling slot-0 detector's
+// `audioGenre` CPC key (an integer index) and its exported GENRE_NAMES. Kept
+// here so the Companion frame can carry both the index AND the human name; the
+// UI maps index→name for the DERIVED panel. (Display-side mapping, not a
+// forbidden fallback.) MUST stay in lock-step with the sibling's GENRE_NAMES.
+const GENRE_NAMES = Object.freeze([
+  'ambient', 'deep_house', 'melodic_house', 'tech_house',
+  'techno', 'melodic_techno', 'downtempo',
+]);
+
+// Read a CPC scalar that MAY NOT be registered yet (a sibling agent's key that
+// isn't merged into this tree). paramCenter.get() THROWS on an unknown key, so
+// gate on isRegisteredKey and return null when absent — the UI renders "—".
+// This is NOT a value fallback (codex P0): an absent KEY is a different thing
+// from a present-but-zero value; we report "not published" honestly.
+function safeGet(key) {
+  return paramCenter.isRegisteredKey(key) ? paramCenter.get(key) : null;
+}
+
+// QUICK low-pass on the derived BPM, applied to `audioBpm` IN PLACE right after
+// the derived-signals tick — so the value the UI frame reads AND the value
+// emitted over OSC are the SAME smoothed number (operator request 2026-06-29:
+// "smooth before the UI reads it"). Default on with a short (250 ms) time
+// constant so the UI still reads realtime. Overridable via config.yaml
+// `companion.bpmSmoothing: { enabled, tauMs }` (applied in applyEngineConfig).
+const bpmSmoother = new BpmSmoother();
 
 // Server-side file browser for the File source. Defaults to the datasets dir:
 // `--datasets <dir>` / $COMPANION_DATASETS, else the corpus build dir, else $HOME.
@@ -109,6 +142,35 @@ const PROXY_KEY = KNOWN_SIGNALS[0];   // micLow — the chain-runner proxy key
 let design = loadCompanionConfig();   // { osc, signals }
 const runners = new Map();            // signalId -> SignalPostProcessor
 
+// OSC OUTPUT RATE (report 20260621_6). The analyzer runs ~86 hops/s; sending an
+// OSC packet for every output on every hop floods the wire (and the engine).
+// `oscRateHz` is the target send rate (a frame rate): all outputs are emitted
+// together at most this many times/sec. Seeded from config (default 60), live-
+// settable from the OSC OUT page. The throttle is evaluated once per hop in the
+// analyzer clock domain so a file-replay (faster than wall-clock) throttles by
+// AUDIO time, identically to live.
+let oscRateHz = (design.osc && Number.isInteger(design.osc.rateHz)) ? design.osc.rateHz : 60;
+// Per-signal OSC SEND DISABLE set (OSC OUT page checkboxes). Keyed by the wire
+// ADDRESS — the identity sendOsc gates on — so it applies uniformly to designed
+// signals, the BPM emit, and the derived emits. Seeded from design.osc.disabled
+// and persisted back into it (Export config writes it through). A disabled
+// address sends NOTHING; its reported rate decays to 0, which is honest.
+const oscDisabled = new Set(Array.isArray(design.osc.disabled) ? design.osc.disabled : []);
+// TEMPORARY (operator request 2026-06-30): the per-signal SEND filter is
+// DISABLED — every signal is sent over OSC regardless of its checkbox. The
+// checkbox state is still tracked + persisted so re-enabling is a one-line flip,
+// but it has NO effect on emission right now. Re-enable by setting this true.
+// Follow-up: Notion "Fix OSC send filter (per-signal mute)".
+const OSC_SEND_FILTER_ENABLED = false;
+// The analyzer emits ~SR/HOP hops/sec (~86). A naive "≥ interval elapsed" gate
+// would quantize the send rate to integer divisors of the hop rate (86, 43, 29…)
+// — set 60 and you'd actually get 43. Instead a PHASE ACCUMULATOR adds
+// oscRateHz/hopRate each hop and emits when it crosses 1.0, so the AVERAGE send
+// rate matches the target (60 → ~60/s) and naturally caps at the hop rate.
+const OSC_HOP_RATE_HZ = SR / HOP;
+let _oscPhase = 1;                 // ≥1 at a hop → that hop is a send frame
+let _oscEmitThisHop = true;        // set per-hop; gates sendOsc for the whole hop
+
 function buildRunners() {
   runners.clear();
   for (const sig of design.signals) {
@@ -138,13 +200,222 @@ function oscOutOf(sig) {
 const oscSock = dgram.createSocket('udp4');
 oscSock.on('error', (e) => console.warn(`[companion OSC] socket error: ${e && e.message}`));
 let oscSent = 0;
-function sendOsc(address, value) {
-  const v = Number.isFinite(value) ? value : 0;
-  const buf = osc.toBuffer({ address, args: [{ type: 'float', value: v }] });
+
+// ── OSC OUT ACCOUNTING (observability) ───────────────────────────────────────
+// Per-address tally of every packet sendOsc emits: the live POST value, the
+// running send count, and an EWMA of the send rate (msgs/sec). This is the data
+// the UI's "OSC OUT" page renders. It is keyed by the OSC ADDRESS (the wire
+// identity) so it stays GENERIC — any current OR future emitter (designed
+// signals, the BPM emit, a sibling agent's new derived emit) shows up the moment
+// it calls sendOsc, with NO hardcoded list. The operator label / cpcKey is
+// attached separately by enumerating the live outputs at broadcast time.
+const oscAccounting = new Map();   // address -> { address, count, lastValue, _lastMs, rateHz }
+const OSC_RATE_TAU_MS = 1000;      // EWMA time-constant for the per-signal rate
+function recordOscSend(address, value) {
+  oscSent++;
+  let acc = oscAccounting.get(address);
+  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  if (!acc) {
+    acc = { address, count: 0, lastValue: 0, _lastMs: 0, rateHz: 0 };
+    oscAccounting.set(address, acc);
+  }
+  if (acc._lastMs) {
+    const dtMs = now - acc._lastMs;
+    if (dtMs > 0) {
+      const inst = 1000 / dtMs;                       // instantaneous msgs/sec
+      const a = Math.min(1, dtMs / OSC_RATE_TAU_MS);  // EWMA weight (dt-aware)
+      acc.rateHz = a * inst + (1 - a) * acc.rateHz;
+    }
+  }
+  acc._lastMs = now;
+  acc.count++;
+  acc.lastValue = value;
+}
+
+function sendOsc(address, value, oscType) {
+  // OSC OUTPUT RATE throttle: _oscEmitThisHop is computed once per analyzer hop
+  // (see onAnalysis). When this hop isn't a send frame, drop the packet entirely
+  // — the value is re-sent on the next frame, and the accounting only counts
+  // packets that actually went on the wire. (report 20260621_6)
+  if (!_oscEmitThisHop) return;
+  // Per-signal SEND DISABLE (OSC OUT page checkbox): a disabled address is muted
+  // on the wire — no packet, no accounting tick (its rate decays to 0).
+  // Gated behind OSC_SEND_FILTER_ENABLED — currently OFF, so all signals send.
+  if (OSC_SEND_FILTER_ENABLED && oscDisabled.has(address)) return;
+  // CATEGORICAL signals (genre / note / structure index) ship as an INTEGER-typed
+  // OSC arg, ROUNDED — a class index must never arrive as 2.4 nor be lerped
+  // between classes. Everything else is a continuous float. (See INTEGER_OSC_KEYS.)
+  const t = oscType === 'integer' ? 'integer' : 'float';
+  const raw = Number.isFinite(value) ? value : 0;
+  const v = t === 'integer' ? Math.round(raw) : raw;
+  const buf = osc.toBuffer({ address, args: [{ type: t, value: v }] });
   oscSock.send(buf, design.osc.port, design.osc.host, (err) => {
     if (err) console.warn(`[companion OSC] send ${address} failed: ${err.message}`);
   });
-  oscSent++;
+  recordOscSend(address, v);
+}
+
+// Build the live OSC-OUT accounting snapshot for the UI. GENERIC: it enumerates
+// (a) every OUTPUT designed signal (chain ending in an enabled osc_out tap) and
+// (b) the always-on built-in emits (currently just BPM), then joins each to its
+// live tally in `oscAccounting` by ADDRESS. Sibling agents adding new derived
+// outputs only need to (i) sendOsc to a /marsin/... address and (ii) — if they
+// want a row even before the first packet — register it via
+// `registerBuiltinOscOutput`. Rows with no packets yet still render (count 0).
+const builtinOscOutputs = [];   // [{ address, label, cpcKey, kind }] — non-designed emits
+function registerBuiltinOscOutput(entry) {
+  if (!builtinOscOutputs.some(e => e.address === entry.address)) builtinOscOutputs.push(entry);
+}
+// BPM is the one always-on built-in emit today (bpm_emit.js → /marsin/audio/bpm).
+registerBuiltinOscOutput({ address: BPM_OSC_ADDRESS, label: 'BPM (derived)', cpcKey: 'audioBpm', kind: 'derived' });
+
+// ── ENGINE-INTERNAL DERIVED signals (NOT OSC-routed) ─────────────────────────
+// Observability honesty (report 20260620_26): the OSC OUT page lists only the
+// signals THIS companion sends over the wire. But the engine ALSO computes a
+// much richer set of second-tier signals in-process — the AudioStructureDetector
+// + DerivedSignals chain (marsin_engine/audio/detector + audio/signals) — that
+// drive patterns 59–68 and never leave the engine. They are NOT sent by the
+// companion and NOT on the OSC bus; they're written straight into the engine's
+// ParamCenter each analyzer hop. Surfacing them here (clearly labelled as
+// engine-internal) stops an operator mistaking the companion for the sole
+// "brain": the engine has its own audio intelligence. This list is informational
+// (static catalogue of CPC keys), not a live tally — these never call sendOsc.
+const ENGINE_INTERNAL_DERIVED = Object.freeze([
+  { cpcKey: 'audioBeat',          label: 'beat pulse (phase-locked)' },
+  { cpcKey: 'audioParty',         label: 'party / loud-music gate' },
+  { cpcKey: 'audioNote',          label: 'dominant pitch class 0–11' },
+  { cpcKey: 'audioNoteHue',       label: 'note → hue (melody as colour)' },
+  { cpcKey: 'audioSwitchPattern', label: 'cue: change pattern' },
+  { cpcKey: 'audioSwitchColor',   label: 'cue: change colour' },
+  { cpcKey: 'audioBeatInBar',     label: 'beat index within the bar' },
+  { cpcKey: 'audioBarPhase',      label: 'phase 0→1 across the bar' },
+  { cpcKey: 'audioDownbeat',      label: 'downbeat pulse' },
+  { cpcKey: 'micOnsetLow',        label: 'per-band onset: kick/low' },
+  { cpcKey: 'micOnsetMid',        label: 'per-band onset: snare/mid' },
+  { cpcKey: 'micOnsetHigh',       label: 'per-band onset: hat/high' },
+  { cpcKey: 'audioChestHit',      label: 'sub-bass chest-hit pulse' },
+  { cpcKey: 'audioGenre',         label: 'coarse dance-genre index' },
+  { cpcKey: 'audioGenreConf',     label: 'genre confidence 0–1' },
+  { cpcKey: 'audioRiserScore',    label: 'riser / build-up strength' },
+  { cpcKey: 'audioBuildEta',      label: 'estimated time-to-drop' },
+  { cpcKey: 'audioRiserConf',     label: 'riser confidence 0–1' },
+  { cpcKey: 'audioSilence',       label: 'inter-track silence latch' },
+  { cpcKey: 'audioTrackChange',   label: 'new-track pulse' },
+  { cpcKey: 'audioClimax',        label: 'sustained climax level' },
+  { cpcKey: 'audioPhrasePhase',   label: 'phase 0→1 across the 8-bar phrase' },
+  { cpcKey: 'audioPhraseBoundary',label: 'phrase-boundary pulse' },
+  { cpcKey: 'audioDropCountdown', label: 'beat-synced drop count-in' },
+  // structure-detector primitives (audio/detector) — also engine-internal.
+  { cpcKey: 'audioBuildScore',    label: 'build-up score (detector)' },
+  { cpcKey: 'audioDropPulse',     label: 'drop pulse (detector)' },
+  { cpcKey: 'audioSlowZone',      label: 'slow-zone / breakdown (detector)' },
+  { cpcKey: 'audioEnergyRatio',   label: 'short/long energy ratio (detector)' },
+  { cpcKey: 'audioStructure',     label: 'structure state (detector)' },
+]);
+
+// ── COMPANION = SOLE ANALYZER: emit EVERY derived signal over OSC ─────────────
+// The Companion computes the full derived/detector set (DerivedSignals +
+// AudioStructureDetector — the SAME modules the engine used) and now SENDS them
+// all over OSC at their canonical addresses, so the engine receives them instead
+// of computing its own (2026-06-21 sole-analyzer move). Address per key comes
+// from the shared audio_signals registry (single source of truth — the engine's
+// inbound bindings and these outbound emits can't drift). Each is registered as
+// a built-in output so the OSC OUT page lists it alongside the designed signals.
+const _audioAddrByKey = new Map(audioRegistryEntries().map((e) => [e.key, e.oscAddress]));
+const DERIVED_OSC_EMITS = ENGINE_INTERNAL_DERIVED
+  .map((s) => ({ key: s.cpcKey, label: s.label, address: _audioAddrByKey.get(s.cpcKey) }))
+  .filter((e) => typeof e.address === 'string' && e.address.length > 0);
+for (const e of DERIVED_OSC_EMITS) {
+  registerBuiltinOscOutput({ address: e.address, label: e.label, cpcKey: e.key, kind: 'derived' });
+}
+// Emit every derived key at its canonical address each hop. Guarded (only finite
+// values; a key not yet registered in this build reads null → skipped, fail-safe)
+// and throttled by the same OSC OUTPUT RATE gate as every other send.
+// CATEGORICAL / INDEX derived keys — values that are a CLASS index, not a
+// continuous quantity. They must travel as ROUNDED INTEGER OSC args so a class
+// (e.g. audioGenre = 2 "techno") is never a fractional float on the wire and is
+// never interpolated between classes by a downstream consumer. (Operator: "the
+// genre is not sent correctly" — the fix is integer-typed, un-smoothed emit.)
+const INTEGER_OSC_KEYS = new Set(['audioGenre', 'audioNote', 'audioStructure']);
+function emitAllDerived() {
+  for (const e of DERIVED_OSC_EMITS) {
+    const v = safeGet(e.key);
+    if (Number.isFinite(v)) sendOsc(e.address, v, INTEGER_OSC_KEYS.has(e.key) ? 'integer' : 'float');
+  }
+}
+
+// The reported rate must reflect a stream that has STOPPED (a disabled tap, or
+// BPM during silence where emitDerivedBpm returns false), not freeze at the last
+// EWMA forever — a stale rate is observability that LIES (codex P0). At READ time
+// we decay each row's stored EWMA by the idle gap since its last packet: the same
+// EWMA folding recordOscSend does, but with `value=0` for the idle interval. A
+// stream sending at rate R reads ~R; one idle for many TAUs reads ~0. Past a hard
+// cutoff (idle > IDLE_CUTOFF_TAUS × TAU) we force exactly 0 so a long-dead stream
+// is unambiguously dead rather than an exponential whisker.
+const OSC_RATE_IDLE_CUTOFF_TAUS = 4;   // idle past this × TAU ⇒ report 0
+function effectiveRateHz(acc, now) {
+  if (!acc || !acc._lastMs) return 0;
+  const idleMs = now - acc._lastMs;
+  if (idleMs <= 0) return acc.rateHz;
+  if (idleMs > OSC_RATE_IDLE_CUTOFF_TAUS * OSC_RATE_TAU_MS) return 0;
+  // Fold an idle (value-0) interval into the EWMA: rate ← (1 - a) · rate.
+  const a = Math.min(1, idleMs / OSC_RATE_TAU_MS);
+  return (1 - a) * acc.rateHz;
+}
+
+function buildOscAccounting() {
+  const rows = [];
+  const seen = new Set();
+  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  const push = (address, label, cpcKey, kind, extra = {}) => {
+    if (seen.has(address)) return;
+    seen.add(address);
+    const acc = oscAccounting.get(address);
+    rows.push({
+      address, label, cpcKey, kind,
+      // SEND toggle (OSC OUT page checkbox): false ⇒ muted on the wire. While the
+      // filter is disabled every signal sends, so report ON.
+      enabled: OSC_SEND_FILTER_ENABLED ? !oscDisabled.has(address) : true,
+      // RENAME eligibility: only DYNAMIC designed outputs (a signal whose cpcKey
+      // is NOT an engine built-in) may rename their path — the engine re-binds
+      // the new address via the manifest. Curated / derived / BPM emits bind at
+      // FIXED canonical addresses compiled into the engine, so their path is
+      // locked (read-only). `id` is the designed-signal id the rename targets.
+      id: extra.id ?? null,
+      editable: extra.editable === true,
+      count: acc ? acc.count : 0,
+      value: acc ? acc.lastValue : null,
+      rateHz: acc ? +effectiveRateHz(acc, now).toFixed(2) : 0,
+    });
+  };
+  // Designed OUTPUT signals — one row each, only when the tap is enabled.
+  for (const sig of design.signals) {
+    const tap = oscOutOf(sig);   // terminal, enabled osc_out or null
+    if (!tap) continue;
+    const { cpcKey, address } = resolveOscOut(tap.params.name, tap.params.address);
+    // Dynamic (non-built-in) cpcKey ⇒ the path is renameable (engine follows via
+    // manifest). A curated name resolves to a built-in cpcKey ⇒ locked.
+    const editable = !paramCenter.isRegisteredKey(cpcKey);
+    push(address, tap.params.name, cpcKey, sig.type, { id: sig.id, editable });
+  }
+  // Always-on built-in emits (BPM, plus anything a sibling registers).
+  for (const b of builtinOscOutputs) push(b.address, b.label, b.cpcKey, b.kind);
+  // Any address that emitted but isn't claimed above (defensive — e.g. a future
+  // emit that forgot to register). Never hide a real packet stream.
+  for (const acc of oscAccounting.values()) push(acc.address, acc.address, '', 'unknown');
+  return {
+    target: { host: design.osc.host, port: design.osc.port },
+    rateHz: oscRateHz,           // the OSC OUTPUT RATE (frames/sec) the operator set
+    totalSent: oscSent,
+    // Whether the per-signal SEND filter is active. Currently OFF (everything
+    // sends) — the UI greys out the checkboxes so they don't read as live.
+    sendFilterEnabled: OSC_SEND_FILTER_ENABLED,
+    outputs: rows,
+    // The Companion is now the SOLE analyzer: it computes AND emits the full
+    // derived/detector set over OSC (see DERIVED_OSC_EMITS), so every signal is
+    // in `outputs` above — there is no longer an "engine-internal, not routed"
+    // tier. (Field kept absent so the old UI panel auto-hides.)
+  };
 }
 
 // ── SIGNAL MANIFEST → engine (auto-route new signals to CaptainPad) ──────────
@@ -194,8 +465,10 @@ function buildManifest() {
     // cpcKey + address are DERIVED from the operator-facing `name` (single-name
     // rehaul). A curated name keeps its canonical engine-bound key/address; any
     // other name slug-derives. The name is also the CaptainPad-visible label.
-    const { cpcKey, address } = resolveOscOut(tap.params.name);
+    const { cpcKey, address } = resolveOscOut(tap.params.name, tap.params.address);
     if (paramCenter.isRegisteredKey(cpcKey)) continue;   // built-in → engine already has it
+    // address carries the operator's rename (if any): the engine binds the NEW
+    // path → the SAME cpcKey, so CaptainPad + modulators follow the rename live.
     signals.push({ cpcKey, address, label: tap.params.name, type: sig.type });
   }
   return { signals };
@@ -261,6 +534,9 @@ setInterval(() => {
 
 // Tweakable test-signal source (the UI edits these in 'test' mode).
 const source = {
+  // Which test SYNTHESIZER drives the 'test' source (see audio/synth/
+  // test_synths.js). Default 'tone' is byte-identical to the legacy generator.
+  synth: 'tone',
   subLevel: 0.5, midLevel: 0.3, highLevel: 0.25,
   kickLevel: 0.8, kickHz: 2.0, noiseLevel: 0.02,
 };
@@ -269,6 +545,12 @@ const source = {
 let inputGain = 1.0;
 // Source-stage smoothing (gentle one-pole LP on the PCM before the FFT).
 let sourceSmoothHz = 12000;
+// Noise gates (on-playa mic tuning, report 20260621_5). The global noiseGate is
+// the floor every band uses unless an explicit per-band gate specializes it.
+// null per-band → that band falls back to the global gate. The MIC TUNE page
+// reads/writes these and the noise-floor auto-calibration recommends them.
+let noiseGate = 0.04;
+let lowGate = null, midGate = null, highGate = null;
 // Realtime/smoothness diagnostic.
 const diag = { lastWall: 0, startWall: 0, frames: 0, samples: 0, deltas: [] };
 function recordFrame(n) {
@@ -324,6 +606,73 @@ function applySmooth(v) {
   analyzer.reconfigure({ bands: { ...analyzer.bands, sourceSmoothHz }, kick: analyzer.kick });
   specAnalyzer.reconfigure({ bands: { ...specAnalyzer.bands, sourceSmoothHz }, kick: specAnalyzer.kick });
 }
+// Re-apply the full gate set to both analyzers. A null per-band gate means
+// "use the global gate", which we realise by setting that band's gate equal to
+// noiseGate (numerically identical to the analyzer's own fallback, and it can't
+// leave a stale override behind in the analyzer's retained bands).
+function applyGates() {
+  const gateFields = {
+    noiseGate,
+    lowGate:  lowGate  === null ? noiseGate : lowGate,
+    midGate:  midGate  === null ? noiseGate : midGate,
+    highGate: highGate === null ? noiseGate : highGate,
+  };
+  analyzer.reconfigure({ bands: { ...analyzer.bands, ...gateFields }, kick: analyzer.kick });
+  specAnalyzer.reconfigure({ bands: { ...specAnalyzer.bands, ...gateFields }, kick: specAnalyzer.kick });
+}
+function applyNoiseGate(v) { noiseGate = Math.max(0, Math.min(0.999, +v)); applyGates(); }
+// band ∈ {'low','mid','high'}; v null → clear the override (use global gate).
+function applyBandGate(band, v) {
+  const val = v === null ? null : Math.max(0, Math.min(0.999, +v));
+  if (band === 'low') lowGate = val; else if (band === 'mid') midGate = val; else if (band === 'high') highGate = val;
+  applyGates();
+}
+// The current gate state as the client/CaptainPad see it (null → "uses global").
+function gateState() { return { noiseGate, lowGate, midGate, highGate }; }
+
+// ── MIC TUNE calibration profiles (report 20260621_8) ────────────────────────
+// Named venue/condition states (gates + gain) the operator can create, calibrate
+// into, apply, and delete. Loaded from mic_profiles.yaml next to the companion;
+// missing file → the built-in default set. `activeProfileId` is the one the
+// operator is editing/calibrating; null only before the first profile exists.
+let micProfiles = loadMicProfiles(__dirname);
+let activeProfileId = micProfiles.length ? micProfiles[0].id : null;
+
+function findProfile(id) { return micProfiles.find((p) => p.id === id) || null; }
+function persistProfiles() {
+  try { micProfiles = saveMicProfiles(__dirname, micProfiles); }
+  catch (e) { console.warn(`[mic_profiles] save failed: ${e && e.message}`); }
+}
+function broadcastProfiles() {
+  broadcast({ type: 'profiles', profiles: micProfiles, activeId: activeProfileId });
+}
+// The current live gates + gain as a profile-shaped snapshot (for "save current").
+function currentProfileSnapshot() {
+  return { gates: { noiseGate, lowGate, midGate, highGate }, inputGain };
+}
+// Push a profile's gates + gain to the live analyzer + engine (write-through).
+function applyProfile(prof) {
+  if (!prof) return;
+  noiseGate = prof.gates.noiseGate;
+  lowGate = prof.gates.lowGate; midGate = prof.gates.midGate; highGate = prof.gates.highGate;
+  applyInputGain(prof.inputGain);   // sets analyzer gain locally
+  applyGates();                     // re-applies the gate set locally
+  broadcast({ type: 'gates', ...gateState() });
+  broadcast({ type: 'inputGain', value: inputGain });
+  // Write the whole bundle through to the engine (single source of truth).
+  const partial = { bands: {
+    noiseGate, inputGain,
+    lowGate:  lowGate  === null ? noiseGate : lowGate,
+    midGate:  midGate  === null ? noiseGate : midGate,
+    highGate: highGate === null ? noiseGate : highGate,
+  } };
+  if (engineLink && engineLink.connected) {
+    engineLink.patch(partial).catch((e) =>
+      broadcast({ type: 'engineLink', connected: !!(engineLink && engineLink.connected), error: `profile PATCH failed: ${e && e.message}` }));
+  } else {
+    broadcast({ type: 'engineLink', connected: false, note: 'engine offline — profile applied locally only' });
+  }
+}
 
 // ── Engine config link (single source of truth for SHARED audio TUNING) ──────
 // The engine config is authoritative for input gain / source smoothing /
@@ -363,6 +712,15 @@ function applyEngineSharedTuning(config) {
       applySmooth(bands.sourceSmoothHz);
       broadcast({ type: 'smooth', value: sourceSmoothHz });
     }
+    // Noise gates from the engine/CaptainPad (report 20260621_5). Reconcile any
+    // that changed, then echo the full gate state to UI clients. Per-band gates
+    // are optional in the engine config; only adopt finite values.
+    let gateChanged = false;
+    if (Number.isFinite(bands.noiseGate) && bands.noiseGate !== noiseGate) { noiseGate = bands.noiseGate; gateChanged = true; }
+    if (Number.isFinite(bands.lowGate)  && bands.lowGate  !== lowGate)  { lowGate  = bands.lowGate;  gateChanged = true; }
+    if (Number.isFinite(bands.midGate)  && bands.midGate  !== midGate)  { midGate  = bands.midGate;  gateChanged = true; }
+    if (Number.isFinite(bands.highGate) && bands.highGate !== highGate) { highGate = bands.highGate; gateChanged = true; }
+    if (gateChanged) { applyGates(); broadcast({ type: 'gates', ...gateState() }); }
   }
   const cap = config.capture && typeof config.capture === 'object' ? config.capture : null;
   if (cap && cap.device !== undefined) applyEngineCaptureDevice(cap.device);
@@ -463,6 +821,14 @@ const CAL_TARGET = 0.7;
 const CAL_MAX_MS = 5000;
 const cal = { recording: false, replaying: false, chunks: [], startClock: 0, peakBand: 0, replayTimer: null };
 
+// Noise-floor auto-calibration (on-playa mic tuning, report 20260621_5). The
+// operator runs this with the music OFF; we collect per-band post-envelope
+// levels of the ambient bed for NOISECAL_MS, then recommend each band's gate as
+// its p90 (rejects ~90% of that band's floor while leaving headroom). This is
+// the "as automatic as possible" path — one tap sets all three gates.
+const NOISECAL_MS = 4000;
+const noiseCal = { recording: false, startClock: 0, low: [], mid: [], high: [] };
+
 // ── DSP wiring (real engine objects) ──────────────────────────────────────
 const clients = new Set();
 function broadcast(obj) { const m = JSON.stringify(obj); for (const c of clients) if (c.readyState === 1) c.send(m); }
@@ -537,8 +903,9 @@ function processDesignedSignals(r, dt) {
     }
     const tap = oscOutOf(sig);
     if (tap) {
-      // Each signal emits ONLY its own osc_out value to its derived address.
-      sendOsc(resolveOscOut(tap.params.name).address, post);
+      // Each signal emits ONLY its own osc_out value to its address (the operator
+      // rename, if any, else the derived /marsin/audio/<cpcKey>).
+      sendOsc(resolveOscOut(tap.params.name, tap.params.address).address, post);
     }
   }
   return out;
@@ -552,25 +919,51 @@ const analyzer = new AudioAnalyzer({
   onConditioned: (cond) => pushScope(cond),
   onAnalysis: (r) => {
     const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000; lastMs = clockMs;
+    // OSC OUTPUT RATE gate (report 20260621_6): decide ONCE per hop whether this
+    // is a send frame, so every output emits together at ~oscRateHz on average.
+    // Phase accumulator (see OSC_HOP_RATE_HZ comment) — tied to hops, so it holds
+    // for live AND faster-than-realtime file replay (both step once per hop).
+    _oscPhase += oscRateHz / OSC_HOP_RATE_HZ;
+    _oscEmitThisHop = _oscPhase >= 1;
+    if (_oscEmitThisHop) _oscPhase -= 1;
+    if (_oscPhase > 1) _oscPhase = 1;   // cap: at most one emit/hop, never bursts
     recordAnalysis(r.low ?? 0);
     if (cal.recording) cal.peakBand = Math.max(cal.peakBand, r.low ?? 0, r.mid ?? 0, r.high ?? 0);
+    if (noiseCal.recording) {
+      noiseCal.low.push(r.low ?? 0); noiseCal.mid.push(r.mid ?? 0); noiseCal.high.push(r.high ?? 0);
+      if (clockMs - noiseCal.startClock >= NOISECAL_MS) finishNoiseCal();
+    }
     const signals = processDesignedSignals(r, dt);   // designed chains + OSC out
     // Publish the raw-mirror CPC keys BEFORE the observers tick — the detector
     // + derived signals read them back from the ParamCenter (not from `r`).
     publishRawMirrors(r);
     detector.tick(clockMs, dt);
     derived.tick(clockMs, dt);
+    // QUICK-smooth audioBpm IN PLACE, right after the tracker publishes it and
+    // BEFORE anything reads it — so the UI frame (derived.bpm below) and the
+    // OSC emit carry the SAME smoothed value (operator request 2026-06-29). A
+    // 0 / no-signal value resets the smoother (next valid sample seeds fresh,
+    // no ramp from a stale tempo) and is left as-is. The frame is pushed at the
+    // analysis rate, so the UI still updates in realtime — only the value is
+    // de-jittered, not delayed.
+    {
+      const rawBpm = paramCenter.get('audioBpm');
+      if (Number.isFinite(rawBpm) && rawBpm > 0) {
+        const sm = bpmSmoother.push(rawBpm, dt * 1000);
+        if (Number.isFinite(sm)) paramCenter.set('audioBpm', sm, 'bpmSmooth');
+      } else {
+        bpmSmoother.reset();
+      }
+    }
     // BPM is a DERIVED signal (not an operator-designed osc_out tap), so the
     // Companion emits it as a built-in, always-on output right after the
     // derived-signals tick produces audioBpm → engine /marsin/audio/bpm.
     emitDerivedBpm(paramCenter, sendOsc);
-    // PARTY + STRUCTURE are the music-MOOD cues (PartyMode / the structure
-    // detector), emitted as built-in always-on outputs right after BPM →
-    // engine /marsin/audio/party + /marsin/audio/structure → CPC audioParty /
-    // audioStructure. The Timeline companion reads these live off the engine's
-    // param WS (no manual injection). Guarded in mood_emit.js — a NaN/out-of-
-    // range value is dropped (fail safe, no stale).
-    emitDerivedMood(paramCenter, sendOsc);
+    // Companion = sole analyzer: emit the FULL derived/detector set over OSC so
+    // the engine receives them (instead of computing its own). (report 20260621_11)
+    // This INCLUDES audioParty + audioStructure — the music-MOOD cues the Timeline
+    // service reads live off the engine CPC (supersedes the old mood_emit.js).
+    emitAllDerived();
     // Dom-freq dance: spring-glide toward the current dom freq + cluster width.
     // The `danceMaker` OP is the canonical dance producer (docs/37 §2.2): when
     // an operator frequency signal carries one, its spring-smoothed POST Hz IS
@@ -588,6 +981,9 @@ const analyzer = new AudioAnalyzer({
     const danceF2 = danceFromOp.dom2 != null ? danceFromOp.dom2 : dance.f2;
     pendingFrames.push({
       type: 'frame', t: clockMs, signals,
+      // Live post-envelope band levels — drive the MIC TUNE page meters so the
+      // operator SEES each band's level against its gate line in real time.
+      bands: { low: r.low ?? 0, mid: r.mid ?? 0, high: r.high ?? 0 },
       dom: {
         f1: r.domFreq1, e1: r.domEnergy1, lo1: r.domLo1, hi1: r.domHi1,
         f2: r.domFreq2, e2: r.domEnergy2, lo2: r.domLo2, hi2: r.domHi2,
@@ -606,6 +1002,24 @@ const analyzer = new AudioAnalyzer({
         party: paramCenter.get('audioParty'), note: paramCenter.get('audioNote'),
         hue: paramCenter.get('audioNoteHue'),
         sp: paramCenter.get('audioSwitchPattern'), sc: paramCenter.get('audioSwitchColor'),
+        // GENRE (sibling slot-0 detector). Absent until that code merges into
+        // this tree → safeGet returns null → the UI shows "—". index → name
+        // via GENRE_NAMES on the client.
+        genre: safeGet('audioGenre'), genreConf: safeGet('audioGenreConf'),
+        // ── NEW Round-2/Wave-D derived signals (computed by THIS companion's own
+        // DerivedSignals into paramCenter). safeGet returns null when a key isn't
+        // registered in this build → the UI shows "—"/idle (honest "not published",
+        // NOT a value fallback). Continuous keys meter; pulse keys flash.
+        // BUILD / anticipation:
+        riserScore: safeGet('audioRiserScore'), buildEta: safeGet('audioBuildEta'),
+        riserConf: safeGet('audioRiserConf'), dropCountdown: safeGet('audioDropCountdown'),
+        // STRUCTURE:
+        climax: safeGet('audioClimax'), phrasePhase: safeGet('audioPhrasePhase'),
+        phraseBoundary: safeGet('audioPhraseBoundary'), silence: safeGet('audioSilence'),
+        trackChange: safeGet('audioTrackChange'),
+        // ONSETS / sub:
+        onsetLow: safeGet('micOnsetLow'), onsetMid: safeGet('micOnsetMid'),
+        onsetHigh: safeGet('micOnsetHigh'), chestHit: safeGet('audioChestHit'),
       },
     });
   },
@@ -628,6 +1042,15 @@ setInterval(() => {
     pendingFrames = [];
   }
 }, BROADCAST_MS);
+
+// OSC-OUT accounting → UI, on its OWN slow cadence (the table doesn't need
+// 60 fps; a steady ~4 Hz keeps the WS light while the values + rates stay
+// live). Decoupled from the analysis frame so it never inflates the hot path.
+const OSC_ACCOUNTING_MS = 250;
+setInterval(() => {
+  if (clients.size === 0) return;   // nobody listening — skip the work
+  broadcast({ type: 'oscAccounting', ...buildOscAccounting() });
+}, OSC_ACCOUNTING_MS);
 
 // ── Audio sources ──────────────────────────────────────────────────────────
 let mode = 'test';        // 'test' | 'mic' | 'file'
@@ -654,8 +1077,7 @@ function feedBrowserPcm(int16) {
   browserResid = off < buf.length ? buf.slice(off) : new Int16Array(0);
 }
 
-let sampleCursor = 0, seed = 0x2f6e2b1;
-const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff * 2 - 1; };
+let sampleCursor = 0;
 const frameBuf = new Int16Array(HOP);
 
 const SPECTRUM_BINS = 256, WAVE_POINTS = 256;
@@ -685,18 +1107,10 @@ function downWave() {
 }
 
 function genFrame(buf) {
-  for (let i = 0; i < buf.length; i++) {
-    const t = (sampleCursor + i) / SR;
-    let s = Math.sin(2 * Math.PI * 55 * t) * source.subLevel
-          + Math.sin(2 * Math.PI * 1000 * t) * source.midLevel
-          + Math.sin(2 * Math.PI * 9000 * t) * source.highLevel
-          + rnd() * source.noiseLevel;
-    if (source.kickHz > 0) {
-      const period = SR / source.kickHz, phase = (sampleCursor + i) % period;
-      if (phase < period * 0.12) s += Math.sin(2 * Math.PI * 80 * t) * source.kickLevel * Math.exp(-phase / (period * 0.03));
-    }
-    buf[i] = Math.max(-1, Math.min(1, s)) * 32767;
-  }
+  // Delegate to the test-synth bank (audio/synth/test_synths.js). The 'tone'
+  // synth reproduces the legacy generator exactly, so the default test look is
+  // byte-identical; `source` carries both the synth name and its params.
+  fillFrame(buf, source.synth, sampleCursor, SR, source);
   sampleCursor += buf.length;
 }
 function pushFrame(int16) {
@@ -709,6 +1123,38 @@ function pushFrame(int16) {
   clockMs += (int16.length / SR) * 1000;
   specAnalyzer.pushSamples(int16);
   analyzer.pushSamples(int16);
+}
+
+// ── noise-floor calibration: record ambient → recommend per-band gates ───────
+function startNoiseCal() {
+  noiseCal.recording = true; noiseCal.startClock = clockMs;
+  noiseCal.low = []; noiseCal.mid = []; noiseCal.high = [];
+  broadcast({ type: 'noiseCalStatus', phase: 'recording', durationMs: NOISECAL_MS });
+}
+function _p90(arr) {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.floor(s.length * 0.9)];
+}
+function finishNoiseCal() {
+  noiseCal.recording = false;
+  // Each band's gate = its p90 in the quiet room, floored at the global gate
+  // (never recommend BELOW the existing global floor) and rounded to 3 dp.
+  const rec = {
+    low:  +Math.max(noiseGate, _p90(noiseCal.low)).toFixed(3),
+    mid:  +Math.max(noiseGate, _p90(noiseCal.mid)).toFixed(3),
+    high: +Math.max(noiseGate, _p90(noiseCal.high)).toFixed(3),
+  };
+  const hops = noiseCal.low.length;
+  broadcast({
+    type: 'noiseCalResult', recommended: rec, hops,
+    seconds: +(hops * HOP / SR).toFixed(1),
+    observed: {
+      low:  +_p90(noiseCal.low).toFixed(3),
+      mid:  +_p90(noiseCal.mid).toFixed(3),
+      high: +_p90(noiseCal.high).toFixed(3),
+    },
+  });
 }
 
 // ── calibration: record → measure → recommend gain → replay ─────────────────
@@ -848,6 +1294,46 @@ function setSignalChain(id, chain) {
   return { ok: true, signal: v.normalized };
 }
 
+// Rename ONLY the wire path of a designed output (OSC OUT page). The cpcKey is
+// untouched (it stays derived from the tap `name`); only the osc_out `address`
+// override changes. An empty address REVERTS to the derived /marsin/audio/<key>.
+// Refused for a CURATED/built-in output — those bind at a FIXED engine address
+// (renaming would orphan them). On success the manifest re-push tells the engine
+// to bind the NEW path → the SAME cpcKey, so the rename is picked up live.
+// Returns { ok, address, oldAddress } | { ok:false, error }.
+function setSignalOscAddress(id, address) {
+  const sig = design.signals.find(s => s.id === id);
+  if (!sig) return { ok: false, error: `unknown signal "${id}"` };
+  const tap = oscOutTap(sig);   // terminal osc_out (enabled or not)
+  if (!tap) return { ok: false, error: `signal "${id}" has no OSC output tap` };
+  const { cpcKey } = resolveOscOut(tap.params.name);
+  if (paramCenter.isRegisteredKey(cpcKey)) {
+    return { ok: false, error: `"${tap.params.name}" is a built-in audio output (cpcKey "${cpcKey}") bound to a fixed engine address — its path can't be renamed` };
+  }
+  const oldAddress = resolveOscOut(tap.params.name, tap.params.address).address;
+  const next = (typeof address === 'string') ? address.trim() : '';
+  const newTap = { ...tap, params: { ...tap.params } };
+  if (next === '') delete newTap.params.address;   // revert to derived
+  else newTap.params.address = next;
+  const candidate = { ...sig, chain: sig.chain.slice(0, -1).concat(newTap) };
+  const v = validateSignal(candidate);
+  if (!v.ok) return { ok: false, error: v.error };
+  const resolved = resolveOscOut(tap.params.name, newTap.params.address).address;
+  // Wire uniqueness vs every OTHER output (validateSignal only checks one signal).
+  for (const other of design.signals) {
+    if (other.id === id) continue;
+    const ot = oscOutTap(other);
+    if (!ot) continue;
+    if (resolveOscOut(ot.params.name, ot.params.address).address === resolved) {
+      return { ok: false, error: `OSC address "${resolved}" is already used by signal "${other.id}"` };
+    }
+  }
+  sig.chain = v.normalized.chain;
+  sig.output = v.normalized.output;
+  buildRunners();
+  return { ok: true, address: resolved, oldAddress };
+}
+
 // ── custom VIEWS (mix/share signals; viz types) ──────────────────────────────
 // A view = { id, label, type, signals:[signalId...] } — a VISUALIZER instance
 // that mixes a chosen subset of signals (contract §"Companion custom VIEWS").
@@ -894,12 +1380,24 @@ function catalog() {
     views: design.views,
     osc: design.osc,
     source, gains: {}, inputGain, sourceSmoothHz,
+    genreNames: GENRE_NAMES,
+    synths: SYNTH_NAMES.map(n => ({ name: n, label: SYNTHS[n].label, description: SYNTHS[n].description })),
   };
 }
 
 function handleMessage(ws, raw) {
   let m; try { m = JSON.parse(raw); } catch { return; }
-  if (m.type === 'setSource' && m.source) Object.assign(source, m.source);
+  if (m.type === 'setSource' && m.source) {
+    const incoming = m.source;
+    // The synth selection must be a known synth name; an unknown value is
+    // ignored (no fallback churn) rather than silently switching to 'tone'.
+    if (incoming.synth !== undefined && !SYNTH_NAMES.includes(incoming.synth)) {
+      const { synth, ...rest } = incoming;   // drop the bad synth, keep param edits
+      Object.assign(source, rest);
+    } else {
+      Object.assign(source, incoming);
+    }
+  }
   else if (m.type === 'setInputGain') {
     // SHARED tuning → write through to the engine (single source of truth),
     // then apply + echo locally. The engine echo reconciles via applyEngine-
@@ -918,6 +1416,147 @@ function handleMessage(ws, raw) {
     );
   }
   else if (m.type === 'calibrate') startCalibration();
+  // ── MIC TUNE: noise gates (on-playa, report 20260621_5) ────────────────────
+  else if (m.type === 'setNoiseGate') {
+    const v = m.value;
+    writeThroughShared(
+      () => { applyNoiseGate(v); broadcast({ type: 'gates', ...gateState() }); },
+      { bands: { noiseGate: Math.max(0, Math.min(0.999, +v)) } },
+    );
+  }
+  else if (m.type === 'setBandGate' && ['low', 'mid', 'high'].includes(m.band)) {
+    // value null → clear the override (band uses the global gate). The engine
+    // PATCH realises "clear" as "= global gate" (PATCH can't unset a field).
+    const clear = m.value === null;
+    const v = clear ? noiseGate : Math.max(0, Math.min(0.999, +m.value));
+    writeThroughShared(
+      () => { applyBandGate(m.band, clear ? null : v); broadcast({ type: 'gates', ...gateState() }); },
+      { bands: { [`${m.band}Gate`]: v } },
+    );
+  }
+  else if (m.type === 'startNoiseCal') startNoiseCal();
+  // OSC OUTPUT RATE (report 20260621_6): set the frames/sec all OSC outputs are
+  // sent at. Live + persisted into design.osc so "Export config" keeps it.
+  else if (m.type === 'setOscRate') {
+    const v = Math.round(+m.value);
+    if (!Number.isInteger(v) || v < 1 || v > 120) {
+      ws.send(JSON.stringify({ type: 'flash', text: 'OSC rate must be an integer 1–120 fps', error: true }));
+    } else {
+      oscRateHz = v;
+      design.osc.rateHz = v;       // so Export config persists the choice
+      _oscPhase = 1;               // apply immediately: next hop is a send frame
+      broadcast({ type: 'oscRate', rateHz: oscRateHz });
+      broadcast({ type: 'oscAccounting', ...buildOscAccounting() });
+    }
+  }
+  // Per-signal OSC SEND toggle (OSC OUT page checkbox). enabled:false mutes the
+  // address on the wire; true re-enables it. Persisted into design.osc.disabled
+  // so Export config keeps it. Keyed by wire ADDRESS (covers designed + derived
+  // + BPM emits uniformly).
+  else if (m.type === 'setOscSend' && typeof m.address === 'string') {
+    if (m.enabled === false) oscDisabled.add(m.address);
+    else oscDisabled.delete(m.address);
+    design.osc.disabled = [...oscDisabled];   // Export config persists the choice
+    broadcast({ type: 'oscAccounting', ...buildOscAccounting() });
+  }
+  // Rename a designed output's OSC path (OSC OUT page). Only DYNAMIC outputs;
+  // the engine re-binds the new path → same cpcKey via the manifest re-push.
+  else if (m.type === 'setOscAddress' && typeof m.id === 'string') {
+    const res = setSignalOscAddress(m.id, m.address);
+    if (res.ok) {
+      // Carry any "muted" flag across the rename so the toggle isn't lost.
+      if (res.oldAddress !== res.address && oscDisabled.has(res.oldAddress)) {
+        oscDisabled.delete(res.oldAddress);
+        oscDisabled.add(res.address);
+        design.osc.disabled = [...oscDisabled];
+      }
+      pushManifest();   // engine binds the NEW address → same cpcKey
+      broadcast({ type: 'signals', signals: design.signals });
+      broadcast({ type: 'oscAccounting', ...buildOscAccounting() });
+    } else {
+      ws.send(JSON.stringify({ type: 'flash', text: `rename: ${res.error}`, error: true }));
+    }
+    ws.send(JSON.stringify({ type: 'oscAddressResult', id: m.id, ...res }));
+  }
+  else if (m.type === 'applyNoiseGates' && m.gates && typeof m.gates === 'object') {
+    // Apply a full recommended/preset gate bundle in one shot (the automatic
+    // path). Each provided band is written through; absent bands are left as-is.
+    const g = m.gates;
+    const partial = { bands: {} };
+    for (const b of ['low', 'mid', 'high']) {
+      if (Number.isFinite(g[b])) {
+        const v = Math.max(0, Math.min(0.999, +g[b]));
+        applyBandGate(b, v);
+        partial.bands[`${b}Gate`] = v;
+      }
+    }
+    if (Number.isFinite(g.noiseGate)) {
+      const v = Math.max(0, Math.min(0.999, +g.noiseGate));
+      applyNoiseGate(v); partial.bands.noiseGate = v;
+    }
+    broadcast({ type: 'gates', ...gateState() });
+    writeThroughShared(() => {}, partial);
+  }
+  // ── MIC TUNE PROFILES (report 20260621_8) ──────────────────────────────────
+  else if (m.type === 'applyProfile') {
+    const prof = findProfile(m.id);
+    if (prof) { activeProfileId = prof.id; applyProfile(prof); broadcastProfiles(); }
+    else ws.send(JSON.stringify({ type: 'flash', text: `no profile "${m.id}"`, error: true }));
+  }
+  else if (m.type === 'addProfile') {
+    const name = String(m.name || '').trim();
+    if (!name) { ws.send(JSON.stringify({ type: 'flash', text: 'profile needs a name', error: true })); }
+    else {
+      try {
+        const id = uniqueProfileId(name, new Set(micProfiles.map((p) => p.id)));
+        const snap = currentProfileSnapshot();
+        // New profile captures the CURRENT live gates + gain (so "add" = save what
+        // you have now under a name). Then it's the active one to calibrate into.
+        micProfiles.push(validateProfile({ id, name, gates: snap.gates, inputGain: snap.inputGain }));
+        activeProfileId = id;
+        persistProfiles(); broadcastProfiles();
+      } catch (e) { ws.send(JSON.stringify({ type: 'flash', text: `add profile: ${e && e.message}`, error: true })); }
+    }
+  }
+  else if (m.type === 'deleteProfile') {
+    if (micProfiles.length <= 1) { ws.send(JSON.stringify({ type: 'flash', text: 'keep at least one profile', error: true })); }
+    else if (!findProfile(m.id)) { ws.send(JSON.stringify({ type: 'flash', text: `no profile "${m.id}"`, error: true })); }
+    else {
+      micProfiles = micProfiles.filter((p) => p.id !== m.id);
+      if (activeProfileId === m.id) activeProfileId = micProfiles[0].id;
+      persistProfiles(); broadcastProfiles();
+    }
+  }
+  else if (m.type === 'saveActiveProfile') {
+    const prof = findProfile(activeProfileId);
+    if (!prof) { ws.send(JSON.stringify({ type: 'flash', text: 'no active profile to save into', error: true })); }
+    else {
+      // Optionally apply incoming gates first (e.g. the noise-floor calibration
+      // result), live + write-through, THEN snapshot the current state into the
+      // active profile and persist. This is "calibrate INTO a profile".
+      if (m.gates && typeof m.gates === 'object') {
+        const partial = { bands: {} };
+        for (const b of ['low', 'mid', 'high']) {
+          const k = `${b}Gate`;
+          if (m.gates[k] !== undefined) {
+            const v = m.gates[k] === null ? null : Math.max(0, Math.min(0.999, +m.gates[k]));
+            applyBandGate(b, v);
+            partial.bands[k] = v === null ? noiseGate : v;
+          }
+        }
+        if (Number.isFinite(m.gates.noiseGate)) {
+          const v = Math.max(0, Math.min(0.999, +m.gates.noiseGate));
+          applyNoiseGate(v); partial.bands.noiseGate = v;
+        }
+        broadcast({ type: 'gates', ...gateState() });
+        writeThroughShared(() => {}, partial);
+      }
+      prof.gates = { noiseGate, lowGate, midGate, highGate };
+      prof.inputGain = inputGain;
+      persistProfiles(); broadcastProfiles();
+      ws.send(JSON.stringify({ type: 'flash', text: `saved to "${prof.name}"` }));
+    }
+  }
   else if (m.type === 'diag') ws.send(JSON.stringify(diagReport()));
   else if (m.type === 'setMode') {
     // SOURCE is now fully two-way (2026-06-17 contract §"Source-mode sync"):
@@ -974,6 +1613,13 @@ const server = http.createServer((req, res) => {
   if (p === '/catalog') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(catalog()));
+    return;
+  }
+  if (p === '/osc_accounting') {
+    // Point-in-time snapshot of every OSC signal sent to the engine (address,
+    // cpcKey, label, live value, count, rate) + the target + running total.
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(buildOscAccounting()));
     return;
   }
   if (p === '/file') {
@@ -1037,8 +1683,15 @@ wss.on('connection', (ws) => {
     ops: opCatalog(), frequencyOps: FREQUENCY_OPS, frequencyOnlyOps: FREQUENCY_ONLY_OPS,
     rawSources: RAW_SOURCES, signalTypes: SIGNAL_TYPES, viewTypes: VIEW_TYPES,
     signals: design.signals, views: design.views, osc: design.osc,
+    genreNames: GENRE_NAMES,
+    synths: SYNTH_NAMES.map(n => ({ name: n, label: SYNTHS[n].label, description: SYNTHS[n].description })),
     source, inputGain, sourceSmoothHz, mode, datasetsDir: DATASETS_DIR,
     device: configDevice,
+    // Current noise-gate state for the MIC TUNE page (global + per-band; null
+    // per-band → uses the global gate).
+    gates: gateState(),
+    // MIC TUNE calibration profiles + the active one.
+    profiles: micProfiles, activeProfileId,
     // Engine SHARED-tuning link state so the UI can show whether gain /
     // smooth / device are mirrored to the engine (single source of truth)
     // or running local-only (engine offline → graceful degradation).
@@ -1084,12 +1737,13 @@ function applyEngineConfig() {
   catch { return 'test'; }   // standalone (no engine config) → boot in test
   const comp = cfg && cfg.companion;
   if (comp && comp.osc && typeof comp.osc.host === 'string' && Number.isInteger(comp.osc.port)) {
-    design.osc = { host: comp.osc.host, port: comp.osc.port };
+    design.osc = { host: comp.osc.host, port: comp.osc.port, rateHz: oscRateHz };
   } else if (cfg && cfg.osc && Number.isInteger(cfg.osc.port)) {
     // Fall back to the engine's own OSC port; loopback host (the companion and
     // engine run on the same Pi). osc.host in config is the engine BIND addr
-    // (0.0.0.0) — not a send target — so we send to loopback.
-    design.osc = { host: '127.0.0.1', port: cfg.osc.port };
+    // (0.0.0.0) — not a send target — so we send to loopback. Preserve the
+    // OSC OUTPUT RATE (it's a send-cadence choice, independent of the target).
+    design.osc = { host: '127.0.0.1', port: cfg.osc.port, rateHz: oscRateHz };
   }
   // MIC selection: the engine/CaptainPad persist the operator's chosen input
   // as `audio.capture.device` (the unified device, via PATCH /audio/config),
@@ -1107,6 +1761,14 @@ function applyEngineConfig() {
   // against (single source of truth). Loopback default — engine + Companion
   // share the Pi (same rationale as the OSC target above).
   engineEndpoint = resolveEngineEndpoint(cfg);
+  // BPM smoothing (operator request 2026-06-29). config.yaml
+  // `companion.bpmSmoothing: { enabled, tauMs }` — absent ⇒ the BpmSmoother
+  // defaults (on, 250 ms). Applied to audioBpm before the UI + OSC read it.
+  const sm = comp && comp.bpmSmoothing;
+  if (sm && typeof sm === 'object') {
+    if (typeof sm.enabled === 'boolean') bpmSmoother.setEnabled(sm.enabled);
+    if (Number.isFinite(sm.tauMs)) bpmSmoother.setTauMs(sm.tauMs);
+  }
   if (comp && (comp.source === 'mic' || comp.source === 'test' || comp.source === 'file')) return comp.source;
   return 'test';
 }

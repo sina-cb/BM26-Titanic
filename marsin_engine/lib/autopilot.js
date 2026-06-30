@@ -1,85 +1,101 @@
-/**
- * Per-channel autopilot pool (docs/19 §11, §13 — Phase 2.3).
- *
- * Pre-2.3 there was a single, deck-bound `Autopilot` daemon: one
- * self-rescheduling setTimeout loop that cycled the deck's playlist.
- * Phase 2.3 promotes that into a POOL of independent loops, one per
- * channel (the deck channel + every mixer overlay channel). Each loop
- * reads ITS OWN channel's `playlist.autopilot` ({active, delay_s,
- * shuffle}) and advances ITS OWN playlist entry, on ITS OWN timer.
- *
- * The proven single-loop machinery is preserved verbatim per channel:
- *
- *   wait delay_s  →  await advance (transition or instant)  →  repeat
- *
- * We use a setTimeout that self-reschedules in the .then() of the
- * advance promise. Every state change (arm / disarm / delay / shuffle)
- * bumps a per-channel `generation` counter; any tick whose captured gen
- * != current gen is a no-op. This makes stop semantics deterministic —
- * disarming a channel clears its timer, and even a tick already sitting
- * in the JS event queue at the moment of the flip reads the new
- * generation and bails before doing work.
- *
- * The advance callback may be sync or return a Promise (the deck's
- * `loadPlaylistEntryWithTransition` returns `{ done: Promise }`); we
- * await it so the inter-pattern timer stays decoupled from transition
- * duration.
- *
- * No fallback / silent behaviour (codex P0): a channel armed with
- * `autopilot.active` but no loaded `playlist.name` simply does nothing
- * (the advance callback short-circuits) — it is not an error.
- */
+import fs from 'fs';
+import path from 'path';
+import yaml from 'js-yaml';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const CONFIG_FILE = path.join(__dirname, '..', 'config.yaml');
 
 /**
- * One self-rescheduling autopilot loop bound to a single channel id.
- * Internal to AutopilotPool; not exported on its own.
+ * Autopilot daemon — cycles the deck's pattern on a self-rescheduling
+ * timer.
+ *
+ * Why setTimeout (not setInterval):
+ *   The interval-based version (pre-May 2026) fired every `delay_s`
+ *   regardless of whether the previous pattern swap had finished. With
+ *   the new soft-swap transitions a swap can take 5 s, so a 1 s delay
+ *   would fire while the previous transition was mid-air — overlapping
+ *   transitions, dropped picks, the works.
+ *
+ *   New model:
+ *     wait delay_s  →  await swap (transition or instant)  →  repeat
+ *
+ *   We use setTimeout that self-reschedules in the .then() of the swap
+ *   promise. Every state change (PLAY/PAUSE/delay/shuffle) bumps a
+ *   `generation` counter; any tick whose captured gen != current gen
+ *   is a no-op. This makes stop semantics deterministic — when you
+ *   pause the autopilot, no further cycles run, even if a tick was
+ *   waiting in the JS event queue at the moment you flipped the toggle.
+ *
+ *   `changePattern()` (the callback from api_server.js) may return a
+ *   Promise; we await it. The Promise resolves on transition complete
+ *   (or immediately if transitions are disabled).
  */
-class ChannelAutopilot {
-  /**
-   * @param {string} channelId            The channel this loop drives.
-   * @param {Function} readStateFn        () => { active, delay_s, shuffle }
-   *   Reads the LIVE autopilot sub-state for this channel (e.g. off
-   *   `channel.playlist.autopilot`). Never cached — re-read every
-   *   schedule/tick so an in-place mutation is always seen.
-   * @param {Function} advanceFn          async () => (void | { done: Promise })
-   *   Advances this channel to its next playlist entry.
-   */
-  constructor(channelId, readStateFn, advanceFn) {
-    this.channelId = channelId;
-    this.readState = readStateFn;
-    this.advance = advanceFn;
+export class Autopilot {
+  constructor(listPatternsFn, patternsDir, currentPatternCb, changePatternFn) {
+    this.listPatterns = listPatternsFn;
+    this.patternsDir = patternsDir;
+    this.currentPatternCb = currentPatternCb;
+    this.changePattern = changePatternFn;
     this.cycleTimer = null;
-    // Bumped on every state change. A scheduled tick captures the
-    // current gen at schedule time and bails on execution if it no
-    // longer matches — i.e. someone re-armed / disarmed / changed the
-    // delay between schedule and fire.
+    // generation counter: bumped on every state change. A scheduled
+    // tick captures the current gen at schedule time and bails on
+    // execution if it doesn't match — i.e. someone changed state
+    // (pause / new delay / new shuffle pick) between schedule and fire.
     this.generation = 0;
+    this.config = this.loadConfig();
+
+    if (!this.config.playlist) {
+      this.config.playlist = {
+        active: false,
+        delay_s: "30",
+        shuffle: false
+      };
+      this.saveConfig();
+    }
+  }
+
+  loadConfig() {
+    try {
+      if (fs.existsSync(CONFIG_FILE)) {
+        return yaml.load(fs.readFileSync(CONFIG_FILE, 'utf8')) || {};
+      }
+    } catch(e) {}
+    return {};
+  }
+
+  saveConfig() {
+    try {
+       fs.writeFileSync(CONFIG_FILE, yaml.dump(this.config));
+    } catch(e) {}
   }
 
   get state() {
-    const s = this.readState();
-    return s || { active: false, delay_s: 30, shuffle: false };
+    return this.config.playlist || { active: false, delay_s: "30", shuffle: false };
   }
 
-  /**
-   * (Re)arm the loop from the channel's current autopilot state. Clears
-   * any existing timer first so a state change re-arms ONLY this channel
-   * with a clean baseline. A disabled channel ends up with no timer.
-   */
-  rearm() {
+  updateState(newState) {
+    if (!this.config.playlist) this.config.playlist = {};
+    if (newState.active !== undefined) this.config.playlist.active = newState.active;
+    if (newState.delay_s !== undefined) this.config.playlist.delay_s = newState.delay_s.toString();
+    if (newState.shuffle !== undefined) this.config.playlist.shuffle = newState.shuffle;
+    this.saveConfig();
+    // Bump generation FIRST so any in-flight tick that's about to
+    // execute reads the new generation and bails before doing work.
     this.generation++;
     this._scheduleNext();
   }
 
-  /** Clear this channel's timer. Idempotent. */
-  clear() {
-    this.generation++;
-    if (this.cycleTimer) {
-      clearTimeout(this.cycleTimer);
-      this.cycleTimer = null;
-    }
+  start() {
+    this._scheduleNext();
   }
 
+  /**
+   * Schedule the next tick `delay_s` seconds from now, if active.
+   * Clears any existing timer first. Captures the current generation
+   * so the scheduled callback can bail if state has since changed.
+   */
   _scheduleNext() {
     if (this.cycleTimer) {
       clearTimeout(this.cycleTimer);
@@ -91,106 +107,42 @@ class ChannelAutopilot {
     this.cycleTimer = setTimeout(() => this._runTick(gen), delayMs);
   }
 
+  /**
+   * Execute one pattern advance. Bails if state has changed since
+   * schedule time. After the swap completes (whether instant or
+   * post-transition), schedule the next tick if still active.
+   */
   async _runTick(scheduledGen) {
-    if (scheduledGen !== this.generation) return; // state changed mid-wait
-    if (!this.state.active) return;               // belt-and-suspenders
+    if (scheduledGen !== this.generation) return;   // state changed mid-wait
+    if (!this.state.active) return;                  // belt-and-suspenders
 
     try {
-      const ret = this.advance();
-      // advance() may be sync (no return) or return a Promise (the deck's
-      // loadPlaylistEntryWithTransition returns { done: Promise }); accept
-      // both — a real Promise to await, or undefined/sync.
+      const ret = this.changePattern();
+      // Callback may be sync (no return) or return a Promise (the new
+      // loadPlaylistEntryWithTransition returns { done: Promise }).
+      // We accept both: a real Promise to await, or undefined/sync.
       if (ret && typeof ret.then === 'function') {
         await ret;
       }
     } catch (e) {
-      console.warn(`[Autopilot:${this.channelId}] tick failed:`, e && e.message ? e.message : e);
+      console.warn('[Autopilot] tick failed:', e && e.message ? e.message : e);
     }
 
-    // Re-check after the (possibly seconds-long) advance: a disarm or a
-    // re-arm could have landed during it. A new rearm() would have bumped
-    // the gen AND scheduled its own next tick, so bailing here avoids a
-    // double-schedule.
+    // Re-check state — the swap could have taken seconds, and the
+    // operator may have hit PAUSE during it. Also confirm gen still
+    // matches: a new updateState would have bumped it AND scheduled
+    // its own next tick, so we should not double-schedule.
     if (scheduledGen !== this.generation) return;
     if (!this.state.active) return;
     this._scheduleNext();
   }
-}
 
-/**
- * Pool of per-channel autopilot loops, keyed by channel id. The deck is
- * simply the entry whose id is the deck base id — it has no special
- * status inside the pool beyond the advance callback the caller wires
- * for it.
- */
-export class AutopilotPool {
-  constructor() {
-    // channelId -> ChannelAutopilot
-    this.loops = new Map();
-  }
-
-  /**
-   * Register (or replace) a channel's loop. Replacing first clears the
-   * existing loop's timer so no orphan fires. Does NOT arm — call
-   * `rearm(channelId)` after, or pass nothing and rely on the boot/route
-   * arming. Most callers register THEN rearm in one breath via `arm()`.
-   *
-   * @param {string} channelId
-   * @param {Function} readStateFn  () => { active, delay_s, shuffle }
-   * @param {Function} advanceFn    async () => void | { done: Promise }
-   */
-  register(channelId, readStateFn, advanceFn) {
-    if (!channelId) throw new Error('AutopilotPool.register requires a channelId');
-    const existing = this.loops.get(channelId);
-    if (existing) existing.clear();
-    this.loops.set(channelId, new ChannelAutopilot(channelId, readStateFn, advanceFn));
-    return this.loops.get(channelId);
-  }
-
-  /** True iff a loop is registered for this channel id. */
-  has(channelId) {
-    return this.loops.has(channelId);
-  }
-
-  /**
-   * Register + arm in one call. Convenience for the route/boot paths
-   * that always want the loop live immediately afterwards.
-   */
-  arm(channelId, readStateFn, advanceFn) {
-    this.register(channelId, readStateFn, advanceFn);
-    this.rearm(channelId);
-  }
-
-  /**
-   * (Re)arm an already-registered channel's loop from its current
-   * autopilot state. No-op (loud warn) if the channel was never
-   * registered — a missing loop means a wiring bug, not a silent skip.
-   */
-  rearm(channelId) {
-    const loop = this.loops.get(channelId);
-    if (!loop) {
-      console.warn(`[AutopilotPool] rearm('${channelId}') for an unregistered channel — ignoring`);
-      return;
-    }
-    loop.rearm();
-  }
-
-  /** Clear+drop a channel's loop entirely (e.g. mixer channel removed). */
-  drop(channelId) {
-    const loop = this.loops.get(channelId);
-    if (!loop) return;
-    loop.clear();
-    this.loops.delete(channelId);
-  }
-
-  /** Read a channel's live autopilot state (or null if not registered). */
-  getState(channelId) {
-    const loop = this.loops.get(channelId);
-    return loop ? loop.state : null;
-  }
-
-  /** Clear every loop's timer (engine shutdown). Loops stay registered. */
-  clearAll() {
-    for (const loop of this.loops.values()) loop.clear();
+  // ── Back-compat shim ─────────────────────────────────────────────
+  // External callers (older tests, hot-reload tools) used to call
+  // `triggerNext()` to manually advance one step. Kept as a no-await
+  // pass-through so they still work, but new code should rely on the
+  // self-scheduled cycle.
+  triggerNext() {
+    return this._runTick(this.generation);
   }
 }

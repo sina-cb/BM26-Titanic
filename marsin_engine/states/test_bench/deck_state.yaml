@@ -1,7 +1,7 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 29_bar_dancers
+  pattern: 00_golden_hour_wash
   mode: blend_screen
   fader: 1
   enabled: true
@@ -46,7 +46,7 @@ channel:
       v2: 0
   playlist:
     name: default
-    activeEntryId: e_1781748878700_5868
+    activeEntryId: e_default_0_00_golden_hour_wash
     cursor: 29
     autopilot:
       active: false

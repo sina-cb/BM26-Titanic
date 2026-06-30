@@ -164,16 +164,56 @@ test('AUDIO_LIVE_FIELDS is the contract surface', () => {
   // software preamp). `kickEma` was REMOVED 2026-06-14 — it was advertised
   // live-tunable but never wired into the analyzer (silent no-op); the kick
   // EMA coefficients are hardcoded in audio_analyzer.js. `structureDetector`
-  // is the build/drop/sustain detector group (docs/30).
+  // is the build/drop/sustain detector group (docs/30). The 2026-06-20 detector
+  // super-tuning pass added `dropMinLevel` (absolute sub floor), `dropLevelAssist`
+  // (windowed-edge level assist toggle), and the slow-zone soft-knee knobs
+  // `slowZoneWidth` + `slowFluxFloor`. The 2026-06-20 detector-RECALL pass added
+  // the build→drop transition gate (`dropBuildGate` + `dropBuildMemoryMs`) and
+  // the mic-gain-relative drop floor (`dropRelLevel`). The 2026-06-20 detector
+  // REAL-AUDIO pass (E1) added the precision-first gates `dropBuildRise` (required
+  // buildScore rise, not a flat-high plateau) + `dropNoveltyRatio`/`dropNoveltyWindowMs`
+  // (windowed-ratio novelty vs recent median) — they cut real-corpus false-fires
+  // from 1.48 to 0.12/min.
   assert.deepEqual(AUDIO_LIVE_FIELDS, {
-    bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz'],
+    bands:   ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz',
+      'lowGate', 'midGate', 'highGate'],
     kick:    ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
+    // analyzer_features (slot 3): sub-bass "chest hit" window (~30–60 Hz).
+    sub:     ['minHz', 'maxHz'],
     structureDetector: [
       'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
-      'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs', 'slowZoneRef',
+      'dropMinLevel', 'dropLevelAssist', 'dropBuildGate', 'dropBuildMemoryMs',
+      'dropSlowZoneMax', 'dropBuildRise', 'dropNoveltyRatio', 'dropNoveltyWindowMs', 'dropRelLevel',
+      'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs',
+      'slowZoneRef', 'slowZoneWidth', 'slowFluxFloor',
       'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
     ],
   });
+});
+
+test('validateLivePatch accepts a valid sub window, rejects bad edges (analyzer_features slot 3)', () => {
+  const ok = validateLivePatch({ sub: { minHz: 30, maxHz: 60 } });
+  assert.equal(ok.ok, true, ok.error);
+  assert.equal(ok.live.sub.minHz, 30);
+  assert.equal(ok.live.sub.maxHz, 60);
+  // Out-of-range edges 400 at the field validator (≤ 0 / above Nyquist).
+  assert.equal(validateLivePatch({ sub: { minHz: 0 } }).ok, false);
+  assert.equal(validateLivePatch({ sub: { maxHz: 30000 } }).ok, false);
+  // Unknown sub field is rejected (no silent acceptance).
+  assert.equal(validateLivePatch({ sub: { threshold: 1.2 } }).ok, false);
+});
+
+test('validateLivePatch accepts per-band gates, rejects out-of-range (on-playa hardening)', () => {
+  const ok = validateLivePatch({ bands: { lowGate: 0.05, midGate: 0.09, highGate: 0.2 } });
+  assert.equal(ok.ok, true, ok.error);
+  assert.equal(ok.live.bands.lowGate, 0.05);
+  assert.equal(ok.live.bands.midGate, 0.09);
+  assert.equal(ok.live.bands.highGate, 0.2);
+  // A gate must be in [0, 1) — 1.0 and negatives 400 at the field validator.
+  assert.equal(validateLivePatch({ bands: { highGate: 1 } }).ok, false);
+  assert.equal(validateLivePatch({ bands: { lowGate: -0.1 } }).ok, false);
+  // Non-finite is rejected before the range check (codex P0: no silent coercion).
+  assert.equal(validateLivePatch({ bands: { midGate: 'loud' } }).ok, false);
 });
 
 test('validateLivePatch accepts dropEdgeMode enum + dropDeltaWindowMs, rejects bad values', () => {

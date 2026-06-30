@@ -608,3 +608,90 @@ test('setEffect throws on an unknown effect name (P0 — no silent no-op)', () =
   assert.throws(() => ctrl.setEffect('hzr', true), /unknown effect/);
 });
 
+// ── patchSlot create-on-patch (June 2026) ─────────────────────────────
+// Bug fix: previously patchSlot threw 'Invalid slotId' for any slot not
+// pre-seeded in DEFAULT_SLOT_CONFIG, so an operator could never assign an
+// effect to an empty slot. patchSlot now CREATES the slot on demand.
+
+test('patchSlot creates a previously-empty slot instead of throwing', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  // Start from a tiny config so slot 9 does not pre-exist.
+  const mgr = new GlobalEffectSlotManager(ctrl, [
+    { slotId: 1, enabled: true, label: '4 Hz Sync', effectId: 'strobe', presetId: 'sync_4hz', behavior: 'toggle', paramsOverride: {} },
+  ]);
+  assert.equal(mgr.getSlot(9), undefined);
+  // Assigning an effect to the empty slot must succeed and persist.
+  const created = mgr.patchSlot(9, {
+    enabled: true, label: 'Punch', effectId: 'strobe', presetId: 'punch_5hz', behavior: 'toggle',
+  });
+  assert.equal(created.slotId, 9);
+  assert.equal(created.effectId, 'strobe');
+  assert.equal(created.presetId, 'punch_5hz');
+  const found = mgr.getSlot(9);
+  assert.ok(found, 'slot 9 should now exist');
+  assert.equal(found.enabled, true);
+  // And it must dispatch like any other slot.
+  mgr.dispatchSlotAction({ slotId: 9, action: 'activate', frameIndex: 0, nowMs: 0 });
+  assert.equal(ctrl.strobeActive, true);
+  assert.equal(ctrl.activeStrobePresetId, 'punch_5hz');
+});
+
+test('patchSlot still rejects an out-of-range slotId (1..MAX_SLOTS)', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  const mgr = new GlobalEffectSlotManager(ctrl);
+  assert.throws(() => mgr.patchSlot(0, { enabled: false }), /Invalid slotId/);
+  assert.throws(() => mgr.patchSlot(17, { enabled: false }), /Invalid slotId/);
+  assert.throws(() => mgr.patchSlot(1.5, { enabled: false }), /Invalid slotId/);
+});
+
+// ── Invert as an assignable slot effect (June 2026) ──────────────────
+// Invert used to be a dedicated fixed button; it is now a swappable slot
+// effect routed through GlobalEffectsController.setInvert / controller.invert.
+
+test('global effect library exposes an `invert` toggle effect', () => {
+  assert.ok(GLOBAL_EFFECT_LIBRARY.invert, 'invert effect must be registered');
+  assert.deepEqual(GLOBAL_EFFECT_LIBRARY.invert.behaviorTypes, ['toggle']);
+  assert.ok(GLOBAL_EFFECT_LIBRARY.invert.presets.default, 'invert needs a default preset');
+  const desc = describeLibrary();
+  assert.ok(desc.invert);
+  assert.equal(desc.invert.presets.default.defaultBehavior, 'toggle');
+});
+
+test('default config seeds invert at slot 9 and it dispatches through the controller', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  const mgr = new GlobalEffectSlotManager(ctrl);
+  const slot9 = mgr.getSlot(9);
+  assert.ok(slot9);
+  assert.equal(slot9.effectId, 'invert');
+  // toggle on
+  assert.equal(ctrl.invert, false);
+  mgr.dispatchSlotAction({ slotId: 9, action: 'toggle', frameIndex: 0, nowMs: 0 });
+  assert.equal(ctrl.invert, true);
+  // toggle off
+  mgr.dispatchSlotAction({ slotId: 9, action: 'toggle', frameIndex: 1, nowMs: 0 });
+  assert.equal(ctrl.invert, false);
+  // explicit activate / deactivate
+  mgr.dispatchSlotAction({ slotId: 9, action: 'activate', frameIndex: 2, nowMs: 0 });
+  assert.equal(ctrl.invert, true);
+  mgr.dispatchSlotAction({ slotId: 9, action: 'deactivate', frameIndex: 3, nowMs: 0 });
+  assert.equal(ctrl.invert, false);
+});
+
+test('getStatus reports an invert slot active flag tracking controller.invert', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  const mgr = new GlobalEffectSlotManager(ctrl);
+  let slot9 = mgr.getStatus().find(s => s.slotId === 9);
+  assert.equal(slot9.active, false);
+  ctrl.setInvert(true);
+  slot9 = mgr.getStatus().find(s => s.slotId === 9);
+  assert.equal(slot9.active, true);
+});
+
+test('invert can be assigned to any slot via patchSlot', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  const mgr = new GlobalEffectSlotManager(ctrl);
+  mgr.patchSlot(2, { enabled: true, label: 'Inv', effectId: 'invert', presetId: 'default', behavior: 'toggle' });
+  mgr.dispatchSlotAction({ slotId: 2, action: 'activate', frameIndex: 0, nowMs: 0 });
+  assert.equal(ctrl.invert, true);
+});
+

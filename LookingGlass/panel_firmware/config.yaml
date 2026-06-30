@@ -1,0 +1,83 @@
+# =============================================================
+#  LookingGlass control panel — firmware configuration (NON-SECRET)
+#  Single source of truth for all build-time tunables (committed).
+#  Credentials (WiFi/AP passwords) are NOT here — they come from a private,
+#  external deployment source that exports the build-secrets file via
+#  $BM26_SECRETS (or the $STOKER_SECRETS fallback), using flat keys
+#  wifi_ssid / wifi_pass / ap_pass. scripts/gen_config.py reads this file plus
+#  those secrets at build time and bakes them into include/generated/net_config.h.
+#
+#  NOTE: the button -> GPIO map and the reserved-pin list stay in
+#  include/config.h (BUTTON_TABLE) — they are structural / hardware-fixed.
+# =============================================================
+
+# ---- Firmware identity & serial -----------------------------
+firmware:
+  name: "LookingGlass Panel"
+  version: "0.1.0"
+  serial_baud: 115200
+  serial_heartbeat_ms: 2000      # periodic "STAT alive" line (0 = off)
+
+# ---- Button gesture timing (milliseconds) -------------------
+buttons:
+  debounce_ms: 15                # contact settle time
+  long_press_ms: 600             # press -> HOLD threshold
+  double_press_ms: 250           # max gap between taps for a double
+  hold_repeat_ms: 200            # interval between HOLD ticks while held
+
+# ---- Illuminated-button lamp (LEDC PWM: dim at rest, full when held) ----
+lamp:
+  enabled: true
+  pin: 18                        # GPIO driving the lamp (was ARCADE_2)
+  source: ARCADE_4               # button whose down-state brightens the lamp
+  active_high: true              # true: higher duty = brighter (false: low-side)
+  dim: 128                       # rest brightness, 0..255 (0 = off) — ~50%
+  full: 255                      # brightness while the source button is held
+  pwm_freq: 1000                 # Hz
+  pwm_bits: 8                    # duty range 0..(2^bits - 1)
+
+# ---- Onboard WS2812 status LED (GPIO21) ---------------------
+status_led:
+  enabled: true
+  pin: 21
+  count: 1
+  brightness: 40                 # 0..255 master cap
+  heartbeat_ms: 4000             # breathe period
+  flash_ms: 120                  # press-flash duration
+  refresh_ms: 16                 # ~60 Hz redraw cap
+
+# =============================================================
+#  Network (non-secret; credentials come from the env-provided build secrets)
+# =============================================================
+device:
+  hostname: lookingglass-panel
+
+# Access Point — the captive-portal network the panel broadcasts.
+ap:
+  enabled: true
+  ssid: LookingGlass-Panel
+  channel: 6
+  hidden: false
+  open: false                    # false: WPA2, ap_pass REQUIRED in the build
+                                 # secrets (8+ chars). true: open AP, no password.
+  # ap password -> build secrets, flat key `ap_pass` (only when open: false).
+
+# Station — an existing WiFi network the panel also joins (optional).
+# When enabled, ssid + password are REQUIRED in the build secrets as flat keys
+# `wifi_ssid` / `wifi_pass` (a missing or blank value fails the build).
+wifi:
+  enabled: true
+
+# Wired LAN to the Raspberry Pi (PLANNED: SPI Ethernet / W5500).
+lan:
+  enabled: false
+  dhcp: true
+  static_ip: 192.168.50.20
+  gateway: 192.168.50.1
+  netmask: 255.255.255.0
+
+# On-board telemetry web server + captive portal.
+web:
+  enabled: true
+  port: 80
+  captive_portal: true

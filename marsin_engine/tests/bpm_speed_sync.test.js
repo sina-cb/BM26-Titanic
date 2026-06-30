@@ -12,6 +12,9 @@ import { BpmSpeedSync } from '../lib/bpm_speed_sync.js';
 function fakePc() {
   const subscribers = [];
   const writes = [];
+  // Last param snapshot an emit() carried, so getCanonicalState() (used by
+  // recompute()) can return the same `{ key: { value } }` shape.
+  let lastParams = {};
   return {
     subscribe(fn) {
       subscribers.push(fn);
@@ -24,8 +27,17 @@ function fakePc() {
       writes.push({ key, value, source, origin });
       return { status: 'ok' };
     },
+    /** Canonical-state shape recompute() reads. */
+    getCanonicalState() {
+      return { params: lastParams };
+    },
+    /** Set the canonical params WITHOUT firing subscribers (e.g. a tap). */
+    setParams(params) {
+      lastParams = params;
+    },
     /** Drive an event with whatever param values the test wants. */
     emit(changedKeys, params) {
+      lastParams = params;
       const ev = { changedKeys, state: { params } };
       for (const fn of [...subscribers]) fn(ev);
     },
@@ -134,4 +146,55 @@ test('attach() is idempotent', () => {
   bs.attach();
   bs.attach();
   assert.equal(pc.subscriberCount, 1);
+});
+
+// ── Source-agnostic tempo (arbitrated OSC OR tap) ──────────────────────────
+
+test('with getTempoBpm, speed maps from the ARBITRATED tempo, not audioBpm', () => {
+  // The arbitrated tempo (e.g. a tapped 180) drives speed even when the raw
+  // audioBpm readout says something else (e.g. 120). This is the whole point
+  // of source-agnosticism: SPEED follows the tapped clock.
+  let arbitrated = 180;
+  const pc = fakePc();
+  new BpmSpeedSync(pc, { getTempoBpm: () => arbitrated }).attach();
+  pc.emit(['audioBpm'], paramSnap({ audioBpm: { value: 120 } }));
+  assert.equal(pc.writes.length, 1);
+  assert.equal(pc.writes.at(-1).value, 1, '180 in [60,180] → 1 (uses arbitrated, not audioBpm 120)');
+});
+
+test('recompute() follows a tap that moved the tempo with no CPC event', () => {
+  // A manual tap writes mixer.tempoBpm directly (no audioBpm event). The
+  // engine calls recompute(); speed must update from the arbitrated value.
+  let arbitrated = 0; // no tempo yet
+  const pc = fakePc();
+  const bs = new BpmSpeedSync(pc, { getTempoBpm: () => arbitrated });
+  bs.attach();
+  pc.setParams(paramSnap()); // bpmSpeedSync on, [60,180]
+  bs.recompute();
+  assert.equal(pc.writes.length, 0, 'no tempo → no write');
+  arbitrated = 120; // operator tapped 120
+  bs.recompute();
+  assert.equal(pc.writes.length, 1);
+  assert.equal(pc.writes.at(-1).value, 0.5);
+});
+
+test('recompute() is idempotent — no write when the mapped speed is unchanged', () => {
+  let arbitrated = 120;
+  const pc = fakePc();
+  const bs = new BpmSpeedSync(pc, { getTempoBpm: () => arbitrated });
+  bs.attach();
+  pc.setParams(paramSnap());
+  bs.recompute();
+  bs.recompute();
+  bs.recompute();
+  assert.equal(pc.writes.length, 1, 'only the first recompute writes; the rest are no-ops');
+});
+
+test('recompute() does nothing when sync is disabled', () => {
+  const pc = fakePc();
+  const bs = new BpmSpeedSync(pc, { getTempoBpm: () => 120 });
+  bs.attach();
+  pc.setParams(paramSnap({ bpmSpeedSync: { value: 0 } }));
+  bs.recompute();
+  assert.equal(pc.writes.length, 0);
 });

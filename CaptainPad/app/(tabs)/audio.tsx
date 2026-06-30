@@ -52,8 +52,10 @@ import {
   resetAllAudioChains,
 } from '@/utils/api';
 import { useAudioStatus, useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, useAudioSignals, type AudioStatus, type AudioStatusDevice, type OscPillState, type AudioSignalDescriptor } from '@/hooks/useEngineState';
+import { useTempoState } from '@/hooks/use_tempo_tap';
 import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
-import { audioAccentHex } from '@/utils/audioSignals';
+import { PulseFlash } from '@/components/audio/PulseFlash';
+import { audioAccentHex, audioGenreName, isGenreKey, isPulseKey } from '@/utils/audioSignals';
 
 // "Auto-driven" accent — mirrors C.tertiary in theme.ts.
 // Local copy keeps this screen working even when the theme's TS shape
@@ -327,6 +329,12 @@ type SignalSlot = {
   accent: SignalAccent;
   kind: 'intensity' | 'frequency' | 'bpm';
   max: number;
+  // True for one-frame PULSE keys (onset/beat/boundary/switch cues). These
+  // render a hold+decay flashing DOT instead of a flatlined bar — a one-hop
+  // pulse blinks imperceptibly through a [0,1] bar (Adv-D P2-A). Classified
+  // in utils/audioSignals.ts (isPulseKey); only an intensity-kind signal can
+  // be a pulse.
+  isPulse: boolean;
 };
 
 function resolveAccent(accent: SignalAccent, palette: Palette): string {
@@ -355,6 +363,9 @@ function toSignalSlot(sig: AudioSignalDescriptor): SignalSlot {
     accent: accentFor(sig),
     kind: sig.kind,
     max: sig.max,
+    // Only intensity-kind keys can be pulses (genre/Hz/bpm have their own
+    // readouts and are never one-hop transients).
+    isPulse: sig.kind === 'intensity' && isPulseKey(sig.key),
   };
 }
 
@@ -367,6 +378,14 @@ function normalizeSlot(slot: SignalSlot, value: number): number {
 
 // Human-readable value for a slot's header readout.
 function slotValueText(slot: SignalSlot, value: number): string {
+  // Genre classifier: the CPC value is an INDEX, not a level — resolve it
+  // to the genre NAME (UPPER, dashes→spaces) so the column reads
+  // "TECH HOUSE" rather than a meaningless "3". A no-genre / out-of-range
+  // index reads "—" (no fabricated label — Codex P0).
+  if (isGenreKey(slot.key)) {
+    const name = audioGenreName(value);
+    return name ? name.replace(/_/g, ' ').toUpperCase() : '—';
+  }
   if (slot.kind === 'frequency') return `${Math.round(value)}Hz`;
   if (slot.kind === 'bpm') return value > 0 ? `${Math.round(value)}` : '—';
   return Math.max(0, Math.min(1, value)).toFixed(2);
@@ -384,6 +403,16 @@ const PINNED_TRACE_HEIGHT = 40;
 // the wrap; per-cell padding makes the gutters (RN's `gap` on a wrap
 // container is unreliable across cells, so we pad inside each cell).
 const SIGNAL_GRID_COLUMNS = 3;
+
+// Max on-screen height of the AUDIO SIGNALS grid before it scrolls inside
+// its own bounded ScrollView (operator brief 2026-06-17 "scrollable signal
+// grid"). ~3 rows of signal columns (each column ≈ 100 px tall with header +
+// bar + trace + RAW footnote, + the 10 px row gutter) stay visible; beyond
+// that the grid scrolls so the lower rows (dom/energy/note/switch/bar-phase/
+// downbeat/genre/onsets) are reachable without the rest of the page being
+// pushed off-screen. A short signal set never reaches this cap, so the grid
+// keeps its natural height and doesn't scroll.
+const SIGNAL_GRID_MAX_HEIGHT = 340;
 
 // Engine INPUT GAIN bounds for the strip slider (software mic-preamp). This
 // is a REAL gain: it patches audio.bands.inputGain on the engine, so it lifts
@@ -418,6 +447,39 @@ const SignalColumn = React.memo(function SignalColumn({ slot, raw, post, active,
   const hasRaw = slot.rawKey !== null;
   const pv = normalizeSlot(slot, post);
   const rawNorm = hasRaw ? normalizeSlot(slot, raw) : null;
+
+  // ── PULSE keys — a flashing DOT (hold+decay) instead of a flatlined bar.
+  // A one-frame onset/beat/boundary/switch pulse spikes to 1 for a single
+  // analyser hop that almost always lands BETWEEN the ~20 Hz param polls, so
+  // a [0,1] bar reads as dead. PulseFlash arms on the rising edge and decays
+  // over ~150-250 ms so the operator actually SEES the cue (Adv-D P2-A).
+  if (slot.isPulse) {
+    return (
+      <View style={{ flex: 1 }}>
+        {/* header — slot label only; the dot IS the value, a numeric POST
+            readout on a one-hop pulse is meaningless (it reads 0.00 the rest
+            of the time). */}
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'baseline', marginBottom: 3 }}>
+          <Text numberOfLines={1} style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+            color: accentColor, textTransform: 'uppercase',
+            letterSpacing: 0.5, flexShrink: 1,
+          }}>{slot.label}</Text>
+        </View>
+        {/* Flash dot sized to fill the same vertical space the bar+trace block
+            occupied, so the grid rows stay aligned. */}
+        <PulseFlash
+          value={post}
+          color={accentColor}
+          restColor={C.ghostBorder}
+          background={C.surfaceContainerLowest}
+          height={traceHeight + 8}
+          active={active}
+        />
+      </View>
+    );
+  }
+
   return (
     <View style={{ flex: 1 }}>
       {/* header — slot label + live POST value */}
@@ -515,9 +577,14 @@ function LiveAudioMeters({
     const slot = liveDoc?.params?.[key];
     return slot && typeof slot.value === 'number' ? slot.value : 0;
   }, [liveDoc]);
-  // Prefer the Companion's analyzed tempo (audioBpm); fall back to the
-  // legacy tempoBpm (/lx/tempo/bpm) only when audioBpm is absent.
-  const tempoLive = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 }) as Record<string, number>;
+  // OSC BPM source is the Audio Companion's analyzed `audioBpm`
+  // (/marsin/audio/bpm) — the ONE OSC tempo source (2026-06-29 cleanup: the
+  // LX /lx/tempo/bpm → `tempoBpm` CPC param is no longer read here; no pattern
+  // or the engine clock consumed it). The "is a tempo driving things?" checks
+  // below read the ARBITRATED tempo (OSC OR tap) off the mixer broadcast via
+  // useTempoState(), not a raw OSC param.
+  const tempoLive = useLiveParamValues({ audioBpm: 0 }) as Record<string, number>;
+  const arbitrated = useTempoState();
   // Pull bpmSpeedSync from steady params for the SYNC pill — cheap;
   // changes only when operator toggles it.
   const steady = useSharedParamValues({ bpmSpeedSync: 0 }) as Record<string, number>;
@@ -556,12 +623,21 @@ function LiveAudioMeters({
                               'off';
   const oscLabel  = oscState ? `OSC ${oscState.toUpperCase()}` : 'OSC …';
   const syncOn    = (steady.bpmSpeedSync ?? 0) >= 0.5;
+  // OSC BPM readout: ALWAYS the raw LIVE OSC tempo (the Audio Companion's
+  // analyzed `audioBpm`, streamed at the live param rate) — independent of
+  // tap / arbitration / the tempo deadband, so it never shows a stale tapped or
+  // held value (operator request 2026-06-29: "live show the OSC BPM always").
+  const oscBpm = tempoLive.audioBpm > 0 ? Math.round(tempoLive.audioBpm) : null;
+  // BPM-SYNC warning is SOURCE-AGNOSTIC (sync follows the ARBITRATED tempo —
+  // OSC OR TAP), so warn only when sync is armed with NO tempo to follow at all
+  // (not merely because OSC isn't live — a tapped tempo is a valid driver).
+  // The arbitrated tempo is `mixer.tempoBpm` (via useTempoState); fall back to
+  // the raw OSC reading only before the first mixer broadcast lands.
+  const arbitratedBpm = (arbitrated.bpm ?? 0) > 0 ? (arbitrated.bpm as number) : tempoLive.audioBpm;
   const syncTone: 'on' | 'off' | 'warn' =
-    syncOn && oscState !== 'live' ? 'warn' :
-    syncOn                        ? 'on'   :
-                                    'off';
-  const effectiveBpm = tempoLive.audioBpm > 0 ? tempoLive.audioBpm : tempoLive.tempoBpm;
-  const bpm = effectiveBpm > 0 ? Math.round(effectiveBpm) : null;
+    syncOn && !(arbitratedBpm > 0) ? 'warn' :
+    syncOn                         ? 'on'   :
+                                     'off';
 
   return (
     <View style={{ marginBottom: 24 }}>
@@ -590,11 +666,11 @@ function LiveAudioMeters({
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
             color: C.secondary, letterSpacing: 0.8, textTransform: 'uppercase',
-          }}>BPM</Text>
+          }}>OSC BPM</Text>
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 22,
-            color: bpm ? C.primary : C.icon,
-          }}>{bpm ?? '—'}</Text>
+            color: oscBpm ? C.primary : C.icon,
+          }}>{oscBpm ?? '—'}</Text>
         </View>
       </View>
       {slots.length === 0 ? (
@@ -602,11 +678,29 @@ function LiveAudioMeters({
           No live audio signals yet — design them in the Audio Companion (a raw source → ops → an OSC-out), and they appear here.
         </Text>
       ) : (
-        // Full-height 3×N grid that wraps to new rows. No inner scroll /
-        // height cap — the whole AUDIO tab is ONE page ScrollView, so the
-        // grid simply lays out at full height and scrolls with everything
-        // else (no pinned strip, no nested scroller to fight the page).
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        // 3×N grid that wraps to new rows, inside a HEIGHT-CAPPED vertical
+        // ScrollView (operator brief 2026-06-17 "scrollable signal grid").
+        //
+        // WHY a nested scroller: the Companion now routes many signals
+        // (low/mid/high/kick, dom1/dom2 + energies, energy/slow/build/party,
+        // note/switch/bar-phase/downbeat, genre, per-band onsets, chest-hit …).
+        // At 3 columns that's 4-6+ rows; on the iPad the lower rows pushed the
+        // BPM-sync / settings cards off-screen and, worse, were unreachable
+        // when the grid alone filled the viewport. Capping the grid's height
+        // and letting IT scroll keeps every signal reachable while the rest of
+        // the page (sync, settings) stays in view below.
+        //
+        // The cap only engages when the grid is tall: a short set sits at its
+        // natural height (the ScrollView never scrolls), so a 3-6 signal rig
+        // looks identical to before. nestedScrollEnabled lets the inner
+        // scroller win the vertical gesture inside its bounds (Android); on
+        // web/iOS the bounded height naturally captures the wheel/drag.
+        <ScrollView
+          style={{ maxHeight: SIGNAL_GRID_MAX_HEIGHT }}
+          nestedScrollEnabled
+          showsVerticalScrollIndicator
+          contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' }}
+        >
           {slots.map((slot) => (
             <View key={slot.key} style={{ width: `${100 / SIGNAL_GRID_COLUMNS}%`, paddingHorizontal: 6, marginBottom: 10 }}>
               <SignalColumn
@@ -618,7 +712,7 @@ function LiveAudioMeters({
               />
             </View>
           ))}
-        </View>
+        </ScrollView>
       )}
       {/* INPUT GAIN — software mic-preamp, UNDER the grid. A REAL engine
           gain (patches audio.bands.inputGain): it lifts the mic bands
@@ -656,18 +750,22 @@ function LiveAudioMeters({
 // the surrounding card (which renders steady-state sliders + the
 // toggle) never re-renders just because tempoBpm ticked.
 
-function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
-  bpmSyncOn: boolean; oscMissing: boolean; oscState: string | null;
+function BpmStaleWarning({ bpmSyncOn }: {
+  bpmSyncOn: boolean;
 }) {
   const C = usePalette();
   // Steady-only render path when SYNC is OFF (nothing to warn about).
-  // Prefer the Companion's analyzed tempo (audioBpm); fall back to
-  // tempoBpm (legacy /lx/tempo/bpm path) only when audioBpm is absent.
-  const live = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
+  // Sync is SOURCE-AGNOSTIC — it follows the ARBITRATED tempo (mixer.tempoBpm
+  // via useTempoState, OSC OR TAP); `audioBpm` is the raw OSC readout, used
+  // only as a fallback before the first arbitrated broadcast lands. We warn
+  // ONLY when there is no tempo to follow at all — a tapped tempo with OSC off
+  // is still valid.
+  const live = useLiveParamValues({ audioBpm: 0 } as Record<string, number>) as Record<string, number>;
+  const arbitrated = useTempoState();
   if (!bpmSyncOn) return null;
-  const effectiveBpm = live.audioBpm > 0 ? live.audioBpm : live.tempoBpm;
+  const effectiveBpm = (arbitrated.bpm ?? 0) > 0 ? (arbitrated.bpm as number) : live.audioBpm;
   const bpmStale = !effectiveBpm || effectiveBpm <= 0;
-  if (!oscMissing && !bpmStale) return null;
+  if (!bpmStale) return null;
   return (
     <View style={{
       borderRadius: 8, borderWidth: 1, borderColor: C.error,
@@ -678,9 +776,7 @@ function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
         ⚠ NO BPM SIGNAL
       </Text>
       <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 11 }}>
-        {oscMissing
-          ? `OSC listener is ${oscState ?? 'unknown'}; the Audio Companion isn't streaming a BPM. Speed will not move.`
-          : 'OSC is live but no BPM has arrived yet. Confirm the Audio Companion is analyzing tempo and streaming audioBpm.'}
+        Sync is armed but there is no tempo to follow. Tap one in (TAP on the deck/mixer GLOBALS bar) or have the Audio Companion stream one over OSC. Speed will not move until a tempo arrives.
       </Text>
     </View>
   );
@@ -693,15 +789,16 @@ function BpmStaleWarning({ bpmSyncOn, oscMissing, oscState }: {
 // history if a future card needs the verbose tempo line back.
 
 // Compact inline live read-out for the BPM card header. Single line,
-// quiet typography — just "126 BPM → 0.43" or "—". Subscribes ONLY to
-// audioBpm/tempoBpm + bpmSpeedMin/Max so the rest of the BPM card doesn't
-// re-render on every tempo tick. Prefers the Companion's analyzed tempo
-// (audioBpm); falls back to tempoBpm only when audioBpm is absent.
+// quiet typography — just "126 BPM → 0.43" or "—". Shows the ARBITRATED tempo
+// that actually drives speed-sync (mixer.tempoBpm via useTempoState, OSC OR
+// TAP); falls back to the raw OSC reading (audioBpm) only before the first
+// mixer broadcast lands. Subscribes to bpmSpeedMin/Max for the mapping.
 function BpmInlineReadout() {
   const C = usePalette();
-  const live = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 } as Record<string, number>) as Record<string, number>;
+  const live = useLiveParamValues({ audioBpm: 0 } as Record<string, number>) as Record<string, number>;
+  const arbitrated = useTempoState();
   const steady = useSharedParamValues({ bpmSpeedMin: 60, bpmSpeedMax: 180 } as Record<string, number>) as Record<string, number>;
-  const bpm = live.audioBpm > 0 ? live.audioBpm : live.tempoBpm;
+  const bpm = (arbitrated.bpm ?? 0) > 0 ? (arbitrated.bpm as number) : live.audioBpm;
   const mapped = useMemo(() => {
     if (!steady.bpmSpeedMin || !steady.bpmSpeedMax || steady.bpmSpeedMin === steady.bpmSpeedMax || !bpm) return null;
     return Math.max(0, Math.min(1, (bpm - steady.bpmSpeedMin) / (steady.bpmSpeedMax - steady.bpmSpeedMin)));
@@ -731,12 +828,10 @@ function BpmInlineReadout() {
 // are kept ≥ 1 BPM apart on commit (client-side guard; engine validates).
 
 function CompactBpmCard({
-  sp, bpmSyncOn, oscMissing, oscState,
+  sp, bpmSyncOn,
 }: {
   sp: Record<string, number>;
   bpmSyncOn: boolean;
-  oscMissing: boolean;
-  oscState: string | null;
 }) {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
@@ -762,7 +857,7 @@ function CompactBpmCard({
             paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
             backgroundColor: bpmSyncOn ? ACCENT_AUTO : C.surfaceContainerHigh,
             borderWidth: 1,
-            borderColor: bpmSyncOn ? ACCENT_AUTO : (oscMissing ? C.error : C.ghostBorder),
+            borderColor: bpmSyncOn ? ACCENT_AUTO : C.ghostBorder,
           }}
         >
           <Text style={{
@@ -776,7 +871,7 @@ function CompactBpmCard({
       </View>
       {/* Stale/no-signal banner only when sync is on AND something is
           actually wrong. BpmStaleWarning self-gates and self-subscribes. */}
-      <BpmStaleWarning bpmSyncOn={bpmSyncOn} oscMissing={oscMissing} oscState={oscState} />
+      <BpmStaleWarning bpmSyncOn={bpmSyncOn} />
       {/* Two sliders on one row (min | max). Reuses FaderRow but with
           a compacted column layout — short labels, no per-slider hint
           paragraph. The one-liner hint sits below the pair. */}
@@ -811,7 +906,7 @@ function CompactBpmCard({
         </View>
       </View>
       <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 10, marginTop: -4 }}>
-        Maps live tempo ({BPM_MIN_ABS}–{BPM_MAX_ABS} BPM) onto speed 0–1. Sync drives global SPEED from the Audio Companion&apos;s analyzed BPM (audioBpm).
+        Maps live tempo ({BPM_MIN_ABS}–{BPM_MAX_ABS} BPM) onto speed 0–1. Sync drives global SPEED from the arbitrated BPM — whatever is driving the clock, OSC (Audio Companion) OR a tapped tempo (TAP).
       </Text>
     </View>
   );
@@ -1252,8 +1347,6 @@ function AudioConfigBody({
     C.icon;
 
   const bpmSyncOn  = (sp.bpmSpeedSync ?? 0) >= 0.5;
-  const oscState   = oscStatus?.state ?? null;
-  const oscMissing = bpmSyncOn && oscState !== 'live';
 
   // ── Render ─────────────────────────────────────────────────────────
   //
@@ -1315,8 +1408,6 @@ function AudioConfigBody({
         <CompactBpmCard
           sp={sp}
           bpmSyncOn={bpmSyncOn}
-          oscMissing={oscMissing}
-          oscState={oscState}
         />
 
         {/* STRUCTURE DETECTOR — RETIRED (2026-06-17). The dedicated

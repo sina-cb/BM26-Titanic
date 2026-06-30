@@ -30,6 +30,22 @@
  *      hiss).
  *   6. mains hum                 → optional 50/60 Hz tone (+ a little 2nd
  *      harmonic) for cheap-PSU / ground-loop realism.
+ *   7. WIND GUSTS                → transient low-frequency rumble bursts on
+ *      the capsule (a real playa night). Steady pink noise (step 4) does NOT
+ *      model these — a gust is an occasional 0.6–1.5 s raised-cosine envelope
+ *      of sub-100 Hz noise that slams the low band and looks, to a naive
+ *      detector, exactly like a kick or a drop edge. Gated by `windLevel>0`.
+ *   8. NEIGHBOR BLEED            → a competing 4-on-the-floor kick+bass from
+ *      the camp next door, at a DIFFERENT tempo than the captured track, low
+ *      level but enough to plant phantom beats / drops uncorrelated with our
+ *      music. Gated by `bleedLevel>0`.
+ *
+ * Steps 7–8 are ADDED to the output mix AFTER the SNR balance (steps 3–6),
+ * so they are absolute contaminants the analyzer must reject rather than
+ * noise the SNR target quietly compensates for — that is the whole point of
+ * the on-playa hardening they exist to stress. They are OFF in every legacy
+ * tier (windLevel/bleedLevel default 0), so clean/moderate/heavy degrade
+ * byte-for-byte as before; only the new `playa` tier turns them on.
  *
  * Codex P0 — NO FALLBACK BEHAVIORS: every public entry validates its
  * inputs and throws loudly on anything malformed (wrong array type, bad
@@ -99,6 +115,30 @@ export const MIC_TIERS = {
     hpHz: 55,
     lpHz: 13000,
   },
+  // The full on-playa case: a far, loud, windy night next to a neighbor camp.
+  // Same band-limit / saturation / SNR as `heavy`, PLUS wind gusts and a
+  // competing 4-on-the-floor bleed from the next sound system. This is the
+  // tier the noise-floor subtraction + wind guard exist to survive.
+  playa: {
+    snrDb: 9,
+    roomNoise: 0.025,
+    selfNoise: 0.004,
+    humLevel: 0.004,
+    humHz: 60,
+    drive: 2.4,
+    hpHz: 30,            // wind energy lives below the heavy-tier 55 Hz HP — let it through
+    lpHz: 13000,
+    // Wind: ~0.18 gusts/s (one every ~5.5 s), each a fat low-freq rumble that
+    // slams the low band. windLevel is the peak gust amplitude (full-scale frac).
+    windLevel: 0.12,
+    windGustHz: 0.18,
+    windLpHz: 90,
+    // Neighbor bleed: a 124-BPM kick+bass from the next camp (our tracks are a
+    // mix of tempos, so it is deliberately uncorrelated), low but audible.
+    bleedLevel: 0.05,
+    bleedBpm: 124,
+    bleedKickHz: 55,
+  },
 };
 
 /** RMS of a float array. */
@@ -128,6 +168,63 @@ function makePinkGen(rnd) {
     // Kellet's sum has ~ ±5 range; scale to roughly unit RMS.
     return pink * 0.11;
   };
+}
+
+/**
+ * Build a WIND-GUST bed: an array of length n carrying occasional fat
+ * low-frequency rumble bursts. Each gust is a raised-cosine envelope
+ * (smooth attack+decay, no click) over low-passed white noise. Gusts are
+ * scheduled at ~`gustHz` per second with ±40% jitter; durations 0.6–1.5 s.
+ * Deterministic given `rnd`. Returns a Float64Array (full-scale fractions).
+ */
+function makeWindBed(n, sampleRate, rnd, { windLevel, windGustHz, windLpHz }) {
+  const bed = new Float64Array(n);
+  if (!(windLevel > 0) || !(windGustHz > 0)) return bed;
+  const meanGapS = 1 / windGustHz;
+  let tS = meanGapS * (0.3 + 0.7 * rnd());          // first gust offset
+  while (tS < n / sampleRate) {
+    const durS = 0.6 + 0.9 * rnd();                  // 0.6–1.5 s
+    const amp = windLevel * (0.6 + 0.4 * rnd());     // gust-to-gust variation
+    const start = Math.floor(tS * sampleRate);
+    const len = Math.floor(durS * sampleRate);
+    for (let i = 0; i < len && start + i < n; i++) {
+      // raised cosine 0→1→0 over the gust
+      const env = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / len);
+      bed[start + i] += amp * env * (rnd() * 2 - 1);
+    }
+    tS += meanGapS * (0.6 + 0.8 * rnd());            // ±40% jittered gap
+  }
+  // Low-pass the whole bed so it is rumble (sub-windLpHz), not hiss.
+  onePoleLowPass(bed, windLpHz, sampleRate);
+  return bed;
+}
+
+/**
+ * Build a NEIGHBOR-BLEED bed: a steady 4-on-the-floor kick + bass at
+ * `bleedBpm`, deliberately uncorrelated with our captured track. Each kick
+ * is a fast pitch-dropping sine "thump" (bleedKickHz) with an exponential
+ * decay; a quieter sustained bass tone fills between hits. `bleedLevel`
+ * scales the whole bed. Deterministic (phase only; no PRNG needed, but we
+ * accept rnd for a small per-run phase offset so it is not lock-stepped).
+ */
+function makeBleedBed(n, sampleRate, rnd, { bleedLevel, bleedBpm, bleedKickHz }) {
+  const bed = new Float64Array(n);
+  if (!(bleedLevel > 0) || !(bleedBpm > 0)) return bed;
+  const beatS = 60 / bleedBpm;
+  const phase0 = rnd() * beatS;                       // where the neighbor "is"
+  const bassHz = bleedKickHz / 2;                     // a low bass under the kick
+  for (let i = 0; i < n; i++) {
+    const t = i / sampleRate;
+    const tb = ((t + phase0) % beatS);                // time since last kick
+    // Kick: pitch sweeps from 2× down to 1× over the first 60 ms, fast decay.
+    const kEnv = Math.exp(-tb / 0.09);
+    const kHz = bleedKickHz * (1 + Math.exp(-tb / 0.02));
+    const kick = kEnv * Math.sin(2 * Math.PI * kHz * tb);
+    // Sustained bass under it (quieter, steady).
+    const bass = 0.35 * Math.sin(2 * Math.PI * bassHz * t);
+    bed[i] = bleedLevel * (0.8 * kick + bass);
+  }
+  return bed;
 }
 
 /** One-pole high-pass (DC/low cut). corner in Hz; sampleRate in Hz. */
@@ -232,6 +329,13 @@ export function applyMicModel(samples, sampleRate, opts = {}) {
     }
   }
 
+  // 3b) post-SNR contaminants (steps 7–8): wind gusts + neighbor bleed. These
+  //     are ABSOLUTE additions on top of the SNR-balanced signal+noise — they
+  //     deliberately do NOT participate in the SNR target (a gust should be
+  //     able to swamp the low band regardless of how loud our music is).
+  const wind  = makeWindBed(n, sampleRate, rnd, spec);
+  const bleed = makeBleedBed(n, sampleRate, rnd, spec);
+
   // 4) mix + re-quantize (hard clamp at full scale — a real ADC clips).
   const out = new Int16Array(n);
   let sumSigSq = 0;
@@ -239,7 +343,7 @@ export function applyMicModel(samples, sampleRate, opts = {}) {
   for (let i = 0; i < n; i++) {
     const s = sig[i] * sigGain;
     sumSigSq += s * s;
-    const mix = s + noise[i];
+    const mix = s + noise[i] + wind[i] + bleed[i];
     sumMixSq += mix * mix;
     let q = Math.round(mix * I16_MAX);
     if (q > I16_MAX) q = I16_MAX; else if (q < -I16_MAX) q = -I16_MAX;

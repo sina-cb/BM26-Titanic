@@ -27,7 +27,8 @@ Key specs by number (in `.agent/00_gol/`): `00` codex · `01` git +
 python style · `02` nodejs style · `03/04/05` auto-checks (CaptainPad / sim /
 engine) · `06` run sim · `07` run engine · `08` MarsinScript patterns ·
 `09` iPad builds · `10` auto-patcher · `11` UI design · `12` Raspberry Pi ·
-`13` multi-agent worktrees · `14` task tracking (Notion).
+`13` multi-agent worktrees · `14` task tracking (Notion) · `15` pattern catalog
+(multi-page + preview GIFs).
 
 ## Task tracking (Notion)
 
@@ -56,9 +57,34 @@ new work; file follow-ups there as `Backlog` cards.
 - **No git operations until explicitly asked** by the human op. Never use
   `git reset --hard` / `git checkout --` to hide test side effects. Before
   claiming merge-ready, run the touched subsystems' auto-check specs.
+- **Follow the GoL branch-naming convention** (`.agent/00_gol/01_git.md` →
+  Branch Naming and Lifecycle): this is an **agent-agnostic** repo, so no agent
+  name goes in a branch. Durable work lives on `feat/<snake_case>`; multi-agent
+  worktrees on `dev/<slug>` (**local only — never pushed to `origin`**);
+  `worktree-agent-<hash>` and auto-named session branches are scratch. Promote
+  a session branch to `feat/` by **GitHub rename** (never delete+recreate a
+  branch with an open PR). Delete temp/merged branches only after verifying
+  their work landed.
+- **Never name a branch random gibberish.** No throwaway auto-codenames. When
+  you create a branch for durable work, give it a proper descriptive
+  `feat/<snake_case>` name that says what the work is; if you can't pick a good
+  one, **ask the user for the name** instead of inventing junk. (Auto-named
+  session branches must still be promoted to a real `feat/` name or deleted —
+  they are not acceptable to keep.)
 - **Offline readiness is a deployment requirement**: the playa has no
   internet. No CDNs, no external fonts, no runtime `npm install`, no
   telemetry. Browser deps are vendored in `simulation/vendor/`.
+- **Panel firmware is flashed ONLY through its registry-locked deploy script.**
+  Flash `LookingGlass/panel_firmware` exclusively via `python deploy.py` (run
+  from that directory) — **never** a raw `pio run -t upload`. `deploy.py` reads a
+  deployment registry (a MAC allowlist) and only flashes a board whose MAC is
+  allowed for the `looking_glass` target — refusing every other board. This is
+  mandatory because multiple ESP32s (the Stoker controllers) are often plugged in
+  at once. The registry and the build secrets (WiFi/AP) are **not** stored in this
+  repo: they come from a private, external deployment source that exports
+  `$BM26_DEPLOY_REGISTRY` and `$BM26_SECRETS` (with `$STOKER_*` fallbacks). If
+  those env vars are not exported, the build and the deploy both **fail loudly** —
+  there is no local fallback. See `.agent/01_skills/14_panel_firmware_ops.md`.
 - Style guides: `.agent/00_gol/01_python_style.md`,
   `.agent/00_gol/02_nodejs_style.md` — read before writing code.
 
@@ -70,6 +96,7 @@ new work; file follow-ups there as `Backlog` cards.
 | `marsin_engine/` | Pixelblaze-compatible pattern engine (WASM VM, 40 fps, sACN out, REST/WS API). `node engine.js --model test_bench --pattern <name>` |
 | `CaptainPad/` | TypeScript Expo iPad app — operator control surface |
 | `control_podium/` | Podium hardware + Raspberry Pi server bridge (Meshtastic radio path) |
+| `LookingGlass/` | Control-panel art piece — `panel_firmware/` (ESP32-S3 arcade buttons → WiFi telemetry portal), MAC-locked `deploy.py`, `circuit.html` wiring diagram. Flash via `deploy.py` only; see `.agent/01_skills/14_panel_firmware_ops.md` |
 | `marsin_pb/` | Pixelblaze-related tooling |
 | `3d_models/`, `3d_structure/`, `renders/`, `images/` | Assets |
 | `states/`, `docs/`, `archived/` | State files, docs, retired work |

@@ -135,9 +135,11 @@ test('enabled→disabled edge resets to THIN and zeroes keys', () => {
 
 test('rising energy + flux drives THIN→BUILD then a drop → SUSTAIN', () => {
   const broadcasts = [];
-  // Fresh stems throughout (full mix) so the drop gate passes.
+  // Fresh stems throughout (full mix) so the drop gate passes. SHIPPED detector
+  // tuning (no dropEnergyJump override) so this proves the real BUILD-state edge
+  // still fires under the P0-1 gates (jump 4.0, rise 0.30, novelty 5.0).
   const { pc, det } = makeDetector(
-    { dropEdgeMode: 'windowed', buildThreshold: 0.2, dropEnergyJump: 1.5, stemsTimeoutMs: 100000 },
+    { dropEdgeMode: 'windowed', buildThreshold: 0.2, stemsTimeoutMs: 100000 },
     broadcasts,
   );
   let now = 1000;
@@ -152,16 +154,14 @@ test('rising energy + flux drives THIN→BUILD then a drop → SUSTAIN', () => {
   }
   assert.equal(det.getStatus().state, 'THIN', 'should still be THIN on quiet baseline');
 
-  // Phase 2 — a build: gently COMPOUNDING low energy + sustained flux for
-  // ~3 s. shortEnv climbs, buildScore climbs, energyRatio rises for >1 s. A
-  // compounding (constant-ratio) rise keeps the windowed rate-of-change
-  // BELOW the drop edge (a build's per-window growth is < the drop slam's),
-  // so the build itself never fires a drop — only the sharp Phase-3 jump
-  // does. (A linear ramp from near-silence would DOUBLE every few hops at
-  // the low end and trip the windowed edge — a real build is gentler.)
+  // Phase 2 — a real EDM build: FLUX ramps up (filter sweep / snare roll) while
+  // the SUB (micLowRaw) stays LOW. buildScore climbs (a genuine RISE, not a flat
+  // plateau) and energyRatio rises for >1 s → THIN→BUILD latches. Keeping the sub
+  // low is what makes the Phase-3 slam a large WINDOWED ratio (the shipped P0-1
+  // gate needs a real rate-of-change, not a sub already pre-raised by the build).
   for (let i = 0; i < 250; i++) {
-    pc.store.micLowRaw = Math.min(0.45, 0.06 * Math.pow(1.010, i));
-    pc.store.micFluxRaw = 0.5;
+    pc.store.micLowRaw = 0.05;
+    pc.store.micFluxRaw = Math.min(0.7, 0.10 + 0.6 * (i / 249));
     // re-feed stems so they stay fresh
     pc.feed({ stemsBassRaw: 0.6, stemsDrumsRaw: 0.6 });
     det.tick(now, tickMs / 1000); now += tickMs;
@@ -170,7 +170,8 @@ test('rising energy + flux drives THIN→BUILD then a drop → SUSTAIN', () => {
     `expected BUILD after the rising ramp; got ${det.getStatus().state}`);
 
   // Phase 3 — the drop: a SHARP jump to 0.95 (a real slam), so the windowed
-  // short-envelope rate-of-change clears dropEnergyJump within the window.
+  // short-envelope rate-of-change clears dropEnergyJump within the window AND is
+  // a novel outlier vs the (low-sub) recent ratio median.
   for (let i = 0; i < 60; i++) {
     pc.store.micLowRaw = 0.95; pc.store.micFluxRaw = 0.4;
     pc.feed({ stemsBassRaw: 0.7, stemsDrumsRaw: 0.7 });
@@ -188,6 +189,144 @@ test('rising energy + flux drives THIN→BUILD then a drop → SUSTAIN', () => {
   assert.equal(drops[0].stemsFresh, true);
   // audioDropPulse jumped to ~1 on the drop and is decaying.
   assert.ok(pc.store.audioDropPulse > 0);
+});
+
+// ── Build→drop transition gate + recall (2026-06-20 detector-recall pass) ──
+
+test('drop fires from THIN when a riser preceded but BUILD state never latched', () => {
+  // The recall fix: through the playa mic, energyRatio saturates at 1.0 during
+  // a build so the brittle THIN→BUILD "rising for >1s" gate never latches —
+  // the machine is still THIN when the drop lands. The old edge fired ONLY from
+  // BUILD, so the drop was missed. With the build-memory gate, a recent high
+  // buildScore (the riser) lets the edge fire from THIN.
+  const broadcasts = [];
+  const { pc, det } = makeDetector(
+    // buildThreshold huge so the state machine CANNOT enter the BUILD state;
+    // proves the drop fires on build-MEMORY, not the BUILD state. SHIPPED gate
+    // tuning (no dropEnergyJump override) so this proves the build-mem THIN edge
+    // still fires under the P0-1 gates (jump 4.0, rise 0.30, novelty 5.0).
+    { dropEdgeMode: 'windowed', buildThreshold: 0.99,
+      dropBuildGate: 0.5, dropMinLevel: 0.06, dropRelLevel: 0, stemsTimeoutMs: 100000 },
+    broadcasts,
+  );
+  let now = 1000; const tickMs = 12;
+  // Quiet baseline so longEnv settles low.
+  for (let i = 0; i < 200; i++) { pc.store.micLowRaw = 0.05; pc.store.micFluxRaw = 0.0; det.tick(now, tickMs / 1000); now += tickMs; }
+  // Riser: a RISING flux ramp (a real EDM build climbs into the drop) while the
+  // SUB stays LOW (filter sweep / snare roll, no kick yet). The state stays THIN
+  // (buildThreshold 0.99) but the build-score MEMORY climbs high AND shows a
+  // genuine rise (peak−trough) — the P0-1 gate (report 23) requires a real rise,
+  // not a flat-high plateau (busy continuous music, which must NOT fire). Keeping
+  // the sub low makes the slam's WINDOWED ratio large + novel (the shipped jump
+  // 4.0 + novelty 5.0 gates), as a real EDM drop does.
+  for (let i = 0; i < 250; i++) {
+    pc.store.micLowRaw = 0.04;
+    pc.store.micFluxRaw = Math.min(0.7, 0.10 + 0.6 * (i / 249));
+    det.tick(now, tickMs / 1000); now += tickMs;
+  }
+  assert.equal(det.getStatus().state, 'THIN', 'BUILD state must NOT have latched (buildThreshold 0.99)');
+  assert.ok(det.getStatus().buildScore >= 0.5, `buildScore should be high from the riser; got ${det.getStatus().buildScore}`);
+  // The slam.
+  for (let i = 0; i < 60; i++) {
+    pc.store.micLowRaw = 0.95; pc.store.micFluxRaw = 0.4;
+    det.tick(now, tickMs / 1000); now += tickMs;
+    if (det.getStatus().state === 'SUSTAIN') break;
+  }
+  const drops = broadcasts.filter(b => b.type === 'dropFired');
+  assert.equal(drops.length, 1, `expected exactly one dropFired from THIN; got ${drops.length}`);
+  assert.equal(det.getStatus().state, 'SUSTAIN');
+});
+
+test('build→drop gate rejects a loud-body onset with NO preceding riser', () => {
+  // A bare loud onset (techno/sustain start) — loud energy slam but buildScore
+  // stayed low (no flux riser). The build-memory gate (dropBuildGate) must
+  // reject it: recentBuildPeak never reached the gate.
+  const broadcasts = [];
+  const { pc, det } = makeDetector(
+    { dropEdgeMode: 'windowed', buildThreshold: 0.99, dropEnergyJump: 1.5,
+      dropBuildGate: 0.5, dropMinLevel: 0.06, dropRelLevel: 0, stemsTimeoutMs: 100000 },
+    broadcasts,
+  );
+  let now = 1000; const tickMs = 12;
+  // Quiet baseline, NO flux (so buildScore never rises).
+  for (let i = 0; i < 200; i++) { pc.store.micLowRaw = 0.05; pc.store.micFluxRaw = 0.0; det.tick(now, tickMs / 1000); now += tickMs; }
+  // A loud slam with NO flux riser (buildScore stays ~0).
+  for (let i = 0; i < 120; i++) { pc.store.micLowRaw = 0.95; pc.store.micFluxRaw = 0.0; det.tick(now, tickMs / 1000); now += tickMs; }
+  const drops = broadcasts.filter(b => b.type === 'dropFired');
+  assert.equal(drops.length, 0, `loud onset with no riser must NOT fire a drop; got ${drops.length}`);
+});
+
+test('busy-music flat-high plateau (no rise, no novelty) does NOT fire a drop', () => {
+  // P0-1 regression (report 23): real continuous DJ/dance music sits at a
+  // SUSTAINED-high energy + flux with constant routine transients — a flat-high
+  // PLATEAU, not a rising build that crests at a slam. This shape was the source
+  // of 1.48 phantom drops/min on the real corpus. With the shipped P0-1 gates
+  // (dropBuildRise 0.30 + dropNoveltyRatio 5.0, applied to BOTH the THIN and the
+  // BUILD edge), a plateau must fire ZERO drops: its buildScore barely rises
+  // (peak−trough tiny) and its windowed ratio is TYPICAL, not a novel outlier.
+  const broadcasts = [];
+  const { pc, det } = makeDetector(  // SHIPPED tuning (no gate overrides)
+    { dropEdgeMode: 'windowed', buildThreshold: 0.2, stemsTimeoutMs: 100000 },
+    broadcasts,
+  );
+  let now = 1000; const tickMs = 12;
+  // 30 s of busy music: high constant energy + high constant flux with small
+  // hop-to-hop jitter (routine transients), NO rising build, NO slam. This is
+  // the busy-music shape the detector must stay silent on.
+  let seed = 12345;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  for (let i = 0; i < 2500; i++) {
+    pc.store.micLowRaw = 0.45 + 0.18 * rnd();   // high sub, jittery
+    pc.store.micFluxRaw = 0.40 + 0.25 * rnd();  // high flux, jittery (busy transients)
+    det.tick(now, tickMs / 1000); now += tickMs;
+  }
+  const drops = broadcasts.filter(b => b.type === 'dropFired');
+  assert.equal(drops.length, 0,
+    `a flat-high busy-music plateau must NOT fire a drop; got ${drops.length}`);
+});
+
+test('mic-gain-relative floor: a scaled-down drop still fires; absolute-only would miss it', () => {
+  // dropMinLevel is an ABSOLUTE micLow floor calibrated for a normal feed. On a
+  // QUIET feed (low mic gain) a genuine drop sits below it and the absolute
+  // floor blocks it. The relative term (dropRelLevel·loudnessRef) scales the
+  // effective floor down with the feed, so the drop still clears it. We model a
+  // quiet feed: a riser + slam at ~0.04 levels (well below dropMinLevel 0.06).
+  const run = (relLevel) => {
+    const broadcasts = [];
+    const { pc, det } = makeDetector(
+      // Isolates the mic-gain-relative floor MECHANISM: the music-shape gates
+      // (dropBuildRise / dropNoveltyRatio) and the high shipped dropEnergyJump
+      // are orthogonal to the floor and are exercised by their own tests, so we
+      // disable them here (the quiet 0.012→0.042 slam is a small ratio by design).
+      { dropEdgeMode: 'windowed', buildThreshold: 0.99, dropEnergyJump: 1.5,
+        dropBuildRise: 0, dropNoveltyRatio: 0,
+        dropBuildGate: 0.5, dropMinLevel: 0.06, dropRelLevel: relLevel, stemsTimeoutMs: 100000 },
+      broadcasts,
+    );
+    let now = 1000; const tickMs = 12;
+    // Very quiet baseline so loudnessRef stays tiny.
+    for (let i = 0; i < 200; i++) { pc.store.micLowRaw = 0.008; pc.store.micFluxRaw = 0.0; det.tick(now, tickMs / 1000); now += tickMs; }
+    // Quiet riser: strong flux drives buildScore, but the SUB stays low (~0.012)
+    // — like a real build where the sub is absent until the drop. loudnessRef
+    // stays small, so the relative floor relaxes below the absolute 0.06.
+    for (let i = 0; i < 250; i++) {
+      pc.store.micLowRaw = 0.012; pc.store.micFluxRaw = 0.5;
+      det.tick(now, tickMs / 1000); now += tickMs;
+    }
+    // A quiet slam: the sub jumps to ~0.042 (a ~3.5× rate-of-change) — ABOVE the
+    // analyzer noise floor but BELOW the absolute dropMinLevel 0.06. The relative
+    // floor must let it fire; the absolute floor blocks it.
+    for (let i = 0; i < 80; i++) {
+      pc.store.micLowRaw = 0.042; pc.store.micFluxRaw = 0.3;
+      det.tick(now, tickMs / 1000); now += tickMs;
+      if (det.getStatus().state === 'SUSTAIN') break;
+    }
+    return broadcasts.filter(b => b.type === 'dropFired').length;
+  };
+  // Absolute-only floor (dropRelLevel 0): the quiet drop is blocked.
+  assert.equal(run(0), 0, 'absolute-only floor should MISS the quiet drop (regression baseline)');
+  // Relative floor on: the quiet drop fires.
+  assert.equal(run(0.5), 1, 'mic-gain-relative floor should fire the quiet drop');
 });
 
 // ── Kalman+NIS drop edge (the adopted default) ──────────────────────────
@@ -248,18 +387,24 @@ test('kalman edge does NOT fire on a step-DOWN (breakdown entrance)', () => {
 // ── Drop refractory + self-quiet ────────────────────────────────────────
 
 // Helper: drive the detector to BUILD, then deliver a drop edge. Returns
-// the number of dropFired events captured so far.
+// the wall clock after the drop. The riser keeps the SUB (micLowRaw) LOW while
+// FLUX climbs — a real EDM build (filter sweep / snare roll, no kick yet) — then
+// the slam jumps the sub sharply. This shape (low-sub riser → sharp slam) is
+// what produces a large WINDOWED ratio + a real buildScore RISE + novelty, so it
+// clears the shipped P0-1 music-shape gates (report 23). A riser that pre-raises
+// the sub would shrink the slam's windowed ratio below dropEnergyJump and the
+// drop would (correctly) not fire under the shipped tuning.
 function rampToDropAndCount(pc, det, startNow, broadcasts) {
   let now = startNow;
   const tickMs = 12;
-  // build
-  for (let i = 0; i < 150; i++) {
-    pc.store.micLowRaw = Math.min(0.6, 0.1 + i * 0.004);
-    pc.store.micFluxRaw = 0.5;
+  // build — flux climbs, sub stays low
+  for (let i = 0; i < 250; i++) {
+    pc.store.micLowRaw = 0.04;
+    pc.store.micFluxRaw = Math.min(0.7, 0.10 + 0.6 * (i / 249));
     pc.feed({ stemsBassRaw: 0.6, stemsDrumsRaw: 0.6 });
     det.tick(now, tickMs / 1000); now += tickMs;
   }
-  // drop
+  // drop — sharp sub slam
   for (let i = 0; i < 30; i++) {
     pc.store.micLowRaw = 0.95; pc.store.micFluxRaw = 0.4;
     pc.feed({ stemsBassRaw: 0.7, stemsDrumsRaw: 0.7 });
