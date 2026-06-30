@@ -97,60 +97,49 @@ pio device monitor           # open the serial console @ 115200
 Target a specific port with `pio run -t upload --upload-port COM4`
 (or `/dev/ttyACM0` on Linux/macOS).
 
-## Deploy (MAC-locked)
+## Deploy (registry-locked)
 
 `deploy.py` is the **canonical flash path**. It verifies the connected board's
-ESP32 MAC against the deploy-target MAC in `../secrets.yaml` (`device.mac`)
-**before** flashing, so you can never flash the wrong board by accident. A
-direct `pio run -t upload` **bypasses** this guard — prefer `deploy.py`.
+ESP32 MAC against an allowlist in a deployment registry **before** flashing, so
+you can never flash the wrong board by accident. A direct `pio run -t upload`
+**bypasses** this guard — prefer `deploy.py`.
 
-**1. Set the target MAC** in `../secrets.yaml` (gitignored — never committed):
+**1. Provide the env vars (once).** The deploy registry (the MAC allowlist) and
+the build secrets are **not** in this repo — they come from a private, external
+deployment source that exports the two environment variables `deploy.py` and the
+build read:
 
-```yaml
-device:
-  mac: "AA:BB:CC:DD:EE:FF"   # the board this firmware deploys to
-```
+- **`$BM26_DEPLOY_REGISTRY`** (or `$STOKER_DEPLOY_REGISTRY`) → the deploy registry (MAC allowlist)
+- **`$BM26_SECRETS`** (or `$STOKER_SECRETS`) → the WiFi/AP build secrets
 
-Read a board's MAC with `python -m esptool --port COM4 read-mac`, or let
-`--pair` write it for you (see below). `secrets.yaml.example` carries a
-placeholder so you know the key exists.
-
-**Shared secret across worktrees.** `secrets.yaml` is gitignored, so it is *not*
-shared between git worktrees. Keep **one** secret for every worktree/branch (WiFi
-creds + `device.mac`) in a folder outside the repo —
-**`~/workspace/BM26-Titanic-Secrets/`** — seeded from the committed template, and
-point the env var **`PANEL_SECRETS`** at it:
-
-```bash
-copy LookingGlass\secrets.yaml.example C:\Users\sina_\workspace\BM26-Titanic-Secrets\panel_secrets.yaml
-setx PANEL_SECRETS "C:\Users\sina_\workspace\BM26-Titanic-Secrets\panel_secrets.yaml"
-```
-
-Both `deploy.py` and the build-time `scripts/gen_config.py` use `$PANEL_SECRETS`
-when set (and fall back to the worktree-local `secrets.yaml` when it is not).
-Set it once and no worktree needs its own copy. (`setx` affects new shells/IDEs —
-restart yours after.)
+If those vars are not exported, the build and the deploy **fail loudly** — there
+is no local fallback. The registry's `target_allow` map decides which board MAC
+is allowed for each deploy **target**; the panel's target is **`looking_glass`**
+(the default), which allows the panel controller. To re-target a different
+physical board, register its MAC for the `looking_glass` target in the registry —
+there is no local `device.mac`. Read a board's MAC with
+`python -m esptool --port COM4 read-mac`.
 
 **2. Deploy:**
 
 ```bash
 cd LookingGlass/panel_firmware
 
-python deploy.py              # detect Espressif boards, verify MAC, then flash the match
-python deploy.py --list       # print expected MAC + connected boards (no flash)
-python deploy.py --pair       # store the single connected board's MAC in secrets.yaml, then flash
-python deploy.py --build-only # compile only (no MAC check, no upload)
-python deploy.py --port COM7  # force a port (still MAC-verified unless --force)
+python deploy.py              # detect Espressif boards, verify against the registry, then flash the allowed board
+python deploy.py --list       # print the target's allowed boards + connected boards (no flash)
+python deploy.py --build-only # compile only (no registry/MAC check, no upload)
+python deploy.py --target NAME # registry deploy target (default: looking_glass)
+python deploy.py --port COM7  # force a port (still registry-verified unless --force)
 python deploy.py --pick       # interactively choose a board to flash
-python deploy.py --force      # skip the MAC guard (emergency only; prints a loud warning)
+python deploy.py --force      # skip the registry/MAC guard (emergency only; prints a loud warning)
 ```
 
-Behavior: exactly one connected board matching `device.mac` is flashed
-automatically. **No match**, **no board**, or a **missing/empty `device.mac`**
-all fail loudly with a clear message — `deploy.py` never guesses. It reads each
-board's MAC via `python -m esptool --port <COM> read-mac` (esptool v5) and
-enumerates Espressif boards by USB VID `0x303A` (pyserial). PyYAML is optional;
-a built-in reader handles `device.mac` when it is not installed.
+Behavior: exactly one connected board allowed for the `looking_glass` target is
+flashed automatically. **No match**, **no board**, a **missing registry/env var**,
+or an **unknown target** all fail loudly with a clear message — `deploy.py` never
+guesses. It reads each board's MAC via `python -m esptool --port <COM> read-mac`
+(esptool v5) and enumerates Espressif boards by USB VID `0x303A` (pyserial).
+PyYAML is required to read the registry.
 
 ## What it does
 

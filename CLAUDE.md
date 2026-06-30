@@ -76,15 +76,15 @@ new work; file follow-ups there as `Backlog` cards.
   telemetry. Browser deps are vendored in `simulation/vendor/`.
 - **Panel firmware is flashed ONLY through its registry-locked deploy script.**
   Flash `LookingGlass/panel_firmware` exclusively via `python deploy.py` (run
-  from that directory) — **never** a raw `pio run -t upload`. `deploy.py` reads
-  the shared, private **BM26-Firmware-Deployment** registry
-  (`deploy_allowed_macs.yaml`, via `$BM26_DEPLOY_REGISTRY` /
-  `$STOKER_DEPLOY_REGISTRY`) and only flashes a board whose MAC is allowed for
-  the `looking_glass` target — refusing every other board. This is mandatory
-  because multiple ESP32s (the Stoker controllers) are often plugged in at once.
-  Build secrets (WiFi/AP) come from that repo's `secrets.yaml` via `$BM26_SECRETS`
-  / `$STOKER_SECRETS`; run its `setup_env.ps1` / `setup_env.sh` once. See
-  `.agent/01_skills/14_panel_firmware_ops.md`.
+  from that directory) — **never** a raw `pio run -t upload`. `deploy.py` reads a
+  deployment registry (a MAC allowlist) and only flashes a board whose MAC is
+  allowed for the `looking_glass` target — refusing every other board. This is
+  mandatory because multiple ESP32s (the Stoker controllers) are often plugged in
+  at once. The registry and the build secrets (WiFi/AP) are **not** stored in this
+  repo: they come from a private, external deployment source that exports
+  `$BM26_DEPLOY_REGISTRY` and `$BM26_SECRETS` (with `$STOKER_*` fallbacks). If
+  those env vars are not exported, the build and the deploy both **fail loudly** —
+  there is no local fallback. See `.agent/01_skills/14_panel_firmware_ops.md`.
 - Style guides: `.agent/00_gol/01_python_style.md`,
   `.agent/00_gol/02_nodejs_style.md` — read before writing code.
 

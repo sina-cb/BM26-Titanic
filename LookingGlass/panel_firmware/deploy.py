@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Registry-locked flasher for the LookingGlass control-panel firmware.
 
-This is the CANONICAL flash path. It reads the SHARED, private deployment
-registry (BM26-Firmware-Deployment/deploy_allowed_macs.yaml) and only flashes a
-board whose MAC is allowed for this firmware's deploy target, so you can never
-flash the wrong ESP32 (e.g. a Stoker fire controller on another COM port).
+This is the CANONICAL flash path. It reads a deployment registry (a MAC
+allowlist) and only flashes a board whose MAC is allowed for this firmware's
+deploy target, so you can never flash the wrong ESP32 (e.g. a fire controller on
+another COM port).
 
     python deploy.py                 # verify the board against the registry, then flash
     python deploy.py --list          # show the target's allowed boards + what's connected
@@ -14,10 +14,10 @@ flash the wrong ESP32 (e.g. a Stoker fire controller on another COM port).
     python deploy.py --pick          # interactively choose a connected board to flash
     python deploy.py --force         # skip the registry/MAC guard (emergency only)
 
-Sources of truth (the private BM26-Firmware-Deployment repo, exposed via its
-setup_env.ps1 / setup_env.sh):
-  $BM26_DEPLOY_REGISTRY (or $STOKER_DEPLOY_REGISTRY)  -> deploy_allowed_macs.yaml
-  $BM26_SECRETS         (or $STOKER_SECRETS)          -> secrets.yaml (build secrets)
+Sources of truth are provided by a private, external deployment source that
+exports two environment variables (this public repo keeps no local copy):
+  $BM26_DEPLOY_REGISTRY (or $STOKER_DEPLOY_REGISTRY)  -> the deploy registry (MAC allowlist)
+  $BM26_SECRETS         (or $STOKER_SECRETS)          -> the build-secrets file
 
 A direct `pio run -t upload` BYPASSES this guard — always deploy through this
 script. Fail-loud, no-fallback: a missing registry/env var, an unparseable
@@ -55,10 +55,10 @@ def warn(msg):
 
 
 # --------------------------------------------------------------------------- #
-#  Deployment registry (the BM26-Firmware-Deployment source of truth)
+#  Deployment registry (env-provided by a private deployment source)
 # --------------------------------------------------------------------------- #
 def resolve_registry_path():
-    """$BM26_DEPLOY_REGISTRY (or the Stoker-named var) -> the shared registry."""
+    """$BM26_DEPLOY_REGISTRY (or the $STOKER_ fallback) -> the deploy registry."""
     for var in ("BM26_DEPLOY_REGISTRY", "STOKER_DEPLOY_REGISTRY"):
         p = os.environ.get(var)
         if p:
@@ -66,9 +66,9 @@ def resolve_registry_path():
                 fail("%s is set to %r but no file exists there." % (var, p))
             return os.path.abspath(p)
     fail(
-        "deployment registry not found. Set $BM26_DEPLOY_REGISTRY (or\n"
-        "  $STOKER_DEPLOY_REGISTRY) to the BM26-Firmware-Deployment/\n"
-        "  deploy_allowed_macs.yaml — run that repo's setup_env.ps1 / setup_env.sh."
+        "deployment registry not found. Export $BM26_DEPLOY_REGISTRY (or the\n"
+        "  $STOKER_DEPLOY_REGISTRY fallback) so it points at the deploy registry.\n"
+        "  It is provided by your private deployment source — this repo has no fallback."
     )
 
 
@@ -311,7 +311,7 @@ def main():
             print()
             print_table([{"port": args.port, "desc": "", "mac": mac}], allowed, blocked)
             fail("board on %s has MAC %s, NOT allowed for target %r.\n"
-                 "  -> use the right --target, register the board in BM26-Firmware-Deployment,\n"
+                 "  -> use the right --target, register the board in the deploy registry,\n"
                  "     or override for THIS flash with --force." % (args.port, mac, args.target))
         info("MAC match on %s (%s = %s)" % (args.port, mac, allowed[mac]))
         run_pio_build()
@@ -356,7 +356,7 @@ def main():
         return
 
     fail("no connected board matches an allowed MAC for target %r.\n"
-         "  -> check the board / the --target, or register it in BM26-Firmware-Deployment." % args.target)
+         "  -> check the board / the --target, or register it in the deploy registry." % args.target)
 
 
 if __name__ == "__main__":

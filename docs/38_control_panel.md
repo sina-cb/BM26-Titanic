@@ -5,7 +5,7 @@
 > serial events, status LED). The **on-board WiFi telemetry portal &
 > build-time config/secrets layer** in §6 is **also built and verified on
 > hardware** (SoftAP + station + captive portal + live telemetry page, with
-> WiFi/AP settings baked from `config.yaml` / `secrets.yaml`). The button-event
+> WiFi/AP settings baked from `config.yaml` / the build-secrets file). The button-event
 > **transport** to the host and the `panel_bridge` host service in §7 are
 > **designed but not yet built** — read the **Built vs Planned** callout in §2
 > before assuming anything is wired up. Note the portal is an
@@ -102,7 +102,7 @@ podium and a handful of buttons.
 > machine, prints structured event lines over **native USB Serial/JTAG**, *and*
 > runs an **on-board WiFi telemetry portal** (SoftAP + station + captive portal
 > + live telemetry page/JSON, §6), with WiFi/AP/web settings baked at build
-> time from `config.yaml` / `secrets.yaml`. All of that is working on the board.
+> time from `config.yaml` / the build-secrets file. All of that is working on the board.
 >
 > **Built, but observability only — not the event transport:** the WiFi portal
 > is a **maintenance/telemetry** channel. It exposes panel state (uptime, heap,
@@ -192,13 +192,11 @@ few more:
 
 ```
 LookingGlass/
-├── secrets.yaml            # WiFi/AP creds + device.mac (GITIGNORED; shareable via $PANEL_SECRETS)
-├── secrets.yaml.example    # template for secrets.yaml (committed)
 └── panel_firmware/
     ├── platformio.ini      # PlatformIO env + `extra_scripts = pre:scripts/gen_config.py`
     ├── config.yaml         # ALL tunables (committed) — single source of truth
     ├── scripts/
-    │   └── gen_config.py   # pre-build hook: bakes config.yaml + secrets.yaml → net_config.h
+    │   └── gen_config.py   # pre-build hook: bakes config.yaml + the build-secrets file (from $BM26_SECRETS) → net_config.h
     ├── include/
     │   ├── config.h        # button -> GPIO map (BUTTON_TABLE) + reserved pins (structural)
     │   └── generated/
@@ -440,8 +438,8 @@ link (§7).
 
 Implementation: `src/net_portal.{h,cpp}` (the network task + web server),
 `src/telemetry.{h,cpp}` (cross-core shared state), and the build-time config
-layer (`../config.yaml`, `../secrets.yaml`, `scripts/gen_config.py` →
-`include/generated/net_config.h`).
+layer (`config.yaml`, the build-secrets file via
+`$BM26_SECRETS`, `scripts/gen_config.py` → `include/generated/net_config.h`).
 
 ### 6.1 Dual-core design (portal on core 0, buttons on core 1)
 
@@ -473,14 +471,15 @@ The radio runs in `WIFI_AP_STA` mode — it is both an access point **and** a
 station at once:
 
 - **SoftAP** — `LookingGlass-Panel` (from `ap.ssid` in `config.yaml`).
-  **Open by default**; set `ap.password` in `secrets.yaml` (8+ chars) to make
-  it WPA2. The portal page/JSON label the AP security as `open` or `WPA2`
+  **Open by default**; set `ap_pass` in the build-secrets file (8+ chars) to
+  make it WPA2. The portal page/JSON label the AP security as `open` or `WPA2`
   accordingly. The AP IP is `192.168.4.1`.
-- **STA** — joins an existing network (the station SSID + password come from
-  `secrets.yaml`). Auto-reconnect is on.
+- **STA** — joins an existing network (the station SSID + password come from the
+  build-secrets file, flat keys `wifi_ssid` / `wifi_pass`). Auto-reconnect is on.
 
-> Credentials live **only** in the gitignored `secrets.yaml` (see §6.5). The
-> station SSID and its password are never written into any committed file.
+> Credentials live **only** in the build-secrets file
+> (resolved via `$BM26_SECRETS`, see §6.6). The station SSID and its password are
+> never written into any committed file in this repo.
 
 ### 6.3 Captive portal
 
@@ -530,44 +529,42 @@ stays in sync with `config.h` with zero duplication.
 WiFi/AP/web/LAN settings are **baked into the firmware at build time** — there
 is no runtime config UI. Two YAML files feed one generated header:
 
-| File | Committed? | Contents |
+| File | Committed here? | Contents |
 |---|---|---|
 | `panel_firmware/config.yaml` | **Yes** (non-secret) | **ALL tunables** — `firmware.*`, `buttons.*`, `lamp.*`, `status_led.*`, plus network: `device.hostname`, `ap.{enabled,ssid,channel,hidden}`, `wifi.enabled`, `lan.*` (planned Ethernet, §7), `web.{enabled,port,captive_portal}` |
-| `LookingGlass/secrets.yaml` | **No — gitignored** | `wifi.ssid` / `wifi.password` (station creds), `ap.password` (AP WPA2; empty = open), `device.mac` (deploy-target board MAC used by `deploy.py`, §6.8) |
-| `LookingGlass/secrets.yaml.example` | **Yes** | template to copy → `secrets.yaml` |
+| build-secrets file (in a private, external deployment source, via `$BM26_SECRETS`) | **No — lives in your private deployment source** | flat keys: `wifi_ssid` / `wifi_pass` (station creds), `ap_pass` (AP WPA2; empty = open). The deploy-target board MAC is **not** here — it's in the deploy registry (a MAC allowlist) used by `deploy.py` (see the Deploy section in `panel_firmware/README.md`) |
 
 `scripts/gen_config.py` is a **PlatformIO `pre:` build hook** (wired via
 `extra_scripts = pre:scripts/gen_config.py` in `platformio.ini`). On every
-build it parses both YAMLs with a tiny dependency-free parser and emits
-`include/generated/net_config.h`, a set of `CFG_*` `#define`s
-(`CFG_AP_SSID`, `CFG_WIFI_SSID`, `CFG_WEB_PORT`, …) that `net_portal.cpp`
-consumes.
+build it parses `config.yaml` plus the build-secrets file resolved via `$BM26_SECRETS`
+with a tiny dependency-free parser and emits `include/generated/net_config.h`, a
+set of `CFG_*` `#define`s (`CFG_AP_SSID`, `CFG_WIFI_SSID`, `CFG_WEB_PORT`, …)
+that `net_portal.cpp` consumes.
 
 It follows the project's **fail-loud, no-fallback** rule: a **missing
-`secrets.yaml`** (or a missing required key) **aborts the build** with a clear
-message pointing at `secrets.yaml.example` — it never invents defaults for
+`$BM26_SECRETS` / build-secrets file** (or a missing required key) **aborts the
+build** with a clear message — there is no local fallback file. Ensure
+`$BM26_DEPLOY_REGISTRY` and `$BM26_SECRETS` are exported in your environment
+(your private deployment source provides them). It never invents defaults for
 credentials. Its console summary prints the AP/STA SSIDs and web port but
 **never prints any password value**.
 
 > [!IMPORTANT]
-> **Public repo — no real credentials in git.** `.gitignore` ignores
-> `LookingGlass/secrets.yaml` and the generated
-> `LookingGlass/panel_firmware/include/generated/` directory, while keeping
-> `secrets.yaml.example` tracked. The real WiFi password lives **only** in the
-> local, gitignored `secrets.yaml`. Never write it into any committed file.
+> **Public repo — no real credentials in git.** No build-secrets file lives in this
+> checkout. The real WiFi/AP credentials live **only** in a private, external
+> deployment source, resolved at build time via
+> `$BM26_SECRETS`. `.gitignore` also ignores the generated
+> `LookingGlass/panel_firmware/include/generated/` directory. Never write a real
+> credential into any committed file.
 
-**Shared secret across worktrees.** Because `secrets.yaml` is gitignored, it is
-not shared between git worktrees — each would otherwise need its own copy. Keep a
-**single** secret for every worktree/branch in a folder outside the repo
-(`~/workspace/BM26-Titanic-Secrets/`), seeded from the committed
-`secrets.yaml.example`, and set the env var **`PANEL_SECRETS`** to it; both
-`gen_config.py` (build) and `deploy.py` (flash) use it when set and fall back to
-the worktree-local `secrets.yaml` when it is not:
-
-```bash
-copy LookingGlass\secrets.yaml.example C:\Users\sina_\workspace\BM26-Titanic-Secrets\panel_secrets.yaml
-setx PANEL_SECRETS "C:\Users\sina_\workspace\BM26-Titanic-Secrets\panel_secrets.yaml"
-```
+**Shared across worktrees.** Because the secrets and the deploy registry live in
+a private, external deployment source (outside this checkout), they are
+automatically shared across every worktree and branch — no per-worktree copy is
+needed. Ensure `$BM26_DEPLOY_REGISTRY` (→ the deploy registry, a MAC allowlist)
+and `$BM26_SECRETS` (→ the build-secrets file) are exported in your environment
+(your private deployment source provides them); both `gen_config.py` (build) and
+`deploy.py` (flash) read them. (The Stoker-named `$STOKER_SECRETS` /
+`$STOKER_DEPLOY_REGISTRY` are accepted as fallbacks.)
 
 ### 6.7 Serial diagnostics
 

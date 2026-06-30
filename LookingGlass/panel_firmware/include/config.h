@@ -39,7 +39,7 @@ enum ButtonId : uint8_t {
 };
 
 // All tunables (FW_*, SERIAL_*, DEBOUNCE_MS, BUTTON_LAMP_*, STATUS_LED_*,
-// CFG_* network) are baked from config.yaml + secrets.yaml at build time.
+// CFG_* network) are baked from config.yaml + the env-provided build secrets.
 // BUTTON_LAMP_SOURCE expands to a BTN_* id, so this include MUST follow the
 // ButtonId enum above.
 #include "generated/net_config.h"

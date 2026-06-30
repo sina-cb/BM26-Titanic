@@ -95,9 +95,9 @@ env/
 .vscode-test/
 
 # LookingGlass control panel — build-time generated config (gitignored).
-# Secrets (WiFi/AP creds) live in the private BM26-Firmware-Deployment repo and
-# are resolved via $BM26_SECRETS / $STOKER_SECRETS — NOT in this public repo.
-# The generated/ header is baked from config.yaml + that secrets file at build time.
+# Secrets (WiFi/AP creds) come from a private, external deployment source via
+# $BM26_SECRETS / $STOKER_SECRETS — NOT in this public repo. The generated/
+# header is baked from config.yaml + those env-provided secrets at build time.
 LookingGlass/panel_firmware/include/generated/
 
 # Node caches & logs

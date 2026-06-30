@@ -1,10 +1,11 @@
 # =============================================================
 #  LookingGlass control panel — firmware configuration (NON-SECRET)
 #  Single source of truth for all build-time tunables (committed).
-#  Credentials (WiFi/AP passwords) live in the private BM26-Firmware-Deployment
-#  repo's secrets.yaml (flat keys: wifi_ssid / wifi_pass / ap_pass), resolved via
-#  $BM26_SECRETS (or $STOKER_SECRETS). Read at build time by scripts/gen_config.py,
-#  which bakes config.yaml + those secrets into include/generated/net_config.h.
+#  Credentials (WiFi/AP passwords) are NOT here — they come from a private,
+#  external deployment source that exports the build-secrets file via
+#  $BM26_SECRETS (or the $STOKER_SECRETS fallback), using flat keys
+#  wifi_ssid / wifi_pass / ap_pass. scripts/gen_config.py reads this file plus
+#  those secrets at build time and bakes them into include/generated/net_config.h.
 #
 #  NOTE: the button -> GPIO map and the reserved-pin list stay in
 #  include/config.h (BUTTON_TABLE) — they are structural / hardware-fixed.
@@ -46,7 +47,7 @@ status_led:
   refresh_ms: 16                 # ~60 Hz redraw cap
 
 # =============================================================
-#  Network (non-secret; SSID passwords live in secrets.yaml)
+#  Network (non-secret; credentials come from the env-provided build secrets)
 # =============================================================
 device:
   hostname: lookingglass-panel
@@ -57,10 +58,13 @@ ap:
   ssid: LookingGlass-Panel
   channel: 6
   hidden: false
-  # ap password -> secrets.yaml (ap.password). Empty there = open network.
+  open: false                    # false: WPA2, ap_pass REQUIRED in the build
+                                 # secrets (8+ chars). true: open AP, no password.
+  # ap password -> build secrets, flat key `ap_pass` (only when open: false).
 
 # Station — an existing WiFi network the panel also joins (optional).
-# ssid + password -> secrets.yaml (wifi.ssid / wifi.password).
+# When enabled, ssid + password are REQUIRED in the build secrets as flat keys
+# `wifi_ssid` / `wifi_pass` (a missing or blank value fails the build).
 wifi:
   enabled: true
 

@@ -10,7 +10,7 @@
 #include "button.h"
 #include "telemetry.h"
 #include "log_bus.h"
-#include "generated/net_config.h"   // baked from config.yaml + secrets.yaml
+#include "generated/net_config.h"   // baked from config.yaml + env-provided secrets
 
 // Button name/GPIO tables, built straight from BUTTON_TABLE so the portal
 // stays in sync with config.h with zero duplication.
