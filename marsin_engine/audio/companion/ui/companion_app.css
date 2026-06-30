@@ -1,8 +1,68 @@
-/* companion_app.css — TouchDesigner-flavoured dark UI. No web fonts (offline). */
-:root{
+/* companion_app.css — TouchDesigner-flavoured UI. No web fonts (offline).
+ *
+ * THEMES (TASK 2): the companion now supports the SAME 5 themes CaptainPad
+ * exposes (light, dark, midnight, sunset, gruvbox — see
+ * CaptainPad/constants/theme.ts). Each [data-theme="…"] block maps that
+ * theme's CaptainPad Palette tokens onto the companion's existing CSS vars so
+ * EVERY component restyles from one place. The picker (companion_app.js) sets
+ * data-theme on <html>; default is gruvbox.
+ *
+ *   CaptainPad token            → companion var
+ *   ─────────────────────────────────────────────
+ *   background                  → --bg
+ *   surfaceContainerLow         → --panel
+ *   surfaceContainerLowest      → --panel2
+ *   surfaceContainerHigh        → --raised
+ *   ghostBorder (→ solid)       → --border
+ *   text                        → --text
+ *   secondary / icon            → --muted
+ *   primary                     → --accent
+ *   tertiary                    → --ok
+ *   error                       → --err
+ *
+ * The original companion dark look is preserved verbatim as the `dark` theme
+ * (the values below) so nothing regresses; the other four are faithful ports
+ * of their CaptainPad counterparts. :root carries the gruvbox values (the
+ * default theme) so a missing data-theme still renders (it never goes unstyled).
+ */
+/* --on-accent: the foreground used on top of --accent (active seg-btn, .primary,
+ * .cal-apply). It is a PER-THEME token because the accents differ in luminance:
+ * the dark/amber/yellow/blue accents are light enough that near-black text
+ * (#1a1205) clears WCAG AA, but the LIGHT theme's teal accent (#006875) at 2.86:1
+ * against #1a1205 FAILS AA — there white (#ffffff) is the only AA-passing pair.
+ * No fallback default: every theme (and :root) defines it so a missing token is a
+ * visible breakage, not a silent wrong color (codex P0). */
+[data-theme="dark"]{
   --bg:#0f1216; --panel:#171b22; --panel2:#11141a; --raised:#1e242d;
   --border:#272d37; --text:#e8edf3; --muted:#8a95a4; --accent:#f0a23b;
-  --ok:#34d3b5; --err:#ff5d6c;
+  --ok:#34d3b5; --err:#ff5d6c; --on-accent:#1a1205;
+}
+/* LIGHT — CaptainPad "Luminance Command" daytime palette. */
+[data-theme="light"]{
+  --bg:#f8f9fa; --panel:#f3f4f5; --panel2:#ffffff; --raised:#e7e8e9;
+  --border:#bac9cc; --text:#191c1d; --muted:#466270; --accent:#006875;
+  --ok:#1b9e77; --err:#ba1a1a; --on-accent:#ffffff;
+}
+/* MIDNIGHT — deep blue-black, cool blue accent. */
+[data-theme="midnight"]{
+  --bg:#06080c; --panel:#0d1320; --panel2:#04060a; --raised:#152030;
+  --border:#27313f; --text:#d4dde8; --muted:#7a8a9e; --accent:#5cc0ff;
+  --ok:#3ad4a6; --err:#ff7a82; --on-accent:#1a1205;
+}
+/* SUNSET — warm amber low-light. */
+[data-theme="sunset"]{
+  --bg:#1a0f0a; --panel:#251812; --panel2:#100905; --raised:#2e2017;
+  --border:#3e2e1a; --text:#f4e8d8; --muted:#b89478; --accent:#ffb84a;
+  --ok:#9acb87; --err:#ff8a6a; --on-accent:#1a1205;
+}
+/* GRUVBOX — retro warm, mustard-yellow accent. The DEFAULT theme: :root holds
+   it so the very first paint (before the JS theme picker runs) is gruvbox, with
+   no flash of another palette. The JS default (DEFAULT_THEME) matches. */
+:root,
+[data-theme="gruvbox"]{
+  --bg:#282828; --panel:#32302f; --panel2:#1d2021; --raised:#3c3836;
+  --border:#504945; --text:#ebdbb2; --muted:#a89984; --accent:#fabd2f;
+  --ok:#b8bb26; --err:#fb4934; --on-accent:#1a1205;
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
@@ -19,7 +79,7 @@ body{background:var(--bg);color:var(--text);
 .seg-btn{background:var(--panel);color:var(--muted);border:none;border-right:1px solid var(--border);
   padding:5px 14px;font:inherit;cursor:pointer}
 .seg-btn:last-child{border-right:none}
-.seg-btn.active{background:var(--accent);color:#1a1205;font-weight:700}
+.seg-btn.active{background:var(--accent);color:var(--on-accent);font-weight:700}
 .file-wrap{display:none;align-items:center;gap:6px}
 .file-wrap.show{display:flex}
 .file-input{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;
@@ -49,7 +109,7 @@ body{background:var(--bg);color:var(--text);
 @keyframes pulse{50%{opacity:.5}}
 .cal-res{color:var(--muted);font-size:11px;display:flex;align-items:center;gap:8px}
 .cal-res b{color:var(--text)}
-.cal-apply{background:var(--accent);color:#1a1205;border:none;border-radius:5px;padding:3px 10px;font:inherit;font-weight:700;cursor:pointer}
+.cal-apply{background:var(--accent);color:var(--on-accent);border:none;border-radius:5px;padding:3px 10px;font:inherit;font-weight:700;cursor:pointer}
 .mic-wrap{display:none;align-items:center;gap:6px}
 .mic-wrap.show{display:flex}
 .device-select{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:5px;
@@ -74,8 +134,8 @@ body{background:var(--bg);color:var(--text);
 .d-lab{color:var(--muted);font-size:10px}
 .d-big{font-weight:700;font-size:20px}
 .beat-dot{color:var(--ok);opacity:0;font-size:12px}
-.party-pill{font-weight:700;letter-spacing:1px;padding:4px 11px;border-radius:7px;background:#22303a;color:#8aa;font-size:11px}
-.party-pill.on{background:rgba(240,162,59,.18);color:var(--accent)}
+.party-pill{font-weight:700;letter-spacing:1px;padding:4px 11px;border-radius:7px;background:var(--raised);color:var(--muted);font-size:11px}
+.party-pill.on{background:color-mix(in srgb, var(--accent) 18%, transparent);color:var(--accent)}
 .cue-flash{float:right;margin-left:8px;color:var(--accent);font-weight:700;font-size:10px;opacity:0;transition:opacity .1s}
 .lr-card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 12px}
 .lr-title{color:var(--muted);letter-spacing:1.5px;font-size:10.5px;margin-bottom:8px}
@@ -87,9 +147,9 @@ body{background:var(--bg);color:var(--text);
 .dom-e{text-align:right;color:var(--muted)}
 .struct-row{display:flex;align-items:center;gap:14px}
 .state-pill{font-weight:700;letter-spacing:1px;padding:5px 12px;border-radius:7px;min-width:78px;text-align:center}
-.s-thin{background:#22303a;color:#8aa}
-.s-build{background:#3a3320;color:var(--accent)}
-.s-sustain{background:#1f3a33;color:var(--ok)}
+.s-thin{background:var(--raised);color:var(--muted)}
+.s-build{background:color-mix(in srgb, var(--accent) 22%, var(--panel2));color:var(--accent)}
+.s-sustain{background:color-mix(in srgb, var(--ok) 22%, var(--panel2));color:var(--ok)}
 .sbars{flex:1;display:flex;flex-direction:column;gap:5px}
 .sbar{display:grid;grid-template-columns:48px 1fr;align-items:center;gap:8px}
 .sbar span{color:var(--muted);font-size:10px}
@@ -105,9 +165,9 @@ body{background:var(--bg);color:var(--text);
 .top-right{display:flex;align-items:center;gap:12px}
 .flash{font-size:11px;min-width:60px;text-align:right}
 .status{padding:3px 10px;border-radius:6px;border:1px solid var(--border);color:var(--muted)}
-.status.ok{color:var(--ok);border-color:var(--ok);background:rgba(52,211,181,.08)}
-.status.err{color:var(--err);border-color:var(--err);background:rgba(255,93,108,.08)}
-.primary{background:var(--accent);color:#1a1205;border:none;border-radius:6px;
+.status.ok{color:var(--ok);border-color:var(--ok);background:color-mix(in srgb, var(--ok) 8%, transparent)}
+.status.err{color:var(--err);border-color:var(--err);background:color-mix(in srgb, var(--err) 8%, transparent)}
+.primary{background:var(--accent);color:var(--on-accent);border:none;border-radius:6px;
   padding:6px 14px;font:inherit;font-weight:700;cursor:pointer}
 .primary:hover{filter:brightness(1.08)}
 
@@ -119,44 +179,50 @@ body{background:var(--bg);color:var(--text);
 /* 5-col grid: name · mini-scope · value · remove(×). The value column is
    widened to 48px and right-padded so the "0.00" never clips the edge
    (sidebar number glitch fix, 2026-06-17). */
-.sig-row{display:grid;grid-template-columns:40px 1fr 48px 24px;align-items:center;gap:6px;
+/* 2-ROW layout: the full signal NAME gets row 1 to itself (single line, no
+   wrap) alongside the value + remove button; the mini-scope PLOT drops to row 2
+   spanning the full width. This shows the whole name on one line and only the
+   plot moves down. (Was a cramped single-row grid that truncated names.) */
+.sig-row{display:grid;grid-template-columns:1fr 46px 22px;align-items:center;column-gap:6px;row-gap:5px;
   background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--acc);
   border-radius:8px;padding:7px 6px 7px 9px;color:var(--text);font:inherit;cursor:pointer;text-align:left}
 .sig-row.active{background:var(--raised);box-shadow:0 0 0 1px var(--acc) inset}
-.sig-name{font-weight:700;color:var(--acc);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sig-name{grid-column:1;grid-row:1;font-weight:700;color:var(--acc);min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* The mini-trace cell must be allowed to SHRINK below the canvas's intrinsic
    110px width (grid items default to min-width:auto, which would let the canvas
    push the row wider and shove the remove [×] button past the sidebar edge).
    min-width:0 + a fluid canvas keeps every column inside the row. */
-.sig-mini{min-width:0;overflow:hidden}
+.sig-mini{grid-column:1 / -1;grid-row:2;min-width:0;overflow:hidden}
 .sig-mini canvas{display:block;width:100%;height:auto}
-.sig-val{text-align:right;color:var(--muted);padding-right:4px;font-variant-numeric:tabular-nums;
-  font-size:11px;white-space:nowrap}
+.sig-val{grid-column:2;grid-row:1;text-align:right;color:var(--muted);padding-right:4px;
+  font-variant-numeric:tabular-nums;font-size:11px;white-space:nowrap}
 .sig-type{display:block;color:var(--muted);font-size:8px;letter-spacing:.5px;margin-top:1px}
 /* Remove control — a clearly themed framed button, the destructive twin of the
    `[+]` add button (.sig-add). Red-tinted so the operator can't miss it. */
-.sig-x{background:rgba(255,93,108,0.10);border:1px solid rgba(255,93,108,0.35);
-  color:#ff5d6c;cursor:pointer;font:inherit;font-weight:700;font-size:13px;
+.sig-x{grid-column:3;grid-row:1;background:color-mix(in srgb, var(--err) 10%, transparent);
+  border:1px solid color-mix(in srgb, var(--err) 35%, transparent);
+  color:var(--err);cursor:pointer;font:inherit;font-weight:700;font-size:13px;
   width:22px;height:22px;padding:0;line-height:1;border-radius:6px}
-.sig-x:hover{color:#fff;background:#ff5d6c;border-color:#ff5d6c}
+.sig-x:hover{color:var(--bg);background:var(--err);border-color:var(--err)}
 .sigs-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
 .sig-add{background:var(--raised);border:1px solid var(--border);color:var(--accent);cursor:pointer;
   font:inherit;font-weight:700;font-size:13px;width:24px;height:24px;border-radius:6px;line-height:1}
 .sig-add:hover{filter:brightness(1.2)}
-.input-row{--acc:#34d3b5;grid-template-columns:1fr;margin-bottom:8px}
-.input-row .sig-name{color:#34d3b5}
+.input-row{--acc:var(--ok);grid-template-columns:1fr;margin-bottom:8px}
+.input-row .sig-name{color:var(--ok)}
 .sig-sub{display:block;color:var(--muted);font-size:9px;margin-top:2px}
 .input-ctrls{display:flex;flex-direction:column;gap:16px;max-width:440px}
 .views-label{margin-top:14px}
-.view-row{--acc:#f0a23b;grid-template-columns:1fr}
-.view-row .sig-name{color:#cdd6e0}
+.view-row{--acc:var(--accent);grid-template-columns:1fr}
+.view-row .sig-name{color:var(--text)}
 .view-row.active .sig-name{color:var(--accent)}
 
 .stage{display:flex;flex-direction:column;min-width:0;padding:14px;gap:14px;overflow:auto}
 .viz-row{display:flex;flex-direction:column;gap:10px}
 .viz-panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px}
 .viz-title{color:var(--muted);letter-spacing:1.5px;font-size:10.5px;margin-bottom:7px}
-.viz-sub{color:#566;letter-spacing:0;font-size:10px;margin-left:6px}
+.viz-sub{color:var(--muted);letter-spacing:0;font-size:10px;margin-left:6px}
 #spectrum{display:block;width:100%;height:150px;background:var(--panel2);border:1px solid var(--border);border-radius:8px}
 #wave{display:block;width:100%;height:84px;background:var(--panel2);border:1px solid var(--border);border-radius:8px}
 .trace-panel{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px}
@@ -168,9 +234,9 @@ body{background:var(--bg);color:var(--text);
 .ro-v.big{font-size:28px}
 .ro-legend{color:var(--muted);font-size:10px;margin-top:6px}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:middle}
-.dot.ghost{background:#888;opacity:.5}.dot.solid{background:var(--accent)}
-/* Dom freq+energy pair: the energy overlay legend swatch (dashed white). */
-.dot.energy{width:14px;height:0;border-radius:0;border-top:2px dashed rgba(255,255,255,.85)}
+.dot.ghost{background:var(--muted);opacity:.5}.dot.solid{background:var(--accent)}
+/* Dom freq+energy pair: the energy overlay legend swatch (dashed). */
+.dot.energy{width:14px;height:0;border-radius:0;border-top:2px dashed color-mix(in srgb, var(--text) 85%, transparent)}
 
 .lower{display:grid;grid-template-columns:230px 1fr;gap:14px;align-items:start}
 /* The TEST SOURCE panel only shows in test mode (syncSourcePanel hides it via
@@ -186,11 +252,15 @@ body{background:var(--bg);color:var(--text);
 .source{display:flex;flex-direction:column;gap:10px}
 .knob-head{display:flex;justify-content:space-between;color:var(--muted);font-size:10.5px;margin-bottom:3px}
 .knob-head span:last-child{color:var(--text)}
+.synth-select{display:flex;flex-direction:column;gap:4px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.synth-head{color:var(--muted);font-size:10.5px;letter-spacing:.04em}
+.synth-dd{width:100%;background:var(--raised);color:var(--text);border:1px solid var(--border);
+  border-radius:5px;padding:5px;font:inherit}
 input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:5px;border-radius:3px;
   background:var(--raised);outline:none}
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;
-  background:var(--accent);cursor:pointer;border:2px solid #0c0f13}
-input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid #0c0f13}
+  background:var(--accent);cursor:pointer;border:2px solid var(--bg)}
+input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--bg)}
 
 /* Ops render LEFT-TO-RIGHT as a horizontal row (source → op → … → osc_out),
    wrapping only when the row overflows. Each op card is compact. */
@@ -198,12 +268,12 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .op{background:var(--panel2);border:1px solid var(--border);border-top:3px solid var(--acc);
   border-radius:8px;padding:9px;min-width:128px;max-width:200px}
 /* The source head (where a designed signal's raw input enters the row). */
-.op.op-source{border-top-color:#34d3b5;min-width:96px}
-.op.op-source .op-type{color:#34d3b5}
+.op.op-source{border-top-color:var(--ok);min-width:96px}
+.op.op-source .op-type{color:var(--ok)}
 .op-src-sub{color:var(--muted);font-size:9px;margin-top:4px}
 /* The terminal OSC output tap reads visually distinct (the output). */
-.op.osc-out{border-top-color:#34d3b5;background:rgba(52,211,181,0.06)}
-.op.osc-out .op-type{color:#34d3b5}
+.op.osc-out{border-top-color:var(--ok);background:color-mix(in srgb, var(--ok) 6%, transparent)}
+.op.osc-out .op-type{color:var(--ok)}
 .op-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
 .op-type{font-weight:700;letter-spacing:.5px;color:var(--acc)}
 .op-tag{color:var(--muted);font-weight:400;font-size:9.5px;letter-spacing:0}
@@ -234,6 +304,10 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 #export-text{width:100%;height:340px;background:var(--panel2);color:var(--text);border:1px solid var(--border);
   border-radius:8px;padding:10px;font:inherit;resize:vertical}
 .modal-foot{margin-top:10px;text-align:right}
+.modal-foot .op-btn{margin-right:8px}
+/* themed confirm dialog (replaces native window.confirm) */
+.confirm-box{width:min(420px,92vw)}
+.confirm-msg{color:var(--text);font-size:13px;line-height:1.5;padding:4px 2px 2px}
 .add-box{width:min(440px,92vw)}
 .add-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
 .add-card{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;
@@ -263,3 +337,227 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
   border-radius:8px;padding:7px 9px;cursor:pointer;font:inherit;opacity:.55}
 .view-sig-card:hover{background:var(--raised)}
 .view-sig-card.on{opacity:1;box-shadow:0 0 0 1px var(--src-accent,#9aa) inset}
+
+/* ── top-bar nav (DESIGN / OSC OUT) + theme picker ──────────────────────────── */
+.nav-seg{display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden}
+.nav-btn{background:var(--panel2);color:var(--muted);border:none;border-right:1px solid var(--border);
+  padding:5px 13px;font:inherit;font-weight:700;letter-spacing:1px;font-size:10.5px;cursor:pointer}
+.nav-btn:last-child{border-right:none}
+.nav-btn.active{background:var(--accent);color:var(--bg)}
+.theme-pick{display:flex;align-items:center;gap:6px}
+.theme-lab{color:var(--muted);letter-spacing:1px;font-size:10px}
+.theme-select{background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:6px;
+  padding:5px 8px;font:inherit;font-size:11px;cursor:pointer}
+
+/* ── DERIVED panel: note swatch + genre readout ─────────────────────────────── */
+.note-swatch{display:inline-block;width:13px;height:13px;border-radius:3px;background:var(--raised);
+  border:1px solid var(--border);align-self:center}
+.d-genre{font-weight:700;font-size:13px;color:var(--text);text-transform:uppercase;letter-spacing:.5px}
+.d-conf{color:var(--muted);font-size:10px}
+/* The note color-change + pattern-switch cues must be VISIBLE when they pulse
+   (operator: the feedback wasn't visible). A short bright flash on the label. */
+.cue-flash.lit{opacity:1}
+.cue-flash.err{color:var(--err)}
+
+/* ── NEW derived row: BUILD · STRUCTURE · ONSETS (Round-2/Wave-D signals) ─────
+   Every color is a theme var so all 5 themes restyle these together. Continuous
+   keys (riser, climax, phrase) meter; pulse keys (countdown, boundary, track
+   change, onsets, chest-hit) flash. */
+.derived2{margin-top:12px}
+.derived2 .d-lab{text-transform:uppercase;letter-spacing:.5px}
+.d-mid{font-weight:700;font-size:15px;color:var(--text)}
+
+/* BUILD card */
+.build-body{display:flex;flex-direction:column;gap:9px}
+.build-stats{display:flex;gap:18px}
+.sbar.riser i{background:var(--accent)}
+.sbar.climax i{background:var(--ok)}
+
+/* STRUCTURE2 card: phrase ring + climax meter + silence pill */
+.struct2-body{display:flex;align-items:center;gap:16px}
+.phrase-ring-wrap{display:flex;flex-direction:column;align-items:center;gap:3px}
+.phrase-ring{display:block}
+.phrase-ring .pr-track{fill:none;stroke:var(--raised);stroke-width:4}
+.phrase-ring .pr-fill{fill:none;stroke:var(--accent);stroke-width:4;stroke-linecap:round;
+  /* r=16 → circumference ≈ 100.53; dasharray full, offset set live in JS */
+  stroke-dasharray:100.53;stroke-dashoffset:100.53;transition:stroke-dashoffset .08s linear}
+.struct2-body .sbar{flex:1}
+.silence-pill{align-self:center}
+.silence-pill.on{background:color-mix(in srgb, var(--err) 18%, transparent);color:var(--err)}
+
+/* ONSETS card: 3 band dots + a chest-hit thump */
+.onsets-body{display:flex;align-items:center;gap:18px}
+.onset-item,.chest-item{display:flex;flex-direction:column;align-items:center;gap:3px}
+.onset-dot{font-size:20px;color:var(--raised);transition:color .04s,text-shadow .04s}
+.onset-dot.lit{color:var(--accent);text-shadow:0 0 8px var(--accent)}
+.onset-dot.high.lit{color:var(--ok);text-shadow:0 0 8px var(--ok)}
+.chest-thump{font-size:24px;color:var(--raised);transform:scale(1);
+  transition:color .04s,transform .06s,text-shadow .04s}
+.chest-thump.lit{color:var(--err);text-shadow:0 0 12px var(--err);transform:scale(1.35)}
+
+/* ── OSC OUT accounting page (TASK 1) ───────────────────────────────────────── */
+.osc-page{flex:1;min-height:0;overflow:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px}
+.osc-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.osc-title{font-weight:700;letter-spacing:1.5px;font-size:13px;color:var(--text)}
+.osc-stats{display:flex;gap:18px;flex-wrap:wrap}
+.osc-stat{display:flex;flex-direction:column;gap:2px}
+.osc-stat-lab{color:var(--muted);letter-spacing:1px;font-size:9.5px}
+.osc-stat-val{font-weight:700;font-size:15px;color:var(--accent);font-variant-numeric:tabular-nums}
+/* The table is its OWN scroll container so a long signal list scrolls while the
+   header + rate control stay put; the sticky thead pins to the wrap's top. */
+.osc-table-wrap{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+  flex:1;min-height:120px;overflow:auto}
+.osc-table{width:100%;border-collapse:collapse;font-size:12px}
+.osc-table thead th{text-align:left;color:var(--muted);letter-spacing:1px;font-size:10px;font-weight:700;
+  padding:10px 12px;background:var(--panel2);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:2}
+.osc-table th.num,.osc-table td.num{text-align:right;font-variant-numeric:tabular-nums}
+.osc-table tbody td{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--text)}
+.osc-table tbody tr:last-child td{border-bottom:none}
+.osc-table tbody tr:hover{background:var(--raised)}
+.osc-sig{font-weight:700;color:var(--accent)}
+.osc-addr{color:var(--ok);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px}
+.osc-key{color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px}
+.osc-kind{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px}
+.osc-val{font-weight:700;color:var(--text)}
+.osc-bar-cell{position:relative}
+.osc-bar{position:absolute;left:0;top:0;bottom:0;background:color-mix(in srgb, var(--accent) 14%, transparent);
+  z-index:0;transition:width .12s linear}
+.osc-bar-cell>*{position:relative;z-index:1}
+.osc-empty{color:var(--muted);padding:18px;text-align:center}
+.osc-list-hint{color:var(--muted);font-size:10.5px;line-height:1.4;margin:-4px 2px 0}
+.osc-list-hint b{color:var(--text)}
+/* Per-signal SEND filter temporarily off — flag it above the table. */
+.osc-list-hint.osc-filter-off::after{content:'  ⚠ SEND filter temporarily disabled — all signals send.';
+  color:var(--warn,#e0a030);font-weight:700}
+/* SEND toggle (per-signal "send over OSC" checkbox). */
+.osc-on-col{width:34px;text-align:center}
+.osc-table td.osc-on{text-align:center}
+.osc-send-cb{width:15px;height:15px;accent-color:var(--accent);cursor:pointer;vertical-align:middle}
+/* A muted (not-sent) row dims so the disabled signals read at a glance. */
+.osc-table tbody tr.osc-off td{opacity:.42}
+.osc-table tbody tr.osc-off td.osc-on{opacity:1}
+/* Editable OSC path (rename) — a borderless inline input that only shows its
+   frame on hover/focus, so the table still reads as a table. Locked (curated/
+   derived) paths render as plain text with a lock glyph. */
+.osc-addr-edit{width:100%;background:transparent;border:1px solid transparent;border-radius:5px;
+  color:var(--ok);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;padding:2px 5px}
+.osc-addr-edit:hover{border-color:var(--border)}
+.osc-addr-edit:focus{outline:none;border-color:var(--accent);background:var(--panel2)}
+.osc-addr-lock{color:var(--muted);font-size:9px;margin-left:5px;opacity:.7}
+
+/* ── MIC TUNE page (report 20260621_5) ─────────────────────────────────────
+   On-playa mic tuning: noise-floor auto-calibration + per-band gate meters +
+   global controls + presets. Fully themed via the same CSS vars as the rest. */
+.mic-page{flex:1;min-height:0;overflow:auto;padding:16px 20px;display:flex;flex-direction:column;gap:16px}
+.mic-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.mic-title{font-weight:800;letter-spacing:1.4px;font-size:15px;color:var(--text);display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.mic-sub{font-weight:500;letter-spacing:.3px;font-size:11.5px;color:var(--muted)}
+.mic-link{font-size:11px;color:var(--muted)}
+.mic-link-state{font-weight:700}
+.mic-link-state.ok{color:var(--ok)}
+.mic-link-state.warn{color:var(--muted)}
+
+/* AUTO hero cards */
+.mic-auto{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:920px){.mic-auto{grid-template-columns:1fr}}
+.mic-auto-card{display:flex;gap:14px;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 18px}
+.mic-auto-card.noise{border-color:var(--accent)}
+.mac-step{font-size:26px;font-weight:800;color:var(--accent);line-height:1;min-width:26px}
+.mac-body{display:flex;flex-direction:column;gap:8px;flex:1}
+.mac-title{font-weight:800;font-size:14px;letter-spacing:.4px;color:var(--text)}
+.mac-hint{font-size:11.5px;line-height:1.55;color:var(--muted);max-width:52ch}
+.mac-hint b{color:var(--text)}
+.mac-actions{display:flex;align-items:center;gap:12px;margin-top:4px;flex-wrap:wrap}
+.primary.big{font-size:13px;padding:9px 16px;border-radius:8px;font-weight:700}
+.primary:disabled{opacity:.5;cursor:not-allowed}
+.mac-status{font-size:11.5px;color:var(--muted);font-weight:600}
+.mac-status.rec{color:var(--err)}
+.mac-result{display:flex;align-items:center;gap:14px;margin-top:6px;padding-top:10px;border-top:1px dashed var(--border);flex-wrap:wrap}
+.mac-rec{font-size:12px;color:var(--text)}
+.mac-rec b{color:var(--accent);font-family:ui-monospace,Menlo,Consolas,monospace}
+
+/* Per-band meters */
+.mic-bands{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 18px;display:flex;flex-direction:column;gap:12px}
+.mic-bands-title{font-weight:700;letter-spacing:1px;font-size:11.5px;color:var(--text);display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.mic-bands-sub{font-weight:500;letter-spacing:.2px;font-size:10.5px;color:var(--muted)}
+.band-row{display:grid;grid-template-columns:46px 1fr 46px 180px 54px 28px;align-items:center;gap:12px}
+@media (max-width:820px){.band-row{grid-template-columns:42px 1fr 42px;grid-row-gap:6px}.band-row .band-slider,.band-row .band-gateval,.band-row .band-clear{grid-column:span 1}}
+.band-name{font-weight:800;font-size:12px;letter-spacing:1px;color:var(--muted)}
+.band-meter{position:relative;height:18px;background:var(--panel2);border:1px solid var(--border);border-radius:5px;overflow:hidden}
+.band-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--muted);border-radius:4px 0 0 4px;transition:width .05s linear}
+.band-fill.passing{background:var(--accent)}
+.band-gateline{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--err);box-shadow:0 0 4px var(--err)}
+.band-val{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--text);text-align:right}
+.band-slider,.mic-range{-webkit-appearance:none;appearance:none;height:5px;border-radius:3px;background:var(--border);outline:none}
+.band-slider::-webkit-slider-thumb,.mic-range::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--bg)}
+.band-slider::-moz-range-thumb,.mic-range::-moz-range-thumb{width:15px;height:15px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--bg)}
+.band-gateval{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:var(--accent);text-align:right}
+.band-gateval.inherit{color:var(--muted);font-style:italic}
+.band-clear{background:var(--panel2);color:var(--muted);border:1px solid var(--border);border-radius:5px;cursor:pointer;font-size:12px;line-height:1;padding:3px 5px}
+.band-clear.active{color:var(--accent);border-color:var(--accent)}
+.band-clear:hover{border-color:var(--accent)}
+
+/* Global controls + presets */
+.mic-globals{display:grid;grid-template-columns:1fr 1fr 1.3fr;gap:14px}
+@media (max-width:920px){.mic-globals{grid-template-columns:1fr}}
+.mic-global,.mic-presets{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.mg-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.mg-name{font-weight:700;letter-spacing:1px;font-size:11px;color:var(--text)}
+.mg-val{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;color:var(--accent);font-weight:700}
+.mic-range{width:100%}
+.mg-hint{font-size:10.5px;color:var(--muted);line-height:1.45}
+.preset-btns{display:flex;flex-wrap:wrap;gap:8px}
+.preset-btn{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:7px;cursor:pointer;
+  font-size:11.5px;font-weight:600;padding:7px 11px}
+.preset-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ── OSC OUTPUT RATE control (report 20260621_6) ───────────────────────────
+   Lives under the OSC OUT page header. Slider + number + fps presets driving
+   the send cadence. Themed via the shared vars. */
+.osc-rate-ctrl{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 14px}
+.orc-lab{font-weight:700;letter-spacing:1px;font-size:10.5px;color:var(--text)}
+.orc-slider{-webkit-appearance:none;appearance:none;height:5px;border-radius:3px;background:var(--border);
+  outline:none;flex:1;min-width:140px;max-width:360px}
+.orc-slider::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;
+  background:var(--accent);cursor:pointer;border:2px solid var(--bg)}
+.orc-slider::-moz-range-thumb{width:15px;height:15px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--bg)}
+.orc-num{width:58px;background:var(--panel2);border:1px solid var(--border);border-radius:6px;
+  color:var(--text);font:inherit;font-variant-numeric:tabular-nums;font-size:13px;font-weight:700;
+  padding:4px 6px;text-align:right}
+.orc-unit{color:var(--muted);font-size:11px;font-weight:600;margin-left:-6px}
+.orc-presets{display:flex;gap:6px}
+.orc-preset{background:var(--panel2);color:var(--muted);border:1px solid var(--border);border-radius:6px;
+  cursor:pointer;font:inherit;font-weight:700;font-size:11px;padding:4px 9px}
+.orc-preset:hover{border-color:var(--accent);color:var(--accent)}
+.orc-preset.active{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.orc-hint{color:var(--muted);font-size:10.5px;flex:1 1 100%}
+
+/* MIC TUNE workflow strip (report 20260621_7) — the on-playa tuning order. */
+.mic-flow{display:flex;flex-wrap:wrap;gap:10px}
+.mic-flow-step{flex:1 1 240px;background:var(--panel2);border:1px solid var(--border);border-radius:9px;
+  padding:9px 12px;font-size:11px;line-height:1.5;color:var(--muted)}
+.mic-flow-step b{color:var(--accent)}
+
+/* MIC TUNE profiles (report 20260621_8) */
+.mic-globals.two{grid-template-columns:1fr 1fr}
+.mic-profiles-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;
+  display:flex;flex-direction:column;gap:10px}
+.mp-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.mp-sub{color:var(--muted);font-size:10.5px}
+.mp-chips{display:flex;flex-wrap:wrap;gap:8px}
+.mp-chip{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:7px;cursor:pointer;
+  font:inherit;font-weight:600;font-size:11.5px;padding:7px 12px}
+.mp-chip:hover{border-color:var(--accent);color:var(--accent)}
+.mp-chip.active{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.mp-active{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 10px;background:var(--panel2);
+  border:1px solid var(--border);border-radius:8px;font-size:11.5px}
+.mp-active-name{font-weight:700;color:var(--accent)}
+.mp-active-vals{color:var(--muted);font-variant-numeric:tabular-nums}
+.mp-del{margin-left:auto;background:color-mix(in srgb, var(--err) 10%, transparent);
+  border:1px solid color-mix(in srgb, var(--err) 35%, transparent);color:var(--err);cursor:pointer;
+  font:inherit;font-size:11px;font-weight:700;padding:4px 9px;border-radius:6px}
+.mp-del:hover:not(:disabled){color:var(--bg);background:var(--err)}
+.mp-del:disabled{opacity:.4;cursor:not-allowed}
+.mp-add{display:flex;gap:8px;flex-wrap:wrap}
+.mp-add .file-input{flex:1;min-width:200px;width:auto}

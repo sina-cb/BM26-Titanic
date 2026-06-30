@@ -18,26 +18,49 @@ import { Palette } from '@/constants/theme';
 import { useOscStatus, OscPillState } from '@/hooks/useEngineState';
 
 // Visual mapping. We keep these in one place so the pill body and
-// the sheet header agree on color semantics.
+// the sheet header agree on color semantics. Prod traffic-light scheme
+// (operator request feat/optimize_channels): GREEN receiving, YELLOW
+// enabled-but-stalled, GRAY disabled.
 //
-//   off       → muted (listener intentionally disabled)
-//   idle      → amber (enabled but nothing flowing — operator
-//               probably needs to start their sender)
-//   unmapped  → orange/error (packets are arriving but addresses
-//               don't match any binding — config mistake)
-//   live      → green/primary (values are flowing into the CPC)
+//   off       → GRAY (listener intentionally disabled — nothing to watch)
+//   idle      → YELLOW (enabled but no values flowing — the operator
+//               probably needs to start their sender; this is an
+//               actionable "OSC is on but starving" state, so it earns
+//               a clear caution colour rather than blending into chrome)
+//   unmapped  → YELLOW/amber (packets ARE arriving but addresses don't
+//               match any binding — also actionable, a config mistake;
+//               kept distinct from `idle` only by its label, not colour,
+//               so "OSC is enabled but you're not getting data" reads as
+//               ONE caution band)
+//   live      → GREEN (values are flowing into the CPC)
 //
-// '#fff3cd' / '#7a5300' / '#f8d7da' / '#842029' / '#003a44' are
-// semantic-state literals intentionally pinned across both themes — the
-// "OSC unmapped" / "OSC idle" badges should look the same regardless of
-// the operator's light/dark preference so the colour reads as a status
-// signal, not a chrome accent.
-function makeStateStyles(C: Palette): Record<OscPillState['state'], { bg: string; fg: string; border: string }> {
+// '#ffc107' (amber/yellow) / '#5a4500' (dark amber text) / '#003a44'
+// (dark teal on the green chip) are semantic-state literals intentionally
+// pinned across both themes — the OSC status badge should look the same
+// regardless of the operator's light/dark preference so the colour reads
+// as a traffic-light status signal, not a chrome accent.
+// Traffic-light state colours. The PILL keeps a neutral surface and signals
+// state with a coloured DOT + coloured LABEL + coloured BORDER (a flooded
+// bright-yellow tile read as garish / hard to scan — operator feedback). The
+// diagnostic SHEET still uses a soft `bg` tint chip in the modal header.
+//   `dot`/`label` are the on-neutral-surface readable colours; `bg`/`fg` are
+//   the soft-chip pair used only in the sheet header.
+const OSC_GREEN = '#1b9e77';       // matches the BPM "OSC-locked" accent
+const OSC_YELLOW = '#ffc107';      // caution dot/border
+const OSC_YELLOW_TEXT = '#b07d00'; // readable amber on a neutral surface
+const OSC_YELLOW_BG = '#fff6d6';   // soft amber chip (sheet only)
+const OSC_YELLOW_FG = '#5a4500';
+function makeStateStyles(C: Palette): Record<OscPillState['state'], { bg: string; fg: string; border: string; dot: string; label: string }> {
   return {
-    off:      { bg: C.surfaceContainerHigh, fg: C.secondary, border: C.ghostBorder },
-    idle:     { bg: '#fff3cd',              fg: '#7a5300',   border: '#e0b400' },
-    unmapped: { bg: '#f8d7da',              fg: '#842029',   border: C.error },
-    live:     { bg: C.primaryContainer,     fg: '#003a44',   border: C.primary },
+    // GRAY — listener disabled. Nothing is expected, so it stays neutral.
+    off:      { bg: C.surfaceContainerHigh, fg: C.secondary, border: C.ghostBorder, dot: C.secondary, label: C.secondary },
+    // YELLOW — enabled but nothing flowing (start the sender). Actionable.
+    idle:     { bg: OSC_YELLOW_BG, fg: OSC_YELLOW_FG, border: OSC_YELLOW, dot: OSC_YELLOW, label: OSC_YELLOW_TEXT },
+    // YELLOW — packets arriving but unmapped (a binding/config mistake). Same
+    // caution band as idle; the label disambiguates the cause.
+    unmapped: { bg: OSC_YELLOW_BG, fg: OSC_YELLOW_FG, border: OSC_YELLOW, dot: OSC_YELLOW, label: OSC_YELLOW_TEXT },
+    // GREEN — values flowing into the CPC.
+    live:     { bg: C.primaryContainer, fg: '#003a44', border: OSC_GREEN, dot: OSC_GREEN, label: OSC_GREEN },
   };
 }
 
@@ -96,10 +119,9 @@ export function OscStatusPill({ compact = false }: Props) {
           width: w, height: TILE_HEIGHT,
           paddingVertical: 4, paddingHorizontal: 6,
           borderRadius: 8, borderWidth: 1,
-          // Subtle bg tinted toward the state, but not flooded — keeps
-          // the tile readable next to the other globals-cluster boxes.
-          // The border + dot do the heavy state-signal lifting.
-          backgroundColor: status.state === 'off' ? C.surface : styles.bg,
+          // Neutral surface always; the coloured border + dot + label carry the
+          // traffic-light signal (no flooded-yellow tile).
+          backgroundColor: C.surface,
           borderColor: styles.border,
           justifyContent: 'space-between',
         }}
@@ -107,15 +129,15 @@ export function OscStatusPill({ compact = false }: Props) {
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
           <Text style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-            color: styles.fg, textTransform: 'uppercase', letterSpacing: 0.8,
+            color: styles.label, textTransform: 'uppercase', letterSpacing: 0.8,
           }}>OSC</Text>
-          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: styles.border }} />
+          <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: styles.dot }} />
         </View>
         <Text
           numberOfLines={1}
           style={{
             fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-            color: styles.fg, textAlign: 'center', textTransform: 'uppercase', letterSpacing: 0.6,
+            color: styles.label, textAlign: 'center', textTransform: 'uppercase', letterSpacing: 0.6,
           }}
         >
           {status.label}

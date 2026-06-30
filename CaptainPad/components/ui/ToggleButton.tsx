@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { TouchableOpacity, Text } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { useGlobalStyles } from '@/styles/globalStyles';
+import { prettySliderName } from '@/components/Modulation';
 
 export const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: number, name: string, initialValue?: number, onChange: Function }) => {
   const globalStyles = useGlobalStyles();
@@ -19,7 +20,7 @@ export const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: num
       ]}
     >
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isOn ? '#fff' : C.text, textAlign: 'center' }}>
-        {name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().toUpperCase().substring(0, 15)}
+        {prettySliderName(name)}
       </Text>
     </TouchableOpacity>
   );
@@ -42,7 +43,7 @@ export const MomentaryButton = ({ id, name, onChange }: { id: number, name: stri
       ]}
     >
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isPressed ? '#fff' : C.text, textAlign: 'center' }}>
-        {name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().toUpperCase().substring(0, 15)}
+        {prettySliderName(name)}
       </Text>
     </TouchableOpacity>
   );

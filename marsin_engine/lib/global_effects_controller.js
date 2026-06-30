@@ -29,6 +29,8 @@ import { dropHitEffect } from '../effects/dropHit.js';
 import { colorWashEffect } from '../effects/colorWash.js';
 import { feedbackTrailsEffect } from '../effects/feedbackTrails.js';
 import { groupFixedColorEffect } from '../effects/group_fixed_color.js';
+import { hueShiftEffect } from '../effects/hue_shift.js';
+import { invertEffect } from '../effects/invert.js';
 
 export class GlobalEffectsController {
   constructor(config = {}) {
@@ -102,6 +104,36 @@ export class GlobalEffectsController {
     // PERSISTENT rig state (globals_state.yaml), like the dimmers —
     // intentionally NOT cleared by panicStop().
     this.groupFixedColors = {};
+
+    // ── Global Hue Shifter (docs/39 §F-hue) ──────────────────────────
+    // A first-class continuous knob (like blackout / master), NOT a GEM
+    // slot/preset. Rotates the RGB hue of the WHOLE post-mixer buffer;
+    // W/A/UV are never touched (see effects/hue_shift.js header). State:
+    //   degrees             0..360  static rotation offset (normalized).
+    //   autoRotateDegPerSec -360..360  optional continuous spin; the
+    //                       per-frame applyHueShift() advances `degrees`
+    //                       by this * dt and wraps into [0,360).
+    // PERSISTENT rig state (globals_state.yaml). Like groupFixedColors
+    // and the dimmers, it is intentionally NOT cleared by panicStop()
+    // (panic is a SAFETY action — it kills active animation, but hue is
+    // a chroma offset, not a brightness/flash, and resetting it would
+    // surprise an operator who deliberately tinted the whole rig).
+    this.hueShift = { degrees: 0, autoRotateDegPerSec: 0 };
+    // Wall-clock timestamp of the last applyHueShift tick, used to
+    // advance the auto-rotate phase frame-rate-independently. null until
+    // the first tick.
+    this._hueShiftLastTickMs = null;
+
+    // ── Global color Invert (docs/39 §F-invert) ──────────────────────
+    // A first-class boolean toggle (like blackout), NOT a GEM slot/preset.
+    // When enabled, inverts the RGB of the WHOLE post-mixer buffer (1 - v);
+    // W/A/UV are never touched (see effects/invert.js header — mission-
+    // critical exterior whites must never be flipped dark). PERSISTENT rig
+    // state (globals_state.yaml). Like hueShift and groupFixedColors, it is
+    // intentionally NOT cleared by panicStop() (panic kills active
+    // animation/flash; invert is a static chroma op, not a brightness/flash
+    // hazard, and blackout still zeroes the output so safety is unaffected).
+    this.invert = false;
   }
 
   // ── Legacy methods ────────────────────────────────────────────────
@@ -560,6 +592,103 @@ export class GlobalEffectsController {
     groupFixedColorEffect.apply({ pixels, overrides: this.groupFixedColors });
   }
 
+  // ── Global Hue Shifter (docs/39 §F-hue) ───────────────────────────
+
+  /**
+   * Set the global hue rotation. Codex P0 — fail loud, no silent
+   * fallback: a non-finite degrees / autoRotateDegPerSec THROWS (the API
+   * layer maps that to a 400). Finite values are normalized/clamped:
+   *   - degrees             → normalized into [0,360) via ((d%360)+360)%360
+   *   - autoRotateDegPerSec → clamped into [-360,360]
+   *
+   * @param {number} degrees
+   * @param {number} [autoRotateDegPerSec=0]
+   */
+  setHueShift(degrees, autoRotateDegPerSec = 0) {
+    if (typeof degrees !== 'number' || !Number.isFinite(degrees)) {
+      throw new Error(`setHueShift: degrees must be a finite number, got ${degrees}`);
+    }
+    if (typeof autoRotateDegPerSec !== 'number' || !Number.isFinite(autoRotateDegPerSec)) {
+      throw new Error(`setHueShift: autoRotateDegPerSec must be a finite number, got ${autoRotateDegPerSec}`);
+    }
+    this.hueShift.degrees = ((degrees % 360) + 360) % 360;
+    this.hueShift.autoRotateDegPerSec = Math.max(-360, Math.min(360, autoRotateDegPerSec));
+  }
+
+  /**
+   * Per-frame pipeline stage. Called by engine.js BETWEEN applyMacros()
+   * and applyGroupFixedColors() (docs/39 §F-hue) so the chroma rotation
+   * runs after the show macros but BEFORE group color-locks and the
+   * intensity/blackout safety stages — locks + e-stop keep the final
+   * say. Rotates RGB only; W/A/UV are untouched (mission-critical
+   * exterior whites must never be tinted/dimmed by this).
+   *
+   * Auto-rotate advances `this.hueShift.degrees` by autoRotateDegPerSec *
+   * dt (wall-clock dt, frame-rate independent) and wraps into [0,360).
+   * The dt is clamped so a frame stall can't fast-forward the spin.
+   *
+   * Codex P0 (zero-cost default): when the effective rotation is 0 AND no
+   * auto-rotate is active, this returns BEFORE touching any pixel — the
+   * default rig pays nothing.
+   *
+   * @param {Array}  pixels  Post-mixer model.pixels.
+   * @param {number} nowMs   Wall-clock ms (engine render `now`).
+   */
+  applyHueShift(pixels, nowMs) {
+    const rot = this.hueShift.autoRotateDegPerSec;
+    if (rot !== 0) {
+      const last = this._hueShiftLastTickMs;
+      this._hueShiftLastTickMs = nowMs;
+      if (last !== null) {
+        const dt = Math.max(0, Math.min(0.25, (nowMs - last) / 1000));
+        const advanced = this.hueShift.degrees + rot * dt;
+        this.hueShift.degrees = ((advanced % 360) + 360) % 360;
+      }
+    } else {
+      // Reset the tick clock so a future auto-rotate enable doesn't see a
+      // huge dt from a long-idle period (the clamp would cap it anyway,
+      // but this keeps the first post-enable step honest).
+      this._hueShiftLastTickMs = null;
+    }
+
+    const degrees = this.hueShift.degrees;
+    // Zero-cost gate: nothing to rotate.
+    if (!degrees) return;
+    hueShiftEffect.apply({ pixels, degrees });
+  }
+
+  // ── Global color Invert (docs/39 §F-invert) ───────────────────────
+
+  /**
+   * Enable/disable the global invert. Pure boolean — coerced via !! (no
+   * fail-loud contract; any value coerces, like the legacy effect toggles).
+   *
+   * @param {boolean} enabled
+   */
+  setInvert(enabled) {
+    this.invert = !!enabled;
+  }
+
+  /**
+   * Per-frame pipeline stage. Called by engine.js AFTER applyHueShift()
+   * and BEFORE applyGroupFixedColors() (docs/39 §F-invert) so the global
+   * chroma flip runs after the global hue rotation but BEFORE group color-
+   * locks and the intensity/blackout safety stages — locks + e-stop keep
+   * the final say. Order: global HUE then global INVERT. Inverts RGB only;
+   * W/A/UV are untouched (mission-critical exterior whites must never be
+   * flipped dark).
+   *
+   * Codex P0 (zero-cost default): when invert is off this returns BEFORE
+   * touching any pixel — the default rig pays nothing.
+   *
+   * @param {Array} pixels  Post-mixer model.pixels.
+   */
+  applyInvert(pixels) {
+    // Zero-cost gate: nothing to invert when off.
+    if (!this.invert) return;
+    invertEffect.apply({ pixels, enabled: true });
+  }
+
   _ensureFeedbackBuffer(pixelCount) {
     if (!this.feedbackTrailBuffer || this.feedbackTrailPixelCount !== pixelCount) {
       this.feedbackTrailBuffer = new Float32Array(pixelCount * 6);
@@ -601,6 +730,13 @@ export class GlobalEffectsController {
       // Per-group fixed-color locks (docs/32) — deep-cloned so status
       // consumers can't mutate the live table.
       groupFixedColors: JSON.parse(JSON.stringify(this.groupFixedColors)),
+      // Global hue shifter (docs/39 §F-hue) — cloned so consumers can't
+      // mutate the live state. `degrees` reflects the LIVE value (which
+      // auto-rotate advances each frame), so a polling client sees the
+      // spin progress.
+      hueShift: { ...this.hueShift },
+      // Global color invert (docs/39 §F-invert) — a plain boolean toggle.
+      invert: this.invert,
       // Legacy rig-globals state surfaced here too so CaptainPad's
       // RigContext consumers (dimmer_rack bypass checkboxes) can
       // mirror engine-side changes without a separate /globals poll.
@@ -632,6 +768,14 @@ export class GlobalEffectsController {
       this.setEffect(k, false);
     }
     this.setColorWash(false, null, 0, 'tint', { immediate: true });
+    // Global hue shift is intentionally LEFT ALONE here (docs/39 §F-hue):
+    // panic kills active animation/flash, but hue is a persistent chroma
+    // offset (like the group color-locks, which panic also preserves),
+    // not a brightness/strobe hazard. Blackout still zeroes the output,
+    // so safety is unaffected.
+    // Global invert (docs/39 §F-invert) is LEFT ALONE for the same reason:
+    // it is a persistent static chroma op, not a brightness/flash hazard,
+    // and blackout still zeroes the output.
   }
 }
 

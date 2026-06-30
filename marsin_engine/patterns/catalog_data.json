@@ -1,0 +1,572 @@
+[
+  {
+    "num": "00",
+    "name": "golden_hour_wash",
+    "identity": "Signature vintage-blinder warm wash",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "④ blinder accent off-test_bench",
+    "batch": "A"
+  },
+  {
+    "num": "01",
+    "name": "cylon_sweep",
+    "identity": "Red beam sweeping side to side",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "④",
+    "batch": "A"
+  },
+  {
+    "num": "02",
+    "name": "phase_cathedral",
+    "identity": "Per-section strict cp1↔cp2 phase field",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "④",
+    "batch": "A"
+  },
+  {
+    "num": "03",
+    "name": "dual_axis_crush",
+    "identity": "Beams collapse from both edges to centre",
+    "peak": null,
+    "corr": null,
+    "titanic": "762",
+    "status": "⑤ partial titanic (geometry)",
+    "batch": "A"
+  },
+  {
+    "num": "04",
+    "name": "beat_folded_helix",
+    "identity": "Pseudo-3D helix tunnel",
+    "peak": null,
+    "corr": null,
+    "titanic": "466",
+    "status": "⑤ partial titanic; corr 0.83 (kick)",
+    "batch": "A"
+  },
+  {
+    "num": "05",
+    "name": "orbital_attractor_field",
+    "identity": "Nearest-attractor focus field",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "④",
+    "batch": "A"
+  },
+  {
+    "num": "06",
+    "name": "neon_elevator",
+    "identity": "Light \"car\" riding the vertical stack",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "④",
+    "batch": "A"
+  },
+  {
+    "num": "07",
+    "name": "shimmer",
+    "identity": "Warm breathing wash + travelling glints",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "④",
+    "batch": "A"
+  },
+  {
+    "num": "08",
+    "name": "ocean_liner",
+    "identity": "Dark water wash + porthole flares",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "—",
+    "batch": "A"
+  },
+  {
+    "num": "09",
+    "name": "cyclone",
+    "identity": "Swirling bright confetti storm",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "④",
+    "batch": "A"
+  },
+  {
+    "num": "10",
+    "name": "chasers",
+    "identity": "Comet-head→tail chasers",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "—",
+    "batch": "A"
+  },
+  {
+    "num": "11",
+    "name": "bioluminescence",
+    "identity": "cp1 swell + sharp cp2 crests + UV",
+    "peak": null,
+    "corr": null,
+    "titanic": "760",
+    "status": "⑤ partial titanic",
+    "batch": "A"
+  },
+  {
+    "num": "12",
+    "name": "breathing",
+    "identity": "Whole-rig inhale/exhale + white spark",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "④",
+    "batch": "A"
+  },
+  {
+    "num": "13",
+    "name": "sparkle",
+    "identity": "Two-colour wash + white-hot sparkles",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "④",
+    "batch": "A"
+  },
+  {
+    "num": "14",
+    "name": "lunar_current",
+    "identity": "Wide smooth moonlit currents",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "—",
+    "batch": "A"
+  },
+  {
+    "num": "15",
+    "name": "silk_prism_ribbons",
+    "identity": "Satin ribbons sliding through the rig",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "—",
+    "batch": "A"
+  },
+  {
+    "num": "16",
+    "name": "ghost_tide_uv",
+    "identity": "UV ghost-tide foam wash",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "—",
+    "batch": "A"
+  },
+  {
+    "num": "17",
+    "name": "rolling_color_dunes",
+    "identity": "Incommensurate quasi-crystal dunes",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "④",
+    "batch": "A"
+  },
+  {
+    "num": "18",
+    "name": "deep_space_lattice",
+    "identity": "Crossed interference lattice",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "—",
+    "batch": "A"
+  },
+  {
+    "num": "19",
+    "name": "swaying_lattice_ballet",
+    "identity": "Corps-de-ballet counter-sway",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "④",
+    "batch": "A"
+  },
+  {
+    "num": "20",
+    "name": "parametric_sway_field",
+    "identity": "Soft glowing dancing nodes",
+    "peak": null,
+    "corr": null,
+    "titanic": "957",
+    "status": "—",
+    "batch": "A"
+  },
+  {
+    "num": "21",
+    "name": "pelagic_manta_rays",
+    "identity": "Manta silhouettes gliding",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "—",
+    "batch": "A"
+  },
+  {
+    "num": "22",
+    "name": "abyssal_sway_garden",
+    "identity": "Vertical fronds swaying",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "④",
+    "batch": "A"
+  },
+  {
+    "num": "23",
+    "name": "prismatic_strange_attractors",
+    "identity": "Orbiting gravity wells",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "dark-space vs corr trade-off (operator decision)",
+    "batch": "A"
+  },
+  {
+    "num": "24",
+    "name": "chromatic_murmuration",
+    "identity": "Flock-attractor murmuration",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "—",
+    "batch": "A"
+  },
+  {
+    "num": "25",
+    "name": "heartbeat",
+    "identity": "lub-DUB double-pulse + blinder",
+    "peak": null,
+    "corr": null,
+    "titanic": "970",
+    "status": "④; corr n/a (kick-gated)",
+    "batch": "A"
+  },
+  {
+    "num": "26",
+    "name": "dom_dancers_chevron",
+    "identity": "Two dancers + spiral filigree",
+    "peak": "246",
+    "corr": "0.14",
+    "titanic": "970",
+    "status": "🟢 corr n/a (kick-gated)",
+    "batch": "B"
+  },
+  {
+    "num": "27",
+    "name": "swipe",
+    "identity": "Unified physical-ordinal swipe",
+    "peak": "253",
+    "corr": "−0.05",
+    "titanic": "142",
+    "status": "🟢 swipe (audio via swipePos); sparse/frame",
+    "batch": "B"
+  },
+  {
+    "num": "28",
+    "name": "spectrum_bloom",
+    "identity": "Per-band fixture/axis bloom",
+    "peak": "59",
+    "corr": "−0.02",
+    "titanic": "970",
+    "status": "🔴🔵 dim + weak audio",
+    "batch": "B"
+  },
+  {
+    "num": "29",
+    "name": "kick_shockwave",
+    "identity": "Expanding kick rings",
+    "peak": "44",
+    "corr": "1.00",
+    "titanic": "874",
+    "status": "🔴 dim (corr great)",
+    "batch": "B"
+  },
+  {
+    "num": "30",
+    "name": "bass_comet",
+    "identity": "Comet sweep + trail",
+    "peak": "242",
+    "corr": "motion",
+    "titanic": "80",
+    "status": "🟢 bass→MOTION primary (brightness corr n/a); lit+animating",
+    "batch": "B"
+  },
+  {
+    "num": "31",
+    "name": "strobe_lattice",
+    "identity": "Crisp strobing node lattice",
+    "peak": "151",
+    "corr": "0.70",
+    "titanic": "221",
+    "status": "🔴 dim; sparse titanic",
+    "batch": "B"
+  },
+  {
+    "num": "32",
+    "name": "caustic_shimmer",
+    "identity": "Layered caustic interference",
+    "peak": "255",
+    "corr": "−0.04",
+    "titanic": "970",
+    "status": "🔵 weak audio",
+    "batch": "B"
+  },
+  {
+    "num": "33",
+    "name": "aurora_breath",
+    "identity": "Vertical aurora ribbons",
+    "peak": "218",
+    "corr": "0.67",
+    "titanic": "970",
+    "status": "🟢 brightness decoupled; breathing",
+    "batch": "B"
+  },
+  {
+    "num": "34",
+    "name": "moire_interference",
+    "identity": "Two-grid moiré beat",
+    "peak": "255",
+    "corr": "0.97",
+    "titanic": "964",
+    "status": "🟢",
+    "batch": "B"
+  },
+  {
+    "num": "35",
+    "name": "sparkle_rain",
+    "identity": "Downward-drifting glints",
+    "peak": "212",
+    "corr": "0.54",
+    "titanic": "970",
+    "status": "🟢 micLow level PRIMARY + kick; idle a touch dim",
+    "batch": "B"
+  },
+  {
+    "num": "36",
+    "name": "orbital_pulse",
+    "identity": "Tight glow around orbiting wells",
+    "peak": "255",
+    "corr": "0.14",
+    "titanic": "970",
+    "status": "🔵 weak audio",
+    "batch": "B"
+  },
+  {
+    "num": "37",
+    "name": "chevron_chase",
+    "identity": "Sharp V-arrow chase",
+    "peak": "240",
+    "corr": "0.29",
+    "titanic": "970",
+    "status": "🔵 weak-ish audio",
+    "batch": "B"
+  },
+  {
+    "num": "38",
+    "name": "prism_helix",
+    "identity": "Crisp bright helical arms",
+    "peak": "255",
+    "corr": "0.95",
+    "titanic": "970",
+    "status": "🟢",
+    "batch": "B"
+  },
+  {
+    "num": "39",
+    "name": "tide_riser",
+    "identity": "Foam crest above a rising waterline",
+    "peak": "255",
+    "corr": "−0.05",
+    "titanic": "970",
+    "status": "🔵 weak audio",
+    "batch": "B"
+  },
+  {
+    "num": "40",
+    "name": "lissajous_weave",
+    "identity": "Lissajous core over black",
+    "peak": "192",
+    "corr": "0.99",
+    "titanic": "757",
+    "status": "🔴 just-dim; ⑤ partial",
+    "batch": "B"
+  },
+  {
+    "num": "41",
+    "name": "reaction_diffusion",
+    "identity": "Gray-Scott reaction-diffusion",
+    "peak": "223",
+    "corr": "1.00",
+    "titanic": "970",
+    "status": "🟢",
+    "batch": "B"
+  },
+  {
+    "num": "42",
+    "name": "phyllotaxis_spiral",
+    "identity": "Sunflower phyllotaxis packing",
+    "peak": "167",
+    "corr": "0.11",
+    "titanic": "970",
+    "status": "🔴🔵",
+    "batch": "B"
+  },
+  {
+    "num": "43",
+    "name": "golden_hour_pulse",
+    "identity": "Warm sunset wash pulse",
+    "peak": "255",
+    "corr": "0.65",
+    "titanic": "970",
+    "status": "🟢 max-react (dark idle by choice)",
+    "batch": "B"
+  },
+  {
+    "num": "44",
+    "name": "biolume_swell",
+    "identity": "Biolume swell + UV",
+    "peak": "221",
+    "corr": "−0.02",
+    "titanic": "970",
+    "status": "🔵🟣",
+    "batch": "B"
+  },
+  {
+    "num": "45",
+    "name": "manta_drift",
+    "identity": "Single manta wingspan gliding",
+    "peak": "176",
+    "corr": "0.09",
+    "titanic": "970",
+    "status": "🔴🔵",
+    "batch": "B"
+  },
+  {
+    "num": "46",
+    "name": "abyssal_fronds",
+    "identity": "Irrational-phase swaying fronds",
+    "peak": "255",
+    "corr": "0.60",
+    "titanic": "970",
+    "status": "🟢 brightness decoupled; spatial breath",
+    "batch": "B"
+  },
+  {
+    "num": "47",
+    "name": "quasicrystal_dunes",
+    "identity": "5-wave quasicrystal interference",
+    "peak": "186",
+    "corr": "0.10",
+    "titanic": "970",
+    "status": "🔴🔵",
+    "batch": "B"
+  },
+  {
+    "num": "48",
+    "name": "heartbeat_drive",
+    "identity": "micLow-driven resting muscle",
+    "peak": "12",
+    "corr": "0.13",
+    "titanic": "970",
+    "status": "⚫ near-dark (peak 12)",
+    "batch": "B"
+  },
+  {
+    "num": "49",
+    "name": "cylon_crush",
+    "identity": "Cylon+crush amalgam",
+    "peak": "180",
+    "corr": "0.90",
+    "titanic": "829",
+    "status": "🔴 just-dim (corr great)",
+    "batch": "B"
+  },
+  {
+    "num": "50",
+    "name": "phase_cathedral_hd",
+    "identity": "Irrational node lattice",
+    "peak": "231",
+    "corr": "0.65",
+    "titanic": "970",
+    "status": "🟢 levelMul anchor; dark idle",
+    "batch": "B"
+  },
+  {
+    "num": "51",
+    "name": "confetti_cyclone",
+    "identity": "Sparks over true black",
+    "peak": "58",
+    "corr": "−0.05",
+    "titanic": "420",
+    "status": "🔴🔵; sparse titanic",
+    "batch": "B"
+  },
+  {
+    "num": "52",
+    "name": "silk_ribbons",
+    "identity": "Crisp-core silk ribbons",
+    "peak": "93",
+    "corr": "0.06",
+    "titanic": "970",
+    "status": "🔴🔵",
+    "batch": "B"
+  },
+  {
+    "num": "53",
+    "name": "neon_elevator_hd",
+    "identity": "Tall elevator shaft bottom→top",
+    "peak": "141",
+    "corr": "0.82",
+    "titanic": "970",
+    "status": "🔴 dim (corr good)",
+    "batch": "B"
+  },
+  {
+    "num": "54",
+    "name": "murmuration_storm",
+    "identity": "Flock density field",
+    "peak": "255",
+    "corr": "0.39",
+    "titanic": "835",
+    "status": "🟢 flash seam fixed (Δ 38×→6.7×); corr kick-gated",
+    "batch": "B"
+  },
+  {
+    "num": "57",
+    "name": "ink_diffuse",
+    "identity": "Dye blooms diffusing in water",
+    "peak": "255",
+    "corr": "0.09",
+    "titanic": "970",
+    "status": "🔵🟣",
+    "batch": "B"
+  },
+  {
+    "num": "58",
+    "name": "lighthouse_solo",
+    "identity": "Single far-field lighthouse sweep",
+    "peak": "122",
+    "corr": "−0.11",
+    "titanic": "485",
+    "status": "🔴🔵; sparse by design",
+    "batch": "B"
+  }
+]

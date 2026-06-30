@@ -137,4 +137,17 @@ document.getElementById('spd').oninput=e=>{fps=+e.target.value;};
   `sliderBlur=0,sliderTrail=0.6`); `--sections 1,2,3` to undim the rig.
 - Multiple patterns: capture each to its own JSON and make separate widgets, or
   capture one at a time and stack the rendered widgets in your reply.
+
+## Reviewing on a phone — the gallery
+To review clips on a phone (over Tailscale) instead of inline, publish them to the
+offline **pattern gallery** and open it on the phone:
+```bash
+cd marsin_engine
+node tools/gallery/publish.mjs --name <pattern> --capture ~/tmp/genkit/out/<pattern>.json
+node tools/gallery/server.mjs            # port from gallery_config.json (6965) — prints the Tailscale URL
 ```
+Then open `http://<your-tailscale-ip>:6965/` on the phone, search, tap the name.
+The gallery is a standalone offline tool (not wired to the launcher). Full pipeline
++ details: skill `13_pattern_gallery.md`,
+`.agent/01_skills/12_highdef_pattern_generation.md` §11, and
+`marsin_engine/tools/gallery/README.md`.

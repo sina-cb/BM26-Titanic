@@ -824,9 +824,11 @@ test('opCatalog lists the 15 op types (7 Phase-2 + 5 Phase-7 + Phase-8 normalize
   assert.equal(cat.danceMaker.params.omega.default, 7);
   assert.equal(cat.gain.paramKeyOrValue, true);
   assert.equal(cat.bias.paramKeyOrValue, false);
-  // osc_out carries a single operator-facing `name` (derives cpcKey+address).
+  // osc_out carries the operator-facing `name` (derives the cpcKey) plus an
+  // OPTIONAL `address` override ("rename the OSC path"); cpcKey is never a param.
   assert.equal(cat.osc_out.params.name.default, 'out');
-  assert.equal(cat.osc_out.params.address, undefined);
+  assert.equal(cat.osc_out.params.address.type, 'string');
+  assert.equal(cat.osc_out.params.address.default, undefined, 'address has no default (absent ⇒ derived)');
   assert.equal(cat.osc_out.params.cpcKey, undefined);
   // Phase 7 schema spot-checks (the iPad picker / chain editor reads these).
   assert.equal(cat.curve.params.shape.default, 'linear');

@@ -274,6 +274,29 @@ test('noiseGate preserves dynamic range above the floor', () => {
   assert.ok(gatedVal > 0.3, `loud signal with gate should still ride > 0.3; got ${gatedVal}`);
 });
 
+test('per-band gate suppresses only its own band (on-playa hardening)', () => {
+  // highGate gates the HIGH band but must leave LOW untouched — the whole point
+  // of per-band gates on a noisy venue (lift the noisy high band's floor without
+  // dimming the lows). An 8 kHz sine lights HIGH; a 0.5 highGate suppresses it,
+  // while the same highGate does nothing to a 100 Hz sine's LOW band.
+  const hiDefault = [], hiGated = [], loWithHiGate = [];
+  makeAnalyzer({ bands: { noiseGate: 0.0 } }, hiDefault).pushSamples(sineInt16(8000, 0.5, 0.05));
+  makeAnalyzer({ bands: { noiseGate: 0.0, highGate: 0.5 } }, hiGated).pushSamples(sineInt16(8000, 0.5, 0.05));
+  makeAnalyzer({ bands: { noiseGate: 0.0, highGate: 0.5 } }, loWithHiGate).pushSamples(sineInt16(100, 0.5, 0.05));
+  assert.ok(lastResult(hiDefault).high > 0, `ungated high should be > 0; got ${lastResult(hiDefault).high}`);
+  assert.equal(lastResult(hiGated).high, 0, `highGate 0.5 should zero a sub-floor high; got ${lastResult(hiGated).high}`);
+  assert.ok(lastResult(loWithHiGate).low > 0, `highGate must NOT touch the low band; got ${lastResult(loWithHiGate).low}`);
+});
+
+test('an absent per-band gate falls back to the global noiseGate (byte-identical default)', () => {
+  // No per-band gate set → every band gated at the global noiseGate, exactly the
+  // legacy single-gate path. A 0.3 global gate zeros a quiet 100 Hz sine just as
+  // it did before per-band gates existed.
+  const globalOnly = [];
+  makeAnalyzer({ bands: { noiseGate: 0.3 } }, globalOnly).pushSamples(sineInt16(100, 0.5, 0.02));
+  assert.equal(lastResult(globalOnly).low, 0, `global gate 0.3 should zero the quiet low; got ${lastResult(globalOnly).low}`);
+});
+
 // ── Kick detector ────────────────────────────────────────────────────────
 
 test('repeated kick-band impulses fire kicks with refractory respected', () => {
@@ -541,4 +564,210 @@ test('dominant-frequency tracker follows a frequency change', () => {
   const highF = lastResult(results).domFreq1;
   assert.ok(Math.abs(lowF - 300) < 30, `dom1 should track 300 Hz; got ${lowF.toFixed(1)}`);
   assert.ok(Math.abs(highF - 1200) < 40, `dom1 should re-lock to 1200 Hz; got ${highF.toFixed(1)}`);
+});
+
+// ── Per-band onsets + sub-bass (analyzer_features, slot 3) ────────────────
+//
+// The analyzer emits four ADDITIVE outputs: onsetLow/onsetMid/onsetHigh
+// (half-wave-rectified spectral flux restricted to each band's bin range)
+// and micSub (narrow sub-band energy). These pin: presence + finiteness +
+// [0,1] range, band steering (a band onset only spikes for that band), the
+// existing five outputs staying byte-identical, and the sub-window config
+// validation (codex P0: no silent fallback).
+
+test('onAnalysis emits finite onsetLow/Mid/High + micSub in [0,1]', () => {
+  const results = [];
+  const an = new AudioAnalyzer({
+    sampleRate: SR, fftSize: 1024, hopSize: 512,
+    bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+    sub:   { minHz: 30, maxHz: 60 },
+    onAnalysis: (r) => results.push(r),
+  });
+  an.pushSamples(whiteNoiseInt16(0.2, 0.5));
+  assert.ok(results.length > 0);
+  for (const r of results) {
+    for (const k of ['onsetLow', 'onsetMid', 'onsetHigh', 'micSub']) {
+      assert.ok(typeof r[k] === 'number' && Number.isFinite(r[k]), `${k} finite; got ${r[k]}`);
+      assert.ok(r[k] >= 0 && r[k] <= 1, `${k} in [0,1]; got ${r[k]}`);
+    }
+  }
+});
+
+test('a sudden LOW-band tone spikes onsetLow, not onsetHigh', () => {
+  const results = [];
+  const an = new AudioAnalyzer({
+    sampleRate: SR, fftSize: 1024, hopSize: 512,
+    bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+    onAnalysis: (r) => results.push(r),
+  });
+  // Settle on quiet, then a loud 100 Hz (LOW) burst.
+  an.pushSamples(sineInt16(100, 0.2, 0.05));
+  const before = results.length;
+  an.pushSamples(sineInt16(100, 0.1, 0.9));
+  const after = results.slice(before);
+  const onLowMax = Math.max(...after.map(r => r.onsetLow));
+  const onHighMax = Math.max(...after.map(r => r.onsetHigh));
+  assert.ok(onLowMax > 0.1, `onsetLow should spike on a low-band onset; got ${onLowMax}`);
+  assert.ok(onLowMax > onHighMax + 0.05, `low onset should dominate high; low=${onLowMax} high=${onHighMax}`);
+});
+
+test('a sudden HIGH-band tone spikes onsetHigh, not onsetLow', () => {
+  const results = [];
+  const an = new AudioAnalyzer({
+    sampleRate: SR, fftSize: 1024, hopSize: 512,
+    bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+    onAnalysis: (r) => results.push(r),
+  });
+  an.pushSamples(sineInt16(8000, 0.2, 0.05));
+  const before = results.length;
+  an.pushSamples(sineInt16(8000, 0.1, 0.9));
+  const after = results.slice(before);
+  const onHighMax = Math.max(...after.map(r => r.onsetHigh));
+  const onLowMax = Math.max(...after.map(r => r.onsetLow));
+  assert.ok(onHighMax > 0.1, `onsetHigh should spike on a high-band onset; got ${onHighMax}`);
+  assert.ok(onHighMax > onLowMax + 0.05, `high onset should dominate low; high=${onHighMax} low=${onLowMax}`);
+});
+
+test('micSub is 0 when no sub window is configured (feature off, not a fallback)', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);   // no `sub` in makeAnalyzer
+  an.pushSamples(sineInt16(45, 0.3, 0.9));  // strong sub-bass tone
+  for (const r of results) assert.equal(r.micSub, 0, `micSub must be 0 with no sub window; got ${r.micSub}`);
+});
+
+test('micSub lights up on a sub-bass tone when the window is configured', () => {
+  const results = [];
+  const an = new AudioAnalyzer({
+    sampleRate: SR, fftSize: 1024, hopSize: 512,
+    bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+    sub:   { minHz: 30, maxHz: 60 },
+    onAnalysis: (r) => results.push(r),
+  });
+  an.pushSamples(sineInt16(43, 0.4, 0.9));  // ~sub bin at fftSize 1024
+  assert.ok(lastResult(results).micSub > 0.2, `micSub should light on a 43 Hz tone; got ${lastResult(results).micSub}`);
+});
+
+test('the five legacy outputs are unaffected by the new sub window', () => {
+  // Same signal, with and without `sub` configured → low/mid/high/kick/flux
+  // must be byte-identical (the additive outputs must not perturb them).
+  function runOnce(withSub) {
+    const results = [];
+    const opts = {
+      sampleRate: SR, fftSize: 1024, hopSize: 512,
+      bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+      kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+      onAnalysis: (r) => results.push(r),
+    };
+    if (withSub) opts.sub = { minHz: 30, maxHz: 60 };
+    const an = new AudioAnalyzer(opts);
+    an.pushSamples(whiteNoiseInt16(0.3, 0.5));
+    return results;
+  }
+  // Deterministic noise needed for byte-exactness — reseed Math.random via a
+  // fixed buffer instead.
+  const seed = whiteNoiseInt16(0.3, 0.5);
+  function runFixed(withSub) {
+    const results = [];
+    const opts = {
+      sampleRate: SR, fftSize: 1024, hopSize: 512,
+      bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+      kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+      onAnalysis: (r) => results.push(r),
+    };
+    if (withSub) opts.sub = { minHz: 30, maxHz: 60 };
+    const an = new AudioAnalyzer(opts);
+    an.pushSamples(seed);
+    return results;
+  }
+  const a = runFixed(false), b = runFixed(true);
+  assert.equal(a.length, b.length);
+  for (let i = 0; i < a.length; i++) {
+    for (const k of ['low', 'mid', 'high', 'kick', 'flux']) {
+      assert.equal(a[i][k], b[i][k], `legacy output ${k}[${i}] must be byte-identical (additive guarantee)`);
+    }
+  }
+});
+
+test('sub window validation throws on invalid edges (codex P0)', () => {
+  const base = {
+    sampleRate: SR, fftSize: 1024, hopSize: 512,
+    bands: { lowMaxHz: 250, midMaxHz: 2000, attackMs: 5, releaseMs: 30, noiseGate: 0 },
+    kick:  { minHz: 40, maxHz: 120, threshold: 1.6, refractoryMs: 200, decayMs: 80 },
+    onAnalysis: () => {},
+  };
+  assert.throws(() => new AudioAnalyzer({ ...base, sub: { minHz: 60, maxHz: 30 } }), /sub band invalid/);
+  assert.throws(() => new AudioAnalyzer({ ...base, sub: { minHz: -1, maxHz: 60 } }), /sub band invalid/);
+});
+
+// ── CHROMA harmonic/timbre features (report 20260620_30) ────────────────────
+// Additive analyzer outputs: tonalStability (chroma concentration), chromaFlux
+// (harmonic-change rate), chromaTilt (treble/bass timbre). All in [0,1].
+
+test('chroma outputs are present and in [0,1]', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  an.pushSamples(sineInt16(220, 1.0));   // A3 — well inside the chroma band
+  for (const r of results) {
+    for (const k of ['tonalStability', 'chromaFlux', 'chromaTilt']) {
+      assert.ok(typeof r[k] === 'number', `${k} should be a number`);
+      assert.ok(r[k] >= 0 && r[k] <= 1, `${k} out of [0,1]: ${r[k]}`);
+    }
+  }
+});
+
+test('a single steady tone reads high tonalStability + low chromaFlux', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  an.pushSamples(sineInt16(330, 1.2));   // E4 — one clear pitch class
+  const tail = results.slice(Math.floor(results.length * 0.5));   // post-settle
+  const meanTonal = tail.reduce((s, r) => s + r.tonalStability, 0) / tail.length;
+  const meanFlux  = tail.reduce((s, r) => s + r.chromaFlux, 0) / tail.length;
+  // One sine concentrates the chroma in ~1 class → high concentration, and once
+  // the spectrum is steady the harmonic-change rate is near zero.
+  assert.ok(meanTonal > 0.4, `steady tone should be tonally concentrated, got ${meanTonal}`);
+  assert.ok(meanFlux < 0.05, `steady tone should have near-zero chromaFlux, got ${meanFlux}`);
+});
+
+test('an alternating two-tone reads higher chromaFlux than a steady tone', () => {
+  const steadyR = [];
+  makeAnalyzer({}, steadyR).pushSamples(sineInt16(262, 1.5));   // steady C4
+  const steadyFlux = steadyR.slice(steadyR.length >> 1)
+    .reduce((s, r) => s + r.chromaFlux, 0) / (steadyR.length >> 1);
+
+  // Alternate C4 and G4 every 0.15 s → the dominant pitch class keeps flipping.
+  const altR = [];
+  const an = makeAnalyzer({}, altR);
+  for (let seg = 0; seg < 10; seg++) {
+    an.pushSamples(sineInt16(seg % 2 ? 392 : 262, 0.15));
+  }
+  const altFlux = altR.slice(altR.length >> 1)
+    .reduce((s, r) => s + r.chromaFlux, 0) / (altR.length >> 1);
+  assert.ok(altFlux > steadyFlux,
+    `alternating tones (${altFlux}) should move chromaFlux above a steady tone (${steadyFlux})`);
+});
+
+test('chromaTilt rises with a bright tone vs a dark one', () => {
+  const lowR = [], highR = [];
+  makeAnalyzer({}, lowR).pushSamples(sineInt16(98, 1.0));    // G2 — bass (below 500 Hz split)
+  makeAnalyzer({}, highR).pushSamples(sineInt16(1318, 1.0)); // E6 — treble (above split)
+  const lowTilt  = lowR[lowR.length - 1].chromaTilt;
+  const highTilt = highR[highR.length - 1].chromaTilt;
+  assert.ok(highTilt > lowTilt,
+    `a treble tone (${highTilt}) should read brighter than a bass tone (${lowTilt})`);
+});
+
+test('chroma adds no NaN and the band sum is finite under silence', () => {
+  const results = [];
+  const an = makeAnalyzer({}, results);
+  an.pushSamples(new Int16Array(SR));   // 1 s of digital silence
+  for (const r of results) {
+    assert.ok(Number.isFinite(r.tonalStability) && Number.isFinite(r.chromaFlux) && Number.isFinite(r.chromaTilt),
+      'chroma outputs must stay finite in silence');
+    // No harmonic content → flat/zero features, never negative.
+    assert.equal(r.chromaTilt, 0, 'silence chromaTilt should be 0');
+  }
 });

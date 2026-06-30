@@ -95,12 +95,18 @@ test('UI/state events ride /ws/control', () => {
     'mixerTransitionRejected',
     'globalEffectSlots',
     'globalEffectMacroStatus',
+    // docs/39 §F-hue: global hue shifter knob broadcast.
+    'globalHueShift',
+    // docs/39 §F-invert: global color-invert toggle broadcast.
+    'globalInvert',
     'scheduledTasks',
     'playlistLibrary',
     'playlistSaved',
     'playlistDeleted',
     'channelPlaylistData',
     'playlistEntryCaptured',
+    // round-2 #10: mixer undo ring depth/top broadcast.
+    'undoState',
     'paramRejected',
     'audioStatus',
     'oscStats',

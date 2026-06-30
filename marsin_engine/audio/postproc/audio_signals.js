@@ -94,28 +94,91 @@ const MIC_BANDS = [
 // `osc` (optional) = the inbound OSC address the Audio Companion (sole
 // analyzer, 2026-06-17 contract) feeds this key from. The detector outputs
 // the companion emits carry a binding; the rest stay engine-internal.
+// The Audio Companion is the SOLE analyzer (2026-06-21): it computes the FULL
+// derived/detector set and emits EVERY key over OSC. So every entry below now
+// carries an `osc` inbound binding — the engine receives them instead of
+// computing its own. (Was: only build/energy/slow/bpm/party were bound.)
 const DETECTORS = [
   { key: 'audioStructure',   label: 'Audio · Structure',    range: [0, 2], hz: 10, osc: '/marsin/audio/structure' },
   { key: 'audioBuildScore',  label: 'Audio · Build Score',  range: [0, 1], hz: 10, osc: '/marsin/audio/build' },
   { key: 'audioEnergyRatio', label: 'Audio · Energy Ratio', range: [0, 1], hz: 10, osc: '/marsin/audio/energy' },
-  { key: 'audioVocalsHot',   label: 'Audio · Vocals Hot',   range: [0, 1], hz: 5  },
-  { key: 'audioDropPulse',   label: 'Audio · Drop Pulse',   range: [0, 1], hz: 15 },
+  { key: 'audioVocalsHot',   label: 'Audio · Vocals Hot',   range: [0, 1], hz: 5,  osc: '/marsin/audio/vocalshot' },
+  { key: 'audioDropPulse',   label: 'Audio · Drop Pulse',   range: [0, 1], hz: 15, osc: '/marsin/audio/drop' },
   { key: 'audioSlowZone',    label: 'Audio · Slow Zone',    range: [0, 1], hz: 10, osc: '/marsin/audio/slow' },
 ];
 
 // Derived signals (BPM / beat / party / note / switch cues) — observe-and-publish.
+// Every derived signal now carries an OSC inbound binding — the Companion (sole
+// analyzer) computes and emits them all; the engine receives them.
 const DERIVED = [
   { key: 'audioBpm',           label: 'Audio · BPM',            range: [0, 300], hz: 5,  osc: '/marsin/audio/bpm' },
-  { key: 'audioBeat',          label: 'Audio · Beat',           range: [0, 1],   hz: 30 },
+  { key: 'audioBeat',          label: 'Audio · Beat',           range: [0, 1],   hz: 30, osc: '/marsin/audio/beat' },
   { key: 'audioParty',         label: 'Audio · Party',          range: [0, 1],   hz: 5,  osc: '/marsin/audio/party' },
-  { key: 'audioNote',          label: 'Audio · Note',           range: [0, 11],  hz: 10 },
-  { key: 'audioNoteHue',       label: 'Audio · Note Hue',       range: [0, 1],   hz: 10 },
-  { key: 'audioSwitchPattern', label: 'Audio · Switch Pattern', range: [0, 1],   hz: 15 },
-  { key: 'audioSwitchColor',   label: 'Audio · Switch Color',   range: [0, 1],   hz: 15 },
-  { key: 'audioBeatInBar',     label: 'Audio · Beat In Bar',    range: [0, 4],   hz: 30 },
-  { key: 'audioBarPhase',      label: 'Audio · Bar Phase',      range: [0, 1],   hz: 30 },
-  { key: 'audioDownbeat',      label: 'Audio · Downbeat',       range: [0, 1],   hz: 30 },
+  { key: 'audioNote',          label: 'Audio · Note',           range: [0, 11],  hz: 10, osc: '/marsin/audio/note' },
+  { key: 'audioNoteHue',       label: 'Audio · Note Hue',       range: [0, 1],   hz: 10, osc: '/marsin/audio/notehue' },
+  { key: 'audioSwitchPattern', label: 'Audio · Switch Pattern', range: [0, 1],   hz: 15, osc: '/marsin/audio/switchpattern' },
+  { key: 'audioSwitchColor',   label: 'Audio · Switch Color',   range: [0, 1],   hz: 15, osc: '/marsin/audio/switchcolor' },
+  { key: 'audioBeatInBar',     label: 'Audio · Beat In Bar',    range: [0, 4],   hz: 30, osc: '/marsin/audio/beatinbar' },
+  { key: 'audioBarPhase',      label: 'Audio · Bar Phase',      range: [0, 1],   hz: 30, osc: '/marsin/audio/barphase' },
+  { key: 'audioDownbeat',      label: 'Audio · Downbeat',       range: [0, 1],   hz: 30, osc: '/marsin/audio/downbeat' },
+  // Coarse dance-genre classifier (party-mode only). audioGenre is an integer
+  // index 0..6 (GENRE_NAMES in audio/signals/genre_classifier.js); conf 0..1.
+  { key: 'audioGenre',         label: 'Audio · Genre',          range: [0, 6],   hz: 5,  osc: '/marsin/audio/genre' },
+  { key: 'audioGenreConf',     label: 'Audio · Genre Conf',     range: [0, 1],   hz: 5,  osc: '/marsin/audio/genreconf' },
+  // new_derived_signals (2026-06-20): riser/anticipation, track-change/silence,
+  // climax, phrase, drop-countdown. audioBuildEta carries SECONDS (best-effort,
+  // 0 when no honest estimate); the rest are [0,1].
+  { key: 'audioRiserScore',     label: 'Audio · Riser Score',     range: [0, 1],  hz: 15, osc: '/marsin/audio/riser' },
+  { key: 'audioBuildEta',       label: 'Audio · Build ETA',       range: [0, 60], hz: 10, osc: '/marsin/audio/buildeta' },
+  { key: 'audioRiserConf',      label: 'Audio · Riser Conf',      range: [0, 1],  hz: 10, osc: '/marsin/audio/riserconf' },
+  { key: 'audioSilence',        label: 'Audio · Silence',         range: [0, 1],  hz: 5,  osc: '/marsin/audio/silence' },
+  { key: 'audioTrackChange',    label: 'Audio · Track Change',    range: [0, 1],  hz: 15, osc: '/marsin/audio/trackchange' },
+  { key: 'audioClimax',         label: 'Audio · Climax',          range: [0, 1],  hz: 10, osc: '/marsin/audio/climax' },
+  { key: 'audioPhrasePhase',    label: 'Audio · Phrase Phase',    range: [0, 1],  hz: 15, osc: '/marsin/audio/phrasephase' },
+  { key: 'audioPhraseBoundary', label: 'Audio · Phrase Boundary', range: [0, 1],  hz: 15, osc: '/marsin/audio/phraseboundary' },
+  { key: 'audioDropCountdown',  label: 'Audio · Drop Countdown',  range: [0, 1],  hz: 30, osc: '/marsin/audio/dropcountdown' },
 ];
+
+// analyzer_features (slot 3): per-band onset → spatial-chase pulses + sub-bass
+// chest hit. RAW analyzer mirrors (micOnset*Raw, micSubRaw) carry the analyzer's
+// rising-flux-per-band / sub-energy each hop; the band_onsets/sub_bass shapers
+// (derivedSignals) read them and publish the PULSE keys (micOnset*, audioChestHit).
+// All live, [0,1], engine-internal (no OSC inbound), not chain-processed.
+const ONSET_RAW = [
+  { key: 'micOnsetLowRaw',  label: 'Mic · Onset Low (raw)' },
+  { key: 'micOnsetMidRaw',  label: 'Mic · Onset Mid (raw)' },
+  { key: 'micOnsetHighRaw', label: 'Mic · Onset High (raw)' },
+  { key: 'micSubRaw',       label: 'Mic · Sub (raw)' },
+];
+const ONSET_PULSE = [
+  { key: 'micOnsetLow',  label: 'Mic · Onset Low',  hz: 30, osc: '/marsin/audio/onsetlow' },
+  { key: 'micOnsetMid',  label: 'Mic · Onset Mid',  hz: 30, osc: '/marsin/audio/onsetmid' },
+  { key: 'micOnsetHigh', label: 'Mic · Onset High', hz: 30, osc: '/marsin/audio/onsethigh' },
+  { key: 'audioChestHit', label: 'Audio · Chest Hit', hz: 30, osc: '/marsin/audio/chesthit' },
+];
+
+// genre_chroma (report 20260620_30): RAW analyzer chroma/timbre mirrors. The
+// analyzer folds the FFT magnitude into a 12-bin pitch-class chroma each hop and
+// derives three level-robust scalars (tonalStability = chroma concentration,
+// chromaFlux = harmonic-change rate, chromaTilt = treble/bass timbre). The genre
+// classifier reads these to separate harmonically-static genres (techno) from
+// chord-moving ones. Engine-internal, live, [0,1], not chain-processed.
+const CHROMA_RAW = [
+  { key: 'micTonalStabilityRaw', label: 'Mic · Tonal Stability (raw)' },
+  { key: 'micChromaFluxRaw',     label: 'Mic · Chroma Flux (raw)' },
+  { key: 'micChromaTiltRaw',     label: 'Mic · Chroma Tilt (raw)' },
+];
+
+function onsetPulseDescriptor(d) {
+  return {
+    key: d.key, label: d.label, type: 'float',
+    range: [0, 1], default: 0.0, clamp: true,
+    persist: false, live: true, broadcastHz: d.hz, portWatch: false,
+    // The Companion (sole analyzer) emits these onset/chest pulses over OSC.
+    oscAddress: d.osc !== undefined ? d.osc : undefined, sharedFnName: d.key,
+    processed: false, hasRawMirror: false, gainKey: null, defaultChainKind: null,
+  };
+}
 
 function gainDescriptor(key, label) {
   return {
@@ -227,6 +290,22 @@ function buildDescriptors() {
   // 10) Derived signals (BPM / beat / party / note / switch cues).
   for (const d of DERIVED) {
     out.push(detectorDescriptor(d));
+  }
+
+  // 11) analyzer_features (slot 3): per-band onset RAW mirrors + their shaped
+  //     pulses, then the sub-bass chest hit (raw + pulse). Raw mirrors first
+  //     (analyzer outputs), then the pulses (derivedSignals outputs).
+  for (const d of ONSET_RAW) {
+    out.push(rawMirrorDescriptor(d.key, d.label, 30));
+  }
+  for (const d of ONSET_PULSE) {
+    out.push(onsetPulseDescriptor(d));
+  }
+
+  // 12) genre_chroma (report 20260620_30): RAW chroma/timbre analyzer mirrors
+  //     the genre classifier reads (engine-internal, no shaped pulse).
+  for (const d of CHROMA_RAW) {
+    out.push(rawMirrorDescriptor(d.key, d.label, 15));
   }
 
   return out;

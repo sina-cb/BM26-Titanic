@@ -1,0 +1,4 @@
+# Published gallery widgets are scratch review artifacts, not source.
+# Ignore everything in this dir except this file.
+*
+!.gitignore

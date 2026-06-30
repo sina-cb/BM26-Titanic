@@ -13,6 +13,10 @@ import { TOP_MIN, registerPanel } from "./panel_layout.js";
 import { setupSyntaxHighlight } from "./syntax_highlight.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { engineHttpUrl } from "../core/engine_endpoint.js";
+// Shared with the engine — single source of truth for parsing a pattern's
+// `export var` slider code defaults from source. Served from the repo root
+// (the sim's static host serves `../`), so this is offline/self-contained.
+import { parsePatternDefaults } from "../../../marsin_engine/lib/pattern_defaults.js";
 
 // ─── Engine Instance ────────────────────────────────────────────────────
 const patternEngine = new MarsinEngine();
@@ -390,7 +394,7 @@ function destroyParamGui() {
 }
 
 // ─── Local Pattern Parameters (rebuilt on each compile) ───────────────────
-async function updateParameterUI(ok) {
+async function updateParameterUI(ok, codeDefaults = {}) {
   // Ensure the persistent global GUI exists
   await ensureGlobalParamsGui();
 
@@ -437,10 +441,30 @@ async function updateParameterUI(ok) {
 
   localFolder = paramGuiInstance.addFolder('Pattern Parameters');
   const paramState = {};
-  // Seed each control from the engine's live value (falling back to `def`) so
-  // the panel reflects what the global CPC controls have driven it to — e.g.
-  // cp1H shows the hue colorPalette1 set, not a stale 0.
-  const seed = (exp, def) => (typeof exp.value === 'number' ? exp.value : def);
+  // Seed each control from the engine's live value when present; otherwise from
+  // the pattern's `export var` CODE DEFAULT (parsed from source — the VM can't
+  // report it), and only then from the supplied bare fallback. This is the same
+  // source of truth the engine uses, so the sim editor and the engine show the
+  // identical author default instead of a hardcoded 0.5 / 0.
+  //   - SLIDER exports key the code-default map directly by control name
+  //     (e.g. "sliderLevel").
+  //   - VAR exports are the underlying variable (e.g. "level"); their default
+  //     lives under the "slider"+Cap(name) key, so we derive it.
+  const codeDefaultFor = (exp) => {
+    if (exp.kind === ExportKind.SLIDER) {
+      return exp.name in codeDefaults ? codeDefaults[exp.name] : undefined;
+    }
+    if (exp.kind === ExportKind.VAR && exp.name.length > 0) {
+      const key = 'slider' + exp.name.charAt(0).toUpperCase() + exp.name.slice(1);
+      return key in codeDefaults ? codeDefaults[key] : undefined;
+    }
+    return undefined;
+  };
+  const seed = (exp, def) => {
+    if (typeof exp.value === 'number') return exp.value;
+    const cd = codeDefaultFor(exp);
+    return typeof cd === 'number' ? cd : def;
+  };
 
   localExports.forEach(exp => {
     if (exp.kind === ExportKind.SLIDER) {
@@ -459,7 +483,7 @@ async function updateParameterUI(ok) {
       localFolder.add(paramState, exp.name);
     } else if (exp.kind === ExportKind.VAR) {
       // CaptainPad parity: every parameter is a 0–1 fader, not a bare number
-      // field. Seeded from the engine so it tracks the global CPC drive.
+      // field. Seeded from the engine live value, else the code default.
       paramState[exp.name] = clamp01(seed(exp, 0));
       localFolder.add(paramState, exp.name, 0, 1)
         .onChange(v => patternEngine.setControl(exp.id, v));
@@ -501,7 +525,18 @@ function compileEditorCode() {
     statusEl.className = 'pe-status error';
     statusEl.innerHTML = '<span class="pe-status-icon">✗</span> ' + errMsg;
   }
-  updateParameterUI(ok);
+  // Parse slider code defaults from the SAME source we just compiled so the
+  // panel seeds each fader to the pattern's `export var` default (the WASM VM
+  // can't report it). Computed (non-literal) defaults are logged loudly and
+  // left to the VM default — never silently guessed (Codex P0).
+  const { defaults: codeDefaults, computed } = parsePatternDefaults(code);
+  for (const c of computed) {
+    console.warn(
+      `[PB] slider "${c.control}" (var ${c.varName}) has a non-literal default `
+      + `"${c.raw}" — leaving VM default.`,
+    );
+  }
+  updateParameterUI(ok, codeDefaults);
 }
 
 export function setupPatternEditor() {

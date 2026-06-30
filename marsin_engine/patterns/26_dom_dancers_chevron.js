@@ -46,13 +46,16 @@
   AUDIO REACTIVITY (modulators-only — patterns never read CPC audio globals,
   operator decision 2026-06-17). The pattern exposes SLIDER params with
   resting defaults that already look great; audio reactivity is added by
-  attaching MODULATION mappings (source = any live audio key) in the
-  playlist. Documented default couplings:
-      MODULATE  sliderBall1X         (ball1_x)        <-  micDomEnergy1
-      MODULATE  sliderBall2X         (ball2_x)        <-  micDomEnergy2
-      MODULATE  sliderBall1Energy    (ball1_energy)   <-  micDomEnergy1
-      MODULATE  sliderBall2Energy    (ball2_energy)   <-  micDomEnergy2
-      MODULATE  sliderChevronSpeedup (chevronSpeedup) <-  micLow
+  attaching MODULATION mappings in the playlist.
+
+  AUDIO_MODULATION_V1:
+    sliderDancerGlow     <- micLow  range 0.35..1.00 curve linear  # PRIMARY whole-rig brightness (both halos)
+    sliderChevronSpeedup <- micFlux range 0.00..1.00 curve linear  # spiral spin speed (build = faster filigree)
+    sliderBall1Energy    <- micMid  range 0.25..1.00 curve linear  # geometry: dancer-1 size + core pop
+    sliderBall2Energy    <- micHigh range 0.25..1.00 curve linear  # detail: dancer-2 size + core pop
+  (static, omit from playlist: sliderBall1X, sliderBall2X — dancer X TARGETS are
+   operator-set so the springs glide between fixed points; sliderBaseGlow,
+   sliderDancerSize, sliderLocalSpeed — operator-set, not audio-driven.)
   At slider defaults (no audio) the dancers idle apart, the bridge breathes,
   and the spirals turn slowly — fully alive, no black-out (P0).
 */
@@ -61,18 +64,18 @@
 export var localSpeed = 0.5;          // standard first local slider (global motion trim)
 
 // Background dancers
-export var ball1_x = 0.34;            // 0..1 dancer-1 X target  (MODULATE <- micDomEnergy1)
-export var ball1_energy = 0.6;        // 0..1 dancer-1 brightness/size
-export var ball2_x = 0.66;            // 0..1 dancer-2 X target  (MODULATE <- micDomEnergy2)
-export var ball2_energy = 0.6;        // 0..1 dancer-2 brightness/size
+export var ball1_x = 0.34;            // 0..1 dancer-1 X target  (operator-set, static)
+export var ball1_energy = 0.5;        // 0..1 dancer-1 size/core (audio: micMid 0.25..1.00)
+export var ball2_x = 0.66;            // 0..1 dancer-2 X target  (operator-set, static)
+export var ball2_energy = 0.5;        // 0..1 dancer-2 size/core (audio: micHigh 0.25..1.00)
 
-export var baseGlow = 0.12;           // soft palette wash floor (never dark — P0)
-export var dancerSize = 0.30;         // base halo half-width (X units)
-export var dancerGlow = 1.0;          // peak halo brightness
+export var baseGlow = 0.15;           // soft palette wash floor (never dark — P0)
+export var dancerSize = 0.34;         // base halo half-width (X units)
+export var dancerGlow = 0.7;          // PRIMARY peak halo brightness (audio: micLow 0.35..1.00)
 
 // Spiral filigree (foreground) speed-up. chevronSpeedup keeps its historical
-// name and acts as the global motion/speed drive (MODULATE <- micLow).
-export var chevronSpeedup = 0.0;
+// name and acts as the spiral motion/speed drive (audio: micFlux).
+export var chevronSpeedup = 0.4;
 
 // Palette pickers (strict cp1<->cp2 RGB-space blending; spirals use the bright
 // complement of the cp midpoint so they always read high-contrast).
@@ -84,12 +87,14 @@ export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 export function sliderLocalSpeed(v) { localSpeed = v; }
 export function sliderBaseGlow(v) { baseGlow = v * 0.30; }
 export function sliderDancerSize(v) { dancerSize = 0.14 + v * 0.40; }
-export function sliderDancerGlow(v) { dancerGlow = v; }
-export function sliderChevronSpeedup(v) { chevronSpeedup = v; }
+// Audio sliders remap the incoming signal (0..1) into a SANE range with a
+// silence floor up to a bright peak. dancerGlow is the PRIMARY whole-rig brightness.
+export function sliderDancerGlow(v) { dancerGlow = 0.35 + v * 0.65; }   // micLow  0.35..1.00 (PRIMARY)
+export function sliderChevronSpeedup(v) { chevronSpeedup = v; }         // micFlux 0..1 spiral speed
 export function sliderBall1X(v) { ball1_x = v; }
-export function sliderBall1Energy(v) { ball1_energy = v; }
+export function sliderBall1Energy(v) { ball1_energy = 0.25 + v * 0.75; } // micMid  0.25..1.00 geometry
 export function sliderBall2X(v) { ball2_x = v; }
-export function sliderBall2Energy(v) { ball2_energy = v; }
+export function sliderBall2Energy(v) { ball2_energy = 0.25 + v * 0.75; } // micHigh 0.25..1.00 detail
 
 // ── Motion constants ─────────────────────────────────────────────────────────
 var SPIN_BASE_HZ  = 0.040;   // constant slow spiral spin
@@ -255,11 +260,15 @@ export function render3D(index, x, y, z) {
   var h1 = orbProfile(abs(px - d1x), halfW1);  // dancer 1 halo
   var h2 = orbProfile(abs(px - d2x), halfW2);  // dancer 2 halo
 
-  // Bright white-ish cores (tight, high-energy centres).
+  // Bright white-ish cores (tight, high-energy centres). Scaled by dancerGlow
+  // (PRIMARY micLow) so the bright cores rise/fall with the low band too — keeps
+  // the PRIMARY brightness correlation high (they are otherwise the dominant,
+  // glow-independent white spike that would dilute the corr).
   var coreW1 = 0.30 * halfW1;
   var coreW2 = 0.30 * halfW2;
-  var core1 = orbProfile(abs(px - d1x), coreW1) * (0.4 + 0.6 * e1);
-  var core2 = orbProfile(abs(px - d2x), coreW2) * (0.4 + 0.6 * e2);
+  var coreGain = 0.35 + 0.65 * dancerGlow;
+  var core1 = orbProfile(abs(px - d1x), coreW1) * (0.4 + 0.6 * e1) * coreGain;
+  var core2 = orbProfile(abs(px - d2x), coreW2) * (0.4 + 0.6 * e2) * coreGain;
 
   // Halo levels driven by glow + energy.
   var lvl1 = dancerGlow * (0.35 + 0.65 * e1) * h1;
@@ -322,11 +331,20 @@ export function render3D(index, x, y, z) {
   arm = pow(arm, SPIRAL_SHARP);           // sharpen into thin filaments
   // Fade the filigree toward the very centre so it doesn't smear into a blob.
   var rFade = clamp01(radius * 2.2);
-  var spiralLvl = arm * rFade * (0.55 + 0.45 * clamp01(chevronSpeedup));
+  // Spiral brightness also rides the PRIMARY (dancerGlow / micLow) so the whole
+  // luminous frame — soft balls AND filigree — rises/falls with the low band.
+  var spiralLvl = arm * rFade * (0.55 + 0.45 * clamp01(chevronSpeedup)) * (0.45 + 0.55 * dancerGlow);
 
   // ── COMPOSITE: screen-blend spiral accent over the soft balls ───────────
   var r = screen1(clamp01(bgR), spiralLvl * spiralR);
   var g = screen1(clamp01(bgG), spiralLvl * spiralG);
   var b = screen1(clamp01(bgB), spiralLvl * spiralB);
+
+  // PRIMARY brightness budget: a final whole-frame gain tied to dancerGlow
+  // (micLow). It scales the entire composite as one budget so total brightness
+  // tracks the low band tightly (high PRIMARY corr), with a floor so the rig is
+  // never dark at rest (P0). Other audio dims still shape geometry/motion/detail.
+  var primary = 0.40 + 0.60 * clamp01(dancerGlow);
+  r = r * primary; g = g * primary; b = b * primary;
   rgb(clamp01(r), clamp01(g), clamp01(b));
 }

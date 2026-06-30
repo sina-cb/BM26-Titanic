@@ -35,7 +35,19 @@ function arg(name, def) {
   return i === -1 ? def : process.argv[i + 1];
 }
 const pattern = arg('pattern', null);
-const frames = parseInt(arg('frames', '48'), 10);
+// --seconds (real-time clip length) wins over --frames, mirroring the offline
+// harness. The vis WS broadcasts at ~5 Hz, so out-fps defaults to 5 here (the
+// stored-frame cadence); frames = round(seconds * out-fps). fps/seconds are
+// stamped into the JSON so the clip plays at the right rate (JSON shape stays
+// otherwise identical to the legacy --frames capture).
+const secondsArg = arg('seconds', null);
+const outFps = parseFloat(arg('out-fps', '5'));
+if (!(outFps > 0) || !isFinite(outFps)) { console.error('❌ --out-fps must be > 0, got ' + arg('out-fps', '5')); process.exit(1); }
+const useSeconds = secondsArg !== null && secondsArg !== undefined;
+const seconds = useSeconds ? parseFloat(secondsArg) : null;
+if (useSeconds && (!(seconds > 0) || !isFinite(seconds))) { console.error('❌ --seconds must be > 0, got ' + secondsArg); process.exit(1); }
+const frames = useSeconds ? Math.max(1, Math.round(seconds * outFps)) : parseInt(arg('frames', '48'), 10);
+const stampFps = useSeconds ? outFps : parseFloat(arg('out-fps', '5'));
 const buffer = arg('buffer', 'master');           // master | rig
 const host = arg('host', '127.0.0.1:6968');
 const modelName = arg('model', 'test_bench');
@@ -57,6 +69,11 @@ async function ids() {
 
 const model = await import(pathToFileURL(path.join(ENGINE_DIR, 'models', modelName + '.js')).href);
 const meta = model.pixels.map(p => ({ i: p.i, fId: p.fId || 0, sId: p.sId || 0, nx: p.nx, ny: p.ny, nz: p.nz }));
+// Raw physical axis spreads (un-normalized model coords if present) so the clip
+// generator's `--view auto` can pick the two physically-widest axes (nx/ny/nz
+// are normalized per-axis and lose the real-world aspect).
+function rawSpread(ax) { const v = model.pixels.map(p => p[ax]).filter(x => typeof x === 'number'); return v.length ? (Math.max(...v) - Math.min(...v)) : 0; }
+const coordSpread = (typeof model.pixels[0].x === 'number') ? { x: rawSpread('x'), y: rawSpread('y'), z: rawSpread('z') } : null;
 
 if (pattern) {
   console.log('loading pattern', pattern);
@@ -83,7 +100,20 @@ const frameData = await new Promise(res => {
     let m; try { m = JSON.parse(d.toString()); } catch { return; }
     if (m.type !== 'vis' || !m.vis || !m.vis[buffer]) return;
     const buf = Buffer.from(m.vis[buffer], 'base64');
-    const fr = []; for (let i = 0; i < buf.length / 6; i++) { const o = i * 6; fr.push([buf[o], buf[o + 1], buf[o + 2]]); }
+    // Fold White/Amber/UV into the displayed RGB the SAME way the offline harness
+    // does (pattern_audio_harness.mjs fold), so a W/A/U-heavy pattern (e.g.
+    // 16_ghost_tide_uv) captures with matching brightness/hue live vs offline —
+    // not darker because the extra channels were dropped. 6ch order: R,G,B,W,Am,U.
+    const fr = [];
+    for (let i = 0; i < buf.length / 6; i++) {
+      const o = i * 6;
+      const R = buf[o], G = buf[o + 1], B = buf[o + 2], W = buf[o + 3], Am = buf[o + 4], U = buf[o + 5];
+      fr.push([
+        Math.min(255, Math.round(R + W + Am * 0.8 + U * 0.1)),
+        Math.min(255, Math.round(G + W + Am * 0.4)),
+        Math.min(255, Math.round(B + W + U * 0.5)),
+      ]);
+    }
     acc.push(fr);
     if (acc.length >= frames) { ws.close(); res(acc); }
   });
@@ -101,6 +131,6 @@ if (frameData.length < frames) {
 }
 
 fs.mkdirSync(path.dirname(out), { recursive: true });
-fs.writeFileSync(out, JSON.stringify({ pattern, buffer, model: modelName, meta, frames: frameData }));
+fs.writeFileSync(out, JSON.stringify({ pattern, buffer, model: modelName, fps: stampFps, seconds: useSeconds ? seconds : +(frameData.length / stampFps).toFixed(3), coordSpread, meta, frames: frameData }));
 console.log('wrote', frameData.length, 'frames x', (frameData[0] || []).length, 'px ->', out);
 process.exit(0);
