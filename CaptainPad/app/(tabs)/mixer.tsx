@@ -4,7 +4,7 @@ import { View, Text, TouchableOpacity, Pressable, ScrollView, StyleSheet, TextIn
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { usePalette } from '@/hooks/use-theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, router } from 'expo-router';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { RigGlobals } from '@/components/RigGlobals';
 import {
@@ -39,8 +39,9 @@ import { postBump } from '@/utils/bumpApi';
 import { GroupRailBody, MixGroupHeader, tintFromHex } from '@/components/GroupRail';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
-import { useOperatorTakeover } from '@/hooks/useTimeline';
+import { useOperatorTakeover, useTimeline } from '@/hooks/useTimeline';
 import { PlanIndicatorPill, PLAN_INDICATOR_CYAN } from '@/components/timeline/PlanIndicatorPill';
+import { ViewTakeoverConfirm } from '@/components/timeline/ViewTakeoverConfirm';
 import {
   ModulationReadonlyBadge, useEntryModulations, useModulationState,
   GhostMarker, prettySliderName,
@@ -54,6 +55,12 @@ import {
 // floor. An 8pt hitSlop on every edge expands the *interactive* area to
 // 44×44 without changing the visual footprint (28 + 8 + 8 = 44).
 const ICON_BTN_HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
+
+// CP-VIEWSWITCH: when a plan forces the output to the DECK and the operator
+// switches to the MIXER tab, we ask a question (the ViewTakeoverConfirm
+// overlay). The operator's exact rule: "ask a question to switch, if not
+// answered within 1m switch to deck." 1 minute = 60 seconds.
+const VIEW_TAKEOVER_TIMEOUT_SEC = 60;
 
 // (Per-channel color-accent palette removed 2026-06-22 — color coding was
 // dropped from the channel strip at operator request.)
@@ -1050,6 +1057,24 @@ export default function MixerScreen() {
   // surfaces the live-plan takeover non-intrusively (no modal).
   const { planActive, leaseHeld, leaseRemainingSec, notifyInteraction, resumeNow } =
     useOperatorTakeover();
+  // ── View-switch takeover (CP-VIEWSWITCH) ───────────────────────────────
+  // Distinct from useOperatorTakeover's CONTROL-touch takeover above: this
+  // gates ENTERING the mixer tab while a plan is forcing the output to the
+  // DECK. `forcingDeckView` (engine, on timelineState) = plan active AND output
+  // pinned to the deck under plan control. We read it + the explicit takeover
+  // action straight off useTimeline (same shared bus the takeover hook uses).
+  const { state: timelineState, takeover: timelineTakeover } = useTimeline();
+  const forcingDeckView = timelineState?.forcingDeckView === true;
+  // The view-switch confirm overlay + its 60s "auto-return to deck" countdown.
+  // The TIMER lives here (not in the overlay) so it's cleared deterministically
+  // on unmount / on any answer — see the focus effect below. `viewConfirmOpen`
+  // gates the modal; `viewConfirmSec` drives the visible M:SS countdown.
+  const [viewConfirmOpen, setViewConfirmOpen] = useState(false);
+  const [viewConfirmSec, setViewConfirmSec] = useState(VIEW_TAKEOVER_TIMEOUT_SEC);
+  // Guard so the on-focus gate prompts ONCE per mixer-tab entry while
+  // forcingDeckView — and so OUR own setMixerView('mixer') (on TAKE OVER) can't
+  // re-trigger the prompt or fight A4's control-touch takeover. Reset on blur.
+  const viewGateHandledRef = useRef(false);
   const [blends, setBlends] = useState<string[]>([]);
   const [transitionsList, setTransitionsList] = useState<string[]>([]);
   // ─── Playlist library: parent-owned (May 2026 refactor) ───────────
@@ -1156,11 +1181,119 @@ export default function MixerScreen() {
   // see the real number, not a stale UI constant.
   const maxChannelsRef = useRef<number>(3);
 
+  // ── View-switch takeover handlers (CP-VIEWSWITCH) ──────────────────────
+  // The 60s countdown interval handle lives in a ref so EVERY exit path —
+  // unmount, blur, TAKE OVER, STAY, timeout, and the forcingDeckView-flips-off
+  // auto-dismiss — clears it. It must NEVER fire late.
+  const viewConfirmTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const clearViewConfirmTimer = useCallback(() => {
+    if (viewConfirmTimerRef.current !== null) {
+      clearInterval(viewConfirmTimerRef.current);
+      viewConfirmTimerRef.current = null;
+    }
+  }, []);
+
+  // STAY ON PLAN / Cancel / 1:00 timeout → do the "switch to deck" the operator
+  // asked for: ensure the deck output and navigate back to the DECK tab. The
+  // plan keeps running on the deck untouched — NO takeover. Always clears the
+  // timer first so it can't fire late.
+  const revertViewToDeck = useCallback(() => {
+    clearViewConfirmTimer();
+    setViewConfirmOpen(false);
+    // viewGateHandledRef stays TRUE — we're leaving the mixer tab; the deck
+    // tab's own focus effect re-pins the deck output. The blur cleanup resets
+    // the guard for the next entry.
+    void setMixerView('deck').then((r) => {
+      if (!r.ok) {
+        Alert.alert('View switch not applied', `The engine rejected returning to the deck. ${r.error || ''}`.trim());
+      }
+    });
+    // Navigate the operator back to the DECK tab (expo-router). The deck route
+    // is the tab group's index.
+    router.replace('/');
+  }, [clearViewConfirmTimer]);
+
+  // TAKE OVER → switch the output to the mixer AND engage the operator lease so
+  // the plan won't fight the operator (the existing 120s inactivity auto-release
+  // later snaps back to the deck). Both calls fail loud on a non-ok result.
+  const acceptViewTakeover = useCallback(() => {
+    clearViewConfirmTimer();
+    setViewConfirmOpen(false);
+    void setMixerView('mixer').then((r) => {
+      if (!r.ok) {
+        Alert.alert('View switch not applied', `The engine rejected switching to the mixer. ${r.error || ''}`.trim());
+      }
+    });
+    void timelineTakeover().then((ok) => {
+      if (!ok) {
+        Alert.alert('Takeover not applied', 'The engine rejected the plan takeover. The plan may still resume control.');
+      }
+    });
+  }, [clearViewConfirmTimer, timelineTakeover]);
+
+  // On mixer-tab focus, gate the on-focus output switch on forcingDeckView.
+  // The handlers above are read through refs so this effect only depends on the
+  // gate inputs (not on every re-creation of revert/accept).
+  const forcingDeckViewRef = useRef(forcingDeckView);
+  useEffect(() => { forcingDeckViewRef.current = forcingDeckView; }, [forcingDeckView]);
+  const revertViewToDeckRef = useRef(revertViewToDeck);
+  useEffect(() => { revertViewToDeckRef.current = revertViewToDeck; }, [revertViewToDeck]);
+
   useFocusEffect(
     useCallback(() => {
-      setMixerView('mixer');
-    }, [])
+      // Once-per-entry guard: should the focus callback ever run again before a
+      // blur (defensive — useFocusEffect normally fires once per focus), don't
+      // re-prompt or re-fire the on-focus switch. Reset on blur below.
+      if (viewGateHandledRef.current) return;
+      if (forcingDeckViewRef.current) {
+        // A plan is forcing the deck output. DO NOT switch the engine to mixer
+        // yet — leave the plan driving the deck. Prompt ONCE per entry, and arm
+        // the 60s auto-return-to-deck timer.
+        viewGateHandledRef.current = true;
+        setViewConfirmSec(VIEW_TAKEOVER_TIMEOUT_SEC);
+        setViewConfirmOpen(true);
+        clearViewConfirmTimer();
+        viewConfirmTimerRef.current = setInterval(() => {
+          setViewConfirmSec((prev) => {
+            if (prev <= 1) {
+              // 1:00 elapsed with no answer → switch to deck + navigate back.
+              revertViewToDeckRef.current();
+              return 0;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+      } else {
+        // No plan forcing the deck → behave exactly as before: switch the
+        // output to the mixer immediately, no prompt.
+        viewGateHandledRef.current = true;
+        setMixerView('mixer');
+      }
+      // Blur cleanup: clear the timer, close the prompt, and reset the
+      // once-per-entry guard so the next mixer-tab entry re-evaluates the gate.
+      return () => {
+        clearViewConfirmTimer();
+        setViewConfirmOpen(false);
+        viewGateHandledRef.current = false;
+      };
+    }, [clearViewConfirmTimer])
   );
+
+  // Auto-dismiss: if forcingDeckView flips to FALSE on its own while the prompt
+  // is open (e.g. the plan ended), the question is moot — proceed to the mixer
+  // normally (switch the output, no takeover) and dismiss. Guarded on the open
+  // ref so it only runs while the prompt is actually showing.
+  useEffect(() => {
+    if (viewConfirmOpen && !forcingDeckView) {
+      clearViewConfirmTimer();
+      setViewConfirmOpen(false);
+      void setMixerView('mixer').then((r) => {
+        if (!r.ok) {
+          Alert.alert('View switch not applied', `The engine rejected switching to the mixer. ${r.error || ''}`.trim());
+        }
+      });
+    }
+  }, [viewConfirmOpen, forcingDeckView, clearViewConfirmTimer]);
 
   // Control plane handler (consumed by useEngineConnection below): mixer
   // state, baseChannelId, maxChannels, in-flight add reconciliation. ALSO:
@@ -2739,6 +2872,19 @@ export default function MixerScreen() {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      {/* ── View-switch takeover confirm (CP-VIEWSWITCH) ─────────────────
+          Shown when the operator enters the mixer tab while a plan is forcing
+          the output to the DECK. TAKE OVER switches the output to the mixer +
+          engages the operator lease; STAY ON PLAN / Cancel / the 1:00 timeout
+          returns to the deck and navigates back (handled by the focus gate's
+          timer + handlers above). */}
+      <ViewTakeoverConfirm
+        visible={viewConfirmOpen}
+        remainingSec={viewConfirmSec}
+        onTakeOver={acceptViewTakeover}
+        onStay={revertViewToDeck}
+      />
     </View>
   );
 }

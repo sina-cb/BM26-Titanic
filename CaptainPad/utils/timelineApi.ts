@@ -100,6 +100,13 @@ export interface TimelineState {
   // paused/overridden — i.e. the plan is actively driving the rig. This is the
   // primary "plan is live" signal the deck/mixer plan indicator reads.
   planActive: boolean;
+  // True when the plan is active AND the output view is pinned to the DECK
+  // under plan control (the plan is forcing the deck output). When this is set,
+  // the operator manually switching to the mixer must be gated by a takeover
+  // confirm (the CP-VIEWSWITCH feature) rather than silently stealing the
+  // output from the running plan. The engine does NOT auto-take-over on a view
+  // change — taking over is the explicit POST /timeline/takeover.
+  forcingDeckView: boolean;
   // The operator-takeover lease (manual override of a running plan), or null
   // when no takeover is held. See TimelineOperatorLease.
   operatorLease: TimelineOperatorLease | null;
