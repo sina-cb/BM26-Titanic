@@ -173,6 +173,8 @@ export class TimelineService {
    *   setDeckTransition(patch)               — patch the deck transition-config
    *                                            ({mode, durationMs?, enabled?}) before a deck swap
    *   setDeckOverlaysEnabled(bool)           — enable (honor configured) / disable ALL deck overlays
+   *   setColorAutopilot({active, palettes, delay_s, shuffle}) — configure + start/stop the
+   *                                            engine palette-cycling daemon (docs/39)
    *   forceDeckView()                        — PIN engine output to the deck via the existing
    *                                            viewOverride machinery (docs/38 §16.9) — the plan owns
    *                                            the deck-pin while it drives the deck
@@ -389,6 +391,18 @@ export class TimelineService {
     steps.push(`deck overlays ← ${enabled ? 'enabled' : 'disabled'}`);
   }
 
+  // Configure + (re)start / stop the engine's COLOR autopilot (palette cycling)
+  // from a deck playlist cue (docs/39). active:true → start cycling the given
+  // palette set on the delay/shuffle; active:false → stop. FAIL LOUD if the dep
+  // is missing (codex P0 — never silently drop an authored colorAutopilot).
+  async _applyColorAutopilot(colorAutopilot, steps) {
+    if (typeof this.deps.setColorAutopilot !== 'function') {
+      throw new Error('setColorAutopilot dep is required to apply a cue colorAutopilot');
+    }
+    await this.deps.setColorAutopilot(colorAutopilot);
+    steps.push(`deck ← colorAutopilot ${JSON.stringify(colorAutopilot)}`);
+  }
+
   // Pin engine output to the deck through the EXISTING viewOverride machinery
   // (docs/38 §16.9). The plan OWNS the deck-pin while it drives the deck; an
   // operator view-change off deck is what arms the operator-takeover lease
@@ -475,6 +489,10 @@ export class TimelineService {
         if (action.autopilot) {
           for (const target of targets) await this._setAutopilotOnTarget(target, action.autopilot, steps);
         }
+        // colorAutopilot is validated DECK-ONLY (show_plan.js) → only when a deck
+        // target is in play. Configure the palette-cycling daemon alongside the
+        // pattern autopilot (docs/39): they run in parallel.
+        if (action.colorAutopilot && onDeck) await this._applyColorAutopilot(action.colorAutopilot, steps);
         // The plan is driving the DECK → pin engine output to the deck (docs/38
         // §16.9). Reuses the existing viewOverride machinery via the injected dep.
         if (onDeck) await this._forceDeckView(steps);

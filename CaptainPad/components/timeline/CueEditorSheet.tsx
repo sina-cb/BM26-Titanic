@@ -12,25 +12,26 @@
  *               sun   → event dropdown + offset ±min stepper
  *               phase → phase dropdown
  *               mood  → from/to segmented + dwell/cooldown steppers + whenPhase
- *   ACTION    segmented   playlist | look       (scene removed — see below)
+ *   ACTION    (fixed)     playlist only        (look + scene removed)
  *               playlist → dropdown (GET /playlists), deck-only target,
  *                          TRANSITION (default|crossfade|flash|dissolve),
- *                          OVERLAYS (leave|enable|disable) + autopilot
- *               look     → dropdown of plan.looks
+ *                          OVERLAYS (leave|enable|disable),
+ *                          pattern AUTOPILOT + COLOR AUTOPILOT
  *   HOLD      none | minutes stepper            (programs only)
  *   DAYS      This day | All days | Pick…       (Pick = day-index toggles)
  *
- * PLAYLIST is the primary/default action (the simple path). LOOK is the
- * optional bundle (playlist + palette + globals, defined in plan.looks).
- * The `scene` action is deliberately NOT authored here: a scene switch
- * restarts the engine — dangerous + irrelevant inside the maker.
+ * PLAYLIST is the ONLY action the maker authors now (operator decision:
+ * "remove look all together"). The CueAction union still carries `look` /
+ * `globals` for hand-authored plans, but this editor never emits them. The
+ * `scene` action is likewise NOT authored here: a scene switch restarts the
+ * engine — dangerous + irrelevant inside the maker.
  */
 import React, { useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Modal, Pressable, StyleSheet } from 'react-native';
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import {
-  PlanCue, CueKind, CueTrigger, CueAction, SunEvent, CueDays, ShowPlan,
+  PlanCue, CueKind, CueTrigger, CueAction, ActionPlaylist, SunEvent, CueDays, ShowPlan,
   DeckTransitionMode, ActionOverlays, DECK_TRANSITION_MODES, DECK_TRANSITION_MODE_LABEL,
 } from '@/utils/timelineApi';
 import {
@@ -64,22 +65,29 @@ function defaultTrigger(type: CueTrigger['type']): CueTrigger {
   }
 }
 
-function defaultAction(type: CueAction['type'], firstLook: string | null): CueAction {
-  switch (type) {
-    case 'playlist': return { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } };
-    case 'look': return { type: 'look', look: firstLook || '' };
-    case 'globals': return { type: 'globals', set: {} };
-  }
+// The maker authors PLAYLIST cues only now (look removed). This always
+// returns a fresh, deck-targeted playlist action — the editor's single
+// default and reset shape.
+function defaultPlaylistAction(): ActionPlaylist {
+  return { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } };
 }
 
 export function CueEditorSheet({
-  visible, initialCue, plan, playlists, dayIndex, onSave, onDelete, onClose,
+  visible, initialCue, plan, playlists, palettes, dayIndex, onSave, onDelete, onClose,
 }: {
   visible: boolean;
   /** null = adding a new cue. */
   initialCue: PlanCue | null;
   plan: ShowPlan;
   playlists: string[];
+  /**
+   * Color-palette options for the COLOR AUTOPILOT multi-select, sourced from
+   * the engine's /color-palettes list (see utils/api.ts getCachedColorPalettes
+   * / fetchColorPalettes). Passed in the same way as `playlists` because the
+   * engine fetch lives outside this component's lease. Defaults to [] so the
+   * control degrades to an empty-state hint when the parent hasn't wired it.
+   */
+  palettes?: { id: string; name: string }[];
   /** The day the editor was opened from — seeds DAYS "This day". */
   dayIndex: number;
   onSave: (cue: PlanCue) => void;
@@ -89,7 +97,7 @@ export function CueEditorSheet({
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
 
-  const lookNames = Object.keys(plan.looks);
+  const paletteOptions = palettes ?? [];
   const phaseNames = Object.keys(plan.phases);
 
   type DaysMode = 'all' | 'this' | 'pick';
@@ -107,7 +115,7 @@ export function CueEditorSheet({
   const [kind, setKind] = useState<CueKind>('program');
   const [label, setLabel] = useState<string>('');
   const [trigger, setTrigger] = useState<CueTrigger>(defaultTrigger('clock'));
-  const [action, setAction] = useState<CueAction>(defaultAction('playlist', lookNames[0] || null));
+  const [action, setAction] = useState<CueAction>(defaultPlaylistAction());
   const [holdMin, setHoldMin] = useState<number | null>(null);
   const [days, setDays] = useState<CueDays>('all');
   // DAYS mode is EXPLICIT state, driven by the segmented control — NOT derived
@@ -124,7 +132,10 @@ export function CueEditorSheet({
       setKind(initialCue.kind || (initialCue.trigger.type === 'mood' ? 'mood' : 'program'));
       setLabel(initialCue.label || '');
       setTrigger(initialCue.trigger);
-      setAction(initialCue.action);
+      // A hand-authored cue could carry a look/globals action; the maker only
+      // edits playlist actions, so normalise anything else to a fresh playlist
+      // so the editor never gets stuck on an action it can't render.
+      setAction(initialCue.action.type === 'playlist' ? initialCue.action : defaultPlaylistAction());
       setHoldMin(initialCue.hold && 'min' in initialCue.hold ? initialCue.hold.min : null);
       setDays(initialCue.days ?? 'all');
       setDaysModeState(initialDaysMode(initialCue.days));
@@ -132,7 +143,7 @@ export function CueEditorSheet({
       setKind('program');
       setLabel('');
       setTrigger(defaultTrigger('clock'));
-      setAction(defaultAction('playlist', lookNames[0] || null));
+      setAction(defaultPlaylistAction());
       setHoldMin(null);
       setDays([dayIndex]); // new cue defaults to "this day"
       setDaysModeState('this');
@@ -180,7 +191,7 @@ export function CueEditorSheet({
       // do emit it, delay_s is clamped to a positive value (default 30) and
       // shuffle defaults to false — guaranteeing validity regardless of the
       // order the operator touched the autopilot controls.
-      const pl = { ...action, target: { channel: 'deck' as const, id: null } };
+      const pl: ActionPlaylist = { ...action, target: { channel: 'deck' as const, id: null } };
       if (pl.autopilot && pl.autopilot.active) {
         const d = pl.autopilot.delay_s;
         pl.autopilot = {
@@ -190,6 +201,24 @@ export function CueEditorSheet({
         };
       } else {
         delete pl.autopilot;
+      }
+      // COLOR AUTOPILOT — same discipline as the pattern autopilot above. Emit
+      // the block ONLY when active===true; otherwise OMIT it. When emitted,
+      // ALWAYS supply a positive delay_s (clamp/default 30), a NON-EMPTY
+      // palettes array (the toggle can't turn on without ≥1 palette, but we
+      // re-guard here so the emitted JSON can never be active+empty), and a
+      // boolean shuffle (default false). This satisfies the engine's strict
+      // validateColorAutopilot regardless of UI interaction order.
+      const ca = pl.colorAutopilot;
+      if (ca && ca.active && Array.isArray(ca.palettes) && ca.palettes.length > 0) {
+        pl.colorAutopilot = {
+          active: true,
+          palettes: ca.palettes,
+          delay_s: typeof ca.delay_s === 'number' && ca.delay_s > 0 ? ca.delay_s : 30,
+          shuffle: ca.shuffle ?? false,
+        };
+      } else {
+        delete pl.colorAutopilot;
       }
       outAction = pl;
     }
@@ -336,6 +365,7 @@ export function CueEditorSheet({
   const renderActionBody = () => {
     if (action.type === 'playlist') {
       const ap = action.autopilot ?? {};
+      const ca = action.colorAutopilot ?? { active: false, palettes: [] as string[], delay_s: 30 };
       // Target is always the main deck now (mixer removed from the maker UI).
       const transitionMode: 'default' | DeckTransitionMode = action.transition?.mode ?? 'default';
       const overlayMode: 'asis' | ActionOverlays = action.overlays ?? 'asis';
@@ -439,23 +469,88 @@ export function CueEditorSheet({
               />
             </>
           ) : null}
-        </View>
-      );
-    }
-    if (action.type === 'look') {
-      return (
-        <View style={styles.subBlock}>
-          <FieldLabel>LOOK</FieldLabel>
-          <Dropdown
-            value={action.look || null}
-            options={lookNames.map((l) => ({ id: l, label: l }))}
-            onSelect={(id) => setAction({ type: 'look', look: id })}
-            placeholder="Pick a look…"
-            emptyHint="This plan defines no looks."
+
+          {/* COLOR AUTOPILOT — cycles the deck's color palette over time,
+              distinct from the pattern autopilot above. Same emit discipline:
+              the block is only present while active, and turning it on seeds a
+              COMPLETE, valid block (≥1 palette + positive delay_s + shuffle) so
+              the emitted JSON can never be active+empty. */}
+          <View style={{ height: 12 }} />
+          <ToggleChip
+            on={!!ca.active}
+            onToggle={() => {
+              if (ca.active) {
+                // Turning OFF: drop the block entirely (optional on the action).
+                const next = { ...action };
+                delete next.colorAutopilot;
+                setAction(next);
+              } else {
+                // Turning ON requires ≥1 palette — without a palette to seed
+                // we can't emit a valid block, so keep the toggle OFF and let
+                // the empty-state hint tell the operator why.
+                if (paletteOptions.length === 0) return;
+                const seedPalette =
+                  ca.palettes && ca.palettes.length > 0 ? ca.palettes : [paletteOptions[0].id];
+                setAction({
+                  ...action,
+                  colorAutopilot: {
+                    active: true,
+                    palettes: seedPalette,
+                    delay_s: ca.delay_s && ca.delay_s > 0 ? ca.delay_s : 30,
+                    shuffle: ca.shuffle ?? false,
+                  },
+                });
+              }
+            }}
+            label={ca.active ? 'COLOR AUTOPILOT ON' : 'COLOR AUTOPILOT OFF'}
           />
-          <Text style={[styles.hint, { marginTop: 8 }]}>
-            A look = a playlist + its palette/brightness, reused by cues.
-          </Text>
+          {paletteOptions.length === 0 ? (
+            <Text style={[styles.hint, { marginTop: 8 }]}>
+              No color palettes reported by the engine — color autopilot unavailable.
+            </Text>
+          ) : null}
+          {ca.active ? (
+            <>
+              <View style={{ height: 8 }} />
+              <FieldLabel>COLOR PALETTES</FieldLabel>
+              <View style={styles.chipRow}>
+                {paletteOptions.map((p) => {
+                  const sel = (ca.palettes ?? []).includes(p.id);
+                  return (
+                    <ToggleChip
+                      key={p.id}
+                      on={sel}
+                      onToggle={() => {
+                        const cur = ca.palettes ?? [];
+                        const next = sel ? cur.filter((x) => x !== p.id) : [...cur, p.id];
+                        // Never let the active selection drop to empty — keep at
+                        // least the palette the operator is toggling off if it's
+                        // the last one (the block must stay valid while ON).
+                        const palettes = next.length > 0 ? next : cur;
+                        setAction({ ...action, colorAutopilot: { ...ca, active: true, palettes } });
+                      }}
+                      label={p.name}
+                    />
+                  );
+                })}
+              </View>
+              <View style={{ height: 8 }} />
+              <FieldLabel>COLOR DELAY (SEC)</FieldLabel>
+              <Stepper
+                value={ca.delay_s ?? 30}
+                step={5}
+                onChange={(v) => setAction({ ...action, colorAutopilot: { ...ca, active: true, palettes: ca.palettes ?? [], delay_s: v } })}
+                min={5} max={600}
+                format={(v) => `${v}s`}
+              />
+              <View style={{ height: 8 }} />
+              <ToggleChip
+                on={!!ca.shuffle}
+                onToggle={() => setAction({ ...action, colorAutopilot: { ...ca, active: true, palettes: ca.palettes ?? [], shuffle: !ca.shuffle } })}
+                label={ca.shuffle ? 'COLOR SHUFFLE ON' : 'COLOR SHUFFLE OFF'}
+              />
+            </>
+          ) : null}
         </View>
       );
     }
@@ -525,22 +620,11 @@ export function CueEditorSheet({
               />
               {renderTriggerBody()}
 
-              {/* ACTION */}
+              {/* ACTION — PLAYLIST only now (look removed; operator decision).
+                  No segmented switch: the maker authors a single action type. */}
               <View style={{ height: 14 }} />
               <FieldLabel>ACTION</FieldLabel>
-              <Segmented
-                options={[
-                  { id: 'playlist', label: 'Playlist' },
-                  { id: 'look', label: 'Look' },
-                ]}
-                value={action.type === 'globals' ? 'playlist' : action.type}
-                onChange={(v) => {
-                  // Only reset to a default when the action TYPE actually
-                  // changes — re-tapping the current segment must not clobber
-                  // the edited action (e.g. a configured playlist/target).
-                  if (v !== action.type) setAction(defaultAction(v as CueAction['type'], lookNames[0] || null));
-                }}
-              />
+              <Text style={styles.hint}>Playlist — the only cue action (looks removed).</Text>
               {renderActionBody()}
 
               {/* HOLD (programs only) */}
@@ -693,6 +777,12 @@ function makeStyles(C: Palette) {
       flexWrap: 'wrap',
       gap: 8,
       marginTop: 10,
+    },
+    chipRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginTop: 8,
     },
     dayPill: {
       minWidth: 44,

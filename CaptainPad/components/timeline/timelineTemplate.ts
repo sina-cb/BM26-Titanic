@@ -135,6 +135,8 @@ export function triggerSummary(t: CueTrigger): string {
 export function actionSummary(a: CueAction): string {
   switch (a.type) {
     case 'look':
+      // The maker no longer emits look actions (operator decision: looks
+      // removed). Kept harmless for hand-authored plans that still carry one.
       return `look · ${a.look}`;
     case 'playlist': {
       // Compact deck extras: transition mode (or `default` when inheriting) and
@@ -153,8 +155,10 @@ export function actionSummary(a: CueAction): string {
 
 // ── BRC starter template ────────────────────────────────────────────────
 // Sunrise shows + nightly autopilot baseline + a party-night cue. Shaped to
-// pass validateShowPlan: phases referenced by cues exist; looks referenced
-// by actions exist; cue ids unique.
+// pass validateShowPlan: phases referenced by cues exist; cue ids unique.
+// LOOKS removed from the maker (operator decision: "remove look all
+// together") — every cue is now a PLAYLIST action on the deck, so the
+// template carries no `looks` block.
 export function brcStarterPlan(name = 'brc_2026'): ShowPlan {
   const cues: PlanCue[] = [
     {
@@ -162,7 +166,7 @@ export function brcStarterPlan(name = 'brc_2026'): ShowPlan {
       label: 'Sunrise show',
       kind: 'program',
       trigger: { type: 'sun', event: 'sunrise', offsetMin: -30 },
-      action: { type: 'look', look: 'sunrise' },
+      action: { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } },
       hold: { min: 90 },
       days: 'all',
     },
@@ -171,7 +175,7 @@ export function brcStarterPlan(name = 'brc_2026'): ShowPlan {
       label: 'Exterior up at golden hour',
       kind: 'program',
       trigger: { type: 'sun', event: 'sunset', offsetMin: -45 },
-      action: { type: 'look', look: 'philharmonic' },
+      action: { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } },
       days: 'all',
     },
     {
@@ -179,7 +183,7 @@ export function brcStarterPlan(name = 'brc_2026'): ShowPlan {
       label: 'Party night ramp',
       kind: 'mood',
       trigger: { type: 'mood', from: 'calm', to: 'party', minDwellSec: 30, cooldownSec: 300 },
-      action: { type: 'look', look: 'party' },
+      action: { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } },
       days: 'all',
     },
     {
@@ -187,7 +191,7 @@ export function brcStarterPlan(name = 'brc_2026'): ShowPlan {
       label: 'Daytime ambient',
       kind: 'ambient',
       trigger: { type: 'sun', event: 'sunrise', offsetMin: 120 },
-      action: { type: 'look', look: 'daytime' },
+      action: { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } },
       days: 'all',
     },
   ];
@@ -205,32 +209,9 @@ export function brcStarterPlan(name = 'brc_2026'): ShowPlan {
       target: { channel: 'deck', id: null },
       mood: true,
     },
-    looks: {
-      daytime: {
-        playlist: 'default',
-        palette: 'deep_sea',
-        globals: { master: 0.5 },
-        target: { channel: 'deck', id: null },
-      },
-      philharmonic: {
-        playlist: 'default',
-        autopilot: { active: true, delay_s: 90, shuffle: false },
-        palette: 'sunset_coral',
-        target: { channel: 'deck', id: null },
-      },
-      party: {
-        playlist: 'default',
-        autopilot: { active: true, delay_s: 30, shuffle: true },
-        palette: 'bass_drop',
-        target: { channel: 'deck', id: null },
-      },
-      sunrise: {
-        playlist: 'default',
-        palette: 'aurora',
-        globals: { master: 0.6 },
-        target: { channel: 'deck', id: null },
-      },
-    },
+    // Looks removed from the maker — an empty looks block is valid per
+    // validateShowPlan, and no cue references a look any more.
+    looks: {},
     phases: {
       philharmonic: {
         start: { sun: 'sunset', offsetMin: -30 },

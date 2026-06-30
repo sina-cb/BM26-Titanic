@@ -19,9 +19,11 @@ import {
   fetchDeckChannel, setDeckChannelControl,
   setMixerView,
   fetchDeckTransitionConfig, setDeckTransitionConfig,
+  fetchDeckColorAutopilot, setDeckColorAutopilot,
   fetchPlaylists,
   fetchChannelPlaylist,
   type DeckTransitionConfig,
+  type DeckColorAutopilotConfig,
 } from '@/utils/api';
 import { setChannelColor } from '@/utils/channelExtrasApi';
 import { panicMixer } from '@/utils/channelOpsApi';
@@ -32,6 +34,9 @@ import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
 import { useOperatorTakeover } from '@/hooks/useTimeline';
 import { PlanIndicatorPill, PLAN_INDICATOR_CYAN } from '@/components/timeline/PlanIndicatorPill';
+import { useEngineLock } from '@/hooks/useEngineLock';
+import { PlanLockBanner } from '@/components/PlanLockBanner';
+import { ColorAutopilotPanel } from '@/components/deck/ColorAutopilotPanel';
 
 // 8pt hitSlop on every edge → a 28×28 visual button gets a 44×44 interactive
 // area (28 + 8 + 8 = 44), matching the mixer's touch-target floor.
@@ -163,6 +168,16 @@ export default function ControlDeckScreen() {
   const { planActive, leaseHeld, leaseRemainingSec, notifyInteraction, resumeNow } =
     useOperatorTakeover();
 
+  // ── Soft PLAN lock (CONTRACT: globalsState.controlLock ∈ {null,'portwatch',
+  // 'plan'}) ──────────────────────────────────────────────────────────────
+  // 'portwatch' is the FULL hard lockout (EngineLockoutOverlay, mounted in the
+  // tab layout). 'plan' is the SOFTER lock: a yellow PlanLockBanner + the deck
+  // pattern-selection controls disabled, while navigation/viewing stay live.
+  // Taking over (the existing operator-takeover lease) re-enables the controls,
+  // so the gate is `plan lock engaged AND no operator lease held`.
+  const { planLocked } = useEngineLock();
+  const planGate = planLocked && !leaseHeld;
+
   // Autopilot state (cycles through the active playlist on a timer)
   const [isPlaylistActive, setPlaylistActive] = useState<boolean>(false);
   const [playlistDelayStr, setPlaylistDelayStr] = useState<string>('30');
@@ -185,6 +200,18 @@ export default function ControlDeckScreen() {
     enabled: false,
     mode: 'trans_crossfade',
     durationMs: 1000,
+    shuffle: false,
+  });
+
+  // Deck COLOR autopilot (operator request: "in the autopilot, select a set of
+  // palettes that switch on their own timer"). Independent of the pattern
+  // autopilot — this one cycles a chosen SET of color palettes on its own
+  // timer. Seeded on focus from GET /deck/color-autopilot; each control change
+  // posts optimistically (same shape as handleDeckTxChange).
+  const [colorAutopilot, setColorAutopilot] = useState<DeckColorAutopilotConfig>({
+    active: false,
+    palettes: [],
+    delay_s: 30,
     shuffle: false,
   });
 
@@ -351,6 +378,12 @@ export default function ControlDeckScreen() {
       setDeckTxConfig(dtRes.data);
     }
 
+    // Load deck COLOR autopilot config (palette-cycling autopilot).
+    const caRes = await fetchDeckColorAutopilot();
+    if (caRes.ok && caRes.data) {
+      setColorAutopilot(caRes.data);
+    }
+
     // Load initial deck channel state.
     const deckRes = await fetchDeckChannel();
     if (deckRes.ok && deckRes.data) {
@@ -401,6 +434,39 @@ export default function ControlDeckScreen() {
       console.error('[Deck] Transition-config POST failed:', err);
       setDeckTxConfig((prev) => ({ ...prev, ...prevSnapshot }));
       Alert.alert('Transition setting not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+    });
+  }, [notifyInteraction]);
+
+  // Patch the deck COLOR autopilot (optimistic local update + POST), mirroring
+  // handleDeckTxChange exactly: snapshot the touched keys, apply optimistically,
+  // POST, and on a rejected/failed POST restore ONLY those keys + Alert (Codex
+  // P0 — never leave the UI showing a value the engine refused). The engine
+  // doesn't broadcast a color-autopilot WS event, so the optimistic value is
+  // authoritative until the next focus re-seed.
+  const handleColorAutopilotChange = useCallback((patch: Partial<DeckColorAutopilotConfig>) => {
+    notifyInteraction();
+    let prevSnapshot: Partial<DeckColorAutopilotConfig> = {};
+    setColorAutopilot((prev) => {
+      const snap: Partial<DeckColorAutopilotConfig> = {};
+      for (const k of Object.keys(patch) as (keyof DeckColorAutopilotConfig)[]) {
+        (snap as any)[k] = prev[k];
+      }
+      prevSnapshot = snap;
+      return { ...prev, ...patch };
+    });
+    void setDeckColorAutopilot(patch).then((res) => {
+      if (!res.ok) {
+        console.error('[Deck] Color-autopilot POST rejected:', res.error);
+        setColorAutopilot((prev) => ({ ...prev, ...prevSnapshot }));
+        Alert.alert(
+          'Color autopilot not applied',
+          `The engine rejected the change. ${res.error || ''} Reverted to the previous value.`.trim(),
+        );
+      }
+    }).catch((err) => {
+      console.error('[Deck] Color-autopilot POST failed:', err);
+      setColorAutopilot((prev) => ({ ...prev, ...prevSnapshot }));
+      Alert.alert('Color autopilot not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
     });
   }, [notifyInteraction]);
 
@@ -469,6 +535,11 @@ export default function ControlDeckScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: C.background }}>
+      {/* Soft PLAN lock banner — low-key YELLOW, non-blocking (box-none), only
+          mounts when controlLock === 'plan'. Navigation/viewing stay live; the
+          deck's pattern selection is the only thing disabled (below). The full
+          red portwatch lockout stays in the tab layout. */}
+      <PlanLockBanner />
       {/* Top bar: title + connection status + master fader. Matches the
           Marsin Mixer header layout, minus channel-add buttons. */}
       <DeckTopBar isConnected={isConnected} />
@@ -573,7 +644,13 @@ export default function ControlDeckScreen() {
                 // During a deck pattern soft-swap we grey out the list +
                 // disable taps. The engine also rejects taps server-side
                 // with 409 — this is just the UX layer of the contract.
-                disabled={deckSwapInFlight}
+                // ALSO disabled under the soft PLAN lock (planGate): pattern
+                // selection changes "what's playing", which the plan owns until
+                // the operator takes over. The greyed/disabled list IS the
+                // "take over to change" affordance — taking over (any control
+                // touch fires the takeover lease) clears planGate and re-enables
+                // it.
+                disabled={deckSwapInFlight || planGate}
                 onRefreshConnection={connectToEngine}
                 playlistLibrary={playlistLibrary}
               />
@@ -695,6 +772,20 @@ export default function ControlDeckScreen() {
                 </View>
               ) : null}
             </View>
+
+            {/* ── COLOR AUTOPILOT ────────────────────────────────────
+                Cycles a chosen SET of color palettes on its own timer —
+                INDEPENDENT of the pattern AUTOPILOT above (operator request:
+                "in the autopilot, select a set of palettes that switch on their
+                own timer"). Reads on focus, posts on change (optimistic +
+                rollback, same shape as handleDeckTxChange). Disabled while
+                offline or under the soft PLAN lock (planGate) — it still renders
+                read-only so the operator sees the live cycle. */}
+            <ColorAutopilotPanel
+              config={colorAutopilot}
+              onChange={handleColorAutopilotChange}
+              disabled={isConnected === false || planGate}
+            />
 
             {/* ── DECK TRANSITIONS ───────────────────────────────────
                 Soft-swap pattern changes via the engine's hidden deck

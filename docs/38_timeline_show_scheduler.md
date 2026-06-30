@@ -1077,6 +1077,63 @@ viewOverride pin is owned by the plan while active; the operator-takeover lease
 
 ---
 
+### 16.10 Color autopilot on a deck playlist cue + the soft `'plan'` control-lock (2026-06-30)
+
+**(a) `colorAutopilot` — a third optional `playlist`-action field (DECK target only).**
+A deck `playlist` action may configure the engine's palette-cycling daemon when it
+fires (the colour analogue of pattern autopilot — see `docs/39 §color-autopilot`):
+
+```yaml
+action:
+  type: playlist
+  name: party_pl
+  target: { channel: deck }            # colorAutopilot is DECK-ONLY
+  colorAutopilot:                       # optional — cycle a SET of palettes on a timer
+    active: true                        # REQUIRED bool — true starts cycling, false stops
+    palettes: [aurora, bass_drop]       # REQUIRED non-empty string[] of palette ids
+    delay_s: 2                          # REQUIRED number > 0 — seconds between palette swaps
+    shuffle: false                      # optional bool, default false (sequential)
+```
+
+Validation is **throw-style / fail-loud** (`show_plan.js validateCueColorAutopilot`
++ the `playlist` case): a non-deck target with `colorAutopilot` throws
+(`… is only valid for a deck target`); an empty `palettes`, `delay_s <= 0`, or a
+non-boolean `active`/`shuffle` throws. Palette **shape** (non-empty strings) is
+checked at validation; palette **membership** in the rig's `colorPalettes` config is
+enforced at apply time (the plan validator has no palette catalog). Absent → **no
+change** (the daemon's current state is left untouched).
+
+When the deck cue fires, `_applyAction` applies in order: `setDeckTransition` → load
+playlist → `setDeckOverlaysEnabled` → pattern autopilot → **`setColorAutopilot(wire)`**
+→ `forceDeckView`. The new `setColorAutopilot` dep is bound in `api_server.js` to the
+real internal `setColorAutopilot()` (configure + (re)start/stop the engine
+`ColorAutopilot` daemon) — **no HTTP self-call**; a missing dep **fails loud** (loud
+`cueError`). Pattern autopilot and colour autopilot run on **independent timers** in
+parallel — colour cycling never changes the running pattern.
+
+**(b) Soft `'plan'` control-lock (replaces the hard PortWatch lock for plan-driven deck-pins).**
+`globalsState.controlLock` is now a **three-state** wire field — `null | 'portwatch' | 'plan'`:
+
+| value | meaning | lease | CaptainPad UX |
+|---|---|---|---|
+| `null` | nobody owns the rig | — | normal |
+| `'portwatch'` | a real **PortWatch device** holds the rig (HARD lockout) | 30 s lease, renew-or-release | full lockout: "PORTWATCH HAS THE RIG" |
+| `'plan'` | the **timeline** forced the deck (SOFT lock) | **no lease** (the plan releases the pin itself) | low-key yellow warning; navigation allowed; **only** pattern-select + mixer-activate disabled |
+
+The raw output pin (`viewOverrideMode = 'deck' | null`) is unchanged; what changed is
+the **source** of that pin, tracked by `controlLockSource` in `api_server.js`. When the
+timeline forces the deck (`timelineForceDeckView`/`forceDeckView` dep) the source is
+`'plan'`; a real PortWatch deck-pin (`POST /mixer/view-override {override:'deck'}`) sets
+the source `'portwatch'` (and an actual device take-over **upgrades** a plan soft-lock to
+the hard lock). The deck-pin derivation pins output to deck for **either** source. The
+PortWatch **lease timer is armed only for `'portwatch'`** — a `'plan'` lock carries
+`controlLockLeaseDurationMs: null` / no expiry and is never auto-released by lease
+expiry; the plan hands the pin back itself on resume/handback (clearing the pin restores
+`controlLock: null` cleanly). CaptainPad reads `controlLock` off `/globals` and the
+`viewOverride` WS broadcast; it must treat `'plan'` as the soft lock above.
+
+---
+
 ## 17. What this deliberately is **not** (v1)
 
 - **Not** a second analyzer — mood comes from the Audio Companion via CPC.

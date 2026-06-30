@@ -44,6 +44,13 @@ export const CUE_TRANSITION_MODES = Object.freeze([
 // disable (turn ALL deck overlays off). Absent → no change (docs/38 §16.9).
 const CUE_OVERLAY_MODES = Object.freeze(['enable', 'disable']);
 
+// A playlist action's optional `colorAutopilot` block (docs/39) — a DECK-ONLY knob
+// that configures the engine's palette-cycling daemon when the cue fires. Wire
+// shape: { active, palettes: string[](>=1), delay_s: number>0, shuffle?: bool }.
+export const CUE_COLOR_AUTOPILOT_KEYS = Object.freeze([
+  'active', 'palettes', 'delay_s', 'shuffle',
+]);
+
 // ── small validators (all throw-style; first arg is a context label) ──────────
 
 function isPlainObject(v) {
@@ -347,6 +354,31 @@ function validateCueTransition(transition, label) {
   return out;
 }
 
+/**
+ * A 'playlist' action's optional `colorAutopilot` block (docs/39) — configures the
+ * engine's palette-cycling daemon when this deck cue fires. THROW-style. The wire
+ * shape MUST match the engine ColorAutopilot + the deck REST route:
+ *   { active: bool, palettes: string[](>=1), delay_s: number>0, shuffle?: bool }
+ * Palette ids are validated for SHAPE here (non-empty strings); membership in the
+ * rig's colorPalettes config is enforced at apply time (the plan validator has no
+ * palette catalog). Returns a normalized { active, palettes, delay_s, shuffle }.
+ */
+function validateCueColorAutopilot(ca, label) {
+  if (!isPlainObject(ca)) {
+    throw new Error(`${label} must be an object { active, palettes, delay_s, shuffle? }`);
+  }
+  assertBool(ca.active, `${label}.active`);
+  if (!Array.isArray(ca.palettes) || ca.palettes.length === 0) {
+    throw new Error(`${label}.palettes must be a non-empty array of palette ids`);
+  }
+  const palettes = ca.palettes.map((id, i) => assertString(id, `${label}.palettes[${i}]`));
+  if (typeof ca.delay_s !== 'number' || Number.isNaN(ca.delay_s) || ca.delay_s <= 0) {
+    throw new Error(`${label}.delay_s must be a number > 0, got ${JSON.stringify(ca.delay_s)}`);
+  }
+  const shuffle = ca.shuffle !== undefined ? assertBool(ca.shuffle, `${label}.shuffle`) : false;
+  return { active: ca.active, palettes, delay_s: ca.delay_s, shuffle };
+}
+
 function validateAction(action, label, lookNames) {
   if (!isPlainObject(action)) throw new Error(`${label} must be an object`);
   switch (action.type) {
@@ -371,6 +403,15 @@ function validateAction(action, label, lookNames) {
           throw new Error(`${label}.overlays must be one of ${CUE_OVERLAY_MODES.join(', ')}, got ${JSON.stringify(action.overlays)}`);
         }
         out.overlays = action.overlays;
+      }
+      // colorAutopilot is a DECK-ONLY knob (docs/39): it drives the engine's
+      // palette-cycling daemon, which only has meaning on the deck output. A
+      // non-deck target with the field is an authoring error → throw.
+      if (action.colorAutopilot !== undefined) {
+        if (out.target.channel !== 'deck') {
+          throw new Error(`${label}.colorAutopilot is only valid for a deck target`);
+        }
+        out.colorAutopilot = validateCueColorAutopilot(action.colorAutopilot, `${label}.colorAutopilot`);
       }
       return out;
     }

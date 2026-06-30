@@ -1,13 +1,22 @@
-// useEngineLock — single source of truth for "is the rig locked by an
-// external owner right now?".
+// useEngineLock — single source of truth for "who/what is driving the rig
+// right now, and how hard is that lock?".
 //
 // Subscribes to the engine WebSocket events forwarded through
 // engineEvents:
 //
 //   - `viewOverride` carries the canonical `controlLock` value
-//     (engine-side: globalsState.controlLock). When equal to
-//     "portwatch", every UI in the building should refuse writes
-//     until the owner releases.
+//     (engine-side: globalsState.controlLock). The contract is:
+//
+//        globalsState.controlLock ∈ { null, 'portwatch', 'plan' }
+//
+//     * 'portwatch' → a DEVICE (PortWatch) has seized the rig. This is a
+//       FULL hard lockout: every UI in the building must refuse writes
+//       until the owner releases (EngineLockoutOverlay curtains the app).
+//     * 'plan'      → the PLAN (timeline program, not a device) is driving
+//       the deck. This is a SOFTER lock: navigation/viewing stay fully
+//       usable, but the controls that change WHAT IS PLAYING (deck pattern
+//       selection, mixer activations) are disabled until the operator
+//       takes over (the existing useOperatorTakeover path re-enables them).
 //
 // Why a hook (and not a context provider): the lock state is
 // global and mutates rarely — a module-level subscription kept in
@@ -25,16 +34,29 @@ import { useEffect, useState } from 'react';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 import { fetchGlobals } from '@/utils/api';
 
+/** Who/what owns the lock right now. */
+export type LockKind = null | 'portwatch' | 'plan';
+
+/** Legacy alias — the lock OWNER used to be the only concept; it is now
+ *  the hard-lock owner specifically ('portwatch' or null). Kept so existing
+ *  call-sites that read `owner` for the portwatch overlay copy keep working. */
 export type LockOwner = null | 'portwatch';
 
 interface LockState {
-  /** Who owns the lock right now, or null if free. */
+  /** What is driving the rig right now: a device, the plan, or nothing. */
+  kind: LockKind;
+  /** Who HARD-owns the lock right now (portwatch), or null. */
   owner: LockOwner;
-  /** Convenience boolean — true when any external owner is holding. */
+  /** Convenience boolean — true ONLY for the portwatch HARD lock. The
+   *  full-screen EngineLockoutOverlay keys off this, so a soft 'plan' lock
+   *  never curtains the app. */
   locked: boolean;
+  /** True for the SOFT 'plan' lock (yellow banner + disabled activation
+   *  controls, navigation stays usable). */
+  planLocked: boolean;
 }
 
-let _cached: LockState = { owner: null, locked: false };
+let _cached: LockState = { kind: null, owner: null, locked: false, planLocked: false };
 const _listeners = new Set<(s: LockState) => void>();
 let _initialized = false;
 
@@ -49,8 +71,21 @@ function _emit(next: LockState) {
   });
 }
 
-function _normalizeOwner(value: unknown): LockOwner {
-  return value === 'portwatch' ? 'portwatch' : null;
+function _normalizeKind(value: unknown): LockKind {
+  if (value === 'portwatch') return 'portwatch';
+  if (value === 'plan') return 'plan';
+  return null;
+}
+
+function _stateFromKind(kind: LockKind): LockState {
+  return {
+    kind,
+    // The hard-lock owner is ONLY the portwatch device; the plan is not an
+    // "owner" in the curtain-the-app sense.
+    owner: kind === 'portwatch' ? 'portwatch' : null,
+    locked: kind === 'portwatch',
+    planLocked: kind === 'plan',
+  };
 }
 
 function _ensureInitialized() {
@@ -64,19 +99,19 @@ function _ensureInitialized() {
     if (msg.type === 'viewOverride') {
       // controlLock is the canonical field as of v2; fall back to
       // `override === 'deck'` for older engines that haven't been
-      // restarted yet.
-      const owner = _normalizeOwner(
+      // restarted yet (those predate 'plan', so this only ever yields
+      // the hard portwatch lock).
+      const kind = _normalizeKind(
         (msg.controlLock as unknown) ??
           (msg.override === 'deck' ? 'portwatch' : null),
       );
-      _emit({ owner, locked: owner !== null });
+      _emit(_stateFromKind(kind));
     } else if (msg.type === 'globals') {
       // Reserved for the future "globals" broadcast (engine doesn't
       // currently emit one for controlLock alone, but adding here
       // ahead of time costs nothing and means a future server-side
       // refactor doesn't need a coordinated client release).
-      const owner = _normalizeOwner(msg.controlLock);
-      _emit({ owner, locked: owner !== null });
+      _emit(_stateFromKind(_normalizeKind(msg.controlLock)));
     }
   });
 
@@ -87,9 +122,9 @@ function _ensureInitialized() {
   fetchGlobals()
     .then((res) => {
       if (!res.ok || !res.data) return;
-      const owner = _normalizeOwner((res.data as Record<string, unknown>).controlLock);
-      if (owner !== _cached.owner) {
-        _emit({ owner, locked: owner !== null });
+      const kind = _normalizeKind((res.data as Record<string, unknown>).controlLock);
+      if (kind !== _cached.kind) {
+        _emit(_stateFromKind(kind));
       }
     })
     .catch(() => undefined);

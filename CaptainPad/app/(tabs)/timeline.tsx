@@ -28,12 +28,13 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import { useFocusEffect } from 'expo-router';
 import { Palette } from '@/constants/theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useTimeline } from '@/hooks/useTimeline';
-import { fetchPlaylists } from '@/utils/api';
+import { fetchPlaylists, getCachedColorPalettes } from '@/utils/api';
 import {
   fetchTimelinePlans,
   fetchTimelinePlan,
@@ -193,11 +194,26 @@ export default function TimelineScreen() {
       if (r.ok && r.data) setLiveOverview(r.data);
     });
   }, []);
+  // The cue editor's playlist dropdown reads from `playlists`. A playlist the
+  // operator creates in the deck AFTER this screen mounted must show up, so the
+  // list can't be a one-shot mount fetch — it refreshes on tab focus and again
+  // the moment the cue editor opens (see openAddCue / openEditCue). Mirrors the
+  // refreshPlans / refreshLiveOverview idiom; surfaces a failure loudly via
+  // actionError instead of silently leaving a stale list (Codex P0: fail loud).
+  const refreshPlaylists = useCallback(() => {
+    fetchPlaylists().then((r) => {
+      if (r.ok && r.data) setPlaylists(r.data);
+      else if (!r.ok) setActionError(r.error || 'Could not load playlists');
+    });
+  }, []);
   useEffect(() => {
     refreshPlans();
     refreshLiveOverview();
-    fetchPlaylists().then((r) => { if (r.ok && r.data) setPlaylists(r.data); });
   }, [refreshPlans, refreshLiveOverview]);
+  // Refresh the playlist library whenever this tab gains focus (also runs on the
+  // first focus, so it replaces the old mount-time playlist fetch) — returning
+  // here after adding a playlist in the deck picks the new one up.
+  useFocusEffect(useCallback(() => { refreshPlaylists(); }, [refreshPlaylists]));
 
   // Keep the live overview fresh when the active plan flips (server-driven).
   const activePlanName = state?.activePlan ?? null;
@@ -487,14 +503,18 @@ export default function TimelineScreen() {
 
   const openAddCue = useCallback(() => {
     if (!draft) return;
+    // Pull the latest playlist library so the dropdown is current the moment the
+    // operator starts building a cue (a playlist added since focus shows up).
+    refreshPlaylists();
     setEditingCue(null);
     setCueSheetOpen(true);
-  }, [draft]);
+  }, [draft, refreshPlaylists]);
 
   const openEditCue = useCallback((cue: PlanCue) => {
+    refreshPlaylists();
     setEditingCue(cue);
     setCueSheetOpen(true);
-  }, []);
+  }, [refreshPlaylists]);
 
   // ── Live controls ──
   const isOffline = !connected && !state;
@@ -855,6 +875,7 @@ export default function TimelineScreen() {
           initialCue={editingCue}
           plan={draft}
           playlists={playlists}
+          palettes={getCachedColorPalettes()}
           dayIndex={editingDay ?? 0}
           onSave={handleSaveCue}
           onDelete={editingCue ? () => handleDeleteCue(editingCue.id) : null}
