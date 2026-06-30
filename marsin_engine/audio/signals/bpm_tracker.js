@@ -131,7 +131,16 @@ const DEFAULTS = Object.freeze({
 
   // LOCKED behaviour
   lockTolFrac: 0.055,       // a measurement within ±5.5% of lock "agrees"
-  unlockVoteHops: 90,       // sustained clustered, octave-DISTINCT disagreement before unlock (~8s)
+  // Sustained clustered, octave-DISTINCT disagreement before unlock. Lowered
+  // 90 → 48 (report 20260621_9): 90 made a real tempo change (e.g. a DJ track
+  // swap 124→140) take ~11 s to follow — far past the "couple seconds is fine"
+  // intent — which reads as the BPM under/overshooting for ~11 s after every
+  // track change. 48 halves that to ~7 s while keeping the SAME steady accuracy,
+  // the SAME octave correctness (the octave tests still pass), and the SAME
+  // real-corpus stability (avg BPM movement sd 6.62 → 6.67 — unchanged). The
+  // disagreement must still CLUSTER on one new tempo and be octave-distinct, so
+  // momentary junk reads can't trip it.
+  unlockVoteHops: 48,
   unlockTolFrac: 0.05,      // the disagreeing reads must cluster within ±5% of each other
 
   // Lock-octave migration (recover a lock that latched a half/double error)
