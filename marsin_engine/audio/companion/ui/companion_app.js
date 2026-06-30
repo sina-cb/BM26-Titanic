@@ -1020,7 +1020,10 @@ function renderLive() {
   $('drop-flash').style.opacity = glow.toFixed(2);
   const dv = S.derived;
   if ($('bpm-val')) {
-    $('bpm-val').textContent = dv.bpm > 0 ? dv.bpm.toFixed(0) : '—';
+    // Math.round (NOT toFixed) so this matches CaptainPad's OSC BPM readout
+    // and the rounded value the Companion emits over OSC byte-for-byte — same
+    // source float, same rounding method, same integer (2026-06-29).
+    $('bpm-val').textContent = dv.bpm > 0 ? String(Math.round(dv.bpm)) : '—';
     const pp = $('party-pill'); pp.textContent = dv.party > 0.5 ? 'PARTY' : 'calm'; pp.className = 'party-pill' + (dv.party > 0.5 ? ' on' : '');
     const nn = $('note-val'); const pc = Math.round(dv.note);
     const noteColor = `hsl(${(dv.hue * 360).toFixed(0)},70%,60%)`;

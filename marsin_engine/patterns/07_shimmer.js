@@ -63,7 +63,7 @@ export var whiteKick = 0.5;      // WHITE: kick-driven glint-core pop (micKick)
 export var whiteWarmth = 0.5;    // WHITE: warm amber(A) <-> cool/UV(U) tint
 
 export var cp1H = 0.08, cp1S = 1.0, cp1V = 1.0; // base wash (warm amber)
-export var cp2H = 0.52, cp2S = 0.85, cp2V = 1.0; // shimmer glints (cool moonlight)
+export var cp2H = 0.17, cp2S = 1.0, cp2V = 1.0; // shimmer glints (warm amber/gold)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -201,7 +201,8 @@ export function render3D(index, wx, wy, wz) {
   var glintAmt = glint * (1.0 + radius * 0.5);
   var kickPop = kick * 0.7;
 
-  var washV = washStruct * gain * 0.55 * (0.9 + kickPop * 0.4);
+  // Lit warm base wash (og identity: a bright candlelit glow, not a dim floor).
+  var washV = washStruct * gain * 0.95 * (0.9 + kickPop * 0.4);
   var glintV = glintAmt * gain * (1.0 + kickPop);
 
   // Two-colour: wash = cp1, glint = cp2, summed channel-wise (blend in RGB).

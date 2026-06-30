@@ -7,7 +7,7 @@ sacn:
 engine:
   fps: 40
 mixer:
-  maxChannels: 4
+  maxChannels: 8
 vis:
   broadcastHz: 5
   maxPixels: 100
@@ -93,6 +93,22 @@ companion:
   engine:
     host: 127.0.0.1
     port: 6968
+  # QUICK low-pass on the derived BPM, applied IN PLACE before the Companion UI
+  # AND the OSC emit read it — so both show the same de-jittered value. Short
+  # time constant = stays realtime (kills frame-to-frame wobble, follows a real
+  # tempo change in well under a second). enabled:false = emit the raw tracker
+  # value. Default (if this block is absent): enabled true, tauMs 250.
+  bpmSmoothing:
+    enabled: true
+    tauMs: 250
+tempo:
+  # Optional re-smoothing of the BPM the ENGINE receives over OSC (same EMA the
+  # Companion runs). OFF by default — the Companion already smooths at the
+  # source, so enable this ONLY for a jumpy non-Companion OSC sender (stacking
+  # both filters adds a little extra lag).
+  oscBpmSmoothing:
+    enabled: false
+    tauMs: 250
 colorPalettes:
   - id: laser_lime
     name: Laser Lime ★
