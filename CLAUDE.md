@@ -74,6 +74,17 @@ new work; file follow-ups there as `Backlog` cards.
 - **Offline readiness is a deployment requirement**: the playa has no
   internet. No CDNs, no external fonts, no runtime `npm install`, no
   telemetry. Browser deps are vendored in `simulation/vendor/`.
+- **Panel firmware is flashed ONLY through its registry-locked deploy script.**
+  Flash `LookingGlass/panel_firmware` exclusively via `python deploy.py` (run
+  from that directory) — **never** a raw `pio run -t upload`. `deploy.py` reads a
+  deployment registry (a MAC allowlist) and only flashes a board whose MAC is
+  allowed for the `looking_glass` target — refusing every other board. This is
+  mandatory because multiple ESP32s (the Stoker controllers) are often plugged in
+  at once. The registry and the build secrets (WiFi/AP) are **not** stored in this
+  repo: they come from a private, external deployment source that exports
+  `$BM26_DEPLOY_REGISTRY` and `$BM26_SECRETS` (with `$STOKER_*` fallbacks). If
+  those env vars are not exported, the build and the deploy both **fail loudly** —
+  there is no local fallback. See `.agent/01_skills/14_panel_firmware_ops.md`.
 - Style guides: `.agent/00_gol/01_python_style.md`,
   `.agent/00_gol/02_nodejs_style.md` — read before writing code.
 
@@ -85,6 +96,7 @@ new work; file follow-ups there as `Backlog` cards.
 | `marsin_engine/` | Pixelblaze-compatible pattern engine (WASM VM, 40 fps, sACN out, REST/WS API). `node engine.js --model test_bench --pattern <name>` |
 | `CaptainPad/` | TypeScript Expo iPad app — operator control surface |
 | `control_podium/` | Podium hardware + Raspberry Pi server bridge (Meshtastic radio path) |
+| `LookingGlass/` | Control-panel art piece — `panel_firmware/` (ESP32-S3 arcade buttons → WiFi telemetry portal), MAC-locked `deploy.py`, `circuit.html` wiring diagram. Flash via `deploy.py` only; see `.agent/01_skills/14_panel_firmware_ops.md` |
 | `marsin_pb/` | Pixelblaze-related tooling |
 | `3d_models/`, `3d_structure/`, `renders/`, `images/` | Assets |
 | `states/`, `docs/`, `archived/` | State files, docs, retired work |
