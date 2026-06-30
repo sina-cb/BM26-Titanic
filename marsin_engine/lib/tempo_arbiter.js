@@ -51,6 +51,18 @@ import { BpmSmoother } from './bpm_smoother.js';
 export const TEMPO_SOURCE_PREFS = ['osc', 'tap'];
 export const DEFAULT_TEMPO_SOURCE_PREF = 'osc';
 
+// The ParamCenter write-source tag of the engine's OWN local audio analyzer
+// (audio/signals/derived_signals.js → setMany(..., 'derivedSignals')). The
+// arbiter IGNORES audioBpm writes from this source: when the engine runs a
+// local mic/file analyzer AND also receives the Audio Companion's BPM over OSC,
+// BOTH write the same `audioBpm` CPC key — the local one RAW + unsmoothed at
+// ~86 Hz, the Companion one EMA-smoothed. With no deadband the arbiter would
+// follow whichever wrote last and the tempo would flicker between the two
+// estimators (the dual-writer race three reviewers confirmed 2026-06-30). The
+// Companion (OSC) is the tempo authority; the local analyzer drives the mic
+// bands, not the global clock — so its audioBpm writes are skipped here.
+export const ENGINE_LOCAL_BPM_SOURCE = 'derivedSignals';
+
 // OSC BPM staleness window: a received `audioBpm` is "live" only if it landed
 // within this many ms. Reuses the OSC staleness notion (~1500ms) so a paused
 // or dropped audio feed stops driving the tempo within ~1.5s.
@@ -135,6 +147,12 @@ export class TempoArbiter {
     if (!ev.changedKeys.includes('audioBpm')) return;
     const params = ev.state && ev.state.params;
     if (!params) return;
+    // SINGLE-SOURCE the tempo: ignore audioBpm written by the engine's OWN local
+    // analyzer (see ENGINE_LOCAL_BPM_SOURCE). The OSC/Companion value (source
+    // 'osc') is the authority; the local raw estimator must not co-drive the
+    // global clock, or the two fight and the tempo flickers. Other sources
+    // (real OSC, test/api injection) are accepted unchanged.
+    if (params.audioBpm && params.audioBpm.lastSource === ENGINE_LOCAL_BPM_SOURCE) return;
     const bpm = Number(params.audioBpm?.value);
     // Non-finite or <= 0 means "no signal" (Companion emits 0 when it can't
     // resolve a tempo) — do NOT refresh the liveness clock. Fail SAFE.

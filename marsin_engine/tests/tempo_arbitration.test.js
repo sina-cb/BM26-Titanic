@@ -58,11 +58,13 @@ function fakeParamCenter() {
         if (i >= 0) subs.splice(i, 1);
       };
     },
-    // Test helper: emit an audioBpm change to every subscriber.
-    emitAudioBpm(value) {
+    // Test helper: emit an audioBpm change to every subscriber. `source` is
+    // the ParamCenter write-source (default 'osc') so tests can model the
+    // OSC/Companion writer vs the engine-local 'derivedSignals' writer.
+    emitAudioBpm(value, source = 'osc') {
       const ev = {
         changedKeys: ['audioBpm'],
-        state: { params: { audioBpm: { value } } },
+        state: { params: { audioBpm: { value, lastSource: source } } },
       };
       for (const fn of subs) fn(ev);
     },
@@ -364,6 +366,43 @@ test('selecting OSC applies the raw live OSC value immediately', () => {
   arbiter.clearOverride();                                 // select OSC
   arbiter.tick(clock());
   assert.equal(mixer.tempoBpm, 128, 'select-OSC applies the raw OSC value (128)');
+});
+
+// ── Single-source: ignore the engine-local analyzer's audioBpm ─────────
+// When the engine runs its OWN local analyzer (DerivedSignals, source
+// 'derivedSignals') AND receives the Companion's OSC bpm, both write the same
+// audioBpm key. The arbiter must follow ONLY the OSC value, or the two raw/
+// smoothed estimators fight and the tempo flickers (the confirmed dual-writer
+// race). These tests pin that the local writer is ignored.
+
+test('engine-local (derivedSignals) audioBpm is IGNORED by the arbiter', () => {
+  const { mixer, pc, arbiter, clock } = makeArbiter();
+  pc.emitAudioBpm(128, 'osc'); arbiter.tick(clock());     // OSC drives → 128
+  assert.equal(mixer.tempoBpm, 128);
+  // The engine-local analyzer now blasts a different raw value on the same key.
+  pc.emitAudioBpm(132, 'derivedSignals'); arbiter.tick(clock());
+  assert.equal(mixer.tempoBpm, 128, 'local writer must not move the tempo');
+  pc.emitAudioBpm(124, 'derivedSignals'); arbiter.tick(clock());
+  assert.equal(mixer.tempoBpm, 128, 'still 128 — only OSC drives');
+  assert.deepEqual(mixer.setCalls, [128], 'no churn from the ignored local writer');
+});
+
+test('a local writer never makes OSC "live" on its own', () => {
+  const { arbiter, pc, clock } = makeArbiter();
+  pc.emitAudioBpm(130, 'derivedSignals');                 // only the local writer
+  assert.equal(arbiter.isOscLive(clock()), false, 'local audioBpm is not OSC liveness');
+  assert.equal(arbiter.oscTempoBpm(clock()), null);
+  pc.emitAudioBpm(130, 'osc');                            // now real OSC
+  assert.equal(arbiter.isOscLive(clock()), true);
+});
+
+test('the OSC value keeps driving even when interleaved with local writes', () => {
+  const { mixer, pc, arbiter, clock } = makeArbiter();
+  pc.emitAudioBpm(128, 'osc'); arbiter.tick(clock());
+  pc.emitAudioBpm(132, 'derivedSignals'); arbiter.tick(clock()); // ignored
+  pc.emitAudioBpm(129, 'osc'); arbiter.tick(clock());            // followed
+  pc.emitAudioBpm(124, 'derivedSignals'); arbiter.tick(clock()); // ignored
+  assert.deepEqual(mixer.setCalls, [128, 129], 'only the OSC values applied');
 });
 
 // ── Constants are sane named values ────────────────────────────────────
