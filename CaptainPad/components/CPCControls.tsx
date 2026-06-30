@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
+import { View, Text, TouchableOpacity, useWindowDimensions, Modal, ScrollView, Pressable } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePalette } from '@/hooks/use-theme';
 import { updateParamCenter, getCachedColorPalettes, warmColorPalettesCache } from '@/utils/api';
 import { MiniFader } from '@/components/ui/MiniFader';
@@ -21,6 +22,10 @@ import { curateDeckSignals, audioAccentHex } from '@/utils/audioSignals';
 // constants/theme.ts → C.tertiary.
 const ACCENT_AUTO = '#1b9e77';
 
+// Max audio-signal plots an operator can pick / the row will show. The row is a
+// single line, so it's capped; the picker disables further selection at this many.
+const AUDIO_PLOTS_MAX = 10;
+
 // Live state flows through the module-level `useEngineState`
 // subscription, so this component has no props. Pre-split it took
 // a `wsRef` prop for sending sharedParam writes; that's now
@@ -33,9 +38,40 @@ const ACCENT_AUTO = '#1b9e77';
 // so its globals row is unchanged.
 interface CPCControlsProps {
   trailing?: React.ReactNode;
+  // Which screen this instance lives on — selects the persistence key for the
+  // audio-plot selection so Deck and Mixer remember different picks.
+  screen?: 'deck' | 'mixer';
 }
 
-export const CPCControls = ({ trailing }: CPCControlsProps = {}) => {
+/**
+ * Persisted, per-screen selection of WHICH audio-signal plots show in the AUDIO
+ * row. `null` = no saved pick → use the curated default (curateDeckSignals).
+ * Stored under `@CaptainPad:audioPlots:<screen>` so Deck and Mixer differ.
+ * Follows the established AsyncStorage best-effort pattern (audio.tsx).
+ */
+function useAudioPlotSelection(screen: 'deck' | 'mixer') {
+  const storageKey = `@CaptainPad:audioPlots:${screen}`;
+  const [selected, setSelected] = useState<string[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem(storageKey).then((raw) => {
+      if (!alive || raw == null) return;
+      try {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) setSelected(arr.filter((k): k is string => typeof k === 'string'));
+      } catch { /* benign — first launch / corrupt entry */ }
+    }).catch(() => { /* best-effort */ });
+    return () => { alive = false; };
+  }, [storageKey]);
+  const update = useCallback((next: string[] | null) => {
+    setSelected(next);
+    if (next == null || next.length === 0) AsyncStorage.removeItem(storageKey).catch(() => {});
+    else AsyncStorage.setItem(storageKey, JSON.stringify(next)).catch(() => {});
+  }, [storageKey]);
+  return [selected, update] as const;
+}
+
+export const CPCControls = ({ trailing, screen = 'deck' }: CPCControlsProps = {}) => {
   const C = usePalette();
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
@@ -154,6 +190,10 @@ export const CPCControls = ({ trailing }: CPCControlsProps = {}) => {
   // (they want to start every show with the full picture).
   const [globalsCollapsed, setGlobalsCollapsed] = useState(false);
   const [audioCollapsed, setAudioCollapsed] = useState(false);
+  // Customizable AUDIO row: which signal plots to show (persisted per screen) +
+  // the picker modal open state.
+  const [audioSelected, setAudioSelected] = useAudioPlotSelection(screen);
+  const [audioPickerOpen, setAudioPickerOpen] = useState(false);
 
   // Writers post to /param-center. The engine's POST handler
   // broadcasts a fresh sharedParams to every subscriber (including us),
@@ -381,8 +421,26 @@ export const CPCControls = ({ trailing }: CPCControlsProps = {}) => {
           signals={audioSignals}
           isPortrait={isPortrait}
           collapsed={audioCollapsed}
+          selectedKeys={audioSelected}
         />
+
+        {/* Edit which plots show — opens the picker. Right-aligned, compact. */}
+        <TouchableOpacity
+          onPress={() => setAudioPickerOpen(true)}
+          accessibilityLabel="Choose which audio signals to show"
+          style={{ marginLeft: 6, paddingHorizontal: 6, paddingVertical: 4, justifyContent: 'center' }}
+        >
+          <IconSymbol name="slider.horizontal.3" size={14} color={C.secondary} />
+        </TouchableOpacity>
       </View>
+
+      <AudioPlotPicker
+        visible={audioPickerOpen}
+        signals={audioSignals}
+        selected={audioSelected}
+        onChange={setAudioSelected}
+        onClose={() => setAudioPickerOpen(false)}
+      />
 
       {/* Tabbed colour picker. Hue-only writes — see ColorPickerModal. */}
       <ColorPickerModal
@@ -549,10 +607,11 @@ function QueuedColorSlot({ queued, onPress, onClear, isPortrait }: {
  * simply omitted. A "+N on AUDIO tab" hint flags how many live signals
  * aren't shown here so the operator knows where the rest are.
  */
-function DynamicAudioRow({ signals, isPortrait, collapsed }: {
+function DynamicAudioRow({ signals, isPortrait, collapsed, selectedKeys }: {
   signals: AudioSignalDescriptor[];
   isPortrait: boolean;
   collapsed: boolean;
+  selectedKeys: string[] | null;
 }) {
   const C = usePalette();
   const liveDoc = useLiveParams();
@@ -562,9 +621,26 @@ function DynamicAudioRow({ signals, isPortrait, collapsed }: {
     return v;
   }, [liveDoc]);
 
-  // Best-practice deck subset (LOW/MID/HIGH/KICK + beat cue), in curated
-  // order. The remainder count drives the "+N on AUDIO tab" hint.
-  const curated = useMemo(() => curateDeckSignals(signals), [signals]);
+  // WHICH plots to show: the operator's saved selection (in their chosen order,
+  // only those still live), else the curated best-practice subset. The remainder
+  // count drives the "+N on AUDIO tab" hint.
+  // Whether an explicit operator selection is driving the row (vs. the curated
+  // default) — a selection shows up to AUDIO_PLOTS_MAX; the default keeps the
+  // tighter 4/6 best-practice cap.
+  const hasSelection = useMemo(() => {
+    if (!selectedKeys || selectedKeys.length === 0) return false;
+    return selectedKeys.some((k) => signals.find((s) => s.key === k));
+  }, [selectedKeys, signals]);
+  const curated = useMemo(() => {
+    if (selectedKeys && selectedKeys.length > 0) {
+      const live = new Map(signals.map((s) => [s.key, s] as const));
+      const picked = selectedKeys
+        .map((k) => live.get(k))
+        .filter((s): s is AudioSignalDescriptor => !!s);
+      if (picked.length > 0) return picked;
+    }
+    return curateDeckSignals(signals);
+  }, [selectedKeys, signals]);
 
   if (signals.length === 0) {
     return (
@@ -585,7 +661,9 @@ function DynamicAudioRow({ signals, isPortrait, collapsed }: {
   // hint. Pre-fix the expanded row pushed every curated cue (up to 6) into a
   // narrow portrait strip where each cell's 52px minWidth forced the strip to
   // overflow its right edge.
-  const maxCells = isPortrait ? 4 : 6;
+  // A custom selection shows every picked plot (up to AUDIO_PLOTS_MAX); the
+  // curated default keeps the tighter single-glance cap.
+  const maxCells = hasSelection ? AUDIO_PLOTS_MAX : (isPortrait ? 4 : 6);
   const baseSet = curated.length > 0 ? curated : signals;
   const shownSet = baseSet.slice(0, maxCells);
   const remainder = signals.length - shownSet.length;
@@ -635,6 +713,86 @@ function DynamicAudioRow({ signals, isPortrait, collapsed }: {
         </Text>
       ) : null}
     </View>
+  );
+}
+
+/**
+ * AudioPlotPicker — modal to choose WHICH audio signal plots show in the row.
+ * Lists every live signal with a checkbox; toggling persists immediately via the
+ * parent's onChange. "Reset to default" clears the pick (→ curated default).
+ * When no explicit pick exists yet, the curated default is shown pre-checked so
+ * the operator sees the starting point.
+ */
+function AudioPlotPicker({ visible, signals, selected, onChange, onClose }: {
+  visible: boolean;
+  signals: AudioSignalDescriptor[];
+  selected: string[] | null;
+  onChange: (next: string[] | null) => void;
+  onClose: () => void;
+}) {
+  const C = usePalette();
+  const curatedKeys = useMemo(() => curateDeckSignals(signals).map((s) => s.key), [signals]);
+  // The working selection: the saved pick, or the curated default when unset.
+  const base = selected && selected.length > 0 ? selected : curatedKeys;
+  const sel = useMemo(() => new Set(base), [base]);
+  const atCap = base.length >= AUDIO_PLOTS_MAX;
+  const toggle = (key: string) => {
+    const has = base.includes(key);
+    if (!has && atCap) return;   // at the cap — must remove one before adding more
+    const next = has ? base.filter((k) => k !== key) : [...base, key];
+    onChange(next.length > 0 ? next : []);   // empty array persists as "none shown"
+  };
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable onPress={onClose} style={{ flex: 1, backgroundColor: '#0009', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+        <Pressable onPress={() => { /* swallow inner taps */ }} style={{ width: '90%', maxWidth: 560, maxHeight: '82%', backgroundColor: C.surfaceContainerLow, borderRadius: 14, borderWidth: 1, borderColor: C.ghostBorder, padding: 16 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.text, textTransform: 'uppercase', letterSpacing: 0.5 }}>Audio plots</Text>
+            <TouchableOpacity onPress={onClose} accessibilityLabel="Close"><Text style={{ color: C.secondary, fontSize: 18 }}>✕</Text></TouchableOpacity>
+          </View>
+          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: atCap ? C.primary : C.secondary, marginBottom: 10 }}>
+            {atCap
+              ? `Showing ${base.length}/${AUDIO_PLOTS_MAX} — remove one to add another. Saved for this screen.`
+              : `Tap to add or remove a plot (${base.length}/${AUDIO_PLOTS_MAX}). Your pick is saved for this screen.`}
+          </Text>
+          <ScrollView style={{ maxHeight: 380 }}>
+            {signals.length === 0 ? (
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, paddingVertical: 12 }}>
+                No live audio signals — design them in the Audio Companion.
+              </Text>
+            ) : signals.map((s) => {
+              const on = sel.has(s.key);
+              const accent = audioAccentHex(s);
+              // At the cap, unselected rows can't be added — dim + block them so
+              // the limit is visible, not a silent no-op tap.
+              const blocked = !on && atCap;
+              return (
+                <TouchableOpacity
+                  key={s.key}
+                  onPress={() => toggle(s.key)}
+                  disabled={blocked}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, paddingHorizontal: 6, opacity: blocked ? 0.35 : 1 }}
+                >
+                  <View style={{ width: 18, height: 18, borderRadius: 5, borderWidth: 2, borderColor: on ? accent : C.ghostBorder, backgroundColor: on ? accent : 'transparent', justifyContent: 'center', alignItems: 'center' }}>
+                    {on ? <Text style={{ color: '#000', fontSize: 12, fontFamily: 'SpaceGrotesk_700Bold' }}>✓</Text> : null}
+                  </View>
+                  <Text style={{ flex: 1, fontFamily: 'Inter_400Regular', fontSize: 13, color: C.text }}>{s.label}</Text>
+                  <Text style={{ fontFamily: 'SpaceMono_400Regular', fontSize: 10, color: C.icon }}>{s.key}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 }}>
+            <TouchableOpacity onPress={() => onChange(null)} style={{ paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder }}>
+              <Text style={{ color: C.secondary, fontSize: 12, fontFamily: 'SpaceGrotesk_700Bold' }}>Reset to default</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={onClose} style={{ paddingVertical: 8, paddingHorizontal: 18, borderRadius: 8, backgroundColor: C.primary }}>
+              <Text style={{ color: C.onPrimary, fontSize: 12, fontFamily: 'SpaceGrotesk_700Bold' }}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 

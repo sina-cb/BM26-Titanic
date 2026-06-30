@@ -45,7 +45,7 @@ audio:
     jitterBufferHops: 4
     stopTimeoutMs: 2000
     stderrWarnIntervalMs: 60000
-  fftSize: 1024
+  fftSize: 2048
   hopSize: 512
   bands:
     lowMaxHz: 200
@@ -55,12 +55,32 @@ audio:
     noiseGate: 0.04
     inputGain: 1
     sourceSmoothHz: 12000
+    # Per-band noise gates (report 20260621_4). UNSET by default → every band
+    # uses the global noiseGate above, so the shipped config is byte-identical to
+    # the legacy single-gate path. On a loud/dusty/windy night the ambient bed
+    # lights the bands unevenly (measured: high ~0.17, mid ~0.07 from noise
+    # alone); the operator runs tools/audio_calibrate.js with the music OFF and
+    # sets the per-band gates to the measured per-band floor so silence/breakdowns
+    # go dark again without dimming quiet musical content in the other bands, e.g.
+    #   lowGate: 0.05
+    #   midGate: 0.09
+    #   highGate: 0.20
   kick:
     minHz: 50
     maxHz: 110
     threshold: 2.4
     refractoryMs: 220
     decayMs: 70
+  # Sub-bass "chest hit" window — the body-felt 30–60 Hz slam, distinct from the
+  # kick CLICK window (50–110 Hz). Drives micSub → audioChestHit. At fftSize 2048
+  # (~21.5 Hz/bin) this resolves to bins 1–2 (≈21.5–64.6 Hz): bin 1 (≈21.5 Hz) is
+  # the body-felt sub fundamental BELOW the kick, so micSub now keys off the real
+  # sub — an 80 Hz kick reads ~0.13 here vs ~0.49 at the old 1024 (43 Hz/bin),
+  # where the sub band was a single bin overlapping the kick. (Verified offline,
+  # report 20260620_14.) Only bin 2 (≈43 Hz) is shared with the kick window.
+  sub:
+    minHz: 30
+    maxHz: 60
   structureDetector:
     enabled: true
     dropEdgeMode: windowed

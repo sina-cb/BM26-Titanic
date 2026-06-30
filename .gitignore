@@ -7,6 +7,10 @@
 
 # Dependencies
 node_modules/
+# Also ignore a node_modules SYMLINK (worktree shares deps via a symlink, which
+# the trailing-slash rule above does NOT match — a tracked symlink merged into
+# another checkout becomes a self-referential link and breaks module resolution).
+node_modules
 
 # OS files
 Thumbs.db
@@ -66,6 +70,13 @@ CaptainPad/dist/
 # never land in git. See docs/07_control_podium.md §3.6.
 marsin_engine/secret.yaml
 !marsin_engine/secret.yaml.example
+
+# MIC TUNE calibration profiles — per-machine operator state written by the Audio
+# Companion at runtime. Defaults are seeded from mic_profiles.js, so a fresh
+# checkout always has profiles; the operator's custom/calibrated profiles stay
+# local (like audio_config.yaml). Never committed.
+marsin_engine/audio/companion/mic_profiles.yaml
+
 __pycache__/
 *.pyc
 .pytest_cache/

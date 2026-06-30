@@ -40,8 +40,23 @@ import yaml from 'js-yaml';
 // behaviors", the analyzer rejects a `bands` payload that's missing
 // any of these — config.yaml supplies them at boot.
 export const AUDIO_LIVE_FIELDS = Object.freeze({
-  bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz'],
+  // lowGate/midGate/highGate (on-playa hardening, report 20260621_4): PER-BAND
+  // noise gates. The single global `noiseGate` is the gate for every band that
+  // does NOT specialize one of these. On a loud/dusty/windy night the ambient
+  // bed lights the bands unevenly — measured: the HIGH band reads ~0.17 and MID
+  // ~0.07 from pure noise (capsule hiss + wind), while the global gate sits at
+  // 0.04, so mid/high stay lit during silence/breakdowns. Raising the global
+  // gate would also kill quiet musical hats; a per-band gate lets the operator
+  // set highGate≈0.18 / midGate≈0.08 (from tools/audio_calibrate.js, which
+  // measures exactly these post-compress per-band floors) WITHOUT dimming the
+  // low band. Absent → that band uses the global noiseGate (so the shipped
+  // config, which sets none, is byte-identical to the legacy single-gate path).
+  bands: ['lowMaxHz', 'midMaxHz', 'attackMs', 'releaseMs', 'noiseGate', 'inputGain', 'sourceSmoothHz',
+    'lowGate', 'midGate', 'highGate'],
   kick:  ['minHz', 'maxHz', 'threshold', 'refractoryMs', 'decayMs'],
+  // analyzer_features (slot 3): sub-bass "chest hit" window (~30–60 Hz). Live-
+  // tunable like kick; analyzer.reconfigure rebinds the sub bin in place.
+  sub:   ['minHz', 'maxHz'],
   // structureDetector — audio build/drop/sustain detector (docs/30).
   // Disabled by default; the detector module is instantiated at boot
   // regardless (so its surface exists) but `tick()` no-ops until the
@@ -51,7 +66,10 @@ export const AUDIO_LIVE_FIELDS = Object.freeze({
   // state machine actually reads).
   structureDetector: [
     'enabled', 'buildThreshold', 'dropEnergyJump', 'dropEdgeMode', 'dropDeltaWindowMs',
-    'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs', 'slowZoneRef',
+    'dropMinLevel', 'dropLevelAssist', 'dropBuildGate', 'dropBuildMemoryMs',
+    'dropSlowZoneMax', 'dropBuildRise', 'dropNoveltyRatio', 'dropNoveltyWindowMs', 'dropRelLevel',
+    'dropNisThreshold', 'dropKalmanQ', 'dropCoWindowMs',
+    'slowZoneRef', 'slowZoneWidth', 'slowFluxFloor',
     'stemsTimeoutMs', 'eventRefractoryMs', 'falseFireCount', 'falseFireWindowMs', 'falseFireQuietMs',
   ],
 });
@@ -61,6 +79,16 @@ export const AUDIO_LIVE_FIELDS = Object.freeze({
  * dropEdgeMode selects the drop discriminator (see audio_structure_detector
  * DETECTOR_DEFAULTS). Validated as an exact-match enum; anything else 400s.
  */
+/**
+ * Boolean live group fields (besides the top-level `enabled` toggle). These
+ * are validated as strict booleans, NOT numbers. dropLevelAssist toggles the
+ * windowed drop edge's level-ratio assist (see audio_structure_detector
+ * DETECTOR_DEFAULTS).
+ */
+const LIVE_BOOLEAN_FIELDS = Object.freeze({
+  structureDetector: Object.freeze(['enabled', 'dropLevelAssist']),
+});
+
 const LIVE_STRING_ENUMS = Object.freeze({
   structureDetector: Object.freeze({
     // 'windowed' (DEFAULT) — rate-of-change discriminator; the corpus-validated
@@ -93,11 +121,49 @@ const LIVE_FIELD_VALIDATORS = Object.freeze({
     inputGain: (v) => (v >= 0 && v <= 64) ? null : `must be in [0, 64]; got ${v}`,
     // Source-stage smoothing LP cutoff (Hz); 0 = off. Up to ~Nyquist.
     sourceSmoothHz: (v) => (v >= 0 && v <= 22050) ? null : `must be in [0, 22050]; got ${v}`,
+    // Per-band noise gates (on-playa hardening). Same [0, 1) post-compression
+    // domain as the global noiseGate — a band value at/below its gate reads 0,
+    // values above are rescaled to use the full range above it. Each OPTIONAL;
+    // an absent band-gate uses the global noiseGate.
+    lowGate:  (v) => (v >= 0 && v < 1) ? null : `must be in [0, 1); got ${v}`,
+    midGate:  (v) => (v >= 0 && v < 1) ? null : `must be in [0, 1); got ${v}`,
+    highGate: (v) => (v >= 0 && v < 1) ? null : `must be in [0, 1); got ${v}`,
+  }),
+  // analyzer_features (slot 3): sub-bass window edges (Hz). Validated like the
+  // kick window — both positive, below Nyquist; the analyzer enforces min<max.
+  sub: Object.freeze({
+    minHz: (v) => (v > 0 && v <= 22050) ? null : `must be in (0, 22050]; got ${v}`,
+    maxHz: (v) => (v > 0 && v <= 22050) ? null : `must be in (0, 22050]; got ${v}`,
   }),
   structureDetector: Object.freeze({
     buildThreshold:    (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
     dropEnergyJump:    (v) => (v > 1.0 && v <= 10.0) ? null : `must be in (1.0, 10.0]; got ${v}`,
     dropDeltaWindowMs: (v) => (v >= 50 && v <= 5000) ? null : `must be in [50, 5000]; got ${v}`,
+    // Absolute sub-energy floor a drop's short-envelope must reach (rejects
+    // near-silent build noise-ratio false edges). 0 disables; ≤1 (micLow domain).
+    dropMinLevel:      (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
+    // Build→drop transition gate: the recent buildScore peak (within
+    // dropBuildMemoryMs) required for the windowed/level edge to fire from THIN.
+    // 0 reverts to the BUILD-state-only edge. Real drops carry ≥0.74, bare
+    // loud-body onsets ≤0.22, so ~0.5 separates them.
+    dropBuildGate:     (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
+    dropBuildMemoryMs: (v) => (v >= 0 && v <= 30000) ? null : `must be in [0, 30000]; got ${v}`,
+    // The build-memory THIN-firing edge only fires when slowZone < this (rejects
+    // a build's onset out of a breakdown). [0,1]; 1 disables the slow-zone gate.
+    dropSlowZoneMax:   (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
+    // P0-1 drop-edge music-shape gates (report 20260620_23) — applied to BOTH
+    // the THIN build-mem edge and the BUILD-state edge. dropBuildRise: the
+    // buildScore rise (peak−trough over dropBuildMemoryMs) a real build must
+    // show — rejects busy music's flat high plateau. dropNoveltyRatio: the
+    // firing windowed ratio must outlier this × above the recent median ratio —
+    // rejects routine busy-music transients. Both 0 = disabled (revert).
+    dropBuildRise:     (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
+    dropNoveltyRatio:  (v) => (v >= 0 && v <= 50) ? null : `must be in [0, 50]; got ${v}`,
+    dropNoveltyWindowMs: (v) => (v >= 0 && v <= 60000) ? null : `must be in [0, 60000]; got ${v}`,
+    // Mic-gain-relative drop floor factor: effective floor =
+    // max(dropMinLevel, dropRelLevel · runningLoudnessRef). 0 → pure absolute
+    // floor; ≤1 keeps it below the loud-passage level.
+    dropRelLevel:      (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
     // Kalman+NIS drop gate (χ² statistic). 6.63 = χ²₁ 99%; tune sensitivity
     // here (lower → more sensitive). slowZoneRef = the activity level
     // (max of micLow/micFlux) at/below which we read as a "slow zone".
@@ -108,6 +174,11 @@ const LIVE_FIELD_VALIDATORS = Object.freeze({
     // Kalman-edge co-occurrence window: low & flux NIS may clear within this many ms.
     dropCoWindowMs:    (v) => (v >= 0 && v <= 2000) ? null : `must be in [0, 2000]; got ${v}`,
     slowZoneRef:       (v) => (v > 0 && v <= 1) ? null : `must be in (0, 1]; got ${v}`,
+    // Slow-zone soft-knee half-width (activity domain). 0 → a hard step at ref.
+    slowZoneWidth:     (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
+    // Mic flux floor discounted from slow-zone activity (rejects capsule/room
+    // flux noise so ambient reads calm). 0 → count all flux as activity.
+    slowFluxFloor:     (v) => (v >= 0 && v <= 1) ? null : `must be in [0, 1]; got ${v}`,
     stemsTimeoutMs:    (v) => (v >= 0 && v <= 60000) ? null : `must be in [0, 60000]; got ${v}`,
     eventRefractoryMs: (v) => (v >= 0 && v <= 60000) ? null : `must be in [0, 60000]; got ${v}`,
     falseFireCount:    (v) => (Number.isInteger(v) && v >= 1 && v <= 100)
@@ -292,11 +363,12 @@ export function validateLivePatch(partial) {
       if (!allowedFields.includes(k)) {
         return { ok: false, error: `field "${key}.${k}" is not live-tunable` };
       }
-      // Boolean group fields (e.g. structureDetector.enabled) — the
-      // numeric guard below doesn't apply. Only the field literally
-      // named `enabled` is allowed to be boolean; everything else in a
-      // group is a finite number. (Codex P0: no silent coercion.)
-      if (k === 'enabled') {
+      // Boolean group fields (e.g. structureDetector.enabled /
+      // dropLevelAssist) — the numeric guard below doesn't apply. The
+      // allowed boolean fields per group are declared in LIVE_BOOLEAN_FIELDS;
+      // everything else is a finite number. (Codex P0: no silent coercion.)
+      const boolFields = LIVE_BOOLEAN_FIELDS[key] || [];
+      if (boolFields.includes(k)) {
         if (typeof v !== 'boolean') {
           return { ok: false, error: `"${key}.${k}" must be a boolean` };
         }

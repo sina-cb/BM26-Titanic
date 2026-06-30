@@ -62,7 +62,7 @@ const framesArg = parseInt(A.frames || '80', 10);
 const modelName = (A.model && A.model !== 'true') ? A.model : 'test_bench';
 if (!/^[A-Za-z0-9._-]+$/.test(modelName)) { console.log('MODEL_FAIL: bad model name ' + modelName); process.exit(2); }
 const out = A.out || (process.env.HOME + '/tmp/genkit/out/vis.json');
-const SR = 44100, FFT = 1024, HOP = 512, DT = 0.025;
+const SR = 44100, FFT = 2048, HOP = 512, DT = 0.025;  // FFT matches config.yaml audio.fftSize
 
 // ── recording length / cadence ────────────────────────────────────────────────
 // Internal stepping always runs at the DT (40 fps) cadence for audio fidelity.

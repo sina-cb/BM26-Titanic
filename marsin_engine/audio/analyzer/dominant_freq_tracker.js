@@ -2,7 +2,7 @@
  * DominantFreqTracker — tracks the N most dominant frequencies in a
  * magnitude spectrum across hops, emitting per-track {freqHz, energy}.
  *
- * Drop-in reference for marsin_engine/audio/analyzer/audio_analyzer.js.
+ * Used by marsin_engine/audio/analyzer/audio_analyzer.js.
  * It consumes the SAME positive-frequency magnitude array the analyzer
  * already computes (length fftSize/2, mag[k] = hypot(re,im)), so it adds
  * zero extra FFT cost. Pure: depends only on Math. No per-hop heap
@@ -14,11 +14,13 @@
  *      of the hop's max magnitude) AND an absolute floor; keep the top
  *      `numPeaks` by magnitude.
  *   2. Parabolic (quadratic) interpolation on each peak's 3 log-magnitude
- *      bins for sub-bin frequency + true peak magnitude. Critical at
- *      fftSize=1024 where one bin is ~43 Hz — far too coarse for bass.
- *   3. Main-lobe energy: integrate magnitude over +-mainLobeBins around
- *      the peak bin so the reported energy is the partial's lobe, not a
- *      single bin (a Hann lobe is ~4 bins wide).
+ *      bins for sub-bin frequency + true peak magnitude. Essential for bass:
+ *      at the shipped fftSize=2048 one bin is ~21.5 Hz, and the interpolation +
+ *      cluster centroid take the residual error to <1 Hz on pure bass roots.
+ *      (All tuning here is in Hz / per-hop, so the tracker is fftSize-agnostic.)
+ *   3. Lobe energy: integrate magnitude over a dynamic, frequency-
+ *      proportional (constant-Q-ish) window around the peak bin so the
+ *      reported energy is the partial's lobe, not a single bin.
  *   4. Track association: greedy nearest-frequency match of this hop's
  *      peaks to existing tracks within `maxJumpHz`. Unmatched strong
  *      peaks BIRTH a new track (replacing the weakest/dead track if all
@@ -84,7 +86,6 @@ export class DominantFreqTracker {
    * @param {number} opts.fftSize        — FFT length the mag array came from
    * @param {number} [opts.numTracks=2]  — how many partials to report
    * @param {number} [opts.numPeaks]     — candidate peaks picked per hop
-   * @param {number} [opts.mainLobeBins] — half-width of lobe energy window
    * @param {number} [opts.relFloor]     — peak floor as fraction of hop max
    * @param {number} [opts.absFloor]     — absolute mag floor (post /fftSize style off; raw mag)
    * @param {number} [opts.maxJumpHz]    — association gate
@@ -102,6 +103,8 @@ export class DominantFreqTracker {
    * @param {number} [opts.kfEnergyQ]
    * @param {number} [opts.kfEnergyR]
    * @param {number} [opts.rankAlpha]    — slow EMA for output ordering
+   * @param {number} [opts.retargetBlend=0.5] — dom2 retarget low-pass toward
+   *   the previous emitted dom2 freq (1 = raw peak, no smoothing)
    */
   constructor(opts) {
     if (!opts || typeof opts !== 'object') {
@@ -121,7 +124,6 @@ export class DominantFreqTracker {
 
     this.numTracks    = opts.numTracks    ?? 2;
     this.numPeaks     = opts.numPeaks     ?? 6;
-    this.mainLobeBins = opts.mainLobeBins ?? 2;       // (legacy; energy now uses a dynamic window)
     // Dynamic energy window — frequency-proportional band summed around the
     // peak (constant-Q-ish), so dom energy tracks the partial's loudness.
     this.energyWindowFrac  = opts.energyWindowFrac  ?? 0.12;  // ±12% of the freq …
@@ -157,6 +159,15 @@ export class DominantFreqTracker {
     // Software input gain (mic preamp) — scales the reported energy so dom
     // energy tracks the operator's gain like the bands/spectrum. Live-settable.
     this.inputGain     = opts.inputGain     ?? 1;
+    // dom2 RETARGET smoothing. When dom2's centroid collapses inside dom1's
+    // cluster window we retarget dom2 to a distinct raw peak (see _emit). That
+    // substitution is a RAW (un-smoothed) peak, so without help it causes a
+    // discontinuous jump in the emitted dom2 freq on the retarget hop. Blend
+    // the substituted freq toward the PREVIOUS emitted dom2 freq by this factor
+    // (1 = take the raw peak outright like before; lower = gentler). The energy
+    // is taken raw (a retarget is genuinely a different partial, so its loudness
+    // should not inherit the old track's). retargetBlend only affects freq.
+    this.retargetBlend = opts.retargetBlend ?? 0.5;
 
     this._minBin = Math.max(1, Math.floor(this.minFreqHz / this.binHz));
     this._maxBin = Math.min(this.numBins - 2, Math.ceil(this.maxFreqHz / this.binHz));
@@ -177,6 +188,10 @@ export class DominantFreqTracker {
     this._out = [];
     for (let i = 0; i < this.numTracks; i++) this._out.push({ freqHz: 0, energy: 0, loHz: 0, hiHz: 0 });
     this._nextId = 1;
+    // Previous emitted dom2 freq, captured each hop BEFORE _out is overwritten,
+    // so the retarget blend has a continuity anchor. 0 = no prior (first emit
+    // or after a gap) → the retarget takes the raw peak outright.
+    this._prevD2Freq = 0;
   }
 
   reset() {
@@ -186,6 +201,7 @@ export class DominantFreqTracker {
       t.lowHops = 0; t.id = 0; t.fP = 1; t.eP = 1;
     }
     this._nextId = 1;
+    this._prevD2Freq = 0;
   }
 
   /**
@@ -370,6 +386,9 @@ export class DominantFreqTracker {
   }
 
   _emit() {
+    // Capture the dom2 freq we emitted LAST hop before the loop below
+    // overwrites _out, so a retarget can blend toward it (continuity anchor).
+    const prevD2Freq = this._prevD2Freq;
     // stable order: sort track indices by rankEnergy desc into _out.
     const tracks = this._tracks;
     // simple insertion sort of indices (numTracks is tiny).
@@ -396,10 +415,25 @@ export class DominantFreqTracker {
           if (f >= d1.loHz && f <= d1.hiHz) continue;     // inside dom1's window → skip
           if (this._peakEner[i] > bestE) { bestE = this._peakEner[i]; bestI = i; }
         }
-        if (bestI >= 0) { d2.freqHz = this._peakFreq[bestI]; d2.energy = this._peakEner[bestI]; d2.loHz = this._peakLo[bestI]; d2.hiHz = this._peakHi[bestI]; }
+        if (bestI >= 0) {
+          const rawFreq = this._peakFreq[bestI];
+          // Low-pass the substituted freq toward the previous emitted dom2 so
+          // the retarget hop doesn't produce a discontinuous micDomFreq2 jump.
+          // Only blend when we have a valid prior AND it's near the new peak's
+          // cluster window (a continuation, not an unrelated partial); a jump to
+          // a genuinely distant partial should NOT be dragged toward a stale
+          // value. Outside that window, take the raw peak as before.
+          const lo = this._peakLo[bestI], hi = this._peakHi[bestI];
+          const blend = (prevD2Freq > 0 && prevD2Freq >= lo && prevD2Freq <= hi)
+            ? this.retargetBlend : 1;
+          d2.freqHz = blend * rawFreq + (1 - blend) * prevD2Freq;
+          d2.energy = this._peakEner[bestI]; d2.loHz = lo; d2.hiHz = hi;
+        }
         else { d2.freqHz = 0; d2.energy = 0; d2.loHz = 0; d2.hiHz = 0; }   // nothing distinct → no dom2
       }
     }
+    // Remember the emitted dom2 freq for next hop's retarget continuity.
+    if (this.numTracks >= 2) this._prevD2Freq = this._out[1].freqHz;
     return this._out;
   }
 }
