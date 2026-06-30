@@ -21,10 +21,10 @@ PROJECT_DIR = env["PROJECT_DIR"]                      # noqa: F821
 LOOKINGGLASS_DIR = os.path.abspath(os.path.join(PROJECT_DIR, ".."))
 # config.yaml now lives in the firmware's main dir (single source of truth).
 CONFIG_PATH = os.path.join(PROJECT_DIR, "config.yaml")
-# Secrets can be SHARED across worktrees: $PANEL_SECRETS, when set, points at a
-# single gitignored file outside the tree (so it is never duplicated per
-# worktree); otherwise the worktree-local LookingGlass/secrets.yaml is used.
-SECRETS_PATH = os.environ.get("PANEL_SECRETS") or os.path.join(LOOKINGGLASS_DIR, "secrets.yaml")
+# Secrets live in the shared, private BM26-Firmware-Deployment repo, exposed via
+# that repo's env vars ($BM26_SECRETS, or the Stoker-named $STOKER_SECRETS — both
+# point at the same secrets.yaml). Run its setup_env.ps1 / setup_env.sh once.
+SECRETS_PATH = os.environ.get("BM26_SECRETS") or os.environ.get("STOKER_SECRETS")
 OUT_PATH = os.path.join(PROJECT_DIR, "include", "generated", "net_config.h")
 
 
@@ -114,12 +114,12 @@ def onoff(v):
 def main():
     if not os.path.isfile(CONFIG_PATH):
         fail("config.yaml not found at %s" % CONFIG_PATH)
-    if not os.path.isfile(SECRETS_PATH):
+    if not SECRETS_PATH or not os.path.isfile(SECRETS_PATH):
         fail(
-            "secrets.yaml not found at %s\n"
-            "  -> copy secrets.yaml.example to secrets.yaml and fill it in,\n"
-            "     or set $PANEL_SECRETS to your shared secrets file.\n"
-            "     (secrets.yaml is gitignored and must never be committed.)"
+            "secrets file not found (got: %r).\n"
+            "  -> set $BM26_SECRETS (or $STOKER_SECRETS) to the\n"
+            "     BM26-Firmware-Deployment/secrets.yaml. Run that repo's\n"
+            "     setup_env.ps1 / setup_env.sh once to register it."
             % SECRETS_PATH
         )
 
@@ -166,11 +166,11 @@ def main():
     ap_ssid = get(cfg, "ap.ssid", required=True)
     ap_channel = int(get(cfg, "ap.channel", default=6))
     ap_hidden = bool(get(cfg, "ap.hidden", default=False))
-    ap_password = get(sec, "ap.password", default="", src="secrets.yaml")
+    ap_password = get(sec, "ap_pass", default="", src="secrets.yaml")   # flat key
 
     wifi_enabled = bool(get(cfg, "wifi.enabled", default=True))
-    wifi_ssid = get(sec, "wifi.ssid", required=wifi_enabled, src="secrets.yaml", default="")
-    wifi_password = get(sec, "wifi.password", required=wifi_enabled, src="secrets.yaml", default="")
+    wifi_ssid = get(sec, "wifi_ssid", required=wifi_enabled, src="secrets.yaml", default="")
+    wifi_password = get(sec, "wifi_pass", required=wifi_enabled, src="secrets.yaml", default="")
 
     lan_enabled = bool(get(cfg, "lan.enabled", default=False))
     lan_dhcp = bool(get(cfg, "lan.dhcp", default=True))

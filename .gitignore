@@ -94,12 +94,10 @@ env/
 .piolibdeps/
 .vscode-test/
 
-# LookingGlass control panel — network secrets & build-time generated config.
-# THIS IS A PUBLIC REPO: real WiFi/AP credentials live in secrets.yaml and
-# must never be committed. `secrets.yaml.example` is committed as the template.
-# The generated/ header is baked from config.yaml + secrets.yaml at build time.
-LookingGlass/secrets.yaml
-!LookingGlass/secrets.yaml.example
+# LookingGlass control panel — build-time generated config (gitignored).
+# Secrets (WiFi/AP creds) live in the private BM26-Firmware-Deployment repo and
+# are resolved via $BM26_SECRETS / $STOKER_SECRETS — NOT in this public repo.
+# The generated/ header is baked from config.yaml + that secrets file at build time.
 LookingGlass/panel_firmware/include/generated/
 
 # Node caches & logs

@@ -1,10 +1,10 @@
 # =============================================================
 #  LookingGlass control panel — firmware configuration (NON-SECRET)
 #  Single source of truth for all build-time tunables (committed).
-#  Credentials (WiFi/AP passwords) live in secrets.yaml — gitignored, and
-#  shareable across worktrees via $PANEL_SECRETS. Read at build time by
-#  scripts/gen_config.py, which bakes these into
-#  include/generated/net_config.h.
+#  Credentials (WiFi/AP passwords) live in the private BM26-Firmware-Deployment
+#  repo's secrets.yaml (flat keys: wifi_ssid / wifi_pass / ap_pass), resolved via
+#  $BM26_SECRETS (or $STOKER_SECRETS). Read at build time by scripts/gen_config.py,
+#  which bakes config.yaml + those secrets into include/generated/net_config.h.
 #
 #  NOTE: the button -> GPIO map and the reserved-pin list stay in
 #  include/config.h (BUTTON_TABLE) — they are structural / hardware-fixed.

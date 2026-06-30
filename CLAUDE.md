@@ -74,17 +74,17 @@ new work; file follow-ups there as `Backlog` cards.
 - **Offline readiness is a deployment requirement**: the playa has no
   internet. No CDNs, no external fonts, no runtime `npm install`, no
   telemetry. Browser deps are vendored in `simulation/vendor/`.
-- **Panel firmware is flashed ONLY through its MAC-locked deploy script.**
+- **Panel firmware is flashed ONLY through its registry-locked deploy script.**
   Flash `LookingGlass/panel_firmware` exclusively via `python deploy.py` (run
-  from that directory) — **never** a raw `pio run -t upload`. `deploy.py`
-  verifies the connected board's ESP32 MAC against `LookingGlass/secrets.yaml`
-  (`device.mac`, gitignored) and refuses any board that doesn't match. This is
-  mandatory because multiple ESP32s (e.g. the Stoker controller) are often
-  plugged in at once, and a raw upload would flash whichever port it finds
-  first. The script owns the MAC: it reads it from the gitignored secret and
-  `--pair` writes/updates it there. The secret can be shared across worktrees
-  via the `$PANEL_SECRETS` env var (one file outside the tree, used by both
-  `deploy.py` and the build). See `.agent/01_skills/14_panel_firmware_ops.md`.
+  from that directory) — **never** a raw `pio run -t upload`. `deploy.py` reads
+  the shared, private **BM26-Firmware-Deployment** registry
+  (`deploy_allowed_macs.yaml`, via `$BM26_DEPLOY_REGISTRY` /
+  `$STOKER_DEPLOY_REGISTRY`) and only flashes a board whose MAC is allowed for
+  the `looking_glass` target — refusing every other board. This is mandatory
+  because multiple ESP32s (the Stoker controllers) are often plugged in at once.
+  Build secrets (WiFi/AP) come from that repo's `secrets.yaml` via `$BM26_SECRETS`
+  / `$STOKER_SECRETS`; run its `setup_env.ps1` / `setup_env.sh` once. See
+  `.agent/01_skills/14_panel_firmware_ops.md`.
 - Style guides: `.agent/00_gol/01_python_style.md`,
   `.agent/00_gol/02_nodejs_style.md` — read before writing code.
 
