@@ -28,7 +28,8 @@ const S = {
   signals: [],         // [{ id, label, source, type, chain, output }]
   views: [],           // [{ id, label, type, signals:[signalId...] }] — VISUALIZERS
   viewTypes: {},       // { typeId: { label, accepts } } — viz type registry
-  osc: { host: '127.0.0.1', port: 10000 },
+  osc: { host: '127.0.0.1', port: 10000, rateHz: 60 },
+  oscRateBuilt: false,
   selected: 'input',
   trace: {},           // signalId -> {raw:Float32Array, post:Float32Array}
   head: 0,
@@ -87,19 +88,20 @@ const MIC_PRESETS = [
 // ── THEME (TASK 2) ───────────────────────────────────────────────────────────
 // The companion mirrors CaptainPad's theme set (CaptainPad/constants/theme.ts).
 // The palettes themselves live in companion_app.css ([data-theme="…"]); here we
-// only carry the picker order + labels and persist the choice. Default: dark.
+// only carry the picker order + labels and persist the choice. Default: gruvbox.
 const THEME_ORDER = ['light', 'dark', 'midnight', 'sunset', 'gruvbox'];
 const THEME_LABELS = {
   light: 'LIGHT', dark: 'DARK', midnight: 'MIDNIGHT', sunset: 'SUNSET', gruvbox: 'GRUVBOX',
 };
 const THEME_KEY = 'companion.theme';
+const DEFAULT_THEME = 'gruvbox';
 function currentTheme() {
   let t = null;
   try { t = localStorage.getItem(THEME_KEY); } catch { /* storage blocked */ }
-  return THEME_ORDER.includes(t) ? t : 'dark';
+  return THEME_ORDER.includes(t) ? t : DEFAULT_THEME;
 }
 function applyTheme(t) {
-  const theme = THEME_ORDER.includes(t) ? t : 'dark';
+  const theme = THEME_ORDER.includes(t) ? t : DEFAULT_THEME;
   document.documentElement.setAttribute('data-theme', theme);
   document.body.setAttribute('data-theme', theme);
   try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage blocked */ }
@@ -195,7 +197,11 @@ function connect() {
       frameQueue.push(...m.frames);
     } else if (m.type === 'oscAccounting') {
       S.oscAcc = m;
+      if (Number.isFinite(m.rateHz)) S.osc.rateHz = m.rateHz;
       if (S.page === 'osc') renderOscPage();
+    } else if (m.type === 'oscRate') {
+      S.osc.rateHz = m.rateHz;
+      if (S.page === 'osc') syncOscRateControl();
     } else if (m.type === 'dropFired') {
       S.dropFlash = 1; flash('▼ DROP ' + (m.confidence != null ? m.confidence.toFixed(2) : ''));
     } else if (m.type === 'sourceStatus') {
@@ -1132,7 +1138,48 @@ function renderDerived2(dv) {
 // Render the live table of every signal the companion sends to the engine. The
 // data is GENERIC — whatever `oscAccounting` the server enumerated (designed
 // output signals + built-in emits like BPM + any sibling-added derived output).
+// OSC OUTPUT RATE control (report 20260621_6). Slider + number + fps presets,
+// all driving setOscRate. Built once; values synced from S.osc.rateHz.
+const OSC_RATE_PRESETS = [30, 60, 86];
+function buildOscRateControl() {
+  if (S.oscRateBuilt) { syncOscRateControl(); return; }
+  const slider = $('osc-rate-slider'), num = $('osc-rate-num'), presets = $('osc-rate-presets');
+  if (!slider || !num) return;
+  const apply = (v) => {
+    let n = Math.round(+v);
+    if (!Number.isFinite(n)) return;
+    n = Math.max(1, Math.min(120, n));
+    S.osc.rateHz = n;
+    syncOscRateControl();
+    send({ type: 'setOscRate', value: n });
+  };
+  slider.oninput = () => apply(slider.value);
+  num.onchange = () => apply(num.value);
+  if (presets) {
+    presets.innerHTML = '';
+    for (const p of OSC_RATE_PRESETS) {
+      const b = el('button', 'orc-preset', p === 86 ? 'MAX' : String(p));
+      b.title = p === 86 ? 'every analyzer hop (~86 fps)' : `${p} fps`;
+      b.onclick = () => apply(p);
+      presets.appendChild(b);
+    }
+  }
+  S.oscRateBuilt = true;
+  syncOscRateControl();
+}
+function syncOscRateControl() {
+  const slider = $('osc-rate-slider'), num = $('osc-rate-num'), presets = $('osc-rate-presets');
+  const r = S.osc.rateHz || 60;
+  if (slider) slider.value = Math.min(90, r);
+  if (num) num.value = r;
+  if (presets) for (const b of presets.children) {
+    const pv = b.textContent === 'MAX' ? 86 : +b.textContent;
+    b.classList.toggle('active', pv === r);
+  }
+}
+
 function renderOscPage() {
+  buildOscRateControl();
   const acc = S.oscAcc;
   const tgt = $('osc-target'), cnt = $('osc-count'), tot = $('osc-total'), rate = $('osc-rate');
   const tbody = $('osc-rows'), empty = $('osc-empty');

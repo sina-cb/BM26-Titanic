@@ -5,7 +5,7 @@
  * CaptainPad/constants/theme.ts). Each [data-theme="…"] block maps that
  * theme's CaptainPad Palette tokens onto the companion's existing CSS vars so
  * EVERY component restyles from one place. The picker (companion_app.js) sets
- * data-theme on <html>; default is dark.
+ * data-theme on <html>; default is gruvbox.
  *
  *   CaptainPad token            → companion var
  *   ─────────────────────────────────────────────
@@ -22,8 +22,8 @@
  *
  * The original companion dark look is preserved verbatim as the `dark` theme
  * (the values below) so nothing regresses; the other four are faithful ports
- * of their CaptainPad counterparts. :root carries the dark values so a missing
- * data-theme still renders (it never goes unstyled).
+ * of their CaptainPad counterparts. :root carries the gruvbox values (the
+ * default theme) so a missing data-theme still renders (it never goes unstyled).
  */
 /* --on-accent: the foreground used on top of --accent (active seg-btn, .primary,
  * .cal-apply). It is a PER-THEME token because the accents differ in luminance:
@@ -32,7 +32,6 @@
  * against #1a1205 FAILS AA — there white (#ffffff) is the only AA-passing pair.
  * No fallback default: every theme (and :root) defines it so a missing token is a
  * visible breakage, not a silent wrong color (codex P0). */
-:root,
 [data-theme="dark"]{
   --bg:#0f1216; --panel:#171b22; --panel2:#11141a; --raised:#1e242d;
   --border:#272d37; --text:#e8edf3; --muted:#8a95a4; --accent:#f0a23b;
@@ -56,7 +55,10 @@
   --border:#3e2e1a; --text:#f4e8d8; --muted:#b89478; --accent:#ffb84a;
   --ok:#9acb87; --err:#ff8a6a; --on-accent:#1a1205;
 }
-/* GRUVBOX — retro warm, mustard-yellow accent. */
+/* GRUVBOX — retro warm, mustard-yellow accent. The DEFAULT theme: :root holds
+   it so the very first paint (before the JS theme picker runs) is gruvbox, with
+   no flash of another palette. The JS default (DEFAULT_THEME) matches. */
+:root,
 [data-theme="gruvbox"]{
   --bg:#282828; --panel:#32302f; --panel2:#1d2021; --raised:#3c3836;
   --border:#504945; --text:#ebdbb2; --muted:#a89984; --accent:#fabd2f;
@@ -177,23 +179,28 @@ body{background:var(--bg);color:var(--text);
 /* 5-col grid: name · mini-scope · value · remove(×). The value column is
    widened to 48px and right-padded so the "0.00" never clips the edge
    (sidebar number glitch fix, 2026-06-17). */
-.sig-row{display:grid;grid-template-columns:40px 1fr 48px 24px;align-items:center;gap:6px;
+/* 2-ROW layout: the full signal NAME gets row 1 to itself (single line, no
+   wrap) alongside the value + remove button; the mini-scope PLOT drops to row 2
+   spanning the full width. This shows the whole name on one line and only the
+   plot moves down. (Was a cramped single-row grid that truncated names.) */
+.sig-row{display:grid;grid-template-columns:1fr 46px 22px;align-items:center;column-gap:6px;row-gap:5px;
   background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--acc);
   border-radius:8px;padding:7px 6px 7px 9px;color:var(--text);font:inherit;cursor:pointer;text-align:left}
 .sig-row.active{background:var(--raised);box-shadow:0 0 0 1px var(--acc) inset}
-.sig-name{font-weight:700;color:var(--acc);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sig-name{grid-column:1;grid-row:1;font-weight:700;color:var(--acc);min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* The mini-trace cell must be allowed to SHRINK below the canvas's intrinsic
    110px width (grid items default to min-width:auto, which would let the canvas
    push the row wider and shove the remove [×] button past the sidebar edge).
    min-width:0 + a fluid canvas keeps every column inside the row. */
-.sig-mini{min-width:0;overflow:hidden}
+.sig-mini{grid-column:1 / -1;grid-row:2;min-width:0;overflow:hidden}
 .sig-mini canvas{display:block;width:100%;height:auto}
-.sig-val{text-align:right;color:var(--muted);padding-right:4px;font-variant-numeric:tabular-nums;
-  font-size:11px;white-space:nowrap}
+.sig-val{grid-column:2;grid-row:1;text-align:right;color:var(--muted);padding-right:4px;
+  font-variant-numeric:tabular-nums;font-size:11px;white-space:nowrap}
 .sig-type{display:block;color:var(--muted);font-size:8px;letter-spacing:.5px;margin-top:1px}
 /* Remove control — a clearly themed framed button, the destructive twin of the
    `[+]` add button (.sig-add). Red-tinted so the operator can't miss it. */
-.sig-x{background:color-mix(in srgb, var(--err) 10%, transparent);
+.sig-x{grid-column:3;grid-row:1;background:color-mix(in srgb, var(--err) 10%, transparent);
   border:1px solid color-mix(in srgb, var(--err) 35%, transparent);
   color:var(--err);cursor:pointer;font:inherit;font-weight:700;font-size:13px;
   width:22px;height:22px;padding:0;line-height:1;border-radius:6px}
@@ -494,3 +501,25 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .preset-btn{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:7px;cursor:pointer;
   font-size:11.5px;font-weight:600;padding:7px 11px}
 .preset-btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ── OSC OUTPUT RATE control (report 20260621_6) ───────────────────────────
+   Lives under the OSC OUT page header. Slider + number + fps presets driving
+   the send cadence. Themed via the shared vars. */
+.osc-rate-ctrl{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 14px}
+.orc-lab{font-weight:700;letter-spacing:1px;font-size:10.5px;color:var(--text)}
+.orc-slider{-webkit-appearance:none;appearance:none;height:5px;border-radius:3px;background:var(--border);
+  outline:none;flex:1;min-width:140px;max-width:360px}
+.orc-slider::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;
+  background:var(--accent);cursor:pointer;border:2px solid var(--bg)}
+.orc-slider::-moz-range-thumb{width:15px;height:15px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--bg)}
+.orc-num{width:58px;background:var(--panel2);border:1px solid var(--border);border-radius:6px;
+  color:var(--text);font:inherit;font-variant-numeric:tabular-nums;font-size:13px;font-weight:700;
+  padding:4px 6px;text-align:right}
+.orc-unit{color:var(--muted);font-size:11px;font-weight:600;margin-left:-6px}
+.orc-presets{display:flex;gap:6px}
+.orc-preset{background:var(--panel2);color:var(--muted);border:1px solid var(--border);border-radius:6px;
+  cursor:pointer;font:inherit;font-weight:700;font-size:11px;padding:4px 9px}
+.orc-preset:hover{border-color:var(--accent);color:var(--accent)}
+.orc-preset.active{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.orc-hint{color:var(--muted);font-size:10.5px;flex:1 1 100%}

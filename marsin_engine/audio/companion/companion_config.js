@@ -223,7 +223,10 @@ export function defaultCompanionConfig() {
     ],
   });
   return {
-    osc: { host: '127.0.0.1', port: 10000 },
+    // rateHz: how many times/sec each OSC output is sent (the "OSC OUTPUT RATE";
+    // a frame rate). 60 = 60 fps, smooth and easy on the wire. The analyzer runs
+    // ~86 hops/s, so sends are downsampled to this target. (report 20260621_6)
+    osc: { host: '127.0.0.1', port: 10000, rateHz: 60 },
     signals: [
       intensity('low',  'micLow',      'rawLow',  5.5),
       intensity('mid',  'micMid',      'rawMid',  8.0),
@@ -391,6 +394,13 @@ export function validateCompanionConfig(cfg) {
   if (!Number.isInteger(cfg.osc.port) || cfg.osc.port < 1 || cfg.osc.port > 65535) {
     throw new Error(`companion config.osc.port must be an integer in [1, 65535], got ${cfg.osc.port}`);
   }
+  // OSC output rate (frames/sec). OPTIONAL — absent ⇒ 60. When present it must be
+  // an integer in [1, 120]. (Codex P0: a present-but-malformed value throws, no
+  // silent clamp.)
+  if (cfg.osc.rateHz !== undefined
+      && (!Number.isInteger(cfg.osc.rateHz) || cfg.osc.rateHz < 1 || cfg.osc.rateHz > 120)) {
+    throw new Error(`companion config.osc.rateHz must be an integer in [1, 120], got ${cfg.osc.rateHz}`);
+  }
   if (!Array.isArray(cfg.signals)) throw new Error('companion config.signals must be an array');
   const seen = new Set();
   const seenCpcKeys = new Map();   // cpcKey → signal id (output uniqueness)
@@ -428,7 +438,10 @@ export function validateCompanionConfig(cfg) {
       views.push(v.normalized);
     }
   }
-  return { osc: { host: cfg.osc.host, port: cfg.osc.port }, signals, views };
+  return {
+    osc: { host: cfg.osc.host, port: cfg.osc.port, rateHz: cfg.osc.rateHz !== undefined ? cfg.osc.rateHz : 60 },
+    signals, views,
+  };
 }
 
 // ── IO ────────────────────────────────────────────────────────────────────

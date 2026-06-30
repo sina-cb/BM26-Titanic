@@ -161,6 +161,17 @@
         <span class="osc-stat"><span class="osc-stat-lab">AGG RATE</span><span id="osc-rate" class="osc-stat-val">0/s</span></span>
       </div>
     </div>
+    <!-- OSC OUTPUT RATE control (report 20260621_6): how fast every output is
+         sent (a frame rate). The analyzer runs ~86 hops/s; this throttles the
+         send cadence so the wire isn't flooded. 60 fps is the smooth default. -->
+    <div class="osc-rate-ctrl">
+      <span class="orc-lab">OUTPUT RATE</span>
+      <input id="osc-rate-slider" class="orc-slider" type="range" min="1" max="90" step="1" />
+      <input id="osc-rate-num" class="orc-num" type="number" min="1" max="120" step="1" />
+      <span class="orc-unit">fps</span>
+      <span class="orc-presets" id="osc-rate-presets"></span>
+      <span class="orc-hint">how fast each output is sent — lower = lighter on the wire</span>
+    </div>
     <div class="osc-table-wrap">
       <table class="osc-table">
         <thead>

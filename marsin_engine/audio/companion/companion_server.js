@@ -140,6 +140,23 @@ const PROXY_KEY = KNOWN_SIGNALS[0];   // micLow — the chain-runner proxy key
 let design = loadCompanionConfig();   // { osc, signals }
 const runners = new Map();            // signalId -> SignalPostProcessor
 
+// OSC OUTPUT RATE (report 20260621_6). The analyzer runs ~86 hops/s; sending an
+// OSC packet for every output on every hop floods the wire (and the engine).
+// `oscRateHz` is the target send rate (a frame rate): all outputs are emitted
+// together at most this many times/sec. Seeded from config (default 60), live-
+// settable from the OSC OUT page. The throttle is evaluated once per hop in the
+// analyzer clock domain so a file-replay (faster than wall-clock) throttles by
+// AUDIO time, identically to live.
+let oscRateHz = (design.osc && Number.isInteger(design.osc.rateHz)) ? design.osc.rateHz : 60;
+// The analyzer emits ~SR/HOP hops/sec (~86). A naive "≥ interval elapsed" gate
+// would quantize the send rate to integer divisors of the hop rate (86, 43, 29…)
+// — set 60 and you'd actually get 43. Instead a PHASE ACCUMULATOR adds
+// oscRateHz/hopRate each hop and emits when it crosses 1.0, so the AVERAGE send
+// rate matches the target (60 → ~60/s) and naturally caps at the hop rate.
+const OSC_HOP_RATE_HZ = SR / HOP;
+let _oscPhase = 1;                 // ≥1 at a hop → that hop is a send frame
+let _oscEmitThisHop = true;        // set per-hop; gates sendOsc for the whole hop
+
 function buildRunners() {
   runners.clear();
   for (const sig of design.signals) {
@@ -202,6 +219,11 @@ function recordOscSend(address, value) {
 }
 
 function sendOsc(address, value) {
+  // OSC OUTPUT RATE throttle: _oscEmitThisHop is computed once per analyzer hop
+  // (see onAnalysis). When this hop isn't a send frame, drop the packet entirely
+  // — the value is re-sent on the next frame, and the accounting only counts
+  // packets that actually went on the wire. (report 20260621_6)
+  if (!_oscEmitThisHop) return;
   const v = Number.isFinite(value) ? value : 0;
   const buf = osc.toBuffer({ address, args: [{ type: 'float', value: v }] });
   oscSock.send(buf, design.osc.port, design.osc.host, (err) => {
@@ -316,6 +338,7 @@ function buildOscAccounting() {
   for (const acc of oscAccounting.values()) push(acc.address, acc.address, '', 'unknown');
   return {
     target: { host: design.osc.host, port: design.osc.port },
+    rateHz: oscRateHz,           // the OSC OUTPUT RATE (frames/sec) the operator set
     totalSent: oscSent,
     outputs: rows,
     // Informational: the rich second-tier signals the ENGINE computes in-process
@@ -782,6 +805,14 @@ const analyzer = new AudioAnalyzer({
   onConditioned: (cond) => pushScope(cond),
   onAnalysis: (r) => {
     const dt = lastMs === 0 ? 0 : (clockMs - lastMs) / 1000; lastMs = clockMs;
+    // OSC OUTPUT RATE gate (report 20260621_6): decide ONCE per hop whether this
+    // is a send frame, so every output emits together at ~oscRateHz on average.
+    // Phase accumulator (see OSC_HOP_RATE_HZ comment) — tied to hops, so it holds
+    // for live AND faster-than-realtime file replay (both step once per hop).
+    _oscPhase += oscRateHz / OSC_HOP_RATE_HZ;
+    _oscEmitThisHop = _oscPhase >= 1;
+    if (_oscEmitThisHop) _oscPhase -= 1;
+    if (_oscPhase > 1) _oscPhase = 1;   // cap: at most one emit/hop, never bursts
     recordAnalysis(r.low ?? 0);
     if (cal.recording) cal.peakBand = Math.max(cal.peakBand, r.low ?? 0, r.mid ?? 0, r.high ?? 0);
     if (noiseCal.recording) {
@@ -1245,6 +1276,20 @@ function handleMessage(ws, raw) {
     );
   }
   else if (m.type === 'startNoiseCal') startNoiseCal();
+  // OSC OUTPUT RATE (report 20260621_6): set the frames/sec all OSC outputs are
+  // sent at. Live + persisted into design.osc so "Export config" keeps it.
+  else if (m.type === 'setOscRate') {
+    const v = Math.round(+m.value);
+    if (!Number.isInteger(v) || v < 1 || v > 120) {
+      ws.send(JSON.stringify({ type: 'flash', text: 'OSC rate must be an integer 1–120 fps', error: true }));
+    } else {
+      oscRateHz = v;
+      design.osc.rateHz = v;       // so Export config persists the choice
+      _oscPhase = 1;               // apply immediately: next hop is a send frame
+      broadcast({ type: 'oscRate', rateHz: oscRateHz });
+      broadcast({ type: 'oscAccounting', ...buildOscAccounting() });
+    }
+  }
   else if (m.type === 'applyNoiseGates' && m.gates && typeof m.gates === 'object') {
     // Apply a full recommended/preset gate bundle in one shot (the automatic
     // path). Each provided band is written through; absent bands are left as-is.
@@ -1442,12 +1487,13 @@ function applyEngineConfig() {
   catch { return 'test'; }   // standalone (no engine config) → boot in test
   const comp = cfg && cfg.companion;
   if (comp && comp.osc && typeof comp.osc.host === 'string' && Number.isInteger(comp.osc.port)) {
-    design.osc = { host: comp.osc.host, port: comp.osc.port };
+    design.osc = { host: comp.osc.host, port: comp.osc.port, rateHz: oscRateHz };
   } else if (cfg && cfg.osc && Number.isInteger(cfg.osc.port)) {
     // Fall back to the engine's own OSC port; loopback host (the companion and
     // engine run on the same Pi). osc.host in config is the engine BIND addr
-    // (0.0.0.0) — not a send target — so we send to loopback.
-    design.osc = { host: '127.0.0.1', port: cfg.osc.port };
+    // (0.0.0.0) — not a send target — so we send to loopback. Preserve the
+    // OSC OUTPUT RATE (it's a send-cadence choice, independent of the target).
+    design.osc = { host: '127.0.0.1', port: cfg.osc.port, rateHz: oscRateHz };
   }
   // MIC selection: the engine/CaptainPad persist the operator's chosen input
   // as `audio.capture.device` (the unified device, via PATCH /audio/config),
