@@ -74,6 +74,17 @@ new work; file follow-ups there as `Backlog` cards.
 - **Offline readiness is a deployment requirement**: the playa has no
   internet. No CDNs, no external fonts, no runtime `npm install`, no
   telemetry. Browser deps are vendored in `simulation/vendor/`.
+- **Panel firmware is flashed ONLY through its MAC-locked deploy script.**
+  Flash `LookingGlass/panel_firmware` exclusively via `python deploy.py` (run
+  from that directory) — **never** a raw `pio run -t upload`. `deploy.py`
+  verifies the connected board's ESP32 MAC against `LookingGlass/secrets.yaml`
+  (`device.mac`, gitignored) and refuses any board that doesn't match. This is
+  mandatory because multiple ESP32s (e.g. the Stoker controller) are often
+  plugged in at once, and a raw upload would flash whichever port it finds
+  first. The script owns the MAC: it reads it from the gitignored secret and
+  `--pair` writes/updates it there. The secret can be shared across worktrees
+  via the `$PANEL_SECRETS` env var (one file outside the tree, used by both
+  `deploy.py` and the build). See `.agent/01_skills/14_panel_firmware_ops.md`.
 - Style guides: `.agent/00_gol/01_python_style.md`,
   `.agent/00_gol/02_nodejs_style.md` — read before writing code.
 
@@ -85,6 +96,7 @@ new work; file follow-ups there as `Backlog` cards.
 | `marsin_engine/` | Pixelblaze-compatible pattern engine (WASM VM, 40 fps, sACN out, REST/WS API). `node engine.js --model test_bench --pattern <name>` |
 | `CaptainPad/` | TypeScript Expo iPad app — operator control surface |
 | `control_podium/` | Podium hardware + Raspberry Pi server bridge (Meshtastic radio path) |
+| `LookingGlass/` | Control-panel art piece — `panel_firmware/` (ESP32-S3 arcade buttons → WiFi telemetry portal), MAC-locked `deploy.py`, `circuit.html` wiring diagram. Flash via `deploy.py` only; see `.agent/01_skills/14_panel_firmware_ops.md` |
 | `marsin_pb/` | Pixelblaze-related tooling |
 | `3d_models/`, `3d_structure/`, `renders/`, `images/` | Assets |
 | `states/`, `docs/`, `archived/` | State files, docs, retired work |
