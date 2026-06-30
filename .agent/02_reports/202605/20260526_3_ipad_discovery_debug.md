@@ -4,13 +4,13 @@
 **Status:** UNRESOLVED at code level (root cause is environmental, not application bug). Diagnostic-complete and ready for expert review.
 **Author:** investigator agent (Claude, opus-4-7, 1M)
 **Subject machine:** operator's Apple Silicon Mac, `dev/summer_camp_readiness` @ `4b500ed`
-**Subject network:** WiFi SSID `MS-LED`, subnet `10.1.1.0/24`, gateway GL.iNet at `10.1.1.1`
+**Subject network:** WiFi SSID `<redacted-wifi>`, subnet `10.1.1.0/24`, gateway GL.iNet at `10.1.1.1`
 
 ---
 
 ## 1. Symptom
 
-The operator's iPad ("FoH iPad 2") on WiFi `MS-LED` cannot reach the MarsinEngine running on the operator's Mac (also on `MS-LED`). Specifically:
+The operator's iPad ("FoH iPad 2") on WiFi `<redacted-wifi>` cannot reach the MarsinEngine running on the operator's Mac (also on `<redacted-wifi>`). Specifically:
 
 - CaptainPad's Config-tab "SCAN NETWORK" with subnet `10.1.1` returns 0 results.
 - Manual entry of `http://10.1.1.<mac-ip>:6968` in CaptainPad's Config tab -> test connection times out.
@@ -32,7 +32,7 @@ The operator's iPad ("FoH iPad 2") on WiFi `MS-LED` cannot reach the MarsinEngin
 
 ### 2a. The router (GL.iNet at 10.1.1.1)
 
-The operator confirmed that running the same MarsinEngine on their Windows machine on the same `MS-LED` WiFi is discoverable AND reachable from the iPad just fine. So the router is allowing client-to-client traffic in general. Any client-isolation theory on the router would have to explain why ONLY this Mac is blocked while the Windows machine is not — it can't.
+The operator confirmed that running the same MarsinEngine on their Windows machine on the same `<redacted-wifi>` WiFi is discoverable AND reachable from the iPad just fine. So the router is allowing client-to-client traffic in general. Any client-isolation theory on the router would have to explain why ONLY this Mac is blocked while the Windows machine is not — it can't.
 
 ### 2b. The engine binary and code
 
@@ -129,7 +129,7 @@ It points decisively at a **packet-layer filter or driver-level intercept** on t
 
 - Apple Silicon. Darwin 25.5.0 (macOS Sequoia or newer).
 - WiFi `en0`, currently `10.1.1.177/24 broadcast 10.1.1.255`, MAC `b2:f6:bc:37:b7:cd`.
-- WiFi associated with `MS-LED` (per `ipconfig getsummary en0` DHCP lease from `10.1.1.1`, lease valid 14:32 -> 02:32 next day).
+- WiFi associated with `<redacted-wifi>` (per `ipconfig getsummary en0` DHCP lease from `10.1.1.1`, lease valid 14:32 -> 02:32 next day).
 - `awdl0` active (Apple Wireless Direct Link — used by AirDrop/Continuity, normal).
 - `bridge0` is the macOS-built-in **Thunderbolt Bridge** (`networksetup -listnetworkserviceorder` confirms it under Hardware Port: "Thunderbolt Bridge, Device: bridge0"). Its `member: en1, en2, en3` are the three Thunderbolt ports. They show `PROMISC` because the bridge driver promiscuous-mode-listens on its members; all three have `status: inactive` (no Thunderbolt cable plugged in). **Not the cause.**
 - `en10` (USB Ethernet adapter, 169.254 link-local). Inactive otherwise.
