@@ -52,8 +52,8 @@ export var whiteLevel = 0.45;  // WHITE: overall white amount / keep (audio: mic
 export var whiteKick = 0.0;    // WHITE: white spark on inhale + blinder pop (audio: micKick)
 export var blinderBite = 0.6;  // WHITE: how snappy the vintage-head blinder swell hits
 
-export var cp1H = 0.02, cp1S = 1.0, cp1V = 1.0; // Exhale (warm red)
-export var cp2H = 0.50, cp2S = 1.0, cp2V = 1.0; // Inhale (calm cyan)
+export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0; // Exhale (Red default — og)
+export var cp2H = 0.1, cp2S = 1.0, cp2V = 1.0; // Inhale (Orange default — og)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -70,7 +70,7 @@ export function sliderWhiteKick(v) { whiteKick = v; }
 export function sliderBlinderBite(v) { blinderBite = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
-var MAX_RATE = 0.5;          // base breaths/sec at localSpeed = 1.0
+var MAX_RATE = 1.0;          // base breaths/sec at localSpeed = 1.0 (restored toward og time(0.05) cadence)
 var PHASE_WRAP = 10000.0;
 var AUTO_PERIOD = 73.0;      // seconds for autonomous direction oscillation
 var BASE_FLOOR = 0.06;       // small non-black floor
@@ -162,8 +162,8 @@ export function render3D(index, x, y, z) {
   // while others dim, so the rig visibly "breathes/ripples" yet total brightness
   // stays roughly constant — leaving the level gain (PRIMARY) as the dominant
   // total-brightness driver (animation wobble in total kills corr, skill §5).
-  var bA = wave(breathA * 0.2 + rip);
-  var bB = wave(breathB * 0.2 + rip * 0.6);
+  var bA = wave(breathA * 2.0 + rip);
+  var bB = wave(breathB * 2.0 + rip * 0.6);
   var breath = bA * 0.6 + bB * 0.4;
 
   // Sharpen the travelling crest; sharpness slider controls definition.

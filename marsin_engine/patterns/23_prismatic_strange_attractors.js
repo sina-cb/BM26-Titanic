@@ -51,8 +51,8 @@ export var whiteCore = 0.5;
 export var uvGhost = 0.4;
 export var colorSpread = 0.95;  // resolved cp1<->cp2 spread (slider 0..1 -> 0.45..1.5; ~mid)
 
-export var cp1H = 0.55, cp1S = 0.95, cp1V = 1.0; // cyan
-export var cp2H = 0.84, cp2S = 0.95, cp2V = 1.0; // violet (wide hue sep)
+export var cp1H = 0.58, cp1S = 0.95, cp1V = 1.0; // cyan (og default)
+export var cp2H = 0.86, cp2S = 0.95, cp2V = 1.0; // violet (og default)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -194,17 +194,17 @@ export function render3D(index, x, y, z) {
   // one channel to full at a musical peak, scaled by level so the cores bloom on
   // bass (lifts peakMaxChan to ~255 at a musical peak).
   var core = pow(max(0.0, 1.0 - nearest * (3.6 + contrast)), 3.2);
-  var intensity = 0.05 + glow * 0.78 + filament * 0.55 + core * (0.4 + level * 1.1);
+  // SPARSE BLACK SPACE (operator-chosen identity): base sits at the og darkFloor
+  // (0.04) and ALL brightness comes from the moving wells (glow/filament/core) —
+  // no uniform per-pixel floor, so the inter-attractor space returns to true
+  // black (darkFrac back toward og ~0.9). The core still blooms ON the wells so
+  // a musical peak drives a channel to full, but only where a well is present.
+  var intensity = 0.04 + glow * 0.78 + filament * 0.55 + core * (0.4 + level * 1.1);
 
-  // PRIMARY brightness gain (audio: micLow -> level). Because the wells ORBIT,
-  // the lit-mass brightness swings with position, which capped the raw corr at
-  // ~0.51; a small phase-free uniform level floor (every pixel, no animation
-  // term) anchors the level-correlated share of total brightness and lifts the
-  // PRIMARY to its target margin (corr ~0.58). The floor is small relative to the
-  // bright cores so the per-pixel contrast (bright moving cores over a deep dim
-  // wash) still reads HIGH-DEF, not flat. Kick pops the cores at a peak.
+  // PRIMARY brightness gain (audio: micLow -> level). The level scales the
+  // well-driven structure (no uniform floor added back), so bright moving cores
+  // ride over genuinely dark space (HIGH-DEF contrast). Kick pops the cores.
   intensity = intensity * (0.22 + level * 1.2)
-            + level * 0.05
             + glow * kick * 0.6;
   intensity = max(0.0, min(1.55, intensity));
 

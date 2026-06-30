@@ -1,12 +1,16 @@
 /**
- * BpmSpeedSync — drive CPC `speed` from `audioBpm` when enabled.
+ * BpmSpeedSync — drive CPC `speed` from the ARBITRATED tempo when enabled.
  *
- * See docs/25_marsin_audio_analysis.md §6 for the design.
+ * See docs/39_channels_deck_mixer.md (tempo arbitration) for the design.
  *
  * Behaviour:
  *   - Subscribes to ParamCenter via `paramCenter.subscribe(...)`.
- *   - On every change event that touches `audioBpm`, if `bpmSpeedSync`
- *     is on and the BPM value is sensible, maps
+ *   - On every change event that touches an input key (`audioBpm` — the raw
+ *     OSC tempo readout — or any of `bpmSpeedSync` / `bpmSpeedMin` /
+ *     `bpmSpeedMax`), it recomputes. The TEMPO it maps is NOT `audioBpm`
+ *     alone — it is the ARBITRATED pattern clock (`mixer.tempoBpm`), i.e.
+ *     whatever is actually driving the clock: OSC auto-follow OR a manual TAP
+ *     override. When `bpmSpeedSync` is on and the tempo is sensible, it maps
  *
  *        speed = clamp01((bpm - bpmSpeedMin) / (bpmSpeedMax - bpmSpeedMin))
  *
@@ -14,31 +18,43 @@
  *     `'bpm-sync:auto'`. The named source lets CaptainPad badge the
  *     speed knob and lets a future source-lock policy block manual
  *     overrides when the auto-driver is active.
+ *   - `recompute()` is a public, idempotent re-evaluation the engine calls
+ *     when the arbitrated tempo can change WITHOUT a CPC event — a manual TAP
+ *     (`POST /mixer/tempo`) writes `mixer.tempoBpm` directly, and the
+ *     per-frame OSC auto-follow does too. It only writes `speed` when the
+ *     mapped value actually changes, so it is safe to call per-frame.
  *
- * Tempo SOURCE (2026-06-17 contract): the Audio Companion is the sole
- * analyzer. It computes the tempo (DerivedSignals/BpmTracker) and streams
- * it to the engine over OSC `/marsin/audio/bpm` → CPC key `audioBpm`. The
- * sync follows THAT analyzed tempo. When `audioBpm` is 0/absent the sync
- * simply doesn't drive — fail SAFE, no fallback to a stale tempo.
+ * SOURCE-AGNOSTIC (tempo arbitration): the sync follows the SAME applied
+ * tempo the BPM tile shows. When a `getTempoBpm` resolver is injected (the
+ * engine passes `() => mixer.tempoBpm`), that arbitrated value is the tempo —
+ * so SPEED tracks a tapped tempo too, not only the analyzed OSC `audioBpm`.
+ * When no resolver is injected (legacy / unit-test default), it falls back to
+ * reading `audioBpm` off the event so the pure mapping stays trivially
+ * testable. When the resolved tempo is 0/absent the sync simply doesn't
+ * drive — fail SAFE, no fallback to a stale tempo.
  *
- * Why a separate module (not folded into AudioAnalyzer or
- * api_server):
- *   - It composes cleanly with the new multi-subscriber CPC API and
- *     keeps the BPM-input side decoupled from "where BPM comes from"
- *     (the Companion's analyzed `audioBpm` today).
+ * Why a separate module (not folded into AudioAnalyzer or api_server):
+ *   - It composes cleanly with the multi-subscriber CPC API and keeps the
+ *     BPM-input side decoupled from "where the tempo comes from" (now the
+ *     arbiter's applied `mixer.tempoBpm`).
  *   - Trivially unit-testable with a stub paramCenter.
  *
  * The class holds no time-domain state — it's a pure mapping that
- * gets called per event. Constructed once at boot, attached, and
- * forgotten.
+ * gets called per event / per recompute. Constructed once at boot,
+ * attached, and forgotten.
  */
 
 export class BpmSpeedSync {
   /**
    * @param {object} paramCenter — anything with `subscribe(fn) → unsubscribe`,
    *                                `set(key, value, source, origin)`, and a
-   *                                `getAll()` returning `{ key: value }`.
+   *                                `getCanonicalState()` returning
+   *                                `{ params: { key: { value } } }` (used by
+   *                                recompute()).
    * @param {object} [opts]
+   * @param {() => number} [opts.getTempoBpm] — resolver for the ARBITRATED
+   *        tempo (OSC OR tap). The engine passes `() => mixer.tempoBpm`. When
+   *        omitted, the mapping reads `audioBpm` off the event (legacy/test).
    * @param {string} [opts.source='bpm-sync']
    * @param {string} [opts.origin='bpm-sync:auto']
    */
@@ -47,9 +63,13 @@ export class BpmSpeedSync {
       throw new TypeError('BpmSpeedSync requires a ParamCenter with subscribe()');
     }
     this._pc = paramCenter;
+    this._getTempoBpm = typeof opts.getTempoBpm === 'function' ? opts.getTempoBpm : null;
     this._source = opts.source || 'bpm-sync';
     this._origin = opts.origin || 'bpm-sync:auto';
     this._unsubscribe = null;
+    // Last speed value this driver wrote — lets recompute() short-circuit when
+    // nothing changed, so it's safe to call per-frame (no CPC churn).
+    this._lastSpeed = null;
   }
 
   /** Subscribe to the CPC. Idempotent. Returns the unsubscribe fn. */
@@ -67,35 +87,90 @@ export class BpmSpeedSync {
     }
   }
 
+  /** @private — keys whose change should re-evaluate the mapping. */
+  _touchesInput(changedKeys) {
+    return changedKeys.includes('audioBpm')
+      || changedKeys.includes('bpmSpeedSync')
+      || changedKeys.includes('bpmSpeedMin')
+      || changedKeys.includes('bpmSpeedMax');
+  }
+
   /** @private */
   _onChange(ev) {
     if (!ev || !Array.isArray(ev.changedKeys)) return;
-    if (!ev.changedKeys.includes('audioBpm')) return;
-
+    if (!this._touchesInput(ev.changedKeys)) return;
     const params = ev.state && ev.state.params;
     if (!params) return;
+    this._apply(params, ev);
+  }
 
-    const enabled = (params.bpmSpeedSync?.value ?? 0) >= 0.5;
+  /**
+   * Re-evaluate the mapping NOW, against the current CPC + arbitrated tempo.
+   * Idempotent: only writes `speed` when the mapped value changed. The engine
+   * calls this when the arbitrated tempo can move without a CPC event — a
+   * manual TAP, or the per-frame OSC auto-follow.
+   */
+  recompute() {
+    // Need the `{ key: { value } }` slot shape (same as the event's
+    // `ev.state.params`), so read the canonical state — NOT getAll(), which
+    // returns flat `{ key: value }`.
+    const state = typeof this._pc.getCanonicalState === 'function'
+      ? this._pc.getCanonicalState()
+      : null;
+    const params = state && state.params;
+    if (!params) return;
+    this._apply(params, null);
+  }
+
+  /**
+   * @private — the shared mapping. `params` is the CPC param map; `ev` is the
+   * triggering event (or null for recompute()). Reads the tempo from the
+   * injected arbitrated resolver when present, else from `audioBpm`.
+   */
+  _apply(params, ev) {
+    const enabled = (this._numOf(params.bpmSpeedSync) ?? 0) >= 0.5;
     if (!enabled) return;
 
-    const bpm = Number(params.audioBpm?.value);
-    if (!Number.isFinite(bpm) || bpm <= 0) return;   // §6.2: no signal → no write
+    const bpm = this._resolveTempo(params);
+    if (!Number.isFinite(bpm) || bpm <= 0) return;   // no signal → no write (fail SAFE)
 
-    let min = Number(params.bpmSpeedMin?.value);
-    let max = Number(params.bpmSpeedMax?.value);
+    let min = this._numOf(params.bpmSpeedMin);
+    let max = this._numOf(params.bpmSpeedMax);
     if (!Number.isFinite(min) || !Number.isFinite(max)) return;
 
+    let speed;
     if (min === max) {
-      // §6.2: avoid div-by-zero, pin to midpoint.
-      this._pc.set('speed', 0.5, this._source, this._origin);
-      return;
+      // avoid div-by-zero, pin to midpoint.
+      speed = 0.5;
+    } else {
+      if (min > max) { const t = min; min = max; max = t; }   // swap, operator clearly meant this
+      const span = max - min;
+      speed = (bpm - min) / span;
+      if (speed < 0) speed = 0;
+      if (speed > 1) speed = 1;
     }
-    if (min > max) { const t = min; min = max; max = t; }   // swap, operator clearly meant this
 
-    const span = max - min;
-    let speed = (bpm - min) / span;
-    if (speed < 0) speed = 0;
-    if (speed > 1) speed = 1;
+    if (this._lastSpeed === speed) return;   // idempotent — no churn
+    this._lastSpeed = speed;
     this._pc.set('speed', speed, this._source, this._origin);
+  }
+
+  /**
+   * @private — resolve the tempo to map. Prefer the injected ARBITRATED tempo
+   * (OSC OR tap) so SPEED tracks whatever drives the clock; fall back to the
+   * raw `audioBpm` param when no resolver is wired (legacy / unit tests).
+   */
+  _resolveTempo(params) {
+    if (this._getTempoBpm) {
+      const t = Number(this._getTempoBpm());
+      return Number.isFinite(t) ? t : NaN;
+    }
+    return this._numOf(params.audioBpm);
+  }
+
+  /** @private — read a numeric `.value` off a CPC param slot. */
+  _numOf(slot) {
+    if (!slot) return NaN;
+    return Number(slot.value);
   }
 }

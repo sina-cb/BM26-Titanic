@@ -16,7 +16,13 @@ export class ChannelParamRouter {
       return { status: 'ignored', reason: 'blocked_by_shared' };
     }
 
-    const channel = this.mixer.getChannel(channelId);
+    // Resolve across EVERY role (deck base, mixer overlays, deck overlays):
+    // per-pattern param sharing must be able to write a propagated slider
+    // onto a deck overlay, which `getChannel` alone does not reach. Falls
+    // back to getChannel for engines/tests whose mixer predates the accessor.
+    const channel = this.mixer.getChannelAnyRole
+      ? this.mixer.getChannelAnyRole(channelId)
+      : this.mixer.getChannel(channelId);
     if (!channel) return { status: 'ignored', reason: 'channel_not_found' };
     const exp = this.mixer.wasmHost.getExports(channel.handle).find(e => e.id === controlId);
     if (!exp || !this.localControlKinds.has(exp.kind)) {
