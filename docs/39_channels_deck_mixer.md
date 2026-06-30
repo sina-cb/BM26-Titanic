@@ -29,7 +29,7 @@ The engine maintains **two output buffers** and crossfades between them:
 | | **Deck** | **Mixer** |
 |---|---|---|
 | What it is | Singleton PFL (pre-fade-listen) preview channel | Stack of live overlay channels |
-| How many channels | Exactly one (`deckChannel`) | 0..N overlays (`maxChannels = 6`) |
+| How many channels | Exactly one (`deckChannel`) | 0..N overlays (`maxChannels = 8`) |
 | Renders into | `deckBuffer` (the focused pattern at 100%) | `mixerBuffer` (composited) |
 | Composite | None — single pattern | Bottom→top: base seeds the buffer, overlays blend on top with each channel's fader + blend mode |
 | Pattern switch | **Soft swap** — ping-pong double-buffer crossfade | **Instant** load (no double-buffer) |
@@ -825,6 +825,13 @@ broadcast reconciles the strips as the ramp progresses); `Alert` on any 4xx
 | `lib/api_server.js` | `morphToLook(look, durationMs)` (union-cap, M/T/C build, master/group/deck ramps, arms `_morph`); `POST /mixer/snapshots/:name/recall-fade` route (validate→morph→broadcast, no kickoff save); `onMorphComplete` finalizer (CPC-unregister faded-out ids + save + broadcast complete) |
 | `CaptainPad/utils/channelExtrasApi.ts` | `recallSnapshotFade(name, durationMs)` (mirrors `recallSnapshot` + master-fade body shape, fail-loud) |
 | `CaptainPad/components/SnapshotBar.tsx` | per-row MORPH button + inline 1/3/5/10 s duration pills → `recallSnapshotFade`; no optimistic flip; Alert on 4xx |
+
+> **Master FADE pills (`MasterFadeGroup`, deck + mixer) — 2026-06-30:** the
+> TO BLACK / UP duration picker now offers **0s** (instant) alongside
+> 1/3/5/10 s. 0s can't use the timed-fade route (`startMasterFade` requires
+> `durationMs > 0`), so `runFade()` routes 0s to the instant
+> `PATCH /mixer {master}` (`updateMixerMaster`, which also cancels any in-flight
+> fade); >0 runs the timed fade as before.
 | `tests/snapshot_morph.test.js` | Unit (11): group-fade lerp/exact-land/cancel-on-write/delete-drop/validation; fadeChannel M midpoint≈smoothstep + T 0→target + C→0+removed; changed-pattern structural-snap + level-ramp; morph descriptor fires finalizer once with fadeOutIds; beginMorph duration validation; cancelMorph (replace mid-flight, no double-fire) |
 | `tests/hil/hil_snapshot_morph_test.mjs` | HIL (18): recall-fade ramps master+fader MONOTONICALLY toward target, converges to target, and the settled mix EQUALS an instant recall of the same snapshot EXACTLY (lands exactly on target look); 404/400 (durationMs 0/neg/non-finite/missing) error paths |
 
@@ -1317,6 +1324,12 @@ fade-in-flight, and vice versa.
 ---
 
 ## 6.za §F-tempo-arbitration — OSC auto-drives, tap overrides (2026-06-21, engine-side)
+
+> ⚠️ **SUPERSEDED 2026-06-30 by §6.zb (sticky OSC/TAP source switch).** The
+> "tap overrides for 12 s then OSC reclaims" auto-revert + the `MANUAL_HOLD_MS`
+> window + the stability deadband described below were REPLACED by a sticky,
+> persisted `tempoSourcePref` switch and source-side smoothing. Read §6.zb for
+> current behavior; this section is kept for history.
 
 The tap-tempo core above (§F-phase) is *manual only*: nothing fed the live
 OSC/audio BPM into `mixer.tempoBpm`. This wave adds the arbiter that makes the
@@ -1945,3 +1958,70 @@ type. `broadcastDeckState()` fires on every overlay mutation.
   configured above ~8s would let the watchdog clear the pending-gate before the
   fade completes. Not observed as a problem at default durations; flagged for
   whoever tunes long fades.
+
+---
+
+## 6.zb §F-tempo-source — sticky OSC/TAP switch + source-side smoothing (2026-06-30)
+
+Supersedes §6.za. The 12 s auto-revert made the source flap OSC↔TAP whenever a
+tap landed or OSC liveness blinked, and the deadband let the applied tempo
+differ from the OSC readout. The operator's rule is now a **sticky switch**:
+*"the OSC/TAP selection decides which BPM the whole system uses, and it stays
+put until you change it."*
+
+**Sticky source preference.** `mixer.tempoSourcePref` ('osc' | 'tap'), persisted
+in `mixer_state.yaml`, restored at boot, and on every `serializeMixerState`
+broadcast (so deck + mixer always agree — one source of truth, no per-surface
+guess).
+
+| pref | behavior |
+|---|---|
+| `osc` (default) | `mixer.tempoBpm` = the RAW live OSC bpm, verbatim (clamped [20,400], no deadband). A brief OSC dropout reads `tempoSource:'held'` while the selector STAYS on OSC — it never flips to TAP. |
+| `tap` | OSC auto-follow fully suppressed; the tapped tempo holds indefinitely. |
+
+- A manual tap (`POST /mixer/tempo`) sets pref→`tap` (you're hand-driving). "Use
+  OSC" (`POST /mixer/tempo/sync`) and the explicit `POST /mixer/tempo/source
+  {source}` set the pref directly. `clearOverride()`/`noteManualTap()` just flip
+  the sticky pref — there is no time window any more.
+- **`tempoSource`** (live status, for the accent) = `'osc'` (selected+live) /
+  `'manual'` (pref tap) / `'held'` (pref osc, OSC stale). **`tempoSourcePref`**
+  (the selector highlight) = the sticky `'osc'`/`'tap'` — does NOT flap.
+
+**Stability lives at the source, not in a deadband.** The Audio Companion (a)
+EMA-smooths `audioBpm` (`lib/bpm_smoother.js`, τ 250 ms) IN PLACE before the UI
+frame AND the OSC emit read it, and (b) rounds to an integer at emit
+(`bpm_emit.js`). So the Companion UI, the OSC packet, CaptainPad's OSC BPM, and
+`mixer.tempoBpm` all show ONE identical integer. Config:
+`config.yaml companion.bpmSmoothing {enabled,tauMs}` (default on). An optional
+engine-side replica (`config.yaml tempo.oscBpmSmoothing`) is **default off** —
+the Companion already smooths; enable only for a jumpy non-Companion sender.
+
+**Single-source `audioBpm` (the "jumpy OSC" fix).** When the engine runs its OWN
+local analyzer (`audio/signals/derived_signals.js`, write-source
+`'derivedSignals'`) alongside the Companion, both write the same `audioBpm` CPC
+key — one raw, one smoothed — and the arbiter followed whichever wrote last,
+flickering the tempo. `TempoArbiter._onChange` now **ignores `audioBpm` whose
+ParamCenter `lastSource === 'derivedSignals'`** and follows only the
+OSC/Companion value (`'osc'`); test/api injection still works. This also
+stabilizes `bpm_speed_sync` (it maps the arbitrated `mixer.tempoBpm`).
+
+**Touched.** `lib/tempo_arbiter.js` (pref + raw-apply + source filter, deadband
+removed), `lib/bpm_smoother.js` (new), `lib/pattern_mixer.js`
+(`tempoSourcePref`), `lib/state_manager.js` (persist), `lib/api_server.js`
+(`POST /mixer/tempo/source`, `tempoSourcePref` in broadcasts + tempo responses,
+restore), `audio/companion/{companion_server,bpm_emit}.js` (smooth+round),
+`config.yaml` (`companion.bpmSmoothing`, `tempo.oscBpmSmoothing`). CaptainPad:
+`hooks/use_tempo_tap.ts` (`sourcePref`, `setSource`), `components/CPCControls.tsx`
+(selector highlights sticky pref), `utils/channelExtrasApi.ts`
+(`postTempoSource`), `app/(tabs)/audio.tsx` (single-source on `audioBpm`).
+Tests: `tempo_arbitration.test.js` (31), `bpm_smoother.test.js` (10),
+`companion_bpm_emit.test.js`, HIL `hil_tempo_arbitration_test.mjs`.
+
+### Mixer-group persistence in saved looks (2026-06-30)
+
+`SnapshotManager.save` rebuilt the on-disk look from `{master,deck,channels}` and
+silently dropped `mixGroups` — so a recalled view kept the per-channel
+`mixGroupId` pointers but lost the group registry, and the gang-faders vanished.
+`save()` now persists `mixGroups` (empty array when none); `load()` returned it
+verbatim already and `recallLook`/`morphToLook` already restore the registry, so
+groups (faders + membership) now round-trip capture → save → recall.
