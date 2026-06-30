@@ -19,10 +19,15 @@ import { View, Text, TouchableOpacity, Alert } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { fadeMaster } from '@/utils/masterApi';
+import { updateMixerMaster } from '@/utils/api';
 
-// Duration choices for the timed fade, in seconds. Kept short — the operator
-// can always drag the master directly for anything bespoke.
-export const FADE_SECONDS = [1, 3, 5, 10] as const;
+// Duration choices for the timed fade, in seconds. `0` = INSTANT (operator
+// request 2026-06-30): a snap to black / full with no ramp. Kept short
+// otherwise — the operator can always drag the master directly for anything
+// bespoke. NOTE: 0 can't go through the timed-fade route (the engine's
+// startMasterFade requires durationMs > 0); runFade() routes 0 to the instant
+// PATCH /mixer {master} (updateMixerMaster) instead.
+export const FADE_SECONDS = [0, 1, 3, 5, 10] as const;
 const DEFAULT_FADE_SECONDS = 3;
 
 interface Props {
@@ -37,16 +42,24 @@ export function MasterFadeGroup({ isPortrait }: Props) {
   const [fadeSeconds, setFadeSeconds] = useState<number>(DEFAULT_FADE_SECONDS);
 
   const runFade = async (target: number) => {
-    const durationMs = fadeSeconds * 1000;
-    const res = await fadeMaster(target, durationMs);
+    // 0s = INSTANT: the timed-fade route rejects durationMs<=0 (startMasterFade
+    // needs >0), so a 0s "fade" is a direct master set that snaps immediately
+    // (and cancels any in-flight fade). Anything >0 runs the timed fade.
+    const res = fadeSeconds > 0
+      ? await fadeMaster(target, fadeSeconds * 1000)
+      : await updateMixerMaster(target);
     if (!res.ok) {
       // Codex P0 — fail loud: a rejected fade must be visible, not silently
       // dropped.
-      const where = target <= 0 ? 'Fade to Black' : 'Fade Up';
+      const where = target <= 0 ? 'To Black' : 'Up';
       console.error(`Master ${where} failed:`, res.error);
-      Alert.alert('Master fade failed', res.error || 'The engine rejected the fade request.');
+      Alert.alert('Master fade failed', res.error || 'The engine rejected the request.');
     }
   };
+
+  // "instantly" for the 0s preset, "over Ns" otherwise — keeps the spoken
+  // labels honest now that 0s is a snap, not a ramp.
+  const overPhrase = fadeSeconds > 0 ? `over ${fadeSeconds} seconds` : 'instantly';
 
   return (
     <View style={styles.fadeGroup}>
@@ -102,7 +115,7 @@ export function MasterFadeGroup({ isPortrait }: Props) {
         hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
         style={[styles.fadeAction, styles.fadeActionBlack]}
         accessibilityRole="button"
-        accessibilityLabel={`Fade master to black over ${fadeSeconds} seconds`}
+        accessibilityLabel={`Fade master to black ${overPhrase}`}
       >
         <Text style={styles.fadeActionText}>TO BLACK</Text>
       </TouchableOpacity>
@@ -111,7 +124,7 @@ export function MasterFadeGroup({ isPortrait }: Props) {
         hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
         style={[styles.fadeAction, styles.fadeActionUp]}
         accessibilityRole="button"
-        accessibilityLabel={`Fade master up over ${fadeSeconds} seconds`}
+        accessibilityLabel={`Fade master up ${overPhrase}`}
       >
         <Text style={styles.fadeActionText}>UP</Text>
       </TouchableOpacity>
