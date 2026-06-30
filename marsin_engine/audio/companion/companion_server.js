@@ -156,6 +156,12 @@ let oscRateHz = (design.osc && Number.isInteger(design.osc.rateHz)) ? design.osc
 // and persisted back into it (Export config writes it through). A disabled
 // address sends NOTHING; its reported rate decays to 0, which is honest.
 const oscDisabled = new Set(Array.isArray(design.osc.disabled) ? design.osc.disabled : []);
+// TEMPORARY (operator request 2026-06-30): the per-signal SEND filter is
+// DISABLED — every signal is sent over OSC regardless of its checkbox. The
+// checkbox state is still tracked + persisted so re-enabling is a one-line flip,
+// but it has NO effect on emission right now. Re-enable by setting this true.
+// Follow-up: Notion "Fix OSC send filter (per-signal mute)".
+const OSC_SEND_FILTER_ENABLED = false;
 // The analyzer emits ~SR/HOP hops/sec (~86). A naive "≥ interval elapsed" gate
 // would quantize the send rate to integer divisors of the hop rate (86, 43, 29…)
 // — set 60 and you'd actually get 43. Instead a PHASE ACCUMULATOR adds
@@ -234,7 +240,8 @@ function sendOsc(address, value, oscType) {
   if (!_oscEmitThisHop) return;
   // Per-signal SEND DISABLE (OSC OUT page checkbox): a disabled address is muted
   // on the wire — no packet, no accounting tick (its rate decays to 0).
-  if (oscDisabled.has(address)) return;
+  // Gated behind OSC_SEND_FILTER_ENABLED — currently OFF, so all signals send.
+  if (OSC_SEND_FILTER_ENABLED && oscDisabled.has(address)) return;
   // CATEGORICAL signals (genre / note / structure index) ship as an INTEGER-typed
   // OSC arg, ROUNDED — a class index must never arrive as 2.4 nor be lerped
   // between classes. Everything else is a continuous float. (See INTEGER_OSC_KEYS.)
@@ -366,8 +373,9 @@ function buildOscAccounting() {
     const acc = oscAccounting.get(address);
     rows.push({
       address, label, cpcKey, kind,
-      // SEND toggle (OSC OUT page checkbox): false ⇒ muted on the wire.
-      enabled: !oscDisabled.has(address),
+      // SEND toggle (OSC OUT page checkbox): false ⇒ muted on the wire. While the
+      // filter is disabled every signal sends, so report ON.
+      enabled: OSC_SEND_FILTER_ENABLED ? !oscDisabled.has(address) : true,
       // RENAME eligibility: only DYNAMIC designed outputs (a signal whose cpcKey
       // is NOT an engine built-in) may rename their path — the engine re-binds
       // the new address via the manifest. Curated / derived / BPM emits bind at
@@ -399,6 +407,9 @@ function buildOscAccounting() {
     target: { host: design.osc.host, port: design.osc.port },
     rateHz: oscRateHz,           // the OSC OUTPUT RATE (frames/sec) the operator set
     totalSent: oscSent,
+    // Whether the per-signal SEND filter is active. Currently OFF (everything
+    // sends) — the UI greys out the checkboxes so they don't read as live.
+    sendFilterEnabled: OSC_SEND_FILTER_ENABLED,
     outputs: rows,
     // The Companion is now the SOLE analyzer: it computes AND emits the full
     // derived/detector set over OSC (see DERIVED_OSC_EMITS), so every signal is

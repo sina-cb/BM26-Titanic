@@ -1199,6 +1199,11 @@ function renderOscPage() {
   // fall to 0 and the row would never dim while the checkbox held focus).
   const ae = document.activeElement;
   if (ae && ae.classList && ae.classList.contains('osc-addr-edit') && tbody.contains(ae)) return;
+  // The per-signal SEND filter is temporarily disabled server-side (all signals
+  // send) — grey the checkboxes out so they don't read as live controls.
+  const filterOn = acc.sendFilterEnabled !== false;
+  const hint = $('osc-list-hint');
+  if (hint) hint.classList.toggle('osc-filter-off', !filterOn);
   tbody.innerHTML = '';
   for (const o of acc.outputs) {
     const tr = document.createElement('tr');
@@ -1213,7 +1218,7 @@ function renderOscPage() {
     const addrCell = o.editable
       ? `<input class="osc-addr-edit" data-id="${attr(o.id)}" data-addr="${attr(o.address)}" value="${attr(o.address)}" spellcheck="false" title="rename this OSC path — the engine re-binds it to the same CPC key">`
       : `${o.address}<span class="osc-addr-lock" title="built-in path — bound to a fixed engine address, not renameable">🔒</span>`;
-    tr.innerHTML = `<td class="osc-on"><input type="checkbox" class="osc-send-cb" data-addr="${attr(o.address)}"${o.enabled ? ' checked' : ''} title="send this signal over OSC"></td>`
+    tr.innerHTML = `<td class="osc-on"><input type="checkbox" class="osc-send-cb" data-addr="${attr(o.address)}"${o.enabled ? ' checked' : ''}${filterOn ? '' : ' disabled'} title="${filterOn ? 'send this signal over OSC' : 'send filter temporarily disabled — all signals send'}"></td>`
       + `<td class="osc-sig">${o.label || o.address}</td>`
       + `<td class="osc-addr">${addrCell}</td>`
       + `<td class="osc-key">${o.cpcKey || '—'}</td>`

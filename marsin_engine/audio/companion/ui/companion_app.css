@@ -426,6 +426,9 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;bac
 .osc-empty{color:var(--muted);padding:18px;text-align:center}
 .osc-list-hint{color:var(--muted);font-size:10.5px;line-height:1.4;margin:-4px 2px 0}
 .osc-list-hint b{color:var(--text)}
+/* Per-signal SEND filter temporarily off — flag it above the table. */
+.osc-list-hint.osc-filter-off::after{content:'  ⚠ SEND filter temporarily disabled — all signals send.';
+  color:var(--warn,#e0a030);font-weight:700}
 /* SEND toggle (per-signal "send over OSC" checkbox). */
 .osc-on-col{width:34px;text-align:center}
 .osc-table td.osc-on{text-align:center}
