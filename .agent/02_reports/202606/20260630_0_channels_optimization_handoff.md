@@ -100,6 +100,24 @@ source-filter), `tests/bpm_smoother.test.js` (10), `tests/companion_bpm_emit.tes
 
 ---
 
+## 6. Removals (2026-06-30) — dead features dropped after their UI was cut
+
+- **Playlist `tags`** — the CaptainPad UI was gone, leaving an unused engine
+  field. Removed the coercion from `PlaylistManager.load()/save()`, the `tags`
+  arg on `POST /playlists`, the unit test, and docs/19 §2.5. Old files with a
+  `tags` key load fine (ignored, stripped on next save).
+- **Playlist hot-swap** (timeline_support) — the SWAP UI was gone and the load
+  flow uses `POST /deck/playlist` (`setChannelPlaylist`); nothing called the
+  hot-swap endpoints. Removed `POST /deck/playlist/swap`, `/deck/playlist/queue`
+  (warm-on-anchor), the mixer-overlay swap twin, `validateSwapTransitionOverride`,
+  the 4 hot-swap HIL tests, the `validateSwapTransitionOverride` unit block, and
+  all docs/39 hot-swap content (§2 flagship, §5 timeline, map rows, retitle).
+  **Preserved** (shared/core): `loadPlaylistEntryWithTransition`, the
+  warm/precompile-next-entry machinery (autopilot pre-warm), `triggerDeckPatternSwap`
+  + the deck transition-config routes, the live load path, and the core
+  soft-transition tests. Verified `node --test` 1140 pass.
+- **`.agent/plans` → `.agent/04_plans`** — numbered to match the other dirs.
+
 ## Open items / follow-ups
 
 - **Sweep remaining `onEndEditing`-only TextInputs.** react-native-web drops
