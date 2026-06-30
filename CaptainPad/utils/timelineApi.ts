@@ -212,7 +212,9 @@ export interface PlanAutopilot {
   delay_s: number;
   shuffle: boolean;
   target?: PlanTarget;
-  mood?: string;
+  // Whether mood swaps (calm→party) run during autopilot — a BOOLEAN flag, NOT a
+  // mood-state string. The engine validateShowPlan rejects a non-boolean.
+  mood?: boolean;
 }
 export interface PlanLook {
   playlist?: string;
