@@ -332,15 +332,24 @@ export async function setDeckTransitionConfig(patch: Partial<DeckTransitionConfi
 //
 // Wire shape (GET returns it, POST accepts the same subset):
 //   { active: boolean, palettes: string[] (>=1 known palette id),
-//     delay_s: number > 0, shuffle?: boolean }
+//     delay_s: number > 0, shuffle?: boolean, transitionMs?: number >= 0 }
 //
-// Partial PATCH-style writes are supported (POST any subset of fields), so the
-// deck UI can post a single toggle/stepper change optimistically.
+// `transitionMs` is the CROSSFADE duration on a palette switch (0 = hard cut),
+// the palette analogue of the DECK TX crossfade time — the engine ramps the
+// palette params old→new over this window instead of snapping (docs/39).
+//
+// Partial PATCH-style writes are supported (POST any subset of fields — the
+// engine merges over the live config before validating), so the deck UI can
+// post a single toggle/stepper change optimistically.
 export type DeckColorAutopilotConfig = {
   active: boolean;
   palettes: string[];
   delay_s: number;
   shuffle: boolean;
+  // Optional so existing seed objects (e.g. the deck screen's initial state)
+  // stay valid without churn; the engine ALWAYS returns it on GET, and the UI
+  // defaults an absent value to 0 (hard cut).
+  transitionMs?: number;
 };
 
 export async function fetchDeckColorAutopilot(): Promise<ApiResult<DeckColorAutopilotConfig>> {

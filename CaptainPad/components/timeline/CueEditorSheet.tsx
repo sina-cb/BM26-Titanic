@@ -38,6 +38,16 @@ import {
   hhmmToMinutes, minutesToHHMM, SUN_EVENT_OPTIONS, MOOD_VALUES,
 } from './timelineTemplate';
 import { Segmented, Stepper, Dropdown, ToggleChip, FieldLabel } from './makerControls';
+import { DualSwatch } from '@/components/ColorPickerModal';
+
+// Crossfade presets for the cue's COLOR AUTOPILOT transition (ms under the
+// hood). 0 = hard cut; the rest ramp the palette params over the window. Mirror
+// of the deck panel's transition pills (DECK TX crossfade idiom).
+const COLOR_TRANSITION_PRESETS_MS = [0, 500, 1000, 2000, 3000];
+function formatColorTransition(ms: number): string {
+  if (ms <= 0) return 'CUT';
+  return ms % 1000 === 0 ? `${ms / 1000}s` : `${(ms / 1000).toFixed(1)}s`;
+}
 
 // Deck transition mode options for the playlist action. "Default" means DON'T
 // emit a `transition` field — the cue inherits the deck's standing transition
@@ -86,8 +96,10 @@ export function CueEditorSheet({
    * / fetchColorPalettes). Passed in the same way as `playlists` because the
    * engine fetch lives outside this component's lease. Defaults to [] so the
    * control degrades to an empty-state hint when the parent hasn't wired it.
+   * `c1`/`c2` are the palette's two hues (0..1) — when present we render the
+   * REAL split swatch (DualSwatch) so a chip shows its true colors, not a name.
    */
-  palettes?: { id: string; name: string }[];
+  palettes?: { id: string; name: string; c1?: number; c2?: number }[];
   /** The day the editor was opened from — seeds DAYS "This day". */
   dayIndex: number;
   onSave: (cue: PlanCue) => void;
@@ -98,6 +110,10 @@ export function CueEditorSheet({
   const styles = useMemo(() => makeStyles(C), [C]);
 
   const paletteOptions = palettes ?? [];
+  const paletteById = useMemo(
+    () => new Map(paletteOptions.map((p) => [p.id, p])),
+    [paletteOptions],
+  );
   const phaseNames = Object.keys(plan.phases);
 
   type DaysMode = 'all' | 'this' | 'pick';
@@ -121,6 +137,9 @@ export function CueEditorSheet({
   // DAYS mode is EXPLICIT state, driven by the segmented control — NOT derived
   // from `days` on every render (deriving made "Pick…" snap back to "This day").
   const [daysMode, setDaysModeState] = useState<DaysMode>('all');
+  // COLOR AUTOPILOT "+ add" popover: collapsed by default so the section shows
+  // only the SELECTED palettes (operator feedback: don't dump the full grid).
+  const [caAdding, setCaAdding] = useState(false);
   const [seedKey, setSeedKey] = useState<string>('');
 
   // Seed when the sheet opens / target cue changes. We key on cue id +
@@ -211,11 +230,16 @@ export function CueEditorSheet({
       // validateColorAutopilot regardless of UI interaction order.
       const ca = pl.colorAutopilot;
       if (ca && ca.active && Array.isArray(ca.palettes) && ca.palettes.length > 0) {
+        // transitionMs (crossfade): normalize like the other fields — a
+        // non-finite / negative value collapses to 0 (hard cut) so the emitted
+        // JSON always satisfies the engine's transitionMs >= 0 validator.
+        const tm = ca.transitionMs;
         pl.colorAutopilot = {
           active: true,
           palettes: ca.palettes,
           delay_s: typeof ca.delay_s === 'number' && ca.delay_s > 0 ? ca.delay_s : 30,
           shuffle: ca.shuffle ?? false,
+          transitionMs: typeof tm === 'number' && Number.isFinite(tm) && tm >= 0 ? tm : 0,
         };
       } else {
         delete pl.colorAutopilot;
@@ -513,27 +537,76 @@ export function CueEditorSheet({
             <>
               <View style={{ height: 8 }} />
               <FieldLabel>COLOR PALETTES</FieldLabel>
-              <View style={styles.chipRow}>
-                {paletteOptions.map((p) => {
-                  const sel = (ca.palettes ?? []).includes(p.id);
+              {/* COMPACT, SELECTED-ONLY chips (operator feedback): show only the
+                  chosen palettes as removable chips with their REAL c1/c2
+                  swatch, plus a "+ ADD" affordance that expands the rest inline.
+                  We never render the whole library grid by default. */}
+              <View style={[styles.chipRow, { alignItems: 'center' }]}>
+                {(ca.palettes ?? []).map((id) => {
+                  const p = paletteById.get(id);
+                  if (!p) return null;
+                  const canRemove = (ca.palettes ?? []).length > 1;
                   return (
-                    <ToggleChip
-                      key={p.id}
-                      on={sel}
-                      onToggle={() => {
-                        const cur = ca.palettes ?? [];
-                        const next = sel ? cur.filter((x) => x !== p.id) : [...cur, p.id];
-                        // Never let the active selection drop to empty — keep at
-                        // least the palette the operator is toggling off if it's
-                        // the last one (the block must stay valid while ON).
-                        const palettes = next.length > 0 ? next : cur;
+                    <TouchableOpacity
+                      key={id}
+                      disabled={!canRemove}
+                      onPress={() => {
+                        // Never let the active selection drop to empty (the block
+                        // must stay valid while ON) — last chip is non-removable.
+                        if (!canRemove) return;
+                        const palettes = (ca.palettes ?? []).filter((x) => x !== id);
                         setAction({ ...action, colorAutopilot: { ...ca, active: true, palettes } });
                       }}
-                      label={p.name}
-                    />
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove palette ${p.name}`}
+                      style={[styles.caChip, { borderColor: C.primary, backgroundColor: C.primary }]}
+                    >
+                      {typeof p.c1 === 'number' && typeof p.c2 === 'number'
+                        ? <DualSwatch h1={p.c1} h2={p.c2} size={14} />
+                        : null}
+                      <Text style={[styles.caChipText, { color: C.onPrimary }]}>{p.name.toUpperCase()}</Text>
+                    </TouchableOpacity>
                   );
                 })}
+                <TouchableOpacity
+                  onPress={() => setCaAdding((v) => !v)}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: caAdding }}
+                  accessibilityLabel={caAdding ? 'Close palette picker' : 'Add palettes'}
+                  style={[styles.caChip, { borderColor: C.ghostBorder, borderStyle: 'dashed', backgroundColor: 'transparent' }]}
+                >
+                  <Text style={[styles.caChipText, { color: C.text }]}>{caAdding ? 'DONE' : '+ ADD'}</Text>
+                </TouchableOpacity>
               </View>
+              {/* Inline library popover — only the UNSELECTED palettes; tap to
+                  add. Collapsed by default to keep the sheet compact. */}
+              {caAdding ? (
+                <View style={styles.caPopover}>
+                  <View style={[styles.chipRow, { marginTop: 0 }]}>
+                    {paletteOptions.filter((p) => !(ca.palettes ?? []).includes(p.id)).length === 0 ? (
+                      <Text style={styles.hint}>All palettes selected.</Text>
+                    ) : (
+                      paletteOptions.filter((p) => !(ca.palettes ?? []).includes(p.id)).map((p) => (
+                        <TouchableOpacity
+                          key={p.id}
+                          onPress={() => {
+                            const palettes = [...(ca.palettes ?? []), p.id];
+                            setAction({ ...action, colorAutopilot: { ...ca, active: true, palettes } });
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Add palette ${p.name}`}
+                          style={[styles.caChip, { borderColor: C.ghostBorder, backgroundColor: 'transparent' }]}
+                        >
+                          {typeof p.c1 === 'number' && typeof p.c2 === 'number'
+                            ? <DualSwatch h1={p.c1} h2={p.c2} size={14} />
+                            : null}
+                          <Text style={[styles.caChipText, { color: C.text }]}>{p.name.toUpperCase()}</Text>
+                        </TouchableOpacity>
+                      ))
+                    )}
+                  </View>
+                </View>
+              ) : null}
               <View style={{ height: 8 }} />
               <FieldLabel>COLOR DELAY (SEC)</FieldLabel>
               <Stepper
@@ -542,6 +615,15 @@ export function CueEditorSheet({
                 onChange={(v) => setAction({ ...action, colorAutopilot: { ...ca, active: true, palettes: ca.palettes ?? [], delay_s: v } })}
                 min={5} max={600}
                 format={(v) => `${v}s`}
+              />
+              <View style={{ height: 8 }} />
+              {/* TRANSITION (crossfade) — palette analogue of DECK TX crossfade
+                  time. CUT = hard switch; the rest ramp the palette params. */}
+              <FieldLabel>COLOR TRANSITION</FieldLabel>
+              <Segmented
+                options={COLOR_TRANSITION_PRESETS_MS.map((ms) => ({ id: String(ms), label: formatColorTransition(ms) }))}
+                value={String(ca.transitionMs ?? 0)}
+                onChange={(id) => setAction({ ...action, colorAutopilot: { ...ca, active: true, palettes: ca.palettes ?? [], transitionMs: Number(id) } })}
               />
               <View style={{ height: 8 }} />
               <ToggleChip
@@ -783,6 +865,28 @@ function makeStyles(C: Palette) {
       flexWrap: 'wrap',
       gap: 8,
       marginTop: 8,
+    },
+    caChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 7,
+      borderRadius: 8,
+      borderWidth: 1,
+    },
+    caChipText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 11,
+      letterSpacing: 0.4,
+    },
+    caPopover: {
+      marginTop: 8,
+      padding: 8,
+      borderRadius: 8,
+      backgroundColor: C.surfaceContainerHigh,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
     },
     dayPill: {
       minWidth: 44,

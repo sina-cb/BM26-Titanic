@@ -1871,20 +1871,34 @@ resets so a new set starts from the top).
 checks membership against the known-id set, and `applyColorPalette` throws on a missing
 id (codex P0 — **no silent skip**).
 
-**Persistence.** The `{active,palettes,delay_s,shuffle}` block lives in `config.yaml`
-under `colorAutopilot:` (same idiom as the pattern autopilot's `playlist:` block) and
-restores on boot.
+**Crossfade (`transitionMs`).** A palette switch can RAMP instead of hard-cutting: when
+`transitionMs > 0` the daemon interpolates the palette params (each `{h,s,v}` leaf of
+`colorPalette1/2`) from the currently-applied set to the target set over `transitionMs`,
+writing interpolated frames through the SAME `applyColorPaletteParams` path a hard write
+uses (so every frame persists + broadcasts). `transitionMs === 0` is a **hard cut** (the
+historical behavior). The ramp runs on an injected clock/scheduler (real timers in the
+engine; a fake clock in tests) and the final frame lands EXACTLY on the target. Reconfig
+/ pause bumps the generation, which **cancels an in-flight tween cleanly** (a stale frame
+becomes a no-op; the next switch ramps from wherever the fade was interrupted). The crossfade
+hooks (`resolvePaletteFn` + `applyParamsFn`) are injected into the `ColorAutopilot` ctor; the
+operator-facing control mirrors the **DECK TX crossfade-time** idiom (presets `0/0.5/1/2/3s`).
+
+**Persistence.** The `{active,palettes,delay_s,shuffle,transitionMs}` block lives in
+`config.yaml` under `colorAutopilot:` (same idiom as the pattern autopilot's `playlist:`
+block) and restores on boot. Older persisted configs that omit `transitionMs` report `0`.
 
 **Wire shape** (REST body + timeline cue field + WS broadcast):
 `{ active: boolean, palettes: string[] (>=1 known id), delay_s: number > 0,
-shuffle?: boolean (default false) }`.
+shuffle?: boolean (default false), transitionMs?: number >= 0 (default 0 = hard cut) }`.
 
 **REST surface** (`api_server.js`, next to `/autopilot`):
 
-- `GET /deck/color-autopilot` → current `{active, palettes, delay_s, shuffle}`.
-- `POST /deck/color-autopilot` → set it. Validates **strictly** (`ColorAutopilot.validate`
-  with the rig's known palette ids): `palettes` a non-empty array of **known** ids,
-  `delay_s` a number > 0, `active`/`shuffle` booleans. A bad shape → **400** with a loud
+- `GET /deck/color-autopilot` → current `{active, palettes, delay_s, shuffle, transitionMs}`.
+- `POST /deck/color-autopilot` → set it. The body is **merged over the live config** (PATCH
+  style — the deck UI can post a single field like `{transitionMs}` or `{delay_s}`
+  optimistically), then validated **strictly** (`ColorAutopilot.validate` with the rig's
+  known palette ids): `palettes` a non-empty array of **known** ids, `delay_s` a number > 0,
+  `transitionMs` a number >= 0, `active`/`shuffle` booleans. A bad shape → **400** with a loud
   message (never coerce / silently skip).
 
 **WS / broadcast.** A `colorAutopilot` message (typed in `ws_topic_routing.js` →
@@ -1896,10 +1910,15 @@ tab mirrors the cycle config immediately.
 (deck-only, see `docs/38 §16.10`); the `setColorAutopilot` dep is bound to the engine's
 internal `setColorAutopilot()` (no HTTP self-call; fail loud if the dep is missing).
 
-**Touched.** `lib/color_autopilot.js` (new), `lib/api_server.js` (instance + 
-`applyColorPalette`/`setColorAutopilot`/`colorAutopilotState`/`broadcastColorAutopilot`,
-`GET`/`POST /deck/color-autopilot`, WS replay, `setColorAutopilot` timeline dep),
-`lib/ws_topic_routing.js` (`colorAutopilot` → CONTROL), `lib/timeline/show_plan.js`
-(`validateCueColorAutopilot` + `playlist` case), `lib/timeline/timeline_service.js`
-(`_applyColorAutopilot` + apply order). Tests: `color_autopilot.test.js` (12),
-`timeline_service.test.js` (+9 schema/apply).
+**Touched.** `lib/color_autopilot.js` (new; + crossfade tween `_runTween`/`lerpParams`
++ `transitionMs` validation), `lib/api_server.js` (instance + crossfade hooks +
+`applyColorPaletteParams`/`applyColorPalette`/`setColorAutopilot`/`colorAutopilotState`
+(+`transitionMs`)/`broadcastColorAutopilot`, `GET`/PATCH-merge `POST /deck/color-autopilot`,
+WS replay, `setColorAutopilot` timeline dep), `lib/ws_topic_routing.js` (`colorAutopilot` →
+CONTROL), `lib/timeline/show_plan.js` (`validateCueColorAutopilot` + `transitionMs` + `playlist`
+case), `lib/timeline/timeline_service.js` (`_applyColorAutopilot` + apply order). CaptainPad:
+`components/deck/ColorAutopilotPanel.tsx` (real `DualSwatch` colors, compact selected-only +
+add popover, transition pills), `components/timeline/CueEditorSheet.tsx` (same), `utils/api.ts`
+(`DeckColorAutopilotConfig.transitionMs?`), `utils/timelineApi.ts` (`ActionColorAutopilot.transitionMs?`).
+Tests: `color_autopilot.test.js` (20 — validate/timer/crossfade-ramp/cancel),
+`timeline_service.test.js` (+11 schema/apply incl. `transitionMs`).

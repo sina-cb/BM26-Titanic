@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, Modal, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert, Modal, StyleSheet, useWindowDimensions } from 'react-native';
 import { useGlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -137,6 +137,17 @@ const OfflineBanner = ({ error }: { error: string }) => {
 export default function ControlDeckScreen() {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
+  // ── 3-COLUMN layout responsiveness (operator request June 2026) ──────────
+  // The deck splits into three side-by-side columns on wide surfaces (iPad
+  // landscape / web): PATTERNS | PARAMETERS | AUTOPILOT & SETTINGS. On narrow
+  // widths (portrait phone, a too-narrow window) three columns would crush the
+  // content, so we fall back to the previous vertical stack. We use the same
+  // `useWindowDimensions` + `width < height` portrait idiom the mixer tab uses
+  // (mixer.tsx), plus an absolute floor: below ~900px even a landscape phone is
+  // too narrow to seat three readable columns, so it stacks too.
+  const { width: winWidth, height: winHeight } = useWindowDimensions();
+  const isPortrait = winWidth < winHeight;
+  const isWide = !isPortrait && winWidth >= 900;
   const [deckChannel, setDeckChannel] = useState<any | null>(null);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [connectionError, setConnectionError] = useState<string>('');
@@ -606,19 +617,36 @@ export default function ControlDeckScreen() {
             strip uses the same `preDimmer` key for parity. */}
         <PixelStrip base64Data={visDataRef.current.preDimmer ?? null} height={18} style={{ borderRadius: 6 }} />
       </View>
-      <View style={globalStyles.container}>
-        {/* Left Pane — Playlist (the one and only pattern list).
-            Padding is tightened from the default leftPane (24) so the
-            playlist gets more vertical room. GLOBAL EFFECTS no longer
-            lives in this narrow column — it moved to a full-width bottom
-            bar below the two-pane content (mirrors the mixer tab) so the
-            effect labels render fully legible instead of being squeezed
-            into the cramped left column (QA round2 deck fix). The
-            playlist now shows ≥5 entries on 11" iPad landscape and the
-            REFRESH/RECONNECT button moved INTO the playlist header
-            (top-right ↻ icon, see PlaylistPanel `onRefreshConnection`)
-            so the old full-width button below the list is gone. */}
-        <View style={[globalStyles.leftPane, { padding: 14, gap: 8 }]}>
+      {/* ── 3-COLUMN deck layout (operator request June 2026) ───────────────
+          On wide surfaces (iPad landscape / web) the deck is three side-by-side
+          columns — PATTERNS | PARAMETERS | AUTOPILOT & SETTINGS — each
+          independently scrollable so tall content (the param list, the palette
+          panel) never gets cut off. On narrow widths (`!isWide`) the row wraps
+          back to a single vertical stack (the previous behavior) so nothing is
+          crushed in portrait. `globalStyles.container` is `flexDirection:'row',
+          flex:1` already; we widen it to wrap on narrow so the columns stack.
+          Column flex weights: PATTERNS 1.1 / PARAMETERS 1 / SETTINGS 1.2 — the
+          pattern grid and the settings stack are a touch wider than the params
+          column to seat their wider controls (pill bars, palette swatches). */}
+      <View style={[globalStyles.container, !isWide && { flexDirection: 'column' }]}>
+        {/* ── COLUMN 1 — PATTERNS ──────────────────────────────────────────
+            The one-and-only pattern list (active playlist) + the global rig HUE
+            shifter pinned above it. DECK MAIN's live preview strip stays in the
+            header above (it is the deck's master output, not a per-column item).
+            Padding is tightened from the default leftPane (24) so the playlist
+            gets more vertical room. GLOBAL EFFECTS lives in the full-width
+            bottom bar below (mirrors the mixer tab). The playlist shows ≥5
+            entries on 11" iPad landscape; REFRESH/RECONNECT is the header ↻
+            icon (PlaylistPanel `onRefreshConnection`). */}
+        <View style={[
+          globalStyles.leftPane,
+          { padding: 14, gap: 8 },
+          // Wide: this column flexes to ~1.1 of the row. Narrow (stacked): the
+          // leftPane's default flex:1 inside a column container would let it
+          // eat all vertical space — pin a sensible min height instead so the
+          // stack scrolls naturally with the columns below it.
+          isWide ? { flex: 1.1 } : { flex: 0, minHeight: 320 },
+        ]}>
           {isConnected === false && <OfflineBanner error={connectionError} />}
 
           {/* THE pattern list = the active playlist for the deck.
@@ -662,15 +690,158 @@ export default function ControlDeckScreen() {
           )}
         </View>
 
-        {/* Right Pane - Parameters & Macros (autopilot + channel exports) */}
-        <View style={[globalStyles.rightPane, { padding: 0 }]}>
+        {/* ── COLUMN 2 — PARAMETERS ────────────────────────────────────────
+            ONLY the deck's (local) parameter controls — the DECK MAIN channel
+            card: entry-label editor, SAVED flash, color swatch, ◎ ALL
+            modulations trigger, the PARAMETERS slider stack (GlobalParams), and
+            the toggle/trigger button grid. This used to sit BELOW the settings
+            stack in the old single right-pane scroll; it now stands alone in
+            the middle column, independently scrollable. */}
+        <View style={[
+          { padding: 0 },
+          isWide ? { flex: 1 } : { flex: 0 },
+        ]}>
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
+            {/* Channel parameters for the deck (base) channel. The deck is
+                hard-wired to the base channel; CaptainPad's MIXER tab is
+                where multi-channel routing lives. */}
+            <View style={{ gap: 24 }}>
+              {(deckChannel ? [deckChannel] : []).map((channel) => {
+                const channelTitle = "DECK MAIN";
+                const exports = channel.exports || [];
+                // GlobalParams (above) is now responsible for surfacing
+                // CPC-matched local exports with a MATCHED badge. This
+                // bottom strip just renders the operator-tappable ones,
+                // so filter the matched toggles/triggers out here to
+                // avoid double-listing them.
+                const toggles = exports.filter((e: any) => e.kind === 2 && !e.cpcOwned);
+                const triggers = exports.filter((e: any) => e.kind === 3 && !e.cpcOwned);
+
+                return (
+                  <View key={channel.id} style={[
+                    { width: '100%', backgroundColor: C.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.ghostBorder },
+                    // Color accent (docs/39 §8.4): tint the card's left edge so
+                    // the operator can identify the deck at a glance — mirrors the
+                    // mixer strip. The lock border still wins (operator-critical
+                    // state); only paint the accent when the deck isn't locked.
+                    // No layout shift when color is null (defaults to ghostBorder
+                    // at the same 1px width).
+                    !channel.locked && channel.color ? { borderColor: channel.color, borderLeftWidth: 4 } : null,
+                  ]}>
+                    {/* D6 trigger: ◎ ALL pill next to the entry label.
+                        Disabled when no deck playlist is loaded — the
+                        AllModulationsPanel renders an empty state in
+                        that case but the disabled affordance is a
+                        clearer signal up-front. */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <View style={{ flex: 1 }}>
+                        {/* Renaming the active playlist entry: tap the title and type.
+                            Auto-saves on blur; the PlaylistPanel listens for the same
+                            `playlistSaved` broadcast and flashes its ✓ SAVED toast. */}
+                        <EntryLabelEditor
+                          channelId={channel.id}
+                          channelLabel={channelTitle}
+                          locked={!!channel.locked}
+                        />
+                      </View>
+                      {/* SAVED flash moved up here from inside GlobalParams
+                          so it never reflows the slider stack. The component
+                          always reserves the same width/height — the inner
+                          pill only fades in/out. */}
+                      <DeckSavedFlash deckChannelId={channel.id} />
+                      {/* Color swatch (docs/39 §8.4) — taps open the accent
+                          picker. The swatch fill IS the deck's current color
+                          (or a hollow "no color" ring when null). Pure
+                          metadata; tints the card for identification, no render
+                          effect. Mirrors the mixer strip's swatch button. */}
+                      <TouchableOpacity
+                        onPress={() => setShowColorPicker(true)}
+                        hitSlop={ICON_BTN_HIT_SLOP}
+                        accessibilityRole="button"
+                        accessibilityLabel={channel.color ? `Deck color ${channel.color}` : 'Set deck color'}
+                        style={[
+                          styles.deckSwatchBtn,
+                          { borderColor: C.ghostBorder },
+                          channel.color ? { backgroundColor: channel.color, borderColor: channel.color } : null,
+                        ]}
+                      >
+                        <Text style={{
+                          fontFamily: 'SpaceGrotesk_700Bold',
+                          fontSize: 13,
+                          color: channel.color ? '#FFFFFF' : C.secondary,
+                        }}>{channel.color ? '●' : '○'}</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => setShowAllMods(true)}
+                        disabled={!channel.playlist?.name}
+                        accessibilityLabel="Open all modulations panel"
+                        accessibilityRole="button"
+                        // Production-console touch target: the pill is
+                        // visually compact (fontSize 11 + 4pt vertical
+                        // padding) so we expand the tappable area with
+                        // hitSlop + a 44pt min height/width instead of
+                        // inflating the chrome, keeping the header tidy.
+                        hitSlop={{ top: 12, bottom: 12, left: 10, right: 10 }}
+                        style={{
+                          paddingHorizontal: 12, borderRadius: 6,
+                          minHeight: 44, minWidth: 44,
+                          alignItems: 'center', justifyContent: 'center',
+                          borderWidth: 1, borderColor: '#00a86b',
+                          backgroundColor: 'transparent',
+                          opacity: channel.playlist?.name ? 1 : 0.4,
+                        }}
+                      >
+                        <Text style={{
+                          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+                          color: '#00a86b', letterSpacing: 0.5,
+                        }}>
+                          ◎ ALL
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* QA round8 #3: the PARAMETERS section spent ~32px of
+                        chrome (16 label margin + 16 section margin) on a single
+                        slider. Tightened both to 6 so the header rides compactly
+                        — mirrors the AUTOPILOT card's tight header pattern. */}
+                    <View style={{ marginBottom: 6 }}>
+                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, marginBottom: 6, textTransform: 'uppercase' }}>PARAMETERS</Text>
+                      <GlobalParams variant="deck" channelId={channel.id} exports={exports} />
+                    </View>
+
+                    {(toggles.length > 0 || triggers.length > 0) ? (
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 8, gap: 8 }}>
+                        {toggles.map((e: any) => (
+                          <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => triggerChannelControl(channel.id, id, v)} />
+                        ))}
+                        {triggers.map((e: any) => (
+                          <MomentaryButton key={`trigger-${e.id}`} id={e.id} name={e.name} onChange={(id: number, v: number) => triggerChannelControl(channel.id, id, v)} />
+                        ))}
+                      </View>
+                    ) : null}
+                  </View>
+                );
+              })}
+            </View>
+          </ScrollView>
+        </View>
+
+        {/* ── COLUMN 3 — AUTOPILOT & SETTINGS ──────────────────────────────
+            The deck-settings stack that used to sit ABOVE the local parameters:
+            AUTOPILOT (pattern playlist cycler + pattern-group locality),
+            COLOR AUTOPILOT (palette cycler), DECK TRANSITIONS, and the DECK
+            DYNAMIC VIEW OVERRIDES stack. Independently scrollable. */}
+        <View style={[
+          { padding: 0 },
+          isWide ? { flex: 1.2 } : { flex: 0 },
+        ]}>
           {/* Padding tightened from 48 → 16 (QA round8 #1): the old 48px
               gutter plus the cards' inner paddingRight:24 wasted ~72px of the
-              right pane's width, forcing the AUTOPILOT / OVERLAYS pill bars
+              column's width, forcing the AUTOPILOT / OVERLAYS pill bars
               into horizontal scroll. paddingBottom keeps the last card clear
               of the bottom GLOBAL EFFECTS bar (its intrinsic height ~58px). */}
           <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
-            {/* Offline Banner (right pane) */}
+            {/* Offline Banner (settings column) */}
             {isConnected === false && (
               <OfflineBanner error={connectionError} />
             )}
@@ -822,128 +993,6 @@ export default function ControlDeckScreen() {
               playlistLibrary={playlistLibrary}
               disabled={isConnected === false}
             />
-
-            {/* Channel parameters for the deck (base) channel. The deck is
-                hard-wired to the base channel; CaptainPad's MIXER tab is
-                where multi-channel routing lives. */}
-            <View style={{ gap: 24 }}>
-              {(deckChannel ? [deckChannel] : []).map((channel) => {
-                const channelTitle = "DECK MAIN";
-                const exports = channel.exports || [];
-                // GlobalParams (above) is now responsible for surfacing
-                // CPC-matched local exports with a MATCHED badge. This
-                // bottom strip just renders the operator-tappable ones,
-                // so filter the matched toggles/triggers out here to
-                // avoid double-listing them.
-                const toggles = exports.filter((e: any) => e.kind === 2 && !e.cpcOwned);
-                const triggers = exports.filter((e: any) => e.kind === 3 && !e.cpcOwned);
-
-                return (
-                  <View key={channel.id} style={[
-                    { width: '100%', backgroundColor: C.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.ghostBorder },
-                    // Color accent (docs/39 §8.4): tint the card's left edge so
-                    // the operator can identify the deck at a glance — mirrors the
-                    // mixer strip. The lock border still wins (operator-critical
-                    // state); only paint the accent when the deck isn't locked.
-                    // No layout shift when color is null (defaults to ghostBorder
-                    // at the same 1px width).
-                    !channel.locked && channel.color ? { borderColor: channel.color, borderLeftWidth: 4 } : null,
-                  ]}>
-                    {/* D6 trigger: ◎ ALL pill next to the entry label.
-                        Disabled when no deck playlist is loaded — the
-                        AllModulationsPanel renders an empty state in
-                        that case but the disabled affordance is a
-                        clearer signal up-front. */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                      <View style={{ flex: 1 }}>
-                        {/* Renaming the active playlist entry: tap the title and type.
-                            Auto-saves on blur; the PlaylistPanel listens for the same
-                            `playlistSaved` broadcast and flashes its ✓ SAVED toast. */}
-                        <EntryLabelEditor
-                          channelId={channel.id}
-                          channelLabel={channelTitle}
-                          locked={!!channel.locked}
-                        />
-                      </View>
-                      {/* SAVED flash moved up here from inside GlobalParams
-                          so it never reflows the slider stack. The component
-                          always reserves the same width/height — the inner
-                          pill only fades in/out. */}
-                      <DeckSavedFlash deckChannelId={channel.id} />
-                      {/* Color swatch (docs/39 §8.4) — taps open the accent
-                          picker. The swatch fill IS the deck's current color
-                          (or a hollow "no color" ring when null). Pure
-                          metadata; tints the card for identification, no render
-                          effect. Mirrors the mixer strip's swatch button. */}
-                      <TouchableOpacity
-                        onPress={() => setShowColorPicker(true)}
-                        hitSlop={ICON_BTN_HIT_SLOP}
-                        accessibilityRole="button"
-                        accessibilityLabel={channel.color ? `Deck color ${channel.color}` : 'Set deck color'}
-                        style={[
-                          styles.deckSwatchBtn,
-                          { borderColor: C.ghostBorder },
-                          channel.color ? { backgroundColor: channel.color, borderColor: channel.color } : null,
-                        ]}
-                      >
-                        <Text style={{
-                          fontFamily: 'SpaceGrotesk_700Bold',
-                          fontSize: 13,
-                          color: channel.color ? '#FFFFFF' : C.secondary,
-                        }}>{channel.color ? '●' : '○'}</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        onPress={() => setShowAllMods(true)}
-                        disabled={!channel.playlist?.name}
-                        accessibilityLabel="Open all modulations panel"
-                        accessibilityRole="button"
-                        // Production-console touch target: the pill is
-                        // visually compact (fontSize 11 + 4pt vertical
-                        // padding) so we expand the tappable area with
-                        // hitSlop + a 44pt min height/width instead of
-                        // inflating the chrome, keeping the header tidy.
-                        hitSlop={{ top: 12, bottom: 12, left: 10, right: 10 }}
-                        style={{
-                          paddingHorizontal: 12, borderRadius: 6,
-                          minHeight: 44, minWidth: 44,
-                          alignItems: 'center', justifyContent: 'center',
-                          borderWidth: 1, borderColor: '#00a86b',
-                          backgroundColor: 'transparent',
-                          opacity: channel.playlist?.name ? 1 : 0.4,
-                        }}
-                      >
-                        <Text style={{
-                          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
-                          color: '#00a86b', letterSpacing: 0.5,
-                        }}>
-                          ◎ ALL
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-
-                    {/* QA round8 #3: the PARAMETERS section spent ~32px of
-                        chrome (16 label margin + 16 section margin) on a single
-                        slider. Tightened both to 6 so the header rides compactly
-                        — mirrors the AUTOPILOT card's tight header pattern. */}
-                    <View style={{ marginBottom: 6 }}>
-                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, marginBottom: 6, textTransform: 'uppercase' }}>PARAMETERS</Text>
-                      <GlobalParams variant="deck" channelId={channel.id} exports={exports} />
-                    </View>
-
-                    {(toggles.length > 0 || triggers.length > 0) ? (
-                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 8, gap: 8 }}>
-                        {toggles.map((e: any) => (
-                          <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => triggerChannelControl(channel.id, id, v)} />
-                        ))}
-                        {triggers.map((e: any) => (
-                          <MomentaryButton key={`trigger-${e.id}`} id={e.id} name={e.name} onChange={(id: number, v: number) => triggerChannelControl(channel.id, id, v)} />
-                        ))}
-                      </View>
-                    ) : null}
-                  </View>
-                );
-              })}
-            </View>
           </ScrollView>
         </View>
       </View>

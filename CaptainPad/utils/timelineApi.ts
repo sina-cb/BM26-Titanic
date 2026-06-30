@@ -247,6 +247,9 @@ export interface ActionColorAutopilot {
   palettes: string[];
   delay_s: number;
   shuffle?: boolean;
+  // Crossfade duration (ms) on a palette switch; 0 = hard cut. Optional —
+  // absent normalizes to 0 server-side (docs/39).
+  transitionMs?: number;
 }
 
 export interface ActionPlaylist {

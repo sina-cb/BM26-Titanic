@@ -854,8 +854,30 @@ test('docs/39 schema: deck playlist cue round-trips colorAutopilot', () => {
   });
   const norm = validateShowPlan(plan);
   assert.deepEqual(norm.cues[0].action.colorAutopilot, {
-    active: true, palettes: ['aurora', 'bass_drop'], delay_s: 2, shuffle: false,
+    active: true, palettes: ['aurora', 'bass_drop'], delay_s: 2, shuffle: false, transitionMs: 0,
   });
+});
+
+test('docs/39 schema: colorAutopilot transitionMs round-trips and defaults to 0', () => {
+  const withTm = validateShowPlan(makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    colorAutopilot: { active: true, palettes: ['aurora'], delay_s: 2, transitionMs: 1500 },
+  }));
+  assert.equal(withTm.cues[0].action.colorAutopilot.transitionMs, 1500);
+
+  const noTm = validateShowPlan(makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    colorAutopilot: { active: true, palettes: ['aurora'], delay_s: 2 },
+  }));
+  assert.equal(noTm.cues[0].action.colorAutopilot.transitionMs, 0);
+});
+
+test('docs/39 schema: colorAutopilot rejects a negative transitionMs', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    colorAutopilot: { active: true, palettes: ['aurora'], delay_s: 2, transitionMs: -1 },
+  });
+  assert.throws(() => validateShowPlan(plan), /colorAutopilot\.transitionMs must be a number >= 0/);
 });
 
 test('docs/39 schema: colorAutopilot shuffle defaults to false', () => {
@@ -916,7 +938,7 @@ test('docs/39 apply: deck cue with colorAutopilot calls setColorAutopilot via de
 
   assert.equal(calls.setColorAutopilot.length, 1, 'setColorAutopilot called once for the deck cue');
   assert.deepEqual(calls.setColorAutopilot[0], {
-    active: true, palettes: ['aurora', 'bass_drop'], delay_s: 2, shuffle: true,
+    active: true, palettes: ['aurora', 'bass_drop'], delay_s: 2, shuffle: true, transitionMs: 0,
   });
 });
 
