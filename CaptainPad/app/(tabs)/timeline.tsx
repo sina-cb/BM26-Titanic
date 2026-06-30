@@ -56,7 +56,7 @@ import {
   FestivalEditor, addDaysToDateKey, FESTIVAL_MIN_DAYS, FESTIVAL_MAX_DAYS,
 } from '@/components/timeline/FestivalEditor';
 import {
-  brcStarterPlan, clonePlan, duplicatePlan, makeCueId,
+  brcStarterPlan, blankPlan, clonePlan, duplicatePlan, makeCueId,
 } from '@/components/timeline/timelineTemplate';
 
 const HOLD_MINUTES = 30;
@@ -337,6 +337,19 @@ export default function TimelineScreen() {
     setPlanPickerOpen(false);
   }, []);
 
+  // New BLANK plan from scratch — same flow as new-from-template, but seeded
+  // with blankPlan() (no BRC cues/looks/phases; carries the BRC location +
+  // festival so the day editor + date picker work out of the box). The operator
+  // builds it up, then SAVE writes it (validateShowPlan accepts empty cues).
+  const handleNewBlank = useCallback(() => {
+    setDraft(blankPlan());
+    setDraftVersion((v) => v + 1);
+    setSaveOk(null);
+    setActionError(null);
+    setPreviewTransportError(null);
+    setPlanPickerOpen(false);
+  }, []);
+
   const handleDuplicate = useCallback(async (name: string) => {
     const r = await fetchTimelinePlan(name);
     if (!r.ok || !r.data) { setActionError(r.error || `Could not load plan ${name}`); return; }
@@ -401,12 +414,14 @@ export default function TimelineScreen() {
     setPreviewTransportError(null);
   }, [draft, mutateDraft, state?.activePlan]);
 
-  // Step the festival start date by ±1 day. Day i = startDate + i, so shifting
-  // the start shifts every day's calendar date; the engine re-computes sun on
-  // the next preview. No cue cleanup needed (the span length is unchanged).
-  const handleShiftStart = useCallback((deltaDays: number) => {
+  // Set the festival start date to a chosen 'YYYY-MM-DD' (from the DateWheel
+  // picker). Day i = startDate + i, so moving the start moves every day's
+  // calendar date; the engine re-computes sun on the next preview. No cue
+  // cleanup needed (the span length is unchanged). Same draft mutation path the
+  // old ±1-day stepper used — only the chosen value differs.
+  const handleSetStartDate = useCallback((dateKey: string) => {
     ensureDraftThen((p) => {
-      p.festival = { ...p.festival, startDate: addDaysToDateKey(p.festival.startDate, deltaDays) };
+      p.festival = { ...p.festival, startDate: dateKey };
     });
   }, [ensureDraftThen]);
 
@@ -676,7 +691,7 @@ export default function TimelineScreen() {
               startDate={festivalView.startDate}
               days={festivalView.days}
               tz={festivalView.tz}
-              onShiftStart={handleShiftStart}
+              onSetStartDate={handleSetStartDate}
               onAddDay={handleAddDay}
               onRemoveDay={handleRemoveDay}
               onSetTz={handleSetTz}
@@ -819,6 +834,7 @@ export default function TimelineScreen() {
         onActivate={handleActivate}
         onDuplicate={handleDuplicate}
         onNewTemplate={handleNewTemplate}
+        onNewBlank={handleNewBlank}
         onClose={() => setPlanPickerOpen(false)}
       />
 

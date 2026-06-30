@@ -249,6 +249,35 @@ export function brcStarterPlan(name = 'brc_2026'): ShowPlan {
   };
 }
 
+// ── Blank "from scratch" plan ────────────────────────────────────────────
+// A minimal v2 plan with NO BRC cues/looks/phases — the operator builds it up
+// from nothing. It still carries the BRC location + festival span so the sun
+// math, the 8-day editor, and the new date picker all work out of the box
+// (the operator can then move the start date with the picker). Shaped to PASS
+// validateShowPlan: schemaVersion 2, slug name, valid location/festival, a
+// boolean-`mood` autopilot baseline, and EMPTY looks/phases/cues. An empty
+// cues array is valid (the engine only requires Array.isArray); empty looks /
+// phases default to {} — so no placeholder cue is needed.
+export function blankPlan(name = 'new_plan'): ShowPlan {
+  return {
+    schemaVersion: 2,
+    name,
+    location: { ...BRC_LOCATION },
+    festival: { ...BRC_FESTIVAL },
+    autopilot: {
+      enabled: true,
+      playlist: 'default',
+      delay_s: 60,
+      shuffle: false,
+      target: { channel: 'deck', id: null },
+      mood: true,
+    },
+    looks: {},
+    phases: {},
+    cues: [],
+  };
+}
+
 // Deep-ish clone for safe local editing of a fetched plan. Plans are plain
 // JSON (engine serialises YAML→JSON), so structuredClone-via-JSON is exact.
 export function clonePlan(plan: ShowPlan): ShowPlan {
