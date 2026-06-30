@@ -43,8 +43,8 @@ export var frondDensity = 10.0; // resolved stalk count (slider 0..1 -> 3..17; m
 export var tipGlow = 0.5;
 export var baseDarkness = 0.5;
 
-export var cp1H = 0.60, cp1S = 0.95, cp1V = 1.0; // deep abyssal blue
-export var cp2H = 0.33, cp2S = 0.95, cp2V = 1.0; // bioluminescent green (wide sep)
+export var cp1H = 0.55, cp1S = 0.95, cp1V = 1.0; // deep abyssal blue (og default)
+export var cp2H = 0.38, cp2S = 0.95, cp2V = 1.0; // bioluminescent green (og default)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 

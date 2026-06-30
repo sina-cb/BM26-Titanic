@@ -191,12 +191,14 @@ export function render3D(index, x, y, z) {
   var v = structure * 0.4 + ambient + coreSpike * kick * 0.5;
   v = max(0.0, min(1.8, v));
 
-  // Colour: which flock (cp1 vs cp2) dominates this pixel, plus a wide nx sweep
-  // so BOTH palette ends always span the rig. S-curve sharpens the two ends.
+  // Colour: like the og, the hue is driven by WHICH FLOCK (cp1 vs cp2) dominates
+  // this pixel. A small nx sweep only nudges the boundary so both palette ends
+  // stay present (hueSpread) without overriding the flock-driven identity.
+  // S-curve sharpens the two ends.
   var totalGlow = aGlow + bGlow + cGlow;
   var flockMix = totalGlow > 0.0 ? ((bGlow + cGlow) / totalGlow) : 0.5;
   var sweep = 0.5 + 0.5 * sin(nx * 3.0 + ribDrift * 6.2831853);
-  var tVal = flockMix * 0.55 + sweep * 0.45;
+  var tVal = flockMix * 0.85 + sweep * 0.15;
   tVal = max(0.0, min(1.0, tVal));
   tVal = tVal * tVal * (3.0 - 2.0 * tVal);
   tVal = tVal * tVal * (3.0 - 2.0 * tVal);

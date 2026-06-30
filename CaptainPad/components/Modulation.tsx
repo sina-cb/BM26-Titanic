@@ -123,6 +123,11 @@ export function prettySliderName(name: string): string {
     .replace(/_v\d+$/, '')
     .replace(/^(slider|toggle|trigger|hsvPicker)/i, '')
     .replace(/([A-Z])/g, ' $1')
+    // Separate a trailing index from its word so e.g. `colorPalette1`
+    // reads "COLOR PALETTE 1", not "COLOR PALETTE1" (operator report
+    // 2026-06-22). Runs after the capital-split so the digit is split
+    // from the (already spaced) word, before the length cap.
+    .replace(/([A-Za-z])(\d)/g, '$1 $2')
     .trim()
     .toUpperCase()
     .substring(0, 15);

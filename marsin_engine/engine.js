@@ -35,6 +35,7 @@ import { OscListener } from './lib/osc_listener.js';
 import { AudioCapture } from './audio/capture/audio_capture.js';
 import { AudioAnalyzer } from './audio/analyzer/audio_analyzer.js';
 import { BpmSpeedSync } from './lib/bpm_speed_sync.js';
+import { TempoArbiter } from './lib/tempo_arbiter.js';
 import { mergeAudioConfig, pickLiveFields } from './audio/config/audio_config.js';
 import {
   loadSceneAudio, saveSceneAudio,
@@ -457,6 +458,13 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
   let startTime = 0;
   let lastStatsTime = 0;
   let lastVisTime = 0;
+  // Pre-dimmer composite snapshot for the deck/mixer master preview: the
+  // composite AFTER global FX (hue / invert / group color-locks) but BEFORE
+  // the section dimmer rack + blackout. So the preview tracks the global hue
+  // and shows the effects while ignoring the hardware dimmer trim. Filled only
+  // on frames that broadcast vis (see the snapshot point in the render loop);
+  // lazily sized to pixelCount*6.
+  let preDimmerVisBuf = null;
   const intervalMs = Math.round(1000 / fps);
   const pixelCount = model.pixels.length;
 
@@ -648,12 +656,50 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       });
     }
 
+    // Global Hue Shifter (docs/39 §F-hue): rotate the RGB hue of the
+    // whole post-mixer buffer (W/A/UV untouched). Runs AFTER the show
+    // macros but BEFORE group color-locks + intensity/blackout, so a
+    // locked group's color and the e-stop safety always have the final
+    // say. Zero-cost at the default (hue=0, no auto-rotate).
+    if (globalEffectsController && globalEffectsController.applyHueShift) {
+      globalEffectsController.applyHueShift(model.pixels, now);
+    }
+
+    // Global color Invert (docs/39 §F-invert): flip the RGB of the whole
+    // post-mixer buffer (W/A/UV untouched). Runs AFTER the global hue
+    // rotation (documented order: global hue THEN global invert) but BEFORE
+    // group color-locks + intensity/blackout, so a locked group's color and
+    // the e-stop safety always have the final say. Zero-cost when off.
+    if (globalEffectsController && globalEffectsController.applyInvert) {
+      globalEffectsController.applyInvert(model.pixels);
+    }
+
     // Group fixed-color locks (docs/32): repaint operator-locked groups
     // AFTER all macros (a locked group must not flicker with the show)
     // but BEFORE intensity/blackout below, so the master cutoffs always
     // keep the final say. Single application point — replaces the
     // summer-camp djLights hack's duplicated post-intensity path.
     if (globalEffectsController) globalEffectsController.applyGroupFixedColors(model.pixels);
+
+    // Snapshot the PRE-DIMMER composite (after all global FX, before the
+    // section dimmers + blackout) for the deck/mixer master preview. Only on
+    // frames that will broadcast vis (mixer.wantVisThisFrame, set above from
+    // the same vis-due condition), so it costs one O(pixelCount) copy at the
+    // vis cadence — not every frame. The vis block below encodes this as the
+    // `preDimmer` key. Channel order matches rigBuffer: r,g,b,w,a,u.
+    if (mixer.wantVisThisFrame) {
+      if (!preDimmerVisBuf) preDimmerVisBuf = new Uint8Array(pixelCount * 6);
+      for (let i = 0; i < pixelCount; i++) {
+        const off = i * 6;
+        const px = model.pixels[i];
+        preDimmerVisBuf[off] = Math.min(255, Math.max(0, Math.round(px.r * 255)));
+        preDimmerVisBuf[off + 1] = Math.min(255, Math.max(0, Math.round(px.g * 255)));
+        preDimmerVisBuf[off + 2] = Math.min(255, Math.max(0, Math.round(px.b * 255)));
+        preDimmerVisBuf[off + 3] = Math.min(255, Math.max(0, Math.round(px.w * 255)));
+        preDimmerVisBuf[off + 4] = Math.min(255, Math.max(0, Math.round(px.a * 255)));
+        preDimmerVisBuf[off + 5] = Math.min(255, Math.max(0, Math.round(px.u * 255)));
+      }
+    }
 
     // Apply any hardware blackout or section intensity scaling from the API (Master cutoffs)
     if (intensityController) intensityController.apply(model.pixels);
@@ -742,12 +788,32 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
           rigBuffer[off + 5] = Math.min(255, Math.max(0, Math.round(px.u * 255)));
         }
         visPayload['rig'] = Buffer.from(subsampleVis(rigBuffer)).toString('base64');
+        // Pre-dimmer composite (after global FX, before dimmers/blackout). The
+        // deck + mixer master preview use this key so they track the global hue
+        // + show the effects while ignoring the section dimmer rack. Encoded
+        // immediately (subsampleVis returns a shared scratch buffer).
+        if (preDimmerVisBuf) {
+          visPayload['preDimmer'] = Buffer.from(subsampleVis(preDimmerVisBuf)).toString('base64');
+        }
+        // Per-channel effective-output METER levels (channel metering).
+        // Plain { <visKey>: number(0..1) } keyed identically to visPayload —
+        // each is the channel's intrinsic brightness scaled by its effFader
+        // (fader/clamp/group/solo), so a layer sitting dark (faded out, muted
+        // group, blend-mode-invisible) reads ~0 even when its pattern is
+        // bright. Shipped as a tiny numeric sidecar to the base64 vis frames
+        // (no per-pixel cost). Absent ⇒ client renders no meter (older engine
+        // / non-vis frame) — a documented default, not a silent fallback.
+        const visLevels = mixer.getVisLevels();
+        const levelsPayload = {};
+        for (const [key, level] of Object.entries(visLevels)) {
+          levelsPayload[key] = level;
+        }
         // `pixelCount` in the message is the number of pixels the iPad
         // should actually expect in each base64 buffer — that's the
         // SAMPLED count, not the model's true pixelCount. PixelStrip
         // already does Math.min(propPixelCount, bytes.length/6) so the
         // strip never tries to draw past the data.
-        statsCallback({ type: 'vis', vis: visPayload, pixelCount: visPxOut });
+        statsCallback({ type: 'vis', vis: visPayload, levels: levelsPayload, pixelCount: visPxOut });
       }
     }
   }
@@ -1115,12 +1181,88 @@ async function main() {
     // Cleared on the next successful hot reload.
     modelSync: { stale: false, message: null },
   };
+
+  // TEMPO ARBITER (docs/39 §tempo-arbitration): coherent arbitration of the
+  // GLOBAL pattern tempo (mixer.tempoBpm) between the live OSC/audio BPM
+  // (auto-follow) and the operator's manual TAP (override hold). Constructed
+  // BEFORE startApiServer so the /mixer/tempo + /mixer/tempo/sync routes and
+  // serializeMixerState can reach it via engineCore.tempoArbiter. attach()
+  // below subscribes it to the CPC so it tracks `audioBpm` freshness. Its
+  // per-frame auto-follow runs in the render loop's beforeFrame hook. NOTE: it
+  // drives ONLY mixer.tempoBpm; bpm_speed_sync independently drives the SPEED
+  // knob from the same audioBpm — different mechanism/target, both may be on.
+  // Optional re-smoothing of the received OSC bpm (config.yaml
+  // `tempo.oscBpmSmoothing: { enabled, tauMs }`). OFF unless set — the Audio
+  // Companion already smooths the BPM before emitting, so this is a safety net
+  // for a jumpy non-Companion OSC sender (enabling it stacks a little lag).
+  const tempoArbiter = new TempoArbiter({
+    mixer, paramCenter,
+    smoothing: engineConfig?.tempo?.oscBpmSmoothing,
+  });
+  tempoArbiter.attach();
+  engineCore.tempoArbiter = tempoArbiter;
+
   const apiServer = startApiServer(opts, engineCore, './patterns', broadcastStatsRef, intensityController, globalEffectsController);
+
+  // Tracks the last tempo pushed to clients via the OSC auto-follow path, so the
+  // render loop broadcasts a fresh mixer state ONLY when the live OSC tempo
+  // actually moves (the arbiter's tick() updates mixer.tempoBpm but never
+  // broadcasts) — keeps the BPM readout tracking live OSC without per-frame churn.
+  let lastBroadcastTempoBpm = mixer.tempoBpm;
+  // Also track the derived tempo SOURCE so a liveness transition (e.g. OSC
+  // drops while pref='osc' → 'osc'→'held') rebroadcasts even though tempoBpm
+  // holds — otherwise the source/liveness badge would stay stale on the UIs
+  // until the next operator action. Cheap: deriveSource() is two field reads.
+  let lastBroadcastSource = tempoArbiter.deriveSource(Date.now());
 
   const loop = createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, paramCenter, (stats) => {
     broadcastStatsRef.publish(stats);
   }, engineConfig.vis || {}, {
-    beforeFrame: (nowMs) => modulationController.applyFrame(nowMs),
+    beforeFrame: (nowMs) => {
+      modulationController.applyFrame(nowMs);
+      // AUTO-CYCLE (round-2 #2): advance any mixer overlay whose playlist
+      // autopilot is active + due. Cheap synchronous decision; the actual
+      // overlay compile is dispatched off the hot path (setImmediate) inside
+      // the tick so it never darkens this frame.
+      if (apiServer && typeof apiServer.autoCycleTick === 'function') {
+        apiServer.autoCycleTick();
+      }
+      // DECK OVERLAYS (deck dynamic view overrides): advance every
+      // auto-advancing deck overlay in UNISON on ONE shared clock (operator
+      // refinement #1). Same wall-clock source as autoCycleTick; the overlay
+      // compiles are dispatched off the hot path inside the tick.
+      if (apiServer && typeof apiServer.deckOverlayAutoCycleTick === 'function') {
+        apiServer.deckOverlayAutoCycleTick();
+      }
+      // TEMPO AUTO-FOLLOW (tempo-arbitration): when a fresh OSC BPM is live and
+      // no manual-tap override is in flight, continuously set mixer.tempoBpm
+      // from it (clamped, only-on-change). Date.now() — NOT nowMs — because the
+      // arbiter's `audioBpm` freshness timestamps are recorded with Date.now()
+      // in its CPC subscription; performance.now() (what nowMs carries) is a
+      // different epoch and would never compare correctly. Hot-path safe: two
+      // field reads + one timestamp compare, no allocation.
+      tempoArbiter.tick(Date.now());
+      // When OSC auto-follow actually moved the tempo, push a fresh mixer state
+      // so the BPM readout tracks the live OSC tempo (only-on-change; the
+      // arbiter itself never broadcasts, and a mixer broadcast otherwise only
+      // fires on operator actions — so OSC drift would look frozen).
+      const curSource = tempoArbiter.deriveSource(Date.now());
+      if ((mixer.tempoBpm !== lastBroadcastTempoBpm || curSource !== lastBroadcastSource)
+          && apiServer && typeof apiServer.broadcastMixerState === 'function') {
+        lastBroadcastTempoBpm = mixer.tempoBpm;
+        lastBroadcastSource = curSource;
+        apiServer.broadcastMixerState();
+      }
+      // BPM → SPEED sync (source-agnostic): the arbiter may have just moved
+      // mixer.tempoBpm (OSC auto-follow) WITHOUT a CPC event, so re-evaluate
+      // the speed mapping against the arbitrated tempo. recompute() is
+      // idempotent — it only writes `speed` when the mapped value changed, so
+      // this is hot-path safe (no per-frame CPC churn). Guarded like the other
+      // beforeFrame callees since bpmSync is wired after loop.start().
+      if (engineCore.bpmSync) {
+        engineCore.bpmSync.recompute();
+      }
+    },
   });
   // Now that the loop exists, give engineCore a way to read the live
   // frame counter (used by /global-effect-slots/:id/activate so the
@@ -1272,12 +1414,15 @@ async function main() {
   loop.start();
 
   // 7b. BPM → speed sync. Attaches to the CPC subscriber list and follows
-  // the Audio Companion's analyzed tempo, which arrives over OSC
-  // `/marsin/audio/bpm` → CPC key `audioBpm` (2026-06-17 contract).
-  // Operator gates the behaviour via the `bpmSpeedSync` CPC param
-  // (default off); when `audioBpm` is 0/absent the sync doesn't drive.
-  const bpmSync = new BpmSpeedSync(paramCenter);
+  // the ARBITRATED pattern tempo (mixer.tempoBpm) — i.e. whatever drives the
+  // clock: OSC auto-follow OR a manual TAP override — so SPEED tracks the
+  // tapped tempo too, not only the analyzed OSC `audioBpm`. Source-agnostic
+  // via the injected `getTempoBpm` resolver. Operator gates the behaviour via
+  // the `bpmSpeedSync` CPC param (default off); when the arbitrated tempo is
+  // 0/absent the sync doesn't drive (fail SAFE).
+  const bpmSync = new BpmSpeedSync(paramCenter, { getTempoBpm: () => mixer.tempoBpm });
   bpmSync.attach();
+  engineCore.bpmSync = bpmSync;
 
   // 7c. Microphone audio listener. Disabled by default — opt in via
   // config.yaml `audio.enabled: true`. A bad config / missing

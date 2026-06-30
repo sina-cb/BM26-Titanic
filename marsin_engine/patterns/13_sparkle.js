@@ -56,8 +56,8 @@ export var whiteLevel = 0.5;   // WHITE: overall white-glint amount (scales the 
 export var whiteKick = 0.0;    // WHITE: kick-driven white-hot sparkle pop + blinder (audio target)
 export var whiteWarmth = 0.5;  // WHITE: glint tint, 0=cool/UV .. 1=warm/amber
 
-export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // Left / "A" colour (cyan)
-export var cp2H = 0.08, cp2S = 1.0, cp2V = 1.0; // Right / "B" colour (amber)
+export var cp1H = 0.0, cp1S = 1.0, cp1V = 1.0; // Left / "A" colour (red — og default)
+export var cp2H = 0.5, cp2S = 1.0, cp2V = 1.0; // Right / "B" colour (cyan — og default)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -78,8 +78,8 @@ export function sliderWhiteKick(v) { whiteKick = v; }
 export function sliderWhiteWarmth(v) { whiteWarmth = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
-var MAX_RATE = 0.5;          // base wash drift turns/sec at localSpeed = 1.0
-var SPARKLE_RATE = 0.9;      // sparkle clock turns/sec at localSpeed = 1.0
+var MAX_RATE = 1.0;          // base wash drift turns/sec at localSpeed = 1.0 (restored toward og time(0.02))
+var SPARKLE_RATE = 1.6;      // sparkle clock turns/sec at localSpeed = 1.0 (restored toward og flicker rate)
 var PHASE_WRAP = 10000.0;
 var AUTO_PERIOD = 67.0;
 var BASE_FLOOR = 0.04;       // small non-black floor
@@ -176,7 +176,7 @@ export function render3D(index, x, y, z) {
   // a modest rate (×6) added inside ONE sine — a slow shimmer at speed 0, a brisk
   // strobe at speed 1 (frame-to-frame change scales with the localSpeed rate).
   var pseed = index * 73.137;
-  var ph = sparkleClock * 6.0;
+  var ph = sparkleClock * 12.0;
   var sp = sin(pseed + ph) * sin(pseed * 3.7) * sin(pseed * 7.3 + ph * 0.5);
   sp = sp * sp * sp * sp;
   var bloom = sin(pseed * 0.071 + ph * 0.2 + x * 0.37 + y * 0.19 + z * 0.11);

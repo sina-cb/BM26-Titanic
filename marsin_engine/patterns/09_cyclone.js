@@ -70,7 +70,7 @@ export function sliderWhiteKick(v) { whiteKick = v; }
 export function sliderBlinderBite(v) { blinderBite = v; }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
-var SWIRL_RATE = 0.45;      // swirl streams per second at localSpeed = 1.0
+var SWIRL_RATE = 0.75;      // swirl streams per second (lively, ~og swirl speed)
 var PHASE_WRAP = 10000.0;
 var BASE_FLOOR = 0.04;      // calm non-black base in silence
 
@@ -168,7 +168,9 @@ export function render3D(index, wx, wy, wz) {
   var speck = pow(sw, sharp);
   // density opens more specks (eligibility gate) and brightens the field.
   var elig = 0.5 + 0.5 * sin((hashp * 17.0 + 0.41) * PI2);
-  if (elig < (1.0 - (0.2 + density * 0.6))) speck = speck * 0.03;
+  // Open the field so the silent swirl is as lively as the og (most specks lit);
+  // density still opens more. Suppressed specks dim rather than black out.
+  if (elig < (1.0 - (0.45 + density * 0.5))) speck = speck * 0.25;
 
   // Sparkle catch-light overlay (incommensurate twinkle, density-scaled).
   var spark = pow(0.5 + 0.5 * sin((sparkPhase + colHash * 9.0) * PI2), 24.0);

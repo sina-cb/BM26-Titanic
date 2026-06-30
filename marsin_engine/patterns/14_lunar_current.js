@@ -41,8 +41,8 @@ export var density = 0.5;      // current spatial frequency
 export var whiteLift = 0.5;    // upper-crown white emitter
 export var uvLift = 0.5;       // upper-crown UV emitter
 
-export var cp1H = 0.68, cp1S = 0.95, cp1V = 1.0; // Current colour (deep indigo)
-export var cp2H = 0.41, cp2S = 1.00, cp2V = 1.0; // Caustic accent (sea-green)
+export var cp1H = 0.58, cp1S = 0.85, cp1V = 1.0; // Current colour (og default)
+export var cp2H = 0.50, cp2S = 1.00, cp2V = 1.0; // Caustic accent (og default)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -57,7 +57,7 @@ export function sliderWhiteLift(v) { whiteLift = v; }
 export function sliderUvLift(v) { uvLift = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
-var MAX_RATE = 0.4;          // base current drift turns/sec at localSpeed = 1.0
+var MAX_RATE = 1.0;          // base current drift turns/sec at localSpeed = 1.0 (restored toward og time(0.035/0.015))
 var PHASE_WRAP = 10000.0;
 var AUTO_PERIOD = 83.0;
 var BASE_FLOOR = 0.05;       // small non-black floor (moonlit base glow)
@@ -152,14 +152,23 @@ export function render3D(index, x, y, z) {
   var reach = 0.7 + radius * 1.2;   // AUDIO: current swell / caustic reach
 
   // Broad longitudinal current + cross caustic (incommensurate frequencies).
-  var longWave = wave((nx * dens) + (ny * 0.8) - driftA * 0.18);
-  var crossWave = wave((ny * dens * 0.7 * reach) - (nx * 0.6) + driftB * 0.18
+  var longWave = wave((nx * dens) + (ny * 0.8) - driftA * 1.4);
+  var crossWave = wave((ny * dens * 0.7 * reach) - (nx * 0.6) + driftB * 1.4
                        + shimmerPhase * 0.07 * shimmer);
   var currentRaw = (longWave * 0.65) + (crossWave * 0.35);
   var current = pow(currentRaw, 1.8);
 
-  // Caustic crest gate — sharpens with shimmer, pops with kick.
-  var crest = (crossWave > (0.86 - shimmer * 0.1)) ? 1.0 : 0.0;
+  // Caustic crest gate — sharpens with shimmer, pops with kick. A hard
+  // (crossWave > edge) ? 1 : 0 gate teleports the caustic on in a single frame
+  // (a real seam: px jumps ~120/255 between consecutive frames as crossWave
+  // crosses the edge in silence). Replace with a STEEP smoothstep over a narrow
+  // band so the caustic still reads as a crisp moonlit crest (same edge, same
+  // pow sharpness below) but rises continuously across the crossing.
+  var crestEdge = 0.86 - shimmer * 0.1;
+  var crestBand = 0.04;                       // narrow -> still a crisp caustic
+  var crestU = (crossWave - (crestEdge - crestBand)) / (crestBand * 2.0);
+  crestU = clamp01(crestU);
+  var crest = crestU * crestU * (3.0 - 2.0 * crestU); // smoothstep(edge-band, edge+band)
   crest = crest * pow(currentRaw, 2.0);
 
   // Upper-head crown weighting.

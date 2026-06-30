@@ -44,12 +44,11 @@ export var level = 0.7;        // PRIMARY: overall brightness (audio: micLow). 0
 export var kick = 0.0;         // brightness/foam pop (audio: micKick); 0 = no pop until beat
 export var radius = 0.5;       // travel distance + wing span (audio: micFlux)
 export var detail = 0.5;       // wing-ripple sparkle (audio: micHigh)
-export var whiteFoam = 0.3;    // white foam crest amount (kept modest so foam accents,
-                               // never washes the rig or decorrelates PRIMARY brightness)
+export var whiteFoam = 0.55;   // white foam crest amount (og default: prominent foam crest)
 export var uvUndertow = 0.3;   // UV undertow amount
 
-export var cp1H = 0.60, cp1S = 1.0, cp1V = 1.0; // Sea (deep blue)
-export var cp2H = 0.33, cp2S = 1.0, cp2V = 1.0; // Reef (green, wide hue sep)
+export var cp1H = 0.55, cp1S = 1.0, cp1V = 1.0; // Sea (og default)
+export var cp2H = 0.44, cp2S = 1.0, cp2V = 1.0; // Reef (og default)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 

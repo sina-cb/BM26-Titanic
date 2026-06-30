@@ -58,6 +58,17 @@ test('emitDerivedBpm sends a sane tempo to /marsin/audio/bpm', () => {
   assert.equal(s.sent[0].value, 128);
 });
 
+test('emitDerivedBpm ROUNDS the emitted BPM to an integer (cross-UI consistency)', () => {
+  // The tracker's audioBpm is a smoothed float; the emitted/displayed value is
+  // an integer so the Companion UI, CaptainPad, and the engine all agree.
+  const s = sender();
+  emitDerivedBpm(pcWithBpm(127.6), s.fn);
+  assert.equal(s.sent[0].value, 128, '127.6 rounds up to 128');
+  const s2 = sender();
+  emitDerivedBpm(pcWithBpm(127.4), s2.fn);
+  assert.equal(s2.sent[0].value, 127, '127.4 rounds down to 127');
+});
+
 test('emitDerivedBpm drops a 0/absent BPM (fail safe — no packet)', () => {
   const s = sender();
   assert.equal(emitDerivedBpm(pcWithBpm(0), s.fn), false);
