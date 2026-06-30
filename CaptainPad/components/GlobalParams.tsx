@@ -109,7 +109,7 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
         // frame, CPC would still win.
         const matched = !!e.cpcOwned;
         if (matched) {
-          const niceName = e.name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().substring(0, 15);
+          const niceName = prettySliderName(e.name);
           return (
             <View key={`slider-${e.id}`} style={{ opacity: 0.5 }}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4, alignItems: 'center' }}>
@@ -151,7 +151,11 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase' }}>HUE</Text>
                 {matched ? <MatchedBadge cpcLabel={e.cpcLabel} /> : null}
               </View>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{(e.v0 ?? 0).toFixed(2)}</Text>
+              {/* QA round8 #3: HUE is an angle — show it in degrees ("°")
+                  to match the deck HUE row + ColorPickerModal (Math.round(v*360)°)
+                  instead of a bare normalized 0.00–1.00, which reads as a
+                  cryptic fraction next to the rest of the app's "°" hues. */}
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{Math.round((e.v0 ?? 0) * 360)}°</Text>
             </View>
             <HorizontalFader
               value={e.v0 ?? 0}
@@ -163,18 +167,24 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
           </View>
         );
       })}
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 16, gap: 8 }}>
-        {toggles.map((e: any) => (
-          e.cpcOwned
-            ? <MatchedButton key={`toggle-${e.id}`} name={e.name} cpcLabel={e.cpcLabel} />
-            : <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => writeLocal(id, v)} />
-        ))}
-        {triggers.map((e: any) => (
-          e.cpcOwned
-            ? <MatchedButton key={`trigger-${e.id}`} name={e.name} cpcLabel={e.cpcLabel} />
-            : <MomentaryButton key={`trigger-${e.id}`} id={e.id} name={e.name} onChange={(id: number, v: number) => writeLocal(id, v)} />
-        ))}
-      </View>
+      {/* Only render the toggle/trigger strip when there's something to
+          show. An always-present empty flex-wrap row (with its 16px top
+          margin) otherwise reserves dead vertical space inside the DECK
+          MAIN PARAMETERS card on a slider-only channel (QA round10). */}
+      {(toggles.length > 0 || triggers.length > 0) ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 16, gap: 8 }}>
+          {toggles.map((e: any) => (
+            e.cpcOwned
+              ? <MatchedButton key={`toggle-${e.id}`} name={e.name} cpcLabel={e.cpcLabel} />
+              : <ToggleButton key={`toggle-${e.id}`} id={e.id} name={e.name} initialValue={e.v0 ?? 0} onChange={(id: number, v: number) => writeLocal(id, v)} />
+          ))}
+          {triggers.map((e: any) => (
+            e.cpcOwned
+              ? <MatchedButton key={`trigger-${e.id}`} name={e.name} cpcLabel={e.cpcLabel} />
+              : <MomentaryButton key={`trigger-${e.id}`} id={e.id} name={e.name} onChange={(id: number, v: number) => writeLocal(id, v)} />
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 };

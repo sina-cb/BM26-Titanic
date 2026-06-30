@@ -38,8 +38,8 @@ export var detail = 0.5;       // audio: glow sharpness / sparkle (micHigh)
 export var focus = 0.5;        // base glow tightness 0..1 (scaled in render)
 export var trailBlend = 0.5;   // colour-trail strength between attractors
 
-export var cp1H = 0.55, cp1S = 0.92, cp1V = 1.0; // cyan
-export var cp2H = 0.86, cp2S = 0.92, cp2V = 1.0; // violet/magenta
+export var cp1H = 0.58, cp1S = 0.92, cp1V = 1.0; // cyan
+export var cp2H = 0.78, cp2S = 0.92, cp2V = 1.0; // violet/magenta
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -118,10 +118,14 @@ export function beforeRender(delta) {
   autoClockB = autoClockB + dt * 0.071 * localMultiplier;
   if (autoClockA >= PHASE_WRAP) autoClockA = autoClockA - PHASE_WRAP;
   if (autoClockB >= PHASE_WRAP) autoClockB = autoClockB - PHASE_WRAP;
-  // Bias toward +dirSign so motion mostly follows the slider but occasionally
-  // eases backward; range ~[-0.4..+1.0] * dirSign.
-  var swayA = (0.3 + 0.7 * cos(autoClockA)) * dirSign;
-  var swayB = (0.3 + 0.7 * cos(autoClockB + 1.1)) * dirSign;
+  // Signed, guaranteed-non-zero base magnitude (like 16/17) so the attractors keep
+  // swimming at the guarded-center default instead of stalling at half rate. The
+  // cosine sway stays away from zero (range ~[0.2..1.0]) so the effective rate
+  // never dips to ~0 — motion floor — while still easing the speed up and down.
+  var dirMag = (dirSign < 0.0) ? -1.0 : 1.0;
+  var swayMag = dirSign + dirMag * 0.7;     // never near-zero at center
+  var swayA = (0.6 + 0.4 * cos(autoClockA)) * swayMag;
+  var swayB = (0.6 + 0.4 * cos(autoClockB + 1.1)) * swayMag;
 
   // Base angular rate (rad/s) per harmonic; advanced by delta so localSpeed
   // (and the global SPEED fader) drive the rate. Incommensurate ratios.
@@ -167,7 +171,9 @@ export function render3D(index, x, y, z) {
 
   var nearest = min(dA, min(dB, dC));
   var focusK = 1.0 + focus * 3.5;   // 0..1 -> 1..4.5 (higher = crisper cores)
-  var glow = pow(max(0.0, 1.0 - nearest * focusK), glowSharp) * 1.6;
+  // og glow had no extra boost — keep cores crisp over a near-black field so the
+  // attractors read as discrete swimming nodes, not a wash.
+  var glow = pow(max(0.0, 1.0 - nearest * focusK), glowSharp) * 1.15;
 
   var trail = wave((dA - dB + dC) * 3.0 + trailPhase);
   // Small clock-driven base floor so silence stays calm-but-visible, but low
@@ -180,21 +186,30 @@ export function render3D(index, x, y, z) {
   // micLow strongly (corr>=0.5) while keeping crisp cores.
   // Ambient floor is gated by proximity to an attractor so true voids stay dark
   // (high-def negative space) while lit regions track the bass.
-  var prox = max(0.0, 1.0 - nearest * 1.6);
-  var ambient = level * 0.18 * prox;
-  var gain = 0.12 + level * 1.30;
+  // Ambient floor gated tightly to attractor cores (smaller reach) so true voids
+  // stay dark (og had darkFrac ~0.46); lit regions still track the bass.
+  var prox = max(0.0, 1.0 - nearest * 2.4);
+  var ambient = level * 0.08 * prox;
+  var gain = 0.16 + level * 1.30;
   // Kick pop: a clean additive brightness lift from micKick (kept secondary so
   // micLow stays the dominant brightness driver for PRIMARY corr).
   var pop = kick * 0.38;
   v = min(1.0, ambient + (v + pop) * gain);
 
   // Colour identity per attractor so BOTH palette ends span the rig (hueSpread):
-  // attractor A pulls toward cp1 (mix 0), B toward cp2 (mix 1), C sits mid. The
-  // nearest attractor dominates the local hue, plus a small positional drift.
-  var mixVal = 0.5;
-  if (dA <= dB && dA <= dC) mixVal = 0.04;
-  else if (dB <= dA && dB <= dC) mixVal = 0.96;
-  else mixVal = 0.5;
+  // attractor A pulls toward cp1 (mix 0.04), B toward cp2 (mix 0.96), C sits mid
+  // (0.5). The nearest attractor dominates the local hue. A hard nearest-of-three
+  // pick used to SNAP the hue instantly whenever a pixel crossed a Voronoi
+  // boundary between two attractors (a real per-pixel colour discontinuity the
+  // detector flagged hundreds of times). Instead, weight the three identities by
+  // a continuous inverse-distance falloff so the dominant attractor still sets the
+  // local hue but the handover across a boundary is smooth (C0/C1) — no snap.
+  var sharp = 14.0;                       // how decisively the nearest one wins
+  var wA = 1.0 / (1.0 + dA * dA * sharp);
+  var wB = 1.0 / (1.0 + dB * dB * sharp);
+  var wC = 1.0 / (1.0 + dC * dC * sharp);
+  var wSum = wA + wB + wC;                 // > 0 always (each term >= small)
+  var mixVal = (wA * 0.04 + wB * 0.96 + wC * 0.5) / wSum;
   mixVal = mixVal + (wave(nx * 0.5 + mixPhase) - 0.5) * 0.18;
   mixVal = max(0.0, min(1.0, mixVal));
 

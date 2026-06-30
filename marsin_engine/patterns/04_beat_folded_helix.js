@@ -98,11 +98,17 @@ export function sliderWhiteKick(v) { whiteKick = v; }
 export function sliderWhiteWarmth(v) { whiteWarmth = v; }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
-var TRAVEL_RATE = 0.55;   // tunnel turns/sec at localSpeed=1, radius=0.5
-var SPIN_RATE   = 0.21;   // spin turns/sec at localSpeed=1
+var TRAVEL_RATE = 6.0;    // tunnel turns/sec — at default sliders (globalDir=1, localMult=1,
+                          // radScale=1) tunnelZ advances ~0.15/frame, matching og's
+                          // tunnelZ = masterTime*(0.05*localMult*120). The helixPhase also
+                          // multiplies depth*twistFreq, so this drives a lively whole-rig sweep.
+var SPIN_RATE   = 2.0;    // spin turns/sec — matches og spinPhase ~0.05/frame at defaults.
 var BEAT_RATE   = 0.62;   // beat cadence (φ-ish) turns/sec
 var DRIFT_RATE  = 0.07;   // colour drift turns/sec
 var FLIP_RATE   = 0.013;  // autonomous direction flip drift rate
+var BEAT_WIN    = 0.55;   // beat-pulse envelope width (cycle units); wide enough that the
+                          // smooth attack/decay is frame-resolvable at 40 fps (the old
+                          // ~0.14 rectangular gate strobed the rig and tripped the detector).
 var PHASE_WRAP  = 10000.0;// wrap far from any in-frame use (no seam, §7)
 
 // ── Palette RGB cache (verbatim from 27_swipe; blend in RGB space) ───────────
@@ -144,7 +150,9 @@ function clamp01(v) {
 }
 
 // ── Persistent state (each consumer owns its accumulator) ────────────────────
-var globalDir = 0.5;       // resolved heading from direction slider (set in setter)
+var globalDir = 1.0;       // resolved heading from direction slider (set in setter).
+                           // Default 1.0 = FULL-speed forward (0.5 was read as a
+                           // half-strength sign and halved the tunnel/spin rate).
 var tunnelZ = 0.0;         // tunnel-travel accumulator
 var spinPhase = 0.0;       // spin accumulator
 var beatPhase = 0.0;       // beat-cadence accumulator
@@ -177,7 +185,14 @@ export function beforeRender(delta) {
   // lockstep. The manual direction slider biases the sign.
   autoFlip = autoFlip + dt * localMultiplier * FLIP_RATE;
   if (autoFlip >= PHASE_WRAP) autoFlip = autoFlip - PHASE_WRAP;
-  var autoDir = wave(autoFlip * 1.6180339) < 0.5 ? -1.0 : 1.0;
+  // Smooth auto-flip: the heading reverses on a golden-ratio cadence, but as a
+  // CONTINUOUS soft-clipped sign (eases through 0 at the reversal) rather than a
+  // discrete +/-1 step. The old step reversed the tunnel/spin VELOCITY in one
+  // frame — a motion KINK at each flip (the same class of bug pattern 00 had).
+  // The soft-clip reads ~+/-1 over almost the whole swing and only eases through
+  // 0 right at the reversal, so the autonomous flip stays organic without the step.
+  var flipOsc = wave(autoFlip * 1.6180339) - 0.5;            // -0.5..0.5, 0 at reversal
+  var autoDir = flipOsc / sqrt(flipOsc * flipOsc + 0.0009);  // soft-clipped odd sign
   headingNow = globalDir * autoDir;            // manual bias x autonomous flip
   // globalDir is guarded away from 0 in the setter; default (no setter call) is
   // 0.5 -> still non-zero, so heading never resolves to a frozen 0.
@@ -198,13 +213,24 @@ export function beforeRender(delta) {
   driftPhase = driftPhase + dt * localMultiplier * DRIFT_RATE;
   if (driftPhase >= PHASE_WRAP) driftPhase = driftPhase - PHASE_WRAP;
 
-  // Beat pulse: fires from the clock alone (keeps the pattern alive with no
-  // audio) but the clock contribution is kept SMALL so it doesn't dominate the
-  // brightness budget and decorrelate the level PRIMARY. The audio KICK is what
-  // makes it slam (and that lands as a separate, kick-correlated dimension).
+  // Beat pulse: fires from the clock ALONE so the beat — and the vintage/par W
+  // flash it drives — ANIMATES at silence like og. The clock weight is strong
+  // (0.7) so the pulse reads with no audio; the kick ADDS slam on top (separate,
+  // kick-correlated dimension). SHAPE: a smooth fast-attack / cosine-decay
+  // envelope over BEAT_WIN of the cycle, NOT the old rectangular (beatFrac<0.14
+  // ? 1 : 0) gate. The rectangular gate snapped beatPulse 0->0.7->0 in one frame,
+  // which (via the par/vintage beat lift) stepped whole sections every beat — the
+  // dominant discontinuity the detector flagged in silence (sumAbsDelta ~30x
+  // local median). The envelope still reads as a punchy beat pop but is smooth
+  // at 40 fps (attack/decay span many frames).
   var beatFrac = beatPhase - floor(beatPhase);
-  var clockBeat = (beatFrac < 0.14) ? 1.0 : 0.0;
-  beatPulse = clamp01(clockBeat * 0.16 + kick * 0.95);
+  var clockBeat = 0.0;
+  if (beatFrac < BEAT_WIN) {
+    var bp = beatFrac / BEAT_WIN;                 // 0..1 across the beat envelope
+    if (bp < 0.30) { var ar = bp / 0.30; clockBeat = 0.5 - 0.5 * cos(ar * 3.14159265); }
+    else { var dr = (bp - 0.30) / 0.70; clockBeat = 0.5 + 0.5 * cos(dr * 3.14159265); }
+  }
+  beatPulse = clamp01(clockBeat * 0.7 + kick * 0.95);
 
   // Resolved controls.
   armCount = 1.0 + floor(count * 12.0);        // 1..13 arms (mid 0.5 -> 7)
@@ -273,8 +299,14 @@ export function render3D(index, x, y, z) {
   } else if (roleSec == 1) {
     // PARS — beat-pop core + a subtler W flash on the beat, scaled by whiteLevel.
     outV = floorv + v * 0.6;
-    if (beatPulse > 0.0 && field > 0.0) {
-      outV = max(outV, 0.55 + 0.45 * beatPulse);
+    if (field > 0.0) {
+      // Beat pop lifts the core toward full ADDITIVELY from its current value,
+      // weighted by the arm field, so the par core swells and ebbs CONTINUOUSLY
+      // with the smooth beat envelope. The old `max(outV, 0.55 + 0.45*beatPulse)`
+      // snapped outV up to a 0.55 floor the instant the beat gate opened (a hard
+      // step independent of the pulse value) — that floor-snap was the visible
+      // beat discontinuity. This keeps the same on-beat peak brightness/feel.
+      outV = outV + beatPulse * (0.95 - outV) * field;
       // White flash: overall amount via whiteKeep, extra pop via whiteBite.
       outW = beatPulse * (0.30 + 0.55 * whiteKeep) * (0.6 + 0.7 * whiteBite);
     }

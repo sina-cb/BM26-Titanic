@@ -67,6 +67,36 @@ function warnThrottled(tag: string, msg: string, err: unknown) {
 
 // ── Connection Health ─────────────────────────────────────────────────────
 
+// Engine render-health snapshot, surfaced on GET /status as `renderHealth`
+// (see marsin_engine/lib/pattern_mixer.js → getRenderHealth() and
+// docs/39_channels_deck_mixer.md). `ok === false` means at least one channel
+// blend is degraded — compositing via the host-side linear-interp fallback
+// because its WASM blend script is missing / failed to compile. `blendErrors`
+// names the offending modes. A healthy engine reports `{ ok:true, blendErrors:[] }`.
+export interface RenderHealthBlendError {
+  blend: string;
+  message?: string;
+  sinceFrame?: number;
+  count?: number;
+}
+
+export interface RenderHealth {
+  ok: boolean;
+  frame?: number;
+  blendErrors?: RenderHealthBlendError[];
+}
+
+// Deck-restore degrade descriptor, surfaced on GET /status as
+// `deckRestoreDegraded` (see marsin_engine/lib/api_server.js FIX A). Non-null
+// ONLY when the saved DECK pattern failed to restore at boot and the engine
+// fell back to a known-good default to keep the mission-critical exterior LIT.
+// Null on a clean boot.
+export interface DeckRestoreDegraded {
+  failedPattern: string | null;
+  reason: string;
+  fellBackTo: string;
+}
+
 export interface ConnectionResult {
   ok: boolean;
   data?: {
@@ -74,6 +104,14 @@ export interface ConnectionResult {
     activeModel?: string;
     activePattern?: string;
     unrealState?: string;
+    // Operator-visibility health signals (additive — older engines omit
+    // these and are treated as healthy by useEngineHealth). This is the
+    // Codex P0 "loud, VISIBLE degrade" channel: a degraded engine literally
+    // reports the degrade here, so treating absence as healthy is NOT a
+    // silent fallback (a healthy engine reports `renderHealth.ok:true` and
+    // `deckRestoreDegraded:null`).
+    renderHealth?: RenderHealth | null;
+    deckRestoreDegraded?: DeckRestoreDegraded | null;
   };
   error?: string;
   latencyMs?: number;
@@ -259,7 +297,13 @@ export async function setDeckTransitionConfig(patch: Partial<DeckTransitionConfi
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     });
+    // Codex P0 — fail loud: surface an engine rejection so the deck's
+    // optimistic transition-config update can roll back instead of
+    // showing a value the engine never accepted.
     const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
     return { ok: true, data };
   } catch (err: any) {
     warnThrottled('Set deck transition config failed:', 'Set deck transition config failed:', err);
@@ -480,19 +524,60 @@ export async function getAutopilot(): Promise<ApiResult<any>> {
   }
 }
 
-export async function setAutopilot(active?: boolean, delay_s?: string, shuffle?: boolean): Promise<ApiResult<any>> {
+// PATTERN-GROUP LOCALITY (feat/optimize_channels): the DECK autopilot can
+// dwell within a window of `groupSize` adjacent playlist entries for
+// `groupDwell` swaps before grabbing a fresh window. These knobs live on the
+// deck base channel's `playlist.autopilot` and are written through
+// `POST /deck/playlist/autopilot` (the active/delay/shuffle fields keep going
+// to `/autopilot` so the autopilot daemon's own state stays authoritative).
+// All three are optional — pass a subset to patch just those keys; the engine
+// coerces groupMode with `!!` and clamps groupSize 2..8 / groupDwell 1..50.
+export type AutopilotGroupFields = {
+  groupMode?: boolean;
+  groupSize?: number;
+  groupDwell?: number;
+};
+
+export async function setAutopilot(
+  active?: boolean,
+  delay_s?: string,
+  shuffle?: boolean,
+  group?: AutopilotGroupFields,
+): Promise<ApiResult<any>> {
   try {
     const payload: any = {};
     if (active !== undefined) payload.active = active;
     if (delay_s !== undefined) payload.delay_s = delay_s;
     if (shuffle !== undefined) payload.shuffle = shuffle;
-    
+
     const res = await fetchWithTimeout(`${api_base}/autopilot`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
     const data = await res.json();
+
+    // Group-locality knobs ride a SECOND POST to the deck-playlist endpoint
+    // (the daemon's /autopilot state has no slot for them). Only fired when
+    // at least one group field is present, so the legacy active/delay/shuffle
+    // call path is byte-for-byte unchanged.
+    if (group && (group.groupMode !== undefined
+        || group.groupSize !== undefined
+        || group.groupDwell !== undefined)) {
+      const groupPayload: AutopilotGroupFields = {};
+      if (group.groupMode !== undefined) groupPayload.groupMode = group.groupMode;
+      if (group.groupSize !== undefined) groupPayload.groupSize = group.groupSize;
+      if (group.groupDwell !== undefined) groupPayload.groupDwell = group.groupDwell;
+      const gRes = await fetchWithTimeout(`${api_base}/deck/playlist/autopilot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(groupPayload),
+      });
+      const gData = await gRes.json();
+      if (!gRes.ok) {
+        return { ok: false, error: gData?.error || `HTTP ${gRes.status}`, data: gData };
+      }
+    }
     return { ok: true, data };
   } catch(err: any) {
     warnThrottled('Set autopilot failed:', 'Set autopilot failed:', err);
@@ -868,11 +953,69 @@ export async function patchOscConfig(partial: {
   }
 }
 
-export async function fetchMixerState(): Promise<ApiResult<any>> {
+// Shape of GET /mixer. `channels` are mixer overlays only (the deck
+// channel lives on /deck/channel post channel-split). Channel internals
+// stay loosely typed (`MixerChannel`) because the strip renders many
+// engine-authored fields (exports, viewSelection, transition*) that the
+// UI passes through verbatim; the fields the screen actually reads at the
+// top level are pinned here.
+export interface MixerChannel {
+  id: string;
+  name?: string;
+  fader?: number;
+  mode?: string;
+  enabled?: boolean;
+  locked?: boolean;
+  faderLocked?: boolean;
+  dirty?: boolean;
+  transitionTime?: number;
+  transitionMode?: string;
+  exports?: any[];
+  playlist?: PlaylistAssignment | null;
+  viewSelection?: { type: string; target: string | number | null; invert?: boolean } | null;
+  // Global tap-tempo opt-in: `followsTempo` opts the channel into the global
+  // tap-tempo multiplier. The engine still serializes this on every mixer-state
+  // broadcast; its per-channel STRIP UI was removed (mixer declutter, the
+  // operator's marked-up screenshot) but the engine endpoint remains.
+  followsTempo?: boolean;
+  // FOLLOW / LINK (round-2 #6, docs/39 §F-follow). When `followLeaderId` names
+  // another channel, THIS channel becomes a FOLLOWER: its effective level is
+  // the leader's effective level × `followScale` (the follower's own manual
+  // fader is ignored while linked). Both ride the existing mixer-state
+  // broadcast (no new WS type). `followLeaderId` is the leader channel id, or
+  // null when not following — the engine CLEARS a follower's `followLeaderId`
+  // (and broadcasts) when its leader is deleted, so the UI can go unfollowed
+  // without local action. `followScale` is clamped to [0,2] (default 1.0).
+  followLeaderId?: string | null;
+  followScale?: number;
+  [key: string]: any;
+}
+
+export interface MixerState {
+  master: number;
+  channels: MixerChannel[];
+  baseChannelId?: string;
+  maxChannels?: number;
+  // Global tap-tempo (round-2 #4). 120 BPM = 1×; null when never set. Affects
+  // only `followsTempo` channels. Rides the existing mixer-state broadcast.
+  tempoBpm?: number | null;
+  [key: string]: any;
+}
+
+export async function fetchMixerState(): Promise<ApiResult<MixerState>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/mixer`);
+    // Hard-fail on non-2xx instead of treating an error body as state —
+    // the old `return { ok: true, data }` would have fed a
+    // `{ error: '...' }` payload straight into the mixer screen, which
+    // reads data.master / data.channels and would have rendered NaN /
+    // an empty rig. Codex P0: fail loud, no silent fallback.
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
     const data = await res.json();
-    return { ok: true, data };
+    if (!data || typeof data !== 'object' || typeof data.master !== 'number' || !Array.isArray(data.channels)) {
+      return { ok: false, error: 'Malformed /mixer response (expected { master:number, channels:[] })' };
+    }
+    return { ok: true, data: data as MixerState };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }
@@ -963,7 +1106,15 @@ export async function updateMixerChannel(id: string, updates: any): Promise<ApiR
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
     });
+    // Codex P0 — fail loud: an engine rejection (400 unknown group /
+    // bad viewMask, 400 WRONG_ROLE, 404, 500) used to come back as
+    // { ok: true } with the error body as `data`, so callers that
+    // branch on `ok` (e.g. mixer view-selection) could never see a
+    // rejected PATCH. Mirror updateDeckChannel's res.ok handling.
     const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
     return { ok: true, data };
   } catch (err: any) {
     return { ok: false, error: err.message };
@@ -978,6 +1129,13 @@ export async function updateMixerMaster(master: number): Promise<ApiResult<any>>
       body: JSON.stringify({ master }),
     });
     const data = await res.json();
+    // Codex P0 — fail loud: the engine 400s a non-finite master (api_server
+    // /mixer PATCH). Surface that instead of reporting a phantom success, so
+    // the MasterFadeGroup 0s (instant TO BLACK / UP) Alert can actually fire.
+    // Matches the res.ok guard the sibling /mixer writers carry.
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
     return { ok: true, data };
   } catch (err: any) {
     return { ok: false, error: err.message };
@@ -987,7 +1145,16 @@ export async function updateMixerMaster(master: number): Promise<ApiResult<any>>
 export async function removeMixerChannel(id: string): Promise<ApiResult<any>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/mixer/channels/${id}`, { method: 'DELETE' });
+    // Codex P0 — fail loud: a DELETE the engine rejected (404 unknown
+    // id, 400 WRONG_ROLE for the deck channel, 500) used to return
+    // { ok: true } unconditionally, so the delete-confirm handler
+    // assumed success on a destructive, live-show action that never
+    // landed. Surface the engine's error body on non-2xx, mirroring
+    // fetchMixerState / updateDeckChannel.
     const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
     return { ok: true, data };
   } catch (err: any) {
     return { ok: false, error: err.message };
@@ -1015,6 +1182,13 @@ export interface PlaylistAssignment {
   name: string;
   activeEntryId: string | null;
   cursor: number;
+  // Auto-cycle / autopilot (engine #2, docs/39 §6.v). When `active`, the engine
+  // auto-advances `activeEntryId` every `delay_s` seconds (floored to 1s;
+  // `shuffle` picks a random next entry instead of in-order). Set via
+  // PATCH /mixer/channels/:id { autopilot:{...} } (utils/channelExtrasApi
+  // setChannelAutoCycle); rides back on the existing mixer-state WS broadcast
+  // inside this `playlist` object (no new WS type), so an auto-advance shows up
+  // live as `activeEntryId` changes. Absent on playlists never armed.
   autopilot?: { active: boolean; delay_s: number; shuffle: boolean };
 }
 
@@ -1226,7 +1400,9 @@ engineEvents.subscribe((msg: { type: string; [k: string]: unknown }) => {
   }
 });
 
-export async function savePlaylist(playlist: { name: string; entries: PlaylistEntry[] }): Promise<ApiResult<any>> {
+export async function savePlaylist(
+  playlist: { name: string; entries: PlaylistEntry[] },
+): Promise<ApiResult<any>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/playlists`, {
       method: 'POST',
@@ -1261,7 +1437,15 @@ export async function deletePlaylist(name: string): Promise<ApiResult<any>> {
 // mixer tab, so it accepts a `role` prop and we dispatch the playlist
 // API call to the matching endpoint here.
 
-export type ChannelRole = 'deck' | 'mixer';
+// 'deckOverlay' is a deck dynamic VIEW OVERRIDE (engine #deck-overlays):
+// a view-scoped overlay deck layered over the main deck. Its playlist
+// routes mirror the deck's (/deck/overlays/:id/playlist + /entry + /swap),
+// so the polymorphic helpers below dispatch a third branch for it and the
+// reused PlaylistPanel can drive an overlay's playlist exactly like the
+// deck's. There is intentionally NO GET /deck/overlays/:id/playlist on the
+// engine — the overlay's assignment rides the `deck` WS message's
+// `overlays[]` array, so fetchChannelPlaylist reads the list for the role.
+export type ChannelRole = 'deck' | 'mixer' | 'deckOverlay';
 
 // Polymorphic playlist GET. Use this instead of fetchMixerChannelPlaylist
 // from any consumer that may be wired to the deck channel.
@@ -1274,6 +1458,21 @@ export async function fetchChannelPlaylist(
       const res = await fetchWithTimeout(`${api_base}/deck/playlist`);
       const data = await res.json();
       return { ok: res.ok, data: data ?? null };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  }
+  if (role === 'deckOverlay') {
+    // No per-overlay playlist GET on the engine: read the overlay's
+    // assignment out of the /deck/overlays list (the same shape the WS
+    // `deck` message folds in). Fail loud on a non-2xx / missing overlay.
+    try {
+      const res = await fetchWithTimeout(`${api_base}/deck/overlays`);
+      const data = await res.json();
+      if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+      const list = Array.isArray(data?.overlays) ? data.overlays : [];
+      const ov = list.find((o: any) => o && o.id === channelId);
+      return { ok: true, data: (ov && ov.playlist) || null };
     } catch (err: any) {
       return { ok: false, error: err.message };
     }
@@ -1304,6 +1503,19 @@ export async function setChannelPlaylist(
       return { ok: false, error: err.message };
     }
   }
+  if (role === 'deckOverlay') {
+    try {
+      const res = await fetchWithTimeout(`${api_base}/deck/overlays/${encodeURIComponent(channelId)}/playlist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      return { ok: res.ok, data, error: res.ok ? undefined : data?.error };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  }
   return setMixerChannelPlaylist(channelId, name);
 }
 
@@ -1318,6 +1530,22 @@ export async function setChannelPlaylistEntry(
   if (role === 'deck') {
     try {
       const res = await fetchWithTimeout(`${api_base}/deck/playlist/entry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entryId }),
+      });
+      const data = await res.json();
+      const code = !res.ok && data && data.code
+        ? String(data.code)
+        : (!res.ok && res.status === 409 ? 'EBUSY' : undefined);
+      return { ok: res.ok, data, code, error: !res.ok ? (data && data.error) : undefined };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  }
+  if (role === 'deckOverlay') {
+    try {
+      const res = await fetchWithTimeout(`${api_base}/deck/overlays/${encodeURIComponent(channelId)}/playlist/entry`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ entryId }),
@@ -1539,6 +1767,31 @@ export async function setGlobalEffectBlackout(enabled: boolean): Promise<ApiResu
     return { ok: true, data: await res.json() };
   } catch (err: any) {
     warnThrottled('global-effect-blackout', 'Failed to set global effect blackout:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Global color INVERT toggle (docs/39 §F-invert). A first-class boolean
+// toggle (sibling of blackout, NOT a GEM slot): inverts the RGB triad of
+// the whole post-mixer buffer (1 - v), leaving W/A/UV untouched so the
+// mission-critical exterior whites never flip. POST /global-effect-invert
+// { enabled: boolean } → { status:'ok', invert } and broadcasts
+// { type:'globalInvert', invert } on /ws/control. Mirrors
+// setGlobalEffectBlackout's shape + fail-loud error handling exactly.
+export async function setGlobalInvert(enabled: boolean): Promise<ApiResult<{ status: string; invert: boolean }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-invert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('global-effect-invert', 'Failed to set global effect invert:', err);
     return { ok: false, error: err.message };
   }
 }

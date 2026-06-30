@@ -32,10 +32,13 @@ test('panic stop also clears legacy rig-global effects', () => {
   const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
   const mgr = new GlobalEffectSlotManager(ctrl);
   // Activate the four legacy effects via the slot dispatcher.
+  // Slot numbers shifted +1 from uvBlast onward (June 2026) when the
+  // global Invert effect was seeded at slot 9 — vintageWhite/blastWhite
+  // stay at 7/8, uvBlast moved 9→10, fogger 10→11.
   mgr.dispatchSlotAction({ slotId: 7,  action: 'activate', frameIndex: 0, nowMs: 0 }); // vintageWhite
   mgr.dispatchSlotAction({ slotId: 8,  action: 'activate', frameIndex: 0, nowMs: 0 }); // blastWhite
-  mgr.dispatchSlotAction({ slotId: 9,  action: 'activate', frameIndex: 0, nowMs: 0 }); // uvBlast
-  mgr.dispatchSlotAction({ slotId: 10, action: 'activate', frameIndex: 0, nowMs: 0 }); // fogger
+  mgr.dispatchSlotAction({ slotId: 10, action: 'activate', frameIndex: 0, nowMs: 0 }); // uvBlast
+  mgr.dispatchSlotAction({ slotId: 11, action: 'activate', frameIndex: 0, nowMs: 0 }); // fogger
   assert.equal(ctrl.effects.vintageWhite, true);
   assert.equal(ctrl.effects.blastWhite,   true);
   assert.equal(ctrl.effects.uvBlast,      true);

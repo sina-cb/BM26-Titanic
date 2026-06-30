@@ -66,12 +66,21 @@ import {
 } from './companion_config.js';
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
 import { emitDerivedBpm } from './bpm_emit.js';
+import { BpmSmoother } from '../../lib/bpm_smoother.js';
 import { SYNTHS, SYNTH_NAMES, fillFrame } from '../synth/test_synths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, 'ui');
 
 const SR = 44100, FFT = 1024, HOP = 512;
+
+// QUICK low-pass on the derived BPM, applied to `audioBpm` IN PLACE right after
+// the derived-signals tick — so the value the UI frame reads AND the value
+// emitted over OSC are the SAME smoothed number (operator request 2026-06-29:
+// "smooth before the UI reads it"). Default on with a short (250 ms) time
+// constant so the UI still reads realtime. Overridable via config.yaml
+// `companion.bpmSmoothing: { enabled, tauMs }` (applied in applyEngineConfig).
+const bpmSmoother = new BpmSmoother();
 
 // Server-side file browser for the File source. Defaults to the datasets dir:
 // `--datasets <dir>` / $COMPANION_DATASETS, else the corpus build dir, else $HOME.
@@ -563,6 +572,22 @@ const analyzer = new AudioAnalyzer({
     publishRawMirrors(r);
     detector.tick(clockMs, dt);
     derived.tick(clockMs, dt);
+    // QUICK-smooth audioBpm IN PLACE, right after the tracker publishes it and
+    // BEFORE anything reads it — so the UI frame (derived.bpm below) and the
+    // OSC emit carry the SAME smoothed value (operator request 2026-06-29). A
+    // 0 / no-signal value resets the smoother (next valid sample seeds fresh,
+    // no ramp from a stale tempo) and is left as-is. The frame is pushed at the
+    // analysis rate, so the UI still updates in realtime — only the value is
+    // de-jittered, not delayed.
+    {
+      const rawBpm = paramCenter.get('audioBpm');
+      if (Number.isFinite(rawBpm) && rawBpm > 0) {
+        const sm = bpmSmoother.push(rawBpm, dt * 1000);
+        if (Number.isFinite(sm)) paramCenter.set('audioBpm', sm, 'bpmSmooth');
+      } else {
+        bpmSmoother.reset();
+      }
+    }
     // BPM is a DERIVED signal (not an operator-designed osc_out tap), so the
     // Companion emits it as a built-in, always-on output right after the
     // derived-signals tick produces audioBpm → engine /marsin/audio/bpm.
@@ -1106,6 +1131,14 @@ function applyEngineConfig() {
   // against (single source of truth). Loopback default — engine + Companion
   // share the Pi (same rationale as the OSC target above).
   engineEndpoint = resolveEngineEndpoint(cfg);
+  // BPM smoothing (operator request 2026-06-29). config.yaml
+  // `companion.bpmSmoothing: { enabled, tauMs }` — absent ⇒ the BpmSmoother
+  // defaults (on, 250 ms). Applied to audioBpm before the UI + OSC read it.
+  const sm = comp && comp.bpmSmoothing;
+  if (sm && typeof sm === 'object') {
+    if (typeof sm.enabled === 'boolean') bpmSmoother.setEnabled(sm.enabled);
+    if (Number.isFinite(sm.tauMs)) bpmSmoother.setTauMs(sm.tauMs);
+  }
   if (comp && (comp.source === 'mic' || comp.source === 'test' || comp.source === 'file')) return comp.source;
   return 'test';
 }

@@ -63,7 +63,7 @@ export var whiteKick = 0.5;      // WHITE: kick-driven vintage blinder bite
 export var blinderBite = 0.5;    // WHITE: blinder attack/decay snap
 
 export var cp1H = 0.5, cp1S = 1.0, cp1V = 1.0; // Bottom floor colour (cyan)
-export var cp2H = 0.85, cp2S = 1.0, cp2V = 1.0; // Top floor colour (magenta)
+export var cp2H = 0.6, cp2S = 1.0, cp2V = 1.0; // Top floor colour (blue)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -169,14 +169,19 @@ export function beforeRender(delta) {
   // its vertical velocity slows to a floor-min creep (the "stop at the floor"
   // feel) but stays > 0, so carY always changes frame-to-frame.
   var fr = carPhase - floor(carPhase);
-  var tri = fr < 0.5 ? fr * 2.0 : 2.0 - fr * 2.0;     // 0..1 raw triangle
-  // Local slope of the triangle (|d tri / d carPhase|) is a constant 2 except it
-  // sign-flips at the vertex; the visible freeze comes from the slowdown around
-  // the floor snap (below) plus tiny per-frame steps. To guarantee non-zero motion
-  // we add a small ALWAYS-FORWARD breathing wobble to the resolved height so the
-  // car is forever inching even when the triangle dwell is slowest.
+  var tri = fr < 0.5 ? fr * 2.0 : 2.0 - fr * 2.0;     // 0..1 raw triangle (slope ref)
+  // A RAW triangle has a constant slope that SIGN-FLIPS instantly at each vertex —
+  // the car's vertical velocity reverses in one frame, a motion KINK (accelKink
+  // ~3900, ~9x local median, at every turnaround). The previous code computed
+  // carVelMag from the dwell but set `carY = tri` directly, never applying it.
+  // FIX: a raised-cosine ping-pong sweeps 0->1->0 over the SAME phase range (same
+  // climb extent + cadence) but its velocity (a sin) eases CONTINUOUSLY through
+  // zero at each turnaround — no slope sign-flip, kink gone. This also IS the
+  // documented "stop at the floor" decel feel. (The instant of zero vertical
+  // velocity at the tip can no longer freeze the rig: the strengthened ALWAYS-
+  // FORWARD shaft sawtooth below ticks every pixel every frame regardless.)
+  carY = 0.5 - 0.5 * cos(fr * PI2);                   // smooth ping-pong, 0..1
   var dwell = 0.5 - 0.5 * cos(tri * PI2);             // 0 at floors, 1 mid-travel
-  carY = tri;
   // |vertical velocity| this frame, floored so it is ALWAYS > 0 at the vertex —
   // the car slows to a creep at the floors (dwell low) but never freezes.
   carVelMag = 0.18 + 0.82 * dwell;                    // never 0 → never frozen
@@ -189,10 +194,20 @@ export function beforeRender(delta) {
     targetY = carY;
   }
 
-  // Arrival "ding": how close the gliding car is to its quantized floor.
-  var near = 1.0 - abs(carY - targetY) * (stepCount - 1.0) * 2.0;
-  if (near < 0.0) near = 0.0;
-  arrivalPulse = near * near;
+  // Arrival "ding": how close the gliding car is to its quantized floor. The
+  // distance proximity is built from abs(carY - targetY), which is a V with a
+  // CUSP at the floor centre — so the old `near = 1 - |..|`, `near*near` peaked at
+  // the centre with a sharp slope SIGN-FLIP (the arrival pulse rose to 1.0 then
+  // instantly reversed). On the Par row that cusp is injected straight into the
+  // colour via max(tColour, arrivalPulse) below — a motion KINK at every floor
+  // crossing (accelKink ~6400 at the Par pixel, the dominant px4 disc flag,
+  // independent of the triangle vertex). FIX: shape the pulse with a raised cosine
+  // of the SIGNED, normalised distance — peak 1 at the centre with ZERO derivative
+  // (no cusp), easing smoothly to 0 at the half-floor boundary. Same bell shape /
+  // "ding" feel, continuous through the centre.
+  var prox = abs(carY - targetY) * (stepCount - 1.0) * 2.0; // 0 at floor, 1 at midpoint
+  if (prox > 1.0) prox = 1.0;
+  arrivalPulse = 0.5 + 0.5 * cos(prox * PI);          // smooth bell, no centre cusp
 
   // ALWAYS-FORWARD shaft shimmer / floor-indicator creep (independent of the car
   // and its direction). Advances every frame on its own incommensurate rate, so
@@ -236,8 +251,15 @@ export function render3D(index, wx, wy, wz) {
   // "ding", not a brightness explosion — keeps total brightness tied to level
   // rather than to animation phase). The white blinder pop carries the impact.
   var outV = v;
-  if (isPar && arrivalPulse > 0.0) {
-    tColour = max(tColour, arrivalPulse);
+  if (isPar) {
+    // Shift the Par colour toward cp2 by the arrival pulse. The old
+    // `max(tColour, arrivalPulse)` is a MAX of two DIFFERENT curves (the flat
+    // visualY=0.5 floor vs the rising pulse): it cusps where they cross
+    // (arrivalPulse = 0.5) — a kink injected into the Par colour (the last residual
+    // disc flag at px4). Blend smoothly instead: tColour eases from the floor up to
+    // cp2 driven by the (already smooth, cusp-free) arrivalPulse, never below the
+    // floor, with no curve-crossing. Same "colour ding toward cp2 on arrival" look.
+    tColour = tColour + (1.0 - tColour) * arrivalPulse;
   }
 
   // PRIMARY audio: a level-driven full-rig SHAFT WASH carries the brightness
@@ -264,8 +286,28 @@ export function render3D(index, wx, wy, wz) {
   var shim = 1.0
     + 0.09 * (saw - 0.5)
     + 0.04 * sin((shimPhase * 0.71 + visualY * 2.3 + wx * 5.1) * PI2);
-  var wash = gain * (0.34 + 0.40 * visualY) * shim; // two-colour gradient up shaft
-  var combinedV = clamp01(wash + outV * 0.52 * gain);
+  // FAINT shaft indicator only: a small non-black floor (mission-critical
+  // visibility) carrying the always-forward shimmer so the rig is never static,
+  // but kept low so the crisp car core dominates over a near-black shaft (og
+  // identity). The car core rides at near-full gain as the bright accent.
+  var wash = gain * (BASE_FLOOR + 0.06 * visualY) * shim; // faint dark-shaft floor
+  // The shimmer above is MULTIPLICATIVE on the ~0.04 shaft floor, so on dark shaft
+  // pixels its per-frame ripple rounds to <1 LSB — when the car's vertical velocity
+  // is momentarily zero at a cosine turnaround the rig could read a static frame.
+  // Add a small ABSOLUTE always-forward sawtooth creep (independent of the floor
+  // magnitude, on its OWN brisk per-pixel rate) so EVERY pixel ticks >=1 LSB every
+  // frame regardless of the car. Tiny + spatially balanced (mean ~0) so it doesn't
+  // lift the shaft or disturb the level→brightness correlation.
+  var crawlRate = 16.0 + index * 0.21 + visualY * 7.0;
+  var crawl = shimPhase * crawlRate + index * 0.017;
+  crawl = crawl - floor(crawl);                       // 0..1 brisk always-rising sawtooth
+  wash = wash + 0.012 * (crawl - 0.5) * gain;
+  if (wash < 0.0) wash = 0.0;
+  // Bright crisp car core (og read full-brightness on the floor it occupies). The
+  // car carries its own near-full brightness lift on top of the level gain so the
+  // default look is a bright car over a near-black shaft; `level` still scales it.
+  var carBright = 0.45 + 0.55 * gain;   // bright at default, still level-reactive
+  var combinedV = clamp01(wash + outV * carBright);
 
   var r = (pr1 + (pr2 - pr1) * tColour) * combinedV;
   var g = (pg1 + (pg2 - pg1) * tColour) * combinedV;

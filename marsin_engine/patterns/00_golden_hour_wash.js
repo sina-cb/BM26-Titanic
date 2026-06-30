@@ -49,7 +49,9 @@ AUDIO_MODULATION_V1:
 
 // ── Exported controls (UI order = declaration order) ─────────────────────────
 export var localSpeed = 0.5;   // FIRST: wash drift rate
-export var direction  = 0.5;   // drift direction (0.5 center -> guarded freeze)
+export var direction  = 1.0;   // drift direction. STORED as a signed value (-1..1);
+                               // default 1.0 = full-speed forward. (0.5 was read as a
+                               // half-strength sign and halved the og wash drift rate.)
 export var level      = 0.5;   // overall brightness (PRIMARY) — mid, audio swings up
 export var kick       = 0.0;   // kick brightness pop on the warm colour body —
                                // transient target; a steady lift floods red and
@@ -64,8 +66,8 @@ export var whiteWarmth = 0.25; // WHITE: warm(A) <-> cool/UV(U) tint of the whit
                                // low default keeps golden-hour tungsten-warm; UV at
                                // 1 cools it. (0.5 introduces blue that breaks identity.)
 
-export var cp1H = 0.0,  cp1S = 1.0, cp1V = 1.0;  // deep red
-export var cp2H = 0.18, cp2S = 1.0, cp2V = 1.0;  // sunset amber-gold
+export var cp1H = 0.0,  cp1S = 1.0, cp1V = 1.0;  // deep red (og default)
+export var cp2H = 0.08, cp2S = 1.0, cp2V = 1.0;  // sunset orange (og default cp2H=0.08)
 export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
@@ -87,9 +89,19 @@ export function sliderWhiteKick(v)   { whiteKick = v; }
 export function sliderWhiteWarmth(v) { whiteWarmth = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
-var MAX_RATE = 0.55;          // drift turns/sec at localSpeed = 1.0
-var BASE_RATE = 0.06;         // creep so motion never fully stops at localSpeed=0
-var PHASE_WRAP = 10000.0;     // wrap accumulators far from any in-frame use (§7)
+var MAX_RATE = 1.05;          // drift turns/sec at localSpeed = 1.0 — tuned so that at
+                              // default sliders (direction=1, localMult=1) the wash drifts
+                              // at og-ballpark per-frame motion (og: tPhase += delta/1310.72;
+                              // raised vs 0.55 because the 2-wave blend is gentler than og's
+                              // single cubed wave, so a higher phase rate matches the look).
+var BASE_RATE = 0.10;         // creep so motion never fully stops at localSpeed=0
+// driftA/driftB feed wave() (period 1.0) with integer-coefficient terms, so an
+// INTEGER wrap is seam-free; 1000.0 keeps them far from float-precision breakdown.
+var PHASE_WRAP = 1000.0;
+// dirOsc feeds sin(); wrap it at a MULTIPLE OF 2π (not an arbitrary big number) so
+// sin(dirOsc) is continuous across the wrap — otherwise the wrap injects a phase
+// seam that makes the auto-reverse fire spuriously. 200π ≈ 628.3 (≈22.9 min @0.137).
+var OSC_WRAP = 628.31853071795862;  // 100 * 2π
 
 // ── Palette RGB cache (verbatim from 27_swipe) ───────────────────────────────
 var pr1 = 1, pg1 = 0, pb1 = 0;
@@ -133,7 +145,8 @@ function clamp01(v) {
 var driftA = 0.0;      // primary wash drift accumulator
 var driftB = 0.0;      // secondary (incommensurate) drift accumulator
 var dirOsc = 0.0;      // autonomous direction oscillator accumulator
-var autoSign = 1.0;    // current autonomous drift sign (occasionally flips)
+var autoSign = 1.0;    // current autonomous drift sign — CONTINUOUS soft-clipped
+                       // sin(dirOsc) in [-1,1], eases through reversals (no kink)
 var levGain = 1.0;     // resolved overall brightness gain this frame
 var radScale = 0.5;    // resolved radius this frame
 var kickBody = 0.0;    // resolved kick pop on the warm colour body this frame
@@ -155,16 +168,27 @@ export function beforeRender(delta) {
   var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);
   var rate = (BASE_RATE + MAX_RATE * localMult);
 
-  // Autonomous direction VARIATION: a slow incommensurate oscillator. When it
-  // crosses zero we flip the autonomous sign — clock-driven, irrational period,
-  // so flips feel organic, not metronomic.
-  var prevOsc = sin(dirOsc);
-  dirOsc = dirOsc + dt * 0.137;        // slow, ~0.137 rad/s (incommensurate)
-  if (dirOsc >= PHASE_WRAP) dirOsc = dirOsc - PHASE_WRAP;
-  var curOsc = sin(dirOsc * 1.41421);  // √2 multiplier -> non-repeating crossings
-  if ((prevOsc <= 0.0 && curOsc > 0.0) || (prevOsc >= 0.0 && curOsc < 0.0)) {
-    autoSign = -autoSign;
-  }
+  // Autonomous direction VARIATION: a slow oscillator. The autonomous drift sign
+  // is a CONTINUOUS odd function of sin(dirOsc) — clock-driven, ~half-period 22.9s,
+  // so the wash drifts one way for ~23s then eases back the other way, organically.
+  // CRITICAL #1: dirOsc must wrap at a multiple of 2π so sin(dirOsc) is continuous
+  //   across the wrap (otherwise a phase seam appears at the wrap).
+  // CRITICAL #2: the autonomous sign must change CONTINUOUSLY, never with a discrete
+  //   ±1 flip. A discrete flip leaves brightness continuous but instantly reverses
+  //   the drift VELOCITY — a sharp motion kink the wash visibly jerks through every
+  //   ~917 frames (a 2nd-difference / "accel" spike of ~6× the local median, ~9σ).
+  //   So autoSign is a SOFT-CLIPPED sin: it saturates to ±1 for most of each swing
+  //   (preserving the "drift this way, then that way" identity) but passes smoothly
+  //   through 0 at the reversal, so the velocity reverses without a discontinuity.
+  //   (The old code compared sin(dirOsc) against sin(dirOsc*1.41421) — two different
+  //   functions — so flips burst to ~1200/min once dirOsc grew, stalling/jittering.)
+  dirOsc = dirOsc + dt * 0.137;        // slow, ~0.137 rad/s
+  if (dirOsc >= OSC_WRAP) dirOsc = dirOsc - OSC_WRAP;  // wrap at 100*2π (seam-free)
+  var osc = sin(dirOsc);
+  // Soft clip: osc / sqrt(osc^2 + k^2) is a smooth odd sigmoid in [-1,1]. Small k
+  // (=0.06) makes it saturate near ±1 quickly so the drift spends most of its time
+  // at full speed (matching the old ±1 look) but eases through the reversal.
+  autoSign = osc / sqrt(osc * osc + 0.0036);   // k=0.06 -> k^2=0.0036
 
   // Effective drift sign: user direction (guarded, never 0) * autonomous sign.
   var effDir = direction;
@@ -248,9 +272,25 @@ export function render3D(index, x, y, z) {
   // white tint between amber (A) for tungsten warmth and UV (U) for a cool punch.
   // White stays ADDITIVE on top of the cp1<->cp2 wash — pars/bars keep colour.
   if (sectionId == 2) {
-    var ambW = whiteKeep * (0.18 + 0.20 * noise);   // calm warm white keep
-    var hitW = whiteBite * (0.6 + 0.4 * noise);     // hard blinder pop on kick
-    w = ambW + hitW * 2.0;                           // drive W HARD on the kick
+    // MOVING base white: like og line 81 (w = noise * 2.5), the W channel tracks
+    // the drifting `noise` field so the white ANIMATES at silence (no audio). The
+    // keep term is scaled BY noise (not a flat +constant) so it too goes to 0 in
+    // the dark troughs of the wash, instead of holding the W channel always-on.
+    var moveW = noise * 1.8;                          // og-style moving white core
+    var ambW  = whiteKeep * 0.55 * noise;            // warm white keep — FULLY noise
+                                                      // gated (no flat term) so it
+                                                      // vanishes in the wash troughs
+    var hitW  = whiteBite * (0.6 + 0.4 * noise);     // hard blinder pop on kick (additive)
+    var wRaw  = moveW + ambW + hitW * 2.0;           // moving base + keep + kick bite
+    // LOWER THRESHOLD so the white truly reaches 0 at low signal (fixes "white never
+    // fully turns off"). Subtract a floor then clamp >=0: in the wash troughs (and at
+    // low whiteLevel) wRaw < W_FLOOR and W collapses to genuine 0, while a bright wash
+    // core / raised whiteLevel / a kick still drives W up normally. With ambW now
+    // fully noise-gated, the only constant survivor would be hitW, so the resting
+    // (silence, kick=0) state floors to 0 across the dark troughs of the field.
+    var w_floor = 0.28;
+    w = wRaw - w_floor;
+    if (w < 0.0) w = 0.0;
     w = w * (0.35 + 0.65 * levGain);                // still gated by overall level
     if (w > 1.0) w = 1.0;
     // Tint the white: warm amber A when whiteTint low, cool/UV U when high.
