@@ -29,7 +29,7 @@
  * no hand-written --mod. Override with --mod to force a mapping.
  *
  * Usage:
- *   node tools/pattern_derived_harness.mjs --pattern patterns/64_drop_countdown.js \
+ *   node tools/pattern_derived_harness.mjs --pattern patterns/25_heartbeat.js \
  *        --synth edm_drop --model titanic --frames 240
  *
  *   --pattern  pattern file (required).
