@@ -472,3 +472,138 @@ test('boot drops a persisted pendingProgram', async () => {
   svc2.stop();
   assert.equal(svc2.state.pendingProgram, null, 'persisted lease dropped on boot');
 });
+
+// ── docs/38 §16 operator-takeover lease ───────────────────────────────────────
+
+test('getState surfaces planActive / operatorLease / operatorLeaseSec', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+  const st = svc.getState();
+  assert.ok('planActive' in st, 'has planActive');
+  assert.ok('operatorLease' in st, 'has operatorLease');
+  assert.ok('operatorLeaseSec' in st, 'has operatorLeaseSec');
+  // No takeover yet → plan is driving (autopilot baseline), lease null.
+  assert.equal(st.planActive, true, 'planActive true under autopilot');
+  assert.equal(st.operatorLease, null);
+  assert.equal(st.operatorLeaseSec, 120, 'default operatorLeaseSec surfaced');
+});
+
+test('takeover() sets mode overridden + arms lease; planActive false', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+  const r = svc.takeover();
+  assert.equal(r.ok, true);
+  assert.equal(typeof r.operatorLease.expiresAtMs, 'number');
+  assert.equal(svc.state.mode, 'overridden');
+  assert.equal(svc.state.controller, 'manual');
+  assert.equal(svc.state.operatorLease.expiresAtMs, svc.nowFn() + 120000, 'lease = now + operatorLeaseSec');
+  const st = svc.getState();
+  assert.equal(st.planActive, false, 'planActive false under overridden takeover');
+  assert.ok(st.operatorLease && st.operatorLease.expiresAtMs, 'lease surfaced in state');
+});
+
+test('takeover() is idempotent — re-calling refreshes expiry', async () => {
+  let nowMs = 1000;
+  const { svc } = setup({ now: 0 });
+  svc.nowFn = () => nowMs;
+  await svc.start();
+  svc.stop();
+  svc.takeover();
+  const first = svc.state.operatorLease.expiresAtMs;
+  nowMs += 5000;
+  const r = svc.takeover();
+  assert.ok(r.operatorLease.expiresAtMs > first, 'second takeover pushes expiry forward');
+  assert.equal(svc.state.operatorLease.expiresAtMs, nowMs + 120000);
+});
+
+test('activity() extends the lease expiry while overridden', async () => {
+  let nowMs = 1000;
+  const { svc } = setup({ now: 0 });
+  svc.nowFn = () => nowMs;
+  await svc.start();
+  svc.stop();
+  svc.takeover();
+  const before = svc.state.operatorLease.expiresAtMs;
+  nowMs += 10000;
+  const r = svc.activity();
+  assert.equal(r.ok, true);
+  assert.ok(svc.state.operatorLease.expiresAtMs > before, 'activity pushed expiry forward');
+  assert.equal(svc.state.operatorLease.expiresAtMs, nowMs + 120000);
+});
+
+test('activity() is a no-op when no lease is held', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+  // No takeover → no lease. activity must not arm one.
+  const r = svc.activity();
+  assert.equal(r.ok, true);
+  assert.equal(svc.state.operatorLease, null, 'activity must not arm a lease on its own');
+});
+
+test('tick past lease expiry → mode armed, lease cleared, catchUp resumed plan', async () => {
+  let nowMs = Date.UTC(2026, 7, 30, 2, 0, 0); // 19:00 PT
+  const { svc, calls } = setup({ now: 0 });
+  svc.nowFn = () => nowMs;
+  await svc.start();
+  svc.takeover();
+  assert.equal(svc.state.mode, 'overridden');
+  // Clear boot/baseline calls so we can prove catchUp re-established the baseline.
+  calls.loadPlaylist.length = 0;
+  calls.setAutopilot.length = 0;
+  // Advance past the lease expiry, then tick.
+  nowMs = svc.state.operatorLease.expiresAtMs + 1000;
+  await svc._tick();
+  svc.stop();
+  assert.equal(svc.state.mode, 'armed', 'mode released to armed');
+  assert.equal(svc.state.operatorLease, null, 'lease cleared on release');
+  // catchUp re-established the autopilot baseline (resume-at-now).
+  assert.ok(calls.loadPlaylist.map((c) => c.name).includes('baseline_pl'),
+    'catchUp re-established the baseline playlist on release');
+  assert.equal(svc.getState().planActive, true, 'plan driving again after release');
+});
+
+test('resume() clears operator lease + runs catchUp', async () => {
+  const { svc, calls } = setup();
+  await svc.start();
+  svc.stop();
+  svc.takeover();
+  assert.ok(svc.state.operatorLease, 'lease held after takeover');
+  calls.loadPlaylist.length = 0;
+  const r = await svc.resume();
+  assert.equal(r.mode, 'armed');
+  assert.equal(svc.state.operatorLease, null, 'resume clears the operator lease');
+  assert.ok(calls.loadPlaylist.map((c) => c.name).includes('baseline_pl'),
+    'resume re-established the baseline via catchUp');
+});
+
+test('boot drops a persisted operatorLease (never resume stale)', async () => {
+  const { svc, stateDir } = setup();
+  await svc.start();
+  svc.stop();
+  // Persist a stale operator lease into the state file.
+  svc.state.mode = 'overridden';
+  svc.state.operatorLease = { expiresAtMs: 1 };
+  svc._persistAndBroadcast();
+
+  // A fresh service over the SAME stateDir must drop the stale lease on boot.
+  const { deps } = makeDeps();
+  const svc2 = new TimelineService({
+    scene: 'summer_camp_dome',
+    sceneDir: svc.sceneDir,
+    stateDir,
+    getMood: () => ({ party: 0, value: 0 }),
+    deps,
+    broadcast: () => {},
+    config: {
+      enabled: true, activePlan: 'test_plan', tickMs: 1000,
+      mood: { key: 'audioParty', partyThreshold: 0.5 }, colorPalettes: PALETTES,
+    },
+    nowFn: () => Date.UTC(2026, 7, 30, 2, 0, 0),
+  });
+  await svc2.start();
+  svc2.stop();
+  assert.equal(svc2.state.operatorLease, null, 'persisted operator lease dropped on boot');
+});

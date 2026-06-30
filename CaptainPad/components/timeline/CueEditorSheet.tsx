@@ -5,21 +5,26 @@
  * Operates on a LOCAL working copy of a PlanCue; commits via onSave (the
  * parent inserts/replaces in the draft plan and fires a debounced preview).
  *
+ *   CUE NAME  text input  the operator-facing label for this cue
  *   KIND      segmented   program | mood | ambient
  *   TRIGGER   segmented   clock | sun | phase | mood | manual
  *               clock → HH:MM stepper
  *               sun   → event dropdown + offset ±min stepper
  *               phase → phase dropdown
  *               mood  → from/to segmented + dwell/cooldown steppers + whenPhase
- *   ACTION    segmented   look | playlist | scene
+ *   ACTION    segmented   playlist | look       (scene removed — see below)
+ *               playlist → dropdown (GET /playlists) + target (deck|mixer) + autopilot
  *               look     → dropdown of plan.looks
- *               playlist → dropdown (GET /playlists) + target + autopilot
- *               scene    → dropdown of known scenes
  *   HOLD      none | minutes stepper            (programs only)
  *   DAYS      This day | All days | Pick…       (Pick = day-index toggles)
+ *
+ * PLAYLIST is the primary/default action (the simple path). LOOK is the
+ * optional bundle (playlist + palette + globals, defined in plan.looks).
+ * The `scene` action is deliberately NOT authored here: a scene switch
+ * restarts the engine — dangerous + irrelevant inside the maker.
  */
 import React, { useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable, StyleSheet } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Modal, Pressable, StyleSheet } from 'react-native';
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import {
@@ -30,18 +35,12 @@ import {
 } from './timelineTemplate';
 import { Segmented, Stepper, Dropdown, ToggleChip, FieldLabel } from './makerControls';
 
-// Scenes the operator can target. Kept explicit (small, stable set) rather
-// than a runtime fetch so the dropdown never flashes empty; the engine
-// ignores an unknown scene loudly via the preview 400 if it drifts.
-const SCENE_OPTIONS = [
-  { id: 'titanic', label: 'titanic' },
-  { id: 'test_bench', label: 'test_bench' },
-];
-
-const TARGET_OPTIONS: { id: 'deck' | 'mixer' | 'all'; label: string }[] = [
+// Playlist target channels the maker offers. DECK or MIXER only — `all` is a
+// hand-authored escape hatch the engine still validates, but it's removed from
+// the maker UI (a mixer target additionally needs a channel id; see below).
+const TARGET_OPTIONS: { id: 'deck' | 'mixer'; label: string }[] = [
   { id: 'deck', label: 'Deck' },
   { id: 'mixer', label: 'Mixer' },
-  { id: 'all', label: 'All' },
 ];
 
 function defaultTrigger(type: CueTrigger['type']): CueTrigger {
@@ -56,9 +55,8 @@ function defaultTrigger(type: CueTrigger['type']): CueTrigger {
 
 function defaultAction(type: CueAction['type'], firstLook: string | null): CueAction {
   switch (type) {
-    case 'look': return { type: 'look', look: firstLook || '' };
     case 'playlist': return { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } };
-    case 'scene': return { type: 'scene', scene: 'titanic' };
+    case 'look': return { type: 'look', look: firstLook || '' };
     case 'globals': return { type: 'globals', set: {} };
   }
 }
@@ -98,7 +96,7 @@ export function CueEditorSheet({
   const [kind, setKind] = useState<CueKind>('program');
   const [label, setLabel] = useState<string>('');
   const [trigger, setTrigger] = useState<CueTrigger>(defaultTrigger('clock'));
-  const [action, setAction] = useState<CueAction>(defaultAction('look', lookNames[0] || null));
+  const [action, setAction] = useState<CueAction>(defaultAction('playlist', lookNames[0] || null));
   const [holdMin, setHoldMin] = useState<number | null>(null);
   const [days, setDays] = useState<CueDays>('all');
   // DAYS mode is EXPLICIT state, driven by the segmented control — NOT derived
@@ -123,7 +121,7 @@ export function CueEditorSheet({
       setKind('program');
       setLabel('');
       setTrigger(defaultTrigger('clock'));
-      setAction(defaultAction('look', lookNames[0] || null));
+      setAction(defaultAction('playlist', lookNames[0] || null));
       setHoldMin(null);
       setDays([dayIndex]); // new cue defaults to "this day"
       setDaysModeState('this');
@@ -298,20 +296,6 @@ export function CueEditorSheet({
 
   // ── Action sub-editors ──
   const renderActionBody = () => {
-    if (action.type === 'look') {
-      return (
-        <View style={styles.subBlock}>
-          <FieldLabel>LOOK</FieldLabel>
-          <Dropdown
-            value={action.look || null}
-            options={lookNames.map((l) => ({ id: l, label: l }))}
-            onSelect={(id) => setAction({ type: 'look', look: id })}
-            placeholder="Pick a look…"
-            emptyHint="This plan defines no looks."
-          />
-        </View>
-      );
-    }
     if (action.type === 'playlist') {
       const ap = action.autopilot ?? {};
       const target = action.target ?? { channel: 'deck' as const, id: null };
@@ -329,9 +313,30 @@ export function CueEditorSheet({
           <FieldLabel>TARGET</FieldLabel>
           <Segmented
             options={TARGET_OPTIONS}
-            value={target.channel}
-            onChange={(ch) => setAction({ ...action, target: { channel: ch, id: target.id } })}
+            value={target.channel === 'mixer' ? 'mixer' : 'deck'}
+            onChange={(ch) => setAction({
+              ...action,
+              // Deck targets the main deck (id always null); mixer needs a
+              // channel id (preserve any typed id when re-selecting mixer).
+              target: ch === 'mixer' ? { channel: 'mixer', id: target.id } : { channel: 'deck', id: null },
+            })}
           />
+          {target.channel === 'mixer' ? (
+            <>
+              <View style={{ height: 8 }} />
+              <FieldLabel>MIXER CHANNEL ID</FieldLabel>
+              <TextInput
+                value={target.id ?? ''}
+                onChangeText={(t) => setAction({ ...action, target: { channel: 'mixer', id: t.trim() || null } })}
+                placeholder="e.g. ch_1"
+                placeholderTextColor={C.icon}
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={styles.textInput}
+                accessibilityLabel="Mixer channel id"
+              />
+            </>
+          ) : null}
           <View style={{ height: 8 }} />
           <ToggleChip
             on={!!ap.active}
@@ -360,15 +365,20 @@ export function CueEditorSheet({
         </View>
       );
     }
-    if (action.type === 'scene') {
+    if (action.type === 'look') {
       return (
         <View style={styles.subBlock}>
-          <FieldLabel>SCENE</FieldLabel>
+          <FieldLabel>LOOK</FieldLabel>
           <Dropdown
-            value={action.scene || null}
-            options={SCENE_OPTIONS}
-            onSelect={(id) => setAction({ type: 'scene', scene: id })}
+            value={action.look || null}
+            options={lookNames.map((l) => ({ id: l, label: l }))}
+            onSelect={(id) => setAction({ type: 'look', look: id })}
+            placeholder="Pick a look…"
+            emptyHint="This plan defines no looks."
           />
+          <Text style={[styles.hint, { marginTop: 8 }]}>
+            A look = a playlist + its palette/brightness, reused by cues.
+          </Text>
         </View>
       );
     }
@@ -396,7 +406,21 @@ export function CueEditorSheet({
                 margin + slack) so the last DAYS / SHUFFLE controls aren't
                 hidden behind it. */}
             <ScrollView style={{ maxHeight: 560 }} contentContainerStyle={{ paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
+              {/* CUE NAME — the operator-facing label (engine cue.label, optional). */}
+              <FieldLabel>CUE NAME</FieldLabel>
+              <TextInput
+                value={label}
+                onChangeText={setLabel}
+                placeholder="Name this cue…"
+                placeholderTextColor={C.icon}
+                autoCapitalize="sentences"
+                autoCorrect={false}
+                style={styles.textInput}
+                accessibilityLabel="Cue name"
+              />
+
               {/* KIND */}
+              <View style={{ height: 14 }} />
               <FieldLabel>KIND</FieldLabel>
               <Segmented
                 options={[
@@ -429,11 +453,10 @@ export function CueEditorSheet({
               <FieldLabel>ACTION</FieldLabel>
               <Segmented
                 options={[
-                  { id: 'look', label: 'Look' },
                   { id: 'playlist', label: 'Playlist' },
-                  { id: 'scene', label: 'Scene' },
+                  { id: 'look', label: 'Look' },
                 ]}
-                value={action.type === 'globals' ? 'look' : action.type}
+                value={action.type === 'globals' ? 'playlist' : action.type}
                 onChange={(v) => {
                   // Only reset to a default when the action TYPE actually
                   // changes — re-tapping the current segment must not clobber
@@ -575,6 +598,18 @@ function makeStyles(C: Palette) {
       fontFamily: 'Inter_400Regular',
       fontSize: 12,
       color: C.secondary,
+    },
+    textInput: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 14,
+      color: C.text,
+      minHeight: 44,
+      paddingVertical: 10,
+      paddingHorizontal: 14,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+      backgroundColor: C.surfaceContainerHigh,
     },
     pickRow: {
       flexDirection: 'row',

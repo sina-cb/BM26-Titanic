@@ -3456,6 +3456,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         activePlan: timelineConfigBlock.activePlan || 'playa_default',
         tickMs: timelineConfigBlock.tickMs || 1000,
         programLeaseSec: timelineConfigBlock.programLeaseSec || 30,
+        operatorLeaseSec: timelineConfigBlock.operatorLeaseSec || 120,
         mood: { key: timelineMoodKey, partyThreshold: timelinePartyThreshold },
         colorPalettes: Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [],
       },
@@ -4350,10 +4351,36 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
       });
     } else if (req.url === '/timeline/resume' && req.method === 'POST') {
+      // Explicit operator hand-back (docs/38 §14.5 + §16): clear pause/override
+      // + operator lease, resume the plan at now (catchUp). Async now.
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
-      const r = timelineService.resume();
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, ...r }));
+      timelineService.resume()
+        .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
+        .catch(e => { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); });
+    } else if (req.url === '/timeline/takeover' && req.method === 'POST') {
+      // Operator-takeover lease ARM (docs/38 §16): CaptainPad signals the
+      // operator grabbed manual control. mode→overridden, arm the lease.
+      // Idempotent (re-calling refreshes expiry).
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const r = timelineService.takeover();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(r));
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/timeline/activity' && req.method === 'POST') {
+      // Operator-activity ping (docs/38 §16): CaptainPad throttles to ~once/10s
+      // while interacting; refreshes the takeover lease expiry. No-op if no
+      // lease is held.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const r = timelineService.activity();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(r));
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
     } else if (req.url === '/timeline/program/end' && req.method === 'POST') {
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
       timelineService.endProgram()

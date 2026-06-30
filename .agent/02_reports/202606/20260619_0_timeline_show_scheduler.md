@@ -323,3 +323,16 @@ message → duplicate from BRC template) — by design; add a "wrap in festival"
 affordance if wanted. (b) sim visuals are muted on test_bench (sparse patching) —
 full fidelity on the patched titanic model. (c) optional: HIL/local validation on
 real hardware (the hand-off step).
+
+### 5.3 Operator-takeover lease (2026-06-30)
+Added the auto-resuming MANUAL takeover lease (`docs/38 §16.8`): `POST
+/timeline/takeover` arms `operatorLease` + `mode='overridden'` (deck frozen),
+`POST /timeline/activity` (CaptainPad pings ~once/10s) refreshes its expiry, and
+the tick RELEASES it after `timeline.operatorLeaseSec` (default 120s) of
+inactivity — running `_catchUp()` to **resume the plan at the wall-clock time of
+release**. `/resume` does the same hand-back explicitly. New `timelineState`
+fields: `planActive`, `operatorLease{expiresAtMs}`, `operatorLeaseSec`. Coexists
+with the §16.5 pending-program lease (30s, program auto-start) — distinct
+concepts, both kept. `operatorLease` is runtime-only (dropped on boot). 27
+timeline_service tests (9 new), 121 timeline tests green; live auto-resume
+smoked on a real tick.

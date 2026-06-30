@@ -918,6 +918,89 @@ the existing `/program/end`, `/mode`, `/autopilot`, `/hold`, `/resume`).
 | V12 | restart mid-show | re-derived (no stale ghost); correct owner; deck not stuck |
 | V13 | missing baseline playlist on resume | loud error; deck not silently broken |
 
+### 16.8 Operator-takeover lease (the auto-resuming MANUAL takeover)
+
+> Operator: *"When a plan is active and an operator takes over (interacts with
+> the rig), put a LEASE on the plan; when there's no UI interaction for 2 minutes
+> (configurable), RELEASE the lease and CONTINUE THE PLAN at the exact wall-clock
+> time of release."*
+
+This is the **second** lease in the protocol and it is distinct from the
+pending-program lease of §16.5 — they coexist:
+
+| | `pendingProgram` (§16.5) | `operatorLease` (§16.8) |
+|---|---|---|
+| What armed it | a due **PROGRAM** waiting while the operator is in a MANUAL sub-state | the operator's **manual TAKEOVER** of an active plan |
+| Window | `programLeaseSec` (default **30 s**) | `operatorLeaseSec` (default **120 s**) |
+| On expiry | the due **program auto-starts** (show goes on) | the **whole plan resumes at now** (catchUp re-derives owner/look) |
+| Driven by | the arbiter (a program coming due in manual) | **CaptainPad** (UI signals takeover + sends activity pings) |
+
+The operator-takeover lease is **UI-DRIVEN**: the engine does **not** auto-detect
+operator writes. CaptainPad explicitly signals the takeover (`POST
+/timeline/takeover`) when the operator grabs the rig, and sends activity pings
+(`POST /timeline/activity`, throttled to ~once/10 s) while the operator keeps
+interacting. Inactivity for `operatorLeaseSec` releases the lease.
+
+**State machine.**
+
+```
+        takeover  (operator grabs the rig — UI signal)
+              │
+              ▼
+   ┌────────────────────────────────────────────┐
+   │ OVERRIDDEN  mode='overridden'               │   activity (UI ping)
+   │   operatorLease = {                         │◀──────────────  refresh
+   │     expiresAtMs = now + operatorLeaseSec*1k │   expiresAtMs = now + window
+   │   }                                         │   (idempotent: takeover also
+   │   controller='manual' → deck FROZEN (§16.6) │    refreshes)
+   └──────┬─────────────────────────┬───────────┘
+     lease-exp (now ≥ expiresAtMs)   resume (operator hand-back)
+     (no UI activity)                /timeline/resume
+          │                                │
+          ▼                                ▼
+   RELEASE: mode='armed',           clear operatorLease,
+   clear operatorLease,             mode='armed', then
+   then _catchUp()  ────────────►   _catchUp()  (same resume-at-now)
+   "continue the plan at the        — explicit, operator-initiated
+    exact time of release"
+```
+
+- **`mode='overridden'`** routes to `controller='manual'` via the arbiter, and
+  the §16.6 baseline reconcile **freezes the deck** under manual (verified:
+  `_reconcileBaselineArm` disarms the baseline when `controller !== 'autopilot'`).
+- **RELEASE = resume-at-now.** On lease expiry (or explicit `/resume`) the
+  service runs the existing **`_catchUp()`** — which re-derives the correct
+  program/look for the **current** wall-clock and re-establishes the baseline.
+  So a 2-minute takeover that straddled a sunset cue resumes into the *right*
+  look for the time it actually is, not the look it left.
+- **`/activity` is a no-op without a lease** — it never arms one on its own; only
+  `/takeover` arms a lease.
+- **Runtime, never stale.** `operatorLease` is RUNTIME state; `_catchUp` drops a
+  persisted lease on boot/scene-switch (§16.6/I6) so a stale lease never
+  auto-resumes after a restart.
+
+**State fields** (on `timelineState` getState + WS broadcast, alongside the
+existing `controller`/`mode`/`pendingProgram`/`activeProgram`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `planActive` | boolean | the timeline is actively DRIVING the rig: `controller ∈ {autopilot, program}` AND `mode` is not paused/overridden |
+| `operatorLease` | `{ expiresAtMs } \| null` | non-null WHILE the operator holds the takeover lease; `expiresAtMs` = when the plan auto-resumes |
+| `operatorLeaseSec` | number | the configured window (UI seeds/show countdowns from this) |
+
+**Routes.**
+
+| Route | Effect |
+|---|---|
+| `POST /timeline/takeover` | operator grabbed manual control: `mode='overridden'`, `operatorLease={expiresAtMs: now + operatorLeaseSec*1000}`. Idempotent (re-call refreshes expiry). Returns `{ok:true, operatorLease}` |
+| `POST /timeline/activity` | if `mode==='overridden'` and a lease is held, refresh `expiresAtMs`; else no-op. Returns `{ok:true}` |
+| `POST /timeline/resume` | (existing) explicit hand-back: clears `operatorLease`, `mode='armed'`, **runs catchUp** (resume-at-now) |
+
+**Config key.** `config.yaml → timeline.operatorLeaseSec: 120` (seconds, the
+inactivity window). `/mode {paused}` remains a **separate hard pause** with **no
+auto-resume** — the operator-takeover lease is the auto-resuming concept; a hard
+pause is not.
+
 ---
 
 ## 17. What this deliberately is **not** (v1)

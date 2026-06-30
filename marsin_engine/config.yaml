@@ -15,8 +15,8 @@ server:
   port: 6968
 playlist:
   active: true
-  delay_s: '2'
-  shuffle: false
+  delay_s: '45'
+  shuffle: true
 web_client:
   enabled: false
   port: 6967
@@ -85,6 +85,7 @@ timeline:
   activePlan: playa_default
   tickMs: 1000
   programLeaseSec: 30
+  operatorLeaseSec: 120
   mood:
     key: audioParty
     partyThreshold: 0.5

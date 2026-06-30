@@ -77,6 +77,15 @@ export interface TimelinePendingProgram {
 export type TimelineMode = 'armed' | 'paused' | 'holding' | 'overridden';
 export type TimelineController = 'autopilot' | 'program' | 'manual';
 
+// Operator-takeover lease (the DECK/MIXER manual-override lease, distinct from
+// the pending-program lease above). Non-null while an operator has taken the
+// rig over from a running plan; `expiresAtMs` is the wall-clock at which the
+// engine auto-releases (no UI activity for `operatorLeaseSec`) and the plan
+// resumes at catchUp. Null when no takeover is held.
+export interface TimelineOperatorLease {
+  expiresAtMs: number;
+}
+
 export interface TimelineState {
   mode: TimelineMode;
   scene: string | null;
@@ -87,6 +96,17 @@ export interface TimelineState {
   activeProgram: TimelineActiveProgram | null;
   // The armed pending-program lease (docs/38 §16.5), or null when none is due.
   pendingProgram: TimelinePendingProgram | null;
+  // True when the controller is autopilot/program AND the mode is not
+  // paused/overridden — i.e. the plan is actively driving the rig. This is the
+  // primary "plan is live" signal the deck/mixer plan indicator reads.
+  planActive: boolean;
+  // The operator-takeover lease (manual override of a running plan), or null
+  // when no takeover is held. See TimelineOperatorLease.
+  operatorLease: TimelineOperatorLease | null;
+  // The configured inactivity window (config.yaml `timeline.operatorLeaseSec`),
+  // e.g. 120. After this many seconds without UI activity the engine releases
+  // the takeover lease and resumes the plan.
+  operatorLeaseSec: number;
   currentPhase: string | null;
   currentMood: string | null;
   party: number | boolean;
@@ -184,9 +204,12 @@ export interface ActionPlaylist {
   target?: PlanTarget;
   autopilot?: PlanAutopilotInline;
 }
-export interface ActionScene { type: 'scene'; scene: string }
 export interface ActionGlobals { type: 'globals'; set: Record<string, unknown> }
-export type CueAction = ActionLook | ActionPlaylist | ActionScene | ActionGlobals;
+// NOTE: the engine also validates a `scene` action, but the maker deliberately
+// does NOT author it — a scene switch RESTARTS the engine, which is dangerous
+// and irrelevant inside the timeline maker. So `scene` is omitted from this
+// union (the maker never emits it; the engine still accepts hand-authored ones).
+export type CueAction = ActionLook | ActionPlaylist | ActionGlobals;
 
 export interface PlanTarget { channel: 'deck' | 'mixer' | 'all'; id: string | null }
 export interface PlanAutopilotInline { active?: boolean; delay_s?: number; shuffle?: boolean }
@@ -347,4 +370,21 @@ export function dismissTimelineProgram(): Promise<ApiResult<unknown>> {
 
 export function fireTimelineCue(id: string): Promise<ApiResult<unknown>> {
   return timelineSend('POST', `/timeline/cues/${encodeURIComponent(id)}/fire`);
+}
+
+// ── Operator-takeover lease actions (DECK/MIXER manual override) ─────────
+// The operator manipulates a manual control while a plan is driving the rig:
+// the engine flips mode='overridden' / controller='manual' and arms a lease.
+// Idempotent — re-firing re-arms/refreshes the lease. No body; the engine
+// returns the standard {ok} / {ok:false,error} envelope (Codex P0: fail loud).
+export function postTimelineTakeover(): Promise<ApiResult<{ operatorLease?: TimelineOperatorLease }>> {
+  return timelineSend('POST', '/timeline/takeover');
+}
+
+// Refresh the takeover lease expiry to now+operatorLeaseSec IF a lease is held
+// (mode overridden); a harmless no-op (still {ok:true}) otherwise. Throttle the
+// caller — this should track real UI interaction, not fire on a fixed idle
+// timer, so genuine inactivity actually expires the lease engine-side.
+export function postTimelineActivity(): Promise<ApiResult<unknown>> {
+  return timelineSend('POST', '/timeline/activity');
 }
