@@ -1209,6 +1209,11 @@ async function main() {
   // actually moves (the arbiter's tick() updates mixer.tempoBpm but never
   // broadcasts) — keeps the BPM readout tracking live OSC without per-frame churn.
   let lastBroadcastTempoBpm = mixer.tempoBpm;
+  // Also track the derived tempo SOURCE so a liveness transition (e.g. OSC
+  // drops while pref='osc' → 'osc'→'held') rebroadcasts even though tempoBpm
+  // holds — otherwise the source/liveness badge would stay stale on the UIs
+  // until the next operator action. Cheap: deriveSource() is two field reads.
+  let lastBroadcastSource = tempoArbiter.deriveSource(Date.now());
 
   const loop = createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, paramCenter, (stats) => {
     broadcastStatsRef.publish(stats);
@@ -1241,8 +1246,11 @@ async function main() {
       // so the BPM readout tracks the live OSC tempo (only-on-change; the
       // arbiter itself never broadcasts, and a mixer broadcast otherwise only
       // fires on operator actions — so OSC drift would look frozen).
-      if (mixer.tempoBpm !== lastBroadcastTempoBpm && apiServer && typeof apiServer.broadcastMixerState === 'function') {
+      const curSource = tempoArbiter.deriveSource(Date.now());
+      if ((mixer.tempoBpm !== lastBroadcastTempoBpm || curSource !== lastBroadcastSource)
+          && apiServer && typeof apiServer.broadcastMixerState === 'function') {
         lastBroadcastTempoBpm = mixer.tempoBpm;
+        lastBroadcastSource = curSource;
         apiServer.broadcastMixerState();
       }
       // BPM → SPEED sync (source-agnostic): the arbiter may have just moved

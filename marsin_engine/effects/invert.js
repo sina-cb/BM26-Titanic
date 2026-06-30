@@ -39,11 +39,18 @@ export function applyInvert({ pixels, enabled }) {
 
   for (let i = 0; i < pixels.length; i++) {
     const px = pixels[i];
-    // W/A/U (px.w / px.a / px.u) are NOT touched.
-    px.r = 1 - px.r;
-    px.g = 1 - px.g;
-    px.b = 1 - px.b;
+    // W/A/U (px.w / px.a / px.u) are NOT touched. Clamp the inverted value into
+    // [0,1] — an over-gamut input (e.g. an additive blend leaving r=1.2) would
+    // otherwise invert to a negative, leaving an out-of-range value in the
+    // buffer for any downstream stage. Mirrors hue_shift's post-clamp.
+    px.r = clamp01(1 - px.r);
+    px.g = clamp01(1 - px.g);
+    px.b = clamp01(1 - px.b);
   }
+}
+
+function clamp01(v) {
+  return v < 0 ? 0 : (v > 1 ? 1 : v);
 }
 
 export const invertEffect = {
