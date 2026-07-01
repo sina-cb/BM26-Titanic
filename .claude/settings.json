@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/scripts/security_check.py\" --hook-gate",
+            "timeout": 120,
+            "statusMessage": "Security gate: scanning pending changes for secrets/PII…"
+          }
+        ]
+      }
+    ]
+  }
+}

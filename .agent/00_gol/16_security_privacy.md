@@ -64,6 +64,46 @@ admins too). A failing scan therefore physically prevents the merge.
 silence one finding. If the scanner is wrong, fix the scanner — loudly,
 in its config, with a comment.
 
+### Pre-commit gate — REQUIRED before every `git commit`
+
+Committing is gated locally, before anything reaches a branch:
+
+- **Agent rule (P0): a `git commit` may only happen after the staged
+  changes pass the security check.** The check is one command:
+
+  ```bash
+  python scripts/security_check.py --staged
+  ```
+
+  It prints `SECURITY CHECK PASSED` (exit 0) or a findings list with
+  redaction instructions (exit 1). If it fails: redact, restage, re-run.
+  Never work around it with `--no-verify` — CI catches it on the PR
+  anyway and by then the secret is already in pushed history.
+
+- **Enforcement layer 1 — git hook:** `.githooks/pre-commit` runs that
+  same command automatically on every commit. Git does not auto-enable
+  hooks, so each clone needs a one-time setup:
+
+  ```bash
+  git config core.hooksPath .githooks
+  ```
+
+  (Set once per clone; worktrees inherit it. If `deploy.py`-style tools
+  ever commit programmatically, they go through the same hook.)
+
+- **Enforcement layer 2 — Claude Code:** the committed
+  `.claude/settings.json` carries a `PreToolUse` hook that intercepts
+  any Bash `git commit` and runs the gate (including `-a` commits:
+  it scans tracked-unstaged changes too). A failing scan blocks the
+  tool call and feeds the findings back to the agent.
+
+- **Enforcement layer 3 — CI:** the PR scan + `protect-main` ruleset
+  (below) backstop both local layers.
+
+The gate needs a `gitleaks` binary or Docker. If neither is available it
+BLOCKS the commit — availability problems are fixed by installing the
+scanner, never by skipping the check.
+
 ### Scanning locally before you push
 
 ```bash

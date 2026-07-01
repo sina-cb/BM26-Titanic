@@ -58,6 +58,12 @@ new work; file follow-ups there as `Backlog` cards.
 - **No git operations until explicitly asked** by the human op. Never use
   `git reset --hard` / `git checkout --` to hide test side effects. Before
   claiming merge-ready, run the touched subsystems' auto-check specs.
+- **Every `git commit` requires a passing security check first** — this repo
+  is PUBLIC. Run `python scripts/security_check.py --staged` (PASS/FAIL with
+  fix instructions); the `.githooks/pre-commit` hook and a Claude Code
+  PreToolUse gate enforce it, and CI re-checks the PR. Never `--no-verify`.
+  New clone? `git config core.hooksPath .githooks` once. Full rules:
+  `.agent/00_gol/16_security_privacy.md`.
 - **Follow the GoL branch-naming convention** (`.agent/00_gol/01_git.md` →
   Branch Naming and Lifecycle): this is an **agent-agnostic** repo, so no agent
   name goes in a branch. Durable work lives on `feat/<snake_case>`; multi-agent

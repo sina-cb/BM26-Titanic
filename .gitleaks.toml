@@ -130,6 +130,7 @@ paths = [
   '''(^|/)node_modules/''',
   '''(^|/)dist/''',
   '''(^|/)build/''',
+  '''(^|/)__pycache__/''',              # gitignored bytecode; only visible to --no-git local scans
   '''\.example$''',                       # committed *.example credential templates
   '''(^|/)package-lock\.json$''',
   '''(^|/)yarn\.lock$''',
@@ -151,7 +152,7 @@ description = "Obvious placeholder / redacted / env values"
 regexTarget = "match"
 regexes = [
   '''(?i)(your[_-]?|example|placeholder|change[_-]?me|dummy|redacted|sample|test[_-]?only|foo|bar|xxx+)''',
-  '''(?i)\b(00:00:00|ff:ff:ff|aa:bb:cc|de:ad:be|11:22:33|12:34:56)''',  # placeholder / broadcast MACs
+  '''(?i)^(00:00:00|ff:ff:ff|aa:bb:cc|de:ad:be|11:22:33|12:34:56|02:00:00)''',  # placeholder / broadcast / synthetic-test MACs (anchored: only as the LEADING octets — a real MAC containing these mid-string still fails; 02:00:00 = locally-administered test fixtures)
   '''(?i)(0011223344|0123456789|abcdef0123|deadbeef)''',                # obvious sequential example hex
   '''(\$\{?[A-Z0-9_]+\}?|env:|<[^>]+>)''',                               # ${ENV}, env:, <token>
   '''LookingGlass-Panel''',  # intentional broadcast AP name — config.yaml documents it as non-secret (creds come from $BM26_SECRETS)

@@ -162,5 +162,10 @@ simulation/scenes/*/playlists/hil_*.yaml
 !simulation/vendor/three/build/
 !simulation/vendor/three/build/**
 
-# Claude Code local settings + agent worktrees (machine-local / transient)
-.claude/
+# Claude Code local settings + agent worktrees (machine-local / transient).
+# `.claude/*` (not `.claude/`) so the negation below can re-include the
+# COMMITTED project settings — the pre-commit security-gate hook lives
+# there and must ship with the repo. Everything else under .claude/
+# (settings.local.json, worktrees/, projects/) stays ignored.
+.claude/*
+!.claude/settings.json
