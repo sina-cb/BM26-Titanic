@@ -20,7 +20,7 @@ import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { OverviewDay, PlanCue, ShowPlan } from '@/utils/timelineApi';
 import {
-  hhmmToMinutes, kindColor, KIND_LABEL, triggerSummary, actionSummary,
+  hhmmToMinutes, hhmmTo12h, minutesTo12h, kindColor, KIND_LABEL, triggerSummary, actionSummary,
 } from './timelineTemplate';
 
 interface SunRow {
@@ -129,9 +129,7 @@ export function DayEditor({
     return out;
   }, [sunRows, draftCuesForDay, atLocalById, nowMinutes]);
 
-  const nowLabel = nowMinutes !== null
-    ? `${String(Math.floor(nowMinutes / 60)).padStart(2, '0')}:${String(nowMinutes % 60).padStart(2, '0')}`
-    : '';
+  const nowLabel = nowMinutes !== null ? minutesTo12h(nowMinutes) : '';
 
   return (
     <Modal transparent visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -176,7 +174,7 @@ export function DayEditor({
                   if (it.type === 'sun') {
                     return (
                       <View key={it.key} style={styles.sunRow}>
-                        <Text style={styles.sunTime}>{it.row.time}</Text>
+                        <Text style={styles.sunTime}>{hhmmTo12h(it.row.time, it.row.time)}</Text>
                         <IconSymbol name="sun.max" size={16} color={C.secondary} />
                         <Text style={styles.sunLabel}>{it.row.label}</Text>
                       </View>
@@ -198,7 +196,7 @@ export function DayEditor({
                       accessibilityLabel={`Edit cue ${cue.label || cue.id}`}
                     >
                       <View style={styles.cueTimeCol}>
-                        <Text style={styles.cueTime}>{at || (pending ? '···' : '—')}</Text>
+                        <Text style={styles.cueTime}>{hhmmTo12h(at, pending ? '···' : '—')}</Text>
                         <View style={[styles.kindDot, { backgroundColor: col }]} />
                       </View>
                       <View style={{ flex: 1, minWidth: 0 }}>
@@ -318,7 +316,7 @@ function makeStyles(C: Palette) {
       fontFamily: 'SpaceGrotesk_700Bold',
       fontSize: 13,
       color: C.secondary,
-      width: 52,
+      width: 72,
     },
     sunLabel: {
       fontFamily: 'Inter_400Regular',
@@ -341,7 +339,7 @@ function makeStyles(C: Palette) {
     },
     cueTimeCol: {
       alignItems: 'center',
-      width: 52,
+      width: 72,
       gap: 4,
     },
     cueTime: {
@@ -385,7 +383,7 @@ function makeStyles(C: Palette) {
     nowTime: {
       fontFamily: 'SpaceGrotesk_700Bold',
       fontSize: 13,
-      width: 52,
+      width: 72,
     },
     nowDot: {
       width: 8,

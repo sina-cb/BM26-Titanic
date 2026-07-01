@@ -35,7 +35,7 @@ import {
   DeckTransitionMode, ActionOverlays, DECK_TRANSITION_MODES, DECK_TRANSITION_MODE_LABEL,
 } from '@/utils/timelineApi';
 import {
-  hhmmToMinutes, minutesToHHMM, SUN_EVENT_OPTIONS, MOOD_VALUES,
+  hhmmToMinutes, minutesToHHMM, minutesTo12h, SUN_EVENT_OPTIONS, MOOD_VALUES,
 } from './timelineTemplate';
 import { Segmented, Stepper, Dropdown, ToggleChip, FieldLabel } from './makerControls';
 import { DualSwatch } from '@/components/ColorPickerModal';
@@ -339,7 +339,10 @@ export function CueEditorSheet({
       const mins = hhmmToMinutes(trigger.at) ?? 1200;
       return (
         <View style={styles.subBlock}>
-          <FieldLabel>TIME (HH:MM)</FieldLabel>
+          <FieldLabel>TIME</FieldLabel>
+          {/* AM/PM summary of the chosen 24h stepper value (operator preference:
+              clock times read as AM/PM everywhere). The steppers stay 24h. */}
+          <Text style={[styles.hint, { marginBottom: 8, color: C.text }]}>{minutesTo12h(mins)}</Text>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <View style={{ flex: 1 }}>
               <Stepper
