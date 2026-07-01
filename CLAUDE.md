@@ -28,7 +28,8 @@ python style · `02` nodejs style · `03/04/05` auto-checks (CaptainPad / sim /
 engine) · `06` run sim · `07` run engine · `08` MarsinScript patterns ·
 `09` iPad builds · `10` auto-patcher · `11` UI design · `12` Raspberry Pi ·
 `13` multi-agent worktrees · `14` task tracking (Notion) · `15` pattern catalog
-(multi-page + preview GIFs).
+(multi-page + preview GIFs) · `16` security & privacy (public repo: gitleaks
+CI gate, redaction rules, MAC pairing overlay, history-rewrite hazard).
 
 ## Task tracking (Notion)
 
