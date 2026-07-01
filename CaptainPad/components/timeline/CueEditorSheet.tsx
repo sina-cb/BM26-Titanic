@@ -38,6 +38,7 @@ import {
   hhmmToMinutes, minutesToHHMM, minutesTo12h, hhmmTo12h, SUN_EVENT_OPTIONS, MOOD_VALUES,
 } from './timelineTemplate';
 import { Segmented, Stepper, Dropdown, ToggleChip, FieldLabel } from './makerControls';
+import { DayTimePicker, DayTimeContextCue } from './DayTimePicker';
 import { DualSwatch } from '@/components/ColorPickerModal';
 
 // Crossfade presets for the cue's COLOR AUTOPILOT transition (ms under the
@@ -122,6 +123,34 @@ function defaultTrigger(type: CueTrigger['type']): CueTrigger {
   }
 }
 
+// Smart default start for a fresh CLOCK trigger (operator: a new cue should
+// default to "~5 minutes from now", snapped UP to the time UI's 5-minute
+// increments, never uncomfortably close). "Now" is read in the PLAN's tz via
+// Intl — the same idiom as timeline.tsx nowPartsInTz, replicated here WITH
+// SECONDS; a malformed tz makes Intl throw (fail loud per codex — no
+// device-tz fallback). Pinned rule:
+//   nextBoundarySec = ceil(nowSec / 300) * 300
+//   if (nextBoundarySec - nowSec < 60) nextBoundarySec += 300
+// Examples: 3:31:00 → 3:35 · 3:34:20 → 3:40 (too close) · 3:35:00 → 3:40.
+function smartDefaultClockAt(tz: string): string {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  });
+  const parts = fmt.formatToParts(new Date());
+  const num = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? NaN);
+  let hour = num('hour');
+  if (hour === 24) hour = 0; // some engines emit '24' for midnight under hour12:false
+  const nowSec = hour * 3600 + num('minute') * 60 + num('second');
+  if (!Number.isFinite(nowSec)) {
+    throw new Error(`CueEditorSheet: cannot read "now" in plan tz '${tz}'`);
+  }
+  let boundarySec = Math.ceil(nowSec / 300) * 300;
+  if (boundarySec - nowSec < 60) boundarySec += 300;
+  // 23:59 rolls over to 00:00 (next day) — the % 1440 wrap matches the wire's
+  // minutes-of-day domain.
+  return minutesToHHMM(Math.floor(boundarySec / 60) % 1440);
+}
+
 // The maker authors PLAYLIST cues only now (look removed). This always
 // returns a fresh, deck-targeted playlist action — the editor's single
 // default and reset shape.
@@ -177,6 +206,15 @@ export function CueEditorSheet({
     [paletteOptions],
   );
   const phaseNames = Object.keys(plan.phases);
+
+  // Fresh trigger for a given type. CLOCK gets the smart "~5 min from now"
+  // default (plan tz) instead of a fixed time — used when seeding a NEW cue
+  // and when the operator switches the TRIGGER segmented control. Opening an
+  // EXISTING cue still seeds its stored trigger untouched.
+  const makeTrigger = (type: CueTrigger['type']): CueTrigger =>
+    type === 'clock'
+      ? { type: 'clock', at: smartDefaultClockAt(plan.location.tz) }
+      : defaultTrigger(type);
 
   type DaysMode = 'all' | 'this' | 'pick';
 
@@ -250,7 +288,9 @@ export function CueEditorSheet({
     } else {
       setKind('program');
       setLabel('');
-      setTrigger(defaultTrigger('clock'));
+      // NEW cue: the clock trigger defaults to ~5 min from NOW in the plan tz,
+      // snapped up to the next comfortable 5-minute boundary (smartDefaultClockAt).
+      setTrigger(makeTrigger('clock'));
       setAction(defaultPlaylistAction());
       setHoldMin(null);
       // A cue is an EVENT with a REQUIRED duration; a fresh cue defaults to 60 min
@@ -286,6 +326,32 @@ export function CueEditorSheet({
   };
 
   const festivalDays = plan.festival?.days ?? 8;
+
+  // The plan's OTHER cues resolvable on the SELECTED day, for the visual day
+  // pane's context blocks. Only CLOCK triggers have a client-resolvable start
+  // (same limitation as the overlap check) — sun/phase/mood/manual cues are
+  // skipped rather than guessed. Date-string day-sets are skipped too (no
+  // index representation). The cue being edited is excluded by id.
+  const dayContextCues = useMemo<DayTimeContextCue[]>(() => {
+    const out: DayTimeContextCue[] = [];
+    for (const c of plan.cues ?? []) {
+      if (initialCue && c.id === initialCue.id) continue;
+      const d = c.days;
+      const onDay =
+        d === 'all' || d === undefined
+        || (Array.isArray(d) && (d as (number | string)[]).includes(dayIndex));
+      if (!onDay) continue;
+      const start = cueStartMinutes(c);
+      if (start === null) continue;
+      out.push({
+        startMinutes: start,
+        durationMin: typeof c.durationMin === 'number' && c.durationMin > 0 ? c.durationMin : 0,
+        kind: c.kind ?? 'program',
+        label: c.label,
+      });
+    }
+    return out;
+  }, [plan, dayIndex, initialCue]);
 
   // Normalize the working ACTION into a valid, emittable CueAction. Shared by
   // buildCue and buildDefaultCue so the deck-target / autopilot / color-autopilot
@@ -439,6 +505,25 @@ export function CueEditorSheet({
               />
             </View>
           </View>
+
+          {/* VISUAL day pane — place the cue on the 24h column by touch: tap
+              sets START (5-min snap), dragging the block's bottom-edge pill
+              sets DURATION. Two-way synced with the steppers above and the
+              DURATION presets/stepper below (all drive the same state). Sun
+              shading is omitted here — the sheet has no overview sun table
+              (see DayTimePicker header). min/max mirror the DURATION stepper. */}
+          <View style={{ height: 14 }} />
+          <FieldLabel>PLACE ON DAY</FieldLabel>
+          <DayTimePicker
+            startMinutes={mins}
+            durationMin={durationMin}
+            kind={kind}
+            others={dayContextCues}
+            onChangeStart={(m) => setTrigger({ type: 'clock', at: minutesToHHMM(m) })}
+            onChangeDuration={setDurationMin}
+            minDuration={5}
+            maxDuration={720}
+          />
         </View>
       );
     }
@@ -882,7 +967,7 @@ export function CueEditorSheet({
                       { id: 'manual', label: 'Manual' },
                     ]}
                     value={trigger.type}
-                    onChange={(v) => setTrigger(defaultTrigger(v as CueTrigger['type']))}
+                    onChange={(v) => setTrigger(makeTrigger(v as CueTrigger['type']))}
                   />
                   {renderTriggerBody()}
                 </>
