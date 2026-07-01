@@ -126,6 +126,27 @@ function SunColumn({
         );
       })}
 
+      {/* Cue LABELS — the cue's time + name at its position, so the day plot
+          reads as a list of events (not anonymous dots/bars). */}
+      {day.cues.map((cue, i) => {
+        const startMins = hhmmToMinutes(cue.atLocal);
+        if (startMins === null) return null;
+        const y = yFor(startMins);
+        if (y === null) return null;
+        const col = kindColor(cue.kind, C);
+        const text = cue.label ? `${cue.atLocal} ${cue.label}` : cue.atLocal;
+        return (
+          <Text
+            key={`${cue.id}:lbl:${i}`}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            style={[styles.cueLabel, { top: y - 6, color: col }]}
+          >
+            {text}
+          </Text>
+        );
+      })}
+
       {/* NOW playhead — only on today's card. A bright thin line + a dot at the
           current local time (top=00:00, bottom=24:00), driven by a 1s ticker
           in the parent. Reuses yFor() so it lines up with the sun + cue math. */}
@@ -347,6 +368,14 @@ function makeStyles(C: Palette) {
       height: 9,
       borderRadius: 5,
       borderWidth: 1.5,
+    },
+    cueLabel: {
+      position: 'absolute',
+      left: 4,
+      right: 18,
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 9,
+      letterSpacing: 0.2,
     },
     cueBlock: {
       position: 'absolute',
