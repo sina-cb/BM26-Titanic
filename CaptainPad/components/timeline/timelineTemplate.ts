@@ -104,6 +104,32 @@ export function minutesToHHMM(mins: number): string {
   return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 }
 
+// ── 12-hour AM/PM display (operator preference: clock times read as
+// "6:08 AM" / "6:49 PM", never 24h). DISPLAY-ONLY — the wire format stays
+// "HH:MM" (24h); parse/emit still go through hhmmToMinutes/minutesToHHMM.
+// 00:xx → 12:xx AM, 12:xx → 12:xx PM, 13:xx → 1:xx PM. No leading zero on
+// the hour; minutes always two digits.
+
+// Format a minutes-of-day value as a 12-hour clock time. Callers that already
+// hold minutes (e.g. the NOW playhead) use this directly.
+export function minutesTo12h(mins: number): string {
+  const norm = ((mins % 1440) + 1440) % 1440;
+  const hh24 = Math.floor(norm / 60);
+  const mm = norm % 60;
+  const period = hh24 < 12 ? 'AM' : 'PM';
+  const hh12 = hh24 % 12 === 0 ? 12 : hh24 % 12;
+  return `${hh12}:${String(mm).padStart(2, '0')} ${period}`;
+}
+
+// Format a "HH:MM" (24h) string as a 12-hour clock time. On null / invalid
+// input return the caller's fallback (default '—') — matching each call
+// site's existing empty placeholder ('—' / '· · ·' / '···').
+export function hhmmTo12h(v: string | null | undefined, fallback = '—'): string {
+  const mins = hhmmToMinutes(v);
+  if (mins === null) return fallback;
+  return minutesTo12h(mins);
+}
+
 // Fraction [0,1] of where a minutes-of-day value sits across a 24h span,
 // used to place markers along a day column / arc.
 export function dayFraction(mins: number | null): number | null {
@@ -130,7 +156,7 @@ export function makeCueId(existing: Set<string>): string {
 export function triggerSummary(t: CueTrigger): string {
   switch (t.type) {
     case 'clock':
-      return `clock · ${t.at}`;
+      return `clock · ${hhmmTo12h(t.at, t.at)}`;
     case 'sun': {
       const off = t.offsetMin ? ` ${t.offsetMin > 0 ? '+' : ''}${t.offsetMin}m` : '';
       return `${t.event}${off}`;

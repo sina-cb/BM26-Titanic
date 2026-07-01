@@ -58,7 +58,7 @@ import {
   FestivalEditor, addDaysToDateKey, FESTIVAL_MIN_DAYS, FESTIVAL_MAX_DAYS,
 } from '@/components/timeline/FestivalEditor';
 import {
-  brcStarterPlan, blankPlan, clonePlan, duplicatePlan, makeCueId,
+  brcStarterPlan, blankPlan, clonePlan, duplicatePlan, makeCueId, hhmmTo12h,
 } from '@/components/timeline/timelineTemplate';
 
 const HOLD_MINUTES = 30;
@@ -987,12 +987,13 @@ function CueRow({
 }) {
   const hasError = !!live?.lastError;
   const triggerText = triggerSummaryText(cue.trigger);
+  const atText = hhmmTo12h(cue.atLocal, '—');
   const subtitle = dayIndex !== null
-    ? `D${dayIndex + 1} · ${cue.atLocal ?? '—'} · ${triggerText}`
-    : `${cue.atLocal ?? '—'} · ${triggerText}`;
+    ? `D${dayIndex + 1} · ${atText} · ${triggerText}`
+    : `${atText} · ${triggerText}`;
   const countdown = live
     ? (live.enabled ? formatCountdown(live.nextInSec) : 'off')
-    : (cue.atLocal ?? '—');
+    : atText;
   // FIRE only fires cues that exist in the ENGINE'S ACTIVE plan. A row can come
   // from an unsaved/unactivated DRAFT (added or renamed cues whose id isn't yet
   // in the live plan), where `live` is null — firing that id makes the engine
@@ -1029,7 +1030,7 @@ function CueRow({
 // template, kept local to avoid importing the maker helper into the live row).
 function triggerSummaryText(t: OverviewCue['trigger']): string {
   switch (t.type) {
-    case 'clock': return `clock ${t.at}`;
+    case 'clock': return `clock ${hhmmTo12h(t.at, t.at)}`;
     case 'sun': {
       const off = t.offsetMin ? ` ${t.offsetMin > 0 ? '+' : ''}${t.offsetMin}m` : '';
       return `${t.event}${off}`;
@@ -1043,9 +1044,13 @@ function triggerSummaryText(t: OverviewCue['trigger']): string {
 
 function RecentFireRow({ fire, styles }: { fire: TimelineRecentFire; styles: Styles }) {
   const t = new Date(fire.atMs);
-  const time = Number.isFinite(fire.atMs)
-    ? `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}:${String(t.getSeconds()).padStart(2, '0')}`
-    : '—';
+  let time = '—';
+  if (Number.isFinite(fire.atMs)) {
+    const h24 = t.getHours();
+    const period = h24 < 12 ? 'AM' : 'PM';
+    const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+    time = `${h12}:${String(t.getMinutes()).padStart(2, '0')}:${String(t.getSeconds()).padStart(2, '0')} ${period}`;
+  }
   return (
     <View style={styles.fireLogRow}>
       <Text style={styles.fireLogCue} numberOfLines={1}>{fire.cueId}</Text>

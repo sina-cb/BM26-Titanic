@@ -17,7 +17,7 @@ import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-nati
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import { OverviewDay, OverviewCue } from '@/utils/timelineApi';
-import { hhmmToMinutes, dayFraction, kindColor, KIND_LABEL } from './timelineTemplate';
+import { hhmmToMinutes, hhmmTo12h, dayFraction, kindColor, KIND_LABEL } from './timelineTemplate';
 
 export const COLUMN_HEIGHT = 240;
 const CARD_WIDTH = 150;
@@ -81,12 +81,12 @@ function SunColumn({
       {/* Sunrise / sunset edge labels */}
       {sunriseY !== null ? (
         <Text style={[styles.edgeTime, { top: Math.max(0, sunriseY - 7), left: 2, color: C.secondary }]}>
-          ☀ {day.sun.sunrise}
+          ☀ {hhmmTo12h(day.sun.sunrise)}
         </Text>
       ) : null}
       {sunsetY !== null ? (
         <Text style={[styles.edgeTime, { top: Math.min(COLUMN_HEIGHT - 14, sunsetY - 7), left: 2, color: C.secondary }]}>
-          ☾ {day.sun.sunset}
+          ☾ {hhmmTo12h(day.sun.sunset)}
         </Text>
       ) : null}
 
@@ -206,7 +206,7 @@ export function DayCard({
         {sortedCues.slice(0, 6).map((c: OverviewCue, i) => (
           <View key={`${c.id}:ev:${i}`} style={styles.eventRow}>
             <View style={[styles.eventDot, { backgroundColor: kindColor(c.kind, C) }]} />
-            <Text style={styles.eventTime}>{c.atLocal ?? '· · ·'}</Text>
+            <Text style={styles.eventTime}>{hhmmTo12h(c.atLocal, '· · ·')}</Text>
             <Text style={styles.eventName} numberOfLines={1} ellipsizeMode="tail">
               {c.label || KIND_LABEL[c.kind]}
             </Text>
@@ -380,7 +380,7 @@ function makeStyles(C: Palette) {
       letterSpacing: 0.2,
       color: C.secondary,
       fontVariant: ['tabular-nums'],
-      width: 34,
+      width: 62,
     },
     eventName: {
       flex: 1,
