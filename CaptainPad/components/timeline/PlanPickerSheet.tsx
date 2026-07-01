@@ -1,15 +1,30 @@
 /**
  * PlanPickerSheet — switch the active plan, load a plan into the maker,
- * duplicate, or seed a fresh BRC template (docs/38 §15.3).
+ * duplicate, or create a new plan (docs/38 §15.3).
  *
- * Themed modal matching the rest of the maker. Pure taps — no keyboard:
- * duplicate / new mint a slug name client-side (`<base>_copy`, `brc_2026`).
+ * Themed modal matching the rest of the maker. Creating a NEW plan (template
+ * or from scratch) REQUIRES a name first: tapping either new-plan button opens
+ * an inline NAME prompt (required field, slug-normalised, duplicate-blocked)
+ * with ADD / CANCEL — the plan is only created on ADD (operator requirement).
  */
-import React, { useMemo } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable, StyleSheet } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Modal, Pressable, StyleSheet } from 'react-native';
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+
+// Engine plan names must match show_plan.js assertSlug: /^[a-z0-9][a-z0-9_-]{0,63}$/.
+// Normalise free text toward that shape; validity is re-checked against the
+// same regex afterwards (an all-symbols input can still normalise to invalid).
+const PLAN_SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+function slugifyPlanName(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/^[_-]+/, '')
+    .slice(0, 64);
+}
 
 export function PlanPickerSheet({
   visible, plans, activePlan, draftName, onLoad, onActivate, onDuplicate, onNewTemplate, onNewBlank, onClose,
@@ -21,13 +36,43 @@ export function PlanPickerSheet({
   onLoad: (name: string) => void;
   onActivate: (name: string) => void;
   onDuplicate: (name: string) => void;
-  onNewTemplate: () => void;
-  /** Seed a fresh BLANK plan (no BRC cues/looks/phases). */
-  onNewBlank: () => void;
+  /** Create from the BRC template under the operator-entered (required) name. */
+  onNewTemplate: (name: string) => void;
+  /** Seed a fresh BLANK plan (no BRC cues/looks/phases) under the required name. */
+  onNewBlank: (name: string) => void;
   onClose: () => void;
 }) {
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
+
+  // Which new-plan flow is awaiting a name (null = prompt hidden).
+  const [naming, setNaming] = useState<'template' | 'blank' | null>(null);
+  const [nameInput, setNameInput] = useState('');
+  useEffect(() => {
+    if (!visible) { setNaming(null); setNameInput(''); }
+  }, [visible]);
+
+  const slug = slugifyPlanName(nameInput);
+  const nameEmpty = nameInput.trim().length === 0;
+  const slugInvalid = !PLAN_SLUG_RE.test(slug);
+  const duplicate = plans.includes(slug);
+  const nameError = nameEmpty
+    ? 'Plan name is required.'
+    : slugInvalid
+      ? 'Name must contain at least one letter or number.'
+      : duplicate
+        ? `A plan named “${slug}” already exists.`
+        : null;
+  const canAdd = nameError === null;
+
+  const confirmAdd = () => {
+    if (!canAdd || naming === null) return;
+    const kind = naming;
+    setNaming(null);
+    setNameInput('');
+    if (kind === 'template') onNewTemplate(slug);
+    else onNewBlank(slug);
+  };
 
   return (
     <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
@@ -40,15 +85,68 @@ export function PlanPickerSheet({
             <Text style={styles.title}>PLANS</Text>
 
             <View style={styles.newRow}>
-              <TouchableOpacity onPress={onNewTemplate} style={[styles.newBtn, styles.newBtnHalf]} accessibilityLabel="New plan from BRC template">
+              <TouchableOpacity
+                onPress={() => setNaming('template')}
+                style={[styles.newBtn, styles.newBtnHalf, naming === 'template' && { opacity: 0.7 }]}
+                accessibilityLabel="New plan from BRC template"
+              >
                 <IconSymbol name="plus.circle" size={18} color={C.onPrimary} />
                 <Text style={styles.newBtnText}>FROM BRC TEMPLATE</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={onNewBlank} style={[styles.newBtnGhost, styles.newBtnHalf]} accessibilityLabel="New blank plan from scratch">
+              <TouchableOpacity
+                onPress={() => setNaming('blank')}
+                style={[styles.newBtnGhost, styles.newBtnHalf, naming === 'blank' && { borderWidth: 2 }]}
+                accessibilityLabel="New blank plan from scratch"
+              >
                 <IconSymbol name="plus.circle" size={18} color={C.text} />
                 <Text style={styles.newBtnGhostText}>FROM SCRATCH</Text>
               </TouchableOpacity>
             </View>
+
+            {/* NAME PROMPT — a new plan is only created once a valid, unique
+                name is entered and ADD is tapped (name is a REQUIRED field). */}
+            {naming !== null ? (
+              <View style={styles.namePrompt}>
+                <Text style={styles.namePromptLabel}>
+                  {naming === 'template' ? 'NAME THE NEW TEMPLATE PLAN' : 'NAME THE NEW BLANK PLAN'}
+                </Text>
+                <TextInput
+                  value={nameInput}
+                  onChangeText={setNameInput}
+                  placeholder="e.g. burn_week"
+                  placeholderTextColor={C.icon}
+                  autoFocus
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  onSubmitEditing={confirmAdd}
+                  style={styles.nameInput}
+                  accessibilityLabel="New plan name (required)"
+                />
+                {nameError ? (
+                  <Text style={styles.nameError}>{nameError}</Text>
+                ) : (
+                  <Text style={styles.nameResolved}>{`Will be saved as “${slug}”`}</Text>
+                )}
+                <View style={styles.namePromptRow}>
+                  <TouchableOpacity
+                    onPress={() => { setNaming(null); setNameInput(''); }}
+                    style={[styles.actionBtn, { flex: 1 }]}
+                    accessibilityLabel="Cancel new plan"
+                  >
+                    <Text style={styles.actionBtnText}>CANCEL</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={confirmAdd}
+                    disabled={!canAdd}
+                    style={[styles.newBtn, { flex: 1, minHeight: 44 }, !canAdd && { opacity: 0.4 }]}
+                    accessibilityLabel="Add new plan"
+                    accessibilityState={{ disabled: !canAdd }}
+                  >
+                    <Text style={styles.newBtnText}>ADD</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : null}
 
             {plans.length === 0 ? (
               <Text style={styles.empty}>No saved plans yet. Start from the template.</Text>
@@ -121,6 +219,46 @@ function makeStyles(C: Palette) {
       flexDirection: 'row',
       gap: 10,
       marginBottom: 14,
+    },
+    namePrompt: {
+      borderWidth: 1,
+      borderColor: C.primary,
+      borderRadius: 10,
+      padding: 12,
+      marginBottom: 14,
+      gap: 8,
+    },
+    namePromptLabel: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 11,
+      letterSpacing: 0.8,
+      color: C.secondary,
+    },
+    nameInput: {
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+      borderRadius: 8,
+      minHeight: 44,
+      paddingHorizontal: 12,
+      fontFamily: 'Inter_400Regular',
+      fontSize: 14,
+      color: C.text,
+      backgroundColor: C.surfaceContainerHigh,
+    },
+    nameError: {
+      fontFamily: 'Inter_400Regular',
+      fontSize: 12,
+      color: C.error,
+    },
+    nameResolved: {
+      fontFamily: 'Inter_400Regular',
+      fontSize: 12,
+      color: C.secondary,
+    },
+    namePromptRow: {
+      flexDirection: 'row',
+      gap: 10,
+      marginTop: 2,
     },
     newBtnHalf: {
       flex: 1,

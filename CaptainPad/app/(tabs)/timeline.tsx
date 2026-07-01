@@ -360,8 +360,10 @@ export default function TimelineScreen() {
     return true;
   }, []);
 
-  const handleNewTemplate = useCallback(() => {
-    setDraft(brcStarterPlan());
+  // New plans REQUIRE an operator-entered name (the PlanPickerSheet's name
+  // prompt validates + de-duplicates before calling these with the slug).
+  const handleNewTemplate = useCallback((name: string) => {
+    setDraft(brcStarterPlan(name));
     setDraftVersion((v) => v + 1);
     setSaveOk(null);
     setActionError(null);
@@ -369,12 +371,10 @@ export default function TimelineScreen() {
     setPlanPickerOpen(false);
   }, []);
 
-  // New BLANK plan from scratch — same flow as new-from-template, but seeded
-  // with blankPlan() (no BRC cues/looks/phases; carries the BRC location +
-  // festival so the day editor + date picker work out of the box). The operator
-  // builds it up, then SAVE writes it (validateShowPlan accepts empty cues).
-  const handleNewBlank = useCallback(() => {
-    setDraft(blankPlan());
+  // New BLANK plan from scratch — seeded by blankPlan(name): starts TODAY in
+  // the plan tz with a 2-day festival span the operator grows as needed.
+  const handleNewBlank = useCallback((name: string) => {
+    setDraft(blankPlan(name));
     setDraftVersion((v) => v + 1);
     setSaveOk(null);
     setActionError(null);

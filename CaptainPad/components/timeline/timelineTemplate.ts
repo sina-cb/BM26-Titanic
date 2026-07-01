@@ -283,12 +283,24 @@ export function brcStarterPlan(name = 'brc_2026'): ShowPlan {
 // boolean-`mood` autopilot baseline, and EMPTY looks/phases/cues. An empty
 // cues array is valid (the engine only requires Array.isArray); empty looks /
 // phases default to {} — so no placeholder cue is needed.
+// Today's YYYY-MM-DD in the plan's tz (BRC). A from-scratch plan starts NOW —
+// the operator configures forward from today, not from Burning Man's dates.
+// Intl throws on a bad tz (BRC_LOCATION.tz is a constant valid IANA id) —
+// fail loud per codex, no fallback.
+export function todayDateKey(tz: string = BRC_LOCATION.tz): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+}
+
 export function blankPlan(name = 'new_plan'): ShowPlan {
   return {
     schemaVersion: 2,
     name,
     location: { ...BRC_LOCATION },
-    festival: { ...BRC_FESTIVAL },
+    // From-scratch plans start TODAY (plan tz) with a short 2-day span the
+    // operator grows as needed — NOT the BRC festival dates (operator request).
+    festival: { startDate: todayDateKey(), days: 2 },
     autopilot: {
       enabled: true,
       playlist: 'default',
