@@ -253,6 +253,10 @@ export class TimelineService {
     this._deckWindowUntilMs = null;  // epoch ms the current durationMin window ends (or null)
     this._deckWindowCueId = null;    // the cue that owns the window
     this._defaultCueActive = false;  // the default cue currently drives the deck (idempotency latch)
+    // F4 (docs/38 §16.11): a default cue whose apply THREW must not retry every
+    // tick (log spam). Latch the failed signature (plan + defaultCue action);
+    // back off until the plan/cue changes. null → no failure latched.
+    this._defaultCueFailKey = null;
   }
 
   // ── lifecycle ───────────────────────────────────────────────────────────
@@ -587,25 +591,27 @@ export class TimelineService {
     return targets.some((t) => t.kind === 'deck');
   }
 
-  // Open (or clear) the deck-ownership WINDOW for a cue that just fired (docs/38
-  // §16.11). A cue with `durationMin` whose action drives the deck OWNS the deck
-  // for [now, now+durationMin); any other deck-driving cue takes ownership with
-  // NO expiry (window cleared → holds until the next cue, today's behavior). A
-  // non-deck cue leaves the window untouched. Firing any deck cue clears the
+  // Open the deck-OWNERSHIP latch for a cue that just fired (docs/38 §16.11).
+  // A deck-driving cue always takes OWNERSHIP of the deck from the previous
+  // owner (`_deckWindowCueId` = this cue). With `durationMin` it owns for a
+  // TIMED window [now, now+durationMin) (`_deckWindowUntilMs` set); without one
+  // it owns with NO expiry (`_deckWindowUntilMs=null` → "holds until the next
+  // deck cue"). EITHER WAY the default cue must NOT fill under a live owner
+  // (F1 fix: a no-duration mood/ambient swap must not be clobbered every tick).
+  // A non-deck cue leaves ownership untouched. Firing any deck cue clears the
   // default-cue latch (the real cue now owns the deck).
   async _noteDeckWindow(cueId, durationMin, action, now) {
     const drivesDeck = await this._actionDrivesDeck(action);
     if (!drivesDeck) return;
     this._defaultCueActive = false;
+    this._deckWindowCueId = cueId;
     if (typeof durationMin === 'number' && durationMin > 0) {
       this._deckWindowUntilMs = now + durationMin * 60000;
-      this._deckWindowCueId = cueId;
     } else {
-      // No durationMin → today's behavior: the cue holds the deck with no timed
-      // window (until the next cue). Clear any prior window so the default cue
-      // does not fill under it.
+      // No durationMin → the cue owns the deck with no timed window (until the
+      // next deck cue). Ownership latch (_deckWindowCueId) above keeps the
+      // default cue from filling under it.
       this._deckWindowUntilMs = null;
-      this._deckWindowCueId = null;
     }
   }
 
@@ -615,10 +621,37 @@ export class TimelineService {
   // it pins the deck via _forceDeckView like any deck cue and is subject to the
   // P1 release logic). Sets the idempotency latch so the tick does not re-apply
   // it every second. THROWS loud on a dep failure (recorded by the caller).
+  // The failure-latch signature for the CURRENT default cue (F4). Keyed on the
+  // active plan + the defaultCue action so ANY plan/cue change clears the latch
+  // and re-attempts the apply. Returns null when there is no default cue.
+  _defaultCueKey() {
+    const dc = this.plan && this.plan.defaultCue ? this.plan.defaultCue : null;
+    if (!dc) return null;
+    return `${this.activePlan}::${JSON.stringify(dc.action)}`;
+  }
+
   async _applyDefaultCue(reason) {
     const dc = this.plan && this.plan.defaultCue ? this.plan.defaultCue : null;
     if (!dc) return { steps: [] };
-    const result = await this._applyAction(dc.action);
+    let result;
+    try {
+      result = await this._applyAction(dc.action);
+    } catch (e) {
+      // F4: a throwing default cue must NOT retry every tick (log spam). Latch
+      // the failed signature and surface the error LOUDLY ONCE — never swallow
+      // it (codex P0: no silent fallback). The latch clears when the plan/cue
+      // changes (_defaultCueKey mismatch) so a fixed plan re-attempts.
+      this.lastError = `default cue (${reason}): ${e && e.message}`;
+      if (this._defaultCueFailKey !== this._defaultCueKey()) {
+        console.warn(`  ⚠ [timeline] default cue (${reason}) failed — backing off: ${e && e.message}`);
+        this._defaultCueFailKey = this._defaultCueKey();
+      }
+      // Mark the latch so the tick does not re-enter the apply every second.
+      this._defaultCueActive = true;
+      throw e;
+    }
+    // Success → clear any prior failure latch (a fixed/changed cue recovered).
+    this._defaultCueFailKey = null;
     this._defaultCueActive = true;
     this._deckWindowUntilMs = null;
     this._deckWindowCueId = null;
@@ -646,6 +679,15 @@ export class TimelineService {
     if (!this._isPlanDrivingDeck()) return;           // manual/paused → operator owns the deck
     // A live durationMin window still owns the deck → do not fill.
     if (typeof this._deckWindowUntilMs === 'number' && this._deckWindowUntilMs > now) return;
+    // A no-duration deck cue OWNS the deck until the next deck cue (F1 fix): its
+    // ownership latch is a cueId with a null window. The default cue must NOT
+    // fill under it — a mood/ambient swap holds the deck exactly like today's
+    // no-hold program behavior. Only a durationMin window that has ELAPSED
+    // (untilMs set and now past it) yields the deck below.
+    const hasElapsedWindow = typeof this._deckWindowUntilMs === 'number' && this._deckWindowUntilMs <= now;
+    if (this._deckWindowCueId !== null && !hasElapsedWindow && !this._defaultCueActive) {
+      return; // a live no-duration deck cue owns the deck → do not fill under it
+    }
     // A HELD program (an explicit hold window still in the future) owns the deck
     // and its precedence — the default cue never preempts it (durationMin governs
     // the deck-fill window; hold governs program precedence — docs/38 §16.11). A
@@ -655,25 +697,25 @@ export class TimelineService {
     if (prog) {
       const heldUntil = prog.untilMs;
       if (typeof heldUntil === 'number' && heldUntil > now) return; // live hold owns the deck
-      // No live hold: if the elapsed cue was THIS program's durationMin window,
-      // end the program so control drops back to autopilot for the default fill.
-      if (this._deckWindowCueId === prog.cueId || this._deckWindowUntilMs !== null) {
+      // No live hold: only end the program when the elapsed window was opened by
+      // THIS program's OWN cue (F2 fix). An unrelated cue's elapsed window must
+      // NOT be misattributed to this program and force-end it early. A program
+      // with no elapsed window of its own is today's "holds until next cue"
+      // behavior — the default cue does not fill under it (no regression).
+      if (this._deckWindowCueId === prog.cueId && hasElapsedWindow) {
         this.state.activeProgram = null;
         if (this.state.autopilotEnabled !== false) this.state.controller = 'autopilot';
       } else {
-        // A no-durationMin, no-hold program is today's "holds until next cue"
-        // behavior — the default cue does not fill under it (no regression).
         return;
       }
     }
-    // The window just elapsed (or was never open) → the default cue owns the gap.
-    if (this._deckWindowUntilMs !== null || this._deckWindowCueId !== null) {
-      // A window existed and has now elapsed → revert to default.
+    // An elapsed durationMin window → revert to the default cue.
+    if (hasElapsedWindow) {
       await this._applyDefaultCue('window-elapsed');
       return;
     }
-    // No window and default not yet driving → fill the deck with the default cue
-    // (plan has no owning cue right now). Idempotent: only apply once.
+    // No owning cue at all → fill the deck with the default cue (plan has no cue
+    // driving the deck right now). Idempotent: only apply once.
     if (!this._defaultCueActive) {
       await this._applyDefaultCue('no-owning-cue');
     }
@@ -1227,6 +1269,14 @@ export class TimelineService {
     this.recentFires = [];
     this.wouldFire = [];
     this.cueErrors = {};
+    // Deck-ownership latches (docs/38 §16.11) are per-plan runtime — reset them
+    // so the incoming plan's default cue / windows are re-derived from scratch,
+    // and a stale F4 failure-latch from the outgoing plan does not suppress the
+    // new plan's default cue.
+    this._deckWindowUntilMs = null;
+    this._deckWindowCueId = null;
+    this._defaultCueActive = false;
+    this._defaultCueFailKey = null;
     await this._catchUp();
     this._broadcastState();
     return name;

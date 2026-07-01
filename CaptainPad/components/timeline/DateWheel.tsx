@@ -22,8 +22,12 @@ import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 
 // Sensible bounds for a festival date picker (BM 2026 sits comfortably inside).
+// YEAR_MAX is a FLOOR, not a hard cap: the wheel derives its real upper bound
+// from the seed date so a plan dated BEYOND this year is always representable
+// (a clamp to 2030 silently rewound a 2031+ plan by a year on SET — the exact
+// no-op-looking mutation this widening removes). See yearMaxFor().
 export const YEAR_MIN = 2024;
-export const YEAR_MAX = 2030;
+export const YEAR_MAX = 2035;
 
 const MONTH_LABELS = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -38,18 +42,31 @@ function daysInMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
-function clampYear(y: number): number {
+// The wheel's upper year bound for a given seed date: the later of YEAR_MAX and
+// (the seed's own year + a few), so a plan dated past YEAR_MAX is ALWAYS
+// representable and SET can never rewind it to the cap. A malformed/absent seed
+// falls back to YEAR_MAX.
+export function yearMaxFor(dateKey: string): number {
+  const m = DATE_KEY_RE.exec(dateKey);
+  if (!m) return YEAR_MAX;
+  const y = Number(m[1]);
+  if (!Number.isFinite(y)) return YEAR_MAX;
+  return Math.max(YEAR_MAX, y + 3);
+}
+
+function clampYear(y: number, yearMax: number): number {
   if (!Number.isFinite(y)) return YEAR_MIN;
-  return Math.min(YEAR_MAX, Math.max(YEAR_MIN, y));
+  return Math.min(yearMax, Math.max(YEAR_MIN, y));
 }
 
 // Parse a 'YYYY-MM-DD' into {year, month(1-12), day}, clamped to the picker's
-// year range. A malformed key falls back to the lower year bound, Jan 1 — the
-// parent always passes a valid festival start, so this is purely defensive.
-function parseDateKey(dateKey: string): { year: number; month: number; day: number } {
+// year range (upper bound derived from the seed via `yearMax`). A malformed key
+// falls back to the lower year bound, Jan 1 — the parent always passes a valid
+// festival start, so this is purely defensive.
+function parseDateKey(dateKey: string, yearMax: number): { year: number; month: number; day: number } {
   const m = DATE_KEY_RE.exec(dateKey);
   if (!m) return { year: YEAR_MIN, month: 1, day: 1 };
-  const year = clampYear(Number(m[1]));
+  const year = clampYear(Number(m[1]), yearMax);
   const month = Math.min(12, Math.max(1, Number(m[2])));
   const day = Math.min(daysInMonth(year, month), Math.max(1, Number(m[3])));
   return { year, month, day };
@@ -73,6 +90,10 @@ export function DateWheel({
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
 
+  // Upper year bound derived from the seed so a plan dated past YEAR_MAX is
+  // representable — tapping SET on such a plan can never rewind it to the cap.
+  const yearMax = useMemo(() => yearMaxFor(initialDate), [initialDate]);
+
   const [year, setYear] = useState(YEAR_MIN);
   const [month, setMonth] = useState(1); // 1-based
   const [day, setDay] = useState(1);
@@ -82,17 +103,17 @@ export function DateWheel({
   // the current festival start).
   useEffect(() => {
     if (!visible) return;
-    const p = parseDateKey(initialDate);
+    const p = parseDateKey(initialDate, yearMax);
     setYear(p.year);
     setMonth(p.month);
     setDay(p.day);
-  }, [visible, initialDate]);
+  }, [visible, initialDate, yearMax]);
 
   const years = useMemo(() => {
     const out: number[] = [];
-    for (let y = YEAR_MIN; y <= YEAR_MAX; y += 1) out.push(y);
+    for (let y = YEAR_MIN; y <= yearMax; y += 1) out.push(y);
     return out;
-  }, []);
+  }, [yearMax]);
 
   const maxDay = daysInMonth(year, month);
   const days = useMemo(() => {
@@ -110,7 +131,18 @@ export function DateWheel({
 
   const handleConfirm = () => {
     const safeDay = Math.min(day, daysInMonth(year, month));
-    onConfirm(formatDateKey(year, month, safeDay));
+    const chosen = formatDateKey(year, month, safeDay);
+    // No-op guard: if the chosen date equals the seed the wheel opened on
+    // (the operator confirmed a shown date without changing anything), emit
+    // NOTHING — confirming a no-op must never mutate the plan (a clamped seed
+    // used to silently rewrite the start date on SET). Still dismiss the sheet.
+    const seed = parseDateKey(initialDate, yearMax);
+    const seedKey = formatDateKey(seed.year, seed.month, seed.day);
+    if (chosen === seedKey) {
+      onClose();
+      return;
+    }
+    onConfirm(chosen);
   };
 
   // Native iOS spinner is dark-on-light by default; itemStyle keeps the wheel

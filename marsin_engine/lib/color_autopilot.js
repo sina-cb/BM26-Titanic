@@ -245,6 +245,25 @@ export class ColorAutopilot {
   }
 
   /**
+   * DEACTIVATE the palette cycle: persist active:false (so it stays stopped
+   * across a restart / start()) AND stop the running cycle. Idempotent — a no-op
+   * when already inactive. Used by the timeline deck-pin release path (docs/38
+   * §16.11): when the plan stops driving the deck, the color daemon must stop
+   * too, symmetric to releaseDeckView. Bumps generation so any in-flight tick
+   * bails. Returns the new state.
+   */
+  deactivate() {
+    const st = this.state;
+    if (st.active) {
+      this.config.colorAutopilot = { ...st, active: false };
+      this.saveConfig();
+      this.generation++;
+    }
+    this.stop();
+    return this.state;
+  }
+
+  /**
    * Apply one palette advance. Bails if state changed since schedule time.
    * Picks the NEXT palette (random when shuffle, else sequential), applies it
    * (hard cut or crossfade per transitionMs), then schedules the next tick if
