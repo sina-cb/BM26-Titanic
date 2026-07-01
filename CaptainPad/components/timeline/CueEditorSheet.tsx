@@ -31,7 +31,7 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, Modal, Pressable, 
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import {
-  PlanCue, CueKind, CueTrigger, CueAction, ActionPlaylist, SunEvent, CueDays, ShowPlan,
+  PlanCue, PlanDefaultCue, CueKind, CueTrigger, CueAction, ActionPlaylist, SunEvent, CueDays, ShowPlan,
   DeckTransitionMode, ActionOverlays, DECK_TRANSITION_MODES, DECK_TRANSITION_MODE_LABEL,
 } from '@/utils/timelineApi';
 import {
@@ -65,6 +65,11 @@ const OVERLAY_OPTIONS: { id: 'asis' | ActionOverlays; label: string }[] = [
   { id: 'disable', label: 'Disable overlays' },
 ];
 
+// DURATION presets (minutes). A cue is an EVENT that owns the deck for this
+// many minutes after it fires; "None" emits no `durationMin` (point event).
+// Mirrors the HOLD stepper idiom but with quick playa-friendly presets.
+const DURATION_PRESETS_MIN = [15, 30, 60, 90, 120, 180];
+
 function defaultTrigger(type: CueTrigger['type']): CueTrigger {
   switch (type) {
     case 'clock': return { type: 'clock', at: '20:00' };
@@ -83,11 +88,23 @@ function defaultPlaylistAction(): ActionPlaylist {
 }
 
 export function CueEditorSheet({
-  visible, initialCue, plan, playlists, palettes, dayIndex, onSave, onDelete, onClose,
+  visible, mode = 'cue', initialCue, initialDefaultCue, plan, playlists, palettes, dayIndex,
+  onSave, onSaveDefault, onDelete, onClose,
 }: {
   visible: boolean;
-  /** null = adding a new cue. */
+  /**
+   * Editor mode:
+   *   'cue'         → full cue editor (name/kind/trigger/action/hold/duration/days).
+   *   'defaultCue'  → the plan's DEFAULT CUE: name + ACTION only. No trigger,
+   *                   kind, hold, duration, or days — the default cue is the
+   *                   standing fallback, not a scheduled event. Saves via
+   *                   onSaveDefault (a PlanDefaultCue), not onSave.
+   */
+  mode?: 'cue' | 'defaultCue';
+  /** null = adding a new cue. Ignored in 'defaultCue' mode. */
   initialCue: PlanCue | null;
+  /** The plan's current default cue, seeded when mode==='defaultCue'. */
+  initialDefaultCue?: PlanDefaultCue | null;
   plan: ShowPlan;
   playlists: string[];
   /**
@@ -103,9 +120,12 @@ export function CueEditorSheet({
   /** The day the editor was opened from — seeds DAYS "This day". */
   dayIndex: number;
   onSave: (cue: PlanCue) => void;
+  /** Called (mode==='defaultCue' only) with the edited plan default cue. */
+  onSaveDefault?: (dc: PlanDefaultCue) => void;
   onDelete: (() => void) | null;
   onClose: () => void;
 }) {
+  const isDefaultMode = mode === 'defaultCue';
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
 
@@ -133,6 +153,9 @@ export function CueEditorSheet({
   const [trigger, setTrigger] = useState<CueTrigger>(defaultTrigger('clock'));
   const [action, setAction] = useState<CueAction>(defaultPlaylistAction());
   const [holdMin, setHoldMin] = useState<number | null>(null);
+  // Cue DURATION (minutes) — a cue owns the deck for this window after firing.
+  // null = no owned window (point event; emits no `durationMin`).
+  const [durationMin, setDurationMin] = useState<number | null>(null);
   const [days, setDays] = useState<CueDays>('all');
   // DAYS mode is EXPLICIT state, driven by the segmented control — NOT derived
   // from `days` on every render (deriving made "Pick…" snap back to "This day").
@@ -142,12 +165,25 @@ export function CueEditorSheet({
   const [caAdding, setCaAdding] = useState(false);
   const [seedKey, setSeedKey] = useState<string>('');
 
-  // Seed when the sheet opens / target cue changes. We key on cue id +
+  // Seed when the sheet opens / target cue changes. We key on mode + cue id +
   // visibility so re-opening the SAME cue after an external edit re-seeds.
-  const wantKey = `${visible ? 'v' : 'h'}:${initialCue?.id ?? 'new'}:${dayIndex}`;
+  const wantKey = `${visible ? 'v' : 'h'}:${mode}:${initialCue?.id ?? 'new'}:${dayIndex}`;
   if (visible && wantKey !== seedKey) {
     setSeedKey(wantKey);
-    if (initialCue) {
+    if (isDefaultMode) {
+      // DEFAULT CUE: only label + action apply. Normalise a non-playlist action
+      // to a fresh deck playlist so the editor always has something to render.
+      const dc = initialDefaultCue ?? null;
+      setLabel(dc?.label || '');
+      setAction(dc && dc.action.type === 'playlist' ? dc.action : defaultPlaylistAction());
+      // The following are inert in default mode but reset for hygiene.
+      setKind('program');
+      setTrigger(defaultTrigger('manual'));
+      setHoldMin(null);
+      setDurationMin(null);
+      setDays('all');
+      setDaysModeState('all');
+    } else if (initialCue) {
       setKind(initialCue.kind || (initialCue.trigger.type === 'mood' ? 'mood' : 'program'));
       setLabel(initialCue.label || '');
       setTrigger(initialCue.trigger);
@@ -156,6 +192,12 @@ export function CueEditorSheet({
       // so the editor never gets stuck on an action it can't render.
       setAction(initialCue.action.type === 'playlist' ? initialCue.action : defaultPlaylistAction());
       setHoldMin(initialCue.hold && 'min' in initialCue.hold ? initialCue.hold.min : null);
+      // DURATION: seed from a saved positive durationMin, else "none" (null).
+      setDurationMin(
+        typeof initialCue.durationMin === 'number' && initialCue.durationMin > 0
+          ? initialCue.durationMin
+          : null,
+      );
       setDays(initialCue.days ?? 'all');
       setDaysModeState(initialDaysMode(initialCue.days));
     } else {
@@ -164,6 +206,7 @@ export function CueEditorSheet({
       setTrigger(defaultTrigger('clock'));
       setAction(defaultPlaylistAction());
       setHoldMin(null);
+      setDurationMin(null);
       setDays([dayIndex]); // new cue defaults to "this day"
       setDaysModeState('this');
     }
@@ -195,11 +238,10 @@ export function CueEditorSheet({
 
   const festivalDays = plan.festival?.days ?? 8;
 
-  const buildCue = (): PlanCue => {
-    // The maker emits a DECK-only playlist target (mixer authoring removed) —
-    // same discipline as how the `scene` action was dropped. We force the deck
-    // target here so a legacy/mixer cue normalises on save; the wire `PlanTarget`
-    // stays permissive for hand-authored plans.
+  // Normalize the working ACTION into a valid, emittable CueAction. Shared by
+  // buildCue and buildDefaultCue so the deck-target / autopilot / color-autopilot
+  // discipline is identical in both paths.
+  const buildNormalizedAction = (): CueAction => {
     let outAction: CueAction = action;
     if (action.type === 'playlist') {
       // Force the deck-only target (mixer authoring removed) and NORMALIZE the
@@ -246,6 +288,15 @@ export function CueEditorSheet({
       }
       outAction = pl;
     }
+    return outAction;
+  };
+
+  const buildCue = (): PlanCue => {
+    // The maker emits a DECK-only playlist target (mixer authoring removed) —
+    // same discipline as how the `scene` action was dropped. The action is
+    // normalized (deck target + autopilot/color-autopilot discipline) by
+    // buildNormalizedAction, shared with the default-cue path.
+    const outAction = buildNormalizedAction();
     // Spread the ORIGINAL cue first so fields the editor doesn't surface
     // (e.g. `catchUp`, and any future/unknown keys) survive a round-trip;
     // then overlay only what the editor manages.
@@ -261,7 +312,19 @@ export function CueEditorSheet({
     else delete cue.label;
     if (kind === 'program' && holdMin && holdMin > 0) cue.hold = { min: holdMin };
     else delete cue.hold;
+    // DURATION — emit `durationMin` ONLY when set (>0), else drop it. The engine
+    // sibling validates durationMin>0, so an unset/<=0 duration must be OMITTED.
+    if (typeof durationMin === 'number' && durationMin > 0) cue.durationMin = durationMin;
+    else delete cue.durationMin;
     return cue;
+  };
+
+  // Build the plan DEFAULT CUE from the label + normalized action. NO trigger /
+  // kind / hold / duration / days — the default cue is the standing fallback.
+  const buildDefaultCue = (): PlanDefaultCue => {
+    const dc: PlanDefaultCue = { action: buildNormalizedAction() };
+    if (label.trim()) dc.label = label.trim();
+    return dc;
   };
 
   // ── Trigger sub-editors ──
@@ -648,8 +711,10 @@ export function CueEditorSheet({
         <Pressable onPress={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 560, maxHeight: '90%' }}>
           <View style={styles.sheet}>
             <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitle}>{initialCue ? 'EDIT CUE' : 'ADD CUE'}</Text>
-              {onDelete ? (
+              <Text style={styles.sheetTitle}>
+                {isDefaultMode ? 'DEFAULT CUE' : (initialCue ? 'EDIT CUE' : 'ADD CUE')}
+              </Text>
+              {!isDefaultMode && onDelete ? (
                 <TouchableOpacity onPress={onDelete} style={styles.trashBtn} accessibilityLabel="Delete cue">
                   <Text style={styles.trashLabel}>DELETE</Text>
                 </TouchableOpacity>
@@ -660,57 +725,117 @@ export function CueEditorSheet({
                 margin + slack) so the last DAYS / SHUFFLE controls aren't
                 hidden behind it. */}
             <ScrollView style={{ maxHeight: 560 }} contentContainerStyle={{ paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
-              {/* CUE NAME — the operator-facing label (engine cue.label, optional). */}
-              <FieldLabel>CUE NAME</FieldLabel>
+              {/* NAME — the operator-facing label (optional). */}
+              <FieldLabel>{isDefaultMode ? 'DEFAULT CUE NAME' : 'CUE NAME'}</FieldLabel>
               <TextInput
                 value={label}
                 onChangeText={setLabel}
-                placeholder="Name this cue…"
+                placeholder={isDefaultMode ? 'Name the default…' : 'Name this cue…'}
                 placeholderTextColor={C.icon}
                 autoCapitalize="sentences"
                 autoCorrect={false}
                 style={styles.textInput}
-                accessibilityLabel="Cue name"
+                accessibilityLabel={isDefaultMode ? 'Default cue name' : 'Cue name'}
               />
 
-              {/* KIND */}
-              <View style={{ height: 14 }} />
-              <FieldLabel>KIND</FieldLabel>
-              <Segmented
-                options={[
-                  { id: 'program', label: 'Program' },
-                  { id: 'mood', label: 'Mood' },
-                  { id: 'ambient', label: 'Ambient' },
-                ]}
-                value={kind}
-                onChange={(v) => setKind(v as CueKind)}
-              />
+              {isDefaultMode ? (
+                <Text style={[styles.hint, { marginTop: 10 }]}>
+                  The default cue is the deck&apos;s standing fallback — it runs in the gaps between
+                  planned cues and when the plan has no cues. It has no trigger, kind, or days.
+                </Text>
+              ) : null}
 
-              {/* TRIGGER */}
-              <View style={{ height: 14 }} />
-              <FieldLabel>TRIGGER</FieldLabel>
-              <Segmented
-                options={[
-                  { id: 'clock', label: 'Clock' },
-                  { id: 'sun', label: 'Sun' },
-                  { id: 'phase', label: 'Phase' },
-                  { id: 'mood', label: 'Mood' },
-                  { id: 'manual', label: 'Manual' },
-                ]}
-                value={trigger.type}
-                onChange={(v) => setTrigger(defaultTrigger(v as CueTrigger['type']))}
-              />
-              {renderTriggerBody()}
+              {/* KIND / TRIGGER — cue-only (the default cue is not a scheduled event). */}
+              {!isDefaultMode ? (
+                <>
+                  <View style={{ height: 14 }} />
+                  <FieldLabel>KIND</FieldLabel>
+                  <Segmented
+                    options={[
+                      { id: 'program', label: 'Program' },
+                      { id: 'mood', label: 'Mood' },
+                      { id: 'ambient', label: 'Ambient' },
+                    ]}
+                    value={kind}
+                    onChange={(v) => setKind(v as CueKind)}
+                  />
+
+                  <View style={{ height: 14 }} />
+                  <FieldLabel>TRIGGER</FieldLabel>
+                  <Segmented
+                    options={[
+                      { id: 'clock', label: 'Clock' },
+                      { id: 'sun', label: 'Sun' },
+                      { id: 'phase', label: 'Phase' },
+                      { id: 'mood', label: 'Mood' },
+                      { id: 'manual', label: 'Manual' },
+                    ]}
+                    value={trigger.type}
+                    onChange={(v) => setTrigger(defaultTrigger(v as CueTrigger['type']))}
+                  />
+                  {renderTriggerBody()}
+                </>
+              ) : null}
 
               {/* ACTION — PLAYLIST only now (look removed; operator decision).
-                  No segmented switch: the maker authors a single action type. */}
+                  No segmented switch: the maker authors a single action type.
+                  Reused verbatim by the DEFAULT CUE editor. */}
               <View style={{ height: 14 }} />
               <FieldLabel>ACTION</FieldLabel>
               <Text style={styles.hint}>Playlist — the only cue action (looks removed).</Text>
               {renderActionBody()}
 
+              {/* DURATION — cue-only. A cue owns the deck for this window after it
+                  fires; outside it (and in the gaps) the default cue runs. */}
+              {!isDefaultMode ? (
+                <>
+                  <View style={{ height: 14 }} />
+                  <FieldLabel>DURATION</FieldLabel>
+                  <Segmented
+                    options={[{ id: 'none', label: 'None' }, { id: 'min', label: 'Minutes' }]}
+                    value={durationMin && durationMin > 0 ? 'min' : 'none'}
+                    onChange={(v) => setDurationMin(v === 'min' ? (durationMin || 60) : null)}
+                  />
+                  {durationMin && durationMin > 0 ? (
+                    <>
+                      <View style={styles.chipRow}>
+                        {DURATION_PRESETS_MIN.map((m) => {
+                          const sel = durationMin === m;
+                          return (
+                            <TouchableOpacity
+                              key={m}
+                              onPress={() => setDurationMin(m)}
+                              style={[styles.dayPill, sel && { backgroundColor: C.primary, borderColor: C.primary }]}
+                              accessibilityRole="button"
+                              accessibilityState={{ selected: sel }}
+                              accessibilityLabel={`${m} minute duration`}
+                            >
+                              <Text style={[styles.dayPillText, sel && { color: C.onPrimary }]}>
+                                {m >= 60 && m % 60 === 0 ? `${m / 60}h` : `${m}m`}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                      <View style={{ marginTop: 8 }}>
+                        <Stepper
+                          value={durationMin}
+                          step={15}
+                          onChange={setDurationMin}
+                          min={5} max={720}
+                          format={(v) => `${v} min`}
+                        />
+                      </View>
+                      <Text style={[styles.hint, { marginTop: 8 }]}>
+                        This cue owns the deck for {durationMin} min after it fires; the default cue fills the gaps.
+                      </Text>
+                    </>
+                  ) : null}
+                </>
+              ) : null}
+
               {/* HOLD (programs only) */}
-              {kind === 'program' ? (
+              {!isDefaultMode && kind === 'program' ? (
                 <>
                   <View style={{ height: 14 }} />
                   <FieldLabel>HOLD</FieldLabel>
@@ -733,7 +858,9 @@ export function CueEditorSheet({
                 </>
               ) : null}
 
-              {/* DAYS */}
+              {/* DAYS — cue-only (the default cue applies to every day/gap). */}
+              {!isDefaultMode ? (
+                <>
               <View style={{ height: 14 }} />
               <FieldLabel>DAYS</FieldLabel>
               <Segmented
@@ -771,6 +898,8 @@ export function CueEditorSheet({
                   })}
                 </View>
               ) : null}
+                </>
+              ) : null}
             </ScrollView>
 
             {/* Footer */}
@@ -779,11 +908,22 @@ export function CueEditorSheet({
                 <Text style={[styles.footerBtnText, { color: C.text }]}>CANCEL</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={() => onSave(buildCue())}
+                onPress={() => {
+                  if (isDefaultMode) {
+                    // Codex P0: fail loud rather than silently no-op if the parent
+                    // opened default mode without wiring the save handler.
+                    if (!onSaveDefault) throw new Error('CueEditorSheet: defaultCue mode requires onSaveDefault');
+                    onSaveDefault(buildDefaultCue());
+                  } else {
+                    onSave(buildCue());
+                  }
+                }}
                 style={[styles.footerBtn, { backgroundColor: C.primary }]}
-                accessibilityLabel="Save cue"
+                accessibilityLabel={isDefaultMode ? 'Save default cue' : 'Save cue'}
               >
-                <Text style={[styles.footerBtnText, { color: C.onPrimary }]}>{initialCue ? 'SAVE CUE' : 'ADD CUE'}</Text>
+                <Text style={[styles.footerBtnText, { color: C.onPrimary }]}>
+                  {isDefaultMode ? 'SAVE DEFAULT' : (initialCue ? 'SAVE CUE' : 'ADD CUE')}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>

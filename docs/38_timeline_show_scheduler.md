@@ -1069,7 +1069,33 @@ viewOverride pin is owned by the plan while active; the operator-takeover lease
 
 **New deps** (constructed in `api_server.js`'s `new TimelineService({deps})`):
 `setDeckTransition(patch)`, `setDeckOverlaysEnabled(bool)`, `forceDeckView()`,
-`getViewOverrideMode()` (read-only, backs `forcingDeckView`).
+`releaseDeckView()`, `getViewOverrideMode()` (read-only, backs `forcingDeckView`).
+
+**(c) The plan RELEASES the deck-pin when it stops driving the deck (2026-07-01).**
+`forceDeckView()` had no counterpart, so turning the plan **off** left the yellow
+`controlLock:'plan'` soft-lock (and `forcingDeckView`) stuck up forever — deck +
+mixer stayed gated in CaptainPad. Fixed with a symmetric **`releaseDeckView()`**
+dep (`api_server.js timelineReleaseDeckView`) that clears the plan's soft deck-pin
+through the **same** `clearViewOverrideInternal` machinery (no parallel pin) — and,
+**critically, only when `controlLockSource === 'plan'`**: a real PortWatch device
+lock (`'portwatch'`) is **never** yanked by the plan (codex P0). The service calls
+it (via `_releaseDeckView` → `_reconcileDeckPin`, which releases whenever the plan
+is **not** driving the deck — `_isPlanDrivingDeck() === false`) on **every**
+"plan stops driving" transition:
+
+- `setMode('paused')` (and `hold(...)`),
+- `setAutopilotEnabled(false)` (after `_disarmBaselineAutopilot()`),
+- `takeover()` (operator grabbed the deck),
+- `endProgram()` when the plan lands in manual/off,
+- and the per-tick `_reconcileDeckPin()` backstop (e.g. a program that expired into
+  manual).
+
+Result contract after the plan is turned off: `getState()` shows `planActive:false`,
+`forcingDeckView:false`, and the engine `controlLock` (globals + `viewOverride`
+broadcast) is back to `null` — so CaptainPad's PlanLockBanner + deck/mixer gating
+(which key off `controlLock==='plan'`) clear automatically. Turning the plan back
+on (`resume()` / `setAutopilotEnabled(true)` / baseline-arm / any deck cue) re-pins
+via the existing `forceDeckView()` calls — fully symmetric.
 
 **State the UI reads** (`timelineState` getState + WS broadcast): `planActive`,
 **`forcingDeckView`** (new), `operatorLease{expiresAtMs}|null`, `operatorLeaseSec`,
@@ -1131,6 +1157,66 @@ PortWatch **lease timer is armed only for `'portwatch'`** — a `'plan'` lock ca
 expiry; the plan hands the pin back itself on resume/handback (clearing the pin restores
 `controlLock: null` cleanly). CaptainPad reads `controlLock` off `/globals` and the
 `viewOverride` WS broadcast; it must treat `'plan'` as the soft lock above.
+
+### 16.11 Cue `durationMin` + plan-level `defaultCue` (events with a window; a default fills the gaps, 2026-07-01)
+
+Operator model: *"the cues are events with duration; outside the planned areas we
+trigger the default cue; when a plan is active and has no cues, apply the default
+cue to the deck."*
+
+**Schema (`show_plan.js`) — two optional additions:**
+
+```yaml
+# plan-level: the deck FALLBACK outside any owning cue window
+defaultCue:
+  label: House ambient          # optional
+  action: { type: look, look: house }   # a normal cue ACTION — DECK target (no trigger/kind/hold/days)
+
+cues:
+  - id: c_short_show
+    kind: program
+    trigger: { type: clock, at: '21:00' }
+    action: { type: playlist, name: show_pl, target: { channel: deck } }
+    durationMin: 45             # optional, number > 0 — minutes this cue OWNS the deck after it fires
+```
+
+- `cue.durationMin?` — `number > 0` (throw-style validation). The minutes the cue's
+  action **owns the deck** after it fires: the window is `[fireTime, fireTime + durationMin)`.
+- `plan.defaultCue?` — `{ label?, action }`. **Not** a trigger cue: no id / trigger /
+  kind / hold / days — just an optional label and a normal cue **action** that must
+  target the **deck** (`validateAction` is reused; a non-deck target throws). Absent →
+  the key is omitted (normalizer only emits `defaultCue` when authored).
+
+**Engine behavior (`timeline_service.js`).** A cue whose action drives the deck
+**opens a deck-ownership window** when it fires (`_noteDeckWindow`): with
+`durationMin` → the window is timed; **without** `durationMin` → the window is
+cleared (today's behavior: the cue holds the deck until the next cue / its hold
+window). The per-tick `_reconcileDefaultCue(now)`:
+
+- **no-op** when `defaultCue` is absent (the **autopilot baseline** stands — **no
+  regression**), or the operator owns the deck (paused / manual), or a **live
+  `durationMin` window** is still open, or a **held program** (an explicit `hold`
+  window still in the future) owns the deck;
+- otherwise applies `plan.defaultCue.action` to the deck (`_applyDefaultCue`) — the
+  default cue **fills the gap** when a `durationMin` window has just elapsed, when
+  the plan has cues but **none currently own** the deck, or when the plan has **no
+  cues at all**. The default cue **pins the deck** (`forceDeckView`) like any deck
+  cue and is subject to the §16.9 **release** logic above. It is idempotent
+  (`_defaultCueActive` latch) and marks the baseline armed so
+  `_reconcileBaselineArm` does **not** reload `plan.autopilot.playlist` on top of it
+  (the default cue **replaces** the autopilot baseline as the deck fill when
+  authored). On boot/catchUp the default cue applies immediately in a gap; a
+  caught-up cue's window is re-anchored to its real past `fireMs` so an
+  already-elapsed `durationMin` yields to the default at once.
+
+**`durationMin` vs `hold`.** They are orthogonal: **`hold`** governs *program
+precedence* (which cue owns the controller + suppresses mood — §14.3), while
+**`durationMin`** governs the *deck-fill window* for the default-cue fallback. A
+held program (`hold` still in the future) is never preempted by the default cue. A
+program with a `durationMin` but **no** live `hold` yields to the default cue when
+its window elapses (the program ends, controller drops to autopilot, default fills).
+If `defaultCue` is **absent**, everything falls back to today's autopilot baseline
+(no regression), including a no-`durationMin` cue holding until the next cue.
 
 ---
 

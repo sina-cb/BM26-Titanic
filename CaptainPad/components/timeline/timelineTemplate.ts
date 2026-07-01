@@ -16,12 +16,26 @@ import { Palette } from '@/constants/theme';
 import {
   ShowPlan,
   PlanCue,
+  PlanDefaultCue,
   CueKind,
   CueTrigger,
   CueAction,
   SunEvent,
   DECK_TRANSITION_MODE_LABEL,
 } from '@/utils/timelineApi';
+
+// ── Default cue (maker-seeded fallback) ─────────────────────────────────
+// The standing playlist the deck falls back to in the gaps between planned
+// cue windows (and when an active plan has no cues). We seed a deck-targeted
+// `default` playlist so every fresh maker plan already has a valid fallback;
+// the operator edits its action via the DEFAULT CUE editor. Shaped to PASS
+// validateShowPlan (a deck playlist action is always valid).
+export function seedDefaultCue(): PlanDefaultCue {
+  return {
+    label: 'Default',
+    action: { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } },
+  };
+}
 
 // Black Rock City coordinates (matches the existing playa_default plan).
 export const BRC_LOCATION = {
@@ -212,6 +226,10 @@ export function brcStarterPlan(name = 'brc_2026'): ShowPlan {
     // Looks removed from the maker — an empty looks block is valid per
     // validateShowPlan, and no cue references a look any more.
     looks: {},
+    // Maker-seeded fallback: the deck runs this in the gaps between cue windows
+    // (and when the plan is active with no cues). Editable via the DEFAULT CUE
+    // editor. Shaped to PASS validateShowPlan (a deck playlist action).
+    defaultCue: seedDefaultCue(),
     phases: {
       philharmonic: {
         start: { sun: 'sunset', offsetMin: -30 },
@@ -256,6 +274,10 @@ export function blankPlan(name = 'new_plan'): ShowPlan {
     looks: {},
     phases: {},
     cues: [],
+    // Every maker plan is seeded with a default cue — the deck's standing
+    // fallback while the plan is active but no cue owns the deck. Editable via
+    // the DEFAULT CUE editor.
+    defaultCue: seedDefaultCue(),
   };
 }
 

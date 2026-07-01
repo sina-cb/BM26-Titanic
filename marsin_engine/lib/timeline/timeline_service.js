@@ -178,6 +178,11 @@ export class TimelineService {
    *   forceDeckView()                        — PIN engine output to the deck via the existing
    *                                            viewOverride machinery (docs/38 §16.9) — the plan owns
    *                                            the deck-pin while it drives the deck
+   *   releaseDeckView()                      — RELEASE the plan's soft deck-pin (docs/38 §16.9): the
+   *                                            counterpart to forceDeckView, called on every transition
+   *                                            where the plan stops driving the deck (pause / autopilot
+   *                                            off / deactivate). Clears the 'plan' controlLock but
+   *                                            NEVER a real PortWatch hardware lock.
    *   getViewOverrideMode()                  — read-only: current engine view-override ('deck'|null),
    *                                            so getState can surface `forcingDeckView`
    * where `target` is { channel:'deck'|'mixer'|'all', id }.
@@ -232,6 +237,14 @@ export class TimelineService {
     // transition. Flipping every tick would reset the autopilot delay timer and
     // the deck would never advance.
     this._baselineArmed = false;
+    // ── default-cue / durationMin bookkeeping (docs/38 §16.11) ───────────────
+    // A cue with `durationMin` OWNS the deck for [fireTime, fireTime+durationMin).
+    // While a window is open the default cue must NOT fill the deck. These are
+    // in-memory runtime (never persisted): a restart re-derives ownership from
+    // the plan + wall-clock in catchUp.
+    this._deckWindowUntilMs = null;  // epoch ms the current durationMin window ends (or null)
+    this._deckWindowCueId = null;    // the cue that owns the window
+    this._defaultCueActive = false;  // the default cue currently drives the deck (idempotency latch)
   }
 
   // ── lifecycle ───────────────────────────────────────────────────────────
@@ -415,6 +428,22 @@ export class TimelineService {
     if (steps) steps.push('output ← deck (view pinned)');
   }
 
+  // Release the plan's soft deck-pin through the EXISTING viewOverride machinery
+  // (docs/38 §16.9). The counterpart to _forceDeckView: called on EVERY
+  // transition where the plan stops driving the deck (pause / hold / autopilot
+  // off / deactivate) so the yellow "PLAN IS RUNNING" soft-lock clears and
+  // CaptainPad regains the deck/mixer (its gating keys off controlLock==='plan').
+  // The engine dep only clears a 'plan'-owned pin — a real PortWatch device lock
+  // is left untouched (codex P0: never yank a hardware lock). FAIL LOUD if the
+  // dep is missing (never silently leave the deck stranded under the plan pin).
+  async _releaseDeckView(steps) {
+    if (typeof this.deps.releaseDeckView !== 'function') {
+      throw new Error('releaseDeckView dep is required to release the plan deck-pin');
+    }
+    await this.deps.releaseDeckView();
+    if (steps) steps.push('output ← released (deck pin cleared)');
+  }
+
   async _applyTaskToggles(enable, disable, steps) {
     for (const id of enable || []) {
       await this.deps.patchScheduledTask(id, { enabled: true });
@@ -531,6 +560,117 @@ export class TimelineService {
     return { steps };
   }
 
+  // ── default cue + durationMin (docs/38 §16.11) ────────────────────────────
+
+  // Does this cue ACTION drive the DECK? A cue owns the deck window only when its
+  // action lands on the deck (channel 'deck' or 'all'). Resolves the target the
+  // same way _resolveTargets does, including a 'look' action's own look.target.
+  async _actionDrivesDeck(action) {
+    if (!action || typeof action !== 'object') return false;
+    if (action.type === 'look') {
+      const look = this.plan && this.plan.looks ? this.plan.looks[action.look] : undefined;
+      if (!look) return false;
+      const targets = await this._resolveTargets(look.target);
+      return targets.some((t) => t.kind === 'deck');
+    }
+    // scene / tasks / effect never target a deck channel; playlist/globals do.
+    if (action.type !== 'playlist' && action.type !== 'globals') return false;
+    const targets = await this._resolveTargets(action.target);
+    return targets.some((t) => t.kind === 'deck');
+  }
+
+  // Open (or clear) the deck-ownership WINDOW for a cue that just fired (docs/38
+  // §16.11). A cue with `durationMin` whose action drives the deck OWNS the deck
+  // for [now, now+durationMin); any other deck-driving cue takes ownership with
+  // NO expiry (window cleared → holds until the next cue, today's behavior). A
+  // non-deck cue leaves the window untouched. Firing any deck cue clears the
+  // default-cue latch (the real cue now owns the deck).
+  async _noteDeckWindow(cueId, durationMin, action, now) {
+    const drivesDeck = await this._actionDrivesDeck(action);
+    if (!drivesDeck) return;
+    this._defaultCueActive = false;
+    if (typeof durationMin === 'number' && durationMin > 0) {
+      this._deckWindowUntilMs = now + durationMin * 60000;
+      this._deckWindowCueId = cueId;
+    } else {
+      // No durationMin → today's behavior: the cue holds the deck with no timed
+      // window (until the next cue). Clear any prior window so the default cue
+      // does not fill under it.
+      this._deckWindowUntilMs = null;
+      this._deckWindowCueId = null;
+    }
+  }
+
+  // Apply the plan-level DEFAULT CUE to the deck (docs/38 §16.11): the fallback
+  // the rig reverts to in a gap between owning cue windows, and when the plan has
+  // no owning cues. Dispatches defaultCue.action through the SAME apply path (so
+  // it pins the deck via _forceDeckView like any deck cue and is subject to the
+  // P1 release logic). Sets the idempotency latch so the tick does not re-apply
+  // it every second. THROWS loud on a dep failure (recorded by the caller).
+  async _applyDefaultCue(reason) {
+    const dc = this.plan && this.plan.defaultCue ? this.plan.defaultCue : null;
+    if (!dc) return { steps: [] };
+    const result = await this._applyAction(dc.action);
+    this._defaultCueActive = true;
+    this._deckWindowUntilMs = null;
+    this._deckWindowCueId = null;
+    // The default cue is now the deck's baseline driver — mark the baseline as
+    // armed so _reconcileBaselineArm does NOT reload plan.autopilot.playlist on
+    // top of it (docs/38 §16.11: defaultCue REPLACES the autopilot baseline as
+    // the deck fill when authored). A later disarm (pause/program) flips this off.
+    this._baselineArmed = true;
+    console.log(`  🎯 [timeline] default cue applied (${reason}): ${result.steps.join('; ')}`);
+    return result;
+  }
+
+  // Reconcile the DEFAULT CUE against the deck-ownership window (docs/38 §16.11).
+  // When the plan is driving the deck under AUTOPILOT (not a held program) and no
+  // cue currently owns the deck window, the default cue fills the deck:
+  //   • window elapsed (durationMin ran out) with no new owner → revert to default;
+  //   • plan has cues but none currently own the deck → default fills the gap;
+  //   • plan has no owning cues at all → default drives the deck.
+  // Only runs when defaultCue is authored; absent → the autopilot baseline stands
+  // (no regression). Never overrides a held program (controller 'program') or a
+  // manual/paused operator. Idempotent via _defaultCueActive.
+  async _reconcileDefaultCue(now) {
+    const dc = this.plan && this.plan.defaultCue ? this.plan.defaultCue : null;
+    if (!dc) return;                                  // no default cue → baseline stands
+    if (!this._isPlanDrivingDeck()) return;           // manual/paused → operator owns the deck
+    // A live durationMin window still owns the deck → do not fill.
+    if (typeof this._deckWindowUntilMs === 'number' && this._deckWindowUntilMs > now) return;
+    // A HELD program (an explicit hold window still in the future) owns the deck
+    // and its precedence — the default cue never preempts it (durationMin governs
+    // the deck-fill window; hold governs program precedence — docs/38 §16.11). A
+    // program whose durationMin window has elapsed with no live hold DOES yield to
+    // the default cue: end it so the arbiter drops back to autopilot + default.
+    const prog = this.state.activeProgram;
+    if (prog) {
+      const heldUntil = prog.untilMs;
+      if (typeof heldUntil === 'number' && heldUntil > now) return; // live hold owns the deck
+      // No live hold: if the elapsed cue was THIS program's durationMin window,
+      // end the program so control drops back to autopilot for the default fill.
+      if (this._deckWindowCueId === prog.cueId || this._deckWindowUntilMs !== null) {
+        this.state.activeProgram = null;
+        if (this.state.autopilotEnabled !== false) this.state.controller = 'autopilot';
+      } else {
+        // A no-durationMin, no-hold program is today's "holds until next cue"
+        // behavior — the default cue does not fill under it (no regression).
+        return;
+      }
+    }
+    // The window just elapsed (or was never open) → the default cue owns the gap.
+    if (this._deckWindowUntilMs !== null || this._deckWindowCueId !== null) {
+      // A window existed and has now elapsed → revert to default.
+      await this._applyDefaultCue('window-elapsed');
+      return;
+    }
+    // No window and default not yet driving → fill the deck with the default cue
+    // (plan has no owning cue right now). Idempotent: only apply once.
+    if (!this._defaultCueActive) {
+      await this._applyDefaultCue('no-owning-cue');
+    }
+  }
+
   // ── dispatch (ported from timeline_server.js) ─────────────────────────────
 
   _recordFire(cueId, reason) {
@@ -542,6 +682,8 @@ export class TimelineService {
     const cue = this.plan.cues.find((c) => c.id === cueId);
     if (!cue) throw new Error(`cue "${cueId}" not in active plan`);
     const result = await this._applyAction(cue.action);
+    // Open/clear the deck-ownership window for the default-cue fallback (§16.11).
+    await this._noteDeckWindow(cue.id, cue.durationMin, cue.action, this.nowFn());
     delete this.cueErrors[cueId];
     this.state.lastFiredCueId = cueId;
     this.state.lastFiredAtMs = this.nowFn();
@@ -603,6 +745,30 @@ export class TimelineService {
     else await this._disarmBaselineAutopilot();
   }
 
+  // True when the plan is currently DRIVING the rig (docs/38 §16). Mirrors the
+  // `planActive` computed in getState(): autopilot-or-program controller AND not
+  // paused/overridden. When false the plan owns nothing and its soft deck-pin
+  // must be released.
+  _isPlanDrivingDeck() {
+    const controller = this.state.controller || 'autopilot';
+    return (controller === 'autopilot' || controller === 'program')
+      && this.state.mode !== 'paused' && this.state.mode !== 'overridden';
+  }
+
+  // Reconcile the plan's SOFT deck-pin against whether the plan is still driving
+  // the deck (docs/38 §16.9). The symmetric counterpart to the forceDeckView
+  // calls scattered through the apply/baseline paths: whenever the plan STOPS
+  // driving (pause / hold / autopilot-off / deactivate), release the pin so the
+  // 'plan' controlLock clears and CaptainPad's PlanLockBanner + deck/mixer gating
+  // drop automatically. The engine dep only clears a 'plan'-owned pin, so a real
+  // PortWatch hardware lock is left untouched. Idempotent (release is a no-op
+  // when nothing is pinned by the plan). Re-pinning on resume/arm is handled by
+  // the existing _forceDeckView calls in the apply/baseline paths.
+  async _reconcileDeckPin() {
+    if (this._isPlanDrivingDeck()) return; // plan drives → its apply paths keep the pin
+    await this._releaseDeckView(null);
+  }
+
   async _dispatchArbitratedAction(act, reason) {
     if (act.autopilotOff) {
       await this._disarmBaselineAutopilot();
@@ -615,6 +781,9 @@ export class TimelineService {
     const cue = this.plan.cues.find((c) => c.id === act.cueId);
     if (!cue) throw new Error(`cue "${act.cueId}" not in active plan`);
     const result = await this._applyAction(act.action);
+    // Open/clear the deck-ownership window for the default-cue fallback (§16.11).
+    // durationMin comes from the plan cue; the action is the one actually applied.
+    await this._noteDeckWindow(cue.id, cue.durationMin, act.action, this.nowFn());
     delete this.cueErrors[act.cueId];
     this.state.lastFiredCueId = act.cueId;
     this.state.lastFiredAtMs = this.nowFn();
@@ -644,6 +813,15 @@ export class TimelineService {
     try {
       await this._establishAutopilotBaseline(reason);
       this.state.controller = 'autopilot';
+      // §16.11: with a plan-level defaultCue authored, the deck runs the default
+      // cue whenever no cue currently owns the deck. Apply it now (idempotent)
+      // so an empty-cues plan (or a boot into a gap) shows the default cue on the
+      // deck immediately, not only after the first reconcile tick. Absent →
+      // the autopilot baseline just established stands (no regression).
+      if (this.plan && this.plan.defaultCue
+          && !(typeof this._deckWindowUntilMs === 'number' && this._deckWindowUntilMs > now)) {
+        await this._applyDefaultCue(reason);
+      }
     } catch (e) {
       this.bootError = `autopilot baseline (${reason}): ${e && e.message}`;
       console.warn(`  ⚠ [timeline] autopilot baseline (${reason}) failed: ${e && e.message}`);
@@ -707,6 +885,14 @@ export class TimelineService {
       try {
         const result = await this._dispatchCue(best.cue.id, 'catchUp');
         console.log(`  ⏪ [timeline] catchUp restored "${best.cue.id}": ${result.steps.join('; ')}`);
+        // §16.11: _dispatchCue opened the deck window at `now`, but a caught-up
+        // cue actually fired in the PAST (best.fireMs). Re-anchor the window to
+        // its true start so an already-elapsed durationMin lets the default cue
+        // fill the gap immediately rather than granting a fresh full window.
+        if (this._deckWindowCueId === best.cue.id
+            && typeof best.cue.durationMin === 'number' && best.cue.durationMin > 0) {
+          this._deckWindowUntilMs = best.fireMs + best.cue.durationMin * 60000;
+        }
         if (programCaughtUp) {
           await this._disarmBaselineAutopilot();
           this.state.controller = 'program';
@@ -803,6 +989,28 @@ export class TimelineService {
       } catch (e) {
         this.lastError = `autopilot reconcile: ${e && e.message}`;
         console.warn(`  ⚠ [timeline] autopilot reconcile failed: ${e && e.message}`);
+      }
+
+      // Reconcile the plan's soft deck-pin against whether it still drives the
+      // deck (docs/38 §16.9): a program that expired into manual, or any drift
+      // into a non-driving controller, releases the pin so the 'plan' controlLock
+      // clears. Re-pinning on resume is handled by the apply/baseline paths.
+      try {
+        await this._reconcileDeckPin();
+      } catch (e) {
+        this.lastError = `deck-pin reconcile: ${e && e.message}`;
+        console.warn(`  ⚠ [timeline] deck-pin reconcile failed: ${e && e.message}`);
+      }
+
+      // Reconcile the DEFAULT CUE against the deck-ownership window (§16.11): a
+      // durationMin window that just elapsed (or a plan with no owning cue right
+      // now) reverts the deck to plan.defaultCue. No-op when defaultCue is absent
+      // (autopilot baseline stands) or a program/operator owns the deck.
+      try {
+        await this._reconcileDefaultCue(now);
+      } catch (e) {
+        this.lastError = `default-cue reconcile: ${e && e.message}`;
+        console.warn(`  ⚠ [timeline] default-cue reconcile failed: ${e && e.message}`);
       }
 
       // A `scene` action (requestScene → engine exit-75) tears this service down
@@ -1018,12 +1226,25 @@ export class TimelineService {
 
   // ── operator controls (docs/38 §14.5) ─────────────────────────────────────
 
-  setMode(mode) {
+  async setMode(mode) {
     if (mode !== 'armed' && mode !== 'paused') {
       throw new Error("mode must be 'armed' or 'paused'");
     }
     this.state.mode = mode;
     if (mode === 'armed') this.state.manualHoldUntilMs = null;
+    // PAUSE stops the plan from driving the deck → release the soft deck-pin so
+    // the 'plan' controlLock clears (docs/38 §16.9). ARM re-enters the driving
+    // state; the baseline reconcile / next tick re-pins as needed.
+    if (mode === 'paused') {
+      // Reflect takeover in the controller immediately so _reconcileDeckPin sees
+      // the plan is no longer driving (don't wait for the next tick).
+      this.state.controller = 'manual';
+      try {
+        await this._reconcileDeckPin();
+      } catch (e) {
+        this.lastError = `pause deck-pin release: ${e && e.message}`;
+      }
+    }
     this._persistAndBroadcast();
     return { mode: this.state.mode };
   }
@@ -1035,6 +1256,11 @@ export class TimelineService {
     // A hold is operator takeover — reflect that in the controller immediately
     // rather than letting it read stale (e.g. 'autopilot') until the next tick.
     this.state.controller = 'manual';
+    // A hold stops the plan from driving the deck → release the soft deck-pin
+    // (docs/38 §16.9). Async release; the sync return keeps the REST contract.
+    this._reconcileDeckPin().catch((e) => {
+      this.lastError = `hold deck-pin release: ${e && e.message}`;
+    });
     this._persistAndBroadcast();
     return { manualHoldUntilMs: this.state.manualHoldUntilMs };
   }
@@ -1077,6 +1303,12 @@ export class TimelineService {
     // Reflect the takeover in the controller immediately (don't read stale
     // 'autopilot' until the next tick) — overridden is operator manual.
     this.state.controller = 'manual';
+    // Operator grabbed the deck → the plan no longer drives it. Release the
+    // soft deck-pin (docs/38 §16.9). Fire-and-forget keeps the sync REST
+    // contract; the tick's _reconcileDeckPin is the backstop.
+    this._reconcileDeckPin().catch((e) => {
+      this.lastError = `takeover deck-pin release: ${e && e.message}`;
+    });
     this._persistAndBroadcast();
     return { ok: true, operatorLease: { expiresAtMs: this.state.operatorLease.expiresAtMs } };
   }
@@ -1126,6 +1358,10 @@ export class TimelineService {
       } else {
         await this._disarmBaselineAutopilot();
         if (!this.state.activeProgram) this.state.controller = 'manual';
+        // The baseline no longer owns the deck (docs/38 §16.9). If a program is
+        // still active it keeps its own deck-pin; otherwise release the plan's
+        // soft deck-pin so the 'plan' controlLock clears (yellow lock drops).
+        await this._reconcileDeckPin();
         this.lastError = null;
       }
     } catch (e) {
@@ -1146,6 +1382,10 @@ export class TimelineService {
       } else {
         this.state.controller = 'manual';
       }
+      // If the plan is no longer driving the deck (autopilot off / paused),
+      // release its soft deck-pin (docs/38 §16.9). No-op when the baseline
+      // re-established above re-pinned the deck.
+      await this._reconcileDeckPin();
       this.lastError = null;
     } catch (e) {
       this.lastError = `program/end: ${e && e.message}`;

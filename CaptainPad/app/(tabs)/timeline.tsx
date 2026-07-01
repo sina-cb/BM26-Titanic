@@ -48,6 +48,7 @@ import {
   OverviewCue,
   ShowPlan,
   PlanCue,
+  PlanDefaultCue,
 } from '@/utils/timelineApi';
 import { DayOverviewStrip } from '@/components/timeline/DayOverviewStrip';
 import { DayEditor } from '@/components/timeline/DayEditor';
@@ -101,6 +102,19 @@ function formatCountdown(sec: number | null): string {
   const s = total % 60;
   if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// Compact summary of the plan's default-cue action for the DEFAULT CUE row.
+// The maker only authors playlist actions, but the field is permissive for
+// hand-authored plans, so we summarise the other action types too.
+function defaultCueActionSummary(dc: PlanDefaultCue): string {
+  const a = dc.action;
+  switch (a.type) {
+    case 'playlist': return `playlist · ${a.name}`;
+    case 'look': return `look · ${a.look}`;
+    case 'globals': return 'globals';
+    default: return 'action';
+  }
 }
 
 // ── Controller pill (§14): AUTOPILOT green / PROGRAM amber / MANUAL grey ──
@@ -175,6 +189,8 @@ export default function TimelineScreen() {
   const [editingDay, setEditingDay] = useState<number | null>(null);
   const [cueSheetOpen, setCueSheetOpen] = useState(false);
   const [editingCue, setEditingCue] = useState<PlanCue | null>(null);
+  // The plan's DEFAULT CUE editor (reuses CueEditorSheet in 'defaultCue' mode).
+  const [defaultCueSheetOpen, setDefaultCueSheetOpen] = useState(false);
 
   // ── 1s ticker — drives the live NOW playhead (strip + day editor). ──
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -516,6 +532,18 @@ export default function TimelineScreen() {
     setCueSheetOpen(true);
   }, [refreshPlaylists]);
 
+  // ── Default-cue editor (maker-only, plan-level fallback) ──
+  const openEditDefaultCue = useCallback(() => {
+    if (!draft) return;
+    refreshPlaylists();
+    setDefaultCueSheetOpen(true);
+  }, [draft, refreshPlaylists]);
+
+  const handleSaveDefaultCue = useCallback((dc: PlanDefaultCue) => {
+    mutateDraft((p) => { p.defaultCue = dc; });
+    setDefaultCueSheetOpen(false);
+  }, [mutateDraft]);
+
   // ── Live controls ──
   const isOffline = !connected && !state;
   const mode = state?.mode ?? 'armed';
@@ -740,6 +768,29 @@ export default function TimelineScreen() {
             ) : null}
           </View>
 
+          {/* ── DEFAULT CUE (maker-only) — the deck's standing fallback that
+              runs in the gaps between cues + when the plan has no cues. Every
+              maker plan is seeded with one; tap EDIT to set its playlist. ── */}
+          {draft ? (
+            <View style={styles.defaultCueRow}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.defaultCueLabel}>DEFAULT CUE</Text>
+                <Text style={styles.defaultCueSub} numberOfLines={1}>
+                  {draft.defaultCue
+                    ? `${draft.defaultCue.label ? `${draft.defaultCue.label} · ` : ''}${defaultCueActionSummary(draft.defaultCue)}`
+                    : 'No default cue set — tap EDIT to add one.'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={openEditDefaultCue}
+                style={styles.miniBtn}
+                accessibilityLabel="Edit the plan default cue"
+              >
+                <Text style={styles.miniBtnText}>EDIT</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
           {overview ? (
             <DayOverviewStrip
               days={overview.days}
@@ -882,6 +933,23 @@ export default function TimelineScreen() {
           onClose={() => { setCueSheetOpen(false); setEditingCue(null); }}
         />
       ) : null}
+
+      {draft ? (
+        <CueEditorSheet
+          visible={defaultCueSheetOpen}
+          mode="defaultCue"
+          initialCue={null}
+          initialDefaultCue={draft.defaultCue ?? null}
+          plan={draft}
+          playlists={playlists}
+          palettes={getCachedColorPalettes()}
+          dayIndex={0}
+          onSave={handleSaveCue}
+          onSaveDefault={handleSaveDefaultCue}
+          onDelete={null}
+          onClose={() => setDefaultCueSheetOpen(false)}
+        />
+      ) : null}
     </View>
   );
 }
@@ -1006,6 +1074,15 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
       textTransform: 'uppercase', marginTop: 8, marginBottom: 10,
     },
     helperLine: { fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary, marginTop: 8, marginBottom: 4 },
+    defaultCueRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4, marginBottom: 10,
+      paddingVertical: 10, paddingHorizontal: 14, borderRadius: 12, borderWidth: 1,
+      borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerLowest,
+    },
+    defaultCueLabel: {
+      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 1, color: C.icon, textTransform: 'uppercase',
+    },
+    defaultCueSub: { fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, marginTop: 3 },
     dayToggle: {
       flexDirection: 'row', gap: 4, borderWidth: 1, borderColor: C.ghostBorder, borderRadius: 8, padding: 2,
     },
