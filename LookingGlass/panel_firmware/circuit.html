@@ -3,12 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>LookingGlass Panel — Circuit / Wiring</title>
+<title>LookingGlass Panel — Circuit / System</title>
 <style>
   :root{
     --bg:#0b0f14; --card:#0f1620; --ink:#cdd6e4; --mut:#7d8aa0; --line:#1e2a38;
-    --btn:#e0b54a; --led:#39d98a; --pwr:#e06a5a; --gnd:#6b7a90; --sys:#5aa0e0;
-    --resbg:#241a1a; --resln:#7a3b3b; --free:#6f8198;
+    --sw:#38bdf8; --pwm:#f59e0b; --mode:#22c55e; --led:#c084fc; --pwr:#e06a5a;
+    --sys:#5aa0e0; --net:#2dd4bf; --gnd:#6b7a90; --free:#9aa6b6;
+    --resbg:#241a1a; --resln:#7a3b3b;
   }
   *{box-sizing:border-box}
   body{font-family:system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--ink);margin:0;padding:20px;line-height:1.45}
@@ -27,7 +28,8 @@
   ul{margin:6px 0 0;padding-left:18px}
   li{margin:3px 0;font-size:13px}
   svg{display:block}
-  .tag-btn{color:var(--btn)} .tag-led{color:var(--led)} .tag-pwr{color:var(--pwr)} .tag-lamp{color:#e0902e}
+  .tag-sw{color:var(--sw)} .tag-pwm{color:var(--pwm)} .tag-mode{color:var(--mode)}
+  .tag-led{color:var(--led)} .tag-pwr{color:var(--pwr)} .tag-sys{color:var(--sys)} .tag-net{color:var(--net)}
   .bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 4px}
   button.act{background:#15212e;color:#cfe0f2;border:1px solid #2a3f55;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
   button.act:hover{background:#1b2c3d;border-color:#3a567299}
@@ -39,82 +41,807 @@
   .canvas{background:#fbfcfe;background-image:radial-gradient(#e4e8ef 1px,transparent 1px);
     background-size:18px 18px;border:1px solid #d7dde6;border-radius:14px;
     box-shadow:0 10px 34px #00000066;padding:10px;overflow-x:auto}
+  .tabs{display:flex;gap:6px;margin:16px 0 0;border-bottom:1px solid var(--line)}
+  .tab{background:none;border:1px solid var(--line);border-bottom:none;color:var(--mut);
+    padding:9px 18px;border-radius:9px 9px 0 0;cursor:pointer;font-size:14px;font-weight:700}
+  .tab.active{background:var(--card);color:#8fb7e0;border-color:#2a3f55}
+  .tabpane{display:none;padding-top:14px} .tabpane.active{display:block}
+  .subtabs{display:inline-flex;gap:4px;background:#0c141d;border:1px solid var(--line);border-radius:9px;padding:3px}
+  .subtab{background:none;border:none;color:var(--mut);padding:6px 12px;border-radius:7px;cursor:pointer;font-size:12.5px;font-weight:700}
+  .subtab.active{background:#1b2c3d;color:#cfe0f2}
+  .wirepane{display:none} .wirepane.active{display:block}
 </style>
 </head>
 <body>
 
-<h1>LookingGlass Control Panel — Circuit / Wiring</h1>
-<div class="sub">Board: <b>Waveshare ESP32-S3-Pico</b> (ESP32-S3R8 · 16&nbsp;MB flash · 8&nbsp;MB PSRAM · native USB).
-Pin map matches <code>include/config.h</code>. 6 momentary arcade buttons, active-low to GND via internal pull-ups.</div>
+<h1>LookingGlass Control Panel — Circuit / System</h1>
+<div class="sub">Board: <b>ESP32-S3-ETH</b> (ESP32-S3R8 · 16&nbsp;MB flash · 8&nbsp;MB PSRAM · <b>W5500 Ethernet + PoE</b>) — same board as BM26-Stoker.
+6 illuminated buttons, active-low to GND, <b>each = 2 IO</b> (switch + PWM LED): <b>SW1–SW4</b> small arcade, <b>SW5</b> big arcade, plus a green <b>Mode</b> button with a status LED. Switch pins mirror Stoker's control-panel map.</div>
 
-<div class="bar">
-  <button class="act" id="copyBtn">&#9106; Copy schematic for Figma</button>
-  <button class="act" id="dlBtn">&#11015; Download .svg</button>
-  <span class="toast" id="toast"></span>
-</div>
-<div class="hint">Click <b>Copy</b>, then paste (<b>Ctrl/Cmd&nbsp;+&nbsp;V</b>) onto a Figma canvas — it imports as editable vector layers. (Or drag the downloaded <code>.svg</code> into Figma.)</div>
-
-<div class="frame">
-  <div class="frame-label">&#9638; LookingGlass / Control Panel — Schematic</div>
-  <div class="canvas" id="schematicPro"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1700 1220" width="1700" height="1220"><rect x="0" y="0" width="1700" height="1220" rx="14" fill="#fbfcfe"></rect><g transform="translate(20,20)"><g><text x="70" y="52" fill="#263043" font-size="17" font-weight="800" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">LookingGlass — Control Panel · Schematic</text><text x="70" y="72" fill="#7a8699" font-size="12" font-weight="500" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">ESP32-S3-Pico (ESP32-S3R8) · Rev 0.1 · active-low buttons · full header pinout</text><line x1="70" y1="86" x2="1570" y2="86" stroke="#e6e9ef" stroke-width="1" stroke-linecap="round" stroke-dasharray="0"></line><rect x="171" y="470" width="1160" height="200" rx="8" fill="#eef2f7" stroke="#9aa7b8" stroke-width="1.4" stroke-dasharray="0"></rect><circle cx="189" cy="488" r="5" fill="none" stroke="#9aa7b8" stroke-width="1.4"></circle><text x="751" y="564" fill="#263043" font-size="20" font-weight="800" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">ESP32-S3-Pico</text><text x="751" y="586" fill="#7a8699" font-size="12" font-weight="500" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">(ESP32-S3R8) · Waveshare module</text><text x="751" y="608" fill="#7a8699" font-size="10.5" font-weight="600" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif" font-style="italic">TOP HEADER ROW (above) · BOTTOM HEADER ROW (below) — exact physical order</text><line x1="200" y1="470" x2="200" y2="448" stroke="#c98a8a" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2"></line><rect x="180" y="424" width="40" height="24" rx="4" fill="#fbeeee" stroke="#c98a8a" stroke-width="1.4" stroke-dasharray="3 2"></rect><text x="200" y="440" fill="#b06a6a" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">33</text><line x1="258" y1="470" x2="258" y2="448" stroke="#c98a8a" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2"></line><rect x="238" y="424" width="40" height="24" rx="4" fill="#fbeeee" stroke="#c98a8a" stroke-width="1.4" stroke-dasharray="3 2"></rect><text x="258" y="440" fill="#b06a6a" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">34</text><line x1="316" y1="470" x2="316" y2="448" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="296" y="424" width="40" height="24" rx="4" fill="#eef1f5" stroke="#9aa7b8" stroke-width="1.4" stroke-dasharray="0"></rect><text x="316" y="440" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">GND</text><line x1="374" y1="470" x2="374" y2="448" stroke="#c98a8a" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2"></line><rect x="354" y="424" width="40" height="24" rx="4" fill="#fbeeee" stroke="#c98a8a" stroke-width="1.4" stroke-dasharray="3 2"></rect><text x="374" y="440" fill="#b06a6a" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">35</text><line x1="432" y1="470" x2="432" y2="448" stroke="#c98a8a" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2"></line><rect x="412" y="424" width="40" height="24" rx="4" fill="#fbeeee" stroke="#c98a8a" stroke-width="1.4" stroke-dasharray="3 2"></rect><text x="432" y="440" fill="#b06a6a" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">36</text><line x1="490" y1="470" x2="490" y2="448" stroke="#c98a8a" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2"></line><rect x="470" y="424" width="40" height="24" rx="4" fill="#fbeeee" stroke="#c98a8a" stroke-width="1.4" stroke-dasharray="3 2"></rect><text x="490" y="440" fill="#b06a6a" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">37</text><line x1="548" y1="470" x2="548" y2="448" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="528" y="424" width="40" height="24" rx="4" fill="#fbf3e0" stroke="#caa040" stroke-width="1.4" stroke-dasharray="0"></rect><text x="548" y="440" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">38</text><line x1="606" y1="470" x2="606" y2="448" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="586" y="424" width="40" height="24" rx="4" fill="#eef1f5" stroke="#9aa7b8" stroke-width="1.4" stroke-dasharray="0"></rect><text x="606" y="440" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">GND</text><line x1="664" y1="470" x2="664" y2="448" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="644" y="424" width="40" height="24" rx="4" fill="#fbf3e0" stroke="#caa040" stroke-width="1.4" stroke-dasharray="0"></rect><text x="664" y="440" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">39</text><line x1="722" y1="470" x2="722" y2="448" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="702" y="424" width="40" height="24" rx="4" fill="#fdecd6" stroke="#e08a2e" stroke-width="1.4" stroke-dasharray="0"></rect><text x="722" y="440" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">40</text><line x1="780" y1="470" x2="780" y2="448" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="760" y="424" width="40" height="24" rx="4" fill="#fbf3e0" stroke="#caa040" stroke-width="1.4" stroke-dasharray="0"></rect><text x="780" y="440" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">41</text><line x1="838" y1="470" x2="838" y2="448" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="818" y="424" width="40" height="24" rx="4" fill="#fdecd6" stroke="#e08a2e" stroke-width="1.4" stroke-dasharray="0"></rect><text x="838" y="440" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">42</text><line x1="896" y1="470" x2="896" y2="448" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="876" y="424" width="40" height="24" rx="4" fill="#eef1f5" stroke="#9aa7b8" stroke-width="1.4" stroke-dasharray="0"></rect><text x="896" y="440" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">GND</text><line x1="954" y1="470" x2="954" y2="448" stroke="#c98a8a" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2"></line><rect x="934" y="424" width="40" height="24" rx="4" fill="#fbeeee" stroke="#c98a8a" stroke-width="1.4" stroke-dasharray="3 2"></rect><text x="954" y="440" fill="#b06a6a" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">45</text><line x1="1012" y1="470" x2="1012" y2="448" stroke="#c98a8a" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2"></line><rect x="992" y="424" width="40" height="24" rx="4" fill="#fbeeee" stroke="#c98a8a" stroke-width="1.4" stroke-dasharray="3 2"></rect><text x="1012" y="440" fill="#b06a6a" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">46</text><line x1="1070" y1="470" x2="1070" y2="448" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="1050" y="424" width="40" height="24" rx="4" fill="#fbf3e0" stroke="#caa040" stroke-width="1.4" stroke-dasharray="0"></rect><text x="1070" y="440" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">47</text><line x1="1128" y1="470" x2="1128" y2="448" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="1108" y="424" width="40" height="24" rx="4" fill="#fdecd6" stroke="#e08a2e" stroke-width="1.4" stroke-dasharray="0"></rect><text x="1128" y="440" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">48</text><line x1="1186" y1="470" x2="1186" y2="448" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="1166" y="424" width="40" height="24" rx="4" fill="#eef1f5" stroke="#9aa7b8" stroke-width="1.4" stroke-dasharray="0"></rect><text x="1186" y="440" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">GND</text><line x1="1244" y1="470" x2="1244" y2="448" stroke="#c98a8a" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2"></line><rect x="1224" y="424" width="40" height="24" rx="4" fill="#fbeeee" stroke="#c98a8a" stroke-width="1.4" stroke-dasharray="3 2"></rect><text x="1244" y="440" fill="#b06a6a" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">19</text><line x1="1302" y1="470" x2="1302" y2="448" stroke="#c98a8a" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2"></line><rect x="1282" y="424" width="40" height="24" rx="4" fill="#fbeeee" stroke="#c98a8a" stroke-width="1.4" stroke-dasharray="3 2"></rect><text x="1302" y="440" fill="#b06a6a" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">20</text><line x1="200" y1="670" x2="200" y2="692" stroke="#c98a8a" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2"></line><rect x="180" y="692" width="40" height="24" rx="4" fill="#fbeeee" stroke="#c98a8a" stroke-width="1.4" stroke-dasharray="3 2"></rect><text x="200" y="708" fill="#b06a6a" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">43</text><line x1="258" y1="670" x2="258" y2="692" stroke="#c98a8a" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2"></line><rect x="238" y="692" width="40" height="24" rx="4" fill="#fbeeee" stroke="#c98a8a" stroke-width="1.4" stroke-dasharray="3 2"></rect><text x="258" y="708" fill="#b06a6a" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">44</text><line x1="316" y1="670" x2="316" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="296" y="692" width="40" height="24" rx="4" fill="#eef1f5" stroke="#9aa7b8" stroke-width="1.4" stroke-dasharray="0"></rect><text x="316" y="708" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">GND</text><line x1="374" y1="670" x2="374" y2="692" stroke="#c98a8a" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2"></line><rect x="354" y="692" width="40" height="24" rx="4" fill="#fbeeee" stroke="#c98a8a" stroke-width="1.4" stroke-dasharray="3 2"></rect><text x="374" y="708" fill="#b06a6a" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">0</text><line x1="432" y1="670" x2="432" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="412" y="692" width="40" height="24" rx="4" fill="#f1f4f8" stroke="#9aa7b8" stroke-width="1.4" stroke-dasharray="0"></rect><text x="432" y="708" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">1</text><line x1="490" y1="670" x2="490" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="470" y="692" width="40" height="24" rx="4" fill="#f1f4f8" stroke="#9aa7b8" stroke-width="1.4" stroke-dasharray="0"></rect><text x="490" y="708" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">2</text><line x1="548" y1="670" x2="548" y2="692" stroke="#c98a8a" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="3 2"></line><rect x="528" y="692" width="40" height="24" rx="4" fill="#fbeeee" stroke="#c98a8a" stroke-width="1.4" stroke-dasharray="3 2"></rect><text x="548" y="708" fill="#b06a6a" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">3</text><line x1="606" y1="670" x2="606" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="586" y="692" width="40" height="24" rx="4" fill="#eef1f5" stroke="#9aa7b8" stroke-width="1.4" stroke-dasharray="0"></rect><text x="606" y="708" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">GND</text><line x1="664" y1="670" x2="664" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="644" y="692" width="40" height="24" rx="4" fill="#fbf3e0" stroke="#caa040" stroke-width="1.4" stroke-dasharray="0"></rect><text x="664" y="708" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">15</text><line x1="722" y1="670" x2="722" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="702" y="692" width="40" height="24" rx="4" fill="#e9f1fb" stroke="#5aa0e0" stroke-width="1.4" stroke-dasharray="0"></rect><text x="722" y="708" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">RUN</text><line x1="780" y1="670" x2="780" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="760" y="692" width="40" height="24" rx="4" fill="#fdecd6" stroke="#e08a2e" stroke-width="1.4" stroke-dasharray="0"></rect><text x="780" y="708" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">18</text><line x1="838" y1="670" x2="838" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="818" y="692" width="40" height="24" rx="4" fill="#fbf3e0" stroke="#caa040" stroke-width="1.4" stroke-dasharray="0"></rect><text x="838" y="708" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">16</text><line x1="896" y1="670" x2="896" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="876" y="692" width="40" height="24" rx="4" fill="#eef1f5" stroke="#9aa7b8" stroke-width="1.4" stroke-dasharray="0"></rect><text x="896" y="708" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">GND</text><line x1="954" y1="670" x2="954" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="934" y="692" width="40" height="24" rx="4" fill="#fdecd6" stroke="#e08a2e" stroke-width="1.4" stroke-dasharray="0"></rect><text x="954" y="708" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">17</text><line x1="1012" y1="670" x2="1012" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="992" y="692" width="40" height="24" rx="4" fill="#e7f8ef" stroke="#39d98a" stroke-width="1.4" stroke-dasharray="0"></rect><text x="1012" y="708" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">21</text><line x1="1070" y1="670" x2="1070" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="1050" y="692" width="40" height="24" rx="4" fill="#fbeceb" stroke="#e06a5a" stroke-width="1.4" stroke-dasharray="0"></rect><text x="1070" y="708" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">3V3</text><line x1="1128" y1="670" x2="1128" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="1108" y="692" width="40" height="24" rx="4" fill="#e9f1fb" stroke="#5aa0e0" stroke-width="1.4" stroke-dasharray="0"></rect><text x="1128" y="708" fill="#263043" font-size="9.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">3V3_EN</text><line x1="1186" y1="670" x2="1186" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="1166" y="692" width="40" height="24" rx="4" fill="#eef1f5" stroke="#9aa7b8" stroke-width="1.4" stroke-dasharray="0"></rect><text x="1186" y="708" fill="#263043" font-size="11.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">GND</text><line x1="1244" y1="670" x2="1244" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="1224" y="692" width="40" height="24" rx="4" fill="#fbeceb" stroke="#e06a5a" stroke-width="1.4" stroke-dasharray="0"></rect><text x="1244" y="708" fill="#263043" font-size="9.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">VSYS</text><line x1="1302" y1="670" x2="1302" y2="692" stroke="#3b4759" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="1282" y="692" width="40" height="24" rx="4" fill="#fbeceb" stroke="#e06a5a" stroke-width="1.4" stroke-dasharray="0"></rect><text x="1302" y="708" fill="#263043" font-size="9.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace">VBUS</text><text x="171" y="404" fill="#b06a6a" font-size="10.5" font-weight="600" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif" font-style="italic">dashed / dimmed pins = reserved — do not use</text><text x="70" y="150" fill="#7a8699" font-size="12" font-weight="700" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">BUTTONS — 5 arcade + 1 mode · active-low (INPUT_PULLUP)</text><text x="70" y="168" fill="#7a8699" font-size="10" font-weight="500" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif" font-style="italic">inputs pulled HIGH internally; each switch closes its GPIO to GND (pressed = LOW)</text><line x1="664" y1="424" x2="664" y2="408" stroke="#3b4759" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="664" cy="408" r="3.4" fill="#fff" stroke="#263043" stroke-width="1.4"></circle><line x1="664" y1="408" x2="664" y2="384" stroke="#263043" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><line x1="655" y1="370" x2="673" y2="370" stroke="#263043" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="0"></line><line x1="664" y1="370" x2="664" y2="336" stroke="#263043" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="664" cy="336" r="3.4" fill="#fff" stroke="#263043" stroke-width="1.4"></circle><line x1="664" y1="336" x2="664" y2="342" stroke="#263043" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><line x1="664" y1="342" x2="664" y2="351" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="653" y1="351" x2="675" y2="351" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="657" y1="355" x2="671" y2="355" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="661" y1="359" x2="667" y2="359" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><text x="678" y="389" fill="#9a6b12" font-size="9.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" transform="rotate(-90 678 389)">ARCADE_1</text><text x="664" y="324" fill="#9a6b12" font-size="10.5" font-weight="800" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">SW1</text><line x1="780" y1="424" x2="780" y2="408" stroke="#3b4759" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="780" cy="408" r="3.4" fill="#fff" stroke="#263043" stroke-width="1.4"></circle><line x1="780" y1="408" x2="780" y2="384" stroke="#263043" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><line x1="771" y1="370" x2="789" y2="370" stroke="#263043" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="0"></line><line x1="780" y1="370" x2="780" y2="336" stroke="#263043" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="780" cy="336" r="3.4" fill="#fff" stroke="#263043" stroke-width="1.4"></circle><line x1="780" y1="336" x2="780" y2="342" stroke="#263043" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><line x1="780" y1="342" x2="780" y2="351" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="769" y1="351" x2="791" y2="351" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="773" y1="355" x2="787" y2="355" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="777" y1="359" x2="783" y2="359" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><text x="794" y="389" fill="#9a6b12" font-size="9.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" transform="rotate(-90 794 389)">ARCADE_2</text><text x="780" y="324" fill="#9a6b12" font-size="10.5" font-weight="800" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">SW2</text><line x1="1070" y1="424" x2="1070" y2="408" stroke="#3b4759" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="1070" cy="408" r="3.4" fill="#fff" stroke="#263043" stroke-width="1.4"></circle><line x1="1070" y1="408" x2="1070" y2="384" stroke="#263043" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1061" y1="370" x2="1079" y2="370" stroke="#263043" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1070" y1="370" x2="1070" y2="336" stroke="#263043" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="1070" cy="336" r="3.4" fill="#fff" stroke="#263043" stroke-width="1.4"></circle><line x1="1070" y1="336" x2="1070" y2="342" stroke="#263043" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1070" y1="342" x2="1070" y2="351" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1059" y1="351" x2="1081" y2="351" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1063" y1="355" x2="1077" y2="355" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1067" y1="359" x2="1073" y2="359" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><text x="1084" y="389" fill="#9a6b12" font-size="9.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" transform="rotate(-90 1084 389)">ARCADE_3</text><text x="1070" y="324" fill="#9a6b12" font-size="10.5" font-weight="800" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">SW3</text><line x1="664" y1="716" x2="664" y2="732" stroke="#3b4759" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="664" cy="732" r="3.4" fill="#fff" stroke="#263043" stroke-width="1.4"></circle><line x1="664" y1="732" x2="664" y2="756" stroke="#263043" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><line x1="655" y1="770" x2="673" y2="770" stroke="#263043" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="0"></line><line x1="664" y1="770" x2="664" y2="792" stroke="#263043" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="664" cy="792" r="3.4" fill="#fff" stroke="#263043" stroke-width="1.4"></circle><line x1="664" y1="792" x2="664" y2="798" stroke="#263043" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><line x1="664" y1="798" x2="664" y2="807" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="653" y1="807" x2="675" y2="807" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="657" y1="811" x2="671" y2="811" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="661" y1="815" x2="667" y2="815" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><text x="678" y="751" fill="#9a6b12" font-size="9.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" transform="rotate(-90 678 751)">ARCADE_4</text><text x="664" y="828" fill="#9a6b12" font-size="10.5" font-weight="800" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">SW4</text><line x1="838" y1="716" x2="838" y2="732" stroke="#3b4759" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="838" cy="732" r="3.4" fill="#fff" stroke="#263043" stroke-width="1.4"></circle><line x1="838" y1="732" x2="838" y2="756" stroke="#263043" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><line x1="829" y1="770" x2="847" y2="770" stroke="#263043" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="0"></line><line x1="838" y1="770" x2="838" y2="792" stroke="#263043" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="838" cy="792" r="3.4" fill="#fff" stroke="#263043" stroke-width="1.4"></circle><line x1="838" y1="792" x2="838" y2="798" stroke="#263043" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><line x1="838" y1="798" x2="838" y2="807" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="827" y1="807" x2="849" y2="807" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="831" y1="811" x2="845" y2="811" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="835" y1="815" x2="841" y2="815" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><text x="852" y="751" fill="#9a6b12" font-size="9.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" transform="rotate(-90 852 751)">ARCADE_5</text><text x="838" y="828" fill="#9a6b12" font-size="10.5" font-weight="800" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">SW5</text><line x1="548" y1="424" x2="548" y2="408" stroke="#3b4759" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="548" cy="408" r="3.4" fill="#fff" stroke="#263043" stroke-width="1.4"></circle><line x1="548" y1="408" x2="548" y2="384" stroke="#263043" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><line x1="539" y1="370" x2="557" y2="370" stroke="#263043" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="0"></line><line x1="548" y1="370" x2="548" y2="336" stroke="#263043" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="548" cy="336" r="3.4" fill="#fff" stroke="#263043" stroke-width="1.4"></circle><line x1="548" y1="336" x2="548" y2="342" stroke="#263043" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><line x1="548" y1="342" x2="548" y2="351" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="537" y1="351" x2="559" y2="351" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="541" y1="355" x2="555" y2="355" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="545" y1="359" x2="551" y2="359" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><text x="562" y="389" fill="#9a6b12" font-size="9.5" font-weight="700" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" transform="rotate(-90 562 389)">MODE</text><text x="548" y="324" fill="#9a6b12" font-size="10.5" font-weight="800" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">SW6</text><line x1="722" y1="424" x2="722" y2="408" stroke="#e08a2e" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="722" cy="424" r="3.2" fill="#e08a2e"></circle><text x="722" y="410" fill="#9a6b12" font-size="9" font-weight="800" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">LAMP1</text><line x1="838" y1="424" x2="838" y2="408" stroke="#e08a2e" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="838" cy="424" r="3.2" fill="#e08a2e"></circle><text x="838" y="410" fill="#9a6b12" font-size="9" font-weight="800" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">LAMP2</text><line x1="1128" y1="424" x2="1128" y2="408" stroke="#e08a2e" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="1128" cy="424" r="3.2" fill="#e08a2e"></circle><text x="1128" y="410" fill="#9a6b12" font-size="9" font-weight="800" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">LAMP3</text><line x1="780" y1="716" x2="780" y2="732" stroke="#e08a2e" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="780" cy="716" r="3.2" fill="#e08a2e"></circle><text x="780" y="744" fill="#9a6b12" font-size="9" font-weight="800" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">LAMP4</text><line x1="954" y1="716" x2="954" y2="732" stroke="#e08a2e" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="954" cy="716" r="3.2" fill="#e08a2e"></circle><text x="954" y="744" fill="#9a6b12" font-size="9" font-weight="800" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">LAMP5</text><text x="1356" y="740" fill="#7a8699" font-size="12" font-weight="700" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">POWER</text><rect x="1356" y="748" width="180" height="58" rx="8" fill="#f1f4f8" stroke="#aab6c6" stroke-width="1.4" stroke-dasharray="0"></rect><text x="1446" y="773" fill="#263043" font-size="13" font-weight="700" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">DC-DC buck</text><text x="1446" y="791" fill="#7a8699" font-size="11" font-weight="500" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">24 V → 5 V</text><line x1="1536" y1="777" x2="1586" y2="777" stroke="#c0392b" stroke-width="2" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1586" y1="777" x2="1586" y2="768" stroke="#c0392b" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1573" y1="768" x2="1599" y2="768" stroke="#c0392b" stroke-width="2" stroke-linecap="round" stroke-dasharray="0"></line><text x="1586" y="762" fill="#c0392b" font-size="11" font-weight="700" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">+24 V</text><line x1="1446" y1="806" x2="1446" y2="834" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1446" y1="834" x2="1446" y2="843" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1435" y1="843" x2="1457" y2="843" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1439" y1="847" x2="1453" y2="847" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1443" y1="851" x2="1449" y2="851" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><text x="1462" y="838" fill="#7a8699" font-size="10" font-weight="500" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">common GND</text><line x1="1356" y1="777" x2="1244" y2="777" stroke="#c0392b" stroke-width="2" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1244" y1="777" x2="1244" y2="716" stroke="#c0392b" stroke-width="2" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="1244" cy="716" r="3.2" fill="#c0392b"></circle><text x="1300" y="769" fill="#c0392b" font-size="11" font-weight="800" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">+5V → VSYS</text><rect x="922" y="770" width="180" height="46" rx="8" fill="#f1f4f8" stroke="#39d98a" stroke-width="1.4" stroke-dasharray="5 4"></rect><text x="1012" y="790" fill="#2e8b57" font-size="13" font-weight="700" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">WS2812</text><text x="1012" y="806" fill="#7a8699" font-size="10" font-weight="500" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">onboard status LED</text><line x1="1012" y1="716" x2="1012" y2="770" stroke="#2e8b57" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="1012" cy="716" r="3.2" fill="#2e8b57"></circle><text x="1046" y="747" fill="#2e8b57" font-size="10.5" font-weight="700" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">GPIO21</text><rect x="1154" y="224" width="210" height="50" rx="8" fill="#f1f4f8" stroke="#aab6c6" stroke-width="1.4" stroke-dasharray="0"></rect><text x="1259" y="245" fill="#263043" font-size="13" font-weight="700" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">USB-C</text><text x="1259" y="261" fill="#7a8699" font-size="10" font-weight="500" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">flash + serial (D-/D+)</text><line x1="1244" y1="274" x2="1244" y2="424" stroke="#3b4759" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="1244" cy="424" r="3.2" fill="#3b4759"></circle><line x1="1302" y1="274" x2="1302" y2="424" stroke="#3b4759" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><circle cx="1302" cy="424" r="3.2" fill="#3b4759"></circle><text x="1237" y="349" fill="#7a8699" font-size="10" font-weight="600" text-anchor="end" font-family="ui-sans-serif,Segoe UI,sans-serif">D-</text><text x="1309" y="349" fill="#7a8699" font-size="10" font-weight="600" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">D+</text><line x1="1186" y1="716" x2="1186" y2="730" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1186" y1="730" x2="1186" y2="739" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1175" y1="739" x2="1197" y2="739" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1179" y1="743" x2="1193" y2="743" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1183" y1="747" x2="1189" y2="747" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><rect x="1300" y="104" width="270" height="94" rx="8" fill="#ffffff" stroke="#aab6c6" stroke-width="1.4" stroke-dasharray="0"></rect><line x1="1300" y1="136" x2="1570" y2="136" stroke="#aab6c6" stroke-width="1" stroke-linecap="round" stroke-dasharray="0"></line><line x1="1300" y1="168" x2="1570" y2="168" stroke="#aab6c6" stroke-width="1" stroke-linecap="round" stroke-dasharray="0"></line><text x="1312" y="124" fill="#263043" font-size="12" font-weight="800" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">LookingGlass — Control Panel</text><text x="1312" y="156" fill="#7a8699" font-size="11" font-weight="500" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">Board: ESP32-S3-Pico (R8)</text><text x="1312" y="188" fill="#7a8699" font-size="11" font-weight="500" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">Rev 0.1 · Sheet 1/1 · active-low</text><rect x="70" y="860" width="1500" height="300" rx="8" fill="#f4f6f9" stroke="#aab6c6" stroke-width="1.4" stroke-dasharray="6 4"></rect><text x="88" y="890" fill="#263043" font-size="13" font-weight="800" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">LAMP DRIVERS — low-side N-MOSFET per lamp (×5, one per arcade button)</text><text x="88" y="908" fill="#7a8699" font-size="11" font-weight="500" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">lamps powered from a separate 5 V / 12 V rail · each lamp GPIO PWMs the MOSFET gate → per-button dim/full · common GND</text><line x1="506" y1="944" x2="506" y2="935" stroke="#c0392b" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="493" y1="935" x2="519" y2="935" stroke="#c0392b" stroke-width="2" stroke-linecap="round" stroke-dasharray="0"></line><text x="506" y="929" fill="#c0392b" font-size="11" font-weight="700" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">+5 / 12 V</text><line x1="506" y1="944" x2="506" y2="962" stroke="#c0392b" stroke-width="2" stroke-linecap="round" stroke-dasharray="0"></line><path d="M 495 962 L 517 962 L 506 982 Z" fill="none" stroke="#263043" stroke-width="1.6"></path><line x1="495" y1="982" x2="517" y2="982" stroke="#263043" stroke-width="2" stroke-linecap="round" stroke-dasharray="0"></line><line x1="506" y1="982" x2="506" y2="1010" stroke="#3b4759" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="522" y1="964" x2="531" y2="955" stroke="#2e8b57" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><line x1="522" y1="974" x2="531" y2="965" stroke="#2e8b57" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><text x="524" y="984" fill="#7a8699" font-size="10" font-weight="500" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">button lamp</text><line x1="470" y1="1024" x2="470" y2="1056" stroke="#263043" stroke-width="2" stroke-linecap="round" stroke-dasharray="0"></line><line x1="480" y1="1024" x2="480" y2="1034" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="480" y1="1036" x2="480" y2="1044" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="480" y1="1046" x2="480" y2="1056" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="480" y1="1029" x2="506" y2="1029" stroke="#263043" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><line x1="506" y1="1029" x2="506" y2="1010" stroke="#263043" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><line x1="480" y1="1051" x2="506" y2="1051" stroke="#263043" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><line x1="506" y1="1051" x2="506" y2="1070" stroke="#263043" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><line x1="480" y1="1040" x2="506" y2="1040" stroke="#263043" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><path d="M 494 1036 L 485 1040 L 494 1044 Z" fill="#263043"></path><line x1="506" y1="1070" x2="506" y2="1079" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="495" y1="1079" x2="517" y2="1079" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="499" y1="1083" x2="513" y2="1083" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="503" y1="1087" x2="509" y2="1087" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><text x="518" y="1014" fill="#263043" font-size="10" font-weight="700" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">M1 — logic-level N-MOS</text><text x="518" y="1028" fill="#7a8699" font-size="9.5" font-weight="500" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">(e.g. AO3400 / IRLZ44N)</text><line x1="350" y1="1040" x2="470" y2="1040" stroke="#263043" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="0"></line><rect x="378" y="1031" width="42" height="18" rx="2" fill="#fff" stroke="#263043" stroke-width="1.4"></rect><text x="399" y="1026" fill="#7a8699" font-size="9" font-weight="600" text-anchor="middle" font-family="ui-sans-serif,Segoe UI,sans-serif">150 Ω</text><text x="344" y="1044" fill="#9a6b12" font-size="11" font-weight="800" text-anchor="end" font-family="ui-sans-serif,Segoe UI,sans-serif">GPIO (PWM)</text><line x1="430" y1="1040" x2="430" y2="1074" stroke="#263043" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0"></line><rect x="421" y="1074" width="18" height="40" rx="2" fill="#fff" stroke="#263043" stroke-width="1.4"></rect><text x="414" y="1098" fill="#7a8699" font-size="9" font-weight="600" text-anchor="end" font-family="ui-sans-serif,Segoe UI,sans-serif">10 kΩ</text><line x1="430" y1="1114" x2="430" y2="1128" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="430" y1="1128" x2="430" y2="1137" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="419" y1="1137" x2="441" y2="1137" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="423" y1="1141" x2="437" y2="1141" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><line x1="427" y1="1145" x2="433" y2="1145" stroke="#263043" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="0"></line><text x="454" y="1136" fill="#7a8699" font-size="9" font-weight="500" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">gate pulldown — lamps OFF at boot</text><text x="840" y="924" fill="#263043" font-size="12" font-weight="800" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">×5 — one driver per arcade lamp:</text><text x="840" y="956" fill="#7a8699" font-size="11.5" font-weight="600" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">LAMP1   =   GPIO40 · Arcade 1</text><text x="840" y="982" fill="#7a8699" font-size="11.5" font-weight="600" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">LAMP2   =   GPIO42 · Arcade 2</text><text x="840" y="1008" fill="#7a8699" font-size="11.5" font-weight="600" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">LAMP3   =   GPIO48 · Arcade 3</text><text x="840" y="1034" fill="#7a8699" font-size="11.5" font-weight="600" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">LAMP4   =   GPIO18 · Arcade 4</text><text x="840" y="1060" fill="#7a8699" font-size="11.5" font-weight="600" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">LAMP5   =   GPIO17 · Arcade 5</text><text x="840" y="1096" fill="#7a8699" font-size="10" font-weight="500" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">logic-level MOSFET (Vgs(th) &lt; 2.5 V) · 150 Ω gate series · 10 kΩ pulldown</text><text x="840" y="1114" fill="#7a8699" font-size="10" font-weight="500" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">common ground with the ESP32 · lamp rail 5 V or 12 V to match the buttons</text><text x="840" y="1136" fill="#263043" font-size="10.5" font-weight="700" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">FUTURE — one ULN2803A 8-ch driver board replaces all ×5 (no gate R/pulldown needed):</text><text x="840" y="1152" fill="#2f6df0" font-size="10" font-weight="700" text-anchor="start" font-family="ui-sans-serif,Segoe UI,sans-serif">amazon.com/ULN2803A-.../dp/B08C5B1S47</text></g></g></svg></div>
+<div class="tabs">
+  <button class="tab active" data-tab="wiring">Panel Wiring</button>
+  <button class="tab" data-tab="system">System Overview</button>
 </div>
 
-<h2>Board pinout (ground-truth header layout)</h2>
-<div class="card">
-  <div id="pinout"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1196 360" width="100%" style="max-width:1196px"><g><rect x="40" y="150" width="1116" height="60" rx="6" fill="#0e1822" stroke="#2a3a4c"></rect><text x="598" y="184" text-anchor="middle" fill="#9fb4cc" font-size="13" font-weight="700">ESP32-S3-Pico  (ESP32-S3R8)</text><rect x="45" y="139" width="46" height="22" rx="4" fill="#241a1a" stroke="#7a3b3b" stroke-dasharray="3 2"></rect><text x="68" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#b06a6a">33</text><rect x="101" y="139" width="46" height="22" rx="4" fill="#241a1a" stroke="#7a3b3b" stroke-dasharray="3 2"></rect><text x="124" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#b06a6a">34</text><rect x="157" y="139" width="46" height="22" rx="4" fill="#6b7a90" stroke="#0008" stroke-dasharray="0"></rect><text x="180" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">GND</text><rect x="213" y="139" width="46" height="22" rx="4" fill="#241a1a" stroke="#7a3b3b" stroke-dasharray="3 2"></rect><text x="236" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#b06a6a">35</text><rect x="269" y="139" width="46" height="22" rx="4" fill="#241a1a" stroke="#7a3b3b" stroke-dasharray="3 2"></rect><text x="292" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#b06a6a">36</text><rect x="325" y="139" width="46" height="22" rx="4" fill="#241a1a" stroke="#7a3b3b" stroke-dasharray="3 2"></rect><text x="348" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#b06a6a">37</text><rect x="381" y="139" width="46" height="22" rx="4" fill="#e0b54a" stroke="#0008" stroke-dasharray="0"></rect><text x="404" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">38</text><text x="404" y="113" text-anchor="middle" font-size="11" font-weight="700" fill="#e0b54a">MODE</text><line x1="404" y1="117" x2="404" y2="137" stroke="#e0b54a" stroke-width="1.5"></line><rect x="437" y="139" width="46" height="22" rx="4" fill="#6b7a90" stroke="#0008" stroke-dasharray="0"></rect><text x="460" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">GND</text><rect x="493" y="139" width="46" height="22" rx="4" fill="#e0b54a" stroke="#0008" stroke-dasharray="0"></rect><text x="516" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">39</text><text x="516" y="113" text-anchor="middle" font-size="11" font-weight="700" fill="#e0b54a">ARCADE_1</text><line x1="516" y1="117" x2="516" y2="137" stroke="#e0b54a" stroke-width="1.5"></line><rect x="549" y="139" width="46" height="22" rx="4" fill="#e0902e" stroke="#0008" stroke-dasharray="0"></rect><text x="572" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">40</text><text x="572" y="113" text-anchor="middle" font-size="11" font-weight="700" fill="#e0902e">LAMP1</text><line x1="572" y1="117" x2="572" y2="137" stroke="#e0902e" stroke-width="1.5"></line><rect x="605" y="139" width="46" height="22" rx="4" fill="#e0b54a" stroke="#0008" stroke-dasharray="0"></rect><text x="628" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">41</text><text x="628" y="113" text-anchor="middle" font-size="11" font-weight="700" fill="#e0b54a">ARCADE_2</text><line x1="628" y1="117" x2="628" y2="137" stroke="#e0b54a" stroke-width="1.5"></line><rect x="661" y="139" width="46" height="22" rx="4" fill="#e0902e" stroke="#0008" stroke-dasharray="0"></rect><text x="684" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">42</text><text x="684" y="113" text-anchor="middle" font-size="11" font-weight="700" fill="#e0902e">LAMP2</text><line x1="684" y1="117" x2="684" y2="137" stroke="#e0902e" stroke-width="1.5"></line><rect x="717" y="139" width="46" height="22" rx="4" fill="#6b7a90" stroke="#0008" stroke-dasharray="0"></rect><text x="740" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">GND</text><rect x="773" y="139" width="46" height="22" rx="4" fill="#241a1a" stroke="#7a3b3b" stroke-dasharray="3 2"></rect><text x="796" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#b06a6a">45</text><rect x="829" y="139" width="46" height="22" rx="4" fill="#241a1a" stroke="#7a3b3b" stroke-dasharray="3 2"></rect><text x="852" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#b06a6a">46</text><rect x="885" y="139" width="46" height="22" rx="4" fill="#e0b54a" stroke="#0008" stroke-dasharray="0"></rect><text x="908" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">47</text><text x="908" y="113" text-anchor="middle" font-size="11" font-weight="700" fill="#e0b54a">ARCADE_3</text><line x1="908" y1="117" x2="908" y2="137" stroke="#e0b54a" stroke-width="1.5"></line><rect x="941" y="139" width="46" height="22" rx="4" fill="#e0902e" stroke="#0008" stroke-dasharray="0"></rect><text x="964" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">48</text><text x="964" y="113" text-anchor="middle" font-size="11" font-weight="700" fill="#e0902e">LAMP3</text><line x1="964" y1="117" x2="964" y2="137" stroke="#e0902e" stroke-width="1.5"></line><rect x="997" y="139" width="46" height="22" rx="4" fill="#6b7a90" stroke="#0008" stroke-dasharray="0"></rect><text x="1020" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">GND</text><rect x="1053" y="139" width="46" height="22" rx="4" fill="#241a1a" stroke="#7a3b3b" stroke-dasharray="3 2"></rect><text x="1076" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#b06a6a">19</text><rect x="1109" y="139" width="46" height="22" rx="4" fill="#241a1a" stroke="#7a3b3b" stroke-dasharray="3 2"></rect><text x="1132" y="154" text-anchor="middle" font-size="11" font-weight="600" fill="#b06a6a">20</text><rect x="45" y="199" width="46" height="22" rx="4" fill="#241a1a" stroke="#7a3b3b" stroke-dasharray="3 2"></rect><text x="68" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#b06a6a">43</text><rect x="101" y="199" width="46" height="22" rx="4" fill="#241a1a" stroke="#7a3b3b" stroke-dasharray="3 2"></rect><text x="124" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#b06a6a">44</text><rect x="157" y="199" width="46" height="22" rx="4" fill="#6b7a90" stroke="#0008" stroke-dasharray="0"></rect><text x="180" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">GND</text><rect x="213" y="199" width="46" height="22" rx="4" fill="#241a1a" stroke="#7a3b3b" stroke-dasharray="3 2"></rect><text x="236" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#b06a6a">0</text><rect x="269" y="199" width="46" height="22" rx="4" fill="#131c26" stroke="#2a3a4c" stroke-dasharray="0"></rect><text x="292" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#6f8198">1</text><rect x="325" y="199" width="46" height="22" rx="4" fill="#131c26" stroke="#2a3a4c" stroke-dasharray="0"></rect><text x="348" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#6f8198">2</text><rect x="381" y="199" width="46" height="22" rx="4" fill="#241a1a" stroke="#7a3b3b" stroke-dasharray="3 2"></rect><text x="404" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#b06a6a">3</text><rect x="437" y="199" width="46" height="22" rx="4" fill="#6b7a90" stroke="#0008" stroke-dasharray="0"></rect><text x="460" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">GND</text><rect x="493" y="199" width="46" height="22" rx="4" fill="#e0b54a" stroke="#0008" stroke-dasharray="0"></rect><text x="516" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">15</text><text x="516" y="251" text-anchor="middle" font-size="11" font-weight="700" fill="#e0b54a">ARCADE_4</text><line x1="516" y1="239" x2="516" y2="223" stroke="#e0b54a" stroke-width="1.5"></line><rect x="549" y="199" width="46" height="22" rx="4" fill="#5aa0e0" stroke="#0008" stroke-dasharray="0"></rect><text x="572" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">RUN</text><rect x="605" y="199" width="46" height="22" rx="4" fill="#e0902e" stroke="#0008" stroke-dasharray="0"></rect><text x="628" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">18</text><text x="628" y="251" text-anchor="middle" font-size="11" font-weight="700" fill="#e0902e">LAMP4</text><line x1="628" y1="239" x2="628" y2="223" stroke="#e0902e" stroke-width="1.5"></line><rect x="661" y="199" width="46" height="22" rx="4" fill="#e0b54a" stroke="#0008" stroke-dasharray="0"></rect><text x="684" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">16</text><text x="684" y="251" text-anchor="middle" font-size="11" font-weight="700" fill="#e0b54a">ARCADE_5</text><line x1="684" y1="239" x2="684" y2="223" stroke="#e0b54a" stroke-width="1.5"></line><rect x="717" y="199" width="46" height="22" rx="4" fill="#6b7a90" stroke="#0008" stroke-dasharray="0"></rect><text x="740" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">GND</text><rect x="773" y="199" width="46" height="22" rx="4" fill="#e0902e" stroke="#0008" stroke-dasharray="0"></rect><text x="796" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">17</text><text x="796" y="251" text-anchor="middle" font-size="11" font-weight="700" fill="#e0902e">LAMP5</text><line x1="796" y1="239" x2="796" y2="223" stroke="#e0902e" stroke-width="1.5"></line><rect x="829" y="199" width="46" height="22" rx="4" fill="#39d98a" stroke="#0008" stroke-dasharray="0"></rect><text x="852" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">21</text><text x="852" y="251" text-anchor="middle" font-size="11" font-weight="700" fill="#39d98a">WS2812</text><line x1="852" y1="239" x2="852" y2="223" stroke="#39d98a" stroke-width="1.5"></line><rect x="885" y="199" width="46" height="22" rx="4" fill="#e06a5a" stroke="#0008" stroke-dasharray="0"></rect><text x="908" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">3V3</text><rect x="941" y="199" width="46" height="22" rx="4" fill="#5aa0e0" stroke="#0008" stroke-dasharray="0"></rect><text x="964" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">3V3_EN</text><rect x="997" y="199" width="46" height="22" rx="4" fill="#6b7a90" stroke="#0008" stroke-dasharray="0"></rect><text x="1020" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">GND</text><rect x="1053" y="199" width="46" height="22" rx="4" fill="#e06a5a" stroke="#0008" stroke-dasharray="0"></rect><text x="1076" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">VSYS</text><text x="1076" y="251" text-anchor="middle" font-size="11" font-weight="700" fill="#e06a5a">+5V</text><line x1="1076" y1="239" x2="1076" y2="223" stroke="#e06a5a" stroke-width="1.5"></line><rect x="1109" y="199" width="46" height="22" rx="4" fill="#e06a5a" stroke="#0008" stroke-dasharray="0"></rect><text x="1132" y="214" text-anchor="middle" font-size="11" font-weight="600" fill="#0a0d12">VBUS</text></g></svg></div>
-  <div class="legend">
-    <span><i class="sw" style="background:var(--btn)"></i> button GPIO</span>
-    <span><i class="sw" style="background:#e0902e"></i> lamp output (GPIO18)</span>
-    <span><i class="sw" style="background:var(--led)"></i> status LED (WS2812)</span>
-    <span><i class="sw" style="background:var(--pwr)"></i> power</span>
-    <span><i class="sw" style="background:var(--gnd)"></i> GND</span>
-    <span><i class="sw" style="background:var(--sys)"></i> system (RUN/3V3_EN)</span>
-    <span><i class="sw" style="background:var(--resbg);border-color:var(--resln)"></i> reserved — do not use</span>
-    <span><i class="sw" style="background:var(--free);opacity:.5"></i> free</span>
+<section class="tabpane active" id="tab-wiring">
+  <div class="bar">
+    <button class="act copyBtn">&#9106; Copy schematic for Figma</button>
+    <button class="act dlBtn">&#11015; Download .svg</button>
+    <span class="toast"></span>
   </div>
-</div>
+  <div class="hint">Click <b>Copy</b>, then paste (<b>Ctrl/Cmd&nbsp;+&nbsp;V</b>) onto a Figma canvas — it imports as editable vector layers. (Or drag the downloaded <code>.svg</code> into Figma.)</div>
 
-<h2>Connections</h2>
-<div class="card" style="padding:0">
+  <div class="frame">
+    <div class="frame-label">&#9638; LookingGlass / Control Panel — Pinout</div>
+    <div class="canvas" id="schematicPro">
+<svg id="schematicSvg" viewBox="0 0 1000 866" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,Segoe UI,sans-serif">
+<rect x="372" y="86" width="236" height="660" rx="16" fill="#11202e" stroke="#2a3f55" stroke-width="2"/>
+<circle cx="396" cy="112" r="7" fill="#0b1622" stroke="#2a3f55"/>
+<text x="490" y="392" text-anchor="middle" fill="#cfe0f2" font-size="20" font-weight="800">ESP32-S3-ETH</text>
+<text x="490" y="416" text-anchor="middle" fill="#7d8aa0" font-size="12">Pico-form · W5500 + PoE</text>
+<text x="490" y="436" text-anchor="middle" fill="#7d8aa0" font-size="11">S3R8 · 16MB flash · 8MB PSRAM</text>
+<line x1="336" y1="118" x2="372" y2="118" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="109" width="18" height="18" rx="3" fill="#b3534b" stroke="#0006"/>
+<text x="308" y="122" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">33</text>
+<text x="40" y="122" text-anchor="start" font-size="12.5" font-weight="600" fill="#7a8699">PSRAM</text>
+<line x1="336" y1="148" x2="372" y2="148" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="139" width="18" height="18" rx="3" fill="#b3534b" stroke="#0006"/>
+<text x="308" y="152" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">34</text>
+<text x="40" y="152" text-anchor="start" font-size="12.5" font-weight="600" fill="#7a8699">PSRAM</text>
+<line x1="336" y1="178" x2="372" y2="178" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="169" width="18" height="18" rx="3" fill="#6b7a90" stroke="#0006"/>
+<text x="308" y="182" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">GND</text>
+<text x="40" y="182" text-anchor="start" font-size="12.5" font-weight="800" fill="#1f2a37">GND</text>
+<line x1="336" y1="208" x2="372" y2="208" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="199" width="18" height="18" rx="3" fill="#b3534b" stroke="#0006"/>
+<text x="308" y="212" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">35</text>
+<text x="40" y="212" text-anchor="start" font-size="12.5" font-weight="600" fill="#7a8699">PSRAM</text>
+<line x1="336" y1="238" x2="372" y2="238" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="229" width="18" height="18" rx="3" fill="#b3534b" stroke="#0006"/>
+<text x="308" y="242" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">36</text>
+<text x="40" y="242" text-anchor="start" font-size="12.5" font-weight="600" fill="#7a8699">PSRAM</text>
+<line x1="336" y1="268" x2="372" y2="268" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="259" width="18" height="18" rx="3" fill="#b3534b" stroke="#0006"/>
+<text x="308" y="272" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">37</text>
+<text x="40" y="272" text-anchor="start" font-size="12.5" font-weight="600" fill="#7a8699">PSRAM</text>
+<line x1="336" y1="298" x2="372" y2="298" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="289" width="18" height="18" rx="3" fill="#b3534b" stroke="#0006"/>
+<text x="308" y="302" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">38</text>
+<text x="40" y="302" text-anchor="start" font-size="12.5" font-weight="600" fill="#7a8699">RGB-LED (reserved)</text>
+<line x1="336" y1="328" x2="372" y2="328" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="319" width="18" height="18" rx="3" fill="#6b7a90" stroke="#0006"/>
+<text x="308" y="332" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">GND</text>
+<text x="40" y="332" text-anchor="start" font-size="12.5" font-weight="800" fill="#1f2a37">GND</text>
+<line x1="336" y1="358" x2="372" y2="358" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="349" width="18" height="18" rx="3" fill="#38bdf8" stroke="#0006"/>
+<text x="308" y="362" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">39</text>
+<text x="40" y="362" text-anchor="start" font-size="12.5" font-weight="800" fill="#1f2a37">SW4 · switch</text>
+<line x1="336" y1="388" x2="372" y2="388" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="379" width="18" height="18" rx="3" fill="#38bdf8" stroke="#0006"/>
+<text x="308" y="392" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">40</text>
+<text x="40" y="392" text-anchor="start" font-size="12.5" font-weight="800" fill="#1f2a37">SW5 · switch (BIG)</text>
+<line x1="336" y1="418" x2="372" y2="418" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="409" width="18" height="18" rx="3" fill="#f59e0b" stroke="#0006"/>
+<text x="308" y="422" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">41</text>
+<text x="40" y="422" text-anchor="start" font-size="12.5" font-weight="800" fill="#1f2a37">SW1 · PWM LED</text>
+<line x1="336" y1="448" x2="372" y2="448" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="439" width="18" height="18" rx="3" fill="#f59e0b" stroke="#0006"/>
+<text x="308" y="452" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">42</text>
+<text x="40" y="452" text-anchor="start" font-size="12.5" font-weight="800" fill="#1f2a37">SW4 · PWM LED</text>
+<line x1="336" y1="478" x2="372" y2="478" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="469" width="18" height="18" rx="3" fill="#6b7a90" stroke="#0006"/>
+<text x="308" y="482" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">GND</text>
+<text x="40" y="482" text-anchor="start" font-size="12.5" font-weight="800" fill="#1f2a37">GND</text>
+<line x1="336" y1="508" x2="372" y2="508" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="499" width="18" height="18" rx="3" fill="#b3534b" stroke="#0006"/>
+<text x="308" y="512" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">45</text>
+<text x="40" y="512" text-anchor="start" font-size="12.5" font-weight="600" fill="#7a8699">strap</text>
+<line x1="336" y1="538" x2="372" y2="538" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="529" width="18" height="18" rx="3" fill="#b3534b" stroke="#0006"/>
+<text x="308" y="542" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">46</text>
+<text x="40" y="542" text-anchor="start" font-size="12.5" font-weight="600" fill="#7a8699">strap</text>
+<line x1="336" y1="568" x2="372" y2="568" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="559" width="18" height="18" rx="3" fill="#22c55e" stroke="#0006"/>
+<text x="308" y="572" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">47</text>
+<text x="40" y="572" text-anchor="start" font-size="12.5" font-weight="800" fill="#1f2a37">Mode · status LED</text>
+<line x1="336" y1="598" x2="372" y2="598" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="589" width="18" height="18" rx="3" fill="#c084fc" stroke="#0006"/>
+<text x="308" y="602" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">48</text>
+<text x="40" y="602" text-anchor="start" font-size="12.5" font-weight="800" fill="#1f2a37">WS2812 (onboard)</text>
+<line x1="336" y1="628" x2="372" y2="628" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="619" width="18" height="18" rx="3" fill="#6b7a90" stroke="#0006"/>
+<text x="308" y="632" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">GND</text>
+<text x="40" y="632" text-anchor="start" font-size="12.5" font-weight="800" fill="#1f2a37">GND</text>
+<line x1="336" y1="658" x2="372" y2="658" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="649" width="18" height="18" rx="3" fill="#b3534b" stroke="#0006"/>
+<text x="308" y="662" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">19</text>
+<text x="40" y="662" text-anchor="start" font-size="12.5" font-weight="600" fill="#7a8699">USB D-</text>
+<line x1="336" y1="688" x2="372" y2="688" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="316" y="679" width="18" height="18" rx="3" fill="#b3534b" stroke="#0006"/>
+<text x="308" y="692" text-anchor="end" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">20</text>
+<text x="40" y="692" text-anchor="start" font-size="12.5" font-weight="600" fill="#7a8699">USB D+</text>
+<line x1="608" y1="118" x2="664" y2="118" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="109" width="18" height="18" rx="3" fill="#b3534b" stroke="#0006"/>
+<text x="692" y="122" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">43</text>
+<text x="960" y="122" text-anchor="end" font-size="12.5" font-weight="600" fill="#7a8699">UART0 TX</text>
+<line x1="608" y1="148" x2="664" y2="148" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="139" width="18" height="18" rx="3" fill="#b3534b" stroke="#0006"/>
+<text x="692" y="152" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">44</text>
+<text x="960" y="152" text-anchor="end" font-size="12.5" font-weight="600" fill="#7a8699">UART0 RX</text>
+<line x1="608" y1="178" x2="664" y2="178" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="169" width="18" height="18" rx="3" fill="#6b7a90" stroke="#0006"/>
+<text x="692" y="182" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">GND</text>
+<text x="960" y="182" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">GND</text>
+<line x1="608" y1="208" x2="664" y2="208" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="199" width="18" height="18" rx="3" fill="#b3534b" stroke="#0006"/>
+<text x="692" y="212" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">0</text>
+<text x="960" y="212" text-anchor="end" font-size="12.5" font-weight="600" fill="#7a8699">BOOT / strap</text>
+<line x1="608" y1="238" x2="664" y2="238" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="229" width="18" height="18" rx="3" fill="#f59e0b" stroke="#0006"/>
+<text x="692" y="242" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">1</text>
+<text x="960" y="242" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">SW2 · PWM LED</text>
+<line x1="608" y1="268" x2="664" y2="268" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="259" width="18" height="18" rx="3" fill="#f59e0b" stroke="#0006"/>
+<text x="692" y="272" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">2</text>
+<text x="960" y="272" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">SW3 · PWM LED</text>
+<line x1="608" y1="298" x2="664" y2="298" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="289" width="18" height="18" rx="3" fill="#b3534b" stroke="#0006"/>
+<text x="692" y="302" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">3</text>
+<text x="960" y="302" text-anchor="end" font-size="12.5" font-weight="600" fill="#7a8699">strap</text>
+<line x1="608" y1="328" x2="664" y2="328" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="319" width="18" height="18" rx="3" fill="#6b7a90" stroke="#0006"/>
+<text x="692" y="332" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">GND</text>
+<text x="960" y="332" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">GND</text>
+<line x1="608" y1="358" x2="664" y2="358" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="349" width="18" height="18" rx="3" fill="#38bdf8" stroke="#0006"/>
+<text x="692" y="362" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">15</text>
+<text x="960" y="362" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">SW1 · switch</text>
+<line x1="608" y1="388" x2="664" y2="388" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="379" width="18" height="18" rx="3" fill="#5aa0e0" stroke="#0006"/>
+<text x="692" y="392" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">RUN</text>
+<text x="960" y="392" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">EN / RUN</text>
+<line x1="608" y1="418" x2="664" y2="418" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="409" width="18" height="18" rx="3" fill="#38bdf8" stroke="#0006"/>
+<text x="692" y="422" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">18</text>
+<text x="960" y="422" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">SW2 · switch</text>
+<line x1="608" y1="448" x2="664" y2="448" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="439" width="18" height="18" rx="3" fill="#38bdf8" stroke="#0006"/>
+<text x="692" y="452" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">16</text>
+<text x="960" y="452" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">SW3 · switch</text>
+<line x1="608" y1="478" x2="664" y2="478" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="469" width="18" height="18" rx="3" fill="#6b7a90" stroke="#0006"/>
+<text x="692" y="482" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">GND</text>
+<text x="960" y="482" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">GND</text>
+<line x1="608" y1="508" x2="664" y2="508" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="499" width="18" height="18" rx="3" fill="#22c55e" stroke="#0006"/>
+<text x="692" y="512" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">17</text>
+<text x="960" y="512" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">GREEN / Mode · switch</text>
+<line x1="608" y1="538" x2="664" y2="538" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="529" width="18" height="18" rx="3" fill="#f59e0b" stroke="#0006"/>
+<text x="692" y="542" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">21</text>
+<text x="960" y="542" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">SW5 · PWM LED (BIG)</text>
+<line x1="608" y1="568" x2="664" y2="568" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="559" width="18" height="18" rx="3" fill="#e06a5a" stroke="#0006"/>
+<text x="692" y="572" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">3V3</text>
+<text x="960" y="572" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">3V3</text>
+<line x1="608" y1="598" x2="664" y2="598" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="589" width="18" height="18" rx="3" fill="#5aa0e0" stroke="#0006"/>
+<text x="692" y="602" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">3V3_EN</text>
+<text x="960" y="602" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">3V3_EN</text>
+<line x1="608" y1="628" x2="664" y2="628" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="619" width="18" height="18" rx="3" fill="#6b7a90" stroke="#0006"/>
+<text x="692" y="632" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">GND</text>
+<text x="960" y="632" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">GND</text>
+<line x1="608" y1="658" x2="664" y2="658" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="649" width="18" height="18" rx="3" fill="#e06a5a" stroke="#0006"/>
+<text x="692" y="662" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">VSYS</text>
+<text x="960" y="662" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">+5V rail</text>
+<line x1="608" y1="688" x2="664" y2="688" stroke="#9fb0c2" stroke-width="2"/>
+<rect x="666" y="679" width="18" height="18" rx="3" fill="#e06a5a" stroke="#0006"/>
+<text x="692" y="692" text-anchor="start" font-size="12" font-weight="700" font-family="ui-monospace,Consolas,monospace" fill="#263043">VBUS</text>
+<text x="960" y="692" text-anchor="end" font-size="12.5" font-weight="800" fill="#1f2a37">USB-C 5V IN</text>
+<rect x="430" y="744" width="120" height="20" rx="8" fill="#0b1622" stroke="#e06a5a" stroke-width="2"/>
+<text x="490" y="785" text-anchor="middle" fill="#e06a5a" font-size="12.5" font-weight="800">USB-C — 5V supply + flash/serial</text>
+<line x1="490" y1="744" x2="490" y2="730" stroke="#e06a5a" stroke-width="2"/>
+<rect x="600" y="788" width="372" height="74" rx="10" fill="#0c1a22" stroke="#2dd4bf" stroke-width="2"/>
+<rect x="616" y="804" width="34" height="26" rx="3" fill="#0b1622" stroke="#2dd4bf"/>
+<text x="662" y="816" font-size="12.5" font-weight="800" fill="#2dd4bf">RJ45 · onboard W5500</text>
+<text x="662" y="833" font-size="11" fill="#8fb7c2">SPI (dedicated pins on ETH variant)</text>
+<text x="616" y="853" font-size="12" font-weight="700" fill="#2dd4bf">→ LookingGlass unmanaged switch</text>
+</svg>
+    </div>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--sw)"></i> SW · switch input</span>
+    <span><i class="sw" style="background:var(--pwm)"></i> PWM LED output</span>
+    <span><i class="sw" style="background:var(--mode)"></i> Mode switch + status LED</span>
+    <span><i class="sw" style="background:var(--led)"></i> WS2812 onboard (GPIO48)</span>
+    <span><i class="sw" style="background:var(--net)"></i> Ethernet (W5500)</span>
+    <span><i class="sw" style="background:var(--pwr)"></i> power (USB-C)</span>
+    <span><i class="sw" style="background:var(--gnd)"></i> GND</span>
+    <span><i class="sw" style="background:var(--resln)"></i> reserved — do not use</span>
+  </div>
+  </div>
+
+  <div class="frame">
+    <div class="frame-label">&#9638; Buttons &amp; full wiring — 6 buttons, each = 2 IO (switch + LED)</div>
+    <div class="bar" style="margin:0 0 8px">
+      <div class="subtabs">
+        <button class="subtab active" data-wire="direct">Direct drive (no MOSFET)</button>
+        <button class="subtab" data-wire="mosfet">MOSFET (5/12&nbsp;V lamps)</button>
+      </div>
+      <button class="act copyBtn" data-name="looking_glass_buttons">&#9106; Copy buttons plot for Figma</button>
+      <button class="act dlBtn" data-name="looking_glass_buttons">&#11015; Download .svg</button>
+      <span class="toast"></span>
+    </div>
+    <div class="canvas wirepane active" data-wire="direct">
+<svg viewBox="0 0 1000 720" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,Segoe UI,sans-serif">
+<text x="24" y="26" font-size="14" font-weight="800" fill="#33414f">6 buttons — each = 2 IO. LED option: DIRECT drive (GPIO → 330Ω → LED → GND) · no MOSFET yet.</text>
+<circle cx="90" cy="126" r="39" fill="none" stroke="#f59e0b" stroke-width="3"/>
+<circle cx="90" cy="126" r="34" fill="#eef3f8" stroke="#c2ccd8" stroke-width="2"/>
+<circle cx="90" cy="126" r="25" fill="#f7fafd" stroke="#d8e0ea"/>
+<text x="90" y="130" text-anchor="middle" font-size="12.5" font-weight="800" fill="#33414f">SW1</text>
+<text x="90" y="56" text-anchor="middle" font-size="11" font-weight="700" fill="#7a8699">small arcade · 2 IO</text>
+<text x="170" y="72" font-size="11" font-weight="800" fill="#38bdf8">SWITCH — IO15</text>
+<rect x="170" y="82" width="48" height="20" rx="4" fill="none" stroke="#38bdf8"/>
+<text x="194" y="96" text-anchor="middle" font-size="11" font-weight="700" fill="#38bdf8" font-family="ui-monospace,monospace">IO15</text>
+<line x1="218" y1="92" x2="244" y2="92" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="246" cy="92" r="3" fill="#1f2a37"/>
+<line x1="246" y1="92" x2="266" y2="82" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="268" cy="92" r="3" fill="#1f2a37"/>
+<line x1="268" y1="92" x2="294" y2="92" stroke="#1f2a37" stroke-width="2"/>
+<text x="298" y="96" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="170" y="118" font-size="9.5" fill="#7a8699">active-LOW · INPUT_PULLUP · pressed = LOW</text>
+<text x="170" y="140" font-size="11" font-weight="800" fill="#f59e0b">LED — IO41 (direct)</text>
+<rect x="170" y="157" width="46" height="16" rx="4" fill="none" stroke="#f59e0b"/>
+<text x="193" y="169" text-anchor="middle" font-size="10" font-weight="700" fill="#f59e0b" font-family="ui-monospace,monospace">IO41</text>
+<line x1="216" y1="168" x2="234" y2="168" stroke="#f59e0b" stroke-width="2"/>
+<rect x="234" y="157" width="44" height="16" rx="3" fill="none" stroke="#f59e0b"/>
+<text x="256" y="169" text-anchor="middle" font-size="9.5" fill="#f59e0b">330Ω</text>
+<line x1="278" y1="168" x2="298" y2="168" stroke="#1f2a37" stroke-width="2"/>
+<path d="M298,162 L298,174 L310,168 Z" fill="#f59e0b"/>
+<line x1="310" y1="162" x2="310" y2="174" stroke="#f59e0b" stroke-width="2"/>
+<line x1="310" y1="168" x2="332" y2="168" stroke="#1f2a37" stroke-width="2"/>
+<text x="336" y="172" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="170" y="196" font-size="9.5" fill="#7a8699">direct GPIO drive · PWM-dimmable · low-current LED only (≤ ~20 mA @ 3.3 V)</text>
+<text x="170" y="210" font-size="9.5" fill="#e06a5a">5/12 V button lamps need the MOSFET option →</text>
+<circle cx="578" cy="126" r="39" fill="none" stroke="#f59e0b" stroke-width="3"/>
+<circle cx="578" cy="126" r="34" fill="#eef3f8" stroke="#c2ccd8" stroke-width="2"/>
+<circle cx="578" cy="126" r="25" fill="#f7fafd" stroke="#d8e0ea"/>
+<text x="578" y="130" text-anchor="middle" font-size="12.5" font-weight="800" fill="#33414f">SW2</text>
+<text x="578" y="56" text-anchor="middle" font-size="11" font-weight="700" fill="#7a8699">small arcade · 2 IO</text>
+<text x="658" y="72" font-size="11" font-weight="800" fill="#38bdf8">SWITCH — IO18</text>
+<rect x="658" y="82" width="48" height="20" rx="4" fill="none" stroke="#38bdf8"/>
+<text x="682" y="96" text-anchor="middle" font-size="11" font-weight="700" fill="#38bdf8" font-family="ui-monospace,monospace">IO18</text>
+<line x1="706" y1="92" x2="732" y2="92" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="734" cy="92" r="3" fill="#1f2a37"/>
+<line x1="734" y1="92" x2="754" y2="82" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="756" cy="92" r="3" fill="#1f2a37"/>
+<line x1="756" y1="92" x2="782" y2="92" stroke="#1f2a37" stroke-width="2"/>
+<text x="786" y="96" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="658" y="118" font-size="9.5" fill="#7a8699">active-LOW · INPUT_PULLUP · pressed = LOW</text>
+<text x="658" y="140" font-size="11" font-weight="800" fill="#f59e0b">LED — IO1 (direct)</text>
+<rect x="658" y="157" width="46" height="16" rx="4" fill="none" stroke="#f59e0b"/>
+<text x="681" y="169" text-anchor="middle" font-size="10" font-weight="700" fill="#f59e0b" font-family="ui-monospace,monospace">IO1</text>
+<line x1="704" y1="168" x2="722" y2="168" stroke="#f59e0b" stroke-width="2"/>
+<rect x="722" y="157" width="44" height="16" rx="3" fill="none" stroke="#f59e0b"/>
+<text x="744" y="169" text-anchor="middle" font-size="9.5" fill="#f59e0b">330Ω</text>
+<line x1="766" y1="168" x2="786" y2="168" stroke="#1f2a37" stroke-width="2"/>
+<path d="M786,162 L786,174 L798,168 Z" fill="#f59e0b"/>
+<line x1="798" y1="162" x2="798" y2="174" stroke="#f59e0b" stroke-width="2"/>
+<line x1="798" y1="168" x2="820" y2="168" stroke="#1f2a37" stroke-width="2"/>
+<text x="824" y="172" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="658" y="196" font-size="9.5" fill="#7a8699">direct GPIO drive · PWM-dimmable · low-current LED only (≤ ~20 mA @ 3.3 V)</text>
+<text x="658" y="210" font-size="9.5" fill="#e06a5a">5/12 V button lamps need the MOSFET option →</text>
+<circle cx="90" cy="350" r="39" fill="none" stroke="#f59e0b" stroke-width="3"/>
+<circle cx="90" cy="350" r="34" fill="#eef3f8" stroke="#c2ccd8" stroke-width="2"/>
+<circle cx="90" cy="350" r="25" fill="#f7fafd" stroke="#d8e0ea"/>
+<text x="90" y="354" text-anchor="middle" font-size="12.5" font-weight="800" fill="#33414f">SW3</text>
+<text x="90" y="280" text-anchor="middle" font-size="11" font-weight="700" fill="#7a8699">small arcade · 2 IO</text>
+<text x="170" y="296" font-size="11" font-weight="800" fill="#38bdf8">SWITCH — IO16</text>
+<rect x="170" y="306" width="48" height="20" rx="4" fill="none" stroke="#38bdf8"/>
+<text x="194" y="320" text-anchor="middle" font-size="11" font-weight="700" fill="#38bdf8" font-family="ui-monospace,monospace">IO16</text>
+<line x1="218" y1="316" x2="244" y2="316" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="246" cy="316" r="3" fill="#1f2a37"/>
+<line x1="246" y1="316" x2="266" y2="306" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="268" cy="316" r="3" fill="#1f2a37"/>
+<line x1="268" y1="316" x2="294" y2="316" stroke="#1f2a37" stroke-width="2"/>
+<text x="298" y="320" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="170" y="342" font-size="9.5" fill="#7a8699">active-LOW · INPUT_PULLUP · pressed = LOW</text>
+<text x="170" y="364" font-size="11" font-weight="800" fill="#f59e0b">LED — IO2 (direct)</text>
+<rect x="170" y="381" width="46" height="16" rx="4" fill="none" stroke="#f59e0b"/>
+<text x="193" y="393" text-anchor="middle" font-size="10" font-weight="700" fill="#f59e0b" font-family="ui-monospace,monospace">IO2</text>
+<line x1="216" y1="392" x2="234" y2="392" stroke="#f59e0b" stroke-width="2"/>
+<rect x="234" y="381" width="44" height="16" rx="3" fill="none" stroke="#f59e0b"/>
+<text x="256" y="393" text-anchor="middle" font-size="9.5" fill="#f59e0b">330Ω</text>
+<line x1="278" y1="392" x2="298" y2="392" stroke="#1f2a37" stroke-width="2"/>
+<path d="M298,386 L298,398 L310,392 Z" fill="#f59e0b"/>
+<line x1="310" y1="386" x2="310" y2="398" stroke="#f59e0b" stroke-width="2"/>
+<line x1="310" y1="392" x2="332" y2="392" stroke="#1f2a37" stroke-width="2"/>
+<text x="336" y="396" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="170" y="420" font-size="9.5" fill="#7a8699">direct GPIO drive · PWM-dimmable · low-current LED only (≤ ~20 mA @ 3.3 V)</text>
+<text x="170" y="434" font-size="9.5" fill="#e06a5a">5/12 V button lamps need the MOSFET option →</text>
+<circle cx="578" cy="350" r="39" fill="none" stroke="#f59e0b" stroke-width="3"/>
+<circle cx="578" cy="350" r="34" fill="#eef3f8" stroke="#c2ccd8" stroke-width="2"/>
+<circle cx="578" cy="350" r="25" fill="#f7fafd" stroke="#d8e0ea"/>
+<text x="578" y="354" text-anchor="middle" font-size="12.5" font-weight="800" fill="#33414f">SW4</text>
+<text x="578" y="280" text-anchor="middle" font-size="11" font-weight="700" fill="#7a8699">small arcade · 2 IO</text>
+<text x="658" y="296" font-size="11" font-weight="800" fill="#38bdf8">SWITCH — IO39</text>
+<rect x="658" y="306" width="48" height="20" rx="4" fill="none" stroke="#38bdf8"/>
+<text x="682" y="320" text-anchor="middle" font-size="11" font-weight="700" fill="#38bdf8" font-family="ui-monospace,monospace">IO39</text>
+<line x1="706" y1="316" x2="732" y2="316" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="734" cy="316" r="3" fill="#1f2a37"/>
+<line x1="734" y1="316" x2="754" y2="306" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="756" cy="316" r="3" fill="#1f2a37"/>
+<line x1="756" y1="316" x2="782" y2="316" stroke="#1f2a37" stroke-width="2"/>
+<text x="786" y="320" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="658" y="342" font-size="9.5" fill="#7a8699">active-LOW · INPUT_PULLUP · pressed = LOW</text>
+<text x="658" y="364" font-size="11" font-weight="800" fill="#f59e0b">LED — IO42 (direct)</text>
+<rect x="658" y="381" width="46" height="16" rx="4" fill="none" stroke="#f59e0b"/>
+<text x="681" y="393" text-anchor="middle" font-size="10" font-weight="700" fill="#f59e0b" font-family="ui-monospace,monospace">IO42</text>
+<line x1="704" y1="392" x2="722" y2="392" stroke="#f59e0b" stroke-width="2"/>
+<rect x="722" y="381" width="44" height="16" rx="3" fill="none" stroke="#f59e0b"/>
+<text x="744" y="393" text-anchor="middle" font-size="9.5" fill="#f59e0b">330Ω</text>
+<line x1="766" y1="392" x2="786" y2="392" stroke="#1f2a37" stroke-width="2"/>
+<path d="M786,386 L786,398 L798,392 Z" fill="#f59e0b"/>
+<line x1="798" y1="386" x2="798" y2="398" stroke="#f59e0b" stroke-width="2"/>
+<line x1="798" y1="392" x2="820" y2="392" stroke="#1f2a37" stroke-width="2"/>
+<text x="824" y="396" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="658" y="420" font-size="9.5" fill="#7a8699">direct GPIO drive · PWM-dimmable · low-current LED only (≤ ~20 mA @ 3.3 V)</text>
+<text x="658" y="434" font-size="9.5" fill="#e06a5a">5/12 V button lamps need the MOSFET option →</text>
+<circle cx="90" cy="574" r="55" fill="none" stroke="#f59e0b" stroke-width="3"/>
+<circle cx="90" cy="574" r="50" fill="#eef3f8" stroke="#c2ccd8" stroke-width="2"/>
+<circle cx="90" cy="574" r="41" fill="#f7fafd" stroke="#d8e0ea"/>
+<text x="90" y="578" text-anchor="middle" font-size="15" font-weight="800" fill="#33414f">SW5</text>
+<text x="90" y="504" text-anchor="middle" font-size="11" font-weight="700" fill="#7a8699">BIG arcade · 2 IO</text>
+<text x="170" y="520" font-size="11" font-weight="800" fill="#38bdf8">SWITCH — IO40</text>
+<rect x="170" y="530" width="48" height="20" rx="4" fill="none" stroke="#38bdf8"/>
+<text x="194" y="544" text-anchor="middle" font-size="11" font-weight="700" fill="#38bdf8" font-family="ui-monospace,monospace">IO40</text>
+<line x1="218" y1="540" x2="244" y2="540" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="246" cy="540" r="3" fill="#1f2a37"/>
+<line x1="246" y1="540" x2="266" y2="530" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="268" cy="540" r="3" fill="#1f2a37"/>
+<line x1="268" y1="540" x2="294" y2="540" stroke="#1f2a37" stroke-width="2"/>
+<text x="298" y="544" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="170" y="566" font-size="9.5" fill="#7a8699">active-LOW · INPUT_PULLUP · pressed = LOW</text>
+<text x="170" y="588" font-size="11" font-weight="800" fill="#f59e0b">LED — IO21 (direct)</text>
+<rect x="170" y="605" width="46" height="16" rx="4" fill="none" stroke="#f59e0b"/>
+<text x="193" y="617" text-anchor="middle" font-size="10" font-weight="700" fill="#f59e0b" font-family="ui-monospace,monospace">IO21</text>
+<line x1="216" y1="616" x2="234" y2="616" stroke="#f59e0b" stroke-width="2"/>
+<rect x="234" y="605" width="44" height="16" rx="3" fill="none" stroke="#f59e0b"/>
+<text x="256" y="617" text-anchor="middle" font-size="9.5" fill="#f59e0b">330Ω</text>
+<line x1="278" y1="616" x2="298" y2="616" stroke="#1f2a37" stroke-width="2"/>
+<path d="M298,610 L298,622 L310,616 Z" fill="#f59e0b"/>
+<line x1="310" y1="610" x2="310" y2="622" stroke="#f59e0b" stroke-width="2"/>
+<line x1="310" y1="616" x2="332" y2="616" stroke="#1f2a37" stroke-width="2"/>
+<text x="336" y="620" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="170" y="644" font-size="9.5" fill="#7a8699">direct GPIO drive · PWM-dimmable · low-current LED only (≤ ~20 mA @ 3.3 V)</text>
+<text x="170" y="658" font-size="9.5" fill="#e06a5a">5/12 V button lamps need the MOSFET option →</text>
+<circle cx="578" cy="574" r="39" fill="none" stroke="#22c55e" stroke-width="3"/>
+<circle cx="578" cy="574" r="34" fill="#eef3f8" stroke="#c2ccd8" stroke-width="2"/>
+<circle cx="578" cy="574" r="25" fill="#f7fafd" stroke="#d8e0ea"/>
+<text x="578" y="578" text-anchor="middle" font-size="12.5" font-weight="800" fill="#33414f">Mode</text>
+<text x="578" y="504" text-anchor="middle" font-size="11" font-weight="700" fill="#7a8699">Mode · 2 IO</text>
+<circle cx="578" cy="524" r="8" fill="#22c55e" stroke="#0006"/>
+<text x="592" y="528" font-size="10.5" font-weight="700" fill="#22c55e">status LED</text>
+<text x="658" y="520" font-size="11" font-weight="800" fill="#38bdf8">SWITCH — IO17</text>
+<rect x="658" y="530" width="48" height="20" rx="4" fill="none" stroke="#38bdf8"/>
+<text x="682" y="544" text-anchor="middle" font-size="11" font-weight="700" fill="#38bdf8" font-family="ui-monospace,monospace">IO17</text>
+<line x1="706" y1="540" x2="732" y2="540" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="734" cy="540" r="3" fill="#1f2a37"/>
+<line x1="734" y1="540" x2="754" y2="530" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="756" cy="540" r="3" fill="#1f2a37"/>
+<line x1="756" y1="540" x2="782" y2="540" stroke="#1f2a37" stroke-width="2"/>
+<text x="786" y="544" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="658" y="566" font-size="9.5" fill="#7a8699">active-LOW · INPUT_PULLUP · pressed = LOW</text>
+<text x="658" y="588" font-size="11" font-weight="800" fill="#f59e0b">LED — IO47 (direct)</text>
+<rect x="658" y="605" width="46" height="16" rx="4" fill="none" stroke="#f59e0b"/>
+<text x="681" y="617" text-anchor="middle" font-size="10" font-weight="700" fill="#f59e0b" font-family="ui-monospace,monospace">IO47</text>
+<line x1="704" y1="616" x2="722" y2="616" stroke="#f59e0b" stroke-width="2"/>
+<rect x="722" y="605" width="44" height="16" rx="3" fill="none" stroke="#f59e0b"/>
+<text x="744" y="617" text-anchor="middle" font-size="9.5" fill="#f59e0b">330Ω</text>
+<line x1="766" y1="616" x2="786" y2="616" stroke="#1f2a37" stroke-width="2"/>
+<path d="M786,610 L786,622 L798,616 Z" fill="#f59e0b"/>
+<line x1="798" y1="610" x2="798" y2="622" stroke="#f59e0b" stroke-width="2"/>
+<line x1="798" y1="616" x2="820" y2="616" stroke="#1f2a37" stroke-width="2"/>
+<text x="824" y="620" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="658" y="644" font-size="9.5" fill="#7a8699">direct GPIO drive · PWM-dimmable · low-current LED only (≤ ~20 mA @ 3.3 V)</text>
+<text x="658" y="658" font-size="9.5" fill="#e06a5a">5/12 V button lamps need the MOSFET option →</text>
+</svg>
+    </div>
+    <div class="canvas wirepane" data-wire="mosfet">
+<svg viewBox="0 0 1000 720" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,Segoe UI,sans-serif">
+<text x="24" y="26" font-size="14" font-weight="800" fill="#33414f">6 buttons — each = 2 IO. LED option: low-side N-MOSFET (for 5/12 V button lamps).</text>
+<circle cx="90" cy="126" r="39" fill="none" stroke="#f59e0b" stroke-width="3"/>
+<circle cx="90" cy="126" r="34" fill="#eef3f8" stroke="#c2ccd8" stroke-width="2"/>
+<circle cx="90" cy="126" r="25" fill="#f7fafd" stroke="#d8e0ea"/>
+<text x="90" y="130" text-anchor="middle" font-size="12.5" font-weight="800" fill="#33414f">SW1</text>
+<text x="90" y="56" text-anchor="middle" font-size="11" font-weight="700" fill="#7a8699">small arcade · 2 IO</text>
+<text x="170" y="72" font-size="11" font-weight="800" fill="#38bdf8">SWITCH — IO15</text>
+<rect x="170" y="82" width="48" height="20" rx="4" fill="none" stroke="#38bdf8"/>
+<text x="194" y="96" text-anchor="middle" font-size="11" font-weight="700" fill="#38bdf8" font-family="ui-monospace,monospace">IO15</text>
+<line x1="218" y1="92" x2="244" y2="92" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="246" cy="92" r="3" fill="#1f2a37"/>
+<line x1="246" y1="92" x2="266" y2="82" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="268" cy="92" r="3" fill="#1f2a37"/>
+<line x1="268" y1="92" x2="294" y2="92" stroke="#1f2a37" stroke-width="2"/>
+<text x="298" y="96" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="170" y="118" font-size="9.5" fill="#7a8699">active-LOW · INPUT_PULLUP · pressed = LOW</text>
+<text x="170" y="140" font-size="11" font-weight="800" fill="#f59e0b">LED — IO41 (PWM via MOSFET)</text>
+<rect x="170" y="151" width="46" height="16" rx="4" fill="none" stroke="#f59e0b"/>
+<text x="193" y="163" text-anchor="middle" font-size="10" font-weight="700" fill="#f59e0b" font-family="ui-monospace,monospace">IO41</text>
+<line x1="216" y1="162" x2="234" y2="162" stroke="#f59e0b" stroke-width="2"/>
+<rect x="234" y="151" width="40" height="16" rx="3" fill="none" stroke="#f59e0b"/>
+<text x="254" y="163" text-anchor="middle" font-size="9.5" fill="#f59e0b">150Ω</text>
+<line x1="274" y1="162" x2="303" y2="162" stroke="#f59e0b" stroke-width="2"/>
+<line x1="303" y1="162" x2="303" y2="177" stroke="#f59e0b" stroke-width="2"/>
+<text x="308" y="165" font-size="9" fill="#7a8699">gate</text>
+<text x="170" y="194" font-size="11" font-weight="800" fill="#e06a5a">+5V</text>
+<line x1="198" y1="190" x2="218" y2="190" stroke="#e06a5a" stroke-width="2"/>
+<path d="M218,184 L218,196 L230,190 Z" fill="#f59e0b"/>
+<line x1="230" y1="184" x2="230" y2="196" stroke="#f59e0b" stroke-width="2"/>
+<line x1="230" y1="190" x2="290" y2="190" stroke="#1f2a37" stroke-width="2"/>
+<rect x="290" y="177" width="26" height="26" rx="3" fill="#10202c" stroke="#1f2a37"/>
+<text x="303" y="194" text-anchor="middle" font-size="11" font-weight="800" fill="#cfe0f2">Q</text>
+<line x1="316" y1="190" x2="338" y2="190" stroke="#1f2a37" stroke-width="2"/>
+<text x="342" y="194" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="170" y="216" font-size="9.5" fill="#7a8699">low-side N-MOSFET · 100kΩ gate↓ · LED on 5/12V rail</text>
+<circle cx="578" cy="126" r="39" fill="none" stroke="#f59e0b" stroke-width="3"/>
+<circle cx="578" cy="126" r="34" fill="#eef3f8" stroke="#c2ccd8" stroke-width="2"/>
+<circle cx="578" cy="126" r="25" fill="#f7fafd" stroke="#d8e0ea"/>
+<text x="578" y="130" text-anchor="middle" font-size="12.5" font-weight="800" fill="#33414f">SW2</text>
+<text x="578" y="56" text-anchor="middle" font-size="11" font-weight="700" fill="#7a8699">small arcade · 2 IO</text>
+<text x="658" y="72" font-size="11" font-weight="800" fill="#38bdf8">SWITCH — IO18</text>
+<rect x="658" y="82" width="48" height="20" rx="4" fill="none" stroke="#38bdf8"/>
+<text x="682" y="96" text-anchor="middle" font-size="11" font-weight="700" fill="#38bdf8" font-family="ui-monospace,monospace">IO18</text>
+<line x1="706" y1="92" x2="732" y2="92" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="734" cy="92" r="3" fill="#1f2a37"/>
+<line x1="734" y1="92" x2="754" y2="82" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="756" cy="92" r="3" fill="#1f2a37"/>
+<line x1="756" y1="92" x2="782" y2="92" stroke="#1f2a37" stroke-width="2"/>
+<text x="786" y="96" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="658" y="118" font-size="9.5" fill="#7a8699">active-LOW · INPUT_PULLUP · pressed = LOW</text>
+<text x="658" y="140" font-size="11" font-weight="800" fill="#f59e0b">LED — IO1 (PWM via MOSFET)</text>
+<rect x="658" y="151" width="46" height="16" rx="4" fill="none" stroke="#f59e0b"/>
+<text x="681" y="163" text-anchor="middle" font-size="10" font-weight="700" fill="#f59e0b" font-family="ui-monospace,monospace">IO1</text>
+<line x1="704" y1="162" x2="722" y2="162" stroke="#f59e0b" stroke-width="2"/>
+<rect x="722" y="151" width="40" height="16" rx="3" fill="none" stroke="#f59e0b"/>
+<text x="742" y="163" text-anchor="middle" font-size="9.5" fill="#f59e0b">150Ω</text>
+<line x1="762" y1="162" x2="791" y2="162" stroke="#f59e0b" stroke-width="2"/>
+<line x1="791" y1="162" x2="791" y2="177" stroke="#f59e0b" stroke-width="2"/>
+<text x="796" y="165" font-size="9" fill="#7a8699">gate</text>
+<text x="658" y="194" font-size="11" font-weight="800" fill="#e06a5a">+5V</text>
+<line x1="686" y1="190" x2="706" y2="190" stroke="#e06a5a" stroke-width="2"/>
+<path d="M706,184 L706,196 L718,190 Z" fill="#f59e0b"/>
+<line x1="718" y1="184" x2="718" y2="196" stroke="#f59e0b" stroke-width="2"/>
+<line x1="718" y1="190" x2="778" y2="190" stroke="#1f2a37" stroke-width="2"/>
+<rect x="778" y="177" width="26" height="26" rx="3" fill="#10202c" stroke="#1f2a37"/>
+<text x="791" y="194" text-anchor="middle" font-size="11" font-weight="800" fill="#cfe0f2">Q</text>
+<line x1="804" y1="190" x2="826" y2="190" stroke="#1f2a37" stroke-width="2"/>
+<text x="830" y="194" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="658" y="216" font-size="9.5" fill="#7a8699">low-side N-MOSFET · 100kΩ gate↓ · LED on 5/12V rail</text>
+<circle cx="90" cy="350" r="39" fill="none" stroke="#f59e0b" stroke-width="3"/>
+<circle cx="90" cy="350" r="34" fill="#eef3f8" stroke="#c2ccd8" stroke-width="2"/>
+<circle cx="90" cy="350" r="25" fill="#f7fafd" stroke="#d8e0ea"/>
+<text x="90" y="354" text-anchor="middle" font-size="12.5" font-weight="800" fill="#33414f">SW3</text>
+<text x="90" y="280" text-anchor="middle" font-size="11" font-weight="700" fill="#7a8699">small arcade · 2 IO</text>
+<text x="170" y="296" font-size="11" font-weight="800" fill="#38bdf8">SWITCH — IO16</text>
+<rect x="170" y="306" width="48" height="20" rx="4" fill="none" stroke="#38bdf8"/>
+<text x="194" y="320" text-anchor="middle" font-size="11" font-weight="700" fill="#38bdf8" font-family="ui-monospace,monospace">IO16</text>
+<line x1="218" y1="316" x2="244" y2="316" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="246" cy="316" r="3" fill="#1f2a37"/>
+<line x1="246" y1="316" x2="266" y2="306" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="268" cy="316" r="3" fill="#1f2a37"/>
+<line x1="268" y1="316" x2="294" y2="316" stroke="#1f2a37" stroke-width="2"/>
+<text x="298" y="320" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="170" y="342" font-size="9.5" fill="#7a8699">active-LOW · INPUT_PULLUP · pressed = LOW</text>
+<text x="170" y="364" font-size="11" font-weight="800" fill="#f59e0b">LED — IO2 (PWM via MOSFET)</text>
+<rect x="170" y="375" width="46" height="16" rx="4" fill="none" stroke="#f59e0b"/>
+<text x="193" y="387" text-anchor="middle" font-size="10" font-weight="700" fill="#f59e0b" font-family="ui-monospace,monospace">IO2</text>
+<line x1="216" y1="386" x2="234" y2="386" stroke="#f59e0b" stroke-width="2"/>
+<rect x="234" y="375" width="40" height="16" rx="3" fill="none" stroke="#f59e0b"/>
+<text x="254" y="387" text-anchor="middle" font-size="9.5" fill="#f59e0b">150Ω</text>
+<line x1="274" y1="386" x2="303" y2="386" stroke="#f59e0b" stroke-width="2"/>
+<line x1="303" y1="386" x2="303" y2="401" stroke="#f59e0b" stroke-width="2"/>
+<text x="308" y="389" font-size="9" fill="#7a8699">gate</text>
+<text x="170" y="418" font-size="11" font-weight="800" fill="#e06a5a">+5V</text>
+<line x1="198" y1="414" x2="218" y2="414" stroke="#e06a5a" stroke-width="2"/>
+<path d="M218,408 L218,420 L230,414 Z" fill="#f59e0b"/>
+<line x1="230" y1="408" x2="230" y2="420" stroke="#f59e0b" stroke-width="2"/>
+<line x1="230" y1="414" x2="290" y2="414" stroke="#1f2a37" stroke-width="2"/>
+<rect x="290" y="401" width="26" height="26" rx="3" fill="#10202c" stroke="#1f2a37"/>
+<text x="303" y="418" text-anchor="middle" font-size="11" font-weight="800" fill="#cfe0f2">Q</text>
+<line x1="316" y1="414" x2="338" y2="414" stroke="#1f2a37" stroke-width="2"/>
+<text x="342" y="418" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="170" y="440" font-size="9.5" fill="#7a8699">low-side N-MOSFET · 100kΩ gate↓ · LED on 5/12V rail</text>
+<circle cx="578" cy="350" r="39" fill="none" stroke="#f59e0b" stroke-width="3"/>
+<circle cx="578" cy="350" r="34" fill="#eef3f8" stroke="#c2ccd8" stroke-width="2"/>
+<circle cx="578" cy="350" r="25" fill="#f7fafd" stroke="#d8e0ea"/>
+<text x="578" y="354" text-anchor="middle" font-size="12.5" font-weight="800" fill="#33414f">SW4</text>
+<text x="578" y="280" text-anchor="middle" font-size="11" font-weight="700" fill="#7a8699">small arcade · 2 IO</text>
+<text x="658" y="296" font-size="11" font-weight="800" fill="#38bdf8">SWITCH — IO39</text>
+<rect x="658" y="306" width="48" height="20" rx="4" fill="none" stroke="#38bdf8"/>
+<text x="682" y="320" text-anchor="middle" font-size="11" font-weight="700" fill="#38bdf8" font-family="ui-monospace,monospace">IO39</text>
+<line x1="706" y1="316" x2="732" y2="316" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="734" cy="316" r="3" fill="#1f2a37"/>
+<line x1="734" y1="316" x2="754" y2="306" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="756" cy="316" r="3" fill="#1f2a37"/>
+<line x1="756" y1="316" x2="782" y2="316" stroke="#1f2a37" stroke-width="2"/>
+<text x="786" y="320" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="658" y="342" font-size="9.5" fill="#7a8699">active-LOW · INPUT_PULLUP · pressed = LOW</text>
+<text x="658" y="364" font-size="11" font-weight="800" fill="#f59e0b">LED — IO42 (PWM via MOSFET)</text>
+<rect x="658" y="375" width="46" height="16" rx="4" fill="none" stroke="#f59e0b"/>
+<text x="681" y="387" text-anchor="middle" font-size="10" font-weight="700" fill="#f59e0b" font-family="ui-monospace,monospace">IO42</text>
+<line x1="704" y1="386" x2="722" y2="386" stroke="#f59e0b" stroke-width="2"/>
+<rect x="722" y="375" width="40" height="16" rx="3" fill="none" stroke="#f59e0b"/>
+<text x="742" y="387" text-anchor="middle" font-size="9.5" fill="#f59e0b">150Ω</text>
+<line x1="762" y1="386" x2="791" y2="386" stroke="#f59e0b" stroke-width="2"/>
+<line x1="791" y1="386" x2="791" y2="401" stroke="#f59e0b" stroke-width="2"/>
+<text x="796" y="389" font-size="9" fill="#7a8699">gate</text>
+<text x="658" y="418" font-size="11" font-weight="800" fill="#e06a5a">+5V</text>
+<line x1="686" y1="414" x2="706" y2="414" stroke="#e06a5a" stroke-width="2"/>
+<path d="M706,408 L706,420 L718,414 Z" fill="#f59e0b"/>
+<line x1="718" y1="408" x2="718" y2="420" stroke="#f59e0b" stroke-width="2"/>
+<line x1="718" y1="414" x2="778" y2="414" stroke="#1f2a37" stroke-width="2"/>
+<rect x="778" y="401" width="26" height="26" rx="3" fill="#10202c" stroke="#1f2a37"/>
+<text x="791" y="418" text-anchor="middle" font-size="11" font-weight="800" fill="#cfe0f2">Q</text>
+<line x1="804" y1="414" x2="826" y2="414" stroke="#1f2a37" stroke-width="2"/>
+<text x="830" y="418" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="658" y="440" font-size="9.5" fill="#7a8699">low-side N-MOSFET · 100kΩ gate↓ · LED on 5/12V rail</text>
+<circle cx="90" cy="574" r="55" fill="none" stroke="#f59e0b" stroke-width="3"/>
+<circle cx="90" cy="574" r="50" fill="#eef3f8" stroke="#c2ccd8" stroke-width="2"/>
+<circle cx="90" cy="574" r="41" fill="#f7fafd" stroke="#d8e0ea"/>
+<text x="90" y="578" text-anchor="middle" font-size="15" font-weight="800" fill="#33414f">SW5</text>
+<text x="90" y="504" text-anchor="middle" font-size="11" font-weight="700" fill="#7a8699">BIG arcade · 2 IO</text>
+<text x="170" y="520" font-size="11" font-weight="800" fill="#38bdf8">SWITCH — IO40</text>
+<rect x="170" y="530" width="48" height="20" rx="4" fill="none" stroke="#38bdf8"/>
+<text x="194" y="544" text-anchor="middle" font-size="11" font-weight="700" fill="#38bdf8" font-family="ui-monospace,monospace">IO40</text>
+<line x1="218" y1="540" x2="244" y2="540" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="246" cy="540" r="3" fill="#1f2a37"/>
+<line x1="246" y1="540" x2="266" y2="530" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="268" cy="540" r="3" fill="#1f2a37"/>
+<line x1="268" y1="540" x2="294" y2="540" stroke="#1f2a37" stroke-width="2"/>
+<text x="298" y="544" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="170" y="566" font-size="9.5" fill="#7a8699">active-LOW · INPUT_PULLUP · pressed = LOW</text>
+<text x="170" y="588" font-size="11" font-weight="800" fill="#f59e0b">LED — IO21 (PWM via MOSFET)</text>
+<rect x="170" y="599" width="46" height="16" rx="4" fill="none" stroke="#f59e0b"/>
+<text x="193" y="611" text-anchor="middle" font-size="10" font-weight="700" fill="#f59e0b" font-family="ui-monospace,monospace">IO21</text>
+<line x1="216" y1="610" x2="234" y2="610" stroke="#f59e0b" stroke-width="2"/>
+<rect x="234" y="599" width="40" height="16" rx="3" fill="none" stroke="#f59e0b"/>
+<text x="254" y="611" text-anchor="middle" font-size="9.5" fill="#f59e0b">150Ω</text>
+<line x1="274" y1="610" x2="303" y2="610" stroke="#f59e0b" stroke-width="2"/>
+<line x1="303" y1="610" x2="303" y2="625" stroke="#f59e0b" stroke-width="2"/>
+<text x="308" y="613" font-size="9" fill="#7a8699">gate</text>
+<text x="170" y="642" font-size="11" font-weight="800" fill="#e06a5a">+5V</text>
+<line x1="198" y1="638" x2="218" y2="638" stroke="#e06a5a" stroke-width="2"/>
+<path d="M218,632 L218,644 L230,638 Z" fill="#f59e0b"/>
+<line x1="230" y1="632" x2="230" y2="644" stroke="#f59e0b" stroke-width="2"/>
+<line x1="230" y1="638" x2="290" y2="638" stroke="#1f2a37" stroke-width="2"/>
+<rect x="290" y="625" width="26" height="26" rx="3" fill="#10202c" stroke="#1f2a37"/>
+<text x="303" y="642" text-anchor="middle" font-size="11" font-weight="800" fill="#cfe0f2">Q</text>
+<line x1="316" y1="638" x2="338" y2="638" stroke="#1f2a37" stroke-width="2"/>
+<text x="342" y="642" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="170" y="664" font-size="9.5" fill="#7a8699">low-side N-MOSFET · 100kΩ gate↓ · LED on 5/12V rail</text>
+<circle cx="578" cy="574" r="39" fill="none" stroke="#22c55e" stroke-width="3"/>
+<circle cx="578" cy="574" r="34" fill="#eef3f8" stroke="#c2ccd8" stroke-width="2"/>
+<circle cx="578" cy="574" r="25" fill="#f7fafd" stroke="#d8e0ea"/>
+<text x="578" y="578" text-anchor="middle" font-size="12.5" font-weight="800" fill="#33414f">Mode</text>
+<text x="578" y="504" text-anchor="middle" font-size="11" font-weight="700" fill="#7a8699">Mode · 2 IO</text>
+<circle cx="578" cy="524" r="8" fill="#22c55e" stroke="#0006"/>
+<text x="592" y="528" font-size="10.5" font-weight="700" fill="#22c55e">status LED</text>
+<text x="658" y="520" font-size="11" font-weight="800" fill="#38bdf8">SWITCH — IO17</text>
+<rect x="658" y="530" width="48" height="20" rx="4" fill="none" stroke="#38bdf8"/>
+<text x="682" y="544" text-anchor="middle" font-size="11" font-weight="700" fill="#38bdf8" font-family="ui-monospace,monospace">IO17</text>
+<line x1="706" y1="540" x2="732" y2="540" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="734" cy="540" r="3" fill="#1f2a37"/>
+<line x1="734" y1="540" x2="754" y2="530" stroke="#1f2a37" stroke-width="2"/>
+<circle cx="756" cy="540" r="3" fill="#1f2a37"/>
+<line x1="756" y1="540" x2="782" y2="540" stroke="#1f2a37" stroke-width="2"/>
+<text x="786" y="544" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="658" y="566" font-size="9.5" fill="#7a8699">active-LOW · INPUT_PULLUP · pressed = LOW</text>
+<text x="658" y="588" font-size="11" font-weight="800" fill="#f59e0b">LED — IO47 (PWM via MOSFET)</text>
+<rect x="658" y="599" width="46" height="16" rx="4" fill="none" stroke="#f59e0b"/>
+<text x="681" y="611" text-anchor="middle" font-size="10" font-weight="700" fill="#f59e0b" font-family="ui-monospace,monospace">IO47</text>
+<line x1="704" y1="610" x2="722" y2="610" stroke="#f59e0b" stroke-width="2"/>
+<rect x="722" y="599" width="40" height="16" rx="3" fill="none" stroke="#f59e0b"/>
+<text x="742" y="611" text-anchor="middle" font-size="9.5" fill="#f59e0b">150Ω</text>
+<line x1="762" y1="610" x2="791" y2="610" stroke="#f59e0b" stroke-width="2"/>
+<line x1="791" y1="610" x2="791" y2="625" stroke="#f59e0b" stroke-width="2"/>
+<text x="796" y="613" font-size="9" fill="#7a8699">gate</text>
+<text x="658" y="642" font-size="11" font-weight="800" fill="#e06a5a">+5V</text>
+<line x1="686" y1="638" x2="706" y2="638" stroke="#e06a5a" stroke-width="2"/>
+<path d="M706,632 L706,644 L718,638 Z" fill="#f59e0b"/>
+<line x1="718" y1="632" x2="718" y2="644" stroke="#f59e0b" stroke-width="2"/>
+<line x1="718" y1="638" x2="778" y2="638" stroke="#1f2a37" stroke-width="2"/>
+<rect x="778" y="625" width="26" height="26" rx="3" fill="#10202c" stroke="#1f2a37"/>
+<text x="791" y="642" text-anchor="middle" font-size="11" font-weight="800" fill="#cfe0f2">Q</text>
+<line x1="804" y1="638" x2="826" y2="638" stroke="#1f2a37" stroke-width="2"/>
+<text x="830" y="642" font-size="11" font-weight="800" fill="#6b7a90">GND</text>
+<text x="658" y="664" font-size="9.5" fill="#7a8699">low-side N-MOSFET · 100kΩ gate↓ · LED on 5/12V rail</text>
+</svg>
+    </div>
+  </div>
+
+  <h2>Connections</h2>
+  <div class="card" style="padding:0">
 <table>
   <tr><th>Net</th><th>ESP32-S3 pin</th><th>Wire to</th><th>Notes</th></tr>
-  <tr><td class="tag-btn">Arcade 1 · switch</td><td><code>GPIO39</code> (top)</td><td>momentary switch → GND</td><td>active-low, <code>INPUT_PULLUP</code></td></tr>
-  <tr><td class="tag-lamp">Arcade 1 · lamp</td><td><code>GPIO40</code> (LAMP1)</td><td>→ N-MOSFET gate (150&nbsp;Ω)</td><td>PWM dim/full · lamp on the 5/12&nbsp;V rail</td></tr>
-  <tr><td class="tag-btn">Arcade 2 · switch</td><td><code>GPIO41</code> (top)</td><td>momentary switch → GND</td><td>active-low, <code>INPUT_PULLUP</code></td></tr>
-  <tr><td class="tag-lamp">Arcade 2 · lamp</td><td><code>GPIO42</code> (LAMP2)</td><td>→ N-MOSFET gate (150&nbsp;Ω)</td><td>PWM dim/full</td></tr>
-  <tr><td class="tag-btn">Arcade 3 · switch</td><td><code>GPIO47</code> (top)</td><td>momentary switch → GND</td><td>active-low, <code>INPUT_PULLUP</code></td></tr>
-  <tr><td class="tag-lamp">Arcade 3 · lamp</td><td><code>GPIO48</code> (LAMP3)</td><td>→ N-MOSFET gate (150&nbsp;Ω)</td><td>PWM dim/full</td></tr>
-  <tr><td class="tag-btn">Arcade 4 · switch</td><td><code>GPIO15</code> (bottom)</td><td>momentary switch → GND</td><td>active-low, <code>INPUT_PULLUP</code></td></tr>
-  <tr><td class="tag-lamp">Arcade 4 · lamp</td><td><code>GPIO18</code> (LAMP4)</td><td>→ N-MOSFET gate (150&nbsp;Ω)</td><td>PWM dim/full</td></tr>
-  <tr><td class="tag-btn">Arcade 5 · switch</td><td><code>GPIO16</code> (bottom)</td><td>momentary switch → GND</td><td>active-low, <code>INPUT_PULLUP</code></td></tr>
-  <tr><td class="tag-lamp">Arcade 5 · lamp</td><td><code>GPIO17</code> (LAMP5)</td><td>→ N-MOSFET gate (150&nbsp;Ω)</td><td>PWM dim/full</td></tr>
-  <tr><td class="tag-btn">Mode (green)</td><td><code>GPIO38</code> (top)</td><td>momentary switch → GND</td><td>active-low, <code>INPUT_PULLUP</code></td></tr>
-  <tr><td class="tag-led">Status LED</td><td><code>GPIO21</code></td><td>onboard WS2812 (no external wiring)</td><td>green breathe + blue press-flash</td></tr>
-  <tr><td class="tag-pwr">+5&nbsp;V in</td><td><code>VSYS</code></td><td>buck-converter 5&nbsp;V output</td><td>source: 24&nbsp;V → buck → 5&nbsp;V</td></tr>
-  <tr><td class="tag-pwr">Lamp rail</td><td>5&nbsp;V / 12&nbsp;V (separate)</td><td>→ lamps + → MOSFET drains</td><td>sized to the buttons; shares GND</td></tr>
-  <tr><td class="tag-pwr">Ground</td><td><code>GND</code> (any)</td><td>common ground</td><td>ESP32 + MOSFET sources + lamp-rail GND</td></tr>
-  <tr><td class="muted">Flash / serial</td><td>USB-C</td><td>dev host</td><td>native USB Serial/JTAG; not a runtime supply</td></tr>
+  <tr><td class="tag-sw">SW1 · switch <span class="muted">(small)</span></td><td><code>GPIO15</code> <span class="muted">(Stoker P1-A)</span></td><td><code>SW1.SW</code> → GND</td><td>active-low, <code>INPUT_PULLUP</code></td></tr>
+  <tr><td class="tag-pwm">SW1 · PWM LED</td><td><code>GPIO41</code> (<code>SW1.PWM.LED</code>)</td><td>→ N-MOSFET gate (150&nbsp;Ω)</td><td>PWM dim/full · LED on the 5/12&nbsp;V rail</td></tr>
+  <tr><td class="tag-sw">SW2 · switch <span class="muted">(small)</span></td><td><code>GPIO18</code> <span class="muted">(Stoker P2-A)</span></td><td><code>SW2.SW</code> → GND</td><td>active-low, <code>INPUT_PULLUP</code></td></tr>
+  <tr><td class="tag-pwm">SW2 · PWM LED</td><td><code>GPIO1</code> (<code>SW2.PWM.LED</code>)</td><td>→ N-MOSFET gate (150&nbsp;Ω)</td><td>PWM dim/full</td></tr>
+  <tr><td class="tag-sw">SW3 · switch <span class="muted">(small)</span></td><td><code>GPIO16</code> <span class="muted">(Stoker P3-A)</span></td><td><code>SW3.SW</code> → GND</td><td>active-low, <code>INPUT_PULLUP</code></td></tr>
+  <tr><td class="tag-pwm">SW3 · PWM LED</td><td><code>GPIO2</code> (<code>SW3.PWM.LED</code>)</td><td>→ N-MOSFET gate (150&nbsp;Ω)</td><td>PWM dim/full</td></tr>
+  <tr><td class="tag-sw">SW4 · switch <span class="muted">(small)</span></td><td><code>GPIO39</code> <span class="muted">(Stoker P1-B)</span></td><td><code>SW4.SW</code> → GND</td><td>active-low, <code>INPUT_PULLUP</code></td></tr>
+  <tr><td class="tag-pwm">SW4 · PWM LED</td><td><code>GPIO42</code> (<code>SW4.PWM.LED</code>)</td><td>→ N-MOSFET gate (150&nbsp;Ω)</td><td>PWM dim/full</td></tr>
+  <tr><td class="tag-sw">SW5 · switch <span class="muted">(BIG)</span></td><td><code>GPIO40</code> <span class="muted">(Stoker P2-B)</span></td><td><code>SW5.SW</code> → GND</td><td>active-low, <code>INPUT_PULLUP</code></td></tr>
+  <tr><td class="tag-pwm">SW5 · PWM LED <span class="muted">(BIG)</span></td><td><code>GPIO21</code> (<code>SW5.PWM.LED</code>)</td><td>→ N-MOSFET gate (150&nbsp;Ω)</td><td>PWM dim/full</td></tr>
+  <tr><td class="tag-mode">Mode · switch <span class="muted">(green)</span></td><td><code>GPIO17</code> <span class="muted">(Stoker MODE)</span></td><td><code>MODE.SW</code> → GND</td><td>active-low, <code>INPUT_PULLUP</code></td></tr>
+  <tr><td class="tag-mode">Mode · status LED</td><td><code>GPIO47</code> <span class="muted">(Stoker mirror-LED)</span></td><td>→ N-MOSFET gate (150&nbsp;Ω) / 330&nbsp;Ω direct</td><td>on top of Mode button · shows mode state</td></tr>
+  <tr><td class="tag-led">Status LED</td><td><code>GPIO48</code></td><td>onboard WS2812 (no external wiring)</td><td>green breathe + blue press-flash</td></tr>
+  <tr><td class="tag-net">Network uplink</td><td>onboard <b>W5500</b> (SPI) → RJ45</td><td>→ LookingGlass unmanaged switch</td><td>wired Ethernet; see System Overview tab</td></tr>
+  <tr><td class="tag-pwr">Power IN</td><td><code>USB-C</code> (VBUS 5&nbsp;V)</td><td>5&nbsp;V USB-C supply</td><td>also flashing/serial · feeds the board + LED rail</td></tr>
+  <tr><td class="tag-pwr">LED rail</td><td>5&nbsp;V / 12&nbsp;V (separate)</td><td>→ LED anodes + → MOSFET drains</td><td>sized to the buttons; shares GND</td></tr>
+  <tr><td class="tag-pwr">Ground</td><td><code>GND</code> (any)</td><td>common ground</td><td>ESP32 + MOSFET sources + LED-rail GND</td></tr>
 </table>
-</div>
+  </div>
 
-<h2>Full pin map &amp; reserved pins</h2>
-<div class="card" style="padding:0"><table id="pinmap">
-  <tr><th>Pin</th><th>Row</th><th>Role</th><th>Use / why reserved</th></tr><tr><td><code>33</code></td><td>top</td><td>psram</td><td>octal PSRAM — do not use</td></tr><tr><td><code>34</code></td><td>top</td><td>psram</td><td>octal PSRAM — do not use</td></tr><tr><td><code>GND</code></td><td>top</td><td>gnd</td><td>ground</td></tr><tr><td><code>35</code></td><td>top</td><td>psram</td><td>octal PSRAM — do not use</td></tr><tr><td><code>36</code></td><td>top</td><td>psram</td><td>octal PSRAM — do not use</td></tr><tr><td><code>37</code></td><td>top</td><td>psram</td><td>octal PSRAM — do not use</td></tr><tr><td><code>38</code></td><td>top</td><td>btn</td><td>MODE — button GPIO</td></tr><tr><td><code>GND</code></td><td>top</td><td>gnd</td><td>ground</td></tr><tr><td><code>39</code></td><td>top</td><td>btn</td><td>ARCADE_1 — button GPIO</td></tr><tr><td><code>40</code></td><td>top</td><td>lamp</td><td>LAMP1 — button-lamp PWM output (illuminated button)</td></tr><tr><td><code>41</code></td><td>top</td><td>btn</td><td>ARCADE_2 — button GPIO</td></tr><tr><td><code>42</code></td><td>top</td><td>lamp</td><td>LAMP2 — button-lamp PWM output (illuminated button)</td></tr><tr><td><code>GND</code></td><td>top</td><td>gnd</td><td>ground</td></tr><tr><td><code>45</code></td><td>top</td><td>strap</td><td>strapping pin — do not use</td></tr><tr><td><code>46</code></td><td>top</td><td>strap</td><td>strapping pin — do not use</td></tr><tr><td><code>47</code></td><td>top</td><td>btn</td><td>ARCADE_3 — button GPIO</td></tr><tr><td><code>48</code></td><td>top</td><td>lamp</td><td>LAMP3 — button-lamp PWM output (illuminated button)</td></tr><tr><td><code>GND</code></td><td>top</td><td>gnd</td><td>ground</td></tr><tr><td><code>19</code></td><td>top</td><td>usb</td><td>native USB D-/D+ — do not use</td></tr><tr><td><code>20</code></td><td>top</td><td>usb</td><td>native USB D-/D+ — do not use</td></tr><tr><td><code>43</code></td><td>bottom</td><td>uart</td><td>UART0 — do not use</td></tr><tr><td><code>44</code></td><td>bottom</td><td>uart</td><td>UART0 — do not use</td></tr><tr><td><code>GND</code></td><td>bottom</td><td>gnd</td><td>ground</td></tr><tr><td><code>0</code></td><td>bottom</td><td>strap</td><td>strapping pin — do not use</td></tr><tr><td><code>1</code></td><td>bottom</td><td>free</td><td>available GPIO</td></tr><tr><td><code>2</code></td><td>bottom</td><td>free</td><td>available GPIO</td></tr><tr><td><code>3</code></td><td>bottom</td><td>strap</td><td>strapping pin — do not use</td></tr><tr><td><code>GND</code></td><td>bottom</td><td>gnd</td><td>ground</td></tr><tr><td><code>15</code></td><td>bottom</td><td>btn</td><td>ARCADE_4 — button GPIO</td></tr><tr><td><code>RUN</code></td><td>bottom</td><td>sys</td><td>system control</td></tr><tr><td><code>18</code></td><td>bottom</td><td>lamp</td><td>LAMP4 — button-lamp PWM output (illuminated button)</td></tr><tr><td><code>16</code></td><td>bottom</td><td>btn</td><td>ARCADE_5 — button GPIO</td></tr><tr><td><code>GND</code></td><td>bottom</td><td>gnd</td><td>ground</td></tr><tr><td><code>17</code></td><td>bottom</td><td>lamp</td><td>LAMP5 — button-lamp PWM output (illuminated button)</td></tr><tr><td><code>21</code></td><td>bottom</td><td>led</td><td>WS2812 — onboard WS2812 status LED</td></tr><tr><td><code>3V3</code></td><td>bottom</td><td>pwr</td><td>power</td></tr><tr><td><code>3V3_EN</code></td><td>bottom</td><td>sys</td><td>system control</td></tr><tr><td><code>GND</code></td><td>bottom</td><td>gnd</td><td>ground</td></tr><tr><td><code>VSYS</code></td><td>bottom</td><td>pwr</td><td>+5V — power</td></tr><tr><td><code>VBUS</code></td><td>bottom</td><td>pwr</td><td>power</td></tr></table></div>
+  <h2>Full pin map &amp; reserved pins</h2>
+  <div class="card" style="padding:0"><table id="pinmap"><tr><th>Pin</th><th>Row</th><th>Role</th><th>Use / why</th></tr><tr><td><code>33</code></td><td>top</td><td class="muted">psram</td><td>octal PSRAM — do not use</td></tr><tr><td><code>34</code></td><td>top</td><td class="muted">psram</td><td>octal PSRAM — do not use</td></tr><tr><td><code>GND</code></td><td>top</td><td class="muted">gnd</td><td>ground</td></tr><tr><td><code>35</code></td><td>top</td><td class="muted">psram</td><td>octal PSRAM — do not use</td></tr><tr><td><code>36</code></td><td>top</td><td class="muted">psram</td><td>octal PSRAM — do not use</td></tr><tr><td><code>37</code></td><td>top</td><td class="muted">psram</td><td>octal PSRAM — do not use</td></tr><tr><td><code>38</code></td><td>top</td><td class="muted">rgb-led</td><td>RGB-LED — reserved, do not use</td></tr><tr><td><code>GND</code></td><td>top</td><td class="muted">gnd</td><td>ground</td></tr><tr><td><code>39</code></td><td>top</td><td class="tag-sw">sw</td><td>SW4 switch — button GPIO (Stoker P1-B)</td></tr><tr><td><code>40</code></td><td>top</td><td class="tag-sw">sw</td><td>SW5 switch (BIG) — button GPIO (Stoker P2-B)</td></tr><tr><td><code>41</code></td><td>top</td><td class="tag-pwm">pwm LED</td><td>SW1 PWM LED — illuminated-button output</td></tr><tr><td><code>42</code></td><td>top</td><td class="tag-pwm">pwm LED</td><td>SW4 PWM LED — illuminated-button output</td></tr><tr><td><code>GND</code></td><td>top</td><td class="muted">gnd</td><td>ground</td></tr><tr><td><code>45</code></td><td>top</td><td class="muted">strap</td><td>strapping pin — do not use</td></tr><tr><td><code>46</code></td><td>top</td><td class="muted">strap</td><td>strapping pin — do not use</td></tr><tr><td><code>47</code></td><td>top</td><td class="tag-mode">mode</td><td>Mode status LED — output (Stoker mirror-LED pin)</td></tr><tr><td><code>48</code></td><td>top</td><td class="tag-led">led</td><td>WS2812 — onboard status LED (reserved RGB)</td></tr><tr><td><code>GND</code></td><td>top</td><td class="muted">gnd</td><td>ground</td></tr><tr><td><code>19</code></td><td>top</td><td class="muted">usb</td><td>native USB D-/D+ — do not use</td></tr><tr><td><code>20</code></td><td>top</td><td class="muted">usb</td><td>native USB D-/D+ — do not use</td></tr><tr><td><code>43</code></td><td>bottom</td><td class="muted">uart</td><td>UART0 — do not use</td></tr><tr><td><code>44</code></td><td>bottom</td><td class="muted">uart</td><td>UART0 — do not use</td></tr><tr><td><code>GND</code></td><td>bottom</td><td class="muted">gnd</td><td>ground</td></tr><tr><td><code>0</code></td><td>bottom</td><td class="muted">strap</td><td>strapping pin — do not use</td></tr><tr><td><code>1</code></td><td>bottom</td><td class="tag-pwm">pwm LED</td><td>SW2 PWM LED — illuminated-button output</td></tr><tr><td><code>2</code></td><td>bottom</td><td class="tag-pwm">pwm LED</td><td>SW3 PWM LED — illuminated-button output</td></tr><tr><td><code>3</code></td><td>bottom</td><td class="muted">strap</td><td>strapping pin — do not use</td></tr><tr><td><code>GND</code></td><td>bottom</td><td class="muted">gnd</td><td>ground</td></tr><tr><td><code>15</code></td><td>bottom</td><td class="tag-sw">sw</td><td>SW1 switch — button GPIO (Stoker P1-A)</td></tr><tr><td><code>RUN</code></td><td>bottom</td><td class="tag-sys">sys</td><td>system control</td></tr><tr><td><code>18</code></td><td>bottom</td><td class="tag-sw">sw</td><td>SW2 switch — button GPIO (Stoker P2-A)</td></tr><tr><td><code>16</code></td><td>bottom</td><td class="tag-sw">sw</td><td>SW3 switch — button GPIO (Stoker P3-A)</td></tr><tr><td><code>GND</code></td><td>bottom</td><td class="muted">gnd</td><td>ground</td></tr><tr><td><code>17</code></td><td>bottom</td><td class="tag-mode">mode</td><td>Mode switch — button GPIO (Stoker MODE)</td></tr><tr><td><code>21</code></td><td>bottom</td><td class="tag-pwm">pwm LED</td><td>SW5 PWM LED (BIG) — illuminated-button output</td></tr><tr><td><code>3V3</code></td><td>bottom</td><td class="tag-pwr">pwr</td><td>power</td></tr><tr><td><code>3V3_EN</code></td><td>bottom</td><td class="tag-sys">sys</td><td>system control</td></tr><tr><td><code>GND</code></td><td>bottom</td><td class="muted">gnd</td><td>ground</td></tr><tr><td><code>VSYS</code></td><td>bottom</td><td class="tag-pwr">pwr</td><td>+5V rail</td></tr><tr><td><code>VBUS</code></td><td>bottom</td><td class="tag-pwr">pwr</td><td>USB-C 5V IN — power</td></tr></table></div>
 
 <h2>Notes</h2>
 <div class="card">
 <ul>
   <li><b>Active-low, internal pull-ups.</b> Each button connects its GPIO straight to GND; firmware sets <code>INPUT_PULLUP</code>, so <b>no external resistors are needed</b>. Pressed = LOW.</li>
   <li><b>Debounce.</b> Firmware debounces in software (<code>DEBOUNCE_MS = 15</code>). An optional <code>100&nbsp;nF</code> cap across each switch (pin→GND) adds hardware filtering but is not required.</li>
-  <li><b>Power.</b> 24&nbsp;V → buck converter → 5&nbsp;V into <code>VSYS</code>; share a common GND with the board and all switches. USB-C is for flashing/serial only — avoid back-feeding <code>VBUS</code> and <code>VSYS</code> at once.</li>
-  <li><b>Button lamps (×5).</b> Each arcade lamp is on its own PWM GPIO (LAMP1–5 = GPIO&nbsp;40/42/48/18/17), driving a <b>low-side N-MOSFET</b> gate (150&nbsp;Ω series + 10&nbsp;kΩ pulldown), with the lamps on a separate 5&nbsp;V/12&nbsp;V rail and a common ground. <b>Recommended (future work):</b> replace all five discrete drivers with one <b>ULN2803A 8-channel</b> board — <a href="https://www.amazon.com/ULN2803A-Darlington-Current-Electric-Component/dp/B08C5B1S47">amazon.com/…/B08C5B1S47</a> (wire GPIO→IN, lamp+→rail, lamp−→OUT, COM→+rail, GND→common; no gate R/pulldown needed).</li>
-  <li><b>Status LED</b> is the module's onboard WS2812 on <code>GPIO21</code> — already wired on the board.</li>
-  <li><b>Reserved pins — never assign a button here:</b> <code>33–37</code> (octal PSRAM), <code>19/20</code> (native USB), <code>43/44</code> (UART0), <code>0/3/45/46</code> (strapping), <code>21</code> (onboard WS2812).</li>
+  <li><b>Power.</b> The board is fed from <b>USB-C 5&nbsp;V</b> (VBUS) — same port used for flashing/serial. Share a common GND with the board, all switches, and the LED rail.</li>
+  <li><b>Button LEDs (×6).</b> Every button — the 4 small arcade, the 1 big arcade, <b>and the Mode button</b> — is illuminated. Each LED is on its own PWM GPIO (<code>SW1–SW5.PWM.LED</code> = GPIO&nbsp;41/1/2/42/21, <b>Mode</b> = GPIO&nbsp;47). <b>Two wiring options</b> (toggle the sub-tabs above the buttons plot): <b>(A) Direct drive — no MOSFET yet</b>: <code>GPIO → 330&nbsp;Ω → LED → GND</code>, PWM-dimmable but only for low-current LEDs (≤ ~20&nbsp;mA @ 3.3&nbsp;V). <b>(B) Low-side N-MOSFET</b>: gate via 150&nbsp;Ω (+ 100&nbsp;kΩ pulldown), LED on a separate 5&nbsp;V/12&nbsp;V rail — required to fully light the 5/12&nbsp;V arcade-button lamps. <b>Future work:</b> one <b>ULN2803A 8-channel</b> board replaces all the discrete drivers — <a href="https://www.amazon.com/ULN2803A-Darlington-Current-Electric-Component/dp/B08C5B1S47">amazon.com/…/B08C5B1S47</a> (GPIO→IN, LED+→rail, LED−→OUT, COM→+rail, GND→common; no gate R/pulldown needed).</li>
+  <li><b>Stoker-compatible IO.</b> The switch pins mirror <b>BM26-Stoker</b>'s control-panel map so harnesses/firmware knowledge transfers: SW1–SW5 = <code>15/18/16/39/40</code> (Stoker P1-A/P2-A/P3-A/P1-B/P2-B), <b>Mode</b> = <code>17</code> (Stoker MODE), Mode LED = <code>47</code> (Stoker mirror-LED). <b>Polarity differs:</b> LookingGlass buttons are <b>active-LOW</b> (<code>INPUT_PULLUP</code>, →GND); Stoker FIRE buttons are active-HIGH (<code>INPUT_PULLDOWN</code>, →3V3) for fire safety — these don't actuate fire, so active-low is fine.</li>
+  <li><b>Network.</b> The panel reaches the LookingGlass <b>unmanaged switch</b> over wired <b>Ethernet</b> via an onboard <b>W5500</b> (ESP32-S3-ETH) and an RJ45. See the <b>System Overview</b> tab for the whole two-side network.</li>
+  <li><b>Status LED</b> is the module's onboard WS2812 on <code>GPIO48</code> (the ETH board's RGB pin) — already wired on the board.</li>
+  <li><b>Reserved pins — never assign a button here:</b> <code>33–37</code> (octal PSRAM), <code>38 &amp; 48</code> (RGB-LED), <code>19/20</code> (native USB), <code>43/44</code> (UART0), <code>0/3/45/46</code> (strapping), <code>9–14</code> (W5500 SPI), <code>26–32</code> (flash). After this map nearly every header GPIO is used or reserved.</li>
 </ul>
 </div>
+</section>
+
+<section class="tabpane" id="tab-system">
+  <div class="bar">
+    <button class="act copyBtn">&#9106; Copy system diagram for Figma</button>
+    <button class="act dlBtn">&#11015; Download .svg</button>
+    <span class="toast"></span>
+  </div>
+  <div class="hint">Paste onto a Figma canvas (<b>Ctrl/Cmd&nbsp;+&nbsp;V</b>) — imports as editable vector layers. (Or drag the downloaded <code>.svg</code> into Figma.)</div>
+
+  <div class="frame">
+    <div class="frame-label">&#9638; BM26 Titanic — Two-Side System (LookingGlass &harr; Ship)</div>
+    <div class="canvas">
+<svg viewBox="0 0 1260 720" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,Segoe UI,sans-serif">
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/></marker></defs>
+<rect x="24" y="64" width="648" height="624" rx="14" fill="none" stroke="#2a3f55" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="42" y="90" font-size="13" font-weight="800" fill="#6f86a3" letter-spacing="1.5">LOOKINGGLASS · PODIUM</text>
+<rect x="820" y="64" width="416" height="624" rx="14" fill="none" stroke="#2a3f55" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="838" y="90" font-size="13" font-weight="800" fill="#6f86a3" letter-spacing="1.5">TITANIC SHIP</text>
+<rect x="60" y="120" width="224" height="92" rx="11" fill="#15212e" stroke="#38bdf8" stroke-width="2"/>
+<rect x="60" y="120" width="6" height="92" rx="3" fill="#38bdf8"/>
+<text x="78" y="146" font-size="14.5" font-weight="800" fill="#e7eef7">ESP32-S3 Panel Controller</text>
+<text x="78" y="166" font-size="11.5" fill="#9fb0c2">6 buttons + 6 PWM LEDs</text>
+<text x="78" y="183" font-size="11.5" fill="#9fb0c2">fw: panel_firmware · W5500 ETH</text>
+<rect x="60" y="300" width="224" height="110" rx="11" fill="#15212e" stroke="#9aa6b6" stroke-width="2"/>
+<rect x="60" y="300" width="6" height="110" rx="3" fill="#9aa6b6"/>
+<text x="78" y="326" font-size="14.5" font-weight="800" fill="#e7eef7">Raspberry Pi</text>
+<text x="78" y="346" font-size="11.5" fill="#9fb0c2">small MarsinEngine (sACN out)</text>
+<text x="78" y="363" font-size="11.5" fill="#9fb0c2">+ Bridge → Titanic ship</text>
+<rect x="60" y="556" width="224" height="92" rx="11" fill="#15212e" stroke="#c084fc" stroke-width="2"/>
+<rect x="60" y="556" width="6" height="92" rx="3" fill="#c084fc"/>
+<text x="78" y="582" font-size="14.5" font-weight="800" fill="#e7eef7">Chroma.tech Angio</text>
+<text x="78" y="602" font-size="11.5" fill="#9fb0c2">sACN / E1.31 → LED controller</text>
+<rect x="360" y="560" width="150" height="84" rx="11" fill="#15212e" stroke="#c084fc" stroke-width="2"/>
+<rect x="360" y="560" width="6" height="84" rx="3" fill="#c084fc"/>
+<text x="378" y="586" font-size="14.5" font-weight="800" fill="#e7eef7">Podium LEDs</text>
+<text x="378" y="606" font-size="11.5" fill="#9fb0c2">driven by Angio</text>
+<rect x="452" y="300" width="168" height="100" rx="11" fill="#15212e" stroke="#2dd4bf" stroke-width="2"/>
+<rect x="452" y="300" width="6" height="100" rx="3" fill="#2dd4bf"/>
+<text x="470" y="326" font-size="14.5" font-weight="800" fill="#e7eef7">Unmanaged Switch</text>
+<text x="470" y="346" font-size="11.5" fill="#9fb0c2">LookingGlass LAN</text>
+<rect x="844" y="300" width="150" height="100" rx="11" fill="#15212e" stroke="#2dd4bf" stroke-width="2"/>
+<rect x="844" y="300" width="6" height="100" rx="3" fill="#2dd4bf"/>
+<text x="862" y="326" font-size="14.5" font-weight="800" fill="#e7eef7">Server Switch</text>
+<text x="862" y="346" font-size="11.5" fill="#9fb0c2">ship-side LAN</text>
+<rect x="1040" y="290" width="168" height="116" rx="11" fill="#15212e" stroke="#e06a5a" stroke-width="2"/>
+<rect x="1040" y="290" width="6" height="116" rx="3" fill="#e06a5a"/>
+<text x="1058" y="316" font-size="14.5" font-weight="800" fill="#e7eef7">Server</text>
+<text x="1058" y="336" font-size="11.5" fill="#9fb0c2">main MarsinEngine</text>
+<text x="1058" y="353" font-size="11.5" fill="#9fb0c2">full ship show</text>
+<rect x="1040" y="470" width="168" height="150" rx="11" fill="#15212e" stroke="#e06a5a" stroke-width="2"/>
+<rect x="1040" y="470" width="6" height="150" rx="3" fill="#e06a5a"/>
+<text x="1058" y="496" font-size="14.5" font-weight="800" fill="#e7eef7">Titanic Ship LEDs</text>
+<text x="1058" y="516" font-size="11.5" fill="#9fb0c2">exterior (mission-critical)</text>
+<text x="1058" y="533" font-size="11.5" fill="#9fb0c2">+ room lighting</text>
+<text x="746" y="250" text-anchor="middle" font-size="12" font-weight="800" fill="#6f86a3">P2P long-range link</text>
+<path d="M700,300 L688,346 L712,346 Z" fill="#11202e" stroke="#2dd4bf" stroke-width="2"/>
+<line x1="700" y1="300" x2="700" y2="286" stroke="#2dd4bf" stroke-width="2"/>
+<circle cx="700" cy="282" r="4" fill="#2dd4bf"/>
+<path d="M792,300 L780,346 L804,346 Z" fill="#11202e" stroke="#2dd4bf" stroke-width="2"/>
+<line x1="792" y1="300" x2="792" y2="286" stroke="#2dd4bf" stroke-width="2"/>
+<circle cx="792" cy="282" r="4" fill="#2dd4bf"/>
+<path d="M704,278 q42,-26 84,0" fill="none" stroke="#2dd4bf" stroke-width="2" stroke-dasharray="4 4"/>
+<path d="M284,156 L452,332" fill="none" stroke="#2dd4bf" stroke-width="2.4" marker-end="url(#ah)"/>
+<rect x="355.8" y="220" width="32.4" height="17" rx="4" fill="#0b0f14" opacity="0.85"/>
+<text x="372" y="232" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2dd4bf">ETH</text>
+<path d="M284,352 L452,350" fill="none" stroke="#2dd4bf" stroke-width="2.4" marker-end="url(#ah)"/>
+<rect x="355.8" y="324" width="32.4" height="17" rx="4" fill="#0b0f14" opacity="0.85"/>
+<text x="372" y="336" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2dd4bf">ETH</text>
+<path d="M284,590 L452,372" fill="none" stroke="#2dd4bf" stroke-width="2.4" marker-end="url(#ah)"/>
+<rect x="355.8" y="458" width="32.4" height="17" rx="4" fill="#0b0f14" opacity="0.85"/>
+<text x="372" y="470" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2dd4bf">ETH</text>
+<path d="M620,350 L700,346" fill="none" stroke="#2dd4bf" stroke-width="2.4"/>
+<path d="M792,346 L844,350" fill="none" stroke="#2dd4bf" stroke-width="2.4"/>
+<path d="M994,350 L1040,348" fill="none" stroke="#2dd4bf" stroke-width="2.4" marker-end="url(#ah)"/>
+<rect x="1000.8" y="331.0" width="32.4" height="17" rx="4" fill="#0b0f14" opacity="0.85"/>
+<text x="1017.0" y="343.0" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2dd4bf">ETH</text>
+<path d="M284,600 L360,600" fill="none" stroke="#c084fc" stroke-width="2.4" marker-end="url(#ah)"/>
+<rect x="288.8" y="582.0" width="66.4" height="17" rx="4" fill="#0b0f14" opacity="0.85"/>
+<text x="322.0" y="594.0" text-anchor="middle" font-size="10.5" font-weight="700" fill="#c084fc">LED data</text>
+<path d="M1124,406 L1124,470" fill="none" stroke="#e06a5a" stroke-width="2.4" marker-end="url(#ah)"/>
+<rect x="1084.0" y="428" width="80.0" height="17" rx="4" fill="#0b0f14" opacity="0.85"/>
+<text x="1124" y="440" text-anchor="middle" font-size="10.5" font-weight="700" fill="#e06a5a">sACN / DMX</text>
+<path d="M172,212 L172,300" fill="none" stroke="#38bdf8" stroke-width="2.4" stroke-dasharray="6 5" marker-end="url(#ah)"/>
+<rect x="121.80000000000001" y="250" width="100.39999999999999" height="17" rx="4" fill="#0b0f14" opacity="0.85"/>
+<text x="172" y="262" text-anchor="middle" font-size="10.5" font-weight="700" fill="#38bdf8">button events</text>
+<path d="M130,410 L130,556" fill="none" stroke="#c084fc" stroke-width="2.4" stroke-dasharray="6 5" marker-end="url(#ah)"/>
+<rect x="90.0" y="474" width="80.0" height="17" rx="4" fill="#0b0f14" opacity="0.85"/>
+<text x="130" y="486" text-anchor="middle" font-size="10.5" font-weight="700" fill="#c084fc">sACN E1.31</text>
+<path d="M284,318 C470,250 560,210 746,210 C940,210 980,300 1040,330" fill="none" stroke="#f59e0b" stroke-width="2.4" stroke-dasharray="6 5" marker-end="url(#ah)"/>
+<rect x="470" y="186" width="230" height="18" rx="4" fill="#0b0f14" opacity="0.88"/>
+<text x="585" y="199" text-anchor="middle" font-size="10.5" font-weight="700" fill="#f59e0b">bridge: translated cues → ship (long-range)</text>
+</svg>
+    </div>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--net)"></i> Ethernet (physical LAN)</span>
+    <span><i class="sw" style="background:var(--sw)"></i> button events (ESP32 → Pi)</span>
+    <span><i class="sw" style="background:var(--pwm)"></i> bridge: cues → ship (long-range)</span>
+    <span><i class="sw" style="background:var(--led)"></i> sACN lighting data</span>
+    <span><i class="sw" style="background:var(--pwr)"></i> ship show (server)</span>
+  </div>
+  </div>
+
+<h2>Data flow</h2>
+<div class="card">
+<ul>
+  <li><b>Two-side system.</b> The <b>Titanic ship</b> side runs the main <b>MarsinEngine</b> on the <b>Server</b>; the <b>LookingGlass</b> podium side runs a small MarsinEngine on the <b>Raspberry Pi</b>, a <b>Chroma.tech Angio</b> LED controller, and the <b>ESP32 panel controller</b>.</li>
+  <li><b>LookingGlass LAN.</b> The Pi, the Angio, and the ESP32 panel all connect to a single <b>unmanaged switch</b> over Ethernet.</li>
+  <li><b>Cross-site link.</b> The unmanaged switch joins a <b>point-to-point long-range network</b> to the <b>server-side switch</b>, linking both LANs.</li>
+  <li><b>Podium lighting.</b> The Pi controls the podium LEDs by streaming <b>sACN (E1.31)</b> to the Angio over Ethernet; the Angio drives the LEDs.</li>
+  <li><b>Panel → ship.</b> The ESP32 panel sends button data to the Pi's <b>bridge</b>, which <b>translates</b> it and forwards it to the Titanic ship over the long-range network.</li>
+  <li><b>Panel → podium.</b> The panel also drives the Pi, which emits <b>sACN</b> to the Angio over Ethernet — so the buttons light the podium directly.</li>
+</ul>
+</div>
+</section>
 
 <div class="sub">Generated for <code>LookingGlass/panel_firmware</code> · keep in sync with <code>include/config.h</code> (<code>BUTTON_TABLE</code>).</div>
 
 <script src="circuit.js"></script>
+<script>
+(function(){
+  var tabs=document.querySelectorAll('.tab');
+  tabs.forEach(function(t){
+    t.addEventListener('click',function(){
+      tabs.forEach(function(x){x.classList.remove('active');});
+      document.querySelectorAll('.tabpane').forEach(function(p){p.classList.remove('active');});
+      t.classList.add('active');
+      document.getElementById('tab-'+t.dataset.tab).classList.add('active');
+    });
+  });
+  // sub-tabs: switch the visible wiring variant (direct vs MOSFET) inside a frame
+  document.querySelectorAll('.subtab').forEach(function(st){
+    st.addEventListener('click',function(){
+      var frame=st.closest('.frame'); if(!frame)return;
+      frame.querySelectorAll('.subtab').forEach(function(x){x.classList.remove('active');});
+      frame.querySelectorAll('.wirepane').forEach(function(p){p.classList.remove('active');});
+      st.classList.add('active');
+      frame.querySelector('.wirepane[data-wire="'+st.dataset.wire+'"]').classList.add('active');
+    });
+  });
+})();
+</script>
 </body>
 </html>
