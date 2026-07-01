@@ -44,6 +44,10 @@ import { DualSwatch } from '@/components/ColorPickerModal';
 // hood). 0 = hard cut; the rest ramp the palette params over the window. Mirror
 // of the deck panel's transition pills (DECK TX crossfade idiom).
 const COLOR_TRANSITION_PRESETS_MS = [0, 500, 1000, 2000, 3000];
+
+// Pattern (deck TX) crossfade-time presets (ms > 0), mirroring the deck panel's
+// DECK TX "CROSSFADE TIME" pills. Shown once a transition mode is chosen.
+const PATTERN_TRANSITION_PRESETS_MS = [200, 500, 1000, 1500, 2000, 3000];
 function formatColorTransition(ms: number): string {
   if (ms <= 0) return 'CUT';
   return ms % 1000 === 0 ? `${ms / 1000}s` : `${(ms / 1000).toFixed(1)}s`;
@@ -153,9 +157,9 @@ export function CueEditorSheet({
   const [trigger, setTrigger] = useState<CueTrigger>(defaultTrigger('clock'));
   const [action, setAction] = useState<CueAction>(defaultPlaylistAction());
   const [holdMin, setHoldMin] = useState<number | null>(null);
-  // Cue DURATION (minutes) — a cue owns the deck for this window after firing.
-  // null = no owned window (point event; emits no `durationMin`).
-  const [durationMin, setDurationMin] = useState<number | null>(null);
+  // Cue DURATION (minutes) — REQUIRED. A cue always owns the deck for this window
+  // after it fires (operator: "new CUEs must have a duration, no None"). Default 60.
+  const [durationMin, setDurationMin] = useState<number>(60);
   const [days, setDays] = useState<CueDays>('all');
   // DAYS mode is EXPLICIT state, driven by the segmented control — NOT derived
   // from `days` on every render (deriving made "Pick…" snap back to "This day").
@@ -180,7 +184,7 @@ export function CueEditorSheet({
       setKind('program');
       setTrigger(defaultTrigger('manual'));
       setHoldMin(null);
-      setDurationMin(null);
+      setDurationMin(60);
       setDays('all');
       setDaysModeState('all');
     } else if (initialCue) {
@@ -192,11 +196,11 @@ export function CueEditorSheet({
       // so the editor never gets stuck on an action it can't render.
       setAction(initialCue.action.type === 'playlist' ? initialCue.action : defaultPlaylistAction());
       setHoldMin(initialCue.hold && 'min' in initialCue.hold ? initialCue.hold.min : null);
-      // DURATION: seed from a saved positive durationMin, else "none" (null).
+      // DURATION is required; seed from a saved positive durationMin, else 60.
       setDurationMin(
         typeof initialCue.durationMin === 'number' && initialCue.durationMin > 0
           ? initialCue.durationMin
-          : null,
+          : 60,
       );
       setDays(initialCue.days ?? 'all');
       setDaysModeState(initialDaysMode(initialCue.days));
@@ -206,12 +210,8 @@ export function CueEditorSheet({
       setTrigger(defaultTrigger('clock'));
       setAction(defaultPlaylistAction());
       setHoldMin(null);
-      // A FRESH cue DEFAULTS to a real duration (operator: "make sure the
-      // duration is default for the cues") so it renders as a deck-owned BLOCK
-      // on the day overview, not a point marker. buildCue emits durationMin
-      // whenever >0, so this 60 rides through to the wire. "None" is still
-      // selectable — this is only the default seed. Existing cues keep their
-      // stored value (the initialCue branch above is untouched).
+      // A cue is an EVENT with a REQUIRED duration; a fresh cue defaults to 60 min
+      // (renders as a deck-owned block on the day overview).
       setDurationMin(60);
       setDays([dayIndex]); // new cue defaults to "this day"
       setDaysModeState('this');
@@ -318,10 +318,8 @@ export function CueEditorSheet({
     else delete cue.label;
     if (kind === 'program' && holdMin && holdMin > 0) cue.hold = { min: holdMin };
     else delete cue.hold;
-    // DURATION — emit `durationMin` ONLY when set (>0), else drop it. The engine
-    // sibling validates durationMin>0, so an unset/<=0 duration must be OMITTED.
-    if (typeof durationMin === 'number' && durationMin > 0) cue.durationMin = durationMin;
-    else delete cue.durationMin;
+    // DURATION is REQUIRED — always emit (durationMin is always a positive number).
+    cue.durationMin = durationMin;
     return cue;
   };
 
@@ -493,13 +491,38 @@ export function CueEditorSheet({
                 delete next.transition;
                 setAction(next);
               } else {
-                setAction({ ...action, transition: { mode: id as DeckTransitionMode } });
+                setAction({ ...action, transition: { ...action.transition, mode: id as DeckTransitionMode } });
               }
             }}
           />
           <Text style={[styles.hint, { marginTop: 8 }]}>
             How this cue crossfades onto the deck. Default keeps the deck's current setting.
           </Text>
+          {transitionMode !== 'default' ? (
+            <View style={{ marginTop: 10 }}>
+              <FieldLabel>TRANSITION TIME</FieldLabel>
+              <View style={styles.chipRow}>
+                {PATTERN_TRANSITION_PRESETS_MS.map((ms) => {
+                  const sel = (action.transition?.durationMs ?? -1) === ms;
+                  return (
+                    <TouchableOpacity
+                      key={ms}
+                      onPress={() => setAction({ ...action, transition: { mode: transitionMode as DeckTransitionMode, durationMs: ms } })}
+                      style={[styles.dayPill, sel && { backgroundColor: C.primary, borderColor: C.primary }]}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: sel }}
+                      accessibilityLabel={`${ms} millisecond transition time`}
+                    >
+                      <Text style={[styles.dayPillText, sel && { color: C.onPrimary }]}>
+                        {ms >= 1000 ? `${ms / 1000}s` : `${ms}ms`}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <Text style={[styles.hint, { marginTop: 8 }]}>Crossfade time for this cue&apos;s deck swap.</Text>
+            </View>
+          ) : null}
           <View style={{ height: 8 }} />
           {/* OVERLAYS — cue-level overlay intent. "Leave as-is" emits nothing. */}
           <FieldLabel>OVERLAYS</FieldLabel>
@@ -800,46 +823,37 @@ export function CueEditorSheet({
                 <>
                   <View style={{ height: 14 }} />
                   <FieldLabel>DURATION</FieldLabel>
-                  <Segmented
-                    options={[{ id: 'none', label: 'None' }, { id: 'min', label: 'Minutes' }]}
-                    value={durationMin && durationMin > 0 ? 'min' : 'none'}
-                    onChange={(v) => setDurationMin(v === 'min' ? (durationMin || 60) : null)}
-                  />
-                  {durationMin && durationMin > 0 ? (
-                    <>
-                      <View style={styles.chipRow}>
-                        {DURATION_PRESETS_MIN.map((m) => {
-                          const sel = durationMin === m;
-                          return (
-                            <TouchableOpacity
-                              key={m}
-                              onPress={() => setDurationMin(m)}
-                              style={[styles.dayPill, sel && { backgroundColor: C.primary, borderColor: C.primary }]}
-                              accessibilityRole="button"
-                              accessibilityState={{ selected: sel }}
-                              accessibilityLabel={`${m} minute duration`}
-                            >
-                              <Text style={[styles.dayPillText, sel && { color: C.onPrimary }]}>
-                                {m >= 60 && m % 60 === 0 ? `${m / 60}h` : `${m}m`}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
-                      <View style={{ marginTop: 8 }}>
-                        <Stepper
-                          value={durationMin}
-                          step={15}
-                          onChange={setDurationMin}
-                          min={5} max={720}
-                          format={(v) => `${v} min`}
-                        />
-                      </View>
-                      <Text style={[styles.hint, { marginTop: 8 }]}>
-                        This cue owns the deck for {durationMin} min after it fires; the default cue fills the gaps.
-                      </Text>
-                    </>
-                  ) : null}
+                  <View style={styles.chipRow}>
+                    {DURATION_PRESETS_MIN.map((m) => {
+                      const sel = durationMin === m;
+                      return (
+                        <TouchableOpacity
+                          key={m}
+                          onPress={() => setDurationMin(m)}
+                          style={[styles.dayPill, sel && { backgroundColor: C.primary, borderColor: C.primary }]}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: sel }}
+                          accessibilityLabel={`${m} minute duration`}
+                        >
+                          <Text style={[styles.dayPillText, sel && { color: C.onPrimary }]}>
+                            {m >= 60 && m % 60 === 0 ? `${m / 60}h` : `${m}m`}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                  <View style={{ marginTop: 8 }}>
+                    <Stepper
+                      value={durationMin}
+                      step={15}
+                      onChange={setDurationMin}
+                      min={5} max={720}
+                      format={(v) => `${v} min`}
+                    />
+                  </View>
+                  <Text style={[styles.hint, { marginTop: 8 }]}>
+                    This cue owns the deck for {durationMin} min after it fires; the default cue fills the gaps.
+                  </Text>
                 </>
               ) : null}
 
