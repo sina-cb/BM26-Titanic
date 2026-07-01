@@ -206,7 +206,13 @@ export function CueEditorSheet({
       setTrigger(defaultTrigger('clock'));
       setAction(defaultPlaylistAction());
       setHoldMin(null);
-      setDurationMin(null);
+      // A FRESH cue DEFAULTS to a real duration (operator: "make sure the
+      // duration is default for the cues") so it renders as a deck-owned BLOCK
+      // on the day overview, not a point marker. buildCue emits durationMin
+      // whenever >0, so this 60 rides through to the wire. "None" is still
+      // selectable — this is only the default seed. Existing cues keep their
+      // stored value (the initialCue branch above is untouched).
+      setDurationMin(60);
       setDays([dayIndex]); // new cue defaults to "this day"
       setDaysModeState('this');
     }

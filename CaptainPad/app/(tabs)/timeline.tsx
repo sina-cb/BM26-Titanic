@@ -993,15 +993,30 @@ function CueRow({
   const countdown = live
     ? (live.enabled ? formatCountdown(live.nextInSec) : 'off')
     : (cue.atLocal ?? '—');
+  // FIRE only fires cues that exist in the ENGINE'S ACTIVE plan. A row can come
+  // from an unsaved/unactivated DRAFT (added or renamed cues whose id isn't yet
+  // in the live plan), where `live` is null — firing that id makes the engine
+  // fireCue(id) throw `cue "<id>" not found`. Rather than fire an id the engine
+  // will reject (Codex P0: no silent fallback, but don't provoke a loud error
+  // the operator can't act on), DISABLE FIRE with a clear hint until the draft
+  // is saved + activated so the cue is live.
+  const canFire = !!live;
   return (
     <View style={[styles.cueRow, hasError && { borderColor: C.error, backgroundColor: C.errorContainer }]}>
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={[styles.cueLabel, hasError && { color: C.error }]} numberOfLines={1}>{cue.label}</Text>
         <Text style={styles.cueTrigger} numberOfLines={1}>{subtitle}</Text>
         {hasError ? <Text style={styles.cueError} numberOfLines={2}>{live!.lastError}</Text> : null}
+        {!canFire ? <Text style={styles.cueTrigger} numberOfLines={1}>save + activate to fire</Text> : null}
       </View>
       <Text style={[styles.cueCountdown, live && !live.enabled && { color: C.icon }]}>{countdown}</Text>
-      <TouchableOpacity onPress={() => onFire(cue.id)} style={styles.fireButton} accessibilityLabel={`Fire cue ${cue.label}`}>
+      <TouchableOpacity
+        onPress={() => onFire(cue.id)}
+        disabled={!canFire}
+        style={[styles.fireButton, !canFire && { opacity: 0.4 }]}
+        accessibilityLabel={canFire ? `Fire cue ${cue.label}` : `Fire cue ${cue.label} (unavailable — save and activate the plan first)`}
+        accessibilityState={{ disabled: !canFire }}
+      >
         <Text style={styles.fireButtonLabel}>FIRE</Text>
       </TouchableOpacity>
     </View>
