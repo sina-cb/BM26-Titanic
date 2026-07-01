@@ -127,7 +127,7 @@ export function buildOverview(plan, nowMs) {
         const ms = anchorToMs({ sun: t.event, offsetMin: t.offsetMin || 0 }, dayNoonMs, tz, sunEvents);
         atLocal = ms !== null ? formatLocal(new Date(ms), tz) : null;
       }
-      return {
+      const overviewCue = {
         id: cue.id,
         label: cue.label || cue.id,
         kind: cue.kind,
@@ -135,6 +135,14 @@ export function buildOverview(plan, nowMs) {
         action: cue.action,
         atLocal,
       };
+      // Carry durationMin through so the maker strip renders the deck-owned
+      // WINDOW as a time BLOCK (start→start+durationMin) rather than a point
+      // marker (operator: "make sure the duration is shown on the day overview
+      // timeline"). Only when authored (>0) — a point cue omits it.
+      if (typeof cue.durationMin === 'number' && cue.durationMin > 0) {
+        overviewCue.durationMin = cue.durationMin;
+      }
+      return overviewCue;
     });
 
     return { index, date, weekday: weekdayFor(date, tz), sun, cues };

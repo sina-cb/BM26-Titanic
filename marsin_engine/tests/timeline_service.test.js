@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { TimelineService } from '../lib/timeline/timeline_service.js';
+import { TimelineService, buildOverview } from '../lib/timeline/timeline_service.js';
 import { saveShowPlan } from '../lib/timeline/show_plan.js';
 
 // ── fakes ─────────────────────────────────────────────────────────────────
@@ -989,4 +989,54 @@ test('docs/39 apply: colorAutopilot fails loud when the dep is missing', async (
     st.lastError && /setColorAutopilot dep is required/.test(st.lastError),
     `expected a loud setColorAutopilot dep error, got ${JSON.stringify(st.lastError)}`,
   );
+});
+
+// ── buildOverview carries durationMin (BUG 2 regression guard) ──────────────
+// A cue authored with durationMin>0 must surface durationMin on its overview
+// cue object so the maker strip renders it as a deck-owned BLOCK (start→
+// start+durationMin), not a point marker. A cue with no durationMin must omit
+// the field (point event).
+test('buildOverview carries durationMin on cues that own a deck window', () => {
+  const plan = validateShowPlan({
+    schemaVersion: 2,
+    name: 'dur_plan',
+    location: { lat: 40.7864, lon: -119.2065, tz: 'America/Los_Angeles' },
+    festival: { startDate: '2026-08-30', days: 2 },
+    autopilot: {
+      enabled: true, playlist: 'baseline_pl', delay_s: 45, shuffle: true,
+      target: { channel: 'deck', id: null }, mood: true,
+    },
+    phases: {},
+    looks: {},
+    cues: [
+      {
+        id: 'c_block',
+        label: 'Sixty-minute block',
+        kind: 'program',
+        trigger: { type: 'clock', at: '20:00' },
+        action: { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } },
+        durationMin: 60,
+        days: 'all',
+      },
+      {
+        id: 'c_point',
+        label: 'Point cue',
+        kind: 'program',
+        trigger: { type: 'clock', at: '21:00' },
+        action: { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } },
+        days: 'all',
+      },
+    ],
+  });
+
+  const overview = buildOverview(plan, Date.UTC(2026, 7, 30, 12, 0, 0));
+  assert.ok(overview.days.length >= 1, 'overview must have at least one day');
+  const day0 = overview.days[0];
+  const block = day0.cues.find((c) => c.id === 'c_block');
+  const point = day0.cues.find((c) => c.id === 'c_point');
+  assert.ok(block, 'c_block must appear in the day overview');
+  assert.equal(block.durationMin, 60, 'a durationMin cue must carry durationMin on its overview object');
+  assert.ok(typeof block.atLocal === 'string' && /^\d{2}:\d{2}$/.test(block.atLocal), 'block must resolve atLocal');
+  assert.ok(point, 'c_point must appear in the day overview');
+  assert.equal(point.durationMin, undefined, 'a point cue (no durationMin) must omit durationMin');
 });
