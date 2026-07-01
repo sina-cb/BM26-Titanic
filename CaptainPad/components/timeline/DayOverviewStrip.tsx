@@ -126,27 +126,6 @@ function SunColumn({
         );
       })}
 
-      {/* Cue LABELS — the cue's time + name at its position, so the day plot
-          reads as a list of events (not anonymous dots/bars). */}
-      {day.cues.map((cue, i) => {
-        const startMins = hhmmToMinutes(cue.atLocal);
-        if (startMins === null) return null;
-        const y = yFor(startMins);
-        if (y === null) return null;
-        const col = kindColor(cue.kind, C);
-        const text = cue.label ? `${cue.atLocal} ${cue.label}` : cue.atLocal;
-        return (
-          <Text
-            key={`${cue.id}:lbl:${i}`}
-            numberOfLines={1}
-            ellipsizeMode="tail"
-            style={[styles.cueLabel, { top: y - 6, color: col }]}
-          >
-            {text}
-          </Text>
-        );
-      })}
-
       {/* NOW playhead — only on today's card. A bright thin line + a dot at the
           current local time (top=00:00, bottom=24:00), driven by a 1s ticker
           in the parent. Reuses yFor() so it lines up with the sun + cue math. */}
@@ -180,7 +159,15 @@ export function DayCard({
   C: Palette;
   styles: Styles;
 }) {
-  const timeless = day.cues.filter((c) => !c.atLocal);
+  // Time-sorted cues for the agenda list: timed cues ascending, then timeless.
+  const sortedCues = [...day.cues].sort((a, b) => {
+    const am = hhmmToMinutes(a.atLocal);
+    const bm = hhmmToMinutes(b.atLocal);
+    if (am === null && bm === null) return 0;
+    if (am === null) return 1;
+    if (bm === null) return -1;
+    return am - bm;
+  });
   // Selection ring takes precedence as the dominant border; today still tints
   // the background. The two may be different days.
   const borderColor = isSelected ? C.primary : (isToday ? C.tertiary : C.ghostBorder);
@@ -211,16 +198,23 @@ export function DayCard({
 
       <SunColumn day={day} nowMinutes={nowMinutes} C={C} styles={styles} />
 
-      {/* Timed cue count + time-less chips */}
+      {/* Event agenda — the day's cues as a readable, time-sorted list
+          (kind dot · time · name). The column above is the visual plot; this
+          is the legible detail the narrow column can't hold. */}
       <View style={styles.cardFooter}>
         <Text style={styles.cueCount}>{`${day.cues.length} cue${day.cues.length === 1 ? '' : 's'}`}</Text>
-        {timeless.slice(0, 2).map((c: OverviewCue, i) => (
-          <View key={`${c.id}:tl:${i}`} style={[styles.timelessChip, { borderColor: kindColor(c.kind, C) }]}>
-            <Text style={[styles.timelessChipText, { color: kindColor(c.kind, C) }]} numberOfLines={1}>
-              {c.trigger.type === 'manual' ? 'MANUAL' : KIND_LABEL[c.kind]}
+        {sortedCues.slice(0, 6).map((c: OverviewCue, i) => (
+          <View key={`${c.id}:ev:${i}`} style={styles.eventRow}>
+            <View style={[styles.eventDot, { backgroundColor: kindColor(c.kind, C) }]} />
+            <Text style={styles.eventTime}>{c.atLocal ?? '· · ·'}</Text>
+            <Text style={styles.eventName} numberOfLines={1} ellipsizeMode="tail">
+              {c.label || KIND_LABEL[c.kind]}
             </Text>
           </View>
         ))}
+        {day.cues.length > 6 ? (
+          <Text style={styles.eventMore}>{`+${day.cues.length - 6} more`}</Text>
+        ) : null}
       </View>
 
       {/* Explicit EDIT DAY affordance — single tap selects/views, this opens
@@ -369,13 +363,36 @@ function makeStyles(C: Palette) {
       borderRadius: 5,
       borderWidth: 1.5,
     },
-    cueLabel: {
-      position: 'absolute',
-      left: 4,
-      right: 18,
+    eventRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      paddingVertical: 1,
+    },
+    eventDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+    },
+    eventTime: {
       fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 9,
+      fontSize: 10,
       letterSpacing: 0.2,
+      color: C.secondary,
+      fontVariant: ['tabular-nums'],
+      width: 34,
+    },
+    eventName: {
+      flex: 1,
+      fontFamily: 'Inter_400Regular',
+      fontSize: 11,
+      color: C.text,
+    },
+    eventMore: {
+      fontFamily: 'Inter_400Regular',
+      fontSize: 10,
+      color: C.secondary,
+      marginTop: 1,
     },
     cueBlock: {
       position: 'absolute',
@@ -385,7 +402,9 @@ function makeStyles(C: Palette) {
       opacity: 0.85,
     },
     cardFooter: {
-      gap: 4,
+      gap: 2,
+      marginTop: 2,
+      alignSelf: 'stretch',
     },
     cueCount: {
       fontFamily: 'SpaceGrotesk_700Bold',
@@ -393,6 +412,7 @@ function makeStyles(C: Palette) {
       letterSpacing: 0.6,
       color: C.icon,
       textTransform: 'uppercase',
+      marginBottom: 2,
     },
     timelessChip: {
       borderWidth: 1,
