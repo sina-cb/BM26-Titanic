@@ -612,6 +612,19 @@ export default function TimelineScreen() {
     return m;
   }, [state?.cues]);
 
+  // Which cues can be FIRED: those present in the ACTIVE plan. The live WS
+  // `state.cues` is unreliable for this gate (it can arrive empty/stale, which
+  // left FIRE disabled even after the plan was activated), so we gate on the
+  // active-plan OVERVIEW (`liveOverview`, from GET /timeline/overview, refreshed
+  // on activate + focus). When there is NO draft, the viewer IS the active plan,
+  // so every shown cue is fireable; while editing a draft, only cues already
+  // saved + activated (present in liveOverview) can fire.
+  const liveCueIds = useMemo(() => {
+    const s = new Set<string>();
+    if (liveOverview?.days) for (const d of liveOverview.days) for (const c of d.cues) s.add(c.id);
+    return s;
+  }, [liveOverview]);
+
   return (
     <View style={styles.container}>
       <View style={styles.surface}>
@@ -873,6 +886,7 @@ export default function TimelineScreen() {
                     cue={cue}
                     dayIndex={showAllDays ? dayIndex : null}
                     live={liveCueById.get(cue.id) ?? null}
+                    fireable={draft === null || liveCueIds.has(cue.id)}
                     onFire={fireCue}
                     styles={styles}
                     C={C}
@@ -974,13 +988,15 @@ function Banner({ styles, text, tone, C }: { styles: Styles; text: string; tone:
 // Renders a day's resolved cue (atLocal time + kind) and layers the LIVE engine
 // cue (countdown / error / enabled) over it when one matches by id.
 function CueRow({
-  cue, dayIndex, live, onFire, styles, C,
+  cue, dayIndex, live, fireable, onFire, styles, C,
 }: {
   cue: OverviewCue;
   /** When set (ALL DAYS view), prefixes the row with its day number. */
   dayIndex: number | null;
   /** Matching live engine cue, or null when not live-tracked. */
   live: TimelineCue | null;
+  /** Whether this cue exists in the ACTIVE plan (so it can be fired). */
+  fireable: boolean;
   onFire: (id: string) => void;
   styles: Styles;
   C: Palette;
@@ -994,14 +1010,12 @@ function CueRow({
   const countdown = live
     ? (live.enabled ? formatCountdown(live.nextInSec) : 'off')
     : atText;
-  // FIRE only fires cues that exist in the ENGINE'S ACTIVE plan. A row can come
-  // from an unsaved/unactivated DRAFT (added or renamed cues whose id isn't yet
-  // in the live plan), where `live` is null — firing that id makes the engine
-  // fireCue(id) throw `cue "<id>" not found`. Rather than fire an id the engine
-  // will reject (Codex P0: no silent fallback, but don't provoke a loud error
-  // the operator can't act on), DISABLE FIRE with a clear hint until the draft
-  // is saved + activated so the cue is live.
-  const canFire = !!live;
+  // FIRE only fires cues that exist in the ENGINE'S ACTIVE plan (`fireable`,
+  // computed from the active-plan overview). A row from an unsaved/unactivated
+  // DRAFT (an id not yet in the live plan) is NOT fireable — firing it would make
+  // the engine fireCue(id) throw `cue "<id>" not found`. So we disable FIRE with a
+  // clear "save + activate" hint for those; every active-plan cue fires normally.
+  const canFire = fireable;
   return (
     <View style={[styles.cueRow, hasError && { borderColor: C.error, backgroundColor: C.errorContainer }]}>
       <View style={{ flex: 1, minWidth: 0 }}>

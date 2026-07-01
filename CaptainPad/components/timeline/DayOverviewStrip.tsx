@@ -397,7 +397,7 @@ function makeStyles(C: Palette) {
     cueBlock: {
       position: 'absolute',
       right: 4,
-      width: 6,
+      width: 30,
       borderRadius: 3,
       opacity: 0.85,
     },
