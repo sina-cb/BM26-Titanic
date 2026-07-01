@@ -21,6 +21,7 @@ function makeDeps() {
     setDeckOverlaysEnabled: [],
     setColorAutopilot: [],
     forceDeckView: [],
+    releaseDeckView: [],
   };
   // The real engine deps branch on target.kind ('deck' | 'mixer'); a target
   // missing `kind` would silently fall into the mixer branch. Mirror that
@@ -36,7 +37,9 @@ function makeDeps() {
   // Mirror the engine's view-override pin so `forcingDeckView` is testable:
   // forceDeckView() pins → 'deck'; getViewOverrideMode() reads it back. A test
   // can clear it (simulating an operator switching the view to mixer).
-  const viewState = { mode: null };
+  // `source` mirrors the engine controlLockSource so a test can prove
+  // releaseDeckView clears a 'plan' pin but never a 'portwatch' one.
+  const viewState = { mode: null, source: null };
   const deps = {
     loadPlaylist: (a) => { assertTarget(a.target); calls.loadPlaylist.push(a); },
     setAutopilot: (a) => { assertTarget(a.target); calls.setAutopilot.push(a); },
@@ -49,7 +52,16 @@ function makeDeps() {
     setDeckTransition: (patch) => { calls.setDeckTransition.push(patch); },
     setDeckOverlaysEnabled: (enabled) => { calls.setDeckOverlaysEnabled.push(enabled); },
     setColorAutopilot: (wire) => { calls.setColorAutopilot.push(wire); },
-    forceDeckView: () => { calls.forceDeckView.push(true); viewState.mode = 'deck'; },
+    forceDeckView: () => { calls.forceDeckView.push(true); viewState.mode = 'deck'; viewState.source = 'plan'; },
+    // Mirror timelineReleaseDeckView: only clears a 'plan'-owned pin, never a
+    // real 'portwatch' hardware lock.
+    releaseDeckView: () => {
+      calls.releaseDeckView.push(true);
+      if (viewState.mode === 'deck' && viewState.source === 'plan') {
+        viewState.mode = null;
+        viewState.source = null;
+      }
+    },
     getViewOverrideMode: () => viewState.mode,
   };
   calls.viewState = viewState;

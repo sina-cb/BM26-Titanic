@@ -206,7 +206,9 @@ export function DayEditor({
                           {cue.label || cue.id}{pending ? '  · pending…' : ''}
                         </Text>
                         <Text style={styles.cueMeta} numberOfLines={1}>
-                          {`${KIND_LABEL[kind]} · ${triggerSummary(cue.trigger)} · ${actionSummary(cue.action)}`}
+                          {`${KIND_LABEL[kind]} · ${triggerSummary(cue.trigger)} · ${actionSummary(cue.action)}${
+                            typeof cue.durationMin === 'number' && cue.durationMin > 0 ? ` · ${cue.durationMin}m block` : ''
+                          }`}
                         </Text>
                       </View>
                       <TouchableOpacity

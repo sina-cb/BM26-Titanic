@@ -286,6 +286,11 @@ export interface PlanCue {
   action: CueAction;
   hold?: { min: number } | { until: PlanAnchor };
   days?: CueDays;
+  // Cue DURATION (minutes): a cue is an EVENT that owns the deck for this many
+  // minutes after it fires. Optional; when present it must be > 0 (the engine
+  // sibling validates that). Absent / <=0 → the cue is a point event with no
+  // owned window (rendered as a marker, not a block, in the day overview).
+  durationMin?: number;
 }
 
 export interface PlanLocation { lat: number; lon: number; tz: string; elevationM?: number }
@@ -310,6 +315,17 @@ export interface PlanLook {
 }
 export interface PlanPhase { start: PlanAnchor; end: PlanAnchor }
 
+// Plan-level DEFAULT CUE (maker-seeded): the fallback the deck runs in the gaps
+// BETWEEN planned cue windows, and whenever the plan is active but has no cues.
+// It carries a deck playlist `action` (reusing the same action editor a cue
+// uses) plus an optional `label`. It has NO trigger/kind/days — it is not a
+// scheduled event, it is the standing fallback. Every maker-authored plan is
+// seeded with one (blankPlan / brcStarterPlan).
+export interface PlanDefaultCue {
+  label?: string;
+  action: CueAction;
+}
+
 export interface ShowPlan {
   schemaVersion: 2;
   name: string;
@@ -319,6 +335,9 @@ export interface ShowPlan {
   looks: Record<string, PlanLook>;
   phases: Record<string, PlanPhase>;
   cues: PlanCue[];
+  // Maker-seeded fallback cue (see PlanDefaultCue). Optional on the wire so
+  // hand-authored / legacy plans without one still validate.
+  defaultCue?: PlanDefaultCue;
 }
 
 // ── Overview (the maker's backbone, GET active / POST draft) ────────────
@@ -340,6 +359,10 @@ export interface OverviewCue {
   trigger: CueTrigger;
   action: CueAction;
   atLocal: string | null;
+  // Cue DURATION (minutes) carried through from the plan cue. Present only for
+  // cues that own a deck window; the overview strip renders these as time
+  // blocks (start→start+durationMin) rather than point markers.
+  durationMin?: number;
 }
 
 export interface OverviewDay {

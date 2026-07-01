@@ -284,3 +284,76 @@ test('plan with > 512 cues throws', () => {
   }
   assert.throws(() => validateShowPlan(plan), /plan has too many cues \(max 512\)/);
 });
+
+// ── §16.11 cue durationMin + plan-level defaultCue ────────────────────────────
+
+test('cue durationMin accepts a number > 0', () => {
+  const plan = defaultShowPlan();
+  plan.cues[0].durationMin = 30;
+  const v = validateShowPlan(plan);
+  assert.equal(v.cues[0].durationMin, 30);
+});
+
+test('cue durationMin <= 0 or NaN throws', () => {
+  const plan = defaultShowPlan();
+  plan.cues[0].durationMin = 0;
+  assert.throws(() => validateShowPlan(plan), /durationMin must be a number > 0/);
+  plan.cues[0].durationMin = -5;
+  assert.throws(() => validateShowPlan(plan), /durationMin must be a number > 0/);
+  plan.cues[0].durationMin = 'later';
+  assert.throws(() => validateShowPlan(plan), /durationMin must be a number > 0/);
+});
+
+test('absent durationMin → key omitted (today\'s behavior, no regression)', () => {
+  const plan = defaultShowPlan();
+  const v = validateShowPlan(plan);
+  assert.equal('durationMin' in v.cues[0], false);
+});
+
+test('plan defaultCue {label, action} validates + normalizes (deck target)', () => {
+  const plan = defaultShowPlan();
+  plan.defaultCue = { label: 'House ambient', action: { type: 'look', look: 'daytime' } };
+  const v = validateShowPlan(plan);
+  assert.equal(v.defaultCue.label, 'House ambient');
+  assert.deepEqual(v.defaultCue.action, { type: 'look', look: 'daytime' });
+});
+
+test('plan defaultCue with a playlist deck action validates', () => {
+  const plan = defaultShowPlan();
+  plan.defaultCue = { action: { type: 'playlist', name: 'default' } };
+  const v = validateShowPlan(plan);
+  assert.equal(v.defaultCue.action.type, 'playlist');
+  assert.deepEqual(v.defaultCue.action.target, { channel: 'deck', id: null });
+});
+
+test('plan defaultCue without an action throws', () => {
+  const plan = defaultShowPlan();
+  plan.defaultCue = { label: 'oops' };
+  assert.throws(() => validateShowPlan(plan), /defaultCue\.action is required/);
+});
+
+test('plan defaultCue targeting a non-deck channel throws', () => {
+  const plan = defaultShowPlan();
+  plan.defaultCue = { action: { type: 'playlist', name: 'default', target: { channel: 'mixer', id: 'm1' } } };
+  assert.throws(() => validateShowPlan(plan), /defaultCue\.action must target the deck/);
+});
+
+test('plan defaultCue with a dangling look reference throws', () => {
+  const plan = defaultShowPlan();
+  plan.defaultCue = { action: { type: 'look', look: 'no_such_look' } };
+  assert.throws(() => validateShowPlan(plan), /no_such_look.*is not a defined look/);
+});
+
+test('absent defaultCue → key omitted (autopilot baseline stands, no regression)', () => {
+  const v = validateShowPlan(defaultShowPlan());
+  assert.equal('defaultCue' in v, false);
+});
+
+test('defaultCue round-trips through dump -> load', () => {
+  const plan = defaultShowPlan();
+  plan.defaultCue = { label: 'House', action: { type: 'look', look: 'daytime' } };
+  plan.cues[0].durationMin = 45;
+  const round = validateShowPlan(JSON.parse(JSON.stringify(validateShowPlan(plan))));
+  assert.deepEqual(round.defaultCue, { label: 'House', action: { type: 'look', look: 'daytime' } });
+  assert.equal(round.cues[0].durationMin, 45);
+});

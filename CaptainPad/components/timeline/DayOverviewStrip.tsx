@@ -90,8 +90,31 @@ function SunColumn({
         </Text>
       ) : null}
 
-      {/* Cue markers (timed) */}
+      {/* Cue BLOCKS (timed + durationMin>0) — a filled bar in the cue's kind
+          colour spanning start→start+duration, so the operator sees the
+          "planned areas" (the deck-owned windows). A duration that runs past
+          24:00 is clamped to the column bottom. Point cues (no duration) fall
+          through to the marker pass below. */}
       {day.cues.map((cue, i) => {
+        const startMins = hhmmToMinutes(cue.atLocal);
+        if (startMins === null) return null;
+        if (!(typeof cue.durationMin === 'number' && cue.durationMin > 0)) return null;
+        const topY = yFor(startMins);
+        if (topY === null) return null;
+        const endY = yFor(Math.min(1440, startMins + cue.durationMin)) ?? COLUMN_HEIGHT;
+        const h = Math.max(3, endY - topY); // keep short windows visible
+        const col = kindColor(cue.kind, C);
+        return (
+          <View
+            key={`${cue.id}:blk:${i}`}
+            style={[styles.cueBlock, { top: topY, height: h, backgroundColor: col }]}
+          />
+        );
+      })}
+
+      {/* Cue markers (timed, point cues only — duration cues render as blocks). */}
+      {day.cues.map((cue, i) => {
+        if (typeof cue.durationMin === 'number' && cue.durationMin > 0) return null;
         const y = yFor(hhmmToMinutes(cue.atLocal));
         if (y === null) return null;
         const col = kindColor(cue.kind, C);
@@ -324,6 +347,13 @@ function makeStyles(C: Palette) {
       height: 9,
       borderRadius: 5,
       borderWidth: 1.5,
+    },
+    cueBlock: {
+      position: 'absolute',
+      right: 4,
+      width: 6,
+      borderRadius: 3,
+      opacity: 0.85,
     },
     cardFooter: {
       gap: 4,

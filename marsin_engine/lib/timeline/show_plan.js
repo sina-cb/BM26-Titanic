@@ -540,6 +540,31 @@ function validateCueDays(days, label, festival) {
   return days.map((v, i) => assertDate(v, `${label}[${i}]`));
 }
 
+/**
+ * The optional plan-level DEFAULT CUE (docs/38 §16.11) — the deck FALLBACK the
+ * rig reverts to outside any cue's owning window (and when the plan has cues but
+ * none currently own the deck). It is NOT a trigger cue: it has no id / trigger /
+ * kind / hold / days — just an optional label and a normal cue ACTION targeting
+ * the DECK. THROW-style. The action reuses validateAction (looks resolvable
+ * against the plan's looks); a non-deck target on the default-cue action is an
+ * authoring error → throw (the default cue fills the DECK). Returns a normalized
+ * { label?, action } or undefined when absent.
+ */
+function validateDefaultCue(defaultCue, label, lookNames) {
+  if (defaultCue === undefined || defaultCue === null) return undefined;
+  if (!isPlainObject(defaultCue)) throw new Error(`${label} must be an object { label?, action }`);
+  const out = {};
+  if (defaultCue.label !== undefined) out.label = assertString(defaultCue.label, `${label}.label`);
+  if (defaultCue.action === undefined) throw new Error(`${label}.action is required`);
+  const action = validateAction(defaultCue.action, `${label}.action`, lookNames);
+  // The default cue fills the DECK — a non-deck target is meaningless here.
+  if (action.target !== undefined && action.target.channel !== 'deck') {
+    throw new Error(`${label}.action must target the deck (got channel "${action.target.channel}")`);
+  }
+  out.action = action;
+  return out;
+}
+
 function validateCue(cue, index, phaseNames, lookNames, seenIds, festival) {
   const label = `plan.cues[${index}]`;
   if (!isPlainObject(cue)) throw new Error(`${label} must be an object`);
@@ -565,6 +590,16 @@ function validateCue(cue, index, phaseNames, lookNames, seenIds, festival) {
   }
   // hold: only meaningful for kind:'program'. Validate whenever present.
   if (cue.hold !== undefined) out.hold = validateHold(cue.hold, `${label}.hold`);
+  // durationMin (docs/38 §16.11): the minutes the cue's action OWNS the deck
+  // after it fires. When the window elapses and no other cue owns the deck, the
+  // plan-level defaultCue fills the gap. Absent → today's behavior (the cue
+  // holds until the next cue / hold window). THROW-style: number > 0.
+  if (cue.durationMin !== undefined) {
+    if (typeof cue.durationMin !== 'number' || Number.isNaN(cue.durationMin) || cue.durationMin <= 0) {
+      throw new Error(`${label}.durationMin must be a number > 0, got ${JSON.stringify(cue.durationMin)}`);
+    }
+    out.durationMin = cue.durationMin;
+  }
   // days: festival-day applicability (docs/38 §15.2). Default 'all'.
   out.days = validateCueDays(cue.days, `${label}.days`, festival);
   return out;
@@ -603,9 +638,16 @@ export function validateShowPlan(plan) {
   const seenIds = new Set();
   const cues = plan.cues.map((cue, i) => validateCue(cue, i, phaseNames, lookNames, seenIds, festival));
 
+  // Plan-level default cue (docs/38 §16.11): the deck fallback for gaps between
+  // owning cue windows (and when the plan has no owning cues). Optional.
+  const defaultCue = validateDefaultCue(plan.defaultCue, 'plan.defaultCue', lookNames);
+
   // Always emit the v2 normalized shape (back-compat: a v1 input → v2 out with
   // festival:null + days:'all'). loadShowPlan still loads old files unchanged.
-  return { schemaVersion: 2, name, location, festival, autopilot, phases, looks, cues };
+  // defaultCue is only present when authored (absent → no key, no regression).
+  const out = { schemaVersion: 2, name, location, festival, autopilot, phases, looks, cues };
+  if (defaultCue !== undefined) out.defaultCue = defaultCue;
+  return out;
 }
 
 /**

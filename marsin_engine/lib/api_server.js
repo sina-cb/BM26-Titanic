@@ -3565,6 +3565,24 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     console.log('[viewOverride] pinned to deck by timeline (plan soft-lock)');
   }
 
+  // Release the TIMELINE's soft deck-pin (docs/38 §16.9). The counterpart to
+  // timelineForceDeckView: the plan calls this when it STOPS driving the deck
+  // (pause, autopilot-off, deactivate) so the yellow "PLAN IS RUNNING" lock
+  // clears and CaptainPad regains the deck/mixer. Reuses the same
+  // clearViewOverrideInternal machinery as a manual view/clear — no parallel
+  // pin. Codex P0 SAFETY: only ever clears a pin OWNED BY THE PLAN. If a real
+  // PortWatch device currently owns the deck ('portwatch'), we leave it
+  // untouched — the plan must never yank a hardware lock. A no-op when nothing
+  // is pinned or the plan doesn't own the pin.
+  function timelineReleaseDeckView() {
+    if (viewOverrideMode !== 'deck') return;         // nothing pinned
+    if (controlLockSource !== 'plan') return;         // not the plan's pin (e.g. portwatch) → leave it
+    clearViewOverrideInternal();
+    syncControlLockToGlobals();
+    broadcastViewOverride();
+    console.log('[viewOverride] plan released the deck pin (soft-lock cleared)');
+  }
+
   const timelineConfigBlock = (engineCore.engineConfig && engineCore.engineConfig.timeline) || {};
   // Gate the in-engine Timeline on config.timeline.enabled. The env escape
   // hatch BM26_DISABLE_TIMELINE=1 lets deck/playlist-focused tests boot the
@@ -3635,6 +3653,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // Bound to the real internal fn (no HTTP self-call).
         setColorAutopilot: (wire) => setColorAutopilot(wire),
         forceDeckView: () => timelineForceDeckView(),
+        // Release the plan's soft deck-pin (docs/38 §16.9). Called on every
+        // transition where the plan stops driving the deck (pause / autopilot
+        // off / deactivate) so the 'plan' controlLock clears. Only touches a
+        // 'plan'-owned pin — never a real PortWatch hardware lock.
+        releaseDeckView: () => timelineReleaseDeckView(),
         // Read-only view of the engine's current view-override pin so getState()
         // can surface `forcingDeckView` (plan active AND output pinned to deck).
         getViewOverrideMode: () => viewOverrideMode,
@@ -4510,13 +4533,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.url === '/timeline/mode' && req.method === 'POST') {
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
       readBody(data => {
-        try {
-          const r = timelineService.setMode(data && data.mode);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: true, ...r }));
-        } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
-        }
+        timelineService.setMode(data && data.mode)
+          .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
+          .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
       });
     } else if (req.url === '/timeline/autopilot' && req.method === 'POST') {
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
