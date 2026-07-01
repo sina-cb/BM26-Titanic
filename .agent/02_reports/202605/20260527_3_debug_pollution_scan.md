@@ -18,7 +18,7 @@ _Generated 2026-05-27_
 - **Suggested action**: delete.
 
 - **Path**: `marsin_engine/models/apply_patches.js`
-- **Why it's pollution**: One-shot mutation script that rewrites `simulation/scenes/summer_camp_dome/patches.yaml` in place, ending with `console.log('Successfully patched summer_camp_dome fixtures!');`. It lives in `marsin_engine/models/` (a directory that the engine scans for model exports) but it is not an ES module export — it is a side-effect script that was clearly run once to produce the committed `patches.yaml`. Leaving it in `models/` means a future `import * from './models/...'` or eager-loader could re-execute it. It also embeds the test-bench DMX mapping (`10.1.1.102`, hand-written universe/address assignments) which is now redundant with the YAML it produced.
+- **Why it's pollution**: One-shot mutation script that rewrites `simulation/scenes/summer_camp_dome/patches.yaml` in place, ending with `console.log('Successfully patched summer_camp_dome fixtures!');`. It lives in `marsin_engine/models/` (a directory that the engine scans for model exports) but it is not an ES module export — it is a side-effect script that was clearly run once to produce the committed `patches.yaml`. Leaving it in `models/` means a future `import * from './models/...'` or eager-loader could re-execute it. It also embeds the test-bench DMX mapping (`10.x.x.102`, hand-written universe/address assignments) which is now redundant with the YAML it produced.
 - **Suggested action**: delete. If you want to preserve the mapping logic for repeatability, move it to `marsin_engine/tools/` (next to `list_audio_devices.js`) and rename to something like `repatch_summer_camp_dome.js`.
 
 ## Needs judgment (medium confidence — please review)

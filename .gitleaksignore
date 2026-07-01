@@ -1,0 +1,17 @@
+# gitleaks per-finding overrides (CI escape hatch #2).
+#
+# When the security/privacy scan flags something that is genuinely safe and
+# an inline `gitleaks:allow` comment would be too ugly (e.g. in prose), add
+# the finding's FINGERPRINT here — one per line. The fingerprint is printed
+# in the CI job log / step summary for every finding, in the form:
+#
+#   <commit-sha>:<file-path>:<rule-id>:<line-number>
+#
+# Prefer, in order:
+#   1. Redact the value (it's usually just not needed).
+#   2. Inline `# gitleaks:allow` on the flagged line (self-documenting).
+#   3. A fingerprint here (for prose/YAML where a comment doesn't fit).
+#   4. A rule/path allowlist in .gitleaks.toml (for whole CLASSES of
+#      false positives, not individual findings).
+#
+# Never delete the workflow or a whole rule to silence one finding.

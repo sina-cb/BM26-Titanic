@@ -1,0 +1,177 @@
+# gitleaks config for the BM26 Titanic security & privacy CI scan.
+#
+# Two layers:
+#   1. gitleaks' built-in secret detectors (private keys, AWS/GCP creds,
+#      GitHub/Slack tokens, high-entropy generic keys, ...) via useDefault.
+#   2. Project-specific PRIVACY rules — the things that must never land in
+#      this PUBLIC repo: WiFi/AP SSIDs, AP passphrases, real device MACs.
+#      Real creds come from $BM26_SECRETS at build time and are gitignored;
+#      a match in a diff is almost always an accident (the operator SSID
+#      redacted in e227fb37 is the motivating case).
+#
+# Tuning philosophy: a scanner that cries wolf gets ignored, so the
+# allowlists below aggressively suppress the KNOWN-safe noise sources in
+# this tree (vendored Unreal SDK, object-property `key:` literals,
+# placeholder/example values) while still failing on real secrets and real
+# device identifiers. If a rule is too noisy for how you work, relax it
+# here — do NOT disable the whole job. Keep layer 1 (secrets) on always.
+
+title = "BM26 Titanic secret & privacy scan"
+
+[extend]
+# Inherit gitleaks' maintained secret ruleset; our rules add to it.
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# Project-specific privacy rules
+# ---------------------------------------------------------------------------
+
+[[rules]]
+id = "bm26-wifi-ssid"
+description = "Possible WiFi/AP SSID committed (SSIDs come from $BM26_SECRETS, never the repo)"
+regex = '''(?i)\b(ssid|wifi[_-]?name|ap[_-]?name)\b\s*[:=]\s*["']?[^\s"'#]{2,32}'''
+tags = ["privacy", "wifi"]
+
+[[rules]]
+id = "bm26-wifi-passphrase"
+# Require a QUOTED literal value so we match real pasted passphrases, not
+# variable assignments like `passphrase = get(sec, ...)`.
+description = "Possible WiFi/AP passphrase committed"
+regex = '''(?i)\b(psk|passphrase|wpa[_-]?pass|wifi[_-]?pass(word)?|ap[_-]?pass(word)?)\b\s*[:=]\s*["'][^\s"'#]{8,63}["']'''
+tags = ["privacy", "wifi", "secret"]
+
+[[rules]]
+id = "bm26-mac-address"
+description = "Possible real device MAC address (real MACs live in the external deploy registry / gitignored config, not the repo)"
+regex = '''\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b'''
+tags = ["privacy", "mac"]
+
+[[rules]]
+# PUBLIC IPs are never expected in this repo (the playa has no internet;
+# every legit address is RFC1918 show/dev LAN). Private/special ranges are
+# excluded here; reports get the stricter bm26-report-ip rule below.
+id = "bm26-public-ip"
+description = "Public (non-RFC1918) IPv4 address committed"
+regex = '''\b((?:[0-9]{1,3}\.){3}[0-9]{1,3})\b'''
+tags = ["privacy", "ip"]
+  [rules.allowlist]
+  regexTarget = "match"
+  regexes = [
+    '''^10\.''',                                  # RFC1918
+    '''^172\.(1[6-9]|2[0-9]|3[01])\.''',          # RFC1918
+    '''^192\.168\.''',                            # RFC1918
+    '''^127\.''',                                 # loopback
+    '''^169\.254\.''',                            # link-local
+    '''^(0|255)\.''',                             # any / broadcast
+    '''^2(2[4-9]|3[0-9])\.''',                    # multicast (sACN lives at 239.255.x.x)
+    '''^(192\.0\.2|198\.51\.100|203\.0\.113)\.''', # RFC5737 documentation ranges
+    '''^100\.64\.0\.0$''',                        # RFC6598 CGNAT range base (cited in comments; a REAL 100.x tailnet addr still fails)
+    '''^1\.2\.3\.4$''',                           # canonical test-fixture IP
+    '''^(25[6-9]|2[6-9][0-9]|[3-9][0-9]{2})\.''',  # first octet > 255 — not a real IP (validator test vectors)
+    '''^[0-9]{1,2}\.[0-9]{1,3}\.[0-9]{1,3}\.(0|x+)$''', # version-string lookalikes / x placeholders
+  ]
+
+[[rules]]
+# Reports are working notes and debug logs — the place PII actually leaks
+# (home-LAN scans, device inventories, operator info). ANY IPv4 there fails,
+# including private ranges that are fine in functional config.
+id = "bm26-report-ip"
+description = "IP address inside an .agent/ report / working note (PII risk — redact it)"
+path = '''\.agent/'''
+regex = '''\b((?:[0-9]{1,3}\.){3}[0-9]{1,3})\b'''
+tags = ["privacy", "ip", "pii", "reports"]
+  [rules.allowlist]
+  regexTarget = "match"
+  regexes = [
+    '''^127\.''',
+    '''^(0|255)\.''',
+    '''^2(2[4-9]|3[0-9])\.''',                    # multicast (sACN protocol constants)
+    '''^192\.168\.4\.1$''',                        # universal ESP32 softAP default (panel firmware skill doc)
+    '''^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.(0|x+)$''',
+  ]
+
+[[rules]]
+# Hardcoded password / passkey LITERALS. Quoted, 6+ chars, and requires at
+# least one non-identifier character class mix so `password = load_secret()`
+# style code and enum-ish values don't trip it; placeholders are killed by
+# the global value allowlist.
+id = "bm26-password-literal"
+description = "Hardcoded password / passkey value committed"
+regex = '''(?i)\b(password|passwd|pwd|pass[_-]?key|passkey|pin[_-]?code|auth[_-]?token)\b\s*[:=]\s*["'][^\s"']{6,}["']'''
+tags = ["secret", "password"]
+
+[[rules]]
+# Personal email addresses are PII. Machine/org addresses that are part of
+# normal git plumbing are excluded below.
+id = "bm26-email-pii"
+description = "Email address committed (PII — reports and code should not carry personal emails)"
+regex = '''\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b'''
+tags = ["privacy", "pii", "email"]
+  [rules.allowlist]
+  regexTarget = "match"
+  regexes = [
+    '''(?i)noreply@''',                    # bot/co-author plumbing (noreply@anthropic.com, GitHub noreply)
+    '''(?i)@(example|test)\.(com|org|net)''',
+    '''(?i)^git@github\.com''',            # SSH clone URLs, not mailboxes
+    '''(?i)@users\.noreply\.github\.com''',
+    '''(?i)@localhost''',
+  ]
+
+# ---------------------------------------------------------------------------
+# Allowlists (apply to ALL rules, built-in and custom)
+# ---------------------------------------------------------------------------
+
+# 1. Paths that are vendored, generated, cache, or example templates.
+[[allowlists]]
+description = "Vendored / generated / example paths — not our secrets"
+paths = [
+  '''(^|/)simulation/vendor/''',        # vendored three.js etc.
+  '''(^|/)simulation/unreal/''',         # vendored Unreal Pixel Streaming SDK + its webcache
+  '''(^|/)node_modules/''',
+  '''(^|/)dist/''',
+  '''(^|/)build/''',
+  '''\.example$''',                       # committed *.example credential templates
+  '''(^|/)package-lock\.json$''',
+  '''(^|/)yarn\.lock$''',
+  '''(^|/)pnpm-lock\.yaml$''',
+  '''(^|/)\.claude/''',
+  # Crypto DOCUMENTATION that intentionally prints example AES-GCM vectors
+  # (the real PSK lives in the gitignored secret.yaml, never here). A
+  # generated 16-byte key is indistinguishable from a real one by pattern,
+  # so these doc files are trusted by path. Reports (.agent/02_reports) are
+  # deliberately NOT here — those stay scanned.
+  '''(^|/)docs/07_control_podium\.md$''',
+  '''(^|/)docs/MARSIN_ENGINE_PATTERNS\.md$''',
+]
+
+# 2. Placeholder / redacted / env-injected VALUES — never real data.
+#    Matched against the matched secret itself.
+[[allowlists]]
+description = "Obvious placeholder / redacted / env values"
+regexTarget = "match"
+regexes = [
+  '''(?i)(your[_-]?|example|placeholder|change[_-]?me|dummy|redacted|sample|test[_-]?only|foo|bar|xxx+)''',
+  '''(?i)\b(00:00:00|ff:ff:ff|aa:bb:cc|de:ad:be|11:22:33|12:34:56)''',  # placeholder / broadcast MACs
+  '''(?i)(0011223344|0123456789|abcdef0123|deadbeef)''',                # obvious sequential example hex
+  '''(\$\{?[A-Z0-9_]+\}?|env:|<[^>]+>)''',                               # ${ENV}, env:, <token>
+  '''LookingGlass-Panel''',  # intentional broadcast AP name — config.yaml documents it as non-secret (creds come from $BM26_SECRETS)
+]
+
+# 3. Structural false positives on whole LINES. The built-in
+#    `generic-api-key` rule fires on this codebase's `key:` idioms, which
+#    are never secrets: unquoted object-property identifiers in the engine's
+#    signal/playlist tables (`key: micDomEnergy1`), dotted-namespace
+#    localStorage keys (`COLLAPSE_KEY = 'bm26.sim.leftDrawerWidth'`), and the
+#    standard WebSocket handshake header. Kept narrow (UNQUOTED identifiers
+#    and dotted namespaces only) so a real quoted secret still trips the rule.
+[[allowlists]]
+description = "Object-property identifiers, dotted-namespace keys, WS header"
+regexTarget = "line"
+regexes = [
+  # key/id/name/... = a symbol-free identifier (quoted OR unquoted), e.g.
+  # `key: 'micDomEnergy1'` or `key: micDomEnergy1`. Bounded to 30 chars with
+  # no /+=- symbols, so a real token (longer / with symbols) still trips.
+  '''(?i)\b(key|id|name|type|label|osc)\b\s*[:=]\s*["']?[a-zA-Z][a-zA-Z0-9_]{0,30}["']?(\s|,|\}|;|$)''',
+  '''["'][a-z][\w]*(\.[\w\-]+)+["']''',   # dotted namespace value, e.g. bm26.sim.x
+  '''(?i)sec-websocket-key''',            # WS handshake header, not a credential
+]

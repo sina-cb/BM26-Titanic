@@ -27,6 +27,12 @@
 # is necessary AND sufficient to bring it onto the mesh. Removing a node
 # (or commenting it out) immediately denies it on the next bridge restart.
 #
+# Hardware pairing (usb_mac per node) is NOT in this file: it lives in the
+# GITIGNORED .config.nodes.pairing.yaml, written by firmware/deploy.py
+# (--pair / auto-pair / --clear) and merged in at load by
+# utils/nodes_config.py. This repo is public — real device MACs never
+# land in a committed file.
+#
 # Out of scope (intentionally NOT in this file):
 #   * Fire effect controller (FW-SPEC-001). Runs different firmware on
 #     a separate transport — not on the mesh radio.
@@ -39,11 +45,10 @@ nodes:
     name: server
     role: server
     type: heltec_v4   # currently a Heltec acting as the radio side of the Pi bridge
-    # USB MAC of the physical board paired to this node. firmware/deploy.py
-    # refuses to flash unless the connected /dev/cu.usbmodem* reports this
-    # exact serial_number (set by ESP32-S3 USB-CDC from the factory MAC).
+    # USB MAC pairing lives in the gitignored .config.nodes.pairing.yaml.
+    # deploy.py refuses to flash unless the connected /dev/cu.usbmodem*
+    # reports the paired serial_number (ESP32-S3 USB-CDC = factory MAC).
     # If the board is replaced, re-pair with: `python deploy.py --pair --node 0x01`.
-    usb_mac: "8C:FD:49:B5:42:90"
     notes: "Pi-side radio bridge. Single instance."
 
   # ── Captains (privileged operators) ──────────────────────────────────
@@ -55,7 +60,6 @@ nodes:
     role: captain
     type: heltec_v4
     notes: "Primary captain handheld (Heltec for now; CaptainPad target later)."
-    usb_mac: "8C:FD:49:B5:7E:B8"
   0x0B:
     name: captain_02
     role: captain
@@ -69,9 +73,7 @@ nodes:
     name: crew_01
     role: crew
     type: heltec_v4
-    usb_mac: "F8:5B:1B:A5:D4:50"
   0x11:
     name: crew_02
     role: crew
     type: heltec_v4
-    usb_mac: "F8:5B:1B:A5:11:54"

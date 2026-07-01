@@ -25,6 +25,10 @@ Desktop.ini
 # Control podium runtime state (MACs paired to roles)
 control_podium/.config.pairing.yaml
 control_podium/.config.deploy.yaml
+# Node table hardware pairing overlay (node id → usb_mac). Real device
+# MACs stay out of the committed .config.nodes.yaml — this repo is
+# public. Written by firmware/deploy.py; merged by utils/nodes_config.py.
+control_podium/.config.nodes.pairing.yaml
 
 # server_bridge — Pi SSH credentials. Each developer maintains their
 # own copy from `.ssh.secret.example`; never committed.

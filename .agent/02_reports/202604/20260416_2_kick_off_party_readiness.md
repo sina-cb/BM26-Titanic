@@ -126,7 +126,7 @@ The core pipeline pieces **exist** but have integration gaps. The heaviest missi
 
 > **Direct Engine → Controller path exists!** You can skip the simulation entirely for the show:
 > ```bash
-> node engine.js --pattern bioluminescence --dest 10.1.1.102
+> node engine.js --pattern bioluminescence --dest 10.x.x.102
 > ```
 > This sends sACN directly from the engine to the controller. The simulation is only needed for visualization.
 
@@ -338,7 +338,7 @@ parLights:
       rotX: 0
       rotY: 0
       rotZ: 0
-      controllerIp: '10.1.1.102'
+      controllerIp: '10.x.x.102'
       dmxUniverse: 1
       dmxAddress: 1
       controllerId: 0

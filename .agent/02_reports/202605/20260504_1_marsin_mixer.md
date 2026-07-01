@@ -421,7 +421,7 @@ The `applyDmx()` function at line 230 runs unconditionally and calls `dmxRouter.
 
 The `sacn` npm library's `Receiver` joins **multicast group** `239.255.0.x` per universe. But the engine's `Sender` was configured with `useUnicastDestination: '127.0.0.1'`, sending unicast packets that never reach the multicast socket.
 
-**Fix applied**: When destination is `127.0.0.1` (localhost), omit `useUnicastDestination` so the sender uses multicast by default. For real controller IPs (e.g. `10.1.1.102`), unicast is preserved.
+**Fix applied**: When destination is `127.0.0.1` (localhost), omit `useUnicastDestination` so the sender uses multicast by default. For real controller IPs (e.g. `10.x.x.102`), unicast is preserved.
 
 ```js
 // sacn_output.js — fixed

@@ -66,6 +66,7 @@ from comms.frame import (
 from comms.radio_port_serial import RadioPortSerial
 from comms.registry import CommandRegistry
 from utils import discovery
+from utils.nodes_config import load_nodes
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -106,11 +107,10 @@ def _resolve_ports() -> tuple[str, str]:
     Server is node 0x01 (role=server). Captain is the first node with
     role=captain that has a `usb_mac` set and is currently plugged in.
     """
-    nodes_yaml = yaml.safe_load((BASE / ".config.nodes.yaml").read_text()) or {}
-    nodes = nodes_yaml.get("nodes") or {}
+    nodes = load_nodes()
     server_node = nodes.get(0x01)
     if not server_node or not server_node.get("usb_mac"):
-        sys.exit("server (0x01) has no usb_mac in .config.nodes.yaml — run deploy.py --pair --node 0x01")
+        sys.exit("server (0x01) has no usb_mac paired (.config.nodes.pairing.yaml) — run deploy.py --pair --node 0x01")
     server_port = discovery.find_port_by_mac(server_node["usb_mac"])
     if not server_port:
         sys.exit(f"server board (MAC {server_node['usb_mac']}) not connected")

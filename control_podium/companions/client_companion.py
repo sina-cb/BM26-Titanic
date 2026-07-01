@@ -59,13 +59,12 @@ from collections import deque
 from pathlib import Path
 from typing import Optional
 
-import yaml
-
 BASE = Path(__file__).resolve().parent.parent
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 
 from comms.acl import AclTable
+from utils.nodes_config import load_nodes
 from comms.frame import (
     BROADCAST,
     FLAG_ACK_REQUESTED,
@@ -439,8 +438,10 @@ def _resolve_serial_port(node_id: int, override: Optional[str]) -> str:
 
     Order:
       1. ``--serial-port`` override (operator was explicit).
-      2. ``.config.nodes.yaml`` ``usb_mac`` → ``/dev/cu.usbmodem*`` via
-         ``utils.discovery.find_port_by_mac`` (set by ``firmware/deploy.py``).
+      2. paired ``usb_mac`` (gitignored ``.config.nodes.pairing.yaml``,
+         merged in by ``utils.nodes_config.load_nodes``) →
+         ``/dev/cu.usbmodem*`` via ``utils.discovery.find_port_by_mac``
+         (set by ``firmware/deploy.py``).
 
     Hard-fails with a clear message if neither resolves; we never want to
     silently grab "the first /dev/cu.usbmodem* we see" because there are
@@ -451,13 +452,12 @@ def _resolve_serial_port(node_id: int, override: Optional[str]) -> str:
 
     from utils.discovery import find_port_by_mac
 
-    cfg = yaml.safe_load((BASE / ".config.nodes.yaml").read_text()) or {}
-    nodes = cfg.get("nodes") or {}
+    nodes = load_nodes()
     entry = nodes.get(node_id) or nodes.get(f"0x{node_id:02X}")
     mac = (entry or {}).get("usb_mac")
     if not mac:
         sys.exit(
-            f"node 0x{node_id:02X} has no usb_mac in .config.nodes.yaml. "
+            f"node 0x{node_id:02X} has no usb_mac paired (.config.nodes.pairing.yaml). "
             f"Run firmware/deploy.py --node 0x{node_id:02X} to pair it, "
             f"or pass --serial-port explicitly."
         )
@@ -554,7 +554,8 @@ def _build_parser() -> argparse.ArgumentParser:
     # Serial transport
     p.add_argument("--serial-port", default=None,
                    help="(serial) explicit /dev/cu.usbmodem* override; "
-                        "default resolves via .config.nodes.yaml usb_mac")
+                        "default resolves via the paired usb_mac "
+                        "(.config.nodes.pairing.yaml)")
     p.add_argument("--baud", type=int, default=115200,
                    help="(serial) USB-CDC baud (115200)")
     # Misc

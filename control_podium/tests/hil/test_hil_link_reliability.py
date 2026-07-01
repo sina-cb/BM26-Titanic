@@ -48,7 +48,6 @@ import time
 from pathlib import Path
 
 import pytest
-import yaml
 
 BASE = Path(__file__).resolve().parent.parent.parent       # control_podium/
 if str(BASE) not in sys.path:
@@ -61,6 +60,7 @@ from comms.frame import (                                       # noqa: E402
 )
 from comms.radio_port_serial import RadioPortSerial              # noqa: E402
 from utils.discovery import find_port_by_mac                     # noqa: E402
+from utils.nodes_config import load_nodes                        # noqa: E402
 
 CAPTAIN_NODE_ID = 0x0A
 CAPTAIN_ROLE = "captain"
@@ -87,15 +87,14 @@ HLO_ACK_TIMEOUT_S = float(os.environ.get("HIL_HLO_ACK_TIMEOUT_S", "55.0"))
 
 
 def _captain_port_or_skip() -> str:
-    nodes = yaml.safe_load(
-        (BASE / ".config.nodes.yaml").read_text(encoding="utf-8")
-    )["nodes"]
+    nodes = load_nodes(BASE)
     entry = nodes.get(CAPTAIN_NODE_ID) or nodes.get(
         f"0x{CAPTAIN_NODE_ID:02X}"
     )
     if not entry or not entry.get("usb_mac"):
         pytest.skip(
-            "captain (node 0x0A) not configured in .config.nodes.yaml"
+            "captain (node 0x0A) not paired — run firmware/deploy.py "
+            "--node 0x0A to write .config.nodes.pairing.yaml"
         )
     port = find_port_by_mac(entry["usb_mac"])
     if not port:
