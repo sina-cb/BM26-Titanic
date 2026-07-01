@@ -62,3 +62,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: .gitleaks.toml
           GITLEAKS_ENABLE_SUMMARY: true
+          # The action's default binary (8.24.x) predates the [[allowlists]]
+          # (plural, regexTarget-aware) config syntax used in .gitleaks.toml —
+          # with it, the global allowlists are silently ignored and placeholder
+          # MACs/IPs false-positive. Pin a version with the modern semantics.
+          GITLEAKS_VERSION: "8.28.0"
