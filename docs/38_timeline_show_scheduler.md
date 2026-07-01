@@ -1220,6 +1220,89 @@ If `defaultCue` is **absent**, everything falls back to today's autopilot baseli
 
 ---
 
+### 16.12 The RECENT FIRES event log records AUTOMATIC fires too (2026-07-01)
+
+**Symptom (operator).** The event log at the bottom of the CaptainPad timeline
+tab (`state.recentFires`) recorded a **manual** cue fire but **not** the
+**automatic** start of a scheduled cue.
+
+**Root cause.** `recentFires` is a bounded ring (`RECENT_MAX = 30`). The manual
+(`fireCue`) and arbiter-dispatched (scheduled clock/sun, mood, lease-enable,
+catchUp) paths already funneled through `_recordFire`, but:
+
+- the plan-level **default cue** (`_applyDefaultCue`) applied to the deck
+  **without** logging a fire; and
+- the ring entries carried only `{ cueId, atMs, reason }` — **no operator-facing
+  label and no coarse source** for the UI to group on.
+
+**Fix (`timeline_service.js`).** `_recordFire(cueId, reason, source, label)` now
+records every application with:
+
+| field | meaning |
+|---|---|
+| `cueId` | cue id (or a synthetic id: `__default_cue__`, an autopilot-resume id) |
+| `atMs` | timestamp (`nowFn()`) |
+| `reason` | fine-grained trigger reason the UI renders verbatim — `manual`, `catchUp`, `clock`, `sun`, `mood`, `resume`, `lease-enable`, `window-elapsed`, … |
+| `source` | **coarse** category for grouping — `manual` \| `auto` \| `catchUp` \| `default` |
+| `label` | resolved operator-facing label (defaults to the cue's label) |
+
+Every AUTOMATIC application now lands in the **same ring** the manual path uses:
+scheduled/mood/lease fires (`source:'auto'`), boot `catchUp` restores
+(`source:'catchUp'`), and the plan **default cue** (`source:'default'`, id
+`__default_cue__`). The ring stays bounded at `RECENT_MAX`, and `getState()`
+surfaces `recentFires` so the `timelineState` WS broadcast carries it to
+CaptainPad. Back-compat: `cueId`/`atMs`/`reason` are unchanged (the current UI
+reads them); `label`/`source` are additive. Covered by
+`tests/timeline_service.test.js` (auto mood fire, manual fire, default cue).
+
+### 16.13 Overlapping-cue SAFETY NET in the plan validator (2026-07-01)
+
+Cues now always carry a `durationMin` window, so the engine enforces a
+**safety net** in `validateShowPlan` (`show_plan.js` → `validateNoOverlap`)
+that mirrors the maker UI's block-collision rule (the definitions **agree**):
+
+- A cue **participates** only when it has a **scheduled trigger** (`clock` or
+  `sun`) **and** a `durationMin` (and is enabled). `mood` / `manual` / `phase`
+  cues own no timed deck window → **excluded**.
+- A cue's window is the **half-open** interval `[start, start + durationMin*60000)`.
+  **Touching endpoints do NOT overlap** (one cue ending exactly when the next
+  starts is legal).
+- Two cues are compared only on **days they both apply** (the day-set
+  intersection: both `all`, overlapping indices, or overlapping dates).
+- **Clock-vs-clock** is resolved exactly (minute-of-day, day-independent).
+  **Sun** triggers resolve **per festival day** via `sun.js` + the plan location.
+  On a **no-festival** (recurring-nightly) plan there is no calendar date, so
+  sun overlap there is **best-effort** (skipped) while clock-vs-clock is still
+  enforced strictly.
+
+On an overlap the validator **fails loud**, naming **both** cue ids/labels + the
+overlapping day, e.g. `plan.cues overlap: "ov_a" (A) and "ov_b" (B) have
+overlapping deck windows on festival day 0 (2026-08-30)`. Because both
+`POST /timeline/plans` and `PUT /timeline/plans/:name` go through
+`validateShowPlan`, an overlapping plan is rejected with **HTTP 400**. Covered by
+`tests/timeline_show_plan.test.js` (overlap rejected, adjacent accepted,
+different-day accepted, mood/no-duration/disabled excluded).
+
+### 16.14 Plan-disable LEAVES the deck as-is (no restore) (2026-07-01)
+
+**Operator request:** when the plan is disabled/paused, **leave the deck exactly
+where the plan last set it** — do **not** restore it to a "last known good" state
+captured before the plan took over.
+
+**Confirmed current behavior.** Disabling autopilot / pausing / taking over
+releases the plan's soft deck-pin via `_releaseDeckView` → `deps.releaseDeckView`
+(`api_server.js timelineReleaseDeckView`), which **only clears the `'plan'`
+control-lock** (the view-override pin). It does **not** restore or overwrite the
+deck's params/pattern — the deck keeps whatever the plan last loaded. This is the
+desired behavior; **no code change** was needed.
+
+A `// TODO:` at the `_releaseDeckView` release path documents the **OPTIONAL**
+future feature (deliberately **not** implemented — operator deemed it not worth
+the added state/complexity): capture the deck's pattern/params on plan
+**takeover** and restore that snapshot on **release**.
+
+---
+
 ## 17. What this deliberately is **not** (v1)
 
 - **Not** a second analyzer — mood comes from the Audio Companion via CPC.

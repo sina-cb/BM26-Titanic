@@ -15,8 +15,11 @@ import type { DeckColorAutopilotConfig } from '@/utils/api';
 //   ON/OFF toggle · SELECTED palette chips (+ add) · delay · TRANSITION · SHUFFLE.
 //
 // Presentational only — the parent (deck screen) owns the fetch-on-focus +
-// optimistic-POST plumbing (same pattern as handleDeckTxChange) and hands us
-// the live config + an onChange(patch). Palette ids come from the engine's
+// live `colorAutopilot` /ws/control reconcile + optimistic-POST plumbing (same
+// pattern as handleDeckTxChange) and hands us the live config + an
+// onChange(patch). Because the config is kept live from the broadcast, this
+// panel faithfully DISPLAYS a PLAN-driven cue's palettes/shuffle/delay/
+// transition even while `disabled` (the soft plan lock) — read-only sync. Palette ids come from the engine's
 // color-palette library (config.colorPalettes {id,name,c1,c2}); we read the
 // SAME cached list the COLORS picker uses (getCachedColorPalettes) and warm it
 // on mount so the chips render immediately. Palette swatches reuse the COLORS

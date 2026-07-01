@@ -35,7 +35,7 @@ import {
   DeckTransitionMode, ActionOverlays, DECK_TRANSITION_MODES, DECK_TRANSITION_MODE_LABEL,
 } from '@/utils/timelineApi';
 import {
-  hhmmToMinutes, minutesToHHMM, minutesTo12h, SUN_EVENT_OPTIONS, MOOD_VALUES,
+  hhmmToMinutes, minutesToHHMM, minutesTo12h, hhmmTo12h, SUN_EVENT_OPTIONS, MOOD_VALUES,
 } from './timelineTemplate';
 import { Segmented, Stepper, Dropdown, ToggleChip, FieldLabel } from './makerControls';
 import { DualSwatch } from '@/components/ColorPickerModal';
@@ -73,6 +73,44 @@ const OVERLAY_OPTIONS: { id: 'asis' | ActionOverlays; label: string }[] = [
 // many minutes after it fires; "None" emits no `durationMin` (point event).
 // Mirrors the HOLD stepper idiom but with quick playa-friendly presets.
 const DURATION_PRESETS_MIN = [15, 30, 60, 90, 120, 180];
+
+// ── Overlap detection (operator: "disallow overlapping cues") ──────────────
+// A cue owns the deck for [start, start+durationMin). Two cues conflict only
+// when their DAY-SETS intersect AND their windows overlap. Touching endpoints
+// do NOT overlap: [10:00,11:00) and [11:00,12:00) are fine. These are pure
+// module-level helpers so the SAVE handler can validate before calling onSave.
+
+// Resolve a cue's window START (minutes-of-day) for overlap math. ONLY the
+// CLOCK trigger has an editor-resolvable start; a SUN trigger's per-day time
+// isn't computed here, so we return null and the caller SKIPS that pair rather
+// than false-positive. Anything else (phase/mood/manual) has no time-of-day
+// anchor either → null (skip).
+function cueStartMinutes(cue: PlanCue): number | null {
+  if (cue.trigger.type === 'clock') return hhmmToMinutes(cue.trigger.at);
+  return null;
+}
+
+// Two half-open windows [aStart, aEnd) and [bStart, bEnd) overlap iff they
+// share more than a touching endpoint: aStart < bEnd AND bStart < aEnd.
+function windowsOverlap(aStart: number, aDur: number, bStart: number, bDur: number): boolean {
+  return aStart < bStart + bDur && bStart < aStart + aDur;
+}
+
+// Do two cue DAY-SETS intersect? 'all' (or absent) matches EVERY day, so it
+// intersects anything. Otherwise both are arrays (number indices OR date
+// strings); we intersect element-wise. A numeric day-set and a date-string
+// day-set can't be compared here (different representations) → treat as
+// NON-intersecting (skip) rather than guess.
+function daySetsIntersect(a: CueDays | undefined, b: CueDays | undefined): boolean {
+  const aAll = a === 'all' || a === undefined;
+  const bAll = b === 'all' || b === undefined;
+  if (aAll || bAll) return true;
+  // Both are arrays here. Compare only when they share a representation.
+  const aArr = a as (number | string)[];
+  const bArr = b as (number | string)[];
+  const bSet = new Set(bArr);
+  return aArr.some((d) => bSet.has(d));
+}
 
 function defaultTrigger(type: CueTrigger['type']): CueTrigger {
   switch (type) {
@@ -168,12 +206,17 @@ export function CueEditorSheet({
   // only the SELECTED palettes (operator feedback: don't dump the full grid).
   const [caAdding, setCaAdding] = useState(false);
   const [seedKey, setSeedKey] = useState<string>('');
+  // Inline validation error surfaced near the SAVE button. Set when a save is
+  // BLOCKED (e.g. overlapping cue); cleared on the next save attempt. null =
+  // no error (nothing renders).
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Seed when the sheet opens / target cue changes. We key on mode + cue id +
   // visibility so re-opening the SAME cue after an external edit re-seeds.
   const wantKey = `${visible ? 'v' : 'h'}:${mode}:${initialCue?.id ?? 'new'}:${dayIndex}`;
   if (visible && wantKey !== seedKey) {
     setSeedKey(wantKey);
+    setSaveError(null); // fresh sheet → clear any stale blocked-save message
     if (isDefaultMode) {
       // DEFAULT CUE: only label + action apply. Normalise a non-playlist action
       // to a fresh deck playlist so the editor always has something to render.
@@ -321,6 +364,42 @@ export function CueEditorSheet({
     // DURATION is REQUIRED — always emit (durationMin is always a positive number).
     cue.durationMin = durationMin;
     return cue;
+  };
+
+  // Validate the candidate cue against every OTHER cue in the plan and return a
+  // human-readable BLOCK message if it overlaps one, else null. Overlap rule:
+  // day-sets intersect AND [start, start+durationMin) windows overlap (touching
+  // endpoints are fine). The cue being edited is EXCLUDED by id (never conflicts
+  // with itself). A candidate we can't resolve a start for (e.g. a SUN trigger)
+  // skips the whole check — better than a false-positive. Likewise any OTHER
+  // cue whose start we can't resolve here is skipped pairwise.
+  const findOverlapError = (candidate: PlanCue): string | null => {
+    const candStart = cueStartMinutes(candidate);
+    // Best-effort: if this cue has no editor-resolvable start (sun/phase/mood/
+    // manual), we can't place its window on the clock here → allow the save.
+    if (candStart === null) return null;
+    const candDur = candidate.durationMin ?? 0;
+    if (candDur <= 0) return null; // no owned window → nothing to overlap
+
+    const others = plan.cues ?? [];
+    for (const other of others) {
+      // Never conflict with self. New cues have id '' (parent mints it on
+      // insert); match by id so editing an existing cue skips its own row.
+      if (candidate.id && other.id === candidate.id) continue;
+      if (!daySetsIntersect(candidate.days, other.days)) continue;
+      const otherStart = cueStartMinutes(other);
+      if (otherStart === null) continue; // unresolved (e.g. sun) → skip pair
+      const otherDur = other.durationMin ?? 0;
+      if (otherDur <= 0) continue; // other owns no window
+      if (windowsOverlap(candStart, candDur, otherStart, otherDur)) {
+        const name = other.label?.trim() || 'another cue';
+        // Window in AM/PM for the operator (file convention: clock reads 12h).
+        const from = hhmmTo12h(minutesToHHMM(otherStart));
+        const to = hhmmTo12h(minutesToHHMM(otherStart + otherDur));
+        return `Overlaps '${name}' (${from}–${to}) on this day — cues can't overlap.`;
+      }
+    }
+    return null;
   };
 
   // Build the plan DEFAULT CUE from the label + normalized action. NO trigger /
@@ -925,6 +1004,15 @@ export function CueEditorSheet({
               ) : null}
             </ScrollView>
 
+            {/* BLOCKED-SAVE reason (e.g. overlapping cue). Sits directly above
+                the footer so it's visible regardless of scroll position; only
+                renders while a save is blocked. */}
+            {saveError ? (
+              <View style={styles.errorBanner} accessibilityRole="alert">
+                <Text style={styles.errorText}>{saveError}</Text>
+              </View>
+            ) : null}
+
             {/* Footer */}
             <View style={styles.footer}>
               <TouchableOpacity onPress={onClose} style={[styles.footerBtn, styles.footerCancel]} accessibilityLabel="Cancel">
@@ -938,7 +1026,17 @@ export function CueEditorSheet({
                     if (!onSaveDefault) throw new Error('CueEditorSheet: defaultCue mode requires onSaveDefault');
                     onSaveDefault(buildDefaultCue());
                   } else {
-                    onSave(buildCue());
+                    // Validate BEFORE committing: a cue owns the deck for its
+                    // window, and two cues can't own it at once on a shared day.
+                    const candidate = buildCue();
+                    const overlap = findOverlapError(candidate);
+                    if (overlap) {
+                      // BLOCK the save — surface WHY inline, don't call onSave.
+                      setSaveError(overlap);
+                      return;
+                    }
+                    setSaveError(null);
+                    onSave(candidate);
                   }
                 }}
                 style={[styles.footerBtn, { backgroundColor: C.primary }]}
@@ -1065,6 +1163,20 @@ function makeStyles(C: Palette) {
       fontFamily: 'SpaceGrotesk_700Bold',
       fontSize: 12,
       color: C.text,
+    },
+    errorBanner: {
+      marginTop: 14,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: C.error,
+      backgroundColor: C.surfaceContainerLowest,
+    },
+    errorText: {
+      fontFamily: 'Inter_400Regular',
+      fontSize: 12,
+      color: C.error,
     },
     footer: {
       flexDirection: 'row',

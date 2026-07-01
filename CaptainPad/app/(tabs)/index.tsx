@@ -217,8 +217,10 @@ export default function ControlDeckScreen() {
   // Deck COLOR autopilot (operator request: "in the autopilot, select a set of
   // palettes that switch on their own timer"). Independent of the pattern
   // autopilot — this one cycles a chosen SET of color palettes on its own
-  // timer. Seeded on focus from GET /deck/color-autopilot; each control change
-  // posts optimistically (same shape as handleDeckTxChange).
+  // timer. Seeded on focus from GET /deck/color-autopilot, then kept LIVE by the
+  // `colorAutopilot` /ws/control broadcast (see onControl) so PLAN-driven cues
+  // and per-tick palette advances show up on the deck in real time; each control
+  // change posts optimistically (same shape as handleDeckTxChange).
   const [colorAutopilot, setColorAutopilot] = useState<DeckColorAutopilotConfig>({
     active: false,
     palettes: [],
@@ -324,6 +326,26 @@ export default function ControlDeckScreen() {
         mode: typeof msg.mode === 'string' ? msg.mode : prev.mode,
         durationMs: typeof msg.durationMs === 'number' ? msg.durationMs : prev.durationMs,
         shuffle: typeof msg.shuffle === 'boolean' ? msg.shuffle : prev.shuffle,
+      }));
+    } else if (msg.type === 'colorAutopilot') {
+      // LIVE color-autopilot sync (feat/timeline_support). The engine
+      // broadcasts `colorAutopilot` on /ws/control (broadcastColorAutopilot in
+      // api_server.js; routed to CONTROL in ws_topic_routing.js) on EVERY
+      // change — an operator POST, a per-tick palette advance, AND a
+      // PLAN-driven cue (timeline_service._applyColorAutopilot). Reconciling it
+      // here is what makes the deck's COLOR AUTOPILOT panel show the FULL
+      // plan-driven config live (palettes + shuffle + delay + transition), not
+      // a stale focus fetch — the operator sees exactly what they'd see if they
+      // had set it by hand. Shape: {active, palettes, delay_s, shuffle,
+      // transitionMs}. We merge per-field (same defensive posture as the
+      // deckTransitionConfig branch) so a malformed field can't blow away a
+      // good one; palettes is replaced wholesale (it IS the selection).
+      setColorAutopilot((prev) => ({
+        active: typeof msg.active === 'boolean' ? msg.active : prev.active,
+        palettes: Array.isArray(msg.palettes) ? (msg.palettes as string[]) : prev.palettes,
+        delay_s: typeof msg.delay_s === 'number' ? msg.delay_s : prev.delay_s,
+        shuffle: typeof msg.shuffle === 'boolean' ? msg.shuffle : prev.shuffle,
+        transitionMs: typeof msg.transitionMs === 'number' ? msg.transitionMs : prev.transitionMs,
       }));
     } else if (msg.type === 'deckSwapStarted') {
       setDeckSwapInFlight(true);
@@ -451,9 +473,11 @@ export default function ControlDeckScreen() {
   // Patch the deck COLOR autopilot (optimistic local update + POST), mirroring
   // handleDeckTxChange exactly: snapshot the touched keys, apply optimistically,
   // POST, and on a rejected/failed POST restore ONLY those keys + Alert (Codex
-  // P0 — never leave the UI showing a value the engine refused). The engine
-  // doesn't broadcast a color-autopilot WS event, so the optimistic value is
-  // authoritative until the next focus re-seed.
+  // P0 — never leave the UI showing a value the engine refused). On a SUCCESSFUL
+  // POST the engine broadcasts `colorAutopilot` on /ws/control, which the
+  // onControl handler above reconciles — that broadcast is the source of truth
+  // (it also carries PLAN-driven and per-tick palette-advance changes), so the
+  // optimistic value just avoids a tap-snap until the echo lands.
   const handleColorAutopilotChange = useCallback((patch: Partial<DeckColorAutopilotConfig>) => {
     notifyInteraction();
     let prevSnapshot: Partial<DeckColorAutopilotConfig> = {};

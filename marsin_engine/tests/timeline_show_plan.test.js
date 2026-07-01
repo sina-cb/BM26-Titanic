@@ -357,3 +357,103 @@ test('defaultCue round-trips through dump -> load', () => {
   assert.deepEqual(round.defaultCue, { label: 'House', action: { type: 'look', look: 'daytime' } });
   assert.equal(round.cues[0].durationMin, 45);
 });
+
+// ── §16.11 overlapping-cue safety net ─────────────────────────────────────────
+// Two cues whose deck windows [start, start+durationMin) overlap on a SHARED day
+// must be rejected. Windows are half-open: touching endpoints do NOT overlap.
+// mood/manual/phase cues (no scheduled time) never participate.
+
+function overlapPlan(cues, festival) {
+  return {
+    schemaVersion: 2,
+    name: 'overlap_plan',
+    location: { lat: 40.7864, lon: -119.2065, tz: 'America/Los_Angeles' },
+    festival: festival === undefined ? { startDate: '2026-08-30', days: 3 } : festival,
+    autopilot: {
+      enabled: true, playlist: 'default', delay_s: 45, shuffle: true,
+      target: { channel: 'deck', id: null }, mood: true,
+    },
+    phases: {},
+    looks: {},
+    cues,
+  };
+}
+
+function deckPlaylistCue(id, at, durationMin, days) {
+  const cue = {
+    id, label: id, kind: 'program',
+    trigger: { type: 'clock', at },
+    action: { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } },
+    durationMin,
+  };
+  if (days !== undefined) cue.days = days;
+  return cue;
+}
+
+test('overlapping clock cues on a shared day are REJECTED (fail loud)', () => {
+  // c_a: 20:00 for 60min → [20:00,21:00). c_b: 20:30 for 30min → [20:30,21:00).
+  const plan = overlapPlan([
+    deckPlaylistCue('c_a', '20:00', 60),
+    deckPlaylistCue('c_b', '20:30', 30),
+  ]);
+  assert.throws(() => validateShowPlan(plan), /overlap.*c_a.*c_b|c_a.*c_b.*overlap/i);
+});
+
+test('ADJACENT (touching) clock windows are ACCEPTED (half-open, endpoints touch)', () => {
+  // c_a: 20:00 for 60min → [20:00,21:00). c_b: 21:00 for 30min → [21:00,21:30).
+  // They touch at 21:00 but do NOT overlap.
+  const plan = overlapPlan([
+    deckPlaylistCue('c_a', '20:00', 60),
+    deckPlaylistCue('c_b', '21:00', 30),
+  ]);
+  assert.doesNotThrow(() => validateShowPlan(plan));
+});
+
+test('overlapping windows on DIFFERENT days are ACCEPTED (no shared day)', () => {
+  // Same clock times + durations but disjoint day-sets → no shared day → legal.
+  const plan = overlapPlan([
+    deckPlaylistCue('c_a', '20:00', 60, [0]),
+    deckPlaylistCue('c_b', '20:30', 30, [1]),
+  ]);
+  assert.doesNotThrow(() => validateShowPlan(plan));
+});
+
+test('overlapping windows sharing ONE day (via days:all vs a day index) are REJECTED', () => {
+  const plan = overlapPlan([
+    deckPlaylistCue('c_a', '20:00', 60, 'all'),
+    deckPlaylistCue('c_b', '20:30', 30, [1]),
+  ]);
+  assert.throws(() => validateShowPlan(plan), /overlap/i);
+});
+
+test('a mood cue (no scheduled time) never participates in overlap', () => {
+  const plan = overlapPlan([
+    deckPlaylistCue('c_a', '20:00', 60),
+    {
+      id: 'c_mood', label: 'mood', kind: 'mood',
+      trigger: { type: 'mood', from: 'calm', to: 'party' },
+      action: { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } },
+      durationMin: 60,
+    },
+  ]);
+  assert.doesNotThrow(() => validateShowPlan(plan));
+});
+
+test('cues WITHOUT durationMin do not participate (point cues never overlap)', () => {
+  // Both at 20:00 but no durationMin → no windows → no overlap.
+  const plan = overlapPlan([
+    { id: 'c_a', label: 'a', kind: 'program', trigger: { type: 'clock', at: '20:00' },
+      action: { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } } },
+    { id: 'c_b', label: 'b', kind: 'program', trigger: { type: 'clock', at: '20:00' },
+      action: { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } } },
+  ]);
+  assert.doesNotThrow(() => validateShowPlan(plan));
+});
+
+test('a DISABLED overlapping cue is ignored (owns no window)', () => {
+  const plan = overlapPlan([
+    deckPlaylistCue('c_a', '20:00', 60),
+    { ...deckPlaylistCue('c_b', '20:30', 30), enabled: false },
+  ]);
+  assert.doesNotThrow(() => validateShowPlan(plan));
+});

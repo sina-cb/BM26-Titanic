@@ -1040,3 +1040,62 @@ test('buildOverview carries durationMin on cues that own a deck window', () => {
   assert.ok(point, 'c_point must appear in the day overview');
   assert.equal(point.durationMin, undefined, 'a point cue (no durationMin) must omit durationMin');
 });
+
+// ── recentFires records AUTOMATIC cue fires (operator bug) ────────────────────
+// The CaptainPad "RECENT FIRES" log renders state.recentFires. A MANUAL fire was
+// recorded, but an AUTOMATIC one (a mood cue firing under autopilot, a scheduled
+// clock cue, the default cue, catchUp) must ALSO land in the ring with the cue
+// id, label, a timestamp, and a source. These guard that.
+
+test('recentFires records an AUTO-fired mood cue with id/label/atMs/source', async () => {
+  const { svc, setMood } = setup();
+  await svc.start();
+  // No program → controller is autopilot. Drive a calm→party mood swap: it fires
+  // AUTOMATICALLY through the arbiter/tick path, NOT via fireCue.
+  setMood({ party: 0, value: 0 });
+  await svc._tick();           // arm at calm
+  setMood({ party: 1, value: 1 });
+  await svc._tick();           // AUTO-fire under autopilot
+  svc.stop();
+
+  const st = svc.getState();
+  const entry = st.recentFires.find((f) => f.cueId === 'c_mood');
+  assert.ok(entry, `auto-fired mood cue must appear in recentFires, got ${JSON.stringify(st.recentFires)}`);
+  assert.equal(entry.label, 'calm to party', 'entry carries the cue label');
+  assert.equal(entry.source, 'auto', 'a scheduled/mood fire is source "auto"');
+  assert.equal(typeof entry.atMs, 'number', 'entry carries a timestamp');
+  assert.equal(entry.reason, 'mood', 'entry carries the fine-grained trigger reason');
+});
+
+test('recentFires distinguishes a MANUAL fire (source manual)', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+  await svc.fireCue('c_show');
+  const st = svc.getState();
+  // The manual fire is the most recent entry for c_show (catchUp may have logged
+  // an earlier boot entry) — assert on the LAST one.
+  const entry = st.recentFires.filter((f) => f.cueId === 'c_show').pop();
+  assert.ok(entry, 'manual fire recorded');
+  assert.equal(entry.source, 'manual', 'a fireCue is source "manual"');
+  assert.equal(entry.label, 'Scheduled show', 'manual entry carries the label');
+});
+
+test('recentFires records the plan DEFAULT CUE auto-application (source default)', async () => {
+  // A plan with NO owning cues + a plan-level defaultCue → the default cue fills
+  // the deck automatically on boot and must be logged.
+  const plan = makePlan();
+  plan.cues = []; // no cues own the deck → default cue drives it
+  plan.defaultCue = {
+    label: 'House ambient',
+    action: { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } },
+  };
+  const { svc } = setupWithPlan(plan);
+  await svc.start();
+  svc.stop();
+  const st = svc.getState();
+  const entry = st.recentFires.find((f) => f.source === 'default');
+  assert.ok(entry, `default cue must appear in recentFires, got ${JSON.stringify(st.recentFires)}`);
+  assert.equal(entry.cueId, '__default_cue__', 'default cue uses the synthetic id');
+  assert.equal(entry.label, 'House ambient', 'default cue carries its authored label');
+});

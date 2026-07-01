@@ -452,6 +452,18 @@ export class TimelineService {
     if (typeof this.deps.releaseDeckView !== 'function') {
       throw new Error('releaseDeckView dep is required to release the plan deck-pin');
     }
+    // CONFIRMED BEHAVIOR (operator request): releasing the plan's deck-pin ONLY
+    // clears the soft 'plan' controlLock — it does NOT restore or overwrite the
+    // deck's params/pattern. When the plan is disabled/paused the deck is LEFT
+    // EXACTLY WHERE THE PLAN LAST SET IT (no revert to a "last known good"
+    // snapshot). This is intentional: no param restore on release.
+    //
+    // TODO (optional, NOT implemented — operator deemed it not worth the added
+    // state/complexity): an OPTIONAL future feature could "restore the deck to a
+    // last-known-good snapshot captured before the plan took over". That would
+    // mean capture-on-takeover (snapshot the deck pattern/params the first time
+    // the plan seizes the deck) + restore-on-release (re-apply that snapshot
+    // here when the plan hands the deck back). Deliberately left out for now.
     await this.deps.releaseDeckView();
     if (steps) steps.push('output ← released (deck pin cleared)');
   }
@@ -660,6 +672,11 @@ export class TimelineService {
     // top of it (docs/38 §16.11: defaultCue REPLACES the autopilot baseline as
     // the deck fill when authored). A later disarm (pause/program) flips this off.
     this._baselineArmed = true;
+    // The default cue is an AUTOMATIC deck application — record it in the event
+    // log too (docs/38 §16.11). It is not a plan cue (no id/trigger), so use a
+    // synthetic id + its authored label (or a readable default). source:'default'
+    // lets the UI style/group it distinctly from a scheduled cue.
+    this._recordFire('__default_cue__', reason, 'default', dc.label || 'Default cue');
     console.log(`  🎯 [timeline] default cue applied (${reason}): ${result.steps.join('; ')}`);
     return result;
   }
@@ -723,8 +740,36 @@ export class TimelineService {
 
   // ── dispatch (ported from timeline_server.js) ─────────────────────────────
 
-  _recordFire(cueId, reason) {
-    this.recentFires.push({ cueId, atMs: this.nowFn(), reason });
+  // Look up a cue's operator-facing label from the active plan (falls back to
+  // the id, which is always present). Used to enrich a recentFires entry so the
+  // event log can show the human label, not just the slug.
+  _cueLabelFor(cueId) {
+    const cue = this.plan && Array.isArray(this.plan.cues)
+      ? this.plan.cues.find((c) => c.id === cueId) : null;
+    return cue ? cueLabel(cue) : cueId;
+  }
+
+  // Append ONE entry to the recentFires ring (docs/38 §15.2 event log). EVERY
+  // application of a cue on the deck/mixer — MANUAL (fireCue) AND AUTOMATIC
+  // (scheduled clock/sun/mood, program auto-start, catchUp, default cue) — flows
+  // through here so the CaptainPad "RECENT FIRES" log records the automatic
+  // starts too (operator: the auto-start of a cue was not landing in the log).
+  //   cueId    — the cue id (or a synthetic id like '__default_cue__' / a resume)
+  //   reason   — the fine-grained trigger reason the UI renders ('manual',
+  //              'catchUp', 'clock', 'sun', 'mood', 'resume', 'lease-enable',
+  //              'window-elapsed', …). Preserved verbatim (the UI reads it).
+  //   source   — a COARSE category the UI can group/filter on: 'manual' | 'auto'
+  //              | 'catchUp' | 'default'. Defaults to 'auto' (any non-manual,
+  //              non-catchUp application is automatic).
+  //   label    — resolved operator-facing label (defaults to the cue's label).
+  _recordFire(cueId, reason, source, label) {
+    this.recentFires.push({
+      cueId,
+      atMs: this.nowFn(),
+      reason,
+      source: source || 'auto',
+      label: label !== undefined ? label : this._cueLabelFor(cueId),
+    });
     if (this.recentFires.length > RECENT_MAX) this.recentFires.shift();
   }
 
@@ -737,7 +782,9 @@ export class TimelineService {
     delete this.cueErrors[cueId];
     this.state.lastFiredCueId = cueId;
     this.state.lastFiredAtMs = this.nowFn();
-    this._recordFire(cueId, reason);
+    // _dispatchCue is the boot catchUp path — record it as source 'catchUp' so
+    // the log distinguishes a restored cue from a live automatic fire.
+    this._recordFire(cueId, reason, reason === 'catchUp' ? 'catchUp' : 'auto');
     return result;
   }
 
@@ -825,7 +872,9 @@ export class TimelineService {
     }
     if (act.action && act.action.type === '__resume_autopilot__') {
       const result = await this._applyAutopilotBaseline();
-      this._recordFire(act.cueId, 'resume');
+      // Autopilot-resume is a synthetic cue id — give it a readable label so the
+      // event log shows "Autopilot resumed" rather than the raw sentinel id.
+      this._recordFire(act.cueId, 'resume', reason === 'manual' ? 'manual' : 'auto', 'Autopilot resumed');
       return result;
     }
     const cue = this.plan.cues.find((c) => c.id === act.cueId);
@@ -837,7 +886,11 @@ export class TimelineService {
     delete this.cueErrors[act.cueId];
     this.state.lastFiredCueId = act.cueId;
     this.state.lastFiredAtMs = this.nowFn();
-    this._recordFire(act.cueId, reason);
+    // Source is MANUAL only when this dispatch came from fireCue ('manual');
+    // every other reason (scheduled clock/sun, mood, lease-enable, auto) is an
+    // AUTOMATIC application and must still land in the recentFires log so the
+    // operator sees the auto-start of the cue.
+    this._recordFire(act.cueId, reason, reason === 'manual' ? 'manual' : 'auto');
     console.log(`  ▶ [timeline] fired "${act.cueId}" (${reason}): ${result.steps.join('; ')}`);
     return result;
   }

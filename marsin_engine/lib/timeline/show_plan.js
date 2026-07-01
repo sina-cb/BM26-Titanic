@@ -17,6 +17,10 @@ import fs from 'node:fs';
 
 import yaml from 'js-yaml';
 
+import { computeSunEvents } from './sun.js';
+import { anchorToMs, dateClockToEpochMs } from './triggers.js';
+import { festivalDateFor } from './festival.js';
+
 // Sun events a sun anchor / sun trigger may reference (mirrors sun.js output).
 export const SUN_EVENTS = Object.freeze([
   'sunrise', 'sunset', 'solarNoon',
@@ -605,6 +609,116 @@ function validateCue(cue, index, phaseNames, lookNames, seenIds, festival) {
   return out;
 }
 
+// ── overlapping-cue safety net (docs/38 §16.11) ───────────────────────────────
+
+// The set of festival-day INDICES a cue applies on, given the plan's festival.
+//   days:'all'        → every day 0..(festival.days-1) (or [0] for a no-festival plan)
+//   integer array     → those indices verbatim
+//   date-string array → the indices whose calendar date matches (dates outside
+//                       the span are dropped — they never render on a festival day)
+// Returns an array of { index, dateKey } so the caller can resolve sun per day.
+function cueDayCells(cue, festival) {
+  if (!festival) {
+    // A no-festival plan is a recurring-nightly plan: every cue is days:'all'
+    // and shares the SAME single representative night. One cell, no date (sun
+    // cross-overlap is best-effort here — see resolveWindowMs).
+    return [{ index: 0, dateKey: null }];
+  }
+  const all = [];
+  for (let i = 0; i < festival.days; i += 1) all.push({ index: i, dateKey: festivalDateFor(festival, i) });
+  const days = cue.days === undefined ? 'all' : cue.days;
+  if (days === 'all') return all;
+  if (typeof days[0] === 'number') return all.filter((c) => days.includes(c.index));
+  return all.filter((c) => days.includes(c.dateKey));
+}
+
+// Resolve a cue's fire time on a specific day cell → epoch ms, or null when it
+// has NO scheduled time (mood / manual / phase triggers) or cannot be resolved
+// (a sun trigger on a no-festival plan where we have no calendar date, or a
+// polar/missing sun event). A null return means "no window on this day" → the
+// cue is excluded from overlap on that day.
+function resolveCueFireMs(cue, cell, location) {
+  const t = cue.trigger;
+  if (t.type === 'clock') {
+    if (cell.dateKey) return dateClockToEpochMs(cell.dateKey, t.at, location.tz);
+    // No-festival plan: resolve the clock on an ARBITRARY fixed date. Clock
+    // minute-of-day is date-independent, so any date yields a consistent
+    // ordering for clock-vs-clock overlap on the shared nightly window.
+    return dateClockToEpochMs('2000-01-01', t.at, location.tz);
+  }
+  if (t.type === 'sun') {
+    // Sun needs a real calendar date + location. Only resolvable on a festival
+    // day (cell.dateKey present); best-effort otherwise (returns null → skipped).
+    if (!cell.dateKey) return null;
+    const dayNoonMs = dateClockToEpochMs(cell.dateKey, '12:00', location.tz);
+    const sunEvents = computeSunEvents({
+      lat: location.lat, lon: location.lon, date: new Date(dayNoonMs), tz: location.tz,
+    });
+    return anchorToMs({ sun: t.event, offsetMin: t.offsetMin || 0 }, dayNoonMs, location.tz, sunEvents);
+  }
+  // mood / manual / phase → no scheduled point → never participates in overlap.
+  return null;
+}
+
+/**
+ * SAFETY NET (docs/38 §16.11): reject a plan where two cues' deck WINDOWS
+ * overlap on a shared festival day. A cue's window is [fireMs, fireMs +
+ * durationMin*60000) — a half-open interval, so TOUCHING endpoints (one starts
+ * exactly when the other ends) do NOT overlap. This mirrors the maker UI's own
+ * block-collision rule so the engine and the UI agree on what is legal.
+ *
+ * Scope:
+ *   • only cues that have a SCHEDULED time (clock or sun trigger) AND a
+ *     durationMin participate — mood/manual/phase cues own no timed deck window.
+ *   • two cues are compared only on days they BOTH apply (day-set intersection).
+ *   • clock-vs-clock is resolved exactly (minute-of-day). sun times resolve
+ *     per festival day via sun.js; on a NO-festival plan sun times can't be
+ *     resolved (no calendar date) so sun-involving overlap there is best-effort
+ *     (skipped) while clock-vs-clock is still enforced strictly.
+ *
+ * THROWS loud naming both cue ids/labels + the overlapping day. Returns nothing.
+ */
+function validateNoOverlap(cues, location, festival) {
+  // Precompute each participating cue's resolved windows, keyed by day index.
+  // A "participating" cue has a durationMin AND a schedulable trigger.
+  const windows = cues.map((cue) => {
+    if (typeof cue.durationMin !== 'number' || cue.durationMin <= 0) return null;
+    if (cue.trigger.type !== 'clock' && cue.trigger.type !== 'sun') return null;
+    if (cue.enabled === false) return null; // a disabled cue owns no window
+    const byDay = new Map();
+    for (const cell of cueDayCells(cue, festival)) {
+      const startMs = resolveCueFireMs(cue, cell, location);
+      if (typeof startMs !== 'number') continue; // unresolved (e.g. polar sun) → skip
+      byDay.set(cell.index, { startMs, endMs: startMs + cue.durationMin * 60000 });
+    }
+    return { cue, byDay };
+  });
+
+  for (let i = 0; i < windows.length; i += 1) {
+    const a = windows[i];
+    if (!a) continue;
+    for (let j = i + 1; j < windows.length; j += 1) {
+      const b = windows[j];
+      if (!b) continue;
+      for (const [dayIndex, wa] of a.byDay) {
+        const wb = b.byDay.get(dayIndex);
+        if (!wb) continue; // not a shared day (or b has no window that day)
+        // Half-open overlap: [aStart,aEnd) ∩ [bStart,bEnd) ≠ ∅ iff
+        // aStart < bEnd AND bStart < aEnd (touching endpoints do NOT overlap).
+        if (wa.startMs < wb.endMs && wb.startMs < wa.endMs) {
+          const la = a.cue.label || a.cue.id;
+          const lb = b.cue.label || b.cue.id;
+          const dayDesc = festival ? `festival day ${dayIndex} (${festivalDateFor(festival, dayIndex)})` : 'the nightly window';
+          throw new Error(
+            `plan.cues overlap: "${a.cue.id}" (${la}) and "${b.cue.id}" (${lb}) `
+            + `have overlapping deck windows on ${dayDesc}`,
+          );
+        }
+      }
+    }
+  }
+}
+
 // ── top-level ─────────────────────────────────────────────────────────────────
 
 /**
@@ -637,6 +751,13 @@ export function validateShowPlan(plan) {
   }
   const seenIds = new Set();
   const cues = plan.cues.map((cue, i) => validateCue(cue, i, phaseNames, lookNames, seenIds, festival));
+
+  // SAFETY NET (docs/38 §16.11): reject a plan where two scheduled cues' deck
+  // windows [start, start+durationMin) overlap on a shared day. Runs after the
+  // per-cue validation so it sees fully-normalized cues (durationMin/days/
+  // trigger). The maker UI blocks this too; the definitions agree (half-open
+  // windows, touching endpoints are legal).
+  validateNoOverlap(cues, location, festival);
 
   // Plan-level default cue (docs/38 §16.11): the deck fallback for gaps between
   // owning cue windows (and when the plan has no owning cues). Optional.
