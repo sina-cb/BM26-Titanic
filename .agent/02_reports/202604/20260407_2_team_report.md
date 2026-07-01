@@ -60,7 +60,7 @@ The lighting simulation has been transformed from a standalone 3D previewer into
                     ┌─────────┼─────────┐
                     ▼         ▼         ▼
               PKnight    PKnight    PKnight
-              10.1.1.101 10.1.1.102 10.1.1.103
+              10.x.x.101 10.x.x.102 10.x.x.103
 ```
 
 ### Key Design Decisions
@@ -153,7 +153,7 @@ Standalone Node.js CLI that renders Pixelblaze-compatible patterns and outputs s
 
 ```bash
 node engine.js --pattern bioluminescence          # → sim preview
-node engine.js --pattern fire --dest 10.1.1.102   # → real hardware
+node engine.js --pattern fire --dest 10.x.x.102   # → real hardware
 ```
 
 ### 3.8 sACN Monitor Panel

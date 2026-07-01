@@ -45,7 +45,7 @@ class BLEStatus(Enum):
 class BLEDeviceInfo:
     """A discovered Titanic BLE device."""
     name: str                      # e.g. "Titanic-Podium"
-    address: str                   # e.g. "8C:FD:49:B5:7E:B9"
+    address: str                   # e.g. "AA:BB:CC:DD:EE:FF"
     rssi: int = 0                  # dBm
     role: Optional[str] = None     # Populated after GATT verification
     fw_version: Optional[str] = None

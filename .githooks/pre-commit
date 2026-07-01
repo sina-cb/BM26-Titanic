@@ -1,0 +1,32 @@
+#!/bin/sh
+# BM26 Titanic — pre-commit secret/PII gate (public repo).
+#
+# Runs scripts/security_check.py --staged (gitleaks over the staged
+# changes with the same config CI enforces). A finding blocks the commit.
+# Spec: .agent/00_gol/16_security_privacy.md
+#
+# One-time setup per clone (git never auto-enables hooks):
+#   git config core.hooksPath .githooks
+#
+# Never bypass with --no-verify — the CI gate on the PR will catch it
+# anyway and you'll have leaked into the branch history for nothing.
+
+set -e
+
+# Find a Python that actually RUNS — on Windows, `python3` on PATH is often
+# the Microsoft Store alias stub, which prints an install nag and exits
+# nonzero. Probe each candidate with a no-op before trusting it.
+PY=""
+for c in python3 python py; do
+    if command -v "$c" >/dev/null 2>&1 && "$c" -c "pass" >/dev/null 2>&1; then
+        PY="$c"
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    echo "pre-commit: no working python found — cannot run the security gate." >&2
+    echo "The commit is BLOCKED (no silent skip; see .agent/00_gol/16_security_privacy.md)." >&2
+    exit 1
+fi
+
+exec "$PY" "$(git rev-parse --show-toplevel)/scripts/security_check.py" --staged

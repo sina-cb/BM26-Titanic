@@ -281,8 +281,8 @@ This prevents CaptainPad from accepting any random HTTP server that happens to b
 Use `expo-network` to get the iPad's current LAN IP at runtime, then derive the `/24` subnet:
 
 ```
-10.1.1.42  →  10.1.1.1 .. 10.1.1.254
-192.168.1.5 → 192.168.1.1 .. 192.168.1.254
+10.x.x.42  →  10.x.x.1 .. 10.x.x.254
+192.x.x.5 → 192.x.x.1 .. 192.x.x.254
 ```
 
 Manual URL entry remains as a fallback for non-standard networks.
@@ -331,7 +331,7 @@ interface UseServerDiscovery {
 Enhance the Config tab (already rebuilt in Phase 1) with discovery features:
 
 1. **Scan Network** button — triggers `useServerDiscovery.scan()`
-2. **Scan progress** — animated bar showing `Scanning 10.1.1.0/24... (142/254)`
+2. **Scan progress** — animated bar showing `Scanning 10.x.x.0/24... (142/254)`
 3. **Discovered server cards** — tappable cards showing server name, IP, active pattern, model, latency
 4. **Auto-fill** — tapping a card saves the IP as `api_base` and re-tests connection
 5. **Preserved controls** — Test Connection button and manual URL input remain
@@ -342,16 +342,16 @@ Enhance the Config tab (already rebuilt in Phase 1) with discovery features:
 │  Pattern: rainbow  Model: titanic       │
 ├─────────────────────────────────────────┤
 │  [SCAN NETWORK]                         │
-│  Scanning 10.1.1.0/24... ████░░ 56%    │
+│  Scanning 10.x.x.0/24... ████░░ 56%    │
 │                                         │
 │  ┌─ MarsinEngine ──────────────────┐    │
-│  │  10.1.1.172:6968  •  14ms       │    │
+│  │  10.x.x.172:6968  •  14ms       │    │
 │  │  Pattern: rainbow               │    │
 │  │  Model: titanic                 │    │
 │  └──────────────────────────────────┘    │
 ├─────────────────────────────────────────┤
 │  ENGINE API BASE URL                    │
-│  [http://10.1.1.172:6968          ]     │
+│  [http://10.x.x.172:6968          ]     │
 │  [SAVE CONFIG]  [RESET TO YAML]         │
 ├─────────────────────────────────────────┤
 │  ⚠ iPAD LOCAL NETWORK PERMISSION       │
@@ -398,9 +398,9 @@ bonjour.publish({
 
 | Test | Method |
 |------|--------|
-| URL normalization + subnet generation | Unit test: `10.1.1.42` → `10.1.1.1..254` |
+| URL normalization + subnet generation | Unit test: `10.x.x.42` → `10.x.x.1..254` |
 | Scan against fake `/status` | Mock: verify `service === "marsin-engine"` filter works |
-| Scan on current WiFi | iPad on LAN with engine at `10.1.1.172` — verify card appears |
+| Scan on current WiFi | iPad on LAN with engine at `10.x.x.172` — verify card appears |
 | Server at new IP | Move engine to different IP → scan again → confirm new card |
 | Local Network denied | Disable permission in iPad Settings → confirm useful error in Config UI |
 | Server down | Stop engine → confirm card disappears on next scan |
@@ -430,7 +430,7 @@ sequenceDiagram
     Note over Engine: On startup:<br/>Serves /status with service marker<br/>(optional: advertises via mDNS)
 
     iPad->>iPad: Get local IP via expo-network
-    iPad->>iPad: Derive subnet (e.g. 10.1.1.0/24)
+    iPad->>iPad: Derive subnet (e.g. 10.x.x.0/24)
 
     loop Batch probe (24-40 concurrent)
         iPad->>Engine: GET /status (400-800ms timeout)

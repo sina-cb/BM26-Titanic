@@ -1,5 +1,10 @@
 # Git And Merge-Readiness Rules
 
+- **Security & privacy first:** this is a PUBLIC repo with a gitleaks CI
+  gate on every PR/push. What may never be committed, how the scanner and
+  its overrides work, the gitignored MAC pairing overlay, and the
+  stale-clone / history-rewrite hazard are specified in
+  `16_security_privacy.md` — read it before pushing anything.
 - Never do git operations until explicitly asked by the Human op.
 - Do not claim a branch is merge-ready just because a report says "approved".
   Verify the branch with the project-specific checks below.

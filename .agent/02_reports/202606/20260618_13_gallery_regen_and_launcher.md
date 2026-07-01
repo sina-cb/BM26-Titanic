@@ -41,7 +41,7 @@
 
 Served via the launcher on **port 6765** (`0.0.0.0`). `/` returned `200`,
 `/api/list` listed **58** widgets, and the launcher surfaced the phone URL
-`http://100.98.202.90:6765/` (Tailscale). Confirm on-device by opening that URL
+`http://100.x.x.90:6765/` (Tailscale). Confirm on-device by opening that URL
 with Tailscale up and checking a couple of clips animate (Pause/Speed work).
 
 ## Notes

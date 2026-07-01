@@ -49,6 +49,7 @@ from comms.radio_port import RadioPort
 from comms.radio_port_sim import RadioPortSim
 from comms.registry import CommandRegistry
 from comms.secure import SecretError, default_codec
+from utils.nodes_config import load_pairing
 
 logger = logging.getLogger("titanic.server_bridge")
 
@@ -103,13 +104,17 @@ def _resolve_serial_port(node_id: int, override) -> str:
     Resolution order:
       1. ``--serial-port`` override (operator was explicit).
       2. ``.config.bridge.yaml`` ``bus.serial.port`` (legacy explicit).
-      3. ``.config.nodes.yaml`` ``usb_mac`` for the bridge node id
-         (default 0x01) → live port via
-         ``utils.discovery.find_port_by_mac``.
+      3. paired ``usb_mac`` for the bridge node id (default 0x01) —
+         gitignored ``.config.nodes.pairing.yaml`` overlay first, then
+         any inline value in ``.config.nodes.yaml`` (test fixtures) —
+         → live port via ``utils.discovery.find_port_by_mac``.
     """
     nodes_path = BASE / ".config.nodes.yaml"
     cfg = yaml.safe_load(nodes_path.read_text()) if nodes_path.exists() else {}
     nodes = (cfg or {}).get("nodes") or {}
+    # Real device MACs live in the gitignored pairing overlay, never in
+    # the committed .config.nodes.yaml — this repo is public.
+    pairing = load_pairing(BASE)
 
     # Pull the entry for the configured bridge node. YAML loads
     # `0x01` as the integer 1, but operators sometimes write the
@@ -137,13 +142,14 @@ def _resolve_serial_port(node_id: int, override) -> str:
         return override
 
     from utils.discovery import find_port_by_mac
-    mac = entry.get("usb_mac")
+    mac = pairing.get(node_id) or entry.get("usb_mac")
     if not mac:
         # Pairing missing = config error. The operator has to run
         # deploy.py once to record the usb_mac. Spinning forever
         # would just mask that.
         sys.exit(
-            f"server node 0x{node_id:02X} has no usb_mac in .config.nodes.yaml. "
+            f"server node 0x{node_id:02X} has no usb_mac paired "
+            f"(.config.nodes.pairing.yaml). "
             f"Run firmware/deploy.py --node 0x{node_id:02X} to pair it, "
             f"or pass --serial-port explicitly."
         )
