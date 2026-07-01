@@ -16,7 +16,9 @@
  *   C. Day editor / maker — tap a day → vertical timeline; add/edit/delete
  *      cues via the themed CueEditorSheet (segmented/stepper/dropdown — no
  *      keyboard walls). Validation 400s surface inline, loudly.
- *   D. Cue list + controls — per-cue FIRE, recent fires, program/end.
+ *   D. Cue list + controls — per-cue FIRE, the EVENT LOG (cue fires + plan
+ *      lifecycle: activate/pause/resume/hold/autopilot/takeover/program),
+ *      program/end.
  *
  * Draft / preview / save loop:
  *   - The draft plan is local state (loaded from GET /timeline/plans/:name,
@@ -63,6 +65,8 @@ import {
 
 const HOLD_MINUTES = 30;
 const PREVIEW_DEBOUNCE_MS = 350;
+// EVENT LOG list cap (the engine ring holds up to 50; show the freshest 20).
+const EVENT_LOG_MAX_ROWS = 20;
 
 // ── Plan-timezone "now" helpers ─────────────────────────────────────────
 // The overview dates are festival-local (plan tz). To pick "today" and to
@@ -894,12 +898,20 @@ export default function TimelineScreen() {
                 ))
               )}
 
-              <Text style={styles.sectionLabel}>RECENT FIRES</Text>
-              {(!state.recentFires || state.recentFires.length === 0) ? (
-                <Text style={styles.emptyHint}>No cues fired yet.</Text>
+              <Text style={styles.sectionLabel}>EVENT LOG</Text>
+              {(!Array.isArray(state.recentFires) || state.recentFires.length === 0) ? (
+                <Text style={styles.emptyHint}>No events yet.</Text>
               ) : (
-                state.recentFires.map((f, i) => (
-                  <RecentFireRow key={`${f.cueId}:${f.atMs}:${i}`} fire={f} styles={styles} />
+                // Newest FIRST, capped to the latest EVENT_LOG_MAX_ROWS. The
+                // engine ring is newest-LAST, so reverse a copy (stable under
+                // same-ms entries — Array.reverse preserves relative order of
+                // the reversal deterministically).
+                [...state.recentFires].reverse().slice(0, EVENT_LOG_MAX_ROWS).map((f, i) => (
+                  <EventLogRow
+                    key={`${f.kind ?? 'fire'}:${f.cueId ?? f.label ?? 'event'}:${f.atMs}:${i}`}
+                    entry={f}
+                    styles={styles}
+                  />
                 ))
               )}
             </>
@@ -1056,19 +1068,46 @@ function triggerSummaryText(t: OverviewCue['trigger']): string {
   }
 }
 
-function RecentFireRow({ fire, styles }: { fire: TimelineRecentFire; styles: Styles }) {
-  const t = new Date(fire.atMs);
+// One EVENT LOG row (engine wire shape
+// { kind:'fire'|'lifecycle', cueId?, label, reason, source, atMs }):
+//   fire      — a cue application: bold label + source·reason + time.
+//   lifecycle — a plan/mode transition: visibly dimmer, no FIRE affordances.
+// DEFENSIVE by contract: an unknown/missing kind renders as a fire row; a
+// missing label falls back to cueId then 'event'; non-string reason/source and
+// a bad atMs render harmlessly ('' / '—') — a malformed entry can never crash
+// the list. Times are DEVICE-LOCAL AM/PM wall-clock formatted from atMs (on
+// playa the device tz == the plan tz; off-playa the operator's own clock is
+// the least-surprising rendering — deliberate, matches the pre-existing rows).
+function EventLogRow({ entry, styles }: { entry: TimelineRecentFire; styles: Styles }) {
+  const label = (typeof entry.label === 'string' && entry.label)
+    || (typeof entry.cueId === 'string' && entry.cueId)
+    || 'event';
+  const reason = typeof entry.reason === 'string' ? entry.reason : '';
+  const source = typeof entry.source === 'string' ? entry.source : '';
   let time = '—';
-  if (Number.isFinite(fire.atMs)) {
+  if (typeof entry.atMs === 'number' && Number.isFinite(entry.atMs)) {
+    const t = new Date(entry.atMs);
     const h24 = t.getHours();
     const period = h24 < 12 ? 'AM' : 'PM';
     const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
     time = `${h12}:${String(t.getMinutes()).padStart(2, '0')}:${String(t.getSeconds()).padStart(2, '0')} ${period}`;
   }
+  if (entry.kind === 'lifecycle') {
+    return (
+      <View style={[styles.fireLogRow, styles.lifecycleRow]}>
+        <Text style={styles.lifecycleLabel} numberOfLines={1}>{label}</Text>
+        <Text style={styles.lifecycleReason} numberOfLines={1}>{reason}</Text>
+        <Text style={styles.fireLogTime}>{time}</Text>
+      </View>
+    );
+  }
+  // 'auto' is the baseline fire source — only tag the noteworthy ones
+  // (manual / catchUp / default / anything unknown-but-present).
+  const detail = source && source !== 'auto' ? `${source} · ${reason}` : reason;
   return (
     <View style={styles.fireLogRow}>
-      <Text style={styles.fireLogCue} numberOfLines={1}>{fire.cueId}</Text>
-      <Text style={styles.fireLogReason} numberOfLines={1}>{fire.reason}</Text>
+      <Text style={styles.fireLogCue} numberOfLines={1}>{label}</Text>
+      <Text style={styles.fireLogReason} numberOfLines={1}>{detail}</Text>
       <Text style={styles.fireLogTime}>{time}</Text>
     </View>
   );
@@ -1154,6 +1193,11 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     fireLogCue: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, flex: 1 },
     fireLogReason: { fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, flex: 1 },
     fireLogTime: { fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon },
+    // Lifecycle event rows: visibly quieter than fires (transparent bg, hairline
+    // border, secondary text) — a mode/plan transition, not a cue application.
+    lifecycleRow: { backgroundColor: 'transparent', borderWidth: 1, borderColor: C.ghostBorder },
+    lifecycleLabel: { fontFamily: 'Inter_600SemiBold', fontSize: 12, color: C.secondary, flex: 1.4 },
+    lifecycleReason: { fontFamily: 'Inter_400Regular', fontSize: 11, color: C.icon, flex: 0.6, textAlign: 'right' },
     emptyHint: { fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, paddingVertical: 8, paddingHorizontal: 4 },
     offlineBanner: {
       backgroundColor: C.errorContainer, borderColor: C.error, borderWidth: 1, borderRadius: 12,

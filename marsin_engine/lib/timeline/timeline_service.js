@@ -38,7 +38,10 @@ import { applicableCues, festivalDayIndex, festivalDateFor } from './festival.js
 import { loadTimelineState, saveTimelineState } from './timeline_state.js';
 import { arbitrate, resolveHold } from './arbiter.js';
 
-const RECENT_MAX = 30;
+// Event-log ring cap. The ring carries cue FIRES *and* plan LIFECYCLE events
+// (pause/resume/hold/autopilot/takeover/program-end/lease — see
+// _recordLifecycle), so it is sized to hold a full evening of both.
+const RECENT_MAX = 50;
 const PLAN_NAME_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
 // Sun-ribbon events surfaced as HH:MM in the timelineState (matches the
@@ -235,7 +238,17 @@ export class TimelineService {
     this.bootError = null;
     this.lastError = null;
     this.cueErrors = {};        // cueId → last error string
-    this.recentFires = [];      // ring of { cueId, atMs, reason }
+    // The EVENT LOG ring (docs/38 §15.2). Field name kept `recentFires` for
+    // wire compat; entries are { kind:'fire'|'lifecycle', cueId?, label,
+    // reason, source, atMs }. 'fire' = a cue application; 'lifecycle' = a
+    // plan/mode transition (activate, pause/resume, hold, autopilot toggle,
+    // takeover/lease, program end, pending-program lease). In-memory only
+    // (never persisted) — matches the pre-existing recentFires behavior.
+    this.recentFires = [];
+    // Manual-hold EDGE latch: set by hold(), cleared by resume/arm/lease paths,
+    // so the tick logs "Hold expired" exactly ONCE when the window lapses
+    // naturally (never per-tick, never after an explicit resume).
+    this._holdLatched = false;
     this.wouldFire = [];        // ring of mood-suppressed { cueId, reason, atMs }
     this.sunCache = { dayKey: null, events: null };
     this._tickHandle = null;
@@ -269,6 +282,13 @@ export class TimelineService {
   async start() {
     if (this._tickHandle) return;
     this._loadSceneFiles();
+    // A hold persisted across a restart re-arms the expiry edge-latch so its
+    // natural lapse is still logged exactly once.
+    this._holdLatched = typeof this.state.manualHoldUntilMs === 'number'
+      && this.state.manualHoldUntilMs > this.nowFn();
+    // The plan coming alive on boot/scene-switch is a lifecycle event — the
+    // operator sees WHICH plan the engine woke up driving (docs/38 §15.2).
+    this._recordLifecycle(`Plan activated: ${this.activePlan}`, 'boot', { source: 'auto' });
     try {
       await this._catchUp();
     } catch (e) {
@@ -722,6 +742,14 @@ export class TimelineService {
       if (this._deckWindowCueId === prog.cueId && hasElapsedWindow) {
         this.state.activeProgram = null;
         if (this.state.autopilotEnabled !== false) this.state.controller = 'autopilot';
+        // A program force-ended by its own elapsed durationMin window is a
+        // lifecycle transition (docs/38 §15.2) — logged HERE (not the tick's
+        // arbiter diff, which only sees hold expiry). One-shot: activeProgram
+        // is null from now on, so this branch can't re-enter.
+        this._recordLifecycle(
+          `Program ended (window elapsed): ${this._cueLabelFor(prog.cueId)}`,
+          'window-elapsed', { cueId: prog.cueId, source: 'auto' },
+        );
       } else {
         return;
       }
@@ -764,11 +792,35 @@ export class TimelineService {
   //   label    — resolved operator-facing label (defaults to the cue's label).
   _recordFire(cueId, reason, source, label) {
     this.recentFires.push({
+      kind: 'fire',
       cueId,
       atMs: this.nowFn(),
       reason,
       source: source || 'auto',
       label: label !== undefined ? label : this._cueLabelFor(cueId),
+    });
+    if (this.recentFires.length > RECENT_MAX) this.recentFires.shift();
+  }
+
+  // Append ONE LIFECYCLE entry to the SAME ring (docs/38 §15.2 event log):
+  // plan/mode/controller transitions rather than cue applications — plan
+  // activated, paused/resumed, hold armed/expired, autopilot toggled, operator
+  // takeover/lease release, program ended, pending-program lease armed /
+  // auto-started / dismissed. Same wire shape as a fire entry, kind:'lifecycle'.
+  // EDGE-ONLY BY CONTRACT: every caller must log a TRANSITION, never a steady
+  // state — a reconcile loop must not funnel through here per tick.
+  //   label  — the operator-facing line the UI renders ('Timeline paused', …)
+  //   reason — machine-ish transition tag ('pause', 'hold-expired', …)
+  //   source — 'manual' (operator-initiated) | 'auto' (engine-initiated)
+  //   cueId  — optional related cue (program/lease events); null otherwise
+  _recordLifecycle(label, reason, { cueId, source } = {}) {
+    this.recentFires.push({
+      kind: 'lifecycle',
+      cueId: cueId !== undefined ? cueId : null,
+      atMs: this.nowFn(),
+      reason,
+      source: source || 'auto',
+      label,
     });
     if (this.recentFires.length > RECENT_MAX) this.recentFires.shift();
   }
@@ -1021,6 +1073,16 @@ export class TimelineService {
     try {
       const now = this.nowFn();
 
+      // Manual-hold natural expiry (docs/38 §15.2 event log). EDGE-ONLY via
+      // _holdLatched: hold() arms the latch, resume/arm/lease paths clear it
+      // silently (they log their own transitions), so a lapsed window logs
+      // exactly once and a re-tick never repeats it.
+      if (this._holdLatched
+          && !(typeof this.state.manualHoldUntilMs === 'number' && this.state.manualHoldUntilMs > now)) {
+        this._holdLatched = false;
+        this._recordLifecycle('Hold expired — plan resumes', 'hold-expired', { source: 'auto' });
+      }
+
       // Operator-takeover lease auto-release (docs/38 §16): if the operator
       // holds a lease (mode 'overridden') and it has expired with no UI
       // activity, RELEASE it and resume the plan at NOW (catchUp re-derives the
@@ -1049,6 +1111,16 @@ export class TimelineService {
       const dayTimes = resolveDayTimes({ plan: dayPlan, now, sunEvents });
       const mood = this.getMood();
 
+      // EVENT-LOG edge captures (docs/38 §15.2): the arbiter is PURE, so its
+      // lifecycle transitions (program hold-expiry end, pending-program lease
+      // arm / lease auto-start) are detected here by diffing the state around
+      // it. Captured BEFORE evaluateTick/arbitrate; compared after. EDGE-ONLY
+      // by construction — same-state ticks log nothing.
+      const prevProgram = this.state.activeProgram
+        ? { cueId: this.state.activeProgram.cueId } : null;
+      const prevPendingCueId = this.state.pendingProgram
+        ? this.state.pendingProgram.cueId : null;
+
       const { fires, state: nextState } = evaluateTick({ now, plan: dayPlan, state: this.state, mood, dayTimes });
       this.state = nextState;
       this.state.currentMood = mood.party ? 'party' : 'calm';
@@ -1070,6 +1142,41 @@ export class TimelineService {
           this.wouldFire.push({ cueId: fire.cueId, reason: fire.reason, controller: this.state.controller, atMs: now });
           if (this.wouldFire.length > RECENT_MAX) this.wouldFire.shift();
         }
+      }
+
+      // ── lifecycle edges out of the arbiter (docs/38 §15.2, edge-only) ──────
+      // Logged BEFORE the dispatch loop so the transition precedes the fire it
+      // causes (auto-start lifecycle → program fire; program end → autopilot
+      // resume) in the ring's insertion order.
+      const pendNow = this.state.pendingProgram;
+      // Pending-program lease ARMED: a due program found the deck in manual and
+      // armed a countdown lease instead of firing (docs/38 §16.5). cueId edge —
+      // a lease re-observed on later ticks (same cue) is never re-logged.
+      if (pendNow && pendNow.cueId && pendNow.cueId !== prevPendingCueId) {
+        const inSec = Math.max(0, Math.round((pendNow.expiresAtMs - now) / 1000));
+        this._recordLifecycle(
+          `Show pending: ${pendNow.label || pendNow.cueId} (auto-starts in ${inSec}s)`,
+          'lease-armed', { cueId: pendNow.cueId, source: 'auto' },
+        );
+      }
+      // Pending-program lease AUTO-START: the lease expired un-actioned and the
+      // arbiter promoted it to the active program this tick (docs/38 §16.5 I2).
+      if (prevPendingCueId && !pendNow && this.state.activeProgram
+          && this.state.activeProgram.cueId === prevPendingCueId
+          && this.state.activeProgram.startedAtMs === now) {
+        this._recordLifecycle(
+          `Show auto-started: ${this._cueLabelFor(prevPendingCueId)}`,
+          'lease-expired', { cueId: prevPendingCueId, source: 'auto' },
+        );
+      }
+      // Program HOLD EXPIRED: the arbiter cleared an active program whose hold
+      // window lapsed. (A program REPLACED by another leaves activeProgram set,
+      // so it lands as the new program's fire, not a spurious "ended".)
+      if (prevProgram && !this.state.activeProgram) {
+        this._recordLifecycle(
+          `Program ended (hold expired): ${this._cueLabelFor(prevProgram.cueId)}`,
+          'hold-expired', { cueId: prevProgram.cueId, source: 'auto' },
+        );
       }
 
       for (const act of actions) {
@@ -1330,6 +1437,9 @@ export class TimelineService {
     this._deckWindowCueId = null;
     this._defaultCueActive = false;
     this._defaultCueFailKey = null;
+    // Event log (docs/38 §15.2): the activation opens the (just-cleared) ring —
+    // logged BEFORE _catchUp so it precedes the plan's catch-up fire.
+    this._recordLifecycle(`Plan activated: ${name}`, 'activate', { source: 'manual' });
     await this._catchUp();
     this._broadcastState();
     return name;
@@ -1341,8 +1451,20 @@ export class TimelineService {
     if (mode !== 'armed' && mode !== 'paused') {
       throw new Error("mode must be 'armed' or 'paused'");
     }
+    const prevMode = this.state.mode;
     this.state.mode = mode;
-    if (mode === 'armed') this.state.manualHoldUntilMs = null;
+    if (mode === 'armed') {
+      this.state.manualHoldUntilMs = null;
+      this._holdLatched = false; // explicit arm ends the hold — no expiry log
+    }
+    // Event log (docs/38 §15.2): PAUSED / ARMED are operator lifecycle
+    // transitions. EDGE-ONLY — a repeated POST of the current mode logs nothing.
+    if (prevMode !== mode) {
+      this._recordLifecycle(
+        mode === 'paused' ? 'Timeline paused' : 'Timeline armed',
+        mode === 'paused' ? 'pause' : 'arm', { source: 'manual' },
+      );
+    }
     // PAUSE stops the plan from driving the deck → release the soft deck-pin so
     // the 'plan' controlLock clears (docs/38 §16.9). ARM re-enters the driving
     // state; the baseline reconcile / next tick re-pins as needed.
@@ -1367,6 +1489,10 @@ export class TimelineService {
     // A hold is operator takeover — reflect that in the controller immediately
     // rather than letting it read stale (e.g. 'autopilot') until the next tick.
     this.state.controller = 'manual';
+    // Event log (docs/38 §15.2): HOLD with its minutes. The latch arms the
+    // one-shot "Hold expired" edge in the tick (a re-hold just re-arms it).
+    this._holdLatched = true;
+    this._recordLifecycle(`Hold for ${m} min`, 'hold', { source: 'manual' });
     // A hold stops the plan from driving the deck → release the soft deck-pin
     // (docs/38 §16.9). Async release; the sync return keeps the REST contract.
     this._reconcileDeckPin().catch((e) => {
@@ -1384,9 +1510,17 @@ export class TimelineService {
    * auto-release, but triggered by the operator rather than by inactivity.
    */
   async resume() {
+    // Event log (docs/38 §15.2): explicit operator hand-back. EDGE-ONLY — a
+    // resume that changes nothing (already armed, no hold, no lease) logs
+    // nothing. Logged BEFORE _catchUp so the resume precedes its catchUp fire.
+    const wasManual = this.state.mode !== 'armed'
+      || !!this.state.operatorLease
+      || (typeof this.state.manualHoldUntilMs === 'number' && this.state.manualHoldUntilMs > this.nowFn());
     this.state.mode = 'armed';
     this.state.manualHoldUntilMs = null;
     this.state.operatorLease = null;
+    this._holdLatched = false; // explicit resume ends any hold — no expiry log
+    if (wasManual) this._recordLifecycle('Plan resumed by operator', 'resume', { source: 'manual' });
     try {
       await this._catchUp();
     } catch (e) {
@@ -1409,6 +1543,11 @@ export class TimelineService {
    */
   takeover() {
     const expiresAtMs = this.nowFn() + this.operatorLeaseSec * 1000;
+    // Event log (docs/38 §15.2): the ARM edge only — takeover() is idempotent
+    // and CaptainPad re-calls it to refresh the lease; refreshes log nothing.
+    if (this.state.mode !== 'overridden') {
+      this._recordLifecycle('Operator takeover (lease armed)', 'takeover', { source: 'manual' });
+    }
     this.state.mode = 'overridden';
     this.state.operatorLease = { expiresAtMs };
     // Reflect the takeover in the controller immediately (don't read stale
@@ -1450,12 +1589,26 @@ export class TimelineService {
     this.state.mode = 'armed';
     this.state.operatorLease = null;
     this.state.manualHoldUntilMs = null;
+    this._holdLatched = false; // the release supersedes any hold-expiry log
+    // Event log (docs/38 §15.2): auto-resume on lease expiry. One-shot by
+    // construction (the lease is nulled here). Logged BEFORE _catchUp so the
+    // release precedes its catchUp fire in the ring.
+    this._recordLifecycle('Operator lease released — plan resumed', 'lease-released', { source: 'auto' });
     console.log(`  🔓 [timeline] operator lease released (expired ${expiry}) — resuming plan at now`);
     await this._catchUp();
   }
 
   async setAutopilotEnabled(enabled) {
     if (typeof enabled !== 'boolean') throw new Error('enabled must be a boolean');
+    // Event log (docs/38 §15.2): the AUTO toggle. EDGE-ONLY — re-posting the
+    // current value logs nothing. Logged before the apply so the toggle
+    // precedes any baseline/program fire it causes.
+    if ((this.state.autopilotEnabled !== false) !== enabled) {
+      this._recordLifecycle(
+        enabled ? 'Autopilot enabled' : 'Autopilot disabled',
+        'autopilot-toggle', { source: 'manual' },
+      );
+    }
     this.state.autopilotEnabled = enabled;
     try {
       if (enabled) {
@@ -1486,6 +1639,12 @@ export class TimelineService {
     if (!this.state.activeProgram) {
       return { activeProgram: null, controller: this.state.controller };
     }
+    // Event log (docs/38 §15.2): operator END SHOW. Edge-only via the early
+    // return above (no active program → nothing ends, nothing logs).
+    this._recordLifecycle(
+      `Program ended: ${this._cueLabelFor(this.state.activeProgram.cueId)}`,
+      'program-end', { cueId: this.state.activeProgram.cueId, source: 'manual' },
+    );
     this.state.activeProgram = null;
     try {
       if (this.state.autopilotEnabled !== false && this.state.mode !== 'paused' && this.state.mode !== 'overridden') {
@@ -1525,6 +1684,7 @@ export class TimelineService {
     // Exit manual — the operator chose to hand the deck to the program.
     this.state.mode = 'armed';
     this.state.manualHoldUntilMs = null;
+    this._holdLatched = false; // the enable supersedes any hold-expiry log
     this.state.activeProgram = {
       cueId: pend.cueId,
       startedAtMs: now,
@@ -1558,6 +1718,12 @@ export class TimelineService {
   dismissProgram() {
     const pend = this.state.pendingProgram;
     if (!pend || !pend.cueId) return { ok: false, error: 'no pending program' };
+    // Event log (docs/38 §15.2): operator dismissed the pending show. Edge-only
+    // via the early return above (nulling the lease makes this one-shot).
+    this._recordLifecycle(
+      `Show dismissed: ${pend.label || pend.cueId}`,
+      'lease-dismissed', { cueId: pend.cueId, source: 'manual' },
+    );
     this._latchFiredToday(pend.cueId, this.nowFn());
     this.state.pendingProgram = null;
     this._persistAndBroadcast();
@@ -1583,11 +1749,23 @@ export class TimelineService {
     const now = this.nowFn();
     const sunEvents = this._sunEventsFor(now);
     const dayTimes = resolveDayTimes({ plan: this.plan, now, sunEvents });
+    const prevPendingCueId = this.state.pendingProgram ? this.state.pendingProgram.cueId : null;
     const { actions, state: arbState } = arbitrate({
       now, plan: this.plan, state: this.state, fires: [{ cueId: id, reason: 'manual' }], dayTimes,
       leaseSec: this.programLeaseSec,
     });
     this.state = arbState;
+    // A MANUAL fire of a program cue while the deck is in manual control ARMS a
+    // lease instead of firing (docs/38 §16.4) — surface that in the event log,
+    // same edge rule as the tick (cueId change only).
+    const pendNow = this.state.pendingProgram;
+    if (pendNow && pendNow.cueId && pendNow.cueId !== prevPendingCueId) {
+      const inSec = Math.max(0, Math.round((pendNow.expiresAtMs - now) / 1000));
+      this._recordLifecycle(
+        `Show pending: ${pendNow.label || pendNow.cueId} (auto-starts in ${inSec}s)`,
+        'lease-armed', { cueId: pendNow.cueId, source: 'manual' },
+      );
+    }
     const steps = [];
     try {
       for (const act of actions) {

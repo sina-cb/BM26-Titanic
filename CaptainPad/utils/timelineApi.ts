@@ -45,10 +45,21 @@ export interface TimelineCue {
   lastError: string | null;
 }
 
+// One EVENT-LOG entry (engine `recentFires` ring — field name kept for wire
+// compat). Pinned wire shape:
+//   { kind:'fire'|'lifecycle', cueId?, label, reason, source, atMs }
+// kind 'fire' = a cue application (manual/auto/catchUp/default source);
+// kind 'lifecycle' = a plan/mode transition (activated, paused/resumed, hold,
+// autopilot toggle, operator takeover/lease, program end, pending lease).
+// kind/label/source are OPTIONAL so an older engine's plain fire entries
+// ({cueId, atMs, reason}) still parse and render.
 export interface TimelineRecentFire {
-  cueId: string;
+  cueId?: string | null;
   atMs: number;
   reason: string;
+  kind?: 'fire' | 'lifecycle' | string;
+  label?: string;
+  source?: string; // 'manual' | 'auto' | 'catchUp' | 'default' | 'system' | …
 }
 
 export interface TimelineWouldFire {
