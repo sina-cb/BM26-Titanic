@@ -33,11 +33,21 @@ const CONFIG_FILE = path.join(__dirname, '..', 'config.yaml');
  *   (or immediately if transitions are disabled).
  */
 export class Autopilot {
-  constructor(listPatternsFn, patternsDir, currentPatternCb, changePatternFn) {
+  constructor(listPatternsFn, patternsDir, currentPatternCb, changePatternFn, onScheduleFn) {
     this.listPatterns = listPatternsFn;
     this.patternsDir = patternsDir;
     this.currentPatternCb = currentPatternCb;
     this.changePattern = changePatternFn;
+    // Optional hook fired on EVERY (re)schedule — including after each swap — so
+    // the server can re-broadcast the fresh next-swap time for the deck
+    // countdown (operator request 2026-07-02: show when the next pattern
+    // transition lands). Works identically for operator- and plan-driven
+    // autopilot: both flow through updateState → _scheduleNext.
+    this.onSchedule = typeof onScheduleFn === 'function' ? onScheduleFn : null;
+    // Wall-clock ms when the next cycle fires (null when inactive). The deck
+    // subtracts Date.now() to render the countdown — same absolute-ms
+    // convention as the operator-lease / program countdowns.
+    this._nextSwapAtMs = null;
     this.cycleTimer = null;
     // generation counter: bumped on every state change. A scheduled
     // tick captures the current gen at schedule time and bails on
@@ -101,10 +111,21 @@ export class Autopilot {
       clearTimeout(this.cycleTimer);
       this.cycleTimer = null;
     }
-    if (!this.state.active) return;
+    if (!this.state.active) {
+      this._nextSwapAtMs = null;
+      if (this.onSchedule) this.onSchedule();
+      return;
+    }
     const delayMs = (parseInt(this.state.delay_s, 10) || 30) * 1000;
     const gen = this.generation;
+    this._nextSwapAtMs = Date.now() + delayMs;
     this.cycleTimer = setTimeout(() => this._runTick(gen), delayMs);
+    if (this.onSchedule) this.onSchedule();
+  }
+
+  /** Wall-clock ms when the next pattern swap fires, or null when inactive. */
+  get nextSwapAtMs() {
+    return this.state.active && typeof this._nextSwapAtMs === 'number' ? this._nextSwapAtMs : null;
   }
 
   /**

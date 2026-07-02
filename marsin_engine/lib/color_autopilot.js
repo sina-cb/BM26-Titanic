@@ -104,6 +104,12 @@ export class ColorAutopilot {
     // doesn't match (someone changed state between schedule and fire). Also
     // cancels any in-flight tween (a stale tween frame becomes a no-op).
     this.generation = 0;
+    // Optional hook fired on EVERY (re)schedule so the server can re-broadcast
+    // the fresh next-swap time for the deck color-autopilot countdown (operator
+    // request 2026-07-02).
+    this.onSchedule = typeof hooks.onSchedule === 'function' ? hooks.onSchedule : null;
+    // Injected-clock ms when the next palette switch fires (null when inactive).
+    this._nextSwapAtMs = null;
     // Sequential cursor — index of the LAST applied palette in this.state.palettes.
     // -1 means "nothing applied yet"; the first tick applies index 0.
     this._cursor = -1;
@@ -220,9 +226,14 @@ export class ColorAutopilot {
       this.cycleTimer = null;
     }
     const st = this.state;
-    if (!st.active || !Array.isArray(st.palettes) || st.palettes.length === 0) return;
+    if (!st.active || !Array.isArray(st.palettes) || st.palettes.length === 0) {
+      this._nextSwapAtMs = null;
+      if (this.onSchedule) this.onSchedule();
+      return;
+    }
     const delayMs = (Number(st.delay_s) > 0 ? Number(st.delay_s) : DEFAULT_DELAY_S) * 1000;
     const gen = this.generation;
+    this._nextSwapAtMs = this._now() + delayMs;
     this.cycleTimer = setTimeout(() => {
       this._runTick(gen).catch((e) => {
         console.warn('[ColorAutopilot] tick failed:', e && e.message ? e.message : e);
@@ -232,6 +243,12 @@ export class ColorAutopilot {
     // bump-sweep timer): the engine stays up via its HTTP server, and tests must
     // not hang on a pending palette tick.
     if (typeof this.cycleTimer.unref === 'function') this.cycleTimer.unref();
+    if (this.onSchedule) this.onSchedule();
+  }
+
+  /** Injected-clock ms when the next palette switch fires, or null when inactive. */
+  get nextSwapAtMs() {
+    return this.state.active && typeof this._nextSwapAtMs === 'number' ? this._nextSwapAtMs : null;
   }
 
   // Stop the cycle (clears the pending timer + any in-flight crossfade tween).

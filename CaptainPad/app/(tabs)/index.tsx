@@ -59,6 +59,16 @@ const CHANNEL_COLOR_SWATCHES: string[] = [
   '#EC407A', // pink
 ];
 
+// Deck autopilot next-swap countdown: "M:SS" remaining until the absolute
+// wall-clock `nextAtMs`, or null when there's no pending swap. Clamped at 0:00
+// so a just-elapsed timer never flashes a negative before the next broadcast.
+// Same absolute-ms convention as the plan/lease countdowns (PlanLockBanner).
+function formatSwapCountdown(nextAtMs: number | null, nowMs: number): string | null {
+  if (nextAtMs === null || !Number.isFinite(nextAtMs)) return null;
+  const total = Math.max(0, Math.round((nextAtMs - nowMs) / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
 // ── Global Effect Button moved to RigGlobals ────────────────────────────
 
 const ToggleButton = ({ id, name, initialValue = 0, onChange }: { id: number, name: string, initialValue?: number, onChange: Function }) => {
@@ -229,6 +239,20 @@ export default function ControlDeckScreen() {
     shuffle: false,
   });
 
+  // Next-swap countdowns (operator request 2026-07-02: "add 2 countdown timers
+  // for the auto pilot pattern and auto pilot colors in the deck view... this
+  // is a deck feature, but the plan needs to be using it too"). Both hold the
+  // wall-clock ms of the next scheduled swap (null when the respective
+  // autopilot is off). The engine stamps these in autopilot.js /
+  // color_autopilot.js `_scheduleNext` and re-broadcasts on every cycle, so the
+  // same field works identically whether the operator or a plan cue is driving
+  // the cadence — no separate plan route. A 1 s ticker (nowMs) re-renders them.
+  const [patternNextSwapAtMs, setPatternNextSwapAtMs] = useState<number | null>(null);
+  const [colorNextSwapAtMs, setColorNextSwapAtMs] = useState<number | null>(null);
+  // 1 Hz clock that drives the countdown re-render. Only ticks while at least
+  // one autopilot has a pending swap, so an idle deck costs no timers.
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+
   // Live swap state — the engine broadcasts `deckSwapStarted` / `…Complete`
   // around every soft swap. We use this to grey out the playlist (so taps
   // during the fade are ignored client-side — server also returns 409 if
@@ -293,6 +317,17 @@ export default function ControlDeckScreen() {
     }, [])
   );
 
+  // Countdown ticker: re-render once a second while either autopilot has a
+  // scheduled swap. The engine re-broadcasts the absolute next-swap ms on every
+  // cycle, so this clock only has to close the sub-second gap between broadcasts
+  // — we never extrapolate past a swap, and an idle deck runs no interval.
+  const anyCountdownActive = patternNextSwapAtMs !== null || colorNextSwapAtMs !== null;
+  React.useEffect(() => {
+    if (!anyCountdownActive) return;
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [anyCountdownActive]);
+
   // Control plane: deck channel state, autopilot, deck-transition
   // config, soft-swap lifecycle markers.
   const onControl = useCallback((msg: EngineMessage) => {
@@ -336,6 +371,11 @@ export default function ControlDeckScreen() {
         setPlaylistDelayStr(msg.delay_s as string);
       }
       if (typeof msg.shuffle === 'boolean') setIsShuffle(msg.shuffle);
+      // Next-pattern-swap wall-clock ms (null when inactive) — the engine
+      // re-broadcasts it on every cycle, so the deck countdown stays accurate
+      // whether the operator OR a plan cue is driving the cadence.
+      const nextSwap = (msg as { nextSwapAtMs?: unknown }).nextSwapAtMs;
+      setPatternNextSwapAtMs(typeof nextSwap === 'number' ? nextSwap : null);
     } else if (msg.type === 'deckTransitionConfig') {
       setDeckTxConfig((prev) => ({
         enabled: typeof msg.enabled === 'boolean' ? msg.enabled : prev.enabled,
@@ -363,6 +403,11 @@ export default function ControlDeckScreen() {
         shuffle: typeof msg.shuffle === 'boolean' ? msg.shuffle : prev.shuffle,
         transitionMs: typeof msg.transitionMs === 'number' ? msg.transitionMs : prev.transitionMs,
       }));
+      // Next-palette-swap wall-clock ms (null when inactive) — mirrors the
+      // pattern-autopilot countdown; re-broadcast on every color cycle, so it
+      // ticks accurately under operator OR plan-cue drive.
+      const nextColorSwap = (msg as { nextSwapAtMs?: unknown }).nextSwapAtMs;
+      setColorNextSwapAtMs(typeof nextColorSwap === 'number' ? nextColorSwap : null);
     } else if (msg.type === 'deckSwapStarted') {
       setDeckSwapInFlight(true);
       const tm = (msg as unknown as { transitionMode?: string }).transitionMode;
@@ -948,6 +993,18 @@ export default function ControlDeckScreen() {
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
                   <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>AUTOPILOT</Text>
+                  {/* Next-pattern-swap countdown — rides right after the label,
+                      only while a swap is scheduled. Drives from the engine's
+                      re-broadcast next-swap ms, so it reads identically whether
+                      the operator or a plan cue owns the cadence. */}
+                  {formatSwapCountdown(patternNextSwapAtMs, nowMs) ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <IconSymbol name="clock" size={11} color={C.primary} />
+                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.primary, letterSpacing: 0.5 }}>
+                        {formatSwapCountdown(patternNextSwapAtMs, nowMs)}
+                      </Text>
+                    </View>
+                  ) : null}
                   <TouchableOpacity
                     onPress={() => { notifyInteraction(); const nx = !isPlaylistActive; setPlaylistActive(nx); setAutopilot(nx, playlistDelayStr, isShuffle); }}
                     style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: isPlaylistActive ? C.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: isPlaylistActive ? 'transparent' : C.ghostBorder }}
@@ -1039,6 +1096,7 @@ export default function ControlDeckScreen() {
               config={colorAutopilot}
               onChange={handleColorAutopilotChange}
               disabled={isConnected === false || planGate}
+              countdownLabel={formatSwapCountdown(colorNextSwapAtMs, nowMs)}
             />
 
             {/* ── DECK TRANSITIONS ───────────────────────────────────

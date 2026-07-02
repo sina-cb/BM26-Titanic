@@ -2970,6 +2970,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       active: !!st.active,
       delay_s: st.delay_s !== undefined ? String(st.delay_s) : '30',
       shuffle: !!st.shuffle,
+      // Wall-clock ms of the next pattern swap (null when inactive) — drives the
+      // deck's "next pattern in M:SS" countdown. Re-broadcast on every cycle via
+      // the daemon's onSchedule hook so it stays fresh after each swap.
+      nextSwapAtMs: (typeof autopilot !== 'undefined' && autopilot) ? autopilot.nextSwapAtMs : null,
     });
   }
 
@@ -3337,7 +3341,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           console.warn('Autopilot playlist swap failed:', e.message);
         }
       }
-    }
+    },
+    // Re-broadcast the next-swap time on every (re)schedule so the deck's
+    // pattern-autopilot countdown stays accurate after each swap.
+    () => broadcastAutopilot(),
   );
 
   // ── COLOR autopilot (palette cycling, docs/39) ──────────────────────
@@ -3383,6 +3390,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   const colorAutopilot = new ColorAutopilot(applyColorPalette, undefined, {
     resolvePaletteFn: resolveColorPaletteParams,
     applyParamsFn: applyColorPaletteParams,
+    // Re-broadcast the next-swap time on every (re)schedule so the deck
+    // color-autopilot countdown stays accurate after each palette switch.
+    onSchedule: () => broadcastColorAutopilot(),
   });
 
   // Single payload shape for every colorAutopilot writer (REST, timeline cue),
@@ -3398,6 +3408,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // transitionMs (docs/39): crossfade duration on a palette switch. 0 ==
       // hard cut. Older persisted configs omit it → report 0.
       transitionMs: typeof st.transitionMs === 'number' ? st.transitionMs : 0,
+      // Wall-clock ms of the next palette switch (null when inactive) — drives
+      // the deck's "next color in M:SS" countdown. Kept fresh each cycle via the
+      // daemon's onSchedule hook.
+      nextSwapAtMs: colorAutopilot.nextSwapAtMs,
     };
   }
   function broadcastColorAutopilot() {
@@ -7784,6 +7798,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         active: !!st.active,
         delay_s: st.delay_s !== undefined ? String(st.delay_s) : '30',
         shuffle: !!st.shuffle,
+        // Include the next-swap time so a late-joining deck paints the pattern
+        // countdown immediately (mirrors broadcastAutopilot + the colorAutopilot
+        // snapshot below, which already spreads the field).
+        nextSwapAtMs: (typeof autopilot !== 'undefined' && autopilot) ? autopilot.nextSwapAtMs : null,
       }));
     } catch (e) {
       // never let a snapshot send break a fresh WS handshake

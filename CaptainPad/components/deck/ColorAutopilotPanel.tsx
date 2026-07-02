@@ -47,9 +47,14 @@ export interface ColorAutopilotPanelProps {
   /** Disable every control (offline, or the soft PLAN lock is engaged). The
    *  panel still RENDERS (read-only) so the operator can see the live state. */
   disabled?: boolean;
+  /** "M:SS" until the next palette swap, or null when none is scheduled. The
+   *  parent owns the 1 Hz clock + the engine's re-broadcast next-swap ms (so it
+   *  ticks the same whether the operator or a plan cue drives the cadence); we
+   *  just render it next to the label as the pattern autopilot does. */
+  countdownLabel?: string | null;
 }
 
-export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config, onChange, disabled }) => {
+export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config, onChange, disabled, countdownLabel }) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
 
@@ -98,6 +103,16 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>COLOR AUTOPILOT</Text>
+          {/* Next-palette-swap countdown — matched pair with the pattern
+              autopilot's timer chip; only shows while a swap is scheduled. */}
+          {countdownLabel ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <IconSymbol name="clock" size={11} color={C.primary} />
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.primary, letterSpacing: 0.5 }}>
+                {countdownLabel}
+              </Text>
+            </View>
+          ) : null}
           <TouchableOpacity
             disabled={disabled}
             onPress={() => onChange({ active: !config.active })}
