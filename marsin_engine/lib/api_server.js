@@ -6032,15 +6032,34 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // /\/mixer\/view/, otherwise it would also catch
       // /mixer/view-override and shadow the override handler below.
       readBody(data => {
-        // While the override is engaged we still let the user pre-set
-        // their next view; we save it so `clear` knows where to land,
-        // but don't actually move the live fader.
-        if (viewOverrideMode === 'deck') {
+        // View routing depends on WHO owns the deck-pin:
+        //
+        //   • HARD PortWatch lock ('portwatch'): the operator is locked out of
+        //     the output. We still let them pre-set their NEXT view — saved so
+        //     `clear`/lease-expiry knows where to land — but the live fader
+        //     stays frozen on the deck.
+        //
+        //   • SOFT plan lock ('plan') OR no lock: move the LIVE fader to the
+        //     operator's chosen view. A soft plan lock permits navigation, and
+        //     a mixer-view write under it is the operator's explicit output
+        //     intent during a takeover (CaptainPad pairs it with POST
+        //     /timeline/takeover). Keeping savedTargetViewFader in lock-step
+        //     means the plan's deck-pin release restores the operator's CHOSEN
+        //     view, never a stale pre-plan (often deck/black) value — so the
+        //     "mixer master goes black on takeover" outcome is deterministic
+        //     regardless of the /timeline/takeover vs /mixer/view call order:
+        //     the live fader always ends on the operator's target (mixer → 1.0).
+        if (viewOverrideMode === 'deck' && controlLockSource === 'portwatch') {
           if (data.view === 'deck') savedTargetViewFader = 0.0;
           else if (data.view === 'mixer') savedTargetViewFader = 1.0;
         } else {
           if (data.view === 'deck') mixer.targetViewFader = 0.0;
           else if (data.view === 'mixer') mixer.targetViewFader = 1.0;
+          // Under a soft plan pin keep the restore-target aligned with the live
+          // fader so a release can never clobber the operator back to deck.
+          if (viewOverrideMode === 'deck' && controlLockSource === 'plan') {
+            savedTargetViewFader = mixer.targetViewFader;
+          }
         }
         // ── Auto-finalize an in-flight deck swap on view → mixer ────
         // Per the operator's spec: navigating to the mixer tab while a

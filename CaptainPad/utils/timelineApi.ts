@@ -118,6 +118,16 @@ export interface TimelineState {
   // output from the running plan. The engine does NOT auto-take-over on a view
   // change — taking over is the explicit POST /timeline/takeover.
   forcingDeckView: boolean;
+  // True when the active plan is "in time": it has NO festival block (recurring
+  // nightly) OR today falls inside [festival.startDate, +days). The plan's
+  // control-lock (yellow "PLAN IS RUNNING") ONLY engages in-window — out of
+  // window the plan still exists/arms but does NOT lock the deck/mixer.
+  inFestivalWindow: boolean;
+  // Whole calendar days (plan tz) until festival.startDate, as a POSITIVE
+  // integer when the plan has a festival and today is before it; otherwise null
+  // (no festival, in-window, or already ended). Drives the plan-view-only
+  // "plan active — starts in X days" note.
+  festivalStartsInDays: number | null;
   // The operator-takeover lease (manual override of a running plan), or null
   // when no takeover is held. See TimelineOperatorLease.
   operatorLease: TimelineOperatorLease | null;

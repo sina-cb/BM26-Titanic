@@ -36,6 +36,7 @@ import { useOperatorTakeover } from '@/hooks/useTimeline';
 import { PlanIndicatorPill, PLAN_INDICATOR_CYAN } from '@/components/timeline/PlanIndicatorPill';
 import { useEngineLock } from '@/hooks/useEngineLock';
 import { PlanLockBanner } from '@/components/PlanLockBanner';
+import { PlanLockScrim } from '@/components/PlanLockScrim';
 import { ColorAutopilotPanel } from '@/components/deck/ColorAutopilotPanel';
 
 // 8pt hitSlop on every edge → a 28×28 visual button gets a 44×44 interactive
@@ -587,6 +588,16 @@ export default function ControlDeckScreen() {
           PLAN lock (planGate) the MASTER fader + FADE/TO BLACK/UP group and
           the whole GLOBALS row (SPEED/SIZE/SYNC/COLORS/QUEUE/TAP/BPM source)
           are disabled; taking over re-enables everything. */}
+      {/* ── Plan-lock content region ──────────────────────────────────
+          Everything the plan freezes lives inside this relative wrapper so
+          the PlanLockScrim (bottom of the wrapper) can hermetically blanket
+          it with ONE tap-catching layer — bulletproof against any control
+          (present or future) that doesn't wire its own `disabled`, which is
+          exactly how the deck overlay controls slipped through before. The
+          floating PlanLockBanner (above, zIndex 1000) and the bottom safety
+          bar (PANIC/BLACKOUT, a sibling BELOW this wrapper) stay OUTSIDE the
+          scrim so emergency recovery is never locked behind a takeover. */}
+      <View style={{ flex: 1, position: 'relative' }}>
       <DeckTopBar isConnected={isConnected} disabled={planGate} />
       <CPCControls disabled={planGate} />
       {/* ── Channel Preview Visualization ───────────────────────────── */}
@@ -1065,6 +1076,12 @@ export default function ControlDeckScreen() {
             />
           </ScrollView>
         </View>
+      </View>
+        {/* Hermetic plan-lock scrim — blankets the whole content region above
+            (top bar → 3 columns → overlays) with one tap-catching layer.
+            Active only under the soft PLAN lock and NOT during an operator
+            takeover (planGate = planLocked && !leaseHeld). */}
+        <PlanLockScrim active={planGate} />
       </View>
       {/* ── Global Rig Controls (Bottom) ───────────────────────────────
           GLOBAL EFFECTS as a full-width horizontal strip pinned at the

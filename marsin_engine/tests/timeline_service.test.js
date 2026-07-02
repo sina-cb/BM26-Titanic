@@ -1161,3 +1161,98 @@ test('savePlan over the active plan hot-reloads the in-memory plan and keeps the
   const evt = ring.find((e) => e.kind === 'lifecycle' && e.reason === 'save');
   assert.ok(evt, 'save-over-active must log a "Plan updated (live)" lifecycle event');
 });
+
+// ── Task A/B: festival-window gating of the plan soft deck-pin ──────────────
+// The 'plan' controlLock (yellow "PLAN IS RUNNING" soft-lock) must engage ONLY
+// while the plan is "in time" (today inside its festival span). Out of window
+// the plan may still drive the deck's CONTENT, but must NOT pin the view /
+// raise the lock. getState also surfaces the window state + a pre-festival
+// countdown for CaptainPad.
+
+function makeFestivalPlan() {
+  const plan = makePlan();
+  plan.schemaVersion = 2;
+  // BRC 2026 span: 2026-08-30 .. 2026-09-06 (8 days) in America/Los_Angeles.
+  plan.festival = { startDate: '2026-08-30', days: 8 };
+  return plan;
+}
+
+function setupFestival({ now }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tlsvc-fest-'));
+  const sceneDir = path.join(dir, 'scene_timeline');
+  const stateDir = path.join(dir, 'state');
+  fs.mkdirSync(sceneDir, { recursive: true });
+  fs.mkdirSync(stateDir, { recursive: true });
+  saveShowPlan(makeFestivalPlan(), path.join(sceneDir, 'test_plan.yaml'));
+  const { deps, calls } = makeDeps();
+  let nowMs = now;
+  const svc = new TimelineService({
+    scene: 'summer_camp_dome', sceneDir, stateDir,
+    getMood: () => ({ party: 0, value: 0 }),
+    deps, broadcast: () => {},
+    config: {
+      enabled: true, activePlan: 'test_plan', tickMs: 1000,
+      mood: { key: 'audioParty', partyThreshold: 0.5 }, colorPalettes: PALETTES,
+    },
+    nowFn: () => nowMs,
+  });
+  return { svc, calls, setNow: (n) => { nowMs = n; } };
+}
+
+// 2026-08-31 10:00 PT — festival day index 1 (inside the span).
+const FEST_IN_WINDOW = Date.UTC(2026, 7, 31, 17, 0, 0);
+// 2026-08-20 10:00 PT — ten calendar days BEFORE the span.
+const FEST_BEFORE_WINDOW = Date.UTC(2026, 7, 20, 17, 0, 0);
+
+test('Task A/B: out of festival window → no deck-pin, controlLock null, countdown surfaced', async () => {
+  const { svc, calls } = setupFestival({ now: FEST_BEFORE_WINDOW });
+  await svc.start();
+  await svc._tick();                 // exercise the deck-pin reconcile
+  svc.stop();
+  const st = svc.getState();
+  assert.equal(st.inFestivalWindow, false, 'today is before the festival span');
+  assert.equal(st.festivalStartsInDays, 10, 'ten calendar days until startDate');
+  assert.equal(st.planActive, true, 'plan is still armed + driving out of window');
+  assert.equal(calls.forceDeckView.length, 0, 'plan must NOT pin the deck out of window');
+  assert.equal(calls.viewState.mode, null, 'nothing pinned → controlLock cascades null');
+  assert.equal(st.forcingDeckView, false, 'forcingDeckView false out of window');
+});
+
+test('Task A/B: in festival window → deck-pin engaged, plan lock on, no countdown', async () => {
+  const { svc, calls } = setupFestival({ now: FEST_IN_WINDOW });
+  await svc.start();
+  svc.stop();
+  const st = svc.getState();
+  assert.equal(st.inFestivalWindow, true, 'today is inside the festival span');
+  assert.equal(st.festivalStartsInDays, null, 'no countdown once the festival has started');
+  assert.equal(st.planActive, true);
+  assert.ok(calls.forceDeckView.length >= 1, 'plan pins the deck in window');
+  assert.equal(calls.viewState.mode, 'deck', 'deck pinned → controlLock plan');
+  assert.equal(st.forcingDeckView, true, 'forcingDeckView true in window');
+});
+
+test('Task A: leaving the festival window releases the plan deck-pin', async () => {
+  const { svc, calls, setNow } = setupFestival({ now: FEST_IN_WINDOW });
+  await svc.start();
+  assert.equal(calls.viewState.mode, 'deck', 'pinned in window on boot');
+  // Advance the clock past the festival span (2026-09-08, well after index 7).
+  setNow(Date.UTC(2026, 8, 8, 17, 0, 0));
+  await svc._tick();                 // reconcile releases the pin
+  svc.stop();
+  const st = svc.getState();
+  assert.equal(st.inFestivalWindow, false, 'clock moved out of the span');
+  assert.ok(calls.releaseDeckView.length >= 1, 'the pin is released on leaving the window');
+  assert.equal(calls.viewState.mode, null, 'controlLock cascades null after release');
+  assert.equal(st.forcingDeckView, false, 'forcingDeckView false once out of window');
+});
+
+test('Task B: a no-festival plan is always in window (unchanged behavior)', async () => {
+  // makePlan() (schemaVersion 1) has NO festival → recurring-nightly, always locks.
+  const { svc, calls } = setup();
+  await svc.start();
+  svc.stop();
+  const st = svc.getState();
+  assert.equal(st.inFestivalWindow, true, 'a no-festival plan is always in window');
+  assert.equal(st.festivalStartsInDays, null, 'no festival → no countdown');
+  assert.ok(calls.forceDeckView.length >= 1, 'no-festival plan still pins the deck (unchanged)');
+});

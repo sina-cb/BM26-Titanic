@@ -662,6 +662,22 @@ export default function TimelineScreen() {
           </View>
         </View>
 
+        {/* Out-of-window note (plan-view ONLY — deliberately NOT shown on the
+            deck/mixer). When the plan is active but today is BEFORE its
+            festival span, the engine holds the lock OFF (inFestivalWindow
+            false) so the deck/mixer stay usable. Surface that here as a calm,
+            minimal note so the operator knows the plan is armed and merely
+            waiting, not broken. `festivalStartsInDays` is a positive int only
+            in this pre-festival window. */}
+        {state?.planActive && state?.inFestivalWindow === false && typeof state?.festivalStartsInDays === 'number' ? (
+          <View style={styles.nextCueRow}>
+            <IconSymbol name="clock" size={14} color="#f5a623" />
+            <Text style={[styles.nextCueText, { color: '#f5a623' }]} numberOfLines={2}>
+              {`Plan active — starts in ${state.festivalStartsInDays} day${state.festivalStartsInDays === 1 ? '' : 's'}. Deck & mixer stay unlocked until then.`}
+            </Text>
+          </View>
+        ) : null}
+
         {/* Active-program countdown */}
         {state?.activeProgram ? (
           <View style={styles.nextCueRow}>
@@ -895,6 +911,19 @@ export default function TimelineScreen() {
                     dayIndex={showAllDays ? dayIndex : null}
                     live={liveCueById.get(cue.id) ?? null}
                     fireable={draft === null || liveCueIds.has(cue.id)}
+                    // Distinguish WHY a draft cue can't fire so the hint is
+                    // actionable (operator confusion 2026-07-02: a saved cue on
+                    // a non-active plan still said "save + activate"). Editing
+                    // the ACTIVE plan → an un-fireable cue is merely UNSAVED
+                    // ("Save to fire"; hot-reload makes it live). A DIFFERENT
+                    // plan loaded in the maker → the whole plan isn't running
+                    // ("Activate this plan to fire"). The engine's fireCue only
+                    // targets the ACTIVE plan, so activation is mandatory there.
+                    fireBlockedReason={
+                      (draft === null || liveCueIds.has(cue.id))
+                        ? null
+                        : (draft.name === activePlanName ? 'save' : 'activate')
+                    }
                     onFire={fireCue}
                     styles={styles}
                     C={C}
@@ -1004,7 +1033,7 @@ function Banner({ styles, text, tone, C }: { styles: Styles; text: string; tone:
 // Renders a day's resolved cue (atLocal time + kind) and layers the LIVE engine
 // cue (countdown / error / enabled) over it when one matches by id.
 function CueRow({
-  cue, dayIndex, live, fireable, onFire, styles, C,
+  cue, dayIndex, live, fireable, fireBlockedReason, onFire, styles, C,
 }: {
   cue: OverviewCue;
   /** When set (ALL DAYS view), prefixes the row with its day number. */
@@ -1013,6 +1042,8 @@ function CueRow({
   live: TimelineCue | null;
   /** Whether this cue exists in the ACTIVE plan (so it can be fired). */
   fireable: boolean;
+  /** Why FIRE is blocked (drives the hint), or null when fireable. */
+  fireBlockedReason: 'save' | 'activate' | null;
   onFire: (id: string) => void;
   styles: Styles;
   C: Palette;
@@ -1032,20 +1063,25 @@ function CueRow({
   // the engine fireCue(id) throw `cue "<id>" not found`. So we disable FIRE with a
   // clear "save + activate" hint for those; every active-plan cue fires normally.
   const canFire = fireable;
+  const fireHint = fireBlockedReason === 'save'
+    ? 'save to fire'
+    : fireBlockedReason === 'activate'
+      ? 'activate this plan to fire'
+      : null;
   return (
     <View style={[styles.cueRow, hasError && { borderColor: C.error, backgroundColor: C.errorContainer }]}>
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={[styles.cueLabel, hasError && { color: C.error }]} numberOfLines={1}>{cue.label}</Text>
         <Text style={styles.cueTrigger} numberOfLines={1}>{subtitle}</Text>
         {hasError ? <Text style={styles.cueError} numberOfLines={2}>{live!.lastError}</Text> : null}
-        {!canFire ? <Text style={styles.cueTrigger} numberOfLines={1}>save + activate to fire</Text> : null}
+        {fireHint ? <Text style={styles.cueTrigger} numberOfLines={1}>{fireHint}</Text> : null}
       </View>
       <Text style={[styles.cueCountdown, live && !live.enabled && { color: C.icon }]}>{countdown}</Text>
       <TouchableOpacity
         onPress={() => onFire(cue.id)}
         disabled={!canFire}
         style={[styles.fireButton, !canFire && { opacity: 0.4 }]}
-        accessibilityLabel={canFire ? `Fire cue ${cue.label}` : `Fire cue ${cue.label} (unavailable — save and activate the plan first)`}
+        accessibilityLabel={canFire ? `Fire cue ${cue.label}` : `Fire cue ${cue.label} (${fireHint || 'unavailable'})`}
         accessibilityState={{ disabled: !canFire }}
       >
         <Text style={styles.fireButtonLabel}>FIRE</Text>

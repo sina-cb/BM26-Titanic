@@ -34,7 +34,9 @@ import { loadShowPlan, saveShowPlan, defaultShowPlan, validateShowPlan } from '.
 import {
   resolveDayTimes, evaluateTick, activePhase, dayKeyFor, anchorToMs, dateClockToEpochMs,
 } from './triggers.js';
-import { applicableCues, festivalDayIndex, festivalDateFor } from './festival.js';
+import {
+  applicableCues, festivalDayIndex, festivalDateFor, festivalStartsInDays,
+} from './festival.js';
 import { loadTimelineState, saveTimelineState } from './timeline_state.js';
 import { arbitrate, resolveHold } from './arbiter.js';
 
@@ -453,6 +455,13 @@ export class TimelineService {
   // operator view-change off deck is what arms the operator-takeover lease
   // (wired in api_server's /mixer/view-override route). FAIL LOUD if missing.
   async _forceDeckView(steps) {
+    // FESTIVAL-WINDOW GATE (docs/38 §15.2): the plan's soft deck-pin (and the
+    // yellow 'plan' controlLock it raises) engages ONLY while the plan is in
+    // time. Out of window the plan may still drive the deck's content
+    // (baseline/cues load + autopilot), but it must NOT pin the view / raise the
+    // lock — so CaptainPad keeps full deck/mixer control. A no-op out of window;
+    // _reconcileDeckPin releases any pin that predates leaving the window.
+    if (!this._inFestivalWindow()) return;
     if (typeof this.deps.forceDeckView !== 'function') {
       throw new Error('forceDeckView dep is required to pin output to the deck');
     }
@@ -894,6 +903,18 @@ export class TimelineService {
     else await this._disarmBaselineAutopilot();
   }
 
+  // Whether the plan is "in time" — TODAY falls inside its festival span
+  // (docs/38 §15.2). A plan with NO festival block is a recurring-nightly plan
+  // and is ALWAYS in window (it locks every night). A plan WITH a festival span
+  // is in window only on days [startDate, startDate+days-1] in the plan's tz;
+  // outside the span the plan must NOT soft-pin the deck / raise the 'plan'
+  // controlLock (operator: the yellow "PLAN IS RUNNING" lock should engage only
+  // while the plan is in time). Uses the injected clock — never Date.now().
+  _inFestivalWindow() {
+    if (!this.plan || !this.plan.festival) return true; // no festival → always locks
+    return festivalDayIndex(this.plan, this.nowFn()) !== null;
+  }
+
   // True when the plan is currently DRIVING the rig (docs/38 §16). Mirrors the
   // `planActive` computed in getState(): autopilot-or-program controller AND not
   // paused/overridden. When false the plan owns nothing and its soft deck-pin
@@ -914,7 +935,11 @@ export class TimelineService {
   // when nothing is pinned by the plan). Re-pinning on resume/arm is handled by
   // the existing _forceDeckView calls in the apply/baseline paths.
   async _reconcileDeckPin() {
-    if (this._isPlanDrivingDeck()) return; // plan drives → its apply paths keep the pin
+    // A plan that is out of its festival window is treated exactly like a
+    // non-driving plan for the purpose of the deck-pin: release the pin so the
+    // 'plan' controlLock clears even while the plan is armed + driving content
+    // (docs/38 §15.2). In window, keep the pin iff the plan is driving.
+    if (this._isPlanDrivingDeck() && this._inFestivalWindow()) return;
     await this._releaseDeckView(null);
   }
 
@@ -1266,6 +1291,7 @@ export class TimelineService {
         type: 'timelineState',
         mode: 'armed', scene: this.scene, activePlan: this.activePlan,
         controller: 'autopilot', planActive: false, forcingDeckView: false,
+        inFestivalWindow: this._inFestivalWindow(), festivalStartsInDays: festivalStartsInDays(this.plan, now),
         autopilotEnabled: true, activeProgram: null,
         pendingProgram: null, operatorLease: null, operatorLeaseSec: this.operatorLeaseSec,
         currentPhase: null, currentMood: 'calm', party: 0, moodValue: 0,
@@ -1366,6 +1392,11 @@ export class TimelineService {
       controller,
       planActive,
       forcingDeckView,
+      // Festival-window surface (docs/38 §15.2): whether the plan is "in time"
+      // (drives the 'plan' controlLock gate), and — when it hasn't started yet —
+      // the whole-day countdown to festival.startDate in plan.location.tz.
+      inFestivalWindow: this._inFestivalWindow(),
+      festivalStartsInDays: festivalStartsInDays(this.plan, now),
       autopilotEnabled: this.state.autopilotEnabled !== false,
       activeProgram,
       pendingProgram,

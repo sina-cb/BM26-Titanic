@@ -660,7 +660,7 @@ export function CueEditorSheet({
             }}
           />
           <Text style={[styles.hint, { marginTop: 8 }]}>
-            How this cue crossfades onto the deck. Default keeps the deck's current setting.
+            How this cue crossfades onto the deck. Default keeps the deck&apos;s current setting.
           </Text>
           {transitionMode !== 'default' ? (
             <View style={{ marginTop: 10 }}>

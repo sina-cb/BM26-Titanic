@@ -86,6 +86,26 @@ export function applicableCues(plan, nowMs) {
 }
 
 /**
+ * Whole CALENDAR days (in the plan's tz) from TODAY until festival.startDate,
+ * computed via the same UTC-midnight day-key math as festivalDayIndex so DST
+ * never distorts the count. Returns a POSITIVE integer ONLY when the plan has a
+ * festival AND today is strictly BEFORE startDate. Returns null otherwise —
+ * no festival, today on/after startDate (in-window or already ended).
+ *
+ * @param {object} plan   — a normalized (v2) plan
+ * @param {number} nowMs  — injected clock
+ * @returns {number|null}
+ */
+export function festivalStartsInDays(plan, nowMs) {
+  const festival = plan && plan.festival;
+  if (!festival) return null;
+  const tz = plan.location.tz;
+  const todayKey = dayKeyFor(nowMs, tz);
+  const delta = dayKeyDelta(todayKey, festival.startDate); // startDate - today
+  return delta > 0 ? delta : null;
+}
+
+/**
  * The 'YYYY-MM-DD' calendar date of festival day `index`, computed from
  * startDate. tz-independent (anchored at UTC midnight). Throws on a bad index.
  *

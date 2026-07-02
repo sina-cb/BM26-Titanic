@@ -3,7 +3,7 @@ import { Animated, Easing, View, Text, TouchableOpacity, Alert } from 'react-nat
 import { router } from 'expo-router';
 import { shadow } from '@/styles/globalStyles';
 import { useEngineLock } from '@/hooks/useEngineLock';
-import { useOperatorTakeover } from '@/hooks/useTimeline';
+import { useOperatorTakeover, useTimeline } from '@/hooks/useTimeline';
 import { setTimelineMode } from '@/utils/timelineApi';
 
 // ── PlanLockBanner ─────────────────────────────────────────────────────
@@ -39,8 +39,15 @@ function formatMSS(sec: number | null): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
-export const PlanLockBanner: React.FC = () => {
+export const PlanLockBanner: React.FC<{
+  // Optional surface-specific takeover. The MIXER passes a handler that ALSO
+  // switches the engine output to the mixer (so the master isn't left black);
+  // the DECK omits it and uses the default plain takeover (its output already
+  // is the deck). Both engage the same operator lease.
+  onTemporaryTakeOver?: () => void | Promise<void>;
+}> = ({ onTemporaryTakeOver }) => {
   const { planLocked } = useEngineLock();
+  const { takeover } = useTimeline();
   // Second banner state (operator request 2026-07-02): the TAKEN-OVER lease.
   // The mixer header used to carry an inline "TOOK OVER · RESUMES M:SS ·
   // RESUME NOW" chip + the PlanIndicatorPill; both crowded the row off a
@@ -67,6 +74,24 @@ export const PlanLockBanner: React.FC = () => {
   };
   const handleGoToPlan = () => {
     try { router.push('/timeline'); } catch { /* router not ready during very early boot */ }
+  };
+  // TEMPORARY TAKE OVER — engage the operator lease so the deck/mixer unlock
+  // for a while. The lease auto-resumes the plan after inactivity (each control
+  // touch extends it); the banner then flips to the amber countdown variant.
+  // Surface-specific override (mixer switches output too) or the plain lease.
+  const [takingOver, setTakingOver] = useState(false);
+  const handleTakeOver = async () => {
+    if (takingOver) return;
+    setTakingOver(true);
+    try {
+      if (onTemporaryTakeOver) await onTemporaryTakeOver();
+      else {
+        const ok = await takeover();
+        if (!ok) Alert.alert('Take over failed', 'The engine rejected the takeover. The plan may still be running.');
+      }
+    } finally {
+      setTakingOver(false);
+    }
   };
   // 0 = hidden, 1 = fully visible. Slide-in from the top, same easing as
   // the override banner so the two read as one visual family. Purely
@@ -163,8 +188,13 @@ export const PlanLockBanner: React.FC = () => {
               ? 'You hold manual control; the plan auto-resumes when you stop. Hand it back early with RESUME NOW.'
               : 'Take over to make changes. Navigation and viewing stay available.'}
           </Text>
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-            {leaseHeld ? (
+          {/* TAKEN-OVER state → a single RESUME NOW hand-back + GO TO PLAN.
+              LOCKED state → TEMPORARY TAKE OVER (primary, full width) on its
+              own row, then DISABLE PLAN + GO TO PLAN below. Three buttons on
+              one row overflowed the 460px banner on an iPad, so the primary
+              action gets its own row. */}
+          {leaseHeld ? (
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
               <TouchableOpacity
                 onPress={() => { void resumeNow(); }}
                 style={{
@@ -182,47 +212,90 @@ export const PlanLockBanner: React.FC = () => {
                   RESUME NOW
                 </Text>
               </TouchableOpacity>
-            ) : (
               <TouchableOpacity
-                onPress={handleDisablePlan}
-                disabled={disabling}
+                onPress={handleGoToPlan}
                 style={{
                   flex: 1,
+                  minHeight: 40,
+                  borderRadius: 8,
+                  borderWidth: 1.5,
+                  borderColor: '#1a1a1a',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Go to the timeline plan tab"
+              >
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: '#1a1a1a' }}>
+                  GO TO PLAN
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <>
+              <TouchableOpacity
+                onPress={handleTakeOver}
+                disabled={takingOver}
+                style={{
                   minHeight: 40,
                   borderRadius: 8,
                   backgroundColor: '#1a1a1a',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  opacity: disabling ? 0.6 : 1,
+                  marginTop: 8,
+                  opacity: takingOver ? 0.6 : 1,
                 }}
                 accessibilityRole="button"
-                accessibilityLabel="Disable the running plan (pause the timeline)"
-                accessibilityState={{ disabled: disabling }}
+                accessibilityLabel="Temporarily take over — unlock the deck and mixer for manual control"
+                accessibilityState={{ disabled: takingOver }}
               >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: PLAN_LOCK_AMBER }}>
-                  {disabling ? 'DISABLING…' : 'DISABLE PLAN'}
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, letterSpacing: 0.8, color: PLAN_LOCK_AMBER }}>
+                  {takingOver ? 'TAKING OVER…' : 'TEMPORARY TAKE OVER'}
                 </Text>
               </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              onPress={handleGoToPlan}
-              style={{
-                flex: 1,
-                minHeight: 40,
-                borderRadius: 8,
-                borderWidth: 1.5,
-                borderColor: '#1a1a1a',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Go to the timeline plan tab"
-            >
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: '#1a1a1a' }}>
-                GO TO PLAN
-              </Text>
-            </TouchableOpacity>
-          </View>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                <TouchableOpacity
+                  onPress={handleDisablePlan}
+                  disabled={disabling}
+                  style={{
+                    flex: 1,
+                    minHeight: 36,
+                    borderRadius: 8,
+                    borderWidth: 1.5,
+                    borderColor: '#1a1a1a',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    opacity: disabling ? 0.6 : 1,
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Disable the running plan (pause the timeline)"
+                  accessibilityState={{ disabled: disabling }}
+                >
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: '#1a1a1a' }}>
+                    {disabling ? 'DISABLING…' : 'DISABLE PLAN'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleGoToPlan}
+                  style={{
+                    flex: 1,
+                    minHeight: 36,
+                    borderRadius: 8,
+                    borderWidth: 1.5,
+                    borderColor: '#1a1a1a',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Go to the timeline plan tab"
+                >
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: '#1a1a1a' }}>
+                    GO TO PLAN
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
         </View>
       </View>
     </Animated.View>
