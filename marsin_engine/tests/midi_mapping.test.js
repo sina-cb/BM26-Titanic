@@ -96,10 +96,11 @@ test('load is lenient — drops an invalid mapping, keeps valid ones', () => {
 // ── PUT upsert-by-target ────────────────────────────────────────────────
 // Faithful replay of the api_server PUT handler's persistence sequence for
 // /api/playlists/:name/items/:itemId/midi-mappings/:mappingId:
-//   load → validate(incoming) → drop any mapping sharing the id OR the target
-//   parameter → push incoming → save. Kept in lockstep with api_server.js.
-// This exercises BOTH the friendly upsert (this helper) and the strict
-// save() backstop (PlaylistManager) without booting the whole engine.
+//   load → validate(incoming) → upsertMidiMapping → save.
+// The upsert filter is NO LONGER copy-pasted here — both this helper and the
+// route call the SAME PlaylistManager.upsertMidiMapping, so they cannot drift.
+// This exercises the friendly upsert AND the strict save() backstop
+// (PlaylistManager) without booting the whole engine.
 function putMidiMapping(pm, playlistName, itemId, mappingId, body) {
   const playlist = pm.load(playlistName);
   if (!playlist) throw new Error('playlist not found');
@@ -107,10 +108,7 @@ function putMidiMapping(pm, playlistName, itemId, mappingId, body) {
   if (!entry) throw new Error('item not found');
   const incoming = { ...body, id: mappingId };
   validateMidiMapping(incoming); // fail loud on bad shape, exactly like the route
-  entry.midiMappings = (entry.midiMappings || []).filter(
-    m => m.id !== mappingId && m.target?.parameter !== incoming.target.parameter,
-  );
-  entry.midiMappings.push(incoming);
+  pm.upsertMidiMapping(entry, incoming);
   const saved = pm.save(playlist);
   return saved.entries.find(e => e.id === itemId);
 }

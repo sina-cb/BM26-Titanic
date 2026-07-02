@@ -378,4 +378,39 @@ export class PlaylistManager {
       }
     }
   }
+
+  /**
+   * Upsert-by-target for a single MIDI mapping on a playlist entry.
+   *
+   * One binding per target parameter is a structural rule: this drops ANY
+   * existing mapping that shares the incoming id (a normal update) OR the
+   * incoming target parameter (a re-bind of an already-bound param, possibly
+   * under a different id), then pushes the incoming one. This is the FRIENDLY
+   * enforcement point — re-binding a param cleanly REPLACES the old binding,
+   * no throw, no duplicate. The strict one-per-target check in `save()` is the
+   * BACKSTOP (defense in depth) for any duplicate that slips in another way.
+   *
+   * Mutates `entry.midiMappings` in place and returns it. Does NOT validate or
+   * persist — the caller validates `incoming` (fail loud on bad shape) and
+   * calls `save()` (which re-validates + writes). Extracted so the PUT route
+   * and the engine test exercise ONE code path instead of two copy-pasted
+   * filters kept in lockstep.
+   *
+   * @param {object} entry     playlist entry (must already exist)
+   * @param {object} incoming  fully-formed mapping (id + control + target + range)
+   * @returns {Array} the entry's updated midiMappings array
+   */
+  upsertMidiMapping(entry, incoming) {
+    if (!entry || typeof entry !== 'object') {
+      throw new Error('upsertMidiMapping: entry required');
+    }
+    if (!incoming || !incoming.target || typeof incoming.target.parameter !== 'string') {
+      throw new Error('upsertMidiMapping: incoming mapping missing target.parameter');
+    }
+    entry.midiMappings = (entry.midiMappings || []).filter(
+      m => m.id !== incoming.id && m.target?.parameter !== incoming.target.parameter,
+    );
+    entry.midiMappings.push(incoming);
+    return entry.midiMappings;
+  }
 }

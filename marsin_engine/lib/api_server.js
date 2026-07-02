@@ -304,7 +304,19 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       wasmHost.beginFrame(channel.handle, 0);
       // We also broadcast so clients know the new schema bindings
       broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+    } else {
+      // Even without CPC we still need the top-level scope executed once so
+      // the seed below sits on a properly-initialized VM.
+      wasmHost.beginFrame(channel.handle, 0);
     }
+    // Seed every untouched local-control export (slider/toggle/hsvPicker) with
+    // its Pixelblaze default so the serializer broadcasts a REAL v0 for it —
+    // root fix for the MIDI knob-index off-by-k (docs/34 §#1). Runs AFTER the
+    // beginFrame(0) top-level pass and BEFORE applyEntryDefaults (the caller),
+    // so a saved playlist default cleanly overrides the seed. localControls was
+    // reset to {} by the caller immediately before this, so nothing real is
+    // clobbered.
+    channel.seedLocalControlDefaults(wasmHost);
   }
 
   /**
@@ -1108,7 +1120,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           paramCenter.registerChannel(channel.id, channel.handle, wasmHost.getExports(channel.handle));
           wasmHost.beginFrame(channel.handle, 0);
           broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+        } else {
+          wasmHost.beginFrame(channel.handle, 0);
         }
+        // Seed Pixelblaze defaults for untouched local controls BEFORE the
+        // saved defaults replay (same ordering as onChannelCompiled) so every
+        // slider broadcasts a real v0 on the transition path too (docs/34 §#1).
+        channel.seedLocalControlDefaults(wasmHost);
         // Replay per-entry defaults onto the now-installed base handle,
         // then let CPC have the last word.
         playlistManager.applyEntryDefaults(channel, entry, wasmHost, paramRouter, paramCenter);
@@ -3474,19 +3492,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             const incoming = { ...data, id: mappingId };
             try { validateMidiMapping(incoming); }
             catch (ve) { res.writeHead(400); return res.end(JSON.stringify({ error: ve.message })); }
-            // Upsert-by-target: one binding per target parameter is a structural
-            // rule here. Drop ANY existing mapping that shares this id (a normal
-            // update) OR this target parameter (a re-bind of an already-bound
-            // param, possibly under a different id), then push the incoming one.
-            // This is the FRIENDLY enforcement point: re-binding a param cleanly
-            // REPLACES the old binding — no 400, no duplicate. The strict
-            // one-per-target check in PlaylistManager.save() is the BACKSTOP
-            // (defense in depth): it catches any duplicate that slips in by
-            // another path — e.g. a PATCH that mutates target into a collision.
-            entry.midiMappings = (entry.midiMappings || []).filter(
-              m => m.id !== mappingId && m.target?.parameter !== incoming.target.parameter,
-            );
-            entry.midiMappings.push(incoming);
+            // Upsert-by-target: one binding per target parameter. The friendly
+            // replace-in-place lives on PlaylistManager.upsertMidiMapping (shared
+            // with the engine test so the two never drift); save() re-validates
+            // and is the strict one-per-target BACKSTOP (defense in depth).
+            playlistManager.upsertMidiMapping(entry, incoming);
             const saved = playlistManager.save(playlist);
             const savedEntry = saved.entries.find(e => e.id === itemId);
             finishOk(savedEntry);
@@ -3878,6 +3888,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // on a fresh swap. Clear localControls first so any keys NOT present
         // in the saved defaults snap back to the WASM export's initial value.
         ch.localControls = {};
+        // Seed Pixelblaze defaults for untouched local controls BEFORE the
+        // saved-defaults replay — same ordering as onChannelCompiled (~:319)
+        // and the transition onComplete (~:1129). Without this, discarding an
+        // in-memory edit strips v0 off every untouched, no-saved-default slider
+        // and re-opens the MIDI knob off-by-k on this channel (docs/34 §#1).
+        // The handle is already installed and has been ticking (beginFrame runs
+        // every render frame), so getExports() is valid here — no extra
+        // beginFrame(0) needed.
+        ch.seedLocalControlDefaults(wasmHost);
         playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
         finalizeCpcValues(ch);
 

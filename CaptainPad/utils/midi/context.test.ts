@@ -53,6 +53,7 @@ describe('per-tab contexts', () => {
       getWindowCursor: () => 0,
       windowSize: 6,
       getColorPaletteHue: () => null,
+      syncOwnedKeys: new Set<string>(),
     };
     const deck = projectLeds(profile, s, {}, 'deck');
     const mixer = projectLeds(profile, s, {}, 'mixer');

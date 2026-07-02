@@ -83,4 +83,34 @@ describe('validateProfileParams', () => {
   it('throws on an unknown key in strict mode', () => {
     expect(() => validateProfileParams(profile, new Set(['size']), { strict: true })).toThrow(/not in the engine CPC schema/);
   });
+
+  // ── N2: paramCenterRelative keys (MFT bank-2 knobs) are validated too ──
+  // A bogus relative key (e.g. a misspelled 'speed') otherwise sails through
+  // validation and dies silently at runtime. It must be held to the same schema.
+  const relativeProfile = validateProfile({
+    device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+    controls: [
+      { id: 'b2_speed', match: { type: 'cc', channel: 0, cc: 16, relative: true }, action: { kind: 'paramCenterRelative', key: 'speeed' } },
+    ],
+  });
+
+  it('reports an unknown paramCenterRelative key (non-strict, names the key)', () => {
+    const errs = validateProfileParams(relativeProfile, new Set(['speed', 'size', 'rotate']));
+    expect(errs).toEqual([{ controlId: 'b2_speed', key: 'speeed' }]);
+  });
+
+  it('THROWS naming the bogus paramCenterRelative key in strict mode (N2)', () => {
+    expect(() => validateProfileParams(relativeProfile, new Set(['speed']), { strict: true }))
+      .toThrow(/paramCenterRelative key 'speeed' is not in the engine CPC schema/);
+  });
+
+  it('accepts a valid paramCenterRelative key against the schema', () => {
+    const good = validateProfile({
+      device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+      controls: [
+        { id: 'b2_speed', match: { type: 'cc', channel: 0, cc: 16, relative: true }, action: { kind: 'paramCenterRelative', key: 'speed' } },
+      ],
+    });
+    expect(validateProfileParams(good, new Set(['speed']))).toEqual([]);
+  });
 });

@@ -60,6 +60,7 @@ import {
   profileClaims,
   ControllerProfile,
 } from '@/utils/midi';
+import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
 import apcProfileRaw from '@/midi_profiles/apc_mini_mk2.yaml';
 import mftProfileRaw from '@/midi_profiles/mft.yaml';
 
@@ -103,7 +104,52 @@ let _snapshot: MidiEngineSnapshot = {
   globalEffectSlots: [],
   colorPalettes: [],
   focused: null,
+  // syncOwnedKeys (contract I4): the global-param keys the engine currently
+  // drives itself (e.g. 'speed' while BPM→Speed sync is on). Empty at boot;
+  // populated from `bpmSpeedSyncOn` in the snapshot rebuild + the in-place patch.
+  syncOwnedKeys: new Set<string>(),
 };
+
+/** Derive `syncOwnedKeys` (contract I4) from the BPM→Speed sync flag: when the
+ *  engine's BPM→Speed sync owns `speed`, a manual write to it (via ANY surface)
+ *  is inert. This is the ONE place the 'speed' literal lives on the hook side;
+ *  D1's flush gate + D4's projector read the SET, never the literal. */
+function _deriveSyncOwnedKeys(bpmSpeedSyncOn: boolean): ReadonlySet<string> {
+  return bpmSpeedSyncOn ? new Set<string>(['speed']) : new Set<string>();
+}
+
+/** Extract the CPC global param VALUES (0..1) from a shared-params `params` map,
+ *  keeping only finite numbers (HSV palettes and other non-scalars are skipped,
+ *  never coerced). The single derivation used by BOTH the full snapshot rebuild
+ *  and the in-place shared-params patch (#10). */
+function _deriveGlobalParamValues(
+  paramsSrc: Record<string, { value?: unknown }> | undefined,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (paramsSrc) {
+    for (const key of Object.keys(paramsSrc)) {
+      const v = paramsSrc[key]?.value;
+      if (typeof v === 'number' && Number.isFinite(v)) out[key] = v;
+    }
+  }
+  return out;
+}
+
+/** #10: in-place patch of `_snapshot` from a live `sharedParams` frame, WITHOUT
+ *  the heavy async rebuild. Recomputes globalParamValues + bpmSpeedSyncOn +
+ *  syncOwnedKeys (so the MFT bank-2 rings + the sync gate track live CPC values)
+ *  and preserves every other snapshot field. Nudges an LED repaint. */
+function _patchSharedParams(paramsSrc: Record<string, { value?: unknown }> | undefined): void {
+  const globalParamValues = _deriveGlobalParamValues(paramsSrc);
+  const bpmSpeedSyncOn = Number(globalParamValues['bpmSpeedSync']) > 0.5;
+  _snapshot = {
+    ..._snapshot,
+    globalParamValues,
+    bpmSpeedSyncOn,
+    syncOwnedKeys: _deriveSyncOwnedKeys(bpmSpeedSyncOn),
+  };
+  _nudge?.();
+}
 
 // ── Modulation anchor cache (the MODULATION ANCHOR for focused params) ─────
 // modulation live-state rides engineParamsEvents as
@@ -126,6 +172,10 @@ let _modState: Record<string, { base: number; modulated: number }> = {};
 // `playlistSaved` (a freshly-learned binding) updates `_snapshot.focused`.
 let _focusedLayer = 0;
 const _focusListeners = new Set<() => void>();
+// The live manager's focus-intent writer (contract I2), published by the boot
+// effect. `setMidiFocus` routes touch focus through this so the manager is the
+// SINGLE source of truth for `requestedFocusLayer` (fixes #2 focus reconcile).
+let _setFocusIntent: ((layer: number) => void) | null = null;
 
 function _bumpFocus(): void {
   _focusListeners.forEach((cb) => {
@@ -155,11 +205,24 @@ function _activePlaylistNames(): Set<string> {
 let _lastEngineChannels: unknown[] = [];
 let _lastEngineDeck: unknown = null;
 
-/** Set the focused mixer layer (Mixer tab). The manager's onFocusChange routes
- *  here; the on-screen mixer can also call it so touch + MIDI agree. */
+/** Set the focused mixer layer (Mixer tab). Two callers:
+ *  - the manager's onFocusChange (a MIDI/APC focus intent already routed through
+ *    `manager.setFocusIntent`), and
+ *  - the on-screen mixer (a TOUCH focus intent).
+ *
+ *  #2 focus single-source-of-truth: a touch intent must ALSO drive the manager's
+ *  `requestedFocusLayer` (contract I2), else an APC-then-touch swap leaves the
+ *  manager's stale request swallowing bound faders forever. We therefore route
+ *  the manager's `setFocusIntent`. Per I2's note we set `_focusedLayer` FIRST so
+ *  the resulting onFocusChange → setMidiFocus hop is idempotent (unchanged layer
+ *  → early return) and does NOT loop. */
 export function setMidiFocus(layer: number): void {
   if (layer === _focusedLayer) return;
   _focusedLayer = layer;
+  // Make the manager the single home of the focus request. Idempotent hop: the
+  // manager fans out → onFocusChange → setMidiFocus(layer), which early-returns
+  // because `_focusedLayer` already equals `layer`.
+  _setFocusIntent?.(layer);
   _bumpFocus();
 }
 
@@ -174,6 +237,21 @@ export function useMidiFocus(): number {
     return () => { _focusListeners.delete(cb); };
   }, []);
   return f;
+}
+
+/** Boolean focus selector (contract I3): is `layerIndex` the focused mixer
+ *  layer? A per-strip component subscribes to THIS instead of `useMidiFocus()`
+ *  so `React.memo` only re-renders the two strips whose focus actually flips on
+ *  a focus change — not every strip on every change (12a render churn). */
+export function useIsMidiFocused(layerIndex: number): boolean {
+  const [focused, setFocused] = useState(_focusedLayer === layerIndex);
+  useEffect(() => {
+    const cb = () => setFocused(_focusedLayer === layerIndex);
+    _focusListeners.add(cb);
+    cb();
+    return () => { _focusListeners.delete(cb); };
+  }, [layerIndex]);
+  return focused;
 }
 
 // ── MIDI-learn arming (consumed by the per-param MIDI map popover) ──────────
@@ -401,17 +479,11 @@ export function useMidiControl(): MidiControlState {
     // can tell whether a saved playlist is one the manager applies.
     _lastEngineChannels = channels;
     _lastEngineDeck = deck;
-    // Current CPC global values (0..1) for the MFT bank-2 relative knobs. Read
-    // off the shared-params doc — every key whose value is a finite number (HSV
-    // colour palettes and other non-scalar values are skipped, never coerced).
-    const sharedSrc = engine.sharedParams?.params;
-    const globalParamValues: Record<string, number> = {};
-    if (sharedSrc) {
-      for (const key of Object.keys(sharedSrc)) {
-        const v = sharedSrc[key]?.value;
-        if (typeof v === 'number' && Number.isFinite(v)) globalParamValues[key] = v;
-      }
-    }
+    // Current CPC global values (0..1) for the MFT bank-2 relative knobs — the
+    // same derivation the live in-place patch uses (#10). Note: sharedParams is
+    // no longer an effect dep; this reads the value at rebuild time and the
+    // engineParamsEvents patch keeps it live between rebuilds.
+    const globalParamValues = _deriveGlobalParamValues(engine.sharedParams?.params);
     // BPM→Speed sync engaged when the CPC `bpmSpeedSync` key is > 0.5.
     const bpmSpeedSyncOn = Number(globalParamValues['bpmSpeedSync']) > 0.5;
     // Fetch a channel's playlist entries (cached) for the pad window browser.
@@ -478,33 +550,36 @@ export function useMidiControl(): MidiControlState {
             if (entry?.defaults && typeof entry.defaults === 'object') entryDefaults = entry.defaults;
           }
         }
-        const exportsList = (focusChan.exports ?? [])
-          // kind 1 = sliders (the learnable local params). CPC-matched exports
-          // can't take a static write (the CPC clobbers it), so drop them.
-          // EXCLUDE (with a warn) an export missing v0 rather than fabricating
-          // 0.5 — a fabricated base corrupts soft-takeover pickup math.
-          .filter((e) => e.kind === 1 && !(e as { cpcOwned?: boolean }).cpcOwned)
-          .flatMap((e) => {
-            if (typeof e.v0 !== 'number') {
-              console.warn(`[midi] focused export '${e.name}' (id ${e.id}) has no numeric v0; excluding it from MIDI-learn (a fabricated base would corrupt pickup)`);
-              return [];
-            }
-            // defaultValue: the entry's saved default for this param — only when
-            // it's a finite number (never fabricate one; the consumer treats an
-            // absent default as "reset deferred").
-            const rawDefault = entryDefaults[e.name];
-            const defaultValue = typeof rawDefault === 'number' && Number.isFinite(rawDefault)
-              ? rawDefault
-              : undefined;
-            // base + modulated: the modulation anchor. For a modulated param v0
-            // is the moving modulated value, so `base` (the operator's stable set
-            // value from modulationState) is the correct target for a knob delta.
-            // Not modulated → base falls back to v0 (the runtime also does this).
-            const mod = _modState[e.name];
-            const modulated = !!mod;
-            const base = mod?.base ?? e.v0;
-            return [{ id: e.id, name: e.name, v0: e.v0, defaultValue, base, modulated }];
-          });
+        // #1 THE single knob order: knob i drives knobMapped[i]. deriveKnobOrder
+        // is the ONE derivation of the learnable slider list (kind===1, not
+        // cpcOwned, numeric v0); the same fn feeds the screens' knob badges, so
+        // on-screen order ≡ physical knob order by construction, not coincidence.
+        // (Replaces the old hand-filter that could drift from the screens'.)
+        const { knobMapped } = deriveKnobOrder(focusChan.exports as Export[] | undefined);
+        // N1 deck-scoped modulation: modulationState is DECK-only (the engine
+        // broadcasts it with deckId 'main', modulation_controller.js:176). Apply
+        // the `_modState` base/modulated anchor ONLY when the focused channel IS
+        // the deck; a mixer channel with a name-colliding export must NOT inherit
+        // the deck's base or a false "modulated" ring pulse — it anchors on v0.
+        const isDeckFocus = ctx === 'deck';
+        const exportsList = knobMapped.map((e) => {
+          const v0 = e.v0 as number; // deriveKnobOrder guarantees a numeric v0
+          // defaultValue: the entry's saved default for this param — only when
+          // it's a finite number (never fabricate one; the consumer treats an
+          // absent default as "reset deferred").
+          const rawDefault = entryDefaults[e.name];
+          const defaultValue = typeof rawDefault === 'number' && Number.isFinite(rawDefault)
+            ? rawDefault
+            : undefined;
+          // base + modulated: the modulation anchor. For a modulated (deck) param
+          // v0 is the moving modulated value, so `base` (the operator's stable set
+          // value from modulationState) is the correct target for a knob delta.
+          // Mixer focus → no deck modulation applies: base=v0, modulated=false.
+          const mod = isDeckFocus ? _modState[e.name] : undefined;
+          const modulated = !!mod;
+          const base = mod?.base ?? v0;
+          return { id: e.id, name: e.name, v0, defaultValue, base, modulated };
+        });
         const role = ctx === 'deck' ? 'deck' : 'mixer';
         // Build the pickup re-lock identity ONCE (role:id:entryId:mappingIds);
         // the runtime compares it as a single string. Including entryId means a
@@ -533,14 +608,19 @@ export function useMidiControl(): MidiControlState {
         focused,
         globalParamValues,
         bpmSpeedSyncOn,
+        // I4: the ONE home of the sync-owned-keys fact (D1's gate + D4's
+        // projector read this, not a 'speed' literal). Derived from the flag.
+        syncOwnedKeys: _deriveSyncOwnedKeys(bpmSpeedSyncOn),
       };
       _nudge?.();
     })();
     return () => { cancelled = true; };
-    // engine.sharedParams is a dep so the snapshot's globalParamValues +
-    // bpmSpeedSyncOn re-derive when an operator turns a CPC knob (mirrors how
-    // blackout / mixerChannels are deps).
-  }, [engine.blackout, engine.deckChannel, engine.mixerChannels, engine.sharedParams, rev]);
+    // #10: engine.sharedParams is NOT a dep — the full async rebuild is heavy
+    // (fetches + LED projection) and CPC knobs tick at 10-30 Hz. Instead a
+    // module-level engineParamsEvents subscription (boot effect) mirrors live
+    // shared values into an IN-PLACE _snapshot patch + _nudge(), recomputing
+    // globalParamValues / bpmSpeedSyncOn / syncOwnedKeys without the rebuild.
+  }, [engine.blackout, engine.deckChannel, engine.mixerChannels, rev]);
 
   // ── Re-validate param keys when the engine CPC schema lands (async) ───────
   useEffect(() => {
@@ -556,10 +636,15 @@ export function useMidiControl(): MidiControlState {
     // the snapshot reads for focused-export base/modulated). ONE subscription,
     // set up here and torn down in every return path — whole-state replacement
     // per frame, exactly like components/Modulation.tsx `useModulationState()`.
+    // Also mirror live `sharedParams` frames into an IN-PLACE _snapshot patch
+    // (#10) so the MFT bank-2 rings + the BPM-sync gate track live CPC values
+    // without dropping sharedParams into the heavy async-rebuild effect's deps.
     const unsubMod = engineParamsEvents.subscribe(
-      (m: { type?: string; parameters?: unknown }) => {
+      (m: { type?: string; parameters?: unknown; params?: unknown }) => {
         if (m?.type === 'modulationState' && m.parameters && typeof m.parameters === 'object') {
           _modState = m.parameters as Record<string, { base: number; modulated: number }>;
+        } else if (m?.type === 'sharedParams') {
+          _patchSharedParams(m.params as Record<string, { value?: unknown }> | undefined);
         }
       },
     );
@@ -579,9 +664,14 @@ export function useMidiControl(): MidiControlState {
     // Publish the loaded profiles for the save-time conflict re-check.
     _loadedProfiles = profiles;
     // A driver that pushes a SysEx config on connect (the MFT's encoder-mode
-    // setup, device.configureOnConnect) needs the SysEx capability on the
-    // shared MIDIAccess — request it now, before the manager connects. APC-only
-    // rigs skip the extra permission scope.
+    // setup, device.configureOnConnect) needs the SysEx capability on the shared
+    // MIDIAccess — request it now, before the manager connects.
+    //
+    // N6 reality: both profiles are ALWAYS bundled and mft.yaml sets
+    // configureOnConnect: true, so this predicate is true in EVERY deployment —
+    // every operator gets Chrome's SysEx permission prompt (decision D-3: live
+    // with it). There is no "APC-only rig" that skips the scope; the request is
+    // unconditional in practice. Behavior is intentionally unchanged.
     if (profiles.some((p) => p.device.configureOnConnect)) setSysexRequested(true);
 
     _schemaKeys = new Set(Object.keys(engine.paramSchema));
@@ -619,6 +709,10 @@ export function useMidiControl(): MidiControlState {
     // Expose this manager's LED repaint so the engine-state effect below can
     // refresh feedback without holding a React ref across renders.
     _nudge = () => manager.onEngineUpdate();
+    // Publish the manager's focus-intent writer (I2) so touch focus (setMidiFocus)
+    // routes through the SAME requestedFocusLayer the APC uses — one source of
+    // truth (#2). Cleared in cleanup so a stale closure never runs post-dispose.
+    _setFocusIntent = (layer) => manager.setFocusIntent(layer);
     // Forward active-tab changes (Deck/Mixer) to the manager's mapping context.
     _applyContext = (name) => manager.setContext(name);
     // Expose MIDI-learn arming for the per-param map popover.
@@ -666,6 +760,7 @@ export function useMidiControl(): MidiControlState {
     return () => {
       disposed = true;
       _nudge = null;
+      _setFocusIntent = null;
       _applyContext = null;
       _armLearn = null;
       _revalidate = null;

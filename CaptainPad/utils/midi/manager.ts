@@ -57,14 +57,19 @@ function clamp01(v: number): number {
 /** Fold two relative-delta payloads within a coalescer window by SUMMING their
  *  deltas — every detent tick counts (accumulate, never last-write-wins). Both
  *  payloads target the same control id, so index/key match by construction. */
-function combineDelta(existing: ResolvedAction, incoming: ResolvedAction): ResolvedAction {
+export function combineDelta(existing: ResolvedAction, incoming: ResolvedAction): ResolvedAction {
   if (existing.kind === 'focusedParamDelta' && incoming.kind === 'focusedParamDelta') {
     return { ...existing, delta: existing.delta + incoming.delta };
   }
   if (existing.kind === 'paramCenterDelta' && incoming.kind === 'paramCenterDelta') {
     return { ...existing, delta: existing.delta + incoming.delta };
   }
-  return incoming; // mismatched kinds can't happen for one control id
+  // Both payloads target the SAME control id, so their kinds match by
+  // construction — a mismatch is a wiring bug. Fail loud (codex P0: no silent
+  // fallback), mirroring the sibling exhaustiveness guard in dispatch.ts.
+  throw new Error(
+    `combineDelta: mismatched kinds for one control id ('${existing.kind}' vs '${incoming.kind}')`,
+  );
 }
 
 export type ControllerStatusKind = 'disconnected' | 'connected' | 'error';
@@ -116,10 +121,23 @@ export interface MidiEngineSnapshot {
    *  knob applies its delta to the value here. Absent key → knob is inert. */
   globalParamValues?: Record<string, number>;
   /** True when the engine's BPM→Speed sync owns the `speed` param (CPC
-   *  `bpmSpeedSync` on). While true, a manual speed knob is INERT and its ring
-   *  strobes — mirroring the APC's fader-7 behaviour. Undefined = off. */
+   *  `bpmSpeedSync` on). Undefined = off. Kept as the raw fact the hook derives
+   *  `syncOwnedKeys` from; the gate itself reads `syncOwnedKeys`, not this. */
   bpmSpeedSyncOn?: boolean;
+  /** Global-param keys the engine is CURRENTLY driving itself (e.g. `speed`
+   *  while BPM→Speed sync is on). A manual write to one of these — via ANY
+   *  surface (an MFT relative knob OR an absolute APC fader) — is INERT and gets
+   *  a status note, because the engine would clobber it on its next tick. The
+   *  ONE shared home of this rule at the flush/dispatch layer, so the MFT delta
+   *  path and the APC absolute path can't drift (contract I4). D2 populates it
+   *  from `bpmSpeedSyncOn`; defaults to an empty set. */
+  syncOwnedKeys: ReadonlySet<string>;
 }
+
+/** Empty default for the `syncOwnedKeys` snapshot fact — used wherever the
+ *  manager reads a snapshot that predates the field (keeps tsc green and the
+ *  gate inert until the hook populates it). */
+const EMPTY_SYNC_OWNED_KEYS: ReadonlySet<string> = new Set<string>();
 
 /** The focused channel's live exports + its active entry's MIDI bindings — the
  *  two things the runtime needs to apply a learned fader to a STATIC param. */
@@ -190,6 +208,15 @@ export const WINDOW_SIZE = 6;
 
 const DEFAULT_COALESCE_MS = 33; // ~30 Hz
 
+/** Re-seed threshold for the optimistic relative-delta anchor (#3). A snapshot
+ *  that moves more than this BETWEEN coalescer windows is treated as an external
+ *  change (reset / other surface / modulator step) and adopted; a smaller move
+ *  is the throttled engine echo merely catching up to our own writes and is
+ *  ignored so a fast sweep keeps accumulating locally. Sized above the largest
+ *  single detent step (0.1) so one very-fast tick of echo can't trip a re-seed,
+ *  yet well below a deliberate reset jump. */
+const OPTIMISTIC_RESEED_EPSILON = 0.15;
+
 interface ResolvedLayer {
   id: string;
   role: 'deck' | 'mixer';
@@ -208,6 +235,20 @@ function layerInfo(snap: MidiEngineSnapshot, layer: number): ResolvedLayer | nul
   }
   const l = snap.layers[layer];
   return l ? { id: l.id, role: 'mixer', playlist: l.playlist } : null;
+}
+
+/** Monitor line for a coalesced continuous payload at flush cadence (12b) —
+ *  the raw decoded event isn't in scope at flush, so describe the resolved
+ *  action instead. */
+function describeFlush(payload: ResolvedAction): string {
+  switch (payload.kind) {
+    case 'paramCenter': return `${payload.key} = ${payload.value.toFixed(2)}`;
+    case 'master': return `master = ${payload.value.toFixed(2)}`;
+    case 'sectionBrightness': return `section ${payload.sectionId} = ${payload.value.toFixed(2)}`;
+    case 'mixerLayerFader': return `layer ${payload.layer} fader = ${payload.value.toFixed(2)}`;
+    case 'localParam': return `param #${payload.exportId} = ${payload.value.toFixed(2)}`;
+    default: return payload.kind;
+  }
 }
 
 function describeEvent(ev: DecodedMidi, controlId: string | null): string {
@@ -240,6 +281,27 @@ class ControllerRuntime {
    *  can't write to the OLD channel. -1 = no explicit request yet (fall back to
    *  the snapshot's focused layer). */
   private requestedFocusLayer = -1;
+  /** Optimistic applied value per relative-delta target (#3 fast-turn
+   *  undershoot). The engine's modulationState echo lags a fast sweep by ~150 ms
+   *  (and is itself throttled), so anchoring each window on the snapshot loses
+   *  most of the sweep. Instead we keep a LOCAL running value per target, seeded
+   *  from the snapshot, accumulating deltas across windows, and re-seeded ONLY
+   *  when the snapshot diverges beyond what a throttled echo lag can explain.
+   *  Keyed by a target identity string (channel-identity + key/index). */
+  private readonly optimisticValues = new Map<string, number>();
+  /** The snapshot anchor last OBSERVED per relative-delta control id, recorded
+   *  alongside the optimistic value. A fresh window compares the current
+   *  snapshot against this: an unchanged (or lagging-toward-us) snapshot means
+   *  our optimistic value still holds; a snapshot that JUMPED (an external write
+   *  / reset / modulator step, beyond the echo epsilon) means re-seed. */
+  private readonly lastSnapAnchor = new Map<string, number>();
+  /** Focus identity captured at ACCUMULATE time per relative-delta control id
+   *  (N3). `focusedParamDelta`/`Reset` resolve `focused.exports[index]` at FLUSH
+   *  time; a focus change inside the coalescer window would otherwise write the
+   *  accumulated delta into the NEW channel's same-index param. We record the
+   *  focus key when the first tick lands and DROP the payload at flush if focus
+   *  moved. */
+  private readonly deltaFocusKey = new Map<string, string | null>();
   /** Soft-takeover state per binding id (locks a fader until it crosses the
    *  param's current value, so focus/pattern switches don't jump the value). */
   private readonly pickupStates = new Map<string, PickupState>();
@@ -268,7 +330,7 @@ class ControllerRuntime {
     this.transport = opts.transportFactory();
     this.coalescer = new ControlCoalescer<ResolvedAction>(
       opts.coalesceMs ?? DEFAULT_COALESCE_MS,
-      (_controlId, payload) => { void this.flushResolved(payload); },
+      (controlId, payload) => { void this.flushResolved(controlId, payload); },
       opts.coalescerTimers,
     );
     this.status = { deviceId: profile.device.id, label: profile.device.label, kind: 'disconnected' };
@@ -425,7 +487,13 @@ class ControllerRuntime {
 
     // 3) Profile-mapped action.
     const ev = resolveEvent(this.profile, decoded, this.context);
-    this.setStatus({ lastEvent: describeEvent(decoded, ev ? ev.controlId : null) });
+    // 12b: don't update the monitor line for CONTINUOUS controls at raw MIDI
+    // rate (>100/s) — the coalescer flush records those at ~30 Hz instead, so
+    // React consumers don't re-render on every fader tick. Unmapped + discrete
+    // events are rare, so they still record immediately here.
+    if (!ev || !ev.continuous) {
+      this.setStatus({ lastEvent: describeEvent(decoded, ev ? ev.controlId : null) });
+    }
     if (!ev) return;
     // Focus + the playlist window browser need controller-local state, so they
     // are handled here rather than in the pure dispatcher.
@@ -437,7 +505,13 @@ class ControllerRuntime {
     if (ev.resolved.kind === 'focusedParamReset') { this.handleParamReset(ev.resolved.index); return; }
     if (ev.resolved.kind === 'focusedParamDelta' || ev.resolved.kind === 'paramCenterDelta') {
       // Relative deltas ACCUMULATE across the coalescer window (no tick dropped),
-      // then flush as a single write against the CURRENT value in flushResolved.
+      // then flush as a single write against the optimistic value in
+      // flushResolved. For a focused delta, capture the focus identity NOW (N3)
+      // so the flush can drop the payload if focus moved during the window
+      // rather than writing into the new channel's same-index param.
+      if (ev.resolved.kind === 'focusedParamDelta' && !this.deltaFocusKey.has(ev.controlId)) {
+        this.deltaFocusKey.set(ev.controlId, this.opts.getSnapshot().focused?.key ?? null);
+      }
       this.coalescer.accumulate(ev.controlId, ev.resolved, combineDelta);
       return;
     }
@@ -450,19 +524,34 @@ class ControllerRuntime {
 
   /** Move focus by a side-button step: prev/next within the existing layers, or
    *  the deck (layer 0). Clamped to the valid layer range; a step past either
-   *  end is inert (no wrap). Uses the same handleFocus path (existence check +
-   *  synchronous requestedFocusLayer + onFocusChange) as the APC track buttons. */
+   *  end is inert (no wrap). Routes through the same setFocusIntent path (the
+   *  single focus-intent writer) as the APC track buttons. */
   private handleFocusStep(dir: 'prev' | 'next' | 'deck'): void {
     const snap = this.opts.getSnapshot();
     if (dir === 'deck') { this.handleFocus(0); return; }
-    // Current focus base: the synchronous request when set, else the snapshot.
-    const cur = this.requestedFocusLayer !== -1
-      ? this.requestedFocusLayer
-      : (snap.focused?.layer ?? 0);
+    // Current focus base: the derived effective focus (request when live, else
+    // the snapshot) so a step is relative to where focus ACTUALLY is.
+    const eff = this.effectiveFocusLayer(snap);
+    const cur = eff !== -1 ? eff : 0;
     const target = dir === 'prev' ? cur - 1 : cur + 1;
     if (target < 0) return; // clamp low — no wrap
     if (!layerInfo(snap, target)) return; // clamp high / absent → inert
     this.handleFocus(target);
+  }
+
+  /** THE single focus-intent writer (contract I2). Every focus intent — an APC
+   *  track button, an MFT side button, OR a touch tap routed from the hook —
+   *  overwrites the focus request through here. Inert when the requested layer
+   *  doesn't exist (deck-tab track buttons for layers > 0, or a deleted
+   *  overlay). Sets `requestedFocusLayer` SYNCHRONOUSLY so LED paint + the
+   *  applyBinding staleness gate don't wait for the async snapshot swap, then
+   *  fires onFocusChange + repaints. Public so the hook can call it for touch. */
+  setFocusIntent(layer: number): void {
+    const snap = this.opts.getSnapshot();
+    if (!layerInfo(snap, layer)) return; // absent layer → inert
+    this.requestedFocusLayer = layer;
+    this.opts.onFocusChange?.(layer);
+    this.projectAndSend(); // repaint the focus LED from requestedFocusLayer now
   }
 
   /** Encoder push → reset the focused param at ordered `index` to the entry's
@@ -474,6 +563,17 @@ class ControllerRuntime {
     if (!focused) return;
     const exp = focused.exports[index];
     if (!exp) return; // no param behind this knob — inert (loud silence)
+    // Reset/turn race (#7): a push right after a spin must NOT be clobbered by
+    // the same encoder's pending accumulated turn flushing a beat later. Cancel
+    // that pending turn slot (its control id is the profile's focusedParamKnob
+    // control for THIS index) + forget its optimistic anchor. Do NOT merge key
+    // namespaces (that breaks combineDelta's same-kind invariant).
+    const turnControlId = this.turnControlIdForIndex(index);
+    if (turnControlId !== null) {
+      this.coalescer.cancel(turnControlId);
+      this.deltaFocusKey.delete(turnControlId);
+      this.forgetOptimistic(turnControlId);
+    }
     if (typeof exp.defaultValue !== 'number') {
       // TODO(mft): thread the entry's saved defaults into focused.exports so
       // encoder-push reset has a target. Until then this is a documented no-op.
@@ -489,26 +589,50 @@ class ControllerRuntime {
     });
   }
 
+  /** The profile control id whose focusedParamKnob drives the focused export at
+   *  `index` — the slot a spin accumulates under, so an encoder-push reset can
+   *  cancel it (#7). null when the profile has no turn control for this index. */
+  private turnControlIdForIndex(index: number): string | null {
+    for (const control of this.profile.controls) {
+      const a = control.action;
+      if (a.kind === 'focusedParamKnob' && a.index === index) return control.id;
+    }
+    return null;
+  }
+
   /** Coalescer flush for a resolved payload. Most payloads dispatch directly; the
    *  MFT relative-delta payloads are resolved HERE against the live focused/CPC
    *  value (they can't be dispatched — they carry a delta, not a value) into a
    *  concrete localParam / paramCenter write. Applying at flush time (not at
    *  accumulate time) means the delta lands on the value as it is NOW, even if a
    *  modulator or another surface moved it during the window. */
-  private async flushResolved(payload: ResolvedAction): Promise<void> {
+  private async flushResolved(controlId: string, payload: ResolvedAction): Promise<void> {
+    // lastEvent status updates move to FLUSH cadence (12b): the coalescer feeds
+    // us ~30 Hz, so recording the monitor line here — instead of at raw MIDI
+    // rate — keeps React consumers from re-rendering >100/s. Error/inert-note
+    // status still fires immediately inside the branches below.
     if (payload.kind === 'focusedParamDelta') {
+      const capturedKey = this.deltaFocusKey.get(controlId);
+      this.deltaFocusKey.delete(controlId);
       const focused = this.opts.getSnapshot().focused;
-      if (!focused) return; // nothing focused — the delta is dropped (loud silence)
+      if (!focused) { this.forgetOptimistic(controlId); return; } // nothing focused — dropped
+      // N3: if focus moved between accumulate and flush, DROP the payload rather
+      // than write the delta into the new channel's same-index param.
+      if (capturedKey !== undefined && capturedKey !== focused.key) {
+        this.forgetOptimistic(controlId);
+        this.setStatus({ lastEvent: 'delta dropped (focus changed mid-turn)' });
+        return;
+      }
       const exp = focused.exports[payload.index];
-      if (!exp) return; // no param behind this knob
-      // Apply the accumulated delta to the modulation BASE, not the moving
-      // modulated value: for an audio-modulated param `v0` is the value AFTER
-      // the modulator, so anchoring on it would fight the modulation. `base` is
-      // the operator's set value the engine keeps layering the modulator on top
-      // of — that is what the knob must shift. Unmodulated params omit `base`
-      // (base === v0), so `exp.base ?? exp.v0` is correct in both cases.
-      const anchor = exp.base ?? exp.v0;
+      if (!exp) { this.forgetOptimistic(controlId); return; } // no param behind this knob
+      // Anchor on the modulation BASE, not the moving modulated value (`v0` is
+      // post-modulation; anchoring there fights the modulation). `base` is the
+      // operator's set value; unmodulated params omit it (base === v0).
+      const snapAnchor = exp.base ?? exp.v0;
+      const anchor = this.optimisticAnchor(controlId, snapAnchor);
       const value = clamp01(anchor + payload.delta);
+      this.optimisticValues.set(controlId, value); // seed the next window's anchor
+      this.setStatus({ lastEvent: `knob ${exp.name} = ${value.toFixed(2)}` });
       await this.dispatcher({
         kind: 'localParam', role: focused.role, channelId: focused.id, exportId: exp.id, value,
       });
@@ -516,33 +640,95 @@ class ControllerRuntime {
     }
     if (payload.kind === 'paramCenterDelta') {
       const snap = this.opts.getSnapshot();
-      // Speed-sync gate: while the engine's BPM→Speed sync owns `speed`, a
-      // manual speed knob is INERT (swallow, no write) — mirrors the APC's
-      // fader-7 rule. The ring strobes as the "sync owns speed" cue (led_projector).
-      if (payload.key === 'speed' && snap.bpmSpeedSyncOn) {
-        this.setStatus({ lastEvent: 'speed (BPM sync owns it — knob inert)' });
+      // Sync gate at shared depth (#4): while the engine drives this key itself
+      // (e.g. `speed` under BPM→Speed sync) it is INERT — a write would be
+      // clobbered on the next tick. syncOwnedKeys is the ONE home of this rule
+      // (contract I4), shared with the absolute paramCenter path below.
+      if ((snap.syncOwnedKeys ?? EMPTY_SYNC_OWNED_KEYS).has(payload.key)) {
+        this.forgetOptimistic(controlId);
+        this.setStatus({ lastEvent: `${payload.key} (engine sync owns it — knob inert)` });
         return;
       }
       const cur = snap.globalParamValues?.[payload.key];
-      if (typeof cur !== 'number') return; // unknown CPC key — inert
-      const value = clamp01(cur + payload.delta);
+      if (typeof cur !== 'number') {
+        // Unknown CPC key — fail visible (mirror the sync-gate branch), not a
+        // silent swallow (8b). validateProfileParams (D4) blocks most typos at
+        // connect; this catches a key that vanished from the live schema.
+        this.forgetOptimistic(controlId);
+        this.setStatus({ kind: 'error', error: `MIDI: unknown global param key '${payload.key}' — knob inert` });
+        return;
+      }
+      const anchor = this.optimisticAnchor(controlId, cur);
+      const value = clamp01(anchor + payload.delta);
+      this.optimisticValues.set(controlId, value);
+      this.setStatus({ lastEvent: `${payload.key} = ${value.toFixed(2)}` });
       await this.dispatcher({ kind: 'paramCenter', key: payload.key, value });
       return;
     }
+    // Absolute paramCenter (e.g. the APC's fader 7) shares the sync gate (#4):
+    // syncOwnedKeys is the ONE home of the rule, so an absolute fader on a
+    // sync-owned key is inert too (it was UNGATED before — the engine clobbered
+    // it every BPM tick). setStatus an inert note so the operator sees why.
+    if (payload.kind === 'paramCenter' && (this.opts.getSnapshot().syncOwnedKeys ?? EMPTY_SYNC_OWNED_KEYS).has(payload.key)) {
+      this.setStatus({ lastEvent: `${payload.key} (engine sync owns it — fader inert)` });
+      return;
+    }
+    // 12b: record the monitor line for a coalesced continuous control at FLUSH
+    // cadence (not raw MIDI rate).
+    this.setStatus({ lastEvent: describeFlush(payload) });
     await this.dispatcher(payload);
   }
 
-  /** Handle a focusChannel track-button press. Inert when the requested layer
-   *  doesn't exist (deck-tab track buttons for layers > 0, or a deleted
-   *  overlay) — like the old solo buttons: no focus change, no LED churn. Sets
-   *  `requestedFocusLayer` SYNCHRONOUSLY so LED paint + the applyBinding
-   *  staleness gate don't wait for the async snapshot swap. */
+  /** Forget the optimistic anchor for a control (on inert/dropped flush, so the
+   *  next window re-seeds from the snapshot). */
+  private forgetOptimistic(controlId: string): void {
+    this.optimisticValues.delete(controlId);
+    this.lastSnapAnchor.delete(controlId);
+  }
+
+  /** Resolve the anchor for a relative-delta window (#3 fast-turn undershoot).
+   *  Returns the LOCAL optimistic value while the snapshot is merely lagging our
+   *  own writes (the throttled modulationState echo), and re-seeds from the
+   *  snapshot only when it JUMPED on its own — an external write / reset /
+   *  modulator step.
+   *
+   *  The discriminator is the snapshot's own MOVEMENT since we last saw it, NOT
+   *  the gap to our optimistic value: during a fast sweep the echo lag makes
+   *  that gap large yet the snapshot is only creeping toward us, so re-seeding on
+   *  the gap would reintroduce the undershoot. A snapshot that moved more than
+   *  epsilon between windows is an external change we must adopt. */
+  private optimisticAnchor(controlId: string, snapValue: number): number {
+    const optimistic = this.optimisticValues.get(controlId);
+    const prevSnap = this.lastSnapAnchor.get(controlId);
+    this.lastSnapAnchor.set(controlId, snapValue);
+    if (optimistic === undefined || prevSnap === undefined) return snapValue;
+    if (Math.abs(snapValue - prevSnap) > OPTIMISTIC_RESEED_EPSILON) return snapValue; // external jump
+    return optimistic; // snapshot only lagging → keep accumulating locally
+  }
+
+  /** Handle a focusChannel track-button press — a MIDI focus intent. Routes
+   *  through the single focus-intent writer (I2) so touch + MIDI share one
+   *  source of truth. */
   private handleFocus(layer: number): void {
-    const snap = this.opts.getSnapshot();
-    if (!layerInfo(snap, layer)) return; // absent layer → inert
-    this.requestedFocusLayer = layer;
-    this.opts.onFocusChange?.(layer);
-    this.projectAndSend(); // repaint the focus LED from requestedFocusLayer now
+    this.setFocusIntent(layer);
+  }
+
+  /** THE one derived reader of the effective focus layer. Returns the layer LED
+   *  paint + the binding gate should treat as focused, and — critically —
+   *  CLEARS a stale `requestedFocusLayer` as a side effect when the request is
+   *  no longer meaningful: the snapshot already matches it (settle done) OR the
+   *  requested layer no longer exists (an overlay was deleted). Without this the
+   *  request only ever cleared inside applyBinding, so a touch/side-button focus
+   *  that no bound fader follows stayed PERMANENTLY stale and swallowed every
+   *  later mixer binding (#2). All three readers go through here. */
+  private effectiveFocusLayer(snap: MidiEngineSnapshot): number {
+    const snapLayer = snap.focused?.layer ?? -1;
+    if (this.requestedFocusLayer !== -1) {
+      if (this.requestedFocusLayer === snapLayer || !layerInfo(snap, this.requestedFocusLayer)) {
+        this.requestedFocusLayer = -1; // settled or gone → drop the request
+      }
+    }
+    return this.requestedFocusLayer !== -1 ? this.requestedFocusLayer : snapLayer;
   }
 
   /** Apply a MIDI-learned binding for the focused channel. Returns true when
@@ -557,16 +743,17 @@ class ControllerRuntime {
     );
     if (!binding) return false;
 
-    // Focus/snapshot staleness gate (mixer only): the focusChannel press sets
+    // Focus/snapshot staleness gate (mixer only): a focus intent sets
     // `requestedFocusLayer` synchronously, but the snapshot's focused layer
     // swaps in async (onFocusChange → React → refetch). Until it catches up a
     // fader would write to the OLD channel — so swallow (locked) while they
-    // disagree. On the deck the single channel is always focused, so
-    // requestedFocusLayer is either -1 (untouched) or 0 and never diverges.
-    if (focused.role === 'mixer' && this.requestedFocusLayer !== -1) {
-      this.reconcileRequestedFocus(focused.layer);
-      if (this.requestedFocusLayer !== -1 && focused.layer !== this.requestedFocusLayer) {
-        this.setStatus({ lastEvent: `bind (focus settling → ch ${this.requestedFocusLayer})` });
+    // disagree. effectiveFocusLayer clears the request once it settles/goes
+    // (the single source of truth, #2). On the deck the single channel is
+    // always focused, so the request is either -1 or 0 and never diverges.
+    if (focused.role === 'mixer') {
+      const eff = this.effectiveFocusLayer(this.opts.getSnapshot());
+      if (eff !== -1 && focused.layer !== eff) {
+        this.setStatus({ lastEvent: `bind (focus settling → ch ${eff})` });
         return true; // consumed; no write until the snapshot catches up
       }
     }
@@ -613,7 +800,12 @@ class ControllerRuntime {
 
     const state = this.pickupStates.get(binding.id) ?? freshPickup();
     const wasLocked = state.locked;
-    const { write, next } = pickup(state, exp.v0, value);
+    // Compare against the modulation BASE, not the moving modulated value:
+    // for an audio-modulated param `v0` oscillates so the fader can never
+    // reliably "cross" it and pickup never unlocks. `base` is the operator's
+    // set value; unmodulated params omit it (base === v0). Consistent with the
+    // delta path's anchor (#5).
+    const { write, next } = pickup(state, exp.base ?? exp.v0, value);
     this.pickupStates.set(binding.id, next);
     this.setStatus({
       lastEvent: `bind ${binding.target.parameter} = ${value.toFixed(2)}${next.locked ? ' (locked)' : ''}`,
@@ -632,13 +824,13 @@ class ControllerRuntime {
    *  Also true while the mixer focus snapshot is still settling (a fader would
    *  be swallowed), so the operator sees "not ready" rather than a dark button. */
   private isFocusLocked(): boolean {
-    const focused = this.opts.getSnapshot().focused;
+    const snap = this.opts.getSnapshot();
+    const focused = snap.focused;
     if (!focused) return false;
-    if (
-      focused.role === 'mixer'
-      && this.requestedFocusLayer !== -1
-      && focused.layer !== this.requestedFocusLayer
-    ) return true;
+    if (focused.role === 'mixer') {
+      const eff = this.effectiveFocusLayer(snap);
+      if (eff !== -1 && focused.layer !== eff) return true;
+    }
     // Only the current focus's pickup slots are meaningful (they were cleared
     // on the last focus-identity change).
     if (focused.key !== this.lastFocusKey) return false;
@@ -648,23 +840,10 @@ class ControllerRuntime {
     return false;
   }
 
-  /** The layer LED paint should treat as focused: the synchronous request when
-   *  set, else the snapshot's focused layer (projector fallback per §1.2). */
+  /** The layer LED paint should treat as focused — the single derived reader
+   *  (also clears a settled/gone request as a side effect, #2). */
   private getRequestedFocusLayer(): number {
-    if (this.requestedFocusLayer !== -1) return this.requestedFocusLayer;
-    return this.opts.getSnapshot().focused?.layer ?? -1;
-  }
-
-  /** Clear the synchronous focus request once it's no longer meaningful: either
-   *  the snapshot's focused layer caught up (settle done) OR the requested layer
-   *  no longer exists (e.g. an overlay was deleted and the hook fell focus back
-   *  to 0). Prevents a stale request from permanently gating mixer bindings. */
-  private reconcileRequestedFocus(snapshotLayer: number): void {
-    if (this.requestedFocusLayer === -1) return;
-    const snap = this.opts.getSnapshot();
-    if (snapshotLayer === this.requestedFocusLayer || !layerInfo(snap, this.requestedFocusLayer)) {
-      this.requestedFocusLayer = -1;
-    }
+    return this.effectiveFocusLayer(this.opts.getSnapshot());
   }
 
   private handleScroll(layer: number, dir: 'up' | 'down'): void {
@@ -715,11 +894,22 @@ class ControllerRuntime {
       windowSize: WINDOW_SIZE,
       getColorPaletteHue: (index) => snap.colorPalettes[index] ?? null,
       // ── MFT ring feedback (best-effort) ──
-      getFocusedExportValue: (index) => snap.focused?.exports[index]?.v0 ?? null,
+      // Show the value the KNOB edits: the modulation base (`base ?? v0`), not
+      // the moving modulated `v0` (#6, decision D-2). The ring pulse still flags
+      // that the param is modulated; the ring position tracks the operator's set
+      // value, consistent with the delta + pickup anchors.
+      getFocusedExportValue: (index) => {
+        const exp = snap.focused?.exports[index];
+        if (!exp) return null;
+        return exp.base ?? exp.v0;
+      },
       getGlobalParamValue: (key) => snap.globalParamValues?.[key] ?? null,
       getFocusedIdentityColor: () => focusedIdentityColor(snap.focused),
       getFocusedExportModulated: (index) => !!snap.focused?.exports[index]?.modulated,
-      isBpmSpeedSyncOn: () => !!snap.bpmSpeedSyncOn,
+      // The projector STROBES a paramCenterRelative ring whose key is engine-owned
+      // — the SAME shared syncOwnedKeys fact the dispatch gate consults (I4), so
+      // the display can never disagree with the gate.
+      syncOwnedKeys: snap.syncOwnedKeys ?? EMPTY_SYNC_OWNED_KEYS,
     };
     const { messages, next } = projectLeds(this.profile, projState, this.ledState, this.context);
     this.ledState = next;
@@ -802,6 +992,19 @@ export class MidiManager {
    *  (Deck vs Mixer map the same hardware to different actions). */
   setContext(name: string): void {
     for (const r of this.runtimes) r.setContext(name);
+  }
+
+  /** Set the focus intent from ANY source (contract I2). Touch focus (the hook)
+   *  calls this so touch + MIDI share ONE source of truth for `requestedFocusLayer`
+   *  — the same synchronous request every controller's LED paint + binding gate
+   *  reads. Fans out to every runtime; each is inert if the layer is absent.
+   *  Does NOT re-fire onFocusChange when the intent originated from the hook —
+   *  but since the hook is the onFocusChange sink, a touch call here would loop.
+   *  Guarded: pass through the runtime's setFocusIntent which calls onFocusChange;
+   *  the hook's setMidiFocus is idempotent on an unchanged layer, so the loop
+   *  terminates after one hop. */
+  setFocusIntent(layer: number): void {
+    for (const r of this.runtimes) r.setFocusIntent(layer);
   }
 
   /** Re-validate param keys across controllers once the CPC schema has loaded. */

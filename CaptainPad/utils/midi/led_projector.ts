@@ -26,7 +26,7 @@
 import { ControllerProfile, ControlDef, LedSpec, ControlMatch } from './profile';
 import { noteOn } from './midi_message';
 import { setRingValue, setColor, setAnimation } from './mft/messages';
-import { ColorValues, AnimationValues } from './mft/constants';
+import { ColorValues, AnimationValues, MidiChannels } from './mft/constants';
 
 export interface MidiProjectionState {
   blackout: boolean;
@@ -70,9 +70,13 @@ export interface MidiProjectionState {
    *  a ring PULSE on that encoder (a modulated param's ring visibly breathes).
    *  Optional; omitted → no pulse (steady ring). */
   getFocusedExportModulated?(index: number): boolean;
-  /** Is the engine's BPM→Speed sync currently ON? When true, a `speed`
-   *  paramCenterRelative ring STROBES — the "sync owns speed" cue. Optional. */
-  isBpmSpeedSyncOn?(): boolean;
+  /** Global-param keys the engine is CURRENTLY driving itself (the shared
+   *  `syncOwnedKeys` snapshot fact — contract I4). A `paramCenterRelative` ring
+   *  whose key is in this set STROBES — the "sync owns this param" cue — and its
+   *  knob is inert to manual writes at the flush layer. Read-only here; the SAME
+   *  set the dispatch gate consults, so the display can never disagree with the
+   *  gate (was a hardcoded `'speed'` literal + `isBpmSpeedSyncOn`). */
+  syncOwnedKeys: ReadonlySet<string>;
 }
 
 /** LED diff key -> the last message bytes sent for it (as "b0:b1:b2"), so only
@@ -82,11 +86,6 @@ export interface MidiProjectionState {
  *  across channels). Numeric note keys from the APC path stay backward-shaped
  *  via the same string key. */
 export type LedState = Record<string, string>;
-
-/** The diff key for a message: statusByte + data1 (note/CC number). */
-function ledKey(msg: number[]): string {
-  return `${msg[0]}:${msg[1]}`;
-}
 
 export interface LedProjection {
   messages: number[][];
@@ -243,33 +242,47 @@ function* padVelocities(
   }
 }
 
-/** Emit the outbound ring/colour CC messages for a `focusedParamKnob` or
+/** A single LED target BEFORE construction: the diff key it occupies and the
+ *  value byte it wants, plus a lazy `build` that assembles the concrete 3-byte
+ *  MIDI message ONLY when the diff says it changed. `key` is the same
+ *  `"status:number"` string in `LedState`, so it diffs against `prev`
+ *  directly; no message array / template-string / `String()` is allocated on
+ *  the no-change path (finding 12c). */
+interface LedTarget {
+  key: string;
+  value: number;
+  build(): number[];
+}
+
+/** Emit the ring/colour LED TARGETS for a `focusedParamKnob` or
  *  `paramCenterRelative` control (MFT). Ring value = the live param value scaled
  *  0-127; colour = the focused channel's identity (when the projection state
- *  supplies it). A knob with no param behind it goes dark (ring 0). Returns []
- *  for any non-relative control or when the projection state lacks the MFT
- *  getters (APC-only path). */
-function* ringMessages(
+ *  supplies it). A knob with no param behind it goes dark (ring 0). Yields
+ *  nothing for a non-relative control or when the projection state lacks the MFT
+ *  getters (APC-only path). Each target's `build` is lazy — no CC array is
+ *  constructed until the diff proves the value changed (finding 12c). */
+function* ringTargets(
   control: ControlDef,
   state: MidiProjectionState,
-): Generator<number[]> {
+): Generator<LedTarget> {
   const a = control.action;
   if (a.kind === 'focusedParamKnob') {
     if (!state.getFocusedExportValue) return;
     const v = state.getFocusedExportValue(a.index);
-    yield setRingValue(a.index, v === null ? 0 : Math.round(clampUnit(v) * 127));
+    const ring = v === null ? 0 : Math.round(clampUnit(v) * 127);
+    yield ringTarget(a.index, ring);
     if (v !== null && state.getFocusedIdentityColor) {
       const color = state.getFocusedIdentityColor();
-      if (color !== null) yield setColor(a.index, color);
+      if (color !== null) yield colorTarget(a.index, color);
     } else {
       // No param behind the knob — dark it (inactive colour).
-      yield setColor(a.index, ColorValues.INACTIVE);
+      yield colorTarget(a.index, ColorValues.INACTIVE);
     }
     // Ring PULSE when the param is audio-MODULATED (the ring breathes at 1 beat
     // so the operator sees the modulator is driving it); NONE otherwise. A knob
     // with no param behind it (v === null) never pulses.
     const modulated = v !== null && !!state.getFocusedExportModulated?.(a.index);
-    yield setAnimation(a.index, modulated ? AnimationValues.RGB_PULSE_1_BEAT : AnimationValues.NONE);
+    yield animationTarget(a.index, modulated ? AnimationValues.RGB_PULSE_1_BEAT : AnimationValues.NONE);
     return;
   }
   if (a.kind === 'paramCenterRelative') {
@@ -279,16 +292,50 @@ function* ringMessages(
     const enc = control.match.type === 'cc' ? control.match.cc : null;
     if (enc === null) return;
     const v = state.getGlobalParamValue(a.key);
-    yield setRingValue(enc, v === null ? 0 : Math.round(clampUnit(v) * 127));
-    // STROBE the ring when BPM-sync owns `speed` — the "sync owns speed" cue; a
-    // steady (NONE) ring otherwise. Only the speed knob carries the cue.
-    const strobe = a.key === 'speed' && !!state.isBpmSpeedSyncOn?.();
-    yield setAnimation(enc, strobe ? AnimationValues.RGB_TOGGLE_1_BEAT : AnimationValues.NONE);
+    yield ringTarget(enc, v === null ? 0 : Math.round(clampUnit(v) * 127));
+    // STROBE the ring when the engine owns this key (the shared syncOwnedKeys
+    // fact — contract I4); a steady (NONE) ring otherwise. ANY sync-owned key
+    // carries the cue, and the display reads the SAME set the dispatch gate uses
+    // so the two can never drift (was a `'speed'` literal + isBpmSpeedSyncOn).
+    const strobe = state.syncOwnedKeys.has(a.key);
+    yield animationTarget(enc, strobe ? AnimationValues.RGB_TOGGLE_1_BEAT : AnimationValues.NONE);
   }
+}
+
+// The three MFT CC channels are fixed by the message builders. Precompute the
+// status byte for each so a target's diff key is a cheap string join, and the
+// full CC array is built only on change (via the matching setter).
+const RING_STATUS = 0xb0 | MidiChannels.ROTARY_ENCODER;
+const COLOR_STATUS = 0xb0 | MidiChannels.SWITCH_AND_COLOR;
+const ANIM_STATUS = 0xb0 | MidiChannels.ANIMATIONS_AND_BRIGHTNESS;
+
+function ringTarget(enc: number, value: number): LedTarget {
+  return { key: `${RING_STATUS}:${enc}`, value, build: () => setRingValue(enc, value) };
+}
+function colorTarget(enc: number, value: number): LedTarget {
+  return { key: `${COLOR_STATUS}:${enc}`, value, build: () => setColor(enc, value) };
+}
+function animationTarget(enc: number, value: number): LedTarget {
+  return { key: `${ANIM_STATUS}:${enc}`, value, build: () => setAnimation(enc, value) };
 }
 
 function clampUnit(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/** Yield the APC pad/button LED TARGETS for a control (notes keyed by
+ *  (status, note)). Like `ringTargets`, each target's `build` is lazy so an
+ *  unchanged pad allocates no `noteOn` array (finding 12c). */
+function* padTargets(
+  control: ControlDef,
+  state: MidiProjectionState,
+): Generator<LedTarget> {
+  if (!control.led && control.action.kind !== 'colorPalettePair') return;
+  for (const { note, velocity } of padVelocities(control, state)) {
+    const channel = isRgbPad(note) ? (control.led?.channel ?? DEFAULT_PAD_CHANNEL) : 0;
+    const status = (0x90 | (channel & 0x0f)) & 0xff;
+    yield { key: `${status}:${note}`, value: velocity, build: () => noteOn(channel, note, velocity) };
+  }
 }
 
 export function projectLeds(
@@ -301,23 +348,35 @@ export function projectLeds(
   const messages: number[][] = [];
   const controls = context ? (profile.contexts[context] ?? profile.controls) : profile.controls;
   for (const control of controls) {
-    // APC pad / button feedback (unchanged): notes keyed by (status, note).
-    if (control.led || control.action.kind === 'colorPalettePair') {
-      for (const { note, velocity } of padVelocities(control, state)) {
-        const channel = isRgbPad(note) ? (control.led?.channel ?? DEFAULT_PAD_CHANNEL) : 0;
-        const msg = noteOn(channel, note, velocity);
-        const key = ledKey(msg);
-        next[key] = String(msg[2]);
-        if (prev[key] !== String(msg[2])) messages.push(msg);
-      }
+    // APC pad/button feedback + MFT ring/colour feedback share the same
+    // diff-before-construct path (finding 12c): compute each target's value and
+    // its cheap "status:number" key, record it in `next`, and CONSTRUCT the
+    // 3-byte MIDI array only when the value actually changed vs `prev`.
+    for (const t of padTargets(control, state)) {
+      const cur = String(t.value);
+      next[t.key] = cur;
+      if (prev[t.key] !== cur) messages.push(t.build());
     }
-    // MFT ring/colour feedback (additive — only fires for relative knob controls
-    // on a projection state that supplies the MFT getters).
-    for (const msg of ringMessages(control, state)) {
-      const key = ledKey(msg);
-      next[key] = String(msg[2]);
-      if (prev[key] !== String(msg[2])) messages.push(msg);
+    for (const t of ringTargets(control, state)) {
+      const cur = String(t.value);
+      next[t.key] = cur;
+      if (prev[t.key] !== cur) messages.push(t.build());
     }
+  }
+  // #9 orphan-off: any key lit in `prev` but ABSENT from `next` (the projected
+  // key set shrank — a future divergent profile / VSN1 context switch) would
+  // otherwise stay stuck lit. Emit an explicit OFF for each vanished key. The
+  // key is "status:number"; value 0 is the off for BOTH a note (0x9n n 0 =
+  // note-off) and a CC ring/colour/animation (0xbn n 0 = clear). Skip keys
+  // already at 0 in prev — they are dark; re-sending 0 would be noise.
+  for (const key in prev) {
+    if (key in next) continue;
+    if (prev[key] === '0') continue;
+    const sep = key.indexOf(':');
+    const status = Number(key.slice(0, sep));
+    const number = Number(key.slice(sep + 1));
+    messages.push([status, number, 0]);
+    next[key] = '0';
   }
   return { messages, next };
 }

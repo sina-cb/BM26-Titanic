@@ -30,6 +30,9 @@ export class ControlCoalescer<T> {
   private readonly flush: (controlId: string, payload: T) => void;
   private readonly timers: CoalescerTimers;
   private readonly slots = new Map<string, Slot<T>>();
+  /** Set once dispose() begins; blocks push()/accumulate() from arming a NEW
+   *  timer if the dispose-flush callback re-enters (no timer leak on teardown). */
+  private disposed = false;
 
   constructor(
     intervalMs: number,
@@ -78,6 +81,7 @@ export class ControlCoalescer<T> {
   }
 
   private openWindow(controlId: string): void {
+    if (this.disposed) return; // teardown in progress — never arm a new timer
     const existing = this.slots.get(controlId);
     const slot: Slot<T> = existing ?? { timer: null, pending: null, hasPending: false };
     slot.timer = this.timers.setTimeout(() => this.onWindowEnd(controlId), this.intervalMs);
@@ -99,11 +103,32 @@ export class ControlCoalescer<T> {
     }
   }
 
-  /** Cancel all timers (teardown). Does not flush pending values. */
+  /** Cancel a SINGLE control's pending slot + timer without flushing it. Used
+   *  by the encoder-push reset path to drop a same-encoder pending TURN so the
+   *  reset write isn't immediately clobbered by a stale accumulated delta
+   *  (the reset/turn race — do NOT merge key namespaces, which would break
+   *  combine()'s same-kind invariant). No-op when the slot is idle/absent. */
+  cancel(controlId: string): void {
+    const slot = this.slots.get(controlId);
+    if (!slot) return;
+    if (slot.timer !== null) this.timers.clearTimeout(slot.timer);
+    this.slots.delete(controlId);
+  }
+
+  /** FLUSH every pending trailing value, then cancel all timers (teardown).
+   *  The module contract is "the final resting position is never dropped"
+   *  (§ top-of-file), so a dispose mid-window must emit the last pending value,
+   *  not silently discard it. Timers are cleared and slots cleared FIRST so a
+   *  flush callback that re-enters push()/accumulate() can't re-arm a timer we
+   *  then leak. */
   dispose(): void {
-    for (const slot of this.slots.values()) {
+    this.disposed = true; // block re-entrant push()/accumulate() from re-arming
+    const drained: Array<[string, T]> = [];
+    for (const [controlId, slot] of this.slots) {
       if (slot.timer !== null) this.timers.clearTimeout(slot.timer);
+      if (slot.hasPending && slot.pending !== null) drained.push([controlId, slot.pending]);
     }
     this.slots.clear();
+    for (const [controlId, payload] of drained) this.flush(controlId, payload);
   }
 }

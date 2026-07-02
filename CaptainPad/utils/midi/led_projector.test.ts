@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { validateProfile } from './profile';
 import { projectLeds, MidiProjectionState, LedState } from './led_projector';
+import * as mftMessages from './mft/messages';
+import * as midiMessage from './midi_message';
 
 const profile = validateProfile({
   device: { id: 'apc', label: 'APC', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
@@ -26,6 +28,7 @@ function state(over: Partial<MidiProjectionState> = {}): MidiProjectionState {
     getWindowCursor: () => 0,
     windowSize: 6,
     getColorPaletteHue: () => null,
+    syncOwnedKeys: new Set<string>(),
     ...over,
   };
 }
@@ -209,10 +212,10 @@ describe('projectLeds — MFT rings (driver #2, best-effort)', () => {
     ],
   });
 
-  it('STROBES the speed ring (RGB_TOGGLE_1_BEAT, ch2) when BPM-sync owns speed', () => {
+  it('STROBES the speed ring (RGB_TOGGLE_1_BEAT, ch2) when syncOwnedKeys owns speed (#4/I4)', () => {
     const s = state({
       getGlobalParamValue: (k) => (k === 'speed' ? 0.5 : null),
-      isBpmSpeedSyncOn: () => true,
+      syncOwnedKeys: new Set(['speed']),
     });
     const { messages } = projectLeds(mftGlobal, s, {});
     // Ring value CC 16 on ch0, then a strobe animation on ch2. RGB_TOGGLE_1_BEAT = 4.
@@ -220,13 +223,29 @@ describe('projectLeds — MFT rings (driver #2, best-effort)', () => {
     expect(messages).toContainEqual([0xb2, 16, 4]); // strobe
   });
 
-  it('speed ring is steady (NONE) when BPM-sync is off', () => {
+  it('speed ring is steady (NONE) when syncOwnedKeys is empty (#4/I4)', () => {
     const s = state({
       getGlobalParamValue: (k) => (k === 'speed' ? 0.5 : null),
-      isBpmSpeedSyncOn: () => false,
+      syncOwnedKeys: new Set<string>(),
     });
     const { messages } = projectLeds(mftGlobal, s, {});
     expect(messages).toContainEqual([0xb2, 16, 0]); // NONE
+  });
+
+  it('reads syncOwnedKeys by the ACTUAL key — not a hardcoded speed literal (#4/I4)', () => {
+    // A profile whose relative knob drives `size`; if the projector still keyed
+    // strobe on the 'speed' literal this would never strobe. It must strobe when
+    // `size` is in syncOwnedKeys and stay steady when it is not.
+    const mftSize = validateProfile({
+      device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+      controls: [
+        { id: 'g_size', match: { type: 'cc', channel: 0, cc: 17, relative: true }, action: { kind: 'paramCenterRelative', key: 'size' } },
+      ],
+    });
+    const owned = projectLeds(mftSize, state({ getGlobalParamValue: (k) => (k === 'size' ? 0.5 : null), syncOwnedKeys: new Set(['size']) }), {});
+    expect(owned.messages).toContainEqual([0xb2, 17, 4]); // strobe — size is owned
+    const free = projectLeds(mftSize, state({ getGlobalParamValue: (k) => (k === 'size' ? 0.5 : null), syncOwnedKeys: new Set(['speed']) }), {});
+    expect(free.messages).toContainEqual([0xb2, 17, 0]); // NONE — only speed owned, not size
   });
 
   // ── The APC LED path stays byte-identical (no animation/ring bytes leak in) ──
@@ -238,10 +257,122 @@ describe('projectLeds — MFT rings (driver #2, best-effort)', () => {
       getFocusedExportValue: () => 0.5,
       getFocusedExportModulated: () => true,
       getGlobalParamValue: () => 0.5,
-      isBpmSpeedSyncOn: () => true,
+      syncOwnedKeys: new Set(['speed']),
     });
     const { messages } = projectLeds(profile, s, {});
     // Only the APC note messages (status 0x90); no CC (0xb0/0xb1/0xb2) anywhere.
     for (const m of messages) expect(m[0] & 0xf0).toBe(0x90);
+  });
+});
+
+// ── #9 orphaned-LED off: keys that VANISH from the projected set get an off ──
+describe('projectLeds — #9 orphaned-LED off', () => {
+  const mft = validateProfile({
+    device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+    controls: [
+      { id: 'k0', match: { type: 'cc', channel: 0, cc: 0, relative: true }, action: { kind: 'focusedParamKnob', index: 0 } },
+    ],
+  });
+
+  it('emits an off for a note key present in prev but absent from next (APC)', () => {
+    // Frame 1 lights the blackout note (107) on.
+    const first = projectLeds(profile, state({ blackout: true }), {});
+    expect(first.next['144:107']).toBe('1'); // 0x90 = 144, note 107, on
+    // Frame 2 projects an EMPTY profile (the key set shrank to nothing). The lit
+    // note vanishes from `next` → must get an explicit off.
+    const empty = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+      controls: [{ id: 'nop', match: { type: 'cc', channel: 0, cc: 60 }, action: { kind: 'master' } }],
+    });
+    const second = projectLeds(empty, state({ blackout: true }), first.next);
+    expect(second.messages).toContainEqual([0x90, 107, 0]); // note-off for the orphan
+    expect(second.next['144:107']).toBe('0');
+  });
+
+  it('emits a CC 0 (ring clear) for an MFT ring key that vanishes', () => {
+    // Frame 1 lights knob-0 ring + colour + animation.
+    const s = state({ getFocusedExportValue: (i) => (i === 0 ? 1.0 : null), getFocusedIdentityColor: () => 1 });
+    const first = projectLeds(mft, s, {});
+    expect(first.next['176:0']).toBe('127'); // 0xb0 ring full
+    // Frame 2: a profile with NO ring controls → the ring/colour/anim keys vanish.
+    const noRings = validateProfile({
+      device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+      controls: [{ id: 'push', match: { type: 'cc', channel: 1, cc: 5 }, action: { kind: 'focusedParamReset', index: 5 } }],
+    });
+    const second = projectLeds(noRings, s, first.next);
+    expect(second.messages).toContainEqual([0xb0, 0, 0]); // ring cleared
+    expect(second.messages).toContainEqual([0xb1, 0, 0]); // colour cleared (0xb1)
+  });
+
+  it('does NOT re-emit an off for a key that was already dark (0) in prev', () => {
+    // prev has a note already at 0 and one at 1; only the lit one that vanishes
+    // should get an off — the dark one is noise-free.
+    const prev: LedState = { '144:50': '0', '144:51': '1' };
+    const empty = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+      controls: [{ id: 'nop', match: { type: 'cc', channel: 0, cc: 60 }, action: { kind: 'master' } }],
+    });
+    const { messages } = projectLeds(empty, state(), prev);
+    expect(messages).toContainEqual([0x90, 51, 0]); // the lit orphan → off
+    expect(messages).not.toContainEqual([0x90, 50, 0]); // the already-dark one → no noise
+  });
+});
+
+// ── 12c diff-before-construct: no MIDI array is built on the no-change path ──
+describe('projectLeds — 12c diff before construct (lazy allocation)', () => {
+  const mft = validateProfile({
+    device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+    controls: [
+      { id: 'k0', match: { type: 'cc', channel: 0, cc: 0, relative: true }, action: { kind: 'focusedParamKnob', index: 0 } },
+    ],
+  });
+
+  it('constructs ZERO messages (no noteOn build) when an APC projection is unchanged', () => {
+    const s = state({ blackout: true, activePattern: 'p2', resolvePatternForBank: (_b, i) => `p${i}` });
+    const first = projectLeds(profile, s, {});
+    const noteOnSpy = vi.spyOn(midiMessage, 'noteOn');
+    const second = projectLeds(profile, s, first.next);
+    expect(second.messages).toHaveLength(0);
+    expect(noteOnSpy).not.toHaveBeenCalled(); // nothing changed → nothing built
+    noteOnSpy.mockRestore();
+  });
+
+  it('constructs ZERO ring/colour/anim messages when an MFT projection is unchanged', () => {
+    const s = state({ getFocusedExportValue: (i) => (i === 0 ? 0.5 : null), getFocusedIdentityColor: () => 1 });
+    const first = projectLeds(mft, s, {});
+    const ringSpy = vi.spyOn(mftMessages, 'setRingValue');
+    const colorSpy = vi.spyOn(mftMessages, 'setColor');
+    const animSpy = vi.spyOn(mftMessages, 'setAnimation');
+    const second = projectLeds(mft, s, first.next);
+    expect(second.messages).toHaveLength(0);
+    expect(ringSpy).not.toHaveBeenCalled();
+    expect(colorSpy).not.toHaveBeenCalled();
+    expect(animSpy).not.toHaveBeenCalled();
+    ringSpy.mockRestore(); colorSpy.mockRestore(); animSpy.mockRestore();
+  });
+
+  it('builds ONLY the changed message on a partial change (identical output to before)', () => {
+    // Two knobs; move only knob 1. Knob 0 must not be rebuilt, and the single
+    // emitted message must equal the full-projection message for knob 1.
+    const mft2 = validateProfile({
+      device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+      controls: [
+        { id: 'k0', match: { type: 'cc', channel: 0, cc: 0, relative: true }, action: { kind: 'focusedParamKnob', index: 0 } },
+        { id: 'k1', match: { type: 'cc', channel: 0, cc: 1, relative: true }, action: { kind: 'focusedParamKnob', index: 1 } },
+      ],
+    });
+    const before = state({ getFocusedExportValue: (i) => (i === 0 ? 0.5 : i === 1 ? 0.5 : null), getFocusedIdentityColor: () => 1 });
+    const first = projectLeds(mft2, before, {});
+    const after = state({ getFocusedExportValue: (i) => (i === 0 ? 0.5 : i === 1 ? 1.0 : null), getFocusedIdentityColor: () => 1 });
+    const ringSpy = vi.spyOn(mftMessages, 'setRingValue');
+    const second = projectLeds(mft2, after, first.next);
+    // Knob 1's ring changed 0.5→1.0; knob 0 unchanged. Ring build fires once.
+    expect(second.messages).toContainEqual([0xb0, 1, 127]); // knob 1 → full
+    expect(ringSpy).toHaveBeenCalledTimes(1);
+    expect(ringSpy).toHaveBeenCalledWith(1, 127);
+    ringSpy.mockRestore();
+    // Output identical to a full fresh projection's knob-1 ring value.
+    const fresh = projectLeds(mft2, after, {});
+    expect(fresh.messages).toContainEqual([0xb0, 1, 127]);
   });
 });

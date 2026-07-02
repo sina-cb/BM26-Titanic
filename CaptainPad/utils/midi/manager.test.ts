@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { MidiManager, MidiEngineSnapshot } from './manager';
+import { MidiManager, MidiEngineSnapshot, combineDelta } from './manager';
 import { MidiTransport, MidiEndpoint, MidiMessageEvent } from './transport';
 import { validateProfile } from './profile';
 import { MidiDispatchApi } from './dispatch';
@@ -82,7 +82,7 @@ function setup(snapshot: MidiEngineSnapshot, endpoints = fullEndpoints) {
 const baseSnap: MidiEngineSnapshot = {
   blackout: false, activePattern: null, patterns: ['p0', 'p1', 'p2'], globalEffects: {},
   layers: [], deckLayer: null, activeContext: 'mixer', globalEffectSlots: [], colorPalettes: [],
-  focused: null,
+  focused: null, syncOwnedKeys: new Set<string>(),
 };
 
 describe('MidiManager (integration, fake transport)', () => {
@@ -227,11 +227,22 @@ describe('MidiManager (integration, fake transport)', () => {
     expect(manager.getStatuses()[0].kind).toBe('disconnected');
   });
 
-  it('records the last event for the Config-tab monitor', async () => {
+  it('records the last event for the Config-tab monitor (discrete, raw format)', async () => {
+    // A discrete (note) control still records the raw monitor line immediately.
     const { manager, transport } = setup(baseSnap);
     await manager.start();
-    transport.emit([0xb0, 48, 64]);
-    expect(manager.getStatuses()[0].lastEvent).toMatch(/CC ch0 #48 = 64 → fader_1/);
+    transport.emit([0x90, 107, 127]); // blackout note press
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/Note On ch0 #107/);
+  });
+
+  it('12b: a CONTINUOUS control records its monitor line at FLUSH cadence, not raw rate', async () => {
+    // The APC fader is continuous → the raw-rate setStatus is skipped; the
+    // coalescer flush records the resolved value (~30 Hz) so React consumers
+    // don't re-render >100/s.
+    const { manager, transport } = setup(baseSnap);
+    await manager.start();
+    transport.emit([0xb0, 48, 64]); // fader 1 (paramCenter speed) — leading-edge flush
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/speed = 0\.50/);
   });
 
   it('switches mapping when the active context (tab) changes', async () => {
@@ -792,19 +803,21 @@ describe('MidiManager — MIDI Fighter Twister', () => {
 
   it('speed-sync ON → a speed knob delta is INERT (swallow, no write)', async () => {
     const snap: MidiEngineSnapshot = {
-      ...baseSnap, globalParamValues: { speed: 0.5, size: 0.5 }, bpmSpeedSyncOn: true,
+      ...baseSnap, globalParamValues: { speed: 0.5, size: 0.5 },
+      bpmSpeedSyncOn: true, syncOwnedKeys: new Set(['speed']),
     };
     const { manager, api, transport, ft } = setupGlobalMft(() => snap);
     await manager.start();
     transport.emit([0xb0, 16, 65]); // +0.01 on speed
     ft.flushDue();
     expect(api.updateParamCenter).not.toHaveBeenCalled();
-    expect(manager.getStatuses()[0].lastEvent).toMatch(/BPM sync owns it/);
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/sync owns it/);
   });
 
   it('speed-sync OFF → a speed knob delta writes normally', async () => {
     const snap: MidiEngineSnapshot = {
-      ...baseSnap, globalParamValues: { speed: 0.5, size: 0.5 }, bpmSpeedSyncOn: false,
+      ...baseSnap, globalParamValues: { speed: 0.5, size: 0.5 },
+      bpmSpeedSyncOn: false, syncOwnedKeys: new Set<string>(),
     };
     const { manager, api, transport, ft } = setupGlobalMft(() => snap);
     await manager.start();
@@ -815,12 +828,267 @@ describe('MidiManager — MIDI Fighter Twister', () => {
 
   it('speed-sync ON gates only speed — a size knob delta still writes', async () => {
     const snap: MidiEngineSnapshot = {
-      ...baseSnap, globalParamValues: { speed: 0.5, size: 0.5 }, bpmSpeedSyncOn: true,
+      ...baseSnap, globalParamValues: { speed: 0.5, size: 0.5 },
+      bpmSpeedSyncOn: true, syncOwnedKeys: new Set(['speed']),
     };
     const { manager, api, transport, ft } = setupGlobalMft(() => snap);
     await manager.start();
     transport.emit([0xb0, 17, 65]); // +0.01 on size
     ft.flushDue();
     expect(api.updateParamCenter).toHaveBeenCalledWith({ size: expect.closeTo(0.51, 5) });
+  });
+});
+
+// ── D1 findings (meta-review Part A/B): #3, #2, #4, #7, N3, 8a, 8b ───────────
+describe('MidiManager — D1 meta-review fixes', () => {
+  function makeFakeTimers() {
+    let id = 0;
+    const armed = new Map<number, () => void>();
+    return {
+      timers: {
+        setTimeout: (cb: () => void) => { const h = ++id; armed.set(h, cb); return h as unknown as ReturnType<typeof setTimeout>; },
+        clearTimeout: (h: ReturnType<typeof setTimeout>) => { armed.delete(h as unknown as number); },
+      },
+      flushDue() { const due = [...armed.entries()]; armed.clear(); for (const [, cb] of due) cb(); },
+    };
+  }
+
+  const mftEndpoints: MidiEndpoint[] = [
+    { id: 'in-0', name: 'Midi Fighter Twister', portIndex: 0, kind: 'source' },
+    { id: 'out-0', name: 'Midi Fighter Twister', portIndex: 0, kind: 'destination' },
+  ];
+
+  // Knob 0 turn + push (reset). Turn control id is 'k0_turn'.
+  const mftProfile = validateProfile({
+    device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+    controls: [
+      { id: 'k0_turn', match: { type: 'cc', channel: 0, cc: 0, relative: true }, action: { kind: 'focusedParamKnob', index: 0, steps: [0.01, 0.05, 0.1] } },
+      { id: 'k0_push', match: { type: 'cc', channel: 1, cc: 0 }, action: { kind: 'focusedParamReset', index: 0 } },
+    ],
+  });
+
+  // ── #3 fast-turn undershoot: optimistic anchor accumulates across windows ──
+  it('#3 focusedParamDelta accumulates across windows off the LOCAL optimistic value, not the lagging snapshot', async () => {
+    // Snapshot is FROZEN at 0.5 (the engine echo hasn't caught up — the fast
+    // sweep's ~150 ms lag). Without the optimistic anchor each window re-seeds
+    // from 0.5 and every flush lands ~0.51, losing the whole sweep. With it, the
+    // three windows accumulate to 0.53.
+    const snap: MidiEngineSnapshot = {
+      ...baseSnap, activeContext: 'deck', deckLayer: { id: 'd1', fader: 1 },
+      focused: { role: 'deck', layer: 0, id: 'd1', entryId: 'e', key: 'deck:d1:e:', exports: [{ id: 5, name: 'glow', v0: 0.5 }], midiMappings: [] },
+    };
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const ft = makeFakeTimers();
+    const manager = new MidiManager({
+      profiles: [mftProfile], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'deck', coalescerTimers: ft.timers,
+    });
+    await manager.start();
+    transport.emit([0xb0, 0, 65]); ft.flushDue(); // window 1: 0.5 + 0.01 = 0.51
+    transport.emit([0xb0, 0, 65]); ft.flushDue(); // window 2: 0.51 + 0.01 = 0.52 (NOT 0.51)
+    transport.emit([0xb0, 0, 65]); ft.flushDue(); // window 3: 0.53
+    const calls = (api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[calls.length - 1][1]).toBeCloseTo(0.53, 5);
+  });
+
+  it('#3 re-seeds the optimistic anchor on an external snapshot jump (reset/other surface)', async () => {
+    // The snapshot JUMPS between windows (an external write) — the anchor must
+    // re-seed to the new snapshot, not keep drifting off the stale optimistic.
+    let v0 = 0.5;
+    const snap = (): MidiEngineSnapshot => ({
+      ...baseSnap, activeContext: 'deck', deckLayer: { id: 'd1', fader: 1 },
+      focused: { role: 'deck', layer: 0, id: 'd1', entryId: 'e', key: 'deck:d1:e:', exports: [{ id: 5, name: 'glow', v0 }], midiMappings: [] },
+    });
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const ft = makeFakeTimers();
+    const manager = new MidiManager({
+      profiles: [mftProfile], transportFactory: () => transport, api,
+      getSnapshot: snap, defaultContext: 'deck', coalescerTimers: ft.timers,
+    });
+    await manager.start();
+    transport.emit([0xb0, 0, 65]); ft.flushDue(); // 0.5 → 0.51 (optimistic now 0.51)
+    v0 = 0.9;                                      // external jump (> epsilon 0.15)
+    transport.emit([0xb0, 0, 65]); ft.flushDue(); // re-seed from 0.9 → 0.91
+    const calls = (api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[calls.length - 1][1]).toBeCloseTo(0.91, 5);
+  });
+
+  it('#3 paramCenterDelta also accumulates off the optimistic value across windows', async () => {
+    const globalProfile = validateProfile({
+      device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+      controls: [{ id: 'g0', match: { type: 'cc', channel: 0, cc: 16, relative: true }, action: { kind: 'paramCenterRelative', key: 'size', steps: [0.01, 0.05, 0.1] } }],
+    });
+    const snap: MidiEngineSnapshot = { ...baseSnap, globalParamValues: { size: 0.5 } }; // frozen echo
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const ft = makeFakeTimers();
+    const manager = new MidiManager({
+      profiles: [globalProfile], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'deck', coalescerTimers: ft.timers,
+    });
+    await manager.start();
+    transport.emit([0xb0, 16, 65]); ft.flushDue(); // 0.5 → 0.51
+    transport.emit([0xb0, 16, 65]); ft.flushDue(); // 0.51 → 0.52 (NOT 0.51)
+    const calls = (api.updateParamCenter as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[calls.length - 1][0]).toEqual({ size: expect.closeTo(0.52, 5) });
+  });
+
+  // ── #4 sync gate at shared depth: ABSOLUTE paramCenter path also gated ──
+  it('#4 an ABSOLUTE paramCenter fader on a sync-owned key is INERT (shared gate, not just the delta path)', async () => {
+    const apcProfile = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+      controls: [{ id: 'fader7', match: { type: 'cc', channel: 0, cc: 54 }, action: { kind: 'paramCenter', key: 'speed', range: [0, 1] } }],
+    });
+    const snap: MidiEngineSnapshot = { ...baseSnap, syncOwnedKeys: new Set(['speed']) };
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [apcProfile], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'deck',
+    });
+    await manager.start();
+    transport.emit([0xb0, 54, 127]); // absolute fader → speed, but sync owns it
+    expect(api.updateParamCenter).not.toHaveBeenCalled();
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/sync owns it/);
+  });
+
+  it('#4 the same absolute fader writes when the key is NOT sync-owned', async () => {
+    const apcProfile = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+      controls: [{ id: 'fader7', match: { type: 'cc', channel: 0, cc: 54 }, action: { kind: 'paramCenter', key: 'speed', range: [0, 1] } }],
+    });
+    const snap: MidiEngineSnapshot = { ...baseSnap, syncOwnedKeys: new Set<string>() };
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [apcProfile], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'deck',
+    });
+    await manager.start();
+    transport.emit([0xb0, 54, 127]);
+    expect(api.updateParamCenter).toHaveBeenCalledWith({ speed: 1 });
+  });
+
+  // ── #2 focus single-source-of-truth: setFocusIntent clears a stale request ──
+  it('#2 setFocusIntent (touch) clears a stale MIDI focus request so later bindings are NOT swallowed', async () => {
+    // A focus that no bound fader follows must NOT leave requestedFocusLayer
+    // permanently stale (the old bug: only applyBinding cleared it). After the
+    // snapshot catches up, effectiveFocusLayer clears the request; a binding on
+    // the now-focused channel flows.
+    let snap: MidiEngineSnapshot = {
+      ...baseSnap, activeContext: 'mixer', layers: [{ id: 'ch0', fader: 1 }, { id: 'ch1', fader: 1 }],
+      focused: { role: 'mixer', layer: 0, id: 'ch0', entryId: 'e0', key: 'mixer:ch0:e0:m1',
+        exports: [{ id: 3, name: 'glow', v0: 0.5 }],
+        midiMappings: [{ id: 'm1', enabled: true, control: { type: 'cc', channel: 0, number: 51 }, target: { parameter: 'glow' }, range: [0, 1] }] },
+    };
+    const bindProfile = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+      contexts: { mixer: [{ id: 'noop', match: { type: 'note', channel: 0, notes: [120] }, action: { kind: 'blackoutToggle' } }] },
+    });
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [bindProfile], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'mixer',
+      // Touch focus: swap the snapshot to layer 1 synchronously (the catch-up).
+      onFocusChange: (l) => { if (l === 1) snap = { ...snap, focused: { role: 'mixer', layer: 1, id: 'ch1', entryId: 'e1', key: 'mixer:ch1:e1:m1', exports: [{ id: 4, name: 'glow', v0: 0.5 }], midiMappings: [{ id: 'm1', enabled: true, control: { type: 'cc', channel: 0, number: 51 }, target: { parameter: 'glow' }, range: [0, 1] }] } }; },
+    });
+    await manager.start();
+    manager.setFocusIntent(1); // touch tap → focus ch1; snapshot catches up in the callback
+    transport.emit([0xb0, 51, 64]); // ~0.5 ≈ current → picks up → writes to ch1
+    expect(api.setMixerChannelControl).toHaveBeenCalledWith('ch1', 4, expect.closeTo(64 / 127, 5));
+  });
+
+  it('#2 MidiManager.setFocusIntent fans out to the runtime and fires onFocusChange', async () => {
+    const snap: MidiEngineSnapshot = {
+      ...baseSnap, activeContext: 'mixer', layers: [{ id: 'ch0', fader: 1 }, { id: 'ch1', fader: 1 }],
+      focused: { role: 'mixer', layer: 0, id: 'ch0', entryId: 'e', key: 'mixer:ch0:e:', exports: [], midiMappings: [] },
+    };
+    const onFocusChange = vi.fn();
+    const p = validateProfile({ device: { id: 'apc', label: 'APC', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 }, contexts: { mixer: [{ id: 'noop', match: { type: 'note', channel: 0, notes: [120] }, action: { kind: 'blackoutToggle' } }] } });
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({ profiles: [p], transportFactory: () => transport, api, getSnapshot: () => snap, defaultContext: 'mixer', onFocusChange });
+    await manager.start();
+    manager.setFocusIntent(1);
+    expect(onFocusChange).toHaveBeenCalledWith(1);
+    manager.setFocusIntent(5); // absent layer → inert
+    expect(onFocusChange).toHaveBeenCalledTimes(1);
+  });
+
+  // ── N3 cross-channel delta: focus change mid-window DROPS the delta ──
+  it('N3 drops a focusedParamDelta when focus changed between accumulate and flush', async () => {
+    let snap: MidiEngineSnapshot = {
+      ...baseSnap, activeContext: 'deck', deckLayer: { id: 'd1', fader: 1 },
+      focused: { role: 'deck', layer: 0, id: 'd1', entryId: 'e0', key: 'deck:d1:e0:', exports: [{ id: 5, name: 'glow', v0: 0.5 }], midiMappings: [] },
+    };
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const ft = makeFakeTimers();
+    const manager = new MidiManager({
+      profiles: [mftProfile], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'deck', coalescerTimers: ft.timers,
+    });
+    await manager.start();
+    transport.emit([0xb0, 0, 65]); // accumulate a +0.01 delta under focus key e0
+    // Focus changes to a DIFFERENT channel/entry before the window flushes.
+    snap = { ...snap, focused: { role: 'deck', layer: 0, id: 'd2', entryId: 'e9', key: 'deck:d2:e9:', exports: [{ id: 7, name: 'glow', v0: 0.5 }], midiMappings: [] } };
+    ft.flushDue();
+    expect(api.setDeckChannelControl).not.toHaveBeenCalled(); // dropped, not written to d2
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/focus changed/);
+  });
+
+  // ── #7 reset/turn race: encoder push cancels the same encoder's pending turn ──
+  it('#7 an encoder push cancels the same knob\'s pending accumulated turn (no post-reset jump)', async () => {
+    const snap: MidiEngineSnapshot = {
+      ...baseSnap, activeContext: 'deck', deckLayer: { id: 'd1', fader: 1 },
+      focused: { role: 'deck', layer: 0, id: 'd1', entryId: 'e', key: 'deck:d1:e:', exports: [{ id: 5, name: 'glow', v0: 0.5, defaultValue: 0.3 }], midiMappings: [] },
+    };
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const ft = makeFakeTimers();
+    const manager = new MidiManager({
+      profiles: [mftProfile], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'deck', coalescerTimers: ft.timers,
+    });
+    await manager.start();
+    transport.emit([0xb0, 0, 66]); // spin +0.05 → pending in the k0_turn slot
+    transport.emit([0xb1, 0, 127]); // push knob 0 → reset to 0.3, cancels the pending turn
+    ft.flushDue(); // the reset flushes; the cancelled turn must NOT also flush
+    const calls = (api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls;
+    // Only the reset write (0.3) — no trailing turn write (which would have been ~0.55).
+    expect(calls).toEqual([[5, 0.3]]);
+  });
+
+  // ── 8a combineDelta mismatched kinds → THROW (codex: fail loud, no fallback) ──
+  it('8a combineDelta throws on mismatched kinds (was a silent `return incoming`)', () => {
+    expect(() => combineDelta(
+      { kind: 'focusedParamDelta', index: 0, delta: 0.1 },
+      { kind: 'paramCenterDelta', key: 'speed', delta: 0.1 },
+    )).toThrow(/mismatched kinds/);
+  });
+
+  // ── 8b unknown CPC key on the delta path → setStatus error (not silent) ──
+  it('8b an unknown global-param key on a delta is a VISIBLE error, not a silent swallow', async () => {
+    const globalProfile = validateProfile({
+      device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+      controls: [{ id: 'g0', match: { type: 'cc', channel: 0, cc: 16, relative: true }, action: { kind: 'paramCenterRelative', key: 'bogus', steps: [0.01, 0.05, 0.1] } }],
+    });
+    const snap: MidiEngineSnapshot = { ...baseSnap, globalParamValues: { speed: 0.5 } }; // no 'bogus'
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const ft = makeFakeTimers();
+    const manager = new MidiManager({
+      profiles: [globalProfile], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'deck', coalescerTimers: ft.timers,
+    });
+    await manager.start();
+    transport.emit([0xb0, 16, 65]); ft.flushDue();
+    expect(api.updateParamCenter).not.toHaveBeenCalled();
+    const s = manager.getStatuses()[0];
+    expect(s.kind).toBe('error');
+    expect(s.error).toMatch(/unknown global param key 'bogus'/);
   });
 });

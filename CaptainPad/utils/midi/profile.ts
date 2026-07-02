@@ -400,11 +400,15 @@ export interface ParamKeyError {
 }
 
 /**
- * Cross-check every paramCenter control's `key` against the live engine CPC
- * schema keys. Returns the list of offending controls (for the Config tab's
- * aggregate banner — other controls keep working, per docs/34 failure table).
- * Pass { strict: true } to instead THROW on the first unknown key (codex P0
- * "fail loudly"; used where a profile must be wholly valid before it runs).
+ * Cross-check every param-key-bearing control's `key` against the live engine
+ * CPC schema keys. BOTH `paramCenter` (absolute APC fader) AND
+ * `paramCenterRelative` (MFT bank-2 relative knob) carry a CPC key that must
+ * exist in the schema — a typo in EITHER dies silently at runtime, so both are
+ * validated against the same allowed-key list (`schemaKeys`). Returns the list
+ * of offending controls (for the Config tab's aggregate banner — other controls
+ * keep working, per docs/34 failure table). Pass { strict: true } to instead
+ * THROW on the first unknown key (codex P0 "fail loudly"; used where a profile
+ * must be wholly valid before it runs).
  */
 export function validateProfileParams(
   profile: ControllerProfile,
@@ -417,15 +421,18 @@ export function validateProfileParams(
   // tab it lives under). Dedup so a key reused across contexts reports once.
   for (const controls of Object.values(profile.contexts)) {
     for (const c of controls) {
-      if (c.action.kind === 'paramCenter' && !schemaKeys.has(c.action.key)) {
-        const dedupKey = `${c.id}:${c.action.key}`;
-        if (seen.has(dedupKey)) continue;
-        seen.add(dedupKey);
-        if (opts.strict) {
-          fail(`control '${c.id}': paramCenter key '${c.action.key}' is not in the engine CPC schema`);
-        }
-        errors.push({ controlId: c.id, key: c.action.key });
+      // Both kinds resolve to a CPC paramCenter write, so both keys are held to
+      // the SAME schema. Name the offending kind in the throw for a precise cue.
+      const a = c.action;
+      if (a.kind !== 'paramCenter' && a.kind !== 'paramCenterRelative') continue;
+      if (schemaKeys.has(a.key)) continue;
+      const dedupKey = `${c.id}:${a.key}`;
+      if (seen.has(dedupKey)) continue;
+      seen.add(dedupKey);
+      if (opts.strict) {
+        fail(`control '${c.id}': ${a.kind} key '${a.key}' is not in the engine CPC schema`);
       }
+      errors.push({ controlId: c.id, key: a.key });
     }
   }
   return errors;
