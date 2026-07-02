@@ -17,8 +17,8 @@ function state(over: Partial<MidiProjectionState> = {}): MidiProjectionState {
     getGlobalEffectState: () => false,
     resolvePatternForBank: () => null,
     layerExists: () => false,
-    getLayerSolo: () => false,
     getFocusedLayer: () => -1,
+    isFocusLocked: () => false,
     getGlobalEffectSlotActive: () => false,
     globalEffectSlotCount: 0,
     getLayerPlaylistLength: () => 0,
@@ -84,6 +84,36 @@ describe('projectLeds', () => {
     const { messages } = projectLeds(p, s, {}, 'mixer');
     expect(messages).toContainEqual([0x90, 100, 0]); // layer 0 exists but not focused → off
     expect(messages).toContainEqual([0x90, 101, 1]); // layer 1 focused → lit
+  });
+
+  it('focusChannel track button BLINKS (flash velocity) while the focus is pickup-locked', () => {
+    const p = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+      contexts: {
+        mixer: [
+          { id: 't1', match: { type: 'note', channel: 0, notes: [100] }, action: { kind: 'focusChannel', layer: 0 }, led: { on: 1, off: 0, flash: 2 } },
+        ],
+      },
+    });
+    // Focused + locked → blink velocity 2.
+    const locked = projectLeds(p, state({ layerExists: (l) => l === 0, getFocusedLayer: () => 0, isFocusLocked: () => true }), {}, 'mixer');
+    expect(locked.messages).toContainEqual([0x90, 100, 2]);
+    // Focused + unlocked → solid on (velocity 1).
+    const solid = projectLeds(p, state({ layerExists: (l) => l === 0, getFocusedLayer: () => 0, isFocusLocked: () => false }), {}, 'mixer');
+    expect(solid.messages).toContainEqual([0x90, 100, 1]);
+  });
+
+  it('focusChannel flash falls back to `on` when the profile omits a flash velocity', () => {
+    const p = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+      contexts: {
+        mixer: [
+          { id: 't1', match: { type: 'note', channel: 0, notes: [100] }, action: { kind: 'focusChannel', layer: 0 }, led: { on: 1, off: 0 } },
+        ],
+      },
+    });
+    const locked = projectLeds(p, state({ layerExists: (l) => l === 0, getFocusedLayer: () => 0, isFocusLocked: () => true }), {}, 'mixer');
+    expect(locked.messages).toContainEqual([0x90, 100, 1]); // no flash → on
   });
 
   it('colour-pair pads show c1 on even columns and c2 on odd (Stage 2)', () => {

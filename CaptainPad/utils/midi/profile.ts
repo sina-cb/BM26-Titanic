@@ -39,7 +39,6 @@ export type ProfileAction =
   // A mixer "layer" = the Nth mixer channel by order (0-based). Inert when no
   // such channel exists (and its pad column stays dark).
   | { kind: 'mixerLayerFader'; layer: number; range: Range }
-  | { kind: 'mixerLayerSolo'; layer: number }
   // Focus the Nth layer (Mixer tab) so the learnable param faders (4-6) drive
   // its active pattern's MIDI bindings. Controller/UI state, not an engine call.
   | { kind: 'focusChannel'; layer: number }
@@ -55,12 +54,16 @@ export type ProfileAction =
 
 /** LED feedback spec. RGB pads use { active, idle } colour velocities (with
  *  optional `channel` for brightness/behaviour, default 6 = solid 100%).
- *  Single-colour buttons use { on, off } velocities (0x00 off / 0x01 on). */
+ *  Single-colour buttons use { on, off } velocities (0x00 off / 0x01 on).
+ *  `flash` is the velocity a single-colour button emits while its focused
+ *  channel is pickup-LOCKED (APC single-colour blink = velocity 2); the
+ *  projector falls back to `on` when a control has no flash velocity. */
 export interface LedSpec {
   active?: number;
   idle?: number;
   on?: number;
   off?: number;
+  flash?: number;
   channel?: number;
 }
 
@@ -105,7 +108,7 @@ export class ProfileValidationError extends Error {
 const ACTION_KINDS = new Set([
   'paramCenter', 'master', 'pattern', 'patternBank',
   'blackoutToggle', 'globalEffect', 'sectionBrightness', 'groupFixedColor',
-  'mixerLayerFader', 'mixerLayerSolo', 'focusChannel', 'globalEffectSlot',
+  'mixerLayerFader', 'focusChannel', 'globalEffectSlot',
   'playlistScroll', 'playlistWindowSelect', 'colorPalettePair',
 ]);
 
@@ -193,11 +196,6 @@ function validateAction(where: string, a: any): ProfileAction {
         fail(`${where}: mixerLayerFader requires a non-negative integer 'layer'`);
       }
       return { kind: 'mixerLayerFader', layer: a.layer, range: a.range ? validateRange(where, a.range) : [0, 1] };
-    case 'mixerLayerSolo':
-      if (typeof a.layer !== 'number' || a.layer < 0 || !Number.isInteger(a.layer)) {
-        fail(`${where}: mixerLayerSolo requires a non-negative integer 'layer'`);
-      }
-      return { kind: 'mixerLayerSolo', layer: a.layer };
     case 'focusChannel':
       if (typeof a.layer !== 'number' || a.layer < 0 || !Number.isInteger(a.layer)) {
         fail(`${where}: focusChannel requires a non-negative integer 'layer'`);
@@ -232,11 +230,11 @@ function validateAction(where: string, a: any): ProfileAction {
 function validateLed(where: string, led: any): LedSpec | undefined {
   if (led === undefined || led === null) return undefined;
   if (typeof led !== 'object') fail(`${where}: led must be an object`);
-  for (const k of ['active', 'idle', 'on', 'off', 'channel'] as const) {
+  for (const k of ['active', 'idle', 'on', 'off', 'flash', 'channel'] as const) {
     if (led[k] !== undefined && !isByte(led[k])) fail(`${where}: led.${k} must be 0-127`);
   }
   return {
-    active: led.active, idle: led.idle, on: led.on, off: led.off, channel: led.channel,
+    active: led.active, idle: led.idle, on: led.on, off: led.off, flash: led.flash, channel: led.channel,
   };
 }
 

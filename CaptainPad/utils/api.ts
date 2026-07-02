@@ -1871,9 +1871,20 @@ export type MidiMapping = {
   range: [number, number];
 };
 
-// Same [-4, 4] window as RANGE_MIN/RANGE_MAX in midi_mapping_engine.js. The
-// learn popover pre-clamps so a typo can't bounce the save with a 400.
+// Same [-4, 4] window as RANGE_MIN/RANGE_MAX in midi_mapping_engine.js (and
+// modulation_engine.js). The learn + modulation popovers pre-clamp so a typo
+// can't bounce the save with a 400.
 export const MIDI_RANGE_LIMIT = 4;
+
+/** Clamp a range value into the engine's [-MIDI_RANGE_LIMIT, MIDI_RANGE_LIMIT]
+ *  window. Non-finite → 0. The single clamp both popovers share (was three
+ *  parallel copies). */
+export function clampToRangeLimit(x: number): number {
+  if (!Number.isFinite(x)) return 0;
+  if (x < -MIDI_RANGE_LIMIT) return -MIDI_RANGE_LIMIT;
+  if (x > MIDI_RANGE_LIMIT) return MIDI_RANGE_LIMIT;
+  return x;
+}
 
 function midiMappingUrl(playlistName: string, itemId: string, mappingId: string): string {
   return `${api_base}/api/playlists/${encodeURIComponent(playlistName)}` +

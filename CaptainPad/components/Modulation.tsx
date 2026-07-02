@@ -15,7 +15,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Modal, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View,
+  Modal, Pressable, ScrollView, Text, TouchableOpacity, View,
 } from 'react-native';
 import Svg, { Path, Line, Circle } from 'react-native-svg';
 import { usePalette } from '@/hooks/use-theme';
@@ -23,13 +23,13 @@ import { useAudioSignals, useLiveParams, type AudioSignalDescriptor } from '@/ho
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
 import { audioAccentHex } from '@/utils/audioSignals';
-import { engineEvents } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import {
-  deleteModulation, fetchPlaylist, migrateModulationMode, MidiMapping, ModulationCurve, ModulationMapping,
+  clampToRangeLimit, deleteModulation, migrateModulationMode, MidiMapping, ModulationCurve, ModulationMapping,
   ModulationMode, ModulationPolarity, ModulationSourceKey, patchModulation, putModulation,
 } from '@/utils/api';
-import { MidiMapBadge, MidiMapPopover } from '@/components/MidiMap';
+import { MidiMapBadge, MidiMapPopover, useEntryBindings } from '@/components/MidiMap';
+import { SectionLabel, Chip, NumberInput } from '@/components/ui/PopoverKit';
 
 // ── modulationState frame subscription ──────────────────────────────
 //
@@ -72,44 +72,16 @@ export function useEntryModulations(
   playlistName: string | null | undefined,
   entryId: string | null | undefined,
 ): { mappings: ModulationMapping[]; refresh: () => void } {
-  const [mappings, setMappings] = useState<ModulationMapping[]>([]);
-  const [tick, setTick] = useState(0);
-  const refresh = useCallback(() => setTick((t) => t + 1), []);
-
-  useEffect(() => {
-    if (!playlistName || !entryId) { setMappings([]); return; }
-    let cancelled = false;
-    // Use the cached `fetchPlaylist` (5 s TTL, deduped, primed by
-    // engine WS broadcasts) — `useEntryModulations` may be called
-    // from N mixer channel strips simultaneously, so an uncached
-    // fetch per strip would hammer the engine on channel-add bursts.
-    fetchPlaylist(playlistName).then((r) => {
-      if (cancelled) return;
-      if (!r.ok || !r.data) { setMappings([]); return; }
-      const entries = r.data.entries as { id?: string; modulations?: ModulationMapping[] }[] | undefined;
-      const entry = Array.isArray(entries)
-        ? entries.find((e) => e && e.id === entryId)
-        : null;
-      // Migrate the legacy 'scale' mode → 'multiply' on read (mirrors the
-      // engine's validateModulationMapping back-compat) so a stored mapping
-      // never surfaces an unknown mode to the picker / preview math.
-      const loaded = Array.isArray(entry?.modulations) ? entry!.modulations! : [];
-      setMappings(loaded.map((m) => ({ ...m, mode: migrateModulationMode(m.mode) })));
-    });
-    return () => { cancelled = true; };
-  }, [playlistName, entryId, tick]);
-
-  // Re-fetch on playlistSaved for our playlist so external mutations
-  // (other CaptainPad sessions, PortWatch, REST) update the panel.
-  useEffect(() => {
-    return engineEvents.subscribe((m) => {
-      if (m && m.type === 'playlistSaved' && m.name === playlistName) {
-        refresh();
-      }
-    });
-  }, [playlistName, refresh]);
-
-  return { mappings, refresh };
+  // Thin wrapper over the shared per-entry fetch. The transform migrates the
+  // legacy 'scale' mode → 'multiply' on read (mirrors the engine's
+  // validateModulationMapping back-compat) so a stored mapping never surfaces
+  // an unknown mode to the picker / preview math.
+  const { items, refresh } = useEntryBindings<ModulationMapping>(
+    playlistName, entryId,
+    (entry) => entry.modulations as ModulationMapping[] | undefined,
+    (m) => ({ ...m, mode: migrateModulationMode(m.mode) }),
+  );
+  return { mappings: items, refresh };
 }
 
 // ── slider name helpers ─────────────────────────────────────────────
@@ -139,18 +111,12 @@ const MOD_GREEN = '#00a86b';
 const MOD_GREEN_SOFT = 'rgba(0,168,107,0.12)';
 
 // Clamp to the engine's widened modulation range [-4, 4] (RANGE_MIN /
-// RANGE_MAX in modulation_engine.js). We pre-clamp on the popover so a
-// typo'd 99 in the range box becomes 4 instead of bouncing the whole save
-// with a 400 from validateModulationMapping. The window must be wide enough
-// for a multiply boost (>1, default [1.0, 1.2]) and for inverting ranges
-// like [-1, 0].
-const RANGE_LIMIT = 4;
-function clampRange(x: number): number {
-  if (!Number.isFinite(x)) return 0;
-  if (x < -RANGE_LIMIT) return -RANGE_LIMIT;
-  if (x > RANGE_LIMIT) return RANGE_LIMIT;
-  return x;
-}
+// RANGE_MAX in modulation_engine.js, mirrored by MIDI_RANGE_LIMIT). We
+// pre-clamp on the popover so a typo'd 99 in the range box becomes 4 instead of
+// bouncing the whole save with a 400 from validateModulationMapping. The window
+// must be wide enough for a multiply boost (>1, default [1.0, 1.2]) and for
+// inverting ranges like [-1, 0]. Shared with the MIDI-map popover.
+const clampRange = clampToRangeLimit;
 
 // ── ModulationBadges — shared ◎ON / ✕ button row ────────────────────
 //
@@ -546,12 +512,10 @@ export const ModulatedSlider = React.memo(
     && (prev.mapping?.curve ?? null) === (next.mapping?.curve ?? null)
     && (prev.mapping?.source.key ?? null) === (next.mapping?.source.key ?? null)
     && (prev.live?.modulated ?? null) === (next.live?.modulated ?? null)
-    && (prev.midiMapping?.id ?? null) === (next.midiMapping?.id ?? null)
-    && (prev.midiMapping?.enabled ?? null) === (next.midiMapping?.enabled ?? null)
-    && (prev.midiMapping?.control.number ?? null) === (next.midiMapping?.control.number ?? null)
-    && (prev.midiMapping?.control.channel ?? null) === (next.midiMapping?.control.channel ?? null)
-    && (prev.midiMapping?.range[0] ?? null) === (next.midiMapping?.range[0] ?? null)
-    && (prev.midiMapping?.range[1] ?? null) === (next.midiMapping?.range[1] ?? null)
+    // midiMapping objects are referentially stable between refetches (fetchPlaylist
+    // returns cached entries), so a single reference compare replaces the six
+    // hand-written field compares — they can't diverge without a new object.
+    && (prev.midiMapping ?? null) === (next.midiMapping ?? null)
     && prev.onChangeBase === next.onChangeBase
     && prev.onChanged === next.onChanged
     && prev.onMidiChanged === next.onMidiChanged
@@ -1074,7 +1038,7 @@ export function ModulationPopover({
 
             <PickerRow label="SIGNAL">
               {sourceOptions.map((opt) => (
-                <Chip key={opt.key} active={source === opt.key} onPress={() => setSource(opt.key)}>
+                <Chip key={opt.key} accent={C.primary} active={source === opt.key} onPress={() => setSource(opt.key)}>
                   {opt.label}
                 </Chip>
               ))}
@@ -1136,9 +1100,9 @@ export function ModulationPopover({
             </Text>
 
             <PickerRow label="MODE">
-              <Chip active={mode === 'offset'} onPress={() => selectMode('offset')}>OFFSET</Chip>
-              <Chip active={mode === 'multiply'} onPress={() => selectMode('multiply')}>MULTIPLY</Chip>
-              <Chip active={mode === 'override'} onPress={() => selectMode('override')}>OVERRIDE</Chip>
+              <Chip accent={C.primary} active={mode === 'offset'} onPress={() => selectMode('offset')}>OFFSET</Chip>
+              <Chip accent={C.primary} active={mode === 'multiply'} onPress={() => selectMode('multiply')}>MULTIPLY</Chip>
+              <Chip accent={C.primary} active={mode === 'override'} onPress={() => selectMode('override')}>OVERRIDE</Chip>
             </PickerRow>
 
             {/* The `!` override affordance: OVERRIDE replaces the static
@@ -1157,6 +1121,7 @@ export function ModulationPopover({
             {mode === 'offset' ? (
               <PickerRow label="POLARITY">
                 <Chip
+                  accent={C.primary}
                   active={polarity === 'unipolar'}
                   onPress={() => {
                     if (polarity === 'unipolar') return;
@@ -1170,6 +1135,7 @@ export function ModulationPopover({
                   }}
                 >UNIPOLAR</Chip>
                 <Chip
+                  accent={C.primary}
                   active={polarity === 'bipolar'}
                   onPress={() => {
                     if (polarity === 'bipolar') return;
@@ -1220,12 +1186,12 @@ export function ModulationPopover({
 
             <PickerRow label="CURVE">
               {CURVE_OPTIONS.map((c) => (
-                <Chip key={c} active={curve === c} onPress={() => setCurve(c)}>{c.toUpperCase()}</Chip>
+                <Chip key={c} accent={C.primary} active={curve === c} onPress={() => setCurve(c)}>{c.toUpperCase()}</Chip>
               ))}
             </PickerRow>
 
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Chip active={enabled} onPress={() => setEnabled(!enabled)}>
+              <Chip accent={C.primary} active={enabled} onPress={() => setEnabled(!enabled)}>
                 {enabled ? 'ENABLED' : 'DISABLED'}
               </Chip>
             </View>
@@ -1305,21 +1271,6 @@ function PickerRow({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
-// Section header — an accent dot + uppercase title + a hairline rule, so
-// the popup reads as three clear zones (SOURCE / MAPPING / TARGET).
-function SectionLabel({ accent, children }: { accent: string; children: React.ReactNode }) {
-  const C = usePalette();
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 }}>
-      <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: accent }} />
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text, textTransform: 'uppercase', letterSpacing: 1.2 }}>
-        {children}
-      </Text>
-      <View style={{ flex: 1, height: 1, backgroundColor: C.ghostBorder }} />
-    </View>
-  );
-}
-
 // TARGET preview — base value, live modulated value, and the delta the
 // audio is currently pushing, plus a base→modulated bar so the operator
 // sees the result on the target param at a glance.
@@ -1367,43 +1318,3 @@ function TargetPreview({ paramName, base, modulated }: {
   );
 }
 
-function Chip({ active, onPress, children }: { active: boolean; onPress: () => void; children: React.ReactNode }) {
-  const C = usePalette();
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      style={{
-        paddingHorizontal: 10, paddingVertical: 6,
-        borderRadius: 6,
-        backgroundColor: active ? C.primary : 'transparent',
-        borderWidth: 1, borderColor: active ? C.primary : C.ghostBorder,
-      }}
-    >
-      <Text style={{
-        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
-        color: active ? C.surfaceContainerLowest : C.text,
-        letterSpacing: 0.5,
-      }}>
-        {children}
-      </Text>
-    </TouchableOpacity>
-  );
-}
-
-function NumberInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
-  const C = usePalette();
-  return (
-    <TextInput
-      value={value}
-      onChangeText={onChange}
-      placeholder={placeholder}
-      placeholderTextColor={C.secondary}
-      keyboardType="numbers-and-punctuation"
-      style={{
-        flex: 1, paddingHorizontal: 10, paddingVertical: 8,
-        borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder,
-        color: C.text, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
-      }}
-    />
-  );
-}

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { validateProfile } from './profile';
-import { resolveEvent } from './resolver';
+import { resolveEvent, profileClaims } from './resolver';
 import { decodeMidi } from './midi_message';
 
 const profile = validateProfile({
@@ -47,6 +47,33 @@ describe('resolveEvent', () => {
   it('returns null for unmapped messages', () => {
     expect(resolveEvent(profile, decodeMidi([0xb0, 99, 10]))).toBeNull();
     expect(resolveEvent(profile, decodeMidi([0x90, 40, 127]))).toBeNull();
+  });
+});
+
+describe('profileClaims (learn-conflict rejection, 1.1)', () => {
+  it('names the control a mapped CC / note resolves to', () => {
+    expect(profileClaims(profile, { type: 'cc', channel: 0, number: 48 })).toBe('fader_1'); // speed
+    expect(profileClaims(profile, { type: 'cc', channel: 0, number: 56 })).toBe('master');
+    expect(profileClaims(profile, { type: 'note', channel: 0, number: 3 })).toBe('pads');
+    expect(profileClaims(profile, { type: 'note', channel: 0, number: 107 })).toBe('blackout');
+  });
+
+  it('returns null for an unmapped control (free to learn)', () => {
+    expect(profileClaims(profile, { type: 'cc', channel: 0, number: 51 })).toBeNull();
+    expect(profileClaims(profile, { type: 'note', channel: 0, number: 40 })).toBeNull();
+  });
+
+  it('respects the active context', () => {
+    const p = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+      contexts: {
+        deck: [{ id: 'd_fader', match: { type: 'cc', channel: 0, cc: 54 }, action: { kind: 'paramCenter', key: 'speed', range: [0, 1] } }],
+        mixer: [{ id: 'm_other', match: { type: 'cc', channel: 0, cc: 55 }, action: { kind: 'master' } }],
+      },
+    });
+    // Mixer context doesn't map CC 54 → free there, but claimed on deck.
+    expect(profileClaims(p, { type: 'cc', channel: 0, number: 54 }, 'deck')).toBe('d_fader');
+    expect(profileClaims(p, { type: 'cc', channel: 0, number: 54 }, 'mixer')).toBeNull();
   });
 });
 

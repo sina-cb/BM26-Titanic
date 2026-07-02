@@ -61,40 +61,71 @@ export function describeControlRef(ref: MidiControlRef): string {
     : `Note ${ref.number}${ref.channel ? ` ch${ref.channel + 1}` : ''}`;
 }
 
-export type LearnCallback = (ref: MidiControlRef) => void;
+/** The outcome delivered to a learn callback: a captured control, or a
+ *  conflict (the moved control already resolves to a static profile action —
+ *  `controlId` names it so the popover can explain, e.g. "CC 54 is GLOBAL
+ *  SPEED"). Learning is REJECTED on conflict so a profile action can never be
+ *  shadowed. */
+export type LearnResult = { ref: MidiControlRef } | { conflict: string };
+
+export type LearnCallback = (result: LearnResult) => void;
 
 /**
  * Shared "capture the next control" state for MIDI-learn. The manager owns one
  * and passes it to every controller runtime; arming makes the next learnable
  * control route HERE (and be swallowed — it binds, it does not also dispatch).
- * Disarms automatically on capture, or via cancel(). Pure (no timers / no
- * transport) so it is unit-testable.
+ * Disarms automatically on capture / conflict, or via cancel(). Pure (no
+ * timers / no transport) so it is unit-testable.
  */
 export class LearnController {
   private cb: LearnCallback | null = null;
+  /** Monotonic arm token. cancel(token) only disarms if the CURRENT arm still
+   *  owns the token — so a stale popover's cancel can't kill a newer arm. */
+  private token = 0;
 
   isArmed(): boolean {
     return this.cb !== null;
   }
 
   /** Arm capture. A second arm() replaces the pending callback (last writer
-   *  wins) so re-opening the learn popover can't strand a stale listener. */
-  arm(cb: LearnCallback): void {
+   *  wins) so re-opening the learn popover can't strand a stale listener.
+   *  Returns the arm's token — pass it to cancel() to scope the cancel to
+   *  THIS arm (a later arm bumps the token, so a stale cancel is a no-op). */
+  arm(cb: LearnCallback): number {
     this.cb = cb;
+    this.token += 1;
+    return this.token;
   }
 
-  cancel(): void {
+  /** Disarm. With a token, only cancels when it matches the current arm (a
+   *  stale closure can't cancel a newer arm). Without a token, cancels
+   *  unconditionally (the manager-level "cancel everything"). */
+  cancel(token?: number): void {
+    if (token !== undefined && token !== this.token) return;
     this.cb = null;
   }
 
   /** Called by a runtime on a learnable control while armed. Fires the callback
-   *  once, disarms, and returns true (the control was consumed by learn).
-   *  Returns false when not armed (the control dispatches normally). */
+   *  once with the captured ref, disarms, and returns true (the control was
+   *  consumed by learn). Returns false when not armed (the control dispatches
+   *  normally). */
   capture(ref: MidiControlRef): boolean {
     const cb = this.cb;
     if (!cb) return false;
     this.cb = null;
-    cb(ref);
+    cb({ ref });
+    return true;
+  }
+
+  /** Called by a runtime while armed when the moved control ALREADY resolves to
+   *  a static profile action — learning is rejected. Fires the callback once
+   *  with the conflict, disarms, and returns true (consumed). Returns false
+   *  when not armed. */
+  reportConflict(controlId: string): boolean {
+    const cb = this.cb;
+    if (!cb) return false;
+    this.cb = null;
+    cb({ conflict: controlId });
     return true;
   }
 }

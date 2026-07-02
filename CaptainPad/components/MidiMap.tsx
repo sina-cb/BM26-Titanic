@@ -10,59 +10,80 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Modal, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View,
+  Modal, Pressable, ScrollView, Text, TouchableOpacity, View,
 } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { engineEvents } from '@/utils/engineEvents';
-import { armMidiLearn } from '@/hooks/useMidiControl';
+import { armMidiLearn, midiControlConflict } from '@/hooks/useMidiControl';
 import { describeControlRef, MidiControlRef } from '@/utils/midi';
 import {
-  deleteMidiMapping, fetchPlaylist, MidiMapping, MIDI_RANGE_LIMIT,
+  clampToRangeLimit, deleteMidiMapping, fetchPlaylist, MidiMapping,
   patchMidiMapping, putMidiMapping,
 } from '@/utils/api';
+import { SectionLabel, Chip, NumberInput } from '@/components/ui/PopoverKit';
 
 // Violet accent — distinct from modulation's green (◎) and the primary blue
 // (interactive control), so "this param is MIDI-mapped" scans at a glance.
 const MIDI_VIOLET = '#7c5cff';
 
-function clampRange(x: number): number {
-  if (!Number.isFinite(x)) return 0;
-  if (x < -MIDI_RANGE_LIMIT) return -MIDI_RANGE_LIMIT;
-  if (x > MIDI_RANGE_LIMIT) return MIDI_RANGE_LIMIT;
-  return x;
-}
+// ── shared per-entry binding fetch ──────────────────────────────────────────
+//
+// Modulations and MIDI mappings are stored the same way (a per-entry array on
+// the playlist) and fetched the same way, so both share this generic hook.
+// `pluck` selects the array off an entry; `transform` optionally maps each
+// loaded item (modulations use it for the legacy mode migration).
 
-// ── per-entry binding fetch (mirror useEntryModulations) ────────────────────
-
-export function useEntryMidiMappings(
+export function useEntryBindings<T>(
   playlistName: string | null | undefined,
   entryId: string | null | undefined,
-): { mappings: MidiMapping[]; refresh: () => void } {
-  const [mappings, setMappings] = useState<MidiMapping[]>([]);
+  pluck: (entry: Record<string, unknown>) => T[] | undefined,
+  transform?: (item: T) => T,
+): { items: T[]; refresh: () => void } {
+  const [items, setItems] = useState<T[]>([]);
   const [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
-    if (!playlistName || !entryId) { setMappings([]); return; }
+    if (!playlistName || !entryId) { setItems([]); return; }
     let cancelled = false;
+    // Use the cached `fetchPlaylist` (5 s TTL, deduped, primed by engine WS
+    // broadcasts) — this hook may be called from N mixer channel strips
+    // simultaneously, so an uncached fetch per strip would hammer the engine on
+    // channel-add bursts.
     fetchPlaylist(playlistName).then((r) => {
       if (cancelled) return;
-      if (!r.ok || !r.data) { setMappings([]); return; }
-      const entries = r.data.entries as { id?: string; midiMappings?: MidiMapping[] }[] | undefined;
+      if (!r.ok || !r.data) { setItems([]); return; }
+      const entries = r.data.entries as unknown as Record<string, unknown>[] | undefined;
       const entry = Array.isArray(entries) ? entries.find((e) => e && e.id === entryId) : null;
-      setMappings(Array.isArray(entry?.midiMappings) ? entry!.midiMappings! : []);
+      const loaded = entry ? (pluck(entry) ?? []) : [];
+      setItems(transform ? loaded.map(transform) : loaded);
     });
     return () => { cancelled = true; };
+    // pluck / transform are defined inline by callers; keep the dep list on the
+    // primitive inputs so the caller needn't memoise them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playlistName, entryId, tick]);
 
-  // Re-fetch on playlistSaved so a learn from another surface / client shows up.
+  // Re-fetch on playlistSaved for our playlist so external mutations (other
+  // CaptainPad sessions, PortWatch, REST) update the panel.
   useEffect(() => {
     return engineEvents.subscribe((m: { type?: string; name?: string }) => {
       if (m && m.type === 'playlistSaved' && m.name === playlistName) refresh();
     });
   }, [playlistName, refresh]);
 
-  return { mappings, refresh };
+  return { items, refresh };
+}
+
+export function useEntryMidiMappings(
+  playlistName: string | null | undefined,
+  entryId: string | null | undefined,
+): { mappings: MidiMapping[]; refresh: () => void } {
+  const { items, refresh } = useEntryBindings<MidiMapping>(
+    playlistName, entryId,
+    (entry) => entry.midiMappings as MidiMapping[] | undefined,
+  );
+  return { mappings: items, refresh };
 }
 
 // ── MidiMapBadge — the ⊞ pill in a slider header ────────────────────────────
@@ -125,38 +146,46 @@ export function MidiMapPopover({
   const [listening, setListening] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Holds the in-flight learn so unmount / re-arm can cancel it cleanly.
-  const learnRef = useRef<{ cancel: () => void } | null>(null);
+  // Holds the in-flight learn's cancel fn so unmount / re-arm can cancel it
+  // cleanly (scoped so a stale arm can't cancel a newer one — see LearnController).
+  const cancelLearnRef = useRef<(() => void) | null>(null);
 
   const isExisting = existing !== null;
   // One binding per param → derive a stable id from the target so re-learning
   // the same param overwrites cleanly (PUT replaces by id).
   const mappingId = useMemo(() => existing?.id ?? `midi_${targetParameter}`, [existing, targetParameter]);
 
-  useEffect(() => () => { learnRef.current?.cancel(); }, []);
+  useEffect(() => () => { cancelLearnRef.current?.(); }, []);
 
   const startLearn = useCallback(() => {
-    learnRef.current?.cancel();
+    cancelLearnRef.current?.();
     setError(null);
     setListening(true);
-    const handle = armMidiLearn();
-    learnRef.current = handle;
-    handle.promise.then((captured) => {
+    // armMidiLearn fires ONCE with { ref } (captured) or { error } (control is
+    // already mapped to a profile action, or MIDI unavailable). The popover
+    // owns cancellation, so there is no timeout.
+    cancelLearnRef.current = armMidiLearn((r) => {
       setListening(false);
-      learnRef.current = null;
-      if (captured) setControl(captured);
+      cancelLearnRef.current = null;
+      if ('ref' in r) setControl(r.ref);
+      else setError(r.error);
     });
   }, []);
 
   const stopLearn = useCallback(() => {
-    learnRef.current?.cancel();
-    learnRef.current = null;
+    cancelLearnRef.current?.();
+    cancelLearnRef.current = null;
     setListening(false);
   }, []);
 
   const save = async () => {
     if (busy) return;
     if (!control) { setError('Move a fader to bind a control first.'); return; }
+    // Belt-and-braces (plan §1.1): refuse to persist a control that already
+    // resolves to a static profile action, in case a stale captured ref slipped
+    // through the runtime's capture-time rejection.
+    const conflict = midiControlConflict(control);
+    if (conflict) { setError(conflict); return; }
     const lo = Number(rangeMin); const hi = Number(rangeMax);
     if (!Number.isFinite(lo) || rangeMin.trim() === '' || !Number.isFinite(hi) || rangeMax.trim() === '') {
       setError('Enter a numeric range before saving.');
@@ -169,7 +198,7 @@ export function MidiMapPopover({
       enabled,
       control,
       target: { scope: 'pattern', parameter: targetParameter },
-      range: [clampRange(lo), clampRange(hi)],
+      range: [clampToRangeLimit(lo), clampToRangeLimit(hi)],
     };
     try {
       const r = isExisting
@@ -237,10 +266,10 @@ export function MidiMapPopover({
                   <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: MIDI_VIOLET, textAlign: 'center' }}>
                     ◉ Listening — move a fader (4-6 or 8) or press a pad…
                   </Text>
-                  <Chip active onPress={stopLearn}>CANCEL LISTENING</Chip>
+                  <Chip active accent={MIDI_VIOLET} onPress={stopLearn}>CANCEL LISTENING</Chip>
                 </>
               ) : (
-                <Chip active={false} onPress={startLearn}>
+                <Chip active={false} accent={MIDI_VIOLET} onPress={startLearn}>
                   {control ? 'RE-LEARN' : 'LEARN — MOVE A FADER'}
                 </Chip>
               )}
@@ -261,7 +290,7 @@ export function MidiMapPopover({
             </View>
 
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Chip active={enabled} onPress={() => setEnabled(!enabled)}>
+              <Chip active={enabled} accent={MIDI_VIOLET} onPress={() => setEnabled(!enabled)}>
                 {enabled ? 'ENABLED' : 'DISABLED'}
               </Chip>
             </View>
@@ -291,54 +320,3 @@ export function MidiMapPopover({
 }
 
 export { MIDI_VIOLET };
-
-// ── tiny shared bits (kept local to avoid coupling to Modulation.tsx) ───────
-
-function SectionLabel({ accent, children }: { accent: string; children: React.ReactNode }) {
-  const C = usePalette();
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 }}>
-      <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: accent }} />
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text, textTransform: 'uppercase', letterSpacing: 1.2 }}>
-        {children}
-      </Text>
-      <View style={{ flex: 1, height: 1, backgroundColor: C.ghostBorder }} />
-    </View>
-  );
-}
-
-function Chip({ active, onPress, children }: { active: boolean; onPress: () => void; children: React.ReactNode }) {
-  const C = usePalette();
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      style={{
-        paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6,
-        backgroundColor: active ? MIDI_VIOLET : 'transparent',
-        borderWidth: 1, borderColor: active ? MIDI_VIOLET : C.ghostBorder,
-      }}
-    >
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: active ? '#fff' : C.text, letterSpacing: 0.5 }}>
-        {children}
-      </Text>
-    </TouchableOpacity>
-  );
-}
-
-function NumberInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
-  const C = usePalette();
-  return (
-    <TextInput
-      value={value}
-      onChangeText={onChange}
-      placeholder={placeholder}
-      placeholderTextColor={C.secondary}
-      keyboardType="numbers-and-punctuation"
-      style={{
-        flex: 1, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6,
-        borderWidth: 1, borderColor: C.ghostBorder, color: C.text,
-        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12,
-      }}
-    />
-  );
-}

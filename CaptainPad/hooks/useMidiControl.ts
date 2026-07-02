@@ -50,10 +50,12 @@ import {
   MidiEngineSnapshot,
   FocusedBinding,
   MidiControlRef,
+  LearnResult,
   selectTransportFactory,
   getMidiTransportKind,
   MidiTransportKind,
   validateProfile,
+  profileClaims,
   ControllerProfile,
 } from '@/utils/midi';
 import apcProfileRaw from '@/midi_profiles/apc_mini_mk2.yaml';
@@ -110,8 +112,32 @@ let _focusedLayer = 0;
 const _focusListeners = new Set<() => void>();
 
 function _bumpFocus(): void {
-  _focusListeners.forEach((cb) => { try { cb(); } catch { /* ignore */ } });
+  _focusListeners.forEach((cb) => {
+    try { cb(); } catch (err) {
+      // A buggy focus listener must not break the others — but don't swallow
+      // it silently (codex: fail loud, at least in the log).
+      console.warn('[midi] focus listener threw:', err);
+    }
+  });
 }
+
+/** Playlist names currently in play (deck + overlays + focused channel). A
+ *  `playlistSaved` for a playlist NOT in this set can't change any binding the
+ *  manager applies, so we skip the snapshot rebuild it would otherwise trigger. */
+function _activePlaylistNames(): Set<string> {
+  const names = new Set<string>();
+  const add = (p: unknown) => {
+    const name = (p as { name?: string } | null | undefined)?.name;
+    if (typeof name === 'string' && name) names.add(name);
+  };
+  for (const c of _lastEngineChannels) add((c as { playlist?: unknown }).playlist);
+  add((_lastEngineDeck as { playlist?: unknown } | null)?.playlist);
+  return names;
+}
+// Last engine channel/deck refs, kept so the playlistSaved filter can tell
+// whether a saved playlist is one the manager actually applies.
+let _lastEngineChannels: unknown[] = [];
+let _lastEngineDeck: unknown = null;
 
 /** Set the focused mixer layer (Mixer tab). The manager's onFocusChange routes
  *  here; the on-screen mixer can also call it so touch + MIDI agree. */
@@ -135,31 +161,61 @@ export function useMidiFocus(): number {
 }
 
 // ── MIDI-learn arming (consumed by the per-param MIDI map popover) ──────────
-let _armLearn: ((cb: (control: MidiControlRef) => void) => () => void) | null = null;
+let _armLearn: ((cb: (result: LearnResult) => void) => () => void) | null = null;
 
 /**
  * Arm MIDI-learn: the next fader/pad the operator moves binds to the param the
- * popover is editing. Returns the captured control (or null on cancel/timeout).
- * `cancel()` resolves the promise with null and disarms. No-op (resolves null)
- * when MIDI is unavailable on this platform.
+ * popover is editing. `cb` fires ONCE with `{ ref }` on a clean capture, or
+ * `{ error }` when the control is already mapped to a profile action or MIDI is
+ * unavailable / not started on this platform (codex P0: fail LOUD, never
+ * silently resolve null — the popover surfaces the error inline). Returns a
+ * cancel fn; the popover owns cancellation (CANCEL chip / unmount / re-arm), so
+ * there is no timeout. The cancel is scoped to THIS arm (a stale popover can't
+ * cancel a newer one).
  */
-export function armMidiLearn(timeoutMs = 30_000): { promise: Promise<MidiControlRef | null>; cancel: () => void } {
-  let settle: (v: MidiControlRef | null) => void = () => {};
-  const promise = new Promise<MidiControlRef | null>((resolve) => { settle = resolve; });
-  let cancelArm = () => {};
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let done = false;
-  const finish = (v: MidiControlRef | null) => {
-    if (done) return;
-    done = true;
-    if (timer) clearTimeout(timer);
-    cancelArm();
-    settle(v);
+export function armMidiLearn(cb: (r: { ref: MidiControlRef } | { error: string }) => void): () => void {
+  if (!_armLearn) {
+    cb({ error: 'MIDI unavailable on this platform (or not started)' });
+    return () => {};
+  }
+  return _armLearn((result) => {
+    if ('ref' in result) cb({ ref: result.ref });
+    else cb({ error: conflictMessage(result.conflict) });
+  });
+}
+
+// Loaded profiles + current context, published by the boot effect so the
+// save-time conflict re-check (below) can run profileClaims without plumbing
+// the whole profile object through the popover.
+let _loadedProfiles: ControllerProfile[] = [];
+
+/** Belt-and-braces: does `ref` already resolve to a static profile action on
+ *  ANY loaded profile in the current context? Returns a human-readable conflict
+ *  message (for the popover's inline red error) or null when the control is free
+ *  to bind. The runtime rejects at capture time (fail loud there); this is the
+ *  save-time re-check per plan §1.1 so a stale captured ref can't be persisted. */
+export function midiControlConflict(ref: MidiControlRef): string | null {
+  for (const p of _loadedProfiles) {
+    const claimed = profileClaims(p, ref, _activeContext);
+    if (claimed !== null) return conflictMessage(claimed);
+  }
+  return null;
+}
+
+/** Human-readable conflict message naming the profile control the operator
+ *  moved (e.g. "CC 54 is GLOBAL SPEED — use fader 4/5/6/8"). The controlId is
+ *  the profile control's id; map the well-known reserved controls to friendly
+ *  copy, else fall back to the id. */
+function conflictMessage(controlId: string): string {
+  const known: Record<string, string> = {
+    fader_7_speed: 'that fader is GLOBAL SPEED',
+    fader_9_master: 'that fader is MASTER',
   };
-  if (!_armLearn) { finish(null); return { promise, cancel: () => finish(null) }; }
-  cancelArm = _armLearn((control) => finish(control));
-  timer = setTimeout(() => finish(null), timeoutMs);
-  return { promise, cancel: () => finish(null) };
+  const named = known[controlId];
+  const hint = ' — use a MIDI-learn fader (4/5/6/8) or a free pad';
+  return named
+    ? `${named}${hint}`
+    : `that control is already mapped ('${controlId}')${hint}`;
 }
 
 // ── Playlist browse-window state (for the mixer-UI rectangular border) ─────
@@ -299,8 +355,13 @@ export function useMidiControl(): MidiControlState {
   useEffect(() => {
     const bump = () => setRev((r) => r + 1);
     _focusListeners.add(bump);
-    const unsub = engineEvents.subscribe((m: { type?: string }) => {
-      if (m?.type === 'playlistSaved') bump();
+    const unsub = engineEvents.subscribe((m: { type?: string; name?: string }) => {
+      // Only rebuild for a playlistSaved whose playlist is actually in the
+      // deck / overlays / focused channel — an unrelated save can't change any
+      // binding the manager applies, so skip the rebuild it would trigger.
+      if (m?.type !== 'playlistSaved') return;
+      if (typeof m.name === 'string' && !_activePlaylistNames().has(m.name)) return;
+      bump();
     });
     return () => { _focusListeners.delete(bump); unsub(); };
   }, []);
@@ -314,6 +375,10 @@ export function useMidiControl(): MidiControlState {
     const channels = engine.mixerChannels;
     const deck = engine.deckChannel as
       { id?: string; fader?: number; pattern?: string; playlist?: PlaylistAssignment | null } | null;
+    // Publish the live channel/deck refs so the playlistSaved filter (above)
+    // can tell whether a saved playlist is one the manager applies.
+    _lastEngineChannels = channels;
+    _lastEngineDeck = deck;
     // Fetch a channel's playlist entries (cached) for the pad window browser.
     const playlistFor = async (pl?: PlaylistAssignment | null) => {
       if (!pl?.name) return undefined;
@@ -323,11 +388,10 @@ export function useMidiControl(): MidiControlState {
     };
     void (async () => {
       const layers = await Promise.all(channels.map(async (c) => {
-        const ch = c as { id: string; fader?: number; solo?: boolean; playlist?: PlaylistAssignment | null };
+        const ch = c as { id: string; fader?: number; playlist?: PlaylistAssignment | null };
         return {
           id: ch.id,
           fader: typeof ch.fader === 'number' ? ch.fader : 1,
-          solo: ch.solo === true,
           playlist: await playlistFor(ch.playlist),
         };
       }));
@@ -341,33 +405,66 @@ export function useMidiControl(): MidiControlState {
       //    current value, for name→id + soft-takeover) and its active entry's
       //    stored midiMappings (the bindings the manager applies). ──────────
       const ctx = _activeContext;
+      // On the Mixer tab, a focus that points past the current channel list
+      // (a deleted overlay, or a track button for a layer that never existed)
+      // would build focused=null → dead faders with no recovery. Reset to
+      // channel 0 and log it (codex: never silently swallow) before building.
+      if (ctx !== 'deck' && _focusedLayer !== 0 && !channels[_focusedLayer]) {
+        console.warn(`[midi] focused layer ${_focusedLayer} no longer exists (only ${channels.length} channel(s)); resetting focus to 0`);
+        _focusedLayer = 0;
+        _bumpFocus();
+      }
+      const focusLayer = ctx === 'deck' ? 0 : _focusedLayer;
       const focusChan: MixerChannel | null = ctx === 'deck'
         ? (engine.deckChannel as MixerChannel | null)
-        : (channels[_focusedLayer] as MixerChannel | undefined) ?? null;
+        : (channels[focusLayer] as MixerChannel | undefined) ?? null;
       let focused: MidiEngineSnapshot['focused'] = null;
       if (focusChan?.id) {
         const exportsList = (focusChan.exports ?? [])
           // kind 1 = sliders (the learnable local params). CPC-matched exports
           // can't take a static write (the CPC clobbers it), so drop them.
+          // EXCLUDE (with a warn) an export missing v0 rather than fabricating
+          // 0.5 — a fabricated base corrupts soft-takeover pickup math.
           .filter((e) => e.kind === 1 && !(e as { cpcOwned?: boolean }).cpcOwned)
-          .map((e) => ({ id: e.id, name: e.name, v0: e.v0 ?? 0.5 }));
+          .flatMap((e) => {
+            if (typeof e.v0 !== 'number') {
+              console.warn(`[midi] focused export '${e.name}' (id ${e.id}) has no numeric v0; excluding it from MIDI-learn (a fabricated base would corrupt pickup)`);
+              return [];
+            }
+            return [{ id: e.id, name: e.name, v0: e.v0 }];
+          });
         const pl = focusChan.playlist as PlaylistAssignment | null | undefined;
+        const entryId = pl?.activeEntryId ?? null;
         let midiMappings: FocusedBinding[] = [];
-        if (pl?.name && pl.activeEntryId) {
+        if (pl?.name && entryId) {
+          // Cached fetch (5 s TTL, deduped) — this is the same playlist
+          // `playlistFor()` fetched above for the window browser, so it hits
+          // the cache rather than re-hitting the engine.
           const r = await fetchPlaylist(pl.name);
           if (r.ok && r.data) {
             const entry = (r.data.entries as { id: string; midiMappings?: unknown[] }[])
-              .find((e) => e.id === pl.activeEntryId);
+              .find((e) => e.id === entryId);
             const raw = Array.isArray(entry?.midiMappings) ? entry!.midiMappings! : [];
-            midiMappings = raw
-              .map((m) => m as FocusedBinding)
-              .filter((m) => m && m.control && m.target && Array.isArray(m.range));
+            midiMappings = raw.flatMap((m) => {
+              const b = m as FocusedBinding;
+              if (b && b.control && b.target && Array.isArray(b.range)) return [b];
+              console.warn('[midi] dropping malformed stored midiMapping on focused entry:', m);
+              return [];
+            });
           }
         }
+        const role = ctx === 'deck' ? 'deck' : 'mixer';
+        // Build the pickup re-lock identity ONCE (role:id:entryId:mappingIds);
+        // the runtime compares it as a single string. Including entryId means a
+        // fader re-picks-up after the active entry changes even when the
+        // popover-derived mapping id (`midi_<param>`) is reused across entries.
+        const key = `${role}:${focusChan.id}:${entryId ?? ''}:${midiMappings.map((m) => m.id).join(',')}`;
         focused = {
-          role: ctx === 'deck' ? 'deck' : 'mixer',
-          layer: ctx === 'deck' ? 0 : _focusedLayer,
+          role,
+          layer: focusLayer,
           id: focusChan.id,
+          entryId,
+          key,
           exports: exportsList,
           midiMappings,
         };
@@ -410,6 +507,8 @@ export function useMidiControl(): MidiControlState {
       _set({ available: true, transportKind, profileError: error, statuses: [] });
       return () => { _listeners.delete(setS); };
     }
+    // Publish the loaded profiles for the save-time conflict re-check.
+    _loadedProfiles = profiles;
 
     _schemaKeys = new Set(Object.keys(engine.paramSchema));
     const manager = new MidiManager({
@@ -496,6 +595,7 @@ export function useMidiControl(): MidiControlState {
       _applyContext = null;
       _armLearn = null;
       _revalidate = null;
+      _loadedProfiles = [];
       unsubSlots();
       manager.dispose();
       _listeners.delete(setS);

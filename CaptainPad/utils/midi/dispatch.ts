@@ -32,7 +32,7 @@ export interface MidiDispatchApi {
 /** A resolved mixer "layer" — unified across tabs. On the Deck tab layer 0 is
  *  the deck channel (role 'deck', its own API); on the Mixer tab layers are the
  *  overlay channels (role 'mixer'). null when that layer doesn't exist. */
-export interface MidiLayerRef { id: string; role: 'deck' | 'mixer'; solo: boolean }
+export interface MidiLayerRef { id: string; role: 'deck' | 'mixer' }
 
 /** Live engine state the dispatcher needs to resolve toggles + banks. */
 export interface MidiDispatchContext {
@@ -91,14 +91,6 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
         else await api.updateMixerChannel(L.id, { fader: resolved.value });
         return;
       }
-      case 'mixerLayerSolo': {
-        const L = ctx.getLayer(resolved.layer);
-        if (!L) return;
-        // The deck channel has no solo concept (single channel) — no-op there.
-        if (L.role === 'deck') return;
-        await api.updateMixerChannel(L.id, { solo: !L.solo });
-        return;
-      }
       case 'globalEffectSlot':
         await api.dispatchGlobalEffectSlotAction(resolved.slot, 'toggle');
         return;
@@ -121,11 +113,14 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
       case 'focusChannel':
       case 'playlistScroll':
       case 'playlistWindowSelect':
-        // Handled by the controller runtime (controller-local state: focus
-        // selection / per-layer window cursor).
-        return;
+        // These are RUNTIME-ONLY actions (controller-local state: focus
+        // selection / per-layer window cursor). The runtime intercepts them
+        // BEFORE the dispatcher — reaching here means a wiring bug, so fail
+        // loud rather than silently swallow (codex P0: no silent no-ops).
+        throw new Error(`dispatch: '${resolved.kind}' must be handled by the controller runtime, not dispatched`);
       default:
-        return;
+        // Exhaustiveness guard — a new ResolvedAction kind must add a case.
+        throw new Error(`dispatch: unhandled ResolvedAction kind '${(resolved as { kind: string }).kind}'`);
     }
   };
 }

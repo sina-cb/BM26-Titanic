@@ -54,18 +54,21 @@ contexts:
     # drive ITS active pattern's MIDI bindings. Deck tab: only channel 1
     # exists (auto-focused), so 2-3 stay dark. (Solo moved off the controller
     # in favour of the focus model — Sina's 2026-06 redesign.)
+    # `flash: 2` = APC single-colour blink velocity — the button BLINKS while a
+    # bound param fader is pickup-locked (soft-takeover not yet crossed), solid
+    # `on` once it tracks. See led_projector focusChannel case.
     - id: track_1_focus_channel1
       match: { type: note, channel: 0, notes: [100] }
       action: { kind: focusChannel, layer: 0 }
-      led: { on: 1, off: 0 }
+      led: { on: 1, off: 0, flash: 2 }
     - id: track_2_focus_channel2
       match: { type: note, channel: 0, notes: [101] }
       action: { kind: focusChannel, layer: 1 }
-      led: { on: 1, off: 0 }
+      led: { on: 1, off: 0, flash: 2 }
     - id: track_3_focus_channel3
       match: { type: note, channel: 0, notes: [102] }
       action: { kind: focusChannel, layer: 2 }
-      led: { on: 1, off: 0 }
+      led: { on: 1, off: 0, flash: 2 }
 
     # ── Pad columns 1-4 → per-channel playlist window browser ──────────────
     # Column c browses channel (c+1)'s playlist: bottom pad scroll-down, top

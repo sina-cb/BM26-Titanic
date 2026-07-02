@@ -4,9 +4,12 @@
 // on connect / context switch).
 //
 // What it lights (docs/34 §3 + Sina's operator mapping):
-//   - blackoutToggle / globalEffect / globalEffectSlot / mixerLayerSolo buttons
+//   - blackoutToggle / globalEffect / globalEffectSlot buttons
 //     → on/off by the matching engine state (out-of-range slots / absent layers
 //       stay dark)
+//   - focusChannel track button → the FOCUSED channel lit solid; while a bound
+//       fader is pickup-locked it BLINKS (velocity `flash`, default = `on`);
+//       non-focused / absent channels stay dark
 //   - patternBank pads → the pad whose pattern == active pattern lit 'active',
 //     the rest 'idle'; an empty pad stays dark
 //   - pattern button → lit 'active' when it is the active pattern
@@ -30,10 +33,11 @@ export interface MidiProjectionState {
   resolvePatternForBank(bank: number, index: number): string | null;
   /** Does the Nth mixer layer exist? */
   layerExists(layer: number): boolean;
-  /** Current solo of the Nth mixer layer. */
-  getLayerSolo(layer: number): boolean;
   /** The focused layer index (whose pattern the param faders drive), or -1. */
   getFocusedLayer(): number;
+  /** Is the focused channel currently pickup-LOCKED (a bound fader hasn't yet
+   *  crossed the param value)? Drives the focus track button's blink. */
+  isFocusLocked(): boolean;
   /** Is global-effect slot N (1-based) active? */
   getGlobalEffectSlotActive(slot: number): boolean;
   /** How many global-effect slots exist (slots beyond this stay dark). */
@@ -144,15 +148,21 @@ function* padVelocities(
       yield { note: pads[0].note, velocity: present ? onOff(control.led, state.getGlobalEffectSlotActive(a.slot)) : 0 };
       return;
     }
-    case 'mixerLayerSolo':
-      yield { note: pads[0].note, velocity: onOff(control.led, state.layerExists(a.layer) && state.getLayerSolo(a.layer)) };
+    case 'focusChannel': {
+      // Single-colour track button: dark on absent / non-focused channels.
+      // The focused channel is lit SOLID (`on`), or BLINKS (`flash`, default =
+      // `on` when the profile omits it) while a bound fader is pickup-locked —
+      // the visual cue Sina's spec promised for soft-takeover.
+      const focused = state.layerExists(a.layer) && state.getFocusedLayer() === a.layer;
+      let velocity = onOff(control.led, false); // off
+      if (focused) {
+        velocity = state.isFocusLocked()
+          ? (control.led?.flash ?? control.led?.on ?? 1)
+          : onOff(control.led, true);
+      }
+      yield { note: pads[0].note, velocity };
       return;
-    case 'focusChannel':
-      // Single-colour track button: lit on the FOCUSED channel, dark otherwise
-      // (incl. channels that don't exist). One lit button = "faders 4-6 drive
-      // this channel's pattern."
-      yield { note: pads[0].note, velocity: onOff(control.led, state.layerExists(a.layer) && state.getFocusedLayer() === a.layer) };
-      return;
+    }
     case 'pattern':
       yield { note: pads[0].note, velocity: activeIdle(control.led, state.activePattern === a.name) };
       return;

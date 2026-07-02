@@ -53,7 +53,7 @@ describe('createDispatcher', () => {
 
   it('mixerLayerFader writes the Nth mixer channel fader (inert if absent)', async () => {
     const api = makeApi();
-    const ctx = { ...baseCtx, getLayer: (l: number) => (l === 0 ? { id: 'ch_a', role: 'mixer' as const, solo: false } : null) };
+    const ctx = { ...baseCtx, getLayer: (l: number) => (l === 0 ? { id: 'ch_a', role: 'mixer' as const } : null) };
     await createDispatcher(api, ctx)({ kind: 'mixerLayerFader', layer: 0, value: 0.5 });
     expect(api.updateMixerChannel).toHaveBeenCalledWith('ch_a', { fader: 0.5 });
     await createDispatcher(api, ctx)({ kind: 'mixerLayerFader', layer: 2, value: 0.9 });
@@ -62,21 +62,19 @@ describe('createDispatcher', () => {
 
   it('mixerLayerFader on the deck channel uses the deck API', async () => {
     const api = makeApi();
-    const ctx = { ...baseCtx, getLayer: () => ({ id: 'deck', role: 'deck' as const, solo: false }) };
+    const ctx = { ...baseCtx, getLayer: () => ({ id: 'deck', role: 'deck' as const }) };
     await createDispatcher(api, ctx)({ kind: 'mixerLayerFader', layer: 0, value: 0.4 });
     expect(api.updateDeckChannel).toHaveBeenCalledWith({ fader: 0.4 });
     expect(api.updateMixerChannel).not.toHaveBeenCalled();
   });
 
-  it('mixerLayerSolo flips solo on the Nth mixer channel (no-op on deck)', async () => {
+  it('runtime-only actions (focusChannel/scroll/window) THROW in the dispatcher', async () => {
     const api = makeApi();
-    const ctx = { ...baseCtx, getLayer: () => ({ id: 'ch_a', role: 'mixer' as const, solo: false }) };
-    await createDispatcher(api, ctx)({ kind: 'mixerLayerSolo', layer: 0 });
-    expect(api.updateMixerChannel).toHaveBeenCalledWith('ch_a', { solo: true });
-    const api2 = makeApi();
-    const deckCtx = { ...baseCtx, getLayer: () => ({ id: 'deck', role: 'deck' as const, solo: false }) };
-    await createDispatcher(api2, deckCtx)({ kind: 'mixerLayerSolo', layer: 0 });
-    expect(api2.updateMixerChannel).not.toHaveBeenCalled();
+    // These must be intercepted by the controller runtime; reaching the
+    // dispatcher is a wiring bug, so it fails loud rather than silently.
+    await expect(createDispatcher(api, baseCtx)({ kind: 'focusChannel', layer: 1 })).rejects.toThrow(/controller runtime/);
+    await expect(createDispatcher(api, baseCtx)({ kind: 'playlistScroll', layer: 0, dir: 'up' })).rejects.toThrow(/controller runtime/);
+    await expect(createDispatcher(api, baseCtx)({ kind: 'playlistWindowSelect', layer: 0, slot: 0 })).rejects.toThrow(/controller runtime/);
   });
 
   it('globalEffectSlot toggles the slot', async () => {
@@ -140,11 +138,4 @@ describe('createDispatcher', () => {
     expect(api.setDeckChannelControl).not.toHaveBeenCalled();
   });
 
-  it('focusChannel is handled by the runtime — the dispatcher is a no-op', async () => {
-    const api = makeApi();
-    await createDispatcher(api, baseCtx)({ kind: 'focusChannel', layer: 1 });
-    // No engine call: focus is controller/UI state.
-    expect(api.updateMixerChannel).not.toHaveBeenCalled();
-    expect(api.setActivePattern).not.toHaveBeenCalled();
-  });
 });

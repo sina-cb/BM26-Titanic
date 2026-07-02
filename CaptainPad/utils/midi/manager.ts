@@ -22,13 +22,13 @@
 import { MidiTransport } from './transport';
 import { ControllerProfile, validateProfileParams, ParamKeyError } from './profile';
 import { decodeMidi, DecodedMidi } from './midi_message';
-import { resolveEvent, ResolvedAction } from './resolver';
+import { resolveEvent, ResolvedAction, profileClaims } from './resolver';
 import { resolveEndpoints, EndpointResolutionError } from './endpoints';
 import { ControlCoalescer, CoalescerTimers } from './coalescer';
 import { createDispatcher, MidiDispatchApi, MidiDispatcher } from './dispatch';
 import { projectLeds, LedState, MidiProjectionState } from './led_projector';
 import {
-  LearnController, MidiControlRef, bindingMatches, controlRefFromEvent,
+  LearnController, LearnResult, MidiControlRef, bindingMatches, controlRefFromEvent,
   scaleMidiToRange, pickup, freshPickup, PickupState,
 } from './learn';
 
@@ -57,7 +57,6 @@ export interface MidiEngineSnapshot {
   layers: {
     id: string;
     fader: number;
-    solo: boolean;
     /** The layer's playlist (entries + active), for the pad window browser. */
     playlist?: { entries: { id: string }[]; activeEntryId: string | null };
   }[];
@@ -86,6 +85,14 @@ export interface FocusedChannel {
   /** Layer index (0-based) the focus came from — for the focus LED. */
   layer: number;
   id: string;
+  /** Active entry id (part of the pickup re-lock identity — a fader must
+   *  re-pick-up after the focused entry changes even if the mapping id is
+   *  reused across entries). null when the channel has no active entry. */
+  entryId: string | null;
+  /** Stable identity of this focus for pickup re-locking, built ONCE in the
+   *  hook: `role:id:entryId:mappingIds`. The runtime compares it as a single
+   *  string (no per-event allocation). */
+  key: string;
   /** Live local exports of the active pattern (id ↔ name ↔ current value). */
   exports: { id: number; name: string; v0: number }[];
   /** Active entry's stored bindings (the engine's per-entry midiMappings). */
@@ -136,7 +143,6 @@ const DEFAULT_COALESCE_MS = 33; // ~30 Hz
 interface ResolvedLayer {
   id: string;
   role: 'deck' | 'mixer';
-  solo: boolean;
   playlist?: { entries: { id: string }[]; activeEntryId: string | null };
 }
 
@@ -146,12 +152,12 @@ interface ResolvedLayer {
 function layerInfo(snap: MidiEngineSnapshot, layer: number): ResolvedLayer | null {
   if (snap.activeContext === 'deck') {
     if (layer === 0 && snap.deckLayer) {
-      return { id: snap.deckLayer.id, role: 'deck', solo: false, playlist: snap.deckLayer.playlist };
+      return { id: snap.deckLayer.id, role: 'deck', playlist: snap.deckLayer.playlist };
     }
     return null;
   }
   const l = snap.layers[layer];
-  return l ? { id: l.id, role: 'mixer', solo: l.solo, playlist: l.playlist } : null;
+  return l ? { id: l.id, role: 'mixer', playlist: l.playlist } : null;
 }
 
 function describeEvent(ev: DecodedMidi, controlId: string | null): string {
@@ -177,6 +183,13 @@ class ControllerRuntime {
   private context: string;
   /** Per-layer playlist browse-window top index (controller-local state). */
   private readonly windowCursor = new Map<number, number>();
+  /** The layer the operator just requested focus on (set SYNCHRONOUSLY in the
+   *  focusChannel handler). The onFocusChange → React → async snapshot swap is
+   *  authoritative-but-late; until `snapshot.focused.layer` catches up we (a)
+   *  paint LEDs from this and (b) treat mixer bindings as locked so a fader
+   *  can't write to the OLD channel. -1 = no explicit request yet (fall back to
+   *  the snapshot's focused layer). */
+  private requestedFocusLayer = -1;
   /** Soft-takeover state per binding id (locks a fader until it crosses the
    *  param's current value, so focus/pattern switches don't jump the value). */
   private readonly pickupStates = new Map<string, PickupState>();
@@ -296,11 +309,23 @@ class ControllerRuntime {
 
     // 1) MIDI-learn capture — while armed, the next learnable control BINDS
     //    (the popover supplied the callback) and is swallowed, never dispatched.
+    //    BUT: a control that already resolves to a STATIC profile action (global
+    //    speed, master, a pad, …) must NOT be learnable — capturing it would
+    //    permanently shadow that action. Run resolveEvent FIRST; if it claims
+    //    the control, reject with a named conflict instead of capturing.
     if (this.learn.isArmed()) {
       const cap = controlRefFromEvent(decoded);
-      if (cap && this.learn.capture(cap.ref)) {
-        this.setStatus({ lastEvent: `learn ← ${describeEvent(decoded, null)}` });
-        return;
+      if (cap) {
+        const claimed = profileClaims(this.profile, cap.ref, this.context);
+        if (claimed !== null) {
+          if (this.learn.reportConflict(claimed)) {
+            this.setStatus({ lastEvent: `learn ✕ ${describeEvent(decoded, claimed)} (mapped)` });
+            return;
+          }
+        } else if (this.learn.capture(cap.ref)) {
+          this.setStatus({ lastEvent: `learn ← ${describeEvent(decoded, null)}` });
+          return;
+        }
       }
     }
 
@@ -316,7 +341,7 @@ class ControllerRuntime {
     if (!ev) return;
     // Focus + the playlist window browser need controller-local state, so they
     // are handled here rather than in the pure dispatcher.
-    if (ev.resolved.kind === 'focusChannel') { this.opts.onFocusChange?.(ev.resolved.layer); return; }
+    if (ev.resolved.kind === 'focusChannel') { this.handleFocus(ev.resolved.layer); return; }
     if (ev.resolved.kind === 'playlistScroll') { this.handleScroll(ev.resolved.layer, ev.resolved.dir); return; }
     if (ev.resolved.kind === 'playlistWindowSelect') { this.handleWindowSelect(ev.resolved.layer, ev.resolved.slot); return; }
     if (ev.continuous) {
@@ -324,6 +349,19 @@ class ControllerRuntime {
     } else {
       void this.dispatcher(ev.resolved);
     }
+  }
+
+  /** Handle a focusChannel track-button press. Inert when the requested layer
+   *  doesn't exist (deck-tab track buttons for layers > 0, or a deleted
+   *  overlay) — like the old solo buttons: no focus change, no LED churn. Sets
+   *  `requestedFocusLayer` SYNCHRONOUSLY so LED paint + the applyBinding
+   *  staleness gate don't wait for the async snapshot swap. */
+  private handleFocus(layer: number): void {
+    const snap = this.opts.getSnapshot();
+    if (!layerInfo(snap, layer)) return; // absent layer → inert
+    this.requestedFocusLayer = layer;
+    this.opts.onFocusChange?.(layer);
+    this.projectAndSend(); // repaint the focus LED from requestedFocusLayer now
   }
 
   /** Apply a MIDI-learned binding for the focused channel. Returns true when
@@ -338,12 +376,27 @@ class ControllerRuntime {
     );
     if (!binding) return false;
 
-    // Re-lock every binding when the focus identity changes (focus channel or
-    // active-entry mapping set), so a fader has to pick up the new value.
-    const focusKey = `${focused.role}:${focused.id}:${focused.midiMappings.map((m) => m.id).join(',')}`;
-    if (focusKey !== this.lastFocusKey) {
+    // Focus/snapshot staleness gate (mixer only): the focusChannel press sets
+    // `requestedFocusLayer` synchronously, but the snapshot's focused layer
+    // swaps in async (onFocusChange → React → refetch). Until it catches up a
+    // fader would write to the OLD channel — so swallow (locked) while they
+    // disagree. On the deck the single channel is always focused, so
+    // requestedFocusLayer is either -1 (untouched) or 0 and never diverges.
+    if (focused.role === 'mixer' && this.requestedFocusLayer !== -1) {
+      this.reconcileRequestedFocus(focused.layer);
+      if (this.requestedFocusLayer !== -1 && focused.layer !== this.requestedFocusLayer) {
+        this.setStatus({ lastEvent: `bind (focus settling → ch ${this.requestedFocusLayer})` });
+        return true; // consumed; no write until the snapshot catches up
+      }
+    }
+
+    // Re-lock every binding when the focus identity changes — focus channel OR
+    // active entry OR its mapping set. The identity `key` is built ONCE in the
+    // hook (role:id:entryId:mappingIds); a single string compare here, no
+    // per-event allocation.
+    if (focused.key !== this.lastFocusKey) {
       this.pickupStates.clear();
-      this.lastFocusKey = focusKey;
+      this.lastFocusKey = focused.key;
     }
 
     // Resolve the bound param to a live export on the focused pattern. If the
@@ -352,8 +405,29 @@ class ControllerRuntime {
     const cap = controlRefFromEvent(decoded);
     const value = scaleMidiToRange(cap ? cap.value : 0, binding.range);
     if (!exp) {
+      // The binding matched but its param isn't on the focused pattern —
+      // LOUD SILENCE: the fader does nothing (no write) but is still owned by
+      // the binding. Returning true is safe now that learn-capture rejects any
+      // control that resolves to a profile action (see onMessage §1.1): a bound
+      // control can never also be a profile action, so swallowing it here can't
+      // mask one. It only ever affects a genuinely-learned fader whose current
+      // pattern lacks the param.
       this.setStatus({ lastEvent: `bind ${binding.target.parameter} (not on pattern)` });
-      return true; // control matched; simply not applicable to this pattern
+      return true;
+    }
+
+    // Discrete NOTE bindings (a learned pad) are an INTENTIONAL jump — bypass
+    // pickup so they write immediately (a pad press can never "cross" a value,
+    // so pickup would leave it permanently dead). Keep soft-takeover for CC.
+    if (cap && !cap.continuous) {
+      // A note press unlocks its pickup slot too, so a following CC (if the
+      // same binding were ever a CC) starts tracking, not locked.
+      this.pickupStates.set(binding.id, { locked: false, last: value });
+      this.setStatus({ lastEvent: `bind ${binding.target.parameter} = ${value.toFixed(2)}` });
+      this.coalescer.push(`bind:${binding.id}`, {
+        kind: 'localParam', role: focused.role, channelId: focused.id, exportId: exp.id, value,
+      });
+      return true;
     }
 
     const state = this.pickupStates.get(binding.id) ?? freshPickup();
@@ -370,6 +444,46 @@ class ControllerRuntime {
       kind: 'localParam', role: focused.role, channelId: focused.id, exportId: exp.id, value,
     });
     return true;
+  }
+
+  /** Is the focused channel currently pickup-LOCKED? True when any binding on
+   *  the current focus has a locked pickup slot (drives the focus LED blink).
+   *  Also true while the mixer focus snapshot is still settling (a fader would
+   *  be swallowed), so the operator sees "not ready" rather than a dark button. */
+  private isFocusLocked(): boolean {
+    const focused = this.opts.getSnapshot().focused;
+    if (!focused) return false;
+    if (
+      focused.role === 'mixer'
+      && this.requestedFocusLayer !== -1
+      && focused.layer !== this.requestedFocusLayer
+    ) return true;
+    // Only the current focus's pickup slots are meaningful (they were cleared
+    // on the last focus-identity change).
+    if (focused.key !== this.lastFocusKey) return false;
+    for (const b of focused.midiMappings) {
+      if (this.pickupStates.get(b.id)?.locked) return true;
+    }
+    return false;
+  }
+
+  /** The layer LED paint should treat as focused: the synchronous request when
+   *  set, else the snapshot's focused layer (projector fallback per §1.2). */
+  private getRequestedFocusLayer(): number {
+    if (this.requestedFocusLayer !== -1) return this.requestedFocusLayer;
+    return this.opts.getSnapshot().focused?.layer ?? -1;
+  }
+
+  /** Clear the synchronous focus request once it's no longer meaningful: either
+   *  the snapshot's focused layer caught up (settle done) OR the requested layer
+   *  no longer exists (e.g. an overlay was deleted and the hook fell focus back
+   *  to 0). Prevents a stale request from permanently gating mixer bindings. */
+  private reconcileRequestedFocus(snapshotLayer: number): void {
+    if (this.requestedFocusLayer === -1) return;
+    const snap = this.opts.getSnapshot();
+    if (snapshotLayer === this.requestedFocusLayer || !layerInfo(snap, this.requestedFocusLayer)) {
+      this.requestedFocusLayer = -1;
+    }
   }
 
   private handleScroll(layer: number, dir: 'up' | 'down'): void {
@@ -406,8 +520,8 @@ class ControllerRuntime {
       getGlobalEffectState: (effect) => !!snap.globalEffects[effect],
       resolvePatternForBank: (bank, index) => snap.patterns[bank * pageSize + index] ?? null,
       layerExists: (layer) => !!layerInfo(snap, layer),
-      getLayerSolo: (layer) => layerInfo(snap, layer)?.solo ?? false,
-      getFocusedLayer: () => snap.focused?.layer ?? -1,
+      getFocusedLayer: () => this.getRequestedFocusLayer(),
+      isFocusLocked: () => this.isFocusLocked(),
       getGlobalEffectSlotActive: (slot) => snap.globalEffectSlots.find((s) => s.slot === slot)?.active ?? false,
       globalEffectSlotCount: snap.globalEffectSlots.length,
       getLayerPlaylistLength: (layer) => layerInfo(snap, layer)?.playlist?.entries.length ?? 0,
@@ -459,7 +573,7 @@ export class MidiManager {
       resolvePatternForBank: (bank, index) => opts.getSnapshot().patterns[bank * pageSize + index] ?? null,
       getLayer: (layer) => {
         const L = layerInfo(opts.getSnapshot(), layer);
-        return L ? { id: L.id, role: L.role, solo: L.solo } : null;
+        return L ? { id: L.id, role: L.role } : null;
       },
       getColorPalette: (index) => opts.getSnapshot().colorPalettes[index] ?? null,
     });
@@ -469,15 +583,14 @@ export class MidiManager {
   }
 
   /** Arm MIDI-learn: the next fader/pad the operator moves on ANY connected
-   *  controller is captured and passed to `cb` (and swallowed — it binds, it
-   *  does not also act). Returns a cancel fn. Auto-disarms on capture. */
-  armLearn(cb: (control: MidiControlRef) => void): () => void {
-    this.learn.arm(cb);
-    return () => this.learn.cancel();
-  }
-
-  cancelLearn(): void {
-    this.learn.cancel();
+   *  controller is delivered to `cb` (and swallowed — it binds, it does not
+   *  also act). Delivers `{ ref }` on a clean capture or `{ conflict }` when
+   *  the control already resolves to a static profile action. Returns a cancel
+   *  fn scoped to THIS arm (a stale cancel can't kill a newer arm). Auto-disarms
+   *  on capture / conflict. */
+  armLearn(cb: (result: LearnResult) => void): () => void {
+    const token = this.learn.arm(cb);
+    return () => this.learn.cancel(token);
   }
 
   isLearning(): boolean {

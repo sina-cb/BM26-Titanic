@@ -129,20 +129,19 @@ describe('MidiManager (integration, fake transport)', () => {
     expect(onActivity).toHaveBeenCalledTimes(2);
   });
 
-  it('drives mixer layer faders + solo by index, inert when the layer is absent', async () => {
+  it('drives mixer layer faders by index, inert when the layer is absent', async () => {
     const layerProfile = validateProfile({
       device: { id: 'apc', label: 'APC mini mk2', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
       contexts: {
         mixer: [
           { id: 'f1', match: { type: 'cc', channel: 0, cc: 48 }, action: { kind: 'mixerLayerFader', layer: 0, range: [0, 1] } },
           { id: 'f2', match: { type: 'cc', channel: 0, cc: 49 }, action: { kind: 'mixerLayerFader', layer: 1, range: [0, 1] } },
-          { id: 's1', match: { type: 'note', channel: 0, notes: [100] }, action: { kind: 'mixerLayerSolo', layer: 0 }, led: { on: 1, off: 0 } },
         ],
       },
     });
     const snap: MidiEngineSnapshot = {
       ...baseSnap,
-      layers: [{ id: 'ch_a', fader: 0.5, solo: false }], // only layer 0 exists
+      layers: [{ id: 'ch_a', fader: 0.5 }], // only layer 0 exists
     };
     const transport = new FakeTransport(fullEndpoints);
     const api = makeApi();
@@ -155,8 +154,6 @@ describe('MidiManager (integration, fake transport)', () => {
     expect(api.updateMixerChannel).toHaveBeenCalledWith('ch_a', { fader: 1 });
     transport.emit([0xb0, 49, 127]); // layer 1 absent → no-op
     expect(api.updateMixerChannel).toHaveBeenCalledTimes(1);
-    transport.emit([0x90, 100, 127]); // solo layer 0
-    expect(api.updateMixerChannel).toHaveBeenCalledWith('ch_a', { solo: true });
   });
 
   it('pad window browser scrolls + selects a layer playlist entry', async () => {
@@ -172,7 +169,7 @@ describe('MidiManager (integration, fake transport)', () => {
     const entries = Array.from({ length: 10 }, (_, i) => ({ id: `e${i}` }));
     const snap: MidiEngineSnapshot = {
       ...baseSnap,
-      layers: [{ id: 'ch_a', fader: 1, solo: false, playlist: { entries, activeEntryId: 'e0' } }],
+      layers: [{ id: 'ch_a', fader: 1, playlist: { entries, activeEntryId: 'e0' } }],
     };
     const windowCalls: [string, number, number][] = [];
     const transport = new FakeTransport(fullEndpoints);
@@ -276,7 +273,8 @@ describe('MidiManager — MIDI-learn (arm, apply, focus)', () => {
     activeContext: 'deck',
     deckLayer: { id: 'deck1', fader: 1 },
     focused: {
-      role: 'deck', layer: 0, id: 'deck1',
+      role: 'deck', layer: 0, id: 'deck1', entryId: 'entryA',
+      key: 'deck:deck1:entryA:m1',
       exports: [{ id: 5, name: 'sliderGlow', v0 }],
       midiMappings: [{
         id: 'm1', enabled: true,
@@ -289,10 +287,10 @@ describe('MidiManager — MIDI-learn (arm, apply, focus)', () => {
   it('armLearn captures the next control and swallows it (no dispatch)', async () => {
     const { manager, api, transport } = setup(deckFocused());
     await manager.start();
-    const captured: unknown[] = [];
-    manager.armLearn((c) => captured.push(c));
+    const results: unknown[] = [];
+    manager.armLearn((r) => results.push(r));
     transport.emit([0xb0, 51, 100]); // move a fader while armed
-    expect(captured).toEqual([{ type: 'cc', channel: 0, number: 51 }]);
+    expect(results).toEqual([{ ref: { type: 'cc', channel: 0, number: 51 } }]);
     expect(manager.isLearning()).toBe(false); // auto-disarmed after capture
     // The control was swallowed — the binding on CC 51 must NOT have applied.
     expect(api.setDeckChannelControl).not.toHaveBeenCalled();
@@ -347,11 +345,213 @@ describe('MidiManager — MIDI-learn (arm, apply, focus)', () => {
     const onFocusChange = vi.fn();
     const manager = new MidiManager({
       profiles: [focusProfile], transportFactory: () => transport, api,
-      getSnapshot: () => ({ ...baseSnap, layers: [{ id: 'a', fader: 1, solo: false }, { id: 'b', fader: 1, solo: false }] }),
+      getSnapshot: () => ({ ...baseSnap, layers: [{ id: 'a', fader: 1 }, { id: 'b', fader: 1 }] }),
       defaultContext: 'mixer', onFocusChange,
     });
     await manager.start();
     transport.emit([0x90, 101, 127]);
     expect(onFocusChange).toHaveBeenCalledWith(1);
+  });
+
+  // ── 1.1 learn-capture rejects a control that resolves to a profile action ──
+  // A profile whose CC 54 is GLOBAL SPEED (a static profile action) and whose
+  // CC 51 is unmapped (free to learn).
+  const claimingProfile = validateProfile({
+    device: { id: 'apc', label: 'APC mini mk2', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+    controls: [
+      { id: 'fader_7_speed', match: { type: 'cc', channel: 0, cc: 54 }, action: { kind: 'paramCenter', key: 'speed', range: [0, 1] } },
+    ],
+  });
+
+  function setupClaiming(snapshot: MidiEngineSnapshot) {
+    const transport = new FakeTransport(fullEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [claimingProfile], transportFactory: () => transport, api,
+      getSnapshot: () => snapshot,
+    });
+    return { transport, api, manager };
+  }
+
+  it('1.1 rejects learning a control mapped to a profile action (surfaces conflict, no capture)', async () => {
+    const { manager, api, transport } = setupClaiming(deckFocused());
+    await manager.start();
+    const results: unknown[] = [];
+    manager.armLearn((r) => results.push(r));
+    transport.emit([0xb0, 54, 100]); // CC 54 = GLOBAL SPEED → conflict, not captured
+    expect(results).toEqual([{ conflict: 'fader_7_speed' }]);
+    expect(manager.isLearning()).toBe(false); // disarmed
+    // The profile action did NOT fire while armed (it was swallowed with the conflict).
+    expect(api.updateParamCenter).not.toHaveBeenCalledWith({ speed: expect.anything() });
+  });
+
+  it('1.1 still captures an unmapped control (CC 51 is free)', async () => {
+    const { manager, transport } = setupClaiming(deckFocused());
+    await manager.start();
+    const results: unknown[] = [];
+    manager.armLearn((r) => results.push(r));
+    transport.emit([0xb0, 51, 100]); // CC 51 unmapped → captured
+    expect(results).toEqual([{ ref: { type: 'cc', channel: 0, number: 51 } }]);
+  });
+
+  // ── 1.3 pickup re-locks across an entry switch (same mapping id, new entry) ──
+  it('1.3 re-locks pickup when the focused entry changes even if the mapping id repeats', async () => {
+    // A mutable snapshot so we can swap the focused entry between emits.
+    let snap = deckFocused(0.5);
+    const transport = new FakeTransport(fullEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [profile], transportFactory: () => transport, api, getSnapshot: () => snap,
+    });
+    await manager.start();
+    // Unlock on entry A (64/127 ≈ 0.5, within eps → writes).
+    transport.emit([0xb0, 51, 64]);
+    expect(api.setDeckChannelControl).toHaveBeenCalledTimes(1);
+    // Switch to entry B — SAME mapping id 'm1', new entryId → new key → re-lock.
+    snap = deckFocused(0.5);
+    snap.focused!.entryId = 'entryB';
+    snap.focused!.key = 'deck:deck1:entryB:m1';
+    transport.emit([0xb0, 51, 127]); // 1.0, far from 0.5 → locked, no write
+    expect(api.setDeckChannelControl).toHaveBeenCalledTimes(1); // still 1 — locked
+  });
+
+  // ── 1.4 / 1.6 focusing an absent layer is inert (deck-tab track buttons too) ──
+  it('1.4 focusChannel on an absent layer does not fire onFocusChange', async () => {
+    const focusProfile = validateProfile({
+      device: { id: 'apc', label: 'APC mini mk2', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+      contexts: {
+        mixer: [{ id: 't3', match: { type: 'note', channel: 0, notes: [102] }, action: { kind: 'focusChannel', layer: 2 }, led: { on: 1, off: 0 } }],
+      },
+    });
+    const transport = new FakeTransport(fullEndpoints);
+    const api = makeApi();
+    const onFocusChange = vi.fn();
+    const manager = new MidiManager({
+      profiles: [focusProfile], transportFactory: () => transport, api,
+      getSnapshot: () => ({ ...baseSnap, layers: [{ id: 'a', fader: 1 }] }), // only layer 0
+      defaultContext: 'mixer', onFocusChange,
+    });
+    await manager.start();
+    transport.emit([0x90, 102, 127]); // focus layer 2 — absent → inert
+    expect(onFocusChange).not.toHaveBeenCalled();
+  });
+
+  it('1.6 a deck-tab track button (layer > 0) is a no-op (layer absent on deck)', async () => {
+    const focusProfile = validateProfile({
+      device: { id: 'apc', label: 'APC mini mk2', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+      contexts: {
+        deck: [{ id: 't3', match: { type: 'note', channel: 0, notes: [102] }, action: { kind: 'focusChannel', layer: 2 }, led: { on: 1, off: 0 } }],
+      },
+    });
+    const transport = new FakeTransport(fullEndpoints);
+    const api = makeApi();
+    const onFocusChange = vi.fn();
+    const manager = new MidiManager({
+      profiles: [focusProfile], transportFactory: () => transport, api,
+      getSnapshot: () => ({ ...baseSnap, activeContext: 'deck', deckLayer: { id: 'deck1', fader: 1 } }),
+      defaultContext: 'deck', onFocusChange,
+    });
+    await manager.start();
+    transport.emit([0x90, 102, 127]); // deck-tab: layers > 0 don't exist → inert
+    expect(onFocusChange).not.toHaveBeenCalled();
+  });
+
+  // ── 1.5 discrete NOTE bindings bypass pickup (a pad press is an intent jump) ──
+  it('1.5 a learned NOTE binding writes on the first press (no pickup lock)', async () => {
+    const snap: MidiEngineSnapshot = {
+      ...baseSnap, activeContext: 'deck', deckLayer: { id: 'deck1', fader: 1 },
+      focused: {
+        role: 'deck', layer: 0, id: 'deck1', entryId: 'e1', key: 'deck:deck1:e1:pad1',
+        exports: [{ id: 7, name: 'sliderGlow', v0: 0.0 }],
+        midiMappings: [{
+          id: 'pad1', enabled: true,
+          control: { type: 'note', channel: 0, number: 40 },
+          target: { parameter: 'sliderGlow' }, range: [0, 1],
+        }],
+      },
+    };
+    const { manager, api, transport } = setup(snap);
+    await manager.start();
+    // A note press at velocity 127 → value 1.0, far from v0 0.0, but NOTE bypasses
+    // pickup → writes immediately.
+    transport.emit([0x90, 40, 127]);
+    expect(api.setDeckChannelControl).toHaveBeenCalledWith(7, 1);
+  });
+
+  // ── 1.2 focus/snapshot staleness gate: mixer bindings locked until the ──────
+  //    snapshot's focused layer catches up to the requested layer.
+  it('1.2 mixer bindings are swallowed until the snapshot focus catches up', async () => {
+    // Profile: a focus track button (layer 1) + a learnable-through-binding CC.
+    const p = validateProfile({
+      device: { id: 'apc', label: 'APC mini mk2', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+      contexts: {
+        mixer: [{ id: 't2', match: { type: 'note', channel: 0, notes: [101] }, action: { kind: 'focusChannel', layer: 1 }, led: { on: 1, off: 0 } }],
+      },
+    });
+    // The snapshot's focused still points at layer 0 (async swap hasn't landed).
+    const snap: MidiEngineSnapshot = {
+      ...baseSnap, activeContext: 'mixer',
+      layers: [{ id: 'ch0', fader: 1 }, { id: 'ch1', fader: 1 }],
+      focused: {
+        role: 'mixer', layer: 0, id: 'ch0', entryId: 'e0', key: 'mixer:ch0:e0:m1',
+        exports: [{ id: 3, name: 'glow', v0: 0.5 }],
+        midiMappings: [{
+          id: 'm1', enabled: true, control: { type: 'cc', channel: 0, number: 51 },
+          target: { parameter: 'glow' }, range: [0, 1],
+        }],
+      },
+    };
+    const transport = new FakeTransport(fullEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [p], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'mixer',
+      onFocusChange: () => { /* async in real life; snapshot stays on layer 0 */ },
+    });
+    await manager.start();
+    transport.emit([0x90, 101, 127]); // request focus layer 1 (sets requestedFocusLayer=1)
+    // Snapshot still reports focused.layer 0 ≠ requested 1 → binding swallowed.
+    transport.emit([0xb0, 51, 64]);
+    expect(api.setMixerChannelControl).not.toHaveBeenCalled();
+  });
+
+  it('1.2 once the snapshot focus catches up, bindings flow to the new channel', async () => {
+    const p = validateProfile({
+      device: { id: 'apc', label: 'APC mini mk2', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+      contexts: {
+        mixer: [{ id: 't2', match: { type: 'note', channel: 0, notes: [101] }, action: { kind: 'focusChannel', layer: 1 }, led: { on: 1, off: 0 } }],
+      },
+    });
+    // Mutable snapshot; onFocusChange swaps focused to layer 1 (the async catch-up).
+    let snap: MidiEngineSnapshot = {
+      ...baseSnap, activeContext: 'mixer',
+      layers: [{ id: 'ch0', fader: 1 }, { id: 'ch1', fader: 1 }],
+      focused: {
+        role: 'mixer', layer: 0, id: 'ch0', entryId: 'e0', key: 'mixer:ch0:e0:m1',
+        exports: [{ id: 3, name: 'glow', v0: 0.5 }],
+        midiMappings: [{ id: 'm1', enabled: true, control: { type: 'cc', channel: 0, number: 51 }, target: { parameter: 'glow' }, range: [0, 1] }],
+      },
+    };
+    const swapToLayer1 = () => {
+      snap = {
+        ...snap,
+        focused: {
+          role: 'mixer', layer: 1, id: 'ch1', entryId: 'e1', key: 'mixer:ch1:e1:m1',
+          exports: [{ id: 4, name: 'glow', v0: 0.5 }],
+          midiMappings: [{ id: 'm1', enabled: true, control: { type: 'cc', channel: 0, number: 51 }, target: { parameter: 'glow' }, range: [0, 1] }],
+        },
+      };
+    };
+    const transport = new FakeTransport(fullEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [p], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'mixer',
+      onFocusChange: () => swapToLayer1(), // synchronous swap simulating the catch-up
+    });
+    await manager.start();
+    transport.emit([0x90, 101, 127]); // focus layer 1; snapshot now reports layer 1
+    transport.emit([0xb0, 51, 64]); // 0.504 ≈ 0.5 → picks up → writes to ch1's export 4
+    expect(api.setMixerChannelControl).toHaveBeenCalledWith('ch1', 4, expect.closeTo(64 / 127, 5));
   });
 });

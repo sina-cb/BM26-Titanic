@@ -6,8 +6,18 @@
 // keeping resolution pure is what makes it unit-testable with synthetic events.
 
 import { ControllerProfile, ControlDef, Range } from './profile';
-import { DecodedMidi } from './midi_message';
+import { DecodedMidi, decodeMidi } from './midi_message';
+import { scaleMidiToRange, MidiControlRef } from './learn';
 
+// ResolvedAction has TWO producers:
+//   1. resolveEvent() (this file, PURE, profile-driven) produces every kind
+//      EXCEPT `localParam` — a decoded event mapped to a static profile action.
+//   2. The controller runtime (manager.ts) builds `localParam` from the focused
+//      entry's stored bindings + live exports (not profile-driven), then routes
+//      it through the same coalescer + dispatcher seam.
+// The dispatcher handles the engine-call kinds; `focusChannel` / `playlistScroll`
+// / `playlistWindowSelect` are consumed by the runtime (controller-local state)
+// and never reach an engine call.
 export type ResolvedAction =
   | { kind: 'paramCenter'; key: string; value: number }
   | { kind: 'master'; value: number }
@@ -18,7 +28,6 @@ export type ResolvedAction =
   | { kind: 'sectionBrightness'; sectionId: number; value: number }
   | { kind: 'groupFixedColor'; group: string; color: number[]; brightness: number }
   | { kind: 'mixerLayerFader'; layer: number; value: number }
-  | { kind: 'mixerLayerSolo'; layer: number }
   | { kind: 'globalEffectSlot'; slot: number }
   | { kind: 'playlistScroll'; layer: number; dir: 'up' | 'down' }
   | { kind: 'playlistWindowSelect'; layer: number; slot: number }
@@ -41,10 +50,11 @@ export interface ResolvedEvent {
 
 const MIDI_MAX = 127;
 
-/** Scale a 0-127 MIDI value into [min, max]. */
+// The single value→range scaler is learn.ts `scaleMidiToRange` (which also
+// clamps out-of-spec bytes). `scale()` is a thin range-typed alias so the
+// paramCenter / fader / sectionBrightness sites read cleanly.
 function scale(value: number, range: Range): number {
-  const [min, max] = range;
-  return min + (value / MIDI_MAX) * (max - min);
+  return scaleMidiToRange(value, range);
 }
 
 function matches(control: ControlDef, ev: DecodedMidi): { hit: boolean; index: number } {
@@ -106,9 +116,6 @@ export function resolveEvent(
         if (ev.type !== 'cc') return null;
         return { controlId: control.id, continuous: true,
           resolved: { kind: 'mixerLayerFader', layer: a.layer, value: scale(ev.value, a.range) } };
-      case 'mixerLayerSolo':
-        return { controlId: control.id, continuous: false,
-          resolved: { kind: 'mixerLayerSolo', layer: a.layer } };
       case 'focusChannel':
         return { controlId: control.id, continuous: false,
           resolved: { kind: 'focusChannel', layer: a.layer } };
@@ -144,4 +151,29 @@ export function resolveEvent(
     }
   }
   return null;
+}
+
+/**
+ * Does a captured control already resolve to a STATIC profile action in the
+ * given context? Returns the claiming control's id (so the caller can name it,
+ * e.g. "CC 54 is GLOBAL SPEED") or null when the control is unmapped and thus
+ * free to learn. Used to REJECT learning a control that would permanently
+ * shadow a profile action (global speed, master, pads, …) — the faders/pads
+ * reserved for learn are simply absent from the profile, so they return null.
+ *
+ * Pure: it synthesises the most-representative decoded event for the ref (a
+ * mid-value CC, a full-velocity Note On) and runs it through resolveEvent.
+ */
+export function profileClaims(
+  profile: ControllerProfile,
+  ref: MidiControlRef,
+  context?: string,
+): string | null {
+  const status = ref.type === 'cc' ? 0xb0 : 0x90;
+  // CC: a mid value (64) resolves the same as any other for range/toggle
+  // actions; Note On: full velocity so it is never mistaken for a Note Off.
+  const value = ref.type === 'cc' ? 64 : 127;
+  const ev = decodeMidi([status | (ref.channel & 0x0f), ref.number, value]);
+  const resolved = resolveEvent(profile, ev, context);
+  return resolved ? resolved.controlId : null;
 }

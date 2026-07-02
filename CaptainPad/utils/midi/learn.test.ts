@@ -66,10 +66,20 @@ describe('LearnController', () => {
     lc.arm(cb);
     expect(lc.isArmed()).toBe(true);
     expect(lc.capture({ type: 'cc', channel: 0, number: 51 })).toBe(true);
-    expect(cb).toHaveBeenCalledWith({ type: 'cc', channel: 0, number: 51 });
+    expect(cb).toHaveBeenCalledWith({ ref: { type: 'cc', channel: 0, number: 51 } });
     expect(lc.isArmed()).toBe(false);
     // A second control after capture is not consumed.
     expect(lc.capture({ type: 'cc', channel: 0, number: 52 })).toBe(false);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+  it('reportConflict delivers a conflict result once, then disarms', () => {
+    const lc = new LearnController();
+    const cb = vi.fn();
+    lc.arm(cb);
+    expect(lc.reportConflict('fader_7_speed')).toBe(true);
+    expect(cb).toHaveBeenCalledWith({ conflict: 'fader_7_speed' });
+    expect(lc.isArmed()).toBe(false);
+    expect(lc.reportConflict('other')).toBe(false); // disarmed
     expect(cb).toHaveBeenCalledTimes(1);
   });
   it('cancel disarms without firing', () => {
@@ -79,6 +89,18 @@ describe('LearnController', () => {
     lc.cancel();
     expect(lc.capture({ type: 'cc', channel: 0, number: 51 })).toBe(false);
     expect(cb).not.toHaveBeenCalled();
+  });
+  it("a stale token's cancel does not disarm a newer arm", () => {
+    const lc = new LearnController();
+    const cb1 = vi.fn();
+    const cb2 = vi.fn();
+    const token1 = lc.arm(cb1); // first arm
+    lc.arm(cb2);                // re-arm (newer); token1 is now stale
+    lc.cancel(token1);          // stale cancel — must NOT disarm cb2
+    expect(lc.isArmed()).toBe(true);
+    expect(lc.capture({ type: 'cc', channel: 0, number: 51 })).toBe(true);
+    expect(cb2).toHaveBeenCalledWith({ ref: { type: 'cc', channel: 0, number: 51 } });
+    expect(cb1).not.toHaveBeenCalled();
   });
 });
 
