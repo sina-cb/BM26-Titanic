@@ -17,7 +17,15 @@ export * from './dispatch';
 export * from './learn';
 export * from './led_projector';
 export * from './manager';
-export { WebMidiTransport, isMidiAvailable } from './web_midi_transport';
+export { WebMidiTransport, isMidiAvailable, setSysexRequested } from './web_midi_transport';
+
+// Driver #2 — MIDI Fighter Twister protocol port (constants, message
+// builders/decoders, sysex config). Re-exported under a namespace so the mft.*
+// symbols don't collide with the mapping-layer exports above (e.g. both have
+// their own colour/animation vocabularies).
+export * as mft from './mft/constants';
+export * as mftMessages from './mft/messages';
+export * as mftConfig from './mft/config';
 
 /** Seam for the deferred native CoreMIDI transport. Always false until the
  *  Expo module lands; kept so the selection logic already reads correctly. */

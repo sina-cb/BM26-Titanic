@@ -63,6 +63,47 @@ describe('ControlCoalescer', () => {
     expect(out).toContainEqual(['a', 3]);
   });
 
+  it('accumulate() sums deltas across a window and flushes the total once', () => {
+    const ft = makeFakeTimers();
+    const out: number[] = [];
+    const c = new ControlCoalescer<number>(33, (_id, v) => out.push(v), ft.timers);
+    const sum = (a: number, b: number) => a + b;
+    // Unlike push(), accumulate does NOT fire a leading edge — it folds every
+    // tick (so a delta lands on the value AT flush time, not double-applied).
+    c.accumulate('k', 1, sum);
+    c.accumulate('k', 2, sum);
+    c.accumulate('k', 3, sum);
+    expect(out).toEqual([]);       // nothing fired yet — all pending
+    expect(ft.pending()).toBe(1);  // one window armed
+    ft.flushDue();
+    expect(out).toEqual([6]);      // 1+2+3 flushed as one
+  });
+
+  it('accumulate() flushes a lone tick on the first window', () => {
+    const ft = makeFakeTimers();
+    const out: number[] = [];
+    const c = new ControlCoalescer<number>(33, (_id, v) => out.push(v), ft.timers);
+    c.accumulate('k', 5, (a, b) => a + b);
+    ft.flushDue();
+    expect(out).toEqual([5]);
+    ft.flushDue(); // nothing pending → window closes
+    expect(out).toEqual([5]);
+    expect(ft.pending()).toBe(0);
+  });
+
+  it('accumulate() keeps separate windows per control id', () => {
+    const ft = makeFakeTimers();
+    const out: Array<[string, number]> = [];
+    const c = new ControlCoalescer<number>(33, (id, v) => out.push([id, v]), ft.timers);
+    const sum = (a: number, b: number) => a + b;
+    c.accumulate('a', 1, sum);
+    c.accumulate('b', 10, sum);
+    c.accumulate('a', 2, sum);
+    ft.flushDue();
+    expect(out).toContainEqual(['a', 3]);
+    expect(out).toContainEqual(['b', 10]);
+  });
+
   it('dispose() cancels armed timers', () => {
     const ft = makeFakeTimers();
     const c = new ControlCoalescer<number>(33, () => {}, ft.timers);

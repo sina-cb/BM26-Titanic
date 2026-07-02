@@ -58,13 +58,27 @@ export function isMidiAvailable(): boolean {
 let sharedAccess: Promise<WebMidiAccess> | null = null;
 const stateChangeListeners = new Set<() => void>();
 
+// Whether to request the SysEx capability. Off by default (a plain MIDI grant
+// on desktop Chrome, no scary prompt). A driver that must push a SysEx config
+// on connect (the MIDI Fighter Twister's encoder-mode setup, device
+// `configureOnConnect`) calls setSysexRequested(true) at boot BEFORE the first
+// controller connects, so the single shared MIDIAccess is granted with sysex.
+let sysexRequested = false;
+
+/** Request the SysEx capability for the shared MIDIAccess. MUST be called
+ *  before the first connect (getAccess memoises the grant). No-op after access
+ *  has already been requested. */
+export function setSysexRequested(required: boolean): void {
+  sysexRequested = sysexRequested || required;
+}
+
 function getAccess(): Promise<WebMidiAccess> {
   if (!isMidiAvailable()) {
     return Promise.reject(new Error('Web MIDI is not available on this platform'));
   }
   if (!sharedAccess) {
     const nav = (globalThis as unknown as { navigator: MidiCapableNavigator }).navigator;
-    sharedAccess = nav.requestMIDIAccess({ sysex: false }).then((access) => {
+    sharedAccess = nav.requestMIDIAccess({ sysex: sysexRequested }).then((access) => {
       access.onstatechange = () => {
         for (const cb of stateChangeListeners) cb();
       };

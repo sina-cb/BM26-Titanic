@@ -27,6 +27,11 @@ export interface MidiDispatchApi {
   // singleton route (no id); mixer overlays are addressed by channel id.
   setDeckChannelControl(id: number, v0: number, v1?: number, v2?: number): Promise<MidiApiResult>;
   setMixerChannelControl(channelId: string, id: number, v0: number, v1?: number, v2?: number): Promise<MidiApiResult>;
+  // Tap-tempo (MFT side button). OPTIONAL: no engine tap endpoint exists yet
+  // (docs/34 §MFT side buttons), so the hook may leave this undefined; the
+  // dispatcher then treats tapTempo as a documented no-op (see below). When a
+  // tap endpoint lands, wire this to it.
+  tapTempo?(): Promise<MidiApiResult>;
 }
 
 /** A resolved mixer "layer" — unified across tabs. On the Deck tab layer 0 is
@@ -110,13 +115,27 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
         if (resolved.role === 'deck') await api.setDeckChannelControl(resolved.exportId, resolved.value);
         else await api.setMixerChannelControl(resolved.channelId, resolved.exportId, resolved.value);
         return;
+      case 'tapTempo':
+        // No engine tap-tempo endpoint exists yet (docs/34 §MFT side buttons).
+        // Fail-loud rule doesn't apply to an intentionally-unbuilt feature: this
+        // is a DOCUMENTED no-op, not a swallowed error. When `api.tapTempo` is
+        // wired to a real endpoint, dispatch it; until then log once per press.
+        // TODO(mft): wire a tap-tempo endpoint in utils/api.ts + the engine.
+        if (api.tapTempo) { await api.tapTempo(); return; }
+        console.warn('[midi] tapTempo pressed but no tap-tempo endpoint is wired yet (documented no-op)');
+        return;
       case 'focusChannel':
       case 'playlistScroll':
       case 'playlistWindowSelect':
+      case 'focusedParamDelta':
+      case 'paramCenterDelta':
+      case 'focusedParamReset':
+      case 'focusStep':
         // These are RUNTIME-ONLY actions (controller-local state: focus
-        // selection / per-layer window cursor). The runtime intercepts them
-        // BEFORE the dispatcher — reaching here means a wiring bug, so fail
-        // loud rather than silently swallow (codex P0: no silent no-ops).
+        // selection / per-layer window cursor / focused-channel delta math). The
+        // runtime intercepts them BEFORE the dispatcher — reaching here means a
+        // wiring bug, so fail loud rather than silently swallow (codex P0: no
+        // silent no-ops).
         throw new Error(`dispatch: '${resolved.kind}' must be handled by the controller runtime, not dispatched`);
       default:
         // Exhaustiveness guard — a new ResolvedAction kind must add a case.

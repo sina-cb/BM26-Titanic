@@ -25,6 +25,8 @@
 
 import { ControllerProfile, ControlDef, LedSpec, ControlMatch } from './profile';
 import { noteOn } from './midi_message';
+import { setRingValue, setColor } from './mft/messages';
+import { ColorValues } from './mft/constants';
 
 export interface MidiProjectionState {
   blackout: boolean;
@@ -53,10 +55,31 @@ export interface MidiProjectionState {
   windowSize: number;
   /** Curated palette pair (hues 0..1) at index, or null when out of range. */
   getColorPaletteHue(index: number): { c1: number; c2: number } | null;
+  // ── Driver #2 — MIDI Fighter Twister ring feedback (best-effort) ──
+  /** Current value (0..1) of the FOCUSED channel's ordered export at `index`,
+   *  for a `focusedParamKnob` ring, or null when no param sits behind that knob
+   *  (ring dark). Optional so APC-only projection needs no new state. */
+  getFocusedExportValue?(index: number): number | null;
+  /** Current value (0..1) of a CPC global param by key (bank-2 rings), or null
+   *  when the key is unknown (ring dark). */
+  getGlobalParamValue?(key: string): number | null;
+  /** Identity colour (an MFT colour-wheel value) of the focused channel, for the
+   *  knob rings — deck vs overlay 1/2/3. Optional; omitted → no colour write. */
+  getFocusedIdentityColor?(): number | null;
 }
 
-/** note -> "status:velocity" of the last message sent for that note. */
-export type LedState = Record<number, string>;
+/** LED diff key -> the last message bytes sent for it (as "b0:b1:b2"), so only
+ *  changed LEDs re-send. Keyed by `(statusByte, number)` — e.g. "144:107" for
+ *  an APC note button, "176:5" for an MFT ring CC — so a note and a CC on the
+ *  same number never collide (the MFT rings and switches share encoder numbers
+ *  across channels). Numeric note keys from the APC path stay backward-shaped
+ *  via the same string key. */
+export type LedState = Record<string, string>;
+
+/** The diff key for a message: statusByte + data1 (note/CC number). */
+function ledKey(msg: number[]): string {
+  return `${msg[0]}:${msg[1]}`;
+}
 
 export interface LedProjection {
   messages: number[][];
@@ -213,6 +236,45 @@ function* padVelocities(
   }
 }
 
+/** Emit the outbound ring/colour CC messages for a `focusedParamKnob` or
+ *  `paramCenterRelative` control (MFT). Ring value = the live param value scaled
+ *  0-127; colour = the focused channel's identity (when the projection state
+ *  supplies it). A knob with no param behind it goes dark (ring 0). Returns []
+ *  for any non-relative control or when the projection state lacks the MFT
+ *  getters (APC-only path). */
+function* ringMessages(
+  control: ControlDef,
+  state: MidiProjectionState,
+): Generator<number[]> {
+  const a = control.action;
+  if (a.kind === 'focusedParamKnob') {
+    if (!state.getFocusedExportValue) return;
+    const v = state.getFocusedExportValue(a.index);
+    yield setRingValue(a.index, v === null ? 0 : Math.round(clampUnit(v) * 127));
+    if (v !== null && state.getFocusedIdentityColor) {
+      const color = state.getFocusedIdentityColor();
+      if (color !== null) yield setColor(a.index, color);
+    } else {
+      // No param behind the knob — dark it (inactive colour).
+      yield setColor(a.index, ColorValues.INACTIVE);
+    }
+    return;
+  }
+  if (a.kind === 'paramCenterRelative') {
+    if (!state.getGlobalParamValue) return;
+    // The ring index for a bank-2 knob is the encoder number the profile pins on
+    // the relative match's CC (encoder N → CC N on ch0). Read it off the match.
+    const enc = control.match.type === 'cc' ? control.match.cc : null;
+    if (enc === null) return;
+    const v = state.getGlobalParamValue(a.key);
+    yield setRingValue(enc, v === null ? 0 : Math.round(clampUnit(v) * 127));
+  }
+}
+
+function clampUnit(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
 export function projectLeds(
   profile: ControllerProfile,
   state: MidiProjectionState,
@@ -223,13 +285,22 @@ export function projectLeds(
   const messages: number[][] = [];
   const controls = context ? (profile.contexts[context] ?? profile.controls) : profile.controls;
   for (const control of controls) {
-    if (!control.led && control.action.kind !== 'colorPalettePair') continue;
-    for (const { note, velocity } of padVelocities(control, state)) {
-      const channel = isRgbPad(note) ? (control.led?.channel ?? DEFAULT_PAD_CHANNEL) : 0;
-      const msg = noteOn(channel, note, velocity);
-      const key = `${msg[0]}:${msg[2]}`;
-      next[note] = key;
-      if (prev[note] !== key) messages.push(msg);
+    // APC pad / button feedback (unchanged): notes keyed by (status, note).
+    if (control.led || control.action.kind === 'colorPalettePair') {
+      for (const { note, velocity } of padVelocities(control, state)) {
+        const channel = isRgbPad(note) ? (control.led?.channel ?? DEFAULT_PAD_CHANNEL) : 0;
+        const msg = noteOn(channel, note, velocity);
+        const key = ledKey(msg);
+        next[key] = String(msg[2]);
+        if (prev[key] !== String(msg[2])) messages.push(msg);
+      }
+    }
+    // MFT ring/colour feedback (additive — only fires for relative knob controls
+    // on a projection state that supplies the MFT getters).
+    for (const msg of ringMessages(control, state)) {
+      const key = ledKey(msg);
+      next[key] = String(msg[2]);
+      if (prev[key] !== String(msg[2])) messages.push(msg);
     }
   }
   return { messages, next };

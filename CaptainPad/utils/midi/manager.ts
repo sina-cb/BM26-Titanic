@@ -31,6 +31,41 @@ import {
   LearnController, LearnResult, MidiControlRef, bindingMatches, controlRefFromEvent,
   scaleMidiToRange, pickup, freshPickup, PickupState,
 } from './learn';
+import { decodeBankChange } from './mft/messages';
+import { ColorValues } from './mft/constants';
+import { buildConnectConfig } from './mft/config';
+
+/** MFT identity colour for the focused channel's knob rings: deck = blue,
+ *  overlay layers 1/2/3 = green/yellow/pink (docs/34 knob-layout table). The
+ *  knobs' colour TELLS the operator which channel is focused. null → no colour. */
+function focusedIdentityColor(focused: FocusedChannel | null): number | null {
+  if (!focused) return null;
+  if (focused.role === 'deck') return ColorValues.BLUE;
+  switch (focused.layer) {
+    case 0: return ColorValues.GREEN;
+    case 1: return ColorValues.YELLOW;
+    case 2: return ColorValues.PINK;
+    default: return ColorValues.GREEN;
+  }
+}
+
+/** Clamp to the unit interval — every focused/global param lives in [0, 1]. */
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/** Fold two relative-delta payloads within a coalescer window by SUMMING their
+ *  deltas — every detent tick counts (accumulate, never last-write-wins). Both
+ *  payloads target the same control id, so index/key match by construction. */
+function combineDelta(existing: ResolvedAction, incoming: ResolvedAction): ResolvedAction {
+  if (existing.kind === 'focusedParamDelta' && incoming.kind === 'focusedParamDelta') {
+    return { ...existing, delta: existing.delta + incoming.delta };
+  }
+  if (existing.kind === 'paramCenterDelta' && incoming.kind === 'paramCenterDelta') {
+    return { ...existing, delta: existing.delta + incoming.delta };
+  }
+  return incoming; // mismatched kinds can't happen for one control id
+}
 
 export type ControllerStatusKind = 'disconnected' | 'connected' | 'error';
 
@@ -76,6 +111,10 @@ export interface MidiEngineSnapshot {
    *  (auto-focused); on the Mixer tab the operator selects it with a track
    *  button. null when nothing is focused (no channel / no active entry). */
   focused: FocusedChannel | null;
+  /** Curated CPC global param VALUES (0..1) keyed by param key, for the MFT
+   *  bank-2 `paramCenterRelative` knobs (and their ring feedback). A relative
+   *  knob applies its delta to the value here. Absent key → knob is inert. */
+  globalParamValues?: Record<string, number>;
 }
 
 /** The focused channel's live exports + its active entry's MIDI bindings — the
@@ -93,8 +132,10 @@ export interface FocusedChannel {
    *  hook: `role:id:entryId:mappingIds`. The runtime compares it as a single
    *  string (no per-event allocation). */
   key: string;
-  /** Live local exports of the active pattern (id ↔ name ↔ current value). */
-  exports: { id: number; name: string; v0: number }[];
+  /** Live local exports of the active pattern (id ↔ name ↔ current value). The
+   *  MFT bank-1 knobs drive these BY ORDER: knob i → exports[i]. `defaultValue`
+   *  (when the entry carries one) is the target for encoder-push reset. */
+  exports: { id: number; name: string; v0: number; defaultValue?: number }[];
   /** Active entry's stored bindings (the engine's per-entry midiMappings). */
   midiMappings: FocusedBinding[];
 }
@@ -195,6 +236,10 @@ class ControllerRuntime {
   private readonly pickupStates = new Map<string, PickupState>();
   /** Identity of the focus the pickup map was built for; a change re-locks. */
   private lastFocusKey: string | null = null;
+  /** Active MFT virtual bank (0-3), tracked from the device's ch3 bank-change
+   *  reports. Bank switching is hardware-local; we only track it for status +
+   *  ring feedback (the device latches ring state per bank). */
+  private activeBank = 0;
   private readonly learn: LearnController;
   status: ControllerStatus;
 
@@ -214,7 +259,7 @@ class ControllerRuntime {
     this.transport = opts.transportFactory();
     this.coalescer = new ControlCoalescer<ResolvedAction>(
       opts.coalesceMs ?? DEFAULT_COALESCE_MS,
-      (_controlId, payload) => { void this.dispatcher(payload); },
+      (_controlId, payload) => { void this.flushResolved(payload); },
       opts.coalescerTimers,
     );
     this.status = { deviceId: profile.device.id, label: profile.device.label, kind: 'disconnected' };
@@ -244,6 +289,26 @@ class ControllerRuntime {
       const resolved = resolveEndpoints(this.profile.device, endpoints); // throws → error
       await this.transport.openSource(resolved.sourceId);
       await this.transport.openDestination(resolved.destinationId);
+
+      // Connect-time sysex config push (MFT): force the encoders into the
+      // relative-mode layout this driver assumes. Requires a transport that can
+      // send sysex; if send() throws (e.g. Web MIDI opened without `sysex:true`)
+      // we go RED with the reason rather than run against unknown encoder modes
+      // (docs/34 §5.3 fail-loud rule). Idempotent — safe to re-send on replug.
+      if (this.profile.device.configureOnConnect) {
+        try {
+          for (const frame of buildConnectConfig()) this.transport.send(frame);
+        } catch (cfgErr) {
+          const reason = cfgErr instanceof Error ? cfgErr.message : String(cfgErr);
+          this.teardownBindings();
+          this.setStatus({
+            kind: 'error',
+            error: `${this.profile.device.label}: sysex config push failed — the transport can't send sysex (Web MIDI needs sysex:true, or flash the .mfs preset via MF Utility). ${reason}`,
+          });
+          this.bindHotplugOnly();
+          return;
+        }
+      }
 
       // Param-key validation: aggregate, non-fatal (other controls keep working).
       // Skipped while the schema is empty (not loaded yet); revalidate() re-runs
@@ -307,6 +372,20 @@ class ControllerRuntime {
     this.opts.onActivity?.();
     const decoded = decodeMidi(data);
 
+    // 0) MFT bank-change report (ch3 CC 0-3 = 127) — hardware-local bank switch.
+    //    Track it for status/ring feedback; it is not a mapped control, so it
+    //    never falls through to learn/binding/resolve. decodeBankChange returns
+    //    null for every non-MFT message, so this is inert for the APC.
+    const bank = decodeBankChange(decoded);
+    if (bank !== null) {
+      if (bank !== this.activeBank) {
+        this.activeBank = bank;
+        this.setStatus({ lastEvent: `MFT bank ${bank + 1}` });
+        this.projectAndSend();
+      }
+      return;
+    }
+
     // 1) MIDI-learn capture — while armed, the next learnable control BINDS
     //    (the popover supplied the callback) and is swallowed, never dispatched.
     //    BUT: a control that already resolves to a STATIC profile action (global
@@ -344,11 +423,92 @@ class ControllerRuntime {
     if (ev.resolved.kind === 'focusChannel') { this.handleFocus(ev.resolved.layer); return; }
     if (ev.resolved.kind === 'playlistScroll') { this.handleScroll(ev.resolved.layer, ev.resolved.dir); return; }
     if (ev.resolved.kind === 'playlistWindowSelect') { this.handleWindowSelect(ev.resolved.layer, ev.resolved.slot); return; }
+    // ── MFT relative-encoder + side-button actions (runtime-handled) ──
+    if (ev.resolved.kind === 'focusStep') { this.handleFocusStep(ev.resolved.dir); return; }
+    if (ev.resolved.kind === 'focusedParamReset') { this.handleParamReset(ev.resolved.index); return; }
+    if (ev.resolved.kind === 'focusedParamDelta' || ev.resolved.kind === 'paramCenterDelta') {
+      // Relative deltas ACCUMULATE across the coalescer window (no tick dropped),
+      // then flush as a single write against the CURRENT value in flushResolved.
+      this.coalescer.accumulate(ev.controlId, ev.resolved, combineDelta);
+      return;
+    }
     if (ev.continuous) {
       this.coalescer.push(ev.controlId, ev.resolved);
     } else {
       void this.dispatcher(ev.resolved);
     }
+  }
+
+  /** Move focus by a side-button step: prev/next within the existing layers, or
+   *  the deck (layer 0). Clamped to the valid layer range; a step past either
+   *  end is inert (no wrap). Uses the same handleFocus path (existence check +
+   *  synchronous requestedFocusLayer + onFocusChange) as the APC track buttons. */
+  private handleFocusStep(dir: 'prev' | 'next' | 'deck'): void {
+    const snap = this.opts.getSnapshot();
+    if (dir === 'deck') { this.handleFocus(0); return; }
+    // Current focus base: the synchronous request when set, else the snapshot.
+    const cur = this.requestedFocusLayer !== -1
+      ? this.requestedFocusLayer
+      : (snap.focused?.layer ?? 0);
+    const target = dir === 'prev' ? cur - 1 : cur + 1;
+    if (target < 0) return; // clamp low — no wrap
+    if (!layerInfo(snap, target)) return; // clamp high / absent → inert
+    this.handleFocus(target);
+  }
+
+  /** Encoder push → reset the focused param at ordered `index` to the entry's
+   *  saved default. When the focused export carries a `defaultValue` we write it;
+   *  otherwise this is a documented no-op (the entry didn't ship a default —
+   *  reset is deferred, not faked). */
+  private handleParamReset(index: number): void {
+    const focused = this.opts.getSnapshot().focused;
+    if (!focused) return;
+    const exp = focused.exports[index];
+    if (!exp) return; // no param behind this knob — inert (loud silence)
+    if (typeof exp.defaultValue !== 'number') {
+      // TODO(mft): thread the entry's saved defaults into focused.exports so
+      // encoder-push reset has a target. Until then this is a documented no-op.
+      this.setStatus({ lastEvent: `reset ${exp.name} (no saved default — deferred)` });
+      return;
+    }
+    const value = clamp01(exp.defaultValue);
+    // Reset unlocks the pickup slot for any binding on this param (a deliberate
+    // jump), mirroring a note-press write.
+    this.setStatus({ lastEvent: `reset ${exp.name} = ${value.toFixed(2)}` });
+    this.coalescer.push(`knob:${index}`, {
+      kind: 'localParam', role: focused.role, channelId: focused.id, exportId: exp.id, value,
+    });
+  }
+
+  /** Coalescer flush for a resolved payload. Most payloads dispatch directly; the
+   *  MFT relative-delta payloads are resolved HERE against the live focused/CPC
+   *  value (they can't be dispatched — they carry a delta, not a value) into a
+   *  concrete localParam / paramCenter write. Applying at flush time (not at
+   *  accumulate time) means the delta lands on the value as it is NOW, even if a
+   *  modulator or another surface moved it during the window. */
+  private async flushResolved(payload: ResolvedAction): Promise<void> {
+    if (payload.kind === 'focusedParamDelta') {
+      const focused = this.opts.getSnapshot().focused;
+      if (!focused) return; // nothing focused — the delta is dropped (loud silence)
+      const exp = focused.exports[payload.index];
+      if (!exp) return; // no param behind this knob
+      // TODO(mft): for an audio-MODULATED param the ideal anchor is the
+      // modulation base, not the moving modulated value. We apply to the
+      // export's current value (v0) for now — turning the knob shifts that base.
+      const value = clamp01(exp.v0 + payload.delta);
+      await this.dispatcher({
+        kind: 'localParam', role: focused.role, channelId: focused.id, exportId: exp.id, value,
+      });
+      return;
+    }
+    if (payload.kind === 'paramCenterDelta') {
+      const cur = this.opts.getSnapshot().globalParamValues?.[payload.key];
+      if (typeof cur !== 'number') return; // unknown CPC key — inert
+      const value = clamp01(cur + payload.delta);
+      await this.dispatcher({ kind: 'paramCenter', key: payload.key, value });
+      return;
+    }
+    await this.dispatcher(payload);
   }
 
   /** Handle a focusChannel track-button press. Inert when the requested layer
@@ -533,6 +693,10 @@ class ControllerRuntime {
       getWindowCursor: (layer) => this.windowCursor.get(layer) ?? 0,
       windowSize: WINDOW_SIZE,
       getColorPaletteHue: (index) => snap.colorPalettes[index] ?? null,
+      // ── MFT ring feedback (best-effort) ──
+      getFocusedExportValue: (index) => snap.focused?.exports[index]?.v0 ?? null,
+      getGlobalParamValue: (key) => snap.globalParamValues?.[key] ?? null,
+      getFocusedIdentityColor: () => focusedIdentityColor(snap.focused),
     };
     const { messages, next } = projectLeds(this.profile, projState, this.ledState, this.context);
     this.ledState = next;

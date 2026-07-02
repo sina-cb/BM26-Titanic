@@ -555,3 +555,195 @@ describe('MidiManager — MIDI-learn (arm, apply, focus)', () => {
     expect(api.setMixerChannelControl).toHaveBeenCalledWith('ch1', 4, expect.closeTo(64 / 127, 5));
   });
 });
+
+// ── Driver #2 — MIDI Fighter Twister (relative encoders + focus + config) ────
+describe('MidiManager — MIDI Fighter Twister', () => {
+  // Controllable coalescer timers so we can flush relative-delta windows on demand.
+  function makeFakeTimers() {
+    let id = 0;
+    const armed = new Map<number, () => void>();
+    return {
+      timers: {
+        setTimeout: (cb: () => void) => { const h = ++id; armed.set(h, cb); return h as unknown as ReturnType<typeof setTimeout>; },
+        clearTimeout: (h: ReturnType<typeof setTimeout>) => { armed.delete(h as unknown as number); },
+      },
+      flushDue() { const due = [...armed.entries()]; armed.clear(); for (const [, cb] of due) cb(); },
+    };
+  }
+
+  const mftEndpoints: MidiEndpoint[] = [
+    { id: 'in-0', name: 'Midi Fighter Twister', portIndex: 0, kind: 'source' },
+    { id: 'out-0', name: 'Midi Fighter Twister', portIndex: 0, kind: 'destination' },
+  ];
+
+  // Bank-1 knobs (relative ch0), pushes (ch1), side buttons (ch3). configureOnConnect
+  // ON so we exercise the sysex push.
+  const mftProfile = validateProfile({
+    device: { id: 'mft', label: 'MIDI Fighter Twister', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0, configureOnConnect: true },
+    controls: [
+      { id: 'k0_turn', match: { type: 'cc', channel: 0, cc: 0, relative: true }, action: { kind: 'focusedParamKnob', index: 0, steps: [0.01, 0.05, 0.1] } },
+      { id: 'k0_push', match: { type: 'cc', channel: 1, cc: 0 }, action: { kind: 'focusedParamReset', index: 0 } },
+      { id: 'f_prev', match: { type: 'cc', channel: 3, cc: 11 }, action: { kind: 'focusStep', dir: 'prev' } },
+      { id: 'f_next', match: { type: 'cc', channel: 3, cc: 12 }, action: { kind: 'focusStep', dir: 'next' } },
+      { id: 'f_deck', match: { type: 'cc', channel: 3, cc: 13 }, action: { kind: 'focusStep', dir: 'deck' } },
+    ],
+  });
+
+  const deckFocus = (v0: number): MidiEngineSnapshot => ({
+    ...baseSnap,
+    activeContext: 'deck',
+    deckLayer: { id: 'deck1', fader: 1 },
+    focused: {
+      role: 'deck', layer: 0, id: 'deck1', entryId: 'e0', key: 'deck:deck1:e0:',
+      exports: [{ id: 5, name: 'glow', v0 }],
+      midiMappings: [],
+    },
+  });
+
+  function setupMft(getSnap: () => MidiEngineSnapshot, extra: Partial<{ onFocusChange: (l: number) => void }> = {}) {
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const ft = makeFakeTimers();
+    const manager = new MidiManager({
+      profiles: [mftProfile], transportFactory: () => transport, api,
+      getSnapshot: getSnap, defaultContext: 'deck',
+      coalescerTimers: ft.timers,
+      onFocusChange: extra.onFocusChange,
+    });
+    return { transport, api, manager, ft };
+  }
+
+  it('pushes the sysex config on connect (many F0..F7 frames)', async () => {
+    const { manager, transport } = setupMft(() => deckFocus(0.5));
+    await manager.start();
+    const sysex = transport.sent.filter((m) => m[0] === 0xf0 && m[m.length - 1] === 0xf7);
+    expect(sysex.length).toBeGreaterThan(0);
+    expect(manager.getStatuses()[0].kind).toBe('connected');
+  });
+
+  it('goes RED (fail-loud) when the transport cannot send sysex', async () => {
+    // A transport whose send() throws on a sysex frame (Web MIDI without sysex:true).
+    class NoSysexTransport extends FakeTransport {
+      send(bytes: number[]) { if (bytes[0] === 0xf0) throw new Error('sysex not permitted'); super.send(bytes); }
+    }
+    const transport = new NoSysexTransport(mftEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [mftProfile], transportFactory: () => transport, api,
+      getSnapshot: () => deckFocus(0.5), defaultContext: 'deck',
+    });
+    await manager.start();
+    const s = manager.getStatuses()[0];
+    expect(s.kind).toBe('error');
+    expect(s.error).toMatch(/sysex config push failed/);
+  });
+
+  it('applies a relative knob delta to the focused deck param (current value + delta)', async () => {
+    const { manager, api, transport, ft } = setupMft(() => deckFocus(0.5));
+    await manager.start();
+    transport.emit([0xb0, 0, 65]); // +1 tick → steps[0] = 0.01
+    ft.flushDue();                  // accumulate flushes on the trailing window
+    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, expect.closeTo(0.51, 5));
+  });
+
+  it('ACCUMULATES deltas within a window (sum, not last-write-wins)', async () => {
+    const { manager, api, transport, ft } = setupMft(() => deckFocus(0.5));
+    await manager.start();
+    transport.emit([0xb0, 0, 65]); // +0.01
+    transport.emit([0xb0, 0, 66]); // +0.05 (fast)
+    transport.emit([0xb0, 0, 67]); // +0.1 (very fast)
+    ft.flushDue();
+    // 0.5 + (0.01 + 0.05 + 0.1) = 0.66 — one write with the SUM, not just +0.1.
+    expect(api.setDeckChannelControl).toHaveBeenCalledTimes(1);
+    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, expect.closeTo(0.66, 5));
+  });
+
+  it('clamps the applied value to [0, 1]', async () => {
+    const { manager, api, transport, ft } = setupMft(() => deckFocus(0.98));
+    await manager.start();
+    transport.emit([0xb0, 0, 67]); // +0.1 → 1.08 → clamped to 1
+    ft.flushDue();
+    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, 1);
+  });
+
+  it('a knob with no param behind it is inert (no write)', async () => {
+    const { manager, api, transport, ft } = setupMft(() => ({ ...deckFocus(0.5), focused: { ...deckFocus(0.5).focused!, exports: [] } }));
+    await manager.start();
+    transport.emit([0xb0, 0, 65]);
+    ft.flushDue();
+    expect(api.setDeckChannelControl).not.toHaveBeenCalled();
+  });
+
+  it('an unknown relative CC value (not 61-67) writes nothing (loud silence)', async () => {
+    const { manager, api, transport, ft } = setupMft(() => deckFocus(0.5));
+    await manager.start();
+    transport.emit([0xb0, 0, 64]); // no-movement code
+    ft.flushDue();
+    expect(api.setDeckChannelControl).not.toHaveBeenCalled();
+  });
+
+  it('focusStep next/prev is clamped to the existing layers (no wrap)', async () => {
+    const onFocusChange = vi.fn();
+    // Mixer context with two layers; focus starts at 0.
+    const snap: MidiEngineSnapshot = {
+      ...baseSnap, activeContext: 'mixer',
+      layers: [{ id: 'ch0', fader: 1 }, { id: 'ch1', fader: 1 }],
+      focused: { role: 'mixer', layer: 0, id: 'ch0', entryId: 'e', key: 'mixer:ch0:e:', exports: [], midiMappings: [] },
+    };
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [mftProfile], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'mixer', onFocusChange,
+    });
+    await manager.start();
+    transport.emit([0xb3, 11, 127]); // prev from 0 → -1 → clamped, inert
+    expect(onFocusChange).not.toHaveBeenCalled();
+    transport.emit([0xb3, 12, 127]); // next from 0 → 1 (exists) → focus 1
+    expect(onFocusChange).toHaveBeenCalledWith(1);
+  });
+
+  it('focusStep deck jumps to layer 0', async () => {
+    const onFocusChange = vi.fn();
+    const snap: MidiEngineSnapshot = {
+      ...baseSnap, activeContext: 'mixer',
+      layers: [{ id: 'ch0', fader: 1 }, { id: 'ch1', fader: 1 }],
+      focused: { role: 'mixer', layer: 1, id: 'ch1', entryId: 'e', key: 'mixer:ch1:e:', exports: [], midiMappings: [] },
+    };
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [mftProfile], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'mixer', onFocusChange,
+    });
+    await manager.start();
+    transport.emit([0xb3, 13, 127]); // deck → layer 0
+    expect(onFocusChange).toHaveBeenCalledWith(0);
+  });
+
+  it('tracks the active bank from a ch3 bank-change (no write, updates status)', async () => {
+    const { manager, transport } = setupMft(() => deckFocus(0.5));
+    await manager.start();
+    transport.emit([0xb3, 1, 127]); // bank 2 (CC 1 = BANK2)
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/MFT bank 2/);
+  });
+
+  it('encoder push with no saved default is a documented no-op (deferred reset)', async () => {
+    const { manager, api, transport } = setupMft(() => deckFocus(0.5));
+    await manager.start();
+    transport.emit([0xb1, 0, 127]); // push knob 0 — export has no defaultValue
+    expect(api.setDeckChannelControl).not.toHaveBeenCalled();
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/no saved default/);
+  });
+
+  it('encoder push resets to a saved default when the export carries one', async () => {
+    const snap = (): MidiEngineSnapshot => ({
+      ...deckFocus(0.9),
+      focused: { ...deckFocus(0.9).focused!, exports: [{ id: 5, name: 'glow', v0: 0.9, defaultValue: 0.3 }] },
+    });
+    const { manager, api, transport } = setupMft(snap);
+    await manager.start();
+    transport.emit([0xb1, 0, 127]); // push → reset glow to 0.3
+    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, 0.3);
+  });
+});

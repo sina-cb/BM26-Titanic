@@ -132,3 +132,49 @@ describe('projectLeds', () => {
     expect(messages).toContainEqual([0x96, 5, 21]); // col5 (odd)  → c2 hue 0.33 → green
   });
 });
+
+describe('projectLeds — MFT rings (driver #2, best-effort)', () => {
+  const mft = validateProfile({
+    device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+    controls: [
+      { id: 'k0', match: { type: 'cc', channel: 0, cc: 0, relative: true }, action: { kind: 'focusedParamKnob', index: 0 } },
+      { id: 'k1', match: { type: 'cc', channel: 0, cc: 1, relative: true }, action: { kind: 'focusedParamKnob', index: 1 } },
+    ],
+  });
+
+  it('emits a ring-value CC (ch0) from the focused export value 0..127', () => {
+    const s = state({
+      getFocusedExportValue: (i) => (i === 0 ? 1.0 : i === 1 ? 0.5 : null),
+      getFocusedIdentityColor: () => 1, // blue (deck)
+    });
+    const { messages } = projectLeds(mft, s, {});
+    expect(messages).toContainEqual([0xb0, 0, 127]); // knob 0 ring full
+    expect(messages).toContainEqual([0xb0, 1, 64]);  // knob 1 ring ~half (round(0.5*127))
+  });
+
+  it('emits the focused identity colour on a knob with a param behind it', () => {
+    const s = state({ getFocusedExportValue: (i) => (i === 0 ? 0.25 : null), getFocusedIdentityColor: () => 50 });
+    const { messages } = projectLeds(mft, s, {});
+    expect(messages).toContainEqual([0xb1, 0, 50]); // colour CC on ch1 (SWITCH_AND_COLOR)
+  });
+
+  it('darks a knob with no param behind it (ring 0 + inactive colour)', () => {
+    const s = state({ getFocusedExportValue: () => null, getFocusedIdentityColor: () => 1 });
+    const { messages } = projectLeds(mft, s, {});
+    expect(messages).toContainEqual([0xb0, 0, 0]);  // ring off
+    expect(messages).toContainEqual([0xb1, 0, 0]);  // inactive colour (ColorValues.INACTIVE)
+  });
+
+  it('diffs rings — an unchanged value re-sends nothing', () => {
+    const s = state({ getFocusedExportValue: (i) => (i === 0 ? 0.5 : null), getFocusedIdentityColor: () => 1 });
+    const first = projectLeds(mft, s, {});
+    const second = projectLeds(mft, s, first.next);
+    expect(second.messages).toHaveLength(0);
+  });
+
+  it('is inert on a projection state without the MFT getters (APC-only path)', () => {
+    const { messages } = projectLeds(mft, state(), {});
+    // No getFocusedExportValue → ringMessages yields nothing; no led specs either.
+    expect(messages).toHaveLength(0);
+  });
+});

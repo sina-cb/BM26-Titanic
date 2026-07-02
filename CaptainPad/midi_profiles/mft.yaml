@@ -1,0 +1,154 @@
+# MIDI Fighter Twister (DJTT) — CaptainPad MIDI profile (driver #2).
+#
+# The MFT is the fine-control PARAMETER surface: 16 endless RGB-ring encoders
+# drive the FOCUSED channel's active-pattern local params, in declaration order.
+# One rule, both tabs — the focus abstraction (shared with the APC track
+# buttons) absorbs the deck/mixer difference, so this profile is CONTEXT-FREE
+# (a single flat `controls:` list).
+#
+# Protocol per Sina's pymft (https://github.com/sina-cb/pymft), ported to
+# utils/midi/mft/*. Loaded/validated by utils/midi/profile.ts; the relative
+# encoders decode via mft/messages.decodeRelativeDelta and their deltas
+# ACCUMULATE + apply to the focused param's current value (manager runtime).
+#
+# Channel map (raw 0-indexed status nibbles, per mft/constants MidiChannels):
+#   ch0 rotary encoder turns · ch1 encoder push (CC-hold) + colour · ch3 system
+#   (bank changes + side buttons). Bank switching is HARDWARE-NATIVE (side
+#   buttons configured BANKUP/BANKDOWN in the sysex config push) — no mapping.
+#
+# configureOnConnect: on connect the runtime pushes buildConnectConfig() sysex
+# to force all 64 encoders into RELATIVE / velocity-sensitive / blended-bar mode
+# with per-bank base colours. Requires a transport that can send sysex (Web MIDI
+# needs sysex:true); if it can't, the controller goes RED with the reason.
+
+device:
+  id: mft
+  label: "MIDI Fighter Twister"
+  nameContains: "Midi Fighter Twister"
+  sourcePort: 0
+  destinationPort: 0
+  configureOnConnect: true
+
+controls:
+  # ── Bank 1 — the 16 endless encoders → FOCUSED pattern local params ────────
+  # Encoder N sends relative CC N on ch0 (turn) and CC N on ch1 (push). Knob i
+  # (row-major, 0 = top-left) drives focused.exports[i]; push resets it to the
+  # entry's saved default. A knob with no param behind it is inert (loud
+  # silence). Step magnitudes are the profile defaults [0.005, 0.02, 0.06]
+  # (normal / fast / very-fast detent), so the relative velocity codes give
+  # coarse↔fine control for free.
+  - id: knob_0_turn
+    match: { type: cc, channel: 0, cc: 0, relative: true }
+    action: { kind: focusedParamKnob, index: 0 }
+  - id: knob_0_push
+    match: { type: cc, channel: 1, cc: 0 }
+    action: { kind: focusedParamReset, index: 0 }
+  - id: knob_1_turn
+    match: { type: cc, channel: 0, cc: 1, relative: true }
+    action: { kind: focusedParamKnob, index: 1 }
+  - id: knob_1_push
+    match: { type: cc, channel: 1, cc: 1 }
+    action: { kind: focusedParamReset, index: 1 }
+  - id: knob_2_turn
+    match: { type: cc, channel: 0, cc: 2, relative: true }
+    action: { kind: focusedParamKnob, index: 2 }
+  - id: knob_2_push
+    match: { type: cc, channel: 1, cc: 2 }
+    action: { kind: focusedParamReset, index: 2 }
+  - id: knob_3_turn
+    match: { type: cc, channel: 0, cc: 3, relative: true }
+    action: { kind: focusedParamKnob, index: 3 }
+  - id: knob_3_push
+    match: { type: cc, channel: 1, cc: 3 }
+    action: { kind: focusedParamReset, index: 3 }
+  - id: knob_4_turn
+    match: { type: cc, channel: 0, cc: 4, relative: true }
+    action: { kind: focusedParamKnob, index: 4 }
+  - id: knob_4_push
+    match: { type: cc, channel: 1, cc: 4 }
+    action: { kind: focusedParamReset, index: 4 }
+  - id: knob_5_turn
+    match: { type: cc, channel: 0, cc: 5, relative: true }
+    action: { kind: focusedParamKnob, index: 5 }
+  - id: knob_5_push
+    match: { type: cc, channel: 1, cc: 5 }
+    action: { kind: focusedParamReset, index: 5 }
+  - id: knob_6_turn
+    match: { type: cc, channel: 0, cc: 6, relative: true }
+    action: { kind: focusedParamKnob, index: 6 }
+  - id: knob_6_push
+    match: { type: cc, channel: 1, cc: 6 }
+    action: { kind: focusedParamReset, index: 6 }
+  - id: knob_7_turn
+    match: { type: cc, channel: 0, cc: 7, relative: true }
+    action: { kind: focusedParamKnob, index: 7 }
+  - id: knob_7_push
+    match: { type: cc, channel: 1, cc: 7 }
+    action: { kind: focusedParamReset, index: 7 }
+  - id: knob_8_turn
+    match: { type: cc, channel: 0, cc: 8, relative: true }
+    action: { kind: focusedParamKnob, index: 8 }
+  - id: knob_8_push
+    match: { type: cc, channel: 1, cc: 8 }
+    action: { kind: focusedParamReset, index: 8 }
+  - id: knob_9_turn
+    match: { type: cc, channel: 0, cc: 9, relative: true }
+    action: { kind: focusedParamKnob, index: 9 }
+  - id: knob_9_push
+    match: { type: cc, channel: 1, cc: 9 }
+    action: { kind: focusedParamReset, index: 9 }
+  - id: knob_10_turn
+    match: { type: cc, channel: 0, cc: 10, relative: true }
+    action: { kind: focusedParamKnob, index: 10 }
+  - id: knob_10_push
+    match: { type: cc, channel: 1, cc: 10 }
+    action: { kind: focusedParamReset, index: 10 }
+  - id: knob_11_turn
+    match: { type: cc, channel: 0, cc: 11, relative: true }
+    action: { kind: focusedParamKnob, index: 11 }
+  - id: knob_11_push
+    match: { type: cc, channel: 1, cc: 11 }
+    action: { kind: focusedParamReset, index: 11 }
+  - id: knob_12_turn
+    match: { type: cc, channel: 0, cc: 12, relative: true }
+    action: { kind: focusedParamKnob, index: 12 }
+  - id: knob_12_push
+    match: { type: cc, channel: 1, cc: 12 }
+    action: { kind: focusedParamReset, index: 12 }
+  - id: knob_13_turn
+    match: { type: cc, channel: 0, cc: 13, relative: true }
+    action: { kind: focusedParamKnob, index: 13 }
+  - id: knob_13_push
+    match: { type: cc, channel: 1, cc: 13 }
+    action: { kind: focusedParamReset, index: 13 }
+  - id: knob_14_turn
+    match: { type: cc, channel: 0, cc: 14, relative: true }
+    action: { kind: focusedParamKnob, index: 14 }
+  - id: knob_14_push
+    match: { type: cc, channel: 1, cc: 14 }
+    action: { kind: focusedParamReset, index: 14 }
+  - id: knob_15_turn
+    match: { type: cc, channel: 0, cc: 15, relative: true }
+    action: { kind: focusedParamKnob, index: 15 }
+  - id: knob_15_push
+    match: { type: cc, channel: 1, cc: 15 }
+    action: { kind: focusedParamReset, index: 15 }
+
+  # ── Side buttons (bank 1, ch3) — a self-sufficient focus + tap path ────────
+  # LEFT column (CC 8, 9 = BANKUP / BANKDOWN) is HARDWARE-NATIVE bank nav set in
+  # the sysex config push, so it is intentionally NOT mapped here. LEFT-3 (CC 10)
+  # → tap-tempo. RIGHT column (CC 11/12/13) → focus prev / next / deck, so the
+  # MFT can steer focus when the APC is absent (the APC track buttons remain the
+  # primary handler in the mixer). Fires on press (value 127), ignores release.
+  - id: side_left3_tap
+    match: { type: cc, channel: 3, cc: 10 }
+    action: { kind: tapTempo }
+  - id: side_right1_focus_prev
+    match: { type: cc, channel: 3, cc: 11 }
+    action: { kind: focusStep, dir: prev }
+  - id: side_right2_focus_next
+    match: { type: cc, channel: 3, cc: 12 }
+    action: { kind: focusStep, dir: next }
+  - id: side_right3_focus_deck
+    match: { type: cc, channel: 3, cc: 13 }
+    action: { kind: focusStep, dir: deck }

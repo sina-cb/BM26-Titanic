@@ -12,7 +12,11 @@ export type Range = readonly [number, number];
 
 /** How an inbound message is matched to a control. */
 export type ControlMatch =
-  | { type: 'cc'; channel: number; cc: number }
+  // `relative: true` marks an endless-encoder CC (MIDI Fighter Twister): the CC
+  // VALUE is a signed relative-delta code (decoded via mft/messages), not an
+  // absolute 0-127 position. The resolver decodes it to a delta action; an
+  // unknown code resolves to null (loud silence). Absolute faders omit it.
+  | { type: 'cc'; channel: number; cc: number; relative?: boolean }
   // `notes`: length 1 = a single note; length 2 = inclusive [lo, hi] range
   // (e.g. a pad row). The matched note's offset from lo becomes the action
   // index (used by patternBank to pick which pattern within the bank).
@@ -50,7 +54,25 @@ export type ProfileAction =
   // …and select within the window (the matched pad's row index = window slot).
   | { kind: 'playlistWindowSelect'; layer: number }
   // Colour-pair pads: apply a curated palette pair; `bank`*8 + index = palette.
-  | { kind: 'colorPalettePair'; bank: number };
+  | { kind: 'colorPalettePair'; bank: number }
+  // ── Driver #2 — MIDI Fighter Twister (relative-encoder) kinds ──
+  // Endless knob `index` (0-15) drives the FOCUSED channel's active-pattern
+  // export at that ordered position. `steps` = the three ascending per-tick
+  // magnitudes for delta codes ±1/±2/±3 (default [0.005, 0.02, 0.06] of full
+  // range). A relative match feeds this; the runtime accumulates the deltas.
+  | { kind: 'focusedParamKnob'; index: number; steps: [number, number, number] }
+  // Encoder push → reset the focused param at `index` to the entry's saved
+  // default (handled app-side).
+  | { kind: 'focusedParamReset'; index: number }
+  // A relative knob driving a CPC global param by key (bank-2 rings). Same
+  // step semantics as focusedParamKnob.
+  | { kind: 'paramCenterRelative'; key: string; steps: [number, number, number] }
+  // Side-button focus move: prev/next within the existing layers, or the deck
+  // (layer 0). A secondary focus path so the MFT is self-sufficient.
+  | { kind: 'focusStep'; dir: 'prev' | 'next' | 'deck' }
+  // Tap-tempo side button. Resolves + dispatches (a documented no-op until a
+  // tap endpoint exists — see dispatch.ts).
+  | { kind: 'tapTempo' };
 
 /** LED feedback spec. RGB pads use { active, idle } colour velocities (with
  *  optional `channel` for brightness/behaviour, default 6 = solid 100%).
@@ -84,6 +106,12 @@ export interface DeviceDef {
   sourcePort: number;
   /** Which port receives LED feedback. */
   destinationPort: number;
+  /** When true, the runtime pushes a sysex config frame set on connect (the
+   *  MIDI Fighter Twister: forces its 64 encoders into the relative-mode layout
+   *  this driver assumes). Requires a transport that can send sysex; if it can't
+   *  the controller goes RED with the reason (never runs against unknown encoder
+   *  modes — docs/34 §5.3). Default false (the APC needs no config push). */
+  configureOnConnect?: boolean;
 }
 
 export interface ControllerProfile {
@@ -110,7 +138,25 @@ const ACTION_KINDS = new Set([
   'blackoutToggle', 'globalEffect', 'sectionBrightness', 'groupFixedColor',
   'mixerLayerFader', 'focusChannel', 'globalEffectSlot',
   'playlistScroll', 'playlistWindowSelect', 'colorPalettePair',
+  'focusedParamKnob', 'focusedParamReset', 'paramCenterRelative', 'focusStep', 'tapTempo',
 ]);
+
+/** Default per-tick step magnitudes for a relative encoder: the three ascending
+ *  deltas that codes ±1/±2/±3 map to (fraction of full range per detent). */
+export const DEFAULT_RELATIVE_STEPS: [number, number, number] = [0.005, 0.02, 0.06];
+
+/** Validate a relative-encoder `steps` triple: exactly three positive, strictly
+ *  ascending magnitudes (coarse control must not be finer than normal). Absent
+ *  → the default triple. */
+function validateSteps(where: string, s: unknown): [number, number, number] {
+  if (s === undefined || s === null) return [...DEFAULT_RELATIVE_STEPS];
+  if (!Array.isArray(s) || s.length !== 3 || !s.every((n) => typeof n === 'number' && n > 0)) {
+    fail(`${where}: steps must be three positive numbers [normal, fast, veryFast]`);
+  }
+  const [a, b, c] = s as [number, number, number];
+  if (!(a < b && b < c)) fail(`${where}: steps must be strictly ascending [normal < fast < veryFast]`);
+  return [a, b, c];
+}
 
 function isByte(n: unknown): n is number {
   return typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 127;
@@ -136,7 +182,8 @@ function validateMatch(where: string, m: any): ControlMatch {
   }
   if (m.type === 'cc') {
     if (!isByte(m.cc)) fail(`${where}: match.cc must be 0-127`);
-    return { type: 'cc', channel: m.channel, cc: m.cc };
+    if (m.relative !== undefined && typeof m.relative !== 'boolean') fail(`${where}: match.relative must be a boolean`);
+    return { type: 'cc', channel: m.channel, cc: m.cc, relative: m.relative === true };
   }
   if (m.type === 'note') {
     if (!Array.isArray(m.notes) || (m.notes.length !== 1 && m.notes.length !== 2)) {
@@ -222,6 +269,26 @@ function validateAction(where: string, a: any): ProfileAction {
         fail(`${where}: colorPalettePair requires a non-negative integer 'bank'`);
       }
       return { kind: 'colorPalettePair', bank: a.bank };
+    case 'focusedParamKnob':
+      if (typeof a.index !== 'number' || a.index < 0 || !Number.isInteger(a.index)) {
+        fail(`${where}: focusedParamKnob requires a non-negative integer 'index'`);
+      }
+      return { kind: 'focusedParamKnob', index: a.index, steps: validateSteps(where, a.steps) };
+    case 'focusedParamReset':
+      if (typeof a.index !== 'number' || a.index < 0 || !Number.isInteger(a.index)) {
+        fail(`${where}: focusedParamReset requires a non-negative integer 'index'`);
+      }
+      return { kind: 'focusedParamReset', index: a.index };
+    case 'paramCenterRelative':
+      if (typeof a.key !== 'string' || !a.key) fail(`${where}: paramCenterRelative requires a string 'key'`);
+      return { kind: 'paramCenterRelative', key: a.key, steps: validateSteps(where, a.steps) };
+    case 'focusStep':
+      if (a.dir !== 'prev' && a.dir !== 'next' && a.dir !== 'deck') {
+        fail(`${where}: focusStep dir must be 'prev', 'next', or 'deck'`);
+      }
+      return { kind: 'focusStep', dir: a.dir };
+    case 'tapTempo':
+      return { kind: 'tapTempo' };
     default:
       return fail(`${where}: unhandled action.kind`);
   }
@@ -272,6 +339,9 @@ export function validateProfile(raw: any, profilePath = '<profile>'): Controller
       fail(`${profilePath}: device.${k} must be a non-negative integer`);
     }
   }
+  if (dev.configureOnConnect !== undefined && typeof dev.configureOnConnect !== 'boolean') {
+    fail(`${profilePath}: device.configureOnConnect must be a boolean`);
+  }
   // A profile carries EITHER a flat `controls:` list (single context) OR a
   // `contexts:` map of per-tab lists (deck / mixer / …). At least one.
   const contexts: Record<string, ControlDef[]> = {};
@@ -295,6 +365,7 @@ export function validateProfile(raw: any, profilePath = '<profile>'): Controller
     device: {
       id: dev.id, label: dev.label, nameContains: dev.nameContains,
       sourcePort: dev.sourcePort, destinationPort: dev.destinationPort,
+      configureOnConnect: dev.configureOnConnect === true,
     },
     controls,
     contexts,

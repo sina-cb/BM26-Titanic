@@ -77,6 +77,62 @@ describe('profileClaims (learn-conflict rejection, 1.1)', () => {
   });
 });
 
+describe('MFT relative encoders + side buttons (driver #2)', () => {
+  // Bank-1 knob 0 = relative CC 0 on ch0 (turn) + CC 0 on ch1 (push); a bank-2
+  // relative CC on ch0; the four side-button actions on ch3. Default steps
+  // [0.005, 0.02, 0.06] for the three detent speeds.
+  const p = validateProfile({
+    device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0, configureOnConnect: true },
+    controls: [
+      { id: 'knob0_turn', match: { type: 'cc', channel: 0, cc: 0, relative: true }, action: { kind: 'focusedParamKnob', index: 0 } },
+      { id: 'knob0_push', match: { type: 'cc', channel: 1, cc: 0 }, action: { kind: 'focusedParamReset', index: 0 } },
+      { id: 'g_speed', match: { type: 'cc', channel: 0, cc: 5, relative: true }, action: { kind: 'paramCenterRelative', key: 'speed', steps: [0.01, 0.05, 0.1] } },
+      { id: 'tap', match: { type: 'cc', channel: 3, cc: 10 }, action: { kind: 'tapTempo' } },
+      { id: 'f_prev', match: { type: 'cc', channel: 3, cc: 11 }, action: { kind: 'focusStep', dir: 'prev' } },
+      { id: 'f_next', match: { type: 'cc', channel: 3, cc: 12 }, action: { kind: 'focusStep', dir: 'next' } },
+      { id: 'f_deck', match: { type: 'cc', channel: 3, cc: 13 }, action: { kind: 'focusStep', dir: 'deck' } },
+    ],
+  });
+
+  it('decodes a normal CW tick (code 65 = +1) to +steps[0], continuous', () => {
+    const r = resolveEvent(p, decodeMidi([0xb0, 0, 65]));
+    expect(r).toEqual({ controlId: 'knob0_turn', continuous: true, resolved: { kind: 'focusedParamDelta', index: 0, delta: 0.005 } });
+  });
+
+  it('decodes a fast CCW tick (code 62 = -2) to -steps[1]', () => {
+    const r = resolveEvent(p, decodeMidi([0xb0, 0, 62]));
+    expect(r?.resolved).toEqual({ kind: 'focusedParamDelta', index: 0, delta: -0.02 });
+  });
+
+  it('decodes a very-fast CW tick (code 67 = +3) to +steps[2]', () => {
+    const r = resolveEvent(p, decodeMidi([0xb0, 0, 67]));
+    expect(r?.resolved).toEqual({ kind: 'focusedParamDelta', index: 0, delta: 0.06 });
+  });
+
+  it('a non-relative CC value (not 61-67) on a relative control resolves to null (loud silence)', () => {
+    expect(resolveEvent(p, decodeMidi([0xb0, 0, 64]))).toBeNull(); // 64 = no movement
+    expect(resolveEvent(p, decodeMidi([0xb0, 0, 100]))).toBeNull();
+  });
+
+  it('paramCenterRelative uses its own steps + carries the key', () => {
+    expect(resolveEvent(p, decodeMidi([0xb0, 5, 66]))?.resolved) // +2 → steps[1]=0.05
+      .toEqual({ kind: 'paramCenterDelta', key: 'speed', delta: 0.05 });
+  });
+
+  it('encoder push (ch1) resolves focusedParamReset on press, null on release', () => {
+    expect(resolveEvent(p, decodeMidi([0xb1, 0, 127]))?.resolved).toEqual({ kind: 'focusedParamReset', index: 0 });
+    expect(resolveEvent(p, decodeMidi([0xb1, 0, 0]))).toBeNull(); // release
+  });
+
+  it('side buttons resolve focusStep + tapTempo on press, null on release', () => {
+    expect(resolveEvent(p, decodeMidi([0xb3, 11, 127]))?.resolved).toEqual({ kind: 'focusStep', dir: 'prev' });
+    expect(resolveEvent(p, decodeMidi([0xb3, 12, 127]))?.resolved).toEqual({ kind: 'focusStep', dir: 'next' });
+    expect(resolveEvent(p, decodeMidi([0xb3, 13, 127]))?.resolved).toEqual({ kind: 'focusStep', dir: 'deck' });
+    expect(resolveEvent(p, decodeMidi([0xb3, 10, 127]))?.resolved).toEqual({ kind: 'tapTempo' });
+    expect(resolveEvent(p, decodeMidi([0xb3, 11, 0]))).toBeNull(); // release
+  });
+});
+
 describe('column matches (Stage 2)', () => {
   const p = validateProfile({
     device: { id: 'apc', label: 'APC', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },

@@ -56,6 +56,27 @@ export class ControlCoalescer<T> {
     slot.hasPending = true;
   }
 
+  /** Feed a value that must ACCUMULATE across a window rather than last-write-
+   *  wins (relative-encoder deltas — every tick counts, none may be dropped).
+   *
+   *  Unlike push(), this does NOT fire a leading edge: a relative delta is
+   *  applied to the value as it is AT FLUSH TIME, so firing the first tick early
+   *  and then flushing the accumulated sum (which re-reads the value) would
+   *  double-apply the first tick. Instead every tick — including the first —
+   *  folds into the pending payload via `combine` and a window is armed; the
+   *  single accumulated payload flushes on the trailing edge (~one window later)
+   *  and the slot resets. A lone detent still flushes on that first window.
+   *
+   *  `combine(existing, incoming)` merges two same-control payloads (e.g. sums
+   *  their deltas); it is not called for the first tick of a window. */
+  accumulate(controlId: string, payload: T, combine: (existing: T, incoming: T) => T): void {
+    const slot = this.slots.get(controlId) ?? { timer: null, pending: null, hasPending: false };
+    slot.pending = slot.hasPending && slot.pending !== null ? combine(slot.pending, payload) : payload;
+    slot.hasPending = true;
+    this.slots.set(controlId, slot);
+    if (slot.timer === null) this.openWindow(controlId);
+  }
+
   private openWindow(controlId: string): void {
     const existing = this.slots.get(controlId);
     const slot: Slot<T> = existing ?? { timer: null, pending: null, hasPending: false };

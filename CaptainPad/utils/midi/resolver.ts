@@ -8,6 +8,7 @@
 import { ControllerProfile, ControlDef, Range } from './profile';
 import { DecodedMidi, decodeMidi } from './midi_message';
 import { scaleMidiToRange, MidiControlRef } from './learn';
+import { decodeRelativeDelta } from './mft/messages';
 
 // ResolvedAction has TWO producers:
 //   1. resolveEvent() (this file, PURE, profile-driven) produces every kind
@@ -16,8 +17,11 @@ import { scaleMidiToRange, MidiControlRef } from './learn';
 //      entry's stored bindings + live exports (not profile-driven), then routes
 //      it through the same coalescer + dispatcher seam.
 // The dispatcher handles the engine-call kinds; `focusChannel` / `playlistScroll`
-// / `playlistWindowSelect` are consumed by the runtime (controller-local state)
-// and never reach an engine call.
+// / `playlistWindowSelect` and the MFT relative kinds (`focusedParamDelta` /
+// `paramCenterDelta` / `focusedParamReset` / `focusStep`) are consumed by the
+// runtime (controller-local state / focused-channel math) and never reach an
+// engine call. `tapTempo` IS dispatched (a documented no-op until a tap
+// endpoint exists).
 export type ResolvedAction =
   | { kind: 'paramCenter'; key: string; value: number }
   | { kind: 'master'; value: number }
@@ -35,6 +39,20 @@ export type ResolvedAction =
   // Select which layer the learnable param faders (4-6) target. Handled in the
   // controller runtime (UI/controller state, not an engine call).
   | { kind: 'focusChannel'; layer: number }
+  // ── Driver #2 — MIDI Fighter Twister (relative-encoder) resolved actions ──
+  // A relative knob turn on the FOCUSED channel's export at `index`. `delta` is
+  // ALREADY the signed step magnitude (signStep × the profile's step for the
+  // detent speed) — the runtime accumulates deltas + applies to the export's
+  // current value. Runtime-handled (needs focused.exports), never dispatched.
+  | { kind: 'focusedParamDelta'; index: number; delta: number }
+  // A relative knob turn on a CPC global param by key. Runtime-handled.
+  | { kind: 'paramCenterDelta'; key: string; delta: number }
+  // Encoder push → reset the focused param at `index`. Runtime-handled.
+  | { kind: 'focusedParamReset'; index: number }
+  // Side-button focus move (prev/next/deck). Runtime-handled (controller state).
+  | { kind: 'focusStep'; dir: 'prev' | 'next' | 'deck' }
+  // Tap-tempo side button. Dispatched (documented no-op until a tap endpoint).
+  | { kind: 'tapTempo' }
   // A MIDI-learned local-param write. NOT produced by resolveEvent (which is
   // profile-driven) — the runtime builds it from the focused entry's stored
   // bindings + live exports, then routes it through the same coalescer +
@@ -55,6 +73,15 @@ const MIDI_MAX = 127;
 // paramCenter / fader / sectionBrightness sites read cleanly.
 function scale(value: number, range: Range): number {
   return scaleMidiToRange(value, range);
+}
+
+/** Map a decoded relative-encoder delta (±1/±2/±3) + the profile's ascending
+ *  step triple to a SIGNED magnitude: sign(delta) × steps[|delta|-1]. So a
+ *  normal tick (±1) uses steps[0], fast (±2) steps[1], very-fast (±3) steps[2].
+ */
+function relativeStep(delta: number, steps: [number, number, number]): number {
+  const mag = steps[Math.min(Math.abs(delta), 3) - 1];
+  return delta < 0 ? -mag : mag;
 }
 
 function matches(control: ControlDef, ev: DecodedMidi): { hit: boolean; index: number } {
@@ -119,6 +146,36 @@ export function resolveEvent(
       case 'focusChannel':
         return { controlId: control.id, continuous: false,
           resolved: { kind: 'focusChannel', layer: a.layer } };
+      case 'focusedParamKnob': {
+        // Relative endless-encoder turn. The CC VALUE is a delta code; an
+        // unknown value (not 61-67) resolves to null — loud silence, never a
+        // guessed delta. Relative knobs are continuous (coalesced, accumulated).
+        if (ev.type !== 'cc') return null;
+        const delta = decodeRelativeDelta(ev.value);
+        if (delta === null) return null;
+        return { controlId: control.id, continuous: true,
+          resolved: { kind: 'focusedParamDelta', index: a.index, delta: relativeStep(delta, a.steps) } };
+      }
+      case 'paramCenterRelative': {
+        if (ev.type !== 'cc') return null;
+        const delta = decodeRelativeDelta(ev.value);
+        if (delta === null) return null;
+        return { controlId: control.id, continuous: true,
+          resolved: { kind: 'paramCenterDelta', key: a.key, delta: relativeStep(delta, a.steps) } };
+      }
+      case 'focusedParamReset':
+        // Encoder push (a CC-hold on the MFT). Discrete; fire on press (value>0).
+        if (ev.type === 'cc' && ev.value === 0) return null; // release — ignore
+        return { controlId: control.id, continuous: false,
+          resolved: { kind: 'focusedParamReset', index: a.index } };
+      case 'focusStep':
+        if (ev.type === 'cc' && ev.value === 0) return null; // side-button release
+        return { controlId: control.id, continuous: false,
+          resolved: { kind: 'focusStep', dir: a.dir } };
+      case 'tapTempo':
+        if (ev.type === 'cc' && ev.value === 0) return null;
+        return { controlId: control.id, continuous: false,
+          resolved: { kind: 'tapTempo' } };
       case 'globalEffectSlot':
         return { controlId: control.id, continuous: false,
           resolved: { kind: 'globalEffectSlot', slot: a.slot } };

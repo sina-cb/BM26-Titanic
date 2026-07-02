@@ -52,6 +52,7 @@ import {
   MidiControlRef,
   LearnResult,
   selectTransportFactory,
+  setSysexRequested,
   getMidiTransportKind,
   MidiTransportKind,
   validateProfile,
@@ -59,6 +60,7 @@ import {
   ControllerProfile,
 } from '@/utils/midi';
 import apcProfileRaw from '@/midi_profiles/apc_mini_mk2.yaml';
+import mftProfileRaw from '@/midi_profiles/mft.yaml';
 
 export interface MidiControlState {
   /** A transport exists on this platform (desktop Chromium / native module). */
@@ -332,10 +334,16 @@ export function midiChipState(s: MidiControlState): { kind: MidiChipKind; messag
 }
 
 function loadProfiles(): { profiles: ControllerProfile[]; error: string | null } {
+  // Load ALL bundled controller profiles — the manager runs them concurrently,
+  // and an absent controller simply shows disconnected. A validation failure on
+  // ANY profile is fatal (fail loud): the offending YAML path is in the message.
+  const specs: { name: string; raw: unknown }[] = [
+    { name: 'apc_mini_mk2.yaml', raw: (apcProfileRaw as { default?: unknown }).default ?? apcProfileRaw },
+    { name: 'mft.yaml', raw: (mftProfileRaw as { default?: unknown }).default ?? mftProfileRaw },
+  ];
   try {
-    // yaml-transformer may expose the doc on `.default` (ESM) or directly.
-    const raw = (apcProfileRaw as { default?: unknown }).default ?? apcProfileRaw;
-    return { profiles: [validateProfile(raw, 'apc_mini_mk2.yaml')], error: null };
+    const profiles = specs.map((s) => validateProfile(s.raw, s.name));
+    return { profiles, error: null };
   } catch (err) {
     return { profiles: [], error: err instanceof Error ? err.message : String(err) };
   }
@@ -509,6 +517,11 @@ export function useMidiControl(): MidiControlState {
     }
     // Publish the loaded profiles for the save-time conflict re-check.
     _loadedProfiles = profiles;
+    // A driver that pushes a SysEx config on connect (the MFT's encoder-mode
+    // setup, device.configureOnConnect) needs the SysEx capability on the
+    // shared MIDIAccess — request it now, before the manager connects. APC-only
+    // rigs skip the extra permission scope.
+    if (profiles.some((p) => p.device.configureOnConnect)) setSysexRequested(true);
 
     _schemaKeys = new Set(Object.keys(engine.paramSchema));
     const manager = new MidiManager({
