@@ -171,6 +171,13 @@ export default function TimelineScreen() {
   const [previewTransportError, setPreviewTransportError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState<string | null>(null);
+  // Auto-save (operator request 2026-07-02: the maker saves like a doc editor —
+  // no SAVE / CANCEL buttons). `lastSavedVersionRef` is the last draftVersion
+  // successfully written; the auto-save effect debounces writes and skips a
+  // version that's already persisted. `autoSaveState` drives a small status
+  // chip where the buttons used to be.
+  const lastSavedVersionRef = useRef<number | null>(null);
+  const [autoSaveState, setAutoSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   // Latest draft version that has been requested — used to discard out-of-order
   // preview responses (a slow v1 must not overwrite a newer v2).
@@ -364,37 +371,55 @@ export default function TimelineScreen() {
     return true;
   }, []);
 
+  // Persist a plan and refresh the derived views. Shared by auto-save, eager
+  // new-plan saves, and the close flush. Saving over the ACTIVE plan
+  // hot-reloads it engine-side, so the live overview (which gates the FIRE
+  // buttons) must refresh — freshly-saved cues become fireable immediately.
+  const persistPlan = useCallback(async (plan: ShowPlan): Promise<boolean> => {
+    const r = await saveTimelinePlan(plan);
+    if (r.ok) {
+      setActionError(null);
+      refreshPlans();
+      refreshLiveOverview();
+      return true;
+    }
+    setActionError(r.error || 'Auto-save failed');
+    return false;
+  }, [refreshPlans, refreshLiveOverview]);
+
   // New plans REQUIRE an operator-entered name (the PlanPickerSheet's name
   // prompt validates + de-duplicates before calling these with the slug).
-  const handleNewTemplate = useCallback((name: string) => {
-    setDraft(brcStarterPlan(name));
+  // Load a freshly-created/duplicated plan into the maker AND persist it
+  // immediately (operator request 2026-07-02: "when adding a new plan, save it
+  // automatically too") so it exists on disk right away — ready to ACTIVATE
+  // without a manual save. The auto-save effect then keeps subsequent edits
+  // written; lastSavedVersionRef starts null so it also re-writes as they edit.
+  const startDraft = useCallback((plan: ShowPlan) => {
+    setDraft(plan);
     setDraftVersion((v) => v + 1);
+    lastSavedVersionRef.current = null;
     setSaveOk(null);
     setActionError(null);
     setPreviewTransportError(null);
     setPlanPickerOpen(false);
-  }, []);
+    void persistPlan(plan);
+  }, [persistPlan]);
+
+  const handleNewTemplate = useCallback((name: string) => {
+    startDraft(brcStarterPlan(name));
+  }, [startDraft]);
 
   // New BLANK plan from scratch — seeded by blankPlan(name): starts TODAY in
   // the plan tz with a 2-day festival span the operator grows as needed.
   const handleNewBlank = useCallback((name: string) => {
-    setDraft(blankPlan(name));
-    setDraftVersion((v) => v + 1);
-    setSaveOk(null);
-    setActionError(null);
-    setPreviewTransportError(null);
-    setPlanPickerOpen(false);
-  }, []);
+    startDraft(blankPlan(name));
+  }, [startDraft]);
 
   const handleDuplicate = useCallback(async (name: string) => {
     const r = await fetchTimelinePlan(name);
     if (!r.ok || !r.data) { setActionError(r.error || `Could not load plan ${name}`); return; }
-    setDraft(duplicatePlan(r.data, `${name}_copy`.slice(0, 64)));
-    setDraftVersion((v) => v + 1);
-    setActionError(null);
-    setPreviewTransportError(null);
-    setPlanPickerOpen(false);
-  }, []);
+    startDraft(duplicatePlan(r.data, `${name}_copy`.slice(0, 64)));
+  }, [startDraft]);
 
   const handleActivate = useCallback(async (name: string) => {
     const ok = await activatePlan(name);
@@ -402,30 +427,41 @@ export default function TimelineScreen() {
     else setActionError('Engine rejected plan activation');
   }, [activatePlan, refreshPlans, refreshLiveOverview]);
 
-  const handleSave = useCallback(async () => {
-    if (!draft) return;
-    const r = await saveTimelinePlan(draft);
-    if (r.ok) {
-      setSaveOk(`Saved "${draft.name}"`);
-      setActionError(null);
-      refreshPlans();
-      // Saving over the ACTIVE plan hot-reloads it engine-side, so the live
-      // overview (which gates the FIRE buttons via liveCueIds) must refresh —
-      // freshly-saved cues become fireable immediately, no re-activate needed.
-      refreshLiveOverview();
-    } else {
-      setActionError(r.error || 'Engine rejected save');
-    }
-  }, [draft, refreshPlans, refreshLiveOverview]);
+  // Persist a plan and refresh the derived views. Shared by auto-save, eager
+  // new-plan saves, and the close flush. Saving over the ACTIVE plan
+  // ── AUTO-SAVE ── debounce a write ~700ms after the last edit. A
+  // schema-invalid draft (saveBlocked) is held back until it's valid again (the
+  // error banner explains why); a version already on disk is skipped so we
+  // don't re-write on load or after our own save.
+  useEffect(() => {
+    if (!draft) { lastSavedVersionRef.current = null; setAutoSaveState('idle'); return; }
+    if (saveBlocked) { setAutoSaveState('error'); return; }
+    if (lastSavedVersionRef.current === draftVersion) { setAutoSaveState('saved'); return; }
+    const versionToSave = draftVersion;
+    const t = setTimeout(async () => {
+      setAutoSaveState('saving');
+      const ok = await persistPlan(draft);
+      if (ok) { lastSavedVersionRef.current = versionToSave; setAutoSaveState('saved'); }
+      else setAutoSaveState('error');
+    }, 700);
+    return () => clearTimeout(t);
+  }, [draft, draftVersion, saveBlocked, persistPlan]);
 
-  const handleDiscardDraft = useCallback(() => {
+  // Close the maker back to the LIVE view. Everything auto-saves, so this is a
+  // "done editing", NOT a discard — flush any change the debounce hasn't
+  // written yet (unless it's schema-invalid, which can't be saved anyway).
+  const handleCloseDraft = useCallback(async () => {
+    if (draft && !saveBlocked && lastSavedVersionRef.current !== draftVersion) {
+      await persistPlan(draft);
+    }
     setDraft(null);
     setDraftOverview(null);
     setPreviewError(null);
     setPreviewTransportError(null);
     setSaveOk(null);
     setEditingDay(null);
-  }, []);
+    lastSavedVersionRef.current = null;
+  }, [draft, saveBlocked, draftVersion, persistPlan]);
 
   // ── Festival span / estimate-tz mutators (top-of-page FestivalEditor) ──
   // These edit the DRAFT. When the operator touches them while viewing the LIVE
@@ -750,7 +786,7 @@ export default function TimelineScreen() {
         {!isOffline && error ? <Banner styles={styles} text={error} tone="error" /> : null}
         {actionError ? <Banner styles={styles} text={actionError} tone="error" /> : null}
         {previewError ? <Banner styles={styles} text={`Draft invalid: ${previewError.msg}`} tone="error" /> : null}
-        {previewTransportError ? <Banner styles={styles} text={`Preview unavailable: ${previewTransportError} (you can still SAVE a valid draft)`} tone="error" /> : null}
+        {previewTransportError ? <Banner styles={styles} text={`Preview unavailable: ${previewTransportError} (a valid draft still auto-saves)`} tone="error" /> : null}
         {saveOk ? <Banner styles={styles} text={saveOk} tone="ok" C={C} /> : null}
 
         {/* ── Live controls ── */}
@@ -819,20 +855,23 @@ export default function TimelineScreen() {
           {/* ── B. 8-day overview ── */}
           <View style={styles.sectionHeaderRow}>
             <Text style={styles.sectionLabel}>
-              {draft ? `MAKER — ${draft.name} (DRAFT)` : '8-DAY OVERVIEW'}
+              {draft ? `MAKER — ${draft.name}` : '8-DAY OVERVIEW'}
             </Text>
             {draft ? (
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                <TouchableOpacity onPress={handleDiscardDraft} style={styles.miniBtnGhost} accessibilityLabel="Discard draft">
-                  <Text style={styles.miniBtnGhostText}>DISCARD</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={handleSave}
-                  disabled={saveBlocked}
-                  style={[styles.miniBtn, saveBlocked && { opacity: 0.4 }]}
-                  accessibilityLabel="Save draft plan"
-                >
-                  <Text style={styles.miniBtnText}>SAVE</Text>
+              <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
+                {/* Auto-save status — no SAVE/CANCEL buttons (operator request
+                    2026-07-02): the maker writes changes automatically. A
+                    schema-invalid draft shows "⚠ fix to save" (the error banner
+                    below explains); DONE closes the editor (changes are already
+                    saved). */}
+                <Text style={{
+                  fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6,
+                  color: autoSaveState === 'error' ? C.error : (autoSaveState === 'saving' ? C.secondary : '#00a86b'),
+                }}>
+                  {autoSaveState === 'saving' ? 'SAVING…' : autoSaveState === 'error' ? '⚠ FIX TO SAVE' : '✓ SAVED'}
+                </Text>
+                <TouchableOpacity onPress={handleCloseDraft} style={styles.miniBtnGhost} accessibilityLabel="Done editing — close the maker">
+                  <Text style={styles.miniBtnGhostText}>DONE</Text>
                 </TouchableOpacity>
               </View>
             ) : null}
@@ -898,7 +937,7 @@ export default function TimelineScreen() {
           {!draft ? (
             <Text style={styles.helperLine}>Tap a day to view its cues; tap EDIT DAY to edit it — the active plan loads into the maker.</Text>
           ) : (
-            <Text style={styles.helperLine}>Edits preview live across all days. SAVE writes the plan; ACTIVATE (in PLANS) makes it run.</Text>
+            <Text style={styles.helperLine}>Edits preview live across all days and auto-save. ACTIVATE (in PLANS) makes the plan run.</Text>
           )}
 
           {/* ── D. Cue list + controls (live) ── */}

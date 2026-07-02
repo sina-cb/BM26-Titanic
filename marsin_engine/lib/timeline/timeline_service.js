@@ -1368,12 +1368,18 @@ export class TimelineService {
       };
     }
 
+    // Out of the festival window the plan HASN'T STARTED (operator request
+    // 2026-07-02): the "starts in X days" note is the only status, so there is
+    // no live "NOW"/"next in …" — those would contradict the dormant state.
+    // The per-day cue SCHEDULE (atLocal times in the overview) still renders;
+    // only the header-level live-status fields are suppressed here.
+    const inWindow = this._inFestivalWindow();
     const cues = [];
     let nextCue = null;
     for (const cue of this.plan.cues) {
       const fireMs = dayTimes.cueTimes[cue.id];
       let nextInSec = null;
-      if (typeof fireMs === 'number' && fireMs > now && cue.enabled !== false) {
+      if (inWindow && typeof fireMs === 'number' && fireMs > now && cue.enabled !== false) {
         nextInSec = Math.round((fireMs - now) / 1000);
         if (nextCue === null || nextInSec < nextCue.inSec) {
           nextCue = { id: cue.id, label: cueLabel(cue), inSec: nextInSec };
@@ -1440,7 +1446,10 @@ export class TimelineService {
     let activeCue = null;
     const activeCueId = (this.state.activeProgram && this.state.activeProgram.cueId)
       || this._deckWindowCueId || null;
-    if (activeCueId) {
+    // Out of window → no active event (see the nextCue note above): the plan
+    // hasn't started, so nothing is "NOW" even if a recurring cue technically
+    // owns the deck window.
+    if (activeCueId && inWindow) {
       const c = this.plan.cues.find((x) => x.id === activeCueId);
       if (c) {
         const untilMs = (this.state.activeProgram && this.state.activeProgram.cueId === activeCueId)
@@ -1466,7 +1475,7 @@ export class TimelineService {
       // Festival-window surface (docs/38 §15.2): whether the plan is "in time"
       // (drives the 'plan' controlLock gate), and — when it hasn't started yet —
       // the whole-day countdown to festival.startDate in plan.location.tz.
-      inFestivalWindow: this._inFestivalWindow(),
+      inFestivalWindow: inWindow,
       festivalStartsInDays: festivalStartsInDays(this.plan, now),
       autopilotEnabled: this.state.autopilotEnabled !== false,
       activeProgram,
