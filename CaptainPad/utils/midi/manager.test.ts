@@ -63,6 +63,7 @@ function makeApi(): MidiDispatchApi {
     setGroupFixedColor: vi.fn(ok), updateMixerChannel: vi.fn(ok), updateDeckChannel: vi.fn(ok),
     dispatchGlobalEffectSlotAction: vi.fn(ok), setGlobalEffectBlackout: vi.fn(ok),
     setChannelPlaylistEntry: vi.fn(ok),
+    setDeckChannelControl: vi.fn(ok), setMixerChannelControl: vi.fn(ok),
   };
 }
 
@@ -81,6 +82,7 @@ function setup(snapshot: MidiEngineSnapshot, endpoints = fullEndpoints) {
 const baseSnap: MidiEngineSnapshot = {
   blackout: false, activePattern: null, patterns: ['p0', 'p1', 'p2'], globalEffects: {},
   layers: [], deckLayer: null, activeContext: 'mixer', globalEffectSlots: [], colorPalettes: [],
+  focused: null,
 };
 
 describe('MidiManager (integration, fake transport)', () => {
@@ -262,5 +264,94 @@ describe('MidiManager (integration, fake transport)', () => {
     manager.setContext('mixer');
     transport.emit([0x90, 7, 127]); // mixer → pattern
     expect(api.setActivePattern).toHaveBeenCalledWith('mixer_only');
+  });
+});
+
+describe('MidiManager — MIDI-learn (arm, apply, focus)', () => {
+  // A focused deck channel carrying one binding (CC 51 → sliderGlow). CC 51 is
+  // unmapped in the default `profile`, so the profile path resolves nothing and
+  // the binding path owns it — the normal faders-4-6 case.
+  const deckFocused = (v0 = 0.5): MidiEngineSnapshot => ({
+    ...baseSnap,
+    activeContext: 'deck',
+    deckLayer: { id: 'deck1', fader: 1 },
+    focused: {
+      role: 'deck', layer: 0, id: 'deck1',
+      exports: [{ id: 5, name: 'sliderGlow', v0 }],
+      midiMappings: [{
+        id: 'm1', enabled: true,
+        control: { type: 'cc', channel: 0, number: 51 },
+        target: { parameter: 'sliderGlow' }, range: [0, 1],
+      }],
+    },
+  });
+
+  it('armLearn captures the next control and swallows it (no dispatch)', async () => {
+    const { manager, api, transport } = setup(deckFocused());
+    await manager.start();
+    const captured: unknown[] = [];
+    manager.armLearn((c) => captured.push(c));
+    transport.emit([0xb0, 51, 100]); // move a fader while armed
+    expect(captured).toEqual([{ type: 'cc', channel: 0, number: 51 }]);
+    expect(manager.isLearning()).toBe(false); // auto-disarmed after capture
+    // The control was swallowed — the binding on CC 51 must NOT have applied.
+    expect(api.setDeckChannelControl).not.toHaveBeenCalled();
+  });
+
+  it('applies a learned binding to the focused deck param (within pickup)', async () => {
+    const { manager, api, transport } = setup(deckFocused(0.5));
+    await manager.start();
+    transport.emit([0xb0, 51, 64]); // ~0.504, within eps of the current 0.5 → writes
+    expect(api.setDeckChannelControl).toHaveBeenCalledTimes(1);
+    const call = (api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe(5);
+    expect(call[1]).toBeCloseTo(64 / 127, 5);
+  });
+
+  it('soft-takeover locks the fader until it crosses the current value', async () => {
+    const { manager, api, transport } = setup(deckFocused(0.5));
+    await manager.start();
+    transport.emit([0xb0, 51, 127]); // 1.0 — far above 0.5 → locked, no write
+    expect(api.setDeckChannelControl).not.toHaveBeenCalled();
+    transport.emit([0xb0, 51, 0]); // 0.0 — crosses 0.5 → unlocks + writes
+    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, 0);
+  });
+
+  it('a disabled binding does not apply', async () => {
+    const snap = deckFocused(0.5);
+    snap.focused!.midiMappings[0].enabled = false;
+    const { manager, api, transport } = setup(snap);
+    await manager.start();
+    transport.emit([0xb0, 51, 64]);
+    expect(api.setDeckChannelControl).not.toHaveBeenCalled();
+  });
+
+  it('binding is inert when the param is not on the focused pattern', async () => {
+    const snap = deckFocused(0.5);
+    snap.focused!.exports = [{ id: 9, name: 'sliderOther', v0: 0.5 }]; // sliderGlow absent
+    const { manager, api, transport } = setup(snap);
+    await manager.start();
+    transport.emit([0xb0, 51, 64]);
+    expect(api.setDeckChannelControl).not.toHaveBeenCalled();
+  });
+
+  it('a focusChannel track button fires onFocusChange (no engine call)', async () => {
+    const focusProfile = validateProfile({
+      device: { id: 'apc', label: 'APC mini mk2', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+      contexts: {
+        mixer: [{ id: 't2', match: { type: 'note', channel: 0, notes: [101] }, action: { kind: 'focusChannel', layer: 1 }, led: { on: 1, off: 0 } }],
+      },
+    });
+    const transport = new FakeTransport(fullEndpoints);
+    const api = makeApi();
+    const onFocusChange = vi.fn();
+    const manager = new MidiManager({
+      profiles: [focusProfile], transportFactory: () => transport, api,
+      getSnapshot: () => ({ ...baseSnap, layers: [{ id: 'a', fader: 1, solo: false }, { id: 'b', fader: 1, solo: false }] }),
+      defaultContext: 'mixer', onFocusChange,
+    });
+    await manager.start();
+    transport.emit([0x90, 101, 127]);
+    expect(onFocusChange).toHaveBeenCalledWith(1);
   });
 });

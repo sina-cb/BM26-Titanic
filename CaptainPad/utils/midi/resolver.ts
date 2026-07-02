@@ -22,7 +22,15 @@ export type ResolvedAction =
   | { kind: 'globalEffectSlot'; slot: number }
   | { kind: 'playlistScroll'; layer: number; dir: 'up' | 'down' }
   | { kind: 'playlistWindowSelect'; layer: number; slot: number }
-  | { kind: 'colorPalettePair'; palette: number };
+  | { kind: 'colorPalettePair'; palette: number }
+  // Select which layer the learnable param faders (4-6) target. Handled in the
+  // controller runtime (UI/controller state, not an engine call).
+  | { kind: 'focusChannel'; layer: number }
+  // A MIDI-learned local-param write. NOT produced by resolveEvent (which is
+  // profile-driven) — the runtime builds it from the focused entry's stored
+  // bindings + live exports, then routes it through the same coalescer +
+  // dispatcher seam as every other continuous control.
+  | { kind: 'localParam'; role: 'deck' | 'mixer'; channelId: string; exportId: number; value: number };
 
 export interface ResolvedEvent {
   controlId: string;
@@ -101,6 +109,9 @@ export function resolveEvent(
       case 'mixerLayerSolo':
         return { controlId: control.id, continuous: false,
           resolved: { kind: 'mixerLayerSolo', layer: a.layer } };
+      case 'focusChannel':
+        return { controlId: control.id, continuous: false,
+          resolved: { kind: 'focusChannel', layer: a.layer } };
       case 'globalEffectSlot':
         return { controlId: control.id, continuous: false,
           resolved: { kind: 'globalEffectSlot', slot: a.slot } };

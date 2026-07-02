@@ -45,6 +45,7 @@ describe('per-tab contexts', () => {
       resolvePatternForBank: (_b, i) => `p${i}`,
       layerExists: () => false,
       getLayerSolo: () => false,
+      getFocusedLayer: () => -1,
       getGlobalEffectSlotActive: () => false,
       globalEffectSlotCount: 0,
       getLayerPlaylistLength: () => 0,

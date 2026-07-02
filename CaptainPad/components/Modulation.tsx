@@ -26,9 +26,10 @@ import { audioAccentHex } from '@/utils/audioSignals';
 import { engineEvents } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import {
-  deleteModulation, fetchPlaylist, migrateModulationMode, ModulationCurve, ModulationMapping,
+  deleteModulation, fetchPlaylist, migrateModulationMode, MidiMapping, ModulationCurve, ModulationMapping,
   ModulationMode, ModulationPolarity, ModulationSourceKey, patchModulation, putModulation,
 } from '@/utils/api';
+import { MidiMapBadge, MidiMapPopover } from '@/components/MidiMap';
 
 // ── modulationState frame subscription ──────────────────────────────
 //
@@ -386,13 +387,18 @@ type ModulatedSliderProps = {
   mapping: ModulationMapping | null;
   live: ModulationParamLive | null;
   onChanged: () => void;
+  // MIDI-learn binding for this param (violet ⊞ badge), and its refresh.
+  midiMapping?: MidiMapping | null;
+  onMidiChanged?: () => void;
 };
 
 function ModulatedSliderImpl({
   exportItem, onChangeBase, playlistName, entryId, mapping, live, onChanged,
+  midiMapping = null, onMidiChanged,
 }: ModulatedSliderProps) {
   const C = usePalette();
   const [popoverOpen, setPopoverOpen] = useState(false);
+  const [midiOpen, setMidiOpen] = useState(false);
   const niceName = prettySliderName(exportItem.name);
   // The ANCHOR (operator's set value). When a modulation is live the engine
   // writes the MODULATED value back into the export every frame, so
@@ -449,6 +455,11 @@ function ModulatedSliderImpl({
             onEdit={() => setPopoverOpen(true)}
             onClear={clearMapping}
           />
+          <MidiMapBadge
+            mapping={midiMapping}
+            editable={enabled}
+            onEdit={() => setMidiOpen(true)}
+          />
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
           {ghost !== null ? (
@@ -498,6 +509,17 @@ function ModulatedSliderImpl({
           onChanged={onChanged}
         />
       ) : null}
+      {midiOpen && enabled ? (
+        <MidiMapPopover
+          paramName={niceName}
+          targetParameter={exportItem.name}
+          playlistName={playlistName!}
+          entryId={entryId!}
+          existing={midiMapping}
+          onClose={() => setMidiOpen(false)}
+          onChanged={() => onMidiChanged?.()}
+        />
+      ) : null}
     </View>
   );
 }
@@ -524,8 +546,15 @@ export const ModulatedSlider = React.memo(
     && (prev.mapping?.curve ?? null) === (next.mapping?.curve ?? null)
     && (prev.mapping?.source.key ?? null) === (next.mapping?.source.key ?? null)
     && (prev.live?.modulated ?? null) === (next.live?.modulated ?? null)
+    && (prev.midiMapping?.id ?? null) === (next.midiMapping?.id ?? null)
+    && (prev.midiMapping?.enabled ?? null) === (next.midiMapping?.enabled ?? null)
+    && (prev.midiMapping?.control.number ?? null) === (next.midiMapping?.control.number ?? null)
+    && (prev.midiMapping?.control.channel ?? null) === (next.midiMapping?.control.channel ?? null)
+    && (prev.midiMapping?.range[0] ?? null) === (next.midiMapping?.range[0] ?? null)
+    && (prev.midiMapping?.range[1] ?? null) === (next.midiMapping?.range[1] ?? null)
     && prev.onChangeBase === next.onChangeBase
     && prev.onChanged === next.onChanged
+    && prev.onMidiChanged === next.onMidiChanged
   ),
 );
 

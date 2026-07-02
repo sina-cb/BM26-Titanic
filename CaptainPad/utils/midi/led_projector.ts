@@ -32,6 +32,8 @@ export interface MidiProjectionState {
   layerExists(layer: number): boolean;
   /** Current solo of the Nth mixer layer. */
   getLayerSolo(layer: number): boolean;
+  /** The focused layer index (whose pattern the param faders drive), or -1. */
+  getFocusedLayer(): number;
   /** Is global-effect slot N (1-based) active? */
   getGlobalEffectSlotActive(slot: number): boolean;
   /** How many global-effect slots exist (slots beyond this stay dark). */
@@ -144,6 +146,12 @@ function* padVelocities(
     }
     case 'mixerLayerSolo':
       yield { note: pads[0].note, velocity: onOff(control.led, state.layerExists(a.layer) && state.getLayerSolo(a.layer)) };
+      return;
+    case 'focusChannel':
+      // Single-colour track button: lit on the FOCUSED channel, dark otherwise
+      // (incl. channels that don't exist). One lit button = "faders 4-6 drive
+      // this channel's pattern."
+      yield { note: pads[0].note, velocity: onOff(control.led, state.layerExists(a.layer) && state.getFocusedLayer() === a.layer) };
       return;
     case 'pattern':
       yield { note: pads[0].note, velocity: activeIdle(control.led, state.activePattern === a.name) };

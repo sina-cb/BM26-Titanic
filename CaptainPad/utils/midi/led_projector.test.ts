@@ -18,6 +18,7 @@ function state(over: Partial<MidiProjectionState> = {}): MidiProjectionState {
     resolvePatternForBank: () => null,
     layerExists: () => false,
     getLayerSolo: () => false,
+    getFocusedLayer: () => -1,
     getGlobalEffectSlotActive: () => false,
     globalEffectSlotCount: 0,
     getLayerPlaylistLength: () => 0,
@@ -67,6 +68,22 @@ describe('projectLeds', () => {
     const off = projectLeds(profile, state({ blackout: false }), {});
     const on = projectLeds(profile, state({ blackout: true }), off.next);
     expect(on.messages).toEqual([[0x90, 107, 1]]);
+  });
+
+  it('focusChannel track button lights only the focused layer', () => {
+    const p = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+      contexts: {
+        mixer: [
+          { id: 't1', match: { type: 'note', channel: 0, notes: [100] }, action: { kind: 'focusChannel', layer: 0 }, led: { on: 1, off: 0 } },
+          { id: 't2', match: { type: 'note', channel: 0, notes: [101] }, action: { kind: 'focusChannel', layer: 1 }, led: { on: 1, off: 0 } },
+        ],
+      },
+    });
+    const s = state({ layerExists: (l) => l <= 1, getFocusedLayer: () => 1 });
+    const { messages } = projectLeds(p, s, {}, 'mixer');
+    expect(messages).toContainEqual([0x90, 100, 0]); // layer 0 exists but not focused → off
+    expect(messages).toContainEqual([0x90, 101, 1]); // layer 1 focused → lit
   });
 
   it('colour-pair pads show c1 on even columns and c2 on odd (Stage 2)', () => {

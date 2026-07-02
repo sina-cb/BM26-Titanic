@@ -14,6 +14,7 @@ export * from './resolver';
 export * from './endpoints';
 export * from './coalescer';
 export * from './dispatch';
+export * from './learn';
 export * from './led_projector';
 export * from './manager';
 export { WebMidiTransport, isMidiAvailable } from './web_midi_transport';

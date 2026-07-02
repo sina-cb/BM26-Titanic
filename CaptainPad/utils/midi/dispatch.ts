@@ -23,6 +23,10 @@ export interface MidiDispatchApi {
   dispatchGlobalEffectSlotAction(slotId: number, action: string): Promise<MidiApiResult>;
   setGlobalEffectBlackout(enabled: boolean): Promise<MidiApiResult>;
   setChannelPlaylistEntry(role: 'deck' | 'mixer', channelId: string, entryId: string): Promise<MidiApiResult>;
+  // Per-control STATIC writes for MIDI-learned local params. The deck has a
+  // singleton route (no id); mixer overlays are addressed by channel id.
+  setDeckChannelControl(id: number, v0: number, v1?: number, v2?: number): Promise<MidiApiResult>;
+  setMixerChannelControl(channelId: string, id: number, v0: number, v1?: number, v2?: number): Promise<MidiApiResult>;
 }
 
 /** A resolved mixer "layer" — unified across tabs. On the Deck tab layer 0 is
@@ -107,9 +111,18 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
         });
         return;
       }
+      case 'localParam':
+        // A MIDI-learned local-param STATIC write. Route to the deck singleton
+        // or the addressed mixer overlay channel. The render loop's audio
+        // modulators stay layered on top of this base value untouched.
+        if (resolved.role === 'deck') await api.setDeckChannelControl(resolved.exportId, resolved.value);
+        else await api.setMixerChannelControl(resolved.channelId, resolved.exportId, resolved.value);
+        return;
+      case 'focusChannel':
       case 'playlistScroll':
       case 'playlistWindowSelect':
-        // Handled by the controller runtime (needs per-layer window cursor).
+        // Handled by the controller runtime (controller-local state: focus
+        // selection / per-layer window cursor).
         return;
       default:
         return;

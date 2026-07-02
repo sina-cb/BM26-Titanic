@@ -27,6 +27,10 @@ import { resolveEndpoints, EndpointResolutionError } from './endpoints';
 import { ControlCoalescer, CoalescerTimers } from './coalescer';
 import { createDispatcher, MidiDispatchApi, MidiDispatcher } from './dispatch';
 import { projectLeds, LedState, MidiProjectionState } from './led_projector';
+import {
+  LearnController, MidiControlRef, bindingMatches, controlRefFromEvent,
+  scaleMidiToRange, pickup, freshPickup, PickupState,
+} from './learn';
 
 export type ControllerStatusKind = 'disconnected' | 'connected' | 'error';
 
@@ -68,6 +72,32 @@ export interface MidiEngineSnapshot {
   globalEffectSlots: { slot: number; active: boolean }[];
   /** Curated colour palette pairs (hues 0..1), for the colour-pair pads. */
   colorPalettes: { c1: number; c2: number }[];
+  /** The FOCUSED channel — whose active pattern's MIDI-learned bindings the
+   *  param faders (4-6) drive. On the Deck tab it is the single deck channel
+   *  (auto-focused); on the Mixer tab the operator selects it with a track
+   *  button. null when nothing is focused (no channel / no active entry). */
+  focused: FocusedChannel | null;
+}
+
+/** The focused channel's live exports + its active entry's MIDI bindings — the
+ *  two things the runtime needs to apply a learned fader to a STATIC param. */
+export interface FocusedChannel {
+  role: 'deck' | 'mixer';
+  /** Layer index (0-based) the focus came from — for the focus LED. */
+  layer: number;
+  id: string;
+  /** Live local exports of the active pattern (id ↔ name ↔ current value). */
+  exports: { id: number; name: string; v0: number }[];
+  /** Active entry's stored bindings (the engine's per-entry midiMappings). */
+  midiMappings: FocusedBinding[];
+}
+
+export interface FocusedBinding {
+  id: string;
+  enabled: boolean;
+  control: MidiControlRef;
+  target: { parameter: string };
+  range: [number, number];
 }
 
 export interface MidiManagerOptions {
@@ -92,6 +122,9 @@ export interface MidiManagerOptions {
   /** Fired when a layer's playlist browse window moves (for the mixer-UI
    *  rectangular border). channelId is the layer's mixer channel id. */
   onWindowChange?: (channelId: string, start: number, size: number) => void;
+  /** Fired when a track button requests a focus-channel change (Mixer tab).
+   *  The hook updates focus state + rebuilds the snapshot's `focused`. */
+  onFocusChange?: (layer: number) => void;
   onStatusChange?: (statuses: ControllerStatus[]) => void;
 }
 
@@ -144,17 +177,25 @@ class ControllerRuntime {
   private context: string;
   /** Per-layer playlist browse-window top index (controller-local state). */
   private readonly windowCursor = new Map<number, number>();
+  /** Soft-takeover state per binding id (locks a fader until it crosses the
+   *  param's current value, so focus/pattern switches don't jump the value). */
+  private readonly pickupStates = new Map<string, PickupState>();
+  /** Identity of the focus the pickup map was built for; a change re-locks. */
+  private lastFocusKey: string | null = null;
+  private readonly learn: LearnController;
   status: ControllerStatus;
 
   constructor(
     profile: ControllerProfile,
     opts: MidiManagerOptions,
     dispatcher: MidiDispatcher,
+    learn: LearnController,
     notify: () => void,
   ) {
     this.profile = profile;
     this.opts = opts;
     this.dispatcher = dispatcher;
+    this.learn = learn;
     this.notify = notify;
     this.context = opts.defaultContext ?? 'deck';
     this.transport = opts.transportFactory();
@@ -252,11 +293,30 @@ class ControllerRuntime {
   private onMessage(data: number[]): void {
     this.opts.onActivity?.();
     const decoded = decodeMidi(data);
+
+    // 1) MIDI-learn capture — while armed, the next learnable control BINDS
+    //    (the popover supplied the callback) and is swallowed, never dispatched.
+    if (this.learn.isArmed()) {
+      const cap = controlRefFromEvent(decoded);
+      if (cap && this.learn.capture(cap.ref)) {
+        this.setStatus({ lastEvent: `learn ← ${describeEvent(decoded, null)}` });
+        return;
+      }
+    }
+
+    // 2) MIDI-learned binding application — a learned control drives the focused
+    //    pattern's STATIC param value. Binding-first: a learned control wins
+    //    over any static profile action on the same control (faders 4-6 are
+    //    unmapped in the profile, so normal use never collides).
+    if (this.applyBinding(decoded)) return;
+
+    // 3) Profile-mapped action.
     const ev = resolveEvent(this.profile, decoded, this.context);
     this.setStatus({ lastEvent: describeEvent(decoded, ev ? ev.controlId : null) });
     if (!ev) return;
-    // The playlist window browser needs controller-local cursor state, so it is
-    // handled here rather than in the pure dispatcher.
+    // Focus + the playlist window browser need controller-local state, so they
+    // are handled here rather than in the pure dispatcher.
+    if (ev.resolved.kind === 'focusChannel') { this.opts.onFocusChange?.(ev.resolved.layer); return; }
     if (ev.resolved.kind === 'playlistScroll') { this.handleScroll(ev.resolved.layer, ev.resolved.dir); return; }
     if (ev.resolved.kind === 'playlistWindowSelect') { this.handleWindowSelect(ev.resolved.layer, ev.resolved.slot); return; }
     if (ev.continuous) {
@@ -264,6 +324,52 @@ class ControllerRuntime {
     } else {
       void this.dispatcher(ev.resolved);
     }
+  }
+
+  /** Apply a MIDI-learned binding for the focused channel. Returns true when
+   *  the event matched an enabled binding (consumed it), false otherwise.
+   *  Soft-takeover ("pickup") keeps the param from jumping after a focus /
+   *  pattern switch — the fader must cross the current value before it writes. */
+  private applyBinding(decoded: DecodedMidi): boolean {
+    const focused = this.opts.getSnapshot().focused;
+    if (!focused) return false;
+    const binding = focused.midiMappings.find(
+      (b) => b.enabled && bindingMatches(b.control, decoded),
+    );
+    if (!binding) return false;
+
+    // Re-lock every binding when the focus identity changes (focus channel or
+    // active-entry mapping set), so a fader has to pick up the new value.
+    const focusKey = `${focused.role}:${focused.id}:${focused.midiMappings.map((m) => m.id).join(',')}`;
+    if (focusKey !== this.lastFocusKey) {
+      this.pickupStates.clear();
+      this.lastFocusKey = focusKey;
+    }
+
+    // Resolve the bound param to a live export on the focused pattern. If the
+    // pattern doesn't declare it, the fader is inert here — loud silence.
+    const exp = focused.exports.find((e) => e.name === binding.target.parameter);
+    const cap = controlRefFromEvent(decoded);
+    const value = scaleMidiToRange(cap ? cap.value : 0, binding.range);
+    if (!exp) {
+      this.setStatus({ lastEvent: `bind ${binding.target.parameter} (not on pattern)` });
+      return true; // control matched; simply not applicable to this pattern
+    }
+
+    const state = this.pickupStates.get(binding.id) ?? freshPickup();
+    const wasLocked = state.locked;
+    const { write, next } = pickup(state, exp.v0, value);
+    this.pickupStates.set(binding.id, next);
+    this.setStatus({
+      lastEvent: `bind ${binding.target.parameter} = ${value.toFixed(2)}${next.locked ? ' (locked)' : ''}`,
+    });
+    if (wasLocked !== next.locked) this.projectAndSend(); // repaint lock/focus LEDs
+    if (!write) return true; // locked — swallow until the fader picks up
+
+    this.coalescer.push(`bind:${binding.id}`, {
+      kind: 'localParam', role: focused.role, channelId: focused.id, exportId: exp.id, value,
+    });
+    return true;
   }
 
   private handleScroll(layer: number, dir: 'up' | 'down'): void {
@@ -301,6 +407,7 @@ class ControllerRuntime {
       resolvePatternForBank: (bank, index) => snap.patterns[bank * pageSize + index] ?? null,
       layerExists: (layer) => !!layerInfo(snap, layer),
       getLayerSolo: (layer) => layerInfo(snap, layer)?.solo ?? false,
+      getFocusedLayer: () => snap.focused?.layer ?? -1,
       getGlobalEffectSlotActive: (slot) => snap.globalEffectSlots.find((s) => s.slot === slot)?.active ?? false,
       globalEffectSlotCount: snap.globalEffectSlots.length,
       getLayerPlaylistLength: (layer) => layerInfo(snap, layer)?.playlist?.entries.length ?? 0,
@@ -339,6 +446,9 @@ class ControllerRuntime {
 export class MidiManager {
   private readonly opts: MidiManagerOptions;
   private readonly runtimes: ControllerRuntime[] = [];
+  /** Shared MIDI-learn capture state — armed by the learn popover, consumed by
+   *  whichever controller the operator moves a fader on. */
+  private readonly learn = new LearnController();
 
   constructor(opts: MidiManagerOptions) {
     this.opts = opts;
@@ -354,8 +464,24 @@ export class MidiManager {
       getColorPalette: (index) => opts.getSnapshot().colorPalettes[index] ?? null,
     });
     for (const profile of opts.profiles) {
-      this.runtimes.push(new ControllerRuntime(profile, opts, dispatcher, () => this.emitStatus()));
+      this.runtimes.push(new ControllerRuntime(profile, opts, dispatcher, this.learn, () => this.emitStatus()));
     }
+  }
+
+  /** Arm MIDI-learn: the next fader/pad the operator moves on ANY connected
+   *  controller is captured and passed to `cb` (and swallowed — it binds, it
+   *  does not also act). Returns a cancel fn. Auto-disarms on capture. */
+  armLearn(cb: (control: MidiControlRef) => void): () => void {
+    this.learn.arm(cb);
+    return () => this.learn.cancel();
+  }
+
+  cancelLearn(): void {
+    this.learn.cancel();
+  }
+
+  isLearning(): boolean {
+    return this.learn.isArmed();
   }
 
   private emitStatus(): void {

@@ -7,6 +7,7 @@ import { ToggleButton, MomentaryButton } from '@/components/ui/ToggleButton';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { useChannelExports, useDeckChannel, MixerChannelExport } from '@/hooks/useEngineState';
 import { ModulatedSlider, useEntryModulations, useModulationState, prettySliderName } from '@/components/Modulation';
+import { useEntryMidiMappings } from '@/components/MidiMap';
 import { engineEvents } from '@/utils/engineEvents';
 
 export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant?: 'deck' | 'mixer', channelId?: string, exports?: any[], wsRef?: unknown }) => {
@@ -34,9 +35,12 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
   const deckPlaylistName = deckPlaylist?.name ?? null;
   const deckEntryId = deckPlaylist?.activeEntryId ?? null;
   const { mappings: entryMappings, refresh: refreshMappings } = useEntryModulations(deckPlaylistName, deckEntryId);
+  const { mappings: midiMappings, refresh: refreshMidi } = useEntryMidiMappings(deckPlaylistName, deckEntryId);
   const modulationLive = useModulationState();
   const mappingByTarget: Record<string, any> = {};
   for (const m of entryMappings) mappingByTarget[m.target.parameter] = m;
+  const midiByTarget: Record<string, any> = {};
+  for (const m of midiMappings) midiByTarget[m.target.parameter] = m;
 
   if (variant === 'mixer') {
     // BASE-PARAMS strip = the deck base channel's live exports. We
@@ -138,6 +142,8 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
               mapping={mappingByTarget[e.name] ?? null}
               live={modulationLive[e.name] ?? null}
               onChanged={refreshMappings}
+              midiMapping={midiByTarget[e.name] ?? null}
+              onMidiChanged={refreshMidi}
             />
           </View>
         );

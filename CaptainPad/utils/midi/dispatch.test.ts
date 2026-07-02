@@ -16,6 +16,8 @@ function makeApi(): MidiDispatchApi {
     dispatchGlobalEffectSlotAction: vi.fn(ok),
     setGlobalEffectBlackout: vi.fn(ok),
     setChannelPlaylistEntry: vi.fn(ok),
+    setDeckChannelControl: vi.fn(ok),
+    setMixerChannelControl: vi.fn(ok),
   };
 }
 
@@ -122,5 +124,27 @@ describe('createDispatcher', () => {
     const api = makeApi();
     await createDispatcher(api, baseCtx)({ kind: 'sectionBrightness', sectionId: 3, value: 0.4 });
     expect(api.setSectionBrightness).toHaveBeenCalledWith(3, 0.4);
+  });
+
+  it('localParam (deck role) → setDeckChannelControl(exportId, value)', async () => {
+    const api = makeApi();
+    await createDispatcher(api, baseCtx)({ kind: 'localParam', role: 'deck', channelId: 'deck1', exportId: 5, value: 0.7 });
+    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, 0.7);
+    expect(api.setMixerChannelControl).not.toHaveBeenCalled();
+  });
+
+  it('localParam (mixer role) → setMixerChannelControl(channelId, exportId, value)', async () => {
+    const api = makeApi();
+    await createDispatcher(api, baseCtx)({ kind: 'localParam', role: 'mixer', channelId: 'ch_b', exportId: 9, value: 0.3 });
+    expect(api.setMixerChannelControl).toHaveBeenCalledWith('ch_b', 9, 0.3);
+    expect(api.setDeckChannelControl).not.toHaveBeenCalled();
+  });
+
+  it('focusChannel is handled by the runtime — the dispatcher is a no-op', async () => {
+    const api = makeApi();
+    await createDispatcher(api, baseCtx)({ kind: 'focusChannel', layer: 1 });
+    // No engine call: focus is controller/UI state.
+    expect(api.updateMixerChannel).not.toHaveBeenCalled();
+    expect(api.setActivePattern).not.toHaveBeenCalled();
   });
 });

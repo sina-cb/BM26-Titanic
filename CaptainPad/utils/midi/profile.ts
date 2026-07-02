@@ -40,6 +40,9 @@ export type ProfileAction =
   // such channel exists (and its pad column stays dark).
   | { kind: 'mixerLayerFader'; layer: number; range: Range }
   | { kind: 'mixerLayerSolo'; layer: number }
+  // Focus the Nth layer (Mixer tab) so the learnable param faders (4-6) drive
+  // its active pattern's MIDI bindings. Controller/UI state, not an engine call.
+  | { kind: 'focusChannel'; layer: number }
   // Global-effect slot (1-based, matches CaptainPad GEM); toggles the slot.
   | { kind: 'globalEffectSlot'; slot: number }
   // ── Stage 2 ──
@@ -102,7 +105,7 @@ export class ProfileValidationError extends Error {
 const ACTION_KINDS = new Set([
   'paramCenter', 'master', 'pattern', 'patternBank',
   'blackoutToggle', 'globalEffect', 'sectionBrightness', 'groupFixedColor',
-  'mixerLayerFader', 'mixerLayerSolo', 'globalEffectSlot',
+  'mixerLayerFader', 'mixerLayerSolo', 'focusChannel', 'globalEffectSlot',
   'playlistScroll', 'playlistWindowSelect', 'colorPalettePair',
 ]);
 
@@ -195,6 +198,11 @@ function validateAction(where: string, a: any): ProfileAction {
         fail(`${where}: mixerLayerSolo requires a non-negative integer 'layer'`);
       }
       return { kind: 'mixerLayerSolo', layer: a.layer };
+    case 'focusChannel':
+      if (typeof a.layer !== 'number' || a.layer < 0 || !Number.isInteger(a.layer)) {
+        fail(`${where}: focusChannel requires a non-negative integer 'layer'`);
+      }
+      return { kind: 'focusChannel', layer: a.layer };
     case 'globalEffectSlot':
       if (typeof a.slot !== 'number' || a.slot < 1 || !Number.isInteger(a.slot)) {
         fail(`${where}: globalEffectSlot requires a positive integer 'slot' (1-based)`);
