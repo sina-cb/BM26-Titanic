@@ -321,6 +321,23 @@ export class TimelineService {
 
   _loadSceneFiles() {
     if (!fs.existsSync(this.sceneDir)) fs.mkdirSync(this.sceneDir, { recursive: true });
+    // Load STATE FIRST: the operator's last plan ACTIVATION is persisted state
+    // and must survive a restart (bug 2026-07-02: the plan file was loaded off
+    // the CONFIG default before state was read, so a reboot silently reverted
+    // to the config plan's CONTENT while getState still REPORTED the persisted
+    // activePlan name — cues/window/autopilot all came from the wrong plan).
+    this.state = loadTimelineState(this.stateDir);
+    if (this.state.activePlan && this.state.activePlan !== this.activePlan) {
+      if (fs.existsSync(this._planPath(this.state.activePlan))) {
+        this.activePlan = this.state.activePlan;
+      } else {
+        // The persisted plan's file is gone (deleted outside activatePlan's
+        // guard). Fail LOUD, then boot the config plan and repair the state
+        // name so what we report always matches what we run.
+        console.error(`  ⚠ [timeline] persisted active plan "${this.state.activePlan}" has no file — booting config plan "${this.activePlan}"`);
+        this.state.activePlan = this.activePlan;
+      }
+    }
     const planPath = this._planPath(this.activePlan);
     if (!fs.existsSync(planPath)) {
       // A fresh scene must be runnable — write the default plan (the only
@@ -329,7 +346,6 @@ export class TimelineService {
       console.log(`  📝 [timeline] wrote default plan → ${planPath}`);
     }
     this.plan = loadShowPlan(planPath);
-    this.state = loadTimelineState(this.stateDir);
     if (!this.state.activePlan) this.state.activePlan = this.activePlan;
     // Seed the runtime autopilot toggle from the plan's baseline only when the
     // state predates the §14 model. Once toggled, the runtime value wins.
@@ -462,6 +478,12 @@ export class TimelineService {
     // lock — so CaptainPad keeps full deck/mixer control. A no-op out of window;
     // _reconcileDeckPin releases any pin that predates leaving the window.
     if (!this._inFestivalWindow()) return;
+    // TAKEOVER/PAUSE GATE (audit M7 2026-07-02): a cue dispatch that was
+    // in-flight when the operator took over (or paused) must not re-pin the
+    // deck out from under them — the tail of an awaited apply used to snap the
+    // view back and re-raise the lock for up to a tick. Mode is set
+    // synchronously by takeover()/setMode(), so this gate is race-safe.
+    if (this.state.mode === 'overridden' || this.state.mode === 'paused') return;
     if (typeof this.deps.forceDeckView !== 'function') {
       throw new Error('forceDeckView dep is required to pin output to the deck');
     }
@@ -939,7 +961,21 @@ export class TimelineService {
     // non-driving plan for the purpose of the deck-pin: release the pin so the
     // 'plan' controlLock clears even while the plan is armed + driving content
     // (docs/38 §15.2). In window, keep the pin iff the plan is driving.
-    if (this._isPlanDrivingDeck() && this._inFestivalWindow()) return;
+    if (this._isPlanDrivingDeck() && this._inFestivalWindow()) {
+      // RE-PIN (audit H2/H3 2026-07-02): the apply/baseline paths only pin on
+      // TRANSITIONS, so two steady-state cases used to leave a driving,
+      // in-window plan unpinned indefinitely (controlLock null, deck/mixer
+      // unlocked while the plan drives): (a) the festival window OPENING at
+      // midnight with the baseline already armed, and (b) a PortWatch hard
+      // lock releasing back to a still-driving plan. This tick-side re-pin
+      // heals both within one tick. A no-op while ANYTHING already pins the
+      // deck — including a PortWatch hard lock, which is never downgraded.
+      if (typeof this.deps.getViewOverrideMode === 'function'
+          && this.deps.getViewOverrideMode() !== 'deck') {
+        await this._forceDeckView(null);
+      }
+      return;
+    }
     await this._releaseDeckView(null);
   }
 
@@ -1141,6 +1177,16 @@ export class TimelineService {
         }
         // A scene action inside catchUp could have torn the service down.
         if (this._tickHandle === null) return;
+      }
+      // SELF-HEAL (audit C1 2026-07-02), the mirror image: a lease stranded on
+      // a NON-'overridden' mode. takeover() is the only lease writer and always
+      // sets mode 'overridden' with it, so lease-without-overridden is by
+      // definition orphaned (a mode exit that predates the setMode/enableProgram
+      // /hold clears). activity() won't extend it and the release above won't
+      // match it — drop it so CaptainPad's leaseHeld can't wedge true.
+      if (this.state.mode !== 'overridden' && this.state.operatorLease) {
+        this.state.operatorLease = null;
+        console.warn('  🔧 [timeline] dropped an orphaned operator lease (mode was not overridden)');
       }
 
       const sunEvents = this._sunEventsFor(now);
@@ -1512,6 +1558,12 @@ export class TimelineService {
     }
     const prevMode = this.state.mode;
     this.state.mode = mode;
+    // Leaving 'overridden' by ANY route must clear the takeover lease (audit
+    // C1 2026-07-02): a lease stranded on a non-overridden mode is never
+    // extended by activity() and never released by the tick, so CaptainPad
+    // read leaseHeld=true forever ("resumes in 0:00") and the deck/mixer
+    // gates never re-engaged. takeover() is the only lease writer.
+    this.state.operatorLease = null;
     if (mode === 'armed') {
       this.state.manualHoldUntilMs = null;
       this._holdLatched = false; // explicit arm ends the hold — no expiry log
@@ -1545,6 +1597,13 @@ export class TimelineService {
     const m = Number(minutes);
     if (!Number.isFinite(m) || m <= 0) throw new Error('minutes must be a number > 0');
     this.state.manualHoldUntilMs = this.nowFn() + m * 60000;
+    // A hold SUPERSEDES a takeover lease (audit H1 2026-07-02): the lease's
+    // 2-min inactivity release used to fire mid-hold and wipe
+    // manualHoldUntilMs — an explicit "HOLD 30m" silently died after 2
+    // minutes. The hold is now the manual owner: clear the lease and exit
+    // 'overridden' (the hold itself keeps the controller manual until expiry).
+    this.state.operatorLease = null;
+    if (this.state.mode === 'overridden') this.state.mode = 'armed';
     // A hold is operator takeover — reflect that in the controller immediately
     // rather than letting it read stale (e.g. 'autopilot') until the next tick.
     this.state.controller = 'manual';
@@ -1752,6 +1811,9 @@ export class TimelineService {
     // Exit manual — the operator chose to hand the deck to the program.
     this.state.mode = 'armed';
     this.state.manualHoldUntilMs = null;
+    // Exiting 'overridden' must clear the takeover lease too (audit C1) — a
+    // stranded lease is never extended/released once mode isn't 'overridden'.
+    this.state.operatorLease = null;
     this._holdLatched = false; // the enable supersedes any hold-expiry log
     this.state.activeProgram = {
       cueId: pend.cueId,

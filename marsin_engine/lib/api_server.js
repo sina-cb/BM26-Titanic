@@ -3026,13 +3026,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   //                 the timeline, never the PortWatch lease timer.
   //   null        — nobody owns it.
   //
-  // We only persist/restore 'portwatch' across a restart (boot hydration
-  // above): a 'plan' pin is re-established by the timeline on start, so
-  // persisting it would strand an orphan lock if the timeline is disabled.
-  // The source is null until something sets it; if we restored a portwatch
-  // deck-pin from disk, seed the source to match.
+  // Boot seeding: whichever owner the persisted lock names, seed the SAME
+  // source. (Audit C2 2026-07-02: a persisted 'plan' lock used to restore the
+  // raw pin but seed source null, and currentControlLock()'s back-compat
+  // treated a source-less pin as 'portwatch' — an un-leased HARD lockout that
+  // no PortWatch device would ever release, that timelineReleaseDeckView
+  // refused to clear (source !== 'plan'), and that CaptainPad curtains with
+  // "PORTWATCH HAS THE RIG". Seeding 'plan' keeps it a SOFT lock the
+  // timeline's per-tick _reconcileDeckPin releases or re-owns within 1s.)
   let controlLockSource =
-    (globalsState && globalsState.controlLock === 'portwatch') ? 'portwatch' : null;
+    (globalsState && (globalsState.controlLock === 'portwatch' || globalsState.controlLock === 'plan'))
+      ? globalsState.controlLock : null;
 
   // The single source of truth for the broadcast `controlLock` field. A deck
   // pin with no recorded source is treated as a PortWatch lock (back-compat:

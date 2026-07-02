@@ -1256,3 +1256,90 @@ test('Task B: a no-festival plan is always in window (unchanged behavior)', asyn
   assert.equal(st.festivalStartsInDays, null, 'no festival → no countdown');
   assert.ok(calls.forceDeckView.length >= 1, 'no-festival plan still pins the deck (unchanged)');
 });
+
+// ── 2026-07-02 audit regressions (bulletproofing pass) ──────────────────────
+
+test('audit H2: festival window OPENING mid-run re-pins on the next tick', async () => {
+  // Boot BEFORE the window with the baseline already armed — no transition
+  // will ever fire at midnight, so only the tick-side re-pin can engage the
+  // lock when startDate arrives.
+  const { svc, calls, setNow } = setupFestival({ now: FEST_BEFORE_WINDOW });
+  await svc.start();
+  assert.equal(calls.viewState.mode, null, 'not pinned before the window');
+  // Clock crosses into the festival span (day 1, 2026-08-31 10:00 PT).
+  setNow(FEST_IN_WINDOW);
+  await svc._tick();
+  svc.stop();
+  assert.equal(calls.viewState.mode, 'deck', 'window opened → tick re-pins the deck');
+  assert.equal(svc.getState().forcingDeckView, true, 'lock engaged without any cue transition');
+});
+
+test('audit S8: boot honors the PERSISTED active plan over the config default', async () => {
+  const { svc, sceneDir, stateDir } = setup();
+  await svc.start();
+  svc.stop();
+  // Operator activates a different plan; the activation persists to state.
+  const other = makePlan();
+  other.name = 'operator_plan';
+  await svc.savePlan(other);
+  await svc.activatePlan('operator_plan');
+  // Reboot with the CONFIG still naming test_plan (the pre-fix path silently
+  // loaded test_plan's CONTENT while reporting activePlan operator_plan).
+  const { deps } = makeDeps();
+  const svc2 = new TimelineService({
+    scene: 'summer_camp_dome', sceneDir, stateDir,
+    getMood: () => ({ party: 0, value: 0 }),
+    deps, broadcast: () => {},
+    config: {
+      enabled: true, activePlan: 'test_plan', tickMs: 1000,
+      mood: { key: 'audioParty', partyThreshold: 0.5 }, colorPalettes: PALETTES,
+    },
+    nowFn: () => Date.UTC(2026, 7, 30, 2, 0, 0),
+  });
+  await svc2.start();
+  svc2.stop();
+  assert.equal(svc2.plan.name, 'operator_plan', 'boot must RUN the persisted active plan');
+  assert.equal(svc2.getState().activePlan, 'operator_plan', 'reported name matches the running content');
+});
+
+test('audit C1: setMode(paused) after a takeover clears the lease (no orphan)', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+  svc.takeover();
+  assert.ok(svc.state.operatorLease, 'lease armed by takeover');
+  await svc.setMode('paused');
+  assert.equal(svc.state.operatorLease, null, 'pause must not strand the lease');
+  assert.equal(svc.state.mode, 'paused');
+});
+
+test('audit H1: hold() supersedes a takeover — lease cleared, hold survives', async () => {
+  let nowMs = Date.UTC(2026, 7, 30, 2, 0, 0);
+  const { svc } = setup({ now: 0 });
+  svc.nowFn = () => nowMs;
+  await svc.start();
+  svc.takeover();
+  const r = svc.hold(30);
+  assert.equal(svc.state.operatorLease, null, 'hold clears the takeover lease');
+  assert.notEqual(svc.state.mode, 'overridden', 'hold exits overridden');
+  assert.equal(r.manualHoldUntilMs, nowMs + 30 * 60000);
+  // 3 minutes later (would have been past the 120s lease expiry): the hold
+  // must still stand — pre-fix the lease release wiped manualHoldUntilMs.
+  nowMs += 3 * 60000;
+  await svc._tick();
+  svc.stop();
+  assert.equal(svc.state.manualHoldUntilMs, r.manualHoldUntilMs, 'hold survives past the old lease window');
+  assert.equal(svc.getState().mode, 'holding', 'still holding');
+});
+
+test('audit C1 backstop: the tick drops an orphaned lease on a non-overridden mode', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+  // Force the trap state directly (any pre-fix mode exit could leave this).
+  svc.state.mode = 'armed';
+  svc.state.operatorLease = { expiresAtMs: svc.nowFn() + 999999 };
+  await svc._tick();
+  assert.equal(svc.state.operatorLease, null, 'orphaned lease dropped by the tick');
+  assert.equal(svc.state.mode, 'armed');
+});
