@@ -75,6 +75,18 @@ export interface TimelineActiveProgram {
   untilMs: number | null;
 }
 
+// The cue/event currently DRIVING the deck (a running program, else the cue
+// that owns the deck window). Null when the autopilot baseline is driving and
+// nothing cue-specific is active. Surfaced so the timeline tab AND the
+// deck/mixer lock banner can name the live event.
+export interface TimelineActiveCue {
+  id: string;
+  label: string;
+  kind: 'cue' | 'program';
+  /** Program hold / durationMin window end (epoch ms), or null when open-ended. */
+  untilMs: number | null;
+}
+
 // Pending-program lease (docs/38 §16.5 / §16.7): a program cue is due while the
 // deck is in MANUAL; the engine arms a lease and CaptainPad shows the
 // "SCHEDULED SHOW PENDING" sign with a countdown until `expiresAtMs` (when the
@@ -105,6 +117,9 @@ export interface TimelineState {
   controller: TimelineController;
   autopilotEnabled: boolean;
   activeProgram: TimelineActiveProgram | null;
+  // The event currently driving the deck (program or deck-window cue), or null
+  // when only the autopilot baseline is driving. See TimelineActiveCue.
+  activeCue: TimelineActiveCue | null;
   // The armed pending-program lease (docs/38 §16.5), or null when none is due.
   pendingProgram: TimelinePendingProgram | null;
   // True when the controller is autopilot/program AND the mode is not

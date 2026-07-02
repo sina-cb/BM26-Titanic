@@ -1338,7 +1338,7 @@ export class TimelineService {
         mode: 'armed', scene: this.scene, activePlan: this.activePlan,
         controller: 'autopilot', planActive: false, forcingDeckView: false,
         inFestivalWindow: this._inFestivalWindow(), festivalStartsInDays: festivalStartsInDays(this.plan, now),
-        autopilotEnabled: true, activeProgram: null,
+        autopilotEnabled: true, activeProgram: null, activeCue: null,
         pendingProgram: null, operatorLease: null, operatorLeaseSec: this.operatorLeaseSec,
         currentPhase: null, currentMood: 'calm', party: 0, moodValue: 0,
         engineConnected: true,
@@ -1430,6 +1430,31 @@ export class TimelineService {
       };
     }
 
+    // activeCue — the EVENT currently driving the deck, for the operator to see
+    // at a glance on the timeline tab AND inside the deck/mixer lock banner
+    // (operator request 2026-07-02: "when an event is active, clearly show it").
+    // Precedence: a running program wins, else the cue that owns the deck window
+    // (§16.11 `_deckWindowCueId`), else null = the autopilot baseline is driving
+    // (nothing cue-specific is "active"). `until` is the program hold / the
+    // durationMin window end when known, so the UI can show a countdown.
+    let activeCue = null;
+    const activeCueId = (this.state.activeProgram && this.state.activeProgram.cueId)
+      || this._deckWindowCueId || null;
+    if (activeCueId) {
+      const c = this.plan.cues.find((x) => x.id === activeCueId);
+      if (c) {
+        const untilMs = (this.state.activeProgram && this.state.activeProgram.cueId === activeCueId)
+          ? (this.state.activeProgram.untilMs ?? null)
+          : (typeof this._deckWindowUntilMs === 'number' ? this._deckWindowUntilMs : null);
+        activeCue = {
+          id: c.id,
+          label: cueLabel(c),
+          kind: c.kind === 'program' ? 'program' : 'cue',
+          untilMs,
+        };
+      }
+    }
+
     return {
       type: 'timelineState',
       mode,
@@ -1445,6 +1470,7 @@ export class TimelineService {
       festivalStartsInDays: festivalStartsInDays(this.plan, now),
       autopilotEnabled: this.state.autopilotEnabled !== false,
       activeProgram,
+      activeCue,
       pendingProgram,
       operatorLease,
       operatorLeaseSec: this.operatorLeaseSec,

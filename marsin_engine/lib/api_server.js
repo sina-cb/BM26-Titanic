@@ -3072,8 +3072,19 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   let controlLockLeaseExpiresAtMs = null;
 
   function clearViewOverrideInternal() {
-    if (viewOverrideMode === 'deck' && savedTargetViewFader !== null) {
-      mixer.targetViewFader = savedTargetViewFader;
+    if (viewOverrideMode === 'deck') {
+      if (controlLockSource === 'plan') {
+        // A PLAN pin always showed the DECK (lit). Handing back to the operator
+        // (takeover / resume / pause) must KEEP the deck lit — never restore a
+        // stale saved mixer value that would black the rig out (bug 2026-07-02
+        // round 2). The operator explicitly flips to mixer output afterward if
+        // they want it. So force the deck view, ignoring savedTargetViewFader.
+        mixer.targetViewFader = 0.0;
+      } else if (savedTargetViewFader !== null) {
+        // A PortWatch device pin restores whatever the operator had before the
+        // device took over (unchanged device semantics).
+        mixer.targetViewFader = savedTargetViewFader;
+      }
     }
     viewOverrideMode = null;
     savedTargetViewFader = null;
@@ -3555,6 +3566,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         controlLockSource = 'plan';
         syncControlLockToGlobals();
         broadcastViewOverride();
+      }
+      // A plan pin ALWAYS shows the deck: if a stale persisted view left the
+      // live fader on the mixer while the pin is a plan soft-lock, snap it to
+      // the deck so the locked output is the lit deck, never a black mixer
+      // (bug 2026-07-02 round 2). Never touch a PortWatch-owned pin's fader.
+      if (controlLockSource === 'plan' && mixer.targetViewFader !== 0.0) {
+        mixer.targetViewFader = 0.0;
       }
       return;
     }
@@ -6053,17 +6071,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         //     "mixer master goes black on takeover" outcome is deterministic
         //     regardless of the /timeline/takeover vs /mixer/view call order:
         //     the live fader always ends on the operator's target (mixer → 1.0).
-        if (viewOverrideMode === 'deck' && controlLockSource === 'portwatch') {
+        // While the deck is pinned by ANYTHING (a PortWatch hard lock OR a plan
+        // soft lock), the live output is FROZEN on the deck — the plan owns it,
+        // and the operator must take over to change it. We still let them
+        // pre-set their next view (savedTargetViewFader) but never move the live
+        // fader (bug 2026-07-02 round 2: an earlier fix moved the live fader
+        // under a soft plan lock, which — now that takeover no longer switches
+        // views — flipped the output to the empty mixer and blacked the rig out
+        // on takeover). No lock → the toggle moves the live fader normally.
+        if (viewOverrideMode === 'deck') {
           if (data.view === 'deck') savedTargetViewFader = 0.0;
           else if (data.view === 'mixer') savedTargetViewFader = 1.0;
         } else {
           if (data.view === 'deck') mixer.targetViewFader = 0.0;
           else if (data.view === 'mixer') mixer.targetViewFader = 1.0;
-          // Under a soft plan pin keep the restore-target aligned with the live
-          // fader so a release can never clobber the operator back to deck.
-          if (viewOverrideMode === 'deck' && controlLockSource === 'plan') {
-            savedTargetViewFader = mixer.targetViewFader;
-          }
         }
         // ── Auto-finalize an in-flight deck swap on view → mixer ────
         // Per the operator's spec: navigating to the mixer tab while a

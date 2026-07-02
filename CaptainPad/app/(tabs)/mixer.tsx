@@ -1123,9 +1123,8 @@ export default function MixerScreen() {
   // and only takeover affordance (see handleMixerTakeover below), so both
   // surfaces share the same takeover UX.
   const { state: timelineState, takeover: timelineTakeover } = useTimeline();
-  const forcingDeckView = timelineState?.forcingDeckView === true;
   // Guard so the on-focus output switch runs ONCE per mixer-tab entry (and so
-  // our own takeover's setMixerView('mixer') can't re-trigger it). Reset on blur.
+  // our own takeover can't re-trigger it). Reset on blur.
   const viewGateHandledRef = useRef(false);
   const [blends, setBlends] = useState<string[]>([]);
   const [transitionsList, setTransitionsList] = useState<string[]>([]);
@@ -1234,41 +1233,47 @@ export default function MixerScreen() {
   const maxChannelsRef = useRef<number>(3);
 
   // TEMPORARY TAKE OVER (mixer variant) — handed to the PlanLockBanner. Engage
-  // the operator lease AND switch the engine output to the mixer so the master
-  // isn't left black (docs/38 §16). Order matters for the engine's view-fader
-  // routing: takeover FIRST (releases the plan's soft deck-pin) THEN point the
-  // output at the mixer. Both fail loud on a non-ok result. The deck variant
-  // needs no override (its output already is the deck) so it uses the banner's
-  // default plain takeover.
+  // the operator lease and UNLOCK the controls; that is ALL. It must NOT switch
+  // the output to the mixer view (bug 2026-07-02): the plan was driving the
+  // DECK, so the mixer's channels sit at fader 0 — flipping the output to the
+  // empty mixer view blacked the whole rig out on takeover (mission-critical:
+  // the Titanic must stay lit). Keeping the output where the plan left it means
+  // the live look continues while the operator builds their mix; when they
+  // actually want mixer output they flip the DECK/MIXER view toggle themselves
+  // (that path is view-fader deterministic per the engine /mixer/view fix).
   const handleMixerTakeover = useCallback(async () => {
     const ok = await timelineTakeover();
     if (!ok) {
       Alert.alert('Take over failed', 'The engine rejected the takeover. The plan may still be running.');
-      return;
-    }
-    const r = await setMixerView('mixer');
-    if (!r.ok) {
-      Alert.alert('View switch not applied', `Took over, but the engine rejected switching output to the mixer. ${r.error || ''}`.trim());
     }
   }, [timelineTakeover]);
 
-  // On mixer-tab focus, switch the engine output to the mixer — UNLESS a plan
-  // is forcing the deck, in which case we leave the plan driving the deck and
-  // show the mixer read-only (scrim + banner). No modal, no timer. The blur
-  // resets the once-per-entry guard.
-  const forcingDeckViewRef = useRef(forcingDeckView);
-  useEffect(() => { forcingDeckViewRef.current = forcingDeckView; }, [forcingDeckView]);
-
+  // On mixer-tab focus, switch the engine output to the mixer — but ONLY when
+  // NO plan is driving the rig. Bug 2026-07-02: this used to fire off a ref
+  // that was still `undefined` (falsey) before the first timelineState arrived,
+  // so entering the mixer while a plan drove the DECK yanked the output to the
+  // (empty, fader-0) mixer view and blacked the whole rig out — even on
+  // takeover. Now we WAIT for the state, and while a plan is active
+  // (planActive) we leave the output on the deck (the live look stays up); the
+  // operator flips the DECK/MIXER toggle if they actually want mixer output.
+  const isMixerFocusedRef = useRef(false);
   useFocusEffect(
     useCallback(() => {
-      if (viewGateHandledRef.current) return;
-      viewGateHandledRef.current = true;
-      // A plan forcing the deck → leave the output on the deck; the operator
-      // takes over via the banner. Otherwise point the output at the mixer.
-      if (!forcingDeckViewRef.current) setMixerView('mixer');
-      return () => { viewGateHandledRef.current = false; };
+      isMixerFocusedRef.current = true;
+      viewGateHandledRef.current = false; // re-evaluate the switch each entry
+      return () => { isMixerFocusedRef.current = false; };
     }, [])
   );
+  useEffect(() => {
+    if (!isMixerFocusedRef.current || viewGateHandledRef.current) return;
+    if (!timelineState) return; // wait for the first state before deciding
+    viewGateHandledRef.current = true;
+    // Switch to mixer output ONLY when the rig is truly free — no plan driving
+    // AND no operator takeover in progress. Under a lock OR a takeover, leave
+    // the output on the (lit) deck so we never black the rig out; the operator
+    // flips the DECK/MIXER toggle for mixer output.
+    if (timelineState.planActive !== true && !leaseHeld) setMixerView('mixer');
+  }, [timelineState, leaseHeld]);
 
   // Control plane handler (consumed by useEngineConnection below): mixer
   // state, baseChannelId, maxChannels, in-flight add reconciliation. ALSO:

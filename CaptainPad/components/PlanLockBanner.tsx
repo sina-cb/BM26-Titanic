@@ -47,7 +47,11 @@ export const PlanLockBanner: React.FC<{
   onTemporaryTakeOver?: () => void | Promise<void>;
 }> = ({ onTemporaryTakeOver }) => {
   const { planLocked } = useEngineLock();
-  const { takeover } = useTimeline();
+  const { takeover, state } = useTimeline();
+  // The live event driving the deck (engine `activeCue`), named in the banner
+  // so the operator sees WHAT is running while it's locked (operator request
+  // 2026-07-02). Null → the autopilot baseline is driving (no specific cue).
+  const activeCue = state?.activeCue ?? null;
   // Second banner state (operator request 2026-07-02): the TAKEN-OVER lease.
   // The mixer header used to carry an inline "TOOK OVER · RESUMES M:SS ·
   // RESUME NOW" chip + the PlanIndicatorPill; both crowded the row off a
@@ -176,6 +180,22 @@ export const PlanLockBanner: React.FC<{
               ? `Taken over — plan resumes in ${formatMSS(leaseRemainingSec)}`
               : 'Plan is running — pattern & mixer changes are locked'}
           </Text>
+          {/* Name the LIVE event (engine activeCue) — shown in BOTH the locked
+              and taken-over states so the operator always knows what the plan
+              is running / will resume to. */}
+          {activeCue ? (
+            <Text
+              style={{
+                fontFamily: 'SpaceGrotesk_700Bold',
+                fontSize: 12,
+                color: '#1a1a1a',
+                marginTop: 3,
+              }}
+              numberOfLines={1}
+            >
+              {`▶ ${activeCue.label}${activeCue.kind === 'program' ? ' (show)' : ''}`}
+            </Text>
+          ) : null}
           <Text
             style={{
               fontFamily: 'Inter_400Regular',

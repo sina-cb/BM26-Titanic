@@ -646,9 +646,22 @@ export default function TimelineScreen() {
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
             <IconSymbol name="sun.max" size={28} color={C.primary} />
             <View style={{ minWidth: 0 }}>
-              <Text style={styles.headerTitle} numberOfLines={1}>
-                {state?.activePlan ? `TIMELINE — ${state.activePlan}` : 'TIMELINE'}
+              {/* ACTIVE PLAN made unmistakable (operator request 2026-07-02):
+                  a small caps label + a green ● RUNNING chip carrying the plan
+                  NAME, so the plan the engine is actually running never gets
+                  confused with a DRAFT being edited below (the maker header
+                  reads "MAKER — <name> (DRAFT)"). */}
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.4, color: C.secondary, textTransform: 'uppercase' }}>
+                ACTIVE PLAN
               </Text>
+              {state?.activePlan ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                  <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: state.planActive ? '#00a86b' : C.secondary }} />
+                  <Text style={styles.headerTitle} numberOfLines={1}>{state.activePlan}</Text>
+                </View>
+              ) : (
+                <Text style={styles.headerTitle} numberOfLines={1}>— none —</Text>
+              )}
               {state?.scene ? <Text style={styles.headerScene} numberOfLines={1}>{`scene · ${state.scene}`}</Text> : null}
             </View>
           </View>
@@ -678,8 +691,28 @@ export default function TimelineScreen() {
           </View>
         ) : null}
 
+        {/* NOW PLAYING — the live event driving the deck (engine activeCue),
+            shown clearly whenever one is active (operator request 2026-07-02:
+            "when an event is active, clearly show it in the timeline UI"). A
+            running program keeps its END affordance below; this green banner is
+            the always-visible "what's on the deck right now". */}
+        {state?.activeCue ? (
+          <View style={[styles.nextCueRow, { backgroundColor: 'rgba(0,168,107,0.12)', borderRadius: 8, borderWidth: 1, borderColor: 'rgba(0,168,107,0.4)', paddingHorizontal: 10, paddingVertical: 6 }]}>
+            <IconSymbol name="play.fill" size={14} color="#00a86b" />
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.2, color: '#00a86b', textTransform: 'uppercase' }}>NOW</Text>
+            <Text style={[styles.nextCueText, { fontFamily: 'SpaceGrotesk_700Bold', color: C.text, flex: 1 }]} numberOfLines={1}>
+              {`${state.activeCue.label}${state.activeCue.kind === 'program' ? ' · show' : ''}`}
+            </Text>
+            {state.activeProgram ? (
+              <TouchableOpacity onPress={() => endProgram()} style={styles.endProgramBtn} accessibilityLabel="End active program">
+                <Text style={styles.endProgramText}>END</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
+
         {/* Active-program countdown */}
-        {state?.activeProgram ? (
+        {state?.activeProgram && !state?.activeCue ? (
           <View style={styles.nextCueRow}>
             <IconSymbol name="play.fill" size={14} color="#f5a623" />
             <Text style={styles.nextCueText} numberOfLines={1}>
@@ -924,6 +957,10 @@ export default function TimelineScreen() {
                         ? null
                         : (draft.name === activePlanName ? 'save' : 'activate')
                     }
+                    // Mark the row that is the LIVE event right now (only on
+                    // the ACTIVE plan's own overview, never a draft) so the
+                    // running cue is unmistakable in the list too.
+                    isActive={draft === null && state?.activeCue?.id === cue.id}
                     onFire={fireCue}
                     styles={styles}
                     C={C}
@@ -1033,7 +1070,7 @@ function Banner({ styles, text, tone, C }: { styles: Styles; text: string; tone:
 // Renders a day's resolved cue (atLocal time + kind) and layers the LIVE engine
 // cue (countdown / error / enabled) over it when one matches by id.
 function CueRow({
-  cue, dayIndex, live, fireable, fireBlockedReason, onFire, styles, C,
+  cue, dayIndex, live, fireable, fireBlockedReason, isActive, onFire, styles, C,
 }: {
   cue: OverviewCue;
   /** When set (ALL DAYS view), prefixes the row with its day number. */
@@ -1044,6 +1081,8 @@ function CueRow({
   fireable: boolean;
   /** Why FIRE is blocked (drives the hint), or null when fireable. */
   fireBlockedReason: 'save' | 'activate' | null;
+  /** True when this cue is the live event driving the deck right now. */
+  isActive: boolean;
   onFire: (id: string) => void;
   styles: Styles;
   C: Palette;
@@ -1069,9 +1108,18 @@ function CueRow({
       ? 'activate this plan to fire'
       : null;
   return (
-    <View style={[styles.cueRow, hasError && { borderColor: C.error, backgroundColor: C.errorContainer }]}>
+    <View style={[
+      styles.cueRow,
+      // Live-event highlight: a green wash + rule marks the cue driving the
+      // deck right now (never at the same time as an error row).
+      isActive && !hasError && { borderColor: '#00a86b', backgroundColor: 'rgba(0,168,107,0.10)' },
+      hasError && { borderColor: C.error, backgroundColor: C.errorContainer },
+    ]}>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={[styles.cueLabel, hasError && { color: C.error }]} numberOfLines={1}>{cue.label}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          {isActive ? <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, letterSpacing: 1, color: '#00a86b', backgroundColor: 'rgba(0,168,107,0.18)', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, overflow: 'hidden' }}>● NOW</Text> : null}
+          <Text style={[styles.cueLabel, hasError && { color: C.error }]} numberOfLines={1}>{cue.label}</Text>
+        </View>
         <Text style={styles.cueTrigger} numberOfLines={1}>{subtitle}</Text>
         {hasError ? <Text style={styles.cueError} numberOfLines={2}>{live!.lastError}</Text> : null}
         {fireHint ? <Text style={styles.cueTrigger} numberOfLines={1}>{fireHint}</Text> : null}
