@@ -98,36 +98,6 @@ export const BankCCs = [
   SystemMessages.BANK4,
 ] as const;
 
-/**
- * Structured view of the side-button CCs (CC 8-31): six buttons per bank
- * (left 1-3, right 1-3) laid out contiguously. Derived arithmetically so the
- * layout is obvious: `firstCc = 8 + bank * 6`.
- */
-export const SIDE_BUTTON_CC_MIN = 8;
-export const SIDE_BUTTON_CC_MAX = 31;
-export const SIDE_BUTTONS_PER_BANK = 6;
-
-export type SideButtonSide = 'left' | 'right';
-
-export interface SideButtonDef {
-  cc: number;
-  bank: number; // 0..3
-  side: SideButtonSide;
-  index: number; // 0..2 within the side column
-}
-
-/** All 24 side buttons (4 banks x 6), keyed by CC. */
-export const SideButtons: readonly SideButtonDef[] = Array.from(
-  { length: 4 * SIDE_BUTTONS_PER_BANK },
-  (_unused, offset) => {
-    const bank = Math.floor(offset / SIDE_BUTTONS_PER_BANK);
-    const within = offset % SIDE_BUTTONS_PER_BANK; // 0..5
-    const side: SideButtonSide = within < 3 ? 'left' : 'right';
-    const index = within % 3; // 0..2
-    return { cc: SIDE_BUTTON_CC_MIN + offset, bank, side, index };
-  },
-);
-
 // ── Colour wheel values (LED colours, on the SWITCH_AND_COLOR channel) ──────
 export const ColorValues = {
   INACTIVE: 0, // typically blue / off

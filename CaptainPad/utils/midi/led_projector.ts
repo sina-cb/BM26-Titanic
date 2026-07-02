@@ -25,6 +25,7 @@
 
 import { ControllerProfile, ControlDef, LedSpec, ControlMatch } from './profile';
 import { noteOn } from './midi_message';
+import { clampUnit } from './unit_clamp';
 import { setRingValue, setColor, setAnimation } from './mft/messages';
 import { ColorValues, AnimationValues, MidiChannels } from './mft/constants';
 
@@ -317,10 +318,6 @@ function colorTarget(enc: number, value: number): LedTarget {
 }
 function animationTarget(enc: number, value: number): LedTarget {
   return { key: `${ANIM_STATUS}:${enc}`, value, build: () => setAnimation(enc, value) };
-}
-
-function clampUnit(v: number): number {
-  return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
 /** Yield the APC pad/button LED TARGETS for a control (notes keyed by

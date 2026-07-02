@@ -4,11 +4,7 @@ import {
   setRingValue,
   setColor,
   setAnimation,
-  selectBank,
   decodeRelativeDelta,
-  decodeEncoderTurn,
-  decodeEncoderPush,
-  decodeSideButton,
   decodeBankChange,
 } from './messages';
 
@@ -27,17 +23,10 @@ describe('mft builders', () => {
     expect(setAnimation(9, 47)).toEqual([0xb2, 9, 47]);
   });
 
-  it('selectBank → CC on system channel (0xB3) value 127', () => {
-    expect(selectBank(0)).toEqual([0xb3, 0, 127]);
-    expect(selectBank(3)).toEqual([0xb3, 3, 127]);
-  });
-
-  it('throws on out-of-range encoder / bank / value', () => {
+  it('throws on out-of-range encoder / value', () => {
     expect(() => setRingValue(64, 0)).toThrow(RangeError);
     expect(() => setRingValue(-1, 0)).toThrow(RangeError);
     expect(() => setColor(0, 128)).toThrow(RangeError);
-    expect(() => selectBank(4)).toThrow(RangeError);
-    expect(() => selectBank(-1)).toThrow(RangeError);
   });
 });
 
@@ -57,46 +46,6 @@ describe('decodeRelativeDelta', () => {
     expect(decodeRelativeDelta(127)).toBeNull();
     expect(decodeRelativeDelta(60)).toBeNull();
     expect(decodeRelativeDelta(68)).toBeNull();
-  });
-});
-
-describe('decodeEncoderTurn', () => {
-  it('decodes a rotary-channel CC into {encoder, delta}', () => {
-    expect(decodeEncoderTurn(decodeMidi([0xb0, 7, 65]))).toEqual({ encoder: 7, delta: 1 });
-    expect(decodeEncoderTurn(decodeMidi([0xb0, 15, 61]))).toEqual({ encoder: 15, delta: -3 });
-  });
-
-  it('returns null off-channel, for non-CC, or for a non-relative value', () => {
-    expect(decodeEncoderTurn(decodeMidi([0xb1, 7, 65]))).toBeNull(); // colour channel
-    expect(decodeEncoderTurn(decodeMidi([0x90, 7, 65]))).toBeNull(); // note
-    expect(decodeEncoderTurn(decodeMidi([0xb0, 7, 64]))).toBeNull(); // no movement
-  });
-});
-
-describe('decodeEncoderPush', () => {
-  it('decodes a colour-channel CC into {encoder, pressed}', () => {
-    expect(decodeEncoderPush(decodeMidi([0xb1, 3, 127]))).toEqual({ encoder: 3, pressed: true });
-    expect(decodeEncoderPush(decodeMidi([0xb1, 3, 0]))).toEqual({ encoder: 3, pressed: false });
-  });
-
-  it('returns null off the switch+colour channel or for non-CC', () => {
-    expect(decodeEncoderPush(decodeMidi([0xb0, 3, 127]))).toBeNull(); // rotary
-    expect(decodeEncoderPush(decodeMidi([0x90, 3, 127]))).toBeNull(); // note
-  });
-});
-
-describe('decodeSideButton', () => {
-  it('decodes system-channel CC 8-31 into {bank, side, index}', () => {
-    expect(decodeSideButton(decodeMidi([0xb3, 8, 127]))).toEqual({ bank: 0, side: 'left', index: 0 });
-    expect(decodeSideButton(decodeMidi([0xb3, 11, 127]))).toEqual({ bank: 0, side: 'right', index: 0 });
-    expect(decodeSideButton(decodeMidi([0xb3, 31, 127]))).toEqual({ bank: 3, side: 'right', index: 2 });
-  });
-
-  it('returns null off-channel or outside the side-button CC range', () => {
-    expect(decodeSideButton(decodeMidi([0xb3, 0, 127]))).toBeNull(); // bank CC, not a side button
-    expect(decodeSideButton(decodeMidi([0xb3, 7, 127]))).toBeNull(); // below range
-    expect(decodeSideButton(decodeMidi([0xb3, 32, 127]))).toBeNull(); // above range
-    expect(decodeSideButton(decodeMidi([0xb0, 8, 127]))).toBeNull(); // wrong channel
   });
 });
 

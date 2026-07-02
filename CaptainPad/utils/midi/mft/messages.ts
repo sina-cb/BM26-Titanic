@@ -16,10 +16,6 @@ import {
   MidiChannels,
   SystemMessages,
   BankCCs,
-  SideButtons,
-  SIDE_BUTTON_CC_MIN,
-  SIDE_BUTTON_CC_MAX,
-  SideButtonSide,
 } from './constants';
 
 const CC_STATUS = 0xb0;
@@ -33,14 +29,6 @@ function assertEncoder(encoder: number): void {
   if (!Number.isInteger(encoder) || encoder < 0 || encoder >= Encoders.DEVICE_KNOB_NUM) {
     throw new RangeError(
       `Invalid encoder index ${encoder}. Valid range is 0-${Encoders.DEVICE_KNOB_NUM - 1}.`,
-    );
-  }
-}
-
-function assertBank(bank: number): void {
-  if (!Number.isInteger(bank) || bank < 0 || bank >= Encoders.DEVICE_BANK_NUM) {
-    throw new RangeError(
-      `Invalid bank index ${bank}. Valid range is 0-${Encoders.DEVICE_BANK_NUM - 1}.`,
     );
   }
 }
@@ -74,29 +62,7 @@ export function setAnimation(encoder: number, animValue: number): number[] {
   return controlChange(MidiChannels.ANIMATIONS_AND_BRIGHTNESS, encoder, animValue);
 }
 
-/** Select a virtual bank (0-3) — CC on the system channel with value 127. */
-export function selectBank(bank: number): number[] {
-  assertBank(bank);
-  return controlChange(MidiChannels.SYSTEM, BankCCs[bank], SystemMessages.BANK_ON);
-}
-
 // ── Decoders ───────────────────────────────────────────────────────────────
-
-export interface EncoderTurn {
-  encoder: number;
-  delta: number; // signed step in -3..-1 / +1..+3
-}
-
-export interface EncoderPush {
-  encoder: number;
-  pressed: boolean;
-}
-
-export interface SideButtonEvent {
-  bank: number; // 0..3
-  side: SideButtonSide;
-  index: number; // 0..2
-}
 
 /**
  * Map a relative-encoder CC value to a signed step:
@@ -120,40 +86,6 @@ export function decodeRelativeDelta(value: number): number | null {
     default:
       return null;
   }
-}
-
-/**
- * Decode a rotary-channel CC as an encoder turn. The CC number is the encoder
- * index; the value is a relative-delta code. Returns null for the wrong
- * channel, a non-CC event, or a value that isn't a relative code.
- */
-export function decodeEncoderTurn(ev: DecodedMidi): EncoderTurn | null {
-  if (ev.type !== 'cc' || ev.channel !== MidiChannels.ROTARY_ENCODER) return null;
-  const delta = decodeRelativeDelta(ev.value);
-  if (delta === null) return null;
-  return { encoder: ev.cc, delta };
-}
-
-/**
- * Decode a colour/switch-channel CC as an encoder push. The CC number is the
- * encoder index; value > 0 is pressed, 0 is released. Returns null off-channel
- * or for non-CC events.
- */
-export function decodeEncoderPush(ev: DecodedMidi): EncoderPush | null {
-  if (ev.type !== 'cc' || ev.channel !== MidiChannels.SWITCH_AND_COLOR) return null;
-  return { encoder: ev.cc, pressed: ev.value > 0 };
-}
-
-/**
- * Decode a system-channel CC (8-31) as a side-button event. Returns null
- * off-channel, for non-CC events, or for CCs outside the side-button range.
- */
-export function decodeSideButton(ev: DecodedMidi): SideButtonEvent | null {
-  if (ev.type !== 'cc' || ev.channel !== MidiChannels.SYSTEM) return null;
-  if (ev.cc < SIDE_BUTTON_CC_MIN || ev.cc > SIDE_BUTTON_CC_MAX) return null;
-  const def = SideButtons.find((b) => b.cc === ev.cc);
-  if (!def) return null;
-  return { bank: def.bank, side: def.side, index: def.index };
 }
 
 /**

@@ -27,6 +27,7 @@ import { resolveEndpoints, EndpointResolutionError } from './endpoints';
 import { ControlCoalescer, CoalescerTimers } from './coalescer';
 import { createDispatcher, MidiDispatchApi, MidiDispatcher } from './dispatch';
 import { projectLeds, LedState, MidiProjectionState } from './led_projector';
+import { clampUnit } from './unit_clamp';
 import {
   LearnController, LearnResult, MidiControlRef, bindingMatches, controlRefFromEvent,
   scaleMidiToRange, pickup, freshPickup, PickupState,
@@ -49,11 +50,6 @@ function focusedIdentityColor(focused: FocusedChannel | null): number | null {
   }
 }
 
-/** Clamp to the unit interval — every focused/global param lives in [0, 1]. */
-function clamp01(v: number): number {
-  return v < 0 ? 0 : v > 1 ? 1 : v;
-}
-
 /** Fold two relative-delta payloads within a coalescer window by SUMMING their
  *  deltas — every detent tick counts (accumulate, never last-write-wins). Both
  *  payloads target the same control id, so index/key match by construction. */
@@ -71,6 +67,13 @@ export function combineDelta(existing: ResolvedAction, incoming: ResolvedAction)
     `combineDelta: mismatched kinds for one control id ('${existing.kind}' vs '${incoming.kind}')`,
   );
 }
+
+/** The MFT connect-time sysex config frames. `buildConnectConfig()` takes zero
+ *  inputs and is fully deterministic (all 64 encoders forced into relative
+ *  mode), so build it ONCE at module load instead of on every connect() —
+ *  a genuine plug fires connect() multiple times and this is multi-KB. The
+ *  BYTES + ordering are unchanged; only WHEN they're computed moved. */
+const MFT_CONNECT_CONFIG_FRAMES: readonly number[][] = buildConnectConfig();
 
 export type ControllerStatusKind = 'disconnected' | 'connected' | 'error';
 
@@ -187,6 +190,15 @@ export interface MidiManagerOptions {
   getSchemaKeys?: () => ReadonlySet<string>;
   coalesceMs?: number;
   coalescerTimers?: CoalescerTimers;
+  /** Debounce window (ms) for hotplug `endpointsChanged` bursts. Web MIDI fires
+   *  `statechange` once per PORT (input AND output → ≥2 events per physical
+   *  plug), all fanned to every transport; without this each event would run a
+   *  full reconnect pass. Default 50 ms collapses one physical plug to one pass. */
+  reconnectDebounceMs?: number;
+  /** Injectable timers for the reconnect debounce (deterministic tests). Defaults
+   *  to real setTimeout/clearTimeout. Separate from `coalescerTimers` so a test
+   *  can drive the two independently. */
+  reconnectTimers?: CoalescerTimers;
   /** Pads-per-bank for patternBank order binding (default 8 = one APC row). */
   patternBankPageSize?: number;
   /** Initial active context (CaptainPad tab). Default 'deck'. */
@@ -207,6 +219,18 @@ export interface MidiManagerOptions {
 export const WINDOW_SIZE = 6;
 
 const DEFAULT_COALESCE_MS = 33; // ~30 Hz
+
+/** Default hotplug-reconnect debounce window. One physical plug emits ≥2
+ *  `statechange` events (input + output port); 50 ms is long enough to collapse
+ *  that burst yet short enough that a replug feels instant. */
+const DEFAULT_RECONNECT_DEBOUNCE_MS = 50;
+
+/** Real-timer implementation for the reconnect debounce (used when the caller
+ *  injects none). */
+const REAL_RECONNECT_TIMERS: CoalescerTimers = {
+  setTimeout: (cb, ms) => setTimeout(cb, ms),
+  clearTimeout: (h) => clearTimeout(h),
+};
 
 /** Re-seed threshold for the optimistic relative-delta anchor (#3). A snapshot
  *  that moves more than this BETWEEN coalescer windows is treated as an external
@@ -311,6 +335,25 @@ class ControllerRuntime {
    *  reports. Bank switching is hardware-local; we only track it for status +
    *  ring feedback (the device latches ring state per bank). */
   private activeBank = 0;
+  /** Was THIS runtime's device present + successfully configured on the last
+   *  connect pass? Drives the connect-time sysex config push (#11): the config
+   *  is pushed ONLY on a genuine disconnected→connected transition for this
+   *  device, never when some OTHER device hotplugs (which fans an
+   *  `endpointsChanged` to every transport). A real power-cycle flips this back
+   *  to false (via the absent / error paths), so a replug re-pushes. */
+  private deviceConfigured = false;
+  /** Reentrancy guard: connect() runs are serialized so overlapping hotplug
+   *  passes can't interleave. When a pass is in flight and another is requested,
+   *  we set `reconnectQueued` and run exactly one more pass on completion (the
+   *  endpoint set may have changed during the run). */
+  private connecting = false;
+  private reconnectQueued = false;
+  /** Pending debounce timer handle for `endpointsChanged` (null = idle). The ≥2
+   *  statechange events one physical plug emits collapse into a single reconnect
+   *  pass fired at the end of this window. */
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly reconnectTimers: CoalescerTimers;
+  private readonly reconnectDebounceMs: number;
   private readonly learn: LearnController;
   status: ControllerStatus;
 
@@ -327,6 +370,8 @@ class ControllerRuntime {
     this.learn = learn;
     this.notify = notify;
     this.context = opts.defaultContext ?? 'deck';
+    this.reconnectTimers = opts.reconnectTimers ?? REAL_RECONNECT_TIMERS;
+    this.reconnectDebounceMs = opts.reconnectDebounceMs ?? DEFAULT_RECONNECT_DEBOUNCE_MS;
     this.transport = opts.transportFactory();
     this.coalescer = new ControlCoalescer<ResolvedAction>(
       opts.coalesceMs ?? DEFAULT_COALESCE_MS,
@@ -341,14 +386,40 @@ class ControllerRuntime {
     this.notify();
   }
 
+  /** Serializing wrapper around `runConnect` (#11). A single physical plug fires
+   *  ≥2 `statechange` events and `endpointsChanged` collapses them, but a genuine
+   *  reconnect and an initial `start()` can still overlap; a reentrant run would
+   *  interleave teardown/rebind. If a run is already in flight, mark one more pass
+   *  queued (the endpoint set may have moved during the run) and return — the
+   *  in-flight run drains the queue on completion. */
   async connect(): Promise<void> {
+    if (this.connecting) {
+      this.reconnectQueued = true;
+      return;
+    }
+    this.connecting = true;
+    try {
+      await this.runConnect();
+      while (this.reconnectQueued) {
+        this.reconnectQueued = false;
+        await this.runConnect();
+      }
+    } finally {
+      this.connecting = false;
+    }
+  }
+
+  private async runConnect(): Promise<void> {
     try {
       const endpoints = await this.transport.listEndpoints();
-      // Device absent (no endpoint carries the name) → grey, not an error.
+      // Device absent (no endpoint carries the name) → grey, not an error. A
+      // real power-cycle passes through here, so clear `deviceConfigured` so the
+      // eventual replug re-pushes the sysex config (survives an unplug).
       const present = endpoints.some(
         (e) => e.name.includes(this.profile.device.nameContains),
       );
       if (!present) {
+        this.deviceConfigured = false;
         this.teardownBindings();
         this.ledState = {};
         this.setStatus({ kind: 'disconnected', error: undefined, sourceName: undefined, destinationName: undefined });
@@ -362,15 +433,22 @@ class ControllerRuntime {
       await this.transport.openDestination(resolved.destinationId);
 
       // Connect-time sysex config push (MFT): force the encoders into the
-      // relative-mode layout this driver assumes. Requires a transport that can
-      // send sysex; if send() throws (e.g. Web MIDI opened without `sysex:true`)
-      // we go RED with the reason rather than run against unknown encoder modes
-      // (docs/34 §5.3 fail-loud rule). Idempotent — safe to re-send on replug.
-      if (this.profile.device.configureOnConnect) {
+      // relative-mode layout this driver assumes. Pushed ONLY on a genuine
+      // disconnected→connected transition for THIS device (`!deviceConfigured`):
+      // when some OTHER controller hotplugs, Web MIDI fans an `endpointsChanged`
+      // to every transport, and an already-connected MFT must NOT be re-blasted
+      // with the multi-KB config burst mid-set (#11). A power-cycle clears the
+      // flag (absent/error paths) so a replug re-pushes. The frames are the
+      // module-level `MFT_CONNECT_CONFIG_FRAMES` — same bytes + ordering as
+      // before, just built once. Requires a transport that can send sysex; if
+      // send() throws (Web MIDI without `sysex:true`) we go RED with the reason
+      // rather than run against unknown encoder modes (docs/34 §5.3 fail-loud).
+      if (this.profile.device.configureOnConnect && !this.deviceConfigured) {
         try {
-          for (const frame of buildConnectConfig()) this.transport.send(frame);
+          for (const frame of MFT_CONNECT_CONFIG_FRAMES) this.transport.send(frame);
         } catch (cfgErr) {
           const reason = cfgErr instanceof Error ? cfgErr.message : String(cfgErr);
+          this.deviceConfigured = false;
           this.teardownBindings();
           this.setStatus({
             kind: 'error',
@@ -380,6 +458,10 @@ class ControllerRuntime {
           return;
         }
       }
+      // Mark configured AFTER a clean open + (possible) config push, so any throw
+      // above leaves the flag false and the next pass re-pushes.
+      const wasConfigured = this.deviceConfigured;
+      this.deviceConfigured = true;
 
       // Param-key validation: aggregate, non-fatal (other controls keep working).
       // Skipped while the schema is empty (not loaded yet); revalidate() re-runs
@@ -389,7 +471,7 @@ class ControllerRuntime {
 
       this.teardownBindings();
       this.unsubs.push(this.transport.addListener('midiMessage', (e) => this.onMessage(e.data)));
-      this.unsubs.push(this.transport.addListener('endpointsChanged', () => { void this.onEndpointsChanged(); }));
+      this.unsubs.push(this.transport.addListener('endpointsChanged', () => this.onEndpointsChanged()));
 
       this.setStatus({
         kind: 'connected',
@@ -398,13 +480,17 @@ class ControllerRuntime {
         destinationName: resolved.destinationName,
         paramErrors: paramErrors.length ? paramErrors : undefined,
       });
-      // Full LED repaint on (re)connect.
-      this.ledState = {};
+      // Force a FULL LED repaint only on a genuine (re)connect transition. When
+      // the device was already configured and merely stayed connected across a
+      // foreign hotplug, keep `ledState` so the diff sends nothing unchanged (#11
+      // — don't blast a full repaint on every other device's plug).
+      if (!wasConfigured) this.ledState = {};
       this.projectAndSend();
     } catch (err) {
       const message = err instanceof EndpointResolutionError
         ? err.message
         : (err instanceof Error ? err.message : String(err));
+      this.deviceConfigured = false;
       this.teardownBindings();
       this.setStatus({ kind: 'error', error: message });
       this.bindHotplugOnly();
@@ -412,13 +498,21 @@ class ControllerRuntime {
   }
 
   private bindHotplugOnly(): void {
-    this.unsubs.push(this.transport.addListener('endpointsChanged', () => { void this.onEndpointsChanged(); }));
+    this.unsubs.push(this.transport.addListener('endpointsChanged', () => this.onEndpointsChanged()));
   }
 
-  private async onEndpointsChanged(): Promise<void> {
-    // Simplest correct behaviour: re-run connect(), which re-resolves the
-    // endpoints (grey on unplug, reconnect + repaint on replug).
-    await this.connect();
+  /** Hotplug `endpointsChanged` handler (#11). Debounces the ≥2 statechange
+   *  events one physical plug emits into a single reconnect pass: each event
+   *  restarts a short timer, and only when it fires do we re-run connect() (which
+   *  re-resolves endpoints — grey on unplug, reconnect + repaint on replug).
+   *  connect() itself serializes, so even a debounce firing while a pass is still
+   *  in flight can't interleave. */
+  private onEndpointsChanged(): void {
+    if (this.reconnectTimer !== null) this.reconnectTimers.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = this.reconnectTimers.setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect();
+    }, this.reconnectDebounceMs);
   }
 
   /** Re-run param-key validation against the now-loaded CPC schema and update
@@ -575,12 +669,13 @@ class ControllerRuntime {
       this.forgetOptimistic(turnControlId);
     }
     if (typeof exp.defaultValue !== 'number') {
-      // TODO(mft): thread the entry's saved defaults into focused.exports so
-      // encoder-push reset has a target. Until then this is a documented no-op.
+      // This entry genuinely shipped no saved default for this param (the hook
+      // threads `defaultValue` from the entry when present) — a documented no-op,
+      // not faked to some invented value.
       this.setStatus({ lastEvent: `reset ${exp.name} (no saved default — deferred)` });
       return;
     }
-    const value = clamp01(exp.defaultValue);
+    const value = clampUnit(exp.defaultValue);
     // Reset unlocks the pickup slot for any binding on this param (a deliberate
     // jump), mirroring a note-press write.
     this.setStatus({ lastEvent: `reset ${exp.name} = ${value.toFixed(2)}` });
@@ -630,7 +725,7 @@ class ControllerRuntime {
       // operator's set value; unmodulated params omit it (base === v0).
       const snapAnchor = exp.base ?? exp.v0;
       const anchor = this.optimisticAnchor(controlId, snapAnchor);
-      const value = clamp01(anchor + payload.delta);
+      const value = clampUnit(anchor + payload.delta);
       this.optimisticValues.set(controlId, value); // seed the next window's anchor
       this.setStatus({ lastEvent: `knob ${exp.name} = ${value.toFixed(2)}` });
       await this.dispatcher({
@@ -659,7 +754,7 @@ class ControllerRuntime {
         return;
       }
       const anchor = this.optimisticAnchor(controlId, cur);
-      const value = clamp01(anchor + payload.delta);
+      const value = clampUnit(anchor + payload.delta);
       this.optimisticValues.set(controlId, value);
       this.setStatus({ lastEvent: `${payload.key} = ${value.toFixed(2)}` });
       await this.dispatcher({ kind: 'paramCenter', key: payload.key, value });

@@ -53,6 +53,10 @@ class FakeTransport implements MidiTransport {
   // ── test helpers ──
   emit(data: number[]) { for (const cb of this.msgCbs) cb({ sourceId: this.openedSource ?? '', data, timestampMs: 0 }); }
   setEndpoints(eps: MidiEndpoint[]) { this.endpoints = eps; for (const cb of this.epCbs) cb(); }
+  /** Fire N `endpointsChanged` events WITHOUT changing the endpoint set — models
+   *  Web MIDI emitting one statechange per PORT (input + output) for a single
+   *  physical plug, all fanned to this transport's listeners. */
+  fireEndpointsChanged(times = 1) { for (let i = 0; i < times; i++) for (const cb of this.epCbs) cb(); }
 }
 
 function makeApi(): MidiDispatchApi {
@@ -75,6 +79,10 @@ function setup(snapshot: MidiEngineSnapshot, endpoints = fullEndpoints) {
     transportFactory: () => transport,
     api,
     getSnapshot: () => snapshot,
+    // 0 ms hotplug debounce (real timers): a statechange settles on the next
+    // microtask/tick so `await new Promise((r) => setTimeout(r, 0))` drains it,
+    // matching how these APC tests already wait for a reconnect to settle.
+    reconnectDebounceMs: 0,
   });
   return { transport, api, manager };
 }
@@ -615,13 +623,17 @@ describe('MidiManager — MIDI Fighter Twister', () => {
     const transport = new FakeTransport(mftEndpoints);
     const api = makeApi();
     const ft = makeFakeTimers();
+    // Separate controllable timer set for the hotplug-reconnect debounce so a
+    // test can flush the debounce window on demand (rt.flushDue()).
+    const rt = makeFakeTimers();
     const manager = new MidiManager({
       profiles: [mftProfile], transportFactory: () => transport, api,
       getSnapshot: getSnap, defaultContext: 'deck',
       coalescerTimers: ft.timers,
+      reconnectTimers: rt.timers,
       onFocusChange: extra.onFocusChange,
     });
-    return { transport, api, manager, ft };
+    return { transport, api, manager, ft, rt };
   }
 
   it('pushes the sysex config on connect (many F0..F7 frames)', async () => {
@@ -647,6 +659,70 @@ describe('MidiManager — MIDI Fighter Twister', () => {
     const s = manager.getStatuses()[0];
     expect(s.kind).toBe('error');
     expect(s.error).toMatch(/sysex config push failed/);
+  });
+
+  // ── #11 hotplug hygiene ──────────────────────────────────────────────────
+  // The connect config is a multi-KB sysex burst. It must go out on a genuine
+  // disconnected→connected transition for THIS device only — never when some
+  // OTHER controller hotplugs (Web MIDI fans an endpointsChanged to every
+  // transport) — and a power-cycle (unplug→replug) MUST re-push it so the config
+  // survives the replug.
+  const countSysex = (t: FakeTransport) => t.sent.filter((m) => m[0] === 0xf0 && m[m.length - 1] === 0xf7).length;
+  // Drain the microtask queue enough times for a full async connect() pass
+  // (listEndpoints → openSource → openDestination → config send) to settle.
+  const settle = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+
+  it('#11: does NOT re-push the sysex config when a FOREIGN device hotplugs', async () => {
+    const { manager, transport, rt } = setupMft(() => deckFocus(0.5));
+    await manager.start();
+    const afterConnect = countSysex(transport);
+    expect(afterConnect).toBeGreaterThan(0); // configured once on connect
+
+    // A different controller plugs in: Web MIDI fires ≥2 statechange events
+    // (input + output ports), fanned to the MFT's transport too. The MFT stayed
+    // connected the whole time, so it must NOT be reconfigured.
+    transport.fireEndpointsChanged(2);
+    rt.flushDue(); // drain the reconnect debounce → one reconnect pass
+    await settle(); // let the async pass settle
+
+    expect(countSysex(transport)).toBe(afterConnect); // no extra burst
+    expect(manager.getStatuses()[0].kind).toBe('connected');
+  });
+
+  it('#11: RE-pushes the sysex config on a genuine power-cycle (unplug→replug)', async () => {
+    const { manager, transport, rt } = setupMft(() => deckFocus(0.5));
+    await manager.start();
+    const afterConnect = countSysex(transport);
+
+    // Unplug: the endpoint set loses the MFT → disconnected, config flag cleared.
+    transport.setEndpoints([]);
+    rt.flushDue();
+    await settle();
+    expect(manager.getStatuses()[0].kind).toBe('disconnected');
+
+    // Replug: the MFT reappears → a genuine transition, config MUST re-push.
+    transport.setEndpoints(mftEndpoints);
+    rt.flushDue();
+    await settle();
+    expect(manager.getStatuses()[0].kind).toBe('connected');
+    expect(countSysex(transport)).toBeGreaterThan(afterConnect); // re-pushed
+  });
+
+  it('#11: debounces ≥2 statechange events for one plug into ONE reconnect pass', async () => {
+    const { manager, transport, rt } = setupMft(() => deckFocus(0.5));
+    await manager.start();
+    // Spy on the actual reconnect work: count how many times listEndpoints runs
+    // after start(). One physical plug = 2 statechange events = ONE reconnect.
+    let listCalls = 0;
+    const origList = transport.listEndpoints.bind(transport);
+    transport.listEndpoints = async () => { listCalls++; return origList(); };
+
+    transport.fireEndpointsChanged(2); // input + output port events for one plug
+    // Both events restart the SAME debounce timer → only one armed timer fires.
+    rt.flushDue();
+    await settle();
+
+    expect(listCalls).toBe(1); // collapsed to a single reconnect pass
   });
 
   it('applies a relative knob delta to the focused deck param (current value + delta)', async () => {

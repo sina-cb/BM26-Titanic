@@ -7,9 +7,6 @@ import {
   EncoderControl,
   SystemMessages,
   BankCCs,
-  SideButtons,
-  SIDE_BUTTON_CC_MIN,
-  SIDE_BUTTON_CC_MAX,
   ColorValues,
   AnimationValues,
   EncoderSettings,
@@ -50,21 +47,11 @@ describe('mft constants', () => {
     expect(SystemMessages.BANK_OFF).toBe(0);
   });
 
-  it('lays out 24 side buttons (6 per bank, 3 left + 3 right) over CC 8-31', () => {
-    expect(SideButtons).toHaveLength(24);
-    expect(SIDE_BUTTON_CC_MIN).toBe(8);
-    expect(SIDE_BUTTON_CC_MAX).toBe(31);
-    // First bank, left column 1.
-    expect(SideButtons[0]).toEqual({ cc: 8, bank: 0, side: 'left', index: 0 });
-    // First bank, right column 1 (4th button of bank 0).
-    expect(SideButtons[3]).toEqual({ cc: 11, bank: 0, side: 'right', index: 0 });
-    // Last button: bank 3, right column 3.
-    expect(SideButtons[23]).toEqual({ cc: 31, bank: 3, side: 'right', index: 2 });
-    // CCs are contiguous 8..31.
-    expect(SideButtons.map((b) => b.cc)).toEqual(
-      Array.from({ length: 24 }, (_u, i) => 8 + i),
-    );
-    // Named constants agree with the derived table.
+  it('names the side-button CCs (pymft parity — CC 8-31, 6 per bank)', () => {
+    // The side buttons route through profile matching (not a decoder), but the
+    // raw pymft-parity CC constants remain for documentation + diffability.
+    expect(SystemMessages.BANK1_LEFT1).toBe(8);
+    expect(SystemMessages.BANK1_RIGHT1).toBe(11);
     expect(SystemMessages.BANK2_LEFT1).toBe(14);
     expect(SystemMessages.BANK4_RIGHT3).toBe(31);
   });
