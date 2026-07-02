@@ -333,7 +333,62 @@ Bench (needs hardware): config push lands (or documented .mfs fallback),
 Chrome sysex permission flow, step-size feel, ring latency during a
 modulated param. Then a dated report + docs/34 as-built subsection.
 
-## 6. Acceptance gates (run after each phase, all must pass)
+## 6. Phase 6 — VSN1 punch surface: momentary action kinds now, profile at bench
+
+Sina LOCKED the Intech Grid VSN1-L as the effects/PUNCH surface (ordered
+2026-07-02; unit not yet on hand). Design: docs/34 § "Driver #3 — Intech Grid
+VSN1-L". Everything below except 6.4 is buildable + testable WITHOUT the
+hardware.
+
+### 6.1 Momentary / while-held action kinds (the real work)
+- `profile.ts`: new kinds `globalEffectMomentary {slot}` and
+  `blackoutMomentary` (validate slot ≥ 1 like globalEffectSlot).
+- `resolver.ts`: v1 swallows Note Off for ALL note controls ("no momentary
+  actions"). Extend: for MOMENTARY-kind controls only, Note On resolves the
+  press action and Note Off resolves the release action (e.g. ResolvedAction
+  `{kind:'globalEffectMomentary', slot, on:boolean}` /
+  `{kind:'blackoutMomentary', on:boolean}`); latched kinds keep ignoring
+  Note Off (regression-test that). Note On with velocity 0 is already
+  normalised to Note Off by decodeMidi — momentary release must fire on it.
+- `dispatch.ts`: `globalEffectMomentary` → `dispatchGlobalEffectSlotAction(
+  slot, on ? 'activate' : 'deactivate')` — FIRST verify the engine's GEM slot
+  route accepts explicit on/off verbs beside 'toggle' (Grep api_server.js /
+  global_effects_controller.js for the accepted actions; the GEM burst/manual
+  paths suggest they exist). If only 'toggle' exists, add explicit verbs
+  engine-side (small, backward-compatible, node-tested).
+  `blackoutMomentary` → `setGlobalEffectBlackout(on)`.
+- Runtime: momentary release must BYPASS the coalescer (a dropped release =
+  a stuck effect — dispatch releases immediately, like discrete presses).
+  Also: on controller disconnect/unplug while a momentary is held, the
+  runtime must fire the release (all-off safety) — test it.
+- LED: momentary controls light while held (projector on/off from the GEM
+  slot active state already covers it — verify with a test).
+- Tests: press/release round-trip, velocity-0 release, latched kinds still
+  ignore Note Off, disconnect-releases-held, release-bypasses-coalescer.
+
+### 6.2 Profile + vendored-config skeleton
+- `CaptainPad/midi_profiles/grid_vsn1/` directory: `README.md` (Phase-0
+  capture checklist from docs/34; where the exported Grid Editor config
+  lives) + `grid_vsn1.yaml` profile SKELETON with the v1 sketch layout
+  (8 keys → globalEffectMomentary 1-7 + blackoutMomentary; jog → relative
+  playlistScroll on the focused layer; 4 buttons → focusStep prev/next + 2
+  reserved) using PLACEHOLDER note/CC numbers clearly marked
+  `# PHASE-0: confirm on bench` — and DO NOT load it in
+  useMidiControl.loadProfiles() yet (loading a guessed profile violates
+  fail-loud; wire it only after the bench capture).
+- Optional stretch (only if 6.1 lands clean): APC Shift-layer punch page —
+  needs a shift-state mechanism in the runtime; skip unless trivial.
+
+### 6.3 Docs
+- After 6.1, update docs/34 Driver #3 "What the mapping layer needs" to
+  as-built (verbs chosen, engine verdict on on/off actions).
+
+### 6.4 Bench (BLOCKED on the physical unit — leave as checklist)
+Phase-0 capture (endpoints, per-control CC/notes, analog key behaviour,
+MIDI-rx LED scripting, screen hello-world) → finalize yaml + vendored config
+→ wire into loadProfiles → HITL punch test.
+
+## 7. Acceptance gates (run after each phase, all must pass)
 
 1. `npx tsc --noEmit` clean; `npx vitest run` green with NEW tests covering
    every 1.x fix; `npx expo lint` 0 errors; `npm run web:build` exports;
@@ -346,7 +401,7 @@ modulated param. Then a dated report + docs/34 as-built subsection.
    logical chunks (fixes / cleanup / docs) on `feat/captainpad-midi-control`
    and push.
 
-## 7. Review evidence trail
+## 8. Review evidence trail
 
 - 8 finder angles (line-by-line, removed-behavior, cross-file, reuse,
   simplification, efficiency, altitude, conventions) → ~37 candidates →
