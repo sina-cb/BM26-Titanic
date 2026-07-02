@@ -2432,12 +2432,16 @@ export default function MixerScreen() {
               RECALL/CAPTURE rebuild the live mix, so they're gated under the
               soft PLAN lock with the rest of the mutating controls. */}
           {!isPortrait ? <SnapshotBar disabled={activationsLocked} /> : null}
-          {/* ── Plan-active takeover warning (request #3) ───────────────────
-              When a plan is live, a manual touch on the mixer is a takeover. A
-              SUBTLE inline warning sits beside the indicator (NOT a modal —
-              never block a live performance). While a lease is held it becomes
-              the "plan resumes in M:SS" countdown + a one-tap RESUME. Landscape
-              only — portrait leans on the compact pill alone to stay uncrowded. */}
+          {/* ── Plan-active lock indicator ──────────────────────────────────
+              When a plan is live the mixer's activation controls are frozen
+              (disabled + dim) — a tap does NOTHING, so the old "A TOUCH TAKES
+              OVER" copy was a lie under the full freeze the operator requested.
+              This SUBTLE inline chip states the truth: controls are LOCKED. To
+              edit, use the TAKE-OVER prompt (shown when the plan is forcing the
+              deck view and you open the mixer) or DISABLE PLAN in the amber
+              banner. While a lease IS held it becomes the "plan resumes in
+              M:SS" countdown + a one-tap RESUME. Landscape only — portrait
+              leans on the compact pill alone to stay uncrowded. */}
           {!isPortrait && planActive && !leaseHeld ? (
             <View style={{
               flexDirection: 'row', alignItems: 'center',
@@ -2445,7 +2449,7 @@ export default function MixerScreen() {
               borderWidth: 1, borderColor: PLAN_INDICATOR_CYAN,
             }}>
               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: PLAN_INDICATOR_CYAN, textTransform: 'uppercase' }}>
-                PLAN LIVE · A TOUCH TAKES OVER
+                PLAN LIVE · CONTROLS LOCKED
               </Text>
             </View>
           ) : !isPortrait && leaseHeld ? (

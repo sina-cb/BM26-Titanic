@@ -599,10 +599,14 @@ export default function ControlDeckScreen() {
             DECK MAIN · LIVE OUTPUT
           </Text>
           <View style={{ flex: 1 }} />
-          {/* ── Plan-active takeover warning (request #3) ───────────────────
-              When a plan is live, a manual touch here is a takeover. We surface
-              a SUBTLE inline warning beside the indicator (NOT a modal — never
-              block a live performance). While a lease is held it becomes the
+          {/* ── Plan-active lock indicator ──────────────────────────────────
+              When a plan is live the deck's mutating controls are fully frozen
+              (pointerEvents 'none' + dim, below) — a tap does NOTHING, so the
+              old "A TOUCH TAKES OVER" copy was a lie under the full freeze the
+              operator requested. This SUBTLE inline chip just states the truth:
+              controls are LOCKED. To edit, use DISABLE PLAN in the amber banner
+              (pauses the plan) or take over from the MIXER's TAKE-OVER prompt.
+              While a lease IS held (taken over via that prompt) it becomes the
               "plan resumes in M:SS" countdown + a one-tap RESUME affordance. */}
           {planActive && !leaseHeld ? (
             <View style={{
@@ -611,7 +615,7 @@ export default function ControlDeckScreen() {
               borderWidth: 1, borderColor: PLAN_INDICATOR_CYAN,
             }}>
               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: PLAN_INDICATOR_CYAN, textTransform: 'uppercase' }}>
-                PLAN LIVE · A TOUCH TAKES OVER
+                PLAN LIVE · CONTROLS LOCKED
               </Text>
             </View>
           ) : leaseHeld ? (
