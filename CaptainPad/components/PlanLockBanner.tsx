@@ -3,6 +3,7 @@ import { Animated, Easing, View, Text, TouchableOpacity, Alert } from 'react-nat
 import { router } from 'expo-router';
 import { shadow } from '@/styles/globalStyles';
 import { useEngineLock } from '@/hooks/useEngineLock';
+import { useOperatorTakeover } from '@/hooks/useTimeline';
 import { setTimelineMode } from '@/utils/timelineApi';
 
 // ── PlanLockBanner ─────────────────────────────────────────────────────
@@ -32,8 +33,23 @@ import { setTimelineMode } from '@/utils/timelineApi';
 // tab bar, zIndex 1000) so the two never collide visually.
 const PLAN_LOCK_AMBER = '#F5A623';
 
+// "M:SS", clamped at 0:00 (mirrors PlanIndicatorPill.formatMSS).
+function formatMSS(sec: number | null): string {
+  const total = sec === null || !Number.isFinite(sec) ? 0 : Math.max(0, Math.round(sec));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
 export const PlanLockBanner: React.FC = () => {
   const { planLocked } = useEngineLock();
+  // Second banner state (operator request 2026-07-02): the TAKEN-OVER lease.
+  // The mixer header used to carry an inline "TOOK OVER · RESUMES M:SS ·
+  // RESUME NOW" chip + the PlanIndicatorPill; both crowded the row off a
+  // single iPad line. The lease warning now lives HERE — floating on top of
+  // the header (zero row width) in the same amber family. The two states are
+  // mutually exclusive by construction: while a lease is held the engine's
+  // controlLock is NOT 'plan' (planActive false under 'overridden'), so
+  // exactly one variant renders at a time.
+  const { leaseHeld, leaseRemainingSec, resumeNow } = useOperatorTakeover();
   // DISABLE PLAN pauses the timeline (POST /timeline/mode {paused}); the
   // engine releases the plan's deck-pin and the banner clears on the next
   // broadcast. In-flight guard against double taps; a non-ok result surfaces
@@ -61,9 +77,10 @@ export const PlanLockBanner: React.FC = () => {
   // was driving the deck — the exact bug this banner exists to surface.)
   const slide = useRef(new Animated.Value(0)).current;
 
+  const visible = planLocked || leaseHeld;
   useEffect(() => {
     Animated.timing(slide, {
-      toValue: planLocked ? 1 : 0,
+      toValue: visible ? 1 : 0,
       duration: 220,
       easing: Easing.out(Easing.cubic),
       // false: react-native-web has no native animation thread; forcing the
@@ -72,12 +89,12 @@ export const PlanLockBanner: React.FC = () => {
       // reliably because it never depends on the callback to gate render.
       useNativeDriver: false,
     }).start();
-  }, [planLocked, slide]);
+  }, [visible, slide]);
 
-  // Gate visibility on the lock itself. While `planLocked` is false the
+  // Gate visibility on the states themselves. While neither is active the
   // banner is fully unmounted; the slide value rests at 0 so the next
   // engage animates in cleanly.
-  if (!planLocked) return null;
+  if (!visible) return null;
 
   return (
     <Animated.View
@@ -130,7 +147,9 @@ export const PlanLockBanner: React.FC = () => {
               textTransform: 'uppercase',
             }}
           >
-            Plan is running — pattern & mixer changes are locked
+            {leaseHeld
+              ? `Taken over — plan resumes in ${formatMSS(leaseRemainingSec)}`
+              : 'Plan is running — pattern & mixer changes are locked'}
           </Text>
           <Text
             style={{
@@ -140,29 +159,51 @@ export const PlanLockBanner: React.FC = () => {
               marginTop: 2,
             }}
           >
-            Take over to make changes. Navigation and viewing stay available.
+            {leaseHeld
+              ? 'You hold manual control; the plan auto-resumes when you stop. Hand it back early with RESUME NOW.'
+              : 'Take over to make changes. Navigation and viewing stay available.'}
           </Text>
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-            <TouchableOpacity
-              onPress={handleDisablePlan}
-              disabled={disabling}
-              style={{
-                flex: 1,
-                minHeight: 40,
-                borderRadius: 8,
-                backgroundColor: '#1a1a1a',
-                alignItems: 'center',
-                justifyContent: 'center',
-                opacity: disabling ? 0.6 : 1,
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Disable the running plan (pause the timeline)"
-              accessibilityState={{ disabled: disabling }}
-            >
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: PLAN_LOCK_AMBER }}>
-                {disabling ? 'DISABLING…' : 'DISABLE PLAN'}
-              </Text>
-            </TouchableOpacity>
+            {leaseHeld ? (
+              <TouchableOpacity
+                onPress={() => { void resumeNow(); }}
+                style={{
+                  flex: 1,
+                  minHeight: 40,
+                  borderRadius: 8,
+                  backgroundColor: '#1a1a1a',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Hand control back and resume the plan now"
+              >
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: PLAN_LOCK_AMBER }}>
+                  RESUME NOW
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                onPress={handleDisablePlan}
+                disabled={disabling}
+                style={{
+                  flex: 1,
+                  minHeight: 40,
+                  borderRadius: 8,
+                  backgroundColor: '#1a1a1a',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: disabling ? 0.6 : 1,
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Disable the running plan (pause the timeline)"
+                accessibilityState={{ disabled: disabling }}
+              >
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: PLAN_LOCK_AMBER }}>
+                  {disabling ? 'DISABLING…' : 'DISABLE PLAN'}
+                </Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               onPress={handleGoToPlan}
               style={{

@@ -634,6 +634,26 @@ test('boot drops a persisted operatorLease (never resume stale)', async () => {
   await svc2.start();
   svc2.stop();
   assert.equal(svc2.state.operatorLease, null, 'persisted operator lease dropped on boot');
+  // Regression (bug 2026-07-02): dropping the lease must ALSO exit
+  // 'overridden'. A persisted mode 'overridden' whose lease was nulled used to
+  // survive boot forever (the tick release required a lease), so CaptainPad
+  // read leaseHeld=true permanently and the deck/mixer never re-locked.
+  assert.equal(svc2.state.mode, 'armed', 'persisted overridden mode released on boot');
+  assert.equal(svc2.getState().planActive, true, 'plan drives again after boot heal');
+});
+
+test('tick self-heals an orphaned overridden mode (no lease)', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+  // Force the trap state directly: mode 'overridden' with NO lease (as a
+  // pre-fix persisted state or any future bug could leave behind).
+  svc.state.mode = 'overridden';
+  svc.state.operatorLease = null;
+  await svc._tick();
+  assert.equal(svc.state.mode, 'armed', 'orphaned overridden released by the tick');
+  assert.equal(svc.state.operatorLease, null);
+  assert.equal(svc.getState().planActive, true, 'plan drives again after self-heal');
 });
 
 // ── docs/38 §17 deck transition + overlays + mixer→deck pin ───────────────────

@@ -1009,6 +1009,13 @@ export class TimelineService {
     // boot/scene-switch (docs/38 §16/I6). Never resume a stale operator lease;
     // catchUp re-establishes the correct owner for the current wall-clock.
     this.state.operatorLease = null;
+    // …and dropping the lease MUST also exit 'overridden' (bug 2026-07-02):
+    // a persisted mode 'overridden' with its lease nulled was a permanent trap
+    // — the tick's lease-release used to require a lease, so the mode never
+    // cleared, CaptainPad read leaseHeld=true forever, and the deck/mixer
+    // never re-locked under an armed plan. takeover() always arms mode+lease
+    // together, so an 'overridden' without a lease is by definition orphaned.
+    if (this.state.mode === 'overridden') this.state.mode = 'armed';
 
     let best = null;
     for (const cue of dayPlan.cues) {
@@ -1089,8 +1096,18 @@ export class TimelineService {
       // correct owner/look for the current wall-clock). This is the
       // "continue the plan at the exact time of release" behavior. After a
       // release the tick falls through to normal ticking on the fresh state.
-      if (this.state.mode === 'overridden' && this.state.operatorLease
-          && now >= this.state.operatorLease.expiresAtMs) {
+      //
+      // SELF-HEAL (bug 2026-07-02): also release 'overridden' with NO lease.
+      // That state is otherwise a PERMANENT trap — _catchUp() nulls a stale
+      // persisted lease on boot but used to leave the persisted mode
+      // 'overridden' behind, and this release only matched lease-holding
+      // states. Result: CaptainPad read leaseHeld=true forever ("TOOK OVER ·
+      // RESUMES —" with a 0:00 pill) and the deck/mixer never re-locked even
+      // with the plan armed + AUTO ON. An 'overridden' mode without a lease is
+      // by definition orphaned (takeover() always arms both together), so
+      // release it on the next tick.
+      if (this.state.mode === 'overridden'
+          && (!this.state.operatorLease || now >= this.state.operatorLease.expiresAtMs)) {
         try {
           await this._releaseOperatorLease();
         } catch (e) {
@@ -1605,7 +1622,7 @@ export class TimelineService {
     // construction (the lease is nulled here). Logged BEFORE _catchUp so the
     // release precedes its catchUp fire in the ring.
     this._recordLifecycle('Operator lease released — plan resumed', 'lease-released', { source: 'auto' });
-    console.log(`  🔓 [timeline] operator lease released (expired ${expiry}) — resuming plan at now`);
+    console.log(`  🔓 [timeline] operator lease released (${typeof expiry === 'number' ? `expired ${expiry}` : 'orphaned override — no lease'}) — resuming plan at now`);
     await this._catchUp();
   }
 

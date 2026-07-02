@@ -40,7 +40,6 @@ import { GroupRailBody, MixGroupHeader, tintFromHex } from '@/components/GroupRa
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
 import { useOperatorTakeover, useTimeline } from '@/hooks/useTimeline';
-import { PlanIndicatorPill, PLAN_INDICATOR_CYAN } from '@/components/timeline/PlanIndicatorPill';
 import { ViewTakeoverConfirm } from '@/components/timeline/ViewTakeoverConfirm';
 import { useEngineLock } from '@/hooks/useEngineLock';
 import { PlanLockBanner } from '@/components/PlanLockBanner';
@@ -1106,11 +1105,11 @@ export default function MixerScreen() {
   // ── Operator takeover (requests #3/#5) ─────────────────────────────────
   // A manual touch here while a plan is driving the rig is a takeover:
   // notifyInteraction() fires the takeover ONCE then keeps the lease alive
-  // (throttled) on continued interaction. The PlanIndicatorPill (globals row,
-  // top-right) reflects plan/lease/countdown; the inline header warning
-  // surfaces the live-plan takeover non-intrusively (no modal).
-  const { planActive, leaseHeld, leaseRemainingSec, notifyInteraction, resumeNow } =
-    useOperatorTakeover();
+  // (throttled) on continued interaction. Plan/lease/countdown status is
+  // surfaced by the floating PlanLockBanner overlay (top-right) — the old
+  // inline header chips + PlanIndicatorPill were removed 2026-07-02 so the
+  // header fits one row on an iPad.
+  const { leaseHeld, notifyInteraction } = useOperatorTakeover();
   // ── Soft PLAN lock (CONTRACT: globalsState.controlLock ∈ {null,'portwatch',
   // 'plan'}) ──────────────────────────────────────────────────────────────
   // 'portwatch' stays the FULL hard lockout (EngineLockoutOverlay, tab layout).
@@ -2432,51 +2431,14 @@ export default function MixerScreen() {
               RECALL/CAPTURE rebuild the live mix, so they're gated under the
               soft PLAN lock with the rest of the mutating controls. */}
           {!isPortrait ? <SnapshotBar disabled={activationsLocked} /> : null}
-          {/* ── Plan-active lock indicator ──────────────────────────────────
-              When a plan is live the mixer's activation controls are frozen
-              (disabled + dim) — a tap does NOTHING, so the old "A TOUCH TAKES
-              OVER" copy was a lie under the full freeze the operator requested.
-              This SUBTLE inline chip states the truth: controls are LOCKED. To
-              edit, use the TAKE-OVER prompt (shown when the plan is forcing the
-              deck view and you open the mixer) or DISABLE PLAN in the amber
-              banner. While a lease IS held it becomes the "plan resumes in
-              M:SS" countdown + a one-tap RESUME. Landscape only — portrait
-              leans on the compact pill alone to stay uncrowded. */}
-          {!isPortrait && planActive && !leaseHeld ? (
-            <View style={{
-              flexDirection: 'row', alignItems: 'center',
-              paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
-              borderWidth: 1, borderColor: PLAN_INDICATOR_CYAN,
-            }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: PLAN_INDICATOR_CYAN, textTransform: 'uppercase' }}>
-                PLAN LIVE · CONTROLS LOCKED
-              </Text>
-            </View>
-          ) : !isPortrait && leaseHeld ? (
-            <View style={{
-              flexDirection: 'row', alignItems: 'center', gap: 8,
-              paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
-              borderWidth: 1, borderColor: '#f5a623',
-            }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: '#f5a623', textTransform: 'uppercase' }}>
-                {`TOOK OVER · RESUMES ${leaseRemainingSec === null ? '—' : `${Math.floor(leaseRemainingSec / 60)}:${String(leaseRemainingSec % 60).padStart(2, '0')}`}`}
-              </Text>
-              <TouchableOpacity
-                onPress={() => { void resumeNow(); }}
-                hitSlop={ICON_BTN_HIT_SLOP}
-                accessibilityRole="button"
-                accessibilityLabel="Resume the plan now"
-              >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: '#f5a623', textTransform: 'uppercase' }}>
-                  RESUME NOW
-                </Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-          {/* Compact plan-status glyph — rightmost badge of the header status
-              row (request #5). Matches the OscStatusPill idiom (48px tile,
-              coloured border/dot/label). Tapping routes to the Timeline tab. */}
-          <PlanIndicatorPill compact={isPortrait} />
+          {/* Plan-lock / takeover status moved OUT of this row (operator
+              request 2026-07-02: the header must fit ONE row on an iPad).
+              The inline "PLAN LIVE · CONTROLS LOCKED" chip, the "TOOK OVER ·
+              RESUMES M:SS · RESUME NOW" chip, and the PlanIndicatorPill all
+              used to stack here and crowded the row. Both states now surface
+              as the floating PlanLockBanner overlay (top-right, on TOP of the
+              header — zero row width), which carries the lease countdown +
+              RESUME NOW when taken over. */}
         </View>
         {/* Right control cluster (QA round1 #5). flexWrap + justify-end lets the
             MASTER readout and the two add buttons reflow to a second line rather
