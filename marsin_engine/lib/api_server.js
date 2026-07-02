@@ -3474,7 +3474,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             const incoming = { ...data, id: mappingId };
             try { validateMidiMapping(incoming); }
             catch (ve) { res.writeHead(400); return res.end(JSON.stringify({ error: ve.message })); }
-            entry.midiMappings = (entry.midiMappings || []).filter(m => m.id !== mappingId);
+            // Upsert-by-target: one binding per target parameter is a structural
+            // rule here. Drop ANY existing mapping that shares this id (a normal
+            // update) OR this target parameter (a re-bind of an already-bound
+            // param, possibly under a different id), then push the incoming one.
+            // This is the FRIENDLY enforcement point: re-binding a param cleanly
+            // REPLACES the old binding — no 400, no duplicate. The strict
+            // one-per-target check in PlaylistManager.save() is the BACKSTOP
+            // (defense in depth): it catches any duplicate that slips in by
+            // another path — e.g. a PATCH that mutates target into a collision.
+            entry.midiMappings = (entry.midiMappings || []).filter(
+              m => m.id !== mappingId && m.target?.parameter !== incoming.target.parameter,
+            );
             entry.midiMappings.push(incoming);
             const saved = playlistManager.save(playlist);
             const savedEntry = saved.entries.find(e => e.id === itemId);

@@ -92,3 +92,89 @@ test('load is lenient — drops an invalid mapping, keeps valid ones', () => {
   assert.equal(reloaded.entries[0].midiMappings.length, 1);
   assert.equal(reloaded.entries[0].midiMappings[0].id, 'midi_sliderLocalSpeed');
 });
+
+// ── PUT upsert-by-target ────────────────────────────────────────────────
+// Faithful replay of the api_server PUT handler's persistence sequence for
+// /api/playlists/:name/items/:itemId/midi-mappings/:mappingId:
+//   load → validate(incoming) → drop any mapping sharing the id OR the target
+//   parameter → push incoming → save. Kept in lockstep with api_server.js.
+// This exercises BOTH the friendly upsert (this helper) and the strict
+// save() backstop (PlaylistManager) without booting the whole engine.
+function putMidiMapping(pm, playlistName, itemId, mappingId, body) {
+  const playlist = pm.load(playlistName);
+  if (!playlist) throw new Error('playlist not found');
+  const entry = playlist.entries.find(e => e.id === itemId);
+  if (!entry) throw new Error('item not found');
+  const incoming = { ...body, id: mappingId };
+  validateMidiMapping(incoming); // fail loud on bad shape, exactly like the route
+  entry.midiMappings = (entry.midiMappings || []).filter(
+    m => m.id !== mappingId && m.target?.parameter !== incoming.target.parameter,
+  );
+  entry.midiMappings.push(incoming);
+  const saved = pm.save(playlist);
+  return saved.entries.find(e => e.id === itemId);
+}
+
+test('PUT upsert-by-target: re-binding a param under a NEW id replaces the old binding (one mapping, no throw)', () => {
+  const { playlistsDir, patternsDir } = tmpdirs();
+  const pm = new PlaylistManager(playlistsDir, patternsDir);
+  pm.save({ name: 'up', entries: [{ id: 'e1', pattern: '13_sparkle', midiMappings: [] }] });
+
+  // PUT id=X targeting parameter P (CC 51).
+  putMidiMapping(pm, 'up', 'e1', 'X', {
+    enabled: true,
+    control: { type: 'cc', channel: 0, number: 51 },
+    target: { scope: 'pattern', parameter: 'P' },
+    range: [0, 1],
+  });
+  // PUT id=Y targeting the SAME parameter P (different id + different CC).
+  const entry = putMidiMapping(pm, 'up', 'e1', 'Y', {
+    enabled: true,
+    control: { type: 'cc', channel: 0, number: 52 },
+    target: { scope: 'pattern', parameter: 'P' },
+    range: [0, 1],
+  });
+
+  // Exactly one mapping targets P — the second (id=Y, CC 52) — and no throw.
+  assert.equal(entry.midiMappings.length, 1);
+  assert.equal(entry.midiMappings[0].id, 'Y');
+  assert.equal(entry.midiMappings[0].target.parameter, 'P');
+  assert.equal(entry.midiMappings[0].control.number, 52);
+});
+
+test('PUT upsert-by-target: two DIFFERENT targets coexist', () => {
+  const { playlistsDir, patternsDir } = tmpdirs();
+  const pm = new PlaylistManager(playlistsDir, patternsDir);
+  pm.save({ name: 'two', entries: [{ id: 'e1', pattern: '13_sparkle', midiMappings: [] }] });
+
+  putMidiMapping(pm, 'two', 'e1', 'A', {
+    enabled: true,
+    control: { type: 'cc', channel: 0, number: 51 },
+    target: { scope: 'pattern', parameter: 'P1' },
+    range: [0, 1],
+  });
+  const entry = putMidiMapping(pm, 'two', 'e1', 'B', {
+    enabled: true,
+    control: { type: 'cc', channel: 0, number: 52 },
+    target: { scope: 'pattern', parameter: 'P2' },
+    range: [0, 1],
+  });
+
+  assert.equal(entry.midiMappings.length, 2);
+  const params = entry.midiMappings.map(m => m.target.parameter).sort();
+  assert.deepEqual(params, ['P1', 'P2']);
+});
+
+test('backstop intact: a direct save() with two same-target mappings still throws', () => {
+  const { playlistsDir, patternsDir } = tmpdirs();
+  const pm = new PlaylistManager(playlistsDir, patternsDir);
+  // Bypasses the friendly PUT upsert — the save() one-per-target guard must
+  // still reject two distinct-id mappings on the same param (defense in depth).
+  assert.throws(() => pm.save({
+    name: 'backstop',
+    entries: [{ id: 'e1', pattern: '13_sparkle', midiMappings: [
+      { ...VALID(), id: 'a', target: { scope: 'pattern', parameter: 'P' } },
+      { ...VALID(), id: 'b', control: { type: 'cc', channel: 0, number: 52 }, target: { scope: 'pattern', parameter: 'P' } },
+    ] }],
+  }), /one per target/);
+});
