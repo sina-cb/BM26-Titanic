@@ -40,26 +40,38 @@ encoders drive the focused channel's params in order; accumulating coalescer
 fail-loud; additive ring feedback (value + identity colour); `mft.yaml` loaded
 alongside the APC; sysex requested only when the MFT profile is present.
 
-## Deferred — non-blocking follow-ups (documented, not lost)
-1. **`focusedParamReset` (MFT encoder push)** — writes a focused export's
-   `defaultValue` when present, but `useMidiControl` does not yet thread the
-   playlist entry's `defaults` into `focused.exports`, so push currently
-   no-ops-with-status. Small hook follow-up (TODO in `manager.handleParamReset`).
-2. **MFT delta anchor** — `focusedParamDelta` applies to the export's current
-   `v0`; for an audio-modulated param the ideal anchor is the modulation base.
-   TODO in the runtime; fine for non-modulated params (the common case).
-3. **`tapTempo`** — resolves + dispatches through an optional `MidiDispatchApi.
-   tapTempo()`, but no tap endpoint exists in `utils/api.ts`/engine yet, so it
-   is a documented no-op. Wire an endpoint to activate the MFT tap side button.
-4. **Bank 2 (MFT global CPC params)** — unmapped pending Sina's curated list
-   (open question in docs/34). Runtime + ring projector already support
-   `paramCenterRelative` + `globalParamValues` when authored.
-5. **Ring animations** — pulse-on-modulated + global-speed strobe deferred
-   (ring VALUE + colour ship now).
+## Deferrals — ALL RESOLVED 2026-07-02 (second pass, 2 agents + integration)
+1. **`focusedParamReset` (MFT encoder push)** — ✅ the hook now threads
+   `entry.defaults` into `focused.exports[].defaultValue`; push resets to the
+   saved default (no-op-with-status when the entry carries none).
+2. **MFT delta anchor** — ✅ `focusedParamDelta` now anchors on
+   `exp.base ?? exp.v0`. The hook sources `base` (the operator's stable set
+   value) from the `modulationState` bus, so turning a knob on an audio-
+   modulated param shifts the base and the modulator keeps layering on top.
+3. **`tapTempo`** — ✅ REMOVED end-to-end (not a no-op stub). A manual tap
+   would violate the engine's 2026-06-17 tempo contract
+   (`marsin_engine/lib/bpm_speed_sync.js`: the Audio Companion is the SOLE
+   tempo analyzer, no fallback). The MFT side button (ch3 CC10) is reserved
+   with a comment. **Decision for Sina:** if you want a manual tempo source,
+   that's a deliberate engine change to the sole-analyzer contract — say the
+   word and it's a separate task.
+4. **Bank 2 (MFT global CPC params)** — ✅ knobs 1-3 → `speed` / `size` /
+   `rotate` (the confirmed [0,1]-normalised CPC floats), relative, with ring
+   feedback from `globalParamValues`; knobs 4-16 reserved. Add more keys to
+   `mft.yaml` when you pick them.
+5. **Ring animations** — ✅ a modulated param's knob ring PULSES
+   (`RGB_PULSE_1_BEAT`); the speed knob STROBES + goes inert while BPM→Speed
+   sync owns speed (`RGB_TOGGLE_1_BEAT`, mirrors APC fader 7).
 
-## MFT open questions still needing Sina (from docs/34)
-Bank-2 param list + order · encoder-push = reset vs fine-adjust · step sizes
-(currently ±0.005/0.02/0.06) · tap-tempo side button wanted?
+Second-pass gate: tsc 0 · **201 vitest** · engine 9/9 · lint 0 · web:build.
+
+## MFT open questions still genuinely needing Sina
+- **Bank-2 param list beyond speed/size/rotate** — which other globals, in
+  what order? (colour params are HSV, not single-value relative-friendly.)
+- **encoder-push** = reset-to-default (current) vs fine-adjust-while-held?
+- **step sizes** ±0.005/0.02/0.06 per detent — right feel? (bench call)
+- **manual tap-tempo** — do you want to break the sole-analyzer tempo
+  contract to add one? (default answer: no)
 
 ## Local test — see the session hand-off (Ring 1: APC+MFT → Chrome Web MIDI →
 CaptainPad web → engine → sim). Nothing here is hardware-verified yet.

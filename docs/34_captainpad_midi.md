@@ -674,12 +674,15 @@ continuous control). For an audio-modulated param the delta applies to the
 modulated value — turning a knob while the music pumps must shift the
 anchor, not fight the modulator.
 
-**Bank 2 — global params (CPC):** a curated, profile-declared list —
-default: speed, size, colour variation, transition time, … , master
-brightness on knob 16. Rings show live CPC values; global-speed knob obeys
-the same BPM-sync rule as APC fader 7 (disabled + strobe animation while
-sync owns speed). **Banks 3-4 — reserved** (dark; candidates: palette
-browser on rings, per-section brightness).
+**Bank 2 — global params (CPC):** a curated, profile-declared list. As
+shipped: knobs 1-3 → `speed` / `size` / `rotate` (the confirmed
+[0,1]-normalised CPC floats), relative, with ring feedback from live CPC
+values; the speed knob obeys the same BPM-sync rule as APC fader 7 (inert +
+`RGB_TOGGLE_1_BEAT` strobe while sync owns speed). Knobs 4-16 reserved —
+add keys to `mft.yaml` as Sina picks them (colour params are HSV, not
+single-value relative-friendly; master lives on APC fader 9). **Banks 3-4 —
+reserved** (dark; candidates: palette browser on rings, per-section
+brightness).
 
 Bank switching is hardware-local (side buttons); the device reports the
 active bank on ch3 and the runtime tracks it for status display, but the
@@ -687,8 +690,10 @@ projector simply addresses all 64 virtual encoders — the device latches ring
 state per bank, so every bank is always current when you land on it.
 
 **Side buttons:** left column = bank up / bank down (hardware action, set in
-the config push) + left-3 = **tap-tempo** (dispatches the existing tap
-endpoint). Right column = **focus prev / focus next / focus deck** — a
+the config push); left-3 (ch3 CC10) is **reserved and unmapped** — a manual
+tap-tempo is intentionally NOT wired because `bpm_speed_sync.js` makes the
+Audio Companion the sole tempo analyzer (2026-06-17 contract, no manual
+override). Right column = **focus prev / focus next / focus deck** — a
 secondary focus path so the MFT is self-sufficient when the APC is absent;
 the APC track buttons remain the primary focus handler in the mixer.
 
@@ -738,14 +743,15 @@ per-control endpoints.
 
 ### MFT open questions (for Sina)
 
-1. **Bank 2 curated list** — which globals, in which order? (Sketch: speed,
-   size, colourVariation, transition time, audio gain, …, master on 16.)
-2. **Encoder push = reset-to-entry-default** — right call, or prefer
+1. **Bank 2 beyond speed/size/rotate** — which other globals, in which order?
+   (Those three ship now; HSV colour params don't fit a single relative knob.)
+2. **Encoder push = reset-to-entry-default** (shipped) — right call, or prefer
    fine-adjust-while-held (the MFT's native `SWACTION_ENCFINEADJUST`)? Both
    can't share the push.
 3. **Step sizes** — ±0.005/±0.02/±0.06 per tick feel right on the bench?
-4. **Side-button tap-tempo** — wanted, or leave all three left buttons as
-   bank navigation?
+4. **Manual tap-tempo** — currently NOT wired (would break the sole-analyzer
+   tempo contract). Want a manual tempo source? That's a deliberate engine
+   change; default answer is no.
 
 ## Open questions (for Sina)
 
