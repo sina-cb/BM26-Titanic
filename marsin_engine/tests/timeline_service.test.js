@@ -14,6 +14,7 @@ function makeDeps() {
     loadPlaylist: [],
     setAutopilot: [],
     setParams: [],
+    setMaster: [],
     requestScene: [],
     patchScheduledTask: [],
     fireScheduledTask: [],
@@ -44,6 +45,10 @@ function makeDeps() {
     loadPlaylist: (a) => { assertTarget(a.target); calls.loadPlaylist.push(a); },
     setAutopilot: (a) => { assertTarget(a.target); calls.setAutopilot.push(a); },
     setParams: (a) => { calls.setParams.push(a); },
+    // Mirror the engine's setMaster dep (routes a `master` global to the deck
+    // grand master, not the CPC). Records the value so a test can prove a
+    // look/globals master lands here and NOT in setParams.
+    setMaster: (v) => { calls.setMaster.push(v); },
     requestScene: (a) => { calls.requestScene.push(a); },
     patchScheduledTask: (id, patch) => { calls.patchScheduledTask.push({ id, patch }); },
     fireScheduledTask: (id) => { calls.fireScheduledTask.push(id); },
@@ -1342,4 +1347,159 @@ test('audit C1 backstop: the tick drops an orphaned lease on a non-overridden mo
   await svc._tick();
   assert.equal(svc.state.operatorLease, null, 'orphaned lease dropped by the tick');
   assert.equal(svc.state.mode, 'armed');
+});
+
+// ── Task 1: a `master` global operates the DECK GRAND MASTER (not a dead CPC) ──
+// Before the fix, a look/globals `master` wrote an unregistered CPC key that
+// nothing reads (silent no-op). It must route to the setMaster dep (the same
+// mixer.setMaster path the operator's master fader uses); every OTHER global key
+// still goes to the CPC via setParams.
+
+function makeMasterLookPlan() {
+  const plan = makePlan();
+  // A look that bundles a master global (→ setMaster) with a real CPC param
+  // (size → setParams) so we can prove the split.
+  plan.looks.masterlook = { playlist: 'show_pl', globals: { master: 0.4, size: 0.2 } };
+  plan.cues = [{
+    id: 'c_master', label: 'Master look', kind: 'ambient',
+    trigger: { type: 'manual' }, action: { type: 'look', look: 'masterlook' },
+  }];
+  return plan;
+}
+
+test('Task 1: a look `master` global routes to setMaster; other globals to setParams', async () => {
+  const { svc, calls } = setupWithPlan(makeMasterLookPlan());
+  await svc.start();
+  svc.stop();
+  calls.setMaster.length = 0;
+  calls.setParams.length = 0;
+
+  await svc.fireCue('c_master');
+
+  assert.deepEqual(calls.setMaster, [0.4], 'master global lands on the deck grand-master dep');
+  // The remaining CPC globals go to setParams — and `master` must NOT be among them.
+  const paramWrites = Object.assign({}, ...calls.setParams);
+  assert.equal(paramWrites.size, 0.2, 'non-master globals still write to the CPC');
+  assert.equal('master' in paramWrites, false, 'master must NOT be written to the CPC');
+});
+
+test('Task 1: a master global fails loud when the setMaster dep is missing', async () => {
+  const { svc, deps } = setupWithPlan(makeMasterLookPlan());
+  await svc.start();
+  svc.stop();
+  delete deps.setMaster; // simulate a mis-wired engine
+  await assert.rejects(() => svc.fireCue('c_master'), /setMaster dep is required/);
+});
+
+// ── Task 3: RESUME re-applies the CURRENTLY-ACTIVE (deck-window-owning) cue ────
+// A mood / phase / ambient / manual cue that owns the deck has NO schedulable
+// trigger, so the clock/sun `best` catchUp never restores it. On resume (and on
+// operator-lease auto-release) the deck must reset to that cue's COMPLETE action,
+// overwriting any operator change made during the takeover.
+
+function makeResumeOwnerPlan() {
+  const plan = makePlan();
+  // A manual-trigger ambient DECK playlist cue with a colorAutopilot block: it
+  // owns the deck window but has no clock/sun trigger, so only the new
+  // `_deckWindowCueId` re-dispatch can restore it on resume.
+  plan.cues = [{
+    id: 'c_owner', label: 'Deck owner', kind: 'ambient',
+    trigger: { type: 'manual' },
+    action: {
+      type: 'playlist', name: 'show_pl', target: { channel: 'deck', id: null },
+      autopilot: { active: true, delay_s: 20, shuffle: false },
+      colorAutopilot: { active: true, palettes: ['deep_sea'], delay_s: 2, shuffle: false },
+    },
+  }];
+  return plan;
+}
+
+test('Task 3: resume() re-applies the deck-window cue (playlist + colorAutopilot)', async () => {
+  const { svc, calls } = setupWithPlan(makeResumeOwnerPlan());
+  await svc.start();
+  // Fire the ambient deck owner → it takes the deck window.
+  await svc.fireCue('c_owner');
+  assert.equal(svc._deckWindowCueId, 'c_owner', 'the ambient cue owns the deck window');
+
+  // Operator takes over and changes the deck (simulated: clear the dep log so a
+  // re-apply is observable, and imagine colorAutopilot was toggled off).
+  svc.takeover();
+  calls.loadPlaylist.length = 0;
+  calls.setAutopilot.length = 0;
+  calls.setColorAutopilot.length = 0;
+
+  await svc.resume();
+  svc.stop();
+
+  // The FULL cue action is re-applied: playlist reload, pattern autopilot, and
+  // the colorAutopilot are all re-asserted to the plan's authored values.
+  assert.ok(calls.loadPlaylist.map((c) => c.name).includes('show_pl'),
+    `resume must reload the owner playlist, got ${JSON.stringify(calls.loadPlaylist)}`);
+  assert.equal(calls.setColorAutopilot.length, 1, 'resume re-applies the cue colorAutopilot');
+  assert.deepEqual(calls.setColorAutopilot[0], {
+    active: true, palettes: ['deep_sea'], delay_s: 2, shuffle: false, transitionMs: 0,
+  });
+  assert.ok(calls.setAutopilot.some((c) => c.state && c.state.active === true),
+    'resume re-applies the cue pattern autopilot');
+  // A 'resume' fire is recorded and the deck window ownership is restored.
+  assert.ok(svc.getState().recentFires.some((f) => f.cueId === 'c_owner' && f.reason === 'resume'),
+    'resume re-apply is logged as a fire');
+  assert.equal(svc._deckWindowCueId, 'c_owner', 'deck window ownership restored to the plan cue');
+});
+
+test('Task 3: a look owner (palette) is re-applied on resume', async () => {
+  const plan = makePlan();
+  plan.looks.ownerlook = { playlist: 'show_pl', palette: 'deep_sea' };
+  plan.cues = [{
+    id: 'c_look_owner', label: 'Look owner', kind: 'ambient',
+    trigger: { type: 'manual' }, action: { type: 'look', look: 'ownerlook' },
+  }];
+  const { svc, calls } = setupWithPlan(plan);
+  await svc.start();
+  await svc.fireCue('c_look_owner');
+  assert.equal(svc._deckWindowCueId, 'c_look_owner');
+
+  svc.takeover();
+  calls.loadPlaylist.length = 0;
+  calls.setParams.length = 0;
+
+  await svc.resume();
+  svc.stop();
+
+  assert.ok(calls.loadPlaylist.map((c) => c.name).includes('show_pl'), 'look playlist re-applied');
+  assert.ok(calls.setParams.some((p) => p.colorPalette1), 'look palette (global color) re-applied on resume');
+});
+
+test('Task 3: operator-lease AUTO-release re-applies the deck-window cue', async () => {
+  let nowMs = Date.UTC(2026, 7, 30, 2, 0, 0);
+  const { svc, calls } = setupWithPlan(makeResumeOwnerPlan());
+  svc.nowFn = () => nowMs;
+  await svc.start();
+  await svc.fireCue('c_owner');
+  svc.takeover();
+  calls.loadPlaylist.length = 0;
+  calls.setColorAutopilot.length = 0;
+
+  // Inactivity past the lease → the tick auto-releases and resumes at now.
+  nowMs = svc.state.operatorLease.expiresAtMs + 1000;
+  await svc._tick();
+  svc.stop();
+
+  assert.equal(svc.state.mode, 'armed', 'lease auto-released');
+  assert.ok(calls.loadPlaylist.map((c) => c.name).includes('show_pl'),
+    'auto-release re-applies the owner playlist');
+  assert.equal(calls.setColorAutopilot.length, 1, 'auto-release re-applies the cue colorAutopilot');
+});
+
+test('Task 3: boot catchUp does NOT spuriously re-dispatch (priorDeckWindowCueId null)', async () => {
+  // On a fresh boot the deck-window owner is null, so the new re-apply branch
+  // must not fire a phantom cue — only the baseline is established.
+  const { svc, calls } = setupWithPlan(makeResumeOwnerPlan());
+  await svc.start();
+  svc.stop();
+  // c_owner is manual/ambient and never fired on boot → no resume re-apply.
+  assert.ok(!svc.getState().recentFires.some((f) => f.reason === 'resume'),
+    'boot must not log a resume re-apply');
+  // colorAutopilot was never armed (owner never fired) on a clean boot.
+  assert.equal(calls.setColorAutopilot.length, 0, 'boot does not arm the owner colorAutopilot');
 });

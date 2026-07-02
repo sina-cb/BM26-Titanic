@@ -301,6 +301,21 @@ export default function ControlDeckScreen() {
     }
     if (msg.type === 'deck') {
       setDeckChannel((msg.channel as any) || null);
+      // Pattern-group locality knobs (GROUP toggle / SIZE / DWELL) ride ONLY
+      // inside the deck message's channel.playlist.autopilot — they have no
+      // dedicated WS channel, so without this they stayed at their seed value
+      // and drifted from a cue/engine-driven change (the deck showed stale
+      // group state). Per-field defensive merge (mirrors the deckTransition
+      // reconcile) so an older playlist that omits them can't clobber the
+      // operator's pick; these are pill taps, not drags, so no snap-back risk.
+      const plAp = (msg.channel as { playlist?: { autopilot?: {
+        groupMode?: unknown; groupSize?: unknown; groupDwell?: unknown;
+      } } } | null | undefined)?.playlist?.autopilot;
+      if (plAp && typeof plAp === 'object') {
+        if (typeof plAp.groupMode === 'boolean') setGroupMode(plAp.groupMode);
+        if (typeof plAp.groupSize === 'number') setGroupSize(plAp.groupSize);
+        if (typeof plAp.groupDwell === 'number') setGroupDwell(plAp.groupDwell);
+      }
       // Deck dynamic VIEW OVERRIDES ride the same `deck` message: the
       // overlay stack + the SHARED auto-cycle cadence. Reconcile both off
       // the broadcast (the engine is the source of truth — every add /

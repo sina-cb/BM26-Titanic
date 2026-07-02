@@ -3656,6 +3656,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           if (!paramCenter) throw new Error('paramCenter not available');
           for (const k in obj) paramCenter.set(k, obj[k], 'timeline');
         },
+        // A cue/look `master` global drives the DECK GRAND MASTER through the
+        // EXACT path the operator's PATCH /mixer { master } uses (mixer.setMaster
+        // + save + broadcastMixerState), so a plan's master is indistinguishable
+        // from the operator setting it by hand (Task 1 unify). Before this, the
+        // timeline wrote `master` to the CPC — which has no `master` param — so
+        // the deck brightness never changed (a silent no-op / separate route).
+        // Codex P0: reject a non-finite master loudly (never black the rig).
+        setMaster: (value) => {
+          const mv = validateFader(value);
+          if (!mv.ok) throw new Error(`master global invalid: ${mv.error}`);
+          mixer.setMaster(mv.value);
+          saveAllState();
+          broadcastMixerState();
+        },
         requestScene: (name) => {
           if (typeof engineCore.requestSceneSwitch !== 'function') {
             throw new Error('engine does not support scene switching (no requestSceneSwitch hook)');

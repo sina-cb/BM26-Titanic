@@ -178,6 +178,12 @@ export class TimelineService {
    *   loadPlaylist({ target, name })        — load a playlist onto a target
    *   setAutopilot({ target, state })        — set autopilot on a target ({active, delay_s, shuffle})
    *   setParams(obj)                         — CPC write (numbers + {h,s,v} palette HSV)
+   *   setMaster(value)                       — DECK GRAND MASTER write (the same
+   *                                            mixer.setMaster path the operator's
+   *                                            master fader uses). A cue/look's
+   *                                            `master` global routes here, NOT to
+   *                                            the CPC (which has no `master` param)
+   *                                            — Task 1 unify.
    *   requestScene(name)                     — engine scene switch
    *   patchScheduledTask(id, patch)          — scheduled-tasks patch
    *   fireScheduledTask(id)                  — scheduled-tasks fire-now
@@ -530,6 +536,33 @@ export class TimelineService {
     }
   }
 
+  // Write a CPC globals map, routing the special `master` key to the DECK GRAND
+  // MASTER (the SAME mixer.setMaster path the operator's PATCH /mixer { master }
+  // uses) instead of a dead CPC param, and every other key to the CPC via
+  // deps.setParams. This UNIFIES a cue's `master` global with the operator's own
+  // master control (Task 1): before this, a look/globals `master` wrote an
+  // UNREGISTERED CPC key that nothing reads — a silent no-op, so the deck's
+  // brightness never changed (a "separate route" from the operator's master
+  // fader). FAIL LOUD if a master is authored but the setMaster dep is missing
+  // (codex P0 — never silently drop an authored global). Emits ONE step under
+  // `label` describing the whole globals map.
+  async _writeGlobals(globals, steps, label) {
+    const rest = {};
+    let hasMaster = false;
+    let masterVal;
+    for (const [k, v] of Object.entries(globals)) {
+      if (k === 'master') { hasMaster = true; masterVal = v; } else rest[k] = v;
+    }
+    if (Object.keys(rest).length > 0) await this.deps.setParams(rest);
+    if (hasMaster) {
+      if (typeof this.deps.setMaster !== 'function') {
+        throw new Error('setMaster dep is required to apply a master global');
+      }
+      await this.deps.setMaster(masterVal);
+    }
+    steps.push(`${label} ${JSON.stringify(globals)}`);
+  }
+
   // Execute a 'look' bundle: palette → globals → playlist → autopilot → tasks.
   async _applyLook(look, name, steps) {
     if (look.palette) {
@@ -537,8 +570,7 @@ export class TimelineService {
       steps.push(`look "${name}" palette "${look.palette}"`);
     }
     if (look.globals) {
-      await this.deps.setParams(look.globals);
-      steps.push(`look "${name}" globals ${JSON.stringify(look.globals)}`);
+      await this._writeGlobals(look.globals, steps, `look "${name}" globals`);
     }
     const targets = await this._resolveTargets(look.target);
     if (look.playlist) {
@@ -614,8 +646,7 @@ export class TimelineService {
         break;
       }
       case 'globals': {
-        await this.deps.setParams(action.set);
-        steps.push(`globals ${JSON.stringify(action.set)}`);
+        await this._writeGlobals(action.set, steps, 'globals');
         break;
       }
       case 'tasks': {
@@ -1048,6 +1079,14 @@ export class TimelineService {
 
   async _catchUp() {
     const now = this.nowFn();
+    // RESUME / lease-release FULL RESET (Task 3, docs/38 §16): capture the cue
+    // that OWNS the deck window BEFORE any dispatch below reassigns it. On a
+    // resume() / operator-lease release this is the plan cue whose COMPLETE
+    // action must be re-applied so ANY operator change made during the takeover
+    // is overwritten back to the plan's authored cue (playlist+entry, params,
+    // palette/global color, colorAutopilot, pattern autopilot, transitions,
+    // overlays). On BOOT it is null (fresh runtime) → nothing to re-apply.
+    const priorDeckWindowCueId = this._deckWindowCueId;
     const sunEvents = this._sunEventsFor(now);
     // catchUp also restricts to TODAY's applicable cues (docs/38 §15.2) — a
     // burn-night program must not "catch up" on a non-burn day.
@@ -1128,6 +1167,36 @@ export class TimelineService {
     }
 
     if (!programCaughtUp) await this._establishBaselineIfActive('boot');
+
+    // RESUME / lease-release FULL RESET (Task 3, docs/38 §16). Re-apply the
+    // COMPLETE action of the cue that OWNED the deck window before this catchUp,
+    // so ANY operator change made during a takeover (pattern, params, palette,
+    // colorAutopilot, autopilot, transitions, overlays) is overwritten back to
+    // the plan's authored cue. The clock/sun `best` selection above only
+    // restores program/look cues that have a SCHEDULABLE trigger; a mood /
+    // phase / ambient / manual cue that owned the deck is otherwise LOST on
+    // resume (the deck fell back to the autopilot baseline). Re-dispatch it
+    // explicitly here. Skipped on boot (priorDeckWindowCueId is null), when
+    // `best` / the caught-up program already restored the SAME cue, when the
+    // operator is still paused/overridden, or when it no longer drives the deck.
+    if (priorDeckWindowCueId
+        && priorDeckWindowCueId !== '__default_cue__'
+        && !programCaughtUp
+        && !(best && best.cue && best.cue.id === priorDeckWindowCueId)
+        && this.state.mode !== 'paused' && this.state.mode !== 'overridden') {
+      const owner = this.plan.cues.find((c) => c.id === priorDeckWindowCueId);
+      if (owner && owner.enabled !== false && await this._actionDrivesDeck(owner.action)) {
+        try {
+          const result = await this._dispatchCue(owner.id, 'resume');
+          console.log(`  ⟳ [timeline] resume re-applied deck cue "${owner.id}": ${result.steps.join('; ')}`);
+        } catch (e) {
+          this.cueErrors[owner.id] = `resume re-apply failed: ${e && e.message}`;
+          this.lastError = `resume re-apply "${owner.id}": ${e && e.message}`;
+          console.warn(`  ⚠ [timeline] resume re-apply "${owner.id}" failed: ${e && e.message}`);
+        }
+      }
+    }
+
     saveTimelineState(this.state, this.stateDir);
     this.lastStateJson = JSON.stringify(this.state);
   }
