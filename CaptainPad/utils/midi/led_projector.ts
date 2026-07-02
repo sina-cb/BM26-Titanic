@@ -25,8 +25,8 @@
 
 import { ControllerProfile, ControlDef, LedSpec, ControlMatch } from './profile';
 import { noteOn } from './midi_message';
-import { setRingValue, setColor } from './mft/messages';
-import { ColorValues } from './mft/constants';
+import { setRingValue, setColor, setAnimation } from './mft/messages';
+import { ColorValues, AnimationValues } from './mft/constants';
 
 export interface MidiProjectionState {
   blackout: boolean;
@@ -66,6 +66,13 @@ export interface MidiProjectionState {
   /** Identity colour (an MFT colour-wheel value) of the focused channel, for the
    *  knob rings — deck vs overlay 1/2/3. Optional; omitted → no colour write. */
   getFocusedIdentityColor?(): number | null;
+  /** Is the FOCUSED channel's ordered export at `index` audio-MODULATED? Drives
+   *  a ring PULSE on that encoder (a modulated param's ring visibly breathes).
+   *  Optional; omitted → no pulse (steady ring). */
+  getFocusedExportModulated?(index: number): boolean;
+  /** Is the engine's BPM→Speed sync currently ON? When true, a `speed`
+   *  paramCenterRelative ring STROBES — the "sync owns speed" cue. Optional. */
+  isBpmSpeedSyncOn?(): boolean;
 }
 
 /** LED diff key -> the last message bytes sent for it (as "b0:b1:b2"), so only
@@ -258,6 +265,11 @@ function* ringMessages(
       // No param behind the knob — dark it (inactive colour).
       yield setColor(a.index, ColorValues.INACTIVE);
     }
+    // Ring PULSE when the param is audio-MODULATED (the ring breathes at 1 beat
+    // so the operator sees the modulator is driving it); NONE otherwise. A knob
+    // with no param behind it (v === null) never pulses.
+    const modulated = v !== null && !!state.getFocusedExportModulated?.(a.index);
+    yield setAnimation(a.index, modulated ? AnimationValues.RGB_PULSE_1_BEAT : AnimationValues.NONE);
     return;
   }
   if (a.kind === 'paramCenterRelative') {
@@ -268,6 +280,10 @@ function* ringMessages(
     if (enc === null) return;
     const v = state.getGlobalParamValue(a.key);
     yield setRingValue(enc, v === null ? 0 : Math.round(clampUnit(v) * 127));
+    // STROBE the ring when BPM-sync owns `speed` — the "sync owns speed" cue; a
+    // steady (NONE) ring otherwise. Only the speed knob carries the cue.
+    const strobe = a.key === 'speed' && !!state.isBpmSpeedSyncOn?.();
+    yield setAnimation(enc, strobe ? AnimationValues.RGB_TOGGLE_1_BEAT : AnimationValues.NONE);
   }
 }
 

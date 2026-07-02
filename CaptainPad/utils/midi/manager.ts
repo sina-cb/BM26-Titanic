@@ -115,6 +115,10 @@ export interface MidiEngineSnapshot {
    *  bank-2 `paramCenterRelative` knobs (and their ring feedback). A relative
    *  knob applies its delta to the value here. Absent key → knob is inert. */
   globalParamValues?: Record<string, number>;
+  /** True when the engine's BPM→Speed sync owns the `speed` param (CPC
+   *  `bpmSpeedSync` on). While true, a manual speed knob is INERT and its ring
+   *  strobes — mirroring the APC's fader-7 behaviour. Undefined = off. */
+  bpmSpeedSyncOn?: boolean;
 }
 
 /** The focused channel's live exports + its active entry's MIDI bindings — the
@@ -133,9 +137,14 @@ export interface FocusedChannel {
    *  string (no per-event allocation). */
   key: string;
   /** Live local exports of the active pattern (id ↔ name ↔ current value). The
-   *  MFT bank-1 knobs drive these BY ORDER: knob i → exports[i]. `defaultValue`
-   *  (when the entry carries one) is the target for encoder-push reset. */
-  exports: { id: number; name: string; v0: number; defaultValue?: number }[];
+   *  MFT bank-1 knobs drive these BY ORDER: knob i → exports[i].
+   *  - `defaultValue` (when the entry carries one) is the encoder-push reset target.
+   *  - `base` is the MODULATION ANCHOR: for an audio-modulated param `v0` is the
+   *    moving modulated value, so a knob delta must apply to `base` (the operator's
+   *    set value) instead — the engine keeps layering the modulator on top. When a
+   *    param is not modulated `base` equals `v0` (or is omitted → the runtime uses `v0`).
+   *  - `modulated` = an active modulation drives this param (for the ring pulse). */
+  exports: { id: number; name: string; v0: number; defaultValue?: number; base?: number; modulated?: boolean }[];
   /** Active entry's stored bindings (the engine's per-entry midiMappings). */
   midiMappings: FocusedBinding[];
 }
@@ -492,17 +501,29 @@ class ControllerRuntime {
       if (!focused) return; // nothing focused — the delta is dropped (loud silence)
       const exp = focused.exports[payload.index];
       if (!exp) return; // no param behind this knob
-      // TODO(mft): for an audio-MODULATED param the ideal anchor is the
-      // modulation base, not the moving modulated value. We apply to the
-      // export's current value (v0) for now — turning the knob shifts that base.
-      const value = clamp01(exp.v0 + payload.delta);
+      // Apply the accumulated delta to the modulation BASE, not the moving
+      // modulated value: for an audio-modulated param `v0` is the value AFTER
+      // the modulator, so anchoring on it would fight the modulation. `base` is
+      // the operator's set value the engine keeps layering the modulator on top
+      // of — that is what the knob must shift. Unmodulated params omit `base`
+      // (base === v0), so `exp.base ?? exp.v0` is correct in both cases.
+      const anchor = exp.base ?? exp.v0;
+      const value = clamp01(anchor + payload.delta);
       await this.dispatcher({
         kind: 'localParam', role: focused.role, channelId: focused.id, exportId: exp.id, value,
       });
       return;
     }
     if (payload.kind === 'paramCenterDelta') {
-      const cur = this.opts.getSnapshot().globalParamValues?.[payload.key];
+      const snap = this.opts.getSnapshot();
+      // Speed-sync gate: while the engine's BPM→Speed sync owns `speed`, a
+      // manual speed knob is INERT (swallow, no write) — mirrors the APC's
+      // fader-7 rule. The ring strobes as the "sync owns speed" cue (led_projector).
+      if (payload.key === 'speed' && snap.bpmSpeedSyncOn) {
+        this.setStatus({ lastEvent: 'speed (BPM sync owns it — knob inert)' });
+        return;
+      }
+      const cur = snap.globalParamValues?.[payload.key];
       if (typeof cur !== 'number') return; // unknown CPC key — inert
       const value = clamp01(cur + payload.delta);
       await this.dispatcher({ kind: 'paramCenter', key: payload.key, value });
@@ -697,6 +718,8 @@ class ControllerRuntime {
       getFocusedExportValue: (index) => snap.focused?.exports[index]?.v0 ?? null,
       getGlobalParamValue: (key) => snap.globalParamValues?.[key] ?? null,
       getFocusedIdentityColor: () => focusedIdentityColor(snap.focused),
+      getFocusedExportModulated: (index) => !!snap.focused?.exports[index]?.modulated,
+      isBpmSpeedSyncOn: () => !!snap.bpmSpeedSyncOn,
     };
     const { messages, next } = projectLeds(this.profile, projState, this.ledState, this.context);
     this.ledState = next;

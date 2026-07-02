@@ -87,7 +87,6 @@ describe('MFT relative encoders + side buttons (driver #2)', () => {
       { id: 'knob0_turn', match: { type: 'cc', channel: 0, cc: 0, relative: true }, action: { kind: 'focusedParamKnob', index: 0 } },
       { id: 'knob0_push', match: { type: 'cc', channel: 1, cc: 0 }, action: { kind: 'focusedParamReset', index: 0 } },
       { id: 'g_speed', match: { type: 'cc', channel: 0, cc: 5, relative: true }, action: { kind: 'paramCenterRelative', key: 'speed', steps: [0.01, 0.05, 0.1] } },
-      { id: 'tap', match: { type: 'cc', channel: 3, cc: 10 }, action: { kind: 'tapTempo' } },
       { id: 'f_prev', match: { type: 'cc', channel: 3, cc: 11 }, action: { kind: 'focusStep', dir: 'prev' } },
       { id: 'f_next', match: { type: 'cc', channel: 3, cc: 12 }, action: { kind: 'focusStep', dir: 'next' } },
       { id: 'f_deck', match: { type: 'cc', channel: 3, cc: 13 }, action: { kind: 'focusStep', dir: 'deck' } },
@@ -124,11 +123,12 @@ describe('MFT relative encoders + side buttons (driver #2)', () => {
     expect(resolveEvent(p, decodeMidi([0xb1, 0, 0]))).toBeNull(); // release
   });
 
-  it('side buttons resolve focusStep + tapTempo on press, null on release', () => {
+  it('side buttons resolve focusStep on press, null on release', () => {
     expect(resolveEvent(p, decodeMidi([0xb3, 11, 127]))?.resolved).toEqual({ kind: 'focusStep', dir: 'prev' });
     expect(resolveEvent(p, decodeMidi([0xb3, 12, 127]))?.resolved).toEqual({ kind: 'focusStep', dir: 'next' });
     expect(resolveEvent(p, decodeMidi([0xb3, 13, 127]))?.resolved).toEqual({ kind: 'focusStep', dir: 'deck' });
-    expect(resolveEvent(p, decodeMidi([0xb3, 10, 127]))?.resolved).toEqual({ kind: 'tapTempo' });
+    // CC 10 (side left-3) is intentionally UNMAPPED — tap-tempo is not wired.
+    expect(resolveEvent(p, decodeMidi([0xb3, 10, 127]))).toBeNull();
     expect(resolveEvent(p, decodeMidi([0xb3, 11, 0]))).toBeNull(); // release
   });
 });

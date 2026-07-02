@@ -69,10 +69,7 @@ export type ProfileAction =
   | { kind: 'paramCenterRelative'; key: string; steps: [number, number, number] }
   // Side-button focus move: prev/next within the existing layers, or the deck
   // (layer 0). A secondary focus path so the MFT is self-sufficient.
-  | { kind: 'focusStep'; dir: 'prev' | 'next' | 'deck' }
-  // Tap-tempo side button. Resolves + dispatches (a documented no-op until a
-  // tap endpoint exists — see dispatch.ts).
-  | { kind: 'tapTempo' };
+  | { kind: 'focusStep'; dir: 'prev' | 'next' | 'deck' };
 
 /** LED feedback spec. RGB pads use { active, idle } colour velocities (with
  *  optional `channel` for brightness/behaviour, default 6 = solid 100%).
@@ -138,7 +135,7 @@ const ACTION_KINDS = new Set([
   'blackoutToggle', 'globalEffect', 'sectionBrightness', 'groupFixedColor',
   'mixerLayerFader', 'focusChannel', 'globalEffectSlot',
   'playlistScroll', 'playlistWindowSelect', 'colorPalettePair',
-  'focusedParamKnob', 'focusedParamReset', 'paramCenterRelative', 'focusStep', 'tapTempo',
+  'focusedParamKnob', 'focusedParamReset', 'paramCenterRelative', 'focusStep',
 ]);
 
 /** Default per-tick step magnitudes for a relative encoder: the three ascending
@@ -287,8 +284,6 @@ function validateAction(where: string, a: any): ProfileAction {
         fail(`${where}: focusStep dir must be 'prev', 'next', or 'deck'`);
       }
       return { kind: 'focusStep', dir: a.dir };
-    case 'tapTempo':
-      return { kind: 'tapTempo' };
     default:
       return fail(`${where}: unhandled action.kind`);
   }

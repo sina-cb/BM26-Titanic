@@ -177,4 +177,71 @@ describe('projectLeds — MFT rings (driver #2, best-effort)', () => {
     // No getFocusedExportValue → ringMessages yields nothing; no led specs either.
     expect(messages).toHaveLength(0);
   });
+
+  // ── Task 4a: a modulated focused param PULSES its ring ──
+  it('emits a RGB_PULSE_1_BEAT animation (ch2) for a modulated focused param', () => {
+    const s = state({
+      getFocusedExportValue: (i) => (i === 0 ? 0.5 : null),
+      getFocusedIdentityColor: () => 1,
+      getFocusedExportModulated: (i) => i === 0, // knob 0 modulated
+    });
+    const { messages } = projectLeds(mft, s, {});
+    // Animation CC is on the ANIMATIONS_AND_BRIGHTNESS channel (2) at the encoder
+    // index; RGB_PULSE_1_BEAT = 13.
+    expect(messages).toContainEqual([0xb2, 0, 13]);
+  });
+
+  it('emits NONE (steady) for an UNmodulated focused param', () => {
+    const s = state({
+      getFocusedExportValue: (i) => (i === 0 ? 0.5 : null),
+      getFocusedIdentityColor: () => 1,
+      getFocusedExportModulated: () => false,
+    });
+    const { messages } = projectLeds(mft, s, {});
+    expect(messages).toContainEqual([0xb2, 0, 0]); // AnimationValues.NONE
+  });
+
+  // ── Task 4b: a speed paramCenterRelative ring STROBES when BPM-sync is on ──
+  const mftGlobal = validateProfile({
+    device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+    controls: [
+      { id: 'g_speed', match: { type: 'cc', channel: 0, cc: 16, relative: true }, action: { kind: 'paramCenterRelative', key: 'speed' } },
+    ],
+  });
+
+  it('STROBES the speed ring (RGB_TOGGLE_1_BEAT, ch2) when BPM-sync owns speed', () => {
+    const s = state({
+      getGlobalParamValue: (k) => (k === 'speed' ? 0.5 : null),
+      isBpmSpeedSyncOn: () => true,
+    });
+    const { messages } = projectLeds(mftGlobal, s, {});
+    // Ring value CC 16 on ch0, then a strobe animation on ch2. RGB_TOGGLE_1_BEAT = 4.
+    expect(messages).toContainEqual([0xb0, 16, 64]); // ring at 0.5
+    expect(messages).toContainEqual([0xb2, 16, 4]); // strobe
+  });
+
+  it('speed ring is steady (NONE) when BPM-sync is off', () => {
+    const s = state({
+      getGlobalParamValue: (k) => (k === 'speed' ? 0.5 : null),
+      isBpmSpeedSyncOn: () => false,
+    });
+    const { messages } = projectLeds(mftGlobal, s, {});
+    expect(messages).toContainEqual([0xb2, 16, 0]); // NONE
+  });
+
+  // ── The APC LED path stays byte-identical (no animation/ring bytes leak in) ──
+  it('emits NO MFT ring/animation CCs on the APC pad profile', () => {
+    const s = state({
+      blackout: true,
+      // Even with all MFT getters present, an APC-only profile has no
+      // focusedParamKnob/paramCenterRelative controls → no ring/anim messages.
+      getFocusedExportValue: () => 0.5,
+      getFocusedExportModulated: () => true,
+      getGlobalParamValue: () => 0.5,
+      isBpmSpeedSyncOn: () => true,
+    });
+    const { messages } = projectLeds(profile, s, {});
+    // Only the APC note messages (status 0x90); no CC (0xb0/0xb1/0xb2) anywhere.
+    for (const m of messages) expect(m[0] & 0xf0).toBe(0x90);
+  });
 });

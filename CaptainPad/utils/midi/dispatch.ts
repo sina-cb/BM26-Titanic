@@ -27,11 +27,6 @@ export interface MidiDispatchApi {
   // singleton route (no id); mixer overlays are addressed by channel id.
   setDeckChannelControl(id: number, v0: number, v1?: number, v2?: number): Promise<MidiApiResult>;
   setMixerChannelControl(channelId: string, id: number, v0: number, v1?: number, v2?: number): Promise<MidiApiResult>;
-  // Tap-tempo (MFT side button). OPTIONAL: no engine tap endpoint exists yet
-  // (docs/34 §MFT side buttons), so the hook may leave this undefined; the
-  // dispatcher then treats tapTempo as a documented no-op (see below). When a
-  // tap endpoint lands, wire this to it.
-  tapTempo?(): Promise<MidiApiResult>;
 }
 
 /** A resolved mixer "layer" — unified across tabs. On the Deck tab layer 0 is
@@ -114,15 +109,6 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
         // modulators stay layered on top of this base value untouched.
         if (resolved.role === 'deck') await api.setDeckChannelControl(resolved.exportId, resolved.value);
         else await api.setMixerChannelControl(resolved.channelId, resolved.exportId, resolved.value);
-        return;
-      case 'tapTempo':
-        // No engine tap-tempo endpoint exists yet (docs/34 §MFT side buttons).
-        // Fail-loud rule doesn't apply to an intentionally-unbuilt feature: this
-        // is a DOCUMENTED no-op, not a swallowed error. When `api.tapTempo` is
-        // wired to a real endpoint, dispatch it; until then log once per press.
-        // TODO(mft): wire a tap-tempo endpoint in utils/api.ts + the engine.
-        if (api.tapTempo) { await api.tapTempo(); return; }
-        console.warn('[midi] tapTempo pressed but no tap-tempo endpoint is wired yet (documented no-op)');
         return;
       case 'focusChannel':
       case 'playlistScroll':

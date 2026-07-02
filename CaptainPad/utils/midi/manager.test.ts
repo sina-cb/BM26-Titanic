@@ -746,4 +746,81 @@ describe('MidiManager — MIDI Fighter Twister', () => {
     transport.emit([0xb1, 0, 127]); // push → reset glow to 0.3
     expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, 0.3);
   });
+
+  // ── Task 1: a knob delta anchors on the modulation BASE, not the moving value ──
+  it('applies the delta to the modulation base (not v0) for a modulated param', async () => {
+    // base 0.3 (operator set value), v0 0.8 (post-modulation moving value). A +0.01
+    // tick must land on the BASE → 0.31, NOT on v0 → 0.81.
+    const snap = (): MidiEngineSnapshot => ({
+      ...deckFocus(0.8),
+      focused: { ...deckFocus(0.8).focused!, exports: [{ id: 5, name: 'glow', v0: 0.8, base: 0.3, modulated: true }] },
+    });
+    const { manager, api, transport, ft } = setupMft(snap);
+    await manager.start();
+    transport.emit([0xb0, 0, 65]); // +1 tick → steps[0] = 0.01
+    ft.flushDue();
+    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, expect.closeTo(0.31, 5));
+  });
+
+  it('falls back to v0 when the export carries no base (unmodulated param)', async () => {
+    const { manager, api, transport, ft } = setupMft(() => deckFocus(0.5)); // no base
+    await manager.start();
+    transport.emit([0xb0, 0, 65]); // +0.01 → 0.51 off v0
+    ft.flushDue();
+    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, expect.closeTo(0.51, 5));
+  });
+
+  // ── Task 3: speed-sync gates a paramCenterDelta with key 'speed' ──
+  const mftGlobalProfile = validateProfile({
+    device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0, configureOnConnect: true },
+    controls: [
+      { id: 'g_speed', match: { type: 'cc', channel: 0, cc: 16, relative: true }, action: { kind: 'paramCenterRelative', key: 'speed', steps: [0.01, 0.05, 0.1] } },
+      { id: 'g_size', match: { type: 'cc', channel: 0, cc: 17, relative: true }, action: { kind: 'paramCenterRelative', key: 'size', steps: [0.01, 0.05, 0.1] } },
+    ],
+  });
+
+  function setupGlobalMft(getSnap: () => MidiEngineSnapshot) {
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const ft = makeFakeTimers();
+    const manager = new MidiManager({
+      profiles: [mftGlobalProfile], transportFactory: () => transport, api,
+      getSnapshot: getSnap, defaultContext: 'deck', coalescerTimers: ft.timers,
+    });
+    return { transport, api, manager, ft };
+  }
+
+  it('speed-sync ON → a speed knob delta is INERT (swallow, no write)', async () => {
+    const snap: MidiEngineSnapshot = {
+      ...baseSnap, globalParamValues: { speed: 0.5, size: 0.5 }, bpmSpeedSyncOn: true,
+    };
+    const { manager, api, transport, ft } = setupGlobalMft(() => snap);
+    await manager.start();
+    transport.emit([0xb0, 16, 65]); // +0.01 on speed
+    ft.flushDue();
+    expect(api.updateParamCenter).not.toHaveBeenCalled();
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/BPM sync owns it/);
+  });
+
+  it('speed-sync OFF → a speed knob delta writes normally', async () => {
+    const snap: MidiEngineSnapshot = {
+      ...baseSnap, globalParamValues: { speed: 0.5, size: 0.5 }, bpmSpeedSyncOn: false,
+    };
+    const { manager, api, transport, ft } = setupGlobalMft(() => snap);
+    await manager.start();
+    transport.emit([0xb0, 16, 65]); // +0.01 → 0.51
+    ft.flushDue();
+    expect(api.updateParamCenter).toHaveBeenCalledWith({ speed: expect.closeTo(0.51, 5) });
+  });
+
+  it('speed-sync ON gates only speed — a size knob delta still writes', async () => {
+    const snap: MidiEngineSnapshot = {
+      ...baseSnap, globalParamValues: { speed: 0.5, size: 0.5 }, bpmSpeedSyncOn: true,
+    };
+    const { manager, api, transport, ft } = setupGlobalMft(() => snap);
+    await manager.start();
+    transport.emit([0xb0, 17, 65]); // +0.01 on size
+    ft.flushDue();
+    expect(api.updateParamCenter).toHaveBeenCalledWith({ size: expect.closeTo(0.51, 5) });
+  });
 });

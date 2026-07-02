@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react';
 
 import { useEngineState, MixerChannel } from '@/hooks/useEngineState';
 import { engineEvents } from '@/utils/engineEvents';
+import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import {
   fetchPatterns,
   updateParamCenter,
@@ -103,6 +104,19 @@ let _snapshot: MidiEngineSnapshot = {
   colorPalettes: [],
   focused: null,
 };
+
+// ── Modulation anchor cache (the MODULATION ANCHOR for focused params) ─────
+// modulation live-state rides engineParamsEvents as
+//   { type:'modulationState', parameters: { [name]: { base, modulated, … } } }
+// — EXACTLY the bus components/Modulation.tsx `useModulationState()` reads.
+// We keep a module-level mirror updated by ONE module-level subscription (set
+// up in the boot effect, torn down in its cleanup) and read it at snapshot-
+// rebuild cadence: `base` (the operator's stable set value) moves slowly, so a
+// one-rebuild lag is fine, and we must NOT rebuild the snapshot on every frame
+// (this bus ticks at audio rate). Whole-state replacement per frame, like
+// Modulation.tsx — the engine emits a final empty-parameters frame on delete,
+// so replacement is enough to clear a stale anchor.
+let _modState: Record<string, { base: number; modulated: number }> = {};
 
 // ── Focused channel (for the MIDI-learn param faders 4-6) ──────────────────
 // On the Deck tab the focus is always the single deck channel. On the Mixer tab
@@ -387,6 +401,19 @@ export function useMidiControl(): MidiControlState {
     // can tell whether a saved playlist is one the manager applies.
     _lastEngineChannels = channels;
     _lastEngineDeck = deck;
+    // Current CPC global values (0..1) for the MFT bank-2 relative knobs. Read
+    // off the shared-params doc — every key whose value is a finite number (HSV
+    // colour palettes and other non-scalar values are skipped, never coerced).
+    const sharedSrc = engine.sharedParams?.params;
+    const globalParamValues: Record<string, number> = {};
+    if (sharedSrc) {
+      for (const key of Object.keys(sharedSrc)) {
+        const v = sharedSrc[key]?.value;
+        if (typeof v === 'number' && Number.isFinite(v)) globalParamValues[key] = v;
+      }
+    }
+    // BPM→Speed sync engaged when the CPC `bpmSpeedSync` key is > 0.5.
+    const bpmSpeedSyncOn = Number(globalParamValues['bpmSpeedSync']) > 0.5;
     // Fetch a channel's playlist entries (cached) for the pad window browser.
     const playlistFor = async (pl?: PlaylistAssignment | null) => {
       if (!pl?.name) return undefined;
@@ -428,6 +455,29 @@ export function useMidiControl(): MidiControlState {
         : (channels[focusLayer] as MixerChannel | undefined) ?? null;
       let focused: MidiEngineSnapshot['focused'] = null;
       if (focusChan?.id) {
+        const pl = focusChan.playlist as PlaylistAssignment | null | undefined;
+        const entryId = pl?.activeEntryId ?? null;
+        // The active entry carries both the learned midiMappings AND the saved
+        // per-param `defaults` (the encoder-push reset target). Fetch it ONCE
+        // (cached, 5 s TTL — the same playlist `playlistFor()` fetched above, so
+        // this hits the cache) and read both off it.
+        let midiMappings: FocusedBinding[] = [];
+        let entryDefaults: Record<string, unknown> = {};
+        if (pl?.name && entryId) {
+          const r = await fetchPlaylist(pl.name);
+          if (r.ok && r.data) {
+            const entry = (r.data.entries as { id: string; midiMappings?: unknown[]; defaults?: Record<string, unknown> }[])
+              .find((e) => e.id === entryId);
+            const raw = Array.isArray(entry?.midiMappings) ? entry!.midiMappings! : [];
+            midiMappings = raw.flatMap((m) => {
+              const b = m as FocusedBinding;
+              if (b && b.control && b.target && Array.isArray(b.range)) return [b];
+              console.warn('[midi] dropping malformed stored midiMapping on focused entry:', m);
+              return [];
+            });
+            if (entry?.defaults && typeof entry.defaults === 'object') entryDefaults = entry.defaults;
+          }
+        }
         const exportsList = (focusChan.exports ?? [])
           // kind 1 = sliders (the learnable local params). CPC-matched exports
           // can't take a static write (the CPC clobbers it), so drop them.
@@ -439,28 +489,22 @@ export function useMidiControl(): MidiControlState {
               console.warn(`[midi] focused export '${e.name}' (id ${e.id}) has no numeric v0; excluding it from MIDI-learn (a fabricated base would corrupt pickup)`);
               return [];
             }
-            return [{ id: e.id, name: e.name, v0: e.v0 }];
+            // defaultValue: the entry's saved default for this param — only when
+            // it's a finite number (never fabricate one; the consumer treats an
+            // absent default as "reset deferred").
+            const rawDefault = entryDefaults[e.name];
+            const defaultValue = typeof rawDefault === 'number' && Number.isFinite(rawDefault)
+              ? rawDefault
+              : undefined;
+            // base + modulated: the modulation anchor. For a modulated param v0
+            // is the moving modulated value, so `base` (the operator's stable set
+            // value from modulationState) is the correct target for a knob delta.
+            // Not modulated → base falls back to v0 (the runtime also does this).
+            const mod = _modState[e.name];
+            const modulated = !!mod;
+            const base = mod?.base ?? e.v0;
+            return [{ id: e.id, name: e.name, v0: e.v0, defaultValue, base, modulated }];
           });
-        const pl = focusChan.playlist as PlaylistAssignment | null | undefined;
-        const entryId = pl?.activeEntryId ?? null;
-        let midiMappings: FocusedBinding[] = [];
-        if (pl?.name && entryId) {
-          // Cached fetch (5 s TTL, deduped) — this is the same playlist
-          // `playlistFor()` fetched above for the window browser, so it hits
-          // the cache rather than re-hitting the engine.
-          const r = await fetchPlaylist(pl.name);
-          if (r.ok && r.data) {
-            const entry = (r.data.entries as { id: string; midiMappings?: unknown[] }[])
-              .find((e) => e.id === entryId);
-            const raw = Array.isArray(entry?.midiMappings) ? entry!.midiMappings! : [];
-            midiMappings = raw.flatMap((m) => {
-              const b = m as FocusedBinding;
-              if (b && b.control && b.target && Array.isArray(b.range)) return [b];
-              console.warn('[midi] dropping malformed stored midiMapping on focused entry:', m);
-              return [];
-            });
-          }
-        }
         const role = ctx === 'deck' ? 'deck' : 'mixer';
         // Build the pickup re-lock identity ONCE (role:id:entryId:mappingIds);
         // the runtime compares it as a single string. Including entryId means a
@@ -487,11 +531,16 @@ export function useMidiControl(): MidiControlState {
         deckLayer,
         activeContext: _activeContext,
         focused,
+        globalParamValues,
+        bpmSpeedSyncOn,
       };
       _nudge?.();
     })();
     return () => { cancelled = true; };
-  }, [engine.blackout, engine.deckChannel, engine.mixerChannels, rev]);
+    // engine.sharedParams is a dep so the snapshot's globalParamValues +
+    // bpmSpeedSyncOn re-derive when an operator turns a CPC knob (mirrors how
+    // blackout / mixerChannels are deps).
+  }, [engine.blackout, engine.deckChannel, engine.mixerChannels, engine.sharedParams, rev]);
 
   // ── Re-validate param keys when the engine CPC schema lands (async) ───────
   useEffect(() => {
@@ -503,17 +552,29 @@ export function useMidiControl(): MidiControlState {
   useEffect(() => {
     _listeners.add(setS);
 
+    // Mirror the engine's live modulationState onto _modState (the anchor cache
+    // the snapshot reads for focused-export base/modulated). ONE subscription,
+    // set up here and torn down in every return path — whole-state replacement
+    // per frame, exactly like components/Modulation.tsx `useModulationState()`.
+    const unsubMod = engineParamsEvents.subscribe(
+      (m: { type?: string; parameters?: unknown }) => {
+        if (m?.type === 'modulationState' && m.parameters && typeof m.parameters === 'object') {
+          _modState = m.parameters as Record<string, { base: number; modulated: number }>;
+        }
+      },
+    );
+
     const transportKind = getMidiTransportKind();
     const factory = selectTransportFactory();
     if (!factory) {
       _set({ available: false, transportKind, profileError: null, statuses: [] });
-      return () => { _listeners.delete(setS); };
+      return () => { _listeners.delete(setS); unsubMod(); _modState = {}; };
     }
 
     const { profiles, error } = loadProfiles();
     if (error) {
       _set({ available: true, transportKind, profileError: error, statuses: [] });
-      return () => { _listeners.delete(setS); };
+      return () => { _listeners.delete(setS); unsubMod(); _modState = {}; };
     }
     // Publish the loaded profiles for the save-time conflict re-check.
     _loadedProfiles = profiles;
@@ -610,6 +671,8 @@ export function useMidiControl(): MidiControlState {
       _revalidate = null;
       _loadedProfiles = [];
       unsubSlots();
+      unsubMod();
+      _modState = {};
       manager.dispose();
       _listeners.delete(setS);
     };

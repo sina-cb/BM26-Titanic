@@ -134,15 +134,33 @@ controls:
     match: { type: cc, channel: 1, cc: 15 }
     action: { kind: focusedParamReset, index: 15 }
 
-  # ── Side buttons (bank 1, ch3) — a self-sufficient focus + tap path ────────
+  # ── Bank 2 (ch0) — curated CPC GLOBAL params via relative knobs ────────────
+  # Bank 2's 16 rotary encoders are global encoder indices 16-31 (bank offset =
+  # bank * DEVICE_KNOB_PER_BANK, 16), so they arrive as relative CC 16-31 on the
+  # rotary channel (ch0). Only the first three are confirmed [0,1]-normalised CPC
+  # floats (verified against param_center.js), so ONLY those are mapped; a
+  # relative knob applies its accumulated delta to the CPC value in the snapshot.
+  # Default step triple [0.005, 0.02, 0.06] (normal / fast / very-fast detent).
+  - id: bank2_knob_0_speed
+    match: { type: cc, channel: 0, cc: 16, relative: true }
+    action: { kind: paramCenterRelative, key: speed }
+  - id: bank2_knob_1_size
+    match: { type: cc, channel: 0, cc: 17, relative: true }
+    action: { kind: paramCenterRelative, key: size }
+  - id: bank2_knob_2_rotate
+    match: { type: cc, channel: 0, cc: 18, relative: true }
+    action: { kind: paramCenterRelative, key: rotate }
+  # Bank-2 knobs 3-15 (CC 19-31 on ch0) are RESERVED — left UNMAPPED until more
+  # CPC keys are confirmed [0,1]-normalised.
+
+  # ── Side buttons (bank 1, ch3) — a self-sufficient focus path ──────────────
   # LEFT column (CC 8, 9 = BANKUP / BANKDOWN) is HARDWARE-NATIVE bank nav set in
   # the sysex config push, so it is intentionally NOT mapped here. LEFT-3 (CC 10)
-  # → tap-tempo. RIGHT column (CC 11/12/13) → focus prev / next / deck, so the
-  # MFT can steer focus when the APC is absent (the APC track buttons remain the
-  # primary handler in the mixer). Fires on press (value 127), ignores release.
-  - id: side_left3_tap
-    match: { type: cc, channel: 3, cc: 10 }
-    action: { kind: tapTempo }
+  # is reserved; manual tap-tempo intentionally not wired — Audio Companion is
+  # the sole tempo source per the 2026-06-17 contract. RIGHT column (CC 11/12/13)
+  # → focus prev / next / deck, so the MFT can steer focus when the APC is absent
+  # (the APC track buttons remain the primary handler in the mixer). Fires on
+  # press (value 127), ignores release.
   - id: side_right1_focus_prev
     match: { type: cc, channel: 3, cc: 11 }
     action: { kind: focusStep, dir: prev }

@@ -20,8 +20,7 @@ import { decodeRelativeDelta } from './mft/messages';
 // / `playlistWindowSelect` and the MFT relative kinds (`focusedParamDelta` /
 // `paramCenterDelta` / `focusedParamReset` / `focusStep`) are consumed by the
 // runtime (controller-local state / focused-channel math) and never reach an
-// engine call. `tapTempo` IS dispatched (a documented no-op until a tap
-// endpoint exists).
+// engine call.
 export type ResolvedAction =
   | { kind: 'paramCenter'; key: string; value: number }
   | { kind: 'master'; value: number }
@@ -51,8 +50,6 @@ export type ResolvedAction =
   | { kind: 'focusedParamReset'; index: number }
   // Side-button focus move (prev/next/deck). Runtime-handled (controller state).
   | { kind: 'focusStep'; dir: 'prev' | 'next' | 'deck' }
-  // Tap-tempo side button. Dispatched (documented no-op until a tap endpoint).
-  | { kind: 'tapTempo' }
   // A MIDI-learned local-param write. NOT produced by resolveEvent (which is
   // profile-driven) — the runtime builds it from the focused entry's stored
   // bindings + live exports, then routes it through the same coalescer +
@@ -172,10 +169,6 @@ export function resolveEvent(
         if (ev.type === 'cc' && ev.value === 0) return null; // side-button release
         return { controlId: control.id, continuous: false,
           resolved: { kind: 'focusStep', dir: a.dir } };
-      case 'tapTempo':
-        if (ev.type === 'cc' && ev.value === 0) return null;
-        return { controlId: control.id, continuous: false,
-          resolved: { kind: 'tapTempo' } };
       case 'globalEffectSlot':
         return { controlId: control.id, continuous: false,
           resolved: { kind: 'globalEffectSlot', slot: a.slot } };
