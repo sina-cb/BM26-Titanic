@@ -33,15 +33,23 @@ const DEFAULT_FADE_SECONDS = 3;
 interface Props {
   /** Compact (portrait) layout when true — pills collapse to a cycler. */
   isPortrait: boolean;
+  /** Soft PLAN lock gate (planLocked && !leaseHeld). When true the whole FADE
+   *  cluster (duration pills / cycler, TO BLACK, UP) is disabled — dimmed,
+   *  handlers blocked — until the operator takes over. Default false so the
+   *  existing call sites are unchanged. */
+  disabled?: boolean;
 }
 
-export function MasterFadeGroup({ isPortrait }: Props) {
+export function MasterFadeGroup({ isPortrait, disabled = false }: Props) {
   const palette = usePalette();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   // Selected fade duration (seconds). Local UI state only.
   const [fadeSeconds, setFadeSeconds] = useState<number>(DEFAULT_FADE_SECONDS);
 
   const runFade = async (target: number) => {
+    // Soft PLAN lock — the buttons below are disabled too; this is the
+    // belt-and-suspenders write-path gate.
+    if (disabled) return;
     // 0s = INSTANT: the timed-fade route rejects durationMs<=0 (startMasterFade
     // needs >0), so a 0s "fade" is a direct master set that snaps immediately
     // (and cancels any in-flight fade). Anything >0 runs the timed fade.
@@ -62,7 +70,7 @@ export function MasterFadeGroup({ isPortrait }: Props) {
   const overPhrase = fadeSeconds > 0 ? `over ${fadeSeconds} seconds` : 'instantly';
 
   return (
-    <View style={styles.fadeGroup}>
+    <View style={[styles.fadeGroup, disabled && { opacity: 0.45 }]}>
       <Text style={styles.labelCaps}>FADE</Text>
       {!isPortrait ? (
         <View style={styles.fadePills}>
@@ -72,10 +80,11 @@ export function MasterFadeGroup({ isPortrait }: Props) {
               <TouchableOpacity
                 key={s}
                 onPress={() => setFadeSeconds(s)}
+                disabled={disabled}
                 hitSlop={{ top: 14, bottom: 14, left: 6, right: 6 }}
                 style={[styles.fadePill, selected && styles.fadePillSelected]}
                 accessibilityRole="button"
-                accessibilityState={{ selected }}
+                accessibilityState={{ selected, disabled }}
                 accessibilityLabel={`Fade duration ${s} seconds`}
               >
                 <Text style={[styles.fadePillText, selected && styles.fadePillTextSelected]}>
@@ -96,9 +105,11 @@ export function MasterFadeGroup({ isPortrait }: Props) {
             const next = FADE_SECONDS[(i + 1) % FADE_SECONDS.length];
             setFadeSeconds(next);
           }}
+          disabled={disabled}
           hitSlop={{ top: 14, bottom: 14, left: 6, right: 6 }}
           style={[styles.fadePill, styles.fadePillSelected, styles.fadePillCycler]}
           accessibilityRole="button"
+          accessibilityState={{ disabled }}
           accessibilityLabel={`Fade duration ${fadeSeconds} seconds`}
           accessibilityHint={`Tap to cycle through ${FADE_SECONDS.map((s) => `${s}s`).join(', ')}`}
         >
@@ -112,18 +123,22 @@ export function MasterFadeGroup({ isPortrait }: Props) {
       )}
       <TouchableOpacity
         onPress={() => runFade(0)}
+        disabled={disabled}
         hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
         style={[styles.fadeAction, styles.fadeActionBlack]}
         accessibilityRole="button"
+        accessibilityState={{ disabled }}
         accessibilityLabel={`Fade master to black ${overPhrase}`}
       >
         <Text style={styles.fadeActionText}>TO BLACK</Text>
       </TouchableOpacity>
       <TouchableOpacity
         onPress={() => runFade(1)}
+        disabled={disabled}
         hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
         style={[styles.fadeAction, styles.fadeActionUp]}
         accessibilityRole="button"
+        accessibilityState={{ disabled }}
         accessibilityLabel={`Fade master up ${overPhrase}`}
       >
         <Text style={styles.fadeActionText}>UP</Text>

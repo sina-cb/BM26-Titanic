@@ -511,6 +511,10 @@ export default function ControlDeckScreen() {
   // reconcile + fail-loud shape; a null color clears the accent and the engine
   // requires a string or null.
   const handleDeckColor = useCallback(async (channelId: string, color: string | null) => {
+    // Soft PLAN lock — the swatch that opens the picker is inside the gated
+    // DECK MAIN card, but the modal could already be open when the lock
+    // engages; this write-path gate covers that edge.
+    if (planGate) return;
     const prev = deckChannel?.color ?? null;
     setDeckChannel((c: any) => (c ? { ...c, color } : c));
     const res = await setChannelColor(channelId, color, { deck: true });
@@ -522,7 +526,7 @@ export default function ControlDeckScreen() {
         `The engine rejected this color. ${res.error || ''} The deck kept its previous color.`.trim(),
       );
     }
-  }, [deckChannel?.color]);
+  }, [deckChannel?.color, planGate]);
 
   // ── PANIC / HOME (docs/39 §6b #9) — mission-critical safe LIT reset ─────
   // Mirrors the mixer tab's PANIC tile (same panicMixer api + ConfirmSheet
@@ -564,6 +568,9 @@ export default function ControlDeckScreen() {
     // Deck tab only ever writes to the deck channel — there's a single
     // dedicated route for that now. We ignore the channelId arg (kept
     // for API compatibility with the previous mixer-routed call).
+    // Soft PLAN lock — the whole DECK MAIN card is pointerEvents-blocked
+    // while gated; this is the belt-and-suspenders write-path gate.
+    if (planGate) return;
     notifyInteraction();
     setDeckChannelControl(id, v0, v1, v2);
   };
@@ -576,9 +583,12 @@ export default function ControlDeckScreen() {
           red portwatch lockout stays in the tab layout. */}
       <PlanLockBanner />
       {/* Top bar: title + connection status + master fader. Matches the
-          Marsin Mixer header layout, minus channel-add buttons. */}
-      <DeckTopBar isConnected={isConnected} />
-      <CPCControls />
+          Marsin Mixer header layout, minus channel-add buttons. Under the soft
+          PLAN lock (planGate) the MASTER fader + FADE/TO BLACK/UP group and
+          the whole GLOBALS row (SPEED/SIZE/SYNC/COLORS/QUEUE/TAP/BPM source)
+          are disabled; taking over re-enables everything. */}
+      <DeckTopBar isConnected={isConnected} disabled={planGate} />
+      <CPCControls disabled={planGate} />
       {/* ── Channel Preview Visualization ───────────────────────────── */}
       <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4, minHeight: 44 }}>
@@ -685,8 +695,9 @@ export default function ControlDeckScreen() {
                   — mirroring how the MIXER shows a compact HUE row above each
                   channel's playlist. Self-contained wiring (own state, seed,
                   WS reconcile, POST) so it's the deck's ONE-AND-ONLY hue
-                  control; the bottom effects bar stays hue-less. */}
-              <GlobalHueRow />
+                  control; the bottom effects bar stays hue-less. Gated under
+                  the soft PLAN lock like every other mutating deck control. */}
+              <GlobalHueRow disabled={planGate} />
               <PlaylistPanel
                 channelId={deckChannelId}
                 role="deck"
@@ -742,16 +753,26 @@ export default function ControlDeckScreen() {
                 const triggers = exports.filter((e: any) => e.kind === 3 && !e.cpcOwned);
 
                 return (
-                  <View key={channel.id} style={[
-                    { width: '100%', backgroundColor: C.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.ghostBorder },
-                    // Color accent (docs/39 §8.4): tint the card's left edge so
-                    // the operator can identify the deck at a glance — mirrors the
-                    // mixer strip. The lock border still wins (operator-critical
-                    // state); only paint the accent when the deck isn't locked.
-                    // No layout shift when color is null (defaults to ghostBorder
-                    // at the same 1px width).
-                    !channel.locked && channel.color ? { borderColor: channel.color, borderLeftWidth: 4 } : null,
-                  ]}>
+                  <View
+                    key={channel.id}
+                    // Soft PLAN lock: the WHOLE DECK MAIN card (entry-label
+                    // editor, color swatch, ◎ ALL, the PARAMETERS sliders, the
+                    // toggle/momentary grid) is a mutating surface, so it's
+                    // gated as one section — pointerEvents 'none' stops every
+                    // interactive child, the dim marks it disabled. Taking
+                    // over (leaseHeld) clears planGate and re-enables it.
+                    pointerEvents={planGate ? 'none' : 'auto'}
+                    style={[
+                      { width: '100%', backgroundColor: C.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.ghostBorder },
+                      // Color accent (docs/39 §8.4): tint the card's left edge so
+                      // the operator can identify the deck at a glance — mirrors the
+                      // mixer strip. The lock border still wins (operator-critical
+                      // state); only paint the accent when the deck isn't locked.
+                      // No layout shift when color is null (defaults to ghostBorder
+                      // at the same 1px width).
+                      !channel.locked && channel.color ? { borderColor: channel.color, borderLeftWidth: 4 } : null,
+                      planGate ? { opacity: 0.45 } : null,
+                    ]}>
                     {/* D6 trigger: ◎ ALL pill next to the entry label.
                         Disabled when no deck playlist is loaded — the
                         AllModulationsPanel renders an empty state in
@@ -881,8 +902,16 @@ export default function ControlDeckScreen() {
                 label was hoisted INSIDE the card to recover the ~24px the
                 free-standing label + its 8px margin used to occupy. Same
                 typography recipe as `labelCaps` (SpaceGrotesk_700Bold /
-                10pt / 1.2 tracking / secondary / uppercase). */}
-            <View style={{ marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: 8, backgroundColor: C.surfaceContainerHigh, ...globalStyles.ghostBorder, gap: 6 }}>
+                10pt / 1.2 tracking / secondary / uppercase).
+                Soft PLAN lock: the whole AUTOPILOT card (PLAY/PAUSE, SHUFFLE,
+                GROUP, the cadence pills, SIZE/DWELL) changes what's playing,
+                so it's gated as one section — pointerEvents 'none' stops every
+                interactive child; the dim marks it disabled. Taking over
+                (leaseHeld) clears planGate and re-enables it. */}
+            <View
+              pointerEvents={planGate ? 'none' : 'auto'}
+              style={{ marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: 8, backgroundColor: C.surfaceContainerHigh, ...globalStyles.ghostBorder, gap: 6, opacity: planGate ? 0.45 : 1 }}
+            >
               {/* Header sits on the SAME row as PLAY/PAUSE + SHUFFLE so it
                   costs zero extra vertical height — the label rides the
                   baseline of the tallest control next to it. */}
@@ -988,18 +1017,27 @@ export default function ControlDeckScreen() {
                 mixer). Independent of AUTOPILOT — playlist auto-cycling
                 and per-tap entry swaps BOTH route through this when
                 enabled. */}
-            <DeckTransitionControls
-              enabled={deckTxConfig.enabled}
-              // When shuffle is on, show the actually-rolled style from
-              // the engine's most-recent broadcast instead of the
-              // operator's pre-shuffle pick (which the engine ignores
-              // in shuffle mode anyway). Falls back to the config mode
-              // before any swap has happened.
-              mode={deckTxConfig.shuffle && lastSwapMode ? lastSwapMode : deckTxConfig.mode}
-              durationMs={deckTxConfig.durationMs}
-              shuffle={deckTxConfig.shuffle}
-              onChange={handleDeckTxChange}
-            />
+            {/* Soft PLAN lock: DECK TX (on/off, mode, crossfade time, shuffle
+                style) tunes how the plan's pattern swaps run, so the whole
+                card is gated as one section — pointerEvents 'none' stops every
+                interactive child; the dim marks it disabled. */}
+            <View
+              pointerEvents={planGate ? 'none' : 'auto'}
+              style={planGate ? { opacity: 0.45 } : null}
+            >
+              <DeckTransitionControls
+                enabled={deckTxConfig.enabled}
+                // When shuffle is on, show the actually-rolled style from
+                // the engine's most-recent broadcast instead of the
+                // operator's pre-shuffle pick (which the engine ignores
+                // in shuffle mode anyway). Falls back to the config mode
+                // before any swap has happened.
+                mode={deckTxConfig.shuffle && lastSwapMode ? lastSwapMode : deckTxConfig.mode}
+                durationMs={deckTxConfig.durationMs}
+                shuffle={deckTxConfig.shuffle}
+                onChange={handleDeckTxChange}
+              />
+            </View>
 
             {/* ── DECK DYNAMIC VIEW OVERRIDES (engine #deck-overlays) ──────
                 View-scoped overlay decks layered OVER the main deck. Each
@@ -1015,7 +1053,11 @@ export default function ControlDeckScreen() {
               overlays={deckOverlays}
               overlayAutopilot={overlayAutopilot}
               playlistLibrary={playlistLibrary}
-              disabled={isConnected === false}
+              // Disabled while offline OR under the soft PLAN lock (planGate):
+              // overlay add/auto/shuffle/timer/per-overlay controls all change
+              // what's playing, which the plan owns until the operator takes
+              // over.
+              disabled={isConnected === false || planGate}
             />
           </ScrollView>
         </View>

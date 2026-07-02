@@ -41,6 +41,13 @@ interface CPCControlsProps {
   // Which screen this instance lives on — selects the persistence key for the
   // audio-plot selection so Deck and Mixer remember different picks.
   screen?: 'deck' | 'mixer';
+  // Soft PLAN lock gate (planLocked && !leaseHeld). When true every MUTATING
+  // control in the GLOBALS row (SPEED/SIZE, SYNC, COLORS, QUEUE, TAP, the BPM
+  // source selector) is disabled — dimmed, handlers blocked — until the
+  // operator takes over. Read-only surfaces stay live: the collapse chevrons
+  // (client-side view state), the AUDIO meters + plot picker (display-only
+  // local selection), and the OSC status pill (a read-only details sheet).
+  disabled?: boolean;
 }
 
 /**
@@ -71,7 +78,7 @@ function useAudioPlotSelection(screen: 'deck' | 'mixer') {
   return [selected, update] as const;
 }
 
-export const CPCControls = ({ trailing, screen = 'deck' }: CPCControlsProps = {}) => {
+export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPCControlsProps = {}) => {
   const C = usePalette();
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
@@ -170,6 +177,9 @@ export const CPCControls = ({ trailing, screen = 'deck' }: CPCControlsProps = {}
   // Tap the slot: armed → send live then clear the cue (back to empty);
   // empty → open the chooser.
   const onSlotTap = useCallback(() => {
+    // Soft PLAN lock — the armed QUEUE slot writes the shared colour params
+    // live; blocked while gated (the tile is also disabled below).
+    if (disabled) return;
     if (queued) {
       updateParamCenter({
         colorPalette1: { h: queued.c1, s: 1, v: 1 },
@@ -179,7 +189,7 @@ export const CPCControls = ({ trailing, screen = 'deck' }: CPCControlsProps = {}
     } else {
       setQueuePickerOpen(true);
     }
-  }, [queued]);
+  }, [queued, disabled]);
   // Collapsible Global Params + Audio Reactivity rows (operator review
   // May 2026): the top strip eats 2× the vertical space the pattern
   // selection actually needs, especially in landscape on the iPad
@@ -200,6 +210,9 @@ export const CPCControls = ({ trailing, screen = 'deck' }: CPCControlsProps = {}
   // so we don't need a separate optimistic local-state path — the
   // broadcast round-trip is already sub-second on Wi-Fi.
   const update = (key: string, val: any) => {
+    // Soft PLAN lock — every write path funnels through here (or through the
+    // per-control disabled gating below), so a gated surface can never post.
+    if (disabled) return;
     updateParamCenter({ [key]: val });
   };
 
@@ -305,6 +318,7 @@ export const CPCControls = ({ trailing, screen = 'deck' }: CPCControlsProps = {}
             h1={params.colorPalette1?.h ?? 0}
             h2={params.colorPalette2?.h ?? 0.5}
             bpm={bpm}
+            disabled={disabled}
             onEditColors={() => setColorPickerOpen(true)}
           />
         ) : (
@@ -316,6 +330,7 @@ export const CPCControls = ({ trailing, screen = 'deck' }: CPCControlsProps = {}
                   value={speedDisplay}
                   fillColor={speedFill}
                   badge={speedBadge}
+                  disabled={disabled}
                   onChange={(v) => update('speed', v)}
                 />
               </View>
@@ -328,12 +343,13 @@ export const CPCControls = ({ trailing, screen = 'deck' }: CPCControlsProps = {}
               <SpeedSyncToggle
                 on={bpmSyncOn}
                 starving={bpmSyncOn && bpm <= 0}
+                disabled={disabled}
                 onToggle={() => update('bpmSpeedSync', bpmSyncOn ? 0 : 1)}
               />
             </View>
 
             <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
-              <MiniFader label="SIZE" value={params.size ?? 0.5} onChange={(v) => update('size', v)} />
+              <MiniFader label="SIZE" value={params.size ?? 0.5} disabled={disabled} onChange={(v) => update('size', v)} />
             </View>
 
             {/* Single COLORS button. Tapping opens the tabbed picker
@@ -344,6 +360,7 @@ export const CPCControls = ({ trailing, screen = 'deck' }: CPCControlsProps = {}
               h1={params.colorPalette1?.h ?? 0}
               h2={params.colorPalette2?.h ?? 0.5}
               isPortrait={isPortrait}
+              disabled={disabled}
               onPress={() => setColorPickerOpen(true)}
             />
 
@@ -355,6 +372,7 @@ export const CPCControls = ({ trailing, screen = 'deck' }: CPCControlsProps = {}
               onPress={onSlotTap}
               onClear={() => setQueued(null)}
               isPortrait={isPortrait}
+              disabled={disabled}
             />
 
             {/* Dedicated, full-size TAP button — the ACTUAL tap target
@@ -363,7 +381,7 @@ export const CPCControls = ({ trailing, screen = 'deck' }: CPCControlsProps = {}
                 it renders on BOTH deck + mixer, and useTempoTap().tap() feeds a
                 MODULE-GLOBAL tap series — so taps are global and synced across
                 tabs and respected app-wide. */}
-            <GlobalTapTile isPortrait={isPortrait} sourcePref={tempo.sourcePref} onTap={onTap} />
+            <GlobalTapTile isPortrait={isPortrait} sourcePref={tempo.sourcePref} disabled={disabled} onTap={onTap} />
 
             {/* BPM tile — the APPLIED tempo readout + a STICKY SOURCE SELECTOR
                 (OSC vs TAP). The selector only CHOOSES the source, it does not
@@ -375,6 +393,7 @@ export const CPCControls = ({ trailing, screen = 'deck' }: CPCControlsProps = {}
               isPortrait={isPortrait}
               source={tempo.source}
               sourcePref={tempo.sourcePref}
+              disabled={disabled}
               onSelectOsc={() => onSetSource('osc')}
               onSelectTap={() => onSetSource('tap')}
             />
@@ -483,20 +502,23 @@ const GLOBALS_TILE_WIDTH_PORTRAIT  = 60;
 const GLOBALS_TILE_WIDTH_LANDSCAPE = 86;
 const GLOBALS_TILE_HEIGHT = 48;
 
-function ColorPairButton({ h1, h2, isPortrait, onPress }: { h1: number; h2: number; isPortrait: boolean; onPress: () => void }) {
+function ColorPairButton({ h1, h2, isPortrait, disabled, onPress }: { h1: number; h2: number; isPortrait: boolean; disabled?: boolean; onPress: () => void }) {
   const C = usePalette();
   const w = isPortrait ? GLOBALS_TILE_WIDTH_PORTRAIT : GLOBALS_TILE_WIDTH_LANDSCAPE;
   return (
     <TouchableOpacity
       onPress={onPress}
+      disabled={disabled}
       accessibilityLabel="Open colour picker"
       accessibilityRole="button"
+      accessibilityState={{ disabled: !!disabled }}
       style={{
         width: w, height: GLOBALS_TILE_HEIGHT,
         paddingVertical: 4, paddingHorizontal: 6,
         borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder,
         backgroundColor: C.surface,
         justifyContent: 'space-between',
+        opacity: disabled ? 0.45 : 1,
       }}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -525,11 +547,12 @@ function ColorPairButton({ h1, h2, isPortrait, onPress }: { h1: number; h2: numb
  * changes it. The ✕ is a sibling overlay (not nested in the main
  * touchable) so its tap can't double-fire the slot.
  */
-function QueuedColorSlot({ queued, onPress, onClear, isPortrait }: {
+function QueuedColorSlot({ queued, onPress, onClear, isPortrait, disabled }: {
   queued: ColorPalettePreset | null;
   onPress: () => void;
   onClear: () => void;
   isPortrait: boolean;
+  disabled?: boolean;
 }) {
   const C = usePalette();
   const w = isPortrait ? GLOBALS_TILE_WIDTH_PORTRAIT : GLOBALS_TILE_WIDTH_LANDSCAPE;
@@ -538,11 +561,14 @@ function QueuedColorSlot({ queued, onPress, onClear, isPortrait }: {
       width: w, height: GLOBALS_TILE_HEIGHT,
       borderRadius: 8, borderWidth: 1, borderColor: queued ? C.primary : C.ghostBorder,
       backgroundColor: C.surface,
+      opacity: disabled ? 0.45 : 1,
     }}>
       <TouchableOpacity
         onPress={onPress}
+        disabled={disabled}
         accessibilityLabel={queued ? `Send queued colour ${queued.name} live` : 'Open colour queue'}
         accessibilityRole="button"
+        accessibilityState={{ disabled: !!disabled }}
         style={{ flex: 1, paddingVertical: 4, paddingHorizontal: 6, justifyContent: 'space-between' }}
       >
         <Text
@@ -572,8 +598,10 @@ function QueuedColorSlot({ queued, onPress, onClear, isPortrait }: {
       {queued ? (
         <TouchableOpacity
           onPress={onClear}
+          disabled={disabled}
           accessibilityLabel="Remove queued colour"
           accessibilityRole="button"
+          accessibilityState={{ disabled: !!disabled }}
           hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
           style={{ position: 'absolute', top: 1, right: 3, padding: 2 }}
         >
@@ -891,9 +919,10 @@ function sourceAccent(C: ReturnType<typeof usePalette>, source: TempoSource): st
  * won't move until a tempo arrives — but the toggle stays operable so the
  * operator can arm sync ahead of audio.
  */
-function SpeedSyncToggle({ on, starving, onToggle }: {
+function SpeedSyncToggle({ on, starving, disabled, onToggle }: {
   on: boolean;
   starving: boolean;
+  disabled?: boolean;
   onToggle: () => void;
 }) {
   const C = usePalette();
@@ -901,8 +930,9 @@ function SpeedSyncToggle({ on, starving, onToggle }: {
   return (
     <TouchableOpacity
       onPress={onToggle}
+      disabled={disabled}
       accessibilityRole="switch"
-      accessibilityState={{ checked: on }}
+      accessibilityState={{ checked: on, disabled: !!disabled }}
       accessibilityLabel={
         on
           ? (starving ? 'Speed follows BPM: on, but no tempo yet' : 'Speed follows BPM: on')
@@ -915,6 +945,7 @@ function SpeedSyncToggle({ on, starving, onToggle }: {
         borderColor: on ? accent : C.ghostBorder,
         backgroundColor: on ? `${accent}22` : C.surface,
         alignItems: 'center', justifyContent: 'center',
+        opacity: disabled ? 0.45 : 1,
       }}
     >
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: accent, letterSpacing: 0.6 }}>
@@ -935,9 +966,10 @@ function SpeedSyncToggle({ on, starving, onToggle }: {
  * Kept SEPARATE from the BPM source selector so the tap target stays big and
  * reliable (the selector only chooses OSC vs TAP, it does not tap).
  */
-function GlobalTapTile({ isPortrait, sourcePref, onTap }: {
+function GlobalTapTile({ isPortrait, sourcePref, disabled, onTap }: {
   isPortrait: boolean;
   sourcePref: TempoSourcePref;
+  disabled?: boolean;
   onTap: () => void;
 }) {
   const C = usePalette();
@@ -948,14 +980,17 @@ function GlobalTapTile({ isPortrait, sourcePref, onTap }: {
   return (
     <TouchableOpacity
       onPress={onTap}
+      disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel="Tap tempo — tap repeatedly on the beat to set the global BPM"
+      accessibilityState={{ disabled: !!disabled }}
       style={{
         width: w, height: GLOBALS_TILE_HEIGHT,
         borderRadius: 8, borderWidth: 1,
         borderColor: armed ? C.tertiary : C.ghostBorder,
         backgroundColor: armed ? C.tertiary : C.surface,
         alignItems: 'center', justifyContent: 'center',
+        opacity: disabled ? 0.45 : 1,
       }}
     >
       <Text style={{
@@ -990,11 +1025,12 @@ function GlobalTapTile({ isPortrait, sourcePref, onTap }: {
  * driving, neutral when OSC-selected-but-held). The big numeric readout stays
  * so the tempo reads from across the venue.
  */
-function BpmTile({ bpm, isPortrait, source, sourcePref, onSelectOsc, onSelectTap }: {
+function BpmTile({ bpm, isPortrait, source, sourcePref, disabled, onSelectOsc, onSelectTap }: {
   bpm: number;
   isPortrait: boolean;
   source: TempoSource;
   sourcePref: TempoSourcePref;
+  disabled?: boolean;
   onSelectOsc: () => void;
   onSelectTap: () => void;
 }) {
@@ -1035,11 +1071,12 @@ function BpmTile({ bpm, isPortrait, source, sourcePref, onSelectOsc, onSelectTap
           NOT tap (the GlobalTapTile is the tap target). The active segment
           fills in its source accent so "what's driving the clock" reads at a
           glance. */}
-      <View style={{ width: 30, height: 40, borderRadius: 6, overflow: 'hidden', borderWidth: 1, borderColor: C.ghostBorder }}>
+      <View style={{ width: 30, height: 40, borderRadius: 6, overflow: 'hidden', borderWidth: 1, borderColor: C.ghostBorder, opacity: disabled ? 0.45 : 1 }}>
         <TouchableOpacity
           onPress={onSelectOsc}
+          disabled={disabled}
           accessibilityRole="button"
-          accessibilityState={{ selected: oscActive }}
+          accessibilityState={{ selected: oscActive, disabled: !!disabled }}
           accessibilityLabel="Use OSC as the tempo source (follow the live OSC feed)"
           hitSlop={{ top: 4, left: 4, right: 4, bottom: 0 }}
           style={{
@@ -1053,8 +1090,9 @@ function BpmTile({ bpm, isPortrait, source, sourcePref, onSelectOsc, onSelectTap
         </TouchableOpacity>
         <TouchableOpacity
           onPress={onSelectTap}
+          disabled={disabled}
           accessibilityRole="button"
-          accessibilityState={{ selected: tapActive }}
+          accessibilityState={{ selected: tapActive, disabled: !!disabled }}
           accessibilityLabel="Use tapped tempo as the source (hold the current BPM; tap to refine)"
           hitSlop={{ top: 0, left: 4, right: 4, bottom: 4 }}
           style={{
@@ -1083,10 +1121,11 @@ function BpmTile({ bpm, isPortrait, source, sourcePref, onSelectOsc, onSelectTap
 // 2026-05-26). Sized so the row fits in ~24px regardless of orientation.
 
 function CollapsedGlobalsSummary({
-  speed, speedBadge, speedFill, size, h1, h2, bpm, onEditColors,
+  speed, speedBadge, speedFill, size, h1, h2, bpm, disabled, onEditColors,
 }: {
   speed: number; speedBadge?: string; speedFill?: string;
   size: number; h1: number; h2: number; bpm: number;
+  disabled?: boolean;
   onEditColors: () => void;
 }) {
   const C = usePalette();
@@ -1094,7 +1133,16 @@ function CollapsedGlobalsSummary({
     <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 14, paddingRight: 8, height: 24 }}>
       <CollapsedReadout label="SPEED" value={Math.round(speed * 100)} unit="%" accent={speedFill} badge={speedBadge} />
       <CollapsedReadout label="SIZE" value={Math.round(size * 100)} unit="%" />
-      <TouchableOpacity onPress={onEditColors} accessibilityLabel="Open colour picker" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+      {/* Soft PLAN lock — the COLORS shortcut opens the (mutating) colour
+          picker, so it's gated with the expanded-row controls. The readouts
+          above stay full-brightness (display-only). */}
+      <TouchableOpacity
+        onPress={onEditColors}
+        disabled={disabled}
+        accessibilityLabel="Open colour picker"
+        accessibilityState={{ disabled: !!disabled }}
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 6, opacity: disabled ? 0.45 : 1 }}
+      >
         <DualSwatch h1={h1} h2={h2} size={18} />
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>COLORS</Text>
       </TouchableOpacity>

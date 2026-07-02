@@ -36,7 +36,14 @@ import { setGlobalHue } from '@/utils/channelExtrasApi';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { engineEvents } from '@/utils/engineEvents';
 
-export const GlobalHueRow: React.FC = () => {
+export const GlobalHueRow: React.FC<{
+  /** Soft PLAN lock gate (planLocked && !leaseHeld). When true the hue fader
+   *  and the tap-to-reset readout are disabled — dimmed, handlers blocked —
+   *  until the operator takes over. The row still renders (and reconciles the
+   *  live plan-driven hue) read-only. Default false: existing call sites are
+   *  unchanged. */
+  disabled?: boolean;
+}> = ({ disabled = false }) => {
   const C = usePalette();
   // Live rig hue offset, reflecting the engine's `globalHueShift` broadcast.
   const [degrees, setDegrees] = useState(0);
@@ -101,13 +108,16 @@ export const GlobalHueRow: React.FC = () => {
   // the last rate) and the hue would keep rotating invisibly with no control to
   // stop it. Pairs with the one-shot mount clear above.
   const onDegreesChange = useCallback(async (deg: number) => {
+    // Soft PLAN lock — the fader/reset are pointerEvents-blocked/disabled
+    // below; this is the belt-and-suspenders write-path gate.
+    if (disabled) return;
     setDegrees(deg);
     const r = await setGlobalHue(deg, 0);
     if (!r.ok) {
       console.warn('[GlobalHueRow] global hue degrees rejected:', r.error);
       Alert.alert('Hue not applied', r.error || 'The engine rejected the global hue.');
     }
-  }, []);
+  }, [disabled]);
 
   // QA round7: tap the degree readout to reset the hue to 0° ("no shift").
   // Same wiring/endpoint as the fader — just a one-tap shortcut back to
@@ -122,8 +132,15 @@ export const GlobalHueRow: React.FC = () => {
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 40, letterSpacing: 0.5, textTransform: 'uppercase' }}>HUE</Text>
       {/* The track is wrapped in a flex:1 / minWidth:0 spacer (it fills that
           wrapper at width:100%) so it spans the row on react-native-web; the
-          value stays right-aligned in its fixed column. */}
-      <View style={{ flex: 1, minWidth: 0, marginHorizontal: 8 }}>
+          value stays right-aligned in its fixed column.
+          Soft PLAN lock: pointerEvents 'none' blocks the fader's PanResponder
+          entirely (a gated onChange alone would still let the thumb track the
+          finger locally); the dim marks it disabled. WS reconcile stays live
+          so plan-driven hue moves still show. */}
+      <View
+        style={{ flex: 1, minWidth: 0, marginHorizontal: 8, opacity: disabled ? 0.45 : 1 }}
+        pointerEvents={disabled ? 'none' : 'auto'}
+      >
         <HorizontalFader
           value={Math.max(0, Math.min(1, degrees / 360))}
           onChange={(v: number) => onDegreesChange(Math.round(v * 360))}
@@ -142,8 +159,16 @@ export const GlobalHueRow: React.FC = () => {
           thumbStyle={{ position: 'absolute', width: 14, height: 22, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.secondary }}
         />
       </View>
-      {/* Tap the degree readout to reset the hue to 0° ("no shift"). */}
-      <TouchableOpacity onPress={onResetDegrees} accessibilityLabel="Reset global hue to zero degrees" hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+      {/* Tap the degree readout to reset the hue to 0° ("no shift"). Gated
+          under the soft PLAN lock like the fader — it's a write path too. */}
+      <TouchableOpacity
+        onPress={onResetDegrees}
+        disabled={disabled}
+        accessibilityLabel="Reset global hue to zero degrees"
+        accessibilityState={{ disabled }}
+        style={disabled ? { opacity: 0.45 } : null}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      >
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, width: 40, textAlign: 'right' }}>{Math.round(degrees)}°</Text>
       </TouchableOpacity>
       {/* QA round7: the live-hue preview is now a CIRCLE (was a rounded
