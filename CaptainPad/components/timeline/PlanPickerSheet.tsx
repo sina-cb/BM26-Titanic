@@ -27,7 +27,7 @@ function slugifyPlanName(raw: string): string {
 }
 
 export function PlanPickerSheet({
-  visible, plans, activePlan, draftName, onLoad, onActivate, onDuplicate, onNewTemplate, onNewBlank, onClose,
+  visible, plans, activePlan, draftName, onLoad, onActivate, onDuplicate, onDelete, onNewTemplate, onNewBlank, onClose,
 }: {
   visible: boolean;
   plans: string[];
@@ -36,6 +36,8 @@ export function PlanPickerSheet({
   onLoad: (name: string) => void;
   onActivate: (name: string) => void;
   onDuplicate: (name: string) => void;
+  /** Delete a saved plan (the engine refuses the ACTIVE plan; we hide it there). */
+  onDelete: (name: string) => void;
   /** Create from the BRC template under the operator-entered (required) name. */
   onNewTemplate: (name: string) => void;
   /** Seed a fresh BLANK plan (no BRC cues/looks/phases) under the required name. */
@@ -48,6 +50,10 @@ export function PlanPickerSheet({
   // Which new-plan flow is awaiting a name (null = prompt hidden).
   const [naming, setNaming] = useState<'template' | 'blank' | null>(null);
   const [nameInput, setNameInput] = useState('');
+  // Two-tap delete confirm (inline — avoids a nested Modal that RN-web
+  // mis-stacks): first tap arms the plan, second CONFIRM deletes.
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  useEffect(() => { if (!visible) setPendingDelete(null); }, [visible]);
   useEffect(() => {
     if (!visible) { setNaming(null); setNameInput(''); }
   }, [visible]);
@@ -182,6 +188,26 @@ export function PlanPickerSheet({
                       >
                         <Text style={[styles.actionBtnText, { color: C.tertiary }]}>ACTIVATE</Text>
                       </TouchableOpacity>
+                      {/* DELETE — hidden for the ACTIVE plan (the engine refuses
+                          it: you can't delete a running plan). Two-tap confirm:
+                          DELETE arms, CONFIRM? deletes. */}
+                      {isActive ? null : pendingDelete === name ? (
+                        <TouchableOpacity
+                          onPress={() => { onDelete(name); setPendingDelete(null); }}
+                          style={[styles.actionBtn, { borderColor: C.error, backgroundColor: C.error }]}
+                          accessibilityLabel={`Confirm delete ${name}`}
+                        >
+                          <Text style={[styles.actionBtnText, { color: '#FFF' }]}>CONFIRM?</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          onPress={() => setPendingDelete(name)}
+                          style={[styles.actionBtn, { borderColor: C.error }]}
+                          accessibilityLabel={`Delete ${name}`}
+                        >
+                          <Text style={[styles.actionBtnText, { color: C.error }]}>DELETE</Text>
+                        </TouchableOpacity>
+                      )}
                     </View>
                   );
                 })}

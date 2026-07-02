@@ -43,6 +43,7 @@ import {
   fetchTimelineOverview,
   previewTimelineOverview,
   saveTimelinePlan,
+  deleteTimelinePlan,
   TimelineState,
   TimelineCue,
   TimelineRecentFire,
@@ -426,6 +427,22 @@ export default function TimelineScreen() {
     if (ok) { refreshPlans(); refreshLiveOverview(); setPlanPickerOpen(false); }
     else setActionError('Engine rejected plan activation');
   }, [activatePlan, refreshPlans, refreshLiveOverview]);
+
+  // Delete a saved plan (the picker confirms + hides the ACTIVE plan; the
+  // engine also refuses to delete the active one). If the deleted plan is the
+  // one loaded in the maker, close the editor so we don't keep re-saving a
+  // now-deleted file.
+  const handleDeletePlan = useCallback(async (name: string) => {
+    const r = await deleteTimelinePlan(name);
+    if (!r.ok) { setActionError(r.error || `Could not delete plan ${name}`); return; }
+    setActionError(null);
+    if (draft?.name === name) {
+      setDraft(null);
+      setDraftOverview(null);
+      lastSavedVersionRef.current = null;
+    }
+    refreshPlans();
+  }, [draft?.name, refreshPlans]);
 
   // Persist a plan and refresh the derived views. Shared by auto-save, eager
   // new-plan saves, and the close flush. Saving over the ACTIVE plan
@@ -1039,6 +1056,7 @@ export default function TimelineScreen() {
         onLoad={loadPlanIntoDraft}
         onActivate={handleActivate}
         onDuplicate={handleDuplicate}
+        onDelete={handleDeletePlan}
         onNewTemplate={handleNewTemplate}
         onNewBlank={handleNewBlank}
         onClose={() => setPlanPickerOpen(false)}
