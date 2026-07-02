@@ -42,17 +42,19 @@ concurrently. Adding a controller is a data change, not a rewrite.
   17 UI buttons. Protocol + colour palette captured from Akai's official docs
   (archived in `CaptainPad/midi_profiles/manuals/`) and a live Web MIDI capture
   on the dev PC; summarised in `CaptainPad/midi_profiles/apc_mini_mk2_reference.md`.
-- **Driver #2 — DJTT MIDI Fighter Twister** (planned, next). The authoritative
+- **Driver #2 — DJTT MIDI Fighter Twister** (designed — see the dedicated
+  **“Driver #2 — MIDI Fighter Twister”** section below). The authoritative
   protocol reference is Sina's **`pymft`** library
-  (<https://github.com/sina-cb/pymft>, local
-  `C:\Users\sina_\workspace\TD-MidiFighterTwister\pymft`): it encodes the MFT's
-  encoder/bank/colour/detent model and 2-way feedback. The MFT lands as a second
-  profile plus a small resolver extension for its **relative (endless) encoders**
-  (the APC's faders are absolute CC; the MFT's encoders send relative deltas and
-  expect value/colour writes back). `pymft` is Python today and **can be ported
-  to native code for the marsin engine eventually** — but for the FoH/iPad path
-  it is a *reference spec*, not a runtime dependency (MIDI stays CaptainPad-side
-  so it reaches the iPad over USB-C; see "iPad is a must" below).
+  (<https://github.com/sina-cb/pymft>): it encodes the MFT's
+  encoder/bank/colour/detent model, the sysex config push, and 2-way feedback.
+  The MFT lands as a second profile plus a small resolver extension for its
+  **relative (endless) encoders** (the APC's faders are absolute CC; the MFT's
+  encoders send relative deltas and expect value/colour writes back). The
+  protocol layer of `pymft` is **ported from Python to TypeScript** into
+  `CaptainPad/utils/midi/mft/` (constants, message builders/decoders, sysex
+  config) so it runs everywhere the mapping stack runs — desktop Chrome and,
+  later, the iPad (MIDI stays CaptainPad-side so it reaches the iPad over
+  USB-C; see "iPad is a must" below).
 
 **iPad is a must.** Engine-side (Node) MIDI was considered and rejected for the
 show path: it puts the controller on the car, not in the operator's hands at
@@ -164,14 +166,20 @@ it is small, isolated, and on a paved Expo path.
 5. CC floods are **coalesced** (per-control trailing throttle) so a fader
    sweep doesn't machine-gun the engine REST API.
 
-**Non-Goals (v1)**
+**Non-Goals (v1)** *(annotated — two of these were later promoted and shipped;
+see the as-built sections below)*
 
-- No on-iPad mapping editor / MIDI-learn UI. Profiles are YAML in the repo;
-  learn mode is a v2 candidate.
+- ~~No on-iPad mapping editor / MIDI-learn UI~~ — **shipped 2026-07**: the
+  per-param ⊞ MIDI-learn flow (see “As-built — MIDI-learn”). Profiles remain
+  YAML for the static layout; learn covers per-pattern local params.
 - No APC40 mkII profile in v1 (structure supports it; profile authored when
   the unit is on the bench).
-- No engine-side changes: no new endpoints, no WS command path. If REST
-  coalescing ever proves too slow, a WS param channel is a separate doc.
+- ~~No engine-side changes~~ — **amended**: the render/control path still has
+  ZERO engine changes (the engine never applies MIDI), but MIDI-learn added
+  **persistence-only** engine endpoints (`midi-mappings` CRUD on playlist
+  entries, mirroring the modulation CRUD) so bindings ride the playlist and
+  sync multi-client. If REST coalescing ever proves too slow, a WS param
+  channel is a separate doc.
 - No Bluetooth MIDI, no Bomebox integration, no Android.
 - No MIDI in the web build on **iPad Safari** (WebKit has no Web MIDI). The
   web build on **desktop Chromium** is a supported transport (dev/test
@@ -294,11 +302,17 @@ layer owns **no transport**:
 |---|---|---|
 | `paramCenter` | `updateParamCenter({ key: scaled })` | `POST /param-center` |
 | `pattern` / `patternBank` | `setActivePattern(name)` | `POST /set-pattern` |
-| `blackoutToggle` | `setGlobalBlackout(!current)` | `POST /global-blackout` |
+| `blackoutToggle` | `setGlobalEffectBlackout(!current)` — the unified GEM e-stop (“stop all clips → blackout”: pixels dark AND active macros cleared) | existing GEM blackout route |
 | `globalEffect` | `setGlobalEffect(effect, state)` | `POST /global-effect` |
+| `globalEffectSlot` | `dispatchGlobalEffectSlotAction(slot, 'toggle')` | existing GEM slot route |
 | `sectionBrightness` | `setSectionBrightness(id, v)` | `POST /section-brightness` |
 | `groupFixedColor` | `setGroupFixedColor(group, …)` | `PUT /group-fixed-colors/:g` |
-| `master` | master-fader dispatch (same path the mixer view uses) | existing |
+| `master` | `updateMixerMaster(v)` (same path the mixer view uses) | `PATCH /mixer` |
+| `mixerLayerFader` | deck: `updateDeckChannel({fader})` · mixer: `updateMixerChannel(id, {fader})` | `PATCH /deck/channel` · `PATCH /mixer/channels/:id` |
+| `focusChannel` | controller/UI state only (selects the focused channel) | — no engine call |
+| `localParam` *(runtime-built: MIDI-learned APC fader / MFT knob delta)* | deck: `setDeckChannelControl(id, v)` · mixer: `setMixerChannelControl(chId, id, v)` | `POST /deck/channel/control` · `POST /mixer/channels/:id/control` |
+| `playlistScroll` / `playlistWindowSelect` | window browser (runtime cursor) → `setChannelPlaylistEntry(…)` | existing playlist-entry route |
+| `colorPalettePair` | `updateParamCenter({colorPalette1, colorPalette2})` | `POST /param-center` |
 
 Coalescing: continuous controls (`cc`) get a **per-control trailing
 throttle (~30 Hz)** — latest value wins, never dropped, flushed on release.
@@ -448,7 +462,9 @@ into the PC can build and verify it end-to-end.
 | 2. Web transport + integration | 1 | `WebMidiTransport`; `useMidiControl` hook; RootShell mount; header chip; Config tab section; capability gate. **Full hardware-in-the-loop verification on Windows**: APC → Chrome → web build → engine → sim, agent-driven via puppeteer + full-stack smoke. | `CaptainPad/utils/midi/web_midi_transport.ts`, `CaptainPad/hooks/useMidiControl.ts` (new), `app/_layout.tsx`, Config tab |
 | 3. Native module | 2 (built via EAS from Windows) | `modules/captain-midi/` (Swift + Expo Module config): enumeration/open/send/events, hotplug, matching the frozen transport interface. One EAS `development` build from Windows → dev-client on iPad. | `CaptainPad/modules/captain-midi/*` (new) |
 | 4. iPad bench gate + verification | 2 | APC → hub → iPad **MIDI Wrench** check (confirm iPadOS endpoint names match the profile; adjust if CoreMIDI names differ from Chromium's), then the same end-to-end pass on the dev client: every mapped control against engine + sim, LED repaint on replug, unplug/replug soak, Guided Access check | report in `.agent/02_reports/` |
-| 5. (later) | — | APC40 mkII profile · MIDI-learn editor · WS param channel if REST coalescing ever measures slow | — |
+| 5. MIDI-learn ✅ (2026-07) | 1 | Per-param ⊞ learn flow + focused channel + engine-side `midiMappings` persistence (see “As-built — MIDI-learn”) | `utils/midi/learn.ts`, `components/MidiMap.tsx`, engine `midi_mapping_engine.js` + CRUD routes |
+| 6. MFT driver | 1 | pymft → TS port (`utils/midi/mft/`), relative-encoder resolver, ring-feedback projector, `mft.yaml` profile, focus interplay (see “Driver #2 — MIDI Fighter Twister”) | `CaptainPad/utils/midi/mft/*` (new), `midi_profiles/mft.yaml` (new), resolver/projector/profile extensions |
+| 7. (later) | — | APC40 mkII profile · WS param channel if REST coalescing ever measures slow | — |
 
 Phases are independently landable. Phase 2 ends with the feature genuinely
 usable (a Windows laptop running Chrome at FoH is a legitimate degraded
@@ -493,9 +509,11 @@ virtual ports (`APCMini -> …`, mfr "Microsoft") are excluded by name.
 | in/out | 1 | `MIDIIN2/MIDIOUT2 (APC mini mk2)` | AKAI Professional |
 
 **Deliberate deviations from the sketch in this doc:**
-- Blackout is mapped to **Track Button 8 (note 107)**, not Shift (122) as the
-  example showed — Shift has **no LED** on the mk2, so it can't satisfy the
-  LED-feedback requirement. Track buttons are single red LEDs.
+- Blackout is mapped to **Scene Launch 8 (note 119, bottom scene button)**,
+  not Shift (122) as the example showed — Shift has **no LED** on the mk2, so
+  it can't satisfy the LED-feedback requirement. (It sat on Track Button 8
+  briefly during the first bench pass; the unified layout moved it to the
+  scene column with the global-effect slots stacked above it.)
 - Endpoint disambiguation is `nameContains` + a **deterministic port index**
   (not "throw if >1 name match"): the index pin is explicit, not a silent
   auto-pick, so it satisfies the no-fallback rule while handling the real
@@ -505,43 +523,242 @@ virtual ports (`APCMini -> …`, mfr "Microsoft") are excluded by name.
   variant for tests — reconciling the failure-mode table with the unit-test
   contract.
 
-**Verification:** `npx tsc --noEmit` clean for all new code (2 pre-existing
-`Modulation.tsx` errors remain, tracked separately); `npm run lint` exit 0 (new
-files: zero warnings); `npm run web:build` passes; Vitest suite green.
-Hardware-in-the-loop on the bench rig confirms the round-trip.
+**Verification (as of 2026-07-02):** `npx tsc --noEmit` clean; `npm run lint`
+exit 0 (new files: zero warnings); `npm run web:build` passes; Vitest suite
+green (98 tests across the `utils/midi` layer). Hardware-in-the-loop on the
+bench rig confirms the round-trip.
 
-### Tab-aware operator mapping (extension)
+### Tab-aware operator mapping → the UNIFIED layout (as-built)
 
-Profiles declare **`contexts:`** (e.g. `deck` / `mixer`); the same hardware maps
-to different actions per active CaptainPad tab (`MidiManager.setContext()`,
-driven by tab focus). A dedicated **MIDI tab** (`app/(tabs)/midi.tsx`) shows
-status + a live event monitor; the 🎹 chip taps through to it. The APC layout:
+Profiles declare **`contexts:`** (e.g. `deck` / `mixer`); the mechanism lets
+the same hardware map to different actions per active CaptainPad tab
+(`MidiManager.setContext()`, driven by tab focus). A dedicated **MIDI tab**
+(`app/(tabs)/midi.tsx`) shows status + a live event monitor; the 🎹 chip taps
+through to it.
 
-- **Common:** fader 9 → master brightness.
-- **Mixer:** faders 1-4 → layer faders; track buttons 1-4 → layer **solo**;
-  fader 5 → speed; pad cols 1-4 → per-layer **playlist window browser** (scroll
-  + 6-entry window + LED border, mirrored as an amber border in the mixer UI);
-  pad cols 5-8 → **colour-pair pads** (palettes 1-16); scene buttons → blackout
-  (GEM e-stop) + global-effect slots.
-- **Deck:** faders → speed/size/rotate; pad row → pattern select; scene buttons
-  → global-effect slots + blackout.
+After two bench iterations the per-tab layouts were **collapsed into ONE
+unified layout** (a YAML anchor shared by both contexts) so the operator
+learns a single surface; only the channel **targets** differ per tab — on the
+Mixer tab the channel controls address the overlay layers, on the Deck tab
+they address the single deck channel (layer 0; layers 1-2 inert). The APC
+mini mk2 layout:
+
+- **Faders:** 1-3 → channel faders (layers 1-3) · 4-6 + 8 → **MIDI-learned
+  local params of the FOCUSED channel** (see “As-built — MIDI-learn” below;
+  intentionally unmapped in the profile) · 7 → global speed · 9 → master
+  brightness.
+- **Track buttons 1-3 → FOCUS channel 1-3** (LED lit = focused). Focus selects
+  which channel the learned param faders — and the MIDI Fighter Twister —
+  drive. (Solo was dropped from the controller in this redesign; note the old
+  controller-solo PATCH was silently ignored by the engine's field whitelist
+  anyway — solo is a purely client-side gesture in mixer.tsx.)
+- **Pad cols 1-4 →** per-channel **playlist window browser** (scroll pads +
+  6-entry window + LED border, mirrored as an amber border in the deck/mixer
+  UI).
+- **Pad cols 5-8 → colour-pair pads** (curated palettes 1-16; pads show the
+  pair hues).
+- **Scene buttons (bottom→up):** blackout (unified GEM e-stop, note 119) then
+  global-effect slots 1-7.
 - **Activity auto-disable:** any MIDI input disables autopilot + deck
   transitions (faders authoritative); restored after 60 s idle.
 
-New action kinds: `mixerLayerFader`, `mixerLayerSolo`, `globalEffectSlot`,
-`playlistScroll`, `playlistWindowSelect`, `colorPalettePair`; new match type
-`column` (strided pad columns). All still dispatch through existing
-`utils/api.ts` — zero engine changes.
+Action kinds added along the way: `mixerLayerFader`, `globalEffectSlot`,
+`playlistScroll`, `playlistWindowSelect`, `colorPalettePair`, `focusChannel`,
+plus the runtime-built `localParam` (learned bindings / MFT knobs); new match
+type `column` (strided pad columns). All dispatch through existing
+`utils/api.ts` — zero engine changes in the control path.
+
+## As-built — MIDI-learn + the focused channel (2026-07-02)
+
+The modulator-style **per-param MIDI mapping**: every local-param slider on
+the deck carries a violet **⊞ MIDI** badge next to the green ◎ modulation
+badge. Tap → **LEARN** → move a fader → the control binds to that param.
+From then on the bound control writes the param's **STATIC** value through
+the existing control endpoints; audio modulators stay layered on top
+untouched.
+
+- **Persistence — engine-side, mirroring modulations:** bindings live on the
+  playlist entry as `midiMappings`
+  (`{id, enabled, control:{type,channel,number}, target:{scope:'pattern',
+  parameter}, range:[min,max]}`), validated by
+  `marsin_engine/lib/midi_mapping_engine.js`, with
+  `PUT/PATCH/DELETE /api/playlists/:name/items/:itemId/midi-mappings/:id`
+  cloned from the modulation routes and the same `playlistSaved` broadcast
+  for multi-client sync. **The engine render loop never reads them** — they
+  are metadata; CaptainPad applies them.
+- **The FOCUSED channel** (the Chromatik-style focus concept): learned
+  bindings — and the MFT below — always drive *the focused channel's active
+  pattern*. Deck tab: the deck channel is auto-focused. Mixer tab: the
+  operator picks focus with the APC track buttons 1-3 (and the on-screen
+  focus UI). Focus is shared state across ALL connected controllers: the APC
+  selects it, every surface's LEDs reflect it.
+- **Soft-takeover (“pickup”):** after a focus/pattern switch a bound fader is
+  locked until it crosses the param's current value — no value jumps. The
+  focused track-button LED flashes while a fader is lock-parked.
+- **Learn safety:** a control that already has a static profile action
+  (global speed, master, pads …) is rejected at capture time with a named
+  error — a learned binding can never silently shadow a show-critical
+  control. *(Review finding; fix specced in the 2026-07-02 plan.)*
+
+## Driver #2 — MIDI Fighter Twister (design)
+
+The MFT is the **parameter surface**: 16 endless RGB-ring encoders (4×4),
+4 virtual banks (64 encoder slots), 6 side buttons, per-encoder push
+switches, full 2-way LED feedback. Where the APC is *selection + macro*
+hardware (pads, faders, scenes), the MFT is *fine control* hardware — so its
+whole job here is:
+
+> **The 16 knobs are the FOCUSED channel's pattern parameters, in order.**
+
+One rule, both tabs. On the **Deck** tab the focused channel is the deck
+channel (automatic); on the **Mixer** tab it is whichever overlay the
+operator focused — **the APC mini's track buttons 1-3 are the focus
+handler**, exactly like Chromatik's focused-channel workflow. The MFT
+profile is therefore *context-free* (one flat control list): the focus
+abstraction absorbs the tab difference entirely.
+
+### The `pymft` port — `utils/midi/mft/`
+
+The protocol layer of <https://github.com/sina-cb/pymft> is ported from
+Python to TypeScript (pure, dependency-free, unit-tested like the rest of
+`utils/midi`). Three modules:
+
+| Module | Ports (from pymft) | Contents |
+|---|---|---|
+| `mft/constants.ts` | `src/constants.py` | Device name (`"Midi Fighter Twister"`), DJTT sysex mfr id `00 01 79`, MIDI channel map (ch0 rotary, ch1 switch+colour, ch2 animation/brightness, ch3 system/banks/side-buttons, ch4 shift), relative-delta codes (61/62/63 = CCW very-fast/fast/normal · 65/66/67 = CW), bank + side-button CC tables (banks CC 0-3; side buttons CC 8-31, six per bank), colour-wheel values (1 blue · 50 green · 64 yellow · 80 red · 100 pink · 127 rainbow-cycle animation), `AnimationValues` (strobe/pulse/brightness), encoder-settings enums + sysex addresses 10-24 |
+| `mft/messages.ts` | send/decode paths of `src/pymft.py` | **Builders:** `setRingValue(enc, v0to127)` → CC ch0 · `setColor(enc, wheel)` → CC ch1 · `setAnimation(enc, anim)` → CC ch2 · `selectBank(bank)` → CC ch3. **Decoders:** `decodeRelativeDelta(value)` → −3…+3 (null for non-relative values) · `decodeEncoderTurn` (ch0) · `decodeEncoderPush` (ch1) · `decodeSideButton` (ch3 CC 8-31 → `{bank, side, index}`) · `decodeBankChange` (ch3 CC 0-3 → active bank) |
+| `mft/config.ts` | `src/encoder.py` + `src/config.py` | Sysex config push: per-encoder `BULK_XFER` frames (setting-address/value pairs, chunked in 24-byte parts, tag = encoder+1) + global `PUSH_CONF`. `buildConnectConfig()` forces all 64 encoders into the layout this doc assumes: **relative mode** (`MIDITYPE_SENDRELENC`), velocity-sensitive movement, switch = CC-hold on ch1, indicator = blended bar, detent off, per-bank base colours |
+
+### Why RELATIVE encoders (not absolute)
+
+pymft's own default config uses absolute CC + write-back sync; we deliberately
+flip the MFT to **relative** for the rig:
+
+- **No pickup problem, ever.** A relative knob holds no authoritative value —
+  it sends deltas that we apply to the engine's *current* value. Focus
+  switches, pattern advances, autopilot, a second iPad, an audio modulator
+  moving the base: nothing can ever make the knob "disagree" and jump a
+  param. (The APC's absolute faders need the whole soft-takeover machinery
+  for exactly this reason; the MFT sidesteps it.)
+- **Velocity built in:** the fast/very-fast delta codes give coarse↔fine
+  control for free (step sizes per code are profile-tunable, default
+  ±0.005 / ±0.02 / ±0.06 of full range per tick).
+- The ring LED is *display-only*, driven by our projector from live engine
+  state — so the ring even animates when an audio modulator drives the param.
+
+Config is pushed once on connect (idempotent). **Caveat (must verify on the
+bench):** the sysex config push requires Web MIDI `sysex: true` (a second
+Chrome permission prompt) — the transport requests it only when a loaded
+profile declares `configureOnConnect: true`. Fallback if sysex is ever
+unavailable: flash the same settings once from the bundled `.mfs` preset via
+DJTT's MF Utility and run config-less; the runtime behaviour is identical.
+Fail-loud rule: if `configureOnConnect` is set and sysex is denied, the MFT
+chip goes red with the reason — never silently run against unknown encoder
+modes.
+
+### Knob layout
+
+**Bank 1 — FOCUSED pattern local params (the headline feature):**
+
+| Knob (row-major, 1 = top-left) | Drives | Ring | Colour |
+|---|---|---|---|
+| 1..16 | `focused.exports[i]` — the focused channel's active-pattern **sliders in declaration order** (same ordered list the MIDI-learn snapshot already carries; CPC-matched exports excluded) | live param value 0-127 (blended bar) | channel identity: deck = blue · overlay 1/2/3 = green/yellow/pink — the knobs themselves TELL you which channel is focused |
+| — knob with no param behind it | inert (loud silence) | off | off |
+| encoder **push** | reset that param to the playlist entry's saved default (switch configured as CC-hold on ch1; handled app-side via the entry's `defaults`) | — | — |
+
+Turn → `delta × step` applied to the param's current **base** value →
+`localParam` write through `setDeckChannelControl` /
+`setMixerChannelControl` (clamped 0-1, coalesced ~30 Hz like every other
+continuous control). For an audio-modulated param the delta applies to the
+**modulation base** (the anchor the ◎ system exposes), not the moving
+modulated value — turning a knob while the music pumps must shift the
+anchor, not fight the modulator.
+
+**Bank 2 — global params (CPC):** a curated, profile-declared list —
+default: speed, size, colour variation, transition time, … , master
+brightness on knob 16. Rings show live CPC values; global-speed knob obeys
+the same BPM-sync rule as APC fader 7 (disabled + strobe animation while
+sync owns speed). **Banks 3-4 — reserved** (dark; candidates: palette
+browser on rings, per-section brightness).
+
+Bank switching is hardware-local (side buttons); the device reports the
+active bank on ch3 and the runtime tracks it for status display, but the
+projector simply addresses all 64 virtual encoders — the device latches ring
+state per bank, so every bank is always current when you land on it.
+
+**Side buttons:** left column = bank up / bank down (hardware action, set in
+the config push) + left-3 = **tap-tempo** (dispatches the existing tap
+endpoint). Right column = **focus prev / focus next / focus deck** — a
+secondary focus path so the MFT is self-sufficient when the APC is absent;
+the APC track buttons remain the primary focus handler in the mixer.
+
+### Mixer design in full (the focused-channel contract)
+
+1. **One channel at a time.** The MFT never fans out across layers — it is
+   always 16 knobs deep into ONE channel, per Sina's Chromatik workflow.
+2. **Focus sources (all write the same shared focus state):** APC track
+   buttons 1-3 (primary) · on-screen focus control in the mixer channel
+   strips · MFT right-side buttons (prev/next/deck). Focus changes validate
+   layer existence (absent layer → inert) and re-target atomically: knob
+   deltas are held (not misrouted) for the brief window until the focused
+   snapshot has actually swapped, then flow to the new channel.
+3. **Feedback on every surface:** APC focused track-button LED lit · mixer
+   UI focus highlight · MFT ring colour flips to the focused channel's
+   identity colour and all 16 rings repaint to the new pattern's values
+   within one engine tick.
+4. **Interplay with MIDI-learn:** learned APC faders 4-6/8 and MFT knobs are
+   two views of the same focused channel. A param can be BOTH learned to a
+   fader and live on knob *i* — last writer wins at the engine (both write
+   the same static value through the same endpoint), and both surfaces'
+   feedback follows the engine state, so they can never fight. The MFT
+   normally makes per-param learn unnecessary (ordered mapping covers all
+   16), but learn remains the way to pin a *specific* param to a *fader* for
+   muscle-memory-critical controls.
+5. **What the MFT does NOT do in the mixer:** channel faders/levels (APC
+   faders 1-3 own those); playlist browsing (APC pad columns); colour pairs
+   (APC pads); blackout / effects (APC scenes). One surface, one job.
+
+### Implementation deltas (what actually has to be built)
+
+| Piece | Change |
+|---|---|
+| `utils/midi/mft/{constants,messages,config}.ts` | the pymft port (pure + unit tests, incl. sysex frame goldens against pymft's output) |
+| `profile.ts` | new match `{type: cc, relative: true}`; new action kinds `focusedParamKnob {index, steps}`, `focusedParamReset {index}`, `paramCenterRelative {key, steps}`, `focusStep {dir: prev\|next\|deck}`, `tapTempo`; device gains `configureOnConnect` |
+| `resolver.ts` | relative-CC decode via `mft/messages.decodeRelativeDelta` → delta actions (a relative control is `continuous` and coalesces per control id) |
+| `manager.ts` runtime | `focusedParamKnob/Reset` handled next to the learn bindings (needs `focused.exports` + current base); delta accumulation between coalescer flushes; bank tracking from ch3 |
+| `led_projector.ts` | generalise: LED state keyed by `(status byte, number)` not bare note; CC-out feedback (`ring`/`color`/`animation` led specs); ring values sourced from `focused.exports` + CPC values (snapshot gains `globalParamValues`) |
+| `web_midi_transport.ts` | optional `sysex: true` request when any loaded profile sets `configureOnConnect` |
+| `midi_profiles/mft.yaml` | driver #2 profile per the layout above |
+| snapshot (`useMidiControl`) | expose modulation-base per export (anchor for deltas) + curated global param values |
+
+Everything rides the existing `MidiManager` multi-controller core — the APC
+and MFT run concurrently as two runtimes over the same dispatcher, snapshot,
+and focus state. Zero engine changes again: knob writes land on the existing
+per-control endpoints.
+
+### MFT open questions (for Sina)
+
+1. **Bank 2 curated list** — which globals, in which order? (Sketch: speed,
+   size, colourVariation, transition time, audio gain, …, master on 16.)
+2. **Encoder push = reset-to-entry-default** — right call, or prefer
+   fine-adjust-while-held (the MFT's native `SWACTION_ENCFINEADJUST`)? Both
+   can't share the push.
+3. **Step sizes** — ±0.005/±0.02/±0.06 per tick feel right on the bench?
+4. **Side-button tap-tempo** — wanted, or leave all three left buttons as
+   bank navigation?
 
 ## Open questions (for Sina)
 
-1. **Default mapping intent** — the profile above sketches faders → CPC
-   params + master, bottom pad row → pattern bank, one button → blackout. Is
-   that the layout you want to start from, or should v1 mirror the 2025
-   Chromatik muscle memory more closely?
+1. ~~**Default mapping intent**~~ — **answered by the 2026-06 bench
+   iterations**: the unified layout above (channels + learn faders + focus
+   buttons + browser/colour pads + scene column) IS the layout, evolved live
+   with the hardware on the desk. (MFT-specific questions live at the end of
+   the MFT section.)
 2. **Pattern banks** — pads-to-patterns by list order is fragile as the
    pattern library grows. Pin pad→pattern names explicitly in the profile
    YAML (stable, but needs editing when patterns change), or by playlist?
+   (Largely superseded by the per-channel playlist window browser, which is
+   playlist-ordered by construction.)
 3. **Which iPad** — is FoH iPad 1 the MIDI iPad, or should both be
    provisioned identically (no extra work either way; just affects the
    hardware checklist count)?

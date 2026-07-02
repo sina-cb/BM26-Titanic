@@ -1,6 +1,7 @@
-# MIDI-learn review findings + implementation plan (for Claude Opus)
+# MIDI review findings + implementation plan (for Claude Opus)
 
-**Date:** 2026-07-02 · **Branch:** `feat/captainpad-midi-control` (b6103059 + uncommitted MIDI-learn work)
+**Date:** 2026-07-02 (rev 2 — adds Phase 5: MIDI Fighter Twister) ·
+**Branch:** `feat/captainpad-midi-control`
 **Worktree:** `.claude/worktrees/midi-learn-build` · **Author:** review agent (8-angle finder sweep + verify pass)
 
 This is a self-contained work order. It assumes a FRESH session with no prior
@@ -226,9 +227,14 @@ change behaviour. Tests: projector emits blink velocity when locked.
 
 ---
 
-## 4. Phase 4 — docs/34_captainpad_midi.md proofread corrections (apply all)
+## 4. Phase 4 — docs/34_captainpad_midi.md proofread corrections — ✅ APPLIED 2026-07-02
 
-The doc is well-written but 6 sections are now stale against as-built:
+All corrections below were applied directly to docs/34 (same commit that adds
+this revision), together with the new MFT design section. Table retained for
+the review trail; the implementing session should treat Phase 4 as DONE and
+only re-touch docs/34 where later phases change behaviour (e.g. 1.1's
+conflict-rejection wording is already described there as the intended
+behaviour — keep doc and code in lockstep).
 
 | # | Location | Problem | Correction |
 |---|---|---|---|
@@ -247,7 +253,87 @@ Prose/grammar is otherwise clean — no typos found worth flagging.
 
 ---
 
-## 5. Acceptance gates (run after each phase, all must pass)
+## 5. Phase 5 — MIDI Fighter Twister driver (pymft → TypeScript port)
+
+Full design rationale + knob maps live in **docs/34 § "Driver #2 — MIDI
+Fighter Twister (design)"** — read it first; this phase is its work
+breakdown. Protocol source of truth: <https://github.com/sina-cb/pymft>
+(Python; port the protocol layer, not the rtmidi runtime). **Hard
+prerequisite: Phase 1 fixes 1.2/1.3/1.4 (focus correctness) — the MFT is a
+pure consumer of the focused-channel state and inherits any focus bug.**
+
+### 5.1 `utils/midi/mft/constants.ts` — port pymft `src/constants.py`
+Device name "Midi Fighter Twister"; DJTT mfr id 00 01 79; channel map
+(0 rotary / 1 switch+colour / 2 animation+brightness / 3 system / 4 shift);
+relative codes 61-63 CCW · 65-67 CW; bank CCs 0-3 + side-button CCs 8-31
+(6 per bank); colour wheel (1 blue, 50 green, 64 yellow, 80 red, 100 pink,
+127 rainbow); AnimationValues; encoder-settings enums; sysex setting
+addresses 10-24; PART_SIZE_BYTES=24. Straight transliteration — keep pymft's
+names so the two libs stay diffable.
+
+### 5.2 `utils/midi/mft/messages.ts` — builders + decoders (pure, tested)
+Builders: `setRingValue(enc, v)` [CC ch0], `setColor(enc, wheel)` [CC ch1],
+`setAnimation(enc, v)` [CC ch2], `selectBank(b)` [CC ch3]. Decoders:
+`decodeRelativeDelta(value)` → ±1/±2/±3 | null; `decodeEncoderPush` (ch1);
+`decodeSideButton` (ch3 CC 8-31 → {bank, side, index});
+`decodeBankChange` (ch3 CC 0-3). Unit tests with byte-level goldens.
+
+### 5.3 `utils/midi/mft/config.ts` — sysex config push
+Port `Encoder.send` + `Config._send_global`: per-encoder BULK_XFER frames
+(address/value pairs, 24-byte parts, tag = encoder index+1) + PUSH_CONF.
+`buildConnectConfig()`: all 64 encoders → MIDITYPE_SENDRELENC,
+MOVEMENTTYPE_VELOCITYSENSITIVE, switch CC-hold on ch1, INDICATORTYPE_
+BLENDEDBAR, detent off, per-bank base colours. Golden-test the emitted
+frames against pymft's Python output for one encoder (byte-for-byte).
+Gate behind profile `device.configureOnConnect: true`; if set and the
+transport lacks sysex → controller status RED with the reason (fail loud,
+never run against unknown encoder modes). `web_midi_transport.ts` requests
+`sysex: true` iff any loaded profile needs it.
+
+### 5.4 Profile/resolver/runtime extensions
+- `profile.ts`: match `{type: cc, relative: true}`; action kinds
+  `focusedParamKnob {index, steps?}`, `focusedParamReset {index}`,
+  `paramCenterRelative {key, steps?}`, `focusStep {dir: prev|next|deck}`,
+  `tapTempo`; validate steps (3 ascending magnitudes, default
+  [0.005, 0.02, 0.06]).
+- `resolver.ts`: relative CC → delta via `decodeRelativeDelta`; unknown
+  values (not 61-67) resolve to null (loud silence). Relative controls are
+  `continuous` (coalesce per control id, deltas ACCUMULATE in the coalescer
+  slot rather than last-write-wins — small coalescer extension, tested).
+- `manager.ts` runtime: `focusedParamKnob` → resolve `focused.exports[index]`,
+  apply accumulated delta to the param's BASE (modulation anchor when the
+  param is modulated — snapshot gains per-export base), clamp 0-1, dispatch
+  `localParam`. `focusedParamReset` → entry `defaults` value. `focusStep` →
+  clamped focus move via onFocusChange. Track active bank from ch3.
+- Snapshot (`useMidiControl.ts`): per-export modulation base;
+  `globalParamValues` for the bank-2 rings.
+
+### 5.5 LED projector generalisation (rings)
+Key LED state by `(statusByte, number)` instead of bare note; support CC-out
+feedback. New led spec for encoders: ring = live param value (0-127),
+colour = channel identity (deck blue / overlays green-yellow-pink), pulse
+animation when the param is audio-modulated, global-speed knob strobe+
+disable while BPM sync owns speed, unmapped knobs dark. Outbound ring
+updates diffed + throttled ~30 Hz.
+
+### 5.6 `midi_profiles/mft.yaml` + wiring
+Context-free profile per the docs/34 layout: bank 1 knobs 1-16 →
+`focusedParamKnob 0-15`; pushes → `focusedParamReset`; bank 2 → curated
+`paramCenterRelative` list (confirm list with Sina — open question); side
+buttons: left = bank up/down (+ tap-tempo?), right = focus prev/next/deck.
+Load in `useMidiControl.loadProfiles()` alongside the APC (the manager
+already runs N controllers). MidiConfigSection lists both.
+
+### 5.7 Verification
+Unit: everything above (target ≥25 new tests incl. sysex goldens +
+delta-accumulation + focus-step clamping). Integration (FakeTransport):
+knob turn → correct `setMixerChannelControl` delta on the focused overlay;
+focus switch → rings repaint to new channel colour; deck tab → deck channel.
+Bench (needs hardware): config push lands (or documented .mfs fallback),
+Chrome sysex permission flow, step-size feel, ring latency during a
+modulated param. Then a dated report + docs/34 as-built subsection.
+
+## 6. Acceptance gates (run after each phase, all must pass)
 
 1. `npx tsc --noEmit` clean; `npx vitest run` green with NEW tests covering
    every 1.x fix; `npx expo lint` 0 errors; `npm run web:build` exports;
@@ -260,7 +346,7 @@ Prose/grammar is otherwise clean — no typos found worth flagging.
    logical chunks (fixes / cleanup / docs) on `feat/captainpad-midi-control`
    and push.
 
-## 6. Review evidence trail
+## 7. Review evidence trail
 
 - 8 finder angles (line-by-line, removed-behavior, cross-file, reuse,
   simplification, efficiency, altitude, conventions) → ~37 candidates →
