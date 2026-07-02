@@ -225,7 +225,7 @@ test('activatePlan / savePlan roundtrip', async () => {
   const authored = makePlan();
   authored.name = 'authored_plan';
   authored.cues = authored.cues.filter((c) => c.id === 'c_show');
-  svc.savePlan(authored);
+  await svc.savePlan(authored);
   const plans = svc.listPlans();
   assert.ok(plans.includes('authored_plan'), `listPlans should include authored_plan, got ${JSON.stringify(plans)}`);
   const got = svc.getPlan('authored_plan');
@@ -242,7 +242,8 @@ test('savePlan rejects an invalid plan (fail loud)', async () => {
   const { svc } = setup();
   await svc.start();
   svc.stop();
-  assert.throws(() => svc.savePlan({ schemaVersion: 1, name: 'bad' }), /location|cues/);
+  // savePlan is async (save-over-active hot-reloads) — validation rejects.
+  await assert.rejects(() => svc.savePlan({ schemaVersion: 1, name: 'bad' }), /location|cues/);
 });
 
 test('setAutopilotEnabled(false) → controller manual, autopilot off', async () => {
@@ -1098,4 +1099,45 @@ test('recentFires records the plan DEFAULT CUE auto-application (source default)
   assert.ok(entry, `default cue must appear in recentFires, got ${JSON.stringify(st.recentFires)}`);
   assert.equal(entry.cueId, '__default_cue__', 'default cue uses the synthetic id');
   assert.equal(entry.label, 'House ambient', 'default cue carries its authored label');
+});
+
+// ── AUTO ON arms a paused timeline (operator: "AUTO ON = plan on") ─────────
+test('setAutopilotEnabled(true) while paused arms the timeline and re-pins the deck', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+  await svc.setMode('paused');
+  assert.equal(svc.getState().mode, 'paused');
+  assert.equal(svc.getState().planActive, false);
+  await svc.setAutopilotEnabled(true);
+  const st = svc.getState();
+  assert.equal(st.mode, 'armed', 'AUTO ON while paused must arm the timeline');
+  assert.equal(st.autopilotEnabled, true);
+  assert.equal(st.planActive, true, 'plan must be active (lock/warning engages) after AUTO ON');
+});
+
+// ── savePlan over the ACTIVE plan hot-reloads it (no re-activate needed) ───
+test('savePlan over the active plan hot-reloads the in-memory plan and keeps the event ring', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+  const ringBefore = svc.getState().recentFires.length;
+  const updated = makePlan();
+  updated.cues = [...updated.cues, {
+    id: 'c_hot_added',
+    label: 'Hot added',
+    kind: 'ambient',
+    trigger: { type: 'clock', at: '03:00' },
+    action: { type: 'playlist', name: 'baseline_pl', target: { channel: 'deck', id: null } },
+    durationMin: 30,
+    days: 'all',
+  }];
+  await svc.savePlan(updated);
+  // In-memory plan now carries the new cue (the live overview / fires see it).
+  assert.ok(svc.plan.cues.some((c) => c.id === 'c_hot_added'), 'active plan must hot-reload on save');
+  // The event ring is preserved (unlike activatePlan) and gains the lifecycle entry.
+  const ring = svc.getState().recentFires;
+  assert.ok(ring.length >= ringBefore, 'save must not clear the event ring');
+  const evt = ring.find((e) => e.kind === 'lifecycle' && e.reason === 'save');
+  assert.ok(evt, 'save-over-active must log a "Plan updated (live)" lifecycle event');
 });

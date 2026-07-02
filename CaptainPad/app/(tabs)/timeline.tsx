@@ -409,10 +409,14 @@ export default function TimelineScreen() {
       setSaveOk(`Saved "${draft.name}"`);
       setActionError(null);
       refreshPlans();
+      // Saving over the ACTIVE plan hot-reloads it engine-side, so the live
+      // overview (which gates the FIRE buttons via liveCueIds) must refresh —
+      // freshly-saved cues become fireable immediately, no re-activate needed.
+      refreshLiveOverview();
     } else {
       setActionError(r.error || 'Engine rejected save');
     }
-  }, [draft, refreshPlans]);
+  }, [draft, refreshPlans, refreshLiveOverview]);
 
   const handleDiscardDraft = useCallback(() => {
     setDraft(null);

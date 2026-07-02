@@ -4470,9 +4470,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
     } else if (req.url === '/timeline/plans' && req.method === 'POST') {
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
-      readBody(data => {
+      readBody(async (data) => {
         try {
-          const plan = timelineService.savePlan(data);
+          // savePlan is async: saving over the ACTIVE plan hot-reloads it
+          // (in-memory swap + catchUp) so the live overview/fires update.
+          const plan = await timelineService.savePlan(data);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: true, name: plan.name }));
         } catch (e) {
@@ -4494,7 +4496,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(404); res.end(JSON.stringify({ error: e.message }));
         }
       } else if (req.method === 'PUT') {
-        readBody(data => {
+        readBody(async (data) => {
           try {
             // The plan body's own `name` is authoritative; the URL name must
             // match so a PUT can't silently rename (fail loud on mismatch).
@@ -4502,7 +4504,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               res.writeHead(400);
               return res.end(JSON.stringify({ error: `plan name mismatch: url "${name}" vs body "${data.name}"` }));
             }
-            const plan = timelineService.savePlan({ ...data, name });
+            const plan = await timelineService.savePlan({ ...data, name });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ ok: true, name: plan.name }));
           } catch (e) {

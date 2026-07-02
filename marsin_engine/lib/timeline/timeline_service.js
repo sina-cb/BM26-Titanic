@@ -1398,12 +1398,23 @@ export class TimelineService {
   }
 
   /** Validate-then-write an authored plan. THROWS on an invalid plan (no fallback). */
-  savePlan(plan) {
+  async savePlan(plan) {
     if (!plan || typeof plan !== 'object') throw new Error('savePlan: plan must be an object');
     const normalized = validateShowPlan(plan);
     this._assertPlanName(normalized.name);
     if (!fs.existsSync(this.sceneDir)) fs.mkdirSync(this.sceneDir, { recursive: true });
     saveShowPlan(normalized, this._planPath(normalized.name));
+    // Saving OVER the ACTIVE plan hot-reloads it. Previously the engine kept
+    // running the stale in-memory copy until re-activate (disk/memory
+    // divergence), which also left freshly-saved cues invisible to the live
+    // overview — the maker's FIRE buttons stayed dead after SAVE. Swap the
+    // plan in place (the event ring is PRESERVED — unlike activatePlan) and
+    // catchUp so cue windows / baseline re-derive from the new content.
+    if (normalized.name === this.activePlan) {
+      this.plan = normalized;
+      this._recordLifecycle(`Plan updated (live): ${normalized.name}`, 'save', { source: 'manual' });
+      await this._catchUp();
+    }
     return normalized;
   }
 
@@ -1612,6 +1623,15 @@ export class TimelineService {
     this.state.autopilotEnabled = enabled;
     try {
       if (enabled) {
+        // AUTO ON also ARMS a paused/holding timeline. Operator intuition: the
+        // AUTO toggle turns the plan ON — previously, enabling autopilot while
+        // the timeline sat paused left it paused (planActive false, no 'plan'
+        // controlLock, no deck/mixer warning) with zero feedback. An active
+        // takeover lease ('overridden') is deliberately NOT broken here — the
+        // lease owns the rig until it expires or the operator resumes.
+        if (this.state.mode === 'paused' || this.state.mode === 'holding') {
+          await this.setMode('armed');
+        }
         // §16.6 lease + ap-on: enabling autopilot while a lease is pending starts
         // the (due) program rather than just resuming the baseline.
         if (this.state.pendingProgram && this.state.pendingProgram.cueId) {
