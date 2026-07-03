@@ -80,6 +80,31 @@ tested change + operator input, so they were deliberately scoped out:
    one line in `main.js`, place it. If it exceeds 170 px it won't fit one
    universe — split into per-universe fixture segments then.
 
+## Follow-up landed: LED resize + per-fixture diffusion (2026-07-03)
+
+Two operator-requested LED-fixture capabilities, both reusing existing code:
+
+- **Resize (S / scale gizmo).** The `S` shortcut + scale gizmo already
+  existed but a DMX par/bar consumes scale into its beam *angle*. For
+  `bus: led` fixtures, `DmxFixtureRuntime` now persists the gizmo scale to
+  `config.scaleX/Y/Z` and applies it to the pixel group (real resize —
+  pixels spread + grow), instead of touching the angle. Restored on load;
+  editable numerically via a new **Scale (Resize)** folder in the fixture
+  panel. Verified: gizmo path keeps `angle` at 20 and stores `scale [3,3,3]`;
+  Grid 2 renders 3× while Grid 1 is untouched.
+- **Diffusion (per-fixture soft glow).** `config.diffusion` (bool) +
+  `diffusionAmount`. Reuses the halo mesh each pixel already owns: ON
+  enlarges + shows them so neighbouring pixels bleed into a frosted-diffuser
+  glow; OFF hides them (crisp dots, **zero halo overdraw**). Opt-in **per
+  fixture**, so the GPU cost is isolated and independent (no shared/global
+  buffer). No post-processing pass — efficient by construction. No-op for DMX
+  fixtures. Verified A/B: Grid 1 (on) glows, Grid 2 (off) stays crisp.
+
+Files: `src/fixtures/dmx_fixture_runtime.js` (`_isLed` flag, `clampScale`,
+scale persist/restore, `applyDiffusion()`), `src/gui/gui_builder.js` (LED-only
+Diffusion + Scale controls), `scenes/titanic/scene_config.yaml` (grids demo
+on/off). The `S`=Scale shortcut was already in `shortcuts.js` — no new key.
+
 ## Open defaults chosen (no operator available to confirm)
 
 - Grid: 8×5, 50 mm pitch, **serpentine** wiring (physical norm for panels;

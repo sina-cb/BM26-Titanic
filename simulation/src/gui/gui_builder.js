@@ -1962,6 +1962,38 @@ function setupGUI() {
             propagateToSelected(index, 'penumbra', v);
           });
 
+          // ── LED-only controls: diffusion (soft glow) + resize ──
+          // Shown only for LED-bus fixtures (Ango 4 panels/ropes); a DMX
+          // par/bar has no size to resize and uses its beam, not a glow.
+          const _ledDef = getDefinition(config.fixtureType);
+          if (_ledDef && _ledDef.bus === 'led') {
+            if (config.diffusion === undefined) config.diffusion = false;
+            if (config.diffusionAmount === undefined) config.diffusionAmount = 2.5;
+            if (config.scaleX === undefined) config.scaleX = 1;
+            if (config.scaleY === undefined) config.scaleY = 1;
+            if (config.scaleZ === undefined) config.scaleZ = 1;
+
+            idxFolder.add(config, "diffusion").name("Diffusion (glow)").onChange(() => {
+              selectThisLight();
+              window.syncLightFromConfig(index);
+            });
+            idxFolder.add(config, "diffusionAmount", 1, 6, 0.1).name("Diffusion Amt").onChange(() => {
+              selectThisLight();
+              window.syncLightFromConfig(index);
+            });
+
+            // Resize (matches the S / scale gizmo — same config.scaleX/Y/Z).
+            const scaleFolder = idxFolder.addFolder("Scale (Resize)");
+            scaleFolder.close();
+            ['scaleX', 'scaleY', 'scaleZ'].forEach((ax) => {
+              scaleFolder.add(config, ax, 0.1, 20, 0.1).onChange((v) => {
+                selectThisLight();
+                window.syncLightFromConfig(index);
+                propagateToSelected(index, ax, v);
+              });
+            });
+          }
+
           // Position
           const posFolder = idxFolder.addFolder("Position");
           posFolder.close();

@@ -44,6 +44,15 @@ function clampUnit(value) {
   return THREE.MathUtils.clamp(numeric, 0, 1);
 }
 
+// Per-axis fixture scale (LED resize). Missing/garbage → 1 (no scale), and the
+// range keeps a dragged gizmo from collapsing the fixture to zero or blowing it
+// up past the scene.
+function clampScale(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 1;
+  return THREE.MathUtils.clamp(numeric, 0.1, 20);
+}
+
 function sanitizeRgb(r, g, b) {
   return [clampUnit(r), clampUnit(g), clampUnit(b)];
 }
@@ -79,6 +88,10 @@ export class DmxFixtureRuntime {
     this.modelRadius = modelRadius;
     this.fixtureDef = fixtureDef;
     this.patchDef = patchDef;
+    // LED-bus fixtures (Ango 4 pixel panels/ropes) get resize + diffusion; a
+    // DMX par/bar keeps its spotlight semantics (scale → cone angle, no glow
+    // toggle). One flag switches both behaviours below.
+    this._isLed = !!(fixtureDef && fixtureDef.bus === 'led');
 
     const color = config.color || '#ffaa44';
     const intensity = config.intensity || 5;
@@ -342,6 +355,30 @@ export class DmxFixtureRuntime {
         if (p.haloMat) p.haloMat.color.set(color).multiplyScalar(gain);
       }
     });
+    this.applyDiffusion();
+  }
+
+  // Per-fixture LED diffusion — a soft additive glow that lets neighbouring
+  // pixels bleed into each other (a frosted-diffuser look). It reuses the halo
+  // meshes each pixel already owns: ON enlarges + shows them so they overlap
+  // and blend; OFF hides them so the fixture renders as crisp dots with zero
+  // halo overdraw. Opt-in PER FIXTURE, so the GPU cost is isolated — a fixture
+  // that doesn't need it pays nothing, and each fixture's halos are independent
+  // (no shared/global buffer to serialize on). No-op for DMX fixtures.
+  applyDiffusion() {
+    if (!this._isLed) return;
+    const on = !!this.config.diffusion;
+    const amt = on ? Math.max(1, Number(this.config.diffusionAmount) || 2.5) : 1;
+    const haloScale = (params.globalHaloScale || 1.0) * amt;
+    const profileDef = getProfileDef(params.lightingProfile || 'edit');
+    this.pixels.forEach((p, j) => {
+      if (!p.halo) return;
+      const shouldEmitter = (profileDef.render.emitterMode === 'pixel') ||
+        (profileDef.render.emitterMode === 'fixture_representative' && j === 0);
+      p.halo.visible = this.group.visible && shouldEmitter && on;
+      p.halo.scale.setScalar(haloScale);
+      p.halo.matrixWorldNeedsUpdate = true;
+    });
   }
 
   syncFromConfig() {
@@ -354,6 +391,15 @@ export class DmxFixtureRuntime {
       THREE.MathUtils.degToRad(this.config.rotY || 0),
       THREE.MathUtils.degToRad(this.config.rotZ || 0)
     ), 'YXZ');
+    // LED resize: restore the persisted per-axis scale onto the hitbox; the
+    // group (all pixel visuals) copies it in updateVisualsFromHitbox.
+    if (this._isLed) {
+      this.hitbox.scale.set(
+        clampScale(this.config.scaleX),
+        clampScale(this.config.scaleY),
+        clampScale(this.config.scaleZ)
+      );
+    }
     this.updateVisualsFromHitbox();
   }
 
@@ -480,6 +526,12 @@ export class DmxFixtureRuntime {
   // ── Transform ────────────────────────────────────────────────────────
 
   handleTransformScale() {
+    // LED fixtures: the scale gizmo is a real resize — the scale is persisted
+    // by writeTransformToConfig and kept on the hitbox (the visuals follow it),
+    // so nothing to consume here.
+    if (this._isLed) return;
+    // DMX fixtures: a par/bar has no size, so the scale gizmo widens its beam
+    // cone instead, then resets to unit scale.
     if (this.hitbox.scale.x !== 1 || this.hitbox.scale.y !== 1 || this.hitbox.scale.z !== 1) {
       this.config.angle = THREE.MathUtils.clamp(
         (this.config.angle || 20) * Math.max(this.hitbox.scale.x, this.hitbox.scale.y),
@@ -497,6 +549,11 @@ export class DmxFixtureRuntime {
     this.config.rotX = THREE.MathUtils.radToDeg(euler.x);
     this.config.rotY = THREE.MathUtils.radToDeg(euler.y);
     this.config.rotZ = THREE.MathUtils.radToDeg(euler.z);
+    if (this._isLed) {
+      this.config.scaleX = clampScale(this.hitbox.scale.x);
+      this.config.scaleY = clampScale(this.hitbox.scale.y);
+      this.config.scaleZ = clampScale(this.hitbox.scale.z);
+    }
   }
 
   // ── Visibility & Scaling ─────────────────────────────────────────────
@@ -521,6 +578,8 @@ export class DmxFixtureRuntime {
         p.halo.matrixWorldNeedsUpdate = true;
       }
     });
+    // Re-assert LED diffusion halo scale on top of the global halo scale.
+    this.applyDiffusion();
   }
 
   setVisibility(visible, conesVisible = true) {
@@ -542,6 +601,9 @@ export class DmxFixtureRuntime {
       if (p.bulb) p.bulb.visible = visible && shouldEmitter;
       if (p.dots) p.dots.forEach(d => { if (d.mesh) d.mesh.visible = visible && shouldEmitter; });
     });
+    // LED halos are gated by the per-fixture diffusion toggle — override the
+    // profile-driven visibility just set above.
+    this.applyDiffusion();
   }
 
   setSelected(selected) {

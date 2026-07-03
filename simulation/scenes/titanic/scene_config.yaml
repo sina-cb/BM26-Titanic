@@ -1216,6 +1216,11 @@ parLights:
       traceGenerated: false
       enabled: true
       brightness: 100
+      diffusion: true
+      diffusionAmount: 3
+      scaleX: 1
+      scaleY: 1
+      scaleZ: 1
     - group: TE LED Grids
       name: TE LED Grid 2
       fixtureType: TeLedGrid40
@@ -1232,6 +1237,11 @@ parLights:
       traceGenerated: false
       enabled: true
       brightness: 100
+      diffusion: false
+      diffusionAmount: 2.5
+      scaleX: 1
+      scaleY: 1
+      scaleZ: 1
   traces: &ref_0
     - name: Right Front Wall Generator
       shape: line
