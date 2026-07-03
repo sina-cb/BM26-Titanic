@@ -520,6 +520,11 @@ Promise.all([
         if (parsed && parsed.model && parsed.model.fixture_type) {
           window.fixtureModels[parsed.model.fixture_type] = parsed.model;
         }
+      } else {
+        // Empty raw = the fetch degraded to '' upstream (404/failed load). A
+        // registered fixture type that never loads here silently falls back to
+        // a generic par, losing its bus:led gating — so fail loudly.
+        console.error("[FixtureModels] " + file + " failed to load (empty response) — fixtures of this type will render as a generic par");
       }
     } catch (err) {
       console.warn("Failed to parse fixture model " + file + ":", err);

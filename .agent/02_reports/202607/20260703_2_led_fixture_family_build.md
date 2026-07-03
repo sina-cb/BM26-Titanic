@@ -99,6 +99,9 @@ Two operator-requested LED-fixture capabilities, both reusing existing code:
   fixture**, so the GPU cost is isolated and independent (no shared/global
   buffer). No post-processing pass — efficient by construction. No-op for DMX
   fixtures. Verified A/B: Grid 1 (on) glows, Grid 2 (off) stays crisp.
+  **Operator note:** diffusion OFF hides the per-pixel halos entirely (crisp
+  dots, no glow) — unlike other pixel fixtures which always show their halos —
+  so the missing glow on an LED fixture is the intended OFF state, not a bug.
 
 Files: `src/fixtures/dmx_fixture_runtime.js` (`_isLed` flag, `clampScale`,
 scale persist/restore, `applyDiffusion()`), `src/gui/gui_builder.js` (LED-only

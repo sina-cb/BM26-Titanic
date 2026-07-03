@@ -370,6 +370,9 @@ export class DmxFixtureRuntime {
     const on = !!this.config.diffusion;
     const amt = on ? Math.max(1, Number(this.config.diffusionAmount) || 2.5) : 1;
     const haloScale = (params.globalHaloScale || 1.0) * amt;
+    // Read the profile fresh (not the cached this.profileDef) because the
+    // lighting profile is runtime state that changes without rebuilding the
+    // fixture — same reason setVisibility() re-fetches it below.
     const profileDef = getProfileDef(params.lightingProfile || 'edit');
     this.pixels.forEach((p, j) => {
       if (!p.halo) return;

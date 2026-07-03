@@ -96,9 +96,18 @@ function pascalCase(snake) {
     .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
 }
 
+// Words that should render fully uppercased in a human-readable name (matched
+// case-insensitively against the whole word). Everything else gets Title Case.
+const HUMAN_ACRONYMS = new Set([
+  'te', 'led', 'rgb', 'rgbw', 'rgbwav', 'dmx', 'uv', 'id', 'ip', 'ango', 'ac', 'dc'
+]);
+
 function humanName(snake) {
   return snake.split(/[_\s-]+/).filter(Boolean)
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    .map(w => HUMAN_ACRONYMS.has(w.toLowerCase())
+      ? w.toUpperCase()
+      : w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
 }
 
 // ── Pixel layout builders (return array of {x_mm, y_mm, z_mm} in wiring order) ─
