@@ -118,7 +118,9 @@ export const PlanLockBanner: React.FC<{
         position: 'absolute',
         top: 12,
         right: 16,
-        maxWidth: 460,
+        // Compact so it doesn't blanket the deck/mixer (operator request
+        // 2026-07-03: the takeover warning was covering too much UI).
+        maxWidth: 300,
         zIndex: 1000,
         transform: [
           {
@@ -138,11 +140,11 @@ export const PlanLockBanner: React.FC<{
           borderWidth: 2,
           borderColor: '#9a6a12',
           borderRadius: 10,
-          paddingHorizontal: 18,
-          paddingVertical: 10,
+          paddingHorizontal: 12,
+          paddingVertical: 8,
           flexDirection: 'row',
           alignItems: 'center',
-          gap: 12,
+          gap: 9,
           boxShadow: shadow(0, 4, 12, '#000', 0.3),
           elevation: 8,
         }}
@@ -152,17 +154,17 @@ export const PlanLockBanner: React.FC<{
           <Text
             style={{
               fontFamily: 'SpaceGrotesk_700Bold',
-              fontSize: 14,
+              fontSize: 11.5,
               // Dark text on amber for contrast (matches onPrimary-on-amber
               // convention used by the gruvbox theme + the PANIC hint).
               color: '#1a1a1a',
-              letterSpacing: 1.2,
+              letterSpacing: 0.8,
               textTransform: 'uppercase',
             }}
           >
             {leaseHeld
-              ? `Taken over — plan resumes in ${formatMSS(leaseRemainingSec)}`
-              : 'Plan is running — pattern & mixer changes are locked'}
+              ? `Taken over · resumes ${formatMSS(leaseRemainingSec)}`
+              : 'Plan running · controls locked'}
           </Text>
           {/* Name the LIVE event (engine activeCue) — shown in BOTH the locked
               and taken-over states so the operator always knows what the plan
@@ -171,40 +173,43 @@ export const PlanLockBanner: React.FC<{
             <Text
               style={{
                 fontFamily: 'SpaceGrotesk_700Bold',
-                fontSize: 12,
+                fontSize: 10.5,
                 color: '#1a1a1a',
-                marginTop: 3,
+                marginTop: 2,
               }}
               numberOfLines={1}
             >
               {`▶ ${activeCue.label}${activeCue.kind === 'program' ? ' (show)' : ''}`}
             </Text>
           ) : null}
-          <Text
-            style={{
-              fontFamily: 'Inter_400Regular',
-              fontSize: 11,
-              color: 'rgba(26,26,26,0.82)',
-              marginTop: 2,
-            }}
-          >
-            {leaseHeld
-              ? 'You hold manual control; the plan auto-resumes when you stop. Hand it back early with RESUME NOW.'
-              : 'Take over to make changes. Navigation and viewing stay available.'}
-          </Text>
+          {/* One-line hint. In the taken-over state the title already says it
+              auto-resumes, so we skip the paragraph to keep the strip small
+              (operator request 2026-07-03). */}
+          {leaseHeld ? null : (
+            <Text
+              style={{
+                fontFamily: 'Inter_400Regular',
+                fontSize: 10,
+                color: 'rgba(26,26,26,0.82)',
+                marginTop: 2,
+              }}
+            >
+              Take over to make changes.
+            </Text>
+          )}
           {/* TAKEN-OVER state → a single RESUME NOW hand-back + GO TO PLAN.
               LOCKED state → TEMPORARY TAKE OVER (primary, full width) on its
               own row, then GO TO PLAN below. DISABLE PLAN was removed
               (2026-07-03 simplification): TEMPORARY TAKE OVER is the only way to
               interrupt a running plan, and it always auto-resumes. */}
           {leaseHeld ? (
-            <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+            <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
               <TouchableOpacity
                 onPress={() => { void resumeNow(); }}
                 style={{
                   flex: 1,
-                  minHeight: 40,
-                  borderRadius: 8,
+                  minHeight: 30,
+                  borderRadius: 7,
                   backgroundColor: '#1a1a1a',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -212,7 +217,7 @@ export const PlanLockBanner: React.FC<{
                 accessibilityRole="button"
                 accessibilityLabel="Hand control back and resume the plan now"
               >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: PLAN_LOCK_AMBER }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6, color: PLAN_LOCK_AMBER }}>
                   RESUME NOW
                 </Text>
               </TouchableOpacity>
@@ -220,8 +225,8 @@ export const PlanLockBanner: React.FC<{
                 onPress={handleGoToPlan}
                 style={{
                   flex: 1,
-                  minHeight: 40,
-                  borderRadius: 8,
+                  minHeight: 30,
+                  borderRadius: 7,
                   borderWidth: 1.5,
                   borderColor: '#1a1a1a',
                   alignItems: 'center',
@@ -230,7 +235,7 @@ export const PlanLockBanner: React.FC<{
                 accessibilityRole="button"
                 accessibilityLabel="Go to the timeline plan tab"
               >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: '#1a1a1a' }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6, color: '#1a1a1a' }}>
                   GO TO PLAN
                 </Text>
               </TouchableOpacity>
@@ -241,37 +246,37 @@ export const PlanLockBanner: React.FC<{
                 onPress={handleTakeOver}
                 disabled={takingOver}
                 style={{
-                  minHeight: 40,
-                  borderRadius: 8,
+                  minHeight: 32,
+                  borderRadius: 7,
                   backgroundColor: '#1a1a1a',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  marginTop: 8,
+                  marginTop: 6,
                   opacity: takingOver ? 0.6 : 1,
                 }}
                 accessibilityRole="button"
                 accessibilityLabel="Temporarily take over — unlock the deck and mixer for manual control"
                 accessibilityState={{ disabled: takingOver }}
               >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, letterSpacing: 0.8, color: PLAN_LOCK_AMBER }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.6, color: PLAN_LOCK_AMBER }}>
                   {takingOver ? 'TAKING OVER…' : 'TEMPORARY TAKE OVER'}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={handleGoToPlan}
                 style={{
-                  minHeight: 36,
-                  borderRadius: 8,
+                  minHeight: 28,
+                  borderRadius: 7,
                   borderWidth: 1.5,
                   borderColor: '#1a1a1a',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  marginTop: 8,
+                  marginTop: 6,
                 }}
                 accessibilityRole="button"
                 accessibilityLabel="Go to the timeline plan tab"
               >
-                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: '#1a1a1a' }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6, color: '#1a1a1a' }}>
                   GO TO PLAN
                 </Text>
               </TouchableOpacity>

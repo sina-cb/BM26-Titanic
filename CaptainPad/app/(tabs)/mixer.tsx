@@ -1233,19 +1233,32 @@ export default function MixerScreen() {
   const maxChannelsRef = useRef<number>(3);
 
   // TEMPORARY TAKE OVER (mixer variant) — handed to the PlanLockBanner. Engage
-  // the operator lease and UNLOCK the controls; that is ALL. It must NOT switch
-  // the output to the mixer view (bug 2026-07-02): the plan was driving the
-  // DECK, so the mixer's channels sit at fader 0 — flipping the output to the
-  // empty mixer view blacked the whole rig out on takeover (mission-critical:
-  // the Titanic must stay lit). Keeping the output where the plan left it means
-  // the live look continues while the operator builds their mix; when they
-  // actually want mixer output they flip the DECK/MIXER view toggle themselves
-  // (that path is view-fader deterministic per the engine /mixer/view fix).
+  // the operator lease, UNLOCK the controls, AND put the live output on the
+  // mixer so the operator's CHANNELS drive the lights.
+  //
+  // Operator request 2026-07-03: a mixer takeover used to leave the output on
+  // the DECK (the plan was driving the base channel), so the exterior kept
+  // playing the plan's base look — "some random master" — while the operator's
+  // mixer-fader moves did nothing visible. Switching to the mixer here makes the
+  // takeover WYSIWYG: what you mix is what shows.
+  //
+  // Ordering is race-free: the takeover POST clears the plan's deck-pin, and
+  // that release runs to completion (microtask drain) BEFORE the engine can
+  // process the next request — so the /mixer/view write below always lands on
+  // the LIVE fader (→ mixer, targetViewFader 1.0), never gets swallowed as a
+  // saved-only value.
+  //
+  // Trade-off the operator accepted: this is a DELIBERATE manual takeover, so if
+  // every mixer channel sits at fader 0 the exterior goes dark until they raise
+  // one. The never-dark mission rule governs AUTONOMOUS/plan behavior — not a
+  // hands-on operator who chose to grab the mixer.
   const handleMixerTakeover = useCallback(async () => {
     const ok = await timelineTakeover();
     if (!ok) {
       Alert.alert('Take over failed', 'The engine rejected the takeover. The plan may still be running.');
+      return;
     }
+    await setMixerView('mixer');
   }, [timelineTakeover]);
 
   // On mixer-tab focus, switch the engine output to the mixer — but ONLY when

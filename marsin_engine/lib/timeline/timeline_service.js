@@ -1754,6 +1754,15 @@ export class TimelineService {
         }
         await this._establishBaselineIfActive('operator');
       } else {
+        // Turning the plan's autopilot OFF is an explicit operator "stop
+        // driving" — it must ALSO END any takeover in progress (clear the
+        // operator lease + exit 'overridden'), so no stale "taken over — plan
+        // resumes in M:SS" banner lingers (operator report 2026-07-03:
+        // disabling the plan after a takeover left the warning up). With the
+        // lease cleared and mode armed, planActive AND leaseHeld both read
+        // false → the deck/mixer lock banner and the lease countdown both drop.
+        this.state.operatorLease = null;
+        this.state.mode = 'armed';
         await this._disarmBaselineAutopilot();
         if (!this.state.activeProgram) this.state.controller = 'manual';
         // The baseline no longer owns the deck (docs/38 §16.9). If a program is

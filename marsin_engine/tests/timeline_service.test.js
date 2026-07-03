@@ -1142,6 +1142,24 @@ test('setAutopilotEnabled(false→true) drops then re-engages the plan', async (
   assert.equal(st.planActive, true, 'plan must be active (lock/warning engages) after AUTO ON');
 });
 
+// ── disabling the plan (AUTO OFF) ends an in-progress takeover ─────────────
+// (operator report 2026-07-03: taken over → AUTO OFF → the "taken over" banner
+// lingered because the lease/overridden weren't cleared).
+test('setAutopilotEnabled(false) clears an in-progress takeover lease + exits overridden', async () => {
+  const { svc } = setup();
+  await svc.start();
+  svc.stop();
+  svc.takeover();
+  assert.ok(svc.state.operatorLease, 'lease armed by takeover');
+  assert.equal(svc.state.mode, 'overridden');
+  await svc.setAutopilotEnabled(false);
+  const st = svc.getState();
+  assert.equal(svc.state.operatorLease, null, 'AUTO OFF clears the takeover lease');
+  assert.equal(st.mode, 'armed', 'AUTO OFF exits overridden');
+  assert.equal(st.planActive, false, 'plan not driving after AUTO OFF');
+  // Both banners drop: planActive false (no lock) AND no lease (no takeover pill).
+});
+
 // ── savePlan over the ACTIVE plan hot-reloads it (no re-activate needed) ───
 test('savePlan over the active plan hot-reloads the in-memory plan and keeps the event ring', async () => {
   const { svc } = setup();
