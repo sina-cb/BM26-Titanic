@@ -314,14 +314,14 @@ test('program preempting an all-channel baseline disarms deck AND mixer (Fix 5)'
   assert.ok(offTargets.includes('mixer:mix_a'), `expected mixer disarm, got ${JSON.stringify(offTargets)}`);
 });
 
-// ── Fix 8: hold() updates controller immediately ──────────────────────────────
+// ── Fix 8: takeover() updates controller immediately ──────────────────────────
 
-test('hold() sets controller to manual immediately (Fix 8)', async () => {
+test('takeover() sets controller to manual immediately (Fix 8)', async () => {
   const { svc } = setup();
   await svc.start();
   svc.stop();
   assert.equal(svc.state.controller, 'autopilot');
-  svc.hold(5);
+  svc.takeover();
   assert.equal(svc.state.controller, 'manual');
 });
 
@@ -1126,17 +1126,18 @@ test('recentFires records the plan DEFAULT CUE auto-application (source default)
   assert.equal(entry.label, 'House ambient', 'default cue carries its authored label');
 });
 
-// ── AUTO ON arms a paused timeline (operator: "AUTO ON = plan on") ─────────
-test('setAutopilotEnabled(true) while paused arms the timeline and re-pins the deck', async () => {
+// ── AUTO OFF drops planActive; AUTO ON re-engages the plan + re-pins deck ───
+// (operator: "AUTO ON = plan on"). PAUSE was removed, so autopilot OFF is the
+// persistent idle-manual state; toggling it back ON re-activates the plan.
+test('setAutopilotEnabled(false→true) drops then re-engages the plan', async () => {
   const { svc } = setup();
   await svc.start();
   svc.stop();
-  await svc.setMode('paused');
-  assert.equal(svc.getState().mode, 'paused');
-  assert.equal(svc.getState().planActive, false);
+  await svc.setAutopilotEnabled(false);
+  assert.equal(svc.getState().planActive, false, 'AUTO OFF drops planActive');
   await svc.setAutopilotEnabled(true);
   const st = svc.getState();
-  assert.equal(st.mode, 'armed', 'AUTO ON while paused must arm the timeline');
+  assert.equal(st.mode, 'armed');
   assert.equal(st.autopilotEnabled, true);
   assert.equal(st.planActive, true, 'plan must be active (lock/warning engages) after AUTO ON');
 });
@@ -1307,34 +1308,15 @@ test('audit S8: boot honors the PERSISTED active plan over the config default', 
   assert.equal(svc2.getState().activePlan, 'operator_plan', 'reported name matches the running content');
 });
 
-test('audit C1: setMode(paused) after a takeover clears the lease (no orphan)', async () => {
+test('audit C1: resume() after a takeover clears the lease (no orphan)', async () => {
   const { svc } = setup();
   await svc.start();
   svc.stop();
   svc.takeover();
   assert.ok(svc.state.operatorLease, 'lease armed by takeover');
-  await svc.setMode('paused');
-  assert.equal(svc.state.operatorLease, null, 'pause must not strand the lease');
-  assert.equal(svc.state.mode, 'paused');
-});
-
-test('audit H1: hold() supersedes a takeover — lease cleared, hold survives', async () => {
-  let nowMs = Date.UTC(2026, 7, 30, 2, 0, 0);
-  const { svc } = setup({ now: 0 });
-  svc.nowFn = () => nowMs;
-  await svc.start();
-  svc.takeover();
-  const r = svc.hold(30);
-  assert.equal(svc.state.operatorLease, null, 'hold clears the takeover lease');
-  assert.notEqual(svc.state.mode, 'overridden', 'hold exits overridden');
-  assert.equal(r.manualHoldUntilMs, nowMs + 30 * 60000);
-  // 3 minutes later (would have been past the 120s lease expiry): the hold
-  // must still stand — pre-fix the lease release wiped manualHoldUntilMs.
-  nowMs += 3 * 60000;
-  await svc._tick();
-  svc.stop();
-  assert.equal(svc.state.manualHoldUntilMs, r.manualHoldUntilMs, 'hold survives past the old lease window');
-  assert.equal(svc.getState().mode, 'holding', 'still holding');
+  await svc.resume();
+  assert.equal(svc.state.operatorLease, null, 'resume must not strand the lease');
+  assert.equal(svc.state.mode, 'armed');
 });
 
 test('audit C1 backstop: the tick drops an orphaned lease on a non-overridden mode', async () => {

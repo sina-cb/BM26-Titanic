@@ -4,7 +4,8 @@
  * WHICH cues want to fire; the arbiter decides WHICH of those actually drive the
  * lights, under the three-layer precedence model:
  *
- *   MANUAL / paused  (operator takeover — drives nothing, hold keeps the look)
+ *   MANUAL           (operator takeover — drives nothing; the deck stays where
+ *                      the operator left it until the lease auto-resumes)
  *     > PROGRAM       (a preprogrammed scheduled show — overrides autopilot,
  *                      suppresses mood swaps, owns priority for its hold window)
  *     > AUTOPILOT     (baseline: engine autopilot cycles a playlist + mood swaps
@@ -52,7 +53,7 @@ export function resolveHold(hold, now, dayTimes) {
  * @param {{
  *   now: number,
  *   plan: object,                         // validated show plan (carries autopilot + cue kinds)
- *   state: object,                        // runtime state (autopilotEnabled, mode, activeProgram, pendingProgram, manualHoldUntilMs)
+ *   state: object,                        // runtime state (autopilotEnabled, mode, activeProgram, pendingProgram, operatorLease)
  *   fires: Array<{cueId:string, reason:string}>,   // from evaluateTick
  *   dayTimes: object,                     // from resolveDayTimes (carries tz + sunEvents for hold anchors)
  *   leaseSec?: number,                    // pending-program lease window (docs/38 §16.5, default 30)
@@ -71,18 +72,20 @@ export function arbitrate({ now, plan, state, fires, dayTimes, leaseSec }) {
   for (const cue of plan.cues) cueById.set(cue.id, cue);
 
   const autopilotEnabled = next.autopilotEnabled !== false;
-  const paused = next.mode === 'paused' || next.mode === 'overridden';
-  const holding = typeof next.manualHoldUntilMs === 'number' && next.manualHoldUntilMs > now;
+  // Operator takeover (mode 'overridden') is the ONLY manual mode now — PAUSE
+  // and HOLD were removed (2026-07-03 simplification). A takeover always
+  // auto-resumes via its lease, so the plan can never get stuck stopped.
+  const overridden = next.mode === 'overridden';
   const moodAllowed = !plan.autopilot || plan.autopilot.mood !== false;
   const leaseWindowSec = typeof leaseSec === 'number' && leaseSec > 0 ? leaseSec : 30;
 
   // ── "manual" = any operator-owned sub-state (docs/38 §16.1) ─────────────────
-  // PAUSED/OVERRIDDEN (mode), HOLDING (manualHoldUntilMs), or IDLE (autopilot
-  // disabled with no active program). A lease arms on top of ANY of these.
-  const manual = paused || holding || (!autopilotEnabled && !next.activeProgram);
+  // OVERRIDDEN (takeover mode) or IDLE (autopilot disabled with no active
+  // program). A pending-program lease arms on top of EITHER of these.
+  const manual = overridden || (!autopilotEnabled && !next.activeProgram);
 
   // ── lease auto-expiry FIRST (docs/38 §16.5: lease-exp → PG auto-start) ──────
-  // The show goes on even when manual/paused (I2). Convert the lease into an
+  // The show goes on even during a manual takeover (I2). Convert the lease into an
   // active program NOW, disarm the baseline, and emit the program's action.
   let leaseAutoStarted = false;
   if (next.pendingProgram && typeof next.pendingProgram.expiresAtMs === 'number'
@@ -113,7 +116,7 @@ export function arbitrate({ now, plan, state, fires, dayTimes, leaseSec }) {
   // drives until the lease resolves (docs/38 §16.1).
   let controller;
   if (leaseAutoStarted) controller = 'program';
-  else if (paused || holding) controller = 'manual';
+  else if (overridden) controller = 'manual';
   else if (next.activeProgram) controller = 'program';
   else if (autopilotEnabled) controller = 'autopilot';
   else controller = 'manual';
@@ -124,7 +127,7 @@ export function arbitrate({ now, plan, state, fires, dayTimes, leaseSec }) {
   // TOP and wins. Emitting resume last would let the baseline playlist clobber
   // the mood swap on the same tick a program expires.
   let resumedThisTick = false;
-  if (programEnded && autopilotEnabled && !paused && !holding) {
+  if (programEnded && autopilotEnabled && !overridden) {
     actions.push({ cueId: '__autopilot_resume__', action: { type: '__resume_autopilot__' } });
     next.activeProgram = null;
     controller = 'autopilot';
@@ -142,7 +145,7 @@ export function arbitrate({ now, plan, state, fires, dayTimes, leaseSec }) {
       // A program just auto-started from a lease this tick — a freshly-due
       // program is the one we just started; ignore further program fires.
       if (leaseAutoStarted) continue;
-      // MANUAL (paused/holding/idle) → ARM a lease instead of firing (docs/38
+      // MANUAL (takeover/idle) → ARM a lease instead of firing (docs/38
       // §16.4/§16.5, I2/I3). The operator gets a sign; if no action within the
       // lease window the lease auto-starts the program. Only ONE pending at a
       // time — a newer due program replaces an un-actioned one. We do NOT latch

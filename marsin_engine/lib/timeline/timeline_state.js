@@ -15,7 +15,9 @@ import yaml from 'js-yaml';
 
 export const TIMELINE_STATE_FILE = 'timeline_state.yaml';
 
-// `mode` ∈ armed | paused | holding | overridden.
+// `mode` ∈ armed | overridden. PAUSE and HOLD were removed (2026-07-03
+// simplification): the only operator interruption of a running plan is a
+// TEMPORARY TAKE OVER ('overridden'), which always auto-resumes via its lease.
 export function defaultTimelineState() {
   return {
     activePlan: null,
@@ -42,7 +44,6 @@ export function defaultTimelineState() {
     currentMood: 'calm',
     lastFiredCueId: null,
     lastFiredAtMs: null,
-    manualHoldUntilMs: null,
     firedToday: {},
     dayKey: null,
     prevMood: null,

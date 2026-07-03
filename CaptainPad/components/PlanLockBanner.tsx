@@ -4,7 +4,6 @@ import { router } from 'expo-router';
 import { shadow } from '@/styles/globalStyles';
 import { useEngineLock } from '@/hooks/useEngineLock';
 import { useOperatorTakeover, useTimeline } from '@/hooks/useTimeline';
-import { setTimelineMode } from '@/utils/timelineApi';
 
 // ── PlanLockBanner ─────────────────────────────────────────────────────
 // The SOFT counterpart to EngineLockoutOverlay. Lights up whenever the
@@ -61,21 +60,6 @@ export const PlanLockBanner: React.FC<{
   // controlLock is NOT 'plan' (planActive false under 'overridden'), so
   // exactly one variant renders at a time.
   const { leaseHeld, leaseRemainingSec, resumeNow } = useOperatorTakeover();
-  // DISABLE PLAN pauses the timeline (POST /timeline/mode {paused}); the
-  // engine releases the plan's deck-pin and the banner clears on the next
-  // broadcast. In-flight guard against double taps; a non-ok result surfaces
-  // loudly (codex P0 — no silent failure).
-  const [disabling, setDisabling] = useState(false);
-  const handleDisablePlan = async () => {
-    if (disabling) return;
-    setDisabling(true);
-    try {
-      const r = await setTimelineMode('paused');
-      if (!r.ok) Alert.alert('Disable plan failed', r.error || 'Engine rejected the pause request.');
-    } finally {
-      setDisabling(false);
-    }
-  };
   const handleGoToPlan = () => {
     try { router.push('/timeline'); } catch { /* router not ready during very early boot */ }
   };
@@ -210,9 +194,9 @@ export const PlanLockBanner: React.FC<{
           </Text>
           {/* TAKEN-OVER state → a single RESUME NOW hand-back + GO TO PLAN.
               LOCKED state → TEMPORARY TAKE OVER (primary, full width) on its
-              own row, then DISABLE PLAN + GO TO PLAN below. Three buttons on
-              one row overflowed the 460px banner on an iPad, so the primary
-              action gets its own row. */}
+              own row, then GO TO PLAN below. DISABLE PLAN was removed
+              (2026-07-03 simplification): TEMPORARY TAKE OVER is the only way to
+              interrupt a running plan, and it always auto-resumes. */}
           {leaseHeld ? (
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
               <TouchableOpacity
@@ -273,47 +257,24 @@ export const PlanLockBanner: React.FC<{
                   {takingOver ? 'TAKING OVER…' : 'TEMPORARY TAKE OVER'}
                 </Text>
               </TouchableOpacity>
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                <TouchableOpacity
-                  onPress={handleDisablePlan}
-                  disabled={disabling}
-                  style={{
-                    flex: 1,
-                    minHeight: 36,
-                    borderRadius: 8,
-                    borderWidth: 1.5,
-                    borderColor: '#1a1a1a',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    opacity: disabling ? 0.6 : 1,
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Disable the running plan (pause the timeline)"
-                  accessibilityState={{ disabled: disabling }}
-                >
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: '#1a1a1a' }}>
-                    {disabling ? 'DISABLING…' : 'DISABLE PLAN'}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={handleGoToPlan}
-                  style={{
-                    flex: 1,
-                    minHeight: 36,
-                    borderRadius: 8,
-                    borderWidth: 1.5,
-                    borderColor: '#1a1a1a',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Go to the timeline plan tab"
-                >
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: '#1a1a1a' }}>
-                    GO TO PLAN
-                  </Text>
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity
+                onPress={handleGoToPlan}
+                style={{
+                  minHeight: 36,
+                  borderRadius: 8,
+                  borderWidth: 1.5,
+                  borderColor: '#1a1a1a',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginTop: 8,
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Go to the timeline plan tab"
+              >
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: '#1a1a1a' }}>
+                  GO TO PLAN
+                </Text>
+              </TouchableOpacity>
             </>
           )}
         </View>

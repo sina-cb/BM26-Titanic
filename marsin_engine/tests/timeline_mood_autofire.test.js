@@ -13,7 +13,6 @@ const baseState = () => ({
   autopilotEnabled: true,
   mode: 'armed',
   activeProgram: null,
-  manualHoldUntilMs: null,
 });
 
 const dayTimes = (plan) => ({ phases: {}, sunEvents: {}, tz: plan.location.tz });

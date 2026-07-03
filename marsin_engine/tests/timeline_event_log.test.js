@@ -115,10 +115,10 @@ const byReason = (svc, reason) => lifecycles(svc).filter((e) => e.reason === rea
 
 test('every event entry carries the pinned wire shape', async () => {
   const { svc, clock } = await setup();
-  await svc.setMode('paused');
+  svc.takeover();
   clock.now += 1000;
   await svc.resume();
-  assert.ok(svc.recentFires.length >= 3, 'boot + pause + resume expected');
+  assert.ok(svc.recentFires.length >= 3, 'boot + takeover + resume expected');
   for (const e of svc.recentFires) {
     assert.ok(e.kind === 'fire' || e.kind === 'lifecycle', `kind pinned, got ${e.kind}`);
     assert.equal(typeof e.label, 'string');
@@ -143,15 +143,17 @@ test('boot logs "Plan activated" lifecycle and cue fires stay kind:fire', async 
   assert.ok(svc.recentFires.indexOf(boot[0]) < svc.recentFires.findIndex((e) => e.kind === 'fire'));
 });
 
-// ── pause / resume / hold ────────────────────────────────────────────────────
+// ── takeover / resume ────────────────────────────────────────────────────────
+// PAUSE and HOLD were removed (2026-07-03); a TEMPORARY TAKE OVER is the only
+// manual interruption, and it always auto-resumes.
 
-test('pause + resume log once each — edge-only under repeats', async () => {
+test('takeover + resume log once each — edge-only under repeats', async () => {
   const { svc, clock } = await setup();
-  await svc.setMode('paused');
-  await svc.setMode('paused'); // repeat: no new event
-  assert.equal(byReason(svc, 'pause').length, 1);
-  assert.equal(byReason(svc, 'pause')[0].label, 'Timeline paused');
-  assert.equal(byReason(svc, 'pause')[0].source, 'manual');
+  svc.takeover();
+  svc.takeover(); // repeat: idempotent refresh, no new event
+  assert.equal(byReason(svc, 'takeover').length, 1);
+  assert.equal(byReason(svc, 'takeover')[0].label, 'Operator takeover (lease armed)');
+  assert.equal(byReason(svc, 'takeover')[0].source, 'manual');
 
   clock.now += 1000;
   await svc.resume();
@@ -159,38 +161,6 @@ test('pause + resume log once each — edge-only under repeats', async () => {
   assert.equal(byReason(svc, 'resume')[0].label, 'Plan resumed by operator');
   // Resuming while already armed (nothing held) logs nothing new.
   await svc.resume();
-  assert.equal(byReason(svc, 'resume').length, 1);
-});
-
-test('hold logs with minutes; natural expiry logs "Hold expired" exactly once', async () => {
-  const { svc, clock } = await setup();
-  svc.hold(5);
-  const held = byReason(svc, 'hold');
-  assert.equal(held.length, 1);
-  assert.equal(held[0].label, 'Hold for 5 min');
-  // Ticks INSIDE the window log nothing.
-  clock.now += 60 * 1000;
-  await svc._tick();
-  assert.equal(byReason(svc, 'hold-expired').length, 0);
-  // Past the window → exactly one expiry event, and re-ticks never repeat it.
-  clock.now += 5 * 60 * 1000;
-  await svc._tick();
-  clock.now += 1000;
-  await svc._tick();
-  const expired = byReason(svc, 'hold-expired');
-  assert.equal(expired.length, 1);
-  assert.equal(expired[0].label, 'Hold expired — plan resumes');
-  assert.equal(expired[0].source, 'auto');
-});
-
-test('explicit resume during a hold suppresses the hold-expiry event', async () => {
-  const { svc, clock } = await setup();
-  svc.hold(5);
-  clock.now += 1000;
-  await svc.resume();
-  clock.now += 10 * 60 * 1000; // way past where the hold would have lapsed
-  await svc._tick();
-  assert.equal(byReason(svc, 'hold-expired').length, 0);
   assert.equal(byReason(svc, 'resume').length, 1);
 });
 
@@ -265,10 +235,11 @@ test('program hold expiry logs "Program ended (hold expired)" from the tick', as
 
 test('lease armed logs once (no per-tick spam), auto-start logs + fires', async () => {
   const { svc, clock } = await setup();
-  // Move to the NEXT day just before the 12:00 cue, PAUSED (manual owner).
+  // Move to the NEXT day just before the 12:00 cue, autopilot OFF (idle =
+  // the persistent manual owner now that PAUSE/HOLD are gone).
   clock.now = NEXT_DAY_1159_MS;
   await svc._tick(); // day rollover resets firedToday
-  await svc.setMode('paused');
+  await svc.setAutopilotEnabled(false);
   clock.now += 2 * 60 * 1000; // 12:01 → cue due while manual → lease ARMS
   await svc._tick();
   clock.now += 1000;
@@ -293,7 +264,7 @@ test('dismissProgram logs "Show dismissed" once', async () => {
   const { svc, clock } = await setup();
   clock.now = NEXT_DAY_1159_MS;
   await svc._tick();
-  await svc.setMode('paused');
+  await svc.setAutopilotEnabled(false);
   clock.now += 2 * 60 * 1000;
   await svc._tick(); // lease arms
   const r = svc.dismissProgram();
@@ -310,7 +281,7 @@ test('dismissProgram logs "Show dismissed" once', async () => {
 
 test('activatePlan clears the ring and opens it with "Plan activated"', async () => {
   const { svc } = await setup();
-  await svc.setMode('paused'); // seed some history
+  svc.takeover(); // seed some history
   await svc.activatePlan('test_plan');
   const first = svc.recentFires[0];
   assert.equal(first.kind, 'lifecycle');
@@ -318,7 +289,7 @@ test('activatePlan clears the ring and opens it with "Plan activated"', async ()
   assert.equal(first.label, 'Plan activated: test_plan');
   assert.equal(first.source, 'manual');
   // The outgoing history is gone; only the activation (+ its catchUp) remain.
-  assert.equal(byReason(svc, 'pause').length, 0);
+  assert.equal(byReason(svc, 'takeover').length, 0);
 });
 
 test('steady-state ticks add no events (a reconcile loop never spams the log)', async () => {
@@ -336,7 +307,7 @@ test('the ring is bounded at its cap and getState mirrors it', async () => {
   const { svc, clock } = await setup();
   for (let i = 0; i < 60; i += 1) {
     clock.now += 1000;
-    await svc.setMode(i % 2 === 0 ? 'paused' : 'armed'); // 60 genuine edges
+    await svc.setAutopilotEnabled(i % 2 === 0 ? false : true); // 60 genuine edges
   }
   assert.ok(svc.recentFires.length <= 50, `ring bounded, got ${svc.recentFires.length}`);
   const st = svc.getState();

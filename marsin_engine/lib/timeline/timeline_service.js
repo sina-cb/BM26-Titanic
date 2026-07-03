@@ -249,14 +249,10 @@ export class TimelineService {
     // The EVENT LOG ring (docs/38 §15.2). Field name kept `recentFires` for
     // wire compat; entries are { kind:'fire'|'lifecycle', cueId?, label,
     // reason, source, atMs }. 'fire' = a cue application; 'lifecycle' = a
-    // plan/mode transition (activate, pause/resume, hold, autopilot toggle,
+    // plan/mode transition (activate, resume, autopilot toggle,
     // takeover/lease, program end, pending-program lease). In-memory only
     // (never persisted) — matches the pre-existing recentFires behavior.
     this.recentFires = [];
-    // Manual-hold EDGE latch: set by hold(), cleared by resume/arm/lease paths,
-    // so the tick logs "Hold expired" exactly ONCE when the window lapses
-    // naturally (never per-tick, never after an explicit resume).
-    this._holdLatched = false;
     this.wouldFire = [];        // ring of mood-suppressed { cueId, reason, atMs }
     this.sunCache = { dayKey: null, events: null };
     this._tickHandle = null;
@@ -290,10 +286,6 @@ export class TimelineService {
   async start() {
     if (this._tickHandle) return;
     this._loadSceneFiles();
-    // A hold persisted across a restart re-arms the expiry edge-latch so its
-    // natural lapse is still logged exactly once.
-    this._holdLatched = typeof this.state.manualHoldUntilMs === 'number'
-      && this.state.manualHoldUntilMs > this.nowFn();
     // The plan coming alive on boot/scene-switch is a lifecycle event — the
     // operator sees WHICH plan the engine woke up driving (docs/38 §15.2).
     this._recordLifecycle(`Plan activated: ${this.activePlan}`, 'boot', { source: 'auto' });
@@ -484,12 +476,12 @@ export class TimelineService {
     // lock — so CaptainPad keeps full deck/mixer control. A no-op out of window;
     // _reconcileDeckPin releases any pin that predates leaving the window.
     if (!this._inFestivalWindow()) return;
-    // TAKEOVER/PAUSE GATE (audit M7 2026-07-02): a cue dispatch that was
-    // in-flight when the operator took over (or paused) must not re-pin the
-    // deck out from under them — the tail of an awaited apply used to snap the
-    // view back and re-raise the lock for up to a tick. Mode is set
-    // synchronously by takeover()/setMode(), so this gate is race-safe.
-    if (this.state.mode === 'overridden' || this.state.mode === 'paused') return;
+    // TAKEOVER GATE (audit M7 2026-07-02): a cue dispatch that was in-flight
+    // when the operator took over must not re-pin the deck out from under them
+    // — the tail of an awaited apply used to snap the view back and re-raise the
+    // lock for up to a tick. Mode is set synchronously by takeover(), so this
+    // gate is race-safe.
+    if (this.state.mode === 'overridden') return;
     if (typeof this.deps.forceDeckView !== 'function') {
       throw new Error('forceDeckView dep is required to pin output to the deck');
     }
@@ -499,7 +491,7 @@ export class TimelineService {
 
   // Release the plan's soft deck-pin through the EXISTING viewOverride machinery
   // (docs/38 §16.9). The counterpart to _forceDeckView: called on EVERY
-  // transition where the plan stops driving the deck (pause / hold / autopilot
+  // transition where the plan stops driving the deck (takeover / autopilot
   // off / deactivate) so the yellow "PLAN IS RUNNING" soft-lock clears and
   // CaptainPad regains the deck/mixer (its gating keys off controlLock==='plan').
   // The engine dep only clears a 'plan'-owned pin — a real PortWatch device lock
@@ -925,7 +917,7 @@ export class TimelineService {
   }
 
   // Re-arm the baseline autopilot WITHOUT reloading the playlist — so resuming
-  // from a pause/hold continues cycling from the CURRENT entry rather than
+  // from a takeover continues cycling from the CURRENT entry rather than
   // jumping back to the first. (_applyAutopilotBaseline reloads; this doesn't.)
   async _rearmBaselineAutopilot() {
     const ap = this.plan && this.plan.autopilot ? this.plan.autopilot : null;
@@ -934,21 +926,21 @@ export class TimelineService {
     const state = { active: true, delay_s: ap.delay_s, shuffle: ap.shuffle };
     for (const target of targets) await this.deps.setAutopilot({ target, state });
     this._baselineArmed = true;
-    // Resuming the deck baseline (pause/hold → armed) re-pins output to the deck
+    // Resuming the deck baseline (takeover → armed) re-pins output to the deck
     // (docs/38 §16.9) so a stale operator view doesn't leave the plan running off-screen.
     if (targets.some((t) => t.kind === 'deck')) await this._forceDeckView(null);
   }
 
   // Keep the engine baseline autopilot armed IFF the controller is 'autopilot'.
-  // This is what makes pause/hold actually FREEZE deck cycling and resume /
-  // hold-expiry resume it — uniformly, in one place. Acts only on a transition
-  // (the _baselineArmed flag), never every tick (which would reset the autopilot
-  // delay). Touches only the baseline's target(s); independent operator-armed
-  // overlays on other channels are left alone (docs/38 §16 I5, per-channel).
+  // This is what makes a takeover actually FREEZE deck cycling and resume it —
+  // uniformly, in one place. Acts only on a transition (the _baselineArmed
+  // flag), never every tick (which would reset the autopilot delay). Touches
+  // only the baseline's target(s); independent operator-armed overlays on other
+  // channels are left alone (docs/38 §16 I5, per-channel).
   async _reconcileBaselineArm() {
     const ap = this.plan && this.plan.autopilot ? this.plan.autopilot : null;
     if (!ap) return;   // no baseline target to act on
-    // `controller` already encodes the runtime autopilot toggle + pause/hold/
+    // `controller` already encodes the runtime autopilot toggle + takeover +
     // program, so it is the single source of truth for "should the baseline run".
     const want = this.state.controller === 'autopilot';
     if (want === this._baselineArmed) return;
@@ -970,18 +962,18 @@ export class TimelineService {
 
   // True when the plan is currently DRIVING the rig (docs/38 §16). Mirrors the
   // `planActive` computed in getState(): autopilot-or-program controller AND not
-  // paused/overridden. When false the plan owns nothing and its soft deck-pin
-  // must be released.
+  // overridden (operator takeover). When false the plan owns nothing and its
+  // soft deck-pin must be released.
   _isPlanDrivingDeck() {
     const controller = this.state.controller || 'autopilot';
     return (controller === 'autopilot' || controller === 'program')
-      && this.state.mode !== 'paused' && this.state.mode !== 'overridden';
+      && this.state.mode !== 'overridden';
   }
 
   // Reconcile the plan's SOFT deck-pin against whether the plan is still driving
   // the deck (docs/38 §16.9). The symmetric counterpart to the forceDeckView
   // calls scattered through the apply/baseline paths: whenever the plan STOPS
-  // driving (pause / hold / autopilot-off / deactivate), release the pin so the
+  // driving (takeover / autopilot-off / deactivate), release the pin so the
   // 'plan' controlLock clears and CaptainPad's PlanLockBanner + deck/mixer gating
   // drop automatically. The engine dep only clears a 'plan'-owned pin, so a real
   // PortWatch hardware lock is left untouched. Idempotent (release is a no-op
@@ -1050,13 +1042,11 @@ export class TimelineService {
   // never crashes (codex P0). Ported from establishBaselineIfActive.
   async _establishBaselineIfActive(reason) {
     const now = this.nowFn();
-    const holding = typeof this.state.manualHoldUntilMs === 'number' && this.state.manualHoldUntilMs > now;
-    const paused = this.state.mode === 'paused' || this.state.mode === 'overridden';
     if (this.state.autopilotEnabled === false) {
       this.state.controller = 'manual';
       return;
     }
-    if (paused || holding) { this.state.controller = 'manual'; return; }
+    if (this.state.mode === 'overridden') { this.state.controller = 'manual'; return; }
     try {
       await this._establishAutopilotBaseline(reason);
       this.state.controller = 'autopilot';
@@ -1178,12 +1168,12 @@ export class TimelineService {
     // resume (the deck fell back to the autopilot baseline). Re-dispatch it
     // explicitly here. Skipped on boot (priorDeckWindowCueId is null), when
     // `best` / the caught-up program already restored the SAME cue, when the
-    // operator is still paused/overridden, or when it no longer drives the deck.
+    // operator is still overridden, or when it no longer drives the deck.
     if (priorDeckWindowCueId
         && priorDeckWindowCueId !== '__default_cue__'
         && !programCaughtUp
         && !(best && best.cue && best.cue.id === priorDeckWindowCueId)
-        && this.state.mode !== 'paused' && this.state.mode !== 'overridden') {
+        && this.state.mode !== 'overridden') {
       const owner = this.plan.cues.find((c) => c.id === priorDeckWindowCueId);
       if (owner && owner.enabled !== false && await this._actionDrivesDeck(owner.action)) {
         try {
@@ -1209,16 +1199,6 @@ export class TimelineService {
     this._ticking = true;
     try {
       const now = this.nowFn();
-
-      // Manual-hold natural expiry (docs/38 §15.2 event log). EDGE-ONLY via
-      // _holdLatched: hold() arms the latch, resume/arm/lease paths clear it
-      // silently (they log their own transitions), so a lapsed window logs
-      // exactly once and a re-tick never repeats it.
-      if (this._holdLatched
-          && !(typeof this.state.manualHoldUntilMs === 'number' && this.state.manualHoldUntilMs > now)) {
-        this._holdLatched = false;
-        this._recordLifecycle('Hold expired — plan resumes', 'hold-expired', { source: 'auto' });
-      }
 
       // Operator-takeover lease auto-release (docs/38 §16): if the operator
       // holds a lease (mode 'overridden') and it has expired with no UI
@@ -1250,8 +1230,8 @@ export class TimelineService {
       // SELF-HEAL (audit C1 2026-07-02), the mirror image: a lease stranded on
       // a NON-'overridden' mode. takeover() is the only lease writer and always
       // sets mode 'overridden' with it, so lease-without-overridden is by
-      // definition orphaned (a mode exit that predates the setMode/enableProgram
-      // /hold clears). activity() won't extend it and the release above won't
+      // definition orphaned (a mode exit that predates the resume/enableProgram
+      // clears). activity() won't extend it and the release above won't
       // match it — drop it so CaptainPad's leaseHeld can't wedge true.
       if (this.state.mode !== 'overridden' && this.state.operatorLease) {
         this.state.operatorLease = null;
@@ -1464,8 +1444,7 @@ export class TimelineService {
       });
     }
 
-    const holding = typeof this.state.manualHoldUntilMs === 'number' && this.state.manualHoldUntilMs > now;
-    const mode = holding ? 'holding' : this.state.mode;
+    const mode = this.state.mode;
 
     // Surface the operator-takeover lease as {expiresAtMs} (docs/38 §16) so
     // CaptainPad can render/seed the auto-resume countdown.
@@ -1476,7 +1455,7 @@ export class TimelineService {
     const controller = this.state.controller || 'autopilot';
     // planActive (docs/38 §16): the timeline is actively DRIVING the rig.
     const planActive = (controller === 'autopilot' || controller === 'program')
-      && this.state.mode !== 'paused' && this.state.mode !== 'overridden';
+      && this.state.mode !== 'overridden';
     // forcingDeckView (docs/38 §16.9): the plan is active AND the engine output
     // is currently pinned to the deck under plan control. CaptainPad reads this
     // to know a switch-to-mixer needs the confirm prompt + 1-min auto-revert
@@ -1656,92 +1635,23 @@ export class TimelineService {
 
   // ── operator controls (docs/38 §14.5) ─────────────────────────────────────
 
-  async setMode(mode) {
-    if (mode !== 'armed' && mode !== 'paused') {
-      throw new Error("mode must be 'armed' or 'paused'");
-    }
-    const prevMode = this.state.mode;
-    this.state.mode = mode;
-    // Leaving 'overridden' by ANY route must clear the takeover lease (audit
-    // C1 2026-07-02): a lease stranded on a non-overridden mode is never
-    // extended by activity() and never released by the tick, so CaptainPad
-    // read leaseHeld=true forever ("resumes in 0:00") and the deck/mixer
-    // gates never re-engaged. takeover() is the only lease writer.
-    this.state.operatorLease = null;
-    if (mode === 'armed') {
-      this.state.manualHoldUntilMs = null;
-      this._holdLatched = false; // explicit arm ends the hold — no expiry log
-    }
-    // Event log (docs/38 §15.2): PAUSED / ARMED are operator lifecycle
-    // transitions. EDGE-ONLY — a repeated POST of the current mode logs nothing.
-    if (prevMode !== mode) {
-      this._recordLifecycle(
-        mode === 'paused' ? 'Timeline paused' : 'Timeline armed',
-        mode === 'paused' ? 'pause' : 'arm', { source: 'manual' },
-      );
-    }
-    // PAUSE stops the plan from driving the deck → release the soft deck-pin so
-    // the 'plan' controlLock clears (docs/38 §16.9). ARM re-enters the driving
-    // state; the baseline reconcile / next tick re-pins as needed.
-    if (mode === 'paused') {
-      // Reflect takeover in the controller immediately so _reconcileDeckPin sees
-      // the plan is no longer driving (don't wait for the next tick).
-      this.state.controller = 'manual';
-      try {
-        await this._reconcileDeckPin();
-      } catch (e) {
-        this.lastError = `pause deck-pin release: ${e && e.message}`;
-      }
-    }
-    this._persistAndBroadcast();
-    return { mode: this.state.mode };
-  }
-
-  hold(minutes) {
-    const m = Number(minutes);
-    if (!Number.isFinite(m) || m <= 0) throw new Error('minutes must be a number > 0');
-    this.state.manualHoldUntilMs = this.nowFn() + m * 60000;
-    // A hold SUPERSEDES a takeover lease (audit H1 2026-07-02): the lease's
-    // 2-min inactivity release used to fire mid-hold and wipe
-    // manualHoldUntilMs — an explicit "HOLD 30m" silently died after 2
-    // minutes. The hold is now the manual owner: clear the lease and exit
-    // 'overridden' (the hold itself keeps the controller manual until expiry).
-    this.state.operatorLease = null;
-    if (this.state.mode === 'overridden') this.state.mode = 'armed';
-    // A hold is operator takeover — reflect that in the controller immediately
-    // rather than letting it read stale (e.g. 'autopilot') until the next tick.
-    this.state.controller = 'manual';
-    // Event log (docs/38 §15.2): HOLD with its minutes. The latch arms the
-    // one-shot "Hold expired" edge in the tick (a re-hold just re-arms it).
-    this._holdLatched = true;
-    this._recordLifecycle(`Hold for ${m} min`, 'hold', { source: 'manual' });
-    // A hold stops the plan from driving the deck → release the soft deck-pin
-    // (docs/38 §16.9). Async release; the sync return keeps the REST contract.
-    this._reconcileDeckPin().catch((e) => {
-      this.lastError = `hold deck-pin release: ${e && e.message}`;
-    });
-    this._persistAndBroadcast();
-    return { manualHoldUntilMs: this.state.manualHoldUntilMs };
-  }
-
   /**
-   * Explicit operator hand-back (docs/38 §14.5 + §16). Clears pause/override,
-   * clears any operator-takeover lease, and RESUMES THE PLAN AT NOW via catchUp
-   * (re-derives the correct program/look for the current wall-clock and
-   * re-establishes the baseline) — same "resume-at-now" behavior as a lease
-   * auto-release, but triggered by the operator rather than by inactivity.
+   * Explicit operator hand-back (docs/38 §14.5 + §16). Ends any operator
+   * takeover — clears the takeover lease + exits 'overridden' — and RESUMES THE
+   * PLAN AT NOW via catchUp (re-derives the correct program/look for the current
+   * wall-clock and re-establishes the baseline). Same "resume-at-now" behavior
+   * as a lease auto-release, but triggered by the operator rather than by
+   * inactivity. Since PAUSE/HOLD were removed, takeover is the ONLY manual
+   * interruption of a running plan (it always auto-resumes) — resume is its
+   * explicit hand-back.
    */
   async resume() {
     // Event log (docs/38 §15.2): explicit operator hand-back. EDGE-ONLY — a
-    // resume that changes nothing (already armed, no hold, no lease) logs
-    // nothing. Logged BEFORE _catchUp so the resume precedes its catchUp fire.
-    const wasManual = this.state.mode !== 'armed'
-      || !!this.state.operatorLease
-      || (typeof this.state.manualHoldUntilMs === 'number' && this.state.manualHoldUntilMs > this.nowFn());
+    // resume that changes nothing (already armed, no lease) logs nothing.
+    // Logged BEFORE _catchUp so the resume precedes its catchUp fire.
+    const wasManual = this.state.mode !== 'armed' || !!this.state.operatorLease;
     this.state.mode = 'armed';
-    this.state.manualHoldUntilMs = null;
     this.state.operatorLease = null;
-    this._holdLatched = false; // explicit resume ends any hold — no expiry log
     if (wasManual) this._recordLifecycle('Plan resumed by operator', 'resume', { source: 'manual' });
     try {
       await this._catchUp();
@@ -1810,8 +1720,6 @@ export class TimelineService {
     const expiry = this.state.operatorLease && this.state.operatorLease.expiresAtMs;
     this.state.mode = 'armed';
     this.state.operatorLease = null;
-    this.state.manualHoldUntilMs = null;
-    this._holdLatched = false; // the release supersedes any hold-expiry log
     // Event log (docs/38 §15.2): auto-resume on lease expiry. One-shot by
     // construction (the lease is nulled here). Logged BEFORE _catchUp so the
     // release precedes its catchUp fire in the ring.
@@ -1834,15 +1742,10 @@ export class TimelineService {
     this.state.autopilotEnabled = enabled;
     try {
       if (enabled) {
-        // AUTO ON also ARMS a paused/holding timeline. Operator intuition: the
-        // AUTO toggle turns the plan ON — previously, enabling autopilot while
-        // the timeline sat paused left it paused (planActive false, no 'plan'
-        // controlLock, no deck/mixer warning) with zero feedback. An active
-        // takeover lease ('overridden') is deliberately NOT broken here — the
-        // lease owns the rig until it expires or the operator resumes.
-        if (this.state.mode === 'paused' || this.state.mode === 'holding') {
-          await this.setMode('armed');
-        }
+        // An active takeover lease ('overridden') is deliberately NOT broken by
+        // AUTO ON — the lease owns the rig until it expires or the operator
+        // resumes. (PAUSE/HOLD were removed, so there is no paused/holding state
+        // for AUTO ON to re-arm anymore.)
         // §16.6 lease + ap-on: enabling autopilot while a lease is pending starts
         // the (due) program rather than just resuming the baseline.
         if (this.state.pendingProgram && this.state.pendingProgram.cueId) {
@@ -1878,12 +1781,12 @@ export class TimelineService {
     );
     this.state.activeProgram = null;
     try {
-      if (this.state.autopilotEnabled !== false && this.state.mode !== 'paused' && this.state.mode !== 'overridden') {
+      if (this.state.autopilotEnabled !== false && this.state.mode !== 'overridden') {
         await this._establishBaselineIfActive('program/end');
       } else {
         this.state.controller = 'manual';
       }
-      // If the plan is no longer driving the deck (autopilot off / paused),
+      // If the plan is no longer driving the deck (autopilot off / takeover),
       // release its soft deck-pin (docs/38 §16.9). No-op when the baseline
       // re-established above re-pinned the deck.
       await this._reconcileDeckPin();
@@ -1896,8 +1799,8 @@ export class TimelineService {
   }
 
   /**
-   * Start the PENDING program immediately (docs/38 §16.5 lease-enable). Clears
-   * pause/hold (exits manual), promotes pendingProgram → activeProgram, disarms
+   * Start the PENDING program immediately (docs/38 §16.5 lease-enable). Exits
+   * any takeover (manual), promotes pendingProgram → activeProgram, disarms
    * the baseline on the program's target(s), applies the pending action through
    * the same dispatch path, clears the lease, sets controller='program'. FAIL
    * LOUD with a 400-style result when there is no pending lease.
@@ -1914,11 +1817,9 @@ export class TimelineService {
     const hold = cue ? cue.hold : undefined;
     // Exit manual — the operator chose to hand the deck to the program.
     this.state.mode = 'armed';
-    this.state.manualHoldUntilMs = null;
     // Exiting 'overridden' must clear the takeover lease too (audit C1) — a
     // stranded lease is never extended/released once mode isn't 'overridden'.
     this.state.operatorLease = null;
-    this._holdLatched = false; // the enable supersedes any hold-expiry log
     this.state.activeProgram = {
       cueId: pend.cueId,
       startedAtMs: now,

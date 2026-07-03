@@ -49,7 +49,7 @@ export interface TimelineCue {
 // compat). Pinned wire shape:
 //   { kind:'fire'|'lifecycle', cueId?, label, reason, source, atMs }
 // kind 'fire' = a cue application (manual/auto/catchUp/default source);
-// kind 'lifecycle' = a plan/mode transition (activated, paused/resumed, hold,
+// kind 'lifecycle' = a plan/mode transition (activated, resumed,
 // autopilot toggle, operator takeover/lease, program end, pending lease).
 // kind/label/source are OPTIONAL so an older engine's plain fire entries
 // ({cueId, atMs, reason}) still parse and render.
@@ -97,7 +97,10 @@ export interface TimelinePendingProgram {
   expiresAtMs: number;
 }
 
-export type TimelineMode = 'armed' | 'paused' | 'holding' | 'overridden';
+// armed = the plan drives the rig; overridden = an operator TEMPORARY TAKE OVER
+// is active (auto-resumes via its lease). PAUSE and HOLD were removed on
+// 2026-07-03 (takeover is the only manual interruption now).
+export type TimelineMode = 'armed' | 'overridden';
 export type TimelineController = 'autopilot' | 'program' | 'manual';
 
 // Operator-takeover lease (the DECK/MIXER manual-override lease, distinct from
@@ -123,8 +126,8 @@ export interface TimelineState {
   // The armed pending-program lease (docs/38 §16.5), or null when none is due.
   pendingProgram: TimelinePendingProgram | null;
   // True when the controller is autopilot/program AND the mode is not
-  // paused/overridden — i.e. the plan is actively driving the rig. This is the
-  // primary "plan is live" signal the deck/mixer plan indicator reads.
+  // overridden (operator takeover) — i.e. the plan is actively driving the rig.
+  // This is the primary "plan is live" signal the deck/mixer plan indicator reads.
   planActive: boolean;
   // True when the plan is active AND the output view is pinned to the DECK
   // under plan control (the plan is forcing the deck output). When this is set,
@@ -458,16 +461,8 @@ export function activateTimelinePlan(name: string): Promise<ApiResult<unknown>> 
   return timelineSend('POST', '/timeline/plan/activate', { name });
 }
 
-export function setTimelineMode(mode: 'armed' | 'paused'): Promise<ApiResult<unknown>> {
-  return timelineSend('POST', '/timeline/mode', { mode });
-}
-
 export function setTimelineAutopilot(enabled: boolean): Promise<ApiResult<unknown>> {
   return timelineSend('POST', '/timeline/autopilot', { enabled });
-}
-
-export function holdTimeline(minutes: number): Promise<ApiResult<unknown>> {
-  return timelineSend('POST', '/timeline/hold', { minutes });
 }
 
 export function resumeTimeline(): Promise<ApiResult<unknown>> {

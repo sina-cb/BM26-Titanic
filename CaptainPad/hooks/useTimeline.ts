@@ -2,7 +2,7 @@
 //
 // docs/38 §15: the Timeline runs IN the engine now (no separate :6965
 // companion). The engine broadcasts a `timelineState` message on its
-// `/ws/control` topic on connect and on every state change (tick, mode flip,
+// `/ws/control` topic on connect and on every state change (tick, takeover,
 // autopilot toggle, program start/end, cue fire, error). This hook reads that
 // off the SHARED control-plane bus (engineEvents) — the same socket every
 // other control hook uses — and seeds the first paint from GET /timeline/state.
@@ -24,9 +24,7 @@ import { engineEvents } from '@/utils/engineEvents';
 import {
   fetchTimelineState,
   activateTimelinePlan,
-  setTimelineMode,
   setTimelineAutopilot,
-  holdTimeline,
   resumeTimeline,
   endTimelineProgram,
   enableTimelineProgram,
@@ -35,7 +33,6 @@ import {
   postTimelineTakeover,
   postTimelineActivity,
   TimelineState,
-  TimelineMode,
 } from '@/utils/timelineApi';
 
 export interface TimelineHookState {
@@ -47,9 +44,8 @@ export interface TimelineHookState {
 
 export interface TimelineActions {
   activatePlan: (name: string) => Promise<boolean>;
-  setMode: (mode: 'armed' | 'paused') => Promise<boolean>;
   setAutopilot: (enabled: boolean) => Promise<boolean>;
-  hold: (minutes: number) => Promise<boolean>;
+  /** End an operator takeover and resume the plan at now (POST /timeline/resume). */
   resume: () => Promise<boolean>;
   endProgram: () => Promise<boolean>;
   /** Start the pending-program lease NOW (docs/38 §16.5 lease-enable). */
@@ -142,44 +138,11 @@ async function _activatePlan(name: string): Promise<boolean> {
   return true;
 }
 
-async function _setMode(mode: 'armed' | 'paused'): Promise<boolean> {
-  // Optimistic mode flip — the pill reads correctly the instant the operator
-  // taps; the WS broadcast / re-seed reconciles within a tick.
-  const priorMode = _cached.state?.mode ?? null;
-  if (_cached.state) {
-    _emit({ ..._cached, state: { ..._cached.state, mode: mode as TimelineMode } });
-  }
-  const r = await setTimelineMode(mode);
-  if (!r.ok) {
-    // Restore the prior mode explicitly — the re-seed no-ops when the engine
-    // is unreachable, which would otherwise leave the pill showing a lie.
-    if (priorMode !== null && _cached.state) {
-      _emit({ ..._cached, state: { ..._cached.state, mode: priorMode }, error: r.error || 'Failed to set mode' });
-    } else {
-      _emit({ ..._cached, error: r.error || 'Failed to set mode' });
-    }
-    await _reseedAfterAction();
-    return false;
-  }
-  await _reseedAfterAction();
-  return true;
-}
-
 async function _setAutopilot(enabled: boolean): Promise<boolean> {
   const r = await setTimelineAutopilot(enabled);
   if (!r.ok) {
     _emit({ ..._cached, error: r.error || 'Failed to toggle autopilot' });
     await _reseedAfterAction();
-    return false;
-  }
-  await _reseedAfterAction();
-  return true;
-}
-
-async function _hold(minutes: number): Promise<boolean> {
-  const r = await holdTimeline(minutes);
-  if (!r.ok) {
-    _emit({ ..._cached, error: r.error || 'Failed to hold' });
     return false;
   }
   await _reseedAfterAction();
@@ -275,9 +238,7 @@ export function useTimeline(): UseTimelineResult {
   return {
     ...state,
     activatePlan: _activatePlan,
-    setMode: _setMode,
     setAutopilot: _setAutopilot,
-    hold: _hold,
     resume: _resume,
     endProgram: _endProgram,
     enableProgram: _enableProgram,
@@ -311,7 +272,7 @@ export function useTimeline(): UseTimelineResult {
 // genuine 2-min inactivity actually releases the lease engine-side (catchUp).
 
 export interface OperatorTakeover {
-  /** True when controller ∈ {autopilot,program} and not paused/overridden. */
+  /** True when controller ∈ {autopilot,program} and not overridden (takeover). */
   planActive: boolean;
   /** True while an operator takeover lease is held (mode overridden). */
   leaseHeld: boolean;

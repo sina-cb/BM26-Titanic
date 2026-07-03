@@ -1,7 +1,7 @@
 /*
  * timeline_deck_release_default_cue.test.js — service-level tests for:
  *   P1 (docs/38 §16.9): releaseDeckView on every transition where the plan stops
- *       driving the deck (pause / autopilot-off / takeover). Proves the plan's
+ *       driving the deck (takeover / autopilot-off). Proves the plan's
  *       soft deck-pin clears (forcingDeckView → false) and, critically, that a
  *       real PortWatch device lock is NEVER cleared by the plan.
  *   P2 (docs/38 §16.11): cue durationMin + plan-level defaultCue — the deck
@@ -98,20 +98,22 @@ function setup(plan, { now } = {}) {
 
 // ── P1: releaseDeckView on pause / autopilot-off / takeover ───────────────────
 
-test('P1 pause releases the plan deck-pin (forcingDeckView → false, pin cleared)', async () => {
+test('P1 takeover releases the plan deck-pin (forcingDeckView → false, pin cleared)', async () => {
   const { svc, calls } = setup(basePlan());
   await svc.start();
   // Boot baseline pinned the deck.
   assert.equal(svc.getState().forcingDeckView, true, 'plan pins deck on boot');
   assert.equal(calls.viewState.mode, 'deck');
 
-  await svc.setMode('paused');
+  // takeover()'s deck-pin release is fire-and-forget; flush the microtasks.
+  svc.takeover();
+  await new Promise((r) => setImmediate(r));
   svc.stop();
-  assert.ok(calls.releaseDeckView.length >= 1, 'pause called releaseDeckView');
-  assert.equal(calls.viewState.mode, null, 'deck pin cleared on pause');
+  assert.ok(calls.releaseDeckView.length >= 1, 'takeover called releaseDeckView');
+  assert.equal(calls.viewState.mode, null, 'deck pin cleared on takeover');
   const st = svc.getState();
-  assert.equal(st.planActive, false, 'planActive false when paused');
-  assert.equal(st.forcingDeckView, false, 'forcingDeckView false when paused');
+  assert.equal(st.planActive, false, 'planActive false when overridden');
+  assert.equal(st.forcingDeckView, false, 'forcingDeckView false when overridden');
 });
 
 test('P1 autopilot-off releases the plan deck-pin', async () => {
@@ -153,7 +155,8 @@ test('P1 a PortWatch device lock is NEVER cleared by the plan release', async ()
   calls.viewState.mode = 'deck';
   calls.viewState.source = 'portwatch';
 
-  await svc.setMode('paused');
+  svc.takeover();
+  await new Promise((r) => setImmediate(r));
   await svc.setAutopilotEnabled(false);
   svc.stop();
   // The plan asked to release, but the fake (like the engine) refuses to clear a
@@ -246,15 +249,16 @@ test('P2 no-durationMin deck cue keeps today\'s behavior (default cue does NOT f
     'no-durationMin cue holds the deck; default cue does not fill (no regression)');
 });
 
-test('P2 the default cue is subject to the P1 release (pause clears its pin)', async () => {
+test('P2 the default cue is subject to the P1 release (takeover clears its pin)', async () => {
   const plan = basePlan({ defaultCue: { label: 'House', action: { type: 'look', look: 'house' } } });
   const { svc, calls } = setup(plan);
   await svc.start();
   assert.equal(svc.getState().forcingDeckView, true, 'default cue pins the deck');
-  await svc.setMode('paused');
+  svc.takeover();
+  await new Promise((r) => setImmediate(r));
   svc.stop();
-  assert.ok(calls.releaseDeckView.length >= 1, 'pause released the default-cue deck pin');
-  assert.equal(svc.getState().forcingDeckView, false, 'default-cue pin cleared on pause');
+  assert.ok(calls.releaseDeckView.length >= 1, 'takeover released the default-cue deck pin');
+  assert.equal(svc.getState().forcingDeckView, false, 'default-cue pin cleared on takeover');
 });
 
 test('P2 absent defaultCue → autopilot baseline stands (no regression)', async () => {

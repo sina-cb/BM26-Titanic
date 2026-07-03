@@ -7,7 +7,7 @@
  *
  * Sections:
  *   A. Header / live status — plan + scene, controller pill (AUTOPILOT /
- *      PROGRAM / MANUAL), autopilot toggle, PAUSE/RESUME + HOLD, mood pill,
+ *      PROGRAM / MANUAL), autopilot toggle, mood pill,
  *      active-program countdown, engine dot, offline banner.
  *   B. 8-day overview — horizontally-scannable day cards (sun arc + cue
  *      markers by kind). Live (GET /overview) until the operator edits, then
@@ -17,7 +17,7 @@
  *      cues via the themed CueEditorSheet (segmented/stepper/dropdown — no
  *      keyboard walls). Validation 400s surface inline, loudly.
  *   D. Cue list + controls — per-cue FIRE, the EVENT LOG (cue fires + plan
- *      lifecycle: activate/pause/resume/hold/autopilot/takeover/program),
+ *      lifecycle: activate/resume/autopilot/takeover/program),
  *      program/end.
  *
  * Draft / preview / save loop:
@@ -64,7 +64,6 @@ import {
   brcStarterPlan, blankPlan, clonePlan, duplicatePlan, makeCueId, hhmmTo12h,
 } from '@/components/timeline/timelineTemplate';
 
-const HOLD_MINUTES = 30;
 const PREVIEW_DEBOUNCE_MS = 350;
 // EVENT LOG list cap (the engine ring holds up to 50; show the freshest 20).
 const EVENT_LOG_MAX_ROWS = 20;
@@ -151,7 +150,7 @@ export default function TimelineScreen() {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
-  const { state, connected, error, setMode, setAutopilot, hold, resume, endProgram, fireCue, activatePlan } = useTimeline();
+  const { state, connected, error, setAutopilot, endProgram, fireCue, activatePlan } = useTimeline();
 
   // ── Server resources ──
   const [plans, setPlans] = useState<string[]>([]);
@@ -607,11 +606,6 @@ export default function TimelineScreen() {
 
   // ── Live controls ──
   const isOffline = !connected && !state;
-  const mode = state?.mode ?? 'armed';
-  const isPaused = mode === 'paused';
-  const handlePauseResume = useCallback(() => {
-    if (isPaused) resume(); else setMode('paused');
-  }, [isPaused, resume, setMode]);
 
   const programCountdown = useMemo(() => {
     const p = state?.activeProgram;
@@ -806,28 +800,13 @@ export default function TimelineScreen() {
         {previewTransportError ? <Banner styles={styles} text={`Preview unavailable: ${previewTransportError} (a valid draft still auto-saves)`} tone="error" /> : null}
         {saveOk ? <Banner styles={styles} text={saveOk} tone="ok" C={C} /> : null}
 
-        {/* ── Live controls ── */}
+        {/* ── Live controls ──
+            PAUSE and HOLD were removed (2026-07-03 simplification): the only
+            way to interrupt a running plan is a TEMPORARY TAKE OVER from the
+            deck/mixer (which always auto-resumes), surfaced by the global plan
+            banner + its RESUME NOW. What stays here is the AUTO toggle (baseline
+            autopilot on/off) and the plan picker. */}
         <View style={styles.controlsRow}>
-          <TouchableOpacity
-            onPress={handlePauseResume}
-            disabled={!state}
-            style={[styles.controlButton, isPaused ? { backgroundColor: C.tertiary } : { backgroundColor: C.surfaceContainerHigh, borderColor: C.ghostBorder, borderWidth: 1 }]}
-            accessibilityLabel={isPaused ? 'Resume timeline' : 'Pause timeline'}
-          >
-            <IconSymbol name={isPaused ? 'play.fill' : 'pause.fill'} size={16} color={isPaused ? '#FFF' : C.text} />
-            <Text style={[styles.controlLabel, { color: isPaused ? '#FFF' : C.text }]}>{isPaused ? 'RESUME' : 'PAUSE'}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            onPress={() => hold(HOLD_MINUTES)}
-            disabled={!state}
-            style={[styles.controlButton, { backgroundColor: C.surfaceContainerHigh, borderColor: C.ghostBorder, borderWidth: 1 }]}
-            accessibilityLabel={`Hold for ${HOLD_MINUTES} minutes`}
-          >
-            <IconSymbol name="pin.fill" size={16} color={C.text} />
-            <Text style={[styles.controlLabel, { color: C.text }]}>{`HOLD ${HOLD_MINUTES}m`}</Text>
-          </TouchableOpacity>
-
           <TouchableOpacity
             onPress={() => state && setAutopilot(!state.autopilotEnabled)}
             disabled={!state}

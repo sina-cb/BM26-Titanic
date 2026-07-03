@@ -151,9 +151,9 @@ test('autopilot disabled → mood fire is suppressed (no autopilot layer)', () =
   assert.equal(r.actions.length, 0);
 });
 
-test('paused → nothing fires (program suppressed under hard takeover)', () => {
+test('overridden (takeover) → nothing fires (program suppressed under takeover)', () => {
   const plan = makePlan();
-  const state = baseState({ mode: 'paused' });
+  const state = baseState({ mode: 'overridden' });
   const r = arbitrate({
     now: NOW, plan, state,
     fires: [{ cueId: 'c_program', reason: 'manual' }, { cueId: 'c_mood', reason: 'mood' }],
@@ -163,22 +163,14 @@ test('paused → nothing fires (program suppressed under hard takeover)', () => 
   assert.equal(r.actions.length, 0);
 });
 
-test('holding → program suppressed, controller manual', () => {
-  const plan = makePlan();
-  const state = baseState({ mode: 'armed', manualHoldUntilMs: NOW + 600000 });
-  const r = arbitrate({ now: NOW, plan, state, fires: [{ cueId: 'c_program', reason: 'manual' }], dayTimes: DAY_TIMES });
-  assert.equal(r.controller, 'manual');
-  assert.equal(r.actions.length, 0);
-});
-
-test('ambient cue applies when not manual, drops under manual', () => {
+test('ambient cue applies when not manual, drops under a takeover', () => {
   const plan = makePlan();
   // autopilot → ambient applies.
   let r = arbitrate({ now: NOW, plan, state: baseState(), fires: [{ cueId: 'c_ambient', reason: 'manual' }], dayTimes: DAY_TIMES });
   assert.equal(r.actions.length, 1);
   assert.equal(r.actions[0].cueId, 'c_ambient');
-  // paused → ambient drops.
-  r = arbitrate({ now: NOW, plan, state: baseState({ mode: 'paused' }), fires: [{ cueId: 'c_ambient', reason: 'manual' }], dayTimes: DAY_TIMES });
+  // overridden → ambient drops.
+  r = arbitrate({ now: NOW, plan, state: baseState({ mode: 'overridden' }), fires: [{ cueId: 'c_ambient', reason: 'manual' }], dayTimes: DAY_TIMES });
   assert.equal(r.actions.length, 0);
 });
 
@@ -246,22 +238,11 @@ test('V6: MANUAL(idle) + program due → pendingProgram armed, not fired', () =>
   assert.deepEqual(r.state.pendingProgram.action, { type: 'look', look: 'sunrise' });
 });
 
-// V6 variants — PAUSED and HOLDING also arm a lease (any manual sub-state).
-test('V6b: PAUSED + program due → lease armed (not fired)', () => {
+// V6b — OVERRIDDEN (operator takeover) also arms a lease. (PAUSED/HOLDING were
+// removed 2026-07-03; takeover is the only manual sub-state now.)
+test('V6b: OVERRIDDEN + program due → lease armed (not fired)', () => {
   const plan = makePlan();
-  const state = baseState({ mode: 'paused' });
-  const r = arbitrate({
-    now: NOW, plan, state, fires: [{ cueId: 'c_program', reason: 'sun' }],
-    dayTimes: DAY_TIMES, leaseSec: 30,
-  });
-  assert.equal(r.controller, 'manual');
-  assert.equal(r.actions.length, 0);
-  assert.equal(r.state.pendingProgram.cueId, 'c_program');
-});
-
-test('V6c: HOLDING + program due → lease armed (not fired)', () => {
-  const plan = makePlan();
-  const state = baseState({ mode: 'armed', manualHoldUntilMs: NOW + 600000 });
+  const state = baseState({ mode: 'overridden' });
   const r = arbitrate({
     now: NOW, plan, state, fires: [{ cueId: 'c_program', reason: 'sun' }],
     dayTimes: DAY_TIMES, leaseSec: 30,
@@ -293,11 +274,12 @@ test('V7: pending + now≥expiresAtMs → auto-start program', () => {
   assert.equal(r.actions[0].autopilotOff, true);
 });
 
-// V10 — PAUSED + lease past expiry still auto-starts (show goes on even paused).
-test('V10: PAUSED pending + lease-exp → auto-start (show goes on)', () => {
+// V10 — OVERRIDDEN + lease past expiry still auto-starts (show goes on even
+// during a takeover).
+test('V10: OVERRIDDEN pending + lease-exp → auto-start (show goes on)', () => {
   const plan = makePlan();
   const state = baseState({
-    mode: 'paused',
+    mode: 'overridden',
     pendingProgram: {
       cueId: 'c_program', label: 'Sunrise', action: { type: 'look', look: 'sunrise' },
       armedAtMs: NOW - 31000, expiresAtMs: NOW - 1000,
@@ -320,7 +302,7 @@ test('newer program due replaces an un-actioned pending lease', () => {
     ],
   });
   const state = baseState({
-    mode: 'paused',
+    mode: 'overridden',
     pendingProgram: {
       cueId: 'c_program', label: 'Sunrise', action: { type: 'look', look: 'sunrise' },
       armedAtMs: NOW - 5000, expiresAtMs: NOW + 25000,
@@ -339,7 +321,7 @@ test('newer program due replaces an un-actioned pending lease', () => {
 // Mood never arms a lease — still suppressed in manual (no pending created).
 test('mood in MANUAL is suppressed and arms NO lease', () => {
   const plan = makePlan();
-  const state = baseState({ mode: 'paused' });
+  const state = baseState({ mode: 'overridden' });
   const r = arbitrate({
     now: NOW, plan, state, fires: [{ cueId: 'c_mood', reason: 'mood' }],
     dayTimes: DAY_TIMES, leaseSec: 30,
@@ -352,7 +334,7 @@ test('mood in MANUAL is suppressed and arms NO lease', () => {
 test('un-expired pending survives a quiet tick (no fire, stays pending)', () => {
   const plan = makePlan();
   const state = baseState({
-    mode: 'paused',
+    mode: 'overridden',
     pendingProgram: {
       cueId: 'c_program', label: 'Sunrise', action: { type: 'look', look: 'sunrise' },
       armedAtMs: NOW - 5000, expiresAtMs: NOW + 25000,

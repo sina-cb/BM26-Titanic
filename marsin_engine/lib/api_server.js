@@ -4467,8 +4467,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
     // ── TIMELINE API (docs/38 §15 — timeline runs IN the engine) ────────
     // GET /timeline/state · GET/POST /timeline/plans · GET/PUT/DELETE
-    // /timeline/plans/:name · POST /timeline/plan/activate · /mode ·
-    // /autopilot · /hold · /resume · /program/end · /cues/:id/fire.
+    // /timeline/plans/:name · POST /timeline/plan/activate ·
+    // /autopilot · /resume · /takeover · /activity · /program/end · /cues/:id/fire.
     // All JSON, fail loud (400/404 + {error}). The service is null when
     // config.timeline.enabled is false → 503 so the UI knows it's off.
     } else if (req.url === '/timeline/state' && req.method === 'GET') {
@@ -4582,13 +4582,6 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           .then(name => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, activePlan: name })); })
           .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
       });
-    } else if (req.url === '/timeline/mode' && req.method === 'POST') {
-      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
-      readBody(data => {
-        timelineService.setMode(data && data.mode)
-          .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
-          .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
-      });
     } else if (req.url === '/timeline/autopilot' && req.method === 'POST') {
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
       readBody(data => {
@@ -4599,20 +4592,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
           .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
       });
-    } else if (req.url === '/timeline/hold' && req.method === 'POST') {
-      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
-      readBody(data => {
-        try {
-          const r = timelineService.hold(data && data.minutes);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: true, ...r }));
-        } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
-        }
-      });
     } else if (req.url === '/timeline/resume' && req.method === 'POST') {
-      // Explicit operator hand-back (docs/38 §14.5 + §16): clear pause/override
-      // + operator lease, resume the plan at now (catchUp). Async now.
+      // Explicit operator hand-back (docs/38 §14.5 + §16): end the takeover
+      // (clear operator lease + exit 'overridden'), resume the plan at now
+      // (catchUp). Async.
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
       timelineService.resume()
         .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
