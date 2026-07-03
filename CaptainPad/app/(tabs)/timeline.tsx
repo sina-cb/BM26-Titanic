@@ -371,6 +371,36 @@ export default function TimelineScreen() {
     return true;
   }, []);
 
+  // ALWAYS-EDITING (operator request 2026-07-03): the maker auto-loads the
+  // ACTIVE plan into the draft so the timeline tab is ALWAYS in edit mode — the
+  // DEFAULT CUE (and the whole maker) is always visible with no "enter the
+  // editor" step, and there is no DONE button (auto-save means we're always
+  // editing). Unlike loadPlanIntoDraft this seeds lastSavedVersionRef to the
+  // freshly-loaded version, so the initial auto-load does NOT trigger a spurious
+  // re-save (which would needlessly hot-reload the running plan). A plan without
+  // a festival span can't be edited on the 8-day grid → left as no-draft (the
+  // helper text points the operator at duplicating from the template).
+  const autoLoadActiveIntoDraft = useCallback(async (name: string) => {
+    const r = await fetchTimelinePlan(name);
+    if (!r.ok || !r.data || !r.data.festival) return;
+    setDraft(clonePlan(r.data));
+    setDraftVersion((v) => { const nv = v + 1; lastSavedVersionRef.current = nv; return nv; });
+    setSaveOk(null);
+    setPreviewTransportError(null);
+  }, []);
+
+  // Drive the always-editing model: whenever there's an active plan and nothing
+  // is loaded in the maker, pull the active plan into the draft. Re-fires if the
+  // draft is cleared (e.g. its plan was deleted). The in-flight guard prevents a
+  // double-load while the async fetch is mid-flight.
+  const autoLoadInFlightRef = useRef(false);
+  useEffect(() => {
+    const active = state?.activePlan;
+    if (!active || draft || autoLoadInFlightRef.current) return;
+    autoLoadInFlightRef.current = true;
+    autoLoadActiveIntoDraft(active).finally(() => { autoLoadInFlightRef.current = false; });
+  }, [state?.activePlan, draft, autoLoadActiveIntoDraft]);
+
   // Persist a plan and refresh the derived views. Shared by auto-save, eager
   // new-plan saves, and the close flush. Saving over the ACTIVE plan
   // hot-reloads it engine-side, so the live overview (which gates the FIRE
@@ -423,9 +453,14 @@ export default function TimelineScreen() {
 
   const handleActivate = useCallback(async (name: string) => {
     const ok = await activatePlan(name);
-    if (ok) { refreshPlans(); refreshLiveOverview(); setPlanPickerOpen(false); }
-    else setActionError('Engine rejected plan activation');
-  }, [activatePlan, refreshPlans, refreshLiveOverview]);
+    if (ok) {
+      refreshPlans(); refreshLiveOverview(); setPlanPickerOpen(false);
+      // Always-editing: switch the maker to the plan we just activated so the
+      // tab keeps showing the running plan (replaces whatever was loaded).
+      setDraft(null);
+      await autoLoadActiveIntoDraft(name);
+    } else setActionError('Engine rejected plan activation');
+  }, [activatePlan, refreshPlans, refreshLiveOverview, autoLoadActiveIntoDraft]);
 
   // Delete a saved plan (the picker confirms + hides the ACTIVE plan; the
   // engine also refuses to delete the active one). If the deleted plan is the
@@ -462,22 +497,6 @@ export default function TimelineScreen() {
     }, 700);
     return () => clearTimeout(t);
   }, [draft, draftVersion, saveBlocked, persistPlan]);
-
-  // Close the maker back to the LIVE view. Everything auto-saves, so this is a
-  // "done editing", NOT a discard — flush any change the debounce hasn't
-  // written yet (unless it's schema-invalid, which can't be saved anyway).
-  const handleCloseDraft = useCallback(async () => {
-    if (draft && !saveBlocked && lastSavedVersionRef.current !== draftVersion) {
-      await persistPlan(draft);
-    }
-    setDraft(null);
-    setDraftOverview(null);
-    setPreviewError(null);
-    setPreviewTransportError(null);
-    setSaveOk(null);
-    setEditingDay(null);
-    lastSavedVersionRef.current = null;
-  }, [draft, saveBlocked, draftVersion, persistPlan]);
 
   // ── Festival span / estimate-tz mutators (top-of-page FestivalEditor) ──
   // These edit the DRAFT. When the operator touches them while viewing the LIVE
@@ -855,20 +874,17 @@ export default function TimelineScreen() {
             </Text>
             {draft ? (
               <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
-                {/* Auto-save status — no SAVE/CANCEL buttons (operator request
-                    2026-07-02): the maker writes changes automatically. A
-                    schema-invalid draft shows "⚠ fix to save" (the error banner
-                    below explains); DONE closes the editor (changes are already
-                    saved). */}
+                {/* Auto-save status — no SAVE/CANCEL/DONE buttons (operator
+                    request 2026-07-03): the maker writes changes automatically
+                    and the tab is ALWAYS editing the active plan, so there's
+                    nothing to "close". A schema-invalid draft shows "⚠ fix to
+                    save" (the error banner below explains). */}
                 <Text style={{
                   fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 0.6,
                   color: autoSaveState === 'error' ? C.error : (autoSaveState === 'saving' ? C.secondary : '#00a86b'),
                 }}>
                   {autoSaveState === 'saving' ? 'SAVING…' : autoSaveState === 'error' ? '⚠ FIX TO SAVE' : '✓ SAVED'}
                 </Text>
-                <TouchableOpacity onPress={handleCloseDraft} style={styles.miniBtnGhost} accessibilityLabel="Done editing — close the maker">
-                  <Text style={styles.miniBtnGhostText}>DONE</Text>
-                </TouchableOpacity>
               </View>
             ) : null}
           </View>
@@ -992,10 +1008,12 @@ export default function TimelineScreen() {
                         ? null
                         : (draft.name === activePlanName ? 'save' : 'activate')
                     }
-                    // Mark the row that is the LIVE event right now (only on
-                    // the ACTIVE plan's own overview, never a draft) so the
-                    // running cue is unmistakable in the list too.
-                    isActive={draft === null && state?.activeCue?.id === cue.id}
+                    // Mark the row that is the LIVE event right now so the
+                    // running cue is unmistakable in the list. Always-editing:
+                    // the draft is normally the ACTIVE plan, so show the
+                    // highlight when viewing live OR editing the active plan —
+                    // but never when a DIFFERENT plan is loaded in the maker.
+                    isActive={(draft === null || draft.name === activePlanName) && state?.activeCue?.id === cue.id}
                     onFire={fireCue}
                     styles={styles}
                     C={C}
@@ -1292,11 +1310,6 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
       backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center',
     },
     miniBtnText: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: C.onPrimary },
-    miniBtnGhost: {
-      paddingHorizontal: 16, paddingVertical: 8, minHeight: 36, borderRadius: 8,
-      borderWidth: 1, borderColor: C.ghostBorder, alignItems: 'center', justifyContent: 'center',
-    },
-    miniBtnGhostText: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 0.8, color: C.text },
     cueRow: {
       flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 14,
       borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerLowest, marginBottom: 8,
