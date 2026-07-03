@@ -128,8 +128,10 @@ export function createControllerRegistry(tree) {
       ip: typeof rawCtl.ip === 'string' ? rawCtl.ip : '',
       // Physical controller family: 'dmx' (default) = DMX gateway on AC;
       // 'led' = Ango 4 (chroma.tech) pixel controller on a 110VAC→24VDC
-      // adapter. Defaulting to 'dmx' keeps every existing controllers.yaml
-      // byte-identical. This is the counterpart to a fixture model's `bus`
+      // adapter. Defaulting to 'dmx' means a legacy controllers.yaml re-parses
+      // with identical behavior (the next save re-stamps an explicit
+      // `kind: dmx`, which normalizes back to the same object — cosmetic diff,
+      // no behavior change). This is the counterpart to a fixture model's `bus`
       // field (see fixture_definition_registry) — a later change can flag a
       // `bus: led` fixture chained on a `dmx` controller as a projection
       // violation. Unknown values normalize to 'dmx' (no silent LED).

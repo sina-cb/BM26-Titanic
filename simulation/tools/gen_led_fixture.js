@@ -80,10 +80,12 @@ function reqNum(opts, key, { int = false, min = undefined } = {}) {
   return n;
 }
 
-function optNum(opts, key, dflt) {
+function optNum(opts, key, dflt, { min = undefined, gt = undefined } = {}) {
   if (opts[key] === undefined) return dflt;
   const n = Number(opts[key]);
   if (!Number.isFinite(n)) fail(`--${key} must be a number, got '${opts[key]}'`);
+  if (gt !== undefined && !(n > gt)) fail(`--${key} must be > ${gt}, got ${n}`);
+  if (min !== undefined && n < min) fail(`--${key} must be >= ${min}, got ${n}`);
   return n;
 }
 
@@ -104,7 +106,7 @@ function humanName(snake) {
 function buildGrid(opts) {
   const cols = reqNum(opts, 'cols', { int: true, min: 1 });
   const rows = reqNum(opts, 'rows', { int: true, min: 1 });
-  const pitch = optNum(opts, 'pitch', 50);
+  const pitch = optNum(opts, 'pitch', 50, { gt: 0 });
   const wiring = opts.wiring || 'serpentine';
   if (wiring !== 'serpentine' && wiring !== 'row') {
     fail(`--wiring must be 'serpentine' or 'row', got '${wiring}'`);
@@ -128,7 +130,7 @@ function buildGrid(opts) {
 
 function buildLine(opts) {
   const count = reqNum(opts, 'count', { int: true, min: 1 });
-  const pitch = optNum(opts, 'pitch', 50);
+  const pitch = optNum(opts, 'pitch', 50, { gt: 0 });
   const axis = opts.axis || 'x';
   if (axis !== 'x' && axis !== 'y') fail(`--axis must be 'x' or 'y', got '${axis}'`);
   const px = [];
@@ -238,8 +240,8 @@ else if (opts._mode === 'map') layout = buildMap(opts);
 else fail(`Unknown mode '${opts._mode}' — use grid | line | map`);
 
 const type = opts.type || pascalCase(opts.name);
-if (!/^[A-Za-z][A-Za-z0-9]*$/.test(type)) {
-  fail(`--type must be PascalCase alphanumeric, got '${type}'`);
+if (!/^[A-Z][A-Za-z0-9]*$/.test(type)) {
+  fail(`--type must be PascalCase alphanumeric (uppercase first), got '${type}'`);
 }
 const footprint = layout.pixels.length * 3;
 const id = `${opts.name}_${footprint}`;
@@ -251,9 +253,9 @@ const yamlStr = emitYaml({
   pixels: layout.pixels,
   spanW: layout.spanW,
   spanH: layout.spanH,
-  pixelSize: optNum(opts, 'pixel-size', 12),
-  margin: optNum(opts, 'margin', 25),
-  depth: optNum(opts, 'depth', 30),
+  pixelSize: optNum(opts, 'pixel-size', 12, { gt: 0 }),
+  margin: optNum(opts, 'margin', 25, { min: 0 }),
+  depth: optNum(opts, 'depth', 30, { gt: 0 }),
   detail: layout.detail,
   mode: opts._mode,
 });

@@ -527,9 +527,17 @@ export class DmxFixtureRuntime {
 
   handleTransformScale() {
     // LED fixtures: the scale gizmo is a real resize — the scale is persisted
-    // by writeTransformToConfig and kept on the hitbox (the visuals follow it),
-    // so nothing to consume here.
-    if (this._isLed) return;
+    // by writeTransformToConfig and kept on the hitbox (the visuals follow it).
+    // Clamp the live hitbox to the SAME bounds we persist so the preview never
+    // diverges from the saved value (drag past 20× then reload = silent snap).
+    if (this._isLed) {
+      this.hitbox.scale.set(
+        clampScale(this.hitbox.scale.x),
+        clampScale(this.hitbox.scale.y),
+        clampScale(this.hitbox.scale.z)
+      );
+      return;
+    }
     // DMX fixtures: a par/bar has no size, so the scale gizmo widens its beam
     // cone instead, then resets to unit scale.
     if (this.hitbox.scale.x !== 1 || this.hitbox.scale.y !== 1 || this.hitbox.scale.z !== 1) {

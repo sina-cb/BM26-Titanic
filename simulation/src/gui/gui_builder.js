@@ -1983,13 +1983,15 @@ function setupGUI() {
             });
 
             // Resize (matches the S / scale gizmo — same config.scaleX/Y/Z).
+            // Deliberately NOT propagated to other selected fixtures: the scale
+            // gizmo only resizes the dragged fixture, and propagating would
+            // write dead scaleX/Y/Z keys into non-LED (DMX) configs.
             const scaleFolder = idxFolder.addFolder("Scale (Resize)");
             scaleFolder.close();
             ['scaleX', 'scaleY', 'scaleZ'].forEach((ax) => {
-              scaleFolder.add(config, ax, 0.1, 20, 0.1).onChange((v) => {
+              scaleFolder.add(config, ax, 0.1, 20, 0.1).onChange(() => {
                 selectThisLight();
                 window.syncLightFromConfig(index);
-                propagateToSelected(index, ax, v);
               });
             });
           }
