@@ -1228,15 +1228,19 @@ const FEST_IN_WINDOW = Date.UTC(2026, 7, 31, 17, 0, 0);
 // 2026-08-20 10:00 PT — ten calendar days BEFORE the span.
 const FEST_BEFORE_WINDOW = Date.UTC(2026, 7, 20, 17, 0, 0);
 
-test('Task A/B: out of festival window → no deck-pin, controlLock null, countdown surfaced', async () => {
+test('Task A/B: out of festival window → DORMANT (planActive false, no pin, countdown surfaced)', async () => {
   const { svc, calls } = setupFestival({ now: FEST_BEFORE_WINDOW });
   await svc.start();
-  await svc._tick();                 // exercise the deck-pin reconcile
+  await svc._tick();                 // exercise the dormant path
   svc.stop();
   const st = svc.getState();
   assert.equal(st.inFestivalWindow, false, 'today is before the festival span');
   assert.equal(st.festivalStartsInDays, 10, 'ten calendar days until startDate');
-  assert.equal(st.planActive, true, 'plan is still armed + driving out of window');
+  // Out of window the plan drives NOTHING (operator request 2026-07-03): the
+  // ONLY signal is the timeline-tab countdown. planActive false → no deck/mixer
+  // lock, no takeover.
+  assert.equal(st.planActive, false, 'plan is DORMANT out of window — drives nothing');
+  assert.equal(st.controller, 'manual', 'dormant → controller manual (baseline not armed)');
   assert.equal(calls.forceDeckView.length, 0, 'plan must NOT pin the deck out of window');
   assert.equal(calls.viewState.mode, null, 'nothing pinned → controlLock cascades null');
   assert.equal(st.forcingDeckView, false, 'forcingDeckView false out of window');
@@ -1253,6 +1257,31 @@ test('Task A/B: in festival window → deck-pin engaged, plan lock on, no countd
   assert.ok(calls.forceDeckView.length >= 1, 'plan pins the deck in window');
   assert.equal(calls.viewState.mode, 'deck', 'deck pinned → controlLock plan');
   assert.equal(st.forcingDeckView, true, 'forcingDeckView true in window');
+});
+
+test('out of window: takeover is a no-op + AUTO OFF never strands a lease (dormant)', async () => {
+  // Operator report 2026-07-03: on boot out of window the autopilot was "on"
+  // and turning it off flashed a "plan taken over" warning. Out of window the
+  // plan must be inert: no baseline driving, and no takeover can arm.
+  const { svc, calls } = setupFestival({ now: FEST_BEFORE_WINDOW });
+  await svc.start();
+  await svc._tick();
+  assert.equal(svc.getState().planActive, false, 'dormant: planActive false');
+  assert.equal(svc._baselineArmed, false, 'dormant: baseline autopilot NOT armed');
+  // A stray takeover must NOT arm a lease out of window.
+  const r = svc.takeover();
+  assert.equal(r.operatorLease, null, 'takeover is a no-op out of window');
+  assert.equal(svc.state.operatorLease, null, 'no lease armed');
+  assert.notEqual(svc.state.mode, 'overridden', 'never enters overridden out of window');
+  // Toggling autopilot never leaves a stranded lease / overridden.
+  await svc.setAutopilotEnabled(false);
+  await svc.setAutopilotEnabled(true);
+  await svc._tick();
+  const st = svc.getState();
+  assert.equal(st.planActive, false, 'still dormant regardless of the AUTO toggle');
+  assert.equal(st.operatorLease, null, 'no takeover lease → no "taken over" banner');
+  assert.equal(calls.forceDeckView.length, 0, 'never pins the deck out of window');
+  svc.stop();
 });
 
 test('Task A: leaving the festival window releases the plan deck-pin', async () => {
@@ -1284,12 +1313,12 @@ test('Task B: a no-festival plan is always in window (unchanged behavior)', asyn
 // ── 2026-07-02 audit regressions (bulletproofing pass) ──────────────────────
 
 test('audit H2: festival window OPENING mid-run re-pins on the next tick', async () => {
-  // Boot BEFORE the window with the baseline already armed — no transition
-  // will ever fire at midnight, so only the tick-side re-pin can engage the
-  // lock when startDate arrives.
+  // Boot BEFORE the window: the plan is DORMANT (2026-07-03 isolation — no
+  // baseline, no pin). No cue transition fires at midnight either, so only the
+  // tick-side re-establish + re-pin can engage the lock when startDate arrives.
   const { svc, calls, setNow } = setupFestival({ now: FEST_BEFORE_WINDOW });
   await svc.start();
-  assert.equal(calls.viewState.mode, null, 'not pinned before the window');
+  assert.equal(calls.viewState.mode, null, 'not pinned before the window (dormant)');
   // Clock crosses into the festival span (day 1, 2026-08-31 10:00 PT).
   setNow(FEST_IN_WINDOW);
   await svc._tick();

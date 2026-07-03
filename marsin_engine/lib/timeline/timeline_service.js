@@ -961,13 +961,53 @@ export class TimelineService {
   }
 
   // True when the plan is currently DRIVING the rig (docs/38 §16). Mirrors the
-  // `planActive` computed in getState(): autopilot-or-program controller AND not
-  // overridden (operator takeover). When false the plan owns nothing and its
-  // soft deck-pin must be released.
+  // `planActive` computed in getState(): autopilot-or-program controller, not
+  // overridden (operator takeover), AND in the festival window. When false the
+  // plan owns nothing and its soft deck-pin must be released.
+  //
+  // The festival-window term is the SAME isolation gate as everywhere else
+  // (operator request 2026-07-03): out of its scheduled days the plan drives
+  // nothing, so it never "drives the deck" for pin/lock purposes.
   _isPlanDrivingDeck() {
     const controller = this.state.controller || 'autopilot';
     return (controller === 'autopilot' || controller === 'program')
-      && this.state.mode !== 'overridden';
+      && this.state.mode !== 'overridden'
+      && this._inFestivalWindow();
+  }
+
+  // FESTIVAL-WINDOW ISOLATION (operator request 2026-07-03): go fully DORMANT.
+  // Out of the plan's scheduled days the plan must affect NOTHING — no autopilot
+  // baseline cycling the deck, no cue fires, no deck-pin / 'plan' lock, no
+  // takeover. The ONLY out-of-window signal is the timeline tab's "not in time"
+  // note (getState.inFestivalWindow=false). This tears down everything the plan
+  // might own and hands the whole rig back to the operator. Idempotent + cheap
+  // at steady state (the disarm is _baselineArmed-gated; the pin release early-
+  // returns when nothing is pinned; the state writes are all no-ops once set).
+  async _goDormant() {
+    // Never resume stale runtime driving/manual state out of window.
+    this.state.activeProgram = null;
+    this.state.pendingProgram = null;
+    this.state.operatorLease = null;
+    if (this.state.mode === 'overridden') this.state.mode = 'armed';
+    this.state.controller = 'manual';
+    this._deckWindowUntilMs = null;
+    this._deckWindowCueId = null;
+    this._defaultCueActive = false;
+    // Stop the plan's baseline autopilot from cycling the deck.
+    if (this._baselineArmed) {
+      try {
+        await this._disarmBaselineAutopilot();
+      } catch (e) {
+        this.lastError = `dormant disarm: ${e && e.message}`;
+      }
+    }
+    // Release the plan's soft deck-pin so the yellow 'plan' lock clears. Out of
+    // window _isPlanDrivingDeck() is false, so this takes the release branch.
+    try {
+      await this._reconcileDeckPin();
+    } catch (e) {
+      this.lastError = `dormant deck-pin: ${e && e.message}`;
+    }
   }
 
   // Reconcile the plan's SOFT deck-pin against whether the plan is still driving
@@ -1042,6 +1082,11 @@ export class TimelineService {
   // never crashes (codex P0). Ported from establishBaselineIfActive.
   async _establishBaselineIfActive(reason) {
     const now = this.nowFn();
+    // FESTIVAL-WINDOW ISOLATION (operator request 2026-07-03): out of window the
+    // plan never establishes an autopilot baseline (this is the gate for
+    // boot/operator-AUTO-ON/program-end). Leaves the deck to the operator; the
+    // baseline arms only once the plan is in time.
+    if (!this._inFestivalWindow()) { this.state.controller = 'manual'; return; }
     if (this.state.autopilotEnabled === false) {
       this.state.controller = 'manual';
       return;
@@ -1106,6 +1151,17 @@ export class TimelineService {
     // never re-locked under an armed plan. takeover() always arms mode+lease
     // together, so an 'overridden' without a lease is by definition orphaned.
     if (this.state.mode === 'overridden') this.state.mode = 'armed';
+
+    // FESTIVAL-WINDOW ISOLATION (operator request 2026-07-03): out of window the
+    // plan is dormant — do NOT restore/fire any cue and do NOT establish the
+    // autopilot baseline on boot/activate/resume. Tear down anything owned and
+    // return; the plan wakes on the first in-window tick.
+    if (!this._inFestivalWindow()) {
+      await this._goDormant();
+      saveTimelineState(this.state, this.stateDir);
+      this.lastStateJson = JSON.stringify(this.state);
+      return;
+    }
 
     let best = null;
     for (const cue of dayPlan.cues) {
@@ -1199,6 +1255,25 @@ export class TimelineService {
     this._ticking = true;
     try {
       const now = this.nowFn();
+
+      // FESTIVAL-WINDOW ISOLATION (operator request 2026-07-03) — the EARLIEST
+      // gate in the tick. Out of the plan's scheduled days the plan drives
+      // NOTHING: skip the whole evaluate/arbitrate/dispatch/baseline machinery
+      // and go dormant (disarm baseline, release deck-pin, drop driving state).
+      // Nothing below runs, so no cue fires, no lock raises, no takeover arms —
+      // only the timeline tab's inFestivalWindow=false note remains.
+      if (!this._inFestivalWindow()) {
+        await this._goDormant();
+        // A scene action inside a dep could have torn the service down.
+        if (this._tickHandle === null) return;
+        const dormantJson = JSON.stringify(this.state);
+        if (dormantJson !== this.lastStateJson) {
+          saveTimelineState(this.state, this.stateDir);
+          this.lastStateJson = dormantJson;
+        }
+        this._broadcastState();
+        return;
+      }
 
       // Operator-takeover lease auto-release (docs/38 §16): if the operator
       // holds a lease (mode 'overridden') and it has expired with no UI
@@ -1454,8 +1529,13 @@ export class TimelineService {
     }
     const controller = this.state.controller || 'autopilot';
     // planActive (docs/38 §16): the timeline is actively DRIVING the rig.
+    // OUT OF THE FESTIVAL WINDOW this is ALWAYS false (operator request
+    // 2026-07-03): the plan drives nothing out of its scheduled days, so the
+    // deck/mixer lock, the takeover flow, and the plan indicator all stay off —
+    // only the timeline tab's inFestivalWindow=false note shows.
     const planActive = (controller === 'autopilot' || controller === 'program')
-      && this.state.mode !== 'overridden';
+      && this.state.mode !== 'overridden'
+      && inWindow;
     // forcingDeckView (docs/38 §16.9): the plan is active AND the engine output
     // is currently pinned to the deck under plan control. CaptainPad reads this
     // to know a switch-to-mixer needs the confirm prompt + 1-min auto-revert
@@ -1674,6 +1754,14 @@ export class TimelineService {
    * @returns {{ok:true, operatorLease:{expiresAtMs:number}}}
    */
   takeover() {
+    // FESTIVAL-WINDOW ISOLATION (operator request 2026-07-03): out of window the
+    // plan drives nothing, so there is nothing to take over — refuse to arm a
+    // lease. Defense in depth: CaptainPad won't even offer takeover out of
+    // window (planActive is false), but a stray call must never resurrect the
+    // "taken over" banner while the plan is dormant.
+    if (!this._inFestivalWindow()) {
+      return { ok: true, operatorLease: null };
+    }
     const expiresAtMs = this.nowFn() + this.operatorLeaseSec * 1000;
     // Event log (docs/38 §15.2): the ARM edge only — takeover() is idempotent
     // and CaptainPad re-calls it to refresh the lease; refreshes log nothing.
