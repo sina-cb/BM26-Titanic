@@ -181,13 +181,17 @@ export function PlanPickerSheet({
                       >
                         <Text style={styles.actionBtnText}>DUPLICATE</Text>
                       </TouchableOpacity>
-                      <TouchableOpacity
-                        onPress={() => onActivate(name)}
-                        style={[styles.actionBtn, { borderColor: C.tertiary }]}
-                        accessibilityLabel={`Activate ${name}`}
-                      >
-                        <Text style={[styles.actionBtnText, { color: C.tertiary }]}>ACTIVATE</Text>
-                      </TouchableOpacity>
+                      {/* ACTIVATE — hidden for the ACTIVE plan (it's already
+                          running; the ● ACTIVE tag says so). */}
+                      {isActive ? null : (
+                        <TouchableOpacity
+                          onPress={() => onActivate(name)}
+                          style={[styles.actionBtn, { borderColor: C.tertiary }]}
+                          accessibilityLabel={`Activate ${name}`}
+                        >
+                          <Text style={[styles.actionBtnText, { color: C.tertiary }]}>ACTIVATE</Text>
+                        </TouchableOpacity>
+                      )}
                       {/* DELETE — hidden for the ACTIVE plan (the engine refuses
                           it: you can't delete a running plan). Two-tap confirm:
                           DELETE arms, CONFIRM? deletes. */}
