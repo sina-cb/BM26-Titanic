@@ -7937,6 +7937,24 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             // No broadcast — fader-only updates outside transitions are
             // already at human-touch rate; full state syncs on
             // saveMixerState (e.g. on slider release).
+          } else {
+            // FAIL LOUD (codex P0): getChannel() returns null for an UNKNOWN id
+            // OR for the deck/base channel (which is faded via /deck, not the
+            // mixer-channel route). The old code silently dropped the write —
+            // leaving the iPad's optimistic slider stuck UP while the engine
+            // never moved, so the "channel" stayed dark with NO signal (operator
+            // report 2026-07-03: a mixer channel "was not being rendered to
+            // master out"). Push back a typed rejection AND force a full mixer
+            // broadcast so the iPad re-syncs to engine truth — a stale channel
+            // drops out of its list, and the operator sees the slider re-peg
+            // instead of a silent no-op.
+            ws.send(JSON.stringify({
+              type: 'channelFaderRejected',
+              channelId: d.channelId,
+              fader: d.fader,
+              reason: 'unknown-or-deck-channel',
+            }));
+            broadcastMixerState();
           }
         } else if (d.type === 'setChannelMode' && d.channelId && d.mode) {
           if (!isValidBlendMode(d.mode)) {
