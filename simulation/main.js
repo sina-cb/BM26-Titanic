@@ -302,8 +302,9 @@ Promise.all([
   fetch("dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_te_machines/model_1.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_chauvet_4d/model_2.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch("dmx/fixtures/te_led_grid/model_120.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("config.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, controllersYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, rootConfigYaml]) => {
+]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, controllersYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, teLedGridModelYaml, rootConfigYaml]) => {
 
   // Load root config
   if (rootConfigYaml) {
@@ -510,7 +511,8 @@ Promise.all([
     { raw: shehdsModelYaml, file: 'model_119.yaml' },
     { raw: vintageModelYaml, file: 'model_33.yaml' },
     { raw: teFogModelYaml, file: 'fog_te_machines/model_1.yaml' },
-    { raw: chauvetHazeModelYaml, file: 'fog_chauvet_4d/model_2.yaml' }
+    { raw: chauvetHazeModelYaml, file: 'fog_chauvet_4d/model_2.yaml' },
+    { raw: teLedGridModelYaml, file: 'te_led_grid/model_120.yaml' }
   ].forEach(({ raw, file }) => {
     try {
       if (raw) {

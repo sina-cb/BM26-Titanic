@@ -126,6 +126,14 @@ export function createControllerRegistry(tree) {
       id,
       name: typeof rawCtl.name === 'string' ? rawCtl.name : `Controller ${id}`,
       ip: typeof rawCtl.ip === 'string' ? rawCtl.ip : '',
+      // Physical controller family: 'dmx' (default) = DMX gateway on AC;
+      // 'led' = Ango 4 (chroma.tech) pixel controller on a 110VAC→24VDC
+      // adapter. Defaulting to 'dmx' keeps every existing controllers.yaml
+      // byte-identical. This is the counterpart to a fixture model's `bus`
+      // field (see fixture_definition_registry) — a later change can flag a
+      // `bus: led` fixture chained on a `dmx` controller as a projection
+      // violation. Unknown values normalize to 'dmx' (no silent LED).
+      kind: rawCtl.kind === 'led' ? 'led' : 'dmx',
       ports: [],
     };
 
@@ -289,11 +297,12 @@ export function noteUniverseUsed(registry, universe) {
 
 // ── Mutations (panel operations) ────────────────────────────────────────
 
-export function addController(registry, { name, ip }) {
+export function addController(registry, { name, ip, kind }) {
   const controller = {
     id: registry.nextControllerId,
     name: String(name || `Controller ${registry.nextControllerId}`),
     ip: String(ip || ''),
+    kind: kind === 'led' ? 'led' : 'dmx',
     ports: [],
   };
   registry.nextControllerId += 1;

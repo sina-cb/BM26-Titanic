@@ -53,6 +53,13 @@ export function initRegistry(fixtureModelsMap) {
       shell: model.shell || null,
       pixels: model.pixels || [],
       controls: model.controls || [],
+      // Physical bus this fixture rides. 'dmx' (default) = DMX gateway on AC;
+      // 'led' = Ango 4 (chroma.tech) pixel controller on a 110VAC→24VDC
+      // adapter. The controller registry uses this to flag a fixture chained
+      // on the wrong controller kind (bus_mismatch). Passed through verbatim
+      // so a definition that omits it stays byte-identical to legacy behavior.
+      bus: model.bus || 'dmx',
+      controllerFamily: model.controller_family || null,
       // Rendering defaults for simple fixtures (will be used by DmxFixtureRuntime)
       defaultColor: '#ffaa44',
       defaultAngle: 20,
