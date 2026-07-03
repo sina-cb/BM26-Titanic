@@ -108,6 +108,22 @@ scale persist/restore, `applyDiffusion()`), `src/gui/gui_builder.js` (LED-only
 Diffusion + Scale controls), `scenes/titanic/scene_config.yaml` (grids demo
 on/off). The `S`=Scale shortcut was already in `shortcuts.js` — no new key.
 
+### Diffusion glow — frosted-diffuser look (2026-07-03)
+
+The first cut used the per-pixel backside **sphere** halo, which read as a
+hard "cotton-ball" additive blob that swallowed the pixels. Replaced (LED
+fixtures only) with a camera-facing **sprite** carrying one shared,
+procedurally-generated **dual-Gaussian radial-gradient** `CanvasTexture`
+(bright core + wide faint tail, alpha → 0 at the quad edge, so no rim). Result
+grades cleanly: soft individual pixel-dots at low `diffusionAmount` → a
+continuous frosted sheet → a wide unified wash at high amounts, with no
+white blowout (per-sprite `opacity = 0.7 / amt^1.5` compensates the ~amt²
+additive overlap under bloom). Efficiency: one 128×128 texture for the whole
+scene, sprite (2 tris) vs sphere (~48 tris) per halo, same draw-call count,
+zero cost when diffusion is OFF. Gated on `_isLed` — the non-LED sphere-halo
+path is byte-identical; ropes untouched. A `led-grid-close` camera preset was
+added for close-up judging. Verified in-sim at amt 1.2 / 3 / 6.
+
 ## Open defaults chosen (no operator available to confirm)
 
 - Grid: 8×5, 50 mm pitch, **serpentine** wiring (physical norm for panels;

@@ -38,6 +38,50 @@ function getCachedSphere(size) {
   return _sphereCache[key];
 }
 
+// ── LED diffusion glow sprite (shared texture) ──────────────────────────
+// One procedurally generated radial-gradient texture shared by EVERY LED
+// pixel halo in the scene (generated in-code — the sim must stay offline-safe,
+// no external image assets). The falloff is a dual Gaussian (bright core +
+// wide faint tail, like a real frosted-acrylic diffuser kernel), shifted so
+// alpha reaches exactly 0 at the quad edge — no visible rim.
+const LED_GLOW_TEX_SIZE = 128;
+const LED_GLOW_CORE_K = 14.0;  // core Gaussian exponent (tight, bright)
+const LED_GLOW_TAIL_K = 3.2;   // tail Gaussian exponent (wide, faint)
+const LED_GLOW_CORE_W = 0.6;   // core weight (core + tail weights sum to 1)
+const LED_GLOW_SPAN = 2.4;     // sprite quad size in bulb-diameter units at 1× diffusion
+const LED_GLOW_OPACITY = 0.7;  // per-sprite opacity at 1× diffusion (fades with amt, see applyDiffusion)
+let _ledGlowTexture = null;
+function getLedGlowTexture() {
+  if (_ledGlowTexture) return _ledGlowTexture;
+  const size = LED_GLOW_TEX_SIZE;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const half = size / 2;
+  const kernel = (r2) =>
+    LED_GLOW_CORE_W * Math.exp(-LED_GLOW_CORE_K * r2) +
+    (1 - LED_GLOW_CORE_W) * Math.exp(-LED_GLOW_TAIL_K * r2);
+  const edge = kernel(1);       // kernel value at the quad edge (r = 1)
+  const peak = kernel(0) - edge;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = (x + 0.5 - half) / half;
+      const dy = (y + 0.5 - half) / half;
+      const g = Math.max(0, (kernel(dx * dx + dy * dy) - edge) / peak);
+      const i = (y * size + x) * 4;
+      img.data[i] = 255;
+      img.data[i + 1] = 255;
+      img.data[i + 2] = 255;
+      img.data[i + 3] = Math.round(g * 255);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  _ledGlowTexture = new THREE.CanvasTexture(canvas);
+  return _ledGlowTexture;
+}
+
 function clampUnit(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 0;
@@ -178,6 +222,7 @@ export class DmxFixtureRuntime {
         let halo = null;
         let bulbMat = null;
         let haloMat = null;
+        let haloBaseSize = 0;
         let dotMeshList = [];
 
         // Always calculate local coordinates as SpotLights and Beams rely on them
@@ -237,12 +282,28 @@ export class DmxFixtureRuntime {
             }
             this.group.add(bulb);
 
-            haloMat = new THREE.MeshBasicMaterial({
-              color, transparent: true, opacity: 0.2,
-              blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
-            });
-            halo = new THREE.Mesh(getCachedSphere(bulbSize * 1.8), haloMat);
-            halo.scale.setScalar(params.globalHaloScale || 1.0);
+            if (this._isLed) {
+              // LED diffusion glow: camera-facing sprite with the shared
+              // radial-gradient texture instead of a backside sphere. A sphere
+              // shell reads as a hard-edged additive ball; the Gaussian
+              // gradient reads as light through frosted acrylic and lets
+              // neighbouring pixels blend into a continuous sheet.
+              haloMat = new THREE.SpriteMaterial({
+                map: getLedGlowTexture(), color, transparent: true,
+                opacity: LED_GLOW_OPACITY,
+                blending: THREE.AdditiveBlending, depthWrite: false,
+              });
+              halo = new THREE.Sprite(haloMat);
+              haloBaseSize = bulbSize * LED_GLOW_SPAN;
+              halo.scale.setScalar(haloBaseSize * (params.globalHaloScale || 1.0));
+            } else {
+              haloMat = new THREE.MeshBasicMaterial({
+                color, transparent: true, opacity: 0.2,
+                blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
+              });
+              halo = new THREE.Mesh(getCachedSphere(bulbSize * 1.8), haloMat);
+              halo.scale.setScalar(params.globalHaloScale || 1.0);
+            }
             halo.position.copy(bulb.position);
             this.group.add(halo);
         }
@@ -265,7 +326,7 @@ export class DmxFixtureRuntime {
         }
 
         this.pixels.push({
-          model: pixelModel, spotLight: null, beam, bulb, bulbMat, halo, haloMat, dots, localPos,
+          model: pixelModel, spotLight: null, beam, bulb, bulbMat, halo, haloMat, haloBaseSize, dots, localPos,
         });
       });
     } else {
@@ -370,6 +431,12 @@ export class DmxFixtureRuntime {
     const on = !!this.config.diffusion;
     const amt = on ? Math.max(1, Number(this.config.diffusionAmount) || 2.5) : 1;
     const haloScale = (params.globalHaloScale || 1.0) * amt;
+    // Overlap compensation: the glow footprint grows with `amt`, so the number
+    // of sprites overlapping any screen pixel grows ~amt². Fading each sprite
+    // by 1/amt^1.5 keeps the additive sum from blowing out to flat white under
+    // the bloom pass, while the wider footprint still merges neighbouring
+    // pixels into one continuous frosted sheet.
+    const opacity = LED_GLOW_OPACITY / Math.pow(amt, 1.5);
     // Read the profile fresh (not the cached this.profileDef) because the
     // lighting profile is runtime state that changes without rebuilding the
     // fixture — same reason setVisibility() re-fetches it below.
@@ -379,7 +446,8 @@ export class DmxFixtureRuntime {
       const shouldEmitter = (profileDef.render.emitterMode === 'pixel') ||
         (profileDef.render.emitterMode === 'fixture_representative' && j === 0);
       p.halo.visible = this.group.visible && shouldEmitter && on;
-      p.halo.scale.setScalar(haloScale);
+      p.halo.scale.setScalar(p.haloBaseSize * haloScale);
+      p.haloMat.opacity = opacity;
       p.halo.matrixWorldNeedsUpdate = true;
     });
   }
@@ -651,7 +719,16 @@ export class DmxFixtureRuntime {
     this.pixels.forEach(p => {
       if (p.beam) disposeNode(p.beam);
       if (p.bulb) disposeNode(p.bulb);
-      if (p.halo) disposeNode(p.halo);
+      if (p.halo) {
+        if (p.halo.isSprite) {
+          // Sprites share one THREE-internal geometry and the module-level
+          // glow texture — dispose only this pixel's material, never the
+          // shared geometry/texture (other fixtures still use them).
+          p.halo.material.dispose();
+        } else {
+          disposeNode(p.halo);
+        }
+      }
       
       // dots share bulb material, so disposing geometry is sufficient
       if (p.dots) p.dots.forEach(d => {
