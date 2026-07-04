@@ -46,7 +46,14 @@ function sanitizeSnapshotName(raw: string): string {
     .slice(0, 64);
 }
 
-export function SnapshotBar() {
+export function SnapshotBar({ disabled = false }: {
+  /** Soft PLAN lock gate (planLocked && !leaseHeld). When true the RECALL and
+   *  + CAPTURE entry buttons are disabled — dimmed, handlers blocked — until
+   *  the operator takes over (every mutating path in this bar flows through a
+   *  modal those two buttons open). Default false: existing call sites are
+   *  unchanged. */
+  disabled?: boolean;
+} = {}) {
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
 
@@ -143,10 +150,12 @@ export function SnapshotBar() {
     <View style={styles.bar}>
       <Text style={styles.barLabel}>LOOKS</Text>
       <TouchableOpacity
-        style={styles.recallBtn}
+        style={[styles.recallBtn, disabled && { opacity: 0.45 }]}
         hitSlop={HIT_SLOP}
+        disabled={disabled}
         onPress={() => setListOpen(true)}
         accessibilityRole="button"
+        accessibilityState={{ disabled }}
         accessibilityLabel={`Recall a saved look (${snapshots.length} saved)`}
       >
         <Text style={styles.recallBtnText} numberOfLines={1}>
@@ -154,11 +163,12 @@ export function SnapshotBar() {
         </Text>
       </TouchableOpacity>
       <TouchableOpacity
-        style={[styles.captureBtn, busy && { opacity: 0.5 }]}
+        style={[styles.captureBtn, busy && { opacity: 0.5 }, disabled && { opacity: 0.45 }]}
         hitSlop={HIT_SLOP}
-        disabled={busy}
+        disabled={busy || disabled}
         onPress={() => { setNameDraft(''); setNameOpen(true); }}
         accessibilityRole="button"
+        accessibilityState={{ disabled: busy || disabled }}
         accessibilityLabel="Capture current mixer state as a new look"
       >
         <Text style={styles.captureBtnText}>{busy ? 'SAVING…' : '+ CAPTURE'}</Text>

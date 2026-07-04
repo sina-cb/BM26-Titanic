@@ -181,6 +181,12 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   const [pendingNewDir, setPendingNewDir] = useState<string | null>(null);
   const [newDirPlaylistName, setNewDirPlaylistName] = useState('');
   const [newPlaylistName, setNewPlaylistName] = useState('');
+  // "Duplicate playlist" name prompt. `pendingDupSource` holds the source
+  // playlist whose entries seed the copy while the operator names it; the
+  // name modal is open whenever it's non-null. Mirrors the "new from
+  // folder" prompt (`pendingNewDir` / `newDirPlaylistName`) above.
+  const [pendingDupSource, setPendingDupSource] = useState<string | null>(null);
+  const [dupPlaylistName, setDupPlaylistName] = useState('');
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
   // Playlist-edits lock — operator-toggled gate that hides every
@@ -834,6 +840,44 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     await handleLoadPlaylist(name);
   }, [pendingNewDir, newDirPlaylistName, fetchDirEntries, handleLoadPlaylist]);
 
+  // "Duplicate playlist" action: open a name prompt seeded with a
+  // "<source>_copy" suggestion. Like handleDirNewPlaylist we DON'T
+  // auto-create — the operator confirms (and can rename) first so we
+  // never silently clobber an existing playlist.
+  const handleDuplicatePlaylist = useCallback((source: string) => {
+    setShowLibrary(false);
+    setDupPlaylistName(sanitizeName(`${source}_copy`));
+    setPendingDupSource(source);
+  }, []);
+
+  // Confirm the duplicate: fetch the source playlist's content, re-key its
+  // entries so the copy is independent, save under the chosen name, and
+  // load the new copy onto this channel. Client-side only — savePlaylist
+  // already persists, so no new engine endpoint is needed.
+  const confirmDuplicatePlaylist = useCallback(async () => {
+    const source = pendingDupSource;
+    if (!source) return;
+    const name = sanitizeName(dupPlaylistName);
+    if (!name) return; // Create is disabled when empty; guard anyway.
+    const src = await fetchPlaylist(source);
+    if (!src.ok || !src.data) {
+      Alert.alert('Duplicate failed', src.error || 'Unknown error');
+      return;
+    }
+    // Fresh entry ids so the copy doesn't alias the source's per-entry
+    // handles (the engine tracks activeEntryId by id). Everything else —
+    // pattern / label / defaults / notes — rides along verbatim so the
+    // copy is a faithful clone of the source.
+    const entries = src.data.entries.map((e) => ({ ...e, id: genEntryId() }));
+    const save = await savePlaylist({ name, entries });
+    if (!save.ok) {
+      Alert.alert('Duplicate failed', save.error || 'Unknown error');
+      return;
+    }
+    setPendingDupSource(null);
+    await handleLoadPlaylist(name);
+  }, [pendingDupSource, dupPlaylistName, handleLoadPlaylist]);
+
   // "Append" action: bulk-add every pattern in a directory to the
   // currently-loaded playlist, then persist — same auto-save model as
   // handleAddPattern, just for a whole folder at once.
@@ -1427,6 +1471,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         newPlaylistName={newPlaylistName}
         setNewPlaylistName={setNewPlaylistName}
         onCreateNew={handleCreateNew}
+        onDuplicate={handleDuplicatePlaylist}
       />
 
       <AddPatternModal
@@ -1454,6 +1499,16 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         exists={playlists.includes(sanitizeName(newDirPlaylistName))}
         onCancel={() => setPendingNewDir(null)}
         onCreate={confirmDirNewPlaylist}
+      />
+
+      <DuplicatePlaylistNameModal
+        visible={pendingDupSource !== null}
+        source={pendingDupSource}
+        name={dupPlaylistName}
+        setName={setDupPlaylistName}
+        exists={playlists.includes(sanitizeName(dupPlaylistName))}
+        onCancel={() => setPendingDupSource(null)}
+        onCreate={confirmDuplicatePlaylist}
       />
 
       {/* Remove-entry confirmation (production-console safety). */}
@@ -1521,11 +1576,12 @@ interface LibraryModalProps {
   newPlaylistName: string;
   setNewPlaylistName: (s: string) => void;
   onCreateNew: () => void;
+  onDuplicate: (name: string) => void;
 }
 
 const LibraryModal: React.FC<LibraryModalProps> = ({
   visible, onClose, playlists, currentName, onLoad, onDelete,
-  newPlaylistName, setNewPlaylistName, onCreateNew,
+  newPlaylistName, setNewPlaylistName, onCreateNew, onDuplicate,
 }) => {
   const C = usePalette();
   const modalStyles = useMemo(() => makeModalStyles(C), [C]);
@@ -1580,6 +1636,16 @@ const LibraryModal: React.FC<LibraryModalProps> = ({
                       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isCurrent ? '#FFF' : C.text }}>
                         {isCurrent ? '▶ ' : ''}{name}
                       </Text>
+                    </TouchableOpacity>
+                    {/* Duplicate: clone this playlist under a new name. Shown
+                        for every row (including `default`) since a copy never
+                        overwrites the source. Opens the name prompt. */}
+                    <TouchableOpacity
+                      onPress={() => onDuplicate(name)}
+                      style={{ width: 28, height: 28, borderRadius: 6, borderWidth: 1, borderColor: C.primary, alignItems: 'center', justifyContent: 'center' }}
+                      accessibilityLabel={`Duplicate playlist ${name}`}
+                    >
+                      <Text style={{ color: C.primary, fontSize: 13 }}>⧉</Text>
                     </TouchableOpacity>
                     {name !== 'default' && (
                       <TouchableOpacity
@@ -1806,6 +1872,79 @@ const NewPlaylistNameModal: React.FC<NewPlaylistNameModalProps> = ({
               style={{ paddingHorizontal: 18, height: 34, borderRadius: 6, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center', opacity: clean ? 1 : 0.4 }}
             >
               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: '#FFF' }}>Create</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </TouchableOpacity>
+    </TouchableOpacity>
+  </Modal>
+  );
+};
+
+interface DuplicatePlaylistNameModalProps {
+  visible: boolean;
+  source: string | null;
+  name: string;
+  setName: (s: string) => void;
+  exists: boolean;
+  onCancel: () => void;
+  onCreate: () => void;
+}
+
+// Name prompt for "duplicate playlist". A near-twin of NewPlaylistNameModal
+// (folder flow): pre-filled with a "<source>_copy" suggestion but editable,
+// so the operator can pick any non-colliding name. An in-app modal (not
+// Alert.alert) because RN-web drops Alert button callbacks.
+const DuplicatePlaylistNameModal: React.FC<DuplicatePlaylistNameModalProps> = ({
+  visible, source, name, setName, exists, onCancel, onCreate,
+}) => {
+  const C = usePalette();
+  const modalStyles = useMemo(() => makeModalStyles(C), [C]);
+  const clean = sanitizeName(name);
+  return (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+    <TouchableOpacity
+      activeOpacity={1}
+      onPress={onCancel}
+      style={modalStyles.backdrop}
+      accessibilityLabel="Close duplicate-playlist name prompt"
+    >
+      <TouchableOpacity activeOpacity={1} onPress={() => {}} style={modalStyles.cardWrap}>
+        <View style={modalStyles.card}>
+          <Text style={modalStyles.title}>DUPLICATE {source?.toUpperCase() || 'PLAYLIST'}</Text>
+          <Text style={{ color: C.icon, fontFamily: 'Inter_400Regular', fontSize: 11, marginBottom: 10, lineHeight: 15 }}>
+            {"Name the copy. It will be filled with this playlist's entries and loaded onto the channel."}
+          </Text>
+          <TextInput
+            value={name}
+            onChangeText={setName}
+            placeholder="playlist name"
+            placeholderTextColor={C.icon}
+            autoFocus
+            onSubmitEditing={() => { if (clean) onCreate(); }}
+            returnKeyType="done"
+            style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, color: C.text }}
+          />
+          {exists && clean ? (
+            <Text style={{ color: C.error, fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 6 }}>
+              {`⚠ "${clean}" already exists — creating will overwrite it.`}
+            </Text>
+          ) : null}
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
+            <TouchableOpacity
+              onPress={onCancel}
+              accessibilityLabel="Cancel duplicate playlist"
+              style={{ paddingHorizontal: 14, height: 34, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => { if (clean) onCreate(); }}
+              disabled={!clean}
+              accessibilityLabel="Create duplicate playlist"
+              style={{ paddingHorizontal: 18, height: 34, borderRadius: 6, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center', opacity: clean ? 1 : 0.4 }}
+            >
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: '#FFF' }}>Duplicate</Text>
             </TouchableOpacity>
           </View>
         </View>

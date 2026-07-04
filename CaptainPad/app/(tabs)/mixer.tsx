@@ -4,7 +4,7 @@ import { View, Text, TouchableOpacity, Pressable, ScrollView, StyleSheet, TextIn
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { usePalette } from '@/hooks/use-theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, router } from 'expo-router';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { RigGlobals } from '@/components/RigGlobals';
 import {
@@ -39,6 +39,10 @@ import { postBump } from '@/utils/bumpApi';
 import { GroupRailBody, MixGroupHeader, tintFromHex } from '@/components/GroupRail';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
+import { useOperatorTakeover, useTimeline } from '@/hooks/useTimeline';
+import { PlanLockScrim } from '@/components/PlanLockScrim';
+import { useEngineLock } from '@/hooks/useEngineLock';
+import { PlanLockBanner } from '@/components/PlanLockBanner';
 import {
   ModulationReadonlyBadge, useEntryModulations, useModulationState,
   GhostMarker, prettySliderName,
@@ -159,9 +163,12 @@ const BlendModePicker = ({ visible, current, onSelect, onClose, blends, title }:
 //     frame. Frames only arrive for the deck-active pattern, so this
 //     overlay lights up when the mixer channel happens to be hosting
 //     the same pattern the deck is playing.
-function MixerLocalParams({ channel, onControlChange }: {
+function MixerLocalParams({ channel, onControlChange, disabled }: {
   channel: { id: string; exports?: any[]; playlist?: { name?: string; activeEntryId?: string } | null };
   onControlChange: (channelId: string, controlId: number, value: number) => void;
+  /** Soft PLAN lock — the live param sliders change what's playing, so they're
+   *  disabled (greyed) until the operator takes over. */
+  disabled?: boolean;
 }) {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
@@ -225,7 +232,7 @@ function MixerLocalParams({ channel, onControlChange }: {
                 label={niceLabel}
                 value={base}
                 onChange={(v: number) => onControlChange(channel.id, exp.id, v)}
-                disabled={matched}
+                disabled={matched || !!disabled}
                 badge={matched ? `MATCH${exp.cpcLabel ? `·${String(exp.cpcLabel).substring(0, 4).toUpperCase()}` : ''}` : undefined}
                 fillColor={hasMapping ? undefined : undefined}
               />
@@ -265,7 +272,7 @@ function MixerLocalParams({ channel, onControlChange }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, cardStyle, isOnlyChannel, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, cardStyle, isOnlyChannel, activationsLocked, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -399,22 +406,24 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           {levelPct}
         </Text>
         <TouchableOpacity
-          style={[styles.thinVToggle, !channel.enabled && styles.toggleBtnMuted]}
+          style={[styles.thinVToggle, !channel.enabled && styles.toggleBtnMuted, activationsLocked && { opacity: 0.45 }]}
           hitSlop={ICON_BTN_HIT_SLOP}
+          disabled={activationsLocked}
           onPress={() => onMuteToggle(channel.id, !channel.enabled)}
           accessibilityRole="button"
           accessibilityLabel={channel.enabled ? 'Mute channel' : 'Channel muted'}
-          accessibilityState={{ selected: !channel.enabled }}
+          accessibilityState={{ selected: !channel.enabled, disabled: !!activationsLocked }}
         >
           <Text style={[styles.labelCaps, { fontSize: 9 }, !channel.enabled && { color: '#FFF' }]}>M</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.thinVToggle, isSolo && { backgroundColor: '#00a86b', borderColor: '#00a86b' }]}
+          style={[styles.thinVToggle, isSolo && { backgroundColor: '#00a86b', borderColor: '#00a86b' }, activationsLocked && { opacity: 0.45 }]}
           hitSlop={ICON_BTN_HIT_SLOP}
+          disabled={activationsLocked}
           onPress={() => onSoloToggle(channel.id)}
           accessibilityRole="button"
           accessibilityLabel={isSolo ? 'Solo on' : 'Solo'}
-          accessibilityState={{ selected: !!isSolo }}
+          accessibilityState={{ selected: !!isSolo, disabled: !!activationsLocked }}
         >
           <Text style={[styles.labelCaps, { fontSize: 9 }, isSolo && { color: '#FFF' }]}>S</Text>
         </TouchableOpacity>
@@ -482,7 +491,11 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             </View>
           ) : null}
           <TextInput
-            style={[styles.headlineSm, { fontSize: 14, color: C.text, flex: 1, padding: 0 }]}
+            style={[styles.headlineSm, { fontSize: 14, color: C.text, flex: 1, padding: 0 }, activationsLocked && { opacity: 0.45 }]}
+            // Soft PLAN lock: renaming is a channel edit — read-only until the
+            // operator takes over (editable=false blocks focus/typing on both
+            // native and react-native-web).
+            editable={!activationsLocked}
             defaultValue={derivedTitle}
             // Commit the rename on BLUR (and on Enter via onSubmitEditing).
             //
@@ -531,13 +544,16 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             live in the ⋮ menu as LABELED rows. The per-button 28pt squircles +
             their ICON_BTN_HIT_SLOP keep every target ≥44pt. */}
         <View style={{ flexDirection: 'row', flexShrink: 0, columnGap: 4, alignItems: 'center', justifyContent: headerTwoRow ? 'flex-start' : 'flex-end' }}>
-          {/* Lock (playlist/pattern lock) — amber when engaged. */}
+          {/* Lock (playlist/pattern lock) — amber when engaged. Gated under
+              the soft PLAN lock: toggling it changes save/edit behaviour. */}
           <TouchableOpacity
-            style={[styles.titleBtn, locked && styles.titleBtnAmberActive]}
+            style={[styles.titleBtn, locked && styles.titleBtnAmberActive, activationsLocked && { opacity: 0.45 }]}
             hitSlop={ICON_BTN_HIT_SLOP}
+            disabled={activationsLocked}
             onPress={() => onLockToggle(channel.id, !locked)}
             accessibilityLabel={locked ? 'Unlock channel' : 'Lock channel'}
             accessibilityRole="button"
+            accessibilityState={{ disabled: !!activationsLocked }}
           >
             <IconSymbol name={locked ? 'lock.fill' : 'lock.open.fill'} size={14} color={locked ? '#F5A623' : C.secondary} />
           </TouchableOpacity>
@@ -547,48 +563,59 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
               by the channel lock. */}
           {onMoveUp && (
             <TouchableOpacity
-              style={[styles.titleBtn, !canMoveUp && { opacity: 0.3 }]}
+              style={[styles.titleBtn, (!canMoveUp || activationsLocked) && { opacity: 0.3 }]}
               hitSlop={ICON_BTN_HIT_SLOP}
-              disabled={!canMoveUp}
+              // Reorder changes the composite order of the live mix — gated
+              // under the soft PLAN lock with the other channel edits.
+              disabled={!canMoveUp || activationsLocked}
               onPress={() => onMoveUp(channel.id)}
               accessibilityLabel="Move channel up (toward top of mix)"
               accessibilityRole="button"
-              accessibilityState={{ disabled: !canMoveUp }}
+              accessibilityState={{ disabled: !canMoveUp || !!activationsLocked }}
             >
               <IconSymbol name="chevron.up" size={14} color={C.secondary} />
             </TouchableOpacity>
           )}
           {onMoveDown && (
             <TouchableOpacity
-              style={[styles.titleBtn, !canMoveDown && { opacity: 0.3 }]}
+              style={[styles.titleBtn, (!canMoveDown || activationsLocked) && { opacity: 0.3 }]}
               hitSlop={ICON_BTN_HIT_SLOP}
-              disabled={!canMoveDown}
+              disabled={!canMoveDown || activationsLocked}
               onPress={() => onMoveDown(channel.id)}
               accessibilityLabel="Move channel down (toward bottom of mix)"
               accessibilityRole="button"
-              accessibilityState={{ disabled: !canMoveDown }}
+              accessibilityState={{ disabled: !canMoveDown || !!activationsLocked }}
             >
               <IconSymbol name="chevron.down" size={14} color={C.secondary} />
             </TouchableOpacity>
           )}
+          {/* Blend-mode ("SCREEN ▾") dropdown — gated under the soft PLAN lock
+              in addition to the channel lock: it changes how this channel
+              composites into the live mix. */}
           <TouchableOpacity
-            style={styles.modeDropdown}
+            style={[styles.modeDropdown, activationsLocked && { opacity: 0.45 }]}
             hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
-            onPress={() => { if (!locked) setShowBlendPicker(true); }}
+            disabled={activationsLocked}
+            onPress={() => { if (!locked && !activationsLocked) setShowBlendPicker(true); }}
             activeOpacity={locked ? 1.0 : 0.2}
             accessibilityRole="button"
+            accessibilityState={{ disabled: !!activationsLocked }}
             accessibilityLabel={`Blend mode: ${(channel.mode || 'normal').replace('blend_', '')}`}
           >
             <Text style={[styles.valueReadout, { color: locked ? C.secondary : C.primary, fontSize: 11 }]}>{(channel.mode || 'normal').replace('blend_', '').toUpperCase()}{locked ? '' : ' ▾'}</Text>
           </TouchableOpacity>
           {/* Overflow ⋮ — vertical three-dot "more" affordance; opens the
-              secondary-actions menu (pin fader, delete). */}
+              secondary-actions menu (pin fader, delete). Both actions mutate
+              the channel, so the entry button is gated under the soft PLAN
+              lock. */}
           <TouchableOpacity
-            style={styles.titleBtn}
+            style={[styles.titleBtn, activationsLocked && { opacity: 0.45 }]}
             hitSlop={ICON_BTN_HIT_SLOP}
+            disabled={activationsLocked}
             onPress={() => setShowActionsMenu(true)}
             accessibilityLabel="More channel actions"
             accessibilityRole="button"
+            accessibilityState={{ disabled: !!activationsLocked }}
           >
             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.secondary }}>⋮</Text>
           </TouchableOpacity>
@@ -694,8 +721,11 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
         <Text style={[styles.labelCaps, { width: 66 }]} numberOfLines={1}>CHANNEL</Text>
         <HorizontalFader
           value={channel.fader ?? 0}
-          onChange={(v: number) => onFaderChange(channel.id, v)}
-          trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6 }]}
+          // Under the soft PLAN lock the channel fader is an activation control
+          // (it changes the mix) — gate the write + dim the track so it reads
+          // disabled. Taking over re-enables it (parent clears activationsLocked).
+          onChange={(v: number) => { if (!activationsLocked) onFaderChange(channel.id, v); }}
+          trackStyle={[styles.faderTrack, { flex: 1, marginHorizontal: 6, opacity: activationsLocked ? 0.45 : 1 }]}
           fillStyle={styles.faderFill}
           // QA round 10 fix #6: visible grabbable thumb so the channel fader
           // reads as draggable at 0 (empty track) and 100 (solid fill), matching
@@ -737,8 +767,10 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           />
           <HorizontalFader
             value={(channel.hue ?? 0) / 360}
-            onChange={(v: number) => { if (!locked) onHueChange(channel.id, Math.round(v * 360)); }}
-            trackStyle={[styles.hueTrack, { flex: 1, marginHorizontal: 6, opacity: locked ? 0.5 : 1 }]}
+            // Soft PLAN lock: the per-channel HUE trim changes the live output,
+            // so it's gated alongside the channel fader / local params.
+            onChange={(v: number) => { if (!locked && !activationsLocked) onHueChange(channel.id, Math.round(v * 360)); }}
+            trackStyle={[styles.hueTrack, { flex: 1, marginHorizontal: 6, opacity: (locked || activationsLocked) ? 0.5 : 1 }]}
             fillStyle={styles.hueFill}
             // QA round 11 fix: a visible grabbable thumb so the HUE fader reads
             // as draggable at 0° (empty track) instead of looking inert (the
@@ -770,6 +802,10 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             initialPlaylist={initialPlaylist || null}
             refreshNonce={refreshNonce}
             playlistLibrary={playlistLibrary}
+            // Soft PLAN lock: pattern/entry selection changes what's playing —
+            // same gate the deck's PlaylistPanel already carries. Taking over
+            // re-enables it.
+            disabled={activationsLocked}
           />
         </View>
 
@@ -792,7 +828,7 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
                 numberOfLines={1}
                 adjustsFontSizeToFit
               >LOCAL PARAMS</Text>
-              <MixerLocalParams channel={channel} onControlChange={onControlChange} />
+              <MixerLocalParams channel={channel} onControlChange={onControlChange} disabled={activationsLocked} />
             </View>
           </ScrollView>
         </View>
@@ -801,7 +837,9 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
       {/* ── Bottom action rows: full strip width ─────────────────────── */}
       <View style={styles.muteSoloRow}>
         <TouchableOpacity
-          style={[styles.toggleBtn, !channel.enabled && styles.toggleBtnMuted]}
+          style={[styles.toggleBtn, !channel.enabled && styles.toggleBtnMuted, activationsLocked && { opacity: 0.45 }]}
+          disabled={activationsLocked}
+          accessibilityState={{ disabled: !!activationsLocked }}
           onPress={() => onMuteToggle(channel.id, !channel.enabled)}>
           <Text style={[styles.labelCaps, !channel.enabled && { color: '#FFF' }]}>Mute</Text>
         </TouchableOpacity>
@@ -813,11 +851,12 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             C10 — solo state must not be color-only (accessibility): the
             ✓ glyph + accessibilityState carry the on/off state. */}
         <TouchableOpacity
-          style={[styles.toggleBtn, isSolo && { backgroundColor: '#00a86b', borderColor: '#00a86b' }]}
+          style={[styles.toggleBtn, isSolo && { backgroundColor: '#00a86b', borderColor: '#00a86b' }, activationsLocked && { opacity: 0.45 }]}
+          disabled={activationsLocked}
           onPress={() => onSoloToggle(channel.id)}
           accessibilityRole="button"
           accessibilityLabel={isSolo ? 'Solo on' : 'Solo'}
-          accessibilityState={{ selected: !!isSolo }}>
+          accessibilityState={{ selected: !!isSolo, disabled: !!activationsLocked }}>
           <Text style={[styles.labelCaps, isSolo && { color: '#FFF' }]}>{isSolo ? 'Solo ✓' : 'Solo'}</Text>
         </TouchableOpacity>
         {/* FLASH / BUMP (docs/39 §10.7) — momentary "full while held" accent.
@@ -831,13 +870,14 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
             not color-only: the ✓ glyph + accessibilityState carry it. */}
         {onBumpOn && (
           <Pressable
-            style={[styles.toggleBtn, isBumped && styles.toggleBtnBump]}
-            onPressIn={() => onBumpOn(channel.id)}
-            onPressOut={() => onBumpOff(channel.id)}
+            style={[styles.toggleBtn, isBumped && styles.toggleBtnBump, activationsLocked && { opacity: 0.45 }]}
+            disabled={activationsLocked}
+            onPressIn={() => { if (!activationsLocked) onBumpOn(channel.id); }}
+            onPressOut={() => { if (!activationsLocked) onBumpOff(channel.id); }}
             hitSlop={ICON_BTN_HIT_SLOP}
             accessibilityRole="button"
             accessibilityLabel={isBumped ? 'Bump held' : 'Bump (hold for full)'}
-            accessibilityState={{ selected: !!isBumped }}>
+            accessibilityState={{ selected: !!isBumped, disabled: !!activationsLocked }}>
             <Text style={[styles.labelCaps, isBumped && { color: '#1a1a1a' }]}>{isBumped ? 'Bump ✓' : 'Bump'}</Text>
           </Pressable>
         )}
@@ -852,11 +892,15 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
               styles.toggleBtn,
               soloProtected && styles.toggleBtnSafe,
               soloActive && soloProtected && styles.toggleBtnSafeLit,
+              activationsLocked && { opacity: 0.45 },
             ]}
+            // Soft PLAN lock: solo-safe changes how solos gate this channel's
+            // live contribution — locked with the other activation controls.
+            disabled={activationsLocked}
             onPress={() => onSoloSafeToggle(channel.id, !soloSafe)}
             accessibilityRole="button"
             accessibilityLabel={soloProtected ? 'Solo-safe on' : 'Solo-safe'}
-            accessibilityState={{ selected: soloProtected }}>
+            accessibilityState={{ selected: soloProtected, disabled: !!activationsLocked }}>
             <Text style={[styles.labelCaps, { fontSize: 9 }, soloProtected && { color: C.primary }]}>
               {soloProtected ? (faderLocked && !soloSafe ? 'SAFE (LOCK)' : 'SAFE ✓') : 'SAFE'}
             </Text>
@@ -873,7 +917,11 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
         {!locked && onViewSelectionChange && (
           <>
             <TouchableOpacity
-              style={[styles.toggleBtn, viewSel.type !== 'all' && { backgroundColor: C.primary, borderColor: C.primary }]}
+              style={[styles.toggleBtn, viewSel.type !== 'all' && { backgroundColor: C.primary, borderColor: C.primary }, activationsLocked && { opacity: 0.45 }]}
+              // Soft PLAN lock: view selection re-targets which pixels this
+              // channel drives — a live-mix change.
+              disabled={activationsLocked}
+              accessibilityState={{ disabled: !!activationsLocked }}
               onPress={() => setShowViewPicker(true)}>
               {/* Round8 #4: the "VIEW:" prefix pushed "ALL" off the end of the
                   narrow toggle ("VIEW: A…"). Drop the prefix and show just the
@@ -948,7 +996,15 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
       </View>
 
       {!isDeck && (
-        <View style={styles.transitionBar}>
+        // Soft PLAN lock: the whole transition row (TRANSITION trigger, style
+        // dropdown, duration wheel) drives/tunes live-mix fades, so it's gated
+        // as one section — pointerEvents 'none' stops every interactive child
+        // (button, dropdown, and the TimerWheel's scroll), the dim marks it
+        // disabled. No PANIC/BLACKOUT lives here.
+        <View
+          pointerEvents={activationsLocked ? 'none' : 'auto'}
+          style={[styles.transitionBar, activationsLocked && { opacity: 0.45 }]}
+        >
           <TouchableOpacity
             style={[styles.toggleBtn, styles.transitionBtn]}
             onPress={() => onTransition && onTransition(channel.id, transTimeMs / 1000, transMode, channel.mode)}>
@@ -1040,6 +1096,36 @@ export default function MixerScreen() {
   // while offline — we hide the chip then, matching the OFFLINE pill's
   // graceful-degrade behaviour.
   const activeModel = useActiveModel();
+  // ── Operator takeover (requests #3/#5) ─────────────────────────────────
+  // A manual touch here while a plan is driving the rig is a takeover:
+  // notifyInteraction() fires the takeover ONCE then keeps the lease alive
+  // (throttled) on continued interaction. Plan/lease/countdown status is
+  // surfaced by the floating PlanLockBanner overlay (top-right) — the old
+  // inline header chips + PlanIndicatorPill were removed 2026-07-02 so the
+  // header fits one row on an iPad.
+  const { leaseHeld, notifyInteraction } = useOperatorTakeover();
+  // ── Soft PLAN lock (CONTRACT: globalsState.controlLock ∈ {null,'portwatch',
+  // 'plan'}) ──────────────────────────────────────────────────────────────
+  // 'portwatch' stays the FULL hard lockout (EngineLockoutOverlay, tab layout).
+  // 'plan' is the SOFTER lock: a yellow PlanLockBanner + the channel ACTIVATION
+  // controls (fader / mute / solo / bump / live params) disabled, while
+  // navigation, scrolling and read-only viewing stay live. Taking over (any
+  // control touch fires the operator lease) clears the gate and re-enables them.
+  const { planLocked } = useEngineLock();
+  const activationsLocked = planLocked && !leaseHeld;
+  // ── Entering the mixer while a plan forces the deck (CP-VIEWSWITCH) ─────
+  // `forcingDeckView` (engine, on timelineState) = plan active AND output
+  // pinned to the deck under plan control. The old behaviour popped a blue
+  // confirm modal ("TAKE OVER / STAY ON PLAN") with a 60s auto-return timer.
+  // Operator request 2026-07-02: KILL the modal. Entering the mixer while the
+  // plan drives the deck just shows the mixer READ-ONLY under the yellow
+  // PlanLockBanner + scrim; the banner's TEMPORARY TAKE OVER button is the one
+  // and only takeover affordance (see handleMixerTakeover below), so both
+  // surfaces share the same takeover UX.
+  const { state: timelineState, takeover: timelineTakeover } = useTimeline();
+  // Guard so the on-focus output switch runs ONCE per mixer-tab entry (and so
+  // our own takeover can't re-trigger it). Reset on blur.
+  const viewGateHandledRef = useRef(false);
   const [blends, setBlends] = useState<string[]>([]);
   const [transitionsList, setTransitionsList] = useState<string[]>([]);
   // ─── Playlist library: parent-owned (May 2026 refactor) ───────────
@@ -1146,11 +1232,61 @@ export default function MixerScreen() {
   // see the real number, not a stale UI constant.
   const maxChannelsRef = useRef<number>(3);
 
+  // TEMPORARY TAKE OVER (mixer variant) — handed to the PlanLockBanner. Engage
+  // the operator lease, UNLOCK the controls, AND put the live output on the
+  // mixer so the operator's CHANNELS drive the lights.
+  //
+  // Operator request 2026-07-03: a mixer takeover used to leave the output on
+  // the DECK (the plan was driving the base channel), so the exterior kept
+  // playing the plan's base look — "some random master" — while the operator's
+  // mixer-fader moves did nothing visible. Switching to the mixer here makes the
+  // takeover WYSIWYG: what you mix is what shows.
+  //
+  // Ordering is race-free: the takeover POST clears the plan's deck-pin, and
+  // that release runs to completion (microtask drain) BEFORE the engine can
+  // process the next request — so the /mixer/view write below always lands on
+  // the LIVE fader (→ mixer, targetViewFader 1.0), never gets swallowed as a
+  // saved-only value.
+  //
+  // Trade-off the operator accepted: this is a DELIBERATE manual takeover, so if
+  // every mixer channel sits at fader 0 the exterior goes dark until they raise
+  // one. The never-dark mission rule governs AUTONOMOUS/plan behavior — not a
+  // hands-on operator who chose to grab the mixer.
+  const handleMixerTakeover = useCallback(async () => {
+    const ok = await timelineTakeover();
+    if (!ok) {
+      Alert.alert('Take over failed', 'The engine rejected the takeover. The plan may still be running.');
+      return;
+    }
+    await setMixerView('mixer');
+  }, [timelineTakeover]);
+
+  // On mixer-tab focus, switch the engine output to the mixer — but ONLY when
+  // NO plan is driving the rig. Bug 2026-07-02: this used to fire off a ref
+  // that was still `undefined` (falsey) before the first timelineState arrived,
+  // so entering the mixer while a plan drove the DECK yanked the output to the
+  // (empty, fader-0) mixer view and blacked the whole rig out — even on
+  // takeover. Now we WAIT for the state, and while a plan is active
+  // (planActive) we leave the output on the deck (the live look stays up); the
+  // operator flips the DECK/MIXER toggle if they actually want mixer output.
+  const isMixerFocusedRef = useRef(false);
   useFocusEffect(
     useCallback(() => {
-      setMixerView('mixer');
+      isMixerFocusedRef.current = true;
+      viewGateHandledRef.current = false; // re-evaluate the switch each entry
+      return () => { isMixerFocusedRef.current = false; };
     }, [])
   );
+  useEffect(() => {
+    if (!isMixerFocusedRef.current || viewGateHandledRef.current) return;
+    if (!timelineState) return; // wait for the first state before deciding
+    viewGateHandledRef.current = true;
+    // Switch to mixer output ONLY when the rig is truly free — no plan driving
+    // AND no operator takeover in progress. Under a lock OR a takeover, leave
+    // the output on the (lit) deck so we never black the rig out; the operator
+    // flips the DECK/MIXER toggle for mixer output.
+    if (timelineState.planActive !== true && !leaseHeld) setMixerView('mixer');
+  }, [timelineState, leaseHeld]);
 
   // Control plane handler (consumed by useEngineConnection below): mixer
   // state, baseChannelId, maxChannels, in-flight add reconciliation. ALSO:
@@ -1391,6 +1527,7 @@ export default function MixerScreen() {
   // module-level event buses + the setState callbacks (which React
   // guarantees are stable), so the empty dep array is correct.
   const handleFaderChange = useCallback(async (channelId: string, level: number) => {
+    notifyInteraction();
     // Stamp BEFORE the WS send so any racing broadcast that arrives
     // during the round-trip is held off the slider's last finger position.
     localFaderWriteRef.current[channelId] = Date.now();
@@ -1415,9 +1552,10 @@ export default function MixerScreen() {
         });
       }
     }
-  }, []);
+  }, [notifyInteraction]);
 
   const handleMuteToggle = useCallback(async (channelId: string, enabled: boolean) => {
+    notifyInteraction();
     // Mute remains interactive at all times — the operator must always be
     // able to drop a channel even during a transition. "Transitions take
     // precedence over mute/solo" is enforced at *transition start* time
@@ -1436,7 +1574,7 @@ export default function MixerScreen() {
       console.error('[Mixer] Mute PATCH failed:', err);
       Alert.alert('Mute may not have applied', `Could not confirm the mute change. ${err?.message || ''}`.trim());
     });
-  }, []);
+  }, [notifyInteraction]);
 
   // Solo (docs/39 §10) — SERVER-AUTHORITATIVE. The engine's
   // PatternMixer.soloedChannelIds Set is the SOLE source of truth. The old
@@ -1457,6 +1595,7 @@ export default function MixerScreen() {
   //   - fader-lock IMPLIES solo-safe on the engine, so a locked layer stays
   //     lit through a solo automatically (no client-side skip needed).
   const handleSoloToggle = useCallback(async (channelId: string) => {
+    notifyInteraction();
     const alreadySolo = soloedIds.has(channelId);
     if (alreadySolo) {
       // Clear this channel's solo. Single-solo is the common case, so a tap on
@@ -1488,7 +1627,7 @@ export default function MixerScreen() {
         console.error(`[Mixer] Solo REST mirror failed for ${channelId}:`, err);
       });
     }
-  }, [soloedIds]);
+  }, [soloedIds, notifyInteraction]);
 
   // Clear ALL solos (header button). Server-authoritative.
   const handleClearAllSolo = useCallback(async () => {
@@ -1532,6 +1671,7 @@ export default function MixerScreen() {
   const BUMP_RENEW_MS = 700;
 
   const handleBumpOn = useCallback((channelId: string) => {
+    notifyInteraction();
     // Optimistic "held" feedback.
     setBumpedIds(prev => {
       if (prev.has(channelId)) return prev;
@@ -1559,7 +1699,7 @@ export default function MixerScreen() {
     timers.set(channelId, setInterval(() => {
       engineEvents.send({ type: 'bump', channelId });
     }, BUMP_RENEW_MS));
-  }, []);
+  }, [notifyInteraction]);
 
   const handleBumpOff = useCallback((channelId: string) => {
     // Stop the renew heartbeat first so we don't re-bump after releasing.
@@ -1588,6 +1728,7 @@ export default function MixerScreen() {
   }, []);
 
   const handleModeChange = useCallback(async (channelId: string, newMode: string) => {
+    notifyInteraction();
     // Capture the prior mode so we can revert if the engine rejects the
     // blend-mode change. The canonical saved mode is the source of truth.
     const prevMode = savedModesRef.current[channelId]
@@ -1611,7 +1752,7 @@ export default function MixerScreen() {
         `The engine rejected this blend mode. ${res.error || ''} The channel kept its previous mode.`.trim(),
       );
     }
-  }, []);
+  }, [notifyInteraction]);
 
   // Unlock-dirty prompt. Engaged when the user toggles lock OFF on a channel
   // whose in-memory params differ from the saved playlist entry. The user
@@ -1750,6 +1891,7 @@ export default function MixerScreen() {
   // + reconcile-from-broadcast + fail-loud revert shape as faderMax/color. The
   // engine's validateHue normalizes degrees into [0,360); a non-finite ⇒ 400.
   const handleHueChange = useCallback(async (channelId: string, hue: number) => {
+    notifyInteraction();
     const prev = channelsRef.current.find(c => c.id === channelId)?.hue;
     setChannels(chs => chs.map(c => c.id === channelId ? { ...c, hue } : c));
     const res = await setChannelHue(channelId, hue);
@@ -1762,7 +1904,7 @@ export default function MixerScreen() {
         `The engine rejected this hue. ${res.error || ''} The channel kept its previous hue.`.trim(),
       );
     }
-  }, []);
+  }, [notifyInteraction]);
 
   // Channel rename — OPTIMISTIC parent update (bug fix 2026-06-29). Every
   // other control (fader/mode/soloSafe/lock/hue) writes `channels`
@@ -1785,6 +1927,7 @@ export default function MixerScreen() {
   }, []);
 
   const handleControlChange = useCallback((channelId: string, controlId: number, val: number) => {
+    notifyInteraction();
     setChannels(chs => chs.map(c => {
       if (c.id !== channelId) return c;
       return { ...c, exports: (c.exports || []).map((e: any) => e.id === controlId ? { ...e, v0: val } : e) };
@@ -1792,7 +1935,7 @@ export default function MixerScreen() {
     if (!engineEvents.send({ type: 'setChannelControl', channelId, id: controlId, v0: val, v1: 0, v2: 0 })) {
       setMixerChannelControl(channelId, controlId, val, 0, 0);
     }
-  }, []);
+  }, [notifyInteraction]);
 
   // Adding a channel is playlist-first. The "+ ADD CHANNEL" button opens the
   // picker so the user can spin up a new layer with one tap. The first row is
@@ -1917,6 +2060,10 @@ export default function MixerScreen() {
   };
 
   const handleMasterChange = async (val: number) => {
+    // Soft PLAN lock — the fader is pointerEvents-blocked while gated; this
+    // is the belt-and-suspenders write-path gate.
+    if (activationsLocked) return;
+    notifyInteraction();
     setMaster(val);
     const now = Date.now();
     if (now - (throttleRef.current['master'] || 0) > 33) {
@@ -2169,6 +2316,20 @@ export default function MixerScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Soft PLAN lock banner — low-key YELLOW, non-blocking (box-none), only
+          mounts when controlLock === 'plan'. Navigation/viewing/scrolling stay
+          live; the channel ACTIVATION controls (fader/mute/solo/bump/params)
+          are the only thing disabled (per ChannelStrip activationsLocked). The
+          full red portwatch lockout stays in the tab layout. */}
+      <PlanLockBanner onTemporaryTakeOver={handleMixerTakeover} />
+      {/* ── Plan-lock content region ──────────────────────────────────
+          Header + master strip + channel strips live inside this relative
+          wrapper so the PlanLockScrim (bottom of the wrapper) hermetically
+          blankets every mutating mixer control with ONE tap-catching layer —
+          future-proof, and a backstop for any control that doesn't wire its
+          own `activationsLocked`. The floating PlanLockBanner (above) and the
+          bottom safety bar (PANIC/BLACKOUT, a sibling BELOW) stay OUTSIDE. */}
+      <View style={{ flex: 1, position: 'relative' }}>
       {/* ── Top Header Bar ─────────────────────────────────────────── */}
       <View style={[styles.header, isPortrait && { paddingHorizontal: 8 }]}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 16 }}>
@@ -2205,8 +2366,18 @@ export default function MixerScreen() {
           {/* Named-look snapshots (docs/39 §8.1): capture the full mixer
               state under a name + recall/delete saved looks. Reconciles
               from the WS `snapshots` event. Hidden in portrait to keep the
-              narrow header uncrowded (matches the model chip's behaviour). */}
-          {!isPortrait ? <SnapshotBar /> : null}
+              narrow header uncrowded (matches the model chip's behaviour).
+              RECALL/CAPTURE rebuild the live mix, so they're gated under the
+              soft PLAN lock with the rest of the mutating controls. */}
+          {!isPortrait ? <SnapshotBar disabled={activationsLocked} /> : null}
+          {/* Plan-lock / takeover status moved OUT of this row (operator
+              request 2026-07-02: the header must fit ONE row on an iPad).
+              The inline "PLAN LIVE · CONTROLS LOCKED" chip, the "TOOK OVER ·
+              RESUMES M:SS · RESUME NOW" chip, and the PlanIndicatorPill all
+              used to stack here and crowded the row. Both states now surface
+              as the floating PlanLockBanner overlay (top-right, on TOP of the
+              header — zero row width), which carries the lease countdown +
+              RESUME NOW when taken over. */}
         </View>
         {/* Right control cluster (QA round1 #5). flexWrap + justify-end lets the
             MASTER readout and the two add buttons reflow to a second line rather
@@ -2226,9 +2397,13 @@ export default function MixerScreen() {
               empty soloedChannelIds[] reconciles every strip back to lit. */}
           {soloedIds.size > 0 ? (
             <TouchableOpacity
-              style={[styles.clearSoloBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }]}
+              style={[styles.clearSoloBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, activationsLocked && { opacity: 0.45 }]}
               onPress={handleClearAllSolo}
+              // Soft PLAN lock: clearing solos changes the live mix, same as
+              // the per-strip SOLO buttons it undoes.
+              disabled={activationsLocked}
               accessibilityRole="button"
+              accessibilityState={{ disabled: activationsLocked }}
               accessibilityLabel="Clear all solos"
             >
               <Text style={[styles.labelCaps, { color: '#FFF' }, isPortrait && { fontSize: 9 }]}>
@@ -2238,8 +2413,10 @@ export default function MixerScreen() {
           ) : null}
           {/* Timed grand-master FADE (TO BLACK / UP) — the SAME shared
               MasterFadeGroup the deck top bar renders, so the two surfaces
-              never drift. */}
-          <MasterFadeGroup isPortrait={isPortrait} />
+              never drift. Gated under the soft PLAN lock (the e-stop BLACKOUT
+              in the rig bar stays live — this is the timed fade, not the
+              safety cut). */}
+          <MasterFadeGroup isPortrait={isPortrait} disabled={activationsLocked} />
           {/* MASTER label + fader + readout travel together as one cluster so
               they never split across a wrap and the value keeps a reserved
               column (no more cramped overlap with the slider). */}
@@ -2249,38 +2426,51 @@ export default function MixerScreen() {
                 leaving the highest-consequence fader on the surface as an
                 unlabeled bare strip. */}
             <Text style={styles.labelCaps}>MASTER</Text>
-            <HorizontalFader
-              value={master}
-              onChange={handleMasterChange}
-              // Smoothly animate the slider during a timed fade (shared with the
-              // deck) instead of snapping to each broadcast value.
-              fadingTarget={fading ? masterFade?.to : null}
-              fadingDurationMs={masterFade?.remainingMs}
-              trackStyle={[styles.faderTrack, { width: isPortrait ? 120 : 160 }]}
-              fillStyle={[styles.faderFill, fading && { backgroundColor: C.tertiary }]}
-              // Visible, grabbable THUMB (QA round 10 fix #2) — same pattern as
-              // the deck master (DeckTopBar.tsx faderThumb). Without it the
-              // master is a full-width hot strip: a stray graze anywhere on the
-              // bar writes master and can drive the whole rig toward 0. The
-              // thumb gives the operator a deliberate handle to aim for.
-              thumbStyle={styles.masterFaderThumb}
-            />
+            {/* Soft PLAN lock: pointerEvents 'none' blocks the fader's
+                PanResponder entirely (a gated onChange alone would still let
+                the thumb track the finger locally — a visual lie); the dim
+                marks it disabled. Broadcast sync / fade animation stay live so
+                plan-driven master moves still show. */}
+            <View
+              pointerEvents={activationsLocked ? 'none' : 'auto'}
+              style={activationsLocked ? { opacity: 0.45 } : null}
+            >
+              <HorizontalFader
+                value={master}
+                onChange={handleMasterChange}
+                // Smoothly animate the slider during a timed fade (shared with the
+                // deck) instead of snapping to each broadcast value.
+                fadingTarget={fading ? masterFade?.to : null}
+                fadingDurationMs={masterFade?.remainingMs}
+                trackStyle={[styles.faderTrack, { width: isPortrait ? 120 : 160 }]}
+                fillStyle={[styles.faderFill, fading && { backgroundColor: C.tertiary }]}
+                // Visible, grabbable THUMB (QA round 10 fix #2) — same pattern as
+                // the deck master (DeckTopBar.tsx faderThumb). Without it the
+                // master is a full-width hot strip: a stray graze anywhere on the
+                // bar writes master and can drive the whole rig toward 0. The
+                // thumb gives the operator a deliberate handle to aim for.
+                thumbStyle={styles.masterFaderThumb}
+              />
+            </View>
             <Text style={[styles.displayMono, {fontSize: 16, width: 36, textAlign: 'right'}, isPortrait && { fontSize: 14, width: 28 }]}>{Math.round(master * 100)}</Text>
           </View>
           {/* One-tap default add: fastest path. disabled+opacity gives the
               operator visual feedback while the POST is in flight, so they
               don't mash and queue 5 of them. */}
           <TouchableOpacity
-            style={[styles.addBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }]}
+            style={[styles.addBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }, activationsLocked && { opacity: 0.45 }]}
             onPress={() => handleAddChannelWithPlaylist('default')}
-            disabled={addBusy}
+            // Soft PLAN lock: adding a channel changes the live mix.
+            disabled={addBusy || activationsLocked}
+            accessibilityState={{ disabled: addBusy || activationsLocked }}
           >
             <Text style={[styles.labelCaps, {color: '#FFF'}, isPortrait && { fontSize: 9 }]}>{addBusy ? 'ADDING…' : '+ DEFAULT'}</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }]}
+            style={[styles.addBtn, { backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }, activationsLocked && { opacity: 0.45 }]}
             onPress={openAddChannelPicker}
-            disabled={addBusy}
+            disabled={addBusy || activationsLocked}
+            accessibilityState={{ disabled: addBusy || activationsLocked }}
           >
             <Text style={[styles.labelCaps, {color: C.primary}, isPortrait && { fontSize: 9 }]} numberOfLines={1}>{isPortrait ? '+ PLAYLIST' : '+ FROM PLAYLIST…'}</Text>
           </TouchableOpacity>
@@ -2289,15 +2479,21 @@ export default function MixerScreen() {
 
       {/* Mixer-only: a compact GROUPS button at the right end of the GLOBALS
           row opens the channel-grouping modal. The deck renders <CPCControls />
-          with no `trailing`, so its globals row is unchanged. */}
+          with no `trailing`, so its globals row is unchanged. Both the GLOBALS
+          row (SPEED/SIZE/SYNC/COLORS/QUEUE/TAP/BPM source) and the GROUPS
+          button (group CRUD / gang faders / group mute) mutate the rig, so
+          they're gated under the soft PLAN lock. */}
       <CPCControls
         screen="mixer"
+        disabled={activationsLocked}
         trailing={
           <TouchableOpacity
-            style={styles.groupsButton}
+            style={[styles.groupsButton, activationsLocked && { opacity: 0.45 }]}
             hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
             onPress={() => setGroupsModalOpen(true)}
+            disabled={activationsLocked}
             accessibilityRole="button"
+            accessibilityState={{ disabled: activationsLocked }}
             accessibilityLabel="Open channel groups"
           >
             <Text style={[styles.labelCaps, { fontSize: 10, color: C.primary }]}>GROUPS</Text>
@@ -2422,6 +2618,7 @@ export default function MixerScreen() {
                 initialPlaylist={channelInlinePlaylist}
                 cardStyle={cardStyle}
                 isOnlyChannel={channels.length === 1}
+                activationsLocked={activationsLocked}
                 onRename={handleRename}
                 onFaderChange={handleFaderChange}
                 onColorChange={handleColorChange}
@@ -2549,6 +2746,12 @@ export default function MixerScreen() {
           </View>
         )}
       </ScrollView>
+        {/* Hermetic plan-lock scrim — blankets the header + master + channels
+            region above with one tap-catching layer. Active only under the
+            soft PLAN lock and NOT during an operator takeover
+            (activationsLocked = planLocked && !leaseHeld). */}
+        <PlanLockScrim active={activationsLocked} />
+      </View>
 
       {/* ── Global Rig Controls (Bottom) ───────────────────────────── */}
       <View style={styles.globalRigBar}>
@@ -2680,6 +2883,7 @@ export default function MixerScreen() {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
     </View>
   );
 }

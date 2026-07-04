@@ -38,6 +38,14 @@ const LIVE_THROTTLE_MS = 33;
 // `colorTransitionMs` range [0, 10000] in docs/36.
 const TRANSITION_MAX_S = 10;
 
+// How long after a hue-fader drag ends we keep swallowing a backdrop
+// dismiss. Covers the synthesised `click` react-native-web fires on the
+// backdrop when a drag releases past the card edge, regardless of whether
+// that click task runs before or after our 0ms flag-clear. Comfortably
+// longer than the click's dispatch latency, far shorter than a deliberate
+// tap-to-dismiss after the operator has stopped dragging.
+const DRAG_DISMISS_GUARD_MS = 300;
+
 export type ColorPalettePreset = {
   id: string;
   name: string;
@@ -76,21 +84,40 @@ export function ColorPickerModal({
   const { colorTransitionMs } = useSharedParamValues({ colorTransitionMs: 800 }) as { colorTransitionMs: number };
   const [transText, setTransText] = useState('');
 
-  // Reset working state to live engine values every time the modal
-  // reopens, and snapshot the baseline for revert.
+  // Latest props, read by the seed effect below WITHOUT keying it on them.
+  // initialH1/initialH2 come from the LIVE engine params in the parent, so a
+  // Manual-tab drag writes a colour → the engine broadcasts it back → these
+  // props change WHILE the modal is open. Keying the seed effect on them
+  // (the old deps) re-ran it mid-drag, snapping the tab back to `initialTab`
+  // (Presets) and the hue back to the broadcast value — unmounting the fader
+  // and the Manual pane under the operator's finger. That's the "colour
+  // picker disappears when I drag" bug. We seed ONLY on the open transition.
+  const initialH1Ref = useRef(initialH1);
+  const initialH2Ref = useRef(initialH2);
+  const initialTabRef = useRef(initialTab);
+  const colorTransitionMsRef = useRef(colorTransitionMs);
+  initialH1Ref.current = initialH1;
+  initialH2Ref.current = initialH2;
+  initialTabRef.current = initialTab;
+  colorTransitionMsRef.current = colorTransitionMs;
+
+  // Reset working state to live engine values every time the modal opens
+  // (the rising edge of `visible` only), and snapshot the baseline for
+  // revert. Seeding on open — not on prop changes — is what stops a live
+  // drag's own feedback from resetting the tab/hue mid-gesture.
   useEffect(() => {
     if (visible) {
-      setH1(initialH1);
-      setH2(initialH2);
-      setTab(initialTab);
-      baselineRef.current = { h1: initialH1, h2: initialH2 };
-      setTransText(formatSeconds(colorTransitionMs));
+      setH1(initialH1Ref.current);
+      setH2(initialH2Ref.current);
+      setTab(initialTabRef.current);
+      baselineRef.current = { h1: initialH1Ref.current, h2: initialH2Ref.current };
+      setTransText(formatSeconds(colorTransitionMsRef.current));
     }
-    // colorTransitionMs intentionally omitted — we only seed the field
-    // on open, not on every live broadcast (would fight the operator's
-    // in-progress typing).
+    // Initial* and colorTransitionMs are read via refs (latest value at the
+    // moment the modal opens) so they are intentionally NOT dependencies —
+    // we seed only when `visible` flips, never on a live broadcast.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, initialH1, initialH2, initialTab]);
+  }, [visible]);
 
   // Cache-first preset load (warmed at app boot in _layout.tsx); also
   // kick a background refresh on open so a transient empty cache
@@ -170,11 +197,39 @@ export function ColorPickerModal({
 
   const hasPresets = presets.length > 0;
 
+  // Drag guard for the Manual hue faders. On react-native-web a horizontal
+  // drag that starts on a fader but releases past the card's edge makes the
+  // browser synthesise a `click` on the nearest common ancestor of the
+  // pointerdown/pointerup targets — the backdrop — which fires its
+  // onPress={cancel} and dismisses the modal mid-scrub. PanResponder capture
+  // moves the fader but does NOT suppress that synthetic click.
+  //
+  // We guard the backdrop two ways so it's robust to event-loop ordering
+  // (RNW does not reliably dispatch that click in the same task as the
+  // pointer-up): (1) a live `draggingRef` set on grant, and (2) a
+  // `lastDragEndRef` timestamp. On release we stamp the time AND clear the
+  // live flag on a 0ms timeout. The backdrop bails while a drag is live OR
+  // if one ended within DRAG_DISMISS_GUARD_MS — so the synthesised click is
+  // swallowed whether it arrives before or after the timeout runs. Native is
+  // unaffected (no synthetic click; a real tap-outside is never within the
+  // guard window of a drag it didn't start).
+  const draggingRef = useRef(false);
+  const lastDragEndRef = useRef(0);
+  const onFaderDragStart = useCallback(() => { draggingRef.current = true; }, []);
+  const onFaderRelease = useCallback(() => {
+    lastDragEndRef.current = Date.now();
+    setTimeout(() => { draggingRef.current = false; }, 0);
+  }, []);
+  const shouldSwallowBackdrop = useCallback(
+    () => draggingRef.current || Date.now() - lastDragEndRef.current < DRAG_DISMISS_GUARD_MS,
+    [],
+  );
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={cancel}>
       {/* Backdrop: tapping anywhere outside the card cancels (docs/36 §6). */}
       <Pressable
-        onPress={cancel}
+        onPress={() => { if (shouldSwallowBackdrop()) return; cancel(); }}
         accessibilityLabel="Close colour picker"
         style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' }}
       >
@@ -203,7 +258,14 @@ export function ColorPickerModal({
           {tab === 'presets' && hasPresets ? (
             <PresetsTab presets={presets} onPick={pickPreset} />
           ) : (
-            <ManualTab h1={h1} h2={h2} setH1={onManualH1} setH2={onManualH2} />
+            <ManualTab
+              h1={h1}
+              h2={h2}
+              setH1={onManualH1}
+              setH2={onManualH2}
+              onDragStart={onFaderDragStart}
+              onRelease={onFaderRelease}
+            />
           )}
 
           {/* ── Transition time (always visible, both tabs) ────────── */}
@@ -339,15 +401,16 @@ function PresetsTab({ presets, onPick }: { presets: ColorPalettePreset[]; onPick
  * rig LIVE (the parent throttles + fades), so the operator "plays" the
  * colour. APPLY just confirms; CANCEL reverts.
  */
-function ManualTab({ h1, h2, setH1, setH2 }: {
+function ManualTab({ h1, h2, setH1, setH2, onDragStart, onRelease }: {
   h1: number; h2: number;
   setH1: (v: number) => void; setH2: (v: number) => void;
+  onDragStart: () => void; onRelease: () => void;
 }) {
   const C = usePalette();
   return (
     <View style={{ gap: 16 }}>
-      <HueRow label="Colour 1" h={h1} setH={setH1} />
-      <HueRow label="Colour 2" h={h2} setH={setH2} />
+      <HueRow label="Colour 1" h={h1} setH={setH1} onDragStart={onDragStart} onRelease={onRelease} />
+      <HueRow label="Colour 2" h={h2} setH={setH2} onDragStart={onDragStart} onRelease={onRelease} />
       <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.icon }}>
         Drag to play colours live. Saturation and brightness stay at 100%.
       </Text>
@@ -355,7 +418,10 @@ function ManualTab({ h1, h2, setH1, setH2 }: {
   );
 }
 
-function HueRow({ label, h, setH }: { label: string; h: number; setH: (v: number) => void }) {
+function HueRow({ label, h, setH, onDragStart, onRelease }: {
+  label: string; h: number; setH: (v: number) => void;
+  onDragStart: () => void; onRelease: () => void;
+}) {
   const C = usePalette();
   return (
     <View>
@@ -366,6 +432,8 @@ function HueRow({ label, h, setH }: { label: string; h: number; setH: (v: number
       <HorizontalFader
         value={h}
         onChange={(v: number) => setH(v)}
+        onDragStart={onDragStart}
+        onRelease={onRelease}
         trackStyle={{ height: 24, backgroundColor: C.surfaceContainerHigh, borderRadius: 12 }}
         fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: hsvToRgbString(h, FULL_S, FULL_V), borderRadius: 12 }}
       />

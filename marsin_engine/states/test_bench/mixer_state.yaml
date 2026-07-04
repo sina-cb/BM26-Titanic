@@ -15,12 +15,32 @@ channels:
         v0: 0.5
         v1: 0
         v2: 0
+      '614525773':
+        v0: 0
+        v1: 0
+        v2: 0
+      '729588226':
+        v0: 0.5
+        v1: 0
+        v2: 0
       '1037917937':
         v0: 0.5
         v1: 0
         v2: 0
       '2384393854':
         v0: 0.5
+        v1: 0
+        v2: 0
+      '2504041261':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '3994789032':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '4234014351':
+        v0: 1
         v1: 0
         v2: 0
     playlist:
@@ -35,3 +55,14 @@ channels:
       type: all
       target: null
       invert: false
+    faderMax: 1
+    color: null
+    mixGroupId: null
+    soloSafe: false
+    hue: 0
+    followsTempo: false
+    followLeaderId: null
+    followScale: 1
+mixGroups: []
+tempoBpm: 127
+tempoSourcePref: osc

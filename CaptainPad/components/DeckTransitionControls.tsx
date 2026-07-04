@@ -21,11 +21,44 @@
  * can re-render both blocks in lockstep. This file is purely a controlled
  * component.
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable, useWindowDimensions } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { useGlobalStyles } from '@/styles/globalStyles';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+
+// ── SwapCountdown ───────────────────────────────────────────────────────
+// A "🕐 M:SS" chip counting down to the next autopilot swap. Self-contained:
+// it owns its OWN 1 Hz ticker so ONLY this tiny node re-renders each second —
+// NOT the whole deck screen. (An earlier version drove the ticker from the deck
+// screen's top-level state, which re-rendered the entire heavy deck tree every
+// second and made the autopilot controls feel laggy — 2026-07-04.) Ticks only
+// while a swap is scheduled (targetMs != null); renders null otherwise, so an
+// idle deck runs no interval. `targetMs` is the absolute wall-clock ms the
+// engine stamped for the next swap (re-broadcast on every cycle), so the chip
+// stays accurate whether the operator or a plan cue drives the cadence.
+export const SwapCountdown: React.FC<{ targetMs: number | null }> = React.memo(({ targetMs }) => {
+  const C = usePalette();
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const active = targetMs !== null && Number.isFinite(targetMs);
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [active]);
+  if (!active) return null;
+  const total = Math.max(0, Math.round(((targetMs as number) - nowMs) / 1000));
+  const label = `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+      <IconSymbol name="clock" size={11} color={C.primary} />
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.primary, letterSpacing: 0.5 }}>
+        {label}
+      </Text>
+    </View>
+  );
+});
+SwapCountdown.displayName = 'SwapCountdown';
 
 // ── TimerPillBar ────────────────────────────────────────────────────────
 // Horizontal scrollable row of preset pills. Replaces the system Picker
@@ -296,12 +329,17 @@ export function DeckTransitionControls({
   durationMs,
   shuffle,
   onChange,
+  bare = false,
 }: {
   enabled: boolean;
   mode: string;
   durationMs: number;
   shuffle: boolean;
   onChange: (patch: { enabled?: boolean; mode?: string; durationMs?: number; shuffle?: boolean }) => void;
+  /** Render WITHOUT the outer surfaceContainerHigh card — for nesting inside
+   *  another card (e.g. the AUTOPILOT PATTERNS card) so it reads as a
+   *  sub-section, not a card-in-card. The parent supplies the padding + bg. */
+  bare?: boolean;
 }) {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
@@ -314,7 +352,7 @@ export function DeckTransitionControls({
   // value is duplicated inline (no new style export) to keep the
   // component self-contained.
   return (
-    <View style={{
+    <View style={bare ? { paddingTop: 6, gap: 6 } : {
       paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8,
       borderRadius: 8, gap: 6,
       backgroundColor: C.surfaceContainerHigh,

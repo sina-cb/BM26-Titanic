@@ -66,6 +66,16 @@ const TOPIC_BY_TYPE = Object.freeze({
   deck:                        TOPICS.CONTROL,
   pattern:                     TOPICS.CONTROL,
   autopilot:                   TOPICS.CONTROL,
+  // docs/19 §13 (Phase 2.3): per-mixer-channel autopilot toggle.
+  // Operator-driven, low volume — rides /ws/control next to the deck's
+  // `autopilot` event.
+  mixerAutopilot:              TOPICS.CONTROL,
+  // docs/39: COLOR autopilot (palette cycling). Broadcast on every
+  // POST /deck/color-autopilot + each timer-driven palette apply + timeline
+  // cue, so CaptainPad's deck tab mirrors the palette-cycle config live.
+  // Operator-driven, low volume → /ws/control next to the deck `autopilot`
+  // event it parallels. Replayed on /ws/control connect.
+  colorAutopilot:              TOPICS.CONTROL,
   viewOverride:                TOPICS.CONTROL,
   deckTransitionConfig:        TOPICS.CONTROL,
   deckSwapStarted:             TOPICS.CONTROL,
@@ -94,6 +104,11 @@ const TOPIC_BY_TYPE = Object.freeze({
   // when a row state-machines), so /ws/control is the right home next
   // to the GEM messages it semantically relates to.
   scheduledTasks:              TOPICS.CONTROL,
+  // docs/38 §15: the Timeline runs IN the engine now (no separate :6965
+  // companion). Its runtime snapshot is broadcast on every tick + state
+  // change (mode/autopilot/program/cue fire). Low volume, operator-facing
+  // — rides /ws/control next to scheduledTasks, replayed on connect.
+  timelineState:               TOPICS.CONTROL,
   playlistLibrary:             TOPICS.CONTROL,
   playlistSaved:               TOPICS.CONTROL,
   playlistDeleted:             TOPICS.CONTROL,

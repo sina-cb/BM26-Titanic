@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, Modal, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Alert, Modal, StyleSheet, useWindowDimensions } from 'react-native';
 import { useGlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -11,7 +11,6 @@ import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { GlobalHueRow } from '@/components/global_hue_row';
 import { EntryLabelEditor } from '@/components/EntryLabelEditor';
 import { PixelStrip } from '@/components/ui/PixelStrip';
-import { AutopilotTimerPills, DeckTransitionControls, TimerPillBar } from '@/components/DeckTransitionControls';
 import { AllModulationsPanel } from '@/components/AllModulationsPanel';
 import { useFocusEffect } from 'expo-router';
 import {
@@ -19,9 +18,11 @@ import {
   fetchDeckChannel, setDeckChannelControl,
   setMixerView,
   fetchDeckTransitionConfig, setDeckTransitionConfig,
+  fetchDeckColorAutopilot, setDeckColorAutopilot,
   fetchPlaylists,
   fetchChannelPlaylist,
   type DeckTransitionConfig,
+  type DeckColorAutopilotConfig,
 } from '@/utils/api';
 import { setChannelColor } from '@/utils/channelExtrasApi';
 import { panicMixer } from '@/utils/channelOpsApi';
@@ -30,6 +31,13 @@ import { DeckOverlayStack } from '@/components/DeckOverlayStack';
 import type { DeckOverlay, DeckOverlayAutopilot } from '@/utils/deckOverlaysApi';
 import { useEngineConnection } from '@/hooks/useEngineConnection';
 import type { EngineMessage, BusStatus } from '@/utils/engineEvents';
+import { useOperatorTakeover } from '@/hooks/useTimeline';
+import { PlanIndicatorPill, PLAN_INDICATOR_CYAN } from '@/components/timeline/PlanIndicatorPill';
+import { useEngineLock } from '@/hooks/useEngineLock';
+import { PlanLockBanner } from '@/components/PlanLockBanner';
+import { PlanLockScrim } from '@/components/PlanLockScrim';
+import { ColorAutopilotPanel } from '@/components/deck/ColorAutopilotPanel';
+import { PatternAutopilotPanel } from '@/components/deck/pattern_autopilot_panel';
 
 // 8pt hitSlop on every edge → a 28×28 visual button gets a 44×44 interactive
 // area (28 + 8 + 8 = 44), matching the mixer's touch-target floor.
@@ -50,6 +58,10 @@ const CHANNEL_COLOR_SWATCHES: string[] = [
   '#8E24AA', // purple
   '#EC407A', // pink
 ];
+
+// (Deck autopilot next-swap countdown moved to the self-ticking <SwapCountdown>
+// in DeckTransitionControls — it owns its own 1 Hz interval so the whole deck
+// screen no longer re-renders every second.)
 
 // ── Global Effect Button moved to RigGlobals ────────────────────────────
 
@@ -130,6 +142,17 @@ const OfflineBanner = ({ error }: { error: string }) => {
 export default function ControlDeckScreen() {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
+  // ── 3-COLUMN layout responsiveness (operator request June 2026) ──────────
+  // The deck splits into three side-by-side columns on wide surfaces (iPad
+  // landscape / web): PATTERNS | PARAMETERS | AUTOPILOT & SETTINGS. On narrow
+  // widths (portrait phone, a too-narrow window) three columns would crush the
+  // content, so we fall back to the previous vertical stack. We use the same
+  // `useWindowDimensions` + `width < height` portrait idiom the mixer tab uses
+  // (mixer.tsx), plus an absolute floor: below ~900px even a landscape phone is
+  // too narrow to seat three readable columns, so it stacks too.
+  const { width: winWidth, height: winHeight } = useWindowDimensions();
+  const isPortrait = winWidth < winHeight;
+  const isWide = !isPortrait && winWidth >= 900;
   const [deckChannel, setDeckChannel] = useState<any | null>(null);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [connectionError, setConnectionError] = useState<string>('');
@@ -150,6 +173,26 @@ export default function ControlDeckScreen() {
   // exports" bugs. See docs/16_captain_pad.md and
   // marsin_engine/lib/pattern_mixer.js (channel-split note).
   const deckChannelId: string | null = deckChannel?.id ?? null;
+
+  // ── Operator takeover (requests #3/#5) ─────────────────────────────────
+  // When a plan is driving the rig and the operator touches a manual control
+  // on this surface, they take it over: notifyInteraction() fires the takeover
+  // ONCE then keeps the lease alive (throttled) while they keep working. The
+  // PlanIndicatorPill (globals row, top-right) reflects plan/lease/countdown;
+  // the inline warning strip surfaces the live-plan takeover non-intrusively
+  // (no modal — never block a live performance).
+  const { planActive, leaseHeld, leaseRemainingSec, notifyInteraction, resumeNow } =
+    useOperatorTakeover();
+
+  // ── Soft PLAN lock (CONTRACT: globalsState.controlLock ∈ {null,'portwatch',
+  // 'plan'}) ──────────────────────────────────────────────────────────────
+  // 'portwatch' is the FULL hard lockout (EngineLockoutOverlay, mounted in the
+  // tab layout). 'plan' is the SOFTER lock: a yellow PlanLockBanner + the deck
+  // pattern-selection controls disabled, while navigation/viewing stay live.
+  // Taking over (the existing operator-takeover lease) re-enables the controls,
+  // so the gate is `plan lock engaged AND no operator lease held`.
+  const { planLocked } = useEngineLock();
+  const planGate = planLocked && !leaseHeld;
 
   // Autopilot state (cycles through the active playlist on a timer)
   const [isPlaylistActive, setPlaylistActive] = useState<boolean>(false);
@@ -175,6 +218,33 @@ export default function ControlDeckScreen() {
     durationMs: 1000,
     shuffle: false,
   });
+
+  // Deck COLOR autopilot (operator request: "in the autopilot, select a set of
+  // palettes that switch on their own timer"). Independent of the pattern
+  // autopilot — this one cycles a chosen SET of color palettes on its own
+  // timer. Seeded on focus from GET /deck/color-autopilot, then kept LIVE by the
+  // `colorAutopilot` /ws/control broadcast (see onControl) so PLAN-driven cues
+  // and per-tick palette advances show up on the deck in real time; each control
+  // change posts optimistically (same shape as handleDeckTxChange).
+  const [colorAutopilot, setColorAutopilot] = useState<DeckColorAutopilotConfig>({
+    active: false,
+    palettes: [],
+    delay_s: 30,
+    shuffle: false,
+  });
+
+  // Next-swap countdowns (operator request 2026-07-02: "add 2 countdown timers
+  // for the auto pilot pattern and auto pilot colors in the deck view... this
+  // is a deck feature, but the plan needs to be using it too"). Both hold the
+  // wall-clock ms of the next scheduled swap (null when the respective
+  // autopilot is off). The engine stamps these in autopilot.js /
+  // color_autopilot.js `_scheduleNext` and re-broadcasts on every cycle, so the
+  // same field works identically whether the operator or a plan cue is driving
+  // the cadence — no separate plan route. The absolute target ms is handed to
+  // <SwapCountdown>, which owns the 1 Hz re-render itself (so the deck screen
+  // doesn't re-render every second).
+  const [patternNextSwapAtMs, setPatternNextSwapAtMs] = useState<number | null>(null);
+  const [colorNextSwapAtMs, setColorNextSwapAtMs] = useState<number | null>(null);
 
   // Live swap state — the engine broadcasts `deckSwapStarted` / `…Complete`
   // around every soft swap. We use this to grey out the playlist (so taps
@@ -248,6 +318,21 @@ export default function ControlDeckScreen() {
     }
     if (msg.type === 'deck') {
       setDeckChannel((msg.channel as any) || null);
+      // Pattern-group locality knobs (GROUP toggle / SIZE / DWELL) ride ONLY
+      // inside the deck message's channel.playlist.autopilot — they have no
+      // dedicated WS channel, so without this they stayed at their seed value
+      // and drifted from a cue/engine-driven change (the deck showed stale
+      // group state). Per-field defensive merge (mirrors the deckTransition
+      // reconcile) so an older playlist that omits them can't clobber the
+      // operator's pick; these are pill taps, not drags, so no snap-back risk.
+      const plAp = (msg.channel as { playlist?: { autopilot?: {
+        groupMode?: unknown; groupSize?: unknown; groupDwell?: unknown;
+      } } } | null | undefined)?.playlist?.autopilot;
+      if (plAp && typeof plAp === 'object') {
+        if (typeof plAp.groupMode === 'boolean') setGroupMode(plAp.groupMode);
+        if (typeof plAp.groupSize === 'number') setGroupSize(plAp.groupSize);
+        if (typeof plAp.groupDwell === 'number') setGroupDwell(plAp.groupDwell);
+      }
       // Deck dynamic VIEW OVERRIDES ride the same `deck` message: the
       // overlay stack + the SHARED auto-cycle cadence. Reconcile both off
       // the broadcast (the engine is the source of truth — every add /
@@ -268,6 +353,11 @@ export default function ControlDeckScreen() {
         setPlaylistDelayStr(msg.delay_s as string);
       }
       if (typeof msg.shuffle === 'boolean') setIsShuffle(msg.shuffle);
+      // Next-pattern-swap wall-clock ms (null when inactive) — the engine
+      // re-broadcasts it on every cycle, so the deck countdown stays accurate
+      // whether the operator OR a plan cue is driving the cadence.
+      const nextSwap = (msg as { nextSwapAtMs?: unknown }).nextSwapAtMs;
+      setPatternNextSwapAtMs(typeof nextSwap === 'number' ? nextSwap : null);
     } else if (msg.type === 'deckTransitionConfig') {
       setDeckTxConfig((prev) => ({
         enabled: typeof msg.enabled === 'boolean' ? msg.enabled : prev.enabled,
@@ -275,6 +365,31 @@ export default function ControlDeckScreen() {
         durationMs: typeof msg.durationMs === 'number' ? msg.durationMs : prev.durationMs,
         shuffle: typeof msg.shuffle === 'boolean' ? msg.shuffle : prev.shuffle,
       }));
+    } else if (msg.type === 'colorAutopilot') {
+      // LIVE color-autopilot sync (feat/timeline_support). The engine
+      // broadcasts `colorAutopilot` on /ws/control (broadcastColorAutopilot in
+      // api_server.js; routed to CONTROL in ws_topic_routing.js) on EVERY
+      // change — an operator POST, a per-tick palette advance, AND a
+      // PLAN-driven cue (timeline_service._applyColorAutopilot). Reconciling it
+      // here is what makes the deck's COLOR AUTOPILOT panel show the FULL
+      // plan-driven config live (palettes + shuffle + delay + transition), not
+      // a stale focus fetch — the operator sees exactly what they'd see if they
+      // had set it by hand. Shape: {active, palettes, delay_s, shuffle,
+      // transitionMs}. We merge per-field (same defensive posture as the
+      // deckTransitionConfig branch) so a malformed field can't blow away a
+      // good one; palettes is replaced wholesale (it IS the selection).
+      setColorAutopilot((prev) => ({
+        active: typeof msg.active === 'boolean' ? msg.active : prev.active,
+        palettes: Array.isArray(msg.palettes) ? (msg.palettes as string[]) : prev.palettes,
+        delay_s: typeof msg.delay_s === 'number' ? msg.delay_s : prev.delay_s,
+        shuffle: typeof msg.shuffle === 'boolean' ? msg.shuffle : prev.shuffle,
+        transitionMs: typeof msg.transitionMs === 'number' ? msg.transitionMs : prev.transitionMs,
+      }));
+      // Next-palette-swap wall-clock ms (null when inactive) — mirrors the
+      // pattern-autopilot countdown; re-broadcast on every color cycle, so it
+      // ticks accurately under operator OR plan-cue drive.
+      const nextColorSwap = (msg as { nextSwapAtMs?: unknown }).nextSwapAtMs;
+      setColorNextSwapAtMs(typeof nextColorSwap === 'number' ? nextColorSwap : null);
     } else if (msg.type === 'deckSwapStarted') {
       setDeckSwapInFlight(true);
       const tm = (msg as unknown as { transitionMode?: string }).transitionMode;
@@ -339,6 +454,12 @@ export default function ControlDeckScreen() {
       setDeckTxConfig(dtRes.data);
     }
 
+    // Load deck COLOR autopilot config (palette-cycling autopilot).
+    const caRes = await fetchDeckColorAutopilot();
+    if (caRes.ok && caRes.data) {
+      setColorAutopilot(caRes.data);
+    }
+
     // Load initial deck channel state.
     const deckRes = await fetchDeckChannel();
     if (deckRes.ok && deckRes.data) {
@@ -359,6 +480,7 @@ export default function ControlDeckScreen() {
   // already mirror in the WS handler — that's the source of truth, but
   // updating locally first avoids the visible "snap-back" on tap.
   const handleDeckTxChange = useCallback((patch: Partial<DeckTransitionConfig>) => {
+    notifyInteraction();
     // Optimistic apply with rollback (C5). We snapshot the fields the
     // patch touches BEFORE applying so a rejected POST can restore
     // exactly those keys without clobbering any concurrent WS update to
@@ -389,7 +511,42 @@ export default function ControlDeckScreen() {
       setDeckTxConfig((prev) => ({ ...prev, ...prevSnapshot }));
       Alert.alert('Transition setting not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
     });
-  }, []);
+  }, [notifyInteraction]);
+
+  // Patch the deck COLOR autopilot (optimistic local update + POST), mirroring
+  // handleDeckTxChange exactly: snapshot the touched keys, apply optimistically,
+  // POST, and on a rejected/failed POST restore ONLY those keys + Alert (Codex
+  // P0 — never leave the UI showing a value the engine refused). On a SUCCESSFUL
+  // POST the engine broadcasts `colorAutopilot` on /ws/control, which the
+  // onControl handler above reconciles — that broadcast is the source of truth
+  // (it also carries PLAN-driven and per-tick palette-advance changes), so the
+  // optimistic value just avoids a tap-snap until the echo lands.
+  const handleColorAutopilotChange = useCallback((patch: Partial<DeckColorAutopilotConfig>) => {
+    notifyInteraction();
+    let prevSnapshot: Partial<DeckColorAutopilotConfig> = {};
+    setColorAutopilot((prev) => {
+      const snap: Partial<DeckColorAutopilotConfig> = {};
+      for (const k of Object.keys(patch) as (keyof DeckColorAutopilotConfig)[]) {
+        (snap as any)[k] = prev[k];
+      }
+      prevSnapshot = snap;
+      return { ...prev, ...patch };
+    });
+    void setDeckColorAutopilot(patch).then((res) => {
+      if (!res.ok) {
+        console.error('[Deck] Color-autopilot POST rejected:', res.error);
+        setColorAutopilot((prev) => ({ ...prev, ...prevSnapshot }));
+        Alert.alert(
+          'Color autopilot not applied',
+          `The engine rejected the change. ${res.error || ''} Reverted to the previous value.`.trim(),
+        );
+      }
+    }).catch((err) => {
+      console.error('[Deck] Color-autopilot POST failed:', err);
+      setColorAutopilot((prev) => ({ ...prev, ...prevSnapshot }));
+      Alert.alert('Color autopilot not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+    });
+  }, [notifyInteraction]);
 
   // Per-channel color metadata (docs/39 §8.4) on the DECK channel. Pure
   // operator-facing accent (no render effect) — tints the deck card for
@@ -397,6 +554,10 @@ export default function ControlDeckScreen() {
   // reconcile + fail-loud shape; a null color clears the accent and the engine
   // requires a string or null.
   const handleDeckColor = useCallback(async (channelId: string, color: string | null) => {
+    // Soft PLAN lock — the swatch that opens the picker is inside the gated
+    // DECK MAIN card, but the modal could already be open when the lock
+    // engages; this write-path gate covers that edge.
+    if (planGate) return;
     const prev = deckChannel?.color ?? null;
     setDeckChannel((c: any) => (c ? { ...c, color } : c));
     const res = await setChannelColor(channelId, color, { deck: true });
@@ -408,7 +569,7 @@ export default function ControlDeckScreen() {
         `The engine rejected this color. ${res.error || ''} The deck kept its previous color.`.trim(),
       );
     }
-  }, [deckChannel?.color]);
+  }, [deckChannel?.color, planGate]);
 
   // ── PANIC / HOME (docs/39 §6b #9) — mission-critical safe LIT reset ─────
   // Mirrors the mixer tab's PANIC tile (same panicMixer api + ConfirmSheet
@@ -450,15 +611,37 @@ export default function ControlDeckScreen() {
     // Deck tab only ever writes to the deck channel — there's a single
     // dedicated route for that now. We ignore the channelId arg (kept
     // for API compatibility with the previous mixer-routed call).
+    // Soft PLAN lock — the whole DECK MAIN card is pointerEvents-blocked
+    // while gated; this is the belt-and-suspenders write-path gate.
+    if (planGate) return;
+    notifyInteraction();
     setDeckChannelControl(id, v0, v1, v2);
   };
 
   return (
     <View style={{ flex: 1, backgroundColor: C.background }}>
+      {/* Soft PLAN lock banner — low-key YELLOW, non-blocking (box-none), only
+          mounts when controlLock === 'plan'. Navigation/viewing stay live; the
+          deck's pattern selection is the only thing disabled (below). The full
+          red portwatch lockout stays in the tab layout. */}
+      <PlanLockBanner />
       {/* Top bar: title + connection status + master fader. Matches the
-          Marsin Mixer header layout, minus channel-add buttons. */}
-      <DeckTopBar isConnected={isConnected} />
-      <CPCControls />
+          Marsin Mixer header layout, minus channel-add buttons. Under the soft
+          PLAN lock (planGate) the MASTER fader + FADE/TO BLACK/UP group and
+          the whole GLOBALS row (SPEED/SIZE/SYNC/COLORS/QUEUE/TAP/BPM source)
+          are disabled; taking over re-enables everything. */}
+      {/* ── Plan-lock content region ──────────────────────────────────
+          Everything the plan freezes lives inside this relative wrapper so
+          the PlanLockScrim (bottom of the wrapper) can hermetically blanket
+          it with ONE tap-catching layer — bulletproof against any control
+          (present or future) that doesn't wire its own `disabled`, which is
+          exactly how the deck overlay controls slipped through before. The
+          floating PlanLockBanner (above, zIndex 1000) and the bottom safety
+          bar (PANIC/BLACKOUT, a sibling BELOW this wrapper) stay OUTSIDE the
+          scrim so emergency recovery is never locked behind a takeover. */}
+      <View style={{ flex: 1, position: 'relative' }}>
+      <DeckTopBar isConnected={isConnected} disabled={planGate} />
+      <CPCControls disabled={planGate} />
       {/* ── Channel Preview Visualization ───────────────────────────── */}
       <View style={{ paddingHorizontal: 16, paddingTop: 4 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4, minHeight: 44 }}>
@@ -469,6 +652,50 @@ export default function ControlDeckScreen() {
             DECK MAIN · LIVE OUTPUT
           </Text>
           <View style={{ flex: 1 }} />
+          {/* ── Plan-active lock indicator ──────────────────────────────────
+              When a plan is live the deck's mutating controls are fully frozen
+              (pointerEvents 'none' + dim, below) — a tap does NOTHING, so the
+              old "A TOUCH TAKES OVER" copy was a lie under the full freeze the
+              operator requested. This SUBTLE inline chip just states the truth:
+              controls are LOCKED. To edit, use DISABLE PLAN in the amber banner
+              (pauses the plan) or take over from the MIXER's TAKE-OVER prompt.
+              While a lease IS held (taken over via that prompt) it becomes the
+              "plan resumes in M:SS" countdown + a one-tap RESUME affordance. */}
+          {planActive && !leaseHeld ? (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', gap: 6,
+              paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
+              borderWidth: 1, borderColor: PLAN_INDICATOR_CYAN,
+            }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: PLAN_INDICATOR_CYAN, textTransform: 'uppercase' }}>
+                PLAN LIVE · CONTROLS LOCKED
+              </Text>
+            </View>
+          ) : leaseHeld ? (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', gap: 8,
+              paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
+              borderWidth: 1, borderColor: '#f5a623',
+            }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: '#f5a623', textTransform: 'uppercase' }}>
+                {`TOOK OVER · PLAN RESUMES ${leaseRemainingSec === null ? '—' : `${Math.floor(leaseRemainingSec / 60)}:${String(leaseRemainingSec % 60).padStart(2, '0')}`}`}
+              </Text>
+              <TouchableOpacity
+                onPress={() => { void resumeNow(); }}
+                hitSlop={ICON_BTN_HIT_SLOP}
+                accessibilityRole="button"
+                accessibilityLabel="Resume the plan now"
+              >
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 0.6, color: '#f5a623', textTransform: 'uppercase' }}>
+                  RESUME NOW
+                </Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          {/* Compact plan-status glyph — RIGHTMOST in the globals row (request
+              #5). Matches the OscStatusPill idiom (48px tile, coloured
+              border/dot/label). Tapping routes to the Timeline tab. */}
+          <PlanIndicatorPill />
         </View>
         {/* "LIVE OUTPUT" preview = the engine's `preDimmer` composite — the
             composition AFTER global FX (hue shift / invert / group color-locks)
@@ -481,19 +708,36 @@ export default function ControlDeckScreen() {
             strip uses the same `preDimmer` key for parity. */}
         <PixelStrip base64Data={visDataRef.current.preDimmer ?? null} height={18} style={{ borderRadius: 6 }} />
       </View>
-      <View style={globalStyles.container}>
-        {/* Left Pane — Playlist (the one and only pattern list).
-            Padding is tightened from the default leftPane (24) so the
-            playlist gets more vertical room. GLOBAL EFFECTS no longer
-            lives in this narrow column — it moved to a full-width bottom
-            bar below the two-pane content (mirrors the mixer tab) so the
-            effect labels render fully legible instead of being squeezed
-            into the cramped left column (QA round2 deck fix). The
-            playlist now shows ≥5 entries on 11" iPad landscape and the
-            REFRESH/RECONNECT button moved INTO the playlist header
-            (top-right ↻ icon, see PlaylistPanel `onRefreshConnection`)
-            so the old full-width button below the list is gone. */}
-        <View style={[globalStyles.leftPane, { padding: 14, gap: 8 }]}>
+      {/* ── 3-COLUMN deck layout (operator request June 2026) ───────────────
+          On wide surfaces (iPad landscape / web) the deck is three side-by-side
+          columns — PATTERNS | PARAMETERS | AUTOPILOT & SETTINGS — each
+          independently scrollable so tall content (the param list, the palette
+          panel) never gets cut off. On narrow widths (`!isWide`) the row wraps
+          back to a single vertical stack (the previous behavior) so nothing is
+          crushed in portrait. `globalStyles.container` is `flexDirection:'row',
+          flex:1` already; we widen it to wrap on narrow so the columns stack.
+          Column flex weights: PATTERNS 1.1 / PARAMETERS 1 / SETTINGS 1.2 — the
+          pattern grid and the settings stack are a touch wider than the params
+          column to seat their wider controls (pill bars, palette swatches). */}
+      <View style={[globalStyles.container, !isWide && { flexDirection: 'column' }]}>
+        {/* ── COLUMN 1 — PATTERNS ──────────────────────────────────────────
+            The one-and-only pattern list (active playlist) + the global rig HUE
+            shifter pinned above it. DECK MAIN's live preview strip stays in the
+            header above (it is the deck's master output, not a per-column item).
+            Padding is tightened from the default leftPane (24) so the playlist
+            gets more vertical room. GLOBAL EFFECTS lives in the full-width
+            bottom bar below (mirrors the mixer tab). The playlist shows ≥5
+            entries on 11" iPad landscape; REFRESH/RECONNECT is the header ↻
+            icon (PlaylistPanel `onRefreshConnection`). */}
+        <View style={[
+          globalStyles.leftPane,
+          { padding: 14, gap: 8 },
+          // Wide: this column flexes to ~1.1 of the row. Narrow (stacked): the
+          // leftPane's default flex:1 inside a column container would let it
+          // eat all vertical space — pin a sensible min height instead so the
+          // stack scrolls naturally with the columns below it.
+          isWide ? { flex: 1.1 } : { flex: 0, minHeight: 320 },
+        ]}>
           {isConnected === false && <OfflineBanner error={connectionError} />}
 
           {/* THE pattern list = the active playlist for the deck.
@@ -508,8 +752,9 @@ export default function ControlDeckScreen() {
                   — mirroring how the MIXER shows a compact HUE row above each
                   channel's playlist. Self-contained wiring (own state, seed,
                   WS reconcile, POST) so it's the deck's ONE-AND-ONLY hue
-                  control; the bottom effects bar stays hue-less. */}
-              <GlobalHueRow />
+                  control; the bottom effects bar stays hue-less. Gated under
+                  the soft PLAN lock like every other mutating deck control. */}
+              <GlobalHueRow disabled={planGate} />
               <PlaylistPanel
                 channelId={deckChannelId}
                 role="deck"
@@ -519,7 +764,13 @@ export default function ControlDeckScreen() {
                 // During a deck pattern soft-swap we grey out the list +
                 // disable taps. The engine also rejects taps server-side
                 // with 409 — this is just the UX layer of the contract.
-                disabled={deckSwapInFlight}
+                // ALSO disabled under the soft PLAN lock (planGate): pattern
+                // selection changes "what's playing", which the plan owns until
+                // the operator takes over. The greyed/disabled list IS the
+                // "take over to change" affordance — taking over (any control
+                // touch fires the takeover lease) clears planGate and re-enables
+                // it.
+                disabled={deckSwapInFlight || planGate}
                 onRefreshConnection={connectToEngine}
                 playlistLibrary={playlistLibrary}
               />
@@ -531,152 +782,18 @@ export default function ControlDeckScreen() {
           )}
         </View>
 
-        {/* Right Pane - Parameters & Macros (autopilot + channel exports) */}
-        <View style={[globalStyles.rightPane, { padding: 0 }]}>
-          {/* Padding tightened from 48 → 16 (QA round8 #1): the old 48px
-              gutter plus the cards' inner paddingRight:24 wasted ~72px of the
-              right pane's width, forcing the AUTOPILOT / OVERLAYS pill bars
-              into horizontal scroll. paddingBottom keeps the last card clear
-              of the bottom GLOBAL EFFECTS bar (its intrinsic height ~58px). */}
+        {/* ── COLUMN 2 — PARAMETERS ────────────────────────────────────────
+            ONLY the deck's (local) parameter controls — the DECK MAIN channel
+            card: entry-label editor, SAVED flash, color swatch, ◎ ALL
+            modulations trigger, the PARAMETERS slider stack (GlobalParams), and
+            the toggle/trigger button grid. This used to sit BELOW the settings
+            stack in the old single right-pane scroll; it now stands alone in
+            the middle column, independently scrollable. */}
+        <View style={[
+          { padding: 0 },
+          isWide ? { flex: 1 } : { flex: 0 },
+        ]}>
           <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
-            {/* Offline Banner (right pane) */}
-            {isConnected === false && (
-              <OfflineBanner error={connectionError} />
-            )}
-
-            {/* ── AUTOPILOT TRANSITIONS ────────────────────────────────
-                PLAY/PAUSE | preset pill-bar (1s … 180s) | SHUFFLE.
-                The pill-bar replaced a native <Picker> wheel in May 2026 —
-                the wheel was hard to hit, ate vertical space, and rendered
-                inconsistently across iOS versions. Pills are direct-tap
-                and scroll horizontally if the operator's currently-active
-                pick is off-screen.
-                Card-internal header (May 2026): the AUTOPILOT TRANSITIONS
-                label was hoisted INSIDE the card to recover the ~24px the
-                free-standing label + its 8px margin used to occupy. Same
-                typography recipe as `labelCaps` (SpaceGrotesk_700Bold /
-                10pt / 1.2 tracking / secondary / uppercase). */}
-            <View style={{ marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: 8, backgroundColor: C.surfaceContainerHigh, ...globalStyles.ghostBorder, gap: 6 }}>
-              {/* Header sits on the SAME row as PLAY/PAUSE + SHUFFLE so it
-                  costs zero extra vertical height — the label rides the
-                  baseline of the tallest control next to it. */}
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>AUTOPILOT</Text>
-                  <TouchableOpacity
-                    onPress={() => { const nx = !isPlaylistActive; setPlaylistActive(nx); setAutopilot(nx, playlistDelayStr, isShuffle); }}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: isPlaylistActive ? C.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: isPlaylistActive ? 'transparent' : C.ghostBorder }}
-                  >
-                    <IconSymbol name={isPlaylistActive ? "pause.fill" : "play.fill"} size={16} color={isPlaylistActive ? "#FFF" : C.text} />
-                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isPlaylistActive ? "#FFF" : C.text, fontSize: 12 }}>
-                      {isPlaylistActive ? 'PAUSE' : 'PLAY'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                  <TouchableOpacity
-                    onPress={() => { const nx = !isShuffle; setIsShuffle(nx); setAutopilot(isPlaylistActive, playlistDelayStr, nx); }}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
-                    accessibilityRole="switch"
-                    accessibilityLabel={isShuffle ? 'Disable autopilot shuffle' : 'Enable autopilot shuffle'}
-                  >
-                    <IconSymbol name="shuffle" size={16} color={isShuffle ? C.primary : C.icon} />
-                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isShuffle ? C.primary : C.icon, fontSize: 12, letterSpacing: 0.5 }}>SHUFFLE</Text>
-                  </TouchableOpacity>
-                  {/* PATTERN-GROUP LOCALITY: GROUP rides next to SHUFFLE with the
-                      SAME on/off treatment (icon + label tint primary when on,
-                      icon token when off). Toggling it POSTs the group fields to
-                      /deck/playlist/autopilot via setAutopilot's group arg. */}
-                  <TouchableOpacity
-                    onPress={() => { const nx = !groupMode; setGroupMode(nx); setAutopilot(undefined, undefined, undefined, { groupMode: nx }); }}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
-                    accessibilityRole="switch"
-                    accessibilityLabel={groupMode ? 'Disable autopilot pattern groups' : 'Enable autopilot pattern groups'}
-                  >
-                    <IconSymbol name="square.grid.2x2" size={16} color={groupMode ? C.primary : C.icon} />
-                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: groupMode ? C.primary : C.icon, fontSize: 12, letterSpacing: 0.5 }}>GROUP</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              {/* Row 2: timer pill-bar */}
-              <AutopilotTimerPills
-                value={parseInt(playlistDelayStr, 10) || 30}
-                onChange={(v) => {
-                  const str = String(v);
-                  setPlaylistDelayStr(str);
-                  setAutopilot(isPlaylistActive, str, isShuffle);
-                }}
-              />
-
-              {/* PATTERN-GROUP LOCALITY: SIZE/DWELL only render while GROUP is
-                  ON, so an OFF group costs no layout beyond the toggle. SIZE =
-                  how many adjacent entries the window spans (→ groupSize);
-                  DWELL = how many swaps to linger in that window before grabbing
-                  a fresh one (→ groupDwell). Reuse the compact TimerPillBar so
-                  the chips match the cadence pills. */}
-              {groupMode ? (
-                <View style={{ gap: 6 }}>
-                  <TimerPillBar
-                    label="SIZE"
-                    compact
-                    presets={[2, 3, 4, 5]}
-                    value={groupSize}
-                    onChange={(v) => { setGroupSize(v); setAutopilot(undefined, undefined, undefined, { groupSize: v }); }}
-                    formatter={(v) => String(v)}
-                  />
-                  <TimerPillBar
-                    label="DWELL"
-                    compact
-                    presets={[4, 6, 8, 12]}
-                    value={groupDwell}
-                    onChange={(v) => { setGroupDwell(v); setAutopilot(undefined, undefined, undefined, { groupDwell: v }); }}
-                    formatter={(v) => String(v)}
-                  />
-                  <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary }}>
-                    dwell = swaps before a new group
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-
-            {/* ── DECK TRANSITIONS ───────────────────────────────────
-                Soft-swap pattern changes via the engine's hidden deck
-                shadow channel (see triggerDeckPatternSwap in the engine
-                mixer). Independent of AUTOPILOT — playlist auto-cycling
-                and per-tap entry swaps BOTH route through this when
-                enabled. */}
-            <DeckTransitionControls
-              enabled={deckTxConfig.enabled}
-              // When shuffle is on, show the actually-rolled style from
-              // the engine's most-recent broadcast instead of the
-              // operator's pre-shuffle pick (which the engine ignores
-              // in shuffle mode anyway). Falls back to the config mode
-              // before any swap has happened.
-              mode={deckTxConfig.shuffle && lastSwapMode ? lastSwapMode : deckTxConfig.mode}
-              durationMs={deckTxConfig.durationMs}
-              shuffle={deckTxConfig.shuffle}
-              onChange={handleDeckTxChange}
-            />
-
-            {/* ── DECK DYNAMIC VIEW OVERRIDES (engine #deck-overlays) ──────
-                View-scoped overlay decks layered OVER the main deck. Each
-                overlay is a CLEAN, self-contained, color-tagged card that
-                collapses to a one-line header and expands on tap; a single
-                shared header drives the unison auto-cycle cadence for the
-                whole group, and a "+ ADD OVERLAY" affordance (hidden at the
-                4-overlay cap) opens a view + playlist picker. Reads the
-                overlay list + shared autopilot off the same `deck` WS message
-                this tab already consumes; PlaylistPanel (role="deckOverlay")
-                drives each overlay's playlist. */}
-            <DeckOverlayStack
-              overlays={deckOverlays}
-              overlayAutopilot={overlayAutopilot}
-              playlistLibrary={playlistLibrary}
-              disabled={isConnected === false}
-            />
-
             {/* Channel parameters for the deck (base) channel. The deck is
                 hard-wired to the base channel; CaptainPad's MIXER tab is
                 where multi-channel routing lives. */}
@@ -693,16 +810,26 @@ export default function ControlDeckScreen() {
                 const triggers = exports.filter((e: any) => e.kind === 3 && !e.cpcOwned);
 
                 return (
-                  <View key={channel.id} style={[
-                    { width: '100%', backgroundColor: C.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.ghostBorder },
-                    // Color accent (docs/39 §8.4): tint the card's left edge so
-                    // the operator can identify the deck at a glance — mirrors the
-                    // mixer strip. The lock border still wins (operator-critical
-                    // state); only paint the accent when the deck isn't locked.
-                    // No layout shift when color is null (defaults to ghostBorder
-                    // at the same 1px width).
-                    !channel.locked && channel.color ? { borderColor: channel.color, borderLeftWidth: 4 } : null,
-                  ]}>
+                  <View
+                    key={channel.id}
+                    // Soft PLAN lock: the WHOLE DECK MAIN card (entry-label
+                    // editor, color swatch, ◎ ALL, the PARAMETERS sliders, the
+                    // toggle/momentary grid) is a mutating surface, so it's
+                    // gated as one section — pointerEvents 'none' stops every
+                    // interactive child, the dim marks it disabled. Taking
+                    // over (leaseHeld) clears planGate and re-enables it.
+                    pointerEvents={planGate ? 'none' : 'auto'}
+                    style={[
+                      { width: '100%', backgroundColor: C.surfaceContainerLowest, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: C.ghostBorder },
+                      // Color accent (docs/39 §8.4): tint the card's left edge so
+                      // the operator can identify the deck at a glance — mirrors the
+                      // mixer strip. The lock border still wins (operator-critical
+                      // state); only paint the accent when the deck isn't locked.
+                      // No layout shift when color is null (defaults to ghostBorder
+                      // at the same 1px width).
+                      !channel.locked && channel.color ? { borderColor: channel.color, borderLeftWidth: 4 } : null,
+                      planGate ? { opacity: 0.45 } : null,
+                    ]}>
                     {/* D6 trigger: ◎ ALL pill next to the entry label.
                         Disabled when no deck playlist is loaded — the
                         AllModulationsPanel renders an empty state in
@@ -800,6 +927,142 @@ export default function ControlDeckScreen() {
             </View>
           </ScrollView>
         </View>
+
+        {/* ── COLUMN 3 — AUTOPILOT & SETTINGS ──────────────────────────────
+            The deck-settings stack that used to sit ABOVE the local parameters:
+            AUTOPILOT (pattern playlist cycler + pattern-group locality),
+            COLOR AUTOPILOT (palette cycler), DECK TRANSITIONS, and the DECK
+            DYNAMIC VIEW OVERRIDES stack. Independently scrollable. */}
+        <View style={[
+          { padding: 0 },
+          isWide ? { flex: 1.2 } : { flex: 0 },
+        ]}>
+          {/* Padding tightened from 48 → 16 (QA round8 #1): the old 48px
+              gutter plus the cards' inner paddingRight:24 wasted ~72px of the
+              column's width, forcing the AUTOPILOT / OVERLAYS pill bars
+              into horizontal scroll. paddingBottom keeps the last card clear
+              of the bottom GLOBAL EFFECTS bar (its intrinsic height ~58px). */}
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
+            {/* Offline Banner (settings column) */}
+            {isConnected === false && (
+              <OfflineBanner error={connectionError} />
+            )}
+
+            {/* ── AUTOPILOT TRANSITIONS ────────────────────────────────
+                PLAY/PAUSE | preset pill-bar (1s … 180s) | SHUFFLE.
+                The pill-bar replaced a native <Picker> wheel in May 2026 —
+                the wheel was hard to hit, ate vertical space, and rendered
+                inconsistently across iOS versions. Pills are direct-tap
+                and scroll horizontally if the operator's currently-active
+                pick is off-screen.
+                Card-internal header (May 2026): the AUTOPILOT TRANSITIONS
+                label was hoisted INSIDE the card to recover the ~24px the
+                free-standing label + its 8px margin used to occupy. Same
+                typography recipe as `labelCaps` (SpaceGrotesk_700Bold /
+                10pt / 1.2 tracking / secondary / uppercase).
+                Soft PLAN lock: the whole AUTOPILOT card (PLAY/PAUSE, SHUFFLE,
+                GROUP, the cadence pills, SIZE/DWELL) changes what's playing,
+                so it's gated as one section — pointerEvents 'none' stops every
+                interactive child; the dim marks it disabled. Taking over
+                (leaseHeld) clears planGate and re-enables it. */}
+            <PatternAutopilotPanel
+              title="AUTOPILOT PATTERNS"
+              active={isPlaylistActive}
+              delayStr={playlistDelayStr}
+              shuffle={isShuffle}
+              groupMode={groupMode}
+              groupSize={groupSize}
+              groupDwell={groupDwell}
+              nextSwapAtMs={patternNextSwapAtMs}
+              disabled={planGate}
+              onInteraction={notifyInteraction}
+              onChange={(patch) => {
+                // Map each knob's patch key onto the EXACT write the inline card
+                // used to fire. The panel emits one key per interaction.
+                if (patch.active !== undefined) {
+                  setPlaylistActive(patch.active);
+                  setAutopilot(patch.active, playlistDelayStr, isShuffle);
+                }
+                if (patch.shuffle !== undefined) {
+                  setIsShuffle(patch.shuffle);
+                  setAutopilot(isPlaylistActive, playlistDelayStr, patch.shuffle);
+                }
+                if (patch.delayStr !== undefined) {
+                  setPlaylistDelayStr(patch.delayStr);
+                  setAutopilot(isPlaylistActive, patch.delayStr, isShuffle);
+                }
+                if (patch.groupMode !== undefined) {
+                  setGroupMode(patch.groupMode);
+                  setAutopilot(undefined, undefined, undefined, { groupMode: patch.groupMode });
+                }
+                if (patch.groupSize !== undefined) {
+                  setGroupSize(patch.groupSize);
+                  setAutopilot(undefined, undefined, undefined, { groupSize: patch.groupSize });
+                }
+                if (patch.groupDwell !== undefined) {
+                  setGroupDwell(patch.groupDwell);
+                  setAutopilot(undefined, undefined, undefined, { groupDwell: patch.groupDwell });
+                }
+              }}
+              // ── DECK TRANSITIONS (nested INTO the AUTOPILOT PATTERNS card,
+              //    operator request 2026-07-04: "the Deck TX and the pattern
+              //    autopilot are the same work"). When shuffle is on, show the
+              //    actually-rolled style from the engine's most-recent broadcast
+              //    instead of the operator's pre-shuffle pick (which the engine
+              //    ignores in shuffle mode anyway). Falls back to the config mode
+              //    before any swap has happened.
+              deckTx={{
+                enabled: deckTxConfig.enabled,
+                mode: deckTxConfig.shuffle && lastSwapMode ? lastSwapMode : deckTxConfig.mode,
+                durationMs: deckTxConfig.durationMs,
+                shuffle: deckTxConfig.shuffle,
+              }}
+              onDeckTxChange={handleDeckTxChange}
+            />
+
+            {/* ── AUTOPILOT COLORS ────────────────────────────────────
+                Cycles a chosen SET of color palettes on its own timer —
+                INDEPENDENT of the pattern autopilot above (operator request:
+                "in the autopilot, select a set of palettes that switch on their
+                own timer"). Reads on focus, posts on change (optimistic +
+                rollback, same shape as handleDeckTxChange). Disabled while
+                offline or under the soft PLAN lock (planGate) — it still renders
+                read-only so the operator sees the live cycle. */}
+            <ColorAutopilotPanel
+              config={colorAutopilot}
+              onChange={handleColorAutopilotChange}
+              disabled={isConnected === false || planGate}
+              countdownTargetMs={colorNextSwapAtMs}
+            />
+
+            {/* ── DECK DYNAMIC VIEW OVERRIDES (engine #deck-overlays) ──────
+                View-scoped overlay decks layered OVER the main deck. Each
+                overlay is a CLEAN, self-contained, color-tagged card that
+                collapses to a one-line header and expands on tap; a single
+                shared header drives the unison auto-cycle cadence for the
+                whole group, and a "+ ADD OVERLAY" affordance (hidden at the
+                4-overlay cap) opens a view + playlist picker. Reads the
+                overlay list + shared autopilot off the same `deck` WS message
+                this tab already consumes; PlaylistPanel (role="deckOverlay")
+                drives each overlay's playlist. */}
+            <DeckOverlayStack
+              overlays={deckOverlays}
+              overlayAutopilot={overlayAutopilot}
+              playlistLibrary={playlistLibrary}
+              // Disabled while offline OR under the soft PLAN lock (planGate):
+              // overlay add/auto/shuffle/timer/per-overlay controls all change
+              // what's playing, which the plan owns until the operator takes
+              // over.
+              disabled={isConnected === false || planGate}
+            />
+          </ScrollView>
+        </View>
+      </View>
+        {/* Hermetic plan-lock scrim — blankets the whole content region above
+            (top bar → 3 columns → overlays) with one tap-catching layer.
+            Active only under the soft PLAN lock and NOT during an operator
+            takeover (planGate = planLocked && !leaseHeld). */}
+        <PlanLockScrim active={planGate} />
       </View>
       {/* ── Global Rig Controls (Bottom) ───────────────────────────────
           GLOBAL EFFECTS as a full-width horizontal strip pinned at the
