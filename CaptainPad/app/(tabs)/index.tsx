@@ -11,7 +11,6 @@ import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { GlobalHueRow } from '@/components/global_hue_row';
 import { EntryLabelEditor } from '@/components/EntryLabelEditor';
 import { PixelStrip } from '@/components/ui/PixelStrip';
-import { AutopilotTimerPills, DeckTransitionControls, TimerPillBar, SwapCountdown } from '@/components/DeckTransitionControls';
 import { AllModulationsPanel } from '@/components/AllModulationsPanel';
 import { useFocusEffect } from 'expo-router';
 import {
@@ -38,6 +37,7 @@ import { useEngineLock } from '@/hooks/useEngineLock';
 import { PlanLockBanner } from '@/components/PlanLockBanner';
 import { PlanLockScrim } from '@/components/PlanLockScrim';
 import { ColorAutopilotPanel } from '@/components/deck/ColorAutopilotPanel';
+import { PatternAutopilotPanel } from '@/components/deck/pattern_autopilot_panel';
 
 // 8pt hitSlop on every edge → a 28×28 visual button gets a 44×44 interactive
 // area (28 + 8 + 8 = 44), matching the mixer's touch-target floor.
@@ -965,122 +965,60 @@ export default function ControlDeckScreen() {
                 so it's gated as one section — pointerEvents 'none' stops every
                 interactive child; the dim marks it disabled. Taking over
                 (leaseHeld) clears planGate and re-enables it. */}
-            <View
-              pointerEvents={planGate ? 'none' : 'auto'}
-              style={{ marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: 8, backgroundColor: C.surfaceContainerHigh, ...globalStyles.ghostBorder, gap: 6, opacity: planGate ? 0.45 : 1 }}
-            >
-              {/* Header sits on the SAME row as PLAY/PAUSE + SHUFFLE so it
-                  costs zero extra vertical height — the label rides the
-                  baseline of the tallest control next to it. */}
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>AUTOPILOT PATTERNS</Text>
-                  {/* Next-pattern-swap countdown — rides right after the label,
-                      only while a swap is scheduled. Self-ticking (its own 1 Hz
-                      interval) so it never re-renders the deck screen; reads
-                      identically whether the operator or a plan cue owns the
-                      cadence. */}
-                  <SwapCountdown targetMs={patternNextSwapAtMs} />
-                  <TouchableOpacity
-                    onPress={() => { notifyInteraction(); const nx = !isPlaylistActive; setPlaylistActive(nx); setAutopilot(nx, playlistDelayStr, isShuffle); }}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: isPlaylistActive ? C.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: isPlaylistActive ? 'transparent' : C.ghostBorder }}
-                  >
-                    <IconSymbol name={isPlaylistActive ? "pause.fill" : "play.fill"} size={16} color={isPlaylistActive ? "#FFF" : C.text} />
-                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isPlaylistActive ? "#FFF" : C.text, fontSize: 12 }}>
-                      {isPlaylistActive ? 'PAUSE' : 'PLAY'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                  <TouchableOpacity
-                    onPress={() => { notifyInteraction(); const nx = !isShuffle; setIsShuffle(nx); setAutopilot(isPlaylistActive, playlistDelayStr, nx); }}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
-                    accessibilityRole="switch"
-                    accessibilityLabel={isShuffle ? 'Disable autopilot shuffle' : 'Enable autopilot shuffle'}
-                  >
-                    <IconSymbol name="shuffle" size={16} color={isShuffle ? C.primary : C.icon} />
-                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: isShuffle ? C.primary : C.icon, fontSize: 12, letterSpacing: 0.5 }}>SHUFFLE</Text>
-                  </TouchableOpacity>
-                  {/* PATTERN-GROUP LOCALITY: GROUP rides next to SHUFFLE with the
-                      SAME on/off treatment (icon + label tint primary when on,
-                      icon token when off). Toggling it POSTs the group fields to
-                      /deck/playlist/autopilot via setAutopilot's group arg. */}
-                  <TouchableOpacity
-                    onPress={() => { notifyInteraction(); const nx = !groupMode; setGroupMode(nx); setAutopilot(undefined, undefined, undefined, { groupMode: nx }); }}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
-                    accessibilityRole="switch"
-                    accessibilityLabel={groupMode ? 'Disable autopilot pattern groups' : 'Enable autopilot pattern groups'}
-                  >
-                    <IconSymbol name="square.grid.2x2" size={16} color={groupMode ? C.primary : C.icon} />
-                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: groupMode ? C.primary : C.icon, fontSize: 12, letterSpacing: 0.5 }}>GROUP</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              {/* Row 2: timer pill-bar */}
-              <AutopilotTimerPills
-                value={parseInt(playlistDelayStr, 10) || 30}
-                onChange={(v) => {
-                  notifyInteraction();
-                  const str = String(v);
-                  setPlaylistDelayStr(str);
-                  setAutopilot(isPlaylistActive, str, isShuffle);
-                }}
-              />
-
-              {/* PATTERN-GROUP LOCALITY: SIZE/DWELL only render while GROUP is
-                  ON, so an OFF group costs no layout beyond the toggle. SIZE =
-                  how many adjacent entries the window spans (→ groupSize);
-                  DWELL = how many swaps to linger in that window before grabbing
-                  a fresh one (→ groupDwell). Reuse the compact TimerPillBar so
-                  the chips match the cadence pills. */}
-              {groupMode ? (
-                <View style={{ gap: 6 }}>
-                  <TimerPillBar
-                    label="SIZE"
-                    compact
-                    presets={[2, 3, 4, 5]}
-                    value={groupSize}
-                    onChange={(v) => { setGroupSize(v); setAutopilot(undefined, undefined, undefined, { groupSize: v }); }}
-                    formatter={(v) => String(v)}
-                  />
-                  <TimerPillBar
-                    label="DWELL"
-                    compact
-                    presets={[4, 6, 8, 12]}
-                    value={groupDwell}
-                    onChange={(v) => { setGroupDwell(v); setAutopilot(undefined, undefined, undefined, { groupDwell: v }); }}
-                    formatter={(v) => String(v)}
-                  />
-                  <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary }}>
-                    dwell = swaps before a new group
-                  </Text>
-                </View>
-              ) : null}
-
-              {/* ── DECK TRANSITIONS (moved INTO the AUTOPILOT PATTERNS card,
-                  operator request 2026-07-04: "the Deck TX and the pattern
-                  autopilot are the same work"). Soft-swap pattern changes via
-                  the engine's hidden deck shadow channel — playlist auto-cycling
-                  AND per-tap entry swaps route through this. A thin divider sets
-                  it apart within the card; the card's planGate already gates it,
-                  so no separate pointerEvents/opacity wrapper is needed. */}
-              <View style={{ height: 1, backgroundColor: C.ghostBorder, opacity: 0.6, marginTop: 2 }} />
-              <DeckTransitionControls
-                bare
-                enabled={deckTxConfig.enabled}
-                // When shuffle is on, show the actually-rolled style from
-                // the engine's most-recent broadcast instead of the
-                // operator's pre-shuffle pick (which the engine ignores
-                // in shuffle mode anyway). Falls back to the config mode
-                // before any swap has happened.
-                mode={deckTxConfig.shuffle && lastSwapMode ? lastSwapMode : deckTxConfig.mode}
-                durationMs={deckTxConfig.durationMs}
-                shuffle={deckTxConfig.shuffle}
-                onChange={handleDeckTxChange}
-              />
-            </View>
+            <PatternAutopilotPanel
+              title="AUTOPILOT PATTERNS"
+              active={isPlaylistActive}
+              delayStr={playlistDelayStr}
+              shuffle={isShuffle}
+              groupMode={groupMode}
+              groupSize={groupSize}
+              groupDwell={groupDwell}
+              nextSwapAtMs={patternNextSwapAtMs}
+              disabled={planGate}
+              onInteraction={notifyInteraction}
+              onChange={(patch) => {
+                // Map each knob's patch key onto the EXACT write the inline card
+                // used to fire. The panel emits one key per interaction.
+                if (patch.active !== undefined) {
+                  setPlaylistActive(patch.active);
+                  setAutopilot(patch.active, playlistDelayStr, isShuffle);
+                }
+                if (patch.shuffle !== undefined) {
+                  setIsShuffle(patch.shuffle);
+                  setAutopilot(isPlaylistActive, playlistDelayStr, patch.shuffle);
+                }
+                if (patch.delayStr !== undefined) {
+                  setPlaylistDelayStr(patch.delayStr);
+                  setAutopilot(isPlaylistActive, patch.delayStr, isShuffle);
+                }
+                if (patch.groupMode !== undefined) {
+                  setGroupMode(patch.groupMode);
+                  setAutopilot(undefined, undefined, undefined, { groupMode: patch.groupMode });
+                }
+                if (patch.groupSize !== undefined) {
+                  setGroupSize(patch.groupSize);
+                  setAutopilot(undefined, undefined, undefined, { groupSize: patch.groupSize });
+                }
+                if (patch.groupDwell !== undefined) {
+                  setGroupDwell(patch.groupDwell);
+                  setAutopilot(undefined, undefined, undefined, { groupDwell: patch.groupDwell });
+                }
+              }}
+              // ── DECK TRANSITIONS (nested INTO the AUTOPILOT PATTERNS card,
+              //    operator request 2026-07-04: "the Deck TX and the pattern
+              //    autopilot are the same work"). When shuffle is on, show the
+              //    actually-rolled style from the engine's most-recent broadcast
+              //    instead of the operator's pre-shuffle pick (which the engine
+              //    ignores in shuffle mode anyway). Falls back to the config mode
+              //    before any swap has happened.
+              deckTx={{
+                enabled: deckTxConfig.enabled,
+                mode: deckTxConfig.shuffle && lastSwapMode ? lastSwapMode : deckTxConfig.mode,
+                durationMs: deckTxConfig.durationMs,
+                shuffle: deckTxConfig.shuffle,
+              }}
+              onDeckTxChange={handleDeckTxChange}
+            />
 
             {/* ── AUTOPILOT COLORS ────────────────────────────────────
                 Cycles a chosen SET of color palettes on its own timer —
