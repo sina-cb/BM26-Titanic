@@ -3485,6 +3485,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (state.active !== undefined) ap.active = !!state.active;
     if (state.delay_s !== undefined) ap.delay_s = parseInt(state.delay_s, 10) || 30;
     if (state.shuffle !== undefined) ap.shuffle = !!state.shuffle;
+    // Pattern-autopilot GROUP LOCALITY (docs — deck dwell window). The deck
+    // daemon / pickNextAutoCycleEntry re-read these three fields off
+    // baseCh.playlist.autopilot every advance and clamp groupSize/groupDwell to
+    // AUTO_GROUP_* on use, so we just mirror the cue's authored values here. A
+    // NaN integer keeps the prior value rather than corrupting the block.
+    if (state.groupMode !== undefined) ap.groupMode = !!state.groupMode;
+    if (state.groupSize !== undefined) {
+      const gs = parseInt(state.groupSize, 10);
+      if (!Number.isNaN(gs)) ap.groupSize = gs;
+    }
+    if (state.groupDwell !== undefined) {
+      const gd = parseInt(state.groupDwell, 10);
+      if (!Number.isNaN(gd)) ap.groupDwell = gd;
+    }
     // Drive main's deck daemon timer (active/delay) the SAME way POST /autopilot
     // does — updateState reschedules the self-rescheduling setTimeout. The
     // shuffle pick is read from baseCh.playlist.autopilot (mirrored above).
@@ -3763,6 +3777,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // transition the deck the moment it fires (operator: "use the settings
         // for the cue to do transition of ... color").
         setColorAutopilot: (wire) => timelineSetColorAutopilot(wire),
+        // Global HUE SHIFT (docs/39 §F-hue): a deck playlist cue's `hue` routes
+        // through the SAME internal path as POST /global-effect-hue (and the
+        // CaptainPad hue slider, which sends setGlobalHue(deg, 0)). rot/spin is
+        // fixed 0. FAIL LOUD if the controller is missing (codex P0 — never
+        // silently drop an authored hue).
+        setGlobalHue: (degrees) => {
+          if (!globalEffectsController) throw new Error('global effects controller not initialized');
+          const hv = validateHue(degrees);
+          if (!hv.ok) throw new Error(hv.error);
+          // setHueShift re-validates + normalizes (degrees [0,360), rot 0) and
+          // throws on non-finite — defence in depth, mirroring the POST route.
+          globalEffectsController.setHueShift(hv.value, 0);
+          globalsState.hueShift = { ...globalEffectsController.hueShift };
+          // Persist through saveGlobalsState (NOT saveAllState, which only
+          // writes mixer/deck state) so the authored hue survives a reboot, and
+          // broadcast mixer state alongside the hue message — mirroring POST
+          // /global-effect-hue exactly.
+          stateManager.saveGlobalsState(globalsState, paramCenter);
+          broadcastWs({ type: 'globalHueShift', hueShift: { ...globalEffectsController.hueShift } });
+          broadcastMixerState();
+        },
         forceDeckView: () => timelineForceDeckView(),
         // Release the plan's soft deck-pin (docs/38 §16.9). Called on every
         // transition where the plan stops driving the deck (pause / autopilot

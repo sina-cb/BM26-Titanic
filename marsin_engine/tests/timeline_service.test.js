@@ -21,6 +21,7 @@ function makeDeps() {
     setDeckTransition: [],
     setDeckOverlaysEnabled: [],
     setColorAutopilot: [],
+    setGlobalHue: [],
     forceDeckView: [],
     releaseDeckView: [],
   };
@@ -57,6 +58,7 @@ function makeDeps() {
     setDeckTransition: (patch) => { calls.setDeckTransition.push(patch); },
     setDeckOverlaysEnabled: (enabled) => { calls.setDeckOverlaysEnabled.push(enabled); },
     setColorAutopilot: (wire) => { calls.setColorAutopilot.push(wire); },
+    setGlobalHue: (degrees) => { calls.setGlobalHue.push(degrees); },
     forceDeckView: () => { calls.forceDeckView.push(true); viewState.mode = 'deck'; viewState.source = 'plan'; },
     // Mirror timelineReleaseDeckView: only clears a 'plan'-owned pin, never a
     // real 'portwatch' hardware lock.
@@ -1056,6 +1058,102 @@ test('docs/39 apply: colorAutopilot fails loud when the dep is missing', async (
     st.lastError && /setColorAutopilot dep is required/.test(st.lastError),
     `expected a loud setColorAutopilot dep error, got ${JSON.stringify(st.lastError)}`,
   );
+});
+
+// ── pattern-autopilot GROUP LOCALITY + global HUE on a deck cue ──────────────
+
+test('group locality schema: autopilot round-trips groupMode/groupSize/groupDwell', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    autopilot: { active: true, delay_s: 30, shuffle: false, groupMode: true, groupSize: 4, groupDwell: 8 },
+  });
+  const norm = validateShowPlan(plan);
+  assert.deepEqual(norm.cues[0].action.autopilot, {
+    active: true, delay_s: 30, shuffle: false, groupMode: true, groupSize: 4, groupDwell: 8,
+  });
+});
+
+test('group locality schema: a non-boolean groupMode throws', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    autopilot: { active: true, delay_s: 30, shuffle: false, groupMode: 'yes' },
+  });
+  assert.throws(() => validateShowPlan(plan), /groupMode must be a boolean/);
+});
+
+test('group locality schema: a non-integer groupSize throws', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    autopilot: { active: true, delay_s: 30, shuffle: false, groupSize: 2.5 },
+  });
+  assert.throws(() => validateShowPlan(plan), /groupSize must be an integer/);
+});
+
+test('group locality apply: cue group fields reach setAutopilot in state', async () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    autopilot: { active: true, delay_s: 30, shuffle: false, groupMode: true, groupSize: 4, groupDwell: 8 },
+  });
+  const { svc, calls, setMood } = setupWithPlan(plan);
+  await svc.start();
+  calls.setAutopilot.length = 0;
+
+  setMood({ party: 0, value: 0 });
+  await svc._tick();
+  setMood({ party: 1, value: 1 });
+  await svc._tick();
+  svc.stop();
+
+  const apCall = calls.setAutopilot.find((c) => c.state && c.state.groupMode !== undefined);
+  assert.ok(apCall, 'expected a setAutopilot call carrying the group fields');
+  assert.equal(apCall.state.groupMode, true);
+  assert.equal(apCall.state.groupSize, 4);
+  assert.equal(apCall.state.groupDwell, 8);
+});
+
+test('hue schema: hue on a deck playlist action round-trips', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    hue: 200,
+  });
+  const norm = validateShowPlan(plan);
+  assert.equal(norm.cues[0].action.hue, 200);
+});
+
+test('hue schema: hue normalizes into [0,360) (380 → 20)', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    hue: 380,
+  });
+  const norm = validateShowPlan(plan);
+  assert.equal(norm.cues[0].action.hue, 20);
+});
+
+test('hue schema: hue on a non-deck target throws', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'mixer', id: 'ch_a' },
+    hue: 200,
+  });
+  assert.throws(() => validateShowPlan(plan), /hue is only valid for a deck target/);
+});
+
+test('hue apply: deck cue with hue reaches setGlobalHue with normalized degrees', async () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    hue: 380,
+  });
+  const { svc, calls, setMood } = setupWithPlan(plan);
+  await svc.start();
+  calls.setGlobalHue.length = 0;
+
+  setMood({ party: 0, value: 0 });
+  await svc._tick();
+  setMood({ party: 1, value: 1 });
+  await svc._tick();
+  svc.stop();
+
+  assert.equal(calls.setGlobalHue.length, 1, 'setGlobalHue called once for the deck cue');
+  assert.equal(calls.setGlobalHue[0], 20, 'hue normalized 380 → 20 before apply');
 });
 
 // ── buildOverview carries durationMin (BUG 2 regression guard) ──────────────

@@ -195,6 +195,15 @@ function validatePlanAutopilot(ap, label) {
   return out;
 }
 
+/**
+ * A cue/look pattern-AUTOPILOT block. THROW-style. Core shape is
+ * { active, delay_s, shuffle }. Optionally carries pattern-autopilot GROUP
+ * LOCALITY (docs — deck daemon dwell window): groupMode (bool), groupSize
+ * (positive int), groupDwell (positive int). We do NOT clamp the group ints
+ * here — the engine clamps them to its MIN/MAX on apply (api_server
+ * AUTO_GROUP_*). Group fields are included in the normalized object ONLY when
+ * present, so an autopilot without them round-trips unchanged.
+ */
 function validateAutopilot(ap, label) {
   if (!isPlainObject(ap)) throw new Error(`${label} must be an object { active, delay_s, shuffle }`);
   assertBool(ap.active, `${label}.active`);
@@ -202,7 +211,21 @@ function validateAutopilot(ap, label) {
     throw new Error(`${label}.delay_s must be a number > 0, got ${JSON.stringify(ap.delay_s)}`);
   }
   assertBool(ap.shuffle, `${label}.shuffle`);
-  return { active: ap.active, delay_s: ap.delay_s, shuffle: ap.shuffle };
+  const out = { active: ap.active, delay_s: ap.delay_s, shuffle: ap.shuffle };
+  // Pattern-autopilot GROUP LOCALITY — all optional. Validate SHAPE only (no
+  // clamp; the engine clamps groupSize/groupDwell to its MIN/MAX on apply).
+  if (ap.groupMode !== undefined) out.groupMode = assertBool(ap.groupMode, `${label}.groupMode`);
+  if (ap.groupSize !== undefined) {
+    assertInteger(ap.groupSize, `${label}.groupSize`);
+    if (ap.groupSize <= 0) throw new Error(`${label}.groupSize must be a positive integer, got ${JSON.stringify(ap.groupSize)}`);
+    out.groupSize = ap.groupSize;
+  }
+  if (ap.groupDwell !== undefined) {
+    assertInteger(ap.groupDwell, `${label}.groupDwell`);
+    if (ap.groupDwell <= 0) throw new Error(`${label}.groupDwell must be a positive integer, got ${JSON.stringify(ap.groupDwell)}`);
+    out.groupDwell = ap.groupDwell;
+  }
+  return out;
 }
 
 function validateIdList(list, label) {
@@ -430,6 +453,18 @@ function validateAction(action, label, lookNames) {
           throw new Error(`${label}.colorAutopilot is only valid for a deck target`);
         }
         out.colorAutopilot = validateCueColorAutopilot(action.colorAutopilot, `${label}.colorAutopilot`);
+      }
+      // hue is a DECK-ONLY knob: it drives the GLOBAL post-mixer hue shifter,
+      // which pins to the deck output. A non-deck target with the field is an
+      // authoring error → throw. Finite number, normalized into [0,360).
+      if (action.hue !== undefined) {
+        if (out.target.channel !== 'deck') {
+          throw new Error(`${label}.hue is only valid for a deck target`);
+        }
+        if (typeof action.hue !== 'number' || !Number.isFinite(action.hue)) {
+          throw new Error(`${label}.hue must be a finite number of degrees, got ${JSON.stringify(action.hue)}`);
+        }
+        out.hue = ((action.hue % 360) + 360) % 360;
       }
       return out;
     }

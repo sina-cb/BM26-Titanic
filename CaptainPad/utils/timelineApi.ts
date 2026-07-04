@@ -346,6 +346,9 @@ export interface ActionPlaylist {
   transition?: ActionTransition;
   // Cue-level overlay intent (deck target only). Absent = leave as-is.
   overlays?: ActionOverlays;
+  // Global HUE SHIFT (degrees, 0–360) applied when the cue fires. DECK-ONLY:
+  // the engine rejects `hue` on a non-deck target. Absent = leave hue as-is.
+  hue?: number;
 }
 export interface ActionGlobals { type: 'globals'; set: Record<string, unknown> }
 // NOTE: the engine also validates a `scene` action, but the maker deliberately
@@ -355,7 +358,17 @@ export interface ActionGlobals { type: 'globals'; set: Record<string, unknown> }
 export type CueAction = ActionLook | ActionPlaylist | ActionGlobals;
 
 export interface PlanTarget { channel: 'deck' | 'mixer' | 'all'; id: string | null }
-export interface PlanAutopilotInline { active?: boolean; delay_s?: number; shuffle?: boolean }
+export interface PlanAutopilotInline {
+  active?: boolean;
+  delay_s?: number;
+  shuffle?: boolean;
+  // Pattern-autopilot GROUP LOCALITY (deck daemon dwells inside a rolling
+  // window of adjacent playlist entries). All optional; the engine clamps
+  // groupSize/groupDwell on apply. Absent → the daemon's own defaults.
+  groupMode?: boolean;
+  groupSize?: number;
+  groupDwell?: number;
+}
 
 export type CueDays = 'all' | number[] | string[];
 

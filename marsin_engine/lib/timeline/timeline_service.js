@@ -194,6 +194,10 @@ export class TimelineService {
    *   setDeckOverlaysEnabled(bool)           — enable (honor configured) / disable ALL deck overlays
    *   setColorAutopilot({active, palettes, delay_s, shuffle}) — configure + start/stop the
    *                                            engine palette-cycling daemon (docs/39)
+   *   setGlobalHue(degrees)                  — apply the GLOBAL hue shift (post-mixer hue
+   *                                            rotation) the SAME way the operator's hue slider
+   *                                            does (globalEffectsController.setHueShift with
+   *                                            rot/spin 0). A deck playlist cue's `hue` routes here.
    *   forceDeckView()                        — PIN engine output to the deck via the existing
    *                                            viewOverride machinery (docs/38 §16.9) — the plan owns
    *                                            the deck-pin while it drives the deck
@@ -465,6 +469,19 @@ export class TimelineService {
     steps.push(`deck ← colorAutopilot ${JSON.stringify(colorAutopilot)}`);
   }
 
+  // Apply the GLOBAL hue shift (degrees, already normalized [0,360) by
+  // show_plan.js) from a deck playlist cue. Routes through the same internal
+  // path the operator's hue slider uses (globalEffectsController.setHueShift
+  // with rot/spin 0). FAIL LOUD if the dep is missing (codex P0 — never
+  // silently drop an authored hue).
+  async _applyHue(hue, steps) {
+    if (typeof this.deps.setGlobalHue !== 'function') {
+      throw new Error('setGlobalHue dep is required to apply a cue hue');
+    }
+    await this.deps.setGlobalHue(hue);
+    steps.push(`deck ← hue ${hue}`);
+  }
+
   // Pin engine output to the deck through the EXISTING viewOverride machinery
   // (docs/38 §16.9). The plan OWNS the deck-pin while it drives the deck; an
   // operator view-change off deck is what arms the operator-takeover lease
@@ -622,6 +639,9 @@ export class TimelineService {
         // target is in play. Configure the palette-cycling daemon alongside the
         // pattern autopilot (docs/39): they run in parallel.
         if (action.colorAutopilot && onDeck) await this._applyColorAutopilot(action.colorAutopilot, steps);
+        // hue is validated DECK-ONLY (show_plan.js) → only when a deck target
+        // is in play. Applies the GLOBAL hue shift alongside the deck swap.
+        if (action.hue !== undefined && onDeck) await this._applyHue(action.hue, steps);
         // The plan is driving the DECK → pin engine output to the deck (docs/38
         // §16.9). Reuses the existing viewOverride machinery via the injected dep.
         if (onDeck) await this._forceDeckView(steps);
