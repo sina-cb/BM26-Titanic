@@ -30,10 +30,19 @@ export async function fetchWithTimeout(
 ): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  // Honor a caller-supplied AbortSignal (e.g. to cancel a superseded request)
+  // by chaining it onto our timeout controller.
+  const caller = init.signal;
+  const onCallerAbort = () => ctrl.abort();
+  if (caller) {
+    if (caller.aborted) ctrl.abort();
+    else caller.addEventListener('abort', onCallerAbort);
+  }
   try {
     return await fetch(url, { ...init, signal: ctrl.signal });
   } finally {
     clearTimeout(t);
+    if (caller) caller.removeEventListener('abort', onCallerAbort);
   }
 }
 
@@ -152,6 +161,8 @@ export interface ApiResult<T> {
   ok: boolean;
   data?: T;
   error?: string;
+  /** HTTP status when the response was received (absent on transport failures). */
+  status?: number;
 }
 
 export async function sendControl(id: number, v0: number, v1?: number, v2?: number): Promise<ApiResult<any>> {
@@ -307,6 +318,73 @@ export async function setDeckTransitionConfig(patch: Partial<DeckTransitionConfi
     return { ok: true, data };
   } catch (err: any) {
     warnThrottled('Set deck transition config failed:', 'Set deck transition config failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── Deck COLOR autopilot (operator request: "in the autopilot, select a set
+// of palettes that switch on their own timer") ─────────────────────────────
+// A second, INDEPENDENT autopilot on the deck that cycles a chosen SET of
+// color palettes on a timer (the pattern autopilot cycles PATTERNS; this one
+// cycles PALETTES). Palette ids come from the engine's color-palette library
+// (the same `config.colorPalettes` {id,name} list surfaced by
+// fetchColorPalettes / getCachedColorPalettes).
+//
+// Wire shape (GET returns it, POST accepts the same subset):
+//   { active: boolean, palettes: string[] (>=1 known palette id),
+//     delay_s: number > 0, shuffle?: boolean, transitionMs?: number >= 0 }
+//
+// `transitionMs` is the CROSSFADE duration on a palette switch (0 = hard cut),
+// the palette analogue of the DECK TX crossfade time — the engine ramps the
+// palette params old→new over this window instead of snapping (docs/39).
+//
+// Partial PATCH-style writes are supported (POST any subset of fields — the
+// engine merges over the live config before validating), so the deck UI can
+// post a single toggle/stepper change optimistically.
+export type DeckColorAutopilotConfig = {
+  active: boolean;
+  palettes: string[];
+  delay_s: number;
+  shuffle: boolean;
+  // Optional so existing seed objects (e.g. the deck screen's initial state)
+  // stay valid without churn; the engine ALWAYS returns it on GET, and the UI
+  // defaults an absent value to 0 (hard cut).
+  transitionMs?: number;
+};
+
+export async function fetchDeckColorAutopilot(): Promise<ApiResult<DeckColorAutopilotConfig>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/deck/color-autopilot`);
+    const data = await res.json();
+    // Codex P0 — fail loud: a non-ok GET surfaces the engine error rather
+    // than handing the deck a half-formed config it would render as truth.
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('Fetch deck color autopilot failed:', 'Fetch deck color autopilot failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function setDeckColorAutopilot(patch: Partial<DeckColorAutopilotConfig>): Promise<ApiResult<DeckColorAutopilotConfig>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/deck/color-autopilot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    // Codex P0 — fail loud: surface an engine rejection so the deck's
+    // optimistic color-autopilot update can roll back instead of showing a
+    // value the engine never accepted.
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('Set deck color autopilot failed:', 'Set deck color autopilot failed:', err);
     return { ok: false, error: err.message };
   }
 }

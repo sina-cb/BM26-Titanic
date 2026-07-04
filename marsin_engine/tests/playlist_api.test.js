@@ -52,6 +52,7 @@ before(async () => {
   proc = spawn('node', ['engine.js', '--pattern', '13_sparkle', '--model', SCENE, '--port', String(port)], {
     cwd: engineDir,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, BM26_DISABLE_TIMELINE: '1' },
   });
   proc.stdout.on('data', d => process.stderr.write('[engine] ' + d));
   proc.stderr.on('data', d => process.stderr.write('[engine!] ' + d));
@@ -156,6 +157,7 @@ test('Playlist assignment persists across engine restart', async () => {
   proc = spawn('node', ['engine.js', '--pattern', '13_sparkle', '--model', SCENE, '--port', String(port)], {
     cwd: engineDir,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, BM26_DISABLE_TIMELINE: '1' },
   });
   proc.stdout.on('data', d => process.stderr.write('[engine] ' + d));
   proc.stderr.on('data', d => process.stderr.write('[engine!] ' + d));
@@ -242,6 +244,7 @@ test('Two entries of same pattern keep independent defaults across restart', asy
   proc = spawn('node', ['engine.js', '--pattern', '13_sparkle', '--model', SCENE, '--port', String(port)], {
     cwd: engineDir,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, BM26_DISABLE_TIMELINE: '1' },
   });
   proc.stdout.on('data', d => process.stderr.write('[engine] ' + d));
   proc.stderr.on('data', d => process.stderr.write('[engine!] ' + d));

@@ -961,6 +961,8 @@ const analyzer = new AudioAnalyzer({
     emitDerivedBpm(paramCenter, sendOsc);
     // Companion = sole analyzer: emit the FULL derived/detector set over OSC so
     // the engine receives them (instead of computing its own). (report 20260621_11)
+    // This INCLUDES audioParty + audioStructure — the music-MOOD cues the Timeline
+    // service reads live off the engine CPC (supersedes the old mood_emit.js).
     emitAllDerived();
     // Dom-freq dance: spring-glide toward the current dom freq + cluster width.
     // The `danceMaker` OP is the canonical dance producer (docs/37 §2.2): when

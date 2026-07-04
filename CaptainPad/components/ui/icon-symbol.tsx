@@ -51,6 +51,13 @@ const MAPPING = {
   // Scheduler tab (docs/31): sidebar icon + per-row controls. The
   // calendar+clock pairing reads as "this fires later, automatically".
   'calendar.badge.clock': 'event',
+  // Timeline / Show Director tab (docs/38): sidebar icon + day-ribbon
+  // sun-event glyphs. `sun.max` reads as "the sky drives this".
+  'sun.max': 'wb-sunny',
+  'sunrise': 'wb-twilight',
+  'sunset': 'wb-twilight',
+  'clock': 'schedule',
+  'moon.stars': 'nights-stay',
   'play.fill': 'play-arrow',
   'pause.fill': 'pause',
   'stop.fill': 'stop',

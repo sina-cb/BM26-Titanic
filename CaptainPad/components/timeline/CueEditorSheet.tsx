@@ -1,0 +1,1346 @@
+/**
+ * CueEditorSheet — themed modal to add / edit a single cue (docs/38 §15.3).
+ *
+ * Pure pill / stepper / segmented / dropdown inputs — NO keyboard walls.
+ * Operates on a LOCAL working copy of a PlanCue; commits via onSave (the
+ * parent inserts/replaces in the draft plan and fires a debounced preview).
+ *
+ *   CUE NAME  text input  the operator-facing label for this cue
+ *   KIND      segmented   program | mood | ambient
+ *   TRIGGER   segmented   clock | sun | phase | mood | manual
+ *               clock → HH:MM stepper
+ *               sun   → event dropdown + offset ±min stepper
+ *               phase → phase dropdown
+ *               mood  → from/to segmented + dwell/cooldown steppers + whenPhase
+ *   ACTION    (fixed)     playlist only        (look + scene removed)
+ *               playlist → dropdown (GET /playlists), deck-only target,
+ *                          TRANSITION (default|crossfade|flash|dissolve),
+ *                          OVERLAYS (leave|enable|disable),
+ *                          pattern AUTOPILOT + COLOR AUTOPILOT
+ *   HOLD      none | minutes stepper            (programs only)
+ *   DAYS      This day | All days | Pick…       (Pick = day-index toggles)
+ *
+ * PLAYLIST is the ONLY action the maker authors now (operator decision:
+ * "remove look all together"). The CueAction union still carries `look` /
+ * `globals` for hand-authored plans, but this editor never emits them. The
+ * `scene` action is likewise NOT authored here: a scene switch restarts the
+ * engine — dangerous + irrelevant inside the maker.
+ */
+import React, { useMemo, useState } from 'react';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Modal, Pressable, StyleSheet } from 'react-native';
+import { Palette } from '@/constants/theme';
+import { usePalette } from '@/hooks/use-theme';
+import {
+  PlanCue, PlanDefaultCue, CueKind, CueTrigger, CueAction, ActionPlaylist, SunEvent, CueDays, ShowPlan,
+  DeckTransitionMode, ActionOverlays, PlanAutopilotInline,
+} from '@/utils/timelineApi';
+import {
+  hhmmToMinutes, minutesToHHMM, minutesTo12h, hhmmTo12h, SUN_EVENT_OPTIONS, MOOD_VALUES,
+} from './timelineTemplate';
+import { Segmented, Stepper, Dropdown, ToggleChip, FieldLabel } from './makerControls';
+import { DayTimePicker, DayTimeContextCue } from './DayTimePicker';
+import { DeckTransitionControls } from '@/components/DeckTransitionControls';
+import { PatternAutopilotPanel } from '@/components/deck/pattern_autopilot_panel';
+import { ColorAutopilotPanel } from '@/components/deck/ColorAutopilotPanel';
+import { HorizontalFader } from '@/components/ui/HorizontalFader';
+import type { DeckColorAutopilotConfig } from '@/utils/api';
+
+// HSV(h°, 1, 1) → #rrggbb for the HUE fader fill (ColorPickerModal's
+// hsvToRgbString is module-private, so we restate the few lines here). Full
+// saturation + value so the swatch reads as the pure hue at that degree.
+function hueToHex(deg: number): string {
+  const h = (((deg % 360) + 360) % 360) / 60;
+  const c = 1;
+  const x = c * (1 - Math.abs((h % 2) - 1));
+  let r = 0, g = 0, b = 0;
+  if (h < 1) { r = c; g = x; }
+  else if (h < 2) { r = x; g = c; }
+  else if (h < 3) { g = c; b = x; }
+  else if (h < 4) { g = x; b = c; }
+  else if (h < 5) { r = x; b = c; }
+  else { r = c; b = x; }
+  const to = (v: number) => Math.round(v * 255).toString(16).padStart(2, '0');
+  return `#${to(r)}${to(g)}${to(b)}`;
+}
+
+// A titled CARD wrapper matching the live deck's autopilot cards (surfaceContainerHigh
+// bg + ghostBorder + rounded, small uppercase header). `right` hosts the section's
+// ON/OFF ToggleChip so the header row reads like the deck's card headers.
+function ActionCard({ title, right, children }: { title: string; right?: React.ReactNode; children?: React.ReactNode }) {
+  const C = usePalette();
+  return (
+    <View style={{ marginTop: 12, padding: 12, borderRadius: 10, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder, gap: 8 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>{title}</Text>
+        {right ?? null}
+      </View>
+      {children}
+    </View>
+  );
+}
+
+// Inherit-vs-override control for the playlist action's deck transition. "Deck
+// default" means DON'T emit a `transition` field — the cue inherits the deck's
+// standing Deck TX config. "Custom" emits a full `transition` block edited via
+// the shared DeckTransitionControls (all 16 blends + time + shuffle).
+const TRANSITION_SOURCE_OPTIONS: { id: 'default' | 'custom'; label: string }[] = [
+  { id: 'default', label: 'Deck default' },
+  { id: 'custom', label: 'Custom' },
+];
+
+// Cue-level overlay intent. "Leave as-is" emits nothing; the other two emit
+// `overlays: 'enable' | 'disable'` on the playlist action.
+const OVERLAY_OPTIONS: { id: 'asis' | ActionOverlays; label: string }[] = [
+  { id: 'asis', label: 'Leave as-is' },
+  { id: 'enable', label: 'Enable overlays' },
+  { id: 'disable', label: 'Disable overlays' },
+];
+
+// DURATION presets (minutes). A cue is an EVENT that owns the deck for this
+// many minutes after it fires; "None" emits no `durationMin` (point event).
+// Mirrors the HOLD stepper idiom but with quick playa-friendly presets.
+const DURATION_PRESETS_MIN = [15, 30, 60, 90, 120, 180];
+
+// ── Overlap detection (operator: "disallow overlapping cues") ──────────────
+// A cue owns the deck for [start, start+durationMin). Two cues conflict only
+// when their DAY-SETS intersect AND their windows overlap. Touching endpoints
+// do NOT overlap: [10:00,11:00) and [11:00,12:00) are fine. These are pure
+// module-level helpers so the SAVE handler can validate before calling onSave.
+
+// Resolve a cue's window START (minutes-of-day) for overlap math. ONLY the
+// CLOCK trigger has an editor-resolvable start; a SUN trigger's per-day time
+// isn't computed here, so we return null and the caller SKIPS that pair rather
+// than false-positive. Anything else (phase/mood/manual) has no time-of-day
+// anchor either → null (skip).
+function cueStartMinutes(cue: PlanCue): number | null {
+  if (cue.trigger.type === 'clock') return hhmmToMinutes(cue.trigger.at);
+  return null;
+}
+
+// Two half-open windows [aStart, aEnd) and [bStart, bEnd) overlap iff they
+// share more than a touching endpoint: aStart < bEnd AND bStart < aEnd.
+function windowsOverlap(aStart: number, aDur: number, bStart: number, bDur: number): boolean {
+  return aStart < bStart + bDur && bStart < aStart + aDur;
+}
+
+// Do two cue DAY-SETS intersect? 'all' (or absent) matches EVERY day, so it
+// intersects anything. Otherwise both are arrays (number indices OR date
+// strings); we intersect element-wise. A numeric day-set and a date-string
+// day-set can't be compared here (different representations) → treat as
+// NON-intersecting (skip) rather than guess.
+function daySetsIntersect(a: CueDays | undefined, b: CueDays | undefined): boolean {
+  const aAll = a === 'all' || a === undefined;
+  const bAll = b === 'all' || b === undefined;
+  if (aAll || bAll) return true;
+  // Both are arrays here. Compare only when they share a representation.
+  const aArr = a as (number | string)[];
+  const bArr = b as (number | string)[];
+  const bSet = new Set(bArr);
+  return aArr.some((d) => bSet.has(d));
+}
+
+function defaultTrigger(type: CueTrigger['type']): CueTrigger {
+  switch (type) {
+    case 'clock': return { type: 'clock', at: '20:00' };
+    case 'sun': return { type: 'sun', event: 'sunset', offsetMin: 0 };
+    case 'phase': return { type: 'phase', phase: '' };
+    case 'mood': return { type: 'mood', from: 'calm', to: 'party', minDwellSec: 30, cooldownSec: 300 };
+    case 'manual': return { type: 'manual' };
+  }
+}
+
+// Smart default start for a fresh CLOCK trigger (operator: a new cue should
+// default to "~5 minutes from now", snapped UP to the time UI's 5-minute
+// increments, never uncomfortably close). "Now" is read in the PLAN's tz via
+// Intl — the same idiom as timeline.tsx nowPartsInTz, replicated here WITH
+// SECONDS; a malformed tz makes Intl throw (fail loud per codex — no
+// device-tz fallback). Pinned rule:
+//   nextBoundarySec = ceil(nowSec / 300) * 300
+//   if (nextBoundarySec - nowSec < 60) nextBoundarySec += 300
+// Examples: 3:31:00 → 3:35 · 3:34:20 → 3:40 (too close) · 3:35:00 → 3:40.
+function smartDefaultClockAt(tz: string): string {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  });
+  const parts = fmt.formatToParts(new Date());
+  const num = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? NaN);
+  let hour = num('hour');
+  if (hour === 24) hour = 0; // some engines emit '24' for midnight under hour12:false
+  const nowSec = hour * 3600 + num('minute') * 60 + num('second');
+  if (!Number.isFinite(nowSec)) {
+    throw new Error(`CueEditorSheet: cannot read "now" in plan tz '${tz}'`);
+  }
+  let boundarySec = Math.ceil(nowSec / 300) * 300;
+  if (boundarySec - nowSec < 60) boundarySec += 300;
+  // 23:59 rolls over to 00:00 (next day) — the % 1440 wrap matches the wire's
+  // minutes-of-day domain.
+  return minutesToHHMM(Math.floor(boundarySec / 60) % 1440);
+}
+
+// The maker authors PLAYLIST cues only now (look removed). This always
+// returns a fresh, deck-targeted playlist action — the editor's single
+// default and reset shape.
+function defaultPlaylistAction(): ActionPlaylist {
+  return { type: 'playlist', name: 'default', target: { channel: 'deck', id: null } };
+}
+
+export function CueEditorSheet({
+  visible, mode = 'cue', initialCue, initialDefaultCue, plan, playlists, palettes, dayIndex,
+  onSave, onSaveDefault, onDelete, onClose,
+}: {
+  visible: boolean;
+  /**
+   * Editor mode:
+   *   'cue'         → full cue editor (name/kind/trigger/action/hold/duration/days).
+   *   'defaultCue'  → the plan's DEFAULT CUE: name + ACTION only. No trigger,
+   *                   kind, hold, duration, or days — the default cue is the
+   *                   standing fallback, not a scheduled event. Saves via
+   *                   onSaveDefault (a PlanDefaultCue), not onSave.
+   */
+  mode?: 'cue' | 'defaultCue';
+  /** null = adding a new cue. Ignored in 'defaultCue' mode. */
+  initialCue: PlanCue | null;
+  /** The plan's current default cue, seeded when mode==='defaultCue'. */
+  initialDefaultCue?: PlanDefaultCue | null;
+  plan: ShowPlan;
+  playlists: string[];
+  /**
+   * Color-palette options for the COLOR AUTOPILOT multi-select, sourced from
+   * the engine's /color-palettes list (see utils/api.ts getCachedColorPalettes
+   * / fetchColorPalettes). Passed in the same way as `playlists` because the
+   * engine fetch lives outside this component's lease. Defaults to [] so the
+   * control degrades to an empty-state hint when the parent hasn't wired it.
+   * `c1`/`c2` are the palette's two hues (0..1) — when present we render the
+   * REAL split swatch (DualSwatch) so a chip shows its true colors, not a name.
+   */
+  palettes?: { id: string; name: string; c1?: number; c2?: number }[];
+  /** The day the editor was opened from — seeds DAYS "This day". */
+  dayIndex: number;
+  onSave: (cue: PlanCue) => void;
+  /** Called (mode==='defaultCue' only) with the edited plan default cue. */
+  onSaveDefault?: (dc: PlanDefaultCue) => void;
+  onDelete: (() => void) | null;
+  onClose: () => void;
+}) {
+  const isDefaultMode = mode === 'defaultCue';
+  const C = usePalette();
+  const styles = useMemo(() => makeStyles(C), [C]);
+
+  const paletteOptions = palettes ?? [];
+  const phaseNames = Object.keys(plan.phases);
+
+  // Fresh trigger for a given type. CLOCK gets the smart "~5 min from now"
+  // default (plan tz) instead of a fixed time — used when seeding a NEW cue
+  // and when the operator switches the TRIGGER segmented control. Opening an
+  // EXISTING cue still seeds its stored trigger untouched.
+  const makeTrigger = (type: CueTrigger['type']): CueTrigger =>
+    type === 'clock'
+      ? { type: 'clock', at: smartDefaultClockAt(plan.location.tz) }
+      : defaultTrigger(type);
+
+  type DaysMode = 'all' | 'this' | 'pick';
+
+  // Classify a saved `days` value into an initial segmented mode. A date-string
+  // array (e.g. ['2026-08-31']) has no grid representation, so we surface it as
+  // 'pick' (read-only) rather than clobbering it.
+  const initialDaysMode = (d: CueDays | undefined): DaysMode => {
+    if (d === 'all' || d === undefined) return 'all';
+    if (Array.isArray(d) && d.length === 1 && d[0] === dayIndex) return 'this';
+    return 'pick';
+  };
+
+  // Working copy. Re-seeded each time the sheet opens with a different cue.
+  const [kind, setKind] = useState<CueKind>('program');
+  const [label, setLabel] = useState<string>('');
+  const [trigger, setTrigger] = useState<CueTrigger>(defaultTrigger('clock'));
+  const [action, setAction] = useState<CueAction>(defaultPlaylistAction());
+  const [holdMin, setHoldMin] = useState<number | null>(null);
+  // Cue DURATION (minutes) — REQUIRED. A cue always owns the deck for this window
+  // after it fires (operator: "new CUEs must have a duration, no None"). Default 60.
+  const [durationMin, setDurationMin] = useState<number>(60);
+  const [days, setDays] = useState<CueDays>('all');
+  // DAYS mode is EXPLICIT state, driven by the segmented control — NOT derived
+  // from `days` on every render (deriving made "Pick…" snap back to "This day").
+  const [daysMode, setDaysModeState] = useState<DaysMode>('all');
+  const [seedKey, setSeedKey] = useState<string>('');
+  // Inline validation error surfaced near the SAVE button. Set when a save is
+  // BLOCKED (e.g. overlapping cue); cleared on the next save attempt. null =
+  // no error (nothing renders).
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Seed when the sheet opens / target cue changes. We key on mode + cue id +
+  // visibility so re-opening the SAME cue after an external edit re-seeds.
+  const wantKey = `${visible ? 'v' : 'h'}:${mode}:${initialCue?.id ?? 'new'}:${dayIndex}`;
+  if (visible && wantKey !== seedKey) {
+    setSeedKey(wantKey);
+    setSaveError(null); // fresh sheet → clear any stale blocked-save message
+    if (isDefaultMode) {
+      // DEFAULT CUE: only label + action apply. Normalise a non-playlist action
+      // to a fresh deck playlist so the editor always has something to render.
+      const dc = initialDefaultCue ?? null;
+      setLabel(dc?.label || '');
+      setAction(dc && dc.action.type === 'playlist' ? dc.action : defaultPlaylistAction());
+      // The following are inert in default mode but reset for hygiene.
+      setKind('program');
+      setTrigger(defaultTrigger('manual'));
+      setHoldMin(null);
+      setDurationMin(60);
+      setDays('all');
+      setDaysModeState('all');
+    } else if (initialCue) {
+      setKind(initialCue.kind || (initialCue.trigger.type === 'mood' ? 'mood' : 'program'));
+      setLabel(initialCue.label || '');
+      setTrigger(initialCue.trigger);
+      // A hand-authored cue could carry a look/globals action; the maker only
+      // edits playlist actions, so normalise anything else to a fresh playlist
+      // so the editor never gets stuck on an action it can't render.
+      setAction(initialCue.action.type === 'playlist' ? initialCue.action : defaultPlaylistAction());
+      setHoldMin(initialCue.hold && 'min' in initialCue.hold ? initialCue.hold.min : null);
+      // DURATION is required; seed from a saved positive durationMin, else 60.
+      setDurationMin(
+        typeof initialCue.durationMin === 'number' && initialCue.durationMin > 0
+          ? initialCue.durationMin
+          : 60,
+      );
+      setDays(initialCue.days ?? 'all');
+      setDaysModeState(initialDaysMode(initialCue.days));
+    } else {
+      setKind('program');
+      setLabel('');
+      // NEW cue: the clock trigger defaults to ~5 min from NOW in the plan tz,
+      // snapped up to the next comfortable 5-minute boundary (smartDefaultClockAt).
+      setTrigger(makeTrigger('clock'));
+      setAction(defaultPlaylistAction());
+      setHoldMin(null);
+      // A cue is an EVENT with a REQUIRED duration; a fresh cue defaults to 60 min
+      // (renders as a deck-owned block on the day overview).
+      setDurationMin(60);
+      setDays([dayIndex]); // new cue defaults to "this day"
+      setDaysModeState('this');
+    }
+  }
+
+  // True when `days` holds date strings (no grid representation; read-only).
+  const isDateStringDays = Array.isArray(days) && days.some((d) => typeof d === 'string');
+
+  const setDaysMode = (mode: DaysMode) => {
+    setDaysModeState(mode);
+    if (mode === 'all') setDays('all');
+    else if (mode === 'this') setDays([dayIndex]);
+    else {
+      // entering "pick": keep an existing numeric/date selection; otherwise
+      // seed from this day so the grid opens with something selected.
+      if (Array.isArray(days) && days.length > 0) return; // preserve as-is
+      setDays([dayIndex]);
+    }
+  };
+
+  const togglePickDay = (idx: number) => {
+    // Toggling is only meaningful for numeric (grid) selections; a date-string
+    // array is shown read-only and left untouched.
+    if (isDateStringDays) return;
+    const cur = Array.isArray(days) && days.every((d) => typeof d === 'number') ? (days as number[]) : [];
+    const next = cur.includes(idx) ? cur.filter((d) => d !== idx) : [...cur, idx].sort((a, b) => a - b);
+    setDays(next.length ? next : [dayIndex]);
+  };
+
+  const festivalDays = plan.festival?.days ?? 8;
+
+  // The plan's OTHER cues resolvable on the SELECTED day, for the visual day
+  // pane's context blocks. Only CLOCK triggers have a client-resolvable start
+  // (same limitation as the overlap check) — sun/phase/mood/manual cues are
+  // skipped rather than guessed. Date-string day-sets are skipped too (no
+  // index representation). The cue being edited is excluded by id.
+  const dayContextCues = useMemo<DayTimeContextCue[]>(() => {
+    const out: DayTimeContextCue[] = [];
+    for (const c of plan.cues ?? []) {
+      if (initialCue && c.id === initialCue.id) continue;
+      const d = c.days;
+      const onDay =
+        d === 'all' || d === undefined
+        || (Array.isArray(d) && (d as (number | string)[]).includes(dayIndex));
+      if (!onDay) continue;
+      const start = cueStartMinutes(c);
+      if (start === null) continue;
+      out.push({
+        startMinutes: start,
+        durationMin: typeof c.durationMin === 'number' && c.durationMin > 0 ? c.durationMin : 0,
+        kind: c.kind ?? 'program',
+        label: c.label,
+      });
+    }
+    return out;
+  }, [plan, dayIndex, initialCue]);
+
+  // Normalize the working ACTION into a valid, emittable CueAction. Shared by
+  // buildCue and buildDefaultCue so the deck-target / autopilot / color-autopilot
+  // discipline is identical in both paths.
+  const buildNormalizedAction = (): CueAction => {
+    let outAction: CueAction = action;
+    if (action.type === 'playlist') {
+      // Force the deck-only target (mixer authoring removed) and NORMALIZE the
+      // optional autopilot block so the emitted JSON always satisfies the
+      // engine's strict validateAutopilot (active + delay_s>0 + shuffle, no
+      // defaults). We emit `autopilot` ONLY when active===true; an inactive /
+      // absent block is OMITTED (it's optional on a playlist action). When we
+      // do emit it, delay_s is clamped to a positive value (default 30) and
+      // shuffle defaults to false — guaranteeing validity regardless of the
+      // order the operator touched the autopilot controls.
+      const pl: ActionPlaylist = { ...action, target: { channel: 'deck' as const, id: null } };
+      // The AUTOPILOT PATTERNS card gates on BLOCK PRESENCE (card ON = block
+      // present), and the reused panel's PLAY/PAUSE drives `active`. So emit the
+      // block whenever it's present — preserving active:false ("this cue PAUSES
+      // autopilot", a legal, meaningful wire state) instead of dropping it — and
+      // CARRY the GROUP LOCALITY fields the card authors (groupMode/groupSize/
+      // groupDwell); the engine validates + applies them on a cue (commit
+      // c775790). Only card OFF (absent block) omits it. delay_s clamps positive,
+      // shuffle defaults false, so the emitted JSON always satisfies the engine's
+      // strict validateAutopilot regardless of the order the operator toggled.
+      if (pl.autopilot) {
+        const a = pl.autopilot;
+        const norm: PlanAutopilotInline = {
+          active: !!a.active,
+          delay_s: typeof a.delay_s === 'number' && a.delay_s > 0 ? a.delay_s : 30,
+          shuffle: a.shuffle ?? false,
+        };
+        if (a.groupMode !== undefined) norm.groupMode = !!a.groupMode;
+        if (typeof a.groupSize === 'number') norm.groupSize = a.groupSize;
+        if (typeof a.groupDwell === 'number') norm.groupDwell = a.groupDwell;
+        pl.autopilot = norm;
+      } else {
+        delete pl.autopilot;
+      }
+      // COLOR AUTOPILOT — same PRESENCE discipline as the pattern autopilot
+      // above. Emit the block whenever it's present WITH ≥1 palette, preserving
+      // active:false ("this cue PAUSES color cycling") instead of dropping it —
+      // so card ON + PAUSE is honored, not silently discarded. Card OFF (absent
+      // block), or a block that somehow has no palettes, omits it. delay_s clamps
+      // positive, shuffle defaults false, and transitionMs (a non-finite/negative
+      // value collapses to 0 = hard cut) so the emitted JSON always satisfies the
+      // engine's strict validateColorAutopilot regardless of interaction order.
+      const ca = pl.colorAutopilot;
+      if (ca && Array.isArray(ca.palettes) && ca.palettes.length > 0) {
+        const tm = ca.transitionMs;
+        pl.colorAutopilot = {
+          active: !!ca.active,
+          palettes: ca.palettes,
+          delay_s: typeof ca.delay_s === 'number' && ca.delay_s > 0 ? ca.delay_s : 30,
+          shuffle: ca.shuffle ?? false,
+          transitionMs: typeof tm === 'number' && Number.isFinite(tm) && tm >= 0 ? tm : 0,
+        };
+      } else {
+        delete pl.colorAutopilot;
+      }
+      outAction = pl;
+    }
+    return outAction;
+  };
+
+  const buildCue = (): PlanCue => {
+    // The maker emits a DECK-only playlist target (mixer authoring removed) —
+    // same discipline as how the `scene` action was dropped. The action is
+    // normalized (deck target + autopilot/color-autopilot discipline) by
+    // buildNormalizedAction, shared with the default-cue path.
+    const outAction = buildNormalizedAction();
+    // Spread the ORIGINAL cue first so fields the editor doesn't surface
+    // (e.g. `catchUp`, and any future/unknown keys) survive a round-trip;
+    // then overlay only what the editor manages.
+    const cue: PlanCue = {
+      ...(initialCue ?? {}),
+      id: initialCue?.id ?? '', // parent mints id for new cues
+      kind,
+      trigger,
+      action: outAction,
+      days,
+    };
+    if (label.trim()) cue.label = label.trim();
+    else delete cue.label;
+    if (kind === 'program' && holdMin && holdMin > 0) cue.hold = { min: holdMin };
+    else delete cue.hold;
+    // DURATION is REQUIRED — always emit (durationMin is always a positive number).
+    cue.durationMin = durationMin;
+    return cue;
+  };
+
+  // Validate the candidate cue against every OTHER cue in the plan and return a
+  // human-readable BLOCK message if it overlaps one, else null. Overlap rule:
+  // day-sets intersect AND [start, start+durationMin) windows overlap (touching
+  // endpoints are fine). The cue being edited is EXCLUDED by id (never conflicts
+  // with itself). A candidate we can't resolve a start for (e.g. a SUN trigger)
+  // skips the whole check — better than a false-positive. Likewise any OTHER
+  // cue whose start we can't resolve here is skipped pairwise.
+  const findOverlapError = (candidate: PlanCue): string | null => {
+    const candStart = cueStartMinutes(candidate);
+    // Best-effort: if this cue has no editor-resolvable start (sun/phase/mood/
+    // manual), we can't place its window on the clock here → allow the save.
+    if (candStart === null) return null;
+    const candDur = candidate.durationMin ?? 0;
+    if (candDur <= 0) return null; // no owned window → nothing to overlap
+
+    const others = plan.cues ?? [];
+    for (const other of others) {
+      // Never conflict with self. New cues have id '' (parent mints it on
+      // insert); match by id so editing an existing cue skips its own row.
+      if (candidate.id && other.id === candidate.id) continue;
+      if (!daySetsIntersect(candidate.days, other.days)) continue;
+      const otherStart = cueStartMinutes(other);
+      if (otherStart === null) continue; // unresolved (e.g. sun) → skip pair
+      const otherDur = other.durationMin ?? 0;
+      if (otherDur <= 0) continue; // other owns no window
+      if (windowsOverlap(candStart, candDur, otherStart, otherDur)) {
+        const name = other.label?.trim() || 'another cue';
+        // Window in AM/PM for the operator (file convention: clock reads 12h).
+        const from = hhmmTo12h(minutesToHHMM(otherStart));
+        const to = hhmmTo12h(minutesToHHMM(otherStart + otherDur));
+        return `Overlaps '${name}' (${from}–${to}) on this day — cues can't overlap.`;
+      }
+    }
+    return null;
+  };
+
+  // Build the plan DEFAULT CUE from the label + normalized action. NO trigger /
+  // kind / hold / duration / days — the default cue is the standing fallback.
+  const buildDefaultCue = (): PlanDefaultCue => {
+    const dc: PlanDefaultCue = { action: buildNormalizedAction() };
+    if (label.trim()) dc.label = label.trim();
+    return dc;
+  };
+
+  // ── Trigger sub-editors ──
+  const renderTriggerBody = () => {
+    if (trigger.type === 'clock') {
+      const mins = hhmmToMinutes(trigger.at) ?? 1200;
+      return (
+        <View style={styles.subBlock}>
+          <FieldLabel>TIME</FieldLabel>
+          {/* AM/PM summary of the chosen 24h stepper value (operator preference:
+              clock times read as AM/PM everywhere). The steppers stay 24h. */}
+          <Text style={[styles.hint, { marginBottom: 8, color: C.text }]}>{minutesTo12h(mins)}</Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <View style={{ flex: 1 }}>
+              <Stepper
+                value={Math.floor(mins / 60)}
+                onChange={(h) => setTrigger({ type: 'clock', at: minutesToHHMM(h * 60 + (mins % 60)) })}
+                min={0} max={23} wrap
+                format={(h) => `${String(h).padStart(2, '0')}h`}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Stepper
+                value={mins % 60}
+                step={5}
+                onChange={(m) => setTrigger({ type: 'clock', at: minutesToHHMM(Math.floor(mins / 60) * 60 + m) })}
+                min={0} max={55} wrap
+                format={(m) => `${String(m).padStart(2, '0')}m`}
+              />
+            </View>
+          </View>
+
+          {/* VISUAL day pane — place the cue on the 24h column by touch: tap
+              sets START (5-min snap), dragging the block's bottom-edge pill
+              sets DURATION. Two-way synced with the steppers above and the
+              DURATION presets/stepper below (all drive the same state). Sun
+              shading is omitted here — the sheet has no overview sun table
+              (see DayTimePicker header). min/max mirror the DURATION stepper. */}
+          <View style={{ height: 14 }} />
+          <FieldLabel>PLACE ON DAY</FieldLabel>
+          <DayTimePicker
+            startMinutes={mins}
+            durationMin={durationMin}
+            kind={kind}
+            others={dayContextCues}
+            onChangeStart={(m) => setTrigger({ type: 'clock', at: minutesToHHMM(m) })}
+            onChangeDuration={setDurationMin}
+            minDuration={5}
+            maxDuration={720}
+          />
+        </View>
+      );
+    }
+    if (trigger.type === 'sun') {
+      return (
+        <View style={styles.subBlock}>
+          <FieldLabel>SUN EVENT</FieldLabel>
+          <Dropdown
+            value={trigger.event}
+            options={SUN_EVENT_OPTIONS.map((s) => ({ id: s.id, label: s.label }))}
+            onSelect={(id) => setTrigger({ ...trigger, event: id as SunEvent })}
+          />
+          <View style={{ height: 8 }} />
+          <FieldLabel>OFFSET (MIN)</FieldLabel>
+          <Stepper
+            value={trigger.offsetMin ?? 0}
+            step={5}
+            onChange={(v) => setTrigger({ ...trigger, offsetMin: v })}
+            min={-180} max={180}
+            format={(v) => `${v > 0 ? '+' : ''}${v} min`}
+          />
+        </View>
+      );
+    }
+    if (trigger.type === 'phase') {
+      return (
+        <View style={styles.subBlock}>
+          <FieldLabel>PHASE</FieldLabel>
+          <Dropdown
+            value={trigger.phase || null}
+            options={phaseNames.map((p) => ({ id: p, label: p }))}
+            onSelect={(id) => setTrigger({ type: 'phase', phase: id })}
+            placeholder="Pick a phase…"
+            emptyHint="This plan defines no phases."
+          />
+        </View>
+      );
+    }
+    if (trigger.type === 'mood') {
+      return (
+        <View style={styles.subBlock}>
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <View style={{ flex: 1 }}>
+              <FieldLabel>FROM</FieldLabel>
+              <Segmented
+                options={MOOD_VALUES.map((m) => ({ id: m, label: m }))}
+                value={trigger.from}
+                onChange={(v) => setTrigger({ ...trigger, from: v })}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <FieldLabel>TO</FieldLabel>
+              <Segmented
+                options={MOOD_VALUES.map((m) => ({ id: m, label: m }))}
+                value={trigger.to}
+                onChange={(v) => setTrigger({ ...trigger, to: v })}
+              />
+            </View>
+          </View>
+          <View style={{ height: 8 }} />
+          <FieldLabel>MIN DWELL (SEC)</FieldLabel>
+          <Stepper
+            value={trigger.minDwellSec ?? 0}
+            step={10}
+            onChange={(v) => setTrigger({ ...trigger, minDwellSec: v })}
+            min={0} max={600}
+            format={(v) => `${v}s`}
+          />
+          <View style={{ height: 8 }} />
+          <FieldLabel>COOLDOWN (SEC)</FieldLabel>
+          <Stepper
+            value={trigger.cooldownSec ?? 0}
+            step={30}
+            onChange={(v) => setTrigger({ ...trigger, cooldownSec: v })}
+            min={0} max={3600}
+            format={(v) => `${v}s`}
+          />
+          <View style={{ height: 8 }} />
+          <FieldLabel>WHEN PHASE (OPTIONAL)</FieldLabel>
+          <Dropdown
+            value={trigger.whenPhase ?? null}
+            options={[{ id: '', label: '— any phase —' }, ...phaseNames.map((p) => ({ id: p, label: p }))]}
+            onSelect={(id) => setTrigger({ ...trigger, whenPhase: id || undefined })}
+            placeholder="— any phase —"
+          />
+        </View>
+      );
+    }
+    return (
+      <View style={styles.subBlock}>
+        <Text style={styles.hint}>Manual cues fire only when the operator taps FIRE.</Text>
+      </View>
+    );
+  };
+
+  // ── Action sub-editors ──
+  const renderActionBody = () => {
+    if (action.type !== 'playlist') return null;
+    // `action` is narrowed to ActionPlaylist for the rest of this branch.
+    const pl = action;
+    const ap = pl.autopilot ?? {};
+    const ca = pl.colorAutopilot;
+    // Each rich section is gated by BLOCK PRESENCE, not the block's `active`
+    // flag: the outer ON/OFF adds/removes the whole override, while the reused
+    // deck card's own PLAY/PAUSE drives `active` inside it. (Tracking `active`
+    // here would make an in-panel PAUSE collapse the card out from under the
+    // operator.) buildNormalizedAction still drops an inactive block on save.
+    const apOn = pl.autopilot !== undefined;
+    const caOn = pl.colorAutopilot !== undefined;
+    const hueOn = typeof pl.hue === 'number';
+    const transitionSource: 'default' | 'custom' = pl.transition ? 'custom' : 'default';
+    const overlayMode: 'asis' | ActionOverlays = pl.overlays ?? 'asis';
+    const hueDeg = typeof pl.hue === 'number' ? pl.hue : 0;
+    // GLOBALS (SPEED/SIZE/SYNC) — block presence gates the card; seeded on
+    // enable so the emitted JSON always carries all three. speed/size are CPC
+    // params in [0,1]; bpmSpeedSync is the SYNC toggle (0|1).
+    const glOn = pl.globals !== undefined;
+    const gl = pl.globals ?? {};
+    const speedVal = typeof gl.speed === 'number' ? gl.speed : 0.5;
+    const sizeVal = typeof gl.size === 'number' ? gl.size : 0.5;
+    const syncOn = (gl.bpmSpeedSync ?? 0) >= 0.5;
+
+    // Adapter for the reused ColorAutopilotPanel: its config type requires a
+    // non-optional `shuffle`, while the cue's ActionColorAutopilot has it
+    // optional. Feed a COMPLETE config; onChange merges the panel's patch back
+    // into action.colorAutopilot (the panel enforces the ≥1-palette invariant
+    // itself via its removePalette guard).
+    const caConfig: DeckColorAutopilotConfig = {
+      active: !!ca?.active,
+      palettes: ca?.palettes ?? [],
+      delay_s: ca?.delay_s ?? 30,
+      shuffle: ca?.shuffle ?? false,
+      transitionMs: ca?.transitionMs,
+    };
+
+    return (
+      <>
+        {/* 1. PLAYLIST — a cue NAMES a playlist; deck-only target. */}
+        <ActionCard title="PLAYLIST">
+          <Dropdown
+            value={pl.name || null}
+            options={playlists.map((p) => ({ id: p, label: p }))}
+            onSelect={(id) => setAction({ ...pl, name: id })}
+            placeholder="Pick a playlist…"
+            emptyHint="Engine reports no playlists."
+          />
+          {/* TARGET is deck-only now — the playlist always drives the main deck.
+              We keep target on the action so the wire shape stays stable. */}
+          <Text style={styles.hint}>Target: deck — the main deck (mixer authoring removed).</Text>
+        </ActionCard>
+
+        {/* 2. AUTOPILOT PATTERNS — reuse the live deck's PatternAutopilotPanel.
+            The header ON/OFF adds/removes the whole autopilot block; the panel
+            drives every knob (PLAY/PAUSE, SHUFFLE, GROUP + SIZE/DWELL, cadence).
+            DECK TX is deliberately NOT nested here (its own card below) so the
+            cue's inherit-vs-custom transition semantics stay separate. */}
+        <ActionCard
+          title="AUTOPILOT PATTERNS"
+          right={
+            <ToggleChip
+              on={apOn}
+              onToggle={() => {
+                if (apOn) {
+                  const next = { ...pl };
+                  delete next.autopilot;
+                  setAction(next);
+                } else {
+                  // Seed a COMPLETE, valid block (engine validateAutopilot is
+                  // strict: active + delay_s>0 + shuffle, no defaults).
+                  setAction({ ...pl, autopilot: { active: true, delay_s: 30, shuffle: false } });
+                }
+              }}
+              label={apOn ? 'ON' : 'OFF'}
+            />
+          }
+        >
+          {apOn ? (
+            <PatternAutopilotPanel
+              bare
+              title=""
+              active={!!ap.active}
+              delayStr={String(ap.delay_s ?? 30)}
+              shuffle={!!ap.shuffle}
+              groupMode={!!ap.groupMode}
+              groupSize={ap.groupSize ?? 3}
+              groupDwell={ap.groupDwell ?? 6}
+              onChange={(patch) => {
+                // One key per emit; keep the block complete (active/delay_s/
+                // shuffle always present — the seed guarantees it, and buildNormalizedAction re-guards).
+                if (patch.active !== undefined) setAction({ ...pl, autopilot: { ...ap, active: patch.active } });
+                else if (patch.shuffle !== undefined) setAction({ ...pl, autopilot: { ...ap, shuffle: patch.shuffle } });
+                else if (patch.delayStr !== undefined) setAction({ ...pl, autopilot: { ...ap, delay_s: parseInt(patch.delayStr, 10) || 30 } });
+                else if (patch.groupMode !== undefined) setAction({ ...pl, autopilot: { ...ap, groupMode: patch.groupMode } });
+                else if (patch.groupSize !== undefined) setAction({ ...pl, autopilot: { ...ap, groupSize: patch.groupSize } });
+                else if (patch.groupDwell !== undefined) setAction({ ...pl, autopilot: { ...ap, groupDwell: patch.groupDwell } });
+              }}
+            />
+          ) : (
+            <Text style={styles.hint}>Off — this cue leaves the deck&apos;s pattern autopilot as-is.</Text>
+          )}
+        </ActionCard>
+
+        {/* 3. DECK TX — deck transition override (verbatim behavior). "Deck
+            default" emits no `transition` field (inherit the deck's standing
+            config); "Custom" emits a full block (all 16 blends + time + shuffle)
+            edited via the SAME control as the live deck's DECK TX. */}
+        <ActionCard title="DECK TX">
+          <Segmented
+            options={TRANSITION_SOURCE_OPTIONS}
+            value={transitionSource}
+            onChange={(id) => {
+              if (id === 'default') {
+                const next = { ...pl };
+                delete next.transition;
+                setAction(next);
+              } else if (!pl.transition) {
+                setAction({
+                  ...pl,
+                  transition: { mode: 'trans_crossfade', durationMs: 1000, enabled: true, shuffle: false },
+                });
+              }
+            }}
+          />
+          <Text style={styles.hint}>
+            Default keeps the deck&apos;s standing transition. Custom sets the full blend, time,
+            and shuffle for this cue.
+          </Text>
+          {pl.transition ? (
+            <DeckTransitionControls
+              bare
+              enabled={pl.transition.enabled ?? true}
+              mode={pl.transition.mode}
+              durationMs={pl.transition.durationMs ?? 1000}
+              shuffle={pl.transition.shuffle ?? false}
+              onChange={(patch) => setAction({
+                ...pl,
+                transition: {
+                  mode: (patch.mode ?? pl.transition!.mode) as DeckTransitionMode,
+                  durationMs: patch.durationMs ?? pl.transition!.durationMs,
+                  shuffle: patch.shuffle ?? pl.transition!.shuffle,
+                  enabled: patch.enabled ?? pl.transition!.enabled,
+                },
+              })}
+            />
+          ) : null}
+        </ActionCard>
+
+        {/* 4. AUTOPILOT COLORS — reuse the live deck's ColorAutopilotPanel. The
+            header ON/OFF adds/removes the whole colorAutopilot block; the panel
+            reads its own palette catalog + drives palettes/delay/transition/
+            shuffle. Turning ON seeds a COMPLETE, valid block (≥1 palette +
+            positive delay_s + shuffle). */}
+        <ActionCard
+          title="AUTOPILOT COLORS"
+          right={
+            <ToggleChip
+              on={caOn}
+              onToggle={() => {
+                if (caOn) {
+                  const next = { ...pl };
+                  delete next.colorAutopilot;
+                  setAction(next);
+                } else {
+                  // Turning ON requires ≥1 palette; without one we can't seed a
+                  // valid block, so keep OFF and let the empty-state hint explain.
+                  if (paletteOptions.length === 0) return;
+                  const seedPalette =
+                    ca?.palettes && ca.palettes.length > 0 ? ca.palettes : [paletteOptions[0].id];
+                  setAction({
+                    ...pl,
+                    colorAutopilot: { active: true, palettes: seedPalette, delay_s: 30, shuffle: false },
+                  });
+                }
+              }}
+              label={caOn ? 'ON' : 'OFF'}
+            />
+          }
+        >
+          {paletteOptions.length === 0 ? (
+            <Text style={styles.hint}>
+              No color palettes reported by the engine — color autopilot unavailable.
+            </Text>
+          ) : caOn ? (
+            <ColorAutopilotPanel
+              bare
+              title=""
+              config={caConfig}
+              onChange={(patch) => setAction({ ...pl, colorAutopilot: { ...caConfig, ...patch } })}
+            />
+          ) : (
+            <Text style={styles.hint}>Off — this cue leaves the deck&apos;s color palette as-is.</Text>
+          )}
+        </ActionCard>
+
+        {/* 5. HUE — NEW. Global hue shift (degrees, 0–360) applied when the cue
+            fires (deck-only). ON seeds hue:0; OFF drops the field. Controlled
+            HorizontalFader mapped 0..1 ⇄ 0..360, filled with the live hue. */}
+        <ActionCard
+          title="HUE"
+          right={
+            <ToggleChip
+              on={hueOn}
+              onToggle={() => {
+                if (hueOn) {
+                  const next = { ...pl };
+                  delete next.hue;
+                  setAction(next);
+                } else {
+                  setAction({ ...pl, hue: 0 });
+                }
+              }}
+              label={hueOn ? 'SET HUE' : 'LEAVE AS-IS'}
+            />
+          }
+        >
+          {hueOn ? (
+            <View style={{ gap: 10 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={styles.hint}>Global hue shift applied when this cue fires.</Text>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: C.text }}>{`${Math.round(hueDeg)}°`}</Text>
+              </View>
+              <HorizontalFader
+                value={hueDeg / 360}
+                onChange={(v: number) => setAction({ ...pl, hue: Math.round(v * 360) })}
+                trackStyle={{ height: 28, borderRadius: 14, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerLowest, justifyContent: 'center' }}
+                fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 14, backgroundColor: hueToHex(hueDeg) }}
+                thumbStyle={{ width: 6, height: 32, borderRadius: 3, backgroundColor: C.text, marginTop: -2 }}
+              />
+            </View>
+          ) : (
+            <Text style={styles.hint}>Leave as-is — this cue doesn&apos;t change the global hue.</Text>
+          )}
+        </ActionCard>
+
+        {/* 6. GLOBALS — NEW. Rig-wide CPC knobs (SPEED/SIZE/SYNC) applied when
+            the cue fires (deck-only). ON seeds {speed:0.5,size:0.5,bpmSpeedSync:0};
+            OFF drops the field. Lets a cue pin speed low and keep sync off. */}
+        <ActionCard
+          title="GLOBALS"
+          right={
+            <ToggleChip
+              on={glOn}
+              onToggle={() => {
+                if (glOn) {
+                  const next = { ...pl };
+                  delete next.globals;
+                  setAction(next);
+                } else {
+                  setAction({ ...pl, globals: { speed: 0.5, size: 0.5, bpmSpeedSync: 0 } });
+                }
+              }}
+              label={glOn ? 'SET GLOBALS' : 'LEAVE AS-IS'}
+            />
+          }
+        >
+          {glOn ? (
+            <View style={{ gap: 12 }}>
+              {/* SPEED */}
+              <View style={{ gap: 6 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <FieldLabel>SPEED</FieldLabel>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: C.text }}>{`${Math.round(speedVal * 100)}%`}</Text>
+                </View>
+                <HorizontalFader
+                  value={speedVal}
+                  onChange={(v: number) => setAction({ ...pl, globals: { ...gl, speed: Math.round(v * 100) / 100 } })}
+                  trackStyle={{ height: 28, borderRadius: 14, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerLowest, justifyContent: 'center' }}
+                  fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 14, backgroundColor: C.primary }}
+                  thumbStyle={{ width: 6, height: 32, borderRadius: 3, backgroundColor: C.text, marginTop: -2 }}
+                />
+              </View>
+              {/* SIZE */}
+              <View style={{ gap: 6 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <FieldLabel>SIZE</FieldLabel>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: C.text }}>{`${Math.round(sizeVal * 100)}%`}</Text>
+                </View>
+                <HorizontalFader
+                  value={sizeVal}
+                  onChange={(v: number) => setAction({ ...pl, globals: { ...gl, size: Math.round(v * 100) / 100 } })}
+                  trackStyle={{ height: 28, borderRadius: 14, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerLowest, justifyContent: 'center' }}
+                  fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 14, backgroundColor: C.primary }}
+                  thumbStyle={{ width: 6, height: 32, borderRadius: 3, backgroundColor: C.text, marginTop: -2 }}
+                />
+              </View>
+              {/* SYNC — bpmSpeedSync: drive SPEED from the arbitrated tempo. */}
+              <ToggleChip
+                on={syncOn}
+                onToggle={() => setAction({ ...pl, globals: { ...gl, bpmSpeedSync: syncOn ? 0 : 1 } })}
+                label={syncOn ? 'SPEED SYNC ON' : 'SPEED SYNC OFF'}
+              />
+              <Text style={styles.hint}>
+                SYNC drives SPEED from the arbitrated tempo (OSC/TAP). Off = SPEED stays where you set it.
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.hint}>Leave as-is — this cue doesn&apos;t change speed, size, or sync.</Text>
+          )}
+        </ActionCard>
+
+        {/* 7. OVERLAYS — cue-level overlay intent. "Leave as-is" emits nothing. */}
+        <ActionCard title="OVERLAYS">
+          <Segmented
+            options={OVERLAY_OPTIONS}
+            value={overlayMode}
+            onChange={(id) => {
+              if (id === 'asis') {
+                const next = { ...pl };
+                delete next.overlays;
+                setAction(next);
+              } else {
+                setAction({ ...pl, overlays: id as ActionOverlays });
+              }
+            }}
+          />
+          <Text style={styles.hint}>
+            Overlays = extra pattern layers stacked over the deck; ‘disable’ blacks them out for this cue.
+          </Text>
+        </ActionCard>
+      </>
+    );
+  };
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+      <Pressable
+        onPress={onClose}
+        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
+      >
+        <Pressable onPress={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 560, maxHeight: '90%' }}>
+          <View style={styles.sheet}>
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>
+                {isDefaultMode ? 'DEFAULT CUE' : (initialCue ? 'EDIT CUE' : 'ADD CUE')}
+              </Text>
+              {!isDefaultMode && onDelete ? (
+                <TouchableOpacity onPress={onDelete} style={styles.trashBtn} accessibilityLabel="Delete cue">
+                  <Text style={styles.trashLabel}>DELETE</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            {/* paddingBottom clears the sticky footer (≈48pt button + 16pt
+                margin + slack) so the last DAYS / SHUFFLE controls aren't
+                hidden behind it. */}
+            <ScrollView style={{ maxHeight: 560 }} contentContainerStyle={{ paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
+              {/* NAME — the operator-facing label (optional). */}
+              <FieldLabel>{isDefaultMode ? 'DEFAULT CUE NAME' : 'CUE NAME'}</FieldLabel>
+              <TextInput
+                value={label}
+                onChangeText={setLabel}
+                placeholder={isDefaultMode ? 'Name the default…' : 'Name this cue…'}
+                placeholderTextColor={C.icon}
+                autoCapitalize="sentences"
+                autoCorrect={false}
+                style={styles.textInput}
+                accessibilityLabel={isDefaultMode ? 'Default cue name' : 'Cue name'}
+              />
+
+              {isDefaultMode ? (
+                <Text style={[styles.hint, { marginTop: 10 }]}>
+                  The default cue is the deck&apos;s standing fallback — it runs in the gaps between
+                  planned cues and when the plan has no cues. It has no trigger, kind, or days.
+                </Text>
+              ) : null}
+
+              {/* KIND / TRIGGER — cue-only (the default cue is not a scheduled event). */}
+              {!isDefaultMode ? (
+                <>
+                  <View style={{ height: 14 }} />
+                  <FieldLabel>KIND</FieldLabel>
+                  <Segmented
+                    options={[
+                      { id: 'program', label: 'Program' },
+                      { id: 'mood', label: 'Mood' },
+                      { id: 'ambient', label: 'Ambient' },
+                    ]}
+                    value={kind}
+                    onChange={(v) => setKind(v as CueKind)}
+                  />
+
+                  <View style={{ height: 14 }} />
+                  <FieldLabel>TRIGGER</FieldLabel>
+                  <Segmented
+                    options={[
+                      { id: 'clock', label: 'Clock' },
+                      { id: 'sun', label: 'Sun' },
+                      { id: 'phase', label: 'Phase' },
+                      { id: 'mood', label: 'Mood' },
+                      { id: 'manual', label: 'Manual' },
+                    ]}
+                    value={trigger.type}
+                    onChange={(v) => setTrigger(makeTrigger(v as CueTrigger['type']))}
+                  />
+                  {renderTriggerBody()}
+                </>
+              ) : null}
+
+              {/* ACTION — PLAYLIST only now (look removed; operator decision).
+                  No segmented switch: the maker authors a single action type.
+                  Reused verbatim by the DEFAULT CUE editor. */}
+              <View style={{ height: 14 }} />
+              <FieldLabel>ACTION</FieldLabel>
+              <Text style={styles.hint}>Playlist — the only cue action (looks removed).</Text>
+              {renderActionBody()}
+
+              {/* DURATION — cue-only. A cue owns the deck for this window after it
+                  fires; outside it (and in the gaps) the default cue runs. */}
+              {!isDefaultMode ? (
+                <>
+                  <View style={{ height: 14 }} />
+                  <FieldLabel>DURATION</FieldLabel>
+                  <View style={styles.chipRow}>
+                    {DURATION_PRESETS_MIN.map((m) => {
+                      const sel = durationMin === m;
+                      return (
+                        <TouchableOpacity
+                          key={m}
+                          onPress={() => setDurationMin(m)}
+                          style={[styles.dayPill, sel && { backgroundColor: C.primary, borderColor: C.primary }]}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: sel }}
+                          accessibilityLabel={`${m} minute duration`}
+                        >
+                          <Text style={[styles.dayPillText, sel && { color: C.onPrimary }]}>
+                            {m >= 60 && m % 60 === 0 ? `${m / 60}h` : `${m}m`}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                  <View style={{ marginTop: 8 }}>
+                    <Stepper
+                      value={durationMin}
+                      step={15}
+                      onChange={setDurationMin}
+                      min={5} max={720}
+                      format={(v) => `${v} min`}
+                    />
+                  </View>
+                  <Text style={[styles.hint, { marginTop: 8 }]}>
+                    This cue owns the deck for {durationMin} min after it fires; the default cue fills the gaps.
+                  </Text>
+                </>
+              ) : null}
+
+              {/* HOLD (programs only) */}
+              {!isDefaultMode && kind === 'program' ? (
+                <>
+                  <View style={{ height: 14 }} />
+                  <FieldLabel>HOLD</FieldLabel>
+                  <Segmented
+                    options={[{ id: 'none', label: 'None' }, { id: 'min', label: 'Minutes' }]}
+                    value={holdMin && holdMin > 0 ? 'min' : 'none'}
+                    onChange={(v) => setHoldMin(v === 'min' ? (holdMin || 30) : null)}
+                  />
+                  {holdMin && holdMin > 0 ? (
+                    <View style={{ marginTop: 8 }}>
+                      <Stepper
+                        value={holdMin}
+                        step={15}
+                        onChange={setHoldMin}
+                        min={5} max={480}
+                        format={(v) => `${v} min`}
+                      />
+                    </View>
+                  ) : null}
+                </>
+              ) : null}
+
+              {/* DAYS — cue-only (the default cue applies to every day/gap). */}
+              {!isDefaultMode ? (
+                <>
+              <View style={{ height: 14 }} />
+              <FieldLabel>DAYS</FieldLabel>
+              <Segmented
+                options={[
+                  { id: 'this', label: 'This day' },
+                  { id: 'all', label: 'All days' },
+                  { id: 'pick', label: 'Pick…' },
+                ]}
+                value={daysMode}
+                onChange={(v) => setDaysMode(v as 'all' | 'this' | 'pick')}
+              />
+              {daysMode === 'pick' && isDateStringDays ? (
+                // Saved as explicit date strings — no grid representation.
+                // Show read-only so we never clobber the operator's dates.
+                <View style={styles.subBlock}>
+                  <Text style={styles.hint}>
+                    {`Specific dates: ${(days as string[]).join(', ')} (edit dates in the plan file).`}
+                  </Text>
+                </View>
+              ) : daysMode === 'pick' ? (
+                <View style={styles.pickRow}>
+                  {Array.from({ length: festivalDays }, (_, i) => i).map((i) => {
+                    const sel = Array.isArray(days) && (days as number[]).includes(i);
+                    return (
+                      <TouchableOpacity
+                        key={i}
+                        onPress={() => togglePickDay(i)}
+                        style={[styles.dayPill, sel && { backgroundColor: C.primary, borderColor: C.primary }]}
+                        accessibilityLabel={`Day ${i + 1}`}
+                        accessibilityState={{ selected: sel }}
+                      >
+                        <Text style={[styles.dayPillText, sel && { color: C.onPrimary }]}>{`D${i + 1}`}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              ) : null}
+                </>
+              ) : null}
+            </ScrollView>
+
+            {/* BLOCKED-SAVE reason (e.g. overlapping cue). Sits directly above
+                the footer so it's visible regardless of scroll position; only
+                renders while a save is blocked. */}
+            {saveError ? (
+              <View style={styles.errorBanner} accessibilityRole="alert">
+                <Text style={styles.errorText}>{saveError}</Text>
+              </View>
+            ) : null}
+
+            {/* Footer */}
+            <View style={styles.footer}>
+              <TouchableOpacity onPress={onClose} style={[styles.footerBtn, styles.footerCancel]} accessibilityLabel="Cancel">
+                <Text style={[styles.footerBtnText, { color: C.text }]}>CANCEL</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  if (isDefaultMode) {
+                    // Codex P0: fail loud rather than silently no-op if the parent
+                    // opened default mode without wiring the save handler.
+                    if (!onSaveDefault) throw new Error('CueEditorSheet: defaultCue mode requires onSaveDefault');
+                    onSaveDefault(buildDefaultCue());
+                  } else {
+                    // Validate BEFORE committing: a cue owns the deck for its
+                    // window, and two cues can't own it at once on a shared day.
+                    const candidate = buildCue();
+                    const overlap = findOverlapError(candidate);
+                    if (overlap) {
+                      // BLOCK the save — surface WHY inline, don't call onSave.
+                      setSaveError(overlap);
+                      return;
+                    }
+                    setSaveError(null);
+                    onSave(candidate);
+                  }
+                }}
+                style={[styles.footerBtn, { backgroundColor: C.primary }]}
+                accessibilityLabel={isDefaultMode ? 'Save default cue' : 'Save cue'}
+              >
+                <Text style={[styles.footerBtnText, { color: C.onPrimary }]}>
+                  {isDefaultMode ? 'SAVE DEFAULT' : (initialCue ? 'SAVE CUE' : 'ADD CUE')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+
+function makeStyles(C: Palette) {
+  return StyleSheet.create({
+    sheet: {
+      backgroundColor: C.surfaceContainerLow,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+      padding: 20,
+    },
+    sheetHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 14,
+    },
+    sheetTitle: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 15,
+      letterSpacing: 1,
+      color: C.text,
+      textTransform: 'uppercase',
+    },
+    trashBtn: {
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: C.error,
+    },
+    trashLabel: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 11,
+      letterSpacing: 0.6,
+      color: C.error,
+    },
+    subBlock: {
+      marginTop: 10,
+      padding: 12,
+      borderRadius: 10,
+      backgroundColor: C.surfaceContainerLowest,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+    },
+    hint: {
+      fontFamily: 'Inter_400Regular',
+      fontSize: 12,
+      color: C.secondary,
+    },
+    textInput: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 14,
+      color: C.text,
+      minHeight: 44,
+      paddingVertical: 10,
+      paddingHorizontal: 14,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+      backgroundColor: C.surfaceContainerHigh,
+    },
+    pickRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginTop: 10,
+    },
+    chipRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginTop: 8,
+    },
+    dayPill: {
+      minWidth: 44,
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    dayPillText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 12,
+      color: C.text,
+    },
+    errorBanner: {
+      marginTop: 14,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: C.error,
+      backgroundColor: C.surfaceContainerLowest,
+    },
+    errorText: {
+      fontFamily: 'Inter_400Regular',
+      fontSize: 12,
+      color: C.error,
+    },
+    footer: {
+      flexDirection: 'row',
+      gap: 10,
+      marginTop: 16,
+    },
+    footerBtn: {
+      flex: 1,
+      minHeight: 48,
+      borderRadius: 8,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    footerCancel: {
+      borderWidth: 1,
+      borderColor: C.ghostBorder,
+      backgroundColor: 'transparent',
+    },
+    footerBtnText: {
+      fontFamily: 'SpaceGrotesk_700Bold',
+      fontSize: 13,
+      letterSpacing: 0.8,
+    },
+  });
+}

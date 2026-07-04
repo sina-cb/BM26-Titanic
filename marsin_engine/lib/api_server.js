@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { Autopilot } from './autopilot.js';
+import { ColorAutopilot } from './color_autopilot.js';
 import { StateManager, serializeChannel as serializeChannelForState } from './state_manager.js';
 import { SnapshotManager, SnapshotLoadError } from './snapshot_manager.js';
 import { ParamPresetManager, ParamPresetError } from './param_preset_manager.js';
@@ -21,6 +22,8 @@ import {
   INTERVAL_PRESETS_MS,
 } from './scheduled_tasks.js';
 import { topicForType, TOPICS } from './ws_topic_routing.js';
+import { TimelineService, buildOverview } from './timeline/timeline_service.js';
+import { validateShowPlan as validateTimelineShowPlan } from './timeline/show_plan.js';
 import { parsePatternDefaults } from './pattern_defaults.js';
 import { UndoStack, UNDO_MAX } from './undo_stack.js';
 import { DECK_OVERLAY_MAX } from './pattern_mixer.js';
@@ -2955,15 +2958,31 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // WS event type so subscribers (CaptainPad's deck tab, future PortWatch
   // mirror, etc.) can wire `if (msg.type === 'autopilot') …` without
   // having to scrape the larger mixer broadcast.
+  function deckAutopilotState() {
+    const baseCh = mixer.getDeckChannel();
+    const ap = baseCh && baseCh.playlist ? baseCh.playlist.autopilot : null;
+    return ap || { active: false, delay_s: 30, shuffle: false };
+  }
   function broadcastAutopilot() {
-    const st = autopilot.state || {};
+    const st = deckAutopilotState();
     broadcastWs({
       type: 'autopilot',
       active: !!st.active,
       delay_s: st.delay_s !== undefined ? String(st.delay_s) : '30',
       shuffle: !!st.shuffle,
+      // Wall-clock ms of the next pattern swap (null when inactive) — drives the
+      // deck's "next pattern in M:SS" countdown. Re-broadcast on every cycle via
+      // the daemon's onSchedule hook so it stays fresh after each swap.
+      nextSwapAtMs: (typeof autopilot !== 'undefined' && autopilot) ? autopilot.nextSwapAtMs : null,
     });
   }
+
+  // Autopilot advance is main's frame-driven system: the deck `autopilot`
+  // daemon (constructed below) drives deck cycling via its self-rescheduling
+  // timer + pickNextAutoCycleEntry, and mixer/deck overlays advance off
+  // autoCycleTick / deckOverlayAutoCycleTick (one wall clock, no per-channel
+  // timers). The superseded per-channel AutopilotPool and its advance helpers
+  // were removed in the timeline merge.
 
   // The "view override" pins the engine output to the deck regardless of
   // any subsequent /mixer/view writes from another panel. When cleared,
@@ -2989,9 +3008,47 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // fader is impossible — we have no record — so we leave the engine
   // wherever its persisted mixerState put it and let the operator
   // release explicitly.
+  // Boot hydration: a persisted deck-pin can come from a real PortWatch device
+  // ('portwatch') or — defensively — a stale plan pin ('plan'). EITHER restores
+  // the deck output pin so the rig keeps the view it had before the restart.
   let viewOverrideMode =
-    (globalsState && globalsState.controlLock === 'portwatch') ? 'deck' : null;
+    (globalsState && (globalsState.controlLock === 'portwatch' || globalsState.controlLock === 'plan'))
+      ? 'deck' : null;
   let savedTargetViewFader = null;       // float pre-override
+
+  // ── controlLock SOURCE — who owns the deck-pin ───────────────────────
+  //
+  // `viewOverrideMode` is the raw output pin ('deck' | null). The
+  // `controlLock` value broadcast to every UI carries WHO forced that pin:
+  //
+  //   'portwatch' — a real PortWatch device holds the rig (HARD lockout:
+  //                 CaptainPad shows "PORTWATCH HAS THE RIG"). Lease-governed.
+  //   'plan'      — the TIMELINE (show plan) forced the deck (SOFT lock:
+  //                 CaptainPad shows a low-key yellow warning, still allows
+  //                 navigation, disables only pattern-select + mixer-activate).
+  //                 NOT lease-governed — the plan releases the pin itself via
+  //                 the timeline, never the PortWatch lease timer.
+  //   null        — nobody owns it.
+  //
+  // Boot seeding: whichever owner the persisted lock names, seed the SAME
+  // source. (Audit C2 2026-07-02: a persisted 'plan' lock used to restore the
+  // raw pin but seed source null, and currentControlLock()'s back-compat
+  // treated a source-less pin as 'portwatch' — an un-leased HARD lockout that
+  // no PortWatch device would ever release, that timelineReleaseDeckView
+  // refused to clear (source !== 'plan'), and that CaptainPad curtains with
+  // "PORTWATCH HAS THE RIG". Seeding 'plan' keeps it a SOFT lock the
+  // timeline's per-tick _reconcileDeckPin releases or re-owns within 1s.)
+  let controlLockSource =
+    (globalsState && (globalsState.controlLock === 'portwatch' || globalsState.controlLock === 'plan'))
+      ? globalsState.controlLock : null;
+
+  // The single source of truth for the broadcast `controlLock` field. A deck
+  // pin with no recorded source is treated as a PortWatch lock (back-compat:
+  // PortWatch is the only writer of the raw deck-pin besides the plan).
+  function currentControlLock() {
+    if (viewOverrideMode !== 'deck') return null;
+    return controlLockSource || 'portwatch';
+  }
 
   // ── controlLock lease ───────────────────────────────────────────────
   //
@@ -3019,11 +3076,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   let controlLockLeaseExpiresAtMs = null;
 
   function clearViewOverrideInternal() {
-    if (viewOverrideMode === 'deck' && savedTargetViewFader !== null) {
-      mixer.targetViewFader = savedTargetViewFader;
+    if (viewOverrideMode === 'deck') {
+      if (controlLockSource === 'plan') {
+        // A PLAN pin always showed the DECK (lit). Handing back to the operator
+        // (takeover / resume / pause) must KEEP the deck lit — never restore a
+        // stale saved mixer value that would black the rig out (bug 2026-07-02
+        // round 2). The operator explicitly flips to mixer output afterward if
+        // they want it. So force the deck view, ignoring savedTargetViewFader.
+        mixer.targetViewFader = 0.0;
+      } else if (savedTargetViewFader !== null) {
+        // A PortWatch device pin restores whatever the operator had before the
+        // device took over (unchanged device semantics).
+        mixer.targetViewFader = savedTargetViewFader;
+      }
     }
     viewOverrideMode = null;
     savedTargetViewFader = null;
+    controlLockSource = null;
   }
 
   function disarmControlLockLease() {
@@ -3158,14 +3227,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // namespace it ("controlLock") rather than reusing "viewOverride"
       // so listeners can tell at a glance whether they're looking at
       // raw view-fader state or "who owns the rig right now".
-      controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
+      // 'portwatch' = hard device lock, 'plan' = soft timeline lock, null = free.
+      controlLock: currentControlLock(),
       // Lease metadata — every UI can render a countdown without
       // needing to subscribe to a separate event. expiresAt is an
       // absolute UNIX ms timestamp so clients with skewed clocks
       // can still compute "remaining = max(0, expiresAt - now)" off
-      // a synchronised time source if they care.
-      controlLockLeaseExpiresAtMs: controlLockLeaseExpiresAtMs,
-      controlLockLeaseDurationMs: viewOverrideMode === 'deck'
+      // a synchronised time source if they care. Only a PortWatch lock
+      // is lease-governed; a 'plan' lock carries no lease (the timeline
+      // owns its release), so these are null for it.
+      controlLockLeaseExpiresAtMs: controlLockSource === 'portwatch' ? controlLockLeaseExpiresAtMs : null,
+      controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
         ? CONTROL_LOCK_LEASE_MS
         : null,
       currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
@@ -3180,7 +3252,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // boot to seed the initial value. Idempotent + cheap (saveGlobalsState
   // batches via the same hook the rest of the globals use).
   function syncControlLockToGlobals() {
-    const next = viewOverrideMode === 'deck' ? 'portwatch' : null;
+    const next = currentControlLock();
     if ((globalsState.controlLock || null) !== next) {
       globalsState.controlLock = next;
       try {
@@ -3200,14 +3272,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // fresh lease so the lock doesn't outlive the engine restart by
   // more than CONTROL_LOCK_LEASE_MS. Without this, a crash while
   // someone held the lock would silently strand CaptainPad after
-  // boot until an operator manually cleared the override.
-  if (viewOverrideMode === 'deck') {
+  // boot until an operator manually cleared the override. A 'plan'
+  // pin is NOT lease-governed — the timeline re-pins + releases it
+  // itself — so we never arm the PortWatch lease for it.
+  if (viewOverrideMode === 'deck' && controlLockSource === 'portwatch') {
     armControlLockLease();
   }
 
   // Initialize Autopilot Daemon. We are always in playlist mode, so the
   // "current key" is the active entry id and the swap target is the next
-  // entry in the deck channel's playlist.
+  // entry in the deck channel's playlist. This is main's frame-driven deck
+  // daemon (#40 tempo overhaul): the daemon's timer is controlled by
+  // `autopilot.updateState({active,delay_s})`, and the next-entry pick reads
+  // `baseCh.playlist.autopilot` (mirrored shuffle/group fields). Mixer
+  // overlays + deck overlays cycle off the SAME pure picker via
+  // `autoCycleTick` / `deckOverlayAutoCycleTick` (per-frame, no per-channel
+  // timers). The superseded per-channel AutopilotPool is gone.
   const autopilot = new Autopilot(
     listPatterns,
     patternsDir,
@@ -3261,8 +3341,510 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           console.warn('Autopilot playlist swap failed:', e.message);
         }
       }
-    }
+    },
+    // Re-broadcast the next-swap time on every (re)schedule so the deck's
+    // pattern-autopilot countdown stays accurate after each swap.
+    () => broadcastAutopilot(),
   );
+
+  // ── COLOR autopilot (palette cycling, docs/39) ──────────────────────
+  // Resolve a colorPalette id → CPC params and WRITE it (the SAME path looks /
+  // timeline cues use: hue-only c1/c2 → colorPalette1/2 {h,s,v}). Throws loud on
+  // an unknown id (codex P0 — no silent skip). Shared by the engine ColorAutopilot
+  // daemon AND the timeline's setColorAutopilot dep, so a cue and a manual deck
+  // write resolve palettes identically.
+  function resolveColorPaletteParams(id) {
+    const palettes = Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [];
+    const entry = palettes.find((p) => p && p.id === id);
+    if (!entry) throw new Error(`palette "${id}" not found in colorPalettes config`);
+    return {
+      colorPalette1: { h: entry.c1, s: 1, v: 1 },
+      colorPalette2: { h: entry.c2, s: 1, v: 1 },
+    };
+  }
+  function knownPaletteIds() {
+    const palettes = Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [];
+    return new Set(palettes.map((p) => p && p.id).filter(Boolean));
+  }
+  // Write an already-resolved (or crossfade-interpolated) params object to the
+  // rig — CPC writes ONLY. The CPC fan-out (paramCenter.onChange, wired at
+  // boot) already handles persistence + the throttled WS broadcast for every
+  // param writer (docs/24 §7.2), so this is safe to call per crossfade FRAME.
+  // It deliberately does NOT saveAllState()/broadcastColorAutopilot(): doing
+  // that on every tween frame (~25 fps) rewrote every state YAML per frame AND
+  // flooded /ws/control with `colorAutopilot` echoes, so a delay/transition tap
+  // racing an in-flight stale echo visibly snapped back then forward on the
+  // deck (operator report 2026-07-03: "double-changing"). The pattern
+  // Autopilot broadcasts its config only on state change / (re)schedule; the
+  // color autopilot now follows the same discipline (setColorAutopilot + the
+  // onSchedule hook cover every config change).
+  function writeColorPaletteParams(params) {
+    if (!paramCenter) throw new Error('paramCenter not available for color autopilot');
+    for (const k in params) paramCenter.set(k, params[k], 'colorAutopilot');
+  }
+  // HARD-CUT palette apply (one write per cycle tick, never per frame):
+  // surface the change the same way an operator palette write would — persist +
+  // broadcast so every UI mirrors the live palette without polling.
+  function applyColorPalette(id) {
+    writeColorPaletteParams(resolveColorPaletteParams(id));
+    saveAllState();
+    broadcastColorAutopilot();
+  }
+
+  // The palette-cycling daemon. Independent timer from the pattern `autopilot`
+  // (they run in parallel; color cycling never changes the pattern). Persists its
+  // {active,palettes,delay_s,shuffle,transitionMs} block into config.yaml under
+  // colorAutopilot. The crossfade hooks (resolve + applyParams) let a switch RAMP
+  // the palette params over `transitionMs` instead of hard-cutting (docs/39).
+  const colorAutopilot = new ColorAutopilot(applyColorPalette, undefined, {
+    resolvePaletteFn: resolveColorPaletteParams,
+    applyParamsFn: writeColorPaletteParams,
+    // Re-broadcast the next-swap time on every (re)schedule so the deck
+    // color-autopilot countdown stays accurate after each palette switch.
+    onSchedule: () => broadcastColorAutopilot(),
+  });
+
+  // Single payload shape for every colorAutopilot writer (REST, timeline cue),
+  // mirroring broadcastAutopilot. CaptainPad's deck tab wires
+  // `if (msg.type === 'colorAutopilot') …`.
+  function colorAutopilotState() {
+    const st = colorAutopilot.state;
+    return {
+      active: !!st.active,
+      palettes: Array.isArray(st.palettes) ? [...st.palettes] : [],
+      delay_s: typeof st.delay_s === 'number' ? st.delay_s : 30,
+      shuffle: !!st.shuffle,
+      // transitionMs (docs/39): crossfade duration on a palette switch. 0 ==
+      // hard cut. Older persisted configs omit it → report 0.
+      transitionMs: typeof st.transitionMs === 'number' ? st.transitionMs : 0,
+      // Wall-clock ms of the next palette switch (null when inactive) — drives
+      // the deck's "next color in M:SS" countdown. Kept fresh each cycle via the
+      // daemon's onSchedule hook.
+      nextSwapAtMs: colorAutopilot.nextSwapAtMs,
+    };
+  }
+  function broadcastColorAutopilot() {
+    broadcastWs({ type: 'colorAutopilot', ...colorAutopilotState() });
+  }
+  // Configure + (re)start the color autopilot from a validated wire object. Used
+  // by the REST route AND the timeline's setColorAutopilot dep. active:true →
+  // start cycling that set; active:false → stop (the daemon pauses on inactive).
+  function setColorAutopilot(wire) {
+    const validated = ColorAutopilot.validate(wire, knownPaletteIds());
+    colorAutopilot.setState(validated);
+    broadcastColorAutopilot();
+    return colorAutopilotState();
+  }
+
+  // Timeline-cue variant of setColorAutopilot: same config/(re)start, but on an
+  // ACTIVATING cue it also applies the FIRST palette IMMEDIATELY rather than
+  // waiting a full delay_s. The immediate apply crossfades per the cue's
+  // transitionMs, seeded from the LIVE on-screen palette (paramCenter's current
+  // colorPalette1/2) so the fade starts from what the operator actually sees —
+  // not a stale/null start that would jump then fade. Scoped to the timeline dep
+  // (the operator's manual /color-autopilot REST toggle keeps its wait-then-cycle
+  // cadence). colorAutopilot.triggerNext() applies palette[0] now AND reschedules
+  // the next switch, so the ongoing cadence is unchanged.
+  function timelineSetColorAutopilot(wire) {
+    const out = setColorAutopilot(wire);
+    if (wire && wire.active && paramCenter) {
+      colorAutopilot.seedCurrentParams({
+        colorPalette1: paramCenter.get('colorPalette1'),
+        colorPalette2: paramCenter.get('colorPalette2'),
+      });
+      // Fire-and-forget: the crossfade tween schedules its own frames. A throw
+      // here (e.g. unknown palette) can't happen — the ids were validated above.
+      colorAutopilot.triggerNext();
+    }
+    return out;
+  }
+
+  // ── Timeline service (docs/38 §15) ──────────────────────────────────
+  // The Timeline (show director) runs IN the engine now — no separate
+  // :6965 companion process. It owns a 1 s tick, reads mood DIRECTLY off
+  // the CPC, and applies actions by calling the same INTERNAL helpers the
+  // /deck/playlist, /mixer autopilot, /param-center, /scene, and
+  // /scheduled-tasks routes use — no HTTP self-calls. Gated on
+  // config.timeline.enabled. Constructed here (after the deck `autopilot`
+  // daemon + playlistManager + paramCenter are ready); started below once
+  // the server is listening, and stopped on engine shutdown via
+  // server.stopTimeline.
+  //
+  // The deps below are thin wrappers over the existing route code paths so
+  // a timeline-driven playlist/autopilot/CPC/scene/task change is
+  // indistinguishable from the operator doing it from CaptainPad (same
+  // broadcasts, same persistence). Autopilot now rides main's frame-driven
+  // system: setting `channel.playlist.autopilot {active,delay_s,shuffle}`
+  // + saving + broadcasting is all the deck daemon / autoCycleTick need —
+  // they re-read that block every tick, so there is no pool to arm/rearm.
+  function timelineSetAutopilotOnDeck(state) {
+    const baseCh = mixer.getDeckChannel();
+    if (!baseCh) throw new Error('no deck channel');
+    baseCh.playlist = baseCh.playlist || { name: null, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+    const ap = baseCh.playlist.autopilot = baseCh.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
+    if (state.active !== undefined) ap.active = !!state.active;
+    if (state.delay_s !== undefined) ap.delay_s = parseInt(state.delay_s, 10) || 30;
+    if (state.shuffle !== undefined) ap.shuffle = !!state.shuffle;
+    // Pattern-autopilot GROUP LOCALITY (docs — deck dwell window). The deck
+    // daemon / pickNextAutoCycleEntry re-read these three fields off
+    // baseCh.playlist.autopilot every advance and clamp groupSize/groupDwell to
+    // AUTO_GROUP_* on use, so we just mirror the cue's authored values here. A
+    // NaN integer keeps the prior value rather than corrupting the block.
+    if (state.groupMode !== undefined) ap.groupMode = !!state.groupMode;
+    if (state.groupSize !== undefined) {
+      const gs = parseInt(state.groupSize, 10);
+      if (!Number.isNaN(gs)) ap.groupSize = gs;
+    }
+    if (state.groupDwell !== undefined) {
+      const gd = parseInt(state.groupDwell, 10);
+      if (!Number.isNaN(gd)) ap.groupDwell = gd;
+    }
+    // Drive main's deck daemon timer (active/delay) the SAME way POST /autopilot
+    // does — updateState reschedules the self-rescheduling setTimeout. The
+    // shuffle pick is read from baseCh.playlist.autopilot (mirrored above).
+    autopilot.updateState({ active: ap.active, delay_s: String(ap.delay_s), shuffle: ap.shuffle });
+    saveAllState();
+    broadcastMixerState();
+    broadcastAutopilot();
+  }
+  function timelineSetAutopilotOnMixer(id, state) {
+    const ch = mixer.getMixerChannel(id);
+    if (!ch) throw new Error(`mixer channel not found: ${id}`);
+    ch.playlist = ch.playlist || { name: null, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+    const ap = ch.playlist.autopilot = ch.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
+    if (state.active !== undefined) ap.active = !!state.active;
+    if (state.delay_s !== undefined) ap.delay_s = parseInt(state.delay_s, 10) || 30;
+    if (state.shuffle !== undefined) ap.shuffle = !!state.shuffle;
+    // Pattern-autopilot GROUP LOCALITY — the mixer autoCycle reads these three
+    // off the same block (parity with the deck mirror + the REST mixer route).
+    // Without this a cue/look authoring group fields on a mixer/`all` target
+    // would validate clean then be silently dropped here (codex P0 — no silent
+    // partial apply). NaN integers keep the prior value.
+    if (state.groupMode !== undefined) ap.groupMode = !!state.groupMode;
+    if (state.groupSize !== undefined) {
+      const gs = parseInt(state.groupSize, 10);
+      if (!Number.isNaN(gs)) ap.groupSize = gs;
+    }
+    if (state.groupDwell !== undefined) {
+      const gd = parseInt(state.groupDwell, 10);
+      if (!Number.isNaN(gd)) ap.groupDwell = gd;
+    }
+    // Mixer overlays cycle off autoCycleTick, which re-reads this block every
+    // frame (seed/wait/due) — no per-channel timer to arm. Re-seed the
+    // wall-clock anchor + drop any group window so the next tick treats this as
+    // a fresh arm, then persist + broadcast so the UI reflects it.
+    ch._autoCycleLastAdvanceMs = null;
+    if (ch._autoGroup) { ch._autoGroup.windowIds = null; ch._autoGroup.swapsLeft = 0; }
+    saveAllState();
+    broadcastWs({ type: 'mixerAutopilot', channelId: id, autopilot: ap });
+    broadcastMixerState();
+  }
+  function timelineLoadPlaylistOnDeck(name) {
+    const baseCh = mixer.getDeckChannel();
+    if (!baseCh) throw new Error('no deck channel');
+    const pl = playlistManager.load(name);
+    if (!pl) throw new Error(`playlist not found: ${name}`);
+    // An empty playlist is a legitimate "nothing loaded" state, but a playlist
+    // whose entries are ALL missing pattern files must FAIL LOUD (codex P0) — the
+    // deck must never silently load a broken `_missing` entry. The timeline's
+    // per-cue try/catch surfaces this as a loud cueError.
+    const firstEntry = pl.entries.find(e => !e._missing);
+    if (!firstEntry) {
+      if (pl.entries.length > 0) {
+        throw new Error(`playlist "${name}" has no loadable entries`);
+      }
+      baseCh.playlist = {
+        name: pl.name, activeEntryId: null, cursor: 0,
+        autopilot: (baseCh.playlist && baseCh.playlist.autopilot) || { active: false, delay_s: 30, shuffle: false },
+      };
+      saveAllState();
+      broadcastMixerState();
+      return;
+    }
+    // Route the deck swap through the TRANSITION-aware loader (same path the
+    // pattern-autopilot swap + the manual /deck/playlist route use) so a cue's
+    // authored `transition` (mode/duration/shuffle, set on deckTransitionConfig
+    // by _applyDeckTransition just before this load) actually ANIMATES the swap
+    // instead of hard-cutting (operator: "use the settings for the cue to do
+    // transition of pattern"). When the effective config is disabled (a "default"
+    // cue that inherits a deck with transitions off), the WithTransition loader
+    // itself falls back to the exact instant load + save/broadcast this used to
+    // do — byte-for-byte identical.
+    //
+    // CONCURRENCY: only ONE deck swap can animate at a time (the mixer refuses an
+    // overlapping one with EBUSY). A cue apply can land on the deck while a prior
+    // swap is still fading — most notably on BOOT, where catchUp restores a cue
+    // (animated) and the autopilot baseline loads its playlist immediately after.
+    // A second animated swap can't start, so LAND THE TARGET INSTANTLY in that
+    // window — the SAME guaranteed-load behavior this path always had before
+    // transitions were added (the cue content must never be dropped). This is a
+    // concurrency decision, not error-hiding: we animate when we can, else load
+    // now. The returned `done` promise is intentionally NOT awaited: the fade
+    // runs in the background (mixer-driven), same as an operator's manual swap.
+    if (deckSwapInFlightReason()) {
+      loadPlaylistEntry(baseCh, pl.name, firstEntry.id);
+      saveAllState();
+      opts.pattern = baseCh.pattern;
+      broadcastWs({ type: 'pattern', name: baseCh.pattern });
+      broadcastMixerState();
+    } else {
+      loadPlaylistEntryWithTransition(baseCh, pl.name, firstEntry.id, deckTransitionConfig);
+    }
+  }
+  function timelineLoadPlaylistOnMixer(id, name) {
+    const ch = mixer.getMixerChannel(id);
+    if (!ch) throw new Error(`mixer channel not found: ${id}`);
+    const pl = playlistManager.load(name);
+    if (!pl) throw new Error(`playlist not found: ${name}`);
+    // Same fail-loud contract as the deck loader: never silently load a broken
+    // `_missing` entry. An all-missing playlist throws; a truly empty one is the
+    // legitimate "nothing loaded" state.
+    const firstEntry = pl.entries.find(e => !e._missing);
+    if (!firstEntry) {
+      if (pl.entries.length > 0) {
+        throw new Error(`playlist "${name}" has no loadable entries`);
+      }
+      ch.playlist = { name: pl.name, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+      saveAllState();
+      broadcastMixerState();
+      return;
+    }
+    loadPlaylistEntry(ch, pl.name, firstEntry.id);
+    saveAllState();
+    broadcastChannelPlaylistData(ch);
+    broadcastMixerState();
+  }
+  // Patch the live deckTransitionConfig from a timeline cue (docs/38 §16.9). Same
+  // validate/clamp contract as POST /deck/transition-config so an authored
+  // transition can never push an out-of-range duration to the render loop. The
+  // mode is gated by the show_plan validator (trans_crossfade|flash|dissolve)
+  // but we re-assert the trans_* shape here too — FAIL LOUD, never coerce.
+  function timelineSetDeckTransition(patch) {
+    if (!patch || typeof patch !== 'object') throw new Error('setDeckTransition: patch must be an object');
+    if (patch.enabled !== undefined) deckTransitionConfig.enabled = !!patch.enabled;
+    if (patch.shuffle !== undefined) deckTransitionConfig.shuffle = !!patch.shuffle;
+    if (patch.mode !== undefined) {
+      if (typeof patch.mode !== 'string' || !patch.mode.startsWith('trans_')) {
+        throw new Error(`setDeckTransition: mode must be a trans_* name, got '${patch.mode}'`);
+      }
+      deckTransitionConfig.mode = patch.mode;
+    }
+    if (patch.durationMs !== undefined) {
+      const n = Number(patch.durationMs);
+      if (!Number.isFinite(n)) throw new Error(`setDeckTransition: durationMs must be finite, got '${patch.durationMs}'`);
+      deckTransitionConfig.durationMs = Math.max(DECK_TRANSITION_MIN_MS, Math.min(DECK_TRANSITION_MAX_MS, n));
+    }
+    saveAllState();
+    broadcastWs({ type: 'deckTransitionConfig', ...deckTransitionConfig });
+  }
+  // Enable / disable ALL deck overlays from a timeline cue (docs/38 §16.9).
+  // `enabled:true` honors the deck's configured overlays (flips each overlay's
+  // own enabled flag on); `enabled:false` turns them all off. Mirrors the
+  // PATCH /deck/overlays/:id { enabled } write per overlay, then saves +
+  // broadcasts once.
+  function timelineSetDeckOverlaysEnabled(enabled) {
+    const want = !!enabled;
+    const overlays = mixer.getDeckOverlays ? mixer.getDeckOverlays() : [];
+    for (const overlay of overlays) overlay.enabled = want;
+    saveAllState();
+    broadcastDeckState();
+  }
+  // Pin engine output to the deck via the EXISTING viewOverride machinery
+  // (docs/38 §16.9). The TIMELINE owns this pin while the plan drives the deck —
+  // so we do NOT arm the controlLock (PortWatch 30 s) lease here; the plan's
+  // own operator-takeover lease governs release. Idempotent: a no-op when
+  // already pinned to deck.
+  function timelineForceDeckView() {
+    // The plan owns the deck-pin as a SOFT lock ('plan'), distinct from a real
+    // PortWatch device lock ('portwatch'). If already pinned to deck, only the
+    // SOURCE may need upgrading to 'plan' (e.g. boot restored a bare deck pin) —
+    // but never DOWNGRADE a real PortWatch lock that's currently held.
+    if (viewOverrideMode === 'deck') {
+      if (controlLockSource !== 'portwatch' && controlLockSource !== 'plan') {
+        controlLockSource = 'plan';
+        syncControlLockToGlobals();
+        broadcastViewOverride();
+      }
+      // A plan pin ALWAYS shows the deck: if a stale persisted view left the
+      // live fader on the mixer while the pin is a plan soft-lock, snap it to
+      // the deck so the locked output is the lit deck, never a black mixer
+      // (bug 2026-07-02 round 2). Never touch a PortWatch-owned pin's fader.
+      if (controlLockSource === 'plan' && mixer.targetViewFader !== 0.0) {
+        mixer.targetViewFader = 0.0;
+      }
+      return;
+    }
+    savedTargetViewFader = mixer.targetViewFader;
+    mixer.targetViewFader = 0.0;
+    viewOverrideMode = 'deck';
+    // SOFT lock: source 'plan'. We do NOT arm the PortWatch lease here — the
+    // plan releases the pin itself via the timeline (resume/handback).
+    controlLockSource = 'plan';
+    syncControlLockToGlobals();
+    broadcastViewOverride();
+    console.log('[viewOverride] pinned to deck by timeline (plan soft-lock)');
+  }
+
+  // Release the TIMELINE's soft deck-pin (docs/38 §16.9). The counterpart to
+  // timelineForceDeckView: the plan calls this when it STOPS driving the deck
+  // (pause, autopilot-off, deactivate) so the yellow "PLAN IS RUNNING" lock
+  // clears and CaptainPad regains the deck/mixer. Reuses the same
+  // clearViewOverrideInternal machinery as a manual view/clear — no parallel
+  // pin. Codex P0 SAFETY: only ever clears a pin OWNED BY THE PLAN. If a real
+  // PortWatch device currently owns the deck ('portwatch'), we leave it
+  // untouched — the plan must never yank a hardware lock. A no-op when nothing
+  // is pinned or the plan doesn't own the pin.
+  function timelineReleaseDeckView() {
+    if (viewOverrideMode !== 'deck') return;         // nothing pinned
+    if (controlLockSource !== 'plan') return;         // not the plan's pin (e.g. portwatch) → leave it
+    clearViewOverrideInternal();
+    syncControlLockToGlobals();
+    broadcastViewOverride();
+    console.log('[viewOverride] plan released the deck pin (soft-lock cleared)');
+  }
+
+  const timelineConfigBlock = (engineCore.engineConfig && engineCore.engineConfig.timeline) || {};
+  // Gate the in-engine Timeline on config.timeline.enabled. The env escape
+  // hatch BM26_DISABLE_TIMELINE=1 lets deck/playlist-focused tests boot the
+  // engine WITHOUT the show director touching the deck baseline on boot
+  // (the timeline's whole job is to drive the deck, which would otherwise
+  // override a test's restored deck state).
+  const timelineEnabled = timelineConfigBlock.enabled === true
+    && process.env.BM26_DISABLE_TIMELINE !== '1';
+  const timelineMoodCfg = timelineConfigBlock.mood || {};
+  const timelineMoodKey = timelineMoodCfg.key || 'audioParty';
+  const timelinePartyThreshold = typeof timelineMoodCfg.partyThreshold === 'number'
+    ? timelineMoodCfg.partyThreshold : 0.5;
+
+  let timelineService = null;
+  if (timelineEnabled) {
+    const sceneName = opts.modelName || 'default';
+    const timelineSceneDir = path.join(
+      patternsDir, '..', '..', 'simulation', 'scenes', sceneName, 'timeline',
+    );
+    timelineService = new TimelineService({
+      scene: sceneName,
+      sceneDir: timelineSceneDir,
+      stateDir,
+      getMood: () => {
+        // Read the mood key DIRECTLY off the CPC (docs/38 §15). The audio
+        // companion populates audioParty; default CALM (0) when unknown so a
+        // mood cue never spuriously fires before the first analyser frame.
+        let value = 0;
+        try {
+          if (paramCenter) {
+            const v = paramCenter.get(timelineMoodKey);
+            value = typeof v === 'number' ? v : (v && typeof v.value === 'number' ? v.value : 0);
+          }
+        } catch (_) {
+          value = 0; // key not registered yet → calm
+        }
+        return { party: value >= timelinePartyThreshold ? 1 : 0, value };
+      },
+      deps: {
+        loadPlaylist: ({ target, name }) => {
+          if (target.kind === 'deck') return timelineLoadPlaylistOnDeck(name);
+          return timelineLoadPlaylistOnMixer(target.id, name);
+        },
+        setAutopilot: ({ target, state }) => {
+          if (target.kind === 'deck') return timelineSetAutopilotOnDeck(state);
+          return timelineSetAutopilotOnMixer(target.id, state);
+        },
+        setParams: (obj) => {
+          if (!paramCenter) throw new Error('paramCenter not available');
+          for (const k in obj) {
+            const r = paramCenter.set(k, obj[k], 'timeline');
+            // FAIL LOUD on an AUTHORING error (codex P0 — no silent drop): a
+            // typo'd/unknown CPC key or a malformed value would otherwise vanish
+            // with no cueError, so a cue's `globals`/look would silently do
+            // nothing. `source_lock` is NOT an authoring error — it's normal
+            // runtime arbitration (another source holds the param) — so let it
+            // pass silently, exactly as a live operator write would be arbitrated.
+            if (r && r.status === 'ignored' && r.reason !== 'source_lock') {
+              throw new Error(`setParams: '${k}' rejected (${r.reason})`);
+            }
+          }
+        },
+        // A cue/look `master` global drives the DECK GRAND MASTER through the
+        // EXACT path the operator's PATCH /mixer { master } uses (mixer.setMaster
+        // + save + broadcastMixerState), so a plan's master is indistinguishable
+        // from the operator setting it by hand (Task 1 unify). Before this, the
+        // timeline wrote `master` to the CPC — which has no `master` param — so
+        // the deck brightness never changed (a silent no-op / separate route).
+        // Codex P0: reject a non-finite master loudly (never black the rig).
+        setMaster: (value) => {
+          const mv = validateFader(value);
+          if (!mv.ok) throw new Error(`master global invalid: ${mv.error}`);
+          mixer.setMaster(mv.value);
+          saveAllState();
+          broadcastMixerState();
+        },
+        requestScene: (name) => {
+          if (typeof engineCore.requestSceneSwitch !== 'function') {
+            throw new Error('engine does not support scene switching (no requestSceneSwitch hook)');
+          }
+          return engineCore.requestSceneSwitch(name);
+        },
+        patchScheduledTask: (id, patch) => scheduledTaskService.patch(id, patch),
+        fireScheduledTask: (id) => scheduledTaskService.fireNow(id),
+        listMixerChannelIds: () => mixer.getMixerChannels().map(c => c.id),
+        listPlaylists: () => playlistManager.list(),
+        // docs/38 §16.9 deck knobs + mixer→deck output pin. Bound to the real
+        // internal engine functions (no HTTP self-calls), same style as above.
+        setDeckTransition: (patch) => timelineSetDeckTransition(patch),
+        setDeckOverlaysEnabled: (enabled) => timelineSetDeckOverlaysEnabled(enabled),
+        // Color autopilot (docs/39): a deck playlist cue's colorAutopilot block
+        // configures + (re)starts / stops the engine palette-cycling daemon.
+        // Bound to the real internal fn (no HTTP self-call). On cue START we
+        // also apply the FIRST palette immediately (crossfading per the cue's
+        // transitionMs, seeded from the live on-screen color) instead of waiting
+        // a full delay_s and hard-cutting — so a cue's color settings visibly
+        // transition the deck the moment it fires (operator: "use the settings
+        // for the cue to do transition of ... color").
+        setColorAutopilot: (wire) => timelineSetColorAutopilot(wire),
+        // Global HUE SHIFT (docs/39 §F-hue): a deck playlist cue's `hue` routes
+        // through the SAME internal path as POST /global-effect-hue (and the
+        // CaptainPad hue slider, which sends setGlobalHue(deg, 0)). rot/spin is
+        // fixed 0. FAIL LOUD if the controller is missing (codex P0 — never
+        // silently drop an authored hue).
+        setGlobalHue: (degrees) => {
+          if (!globalEffectsController) throw new Error('global effects controller not initialized');
+          const hv = validateHue(degrees);
+          if (!hv.ok) throw new Error(hv.error);
+          // setHueShift re-validates + normalizes (degrees [0,360), rot 0) and
+          // throws on non-finite — defence in depth, mirroring the POST route.
+          globalEffectsController.setHueShift(hv.value, 0);
+          globalsState.hueShift = { ...globalEffectsController.hueShift };
+          // Persist through saveGlobalsState (NOT saveAllState, which only
+          // writes mixer/deck state) so the authored hue survives a reboot, and
+          // broadcast mixer state alongside the hue message — mirroring POST
+          // /global-effect-hue exactly.
+          stateManager.saveGlobalsState(globalsState, paramCenter);
+          broadcastWs({ type: 'globalHueShift', hueShift: { ...globalEffectsController.hueShift } });
+          broadcastMixerState();
+        },
+        forceDeckView: () => timelineForceDeckView(),
+        // Release the plan's soft deck-pin (docs/38 §16.9). Called on every
+        // transition where the plan stops driving the deck (pause / autopilot
+        // off / deactivate) so the 'plan' controlLock clears. Only touches a
+        // 'plan'-owned pin — never a real PortWatch hardware lock.
+        releaseDeckView: () => timelineReleaseDeckView(),
+        // Read-only view of the engine's current view-override pin so getState()
+        // can surface `forcingDeckView` (plan active AND output pinned to deck).
+        getViewOverrideMode: () => viewOverrideMode,
+      },
+      broadcast: broadcastWs,
+      config: {
+        enabled: true,
+        activePlan: timelineConfigBlock.activePlan || 'playa_default',
+        tickMs: timelineConfigBlock.tickMs || 1000,
+        programLeaseSec: timelineConfigBlock.programLeaseSec || 30,
+        operatorLeaseSec: timelineConfigBlock.operatorLeaseSec || 120,
+        mood: { key: timelineMoodKey, partyThreshold: timelinePartyThreshold },
+        colorPalettes: Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [],
+      },
+    });
+  }
 
   const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -3275,10 +3857,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
 
     // Body parsing helper
+    // Cap request bodies at ~1 MB. An unbounded body (e.g. a 10k-cue timeline
+    // plan POST) buffers into memory and then stalls the event loop in
+    // validation/overview — reject it BEFORE we finish buffering or parse.
+    const MAX_BODY_BYTES = 1024 * 1024;
     const readBody = (callback) => {
       let body = '';
-      req.on('data', chunk => body += chunk.toString());
+      let size = 0;
+      let aborted = false;
+      req.on('data', chunk => {
+        if (aborted) return;
+        size += chunk.length;
+        if (size > MAX_BODY_BYTES) {
+          aborted = true;
+          res.writeHead(413); res.end(JSON.stringify({ error: 'Request body too large (max 1 MB)' }));
+          req.destroy();
+          return;
+        }
+        body += chunk.toString();
+      });
       req.on('end', () => {
+        if (aborted) return;
         try {
           callback(JSON.parse(body || '{}'));
         } catch (e) {
@@ -3987,6 +4586,198 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(code); res.end(JSON.stringify({ error: e.message }));
       }
 
+    // ── TIMELINE API (docs/38 §15 — timeline runs IN the engine) ────────
+    // GET /timeline/state · GET/POST /timeline/plans · GET/PUT/DELETE
+    // /timeline/plans/:name · POST /timeline/plan/activate ·
+    // /autopilot · /resume · /takeover · /activity · /program/end · /cues/:id/fire.
+    // All JSON, fail loud (400/404 + {error}). The service is null when
+    // config.timeline.enabled is false → 503 so the UI knows it's off.
+    } else if (req.url === '/timeline/state' && req.method === 'GET') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const payload = JSON.stringify(timelineService.getState());
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(payload);
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/timeline/overview' && req.method === 'GET') {
+      // Multi-day overview of the ACTIVE plan for the UI (docs/38 §15.2).
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const payload = JSON.stringify(buildOverview(timelineService.plan, Date.now()));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(payload);
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/timeline/overview' && req.method === 'POST') {
+      // Overview of a POSTED (possibly UNSAVED) plan — live maker previews.
+      // Validate first so a malformed draft fails loud with 400 (docs/38 §15.2).
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(data => {
+        let plan;
+        try {
+          plan = validateTimelineShowPlan(data);
+        } catch (e) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: e.message }));
+        }
+        try {
+          const payload = JSON.stringify(buildOverview(plan, Date.now()));
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(payload);
+        } catch (e) {
+          res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.url === '/timeline/plans' && req.method === 'GET') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const payload = JSON.stringify({ plans: timelineService.listPlans() });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(payload);
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/timeline/plans' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(async (data) => {
+        try {
+          // savePlan is async: saving over the ACTIVE plan hot-reloads it
+          // (in-memory swap + catchUp) so the live overview/fires update.
+          const plan = await timelineService.savePlan(data);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, name: plan.name }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.url.match(/^\/timeline\/plans\/[^\/]+$/)) {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      const name = decodeURIComponent(req.url.split('/')[3]);
+      if (req.method === 'GET') {
+        try {
+          // Resolve the plan BEFORE writing any header — getPlan throws on a
+          // missing/broken plan, and writing 200 first would make the 404
+          // path crash with ERR_HTTP_HEADERS_SENT.
+          const plan = timelineService.getPlan(name);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(plan));
+        } catch (e) {
+          res.writeHead(404); res.end(JSON.stringify({ error: e.message }));
+        }
+      } else if (req.method === 'PUT') {
+        readBody(async (data) => {
+          try {
+            // The plan body's own `name` is authoritative; the URL name must
+            // match so a PUT can't silently rename (fail loud on mismatch).
+            if (data && data.name !== undefined && data.name !== name) {
+              res.writeHead(400);
+              return res.end(JSON.stringify({ error: `plan name mismatch: url "${name}" vs body "${data.name}"` }));
+            }
+            const plan = await timelineService.savePlan({ ...data, name });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, name: plan.name }));
+          } catch (e) {
+            res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          }
+        });
+      } else if (req.method === 'DELETE') {
+        try {
+          timelineService.deletePlan(name);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      } else {
+        res.writeHead(405); res.end(JSON.stringify({ error: 'method not allowed' }));
+      }
+    } else if (req.url === '/timeline/plan/activate' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(data => {
+        if (!data || typeof data.name !== 'string') {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'body { name } required' }));
+        }
+        timelineService.activatePlan(data.name)
+          .then(name => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, activePlan: name })); })
+          .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
+      });
+    } else if (req.url === '/timeline/autopilot' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(data => {
+        if (!data || typeof data.enabled !== 'boolean') {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'body { enabled: Bool } required' }));
+        }
+        timelineService.setAutopilotEnabled(data.enabled)
+          .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
+          .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
+      });
+    } else if (req.url === '/timeline/resume' && req.method === 'POST') {
+      // Explicit operator hand-back (docs/38 §14.5 + §16): end the takeover
+      // (clear operator lease + exit 'overridden'), resume the plan at now
+      // (catchUp). Async.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      timelineService.resume()
+        .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
+        .catch(e => { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); });
+    } else if (req.url === '/timeline/takeover' && req.method === 'POST') {
+      // Operator-takeover lease ARM (docs/38 §16): CaptainPad signals the
+      // operator grabbed manual control. mode→overridden, arm the lease.
+      // Idempotent (re-calling refreshes expiry).
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const r = timelineService.takeover();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(r));
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/timeline/activity' && req.method === 'POST') {
+      // Operator-activity ping (docs/38 §16): CaptainPad throttles to ~once/10s
+      // while interacting; refreshes the takeover lease expiry. No-op if no
+      // lease is held.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const r = timelineService.activity();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(r));
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/timeline/program/end' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      timelineService.endProgram()
+        .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
+        .catch(e => { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); });
+    } else if (req.url === '/timeline/program/enable' && req.method === 'POST') {
+      // Pending-program lease ENABLE (docs/38 §16.7): start the armed program now.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      timelineService.enableProgram()
+        .then(r => {
+          if (r && r.ok === false) { res.writeHead(400); return res.end(JSON.stringify(r)); }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, ...r }));
+        })
+        .catch(e => { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); });
+    } else if (req.url === '/timeline/program/dismiss' && req.method === 'POST') {
+      // Pending-program lease DISMISS (docs/38 §16.7): cancel + latch firedToday.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const r = timelineService.dismissProgram();
+        if (r && r.ok === false) { res.writeHead(400); return res.end(JSON.stringify(r)); }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, ...r }));
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url.match(/^\/timeline\/cues\/[^\/]+\/fire$/) && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      timelineService.fireCue(id)
+        .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
+        .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
+
     } else if (req.method === 'GET' && req.url === '/globals') {
       // Always reflect the LIVE override state alongside whatever was
       // persisted to disk — the in-memory `viewOverrideMode` is the
@@ -3996,25 +4787,30 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // have shown.
       const live = {
         ...globalsState,
-        controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
+        controlLock: currentControlLock(),
       };
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(live));
     } else if (req.method === 'GET' && req.url === '/autopilot') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(autopilot.state));
+      res.end(JSON.stringify(deckAutopilotState()));
     } else if (req.method === 'POST' && req.url === '/autopilot') {
       readBody(data => {
-        autopilot.updateState(data);
-        // ── Mirror into deck base channel's per-playlist autopilot ──
-        // The actual "advance to next entry" runner in the autopilot
-        // callback (see `new Autopilot(...)` above) reads
-        // `baseCh.playlist.autopilot.shuffle` to decide between
-        // shuffle and sequential. Without this mirror, the iPad would
-        // toggle the SHUFFLE pill, the Autopilot daemon would store
-        // it in its own config.yaml, but the runner would still see
-        // `baseCh.playlist.autopilot.shuffle === false` and keep
-        // walking the playlist sequentially. Fixed May 2026.
+        // Deck autopilot route (PortWatch over LoRa, scripts, CaptainPad's
+        // deck tab). main's frame-driven system: the daemon's timer is driven
+        // by autopilot.updateState({active,delay_s}); the next-entry pick reads
+        // the DECK channel's playlist.autopilot (shuffle + group fields), so we
+        // mirror the patch into that block too. No pool to rearm — the daemon
+        // re-reads the deck playlist every tick.
+        //
+        // ORDER MATTERS (2026-07-04): update the DECK channel's playlist.autopilot
+        // BEFORE autopilot.updateState(). updateState reschedules the daemon,
+        // which fires its onSchedule hook → broadcastAutopilot() SYNCHRONOUSLY,
+        // and that broadcast sources delay/active/shuffle from deckAutopilotState()
+        // (the channel block). With the old order (daemon first) the broadcast
+        // echoed the STALE channel delay, so the operator's pill snapped back to
+        // the old value then forward again — the "double-changing" jank.
+        // timelineSetAutopilotOnDeck already uses this channel-first order.
         try {
           const baseCh = mixer.getDeckChannel();
           if (baseCh) {
@@ -4042,15 +4838,42 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             broadcastMixerState();
           }
         } catch (e) {
-          console.warn('[Autopilot] mirror-to-deck failed:', e.message);
+          console.warn('[Autopilot] deck autopilot write failed:', e.message);
         }
+        autopilot.updateState(data);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(autopilot.state));
+        res.end(JSON.stringify(deckAutopilotState()));
         // External writers (PortWatch over LoRa, scripts, etc.) need the
         // CaptainPad UI to reflect their flips immediately. Broadcast on
         // every transition so the existing `engineEvents` bus on the iPad
         // can mirror state without polling.
         broadcastAutopilot();
+      });
+    } else if (req.method === 'GET' && req.url === '/deck/color-autopilot') {
+      // Read the current palette-cycling config (docs/39). Independent of the
+      // pattern /autopilot — they run in parallel.
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(colorAutopilotState()));
+    } else if (req.method === 'POST' && req.url === '/deck/color-autopilot') {
+      // Set the palette-cycling config. PATCH-style: the posted body is MERGED
+      // over the current config, so the deck UI can post a single toggle/stepper
+      // change (e.g. { delay_s } or { transitionMs }) optimistically. The MERGED
+      // object is then validated STRICTLY (codex P0): palettes a non-empty array
+      // of KNOWN ids, delay_s number>0, transitionMs number>=0, active+shuffle
+      // booleans. A bad shape → 400 with a loud message (never coerce / skip).
+      readBody(data => {
+        try {
+          if (!data || typeof data !== 'object' || Array.isArray(data)) {
+            throw new Error('colorAutopilot body must be an object');
+          }
+          const merged = { ...colorAutopilotState(), ...data };
+          const out = setColorAutopilot(merged);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(out));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e && e.message ? e.message : String(e) }));
+        }
       });
     }
     // ---- MODEL METADATA ----
@@ -4806,6 +5629,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
         finalizeCpcValues(channel);
         saveAllState();
+        // Mixer overlays cycle off the per-frame autoCycleTick, which reads
+        // each channel's playlist.autopilot live — no per-channel timer to arm.
         // Emit playlist content on WS BEFORE the mixer broadcast so
         // every client primes its playlist cache before mounting the
         // new PlaylistPanel off the mixer event. See
@@ -5370,9 +6195,31 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // /\/mixer\/view/, otherwise it would also catch
       // /mixer/view-override and shadow the override handler below.
       readBody(data => {
-        // While the override is engaged we still let the user pre-set
-        // their next view; we save it so `clear` knows where to land,
-        // but don't actually move the live fader.
+        // View routing depends on WHO owns the deck-pin:
+        //
+        //   • HARD PortWatch lock ('portwatch'): the operator is locked out of
+        //     the output. We still let them pre-set their NEXT view — saved so
+        //     `clear`/lease-expiry knows where to land — but the live fader
+        //     stays frozen on the deck.
+        //
+        //   • SOFT plan lock ('plan') OR no lock: move the LIVE fader to the
+        //     operator's chosen view. A soft plan lock permits navigation, and
+        //     a mixer-view write under it is the operator's explicit output
+        //     intent during a takeover (CaptainPad pairs it with POST
+        //     /timeline/takeover). Keeping savedTargetViewFader in lock-step
+        //     means the plan's deck-pin release restores the operator's CHOSEN
+        //     view, never a stale pre-plan (often deck/black) value — so the
+        //     "mixer master goes black on takeover" outcome is deterministic
+        //     regardless of the /timeline/takeover vs /mixer/view call order:
+        //     the live fader always ends on the operator's target (mixer → 1.0).
+        // While the deck is pinned by ANYTHING (a PortWatch hard lock OR a plan
+        // soft lock), the live output is FROZEN on the deck — the plan owns it,
+        // and the operator must take over to change it. We still let them
+        // pre-set their next view (savedTargetViewFader) but never move the live
+        // fader (bug 2026-07-02 round 2: an earlier fix moved the live fader
+        // under a soft plan lock, which — now that takeover no longer switches
+        // views — flipped the output to the empty mixer and blacked the rig out
+        // on takeover). No lock → the toggle moves the live fader normally.
         if (viewOverrideMode === 'deck') {
           if (data.view === 'deck') savedTargetViewFader = 0.0;
           else if (data.view === 'mixer') savedTargetViewFader = 1.0;
@@ -5407,6 +6254,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             mixer.targetViewFader = 0.0;
             viewOverrideMode = 'deck';
           }
+          // This is the REAL PortWatch-device deck-pin path (HARD lock). Mark the
+          // source 'portwatch' — even if the plan had soft-pinned the deck, an
+          // actual device take-over upgrades it to the hard lock.
+          controlLockSource = 'portwatch';
           // (Re)arm the lease on every successful deck-pin POST. This
           // is the renew path: clients holding the lock POST again
           // every ~20s to refresh the 30s lease. Doing it for the
@@ -5414,6 +6265,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // a first take always starts the countdown.
           armControlLockLease();
         } else if (requested === null || requested === '' || requested === 'clear') {
+          // docs/38 §16.9: the engine does NOT auto-arm the operator-takeover
+          // lease from a passive view event. When the plan is forcing the deck
+          // view (`forcingDeckView`), a switch to mixer is CONFIRM-GATED in the
+          // CaptainPad UI (confirm prompt + 1-minute auto-revert to deck). On an
+          // explicit operator confirm the UI calls POST /timeline/takeover. So
+          // this route just clears the raw deck-pin — no timeline.takeover() here.
           clearViewOverrideInternal();
           disarmControlLockLease();
         } else {
@@ -5431,9 +6288,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({
           status: 'ok',
           override: viewOverrideMode,
-          controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
-          controlLockLeaseExpiresAtMs: controlLockLeaseExpiresAtMs,
-          controlLockLeaseDurationMs: viewOverrideMode === 'deck'
+          controlLock: currentControlLock(),
+          controlLockLeaseExpiresAtMs: controlLockSource === 'portwatch' ? controlLockLeaseExpiresAtMs : null,
+          controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
             ? CONTROL_LOCK_LEASE_MS
             : null,
           currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
@@ -5444,10 +6301,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         override: viewOverrideMode,
-        controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
-        controlLockLeaseExpiresAtMs: controlLockLeaseExpiresAtMs,
-        controlLockLeaseRemainingMs: controlLockLeaseRemainingMs(),
-        controlLockLeaseDurationMs: viewOverrideMode === 'deck'
+        controlLock: currentControlLock(),
+        controlLockLeaseExpiresAtMs: controlLockSource === 'portwatch' ? controlLockLeaseExpiresAtMs : null,
+        controlLockLeaseRemainingMs: controlLockSource === 'portwatch' ? controlLockLeaseRemainingMs() : 0,
+        controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
           ? CONTROL_LOCK_LEASE_MS
           : null,
         currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
@@ -6693,6 +7550,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           if (baseCh._autoGroup) { baseCh._autoGroup.windowIds = null; baseCh._autoGroup.swapsLeft = 0; }
         }
         saveAllState();
+        // Drive main's deck daemon timer from the now-updated autopilot block
+        // (active/delay reschedule the self-rescheduling setTimeout; shuffle +
+        // group are read live from baseCh.playlist.autopilot by the picker).
         autopilot.updateState({ active: ap.active, delay_s: String(ap.delay_s), shuffle: ap.shuffle });
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok', autopilot: ap }));
         broadcastMixerState();
@@ -6823,6 +7683,43 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
         }
       });
+    } else if (req.method === 'GET' && req.url.match(/^\/mixer\/channels\/[^\/]+\/autopilot$/)) {
+      // Return the channel's autopilot block (docs/19 §8.3 / §13).
+      const id = req.url.split('/')[3];
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      const ch = mixer.getMixerChannel(id);
+      if (!ch) { res.writeHead(404); return res.end(JSON.stringify({ error: 'channel not found' })); }
+      const ap = (ch.playlist && ch.playlist.autopilot) || { active: false, delay_s: 30, shuffle: false };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(ap));
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/autopilot$/)) {
+      // Independently control a mixer channel's autopilot. Updates the
+      // channel's playlist.autopilot, persists mixer state, and broadcasts a
+      // dedicated mixerAutopilot event. Under main's frame-driven system the
+      // per-frame autoCycleTick reads this block live — no pool to arm; we just
+      // re-seed the wall-clock anchor so the next tick measures a full delay_s
+      // from THIS change.
+      const id = req.url.split('/')[3];
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      readBody(data => {
+        const ch = mixer.getMixerChannel(id);
+        if (!ch) { res.writeHead(404); return res.end(JSON.stringify({ error: 'channel not found' })); }
+        ch.playlist = ch.playlist || { name: null, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+        const ap = ch.playlist.autopilot = ch.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
+        if (data.active !== undefined) ap.active = !!data.active;
+        if (data.delay_s !== undefined) ap.delay_s = parseInt(data.delay_s, 10) || 30;
+        if (data.shuffle !== undefined) ap.shuffle = !!data.shuffle;
+        // Re-seed the auto-cycle wall-clock anchor + drop any group window so
+        // the next autoCycleTick frame treats this as a fresh arm.
+        ch._autoCycleLastAdvanceMs = null;
+        if (ch._autoGroup) { ch._autoGroup.windowIds = null; ch._autoGroup.swapsLeft = 0; }
+        saveAllState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', channelId: id, autopilot: ap }));
+        broadcastWs({ type: 'mixerAutopilot', channelId: id, autopilot: ap });
+        broadcastMixerState();
+      });
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist\/capture$/)) {
       const id = req.url.split('/')[3];
       const reject = rejectIfWrongRole(id, 'mixer');
@@ -6915,8 +7812,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // Expose the map BEFORE we wire any handlers — broadcastWs() reads
   // global.wssByTopic on every call and will no-op until this assignment
   // runs. Done early so any synchronous broadcasts during the WS
-  // connect handlers (e.g. autopilot.start emitting a state event) find
-  // the right socket already registered.
+  // connect handlers (e.g. an autopilot state replay) find the right
+  // socket already registered.
   global.wssByTopic = wssByTopic;
   // Back-compat shim — exported tests + a couple of legacy call sites
   // still reach for `global.wss`. Point it at the control socket so any
@@ -6978,7 +7875,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       console.error('Server error:', e);
     }
   });
+  // Start main's deck Autopilot daemon. Its active/delay live in config.yaml
+  // (autopilot.state); the next-entry pick reads the restored deck
+  // playlist.autopilot live. Mixer + deck overlays resume on their own — the
+  // per-frame autoCycleTick / deckOverlayAutoCycleTick read each channel's
+  // restored playlist.autopilot, so any overlay whose autopilot.active === true
+  // resumes cycling on boot without an explicit per-channel arm.
   autopilot.start();
+  // Start the COLOR autopilot daemon. Its {active,palettes,delay_s,shuffle} live
+  // in config.yaml (colorAutopilot.state); pauses cleanly when inactive.
+  colorAutopilot.start();
 
   // ── Per-topic replay-on-connect ──────────────────────────────────────
   // Each socket only replays the cached payloads it owns. A fresh
@@ -6999,13 +7905,24 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // see the same values that the existing one-shot REST loads would
     // have given them — without having to wait for the next change.
     try {
-      const st = autopilot.state || {};
+      const st = deckAutopilotState();
       ws.send(JSON.stringify({
         type: 'autopilot',
         active: !!st.active,
         delay_s: st.delay_s !== undefined ? String(st.delay_s) : '30',
         shuffle: !!st.shuffle,
+        // Include the next-swap time so a late-joining deck paints the pattern
+        // countdown immediately (mirrors broadcastAutopilot + the colorAutopilot
+        // snapshot below, which already spreads the field).
+        nextSwapAtMs: (typeof autopilot !== 'undefined' && autopilot) ? autopilot.nextSwapAtMs : null,
       }));
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+    // COLOR autopilot replay (docs/39): a late-joining CaptainPad deck tab sees
+    // the current palette-cycling config immediately.
+    try {
+      ws.send(JSON.stringify({ type: 'colorAutopilot', ...colorAutopilotState() }));
     } catch (e) {
       // never let a snapshot send break a fresh WS handshake
     }
@@ -7025,9 +7942,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       ws.send(JSON.stringify({
         type: 'viewOverride',
         override: viewOverrideMode,
-        controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
-        controlLockLeaseExpiresAtMs: controlLockLeaseExpiresAtMs,
-        controlLockLeaseDurationMs: viewOverrideMode === 'deck'
+        controlLock: currentControlLock(),
+        controlLockLeaseExpiresAtMs: controlLockSource === 'portwatch' ? controlLockLeaseExpiresAtMs : null,
+        controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
           ? CONTROL_LOCK_LEASE_MS
           : null,
         currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
@@ -7072,6 +7989,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           chains: spp.getAllChains(),
         }));
       }
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+
+    // Replay the current timelineState (docs/38 §15) so a fresh CaptainPad
+    // paints the controller banner / cue list / sun ribbon immediately
+    // instead of waiting up to one tick. Same posture as the scheduledTasks
+    // / autopilot replays above.
+    try {
+      if (timelineService) ws.send(JSON.stringify(timelineService.getState()));
     } catch (e) {
       // never let a snapshot send break a fresh WS handshake
     }
@@ -7140,6 +8067,24 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             // No broadcast — fader-only updates outside transitions are
             // already at human-touch rate; full state syncs on
             // saveMixerState (e.g. on slider release).
+          } else {
+            // FAIL LOUD (codex P0): getChannel() returns null for an UNKNOWN id
+            // OR for the deck/base channel (which is faded via /deck, not the
+            // mixer-channel route). The old code silently dropped the write —
+            // leaving the iPad's optimistic slider stuck UP while the engine
+            // never moved, so the "channel" stayed dark with NO signal (operator
+            // report 2026-07-03: a mixer channel "was not being rendered to
+            // master out"). Push back a typed rejection AND force a full mixer
+            // broadcast so the iPad re-syncs to engine truth — a stale channel
+            // drops out of its list, and the operator sees the slider re-peg
+            // instead of a silent no-op.
+            ws.send(JSON.stringify({
+              type: 'channelFaderRejected',
+              channelId: d.channelId,
+              fader: d.fader,
+              reason: 'unknown-or-deck-channel',
+            }));
+            broadcastMixerState();
           }
         } else if (d.type === 'setChannelMode' && d.channelId && d.mode) {
           if (!isValidBlendMode(d.mode)) {
@@ -7382,6 +8327,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     for (const url of reachableUrls(opts.port)) {
       console.log(`       ${url}`);
     }
+    // Start the in-engine Timeline service (docs/38 §15) once the WS
+    // sockets exist so its tick broadcasts reach connected clients. boot
+    // never crashes the engine — start() records boot errors into the
+    // timelineState instead of throwing.
+    if (timelineService) {
+      timelineService.start()
+        .then(() => console.log(`  ⏱ Timeline service started (scene "${opts.modelName}", plan "${timelineService.activePlan}")`))
+        .catch((err) => console.warn(`  ⚠ Timeline service start failed: ${err && err.message}`));
+    }
   });
 
   publishStatsRef.publish = (data) => {
@@ -7432,6 +8386,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // the live model object and is therefore fresh on the next reload.)
   server.broadcastMixerState = broadcastMixerState;
 
+  // Stop the in-engine Timeline tick on shutdown / scene-switch restart.
+  server.stopTimeline = () => {
+    try { if (timelineService) timelineService.stop(); } catch (_) { /* ignore */ }
+  };
+
   // AUTO-CYCLE (round-2 #2): the per-frame auto-cycle tick. engine.js composes
   // this into the render loop's beforeFrame hook so overlay playlists advance
   // on their timer. One source of time (wall clock), no per-channel timers.
@@ -7447,6 +8406,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // server.close() and the port release) and stop accepting connections so a
   // replacement engine can re-bind :6968 immediately.
   server.closeNow = () => {
+    try { if (timelineService) timelineService.stop(); } catch (_) { /* ignore */ }
     try {
       for (const wssInst of Object.values(wssByTopic)) {
         for (const client of wssInst.clients) {

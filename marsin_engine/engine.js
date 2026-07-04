@@ -1176,6 +1176,9 @@ async function main() {
     // under `colorPalettes:` so the operator can edit the rig's house
     // palette without code changes. See docs/27_color_palettes.md.
     colorPalettes: Array.isArray(engineConfig.colorPalettes) ? engineConfig.colorPalettes : [],
+    // The full loaded config.yaml object — api_server reads the `timeline:`
+    // block off it to construct the in-engine Timeline service (docs/38 §15).
+    engineConfig,
     // Model-sync status. `stale: true` means the engine REFUSED a model
     // hot reload (e.g. pixel count changed) and is still rendering the
     // old model while the sim/disk already has a newer one. Surfaced on
@@ -2077,6 +2080,9 @@ async function main() {
       try { lOsc.stop(); } catch (_) { /* ignore */ }
     }
     try { bpmSync.detach(); } catch (_) { /* ignore */ }
+    // Stop the in-engine Timeline tick (docs/38 §15) before tearing the
+    // render loop / API down so no late cue fires into a half-shut engine.
+    try { apiServer.stopTimeline && apiServer.stopTimeline(); } catch (_) { /* ignore */ }
     loop.stop();
     // Release the HTTP/WS API socket so a replacement engine can re-bind
     // :6968 immediately (scene-switch restart). On a plain SIGINT/SIGTERM

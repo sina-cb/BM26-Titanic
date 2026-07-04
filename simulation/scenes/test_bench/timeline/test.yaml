@@ -1,0 +1,82 @@
+schemaVersion: 2
+name: test
+location:
+  lat: 40.7864
+  lon: -119.2065
+  tz: America/Los_Angeles
+  elevationM: 1190
+festival:
+  startDate: '2026-07-04'
+  days: 2
+autopilot:
+  enabled: true
+  playlist: default
+  delay_s: 60
+  shuffle: false
+  target:
+    channel: deck
+    id: null
+  mood: true
+phases: {}
+looks: {}
+cues:
+  - id: c_mr64uc2tot
+    enabled: true
+    catchUp: true
+    trigger:
+      type: clock
+      at: '02:05'
+    action:
+      type: playlist
+      name: default
+      target:
+        channel: deck
+        id: null
+      autopilot:
+        active: true
+        delay_s: 10
+        shuffle: true
+      transition:
+        mode: trans_dissolve
+        durationMs: 1000
+        enabled: true
+        shuffle: true
+      overlays: disable
+      colorAutopilot:
+        active: true
+        palettes:
+          - laser_lime
+          - sunset_coral
+          - phoenix
+        delay_s: 5
+        shuffle: false
+        transitionMs: 2000
+      globals:
+        speed: 0.5
+        size: 0.5
+        bpmSpeedSync: 1
+    kind: program
+    durationMin: 15
+    days:
+      - 0
+defaultCue:
+  label: Default (from deck)
+  action:
+    type: playlist
+    name: default
+    target:
+      channel: deck
+      id: null
+    autopilot:
+      active: true
+      delay_s: 10
+      shuffle: true
+    colorAutopilot:
+      active: true
+      palettes:
+        - toxic_wave
+        - deep_sea
+        - afterhours
+      delay_s: 5
+      shuffle: false
+      transitionMs: 1000
