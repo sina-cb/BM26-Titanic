@@ -36,7 +36,10 @@ import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useTimeline } from '@/hooks/useTimeline';
-import { fetchPlaylists, getCachedColorPalettes } from '@/utils/api';
+import {
+  fetchPlaylists, getCachedColorPalettes,
+  fetchDeckChannel, getAutopilot, fetchDeckColorAutopilot,
+} from '@/utils/api';
 import {
   fetchTimelinePlans,
   fetchTimelinePlan,
@@ -52,6 +55,7 @@ import {
   ShowPlan,
   PlanCue,
   PlanDefaultCue,
+  ActionPlaylist,
 } from '@/utils/timelineApi';
 import { DayOverviewStrip } from '@/components/timeline/DayOverviewStrip';
 import { DayEditor } from '@/components/timeline/DayEditor';
@@ -61,7 +65,7 @@ import {
   FestivalEditor, addDaysToDateKey, FESTIVAL_MIN_DAYS, FESTIVAL_MAX_DAYS,
 } from '@/components/timeline/FestivalEditor';
 import {
-  brcStarterPlan, blankPlan, clonePlan, duplicatePlan, makeCueId, hhmmTo12h,
+  brcStarterPlan, blankPlan, clonePlan, duplicatePlan, makeCueId, hhmmTo12h, seedDefaultCue,
 } from '@/components/timeline/timelineTemplate';
 
 const PREVIEW_DEBOUNCE_MS = 350;
@@ -106,6 +110,65 @@ function formatCountdown(sec: number | null): string {
   const s = total % 60;
   if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// Snapshot the deck's CURRENT live state (playlist + pattern autopilot + color
+// autopilot) into a plan DEFAULT CUE, taken at plan-creation time (operator:
+// "when a plan is set and the default cue has not been modified, use the current
+// state of the deck as the default at the time of plan creation"). A freshly
+// created plan's standing fallback then matches what the deck is doing right
+// now, instead of a hardcoded 'default' playlist. Mirrors the CueEditorSheet's
+// emit discipline (buildNormalizedAction): the autopilot/colorAutopilot blocks
+// are included ONLY when active + valid, so the snapshot always satisfies the
+// engine's strict validators. Best-effort: if the engine is unreachable or the
+// deck has no playlist loaded, degrade to the maker seed (a valid 'default').
+async function snapshotDeckAsDefaultCue(): Promise<PlanDefaultCue> {
+  const [deckRes, apRes, caRes] = await Promise.all([
+    fetchDeckChannel(),
+    getAutopilot(),
+    fetchDeckColorAutopilot(),
+  ]);
+  const playlistName = deckRes.ok && deckRes.data?.channel?.playlist?.name
+    ? String(deckRes.data.channel.playlist.name)
+    : null;
+  // Nothing live to snapshot (engine down / no playlist on the deck) → keep the
+  // standard maker seed so the new plan still has a valid default cue.
+  if (!playlistName) return seedDefaultCue();
+
+  const action: ActionPlaylist = {
+    type: 'playlist',
+    name: playlistName,
+    target: { channel: 'deck', id: null },
+  };
+
+  // Pattern autopilot — include the block ONLY when active, with a positive
+  // delay_s + boolean shuffle (same normalization the cue editor emits).
+  const ap = apRes.ok ? apRes.data : null;
+  if (ap && ap.active) {
+    const d = Number(ap.delay_s);
+    action.autopilot = {
+      active: true,
+      delay_s: Number.isFinite(d) && d > 0 ? d : 30,
+      shuffle: !!ap.shuffle,
+    };
+  }
+
+  // Color autopilot — include ONLY when active with ≥1 palette (the engine's
+  // strict validateColorAutopilot); clamp delay_s / transitionMs like the editor.
+  const ca = caRes.ok ? caRes.data : null;
+  if (ca && ca.active && Array.isArray(ca.palettes) && ca.palettes.length > 0) {
+    const d = Number(ca.delay_s);
+    const tm = Number(ca.transitionMs);
+    action.colorAutopilot = {
+      active: true,
+      palettes: [...ca.palettes],
+      delay_s: Number.isFinite(d) && d > 0 ? d : 30,
+      shuffle: !!ca.shuffle,
+      transitionMs: Number.isFinite(tm) && tm >= 0 ? tm : 0,
+    };
+  }
+
+  return { label: 'Default (from deck)', action };
 }
 
 // Compact summary of the plan's default-cue action for the DEFAULT CUE row.
@@ -435,14 +498,21 @@ export default function TimelineScreen() {
     void persistPlan(plan);
   }, [persistPlan]);
 
-  const handleNewTemplate = useCallback((name: string) => {
-    startDraft(brcStarterPlan(name));
+  // New plans seed their DEFAULT CUE from the deck's current live state (see
+  // snapshotDeckAsDefaultCue) so the standing fallback matches what's playing
+  // right now, captured at creation. The operator can still edit it afterwards.
+  const handleNewTemplate = useCallback(async (name: string) => {
+    const plan = brcStarterPlan(name);
+    plan.defaultCue = await snapshotDeckAsDefaultCue();
+    startDraft(plan);
   }, [startDraft]);
 
   // New BLANK plan from scratch — seeded by blankPlan(name): starts TODAY in
   // the plan tz with a 2-day festival span the operator grows as needed.
-  const handleNewBlank = useCallback((name: string) => {
-    startDraft(blankPlan(name));
+  const handleNewBlank = useCallback(async (name: string) => {
+    const plan = blankPlan(name);
+    plan.defaultCue = await snapshotDeckAsDefaultCue();
+    startDraft(plan);
   }, [startDraft]);
 
   const handleDuplicate = useCallback(async (name: string) => {
