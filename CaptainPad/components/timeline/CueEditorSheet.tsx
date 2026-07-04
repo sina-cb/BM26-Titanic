@@ -39,17 +39,44 @@ import {
 } from './timelineTemplate';
 import { Segmented, Stepper, Dropdown, ToggleChip, FieldLabel } from './makerControls';
 import { DayTimePicker, DayTimeContextCue } from './DayTimePicker';
-import { DualSwatch } from '@/components/ColorPickerModal';
 import { DeckTransitionControls } from '@/components/DeckTransitionControls';
+import { PatternAutopilotPanel } from '@/components/deck/pattern_autopilot_panel';
+import { ColorAutopilotPanel } from '@/components/deck/ColorAutopilotPanel';
+import { HorizontalFader } from '@/components/ui/HorizontalFader';
+import type { DeckColorAutopilotConfig } from '@/utils/api';
 
-// Crossfade presets for the cue's COLOR AUTOPILOT transition (ms under the
-// hood). 0 = hard cut; the rest ramp the palette params over the window. Mirror
-// of the deck panel's transition pills (DECK TX crossfade idiom).
-const COLOR_TRANSITION_PRESETS_MS = [0, 500, 1000, 2000, 3000];
+// HSV(h°, 1, 1) → #rrggbb for the HUE fader fill (ColorPickerModal's
+// hsvToRgbString is module-private, so we restate the few lines here). Full
+// saturation + value so the swatch reads as the pure hue at that degree.
+function hueToHex(deg: number): string {
+  const h = (((deg % 360) + 360) % 360) / 60;
+  const c = 1;
+  const x = c * (1 - Math.abs((h % 2) - 1));
+  let r = 0, g = 0, b = 0;
+  if (h < 1) { r = c; g = x; }
+  else if (h < 2) { r = x; g = c; }
+  else if (h < 3) { g = c; b = x; }
+  else if (h < 4) { g = x; b = c; }
+  else if (h < 5) { r = x; b = c; }
+  else { r = c; b = x; }
+  const to = (v: number) => Math.round(v * 255).toString(16).padStart(2, '0');
+  return `#${to(r)}${to(g)}${to(b)}`;
+}
 
-function formatColorTransition(ms: number): string {
-  if (ms <= 0) return 'CUT';
-  return ms % 1000 === 0 ? `${ms / 1000}s` : `${(ms / 1000).toFixed(1)}s`;
+// A titled CARD wrapper matching the live deck's autopilot cards (surfaceContainerHigh
+// bg + ghostBorder + rounded, small uppercase header). `right` hosts the section's
+// ON/OFF ToggleChip so the header row reads like the deck's card headers.
+function ActionCard({ title, right, children }: { title: string; right?: React.ReactNode; children?: React.ReactNode }) {
+  const C = usePalette();
+  return (
+    <View style={{ marginTop: 12, padding: 12, borderRadius: 10, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder, gap: 8 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>{title}</Text>
+        {right ?? null}
+      </View>
+      {children}
+    </View>
+  );
 }
 
 // Inherit-vs-override control for the playlist action's deck transition. "Deck
@@ -200,10 +227,6 @@ export function CueEditorSheet({
   const styles = useMemo(() => makeStyles(C), [C]);
 
   const paletteOptions = palettes ?? [];
-  const paletteById = useMemo(
-    () => new Map(paletteOptions.map((p) => [p.id, p])),
-    [paletteOptions],
-  );
   const phaseNames = Object.keys(plan.phases);
 
   // Fresh trigger for a given type. CLOCK gets the smart "~5 min from now"
@@ -239,9 +262,6 @@ export function CueEditorSheet({
   // DAYS mode is EXPLICIT state, driven by the segmented control — NOT derived
   // from `days` on every render (deriving made "Pick…" snap back to "This day").
   const [daysMode, setDaysModeState] = useState<DaysMode>('all');
-  // COLOR AUTOPILOT "+ add" popover: collapsed by default so the section shows
-  // only the SELECTED palettes (operator feedback: don't dump the full grid).
-  const [caAdding, setCaAdding] = useState(false);
   const [seedKey, setSeedKey] = useState<string>('');
   // Inline validation error surfaced near the SAVE button. Set when a save is
   // BLOCKED (e.g. overlapping cue); cleared on the next save attempt. null =
@@ -620,283 +640,256 @@ export function CueEditorSheet({
 
   // ── Action sub-editors ──
   const renderActionBody = () => {
-    if (action.type === 'playlist') {
-      const ap = action.autopilot ?? {};
-      const ca = action.colorAutopilot ?? { active: false, palettes: [] as string[], delay_s: 30 };
-      // Target is always the main deck now (mixer removed from the maker UI).
-      const transitionSource: 'default' | 'custom' = action.transition ? 'custom' : 'default';
-      const overlayMode: 'asis' | ActionOverlays = action.overlays ?? 'asis';
-      return (
-        <View style={styles.subBlock}>
-          <FieldLabel>PLAYLIST</FieldLabel>
+    if (action.type !== 'playlist') return null;
+    // `action` is narrowed to ActionPlaylist for the rest of this branch.
+    const pl = action;
+    const ap = pl.autopilot ?? {};
+    const ca = pl.colorAutopilot;
+    // Each rich section is gated by BLOCK PRESENCE, not the block's `active`
+    // flag: the outer ON/OFF adds/removes the whole override, while the reused
+    // deck card's own PLAY/PAUSE drives `active` inside it. (Tracking `active`
+    // here would make an in-panel PAUSE collapse the card out from under the
+    // operator.) buildNormalizedAction still drops an inactive block on save.
+    const apOn = pl.autopilot !== undefined;
+    const caOn = pl.colorAutopilot !== undefined;
+    const hueOn = typeof pl.hue === 'number';
+    const transitionSource: 'default' | 'custom' = pl.transition ? 'custom' : 'default';
+    const overlayMode: 'asis' | ActionOverlays = pl.overlays ?? 'asis';
+    const hueDeg = typeof pl.hue === 'number' ? pl.hue : 0;
+
+    // Adapter for the reused ColorAutopilotPanel: its config type requires a
+    // non-optional `shuffle`, while the cue's ActionColorAutopilot has it
+    // optional. Feed a COMPLETE config; onChange merges the panel's patch back
+    // into action.colorAutopilot (the panel enforces the ≥1-palette invariant
+    // itself via its removePalette guard).
+    const caConfig: DeckColorAutopilotConfig = {
+      active: !!ca?.active,
+      palettes: ca?.palettes ?? [],
+      delay_s: ca?.delay_s ?? 30,
+      shuffle: ca?.shuffle ?? false,
+      transitionMs: ca?.transitionMs,
+    };
+
+    return (
+      <>
+        {/* 1. PLAYLIST — a cue NAMES a playlist; deck-only target. */}
+        <ActionCard title="PLAYLIST">
           <Dropdown
-            value={action.name || null}
+            value={pl.name || null}
             options={playlists.map((p) => ({ id: p, label: p }))}
-            onSelect={(id) => setAction({ ...action, name: id })}
+            onSelect={(id) => setAction({ ...pl, name: id })}
             placeholder="Pick a playlist…"
             emptyHint="Engine reports no playlists."
           />
-          <View style={{ height: 8 }} />
           {/* TARGET is deck-only now — the playlist always drives the main deck.
               We keep target on the action so the wire shape stays stable. */}
-          <FieldLabel>TARGET</FieldLabel>
-          <Text style={styles.hint}>Deck — the main deck (mixer authoring removed).</Text>
-          <View style={{ height: 8 }} />
-          {/* TRANSITION — deck transition override. "Deck default" emits no
-              `transition` field, so the cue inherits the deck's standing Deck TX
-              config. "Custom" emits a full transition block (all 16 blends +
-              crossfade time + shuffle) edited via the SAME control as the live
-              deck's DECK TX. */}
-          <FieldLabel>TRANSITION</FieldLabel>
+          <Text style={styles.hint}>Target: deck — the main deck (mixer authoring removed).</Text>
+        </ActionCard>
+
+        {/* 2. AUTOPILOT PATTERNS — reuse the live deck's PatternAutopilotPanel.
+            The header ON/OFF adds/removes the whole autopilot block; the panel
+            drives every knob (PLAY/PAUSE, SHUFFLE, GROUP + SIZE/DWELL, cadence).
+            DECK TX is deliberately NOT nested here (its own card below) so the
+            cue's inherit-vs-custom transition semantics stay separate. */}
+        <ActionCard
+          title="AUTOPILOT PATTERNS"
+          right={
+            <ToggleChip
+              on={apOn}
+              onToggle={() => {
+                if (apOn) {
+                  const next = { ...pl };
+                  delete next.autopilot;
+                  setAction(next);
+                } else {
+                  // Seed a COMPLETE, valid block (engine validateAutopilot is
+                  // strict: active + delay_s>0 + shuffle, no defaults).
+                  setAction({ ...pl, autopilot: { active: true, delay_s: 30, shuffle: false } });
+                }
+              }}
+              label={apOn ? 'ON' : 'OFF'}
+            />
+          }
+        >
+          {apOn ? (
+            <PatternAutopilotPanel
+              bare
+              title=""
+              active={!!ap.active}
+              delayStr={String(ap.delay_s ?? 30)}
+              shuffle={!!ap.shuffle}
+              groupMode={!!ap.groupMode}
+              groupSize={ap.groupSize ?? 3}
+              groupDwell={ap.groupDwell ?? 6}
+              onChange={(patch) => {
+                // One key per emit; keep the block complete (active/delay_s/
+                // shuffle always present — the seed guarantees it, and buildNormalizedAction re-guards).
+                if (patch.active !== undefined) setAction({ ...pl, autopilot: { ...ap, active: patch.active } });
+                else if (patch.shuffle !== undefined) setAction({ ...pl, autopilot: { ...ap, shuffle: patch.shuffle } });
+                else if (patch.delayStr !== undefined) setAction({ ...pl, autopilot: { ...ap, delay_s: parseInt(patch.delayStr, 10) || 30 } });
+                else if (patch.groupMode !== undefined) setAction({ ...pl, autopilot: { ...ap, groupMode: patch.groupMode } });
+                else if (patch.groupSize !== undefined) setAction({ ...pl, autopilot: { ...ap, groupSize: patch.groupSize } });
+                else if (patch.groupDwell !== undefined) setAction({ ...pl, autopilot: { ...ap, groupDwell: patch.groupDwell } });
+              }}
+            />
+          ) : (
+            <Text style={styles.hint}>Off — this cue leaves the deck&apos;s pattern autopilot as-is.</Text>
+          )}
+        </ActionCard>
+
+        {/* 3. DECK TX — deck transition override (verbatim behavior). "Deck
+            default" emits no `transition` field (inherit the deck's standing
+            config); "Custom" emits a full block (all 16 blends + time + shuffle)
+            edited via the SAME control as the live deck's DECK TX. */}
+        <ActionCard title="DECK TX">
           <Segmented
             options={TRANSITION_SOURCE_OPTIONS}
             value={transitionSource}
             onChange={(id) => {
               if (id === 'default') {
-                const next = { ...action };
+                const next = { ...pl };
                 delete next.transition;
                 setAction(next);
-              } else if (!action.transition) {
+              } else if (!pl.transition) {
                 setAction({
-                  ...action,
+                  ...pl,
                   transition: { mode: 'trans_crossfade', durationMs: 1000, enabled: true, shuffle: false },
                 });
               }
             }}
           />
-          <Text style={[styles.hint, { marginTop: 8 }]}>
+          <Text style={styles.hint}>
             Default keeps the deck&apos;s standing transition. Custom sets the full blend, time,
             and shuffle for this cue.
           </Text>
-          {action.transition ? (
-            <View style={{ marginTop: 10 }}>
-              <DeckTransitionControls
-                bare
-                enabled={action.transition.enabled ?? true}
-                mode={action.transition.mode}
-                durationMs={action.transition.durationMs ?? 1000}
-                shuffle={action.transition.shuffle ?? false}
-                onChange={(patch) => setAction({
-                  ...action,
-                  transition: {
-                    mode: (patch.mode ?? action.transition!.mode) as DeckTransitionMode,
-                    durationMs: patch.durationMs ?? action.transition!.durationMs,
-                    shuffle: patch.shuffle ?? action.transition!.shuffle,
-                    enabled: patch.enabled ?? action.transition!.enabled,
-                  },
-                })}
+          {pl.transition ? (
+            <DeckTransitionControls
+              bare
+              enabled={pl.transition.enabled ?? true}
+              mode={pl.transition.mode}
+              durationMs={pl.transition.durationMs ?? 1000}
+              shuffle={pl.transition.shuffle ?? false}
+              onChange={(patch) => setAction({
+                ...pl,
+                transition: {
+                  mode: (patch.mode ?? pl.transition!.mode) as DeckTransitionMode,
+                  durationMs: patch.durationMs ?? pl.transition!.durationMs,
+                  shuffle: patch.shuffle ?? pl.transition!.shuffle,
+                  enabled: patch.enabled ?? pl.transition!.enabled,
+                },
+              })}
+            />
+          ) : null}
+        </ActionCard>
+
+        {/* 4. AUTOPILOT COLORS — reuse the live deck's ColorAutopilotPanel. The
+            header ON/OFF adds/removes the whole colorAutopilot block; the panel
+            reads its own palette catalog + drives palettes/delay/transition/
+            shuffle. Turning ON seeds a COMPLETE, valid block (≥1 palette +
+            positive delay_s + shuffle). */}
+        <ActionCard
+          title="AUTOPILOT COLORS"
+          right={
+            <ToggleChip
+              on={caOn}
+              onToggle={() => {
+                if (caOn) {
+                  const next = { ...pl };
+                  delete next.colorAutopilot;
+                  setAction(next);
+                } else {
+                  // Turning ON requires ≥1 palette; without one we can't seed a
+                  // valid block, so keep OFF and let the empty-state hint explain.
+                  if (paletteOptions.length === 0) return;
+                  const seedPalette =
+                    ca?.palettes && ca.palettes.length > 0 ? ca.palettes : [paletteOptions[0].id];
+                  setAction({
+                    ...pl,
+                    colorAutopilot: { active: true, palettes: seedPalette, delay_s: 30, shuffle: false },
+                  });
+                }
+              }}
+              label={caOn ? 'ON' : 'OFF'}
+            />
+          }
+        >
+          {paletteOptions.length === 0 ? (
+            <Text style={styles.hint}>
+              No color palettes reported by the engine — color autopilot unavailable.
+            </Text>
+          ) : caOn ? (
+            <ColorAutopilotPanel
+              bare
+              title=""
+              config={caConfig}
+              onChange={(patch) => setAction({ ...pl, colorAutopilot: { ...caConfig, ...patch } })}
+            />
+          ) : (
+            <Text style={styles.hint}>Off — this cue leaves the deck&apos;s color palette as-is.</Text>
+          )}
+        </ActionCard>
+
+        {/* 5. HUE — NEW. Global hue shift (degrees, 0–360) applied when the cue
+            fires (deck-only). ON seeds hue:0; OFF drops the field. Controlled
+            HorizontalFader mapped 0..1 ⇄ 0..360, filled with the live hue. */}
+        <ActionCard
+          title="HUE"
+          right={
+            <ToggleChip
+              on={hueOn}
+              onToggle={() => {
+                if (hueOn) {
+                  const next = { ...pl };
+                  delete next.hue;
+                  setAction(next);
+                } else {
+                  setAction({ ...pl, hue: 0 });
+                }
+              }}
+              label={hueOn ? 'SET HUE' : 'LEAVE AS-IS'}
+            />
+          }
+        >
+          {hueOn ? (
+            <View style={{ gap: 10 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={styles.hint}>Global hue shift applied when this cue fires.</Text>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: C.text }}>{`${Math.round(hueDeg)}°`}</Text>
+              </View>
+              <HorizontalFader
+                value={hueDeg / 360}
+                onChange={(v: number) => setAction({ ...pl, hue: Math.round(v * 360) })}
+                trackStyle={{ height: 28, borderRadius: 14, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerLowest, justifyContent: 'center' }}
+                fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 14, backgroundColor: hueToHex(hueDeg) }}
+                thumbStyle={{ width: 6, height: 32, borderRadius: 3, backgroundColor: C.text, marginTop: -2 }}
               />
             </View>
-          ) : null}
-          <View style={{ height: 8 }} />
-          {/* OVERLAYS — cue-level overlay intent. "Leave as-is" emits nothing. */}
-          <FieldLabel>OVERLAYS</FieldLabel>
+          ) : (
+            <Text style={styles.hint}>Leave as-is — this cue doesn&apos;t change the global hue.</Text>
+          )}
+        </ActionCard>
+
+        {/* 6. OVERLAYS — cue-level overlay intent. "Leave as-is" emits nothing. */}
+        <ActionCard title="OVERLAYS">
           <Segmented
             options={OVERLAY_OPTIONS}
             value={overlayMode}
             onChange={(id) => {
               if (id === 'asis') {
-                const next = { ...action };
+                const next = { ...pl };
                 delete next.overlays;
                 setAction(next);
               } else {
-                setAction({ ...action, overlays: id as ActionOverlays });
+                setAction({ ...pl, overlays: id as ActionOverlays });
               }
             }}
           />
-          <Text style={[styles.hint, { marginTop: 8 }]}>
+          <Text style={styles.hint}>
             Overlays = extra pattern layers stacked over the deck; ‘disable’ blacks them out for this cue.
           </Text>
-          <View style={{ height: 8 }} />
-          <ToggleChip
-            on={!!ap.active}
-            onToggle={() => {
-              if (ap.active) {
-                // Turning OFF: drop the autopilot block entirely so the emitted
-                // action omits the field (it's optional on a playlist action).
-                const next = { ...action };
-                delete next.autopilot;
-                setAction(next);
-              } else {
-                // Turning ON: seed a COMPLETE, valid block. The engine's
-                // validateAutopilot is strict (active + delay_s>0 + shuffle,
-                // no defaults), so we must supply delay_s/shuffle here — not
-                // leave them undefined for the operator to (maybe) fill in.
-                setAction({
-                  ...action,
-                  autopilot: {
-                    active: true,
-                    delay_s: ap.delay_s && ap.delay_s > 0 ? ap.delay_s : 30,
-                    shuffle: ap.shuffle ?? false,
-                  },
-                });
-              }
-            }}
-            label={ap.active ? 'AUTOPILOT ON' : 'AUTOPILOT OFF'}
-          />
-          {ap.active ? (
-            <>
-              <View style={{ height: 8 }} />
-              <FieldLabel>AUTOPILOT DELAY (SEC)</FieldLabel>
-              <Stepper
-                value={ap.delay_s ?? 30}
-                step={5}
-                onChange={(v) => setAction({ ...action, autopilot: { ...ap, delay_s: v } })}
-                min={5} max={600}
-                format={(v) => `${v}s`}
-              />
-              <View style={{ height: 8 }} />
-              <ToggleChip
-                on={!!ap.shuffle}
-                onToggle={() => setAction({ ...action, autopilot: { ...ap, shuffle: !ap.shuffle } })}
-                label={ap.shuffle ? 'SHUFFLE ON' : 'SHUFFLE OFF'}
-              />
-            </>
-          ) : null}
-
-          {/* COLOR AUTOPILOT — cycles the deck's color palette over time,
-              distinct from the pattern autopilot above. Same emit discipline:
-              the block is only present while active, and turning it on seeds a
-              COMPLETE, valid block (≥1 palette + positive delay_s + shuffle) so
-              the emitted JSON can never be active+empty. */}
-          <View style={{ height: 12 }} />
-          <ToggleChip
-            on={!!ca.active}
-            onToggle={() => {
-              if (ca.active) {
-                // Turning OFF: drop the block entirely (optional on the action).
-                const next = { ...action };
-                delete next.colorAutopilot;
-                setAction(next);
-              } else {
-                // Turning ON requires ≥1 palette — without a palette to seed
-                // we can't emit a valid block, so keep the toggle OFF and let
-                // the empty-state hint tell the operator why.
-                if (paletteOptions.length === 0) return;
-                const seedPalette =
-                  ca.palettes && ca.palettes.length > 0 ? ca.palettes : [paletteOptions[0].id];
-                setAction({
-                  ...action,
-                  colorAutopilot: {
-                    active: true,
-                    palettes: seedPalette,
-                    delay_s: ca.delay_s && ca.delay_s > 0 ? ca.delay_s : 30,
-                    shuffle: ca.shuffle ?? false,
-                  },
-                });
-              }
-            }}
-            label={ca.active ? 'COLOR AUTOPILOT ON' : 'COLOR AUTOPILOT OFF'}
-          />
-          {paletteOptions.length === 0 ? (
-            <Text style={[styles.hint, { marginTop: 8 }]}>
-              No color palettes reported by the engine — color autopilot unavailable.
-            </Text>
-          ) : null}
-          {ca.active ? (
-            <>
-              <View style={{ height: 8 }} />
-              <FieldLabel>COLOR PALETTES</FieldLabel>
-              {/* COMPACT, SELECTED-ONLY chips (operator feedback): show only the
-                  chosen palettes as removable chips with their REAL c1/c2
-                  swatch, plus a "+ ADD" affordance that expands the rest inline.
-                  We never render the whole library grid by default. */}
-              <View style={[styles.chipRow, { alignItems: 'center' }]}>
-                {(ca.palettes ?? []).map((id) => {
-                  const p = paletteById.get(id);
-                  if (!p) return null;
-                  const canRemove = (ca.palettes ?? []).length > 1;
-                  return (
-                    <TouchableOpacity
-                      key={id}
-                      disabled={!canRemove}
-                      onPress={() => {
-                        // Never let the active selection drop to empty (the block
-                        // must stay valid while ON) — last chip is non-removable.
-                        if (!canRemove) return;
-                        const palettes = (ca.palettes ?? []).filter((x) => x !== id);
-                        setAction({ ...action, colorAutopilot: { ...ca, active: true, palettes } });
-                      }}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Remove palette ${p.name}`}
-                      style={[styles.caChip, { borderColor: C.primary, backgroundColor: C.primary }]}
-                    >
-                      {typeof p.c1 === 'number' && typeof p.c2 === 'number'
-                        ? <DualSwatch h1={p.c1} h2={p.c2} size={14} />
-                        : null}
-                      <Text style={[styles.caChipText, { color: C.onPrimary }]}>{p.name.toUpperCase()}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-                <TouchableOpacity
-                  onPress={() => setCaAdding((v) => !v)}
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: caAdding }}
-                  accessibilityLabel={caAdding ? 'Close palette picker' : 'Add palettes'}
-                  style={[styles.caChip, { borderColor: C.ghostBorder, borderStyle: 'dashed', backgroundColor: 'transparent' }]}
-                >
-                  <Text style={[styles.caChipText, { color: C.text }]}>{caAdding ? 'DONE' : '+ ADD'}</Text>
-                </TouchableOpacity>
-              </View>
-              {/* Inline library popover — only the UNSELECTED palettes; tap to
-                  add. Collapsed by default to keep the sheet compact. */}
-              {caAdding ? (
-                <View style={styles.caPopover}>
-                  <View style={[styles.chipRow, { marginTop: 0 }]}>
-                    {paletteOptions.filter((p) => !(ca.palettes ?? []).includes(p.id)).length === 0 ? (
-                      <Text style={styles.hint}>All palettes selected.</Text>
-                    ) : (
-                      paletteOptions.filter((p) => !(ca.palettes ?? []).includes(p.id)).map((p) => (
-                        <TouchableOpacity
-                          key={p.id}
-                          onPress={() => {
-                            const palettes = [...(ca.palettes ?? []), p.id];
-                            setAction({ ...action, colorAutopilot: { ...ca, active: true, palettes } });
-                          }}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Add palette ${p.name}`}
-                          style={[styles.caChip, { borderColor: C.ghostBorder, backgroundColor: 'transparent' }]}
-                        >
-                          {typeof p.c1 === 'number' && typeof p.c2 === 'number'
-                            ? <DualSwatch h1={p.c1} h2={p.c2} size={14} />
-                            : null}
-                          <Text style={[styles.caChipText, { color: C.text }]}>{p.name.toUpperCase()}</Text>
-                        </TouchableOpacity>
-                      ))
-                    )}
-                  </View>
-                </View>
-              ) : null}
-              <View style={{ height: 8 }} />
-              <FieldLabel>COLOR DELAY (SEC)</FieldLabel>
-              <Stepper
-                value={ca.delay_s ?? 30}
-                step={5}
-                onChange={(v) => setAction({ ...action, colorAutopilot: { ...ca, active: true, palettes: ca.palettes ?? [], delay_s: v } })}
-                min={5} max={600}
-                format={(v) => `${v}s`}
-              />
-              <View style={{ height: 8 }} />
-              {/* TRANSITION (crossfade) — palette analogue of DECK TX crossfade
-                  time. CUT = hard switch; the rest ramp the palette params. */}
-              <FieldLabel>COLOR TRANSITION</FieldLabel>
-              <Segmented
-                options={COLOR_TRANSITION_PRESETS_MS.map((ms) => ({ id: String(ms), label: formatColorTransition(ms) }))}
-                value={String(ca.transitionMs ?? 0)}
-                onChange={(id) => setAction({ ...action, colorAutopilot: { ...ca, active: true, palettes: ca.palettes ?? [], transitionMs: Number(id) } })}
-              />
-              <View style={{ height: 8 }} />
-              <ToggleChip
-                on={!!ca.shuffle}
-                onToggle={() => setAction({ ...action, colorAutopilot: { ...ca, active: true, palettes: ca.palettes ?? [], shuffle: !ca.shuffle } })}
-                label={ca.shuffle ? 'COLOR SHUFFLE ON' : 'COLOR SHUFFLE OFF'}
-              />
-            </>
-          ) : null}
-        </View>
-      );
-    }
-    return null;
+        </ActionCard>
+      </>
+    );
   };
 
   return (
@@ -1212,28 +1205,6 @@ function makeStyles(C: Palette) {
       flexWrap: 'wrap',
       gap: 8,
       marginTop: 8,
-    },
-    caChip: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 6,
-      paddingHorizontal: 10,
-      paddingVertical: 7,
-      borderRadius: 8,
-      borderWidth: 1,
-    },
-    caChipText: {
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: 11,
-      letterSpacing: 0.4,
-    },
-    caPopover: {
-      marginTop: 8,
-      padding: 8,
-      borderRadius: 8,
-      backgroundColor: C.surfaceContainerHigh,
-      borderWidth: 1,
-      borderColor: C.ghostBorder,
     },
     dayPill: {
       minWidth: 44,

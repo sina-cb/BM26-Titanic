@@ -52,9 +52,15 @@ export interface ColorAutopilotPanelProps {
    *  1 Hz interval), so it ticks the same whether the operator or a plan cue
    *  drives the cadence — without re-rendering the deck screen. */
   countdownTargetMs?: number | null;
+  /** Render WITHOUT the outer surfaceContainerHigh card chrome, for embedding in
+   *  another card (e.g. the cue editor). Default = full card wrapper. Mirrors the
+   *  sibling PatternAutopilotPanel's `bare`. */
+  bare?: boolean;
+  /** Card header label. Default "AUTOPILOT COLORS". */
+  title?: string;
 }
 
-export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config, onChange, disabled, countdownTargetMs }) => {
+export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config, onChange, disabled, countdownTargetMs, bare = false, title = 'AUTOPILOT COLORS' }) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
 
@@ -103,12 +109,14 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
   };
 
   return (
-    <View style={{ marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: 8, backgroundColor: C.surfaceContainerHigh, ...globalStyles.ghostBorder, gap: 8, opacity: disabled ? 0.6 : 1 }}>
+    <View style={bare
+      ? { gap: 8, opacity: disabled ? 0.6 : 1 }
+      : { marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: 8, backgroundColor: C.surfaceContainerHigh, ...globalStyles.ghostBorder, gap: 8, opacity: disabled ? 0.6 : 1 }}>
       {/* Header row: label + ON/PAUSE + SHUFFLE — same recipe as the pattern
           AUTOPILOT card so the two read as a matched pair. */}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>AUTOPILOT COLORS</Text>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>{title}</Text>
           {/* Next-palette-swap countdown — matched pair with the pattern
               autopilot's timer chip; self-ticking, only shows while a swap is
               scheduled. */}
