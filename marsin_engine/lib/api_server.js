@@ -3427,6 +3427,29 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return colorAutopilotState();
   }
 
+  // Timeline-cue variant of setColorAutopilot: same config/(re)start, but on an
+  // ACTIVATING cue it also applies the FIRST palette IMMEDIATELY rather than
+  // waiting a full delay_s. The immediate apply crossfades per the cue's
+  // transitionMs, seeded from the LIVE on-screen palette (paramCenter's current
+  // colorPalette1/2) so the fade starts from what the operator actually sees —
+  // not a stale/null start that would jump then fade. Scoped to the timeline dep
+  // (the operator's manual /color-autopilot REST toggle keeps its wait-then-cycle
+  // cadence). colorAutopilot.triggerNext() applies palette[0] now AND reschedules
+  // the next switch, so the ongoing cadence is unchanged.
+  function timelineSetColorAutopilot(wire) {
+    const out = setColorAutopilot(wire);
+    if (wire && wire.active && paramCenter) {
+      colorAutopilot.seedCurrentParams({
+        colorPalette1: paramCenter.get('colorPalette1'),
+        colorPalette2: paramCenter.get('colorPalette2'),
+      });
+      // Fire-and-forget: the crossfade tween schedules its own frames. A throw
+      // here (e.g. unknown palette) can't happen — the ids were validated above.
+      colorAutopilot.triggerNext();
+    }
+    return out;
+  }
+
   // ── Timeline service (docs/38 §15) ──────────────────────────────────
   // The Timeline (show director) runs IN the engine now — no separate
   // :6965 companion process. It owns a 1 s tick, reads mood DIRECTLY off
@@ -3501,11 +3524,35 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       broadcastMixerState();
       return;
     }
-    loadPlaylistEntry(baseCh, pl.name, firstEntry.id);
-    saveAllState();
-    opts.pattern = baseCh.pattern;
-    broadcastWs({ type: 'pattern', name: baseCh.pattern });
-    broadcastMixerState();
+    // Route the deck swap through the TRANSITION-aware loader (same path the
+    // pattern-autopilot swap + the manual /deck/playlist route use) so a cue's
+    // authored `transition` (mode/duration/shuffle, set on deckTransitionConfig
+    // by _applyDeckTransition just before this load) actually ANIMATES the swap
+    // instead of hard-cutting (operator: "use the settings for the cue to do
+    // transition of pattern"). When the effective config is disabled (a "default"
+    // cue that inherits a deck with transitions off), the WithTransition loader
+    // itself falls back to the exact instant load + save/broadcast this used to
+    // do — byte-for-byte identical.
+    //
+    // CONCURRENCY: only ONE deck swap can animate at a time (the mixer refuses an
+    // overlapping one with EBUSY). A cue apply can land on the deck while a prior
+    // swap is still fading — most notably on BOOT, where catchUp restores a cue
+    // (animated) and the autopilot baseline loads its playlist immediately after.
+    // A second animated swap can't start, so LAND THE TARGET INSTANTLY in that
+    // window — the SAME guaranteed-load behavior this path always had before
+    // transitions were added (the cue content must never be dropped). This is a
+    // concurrency decision, not error-hiding: we animate when we can, else load
+    // now. The returned `done` promise is intentionally NOT awaited: the fade
+    // runs in the background (mixer-driven), same as an operator's manual swap.
+    if (deckSwapInFlightReason()) {
+      loadPlaylistEntry(baseCh, pl.name, firstEntry.id);
+      saveAllState();
+      opts.pattern = baseCh.pattern;
+      broadcastWs({ type: 'pattern', name: baseCh.pattern });
+      broadcastMixerState();
+    } else {
+      loadPlaylistEntryWithTransition(baseCh, pl.name, firstEntry.id, deckTransitionConfig);
+    }
   }
   function timelineLoadPlaylistOnMixer(id, name) {
     const ch = mixer.getMixerChannel(id);
@@ -3700,8 +3747,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         setDeckOverlaysEnabled: (enabled) => timelineSetDeckOverlaysEnabled(enabled),
         // Color autopilot (docs/39): a deck playlist cue's colorAutopilot block
         // configures + (re)starts / stops the engine palette-cycling daemon.
-        // Bound to the real internal fn (no HTTP self-call).
-        setColorAutopilot: (wire) => setColorAutopilot(wire),
+        // Bound to the real internal fn (no HTTP self-call). On cue START we
+        // also apply the FIRST palette immediately (crossfading per the cue's
+        // transitionMs, seeded from the live on-screen color) instead of waiting
+        // a full delay_s and hard-cutting — so a cue's color settings visibly
+        // transition the deck the moment it fires (operator: "use the settings
+        // for the cue to do transition of ... color").
+        setColorAutopilot: (wire) => timelineSetColorAutopilot(wire),
         forceDeckView: () => timelineForceDeckView(),
         // Release the plan's soft deck-pin (docs/38 §16.9). Called on every
         // transition where the plan stops driving the deck (pause / autopilot

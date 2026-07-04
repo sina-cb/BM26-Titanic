@@ -208,6 +208,19 @@ test('crossfade ramps the palette params over transitionMs toward the target', a
   }
 });
 
+test('seedCurrentParams makes the FIRST apply crossfade FROM the seeded live color (no snap)', async () => {
+  // Timeline cue-start path: seed the current on-screen color, then the first
+  // palette (aurora, h=0) ramps FROM the seeded hue instead of snapping.
+  const { ca, writes, advance } = makeCrossfadeCA(1000);
+  ca.seedCurrentParams({ colorPalette1: { h: 60, s: 1, v: 1 } });
+  const p = ca.triggerNext(); // aurora (h=0), fading DOWN from the seeded h=60
+  const firstHue = writes.at(-1).colorPalette1.h;
+  assert.ok(firstHue > 50, `first frame starts near the SEEDED hue (60), got ${firstHue}`);
+  advance(1100);
+  await p;
+  assert.equal(writes.at(-1).colorPalette1.h, 0, 'tween lands exactly on the target hue');
+});
+
 test('reconfig mid-crossfade cancels the in-flight tween cleanly (no further frames)', async () => {
   const { ca, writes, advance } = makeCrossfadeCA(1000);
   await ca.triggerNext(); // aurora snaps

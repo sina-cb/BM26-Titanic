@@ -216,6 +216,18 @@ export class ColorAutopilot {
   }
 
   /**
+   * Seed the crossfade START point with an already-resolved params object (the
+   * shape resolvePaletteFn returns: { colorPalette1:{h,s,v}, colorPalette2:{h,s,v} }).
+   * Used by the timeline before a cue-start immediate apply so the FIRST palette
+   * fades FROM the color that's actually on screen (the live CPC palette) rather
+   * than from a stale/null start — which would otherwise jump then fade. A no-op
+   * degrades to a hard snap on the first apply (from === null).
+   */
+  seedCurrentParams(params) {
+    this._currentParams = params || null;
+  }
+
+  /**
    * Schedule the next tick `delay_s` seconds from now, if active. Clears any
    * existing timer first. Captures the current generation so the scheduled
    * callback can bail if state has since changed.
