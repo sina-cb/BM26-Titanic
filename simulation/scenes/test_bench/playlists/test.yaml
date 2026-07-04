@@ -100,7 +100,16 @@ entries:
   - id: e_test_16_test_params
     pattern: test/test_params
     label: null
-    defaults: {}
+    defaults:
+      sliderSpeed: 0
+      sliderFlashSpeed: 0
+      toggleReverse: 0
+      hsvPickerColor:
+        h: 0
+        s: 1
+        v: 1
+      toggleBreathing: 0
+      toggleHoldFlash: 0
     modulations: []
     notes: null
   - id: e_test_17_wipe

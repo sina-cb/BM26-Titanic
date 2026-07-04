@@ -31,3 +31,6 @@ kick:
 structureDetector:
   enabled: true
   dropEdgeMode: windowed
+sub:
+  minHz: 30
+  maxHz: 60

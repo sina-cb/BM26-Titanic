@@ -15,7 +15,7 @@ server:
   port: 6968
 playlist:
   active: true
-  delay_s: '45'
+  delay_s: '10'
   shuffle: true
 web_client:
   enabled: false
