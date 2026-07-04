@@ -349,6 +349,11 @@ export interface ActionPlaylist {
   // Global HUE SHIFT (degrees, 0–360) applied when the cue fires. DECK-ONLY:
   // the engine rejects `hue` on a non-deck target. Absent = leave hue as-is.
   hue?: number;
+  // Global CPC knobs applied when the cue fires (DECK-ONLY): SPEED / SIZE
+  // (0..1) and bpmSpeedSync (0|1, the SYNC toggle). Rig-wide — they route
+  // through the same setParams path a look's `globals` uses. Absent = leave
+  // globals as-is.
+  globals?: { speed?: number; size?: number; bpmSpeedSync?: number };
 }
 export interface ActionGlobals { type: 'globals'; set: Record<string, unknown> }
 // NOTE: the engine also validates a `scene` action, but the maker deliberately

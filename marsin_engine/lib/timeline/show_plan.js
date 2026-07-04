@@ -466,6 +466,16 @@ function validateAction(action, label, lookNames) {
         }
         out.hue = ((action.hue % 360) + 360) % 360;
       }
+      // globals: rig-wide CPC knobs (SPEED/SIZE/bpmSpeedSync) applied when the
+      // cue fires, via the SAME setParams path a look's `globals` uses. Gated
+      // to a deck target for consistency with the other authored knobs (the
+      // maker is deck-only). Reuses validateGlobalsMap (Number or {h,s,v}).
+      if (action.globals !== undefined) {
+        if (out.target.channel !== 'deck') {
+          throw new Error(`${label}.globals is only valid for a deck target`);
+        }
+        out.globals = validateGlobalsMap(action.globals, `${label}.globals`);
+      }
       return out;
     }
     case 'look': {

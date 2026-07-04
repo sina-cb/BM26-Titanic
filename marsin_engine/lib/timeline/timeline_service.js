@@ -642,6 +642,9 @@ export class TimelineService {
         // hue is validated DECK-ONLY (show_plan.js) → only when a deck target
         // is in play. Applies the GLOBAL hue shift alongside the deck swap.
         if (action.hue !== undefined && onDeck) await this._applyHue(action.hue, steps);
+        // globals (SPEED/SIZE/bpmSpeedSync) — validated DECK-ONLY (show_plan.js).
+        // Routes through _writeGlobals → setParams, exactly like a look's globals.
+        if (action.globals && onDeck) await this._writeGlobals(action.globals, steps, 'cue globals');
         // The plan is driving the DECK → pin engine output to the deck (docs/38
         // §16.9). Reuses the existing viewOverride machinery via the injected dep.
         if (onDeck) await this._forceDeckView(steps);

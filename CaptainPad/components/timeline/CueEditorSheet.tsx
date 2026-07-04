@@ -656,6 +656,14 @@ export function CueEditorSheet({
     const transitionSource: 'default' | 'custom' = pl.transition ? 'custom' : 'default';
     const overlayMode: 'asis' | ActionOverlays = pl.overlays ?? 'asis';
     const hueDeg = typeof pl.hue === 'number' ? pl.hue : 0;
+    // GLOBALS (SPEED/SIZE/SYNC) — block presence gates the card; seeded on
+    // enable so the emitted JSON always carries all three. speed/size are CPC
+    // params in [0,1]; bpmSpeedSync is the SYNC toggle (0|1).
+    const glOn = pl.globals !== undefined;
+    const gl = pl.globals ?? {};
+    const speedVal = typeof gl.speed === 'number' ? gl.speed : 0.5;
+    const sizeVal = typeof gl.size === 'number' ? gl.size : 0.5;
+    const syncOn = (gl.bpmSpeedSync ?? 0) >= 0.5;
 
     // Adapter for the reused ColorAutopilotPanel: its config type requires a
     // non-optional `shuffle`, while the cue's ActionColorAutopilot has it
@@ -869,7 +877,73 @@ export function CueEditorSheet({
           )}
         </ActionCard>
 
-        {/* 6. OVERLAYS — cue-level overlay intent. "Leave as-is" emits nothing. */}
+        {/* 6. GLOBALS — NEW. Rig-wide CPC knobs (SPEED/SIZE/SYNC) applied when
+            the cue fires (deck-only). ON seeds {speed:0.5,size:0.5,bpmSpeedSync:0};
+            OFF drops the field. Lets a cue pin speed low and keep sync off. */}
+        <ActionCard
+          title="GLOBALS"
+          right={
+            <ToggleChip
+              on={glOn}
+              onToggle={() => {
+                if (glOn) {
+                  const next = { ...pl };
+                  delete next.globals;
+                  setAction(next);
+                } else {
+                  setAction({ ...pl, globals: { speed: 0.5, size: 0.5, bpmSpeedSync: 0 } });
+                }
+              }}
+              label={glOn ? 'SET GLOBALS' : 'LEAVE AS-IS'}
+            />
+          }
+        >
+          {glOn ? (
+            <View style={{ gap: 12 }}>
+              {/* SPEED */}
+              <View style={{ gap: 6 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <FieldLabel>SPEED</FieldLabel>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: C.text }}>{`${Math.round(speedVal * 100)}%`}</Text>
+                </View>
+                <HorizontalFader
+                  value={speedVal}
+                  onChange={(v: number) => setAction({ ...pl, globals: { ...gl, speed: Math.round(v * 100) / 100 } })}
+                  trackStyle={{ height: 28, borderRadius: 14, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerLowest, justifyContent: 'center' }}
+                  fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 14, backgroundColor: C.primary }}
+                  thumbStyle={{ width: 6, height: 32, borderRadius: 3, backgroundColor: C.text, marginTop: -2 }}
+                />
+              </View>
+              {/* SIZE */}
+              <View style={{ gap: 6 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <FieldLabel>SIZE</FieldLabel>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: C.text }}>{`${Math.round(sizeVal * 100)}%`}</Text>
+                </View>
+                <HorizontalFader
+                  value={sizeVal}
+                  onChange={(v: number) => setAction({ ...pl, globals: { ...gl, size: Math.round(v * 100) / 100 } })}
+                  trackStyle={{ height: 28, borderRadius: 14, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerLowest, justifyContent: 'center' }}
+                  fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 14, backgroundColor: C.primary }}
+                  thumbStyle={{ width: 6, height: 32, borderRadius: 3, backgroundColor: C.text, marginTop: -2 }}
+                />
+              </View>
+              {/* SYNC — bpmSpeedSync: drive SPEED from the arbitrated tempo. */}
+              <ToggleChip
+                on={syncOn}
+                onToggle={() => setAction({ ...pl, globals: { ...gl, bpmSpeedSync: syncOn ? 0 : 1 } })}
+                label={syncOn ? 'SPEED SYNC ON' : 'SPEED SYNC OFF'}
+              />
+              <Text style={styles.hint}>
+                SYNC drives SPEED from the arbitrated tempo (OSC/TAP). Off = SPEED stays where you set it.
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.hint}>Leave as-is — this cue doesn&apos;t change speed, size, or sync.</Text>
+          )}
+        </ActionCard>
+
+        {/* 7. OVERLAYS — cue-level overlay intent. "Leave as-is" emits nothing. */}
         <ActionCard title="OVERLAYS">
           <Segmented
             options={OVERLAY_OPTIONS}

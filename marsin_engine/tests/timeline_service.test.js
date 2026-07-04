@@ -1156,6 +1156,42 @@ test('hue apply: deck cue with hue reaches setGlobalHue with normalized degrees'
   assert.equal(calls.setGlobalHue[0], 20, 'hue normalized 380 → 20 before apply');
 });
 
+test('globals schema: SPEED/SIZE/SYNC on a deck playlist action round-trip', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    globals: { speed: 0.2, size: 0.75, bpmSpeedSync: 0 },
+  });
+  const norm = validateShowPlan(plan);
+  assert.deepEqual(norm.cues[0].action.globals, { speed: 0.2, size: 0.75, bpmSpeedSync: 0 });
+});
+
+test('globals schema: globals on a non-deck target throws', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'mixer', id: 'ch1' },
+    globals: { speed: 0.2 },
+  });
+  assert.throws(() => validateShowPlan(plan), /globals is only valid for a deck target/);
+});
+
+test('globals apply: a deck cue with globals reaches setParams (SPEED/SIZE/SYNC)', async () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    globals: { speed: 0.2, size: 0.75, bpmSpeedSync: 1 },
+  });
+  const { svc, calls, setMood } = setupWithPlan(plan);
+  await svc.start();
+  calls.setParams.length = 0;
+
+  setMood({ party: 0, value: 0 });
+  await svc._tick();
+  setMood({ party: 1, value: 1 });
+  await svc._tick();
+  svc.stop();
+
+  assert.equal(calls.setParams.length, 1, 'setParams called once for the deck cue globals');
+  assert.deepEqual(calls.setParams[0], { speed: 0.2, size: 0.75, bpmSpeedSync: 1 });
+});
+
 // ── buildOverview carries durationMin (BUG 2 regression guard) ──────────────
 // A cue authored with durationMin>0 must surface durationMin on its overview
 // cue object so the maker strip renders it as a deck-owned BLOCK (start→
