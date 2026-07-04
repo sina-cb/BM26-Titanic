@@ -37,6 +37,8 @@ _PODIUM_DIR = _HERE.parent.parent
 sys.path.insert(0, str(_PODIUM_DIR.parent))  # repo root, for `control_podium.*`
 sys.path.insert(0, str(_PODIUM_DIR))         # in-package imports
 
+from utils import nodes_config  # noqa: E402  (needs the sys.path insert above)
+
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 # ── Config source ─────────────────────────────────────────────────────
@@ -45,7 +47,9 @@ NODES_PATH = _PODIUM_DIR / ".config.nodes.yaml"
 
 def _load_hil_pairings() -> Dict[str, Dict[str, str]]:
     """Return ``{role_or_name: {mac, node_id, role}}`` from
-    ``.config.nodes.yaml``. Empty dict if missing — HIL tests self-skip.
+    ``.config.nodes.yaml`` merged with the gitignored usb_mac pairing
+    overlay (real device MACs never live in the committed file — this
+    repo is public). Empty dict if missing — HIL tests self-skip.
     """
     if not NODES_PATH.exists():
         return {}
@@ -53,12 +57,16 @@ def _load_hil_pairings() -> Dict[str, Dict[str, str]]:
         doc = yaml.safe_load(NODES_PATH.read_text()) or {}
     except yaml.YAMLError:
         return {}
+    try:
+        pairing = nodes_config.load_pairing(_PODIUM_DIR)
+    except yaml.YAMLError:
+        pairing = {}
     nodes_by_id = doc.get("nodes") or {}
     out: Dict[str, Dict[str, str]] = {}
     for nid, n in nodes_by_id.items():
         if not isinstance(n, dict):
             continue
-        mac = n.get("usb_mac")
+        mac = (pairing.get(nid) if isinstance(nid, int) else None) or n.get("usb_mac")
         if not mac:
             continue
         # Index by both name and role so test code can ask for either.

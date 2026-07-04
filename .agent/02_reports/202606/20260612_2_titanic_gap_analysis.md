@@ -90,7 +90,7 @@ dramatic/night-walk), none area-specific.
 
 Method: real-UI puppeteer run (`~/tmp/titanic_map_exercise.cjs`) on
 `?scene=titanic`, slot-2 ports. One controller per group (10 controllers,
-named after the groups, IPs 10.1.1.10–10.1.1.19) created through the
+named after the groups, IPs 10.x.x.10–10.x.x.19) created through the
 `+ Add Controller` modal; every fixture mapped through **pick mode**
 (`+ list` → tray filter = group name → click chips one by one). No
 `Save Configuration` click at any point. Afterwards `git status` confirmed

@@ -25,6 +25,10 @@ Desktop.ini
 # Control podium runtime state (MACs paired to roles)
 control_podium/.config.pairing.yaml
 control_podium/.config.deploy.yaml
+# Node table hardware pairing overlay (node id → usb_mac). Real device
+# MACs stay out of the committed .config.nodes.yaml — this repo is
+# public. Written by firmware/deploy.py; merged by utils/nodes_config.py.
+control_podium/.config.nodes.pairing.yaml
 
 # server_bridge — Pi SSH credentials. Each developer maintains their
 # own copy from `.ssh.secret.example`; never committed.
@@ -158,8 +162,13 @@ simulation/scenes/*/playlists/hil_*.yaml
 !simulation/vendor/three/build/
 !simulation/vendor/three/build/**
 
-# Claude Code local settings + agent worktrees (machine-local / transient)
-.claude/
+# Claude Code local settings + agent worktrees (machine-local / transient).
+# `.claude/*` (not `.claude/`) so the negation below can re-include the
+# COMMITTED project settings — the pre-commit security-gate hook lives
+# there and must ship with the repo. Everything else under .claude/
+# (settings.local.json, worktrees/, projects/) stays ignored.
+.claude/*
+!.claude/settings.json
 
 # Timeline companion runtime state (regenerated on boot)
 marsin_engine/states/*/timeline_state.yaml

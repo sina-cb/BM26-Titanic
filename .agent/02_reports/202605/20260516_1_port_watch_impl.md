@@ -475,7 +475,7 @@ Tier-1 ("rig is down at the playa"):
 3. Check the bridge process on the Raspberry Pi —
    `systemctl status titanic-bridge` (or `bridge.py` foreground
    for the dev setup).
-4. Check `marsin_engine` health on `http://10.1.1.172:6968/status`.
+4. Check `marsin_engine` health on `http://10.x.x.172:6968/status`.
 
 Tier-2 ("things look stale"):
 1. Watch PortWatch's LOGS tab. Polling fires every 5 s; if you

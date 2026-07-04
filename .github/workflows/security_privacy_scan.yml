@@ -1,0 +1,69 @@
+# Security & privacy leak scan (gitleaks).
+#
+# Defense-in-depth for a PUBLIC repo: .gitignore already keeps the real
+# secrets out (secret.yaml, PSK, SSH creds, WiFi/AP creds from
+# $BM26_SECRETS), but a stray paste into a report, doc, or config would
+# still land in the open. This job diffs every PR and every push to main
+# for committed secrets AND the project-specific privacy patterns we care
+# about (WiFi SSIDs, AP passphrases, device MACs) — see .gitleaks.toml.
+#
+# What it flags (see .gitleaks.toml for the exact rules):
+#   - all of gitleaks' built-in secret detectors (keys, tokens, creds)
+#   - device MAC addresses
+#   - public (non-RFC1918) IPs anywhere; ANY IP inside .agent/ reports
+#   - hardcoded password / passkey / passphrase literals
+#   - email addresses (PII), personal info in reports
+#
+# Overriding a finding (when CI is wrong and the value is genuinely safe):
+#   1. Preferred: redact the value, or add `# gitleaks:allow` inline on
+#      the flagged line (self-documenting, survives rebases).
+#   2. Add the finding's fingerprint (printed in the job log/summary as
+#      <commit>:<file>:<rule>:<line>) to .gitleaksignore.
+#   3. For a whole CLASS of false positives, extend the allowlists in
+#      .gitleaks.toml — never delete a rule or this workflow for one hit.
+#
+# Scope: it scans the NEW commits in a PR / push, not the whole history,
+# so pre-existing history (e.g. the SSID already redacted in e227fb37 but
+# still reachable in old commits) does not block ongoing work. For a
+# one-time full-history audit, run locally:
+#
+#   docker run -v "$PWD:/repo" zricethezav/gitleaks:latest \
+#     detect --source=/repo --config=/repo/.gitleaks.toml --redact -v
+#
+# gitleaks-action is free for public and personal-account repos; no
+# GITLEAKS_LICENSE is required here.
+
+name: security-privacy-scan
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: read the code, and write PR comments when a leak is
+# found on a pull_request event. Nothing else.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history so gitleaks can diff the pushed commits)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for secrets & privacy leaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_ENABLE_SUMMARY: true
+          # The action's default binary (8.24.x) predates the [[allowlists]]
+          # (plural, regexTarget-aware) config syntax used in .gitleaks.toml —
+          # with it, the global allowlists are silently ignored and placeholder
+          # MACs/IPs false-positive. Pin a version with the modern semantics.
+          GITLEAKS_VERSION: "8.28.0"

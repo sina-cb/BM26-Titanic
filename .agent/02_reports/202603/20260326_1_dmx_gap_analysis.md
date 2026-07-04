@@ -178,7 +178,7 @@ routes:
       universe: 1
     output:
       protocol: artnet
-      ip: "10.1.1.102"
+      ip: "10.x.x.102"
       universe: 0
 ```
 
@@ -187,7 +187,7 @@ routes:
 Protocol:  sACN (E1.31)
 Universe:  1
 Priority:  150
-Mode:      Unicast → 10.1.1.102  (or Multicast)
+Mode:      Unicast → 10.x.x.102  (or Multicast)
 ```
 
 ---

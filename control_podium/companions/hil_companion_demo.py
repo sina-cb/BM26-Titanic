@@ -81,6 +81,7 @@ from comms.frame import (
 from comms.radio_port_serial import RadioPortSerial
 from comms.registry import CommandRegistry
 from utils import discovery
+from utils.nodes_config import load_nodes
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -117,12 +118,11 @@ def _section(title: str) -> None:
 # ── Hardware resolution (same as hil_secured_demo, but split out so this
 # script can run standalone with no other imports from that file) ────────
 def _resolve_ports() -> tuple[str, str, int]:
-    nodes_yaml = yaml.safe_load((BASE / ".config.nodes.yaml").read_text()) or {}
-    nodes = nodes_yaml.get("nodes") or {}
+    nodes = load_nodes()
     server_node = nodes.get(0x01)
     if not server_node or not server_node.get("usb_mac"):
         sys.exit(
-            "server (0x01) has no usb_mac in .config.nodes.yaml — "
+            "server (0x01) has no usb_mac paired (.config.nodes.pairing.yaml) — "
             "run firmware/deploy.py --node 0x01 to pair it first."
         )
     server_port = discovery.find_port_by_mac(server_node["usb_mac"])
