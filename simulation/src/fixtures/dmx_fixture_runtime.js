@@ -82,6 +82,30 @@ function getLedGlowTexture() {
   return _ledGlowTexture;
 }
 
+// ── LED diffusor "screen" panel ─────────────────────────────────────────
+// A flat translucent panel drawn across the fixture's front face that reads
+// the live per-pixel colors and paints a blended 2D surface — the look of
+// LEDs mounted behind a ~50% opaque milky-white polycarbonate diffuser. It is
+// a per-fixture CanvasTexture on a Plane (its own canvas/texture/mesh, so the
+// GPU cost is isolated and it's zero when OFF), and it works for ANY pixel
+// layout (grid / line / arbitrary TE-Sign map) because each pixel is stamped
+// at its own local position — no grid assumption. Distinct from the diffusion
+// glow (which is additive halo sprites); this is a real bounded surface.
+const SCREEN_TEX_LONG_EDGE = 256;   // canvas px on the panel's longer edge
+const SCREEN_MILK = 0.35;           // mix each LED color toward white (milky-diffuser pastel)
+const SCREEN_BASE_ALPHA = 0.05;     // faint body of the unlit polycarb sheet
+const SCREEN_CORE_ALPHA = 0.85;     // blob centre alpha before the radial falloff
+const SCREEN_DEFAULT_PIXEL_MM = 60; // default blob diameter (mm) — a touch over a 50mm pitch so blobs merge
+
+// Blob radius, in mm, that each pixel bleeds across the diffuser. Missing or
+// garbage → the default; clamped so a slider can't collapse it to a dot or
+// blow it up past the panel.
+function clampScreenPixelMm(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return SCREEN_DEFAULT_PIXEL_MM;
+  return THREE.MathUtils.clamp(numeric, 10, 400);
+}
+
 function clampUnit(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 0;
@@ -374,8 +398,112 @@ export class DmxFixtureRuntime {
       });
     }
 
+    // Diffusor screen panel — lazily built on first enable (see update()), so
+    // an LED fixture that never turns it on allocates no canvas/texture/mesh.
+    this._screen = null;
+
     // ─── Initial positioning ─────────────────────────────────────────
     this.syncFromConfig();
+  }
+
+  // Build the per-fixture diffusor panel: a Plane across the fixture's front
+  // face carrying a CanvasTexture that `update()` repaints from the live pixel
+  // colors. Sized to the physical fixture (falls back to the pixel bounds), so
+  // it moves / rotates / resizes with the fixture (it lives in `this.group`).
+  _buildScreen() {
+    // Pixel bounds in group-local space (works for grid / line / arbitrary map).
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, sumZ = 0, n = 0;
+    for (const p of this.pixels) {
+      if (!p.localPos) continue;
+      minX = Math.min(minX, p.localPos.x); maxX = Math.max(maxX, p.localPos.x);
+      minY = Math.min(minY, p.localPos.y); maxY = Math.max(maxY, p.localPos.y);
+      sumZ += p.localPos.z; n++;
+    }
+    if (n === 0) return; // nothing to diffuse
+
+    const spanX = maxX - minX;
+    const spanY = maxY - minY;
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    const zPlane = sumZ / n;
+
+    // Prefer the physical fixture face; fall back to the pixel span (+margin)
+    // for a definition with no dimensions or a degenerate 1-row/1-col layout.
+    const margin = 0.04;
+    const width = Math.max(this._fixtureWidth || 0, spanX + margin, 0.05);
+    const height = Math.max(this._fixtureHeight || 0, spanY + margin, 0.05);
+
+    // Canvas: fixed long edge, aspect-matched, so the paint cost is bounded.
+    const long = SCREEN_TEX_LONG_EDGE;
+    const cw = width >= height ? long : Math.max(1, Math.round(long * width / height));
+    const ch = width >= height ? Math.max(1, Math.round(long * height / width)) : long;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = cw;
+    canvas.height = ch;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+
+    const mat = new THREE.MeshBasicMaterial({
+      map: texture, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), mat);
+    // A hair in front of the LEDs (−Z is the emitting/front direction here).
+    mesh.position.set(centerX, centerY, zPlane - 0.005);
+    mesh.visible = false;
+    this.group.add(mesh);
+
+    this._screen = {
+      mesh, mat, texture, canvas, ctx: canvas.getContext('2d'),
+      cw, ch,
+      originX: centerX - width / 2, originY: centerY - height / 2,
+      width, height,
+    };
+  }
+
+  // Per-frame hook (called from animate.js). Repaints the diffusor panel from
+  // the live pixel colors when it's enabled; otherwise a couple of cheap
+  // checks. Builds the panel lazily the first time it's switched on.
+  update() {
+    if (!this._isLed) return;
+    const on = !!this.config.screen && this.group.visible;
+    if (on && !this._screen) this._buildScreen();
+    if (!this._screen) return;
+    this._screen.mesh.visible = on;
+    if (on) this._paintScreen();
+  }
+
+  _paintScreen() {
+    const scr = this._screen;
+    const { ctx, cw, ch } = scr;
+    const pxPerMeter = cw / scr.width;
+    const radius = Math.max(3, clampScreenPixelMm(this.config.screenPixelSize) * 0.001 * pxPerMeter);
+
+    ctx.clearRect(0, 0, cw, ch);
+    // Faint milky body of the polycarb sheet (barely visible unlit at night).
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = `rgba(255,255,255,${SCREEN_BASE_ALPHA})`;
+    ctx.fillRect(0, 0, cw, ch);
+    // LED bleed: each pixel is an additive soft radial blob, its colour mixed
+    // toward white so the surface reads as diffused pastel, not raw neon.
+    ctx.globalCompositeOperation = 'lighter';
+    for (const p of this.pixels) {
+      if (!p.localPos || !p.bulbMat) continue;
+      const c = p.bulbMat.color;
+      const r = Math.round((c.r * (1 - SCREEN_MILK) + SCREEN_MILK) * 255);
+      const g = Math.round((c.g * (1 - SCREEN_MILK) + SCREEN_MILK) * 255);
+      const b = Math.round((c.b * (1 - SCREEN_MILK) + SCREEN_MILK) * 255);
+      const cx = (p.localPos.x - scr.originX) * pxPerMeter;
+      const cy = ch - (p.localPos.y - scr.originY) * pxPerMeter; // canvas Y is flipped
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+      grad.addColorStop(0, `rgba(${r},${g},${b},${SCREEN_CORE_ALPHA})`);
+      grad.addColorStop(0.6, `rgba(${r},${g},${b},${SCREEN_CORE_ALPHA * 0.35})`);
+      grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    scr.texture.needsUpdate = true;
   }
 
   // ── Visual sync ──────────────────────────────────────────────────────
@@ -735,6 +863,12 @@ export class DmxFixtureRuntime {
         if (d.mesh && d.mesh.geometry) d.mesh.geometry.dispose();
       });
     });
+
+    if (this._screen) {
+      this._screen.mesh.geometry.dispose();
+      this._screen.mat.dispose();
+      this._screen.texture.dispose();
+    }
 
     if (this.shell) {
        this.shell.traverse((child) => {

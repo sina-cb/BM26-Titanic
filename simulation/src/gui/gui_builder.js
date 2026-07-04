@@ -1969,6 +1969,8 @@ function setupGUI() {
           if (_ledDef && _ledDef.bus === 'led') {
             if (config.diffusion === undefined) config.diffusion = false;
             if (config.diffusionAmount === undefined) config.diffusionAmount = 2.5;
+            if (config.screen === undefined) config.screen = false;
+            if (config.screenPixelSize === undefined) config.screenPixelSize = 60;
             if (config.scaleX === undefined) config.scaleX = 1;
             if (config.scaleY === undefined) config.scaleY = 1;
             if (config.scaleZ === undefined) config.scaleZ = 1;
@@ -1980,6 +1982,17 @@ function setupGUI() {
             idxFolder.add(config, "diffusionAmount", 1, 6, 0.1).name("Diffusion Amt").onChange(() => {
               selectThisLight();
               window.syncLightFromConfig(index);
+            });
+
+            // Diffusor screen: a milky-white polycarb panel across the fixture
+            // face that blends the LED colors into a 2D surface. Pixel Size is
+            // the per-LED bleed radius (mm) — bigger = softer, more merged.
+            // Live per frame, so no syncLightFromConfig() needed to repaint.
+            idxFolder.add(config, "screen").name("Screen (diffusor)").onChange(() => {
+              selectThisLight();
+            });
+            idxFolder.add(config, "screenPixelSize", 10, 300, 5).name("Pixel Size (mm)").onChange(() => {
+              selectThisLight();
             });
 
             // Resize (matches the S / scale gizmo — same config.scaleX/Y/Z).

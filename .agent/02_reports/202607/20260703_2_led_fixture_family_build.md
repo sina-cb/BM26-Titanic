@@ -132,6 +132,41 @@ span `2.4→1.4`, base opacity `0.7→0.45`, and the demo grid's `diffusionAmoun
 `3→1.5`. Re-verified at the `led-grid-close` preset: individual pixels are
 sharp with a tight, dim halo — no wash.
 
+### Diffusor "screen" panel — LEDs behind milky polycarb (2026-07-04)
+
+A new per-fixture, opt-in feature for LED fixtures: a flat translucent **screen**
+drawn across the fixture's front face that reads the live per-pixel colors and
+paints a blended 2D surface — the look of LEDs mounted behind a ~50 % opaque
+milky-white polycarbonate diffuser. Distinct from the diffusion glow (additive
+halo sprites, untouched): the screen is a real bounded surface with hard panel
+edges, so it can't bloom into a smoky cloud.
+
+- **How it works.** Each LED fixture lazily builds (on first enable) its own
+  `THREE.Mesh` PlaneGeometry sized to the physical fixture face (falls back to
+  the pixel bounds), carrying a per-fixture `CanvasTexture`. The per-frame
+  `update()` hook — which `DmxFixtureRuntime` now implements, called from the
+  existing `animate.js` fixture loop — repaints the canvas from each pixel's
+  live `bulbMat.color`: a faint milky base, then one additive soft radial blob
+  per pixel with its colour mixed 35 % toward white (the diffused pastel).
+  Because each pixel is stamped at its own local position, it works for **any**
+  layout — grid, line, or the future arbitrary TE-Sign map — with no grid
+  assumption. It moves / rotates / **resizes** with the fixture (the mesh lives
+  in `this.group`).
+- **Isolation / efficiency.** One small canvas + texture + mesh **per fixture**
+  (no shared/global buffer), built only when first switched on, hidden and
+  skipped when off (a couple of cheap checks per frame), disposed in
+  `destroy()`. A fixture that never enables it pays nothing.
+- **Config + UI.** Two LED-only keys: `screen` (bool) and `screenPixelSize`
+  (mm, the per-LED bleed radius — bigger = softer/more merged, default 60). New
+  GUI controls **"Screen (diffusor)"** + **"Pixel Size (mm)"** next to the
+  Diffusion controls, gated on `bus === 'led'`. No-op for DMX fixtures; the
+  rope strands (a separate `LedStrand` class) are untouched.
+- **Verified in-sim.** Grid 2 (screen ON, `screenPixelSize 70`) renders a clean
+  milky pastel sheet — the LED grid blended through a diffuser — while Grid 1
+  (screen OFF, glow ON) stays crisp glowing dots. A `led-grid-close2` camera
+  preset was added for the Grid-2 close-up. Screen defaults OFF, so every
+  existing fixture is visually unchanged.
+
 ## Open defaults chosen (no operator available to confirm)
 
 - Grid: 8×5, 50 mm pitch, **serpentine** wiring (physical norm for panels;
