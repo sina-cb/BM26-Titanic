@@ -4742,7 +4742,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // the DECK channel's playlist.autopilot (shuffle + group fields), so we
         // mirror the patch into that block too. No pool to rearm — the daemon
         // re-reads the deck playlist every tick.
-        autopilot.updateState(data);
+        //
+        // ORDER MATTERS (2026-07-04): update the DECK channel's playlist.autopilot
+        // BEFORE autopilot.updateState(). updateState reschedules the daemon,
+        // which fires its onSchedule hook → broadcastAutopilot() SYNCHRONOUSLY,
+        // and that broadcast sources delay/active/shuffle from deckAutopilotState()
+        // (the channel block). With the old order (daemon first) the broadcast
+        // echoed the STALE channel delay, so the operator's pill snapped back to
+        // the old value then forward again — the "double-changing" jank.
+        // timelineSetAutopilotOnDeck already uses this channel-first order.
         try {
           const baseCh = mixer.getDeckChannel();
           if (baseCh) {
@@ -4772,6 +4780,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         } catch (e) {
           console.warn('[Autopilot] deck autopilot write failed:', e.message);
         }
+        autopilot.updateState(data);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(deckAutopilotState()));
         // External writers (PortWatch over LoRa, scripts, etc.) need the

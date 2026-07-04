@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { useGlobalStyles } from '@/styles/globalStyles';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { TimerPillBar } from '@/components/DeckTransitionControls';
+import { TimerPillBar, SwapCountdown } from '@/components/DeckTransitionControls';
 import { DualSwatch } from '@/components/ColorPickerModal';
 import { getCachedColorPalettes, warmColorPalettesCache } from '@/utils/api';
 import type { DeckColorAutopilotConfig } from '@/utils/api';
@@ -47,14 +47,14 @@ export interface ColorAutopilotPanelProps {
   /** Disable every control (offline, or the soft PLAN lock is engaged). The
    *  panel still RENDERS (read-only) so the operator can see the live state. */
   disabled?: boolean;
-  /** "M:SS" until the next palette swap, or null when none is scheduled. The
-   *  parent owns the 1 Hz clock + the engine's re-broadcast next-swap ms (so it
-   *  ticks the same whether the operator or a plan cue drives the cadence); we
-   *  just render it next to the label as the pattern autopilot does. */
-  countdownLabel?: string | null;
+  /** Absolute wall-clock ms of the next palette swap, or null when none is
+   *  scheduled. Rendered by the self-ticking <SwapCountdown> (which owns its own
+   *  1 Hz interval), so it ticks the same whether the operator or a plan cue
+   *  drives the cadence — without re-rendering the deck screen. */
+  countdownTargetMs?: number | null;
 }
 
-export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config, onChange, disabled, countdownLabel }) => {
+export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config, onChange, disabled, countdownTargetMs }) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
 
@@ -110,15 +110,9 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>COLOR AUTOPILOT</Text>
           {/* Next-palette-swap countdown — matched pair with the pattern
-              autopilot's timer chip; only shows while a swap is scheduled. */}
-          {countdownLabel ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-              <IconSymbol name="clock" size={11} color={C.primary} />
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.primary, letterSpacing: 0.5 }}>
-                {countdownLabel}
-              </Text>
-            </View>
-          ) : null}
+              autopilot's timer chip; self-ticking, only shows while a swap is
+              scheduled. */}
+          <SwapCountdown targetMs={countdownTargetMs ?? null} />
           {/* PLAY/PAUSE + SHUFFLE are DISABLED (greyed) until >=1 palette is
               selected: the engine rejects an active/empty color autopilot, so
               tapping PLAY with no palettes just 400'd + snapped back. Same
