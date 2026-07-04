@@ -3515,6 +3515,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (state.active !== undefined) ap.active = !!state.active;
     if (state.delay_s !== undefined) ap.delay_s = parseInt(state.delay_s, 10) || 30;
     if (state.shuffle !== undefined) ap.shuffle = !!state.shuffle;
+    // Pattern-autopilot GROUP LOCALITY — the mixer autoCycle reads these three
+    // off the same block (parity with the deck mirror + the REST mixer route).
+    // Without this a cue/look authoring group fields on a mixer/`all` target
+    // would validate clean then be silently dropped here (codex P0 — no silent
+    // partial apply). NaN integers keep the prior value.
+    if (state.groupMode !== undefined) ap.groupMode = !!state.groupMode;
+    if (state.groupSize !== undefined) {
+      const gs = parseInt(state.groupSize, 10);
+      if (!Number.isNaN(gs)) ap.groupSize = gs;
+    }
+    if (state.groupDwell !== undefined) {
+      const gd = parseInt(state.groupDwell, 10);
+      if (!Number.isNaN(gd)) ap.groupDwell = gd;
+    }
     // Mixer overlays cycle off autoCycleTick, which re-reads this block every
     // frame (seed/wait/due) — no per-channel timer to arm. Re-seed the
     // wall-clock anchor + drop any group window so the next tick treats this as
@@ -3738,7 +3752,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         },
         setParams: (obj) => {
           if (!paramCenter) throw new Error('paramCenter not available');
-          for (const k in obj) paramCenter.set(k, obj[k], 'timeline');
+          for (const k in obj) {
+            const r = paramCenter.set(k, obj[k], 'timeline');
+            // FAIL LOUD on an AUTHORING error (codex P0 — no silent drop): a
+            // typo'd/unknown CPC key or a malformed value would otherwise vanish
+            // with no cueError, so a cue's `globals`/look would silently do
+            // nothing. `source_lock` is NOT an authoring error — it's normal
+            // runtime arbitration (another source holds the param) — so let it
+            // pass silently, exactly as a live operator write would be arbitrated.
+            if (r && r.status === 'ignored' && r.reason !== 'source_lock') {
+              throw new Error(`setParams: '${k}' rejected (${r.reason})`);
+            }
+          }
         },
         // A cue/look `master` global drives the DECK GRAND MASTER through the
         // EXACT path the operator's PATCH /mixer { master } uses (mixer.setMaster

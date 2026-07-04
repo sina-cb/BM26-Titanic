@@ -12,6 +12,19 @@ export const HorizontalFader = ({ value, onChange, onRelease, trackStyle, fillSt
   // the timing animation ~10×/s and stutter the bar).
   const fadingDurationRef = useRef(fadingDurationMs);
   fadingDurationRef.current = fadingDurationMs;
+  // The PanResponder is built ONCE (useRef) so its gesture handlers capture the
+  // FIRST-render onChange/onDragStart/onRelease forever. Reading them through
+  // refs that we refresh every render fixes a stale-closure data-loss bug: a
+  // caller whose onChange closes over other state (e.g. the cue editor's
+  // `setAction({ ...pl, hue })`, or ColorPickerModal's `liveWrite(v, h2)`) would
+  // otherwise write a stale snapshot on drag, silently reverting edits made
+  // since the fader mounted. Keep the latest callbacks live here.
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const onDragStartRef = useRef(onDragStart);
+  onDragStartRef.current = onDragStart;
+  const onReleaseRef = useRef(onRelease);
+  onReleaseRef.current = onRelease;
 
   // Sync from external when not dragging — but NOT while a timed fade is in
   // flight: during a fade the value arrives as coarse, broadcast-rate steps,
@@ -64,23 +77,33 @@ export const HorizontalFader = ({ value, onChange, onRelease, trackStyle, fillSt
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: (evt) => {
         draggingRef.current = true;
-        if (onDragStart) onDragStart();
+        if (onDragStartRef.current) onDragStartRef.current();
         const v = clamp01(evt.nativeEvent.locationX / widthRef.current);
         startValRef.current = v;
         animVal.setValue(v);
-        onChange(v);
+        onChangeRef.current(v);
       },
       onPanResponderMove: (_evt, gs) => {
         const nv = clamp01(startValRef.current + gs.dx / widthRef.current);
         animVal.setValue(nv);
         const now = Date.now();
-        if (now - lastSendRef.current > 50) { lastSendRef.current = now; onChange(nv); }
+        if (now - lastSendRef.current > 50) { lastSendRef.current = now; onChangeRef.current(nv); }
       },
       onPanResponderRelease: (_evt, gs) => {
         const nv = clamp01(startValRef.current + gs.dx / widthRef.current);
         draggingRef.current = false;
-        onChange(nv);
-        if (onRelease) onRelease();
+        onChangeRef.current(nv);
+        if (onReleaseRef.current) onReleaseRef.current();
+      },
+      // A cancelled gesture (browser pointercancel, focus loss) never fires
+      // Release — mirror it so draggingRef and the caller's drag-guard clear,
+      // otherwise external value-sync freezes and a modal's backdrop-dismiss
+      // guard sticks on forever.
+      onPanResponderTerminate: (_evt, gs) => {
+        const nv = clamp01(startValRef.current + gs.dx / widthRef.current);
+        draggingRef.current = false;
+        onChangeRef.current(nv);
+        if (onReleaseRef.current) onReleaseRef.current();
       }
     })
   ).current;

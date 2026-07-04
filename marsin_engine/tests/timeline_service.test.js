@@ -1192,6 +1192,29 @@ test('globals apply: a deck cue with globals reaches setParams (SPEED/SIZE/SYNC)
   assert.deepEqual(calls.setParams[0], { speed: 0.2, size: 0.75, bpmSpeedSync: 1 });
 });
 
+test('globals schema: a non-finite globals value throws (no silent clamp)', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    globals: { speed: Infinity },
+  });
+  assert.throws(() => validateShowPlan(plan), /must be a finite number/);
+});
+
+test('group schema: group locality on a MIXER target round-trips (not deck-gated, so the mixer apply can honor it)', () => {
+  // groupMode/groupSize/groupDwell live on the autopilot block, which is NOT
+  // deck-only (unlike hue/globals/transition). The validator must keep them for
+  // a mixer target so timelineSetAutopilotOnMixer can mirror them — otherwise
+  // they'd be a silent partial apply.
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'mixer', id: 'ch1' },
+    autopilot: { active: true, delay_s: 30, shuffle: false, groupMode: true, groupSize: 4, groupDwell: 8 },
+  });
+  const norm = validateShowPlan(plan);
+  assert.deepEqual(norm.cues[0].action.autopilot, {
+    active: true, delay_s: 30, shuffle: false, groupMode: true, groupSize: 4, groupDwell: 8,
+  });
+});
+
 // ── buildOverview carries durationMin (BUG 2 regression guard) ──────────────
 // A cue authored with durationMin>0 must surface durationMin on its overview
 // cue object so the maker strip renders it as a deck-owned BLOCK (start→

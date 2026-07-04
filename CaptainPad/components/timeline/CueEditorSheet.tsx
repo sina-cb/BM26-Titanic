@@ -32,7 +32,7 @@ import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import {
   PlanCue, PlanDefaultCue, CueKind, CueTrigger, CueAction, ActionPlaylist, SunEvent, CueDays, ShowPlan,
-  DeckTransitionMode, ActionOverlays,
+  DeckTransitionMode, ActionOverlays, PlanAutopilotInline,
 } from '@/utils/timelineApi';
 import {
   hhmmToMinutes, minutesToHHMM, minutesTo12h, hhmmTo12h, SUN_EVENT_OPTIONS, MOOD_VALUES,
@@ -387,31 +387,42 @@ export function CueEditorSheet({
       // shuffle defaults to false — guaranteeing validity regardless of the
       // order the operator touched the autopilot controls.
       const pl: ActionPlaylist = { ...action, target: { channel: 'deck' as const, id: null } };
-      if (pl.autopilot && pl.autopilot.active) {
-        const d = pl.autopilot.delay_s;
-        pl.autopilot = {
-          active: true,
-          delay_s: typeof d === 'number' && d > 0 ? d : 30,
-          shuffle: pl.autopilot.shuffle ?? false,
+      // The AUTOPILOT PATTERNS card gates on BLOCK PRESENCE (card ON = block
+      // present), and the reused panel's PLAY/PAUSE drives `active`. So emit the
+      // block whenever it's present — preserving active:false ("this cue PAUSES
+      // autopilot", a legal, meaningful wire state) instead of dropping it — and
+      // CARRY the GROUP LOCALITY fields the card authors (groupMode/groupSize/
+      // groupDwell); the engine validates + applies them on a cue (commit
+      // c775790). Only card OFF (absent block) omits it. delay_s clamps positive,
+      // shuffle defaults false, so the emitted JSON always satisfies the engine's
+      // strict validateAutopilot regardless of the order the operator toggled.
+      if (pl.autopilot) {
+        const a = pl.autopilot;
+        const norm: PlanAutopilotInline = {
+          active: !!a.active,
+          delay_s: typeof a.delay_s === 'number' && a.delay_s > 0 ? a.delay_s : 30,
+          shuffle: a.shuffle ?? false,
         };
+        if (a.groupMode !== undefined) norm.groupMode = !!a.groupMode;
+        if (typeof a.groupSize === 'number') norm.groupSize = a.groupSize;
+        if (typeof a.groupDwell === 'number') norm.groupDwell = a.groupDwell;
+        pl.autopilot = norm;
       } else {
         delete pl.autopilot;
       }
-      // COLOR AUTOPILOT — same discipline as the pattern autopilot above. Emit
-      // the block ONLY when active===true; otherwise OMIT it. When emitted,
-      // ALWAYS supply a positive delay_s (clamp/default 30), a NON-EMPTY
-      // palettes array (the toggle can't turn on without ≥1 palette, but we
-      // re-guard here so the emitted JSON can never be active+empty), and a
-      // boolean shuffle (default false). This satisfies the engine's strict
-      // validateColorAutopilot regardless of UI interaction order.
+      // COLOR AUTOPILOT — same PRESENCE discipline as the pattern autopilot
+      // above. Emit the block whenever it's present WITH ≥1 palette, preserving
+      // active:false ("this cue PAUSES color cycling") instead of dropping it —
+      // so card ON + PAUSE is honored, not silently discarded. Card OFF (absent
+      // block), or a block that somehow has no palettes, omits it. delay_s clamps
+      // positive, shuffle defaults false, and transitionMs (a non-finite/negative
+      // value collapses to 0 = hard cut) so the emitted JSON always satisfies the
+      // engine's strict validateColorAutopilot regardless of interaction order.
       const ca = pl.colorAutopilot;
-      if (ca && ca.active && Array.isArray(ca.palettes) && ca.palettes.length > 0) {
-        // transitionMs (crossfade): normalize like the other fields — a
-        // non-finite / negative value collapses to 0 (hard cut) so the emitted
-        // JSON always satisfies the engine's transitionMs >= 0 validator.
+      if (ca && Array.isArray(ca.palettes) && ca.palettes.length > 0) {
         const tm = ca.transitionMs;
         pl.colorAutopilot = {
-          active: true,
+          active: !!ca.active,
           palettes: ca.palettes,
           delay_s: typeof ca.delay_s === 'number' && ca.delay_s > 0 ? ca.delay_s : 30,
           shuffle: ca.shuffle ?? false,

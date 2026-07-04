@@ -136,7 +136,7 @@ function validateGlobalsMap(map, label) {
   const out = {};
   for (const [key, val] of Object.entries(map)) {
     if (typeof val === 'number') {
-      if (Number.isNaN(val)) throw new Error(`${label}.${key} number is NaN`);
+      if (!Number.isFinite(val)) throw new Error(`${label}.${key} must be a finite number, got ${val}`);
       out[key] = val;
     } else if (isPlainObject(val)) {
       const keys = Object.keys(val).sort();
