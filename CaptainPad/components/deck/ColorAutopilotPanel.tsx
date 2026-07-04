@@ -119,13 +119,17 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
               </Text>
             </View>
           ) : null}
+          {/* PLAY/PAUSE + SHUFFLE are DISABLED (greyed) until >=1 palette is
+              selected: the engine rejects an active/empty color autopilot, so
+              tapping PLAY with no palettes just 400'd + snapped back. Same
+              no-palettes gate as the timer/transition rows below. */}
           <TouchableOpacity
-            disabled={disabled}
-            onPress={() => onChange({ active: !config.active })}
-            style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: config.active ? C.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: config.active ? 'transparent' : C.ghostBorder }}
+            disabled={disabled || noPalettes}
+            onPress={() => { if (!noPalettes) onChange({ active: !config.active }); }}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: config.active ? C.primary : 'transparent', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: config.active ? 'transparent' : C.ghostBorder, opacity: noPalettes ? 0.4 : 1 }}
             accessibilityRole="switch"
-            accessibilityState={{ checked: config.active, disabled: !!disabled }}
-            accessibilityLabel={config.active ? 'Pause color autopilot' : 'Play color autopilot'}
+            accessibilityState={{ checked: config.active, disabled: !!disabled || noPalettes }}
+            accessibilityLabel={noPalettes ? 'Add a palette to play color autopilot' : (config.active ? 'Pause color autopilot' : 'Play color autopilot')}
           >
             <IconSymbol name={config.active ? 'pause.fill' : 'play.fill'} size={16} color={config.active ? '#FFF' : C.text} />
             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: config.active ? '#FFF' : C.text, fontSize: 12 }}>
@@ -134,12 +138,12 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
           </TouchableOpacity>
         </View>
         <TouchableOpacity
-          disabled={disabled}
-          onPress={() => onChange({ shuffle: !config.shuffle })}
-          style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
+          disabled={disabled || noPalettes}
+          onPress={() => { if (!noPalettes) onChange({ shuffle: !config.shuffle }); }}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8, opacity: noPalettes ? 0.4 : 1 }}
           accessibilityRole="switch"
-          accessibilityState={{ checked: config.shuffle, disabled: !!disabled }}
-          accessibilityLabel={config.shuffle ? 'Disable color shuffle' : 'Enable color shuffle'}
+          accessibilityState={{ checked: config.shuffle, disabled: !!disabled || noPalettes }}
+          accessibilityLabel={noPalettes ? 'Add a palette to enable color shuffle' : (config.shuffle ? 'Disable color shuffle' : 'Enable color shuffle')}
         >
           <IconSymbol name="shuffle" size={16} color={config.shuffle ? C.primary : C.icon} />
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: config.shuffle ? C.primary : C.icon, fontSize: 12, letterSpacing: 0.5 }}>SHUFFLE</Text>
