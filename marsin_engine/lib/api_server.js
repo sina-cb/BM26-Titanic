@@ -3367,19 +3367,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return new Set(palettes.map((p) => p && p.id).filter(Boolean));
   }
   // Write an already-resolved (or crossfade-interpolated) params object to the
-  // rig, then persist + broadcast. Split out of applyColorPalette so the
-  // ColorAutopilot crossfade tween can push INTERMEDIATE frames through the
-  // exact same path a final/hard-cut write uses.
-  function applyColorPaletteParams(params) {
+  // rig — CPC writes ONLY. The CPC fan-out (paramCenter.onChange, wired at
+  // boot) already handles persistence + the throttled WS broadcast for every
+  // param writer (docs/24 §7.2), so this is safe to call per crossfade FRAME.
+  // It deliberately does NOT saveAllState()/broadcastColorAutopilot(): doing
+  // that on every tween frame (~25 fps) rewrote every state YAML per frame AND
+  // flooded /ws/control with `colorAutopilot` echoes, so a delay/transition tap
+  // racing an in-flight stale echo visibly snapped back then forward on the
+  // deck (operator report 2026-07-03: "double-changing"). The pattern
+  // Autopilot broadcasts its config only on state change / (re)schedule; the
+  // color autopilot now follows the same discipline (setColorAutopilot + the
+  // onSchedule hook cover every config change).
+  function writeColorPaletteParams(params) {
     if (!paramCenter) throw new Error('paramCenter not available for color autopilot');
     for (const k in params) paramCenter.set(k, params[k], 'colorAutopilot');
-    // Surface the change the same way an operator palette write would: persist +
-    // broadcast so every UI mirrors the live palette without polling.
+  }
+  // HARD-CUT palette apply (one write per cycle tick, never per frame):
+  // surface the change the same way an operator palette write would — persist +
+  // broadcast so every UI mirrors the live palette without polling.
+  function applyColorPalette(id) {
+    writeColorPaletteParams(resolveColorPaletteParams(id));
     saveAllState();
     broadcastColorAutopilot();
-  }
-  function applyColorPalette(id) {
-    applyColorPaletteParams(resolveColorPaletteParams(id));
   }
 
   // The palette-cycling daemon. Independent timer from the pattern `autopilot`
@@ -3389,7 +3398,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // the palette params over `transitionMs` instead of hard-cutting (docs/39).
   const colorAutopilot = new ColorAutopilot(applyColorPalette, undefined, {
     resolvePaletteFn: resolveColorPaletteParams,
-    applyParamsFn: applyColorPaletteParams,
+    applyParamsFn: writeColorPaletteParams,
     // Re-broadcast the next-swap time on every (re)schedule so the deck
     // color-autopilot countdown stays accurate after each palette switch.
     onSchedule: () => broadcastColorAutopilot(),

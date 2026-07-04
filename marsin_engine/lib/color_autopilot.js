@@ -27,7 +27,13 @@ const TWEEN_FRAME_MS = 40;
  * cycling does not change the running pattern.
  *
  * Timer model (mirrors Autopilot, docs/39):
- *   wait delay_s  →  apply next palette  →  repeat
+ *   wait delay_s  →  apply next palette (AWAIT the crossfade)  →  repeat
+ * Exactly the pattern Autopilot's await-swap-then-reschedule model: the apply
+ * — including a transitionMs crossfade — completes BEFORE the next delay_s
+ * wait is armed, so the transition is ADDITIVE to the hold. delay_s=5 +
+ * transitionMs=1000 is a 6 s cycle (5 s hold + 1 s fade); the fade never eats
+ * into the hold (operator ruling 2026-07-03; locked by the additive-scheduling
+ * tests).
  * Every state change (active / palettes / delay_s / shuffle / transitionMs)
  * bumps a `generation` counter. A scheduled tick captures the gen at schedule
  * time and bails on fire if it no longer matches — deterministic stop
@@ -249,6 +255,13 @@ export class ColorAutopilot {
     this.cycleTimer = setTimeout(() => {
       this._runTick(gen).catch((e) => {
         console.warn('[ColorAutopilot] tick failed:', e && e.message ? e.message : e);
+        // Mirror the pattern Autopilot's cycle-continuation: a throwing apply
+        // is logged LOUD but must not kill the daemon — re-arm the cycle so the
+        // next palette still lands (Autopilot._runTick catches its swap error
+        // and reschedules the same way). Guarded on gen + active so a reconfig
+        // or pause that raced the failure doesn't double-schedule. A manual
+        // triggerNext() still REJECTS (codex P0 — no silent skip for callers).
+        if (gen === this.generation && this.state.active) this._scheduleNext();
       });
     }, delayMs);
     // Don't keep the event loop alive solely for the color cycle (mirrors the

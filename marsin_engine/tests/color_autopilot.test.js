@@ -221,6 +221,70 @@ test('seedCurrentParams makes the FIRST apply crossfade FROM the seeded live col
   assert.equal(writes.at(-1).colorPalette1.h, 0, 'tween lands exactly on the target hue');
 });
 
+// ── ADDITIVE scheduling (operator ruling 2026-07-03) ────────────────────────
+// The crossfade must NOT eat into the hold. With delay_s = 1 and transitionMs
+// = 1000 the cycle is 2 s (1 s hold + 1 s fade): the next switch is scheduled
+// AFTER the fade completes, at fadeEnd + delay_s — never at fadeStart +
+// delay_s. This is the pattern Autopilot's await-swap-then-reschedule model
+// (autopilot.js _runTick awaits changePattern before _scheduleNext).
+
+test('additive scheduling: next switch = fade END + delay_s, not fade START + delay_s', async () => {
+  const { ca, advance } = makeCrossfadeCA(1000);
+  await ca.triggerNext(); // aurora — first apply SNAPS at t=0 (nothing to fade from)
+  // The snap completes instantly, so the reschedule lands at t=0 + delay_s.
+  assert.equal(ca.nextSwapAtMs, 1000, 'snap apply reschedules at +delay_s');
+
+  const p = ca.triggerNext(); // fade to bass_drop starts at t=0 on the fake clock
+  advance(1000);              // drive the tween to completion (fade ends at t=1000)
+  await p;
+  // Reschedule happens AFTER the awaited fade: t=1000 (fade end) + 1000 (hold)
+  // = 2000. The overlapped (delay-only) bug would leave this at 1000.
+  assert.equal(ca.nextSwapAtMs, 2000, 'next switch fires delay_s AFTER the fade completes');
+});
+
+test('real-timer cycle period is delay_s + transitionMs (fade does not eat the hold)', async () => {
+  const HOLD_MS = 80;
+  const FADE_MS = 120;
+  // resolvePaletteFn fires exactly once per switch, at switch START — stamp it.
+  const switchStarts = [];
+  const resolve = (id) => {
+    switchStarts.push(Date.now());
+    return { colorPalette1: { h: HUE[id], s: 1, v: 1 } };
+  };
+  const ca = new ColorAutopilot((id) => { resolve(id); }, tmpCfg(), {
+    resolvePaletteFn: resolve,
+    applyParamsFn: () => {},
+  });
+  ca.setState({ active: true, palettes: ['aurora', 'bass_drop'], delay_s: HOLD_MS / 1000, shuffle: false, transitionMs: FADE_MS });
+  // Expected starts: ~80 ms (snap), ~160 ms (fades until ~280 ms), ~360 ms.
+  await new Promise((r) => setTimeout(r, 600));
+  ca.deactivate();
+  assert.ok(switchStarts.length >= 3, `expected >=3 switches in 600ms, got ${switchStarts.length}`);
+  // Gap between two switches where the FIRST one faded: >= hold + fade. Real
+  // timers only ever run LATE, so additive scheduling can never produce a gap
+  // under ~200 ms here — the overlapped bug would produce ~80 ms. (-5 ms
+  // tolerance for Date.now()-vs-timer rounding.)
+  const gap = switchStarts[2] - switchStarts[1];
+  assert.ok(gap >= HOLD_MS + FADE_MS - 5, `switch gap must be >= hold+fade (~200ms), got ${gap}ms`);
+});
+
+test('a throwing timer-driven tick logs loud but re-arms the cycle (mirrors pattern Autopilot)', async () => {
+  // First tick throws, later ticks succeed — the daemon must survive the
+  // failure and keep cycling, exactly like Autopilot._runTick's catch +
+  // reschedule. (triggerNext, the DIRECT call path, still rejects — see the
+  // 'throwing applyPalette propagates' test above.)
+  const applied = [];
+  let boom = true;
+  const ca = new ColorAutopilot((id) => {
+    if (boom) { boom = false; throw new Error('palette boom'); }
+    applied.push(id);
+  }, tmpCfg());
+  ca.setState({ active: true, palettes: ['aurora', 'bass_drop'], delay_s: 0.05, shuffle: false });
+  await new Promise((r) => setTimeout(r, 250)); // ~4-5 ticks at 50ms; #1 throws
+  ca.deactivate();
+  assert.ok(applied.length >= 1, `cycle must keep running after a throwing tick, got ${applied.length} applies`);
+});
+
 test('reconfig mid-crossfade cancels the in-flight tween cleanly (no further frames)', async () => {
   const { ca, writes, advance } = makeCrossfadeCA(1000);
   await ca.triggerNext(); // aurora snaps

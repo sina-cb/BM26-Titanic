@@ -79,6 +79,12 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
   const selectedIds = config.palettes;
   const selectedSet = new Set(selectedIds);
   const transitionMs = config.transitionMs ?? 0;
+  // The engine contract requires >=1 palette id on EVERY write (the POST is
+  // merged over the live config, then validated strictly), so with an empty
+  // selection a delay/transition tap would 400 + roll back — the pills looked
+  // alive but "did nothing" (operator report 2026-07-03). Grey those rows out
+  // with an explicit hint until a palette is added.
+  const noPalettes = selectedIds.length === 0;
 
   // Remove a selected palette. The engine contract requires >=1 palette id, so
   // a removal that would empty the set is a no-op (mirrors the deck's fail-loud
@@ -238,27 +244,54 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
       </View>
 
       {/* Delay stepper — how long each palette holds before the next switches
-          in. Reuses the same compact cadence pills as the pattern autopilot. */}
-      <TimerPillBar
-        label="SWITCH EVERY"
-        compact
-        presets={COLOR_AUTOPILOT_DELAY_PRESETS}
-        value={config.delay_s}
-        onChange={(v) => { if (!disabled) onChange({ delay_s: v }); }}
-        formatter={(v) => (v < 60 ? `${v}s` : `${v % 60 === 0 ? v / 60 : (v / 60).toFixed(1)}m`)}
-      />
+          in. Reuses the same compact cadence pills as the pattern autopilot.
+          With ZERO palettes selected the row is replaced by an explicit hint
+          (same disabled idiom as DECK TX's crossfade-time row — QA #9 ruled
+          that flat-opacity greyed pills read as "broken"): every write needs
+          >=1 palette, so live-looking pills here would just 400 + snap back. */}
+      {noPalettes ? (
+        <View style={{ paddingVertical: 2 }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.2, color: C.secondary, marginBottom: 3, textTransform: 'uppercase' }}>
+            SWITCH EVERY
+          </Text>
+          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary }}>
+            Add at least one palette to set the switch timer.
+          </Text>
+        </View>
+      ) : (
+        <TimerPillBar
+          label="SWITCH EVERY"
+          compact
+          presets={COLOR_AUTOPILOT_DELAY_PRESETS}
+          value={config.delay_s}
+          onChange={(v) => { if (!disabled) onChange({ delay_s: v }); }}
+          formatter={(v) => (v < 60 ? `${v}s` : `${v % 60 === 0 ? v / 60 : (v / 60).toFixed(1)}m`)}
+        />
+      )}
 
       {/* Transition (crossfade) time — the palette analogue of DECK TX crossfade
           time. CUT = hard switch; otherwise the engine ramps the palette params
-          over this window. ms under the hood. */}
-      <TimerPillBar
-        label="TRANSITION"
-        compact
-        presets={COLOR_AUTOPILOT_TRANSITION_PRESETS_MS}
-        value={transitionMs}
-        onChange={(v) => { if (!disabled) onChange({ transitionMs: v }); }}
-        formatter={formatTransition}
-      />
+          over this window (ADDITIVE to the hold: delay_s + transition per
+          cycle). ms under the hood. Same no-palettes gating as SWITCH EVERY. */}
+      {noPalettes ? (
+        <View style={{ paddingVertical: 2 }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.2, color: C.secondary, marginBottom: 3, textTransform: 'uppercase' }}>
+            TRANSITION
+          </Text>
+          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary }}>
+            Add at least one palette to set the transition time.
+          </Text>
+        </View>
+      ) : (
+        <TimerPillBar
+          label="TRANSITION"
+          compact
+          presets={COLOR_AUTOPILOT_TRANSITION_PRESETS_MS}
+          value={transitionMs}
+          onChange={(v) => { if (!disabled) onChange({ transitionMs: v }); }}
+          formatter={formatTransition}
+        />
+      )}
     </View>
   );
 };
