@@ -974,7 +974,7 @@ export default function ControlDeckScreen() {
                   baseline of the tallest control next to it. */}
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>AUTOPILOT</Text>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>AUTOPILOT PATTERNS</Text>
                   {/* Next-pattern-swap countdown — rides right after the label,
                       only while a swap is scheduled. Self-ticking (its own 1 Hz
                       interval) so it never re-renders the deck screen; reads
@@ -1058,38 +1058,17 @@ export default function ControlDeckScreen() {
                   </Text>
                 </View>
               ) : null}
-            </View>
 
-            {/* ── COLOR AUTOPILOT ────────────────────────────────────
-                Cycles a chosen SET of color palettes on its own timer —
-                INDEPENDENT of the pattern AUTOPILOT above (operator request:
-                "in the autopilot, select a set of palettes that switch on their
-                own timer"). Reads on focus, posts on change (optimistic +
-                rollback, same shape as handleDeckTxChange). Disabled while
-                offline or under the soft PLAN lock (planGate) — it still renders
-                read-only so the operator sees the live cycle. */}
-            <ColorAutopilotPanel
-              config={colorAutopilot}
-              onChange={handleColorAutopilotChange}
-              disabled={isConnected === false || planGate}
-              countdownTargetMs={colorNextSwapAtMs}
-            />
-
-            {/* ── DECK TRANSITIONS ───────────────────────────────────
-                Soft-swap pattern changes via the engine's hidden deck
-                shadow channel (see triggerDeckPatternSwap in the engine
-                mixer). Independent of AUTOPILOT — playlist auto-cycling
-                and per-tap entry swaps BOTH route through this when
-                enabled. */}
-            {/* Soft PLAN lock: DECK TX (on/off, mode, crossfade time, shuffle
-                style) tunes how the plan's pattern swaps run, so the whole
-                card is gated as one section — pointerEvents 'none' stops every
-                interactive child; the dim marks it disabled. */}
-            <View
-              pointerEvents={planGate ? 'none' : 'auto'}
-              style={planGate ? { opacity: 0.45 } : null}
-            >
+              {/* ── DECK TRANSITIONS (moved INTO the AUTOPILOT PATTERNS card,
+                  operator request 2026-07-04: "the Deck TX and the pattern
+                  autopilot are the same work"). Soft-swap pattern changes via
+                  the engine's hidden deck shadow channel — playlist auto-cycling
+                  AND per-tap entry swaps route through this. A thin divider sets
+                  it apart within the card; the card's planGate already gates it,
+                  so no separate pointerEvents/opacity wrapper is needed. */}
+              <View style={{ height: 1, backgroundColor: C.ghostBorder, opacity: 0.6, marginTop: 2 }} />
               <DeckTransitionControls
+                bare
                 enabled={deckTxConfig.enabled}
                 // When shuffle is on, show the actually-rolled style from
                 // the engine's most-recent broadcast instead of the
@@ -1102,6 +1081,21 @@ export default function ControlDeckScreen() {
                 onChange={handleDeckTxChange}
               />
             </View>
+
+            {/* ── AUTOPILOT COLORS ────────────────────────────────────
+                Cycles a chosen SET of color palettes on its own timer —
+                INDEPENDENT of the pattern autopilot above (operator request:
+                "in the autopilot, select a set of palettes that switch on their
+                own timer"). Reads on focus, posts on change (optimistic +
+                rollback, same shape as handleDeckTxChange). Disabled while
+                offline or under the soft PLAN lock (planGate) — it still renders
+                read-only so the operator sees the live cycle. */}
+            <ColorAutopilotPanel
+              config={colorAutopilot}
+              onChange={handleColorAutopilotChange}
+              disabled={isConnected === false || planGate}
+              countdownTargetMs={colorNextSwapAtMs}
+            />
 
             {/* ── DECK DYNAMIC VIEW OVERRIDES (engine #deck-overlays) ──────
                 View-scoped overlay decks layered OVER the main deck. Each

@@ -329,12 +329,17 @@ export function DeckTransitionControls({
   durationMs,
   shuffle,
   onChange,
+  bare = false,
 }: {
   enabled: boolean;
   mode: string;
   durationMs: number;
   shuffle: boolean;
   onChange: (patch: { enabled?: boolean; mode?: string; durationMs?: number; shuffle?: boolean }) => void;
+  /** Render WITHOUT the outer surfaceContainerHigh card — for nesting inside
+   *  another card (e.g. the AUTOPILOT PATTERNS card) so it reads as a
+   *  sub-section, not a card-in-card. The parent supplies the padding + bg. */
+  bare?: boolean;
 }) {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
@@ -347,7 +352,7 @@ export function DeckTransitionControls({
   // value is duplicated inline (no new style export) to keep the
   // component self-contained.
   return (
-    <View style={{
+    <View style={bare ? { paddingTop: 6, gap: 6 } : {
       paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8,
       borderRadius: 8, gap: 6,
       backgroundColor: C.surfaceContainerHigh,

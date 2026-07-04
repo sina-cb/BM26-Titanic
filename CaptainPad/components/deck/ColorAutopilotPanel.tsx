@@ -108,7 +108,7 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
           AUTOPILOT card so the two read as a matched pair. */}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>COLOR AUTOPILOT</Text>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>AUTOPILOT COLORS</Text>
           {/* Next-palette-swap countdown — matched pair with the pattern
               autopilot's timer chip; self-ticking, only shows while a swap is
               scheduled. */}
