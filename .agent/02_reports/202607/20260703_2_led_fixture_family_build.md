@@ -124,6 +124,14 @@ zero cost when diffusion is OFF. Gated on `_isLed` — the non-LED sphere-halo
 path is byte-identical; ropes untouched. A `led-grid-close` camera preset was
 added for close-up judging. Verified in-sim at amt 1.2 / 3 / 6.
 
+**Clean-tune (2026-07-04).** The first frosted look read as too bright and
+smoky — a wide additive haze that washed the pixels out. Tightened the kernel
+so the glow is contained and the dots stay crisp: core exponent `14→22`, tail
+`3.2→8.0` (a wide tail is what reads as smoke), core weight `0.6→0.82`, sprite
+span `2.4→1.4`, base opacity `0.7→0.45`, and the demo grid's `diffusionAmount`
+`3→1.5`. Re-verified at the `led-grid-close` preset: individual pixels are
+sharp with a tight, dim halo — no wash.
+
 ## Open defaults chosen (no operator available to confirm)
 
 - Grid: 8×5, 50 mm pitch, **serpentine** wiring (physical norm for panels;

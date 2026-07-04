@@ -1217,7 +1217,7 @@ parLights:
       enabled: true
       brightness: 100
       diffusion: true
-      diffusionAmount: 3
+      diffusionAmount: 1.5
       scaleX: 1
       scaleY: 1
       scaleZ: 1

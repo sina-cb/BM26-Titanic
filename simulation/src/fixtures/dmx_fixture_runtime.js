@@ -45,11 +45,11 @@ function getCachedSphere(size) {
 // wide faint tail, like a real frosted-acrylic diffuser kernel), shifted so
 // alpha reaches exactly 0 at the quad edge — no visible rim.
 const LED_GLOW_TEX_SIZE = 128;
-const LED_GLOW_CORE_K = 14.0;  // core Gaussian exponent (tight, bright)
-const LED_GLOW_TAIL_K = 3.2;   // tail Gaussian exponent (wide, faint)
-const LED_GLOW_CORE_W = 0.6;   // core weight (core + tail weights sum to 1)
-const LED_GLOW_SPAN = 2.4;     // sprite quad size in bulb-diameter units at 1× diffusion
-const LED_GLOW_OPACITY = 0.7;  // per-sprite opacity at 1× diffusion (fades with amt, see applyDiffusion)
+const LED_GLOW_CORE_K = 22.0;  // core Gaussian exponent (tight, bright)
+const LED_GLOW_TAIL_K = 8.0;   // tail Gaussian exponent (kept tight — a wide tail reads as smoke)
+const LED_GLOW_CORE_W = 0.82;  // core weight (core + tail weights sum to 1); high = clean, low = hazy
+const LED_GLOW_SPAN = 1.4;     // sprite quad size in bulb-diameter units at 1× diffusion
+const LED_GLOW_OPACITY = 0.45; // per-sprite opacity at 1× diffusion (fades with amt, see applyDiffusion)
 let _ledGlowTexture = null;
 function getLedGlowTexture() {
   if (_ledGlowTexture) return _ledGlowTexture;
