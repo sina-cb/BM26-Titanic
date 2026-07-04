@@ -248,18 +248,60 @@ export interface ActionLook { type: 'look'; look: string }
 // Deck transition modes (mirrors the engine DeckTransitionConfig modes, see
 // CaptainPad/utils/api.ts DeckTransitionConfig). The maker offers these on a
 // playlist action whose target is the deck (the only target now).
-export type DeckTransitionMode = 'trans_crossfade' | 'trans_flash' | 'trans_dissolve';
+export type DeckTransitionMode =
+  | 'trans_crossfade'
+  | 'trans_flash'
+  | 'trans_color_burst'
+  | 'trans_dissolve'
+  | 'trans_wipe_right'
+  | 'trans_wipe_left'
+  | 'trans_wipe_down'
+  | 'trans_diagonal_wipe'
+  | 'trans_wave_sweep'
+  | 'trans_iris'
+  | 'trans_iris_close'
+  | 'trans_diamond_wipe'
+  | 'trans_split_horizontal'
+  | 'trans_split_vertical'
+  | 'trans_ripple_in'
+  | 'trans_morse_blink';
 
 export const DECK_TRANSITION_MODES: DeckTransitionMode[] = [
   'trans_crossfade',
   'trans_flash',
+  'trans_color_burst',
   'trans_dissolve',
+  'trans_wipe_right',
+  'trans_wipe_left',
+  'trans_wipe_down',
+  'trans_diagonal_wipe',
+  'trans_wave_sweep',
+  'trans_iris',
+  'trans_iris_close',
+  'trans_diamond_wipe',
+  'trans_split_horizontal',
+  'trans_split_vertical',
+  'trans_ripple_in',
+  'trans_morse_blink',
 ];
 
 export const DECK_TRANSITION_MODE_LABEL: Record<DeckTransitionMode, string> = {
   trans_crossfade: 'Crossfade',
   trans_flash: 'Flash',
+  trans_color_burst: 'Burst',
   trans_dissolve: 'Dissolve',
+  trans_wipe_right: 'Wipe Right',
+  trans_wipe_left: 'Wipe Left',
+  trans_wipe_down: 'Wipe Down',
+  trans_diagonal_wipe: 'Diagonal',
+  trans_wave_sweep: 'Wave',
+  trans_iris: 'Iris Open',
+  trans_iris_close: 'Iris Close',
+  trans_diamond_wipe: 'Diamond',
+  trans_split_horizontal: 'Bay Doors',
+  trans_split_vertical: 'Curtain',
+  trans_ripple_in: 'Ripple',
+  trans_morse_blink: 'SOS',
 };
 
 // Cue-level overlay intent on a playlist (deck) action. Absent = leave the
@@ -274,6 +316,7 @@ export interface ActionTransition {
   mode: DeckTransitionMode;
   durationMs?: number;
   enabled?: boolean;
+  shuffle?: boolean;
 }
 
 // Color-autopilot block on a playlist (deck) action. Cycles the color

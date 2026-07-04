@@ -437,6 +437,7 @@ export class TimelineService {
     }
     const patch = { mode: transition.mode, enabled: transition.enabled !== undefined ? transition.enabled : true };
     if (transition.durationMs !== undefined) patch.durationMs = transition.durationMs;
+    if (transition.shuffle !== undefined) patch.shuffle = !!transition.shuffle;
     await this.deps.setDeckTransition(patch);
     steps.push(`deck ← transition ${JSON.stringify(patch)}`);
   }

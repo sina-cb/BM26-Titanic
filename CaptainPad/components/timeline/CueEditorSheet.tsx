@@ -32,7 +32,7 @@ import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import {
   PlanCue, PlanDefaultCue, CueKind, CueTrigger, CueAction, ActionPlaylist, SunEvent, CueDays, ShowPlan,
-  DeckTransitionMode, ActionOverlays, DECK_TRANSITION_MODES, DECK_TRANSITION_MODE_LABEL,
+  DeckTransitionMode, ActionOverlays,
 } from '@/utils/timelineApi';
 import {
   hhmmToMinutes, minutesToHHMM, minutesTo12h, hhmmTo12h, SUN_EVENT_OPTIONS, MOOD_VALUES,
@@ -40,26 +40,25 @@ import {
 import { Segmented, Stepper, Dropdown, ToggleChip, FieldLabel } from './makerControls';
 import { DayTimePicker, DayTimeContextCue } from './DayTimePicker';
 import { DualSwatch } from '@/components/ColorPickerModal';
+import { DeckTransitionControls } from '@/components/DeckTransitionControls';
 
 // Crossfade presets for the cue's COLOR AUTOPILOT transition (ms under the
 // hood). 0 = hard cut; the rest ramp the palette params over the window. Mirror
 // of the deck panel's transition pills (DECK TX crossfade idiom).
 const COLOR_TRANSITION_PRESETS_MS = [0, 500, 1000, 2000, 3000];
 
-// Pattern (deck TX) crossfade-time presets (ms > 0), mirroring the deck panel's
-// DECK TX "CROSSFADE TIME" pills. Shown once a transition mode is chosen.
-const PATTERN_TRANSITION_PRESETS_MS = [200, 500, 1000, 1500, 2000, 3000];
 function formatColorTransition(ms: number): string {
   if (ms <= 0) return 'CUT';
   return ms % 1000 === 0 ? `${ms / 1000}s` : `${(ms / 1000).toFixed(1)}s`;
 }
 
-// Deck transition mode options for the playlist action. "Default" means DON'T
-// emit a `transition` field — the cue inherits the deck's standing transition
-// config. Picking a named mode emits `transition: { mode }`.
-const TRANSITION_OPTIONS: { id: 'default' | DeckTransitionMode; label: string }[] = [
-  { id: 'default', label: 'Default' },
-  ...DECK_TRANSITION_MODES.map((m) => ({ id: m, label: DECK_TRANSITION_MODE_LABEL[m] })),
+// Inherit-vs-override control for the playlist action's deck transition. "Deck
+// default" means DON'T emit a `transition` field — the cue inherits the deck's
+// standing Deck TX config. "Custom" emits a full `transition` block edited via
+// the shared DeckTransitionControls (all 16 blends + time + shuffle).
+const TRANSITION_SOURCE_OPTIONS: { id: 'default' | 'custom'; label: string }[] = [
+  { id: 'default', label: 'Deck default' },
+  { id: 'custom', label: 'Custom' },
 ];
 
 // Cue-level overlay intent. "Leave as-is" emits nothing; the other two emit
@@ -625,7 +624,7 @@ export function CueEditorSheet({
       const ap = action.autopilot ?? {};
       const ca = action.colorAutopilot ?? { active: false, palettes: [] as string[], delay_s: 30 };
       // Target is always the main deck now (mixer removed from the maker UI).
-      const transitionMode: 'default' | DeckTransitionMode = action.transition?.mode ?? 'default';
+      const transitionSource: 'default' | 'custom' = action.transition ? 'custom' : 'default';
       const overlayMode: 'asis' | ActionOverlays = action.overlays ?? 'asis';
       return (
         <View style={styles.subBlock}>
@@ -643,48 +642,50 @@ export function CueEditorSheet({
           <FieldLabel>TARGET</FieldLabel>
           <Text style={styles.hint}>Deck — the main deck (mixer authoring removed).</Text>
           <View style={{ height: 8 }} />
-          {/* TRANSITION — deck transition mode override. "Default" emits no
-              `transition` field, so the cue inherits the deck's standing config. */}
+          {/* TRANSITION — deck transition override. "Deck default" emits no
+              `transition` field, so the cue inherits the deck's standing Deck TX
+              config. "Custom" emits a full transition block (all 16 blends +
+              crossfade time + shuffle) edited via the SAME control as the live
+              deck's DECK TX. */}
           <FieldLabel>TRANSITION</FieldLabel>
-          <Dropdown
-            value={transitionMode}
-            options={TRANSITION_OPTIONS}
-            onSelect={(id) => {
+          <Segmented
+            options={TRANSITION_SOURCE_OPTIONS}
+            value={transitionSource}
+            onChange={(id) => {
               if (id === 'default') {
                 const next = { ...action };
                 delete next.transition;
                 setAction(next);
-              } else {
-                setAction({ ...action, transition: { ...action.transition, mode: id as DeckTransitionMode } });
+              } else if (!action.transition) {
+                setAction({
+                  ...action,
+                  transition: { mode: 'trans_crossfade', durationMs: 1000, enabled: true, shuffle: false },
+                });
               }
             }}
           />
           <Text style={[styles.hint, { marginTop: 8 }]}>
-            How this cue crossfades onto the deck. Default keeps the deck&apos;s current setting.
+            Default keeps the deck&apos;s standing transition. Custom sets the full blend, time,
+            and shuffle for this cue.
           </Text>
-          {transitionMode !== 'default' ? (
+          {action.transition ? (
             <View style={{ marginTop: 10 }}>
-              <FieldLabel>TRANSITION TIME</FieldLabel>
-              <View style={styles.chipRow}>
-                {PATTERN_TRANSITION_PRESETS_MS.map((ms) => {
-                  const sel = (action.transition?.durationMs ?? -1) === ms;
-                  return (
-                    <TouchableOpacity
-                      key={ms}
-                      onPress={() => setAction({ ...action, transition: { mode: transitionMode as DeckTransitionMode, durationMs: ms } })}
-                      style={[styles.dayPill, sel && { backgroundColor: C.primary, borderColor: C.primary }]}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: sel }}
-                      accessibilityLabel={`${ms} millisecond transition time`}
-                    >
-                      <Text style={[styles.dayPillText, sel && { color: C.onPrimary }]}>
-                        {ms >= 1000 ? `${ms / 1000}s` : `${ms}ms`}
-                      </Text>
-                    </TouchableOpacity>
-                  );
+              <DeckTransitionControls
+                bare
+                enabled={action.transition.enabled ?? true}
+                mode={action.transition.mode}
+                durationMs={action.transition.durationMs ?? 1000}
+                shuffle={action.transition.shuffle ?? false}
+                onChange={(patch) => setAction({
+                  ...action,
+                  transition: {
+                    mode: (patch.mode ?? action.transition!.mode) as DeckTransitionMode,
+                    durationMs: patch.durationMs ?? action.transition!.durationMs,
+                    shuffle: patch.shuffle ?? action.transition!.shuffle,
+                    enabled: patch.enabled ?? action.transition!.enabled,
+                  },
                 })}
-              </View>
-              <Text style={[styles.hint, { marginTop: 8 }]}>Crossfade time for this cue&apos;s deck swap.</Text>
+              />
             </View>
           ) : null}
           <View style={{ height: 8 }} />

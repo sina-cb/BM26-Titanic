@@ -721,9 +721,50 @@ test('§16.9 schema: playlist action round-trips transition + overlays', () => {
 test('§16.9 schema: rejects an unknown transition mode (allowed list in message)', () => {
   const plan = makePlanWithDeckKnobs({
     type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
-    transition: { mode: 'trans_wipe_left' },
+    transition: { mode: 'trans_bogus' },
   });
-  assert.throws(() => validateShowPlan(plan), /trans_crossfade, trans_flash, trans_dissolve/);
+  assert.throws(() => validateShowPlan(plan), /trans_crossfade, trans_flash, trans_color_burst/);
+});
+
+test('§16.9 schema: accepts the full 16-blend set (e.g. trans_iris) + shuffle round-trip', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl',
+    target: { channel: 'deck', id: null },
+    transition: { mode: 'trans_iris', durationMs: 800, enabled: true, shuffle: true },
+  });
+  const norm = validateShowPlan(plan);
+  assert.deepEqual(norm.cues[0].action.transition, {
+    mode: 'trans_iris', durationMs: 800, enabled: true, shuffle: true,
+  });
+});
+
+test('§16.9 schema: rejects a non-boolean transition shuffle', () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    transition: { mode: 'trans_crossfade', shuffle: 'yes' },
+  });
+  assert.throws(() => validateShowPlan(plan), /\.shuffle must be a boolean/);
+});
+
+test('§16.9 apply: an authored transition shuffle reaches setDeckTransition', async () => {
+  const plan = makePlanWithDeckKnobs({
+    type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
+    transition: { mode: 'trans_iris', durationMs: 800, shuffle: true },
+  });
+  const { svc, calls, setMood } = setupWithPlan(plan);
+  await svc.start();
+  calls.setDeckTransition.length = 0;
+
+  setMood({ party: 0, value: 0 });
+  await svc._tick();
+  setMood({ party: 1, value: 1 });
+  await svc._tick();
+  svc.stop();
+
+  assert.equal(calls.setDeckTransition.length, 1, 'setDeckTransition called once');
+  assert.deepEqual(calls.setDeckTransition[0], {
+    mode: 'trans_iris', enabled: true, durationMs: 800, shuffle: true,
+  });
 });
 
 test('§16.9 schema: transition requires mode when present', () => {

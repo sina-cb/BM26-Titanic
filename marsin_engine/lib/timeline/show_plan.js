@@ -39,10 +39,13 @@ const CUE_KINDS = Object.freeze(['program', 'mood', 'ambient']);
 
 // Deck playlist transition styles a 'playlist' action may request (docs/38 §16.9).
 // Mirrors the engine's deck transition-config `mode` (api_server.js) — the swap
-// runs as a soft double-buffer fade in this style. UI drops the rarer wipe/iris
-// styles; the engine accepts exactly these three for an authored cue.
+// runs as a soft double-buffer fade in this style. The cue editor exposes the
+// FULL blend set (all 16), matching the live deck's Deck TX picker.
 export const CUE_TRANSITION_MODES = Object.freeze([
-  'trans_crossfade', 'trans_flash', 'trans_dissolve',
+  'trans_crossfade', 'trans_flash', 'trans_color_burst', 'trans_dissolve',
+  'trans_wipe_right', 'trans_wipe_left', 'trans_wipe_down', 'trans_diagonal_wipe',
+  'trans_wave_sweep', 'trans_iris', 'trans_iris_close', 'trans_diamond_wipe',
+  'trans_split_horizontal', 'trans_split_vertical', 'trans_ripple_in', 'trans_morse_blink',
 ]);
 // A playlist action's `overlays` field: enable (honor configured overlays) or
 // disable (turn ALL deck overlays off). Absent → no change (docs/38 §16.9).
@@ -337,7 +340,7 @@ function validateTrigger(trigger, label, phaseNames) {
  * A 'playlist' action's optional `transition` block (docs/38 §16.9) — how the deck
  * swap that loads this playlist should look. THROW-style; `mode` is REQUIRED when
  * the block is present (an empty {} is an authoring error). Returns a normalized
- * { mode, durationMs?, enabled? }.
+ * { mode, durationMs?, enabled?, shuffle? }.
  */
 function validateCueTransition(transition, label) {
   if (!isPlainObject(transition)) throw new Error(`${label} must be an object { mode, durationMs?, enabled? }`);
@@ -355,6 +358,7 @@ function validateCueTransition(transition, label) {
     out.durationMs = ms;
   }
   if (transition.enabled !== undefined) out.enabled = assertBool(transition.enabled, `${label}.enabled`);
+  if (transition.shuffle !== undefined) out.shuffle = assertBool(transition.shuffle, `${label}.shuffle`);
   return out;
 }
 
