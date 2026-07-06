@@ -340,7 +340,7 @@ test('repeated kick-band impulses fire kicks with refractory respected', () => {
 
 test('kick detector survives sustained loud bass without drift', () => {
   // Regression for the EMA-drift bug documented in
-  // .agent/02_reports/202605/20260526_1_audio_analysis_report.md
+  // .agent/reports/202605/20260526_1_audio_analysis_report.md
   // Concern 5: under sustained loud kick-band content (a heavy
   // bassline at high duty cycle) the original symmetric EMA tracked
   // the loud baseline UP and never decayed. The fire test

@@ -34,7 +34,7 @@
  * Snapshots globals_state.yaml + global_effect_slots.yaml before any
  * mutation, restores them in a finally block. The HIL spec is strict:
  * "after your tests, `git status` inside the worktree should show only
- * your intended diff" (.agent/00_gol/13_multi_agent.md §6.5).
+ * your intended diff" (.agent/os/multi_agent.md §6.5).
  */
 
 import http from 'http';

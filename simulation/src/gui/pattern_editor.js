@@ -47,7 +47,7 @@ function renderPresetButtons() {
 export async function loadPatternPresets() {
   // Single source of truth: the static manifest committed alongside the patterns.
   // Same path in dev and prod (no localhost fallback, no hardcoded preset list) —
-  // see .agent/00_gol/00_codex.md P0. The dev save-server regenerates this file
+  // see .agent/codex.md P0. The dev save-server regenerates this file
   // after any pattern save / delete so the list stays live during development.
   const manifestUrl = `../marsin_engine/patterns/manifest.json?t=${Date.now()}`;
   const resp = await fetch(manifestUrl);

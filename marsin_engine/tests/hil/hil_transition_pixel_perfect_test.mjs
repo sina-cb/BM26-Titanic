@@ -29,7 +29,7 @@
  * a total wall-time budget under 60 s for all 16 transitions.
  *
  * ── Self-booting ──────────────────────────────────────────────────────
- *   Per .agent/00_gol/13_multi_agent.md §5, a sub-agent runs servers
+ *   Per .agent/os/multi_agent.md §5, a sub-agent runs servers
  *   on its allocated slot ports. This test spawns its OWN engine on
  *   slot 1 (port 31168) and shuts it down before exit. The operator's
  *   main engine on port 6968 is untouched. State snapshots from

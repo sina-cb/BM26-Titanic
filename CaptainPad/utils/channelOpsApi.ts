@@ -2,7 +2,7 @@
 // (docs/39 §6b): #6 duplicate an overlay, #7 reorder the overlay stack, and
 // #9 panic/home (mission-critical safe LIT reset). The engine side merged on
 // `dev/channel_ops_engine`; the EXACT API surface is captured in
-// `.agent/02_reports/202606/20260620_22_channel_ops_engine.md`.
+// `.agent/reports/202606/20260620_22_channel_ops_engine.md`.
 //
 // File ownership (multi-agent wave): the shared utils/api.ts is owned by a
 // different agent, so these clients live in this dedicated file (mirroring

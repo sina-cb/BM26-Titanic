@@ -37,7 +37,7 @@
  *     convention): fast attack so peaks register, slow release so
  *     visuals don't flicker. Configurable via `bands.attackMs` /
  *     `bands.releaseMs`. Shared across all three bands — one
- *     envelope primitive parameterized once, per .agent/00_gol/00
+ *     envelope primitive parameterized once, per .agent/codex.md
  *     "smallest patch that works".
  *   - Per-band noise gate (`bands.noiseGate`): post-compression
  *     floor, below which the band reads as 0. Compensates for
@@ -241,7 +241,7 @@ export class AudioAnalyzer {
     // it from the first 50 hops' running mean.
     //
     // Asymmetric attack/release + slow-trailing ceiling clamp
-    // (hot-fix per .agent/02_reports/202605/20260526_1_audio_analysis_report.md
+    // (hot-fix per .agent/reports/202605/20260526_1_audio_analysis_report.md
     // Concern 5, "BLOCKER for the playa"):
     //
     //   Symptom — under sustained loud kick-band content (e.g. a
@@ -701,7 +701,7 @@ export class AudioAnalyzer {
     // gives the classic VU/level-meter feel — snap up on peaks,
     // smooth fall on releases — without flickering. Same primitive
     // shared across all three bands (single helper, three calls)
-    // per .agent/00_gol/00 "smallest patch that works".
+    // per .agent/codex.md "smallest patch that works".
     //
     // The noise gate is applied to the post-compression value (in
     // [0, 1)), not the raw FFT energy: it's a perceptual floor for

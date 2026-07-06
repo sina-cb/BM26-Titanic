@@ -4,7 +4,7 @@
  * Design doc: docs/30_[todo]_audio_structure_detector.md (Phase 1).
  * Feasibility review corrections (folded in, override the doc where
  * they conflict):
- * .agent/02_reports/202606/20260612_2_audio_analysis_review_docs30_feasibility.md §2
+ * .agent/reports/202606/20260612_2_audio_analysis_review_docs30_feasibility.md §2
  *
  * OBSERVE-AND-PUBLISH ONLY. This module watches the music (via the
  * ParamCenter live keys the analyzer + OSC stems publish), runs a small

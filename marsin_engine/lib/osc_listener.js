@@ -9,7 +9,7 @@
  * downstream onChange fires exactly once per packet.
  *
  * Design doc: docs/24_osc_integration.md (§3, §6, §7).
- * Implementation plan: .agent/02_reports/202605/20260524_1_osc_impl.md (Phase 3).
+ * Implementation plan: .agent/reports/202605/20260524_1_osc_impl.md (Phase 3).
  *
  * Hard-fails fast: every config error throws from the constructor —
  * no silent skip of bad bindings, no partial binding map. The

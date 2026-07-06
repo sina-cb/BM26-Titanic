@@ -1916,7 +1916,7 @@ export async function fetchGlobalEffectLibrary(): Promise<ApiResult<{ effects: R
 // the global effect library and fires on a server-side 250 ms tick. The
 // scheduler keeps running while the iPad is asleep / closed; CaptainPad
 // is purely a UI surface. See the Phase 1 engine report
-// (.agent/02_reports/202605/20260527_2_scheduler_engine.md) for the
+// (.agent/reports/202605/20260527_2_scheduler_engine.md) for the
 // full wire contract and the docs/31_scheduled_tasks.md design doc.
 //
 // All optimistic state lives in the caller — these helpers just

@@ -11,7 +11,7 @@
   SOURCE OF TRUTH is catalog_data.json (one entry per pattern, ordered). Curate
   that + regenerate to maintain the catalog. The preview GIFs are produced
   separately by tools/gen_pattern_gifs.mjs. See the spec:
-  .agent/00_gol/15_pattern_catalog.md.
+  .agent/ops/pattern_catalog.md.
 
   Usage (from marsin_engine/):  node tools/gen_catalog.mjs
 */
@@ -51,7 +51,7 @@ several still need that pass (see each group's status + the worklist below).
 \`node tools/gen_catalog.mjs\` to regenerate this index + the group pages. The
 preview GIFs come from \`node tools/gen_pattern_gifs.mjs\` (test_bench widget
 layout → \`patterns/gifs/NN.gif\`). Full spec:
-\`.agent/00_gol/15_pattern_catalog.md\`.
+\`.agent/ops/pattern_catalog.md\`.
 
 **Gate thresholds** (skill \`12_highdef_pattern_generation.md\` §0): \`peak ≥ 200\`
 (high-def brightness), PRIMARY \`micLow→brightness corr ≥ 0.5\` (audio-reactive),
