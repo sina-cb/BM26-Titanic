@@ -21,6 +21,7 @@ import {
   EncoderSettings,
   ColorValues,
   SysExValues,
+  DeviceConfigDefaults,
 } from './constants';
 
 const SYSEX_START = 0xf0;
@@ -118,14 +119,37 @@ function bankColors(bank: number): { active: number; inactive: number } {
 }
 
 /**
+ * Build the global config commit frame — the `PUSH_CONF` sysex that carries the
+ * device-wide settings (system MIDI channel, side-button actions incl.
+ * BANKUP/BANKDOWN, super-knob range, default colours, brightness). Mirrors
+ * pymft's `Config._send_global`:
+ *   [0xF0, mfr0, mfr1, mfr2, PUSH_CONF, addr, val, addr, val, ..., 0xF7]
+ * iterating `DeviceConfigDefaults` (pymft's `DeviceSettings._settings`) in
+ * order. Byte-for-byte diffable against pymft's default global config.
+ */
+export function buildGlobalConfigFrame(): number[] {
+  const frame = [SYSEX_START, ...MIDI_MFR_ID, SysExCommands.PUSH_CONF];
+  for (const [address, value] of DeviceConfigDefaults) {
+    frame.push(address, value);
+  }
+  frame.push(SYSEX_END);
+  return frame;
+}
+
+/**
  * Build the full connect-time config: all 64 encoders forced into RELATIVE
- * mode with the rig's layout. Returns a flat list of sysex frames (all encoder
- * BULK_XFER frames, encoder 0 first) ready to send once on connect.
+ * mode with the rig's layout, THEN the global `PUSH_CONF` commit frame.
+ * Returns a flat list of sysex frames (every encoder BULK_XFER frame first,
+ * encoder 0 leading, then the single global frame last) ready to send once on
+ * connect — mirroring pymft's `Config.send_all` (`_send_encoders(force_all)`
+ * then `_send_global()`). The global frame is REQUIRED: without it the
+ * per-encoder pushes are never committed device-wide and the side-button
+ * BANKUP/BANKDOWN wiring (docs/34) is never applied.
  *
- * Field set + addresses follow `Config.initialize_defaults`; the values encode
- * this port's deviations (relative encoder type, velocity-sensitive movement,
- * switch CC-hold on channel 1, blended-bar indicator, detent off, per-bank
- * base colours).
+ * Field set + addresses follow `Config.initialize_defaults`; the per-encoder
+ * values encode this port's deviations (relative encoder type,
+ * velocity-sensitive movement, switch CC-hold on the switch channel,
+ * blended-bar indicator, detent off, per-bank base colours).
  */
 export function buildConnectConfig(): number[][] {
   const frames: number[][] = [];
@@ -137,10 +161,16 @@ export function buildConnectConfig(): number[][] {
         detent: SysExValues.FALSE,
         movement_type: EncoderSettings.MOVEMENTTYPE_VELOCITYSENSITIVE,
         switch_action_type: EncoderSettings.SWACTION_CCHOLD,
-        switch_midi_channel: 1, // switch on channel 1, CC-hold
+        // `switch_midi_channel` is the 1-BASED sysex channel field (pymft
+        // config.py sets encoder_midi_channel=1 → raw ch0, switch_midi_channel=2
+        // → raw ch1). Value 2 puts the push switch on the runtime
+        // SWITCH_AND_COLOR channel (raw ch1), where decodeEncoderPush / setColor
+        // live — matching docs/34 "switch = CC-hold on ch1". Value 1 (the old
+        // bug) would collide the push onto the rotary channel (raw ch0).
+        switch_midi_channel: 2,
         switch_midi_number: i,
         switch_midi_type: 0,
-        encoder_midi_channel: 1,
+        encoder_midi_channel: 1, // 1-based → raw ch0 (rotary/turn channel)
         encoder_midi_number: i,
         encoder_midi_type: EncoderSettings.MIDITYPE_SENDRELENC, // RELATIVE
         active_color: active,
@@ -153,5 +183,8 @@ export function buildConnectConfig(): number[][] {
       frames.push(...buildEncoderConfigFrames(i, settings));
     }
   }
+  // Commit the whole push with the global PUSH_CONF frame — pymft send_all()
+  // order: encoders first, global last.
+  frames.push(buildGlobalConfigFrame());
   return frames;
 }

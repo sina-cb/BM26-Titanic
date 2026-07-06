@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { buildEncoderConfigFrames, buildConnectConfig } from './config';
+import {
+  buildEncoderConfigFrames,
+  buildConnectConfig,
+  buildGlobalConfigFrame,
+} from './config';
 import { Encoders, EncoderSettings, ColorValues } from './constants';
 
 describe('buildEncoderConfigFrames', () => {
@@ -89,9 +93,26 @@ describe('buildEncoderConfigFrames', () => {
 describe('buildConnectConfig', () => {
   const frames = buildConnectConfig();
 
-  it('emits one frame per encoder (64 total, all single-part)', () => {
-    // Each encoder has 15 settings → 30 bytes → 2 parts.
-    expect(frames).toHaveLength(Encoders.DEVICE_KNOB_NUM * 2);
+  it('emits two BULK_XFER parts per encoder PLUS the trailing global PUSH_CONF frame', () => {
+    // Each encoder has 15 settings → 30 bytes → 2 parts (128 encoder frames),
+    // then one global PUSH_CONF commit frame — mirrors pymft Config.send_all()
+    // (_send_encoders(force_all=True) then _send_global()). P1-1: the global
+    // frame was previously never emitted, so the "force encoders to relative
+    // mode" push was a silent no-op with no commit + side-button config.
+    expect(frames).toHaveLength(Encoders.DEVICE_KNOB_NUM * 2 + 1);
+  });
+
+  it('appends the global PUSH_CONF frame LAST (after every encoder frame)', () => {
+    // pymft send_all(): encoders first, global commit last.
+    const last = frames[frames.length - 1];
+    expect(last[0]).toBe(0xf0);
+    expect(last.slice(1, 4)).toEqual([0x00, 0x01, 0x79]); // DJTT mfr id
+    expect(last[4]).toBe(0x01); // SysExCommands.PUSH_CONF
+    expect(last[last.length - 1]).toBe(0xf7);
+    // Every OTHER frame is a BULK_XFER (cmd byte 0x04) — only the last is global.
+    for (let i = 0; i < frames.length - 1; i += 1) {
+      expect(frames[i][4]).toBe(0x04);
+    }
   });
 
   it('forces relative mode + velocity movement on encoder 0', () => {
@@ -106,9 +127,18 @@ describe('buildConnectConfig', () => {
     expect(pairs.get(18)).toBe(EncoderSettings.MIDITYPE_SENDRELENC);
     // movement_type (addr 11) = MOVEMENTTYPE_VELOCITYSENSITIVE.
     expect(pairs.get(11)).toBe(EncoderSettings.MOVEMENTTYPE_VELOCITYSENSITIVE);
-    // switch on channel 1 (addr 13) CC-hold (addr 12 = SWACTION_CCHOLD).
-    expect(pairs.get(13)).toBe(1);
+    // Switch push must land on the runtime SWITCH_AND_COLOR channel (raw ch1),
+    // where decodeEncoderPush / setColor listen. The sysex `switch_midi_channel`
+    // field is 1-BASED (pymft config.py sets encoder_midi_channel=1 for raw ch0,
+    // switch_midi_channel=2 for raw ch1), so addr 13 must be 2, NOT 1. Value 1
+    // would put the push on the rotary channel (raw ch0) and collide with turns.
+    // pymft parity: pymft/src/config.py initialize_defaults →
+    //   set("switch_midi_channel", 2). CC-hold (addr 12) is this port's
+    //   intentional deviation from pymft's SWACTION_ENCRESETVALUE.
+    expect(pairs.get(13)).toBe(2);
     expect(pairs.get(12)).toBe(EncoderSettings.SWACTION_CCHOLD);
+    // encoder_midi_channel (addr 16) = 1 (1-based → raw ch0, the rotary channel).
+    expect(pairs.get(16)).toBe(1);
     // indicator = blended bar (addr 22); detent off (addr 10 = 0).
     expect(pairs.get(22)).toBe(EncoderSettings.INDICATORTYPE_BLENDEDBAR);
     expect(pairs.get(10)).toBe(0);
@@ -118,8 +148,9 @@ describe('buildConnectConfig', () => {
     // Frame 0 → encoder 0 → tag 1; frame 2 → encoder 1 → tag 2.
     expect(frames[0][6]).toBe(1);
     expect(frames[2][6]).toBe(2);
-    // Last encoder (63) → tag 64, on the penultimate/last frame pair.
-    expect(frames[frames.length - 1][6]).toBe(64);
+    // Last encoder (63) → tag 64. The very last frame is the global PUSH_CONF,
+    // so encoder 63's second part is at length-2 (index of the last BULK_XFER).
+    expect(frames[frames.length - 2][6]).toBe(64);
   });
 
   it('applies per-bank base colours (bank1 pink, bank2 yellow, bank3 red, bank4 blue)', () => {
@@ -147,5 +178,56 @@ describe('buildConnectConfig', () => {
     };
     expect(inactiveColorOf(0)).toBe(ColorValues.BLUE);
     expect(inactiveColorOf(48)).toBe(ColorValues.BLUE);
+  });
+});
+
+describe('buildGlobalConfigFrame (pymft _send_global golden)', () => {
+  // PYMFT-CONFIRMED GOLDEN — computed by hand from pymft/src/config.py
+  // `Config._send_global()` iterating `pymft/src/device_settings.py`
+  // `DeviceSettings._settings` (insertion order preserved), with every
+  // constant resolved from `pymft/src/constants.py`:
+  //   frame = [0xF0] + MFR_ID + [PUSH_CONF] + [key,value ...] + [0xF7]
+  // DeviceSettings pairs (address: value):
+  //   0:SYSTEM(3) 1:TRUE(1) 2:CCTOGGLE(1) 3:BANKDOWN(7) 4:CCTOGGLE(1)
+  //   5:CCTOGGLE(1) 6:BANKUP(6) 7:CCTOGGLE(1) 8:63 9:127
+  //   10:0 11:0 12:0 13:2 14:0 15:0 16:1 17:0 18:MIDITYPE_SENDCC(1)
+  //   19:ACTIVE(127) 20:BLUE(1) 21:63 22:INDICATORTYPE_BLENDEDBAR(2) 23:0 24:0
+  //   31:127 32:127
+  // These bytes are what a bench MFT actually receives from pymft's default
+  // config; they carry the side-button BANKUP/BANKDOWN wiring (keys 6 / 3) that
+  // docs/34 promises "set in the config push". This frame is byte-for-byte
+  // diffable against pymft and does NOT depend on buildGlobalConfigFrame's own
+  // output (it is a real external golden, not self-referential).
+  const PYMFT_GLOBAL_GOLDEN = [
+    0xf0, 0x00, 0x01, 0x79, 0x01,
+    0, 3, 1, 1, 2, 1, 3, 7, 4, 1, 5, 1, 6, 6, 7, 1, 8, 63, 9, 127,
+    10, 0, 11, 0, 12, 0, 13, 2, 14, 0, 15, 0, 16, 1, 17, 0, 18, 1,
+    19, 127, 20, 1, 21, 63, 22, 2, 23, 0, 24, 0, 31, 127, 32, 127,
+    0xf7,
+  ];
+
+  it('matches pymft _send_global byte-for-byte (60-byte PUSH_CONF frame)', () => {
+    expect(buildGlobalConfigFrame()).toEqual(PYMFT_GLOBAL_GOLDEN);
+  });
+
+  it('is a well-formed PUSH_CONF sysex frame', () => {
+    const f = buildGlobalConfigFrame();
+    expect(f[0]).toBe(0xf0);
+    expect(f.slice(1, 4)).toEqual([0x00, 0x01, 0x79]);
+    expect(f[4]).toBe(0x01); // SysExCommands.PUSH_CONF
+    expect(f[f.length - 1]).toBe(0xf7);
+    // Header(5) + 27 address/value pairs (54) + terminator(1) = 60 bytes.
+    expect(f).toHaveLength(60);
+  });
+
+  it('carries the side-button bank-down (key 3) and bank-up (key 6) actions', () => {
+    // docs/34_captainpad_midi.md §"Side buttons": "left column = bank up / bank
+    // down (hardware action, set in the config push)". pymft's default wiring:
+    // Left Button 2 = BANKDOWN (0x07), Right Button 2 = BANKUP (0x06).
+    const f = buildGlobalConfigFrame();
+    const pairs = new Map<number, number>();
+    for (let i = 5; i < f.length - 1; i += 2) pairs.set(f[i], f[i + 1]);
+    expect(pairs.get(3)).toBe(0x07); // BANKDOWN
+    expect(pairs.get(6)).toBe(0x06); // BANKUP
   });
 });

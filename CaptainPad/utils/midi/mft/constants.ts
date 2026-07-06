@@ -275,3 +275,48 @@ export const EncoderSettingAddress = {
 
 /** Names of the per-encoder settings, in the canonical sysex order. */
 export type EncoderSettingName = keyof typeof EncoderSettingAddress;
+
+// ── Global device settings (the PUSH_CONF commit frame) ────────────────────
+// A straight transliteration of pymft's `src/device_settings.py`
+// `DeviceSettings._settings` — the [address, value] pairs the global
+// `Config._send_global()` frame carries after every per-encoder BULK_XFER.
+// Keys are the raw sysex addresses (note the gap 25..30, which mirrors the
+// Midi Fighter Utility's own sysex exactly). Insertion order MATTERS:
+// `buildGlobalConfigFrame` iterates this list in order, exactly like pymft
+// iterating the dict. Values reference the same constants pymft uses so the two
+// libraries stay byte-for-byte diffable.
+//
+// This is pymft's DEFAULT global config; the rig's relative-mode deviations
+// live in the PER-ENCODER frames (buildConnectConfig), not here. The
+// side-button wiring (Left Button 2 = BANKDOWN, Right Button 2 = BANKUP) is the
+// "hardware action set in the config push" docs/34 refers to.
+export const DeviceConfigDefaults: ReadonlyArray<readonly [number, number]> = [
+  [0, MidiChannels.SYSTEM], // System MIDI channel
+  [1, SysExValues.TRUE], // Bank side buttons enabled
+  [2, GlobalSideSwitchAction.CCTOGGLE], // Left Button 1
+  [3, GlobalSideSwitchAction.BANKDOWN], // Left Button 2
+  [4, GlobalSideSwitchAction.CCTOGGLE], // Left Button 3
+  [5, GlobalSideSwitchAction.CCTOGGLE], // Right Button 1
+  [6, GlobalSideSwitchAction.BANKUP], // Right Button 2
+  [7, GlobalSideSwitchAction.CCTOGGLE], // Right Button 3
+  [8, 63], // Super Knob start point
+  [9, 127], // Super Knob end point
+  [10, 0], // (not defined in the MFT PDF)
+  [11, 0],
+  [12, 0],
+  [13, 2],
+  [14, 0],
+  [15, 0],
+  [16, 1],
+  [17, 0],
+  [18, EncoderSettings.MIDITYPE_SENDCC], // Default encoder MIDI type
+  [19, ColorValues.ACTIVE], // Default encoder active colour
+  [20, ColorValues.BLUE], // Default encoder inactive colour
+  [21, 63], // Default encoder detent colour
+  [22, EncoderSettings.INDICATORTYPE_BLENDEDBAR], // Default indicator type
+  [23, 0],
+  [24, 0],
+  // Address gap 25..30 matches the Midi Fighter Utility sysex exactly.
+  [31, 127], // RGB LED brightness
+  [32, 127], // Indicator global brightness
+] as const;
