@@ -11,7 +11,7 @@ draws** (the engine's vis broadcast), so it is the real visualization, not a
 mock or a re-render.
 
 It also documents how the serialized vis buffer maps to fixtures — see the
-companion spec `.agent/02_reports/202606/20260618_5_serialized_vis_and_dmx_layout_spec.md`.
+companion spec `.agent/reports/202606/20260618_5_serialized_vis_and_dmx_layout_spec.md`.
 
 ## When to use
 - "Show me the swipe / pattern", "send me a clip", "what does it look like".

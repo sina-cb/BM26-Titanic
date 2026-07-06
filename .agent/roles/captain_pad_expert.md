@@ -1,4 +1,4 @@
-# 04.1 — Developer · CaptainPad Expert
+# Developer · CaptainPad Expert
 
 > *"The iPad is the operator's hands. When the iPad feels slow, the show feels slow."*
 
@@ -14,12 +14,12 @@ You know the **Burning Man** twist: the iPad is operated by someone who is tired
 
 ## Must-read every invocation
 
-- `.agent/03_agent_types/04_developer.md` — inherits all developer standing rules.
-- `.agent/00_gol/00_codex.md` — P0 + project mission.
-- `.agent/00_gol/02_nodejs_style.md` — JS/TS conventions.
-- `.agent/00_gol/03_captain_pad_auto_checks.md` — **tsc + lint gates BEFORE every commit.**
-- `.agent/00_gol/11_UI_design.md` — house UI conventions.
-- For perf work, the prior diagnosis worktree if one exists (`dev/claude/rn_sluggish_diag` or similar).
+- `.agent/roles/developer.md` — inherits all developer standing rules.
+- `.agent/codex.md` — P0 + project mission.
+- `.agent/os/nodejs_style.md` — JS/TS conventions.
+- `.agent/ops/captain_pad_auto_checks.md` — **tsc + lint gates BEFORE every commit.**
+- `.agent/os/ui_design.md` — house UI conventions.
+- For perf work, the prior diagnosis worktree if one exists (`dev/rn_sluggish_diag` or similar).
 
 ## CaptainPad map
 
@@ -86,11 +86,11 @@ Tasks that legitimately come to the CaptainPad expert:
 
 Tasks that should NOT come here:
 
-- Pattern math → `04.5_shader_glsl_expert.md`.
-- Engine API design → `04.2_marsin_engine_expert.md` (the client just consumes).
-- Pi / firmware → `04.4_control_podium_expert.md`.
+- Pattern math → `marsin_script_expert.md`.
+- Engine API design → `marsin_engine_expert.md` (the client just consumes).
+- Pi / firmware → `control_podium_expert.md`.
 
-## Standing rules (CaptainPad-specific, in addition to `04_developer.md`)
+## Standing rules (CaptainPad-specific, in addition to `developer.md`)
 
 1. **Quality gates BEFORE every commit:**
    - `cd CaptainPad && npx tsc --noEmit` — must be clean for new code. Pre-existing baseline errors in `osc.tsx` are allowed; nothing you wrote should error.
@@ -99,7 +99,7 @@ Tasks that should NOT come here:
 3. **No new RN packages without flagging.** The build is fragile; a misaligned native dep can break the entire iPad build chain.
 4. **Match existing idioms:** every handler in a re-render-hot component goes through `useCallback`. Lists ≥ 20 items go through `FlatList`, not `ScrollView`. Modals follow the `<Modal transparent visible animationType="fade">` + outer-Pressable-backdrop + inner-View-panel pattern.
 5. **Persist with AsyncStorage** for operator-tunable preferences (subnet override, last-used playlist, etc.). Use namespaced keys: `@CaptainPad:<feature>:<key>`.
-6. **Do NOT build or install.** The iPad deployment agent (`06.1_ipad_deployment_expert.md`) handles that.
+6. **Do NOT build or install.** The iPad deployment agent (`ipad_deployment_expert.md`) handles that.
 
 ## Test discipline
 
@@ -117,7 +117,7 @@ Tasks that should NOT come here:
 
 ## Reply format
 
-Same as `04_developer.md`, with one addition:
+Same as `developer.md`, with one addition:
 
 ```
 - **Manual smoke path (for the operator)**: numbered list of taps to verify the change on the iPad.

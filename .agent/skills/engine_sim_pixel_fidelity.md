@@ -12,12 +12,13 @@ validated R/G/B/W end-to-end on test_bench. Use this whenever pixel
 colors look wrong, after touching the mapping/export/sACN path, or as
 a pre-playa sanity sweep.
 
-Related specs/skills: `.agent/00_gol/06` (run sim), `07` (run engine),
-`.agent/01_skills/00_see_the_world.md` (screenshots),
-`05_full_stack_smoke.md` (whole-stack bring-up). Known open issues that
+Related specs/skills: `.agent/ops/run_sim.md` (run sim),
+`.agent/ops/run_marsin_engine.md` (run engine),
+`.agent/skills/see_the_world.md` (screenshots),
+`full_stack_smoke.md` (whole-stack bring-up). Known open issues that
 WILL bite you are flagged inline by repo task id (`010`, `022`, `023`)
 — they live as cards on the Notion *Titanic Lighting - Task Tracker*
-board (see `.agent/00_gol/14_task_tracking.md`); the card bodies carry
+board (see `.agent/os/task_tracking.md`); the card bodies carry
 these ids.
 
 ---
@@ -140,7 +141,7 @@ test sessions only and must be reverted:
 
 ## 6. Visual verification
 
-Per color: screenshot the full page (skill 00 conventions), then
+Per color: screenshot the full page (see_the_world conventions), then
 **actually look at it** (Read tool). PASS = every pixel dot uniform in
 the expected color across all fixture types, plus matching ground
 wash. Account for:

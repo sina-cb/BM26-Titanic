@@ -4,7 +4,7 @@
   gate on every PR/push. What may never be committed, how the scanner and
   its overrides work, the gitignored MAC pairing overlay, and the
   stale-clone / history-rewrite hazard are specified in
-  `16_security_privacy.md` — read it before pushing anything.
+  `security_privacy.md` — read it before pushing anything.
 - Never do git operations until explicitly asked by the Human op.
 - Do not claim a branch is merge-ready just because a report says "approved".
   Verify the branch with the project-specific checks below.
@@ -25,7 +25,7 @@ agent. Do not bake an agent's name (`claude`, etc.) into a branch you create.
 | --- | --- | --- | --- |
 | `main` | Production / integration trunk. All work lands here via squash-merged PRs. | Permanent | Yes |
 | `feat/<snake_case>` | **Durable feature branches** that outlive a single agent session — long-running work, deploy hosts, anything an open PR tracks. This is the only namespace for work meant to stick around. | Long-lived, until merged | Yes |
-| `dev/<slug>` | Multi-agent worktree sub-agent branches. Governed by `.agent/00_gol/13_multi_agent.md`. **Local only.** | Transient, one per multi-agent run | **No — stays local** |
+| `dev/<slug>` | Multi-agent worktree sub-agent branches. Governed by `.agent/os/multi_agent.md`. **Local only.** | Transient, one per multi-agent run | **No — stays local** |
 | `worktree-agent-<hash>` | **Temporary local worktree** scratch branches. Never durable work. | Ephemeral, delete after use | **No — stays local** |
 | `<agent>/<auto_name>` | Auto-named branches an agent's web / cloud session creates for itself (random codenames like `nice-cerf-bl2jnk`). Treat as scratch until promoted. | Ephemeral | Only the originating session's own branch |
 
@@ -61,20 +61,20 @@ Rules:
   squash-merge means `git branch --merged` will NOT list them, so check by
   content, not by the merged flag. Record the tip SHA before deleting so the
   branch can be restored with `git push origin <sha>:refs/heads/<name>`.
-- **Worktree branches follow `13_multi_agent.md`.** Worktrees live in the
+- **Worktree branches follow `multi_agent.md`.** Worktrees live in the
   sibling `BM26-Titanic-worktrees/` dir, never inside the repo or `~/tmp/`.
   Remove them with `git worktree remove` (never `rm -rf`), then delete the
   branch. Local-only port edits to `config.yaml` never get committed.
 - **Branches stay local until the Human op says "push"** (see the first rule
-  of this file and `13_multi_agent.md` §3).
+  of this file and `multi_agent.md` §3).
 
 ## Auto-Check Specs
 
 Before commit or merge-readiness review, follow the relevant spec files:
 
-- CaptainPad: `.agent/00_gol/03_captain_pad_auto_checks.md`
-- Simulation: `.agent/00_gol/04_sim_auto_checks.md`
-- Marsin Engine: `.agent/00_gol/05_marsin_engine_auto_checks.md`
+- CaptainPad: `.agent/ops/captain_pad_auto_checks.md`
+- Simulation: `.agent/ops/sim_auto_checks.md`
+- Marsin Engine: `.agent/ops/marsin_engine_auto_checks.md`
 
 If a branch touches more than one subsystem, run every touched subsystem's
 checks. If the branch touches shared generated model data, run both the source
@@ -111,7 +111,7 @@ These are the known follow-up tasks from the May 7, 2026 merge-readiness review.
 Agents should complete these before recommending merge to `main`.
 
 1. Fix CaptainPad type/lint failures.
-   - Follow `.agent/00_gol/03_captain_pad_auto_checks.md`.
+   - Follow `.agent/ops/captain_pad_auto_checks.md`.
    - Add a YAML module declaration so `@/config.yaml` typechecks.
    - Replace or define the missing `C.border` color token.
    - Type implicit `any` fader callbacks in `CPCControls`.
@@ -120,7 +120,7 @@ Agents should complete these before recommending merge to `main`.
    - Re-run `npx tsc --noEmit` and `npm run lint` from `CaptainPad`.
 
 2. Update the HIL transition test so it can gate merges.
-   - Follow `.agent/00_gol/05_marsin_engine_auto_checks.md`.
+   - Follow `.agent/ops/marsin_engine_auto_checks.md`.
    - Remove hardcoded `PIXEL_COUNT = 64`; derive count from captured vis data.
    - Add assertions for brightness and per-pixel deltas.
    - Add reliable cleanup so `states/test_bench/*.yaml` are not changed by the

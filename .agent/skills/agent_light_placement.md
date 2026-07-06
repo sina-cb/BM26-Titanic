@@ -9,7 +9,7 @@ sim itself would**, so the result is byte-faithful to a UI-placed generator and
 passes every integrity check. Written from the back-deck-vintage placement
 (mirroring the front-deck vintage groups across each hull half).
 
-Pair this with `00_see_the_world.md` (rendering) and the codex P0 rules
+Pair this with `see_the_world.md` (rendering) and the codex P0 rules
 (no silent fallbacks, restore any temp edits).
 
 ---
@@ -114,7 +114,7 @@ implement the small vector ops + the 'YXZ' extraction directly (above). Always
   its trace `groupName`.
 - **Numeric mirror check**: reflect the source fixtures and assert max position
   error ≈ 0 and spacing matches.
-- **Render & eyeball** (`00_see_the_world.md`). To prove placement, see §7.
+- **Render & eyeball** (`see_the_world.md`). To prove placement, see §7.
 
 ---
 

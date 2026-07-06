@@ -92,4 +92,4 @@ Then deliver the printed `.jpg` to the operator as a single file.
 | `simulation/agent_tools/webcam_capture.cjs` | dshow webcam → MP4 clip / JPEG still |
 | `simulation/agent_tools/webcam_to_drive.cjs` | upload a file to Drive via rclone |
 | `tmp/webcam/` | output dir (gitignored) |
-| `00_see_the_world.md` / `09_capture_sim_video.md` | the *sim*-side still / video tools (this skill is for the *real* rig) |
+| `see_the_world.md` / `capture_sim_video.md` | the *sim*-side still / video tools (this skill is for the *real* rig) |

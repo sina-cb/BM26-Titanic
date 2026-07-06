@@ -9,8 +9,8 @@ When the operator asks to **"visualize the pattern"**, "show me the swipe",
 replays the pattern's real per-pixel output — the same look as CaptainPad's
 DECK MAIN strip. This is the go-to skill for that request.
 
-It pairs with `07_pixel_vis_clips.md` (the capture/clip CLI tools) and the spec
-`.agent/02_reports/202606/20260618_5_serialized_vis_and_dmx_layout_spec.md`
+It pairs with `pixel_vis_clips.md` (the capture/clip CLI tools) and the spec
+`.agent/reports/202606/20260618_5_serialized_vis_and_dmx_layout_spec.md`
 (buffer format + fixture map). This doc focuses on the **widget itself** so any
 agent can build, explain, or adapt it.
 
@@ -36,7 +36,7 @@ So: to visualize, make sure the engine is up (`node engine.js --model
 test_bench --pattern <name>`, or `node launcher.js dev --scene test_bench`),
 then capture, then render the widget.
 
-## The fast path (CLI tools from skill 07)
+## The fast path (CLI tools from pixel_vis_clips)
 ```bash
 cd marsin_engine
 # 1) run the pattern + capture its live per-pixel frames
@@ -148,6 +148,6 @@ node tools/gallery/server.mjs            # port from gallery_config.json (6965) 
 ```
 Then open `http://<your-tailscale-ip>:6965/` on the phone, search, tap the name.
 The gallery is a standalone offline tool (not wired to the launcher). Full pipeline
-+ details: skill `13_pattern_gallery.md`,
-`.agent/01_skills/12_highdef_pattern_generation.md` §11, and
++ details: skill `pattern_gallery.md`,
+`.agent/skills/highdef_pattern_generation.md` §11, and
 `marsin_engine/tools/gallery/README.md`.

@@ -48,7 +48,7 @@ cd CaptainPad     && npm install     # only needed for the CaptainPad steps
 
 Headless machines also need `xvfb-run` (browsers launch headed) and should
 pass `--viewport 1280x720` to sim renders (see
-`.agent/01_skills/00_see_the_world.md`).
+`.agent/skills/see_the_world.md`).
 
 ---
 
@@ -155,7 +155,7 @@ Kill the three processes (sim, engine, serve) when done.
 > runtime state into **tracked** files (`marsin_engine/states/**/*.yaml`)
 > and hot-regenerates `marsin_engine/models/*.js`. This is expected smoke
 > residue — do **not** commit it, and do **not** silently revert it either
-> (`.agent/00_gol/01_git.md`). Report the dirty paths to the operator and
+> (`.agent/os/git.md`). Report the dirty paths to the operator and
 > let them decide.
 
 ---

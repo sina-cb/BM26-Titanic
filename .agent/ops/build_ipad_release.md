@@ -653,7 +653,7 @@ the engine directly — it pairs with a captain Heltec radio over BLE, signs
 every command with the camp's pre-shared AES-128 key, and relays frames
 through the Pi server bridge to MarsinEngine over LoRa. See
 `control_podium/PortWatch/README.md` and
-`.agent/00_gol/12_operating_raspberry_pi.md` for the full radio topology.
+`.agent/ops/operating_raspberry_pi.md` for the full radio topology.
 
 ## 2.1 Project location
 
@@ -899,7 +899,7 @@ Cause: commands sent faster than the half-duplex LoRa link can transmit.
 
 Fix: avoid rapid multi-taps in the UI; verify the engine status publish rate
 is not configured aggressively low. Diagnose via the Pi bridge `/health`
-endpoint — see `.agent/00_gol/12_operating_raspberry_pi.md` §6.
+endpoint — see `.agent/ops/operating_raspberry_pi.md` §6.
 
 ### All commands time out
 
@@ -907,7 +907,7 @@ Cause: server bridge on the Pi is down, or the Pi cannot reach the engine.
 
 Fix: from the dev laptop, `curl http://<PI_HOST>:7099/health` (PI_HOST in
 `control_podium/server_bridge/.ssh.secret`). If that fails, see
-`.agent/00_gol/12_operating_raspberry_pi.md` §10 troubleshooting.
+`.agent/ops/operating_raspberry_pi.md` §10 troubleshooting.
 
 ## 2.7 PortWatch current known-good state
 

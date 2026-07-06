@@ -8,7 +8,7 @@ This is the canonical, step-by-step recipe for producing a **production-grade**
 lighting pattern: high-definition, genuinely **sound-reactive**, strict two-colour,
 never dead-static, never dead-black. It pairs with:
 
-- `.agent/01_skills/08_visualize_patterns_widget.md` — the LED widget anatomy.
+- `.agent/skills/visualize_patterns_widget.md` — the LED widget anatomy.
 - `docs/MARSIN_ENGINE_PATTERNS.md` — the language/parameter/colour contracts (§2,3,4,7,8,9).
 - `docs/MARSIN_PB_LANG_SPEC.md` — MarsinScript reference (§2.4 reserved names, §6 builtins).
 - The template pattern `marsin_engine/patterns/27_swipe.js` (copy its shape + `_hsv2rgb` helpers).
@@ -408,7 +408,7 @@ watch the visualization. (`/` = index, `/w/<name>` = the clip, `/api/list` = JSO
 So the loop is: *"I just made `NN_name`"* → `publish.mjs --name NN_name` →
 operator opens the gallery on the phone → selects `NN_name` → sees it live.
 
-See skill `13_pattern_gallery.md` and `marsin_engine/tools/gallery/README.md`
+See skill `pattern_gallery.md` and `marsin_engine/tools/gallery/README.md`
 for full details.
 
 ---

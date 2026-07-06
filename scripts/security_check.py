@@ -4,7 +4,7 @@ security_check.py — pre-commit secret/PII gate for a PUBLIC repo.
 
 Scans the changes about to be committed with gitleaks, using the SAME
 `.gitleaks.toml` config CI enforces, and blocks the commit when anything
-is found. Governing spec: `.agent/00_gol/16_security_privacy.md`.
+is found. Governing spec: `.agent/os/security_privacy.md`.
 
 Modes:
   --staged     Scan the staged changes (index vs HEAD). Used by the
@@ -59,7 +59,7 @@ and commit again:
      above to .gitleaksignore.
 
 Never bypass this check with --no-verify. Rules + rationale:
-.agent/00_gol/16_security_privacy.md
+.agent/os/security_privacy.md
 """
 
 
@@ -137,7 +137,7 @@ def run_gitleaks(scan_dir: Path, config: Path) -> int:
         "security_check: neither a `gitleaks` binary nor `docker` is "
         f"available. Install gitleaks v{GITLEAKS_VERSION} (or Docker) — "
         "the commit is BLOCKED until the check can run. "
-        "See .agent/00_gol/16_security_privacy.md."
+        "See .agent/os/security_privacy.md."
     )
 
 

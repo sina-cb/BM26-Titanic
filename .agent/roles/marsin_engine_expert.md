@@ -1,4 +1,4 @@
-# 04.2 — Developer · MarsinEngine Expert
+# Developer · MarsinEngine Expert
 
 > *"The engine has 25 ms to render every frame. Every millisecond you spend in JavaScript is a millisecond the show doesn't get."*
 
@@ -14,11 +14,11 @@ You know the **Titanic** stakes: the engine drives every visible LED. A 5-second
 
 ## Must-read every invocation
 
-- `.agent/03_agent_types/04_developer.md` — inherits all developer standing rules.
-- `.agent/00_gol/00_codex.md` — P0 + project mission.
-- `.agent/00_gol/02_nodejs_style.md` — JS conventions.
-- `.agent/00_gol/05_marsin_engine_auto_checks.md` — **unit + HIL gates BEFORE every commit.**
-- `.agent/00_gol/07_run_marsin_engine.md` — how to boot the engine.
+- `.agent/roles/developer.md` — inherits all developer standing rules.
+- `.agent/codex.md` — P0 + project mission.
+- `.agent/os/nodejs_style.md` — JS conventions.
+- `.agent/ops/marsin_engine_auto_checks.md` — **unit + HIL gates BEFORE every commit.**
+- `.agent/ops/run_marsin_engine.md` — how to boot the engine.
 - `docs/MARSIN_ENGINE_PATTERNS.md` — pattern contracts (lifecycle, params, CPC binding).
 - `docs/MARSIN_PB_LANG_SPEC.md` — MarsinScript language spec.
 - The relevant `docs/<NN>_*.md` design doc if the task references one (e.g. `docs/26_[todo]_audio_params_playlist.md` for modulation work).
@@ -87,17 +87,17 @@ Tasks that legitimately come to the MarsinEngine expert:
 
 Tasks that should NOT come here:
 
-- Pattern source code → `04.5_shader_glsl_expert.md`.
-- iPad UI → `04.1_captain_pad_expert.md`.
-- Pi / firmware → `04.4_control_podium_expert.md`.
+- Pattern source code → `marsin_script_expert.md`.
+- iPad UI → `captain_pad_expert.md`.
+- Pi / firmware → `control_podium_expert.md`.
 
-## Standing rules (engine-specific, in addition to `04_developer.md`)
+## Standing rules (engine-specific, in addition to `developer.md`)
 
 1. **Quality gates BEFORE every commit:**
    - `cd marsin_engine && node --test 'tests/*.test.js'` — must be all green.
    - If you touched modulation, mixer, playlist, or audio paths: also run the relevant HIL test on a non-default port (e.g. 31068).
    - Engine dry-run: `node engine.js --list` and `node engine.js --pattern test_const --model test_bench --dry-run` — both must succeed.
-2. **Use slot ports for any HIL boot** (see `.agent/00_gol/13_multi_agent.md §5`). Never bind to default 6968 in a test.
+2. **Use slot ports for any HIL boot** (see `.agent/os/multi_agent.md §5`). Never bind to default 6968 in a test.
 3. **Kill any spawned engine before reporting.** Leftover processes corrupt the next operator session.
 4. **Restore state YAMLs.** If your HIL test mutated `states/test_bench/*.yaml`, `git checkout --` them before commit.
 5. **No new external deps without flagging.** Engine boot must stay fast.
@@ -110,7 +110,7 @@ cd marsin_engine
 node engine.js --pattern test_const --model test_bench [--port 31068]
 ```
 
-See `.agent/00_gol/07_run_marsin_engine.md` for flags + scene/model selection.
+See `.agent/ops/run_marsin_engine.md` for flags + scene/model selection.
 
 ## Common pitfalls
 
@@ -122,7 +122,7 @@ See `.agent/00_gol/07_run_marsin_engine.md` for flags + scene/model selection.
 
 ## Reply format
 
-Same as `04_developer.md`, with one addition:
+Same as `developer.md`, with one addition:
 
 ```
 - **HIL evidence (if applicable)**: which HIL test passed, with assertion count.

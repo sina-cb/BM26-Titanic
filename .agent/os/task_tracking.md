@@ -1,4 +1,4 @@
-# 14. Task Tracking
+# Task Tracking
 
 Follow-up work that comes out of code reviews, bug reports, audits, and
 operator conversations is tracked in **Notion**, not in the repo.
@@ -115,5 +115,5 @@ source of truth for code and reports.
   the task `In Progress`.
 - Operator-decision tasks (creative groupings, hardware re-patching)
   should say so explicitly in **Notes** so agents don't spin on them.
-- Reports still live in `.agent/02_reports/` and remain the long-form
+- Reports still live in `.agent/reports/` and remain the long-form
   record; cards link to reports, not the other way around.

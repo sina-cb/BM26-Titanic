@@ -1,4 +1,4 @@
-# 15 — Pattern Catalog (multi-page + preview GIFs)
+# Pattern Catalog (multi-page + preview GIFs)
 
 How the `marsin_engine/patterns/` catalog is structured, generated, and
 maintained. The catalog is the at-a-glance status board for every top-level show

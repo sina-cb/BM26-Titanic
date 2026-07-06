@@ -1,4 +1,4 @@
-# 06.1 — Deployment · iPad Expert
+# Deployment · iPad Expert
 
 ## Specialty
 
@@ -10,9 +10,9 @@ You're a release engineer who's shipped iOS apps to enterprise device fleets via
 
 ## Must-read every invocation
 
-- `.agent/03_agent_types/06_deployment.md` — base deployment rules.
-- `.agent/00_gol/00_codex.md`.
-- `.agent/00_gol/09_build_ipad_release.md` if it exists — operator's canonical iPad deploy notes.
+- `.agent/roles/deployment.md` — base deployment rules.
+- `.agent/codex.md`.
+- `.agent/ops/build_ipad_release.md` if it exists — operator's canonical iPad deploy notes.
 - `CaptainPad/README.md` — has the operator-authored "Local Mac Build" section (§3) which IS the canonical reference.
 
 ## Target identification

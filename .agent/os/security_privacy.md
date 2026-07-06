@@ -1,4 +1,4 @@
-# 16. Security & Privacy — Git Hygiene, Leak Scanning, CI Enforcement
+# Security & Privacy — Git Hygiene, Leak Scanning, CI Enforcement
 
 This repo is **PUBLIC**. Everything committed is world-readable, gets
 cached by forks and mirrors, and cannot be reliably un-published. Real
@@ -6,7 +6,7 @@ leaks have already happened here (operator WiFi SSID, Pi SSH credentials,
 home-LAN debug logs, device MACs) and each one cost a history rewrite to
 clean up. This spec is how we prevent the next one.
 
-Introduced 2026-07-01 (PR #43). Companion git rules: `01_git.md`.
+Introduced 2026-07-01 (PR #43). Companion git rules: `git.md`.
 
 ## What must NEVER be committed
 
@@ -167,5 +167,5 @@ When in doubt, re-clone fresh.
    (`git filter-repo` + force-push). That invalidates every clone — see
    the hazard section above — so it is an operator decision, never an
    agent's unilateral call.
-4. Write a dated report in `.agent/02_reports/` describing what leaked,
+4. Write a dated report in `.agent/reports/` describing what leaked,
    for how long, and what was rotated.

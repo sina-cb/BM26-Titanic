@@ -1,4 +1,4 @@
-# 08. MarsinScript Patterns
+# MarsinScript Patterns
 
 This spec defines how to write, compile, and test lighting patterns for the `marsin_engine`. Patterns are compiled into WASM bytecode and executed on the local Pixelblaze-compatible VM.
 

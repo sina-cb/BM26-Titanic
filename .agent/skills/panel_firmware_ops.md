@@ -1,4 +1,4 @@
-# 14 — Panel Firmware Ops (LookingGlass control panel)
+# Panel Firmware Ops (LookingGlass control panel)
 
 How to build, flash, monitor, and configure the **LookingGlass control-panel
 firmware** at `LookingGlass/panel_firmware/` (ESP32-S3R8 arcade-button controller

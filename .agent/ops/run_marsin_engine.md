@@ -1,4 +1,4 @@
-# 07. Run Marsin Engine
+# Run Marsin Engine
 
 This spec outlines how to run the `marsin_engine` locally or on the production environment. The engine is responsible for rendering Pixelblaze-compatible patterns and routing sACN DMX data to the simulation or physical controllers.
 

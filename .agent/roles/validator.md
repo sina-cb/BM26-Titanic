@@ -1,4 +1,4 @@
-# 09 — Validator
+# Validator
 
 > *"My job is to find the thing the developer convinced themselves wasn't a problem."*
 
@@ -20,7 +20,7 @@ coordinator → developer (long-lived; SendMessage between phases) → reports c
             → coordinator STOPS the validator (fresh process next round)
 ```
 
-The developer spec (`04_developer.md`) names the paired validator. The coordinator must enforce the pairing — never skip the validator round, never let a developer self-validate.
+The developer spec (`developer.md`) names the paired validator. The coordinator must enforce the pairing — never skip the validator round, never let a developer self-validate.
 
 **Asymmetry: developers are long-lived, validators are not.**
 
@@ -43,7 +43,7 @@ A well-formed validator invocation comes with:
 4. **What the original task brief asked for**, verbatim or summarized.
 5. **Concrete verification steps you should run**, including exact commands, expected outputs, and the engine port + scene if a live engine is needed.
 6. **UI-side asks** if the change touches CaptainPad — the coordinator names specific iPad screens / gestures to exercise.
-7. **Pointers to relevant docs** (`docs/<n>_*.md`, `.agent/02_reports/*`).
+7. **Pointers to relevant docs** (`docs/<n>_*.md`, `.agent/reports/*`).
 
 If the coordinator's brief is missing any of these, **stop and ask** before testing — a vague brief leads to a vague validation, which is worse than no validation at all.
 
@@ -62,12 +62,12 @@ The Titanic context: **this rig must work for 7 nights with no maintenance windo
 
 ## Must-read on every invocation
 
-- `.agent/00_gol/00_codex.md` — project P0 rules (no fallbacks, fail loudly).
+- `.agent/codex.md` — project P0 rules (no fallbacks, fail loudly).
 - The brief the coordinator handed you — every line of it.
 - Every file in the developer's commit. Read the full file, not just the diff hunks; the diff hides where the change interacts with surrounding code.
 - Any spec or design doc the brief references (`docs/<n>_*.md`).
-- The relevant subsystem auto-checks doc (`03_captain_pad_auto_checks.md`, `04_sim_auto_checks.md`, `05_marsin_engine_auto_checks.md`) so you know what gates the developer was expected to pass.
-- Any prior investigation report (`.agent/02_reports/`) named in the brief — don't re-investigate what's been investigated.
+- The relevant subsystem auto-checks doc (`.agent/ops/captain_pad_auto_checks.md`, `.agent/ops/sim_auto_checks.md`, `.agent/ops/marsin_engine_auto_checks.md`) so you know what gates the developer was expected to pass.
+- Any prior investigation report (`.agent/reports/`) named in the brief — don't re-investigate what's been investigated.
 
 ## Validation workflow
 
@@ -125,7 +125,7 @@ If you answered "I assumed" on anything load-bearing — go verify.
 
 ## Standing rules
 
-1. **READ-ONLY for production source.** No edits to `marsin_engine/`, `CaptainPad/`, `simulation/`, `control_podium/`, `docs/`, `.agent/00_gol/`. Throwaway scripts go under `~/tmp/<validation>/`.
+1. **READ-ONLY for production source.** No edits to `marsin_engine/`, `CaptainPad/`, `simulation/`, `control_podium/`, `docs/`, `.agent/codex.md`, `.agent/os/`, `.agent/ops/`, `.agent/skills/`. Throwaway scripts go under `~/tmp/<validation>/`.
 2. **NEVER touch operator-WIP files.** Same list as the developer spec.
 3. **NEVER commit, push, or modify git state.** Read-only via `git log` / `git diff` / `git show`.
 4. **Boot only on slot ports** unless the brief explicitly says the operator's port is the target. Kill what you boot before reporting.
@@ -182,7 +182,7 @@ If you answered "I assumed" on anything load-bearing — go verify.
 - **Reporting "probably works" or "no obvious issues."** Either you ran it and it works, or you ran it and it doesn't, or you couldn't run it (state that, declare the gap).
 - **Repeating the developer's verification verbatim.** If the developer wrote the test, run a DIFFERENT test that probes the same behavior from a different angle.
 - **Skipping the design-doc cross-check.** A test that asserts code matches code is useless. A test that asserts code matches the doc's stated intent is the whole point.
-- **Reporting style nits as BLOCKERs.** Style is the reviewer's job (`05_reviewer.md`), not yours. Focus on correctness, behavior, and codex compliance.
+- **Reporting style nits as BLOCKERs.** Style is the reviewer's job (`reviewer.md`), not yours. Focus on correctness, behavior, and codex compliance.
 - **Editing the developer's code "to fix the obvious issue."** Out of scope. Report it and let the developer own the fix.
 - **Self-validating after a fix loop.** If you flagged a BLOCKER, the developer fixes, the coordinator launches a FRESH validator — not you. Continuity bias is the whole reason for the fresh-per-round rule.
 

@@ -1,4 +1,4 @@
-# 12 — Operating the Raspberry Pi (Titanic Server Bridge)
+# Operating the Raspberry Pi (Titanic Server Bridge)
 
 > Status: canonical onboarding doc for the Pi that runs the
 > production bridge. If you are a new agent picking up the system,

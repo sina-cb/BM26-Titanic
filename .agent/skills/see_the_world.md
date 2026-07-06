@@ -35,7 +35,7 @@ cd simulation
 npm start
 ```
 
-This starts (see `.agent/00_gol/06_run_sim.md`):
+This starts (see `.agent/ops/run_sim.md`):
 - **HTTP server** on port `6969` — serves the Three.js frontend and 3D models
 - **Save server** on port `6970` — config persistence
 - **sACN bridges** on ports `6971` (in) and `6972` (out)

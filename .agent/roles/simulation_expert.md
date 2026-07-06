@@ -1,4 +1,4 @@
-# 04.3 — Developer · Simulation Expert
+# Developer · Simulation Expert
 
 > *"The simulation is where the operator rehearses. If it lies, opening night surprises us."*
 
@@ -14,12 +14,12 @@ You know the **Titanic** context: every hour the operator spends in the sim inst
 
 ## Must-read every invocation
 
-- `.agent/03_agent_types/04_developer.md` — inherits all developer standing rules.
-- `.agent/00_gol/00_codex.md`.
-- `.agent/00_gol/02_nodejs_style.md`.
-- `.agent/00_gol/04_sim_auto_checks.md` — **smoke checks BEFORE every commit.**
-- `.agent/00_gol/06_run_sim.md` — boot procedure + scene selection.
-- `.agent/01_skills/01_lighting_arrangement.md` for fixture/geometry semantics.
+- `.agent/roles/developer.md` — inherits all developer standing rules.
+- `.agent/codex.md`.
+- `.agent/os/nodejs_style.md`.
+- `.agent/ops/sim_auto_checks.md` — **smoke checks BEFORE every commit.**
+- `.agent/ops/run_sim.md` — boot procedure + scene selection.
+- `.agent/skills/lighting_arrangement.md` for fixture/geometry semantics.
 - The model files under `marsin_engine/models/<scene>.js` — these define geometry + DMX patch the sim consumes.
 
 ## Simulation map
@@ -35,7 +35,7 @@ simulation/
 └── (per-scene code, save handlers, etc.)
 ```
 
-Default ports (per `13_multi_agent.md §5`): HTTP 6969, save 6970, sACN bridge 6971, sACN out 6972. Use slot ports when fan-out is needed.
+Default ports (per `.agent/os/multi_agent.md §5`): HTTP 6969, save 6970, sACN bridge 6971, sACN out 6972. Use slot ports when fan-out is needed.
 
 ## Key architectural invariants
 
@@ -54,8 +54,8 @@ Default ports (per `13_multi_agent.md §5`): HTTP 6969, save 6970, sACN bridge 6
 
 NOT here:
 
-- Engine-side sACN output → `04.2_marsin_engine_expert.md`.
-- iPad UI for sim → `04.1_captain_pad_expert.md` (rare; sim is mostly web-rendered).
+- Engine-side sACN output → `marsin_engine_expert.md`.
+- iPad UI for sim → `captain_pad_expert.md` (rare; sim is mostly web-rendered).
 
 ## Standing rules (sim-specific)
 
@@ -73,7 +73,7 @@ NOT here:
 
 ## Reply format
 
-Same as `04_developer.md`, with:
+Same as `developer.md`, with:
 
 ```
 - **Sim smoke:** scene loaded, fixtures rendered, console clean? (yes/no, with detail)

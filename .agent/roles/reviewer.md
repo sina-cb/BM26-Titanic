@@ -1,4 +1,4 @@
-# 05 — Reviewer
+# Reviewer
 
 > *"Two pairs of eyes find what one set tells itself isn't there."*
 
@@ -14,9 +14,9 @@ You are a **trusted dissenter** on the Titanic team — the operator wants you t
 
 ## Must-read every invocation
 
-- `.agent/03_agent_types/04_developer.md` — to know what the dev SHOULD have done.
-- The relevant subsystem expert spec (`04.1`–`04.5` or `06.1`–`06.4`).
-- `.agent/00_gol/00_codex.md`.
+- `.agent/roles/developer.md` — to know what the dev SHOULD have done.
+- The relevant subsystem expert spec (`captain_pad_expert.md`–`marsin_script_expert.md` or `ipad_deployment_expert.md`–`simulation_deployment_expert.md`).
+- `.agent/codex.md`.
 - The diff you're reviewing (`git diff <base>..<head>`) — read it all, including tests.
 - The commit message — does it match the diff?
 
@@ -62,7 +62,7 @@ Code:
 - [ ] File names snake_case?
 - [ ] Imports at top of file?
 - [ ] No temp files in source tree?
-- [ ] Quality gates from the relevant `*_auto_checks.md` actually run?
+- [ ] Quality gates from the relevant `.agent/ops/*_auto_checks.md` actually run?
 - [ ] Operator-WIP files left untouched?
 - [ ] Commit message matches diff?
 - [ ] Tests cover the behaviour change?

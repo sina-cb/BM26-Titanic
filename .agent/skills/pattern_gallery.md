@@ -11,9 +11,9 @@ lighting-pattern clips on a **phone over Tailscale**. It lives at
 start it on its own. Node built-ins only (`http fs path url os`): no npm deps,
 no CDNs, no fonts, no telemetry (playa-offline safe).
 
-It pairs with the clip pipeline — skill `07_pixel_vis_clips.md` (capture/clip),
-`08_visualize_patterns_widget.md` (widget anatomy), and
-`12_highdef_pattern_generation.md` §10–11 (where the clip + gallery sit in the
+It pairs with the clip pipeline — skill `pixel_vis_clips.md` (capture/clip),
+`visualize_patterns_widget.md` (widget anatomy), and
+`highdef_pattern_generation.md` §10–11 (where the clip + gallery sit in the
 pattern workflow). The clips themselves are the real per-pixel output; this
 skill is just how you get them onto a phone.
 
@@ -34,7 +34,7 @@ engine/sim block 6967–6972 (no collision).
 ## The loop (capture → publish → serve → phone)
 
 1. **Get a capture JSON.** Either offline (no engine) via the harness, or live
-   from the engine (skill 07). Offline is the usual path:
+   from the engine (skill pixel_vis_clips). Offline is the usual path:
    ```bash
    cd marsin_engine
    node tools/pattern_audio_harness.mjs --pattern patterns/NN_name.js \

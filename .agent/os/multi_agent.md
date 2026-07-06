@@ -1,4 +1,4 @@
-# 13. Multi-Agent Workflow (Worktrees + Branches)
+# Multi-Agent Workflow (Worktrees + Branches)
 
 This spec defines how an **instigator agent** (the parent Claude / Cursor
 session that the human operator spoke to) can fan out work to **N sub-agents**
@@ -14,11 +14,11 @@ sim, CaptainPad, control_podium) is only safe when each agent owns:
    actually boots a server), and
 4. a clearly defined task slice (no overlapping edits on the same files).
 
-> See also: `.agent/00_gol/00_codex.md` (master rules), `01_git.md`,
-> `02_nodejs_style.md`, `01_python_style.md`, `03_captain_pad_auto_checks.md`,
-> `04_sim_auto_checks.md`, `05_marsin_engine_auto_checks.md`,
-> `06_run_sim.md`, `07_run_marsin_engine.md`, `08_patterns.md`,
-> `11_UI_design.md`.
+> See also: `.agent/codex.md` (master rules), `git.md`,
+> `nodejs_style.md`, `python_style.md`, `.agent/ops/captain_pad_auto_checks.md`,
+> `.agent/ops/sim_auto_checks.md`, `.agent/ops/marsin_engine_auto_checks.md`,
+> `.agent/ops/run_sim.md`, `.agent/ops/run_marsin_engine.md`, `.agent/ops/patterns.md`,
+> `ui_design.md`.
 
 ## 1. When to use this workflow
 
@@ -51,7 +51,7 @@ Do **NOT** use it for:
 
 The instigator does **not** edit the source code itself — it only
 orchestrates. The one exception is the multi-agent meta files
-(this spec, status reports under `.agent/02_reports/`).
+(this spec, status reports under `.agent/reports/`).
 
 ### Sub-agents
 
@@ -64,7 +64,7 @@ orchestrates. The one exception is the multi-agent meta files
 - Tests its change locally (unit + integration + auto-checks + at least one
   manual smoke check, see §6).
 - Commits to its branch and writes a short report to
-  `.agent/02_reports/<YYYYMM>/<YYYYMMDD>_<slot>_<slug>.md` describing what
+  `.agent/reports/<YYYYMM>/<YYYYMMDD>_<slot>_<slug>.md` describing what
   changed, what was tested, and known gaps.
 - Does NOT push to `origin` and does NOT touch other agents' branches.
 
@@ -97,7 +97,7 @@ Rules:
   creating worktrees). Record that parent branch in the per-task report.
 - **`dev/*` branches are local only — never push them to `origin`.** They stay
   on the machine that created them until the operator promotes the work to a
-  `feat/<snake_case>` branch (see `01_git.md` → Branch Naming and Lifecycle).
+  `feat/<snake_case>` branch (see `git.md` → Branch Naming and Lifecycle).
   Pushing worktree branches to `origin` clutters the shared remote.
 
 ## 4. Worktree convention
@@ -229,15 +229,15 @@ Port-conflict discipline:
 
 Before claiming "done":
 
-1. **Codex rules** (`.agent/00_gol/00_codex.md`) are non-negotiable —
+1. **Codex rules** (`.agent/codex.md`) are non-negotiable —
    especially "no fallback behaviors" (P0) and "no temp files in source tree
    (use `~/tmp/`)".
-2. **Language style** — `.agent/00_gol/02_nodejs_style.md` for JS/TS,
-   `.agent/00_gol/01_python_style.md` for Python.
+2. **Language style** — `nodejs_style.md` for JS/TS,
+   `python_style.md` for Python.
 3. **Subsystem auto-checks** for every subsystem you touched:
-   - CaptainPad — `.agent/00_gol/03_captain_pad_auto_checks.md`
-   - Simulation — `.agent/00_gol/04_sim_auto_checks.md`
-   - Marsin engine — `.agent/00_gol/05_marsin_engine_auto_checks.md`
+   - CaptainPad — `.agent/ops/captain_pad_auto_checks.md`
+   - Simulation — `.agent/ops/sim_auto_checks.md`
+   - Marsin engine — `.agent/ops/marsin_engine_auto_checks.md`
 4. **Tests** — at least one of (preferably all that apply):
    - Unit test (`node --test ...` in `marsin_engine/tests/` or
      `simulation/tests/`).
@@ -250,7 +250,7 @@ Before claiming "done":
 5. **No tracked-state side effects** — after your tests, `git status`
    inside the worktree should show only your intended diff. If a test
    modified `marsin_engine/states/test_bench/*.yaml`, restore those files
-   in a `finally` block (see `05_marsin_engine_auto_checks.md`).
+   in a `finally` block (see `.agent/ops/marsin_engine_auto_checks.md`).
 6. **No port leftovers** — kill all servers you started.
 
 ## 7. Reporting back
@@ -258,7 +258,7 @@ Before claiming "done":
 Each sub-agent writes a markdown report at:
 
 ```text
-.agent/02_reports/<YYYYMM>/<YYYYMMDD>_<slot>_<slug>.md
+.agent/reports/<YYYYMM>/<YYYYMMDD>_<slot>_<slug>.md
 ```
 
 Required sections:
@@ -348,7 +348,7 @@ After all merges land on `<PARENT>`:
    default port `6968`).
 3. Run `git diff --check <ORIGIN_PARENT>..HEAD` for whitespace.
 4. Capture the result in a final report under
-   `.agent/02_reports/<YYYYMM>/<YYYYMMDD>_merge_summary.md` listing each
+   `.agent/reports/<YYYYMM>/<YYYYMMDD>_merge_summary.md` listing each
    merge commit SHA and verification result.
 
 ### 8.4 Cleanup
@@ -377,7 +377,7 @@ git branch -d dev/<slug>     # safe delete (only if merged)
 - **Sub-agent re-uses someone else's port slot.** Server crashes look
   identical to real bugs.
 - **Sub-agent runs `git reset --hard` to "clean up" test state.** See
-  `01_git.md`: never destructively reset to hide test side effects. Fix
+  `git.md`: never destructively reset to hide test side effects. Fix
   the test instead.
 - **Instigator auto-merges branches without operator approval.** The
   human owns the merge decision.
@@ -408,7 +408,7 @@ For sub-agents that need quick orientation:
 - CaptainPad API client: `CaptainPad/utils/api.ts`
 - CaptainPad globals: `CaptainPad/components/RigGlobals.tsx`,
   `CaptainPad/components/GlobalParams.tsx`
-- Server bridge / Pi: `.agent/00_gol/12_operating_raspberry_pi.md`
+- Server bridge / Pi: `.agent/ops/operating_raspberry_pi.md`
 
 ## 11. Quick start (instigator checklist)
 

@@ -6,7 +6,7 @@ description: Capture short video clips (MP4/GIF) of the 3D lighting simulation
 
 This skill records short video clips of the BM26 Titanic simulation by capturing
 a burst of frames from the running sim and encoding them with ffmpeg. Use it
-when a still PNG (see `00_see_the_world.md`) isn't enough — e.g. showing a
+when a still PNG (see `see_the_world.md`) isn't enough — e.g. showing a
 pattern animating, a gradient color-wave sweeping the ship, or a
 transition/crossfade in motion.
 
@@ -21,11 +21,11 @@ tool).
 > expected; tune for it (see §4).
 
 > Note: for an exact **per-pixel LED replay** of a pattern (the CaptainPad
-> DECK MAIN look) rather than a 3D-scene clip, use `08_visualize_patterns_widget.md`
+> DECK MAIN look) rather than a 3D-scene clip, use `visualize_patterns_widget.md`
 > instead — that taps the engine's real pixel buffer. This skill films the 3D sim.
 
 ## Prerequisites
-- The sim servers running (`cd simulation && npm start`) — same as `00_see_the_world.md`.
+- The sim servers running (`cd simulation && npm start`) — same as `see_the_world.md`.
 - `simulation/agent_tools/capture_seq.cjs` — the frame-burst capture tool
   (committed alongside `agent_render.cjs`; reuses its Chrome flags + load/hide logic).
 - An ffmpeg binary. The container often has no system ffmpeg. Get one without
@@ -87,7 +87,7 @@ SendUserFile(files: ["~/tmp/vid/clip.mp4"], status: "normal", caption: "...")
 ### 4. Inspect before sending
 Always `Read` a mid-sequence frame (e.g. `f_0011.png`) to confirm it isn't
 black/blown-out before encoding — same visual-inspection rule as
-`00_see_the_world.md`.
+`see_the_world.md`.
 
 ## Tuning notes (learned the hard way)
 - **Use `profile=full` for light washes.** The big amber/colored spotlight pools
@@ -135,6 +135,6 @@ afterward).
 | File | Purpose |
 |---|---|
 | `simulation/agent_tools/capture_seq.cjs` | Frame-burst capture tool |
-| `simulation/agent_tools/agent_render.cjs` | Single-still renderer (`00_see_the_world.md`) |
+| `simulation/agent_tools/agent_render.cjs` | Single-still renderer (`see_the_world.md`) |
 | `~/tmp/vid/` | Scratch: `node_modules/ffmpeg-static`, frames, clips (gitignored) |
 | `scenes/<scene>/cameras.yaml` | Camera preset keys for `--view` |

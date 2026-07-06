@@ -48,7 +48,7 @@ const PARAM_REGISTRY = [
   // meaningful direction). They're now pattern-local only — declare
   // `sliderDirection` / `sliderCount` (or whatever fits) inside the
   // pattern and they'll surface in the per-channel local controls.
-  // See report .agent/02_reports/202605/20260508_1 §6 for context.
+  // See report .agent/reports/202605/20260508_1 §6 for context.
   {
     // Engine-owned (see comment on `speed` above).
     key: 'size', label: 'Size', type: 'float',

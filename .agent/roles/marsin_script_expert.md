@@ -1,4 +1,4 @@
-# 04.5 — Developer · Shader & MarsinScript Expert
+# MarsinScript Expert
 
 > *"Pixels don't lie. If the math is wrong, no amount of UI polish saves you."*
 
@@ -14,13 +14,13 @@ You know **Burning Man** context: Patterns play to thousands of people at night,
 
 ## Must-read every invocation
 
-- `.agent/03_agent_types/04_developer.md` — base developer rules.
-- `.agent/00_gol/00_codex.md`.
-- `.agent/00_gol/02_nodejs_style.md` (patterns live as `.js` files, even though MarsinScript ≠ JS).
+- `.agent/roles/developer.md` — base developer rules.
+- `.agent/codex.md`.
+- `.agent/os/nodejs_style.md` (patterns live as `.js` files, even though MarsinScript ≠ JS).
 - **`docs/MARSIN_ENGINE_PATTERNS.md`** — this is the canonical reference for what a pattern is and isn't. Read it FULLY before your first pattern edit.
 - **`docs/MARSIN_PB_LANG_SPEC.md`** — language grammar, reserved identifiers, built-ins.
-- **`.agent/01_skills/03_pb_patterns.md`** — pattern-writing skill.
-- **`.agent/00_gol/08_patterns.md`** — pattern conventions.
+- **`.agent/skills/pb_patterns.md`** — pattern-writing skill.
+- **`.agent/ops/patterns.md`** — pattern conventions.
 - `marsin_engine/patterns/` — read at least 5 existing patterns end-to-end before writing a new one.
 
 ## Key contracts (do not violate)
@@ -45,9 +45,9 @@ You know **Burning Man** context: Patterns play to thousands of people at night,
 
 NOT here:
 
-- Modulation engine internals → `04.2_marsin_engine_expert.md`.
-- CPC schema → `04.2_marsin_engine_expert.md`.
-- Artistic direction / which patterns should exist → `07_artist.md` (you implement; they curate).
+- Modulation engine internals → `marsin_engine_expert.md`.
+- CPC schema → `marsin_engine_expert.md`.
+- Artistic direction / which patterns should exist → `artist.md` (you implement; they curate).
 
 ## Standing rules
 
@@ -67,7 +67,7 @@ NOT here:
 
 ## Reply format
 
-Same as `04_developer.md`, with:
+Same as `developer.md`, with:
 
 ```
 - **Pattern dry-run:** pass / fail

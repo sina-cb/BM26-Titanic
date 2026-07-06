@@ -74,6 +74,6 @@ node scripts/osc_synth.mjs --address /marsin/mic/mid --shape hold --value 0.6
 - To see a swipe/dancer react, attach a modulation on the playlist entry
   (`source: cpc <key>` → `target: slider…`) and drive `<key>` here. See
   `docs/MARSIN_ENGINE_PATTERNS.md` §8 (modulators-only) and the audio system
-  overview in `.agent/02_reports/202606/20260618_0_bar_swipe_handoff.md`.
+  overview in `.agent/reports/202606/20260618_0_bar_swipe_handoff.md`.
 - For accurate end-to-end audio (real DSP), use the Companion instead; this is the
   fast, mic-free shortcut for UI/modulation testing.

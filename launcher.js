@@ -4,7 +4,7 @@
  *
  * Coordinates the simulation, marsin_engine, and (in dev profiles) the
  * CaptainPad Expo dev server, in the startup order proven by
- * `.agent/01_skills/05_full_stack_smoke.md`: sim → engine → CaptainPad.
+ * `.agent/skills/full_stack_smoke.md`: sim → engine → CaptainPad.
  *
  * Usage:
  *   node launcher.js <profile> [options]   Start the stack

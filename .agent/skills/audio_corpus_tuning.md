@@ -1,4 +1,4 @@
-# Skill 06 — Audio corpus tuning (decode → mic-model → measure → tune)
+# Audio corpus tuning (decode → mic-model → measure → tune)
 
 **When to use:** you need to tune the in-engine audio analysis — the
 pattern-facing signal *feel* (smooth bands / sudden kick) or the structure
@@ -7,7 +7,7 @@ REAL playa microphone, and prove the change with numbers instead of vibes.
 
 This skill documents the reusable harness under
 `marsin_engine/tests/integration/` built during the 2026-06 corpus-tuning
-pass (report `.agent/02_reports/202606/20260613_5_audio_corpus_tuning.md`).
+pass (report `.agent/reports/202606/20260613_5_audio_corpus_tuning.md`).
 **All audio lives in `~/tmp/` (gitignored) — never commit audio binaries.**
 
 - **Datasets** (what/where/how to download): `marsin_engine/datasets/README.md`.
@@ -305,7 +305,7 @@ output. **`audio.bands.inputGain` is the software mic-preamp applied first.**
   higher-recall/higher-FP arm shipped OFF (enable per-scene if a miss is worse
   than a phantom). Regression: `tests/detector_eval.test.mjs` +
   `tests/integration/detection_metrics.test.mjs`. Report:
-  `.agent/02_reports/202606/20260620_4_detector_supertuning_and_scoring.md`.
+  `.agent/reports/202606/20260620_4_detector_supertuning_and_scoring.md`.
 
 ### Applying the result — defaults vs SHOW SCENES (read before you celebrate)
 The engine boots `config.yaml` < `states/<model>/audio_state.yaml`, and loads

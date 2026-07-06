@@ -139,7 +139,7 @@ paths = [
   # Crypto DOCUMENTATION that intentionally prints example AES-GCM vectors
   # (the real PSK lives in the gitignored secret.yaml, never here). A
   # generated 16-byte key is indistinguishable from a real one by pattern,
-  # so these doc files are trusted by path. Reports (.agent/02_reports) are
+  # so these doc files are trusted by path. Reports (.agent/reports) are
   # deliberately NOT here — those stay scanned.
   '''(^|/)docs/07_control_podium\.md$''',
   '''(^|/)docs/MARSIN_ENGINE_PATTERNS\.md$''',

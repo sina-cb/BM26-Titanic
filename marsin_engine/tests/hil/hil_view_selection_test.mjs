@@ -44,7 +44,7 @@
 
 import http from 'http';
 
-// Slot 1 engine port per .agent/00_gol/13_multi_agent.md.
+// Slot 1 engine port per .agent/os/multi_agent.md.
 const portIdx = process.argv.indexOf('--port');
 const PORT = portIdx !== -1 && process.argv[portIdx + 1]
   ? parseInt(process.argv[portIdx + 1], 10)

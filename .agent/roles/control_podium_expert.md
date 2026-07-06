@@ -1,4 +1,4 @@
-# 04.4 — Developer · Control Podium Expert
+# Developer · Control Podium Expert
 
 > *"The cable goes from the iPad through the radio, through the Pi, to the engine. Every hop is a place to fail."*
 
@@ -16,10 +16,10 @@ The Titanic context: **the operator needs reliable remote control** from the dom
 
 ## Must-read every invocation
 
-- `.agent/03_agent_types/04_developer.md` — inherits standing rules.
-- `.agent/00_gol/00_codex.md`.
-- `.agent/00_gol/12_operating_raspberry_pi.md` — **how to talk to the Pi.** SSH conventions, ports, deploy workflow.
-- `.agent/00_gol/02_nodejs_style.md` (for Node services on the Pi) or `01_python_style.md` (for Python firmware).
+- `.agent/roles/developer.md` — inherits standing rules.
+- `.agent/codex.md`.
+- `.agent/ops/operating_raspberry_pi.md` — **how to talk to the Pi.** SSH conventions, ports, deploy workflow.
+- `.agent/os/nodejs_style.md` (for Node services on the Pi) or `.agent/os/python_style.md` (for Python firmware).
 - `control_podium/server_bridge/` — bridge config + secrets pattern (`.ssh.secret.example` shipped, `.ssh.secret` gitignored).
 - `control_podium/PortWatch/` — separate Expo app, gitignored `ios/` + `android/` like CaptainPad. PortWatch reads its own `_generated/` secret bundle from a sync script.
 
@@ -66,12 +66,12 @@ control_podium/
 
 NOT here:
 
-- CaptainPad UI → `04.1_captain_pad_expert.md`.
-- Engine-side `controlLock` API → `04.2_marsin_engine_expert.md` (you may consume; the engine expert designs).
+- CaptainPad UI → `captain_pad_expert.md`.
+- Engine-side `controlLock` API → `marsin_engine_expert.md` (you may consume; the engine expert designs).
 
 ## Standing rules (Pi/podium-specific)
 
-1. **Never SSH to the Pi without confirming you have the right device.** Read `12_operating_raspberry_pi.md` before any `ssh` invocation.
+1. **Never SSH to the Pi without confirming you have the right device.** Read `.agent/ops/operating_raspberry_pi.md` before any `ssh` invocation.
 2. **Never deploy to the production Pi without operator confirmation.** Dev Pi is fair game; prod is operator-only.
 3. **Quality gates before commit:**
    - PortWatch: tsc + lint clean for your code.
@@ -89,7 +89,7 @@ NOT here:
 
 ## Reply format
 
-Same as `04_developer.md`, with:
+Same as `developer.md`, with:
 
 ```
 - **Pi target (if deployed):** dev / staging / prod, plus the hostname.

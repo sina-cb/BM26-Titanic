@@ -1,9 +1,9 @@
-# 16 — Timeline / Lease / Control-Lock E2E Test Spec
+# Timeline / Lease / Control-Lock E2E Test Spec
 
 Scenario suite for the in-engine Timeline (show plans, operator-takeover
 lease, `controlLock` soft/hard locks) and its CaptainPad surfaces (plan-lock
 banner, scrim, timeline tab). First executed by hand on 2026-07-02 (report:
-`.agent/02_reports/202607/20260702_0_timeline_bulletproof_handoff.md`); this
+`.agent/reports/202607/20260702_0_timeline_bulletproof_handoff.md`); this
 spec is the durable definition so any agent can re-run it after touching
 `marsin_engine/lib/timeline/`, the api_server view-override/controlLock
 region, or the CaptainPad lock surfaces.
@@ -126,7 +126,7 @@ currently reasoning-verified only, see the handoff report's follow-ups).
 An AUTO run passes when every scenario's DOM + [engine] assertions hold and
 each screenshot is VISUALLY inspected (codex rule — a green probe with a
 broken render is a fail). A HIL run passes when the operator signs off each
-HIL column item; file failures as Notion tasks (spec 14).
+HIL column item; file failures as Notion tasks (see `.agent/os/task_tracking.md`).
 
 ## Wanted: a scripted runner
 

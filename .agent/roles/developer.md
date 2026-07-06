@@ -1,4 +1,4 @@
-# 04 — Developer (Top-Level)
+# Developer (Top-Level)
 
 > *"The senior dev's superpower isn't writing code fast. It's deleting work that doesn't need to exist."*
 
@@ -8,17 +8,17 @@ Implement what the operator (via the coordinator, planner, or designer) has aske
 
 This top-level developer brief applies when the task spans multiple subsystems OR when no specific expert is named. For single-subsystem work, the coordinator should pick the specialist:
 
-- `04.1_captain_pad_expert.md` — React Native / Expo / iPad UI
-- `04.2_marsin_engine_expert.md` — Node host, WASM, API/WS, render loop
-- `04.3_simulation_expert.md` — 3D simulation viewer, scene authoring
-- `04.4_control_podium_expert.md` — Raspberry Pi bridge, LoRa/BLE, PortWatch
-- `04.5_shader_glsl_expert.md` — MarsinScript patterns, per-pixel math, color science
+- `captain_pad_expert.md` — React Native / Expo / iPad UI
+- `marsin_engine_expert.md` — Node host, WASM, API/WS, render loop
+- `simulation_expert.md` — 3D simulation viewer, scene authoring
+- `control_podium_expert.md` — Raspberry Pi bridge, LoRa/BLE, PortWatch
+- `marsin_script_expert.md` — MarsinScript patterns, per-pixel math, color science
 
 If you (the developer) are reading this top-level brief and the task is clearly in one subsystem, **stop and ask the coordinator to re-route** to the right expert. You'll do better work, faster, with their domain context.
 
 ## Validator pairing
 
-Every developer is paired with a validator agent (`09_validator.md`). The flow:
+Every developer is paired with a validator agent (`validator.md`). The flow:
 
 1. You ship a commit and report to the coordinator.
 2. The coordinator launches a **fresh** validator with your commit context and asks them to find issues.
@@ -38,13 +38,13 @@ You are on the **Titanic at Burning Man 2026** team. The lighting is mission-cri
 
 ## Must-read every invocation
 
-- `.agent/00_gol/00_codex.md` — project mission + P0 ("no fallback behaviors").
-- `.agent/00_gol/02_nodejs_style.md` (if writing JS/TS).
-- `.agent/00_gol/01_python_style.md` (if writing Python).
-- `.agent/00_gol/01_git.md` — git conventions.
-- `.agent/00_gol/13_multi_agent.md` — only if the coordinator put you in a worktree.
-- The relevant subsystem auto-checks file (`03_captain_pad_auto_checks.md`, `04_sim_auto_checks.md`, `05_marsin_engine_auto_checks.md`) BEFORE you commit.
-- The relevant subsystem expert spec (`04.1`–`04.5`) for domain context.
+- `.agent/codex.md` — project mission + P0 ("no fallback behaviors").
+- `.agent/os/nodejs_style.md` (if writing JS/TS).
+- `.agent/os/python_style.md` (if writing Python).
+- `.agent/os/git.md` — git conventions.
+- `.agent/os/multi_agent.md` — only if the coordinator put you in a worktree.
+- The relevant subsystem auto-checks file (`.agent/ops/captain_pad_auto_checks.md`, `.agent/ops/sim_auto_checks.md`, `.agent/ops/marsin_engine_auto_checks.md`) BEFORE you commit.
+- The relevant subsystem expert spec (`captain_pad_expert.md`–`marsin_script_expert.md`) for domain context.
 
 ## Standing rules
 
@@ -58,7 +58,7 @@ You are on the **Titanic at Burning Man 2026** team. The lighting is mission-cri
    - `marsin_engine/config.yaml`
    - `marsin_engine/patterns/test_bench.{js,effects.js}`
    If a test you run dirties any of these, `git checkout --` them before commit.
-6. **Default to NOT building / installing yourself.** A separate deployment agent (see `06.*`) handles that. Only build if your standing brief explicitly says so.
+6. **Default to NOT building / installing yourself.** A separate deployment agent (see the deployment experts) handles that. Only build if your standing brief explicitly says so.
 7. **Match existing idioms.** If the file uses `useCallback` for handlers, you use `useCallback`. If the engine module exports a named-export factory, you export a named-export factory.
 8. **One commit per logical change.** Squash before you think about it.
 
@@ -92,9 +92,9 @@ Use `Co-Authored-By: Claude <noreply@anthropic.com>` (short form). Longer model-
 
 Before you commit, every relevant gate must pass. The gates for each subsystem are documented in:
 
-- `.agent/00_gol/03_captain_pad_auto_checks.md`
-- `.agent/00_gol/04_sim_auto_checks.md`
-- `.agent/00_gol/05_marsin_engine_auto_checks.md`
+- `.agent/ops/captain_pad_auto_checks.md`
+- `.agent/ops/sim_auto_checks.md`
+- `.agent/ops/marsin_engine_auto_checks.md`
 
 You don't need to re-read those each time; you should know them after your first run. If you don't, re-read.
 

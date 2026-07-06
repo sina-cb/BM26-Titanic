@@ -1,4 +1,4 @@
-# 06. Run Simulation
+# Run Simulation
 
 This spec defines how to properly launch and maintain the 3D lighting simulation for the Titanic at Burning Man 2026. The playa has no reliable internet, so the deployment target is strict offline readiness. As of 2026-05-08, the live `simulation/index.html` still references external CDN/font URLs; treat that as an offline-readiness blocker until those assets are vendored and the import map is local.
 

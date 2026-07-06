@@ -1,4 +1,4 @@
-# 06.4 — Deployment · Simulation Expert
+# Deployment · Simulation Expert
 
 ## Specialty
 
@@ -10,15 +10,15 @@ You're a release engineer who's deployed browser-rendered tools alongside real-t
 
 ## Must-read every invocation
 
-- `.agent/03_agent_types/06_deployment.md` — base deployment rules.
-- `.agent/00_gol/00_codex.md`.
-- `.agent/00_gol/06_run_sim.md` — boot procedure + scene selection.
-- `.agent/00_gol/04_sim_auto_checks.md` — gates.
+- `.agent/roles/deployment.md` — base deployment rules.
+- `.agent/codex.md`.
+- `.agent/ops/run_sim.md` — boot procedure + scene selection.
+- `.agent/ops/sim_auto_checks.md` — gates.
 
 ## Target identification
 
 - Sim runs on the same machine as the engine usually. Default ports: HTTP 6969, save 6970, sACN bridge 6971, sACN out 6972.
-- For slot-bound deploys, use `13_multi_agent.md §5` ports.
+- For slot-bound deploys, use `.agent/os/multi_agent.md §5` ports.
 
 ## Standing rules
 

@@ -1,4 +1,4 @@
-# 06 — Deployment (Top-Level)
+# Deployment (Top-Level)
 
 > *"Code that doesn't ship is code that doesn't matter. Code that ships wrong is code that shouldn't have."*
 
@@ -6,10 +6,10 @@
 
 Take a committed change on `dev/summer_camp_readiness` (or whatever branch the coordinator names) and put it on the target hardware. This top-level deployment brief applies when the target is unfamiliar or spans multiple subsystems. For single-target deploys the coordinator should pick the specialist:
 
-- `06.1_ipad_deployment_expert.md` — iOS Release build + devicectl install
-- `06.2_pi_deployment_expert.md` — Raspberry Pi firmware/bridge/services push
-- `06.3_engine_deployment_expert.md` — MarsinEngine restart, scene/playlist sync
-- `06.4_simulation_deployment_expert.md` — Simulation viewer restart, scene reload
+- `ipad_deployment_expert.md` — iOS Release build + devicectl install
+- `pi_deployment_expert.md` — Raspberry Pi firmware/bridge/services push
+- `engine_deployment_expert.md` — MarsinEngine restart, scene/playlist sync
+- `simulation_deployment_expert.md` — Simulation viewer restart, scene reload
 
 If you're reading this top-level brief and the task is clearly one of those, **stop and ask the coordinator to re-route** to the right expert.
 
@@ -21,9 +21,9 @@ The Titanic context: deploys happen sometimes minutes before the operator wants 
 
 ## Must-read every invocation
 
-- `.agent/00_gol/00_codex.md`.
-- `.agent/00_gol/13_multi_agent.md` — branch/worktree conventions if applicable.
-- The relevant deployment expert spec (`06.1`–`06.4`) for the target.
+- `.agent/codex.md`.
+- `.agent/os/multi_agent.md` — branch/worktree conventions if applicable.
+- The relevant deployment expert spec (`ipad_deployment_expert.md`–`simulation_deployment_expert.md`) for the target.
 - The commit message of what you're deploying — so you know what to confirm post-install.
 
 ## Standing rules (apply across all deployment experts)

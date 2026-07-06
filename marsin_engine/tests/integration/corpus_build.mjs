@@ -6,7 +6,7 @@
  * Reusable + reproducible: re-running rebuilds the corpus deterministically
  * from the same raw inputs. Audio stays in ~/tmp (gitignored) — only the
  * tooling is committed. See the replication skill
- * (.agent/01_skills/06_audio_corpus_tuning.md) for the full workflow.
+ * (.agent/skills/audio_corpus_tuning.md) for the full workflow.
  *
  * USAGE
  *   node tests/integration/corpus_build.mjs \
