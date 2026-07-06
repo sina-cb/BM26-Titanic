@@ -24,6 +24,7 @@
 // channel 0 with velocity 0x00 off / 0x01 on.
 
 import { ControllerProfile, ControlDef, LedSpec, ControlMatch } from './profile';
+import { controlsForContext } from './resolver';
 import { noteOn } from './midi_message';
 import { clampUnit } from './unit_clamp';
 import { setRingValue, setColor, setAnimation } from './mft/messages';
@@ -343,7 +344,9 @@ export function projectLeds(
 ): LedProjection {
   const next: LedState = {};
   const messages: number[][] = [];
-  const controls = context ? (profile.contexts[context] ?? profile.controls) : profile.controls;
+  // P3-7: an unknown context FAILS LOUD here too (shared guard with the
+  // resolver) — never silently paint the deck list's LEDs onto a foreign tab.
+  const controls = controlsForContext(profile, context);
   for (const control of controls) {
     // APC pad/button feedback + MFT ring/colour feedback share the same
     // diff-before-construct path (finding 12c): compute each target's value and

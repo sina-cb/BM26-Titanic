@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { validateProfile } from './profile';
-import { resolveEvent } from './resolver';
+import { resolveEvent, UnknownContextError } from './resolver';
 import { projectLeds, MidiProjectionState } from './led_projector';
 import { decodeMidi } from './midi_message';
 
@@ -31,10 +31,14 @@ describe('per-tab contexts', () => {
     expect(resolveEvent(profile, ev, 'mixer')?.resolved).toEqual({ kind: 'paramCenter', key: 'micLowGain', value: 1 });
   });
 
-  it('falls back to the default (deck) when no/unknown context is given', () => {
+  it('defaults to the deck list when NO context is supplied (context-agnostic call)', () => {
     const ev = decodeMidi([0xb0, 48, 64]);
     expect(resolveEvent(profile, ev)?.resolved).toEqual({ kind: 'paramCenter', key: 'speed', value: 64 / 127 });
-    expect(resolveEvent(profile, ev, 'nope')?.resolved).toEqual({ kind: 'paramCenter', key: 'speed', value: 64 / 127 });
+  });
+
+  it('throws UnknownContextError for an UNKNOWN context on a multi-context profile (P3-7 fail-loud)', () => {
+    const ev = decodeMidi([0xb0, 48, 64]);
+    expect(() => resolveEvent(profile, ev, 'nope')).toThrow(UnknownContextError);
   });
 
   it('projects different LED colours per context for the active pad', () => {

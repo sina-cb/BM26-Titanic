@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { validateProfile } from './profile';
 import { projectLeds, MidiProjectionState, LedState } from './led_projector';
+import { UnknownContextError } from './resolver';
 import * as mftMessages from './mft/messages';
 import * as midiMessage from './midi_message';
 
@@ -117,6 +118,32 @@ describe('projectLeds', () => {
     });
     const locked = projectLeds(p, state({ layerExists: (l) => l === 0, getFocusedLayer: () => 0, isFocusLocked: () => true }), {}, 'mixer');
     expect(locked.messages).toContainEqual([0x90, 100, 1]); // no flash → on
+  });
+
+  // ── P3-7: an unknown context must FAIL LOUDLY here too — otherwise the LED
+  // projector would paint the deck list's LEDs on a tab that isn't the deck. ──
+  it('throws UnknownContextError on an unknown context (P3-7), naming it', () => {
+    const p = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+      contexts: {
+        deck: [{ id: 't1', match: { type: 'note', channel: 0, notes: [100] }, action: { kind: 'blackoutToggle' }, led: { on: 1, off: 0 } }],
+        mixer: [{ id: 't2', match: { type: 'note', channel: 0, notes: [101] }, action: { kind: 'blackoutToggle' }, led: { on: 1, off: 0 } }],
+      },
+    });
+    expect(() => projectLeds(p, state({ blackout: true }), {}, 'nope')).toThrow(UnknownContextError);
+    expect(() => projectLeds(p, state({ blackout: true }), {}, 'nope')).toThrow(/nope/);
+  });
+
+  it('still projects a known context and the no-context path unchanged (P3-7)', () => {
+    const p = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+      contexts: {
+        mixer: [{ id: 't1', match: { type: 'note', channel: 0, notes: [100] }, action: { kind: 'blackoutToggle' }, led: { on: 1, off: 0 } }],
+      },
+    });
+    expect(projectLeds(p, state({ blackout: true }), {}, 'mixer').messages).toContainEqual([0x90, 100, 1]);
+    // No context supplied → default control list, no throw.
+    expect(projectLeds(p, state({ blackout: true }), {}).messages).toContainEqual([0x90, 100, 1]);
   });
 
   it('colour-pair pads show c1 on even columns and c2 on odd (Stage 2)', () => {

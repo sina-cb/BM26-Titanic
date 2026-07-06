@@ -99,6 +99,12 @@ export interface DeviceDef {
   label: string;
   /** Substring matched against the endpoint name. */
   nameContains: string;
+  /** OPTIONAL exact-name pin. When present, endpoint selection requires an
+   *  EXACT name match (===), not just a `nameContains` substring — so a spare
+   *  identical unit whose near-name ("MIDIIN2 (APC mini mk2)") would otherwise
+   *  satisfy `nameContains` and shift portIndex 0 onto the wrong device is
+   *  rejected. Backward-compatible: absent → `nameContains` matching unchanged. */
+  nameEquals?: string;
   /** Which port (by index among same-name matches) carries input. */
   sourcePort: number;
   /** Which port receives LED feedback. */
@@ -329,6 +335,11 @@ export function validateProfile(raw: any, profilePath = '<profile>'): Controller
   for (const k of ['id', 'label', 'nameContains'] as const) {
     if (typeof dev[k] !== 'string' || !dev[k]) fail(`${profilePath}: device.${k} must be a non-empty string`);
   }
+  // Optional exact-name pin: absent → undefined; present must be a non-empty
+  // string (an empty pin would match nothing). Fail-loud with YAML path context.
+  if (dev.nameEquals !== undefined && (typeof dev.nameEquals !== 'string' || !dev.nameEquals)) {
+    fail(`${profilePath}: device.nameEquals must be a non-empty string when present`);
+  }
   for (const k of ['sourcePort', 'destinationPort'] as const) {
     if (typeof dev[k] !== 'number' || dev[k] < 0 || !Number.isInteger(dev[k])) {
       fail(`${profilePath}: device.${k} must be a non-negative integer`);
@@ -359,6 +370,9 @@ export function validateProfile(raw: any, profilePath = '<profile>'): Controller
   return {
     device: {
       id: dev.id, label: dev.label, nameContains: dev.nameContains,
+      // Only carry nameEquals when the profile pinned it — absent stays absent
+      // so `'nameEquals' in device` cleanly distinguishes pinned from unpinned.
+      ...(dev.nameEquals !== undefined ? { nameEquals: dev.nameEquals } : {}),
       sourcePort: dev.sourcePort, destinationPort: dev.destinationPort,
       configureOnConnect: dev.configureOnConnect === true,
     },

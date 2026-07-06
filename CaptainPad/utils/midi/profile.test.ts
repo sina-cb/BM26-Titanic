@@ -66,6 +66,29 @@ describe('validateProfile', () => {
     const bad = { ...valid, controls: [{ id: 'c', match: { type: 'cc', channel: 0, cc: 1 }, action: { kind: 'paramCenter', key: 'speed', range: [1, 1] } }] };
     expect(() => validateProfile(bad)).toThrow(/min and max must differ/);
   });
+
+  // ── nameEquals: OPTIONAL exact-name endpoint pin (a spare identical device
+  // otherwise silently shifts portIndex 0). Backward-compatible: absent → the
+  // device carries no nameEquals and behaves exactly as before. ──
+  it('accepts an optional nameEquals string and carries it through', () => {
+    const p = validateProfile({ ...valid, device: { ...valid.device, nameEquals: 'APC mini mk2' } });
+    expect(p.device.nameEquals).toBe('APC mini mk2');
+  });
+
+  it('leaves nameEquals undefined when the profile omits it (backward-compatible)', () => {
+    expect(validateProfile(valid).device.nameEquals).toBeUndefined();
+  });
+
+  it('throws at load when nameEquals is the wrong type (fail-loud, YAML path context)', () => {
+    const bad = { ...valid, device: { ...valid.device, nameEquals: 42 } };
+    expect(() => validateProfile(bad, 'apc.yaml')).toThrow(ProfileValidationError);
+    expect(() => validateProfile(bad, 'apc.yaml')).toThrow(/apc\.yaml.*nameEquals/);
+  });
+
+  it('throws when nameEquals is an empty string (a pin that matches nothing)', () => {
+    const bad = { ...valid, device: { ...valid.device, nameEquals: '' } };
+    expect(() => validateProfile(bad)).toThrow(/nameEquals/);
+  });
 });
 
 describe('validateProfileParams', () => {

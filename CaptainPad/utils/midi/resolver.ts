@@ -65,6 +65,49 @@ export interface ResolvedEvent {
 
 const MIDI_MAX = 127;
 
+/** Thrown when a caller supplies a `context` (CaptainPad tab) that a
+ *  MULTI-context profile never published. Codex P0 fail-loud: the OLD
+ *  `?? profile.controls` fallback silently resolved every control on an unknown
+ *  tab against the DECK list — a wrong-tab mismap that looked like it worked.
+ *  Now the offending context is named and the caller surfaces it (red status),
+ *  never a guessed control set. */
+export class UnknownContextError extends Error {
+  constructor(context: string, known: string[]) {
+    super(
+      `MIDI: unknown context '${context}' — profile publishes ${known.length ? known.map((k) => `'${k}'`).join(', ') : '(none)'}`,
+    );
+    this.name = 'UnknownContextError';
+  }
+}
+
+/** The synthetic context a FLAT `controls:` profile (no per-tab `contexts:` map)
+ *  is normalised into by validateProfile. Such a profile is context-AGNOSTIC —
+ *  one universal map — so any requested context resolves to it; only genuinely
+ *  multi-context profiles police their context names. */
+const DEFAULT_CONTEXT = 'default';
+
+/** Resolve the control list for a context, FAILING LOUD on an unknown one (P3-7).
+ *
+ *  - No `context` supplied → the default list (`profile.controls`), unchanged.
+ *  - A flat/context-AGNOSTIC profile (its only context is the synthetic
+ *    `default`) → the default list for ANY requested context. It declares no
+ *    tabs, so it can't have an "unknown" one; this keeps single-map profiles
+ *    working under the manager's `'deck'` default sentinel.
+ *  - A MULTI-context profile + an unknown context → THROW (the P3-7 fix): the
+ *    tab was never published, so resolving it against the deck list would
+ *    silently mismap every control.
+ *
+ *  Shared by resolveEvent (this file) and the LED projector so the two paths can
+ *  never diverge on what "unknown context" means. */
+export function controlsForContext(profile: ControllerProfile, context: string | undefined): ControlDef[] {
+  if (context === undefined) return profile.controls;
+  const known = Object.keys(profile.contexts);
+  if (known.length === 1 && known[0] === DEFAULT_CONTEXT) return profile.controls;
+  const controls = profile.contexts[context];
+  if (!controls) throw new UnknownContextError(context, known);
+  return controls;
+}
+
 // The single value→range scaler is learn.ts `scaleMidiToRange` (which also
 // clamps out-of-spec bytes). `scale()` is a thin range-typed alias so the
 // paramCenter / fader / sectionBrightness sites read cleanly.
@@ -114,7 +157,7 @@ export function resolveEvent(
   context?: string,
 ): ResolvedEvent | null {
   if (ev.type === 'other') return null;
-  const controls = context ? (profile.contexts[context] ?? profile.controls) : profile.controls;
+  const controls = controlsForContext(profile, context);
   for (const control of controls) {
     const { hit, index } = matches(control, ev);
     if (!hit) continue;

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { validateProfile } from './profile';
-import { resolveEvent, profileClaims } from './resolver';
+import { resolveEvent, profileClaims, UnknownContextError } from './resolver';
 import { decodeMidi } from './midi_message';
 
 const profile = validateProfile({
@@ -74,6 +74,41 @@ describe('profileClaims (learn-conflict rejection, 1.1)', () => {
     // Mixer context doesn't map CC 54 → free there, but claimed on deck.
     expect(profileClaims(p, { type: 'cc', channel: 0, number: 54 }, 'deck')).toBe('d_fader');
     expect(profileClaims(p, { type: 'cc', channel: 0, number: 54 }, 'mixer')).toBeNull();
+  });
+});
+
+// ── P3-7: an UNKNOWN context must FAIL LOUDLY, never silently fall back to the
+// deck/default control list (which would mismap every control on that tab). ──
+describe('resolveEvent — unknown context fails loud (P3-7)', () => {
+  const p = validateProfile({
+    device: { id: 'apc', label: 'APC', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
+    contexts: {
+      deck: [{ id: 'd_fader', match: { type: 'cc', channel: 0, cc: 54 }, action: { kind: 'paramCenter', key: 'speed', range: [0, 1] } }],
+      mixer: [{ id: 'm_other', match: { type: 'cc', channel: 0, cc: 55 }, action: { kind: 'master' } }],
+    },
+  });
+
+  it('throws UnknownContextError naming the offending context', () => {
+    expect(() => resolveEvent(p, decodeMidi([0xb0, 54, 127]), 'config'))
+      .toThrow(UnknownContextError);
+    expect(() => resolveEvent(p, decodeMidi([0xb0, 54, 127]), 'config'))
+      .toThrow(/config/);
+  });
+
+  it('does NOT silently resolve the unknown context against the deck list', () => {
+    // CC 54 is a real deck control; under the old `?? profile.controls` fallback
+    // an unknown context would resolve it as if it were the deck tab.
+    expect(() => resolveEvent(p, decodeMidi([0xb0, 54, 127]), 'config')).toThrow();
+  });
+
+  it('still resolves a known context, and the no-context path is unchanged', () => {
+    expect(resolveEvent(p, decodeMidi([0xb0, 54, 127]), 'deck')?.controlId).toBe('d_fader');
+    expect(resolveEvent(p, decodeMidi([0xb0, 54, 127]))?.controlId).toBe('d_fader'); // default fallback list
+  });
+
+  it('profileClaims also fails loud on an unknown context', () => {
+    expect(() => profileClaims(p, { type: 'cc', channel: 0, number: 54 }, 'config'))
+      .toThrow(UnknownContextError);
   });
 });
 
