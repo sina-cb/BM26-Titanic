@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { engineEvents } from '@/utils/engineEvents';
-import { armMidiLearn, midiControlConflict } from '@/hooks/useMidiControl';
+import { armMidiLearn, midiControlConflict, midiControlLearnedConflict } from '@/hooks/useMidiControl';
 import { describeControlRef, MidiControlRef } from '@/utils/midi';
 import {
   clampToRangeLimit, deleteMidiMapping, fetchPlaylist, MidiMapping,
@@ -186,6 +186,12 @@ export function MidiMapPopover({
     // through the runtime's capture-time rejection.
     const conflict = midiControlConflict(control);
     if (conflict) { setError(conflict); return; }
+    // One-per-control (P2-2, save side): refuse to persist a control that another
+    // ENABLED learned binding already owns (bound to a DIFFERENT param) — else one
+    // fader would silently drive two params. Re-learning THIS param is a clean
+    // replace and is excluded. The sibling runtime enforces the same at capture.
+    const learnedConflict = midiControlLearnedConflict(control, targetParameter);
+    if (learnedConflict) { setError(learnedConflict); return; }
     const lo = Number(rangeMin); const hi = Number(rangeMax);
     if (!Number.isFinite(lo) || rangeMin.trim() === '' || !Number.isFinite(hi) || rangeMax.trim() === '') {
       setError('Enter a numeric range before saving.');

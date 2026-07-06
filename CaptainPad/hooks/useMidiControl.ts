@@ -20,6 +20,7 @@ import { useEngineState, MixerChannel } from '@/hooks/useEngineState';
 import { engineEvents } from '@/utils/engineEvents';
 import { engineParamsEvents } from '@/utils/engineParamsEvents';
 import {
+  fetchGlobals,
   fetchPatterns,
   updateParamCenter,
   updateMixerMaster,
@@ -58,6 +59,7 @@ import {
   MidiTransportKind,
   validateProfile,
   profileClaims,
+  describeControlRef,
   ControllerProfile,
 } from '@/utils/midi';
 import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
@@ -71,6 +73,12 @@ export interface MidiControlState {
   /** Profile load/validate failure (fatal for that profile). */
   profileError: string | null;
   statuses: ControllerStatus[];
+  /** Last operator-facing notice from the MIDI runtime that isn't a hard error
+   *  or a per-controller status — e.g. "autopilot disable failed; it may keep
+   *  fighting the faders" or "focus reset to channel 0". Surfaced in the header
+   *  chip's message (codex: fail LOUD — never swallow a runtime failure the
+   *  operator is fighting). Optional so every `_set` literal stays valid. */
+  notice?: string | null;
 }
 
 const EMPTY: MidiControlState = {
@@ -78,6 +86,7 @@ const EMPTY: MidiControlState = {
   transportKind: 'none',
   profileError: null,
   statuses: [],
+  notice: null,
 };
 
 // ── Module store (mirrors useEngineState's cache + listener set) ───────────
@@ -85,10 +94,21 @@ let _state: MidiControlState = EMPTY;
 const _listeners = new Set<(s: MidiControlState) => void>();
 
 function _set(next: MidiControlState): void {
-  _state = next;
+  // Preserve the last runtime notice across status-only updates (onStatusChange
+  // fires often and doesn't carry a notice) — a notice is cleared explicitly via
+  // _setNotice(null), never implicitly by an unrelated status refresh.
+  _state = 'notice' in next ? next : { ...next, notice: _state.notice ?? null };
   _listeners.forEach((cb) => {
-    try { cb(next); } catch { /* a buggy subscriber must not break the others */ }
+    try { cb(_state); } catch { /* a buggy subscriber must not break the others */ }
   });
+}
+
+/** Set (or clear, with null) the operator-facing runtime notice, preserving the
+ *  rest of the state. Loud-fail surface for a runtime failure the operator is
+ *  actively fighting (e.g. autopilot that won't disable). */
+function _setNotice(notice: string | null): void {
+  if ((_state.notice ?? null) === notice) return; // no churn on repeats
+  _set({ ..._state, notice });
 }
 
 // Live snapshot the manager reads on every dispatch + LED projection. Kept in
@@ -296,6 +316,47 @@ export function midiControlConflict(ref: MidiControlRef): string | null {
   return null;
 }
 
+/** Same physical control? (type + channel + number.) The one-per-control rule
+ *  keys on the physical identity, not the id. Pure. */
+function _sameControl(a: MidiControlRef, b: MidiControlRef): boolean {
+  return a.type === b.type && a.channel === b.channel && a.number === b.number;
+}
+
+/** One-per-control learned-binding check (P2-2, save side). Given the control
+ *  the operator is about to save and the param it targets, find an EXISTING
+ *  ENABLED learned binding sitting on the SAME physical control but bound to a
+ *  DIFFERENT param — that would let one fader silently drive two params at once.
+ *  Returns the colliding binding's target parameter, or null when the control is
+ *  free. Re-learning the SAME param (same target) is a legitimate replace, not a
+ *  conflict, so it is excluded. A disabled binding doesn't reserve the control.
+ *  Pure + exported for unit testing without the module snapshot. */
+export function findLearnedControlConflict(
+  ref: MidiControlRef,
+  targetParameter: string,
+  existing: readonly FocusedBinding[],
+): string | null {
+  for (const b of existing) {
+    if (!b.enabled) continue;
+    if (b.target?.parameter === targetParameter) continue; // same param → replace
+    if (_sameControl(b.control, ref)) return b.target?.parameter ?? '(unknown)';
+  }
+  return null;
+}
+
+/** Belt-and-braces one-per-control re-check (P2-2). Reads the FOCUSED channel's
+ *  active-entry bindings (the ones the manager actually applies) and rejects a
+ *  save that would put this control on top of another enabled learned binding.
+ *  Returns an operator-facing message (for the popover's inline red error) or
+ *  null when the control is free. The sibling runtime capture side enforces the
+ *  same rule at learn time; this is the save-time guard so a stale captured ref
+ *  can't be persisted into a double-binding. */
+export function midiControlLearnedConflict(ref: MidiControlRef, targetParameter: string): string | null {
+  const bindings = _snapshot.focused?.midiMappings ?? [];
+  const collidingParam = findLearnedControlConflict(ref, targetParameter, bindings);
+  if (collidingParam === null) return null;
+  return `${describeControlRef(ref)} is already learned to '${collidingParam}' — free it first or pick another control`;
+}
+
 /** Human-readable conflict message naming the profile control the operator
  *  moved (e.g. "CC 54 is GLOBAL SPEED — use fader 4/5/6/8"). The controlId is
  *  the profile control's id; map the well-known reserved controls to friendly
@@ -346,9 +407,23 @@ let _idleTimer: ReturnType<typeof setTimeout> | null = null;
 let _priorAutopilot: boolean | null = null;
 let _priorTransitions: boolean | null = null;
 
+/** Idle-restore guard (P3-5). We only re-enable a subsystem on idle when TWO
+ *  things hold: it was ON when activity began (`prior === true`), AND the
+ *  operator has NOT touched it since — i.e. it is STILL sitting at the `false`
+ *  our disable wrote (`current === false`). If the operator deliberately turned
+ *  autopilot OFF on-screen during the active window, `current` is already false
+ *  because THEY set it — but `prior` was true, so the naive "restore if prior"
+ *  would clobber their choice. We therefore restore ONLY when current is still
+ *  the disabled value we wrote; if `current` couldn't be read (null), we do NOT
+ *  restore (fail safe: never fight a state we can't confirm). Pure + exported
+ *  for unit testing without reaching into the runtime. */
+export function shouldRestoreOnIdle(prior: boolean | null, current: boolean | null): boolean {
+  return prior === true && current === false;
+}
+
 async function _onMidiActivity(): Promise<void> {
   if (_idleTimer) clearTimeout(_idleTimer);
-  _idleTimer = setTimeout(_onMidiIdle, MIDI_IDLE_MS);
+  _idleTimer = setTimeout(() => { void _onMidiIdle(); }, MIDI_IDLE_MS);
   if (_midiActive) return;
   _midiActive = true;
   // Capture current state BEFORE disabling, so idle can restore it.
@@ -360,17 +435,49 @@ async function _onMidiActivity(): Promise<void> {
     const tx = await fetchDeckTransitionConfig();
     _priorTransitions = tx.ok && tx.data ? !!tx.data.enabled : null;
   } catch { _priorTransitions = null; }
-  setAutopilot(false).catch(() => undefined);
-  setDeckTransitionConfig({ enabled: false }).catch(() => undefined);
+  // Disable. These ApiResults capture transport errors as { ok: false } (they
+  // don't throw), so a swallowed .catch would HIDE a real disable failure and
+  // leave autopilot fighting the operator's faders with no indication. Surface
+  // it as a header-chip notice instead (codex P0: fail LOUD).
+  setAutopilot(false).then((r) => {
+    if (!r.ok) _setNotice('autopilot disable FAILED — it may keep fighting the faders');
+    else _setNotice(null);
+  }).catch(() => _setNotice('autopilot disable FAILED — it may keep fighting the faders'));
+  setDeckTransitionConfig({ enabled: false }).then((r) => {
+    if (!r.ok) _setNotice('deck-transition disable FAILED — transitions may still fire');
+  }).catch(() => _setNotice('deck-transition disable FAILED — transitions may still fire'));
 }
 
-function _onMidiIdle(): void {
+async function _onMidiIdle(): Promise<void> {
   _idleTimer = null;
   _midiActive = false;
-  if (_priorAutopilot) setAutopilot(true).catch(() => undefined);
-  if (_priorTransitions) setDeckTransitionConfig({ enabled: true }).catch(() => undefined);
+  const priorAutopilot = _priorAutopilot;
+  const priorTransitions = _priorTransitions;
   _priorAutopilot = null;
   _priorTransitions = null;
+  // P3-5: don't blindly re-enable what we disabled — re-read the LIVE state and
+  // restore ONLY if it is still the `false` our disable wrote. If the operator
+  // deliberately changed it on-screen during the active window, leave it alone.
+  if (priorAutopilot === true) {
+    let current: boolean | null = null;
+    try {
+      const ap = await getAutopilot();
+      current = ap.ok && ap.data ? !!ap.data.active : null;
+    } catch { current = null; }
+    if (shouldRestoreOnIdle(priorAutopilot, current)) {
+      setAutopilot(true).catch(() => undefined);
+    }
+  }
+  if (priorTransitions === true) {
+    let current: boolean | null = null;
+    try {
+      const tx = await fetchDeckTransitionConfig();
+      current = tx.ok && tx.data ? !!tx.data.enabled : null;
+    } catch { current = null; }
+    if (shouldRestoreOnIdle(priorTransitions, current)) {
+      setDeckTransitionConfig({ enabled: true }).catch(() => undefined);
+    }
+  }
 }
 
 // The boot effect publishes its manager's repaint here so the engine-state
@@ -417,12 +524,20 @@ export function useMidiStatus(): MidiControlState {
 export type MidiChipKind = 'unavailable' | 'disconnected' | 'connected' | 'error';
 
 export function midiChipState(s: MidiControlState): { kind: MidiChipKind; message?: string } {
-  if (!s.available) return { kind: 'unavailable', message: 'MIDI not available on this platform' };
-  if (s.profileError) return { kind: 'error', message: s.profileError };
+  // A live runtime notice (e.g. autopilot-disable failure) rides ALONGSIDE the
+  // resolved kind: it appends to whatever message the state produces, so it is
+  // visible in the chip's accessibility label / detail without masking the
+  // controller's real connected/error status.
+  const withNotice = (r: { kind: MidiChipKind; message?: string }): { kind: MidiChipKind; message?: string } => {
+    if (!s.notice) return r;
+    return { kind: r.kind, message: r.message ? `${r.message} — ${s.notice}` : s.notice };
+  };
+  if (!s.available) return withNotice({ kind: 'unavailable', message: 'MIDI not available on this platform' });
+  if (s.profileError) return withNotice({ kind: 'error', message: s.profileError });
   const err = s.statuses.find((c) => c.kind === 'error');
-  if (err) return { kind: 'error', message: err.error };
-  if (s.statuses.some((c) => c.kind === 'connected')) return { kind: 'connected' };
-  return { kind: 'disconnected', message: 'No controller detected' };
+  if (err) return withNotice({ kind: 'error', message: err.error });
+  if (s.statuses.some((c) => c.kind === 'connected')) return withNotice({ kind: 'connected' });
+  return withNotice({ kind: 'disconnected', message: 'No controller detected' });
 }
 
 function loadProfiles(): { profiles: ControllerProfile[]; error: string | null } {
@@ -518,6 +633,7 @@ export function useMidiControl(): MidiControlState {
       // channel 0 and log it (codex: never silently swallow) before building.
       if (ctx !== 'deck' && _focusedLayer !== 0 && !channels[_focusedLayer]) {
         console.warn(`[midi] focused layer ${_focusedLayer} no longer exists (only ${channels.length} channel(s)); resetting focus to 0`);
+        _setNotice(`MIDI focus reset to channel 1 (layer ${_focusedLayer + 1} no longer exists)`);
         _focusedLayer = 0;
         _bumpFocus();
       }
@@ -719,13 +835,20 @@ export function useMidiControl(): MidiControlState {
     _armLearn = (cb) => manager.armLearn(cb);
     // Forward CPC-schema arrival so param-key validation re-runs.
     _revalidate = () => manager.revalidate();
-    // Seed the pattern list for pattern-bank dispatch + LED highlight.
-    fetchPatterns().then((r) => {
-      if (r.ok && r.data) {
-        _snapshot = { ..._snapshot, patterns: r.data };
-        if (!disposed) manager.onEngineUpdate();
-      }
-    }).catch(() => undefined);
+    // Seed the pattern list for pattern-bank dispatch + LED highlight. Named so
+    // the engine-connected transition (P2-6) can re-run it — if CaptainPad
+    // booted BEFORE the engine, the initial fetch fails silently and the 16
+    // pattern pads would stay dark for the night; re-running on connect lights
+    // them the moment the engine appears.
+    const refreshPatterns = () => {
+      fetchPatterns().then((r) => {
+        if (r.ok && r.data) {
+          _snapshot = { ..._snapshot, patterns: r.data };
+          if (!disposed) manager.onEngineUpdate();
+        }
+      }).catch(() => undefined);
+    };
+    refreshPatterns();
 
     // Global-effect slots: count (for "off when out of slots") + active state
     // (for scene-button LEDs). Re-fetched on global-effect WS broadcasts.
@@ -744,14 +867,67 @@ export function useMidiControl(): MidiControlState {
       if (typeof m?.type === 'string' && m.type.toLowerCase().includes('globaleffect')) refreshSlots();
     });
 
-    // Curated colour palette pairs for the colour-pair pads (warmed at boot).
-    warmColorPalettesCache().then(() => {
-      const pals = getCachedColorPalettes();
-      if (pals.length) {
-        _snapshot = { ..._snapshot, colorPalettes: pals.map((p) => ({ c1: p.c1, c2: p.c2 })) };
+    // Legacy global-effect toggle state (P3-4). The `globalEffect` action kind
+    // toggles `!getGlobalEffectState(effect)`, so with globalEffects never
+    // populated it could only ever flip from false→true (can't turn one off) and
+    // the pad LED stayed dark. GET /globals returns globalsState.effects (a
+    // Record<string,boolean>); mirror it. Re-fetched on global-effect WS
+    // broadcasts (same trigger as the slots) AND on the engine-connected
+    // transition. Note: the engine does NOT broadcast the legacy toggle map, so
+    // the connect-transition refresh is the authoritative catch-up path.
+    const refreshGlobalEffects = () => {
+      fetchGlobals().then((r) => {
+        if (!r.ok || !r.data) return;
+        const raw = (r.data as { effects?: unknown }).effects;
+        if (!raw || typeof raw !== 'object') return;
+        const effects: Record<string, boolean> = {};
+        for (const key of Object.keys(raw as Record<string, unknown>)) {
+          effects[key] = !!(raw as Record<string, unknown>)[key];
+        }
+        _snapshot = { ..._snapshot, globalEffects: effects };
         if (!disposed) manager.onEngineUpdate();
+      }).catch(() => undefined);
+    };
+    refreshGlobalEffects();
+    // The slots subscription above already fires on every `*globaleffect*` WS
+    // message; piggy-back the legacy toggle refresh on the SAME filter so a
+    // legacy effect toggled from another surface repaints its pad LED too.
+    const unsubEffects = engineEvents.subscribe((m: { type?: string }) => {
+      if (typeof m?.type === 'string' && m.type.toLowerCase().includes('globaleffect')) refreshGlobalEffects();
+    });
+
+    // Curated colour palette pairs for the colour-pair pads (warmed at boot).
+    // Named so the engine-connected transition (P2-6) can re-warm it — if the
+    // cache warm failed because the engine wasn't up yet, the 16 colour-pair
+    // pads would stay dark; re-warming on connect fills them.
+    const refreshColorPalettes = () => {
+      warmColorPalettesCache().then(() => {
+        const pals = getCachedColorPalettes();
+        if (pals.length) {
+          _snapshot = { ..._snapshot, colorPalettes: pals.map((p) => ({ c1: p.c1, c2: p.c2 })) };
+          if (!disposed) manager.onEngineUpdate();
+        }
+      }).catch(() => undefined);
+    };
+    refreshColorPalettes();
+
+    // P2-6: engine-connected transition catch-up. The boot seeds above run once;
+    // if CaptainPad boots before the engine they all fail silently and the pads
+    // stay dark forever (the "unlit pad = nothing behind it" loud-silence rule
+    // would then LIE). subscribeStatus fires immediately with the current status
+    // AND on every open/close, so we re-run the one-shot seeds on each FALSE→TRUE
+    // transition (a real (re)connect) — NOT on the initial immediate fire (the
+    // boot seeds already cover that), avoiding a duplicate fetch storm.
+    let _wasConnected = engineEvents.getStatus().connected;
+    const unsubConn = engineEvents.subscribeStatus((st) => {
+      if (st.connected && !_wasConnected) {
+        refreshPatterns();
+        refreshColorPalettes();
+        refreshSlots();
+        refreshGlobalEffects();
       }
-    }).catch(() => undefined);
+      _wasConnected = st.connected;
+    });
 
     manager.start().then(() => {
       if (!disposed) manager.onEngineUpdate();
@@ -766,6 +942,8 @@ export function useMidiControl(): MidiControlState {
       _revalidate = null;
       _loadedProfiles = [];
       unsubSlots();
+      unsubEffects();
+      unsubConn();
       unsubMod();
       _modState = {};
       manager.dispose();
