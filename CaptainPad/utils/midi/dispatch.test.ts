@@ -138,4 +138,48 @@ describe('createDispatcher', () => {
     expect(api.setDeckChannelControl).not.toHaveBeenCalled();
   });
 
+  // ── P2-5: the dispatcher THREADS the api's MidiApiResult back (fail-loud) ──
+  it('P2-5 returns the api result (ok:false with error) instead of discarding it', async () => {
+    const api = makeApi();
+    (api.updateParamCenter as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, error: 'engine 404' });
+    const r = await createDispatcher(api, baseCtx)({ kind: 'paramCenter', key: 'speed', value: 0.5 });
+    expect(r).toEqual({ ok: false, error: 'engine 404' });
+  });
+
+  it('P2-5 returns ok:true for a real engine call', async () => {
+    const api = makeApi();
+    const r = await createDispatcher(api, baseCtx)({ kind: 'master', value: 0.5 });
+    expect(r).toEqual({ ok: true });
+  });
+
+  it('P2-5 a deliberate no-op (empty pad) is a SUCCESS, not a failure', async () => {
+    const api = makeApi();
+    // resolvePatternForBank returns null → nothing behind the pad → OK, not a fail.
+    const r = await createDispatcher(api, baseCtx)({ kind: 'patternBank', bank: 0, index: 99 });
+    expect(r).toEqual({ ok: true });
+    expect(api.setActivePattern).not.toHaveBeenCalled();
+  });
+
+  // ── P3-1: a blackout panic double-tap inside the echo window toggles ──
+  it('P3-1 a double-tap on the LAGGING snapshot still toggles (does not stick ON)', async () => {
+    const api = makeApi();
+    // The snapshot is FROZEN at false the whole time (the echo hasn't landed).
+    const dispatch = createDispatcher(api, { ...baseCtx, getBlackout: () => false });
+    await dispatch({ kind: 'blackoutToggle' }); // false → sends true
+    await dispatch({ kind: 'blackoutToggle' }); // stale snapshot still false, but last-sent true → sends false
+    const calls = (api.setGlobalEffectBlackout as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.map((c) => c[0])).toEqual([true, false]); // actually toggled, not [true, true]
+  });
+
+  it('P3-1 trusts the snapshot again once its echo catches up', async () => {
+    const api = makeApi();
+    let bo = false;
+    const dispatch = createDispatcher(api, { ...baseCtx, getBlackout: () => bo });
+    await dispatch({ kind: 'blackoutToggle' }); // false → true (lastSent = true)
+    bo = true; // echo landed: snapshot now matches lastSent
+    await dispatch({ kind: 'blackoutToggle' }); // snapshot true → sends false
+    const calls = (api.setGlobalEffectBlackout as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.map((c) => c[0])).toEqual([true, false]);
+  });
+
 });

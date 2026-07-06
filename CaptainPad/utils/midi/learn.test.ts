@@ -82,6 +82,16 @@ describe('LearnController', () => {
     expect(lc.reportConflict('other')).toBe(false); // disarmed
     expect(cb).toHaveBeenCalledTimes(1);
   });
+  it('reportReject delivers a rejection reason once, then disarms', () => {
+    const lc = new LearnController();
+    const cb = vi.fn();
+    lc.arm(cb);
+    expect(lc.reportReject("that's an endless encoder — knobs map by order, not by learn")).toBe(true);
+    expect(cb).toHaveBeenCalledWith({ conflict: "that's an endless encoder — knobs map by order, not by learn" });
+    expect(lc.isArmed()).toBe(false);
+    expect(lc.reportReject('other')).toBe(false); // disarmed
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
   it('cancel disarms without firing', () => {
     const lc = new LearnController();
     const cb = vi.fn();

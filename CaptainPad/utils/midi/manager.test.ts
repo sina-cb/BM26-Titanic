@@ -308,10 +308,12 @@ describe('MidiManager — MIDI-learn (arm, apply, focus)', () => {
     await manager.start();
     const results: unknown[] = [];
     manager.armLearn((r) => results.push(r));
-    transport.emit([0xb0, 51, 100]); // move a fader while armed
-    expect(results).toEqual([{ ref: { type: 'cc', channel: 0, number: 51 } }]);
+    // CC 52 is unmapped in the profile AND unbound on the focused pattern (CC 51
+    // is bound → it would be rejected as a duplicate, P2-2). Move it while armed.
+    transport.emit([0xb0, 52, 100]);
+    expect(results).toEqual([{ ref: { type: 'cc', channel: 0, number: 52 } }]);
     expect(manager.isLearning()).toBe(false); // auto-disarmed after capture
-    // The control was swallowed — the binding on CC 51 must NOT have applied.
+    // The captured control was swallowed — no dispatch fired while learning.
     expect(api.setDeckChannelControl).not.toHaveBeenCalled();
   });
 
@@ -404,13 +406,15 @@ describe('MidiManager — MIDI-learn (arm, apply, focus)', () => {
     expect(api.updateParamCenter).not.toHaveBeenCalledWith({ speed: expect.anything() });
   });
 
-  it('1.1 still captures an unmapped control (CC 51 is free)', async () => {
+  it('1.1 still captures an unmapped, unbound control (CC 52 is free)', async () => {
+    // CC 51 is already bound in `deckFocused` (m1 → sliderGlow), so it is now
+    // rejected as a duplicate (P2-2); CC 52 is neither profile-mapped nor bound.
     const { manager, transport } = setupClaiming(deckFocused());
     await manager.start();
     const results: unknown[] = [];
     manager.armLearn((r) => results.push(r));
-    transport.emit([0xb0, 51, 100]); // CC 51 unmapped → captured
-    expect(results).toEqual([{ ref: { type: 'cc', channel: 0, number: 51 } }]);
+    transport.emit([0xb0, 52, 100]); // CC 52 unmapped + unbound → captured
+    expect(results).toEqual([{ ref: { type: 'cc', channel: 0, number: 52 } }]);
   });
 
   // ── 1.3 pickup re-locks across an entry switch (same mapping id, new entry) ──
@@ -658,7 +662,8 @@ describe('MidiManager — MIDI Fighter Twister', () => {
     await manager.start();
     const s = manager.getStatuses()[0];
     expect(s.kind).toBe('error');
-    expect(s.error).toMatch(/sysex config push failed/);
+    expect(s.error).toMatch(/MIDI sysex denied — reload and allow/);
+    expect(s.error).toMatch(/sysex not permitted/); // raw reason still parenthesised
   });
 
   // ── #11 hotplug hygiene ──────────────────────────────────────────────────
@@ -1146,13 +1151,17 @@ describe('MidiManager — D1 meta-review fixes', () => {
     )).toThrow(/mismatched kinds/);
   });
 
-  // ── 8b unknown CPC key on the delta path → setStatus error (not silent) ──
-  it('8b an unknown global-param key on a delta is a VISIBLE error, not a silent swallow', async () => {
+  // ── 8b unknown CPC key (map LOADED) → VISIBLE but NON-FATAL (P2-1) ──
+  // A key missing from a LOADED globalParamValues map is a real config error but
+  // must NOT sticky-error (that would freeze projectAndSend + all LEDs). It's
+  // aggregated into paramErrors, surfaced in lastEvent, and the controller stays
+  // `connected`. (The boot-race case — undefined map — is covered separately.)
+  it('8b an unknown global-param key on a LOADED map is a VISIBLE, NON-FATAL error (aggregated, stays connected)', async () => {
     const globalProfile = validateProfile({
       device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
       controls: [{ id: 'g0', match: { type: 'cc', channel: 0, cc: 16, relative: true }, action: { kind: 'paramCenterRelative', key: 'bogus', steps: [0.01, 0.05, 0.1] } }],
     });
-    const snap: MidiEngineSnapshot = { ...baseSnap, globalParamValues: { speed: 0.5 } }; // no 'bogus'
+    const snap: MidiEngineSnapshot = { ...baseSnap, globalParamValues: { speed: 0.5 } }; // LOADED, no 'bogus'
     const transport = new FakeTransport(mftEndpoints);
     const api = makeApi();
     const ft = makeFakeTimers();
@@ -1164,7 +1173,279 @@ describe('MidiManager — D1 meta-review fixes', () => {
     transport.emit([0xb0, 16, 65]); ft.flushDue();
     expect(api.updateParamCenter).not.toHaveBeenCalled();
     const s = manager.getStatuses()[0];
-    expect(s.kind).toBe('error');
-    expect(s.error).toMatch(/unknown global param key 'bogus'/);
+    expect(s.kind).toBe('connected'); // NON-FATAL — never sticky-red
+    expect(s.lastEvent).toMatch(/bogus \(not in engine schema/);
+    expect(s.paramErrors).toContainEqual({ controlId: 'bogus', key: 'bogus' });
+  });
+});
+
+// ── W1 runtime fixes: dispatch fail-loud, boot-race, reset/turn, learn footguns ─
+describe('MidiManager — W1 runtime correctness + fail-loud', () => {
+  function makeFakeTimers() {
+    let id = 0;
+    const armed = new Map<number, () => void>();
+    return {
+      timers: {
+        setTimeout: (cb: () => void) => { const h = ++id; armed.set(h, cb); return h as unknown as ReturnType<typeof setTimeout>; },
+        clearTimeout: (h: ReturnType<typeof setTimeout>) => { armed.delete(h as unknown as number); },
+      },
+      flushDue() { const due = [...armed.entries()]; armed.clear(); for (const [, cb] of due) cb(); },
+    };
+  }
+
+  const mftEndpoints: MidiEndpoint[] = [
+    { id: 'in-0', name: 'Midi Fighter Twister', portIndex: 0, kind: 'source' },
+    { id: 'out-0', name: 'Midi Fighter Twister', portIndex: 0, kind: 'destination' },
+  ];
+
+  const deckFocus = (v0: number, defaultValue?: number): MidiEngineSnapshot => ({
+    ...baseSnap, activeContext: 'deck', deckLayer: { id: 'd1', fader: 1 },
+    focused: {
+      role: 'deck', layer: 0, id: 'd1', entryId: 'e', key: 'deck:d1:e:',
+      exports: [{ id: 5, name: 'glow', v0, defaultValue }], midiMappings: [],
+    },
+  });
+
+  // ── P2-5: dispatch results are surfaced (was discarded) ──────────────────
+  const apcSpeed = validateProfile({
+    device: { id: 'apc', label: 'APC', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+    controls: [{ id: 'blk', match: { type: 'note', channel: 0, notes: [50] }, action: { kind: 'blackoutToggle' } }],
+  });
+
+  // Drain the microtask + macrotask queue so a `void runDispatch(...)` (which
+  // awaits a mocked api promise then setStatus) has fully settled.
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it('P2-5 an ok:false dispatch sets a visible ✕ lastEvent (was silent)', async () => {
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    (api.setGlobalEffectBlackout as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, error: 'engine down' });
+    const manager = new MidiManager({
+      profiles: [apcSpeed], transportFactory: () => transport, api,
+      getSnapshot: () => baseSnap, defaultContext: 'default',
+    });
+    await manager.start();
+    transport.emit([0x90, 50, 127]); // blackout press → dispatch fails
+    await flush();
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/✕ blackoutToggle failed: engine down/);
+  });
+
+  it('P2-5 escalates to a NON-STICKY warning after N consecutive failures, cleared on success', async () => {
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const fail = api.setGlobalEffectBlackout as ReturnType<typeof vi.fn>;
+    fail.mockResolvedValue({ ok: false, error: 'engine down' });
+    const manager = new MidiManager({
+      profiles: [apcSpeed], transportFactory: () => transport, api,
+      getSnapshot: () => baseSnap, defaultContext: 'default',
+    });
+    await manager.start();
+    for (let i = 0; i < 3; i++) { transport.emit([0x90, 50, 127]); await flush(); }
+    const s = manager.getStatuses()[0];
+    expect(s.kind).toBe('connected'); // NON-STICKY — not sticky-red
+    expect(s.warning).toMatch(/MIDI writes failed/);
+    // A subsequent success clears the warning + streak.
+    fail.mockResolvedValue({ ok: true });
+    transport.emit([0x90, 50, 127]); await flush();
+    expect(manager.getStatuses()[0].warning).toBeUndefined();
+  });
+
+  // ── P2-1: boot race (globalParamValues undefined) is inert, not sticky-red ─
+  const mftGlobal = validateProfile({
+    device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+    controls: [{ id: 'g0', match: { type: 'cc', channel: 0, cc: 16, relative: true }, action: { kind: 'paramCenterRelative', key: 'size', steps: [0.01, 0.05, 0.1] } }],
+  });
+
+  it('P2-1 a bank-2 knob during the WS handshake (values not loaded) stays connected + inert', async () => {
+    // globalParamValues is UNDEFINED (no sharedParams frame yet). The OLD code
+    // flipped a sticky error here → froze every LED for the set. Now: inert, note,
+    // stays connected.
+    let snap: MidiEngineSnapshot = { ...baseSnap }; // no globalParamValues
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const ft = makeFakeTimers();
+    const manager = new MidiManager({
+      profiles: [mftGlobal], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'deck', coalescerTimers: ft.timers,
+    });
+    await manager.start();
+    transport.emit([0xb0, 16, 65]); ft.flushDue();
+    let s = manager.getStatuses()[0];
+    expect(s.kind).toBe('connected'); // NOT sticky-red
+    expect(s.lastEvent).toMatch(/param values not loaded yet/);
+    expect(s.paramErrors).toBeUndefined();
+    // Recovery: once the first sharedParams frame lands, the knob writes normally.
+    snap = { ...baseSnap, globalParamValues: { size: 0.5 } };
+    transport.emit([0xb0, 16, 65]); ft.flushDue();
+    expect(api.updateParamCenter).toHaveBeenCalledWith({ size: expect.closeTo(0.51, 5) });
+  });
+
+  it('P2-1 a missing key on a LOADED map auto-CLEARS once the key appears', async () => {
+    let snap: MidiEngineSnapshot = { ...baseSnap, globalParamValues: { speed: 0.5 } }; // no 'size'
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const ft = makeFakeTimers();
+    const manager = new MidiManager({
+      profiles: [mftGlobal], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'deck', coalescerTimers: ft.timers,
+    });
+    await manager.start();
+    transport.emit([0xb0, 16, 65]); ft.flushDue();
+    expect(manager.getStatuses()[0].paramErrors).toContainEqual({ controlId: 'size', key: 'size' });
+    // The schema gains 'size' → the aggregated error auto-clears on the next turn.
+    snap = { ...baseSnap, globalParamValues: { speed: 0.5, size: 0.5 } };
+    transport.emit([0xb0, 16, 65]); ft.flushDue();
+    expect(manager.getStatuses()[0].paramErrors).toBeUndefined();
+    expect(api.updateParamCenter).toHaveBeenCalledWith({ size: expect.closeTo(0.51, 5) });
+  });
+
+  // ── P2-3: reset seeds the turn anchor so a follow-up turn keeps the reset ──
+  const mftKnob = validateProfile({
+    device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+    controls: [
+      { id: 'k0_turn', match: { type: 'cc', channel: 0, cc: 0, relative: true }, action: { kind: 'focusedParamKnob', index: 0, steps: [0.01, 0.05, 0.1] } },
+      { id: 'k0_push', match: { type: 'cc', channel: 1, cc: 0 }, action: { kind: 'focusedParamReset', index: 0 } },
+    ],
+  });
+
+  it('P2-3 a turn right after a reset accumulates from the RESET value, not the stale snapshot base', async () => {
+    // Reset default is 0.3. After the push, the engine echo LAGS: the snapshot
+    // still reports v0 = 0.35 (a small, within-epsilon echo creep toward 0.3).
+    // The seeded optimistic anchor (0.3) must hold, so an immediate +0.01 turn
+    // lands at 0.31. The OLD code forgot the anchor → the turn re-seeded from the
+    // stale 0.35 snapshot → 0.36. (Only the SEED makes 0.31 vs 0.36 the outcome.)
+    let snap: MidiEngineSnapshot = deckFocus(0.9, 0.3);
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const ft = makeFakeTimers();
+    const manager = new MidiManager({
+      profiles: [mftKnob], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'deck', coalescerTimers: ft.timers,
+    });
+    await manager.start();
+    transport.emit([0xb1, 0, 127]); ft.flushDue(); // push → reset to 0.3
+    snap = deckFocus(0.35, 0.3);                    // echo creeps toward 0.3 (within eps)
+    transport.emit([0xb0, 0, 65]); ft.flushDue();   // +0.01 turn off the seeded 0.3 → 0.31
+    const calls = (api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0]).toEqual([5, 0.3]);
+    expect(calls[calls.length - 1][1]).toBeCloseTo(0.31, 5); // NOT 0.36 (stale-base re-seed)
+  });
+
+  // ── P1-3: learn rejects a relative-code CC / a config-device rotary channel ─
+  const mftLearnDevice = validateProfile({
+    device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0, configureOnConnect: true },
+    controls: [{ id: 'noop', match: { type: 'note', channel: 5, notes: [10] }, action: { kind: 'blackoutToggle' } }],
+  });
+
+  it('P1-3 learn REJECTS an endless-encoder CC (value decodes as a relative delta)', async () => {
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [mftLearnDevice], transportFactory: () => transport, api,
+      getSnapshot: () => deckFocus(0.5), defaultContext: 'default',
+    });
+    await manager.start();
+    const results: unknown[] = [];
+    manager.armLearn((r) => results.push(r));
+    transport.emit([0xb0, 20, 65]); // ch0 CC 20 value 65 = +1 relative delta code
+    expect(results).toEqual([{ conflict: "that's an endless encoder — knobs map by order, not by learn" }]);
+    expect(manager.isLearning()).toBe(false);
+  });
+
+  it('P1-3 learn REJECTS a CC-hold push on a configureOnConnect device switch channel', async () => {
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [mftLearnDevice], transportFactory: () => transport, api,
+      getSnapshot: () => deckFocus(0.5), defaultContext: 'default',
+    });
+    await manager.start();
+    const results: unknown[] = [];
+    manager.armLearn((r) => results.push(r));
+    transport.emit([0xb1, 32, 127]); // ch1 (SWITCH_AND_COLOR) push, absolute value 127
+    expect(results).toEqual([{ conflict: "that's an endless encoder — knobs map by order, not by learn" }]);
+    expect(manager.isLearning()).toBe(false);
+  });
+
+  // ── P2-2: learn rejects a SECOND binding on a control already bound ─────────
+  it('P2-2 learn REJECTS a control the focused pattern already has an enabled binding on', async () => {
+    const bound: MidiEngineSnapshot = {
+      ...baseSnap, activeContext: 'deck', deckLayer: { id: 'd1', fader: 1 },
+      focused: {
+        role: 'deck', layer: 0, id: 'd1', entryId: 'e', key: 'deck:d1:e:m1',
+        exports: [{ id: 5, name: 'glow', v0: 0.5 }],
+        midiMappings: [{ id: 'm1', enabled: true, control: { type: 'cc', channel: 0, number: 51 }, target: { parameter: 'glow' }, range: [0, 1] }],
+      },
+    };
+    const apcNoClaim = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+      controls: [{ id: 'noop', match: { type: 'note', channel: 9, notes: [10] }, action: { kind: 'blackoutToggle' } }],
+    });
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [apcNoClaim], transportFactory: () => transport, api,
+      getSnapshot: () => bound, defaultContext: 'default',
+    });
+    await manager.start();
+    const results: unknown[] = [];
+    manager.armLearn((r) => results.push(r));
+    transport.emit([0xb0, 51, 100]); // CC 51 already bound to 'glow' → rejected
+    expect(results).toEqual([{ conflict: "that control is already learned to 'glow'" }]);
+    expect(manager.isLearning()).toBe(false);
+  });
+
+  // ── P3-3: a learned write is clamped to [0, 1] (binding.range may exceed it) ─
+  it('P3-3 clamps a learned write whose binding.range exceeds the unit interval', async () => {
+    const wideBound: MidiEngineSnapshot = {
+      ...baseSnap, activeContext: 'deck', deckLayer: { id: 'd1', fader: 1 },
+      focused: {
+        role: 'deck', layer: 0, id: 'd1', entryId: 'e', key: 'deck:d1:e:m1',
+        exports: [{ id: 5, name: 'glow', v0: 0 }],
+        // range [0, 4] (engine allows ±4); a full fader would scale to 4 unclamped.
+        midiMappings: [{ id: 'm1', enabled: true, control: { type: 'cc', channel: 0, number: 51 }, target: { parameter: 'glow' }, range: [0, 4] }],
+      },
+    };
+    const apcNoClaim = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+      controls: [{ id: 'noop', match: { type: 'note', channel: 9, notes: [10] }, action: { kind: 'blackoutToggle' } }],
+    });
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const ft = makeFakeTimers();
+    const manager = new MidiManager({
+      profiles: [apcNoClaim], transportFactory: () => transport, api,
+      getSnapshot: () => wideBound, defaultContext: 'default', coalescerTimers: ft.timers,
+    });
+    await manager.start();
+    transport.emit([0xb0, 51, 0]); ft.flushDue();   // 0 → within eps of v0 0 → pickup unlocks, writes 0
+    transport.emit([0xb0, 51, 127]); ft.flushDue(); // full → scales to 4 → CLAMPED to 1
+    const calls = (api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[calls.length - 1]).toEqual([5, 1]); // clamped, not 4
+  });
+
+  // ── LED-send failure is surfaced (non-sticky) instead of silently swallowed ─
+  it('LED-send failures escalate to a NON-STICKY warning (dead strip not silent)', async () => {
+    // A transport whose send() always throws → every LED repaint fails.
+    class DeadLedTransport extends FakeTransport {
+      send() { throw new Error('LED endpoint gone'); }
+    }
+    const transport = new DeadLedTransport(mftEndpoints);
+    const api = makeApi();
+    // An 8-pad bank → the connect repaint tries 8 LED sends at once; all throw,
+    // so the FAILED-MESSAGE count crosses the threshold on the first repaint
+    // (per-message, not per-call — diffing means later repaints send nothing).
+    const p = validateProfile({
+      device: { id: 'apc', label: 'APC', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+      controls: [{ id: 'pads', match: { type: 'note', channel: 0, notes: [0, 7] }, action: { kind: 'patternBank', bank: 0 }, led: { active: 21, idle: 1, channel: 6 } }],
+    });
+    const manager = new MidiManager({
+      profiles: [p], transportFactory: () => transport, api,
+      getSnapshot: () => ({ ...baseSnap, activePattern: 'p0', patterns: ['p0', 'p1'] }), defaultContext: 'default',
+    });
+    await manager.start(); // connect repaint tries 8 LED sends, all fail
+    const s = manager.getStatuses()[0];
+    expect(s.kind).toBe('connected'); // NON-STICKY — the controller keeps running
+    expect(s.warning).toMatch(/LED feedback failing/);
   });
 });

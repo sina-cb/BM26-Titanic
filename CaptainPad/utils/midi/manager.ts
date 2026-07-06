@@ -22,18 +22,18 @@
 import { MidiTransport } from './transport';
 import { ControllerProfile, validateProfileParams, ParamKeyError } from './profile';
 import { decodeMidi, DecodedMidi } from './midi_message';
-import { resolveEvent, ResolvedAction, profileClaims } from './resolver';
+import { resolveEvent, ResolvedAction, profileClaims, UnknownContextError } from './resolver';
 import { resolveEndpoints, EndpointResolutionError } from './endpoints';
 import { ControlCoalescer, CoalescerTimers } from './coalescer';
-import { createDispatcher, MidiDispatchApi, MidiDispatcher } from './dispatch';
+import { createDispatcher, MidiDispatchApi, MidiDispatcher, MidiApiResult } from './dispatch';
 import { projectLeds, LedState, MidiProjectionState } from './led_projector';
 import { clampUnit } from './unit_clamp';
 import {
   LearnController, LearnResult, MidiControlRef, bindingMatches, controlRefFromEvent,
   scaleMidiToRange, pickup, freshPickup, PickupState,
 } from './learn';
-import { decodeBankChange } from './mft/messages';
-import { ColorValues } from './mft/constants';
+import { decodeBankChange, decodeRelativeDelta } from './mft/messages';
+import { ColorValues, MidiChannels } from './mft/constants';
 import { buildConnectConfig } from './mft/config';
 
 /** MFT identity colour for the focused channel's knob rings: deck = blue,
@@ -88,6 +88,12 @@ export interface ControllerStatus {
   paramErrors?: ParamKeyError[];
   /** Last decoded inbound event — a poor-man's MIDI monitor for the Config tab. */
   lastEvent?: string;
+  /** A NON-STICKY visible warning (dispatch/LED sends failing in a run). Unlike
+   *  `error` (which is sticky and freezes LED projection while `kind==='error'`)
+   *  this leaves `kind` at `connected` — the controller keeps running — but
+   *  surfaces "N of your writes just failed" so a dead engine / dead LED strip
+   *  isn't silent. Auto-clears on the next successful send. */
+  warning?: string;
 }
 
 /** Everything the dispatcher + LED projector need from live engine state. */
@@ -225,6 +231,12 @@ const DEFAULT_COALESCE_MS = 33; // ~30 Hz
  *  that burst yet short enough that a replug feels instant. */
 const DEFAULT_RECONNECT_DEBOUNCE_MS = 50;
 
+/** Consecutive-failure threshold before a dispatch / LED-send run escalates
+ *  from a per-event `lastEvent` note to a NON-STICKY visible `warning` (P2-5,
+ *  LED-send). One transient 404 shouldn't nag; a dead engine / dead strip
+ *  should. Non-sticky: the next success clears it. */
+const FAILURE_WARN_THRESHOLD = 3;
+
 /** Real-timer implementation for the reconnect debounce (used when the caller
  *  injects none). */
 const REAL_RECONNECT_TIMERS: CoalescerTimers = {
@@ -236,9 +248,11 @@ const REAL_RECONNECT_TIMERS: CoalescerTimers = {
  *  that moves more than this BETWEEN coalescer windows is treated as an external
  *  change (reset / other surface / modulator step) and adopted; a smaller move
  *  is the throttled engine echo merely catching up to our own writes and is
- *  ignored so a fast sweep keeps accumulating locally. Sized above the largest
- *  single detent step (0.1) so one very-fast tick of echo can't trip a re-seed,
- *  yet well below a deliberate reset jump. */
+ *  ignored so a fast sweep keeps accumulating locally. The real hazard isn't one
+ *  detent (the largest shipped very-fast step is 0.06, DEFAULT_RELATIVE_STEPS[2])
+ *  but the echo catching up on a WHOLE coalescer window's worth of accumulated
+ *  ticks at once; 0.15 sits above that per-window echo creep yet well below a
+ *  deliberate reset jump. */
 const OPTIMISTIC_RESEED_EPSILON = 0.15;
 
 interface ResolvedLayer {
@@ -355,6 +369,25 @@ class ControllerRuntime {
   private readonly reconnectTimers: CoalescerTimers;
   private readonly reconnectDebounceMs: number;
   private readonly learn: LearnController;
+  /** Consecutive failed `api.*()` dispatches (P2-5). Reset on any success. Once
+   *  it crosses FAILURE_WARN_THRESHOLD a non-sticky `warning` surfaces so an
+   *  engine that died mid-set (knobs 404-ing) isn't silent. */
+  private dispatchFailStreak = 0;
+  /** Consecutive failed LED `transport.send` calls (LED-send silence). Same
+   *  escalation shape as dispatch; a dead LED strip becomes visible instead of
+   *  vanishing into a bare catch. */
+  private ledFailStreak = 0;
+  /** CPC keys that a relative knob referenced but that are MISSING from the
+   *  now-LOADED globalParamValues map (P2-1). Aggregated + surfaced non-fatally
+   *  (the controller stays `connected`); cleared per key the moment it appears.
+   *  Distinct from a boot race where the map itself is undefined (that's inert,
+   *  not an error). */
+  private readonly runtimeParamErrors = new Set<string>();
+  /** Connect-time param-key errors from validateProfileParams (a key in the
+   *  profile YAML that isn't in the CPC schema). Kept as a field — not just
+   *  pushed into status — so the runtime "vanished from schema" set (P2-1) can be
+   *  merged with it into one surfaced aggregate. */
+  private profileParamErrors: ParamKeyError[] = [];
   status: ControllerStatus;
 
   constructor(
@@ -384,6 +417,42 @@ class ControllerRuntime {
   private setStatus(patch: Partial<ControllerStatus>): void {
     this.status = { ...this.status, ...patch };
     this.notify();
+  }
+
+  /** Dispatch a resolved action and SURFACE the result (P2-5). The dispatcher
+   *  returns the engine call's MidiApiResult; the old code awaited it and threw
+   *  it away, so an engine restart / deleted-entry 404 mid-set left knobs doing
+   *  nothing while the chip stayed green — the exact fail-loud violation. On
+   *  `ok:false` we set a visible `lastEvent` (`✕ <kind> failed: <error>`) and,
+   *  after FAILURE_WARN_THRESHOLD consecutive failures, a NON-STICKY `warning`
+   *  (the controller keeps running; it does not go sticky-red). Any success
+   *  clears the streak + warning. Returns the result for callers that branch. */
+  private async runDispatch(resolved: ResolvedAction): Promise<MidiApiResult> {
+    const result = await this.dispatcher(resolved);
+    this.surfaceApiResult(resolved.kind, result);
+    return result;
+  }
+
+  /** Surface a MidiApiResult from ANY engine call the runtime makes — the
+   *  dispatcher path AND the direct api calls (playlist-entry select). On
+   *  success it clears the fail streak + warning; on failure it sets a visible
+   *  `lastEvent` and escalates to a NON-STICKY `warning` after
+   *  FAILURE_WARN_THRESHOLD consecutive failures (P2-5). */
+  private surfaceApiResult(kind: string, result: MidiApiResult): void {
+    if (result.ok) {
+      if (this.dispatchFailStreak !== 0) {
+        this.dispatchFailStreak = 0;
+        this.setStatus({ warning: undefined });
+      }
+      return;
+    }
+    this.dispatchFailStreak += 1;
+    const reason = result.error ?? 'unknown error';
+    const patch: Partial<ControllerStatus> = { lastEvent: `✕ ${kind} failed: ${reason}` };
+    if (this.dispatchFailStreak >= FAILURE_WARN_THRESHOLD) {
+      patch.warning = `${this.dispatchFailStreak} MIDI writes failed (${kind}: ${reason}) — is the engine up?`;
+    }
+    this.setStatus(patch);
   }
 
   /** Serializing wrapper around `runConnect` (#11). A single physical plug fires
@@ -450,9 +519,11 @@ class ControllerRuntime {
           const reason = cfgErr instanceof Error ? cfgErr.message : String(cfgErr);
           this.deviceConfigured = false;
           this.teardownBindings();
+          // Operator-friendly copy first, raw reason parenthesised last (never a
+          // bare DOMException as the whole message).
           this.setStatus({
             kind: 'error',
-            error: `${this.profile.device.label}: sysex config push failed — the transport can't send sysex (Web MIDI needs sysex:true, or flash the .mfs preset via MF Utility). ${reason}`,
+            error: `${this.profile.device.label}: MIDI sysex denied — reload and allow sysex (Web MIDI needs sysex:true), or flash the .mfs preset via MF Utility. (${reason})`,
           });
           this.bindHotplugOnly();
           return;
@@ -465,9 +536,10 @@ class ControllerRuntime {
 
       // Param-key validation: aggregate, non-fatal (other controls keep working).
       // Skipped while the schema is empty (not loaded yet); revalidate() re-runs
-      // it once the engine CPC schema lands.
+      // it once the engine CPC schema lands. Stored on the field so it merges
+      // with the runtime "vanished from schema" set (P2-1).
       const keys = this.opts.getSchemaKeys?.();
-      const paramErrors = keys && keys.size > 0 ? validateProfileParams(this.profile, keys) : [];
+      this.profileParamErrors = keys && keys.size > 0 ? validateProfileParams(this.profile, keys) : [];
 
       this.teardownBindings();
       this.unsubs.push(this.transport.addListener('midiMessage', (e) => this.onMessage(e.data)));
@@ -478,7 +550,7 @@ class ControllerRuntime {
         error: undefined,
         sourceName: resolved.sourceName,
         destinationName: resolved.destinationName,
-        paramErrors: paramErrors.length ? paramErrors : undefined,
+        paramErrors: this.mergedParamErrors(),
       });
       // Force a FULL LED repaint only on a genuine (re)connect transition. When
       // the device was already configured and merely stayed connected across a
@@ -520,8 +592,8 @@ class ControllerRuntime {
   revalidateParams(): void {
     if (this.status.kind !== 'connected') return;
     const keys = this.opts.getSchemaKeys?.();
-    const paramErrors = keys && keys.size > 0 ? validateProfileParams(this.profile, keys) : [];
-    this.setStatus({ paramErrors: paramErrors.length ? paramErrors : undefined });
+    this.profileParamErrors = keys && keys.size > 0 ? validateProfileParams(this.profile, keys) : [];
+    this.setStatus({ paramErrors: this.mergedParamErrors() });
   }
 
   /** Switch the active context (CaptainPad tab) — repaints LEDs for the new
@@ -560,6 +632,38 @@ class ControllerRuntime {
     if (this.learn.isArmed()) {
       const cap = controlRefFromEvent(decoded);
       if (cap) {
+        // P1-3: an MFT endless encoder / CC-hold push is learnable-LOOKING but a
+        // footgun (codex P0). Its CC "value" is a relative-delta code (61-67), not
+        // an absolute position, so learning it and feeding it through absolute
+        // scaleMidiToRange would pin the param to ~0.5 jitter. Reject when EITHER
+        // the value decodes as a relative delta OR the event is on a
+        // configureOnConnect device's rotary/switch channel (bank-3/4 turns +
+        // pushes never reach a static profile action, so profileClaims wouldn't
+        // catch them). Named error so the popover can explain.
+        const isRelativeCode = decoded.type === 'cc' && decodeRelativeDelta(decoded.value) !== null;
+        const onRotaryOrSwitch = this.profile.device.configureOnConnect
+          && (decoded.type === 'cc' || decoded.type === 'noteOn' || decoded.type === 'noteOff')
+          && (decoded.channel === MidiChannels.ROTARY_ENCODER || decoded.channel === MidiChannels.SWITCH_AND_COLOR);
+        if (isRelativeCode || onRotaryOrSwitch) {
+          if (this.learn.reportReject("that's an endless encoder — knobs map by order, not by learn")) {
+            this.setStatus({ lastEvent: `learn ✕ ${describeEvent(decoded, null)} (endless encoder)` });
+            return;
+          }
+        }
+        // P2-2: reject a SECOND learned binding on a control the focused pattern
+        // already has an enabled binding for. applyBinding's `.find()` picks by
+        // array order while the UI names a different one, so two bindings on one
+        // physical fader silently fight. Reject at capture (the runtime side; a
+        // sibling agent handles the save-time UI re-check). Upsert-by-control is
+        // the save-side concern; here we simply refuse the duplicate capture.
+        const focused = this.opts.getSnapshot().focused;
+        const dup = focused?.midiMappings.find((b) => b.enabled && bindingMatches(b.control, decoded));
+        if (dup) {
+          if (this.learn.reportReject(`that control is already learned to '${dup.target.parameter}'`)) {
+            this.setStatus({ lastEvent: `learn ✕ ${describeEvent(decoded, dup.id)} (already bound)` });
+            return;
+          }
+        }
         const claimed = profileClaims(this.profile, cap.ref, this.context);
         if (claimed !== null) {
           if (this.learn.reportConflict(claimed)) {
@@ -579,8 +683,20 @@ class ControllerRuntime {
     //    unmapped in the profile, so normal use never collides).
     if (this.applyBinding(decoded)) return;
 
-    // 3) Profile-mapped action.
-    const ev = resolveEvent(this.profile, decoded, this.context);
+    // 3) Profile-mapped action. An unknown active context is a wiring bug (a tab
+    //    published a context the profile never declared) — surface it as a red
+    //    chip rather than letting the throw crash the transport's message
+    //    callback. Other errors keep propagating unchanged.
+    let ev: ReturnType<typeof resolveEvent>;
+    try {
+      ev = resolveEvent(this.profile, decoded, this.context);
+    } catch (err) {
+      if (err instanceof UnknownContextError) {
+        this.setStatus({ kind: 'error', error: err.message });
+        return;
+      }
+      throw err;
+    }
     // 12b: don't update the monitor line for CONTINUOUS controls at raw MIDI
     // rate (>100/s) — the coalescer flush records those at ~30 Hz instead, so
     // React consumers don't re-render on every fader tick. Unmapped + discrete
@@ -612,7 +728,7 @@ class ControllerRuntime {
     if (ev.continuous) {
       this.coalescer.push(ev.controlId, ev.resolved);
     } else {
-      void this.dispatcher(ev.resolved);
+      void this.runDispatch(ev.resolved);
     }
   }
 
@@ -660,22 +776,33 @@ class ControllerRuntime {
     // Reset/turn race (#7): a push right after a spin must NOT be clobbered by
     // the same encoder's pending accumulated turn flushing a beat later. Cancel
     // that pending turn slot (its control id is the profile's focusedParamKnob
-    // control for THIS index) + forget its optimistic anchor. Do NOT merge key
-    // namespaces (that breaks combineDelta's same-kind invariant).
+    // control for THIS index). Do NOT merge key namespaces (that breaks
+    // combineDelta's same-kind invariant).
     const turnControlId = this.turnControlIdForIndex(index);
     if (turnControlId !== null) {
       this.coalescer.cancel(turnControlId);
       this.deltaFocusKey.delete(turnControlId);
-      this.forgetOptimistic(turnControlId);
     }
     if (typeof exp.defaultValue !== 'number') {
       // This entry genuinely shipped no saved default for this param (the hook
       // threads `defaultValue` from the entry when present) — a documented no-op,
-      // not faked to some invented value.
+      // not faked to some invented value. No reset value to seed, so forget the
+      // turn anchor (it re-seeds from the snapshot on the next spin).
+      if (turnControlId !== null) this.forgetOptimistic(turnControlId);
       this.setStatus({ lastEvent: `reset ${exp.name} (no saved default — deferred)` });
       return;
     }
     const value = clampUnit(exp.defaultValue);
+    // P2-3 reset-then-turn: SEED the turn slot's optimistic anchor with the reset
+    // value (not forget it). The old code cleared it, so an immediate follow-up
+    // turn re-seeded from the STALE snapshot base and the reset "didn't take"
+    // under continued turning. Seeding both the optimistic value and its
+    // snap-anchor makes the next window accumulate from the reset value, and a
+    // lagging snapshot echo can't trip a re-seed back to the old base.
+    if (turnControlId !== null) {
+      this.optimisticValues.set(turnControlId, value);
+      this.lastSnapAnchor.set(turnControlId, value);
+    }
     // Reset unlocks the pickup slot for any binding on this param (a deliberate
     // jump), mirroring a note-press write.
     this.setStatus({ lastEvent: `reset ${exp.name} = ${value.toFixed(2)}` });
@@ -728,7 +855,7 @@ class ControllerRuntime {
       const value = clampUnit(anchor + payload.delta);
       this.optimisticValues.set(controlId, value); // seed the next window's anchor
       this.setStatus({ lastEvent: `knob ${exp.name} = ${value.toFixed(2)}` });
-      await this.dispatcher({
+      await this.runDispatch({
         kind: 'localParam', role: focused.role, channelId: focused.id, exportId: exp.id, value,
       });
       return;
@@ -744,20 +871,33 @@ class ControllerRuntime {
         this.setStatus({ lastEvent: `${payload.key} (engine sync owns it — knob inert)` });
         return;
       }
-      const cur = snap.globalParamValues?.[payload.key];
-      if (typeof cur !== 'number') {
-        // Unknown CPC key — fail visible (mirror the sync-gate branch), not a
-        // silent swallow (8b). validateProfileParams (D4) blocks most typos at
-        // connect; this catches a key that vanished from the live schema.
+      // P2-1: the values map is UNDEFINED until the first engine sharedParams
+      // frame. Twisting a bank-2 knob during the WS handshake must NOT sticky-red
+      // (which would freeze projectAndSend + every LED for the rest of the set,
+      // recoverable only by a physical replug). A not-yet-loaded map is a benign
+      // boot race → inert with a note, stay `connected`; the value will arrive.
+      if (snap.globalParamValues === undefined) {
         this.forgetOptimistic(controlId);
-        this.setStatus({ kind: 'error', error: `MIDI: unknown global param key '${payload.key}' — knob inert` });
+        this.setStatus({ lastEvent: `${payload.key} (param values not loaded yet — knob inert)` });
         return;
       }
+      const cur = snap.globalParamValues[payload.key];
+      if (typeof cur !== 'number') {
+        // The map IS loaded but this key is missing from the live schema — a real
+        // (non-fatal) config error, aggregated + surfaced like validateProfileParams
+        // so OTHER controls keep working and the controller stays `connected`
+        // (never sticky-error → never freezes LEDs). Auto-clears if the key
+        // later appears (the schema can change mid-set).
+        this.forgetOptimistic(controlId);
+        this.noteRuntimeParamError(payload.key);
+        return;
+      }
+      this.clearRuntimeParamError(payload.key); // key present now → drop any stale flag
       const anchor = this.optimisticAnchor(controlId, cur);
       const value = clampUnit(anchor + payload.delta);
       this.optimisticValues.set(controlId, value);
       this.setStatus({ lastEvent: `${payload.key} = ${value.toFixed(2)}` });
-      await this.dispatcher({ kind: 'paramCenter', key: payload.key, value });
+      await this.runDispatch({ kind: 'paramCenter', key: payload.key, value });
       return;
     }
     // Absolute paramCenter (e.g. the APC's fader 7) shares the sync gate (#4):
@@ -771,7 +911,36 @@ class ControllerRuntime {
     // 12b: record the monitor line for a coalesced continuous control at FLUSH
     // cadence (not raw MIDI rate).
     this.setStatus({ lastEvent: describeFlush(payload) });
-    await this.dispatcher(payload);
+    await this.runDispatch(payload);
+  }
+
+  /** Record a runtime "key missing from the LOADED schema" error (P2-1). Merges
+   *  into the surfaced set (non-fatal, stays `connected`) only when NEW, so a
+   *  knob spam doesn't renotify. The Config-tab banner reads status.paramErrors,
+   *  so we surface through the SAME shape (controlId = the key). */
+  private noteRuntimeParamError(key: string): void {
+    if (this.runtimeParamErrors.has(key)) return;
+    this.runtimeParamErrors.add(key);
+    this.setStatus({
+      lastEvent: `${key} (not in engine schema — knob inert)`,
+      paramErrors: this.mergedParamErrors(),
+    });
+  }
+
+  /** Drop a key from the runtime error set once it appears in the schema (P2-1
+   *  auto-clear). Refreshes the surfaced set only when it actually changes. */
+  private clearRuntimeParamError(key: string): void {
+    if (!this.runtimeParamErrors.delete(key)) return;
+    this.setStatus({ paramErrors: this.mergedParamErrors() });
+  }
+
+  /** Combine the connect-time profile param errors (validateProfileParams) with
+   *  the runtime "vanished from schema" keys into one aggregate for the status.
+   *  undefined when empty (keeps the Config-tab banner hidden). */
+  private mergedParamErrors(): ParamKeyError[] | undefined {
+    const runtime = [...this.runtimeParamErrors].map((key) => ({ controlId: key, key }));
+    const all = [...(this.profileParamErrors ?? []), ...runtime];
+    return all.length ? all : undefined;
   }
 
   /** Forget the optimistic anchor for a control (on inert/dropped flush, so the
@@ -866,7 +1035,11 @@ class ControllerRuntime {
     // pattern doesn't declare it, the fader is inert here — loud silence.
     const exp = focused.exports.find((e) => e.name === binding.target.parameter);
     const cap = controlRefFromEvent(decoded);
-    const value = scaleMidiToRange(cap ? cap.value : 0, binding.range);
+    // P3-3: clamp the learned write to the unit interval like the delta/reset
+    // paths do. `binding.range` can exceed [0, 1] (the engine allows ±4), and a
+    // localParam export is a unit value — writing an unclamped scaled value was
+    // the one write path that skipped clampUnit.
+    const value = clampUnit(scaleMidiToRange(cap ? cap.value : 0, binding.range));
     if (!exp) {
       // The binding matched but its param isn't on the focused pattern —
       // LOUD SILENCE: the fader does nothing (no write) but is still owned by
@@ -961,7 +1134,10 @@ class ControllerRuntime {
     if (!L?.playlist) return;
     const entry = L.playlist.entries[(this.windowCursor.get(layer) ?? 0) + slot];
     if (!entry) return; // pad past the end of the playlist — no-op
-    void this.opts.api.setChannelPlaylistEntry(L.role, L.id, entry.id);
+    // Direct api call (not a ResolvedAction), but its result is surfaced through
+    // the same fail-loud path (P2-5) so a failed entry select isn't silent.
+    void this.opts.api.setChannelPlaylistEntry(L.role, L.id, entry.id)
+      .then((r) => this.surfaceApiResult('playlistWindowSelect', r));
   }
 
   /** Recompute LED diffs against the current snapshot and send them. */
@@ -1006,14 +1182,48 @@ class ControllerRuntime {
       // the display can never disagree with the gate.
       syncOwnedKeys: snap.syncOwnedKeys ?? EMPTY_SYNC_OWNED_KEYS,
     };
-    const { messages, next } = projectLeds(this.profile, projState, this.ledState, this.context);
+    let messages: number[][];
+    let next: LedState;
+    try {
+      ({ messages, next } = projectLeds(this.profile, projState, this.ledState, this.context));
+    } catch (err) {
+      // Same wiring-bug guard as onMessage: an unknown context must fail loud as
+      // a red chip, not crash the LED projection loop. Other errors propagate.
+      if (err instanceof UnknownContextError) {
+        this.setStatus({ kind: 'error', error: err.message });
+        return;
+      }
+      throw err;
+    }
     this.ledState = next;
+    // A failed LED write must never break the dispatch path (so we still swallow
+    // the throw), but it must not be SILENT either (LED-send fail-loud): count
+    // failures and surface a NON-STICKY warning after FAILURE_WARN_THRESHOLD so a
+    // dead LED strip / lost destination endpoint is visible. Any clean batch
+    // clears it. Only the FIRST throw of a batch is captured for the reason.
+    let ledFailures = 0;
+    let firstReason = '';
     for (const msg of messages) {
       try {
         this.transport.send(msg);
-      } catch {
-        // A failed LED write must never break the dispatch path.
+      } catch (err) {
+        ledFailures += 1;
+        if (firstReason === '') firstReason = err instanceof Error ? err.message : String(err);
       }
+    }
+    if (ledFailures > 0) {
+      // Count FAILED MESSAGES, not calls — LED diffing means only the first full
+      // repaint of a dead strip carries messages (later identical repaints send
+      // nothing), so a per-call counter would never escalate. A dead strip's
+      // first repaint fails many messages at once → crosses the threshold.
+      this.ledFailStreak += ledFailures;
+      if (this.ledFailStreak >= FAILURE_WARN_THRESHOLD) {
+        this.setStatus({ warning: `LED feedback failing (${firstReason}) — the controller's lights may be dark.` });
+      }
+    } else if (messages.length > 0 && this.ledFailStreak !== 0) {
+      // A clean repaint (messages that all sent) after a failing run clears it.
+      this.ledFailStreak = 0;
+      this.setStatus({ warning: undefined });
     }
   }
 

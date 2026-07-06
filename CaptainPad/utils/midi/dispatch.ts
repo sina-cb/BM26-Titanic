@@ -50,66 +50,80 @@ export interface MidiDispatchContext {
   getColorPalette(index: number): { c1: number; c2: number } | null;
 }
 
-export type MidiDispatcher = (resolved: ResolvedAction) => Promise<void>;
+// Every dispatch RETURNS the api's MidiApiResult so the runtime can surface a
+// failed engine call (fail-loud, codex P0): a knob that silently does nothing
+// after an engine restart / deleted entry (404) is the exact anti-pattern this
+// layer exists to prevent. A deliberate no-op (an empty pad, an absent layer)
+// is a SUCCESS (`OK`) — nothing was meant to happen, so nothing failed.
+export type MidiDispatcher = (resolved: ResolvedAction) => Promise<MidiApiResult>;
+
+/** A deliberate no-op (empty pad / absent layer / missing palette) succeeds:
+ *  the mapping resolved but there was nothing behind it, which is loud silence
+ *  by design, not a dispatch failure. */
+const OK: MidiApiResult = { ok: true };
 
 export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext): MidiDispatcher {
-  return async (resolved: ResolvedAction): Promise<void> => {
+  // Optimistic blackout intent (#P3-1): the GEM blackout snapshot lags the send
+  // by an echo window, so a panic double-tap inside that window would read the
+  // SAME stale `getBlackout()` twice and send `true` twice — sticking ON. We
+  // track the last state we SENT and toggle off THAT while the snapshot hasn't
+  // caught up yet, so a rapid re-tap actually inverts. null = no send in flight
+  // (trust the snapshot); cleared implicitly once the snapshot matches our send.
+  let lastBlackoutSent: boolean | null = null;
+
+  return async (resolved: ResolvedAction): Promise<MidiApiResult> => {
     switch (resolved.kind) {
       case 'paramCenter':
-        await api.updateParamCenter({ [resolved.key]: resolved.value });
-        return;
+        return api.updateParamCenter({ [resolved.key]: resolved.value });
       case 'master':
-        await api.updateMixerMaster(resolved.value);
-        return;
+        return api.updateMixerMaster(resolved.value);
       case 'sectionBrightness':
-        await api.setSectionBrightness(resolved.sectionId, resolved.value);
-        return;
+        return api.setSectionBrightness(resolved.sectionId, resolved.value);
       case 'pattern':
-        await api.setActivePattern(resolved.name);
-        return;
+        return api.setActivePattern(resolved.name);
       case 'patternBank': {
         const name = ctx.resolvePatternForBank(resolved.bank, resolved.index);
-        if (name === null) return; // no pattern behind this pad — loud silence
-        await api.setActivePattern(name);
-        return;
+        if (name === null) return OK; // no pattern behind this pad — loud silence
+        return api.setActivePattern(name);
       }
-      case 'blackoutToggle':
+      case 'blackoutToggle': {
         // The unified GEM e-stop ("stop all clips → blackout"): blacks out
-        // pixels AND clears active macros/global effects.
-        await api.setGlobalEffectBlackout(!ctx.getBlackout());
-        return;
+        // pixels AND clears active macros/global effects. Base the toggle on the
+        // last state we SENT while the snapshot echo is still catching up to it
+        // (#P3-1), otherwise on the live snapshot; a matching snapshot means the
+        // echo landed, so we trust it again.
+        const snap = ctx.getBlackout();
+        const base = lastBlackoutSent !== null && lastBlackoutSent !== snap ? lastBlackoutSent : snap;
+        const next = !base;
+        lastBlackoutSent = next;
+        return api.setGlobalEffectBlackout(next);
+      }
       case 'globalEffect':
-        await api.setGlobalEffect(resolved.effect, !ctx.getGlobalEffectState(resolved.effect));
-        return;
+        return api.setGlobalEffect(resolved.effect, !ctx.getGlobalEffectState(resolved.effect));
       case 'groupFixedColor':
-        await api.setGroupFixedColor(resolved.group, resolved.color, resolved.brightness);
-        return;
+        return api.setGroupFixedColor(resolved.group, resolved.color, resolved.brightness);
       case 'mixerLayerFader': {
         const L = ctx.getLayer(resolved.layer);
-        if (!L) return; // layer doesn't exist — inert
-        if (L.role === 'deck') await api.updateDeckChannel({ fader: resolved.value });
-        else await api.updateMixerChannel(L.id, { fader: resolved.value });
-        return;
+        if (!L) return OK; // layer doesn't exist — inert
+        if (L.role === 'deck') return api.updateDeckChannel({ fader: resolved.value });
+        return api.updateMixerChannel(L.id, { fader: resolved.value });
       }
       case 'globalEffectSlot':
-        await api.dispatchGlobalEffectSlotAction(resolved.slot, 'toggle');
-        return;
+        return api.dispatchGlobalEffectSlotAction(resolved.slot, 'toggle');
       case 'colorPalettePair': {
         const p = ctx.getColorPalette(resolved.palette);
-        if (!p) return; // no palette behind this pad — loud silence
-        await api.updateParamCenter({
+        if (!p) return OK; // no palette behind this pad — loud silence
+        return api.updateParamCenter({
           colorPalette1: { h: p.c1, s: 1, v: 1 },
           colorPalette2: { h: p.c2, s: 1, v: 1 },
         });
-        return;
       }
       case 'localParam':
         // A MIDI-learned local-param STATIC write. Route to the deck singleton
         // or the addressed mixer overlay channel. The render loop's audio
         // modulators stay layered on top of this base value untouched.
-        if (resolved.role === 'deck') await api.setDeckChannelControl(resolved.exportId, resolved.value);
-        else await api.setMixerChannelControl(resolved.channelId, resolved.exportId, resolved.value);
-        return;
+        if (resolved.role === 'deck') return api.setDeckChannelControl(resolved.exportId, resolved.value);
+        return api.setMixerChannelControl(resolved.channelId, resolved.exportId, resolved.value);
       case 'focusChannel':
       case 'playlistScroll':
       case 'playlistWindowSelect':

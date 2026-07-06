@@ -128,6 +128,22 @@ export class LearnController {
     cb({ conflict: controlId });
     return true;
   }
+
+  /** Called by a runtime while armed to REJECT a learnable-looking control that
+   *  must not be learned for a reason OTHER than a profile-action conflict — an
+   *  MFT endless encoder (its "value" is a relative delta code, so absolute
+   *  scaling would pin the param to ~0.5 jitter), a CC-hold push, or a control
+   *  already bound to another learned param on the focused pattern. Same
+   *  fire-once-then-disarm shape as reportConflict; `reason` is the human message
+   *  surfaced through the SAME `{ conflict }` channel (LearnResult is unchanged).
+   *  Returns false when not armed. */
+  reportReject(reason: string): boolean {
+    const cb = this.cb;
+    if (!cb) return false;
+    this.cb = null;
+    cb({ conflict: reason });
+    return true;
+  }
 }
 
 // ── Soft-takeover ("pickup") ────────────────────────────────────────────────
