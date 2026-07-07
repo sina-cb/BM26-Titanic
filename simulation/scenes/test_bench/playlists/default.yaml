@@ -704,3 +704,99 @@ entries:
           - 0.35
         curve: linear
     notes: null
+  - id: e_default_41_reaction_diffusion
+    pattern: 41_reaction_diffusion
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_42_phyllotaxis_spiral
+    pattern: 42_phyllotaxis_spiral
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_43_golden_hour_pulse
+    pattern: 43_golden_hour_pulse
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_44_biolume_swell
+    pattern: 44_biolume_swell
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_45_manta_drift
+    pattern: 45_manta_drift
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_46_abyssal_fronds
+    pattern: 46_abyssal_fronds
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_47_quasicrystal_dunes
+    pattern: 47_quasicrystal_dunes
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_48_heartbeat_drive
+    pattern: 48_heartbeat_drive
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_49_cylon_crush
+    pattern: 49_cylon_crush
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_50_phase_cathedral_hd
+    pattern: 50_phase_cathedral_hd
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_51_confetti_cyclone
+    pattern: 51_confetti_cyclone
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_52_silk_ribbons
+    pattern: 52_silk_ribbons
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_53_neon_elevator_hd
+    pattern: 53_neon_elevator_hd
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_54_murmuration_storm
+    pattern: 54_murmuration_storm
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_57_ink_diffuse
+    pattern: 57_ink_diffuse
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_default_58_lighthouse_solo
+    pattern: 58_lighthouse_solo
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
