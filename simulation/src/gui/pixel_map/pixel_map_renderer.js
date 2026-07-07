@@ -278,8 +278,9 @@ export class PixelMapRenderer {
       const entry = list[p.gi];
       if (!entry) continue;
       const [r, g, b] = entryDisplayRgb(entry, patchesActive, showUnpatchedRed);
-      if (r + g + b < 0.02) continue;
-      ctx.fillStyle = _rgb(r, g, b);
+      if (r + g + b < 0.006) continue;
+      const [pr, pg, pb] = _previewBrighten(r, g, b);
+      ctx.fillStyle = _rgb(pr, pg, pb);
       this._pathShape(ctx, p.cx, p.cy, p.sizeX, p.sizeY, p.shape, p.rot);
       ctx.fill();
     }
@@ -309,6 +310,19 @@ export class PixelMapRenderer {
 
 function _rgb(r, g, b) {
   return `rgb(${(r * 255) | 0},${(g * 255) | 0},${(b * 255) | 0})`;
+}
+
+// Preview-only brightness lift for the 2D map (does NOT affect DMX/sACN output —
+// the fixtures still get the true color). A gamma on the pixel's VALUE (max
+// channel) lifts dim/dimmed lights so they read on-screen, while full brightness
+// stays essentially unchanged; scaling all channels by the same factor keeps hue
+// and saturation intact. e.g. 10% dimmed (0.10) → ~0.25 on screen; 100% → 100%.
+const PREVIEW_GAMMA = 0.6;
+function _previewBrighten(r, g, b) {
+  const v = Math.max(r, g, b);
+  if (v <= 0) return [r, g, b];
+  const s = Math.pow(v, PREVIEW_GAMMA) / v;   // = v^(GAMMA-1); ≥1, biggest when dim
+  return [Math.min(1, r * s), Math.min(1, g * s), Math.min(1, b * s)];
 }
 
 function _roundRect(ctx, x, y, w, h, r) {
