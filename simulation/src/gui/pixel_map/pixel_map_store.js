@@ -143,11 +143,14 @@ export function persistToParams() {
   params.pixelMap2d = pm;
 }
 
-/** Write current state to params + mark the scene dirty for autosave. */
+/** Write current state to params + persist. The 2D Pixel Map always auto-saves
+ *  its edits (force=true) so layout/size tweaks survive a reload even when the
+ *  scene's global "Auto-Save on Change" toggle is off — the map is a live tuning
+ *  surface and losing placements to a forgotten Save would be maddening. */
 export function markEdited() {
   persistToParams();
   if (window._setSceneDirty) window._setSceneDirty(true);
-  if (window.debounceAutoSave) window.debounceAutoSave();
+  if (window.debounceAutoSave) window.debounceAutoSave(true);
 }
 store.__markEdited = markEdited;
 

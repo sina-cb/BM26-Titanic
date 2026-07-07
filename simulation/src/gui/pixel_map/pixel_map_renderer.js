@@ -3,19 +3,17 @@
  *
  * Canvas 2D (not WebGL) on purpose: a second GL context would fight the main
  * THREE renderer (real context-loss risk under SwiftShader, see
- * see_the_world.md), and chunky pixel-art + exact gaps are easier in 2D. Glow
- * is a 'lighter' composite pass — NEVER ctx.shadowBlur (catastrophically slow
- * per-shape).
+ * see_the_world.md), and chunky pixel-art + exact gaps are easier in 2D.
  *
- * Design stance: an output monitor, not a toy. (1) Lit-pixel cores are 100%
- * color-true — no white/tint blended into the core. (2) All chrome is neutral
- * cool-gray hairlines. (3) Exactly one accent — the theme amber --primary —
- * used only for selection/edit affordances.
+ * Design stance: a plain, flat pixel map — solid color blocks, NO glow / bloom /
+ * halos / vignette / effects. (1) Lit-pixel fills are 100% color-true. (2) All
+ * chrome is neutral cool-gray hairlines. (3) Exactly one accent — the theme
+ * amber --primary — used only for selection/edit affordances.
  *
- * Two layers: a static offscreen canvas (background, vignette, grid, off-bezels,
+ * Two layers: a static offscreen canvas (flat background, grid, off-bezels,
  * hulls/handles — redrawn only on layout/mode/selection/view change) and the
- * visible canvas (static blit + lit pixel fills every frame). Everything is in
- * fixed "design space"; one setTransform letterboxes it into the DPR-scaled
+ * visible canvas (static blit + flat lit pixel fills every frame). Everything is
+ * in fixed "design space"; one setTransform letterboxes it into the DPR-scaled
  * backing store, so pan/zoom/resize are pure re-fits and never mutate layout.
  */
 
@@ -151,14 +149,8 @@ export class PixelMapRenderer {
     const W = this.static.width, H = this.static.height;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = BG;
+    ctx.fillStyle = BG;              // flat background — no vignette/effects
     ctx.fillRect(0, 0, W, H);
-    // Vignette — pure darkening (never contaminates pixel color).
-    const R = Math.hypot(W, H) / 2;
-    const vg = ctx.createRadialGradient(W / 2, H / 2, R * 0.55, W / 2, H / 2, R);
-    vg.addColorStop(0, 'rgba(0,0,0,0)');
-    vg.addColorStop(1, 'rgba(0,0,0,0.30)');
-    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
 
     this._applyTransform(ctx);
     const k = this._k;
@@ -279,47 +271,17 @@ export class PixelMapRenderer {
     }
 
     this._applyTransform(ctx);
-    const glow = this.mode === 'view';
 
-    const lit = [];
+    // Flat solid pixel blocks — true color, no glow/halo/specular. Off pixels
+    // are skipped so their dark bezel (drawn on the static layer) shows through.
     for (const p of this.pixels) {
       const entry = list[p.gi];
       if (!entry) continue;
       const [r, g, b] = entryDisplayRgb(entry, patchesActive, showUnpatchedRed);
-      const luma = 0.30 * r + 0.59 * g + 0.11 * b;
-      if (luma < 0.012) continue;
-      lit.push({ p, r, g, b, luma });
-    }
-
-    // Halo pass (view mode): round, luma-driven bloom — tight on bright pixels,
-    // near-nothing on dim ones (no milky low-level wash).
-    if (glow) {
-      ctx.globalCompositeOperation = 'lighter';
-      for (const L of lit) {
-        const d = Math.max(L.p.sizeX, L.p.sizeY) * (1.35 + 0.65 * L.luma);
-        ctx.globalAlpha = 0.08 + 0.14 * L.luma * L.luma;
-        ctx.fillStyle = _rgb(L.r, L.g, L.b);
-        ctx.beginPath();
-        ctx.arc(L.p.cx, L.p.cy, d / 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = 'source-over';
-    }
-
-    // Core pass: 100% color-true.
-    for (const L of lit) {
-      ctx.fillStyle = _rgb(L.r, L.g, L.b);
-      this._pathShape(ctx, L.p.cx, L.p.cy, L.p.sizeX, L.p.sizeY, L.p.shape, L.p.rot);
+      if (r + g + b < 0.02) continue;
+      ctx.fillStyle = _rgb(r, g, b);
+      this._pathShape(ctx, p.cx, p.cy, p.sizeX, p.sizeY, p.shape, p.rot);
       ctx.fill();
-      // Quiet glass wink — circles only; bars stay flat/exact.
-      if (L.p.shape === 'circle' && L.luma >= 0.35) {
-        const sm = Math.min(L.p.sizeX, L.p.sizeY);
-        ctx.fillStyle = 'rgba(255,255,255,0.12)';
-        ctx.beginPath();
-        ctx.arc(L.p.cx - sm * 0.20, L.p.cy - sm * 0.20, sm * 0.08, 0, Math.PI * 2);
-        ctx.fill();
-      }
     }
 
     // Marquee box-select overlay (dashed amber, faint fill).
