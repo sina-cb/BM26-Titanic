@@ -15,7 +15,7 @@
  *   http://localhost; any https:// origin is by definition a deployed static
  *   artifact with no backend reachable from the page.
  *
- * Per .agent/00_gol/00_codex.md P0: this is NOT a fallback. We are not
+ * Per .agent/codex.md P0: this is NOT a fallback. We are not
  * pretending a request succeeded, retrying silently, or substituting a
  * different transport. We are surfacing — once, at boot — that a feature
  * cannot exist in this hosting model and skipping it cleanly so the

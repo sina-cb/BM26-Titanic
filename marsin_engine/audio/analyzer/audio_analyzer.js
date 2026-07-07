@@ -2,12 +2,13 @@
  * AudioAnalyzer — FFT, band energy + kick detection. PURE DATA SOURCE.
  *
  * Reads Int16 PCM frames via `pushSamples(int16)` and emits per-hop
- * analysis results to `onAnalysis({ low, mid, high, kick, flux })` —
+ * analysis results to `onAnalysis({ low, mid, high, kick, flux, … })` —
  * RAW post-envelope band values in [0, 1] plus half-wave-rectified
- * spectral flux (`flux`). No per-band gain, no chain
+ * spectral flux (`flux`), plus the additive dom-freq / onset / sub /
+ * chroma fields (see the constructor JSDoc). No per-band gain, no chain
  * processing here. The engine wraps each value through the per-signal
- * post-processing chain (`lib/signal_post_processor.js`, docs/29) in
- * its `onAnalysis` callback before writing to CPC.
+ * post-processing chain (`audio/postproc/signal_post_processor.js`, docs/29)
+ * in its `onAnalysis` callback before writing to CPC.
  *
  * Architectural rationale (operator brief, 2026-05-26 + docs/29):
  *   - The analyzer is the canonical "raw mic" source. Per-band gain,
@@ -36,7 +37,7 @@
  *     convention): fast attack so peaks register, slow release so
  *     visuals don't flicker. Configurable via `bands.attackMs` /
  *     `bands.releaseMs`. Shared across all three bands — one
- *     envelope primitive parameterized once, per .agent/00_gol/00
+ *     envelope primitive parameterized once, per .agent/codex.md
  *     "smallest patch that works".
  *   - Per-band noise gate (`bands.noiseGate`): post-compression
  *     floor, below which the band reads as 0. Compensates for
@@ -71,11 +72,18 @@ import FFT from 'fft.js';
 import { DominantFreqTracker } from './dominant_freq_tracker.js';
 
 // Dominant-frequency tracker tuning — validated offline on the EDM corpus
-// (report 202606/..._dominant_freq_tracker.md). EMA smoothing beat the Kalman
-// path (which converges to a fixed-gain EMA), so useKalman:false. energyGain
-// matches PRE_CLAMP_GAIN so dom energy shares the bands' [0,1] softCompress
-// scale. Works at fftSize 1024; bump the analyzer FFT to 2048 (config) to
-// resolve sub-bass partials below ~200 Hz more cleanly.
+// (report 202606/..._dominant_freq_tracker.md). The shipped path uses the
+// scalar Kalman smoother (useKalman:true) tuned for stability (low process
+// noise + high measurement noise → the filter trusts its model and glides,
+// killing the bin-to-bin freq jitter). energyGain matches PRE_CLAMP_GAIN so dom
+// energy shares the bands' [0,1] softCompress scale. Runs at the config FFT
+// (2048 as of 2026-06-20, ~21.5 Hz/bin): parabolic interpolation + the cluster
+// centroid push sub-bin error well below one bin — measured mean |dom1-true|
+// 0.66 Hz on pure bass roots (vs 4.46 Hz at the old 1024), so bass-root pitch
+// classes are now correct (8/8 vs 5/8 on a known-pitch sweep, report 20260620_14).
+// The params are FFT-size-agnostic — every threshold here is in Hz, and the
+// Kalman is per-HOP tuned (hop rate ~86 Hz is unchanged), so the 2048 bump needs
+// no retune of this block.
 const DOM_FREQ_PARAMS = Object.freeze({
   numTracks: 2, numPeaks: 8, relFloor: 0.06, absFloor: 1e-4,
   maxJumpHz: 90, minFreqHz: 30, maxFreqHz: 8000, energyGain: 8.0,
@@ -98,6 +106,19 @@ const DOM_FREQ_PARAMS = Object.freeze({
 // produces a ~0.5 band value, which is what an operator expects to
 // see on the meter.
 const PRE_CLAMP_GAIN = 8.0;
+
+// Hops used to seed the kick EMA before it can fire, so a single loud first
+// frame doesn't trigger a phantom kick before "normal" has any context.
+const KICK_WARMUP_HOPS = 50;
+
+// ── CHROMA band (harmonic/timbre feature, report 20260620_30) ───────────────
+// Fundamental-pitch window for the 12-bin pitch-class chroma. Lower bound above
+// the kick/sub-bass thump (octave-ambiguous, would saturate one class); upper
+// bound below the cymbal/air hiss (unpitched HF noise). 65 Hz ≈ C2, 2000 Hz ≈
+// B6 — covers bass roots, chords, and lead/vocal fundamentals on dance music.
+const CHROMA_LO_HZ = 65;
+const CHROMA_HI_HZ = 2000;
+const N_CHROMA = 12;
 
 function softCompress(x) {
   // Maps [0, +∞) → [0, 1). Identity-ish near zero, asymptotes at 1.
@@ -132,12 +153,21 @@ export class AudioAnalyzer {
    * @param {number} [opts.hopSize]     — defaults to fftSize/2
    * @param {object} opts.bands         — { lowMaxHz, midMaxHz, attackMs, releaseMs, noiseGate }
    * @param {object} opts.kick          — { minHz, maxHz, threshold, refractoryMs, decayMs }
-   * @param {(r: {low, mid, high, kick, flux}) => void} opts.onAnalysis
+   * @param {object} [opts.sub]         — { minHz, maxHz } narrow sub-bass window
+   *        (~30–60 Hz, distinct from the kick window). Optional: absent → the
+   *        sub-band outputs are emitted as 0 (the feature is off, NOT a silent
+   *        fallback for the existing bands). Present → validated like kick.
+   * @param {(r: object) => void} opts.onAnalysis
    *        Each callback receives the RAW post-envelope band values
-   *        in [0, 1], plus `flux` (half-wave-rectified spectral flux,
-   *        same scale). The engine wraps the bands/kick through the
-   *        per-signal post-processing chain (lib/signal_post_processor.js)
-   *        before writing them to CPC.
+   *        `{ low, mid, high, kick, flux }` in [0, 1] (flux =
+   *        half-wave-rectified spectral flux, same scale), PLUS the additive
+   *        fields the analyzer also emits each hop: dominant-frequency tracks
+   *        (`domFreq1/2`, `domEnergy1/2`, `domLo1/Hi1`, `domLo2/Hi2`), per-band
+   *        onsets (`onsetLow/Mid/High`), the sub-bass `micSub`, and the chroma
+   *        scalars (`tonalStability`, `chromaFlux`, `chromaTilt`). See the emit
+   *        block in `_process()` for the authoritative shape. The engine wraps
+   *        the bands/kick through the per-signal post-processing chain
+   *        (audio/postproc/signal_post_processor.js) before writing them to CPC.
    * @param {() => number} [opts.nowFn] — DI hook for tests (default: Date.now)
    */
   constructor(opts) {
@@ -196,13 +226,22 @@ export class AudioAnalyzer {
     // hop fills it (first flux is 0 — no prior spectrum to diff against).
     this._prevMag = null;
 
+    // ── CHROMA state (additive harmonic/timbre feature) ─────────────────────
+    // `_chroma` is the current 12-bin pitch-class energy vector (reused, no
+    // per-hop alloc); `_prevChromaNorm` holds the previous hop's L1-normalized
+    // chroma so each hop can compute chromaFlux (harmonic-change rate). Both
+    // are filled lazily on the first hop. The bin→class map is built in
+    // reconfigure (`_chromaBinClass`).
+    this._chroma = new Float64Array(N_CHROMA);
+    this._prevChromaNorm = null;
+
     // Kick state. EMA is "what does the kick band typically look
     // like right now"; we compare the instant read against it. To
     // avoid a phantom kick at boot before EMA has settled, we seed
     // it from the first 50 hops' running mean.
     //
     // Asymmetric attack/release + slow-trailing ceiling clamp
-    // (hot-fix per .agent/02_reports/202605/20260526_1_audio_analysis_report.md
+    // (hot-fix per .agent/reports/202605/20260526_1_audio_analysis_report.md
     // Concern 5, "BLOCKER for the playa"):
     //
     //   Symptom — under sustained loud kick-band content (e.g. a
@@ -257,7 +296,7 @@ export class AudioAnalyzer {
     this._srcLp = 0;
     this._srcSmoothAlpha = 0;
 
-    this.reconfigure({ bands: opts.bands, kick: opts.kick });
+    this.reconfigure({ bands: opts.bands, kick: opts.kick, sub: opts.sub });
   }
 
   /**
@@ -272,6 +311,9 @@ export class AudioAnalyzer {
     const next = {
       bands: { ...(this.bands || {}), ...(updates.bands || {}) },
       kick:  { ...(this.kick  || {}), ...(updates.kick  || {}) },
+      // `sub` is OPTIONAL (the chest-hit feature). Merge whatever is present;
+      // an empty {} means "feature off" (no window) — handled below.
+      sub:   { ...(this.sub   || {}), ...(updates.sub   || {}) },
     };
     const nyquist = this.sampleRate / 2;
     const lowMaxHz = +next.bands.lowMaxHz;
@@ -306,6 +348,16 @@ export class AudioAnalyzer {
         throw new RangeError(`bands.inputGain must be in [0, 64]; got ${ig}`);
       }
     }
+    // Per-band noise gates (on-playa hardening). Each is OPTIONAL — an absent
+    // band-gate uses the global noiseGate (validated above). When present it
+    // must be a valid gate in [0, 1) (codex P0: validate explicitly, no silent
+    // clamp of a malformed value).
+    for (const fld of ['lowGate', 'midGate', 'highGate']) {
+      if (next.bands[fld] !== undefined) {
+        const v = +next.bands[fld];
+        if (!(v >= 0 && v < 1)) throw new RangeError(`bands.${fld} must be in [0, 1); got ${v}`);
+      }
+    }
 
     const kMin = +next.kick.minHz, kMax = +next.kick.maxHz;
     if (!(kMin > 0 && kMin < kMax && kMax <= nyquist)) {
@@ -313,29 +365,102 @@ export class AudioAnalyzer {
         `kick band invalid: require 0 < minHz (${kMin}) < maxHz (${kMax}) <= nyquist (${nyquist})`,
       );
     }
-    if (!(next.kick.threshold > 1)) {
-      throw new RangeError(`kick.threshold must be > 1; got ${next.kick.threshold}`);
+    // Finite bounds (codex P0 fail-loud): Infinity passes a bare `> 1` / `>= 0`
+    // guard and then silently breaks the detector (decayMs=Infinity → the kick
+    // never decays). The PATCH validator already rejects non-finite, this is the
+    // analyzer's defensive re-check on the boot path.
+    if (!(Number.isFinite(next.kick.threshold) && next.kick.threshold > 1)) {
+      throw new RangeError(`kick.threshold must be a finite number > 1; got ${next.kick.threshold}`);
     }
-    if (!(next.kick.refractoryMs >= 0)) {
-      throw new RangeError(`kick.refractoryMs must be >= 0`);
+    if (!(Number.isFinite(next.kick.refractoryMs) && next.kick.refractoryMs >= 0)) {
+      throw new RangeError(`kick.refractoryMs must be a finite number >= 0; got ${next.kick.refractoryMs}`);
     }
-    if (!(next.kick.decayMs > 0)) {
-      throw new RangeError(`kick.decayMs must be > 0`);
+    if (!(Number.isFinite(next.kick.decayMs) && next.kick.decayMs > 0)) {
+      throw new RangeError(`kick.decayMs must be a finite number > 0; got ${next.kick.decayMs}`);
+    }
+
+    // Sub-bass "chest hit" window (~30–60 Hz), distinct from the kick window.
+    // OPTIONAL: when neither minHz nor maxHz is supplied the feature is OFF and
+    // `_binSub` is null (the analyzer emits micSub:0). This is NOT a silent
+    // fallback for an existing signal — it's an opt-in additive output; when
+    // present BOTH edges must be valid (codex P0: validate explicitly).
+    let subBin = null;
+    if (next.sub && (next.sub.minHz !== undefined || next.sub.maxHz !== undefined)) {
+      const sMin = +next.sub.minHz, sMax = +next.sub.maxHz;
+      if (!(sMin > 0 && sMin < sMax && sMax <= nyquist)) {
+        throw new RangeError(
+          `sub band invalid: require 0 < minHz (${sMin}) < maxHz (${sMax}) <= nyquist (${nyquist})`,
+        );
+      }
+      // At fftSize 2048 (~21.5 Hz/bin, 44.1 kHz) a 30–60 Hz window resolves to
+      // bins 1–2 (≈21.5–64.6 Hz) — a real ≥2-bin window covering the body-felt
+      // sub fundamental below the kick, no longer a single bin overlapping it.
+      // We still force a ≥1-bin window starting at bin 1 (skip DC) so the sub
+      // energy is always well-defined for any (smaller) fftSize an operator
+      // might PATCH. NOT a fallback — it's the bin-quantization floor.
+      const b0 = Math.max(1, hzToBin(sMin, this.sampleRate, this.fftSize));
+      let b1 = hzToBin(sMax, this.sampleRate, this.fftSize);
+      if (b1 <= b0) b1 = b0 + 1;
+      subBin = [b0, b1];
     }
 
     this.bands = next.bands;
     this.kick  = next.kick;
+    this.sub   = next.sub;
+    this._binSub = subBin;
 
     // Source-stage smoothing: gentle one-pole LP on the PCM before the FFT
     // (denoise). bands.sourceSmoothHz = cutoff in Hz; 0 / absent / invalid = off.
     const fc = +next.bands.sourceSmoothHz;
     this._srcSmoothAlpha = (fc > 0 && fc < nyquist) ? (1 - Math.exp(-2 * Math.PI * fc / this.sampleRate)) : 0;
 
+    // Per-band noise gates, precomputed (the hot path reads scalars only). An
+    // absent per-band gate uses the global noiseGate, so a config that sets none
+    // is byte-identical to the legacy single-gate path. (report 20260621_4)
+    this._lowGate  = next.bands.lowGate  !== undefined ? +next.bands.lowGate  : noiseGate;
+    this._midGate  = next.bands.midGate  !== undefined ? +next.bands.midGate  : noiseGate;
+    this._highGate = next.bands.highGate !== undefined ? +next.bands.highGate : noiseGate;
+
     // Pre-compute bin ranges so the hot path doesn't multiply.
     this._binLow  = [hzToBin(20,         this.sampleRate, this.fftSize), hzToBin(lowMaxHz, this.sampleRate, this.fftSize)];
     this._binMid  = [hzToBin(lowMaxHz,   this.sampleRate, this.fftSize), hzToBin(midMaxHz, this.sampleRate, this.fftSize)];
     this._binHigh = [hzToBin(midMaxHz,   this.sampleRate, this.fftSize), Math.floor(this.fftSize / 2)];
     this._binKick = [hzToBin(kMin,       this.sampleRate, this.fftSize), hzToBin(kMax,     this.sampleRate, this.fftSize)];
+
+    // ── CHROMA (12-bin pitch-class) bin→class map ───────────────────────────
+    // ADDITIVE harmonic/timbre feature (report 20260620_30). For each FFT bin
+    // whose centre frequency falls in a musical fundamental band we precompute
+    // its pitch class (0=C..11=B) so the hot loop just does one array index +
+    // accumulate — no per-hop log2/mod. The band is CHROMA_LO_HZ..CHROMA_HI_HZ:
+    // we skip sub-bass (octave-ambiguous, and the kick/bass thump would dominate
+    // a single class) and skip the HF hiss above ~2 kHz (mostly cymbal/air noise
+    // with no clear pitch). Bins outside the band get class -1 (ignored).
+    this._chromaBinClass = this._buildChromaMap();
+    // Bass/treble split for the chroma-band spectral tilt (~500 Hz, the
+    // low-mid hinge): bins below this are "bass" energy, at/above are "treble".
+    this._chromaSplitBin = hzToBin(500, this.sampleRate, this.fftSize);
+  }
+
+  /**
+   * @private Build a per-positive-bin pitch-class map (Int8Array, length
+   * fftSize/2). Bin k centre = k·sampleRate/fftSize. Bins in
+   * [CHROMA_LO_HZ, CHROMA_HI_HZ] → 0..11 (0=C), others → -1. Octave-invariant
+   * pitch class = round(12·log2(f/C0)) mod 12, C0 = 16.3516 Hz.
+   */
+  _buildChromaMap() {
+    const half = this.fftSize >> 1;
+    const map = new Int8Array(half).fill(-1);
+    const C0 = 16.3515978313; // MIDI note 0 (C-1), the pitch-class reference
+    const binHz = this.sampleRate / this.fftSize;
+    for (let k = 1; k < half; k++) {
+      const hz = k * binHz;
+      if (hz < CHROMA_LO_HZ || hz > CHROMA_HI_HZ) continue;
+      const semis = Math.round(12 * Math.log2(hz / C0));
+      let pc = semis % 12;
+      if (pc < 0) pc += 12;
+      map[k] = pc;
+    }
+    return map;
   }
 
   /** Push a chunk of Int16 mono samples; emits analyses as hops fill. */
@@ -425,6 +550,8 @@ export class AudioAnalyzer {
     this._kickValue = 0;
     this._lastKickAt = -Infinity;
     this._prevMag = null;
+    this._chroma.fill(0);
+    this._prevChromaNorm = null;
     this._srcLp = 0;
     if (this._domTracker) this._domTracker.reset();
   }
@@ -452,6 +579,10 @@ export class AudioAnalyzer {
     const midE  = this._bandEnergy(out, this._binMid);
     const highE = this._bandEnergy(out, this._binHigh);
     const kickE = this._bandEnergy(out, this._binKick);
+    // Sub-bass "chest hit" energy — narrow window (~30–60 Hz), distinct from the
+    // kick band. ADDITIVE: reuses the same _bandEnergy sum-of-magnitudes; null
+    // window (feature off) → 0. (Same softCompress(PRE_CLAMP_GAIN·E) scale.)
+    const subE  = this._binSub ? this._bandEnergy(out, this._binSub) : 0;
 
     // Half-wave-rectified spectral flux (SuperFlux-lite — Böck & Widmer
     // 2013; research memo §A2). One pass over the positive-frequency
@@ -463,16 +594,98 @@ export class AudioAnalyzer {
     const halfBins = this.fftSize >> 1;
     if (this._prevMag === null) this._prevMag = new Float64Array(halfBins);
     const prevMag = this._prevMag;
-    let fluxE = 0;
+    // PER-BAND ONSET (spatial-chase trigger): the SAME half-wave-rectified
+    // spectral-flux accumulation the global `fluxE` already does, RESTRICTED to
+    // the LOW / MID / HIGH bin ranges. Each band's rising-energy-only flux is a
+    // drum-kit-following onset strength (kick→LOW, snare/mid→MID, hats→HIGH).
+    // Computed in the SAME single pass — additive, ~0 extra cost. The five
+    // existing outputs (low/mid/high/kick/flux) stay byte-identical because the
+    // global `fluxE` sum and `prevMag` updates are unchanged. (Böck & Widmer
+    // 2013 SuperFlux-lite, restricted to a band.)
+    const [loL, loH] = this._binLow;
+    const [miL, miH] = this._binMid;
+    const [hiL, hiH] = this._binHigh;
+    // CHROMA accumulation (additive harmonic/timbre feature): zero the reused
+    // 12-bin vector, then fold each in-band bin's magnitude into its pitch
+    // class in the SAME single pass (one Int8Array lookup + add per bin). The
+    // five existing outputs stay byte-identical (chroma reads `mag`, writes
+    // only `_chroma`). `chromaTreble` / `chromaBass` sum the in-band magnitude
+    // split at CHROMA_SPLIT_BIN for a level-robust spectral-tilt timbre.
+    const chroma = this._chroma;
+    chroma.fill(0);
+    const binClass = this._chromaBinClass;
+    let chromaBassE = 0, chromaTrebleE = 0;
+    const splitBin = this._chromaSplitBin;
+    let fluxE = 0, onLowE = 0, onMidE = 0, onHighE = 0;
     for (let k = 0; k < halfBins; k++) {
       const re = out[k * 2];
       const im = out[k * 2 + 1];
-      const mag = Math.hypot(re, im);
+      // sqrt(re²+im²) rather than Math.hypot: identical result for finite,
+      // non-overflowing magnitudes (FFT bins here are well within float range,
+      // so the overflow-safe scaling Math.hypot pays for is never exercised)
+      // but ~2.8× faster — this is the per-hop hot loop over every bin.
+      const mag = Math.sqrt(re * re + im * im);
       const diff = mag - prevMag[k];
-      if (diff > 0) fluxE += diff;
+      if (diff > 0) {
+        fluxE += diff;
+        if (k >= loL && k < loH) onLowE += diff;
+        else if (k >= miL && k < miH) onMidE += diff;
+        else if (k >= hiL && k < hiH) onHighE += diff;
+      }
+      const pc = binClass[k];
+      if (pc >= 0) {
+        chroma[pc] += mag;
+        if (k < splitBin) chromaBassE += mag; else chromaTrebleE += mag;
+      }
       prevMag[k] = mag;
     }
-    fluxE /= this.fftSize;
+    fluxE   /= this.fftSize;
+    onLowE  /= this.fftSize;
+    onMidE  /= this.fftSize;
+    onHighE /= this.fftSize;
+
+    // ── CHROMA-derived scalar features (harmonic/timbre axis) ───────────────
+    // All three are level-robust (built on the L1-NORMALIZED chroma or a ratio),
+    // so loudness doesn't move them — they characterize harmonic CONTENT.
+    //
+    //   tonalStability — concentration of the normalized chroma. A clear chord/
+    //     bassline puts most energy in a few classes (high concentration → high
+    //     stability); an atonal/percussive wash spreads flat (low). Measured as
+    //     1 − normalizedEntropy(chroma): 1 = a single pitch class, 0 = perfectly
+    //     flat across all 12.
+    //   chromaFlux — L1 distance between this hop's and the previous hop's
+    //     normalized chroma = harmonic-CHANGE rate. A harmonically static loop
+    //     (techno) barely moves; a chord-progressing melodic track moves a lot.
+    //   spectralTilt — treble/(bass+treble) of the in-CHROMA-band magnitude,
+    //     split at ~500 Hz. Brightness/timbre independent of absolute level.
+    let chromaSum = 0;
+    for (let i = 0; i < N_CHROMA; i++) chromaSum += chroma[i];
+    let tonalStability = 0, chromaFlux = 0;
+    if (this._prevChromaNorm === null) this._prevChromaNorm = new Float64Array(N_CHROMA);
+    const prevNorm = this._prevChromaNorm;
+    if (chromaSum > 1e-9) {
+      // Normalized-entropy → concentration. H = -Σ p·log p, max = log(12).
+      let h = 0;
+      for (let i = 0; i < N_CHROMA; i++) {
+        const p = chroma[i] / chromaSum;
+        if (p > 1e-12) h -= p * Math.log(p);
+        // chromaFlux: |p_now − p_prev|, accumulated; reuse prevNorm in place.
+        const d = p - prevNorm[i];
+        chromaFlux += d < 0 ? -d : d;
+        prevNorm[i] = p;
+      }
+      tonalStability = 1 - h / Math.log(N_CHROMA);
+      if (tonalStability < 0) tonalStability = 0;
+      // chromaFlux L1 over a probability vector lands in [0,2]; halve → [0,1].
+      chromaFlux *= 0.5;
+    } else {
+      // Silence / out-of-band: decay the previous norm toward 0 so the next
+      // onset's flux isn't measured against a stale chord. Not a fallback —
+      // there is genuinely no harmonic content this hop.
+      for (let i = 0; i < N_CHROMA; i++) prevNorm[i] = 0;
+    }
+    const chromaTilt = (chromaBassE + chromaTrebleE) > 1e-9
+      ? chromaTrebleE / (chromaBassE + chromaTrebleE) : 0;
 
     // Dominant-frequency tracking on THIS hop's magnitude spectrum — the flux
     // loop just refilled `prevMag` with it, so we reuse it (zero extra FFT,
@@ -488,25 +701,26 @@ export class AudioAnalyzer {
     // gives the classic VU/level-meter feel — snap up on peaks,
     // smooth fall on releases — without flickering. Same primitive
     // shared across all three bands (single helper, three calls)
-    // per .agent/00_gol/00 "smallest patch that works".
+    // per .agent/codex.md "smallest patch that works".
     //
     // The noise gate is applied to the post-compression value (in
     // [0, 1)), not the raw FFT energy: it's a perceptual floor for
     // "how visible is this band". Values above the gate are
     // rescaled so the operator's [0, 1] meter still uses the full
     // range above the gate (otherwise raising the gate would just
-    // dim the whole band).
+    // dim the whole band). Each band uses its own gate (this._lowGate /
+    // _midGate / _highGate), which defaults to the global noiseGate when the
+    // operator hasn't specialized that band — on a noisy venue the high band's
+    // gate can be lifted (its noise floor is higher) without dimming the lows.
     const frameMs = (this.hopSize * 1000) / this.sampleRate;
-    const gate = this.bands.noiseGate;
-    const gateScale = 1 - gate;
-    const applyGate = (v) => (v <= gate ? 0 : (v - gate) / gateScale);
+    const applyGate = (v, g) => (v <= g ? 0 : (v - g) / (1 - g));
     // INPUT GAIN is now applied at the SOURCE (to the PCM in pushSamples),
     // BEFORE the FFT, so it already scales lowE/midE/highE/kickE/fluxE here —
     // no per-band gain multiply needed (and the kick is no longer a special
     // case). Gain-on-PCM ≡ gain-on-band-energy for the bands (FFT linear).
-    const lowTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * lowE));
-    const midTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * midE));
-    const highTarget = applyGate(softCompress(PRE_CLAMP_GAIN * highE));
+    const lowTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * lowE),  this._lowGate);
+    const midTarget  = applyGate(softCompress(PRE_CLAMP_GAIN * midE),  this._midGate);
+    const highTarget = applyGate(softCompress(PRE_CLAMP_GAIN * highE), this._highGate);
     const attackAlpha  = 1 - Math.exp(-frameMs / this.bands.attackMs);
     const releaseAlpha = 1 - Math.exp(-frameMs / this.bands.releaseMs);
     const env = (prev, target) => {
@@ -537,7 +751,9 @@ export class AudioAnalyzer {
     // (`kickGated > 0`) stays as a SILENCE FLOOR, and the source-stage
     // smoothing + the operator's gain manage the amplified-noise-floor case.
     const kickLin   = PRE_CLAMP_GAIN * kickE;          // source-conditioned (gain applied pre-FFT)
-    const kickGated = applyGate(softCompress(kickLin)); // silence floor only
+    // Kick uses the GLOBAL noiseGate as its silence floor (not a per-band gate —
+    // the kick is its own window, and the per-band gates specialize low/mid/high).
+    const kickGated = applyGate(softCompress(kickLin), this.bands.noiseGate); // silence floor only
     if (this._kickEmaWarmedUp) {
       const alpha = kickLin > this._kickEma
         ? this._kickEmaAlphaUp     // slow attack — lag loud baselines
@@ -556,7 +772,7 @@ export class AudioAnalyzer {
       // Seed EMA with the running mean of the first warmup hops.
       this._kickEmaWarmupSum += kickLin;
       this._kickEmaWarmupHops++;
-      if (this._kickEmaWarmupHops >= 50) {
+      if (this._kickEmaWarmupHops >= KICK_WARMUP_HOPS) {
         const seed = this._kickEmaWarmupSum / this._kickEmaWarmupHops;
         this._kickEma = seed;
         this._kickEmaTrail = seed;
@@ -581,15 +797,6 @@ export class AudioAnalyzer {
       if (this._kickValue < 1e-3) this._kickValue = 0;
     }
 
-    // RAW (pre-gain) values: same envelope / compression / noise-gate
-    // path as the post-gain values, just BEFORE the operator gain is
-    // applied. Emitted alongside the gained values so engine.js can
-    // publish them to `*Raw` CPC mirrors (see param_center.js). Lets
-    // CaptainPad SIGNAL DIAGNOSTICS show raw vs post side-by-side; we
-    // can't derive raw client-side from `post / gain` because that
-    // can't recover clipped post=1.0 cases. Operator brief 2026-05-26
-    // "show raw + post" + scope clarification "RAW = pre-gain,
-    // pre-post-processing analyzer output".
     // Emit RAW post-envelope band values. The engine's onAnalysis
     // callback runs each through `signalPostProcessor.process()` before
     // writing to CPC (the chain is the new single source of truth for
@@ -604,6 +811,15 @@ export class AudioAnalyzer {
     // fields are byte-for-byte unchanged. SuperFlux-lite (Böck &
     // Widmer 2013; research memo §A2).
     const fluxOut = clamp01(softCompress(PRE_CLAMP_GAIN * fluxE));   // gain applied pre-FFT (source)
+    // Per-band onset strengths + sub-bass energy — same softCompress(PRE_CLAMP_GAIN·E)
+    // mapping as the bands/flux so they share the [0,1] scale. Additive outputs:
+    // the second-tier shapers (band_onsets.js / sub_bass.js) turn these into
+    // pulse CPC keys. micSub is RAW band energy (no envelope) so the shaper can
+    // do its own transient emphasis.
+    const onsetLowOut  = clamp01(softCompress(PRE_CLAMP_GAIN * onLowE));
+    const onsetMidOut  = clamp01(softCompress(PRE_CLAMP_GAIN * onMidE));
+    const onsetHighOut = clamp01(softCompress(PRE_CLAMP_GAIN * onHighE));
+    const subOut       = clamp01(softCompress(PRE_CLAMP_GAIN * subE));
 
     try {
       this._onAnalysis({
@@ -624,6 +840,22 @@ export class AudioAnalyzer {
         domEnergy2: dom2.energy,
         domLo2:     dom2.loHz,
         domHi2:     dom2.hiHz,
+        // Per-band onset strengths (raw rising-only spectral flux per band) +
+        // sub-bass energy. Additive — the engine publishes these to RAW CPC
+        // mirrors that the band_onsets/sub_bass shapers read each hop.
+        onsetLow:   onsetLowOut,
+        onsetMid:   onsetMidOut,
+        onsetHigh:  onsetHighOut,
+        micSub:     subOut,
+        // Chroma-derived harmonic/timbre scalars (report 20260620_30). Additive,
+        // level-robust, already in [0,1]. The genre classifier reads these to
+        // separate harmonically-static genres (techno) from chord-moving ones.
+        //   tonalStability — chroma concentration (1 = single pitch class)
+        //   chromaFlux      — harmonic-change rate (0 = static loop)
+        //   chromaTilt      — treble/(bass+treble) timbre brightness
+        tonalStability: clamp01(tonalStability),
+        chromaFlux:     clamp01(chromaFlux),
+        chromaTilt:     clamp01(chromaTilt),
       });
     } catch (e) {
       console.warn(`[AudioAnalyzer] onAnalysis threw: ${e && e.message}`);

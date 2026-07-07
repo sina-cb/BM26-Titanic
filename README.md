@@ -232,7 +232,7 @@ BM26-Titanic/
 ├── states/              # Persisted state files
 ├── docs/                # Design docs & technical architecture
 ├── archived/            # Deprecated modules (old JS backend, smart_router, etc.)
-└── .agent/              # Agent collaboration codex & reports
+└── .agent/              # Agent OS — codex, laws, ops, skills, roles, context, memory, plans, projects, reports
 ```
 
 ### `/simulation` — Interactive 3D Lighting Simulator

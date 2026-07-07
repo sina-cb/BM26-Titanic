@@ -87,11 +87,16 @@ const EXPECTED_TOPIC_BY_TYPE = {
   mixerTransitionRejected:     'control',
   globalEffectSlots:           'control',
   globalEffectMacroStatus:     'control',
+  // docs/39 §F-hue / §F-invert: global hue shifter knob + color-invert toggle.
+  globalHueShift:              'control',
+  globalInvert:                'control',
   playlistLibrary:             'control',
   playlistSaved:               'control',
   playlistDeleted:             'control',
   channelPlaylistData:         'control',
   playlistEntryCaptured:       'control',
+  // round-2 #10: mixer undo ring depth/top broadcast.
+  undoState:                   'control',
   paramRejected:               'control',
   audioStatus:                 'control',
   oscStats:                    'control',
@@ -100,6 +105,10 @@ const EXPECTED_TOPIC_BY_TYPE = {
   scheduledTasks:              'control',
   // docs/29: chain-editor reconcile rebroadcast after PUT/PATCH/reset.
   audioChainsChanged:          'control',
+  // Audio TUNING config rebroadcast (PATCH /audio/config + reset). Present in
+  // the engine table; was missing from this client pin (drift from the audio-
+  // config merge) — added so the snapshot mirrors lib/ws_topic_routing.js.
+  audioConfig:                 'control',
   // docs/30: sparse drop-instant event from the audio structure detector.
   dropFired:                   'control',
   // /ws/params — steady CPC

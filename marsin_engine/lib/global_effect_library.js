@@ -254,6 +254,28 @@ export const GLOBAL_EFFECT_LIBRARY = {
     apply: colorWashEffect.apply,
   },
 
+  // ── Global color Invert (docs/39 §F-invert) ──────────────────────
+  // Now an ASSIGNABLE slot effect (channels-optimization campaign,
+  // June 2026) instead of a dedicated fixed button. Routes through
+  // GlobalEffectsController.setInvert / controller.invert — see
+  // _isSlotActive / _dispatchResolved in global_effect_slot_manager.js.
+  // No tunable params; a single 'default' preset; toggle-only.
+  invert: {
+    id: 'invert',
+    name: 'Invert',
+    category: 'color',
+    behaviorTypes: ['toggle'],
+    singleton: true,
+    safetySensitive: false,
+    presets: {
+      default: {
+        label: 'Invert',
+        params: {},
+        defaultBehavior: 'toggle',
+      },
+    },
+  },
+
   feedbackTrails: {
     id: 'feedbackTrails',
     name: 'Feedback Trails / Ghost Trails',
@@ -452,6 +474,10 @@ export function validateParams(effectId, params = {}) {
     }
     case 'fogger': {
       // No tunable params; ignore any overrides.
+      break;
+    }
+    case 'invert': {
+      // No tunable params; ignore any overrides (toggle-only global).
       break;
     }
     default:

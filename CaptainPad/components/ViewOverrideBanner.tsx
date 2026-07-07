@@ -5,9 +5,20 @@ import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 import { shadow } from '@/styles/globalStyles';
 
 // ── ViewOverrideBanner ─────────────────────────────────────────────
-// Sticky warning banner that lights up whenever PortWatch (or any
-// other client) pins the engine's view to "deck" via the
-// /mixer/view-override endpoint.
+// Sticky RED warning banner reserved EXCLUSIVELY for the real PortWatch
+// app pinning the engine's view to "deck" via the /mixer/view-override
+// endpoint. It fires ONLY when the engine reports
+// `controlLock === 'portwatch'` — never for a timeline PLAN.
+//
+// Why the controlLock gate matters:
+//   The engine ALSO pins the deck for the timeline PLAN (a soft 'plan'
+//   lock). Both cases land as `override === 'deck'` on the wire, so
+//   keying this banner off `override` alone would light up the scary
+//   red "PORTWATCH" sign during every plan — which is the bug this
+//   component used to have. The yellow PlanLockBanner owns the 'plan'
+//   case; this red banner stays HIDDEN unless controlLock is the real
+//   PortWatch device. (PortWatch is a separate app that may be removed
+//   later, so its banner is deliberately narrowly scoped.)
 //
 // Why this exists:
 //   When PortWatch takes the deck override, the engine forces the
@@ -19,9 +30,10 @@ import { shadow } from '@/styles/globalStyles';
 //   actually doing on the rig.
 //
 // Behaviour:
-//   - Stays visible the entire time `override === "deck"`. Operators
-//     can dismiss the auto-navigation but the banner remains as a
-//     reminder.
+//   - Stays visible the entire time PortWatch holds the deck pin
+//     (`override === "deck" && controlLock === "portwatch"`).
+//     Operators can dismiss the auto-navigation but the banner
+//     remains as a reminder.
 //   - Auto-navigates to "/" (the Deck tab) ONCE per override-engage
 //     edge. We deliberately don't keep navigating away from later
 //     manual tab changes — that would turn the banner into a
@@ -35,6 +47,7 @@ import { shadow } from '@/styles/globalStyles';
 // every parsed message through that bus.
 export const ViewOverrideBanner: React.FC = () => {
   const [override, setOverride] = useState<string | null>(null);
+  const [controlLock, setControlLock] = useState<string | null>(null);
   const [savedView, setSavedView] = useState<string | null>(null);
   const wasActive = useRef(false);
   const pathname = usePathname();
@@ -45,19 +58,28 @@ export const ViewOverrideBanner: React.FC = () => {
     return engineEvents.subscribe((msg: EngineMessage) => {
       if (msg.type !== 'viewOverride') return;
       const next = (msg.override as string | null) ?? null;
+      const cl = (msg.controlLock as string | null) ?? null;
       const sv = (msg.savedView as string | null) ?? null;
       setOverride(next);
+      setControlLock(cl);
       setSavedView(sv);
     });
   }, []);
 
   useEffect(() => {
-    const isActive = override === 'deck';
+    // RED PortWatch banner ONLY for the real PortWatch device. A 'plan'
+    // (or any non-portwatch) deck-pin is owned by the yellow
+    // PlanLockBanner and must NOT light this up.
+    const isActive = override === 'deck' && controlLock === 'portwatch';
     Animated.timing(slide, {
       toValue: isActive ? 1 : 0,
       duration: 220,
       easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
+      // false: react-native-web has no native animation thread — the native
+      // driver silently no-ops the slide on web. Render is gated on the
+      // override/controlLock condition below (not the animation), so the
+      // banner still appears either way; this just makes it actually slide.
+      useNativeDriver: false,
     }).start();
 
     // Edge: just engaged — auto-route to the Deck tab so the
@@ -78,18 +100,18 @@ export const ViewOverrideBanner: React.FC = () => {
       }
     }
     wasActive.current = isActive;
-  }, [override, slide, pathname]);
+  }, [override, controlLock, slide, pathname]);
 
-  if (override !== 'deck') return null;
+  if (!(override === 'deck' && controlLock === 'portwatch')) return null;
 
   return (
     <Animated.View
       style={{
         pointerEvents: 'box-none',
         position: 'absolute',
-        top: 0,
-        left: 112,
-        right: 0,
+        top: 12,
+        right: 16,
+        maxWidth: 520,
         zIndex: 1000,
         transform: [
           {
@@ -104,10 +126,11 @@ export const ViewOverrideBanner: React.FC = () => {
       <View
         style={{
           backgroundColor: 'rgba(220, 38, 38, 0.96)',
-          borderBottomWidth: 2,
-          borderBottomColor: '#7f1d1d',
-          paddingHorizontal: 24,
-          paddingVertical: 14,
+          borderWidth: 2,
+          borderColor: '#7f1d1d',
+          borderRadius: 10,
+          paddingHorizontal: 18,
+          paddingVertical: 12,
           flexDirection: 'row',
           alignItems: 'center',
           gap: 12,

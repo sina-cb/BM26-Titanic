@@ -14,7 +14,7 @@
  * Exits cleanly on SIGINT. NOT a unit test — it's a real-network
  * harness, kept under `tests/` so the impl plan's Phase 8 live
  * validation has a single command to run. See
- * .agent/02_reports/202605/20260524_1_osc_impl.md §8.2.
+ * .agent/reports/202605/20260524_1_osc_impl.md §8.2.
  */
 
 import { ParamCenter } from '../lib/param_center.js';

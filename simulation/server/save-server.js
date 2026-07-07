@@ -53,7 +53,7 @@ function writeFileAtomic(targetPath, contents) {
 // The simulation client (main.js, pattern_editor.js) discovers the scene
 // and pattern lists by fetching these JSON files — same path in dev and
 // production (GitHub Pages). No localhost fetch, no hardcoded fallback
-// (see .agent/00_gol/00_codex.md P0). We regenerate them here after every
+// (see .agent/codex.md P0). We regenerate them here after every
 // mutation so the dev experience stays "live" without two client code paths.
 const SCENE_MANIFEST_PATH = path.join(SCENES_ROOT, 'manifest.json');
 const PATTERN_MANIFEST_PATH = path.join(ENGINE_ROOT, 'patterns', 'manifest.json');

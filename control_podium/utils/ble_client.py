@@ -5,7 +5,7 @@ Reads stats, sends commands, and monitors connection state.
 
 Usage:
     from utils.ble_client import BLENodeClient
-    client = BLENodeClient("8C:FD:49:B5:7E:B9")
+    client = BLENodeClient("AA:BB:CC:DD:EE:FF")
     await client.connect()
     stats = await client.read_stats()
     await client.send_command("titanic:scene:sunset")
@@ -53,7 +53,7 @@ class BLENodeClient:
     def __init__(self, address: str, on_disconnect: Optional[Callable] = None):
         """
         Args:
-            address: BLE MAC address (e.g. "8C:FD:49:B5:7E:B9")
+            address: BLE MAC address (e.g. "AA:BB:CC:DD:EE:FF")
             on_disconnect: Optional callback when connection drops.
         """
         self.address = address

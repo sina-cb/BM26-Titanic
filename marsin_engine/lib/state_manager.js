@@ -2,6 +2,102 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 
+// ── Channel serialization (additive de-dup helper) ──────────────────────
+// saveDeckState and saveMixerState both flatten a PatternChannel into the
+// on-disk shape. They diverge slightly (the mixer file carries overlay-only
+// fields like `transitionMode`/`transitionTime`), so this helper emits the
+// COMMON core and each caller layers its extra fields on top. This keeps the
+// byte-for-byte on-disk schema identical to the pre-refactor output — the
+// fields below are exactly those the engine restores at boot.
+//
+// Exported (not just internal) so a unit test can pin the serialized shape
+// against regressions without reaching into a save path that touches disk.
+export function serializeChannel(ch) {
+  return {
+    id: ch.id,
+    name: ch.name,
+    pattern: ch.pattern,
+    mode: ch.mode,
+    fader: ch.fader,
+    enabled: ch.enabled,
+    // Lock flags (slot 5). `locked` is the mute/solo-style lock; `faderLocked`
+    // freezes the fader against scripted transitions. Both round-trip so an
+    // engine restart preserves the operator's lock decisions.
+    locked: !!ch.locked,
+    faderLocked: !!ch.faderLocked,
+    localControls: ch.localControls,
+    playlist: ch.playlist || null,
+    // Per-channel view-selection so the engine boots back into the exact
+    // mixer layout the operator left it in (docs/27).
+    viewSelection: ch.viewSelection || { type: 'all', target: null, invert: false },
+    // ── Additive fields (channel_features wave, 2026-06) ──────────────
+    // Appended AFTER viewSelection so the pre-existing on-disk key order is
+    // unchanged for all earlier fields — an old state file (no faderMax/
+    // color) still loads and restores to the documented defaults (1.0 / null).
+    // faderMax: per-channel intensity ceiling (F-C). color: metadata tag (F-D).
+    faderMax: (typeof ch.faderMax === 'number' && Number.isFinite(ch.faderMax))
+      ? Math.max(0, Math.min(1, ch.faderMax))
+      : 1.0,
+    color: (typeof ch.color === 'string') ? ch.color : null,
+    // ── Additive fields (groups + solo wave, WAVE 15, 2026-06) ────────
+    // Appended AFTER faderMax/color so earlier on-disk key order is
+    // unchanged — an old state file (no mixGroupId/soloSafe) loads and
+    // restores to the documented defaults (null / false). mixGroupId:
+    // gang-fader group membership pointer (F-group). soloSafe: rig-config
+    // never-gated-by-others flag (F-solo). soloedChannelIds is TRANSIENT
+    // and deliberately NOT persisted on the channel — it lives on the
+    // mixer and is cleared on restart.
+    mixGroupId: (typeof ch.mixGroupId === 'string' && ch.mixGroupId.length > 0) ? ch.mixGroupId : null,
+    soloSafe: !!ch.soloSafe,
+    // ── Additive field (hue shifter wave, 2026-06) ────────────────────
+    // Appended AFTER mixGroupId/soloSafe so earlier on-disk key order is
+    // unchanged — an old state file (no hue) loads and restores to the
+    // documented default (0 = no shift). Per-channel hue rotation in
+    // degrees [0,360) (F-hue, docs/39).
+    hue: (typeof ch.hue === 'number' && Number.isFinite(ch.hue))
+      ? ((ch.hue % 360) + 360) % 360
+      : 0,
+    // ── Additive field (phase-clock wave, 2026-06) ────────────────────
+    // Appended AFTER hue so earlier on-disk key order is unchanged — an
+    // old state file (no followsTempo) loads and restores to the documented
+    // default (false). Per-channel TAP-TEMPO opt-in (F-phase #4, docs/39):
+    // followsTempo channels run at the global tap-tempo multiplier. The
+    // TRANSIENT _phaseSeconds accumulator is deliberately NEVER persisted —
+    // it is rebuilt from 0 on boot.
+    followsTempo: !!ch.followsTempo,
+    // ── Additive fields (follow/link wave, round-2 #6, 2026-06) ───────
+    // Appended AFTER the phase-clock fields so earlier on-disk key order is
+    // unchanged — an old state file (no followLeaderId/followScale) loads and
+    // restores to the documented defaults (null = not following; 1.0). Channel
+    // FOLLOW/LINK (F-follow, docs/39): the follower tracks the leader's
+    // effective level × followScale. followLeaderId is a channel→leader
+    // POINTER; if the leader is gone on reload _effFader fails safe (reads 0,
+    // never crashes). The TRANSIENT prev-frame effective cache is never
+    // persisted — it is rebuilt frame-by-frame from 0 on boot.
+    followLeaderId: (typeof ch.followLeaderId === 'string' && ch.followLeaderId.length > 0) ? ch.followLeaderId : null,
+    followScale: (typeof ch.followScale === 'number' && Number.isFinite(ch.followScale))
+      ? Math.max(0, Math.min(2, ch.followScale))
+      : 1.0,
+  };
+}
+
+// ── MixGroup serialization (WAVE 15) ────────────────────────────────────
+// Persists a gang-fader group definition. Group fader/mute/color/name must
+// survive an engine restart or every member's mixGroupId pointer would
+// dangle on reload. Defensive clamps mirror the runtime setters. Exported
+// for the same shape-pinning reason as serializeChannel.
+export function serializeMixGroup(g) {
+  return {
+    id: g.id,
+    name: (typeof g.name === 'string') ? g.name : null,
+    fader: (typeof g.fader === 'number' && Number.isFinite(g.fader))
+      ? Math.max(0, Math.min(1, g.fader))
+      : 1.0,
+    muted: !!g.muted,
+    color: (typeof g.color === 'string') ? g.color : null,
+  };
+}
+
 export class StateManager {
   constructor(stateDir) {
     this.stateDir = stateDir;
@@ -25,9 +121,66 @@ export class StateManager {
   save(filename, state) {
     const filePath = path.join(this.stateDir, filename);
     try {
-      fs.writeFileSync(filePath, yaml.dump(state));
+      this._writeFileAtomic(filePath, yaml.dump(state));
     } catch (e) {
       console.warn(`Failed to save state to ${filename}:`, e);
+    }
+  }
+
+  /**
+   * Crash-safe write: serialize to a sibling temp file, fsync it, then
+   * atomically rename over the destination. A crash (or a thrown error)
+   * mid-write can leave a stray `.<name>.<pid>.<n>.tmp` behind, but it can
+   * NEVER leave a half-written/corrupt `filename` on disk — the previous
+   * good file stays intact until the rename swaps in the fully-written one.
+   *
+   * Rename within the same directory is atomic on POSIX and on NTFS
+   * (ReplaceFile semantics via Node's fs.renameSync over an existing file),
+   * so a reader either sees the old complete file or the new complete file.
+   *
+   * The temp file is written into the SAME directory as the destination so
+   * the rename never crosses a filesystem boundary (a cross-device rename
+   * is not atomic and would fall back to copy+unlink). On any failure we
+   * best-effort unlink the temp file and re-throw so the caller's existing
+   * try/catch logs it — we do not silently swallow the write error here.
+   */
+  /**
+   * Public crash-safe write for callers that manage their own file paths
+   * outside the StateManager's flat `stateDir` (e.g. SnapshotManager, which
+   * writes into a `snapshots/` subdirectory). Delegates to the same atomic
+   * temp+fsync+rename machinery as save() so snapshots get the identical
+   * torn-write guarantee. Re-throws on failure (no silent swallow).
+   */
+  writeFileAtomic(filePath, data) {
+    this._writeFileAtomic(filePath, data);
+  }
+
+  _writeFileAtomic(filePath, data) {
+    const dir = path.dirname(filePath);
+    const base = path.basename(filePath);
+    // Unique temp name: pid + monotonic counter avoids collisions between
+    // concurrent saves of different files (and back-to-back saves of the
+    // same file) in a single engine process.
+    this._tmpCounter = (this._tmpCounter || 0) + 1;
+    const tmpPath = path.join(dir, `.${base}.${process.pid}.${this._tmpCounter}.tmp`);
+    let fd;
+    try {
+      fd = fs.openSync(tmpPath, 'w');
+      fs.writeSync(fd, data);
+      // Flush to the storage device before the rename so a power loss right
+      // after the rename can't leave the new inode pointing at empty data.
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = undefined;
+      fs.renameSync(tmpPath, filePath);
+    } catch (err) {
+      if (fd !== undefined) {
+        try { fs.closeSync(fd); } catch (_) { /* fd already gone */ }
+      }
+      try {
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+      } catch (_) { /* best-effort temp cleanup */ }
+      throw err;
     }
   }
 
@@ -46,7 +199,7 @@ export class StateManager {
    * the already-split files don't trigger it.
    */
   loadMixerState() {
-    const raw = this.load('mixer_state.yaml', { master: 1.0, channels: [], patternControls: {} });
+    const raw = this.load('mixer_state.yaml', { master: 1.0, channels: [], patternControls: {}, mixGroups: [] });
     if (!Array.isArray(raw.channels) || raw.channels.length === 0) return raw;
 
     // Heuristic: in the legacy combined format the first channel was
@@ -65,7 +218,17 @@ export class StateManager {
   }
 
   loadGlobalsState() {
-    return this.load('globals_state.yaml', { blackout: false, effects: {}, params: {}, dimmers: {} });
+    // hueShift (F-hue, docs/39): persistent global hue knob. Default
+    // { degrees: 0, autoRotateDegPerSec: 0 } = no shift — an old file
+    // without the key loads to this documented default.
+    // invert (F-invert, docs/39): persistent global color-invert toggle.
+    // Default false = no invert — an old file without the key loads to this
+    // documented default.
+    return this.load('globals_state.yaml', {
+      blackout: false, effects: {}, params: {}, dimmers: {},
+      hueShift: { degrees: 0, autoRotateDegPerSec: 0 },
+      invert: false,
+    });
   }
 
   /**
@@ -123,6 +286,24 @@ export class StateManager {
         intensityController.setSectionBrightness(parseInt(sId, 10), bright);
       }
     }
+    if (globalEffectsController && globalsState.hueShift) {
+      // F-hue restore (docs/39): re-apply the persisted global hue knob
+      // through the validating setter so a hand-edited bad YAML value
+      // fails loudly here (caught + logged by the boot caller) instead of
+      // silently half-applying. A missing field stays at the controller's
+      // 0/0 default (handled by loadGlobalsState's default).
+      const hs = globalsState.hueShift;
+      globalEffectsController.setHueShift(
+        typeof hs.degrees === 'number' ? hs.degrees : 0,
+        typeof hs.autoRotateDegPerSec === 'number' ? hs.autoRotateDegPerSec : 0,
+      );
+    }
+    if (globalEffectsController && globalsState.invert !== undefined) {
+      // F-invert restore (docs/39): re-apply the persisted global invert
+      // toggle through the coercing setter. A missing field stays at the
+      // controller's false default (handled by loadGlobalsState's default).
+      globalEffectsController.setInvert(globalsState.invert);
+    }
     if (globalEffectsController && globalsState.groupFixedColors) {
       // Route through the validating setter so a hand-edited bad YAML
       // entry fails loudly here (caught + logged by the boot caller)
@@ -143,27 +324,76 @@ export class StateManager {
       : mixer.channels.filter(c => c.id !== mixer.baseChannelId);
     const state = {
       master: mixer.master,
-      channels: overlays.map(c => ({
-        id: c.id,
-        name: c.name,
-        pattern: c.pattern,
-        mode: c.mode.startsWith('trans_') ? 'blend_screen' : c.mode,
-        fader: c.fader,
-        enabled: c.enabled,
-        locked: !!c.locked,
-        // Fader-lock (slot 5): independent of `locked`. Persisted so an
-        // engine restart preserves the operator's frozen-fader
-        // decision. See PatternChannel.faderLocked for semantics.
-        faderLocked: !!c.faderLocked,
-        transitionMode: c.transitionMode || 'trans_crossfade',
-        transitionTime: c.transitionTime || 1.0,
-        localControls: c.localControls,
-        playlist: c.playlist || null,
-        // Persist the per-channel view-selection so the engine boots
-        // back into the exact mixer layout the operator left it in.
-        // See docs/27_[todo]_mixer_layer_view_selection.md.
-        viewSelection: c.viewSelection || { type: 'all', target: null, invert: false }
-      }))
+      channels: overlays.map((c) => {
+        // serializeChannel emits the common core (id..faderLocked,
+        // localControls, playlist, viewSelection). The mixer file carries
+        // two extra overlay-only fields (transitionMode/transitionTime)
+        // and never persists a live trans_* mode (it would re-trigger a
+        // scripted blend on reload), so we coerce that here. Key order is
+        // preserved byte-for-byte vs the pre-refactor output: the trans_*
+        // fields slot between faderLocked and localControls exactly as
+        // before.
+        const core = serializeChannel(c);
+        return {
+          id: core.id,
+          name: core.name,
+          pattern: core.pattern,
+          mode: c.mode.startsWith('trans_') ? 'blend_screen' : core.mode,
+          fader: core.fader,
+          enabled: core.enabled,
+          locked: core.locked,
+          // Fader-lock (slot 5): independent of `locked`. Persisted so an
+          // engine restart preserves the operator's frozen-fader decision.
+          faderLocked: core.faderLocked,
+          transitionMode: c.transitionMode || 'trans_crossfade',
+          transitionTime: c.transitionTime || 1.0,
+          localControls: core.localControls,
+          playlist: core.playlist,
+          viewSelection: core.viewSelection,
+          // Additive (channel_features wave): persisted AFTER the existing
+          // overlay fields so old files stay loadable. serializeChannel
+          // already clamped/typed these — reuse its values verbatim.
+          faderMax: core.faderMax,
+          color: core.color,
+          // Additive (WAVE 15 groups+solo): group membership + solo-safe
+          // round-trip so a restart restores the operator's grouping and
+          // rig-config. Solo itself is transient (mixer-level, not persisted).
+          mixGroupId: core.mixGroupId,
+          soloSafe: core.soloSafe,
+          // Additive (hue shifter wave): per-channel hue round-trips so a
+          // restart restores the operator's recolor. serializeChannel
+          // already normalized it — reuse verbatim.
+          hue: core.hue,
+          // Additive (phase-clock wave): per-channel tap-tempo opt-in round-
+          // trips so a restart restores the operator's clock. serializeChannel
+          // already coerced it — reuse verbatim. The transient _phaseSeconds
+          // accumulator is never persisted.
+          followsTempo: core.followsTempo,
+          // Additive (follow/link wave, round-2 #6): channel FOLLOW/LINK
+          // round-trips so a restart restores the operator's link.
+          // serializeChannel already typed/clamped these — reuse verbatim. The
+          // transient prev-frame effective cache is never persisted.
+          followLeaderId: core.followLeaderId,
+          followScale: core.followScale,
+        };
+      }),
+      // Group registry (WAVE 15). Persisted alongside master so member
+      // pointers (mixGroupId) resolve on reload. Empty array on a rig with
+      // no groups — an old file without this key loads to [] (default).
+      mixGroups: Array.isArray(mixer.getMixGroups && mixer.getMixGroups())
+        ? mixer.getMixGroups().map(serializeMixGroup)
+        : [],
+      // Global tap-tempo (phase-clock wave, F-phase #4). Persisted alongside
+      // master so a restart restores the operator's tempo; the derived
+      // _tempoMultiplier is recomputed from it on boot. null = no tempo set
+      // (documented default — an old file without this key loads to null).
+      tempoBpm: (typeof mixer.tempoBpm === 'number' && Number.isFinite(mixer.tempoBpm))
+        ? mixer.tempoBpm
+        : null,
+      // STICKY tempo source selector position ('osc' | 'tap'), persisted so a
+      // restart restores the operator's choice. Default 'osc' (an old file
+      // without this key loads to 'osc').
+      tempoSourcePref: mixer.tempoSourcePref === 'tap' ? 'tap' : 'osc',
     };
     this.save('mixer_state.yaml', state);
   }
@@ -182,25 +412,12 @@ export class StateManager {
       ? mixer.getDeckChannel()
       : mixer.getChannel(mixer.baseChannelId);
     if (!baseCh) return;
+    // The deck file's channel shape is exactly serializeChannel's core
+    // (id..faderLocked, localControls, playlist, viewSelection) with no
+    // overlay-only extras, so we emit it directly. Byte-compatible with
+    // the pre-refactor output, including both lock flags round-tripping.
     const state = {
-      channel: {
-        id: baseCh.id,
-        name: baseCh.name,
-        pattern: baseCh.pattern,
-        mode: baseCh.mode,
-        fader: baseCh.fader,
-        enabled: baseCh.enabled,
-        // Lock flags (slot 5): mirror the mixer-side persistence so
-        // the deck channel also survives restart in the same lock
-        // state. `locked` was previously omitted from the deck save
-        // path; including it alongside `faderLocked` so both round-
-        // trip cleanly.
-        locked: !!baseCh.locked,
-        faderLocked: !!baseCh.faderLocked,
-        localControls: baseCh.localControls,
-        playlist: baseCh.playlist || null,
-        viewSelection: baseCh.viewSelection || { type: 'all', target: null, invert: false }
-      }
+      channel: serializeChannel(baseCh),
     };
     if (extras && typeof extras === 'object') {
       Object.assign(state, extras);

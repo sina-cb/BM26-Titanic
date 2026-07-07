@@ -5,8 +5,11 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { Autopilot } from './autopilot.js';
-import { StateManager } from './state_manager.js';
-import { PlaylistManager } from './playlist_manager.js';
+import { ColorAutopilot } from './color_autopilot.js';
+import { StateManager, serializeChannel as serializeChannelForState } from './state_manager.js';
+import { SnapshotManager, SnapshotLoadError } from './snapshot_manager.js';
+import { ParamPresetManager, ParamPresetError } from './param_preset_manager.js';
+import { PlaylistManager, PlaylistLoadError } from './playlist_manager.js';
 import {
   validateModulationMapping,
 } from './modulation_engine.js';
@@ -19,6 +22,11 @@ import {
   INTERVAL_PRESETS_MS,
 } from './scheduled_tasks.js';
 import { topicForType, TOPICS } from './ws_topic_routing.js';
+import { TimelineService, buildOverview } from './timeline/timeline_service.js';
+import { validateShowPlan as validateTimelineShowPlan } from './timeline/show_plan.js';
+import { parsePatternDefaults } from './pattern_defaults.js';
+import { UndoStack, UNDO_MAX } from './undo_stack.js';
+import { DECK_OVERLAY_MAX } from './pattern_mixer.js';
 
 /**
  * Validate a `viewSelection` payload before it reaches the mixer.
@@ -149,6 +157,322 @@ export function validateSignalManifest(body) {
   return { ok: true, signals: out };
 }
 
+// ── Blend-mode validation (single source of truth) ─────────────────────
+// A channel's `mode` is the compositing blend used to lay it over the
+// layer beneath it. Two legitimate shapes:
+//   1. A steady channel-blend script under patterns/channel_blends/.
+//   2. A scripted transition under patterns/transitions/ (a `trans_*`
+//      name), used transiently while a fade is in flight.
+// Centralizing the accepted set here means the PATCH /mixer/channels/:id,
+// PATCH /deck/channel, and /deck/transition-config paths can't drift apart
+// (before this, each path open-coded its own `startsWith('trans_')` check
+// or accepted anything). An unknown mode is rejected with 400 instead of
+// being silently handed to the mixer (which would then composite it via
+// the degraded host-side fallback — visible on /status, but better caught
+// at the API boundary).
+export const VALID_CHANNEL_BLEND_MODES = Object.freeze(new Set([
+  'blend_screen',
+  'blend_add',
+  'blend_over',
+]));
+
+// True for any accepted channel mode: a known steady channel-blend, or a
+// scripted transition (`trans_*`). Transition script existence is verified
+// by the mixer at compile time; here we only gate the NAME shape so a typo
+// like 'blend_scren' is rejected loudly.
+export function isValidBlendMode(mode) {
+  if (typeof mode !== 'string' || mode.length === 0) return false;
+  if (VALID_CHANNEL_BLEND_MODES.has(mode)) return true;
+  if (mode.startsWith('trans_')) return true;
+  return false;
+}
+
+// ── Fader value validation (single source of truth) ────────────────────
+// A fader is a normalized [0,1] gain. Every write path (mixer PATCH, deck
+// PATCH, mixer master PATCH, WS setChannelFader) routes through this so a
+// bad value can never reach the render loop. Codex P0 (no silent fallback):
+// a non-finite value (NaN/Infinity, e.g. `Number('abc')`) is REJECTED with
+// 400 — we do NOT coerce it to 0/1, because that masks a broken client. A
+// finite-but-out-of-range value IS clamped to [0,1]: that's a benign
+// saturation of a real intent (slider overshoot), not a malformed input.
+//
+// Returns { ok: true, value } with the clamped number on success, or
+// { ok: false, error } (human-readable, suitable for a 400 body) when the
+// input is not a finite number.
+export function validateFader(raw) {
+  // Only accept an actual number, or a string that parses to a finite
+  // number. Reject null / undefined / boolean / object outright — JSON
+  // coercion (Number(null)===0, Number(true)===1) would otherwise mask a
+  // structurally-wrong payload as a valid fader (silent fallback, Codex P0).
+  let n;
+  if (typeof raw === 'number') {
+    n = raw;
+  } else if (typeof raw === 'string' && raw.trim() !== '') {
+    n = Number(raw);
+  } else {
+    return { ok: false, error: `fader must be a finite number in [0,1], got '${raw}'` };
+  }
+  if (!Number.isFinite(n)) {
+    return { ok: false, error: `fader must be a finite number in [0,1], got '${raw}'` };
+  }
+  return { ok: true, value: Math.max(0, Math.min(1, n)) };
+}
+
+// ── Hue value validation (single source of truth) ──────────────────────
+// A hue is an angle in degrees. Every write path (per-channel PATCH, deck
+// PATCH, POST /global-effect-hue) routes through this. Codex P0 (no silent
+// fallback): a NON-FINITE value (NaN / Infinity, or a non-number /
+// unparseable string) is REJECTED with 400 — we never coerce a broken
+// payload to 0. A finite value (any magnitude, including negatives like
+// -30 or wrap-arounds like 370) is NORMALIZED into the canonical [0,360)
+// range via ((n % 360) + 360) % 360 — that's a real, benign intent (the
+// hue wheel wraps), not a malformed input.
+//
+// Returns { ok: true, value } with the normalized angle on success, or
+// { ok: false, error } (human-readable, suitable for a 400 body).
+export function validateHue(raw) {
+  let n;
+  if (typeof raw === 'number') {
+    n = raw;
+  } else if (typeof raw === 'string' && raw.trim() !== '') {
+    n = Number(raw);
+  } else {
+    return { ok: false, error: `hue must be a finite number of degrees, got '${raw}'` };
+  }
+  if (!Number.isFinite(n)) {
+    return { ok: false, error: `hue must be a finite number of degrees, got '${raw}'` };
+  }
+  return { ok: true, value: ((n % 360) + 360) % 360 };
+}
+
+// ── Per-channel FOLLOW SCALE validation (docs/39 §F-follow, round-2 #6) ─
+// A follower's followScale multiplies the leader's effective level before the
+// follower's own caps. Accept/reject contract: a
+// NON-FINITE value (NaN / Infinity, non-number / unparseable string) is
+// REJECTED with 400 (Codex P0 — never coerce a broken payload to a default);
+// a finite value is CLAMPED into [0,2] (a follower may run hotter than its
+// leader up to 2×, but never negative — that would be a phase flip the follow
+// semantics don't model). Mirrors the PatternChannel constructor clamp.
+export function validateFollowScale(raw) {
+  let n;
+  if (typeof raw === 'number') {
+    n = raw;
+  } else if (typeof raw === 'string' && raw.trim() !== '') {
+    n = Number(raw);
+  } else {
+    return { ok: false, error: `followScale must be a finite number in [0,2], got '${raw}'` };
+  }
+  if (!Number.isFinite(n)) {
+    return { ok: false, error: `followScale must be a finite number in [0,2], got '${raw}'` };
+  }
+  return { ok: true, value: Math.max(0, Math.min(2, n)) };
+}
+
+// ── Per-pattern param SHARING — pure propagation core ─────────────────────
+// (operator request, feat/optimize_channels)
+//
+// Given the SOURCE channel a control was just written on, mirror that SAME
+// exported slider/param onto every OTHER live channel running the SAME pattern
+// from the SAME playlist (deck base, mixer overlays, deck overlays). Extracted
+// as a pure, dependency-injected function (no engine closure) so it is unit-
+// testable in isolation; the api_server factory's `propagatePatternParam`
+// wrapper supplies `mixer`/`wasmHost`/`paramRouter`.
+//
+// Keying is strict (mixer.channelsRunningPattern): playlist.name === L AND
+// channel.pattern === P. Mapping is by export NAME (per-handle controlIds are
+// not guaranteed identical across compiles): resolve the source export's name,
+// then find the same-named export on each target and write THROUGH
+// paramRouter.setChannelControl — which already rejects CPC-owned / CPC-blocked
+// / non-local controls per target, so only the pattern's LOCAL sliders/params
+// ever propagate (never fader/level/hue/mode — those are not pattern exports
+// and never reach here). Returns the array of channel ids that actually
+// received the value (status 'ok'); the source is never included.
+export function propagatePatternParamWith({ source, sourceChannelId, controlId, v0, v1, v2, mixer, wasmHost, paramRouter }) {
+  if (!source || !source.playlist || !source.playlist.name || !source.pattern) {
+    // No (playlist, pattern) context on the source — nothing to share by.
+    return [];
+  }
+  const playlistName = source.playlist.name;
+  const patternName = source.pattern;
+
+  const sourceExports = wasmHost.getExports(source.handle) || [];
+  const sourceExp = sourceExports.find(e => e.id === controlId);
+  if (!sourceExp) return [];
+  const exportName = sourceExp.name;
+
+  const targets = mixer.channelsRunningPattern(playlistName, patternName, { excludeId: sourceChannelId });
+  const applied = [];
+  for (const target of targets) {
+    const targetExports = wasmHost.getExports(target.handle) || [];
+    const targetExp = targetExports.find(e => e.name === exportName);
+    if (!targetExp) continue; // pattern recompiled without this export — skip, never crash
+    const result = paramRouter.setChannelControl(target.id, targetExp.id, v0, v1, v2);
+    if (result && result.status === 'ok') applied.push(target.id);
+  }
+  return applied;
+}
+
+// ── Auto-cycle DELAY validation (docs/39 §auto-cycle, round-2 #2) ──────
+// The interval (seconds) between automatic playlist advances on a mixer
+// overlay channel. Codex P0 (no silent fallback): a NON-FINITE value (NaN /
+// Infinity, non-number / unparseable string) OR a value ≤ 0 is REJECTED with
+// 400 AUTOCYCLE_BAD_DELAY — we never coerce a broken/zero delay to a default
+// (a 0 / negative interval would advance every frame = a strobe storm, which
+// the codex forbids as a silent failure). A finite POSITIVE value is FLOORED
+// to 1s (the only mutation — a benign floor, never a reject of an in-range
+// number) so the cycle can never out-run a 50-200ms overlay compile. Rejects
+// ≤0 instead of clamping it.
+export function validateAutoCycleDelay(raw) {
+  let n;
+  if (typeof raw === 'number') {
+    n = raw;
+  } else if (typeof raw === 'string' && raw.trim() !== '') {
+    n = Number(raw);
+  } else {
+    return { ok: false, error: `delay_s must be a finite number > 0, got '${raw}'` };
+  }
+  if (!Number.isFinite(n) || n <= 0) {
+    return { ok: false, error: `delay_s must be a finite number > 0, got '${raw}'` };
+  }
+  return { ok: true, value: Math.max(1, n) };
+}
+
+// ── Auto-cycle DUE decision (pure, fake-clock unit-tested) ────────────
+// Decides what the per-frame auto-cycle tick should do for ONE channel at
+// wall-clock `nowMs`. Pure (no Date.now / no side effects) so a test can
+// inject a fake clock instead of sleeping real seconds. Returns:
+//   'skip' — not an active overlay (no playlist.name, autopilot absent or
+//            inactive). Exterior immunity rides here: active defaults false.
+//   'seed' — autopilot is active but the wall-clock anchor is not yet set
+//            (first active frame, or post manual-tap / post-advance re-seed).
+//            The caller seeds `_autoCycleLastAdvanceMs = nowMs` and does NOT
+//            advance, so the first auto-advance lands a full delay_s later.
+//   'wait' — active + seeded, but delay_s has not elapsed yet.
+//   'due'  — active + seeded + delay_s elapsed: the caller picks the next
+//            entry and advances. delay_s is floored to 1s (mirrors the
+//            validator) so a stale/zero on-disk value can't strobe.
+export function autoCycleDueDecision(channel, nowMs) {
+  const ap = channel.playlist && channel.playlist.autopilot;
+  if (!ap || !ap.active) return 'skip';
+  if (!channel.playlist.name) return 'skip';
+  if (channel._autoCycleLastAdvanceMs === null
+      || channel._autoCycleLastAdvanceMs === undefined) return 'seed';
+  const delayMs = Math.max(1, ap.delay_s) * 1000;
+  return (nowMs - channel._autoCycleLastAdvanceMs >= delayMs) ? 'due' : 'wait';
+}
+
+// ── Auto-cycle group-locality clamps (single source of truth) ─────────
+// PATTERN-GROUP LOCALITY (feat/optimize_channels): the autopilot grabs a
+// small WINDOW of adjacent playlist entries, dwells within it for a number of
+// swaps, then releases and grabs a fresh window. The window size and dwell
+// count are clamped here so a stale/garbage on-disk value can't form a
+// degenerate (1-wide) or runaway window. Defaults match the field docs.
+export const AUTO_GROUP_SIZE_MIN = 2;
+export const AUTO_GROUP_SIZE_MAX = 8;
+export const AUTO_GROUP_SIZE_DEFAULT = 3;
+export const AUTO_GROUP_DWELL_MIN = 1;
+export const AUTO_GROUP_DWELL_MAX = 50;
+export const AUTO_GROUP_DWELL_DEFAULT = 6;
+
+const clampInt = (raw, lo, hi, dflt) => {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return dflt;
+  return Math.max(lo, Math.min(hi, Math.trunc(n)));
+};
+
+// Normalize the three group-locality fields off any autopilot-ish object for
+// serialize / broadcast / restore (single shape, single source of clamps).
+// Absent fields default (off / 3 / 6), so an old state file restores clean.
+const autoGroupFields = (ap) => ({
+  groupMode: !!(ap && ap.groupMode),
+  groupSize: clampInt(ap && ap.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX, AUTO_GROUP_SIZE_DEFAULT),
+  groupDwell: clampInt(ap && ap.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT),
+});
+
+// ── Auto-cycle next-entry pick (pure, unit-tested) ────────────────────
+// MIRRORS the deck Autopilot advance pick (api_server deck daemon): when
+// group-locality is armed, dwell within a window of adjacent entries, else
+// shuffle picks a random OTHER usable entry, else sequential walks forward
+// skipping `_missing`. `usable` excludes `_missing` entries.
+// Returns the chosen entry, or null when there is nothing to advance to (no
+// usable entries).
+//
+// PATTERN-GROUP LOCALITY: when `autopilot.groupMode` is true AND there are
+// strictly more usable entries than the window size, dwell state lives in the
+// caller-owned mutable `groupRuntime` ({ windowIds, swapsLeft }) so the window
+// + remaining-swap count persist ACROSS advances. The function reads and
+// MUTATES `groupRuntime` in place (the contract); randomness via Math.random
+// matches shuffle. With group-locality off (default), or too few usable
+// entries, group mode is a no-op and the existing shuffle/sequential logic
+// runs unchanged — `groupRuntime` may be omitted by those callers.
+export function pickNextAutoCycleEntry(pl, autopilot, curEntryId, groupRuntime) {
+  if (!pl || !Array.isArray(pl.entries) || pl.entries.length === 0) return null;
+  const usable = pl.entries.filter(e => !e._missing);
+  if (usable.length === 0) return null;
+  // PATTERN-GROUP LOCALITY: dwell inside a rolling window of adjacent usable
+  // entries. No-op (fall through) unless armed AND the playlist is bigger than
+  // one window — otherwise the "window" would be the whole list, defeating the
+  // point. Needs a mutable runtime to carry dwell state across advances.
+  const groupSize = clampInt(
+    autopilot && autopilot.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX,
+    AUTO_GROUP_SIZE_DEFAULT,
+  );
+  if (autopilot && autopilot.groupMode && groupRuntime && usable.length > groupSize) {
+    const groupDwell = clampInt(
+      autopilot.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX,
+      AUTO_GROUP_DWELL_DEFAULT,
+    );
+    const win = groupRuntime.windowIds;
+    const haveWindow = Array.isArray(win) && win.length > 0;
+    const curInWindow = haveWindow && win.includes(curEntryId);
+    // Form a FRESH window when there is none, the dwell expired, or we've
+    // wandered out of the current window (manual tap / loop release landed
+    // elsewhere). A fresh random start is fine even when re-forming.
+    if (!haveWindow || groupRuntime.swapsLeft <= 0 || !curInWindow) {
+      const start = Math.floor(Math.random() * usable.length);
+      const windowIds = [];
+      for (let i = 0; i < groupSize; i++) {
+        windowIds.push(usable[(start + i) % usable.length].id);
+      }
+      groupRuntime.windowIds = windowIds;
+      groupRuntime.swapsLeft = groupDwell;
+    }
+    // Pick a random entry from the window that is NOT the current one (no
+    // immediate repeat); if the window collapsed to only the current entry,
+    // replay it. Decrement the dwell counter (mutate in place — the contract).
+    const choices = groupRuntime.windowIds.filter(id => id !== curEntryId);
+    const pickId = choices.length
+      ? choices[Math.floor(Math.random() * choices.length)]
+      : curEntryId;
+    groupRuntime.swapsLeft -= 1;
+    const picked = usable.find(e => e.id === pickId);
+    if (picked) return picked;
+    // The chosen id is no longer usable (entry removed mid-dwell) — force a
+    // fresh window next call and fall through to sequential this beat.
+    groupRuntime.windowIds = null;
+    groupRuntime.swapsLeft = 0;
+  }
+  if (autopilot && autopilot.shuffle) {
+    const others = usable.filter(e => e.id !== curEntryId);
+    return others.length ? others[Math.floor(Math.random() * others.length)] : usable[0];
+  }
+  // Sequential: walk forward from the current index, skipping _missing.
+  const idx = pl.entries.findIndex(e => e.id === curEntryId);
+  let nextIdx = (idx + 1) % pl.entries.length;
+  for (let i = 0; i < pl.entries.length; i++) {
+    if (!pl.entries[nextIdx]._missing) return pl.entries[nextIdx];
+    nextIdx = (nextIdx + 1) % pl.entries.length;
+  }
+  return null;
+}
+
+// ── Deck transition durationMs bounds (single source of truth) ─────────
+// The /deck/transition-config POST and the internal
+// loadPlaylistEntryWithTransition resolve both clamp to this same window
+// so a "5 minute" or "1 ms" fade can never reach the render loop.
+export const DECK_TRANSITION_MIN_MS = 50;
+export const DECK_TRANSITION_MAX_MS = 30000;
+
 function listPatterns(patternsDir) {
   if (!fs.existsSync(patternsDir)) return [];
   return fs.readdirSync(patternsDir)
@@ -214,6 +538,83 @@ function loadPattern(patternsDir, name) {
     throw new Error(`Pattern not found: ${filePath}`);
   }
   return fs.readFileSync(filePath, 'utf8');
+}
+
+/**
+ * Mission-critical deck-restore safety (Codex P0 — keep the exterior LIT).
+ *
+ * The deck channel drives the Titanic's exterior — the one surface that is
+ * mission-critical to be visible at night. Restoring it from saved state can
+ * fail two ways: the saved pattern is null/empty/missing-on-disk (load throws),
+ * or it loads but fails to compile. EITHER outcome used to leave the rig dark
+ * (silent null deck) or refuse to boot (crash). Both are unacceptable for the
+ * deck.
+ *
+ * This helper makes the deck restore self-healing: it tries to build from the
+ * saved pattern, and on ANY failure FALLS BACK to the known-good default
+ * pattern so the deck is never dark. The fallback is NOT silent — it returns a
+ * `degraded` descriptor the caller surfaces on `/status` (so an operator /
+ * CaptainPad / smoke-check can SEE the saved deck didn't restore) and logs a
+ * loud one-time `console.error`. Only if the DEFAULT pattern ALSO fails does it
+ * throw fatally — that means the install itself is broken.
+ *
+ * `build(pattern)` must synchronously return the built channel or THROW. It is
+ * the only injected dependency, which keeps this pure and unit-testable without
+ * booting the engine.
+ *
+ * Returns `{ channel, degraded }` where `degraded` is either `null` (saved
+ * pattern restored cleanly) or `{ failedPattern, reason, fellBackTo }`.
+ */
+export function restoreDeckWithFallback(saved, defaultPattern, build) {
+  const savedPattern = saved && saved.pattern;
+  // A null/empty saved pattern can't even be attempted — treat the same as a
+  // load failure so the fallback path runs (don't hand build() a bad name).
+  if (typeof savedPattern === 'string' && savedPattern.length > 0) {
+    try {
+      const channel = build(savedPattern);
+      return { channel, degraded: null };
+    } catch (e) {
+      return buildDeckFallback(saved, savedPattern, e.message, defaultPattern, build);
+    }
+  }
+  return buildDeckFallback(
+    saved,
+    savedPattern == null ? null : String(savedPattern),
+    savedPattern == null ? 'saved deck pattern is null/empty' : `saved deck pattern is empty`,
+    defaultPattern,
+    build,
+  );
+}
+
+function buildDeckFallback(saved, failedPattern, reason, defaultPattern, build) {
+  console.error(
+    `[Restore] DECK RESTORE DEGRADED — saved deck pattern ` +
+    `'${failedPattern == null ? '(null)' : failedPattern}' failed to restore ` +
+    `(${reason}). Falling back to default pattern '${defaultPattern}' to keep ` +
+    `the mission-critical exterior LIT. This is a LOUD, VISIBLE degrade — see ` +
+    `deckRestoreDegraded on /status.`,
+  );
+  // Build the deck from the known-good default with the saved channel's
+  // identity/lock/view prefs preserved (so the operator's slot survives) but
+  // the broken pattern swapped for the default.
+  let channel;
+  try {
+    channel = build(defaultPattern);
+  } catch (e) {
+    // The default ALSO failed — the install is broken; boot must fail loud.
+    const fatal = new Error(
+      `Deck restore fallback FAILED: default pattern '${defaultPattern}' also ` +
+      `failed to build (${e.message}) after saved pattern ` +
+      `'${failedPattern == null ? '(null)' : failedPattern}' failed (${reason}). ` +
+      `The install is broken — refusing to boot a dark deck.`,
+    );
+    fatal._deckRestoreFatal = true;
+    throw fatal;
+  }
+  return {
+    channel,
+    degraded: { failedPattern: failedPattern == null ? null : failedPattern, reason, fellBackTo: defaultPattern },
+  };
 }
 
 /**
@@ -295,15 +696,115 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // the same millisecond producing the same `ch_<Date.now()>` id.
   let channelIdCounter = 0;
 
-  function onChannelCompiled(channel) {
+  function onChannelCompiled(channel, source = null) {
     if (paramCenter) {
       paramCenter.registerChannel(channel.id, channel.handle, wasmHost.getExports(channel.handle));
       // Force the VM to execute its top-level scope (export var defaults) so that
       // CPC values don't get clobbered by the first real beginFrame.
       wasmHost.beginFrame(channel.handle, 0);
+    }
+    // Seed each SLIDER control to its pattern's `export var` code default
+    // (parsed from source — the VM can't report it). This is the BASE that
+    // playlist/CPC overrides layer on top of (both run AFTER this call), so
+    // override order is preserved. Must run even when paramCenter is absent.
+    seedSliderCodeDefaults(channel, source);
+    if (paramCenter) {
       // We also broadcast so clients know the new schema bindings
       broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
     }
+  }
+
+  /**
+   * Seed a channel's SLIDER controls (export kind 1) to the pattern's declared
+   * `export var <x> = <default>` value, parsed from the pattern source. The
+   * WASM VM's getExports() carries no values and there is no get_var cwrap, so
+   * the host can't read the code default at runtime — this restores author
+   * intent instead of leaving the VM's compiled-in 0.5 slider seed in place.
+   *
+   * The seed is written through channel.setControl so it lands in BOTH the live
+   * WASM handle AND channel.localControls — the latter is what the exports
+   * payload (`/mixer`, `/deck`), modulation baseParams, and playlist
+   * captureDefaults all read as the control's current value. CPC-owned /
+   * conflict-blocked controls are skipped (CPC owns those). Sliders with no
+   * matching `export var` default are left at the VM default and logged.
+   *
+   * @param {object} channel
+   * @param {string|null} source — explicit pattern text (live-edit buffer).
+   *   When null we load it from disk by `channel.pattern`.
+   */
+  function seedSliderCodeDefaults(channel, source = null) {
+    if (!channel || !channel.handle) return;
+    let src = source;
+    if (src === null) {
+      if (!channel.pattern) return; // transition/blend handle — no var defaults
+      try {
+        src = loadPattern(patternsDir, channel.pattern);
+      } catch (err) {
+        // A channel pointing at a now-missing pattern is a real problem, but
+        // not one this seeding step should crash the request over — surface it.
+        console.warn(`[SliderDefaults] cannot load source for "${channel.pattern}": ${err.message}`);
+        return;
+      }
+    }
+    const { defaults, computed } = parsePatternDefaults(src);
+    const sliderExports = wasmHost.getExports(channel.handle).filter(e => e.kind === 1);
+    const noDefault = [];
+    for (const exp of sliderExports) {
+      // CPC owns these — never let a code default fight the global value.
+      if (paramCenter && paramCenter.isSharedExport(channel.id, exp.name)) continue;
+      if (paramCenter && paramCenter.getBlockedIds(channel.id).has(exp.id)) continue;
+      if (!(exp.name in defaults)) {
+        noDefault.push(exp.name);   // collected; summarized once below
+        continue;
+      }
+      channel.setControl(wasmHost, exp.id, defaults[exp.name], 0, 0);
+    }
+    // Surface non-literal / no-default sliders as ONE summary line per load
+    // instead of one per slider — under autopilot cycling 50+ patterns the
+    // per-slider spam buried the actionable swap/compile errors. Still surfaced
+    // (codex P0: no silent fallback), just not flooded.
+    const who = channel.pattern || channel.id;
+    if (computed.length) {
+      console.warn(`[SliderDefaults] ${who}: ${computed.length} non-literal default(s) `
+        + `left at VM default: ${computed.map(c => `${c.control}(${c.varName})`).join(', ')}`);
+    }
+    if (noDefault.length) {
+      console.warn(`[SliderDefaults] ${who}: ${noDefault.length} slider(s) with no parsed `
+        + `export var default, left at VM default: ${noDefault.join(', ')}`);
+    }
+  }
+
+  // Per-channel cache of parsed code defaults, keyed by pattern name, so the
+  // hot serialize path (mixer/deck broadcasts) doesn't re-read + re-parse the
+  // pattern file on every frame. Invalidated implicitly: a new pattern name is
+  // a new key; a live-edit recompile keeps the same name but the defaults are
+  // re-seeded into localControls regardless, so a stale cache here only affects
+  // the additive `codeDefault` HINT field, never the live value.
+  const codeDefaultsCache = new Map();
+  function codeDefaultsForPattern(patternName) {
+    if (!patternName) return {};
+    if (codeDefaultsCache.has(patternName)) return codeDefaultsCache.get(patternName);
+    let defaults = {};
+    try {
+      defaults = parsePatternDefaults(loadPattern(patternsDir, patternName)).defaults;
+    } catch (err) {
+      console.warn(`[SliderDefaults] codeDefault hint unavailable for "${patternName}": ${err.message}`);
+    }
+    codeDefaultsCache.set(patternName, defaults);
+    return defaults;
+  }
+
+  /**
+   * Additive: stamp each SLIDER export (kind 1) with `codeDefault` — the
+   * pattern's declared `export var` default — so clients can show / reset to
+   * it. Does NOT touch existing fields; mutates and returns the same array.
+   */
+  function annotateCodeDefaults(channel, exportsArr) {
+    const defaults = codeDefaultsForPattern(channel.pattern);
+    for (const e of exportsArr) {
+      if (e.kind === 1 && e.name in defaults) e.codeDefault = defaults[e.name];
+    }
+    return exportsArr;
   }
 
   /**
@@ -361,6 +862,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
   const stateDir = path.join(patternsDir, '..', 'states', opts.modelName || 'default');
   const stateManager = new StateManager(stateDir);
+  // Named mixer snapshots / look recall (F-A). Lives in <stateDir>/snapshots
+  // and reuses the StateManager's atomic writer for torn-write safety.
+  const snapshotManager = new SnapshotManager(stateDir, stateManager);
+  // Named per-channel parameter presets (round-2 #9). Lives in
+  // <stateDir>/param_presets and reuses the StateManager's atomic writer for
+  // torn-write safety. Captures one channel's localControls; recall is
+  // pattern-scoped (see param_preset_manager.js + docs/39).
+  const paramPresetManager = new ParamPresetManager(stateDir, stateManager);
 
   // Playlist library lives in simulation/scenes/<scene>/playlists/
   const playlistsDir = path.join(
@@ -746,7 +1255,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
   function saveAllState() {
     stateManager.saveMixerState(mixer);
-    stateManager.saveDeckState(mixer, { transitionConfig: { ...deckTransitionConfig } });
+    stateManager.saveDeckState(mixer, {
+      transitionConfig: { ...deckTransitionConfig },
+      // Deck dynamic view overrides: persist the overlay stack + the SHARED
+      // overlay autopilot cadence so they survive an engine restart (operator
+      // ruling #5). Each overlay is serialized with the same channel shape the
+      // mixer overlays use (serializeChannelForState) so the restore path can
+      // rebuild them via buildChannelFromSaved + loadPlaylistEntry. order is
+      // array order (bottom→top). The transient shared anchor is not persisted.
+      overlays: (mixer.getDeckOverlays ? mixer.getDeckOverlays() : []).map(serializeChannelForState),
+      overlayAutopilot: {
+        active: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.active),
+        delay_s: (mixer.deckOverlayAutopilot && typeof mixer.deckOverlayAutopilot.delay_s === 'number')
+          ? mixer.deckOverlayAutopilot.delay_s : 30,
+        shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
+        ...autoGroupFields(mixer.deckOverlayAutopilot),
+      },
+    });
   }
 
   function getReplayableLocalExport(channel, controlId) {
@@ -849,6 +1374,64 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   }
 
   /**
+   * Per-pattern param SHARING (operator request, feat/optimize_channels).
+   *
+   * A pattern's exported SLIDERS/params are conceptually owned by the
+   * (playlist, pattern) pair, NOT by the one channel the operator happened
+   * to touch. So when a control is written on the SOURCE channel, mirror that
+   * SAME export onto every OTHER live channel currently running the SAME
+   * pattern from the SAME playlist — the deck base channel, every mixer
+   * overlay, AND every deck overlay.
+   *
+   * Keying: matched on (channel.playlist.name === L) AND (channel.pattern === P)
+   * via mixer.channelsRunningPattern. The on-disk source of truth is each
+   * matched channel's playlist-entry `defaults` (captured by
+   * scheduleEntryCapture below), so the shared value ALSO lands on disk and is
+   * re-applied when any channel later (re)loads that (playlist, pattern).
+   *
+   * Mapping is by export NAME, not by raw controlId: each channel has its own
+   * WASM handle, so we resolve the source export's name, then find the
+   * same-named export on each target and write THROUGH paramRouter
+   * (setChannelControl), which already rejects CPC-owned / CPC-blocked /
+   * non-local controls per target. This guarantees we only ever propagate the
+   * pattern's LOCAL sliders/params — never channel-level things (fader, level,
+   * hue, mode, faderMax) which are not pattern exports and never reach here.
+   *
+   * Returns the array of channel ids that actually received the value (so the
+   * caller can schedule their entry-capture too). The source channel is never
+   * in the result — the caller already wrote + captured it.
+   */
+  function propagatePatternParam(sourceChannelId, controlId, v0, v1, v2) {
+    const source = mixer.getChannel(sourceChannelId)
+      || (mixer.getDeckOverlay && mixer.getDeckOverlay(sourceChannelId));
+    return propagatePatternParamWith({
+      source,
+      sourceChannelId,
+      controlId,
+      v0, v1, v2,
+      mixer,
+      wasmHost,
+      paramRouter,
+    });
+  }
+
+  /**
+   * Convenience wrapper used by the runtime control-write routes: write the
+   * control on the source channel's OWN capture+dirty pipeline, then propagate
+   * the same export to every sibling channel running the same (playlist,
+   * pattern), scheduling their capture too. The source channel's own write +
+   * scheduleEntryCapture is done by the caller BEFORE this is invoked.
+   */
+  function propagateAndCapturePatternParam(sourceChannelId, controlId, v0, v1, v2) {
+    const applied = propagatePatternParam(sourceChannelId, controlId, v0, v1, v2);
+    for (const id of applied) {
+      scheduleEntryCapture(id);
+      markChannelDirtyIfLocked(id);
+    }
+    return applied;
+  }
+
+  /**
    * Load a playlist entry into an EXISTING channel: compile pattern, swap
    * handle, apply entry defaults, and let CPC have the last word. Updates
    * channel.playlist.activeEntryId + cursor.
@@ -888,6 +1471,19 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     channel.playlist.cursor = idx;
     channel.playlist.autopilot = channel.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
 
+    // Auto-cycle baseline reset (round-2 #2): EVERY load through this choke —
+    // whether an operator's manual entry tap OR an auto-cycle advance itself —
+    // re-seeds the wall-clock anchor to null so the next auto-cycle tick
+    // measures a full delay_s from THIS load, not from a stale pre-load
+    // baseline. (The tick re-seeds null→now on its next active frame, so a
+    // manual tap mid-cycle restarts the timer cleanly. Transient, never saved.)
+    channel._autoCycleLastAdvanceMs = null;
+    // PATTERN-GROUP LOCALITY (feat/optimize_channels): a manual entry tap OR a
+    // (re-)load/assignment change must START A FRESH GROUP — drop any window
+    // we were dwelling in so the next group-mode advance grabs a new one from
+    // the new baseline (mirrors the anchor reset directly above). Transient.
+    if (channel._autoGroup) { channel._autoGroup.windowIds = null; channel._autoGroup.swapsLeft = 0; }
+
     // Switching to a new entry resets the "dirty since lock" state — the
     // new entry's own defaults are now the canonical reference, and any
     // edits made in the previous entry are no longer relevant here.
@@ -902,6 +1498,159 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return { entry, index: idx, total: playlist.entries.length };
   }
 
+  // ── AUTO-CYCLE tick (round-2 #2, docs/39 §auto-cycle) ─────────────────
+  //
+  // Generalizes the deck Autopilot daemon to ANY mixer overlay: a channel
+  // with `playlist.autopilot.active` auto-advances its playlist on a timer.
+  // Called ONCE PER FRAME from the engine render loop's beforeFrame hook
+  // (engine.js), so there is ONE source of time (the wall clock) and NO
+  // per-channel setTimeout sprawl — naturally paused by a stopped loop.
+  //
+  // The tick itself is cheap + synchronous: for each active overlay it reads
+  // the wall-clock anchor and decides whether an advance is DUE. It never
+  // compiles inline — overlay `loadPlaylistEntry` is an INSTANT hard handle
+  // destroy+compile (50-200ms) with no double-buffer, so awaiting it in the
+  // frame would darken the composite. Instead the actual advance is dispatched
+  // OFF THE HOT PATH via setImmediate (drained after the frame returns), with
+  // an in-flight guard so a slow compile can never stack two advances. A
+  // compile error is logged LOUDLY and the channel keeps its current pattern
+  // (Codex P0 — NOT a silent swap, NOT a silent swallow).
+  //
+  // Mirrors the deck advance pick logic — see the module-level exported
+  // `pickNextAutoCycleEntry` / `autoCycleDueDecision` (pure, unit-tested with
+  // a fake clock). Exterior immunity is free: active defaults false (opt-in).
+  // v1 ships the visible hard-cut on overlays (no overlay double-buffer exists
+  // today — documented in docs/39); a v2 fade is out of scope.
+  function autoCycleTick() {
+    // If a snapshot morph / recall-fade is rebuilding overlays this frame,
+    // skip auto-advance entirely — a handle swap mid-morph would fight the
+    // morph's per-channel ramps. (Deck-swap in-flight only affects the deck,
+    // not overlays, so we don't gate on it here.)
+    if (mixer.getMorph && mixer.getMorph()) return;
+
+    const now = Date.now();
+    const overlays = mixer.getMixerChannels ? mixer.getMixerChannels() : [];
+    for (const channel of overlays) {
+      if (channel._autoCycleInFlight) continue; // a compile is still draining
+
+      // Pure decision (fake-clock unit-tested): 'skip' | 'seed' | 'wait' |
+      // 'due'. Seeds the anchor on the first active frame (no advance), waits
+      // until delay_s elapses, then reports 'due'.
+      const decision = autoCycleDueDecision(channel, now);
+      if (decision === 'skip') continue;
+      if (decision === 'seed') { channel._autoCycleLastAdvanceMs = now; continue; }
+      if (decision === 'wait') continue;
+
+      // Due. Resolve the playlist + next entry synchronously (cheap), then
+      // dispatch the compile off the hot path.
+      const ap = channel.playlist.autopilot;
+      const pl = playlistManager.load(channel.playlist.name);
+      if (!pl || pl.entries.length === 0) { channel._autoCycleLastAdvanceMs = now; continue; }
+      const next = pickNextAutoCycleEntry(pl, ap, channel.playlist.activeEntryId, channel._autoGroup);
+      if (!next) {
+        // Held / no usable target — re-anchor so we re-check after delay_s,
+        // not every frame (mirrors the deck daemon re-checking each beat).
+        channel._autoCycleLastAdvanceMs = now;
+        continue;
+      }
+      // Anchor BEFORE dispatch so the next due-check counts from this beat
+      // even while the compile is draining. (loadPlaylistEntry will reset
+      // the anchor to null on success → re-seeded next frame; on failure the
+      // anchor we set here keeps the cadence so we don't hammer a bad entry.)
+      channel._autoCycleLastAdvanceMs = now;
+      channel._autoCycleInFlight = true;
+      const targetId = next.id;
+      const plName = channel.playlist.name;
+      setImmediate(() => {
+        try {
+          loadPlaylistEntry(channel, plName, targetId);
+          saveAllState();
+          broadcastMixerState();
+        } catch (e) {
+          // Fail LOUD; keep the current pattern (NOT a silent swallow).
+          console.warn(`[AutoCycle] advance failed on channel ${channel.id} → ${targetId}: ${e.message}`);
+        } finally {
+          channel._autoCycleInFlight = false;
+        }
+      });
+    }
+  }
+
+  // ── SHARED deck-overlay auto-cycle tick (deck dynamic view overrides) ─────
+  //
+  // Operator refinement #1: deck overlays auto-advance on ONE SHARED clock, in
+  // UNISON — a single anchor + a single delay for the whole overlay group, NOT
+  // an independent per-overlay anchor. When the shared timer crosses its delay
+  // boundary EVERY auto-advancing overlay advances its OWN playlist cursor at
+  // the same instant (each to its own next entry/content). An overlay may be
+  // individually paused (its own `enabled` flag); a disabled overlay does not
+  // advance, but the SHARED cadence/phase is unaffected so the others stay in
+  // step.
+  //
+  // Driven from the SAME render-loop beforeFrame hook as autoCycleTick (one
+  // source of time, the wall clock). The shared autopilot state lives on
+  // `mixer.deckOverlayAutopilot` ({active,delay_s,shuffle}) and the transient
+  // anchor on `mixer._deckOverlayAnchorMs` (null = not yet seeded; first active
+  // tick seeds it without advancing, so the first advance lands a full delay_s
+  // later — mirrors the per-channel seed semantics). Actual advances are
+  // dispatched OFF the hot path via setImmediate (overlay loadPlaylistEntry is
+  // a 50-200ms hard handle swap; awaiting it in-frame would darken the deck).
+  // A per-overlay in-flight guard prevents stacking. Compile errors are logged
+  // LOUDLY and the overlay keeps its current pattern (Codex P0 — never silent).
+  function deckOverlayAutoCycleTick() {
+    // Mirror autoCycleTick: skip while a snapshot morph is rebuilding state.
+    if (mixer.getMorph && mixer.getMorph()) return;
+
+    const ap = mixer.deckOverlayAutopilot;
+    if (!ap || !ap.active) return;
+    const overlays = mixer.getDeckOverlays ? mixer.getDeckOverlays() : [];
+    if (overlays.length === 0) return;
+
+    const now = Date.now();
+    // Seed the SHARED anchor on the first active tick (no advance), then wait
+    // until delay_s elapses. delay_s floored to 1s (mirrors the validator) so a
+    // stale/zero on-disk value can't strobe.
+    if (mixer._deckOverlayAnchorMs === null || mixer._deckOverlayAnchorMs === undefined) {
+      mixer._deckOverlayAnchorMs = now;
+      return;
+    }
+    const delayMs = Math.max(1, ap.delay_s) * 1000;
+    if (now - mixer._deckOverlayAnchorMs < delayMs) return; // shared 'wait'
+
+    // Due on the SHARED clock: advance the SHARED anchor ONCE for the whole
+    // group (single cadence, no drift), then advance EVERY auto-advancing
+    // overlay's own cursor in unison. Re-anchor BEFORE dispatch so the next
+    // due-check counts from this beat even while compiles drain.
+    mixer._deckOverlayAnchorMs = now;
+    for (const overlay of overlays) {
+      // Individually-paused overlays don't advance, but the shared cadence is
+      // unaffected (the anchor already moved above) so the rest stay in step.
+      if (!overlay.enabled) continue;
+      if (overlay._autoCycleInFlight) continue;
+      if (!overlay.playlist || !overlay.playlist.name) continue;
+      const pl = playlistManager.load(overlay.playlist.name);
+      if (!pl || pl.entries.length === 0) continue;
+      // Each overlay picks its OWN next entry from its OWN playlist + cursor,
+      // honoring the SHARED shuffle flag (per-overlay content, shared timer).
+      const next = pickNextAutoCycleEntry(pl, ap, overlay.playlist.activeEntryId, overlay._autoGroup);
+      if (!next) continue; // held / no usable target — stays put this beat
+      overlay._autoCycleInFlight = true;
+      const targetId = next.id;
+      const plName = overlay.playlist.name;
+      setImmediate(() => {
+        try {
+          loadPlaylistEntry(overlay, plName, targetId);
+          saveAllState();
+          broadcastDeckState();
+        } catch (e) {
+          // Fail LOUD; keep the current pattern (NOT a silent swallow).
+          console.warn(`[DeckOverlayAutoCycle] advance failed on overlay ${overlay.id} → ${targetId}: ${e.message}`);
+        } finally {
+          overlay._autoCycleInFlight = false;
+        }
+      });
+    }
+  }
   // ── Deck pattern transitions (double-buffer via mixer shadow channel) ──
   //
   // `loadPlaylistEntryWithTransition` is the soft-swap sibling of
@@ -978,6 +1727,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       opts.pattern = channel.pattern;
       broadcastWs({ type: 'pattern', name: channel.pattern });
       broadcastMixerState();
+      // Warm the predicted-next handle for the next sequential advance.
+      if (mixer.getDeckChannel && mixer.getDeckChannel()?.id === channel.id) {
+        precompileNextDeckEntry(channel);
+      }
       return { ...r, transitionId: null, done: Promise.resolve() };
     }
 
@@ -1061,6 +1814,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
       paramCenter.applyToChannel(wasmHost, '__deck_swap__');
     }
+    // Seed the shadow swap handle's sliders to their pattern code defaults so
+    // the fading-in pattern reads author intent as its BASE (entry defaults +
+    // CPC still layer on top below / via finalizeCpcValues on completion).
+    // Skip on reuse — the warm inactive handle was already seeded when it was
+    // first compiled and has been ticking since. CPC-owned/blocked sliders are
+    // skipped (resolved against the shadow id).
+    if (!isReused) {
+      try {
+        const swapSrc = loadPattern(patternsDir, entry.pattern);
+        const { defaults: swapDefaults } = parsePatternDefaults(swapSrc);
+        for (const exp of (handleExports || [])) {
+          if (exp.kind !== 1) continue;
+          if (!(exp.name in swapDefaults)) continue;
+          if (paramCenter && paramCenter.isSharedExport('__deck_swap__', exp.name)) continue;
+          if (paramCenter && paramCenter.getBlockedIds('__deck_swap__').has(exp.id)) continue;
+          wasmHost.setControl(handleForSwap, exp.id, swapDefaults[exp.name], 0, 0);
+        }
+      } catch (err) {
+        console.warn(`[SliderDefaults] deck-swap seed skipped for "${entry.pattern}": ${err.message}`);
+      }
+    }
     // Apply per-entry defaults to the swap handle directly (not via
     // the channel object — that's still pointing at the active
     // channel). Mimics playlistManager.applyEntryDefaults but bypasses
@@ -1133,6 +1907,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastWs({ type: 'pattern', name: channel.pattern });
         broadcastWs({ type: 'deckSwapComplete', pattern: channel.pattern, transitionId: txid, transitionMode: transMode });
         broadcastMixerState();
+        // Warm the predicted-next handle now that the swap landed and the
+        // inactive slot is free again. Sequential autopilot only (the
+        // helper guards this) so manual ping-pong warmth is preserved.
+        precompileNextDeckEntry(channel);
         // Resolve the autopilot's await so its inter-pattern timer
         // can start its next countdown from a clean baseline.
         try { resolveDone(); } catch (_) {}
@@ -1164,63 +1942,206 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     };
   }
 
-  function restoreChannel(saved, role /* 'deck' | 'mixer' */) {
+  // ── Precompile-next-entry (hot-swap playlist optimization) ───────────
+  // After the deck lands on an entry, predict the NEXT entry the operator
+  // (or autopilot) will advance to and warm-compile its pattern into the
+  // mixer's inactive deck slot. The next advance then reuses a warm handle
+  // (zero-compile) instead of stalling on a fresh compile in the request
+  // path — the smooth-swap win that feat/timeline_support needs.
+  //
+  // Prediction is intentionally simple and side-effect-free:
+  //   - shuffle autopilot → unpredictable, so we DON'T pre-warm (a wrong
+  //     guess would just waste a compile + evict a possibly-useful warm
+  //     ping-pong handle).
+  //   - otherwise → the next non-missing entry after the active cursor,
+  //     wrapping to the top (matches sequential autopilot advance).
+  //
+  // Safe to call after every deck entry load. Never throws (a prediction
+  // failure must not break the load that just succeeded).
+  function precompileNextDeckEntry(channel) {
     try {
-      const src = loadPattern(patternsDir, saved.pattern);
-      const comp = wasmHost.compile(src);
-      if (!comp.ok) {
-        console.warn(`Failed to compile saved channel ${saved.pattern}:`, comp.error);
+      if (!channel || !channel.playlist || !channel.playlist.name) return;
+      const ap = channel.playlist.autopilot;
+      // Only pre-warm during ACTIVE SEQUENTIAL autopilot (the forward
+      // timeline-playback scenario). Manual taps are left to the ping-pong
+      // warm-keeper so we don't evict a useful back-and-forth handle on a
+      // single manual advance. Shuffle is unpredictable → skip.
+      if (!ap || !ap.active || ap.shuffle) return;
+      const pl = playlistManager.tryLoad(channel.playlist.name);
+      if (!pl || pl.entries.length === 0) return;
+      const usable = pl.entries.filter(e => !e._missing);
+      if (usable.length === 0) return;
+      const activeIdx = usable.findIndex(e => e.id === channel.playlist.activeEntryId);
+      // Next sequential entry, wrapping. If the active entry isn't found
+      // (e.g. it was missing), start from the first usable entry.
+      const nextEntry = usable[(activeIdx + 1) % usable.length];
+      if (!nextEntry || nextEntry.pattern === channel.pattern) return;
+      // Already warm? getInactiveDeckPattern avoids a redundant compile.
+      if (mixer.getInactiveDeckPattern && mixer.getInactiveDeckPattern() === nextEntry.pattern) {
         return;
       }
-      const config = {
-        id: saved.id,
-        name: saved.name,
-        pattern: saved.pattern,
-        handle: comp.handle,
-        mode: saved.mode,
-        fader: saved.fader,
-        enabled: saved.enabled,
-        // Restore lock flags so the channel survives engine restart in
-        // the same lock state the operator left it in. Pre-fader_lock
-        // these were silently dropped; with the new faderLocked field
-        // added in slot 5 we plumb them through explicitly. Falsy
-        // defaults match the PatternChannel constructor.
-        locked: !!saved.locked,
-        faderLocked: !!saved.faderLocked,
-        // Same reasoning for transition prefs.
-        transitionMode: saved.transitionMode || 'trans_crossfade',
-        transitionTime: saved.transitionTime || 1.0,
-        // Restore view-selection so a mask-restricted channel survives
-        // engine restart. setDeckChannel / addMixerChannel will compile
-        // the mask immediately via recompileChannelMask (no extra call
-        // needed here).
-        viewSelection: saved.viewSelection || { type: 'all', target: null, invert: false },
-      };
-      const ch = role === 'deck'
-        ? mixer.setDeckChannel(config)
-        : mixer.addMixerChannel(config);
-      if (saved.playlist) ch.playlist = saved.playlist;
-      onChannelCompiled(ch);
-
-      // Per docs/19_playlists.md §9.3 the playlist entry's `defaults` is the
-      // canonical per-slot state. If a playlist+entry survived in saved
-      // state, re-apply those defaults; otherwise just replay localControls.
-      const pl = ch.playlist && ch.playlist.name && playlistManager.load(ch.playlist.name);
-      const entry = pl && ch.playlist.activeEntryId &&
-        pl.entries.find(e => e.id === ch.playlist.activeEntryId);
-      if (entry && !entry._missing) {
-        playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
-      } else if (saved.localControls) {
-        for (const [idStr, cv] of Object.entries(saved.localControls)) {
-          const controlId = parseInt(idStr, 10);
-          if (!getReplayableLocalExport(ch, controlId)) continue;
-          paramRouter.setChannelControl(ch.id, controlId, cv.v0, cv.v1, cv.v2);
-        }
+      // Don't fight an in-flight swap — the inactive slot is the live fade
+      // target then. warmInactiveDeckHandle also guards this, but checking
+      // here avoids a wasted compile.
+      if (mixer.isDeckSwapInFlight && mixer.isDeckSwapInFlight()) return;
+      const src = loadPattern(patternsDir, nextEntry.pattern);
+      const comp = wasmHost.compile(src);
+      if (!comp.ok) {
+        console.warn(`[Deck] precompile-next skipped for '${nextEntry.pattern}': ${comp.error}`);
+        return;
       }
-      // CPC gets the last word — latest color palette, speed, etc. always win
-      finalizeCpcValues(ch);
+      // Seed top-level scope so the warmed handle's exports are initialized
+      // and it ticks correctly while parked.
+      wasmHost.beginFrame(comp.handle, 0);
+      const installed = mixer.warmInactiveDeckHandle(nextEntry.pattern, comp.handle);
+      if (installed) {
+        console.log(`[Deck] precompiled next entry '${nextEntry.pattern}' into warm slot`);
+      }
+    } catch (err) {
+      console.warn(`[Deck] precompileNextDeckEntry failed (non-fatal): ${err.message}`);
+    }
+  }
+
+  // Mission-critical deck-restore visibility (FIX A). Set to a descriptor
+  // `{ failedPattern, reason, fellBackTo }` iff the saved deck channel failed
+  // to restore and we fell back to the default pattern to keep the exterior
+  // LIT. Surfaced on GET /status as `deckRestoreDegraded` so an operator /
+  // CaptainPad / smoke-check can SEE that the saved deck didn't restore.
+  // Null on a clean boot.
+  let deckRestoreDegraded = null;
+
+  // Build a channel (deck or mixer) from a saved-state shape against a given
+  // pattern name. Loads + compiles the pattern, installs the channel, re-binds
+  // its saved playlist, and replays entry defaults / localControls. THROWS on
+  // load or compile failure so the deck-fallback wrapper can react; the mixer
+  // path lets the throw bubble to restoreChannel's catch (degrade + warn).
+  function buildChannelFromSaved(saved, role, pattern) {
+    const src = loadPattern(patternsDir, pattern);
+    const comp = wasmHost.compile(src);
+    if (!comp.ok) {
+      throw new Error(`Failed to compile saved ${role} channel '${pattern}': ${comp.error}`);
+    }
+    const config = {
+      id: saved.id,
+      name: saved.name,
+      // Use the pattern we actually built — on a deck fallback this is the
+      // default, not the broken saved.pattern.
+      pattern: pattern,
+      handle: comp.handle,
+      mode: saved.mode,
+      fader: saved.fader,
+      enabled: saved.enabled,
+      // Restore lock flags so the channel survives engine restart in
+      // the same lock state the operator left it in. Pre-fader_lock
+      // these were silently dropped; with the new faderLocked field
+      // added in slot 5 we plumb them through explicitly. Falsy
+      // defaults match the PatternChannel constructor.
+      locked: !!saved.locked,
+      faderLocked: !!saved.faderLocked,
+      // Same reasoning for transition prefs.
+      transitionMode: saved.transitionMode || 'trans_crossfade',
+      transitionTime: saved.transitionTime || 1.0,
+      // Restore view-selection so a mask-restricted channel survives
+      // engine restart. setDeckChannel / addMixerChannel will compile
+      // the mask immediately via recompileChannelMask (no extra call
+      // needed here).
+      viewSelection: saved.viewSelection || { type: 'all', target: null, invert: false },
+      // F-C / F-D restore. An old state file without these fields restores
+      // to the documented schema defaults (faderMax 1.0 = no clamp,
+      // color null). The PatternChannel constructor clamps/types both.
+      faderMax: typeof saved.faderMax === 'number' ? saved.faderMax : 1.0,
+      color: typeof saved.color === 'string' ? saved.color : null,
+      // WAVE 15 restore. An old state file without these restores to the
+      // documented defaults (mixGroupId null = no group; soloSafe false).
+      // The group it points at is restored separately (mixGroups, below) so
+      // membership resolves. The PatternChannel ctor types both defensively.
+      mixGroupId: typeof saved.mixGroupId === 'string' ? saved.mixGroupId : null,
+      soloSafe: !!saved.soloSafe,
+      // F-hue restore (docs/39). An old state file without this restores
+      // to 0 = no shift (documented schema default). The PatternChannel
+      // ctor normalizes into [0,360).
+      hue: typeof saved.hue === 'number' ? saved.hue : 0,
+      // F-phase #4 restore (docs/39 §F-phase). An old state file without this
+      // restores to the documented default (followsTempo false = immune to
+      // tap-tempo). The transient _phaseSeconds accumulator is NEVER restored
+      // (it starts at 0 on boot).
+      followsTempo: !!saved.followsTempo,
+      // F-follow restore (docs/39 §F-follow, round-2 #6). An old state file
+      // without these restores to the documented defaults (followLeaderId null
+      // = not following; followScale 1.0). The leader the pointer names is
+      // restored as its own channel separately; if that leader no longer exists
+      // after a restore, _effFader reads a missing prev-frame cache entry as 0
+      // (the follower tracks down, never crashes) — but the operator should
+      // re-link. The PatternChannel ctor types/clamps both defensively.
+      followLeaderId: typeof saved.followLeaderId === 'string' ? saved.followLeaderId : null,
+      followScale: typeof saved.followScale === 'number' ? saved.followScale : 1.0,
+    };
+    const ch = role === 'deck'
+      ? mixer.setDeckChannel(config)
+      : role === 'deckOverlay'
+        ? mixer.addDeckOverlay(config)
+        : mixer.addMixerChannel(config);
+    if (saved.playlist) ch.playlist = saved.playlist;
+    onChannelCompiled(ch);
+
+    // Per docs/19_playlists.md §9.3 the playlist entry's `defaults` is the
+    // canonical per-slot state. If a playlist+entry survived in saved
+    // state, re-apply those defaults; otherwise just replay localControls.
+    // tryLoad (not load) so a corrupt active playlist degrades to the
+    // localControls fallback instead of aborting the channel restore.
+    const pl = ch.playlist && ch.playlist.name && playlistManager.tryLoad(ch.playlist.name);
+    const entry = pl && ch.playlist.activeEntryId &&
+      pl.entries.find(e => e.id === ch.playlist.activeEntryId);
+    // Codex P0: a dangling activeEntryId (the entry was deleted from the
+    // playlist since this state was saved) is a restore-time bomb — every
+    // later "advance from current entry" lookup would silently no-op
+    // against an id that resolves to nothing. Detect it here, WARN loudly,
+    // and CLEAR the stale id so the channel is in a clean "no active
+    // entry" state rather than carrying a pointer to a ghost. We still
+    // fall back to localControls below so the slot keeps its last params.
+    const danglingEntryId = pl && ch.playlist.activeEntryId && !entry;
+    if (danglingEntryId) {
+      console.warn(
+        `[Restore] ${role} channel '${ch.id}': playlist '${ch.playlist.name}' ` +
+        `has no entry '${ch.playlist.activeEntryId}' (deleted since save) — ` +
+        `clearing the stale activeEntryId.`);
+      ch.playlist.activeEntryId = null;
+    }
+    if (entry && !entry._missing) {
+      playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
+    } else if (saved.localControls) {
+      for (const [idStr, cv] of Object.entries(saved.localControls)) {
+        const controlId = parseInt(idStr, 10);
+        if (!getReplayableLocalExport(ch, controlId)) continue;
+        paramRouter.setChannelControl(ch.id, controlId, cv.v0, cv.v1, cv.v2);
+      }
+    }
+    // CPC gets the last word — latest color palette, speed, etc. always win
+    finalizeCpcValues(ch);
+    return ch;
+  }
+
+  function restoreChannel(saved, role /* 'deck' | 'mixer' */) {
+    if (role === 'deck') {
+      // FIX A (mission critical): the deck drives the exterior — it must NEVER
+      // boot dark. On ANY failure to restore the saved deck (null/empty/
+      // missing-file/compile-fail) fall back to the known-good default pattern
+      // and surface a LOUD, VISIBLE degrade (console.error + deckRestoreDegraded
+      // on /status). Only a default that ALSO fails throws fatally.
+      const { degraded } = restoreDeckWithFallback(
+        saved,
+        opts.pattern,
+        (pattern) => buildChannelFromSaved(saved, 'deck', pattern),
+      );
+      deckRestoreDegraded = degraded;
+      return;
+    }
+    // Mixer overlay path: a dead overlay degrades + warns (the deck + other
+    // overlays stay live). Behavior unchanged from before FIX A.
+    try {
+      buildChannelFromSaved(saved, 'mixer', saved.pattern);
     } catch (e) {
-      console.warn(`Failed to restore channel ${saved.pattern}:`, e.message);
+      console.warn(`Failed to restore ${role} channel ${saved.pattern}:`, e.message);
     }
   }
 
@@ -1259,6 +2180,37 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
     }
 
+    // Deck dynamic view overrides restore (operator ruling #5): rebuild the
+    // deck overlays from deck_state.yaml in saved order (bottom→top), mirroring
+    // the mixer restore loop. A dead overlay degrades + warns (the deck + other
+    // overlays stay live — never crashes the boot). An old file without
+    // `overlays` loads to [] (documented default). The shared overlay autopilot
+    // cadence is restored afterward; the transient shared anchor stays null
+    // (re-seeds on the first active tick).
+    if (Array.isArray(deckState.overlays)) {
+      for (const saved of deckState.overlays) {
+        try {
+          buildChannelFromSaved(saved, 'deckOverlay', saved.pattern);
+        } catch (e) {
+          console.warn(`Failed to restore deck overlay ${saved && saved.id} (${saved && saved.pattern}):`, e.message);
+        }
+      }
+    }
+    if (deckState.overlayAutopilot && typeof deckState.overlayAutopilot === 'object') {
+      const oap = deckState.overlayAutopilot;
+      mixer.deckOverlayAutopilot = {
+        active: !!oap.active,
+        // delay floored to 1s (mirrors validateAutoCycleDelay) so a stale/zero
+        // on-disk value can't strobe.
+        delay_s: (typeof oap.delay_s === 'number' && Number.isFinite(oap.delay_s)) ? Math.max(1, oap.delay_s) : 30,
+        shuffle: !!oap.shuffle,
+        // PATTERN-GROUP LOCALITY (feat/optimize_channels): absent fields default
+        // (off / 3 / 6) so an old state file with no group keys restores clean.
+        ...autoGroupFields(oap),
+      };
+      mixer._deckOverlayAnchorMs = null;
+    }
+
     if (mixerState.master !== undefined) {
       mixer.setMaster(mixerState.master);
     }
@@ -1284,11 +2236,365 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }, 'deck');
     }
 
+    // F-phase #4 (tap-tempo) restore: rebuild the derived _tempoMultiplier
+    // from the persisted global tempoBpm. A finite saved value goes through
+    // setTempoBpm (which clamps the multiplier); a missing/null/non-finite
+    // value leaves the default null tempo (no tempo set) untouched — a
+    // documented schema default, not a silent fallback.
+    if (typeof mixerState.tempoBpm === 'number' && Number.isFinite(mixerState.tempoBpm)) {
+      mixer.setTempoBpm(mixerState.tempoBpm);
+    }
+    // STICKY tempo source preference restore (operator request 2026-06-29). The
+    // selector position survives a restart. Absent/invalid ⇒ the mixer default
+    // 'osc' (a documented default, not a silent fallback). The arbiter reads
+    // mixer.tempoSourcePref live, so setting it here is sufficient.
+    if (mixerState.tempoSourcePref === 'osc' || mixerState.tempoSourcePref === 'tap') {
+      mixer.tempoSourcePref = mixerState.tempoSourcePref;
+    }
+
     const base = mixer.getDeckChannel();
     if (base) opts.pattern = base.pattern;
+    // WAVE 15: restore the gang-fader group registry so member channels'
+    // mixGroupId pointers resolve. Done after channels (membership is a
+    // channel→group pointer the channels already carry). Defensive — skip
+    // malformed entries rather than abort the whole boot.
+    restoreMixGroups();
   } else {
     if (mixer.getDeckChannel()) finalizeCpcValues(mixer.getDeckChannel());
     for (const ch of mixer.getMixerChannels()) finalizeCpcValues(ch);
+    // WAVE 15: a state file with a group registry but no surviving channels
+    // is still worth restoring (the operator may re-add members). Idempotent.
+    restoreMixGroups();
+  }
+
+  // ── Named mixer snapshots / look recall (F-A) ─────────────────────────
+  //
+  // captureLook() serializes the FULL mixer state (master + the deck channel
+  // + every overlay) into the same on-disk channel shape buildChannelFromSaved
+  // restores from — so a captured look round-trips through recall identically
+  // to an engine restart. recallLook() reuses the existing build/setter
+  // machinery (buildChannelFromSaved → setDeckChannel/addMixerChannel) and
+  // RESPECTS maxChannels: it removes every current overlay, then re-adds the
+  // snapshot's overlays up to the cap. A snapshot with more overlays than the
+  // cap is a fail-loud condition (the caller 400s) — not a silent truncation.
+  function captureLook() {
+    const deck = mixer.getDeckChannel();
+    return {
+      master: mixer.master,
+      deck: deck ? serializeChannelForState(deck) : null,
+      channels: mixer.getMixerChannels().map(c => serializeChannelForState(c)),
+      // WAVE 15: groups ride in the look so a recall reproduces the gang
+      // faders + membership exactly (members' mixGroupId is in `channels`).
+      mixGroups: mixer.getMixGroups().map(g => ({
+        id: g.id, name: g.name, fader: g.fader, muted: g.muted, color: g.color,
+      })),
+    };
+  }
+
+  // WAVE 15: rebuild the gang-fader group registry from saved/snapshot state.
+  // Validates each entry defensively — a malformed group is skipped + warned
+  // rather than aborting boot. The mixer's createMixGroup mints fresh ids, so
+  // we install groups directly to PRESERVE the saved id (member pointers
+  // reference it). Called at boot and on look recall.
+  function restoreMixGroups(savedGroups) {
+    const groups = Array.isArray(savedGroups)
+      ? savedGroups
+      : (Array.isArray(mixerState.mixGroups) ? mixerState.mixGroups : []);
+    mixer.mixGroups = [];
+    let maxCounter = 0;
+    for (const g of groups) {
+      if (!g || typeof g.id !== 'string' || g.id.length === 0) {
+        console.warn('[Restore] skipping malformed mix group (missing id):', g);
+        continue;
+      }
+      mixer.mixGroups.push({
+        id: g.id,
+        name: (typeof g.name === 'string') ? g.name : g.id,
+        fader: (typeof g.fader === 'number' && Number.isFinite(g.fader)) ? Math.max(0, Math.min(1, g.fader)) : 1.0,
+        muted: !!g.muted,
+        color: (typeof g.color === 'string') ? g.color : null,
+      });
+      // Keep the counter ahead of any restored id of the form mg_<n>_<ts> so
+      // a freshly-created group can't collide with a restored one.
+      const m = /^mg_(\d+)_/.exec(g.id);
+      if (m) { const n = parseInt(m[1], 10); if (Number.isFinite(n) && n > maxCounter) maxCounter = n; }
+    }
+    if (maxCounter > mixer._mixGroupCounter) mixer._mixGroupCounter = maxCounter;
+  }
+
+  // Apply a loaded snapshot to the live mixer. Throws on a structurally
+  // invalid look (over-cap overlay count, deck rebuild failure) so the route
+  // can surface a real error instead of half-applying. Best-effort per overlay
+  // (a dead overlay degrades + warns, matching restoreChannel's mixer path).
+  function recallLook(look) {
+    if (!look || typeof look !== 'object') {
+      throw new Error('recallLook: look must be an object');
+    }
+    const overlays = Array.isArray(look.channels) ? look.channels : [];
+    if (overlays.length > mixer.maxChannels) {
+      const err = new Error(
+        `Snapshot has ${overlays.length} overlays but the mixer cap is ` +
+        `${mixer.maxChannels}`);
+      err.code = 'SNAPSHOT_OVER_CAP';
+      throw err;
+    }
+    // Tear down the current overlays (unregister CPC + destroy handles via the
+    // existing remover). The deck channel is rebuilt in place below.
+    for (const overlay of [...mixer.getMixerChannels()]) {
+      if (paramCenter) paramCenter.unregisterChannel(overlay.id);
+      mixer.removeMixerChannel(overlay.id);
+    }
+    // Deck: rebuild from the snapshot if present (reuses the mission-critical
+    // never-dark fallback). If the snapshot carried no deck, leave the live
+    // deck untouched rather than going dark.
+    if (look.deck) {
+      if (mixer.getDeckChannel()) {
+        if (paramCenter) paramCenter.unregisterChannel(mixer.getDeckChannel().id);
+        mixer.removeDeckChannel();
+      }
+      restoreChannel(look.deck, 'deck');
+    }
+    // Overlays: rebuild each through the same degrade-tolerant path as boot.
+    for (const saved of overlays) {
+      if (saved && saved.id && saved.id.startsWith('ch_base')) continue;
+      restoreChannel(saved, 'mixer');
+    }
+    // WAVE 15: restore the look's group registry (members' mixGroupId came
+    // back with the overlay rebuild above). A look without mixGroups (older
+    // snapshot) clears the registry to [] — the recalled overlays carry no
+    // membership in that case either, so nothing dangles.
+    restoreMixGroups(Array.isArray(look.mixGroups) ? look.mixGroups : []);
+    // Master last (setMaster cancels any in-flight fade — a recall is a hard
+    // set of the whole look, not an animation).
+    if (typeof look.master === 'number' && Number.isFinite(look.master)) {
+      mixer.setMaster(look.master);
+    }
+  }
+
+  // ── Snapshot crossfade / morph (round-2 #1) ───────────────────────────
+  //
+  // morphToLook(look, durationMs) is the RAMPED sibling of recallLook(): it
+  // brings the live mix to `look` by ANIMATING current→target over durationMs
+  // instead of the instant teardown+rebuild recallLook does. It reuses the
+  // engine's existing animation machinery wholesale — per-channel fadeChannel
+  // transitions[], the grand-master _masterFade, and the morph group fades
+  // (_groupFades) — and owns the build (T channels) + CPC bookkeeping. The
+  // mixer's _morph descriptor + _tickMorph drive the single completion
+  // finalizer (onMorphComplete, wired below) that CPC-unregisters the
+  // faded-out channels, persists, and broadcasts.
+  //
+  // Channel semantics (match by channel ID), v1 RAMP LEVELS ONLY:
+  //   M (id in both):    SNAP structural/chroma (rebuild content so a changed
+  //                      pattern/mode/view/faderMax/color/hue/group takes
+  //                      effect at kickoff), but RAMP the fader current→target.
+  //   T (target only):   build at fader 0 + enabled, then ramp 0→target fader.
+  //   C (current only):  ramp fader →0 with destroyOnComplete; the finalizer
+  //                      CPC-unregisters the id (removeChannel does NOT).
+  // Master: startMasterFade. Groups: ramp the fader of groups present in BOTH;
+  // snap (no ramp) groups that are target-only (they didn't exist to ramp
+  // from). Deck: SNAP content (mission-critical never-dark), RAMP its fader.
+  //
+  // v1 DEFERRALS (documented, additive-safe): hue/color/faderMax are SNAPPED
+  // at kickoff, not ramped — color is metadata (no render), faderMax is a
+  // non-linear ceiling, hue is angular (needs short-arc interpolation). See
+  // docs/39 §10.8. Fader-locked channels are skipped by fadeChannel (their
+  // parked level is sacred); their structural snap still applies.
+  //
+  // Throws on a structurally invalid look (over-cap UNION, deck rebuild
+  // failure) so the route surfaces a real error instead of half-applying.
+  // The UNION cap check is the transient-cap guard: while a morph is in
+  // flight the current-only (C) channels still exist (fading out) WHILE the
+  // target-only (T) channels are added, so the peak channel count is the
+  // union, not the target count. Over-cap ⇒ fail-loud SNAPSHOT_OVER_CAP, no
+  // silent truncation (Codex P0).
+  function morphToLook(look, durationMs) {
+    if (!look || typeof look !== 'object') {
+      throw new Error('morphToLook: look must be an object');
+    }
+    if (!Number.isFinite(durationMs) || durationMs <= 0) {
+      // Defensive re-validation — the route validates first, but never mutate
+      // on a bad duration.
+      const err = new Error(`morphToLook: durationMs must be finite > 0, got ${durationMs}`);
+      err.code = 'MORPH_BAD_DURATION';
+      throw err;
+    }
+
+    const targetOverlays = (Array.isArray(look.channels) ? look.channels : [])
+      .filter(s => s && !(typeof s.id === 'string' && s.id.startsWith('ch_base')));
+    const currentOverlays = mixer.getMixerChannels();
+
+    // ── Transient UNION cap check (BEFORE any mutation) ──────────────────
+    const unionIds = new Set();
+    for (const c of currentOverlays) unionIds.add(c.id);
+    for (const s of targetOverlays) if (s && typeof s.id === 'string') unionIds.add(s.id);
+    if (unionIds.size > mixer.maxChannels) {
+      const err = new Error(
+        `Morph would peak at ${unionIds.size} overlays (current ∪ target) but the ` +
+        `mixer cap is ${mixer.maxChannels}`);
+      err.code = 'SNAPSHOT_OVER_CAP';
+      throw err;
+    }
+
+    // Classify by id. M = in both, T = target-only, C = current-only.
+    const targetById = new Map();
+    for (const s of targetOverlays) if (s && typeof s.id === 'string') targetById.set(s.id, s);
+    const currentById = new Map();
+    for (const c of currentOverlays) currentById.set(c.id, c);
+
+    // ── Arm the morph descriptor + cancel any conflicting in-flight state ─
+    // Kickoff cancels/replaces a prior morph, the grand-master fade (auto via
+    // startMasterFade below), per-channel transitions (auto via fadeChannel's
+    // cancelChannelTransition), the deck swap, and clears solo (transient —
+    // a stuck solo would gate the morph's losers to black mid-ramp).
+    mixer.cancelMorph();
+    mixer.cancelAllGroupFades();
+    mixer.cancelDeckPatternSwap();
+    mixer.soloedChannelIds.clear();
+    if (typeof mixer.clearBumps === 'function') mixer.clearBumps();
+
+    // ── C: current-only channels ramp to 0 + are removed on completion ───
+    // Schedule the fade-out FIRST (before rebuilds) so destroyOnComplete +
+    // the finalizer CPC-unregister own the teardown. fadeChannel refuses
+    // fader-locked channels (returns false) — those stay put; document.
+    const fadeOutIds = [];
+    for (const c of currentOverlays) {
+      if (targetById.has(c.id)) continue; // M handled below
+      c.enabled = true; // ensure it's visible so the fade-out actually reads
+      const scheduled = mixer.fadeChannel(c.id, 0, durationMs, {
+        curve: 'smoothstep',
+        destroyOnComplete: true,
+      });
+      // Track every current-only id for finalizer CPC cleanup. Even a
+      // fader-locked channel (scheduled=false, won't auto-remove) is left
+      // alone — it's not part of the target, but ripping it out mid-morph
+      // would be a silent structural change; v1 leaves locked C channels in
+      // place and documents it. Only push ids we actually fade out.
+      if (scheduled) fadeOutIds.push(c.id);
+    }
+
+    // ── M: id in both — SNAP structural by rebuild, RAMP the fader ───────
+    // We rebuild the channel from the target's saved shape so a changed
+    // pattern/mode/view/chroma takes effect at kickoff, then anchor the
+    // rebuilt channel's fader at the CURRENT (pre-morph) value and ramp it to
+    // the target fader. Rebuild = remove (CPC unregister + destroy handle) +
+    // re-add through the same degrade-tolerant restoreChannel path recall
+    // uses. The fader is the only thing that animates.
+    for (const [id, saved] of targetById) {
+      if (!currentById.has(id)) continue; // T handled below
+      const startFader = currentById.get(id).fader;
+      const targetFader = (typeof saved.fader === 'number' && Number.isFinite(saved.fader))
+        ? Math.max(0, Math.min(1, saved.fader))
+        : 1.0;
+      if (paramCenter) paramCenter.unregisterChannel(id);
+      mixer.removeMixerChannel(id);
+      restoreChannel(saved, 'mixer');
+      const rebuilt = mixer.getMixerChannel(id);
+      if (rebuilt) {
+        rebuilt.enabled = true;
+        rebuilt.fader = startFader; // anchor at the pre-morph level
+        mixer.fadeChannel(id, targetFader, durationMs, { curve: 'smoothstep' });
+      }
+    }
+
+    // ── T: target-only — build at fader 0, then ramp 0→target fader ─────
+    for (const [id, saved] of targetById) {
+      if (currentById.has(id)) continue; // M handled above
+      const targetFader = (typeof saved.fader === 'number' && Number.isFinite(saved.fader))
+        ? Math.max(0, Math.min(1, saved.fader))
+        : 1.0;
+      restoreChannel(saved, 'mixer');
+      const built = mixer.getMixerChannel(id);
+      if (built) {
+        built.enabled = true;
+        built.fader = 0; // start dark, ramp up
+        mixer.fadeChannel(id, targetFader, durationMs, { curve: 'smoothstep' });
+      }
+    }
+
+    // ── Deck: SNAP content (never-dark), RAMP the fader ─────────────────
+    // Rebuild the deck from the snapshot (mission-critical never-dark
+    // fallback inside restoreChannel), anchored at the current deck fader,
+    // then ramp to the snapshot's deck fader. If the snapshot carried no
+    // deck, leave the live deck untouched (don't go dark).
+    if (look.deck) {
+      const liveDeck = mixer.getDeckChannel();
+      const deckStartFader = liveDeck ? liveDeck.fader : 0;
+      const deckTargetFader = (typeof look.deck.fader === 'number' && Number.isFinite(look.deck.fader))
+        ? Math.max(0, Math.min(1, look.deck.fader))
+        : 1.0;
+      const deckId = look.deck.id;
+      if (liveDeck) {
+        if (paramCenter) paramCenter.unregisterChannel(liveDeck.id);
+        mixer.removeDeckChannel();
+      }
+      restoreChannel(look.deck, 'deck');
+      const rebuiltDeck = mixer.getDeckChannel();
+      if (rebuiltDeck && rebuiltDeck.id === deckId && !rebuiltDeck.faderLocked) {
+        rebuiltDeck.enabled = true;
+        rebuiltDeck.fader = deckStartFader;
+        mixer.fadeChannel(deckId, deckTargetFader, durationMs, { curve: 'smoothstep' });
+      }
+    }
+
+    // ── Groups: ramp groups in BOTH, snap target-only groups ────────────
+    // Capture the live group faders by id, install the target group registry
+    // (restoreMixGroups replaces it wholesale, preserving the saved id so
+    // member pointers resolve), then for any group that existed BEFORE too,
+    // rewind its fader to the pre-morph value and ramp it to the target.
+    // Target-only groups stay at their snapshot fader (nothing to ramp from).
+    const priorGroupFaders = new Map();
+    for (const g of mixer.getMixGroups()) priorGroupFaders.set(g.id, g.fader);
+    restoreMixGroups(Array.isArray(look.mixGroups) ? look.mixGroups : []);
+    for (const g of mixer.getMixGroups()) {
+      if (!priorGroupFaders.has(g.id)) continue; // target-only → snap
+      const startF = priorGroupFaders.get(g.id);
+      const targetF = g.fader;
+      if (startF === targetF) continue; // already there, no ramp needed
+      g.fader = startF; // rewind to pre-morph level
+      mixer.startGroupFade(g.id, targetF, durationMs);
+    }
+
+    // ── Master: ramp current→target ────────────────────────────────────
+    if (typeof look.master === 'number' && Number.isFinite(look.master)) {
+      mixer.startMasterFade(look.master, durationMs);
+    }
+
+    // ── Arm the completion window. The ramps above all share durationMs, so
+    // they land on the same wall-clock boundary _tickMorph watches; the
+    // finalizer then CPC-unregisters the faded-out ids + persists.
+    mixer.beginMorph(durationMs, fadeOutIds);
+  }
+
+  // ── Mixer UNDO (round-2 #10, docs/39 §F-undo) ─────────────────────────
+  //
+  // A bounded, SESSION-ONLY ring of full captureLook() snapshots taken
+  // BEFORE each DESTRUCTIVE mixer mutation. Undo pops the most recent look
+  // and restores it through the proven never-dark recallLook() path. See
+  // lib/undo_stack.js for the rationale (ring of looks vs inverse-op log;
+  // session-only vs persisted). pushUndo() is the single choke point: it is
+  // called as the FIRST line — BEFORE the mutation — in each destructive
+  // route, so the captured look is always the PRE-mutation state.
+  //
+  // NOT pushed: fader/hue/speed/etc PATCH writes (non-destructive,
+  // high-frequency — pushing them would flood the ring and bury the
+  // structural action the operator actually wants to undo). Undo scope is
+  // STRUCTURAL mutations only.
+  const undoStack = new UndoStack(UNDO_MAX);
+
+  // Broadcast the undo button's enable/label state. ONE typed message on
+  // /ws/control (registered in ws_topic_routing TOPIC_BY_TYPE), emitted on
+  // every push + every undo so CaptainPad mirrors depth/top live. Replayed
+  // on /ws/control connect (see wssControl 'connection' below).
+  function broadcastUndoState() {
+    broadcastWs({ type: 'undoState', depth: undoStack.depth, top: undoStack.topLabel });
+  }
+
+  // The choke point. Call as the FIRST line of a destructive route, BEFORE
+  // mutating the mixer, so captureLook() records the PRE-mutation look. The
+  // ring is bounded (oldest dropped at UNDO_MAX) inside UndoStack.push.
+  function pushUndo(label) {
+    undoStack.push({ label, look: captureLook(), atMs: Date.now() });
+    broadcastUndoState();
   }
 
   // ── Channel serialization (post-split) ────────────────────────────
@@ -1324,11 +2630,38 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       transitionTime: c.transitionTime || 1.0,
       playlist: c.playlist || null,
       viewSelection: c.viewSelection || { type: 'all', target: null, invert: false },
+      // F-C: per-channel intensity ceiling (hard cap on this channel's own
+      // contribution). Default 1.0 = no clamp. F-D: per-channel color
+      // metadata (no render effect). Surfaced so CaptainPad can show the
+      // clamp slider + color chip. See docs/39 §F-C/§F-D.
+      faderMax: typeof c.faderMax === 'number' ? c.faderMax : 1.0,
+      color: typeof c.color === 'string' ? c.color : null,
+      // WAVE 15: gang-fader group membership pointer (null = no group) +
+      // solo-safe rig flag. Surfaced so CaptainPad can render the group rail
+      // chip + the solo-safe toggle. See docs/39 §F-group/§F-solo.
+      mixGroupId: typeof c.mixGroupId === 'string' ? c.mixGroupId : null,
+      soloSafe: !!c.soloSafe,
+      // F-hue (docs/39): per-channel hue rotation in degrees [0,360).
+      // Surfaced so CaptainPad can render the per-channel HUE control. A
+      // channel without the field (old engine) serializes 0 = no shift.
+      hue: typeof c.hue === 'number' ? c.hue : 0,
+      // F-phase (docs/39 §F-phase #4): tap-tempo opt-in. Surfaced so CaptainPad
+      // can render the FOLLOW TEMPO toggle. The transient _phaseSeconds
+      // accumulator is NEVER surfaced. Default false for an old engine without
+      // the field.
+      followsTempo: !!c.followsTempo,
+      // F-follow (docs/39 §F-follow, round-2 #6): channel FOLLOW/LINK. Surfaced
+      // so CaptainPad can render the follow picker + scale. followLeaderId is
+      // the leader channel id (null = not following). followScale multiplies
+      // the leader's effective level [0,2]. A channel without the fields (old
+      // engine) serializes null / 1.0 = no follow.
+      followLeaderId: typeof c.followLeaderId === 'string' ? c.followLeaderId : null,
+      followScale: typeof c.followScale === 'number' ? c.followScale : 1.0,
       // CPC-matched exports are tagged with `cpcOwned`/`cpcKey`/
       // `cpcLabel` so the iPad can show a disabled "MATCHED · SPEED"
       // badge instead of silently hiding them — see notes in the
       // pre-split serializer for the May 2026 reasoning.
-      exports: wasmHost.getExports(c.handle)
+      exports: annotateCodeDefaults(c, wasmHost.getExports(c.handle)
         .filter(e => localControlKinds.has(e.kind))
         .map(e => {
           const cv = c.localControls[e.id];
@@ -1340,7 +2673,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             e.cpcLabel = owned.label;
           }
           return e;
-        })
+        }))
     };
   }
 
@@ -1354,7 +2687,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       type: 'deck',
       blackout: globalsState.blackout,
       master: mixer.master,
+      // F-B: in-flight grand-master fade descriptor, or null when steady.
+      // Lets the deck tab show a fade-in-progress affordance.
+      masterFade: mixer.getMasterFade ? mixer.getMasterFade() : null,
       channel: serializeDeckChannel(),
+      // Deck dynamic view overrides (deck overlays). Folded into the `deck`
+      // WS message (the deck tab already subscribes) so existing subscribers
+      // get them free — NO new WS type. order[0] = bottom, order[last] = top.
+      // Each overlay serialized with the full channel shape (serializeChannel)
+      // PLUS its compiled view + the overlay-specific color accent.
+      overlays: (mixer.getDeckOverlays ? mixer.getDeckOverlays() : []).map(serializeChannel),
+      // SHARED deck-overlay autopilot cadence (operator refinement #1): ONE
+      // clock for the whole overlay group. The transient anchor
+      // (_deckOverlayAnchorMs) is NOT surfaced. delay_s/shuffle persist;
+      // active is the live arm flag.
+      overlayAutopilot: {
+        active: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.active),
+        delay_s: (mixer.deckOverlayAutopilot && typeof mixer.deckOverlayAutopilot.delay_s === 'number')
+          ? mixer.deckOverlayAutopilot.delay_s : 30,
+        shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
+        ...autoGroupFields(mixer.deckOverlayAutopilot),
+      },
     };
   }
 
@@ -1379,6 +2732,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       modelStale: !!(engineCore.modelSync && engineCore.modelSync.stale),
       modelStaleMessage: (engineCore.modelSync && engineCore.modelSync.message) || null,
       master: mixer.master,
+      // F-B: in-flight grand-master fade descriptor (null when steady).
+      masterFade: mixer.getMasterFade ? mixer.getMasterFade() : null,
       maxChannels: mixer.maxChannels,
       baseChannelId: mixer.baseChannelId,
       channels: mixer.getMixerChannels().map(c => ({
@@ -1407,6 +2762,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // pointer. Broadcasting it lets the deck and mixer panels detect
         // cross-tab swaps without polling.
         playlist: c.playlist || null,
+        // F-C / F-D: per-channel intensity ceiling + color metadata. See
+        // serializeChannel above for semantics.
+        faderMax: typeof c.faderMax === 'number' ? c.faderMax : 1.0,
+        color: typeof c.color === 'string' ? c.color : null,
+        // WAVE 15: gang-fader group membership + solo-safe flag. See
+        // serializeChannel above for semantics. docs/39 §F-group/§F-solo.
+        mixGroupId: typeof c.mixGroupId === 'string' ? c.mixGroupId : null,
+        soloSafe: !!c.soloSafe,
+        // F-hue (docs/39): per-channel hue rotation. See serializeChannel
+        // above for semantics. 0 = no shift.
+        hue: typeof c.hue === 'number' ? c.hue : 0,
+        // F-phase (docs/39 §F-phase #4): tap-tempo opt-in. See serializeChannel
+        // above for semantics. Default false. _phaseSeconds is transient and
+        // never surfaced.
+        followsTempo: !!c.followsTempo,
+        // F-follow (docs/39 §F-follow, round-2 #6): FOLLOW/LINK. See
+        // serializeChannel above for semantics. null / 1.0 = no follow.
+        followLeaderId: typeof c.followLeaderId === 'string' ? c.followLeaderId : null,
+        followScale: typeof c.followScale === 'number' ? c.followScale : 1.0,
         // CPC-matched exports used to be filtered out here. As of
         // May 2026 they're SURFACED with a `cpcOwned` / `cpcKey` /
         // `cpcLabel` tag so the UI can show a disabled "MATCHED ·
@@ -1416,7 +2790,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // path still no-ops on these exports (getReplayableLocalExport
         // returns null for shared IDs), so re-exposing them in the
         // payload doesn't open a back-channel write.
-        exports: wasmHost.getExports(c.handle)
+        exports: annotateCodeDefaults(c, wasmHost.getExports(c.handle)
           .filter(e => localControlKinds.has(e.kind))
           .map(e => {
             const cv = c.localControls[e.id];
@@ -1428,8 +2802,50 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               e.cpcLabel = owned.label;
             }
             return e;
-          })
-      }))
+          }))
+      })),
+      // WAVE 15: the gang-fader group registry and the server-authoritative
+      // solo set. soloedChannelIds is an ARRAY snapshot of the transient Set
+      // (the client reconciles its display-only dim/active state from this on
+      // every broadcast; it survives reconnect because it lives server-side).
+      mixGroups: mixer.getMixGroups().map(g => ({
+        id: g.id, name: g.name, fader: g.fader, muted: g.muted, color: g.color,
+      })),
+      soloedChannelIds: [...mixer.soloedChannelIds],
+      // FLASH / BUMP (round-2 #5, docs/39 §10.7): the transient momentary-full
+      // set. ARRAY snapshot of the Set — the client reconciles its "held" button
+      // display from this on every broadcast. NOT persisted (transient, like
+      // solo); empty after a restart.
+      bumpedChannelIds: [...mixer._bumpedChannelIds],
+      // F-phase #4 (tap-tempo): the GLOBAL operator-tapped tempo. null =
+      // no tempo set (documented default — distinct from a tapped value).
+      // Affects only channels that opted in (followsTempo). The derived
+      // _tempoMultiplier is NOT surfaced (recomputed from bpm on the
+      // client / on restore). Rides the mixer-state broadcast — no new WS
+      // message type needed.
+      tempoBpm: (typeof mixer.tempoBpm === 'number' && Number.isFinite(mixer.tempoBpm))
+        ? mixer.tempoBpm
+        : null,
+      // TEMPO ARBITRATION: the LIVE status of how tempoBpm is being driven —
+      // for the colour/liveness accent (NOT the selector highlight):
+      //   'osc'    — OSC selected and live, auto-following.
+      //   'manual' — TAP is the sticky source (the tapped tempo owns it).
+      //   'held'   — OSC selected but stale/off, the last value just holding.
+      // `tempoSourcePref` is the STICKY operator selection ('osc' | 'tap') the
+      // OSC/TAP selector highlights — it does NOT flap with OSC liveness, so a
+      // brief OSC dropout reads as 'held' here while the selector stays on OSC.
+      // `oscTempoBpm` is the RAW live OSC value (clamped) or null when stale —
+      // distinct from the applied `tempoBpm`. All ride the existing mixer-state
+      // broadcast; the legacy `tempoBpm` field is unchanged.
+      tempoSource: engineCore.tempoArbiter
+        ? engineCore.tempoArbiter.deriveSource()
+        : 'held',
+      tempoSourcePref: engineCore.tempoArbiter
+        ? engineCore.tempoArbiter.sourcePref()
+        : (mixer.tempoSourcePref === 'tap' ? 'tap' : 'osc'),
+      oscTempoBpm: engineCore.tempoArbiter
+        ? engineCore.tempoArbiter.oscTempoBpm()
+        : null,
     };
   }
 
@@ -1535,19 +2951,59 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     broadcastMixerState();
   };
 
+  // ── Snapshot morph finalizer (round-2 #1) ──────────────────────────────
+  // The mixer's _tickMorph() fires this exactly once when a morph's wall-clock
+  // window elapses (the descriptor is already cleared by the time we run).
+  // The per-channel/master/group ramps have all landed by this boundary; our
+  // job is the bookkeeping recallLook does synchronously but a morph defers:
+  //   - CPC-unregister the faded-out (current-only) channel ids. The mixer's
+  //     destroyOnComplete + removeChannel already destroyed their handles +
+  //     spliced them out of the stack, but removeChannel does NOT touch the
+  //     ParamCenter registry (recallLook unregisters explicitly at its
+  //     teardown); without this the registry would leak a ghost id.
+  //   - Persist (we deliberately did NOT saveAllState at kickoff — the morph
+  //     is a transient animation, like /mixer/master/fade; the settled look
+  //     is the canonical state).
+  //   - Broadcast the settled mixer + a recall-fade-complete signal so the
+  //     iPad reconciles the strips on the look it landed on.
+  mixer.onMorphComplete = ({ fadeOutIds = [] } = {}) => {
+    if (paramCenter) {
+      for (const id of fadeOutIds) paramCenter.unregisterChannel(id);
+    }
+    saveAllState();
+    broadcastWs({ type: 'snapshots', action: 'recall-fade-complete', snapshots: snapshotManager.list() });
+    broadcastMixerState();
+  };
+
   // Single payload shape used by every autopilot writer. Kept on its own
   // WS event type so subscribers (CaptainPad's deck tab, future PortWatch
   // mirror, etc.) can wire `if (msg.type === 'autopilot') …` without
   // having to scrape the larger mixer broadcast.
+  function deckAutopilotState() {
+    const baseCh = mixer.getDeckChannel();
+    const ap = baseCh && baseCh.playlist ? baseCh.playlist.autopilot : null;
+    return ap || { active: false, delay_s: 30, shuffle: false };
+  }
   function broadcastAutopilot() {
-    const st = autopilot.state || {};
+    const st = deckAutopilotState();
     broadcastWs({
       type: 'autopilot',
       active: !!st.active,
       delay_s: st.delay_s !== undefined ? String(st.delay_s) : '30',
       shuffle: !!st.shuffle,
+      // Wall-clock ms of the next pattern swap (null when inactive) — drives the
+      // deck's "next pattern in M:SS" countdown. Re-broadcast on every cycle via
+      // the daemon's onSchedule hook so it stays fresh after each swap.
+      nextSwapAtMs: (typeof autopilot !== 'undefined' && autopilot) ? autopilot.nextSwapAtMs : null,
     });
   }
+
+  // Autopilot advance is main's frame-driven system: the deck `autopilot`
+  // daemon (constructed below) drives deck cycling via its self-rescheduling
+  // timer + pickNextAutoCycleEntry, and mixer/deck overlays advance off
+  // autoCycleTick / deckOverlayAutoCycleTick (one wall clock, no per-channel
+  // timers). The superseded per-channel AutopilotPool and its advance helpers
+  // were removed in the timeline merge.
 
   // The "view override" pins the engine output to the deck regardless of
   // any subsequent /mixer/view writes from another panel. When cleared,
@@ -1573,9 +3029,47 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // fader is impossible — we have no record — so we leave the engine
   // wherever its persisted mixerState put it and let the operator
   // release explicitly.
+  // Boot hydration: a persisted deck-pin can come from a real PortWatch device
+  // ('portwatch') or — defensively — a stale plan pin ('plan'). EITHER restores
+  // the deck output pin so the rig keeps the view it had before the restart.
   let viewOverrideMode =
-    (globalsState && globalsState.controlLock === 'portwatch') ? 'deck' : null;
+    (globalsState && (globalsState.controlLock === 'portwatch' || globalsState.controlLock === 'plan'))
+      ? 'deck' : null;
   let savedTargetViewFader = null;       // float pre-override
+
+  // ── controlLock SOURCE — who owns the deck-pin ───────────────────────
+  //
+  // `viewOverrideMode` is the raw output pin ('deck' | null). The
+  // `controlLock` value broadcast to every UI carries WHO forced that pin:
+  //
+  //   'portwatch' — a real PortWatch device holds the rig (HARD lockout:
+  //                 CaptainPad shows "PORTWATCH HAS THE RIG"). Lease-governed.
+  //   'plan'      — the TIMELINE (show plan) forced the deck (SOFT lock:
+  //                 CaptainPad shows a low-key yellow warning, still allows
+  //                 navigation, disables only pattern-select + mixer-activate).
+  //                 NOT lease-governed — the plan releases the pin itself via
+  //                 the timeline, never the PortWatch lease timer.
+  //   null        — nobody owns it.
+  //
+  // Boot seeding: whichever owner the persisted lock names, seed the SAME
+  // source. (Audit C2 2026-07-02: a persisted 'plan' lock used to restore the
+  // raw pin but seed source null, and currentControlLock()'s back-compat
+  // treated a source-less pin as 'portwatch' — an un-leased HARD lockout that
+  // no PortWatch device would ever release, that timelineReleaseDeckView
+  // refused to clear (source !== 'plan'), and that CaptainPad curtains with
+  // "PORTWATCH HAS THE RIG". Seeding 'plan' keeps it a SOFT lock the
+  // timeline's per-tick _reconcileDeckPin releases or re-owns within 1s.)
+  let controlLockSource =
+    (globalsState && (globalsState.controlLock === 'portwatch' || globalsState.controlLock === 'plan'))
+      ? globalsState.controlLock : null;
+
+  // The single source of truth for the broadcast `controlLock` field. A deck
+  // pin with no recorded source is treated as a PortWatch lock (back-compat:
+  // PortWatch is the only writer of the raw deck-pin besides the plan).
+  function currentControlLock() {
+    if (viewOverrideMode !== 'deck') return null;
+    return controlLockSource || 'portwatch';
+  }
 
   // ── controlLock lease ───────────────────────────────────────────────
   //
@@ -1603,11 +3097,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   let controlLockLeaseExpiresAtMs = null;
 
   function clearViewOverrideInternal() {
-    if (viewOverrideMode === 'deck' && savedTargetViewFader !== null) {
-      mixer.targetViewFader = savedTargetViewFader;
+    if (viewOverrideMode === 'deck') {
+      if (controlLockSource === 'plan') {
+        // A PLAN pin always showed the DECK (lit). Handing back to the operator
+        // (takeover / resume / pause) must KEEP the deck lit — never restore a
+        // stale saved mixer value that would black the rig out (bug 2026-07-02
+        // round 2). The operator explicitly flips to mixer output afterward if
+        // they want it. So force the deck view, ignoring savedTargetViewFader.
+        mixer.targetViewFader = 0.0;
+      } else if (savedTargetViewFader !== null) {
+        // A PortWatch device pin restores whatever the operator had before the
+        // device took over (unchanged device semantics).
+        mixer.targetViewFader = savedTargetViewFader;
+      }
     }
     viewOverrideMode = null;
     savedTargetViewFader = null;
+    controlLockSource = null;
   }
 
   function disarmControlLockLease() {
@@ -1647,6 +3153,93 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return Math.max(0, controlLockLeaseExpiresAtMs - Date.now());
   }
 
+  // ── FLASH / BUMP release-on-disconnect lease (round-2 #5, docs/39 §10.7) ──
+  //
+  // A held bump pins a channel to FULL. If the iPad that's holding the bump
+  // drops off (walks out of wifi range, app force-quit, link dies), the
+  // channel must NOT stay pinned full forever. Two independent safety nets,
+  // both belt-and-braces:
+  //
+  //   1. LEASE: every `bump` (REST or WS) stamps `bumpLeaseExpiry[channelId]`
+  //      = now + BUMP_LEASE_MS. The client RENEWS by re-sending the bump
+  //      while the button is held (CaptainPad re-sends every BUMP_RENEW_MS).
+  //      A periodic sweep (BUMP_SWEEP_MS) auto-releases any bump whose lease
+  //      has lapsed. So a dropped client's bump self-heals within ~one lease.
+  //   2. WS-CLOSE: each /ws/control socket tracks the channels IT bumped
+  //      (`ws._bumpedByThisWs`). On close we release exactly those — instant
+  //      cleanup for the common "tab closed / reconnect" case, without
+  //      waiting out the lease. (REST bumps have no socket to close, so they
+  //      rely solely on the lease — that's why the lease exists at all.)
+  //
+  // The lease window is short (2 s) so a stuck channel recovers fast; the
+  // renew cadence (~700 ms) is comfortably inside it so a healthy hold never
+  // flickers. unbump (release) clears the lease entry immediately.
+  const BUMP_LEASE_MS = 2_000;
+  const bumpLeaseExpiry = new Map(); // channelId -> expiry ms (Date.now()-based)
+  let bumpSweepTimer = null;
+  const BUMP_SWEEP_MS = 500;
+
+  function touchBumpLease(channelId) {
+    bumpLeaseExpiry.set(channelId, Date.now() + BUMP_LEASE_MS);
+  }
+  function clearBumpLease(channelId) {
+    bumpLeaseExpiry.delete(channelId);
+  }
+
+  // Periodic sweep: release any bump whose lease has lapsed (dropped client).
+  // Runs only while at least one bump is held — the timer is armed on the
+  // first bump and disarmed when the set empties, so an idle engine pays zero.
+  function sweepExpiredBumps() {
+    const now = Date.now();
+    let releasedAny = false;
+    for (const id of [...mixer._bumpedChannelIds]) {
+      const exp = bumpLeaseExpiry.get(id);
+      if (exp === undefined || exp <= now) {
+        const r = mixer.unbumpChannel(id);
+        if (r.ok && r.changed) releasedAny = true;
+        bumpLeaseExpiry.delete(id);
+        console.log(`[bump] lease expired — auto-released '${id}'`);
+      }
+    }
+    if (releasedAny) {
+      saveAllState();
+      broadcastMixerState();
+    }
+    if (mixer._bumpedChannelIds.size === 0) {
+      disarmBumpSweep();
+    }
+  }
+  function armBumpSweep() {
+    if (bumpSweepTimer !== null) return;
+    bumpSweepTimer = setInterval(sweepExpiredBumps, BUMP_SWEEP_MS);
+    // Don't keep the event loop alive solely for the bump sweep.
+    if (typeof bumpSweepTimer.unref === 'function') bumpSweepTimer.unref();
+  }
+  function disarmBumpSweep() {
+    if (bumpSweepTimer !== null) {
+      clearInterval(bumpSweepTimer);
+      bumpSweepTimer = null;
+    }
+  }
+
+  // Apply a bump (on=true) / release (on=false) with full validation + lease
+  // bookkeeping. Returns the mixer result ({ ok, changed } | { ok:false,
+  // status, error }). The caller broadcasts/saves on ok. Shared by REST + WS.
+  function applyBump(channelId, on) {
+    if (on) {
+      const r = mixer.bumpChannel(channelId);
+      if (r.ok) { touchBumpLease(channelId); armBumpSweep(); }
+      return r;
+    }
+    const r = mixer.unbumpChannel(channelId);
+    if (r.ok) {
+      if (channelId === null || channelId === undefined) bumpLeaseExpiry.clear();
+      else clearBumpLease(channelId);
+      if (mixer._bumpedChannelIds.size === 0) disarmBumpSweep();
+    }
+    return r;
+  }
+
   function broadcastViewOverride() {
     broadcastWs({
       type: 'viewOverride',
@@ -1655,14 +3248,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // namespace it ("controlLock") rather than reusing "viewOverride"
       // so listeners can tell at a glance whether they're looking at
       // raw view-fader state or "who owns the rig right now".
-      controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
+      // 'portwatch' = hard device lock, 'plan' = soft timeline lock, null = free.
+      controlLock: currentControlLock(),
       // Lease metadata — every UI can render a countdown without
       // needing to subscribe to a separate event. expiresAt is an
       // absolute UNIX ms timestamp so clients with skewed clocks
       // can still compute "remaining = max(0, expiresAt - now)" off
-      // a synchronised time source if they care.
-      controlLockLeaseExpiresAtMs: controlLockLeaseExpiresAtMs,
-      controlLockLeaseDurationMs: viewOverrideMode === 'deck'
+      // a synchronised time source if they care. Only a PortWatch lock
+      // is lease-governed; a 'plan' lock carries no lease (the timeline
+      // owns its release), so these are null for it.
+      controlLockLeaseExpiresAtMs: controlLockSource === 'portwatch' ? controlLockLeaseExpiresAtMs : null,
+      controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
         ? CONTROL_LOCK_LEASE_MS
         : null,
       currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
@@ -1677,7 +3273,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // boot to seed the initial value. Idempotent + cheap (saveGlobalsState
   // batches via the same hook the rest of the globals use).
   function syncControlLockToGlobals() {
-    const next = viewOverrideMode === 'deck' ? 'portwatch' : null;
+    const next = currentControlLock();
     if ((globalsState.controlLock || null) !== next) {
       globalsState.controlLock = next;
       try {
@@ -1697,14 +3293,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // fresh lease so the lock doesn't outlive the engine restart by
   // more than CONTROL_LOCK_LEASE_MS. Without this, a crash while
   // someone held the lock would silently strand CaptainPad after
-  // boot until an operator manually cleared the override.
-  if (viewOverrideMode === 'deck') {
+  // boot until an operator manually cleared the override. A 'plan'
+  // pin is NOT lease-governed — the timeline re-pins + releases it
+  // itself — so we never arm the PortWatch lease for it.
+  if (viewOverrideMode === 'deck' && controlLockSource === 'portwatch') {
     armControlLockLease();
   }
 
   // Initialize Autopilot Daemon. We are always in playlist mode, so the
   // "current key" is the active entry id and the swap target is the next
-  // entry in the deck channel's playlist.
+  // entry in the deck channel's playlist. This is main's frame-driven deck
+  // daemon (#40 tempo overhaul): the daemon's timer is controlled by
+  // `autopilot.updateState({active,delay_s})`, and the next-entry pick reads
+  // `baseCh.playlist.autopilot` (mirrored shuffle/group fields). Mixer
+  // overlays + deck overlays cycle off the SAME pure picker via
+  // `autoCycleTick` / `deckOverlayAutoCycleTick` (per-frame, no per-channel
+  // timers). The superseded per-channel AutopilotPool is gone.
   const autopilot = new Autopilot(
     listPatterns,
     patternsDir,
@@ -1722,19 +3326,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (usable.length === 0) return;
 
         const cur = baseCh.playlist.activeEntryId;
-        let nextEntry;
-        if (baseCh.playlist.autopilot && baseCh.playlist.autopilot.shuffle) {
-          const others = usable.filter(e => e.id !== cur);
-          nextEntry = others.length ? others[Math.floor(Math.random() * others.length)] : usable[0];
-        } else {
-          const idx = pl.entries.findIndex(e => e.id === cur);
-          // Walk forward until we hit a non-missing entry.
-          let nextIdx = (idx + 1) % pl.entries.length;
-          for (let i = 0; i < pl.entries.length; i++) {
-            if (!pl.entries[nextIdx]._missing) { nextEntry = pl.entries[nextIdx]; break; }
-            nextIdx = (nextIdx + 1) % pl.entries.length;
-          }
-        }
+        // Selection is the SHARED pure picker (group→shuffle→sequential) —
+        // the SAME `pickNextAutoCycleEntry` the mixer overlay ticks use, so
+        // the deck and overlays can never drift. It applies group-locality,
+        // then shuffle/sequential. Group dwell state lives on the deck base
+        // channel's transient `_autoGroup` (reset by loadPlaylistEntry on every
+        // manual tap / (re-)load, so a manual tap starts a fresh group).
+        const nextEntry = pickNextAutoCycleEntry(
+          pl, baseCh.playlist.autopilot, cur, baseCh._autoGroup);
         if (!nextEntry) return;
         // Route through the deck-transition path: if the operator has
         // enabled transitions, the load runs as a smooth double-buffer
@@ -1763,8 +3362,510 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           console.warn('Autopilot playlist swap failed:', e.message);
         }
       }
-    }
+    },
+    // Re-broadcast the next-swap time on every (re)schedule so the deck's
+    // pattern-autopilot countdown stays accurate after each swap.
+    () => broadcastAutopilot(),
   );
+
+  // ── COLOR autopilot (palette cycling, docs/39) ──────────────────────
+  // Resolve a colorPalette id → CPC params and WRITE it (the SAME path looks /
+  // timeline cues use: hue-only c1/c2 → colorPalette1/2 {h,s,v}). Throws loud on
+  // an unknown id (codex P0 — no silent skip). Shared by the engine ColorAutopilot
+  // daemon AND the timeline's setColorAutopilot dep, so a cue and a manual deck
+  // write resolve palettes identically.
+  function resolveColorPaletteParams(id) {
+    const palettes = Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [];
+    const entry = palettes.find((p) => p && p.id === id);
+    if (!entry) throw new Error(`palette "${id}" not found in colorPalettes config`);
+    return {
+      colorPalette1: { h: entry.c1, s: 1, v: 1 },
+      colorPalette2: { h: entry.c2, s: 1, v: 1 },
+    };
+  }
+  function knownPaletteIds() {
+    const palettes = Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [];
+    return new Set(palettes.map((p) => p && p.id).filter(Boolean));
+  }
+  // Write an already-resolved (or crossfade-interpolated) params object to the
+  // rig — CPC writes ONLY. The CPC fan-out (paramCenter.onChange, wired at
+  // boot) already handles persistence + the throttled WS broadcast for every
+  // param writer (docs/24 §7.2), so this is safe to call per crossfade FRAME.
+  // It deliberately does NOT saveAllState()/broadcastColorAutopilot(): doing
+  // that on every tween frame (~25 fps) rewrote every state YAML per frame AND
+  // flooded /ws/control with `colorAutopilot` echoes, so a delay/transition tap
+  // racing an in-flight stale echo visibly snapped back then forward on the
+  // deck (operator report 2026-07-03: "double-changing"). The pattern
+  // Autopilot broadcasts its config only on state change / (re)schedule; the
+  // color autopilot now follows the same discipline (setColorAutopilot + the
+  // onSchedule hook cover every config change).
+  function writeColorPaletteParams(params) {
+    if (!paramCenter) throw new Error('paramCenter not available for color autopilot');
+    for (const k in params) paramCenter.set(k, params[k], 'colorAutopilot');
+  }
+  // HARD-CUT palette apply (one write per cycle tick, never per frame):
+  // surface the change the same way an operator palette write would — persist +
+  // broadcast so every UI mirrors the live palette without polling.
+  function applyColorPalette(id) {
+    writeColorPaletteParams(resolveColorPaletteParams(id));
+    saveAllState();
+    broadcastColorAutopilot();
+  }
+
+  // The palette-cycling daemon. Independent timer from the pattern `autopilot`
+  // (they run in parallel; color cycling never changes the pattern). Persists its
+  // {active,palettes,delay_s,shuffle,transitionMs} block into config.yaml under
+  // colorAutopilot. The crossfade hooks (resolve + applyParams) let a switch RAMP
+  // the palette params over `transitionMs` instead of hard-cutting (docs/39).
+  const colorAutopilot = new ColorAutopilot(applyColorPalette, undefined, {
+    resolvePaletteFn: resolveColorPaletteParams,
+    applyParamsFn: writeColorPaletteParams,
+    // Re-broadcast the next-swap time on every (re)schedule so the deck
+    // color-autopilot countdown stays accurate after each palette switch.
+    onSchedule: () => broadcastColorAutopilot(),
+  });
+
+  // Single payload shape for every colorAutopilot writer (REST, timeline cue),
+  // mirroring broadcastAutopilot. CaptainPad's deck tab wires
+  // `if (msg.type === 'colorAutopilot') …`.
+  function colorAutopilotState() {
+    const st = colorAutopilot.state;
+    return {
+      active: !!st.active,
+      palettes: Array.isArray(st.palettes) ? [...st.palettes] : [],
+      delay_s: typeof st.delay_s === 'number' ? st.delay_s : 30,
+      shuffle: !!st.shuffle,
+      // transitionMs (docs/39): crossfade duration on a palette switch. 0 ==
+      // hard cut. Older persisted configs omit it → report 0.
+      transitionMs: typeof st.transitionMs === 'number' ? st.transitionMs : 0,
+      // Wall-clock ms of the next palette switch (null when inactive) — drives
+      // the deck's "next color in M:SS" countdown. Kept fresh each cycle via the
+      // daemon's onSchedule hook.
+      nextSwapAtMs: colorAutopilot.nextSwapAtMs,
+    };
+  }
+  function broadcastColorAutopilot() {
+    broadcastWs({ type: 'colorAutopilot', ...colorAutopilotState() });
+  }
+  // Configure + (re)start the color autopilot from a validated wire object. Used
+  // by the REST route AND the timeline's setColorAutopilot dep. active:true →
+  // start cycling that set; active:false → stop (the daemon pauses on inactive).
+  function setColorAutopilot(wire) {
+    const validated = ColorAutopilot.validate(wire, knownPaletteIds());
+    colorAutopilot.setState(validated);
+    broadcastColorAutopilot();
+    return colorAutopilotState();
+  }
+
+  // Timeline-cue variant of setColorAutopilot: same config/(re)start, but on an
+  // ACTIVATING cue it also applies the FIRST palette IMMEDIATELY rather than
+  // waiting a full delay_s. The immediate apply crossfades per the cue's
+  // transitionMs, seeded from the LIVE on-screen palette (paramCenter's current
+  // colorPalette1/2) so the fade starts from what the operator actually sees —
+  // not a stale/null start that would jump then fade. Scoped to the timeline dep
+  // (the operator's manual /color-autopilot REST toggle keeps its wait-then-cycle
+  // cadence). colorAutopilot.triggerNext() applies palette[0] now AND reschedules
+  // the next switch, so the ongoing cadence is unchanged.
+  function timelineSetColorAutopilot(wire) {
+    const out = setColorAutopilot(wire);
+    if (wire && wire.active && paramCenter) {
+      colorAutopilot.seedCurrentParams({
+        colorPalette1: paramCenter.get('colorPalette1'),
+        colorPalette2: paramCenter.get('colorPalette2'),
+      });
+      // Fire-and-forget: the crossfade tween schedules its own frames. A throw
+      // here (e.g. unknown palette) can't happen — the ids were validated above.
+      colorAutopilot.triggerNext();
+    }
+    return out;
+  }
+
+  // ── Timeline service (docs/38 §15) ──────────────────────────────────
+  // The Timeline (show director) runs IN the engine now — no separate
+  // :6965 companion process. It owns a 1 s tick, reads mood DIRECTLY off
+  // the CPC, and applies actions by calling the same INTERNAL helpers the
+  // /deck/playlist, /mixer autopilot, /param-center, /scene, and
+  // /scheduled-tasks routes use — no HTTP self-calls. Gated on
+  // config.timeline.enabled. Constructed here (after the deck `autopilot`
+  // daemon + playlistManager + paramCenter are ready); started below once
+  // the server is listening, and stopped on engine shutdown via
+  // server.stopTimeline.
+  //
+  // The deps below are thin wrappers over the existing route code paths so
+  // a timeline-driven playlist/autopilot/CPC/scene/task change is
+  // indistinguishable from the operator doing it from CaptainPad (same
+  // broadcasts, same persistence). Autopilot now rides main's frame-driven
+  // system: setting `channel.playlist.autopilot {active,delay_s,shuffle}`
+  // + saving + broadcasting is all the deck daemon / autoCycleTick need —
+  // they re-read that block every tick, so there is no pool to arm/rearm.
+  function timelineSetAutopilotOnDeck(state) {
+    const baseCh = mixer.getDeckChannel();
+    if (!baseCh) throw new Error('no deck channel');
+    baseCh.playlist = baseCh.playlist || { name: null, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+    const ap = baseCh.playlist.autopilot = baseCh.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
+    if (state.active !== undefined) ap.active = !!state.active;
+    if (state.delay_s !== undefined) ap.delay_s = parseInt(state.delay_s, 10) || 30;
+    if (state.shuffle !== undefined) ap.shuffle = !!state.shuffle;
+    // Pattern-autopilot GROUP LOCALITY (docs — deck dwell window). The deck
+    // daemon / pickNextAutoCycleEntry re-read these three fields off
+    // baseCh.playlist.autopilot every advance and clamp groupSize/groupDwell to
+    // AUTO_GROUP_* on use, so we just mirror the cue's authored values here. A
+    // NaN integer keeps the prior value rather than corrupting the block.
+    if (state.groupMode !== undefined) ap.groupMode = !!state.groupMode;
+    if (state.groupSize !== undefined) {
+      const gs = parseInt(state.groupSize, 10);
+      if (!Number.isNaN(gs)) ap.groupSize = gs;
+    }
+    if (state.groupDwell !== undefined) {
+      const gd = parseInt(state.groupDwell, 10);
+      if (!Number.isNaN(gd)) ap.groupDwell = gd;
+    }
+    // Drive main's deck daemon timer (active/delay) the SAME way POST /autopilot
+    // does — updateState reschedules the self-rescheduling setTimeout. The
+    // shuffle pick is read from baseCh.playlist.autopilot (mirrored above).
+    autopilot.updateState({ active: ap.active, delay_s: String(ap.delay_s), shuffle: ap.shuffle });
+    saveAllState();
+    broadcastMixerState();
+    broadcastAutopilot();
+  }
+  function timelineSetAutopilotOnMixer(id, state) {
+    const ch = mixer.getMixerChannel(id);
+    if (!ch) throw new Error(`mixer channel not found: ${id}`);
+    ch.playlist = ch.playlist || { name: null, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+    const ap = ch.playlist.autopilot = ch.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
+    if (state.active !== undefined) ap.active = !!state.active;
+    if (state.delay_s !== undefined) ap.delay_s = parseInt(state.delay_s, 10) || 30;
+    if (state.shuffle !== undefined) ap.shuffle = !!state.shuffle;
+    // Pattern-autopilot GROUP LOCALITY — the mixer autoCycle reads these three
+    // off the same block (parity with the deck mirror + the REST mixer route).
+    // Without this a cue/look authoring group fields on a mixer/`all` target
+    // would validate clean then be silently dropped here (codex P0 — no silent
+    // partial apply). NaN integers keep the prior value.
+    if (state.groupMode !== undefined) ap.groupMode = !!state.groupMode;
+    if (state.groupSize !== undefined) {
+      const gs = parseInt(state.groupSize, 10);
+      if (!Number.isNaN(gs)) ap.groupSize = gs;
+    }
+    if (state.groupDwell !== undefined) {
+      const gd = parseInt(state.groupDwell, 10);
+      if (!Number.isNaN(gd)) ap.groupDwell = gd;
+    }
+    // Mixer overlays cycle off autoCycleTick, which re-reads this block every
+    // frame (seed/wait/due) — no per-channel timer to arm. Re-seed the
+    // wall-clock anchor + drop any group window so the next tick treats this as
+    // a fresh arm, then persist + broadcast so the UI reflects it.
+    ch._autoCycleLastAdvanceMs = null;
+    if (ch._autoGroup) { ch._autoGroup.windowIds = null; ch._autoGroup.swapsLeft = 0; }
+    saveAllState();
+    broadcastWs({ type: 'mixerAutopilot', channelId: id, autopilot: ap });
+    broadcastMixerState();
+  }
+  function timelineLoadPlaylistOnDeck(name) {
+    const baseCh = mixer.getDeckChannel();
+    if (!baseCh) throw new Error('no deck channel');
+    const pl = playlistManager.load(name);
+    if (!pl) throw new Error(`playlist not found: ${name}`);
+    // An empty playlist is a legitimate "nothing loaded" state, but a playlist
+    // whose entries are ALL missing pattern files must FAIL LOUD (codex P0) — the
+    // deck must never silently load a broken `_missing` entry. The timeline's
+    // per-cue try/catch surfaces this as a loud cueError.
+    const firstEntry = pl.entries.find(e => !e._missing);
+    if (!firstEntry) {
+      if (pl.entries.length > 0) {
+        throw new Error(`playlist "${name}" has no loadable entries`);
+      }
+      baseCh.playlist = {
+        name: pl.name, activeEntryId: null, cursor: 0,
+        autopilot: (baseCh.playlist && baseCh.playlist.autopilot) || { active: false, delay_s: 30, shuffle: false },
+      };
+      saveAllState();
+      broadcastMixerState();
+      return;
+    }
+    // Route the deck swap through the TRANSITION-aware loader (same path the
+    // pattern-autopilot swap + the manual /deck/playlist route use) so a cue's
+    // authored `transition` (mode/duration/shuffle, set on deckTransitionConfig
+    // by _applyDeckTransition just before this load) actually ANIMATES the swap
+    // instead of hard-cutting (operator: "use the settings for the cue to do
+    // transition of pattern"). When the effective config is disabled (a "default"
+    // cue that inherits a deck with transitions off), the WithTransition loader
+    // itself falls back to the exact instant load + save/broadcast this used to
+    // do — byte-for-byte identical.
+    //
+    // CONCURRENCY: only ONE deck swap can animate at a time (the mixer refuses an
+    // overlapping one with EBUSY). A cue apply can land on the deck while a prior
+    // swap is still fading — most notably on BOOT, where catchUp restores a cue
+    // (animated) and the autopilot baseline loads its playlist immediately after.
+    // A second animated swap can't start, so LAND THE TARGET INSTANTLY in that
+    // window — the SAME guaranteed-load behavior this path always had before
+    // transitions were added (the cue content must never be dropped). This is a
+    // concurrency decision, not error-hiding: we animate when we can, else load
+    // now. The returned `done` promise is intentionally NOT awaited: the fade
+    // runs in the background (mixer-driven), same as an operator's manual swap.
+    if (deckSwapInFlightReason()) {
+      loadPlaylistEntry(baseCh, pl.name, firstEntry.id);
+      saveAllState();
+      opts.pattern = baseCh.pattern;
+      broadcastWs({ type: 'pattern', name: baseCh.pattern });
+      broadcastMixerState();
+    } else {
+      loadPlaylistEntryWithTransition(baseCh, pl.name, firstEntry.id, deckTransitionConfig);
+    }
+  }
+  function timelineLoadPlaylistOnMixer(id, name) {
+    const ch = mixer.getMixerChannel(id);
+    if (!ch) throw new Error(`mixer channel not found: ${id}`);
+    const pl = playlistManager.load(name);
+    if (!pl) throw new Error(`playlist not found: ${name}`);
+    // Same fail-loud contract as the deck loader: never silently load a broken
+    // `_missing` entry. An all-missing playlist throws; a truly empty one is the
+    // legitimate "nothing loaded" state.
+    const firstEntry = pl.entries.find(e => !e._missing);
+    if (!firstEntry) {
+      if (pl.entries.length > 0) {
+        throw new Error(`playlist "${name}" has no loadable entries`);
+      }
+      ch.playlist = { name: pl.name, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+      saveAllState();
+      broadcastMixerState();
+      return;
+    }
+    loadPlaylistEntry(ch, pl.name, firstEntry.id);
+    saveAllState();
+    broadcastChannelPlaylistData(ch);
+    broadcastMixerState();
+  }
+  // Patch the live deckTransitionConfig from a timeline cue (docs/38 §16.9). Same
+  // validate/clamp contract as POST /deck/transition-config so an authored
+  // transition can never push an out-of-range duration to the render loop. The
+  // mode is gated by the show_plan validator (trans_crossfade|flash|dissolve)
+  // but we re-assert the trans_* shape here too — FAIL LOUD, never coerce.
+  function timelineSetDeckTransition(patch) {
+    if (!patch || typeof patch !== 'object') throw new Error('setDeckTransition: patch must be an object');
+    if (patch.enabled !== undefined) deckTransitionConfig.enabled = !!patch.enabled;
+    if (patch.shuffle !== undefined) deckTransitionConfig.shuffle = !!patch.shuffle;
+    if (patch.mode !== undefined) {
+      if (typeof patch.mode !== 'string' || !patch.mode.startsWith('trans_')) {
+        throw new Error(`setDeckTransition: mode must be a trans_* name, got '${patch.mode}'`);
+      }
+      deckTransitionConfig.mode = patch.mode;
+    }
+    if (patch.durationMs !== undefined) {
+      const n = Number(patch.durationMs);
+      if (!Number.isFinite(n)) throw new Error(`setDeckTransition: durationMs must be finite, got '${patch.durationMs}'`);
+      deckTransitionConfig.durationMs = Math.max(DECK_TRANSITION_MIN_MS, Math.min(DECK_TRANSITION_MAX_MS, n));
+    }
+    saveAllState();
+    broadcastWs({ type: 'deckTransitionConfig', ...deckTransitionConfig });
+  }
+  // Enable / disable ALL deck overlays from a timeline cue (docs/38 §16.9).
+  // `enabled:true` honors the deck's configured overlays (flips each overlay's
+  // own enabled flag on); `enabled:false` turns them all off. Mirrors the
+  // PATCH /deck/overlays/:id { enabled } write per overlay, then saves +
+  // broadcasts once.
+  function timelineSetDeckOverlaysEnabled(enabled) {
+    const want = !!enabled;
+    const overlays = mixer.getDeckOverlays ? mixer.getDeckOverlays() : [];
+    for (const overlay of overlays) overlay.enabled = want;
+    saveAllState();
+    broadcastDeckState();
+  }
+  // Pin engine output to the deck via the EXISTING viewOverride machinery
+  // (docs/38 §16.9). The TIMELINE owns this pin while the plan drives the deck —
+  // so we do NOT arm the controlLock (PortWatch 30 s) lease here; the plan's
+  // own operator-takeover lease governs release. Idempotent: a no-op when
+  // already pinned to deck.
+  function timelineForceDeckView() {
+    // The plan owns the deck-pin as a SOFT lock ('plan'), distinct from a real
+    // PortWatch device lock ('portwatch'). If already pinned to deck, only the
+    // SOURCE may need upgrading to 'plan' (e.g. boot restored a bare deck pin) —
+    // but never DOWNGRADE a real PortWatch lock that's currently held.
+    if (viewOverrideMode === 'deck') {
+      if (controlLockSource !== 'portwatch' && controlLockSource !== 'plan') {
+        controlLockSource = 'plan';
+        syncControlLockToGlobals();
+        broadcastViewOverride();
+      }
+      // A plan pin ALWAYS shows the deck: if a stale persisted view left the
+      // live fader on the mixer while the pin is a plan soft-lock, snap it to
+      // the deck so the locked output is the lit deck, never a black mixer
+      // (bug 2026-07-02 round 2). Never touch a PortWatch-owned pin's fader.
+      if (controlLockSource === 'plan' && mixer.targetViewFader !== 0.0) {
+        mixer.targetViewFader = 0.0;
+      }
+      return;
+    }
+    savedTargetViewFader = mixer.targetViewFader;
+    mixer.targetViewFader = 0.0;
+    viewOverrideMode = 'deck';
+    // SOFT lock: source 'plan'. We do NOT arm the PortWatch lease here — the
+    // plan releases the pin itself via the timeline (resume/handback).
+    controlLockSource = 'plan';
+    syncControlLockToGlobals();
+    broadcastViewOverride();
+    console.log('[viewOverride] pinned to deck by timeline (plan soft-lock)');
+  }
+
+  // Release the TIMELINE's soft deck-pin (docs/38 §16.9). The counterpart to
+  // timelineForceDeckView: the plan calls this when it STOPS driving the deck
+  // (pause, autopilot-off, deactivate) so the yellow "PLAN IS RUNNING" lock
+  // clears and CaptainPad regains the deck/mixer. Reuses the same
+  // clearViewOverrideInternal machinery as a manual view/clear — no parallel
+  // pin. Codex P0 SAFETY: only ever clears a pin OWNED BY THE PLAN. If a real
+  // PortWatch device currently owns the deck ('portwatch'), we leave it
+  // untouched — the plan must never yank a hardware lock. A no-op when nothing
+  // is pinned or the plan doesn't own the pin.
+  function timelineReleaseDeckView() {
+    if (viewOverrideMode !== 'deck') return;         // nothing pinned
+    if (controlLockSource !== 'plan') return;         // not the plan's pin (e.g. portwatch) → leave it
+    clearViewOverrideInternal();
+    syncControlLockToGlobals();
+    broadcastViewOverride();
+    console.log('[viewOverride] plan released the deck pin (soft-lock cleared)');
+  }
+
+  const timelineConfigBlock = (engineCore.engineConfig && engineCore.engineConfig.timeline) || {};
+  // Gate the in-engine Timeline on config.timeline.enabled. The env escape
+  // hatch BM26_DISABLE_TIMELINE=1 lets deck/playlist-focused tests boot the
+  // engine WITHOUT the show director touching the deck baseline on boot
+  // (the timeline's whole job is to drive the deck, which would otherwise
+  // override a test's restored deck state).
+  const timelineEnabled = timelineConfigBlock.enabled === true
+    && process.env.BM26_DISABLE_TIMELINE !== '1';
+  const timelineMoodCfg = timelineConfigBlock.mood || {};
+  const timelineMoodKey = timelineMoodCfg.key || 'audioParty';
+  const timelinePartyThreshold = typeof timelineMoodCfg.partyThreshold === 'number'
+    ? timelineMoodCfg.partyThreshold : 0.5;
+
+  let timelineService = null;
+  if (timelineEnabled) {
+    const sceneName = opts.modelName || 'default';
+    const timelineSceneDir = path.join(
+      patternsDir, '..', '..', 'simulation', 'scenes', sceneName, 'timeline',
+    );
+    timelineService = new TimelineService({
+      scene: sceneName,
+      sceneDir: timelineSceneDir,
+      stateDir,
+      getMood: () => {
+        // Read the mood key DIRECTLY off the CPC (docs/38 §15). The audio
+        // companion populates audioParty; default CALM (0) when unknown so a
+        // mood cue never spuriously fires before the first analyser frame.
+        let value = 0;
+        try {
+          if (paramCenter) {
+            const v = paramCenter.get(timelineMoodKey);
+            value = typeof v === 'number' ? v : (v && typeof v.value === 'number' ? v.value : 0);
+          }
+        } catch (_) {
+          value = 0; // key not registered yet → calm
+        }
+        return { party: value >= timelinePartyThreshold ? 1 : 0, value };
+      },
+      deps: {
+        loadPlaylist: ({ target, name }) => {
+          if (target.kind === 'deck') return timelineLoadPlaylistOnDeck(name);
+          return timelineLoadPlaylistOnMixer(target.id, name);
+        },
+        setAutopilot: ({ target, state }) => {
+          if (target.kind === 'deck') return timelineSetAutopilotOnDeck(state);
+          return timelineSetAutopilotOnMixer(target.id, state);
+        },
+        setParams: (obj) => {
+          if (!paramCenter) throw new Error('paramCenter not available');
+          for (const k in obj) {
+            const r = paramCenter.set(k, obj[k], 'timeline');
+            // FAIL LOUD on an AUTHORING error (codex P0 — no silent drop): a
+            // typo'd/unknown CPC key or a malformed value would otherwise vanish
+            // with no cueError, so a cue's `globals`/look would silently do
+            // nothing. `source_lock` is NOT an authoring error — it's normal
+            // runtime arbitration (another source holds the param) — so let it
+            // pass silently, exactly as a live operator write would be arbitrated.
+            if (r && r.status === 'ignored' && r.reason !== 'source_lock') {
+              throw new Error(`setParams: '${k}' rejected (${r.reason})`);
+            }
+          }
+        },
+        // A cue/look `master` global drives the DECK GRAND MASTER through the
+        // EXACT path the operator's PATCH /mixer { master } uses (mixer.setMaster
+        // + save + broadcastMixerState), so a plan's master is indistinguishable
+        // from the operator setting it by hand (Task 1 unify). Before this, the
+        // timeline wrote `master` to the CPC — which has no `master` param — so
+        // the deck brightness never changed (a silent no-op / separate route).
+        // Codex P0: reject a non-finite master loudly (never black the rig).
+        setMaster: (value) => {
+          const mv = validateFader(value);
+          if (!mv.ok) throw new Error(`master global invalid: ${mv.error}`);
+          mixer.setMaster(mv.value);
+          saveAllState();
+          broadcastMixerState();
+        },
+        requestScene: (name) => {
+          if (typeof engineCore.requestSceneSwitch !== 'function') {
+            throw new Error('engine does not support scene switching (no requestSceneSwitch hook)');
+          }
+          return engineCore.requestSceneSwitch(name);
+        },
+        patchScheduledTask: (id, patch) => scheduledTaskService.patch(id, patch),
+        fireScheduledTask: (id) => scheduledTaskService.fireNow(id),
+        listMixerChannelIds: () => mixer.getMixerChannels().map(c => c.id),
+        listPlaylists: () => playlistManager.list(),
+        // docs/38 §16.9 deck knobs + mixer→deck output pin. Bound to the real
+        // internal engine functions (no HTTP self-calls), same style as above.
+        setDeckTransition: (patch) => timelineSetDeckTransition(patch),
+        setDeckOverlaysEnabled: (enabled) => timelineSetDeckOverlaysEnabled(enabled),
+        // Color autopilot (docs/39): a deck playlist cue's colorAutopilot block
+        // configures + (re)starts / stops the engine palette-cycling daemon.
+        // Bound to the real internal fn (no HTTP self-call). On cue START we
+        // also apply the FIRST palette immediately (crossfading per the cue's
+        // transitionMs, seeded from the live on-screen color) instead of waiting
+        // a full delay_s and hard-cutting — so a cue's color settings visibly
+        // transition the deck the moment it fires (operator: "use the settings
+        // for the cue to do transition of ... color").
+        setColorAutopilot: (wire) => timelineSetColorAutopilot(wire),
+        // Global HUE SHIFT (docs/39 §F-hue): a deck playlist cue's `hue` routes
+        // through the SAME internal path as POST /global-effect-hue (and the
+        // CaptainPad hue slider, which sends setGlobalHue(deg, 0)). rot/spin is
+        // fixed 0. FAIL LOUD if the controller is missing (codex P0 — never
+        // silently drop an authored hue).
+        setGlobalHue: (degrees) => {
+          if (!globalEffectsController) throw new Error('global effects controller not initialized');
+          const hv = validateHue(degrees);
+          if (!hv.ok) throw new Error(hv.error);
+          // setHueShift re-validates + normalizes (degrees [0,360), rot 0) and
+          // throws on non-finite — defence in depth, mirroring the POST route.
+          globalEffectsController.setHueShift(hv.value, 0);
+          globalsState.hueShift = { ...globalEffectsController.hueShift };
+          // Persist through saveGlobalsState (NOT saveAllState, which only
+          // writes mixer/deck state) so the authored hue survives a reboot, and
+          // broadcast mixer state alongside the hue message — mirroring POST
+          // /global-effect-hue exactly.
+          stateManager.saveGlobalsState(globalsState, paramCenter);
+          broadcastWs({ type: 'globalHueShift', hueShift: { ...globalEffectsController.hueShift } });
+          broadcastMixerState();
+        },
+        forceDeckView: () => timelineForceDeckView(),
+        // Release the plan's soft deck-pin (docs/38 §16.9). Called on every
+        // transition where the plan stops driving the deck (pause / autopilot
+        // off / deactivate) so the 'plan' controlLock clears. Only touches a
+        // 'plan'-owned pin — never a real PortWatch hardware lock.
+        releaseDeckView: () => timelineReleaseDeckView(),
+        // Read-only view of the engine's current view-override pin so getState()
+        // can surface `forcingDeckView` (plan active AND output pinned to deck).
+        getViewOverrideMode: () => viewOverrideMode,
+      },
+      broadcast: broadcastWs,
+      config: {
+        enabled: true,
+        activePlan: timelineConfigBlock.activePlan || 'playa_default',
+        tickMs: timelineConfigBlock.tickMs || 1000,
+        programLeaseSec: timelineConfigBlock.programLeaseSec || 30,
+        operatorLeaseSec: timelineConfigBlock.operatorLeaseSec || 120,
+        mood: { key: timelineMoodKey, partyThreshold: timelinePartyThreshold },
+        colorPalettes: Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [],
+      },
+    });
+  }
 
   const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -1777,10 +3878,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
 
     // Body parsing helper
+    // Cap request bodies at ~1 MB. An unbounded body (e.g. a 10k-cue timeline
+    // plan POST) buffers into memory and then stalls the event loop in
+    // validation/overview — reject it BEFORE we finish buffering or parse.
+    const MAX_BODY_BYTES = 1024 * 1024;
     const readBody = (callback) => {
       let body = '';
-      req.on('data', chunk => body += chunk.toString());
+      let size = 0;
+      let aborted = false;
+      req.on('data', chunk => {
+        if (aborted) return;
+        size += chunk.length;
+        if (size > MAX_BODY_BYTES) {
+          aborted = true;
+          res.writeHead(413); res.end(JSON.stringify({ error: 'Request body too large (max 1 MB)' }));
+          req.destroy();
+          return;
+        }
+        body += chunk.toString();
+      });
       req.on('end', () => {
+        if (aborted) return;
         try {
           callback(JSON.parse(body || '{}'));
         } catch (e) {
@@ -1840,6 +3958,26 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // and the engine is still rendering the old model — restart needed.
         modelStale: !!(engineCore.modelSync && engineCore.modelSync.stale),
         modelStaleMessage: (engineCore.modelSync && engineCore.modelSync.message) || null,
+        // Render-health (Codex P0 visibility): renderHealth.ok === false
+        // means at least one channel blend is degraded — running on the
+        // host-side linear-interp fallback because its WASM blend script is
+        // missing or failed to compile. blendErrors lists the offending
+        // modes. A green rig has renderHealth.ok === true with an empty
+        // blendErrors array. See pattern_mixer.getRenderHealth().
+        renderHealth: mixer.getRenderHealth ? mixer.getRenderHealth() : null,
+        // FIX A (Codex P0 visibility): non-null iff the saved DECK channel
+        // failed to restore at boot and the engine fell back to the default
+        // pattern to keep the mission-critical exterior LIT. Shape:
+        // { failedPattern, reason, fellBackTo }. Null on a clean boot. An
+        // operator / CaptainPad / smoke-check reads this to SEE that the
+        // saved deck did not restore (a loud, VISIBLE degrade — never silent).
+        deckRestoreDegraded,
+        // F-B: current grand-master value + any in-flight timed fade. A
+        // timed blackout / restore animates `master` toward a target on the
+        // render tick; `masterFade` is null when steady, else carries
+        // { active, from, to, durationMs, elapsedMs, remainingMs }.
+        master: mixer.master,
+        masterFade: mixer.getMasterFade ? mixer.getMasterFade() : null,
       }));
     } else if (req.method === 'GET' && req.url === '/exports') {
       // Legacy endpoint, return exports of base channel
@@ -1850,7 +3988,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
       const exports = wasmHost.getExports(baseChannel.handle);
       const filtered = exports.filter(e => !(paramCenter && paramCenter.isSharedExport(baseChannel.id, e.name)));
-      res.end(JSON.stringify(filtered));
+      res.end(JSON.stringify(annotateCodeDefaults(baseChannel, filtered)));
     } else if (req.method === 'GET' && req.url.startsWith('/pattern-code')) {
       const name = req.url.split('?name=')[1];
       if (!name) { res.writeHead(400); return res.end(JSON.stringify({ error: 'name required' })); }
@@ -1892,9 +4030,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             if (compNew.ok) {
               if (ch.handle) wasmHost.destroy(ch.handle);
               ch.handle = compNew.handle;
-              onChannelCompiled(ch);
+              // Seed slider defaults from the LIVE edit buffer, not stale disk.
+              onChannelCompiled(ch, data.code);
               // Re-apply playlist entry defaults if a playlist+entry is active.
-              const pl = ch.playlist && ch.playlist.name && playlistManager.load(ch.playlist.name);
+              // tryLoad so a corrupt active playlist can't break a pattern save.
+              const pl = ch.playlist && ch.playlist.name && playlistManager.tryLoad(ch.playlist.name);
               const entry = pl && ch.playlist.activeEntryId &&
                 pl.entries.find(e => e.id === ch.playlist.activeEntryId);
               if (entry && !entry._missing) {
@@ -2096,8 +4236,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // its active playlist entry so the deck's playlist stays in sync.
         scheduleEntryCapture(mixer.baseChannelId);
         markChannelDirtyIfLocked(mixer.baseChannelId);
+        // Per-pattern param SHARING: mirror onto siblings on the same
+        // (playlist, pattern).
+        if (mixer.baseChannelId) {
+          propagateAndCapturePatternParam(mixer.baseChannelId, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        }
         saveAllState();
         broadcastMixerState();
+        broadcastDeckState();
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', id: data.id }));
@@ -2289,6 +4435,69 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', blackout: data.enabled }));
       });
+    // POST /global-effect-hue (docs/39 §F-hue) — the GLOBAL hue shifter.
+    // A first-class continuous knob (like blackout), NOT a GEM slot.
+    // Rotates the RGB hue of the WHOLE post-mixer buffer (W/A/UV
+    // untouched); stacks additively with any per-channel hue.
+    //   Body: { degrees, autoRotateDegPerSec? }
+    //     - degrees             required, finite ⇒ normalized [0,360),
+    //                           else 400 (Codex P0, no silent fallback).
+    //     - autoRotateDegPerSec optional (default 0), finite + clamped
+    //                           [-360,360]; else 400.
+    // Persists globalsState.hueShift so the next boot honours it, and
+    // broadcasts { type: 'globalHueShift', hueShift } + mixer state.
+    } else if (req.method === 'POST' && req.url === '/global-effect-hue') {
+      readBody(data => {
+        if (!globalEffectsController) {
+          res.writeHead(503); return res.end(JSON.stringify({ error: 'global effects controller not initialized' }));
+        }
+        const hv = validateHue(data.degrees);
+        if (!hv.ok) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: hv.error.replace(/^hue/, 'degrees') }));
+        }
+        let rot = 0;
+        if (data.autoRotateDegPerSec !== undefined) {
+          if (typeof data.autoRotateDegPerSec !== 'number' || !Number.isFinite(data.autoRotateDegPerSec)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: `autoRotateDegPerSec must be a finite number, got '${data.autoRotateDegPerSec}'` }));
+          }
+          rot = Math.max(-360, Math.min(360, data.autoRotateDegPerSec));
+        }
+        // setHueShift re-validates + normalizes (degrees [0,360), rot
+        // clamped) and throws on non-finite — defence in depth.
+        globalEffectsController.setHueShift(hv.value, rot);
+        globalsState.hueShift = { ...globalEffectsController.hueShift };
+        stateManager.saveGlobalsState(globalsState, paramCenter);
+        broadcastWs({ type: 'globalHueShift', hueShift: { ...globalEffectsController.hueShift } });
+        broadcastMixerState();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', hueShift: { ...globalEffectsController.hueShift } }));
+      });
+    // POST /global-effect-invert (docs/39 §F-invert) — the GLOBAL color
+    // invert. A first-class boolean toggle (like blackout), NOT a GEM slot.
+    // Inverts the RGB of the WHOLE post-mixer buffer (1 - v; W/A/UV
+    // untouched) in the pipeline AFTER the global hue rotation. Mirrors the
+    // global-hue route's shape.
+    //   Body: { enabled }
+    //     - enabled  coerced via !! (pure boolean toggle — no fail-loud
+    //                contract, matching the legacy effect toggles).
+    // Persists globalsState.invert so the next boot honours it, and
+    // broadcasts { type: 'globalInvert', invert } + mixer state.
+    } else if (req.method === 'POST' && req.url === '/global-effect-invert') {
+      readBody(data => {
+        if (!globalEffectsController) {
+          res.writeHead(503); return res.end(JSON.stringify({ error: 'global effects controller not initialized' }));
+        }
+        const enabled = !!(data && data.enabled);
+        globalEffectsController.setInvert(enabled);
+        globalsState.invert = globalEffectsController.invert;
+        stateManager.saveGlobalsState(globalsState, paramCenter);
+        broadcastWs({ type: 'globalInvert', invert: globalEffectsController.invert });
+        broadcastMixerState();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', invert: globalEffectsController.invert }));
+      });
     } else if (req.method === 'PATCH' && req.url.startsWith('/global-effect-slots/')) {
       // PATCH /global-effect-slots/:slotId
       const m = req.url.match(/^\/global-effect-slots\/(\d+)$/);
@@ -2398,6 +4607,198 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(code); res.end(JSON.stringify({ error: e.message }));
       }
 
+    // ── TIMELINE API (docs/38 §15 — timeline runs IN the engine) ────────
+    // GET /timeline/state · GET/POST /timeline/plans · GET/PUT/DELETE
+    // /timeline/plans/:name · POST /timeline/plan/activate ·
+    // /autopilot · /resume · /takeover · /activity · /program/end · /cues/:id/fire.
+    // All JSON, fail loud (400/404 + {error}). The service is null when
+    // config.timeline.enabled is false → 503 so the UI knows it's off.
+    } else if (req.url === '/timeline/state' && req.method === 'GET') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const payload = JSON.stringify(timelineService.getState());
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(payload);
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/timeline/overview' && req.method === 'GET') {
+      // Multi-day overview of the ACTIVE plan for the UI (docs/38 §15.2).
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const payload = JSON.stringify(buildOverview(timelineService.plan, Date.now()));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(payload);
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/timeline/overview' && req.method === 'POST') {
+      // Overview of a POSTED (possibly UNSAVED) plan — live maker previews.
+      // Validate first so a malformed draft fails loud with 400 (docs/38 §15.2).
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(data => {
+        let plan;
+        try {
+          plan = validateTimelineShowPlan(data);
+        } catch (e) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: e.message }));
+        }
+        try {
+          const payload = JSON.stringify(buildOverview(plan, Date.now()));
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(payload);
+        } catch (e) {
+          res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.url === '/timeline/plans' && req.method === 'GET') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const payload = JSON.stringify({ plans: timelineService.listPlans() });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(payload);
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/timeline/plans' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(async (data) => {
+        try {
+          // savePlan is async: saving over the ACTIVE plan hot-reloads it
+          // (in-memory swap + catchUp) so the live overview/fires update.
+          const plan = await timelineService.savePlan(data);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, name: plan.name }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.url.match(/^\/timeline\/plans\/[^\/]+$/)) {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      const name = decodeURIComponent(req.url.split('/')[3]);
+      if (req.method === 'GET') {
+        try {
+          // Resolve the plan BEFORE writing any header — getPlan throws on a
+          // missing/broken plan, and writing 200 first would make the 404
+          // path crash with ERR_HTTP_HEADERS_SENT.
+          const plan = timelineService.getPlan(name);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(plan));
+        } catch (e) {
+          res.writeHead(404); res.end(JSON.stringify({ error: e.message }));
+        }
+      } else if (req.method === 'PUT') {
+        readBody(async (data) => {
+          try {
+            // The plan body's own `name` is authoritative; the URL name must
+            // match so a PUT can't silently rename (fail loud on mismatch).
+            if (data && data.name !== undefined && data.name !== name) {
+              res.writeHead(400);
+              return res.end(JSON.stringify({ error: `plan name mismatch: url "${name}" vs body "${data.name}"` }));
+            }
+            const plan = await timelineService.savePlan({ ...data, name });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, name: plan.name }));
+          } catch (e) {
+            res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          }
+        });
+      } else if (req.method === 'DELETE') {
+        try {
+          timelineService.deletePlan(name);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      } else {
+        res.writeHead(405); res.end(JSON.stringify({ error: 'method not allowed' }));
+      }
+    } else if (req.url === '/timeline/plan/activate' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(data => {
+        if (!data || typeof data.name !== 'string') {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'body { name } required' }));
+        }
+        timelineService.activatePlan(data.name)
+          .then(name => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, activePlan: name })); })
+          .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
+      });
+    } else if (req.url === '/timeline/autopilot' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(data => {
+        if (!data || typeof data.enabled !== 'boolean') {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'body { enabled: Bool } required' }));
+        }
+        timelineService.setAutopilotEnabled(data.enabled)
+          .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
+          .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
+      });
+    } else if (req.url === '/timeline/resume' && req.method === 'POST') {
+      // Explicit operator hand-back (docs/38 §14.5 + §16): end the takeover
+      // (clear operator lease + exit 'overridden'), resume the plan at now
+      // (catchUp). Async.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      timelineService.resume()
+        .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
+        .catch(e => { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); });
+    } else if (req.url === '/timeline/takeover' && req.method === 'POST') {
+      // Operator-takeover lease ARM (docs/38 §16): CaptainPad signals the
+      // operator grabbed manual control. mode→overridden, arm the lease.
+      // Idempotent (re-calling refreshes expiry).
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const r = timelineService.takeover();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(r));
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/timeline/activity' && req.method === 'POST') {
+      // Operator-activity ping (docs/38 §16): CaptainPad throttles to ~once/10s
+      // while interacting; refreshes the takeover lease expiry. No-op if no
+      // lease is held.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const r = timelineService.activity();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(r));
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/timeline/program/end' && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      timelineService.endProgram()
+        .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
+        .catch(e => { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); });
+    } else if (req.url === '/timeline/program/enable' && req.method === 'POST') {
+      // Pending-program lease ENABLE (docs/38 §16.7): start the armed program now.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      timelineService.enableProgram()
+        .then(r => {
+          if (r && r.ok === false) { res.writeHead(400); return res.end(JSON.stringify(r)); }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, ...r }));
+        })
+        .catch(e => { res.writeHead(500); res.end(JSON.stringify({ error: e.message })); });
+    } else if (req.url === '/timeline/program/dismiss' && req.method === 'POST') {
+      // Pending-program lease DISMISS (docs/38 §16.7): cancel + latch firedToday.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        const r = timelineService.dismissProgram();
+        if (r && r.ok === false) { res.writeHead(400); return res.end(JSON.stringify(r)); }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, ...r }));
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url.match(/^\/timeline\/cues\/[^\/]+\/fire$/) && req.method === 'POST') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      timelineService.fireCue(id)
+        .then(r => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, ...r })); })
+        .catch(e => { res.writeHead(400); res.end(JSON.stringify({ error: e.message })); });
+
     } else if (req.method === 'GET' && req.url === '/globals') {
       // Always reflect the LIVE override state alongside whatever was
       // persisted to disk — the in-memory `viewOverrideMode` is the
@@ -2407,25 +4808,30 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // have shown.
       const live = {
         ...globalsState,
-        controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
+        controlLock: currentControlLock(),
       };
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(live));
     } else if (req.method === 'GET' && req.url === '/autopilot') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(autopilot.state));
+      res.end(JSON.stringify(deckAutopilotState()));
     } else if (req.method === 'POST' && req.url === '/autopilot') {
       readBody(data => {
-        autopilot.updateState(data);
-        // ── Mirror into deck base channel's per-playlist autopilot ──
-        // The actual "advance to next entry" runner in the autopilot
-        // callback (see `new Autopilot(...)` above) reads
-        // `baseCh.playlist.autopilot.shuffle` to decide between
-        // shuffle and sequential. Without this mirror, the iPad would
-        // toggle the SHUFFLE pill, the Autopilot daemon would store
-        // it in its own config.yaml, but the runner would still see
-        // `baseCh.playlist.autopilot.shuffle === false` and keep
-        // walking the playlist sequentially. Fixed May 2026.
+        // Deck autopilot route (PortWatch over LoRa, scripts, CaptainPad's
+        // deck tab). main's frame-driven system: the daemon's timer is driven
+        // by autopilot.updateState({active,delay_s}); the next-entry pick reads
+        // the DECK channel's playlist.autopilot (shuffle + group fields), so we
+        // mirror the patch into that block too. No pool to rearm — the daemon
+        // re-reads the deck playlist every tick.
+        //
+        // ORDER MATTERS (2026-07-04): update the DECK channel's playlist.autopilot
+        // BEFORE autopilot.updateState(). updateState reschedules the daemon,
+        // which fires its onSchedule hook → broadcastAutopilot() SYNCHRONOUSLY,
+        // and that broadcast sources delay/active/shuffle from deckAutopilotState()
+        // (the channel block). With the old order (daemon first) the broadcast
+        // echoed the STALE channel delay, so the operator's pill snapped back to
+        // the old value then forward again — the "double-changing" jank.
+        // timelineSetAutopilotOnDeck already uses this channel-first order.
         try {
           const baseCh = mixer.getDeckChannel();
           if (baseCh) {
@@ -2434,19 +4840,61 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             if (data.active !== undefined) ap.active = !!data.active;
             if (data.delay_s !== undefined) ap.delay_s = parseInt(data.delay_s, 10) || 30;
             if (data.shuffle !== undefined) ap.shuffle = !!data.shuffle;
+            // PATTERN-GROUP LOCALITY (feat/optimize_channels): mirror the group
+            // fields into the deck playlist autopilot the SAME way as shuffle,
+            // so external writers (PortWatch/LoRa) can drive them too.
+            if (data.groupMode !== undefined) ap.groupMode = !!data.groupMode;
+            if (data.groupSize !== undefined) {
+              ap.groupSize = clampInt(
+                data.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX, AUTO_GROUP_SIZE_DEFAULT);
+            }
+            if (data.groupDwell !== undefined) {
+              ap.groupDwell = clampInt(
+                data.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT);
+            }
+            if (data.groupMode !== undefined || data.groupSize !== undefined || data.groupDwell !== undefined) {
+              if (baseCh._autoGroup) { baseCh._autoGroup.windowIds = null; baseCh._autoGroup.swapsLeft = 0; }
+            }
             saveAllState();
             broadcastMixerState();
           }
         } catch (e) {
-          console.warn('[Autopilot] mirror-to-deck failed:', e.message);
+          console.warn('[Autopilot] deck autopilot write failed:', e.message);
         }
+        autopilot.updateState(data);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(autopilot.state));
+        res.end(JSON.stringify(deckAutopilotState()));
         // External writers (PortWatch over LoRa, scripts, etc.) need the
         // CaptainPad UI to reflect their flips immediately. Broadcast on
         // every transition so the existing `engineEvents` bus on the iPad
         // can mirror state without polling.
         broadcastAutopilot();
+      });
+    } else if (req.method === 'GET' && req.url === '/deck/color-autopilot') {
+      // Read the current palette-cycling config (docs/39). Independent of the
+      // pattern /autopilot — they run in parallel.
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(colorAutopilotState()));
+    } else if (req.method === 'POST' && req.url === '/deck/color-autopilot') {
+      // Set the palette-cycling config. PATCH-style: the posted body is MERGED
+      // over the current config, so the deck UI can post a single toggle/stepper
+      // change (e.g. { delay_s } or { transitionMs }) optimistically. The MERGED
+      // object is then validated STRICTLY (codex P0): palettes a non-empty array
+      // of KNOWN ids, delay_s number>0, transitionMs number>=0, active+shuffle
+      // booleans. A bad shape → 400 with a loud message (never coerce / skip).
+      readBody(data => {
+        try {
+          if (!data || typeof data !== 'object' || Array.isArray(data)) {
+            throw new Error('colorAutopilot body must be an object');
+          }
+          const merged = { ...colorAutopilotState(), ...data };
+          const out = setColorAutopilot(merged);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(out));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e && e.message ? e.message : String(e) }));
+        }
       });
     }
     // ---- MODEL METADATA ----
@@ -2529,11 +4977,604 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.end(JSON.stringify(serializeMixerState()));
     } else if (req.method === 'PATCH' && req.url === '/mixer') {
       readBody(data => {
-        if (data.master !== undefined) mixer.setMaster(data.master);
+        if (data.master !== undefined) {
+          // Codex P0: master is a [0,1] fader. Reject non-finite with 400
+          // (setMaster's Math.max/min would otherwise pass NaN straight
+          // through to applyMaster and black the rig). Clamp finite.
+          const mv = validateFader(data.master);
+          if (!mv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: mv.error }));
+          }
+          mixer.setMaster(mv.value);
+        }
         saveAllState();
         broadcastMixerState();
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
       });
+    } else if (req.method === 'POST' && req.url === '/mixer/master/fade') {
+      // F-B: grand-master timed fade / timed blackout. Animates `master`
+      // toward `target` over `durationMs` on the render tick. A timed
+      // blackout is target=0; a restore is a fade to a non-zero value.
+      readBody(data => {
+        // Codex P0: reject non-finite / out-of-range BEFORE touching the
+        // mixer. target reuses validateFader's finite-[0,1] contract (but
+        // is NOT clamped silently here — validateFader clamps a finite
+        // overshoot, which is the same benign saturation as a slider).
+        const tv = validateFader(data.target);
+        if (!tv.ok) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: tv.error.replace('fader', 'target') }));
+        }
+        const durationMs = (typeof data.durationMs === 'number')
+          ? data.durationMs
+          : Number(data.durationMs);
+        if (!Number.isFinite(durationMs) || durationMs <= 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `durationMs must be a finite number > 0, got '${data.durationMs}'`,
+          }));
+        }
+        mixer.startMasterFade(tv.value, durationMs);
+        // Note: we deliberately do NOT saveAllState() here. The master fade
+        // is a transient animation; the final master value is persisted on
+        // the next mutation (or by the periodic save). Persisting an
+        // in-flight intermediate would be misleading on restart.
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({
+          status: 'ok',
+          masterFade: mixer.getMasterFade(),
+        }));
+      });
+    } else if (req.method === 'POST' && req.url === '/mixer/tempo') {
+      // F-phase #4 (tap-tempo). The CLIENT computes BPM from tap intervals;
+      // the engine just stores the resolved tempo and derives the global
+      // multiplier (120 BPM = 1×). Affects ONLY channels that opted in via
+      // followsTempo — the mission-critical exterior stays immune unless the
+      // operator opts it in. Rides the existing mixer-state broadcast (the
+      // serialized payload carries tempoBpm); no new WS message type.
+      readBody(data => {
+        // Codex P0: reject a non-finite or out-of-musical-range bpm with
+        // 400 BEFORE touching the mixer. [20,400] BPM is the supported
+        // musical window; outside it is a malformed tap, not a clamp.
+        const bpm = (typeof data.bpm === 'number') ? data.bpm : Number(data.bpm);
+        if (data.bpm === null || data.bpm === undefined || typeof data.bpm === 'boolean'
+            || (typeof data.bpm === 'string' && data.bpm.trim() === '')
+            || !Number.isFinite(bpm) || bpm < 20 || bpm > 400) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `bpm must be a finite number in [20,400], got '${data.bpm}'`,
+          }));
+        }
+        mixer.setTempoBpm(bpm);
+        // TEMPO ARBITRATION: a manual tap means the operator is hand-driving,
+        // so it makes TAP the STICKY source (mixer.tempoSourcePref='tap'). OSC
+        // auto-follow stays suppressed until the operator selects OSC again —
+        // no 12s auto-revert (that revert made the source jump OSC↔TAP).
+        // (No arbiter ⇒ a tapped tempo simply has no preference; still honored.)
+        if (engineCore.tempoArbiter) {
+          engineCore.tempoArbiter.noteManualTap();
+        }
+        // BPM → SPEED sync is source-agnostic: a manual tap just moved the
+        // arbitrated tempo (mixer.tempoBpm) WITHOUT a CPC event, so re-evaluate
+        // the speed mapping now so SPEED follows the tapped tempo immediately
+        // (idempotent — only writes when the mapped value changed).
+        if (engineCore.bpmSync) {
+          engineCore.bpmSync.recompute();
+        }
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({
+          status: 'ok',
+          tempoBpm: mixer.tempoBpm,
+          tempoMultiplier: mixer._tempoMultiplier,
+          tempoSource: engineCore.tempoArbiter
+            ? engineCore.tempoArbiter.deriveSource()
+            : 'manual',
+          tempoSourcePref: engineCore.tempoArbiter
+            ? engineCore.tempoArbiter.sourcePref()
+            : 'tap',
+        }));
+      });
+    } else if (req.method === 'POST' && req.url === '/mixer/tempo/sync') {
+      // TEMPO ARBITRATION: explicit "re-sync to OSC". Drops the manual-override
+      // hold immediately so the live OSC BPM reclaims the tempo on the next
+      // render tick (if OSC is live; otherwise the last value just holds).
+      // Codex P0 — fail loud if the arbiter (and thus the mixer) is missing.
+      readBody(() => {
+        if (!engineCore.tempoArbiter) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'tempo arbiter unavailable — cannot drop manual override',
+          }));
+        }
+        engineCore.tempoArbiter.clearOverride();
+        // Apply the OSC auto-follow NOW (before broadcasting) so the readout
+        // immediately shows the OSC bpm on "use OSC". Without this the broadcast
+        // would carry tempoSource='osc' but the STALE tapped tempoBpm (the
+        // per-frame tick hadn't run yet) — which read as "OSC selected but the
+        // number stays on the tapped value". If OSC isn't live, tick() is a
+        // no-op and the last value just holds (source 'held').
+        engineCore.tempoArbiter.tick(Date.now());
+        if (engineCore.bpmSync) engineCore.bpmSync.recompute();
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({
+          status: 'ok',
+          tempoBpm: mixer.tempoBpm,
+          tempoSource: engineCore.tempoArbiter.deriveSource(),
+          tempoSourcePref: engineCore.tempoArbiter.sourcePref(),
+          oscTempoBpm: engineCore.tempoArbiter.oscTempoBpm(),
+        }));
+      });
+    } else if (req.method === 'POST' && req.url === '/mixer/tempo/source') {
+      // STICKY tempo source selector (operator request 2026-06-29). Sets the
+      // persisted preference the OSC/TAP selector reflects on BOTH the deck and
+      // mixer (one source of truth, no per-surface guessing):
+      //   'osc' — follow the live OSC BPM (snaps on the next tick if live).
+      //   'tap' — hold the current/tapped tempo; OSC auto-follow suppressed.
+      // Codex P0 — fail loud if the arbiter is missing or the source invalid.
+      readBody(data => {
+        if (!engineCore.tempoArbiter) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'tempo arbiter unavailable — cannot set tempo source',
+          }));
+        }
+        if (data.source !== 'osc' && data.source !== 'tap') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `source must be 'osc' | 'tap', got '${data.source}'`,
+          }));
+        }
+        engineCore.tempoArbiter.setSourcePref(data.source);
+        // On 'osc', apply the auto-follow NOW so the readout snaps to the live
+        // OSC bpm immediately (same rationale as /sync). On 'tap', the current
+        // tempo just holds — tick() is a no-op in tap mode.
+        engineCore.tempoArbiter.tick(Date.now());
+        if (engineCore.bpmSync) engineCore.bpmSync.recompute();
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({
+          status: 'ok',
+          tempoBpm: mixer.tempoBpm,
+          tempoSource: engineCore.tempoArbiter.deriveSource(),
+          tempoSourcePref: engineCore.tempoArbiter.sourcePref(),
+          oscTempoBpm: engineCore.tempoArbiter.oscTempoBpm(),
+        }));
+      });
+    }
+    // ── MIXER CHANNEL GROUPS (gang-faders) + SOLO (WAVE 15) ──────────────
+    //
+    // These routes use DISTINCT url prefixes (`/mixer/groups`, `/mixer/solo`)
+    // from `/mixer/channels/...` and `/mixer/snapshots/...`, so the existing
+    // channel/snapshot regexes can't shadow them. Within this block the more
+    // specific `.../members/...` and `.../members` routes are armed BEFORE
+    // the bare `/mixer/groups/:gid` route so the `[^\/]+$` regex doesn't
+    // swallow a members path. All mutations are validate→mutate→saveAllState
+    // →broadcastMixerState; bad input fails loud (400/404), never silently.
+    else if (req.method === 'GET' && req.url === '/mixer/groups') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ mixGroups: mixer.getMixGroups() }));
+    } else if (req.method === 'POST' && req.url === '/mixer/groups') {
+      // Create a group. name/color optional; fader=1, muted=false to start.
+      readBody(data => {
+        if (data.name !== undefined && data.name !== null && typeof data.name !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `name must be a string or null, got ${typeof data.name}` }));
+        }
+        if (data.color !== undefined && data.color !== null && typeof data.color !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
+        }
+        const group = mixer.createMixGroup({ name: data.name, color: data.color });
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', group }));
+      });
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/groups\/[^\/]+\/members$/)) {
+      // Add a mixer channel to this group (single membership).
+      const gid = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        if (typeof data.channelId !== 'string' || data.channelId.length === 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'channelId (non-empty string) required' }));
+        }
+        // A deck channel can never be in a mixer group — reuse the role guard.
+        const reject = rejectIfWrongRole(data.channelId, 'mixer');
+        if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+        const r = mixer.addChannelToGroup(gid, data.channelId);
+        if (!r.ok) { res.writeHead(r.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: r.error })); }
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+      });
+    } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/groups\/[^\/]+\/members\/[^\/]+$/)) {
+      // Remove a channel from this group.
+      const parts = req.url.split('/');
+      const gid = decodeURIComponent(parts[3]);
+      const channelId = decodeURIComponent(parts[5]);
+      const r = mixer.removeChannelFromGroup(gid, channelId);
+      if (!r.ok) { res.writeHead(r.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: r.error })); }
+      saveAllState();
+      broadcastMixerState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+    } else if (req.method === 'PATCH' && req.url.match(/^\/mixer\/groups\/[^\/]+$/)) {
+      // Update a group's name / fader / muted / color.
+      const gid = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        if (!mixer.getMixGroup(gid)) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `group '${gid}' not found` }));
+        }
+        const patch = {};
+        if (data.name !== undefined) {
+          if (data.name !== null && typeof data.name !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: `name must be a string or null, got ${typeof data.name}` }));
+          }
+          patch.name = data.name;
+        }
+        if (data.fader !== undefined) {
+          const fv = validateFader(data.fader);
+          if (!fv.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: fv.error })); }
+          patch.fader = fv.value;
+        }
+        if (data.muted !== undefined) patch.muted = !!data.muted;
+        if (data.color !== undefined) {
+          if (data.color !== null && typeof data.color !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
+          }
+          patch.color = data.color;
+        }
+        const group = mixer.updateMixGroup(gid, patch);
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', group }));
+      });
+    } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/groups\/[^\/]+$/)) {
+      // Delete a group (clears every member's mixGroupId first).
+      const gid = decodeURIComponent(req.url.split('/')[3]);
+      const removed = mixer.deleteMixGroup(gid);
+      if (!removed) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: `group '${gid}' not found` }));
+      }
+      saveAllState();
+      broadcastMixerState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+    }
+    // ── SERVER-AUTHORITATIVE SOLO (WAVE 15) ──────────────────────────────
+    else if (req.method === 'POST' && req.url === '/mixer/solo') {
+      // Solo a channel. additive=true adds to the set; false (default)
+      // replaces it. The render gate reads soloedChannelIds; siblings'
+      // enabled/fader are NEVER mutated (parked levels survive).
+      readBody(data => {
+        if (typeof data.channelId !== 'string' || data.channelId.length === 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'channelId (non-empty string) required' }));
+        }
+        const reject = rejectIfWrongRole(data.channelId, 'mixer');
+        if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+        const r = mixer.setSolo(data.channelId, !!data.additive);
+        if (!r.ok) { res.writeHead(r.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: r.error })); }
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', soloedChannelIds: [...mixer.soloedChannelIds] }));
+      });
+    } else if (req.method === 'DELETE' && req.url === '/mixer/solo') {
+      // Clear ALL solos.
+      mixer.clearSolo();
+      saveAllState();
+      broadcastMixerState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok', soloedChannelIds: [] }));
+    } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/solo\/[^\/]+$/)) {
+      // Un-solo a single channel.
+      const channelId = decodeURIComponent(req.url.split('/')[3]);
+      const r = mixer.clearSolo(channelId);
+      if (!r.ok) { res.writeHead(r.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: r.error })); }
+      saveAllState();
+      broadcastMixerState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok', soloedChannelIds: [...mixer.soloedChannelIds] }));
+    }
+    // ── MIXER SNAPSHOTS / LOOK RECALL (F-A) ──────────────────────────────
+    else if (req.method === 'GET' && req.url === '/mixer/snapshots') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ snapshots: snapshotManager.list() }));
+    } else if (req.method === 'POST' && req.url === '/mixer/snapshots') {
+      // Capture the current full mixer state under a name.
+      readBody(data => {
+        if (typeof data.name !== 'string' || data.name.trim() === '') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'name (non-empty string) required' }));
+        }
+        try {
+          const saved = snapshotManager.save(data.name, captureLook());
+          broadcastWs({ type: 'snapshots', action: 'saved', name: saved.name, snapshots: snapshotManager.list() });
+          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name: saved.name }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.method === 'GET' && req.url.match(/^\/mixer\/snapshots\/[^\/]+$/)) {
+      const name = decodeURIComponent(req.url.split('/')[3]);
+      try {
+        const look = snapshotManager.load(name);
+        if (!look) { res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: `snapshot '${name}' not found` })); }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(look));
+      } catch (e) {
+        // SnapshotLoadError (malformed YAML / shape) ⇒ structured 400.
+        if (e instanceof SnapshotLoadError) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: e.message, code: e.code }));
+        }
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/snapshots\/[^\/]+$/)) {
+      const name = decodeURIComponent(req.url.split('/')[3]);
+      try {
+        const removed = snapshotManager.delete(name);
+        if (!removed) { res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: `snapshot '${name}' not found` })); }
+        broadcastWs({ type: 'snapshots', action: 'deleted', name, snapshots: snapshotManager.list() });
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/snapshots\/[^\/]+\/recall$/)) {
+      const name = decodeURIComponent(req.url.split('/')[3]);
+      let look;
+      try {
+        look = snapshotManager.load(name);
+      } catch (e) {
+        // Malformed snapshot ⇒ fail loud with a structured error.
+        if (e instanceof SnapshotLoadError) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: e.message, code: e.code }));
+        }
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+      if (!look) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: `snapshot '${name}' not found` }));
+      }
+      // UNDO: snapshot the live look AFTER validation (no phantom entry on a
+      // 404/malformed snapshot) but BEFORE recallLook destructively swaps it.
+      pushUndo(`recall '${name}'`);
+      try {
+        recallLook(look);
+      } catch (e) {
+        // An over-cap snapshot (or other structural failure) is a real
+        // error, not a silent truncation — surface it.
+        const status = e.code === 'SNAPSHOT_OVER_CAP' ? 400 : 500;
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message, code: e.code || 'SNAPSHOT_RECALL_FAILED' }));
+      }
+      saveAllState();
+      broadcastWs({ type: 'snapshots', action: 'recalled', name, snapshots: snapshotManager.list() });
+      broadcastMixerState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name }));
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/snapshots\/[^\/]+\/recall-fade$/)) {
+      // ── SNAPSHOT CROSSFADE / MORPH (round-2 #1, docs/39 §10.8) ──────────
+      // Recall a saved look by RAMPING current→target over durationMs instead
+      // of the instant cut /recall does. Body: { durationMs } (finite > 0).
+      // Validate (404 missing, 400 malformed, 400 bad duration, 400 over-cap
+      // UNION) BEFORE any mutation; no saveAllState at kickoff (transient,
+      // like /mixer/master/fade — persisted by the morph finalizer on
+      // completion). Broadcasts {type:'snapshots',action:'recall-fade'} now +
+      // a recall-fade-complete from the finalizer when the ramps land.
+      const name = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        // Validate durationMs FIRST — never load/mutate on a bad duration.
+        const durationMs = (typeof data.durationMs === 'number')
+          ? data.durationMs
+          : Number(data.durationMs);
+        if (!Number.isFinite(durationMs) || durationMs <= 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `durationMs must be a finite number > 0, got '${data.durationMs}'`,
+          }));
+        }
+        let look;
+        try {
+          look = snapshotManager.load(name);
+        } catch (e) {
+          // Malformed snapshot ⇒ fail loud with a structured error.
+          if (e instanceof SnapshotLoadError) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: e.message, code: e.code }));
+          }
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: e.message }));
+        }
+        if (!look) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `snapshot '${name}' not found` }));
+        }
+        // UNDO: snapshot the PRE-morph live look (captures it before the ramp
+        // begins) AFTER validation so a 404/400 leaves no phantom entry.
+        pushUndo(`recall-fade '${name}'`);
+        try {
+          morphToLook(look, durationMs);
+        } catch (e) {
+          // An over-cap UNION (or other structural failure) is a real error,
+          // not a silent truncation — surface it (transient-cap fail-loud).
+          const status = e.code === 'SNAPSHOT_OVER_CAP' ? 400 : 500;
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: e.message, code: e.code || 'SNAPSHOT_MORPH_FAILED' }));
+        }
+        // Transient animation: do NOT saveAllState() here (the finalizer
+        // persists the settled look). Broadcast the kickoff so the iPad
+        // knows a morph is in flight; the mixer broadcast carries the
+        // current (ramping) faders.
+        broadcastWs({ type: 'snapshots', action: 'recall-fade', name, snapshots: snapshotManager.list() });
+        broadcastMixerState();
+        res.writeHead(200); res.end(JSON.stringify({
+          status: 'ok',
+          name,
+          morph: mixer.getMorph(),
+        }));
+      });
+    }
+    // ── MIXER UNDO (round-2 #10, docs/39 §F-undo) ────────────────────────
+    // POST /mixer/undo → pop the most recent destructive-action snapshot and
+    // restore it via recallLook (never-dark). Empty ring → 400 UNDO_EMPTY
+    // (fail loud, NOT a silent no-op — Codex P0). GET /mixer/undo → {depth,
+    // top} for the UI button enable/label.
+    else if (req.method === 'POST' && req.url === '/mixer/undo') {
+      if (undoStack.isEmpty) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'nothing to undo', code: 'UNDO_EMPTY' }));
+      }
+      // MORPH RACE (CRITICAL): if a recall-fade/morph is mid-flight, cancel it
+      // BEFORE recallLook so its completion finalizer (onMorphComplete) can't
+      // fire against the torn-down/rebuilt state we're about to install.
+      // cancelMorph() drops the descriptor WITHOUT firing the finalizer; the
+      // C channels it would have removed are still present and recallLook tears
+      // them down + rebuilds the captured look wholesale.
+      if (typeof mixer.cancelMorph === 'function') mixer.cancelMorph();
+      const popped = undoStack.pop();
+      try {
+        recallLook(popped.look);
+      } catch (e) {
+        // A self-captured look should never be over-cap, but surface any
+        // structural failure loud rather than half-applying silently.
+        const status = e.code === 'SNAPSHOT_OVER_CAP' ? 400 : 500;
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message, code: e.code || 'UNDO_RECALL_FAILED' }));
+      }
+      saveAllState();
+      broadcastMixerState();
+      broadcastUndoState();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', label: popped.label }));
+    } else if (req.method === 'GET' && req.url === '/mixer/undo') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ depth: undoStack.depth, top: undoStack.topLabel }));
+    }
+    // ── NAMED PER-CHANNEL PARAM PRESETS (round-2 #9) ─────────────────────
+    // Capture one channel's live localControls (its pattern slider/knob/color
+    // values) under a name, and recall them later. NARROWER than a mixer
+    // snapshot (whole-mixer look): a param preset is ONE channel's pattern
+    // params. Recall is PATTERN-SCOPED — recalling onto a channel running a
+    // different pattern is a fail-loud 409 (the control ids are pattern-
+    // specific export slots; replaying them onto another pattern would set
+    // the wrong knobs). Works on ANY channel (deck or mixer) via
+    // mixer.getChannel — disjoint from the snapshot routes above. See docs/39.
+    else if (req.method === 'GET' && req.url === '/mixer/param-presets') {
+      try {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ paramPresets: paramPresetManager.listParamPresets() }));
+      } catch (e) {
+        // A corrupt preset file surfaces here (listParamPresets reads each
+        // header) — fail loud rather than hiding the bad preset from the list.
+        if (e instanceof ParamPresetError) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: e.message, code: e.code }));
+        }
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/param-presets$/)) {
+      // Capture the addressed channel's current params under a name.
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        if (typeof data.name !== 'string' || data.name.trim() === '') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'name (non-empty string) required' }));
+        }
+        const channel = mixer.getChannel(id);
+        if (!channel) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `channel '${id}' not found` }));
+        }
+        try {
+          const saved = paramPresetManager.captureParamPreset(data.name, channel);
+          broadcastWs({ type: 'paramPresets', action: 'captured', name: saved.name, pattern: saved.pattern, paramPresets: paramPresetManager.listParamPresets() });
+          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name: saved.name, pattern: saved.pattern }));
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/param-presets\/[^\/]+\/recall$/)) {
+      // Recall a named preset onto the addressed channel. Validate everything
+      // (404 missing channel/preset, 400 malformed preset, 409 pattern
+      // mismatch) BEFORE applying any control. On success, replay every saved
+      // control through paramRouter.setChannelControl — the SAME path
+      // boot/snapshot-recall uses — which writes both channel.localControls
+      // AND the live WASM handle, so the running pattern picks the values up
+      // on the NEXT frame.
+      const parts = req.url.split('/');
+      const id = decodeURIComponent(parts[3]);
+      const name = decodeURIComponent(parts[5]);
+      const channel = mixer.getChannel(id);
+      if (!channel) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: `channel '${id}' not found` }));
+      }
+      let preset;
+      try {
+        preset = paramPresetManager.loadParamPreset(name);
+      } catch (e) {
+        // Malformed preset ⇒ fail loud with a structured error.
+        if (e instanceof ParamPresetError) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: e.message, code: e.code }));
+        }
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+      if (!preset) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: `param preset '${name}' not found` }));
+      }
+      // Pattern-scope guard: refuse to apply a preset onto a channel running a
+      // different pattern. The control ids are pattern-specific export slots.
+      if (preset.pattern !== channel.pattern) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+          error: `param preset '${name}' was captured on pattern '${preset.pattern}' ` +
+            `but channel '${id}' is running '${channel.pattern}' — pattern mismatch`,
+          code: 'PARAM_PRESET_PATTERN_MISMATCH',
+        }));
+      }
+      // UNDO: snapshot the live look AFTER all validation (404/400/409) but
+      // BEFORE replaying the preset's controls onto the channel.
+      pushUndo(`param-preset '${name}'`);
+      // Replay each saved control. setChannelControl ignores CPC-owned /
+      // blocked / non-local ids defensively; getReplayableLocalExport mirrors
+      // that gate so we don't even attempt those (same as the boot restore
+      // path). Numeric control ids round-trip as YAML string keys — parseInt
+      // them back, just as restoreChannel does.
+      for (const [idStr, cv] of Object.entries(preset.controls)) {
+        const controlId = parseInt(idStr, 10);
+        if (!getReplayableLocalExport(channel, controlId)) continue;
+        paramRouter.setChannelControl(channel.id, controlId, cv.v0, cv.v1, cv.v2);
+      }
+      scheduleEntryCapture(channel.id);
+      markChannelDirtyIfLocked(channel.id);
+      saveAllState();
+      broadcastWs({ type: 'paramPresets', action: 'recalled', name, channelId: channel.id, paramPresets: paramPresetManager.listParamPresets() });
+      broadcastMixerState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name, channelId: channel.id }));
+    } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/param-presets\/[^\/]+$/)) {
+      const name = decodeURIComponent(req.url.split('/')[3]);
+      try {
+        const removed = paramPresetManager.deleteParamPreset(name);
+        if (!removed) { res.writeHead(404, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: `param preset '${name}' not found` })); }
+        broadcastWs({ type: 'paramPresets', action: 'deleted', name, paramPresets: paramPresetManager.listParamPresets() });
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
     } else if (req.method === 'POST' && req.url === '/mixer/channels') {
       // Add a mixer channel. Two ways to call this, both are playlist-driven:
       //  1. {playlist:'<name>', playlistEntryId?:'<id>'} — load that playlist
@@ -2629,6 +5670,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
         finalizeCpcValues(channel);
         saveAllState();
+        // Mixer overlays cycle off the per-frame autoCycleTick, which reads
+        // each channel's playlist.autopilot live — no per-channel timer to arm.
         // Emit playlist content on WS BEFORE the mixer broadcast so
         // every client primes its playlist cache before mounting the
         // new PlaylistPanel off the mixer event. See
@@ -2661,6 +5704,218 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           playlistData: inlinePlaylistData,
         }));
       });
+    }
+    // ── CHANNEL OPS #6 — DUPLICATE ───────────────────────────────────────
+    // POST /mixer/channels/:id/bump { on: true|false }. FLASH / BUMP (round-2
+    // #5, docs/39 §10.7): momentary full-while-held accent. on:true bumps the
+    // channel to FULL (capped by faderMax); on:false releases it to its parked
+    // level. The REST mirror of the WS bump/unbump (low-latency path is WS).
+    // Armed BEFORE the `^/mixer/channels/[^/]+$` PATCH/DELETE regexes so the
+    // literal `/bump` segment isn't swallowed as a channel id. Each `on:true`
+    // RENEWS the disconnect-safety lease (see applyBump / sweepExpiredBumps).
+    else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/bump$/)) {
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      // Decks never bump via /mixer routes (deck is PFL, never in the composite).
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      readBody(data => {
+        if (typeof data.on !== 'boolean') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'on (boolean) required' }));
+        }
+        const r = applyBump(id, data.on);
+        if (!r.ok) { res.writeHead(r.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: r.error })); }
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200);
+        res.end(JSON.stringify({ status: 'ok', bumpedChannelIds: [...mixer._bumpedChannelIds] }));
+      });
+    }
+    // POST /mixer/channels/:id/duplicate. Deep-copies a mixer overlay into a
+    // NEW overlay landing on TOP of the stack. MUST be armed BEFORE the
+    // `^/mixer/channels/[^/]+$` PATCH/DELETE regexes so the literal
+    // `/duplicate` segment isn't swallowed as a channel id.
+    //
+    // Copy strategy (spec §#6): serialize the source via the SAME serializer
+    // captureLook uses (serializeChannelForState), override id (fresh minted)
+    // + name (`<src> copy`), then rebuild through buildChannelFromSaved which
+    // compiles a FRESH wasm handle (never shares src.handle → no double-free),
+    // re-binds playlist + replays localControls + finalizeCpcValues. All
+    // additive fields (faderMax, color, mixGroupId, soloSafe, viewSelection,
+    // locks, transition prefs) ride along in the serialized blob for free.
+    else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/duplicate$/)) {
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      // Decks can't be duplicated via /mixer routes (single deck identity).
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      const src = mixer.getMixerChannel(id);
+      if (!src) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: `mixer channel '${id}' not found` }));
+      }
+      // Serialize, then override identity. The id uses the SAME monotonic
+      // minting as POST /mixer/channels so two rapid dups can't collide.
+      const serialized = serializeChannelForState(src);
+      serialized.id = 'ch_' + Date.now() + '_' + (channelIdCounter++);
+      serialized.name = `${src.name} copy`;
+      let copy;
+      try {
+        // buildChannelFromSaved delegates the cap check to addMixerChannel
+        // (throws "Maximum of N mixer channels allowed" → 400, single source
+        // of truth — no separate pre-check to drift out of sync).
+        copy = buildChannelFromSaved(serialized, 'mixer', serialized.pattern);
+      } catch (dupErr) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: String(dupErr.message || dupErr) }));
+      }
+      saveAllState();
+      // Mirror POST /mixer/channels ordering: prime the playlist cache BEFORE
+      // the mixer broadcast so a freshly-mounting panel has its entries.
+      broadcastChannelPlaylistData(copy);
+      broadcastMixerState();
+      let inlinePlaylistData = null;
+      try {
+        if (copy.playlist && copy.playlist.name) {
+          const pl = playlistManager.load(copy.playlist.name);
+          if (pl) inlinePlaylistData = pl;
+        }
+      } catch (_) {}
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'ok',
+        channelId: copy.id,
+        sourceChannelId: id,
+        pattern: copy.pattern,
+        playlist: copy.playlist,
+        playlistData: inlinePlaylistData,
+      }));
+    }
+    // ── CHANNEL OPS #7 — REORDER ─────────────────────────────────────────
+    // POST /mixer/channels/reorder { order: [ids] }. Reassigns the overlay
+    // stack order. MUST be armed BEFORE the `:id` regexes (the literal
+    // `reorder` segment would otherwise be read as a channel id). Validate the
+    // permutation BEFORE mutating (fail loud, no partial apply).
+    // order[0] = bottom of the mix, order[last] = top.
+    else if (req.method === 'POST' && req.url === '/mixer/channels/reorder') {
+      readBody(data => {
+        const order = data && data.order;
+        const current = mixer.getMixerChannels();
+        const currentIds = current.map(c => c.id);
+        // Permutation validation: array, exact length, no dups, exact same id
+        // set as the live stack. Any deviation ⇒ 400 REORDER_BAD_SET.
+        const bad = (msg) => {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: msg, code: 'REORDER_BAD_SET' }));
+        };
+        if (!Array.isArray(order)) return bad('order must be an array of channel ids');
+        if (order.length !== currentIds.length) {
+          return bad(`order has ${order.length} ids but the mixer has ${currentIds.length} channels`);
+        }
+        const orderSet = new Set(order);
+        if (orderSet.size !== order.length) return bad('order contains duplicate ids');
+        const currentSet = new Set(currentIds);
+        for (const oid of order) {
+          if (!currentSet.has(oid)) return bad(`order contains unknown channel id '${oid}'`);
+        }
+        // Set equality is now guaranteed (same length, no dups, every order id
+        // is a current id) — every current id is therefore covered too.
+        // UNDO: snapshot the current order AFTER validation, BEFORE reordering.
+        pushUndo('reorder channels');
+        try {
+          mixer.reorderMixerChannels(order);
+        } catch (e) {
+          // Defensive: the mixer re-validates and throws. Shouldn't happen
+          // after the checks above, but surface it loud rather than swallow.
+          return bad(String(e.message || e));
+        }
+        saveAllState();
+        broadcastMixerState();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', order: mixer.getMixerChannels().map(c => c.id) }));
+      });
+    }
+    // ── CHANNEL OPS #9 — PANIC / HOME ────────────────────────────────────
+    // POST /mixer/panic { home? }. Mission-critical: leave the rig LIT.
+    //   - If a "home" snapshot exists (reserved name 'home') → recallLook it.
+    //     A 404/malformed home is the ONE sanctioned LOUD fallback: return
+    //     400 with the structured error BUT STILL clear blackout + master up
+    //     so the exterior is never left dark on a broken home.
+    //   - Else panicToSafeDefault() + clear blackout + master 1.0.
+    // Always cancels master-fade / deck-swap / transitions, clears solo,
+    // un-mutes groups (panicToSafeDefault), and persists.
+    else if (req.method === 'POST' && req.url === '/mixer/panic') {
+      readBody(data => {
+        const HOME_NAME = 'home';
+        const wantHome = data && data.home !== undefined ? !!data.home : true;
+
+        // The always-run LIT guarantee: blackout off + master up. Factored so
+        // every exit path (success, safe-default, broken-home loud fallback)
+        // leaves the rig visible.
+        const forceLit = () => {
+          if (intensityController) intensityController.setBlackout(false);
+          globalsState.blackout = false;
+          stateManager.saveGlobalsState(globalsState, paramCenter);
+          mixer.setMaster(1.0);
+          mixer.targetViewFader = 1.0;
+        };
+
+        // Try a home snapshot first when requested + present.
+        let homeLook = null;
+        let homeExists = false;
+        if (wantHome) {
+          try {
+            homeLook = snapshotManager.load(HOME_NAME);
+            homeExists = !!homeLook;
+          } catch (e) {
+            // Malformed home snapshot — fail loud, but STILL light the rig.
+            forceLit();
+            broadcastMixerState();
+            broadcastWs({ type: 'globalEffectMacroStatus', blackout: false });
+            const status = (e instanceof SnapshotLoadError) ? 400 : 400;
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `home snapshot '${HOME_NAME}' is malformed: ${e.message}`,
+              code: e.code || 'PANIC_HOME_MALFORMED',
+              rigLit: true,
+            }));
+          }
+        }
+
+        if (homeExists) {
+          try {
+            recallLook(homeLook);
+          } catch (e) {
+            // Home loaded but is structurally unusable (e.g. over-cap). Loud
+            // 400 — but light the rig first so the exterior stays visible.
+            forceLit();
+            broadcastMixerState();
+            broadcastWs({ type: 'globalEffectMacroStatus', blackout: false });
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `home snapshot '${HOME_NAME}' could not be recalled: ${e.message}`,
+              code: e.code || 'PANIC_HOME_RECALL_FAILED',
+              rigLit: true,
+            }));
+          }
+          // Recall set master/overlays from the look; still force blackout off
+          // + master up so a home captured at low master can't leave it dark.
+          forceLit();
+          saveAllState();
+          broadcastMixerState();
+          broadcastWs({ type: 'globalEffectMacroStatus', blackout: false });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ status: 'ok', mode: 'home', home: HOME_NAME, rigLit: true }));
+        }
+
+        // No home snapshot → safe LIT default.
+        mixer.panicToSafeDefault();
+        forceLit();
+        saveAllState();
+        broadcastMixerState();
+        broadcastWs({ type: 'globalEffectMacroStatus', blackout: false });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', mode: 'safeDefault', rigLit: true }));
+      });
     } else if (req.method === 'PATCH' && req.url.match(/^\/mixer\/channels\/[^\/]+$/)) {
       const id = req.url.split('/')[3];
       readBody(data => {
@@ -2670,6 +5925,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (!channel) { res.writeHead(404); return res.end(); }
         if (data.name !== undefined) channel.name = data.name;
         if (data.mode !== undefined) {
+          if (!isValidBlendMode(data.mode)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `Invalid blend mode '${data.mode}' (expected one of ` +
+                `${[...VALID_CHANNEL_BLEND_MODES].join(', ')} or a trans_* transition)`,
+            }));
+          }
           // PATCH-driven mode change: clear any scripted-transition
           // restore so the operator's pick is sticky. Mirrors the WS
           // setChannelMode logic — see that handler for rationale.
@@ -2679,6 +5941,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           mixer.getBlendHandle(data.mode);
         }
         if (data.fader !== undefined) {
+          // Codex P0: reject a non-finite fader (NaN/Infinity) with 400
+          // BEFORE the fader-lock check — a malformed value is a client
+          // bug regardless of lock state, and must never reach the render
+          // loop. A finite out-of-range value is clamped to [0,1].
+          const fv = validateFader(data.fader);
+          if (!fv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: fv.error }));
+          }
           // Fader-lock: reject the fader portion silently (no-op) but
           // still process other fields in this PATCH. We do NOT 4xx
           // because operators bulk-PATCH multiple fields at once and a
@@ -2689,7 +5960,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             // Manual fader writes ALWAYS cancel any in-flight transition
             // for that channel — mirrors WS setChannelFader (see above).
             mixer.cancelChannelTransition(id);
-            channel.fader = data.fader;
+            channel.fader = fv.value;
           }
         }
         if (data.enabled !== undefined) channel.enabled = data.enabled;
@@ -2701,6 +5972,105 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // visually-mid-fade animation just because the operator
           // tapped the lock icon.
           channel.faderLocked = !!data.faderLocked;
+        }
+        // F-C: per-channel intensity ceiling. Validated identically to a
+        // fader (finite, clamped to [0,1]); non-finite ⇒ 400 (Codex P0,
+        // no silent coercion). Applied as a hard cap at the composite.
+        if (data.faderMax !== undefined) {
+          const fm = validateFader(data.faderMax);
+          if (!fm.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: fm.error.replace('fader', 'faderMax') }));
+          }
+          channel.faderMax = fm.value;
+        }
+        // F-D: per-channel color metadata. Pure metadata (no render effect);
+        // accept a string (e.g. hex) or null to clear. A non-string/non-null
+        // value is a malformed payload ⇒ 400 (fail loud).
+        if (data.color !== undefined) {
+          if (data.color !== null && typeof data.color !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
+          }
+          channel.color = data.color === null ? null : data.color;
+        }
+        // WAVE 15: solo-safe toggle — pure boolean rig-config (never gated
+        // off by another channel's solo). Orthogonal to faderLocked/enabled.
+        // A non-boolean-ish value is coerced via !! (the field is a simple
+        // flag, like faderLocked above).
+        if (data.soloSafe !== undefined) {
+          channel.soloSafe = !!data.soloSafe;
+        }
+        // F-hue: per-channel hue rotation (docs/39). Validated via
+        // validateHue — non-finite ⇒ 400 (Codex P0, no silent coercion);
+        // a finite value is normalized into [0,360). Rotates this layer's
+        // RGB BEFORE blend (W/A/U untouched). Stacks additively with the
+        // global hue. The render loop gates on non-zero, so hue=0 = no-op.
+        if (data.hue !== undefined) {
+          const hv = validateHue(data.hue);
+          if (!hv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: hv.error }));
+          }
+          channel.hue = hv.value;
+        }
+        // F-phase #4: opt this channel in/out of the global tap-tempo. Pure
+        // boolean flag (coerced via !! like soloSafe/faderLocked). The render
+        // loop reads channel.followsTempo each frame via _effectiveSpeed.
+        if (data.followsTempo !== undefined) {
+          channel.followsTempo = !!data.followsTempo;
+        }
+        // FOLLOW/LINK (round-2 #6, docs/39 §F-follow): set/clear this
+        // channel's leader. A null/empty value CLEARS the link (revert to the
+        // follower's own manual fader). A non-empty string id must name an
+        // EXISTING channel (mixer overlay or the deck — a mixer overlay may
+        // follow the deck), else 404. Self-follow and any cycle (A→B→A, longer
+        // chains) are REJECTED with 400 FOLLOW_CYCLE (Codex P0: fail loud — a
+        // cyclic follow would be an undefined render). Non-string/non-null is a
+        // malformed payload ⇒ 400. Validated BEFORE mutation so a bad payload
+        // never half-applies.
+        if (data.followLeaderId !== undefined) {
+          if (data.followLeaderId === null || data.followLeaderId === '') {
+            channel.followLeaderId = null;
+          } else if (typeof data.followLeaderId !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `followLeaderId must be a channel id string or null, got ${typeof data.followLeaderId}`,
+            }));
+          } else {
+            const leaderId = data.followLeaderId;
+            // Leader must exist (mixer overlay OR the deck channel).
+            if (!mixer.getChannel(leaderId)) {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({
+                error: `follow leader '${leaderId}' not found`,
+                code: 'FOLLOW_LEADER_NOT_FOUND',
+              }));
+            }
+            // Self-follow + cycle rejection (walks the existing chain at PATCH
+            // time so the live follow graph can never contain a loop).
+            if (mixer.wouldCreateFollowCycle(id, leaderId)) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({
+                error: leaderId === id
+                  ? `channel '${id}' cannot follow itself`
+                  : `following '${leaderId}' would create a follow cycle`,
+                code: 'FOLLOW_CYCLE',
+              }));
+            }
+            channel.followLeaderId = leaderId;
+          }
+        }
+        // FOLLOW/LINK scale: validateFollowScale — non-finite ⇒ 400 (Codex
+        // P0); a finite value is clamped to [0,2]. Independent of
+        // followLeaderId (an operator can pre-set the scale before linking).
+        if (data.followScale !== undefined) {
+          const fsv = validateFollowScale(data.followScale);
+          if (!fsv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: fsv.error }));
+          }
+          channel.followScale = fsv.value;
         }
         if (data.transitionMode !== undefined) channel.transitionMode = data.transitionMode;
         if (data.transitionTime !== undefined) channel.transitionTime = data.transitionTime;
@@ -2761,6 +6131,70 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             console.warn(`[Mixer] Pattern swap FAILED: ${patternName} compile error:`, comp.error);
           }
         }
+        // AUTO-CYCLE (round-2 #2, docs/39 §auto-cycle): merge a partial
+        // autopilot patch into this overlay's playlist.autopilot. Mirrors the
+        // deck `/deck/playlist/autopilot` handler, but stricter on delay_s
+        // (Codex P0 — no silent parseInt||30 coerce; validateAutoCycleDelay
+        // rejects ≤0 / non-finite with 400 AUTOCYCLE_BAD_DELAY). Auto-cycle
+        // requires an assigned playlist to advance through — a channel with no
+        // playlist.name has nothing to cycle, so we 400 rather than arm a
+        // no-op timer (fail loud). active/shuffle coerce via !! like the other
+        // boolean flags. Validated BEFORE any mutation so a bad payload never
+        // half-applies; the autopilot rides the existing `mixer` broadcast (no
+        // new WS type) since it lives inside the serialized per-channel
+        // playlist. Exterior immunity is free: autopilot.active defaults false
+        // (opt-in), so a mission-critical channel never auto-changes unless an
+        // operator explicitly flips it here.
+        if (data.autopilot !== undefined) {
+          if (data.autopilot === null || typeof data.autopilot !== 'object') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `autopilot must be an object {active?,delay_s?,shuffle?}, got ${data.autopilot === null ? 'null' : typeof data.autopilot}`,
+              code: 'AUTOCYCLE_BAD_PAYLOAD',
+            }));
+          }
+          if (!channel.playlist || !channel.playlist.name) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `channel '${id}' has no playlist assigned; cannot enable auto-cycle`,
+              code: 'AUTOCYCLE_NO_PLAYLIST',
+            }));
+          }
+          // Validate delay_s FIRST (before mutating) so an invalid delay can't
+          // half-apply active/shuffle.
+          let nextDelay;
+          if (data.autopilot.delay_s !== undefined) {
+            const dv = validateAutoCycleDelay(data.autopilot.delay_s);
+            if (!dv.ok) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({ error: dv.error, code: 'AUTOCYCLE_BAD_DELAY' }));
+            }
+            nextDelay = dv.value;
+          }
+          const ap = channel.playlist.autopilot = channel.playlist.autopilot
+            || { active: false, delay_s: 30, shuffle: false };
+          if (data.autopilot.active !== undefined) ap.active = !!data.autopilot.active;
+          if (nextDelay !== undefined) ap.delay_s = nextDelay;
+          if (data.autopilot.shuffle !== undefined) ap.shuffle = !!data.autopilot.shuffle;
+          // PATTERN-GROUP LOCALITY (feat/optimize_channels): groupMode/groupSize
+          // /groupDwell mirror `shuffle` — booleans coerce via !!, ints clamp at
+          // the picker (a bad value lands inside the clamp window, not a 400).
+          if (data.autopilot.groupMode !== undefined) ap.groupMode = !!data.autopilot.groupMode;
+          if (data.autopilot.groupSize !== undefined) {
+            ap.groupSize = clampInt(
+              data.autopilot.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX, AUTO_GROUP_SIZE_DEFAULT);
+          }
+          if (data.autopilot.groupDwell !== undefined) {
+            ap.groupDwell = clampInt(
+              data.autopilot.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT);
+          }
+          // Re-seed the wall-clock anchor so the next auto-cycle tick measures
+          // a full delay_s from THIS arm/change, not a stale pre-patch baseline
+          // (the tick re-seeds null→now on its next active frame). Drop the
+          // group window too — an arm/disarm/reconfigure starts a fresh group.
+          channel._autoCycleLastAdvanceMs = null;
+          if (channel._autoGroup) { channel._autoGroup.windowIds = null; channel._autoGroup.swapsLeft = 0; }
+        }
         // PATCH might target ch_base, so persist deck state too.
         saveAllState();
         broadcastMixerState();
@@ -2770,7 +6204,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       const id = req.url.split('/')[3];
       const reject = rejectIfWrongRole(id, 'mixer');
       if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      // UNDO: snapshot the full look (incl. this channel + its CPC registration,
+      // playlist, follow/group membership) BEFORE we tear it down. recallLook
+      // rebuilds the deleted channel through buildChannelFromSaved→registerChannel
+      // so undo restores it never-dark with CPC re-registered.
+      pushUndo(`delete '${id}'`);
       if (paramCenter) paramCenter.unregisterChannel(id);
+      // FOLLOW/LINK (round-2 #6, docs/39 §F-follow): fail-safe leader DELETE.
+      // BEFORE removing the channel, clear followLeaderId on every channel that
+      // followed it so no follower is left pointing at a ghost (which _effFader
+      // would read as a 0-level missing leader, freezing the follower dark — a
+      // silent dangling reference the codex forbids). A cleared follower reverts
+      // to its OWN manual fader (still lit, never silent). removeMixerChannel
+      // also clears followers belt-and-braces, but doing it here lets the single
+      // broadcast below carry the cleared followLeaderId values.
+      mixer.clearFollowersOf(id);
       mixer.removeMixerChannel(id);
       saveAllState();
       broadcastMixerState();
@@ -2786,8 +6234,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         paramRouter.setChannelControl(id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         scheduleEntryCapture(id);
         markChannelDirtyIfLocked(id);
+        // Per-pattern param SHARING: mirror this export onto every other live
+        // channel running the same (playlist, pattern) — deck base, mixer
+        // overlays, deck overlays.
+        propagateAndCapturePatternParam(id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         saveAllState();
         broadcastMixerState();
+        broadcastDeckState();
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
       });
     } else if (req.method === 'POST' && req.url === '/mixer/view') {
@@ -2795,18 +6248,37 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // /\/mixer\/view/, otherwise it would also catch
       // /mixer/view-override and shadow the override handler below.
       readBody(data => {
-        // While the override is engaged we still let the user pre-set
-        // their next view; we save it so `clear` knows where to land,
-        // but don't actually move the live fader.
+        // View routing depends on WHO owns the deck-pin:
+        //
+        //   • HARD PortWatch lock ('portwatch'): the operator is locked out of
+        //     the output. We still let them pre-set their NEXT view — saved so
+        //     `clear`/lease-expiry knows where to land — but the live fader
+        //     stays frozen on the deck.
+        //
+        //   • SOFT plan lock ('plan') OR no lock: move the LIVE fader to the
+        //     operator's chosen view. A soft plan lock permits navigation, and
+        //     a mixer-view write under it is the operator's explicit output
+        //     intent during a takeover (CaptainPad pairs it with POST
+        //     /timeline/takeover). Keeping savedTargetViewFader in lock-step
+        //     means the plan's deck-pin release restores the operator's CHOSEN
+        //     view, never a stale pre-plan (often deck/black) value — so the
+        //     "mixer master goes black on takeover" outcome is deterministic
+        //     regardless of the /timeline/takeover vs /mixer/view call order:
+        //     the live fader always ends on the operator's target (mixer → 1.0).
+        // While the deck is pinned by ANYTHING (a PortWatch hard lock OR a plan
+        // soft lock), the live output is FROZEN on the deck — the plan owns it,
+        // and the operator must take over to change it. We still let them
+        // pre-set their next view (savedTargetViewFader) but never move the live
+        // fader (bug 2026-07-02 round 2: an earlier fix moved the live fader
+        // under a soft plan lock, which — now that takeover no longer switches
+        // views — flipped the output to the empty mixer and blacked the rig out
+        // on takeover). No lock → the toggle moves the live fader normally.
         if (viewOverrideMode === 'deck') {
           if (data.view === 'deck') savedTargetViewFader = 0.0;
           else if (data.view === 'mixer') savedTargetViewFader = 1.0;
         } else {
           if (data.view === 'deck') mixer.targetViewFader = 0.0;
           else if (data.view === 'mixer') mixer.targetViewFader = 1.0;
-        }
-        if (data.deckChannel !== undefined) {
-          mixer.deckFocusChannelId = data.deckChannel || null;
         }
         // ── Auto-finalize an in-flight deck swap on view → mixer ────
         // Per the operator's spec: navigating to the mixer tab while a
@@ -2835,6 +6307,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             mixer.targetViewFader = 0.0;
             viewOverrideMode = 'deck';
           }
+          // This is the REAL PortWatch-device deck-pin path (HARD lock). Mark the
+          // source 'portwatch' — even if the plan had soft-pinned the deck, an
+          // actual device take-over upgrades it to the hard lock.
+          controlLockSource = 'portwatch';
           // (Re)arm the lease on every successful deck-pin POST. This
           // is the renew path: clients holding the lock POST again
           // every ~20s to refresh the 30s lease. Doing it for the
@@ -2842,6 +6318,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // a first take always starts the countdown.
           armControlLockLease();
         } else if (requested === null || requested === '' || requested === 'clear') {
+          // docs/38 §16.9: the engine does NOT auto-arm the operator-takeover
+          // lease from a passive view event. When the plan is forcing the deck
+          // view (`forcingDeckView`), a switch to mixer is CONFIRM-GATED in the
+          // CaptainPad UI (confirm prompt + 1-minute auto-revert to deck). On an
+          // explicit operator confirm the UI calls POST /timeline/takeover. So
+          // this route just clears the raw deck-pin — no timeline.takeover() here.
           clearViewOverrideInternal();
           disarmControlLockLease();
         } else {
@@ -2859,9 +6341,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({
           status: 'ok',
           override: viewOverrideMode,
-          controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
-          controlLockLeaseExpiresAtMs: controlLockLeaseExpiresAtMs,
-          controlLockLeaseDurationMs: viewOverrideMode === 'deck'
+          controlLock: currentControlLock(),
+          controlLockLeaseExpiresAtMs: controlLockSource === 'portwatch' ? controlLockLeaseExpiresAtMs : null,
+          controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
             ? CONTROL_LOCK_LEASE_MS
             : null,
           currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
@@ -2872,10 +6354,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         override: viewOverrideMode,
-        controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
-        controlLockLeaseExpiresAtMs: controlLockLeaseExpiresAtMs,
-        controlLockLeaseRemainingMs: controlLockLeaseRemainingMs(),
-        controlLockLeaseDurationMs: viewOverrideMode === 'deck'
+        controlLock: currentControlLock(),
+        controlLockLeaseExpiresAtMs: controlLockSource === 'portwatch' ? controlLockLeaseExpiresAtMs : null,
+        controlLockLeaseRemainingMs: controlLockSource === 'portwatch' ? controlLockLeaseRemainingMs() : 0,
+        controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
           ? CONTROL_LOCK_LEASE_MS
           : null,
         currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
@@ -3229,6 +6711,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               error: `cpcKey "${sig.cpcKey}" is a built-in CPC key — cannot be redefined by the manifest`,
             }));
           }
+          // A RENAME re-pushes the same cpcKey at a NEW address. Capture the
+          // key's prior address first so we can drop its stale binding below —
+          // otherwise the old path would keep a dormant binding to this key.
+          const priorEntry = paramCenter.getSchema().find(e => e.key === sig.cpcKey);
+          const priorAddr = priorEntry && priorEntry.oscAddress;
           let result;
           try {
             result = paramCenter.registerDynamicLiveParam({
@@ -3245,6 +6732,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           if (listener) {
             try {
               listener.addDynamicBinding(sig.address, sig.cpcKey);
+              // Rename: the address moved → remove the now-dormant old binding so
+              // the key has exactly one wire path (the engine follows the rename).
+              if (priorAddr && priorAddr !== sig.address) {
+                listener.removeDynamicBinding(priorAddr);
+              }
             } catch (err) {
               res.writeHead(400, { 'Content-Type': 'application/json' });
               return res.end(JSON.stringify({ error: err.message }));
@@ -3485,6 +6977,376 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
       res.writeHead(405); res.end(JSON.stringify({ error: 'method not allowed' }));
     }
+    // ── DECK DYNAMIC VIEW OVERRIDES (deck overlays) ──────────────────────
+    // Layered, view-scoped overlay decks composited OVER the main deck. Mirror
+    // the mixer overlay routes (fail loud, no silent fallback). Literal-segment
+    // routes (/deck/overlays/reorder, /deck/overlays/autopilot) are armed
+    // BEFORE the `:id` regexes so the literal segment isn't read as an id.
+    // Operator rulings: unique view per overlay (409 DECK_OVERLAY_VIEW_TAKEN),
+    // cap 4 (400 DECK_OVERLAY_OVER_CAP), SHARED autopilot timer, SHARED globals,
+    // persist across restart. order[0]=bottom, order[last]=top.
+    else if (req.method === 'GET' && req.url === '/deck/overlays') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        overlays: (mixer.getDeckOverlays ? mixer.getDeckOverlays() : []).map(serializeChannel),
+        overlayAutopilot: {
+          active: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.active),
+          delay_s: (mixer.deckOverlayAutopilot && typeof mixer.deckOverlayAutopilot.delay_s === 'number')
+            ? mixer.deckOverlayAutopilot.delay_s : 30,
+          shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
+          ...autoGroupFields(mixer.deckOverlayAutopilot),
+        },
+      }));
+    }
+    // POST /deck/overlays { viewSelection(required), playlist|pattern, mode,
+    // enabled } — add a deck overlay. Mirrors POST /mixer/channels but targets
+    // the deck-overlay stack: REQUIRES an explicit, non-'all' view (never-dark
+    // guard), rejects a taken view (409), and the cap (400 over 4).
+    else if (req.method === 'POST' && req.url === '/deck/overlays') {
+      readBody(data => {
+        // viewSelection is REQUIRED (an all-view overlay would defeat the
+        // feature AND violate never-dark). Validate first (fail loud).
+        if (data.viewSelection === undefined || data.viewSelection === null) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'viewSelection is required for a deck overlay', code: 'DECK_OVERLAY_VIEW_REQUIRED' }));
+        }
+        const v = validateViewSelection(data.viewSelection);
+        if (!v.ok) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: v.error }));
+        }
+        if (v.value.type === 'all') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'deck overlay viewSelection must target a specific view (not "all")', code: 'DECK_OVERLAY_VIEW_REQUIRED' }));
+        }
+        // Cap check BEFORE we burn a WASM handle (fail loud, distinct code).
+        if ((mixer.getDeckOverlays ? mixer.getDeckOverlays() : []).length >= DECK_OVERLAY_MAX) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: `Maximum of ${DECK_OVERLAY_MAX} deck overlays allowed`, code: 'DECK_OVERLAY_OVER_CAP' }));
+        }
+        // Unique-view check (409) BEFORE compile.
+        if (mixer.deckOverlayViewTaken(v.value, null)) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'a deck overlay already targets this view', code: 'DECK_OVERLAY_VIEW_TAKEN' }));
+        }
+        // Optional blend mode (default blend_screen). trans_* excluded for
+        // overlays — only steady channel-blend modes are valid.
+        let mode = 'blend_screen';
+        if (data.mode !== undefined) {
+          if (!VALID_CHANNEL_BLEND_MODES.has(data.mode)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `Invalid deck-overlay blend mode '${data.mode}' (expected one of ${[...VALID_CHANNEL_BLEND_MODES].join(', ')})`,
+            }));
+          }
+          mode = data.mode;
+        }
+        // Resolve playlist + pattern (mirror POST /mixer/channels).
+        let playlistName = data.playlist;
+        let entryId = data.playlistEntryId;
+        let patternName;
+        if (playlistName) {
+          const pl = playlistManager.load(playlistName);
+          if (!pl) { res.writeHead(400); return res.end(JSON.stringify({ error: `Playlist not found: ${playlistName}` })); }
+          const usable = pl.entries.filter(e => !e._missing);
+          if (usable.length === 0) { res.writeHead(400); return res.end(JSON.stringify({ error: `Playlist ${playlistName} has no usable entries` })); }
+          const entry = entryId ? (pl.entries.find(e => e.id === entryId && !e._missing) || usable[0]) : usable[0];
+          entryId = entry.id;
+          patternName = entry.pattern;
+        } else if (data.pattern) {
+          patternName = path.basename(data.pattern, '.js');
+          playlistName = 'default';
+        } else {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'playlist or pattern required' }));
+        }
+        const src = loadPattern(patternsDir, patternName);
+        const comp = wasmHost.compile(src);
+        if (!comp.ok) { res.writeHead(400); return res.end(JSON.stringify({ error: comp.error })); }
+
+        let overlay;
+        try {
+          overlay = mixer.addDeckOverlay({
+            id: 'do_' + Date.now() + '_' + (channelIdCounter++),
+            name: data.name || 'Overlay',
+            pattern: patternName,
+            handle: comp.handle,
+            mode,
+            fader: data.fader !== undefined ? data.fader : 1.0,
+            enabled: data.enabled !== undefined ? !!data.enabled : true,
+            viewSelection: v.value,
+          });
+        } catch (addErr) {
+          // Belt-and-braces (the API checks above should have caught these).
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: String(addErr.message || addErr) }));
+        }
+        onChannelCompiled(overlay);
+        try {
+          if (data.playlist) {
+            loadPlaylistEntry(overlay, playlistName, entryId);
+          } else {
+            overlay.playlist = { name: playlistName, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+          }
+        } catch (e) {
+          console.warn(`[DeckOverlay] Could not attach playlist ${playlistName} to new overlay:`, e.message);
+        }
+        finalizeCpcValues(overlay);
+        saveAllState();
+        broadcastChannelPlaylistData(overlay);
+        broadcastDeckState();
+        let inlinePlaylistData = null;
+        try {
+          if (overlay.playlist && overlay.playlist.name) {
+            const pl = playlistManager.load(overlay.playlist.name);
+            if (pl) inlinePlaylistData = pl;
+          }
+        } catch (_) {}
+        res.writeHead(200); res.end(JSON.stringify({
+          status: 'ok',
+          overlayId: overlay.id,
+          pattern: overlay.pattern,
+          color: overlay.color,
+          playlist: overlay.playlist,
+          playlistData: inlinePlaylistData,
+        }));
+      });
+    }
+    // POST /deck/overlays/reorder { order:[ids] } (armed before :id regexes).
+    else if (req.method === 'POST' && req.url === '/deck/overlays/reorder') {
+      readBody(data => {
+        const order = data && data.order;
+        const current = mixer.getDeckOverlays ? mixer.getDeckOverlays() : [];
+        const currentIds = current.map(o => o.id);
+        const bad = (msg) => {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: msg, code: 'REORDER_BAD_SET' }));
+        };
+        if (!Array.isArray(order)) return bad('order must be an array of overlay ids');
+        if (order.length !== currentIds.length) {
+          return bad(`order has ${order.length} ids but there are ${currentIds.length} deck overlays`);
+        }
+        const orderSet = new Set(order);
+        if (orderSet.size !== order.length) return bad('order contains duplicate ids');
+        const currentSet = new Set(currentIds);
+        for (const oid of order) {
+          if (!currentSet.has(oid)) return bad(`order contains unknown overlay id '${oid}'`);
+        }
+        try {
+          mixer.reorderDeckOverlays(order);
+        } catch (e) {
+          return bad(String(e.message || e));
+        }
+        saveAllState();
+        broadcastDeckState();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', order: mixer.getDeckOverlays().map(o => o.id) }));
+      });
+    }
+    // POST /deck/overlays/autopilot { active?, delay_s?, shuffle? } — set the
+    // SHARED overlay autopilot cadence (operator refinement #1: ONE clock for
+    // the whole group). Armed before the :id regexes. delay_s validated by
+    // validateAutoCycleDelay (reject ≤0 / non-finite 400 AUTOCYCLE_BAD_DELAY).
+    else if (req.method === 'POST' && req.url === '/deck/overlays/autopilot') {
+      readBody(data => {
+        if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'body must be an object {active?,delay_s?,shuffle?}', code: 'AUTOCYCLE_BAD_PAYLOAD' }));
+        }
+        let nextDelay;
+        if (data.delay_s !== undefined) {
+          const dv = validateAutoCycleDelay(data.delay_s);
+          if (!dv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: dv.error, code: 'AUTOCYCLE_BAD_DELAY' }));
+          }
+          nextDelay = dv.value;
+        }
+        const ap = mixer.deckOverlayAutopilot = mixer.deckOverlayAutopilot
+          || { active: false, delay_s: 30, shuffle: false };
+        if (data.active !== undefined) ap.active = !!data.active;
+        if (nextDelay !== undefined) ap.delay_s = nextDelay;
+        if (data.shuffle !== undefined) ap.shuffle = !!data.shuffle;
+        // PATTERN-GROUP LOCALITY (feat/optimize_channels): mirror `shuffle`. The
+        // SHARED overlay autopilot drives every overlay's per-overlay picker, so
+        // group config lives on this one object; each overlay keeps its own
+        // window in its own transient `_autoGroup`.
+        if (data.groupMode !== undefined) ap.groupMode = !!data.groupMode;
+        if (data.groupSize !== undefined) {
+          ap.groupSize = clampInt(
+            data.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX, AUTO_GROUP_SIZE_DEFAULT);
+        }
+        if (data.groupDwell !== undefined) {
+          ap.groupDwell = clampInt(
+            data.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT);
+        }
+        // Re-seed the SHARED anchor so the next tick measures a full delay_s
+        // from THIS arm/change, not a stale pre-patch baseline. Drop each
+        // overlay's group window so a reconfigure starts fresh windows.
+        mixer._deckOverlayAnchorMs = null;
+        if (data.groupMode !== undefined || data.groupSize !== undefined || data.groupDwell !== undefined) {
+          for (const overlay of (mixer.getDeckOverlays ? mixer.getDeckOverlays() : [])) {
+            if (overlay._autoGroup) { overlay._autoGroup.windowIds = null; overlay._autoGroup.swapsLeft = 0; }
+          }
+        }
+        saveAllState();
+        broadcastDeckState();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', overlayAutopilot: { ...ap } }));
+      });
+    }
+    // POST /deck/overlays/:id/playlist { name } — swap the overlay's playlist.
+    else if (req.method === 'POST' && req.url.match(/^\/deck\/overlays\/[^\/]+\/playlist$/)) {
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        const overlay = mixer.getDeckOverlay(id);
+        if (!overlay) { res.writeHead(404); return res.end(JSON.stringify({ error: 'deck overlay not found' })); }
+        try {
+          if (data.name === null) {
+            overlay.playlist = null;
+            saveAllState();
+            res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: null, playlistData: null }));
+            broadcastDeckState(); return;
+          }
+          const pl = playlistManager.load(data.name);
+          if (!pl) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+          const firstEntry = pl.entries.find(e => !e._missing) || pl.entries[0];
+          if (!firstEntry) {
+            overlay.playlist = { name: pl.name, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+            saveAllState();
+            res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: overlay.playlist, playlistData: pl }));
+            broadcastChannelPlaylistData(overlay);
+            broadcastDeckState(); return;
+          }
+          loadPlaylistEntry(overlay, pl.name, firstEntry.id);
+          saveAllState();
+          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: overlay.playlist, playlistData: pl }));
+          broadcastChannelPlaylistData(overlay);
+          broadcastDeckState();
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    }
+    // POST /deck/overlays/:id/playlist/entry { entryId } — load a specific entry.
+    else if (req.method === 'POST' && req.url.match(/^\/deck\/overlays\/[^\/]+\/playlist\/entry$/)) {
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        const overlay = mixer.getDeckOverlay(id);
+        if (!overlay) { res.writeHead(404); return res.end(JSON.stringify({ error: 'deck overlay not found' })); }
+        if (!overlay.playlist || !overlay.playlist.name) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'no playlist loaded' }));
+        }
+        if (!data.entryId) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'entryId required' }));
+        }
+        try {
+          loadPlaylistEntry(overlay, overlay.playlist.name, data.entryId);
+          saveAllState();
+          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: overlay.playlist, pattern: overlay.pattern }));
+          broadcastDeckState();
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    }
+    // PATCH /deck/overlays/:id { mode, fader, enabled, faderLocked, faderMax,
+    // color, hue, viewSelection } — mutate one overlay. The role guard rejects
+    // the deck id and any mixer overlay id (must be a deck-overlay id).
+    else if (req.method === 'PATCH' && req.url.match(/^\/deck\/overlays\/[^\/]+$/)) {
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      readBody(data => {
+        // Role guard: :id must be a deck overlay — not the deck channel,
+        // not a mixer overlay (fail loud, mirrors rejectIfWrongRole).
+        if (mixer.deckChannel && id === mixer.deckChannel.id) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'deck channel cannot be addressed via /deck/overlays routes', code: 'WRONG_ROLE', useInstead: '/deck/channel' }));
+        }
+        if (mixer.getMixerChannel && mixer.getMixerChannel(id)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'mixer overlay cannot be addressed via /deck/overlays routes', code: 'WRONG_ROLE', useInstead: `/mixer/channels/${encodeURIComponent(id)}` }));
+        }
+        const overlay = mixer.getDeckOverlay(id);
+        if (!overlay) { res.writeHead(404); return res.end(JSON.stringify({ error: 'deck overlay not found' })); }
+        if (data.name !== undefined) overlay.name = data.name;
+        if (data.mode !== undefined) {
+          // Overlays only accept steady channel-blend modes (no trans_*).
+          if (!VALID_CHANNEL_BLEND_MODES.has(data.mode)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `Invalid deck-overlay blend mode '${data.mode}' (expected one of ${[...VALID_CHANNEL_BLEND_MODES].join(', ')})`,
+            }));
+          }
+          overlay.mode = data.mode;
+          mixer.getBlendHandle(data.mode);
+        }
+        if (data.fader !== undefined) {
+          const fv = validateFader(data.fader);
+          if (!fv.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: fv.error })); }
+          if (!overlay.faderLocked) overlay.fader = fv.value;
+        }
+        if (data.enabled !== undefined) overlay.enabled = !!data.enabled;
+        if (data.faderLocked !== undefined) overlay.faderLocked = !!data.faderLocked;
+        if (data.faderMax !== undefined) {
+          const fm = validateFader(data.faderMax);
+          if (!fm.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: fm.error.replace('fader', 'faderMax') })); }
+          overlay.faderMax = fm.value;
+        }
+        if (data.color !== undefined) {
+          if (data.color !== null && typeof data.color !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
+          }
+          overlay.color = data.color === null ? null : data.color;
+        }
+        if (data.hue !== undefined) {
+          const hv = validateHue(data.hue);
+          if (!hv.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: hv.error })); }
+          overlay.hue = hv.value;
+        }
+        if (data.viewSelection !== undefined) {
+          const v = validateViewSelection(data.viewSelection);
+          if (!v.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: v.error })); }
+          // Never-dark guard + unique-view rule (409) on view change too.
+          if (v.value.type === 'all') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'deck overlay viewSelection must target a specific view (not "all")', code: 'DECK_OVERLAY_VIEW_REQUIRED' }));
+          }
+          if (mixer.deckOverlayViewTaken(v.value, id)) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'a deck overlay already targets this view', code: 'DECK_OVERLAY_VIEW_TAKEN' }));
+          }
+          mixer.setDeckOverlayViewSelection(id, v.value);
+        }
+        if (data.pattern !== undefined && data.pattern !== overlay.pattern) {
+          const patternName = path.basename(data.pattern, '.js');
+          const src = loadPattern(patternsDir, patternName);
+          const comp = wasmHost.compile(src);
+          if (comp.ok) {
+            if (overlay.handle) wasmHost.destroy(overlay.handle);
+            overlay.handle = comp.handle;
+            overlay.pattern = patternName;
+            overlay.localControls = {};
+            onChannelCompiled(overlay);
+            finalizeCpcValues(overlay);
+          } else {
+            console.warn(`[DeckOverlay] Pattern swap FAILED: ${patternName} compile error:`, comp.error);
+          }
+        }
+        saveAllState();
+        broadcastDeckState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+      });
+    }
+    // DELETE /deck/overlays/:id — remove an overlay (free its WASM handle).
+    else if (req.method === 'DELETE' && req.url.match(/^\/deck\/overlays\/[^\/]+$/)) {
+      const id = decodeURIComponent(req.url.split('/')[3]);
+      if (paramCenter) paramCenter.unregisterChannel(id);
+      const removed = mixer.removeDeckOverlay(id);
+      if (!removed) { res.writeHead(404); return res.end(JSON.stringify({ error: 'deck overlay not found' })); }
+      saveAllState();
+      broadcastDeckState();
+      res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
+    }
     // ── DECK CHANNEL (post-split) ────────────────────────────────────────
     // Replaces the deck-via-/mixer/channels/<baseId>/... access pattern.
     // The deck is a singleton (no id needed in the URL) and these routes
@@ -3505,20 +7367,67 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (!channel) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
         if (data.name !== undefined) channel.name = data.name;
         if (data.mode !== undefined) {
+          if (!isValidBlendMode(data.mode)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `Invalid blend mode '${data.mode}' (expected one of ` +
+                `${[...VALID_CHANNEL_BLEND_MODES].join(', ')} or a trans_* transition)`,
+            }));
+          }
           if (channel._savedMode) delete channel._savedMode;
           mixer.cancelChannelTransition(channel.id);
           channel.mode = data.mode;
           mixer.getBlendHandle(data.mode);
         }
         if (data.fader !== undefined) {
+          // Codex P0: reject non-finite, clamp finite (see validateFader).
+          const fv = validateFader(data.fader);
+          if (!fv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: fv.error }));
+          }
           // Fader-lock: same silent-skip semantics as the mixer PATCH.
           if (!channel.faderLocked) {
             mixer.cancelChannelTransition(channel.id);
-            channel.fader = data.fader;
+            channel.fader = fv.value;
           }
         }
         if (data.enabled !== undefined) channel.enabled = data.enabled;
         if (data.faderLocked !== undefined) channel.faderLocked = !!data.faderLocked;
+        // F-C: per-channel intensity ceiling on the deck channel. (The deck
+        // drives the mission-critical exterior — a clamp here caps its own
+        // contribution; same validation as the mixer PATCH.)
+        if (data.faderMax !== undefined) {
+          const fm = validateFader(data.faderMax);
+          if (!fm.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: fm.error.replace('fader', 'faderMax') }));
+          }
+          channel.faderMax = fm.value;
+        }
+        // F-D: per-channel color metadata on the deck channel.
+        if (data.color !== undefined) {
+          if (data.color !== null && typeof data.color !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: `color must be a string or null, got ${typeof data.color}` }));
+          }
+          channel.color = data.color === null ? null : data.color;
+        }
+        // F-hue: per-channel hue on the deck channel. Same validation +
+        // semantics as the mixer PATCH (docs/39 §F-hue).
+        if (data.hue !== undefined) {
+          const hv = validateHue(data.hue);
+          if (!hv.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: hv.error }));
+          }
+          channel.hue = hv.value;
+        }
+        // F-phase #4 on the deck channel — tap-tempo opt-in, same semantics
+        // as the mixer PATCH (docs/39 §F-phase).
+        if (data.followsTempo !== undefined) {
+          channel.followsTempo = !!data.followsTempo;
+        }
         if (data.locked !== undefined) {
           const becameLocked = !channel.locked && !!data.locked;
           channel.locked = !!data.locked;
@@ -3559,8 +7468,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         paramRouter.setChannelControl(channel.id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         scheduleEntryCapture(channel.id);
         markChannelDirtyIfLocked(channel.id);
+        // Per-pattern param SHARING: mirror onto siblings on the same
+        // (playlist, pattern) — mixer overlays + deck overlays.
+        propagateAndCapturePatternParam(channel.id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         saveAllState();
         broadcastMixerState();
+        broadcastDeckState();
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
       });
     }
@@ -3636,6 +7549,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             playlist: baseCh.playlist,
             pattern: baseCh.pattern,
             transitionId: r && r.transitionId ? r.transitionId : null,
+            // FIX B: the RESOLVED target entry id for this swap. During a soft
+            // transition baseCh.playlist.activeEntryId is still the OLD entry
+            // (the new id is written in onComplete after the fade), so the
+            // client must arm its pending-gate from THIS, not playlist.
+            // activeEntryId, or the panel suppresses reconcile until the ~8s
+            // watchdog. For the entry-advance path the resolved target IS the
+            // requested entryId.
+            targetEntryId: data.entryId,
           }));
         } catch (e) {
           if (e && e.code === 'EBUSY') {
@@ -3673,7 +7594,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.active !== undefined) ap.active = !!data.active;
         if (data.delay_s !== undefined) ap.delay_s = parseInt(data.delay_s, 10) || 30;
         if (data.shuffle !== undefined) ap.shuffle = !!data.shuffle;
+        // PATTERN-GROUP LOCALITY (feat/optimize_channels): mirror `shuffle` —
+        // groupMode bool, groupSize/groupDwell ints clamped to their windows.
+        if (data.groupMode !== undefined) ap.groupMode = !!data.groupMode;
+        if (data.groupSize !== undefined) {
+          ap.groupSize = clampInt(
+            data.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX, AUTO_GROUP_SIZE_DEFAULT);
+        }
+        if (data.groupDwell !== undefined) {
+          ap.groupDwell = clampInt(
+            data.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT);
+        }
+        // Reconfiguring group-locality starts a fresh group (drop the window).
+        if (data.groupMode !== undefined || data.groupSize !== undefined || data.groupDwell !== undefined) {
+          if (baseCh._autoGroup) { baseCh._autoGroup.windowIds = null; baseCh._autoGroup.swapsLeft = 0; }
+        }
         saveAllState();
+        // Drive main's deck daemon timer from the now-updated autopilot block
+        // (active/delay reschedule the self-rescheduling setTimeout; shuffle +
+        // group are read live from baseCh.playlist.autopilot by the picker).
         autopilot.updateState({ active: ap.active, delay_s: String(ap.delay_s), shuffle: ap.shuffle });
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok', autopilot: ap }));
         broadcastMixerState();
@@ -3688,12 +7627,31 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // can update one knob without resetting the rest.
         if (typeof data.enabled === 'boolean') deckTransitionConfig.enabled = data.enabled;
         if (typeof data.shuffle === 'boolean') deckTransitionConfig.shuffle = data.shuffle;
-        if (typeof data.mode === 'string' && data.mode.startsWith('trans_')) {
+        if (data.mode !== undefined) {
+          // The deck transition `mode` is a scripted transition (trans_*),
+          // not a steady channel blend. Reject anything else with 400 so a
+          // typo can't silently leave the previous mode in place.
+          if (typeof data.mode !== 'string' || !data.mode.startsWith('trans_')) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `transition-config mode must be a trans_* transition name, got '${data.mode}'`,
+            }));
+          }
           deckTransitionConfig.mode = data.mode;
         }
         if (data.durationMs !== undefined) {
-          const ms = Math.max(50, Math.min(30000, Number(data.durationMs) || 1000));
-          deckTransitionConfig.durationMs = ms;
+          // NaN/finite validation (Codex P0): reject a non-finite duration
+          // with 400 instead of silently coercing it (Number(NaN)||1000
+          // used to mask 'abc'/NaN as 1000s, hiding a broken client). A
+          // finite value is still clamped to the safe 50..30000 ms window.
+          const n = Number(data.durationMs);
+          if (!Number.isFinite(n)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `durationMs must be a finite number, got '${data.durationMs}'`,
+            }));
+          }
+          deckTransitionConfig.durationMs = Math.max(50, Math.min(30000, n));
         }
         saveAllState();
         // Broadcast so other clients see the change immediately.
@@ -3784,6 +7742,43 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
           }
         }
+      });
+    } else if (req.method === 'GET' && req.url.match(/^\/mixer\/channels\/[^\/]+\/autopilot$/)) {
+      // Return the channel's autopilot block (docs/19 §8.3 / §13).
+      const id = req.url.split('/')[3];
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      const ch = mixer.getMixerChannel(id);
+      if (!ch) { res.writeHead(404); return res.end(JSON.stringify({ error: 'channel not found' })); }
+      const ap = (ch.playlist && ch.playlist.autopilot) || { active: false, delay_s: 30, shuffle: false };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(ap));
+    } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/autopilot$/)) {
+      // Independently control a mixer channel's autopilot. Updates the
+      // channel's playlist.autopilot, persists mixer state, and broadcasts a
+      // dedicated mixerAutopilot event. Under main's frame-driven system the
+      // per-frame autoCycleTick reads this block live — no pool to arm; we just
+      // re-seed the wall-clock anchor so the next tick measures a full delay_s
+      // from THIS change.
+      const id = req.url.split('/')[3];
+      const reject = rejectIfWrongRole(id, 'mixer');
+      if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
+      readBody(data => {
+        const ch = mixer.getMixerChannel(id);
+        if (!ch) { res.writeHead(404); return res.end(JSON.stringify({ error: 'channel not found' })); }
+        ch.playlist = ch.playlist || { name: null, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
+        const ap = ch.playlist.autopilot = ch.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
+        if (data.active !== undefined) ap.active = !!data.active;
+        if (data.delay_s !== undefined) ap.delay_s = parseInt(data.delay_s, 10) || 30;
+        if (data.shuffle !== undefined) ap.shuffle = !!data.shuffle;
+        // Re-seed the auto-cycle wall-clock anchor + drop any group window so
+        // the next autoCycleTick frame treats this as a fresh arm.
+        ch._autoCycleLastAdvanceMs = null;
+        if (ch._autoGroup) { ch._autoGroup.windowIds = null; ch._autoGroup.swapsLeft = 0; }
+        saveAllState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', channelId: id, autopilot: ap }));
+        broadcastWs({ type: 'mixerAutopilot', channelId: id, autopilot: ap });
+        broadcastMixerState();
       });
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist\/capture$/)) {
       const id = req.url.split('/')[3];
@@ -3877,8 +7872,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // Expose the map BEFORE we wire any handlers — broadcastWs() reads
   // global.wssByTopic on every call and will no-op until this assignment
   // runs. Done early so any synchronous broadcasts during the WS
-  // connect handlers (e.g. autopilot.start emitting a state event) find
-  // the right socket already registered.
+  // connect handlers (e.g. an autopilot state replay) find the right
+  // socket already registered.
   global.wssByTopic = wssByTopic;
   // Back-compat shim — exported tests + a couple of legacy call sites
   // still reach for `global.wss`. Point it at the control socket so any
@@ -3940,7 +7935,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       console.error('Server error:', e);
     }
   });
+  // Start main's deck Autopilot daemon. Its active/delay live in config.yaml
+  // (autopilot.state); the next-entry pick reads the restored deck
+  // playlist.autopilot live. Mixer + deck overlays resume on their own — the
+  // per-frame autoCycleTick / deckOverlayAutoCycleTick read each channel's
+  // restored playlist.autopilot, so any overlay whose autopilot.active === true
+  // resumes cycling on boot without an explicit per-channel arm.
   autopilot.start();
+  // Start the COLOR autopilot daemon. Its {active,palettes,delay_s,shuffle} live
+  // in config.yaml (colorAutopilot.state); pauses cleanly when inactive.
+  colorAutopilot.start();
 
   // ── Per-topic replay-on-connect ──────────────────────────────────────
   // Each socket only replays the cached payloads it owns. A fresh
@@ -3961,23 +7965,46 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // see the same values that the existing one-shot REST loads would
     // have given them — without having to wait for the next change.
     try {
-      const st = autopilot.state || {};
+      const st = deckAutopilotState();
       ws.send(JSON.stringify({
         type: 'autopilot',
         active: !!st.active,
         delay_s: st.delay_s !== undefined ? String(st.delay_s) : '30',
         shuffle: !!st.shuffle,
+        // Include the next-swap time so a late-joining deck paints the pattern
+        // countdown immediately (mirrors broadcastAutopilot + the colorAutopilot
+        // snapshot below, which already spreads the field).
+        nextSwapAtMs: (typeof autopilot !== 'undefined' && autopilot) ? autopilot.nextSwapAtMs : null,
       }));
     } catch (e) {
       // never let a snapshot send break a fresh WS handshake
+    }
+    // COLOR autopilot replay (docs/39): a late-joining CaptainPad deck tab sees
+    // the current palette-cycling config immediately.
+    try {
+      ws.send(JSON.stringify({ type: 'colorAutopilot', ...colorAutopilotState() }));
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+    // UNDO state replay (round-2 #10): a late-joining CaptainPad sees the
+    // current undo depth/top immediately, so its UNDO button paints enabled/
+    // labeled without waiting for the next push.
+    try {
+      ws.send(JSON.stringify({
+        type: 'undoState',
+        depth: undoStack.depth,
+        top: undoStack.topLabel,
+      }));
+    } catch (e) {
+      // ignore — never break the handshake on a replay send
     }
     try {
       ws.send(JSON.stringify({
         type: 'viewOverride',
         override: viewOverrideMode,
-        controlLock: viewOverrideMode === 'deck' ? 'portwatch' : null,
-        controlLockLeaseExpiresAtMs: controlLockLeaseExpiresAtMs,
-        controlLockLeaseDurationMs: viewOverrideMode === 'deck'
+        controlLock: currentControlLock(),
+        controlLockLeaseExpiresAtMs: controlLockSource === 'portwatch' ? controlLockLeaseExpiresAtMs : null,
+        controlLockLeaseDurationMs: currentControlLock() === 'portwatch'
           ? CONTROL_LOCK_LEASE_MS
           : null,
         currentView: mixer.targetViewFader < 0.5 ? 'deck' : 'mixer',
@@ -4026,6 +8053,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // never let a snapshot send break a fresh WS handshake
     }
 
+    // Replay the current timelineState (docs/38 §15) so a fresh CaptainPad
+    // paints the controller banner / cue list / sun ribbon immediately
+    // instead of waiting up to one tick. Same posture as the scheduledTasks
+    // / autopilot replays above.
+    try {
+      if (timelineService) ws.send(JSON.stringify(timelineService.getState()));
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+
     ws.on('message', msg => {
       try {
         const d = JSON.parse(msg);
@@ -4033,15 +8070,37 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           paramRouter.setControl(d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
           scheduleEntryCapture(mixer.baseChannelId);
           markChannelDirtyIfLocked(mixer.baseChannelId);
+          // Per-pattern param SHARING (see propagatePatternParam).
+          if (mixer.baseChannelId) {
+            propagateAndCapturePatternParam(mixer.baseChannelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
+          }
           saveAllState();
           broadcastMixerState();
+          broadcastDeckState();
         } else if (d.type === 'setChannelControl' && d.channelId && d.id !== undefined) {
           paramRouter.setChannelControl(d.channelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
           scheduleEntryCapture(d.channelId);
           markChannelDirtyIfLocked(d.channelId);
+          // Per-pattern param SHARING (see propagatePatternParam).
+          propagateAndCapturePatternParam(d.channelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
           saveAllState();
           broadcastMixerState();
+          broadcastDeckState();
         } else if (d.type === 'setChannelFader' && d.channelId && d.fader !== undefined) {
+          // Codex P0: reject a non-finite fader loudly over WS too. We have
+          // no res to 4xx on a socket, so push back a typed rejection the
+          // iPad can surface + re-sync from; we do NOT coerce NaN to a
+          // number. Finite values are clamped to [0,1] before they land.
+          const fv = validateFader(d.fader);
+          if (!fv.ok) {
+            ws.send(JSON.stringify({
+              type: 'channelFaderRejected',
+              channelId: d.channelId,
+              fader: d.fader,
+              reason: fv.error,
+            }));
+            return;
+          }
           const channel = mixer.getChannel(d.channelId);
           if (channel) {
             // Fader-lock: refuse manual fader writes on a locked
@@ -4064,12 +8123,39 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             // would keep overwriting the operator's slider drag, causing
             // a "rubber band" snap-back effect. Agent review (May 2026) §5.
             mixer.cancelChannelTransition(d.channelId);
-            channel.fader = d.fader;
+            channel.fader = fv.value;
             // No broadcast — fader-only updates outside transitions are
             // already at human-touch rate; full state syncs on
             // saveMixerState (e.g. on slider release).
+          } else {
+            // FAIL LOUD (codex P0): getChannel() returns null for an UNKNOWN id
+            // OR for the deck/base channel (which is faded via /deck, not the
+            // mixer-channel route). The old code silently dropped the write —
+            // leaving the iPad's optimistic slider stuck UP while the engine
+            // never moved, so the "channel" stayed dark with NO signal (operator
+            // report 2026-07-03: a mixer channel "was not being rendered to
+            // master out"). Push back a typed rejection AND force a full mixer
+            // broadcast so the iPad re-syncs to engine truth — a stale channel
+            // drops out of its list, and the operator sees the slider re-peg
+            // instead of a silent no-op.
+            ws.send(JSON.stringify({
+              type: 'channelFaderRejected',
+              channelId: d.channelId,
+              fader: d.fader,
+              reason: 'unknown-or-deck-channel',
+            }));
+            broadcastMixerState();
           }
         } else if (d.type === 'setChannelMode' && d.channelId && d.mode) {
+          if (!isValidBlendMode(d.mode)) {
+            ws.send(JSON.stringify({
+              type: 'channelModeRejected',
+              channelId: d.channelId,
+              mode: d.mode,
+              reason: 'invalid-blend-mode',
+            }));
+            return;
+          }
           const channel = mixer.getChannel(d.channelId);
           if (channel) {
             // A manual mode change wins over any in-flight scripted
@@ -4155,6 +8241,62 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               broadcastMixerState();
             }
           }
+        } else if (d.type === 'setSolo' && d.channelId) {
+          // Server-authoritative solo over WS (low-latency mirror of POST
+          // /mixer/solo). Same dual-path as setChannelFader. additive=true
+          // adds; false replaces. A bad / non-mixer id is pushed back as a
+          // typed rejection (no res to 4xx on a socket); siblings are never
+          // mutated. Always broadcast so every client reconciles its
+          // display-only solo state from the canonical soloedChannelIds.
+          const r = mixer.setSolo(d.channelId, !!d.additive);
+          if (!r.ok) {
+            ws.send(JSON.stringify({ type: 'soloRejected', channelId: d.channelId, reason: r.error }));
+            return;
+          }
+          saveAllState();
+          broadcastMixerState();
+        } else if (d.type === 'clearSolo') {
+          // Clear one channel's solo (d.channelId present) or ALL (absent).
+          const r = mixer.clearSolo(d.channelId !== undefined ? d.channelId : null);
+          if (!r.ok) {
+            ws.send(JSON.stringify({ type: 'soloRejected', channelId: d.channelId, reason: r.error }));
+            return;
+          }
+          saveAllState();
+          broadcastMixerState();
+        } else if (d.type === 'bump' && d.channelId) {
+          // FLASH / BUMP over WS (low-latency mirror of POST
+          // /mixer/channels/:id/bump {on:true}). Same dual-path as setSolo.
+          // Each `bump` RENEWS the disconnect lease, so a held button that
+          // re-sends every BUMP_RENEW_MS keeps the channel pinned; stop
+          // re-sending (or drop off wifi) and the sweep auto-releases. We
+          // ALSO track which channels THIS socket bumped so ws-close releases
+          // them instantly (belt-and-braces beside the lease). A bad / non-
+          // mixer id is pushed back as a typed rejection.
+          const r = applyBump(d.channelId, true);
+          if (!r.ok) {
+            ws.send(JSON.stringify({ type: 'bumpRejected', channelId: d.channelId, reason: r.error }));
+            return;
+          }
+          if (!ws._bumpedByThisWs) ws._bumpedByThisWs = new Set();
+          ws._bumpedByThisWs.add(d.channelId);
+          // Broadcast only when the set actually changed — a renew (already
+          // bumped) is a no-op for every other client, so skip the fan-out
+          // to keep the hold-renew cadence off the wire.
+          if (r.changed) { saveAllState(); broadcastMixerState(); }
+        } else if (d.type === 'unbump') {
+          // Release one channel's bump (d.channelId present) or ALL (absent).
+          const r = applyBump(d.channelId !== undefined ? d.channelId : null, false);
+          if (!r.ok) {
+            ws.send(JSON.stringify({ type: 'bumpRejected', channelId: d.channelId, reason: r.error }));
+            return;
+          }
+          if (ws._bumpedByThisWs) {
+            if (d.channelId !== undefined) ws._bumpedByThisWs.delete(d.channelId);
+            else ws._bumpedByThisWs.clear();
+          }
+          saveAllState();
+          broadcastMixerState();
         } else if (d.type === 'setSharedParam') {
           if (!paramCenter) return;
           const res = paramCenter.set(d.key, d.value, 'ws', d.origin);
@@ -4176,6 +8318,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
         }
       } catch(e) {}
+    });
+
+    // FLASH / BUMP release-on-disconnect (docs/39 §10.7): when this /ws/control
+    // socket closes (tab closed, app backgrounded long enough to drop the
+    // socket, wifi dropout the OS noticed), release every bump THIS socket was
+    // holding — instant cleanup so a channel can't stay pinned full. The lease
+    // sweep is the backstop for the case where close never fires (hard link
+    // loss); this is the fast path for clean disconnects.
+    ws.on('close', () => {
+      if (!ws._bumpedByThisWs || ws._bumpedByThisWs.size === 0) return;
+      let releasedAny = false;
+      for (const id of ws._bumpedByThisWs) {
+        const r = applyBump(id, false);
+        if (r.ok && r.changed) releasedAny = true;
+      }
+      ws._bumpedByThisWs.clear();
+      if (releasedAny) {
+        saveAllState();
+        broadcastMixerState();
+        console.log('[bump] /ws/control closed — released held bumps');
+      }
     });
   });
 
@@ -4223,6 +8386,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     console.log(`     Reachable on:`);
     for (const url of reachableUrls(opts.port)) {
       console.log(`       ${url}`);
+    }
+    // Start the in-engine Timeline service (docs/38 §15) once the WS
+    // sockets exist so its tick broadcasts reach connected clients. boot
+    // never crashes the engine — start() records boot errors into the
+    // timelineState instead of throwing.
+    if (timelineService) {
+      timelineService.start()
+        .then(() => console.log(`  ⏱ Timeline service started (scene "${opts.modelName}", plan "${timelineService.activePlan}")`))
+        .catch((err) => console.warn(`  ⚠ Timeline service start failed: ${err && err.message}`));
     }
   });
 
@@ -4274,11 +8446,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // the live model object and is therefore fresh on the next reload.)
   server.broadcastMixerState = broadcastMixerState;
 
+  // Stop the in-engine Timeline tick on shutdown / scene-switch restart.
+  server.stopTimeline = () => {
+    try { if (timelineService) timelineService.stop(); } catch (_) { /* ignore */ }
+  };
+
+  // AUTO-CYCLE (round-2 #2): the per-frame auto-cycle tick. engine.js composes
+  // this into the render loop's beforeFrame hook so overlay playlists advance
+  // on their timer. One source of time (wall clock), no per-channel timers.
+  server.autoCycleTick = autoCycleTick;
+
+  // SHARED deck-overlay auto-cycle tick (deck dynamic view overrides). engine.js
+  // composes this into the SAME beforeFrame hook as autoCycleTick so deck
+  // overlays auto-advance in UNISON on one shared clock (operator refinement #1).
+  server.deckOverlayAutoCycleTick = deckOverlayAutoCycleTick;
+
   // Forceful close for the scene-switch restart path: terminate every live
   // WS client (they hold the connection open, which would otherwise delay
   // server.close() and the port release) and stop accepting connections so a
   // replacement engine can re-bind :6968 immediately.
   server.closeNow = () => {
+    try { if (timelineService) timelineService.stop(); } catch (_) { /* ignore */ }
     try {
       for (const wssInst of Object.values(wssByTopic)) {
         for (const client of wssInst.clients) {

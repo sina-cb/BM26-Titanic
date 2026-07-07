@@ -7,6 +7,10 @@
 
 # Dependencies
 node_modules/
+# Also ignore a node_modules SYMLINK (worktree shares deps via a symlink, which
+# the trailing-slash rule above does NOT match — a tracked symlink merged into
+# another checkout becomes a self-referential link and breaks module resolution).
+node_modules
 
 # OS files
 Thumbs.db
@@ -21,6 +25,10 @@ Desktop.ini
 # Control podium runtime state (MACs paired to roles)
 control_podium/.config.pairing.yaml
 control_podium/.config.deploy.yaml
+# Node table hardware pairing overlay (node id → usb_mac). Real device
+# MACs stay out of the committed .config.nodes.yaml — this repo is
+# public. Written by firmware/deploy.py; merged by utils/nodes_config.py.
+control_podium/.config.nodes.pairing.yaml
 
 # server_bridge — Pi SSH credentials. Each developer maintains their
 # own copy from `.ssh.secret.example`; never committed.
@@ -66,6 +74,13 @@ CaptainPad/dist/
 # never land in git. See docs/07_control_podium.md §3.6.
 marsin_engine/secret.yaml
 !marsin_engine/secret.yaml.example
+
+# MIC TUNE calibration profiles — per-machine operator state written by the Audio
+# Companion at runtime. Defaults are seeded from mic_profiles.js, so a fresh
+# checkout always has profiles; the operator's custom/calibrated profiles stay
+# local (like audio_config.yaml). Never committed.
+marsin_engine/audio/companion/mic_profiles.yaml
+
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -93,6 +108,12 @@ env/
 .pioenvs/
 .piolibdeps/
 .vscode-test/
+
+# LookingGlass control panel — build-time generated config (gitignored).
+# Secrets (WiFi/AP creds) come from a private, external deployment source via
+# $BM26_SECRETS / $STOKER_SECRETS — NOT in this public repo. The generated/
+# header is baked from config.yaml + those env-provided secrets at build time.
+LookingGlass/panel_firmware/include/generated/
 
 # Node caches & logs
 npm-debug.log*
@@ -141,5 +162,13 @@ simulation/scenes/*/playlists/hil_*.yaml
 !simulation/vendor/three/build/
 !simulation/vendor/three/build/**
 
-# Claude Code local settings + agent worktrees (machine-local / transient)
-.claude/
+# Claude Code local settings + agent worktrees (machine-local / transient).
+# `.claude/*` (not `.claude/`) so the negation below can re-include the
+# COMMITTED project settings — the pre-commit security-gate hook lives
+# there and must ship with the repo. Everything else under .claude/
+# (settings.local.json, worktrees/, projects/) stays ignored.
+.claude/*
+!.claude/settings.json
+
+# Timeline companion runtime state (regenerated on boot)
+marsin_engine/states/*/timeline_state.yaml

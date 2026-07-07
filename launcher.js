@@ -4,7 +4,7 @@
  *
  * Coordinates the simulation, marsin_engine, and (in dev profiles) the
  * CaptainPad Expo dev server, in the startup order proven by
- * `.agent/01_skills/05_full_stack_smoke.md`: sim → engine → CaptainPad.
+ * `.agent/skills/full_stack_smoke.md`: sim → engine → CaptainPad.
  *
  * Usage:
  *   node launcher.js <profile> [options]   Start the stack
@@ -101,19 +101,44 @@ const STACK_PROCESS_SIGNATURES = [
 //   dev-lite  sim + engine + CaptainPad   · emissive lighting, no spotlights
 const PROFILES = {
   prod: {
-    description: 'Show stack: sim + engine + audio companion, lightest sim rendering',
-    processes: ['sim', 'engine', 'companion'],
+    description: 'Show stack: sim + engine + audio companion, lightest sim rendering (timeline runs in-engine)',
+    processes: ['sim', 'engine'],
+    companions: ['audio'],
     simParams: { profile: 'edit', spotlights: 0 },
   },
   dev: {
-    description: 'Full dev stack: sim + engine + companion + CaptainPad Expo, full analytic lighting, 60 spotlights',
-    processes: ['sim', 'engine', 'companion', 'captainpad'],
+    description: 'Full dev stack: sim + engine + audio companion + CaptainPad Expo, full analytic lighting, 60 spotlights (timeline runs in-engine)',
+    processes: ['sim', 'engine', 'captainpad'],
+    companions: ['audio'],
     simParams: { profile: 'full', spotlights: 60 },
   },
   'dev-lite': {
-    description: 'Dev stack without fancy lighting: sim + engine + companion + CaptainPad Expo, emissive only',
-    processes: ['sim', 'engine', 'companion', 'captainpad'],
+    description: 'Dev stack without fancy lighting: sim + engine + audio companion + CaptainPad Expo, emissive only (timeline runs in-engine)',
+    processes: ['sim', 'engine', 'captainpad'],
+    companions: ['audio'],
     simParams: { profile: 'emissive', spotlights: 0 },
+  },
+};
+
+// Companions registry — long-running analyzer/UI sidecars that boot AFTER the
+// engine and feed it (audio over OSC; timeline over the engine API). Each is a
+// supervised startChild like any other stack process, so teardown reaches them
+// automatically. The active profile's `companions` array names which ones run.
+//   port      — fixed HTTP/WS port (also each server's --port default; see docs/38 §2)
+//   script    — path relative to ENGINE_DIR
+//   label     — human-facing name in logs / wait messages
+//   waitMs    — readiness timeout for waitForHttp
+//   healthPath— HTTP path that returns 200 once ready (default '/')
+//   extraArgs — optional (opts) => string[] of extra CLI args
+// NOTE: the Timeline is no longer a companion process — it runs IN the engine
+// (docs/38 §15). Only the audio analyzer remains a supervised sidecar.
+const COMPANIONS = {
+  audio: {
+    port: 6966,
+    script: 'audio/companion/companion_server.js',
+    label: 'Audio Companion',
+    waitMs: 60000,
+    healthPath: '/',
   },
 };
 
@@ -125,7 +150,7 @@ const SIM_QUERY_COMMON = { lighting_mode: 'sacn_in' };
 
 // ── Logging ─────────────────────────────────────────────────────────────
 const USE_COLOR = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
-const TAG_COLORS = { sim: '\x1b[36m', engine: '\x1b[35m', companion: '\x1b[34m', captainpad: '\x1b[33m', launcher: '\x1b[32m' };
+const TAG_COLORS = { sim: '\x1b[36m', engine: '\x1b[35m', audio: '\x1b[34m', timeline: '\x1b[95m', captainpad: '\x1b[33m', launcher: '\x1b[32m' };
 const RESET = '\x1b[0m';
 
 function log(tag, line, stream = process.stdout) {
@@ -650,10 +675,13 @@ function openProfileUis(opts, profileDef, urls) {
     // tiled === false → fall through to default-browser opens below.
   }
 
-  // Strict order: sim → CaptainPad → Companion.
+  // Strict order: sim → CaptainPad → companions (in profile order).
   if (has('sim') && !simHandled) openInBrowser('Simulation', urls.sim);
   if (has('captainpad') && !captainPadHandled) openInBrowser('CaptainPad', urls.captainPad);
-  if (has('companion')) openInBrowser('Audio Companion', urls.companion);
+  for (const name of profileDef.companions || []) {
+    const c = COMPANIONS[name];
+    openInBrowser(c.label, `http://localhost:${c.port}`);
+  }
 }
 
 function stopChild(tag, child) {
@@ -940,10 +968,9 @@ async function main() {
     simQuery.set(key, String(value));
   }
   const simUrl = `http://localhost:${ports.http_port}/simulation/?${simQuery.toString()}`;
-  // Audio Companion (the sole audio analyzer — feeds the engine over OSC). Its
-  // HTTP/WS port is fixed at the companion_server.js default; see docs/37 §9.
-  const COMPANION_PORT = 6966;
-  const companionUrl = `http://localhost:${COMPANION_PORT}`;
+  // Companions for this profile (audio analyzer + timeline), from the registry.
+  // Ports are fixed at each server's default; see docs/38 §2 and docs/37 §9.
+  const activeCompanions = (profileDef.companions || []).map((name) => COMPANIONS[name]);
 
   log('launcher', `Profile '${opts.command}' — ${profileDef.description}`);
   log('launcher', `Scene/model: ${opts.scene} · boot pattern: ${opts.pattern}`);
@@ -951,7 +978,7 @@ async function main() {
   const stackPorts = [ports.http_port, ports.save_port, ports.sacn_port, ports.sacn_output_port,
     ports.marsin_engine_port];
   if (profileDef.processes.includes('captainpad')) stackPorts.push(ports.captainpad_web_port);
-  if (profileDef.processes.includes('companion')) stackPorts.push(COMPANION_PORT);
+  for (const c of activeCompanions) stackPorts.push(c.port);
 
   // `prod` is the show stack — it force-claims its ports by default (a stuck
   // foreign process must never block the rig coming up). Any profile + `-f`.
@@ -1030,16 +1057,16 @@ async function main() {
   await startEngine(opts.scene);
   log('launcher', '✅ Engine is ready.');
 
-  // 2b. Audio Companion — the sole audio analyzer. Started after the engine so
-  // its OSC output (host/port from config.companion.osc) lands in the engine CPC.
-  // Supervised like the other stack children; UDP send is fire-and-forget, so it
-  // tolerates the engine restarting under it.
-  if (profileDef.processes.includes('companion')) {
-    startChild('companion', 'node',
-      ['audio/companion/companion_server.js', '--port', String(COMPANION_PORT)],
-      ENGINE_DIR);
-    await waitForHttp('audio companion', companionUrl, 60000);
-    log('launcher', '✅ Audio Companion is ready.');
+  // 2b. Companions — started after the engine and in profile order. The audio
+  // analyzer's OSC output (host/port from config.companion.osc) lands in the
+  // engine CPC; the timeline companion drives the engine over its API. Each is
+  // supervised like the other stack children, so teardown reaches them; UDP/API
+  // sends are fire-and-forget, so they tolerate the engine restarting under them.
+  for (const [name, c] of (profileDef.companions || []).map((n) => [n, COMPANIONS[n]])) {
+    const args = ['--port', String(c.port), ...(c.extraArgs ? c.extraArgs(opts) : [])];
+    startChild(name, 'node', [c.script, ...args], ENGINE_DIR);
+    await waitForHttp(c.label, `http://localhost:${c.port}${c.healthPath}`, c.waitMs);
+    log('launcher', `✅ ${c.label} is ready.`);
   }
 
   // 3. CaptainPad Expo dev server (dev profiles only).
@@ -1053,11 +1080,10 @@ async function main() {
   }
 
   // All relevant processes are confirmed up — now auto-open this profile's UIs
-  // in the proven order sim → CaptainPad → Companion (see openProfileUis).
+  // in the proven order sim → CaptainPad → companions (see openProfileUis).
   openProfileUis(opts, profileDef, {
     sim: simUrl,
     captainPad: captainPadUrl,
-    companion: companionUrl,
   });
 
   log('launcher', '────────────────────────────────────────────────────────');
@@ -1069,8 +1095,8 @@ async function main() {
   if (profileDef.processes.includes('captainpad')) {
     log('launcher', `     CaptainPad:  ${captainPadUrl}`);
   }
-  if (profileDef.processes.includes('companion')) {
-    log('launcher', `     Companion:   ${companionUrl}   (audio analyzer → feeds the engine over OSC)`);
+  for (const c of activeCompanions) {
+    log('launcher', `     ${c.label.padEnd(11)} http://localhost:${c.port}`);
   }
   log('launcher', '');
   log('launcher', `   Engine API:    http://localhost:${ports.marsin_engine_port}/status`);

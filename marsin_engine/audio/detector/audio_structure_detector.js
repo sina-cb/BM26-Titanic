@@ -4,14 +4,14 @@
  * Design doc: docs/30_[todo]_audio_structure_detector.md (Phase 1).
  * Feasibility review corrections (folded in, override the doc where
  * they conflict):
- * .agent/02_reports/202606/20260612_2_audio_analysis_review_docs30_feasibility.md §2
+ * .agent/reports/202606/20260612_2_audio_analysis_review_docs30_feasibility.md §2
  *
  * OBSERVE-AND-PUBLISH ONLY. This module watches the music (via the
  * ParamCenter live keys the analyzer + OSC stems publish), runs a small
  * 3-state machine (THIN → BUILD → SUSTAIN), and:
- *   - publishes five live keys back to CPC
+ *   - publishes six live keys back to CPC
  *     (audioStructure / audioBuildScore / audioEnergyRatio /
- *      audioVocalsHot / audioDropPulse), and
+ *      audioVocalsHot / audioDropPulse / audioSlowZone), and
  *   - emits a sparse `dropFired` WS event on the broadcast hook the
  *     instant a drop lands.
  * It NEVER triggers an irreversible action — no deck swaps, blackouts,
@@ -41,7 +41,31 @@
 const DETECTOR_DEFAULTS = Object.freeze({
   enabled:           false,
   buildThreshold:    0.35,   // buildScore must clear this to enter BUILD
-  dropEnergyJump:    1.5,    // short-energy ×-jump that signals a drop
+  // short-energy ×-jump that signals a drop. Raised 1.5→1.8 in the 2026-06-20
+  // detector super-tuning pass: with the new dropMinLevel floor, 1.8 drives
+  // spurious drops on calm/ambient/build passages to ZERO across all mic tiers
+  // (detection_sweep) while keeping precision at 1.00 — a phantom drop on a
+  // calm Burning Man passage is far worse than missing one, so we tune for
+  // zero false positives first.
+  // Re-tuned 1.8→1.9 with the FFT 1024→2048 bump (report 20260620_14): the
+  // finer spectrum sharpens the windowed rate-of-change ratio, so genuine drops
+  // read a slightly larger jump. At 1.9 the labeled-scenario score is
+  // P=1.00 R=0.78 F1=0.875 (vs 1.8→P=0.86 R=0.67 F1=0.75 at 2048, and the old
+  // 1024 default P=1.00 R=0.56 F1=0.71) — strictly better precision AND recall.
+  // P0-1 real-audio re-tune (report 20260620_23): raised 1.9→4.0. The
+  // fire-population diagnostic over the 60-track real corpus vs the synthetic
+  // positives is unambiguous — the BULK of real-music phantom drops (57 of 89
+  // gate-off fires) cluster at a windowed ratio of ≈1.9–2.0, i.e. they BARELY
+  // clear the old 1.9 threshold, while a genuine MODERATE-tier synthetic drop
+  // reads ratio 5–13. So a 4.0 jump cuts the entire phantom cluster in one
+  // stroke. The honest cost (documented, accepted): a CLEAN-tier synthetic drop
+  // ALSO reads ratio ≈ 1.90 (the synth's idealised line-in step is gentle and
+  // indistinguishable from a busy-music transient), so this gate cannot pass it
+  // — clean/heavy synthetic recall drops, moderate-tier (the realistic playa-mic
+  // case) is retained. Per the codex + operator directive a phantom drop on the
+  // dance floor is worse than a miss, so we tune the real false-fire rate down
+  // and accept the synthetic-recall trade-off.
+  dropEnergyJump:    4.0,
   // Drop-edge discriminator:
   //   'level'    — short/long LEVEL ratio > dropEnergyJump (the original
   //                behavior; re-fires in a loud body because the slow long
@@ -61,10 +85,121 @@ const DETECTOR_DEFAULTS = Object.freeze({
   //                exposed for the pending re-tune; until that lands + passes
   //                the corpus regression, the product default stays 'windowed'.
   dropEdgeMode:      'windowed', // 'level' | 'windowed' | 'kalman'(opt-in, see above)
+  // Absolute sub-energy floor a drop must reach. A REAL drop slams the sub
+  // (micLow short-envelope) to a SUSTAINED high level; a build's rising sub
+  // sits near zero (especially through the playa mic, which compresses the
+  // build's small sub away — measured: build micLow ≈ 0.00–0.02, drop micLow
+  // ≈ 0.10–0.65 across SNR tiers). Requiring shortEnv ≥ dropMinLevel kills the
+  // windowed/level edge's biggest false-positive source: a tiny-over-tinier
+  // RATIO spike during a near-silent build (0.004 / 0.002 = 2× but it is
+  // noise, not a drop). This is the single change that recovered drop recall +
+  // precision on the labeled scenarios (detection_eval). Tuned to sit above the
+  // moderate/heavy build floor and below the drop level. 0 disables the gate.
+  dropMinLevel:      0.06,
+  // Windowed-edge LEVEL ASSIST: also fire when the steady short/long level
+  // ratio clears dropEnergyJump (catches post-breakdown second drops + heavy-
+  // mic-compressed slams the pure rate-of-change edge under-shoots). It DOES
+  // lift recall (0.56→0.78 on the labeled scenarios) but at the cost of
+  // spurious drops on calm/build passages (negFP 0→3) — unacceptable on a
+  // dance floor, where a phantom drop is worse than a miss. So it ships OFF;
+  // an operator who wants the higher-recall arm can enable it per-scene via
+  // PATCH /audio/config {structureDetector:{dropLevelAssist:true}}.
+  dropLevelAssist:   false,
+  // BUILD→DROP transition gate + recall recovery (2026-06-20 detector-recall
+  // pass). The windowed/level drop edge used to fire ONLY from the BUILD state,
+  // so a drop was missed whenever the brittle THIN→BUILD entry gate
+  // (energyRatio "rising for >1s") didn't latch in time — which happens through
+  // the playa mic, where the build saturates energyRatio at 1.0 (no monotone
+  // rise) and the drop lands while still in THIN. That cost ~all heavy-tier
+  // drops and the post-breakdown second drop. The fix: let the edge fire from
+  // THIN *or* BUILD, gated NOT on the state machine but on a RECENT BUILD-SCORE
+  // memory — a real drop is preceded by a riser (buildScore ≥ dropBuildGate in
+  // the last dropBuildMemoryMs), while a loud steady-body onset (techno start,
+  // sustain start) is not. Measured: real drops carry a 3 s build-peak of
+  // 0.74–0.99 across all tiers; techno/sustain onsets carry ≤ 0.22 — a clean
+  // 0.5 separation. This recovers the missed drops with ZERO new false-fires.
+  dropBuildGate:     0.5,    // recent buildScore peak required to fire from THIN
+  dropBuildMemoryMs: 3000,   // how long a build-score peak counts as "recent"
+  // The build-memory THIN-firing edge additionally requires we're NOT in a slow
+  // zone (slowZone < this). A real drop lands in an active section (measured
+  // slowZone ≤0.32 at every real drop across tiers); a build's ONSET right out
+  // of a breakdown crosses the build gate while slowZone is still high (≈0.49–
+  // 0.51) — the build STARTING, not a drop. Tightened 0.4→0.30 in the P0-1
+  // real-audio re-tune (report 23): a couple of real busy-music phantom fires
+  // landed at slowZone ≈ 0.36, and the moderate-tier true synthetic drops sit at
+  // slowZone ≤ 0.26, so 0.30 rejects the former without touching the latter.
+  dropSlowZoneMax:   0.30,   // build-mem edge only fires when slowZone is below this
+  // ── P0-1 real-audio false-fire fix (report 20260620_22 / 23) ──────────────
+  // The windowed drop edge fired 1.48 phantom drops/min on 60 min of continuous
+  // real DJ music. The FIRST pass (report 22) gated only the build-memory THIN
+  // edge (rise 0.15 + novelty 2.5) and got to 0.87/min — NOT at target. Report
+  // 23 measured WHY: with the THIN edge fully OFF, 33 of 52 phantom drops STILL
+  // fire — from the BUILD STATE, which latches readily on busy continuous music.
+  // So BOTH edges had to be gated, AND the gates had to be stronger. The
+  // fire-population diagnostic (gate-off fires on the real corpus vs the
+  // synthetic positives) showed the clean separator and its hard limit:
+  //   - the BULK of phantom fires sit at windowed ratio ≈ 1.9–2.0 → handled by
+  //     dropEnergyJump 1.9→4.0 above (a moderate-tier true drop reads 5–13).
+  //   - the residual phantom fires are caught by two ADDITIVE music-shape gates
+  //     applied to BOTH the THIN and the BUILD edge (a real drop is a NOVEL
+  //     windowed-ratio outlier preceded by a real buildScore RISE, regardless of
+  //     which state the machine is in; busy music is neither):
+  //
+  //   dropBuildRise — the buildScore must have actually RISEN by ≥ this within
+  //     the memory window (recentBuildPeak − recentBuildTrough). A flat high
+  //     plateau (busy music) has a tiny rise; a real build climbs. Measured at
+  //     fire time: moderate-tier true drops carry rise ≥ 0.30; the residual
+  //     phantom fires sit at rise ≤ 0.22. 0 disables (revert to peak-only).
+  //   dropNoveltyRatio — the windowed drop ratio that triggered the edge must be
+  //     a NOVEL OUTLIER vs the recent windowed-ratio MEDIAN (ratioNow / recent
+  //     median ≥ this). On busy music the firing ratio is TYPICAL (the windowed
+  //     edge crosses constantly, curOverMed ≈ 1.9–2.1); a real drop's slam is a
+  //     strong outlier (curOverMed ≥ 5). 0 disables.
+  // Pareto point chosen (report 23): jump 4.0 + rise 0.30 + novelty 5.0 +
+  // slowZoneMax 0.30 → REAL ff/min 0.87→0.117 (7 phantom drops over 59.8 min,
+  // 6/60 tracks), at the cost of synthetic DROP recall 0.94→0.28 (only the
+  // realistic MODERATE mic tier still fires; clean/heavy true drops read the same
+  // gentle ratio ≈ 1.9–3.4 as busy music and are inseparable from a phantom —
+  // an inherent limit, see report 23 §frontier). The codex + operator directive
+  // is explicit: when real-ff and synthetic recall conflict, prefer FEW false
+  // fires — a phantom drop on a Burning Man dance floor is worse than a miss.
+  // An operator who wants the higher-recall arm can relax these per-scene via
+  // PATCH /audio/config {structureDetector:{dropEnergyJump:1.9, dropBuildRise:0,
+  // dropNoveltyRatio:0}}.
+  dropBuildRise:     0.30,   // both drop edges: required buildScore rise over the memory window
+  dropNoveltyRatio:  5.0,    // both drop edges: required windowed-ratio novelty vs recent median (0 = off)
+  dropNoveltyWindowMs: 12000, // lookback for the recent windowed-ratio median (novelty baseline)
+  // Mic-gain-RELATIVE drop floor — SHIPPED OFF by default. dropMinLevel is an
+  // ABSOLUTE micLow floor, calibrated against the harness's SNR-renormalized
+  // tiers (drop micLow ≈ 0.11). A real venue's mic gain / AGC can land a genuine
+  // drop below 0.06 (quiet feed) — report 20260620_9's "mic-gain dependence".
+  // When dropRelLevel>0 the floor becomes
+  //   effFloor = clamp(dropRelLevel · loudnessRef, DROP_FLOOR_HARD_MIN, dropMinLevel)
+  // where loudnessRef is a running peak-follower of the short envelope, so the
+  // floor SCALES with this feed: a quiet venue shrinks it (real drops still
+  // clear), a hot feed is capped at dropMinLevel (same protection as the
+  // absolute floor). It is OPT-IN because on the SNR-renormalized harness tiers
+  // the absolute floor already lands correctly, and relaxing it there
+  // reintroduces false-fires on the mic-compressed negatives (measured:
+  // dropRelLevel:0.5 → falseFiresPerMin 0→0.38 on the scenario set — a phantom
+  // drop on calm music is the worst dance-floor failure). So the SAFE default is
+  // the pure absolute floor; an operator at a quiet-feed venue can enable the
+  // relative floor per-scene via PATCH {structureDetector:{dropRelLevel:0.5}}.
+  // 0 = pure absolute dropMinLevel (default).
+  dropRelLevel:      0,      // OPT-IN: effFloor = clamp(this·loudnessRef, hardMin, dropMinLevel)
   dropNisThreshold:  6.63,   // χ²₁ 99% gate for the kalman edge (lower → more sensitive)
   dropKalmanQ:       0.001,  // kalman-edge process noise (was a hardcoded 0.01 that floored NIS)
   dropCoWindowMs:    60,     // kalman-edge: low & flux NIS may clear within this window (not same-hop)
-  slowZoneRef:       0.5,    // activity (max micLow/micFlux) at/below which → slow zone
+  // Slow-zone soft-knee center + half-width on activity = max(micLow, micFlux).
+  // slowZoneRef was 0.5 (calibrated for clean line-in); through the playa mic
+  // that left BOTH calm and active passages reading ~0.75 (no separation). The
+  // measured knee that splits calm (activity ≈ 0.04) from active (≈ 0.10–0.6)
+  // sits near 0.12 with a ±0.06 half-width — verified by the detection_eval
+  // slow-zone separation margin (0.26 → ~0.6+). A wider width tolerates the
+  // moderate/heavy mic floor; a tighter one sharpens the calm/party boundary.
+  slowZoneRef:       0.07,   // activity (max micLow, micFlux−floor) knee center → slow zone
+  slowZoneWidth:     0.04,   // soft-knee half-width around slowZoneRef
+  slowFluxFloor:     0.10,   // discount mic flux floor below this from "activity"
   dropDeltaWindowMs: 400,    // look-back window for the windowed drop edge
   stemsTimeoutMs:    300,    // stems older than this read as stale (offline)
   eventRefractoryMs: 3500,   // suppress repeat dropFired within this window
@@ -83,7 +218,12 @@ const BUILD_GAIN    = 4.0;   // maps per-hop flux into the build-score EMA
 
 // Kalman+NIS drop detector (adopted from the offline corpus experiment —
 // local-level model, χ² 99% AND-gate on micLow ∧ micFlux, with a warmup).
-const KALMAN_Q       = 0.01;   // process noise (level random-walk) — tuned winner
+// Unreached default for `_kalmanNis`'s Q param: the live edge ALWAYS passes
+// `cfg.dropKalmanQ` (default 0.001, see DETECTOR_DEFAULTS), so this 0.01 only
+// applies if `_kalmanNis` is ever called without a Q. NOTE: 0.01 is the value
+// that FLOORED NIS / under-fired (see dropKalmanQ comment) — it is NOT the
+// shipped tuning, despite this constant's name.
+const KALMAN_Q       = 0.01;   // process noise (level random-walk)
 const KALMAN_R_FLOOR = 1e-6;   // measurement-noise floor (just keeps NIS finite on flat
                                // input; must stay BELOW the envelope-smoothed low band's
                                // real noise ~5e-5, else it crushes the sub's NIS — the
@@ -91,6 +231,19 @@ const KALMAN_R_FLOOR = 1e-6;   // measurement-noise floor (just keeps NIS finite
 const KALMAN_R_ALPHA = 0.02;   // EMA rate for the adaptive measurement-noise estimate
 const DROP_WARMUP_MS = 1000;   // ignore drops in the first second after enable (filter init)
 const SLOW_ZONE_TAU  = 1.5;    // s — slow-zone EMA tau (a sustained zone, not a flicker)
+// Running loudness reference for the mic-gain-RELATIVE drop floor. We track the
+// recent loud-passage level of the short envelope: a fast attack (so a drop's
+// loud body lifts it within a beat or two) and a slow release (so a quiet
+// breakdown doesn't immediately collapse the reference and re-arm a tiny floor).
+// This is a peak-follower, not a mean — the floor must scale with how loud the
+// LOUD parts of THIS feed are, not the average.
+const LOUDNESS_ATTACK_TAU  = 0.5;  // s — fast rise toward a louder short-env
+const LOUDNESS_RELEASE_TAU = 8.0;  // s — slow decay when the music quiets
+// Hard lower bound on the mic-gain-relative drop floor: it never relaxes below
+// this, so a dead-silent / pure-noise input can't drive the floor to zero and
+// admit a noise-ratio false edge. Sits just under the analyzer noiseGate (0.04)
+// region so a genuine quiet drop (just above the gate) can still clear it.
+const DROP_FLOOR_HARD_MIN = 0.02;
 
 const EPS = 1e-9;
 // energyRatio display map: log1p(rawRatio) / log1p(3) → [0,1]-ish.
@@ -109,6 +262,21 @@ const STATE_NAME = Object.freeze({ 0: 'THIN', 1: 'BUILD', 2: 'SUSTAIN' });
 function clamp01(x) {
   if (!(x > 0)) return 0;
   return x < 1 ? x : 1;
+}
+
+/**
+ * Falling smoothstep soft-knee: 1 when x ≤ center−width, 0 when x ≥
+ * center+width, a smooth Hermite transition (3u²−2u³) across the knee. Used
+ * for the slow-zone target so a measured activity threshold cleanly separates
+ * calm from active without a hard step or the old saturating linear ramp.
+ */
+function _smoothKneeDown(x, center, width) {
+  const w = width > 0 ? width : 1e-6;
+  const u = (x - (center - w)) / (2 * w);  // 0 at lo edge, 1 at hi edge
+  if (u <= 0) return 1;
+  if (u >= 1) return 0;
+  const s = u * u * (3 - 2 * u);
+  return 1 - s;
 }
 
 export class AudioStructureDetector {
@@ -170,7 +338,7 @@ export class AudioStructureDetector {
 
   /**
    * Hard reset — state machine to THIN, all envelopes + trend trackers
-   * zeroed, five live keys zeroed, drop bookkeeping cleared. Called on
+   * zeroed, six live keys zeroed, drop bookkeeping cleared. Called on
    * construction and whenever the detector is disabled (no half-state).
    */
   reset() {
@@ -183,6 +351,22 @@ export class AudioStructureDetector {
     this._energyRatio = 0;
     this._dropPulse = 0;
     this._slowZone = 0;
+
+    // Recent build-score memory for the build→drop transition gate: a sliding
+    // peak of buildScore, so the windowed/level drop edge can fire from THIN
+    // when a riser PRECEDED the slam (a real drop) but NOT on a bare loud-body
+    // onset (techno/sustain start, where buildScore stayed low). One sample per
+    // hop kept; entries older than dropBuildMemoryMs pruned at read.
+    this._buildHist = [];      // [{ t, v:buildScore }]
+    // Recent windowed-drop-ratio history for the refractory-relative novelty
+    // gate (P0-1). One sample per hop {t, v:windowedRatio}; entries older than
+    // dropNoveltyWindowMs pruned at read. The median over this window is the
+    // baseline a real drop's slam must outlier above (dropNoveltyRatio).
+    this._ratioHist = [];      // [{ t, v:windowedRatio }]
+    // Running loudness reference (peak-follower of the short envelope) driving
+    // the mic-gain-RELATIVE drop floor. Seeded at 0; warms up over the first
+    // few seconds of music.
+    this._loudnessRef = 0;
 
     // Kalman+NIS drop detector state — one local-level filter per signal
     // (micLow, micFlux). `started` defers init to the first real reading so
@@ -313,6 +497,11 @@ export class AudioStructureDetector {
     if (dt > 0) {
       this._shortEnv += (dt / SHORT_ENV_TAU) * (micLow - this._shortEnv);
       this._longEnv  += (dt / LONG_ENV_TAU)  * (micLow - this._longEnv);
+      // Running loudness reference: peak-follower of the short envelope (fast
+      // attack, slow release). Drives the mic-gain-relative drop floor below.
+      const lTau = this._shortEnv > this._loudnessRef ? LOUDNESS_ATTACK_TAU : LOUDNESS_RELEASE_TAU;
+      this._loudnessRef += (dt / lTau) * (this._shortEnv - this._loudnessRef);
+      if (this._loudnessRef < 0) this._loudnessRef = 0;
     }
     const rawRatio = this._shortEnv / Math.max(this._longEnv, EPS);
     const energyRatio = clamp01(Math.log1p(rawRatio) / ENERGY_RATIO_DENOM);
@@ -324,12 +513,34 @@ export class AudioStructureDetector {
       this._buildScore += (dt / BUILD_TAU) * (target - this._buildScore);
       this._buildScore = clamp01(this._buildScore);
     }
+    // Record build-score history + compute the recent build peak (the riser
+    // memory for the build→drop transition gate). Prune entries older than the
+    // memory window; the peak over what remains tells us whether a riser
+    // recently happened — the discriminator between a real drop (preceded by a
+    // build) and a bare loud-body onset (no build).
+    this._buildHist.push({ t: now, v: this._buildScore });
+    const buildCutoff = now - cfg.dropBuildMemoryMs;
+    while (this._buildHist.length > 1 && this._buildHist[0].t < buildCutoff) {
+      this._buildHist.shift();
+    }
+    let recentBuildPeak = 0;
+    let recentBuildTrough = 1;
+    for (const b of this._buildHist) {
+      if (b.v > recentBuildPeak) recentBuildPeak = b.v;
+      if (b.v < recentBuildTrough) recentBuildTrough = b.v;
+    }
+    // P0-1: how much buildScore actually ROSE across the memory window. A real
+    // EDM build climbs (large rise + crest); busy continuous music sits at a
+    // high plateau (peak high but rise small). The build-mem THIN edge requires
+    // a genuine rise, not merely a sustained-high peak.
+    const recentBuildRise = recentBuildPeak - recentBuildTrough;
 
     // 2b. Kalman+NIS drop edge + slow-zone signal.
     //   Each of micLow / micFlux is tracked by a local-level Kalman filter;
     //   the Normalized Innovation Squared (NIS = innovation² / S) spikes when
-    //   the signal steps. A drop = BOTH NIS clear the χ² gate on the same hop
-    //   AND both innovations are RISING (a drop slams energy UP — a breakdown
+    //   the signal steps. A drop = BOTH NIS clear the χ² gate within
+    //   dropCoWindowMs (see below) AND both innovations are RISING (a drop slams
+    //   energy UP — a breakdown
     //   ENTRANCE steps down and must not qualify). Self-normalising, so unlike
     //   buildScore it can't saturate; the AND-gate kills most false fires.
     const kLow  = this._kalmanNis(this._kfLow,  micLow,     dt, cfg.dropKalmanQ);
@@ -346,23 +557,52 @@ export class AudioStructureDetector {
     if (kFlux.nis >= cfg.dropNisThreshold)               this._fluxHotAtMs = now;
     const lowHot  = (now - this._lowHotAtMs)  <= cfg.dropCoWindowMs;
     const fluxHot = (now - this._fluxHotAtMs) <= cfg.dropCoWindowMs;
-    const kalmanDropEdge = warmupOk && lowHot && fluxHot;
+    // Same absolute sub floor as the windowed/level edges: a real drop's sub
+    // is sustained-high, so reject a kalman co-occurrence that lands while the
+    // short envelope is still near the noise floor (a near-silent build blip).
+    const kalmanLevelOk = !(cfg.dropMinLevel > 0) || this._shortEnv >= cfg.dropMinLevel;
+    const kalmanDropEdge = warmupOk && lowHot && fluxHot && kalmanLevelOk;
     const kalmanConf = clamp01(Math.min(kLow.nis, kFlux.nis) / (2 * cfg.dropNisThreshold));
 
     //   Slow-zone: how much we're in a sparse / breakdown / ambient section.
-    //   Activity = max(micLow, micFlux); slowness rises as activity falls
-    //   below slowZoneRef, EMA-smoothed over ~1.5 s so it marks a ZONE.
-    const activity = Math.max(micLow, micFluxRaw);
-    const slowTarget = clamp01((cfg.slowZoneRef - activity) / cfg.slowZoneRef);
+    //   Activity = max(micLow, micFlux). A calm/ambient passage has near-ZERO
+    //   sub (micLow) and no sustained flux; a drop body, sustain, or driving
+    //   techno body has high sub and/or flux. (Measured through the playa mic:
+    //   slow micLow ≈ 0.00–0.04 vs non-slow micLow ≈ 0.07–0.60; slow flux floor
+    //   ≈ 0.08 vs non-slow flux up to 0.55 — see detection_eval slow probe.)
+    //
+    //   slowness = a SMOOTHSTEP soft-knee centered on slowZoneRef with half-
+    //   width slowZoneWidth: ~1 well below (ref−width), ~0 well above
+    //   (ref+width), smooth across the knee. The old linear (ref−act)/ref map
+    //   with ref=0.5 kept BOTH slow and non-slow regions reading ~0.75 once the
+    //   mic compressed the dynamic range — a useless separation. The knee at a
+    //   measured ref (~0.12) cleanly splits the two. EMA-smoothed over
+    //   SLOW_ZONE_TAU so it marks a sustained ZONE, not a flicker.
+    //   Activity discounts the mic FLUX FLOOR: the playa mic posts a constant
+    //   ~0.08–0.10 flux even on silence (capsule/room noise differenced hop to
+    //   hop), so a raw max(micLow, micFlux) reads ambient as "active". We only
+    //   count flux ABOVE slowFluxFloor as real activity (a build/riser), while
+    //   micLow (sub presence) always counts. Measured: this collapses ambient
+    //   activity to ≈0.04 while drop/sustain/techno bodies stay ≥0.09 across
+    //   all mic tiers (detection_eval slow probe) — a clean calm/active split.
+    const fluxActivity = Math.max(0, micFluxRaw - cfg.slowFluxFloor);
+    const activity = Math.max(micLow, fluxActivity);
+    const slowTarget = _smoothKneeDown(activity, cfg.slowZoneRef, cfg.slowZoneWidth);
     if (dt > 0) this._slowZone += (dt / SLOW_ZONE_TAU) * (slowTarget - this._slowZone);
     this._slowZone = clamp01(this._slowZone);
 
     // 3. Stems booleans (only meaningful when fresh).
     let stemsBass = 0, stemsDrums = 0, stemsVocals = 0;
     if (stemsFresh) {
-      stemsBass   = this.paramCenter.get('stemsBassRaw');
-      stemsDrums  = this.paramCenter.get('stemsDrumsRaw');
-      stemsVocals = this.paramCenter.get('stemsVocalsRaw');
+      // Finite guard, same fail-loud-but-isolated contract as micLow/micFlux
+      // above: a non-finite stem value must not silently make the stems
+      // booleans false (NaN comparisons are false) — warn once, treat as 0.
+      const sB = this.paramCenter.get('stemsBassRaw');
+      const sD = this.paramCenter.get('stemsDrumsRaw');
+      const sV = this.paramCenter.get('stemsVocalsRaw');
+      stemsBass   = Number.isFinite(sB) ? sB : (this._warnNonFinite('stemsBassRaw', sB), 0);
+      stemsDrums  = Number.isFinite(sD) ? sD : (this._warnNonFinite('stemsDrumsRaw', sD), 0);
+      stemsVocals = Number.isFinite(sV) ? sV : (this._warnNonFinite('stemsVocalsRaw', sV), 0);
     }
     const stemsFull = stemsFresh && stemsBass > 0.4 && stemsDrums > 0.4;
     const stemsThin = stemsFresh && stemsBass < 0.15 && stemsDrums < 0.15;
@@ -416,8 +656,75 @@ export class AudioStructureDetector {
       const windowedRatio = this._shortEnv / Math.max(past, EPS);
       dropEdge = windowedRatio > cfg.dropEnergyJump;
       dropEdgeRatio = windowedRatio;
+      // LEVEL ASSIST (windowed only). The pure rate-of-change edge misses two
+      // real drops: (a) the SECOND drop after a breakdown — the short envelope
+      // had already been nudged up by build noise so the window ratio under-
+      // shoots, but the steady short/long LEVEL ratio is huge (long env is low
+      // from the breakdown); and (b) a drop through the heavy mic, where the
+      // slam is compressed to a smaller step. So ALSO fire when the steady
+      // level ratio clears the jump. This re-introduces the level edge's only
+      // failure mode — in-body re-fire — which is now independently prevented
+      // by the SUSTAIN-entry rising-tracker reset + the eventRefractory, so it
+      // is safe. The absolute floor below gates BOTH. Disable via
+      // dropLevelAssist:false to get the pure rate-of-change edge.
+      if (cfg.dropLevelAssist !== false && energyLevelRatio > cfg.dropEnergyJump) {
+        dropEdge = true;
+        if (energyLevelRatio > dropEdgeRatio) dropEdgeRatio = energyLevelRatio;
+      }
     } else {
       dropEdge = energyLevelRatio > cfg.dropEnergyJump;
+    }
+    // Sub-energy floor (both ratio edges), mic-gain-RELATIVE. A drop's sub slams
+    // to a SUSTAINED high level; a near-silent build can post a huge RATIO off
+    // noise-floor sub but its absolute shortEnv stays tiny. When dropRelLevel>0
+    // the effective floor is a fraction of the running loudness reference —
+    //   effFloor = clamp(dropRelLevel · loudnessRef, DROP_FLOOR_HARD_MIN, dropMinLevel)
+    // so it SCALES with this feed's mic gain: a quiet venue (loudnessRef small)
+    // shrinks the floor so a real but quiet drop still clears it, while a hot
+    // feed is capped at dropMinLevel (the same protection the absolute floor
+    // gave) and a hard min keeps it above the analyzer noise floor on a
+    // dead-silent input. The build→drop transition gate (recentBuildPeak) is the
+    // primary near-silent-build rejection now, so the floor can safely relax on
+    // quiet feeds. dropRelLevel:0 → the pure absolute dropMinLevel floor (the
+    // pre-recall-pass behavior).
+    let effDropFloor;
+    if ((cfg.dropRelLevel || 0) > 0) {
+      const rel = cfg.dropRelLevel * this._loudnessRef;
+      const cap = cfg.dropMinLevel || 0;
+      effDropFloor = Math.min(cap > 0 ? cap : rel, Math.max(DROP_FLOOR_HARD_MIN, rel));
+    } else {
+      effDropFloor = cfg.dropMinLevel || 0;
+    }
+    if (effDropFloor > 0 && this._shortEnv < effDropFloor) {
+      dropEdge = false;
+    }
+
+    // P0-1 refractory-relative NOVELTY (build-mem THIN edge only). Track the
+    // windowed drop ratio every hop; a real drop's slam ratio is a strong
+    // OUTLIER above the recent median, while on busy continuous music the
+    // windowed edge crosses constantly so the firing ratio is TYPICAL (≈ the
+    // median). We compute the median over dropNoveltyWindowMs EXCLUDING the most
+    // recent ~500 ms so the drop's own ramp doesn't inflate its baseline, then
+    // form noveltyRatio = ratioNow / medianRatio. The gate (in the build-mem
+    // edge below) requires noveltyRatio ≥ dropNoveltyRatio. Only meaningful on
+    // the windowed edge (dropEdgeRatio is the windowed ratio there).
+    this._ratioHist.push({ t: now, v: dropEdgeRatio });
+    const noveltyCutoff = now - (cfg.dropNoveltyWindowMs || 0);
+    while (this._ratioHist.length > 1 && this._ratioHist[0].t < noveltyCutoff) {
+      this._ratioHist.shift();
+    }
+    let dropNovelty = Infinity; // ∞ when novelty gating is disabled / no baseline
+    if ((cfg.dropNoveltyRatio || 0) > 0) {
+      const baseline = [];
+      for (const r of this._ratioHist) if (r.t <= now - 500) baseline.push(r.v);
+      if (baseline.length >= 8) {
+        baseline.sort((a, b) => a - b);
+        const med = baseline[Math.floor(baseline.length * 0.5)];
+        dropNovelty = dropEdgeRatio / Math.max(med, EPS);
+      }
+      // baseline too short (clip just started) → leave ∞ so the gate passes; the
+      // buildGate + rise + slowZone gates still apply, and a true drop in the
+      // first few seconds is rare enough that this is the safe (no-suppress) side.
     }
 
     // 5. State machine.
@@ -431,6 +738,45 @@ export class AudioStructureDetector {
     let droppedThisTick = false;
     if (useKalman && kalmanDropEdge && (stemsFull || !stemsFresh) && nearDownbeat) {
       this._executeDrop(now, kalmanConf, stemsFresh, cfg, 'DROP→SUSTAIN (kalman)');
+      droppedThisTick = true;
+    }
+
+    // Windowed/level drop edge — fire from THIN or BUILD when a riser PRECEDED
+    // the slam (recentBuildPeak ≥ dropBuildGate). This is the recall fix: the
+    // brittle THIN→BUILD state-entry gate (energyRatio "rising for >1s")
+    // frequently fails to latch through the mic (energyRatio saturates at 1.0,
+    // so there's no monotone rise), leaving the machine in THIN when the drop
+    // lands — and the old edge fired ONLY from BUILD, so it was missed. Gating
+    // on the recent build-score MEMORY instead of the state machine catches the
+    // drop regardless of whether BUILD latched, while the build-peak threshold
+    // (0.5; real drops carry 0.74–0.99, bare loud-body onsets ≤0.22) keeps the
+    // techno/sustain onset from false-firing. The dropBuildGate:0 escape hatch
+    // reverts to the BUILD-state-only behavior. The BUILD-state case below still
+    // owns its own confidence (buildScore·ratio·stemsBoost); here, fired from
+    // THIN, we use the recentBuildPeak as the build proxy for confidence.
+    //   …and we are NOT currently in a slow/calm zone. A real drop lands in an
+    //   ACTIVE section (measured slowZone ≤0.32); the false edges this opened
+    //   were a build's ONSET right out of a breakdown, where buildScore just
+    //   crosses the gate while slowZone is still high (≈0.49–0.51) — the build
+    //   STARTING, not a drop. Requiring slowZone below dropSlowZoneMax rejects
+    //   that onset without touching any real drop (separation 0.32 vs ~0.5).
+    const notInSlowZone = this._slowZone < cfg.dropSlowZoneMax;
+    // P0-1 gates (report 23): a genuine buildScore RISE (not a flat high plateau)
+    // AND the firing windowed ratio must be a NOVEL outlier vs the recent median
+    // (not a routine busy-music transient). Both default-on; set the cfg key to 0
+    // to disable either. These gate BOTH drop edges — the THIN build-mem edge
+    // here AND the BUILD-state edge below — because the real-corpus diagnostic
+    // showed the BUILD edge is an equal false-fire source on busy continuous
+    // music (33 of 52 phantom drops survive with the THIN edge fully off). A real
+    // drop is a novel rising-build outlier in EITHER state; busy music is neither.
+    const buildRoseEnough = recentBuildRise >= (cfg.dropBuildRise || 0);
+    const noveltyEnough = dropNovelty >= (cfg.dropNoveltyRatio || 0);
+    if (!droppedThisTick && !useKalman && dropEdge && recentBuildPeak >= cfg.dropBuildGate
+        && buildRoseEnough && noveltyEnough
+        && notInSlowZone && (stemsFull || !stemsFresh) && nearDownbeat) {
+      const stemsBoost = stemsFull ? 1.0 : 0.7;
+      this._executeDrop(now, clamp01(recentBuildPeak * dropEdgeRatio * stemsBoost),
+        stemsFresh, cfg, `${STATE_NAME[this._state]}→SUSTAIN drop (build-mem)`);
       droppedThisTick = true;
     }
 
@@ -449,7 +795,19 @@ export class AudioStructureDetector {
       case STATE.BUILD: {
         this._buildPeak = Math.max(this._buildPeak, this._buildScore);
         const buildDecaying = this._buildScore < this._buildPeak * 0.7;
-        if (!useKalman && dropEdge && (stemsFull || !stemsFresh) && nearDownbeat) {
+        // P0-1 (report 23): the BUILD-state edge is NOT immune to real-music
+        // false-fires. The adversarial corpus showed that with the THIN build-mem
+        // edge fully OFF, 33 of 52 phantom drops SURVIVE — they fire from the
+        // BUILD state, which latches readily on busy continuous music (sustained-
+        // high buildScore + a routine windowed bump). So the same two music-shape
+        // gates that protect the THIN edge MUST also guard the BUILD edge: a real
+        // drop is a NOVEL windowed-ratio outlier preceded by a buildScore RISE,
+        // whether the state machine happens to be in THIN or BUILD. A flat-high
+        // busy-music plateau (small rise, typical ratio) is rejected from BOTH.
+        // The gates are config-driven (both 0 ⇒ disabled), so the BUILD edge can
+        // revert to its pre-P0-1 behavior per-scene if an operator needs it.
+        if (!useKalman && dropEdge && buildRoseEnough && noveltyEnough
+            && (stemsFull || !stemsFresh) && nearDownbeat) {
           // DROP (windowed / level edge). _executeDrop resets the rising-trend
           // tracker on entry to SUSTAIN: energyRatio is pinned at the ceiling
           // through a loud body, so the tracker would otherwise stay "rising"
@@ -492,7 +850,7 @@ export class AudioStructureDetector {
     this._lastEnergyRatio = energyRatio;
 
     // 7. Publish — single setMany so the onChange fan-out (which
-    //    deep-copies the CPC store) fires ONCE per hop for all five keys,
+    //    deep-copies the CPC store) fires ONCE per hop for all six keys,
     //    matching the mic path's batching right beside us in engine.js.
     this.paramCenter.setMany([
       { kind: 'scalar', key: 'audioStructure',   value: this._state },
@@ -525,7 +883,14 @@ export class AudioStructureDetector {
   _executeDrop(now, conf, stemsFresh, cfg, label) {
     this._state = STATE.SUSTAIN;
     this._energyRisingSinceMs = null;
-    const buildDurationMs = now - this._buildStartedAtMs;
+    // P0-2 clamp (report 20260620_22): the windowed/level edge can fire from THIN
+    // via the build-memory gate WITHOUT BUILD ever latching, so _buildStartedAtMs
+    // is still its -Infinity sentinel and `now - (-Infinity)` = Infinity, which we
+    // were broadcasting to WS consumers as buildDurationMs. Report 0 when no BUILD
+    // was entered (a drop straight out of THIN has no measured build duration).
+    const buildDurationMs = this._buildStartedAtMs > 0
+      ? now - this._buildStartedAtMs
+      : 0;
     if (this._fireDrop(now, clamp01(conf), buildDurationMs, stemsFresh, cfg)) {
       this._dropPulse = 1.0;
     }
@@ -641,7 +1006,7 @@ export class AudioStructureDetector {
     this._tickP99Ms = sorted[idx];
   }
 
-  /** @private zero all five live keys (disable / reset / boot). */
+  /** @private zero all six live keys (disable / reset / boot). */
   _zeroLiveKeys() {
     if (this._fatal) return;
     try {

@@ -1,9 +1,16 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
+import { View, Text, TouchableOpacity, useWindowDimensions, Modal, ScrollView, Pressable } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePalette } from '@/hooks/use-theme';
 import { updateParamCenter, getCachedColorPalettes, warmColorPalettesCache } from '@/utils/api';
 import { MiniFader } from '@/components/ui/MiniFader';
-import { useSharedParamValues, useLiveParamValues, useLiveParams, useOscStatus, useAudioSignals, type AudioSignalDescriptor } from '@/hooks/useEngineState';
+import { useSharedParamValues, useLiveParamValues, useLiveParams, useAudioSignals, type AudioSignalDescriptor } from '@/hooks/useEngineState';
+import {
+  useTempoState,
+  useTempoTap,
+  type TempoSource,
+  type TempoSourcePref,
+} from '@/hooks/use_tempo_tap';
 import { OscStatusPill } from '@/components/OscStatusPill';
 import { ColorPickerModal, ColorQueueModal, DualSwatch, type ColorPalettePreset } from '@/components/ColorPickerModal';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -15,11 +22,63 @@ import { curateDeckSignals, audioAccentHex } from '@/utils/audioSignals';
 // constants/theme.ts → C.tertiary.
 const ACCENT_AUTO = '#1b9e77';
 
+// Max audio-signal plots an operator can pick / the row will show. The row is a
+// single line, so it's capped; the picker disables further selection at this many.
+const AUDIO_PLOTS_MAX = 10;
+
 // Live state flows through the module-level `useEngineState`
 // subscription, so this component has no props. Pre-split it took
 // a `wsRef` prop for sending sharedParam writes; that's now
 // `engineEvents.send(...)` via `updateParamCenter`.
-export const CPCControls = () => {
+//
+// `trailing` is an optional accessory rendered at the RIGHT end of the
+// GLOBALS row (row 1). The mixer uses it to seat its compact GROUPS
+// button next to the globals cluster (the channel-grouping UI moved
+// into a floating modal launched from there); the deck passes nothing,
+// so its globals row is unchanged.
+interface CPCControlsProps {
+  trailing?: React.ReactNode;
+  // Which screen this instance lives on — selects the persistence key for the
+  // audio-plot selection so Deck and Mixer remember different picks.
+  screen?: 'deck' | 'mixer';
+  // Soft PLAN lock gate (planLocked && !leaseHeld). When true every MUTATING
+  // control in the GLOBALS row (SPEED/SIZE, SYNC, COLORS, QUEUE, TAP, the BPM
+  // source selector) is disabled — dimmed, handlers blocked — until the
+  // operator takes over. Read-only surfaces stay live: the collapse chevrons
+  // (client-side view state), the AUDIO meters + plot picker (display-only
+  // local selection), and the OSC status pill (a read-only details sheet).
+  disabled?: boolean;
+}
+
+/**
+ * Persisted, per-screen selection of WHICH audio-signal plots show in the AUDIO
+ * row. `null` = no saved pick → use the curated default (curateDeckSignals).
+ * Stored under `@CaptainPad:audioPlots:<screen>` so Deck and Mixer differ.
+ * Follows the established AsyncStorage best-effort pattern (audio.tsx).
+ */
+function useAudioPlotSelection(screen: 'deck' | 'mixer') {
+  const storageKey = `@CaptainPad:audioPlots:${screen}`;
+  const [selected, setSelected] = useState<string[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem(storageKey).then((raw) => {
+      if (!alive || raw == null) return;
+      try {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) setSelected(arr.filter((k): k is string => typeof k === 'string'));
+      } catch { /* benign — first launch / corrupt entry */ }
+    }).catch(() => { /* best-effort */ });
+    return () => { alive = false; };
+  }, [storageKey]);
+  const update = useCallback((next: string[] | null) => {
+    setSelected(next);
+    if (next == null || next.length === 0) AsyncStorage.removeItem(storageKey).catch(() => {});
+    else AsyncStorage.setItem(storageKey, JSON.stringify(next)).catch(() => {});
+  }, [storageKey]);
+  return [selected, update] as const;
+}
+
+export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPCControlsProps = {}) => {
   const C = usePalette();
   const { width, height } = useWindowDimensions();
   const isPortrait = width < height;
@@ -65,12 +124,23 @@ export const CPCControls = () => {
   // so the live key set stays dynamic (the Companion can add/remove
   // signals at runtime) without the hook's pinned-key-set hazard.
   //
-  // Tempo SOURCE (2026-06-17 contract): the Audio Companion is the sole
-  // analyzer and streams its analyzed tempo over OSC → CPC key `audioBpm`.
-  // Prefer that; fall back to the legacy `tempoBpm` only when `audioBpm`
-  // is absent. Mirrors the engine's BpmSpeedSync + the AUDIO tab.
-  const live = useLiveParamValues({ audioBpm: 0, tempoBpm: 0 });
-  const liveBpm = (live.audioBpm ?? 0) > 0 ? live.audioBpm : live.tempoBpm;
+  // Tempo SOURCE (tempo arbitration, engine feat/optimize_channels): the
+  // engine now arbitrates "OSC auto-drives, tap overrides" and broadcasts the
+  // APPLIED pattern-clock `tempoBpm` + `tempoSource` + raw `oscTempoBpm` on the
+  // mixer/deck control bus. That applied tempo is the SINGLE SOURCE OF TRUTH
+  // for what's driving the clock — read it via useTempoState (NOT the
+  // analyser's `audioBpm`, which is now only the raw "incoming OSC" readout).
+  //
+  // `live.audioBpm` (from /ws/signals) is kept ONLY as the secondary "what OSC
+  // is hearing" number; it no longer drives the primary BPM display, so the
+  // globals tile and the deck TAP button can never disagree about the clock.
+  const tempo = useTempoState();
+  const live = useLiveParamValues({ audioBpm: 0 });
+  // Primary BPM = the engine-applied pattern clock. Fall back to the raw OSC
+  // reading (audioBpm — the Companion's analyzed tempo, the ONE OSC source)
+  // only before the first mixer/deck broadcast lands. (2026-06-29 cleanup: the
+  // LX /lx/tempo/bpm → `tempoBpm` CPC param is no longer read as a fallback.)
+  const liveBpm = tempo.bpm != null ? tempo.bpm : (live.audioBpm ?? 0);
   const params = useMemo(
     () => ({ ...steadyParams, ...live }),
     [steadyParams, live],
@@ -107,6 +177,9 @@ export const CPCControls = () => {
   // Tap the slot: armed → send live then clear the cue (back to empty);
   // empty → open the chooser.
   const onSlotTap = useCallback(() => {
+    // Soft PLAN lock — the armed QUEUE slot writes the shared colour params
+    // live; blocked while gated (the tile is also disabled below).
+    if (disabled) return;
     if (queued) {
       updateParamCenter({
         colorPalette1: { h: queued.c1, s: 1, v: 1 },
@@ -116,7 +189,7 @@ export const CPCControls = () => {
     } else {
       setQueuePickerOpen(true);
     }
-  }, [queued]);
+  }, [queued, disabled]);
   // Collapsible Global Params + Audio Reactivity rows (operator review
   // May 2026): the top strip eats 2× the vertical space the pattern
   // selection actually needs, especially in landscape on the iPad
@@ -127,28 +200,46 @@ export const CPCControls = () => {
   // (they want to start every show with the full picture).
   const [globalsCollapsed, setGlobalsCollapsed] = useState(false);
   const [audioCollapsed, setAudioCollapsed] = useState(false);
+  // Customizable AUDIO row: which signal plots to show (persisted per screen) +
+  // the picker modal open state.
+  const [audioSelected, setAudioSelected] = useAudioPlotSelection(screen);
+  const [audioPickerOpen, setAudioPickerOpen] = useState(false);
 
   // Writers post to /param-center. The engine's POST handler
   // broadcasts a fresh sharedParams to every subscriber (including us),
   // so we don't need a separate optimistic local-state path — the
   // broadcast round-trip is already sub-second on Wi-Fi.
   const update = (key: string, val: any) => {
+    // Soft PLAN lock — every write path funnels through here (or through the
+    // per-control disabled gating below), so a gated surface can never post.
+    if (disabled) return;
     updateParamCenter({ [key]: val });
   };
 
-  const faderMaxWidth = isPortrait ? 90 : 140;
+  // QA round8 #2: the GLOBALS row left a ~40% dead gutter to the right of
+  // the OSC tile in landscape because the SPEED/SIZE faders were capped at
+  // 140 and couldn't grow into the slack. Portrait stays capped (the row is
+  // already tight there); landscape uncaps so the two faders flex-grow to
+  // absorb the gutter — "big but compact". The inter-tile gap also tightens
+  // (20→12) so the cluster reads as intentionally dense rather than sparse.
+  const faderMaxWidth = isPortrait ? 90 : undefined;
+  const globalsRowGap = isPortrait ? 8 : 12;
   // Shared label column for row-1 and row-2 so REACT lines up under
   // SPEED. labelGap is the same number for both rows; widening one
   // requires widening both — that's the whole point of the constants.
   const labelWidth = isPortrait ? 60 : 110;
   const labelGap   = isPortrait ? 8 : 12;
 
-  // BPM → speed sync surface state (see docs/25 §6 + Audio tab). When
-  // sync is ON we tag the SPEED fader green and pull its display from
-  // the live mapped value so the operator can see "speed is being
-  // auto-driven by tempoBpm" without leaving the Deck. We also surface
-  // a warning if sync expects OSC but OSC isn't flowing.
-  const oscStatus  = useOscStatus();
+  // BPM → speed sync surface state (see bpm_speed_sync.js + Audio tab). When
+  // sync is ON we tag the SPEED fader green and pull its display from the live
+  // mapped value so the operator can see "speed is being auto-driven by the
+  // arbitrated tempo" without leaving the Deck. We surface a warning only when
+  // there is NO tempo to follow at all (source-agnostic — OSC OR TAP counts).
+  // Global tap-tempo cluster (tempo arbitration). Same shared tap logic as the
+  // deck TAP button, so a tap from either surface means exactly the same
+  // thing. `tempo.sourcePref` (sticky) drives the OSC↔TAP selector highlight;
+  // `setSource` flips it. State rides the mixer broadcast, so deck + mixer agree.
+  const { tap: onTap, setSource: onSetSource } = useTempoTap();
   const bpmSyncOn  = (params.bpmSpeedSync ?? 0) >= 0.5;
   const bpmMin     = params.bpmSpeedMin ?? 60;
   const bpmMax     = params.bpmSpeedMax ?? 180;
@@ -167,9 +258,11 @@ export const CPCControls = () => {
   const speedBadge    = bpmSyncOn
     ? `BPM ${bpm > 0 ? Math.round(bpm) : '—'}`
     : undefined;
-  const bpmSyncStale  = bpmSyncOn && (
-    (oscStatus && oscStatus.state !== 'live') || bpm <= 0
-  );
+  // Sync is now SOURCE-AGNOSTIC (it follows the arbitrated tempo — OSC OR
+  // TAP). So the warning fires only when there is NO usable tempo at all
+  // (bpm <= 0), NOT merely because OSC isn't live — a tapped tempo with OSC
+  // off is a perfectly valid driver for SPEED.
+  const bpmSyncStale  = bpmSyncOn && bpm <= 0;
 
   return (
     <View style={{ backgroundColor: C.surfaceContainerLowest, padding: isPortrait ? 8 : 12, borderBottomWidth: 1, borderBottomColor: C.ghostBorder, gap: isPortrait ? 8 : 10 }}>
@@ -182,9 +275,9 @@ export const CPCControls = () => {
           borderWidth: 1, borderColor: C.error,
           backgroundColor: 'rgba(255,80,80,0.10)',
         }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 10 }}>⚠ BPM SYNC ON · NO OSC TEMPO</Text>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.error, fontSize: 10 }}>⚠ BPM SYNC ON · NO TEMPO</Text>
           <Text style={{ fontFamily: 'Inter_400Regular', color: C.text, fontSize: 11, flex: 1 }}>
-            Speed will not move until the Audio Companion streams a tempo (audioBpm). Disable sync on the Audio tab, or fix the OSC source.
+            Speed will not move until there is a tempo to follow — tap one in (TAP) or let the Audio Companion stream one over OSC. Toggle SYNC off to release SPEED.
           </Text>
         </View>
       ) : null}
@@ -208,7 +301,12 @@ export const CPCControls = () => {
           style={{ width: labelWidth, marginRight: labelGap, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 4 }}
         >
           <IconSymbol name={globalsCollapsed ? 'chevron.right' : 'chevron.down'} size={10} color={C.secondary} />
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>{isPortrait ? 'GLOBALS' : 'GLOBAL PARAMS'}</Text>
+          {/* One label in BOTH orientations (round-10 fix): portrait used to
+              read "GLOBALS" while landscape read "GLOBAL PARAMS" for the same
+              collapsible group. Standardized to "GLOBALS" — the shorter form
+              fits the compact label cell in both orientations and matches the
+              deck header strip caption. */}
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>GLOBALS</Text>
         </TouchableOpacity>
 
         {globalsCollapsed ? (
@@ -220,22 +318,38 @@ export const CPCControls = () => {
             h1={params.colorPalette1?.h ?? 0}
             h2={params.colorPalette2?.h ?? 0.5}
             bpm={bpm}
+            disabled={disabled}
             onEditColors={() => setColorPickerOpen(true)}
           />
         ) : (
-          <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', gap: isPortrait ? 8 : 20, paddingRight: isPortrait ? 4 : 12, flex: 1 }}>
-            <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
-              <MiniFader
-                label="SPEED"
-                value={speedDisplay}
-                fillColor={speedFill}
-                badge={speedBadge}
-                onChange={(v) => update('speed', v)}
+          <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', gap: globalsRowGap, paddingRight: isPortrait ? 4 : 12, flex: 1 }}>
+            <View style={{ flex: 1, maxWidth: faderMaxWidth, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={{ flex: 1 }}>
+                <MiniFader
+                  label="SPEED"
+                  value={speedDisplay}
+                  fillColor={speedFill}
+                  badge={speedBadge}
+                  disabled={disabled}
+                  onChange={(v) => update('speed', v)}
+                />
+              </View>
+              {/* SPEED ← BPM sync toggle, on the MAIN UI (operator request
+                  feat/optimize_channels). Toggles the engine `bpmSpeedSync`
+                  param so the engine maps the ARBITRATED tempo (OSC OR TAP)
+                  onto SPEED. Source-agnostic — see bpm_speed_sync.js. When ON
+                  with no tempo available it tints amber (a warning) but stays
+                  toggleable so the operator can arm sync before audio starts. */}
+              <SpeedSyncToggle
+                on={bpmSyncOn}
+                starving={bpmSyncOn && bpm <= 0}
+                disabled={disabled}
+                onToggle={() => update('bpmSpeedSync', bpmSyncOn ? 0 : 1)}
               />
             </View>
 
             <View style={{ flex: 1, maxWidth: faderMaxWidth }}>
-              <MiniFader label="SIZE" value={params.size ?? 0.5} onChange={(v) => update('size', v)} />
+              <MiniFader label="SIZE" value={params.size ?? 0.5} disabled={disabled} onChange={(v) => update('size', v)} />
             </View>
 
             {/* Single COLORS button. Tapping opens the tabbed picker
@@ -246,6 +360,7 @@ export const CPCControls = () => {
               h1={params.colorPalette1?.h ?? 0}
               h2={params.colorPalette2?.h ?? 0.5}
               isPortrait={isPortrait}
+              disabled={disabled}
               onPress={() => setColorPickerOpen(true)}
             />
 
@@ -257,15 +372,46 @@ export const CPCControls = () => {
               onPress={onSlotTap}
               onClear={() => setQueued(null)}
               isPortrait={isPortrait}
+              disabled={disabled}
             />
 
-            {/* BPM tile sits just before the OSC pill — a "tempo + source
-                health" cluster at the end of the row. */}
-            <BpmTile bpm={bpm} isPortrait={isPortrait} synced={bpmSyncOn} />
+            {/* Dedicated, full-size TAP button — the ACTUAL tap target
+                (operator request feat/optimize_channels): tapping lives here,
+                NOT on the tiny BPM source selector. It's in the GLOBALS bar so
+                it renders on BOTH deck + mixer, and useTempoTap().tap() feeds a
+                MODULE-GLOBAL tap series — so taps are global and synced across
+                tabs and respected app-wide. */}
+            <GlobalTapTile isPortrait={isPortrait} sourcePref={tempo.sourcePref} disabled={disabled} onTap={onTap} />
+
+            {/* BPM tile — the APPLIED tempo readout + a STICKY SOURCE SELECTOR
+                (OSC vs TAP). The selector only CHOOSES the source, it does not
+                tap: OSC follows the live OSC feed; TAP holds the current tempo
+                (then refine it with the big TAP button). The selection is sticky
+                and shared across deck + mixer — it never bounces OSC↔TAP. */}
+            <BpmTile
+              bpm={bpm}
+              isPortrait={isPortrait}
+              source={tempo.source}
+              sourcePref={tempo.sourcePref}
+              disabled={disabled}
+              onSelectOsc={() => onSetSource('osc')}
+              onSelectTap={() => onSetSource('tap')}
+            />
 
             <OscStatusPill compact={isPortrait} />
           </View>
         )}
+
+        {/* Optional right-end accessory (mixer-only GROUPS button). Sits at
+            the far right of the GLOBALS row so it reclaims the slack the deck
+            leaves empty; the deck passes no `trailing`, so its row is
+            unchanged. Rendered outside the collapsible body so it stays
+            reachable whether or not GLOBALS is collapsed. */}
+        {trailing ? (
+          <View style={{ marginLeft: globalsRowGap, justifyContent: 'center' }}>
+            {trailing}
+          </View>
+        ) : null}
       </View>
 
       {/* ── Row 2: audio — dynamic live-only signal meters ──────────────
@@ -294,8 +440,26 @@ export const CPCControls = () => {
           signals={audioSignals}
           isPortrait={isPortrait}
           collapsed={audioCollapsed}
+          selectedKeys={audioSelected}
         />
+
+        {/* Edit which plots show — opens the picker. Right-aligned, compact. */}
+        <TouchableOpacity
+          onPress={() => setAudioPickerOpen(true)}
+          accessibilityLabel="Choose which audio signals to show"
+          style={{ marginLeft: 6, paddingHorizontal: 6, paddingVertical: 4, justifyContent: 'center' }}
+        >
+          <IconSymbol name="slider.horizontal.3" size={14} color={C.secondary} />
+        </TouchableOpacity>
       </View>
+
+      <AudioPlotPicker
+        visible={audioPickerOpen}
+        signals={audioSignals}
+        selected={audioSelected}
+        onChange={setAudioSelected}
+        onClose={() => setAudioPickerOpen(false)}
+      />
 
       {/* Tabbed colour picker. Hue-only writes — see ColorPickerModal. */}
       <ColorPickerModal
@@ -338,20 +502,23 @@ const GLOBALS_TILE_WIDTH_PORTRAIT  = 60;
 const GLOBALS_TILE_WIDTH_LANDSCAPE = 86;
 const GLOBALS_TILE_HEIGHT = 48;
 
-function ColorPairButton({ h1, h2, isPortrait, onPress }: { h1: number; h2: number; isPortrait: boolean; onPress: () => void }) {
+function ColorPairButton({ h1, h2, isPortrait, disabled, onPress }: { h1: number; h2: number; isPortrait: boolean; disabled?: boolean; onPress: () => void }) {
   const C = usePalette();
   const w = isPortrait ? GLOBALS_TILE_WIDTH_PORTRAIT : GLOBALS_TILE_WIDTH_LANDSCAPE;
   return (
     <TouchableOpacity
       onPress={onPress}
+      disabled={disabled}
       accessibilityLabel="Open colour picker"
       accessibilityRole="button"
+      accessibilityState={{ disabled: !!disabled }}
       style={{
         width: w, height: GLOBALS_TILE_HEIGHT,
         paddingVertical: 4, paddingHorizontal: 6,
         borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder,
         backgroundColor: C.surface,
         justifyContent: 'space-between',
+        opacity: disabled ? 0.45 : 1,
       }}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -380,11 +547,12 @@ function ColorPairButton({ h1, h2, isPortrait, onPress }: { h1: number; h2: numb
  * changes it. The ✕ is a sibling overlay (not nested in the main
  * touchable) so its tap can't double-fire the slot.
  */
-function QueuedColorSlot({ queued, onPress, onClear, isPortrait }: {
+function QueuedColorSlot({ queued, onPress, onClear, isPortrait, disabled }: {
   queued: ColorPalettePreset | null;
   onPress: () => void;
   onClear: () => void;
   isPortrait: boolean;
+  disabled?: boolean;
 }) {
   const C = usePalette();
   const w = isPortrait ? GLOBALS_TILE_WIDTH_PORTRAIT : GLOBALS_TILE_WIDTH_LANDSCAPE;
@@ -393,11 +561,14 @@ function QueuedColorSlot({ queued, onPress, onClear, isPortrait }: {
       width: w, height: GLOBALS_TILE_HEIGHT,
       borderRadius: 8, borderWidth: 1, borderColor: queued ? C.primary : C.ghostBorder,
       backgroundColor: C.surface,
+      opacity: disabled ? 0.45 : 1,
     }}>
       <TouchableOpacity
         onPress={onPress}
+        disabled={disabled}
         accessibilityLabel={queued ? `Send queued colour ${queued.name} live` : 'Open colour queue'}
         accessibilityRole="button"
+        accessibilityState={{ disabled: !!disabled }}
         style={{ flex: 1, paddingVertical: 4, paddingHorizontal: 6, justifyContent: 'space-between' }}
       >
         <Text
@@ -427,8 +598,10 @@ function QueuedColorSlot({ queued, onPress, onClear, isPortrait }: {
       {queued ? (
         <TouchableOpacity
           onPress={onClear}
+          disabled={disabled}
           accessibilityLabel="Remove queued colour"
           accessibilityRole="button"
+          accessibilityState={{ disabled: !!disabled }}
           hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
           style={{ position: 'absolute', top: 1, right: 3, padding: 2 }}
         >
@@ -462,10 +635,11 @@ function QueuedColorSlot({ queued, onPress, onClear, isPortrait }: {
  * simply omitted. A "+N on AUDIO tab" hint flags how many live signals
  * aren't shown here so the operator knows where the rest are.
  */
-function DynamicAudioRow({ signals, isPortrait, collapsed }: {
+function DynamicAudioRow({ signals, isPortrait, collapsed, selectedKeys }: {
   signals: AudioSignalDescriptor[];
   isPortrait: boolean;
   collapsed: boolean;
+  selectedKeys: string[] | null;
 }) {
   const C = usePalette();
   const liveDoc = useLiveParams();
@@ -475,9 +649,26 @@ function DynamicAudioRow({ signals, isPortrait, collapsed }: {
     return v;
   }, [liveDoc]);
 
-  // Best-practice deck subset (LOW/MID/HIGH/KICK + beat cue), in curated
-  // order. The remainder count drives the "+N on AUDIO tab" hint.
-  const curated = useMemo(() => curateDeckSignals(signals), [signals]);
+  // WHICH plots to show: the operator's saved selection (in their chosen order,
+  // only those still live), else the curated best-practice subset. The remainder
+  // count drives the "+N on AUDIO tab" hint.
+  // Whether an explicit operator selection is driving the row (vs. the curated
+  // default) — a selection shows up to AUDIO_PLOTS_MAX; the default keeps the
+  // tighter 4/6 best-practice cap.
+  const hasSelection = useMemo(() => {
+    if (!selectedKeys || selectedKeys.length === 0) return false;
+    return selectedKeys.some((k) => signals.find((s) => s.key === k));
+  }, [selectedKeys, signals]);
+  const curated = useMemo(() => {
+    if (selectedKeys && selectedKeys.length > 0) {
+      const live = new Map(signals.map((s) => [s.key, s] as const));
+      const picked = selectedKeys
+        .map((k) => live.get(k))
+        .filter((s): s is AudioSignalDescriptor => !!s);
+      if (picked.length > 0) return picked;
+    }
+    return curateDeckSignals(signals);
+  }, [selectedKeys, signals]);
 
   if (signals.length === 0) {
     return (
@@ -492,7 +683,17 @@ function DynamicAudioRow({ signals, isPortrait, collapsed }: {
   // If NONE of the curated cues are live (an exotic Companion routing that
   // publishes signals we don't recognise), fall back to the first few live
   // signals so the row is never blank while audio IS flowing.
-  const shownSet = curated.length > 0 ? curated : signals.slice(0, isPortrait ? 4 : 6);
+  //
+  // QA round1 #21: the strip is a SINGLE row, so cap how many cells it shows
+  // (4 portrait / 6 landscape) and roll the rest into the "+N on AUDIO tab"
+  // hint. Pre-fix the expanded row pushed every curated cue (up to 6) into a
+  // narrow portrait strip where each cell's 52px minWidth forced the strip to
+  // overflow its right edge.
+  // A custom selection shows every picked plot (up to AUDIO_PLOTS_MAX); the
+  // curated default keeps the tighter single-glance cap.
+  const maxCells = hasSelection ? AUDIO_PLOTS_MAX : (isPortrait ? 4 : 6);
+  const baseSet = curated.length > 0 ? curated : signals;
+  const shownSet = baseSet.slice(0, maxCells);
   const remainder = signals.length - shownSet.length;
 
   if (collapsed) {
@@ -509,7 +710,10 @@ function DynamicAudioRow({ signals, isPortrait, collapsed }: {
           />
         ))}
         {remainder > 0 ? (
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.icon }}>+{remainder}</Text>
+          // QA round8 #4: was 8px / C.icon (faint grey) — below the
+          // legibility floor in a glare environment. Bumped to 9px and the
+          // higher-contrast secondary so the "more signals live" hint reads.
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary }}>+{remainder}</Text>
         ) : null}
       </View>
     );
@@ -526,14 +730,97 @@ function DynamicAudioRow({ signals, isPortrait, collapsed }: {
         />
       ))}
       {remainder > 0 ? (
+        // QA round8 #4: the "+N on AUDIO tab" hint was 8px / C.icon (faint
+        // grey) — sub-legible at the edge of the venue. Bumped to 9px and
+        // C.secondary for readable contrast without out-shouting the meters.
         <Text
           numberOfLines={2}
-          style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.icon, maxWidth: 54, textTransform: 'uppercase', letterSpacing: 0.4 }}
+          style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, maxWidth: 54, textTransform: 'uppercase', letterSpacing: 0.4 }}
         >
           +{remainder} on AUDIO tab
         </Text>
       ) : null}
     </View>
+  );
+}
+
+/**
+ * AudioPlotPicker — modal to choose WHICH audio signal plots show in the row.
+ * Lists every live signal with a checkbox; toggling persists immediately via the
+ * parent's onChange. "Reset to default" clears the pick (→ curated default).
+ * When no explicit pick exists yet, the curated default is shown pre-checked so
+ * the operator sees the starting point.
+ */
+function AudioPlotPicker({ visible, signals, selected, onChange, onClose }: {
+  visible: boolean;
+  signals: AudioSignalDescriptor[];
+  selected: string[] | null;
+  onChange: (next: string[] | null) => void;
+  onClose: () => void;
+}) {
+  const C = usePalette();
+  const curatedKeys = useMemo(() => curateDeckSignals(signals).map((s) => s.key), [signals]);
+  // The working selection: the saved pick, or the curated default when unset.
+  const base = selected && selected.length > 0 ? selected : curatedKeys;
+  const sel = useMemo(() => new Set(base), [base]);
+  const atCap = base.length >= AUDIO_PLOTS_MAX;
+  const toggle = (key: string) => {
+    const has = base.includes(key);
+    if (!has && atCap) return;   // at the cap — must remove one before adding more
+    const next = has ? base.filter((k) => k !== key) : [...base, key];
+    onChange(next.length > 0 ? next : []);   // empty array persists as "none shown"
+  };
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable onPress={onClose} style={{ flex: 1, backgroundColor: '#0009', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+        <Pressable onPress={() => { /* swallow inner taps */ }} style={{ width: '90%', maxWidth: 560, maxHeight: '82%', backgroundColor: C.surfaceContainerLow, borderRadius: 14, borderWidth: 1, borderColor: C.ghostBorder, padding: 16 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.text, textTransform: 'uppercase', letterSpacing: 0.5 }}>Audio plots</Text>
+            <TouchableOpacity onPress={onClose} accessibilityLabel="Close"><Text style={{ color: C.secondary, fontSize: 18 }}>✕</Text></TouchableOpacity>
+          </View>
+          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 11, color: atCap ? C.primary : C.secondary, marginBottom: 10 }}>
+            {atCap
+              ? `Showing ${base.length}/${AUDIO_PLOTS_MAX} — remove one to add another. Saved for this screen.`
+              : `Tap to add or remove a plot (${base.length}/${AUDIO_PLOTS_MAX}). Your pick is saved for this screen.`}
+          </Text>
+          <ScrollView style={{ maxHeight: 380 }}>
+            {signals.length === 0 ? (
+              <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, paddingVertical: 12 }}>
+                No live audio signals — design them in the Audio Companion.
+              </Text>
+            ) : signals.map((s) => {
+              const on = sel.has(s.key);
+              const accent = audioAccentHex(s);
+              // At the cap, unselected rows can't be added — dim + block them so
+              // the limit is visible, not a silent no-op tap.
+              const blocked = !on && atCap;
+              return (
+                <TouchableOpacity
+                  key={s.key}
+                  onPress={() => toggle(s.key)}
+                  disabled={blocked}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, paddingHorizontal: 6, opacity: blocked ? 0.35 : 1 }}
+                >
+                  <View style={{ width: 18, height: 18, borderRadius: 5, borderWidth: 2, borderColor: on ? accent : C.ghostBorder, backgroundColor: on ? accent : 'transparent', justifyContent: 'center', alignItems: 'center' }}>
+                    {on ? <Text style={{ color: '#000', fontSize: 12, fontFamily: 'SpaceGrotesk_700Bold' }}>✓</Text> : null}
+                  </View>
+                  <Text style={{ flex: 1, fontFamily: 'Inter_400Regular', fontSize: 13, color: C.text }}>{s.label}</Text>
+                  <Text style={{ fontFamily: 'SpaceMono_400Regular', fontSize: 10, color: C.icon }}>{s.key}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 }}>
+            <TouchableOpacity onPress={() => onChange(null)} style={{ paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder }}>
+              <Text style={{ color: C.secondary, fontSize: 12, fontFamily: 'SpaceGrotesk_700Bold' }}>Reset to default</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={onClose} style={{ paddingVertical: 8, paddingHorizontal: 18, borderRadius: 8, backgroundColor: C.primary }}>
+              <Text style={{ color: C.onPrimary, fontSize: 12, fontFamily: 'SpaceGrotesk_700Bold' }}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -552,6 +839,17 @@ function audioValueText(signal: AudioSignalDescriptor, value: number): string {
   if (signal.kind === 'frequency') return `${Math.round(value)}Hz`;
   if (signal.kind === 'bpm') return value > 0 ? `${Math.round(value)}` : '—';
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}`;
+}
+
+// Compact meter label for the dense GLOBALS audio strip. The engine ships
+// verbose band names ("ENERGY RATIO") that mid-word-clip in the strip's
+// narrow cells (QA round1 #21: "ENERGY RA…"). Collapse a multi-word label to
+// its first word so the cue stays whole instead of truncating — never an
+// ellipsis on a control label. Single-word labels pass through untouched.
+function audioMeterLabel(label: string): string {
+  const trimmed = label.trim();
+  const space = trimmed.indexOf(' ');
+  return space === -1 ? trimmed : trimmed.slice(0, space);
 }
 
 /**
@@ -581,9 +879,13 @@ function LiveMeterColumn({ isPortrait, signal, value }: {
       backgroundColor: C.surface,
       justifyContent: 'center',
     }}>
+      {/* QA round1 #21: bumped 8→9px and secondary→text so the band labels
+          and values read at the edge of the venue; the label is abbreviated
+          to its first word (audioMeterLabel) so it stays whole instead of
+          clipping mid-word ("ENERGY RA…"). */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
-        <Text numberOfLines={1} style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6, flex: 1, marginRight: 4 }}>{signal.label}</Text>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.text }}>{audioValueText(signal, value)}</Text>
+        <Text numberOfLines={1} style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.text, textTransform: 'uppercase', letterSpacing: 0.6, flex: 1, marginRight: 4 }}>{audioMeterLabel(signal.label)}</Text>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.text }}>{audioValueText(signal, value)}</Text>
       </View>
       <View style={{
         height: 8, borderRadius: 4,
@@ -600,43 +902,210 @@ function LiveMeterColumn({ isPortrait, signal, value }: {
   );
 }
 
-// BPM gets its own compact tile (no operator gain — it's a tempo
-// reference, not a level to scale). The big numeric readout makes
-// it easy to glance at from across the venue. A faint pulse-dot
-// next to the number lights when fresh data is arriving so the
-// operator can tell at a glance whether the upstream LX tempo
-// source is live.
-function BpmTile({ bpm, isPortrait, synced }: { bpm: number; isPortrait: boolean; synced?: boolean }) {
+// The BPM source-tag accent: OSC reads as auto-driven (green), a manual
+// override reads as "operator hands on" (tertiary), HELD stays muted.
+function sourceAccent(C: ReturnType<typeof usePalette>, source: TempoSource): string {
+  if (source === 'osc') return ACCENT_AUTO;
+  if (source === 'manual') return C.tertiary;
+  return C.secondary;
+}
+
+/**
+ * SpeedSyncToggle — a compact SYNC button that sits to the right of the SPEED
+ * fader on the GLOBALS bar. Toggles the engine `bpmSpeedSync` param so SPEED
+ * is auto-driven from the ARBITRATED tempo (OSC OR TAP — see
+ * bpm_speed_sync.js). ON = green (matches the SPEED fader's auto-driven tint).
+ * ON-but-starving (sync armed, no tempo yet) = amber, a warning that speed
+ * won't move until a tempo arrives — but the toggle stays operable so the
+ * operator can arm sync ahead of audio.
+ */
+function SpeedSyncToggle({ on, starving, disabled, onToggle }: {
+  on: boolean;
+  starving: boolean;
+  disabled?: boolean;
+  onToggle: () => void;
+}) {
+  const C = usePalette();
+  const accent = on ? (starving ? '#ffc107' : ACCENT_AUTO) : C.secondary;
+  return (
+    <TouchableOpacity
+      onPress={onToggle}
+      disabled={disabled}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: on, disabled: !!disabled }}
+      accessibilityLabel={
+        on
+          ? (starving ? 'Speed follows BPM: on, but no tempo yet' : 'Speed follows BPM: on')
+          : 'Speed follows BPM: off'
+      }
+      hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+      style={{
+        width: 34, height: 44,
+        borderRadius: 7, borderWidth: 1,
+        borderColor: on ? accent : C.ghostBorder,
+        backgroundColor: on ? `${accent}22` : C.surface,
+        alignItems: 'center', justifyContent: 'center',
+        opacity: disabled ? 0.45 : 1,
+      }}
+    >
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: accent, letterSpacing: 0.6 }}>
+        SYNC
+      </Text>
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 7, color: on ? accent : C.icon, letterSpacing: 0.4 }}>
+        {on ? (starving ? 'NO BPM' : 'ON') : 'OFF'}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+/**
+ * GlobalTapTile — the dedicated, FULL-SIZE tap target (operator request
+ * feat/optimize_channels). Each press registers a tap via useTempoTap().tap(),
+ * which feeds a MODULE-GLOBAL tap series (see use_tempo_tap.ts) — so taps
+ * accumulate across the deck and mixer tabs and drive the one global tempo.
+ * Kept SEPARATE from the BPM source selector so the tap target stays big and
+ * reliable (the selector only chooses OSC vs TAP, it does not tap).
+ */
+function GlobalTapTile({ isPortrait, sourcePref, disabled, onTap }: {
+  isPortrait: boolean;
+  sourcePref: TempoSourcePref;
+  disabled?: boolean;
+  onTap: () => void;
+}) {
+  const C = usePalette();
+  const w = isPortrait ? GLOBALS_TILE_WIDTH_PORTRAIT : GLOBALS_TILE_WIDTH_LANDSCAPE;
+  // Tint when TAP is the (sticky) selected source, so the button reads as
+  // "you are driving the tempo by tapping". Sticky — doesn't flicker with OSC.
+  const armed = sourcePref === 'tap';
+  return (
+    <TouchableOpacity
+      onPress={onTap}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel="Tap tempo — tap repeatedly on the beat to set the global BPM"
+      accessibilityState={{ disabled: !!disabled }}
+      style={{
+        width: w, height: GLOBALS_TILE_HEIGHT,
+        borderRadius: 8, borderWidth: 1,
+        borderColor: armed ? C.tertiary : C.ghostBorder,
+        backgroundColor: armed ? C.tertiary : C.surface,
+        alignItems: 'center', justifyContent: 'center',
+        opacity: disabled ? 0.45 : 1,
+      }}
+    >
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18, lineHeight: 20,
+        letterSpacing: 1, color: armed ? C.surfaceContainerLowest : C.text,
+      }}>
+        TAP
+      </Text>
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, letterSpacing: 0.6,
+        color: armed ? C.surfaceContainerLowest : C.secondary, textTransform: 'uppercase',
+      }}>
+        tempo
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+/**
+ * BpmTile — the applied BPM readout + a STICKY SOURCE SELECTOR (operator
+ * request feat/optimize_channels). The selector ONLY chooses where the clock
+ * comes from — it is NOT a tap target (the dedicated GlobalTapTile taps):
+ *
+ *   - OSC side → follow the live OSC feed (setSource('osc')). Highlighted when
+ *                the STICKY pref is 'osc' — and STAYS highlighted through a brief
+ *                OSC dropout (live source 'held'), so it never bounces to TAP.
+ *   - TAP side → hold the CURRENT tempo (setSource('tap')); refine it with the
+ *                big TAP button. Highlighted when the sticky pref is 'tap'.
+ *
+ * The SELECTOR highlight tracks the sticky `sourcePref` (no flapping); the
+ * accent/border colour reflects the LIVE `source` (green when OSC is actually
+ * driving, neutral when OSC-selected-but-held). The big numeric readout stays
+ * so the tempo reads from across the venue.
+ */
+function BpmTile({ bpm, isPortrait, source, sourcePref, disabled, onSelectOsc, onSelectTap }: {
+  bpm: number;
+  isPortrait: boolean;
+  source: TempoSource;
+  sourcePref: TempoSourcePref;
+  disabled?: boolean;
+  onSelectOsc: () => void;
+  onSelectTap: () => void;
+}) {
   const C = usePalette();
   const hasSignal = bpm > 0;
-  const w = isPortrait ? GLOBALS_TILE_WIDTH_PORTRAIT : GLOBALS_TILE_WIDTH_LANDSCAPE;
-  // Green border + dot when BPM is auto-driving speed, so the
-  // operator can spot from across the venue whether the show is
-  // currently hands-on or beat-locked.
-  const accent = synced ? ACCENT_AUTO : hasSignal ? C.primary : C.ghostBorder;
+  const accent = sourceAccent(C, source);
+  // Widen the tile to seat the OSC/TAP selector beside the number.
+  const baseW = isPortrait ? GLOBALS_TILE_WIDTH_PORTRAIT : GLOBALS_TILE_WIDTH_LANDSCAPE;
+  const w = baseW + (isPortrait ? 30 : 40);
+  // Selector highlight = the STICKY preference (never flaps). Border = LIVE
+  // status (green only when OSC is actually driving).
+  const oscActive = sourcePref === 'osc';
+  const tapActive = sourcePref === 'tap';
+  const border = source === 'osc' ? ACCENT_AUTO : tapActive ? C.tertiary : C.ghostBorder;
   return (
     <View style={{
       width: w, height: GLOBALS_TILE_HEIGHT,
       paddingVertical: 4, paddingHorizontal: 6,
-      borderRadius: 8, borderWidth: 1, borderColor: synced ? ACCENT_AUTO : C.ghostBorder,
+      borderRadius: 8, borderWidth: 1, borderColor: border,
       backgroundColor: C.surface,
-      justifyContent: 'space-between',
+      flexDirection: 'row', alignItems: 'center', gap: 5,
     }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: synced ? ACCENT_AUTO : C.secondary, textTransform: 'uppercase', letterSpacing: 0.8 }}>
+      <View style={{ flex: 1, justifyContent: 'space-between', height: '100%' }}>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: accent, textTransform: 'uppercase', letterSpacing: 0.8 }}>
           BPM
         </Text>
-        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: accent }} />
+        <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'center' }}>
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 18,
+            color: hasSignal ? C.text : C.icon, lineHeight: 20,
+          }}>
+            {hasSignal ? Math.round(bpm) : '—'}
+          </Text>
+        </View>
       </View>
-      <Text style={{
-        fontFamily: 'SpaceGrotesk_700Bold',
-        fontSize: 20,
-        color: hasSignal ? C.text : C.icon,
-        textAlign: 'center',
-        lineHeight: 22,
-      }}>
-        {hasSignal ? Math.round(bpm) : '—'}
-      </Text>
+
+      {/* SOURCE selector (OSC vs TAP) — chooses the clock source only; it does
+          NOT tap (the GlobalTapTile is the tap target). The active segment
+          fills in its source accent so "what's driving the clock" reads at a
+          glance. */}
+      <View style={{ width: 30, height: 40, borderRadius: 6, overflow: 'hidden', borderWidth: 1, borderColor: C.ghostBorder, opacity: disabled ? 0.45 : 1 }}>
+        <TouchableOpacity
+          onPress={onSelectOsc}
+          disabled={disabled}
+          accessibilityRole="button"
+          accessibilityState={{ selected: oscActive, disabled: !!disabled }}
+          accessibilityLabel="Use OSC as the tempo source (follow the live OSC feed)"
+          hitSlop={{ top: 4, left: 4, right: 4, bottom: 0 }}
+          style={{
+            flex: 1, alignItems: 'center', justifyContent: 'center',
+            backgroundColor: oscActive ? ACCENT_AUTO : C.surface,
+          }}
+        >
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, letterSpacing: 0.4, color: oscActive ? '#003a44' : C.secondary }}>
+            OSC
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={onSelectTap}
+          disabled={disabled}
+          accessibilityRole="button"
+          accessibilityState={{ selected: tapActive, disabled: !!disabled }}
+          accessibilityLabel="Use tapped tempo as the source (hold the current BPM; tap to refine)"
+          hitSlop={{ top: 0, left: 4, right: 4, bottom: 4 }}
+          style={{
+            flex: 1, alignItems: 'center', justifyContent: 'center',
+            borderTopWidth: 1, borderTopColor: C.ghostBorder,
+            backgroundColor: tapActive ? C.tertiary : C.surface,
+          }}
+        >
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, letterSpacing: 0.4, color: tapActive ? C.surfaceContainerLowest : C.secondary }}>
+            TAP
+          </Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -652,18 +1121,28 @@ function BpmTile({ bpm, isPortrait, synced }: { bpm: number; isPortrait: boolean
 // 2026-05-26). Sized so the row fits in ~24px regardless of orientation.
 
 function CollapsedGlobalsSummary({
-  speed, speedBadge, speedFill, size, h1, h2, bpm, onEditColors,
+  speed, speedBadge, speedFill, size, h1, h2, bpm, disabled, onEditColors,
 }: {
   speed: number; speedBadge?: string; speedFill?: string;
   size: number; h1: number; h2: number; bpm: number;
+  disabled?: boolean;
   onEditColors: () => void;
 }) {
   const C = usePalette();
   return (
     <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 14, paddingRight: 8, height: 24 }}>
-      <CollapsedReadout label="SPEED" value={Math.round(speed * 100)} accent={speedFill} badge={speedBadge} />
-      <CollapsedReadout label="SIZE" value={Math.round(size * 100)} />
-      <TouchableOpacity onPress={onEditColors} accessibilityLabel="Open colour picker" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+      <CollapsedReadout label="SPEED" value={Math.round(speed * 100)} unit="%" accent={speedFill} badge={speedBadge} />
+      <CollapsedReadout label="SIZE" value={Math.round(size * 100)} unit="%" />
+      {/* Soft PLAN lock — the COLORS shortcut opens the (mutating) colour
+          picker, so it's gated with the expanded-row controls. The readouts
+          above stay full-brightness (display-only). */}
+      <TouchableOpacity
+        onPress={onEditColors}
+        disabled={disabled}
+        accessibilityLabel="Open colour picker"
+        accessibilityState={{ disabled: !!disabled }}
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 6, opacity: disabled ? 0.45 : 1 }}
+      >
         <DualSwatch h1={h1} h2={h2} size={18} />
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>COLORS</Text>
       </TouchableOpacity>
@@ -676,12 +1155,18 @@ function CollapsedGlobalsSummary({
   );
 }
 
-function CollapsedReadout({ label, value, accent, badge }: { label: string; value: number; accent?: string; badge?: string }) {
+function CollapsedReadout({ label, value, unit, accent, badge }: { label: string; value: number; unit?: string; accent?: string; badge?: string }) {
   const C = usePalette();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.6 }}>{label}</Text>
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: accent || C.text }}>{value}</Text>
+      {/* QA round8 #3: level-like 0–100 params carry a "%" unit so the
+          collapsed GLOBALS readout isn't a bare integer (matches the deck
+          HUE's "°"). The unit is rendered a touch smaller/secondary so the
+          number still leads. */}
+      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: accent || C.text }}>
+        {value}{unit ? <Text style={{ fontSize: 9, color: C.secondary }}>{unit}</Text> : null}
+      </Text>
       {badge ? (
         <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 7, color: accent || C.secondary, textTransform: 'uppercase', letterSpacing: 0.5 }}>{badge}</Text>
       ) : null}

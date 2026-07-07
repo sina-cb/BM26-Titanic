@@ -732,7 +732,7 @@ function setupSceneIndicator() {
   select.innerHTML = `<option value="${active}" selected>${active}</option>`;
 
   // Single source of truth: the static manifest committed alongside the scenes.
-  // Same path in dev and prod (no localhost fallback) — see .agent/00_gol/00_codex.md P0.
+  // Same path in dev and prod (no localhost fallback) — see .agent/codex.md P0.
   // The dev save-server regenerates this file after any mutation, so it stays live.
   const manifestUrl = './scenes/manifest.json';
   fetch(manifestUrl)

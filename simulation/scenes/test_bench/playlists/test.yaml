@@ -1,0 +1,132 @@
+schemaVersion: 1
+name: test
+entries:
+  - id: e_test_0_solid
+    pattern: test/solid
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_1_bioluminescence
+    pattern: test/bioluminescence
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_2_breathing
+    pattern: test/breathing
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_3_cal_3d_sweep
+    pattern: test/cal_3d_sweep
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_4_cal_index_chaser
+    pattern: test/cal_index_chaser
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_5_cal_rgb_chaser
+    pattern: test/cal_rgb_chaser
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_6_cyclone
+    pattern: test/cyclone
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_7_fire
+    pattern: test/fire
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_8_heartbeat
+    pattern: test/heartbeat
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_9_occeanliner
+    pattern: test/occeanliner
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_10_plasma
+    pattern: test/plasma
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_11_police_lights
+    pattern: test/police_lights
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_12_rainbow_cascade
+    pattern: test/rainbow_cascade
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_13_rpm_fixtures_tune_v2
+    pattern: test/rpm_fixtures_tune_v2
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_14_sparkle
+    pattern: test/sparkle
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_15_test_6ch_pixel
+    pattern: test/test_6ch_pixel
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_16_test_params
+    pattern: test/test_params
+    label: null
+    defaults:
+      sliderSpeed: 0
+      sliderFlashSpeed: 0
+      toggleReverse: 0
+      hsvPickerColor:
+        h: 0
+        s: 1
+        v: 1
+      toggleBreathing: 0
+      toggleHoldFlash: 0
+    modulations: []
+    notes: null
+  - id: e_test_17_wipe
+    pattern: test/wipe
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_18_test_const
+    pattern: test_const
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_test_19_test_dualband
+    pattern: test_dualband
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null

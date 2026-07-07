@@ -14,6 +14,7 @@ import {
   type ChannelRole,
 } from '@/utils/api';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
+import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // "1 list to rule them all": this component renders the active playlist's
@@ -126,6 +127,27 @@ function patternDisplayName(pattern: string): string {
   return i >= 0 ? pattern.slice(i + 1) : pattern;
 }
 
+// Build the panel header title with ONE consistent separator + casing
+// pattern across every place this shared panel is mounted (deck, mixer
+// channel strips, deck overlays). Round-8 fix: the header drifted between
+// uses — "DECK MAIN - PLAYLIST" vs "CH 1 · PLAYLIST" — because callers
+// pass labels in varied shapes and some already embed their own separator
+// (the deck overlay passes "OVERLAY · MASK: PARS"). Normalize ANY of
+// `·`, `-`, `–`, `—`, or `/` separators in the incoming label to the
+// canonical " · " (spaced middot), uppercase the whole thing, then append
+// " · PLAYLIST". Result: a single glyph + casing rule everywhere.
+const HEADER_SEP = ' · ';
+function playlistHeaderTitle(channelLabel?: string): string {
+  if (!channelLabel) return 'PLAYLIST';
+  const normalized = channelLabel
+    .split(/\s*[·\-–—/]\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(HEADER_SEP)
+    .toUpperCase();
+  return `${normalized}${HEADER_SEP}PLAYLIST`;
+}
+
 export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce, playlistLibrary }) => {
   const C = usePalette();
   // playlistLibrary is currently consumed via the local `playlists`
@@ -159,6 +181,12 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   const [pendingNewDir, setPendingNewDir] = useState<string | null>(null);
   const [newDirPlaylistName, setNewDirPlaylistName] = useState('');
   const [newPlaylistName, setNewPlaylistName] = useState('');
+  // "Duplicate playlist" name prompt. `pendingDupSource` holds the source
+  // playlist whose entries seed the copy while the operator names it; the
+  // name modal is open whenever it's non-null. Mirrors the "new from
+  // folder" prompt (`pendingNewDir` / `newDirPlaylistName`) above.
+  const [pendingDupSource, setPendingDupSource] = useState<string | null>(null);
+  const [dupPlaylistName, setDupPlaylistName] = useState('');
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
   // Playlist-edits lock — operator-toggled gate that hides every
@@ -543,6 +571,21 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           console.log(`[PLAYLIST_DBG] deck event triggers refresh: local=${local?.activeEntryId} next=${next?.activeEntryId}`);
           refresh();
         }
+      } else if (role === 'deckOverlay' && msg.type === 'deck') {
+        // Deck dynamic VIEW OVERRIDE event: this overlay's assignment rides
+        // the `deck` message's `overlays[]` array (engine #deck-overlays
+        // folds it in — no new WS type). Find our overlay by id and adopt
+        // its playlist exactly like the deck channel does above.
+        const overlays = (msg.overlays as { id?: string; playlist?: PlaylistAssignment | null }[]) || [];
+        const ovCh = overlays.find((o) => o && o.id === channelId);
+        if (!ovCh) return;
+        const next = ovCh.playlist || null;
+        if (shouldSuppressReconcile(next?.activeEntryId ?? null, 'deckOverlay')) return;
+        const local = assignmentRef.current;
+        const changed =
+          (local?.name ?? null) !== (next?.name ?? null) ||
+          (local?.activeEntryId ?? null) !== (next?.activeEntryId ?? null);
+        if (changed) refresh();
       } else if (msg.type === 'channelPlaylistData') {
         // Engine emits this whenever a channel's playlist is set or
         // swapped (before the mixer event that announces the
@@ -797,6 +840,44 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     await handleLoadPlaylist(name);
   }, [pendingNewDir, newDirPlaylistName, fetchDirEntries, handleLoadPlaylist]);
 
+  // "Duplicate playlist" action: open a name prompt seeded with a
+  // "<source>_copy" suggestion. Like handleDirNewPlaylist we DON'T
+  // auto-create — the operator confirms (and can rename) first so we
+  // never silently clobber an existing playlist.
+  const handleDuplicatePlaylist = useCallback((source: string) => {
+    setShowLibrary(false);
+    setDupPlaylistName(sanitizeName(`${source}_copy`));
+    setPendingDupSource(source);
+  }, []);
+
+  // Confirm the duplicate: fetch the source playlist's content, re-key its
+  // entries so the copy is independent, save under the chosen name, and
+  // load the new copy onto this channel. Client-side only — savePlaylist
+  // already persists, so no new engine endpoint is needed.
+  const confirmDuplicatePlaylist = useCallback(async () => {
+    const source = pendingDupSource;
+    if (!source) return;
+    const name = sanitizeName(dupPlaylistName);
+    if (!name) return; // Create is disabled when empty; guard anyway.
+    const src = await fetchPlaylist(source);
+    if (!src.ok || !src.data) {
+      Alert.alert('Duplicate failed', src.error || 'Unknown error');
+      return;
+    }
+    // Fresh entry ids so the copy doesn't alias the source's per-entry
+    // handles (the engine tracks activeEntryId by id). Everything else —
+    // pattern / label / defaults / notes — rides along verbatim so the
+    // copy is a faithful clone of the source.
+    const entries = src.data.entries.map((e) => ({ ...e, id: genEntryId() }));
+    const save = await savePlaylist({ name, entries });
+    if (!save.ok) {
+      Alert.alert('Duplicate failed', save.error || 'Unknown error');
+      return;
+    }
+    setPendingDupSource(null);
+    await handleLoadPlaylist(name);
+  }, [pendingDupSource, dupPlaylistName, handleLoadPlaylist]);
+
   // "Append" action: bulk-add every pattern in a directory to the
   // currently-loaded playlist, then persist — same auto-save model as
   // handleAddPattern, just for a whole folder at once.
@@ -818,8 +899,21 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     flashSaved();
   }, [fetchDirEntries, flashSaved, refresh]);
 
-  // Remove + persist in one step.
-  const handleRemoveEntry = useCallback(async (entryId: string) => {
+  // Destructive-action guard (production-console safety): removing a
+  // playlist entry persists immediately to disk, so it must not happen on
+  // a single accidental tap mid-show. The (−) button ARMS the confirm
+  // sheet; performRemoveEntry only runs on explicit confirmation.
+  // `removePrompt` holds the target entry id + a display label.
+  const [removePrompt, setRemovePrompt] = useState<{ id: string; label: string } | null>(null);
+  const requestRemoveEntry = useCallback((entryId: string) => {
+    const cur = playlistRef.current;
+    const entry = cur?.entries.find((e) => e.id === entryId);
+    const label = entry ? (entry.label || patternDisplayName(entry.pattern)) : entryId;
+    setRemovePrompt({ id: entryId, label });
+  }, []);
+
+  // Remove + persist in one step (invoked only after confirmation).
+  const performRemoveEntry = useCallback(async (entryId: string) => {
     const cur = playlistRef.current;
     if (!cur) return;
     const nextEntries = cur.entries.filter((e) => e.id !== entryId);
@@ -832,6 +926,13 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     }
     flashSaved();
   }, [flashSaved, refresh]);
+
+  const confirmRemoveEntry = useCallback(async () => {
+    const target = removePrompt;
+    if (!target) return;
+    setRemovePrompt(null);
+    await performRemoveEntry(target.id);
+  }, [removePrompt, performRemoveEntry]);
 
   // ── Reorder: move an entry one slot up (direction=-1) or down (+1) ──
   // Operator request (May 2026): re-sequence mid-show without going back
@@ -913,7 +1014,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     rowPadY: compact ? 4 : 5,
     rowPadX: compact ? 6 : 8,
     rowGap: compact ? 1 : 2,
-    fontPrimary: compact ? 12 : 13,
+    fontPrimary: compact ? 13 : 13,
     fontSecondary: compact ? 9 : 10,
     fontMicro: compact ? 8 : 9,
     indexWidth: compact ? 16 : 20,
@@ -949,7 +1050,11 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           full-width REFRESH/RECONNECT button that used to sit below the
           playlist — putting it inline here frees a chunky vertical
           slot for an extra entry row. */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, minHeight: sz.btnH - 4 }}>
+      {/* minHeight matches the header buttons (lock / refresh are sz.btnH
+          tall) so the icons aren't visually pinched against the panel's top
+          padding — the prior `btnH - 4` was shorter than the icons and read
+          as a clipped header. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, minHeight: sz.btnH }}>
         <Text
           style={{
             fontFamily: 'SpaceGrotesk_700Bold',
@@ -960,7 +1065,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           }}
           numberOfLines={1}
         >
-          {(channelLabel ? `${channelLabel.toUpperCase()} · ` : '') + 'PLAYLIST'}
+          {playlistHeaderTitle(channelLabel)}
         </Text>
         {showSaved && (
           <View
@@ -1043,6 +1148,10 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
             onPress={() => setShowLibrary(true)}
             style={{
               flex: 1,
+              // Floor wide enough that a common name like "default" shows
+              // in full instead of clipping to "de…" in the narrow mixer
+              // strip (it still flexes wider when there's room). 2026-06-22.
+              minWidth: 72,
               height: sz.btnH,
               paddingHorizontal: 8,
               borderRadius: 6,
@@ -1146,7 +1255,11 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
             ref={scrollRef}
             nestedScrollEnabled
             style={{ flex: 1, minHeight: 0, opacity: disabled ? 0.55 : 1 }}
-            contentContainerStyle={{ paddingBottom: 4 }}
+            // Reserve a right gutter so the vertical scrollbar (RN-web
+            // overlays it on top of content) doesn't sit over the row's
+            // reorder/remove controls. paddingBottom keeps the last row off the
+            // panel edge.
+            contentContainerStyle={{ paddingBottom: 4, paddingRight: 6 }}
             onLayout={(ev) => { viewportHeightRef.current = ev.nativeEvent.layout.height; }}
             onContentSizeChange={(_w, h) => { contentHeightRef.current = h; }}
           >
@@ -1169,9 +1282,15 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                     rowOffsetsRef.current.set(e.id, { y, h: height });
                   }}
                   style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 6,
+                    // 2-line layout (2026-06-20, mixer readability): line 1 is
+                    // the index badge + full-width name; line 2 is the compact
+                    // control sub-row (reorder chevrons + remove). In a
+                    // cramped mixer channel-strip the name column used to
+                    // collapse to ~60pt and truncate long pattern names to
+                    // "tran…"/"0…"; stacking the controls underneath gives the
+                    // name the full strip width with no strip-width change.
+                    flexDirection: 'column',
+                    gap: 2,
                     paddingHorizontal: sz.rowPadX,
                     paddingVertical: sz.rowPadY,
                     borderRadius: 6,
@@ -1182,25 +1301,93 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                     opacity: missing ? 0.4 : 1,
                   }}
                 >
-                  <Text
-                    style={{
-                      fontFamily: 'SpaceGrotesk_700Bold',
-                      fontSize: sz.fontMicro,
-                      color: isActive ? 'rgba(255,255,255,0.75)' : C.icon,
-                      width: sz.indexWidth,
-                    }}
-                  >
-                    {(idx + 1).toString().padStart(2, '0')}
-                  </Text>
+                  {/* Line 1: index badge + full-width name (≥44pt tap row). */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text
+                      style={{
+                        fontFamily: 'SpaceGrotesk_700Bold',
+                        fontSize: sz.fontMicro,
+                        color: isActive ? 'rgba(255,255,255,0.75)' : C.icon,
+                        width: sz.indexWidth,
+                      }}
+                    >
+                      {(idx + 1).toString().padStart(2, '0')}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => handleEntryTap(e.id)}
+                      disabled={missing || disabled}
+                      style={{ flex: 1 }}
+                    >
+                      <Text
+                        // Underscored pattern names (e.g.
+                        // "05_orbital_attractor_field") have no spaces, so
+                        // RN-web's default `word-break: break-word` chops them
+                        // mid-word leaving orphan letters ("…attracto /
+                        // r_field"). Force single-line tail truncation and pin
+                        // the web word-break to `normal` so the name truncates
+                        // cleanly with "…" instead of breaking per-character.
+                        // `wordBreak` is a web-only CSS prop, hence `as any`.
+                        style={{
+                          fontFamily: 'SpaceGrotesk_700Bold',
+                          fontSize: sz.fontPrimary,
+                          lineHeight: sz.fontPrimary + 4,
+                          color: isActive ? '#FFF' : C.text,
+                          wordBreak: 'normal',
+                        } as any}
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
+                      >
+                        {e.label || patternDisplayName(e.pattern)}
+                        {missing ? '  ⚠' : ''}
+                      </Text>
+                      {(e.label || paramCount > 0) && (
+                        <Text
+                          // Sub-label ("N params" / source pattern). Round-8
+                          // contrast bump: was C.icon (outline-variant — too
+                          // faint to read on the playa). Stepped up to
+                          // C.secondary, which is one tone darker/more saturated
+                          // and reads as a deliberate caption. lineHeight pins
+                          // the baseline rhythm so every row has the same
+                          // title→sub-label gap (the prior default line-height
+                          // varied with the glyphs and looked unevenly spaced).
+                          style={{
+                            fontFamily: 'Inter_400Regular',
+                            fontSize: sz.fontMicro,
+                            lineHeight: sz.fontMicro + 4,
+                            marginTop: 1,
+                            color: isActive ? 'rgba(255,255,255,0.85)' : C.secondary,
+                            wordBreak: 'normal',
+                          } as any}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                        >
+                          {e.label ? patternDisplayName(e.pattern) : ''}
+                          {e.label && paramCount > 0 ? '  · ' : ''}
+                          {paramCount > 0 ? `${paramCount} ${paramCount === 1 ? 'param' : 'params'}` : ''}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                  {/* Line 2: compact control sub-row — reorder chevrons +
+                      remove. Only rendered when there is at least one
+                      control to show (i.e. editable & not deck-edit-locked), so
+                      read-only / show-mode rows stay single-line. */}
                   {editable && !(role === 'deck' && playlistEditsLocked) && (
-                    <View style={{ flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 0 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
+                    {/* Reorder chevrons — lowest-weight glyph-only controls so
+                        they recede behind the track name. Tinted to the muted
+                        icon color (not primary) so the row-action cluster
+                        doesn't compete with the title for attention (round-8
+                        hierarchy fix). */}
+                    {(
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 0, marginRight: 'auto' }}>
                       <TouchableOpacity
                         onPress={canMoveUp ? () => handleMoveEntry(e.id, -1) : undefined}
                         disabled={!canMoveUp}
-                        hitSlop={{ top: 4, bottom: 0, left: 4, right: 4 }}
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                         style={{
-                          width: sz.btnH - 6,
-                          height: sz.btnH / 2 - 1,
+                          width: sz.btnH - 4,
+                          height: sz.btnH - 4,
                           alignItems: 'center',
                           justifyContent: 'center',
                           opacity: canMoveUp ? 1 : 0.2,
@@ -1210,17 +1397,17 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       >
                         <IconSymbol
                           name="chevron.up"
-                          size={sz.fontPrimary + 2}
-                          color={isActive ? '#FFF' : C.primary}
+                          size={sz.fontPrimary}
+                          color={isActive ? 'rgba(255,255,255,0.8)' : C.icon}
                         />
                       </TouchableOpacity>
                       <TouchableOpacity
                         onPress={canMoveDown ? () => handleMoveEntry(e.id, 1) : undefined}
                         disabled={!canMoveDown}
-                        hitSlop={{ top: 0, bottom: 4, left: 4, right: 4 }}
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                         style={{
-                          width: sz.btnH - 6,
-                          height: sz.btnH / 2 - 1,
+                          width: sz.btnH - 4,
+                          height: sz.btnH - 4,
                           alignItems: 'center',
                           justifyContent: 'center',
                           opacity: canMoveDown ? 1 : 0.2,
@@ -1230,57 +1417,38 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       >
                         <IconSymbol
                           name="chevron.down"
-                          size={sz.fontPrimary + 2}
-                          color={isActive ? '#FFF' : C.primary}
+                          size={sz.fontPrimary}
+                          color={isActive ? 'rgba(255,255,255,0.8)' : C.icon}
                         />
                       </TouchableOpacity>
                     </View>
-                  )}
-                  <TouchableOpacity
-                    onPress={() => handleEntryTap(e.id)}
-                    disabled={missing || disabled}
-                    style={{ flex: 1 }}
-                  >
-                    <Text
-                      style={{
-                        fontFamily: 'SpaceGrotesk_700Bold',
-                        fontSize: sz.fontPrimary,
-                        color: isActive ? '#FFF' : C.text,
-                      }}
-                      numberOfLines={1}
-                    >
-                      {e.label || patternDisplayName(e.pattern)}
-                      {missing ? '  ⚠' : ''}
-                    </Text>
-                    {(e.label || paramCount > 0) && (
-                      <Text
-                        style={{
-                          fontFamily: 'Inter_400Regular',
-                          fontSize: sz.fontMicro,
-                          color: isActive ? 'rgba(255,255,255,0.7)' : C.icon,
-                        }}
-                        numberOfLines={1}
-                      >
-                        {e.label ? patternDisplayName(e.pattern) : ''}
-                        {e.label && paramCount > 0 ? '  · ' : ''}
-                        {paramCount > 0 ? `${paramCount} ${paramCount === 1 ? 'param' : 'params'}` : ''}
-                      </Text>
                     )}
-                  </TouchableOpacity>
-                  {editable && !(role === 'deck' && playlistEditsLocked) && (
+                  {(
                     <TouchableOpacity
-                      onPress={() => handleRemoveEntry(e.id)}
+                      onPress={() => requestRemoveEntry(e.id)}
+                      // Destructive remove — round-8 fix: red on EVERY row was
+                      // a hierarchy inversion (the stop/delete semantic screamed
+                      // down the whole list, competing with track names). Now
+                      // it's a NEUTRAL grey glyph by default — no outline, no
+                      // fill — so the row chrome recedes and the track name
+                      // dominates. The remove only takes on its destructive
+                      // identity at the confirm sheet (which is already armed
+                      // by requestRemoveEntry). Still >= 44pt tap area via hitSlop.
+                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                       style={{
-                        width: sz.btnH - 4,
+                        width: sz.btnH - 6,
                         height: sz.btnH - 4,
                         borderRadius: 4,
                         alignItems: 'center',
                         justifyContent: 'center',
                       }}
                       accessibilityLabel={`Remove ${e.pattern} from playlist`}
+                      accessibilityRole="button"
                     >
-                      <Text style={{ color: isActive ? '#FFF' : C.error, fontWeight: 'bold', fontSize: sz.fontPrimary }}>−</Text>
+                      <Text style={{ color: isActive ? 'rgba(255,255,255,0.8)' : C.icon, fontWeight: 'bold', fontSize: sz.fontPrimary + 2 }}>−</Text>
                     </TouchableOpacity>
+                  )}
+                  </View>
                   )}
                 </View>
               );
@@ -1303,6 +1471,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         newPlaylistName={newPlaylistName}
         setNewPlaylistName={setNewPlaylistName}
         onCreateNew={handleCreateNew}
+        onDuplicate={handleDuplicatePlaylist}
       />
 
       <AddPatternModal
@@ -1331,6 +1500,27 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         onCancel={() => setPendingNewDir(null)}
         onCreate={confirmDirNewPlaylist}
       />
+
+      <DuplicatePlaylistNameModal
+        visible={pendingDupSource !== null}
+        source={pendingDupSource}
+        name={dupPlaylistName}
+        setName={setDupPlaylistName}
+        exists={playlists.includes(sanitizeName(dupPlaylistName))}
+        onCancel={() => setPendingDupSource(null)}
+        onCreate={confirmDuplicatePlaylist}
+      />
+
+      {/* Remove-entry confirmation (production-console safety). */}
+      <ConfirmSheet
+        visible={!!removePrompt}
+        title="Remove entry?"
+        message={`Remove "${removePrompt?.label ?? ''}" from this playlist? This saves immediately to disk.`}
+        confirmLabel="REMOVE"
+        cancelLabel="CANCEL"
+        onConfirm={confirmRemoveEntry}
+        onCancel={() => setRemovePrompt(null)}
+      />
     </View>
   );
 };
@@ -1339,6 +1529,42 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
 // Pulled out into their own components so the JSX nesting is shallow and
 // readable. Both share the same backdrop pattern: outer TWF closes on tap,
 // inner TWF swallows taps so the modal content is opaque to dismissal.
+
+// ── Name-query filtering ────────────────────────────────────────────
+// Shared by the library + swap pickers. A playlist matches when its name
+// contains the (lowercased) search query. (Tag filtering was retired in the
+// 2026-06-22 UI cleanup — name search is the only client-side filter now.)
+function filterPlaylistNames(names: string[], query: string): string[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return names;
+  return names.filter((n) => n.toLowerCase().includes(q));
+}
+
+interface PlaylistFilterBarProps {
+  C: Palette;
+  query: string;
+  setQuery: (s: string) => void;
+}
+
+// Search box shared by both pickers — name-query only.
+const PlaylistFilterBar: React.FC<PlaylistFilterBarProps> = ({
+  C, query, setQuery,
+}) => (
+  <View style={{ marginBottom: 8 }}>
+    <TextInput
+      value={query}
+      onChangeText={setQuery}
+      placeholder="search playlists…"
+      placeholderTextColor={C.icon}
+      style={{
+        paddingHorizontal: 10, paddingVertical: 7, borderRadius: 6,
+        borderWidth: 1, borderColor: C.ghostBorder, color: C.text,
+        fontFamily: 'Inter_400Regular', fontSize: 12,
+      }}
+      accessibilityLabel="Search playlists by name"
+    />
+  </View>
+);
 
 interface LibraryModalProps {
   visible: boolean;
@@ -1350,14 +1576,25 @@ interface LibraryModalProps {
   newPlaylistName: string;
   setNewPlaylistName: (s: string) => void;
   onCreateNew: () => void;
+  onDuplicate: (name: string) => void;
 }
 
 const LibraryModal: React.FC<LibraryModalProps> = ({
   visible, onClose, playlists, currentName, onLoad, onDelete,
-  newPlaylistName, setNewPlaylistName, onCreateNew,
+  newPlaylistName, setNewPlaylistName, onCreateNew, onDuplicate,
 }) => {
   const C = usePalette();
   const modalStyles = useMemo(() => makeModalStyles(C), [C]);
+  const [query, setQuery] = useState('');
+  // Reset the filter each time the picker opens so a stale query from a
+  // prior open doesn't hide everything.
+  useEffect(() => {
+    if (visible) { setQuery(''); }
+  }, [visible]);
+  const filtered = useMemo(
+    () => filterPlaylistNames(playlists, query),
+    [playlists, query],
+  );
   return (
   <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
     <TouchableOpacity
@@ -1369,13 +1606,23 @@ const LibraryModal: React.FC<LibraryModalProps> = ({
       <TouchableOpacity activeOpacity={1} onPress={() => {}} style={modalStyles.cardWrap}>
         <View style={modalStyles.card}>
             <Text style={modalStyles.title}>PLAYLIST LIBRARY</Text>
+            <PlaylistFilterBar
+              C={C}
+              query={query}
+              setQuery={setQuery}
+            />
             <ScrollView style={{ maxHeight: 320 }}>
               {playlists.length === 0 && (
                 <Text style={{ color: C.icon, fontStyle: 'italic', fontSize: 11 }}>
                   No playlists yet — create one below.
                 </Text>
               )}
-              {playlists.map((name) => {
+              {playlists.length > 0 && filtered.length === 0 && (
+                <Text style={{ color: C.icon, fontStyle: 'italic', fontSize: 11 }}>
+                  No playlists match the current filter.
+                </Text>
+              )}
+              {filtered.map((name) => {
                 const isCurrent = name === currentName;
                 return (
                   <View key={name} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
@@ -1389,6 +1636,16 @@ const LibraryModal: React.FC<LibraryModalProps> = ({
                       <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: isCurrent ? '#FFF' : C.text }}>
                         {isCurrent ? '▶ ' : ''}{name}
                       </Text>
+                    </TouchableOpacity>
+                    {/* Duplicate: clone this playlist under a new name. Shown
+                        for every row (including `default`) since a copy never
+                        overwrites the source. Opens the name prompt. */}
+                    <TouchableOpacity
+                      onPress={() => onDuplicate(name)}
+                      style={{ width: 28, height: 28, borderRadius: 6, borderWidth: 1, borderColor: C.primary, alignItems: 'center', justifyContent: 'center' }}
+                      accessibilityLabel={`Duplicate playlist ${name}`}
+                    >
+                      <Text style={{ color: C.primary, fontSize: 13 }}>⧉</Text>
                     </TouchableOpacity>
                     {name !== 'default' && (
                       <TouchableOpacity
@@ -1497,8 +1754,11 @@ const LoadDirectoryModal: React.FC<LoadDirectoryModalProps> = ({
       style={modalStyles.backdrop}
       accessibilityLabel="Close load-directory picker"
     >
-      <TouchableOpacity activeOpacity={1} onPress={() => {}} style={modalStyles.cardWrap}>
-        <View style={[modalStyles.card, { maxHeight: '90%', minWidth: 420 }]}>
+      {/* Card IS the stop-propagation layer (no full-width cardWrap): taps to
+          the SIDES of the centered card now reach the backdrop and close the
+          picker, so "click outside to cancel" works horizontally too — the old
+          width:100% cardWrap swallowed those side taps. */}
+      <TouchableOpacity activeOpacity={1} onPress={() => {}} style={[modalStyles.card, { maxHeight: '90%', minWidth: 420 }]}>
           <Text style={modalStyles.title}>LOAD DIRECTORY</Text>
           <Text style={{ color: C.icon, fontFamily: 'Inter_400Regular', fontSize: 11, marginBottom: 10, lineHeight: 15 }}>
             <Text style={{ color: C.primary, fontFamily: 'SpaceGrotesk_700Bold' }}>New playlist</Text>
@@ -1542,7 +1802,6 @@ const LoadDirectoryModal: React.FC<LoadDirectoryModalProps> = ({
               </View>
             ))}
           </ScrollView>
-        </View>
       </TouchableOpacity>
     </TouchableOpacity>
   </Modal>
@@ -1622,20 +1881,105 @@ const NewPlaylistNameModal: React.FC<NewPlaylistNameModalProps> = ({
   );
 };
 
+interface DuplicatePlaylistNameModalProps {
+  visible: boolean;
+  source: string | null;
+  name: string;
+  setName: (s: string) => void;
+  exists: boolean;
+  onCancel: () => void;
+  onCreate: () => void;
+}
+
+// Name prompt for "duplicate playlist". A near-twin of NewPlaylistNameModal
+// (folder flow): pre-filled with a "<source>_copy" suggestion but editable,
+// so the operator can pick any non-colliding name. An in-app modal (not
+// Alert.alert) because RN-web drops Alert button callbacks.
+const DuplicatePlaylistNameModal: React.FC<DuplicatePlaylistNameModalProps> = ({
+  visible, source, name, setName, exists, onCancel, onCreate,
+}) => {
+  const C = usePalette();
+  const modalStyles = useMemo(() => makeModalStyles(C), [C]);
+  const clean = sanitizeName(name);
+  return (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+    <TouchableOpacity
+      activeOpacity={1}
+      onPress={onCancel}
+      style={modalStyles.backdrop}
+      accessibilityLabel="Close duplicate-playlist name prompt"
+    >
+      <TouchableOpacity activeOpacity={1} onPress={() => {}} style={modalStyles.cardWrap}>
+        <View style={modalStyles.card}>
+          <Text style={modalStyles.title}>DUPLICATE {source?.toUpperCase() || 'PLAYLIST'}</Text>
+          <Text style={{ color: C.icon, fontFamily: 'Inter_400Regular', fontSize: 11, marginBottom: 10, lineHeight: 15 }}>
+            {"Name the copy. It will be filled with this playlist's entries and loaded onto the channel."}
+          </Text>
+          <TextInput
+            value={name}
+            onChangeText={setName}
+            placeholder="playlist name"
+            placeholderTextColor={C.icon}
+            autoFocus
+            onSubmitEditing={() => { if (clean) onCreate(); }}
+            returnKeyType="done"
+            style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, color: C.text }}
+          />
+          {exists && clean ? (
+            <Text style={{ color: C.error, fontFamily: 'Inter_400Regular', fontSize: 11, marginTop: 6 }}>
+              {`⚠ "${clean}" already exists — creating will overwrite it.`}
+            </Text>
+          ) : null}
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
+            <TouchableOpacity
+              onPress={onCancel}
+              accessibilityLabel="Cancel duplicate playlist"
+              style={{ paddingHorizontal: 14, height: 34, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => { if (clean) onCreate(); }}
+              disabled={!clean}
+              accessibilityLabel="Create duplicate playlist"
+              style={{ paddingHorizontal: 18, height: 34, borderRadius: 6, backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center', opacity: clean ? 1 : 0.4 }}
+            >
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: '#FFF' }}>Duplicate</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </TouchableOpacity>
+    </TouchableOpacity>
+  </Modal>
+  );
+};
+
 function makeModalStyles(C: Palette) {
   return {
-    // Full-screen tint: tapping this dismisses the modal.
+    // Full-screen tint: tapping this dismisses the modal. flex:1 makes the
+    // backdrop fill the Modal's full viewport (confirmed on RN-web — the
+    // RCTModalHostView the backdrop sits inside is itself full-screen), so
+    // the dim covers the whole screen and the behind-modal content can't
+    // bleed through. Bumped to 0.7 (was 0.5) so the picker reads clearly
+    // against the busy mixer behind it.
     backdrop: {
       flex: 1,
-      // 'rgba(0,0,0,0.5)' — modal-dimmer tint, identical in both themes.
-      backgroundColor: 'rgba(0,0,0,0.5)',
+      backgroundColor: 'rgba(0,0,0,0.7)',
       justifyContent: 'center' as const,
       alignItems: 'center' as const,
+      // Keep the centered card off the screen edges so it never drifts flush
+      // to top/bottom on a short viewport.
+      paddingVertical: 24,
+      paddingHorizontal: 16,
     },
     // Inner wrapper: noop onPress catches taps so the modal stays open when
-    // the user is interacting with content (textbox, list items, …). No
-    // additional style is needed; the wrapper just exists to swallow taps.
-    cardWrap: {},
+    // the user is interacting with content (textbox, list items, …). It also
+    // owns the card's horizontal sizing so the card stays truly centered by
+    // the backdrop's flex centering rather than drifting.
+    cardWrap: {
+      width: '100%' as const,
+      alignItems: 'center' as const,
+    },
     card: {
       backgroundColor: C.surfaceContainerLowest,
       borderRadius: 16,

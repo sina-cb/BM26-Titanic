@@ -1,5 +1,5 @@
 /**
- * party_mode_ref.js — boolean "is LOUD music playing right now".
+ * party_mode.js — boolean "is LOUD music playing right now".
  *
  * ── What it is ────────────────────────────────────────────────────────────
  * A debounced on/off flag that is ON only when loud, full-band music is
@@ -36,6 +36,11 @@ export const PARTY_MODE_DEFAULTS = Object.freeze({
   offThresh: 0.12,     // and drop below this to turn OFF (hysteresis gap)
   holdMs: 1200,        // min ON time once triggered
   offConfirmMs: 800,   // sustained-quiet time required before OFF
+  // Startup hold: suppress the ON latch for the first warmupMs so a single loud
+  // opening transient (or a mic pop at engine start) can't latch party — and
+  // then HOLD it for holdMs — before the loudness EMA has had time to settle.
+  // Sibling shapers (band_onsets/sub_bass/genre) all have an equivalent guard.
+  warmupMs: 1500,
 });
 
 export class PartyMode {
@@ -50,6 +55,7 @@ export class PartyMode {
     this.loudness = 0;
     this._onSinceMs = -Infinity;
     this._quietSinceMs = null;
+    this._firstMs = null;   // hop clock of the first update() (warmup anchor)
   }
 
   /**
@@ -69,9 +75,15 @@ export class PartyMode {
     }
     this.loudness = this._loud;
 
+    // Warmup gate: anchor on the first hop, suppress the ON latch until the
+    // loudness EMA has had warmupMs to settle (a lone opening spike must not
+    // latch+hold party). Quiet/OFF logic is unaffected.
+    if (this._firstMs === null) this._firstMs = nowMs;
+    const warmedUp = (nowMs - this._firstMs) >= p.warmupMs;
+
     if (!this.party) {
-      // OFF → ON when we clear the high threshold.
-      if (this._loud >= p.onThresh) {
+      // OFF → ON when we clear the high threshold (after warmup).
+      if (warmedUp && this._loud >= p.onThresh) {
         this.party = true;
         this._onSinceMs = nowMs;
         this._quietSinceMs = null;

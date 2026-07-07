@@ -25,15 +25,15 @@ sacn:
 engine:
   fps: 40
 mixer:
-  maxChannels: 4
+  maxChannels: 8
 vis:
   broadcastHz: 5
   maxPixels: 100
 server:
   port: 6968
 playlist:
-  active: false
-  delay_s: '15'
+  active: true
+  delay_s: '10'
   shuffle: true
 web_client:
   enabled: false
@@ -63,7 +63,7 @@ audio:
     jitterBufferHops: 4
     stopTimeoutMs: 2000
     stderrWarnIntervalMs: 60000
-  fftSize: 1024
+  fftSize: 2048
   hopSize: 512
   bands:
     lowMaxHz: 200
@@ -79,6 +79,9 @@ audio:
     threshold: 2.4
     refractoryMs: 220
     decayMs: 70
+  sub:
+    minHz: 30
+    maxHz: 60
   structureDetector:
     enabled: true
     dropEdgeMode: windowed
@@ -88,17 +91,26 @@ companion:
     port: 10000
   source: mic
   device: null
-  # Engine API endpoint the Companion live-syncs its SHARED audio TUNING
-  # against (input gain / source smoothing / capture device). The engine
-  # config is the single source of truth: the Companion subscribes to the
-  # engine's /ws/control for `audioConfig` broadcasts and writes its own
-  # UI changes back via PATCH /audio/config. OPTIONAL — analysis never
-  # blocks on the engine; if unreachable the Companion keeps its last
-  # known tuning and reconnects in the background. Defaults to the engine
-  # server.port above on loopback.
   engine:
     host: 127.0.0.1
     port: 6968
+  bpmSmoothing:
+    enabled: true
+    tauMs: 250
+companions: {}
+timeline:
+  enabled: true
+  activePlan: playa_default
+  tickMs: 1000
+  programLeaseSec: 30
+  operatorLeaseSec: 120
+  mood:
+    key: audioParty
+    partyThreshold: 0.5
+tempo:
+  oscBpmSmoothing:
+    enabled: false
+    tauMs: 250
 colorPalettes:
   - id: laser_lime
     name: Laser Lime ★

@@ -35,14 +35,18 @@ import { OscListener } from './lib/osc_listener.js';
 import { AudioCapture } from './audio/capture/audio_capture.js';
 import { AudioAnalyzer } from './audio/analyzer/audio_analyzer.js';
 import { BpmSpeedSync } from './lib/bpm_speed_sync.js';
+import { TempoArbiter } from './lib/tempo_arbiter.js';
 import { mergeAudioConfig, pickLiveFields } from './audio/config/audio_config.js';
 import {
   loadSceneAudio, saveSceneAudio,
 } from './audio/config/audio_config_store.js';
 import { listAudioDevices, findConfiguredDevice } from './audio/capture/audio_devices.js';
 import { SignalPostProcessor, KNOWN_SIGNALS } from './audio/postproc/signal_post_processor.js';
-import { AudioStructureDetector } from './audio/detector/audio_structure_detector.js';
-import { DerivedSignals } from './audio/signals/derived_signals.js';
+// (2026-06-21) The Audio Companion is the SOLE analyzer: it computes the full
+// derived/detector set and emits every key over OSC, which the engine receives
+// via the static /marsin/audio/* bindings (audio/postproc/audio_signals.js). The
+// engine no longer instantiates AudioStructureDetector / DerivedSignals — those
+// calcs MOVED to the companion. The modules still exist (used BY the companion).
 import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './audio/capture/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
@@ -611,6 +615,13 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
   let startTime = 0;
   let lastStatsTime = 0;
   let lastVisTime = 0;
+  // Pre-dimmer composite snapshot for the deck/mixer master preview: the
+  // composite AFTER global FX (hue / invert / group color-locks) but BEFORE
+  // the section dimmer rack + blackout. So the preview tracks the global hue
+  // and shows the effects while ignoring the hardware dimmer trim. Filled only
+  // on frames that broadcast vis (see the snapshot point in the render loop);
+  // lazily sized to pixelCount*6.
+  let preDimmerVisBuf = null;
   const intervalMs = Math.round(1000 / fps);
   const pixelCount = model.pixels.length;
 
@@ -808,12 +819,50 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       });
     }
 
+    // Global Hue Shifter (docs/39 §F-hue): rotate the RGB hue of the
+    // whole post-mixer buffer (W/A/UV untouched). Runs AFTER the show
+    // macros but BEFORE group color-locks + intensity/blackout, so a
+    // locked group's color and the e-stop safety always have the final
+    // say. Zero-cost at the default (hue=0, no auto-rotate).
+    if (globalEffectsController && globalEffectsController.applyHueShift) {
+      globalEffectsController.applyHueShift(model.pixels, now);
+    }
+
+    // Global color Invert (docs/39 §F-invert): flip the RGB of the whole
+    // post-mixer buffer (W/A/UV untouched). Runs AFTER the global hue
+    // rotation (documented order: global hue THEN global invert) but BEFORE
+    // group color-locks + intensity/blackout, so a locked group's color and
+    // the e-stop safety always have the final say. Zero-cost when off.
+    if (globalEffectsController && globalEffectsController.applyInvert) {
+      globalEffectsController.applyInvert(model.pixels);
+    }
+
     // Group fixed-color locks (docs/32): repaint operator-locked groups
     // AFTER all macros (a locked group must not flicker with the show)
     // but BEFORE intensity/blackout below, so the master cutoffs always
     // keep the final say. Single application point — replaces the
     // summer-camp djLights hack's duplicated post-intensity path.
     if (globalEffectsController) globalEffectsController.applyGroupFixedColors(model.pixels);
+
+    // Snapshot the PRE-DIMMER composite (after all global FX, before the
+    // section dimmers + blackout) for the deck/mixer master preview. Only on
+    // frames that will broadcast vis (mixer.wantVisThisFrame, set above from
+    // the same vis-due condition), so it costs one O(pixelCount) copy at the
+    // vis cadence — not every frame. The vis block below encodes this as the
+    // `preDimmer` key. Channel order matches rigBuffer: r,g,b,w,a,u.
+    if (mixer.wantVisThisFrame) {
+      if (!preDimmerVisBuf) preDimmerVisBuf = new Uint8Array(pixelCount * 6);
+      for (let i = 0; i < pixelCount; i++) {
+        const off = i * 6;
+        const px = model.pixels[i];
+        preDimmerVisBuf[off] = Math.min(255, Math.max(0, Math.round(px.r * 255)));
+        preDimmerVisBuf[off + 1] = Math.min(255, Math.max(0, Math.round(px.g * 255)));
+        preDimmerVisBuf[off + 2] = Math.min(255, Math.max(0, Math.round(px.b * 255)));
+        preDimmerVisBuf[off + 3] = Math.min(255, Math.max(0, Math.round(px.w * 255)));
+        preDimmerVisBuf[off + 4] = Math.min(255, Math.max(0, Math.round(px.a * 255)));
+        preDimmerVisBuf[off + 5] = Math.min(255, Math.max(0, Math.round(px.u * 255)));
+      }
+    }
 
     // Apply any hardware blackout or section intensity scaling from the API (Master cutoffs)
     if (intensityController) intensityController.apply(model.pixels);
@@ -902,12 +951,32 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
           rigBuffer[off + 5] = Math.min(255, Math.max(0, Math.round(px.u * 255)));
         }
         visPayload['rig'] = Buffer.from(subsampleVis(rigBuffer)).toString('base64');
+        // Pre-dimmer composite (after global FX, before dimmers/blackout). The
+        // deck + mixer master preview use this key so they track the global hue
+        // + show the effects while ignoring the section dimmer rack. Encoded
+        // immediately (subsampleVis returns a shared scratch buffer).
+        if (preDimmerVisBuf) {
+          visPayload['preDimmer'] = Buffer.from(subsampleVis(preDimmerVisBuf)).toString('base64');
+        }
+        // Per-channel effective-output METER levels (channel metering).
+        // Plain { <visKey>: number(0..1) } keyed identically to visPayload —
+        // each is the channel's intrinsic brightness scaled by its effFader
+        // (fader/clamp/group/solo), so a layer sitting dark (faded out, muted
+        // group, blend-mode-invisible) reads ~0 even when its pattern is
+        // bright. Shipped as a tiny numeric sidecar to the base64 vis frames
+        // (no per-pixel cost). Absent ⇒ client renders no meter (older engine
+        // / non-vis frame) — a documented default, not a silent fallback.
+        const visLevels = mixer.getVisLevels();
+        const levelsPayload = {};
+        for (const [key, level] of Object.entries(visLevels)) {
+          levelsPayload[key] = level;
+        }
         // `pixelCount` in the message is the number of pixels the iPad
         // should actually expect in each base64 buffer — that's the
         // SAMPLED count, not the model's true pixelCount. PixelStrip
         // already does Math.min(propPixelCount, bytes.length/6) so the
         // strip never tries to draw past the data.
-        statsCallback({ type: 'vis', vis: visPayload, pixelCount: visPxOut });
+        statsCallback({ type: 'vis', vis: visPayload, levels: levelsPayload, pixelCount: visPxOut });
       }
     }
   }
@@ -1286,6 +1355,9 @@ async function main() {
     // under `colorPalettes:` so the operator can edit the rig's house
     // palette without code changes. See docs/27_color_palettes.md.
     colorPalettes: Array.isArray(engineConfig.colorPalettes) ? engineConfig.colorPalettes : [],
+    // The full loaded config.yaml object — api_server reads the `timeline:`
+    // block off it to construct the in-engine Timeline service (docs/38 §15).
+    engineConfig,
     // Model-sync status. `stale: true` means the engine REFUSED a model
     // hot reload (e.g. pixel count changed) and is still rendering the
     // old model while the sim/disk already has a newer one. Surfaced on
@@ -1294,6 +1366,27 @@ async function main() {
     // Cleared on the next successful hot reload.
     modelSync: { stale: false, message: null },
   };
+
+  // TEMPO ARBITER (docs/39 §tempo-arbitration): coherent arbitration of the
+  // GLOBAL pattern tempo (mixer.tempoBpm) between the live OSC/audio BPM
+  // (auto-follow) and the operator's manual TAP (override hold). Constructed
+  // BEFORE startApiServer so the /mixer/tempo + /mixer/tempo/sync routes and
+  // serializeMixerState can reach it via engineCore.tempoArbiter. attach()
+  // below subscribes it to the CPC so it tracks `audioBpm` freshness. Its
+  // per-frame auto-follow runs in the render loop's beforeFrame hook. NOTE: it
+  // drives ONLY mixer.tempoBpm; bpm_speed_sync independently drives the SPEED
+  // knob from the same audioBpm — different mechanism/target, both may be on.
+  // Optional re-smoothing of the received OSC bpm (config.yaml
+  // `tempo.oscBpmSmoothing: { enabled, tauMs }`). OFF unless set — the Audio
+  // Companion already smooths the BPM before emitting, so this is a safety net
+  // for a jumpy non-Companion OSC sender (enabling it stacks a little lag).
+  const tempoArbiter = new TempoArbiter({
+    mixer, paramCenter,
+    smoothing: engineConfig?.tempo?.oscBpmSmoothing,
+  });
+  tempoArbiter.attach();
+  engineCore.tempoArbiter = tempoArbiter;
+
   const apiServer = startApiServer(opts, engineCore, './patterns', broadcastStatsRef, intensityController, globalEffectsController);
 
   // View defaults to the composed MIXER buffer (PatternMixer constructor:
@@ -1320,10 +1413,65 @@ async function main() {
     console.log('  ▶ No live mixer overlay at boot — live view pinned to DECK so --pattern renders.');
   }
 
+  // Tracks the last tempo pushed to clients via the OSC auto-follow path, so the
+  // render loop broadcasts a fresh mixer state ONLY when the live OSC tempo
+  // actually moves (the arbiter's tick() updates mixer.tempoBpm but never
+  // broadcasts) — keeps the BPM readout tracking live OSC without per-frame churn.
+  let lastBroadcastTempoBpm = mixer.tempoBpm;
+  // Also track the derived tempo SOURCE so a liveness transition (e.g. OSC
+  // drops while pref='osc' → 'osc'→'held') rebroadcasts even though tempoBpm
+  // holds — otherwise the source/liveness badge would stay stale on the UIs
+  // until the next operator action. Cheap: deriveSource() is two field reads.
+  let lastBroadcastSource = tempoArbiter.deriveSource(Date.now());
+
   const loop = createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, opts.fps, intensityController, globalEffectsController, paramCenter, (stats) => {
     broadcastStatsRef.publish(stats);
   }, engineConfig.vis || {}, {
-    beforeFrame: (nowMs) => modulationController.applyFrame(nowMs),
+    beforeFrame: (nowMs) => {
+      modulationController.applyFrame(nowMs);
+      // AUTO-CYCLE (round-2 #2): advance any mixer overlay whose playlist
+      // autopilot is active + due. Cheap synchronous decision; the actual
+      // overlay compile is dispatched off the hot path (setImmediate) inside
+      // the tick so it never darkens this frame.
+      if (apiServer && typeof apiServer.autoCycleTick === 'function') {
+        apiServer.autoCycleTick();
+      }
+      // DECK OVERLAYS (deck dynamic view overrides): advance every
+      // auto-advancing deck overlay in UNISON on ONE shared clock (operator
+      // refinement #1). Same wall-clock source as autoCycleTick; the overlay
+      // compiles are dispatched off the hot path inside the tick.
+      if (apiServer && typeof apiServer.deckOverlayAutoCycleTick === 'function') {
+        apiServer.deckOverlayAutoCycleTick();
+      }
+      // TEMPO AUTO-FOLLOW (tempo-arbitration): when a fresh OSC BPM is live and
+      // no manual-tap override is in flight, continuously set mixer.tempoBpm
+      // from it (clamped, only-on-change). Date.now() — NOT nowMs — because the
+      // arbiter's `audioBpm` freshness timestamps are recorded with Date.now()
+      // in its CPC subscription; performance.now() (what nowMs carries) is a
+      // different epoch and would never compare correctly. Hot-path safe: two
+      // field reads + one timestamp compare, no allocation.
+      tempoArbiter.tick(Date.now());
+      // When OSC auto-follow actually moved the tempo, push a fresh mixer state
+      // so the BPM readout tracks the live OSC tempo (only-on-change; the
+      // arbiter itself never broadcasts, and a mixer broadcast otherwise only
+      // fires on operator actions — so OSC drift would look frozen).
+      const curSource = tempoArbiter.deriveSource(Date.now());
+      if ((mixer.tempoBpm !== lastBroadcastTempoBpm || curSource !== lastBroadcastSource)
+          && apiServer && typeof apiServer.broadcastMixerState === 'function') {
+        lastBroadcastTempoBpm = mixer.tempoBpm;
+        lastBroadcastSource = curSource;
+        apiServer.broadcastMixerState();
+      }
+      // BPM → SPEED sync (source-agnostic): the arbiter may have just moved
+      // mixer.tempoBpm (OSC auto-follow) WITHOUT a CPC event, so re-evaluate
+      // the speed mapping against the arbitrated tempo. recompute() is
+      // idempotent — it only writes `speed` when the mapped value changed, so
+      // this is hot-path safe (no per-frame CPC churn). Guarded like the other
+      // beforeFrame callees since bpmSync is wired after loop.start().
+      if (engineCore.bpmSync) {
+        engineCore.bpmSync.recompute();
+      }
+    },
   });
   // Now that the loop exists, give engineCore a way to read the live
   // frame counter (used by /global-effect-slots/:id/activate so the
@@ -1482,12 +1630,15 @@ async function main() {
   loop.start();
 
   // 7b. BPM → speed sync. Attaches to the CPC subscriber list and follows
-  // the Audio Companion's analyzed tempo, which arrives over OSC
-  // `/marsin/audio/bpm` → CPC key `audioBpm` (2026-06-17 contract).
-  // Operator gates the behaviour via the `bpmSpeedSync` CPC param
-  // (default off); when `audioBpm` is 0/absent the sync doesn't drive.
-  const bpmSync = new BpmSpeedSync(paramCenter);
+  // the ARBITRATED pattern tempo (mixer.tempoBpm) — i.e. whatever drives the
+  // clock: OSC auto-follow OR a manual TAP override — so SPEED tracks the
+  // tapped tempo too, not only the analyzed OSC `audioBpm`. Source-agnostic
+  // via the injected `getTempoBpm` resolver. Operator gates the behaviour via
+  // the `bpmSpeedSync` CPC param (default off); when the arbitrated tempo is
+  // 0/absent the sync doesn't drive (fail SAFE).
+  const bpmSync = new BpmSpeedSync(paramCenter, { getTempoBpm: () => mixer.tempoBpm });
   bpmSync.attach();
+  engineCore.bpmSync = bpmSync;
 
   // 7c. Microphone audio listener. Disabled by default — opt in via
   // config.yaml `audio.enabled: true`. A bad config / missing
@@ -1527,24 +1678,13 @@ async function main() {
     }
   }
 
-  // docs/30: audio structure detector (build / drop / sustain cues).
-  // ALWAYS constructed so its surface exists even when disabled — tick()
-  // no-ops until audio.structureDetector.enabled flips true via PATCH
-  // /audio/config. Reads the live config fresh each tick via getConfig so
-  // a hot enable/disable + threshold tweak takes effect immediately.
-  // Broadcast hook is the same audioStatus publisher used below; the
-  // detector emits the sparse `dropFired` event through it.
-  const audioStructureDetector = new AudioStructureDetector({
-    paramCenter,
-    broadcast: (msg) => broadcastStatsRef.publish(msg),
-    getConfig: () => (audioState.config && audioState.config.structureDetector) || {},
-  });
-  audioState.structureDetector = audioStructureDetector;
-
-  // Derived signals (BPM / beat / party / note / switch cues) — observe-and-
-  // publish, runs right after the detector each hop off the live CPC keys.
-  const derivedSignals = new DerivedSignals({ paramCenter });
-  audioState.derivedSignals = derivedSignals;
+  // (2026-06-21) Audio structure detector + derived signals are NO LONGER
+  // computed here — the Audio Companion (sole analyzer) computes them and emits
+  // every key over OSC; the engine receives them via the /marsin/audio/* inbound
+  // bindings. The `structureDetector.*` live-config block is still accepted +
+  // persisted (the operator tunes the COMPANION's detector through it; the
+  // engine just stores/forwards it), and the analyzer below still writes the raw
+  // mic bands for the audio.enabled (engine-mic) path.
 
   // Lifecycle helper so /audio/config PATCH can hot-restart the
   // analyzer with new band/kick settings without juggling state by
@@ -1640,13 +1780,44 @@ async function main() {
       // `*Gain` CPC param live each call, preserving the operator's
       // existing slider-as-source-of-truth contract.
       let lastAnalysisAtMs = 0;
+      // Hoisted analyzer-publish payload (codex: allocation-free hot path). The
+      // {kind,key} shapes are static; only `.value` changes each hop. Allocate
+      // the 19 objects + array ONCE per analyzer build (not ~1640 obj/s at
+      // 86 Hz) and mutate in place in onAnalysis. paramCenter.setMany() reads
+      // each entry synchronously and never retains the array, so reuse is safe.
+      const micWrites = [
+        { kind: 'scalar', key: 'micLow',     value: 0 },
+        { kind: 'scalar', key: 'micMid',     value: 0 },
+        { kind: 'scalar', key: 'micHigh',    value: 0 },
+        { kind: 'scalar', key: 'micKick',    value: 0 },
+        { kind: 'scalar', key: 'micFlux',    value: 0 },
+        { kind: 'scalar', key: 'micLowRaw',  value: 0 },
+        { kind: 'scalar', key: 'micMidRaw',  value: 0 },
+        { kind: 'scalar', key: 'micHighRaw', value: 0 },
+        { kind: 'scalar', key: 'micKickRaw', value: 0 },
+        { kind: 'scalar', key: 'micFluxRaw', value: 0 },
+        { kind: 'scalar', key: 'micDomFreq1',   value: 0 },
+        { kind: 'scalar', key: 'micDomEnergy1', value: 0 },
+        { kind: 'scalar', key: 'micDomFreq2',   value: 0 },
+        { kind: 'scalar', key: 'micDomEnergy2', value: 0 },
+        { kind: 'scalar', key: 'micOnsetLowRaw',  value: 0 },
+        { kind: 'scalar', key: 'micOnsetMidRaw',  value: 0 },
+        { kind: 'scalar', key: 'micOnsetHighRaw', value: 0 },
+        { kind: 'scalar', key: 'micSubRaw',       value: 0 },
+        { kind: 'scalar', key: 'micTonalStabilityRaw', value: 0 },
+        { kind: 'scalar', key: 'micChromaFluxRaw',     value: 0 },
+        { kind: 'scalar', key: 'micChromaTiltRaw',     value: 0 },
+      ];
       audioState.analyzer = new AudioAnalyzer({
         sampleRate: cfg.capture.sampleRate,
         fftSize:    cfg.fftSize,
         hopSize:    cfg.hopSize,
         bands:      cfg.bands,
         kick:       cfg.kick,
-        onAnalysis: ({ low, mid, high, kick, flux, domFreq1, domEnergy1, domFreq2, domEnergy2 }) => {
+        sub:        cfg.sub,   // analyzer_features (slot 3): sub-bass chest-hit window (optional)
+        onAnalysis: ({ low, mid, high, kick, flux, domFreq1, domEnergy1, domFreq2, domEnergy2,
+                       onsetLow, onsetMid, onsetHigh, micSub,
+                       tonalStability, chromaFlux, chromaTilt }) => {
           const nowMs = Date.now();
           const dt = lastAnalysisAtMs === 0 ? 0 : Math.max(0, (nowMs - lastAnalysisAtMs) / 1000);
           lastAnalysisAtMs = nowMs;
@@ -1661,30 +1832,39 @@ async function main() {
           // CaptainPad SIGNAL DIAGNOSTICS uses the *Raw keys to render
           // the raw row of the diagnostics strip. micFlux (docs/30) is
           // the spectral-flux primitive the structure detector reads.
-          paramCenter.setMany([
-            { kind: 'scalar', key: 'micLow',     value: lowPost  },
-            { kind: 'scalar', key: 'micMid',     value: midPost  },
-            { kind: 'scalar', key: 'micHigh',    value: highPost },
-            { kind: 'scalar', key: 'micKick',    value: kickPost },
-            { kind: 'scalar', key: 'micFlux',    value: fluxPost },
-            { kind: 'scalar', key: 'micLowRaw',  value: low      },
-            { kind: 'scalar', key: 'micMidRaw',  value: mid      },
-            { kind: 'scalar', key: 'micHighRaw', value: high     },
-            { kind: 'scalar', key: 'micKickRaw', value: kick     },
-            { kind: 'scalar', key: 'micFluxRaw', value: flux     },
-            // Dominant-frequency analyzer outputs (dom1/dom2 + energy).
-            { kind: 'scalar', key: 'micDomFreq1',   value: domFreq1   },
-            { kind: 'scalar', key: 'micDomEnergy1', value: domEnergy1 },
-            { kind: 'scalar', key: 'micDomFreq2',   value: domFreq2   },
-            { kind: 'scalar', key: 'micDomEnergy2', value: domEnergy2 },
-          ], 'audio', 'audio:mic');
-          // docs/30: run the structure detector at the analyzer hop rate
-          // (lowest latency, auto-pauses when the analyzer is off). It
-          // reads the live keys just written above and publishes its own
-          // five keys + the sparse dropFired event. No-ops when disabled.
-          audioStructureDetector.tick(nowMs, dt);
-          // Derived signals read the keys the analyzer + detector just wrote.
-          derivedSignals.tick(nowMs, dt);
+          // Mutate the hoisted payload in place (order matches micWrites above):
+          // post bands, raw bands, dom1/dom2 + energy, then the slot-3 RAW
+          // per-band onset strengths + sub-bass energy (additive analyzer
+          // outputs the band_onsets/sub_bass shapers read each hop).
+          micWrites[0].value  = lowPost;
+          micWrites[1].value  = midPost;
+          micWrites[2].value  = highPost;
+          micWrites[3].value  = kickPost;
+          micWrites[4].value  = fluxPost;
+          micWrites[5].value  = low;
+          micWrites[6].value  = mid;
+          micWrites[7].value  = high;
+          micWrites[8].value  = kick;
+          micWrites[9].value  = flux;
+          micWrites[10].value = domFreq1;
+          micWrites[11].value = domEnergy1;
+          micWrites[12].value = domFreq2;
+          micWrites[13].value = domEnergy2;
+          micWrites[14].value = onsetLow;
+          micWrites[15].value = onsetMid;
+          micWrites[16].value = onsetHigh;
+          micWrites[17].value = micSub;
+          micWrites[18].value = tonalStability;
+          micWrites[19].value = chromaFlux;
+          micWrites[20].value = chromaTilt;
+          paramCenter.setMany(micWrites, 'audio', 'audio:mic');
+          // (2026-06-21) The structure detector + derived signals are no longer
+          // ticked here — the Companion (sole analyzer) computes them and emits
+          // every derived key over OSC, which arrives via the /marsin/audio/*
+          // bindings. This engine-mic analyzer now writes only the RAW mic bands
+          // above (the audio.enabled path); the derived layer lives in the
+          // Companion. (`dt` is still consumed by the band writes; `nowMs` is the
+          // analyzer clock used by the capture/visualizer.)
         },
       });
       audioState.capture = new AudioCapture({
@@ -1758,9 +1938,9 @@ async function main() {
       // Rebuild from scratch — buildAndStartAudio reads audioState.config.
       await buildAndStartAudio();
     } else if (audioState.analyzer) {
-      // Hot reconfigure path — bands/kick only. Throws on invalid
+      // Hot reconfigure path — bands/kick/sub only. Throws on invalid
       // combinations; caller catches and returns 400.
-      audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick });
+      audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick, sub: next.sub });
       audioState.config = next;
     } else {
       audioState.config = next;
@@ -1806,7 +1986,7 @@ async function main() {
       enabled: audioState.config?.enabled,
     });
     if (audioState.analyzer) {
-      audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick });
+      audioState.analyzer.reconfigure({ bands: next.bands, kick: next.kick, sub: next.sub });
     }
     audioState.config = next;
     try {
@@ -2110,6 +2290,9 @@ async function main() {
       try { lOsc.stop(); } catch (_) { /* ignore */ }
     }
     try { bpmSync.detach(); } catch (_) { /* ignore */ }
+    // Stop the in-engine Timeline tick (docs/38 §15) before tearing the
+    // render loop / API down so no late cue fires into a half-shut engine.
+    try { apiServer.stopTimeline && apiServer.stopTimeline(); } catch (_) { /* ignore */ }
     loop.stop();
     // Release the HTTP/WS API socket so a replacement engine can re-bind
     // :6968 immediately (scene-switch restart). On a plain SIGINT/SIGTERM

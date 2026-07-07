@@ -129,3 +129,103 @@ trusting drop precision/recall.
   `corpus_relabel.mjs`.
 - Keep usage **non-commercial** (both datasets require it / are CC). Don't
   redistribute the audio; don't commit it.
+
+## Genre detection — datasets used (2026-06-20, dev/genre_signals)
+
+The party-mode genre classifier (`audio/signals/genre_classifier.js`) was
+developed and validated **offline against deterministic synthetic profiles**,
+NOT a fetched audio corpus. Rationale: this datacenter IP is bot-gated for
+YouTube/streaming audio (documented in report 20260616_1 §7), and the operator
+offered SoundCloud/Spotify creds that are not reachable here. The classifier is
+driven entirely from already-derived signals (BPM, kick density/regularity,
+band balance + high-band variance, note-change rate), so genre-characteristic
+**signal scenarios** are a faithful tuning/validation surface.
+
+Datasets / fixtures used:
+- **Synthetic genre scenarios** (`tests/genre_classifier.test.js`): per-genre
+  raw-signal profiles (techno / tech_house / house / downtempo …) constructed
+  from the musical priors in the classifier header. Deterministic, committed.
+- **`chord_progression` synth** (`audio/synth/test_synths.js`, new): a
+  bass-rooted 4-chord walk with clear NOTE CHANGES, used to validate the
+  note→colour cue (`audioSwitchColor`) end-to-end through the real analyzer.
+- The classifier's per-genre PROFILE vectors were tuned against the real
+  `AudioAnalyzer`'s measured feature vectors on these synthetic tracks (see the
+  PROFILE TUNING NOTE in `genre_classifier.js`).
+
+**Follow-up (needs un-gated network):** re-tune the genre profiles against real
+labelled audio per genre (e.g. a CC dance-music set, or the operator's
+SoundCloud/Spotify on a residential IP). The synthetic profiles are a solid
+v1 but real-audio tuning is the path to field-grade accuracy.
+
+## Real CC dance-music genre corpus (2026-06-20, dev/audio_corpus_real)
+
+The follow-up above is now **DONE for acquisition**: network audio fetch works
+from this environment, so we built a **real, genre-labelled, Creative-Commons
+dance-music corpus** from **archive.org** netlabel/electronic collections and
+stood up a reusable **genre-eval harness** to score the classifier on it.
+
+- **Source:** `https://archive.org` — searched per genre via the advancedsearch
+  API (`subject:(<genre>) AND mediatype:(audio) AND licenseurl:(*creativecommons*)`,
+  sorted by downloads), picked one audio file per item from
+  `/metadata/<id>`, downloaded from `/download/<id>/<file>`.
+- **Size:** **60 tracks, 6 per genre**, across **10 genres**: the 6 canonical
+  classifier genres (`techno`, `deep_house`, `melodic_house`, `tech_house`,
+  `melodic_techno`, `downtempo`) **plus 4 Burning-Man extras** (`house`,
+  `psytrance`, `drum_and_bass`, `progressive`) decoded but reported as
+  out-of-vocab (the classifier can only emit the 6 canonical genres).
+- **Processing:** each track trimmed to **60 s** (skipping the first 30 s to
+  avoid quiet intros) and decoded to **mono 44.1 kHz 16-bit WAV** with the
+  `ffmpeg-static` binary (same path the production file-replay decode uses).
+- **Licenses:** all Creative Commons (mix of CC0/public-domain-mark, CC-BY,
+  CC-BY-SA, CC-BY-NC, CC-BY-NC-ND). The **exact per-track license + identifier
+  + title + source URL** is recorded in
+  `datasets/genre_corpus_manifest.json` (committed; small). Use is **offline
+  analysis/tuning only** — the audio is never committed, never redistributed,
+  and no derivative work is distributed (so the ND tracks are fine for this).
+
+> ⚠️ Audio stays in **`~/tmp/genre_corpus/<genre>/<id>.wav`** (gitignored).
+> Only the manifest is committed.
+
+### Rebuild the corpus
+
+The fetch script is scratch (it lives in `~/tmp`, not the tree). To re-acquire
+(identifiers may rotate on archive.org — the manifest pins what we used):
+
+```bash
+# scratch fetch tool: ~/tmp/corpus_fetch/build_corpus.mjs
+node ~/tmp/corpus_fetch/build_corpus.mjs   # → ~/tmp/genre_corpus/<genre>/*.wav
+cp ~/tmp/genre_corpus_manifest.json marsin_engine/datasets/genre_corpus_manifest.json
+```
+
+### Evaluate the genre classifier on it
+
+`tools/genre_eval.mjs` runs each corpus WAV through the **REAL** engine audio
+chain (AudioAnalyzer → SignalPostProcessor → AudioStructureDetector →
+DerivedSignals), forces party mode on, collects the published `audioGenre`
+(tail majority vote), and scores it vs the folder label — printing a confusion
+matrix, per-genre accuracy, overall accuracy, and the **measured per-genre
+feature centroids** the classifier reads (for re-tuning the PROFILES).
+
+```bash
+cd marsin_engine
+node tools/genre_eval.mjs                       # default corpus ~/tmp/genre_corpus, fft 1024
+node tools/genre_eval.mjs --corpus <dir> --fft 2048 --json
+node tools/genre_eval.mjs --no-force-party      # also require the real party gate to fire
+node --test tests/genre_eval_harness.test.mjs   # CI guard (synthetic, no real-audio dep)
+```
+
+**Baseline (fftSize 1024, the shipped value):** **8/36 = 22.2%** overall on the
+6 scored genres (vs ~17% chance). Per-genre: downtempo 50%, techno 33%,
+tech_house 33%, deep_house 17%, melodic_house 0%, melodic_techno 0%. The
+classifier collapses most house/techno-family tracks onto **techno/tech_house**
+and **never emits melodic_house or melodic_techno**. See report
+`.agent/02_reports/202606/20260620_13_real_genre_corpus.md` for the confusion
+matrix, the measured feature centroids, and concrete PROFILE-tuning suggestions
+for the sibling that owns `genre_classifier.js`.
+
+**Corpus caveats (real-world noise, documented honestly):** a few archive.org
+items are mis-tagged at the source (e.g. some `house` hits are spoken-word/
+LibriVox), and `melodic_house`/`progressive` are dominated by a single netlabel
+artist (Prototype 202), so within-genre diversity is uneven. The numbers are a
+real, reproducible **lower bound** on field accuracy, not a polished benchmark —
+treat genre labels as the uploader's subject tags, not expert annotation.

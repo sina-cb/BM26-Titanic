@@ -3,9 +3,11 @@
 deploy.py — MAC-locked firmware deploy for Heltec controllers.
 =============================================================
 
-Reads ../.config.nodes.yaml, picks the firmware env + NODE_ID for the
-target node, and flashes ONLY the connected USB serial whose factory
-MAC matches the node's `usb_mac` field. Refuses to flash if:
+Reads ../.config.nodes.yaml (roles, committed) merged with the gitignored
+../.config.nodes.pairing.yaml (usb_mac per node — real device MACs stay out
+of this public repo; see utils/nodes_config.py), picks the firmware env +
+NODE_ID for the target node, and flashes ONLY the connected USB serial whose
+factory MAC matches the node's `usb_mac`. Refuses to flash if:
 
   - the target node has no `usb_mac` recorded (use --pair to set one), or
   - no currently-connected board has a MAC matching the recorded `usb_mac`.
@@ -30,12 +32,9 @@ First-deploy auto-pair
 ----------------------
 If the target node has no `usb_mac` set yet AND exactly one connected
 Heltec has a MAC that isn't already claimed by some other node, deploy
-will (after one [y/N] prompt) write that MAC into the YAML and proceed.
-If 0 or >1 boards are unclaimed, deploy refuses — explicit --pair is
-required to disambiguate.
-
-YAML edits use ruamel.yaml so the header comment block and per-node
-notes survive round-tripping unchanged.
+will (after one [y/N] prompt) write that MAC into the gitignored pairing
+overlay and proceed. If 0 or >1 boards are unclaimed, deploy refuses —
+explicit --pair is required to disambiguate.
 """
 
 from __future__ import annotations
@@ -59,20 +58,16 @@ if str(PODIUM_DIR) not in sys.path:
 import serial                                    # noqa: E402  (pyserial)
 import yaml                                      # noqa: E402
 
-# ruamel preserves comments + key order across round-trip writes, so
-# auto-pair / --clear can mutate .config.nodes.yaml in place without
-# clobbering the giant header comment that documents roles + reserved
-# IDs. Falls back to PyYAML for read-only paths so --list and --build
-# still work even if ruamel isn't installed.
-try:
-    from ruamel.yaml import YAML
-    _ruamel = YAML(typ="rt")
-    _ruamel.preserve_quotes = True
-    _ruamel.indent(mapping=2, sequence=4, offset=2)
-except ImportError:                              # pragma: no cover
-    _ruamel = None
-
 from utils.discovery import scan_ports, _normalize_mac  # noqa: E402
+# Pairing (usb_mac ↔ node) lives in the gitignored overlay file, managed
+# by utils/nodes_config.py — never in the committed .config.nodes.yaml.
+from utils.nodes_config import (                 # noqa: E402
+    PAIRING_FILENAME,
+    clear_all_pairings,
+    clear_pairing_mac,
+    load_nodes,
+    save_pairing_mac,
+)
 
 NODES_YAML = PODIUM_DIR / ".config.nodes.yaml"
 FIRMWARE_YAML = PODIUM_DIR / ".config.firmware.yaml"
@@ -128,21 +123,8 @@ def cprint(color: str, msg: str) -> None:
 
 
 # ── Config + node selection ─────────────────────────────────────────
-
-def load_nodes() -> dict:
-    """Return the `nodes` dict from .config.nodes.yaml.
-
-    PyYAML parses `0x01` keys as Python ints, so the dict is keyed by
-    integer node id.
-    """
-    if not NODES_YAML.exists():
-        sys.exit(f"missing {NODES_YAML}")
-    with open(NODES_YAML) as f:
-        data = yaml.safe_load(f) or {}
-    nodes = data.get("nodes", {})
-    if not isinstance(nodes, dict):
-        sys.exit(f"{NODES_YAML}: 'nodes' must be a mapping")
-    return nodes
+# load_nodes() comes from utils.nodes_config: committed roles merged with
+# the gitignored usb_mac pairing overlay, keyed by integer node id.
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -377,86 +359,11 @@ def _macs_used_in_yaml(nodes: dict, *, exclude_node: int | None = None) -> set[s
     }
 
 
-# ── ruamel-backed YAML edits (auto-pair / clear) ──────────────────
-
-def _require_ruamel(action: str) -> "YAML":
-    if _ruamel is None:
-        sys.exit(
-            f"{action} needs ruamel.yaml (preserves comments). Install with:\n"
-            "  pip install 'ruamel.yaml>=0.18'"
-        )
-    return _ruamel
-
-
-def _load_nodes_rt():
-    """Round-trip-loaded full doc (CommentedMap) for in-place editing."""
-    y = _require_ruamel("YAML edit")
-    with open(NODES_YAML) as f:
-        doc = y.load(f)
-    if doc is None or "nodes" not in doc:
-        sys.exit(f"{NODES_YAML}: no `nodes` mapping")
-    return doc
-
-
-def _save_nodes_rt(doc) -> None:
-    y = _require_ruamel("YAML edit")
-    with open(NODES_YAML, "w") as f:
-        y.dump(doc, f)
-
-
-def _node_key(doc_nodes, node_id: int):
-    """ruamel preserves the literal key (often a YAML int parsed from
-    `0x01`); look up tolerantly so callers can pass a plain int."""
-    if node_id in doc_nodes:
-        return node_id
-    for k in doc_nodes.keys():
-        if isinstance(k, int) and k == node_id:
-            return k
-    sys.exit(f"node 0x{node_id:02X} not found in {NODES_YAML.name}")
-
-
-def write_pairing(node_id: int, mac: str) -> None:
-    """Set or replace `usb_mac` on the node, preserving comments. The
-    MAC is emitted as a double-quoted scalar to match the hand-edited
-    entries in the file (and to dodge YAML-spec edge cases around bare
-    colon-containing strings on future edits).
-    """
-    doc = _load_nodes_rt()
-    nodes = doc["nodes"]
-    k = _node_key(nodes, node_id)
-    try:
-        from ruamel.yaml.scalarstring import DoubleQuotedScalarString
-        value = DoubleQuotedScalarString(mac.upper())
-    except ImportError:                              # pragma: no cover
-        value = mac.upper()
-    nodes[k]["usb_mac"] = value
-    _save_nodes_rt(doc)
-
-
-def clear_pairing(node_id: int) -> bool:
-    """Remove `usb_mac` from a node. Returns True if anything changed."""
-    doc = _load_nodes_rt()
-    nodes = doc["nodes"]
-    k = _node_key(nodes, node_id)
-    if "usb_mac" not in nodes[k]:
-        return False
-    del nodes[k]["usb_mac"]
-    _save_nodes_rt(doc)
-    return True
-
-
-def clear_all_pairings() -> int:
-    """Remove `usb_mac` from every node. Returns the count cleared."""
-    doc = _load_nodes_rt()
-    nodes = doc["nodes"]
-    cleared = 0
-    for k in list(nodes.keys()):
-        if "usb_mac" in nodes[k]:
-            del nodes[k]["usb_mac"]
-            cleared += 1
-    if cleared:
-        _save_nodes_rt(doc)
-    return cleared
+# ── Pairing edits ─────────────────────────────────────────────────
+# save_pairing_mac / clear_pairing_mac / clear_all_pairings come from
+# utils.nodes_config and edit ONLY the gitignored pairing overlay — the
+# committed .config.nodes.yaml (roles, giant header comment) is never
+# touched by pairing operations, so ruamel round-tripping is gone too.
 
 
 def _confirm(prompt: str, *, assume_yes: bool) -> bool:
@@ -907,7 +814,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     by_mac = {_normalize_mac(p["mac"]): p for p in ports}
     used_macs = set()
 
-    cprint("bold", "\nPaired nodes (.config.nodes.yaml):")
+    cprint("bold", f"\nPaired nodes (.config.nodes.yaml + {PAIRING_FILENAME}):")
     print(f"  {'NODE':<6} {'NAME':<20} {'ROLE':<10} {'TYPE':<12} {'USB_MAC':<19} {'PORT':<26} {'STATE'}")
     print(f"  {'─'*6} {'─'*20} {'─'*10} {'─'*12} {'─'*19} {'─'*26} {'─'*10}")
     for nid, n in sorted(nodes.items()):
@@ -972,11 +879,11 @@ def cmd_pair(args: argparse.Namespace, target_id: int, target_node: dict) -> int
     cprint("bold", f"\nPair node 0x{target_id:02X} ({target_node.get('name','?')}) →")
     print(f"  port: {chosen['port']}")
     print(f"  mac:  {chosen['mac']}")
-    if not _confirm("  Write this MAC into .config.nodes.yaml? [y/N] ", assume_yes=args.yes):
+    if not _confirm(f"  Write this MAC into {PAIRING_FILENAME}? [y/N] ", assume_yes=args.yes):
         cprint("yellow", "  aborted")
         return 130
 
-    write_pairing(target_id, chosen["mac"])
+    save_pairing_mac(target_id, chosen["mac"])
     cprint("green", f"  ✓ wrote usb_mac={chosen['mac']} under 0x{target_id:02X}")
     return 0
 
@@ -994,7 +901,7 @@ def cmd_clear(args: argparse.Namespace, target_id: int, target_node: dict) -> in
     ):
         cprint("yellow", "  aborted")
         return 130
-    if clear_pairing(target_id):
+    if clear_pairing_mac(target_id):
         cprint("green", f"  ✓ removed usb_mac from 0x{target_id:02X}")
     return 0
 
@@ -1111,7 +1018,7 @@ def cmd_deploy(args: argparse.Namespace, target_id: int, target_node: dict) -> i
         chosen = _pick_unclaimed_board(nodes, exclude_node=target_id)
         if chosen is None:
             sys.exit(
-                f"node 0x{target_id:02X} has no `usb_mac` set in {NODES_YAML.name}, "
+                f"node 0x{target_id:02X} has no `usb_mac` paired in {PAIRING_FILENAME}, "
                 "and no connected Heltec is unclaimed.\n"
                 f"Plug in the target board, or run: python deploy.py --node 0x{target_id:02X} --pair"
             )
@@ -1126,7 +1033,7 @@ def cmd_deploy(args: argparse.Namespace, target_id: int, target_node: dict) -> i
         ):
             cprint("yellow", "  aborted (no YAML written)")
             return 130
-        write_pairing(target_id, chosen["mac"])
+        save_pairing_mac(target_id, chosen["mac"])
         cprint("green", f"  ✓ wrote usb_mac={chosen['mac']} under 0x{target_id:02X}")
         expected_mac = chosen["mac"]
 
@@ -1223,7 +1130,7 @@ def main() -> int:
     ap.add_argument("--pair", action="store_true",
                     help="persist a usb_mac pairing for --node/--role (requires the lone unclaimed board to be the right one)")
     ap.add_argument("--clear", action="store_true",
-                    help="remove --node/--role's usb_mac pairing from .config.nodes.yaml")
+                    help=f"remove --node/--role's usb_mac pairing from {PAIRING_FILENAME}")
     ap.add_argument("--clear-all", action="store_true",
                     help="remove every node's usb_mac pairing (asks first)")
     ap.add_argument("--no-verify", action="store_true", help="skip post-flash banner check")

@@ -13,7 +13,7 @@
     }
   },
   "realWorldEngineeringPriors": {
-    "source": ".agent/02_reports/202605/20260526_2_drop_mood_detection_research.md §key-findings 2",
+    "source": ".agent/reports/202605/20260526_2_drop_mood_detection_research.md §key-findings 2",
     "note": "engineering priors, NOT measured here; unmet target for a real Phase-3 corpus",
     "precision": [
       0.65,

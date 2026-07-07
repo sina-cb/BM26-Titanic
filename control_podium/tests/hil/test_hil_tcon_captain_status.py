@@ -67,7 +67,6 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
 
 BASE = Path(__file__).resolve().parent.parent.parent       # control_podium/
 if str(BASE) not in sys.path:
@@ -77,6 +76,7 @@ from companions.client_companion import Client                  # noqa: E402
 from comms.frame import TYPE_QRY, TYPE_REP                       # noqa: E402
 from comms.radio_port_serial import RadioPortSerial              # noqa: E402
 from utils.discovery import find_port_by_mac                     # noqa: E402
+from utils.nodes_config import load_nodes                        # noqa: E402
 
 # Node 0x0A is "sina" / role captain — see .config.nodes.yaml.
 CAPTAIN_NODE_ID = 0x0A
@@ -91,9 +91,7 @@ def _captain_port_or_skip() -> str:
     cleanly if it isn't plugged in. We resolve by MAC (the same way
     firmware/deploy.py does) so an arbitrary port number doesn't
     confuse the test on a machine with multiple USB serials."""
-    nodes = yaml.safe_load(
-        (BASE / ".config.nodes.yaml").read_text(encoding="utf-8")
-    )["nodes"]
+    nodes = load_nodes(BASE)
     entry = nodes.get(CAPTAIN_NODE_ID) or nodes.get(
         f"0x{CAPTAIN_NODE_ID:02X}"
     )
@@ -104,8 +102,9 @@ def _captain_port_or_skip() -> str:
     mac = entry.get("usb_mac")
     if not mac:
         pytest.skip(
-            f"node 0x{CAPTAIN_NODE_ID:02X} has no usb_mac — pair the captain "
-            "Heltec via firmware/deploy.py before running HIL tests"
+            f"node 0x{CAPTAIN_NODE_ID:02X} has no usb_mac paired "
+            "(.config.nodes.pairing.yaml) — pair the captain Heltec via "
+            "firmware/deploy.py before running HIL tests"
         )
     port = find_port_by_mac(mac)
     if not port:
