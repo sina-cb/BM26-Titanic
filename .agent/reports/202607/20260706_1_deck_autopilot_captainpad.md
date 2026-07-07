@@ -39,11 +39,41 @@ No new npm dependencies — `PanResponder` + `Modal` are core RN.
 ## Commits (on `dev/deck_autopilot_captainpad`)
 
 ```
+8d051ee fix(captainpad): F3 use deckChannelId to key pane remounts
+be7a690 fix(captainpad): F2 gate the pane-2 close button with disabled
+3ac91dd fix(captainpad): F1 clamp split ratio to 0.5 on short containers
 6ac06e0 feat(captainpad): U2 split playlist panes
 94bc8e7 feat(captainpad): U1 autopilot profile dropdown
 ```
 
-(parent tip `0252d37 docs(plan): autopilot+deck improvement multi-agent project dossiers`)
+(parent tip `0252d37 docs(plan): autopilot+deck improvement multi-agent project dossiers`;
+the `docs(report)` commit for this file follows the three review fixes.)
+
+## Review fixes (coordinator, post-U2)
+
+A pre-merge review flagged three small issues; all fixed on-branch, tsc+lint
+green after each, zero new warnings:
+
+- **F1 (moderate)** — `split_playlist_panes.tsx` `effectiveClamp` returned the
+  raw unclamped ratio when the container was shorter than `2·MIN_PANE_PT`
+  (280pt); on a short narrow-layout column a drag could compute a ratio outside
+  `[0,1]` → NEGATIVE `flexGrow` on pane 1. Now returns a fixed `0.5` in that
+  case (dossier §Resizable split), leaving the STORED ratio untouched. Companion
+  mitigation: narrow/stacked col-1 `minHeight` raised 320→480 when a secondary is
+  bound (`index.tsx`), so the split card can seat two `MIN_PANE` panes and keep
+  the drag live. Commit `3ac91dd`.
+- **F2 (low)** — the pane-2 ✕ (`onClosePane`) `TouchableOpacity` had no
+  `disabled`; during `deckSwapInFlight` (dim, no scrim) it stayed tappable while
+  siblings were gated. Added `disabled={disabled}` + dimmed opacity; the handler
+  keeps its `planGate` write-path guard. Commit `be7a690`.
+- **F3 (low)** — `deckChannelId` was destructured + documented but unused. Now
+  applied as `key={\`primary-${deckChannelId}\`}` / `secondary-…` on the three
+  pane wrappers so a deck-channel-id change remounts the panes with fresh
+  per-instance state (matching the prop's documented intent). Commit `8d051ee`.
+
+Review also judged the "typed guards degrade to documented defaults" pattern
+ACCEPTABLE (no codex violation — no non-2xx/unreachable engine is ever masked);
+no change made there.
 
 ## Checks (HONEST)
 
@@ -51,7 +81,7 @@ Baseline BEFORE any change (recorded per brief):
 - `npx tsc --noEmit`: **PASS** (exit 0).
 - `npm run lint`: **PASS** (exit 0) — 15 pre-existing warnings, 0 errors.
 
-After U1 and after U2 (final tip):
+After U1, U2, AND the three review fixes F1/F2/F3 (final tip):
 - `git diff --check -- CaptainPad`: **PASS** (no whitespace errors).
 - `npx tsc --noEmit`: **PASS** (exit 0).
 - `npm run lint`: **PASS** (exit 0) — **15 warnings, 0 errors; ZERO new
@@ -108,8 +138,9 @@ Working tree clean at handoff. Never `--no-verify`, never pushed, never merged.
   ()=>false` so the column ScrollView can't steal the drag; `onPanResponder
   Terminate` mirrors release (browser `pointercancel`); live drag updates LOCAL
   state only, POST once on release/terminate. `MIN_PANE_PT = 140` clamp via an
-  `effectiveClamp` bound to the `onLayout` container height; when `h < 2·MIN` the
-  stored ratio is left untouched. Pane 2 is opt-in/collapsed by default — a slim
+  `effectiveClamp` bound to the `onLayout` container height; when `h < 2·MIN` it
+  forces a fixed `0.5` (F1 fix — leaving the STORED ratio untouched). Pane 2 is
+  opt-in/collapsed by default — a slim
   dashed `+ SECOND PLAYLIST` bar under pane 1; expanding reveals an UNASSIGNED
   secondary panel whose LOAD… dropdown binds a playlist; the pane's ✕
   (`onClosePane`) clears the slot AND collapses. `secondaryBound` (from engine
