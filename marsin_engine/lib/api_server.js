@@ -6,6 +6,22 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { Autopilot } from './autopilot.js';
 import { ColorAutopilot } from './color_autopilot.js';
+import {
+  AUTO_GROUP_SIZE_MIN,
+  AUTO_GROUP_SIZE_MAX,
+  AUTO_GROUP_SIZE_DEFAULT,
+  AUTO_GROUP_DWELL_MIN,
+  AUTO_GROUP_DWELL_MAX,
+  AUTO_GROUP_DWELL_DEFAULT,
+  clampInt,
+  pickNextAutoCycleEntry,
+} from './autopilot_pick.js';
+import {
+  AUTOPILOT_PROFILES,
+  AUTOPILOT_PROFILE_DEFAULT,
+  normalizeAutopilotProfile,
+  createAutopilotProfile,
+} from './autopilot_profiles/profile_registry.js';
 import { StateManager, serializeChannel as serializeChannelForState } from './state_manager.js';
 import { SnapshotManager, SnapshotLoadError } from './snapshot_manager.js';
 import { ParamPresetManager, ParamPresetError } from './param_preset_manager.js';
@@ -361,24 +377,22 @@ export function autoCycleDueDecision(channel, nowMs) {
   return (nowMs - channel._autoCycleLastAdvanceMs >= delayMs) ? 'due' : 'wait';
 }
 
-// ── Auto-cycle group-locality clamps (single source of truth) ─────────
-// PATTERN-GROUP LOCALITY (feat/optimize_channels): the autopilot grabs a
-// small WINDOW of adjacent playlist entries, dwells within it for a number of
-// swaps, then releases and grabs a fresh window. The window size and dwell
-// count are clamped here so a stale/garbage on-disk value can't form a
-// degenerate (1-wide) or runaway window. Defaults match the field docs.
-export const AUTO_GROUP_SIZE_MIN = 2;
-export const AUTO_GROUP_SIZE_MAX = 8;
-export const AUTO_GROUP_SIZE_DEFAULT = 3;
-export const AUTO_GROUP_DWELL_MIN = 1;
-export const AUTO_GROUP_DWELL_MAX = 50;
-export const AUTO_GROUP_DWELL_DEFAULT = 6;
-
-const clampInt = (raw, lo, hi, dflt) => {
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return dflt;
-  return Math.max(lo, Math.min(hi, Math.trunc(n)));
-};
+// ── Auto-cycle group-locality clamps + pure picker ────────────────────
+// PATTERN-GROUP LOCALITY (feat/optimize_channels): these clamps + the pure
+// `pickNextAutoCycleEntry` picker were EXTRACTED to `lib/autopilot_pick.js`
+// (autopilot profile seam, 2026-07-06) so the autopilot profiles can import
+// the picker without a circular dependency on this module. They are re-exported
+// here VERBATIM so every historical import path (`from './api_server.js'`) —
+// unit tests, external tooling — keeps resolving the identical symbols.
+export {
+  AUTO_GROUP_SIZE_MIN,
+  AUTO_GROUP_SIZE_MAX,
+  AUTO_GROUP_SIZE_DEFAULT,
+  AUTO_GROUP_DWELL_MIN,
+  AUTO_GROUP_DWELL_MAX,
+  AUTO_GROUP_DWELL_DEFAULT,
+  pickNextAutoCycleEntry,
+} from './autopilot_pick.js';
 
 // Normalize the three group-locality fields off any autopilot-ish object for
 // serialize / broadcast / restore (single shape, single source of clamps).
@@ -389,82 +403,10 @@ const autoGroupFields = (ap) => ({
   groupDwell: clampInt(ap && ap.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT),
 });
 
-// ── Auto-cycle next-entry pick (pure, unit-tested) ────────────────────
-// MIRRORS the deck Autopilot advance pick (api_server deck daemon): when
-// group-locality is armed, dwell within a window of adjacent entries, else
-// shuffle picks a random OTHER usable entry, else sequential walks forward
-// skipping `_missing`. `usable` excludes `_missing` entries.
-// Returns the chosen entry, or null when there is nothing to advance to (no
-// usable entries).
-//
-// PATTERN-GROUP LOCALITY: when `autopilot.groupMode` is true AND there are
-// strictly more usable entries than the window size, dwell state lives in the
-// caller-owned mutable `groupRuntime` ({ windowIds, swapsLeft }) so the window
-// + remaining-swap count persist ACROSS advances. The function reads and
-// MUTATES `groupRuntime` in place (the contract); randomness via Math.random
-// matches shuffle. With group-locality off (default), or too few usable
-// entries, group mode is a no-op and the existing shuffle/sequential logic
-// runs unchanged — `groupRuntime` may be omitted by those callers.
-export function pickNextAutoCycleEntry(pl, autopilot, curEntryId, groupRuntime) {
-  if (!pl || !Array.isArray(pl.entries) || pl.entries.length === 0) return null;
-  const usable = pl.entries.filter(e => !e._missing);
-  if (usable.length === 0) return null;
-  // PATTERN-GROUP LOCALITY: dwell inside a rolling window of adjacent usable
-  // entries. No-op (fall through) unless armed AND the playlist is bigger than
-  // one window — otherwise the "window" would be the whole list, defeating the
-  // point. Needs a mutable runtime to carry dwell state across advances.
-  const groupSize = clampInt(
-    autopilot && autopilot.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX,
-    AUTO_GROUP_SIZE_DEFAULT,
-  );
-  if (autopilot && autopilot.groupMode && groupRuntime && usable.length > groupSize) {
-    const groupDwell = clampInt(
-      autopilot.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX,
-      AUTO_GROUP_DWELL_DEFAULT,
-    );
-    const win = groupRuntime.windowIds;
-    const haveWindow = Array.isArray(win) && win.length > 0;
-    const curInWindow = haveWindow && win.includes(curEntryId);
-    // Form a FRESH window when there is none, the dwell expired, or we've
-    // wandered out of the current window (manual tap / loop release landed
-    // elsewhere). A fresh random start is fine even when re-forming.
-    if (!haveWindow || groupRuntime.swapsLeft <= 0 || !curInWindow) {
-      const start = Math.floor(Math.random() * usable.length);
-      const windowIds = [];
-      for (let i = 0; i < groupSize; i++) {
-        windowIds.push(usable[(start + i) % usable.length].id);
-      }
-      groupRuntime.windowIds = windowIds;
-      groupRuntime.swapsLeft = groupDwell;
-    }
-    // Pick a random entry from the window that is NOT the current one (no
-    // immediate repeat); if the window collapsed to only the current entry,
-    // replay it. Decrement the dwell counter (mutate in place — the contract).
-    const choices = groupRuntime.windowIds.filter(id => id !== curEntryId);
-    const pickId = choices.length
-      ? choices[Math.floor(Math.random() * choices.length)]
-      : curEntryId;
-    groupRuntime.swapsLeft -= 1;
-    const picked = usable.find(e => e.id === pickId);
-    if (picked) return picked;
-    // The chosen id is no longer usable (entry removed mid-dwell) — force a
-    // fresh window next call and fall through to sequential this beat.
-    groupRuntime.windowIds = null;
-    groupRuntime.swapsLeft = 0;
-  }
-  if (autopilot && autopilot.shuffle) {
-    const others = usable.filter(e => e.id !== curEntryId);
-    return others.length ? others[Math.floor(Math.random() * others.length)] : usable[0];
-  }
-  // Sequential: walk forward from the current index, skipping _missing.
-  const idx = pl.entries.findIndex(e => e.id === curEntryId);
-  let nextIdx = (idx + 1) % pl.entries.length;
-  for (let i = 0; i < pl.entries.length; i++) {
-    if (!pl.entries[nextIdx]._missing) return pl.entries[nextIdx];
-    nextIdx = (nextIdx + 1) % pl.entries.length;
-  }
-  return null;
-}
+// `pickNextAutoCycleEntry` now lives in `lib/autopilot_pick.js` (see the
+// re-export block above). It is unchanged — the deck daemon, the mixer/overlay
+// auto-cycle ticks, and the `random` autopilot profile all call the SAME pure
+// picker via that module.
 
 // ── Deck transition durationMs bounds (single source of truth) ─────────
 // The /deck/transition-config POST and the internal
@@ -997,6 +939,35 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     ...(deckState && deckState.transitionConfig ? deckState.transitionConfig : {}),
   };
 
+  // ── Deck playlist SLOTS (split playlists — two stacked panes) ──────────
+  // The deck plays exactly ONE pattern (channel.playlist stays the single live
+  // pointer). These SLOTS are stable name bindings the two CaptainPad panes
+  // browse independently; the live pointer moves between them. `primary` = pane
+  // 1 (as today), `secondary` = an optional pane 2, `splitRatio` = the divider
+  // position. Persisted per-scene in deck_state.yaml under `playlistSlots` (see
+  // saveAllState). Boot-validated below (unbound-null / dead-secondary / bad
+  // ratio) before first use.
+  const DECK_SPLIT_RATIO_MIN = 0.15;
+  const DECK_SPLIT_RATIO_MAX = 0.85;
+  const DECK_SPLIT_RATIO_DEFAULT = 0.5;
+  const deckPlaylistSlots = {
+    primary: null,
+    secondary: null,
+    splitRatio: DECK_SPLIT_RATIO_DEFAULT,
+    ...(deckState && deckState.playlistSlots ? deckState.playlistSlots : {}),
+  };
+
+  // Keep pane 1 (primary) following any live playlist-name change that is NOT
+  // the secondary. Called at the two choke points where channel.playlist.name
+  // changes (instant load + transition onComplete), so timeline cues / legacy
+  // POST /deck/playlist / autopilot advances all keep pane 1 pointed at the
+  // deck's main list — and structurally prevents both panes binding one name.
+  function noteDeckLivePlaylist(name) {
+    if (name && name !== deckPlaylistSlots.secondary) {
+      deckPlaylistSlots.primary = name;
+    }
+  }
+
   if (paramCenter) {
     paramCenter.saveHook = () => stateManager.saveGlobalsState(globalsState, paramCenter);
   }
@@ -1271,6 +1242,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
         ...autoGroupFields(mixer.deckOverlayAutopilot),
       },
+      // Split-playlist SLOTS: persist the two name bindings + the divider ratio
+      // per-scene so the panes + split survive an engine restart. Plain scalars
+      // (name strings / null / a number) — restored + validated at boot.
+      playlistSlots: {
+        primary: deckPlaylistSlots.primary,
+        secondary: deckPlaylistSlots.secondary,
+        splitRatio: deckPlaylistSlots.splitRatio,
+      },
     });
   }
 
@@ -1493,6 +1472,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // load lands on the deck channel.
     if (mixer.getDeckChannel && mixer.getDeckChannel()?.id === channel.id) {
       pushActiveEntryToModulation();
+      // Split-playlist choke point (instant path): keep pane 1 (primary)
+      // following the live playlist name unless it's the secondary slot.
+      noteDeckLivePlaylist(playlistName);
     }
 
     return { entry, index: idx, total: playlist.entries.length };
@@ -1901,6 +1883,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // Refresh modulation context for the new entry now that the
         // deck channel's handle and playlist tuple reflect the swap.
         pushActiveEntryToModulation();
+        // Split-playlist choke point (transition path): keep pane 1 (primary)
+        // following the live playlist name unless it's the secondary slot. This
+        // runs BEFORE saveAllState so the persisted slots reflect the swap.
+        noteDeckLivePlaylist(playlistName);
 
         opts.pattern = channel.pattern;
         saveAllState();
@@ -2169,6 +2155,66 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         fader: 1.0,
         enabled: true
       }, 'deck');
+    }
+
+    // AUTOPILOT PROFILE restore validation (per-scene). The profile name rides
+    // baseCh.playlist.autopilot.profile via serializeChannel. A present-but-
+    // UNKNOWN value (e.g. an old scene saved a profile since removed) is a
+    // restore-time bomb — the boot arm would throw. Detect it, WARN loudly, and
+    // clear to the documented default so the daemon boots clean (clone of the
+    // dangling-activeEntryId precedent above). Absent → leave absent; the
+    // normalizer applies the default at read time.
+    {
+      const deckCh = mixer.getDeckChannel();
+      const ap = deckCh && deckCh.playlist ? deckCh.playlist.autopilot : null;
+      if (ap && ap.profile !== undefined && ap.profile !== null && ap.profile !== '') {
+        try {
+          normalizeAutopilotProfile(ap.profile);
+        } catch (e) {
+          console.warn(
+            `[Restore] deck autopilot profile '${ap.profile}' is unknown ` +
+            `(${e.message}) — clearing to '${AUTOPILOT_PROFILE_DEFAULT}'.`);
+          ap.profile = AUTOPILOT_PROFILE_DEFAULT;
+        }
+      }
+    }
+
+    // DECK PLAYLIST SLOTS restore validation (per-scene). Runs after the deck
+    // channel is rebuilt so `primary` can seed from the live playlist name.
+    {
+      const deckCh = mixer.getDeckChannel();
+      const livePlaylistName = deckCh && deckCh.playlist ? deckCh.playlist.name : null;
+      // primary unbound → seed it from the live deck playlist (pane 1 = today's
+      // deck list). null when the deck has no playlist at all.
+      if (deckPlaylistSlots.primary == null) {
+        deckPlaylistSlots.primary = livePlaylistName ?? null;
+      }
+      // secondary bound to a playlist that no longer exists → warn + clear
+      // (clone of the dangling-activeEntryId precedent).
+      if (deckPlaylistSlots.secondary != null
+          && !playlistManager.tryLoad(deckPlaylistSlots.secondary)) {
+        console.warn(
+          `[Restore] deck secondary playlist '${deckPlaylistSlots.secondary}' ` +
+          `not found — clearing the slot.`);
+        deckPlaylistSlots.secondary = null;
+      }
+      // secondary === primary is a structural violation (both panes one name) →
+      // clear secondary.
+      if (deckPlaylistSlots.secondary != null
+          && deckPlaylistSlots.secondary === deckPlaylistSlots.primary) {
+        console.warn(
+          `[Restore] deck secondary playlist equals primary ` +
+          `('${deckPlaylistSlots.secondary}') — clearing the secondary slot.`);
+        deckPlaylistSlots.secondary = null;
+      }
+      // splitRatio non-finite / out of [0.15, 0.85] → warn + reset to 0.5.
+      const r = deckPlaylistSlots.splitRatio;
+      if (!Number.isFinite(r) || r < DECK_SPLIT_RATIO_MIN || r > DECK_SPLIT_RATIO_MAX) {
+        console.warn(
+          `[Restore] deck splitRatio '${r}' out of [${DECK_SPLIT_RATIO_MIN}, ` +
+          `${DECK_SPLIT_RATIO_MAX}] — resetting to ${DECK_SPLIT_RATIO_DEFAULT}.`);
+        deckPlaylistSlots.splitRatio = DECK_SPLIT_RATIO_DEFAULT;
+      }
     }
 
     if (hasMixer) {
@@ -2661,6 +2707,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return deck ? serializeChannel(deck) : null;
   }
 
+  // Serialize one deck playlist SLOT (a name binding) into the wire shape the
+  // CaptainPad panes consume. A slot reflects LIVE-ness: only the slot whose
+  // name matches the live deck pointer carries the real activeEntryId/cursor —
+  // a NON-live slot has activeEntryId:null (so the pane draws no highlight and
+  // every tap fires the drive path). Returns null for an unbound slot.
+  function serializeDeckPlaylistSlot(slotName) {
+    if (!slotName) return null;
+    const live = (mixer.getDeckChannel && mixer.getDeckChannel())
+      ? mixer.getDeckChannel().playlist : null;
+    const isLive = !!(live && live.name === slotName);
+    return {
+      name: slotName,
+      activeEntryId: isLive ? (live.activeEntryId || null) : null,
+      cursor: isLive ? (live.cursor || 0) : 0,
+      autopilot: (isLive && live.autopilot) || { active: false, delay_s: 30, shuffle: false },
+      live: isLive,
+    };
+  }
+
   function serializeDeckState() {
     return {
       type: 'deck',
@@ -2670,6 +2735,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // Lets the deck tab show a fade-in-progress affordance.
       masterFade: mixer.getMasterFade ? mixer.getMasterFade() : null,
       channel: serializeDeckChannel(),
+      // Split-playlist SLOTS (two stacked panes). Folded into the `deck` message
+      // (NO new WS type) — connect-replay carries it for free. Same slot object
+      // shape GET /deck/playlist/slots returns, byte-identical, so CaptainPad
+      // feeds both into one assignment path.
+      playlistSlots: {
+        primary: serializeDeckPlaylistSlot(deckPlaylistSlots.primary),
+        secondary: serializeDeckPlaylistSlot(deckPlaylistSlots.secondary),
+        splitRatio: deckPlaylistSlots.splitRatio,
+      },
       // Deck dynamic view overrides (deck overlays). Folded into the `deck`
       // WS message (the deck tab already subscribes) so existing subscribers
       // get them free — NO new WS type. order[0] = bottom, order[last] = top.
@@ -2963,18 +3037,30 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     const ap = baseCh && baseCh.playlist ? baseCh.playlist.autopilot : null;
     return ap || { active: false, delay_s: 30, shuffle: false };
   }
-  function broadcastAutopilot() {
+  // Single builder for the `autopilot` WS payload — used by broadcastAutopilot()
+  // AND the connect-replay so a late joiner and a live update carry byte-
+  // identical fields (incl. the profile dropdown state). Centralizing this is
+  // why the connect replay below no longer hand-builds its own object.
+  function buildAutopilotPayload() {
     const st = deckAutopilotState();
-    broadcastWs({
+    return {
       type: 'autopilot',
       active: !!st.active,
       delay_s: st.delay_s !== undefined ? String(st.delay_s) : '30',
       shuffle: !!st.shuffle,
-      // Wall-clock ms of the next pattern swap (null when inactive) — drives the
-      // deck's "next pattern in M:SS" countdown. Re-broadcast on every cycle via
-      // the daemon's onSchedule hook so it stays fresh after each swap.
+      // Active profile (normalized) + the full list of selectable profiles, so
+      // the CaptainPad dropdown paints the current pick and its options without
+      // a separate GET. Absent → the documented default via the normalizer.
+      profile: normalizeAutopilotProfile(st.profile),
+      profiles: AUTOPILOT_PROFILES,
+      // Wall-clock ms of the next pattern swap (null when inactive OR event-
+      // driven) — drives the deck's "next pattern in M:SS" countdown. Re-
+      // broadcast on every cycle via the daemon's onSchedule hook.
       nextSwapAtMs: (typeof autopilot !== 'undefined' && autopilot) ? autopilot.nextSwapAtMs : null,
-    });
+    };
+  }
+  function broadcastAutopilot() {
+    broadcastWs(buildAutopilotPayload());
   }
 
   // Autopilot advance is main's frame-driven system: the deck `autopilot`
@@ -3305,13 +3391,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (usable.length === 0) return;
 
         const cur = baseCh.playlist.activeEntryId;
-        // Selection is the SHARED pure picker (group→shuffle→sequential) —
-        // the SAME `pickNextAutoCycleEntry` the mixer overlay ticks use, so
-        // the deck and overlays can never drift. It applies group-locality,
-        // then shuffle/sequential. Group dwell state lives on the deck base
+        // Selection dispatches on the active PROFILE. The `random` profile wraps
+        // the SHARED pure picker (group→shuffle→sequential) — the SAME
+        // `pickNextAutoCycleEntry` the mixer overlay ticks use, so the deck and
+        // overlays can never drift. Group dwell state lives on the deck base
         // channel's transient `_autoGroup` (reset by loadPlaylistEntry on every
-        // manual tap / (re-)load, so a manual tap starts a fresh group).
-        const nextEntry = pickNextAutoCycleEntry(
+        // manual tap / (re-)load, so a manual tap starts a fresh group). A
+        // missing profile is a wiring bug — throw (the daemon's catch warns).
+        if (!activeAutopilotProfile) {
+          throw new Error('no active autopilot profile');
+        }
+        const nextEntry = activeAutopilotProfile.pickNextEntry(
           pl, baseCh.playlist.autopilot, cur, baseCh._autoGroup);
         if (!nextEntry) return;
         // Route through the deck-transition path: if the operator has
@@ -3346,6 +3436,61 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // pattern-autopilot countdown stays accurate after each swap.
     () => broadcastAutopilot(),
   );
+
+  // ── Autopilot PROFILE management ─────────────────────────────────────
+  // The active profile instance drives BOTH the daemon timing (via
+  // autopilot.setProfile → nextDelayMs) AND the next-entry pick (via the
+  // selection callback above → activeAutopilotProfile.pickNextEntry). One
+  // instance is live at a time; swapping detaches the old and attaches the new.
+  //
+  // Persistence: the profile NAME lives on `baseCh.playlist.autopilot.profile`
+  // (per-scene, rides serializeChannel → deck_state.yaml — zero new plumbing).
+  // The instance itself is transient runtime state, re-derived from that name.
+  let activeAutopilotProfile = null;
+
+  // The ctx a profile's attach() receives. `requestAdvance` routes through the
+  // daemon's generation-guarded _runTick (so audio-driven advances honour the
+  // same await-swap + EBUSY-skip as timer advances). `applyColorPalette`/
+  // `resolveColorPaletteParams`/`colorAutopilot` are captured lazily (resolved
+  // at call time, long after boot) so the audio-reactive profile can drive
+  // palette + speed without re-wiring this block in E2.
+  function buildAutopilotProfileCtx() {
+    return {
+      paramCenter,
+      requestAdvance: () => autopilot.requestAdvance(),
+      state: () => autopilot.state,
+      applyColorPalette: (id) => applyColorPalette(id),
+      knownPaletteIds: () => knownPaletteIds(),
+      colorPalettes: () => (Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : []),
+      triggerColorNext: () => { if (colorAutopilot) colorAutopilot.triggerNext(); },
+    };
+  }
+
+  // Read the persisted profile name off the live deck channel (documented
+  // default when absent). NEVER throws here — restore-time validation already
+  // cleared any unknown value to 'random' (see the deck restore block), so a
+  // live read is always a known name.
+  function currentAutopilotProfileName() {
+    const baseCh = mixer.getDeckChannel();
+    const ap = baseCh && baseCh.playlist ? baseCh.playlist.autopilot : null;
+    return normalizeAutopilotProfile(ap && ap.profile);
+  }
+
+  // (Re)build the active profile instance from a name, detaching any prior one.
+  // Throws on an unknown name (createAutopilotProfile → normalize) — callers at
+  // the route boundary map that to a 400 BEFORE persisting.
+  function armAutopilotProfile(name) {
+    const next = createAutopilotProfile(name);
+    if (activeAutopilotProfile && typeof activeAutopilotProfile.detach === 'function') {
+      try { activeAutopilotProfile.detach(); } catch (e) {
+        console.warn('[Autopilot] profile detach failed:', e && e.message ? e.message : e);
+      }
+    }
+    activeAutopilotProfile = next;
+    autopilot.setProfile(next);
+    if (typeof next.attach === 'function') next.attach(buildAutopilotProfileCtx());
+    return next;
+  }
 
   // ── COLOR autopilot (palette cycling, docs/39) ──────────────────────
   // Resolve a colorPalette id → CPC params and WRITE it (the SAME path looks /
@@ -4793,7 +4938,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.end(JSON.stringify(live));
     } else if (req.method === 'GET' && req.url === '/autopilot') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(deckAutopilotState()));
+      // Return a NEW object carrying the dropdown fields (CaptainPad seeds
+      // profile state from this GET). deckAutopilotState() returns the LIVE
+      // `playlist.autopilot` ref, which is persisted to deck_state.yaml — we
+      // must NOT add `profiles` in place or the array leaks into saved state.
+      const st = deckAutopilotState();
+      res.end(JSON.stringify({
+        ...st,
+        profile: normalizeAutopilotProfile(st.profile),
+        profiles: AUTOPILOT_PROFILES,
+      }));
     } else if (req.method === 'POST' && req.url === '/autopilot') {
       readBody(data => {
         // Deck autopilot route (PortWatch over LoRa, scripts, CaptainPad's
@@ -7449,11 +7603,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               name: pl.name, activeEntryId: null, cursor: 0,
               autopilot: (baseCh.playlist && baseCh.playlist.autopilot) || { active: false, delay_s: 30, shuffle: false }
             };
+            // Split-playlist: pane 1 (primary) follows this live-name change.
+            noteDeckLivePlaylist(pl.name);
             saveAllState();
             res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: baseCh.playlist }));
             broadcastMixerState();
             return;
           }
+          // loadPlaylistEntry calls noteDeckLivePlaylist internally (deck path).
           loadPlaylistEntry(baseCh, pl.name, firstEntry.id);
           saveAllState();
           opts.pattern = baseCh.pattern;
@@ -7464,15 +7621,102 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
         }
       });
+    } else if (req.method === 'GET' && req.url === '/deck/playlist/slots') {
+      // Split-playlist SLOTS snapshot. Byte-identical shape to the `deck` WS
+      // message's `playlistSlots` (CaptainPad feeds both into one path).
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        primary: serializeDeckPlaylistSlot(deckPlaylistSlots.primary),
+        secondary: serializeDeckPlaylistSlot(deckPlaylistSlots.secondary),
+        splitRatio: deckPlaylistSlots.splitRatio,
+      }));
+    } else if (req.method === 'POST' && req.url === '/deck/playlist/secondary') {
+      readBody(data => {
+        const baseCh = mixer.getDeckChannel();
+        if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
+        // CLEAR: {name:null} detaches pane 2 (the ✕ button sends this). If the
+        // secondary is currently LIVE, promote it to primary so the deck keeps
+        // playing (primary = live name), then clear secondary.
+        if (data.name === null) {
+          const live = baseCh.playlist ? baseCh.playlist.name : null;
+          if (live && live === deckPlaylistSlots.secondary) {
+            deckPlaylistSlots.primary = live;
+          }
+          deckPlaylistSlots.secondary = null;
+          saveAllState();
+          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: null }));
+          broadcastDeckState();
+          return;
+        }
+        if (typeof data.name !== 'string' || !data.name) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'name must be a playlist name string or null' }));
+        }
+        // 400 if it would bind the same name to both panes (structural rule).
+        if (data.name === deckPlaylistSlots.primary) {
+          res.writeHead(400);
+          return res.end(JSON.stringify({ error: `secondary cannot equal the primary playlist '${data.name}'` }));
+        }
+        const pl = playlistManager.load(data.name);
+        if (!pl) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+        // Browse-only: assigning pane 2 does NOT change what's playing. The pane
+        // adopts res.playlist as canonical + a channelPlaylistData broadcast
+        // primes its cache so it renders instantly.
+        deckPlaylistSlots.secondary = data.name;
+        const slot = serializeDeckPlaylistSlot(data.name);
+        saveAllState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: slot }));
+        broadcastWs({
+          type: 'channelPlaylistData', channelId: 'secondary',
+          playlist: slot, playlistData: pl,
+        });
+        broadcastDeckState();
+      });
+    } else if (req.method === 'POST' && req.url === '/deck/playlist/split') {
+      readBody(data => {
+        // Bounds are INCLUSIVE [0.15, 0.85] — CaptainPad clamps its drag to
+        // exactly those boundary values and WILL POST them, so use </> (NOT
+        // <=/>=) or every full drag would 400. Fail loud on a bad value
+        // (no clamp-on-write, codex P0).
+        const ratio = Number(data.ratio);
+        if (!Number.isFinite(ratio) || ratio < DECK_SPLIT_RATIO_MIN || ratio > DECK_SPLIT_RATIO_MAX) {
+          res.writeHead(400);
+          return res.end(JSON.stringify({
+            error: `ratio must be a finite number in [${DECK_SPLIT_RATIO_MIN}, ${DECK_SPLIT_RATIO_MAX}], got '${data.ratio}'`,
+          }));
+        }
+        deckPlaylistSlots.splitRatio = ratio;
+        saveAllState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', splitRatio: ratio }));
+        broadcastDeckState();
+      });
     } else if (req.method === 'POST' && req.url === '/deck/playlist/entry') {
       readBody(data => {
         const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
-        if (!baseCh.playlist || !baseCh.playlist.name) {
-          res.writeHead(400); return res.end(JSON.stringify({ error: 'no playlist loaded' }));
-        }
         if (!data.entryId) {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'entryId required' }));
+        }
+        // SPLIT PLAYLISTS: an optional `slot` names which pane drives. Omitted →
+        // legacy behaviour (drive the live playlist). Given → resolve the slot's
+        // bound playlist NAME and drive it (this is what flips the live pointer
+        // between panes). A given-but-unbound slot is a 400.
+        let playlistName;
+        if (data.slot !== undefined) {
+          if (data.slot !== 'primary' && data.slot !== 'secondary') {
+            res.writeHead(400);
+            return res.end(JSON.stringify({ error: `slot must be 'primary' or 'secondary', got '${data.slot}'` }));
+          }
+          playlistName = deckPlaylistSlots[data.slot];
+          if (!playlistName) {
+            res.writeHead(400);
+            return res.end(JSON.stringify({ error: `deck ${data.slot} slot is not bound to a playlist` }));
+          }
+        } else {
+          // Legacy path: drive the currently-live playlist.
+          if (!baseCh.playlist || !baseCh.playlist.name) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: 'no playlist loaded' }));
+          }
+          playlistName = baseCh.playlist.name;
         }
         try {
           // Route through the deck-transition helper. With transitions
@@ -7481,7 +7725,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // swap and broadcasts a `deckSwapStarted` event so the UI can
           // show pending state, then `deckSwapComplete` on landing.
           const r = loadPlaylistEntryWithTransition(
-            baseCh, baseCh.playlist.name, data.entryId, deckTransitionConfig,
+            baseCh, playlistName, data.entryId, deckTransitionConfig,
           );
           res.writeHead(200);
           res.end(JSON.stringify({
@@ -7529,6 +7773,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       readBody(data => {
         const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
+        // PROFILE: validate BEFORE mutating anything so an unknown value fails
+        // the whole request atomically (400, loud — codex P0, no silent coerce).
+        // Clone the trans_* validation posture at /deck/transition-config.
+        let nextProfileName = null;
+        if (data.profile !== undefined) {
+          try {
+            nextProfileName = normalizeAutopilotProfile(data.profile);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: e.message }));
+          }
+        }
         baseCh.playlist = baseCh.playlist || { name: null, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
         const ap = baseCh.playlist.autopilot = baseCh.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
         if (data.active !== undefined) ap.active = !!data.active;
@@ -7545,14 +7801,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           ap.groupDwell = clampInt(
             data.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT);
         }
+        // PROFILE: persist the name + re-arm the profile instance when it
+        // changed. Re-arm detaches the old profile (unsubscribes / restores any
+        // CPC globals it set) and attaches the new one, so switching from
+        // audio_reactive back to random tears down the audio subscriptions
+        // cleanly. Also reset the group window (mirrors the group-field reset)
+        // so the new profile starts from a fresh baseline.
+        const profileChanged = nextProfileName !== null
+          && nextProfileName !== normalizeAutopilotProfile(ap.profile);
+        if (nextProfileName !== null) ap.profile = nextProfileName;
         // Reconfiguring group-locality starts a fresh group (drop the window).
-        if (data.groupMode !== undefined || data.groupSize !== undefined || data.groupDwell !== undefined) {
+        if (data.groupMode !== undefined || data.groupSize !== undefined
+            || data.groupDwell !== undefined || profileChanged) {
           if (baseCh._autoGroup) { baseCh._autoGroup.windowIds = null; baseCh._autoGroup.swapsLeft = 0; }
         }
+        if (profileChanged) armAutopilotProfile(nextProfileName);
         saveAllState();
         // Drive main's deck daemon timer from the now-updated autopilot block
         // (active/delay reschedule the self-rescheduling setTimeout; shuffle +
         // group are read live from baseCh.playlist.autopilot by the picker).
+        // NOTE: armAutopilotProfile already bumped the generation + rescheduled
+        // under the new profile's timing; updateState reschedules again with the
+        // active/delay change — both converge on the same profile.nextDelayMs.
         autopilot.updateState({ active: ap.active, delay_s: String(ap.delay_s), shuffle: ap.shuffle });
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok', autopilot: ap }));
         broadcastMixerState();
@@ -7875,6 +8145,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       console.error('Server error:', e);
     }
   });
+  // Arm the deck autopilot PROFILE from the restored per-scene state BEFORE the
+  // daemon starts — armAutopilotProfile injects the timing profile the daemon's
+  // first _scheduleNext will consult (timer vs event-driven). The name was
+  // validated + cleared to 'random' at restore, so this never throws.
+  armAutopilotProfile(currentAutopilotProfileName());
   // Start main's deck Autopilot daemon. Its active/delay live in config.yaml
   // (autopilot.state); the next-entry pick reads the restored deck
   // playlist.autopilot live. Mixer + deck overlays resume on their own — the
@@ -7905,17 +8180,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // see the same values that the existing one-shot REST loads would
     // have given them — without having to wait for the next change.
     try {
-      const st = deckAutopilotState();
-      ws.send(JSON.stringify({
-        type: 'autopilot',
-        active: !!st.active,
-        delay_s: st.delay_s !== undefined ? String(st.delay_s) : '30',
-        shuffle: !!st.shuffle,
-        // Include the next-swap time so a late-joining deck paints the pattern
-        // countdown immediately (mirrors broadcastAutopilot + the colorAutopilot
-        // snapshot below, which already spreads the field).
-        nextSwapAtMs: (typeof autopilot !== 'undefined' && autopilot) ? autopilot.nextSwapAtMs : null,
-      }));
+      // Shared builder so the late-joiner replay carries the SAME fields as a
+      // live broadcastAutopilot() — including `profile` + `profiles` for the
+      // dropdown, and the next-swap countdown time.
+      ws.send(JSON.stringify(buildAutopilotPayload()));
     } catch (e) {
       // never let a snapshot send break a fresh WS handshake
     }

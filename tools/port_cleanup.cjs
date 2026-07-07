@@ -16,6 +16,15 @@ const { execFileSync } = require('child_process');
 
 const IS_WIN = process.platform === 'win32';
 
+// `netstat -ano` / `lsof` output on a box with a large TCP connection table
+// (tens of thousands of TIME_WAIT entries — common on a busy control machine)
+// can run to several MB, which blows past execFileSync's default 1 MB maxBuffer
+// and throws ENOBUFS — making freeStackPorts fatal and crashing EVERY non-dry-
+// run engine boot. Give the port-inspection calls a generous ceiling so a large
+// connection table can never turn port cleanup into a boot failure. Offline-safe
+// (no network), and the buffer is only held transiently during parsing.
+const PORT_SCAN_MAX_BUFFER = 64 * 1024 * 1024;
+
 // Command-line fragments that identify a process as part of this stack.
 const STACK_PROCESS_SIGNATURES = [
   'start.js', 'engine.js', 'save-server.js', 'sacn_bridge.js',
@@ -33,7 +42,9 @@ const STACK_PROCESS_SIGNATURES = [
 function listenersOnPort(port, opts = {}) {
   const udp = opts.udp === true;
   if (IS_WIN) {
-    const out = execFileSync('netstat', ['-ano', '-p', udp ? 'udp' : 'tcp'], { encoding: 'utf8' });
+    const out = execFileSync('netstat', ['-ano', '-p', udp ? 'udp' : 'tcp'], {
+      encoding: 'utf8', maxBuffer: PORT_SCAN_MAX_BUFFER,
+    });
     const pids = new Set();
     for (const line of out.split('\n')) {
       const cols = line.trim().split(/\s+/);
@@ -47,7 +58,7 @@ function listenersOnPort(port, opts = {}) {
   const sel = udp ? `-iUDP:${port}` : `-iTCP:${port}`;
   const args = udp ? ['-t', '-nP', sel] : ['-t', '-nP', sel, '-sTCP:LISTEN'];
   try {
-    const out = execFileSync('lsof', args, { encoding: 'utf8' });
+    const out = execFileSync('lsof', args, { encoding: 'utf8', maxBuffer: PORT_SCAN_MAX_BUFFER });
     return out.split('\n').map((s) => s.trim()).filter(Boolean).map(Number);
   } catch (err) {
     if (err.status === 1) return []; // lsof exits 1 when nothing matches
