@@ -223,6 +223,11 @@ consumer).
 
 ## Audio-reactive profile behavior (design)
 
+**Guiding principle (operator, 2026-07-06): PATTERN reacts to DYNAMICS (fast —
+energy transients), COLOR reacts to STABLE STATE (slow — sustained changes).**
+The two are deliberately driven by different time-scales of the same energy
+signal so they don't fire together.
+
 Using only signals proven to exist:
 - **Pattern advance:** `nextDelayMs` → `null`; subscribe `audioSwitchPattern`,
   `ctx.requestAdvance()` on trigger (edge or 200 ms window per Spike 0).
@@ -230,16 +235,54 @@ Using only signals proven to exist:
   safety advance (default 300). Suppress when `audioSilence==1`/`audioParty<0.5`.
 - **Pick bias:** `audioEnergyRatio>0.6` → shuffle; `audioSlowZone>0.55` →
   group-locality.
-- **Color:** on `audioSwitchColor`, map `audioNoteHue`→nearest curated palette
-  by `c1` hue distance over `engineCore.colorPalettes` (`api_server.js:3356-3364`),
-  apply via `timelineSetColorAutopilot` (`:3448-3460`) or
-  `colorAutopilot.triggerNext()`. Optional `audioGenre` subset gated on
-  `audioGenreConf>0.5`.
 - **Speed:** set CPC `bpmSpeedSync=1` + `bpmSpeedMin/Max` on `attach`, restore
-  on `detach` (read-modify-restore, no fallback).
+  on `detach` (read-modify-restore, no fallback). See energy-arc below for the
+  slow-down behavior layered on top.
 - **Transition punch:** high `audioRiserScore`/`audioDropCountdown` → short deck
   transition; slow zone → long crossfade (`setDeckTransition`, `:469-474`).
 - **Brightness:** none unless operator gate flips.
+
+### Energy-arc dynamics — slow-down + switch (operator request, 2026-07-06)
+
+The profile keeps a **smoothed energy envelope**: `energyFast` = EMA of
+`audioEnergyRatio` (τ ≈ 2 s) and `energySlow` = a longer EMA (τ ≈ 8–12 s), plus
+`audioSlowZone` as a corroborating regime signal. On each frame it compares them.
+
+- **Stable high→low energy shift ⇒ SLOW THE PATTERN DOWN.** When `energyFast`
+  is in a *sustained* decline (`energyFast < energySlow` held for ≥ ~4 s, and/or
+  `audioSlowZone` rising), continuously ramp the pattern speed **downward** — a
+  smooth map from the smoothed energy to a speed multiplier / the `speed` CPC
+  (lower energy → slower), never stepwise. This layers on the BPM speed sync:
+  the profile drives an energy-derived speed *scale* that sags as the music
+  calms. Ramp back up only as energy stably recovers (hysteresis, no jitter).
+- **Sudden energy PICKUP ⇒ PATTERN SWITCH.** On a fast *positive* jump in
+  `energyFast` (rising slope over a threshold within ~1 s, i.e. the low→high
+  transition after a calm stretch) → `ctx.requestAdvance()` (still honoring
+  `minIntervalMs`). **Predictive is preferred but optional:** pre-arm the switch
+  slightly ahead using `audioRiserScore` / `audioDropCountdown` / `audioBuildEta`
+  so the change lands *on* the pickup; a **small reactive delay** after the
+  pickup is explicitly acceptable per the operator, so a non-predictive
+  slope-trigger is a valid v1. `audioDropPulse` is the strongest confirmation.
+- This composes with the existing `audioSwitchPattern` trigger — treat the
+  energy-pickup as an *additional* advance source OR'd into the same
+  `requestAdvance()` path (both go through `minIntervalMs`), so drops and
+  energy-pickups both switch patterns without double-firing.
+
+### Color on STABLE audio changes (operator request, 2026-07-06)
+
+Color must change on **settled** shifts in the audio situation, NOT on the
+transients that drive pattern. The profile tracks a coarse **situation
+descriptor** — quantized energy band (from `energySlow`) + section/regime
+(`audioSlowZone` / `audioStructure` when trustworthy) + held note class
+(`audioNote`) — and only triggers a color change when that descriptor **changes
+and then holds** for a dwell (≈ 4–8 s, hysteresis + hold). On such a stable
+change, map the settled `audioNoteHue` → nearest curated palette by `c1` hue
+distance over `engineCore.colorPalettes` (`api_server.js:3356-3364`), applied
+via `timelineSetColorAutopilot` (`:3448-3460`) or `colorAutopilot.triggerNext()`;
+optional `audioGenre` subset gated on `audioGenreConf>0.5`. Use `audioSwitchColor`
+only as a *candidate* moment that still must pass the stable-hold gate — a
+raw drop/onset alone must NOT recolor. Net effect: colors drift with the
+song's mood, not its beats.
 
 ## Open questions (feed the master's gate list)
 
@@ -269,3 +312,8 @@ Using only signals proven to exist:
   `PatternAutopilotPanel`.
 - **2026-07-06** — v1 excludes spectral-centroid palette temperature and
   per-entry energy matching (neither exists) — additive follow-ups.
+- **2026-07-06 (operator add)** — Energy-arc: stable high→low energy ramps
+  pattern speed DOWN; sudden low→high pickup triggers a pattern SWITCH
+  (predictive nice, small reactive delay OK). COLOR is gated to *stable/settled*
+  audio changes (dwell-held situation descriptor), never on the transients that
+  drive pattern. Pattern = dynamics/fast, color = stable-state/slow.
