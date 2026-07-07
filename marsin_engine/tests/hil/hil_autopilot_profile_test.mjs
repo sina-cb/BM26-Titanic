@@ -203,6 +203,25 @@ function stopEngine() {
       sub.stop(); ws.close(); await sleep(50);
     }
 
+    // ── GET /autopilot carries profile + profiles (CaptainPad seeds from it) ─
+    console.log('\n[TEST 3b] GET /autopilot carries profile + profiles');
+    {
+      const g = await httpJson('GET', '/autopilot');
+      check(g.status === 200, `GET /autopilot → 200 (got ${g.status})`, 'GET /autopilot failed');
+      check(g.body && g.body.profile === 'random' && Array.isArray(g.body.profiles)
+        && g.body.profiles.includes('audio_reactive'),
+        `GET /autopilot body carries profile:'random' + profiles`,
+        'GET /autopilot missing profile/profiles', JSON.stringify(g.body).slice(0, 200));
+      // The fix must NOT leak `profiles` into the persisted live autopilot ref:
+      // GET /deck/channel (the persisted-shaped object) must NOT carry it.
+      const dc = await httpJson('GET', '/deck/channel');
+      const ap = dc.body && dc.body.channel && dc.body.channel.playlist
+        && dc.body.channel.playlist.autopilot;
+      check(ap && ap.profiles === undefined,
+        'the live/persisted autopilot ref does NOT carry the profiles array',
+        'GET /autopilot leaked profiles into the persisted ref', JSON.stringify(ap).slice(0, 200));
+    }
+
     // ── Switch to audio_reactive → 200, broadcast flips ───────────────────
     console.log('\n[TEST 4] POST profile:audio_reactive → 200, broadcast flips');
     {

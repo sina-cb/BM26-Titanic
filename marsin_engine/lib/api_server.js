@@ -939,6 +939,35 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     ...(deckState && deckState.transitionConfig ? deckState.transitionConfig : {}),
   };
 
+  // ── Deck playlist SLOTS (split playlists — two stacked panes) ──────────
+  // The deck plays exactly ONE pattern (channel.playlist stays the single live
+  // pointer). These SLOTS are stable name bindings the two CaptainPad panes
+  // browse independently; the live pointer moves between them. `primary` = pane
+  // 1 (as today), `secondary` = an optional pane 2, `splitRatio` = the divider
+  // position. Persisted per-scene in deck_state.yaml under `playlistSlots` (see
+  // saveAllState). Boot-validated below (unbound-null / dead-secondary / bad
+  // ratio) before first use.
+  const DECK_SPLIT_RATIO_MIN = 0.15;
+  const DECK_SPLIT_RATIO_MAX = 0.85;
+  const DECK_SPLIT_RATIO_DEFAULT = 0.5;
+  const deckPlaylistSlots = {
+    primary: null,
+    secondary: null,
+    splitRatio: DECK_SPLIT_RATIO_DEFAULT,
+    ...(deckState && deckState.playlistSlots ? deckState.playlistSlots : {}),
+  };
+
+  // Keep pane 1 (primary) following any live playlist-name change that is NOT
+  // the secondary. Called at the two choke points where channel.playlist.name
+  // changes (instant load + transition onComplete), so timeline cues / legacy
+  // POST /deck/playlist / autopilot advances all keep pane 1 pointed at the
+  // deck's main list — and structurally prevents both panes binding one name.
+  function noteDeckLivePlaylist(name) {
+    if (name && name !== deckPlaylistSlots.secondary) {
+      deckPlaylistSlots.primary = name;
+    }
+  }
+
   if (paramCenter) {
     paramCenter.saveHook = () => stateManager.saveGlobalsState(globalsState, paramCenter);
   }
@@ -1213,6 +1242,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
         ...autoGroupFields(mixer.deckOverlayAutopilot),
       },
+      // Split-playlist SLOTS: persist the two name bindings + the divider ratio
+      // per-scene so the panes + split survive an engine restart. Plain scalars
+      // (name strings / null / a number) — restored + validated at boot.
+      playlistSlots: {
+        primary: deckPlaylistSlots.primary,
+        secondary: deckPlaylistSlots.secondary,
+        splitRatio: deckPlaylistSlots.splitRatio,
+      },
     });
   }
 
@@ -1435,6 +1472,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // load lands on the deck channel.
     if (mixer.getDeckChannel && mixer.getDeckChannel()?.id === channel.id) {
       pushActiveEntryToModulation();
+      // Split-playlist choke point (instant path): keep pane 1 (primary)
+      // following the live playlist name unless it's the secondary slot.
+      noteDeckLivePlaylist(playlistName);
     }
 
     return { entry, index: idx, total: playlist.entries.length };
@@ -1843,6 +1883,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // Refresh modulation context for the new entry now that the
         // deck channel's handle and playlist tuple reflect the swap.
         pushActiveEntryToModulation();
+        // Split-playlist choke point (transition path): keep pane 1 (primary)
+        // following the live playlist name unless it's the secondary slot. This
+        // runs BEFORE saveAllState so the persisted slots reflect the swap.
+        noteDeckLivePlaylist(playlistName);
 
         opts.pattern = channel.pattern;
         saveAllState();
@@ -2132,6 +2176,44 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             `(${e.message}) — clearing to '${AUTOPILOT_PROFILE_DEFAULT}'.`);
           ap.profile = AUTOPILOT_PROFILE_DEFAULT;
         }
+      }
+    }
+
+    // DECK PLAYLIST SLOTS restore validation (per-scene). Runs after the deck
+    // channel is rebuilt so `primary` can seed from the live playlist name.
+    {
+      const deckCh = mixer.getDeckChannel();
+      const livePlaylistName = deckCh && deckCh.playlist ? deckCh.playlist.name : null;
+      // primary unbound → seed it from the live deck playlist (pane 1 = today's
+      // deck list). null when the deck has no playlist at all.
+      if (deckPlaylistSlots.primary == null) {
+        deckPlaylistSlots.primary = livePlaylistName ?? null;
+      }
+      // secondary bound to a playlist that no longer exists → warn + clear
+      // (clone of the dangling-activeEntryId precedent).
+      if (deckPlaylistSlots.secondary != null
+          && !playlistManager.tryLoad(deckPlaylistSlots.secondary)) {
+        console.warn(
+          `[Restore] deck secondary playlist '${deckPlaylistSlots.secondary}' ` +
+          `not found — clearing the slot.`);
+        deckPlaylistSlots.secondary = null;
+      }
+      // secondary === primary is a structural violation (both panes one name) →
+      // clear secondary.
+      if (deckPlaylistSlots.secondary != null
+          && deckPlaylistSlots.secondary === deckPlaylistSlots.primary) {
+        console.warn(
+          `[Restore] deck secondary playlist equals primary ` +
+          `('${deckPlaylistSlots.secondary}') — clearing the secondary slot.`);
+        deckPlaylistSlots.secondary = null;
+      }
+      // splitRatio non-finite / out of [0.15, 0.85] → warn + reset to 0.5.
+      const r = deckPlaylistSlots.splitRatio;
+      if (!Number.isFinite(r) || r < DECK_SPLIT_RATIO_MIN || r > DECK_SPLIT_RATIO_MAX) {
+        console.warn(
+          `[Restore] deck splitRatio '${r}' out of [${DECK_SPLIT_RATIO_MIN}, ` +
+          `${DECK_SPLIT_RATIO_MAX}] — resetting to ${DECK_SPLIT_RATIO_DEFAULT}.`);
+        deckPlaylistSlots.splitRatio = DECK_SPLIT_RATIO_DEFAULT;
       }
     }
 
@@ -2625,6 +2707,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return deck ? serializeChannel(deck) : null;
   }
 
+  // Serialize one deck playlist SLOT (a name binding) into the wire shape the
+  // CaptainPad panes consume. A slot reflects LIVE-ness: only the slot whose
+  // name matches the live deck pointer carries the real activeEntryId/cursor —
+  // a NON-live slot has activeEntryId:null (so the pane draws no highlight and
+  // every tap fires the drive path). Returns null for an unbound slot.
+  function serializeDeckPlaylistSlot(slotName) {
+    if (!slotName) return null;
+    const live = (mixer.getDeckChannel && mixer.getDeckChannel())
+      ? mixer.getDeckChannel().playlist : null;
+    const isLive = !!(live && live.name === slotName);
+    return {
+      name: slotName,
+      activeEntryId: isLive ? (live.activeEntryId || null) : null,
+      cursor: isLive ? (live.cursor || 0) : 0,
+      autopilot: (isLive && live.autopilot) || { active: false, delay_s: 30, shuffle: false },
+      live: isLive,
+    };
+  }
+
   function serializeDeckState() {
     return {
       type: 'deck',
@@ -2634,6 +2735,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // Lets the deck tab show a fade-in-progress affordance.
       masterFade: mixer.getMasterFade ? mixer.getMasterFade() : null,
       channel: serializeDeckChannel(),
+      // Split-playlist SLOTS (two stacked panes). Folded into the `deck` message
+      // (NO new WS type) — connect-replay carries it for free. Same slot object
+      // shape GET /deck/playlist/slots returns, byte-identical, so CaptainPad
+      // feeds both into one assignment path.
+      playlistSlots: {
+        primary: serializeDeckPlaylistSlot(deckPlaylistSlots.primary),
+        secondary: serializeDeckPlaylistSlot(deckPlaylistSlots.secondary),
+        splitRatio: deckPlaylistSlots.splitRatio,
+      },
       // Deck dynamic view overrides (deck overlays). Folded into the `deck`
       // WS message (the deck tab already subscribes) so existing subscribers
       // get them free — NO new WS type. order[0] = bottom, order[last] = top.
@@ -4828,7 +4938,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.end(JSON.stringify(live));
     } else if (req.method === 'GET' && req.url === '/autopilot') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(deckAutopilotState()));
+      // Return a NEW object carrying the dropdown fields (CaptainPad seeds
+      // profile state from this GET). deckAutopilotState() returns the LIVE
+      // `playlist.autopilot` ref, which is persisted to deck_state.yaml — we
+      // must NOT add `profiles` in place or the array leaks into saved state.
+      const st = deckAutopilotState();
+      res.end(JSON.stringify({
+        ...st,
+        profile: normalizeAutopilotProfile(st.profile),
+        profiles: AUTOPILOT_PROFILES,
+      }));
     } else if (req.method === 'POST' && req.url === '/autopilot') {
       readBody(data => {
         // Deck autopilot route (PortWatch over LoRa, scripts, CaptainPad's
@@ -7484,11 +7603,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               name: pl.name, activeEntryId: null, cursor: 0,
               autopilot: (baseCh.playlist && baseCh.playlist.autopilot) || { active: false, delay_s: 30, shuffle: false }
             };
+            // Split-playlist: pane 1 (primary) follows this live-name change.
+            noteDeckLivePlaylist(pl.name);
             saveAllState();
             res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: baseCh.playlist }));
             broadcastMixerState();
             return;
           }
+          // loadPlaylistEntry calls noteDeckLivePlaylist internally (deck path).
           loadPlaylistEntry(baseCh, pl.name, firstEntry.id);
           saveAllState();
           opts.pattern = baseCh.pattern;
@@ -7499,15 +7621,102 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
         }
       });
+    } else if (req.method === 'GET' && req.url === '/deck/playlist/slots') {
+      // Split-playlist SLOTS snapshot. Byte-identical shape to the `deck` WS
+      // message's `playlistSlots` (CaptainPad feeds both into one path).
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        primary: serializeDeckPlaylistSlot(deckPlaylistSlots.primary),
+        secondary: serializeDeckPlaylistSlot(deckPlaylistSlots.secondary),
+        splitRatio: deckPlaylistSlots.splitRatio,
+      }));
+    } else if (req.method === 'POST' && req.url === '/deck/playlist/secondary') {
+      readBody(data => {
+        const baseCh = mixer.getDeckChannel();
+        if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
+        // CLEAR: {name:null} detaches pane 2 (the ✕ button sends this). If the
+        // secondary is currently LIVE, promote it to primary so the deck keeps
+        // playing (primary = live name), then clear secondary.
+        if (data.name === null) {
+          const live = baseCh.playlist ? baseCh.playlist.name : null;
+          if (live && live === deckPlaylistSlots.secondary) {
+            deckPlaylistSlots.primary = live;
+          }
+          deckPlaylistSlots.secondary = null;
+          saveAllState();
+          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: null }));
+          broadcastDeckState();
+          return;
+        }
+        if (typeof data.name !== 'string' || !data.name) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'name must be a playlist name string or null' }));
+        }
+        // 400 if it would bind the same name to both panes (structural rule).
+        if (data.name === deckPlaylistSlots.primary) {
+          res.writeHead(400);
+          return res.end(JSON.stringify({ error: `secondary cannot equal the primary playlist '${data.name}'` }));
+        }
+        const pl = playlistManager.load(data.name);
+        if (!pl) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+        // Browse-only: assigning pane 2 does NOT change what's playing. The pane
+        // adopts res.playlist as canonical + a channelPlaylistData broadcast
+        // primes its cache so it renders instantly.
+        deckPlaylistSlots.secondary = data.name;
+        const slot = serializeDeckPlaylistSlot(data.name);
+        saveAllState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: slot }));
+        broadcastWs({
+          type: 'channelPlaylistData', channelId: 'secondary',
+          playlist: slot, playlistData: pl,
+        });
+        broadcastDeckState();
+      });
+    } else if (req.method === 'POST' && req.url === '/deck/playlist/split') {
+      readBody(data => {
+        // Bounds are INCLUSIVE [0.15, 0.85] — CaptainPad clamps its drag to
+        // exactly those boundary values and WILL POST them, so use </> (NOT
+        // <=/>=) or every full drag would 400. Fail loud on a bad value
+        // (no clamp-on-write, codex P0).
+        const ratio = Number(data.ratio);
+        if (!Number.isFinite(ratio) || ratio < DECK_SPLIT_RATIO_MIN || ratio > DECK_SPLIT_RATIO_MAX) {
+          res.writeHead(400);
+          return res.end(JSON.stringify({
+            error: `ratio must be a finite number in [${DECK_SPLIT_RATIO_MIN}, ${DECK_SPLIT_RATIO_MAX}], got '${data.ratio}'`,
+          }));
+        }
+        deckPlaylistSlots.splitRatio = ratio;
+        saveAllState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', splitRatio: ratio }));
+        broadcastDeckState();
+      });
     } else if (req.method === 'POST' && req.url === '/deck/playlist/entry') {
       readBody(data => {
         const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
-        if (!baseCh.playlist || !baseCh.playlist.name) {
-          res.writeHead(400); return res.end(JSON.stringify({ error: 'no playlist loaded' }));
-        }
         if (!data.entryId) {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'entryId required' }));
+        }
+        // SPLIT PLAYLISTS: an optional `slot` names which pane drives. Omitted →
+        // legacy behaviour (drive the live playlist). Given → resolve the slot's
+        // bound playlist NAME and drive it (this is what flips the live pointer
+        // between panes). A given-but-unbound slot is a 400.
+        let playlistName;
+        if (data.slot !== undefined) {
+          if (data.slot !== 'primary' && data.slot !== 'secondary') {
+            res.writeHead(400);
+            return res.end(JSON.stringify({ error: `slot must be 'primary' or 'secondary', got '${data.slot}'` }));
+          }
+          playlistName = deckPlaylistSlots[data.slot];
+          if (!playlistName) {
+            res.writeHead(400);
+            return res.end(JSON.stringify({ error: `deck ${data.slot} slot is not bound to a playlist` }));
+          }
+        } else {
+          // Legacy path: drive the currently-live playlist.
+          if (!baseCh.playlist || !baseCh.playlist.name) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: 'no playlist loaded' }));
+          }
+          playlistName = baseCh.playlist.name;
         }
         try {
           // Route through the deck-transition helper. With transitions
@@ -7516,7 +7725,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // swap and broadcasts a `deckSwapStarted` event so the UI can
           // show pending state, then `deckSwapComplete` on landing.
           const r = loadPlaylistEntryWithTransition(
-            baseCh, baseCh.playlist.name, data.entryId, deckTransitionConfig,
+            baseCh, playlistName, data.entryId, deckTransitionConfig,
           );
           res.writeHead(200);
           res.end(JSON.stringify({
