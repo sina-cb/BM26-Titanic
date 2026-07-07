@@ -58,6 +58,25 @@ export const LIGHTING_PROFILES = {
       coneMode: 'pixel',
       effectsMode: 'on'
     }
+  },
+  // 2D-only headless profile: the engine + DMX/sACN pipeline run and the 2D
+  // Pixel Map renders, but ALL per-frame GPU 3D work is skipped (scene render,
+  // bloom, shadows, spotlight pool, instanced-dot flush, fixture visuals). Lets
+  // the sim drive real fixtures + a 2D preview on a low-power box (Raspberry Pi)
+  // with no capable GPU. `headless: true` is the flag animate() gates on.
+  '2d_pixels': {
+    label: "2D Pixels (Pi / no-GPU)",
+    category: "lite",
+    isEditMode: false,
+    mappingEnabled: true,
+    allowConesUi: false,
+    headless: true,
+    render: {
+      emitterMode: 'none',
+      analyticLightMode: 'none',
+      coneMode: 'none',
+      effectsMode: 'off'
+    }
   }
 };
 

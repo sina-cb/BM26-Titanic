@@ -2904,3 +2904,113 @@ body.edit-mode-active #engine-params-panel {
   font-weight: 700;
   border-color: color-mix(in srgb, var(--error) 70%, transparent);
 }
+
+/* ─── 2D Pixel Map — full-screen viewport for the 2d_pixels profile ─── */
+/* It replaces the (blacked-out) 3D canvas: opaque, edge-to-edge, sits above
+   the canvas but below the floating tool panels (pattern editor etc.). Not a
+   floating panel — no drag/resize/collapse. */
+#pixel-map-panel {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  background: #0b0d12;
+  overflow: hidden;
+  font-family: inherit;
+}
+
+#pixel-map-panel.hidden { display: none; }
+
+.pm-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: default;
+  pointer-events: none;              /* static top bar — no drag/collapse full-screen */
+  background: color-mix(in srgb, var(--surface-container-high) 55%, transparent);
+  border-bottom: 1px solid var(--ghost-border);
+  user-select: none;
+}
+.pm-header .pe-btn { display: none; }  /* collapse button not applicable full-screen */
+.pm-title { font-weight: 700; font-size: 0.8rem; color: var(--on-surface); flex: 0 0 auto; }
+.pm-mode-chip {
+  font-size: 0.6rem; font-weight: 700; letter-spacing: 0.08em;
+  padding: 1px 6px; border-radius: 4px; margin-left: auto;
+}
+.pm-mode-chip.view { color: #6fd3e0; background: color-mix(in srgb, #6fd3e0 18%, transparent); }
+.pm-mode-chip.edit { color: var(--primary); background: color-mix(in srgb, var(--primary) 18%, transparent); }
+
+.pm-body { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.pm-body.edit .pm-canvas-host { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 45%, transparent); }
+
+.pm-toolbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 9px; font-size: 0.68rem; color: var(--on-surface-variant);
+  border-bottom: 1px solid var(--ghost-border);
+}
+.pm-seg { display: inline-flex; border: 1px solid var(--ghost-border); border-radius: 6px; overflow: hidden; }
+.pm-seg-btn {
+  background: transparent; color: var(--on-surface-variant); border: none;
+  padding: 3px 12px; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.08em; cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.pm-seg-btn:hover { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.pm-seg-btn.active { background: color-mix(in srgb, var(--primary) 22%, transparent); color: var(--primary); }
+.pm-count {
+  font-family: var(--font-mono, monospace); font-size: 0.62rem;
+  letter-spacing: 0.02em; color: var(--on-surface-variant); opacity: 0.9;
+}
+/* Micro-buttons (plane, Reset seed, Fit) — bordered, neutral. */
+.pm-mini {
+  background: transparent; color: var(--on-surface-variant);
+  border: 1px solid var(--ghost-border); border-radius: 5px;
+  padding: 2px 8px; font-size: 0.6rem; cursor: pointer; transition: color 0.12s, border-color 0.12s;
+}
+.pm-mini:hover { color: var(--primary); border-color: color-mix(in srgb, var(--primary) 50%, transparent); }
+.pm-reset { margin-left: auto; }
+/* AUTO-OPEN persisted pill. */
+.pm-scene-toggle {
+  background: transparent; color: var(--on-surface-variant);
+  border: 1px solid var(--ghost-border); border-radius: 999px;
+  padding: 2px 9px; font-size: 0.58rem; letter-spacing: 0.08em; cursor: pointer;
+}
+.pm-scene-toggle.on {
+  color: var(--primary); border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.pm-edit-controls, .pm-inspector {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 6px 10px; border-bottom: 1px solid var(--ghost-border);
+  font-size: 0.62rem; color: var(--on-surface-variant);
+}
+.pm-inspector { background: color-mix(in srgb, var(--primary) 5%, transparent); }
+.pm-insp-name { font-family: var(--font-mono, monospace); color: var(--primary); font-size: 0.64rem; }
+.pm-typerow { display: flex; align-items: center; gap: 8px; }
+.pm-typelabel { flex: 0 0 52px; font-weight: 700; }
+.pm-typerow label { display: inline-flex; align-items: center; gap: 4px; }
+.pm-typerow input[type="range"] { width: 84px; accent-color: var(--primary); }
+.pm-inspector .pm-typerow input[type="range"] { flex: 1; }
+.pm-num { width: 54px; background: var(--surface-container-low); color: var(--on-surface);
+  border: 1px solid var(--ghost-border); border-radius: 4px; padding: 1px 4px; }
+
+.pm-canvas-host { position: relative; flex: 1; min-height: 0; }
+.pm-body.edit .pm-canvas-host { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent); }
+.pm-canvas { display: block; width: 100%; height: 100%; outline: none; }
+
+/* Permanent status strip — reads "instrument", not "toy". */
+.pm-status {
+  display: flex; align-items: center; gap: 10px; height: 24px; padding: 0 10px;
+  font-family: var(--font-mono, monospace); font-size: 0.62rem;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border-top: 1px solid var(--ghost-border); color: var(--on-surface-variant);
+}
+.pm-swatch { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 auto;
+  border: 1px solid var(--ghost-border); }
+.pm-status-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-status-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.pm-zoom { opacity: 0.85; min-width: 34px; text-align: right; }

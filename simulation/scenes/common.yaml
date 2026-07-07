@@ -105,13 +105,14 @@ options:
       - webgpu
       - webgl
   lightingProfile:
-    value: full
+    value: 2d_pixels
     label: 💡 Lighting Profile
     options:
       - edit
       - pixel_mapping
       - emissive
       - full
+      - 2d_pixels
   spotlightSamplingMode:
     value: uniform
     label: Sim Spotlight Sampling
@@ -164,7 +165,7 @@ colorWave:
     label: ⚡ Enable
     transient: true
   lightingMode:
-    value: sacn_in
+    value: pixelblaze
     label: Mode
     options:
       - gradient

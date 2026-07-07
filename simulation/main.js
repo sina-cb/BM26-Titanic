@@ -44,6 +44,7 @@ import { initModernSacnMonitors, initModernViewPresets } from "./src/gui/modern/
 import { initModernPatternEditorShell } from "./src/gui/modern/pattern_editor_panel.js";
 import { initModernViewMasksShell } from "./src/gui/modern/view_masks_panel.js";
 import { initModernControllerMapShell } from "./src/gui/modern/controller_map_panel.js";
+import { initPixelMapPanel } from "./src/gui/modern/pixel_map_panel.js";
 import {
   registerPanel, getStoredGeometry,
   sanitizeStore, clampAllPanels,
@@ -613,6 +614,7 @@ Promise.all([
     setupViewMasksEditor();
     setupControllerMapEditor();
     initModernSacnMonitors();
+    initPixelMapPanel();
     setupSceneIndicator();
     setupSceneManager();
     loadPatternPresets().then(() => {

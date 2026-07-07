@@ -522,6 +522,12 @@ export function onKeyDown(event) {
     return;
   }
 
+  // M key: toggle the 2D Pixel Map window
+  if (event.key.toLowerCase() === 'm' && !event.ctrlKey && !event.metaKey) {
+    if (window.togglePixelMap2d) window.togglePixelMap2d();
+    return;
+  }
+
   // Delete selected par light(s)
   if (event.key === 'Delete') {
     if (selectedFixtureIndices.size > 0) {

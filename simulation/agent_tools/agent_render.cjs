@@ -190,6 +190,7 @@ const UI_PANEL_IDS = [
   'view-presets',
   'gui-panel',
   'unpatched-warning',
+  'pixel-map-panel',
 ];
 
 async function hideUI(page) {

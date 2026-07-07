@@ -829,6 +829,13 @@ export function onLightingChange() {
       if (window.sacnLog) window.sacnLog('sACN input disabled', 'warn');
     }
   }
+
+  // The 2D Pixel Map is exclusively the 2d_pixels profile's viewport: show it
+  // (full-screen, replacing the blacked-out 3D) when that profile is active,
+  // hide it otherwise.
+  if (window.showPixelMap2d) {
+    window.showPixelMap2d(params.lightingProfile === '2d_pixels');
+  }
 }
 
 // Expose on window for cross-module access

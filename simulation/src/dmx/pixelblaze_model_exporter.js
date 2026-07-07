@@ -77,6 +77,11 @@ export function generatePixelMap() {
               type: 'dmx',
               fixtureType: light.type || light.fixtureType || 'UkingPar',
               name: (light.name || `Fixture ${i + 1}`) + (px.model ? ` - ${px.model.id}` : ` (Ch ${j + 1})`),
+              // Runtime-only grouping keys for the 2D Pixel Map: fixIndex is an
+              // unambiguous per-fixture cluster key (fId is often 0), fixKey is
+              // a stable persist key. NOT serialized into the engine model.
+              fixIndex: i,
+              fixKey: light.name || `Fixture ${i + 1}`,
               group: light.group || '',
               x: +(worldPos.x).toFixed(3),
               y: +(worldPos.y).toFixed(3),
@@ -127,6 +132,10 @@ export function generatePixelMap() {
             type: 'dmx',
             fixtureType: light.type || light.fixtureType || 'Generic',
             name: light.name || `Fixture ${i + 1}`,
+            // Runtime-only grouping keys for the 2D Pixel Map (see multi-pixel
+            // push above). NOT serialized into the engine model.
+            fixIndex: i,
+            fixKey: light.name || `Fixture ${i + 1}`,
             group: light.group || '',
             x: +(worldPos.x).toFixed(3),
             y: +(worldPos.y).toFixed(3),

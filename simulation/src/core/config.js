@@ -91,6 +91,31 @@ export function pruneGroupOverrides(groupOverrides) {
 }
 
 /**
+ * Return a cleaned copy of the 2D Pixel Map per-scene config, or null when it
+ * is pure default (nothing to persist — keeps virgin scenes clean). Mirrors
+ * pruneGroupOverrides.
+ */
+export function prunePixelMap2d(pm) {
+  if (!pm || typeof pm !== "object") return null;
+  const enabled = pm.enabled === true;
+  const fixtures = (pm.fixtures && typeof pm.fixtures === "object") ? pm.fixtures : {};
+  const types = (pm.types && typeof pm.types === "object") ? pm.types : {};
+  const hasFixtures = Object.keys(fixtures).length > 0;
+  const hasTypes = Object.keys(types).length > 0;
+  const canvas = (pm.canvas && pm.canvas.w && pm.canvas.h) ? pm.canvas : null;
+  const nonDefaultCanvas = !!canvas && (canvas.w !== 900 || canvas.h !== 520);
+  const nonDefaultPlane = pm.plane && pm.plane !== "auto";
+  if (!enabled && !hasFixtures && !hasTypes && !nonDefaultCanvas && !nonDefaultPlane) return null;
+  const out = {};
+  if (enabled) out.enabled = true;
+  if (nonDefaultPlane) out.plane = pm.plane;
+  if (nonDefaultCanvas) out.canvas = { w: canvas.w, h: canvas.h };
+  if (hasTypes) out.types = types;
+  if (hasFixtures) out.fixtures = fixtures;
+  return out;
+}
+
+/**
  * Walk the YAML config tree and extract all { value: ... } entries into flat params.
  */
 export function extractParams(node, parentKey = null) {
@@ -133,6 +158,11 @@ export function extractParams(node, parentKey = null) {
       params.groupOverrides = node[key];
       continue;
     }
+    // 2D Pixel Map per-scene layout (plain data map, like groupOverrides).
+    if (key === "pixelMap2d" && node[key] && typeof node[key] === "object") {
+      params.pixelMap2d = node[key];
+      continue;
+    }
 
     const entry = node[key];
     if (entry && typeof entry === "object" && !Array.isArray(entry)) {
@@ -166,6 +196,13 @@ export function reconstructYAML(node, parentKey = null) {
       if (!node.groupOverrides) node.groupOverrides = {};
     } else {
       delete node.groupOverrides;
+    }
+    // 2D Pixel Map: persist only when non-default; otherwise keep scene clean.
+    const pmClean = prunePixelMap2d(params.pixelMap2d);
+    if (pmClean) {
+      if (!node.pixelMap2d) node.pixelMap2d = {};
+    } else {
+      delete node.pixelMap2d;
     }
   }
   for (const key of Object.keys(node)) {
@@ -207,6 +244,10 @@ export function reconstructYAML(node, parentKey = null) {
     }
     if (key === "groupOverrides") {
       node[key] = pruneGroupOverrides(params.groupOverrides);
+      continue;
+    }
+    if (key === "pixelMap2d") {
+      node[key] = prunePixelMap2d(params.pixelMap2d) || {};
       continue;
     }
 
