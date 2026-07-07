@@ -100,9 +100,9 @@ The launcher fails loudly and tells you which component's `node_modules` is
 missing — run the install command in [Prerequisites](#-prerequisites) if so.
 
 ### 🔄 Quick Fetch & Run a Branch
-To discard any local changes, pull the latest from a branch (e.g. `feat/views_rehaul`), apply the network buffer workarounds (preventing `ENOBUFS` errors on busy Windows systems), and launch the dev server with force-kill enabled:
+To discard any local changes, pull the latest from a branch (e.g. `feat/views_rehaul`), perform a clean install of dependencies in CaptainPad (which resolves Metro bundler errors like `Cannot read properties of undefined (reading 'has')`), and launch the dev server with force-kill enabled:
 ```powershell
-git checkout feat/views_rehaul ; git reset --hard origin/feat/views_rehaul ; git pull origin feat/views_rehaul ; node -e "['launcher.js', 'tools/port_cleanup.cjs'].forEach(f => { fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/encoding:\s*'utf8'/g, 'encoding: \'utf8\', maxBuffer: 10 * 1024 * 1024')) })" ; node launcher.js dev --scene test_bench -f
+git checkout feat/views_rehaul ; git reset --hard origin/feat/views_rehaul ; git pull origin feat/views_rehaul ; cd CaptainPad ; npm ci --no-audit --no-fund ; cd .. ; node launcher.js dev --scene test_bench -f
 ```
 
 ---
