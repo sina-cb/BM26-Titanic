@@ -102,10 +102,15 @@ export function SplitPlaylistPanes({
   }, []);
 
   // Effective clamp band given the current container height. When the column is
-  // too short to seat two MIN_PANE panes we can't resize meaningfully.
+  // too short to seat two MIN_PANE panes we can't resize meaningfully, so we
+  // force a fixed 0.5 split (per deck_split_playlists.md §Resizable split) — NOT
+  // the raw `r`, which for a small `h` could compute `startRatio + dy/h` outside
+  // [0,1] and produce a NEGATIVE flexGrow on pane 1. The STORED ratio is left
+  // untouched (this only affects what's painted / POSTed while the column is too
+  // short); it comes back the moment the column is tall enough again.
   const effectiveClamp = (r: number): number => {
     const h = containerHRef.current;
-    if (h < 2 * MIN_PANE_PT) return r; // caller renders 0.5 in that case
+    if (h < 2 * MIN_PANE_PT) return 0.5;
     const lo = Math.max(RATIO_MIN, MIN_PANE_PT / h);
     const hi = Math.min(RATIO_MAX, 1 - MIN_PANE_PT / h);
     return Math.max(lo, Math.min(hi, r));

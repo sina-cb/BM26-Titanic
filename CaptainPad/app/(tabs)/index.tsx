@@ -894,8 +894,12 @@ export default function ControlDeckScreen() {
           // Wide: this column flexes to ~1.1 of the row. Narrow (stacked): the
           // leftPane's default flex:1 inside a column container would let it
           // eat all vertical space — pin a sensible min height instead so the
-          // stack scrolls naturally with the columns below it.
-          isWide ? { flex: 1.1 } : { flex: 0, minHeight: 320 },
+          // stack scrolls naturally with the columns below it. When a SECOND
+          // playlist pane is bound in the narrow/stacked layout, raise the floor
+          // 320→480 so the split card is tall enough to seat two MIN_PANE panes
+          // (deck_split_playlists.md §Resizable split): below 2·MIN_PANE_PT the
+          // divider forces a fixed 0.5, so the extra height keeps the drag live.
+          isWide ? { flex: 1.1 } : { flex: 0, minHeight: deckSecondaryBound ? 480 : 320 },
         ]}>
           {isConnected === false && <OfflineBanner error={connectionError} />}
 
