@@ -6,6 +6,22 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { Autopilot } from './autopilot.js';
 import { ColorAutopilot } from './color_autopilot.js';
+import {
+  AUTO_GROUP_SIZE_MIN,
+  AUTO_GROUP_SIZE_MAX,
+  AUTO_GROUP_SIZE_DEFAULT,
+  AUTO_GROUP_DWELL_MIN,
+  AUTO_GROUP_DWELL_MAX,
+  AUTO_GROUP_DWELL_DEFAULT,
+  clampInt,
+  pickNextAutoCycleEntry,
+} from './autopilot_pick.js';
+import {
+  AUTOPILOT_PROFILES,
+  AUTOPILOT_PROFILE_DEFAULT,
+  normalizeAutopilotProfile,
+  createAutopilotProfile,
+} from './autopilot_profiles/profile_registry.js';
 import { StateManager, serializeChannel as serializeChannelForState } from './state_manager.js';
 import { SnapshotManager, SnapshotLoadError } from './snapshot_manager.js';
 import { ParamPresetManager, ParamPresetError } from './param_preset_manager.js';
@@ -361,24 +377,22 @@ export function autoCycleDueDecision(channel, nowMs) {
   return (nowMs - channel._autoCycleLastAdvanceMs >= delayMs) ? 'due' : 'wait';
 }
 
-// ── Auto-cycle group-locality clamps (single source of truth) ─────────
-// PATTERN-GROUP LOCALITY (feat/optimize_channels): the autopilot grabs a
-// small WINDOW of adjacent playlist entries, dwells within it for a number of
-// swaps, then releases and grabs a fresh window. The window size and dwell
-// count are clamped here so a stale/garbage on-disk value can't form a
-// degenerate (1-wide) or runaway window. Defaults match the field docs.
-export const AUTO_GROUP_SIZE_MIN = 2;
-export const AUTO_GROUP_SIZE_MAX = 8;
-export const AUTO_GROUP_SIZE_DEFAULT = 3;
-export const AUTO_GROUP_DWELL_MIN = 1;
-export const AUTO_GROUP_DWELL_MAX = 50;
-export const AUTO_GROUP_DWELL_DEFAULT = 6;
-
-const clampInt = (raw, lo, hi, dflt) => {
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return dflt;
-  return Math.max(lo, Math.min(hi, Math.trunc(n)));
-};
+// ── Auto-cycle group-locality clamps + pure picker ────────────────────
+// PATTERN-GROUP LOCALITY (feat/optimize_channels): these clamps + the pure
+// `pickNextAutoCycleEntry` picker were EXTRACTED to `lib/autopilot_pick.js`
+// (autopilot profile seam, 2026-07-06) so the autopilot profiles can import
+// the picker without a circular dependency on this module. They are re-exported
+// here VERBATIM so every historical import path (`from './api_server.js'`) —
+// unit tests, external tooling — keeps resolving the identical symbols.
+export {
+  AUTO_GROUP_SIZE_MIN,
+  AUTO_GROUP_SIZE_MAX,
+  AUTO_GROUP_SIZE_DEFAULT,
+  AUTO_GROUP_DWELL_MIN,
+  AUTO_GROUP_DWELL_MAX,
+  AUTO_GROUP_DWELL_DEFAULT,
+  pickNextAutoCycleEntry,
+} from './autopilot_pick.js';
 
 // Normalize the three group-locality fields off any autopilot-ish object for
 // serialize / broadcast / restore (single shape, single source of clamps).
@@ -389,82 +403,10 @@ const autoGroupFields = (ap) => ({
   groupDwell: clampInt(ap && ap.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT),
 });
 
-// ── Auto-cycle next-entry pick (pure, unit-tested) ────────────────────
-// MIRRORS the deck Autopilot advance pick (api_server deck daemon): when
-// group-locality is armed, dwell within a window of adjacent entries, else
-// shuffle picks a random OTHER usable entry, else sequential walks forward
-// skipping `_missing`. `usable` excludes `_missing` entries.
-// Returns the chosen entry, or null when there is nothing to advance to (no
-// usable entries).
-//
-// PATTERN-GROUP LOCALITY: when `autopilot.groupMode` is true AND there are
-// strictly more usable entries than the window size, dwell state lives in the
-// caller-owned mutable `groupRuntime` ({ windowIds, swapsLeft }) so the window
-// + remaining-swap count persist ACROSS advances. The function reads and
-// MUTATES `groupRuntime` in place (the contract); randomness via Math.random
-// matches shuffle. With group-locality off (default), or too few usable
-// entries, group mode is a no-op and the existing shuffle/sequential logic
-// runs unchanged — `groupRuntime` may be omitted by those callers.
-export function pickNextAutoCycleEntry(pl, autopilot, curEntryId, groupRuntime) {
-  if (!pl || !Array.isArray(pl.entries) || pl.entries.length === 0) return null;
-  const usable = pl.entries.filter(e => !e._missing);
-  if (usable.length === 0) return null;
-  // PATTERN-GROUP LOCALITY: dwell inside a rolling window of adjacent usable
-  // entries. No-op (fall through) unless armed AND the playlist is bigger than
-  // one window — otherwise the "window" would be the whole list, defeating the
-  // point. Needs a mutable runtime to carry dwell state across advances.
-  const groupSize = clampInt(
-    autopilot && autopilot.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX,
-    AUTO_GROUP_SIZE_DEFAULT,
-  );
-  if (autopilot && autopilot.groupMode && groupRuntime && usable.length > groupSize) {
-    const groupDwell = clampInt(
-      autopilot.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX,
-      AUTO_GROUP_DWELL_DEFAULT,
-    );
-    const win = groupRuntime.windowIds;
-    const haveWindow = Array.isArray(win) && win.length > 0;
-    const curInWindow = haveWindow && win.includes(curEntryId);
-    // Form a FRESH window when there is none, the dwell expired, or we've
-    // wandered out of the current window (manual tap / loop release landed
-    // elsewhere). A fresh random start is fine even when re-forming.
-    if (!haveWindow || groupRuntime.swapsLeft <= 0 || !curInWindow) {
-      const start = Math.floor(Math.random() * usable.length);
-      const windowIds = [];
-      for (let i = 0; i < groupSize; i++) {
-        windowIds.push(usable[(start + i) % usable.length].id);
-      }
-      groupRuntime.windowIds = windowIds;
-      groupRuntime.swapsLeft = groupDwell;
-    }
-    // Pick a random entry from the window that is NOT the current one (no
-    // immediate repeat); if the window collapsed to only the current entry,
-    // replay it. Decrement the dwell counter (mutate in place — the contract).
-    const choices = groupRuntime.windowIds.filter(id => id !== curEntryId);
-    const pickId = choices.length
-      ? choices[Math.floor(Math.random() * choices.length)]
-      : curEntryId;
-    groupRuntime.swapsLeft -= 1;
-    const picked = usable.find(e => e.id === pickId);
-    if (picked) return picked;
-    // The chosen id is no longer usable (entry removed mid-dwell) — force a
-    // fresh window next call and fall through to sequential this beat.
-    groupRuntime.windowIds = null;
-    groupRuntime.swapsLeft = 0;
-  }
-  if (autopilot && autopilot.shuffle) {
-    const others = usable.filter(e => e.id !== curEntryId);
-    return others.length ? others[Math.floor(Math.random() * others.length)] : usable[0];
-  }
-  // Sequential: walk forward from the current index, skipping _missing.
-  const idx = pl.entries.findIndex(e => e.id === curEntryId);
-  let nextIdx = (idx + 1) % pl.entries.length;
-  for (let i = 0; i < pl.entries.length; i++) {
-    if (!pl.entries[nextIdx]._missing) return pl.entries[nextIdx];
-    nextIdx = (nextIdx + 1) % pl.entries.length;
-  }
-  return null;
-}
+// `pickNextAutoCycleEntry` now lives in `lib/autopilot_pick.js` (see the
+// re-export block above). It is unchanged — the deck daemon, the mixer/overlay
+// auto-cycle ticks, and the `random` autopilot profile all call the SAME pure
+// picker via that module.
 
 // ── Deck transition durationMs bounds (single source of truth) ─────────
 // The /deck/transition-config POST and the internal
@@ -2171,6 +2113,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }, 'deck');
     }
 
+    // AUTOPILOT PROFILE restore validation (per-scene). The profile name rides
+    // baseCh.playlist.autopilot.profile via serializeChannel. A present-but-
+    // UNKNOWN value (e.g. an old scene saved a profile since removed) is a
+    // restore-time bomb — the boot arm would throw. Detect it, WARN loudly, and
+    // clear to the documented default so the daemon boots clean (clone of the
+    // dangling-activeEntryId precedent above). Absent → leave absent; the
+    // normalizer applies the default at read time.
+    {
+      const deckCh = mixer.getDeckChannel();
+      const ap = deckCh && deckCh.playlist ? deckCh.playlist.autopilot : null;
+      if (ap && ap.profile !== undefined && ap.profile !== null && ap.profile !== '') {
+        try {
+          normalizeAutopilotProfile(ap.profile);
+        } catch (e) {
+          console.warn(
+            `[Restore] deck autopilot profile '${ap.profile}' is unknown ` +
+            `(${e.message}) — clearing to '${AUTOPILOT_PROFILE_DEFAULT}'.`);
+          ap.profile = AUTOPILOT_PROFILE_DEFAULT;
+        }
+      }
+    }
+
     if (hasMixer) {
       for (const saved of mixerState.channels) {
         // Defensive: skip any leaked deck-shaped id. The state_manager
@@ -2963,18 +2927,30 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     const ap = baseCh && baseCh.playlist ? baseCh.playlist.autopilot : null;
     return ap || { active: false, delay_s: 30, shuffle: false };
   }
-  function broadcastAutopilot() {
+  // Single builder for the `autopilot` WS payload — used by broadcastAutopilot()
+  // AND the connect-replay so a late joiner and a live update carry byte-
+  // identical fields (incl. the profile dropdown state). Centralizing this is
+  // why the connect replay below no longer hand-builds its own object.
+  function buildAutopilotPayload() {
     const st = deckAutopilotState();
-    broadcastWs({
+    return {
       type: 'autopilot',
       active: !!st.active,
       delay_s: st.delay_s !== undefined ? String(st.delay_s) : '30',
       shuffle: !!st.shuffle,
-      // Wall-clock ms of the next pattern swap (null when inactive) — drives the
-      // deck's "next pattern in M:SS" countdown. Re-broadcast on every cycle via
-      // the daemon's onSchedule hook so it stays fresh after each swap.
+      // Active profile (normalized) + the full list of selectable profiles, so
+      // the CaptainPad dropdown paints the current pick and its options without
+      // a separate GET. Absent → the documented default via the normalizer.
+      profile: normalizeAutopilotProfile(st.profile),
+      profiles: AUTOPILOT_PROFILES,
+      // Wall-clock ms of the next pattern swap (null when inactive OR event-
+      // driven) — drives the deck's "next pattern in M:SS" countdown. Re-
+      // broadcast on every cycle via the daemon's onSchedule hook.
       nextSwapAtMs: (typeof autopilot !== 'undefined' && autopilot) ? autopilot.nextSwapAtMs : null,
-    });
+    };
+  }
+  function broadcastAutopilot() {
+    broadcastWs(buildAutopilotPayload());
   }
 
   // Autopilot advance is main's frame-driven system: the deck `autopilot`
@@ -3305,13 +3281,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (usable.length === 0) return;
 
         const cur = baseCh.playlist.activeEntryId;
-        // Selection is the SHARED pure picker (group→shuffle→sequential) —
-        // the SAME `pickNextAutoCycleEntry` the mixer overlay ticks use, so
-        // the deck and overlays can never drift. It applies group-locality,
-        // then shuffle/sequential. Group dwell state lives on the deck base
+        // Selection dispatches on the active PROFILE. The `random` profile wraps
+        // the SHARED pure picker (group→shuffle→sequential) — the SAME
+        // `pickNextAutoCycleEntry` the mixer overlay ticks use, so the deck and
+        // overlays can never drift. Group dwell state lives on the deck base
         // channel's transient `_autoGroup` (reset by loadPlaylistEntry on every
-        // manual tap / (re-)load, so a manual tap starts a fresh group).
-        const nextEntry = pickNextAutoCycleEntry(
+        // manual tap / (re-)load, so a manual tap starts a fresh group). A
+        // missing profile is a wiring bug — throw (the daemon's catch warns).
+        if (!activeAutopilotProfile) {
+          throw new Error('no active autopilot profile');
+        }
+        const nextEntry = activeAutopilotProfile.pickNextEntry(
           pl, baseCh.playlist.autopilot, cur, baseCh._autoGroup);
         if (!nextEntry) return;
         // Route through the deck-transition path: if the operator has
@@ -3346,6 +3326,61 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // pattern-autopilot countdown stays accurate after each swap.
     () => broadcastAutopilot(),
   );
+
+  // ── Autopilot PROFILE management ─────────────────────────────────────
+  // The active profile instance drives BOTH the daemon timing (via
+  // autopilot.setProfile → nextDelayMs) AND the next-entry pick (via the
+  // selection callback above → activeAutopilotProfile.pickNextEntry). One
+  // instance is live at a time; swapping detaches the old and attaches the new.
+  //
+  // Persistence: the profile NAME lives on `baseCh.playlist.autopilot.profile`
+  // (per-scene, rides serializeChannel → deck_state.yaml — zero new plumbing).
+  // The instance itself is transient runtime state, re-derived from that name.
+  let activeAutopilotProfile = null;
+
+  // The ctx a profile's attach() receives. `requestAdvance` routes through the
+  // daemon's generation-guarded _runTick (so audio-driven advances honour the
+  // same await-swap + EBUSY-skip as timer advances). `applyColorPalette`/
+  // `resolveColorPaletteParams`/`colorAutopilot` are captured lazily (resolved
+  // at call time, long after boot) so the audio-reactive profile can drive
+  // palette + speed without re-wiring this block in E2.
+  function buildAutopilotProfileCtx() {
+    return {
+      paramCenter,
+      requestAdvance: () => autopilot.requestAdvance(),
+      state: () => autopilot.state,
+      applyColorPalette: (id) => applyColorPalette(id),
+      knownPaletteIds: () => knownPaletteIds(),
+      colorPalettes: () => (Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : []),
+      triggerColorNext: () => { if (colorAutopilot) colorAutopilot.triggerNext(); },
+    };
+  }
+
+  // Read the persisted profile name off the live deck channel (documented
+  // default when absent). NEVER throws here — restore-time validation already
+  // cleared any unknown value to 'random' (see the deck restore block), so a
+  // live read is always a known name.
+  function currentAutopilotProfileName() {
+    const baseCh = mixer.getDeckChannel();
+    const ap = baseCh && baseCh.playlist ? baseCh.playlist.autopilot : null;
+    return normalizeAutopilotProfile(ap && ap.profile);
+  }
+
+  // (Re)build the active profile instance from a name, detaching any prior one.
+  // Throws on an unknown name (createAutopilotProfile → normalize) — callers at
+  // the route boundary map that to a 400 BEFORE persisting.
+  function armAutopilotProfile(name) {
+    const next = createAutopilotProfile(name);
+    if (activeAutopilotProfile && typeof activeAutopilotProfile.detach === 'function') {
+      try { activeAutopilotProfile.detach(); } catch (e) {
+        console.warn('[Autopilot] profile detach failed:', e && e.message ? e.message : e);
+      }
+    }
+    activeAutopilotProfile = next;
+    autopilot.setProfile(next);
+    if (typeof next.attach === 'function') next.attach(buildAutopilotProfileCtx());
+    return next;
+  }
 
   // ── COLOR autopilot (palette cycling, docs/39) ──────────────────────
   // Resolve a colorPalette id → CPC params and WRITE it (the SAME path looks /
@@ -7529,6 +7564,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       readBody(data => {
         const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
+        // PROFILE: validate BEFORE mutating anything so an unknown value fails
+        // the whole request atomically (400, loud — codex P0, no silent coerce).
+        // Clone the trans_* validation posture at /deck/transition-config.
+        let nextProfileName = null;
+        if (data.profile !== undefined) {
+          try {
+            nextProfileName = normalizeAutopilotProfile(data.profile);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: e.message }));
+          }
+        }
         baseCh.playlist = baseCh.playlist || { name: null, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
         const ap = baseCh.playlist.autopilot = baseCh.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
         if (data.active !== undefined) ap.active = !!data.active;
@@ -7545,14 +7592,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           ap.groupDwell = clampInt(
             data.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT);
         }
+        // PROFILE: persist the name + re-arm the profile instance when it
+        // changed. Re-arm detaches the old profile (unsubscribes / restores any
+        // CPC globals it set) and attaches the new one, so switching from
+        // audio_reactive back to random tears down the audio subscriptions
+        // cleanly. Also reset the group window (mirrors the group-field reset)
+        // so the new profile starts from a fresh baseline.
+        const profileChanged = nextProfileName !== null
+          && nextProfileName !== normalizeAutopilotProfile(ap.profile);
+        if (nextProfileName !== null) ap.profile = nextProfileName;
         // Reconfiguring group-locality starts a fresh group (drop the window).
-        if (data.groupMode !== undefined || data.groupSize !== undefined || data.groupDwell !== undefined) {
+        if (data.groupMode !== undefined || data.groupSize !== undefined
+            || data.groupDwell !== undefined || profileChanged) {
           if (baseCh._autoGroup) { baseCh._autoGroup.windowIds = null; baseCh._autoGroup.swapsLeft = 0; }
         }
+        if (profileChanged) armAutopilotProfile(nextProfileName);
         saveAllState();
         // Drive main's deck daemon timer from the now-updated autopilot block
         // (active/delay reschedule the self-rescheduling setTimeout; shuffle +
         // group are read live from baseCh.playlist.autopilot by the picker).
+        // NOTE: armAutopilotProfile already bumped the generation + rescheduled
+        // under the new profile's timing; updateState reschedules again with the
+        // active/delay change — both converge on the same profile.nextDelayMs.
         autopilot.updateState({ active: ap.active, delay_s: String(ap.delay_s), shuffle: ap.shuffle });
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok', autopilot: ap }));
         broadcastMixerState();
@@ -7875,6 +7936,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       console.error('Server error:', e);
     }
   });
+  // Arm the deck autopilot PROFILE from the restored per-scene state BEFORE the
+  // daemon starts — armAutopilotProfile injects the timing profile the daemon's
+  // first _scheduleNext will consult (timer vs event-driven). The name was
+  // validated + cleared to 'random' at restore, so this never throws.
+  armAutopilotProfile(currentAutopilotProfileName());
   // Start main's deck Autopilot daemon. Its active/delay live in config.yaml
   // (autopilot.state); the next-entry pick reads the restored deck
   // playlist.autopilot live. Mixer + deck overlays resume on their own — the
@@ -7905,17 +7971,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // see the same values that the existing one-shot REST loads would
     // have given them — without having to wait for the next change.
     try {
-      const st = deckAutopilotState();
-      ws.send(JSON.stringify({
-        type: 'autopilot',
-        active: !!st.active,
-        delay_s: st.delay_s !== undefined ? String(st.delay_s) : '30',
-        shuffle: !!st.shuffle,
-        // Include the next-swap time so a late-joining deck paints the pattern
-        // countdown immediately (mirrors broadcastAutopilot + the colorAutopilot
-        // snapshot below, which already spreads the field).
-        nextSwapAtMs: (typeof autopilot !== 'undefined' && autopilot) ? autopilot.nextSwapAtMs : null,
-      }));
+      // Shared builder so the late-joiner replay carries the SAME fields as a
+      // live broadcastAutopilot() — including `profile` + `profiles` for the
+      // dropdown, and the next-swap countdown time.
+      ws.send(JSON.stringify(buildAutopilotPayload()));
     } catch (e) {
       // never let a snapshot send break a fresh WS handshake
     }
