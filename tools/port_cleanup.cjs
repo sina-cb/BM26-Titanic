@@ -33,7 +33,7 @@ const STACK_PROCESS_SIGNATURES = [
 function listenersOnPort(port, opts = {}) {
   const udp = opts.udp === true;
   if (IS_WIN) {
-    const out = execFileSync('netstat', ['-ano', '-p', udp ? 'udp' : 'tcp'], { encoding: 'utf8' });
+    const out = execFileSync('netstat', ['-ano', '-p', udp ? 'udp' : 'tcp'], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, maxBuffer: 10 * 1024 * 1024 });
     const pids = new Set();
     for (const line of out.split('\n')) {
       const cols = line.trim().split(/\s+/);
@@ -47,7 +47,7 @@ function listenersOnPort(port, opts = {}) {
   const sel = udp ? `-iUDP:${port}` : `-iTCP:${port}`;
   const args = udp ? ['-t', '-nP', sel] : ['-t', '-nP', sel, '-sTCP:LISTEN'];
   try {
-    const out = execFileSync('lsof', args, { encoding: 'utf8' });
+    const out = execFileSync('lsof', args, { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, maxBuffer: 10 * 1024 * 1024 });
     return out.split('\n').map((s) => s.trim()).filter(Boolean).map(Number);
   } catch (err) {
     if (err.status === 1) return []; // lsof exits 1 when nothing matches
@@ -65,10 +65,10 @@ function commandlineOf(pid) {
       const out = execFileSync('powershell', [
         '-NoProfile', '-Command',
         `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`,
-      ], { encoding: 'utf8' });
+      ], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, maxBuffer: 10 * 1024 * 1024 });
       return out.trim();
     }
-    return execFileSync('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf8' }).trim();
+    return execFileSync('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, maxBuffer: 10 * 1024 * 1024 }).trim();
   } catch (err) {
     return '';
   }

@@ -15,3 +15,12 @@
 #      false positives, not individual findings).
 #
 # Never delete the workflow or a whole rule to silence one finding.
+
+# --- Historical findings (option 3): private RFC1918 LAN IPs in internal agent
+# reports. Introduced on the old `.agent/02_reports/` path; the main-merge moved
+# these reports to `.agent/reports/` AND redacted the IPs, so HEAD is clean —
+# but gitleaks scans full PR history and still flags the introducing commits,
+# which can't be edited without rewriting a shared branch with an open PR.
+72de1ef7cfc15b14ef3c3e95fac02f4296ffb0e2:.agent/02_reports/202606/20260619_2_test_auto_patch.md:bm26-report-ip:52
+72de1ef7cfc15b14ef3c3e95fac02f4296ffb0e2:.agent/02_reports/202606/20260619_2_test_auto_patch.md:bm26-report-ip:137
+94e59ac3397e77f27c968903fab60882cca1130b:.agent/02_reports/202606/20260618_10_led_dmx_parity_impl.md:bm26-report-ip:31

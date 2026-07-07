@@ -4,12 +4,12 @@ views:
     Right Top Chimney Generator: 2
     Right Front Deck Generator: 4
     Right Center Auditorium Generator: 8
-    Left Back Wall: 16
+    Left Back Wall Generator: 16
     Right Back Wall Generator: 32
     Left Front Wall Generator: 64
     Left Top Chimney Generator: 128
     Left Front Deck Generator: 256
-    Left Center Auditorium: 512
+    Left Center Auditorium Generator: 512
     Left_Front_Left: 1024
     Left_Back_Left: 2048
     Left_Back_Right: 4096

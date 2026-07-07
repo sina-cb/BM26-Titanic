@@ -3,6 +3,9 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 
 import { injectMaskConstants } from './view_mask_constants.js';
+import { injectFixtureConstants } from './fixture_type_constants.js';
+import { injectInViewIntrinsic } from './in_view_intrinsic.js';
+import { META_LANES, VIEW_MASK_HI_ENABLED } from './meta_abi.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +19,26 @@ export class WasmHost {
     // at compile time (see view_mask_constants.js). Set by the engine
     // after loadModel and refreshed on model hot-reload.
     this.maskConstants = {};
+
+    // Model-derived {FIX_ROLE: bit} table for Tier-A fixture-type
+    // targeting (see fixture_type_constants.js). Empty when the model's
+    // fixture types do not fit the viewMask bit budget (Tier B owns that
+    // model's fixture-typing — see engine loadModel). Injected into
+    // pattern source alongside maskConstants at compile time.
+    this.fixtureConstants = {};
+
+    // Model-derived AUTHORED-name -> { bit, word } table for the
+    // `inView("Name")` compile-time intrinsic (see in_view_intrinsic.js).
+    // Set by the engine after loadModel and refreshed on model hot-reload.
+    this.viewTable = {};
+
+    // Optional host hook that allocates an in-VM bit for a bit-free
+    // (Tier-A) view ON DEMAND when `inView` first tests it, sets the bit
+    // on the view's member pixels, and returns { bit, word }. When a
+    // promotion mutates the pixel meta, `metaDirty` is raised so the
+    // caller re-packs the meta buffer (see setPixelMeta) before rendering.
+    this.bitFreeViewPromoter = null;
+    this.metaDirty = false;
 
     // Pointers and Views
     this.coordPtr = 0;
@@ -75,14 +98,40 @@ export class WasmHost {
     this.maskConstants = constants || {};
   }
 
+  setFixtureConstants(constants) {
+    this.fixtureConstants = constants || {};
+  }
+
+  // AUTHORED-name -> { bit, word } table for the inView("Name") intrinsic.
+  setViewTable(table) {
+    this.viewTable = table || {};
+  }
+
+  // Wire the on-demand bit-free-view promoter (engine.js owns the model
+  // pixels + allocator). `fn(name) -> { bit, word }`; it must set the bit
+  // on the view's member pixels and may flip metaDirty on the host so the
+  // caller re-packs meta. Pass null to clear (no promotion available).
+  setBitFreeViewPromoter(fn) {
+    this.bitFreeViewPromoter = typeof fn === 'function' ? fn : null;
+  }
+
   // Every compile path (boot pattern, mixer channels, live-edit API,
-  // blends/transitions) funnels through here, so MASK_* name resolution
-  // is uniform: referenced-but-undeclared constants are prepended as
-  // integer `var` declarations, unknown names fail the compile loudly.
+  // blends/transitions) funnels through here, so MASK_*/FIX_* name
+  // resolution is uniform: referenced-but-undeclared constants are
+  // prepended as integer `var` declarations, unknown names fail the
+  // compile loudly. The two injectors are prefix-isolated, so a pattern
+  // may freely mix MASK_* and FIX_*.
   compile(code) {
     let source;
     try {
-      source = injectMaskConstants(code, this.maskConstants);
+      // `inView("Name")` folds FIRST (it may promote a bit-free view to an
+      // in-VM bit on demand) so its emitted `(viewMask & <bit>)` /
+      // `(viewMaskHi & <literal>)` test rides the same compiler the MASK_*
+      // and FIX_* injections feed. An unknown name / un-promotable bit-free
+      // view throws here — caught below as a loud compile error (codex P0).
+      source = injectInViewIntrinsic(code, this.viewTable, this.bitFreeViewPromoter);
+      source = injectMaskConstants(source, this.maskConstants);
+      source = injectFixtureConstants(source, this.fixtureConstants);
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -232,17 +281,28 @@ export class WasmHost {
     }
 
     if (!this.metaPtr) {
-      const metaBufSize = this.pixelCount * 4 * 4;
+      // Stride is META_LANES int32/pixel (ABI lanes: [ctrl, sec, fix, view,
+      // fixtureTypeId, localIndex] + optional [viewMaskHi] — see meta_abi.js).
+      // The stride is gated by VIEW_MASK_HI_ENABLED so the host keeps the
+      // current 6-int pack until the 7-lane WASM is vendored at integration.
+      const metaBufSize = this.pixelCount * META_LANES * 4;
       this.metaPtr = this.Module._malloc(metaBufSize);
-      this.metaView = new Int32Array(this.Module.HEAP32.buffer, this.metaPtr, this.pixelCount * 4);
+      this.metaView = new Int32Array(this.Module.HEAP32.buffer, this.metaPtr, this.pixelCount * META_LANES);
     }
 
+    const stride = META_LANES;
     for (let i = 0; i < this.pixelCount && i < metaArray.length; i++) {
       const m = metaArray[i] || {};
-      this.metaView[i * 4] = m.controllerId || 0;
-      this.metaView[i * 4 + 1] = m.sectionId || 0;
-      this.metaView[i * 4 + 2] = m.fixtureId || 0;
-      this.metaView[i * 4 + 3] = m.viewMask || 0;
+      const base = i * stride;
+      this.metaView[base] = m.controllerId || 0;
+      this.metaView[base + 1] = m.sectionId || 0;
+      this.metaView[base + 2] = m.fixtureId || 0;
+      this.metaView[base + 3] = m.viewMask || 0;
+      this.metaView[base + 4] = m.fixtureTypeId || 0;   // canonical FIX_* id
+      this.metaView[base + 5] = m.pixelLocalIndex || 0; // 0-based index within fixture
+      if (VIEW_MASK_HI_ENABLED) {
+        this.metaView[base + 6] = m.viewMaskHi || 0;    // second view word (Tier C)
+      }
     }
   }
 

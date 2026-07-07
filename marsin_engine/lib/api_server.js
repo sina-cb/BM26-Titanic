@@ -2215,6 +2215,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       mixer.setMaster(mixerState.master);
     }
 
+    // If the saved deck channel failed to restore (e.g. its pattern was
+    // renamed/deleted on disk — `Failed to restore channel <x>: Pattern
+    // not found`), the boot deck we tore down above is gone and nothing
+    // replaced it. A deckless engine renders an all-zero deck buffer; in
+    // the default mixer view (and whenever the mixer overlays are dark)
+    // that means the rig goes BLACK with no error — exactly the
+    // "engine streams but sim is dark" failure. The operator gave an
+    // explicit `--pattern` on the CLI; honour it as the deck fallback so
+    // a stale/broken saved deck can never silently kill output.
+    if (!mixer.getDeckChannel() && opts.pattern) {
+      console.warn(`  ⚠️  Saved deck channel did not restore — falling back to boot pattern '${opts.pattern}' on the deck.`);
+      restoreChannel({
+        id: 'ch_base',
+        name: 'Base',
+        pattern: opts.pattern,
+        mode: 'blend_screen',
+        fader: 1.0,
+        enabled: true
+      }, 'deck');
+    }
+
     // F-phase #4 (tap-tempo) restore: rebuild the derived _tempoMultiplier
     // from the persisted global tempoBpm. A finite saved value goes through
     // setTempoBpm (which clamps the multiplier); a missing/null/non-finite
@@ -4913,6 +4934,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           bit: vm.bit,
           inUse: (viewMaskUnion & vm.bit) !== 0,
         }));
+      // Tier-A named views (report 20260618_2 §3.3): every mask the
+      // MaskRegistry interns is selectable by name via viewSelection
+      // {type:'viewMask', target:'<name>'} WITHOUT a viewMask bit — this
+      // is how LED-strand per-strand and LEFT/RIGHT views (LED parity
+      // §D.5) surface to CaptainPad/the mixer. We list them all (groups +
+      // composites + pixelSets) with their kind and member count so the
+      // picker can render them; the existing `viewMasks` array stays the
+      // bit-backed subset for back-compat.
+      const reg = mixer && mixer.maskRegistry;
+      const namedViews = reg
+        ? reg.names().map(name => {
+          const e = reg.get(name);
+          let memberCount = 0;
+          if (e && e.members) {
+            for (let k = 0; k < e.members.length; k++) memberCount += e.members[k];
+          }
+          return { name, kind: e ? e.kind : 'group', bit: e ? e.bit : 0, memberCount };
+        })
+        : [];
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         groups: [...groups].sort(),
@@ -4920,6 +4960,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         fixtures: [...fixtures].sort((a, b) => a - b),
         viewMaskUnion,
         viewMasks,
+        namedViews,
         // Group→bit table for this model (pinned by the sidecar or
         // derived at load time — docs/13 §4.5.1) and the MASK_* pattern
         // constants built from it. Surfaced so operators, tools, and
@@ -6043,7 +6084,19 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: v.error }));
           }
-          mixer.setChannelViewSelection(id, v.value);
+          // validateViewSelection only checks SHAPE. An unknown view-mask
+          // NAME is caught later, when the mixer compiles the mask against
+          // the model's MaskRegistry (codex P0 hard error, report
+          // 20260618_2 §6). Wrap it so the operator sees the real
+          // "Unknown viewMask name ... Known viewMasks: [...]" message
+          // instead of readBody's generic "Invalid JSON" — same reasoning
+          // as the addMixerChannel wrap above.
+          try {
+            mixer.setChannelViewSelection(id, v.value);
+          } catch (vsErr) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: String(vsErr.message || vsErr) }));
+          }
         }
         if (data.locked !== undefined) {
           const becameLocked = !channel.locked && !!data.locked;
@@ -7390,7 +7443,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: v.error }));
           }
-          mixer.setChannelViewSelection(channel.id, v.value);
+          // Unknown view-mask NAME (vs shape) hard-errors at mask compile —
+          // surface the real message rather than readBody's "Invalid JSON".
+          try {
+            mixer.setChannelViewSelection(channel.id, v.value);
+          } catch (vsErr) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: String(vsErr.message || vsErr) }));
+          }
         }
         saveAllState();
         broadcastMixerState();

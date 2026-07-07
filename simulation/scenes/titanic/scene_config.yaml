@@ -53,7 +53,9 @@ parLights:
     value: true
     label: Master Enabled
   masterExposure:
-    value: 0.05
+    # Preview-only (does NOT affect DMX output). Was 0.05, which made
+    # validation renders nearly black; 0.7 reads well without blowing out.
+    value: 0.7
     label: Sim Exposure (Preview Only)
     min: 0
     max: 2
@@ -1314,7 +1316,7 @@ parLights:
       lightColor: '#ff0000'
       lightIntensity: 50
       lightAngle: 60
-      groupName: Left Center Auditorium
+      groupName: Left Center Auditorium Generator
       generated: true
       fixtureType: UkingPar
       fixtureRotOffX: 0
@@ -1338,7 +1340,7 @@ parLights:
       lightColor: '#001eff'
       lightIntensity: 18
       lightAngle: 30
-      groupName: Left Back Wall
+      groupName: Left Back Wall Generator
       generated: true
       fixtureType: ShehdsBar
       fixtureRotOffX: 0
