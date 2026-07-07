@@ -162,7 +162,12 @@ export function SplitPlaylistPanes({
   if (!expanded) {
     return (
       <View style={{ flex: 1, minHeight: 0 }}>
-        <View style={{ flex: 1, minHeight: 0 }}>
+        {/* key on deckChannelId so a deck-channel-id change (e.g. a model/scene
+            swap that re-IDs the deck base channel) remounts the pane with fresh
+            per-instance panel state instead of carrying stale assignment/entry
+            cache across the switch. The slot key ('primary') is stable; the deck
+            id is what changes. */}
+        <View key={`primary-${deckChannelId}`} style={{ flex: 1, minHeight: 0 }}>
           <PlaylistPanel
             channelId="primary"
             role="deckSlot"
@@ -209,7 +214,7 @@ export function SplitPlaylistPanes({
       {/* Pane 1 — DECK A (primary). flexGrow = ratio share; flexBasis:0 +
           minHeight:0 so it truly splits the container rather than sizing to its
           content. */}
-      <View style={{ flexGrow: paintRatio, flexBasis: 0, minHeight: 0 }}>
+      <View key={`primary-${deckChannelId}`} style={{ flexGrow: paintRatio, flexBasis: 0, minHeight: 0 }}>
         <PlaylistPanel
           channelId="primary"
           role="deckSlot"
@@ -247,7 +252,7 @@ export function SplitPlaylistPanes({
       {/* Pane 2 — DECK B (secondary). Complementary flexGrow share; ✕ (onClosePane)
           clears the slot binding AND collapses back to the "+ SECOND PLAYLIST"
           bar. */}
-      <View style={{ flexGrow: 1 - paintRatio, flexBasis: 0, minHeight: 0 }}>
+      <View key={`secondary-${deckChannelId}`} style={{ flexGrow: 1 - paintRatio, flexBasis: 0, minHeight: 0 }}>
         <PlaylistPanel
           channelId="secondary"
           role="deckSlot"
