@@ -7,7 +7,6 @@ import { RigGlobals } from '@/components/RigGlobals';
 import { GlobalParams, DeckSavedFlash } from '@/components/GlobalParams';
 import { CPCControls } from '@/components/CPCControls';
 import { DeckTopBar } from '@/components/DeckTopBar';
-import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { GlobalHueRow } from '@/components/global_hue_row';
 import { EntryLabelEditor } from '@/components/EntryLabelEditor';
 import { PixelStrip } from '@/components/ui/PixelStrip';
@@ -15,14 +14,19 @@ import { AllModulationsPanel } from '@/components/AllModulationsPanel';
 import { useFocusEffect } from 'expo-router';
 import {
   getAutopilot, setAutopilot,
+  setAutopilotProfile as apiSetAutopilotProfile,
   fetchDeckChannel, setDeckChannelControl,
   setMixerView,
   fetchDeckTransitionConfig, setDeckTransitionConfig,
   fetchDeckColorAutopilot, setDeckColorAutopilot,
   fetchPlaylists,
   fetchChannelPlaylist,
+  setChannelPlaylist,
+  setDeckPlaylistSplit,
+  fetchDeckPlaylistSlots,
   type DeckTransitionConfig,
   type DeckColorAutopilotConfig,
+  type PlaylistAssignment,
 } from '@/utils/api';
 import { setChannelColor } from '@/utils/channelExtrasApi';
 import { panicMixer } from '@/utils/channelOpsApi';
@@ -38,6 +42,7 @@ import { PlanLockBanner } from '@/components/PlanLockBanner';
 import { PlanLockScrim } from '@/components/PlanLockScrim';
 import { ColorAutopilotPanel } from '@/components/deck/ColorAutopilotPanel';
 import { PatternAutopilotPanel } from '@/components/deck/pattern_autopilot_panel';
+import { SplitPlaylistPanes } from '@/components/deck/split_playlist_panes';
 
 // 8pt hitSlop on every edge → a 28×28 visual button gets a 44×44 interactive
 // area (28 + 8 + 8 = 44), matching the mixer's touch-target floor.
@@ -208,6 +213,30 @@ export default function ControlDeckScreen() {
   const [groupMode, setGroupMode] = useState<boolean>(false);
   const [groupSize, setGroupSize] = useState<number>(3);
   const [groupDwell, setGroupDwell] = useState<number>(6);
+  // AUTOPILOT PROFILE (feat/autopilot_deck_improvement): the deck autopilot is a
+  // set of named profiles. `random` (default — today's shuffle/sequential
+  // cycling, byte-identical) and `audio_reactive` (audio-driven). The profile
+  // lives on the deck base channel's playlist.autopilot and rides the
+  // `autopilot` WS broadcast (`profile` + the selectable-list `profiles`). Seed
+  // from GET /autopilot; reconcile in the `autopilot` WS branch; write through
+  // setAutopilotProfile (POST /deck/playlist/autopilot {profile}). Defaults are
+  // the ONE documented schema default (`'random'`) and a single-item list so the
+  // dropdown renders even before the first broadcast.
+  const [autopilotProfile, setAutopilotProfile] = useState<string>('random');
+  const [autopilotProfiles, setAutopilotProfiles] = useState<string[]>(['random']);
+
+  // DECK SPLIT PLAYLISTS (feat/autopilot_deck_improvement): the PATTERNS column
+  // is two stacked, resizable playlist panes — `primary` (DECK A, today's main
+  // list) and an OPTIONAL `secondary` (DECK B). The deck still plays one
+  // pattern; the panes are stable name bindings the operator browses/drives.
+  // These fields ride the `deck` WS message's `playlistSlots` (no new WS type),
+  // seeded from GET /deck/playlist/slots. `splitRatio` is the divider's pane-1
+  // share (0.15..0.85; the ONE documented default is 0.5). `secondaryBound`
+  // drives whether pane 2 is shown expanded. PlaylistPanel (role="deckSlot")
+  // reconciles each pane's own playlist off the same message, so this state only
+  // needs the binding presence + ratio, not the full entry lists.
+  const [deckSplitRatio, setDeckSplitRatio] = useState<number>(0.5);
+  const [deckSecondaryBound, setDeckSecondaryBound] = useState<boolean>(false);
 
   // Deck transition config (soft swap between patterns via server-side
   // double-buffer — see DECK TRANSITIONS in DeckTransitionControls.tsx
@@ -347,12 +376,37 @@ export default function ControlDeckScreen() {
           shuffle: !!ap.shuffle,
         });
       }
+      // DECK SPLIT PLAYLISTS: the two panes' bindings + divider ratio ride the
+      // same `deck` message's `playlistSlots` map (the engine folds it in — no
+      // new WS type). We only track secondary presence + the ratio here; each
+      // pane's PlaylistPanel (role="deckSlot") reconciles its own list off the
+      // same map. Defensive: only adopt a well-typed ratio so a malformed field
+      // can't jump the divider.
+      const slots = (msg as { playlistSlots?: { secondary?: unknown; splitRatio?: unknown } }).playlistSlots;
+      if (slots && typeof slots === 'object') {
+        setDeckSecondaryBound(!!slots.secondary);
+        if (typeof slots.splitRatio === 'number' && Number.isFinite(slots.splitRatio)) {
+          setDeckSplitRatio(slots.splitRatio);
+        }
+      }
     } else if (msg.type === 'autopilot') {
       if (typeof msg.active === 'boolean') setPlaylistActive(msg.active);
       if (typeof msg.delay_s === 'string' && (msg.delay_s as string).length) {
         setPlaylistDelayStr(msg.delay_s as string);
       }
       if (typeof msg.shuffle === 'boolean') setIsShuffle(msg.shuffle);
+      // AUTOPILOT PROFILE: the `autopilot` broadcast carries the active `profile`
+      // (normalized string) + the selectable `profiles` list. Reconcile both so
+      // the dropdown reflects an operator POST, a per-scene restore, OR a
+      // plan-cue-driven profile change live. Defensive: only adopt well-typed
+      // values so a malformed field can't blow away a good one (mirrors the
+      // group-locality reconcile above).
+      const apProfile = (msg as { profile?: unknown }).profile;
+      if (typeof apProfile === 'string' && apProfile.length) setAutopilotProfile(apProfile);
+      const apProfiles = (msg as { profiles?: unknown }).profiles;
+      if (Array.isArray(apProfiles) && apProfiles.every((p) => typeof p === 'string') && apProfiles.length) {
+        setAutopilotProfiles(apProfiles as string[]);
+      }
       // Next-pattern-swap wall-clock ms (null when inactive) — the engine
       // re-broadcasts it on every cycle, so the deck countdown stays accurate
       // whether the operator OR a plan cue is driving the cadence.
@@ -431,6 +485,16 @@ export default function ControlDeckScreen() {
       setPlaylistActive(apResult.data.active);
       setPlaylistDelayStr(apResult.data.delay_s);
       setIsShuffle(apResult.data.shuffle);
+      // AUTOPILOT PROFILE: seed the active profile + selectable list from the
+      // same GET /autopilot the daemon fields come from (the engine folds
+      // `profile`/`profiles` into that response). Only adopt well-typed values;
+      // otherwise keep the documented `'random'` default.
+      if (typeof apResult.data.profile === 'string' && apResult.data.profile.length) {
+        setAutopilotProfile(apResult.data.profile);
+      }
+      if (Array.isArray(apResult.data.profiles) && apResult.data.profiles.length) {
+        setAutopilotProfiles(apResult.data.profiles as string[]);
+      }
     }
 
     // PATTERN-GROUP LOCALITY: the group knobs are NOT in the autopilot daemon
@@ -465,6 +529,19 @@ export default function ControlDeckScreen() {
     if (deckRes.ok && deckRes.data) {
       const ch = deckRes.data.channel || null;
       setDeckChannel(ch);
+    }
+
+    // DECK SPLIT PLAYLISTS: hydrate the divider ratio + secondary-slot presence
+    // before the first `deck` broadcast so the panes render at the right split
+    // (and pane 2 opens if a secondary was bound in a previous session). The
+    // per-pane entry lists still come from each PlaylistPanel's own deckSlot
+    // fetch/reconcile — this only seeds the parent-owned split chrome.
+    const slotsRes = await fetchDeckPlaylistSlots();
+    if (slotsRes.ok && slotsRes.data) {
+      setDeckSecondaryBound(!!slotsRes.data.secondary);
+      if (typeof slotsRes.data.splitRatio === 'number' && Number.isFinite(slotsRes.data.splitRatio)) {
+        setDeckSplitRatio(slotsRes.data.splitRatio);
+      }
     }
 
     // Seed the parent-owned playlist library (see comment on the
@@ -547,6 +624,88 @@ export default function ControlDeckScreen() {
       Alert.alert('Color autopilot not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
     });
   }, [notifyInteraction]);
+
+  // Set the AUTOPILOT PROFILE (optimistic + rollback + Alert), cloned exactly
+  // from handleDeckTxChange: snapshot the previous profile, apply optimistically,
+  // POST /deck/playlist/autopilot {profile}, and on a rejected/failed POST
+  // restore the previous value + Alert (Codex P0 — never leave the UI showing a
+  // value the engine refused; an unknown profile 400s loud). On success the
+  // engine broadcasts `autopilot` with the new profile, which the onControl
+  // handler reconciles — that broadcast is the source of truth. planGate-guarded
+  // (the panel is also `disabled`, and the PlanLockScrim blankets it).
+  const handleAutopilotProfileChange = useCallback((profile: string) => {
+    if (planGate) return;
+    notifyInteraction();
+    let prevProfile = 'random';
+    setAutopilotProfile((prev) => { prevProfile = prev; return profile; });
+    void apiSetAutopilotProfile(profile).then((res) => {
+      if (!res.ok) {
+        console.error('[Deck] Autopilot-profile POST rejected:', res.error);
+        setAutopilotProfile(prevProfile);
+        Alert.alert(
+          'Autopilot profile not applied',
+          `The engine rejected the change. ${res.error || ''} Reverted to the previous value.`.trim(),
+        );
+      }
+    }).catch((err) => {
+      console.error('[Deck] Autopilot-profile POST failed:', err);
+      setAutopilotProfile(prevProfile);
+      Alert.alert('Autopilot profile not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+    });
+  }, [notifyInteraction, planGate]);
+
+  // DECK SPLIT: POST the new divider ratio on drag release (optimistic +
+  // rollback + Alert). The split component already applied the ratio locally
+  // during the drag; we snapshot the pre-drag stored ratio and restore it if the
+  // engine rejects (an out-of-band ratio 400s — fail loud). On success the
+  // engine broadcasts `deck` with the new splitRatio, which the onControl
+  // handler reconciles (source of truth). planGate-guarded.
+  const handleSplitRelease = useCallback((ratio: number) => {
+    if (planGate) return;
+    notifyInteraction();
+    let prevRatio = 0.5;
+    setDeckSplitRatio((prev) => { prevRatio = prev; return ratio; });
+    void setDeckPlaylistSplit(ratio).then((res) => {
+      if (!res.ok) {
+        console.error('[Deck] Split-ratio POST rejected:', res.error);
+        setDeckSplitRatio(prevRatio);
+        Alert.alert(
+          'Split not applied',
+          `The engine rejected the divider position. ${res.error || ''} Reverted.`.trim(),
+        );
+      }
+    }).catch((err) => {
+      console.error('[Deck] Split-ratio POST failed:', err);
+      setDeckSplitRatio(prevRatio);
+      Alert.alert('Split not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+    });
+  }, [notifyInteraction, planGate]);
+
+  // DECK SPLIT: clear the SECONDARY pane's slot binding (✕ on pane 2). No
+  // ConfirmSheet — clearing a slot destroys nothing. Optimistic collapse +
+  // rollback + Alert; on success the engine broadcasts `deck` with the slot
+  // cleared (source of truth). Clearing a LIVE secondary promotes it to primary
+  // engine-side, which the WS reconcile then reflects.
+  const handleCloseSecondary = useCallback(() => {
+    if (planGate) return;
+    notifyInteraction();
+    const prevBound = deckSecondaryBound;
+    setDeckSecondaryBound(false);
+    void setChannelPlaylist('deckSlot', 'secondary', null).then((res) => {
+      if (!res.ok) {
+        console.error('[Deck] Clear secondary slot rejected:', res.error);
+        setDeckSecondaryBound(prevBound);
+        Alert.alert(
+          'Second playlist not cleared',
+          `The engine rejected the change. ${res.error || ''} Reverted.`.trim(),
+        );
+      }
+    }).catch((err) => {
+      console.error('[Deck] Clear secondary slot failed:', err);
+      setDeckSecondaryBound(prevBound);
+      Alert.alert('Second playlist not cleared', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+    });
+  }, [notifyInteraction, planGate, deckSecondaryBound]);
 
   // Per-channel color metadata (docs/39 §8.4) on the DECK channel. Pure
   // operator-facing accent (no render effect) — tints the deck card for
@@ -735,8 +894,12 @@ export default function ControlDeckScreen() {
           // Wide: this column flexes to ~1.1 of the row. Narrow (stacked): the
           // leftPane's default flex:1 inside a column container would let it
           // eat all vertical space — pin a sensible min height instead so the
-          // stack scrolls naturally with the columns below it.
-          isWide ? { flex: 1.1 } : { flex: 0, minHeight: 320 },
+          // stack scrolls naturally with the columns below it. When a SECOND
+          // playlist pane is bound in the narrow/stacked layout, raise the floor
+          // 320→480 so the split card is tall enough to seat two MIN_PANE panes
+          // (deck_split_playlists.md §Resizable split): below 2·MIN_PANE_PT the
+          // divider forces a fixed 0.5, so the extra height keeps the drag live.
+          isWide ? { flex: 1.1 } : { flex: 0, minHeight: deckSecondaryBound ? 480 : 320 },
         ]}>
           {isConnected === false && <OfflineBanner error={connectionError} />}
 
@@ -755,24 +918,26 @@ export default function ControlDeckScreen() {
                   control; the bottom effects bar stays hue-less. Gated under
                   the soft PLAN lock like every other mutating deck control. */}
               <GlobalHueRow disabled={planGate} />
-              <PlaylistPanel
-                channelId={deckChannelId}
-                role="deck"
-                channelLabel="DECK MAIN"
+              {/* DECK SPLIT PLAYLISTS: the single deck list is now two stacked,
+                  resizable panes — DECK A (primary, today's list) and an OPTIONAL
+                  DECK B (secondary). The deck still plays exactly one pattern;
+                  tapping an entry in either pane drives it. Pane 2 is collapsed
+                  by default (a "+ SECOND PLAYLIST" bar) so operators who never
+                  add one see today's single list, pixel-identical. Both panes are
+                  disabled during a soft-swap OR under the soft PLAN lock, exactly
+                  as the single deck panel was. The PARAMETERS column (col 2) is
+                  untouched — it still renders off the live deck channel. */}
+              <SplitPlaylistPanes
+                deckChannelId={deckChannelId}
                 locked={!!deckChannel?.locked}
-                initialAssignment={deckChannel?.playlist || null}
-                // During a deck pattern soft-swap we grey out the list +
-                // disable taps. The engine also rejects taps server-side
-                // with 409 — this is just the UX layer of the contract.
-                // ALSO disabled under the soft PLAN lock (planGate): pattern
-                // selection changes "what's playing", which the plan owns until
-                // the operator takes over. The greyed/disabled list IS the
-                // "take over to change" affordance — taking over (any control
-                // touch fires the takeover lease) clears planGate and re-enables
-                // it.
+                primaryAssignment={(deckChannel?.playlist as PlaylistAssignment) || null}
                 disabled={deckSwapInFlight || planGate}
                 onRefreshConnection={connectToEngine}
                 playlistLibrary={playlistLibrary}
+                splitRatio={deckSplitRatio}
+                secondaryBound={deckSecondaryBound}
+                onSplitRelease={handleSplitRelease}
+                onCloseSecondary={handleCloseSecondary}
               />
             </View>
           ) : (
@@ -973,6 +1138,8 @@ export default function ControlDeckScreen() {
               groupMode={groupMode}
               groupSize={groupSize}
               groupDwell={groupDwell}
+              profile={autopilotProfile}
+              profiles={autopilotProfiles}
               nextSwapAtMs={patternNextSwapAtMs}
               disabled={planGate}
               onInteraction={notifyInteraction}
@@ -1002,6 +1169,12 @@ export default function ControlDeckScreen() {
                 if (patch.groupDwell !== undefined) {
                   setGroupDwell(patch.groupDwell);
                   setAutopilot(undefined, undefined, undefined, { groupDwell: patch.groupDwell });
+                }
+                // AUTOPILOT PROFILE: the dropdown emits `profile`; route it
+                // through the dedicated optimistic-rollback handler (its own POST
+                // + Alert, NOT setAutopilot which would double-write).
+                if (patch.profile !== undefined) {
+                  handleAutopilotProfileChange(patch.profile);
                 }
               }}
               // ── DECK TRANSITIONS (nested INTO the AUTOPILOT PATTERNS card,

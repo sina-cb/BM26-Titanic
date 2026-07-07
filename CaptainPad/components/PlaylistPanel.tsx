@@ -108,6 +108,12 @@ interface Props {
    *  GETs under burst channel adds, which was the original
    *  "no playlists yet on 3rd channel" symptom. */
   playlistLibrary?: string[];
+  /** Optional close/clear affordance. When provided, a small ✕ button renders
+   *  in the panel header (beside refresh). Used by the deck split's SECOND pane
+   *  to clear its slot binding (setChannelPlaylist('deckSlot','secondary',null))
+   *  and collapse the pane. No ConfirmSheet — clearing a slot destroys nothing.
+   */
+  onClosePane?: () => void;
 }
 
 function genEntryId() {
@@ -148,7 +154,7 @@ function playlistHeaderTitle(channelLabel?: string): string {
   return `${normalized}${HEADER_SEP}PLAYLIST`;
 }
 
-export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce, playlistLibrary }) => {
+export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce, playlistLibrary, onClosePane }) => {
   const C = usePalette();
   // playlistLibrary is currently consumed via the local `playlists`
   // state + engineEvents `playlistLibrary` subscription further down.
@@ -581,6 +587,22 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         if (!ovCh) return;
         const next = ovCh.playlist || null;
         if (shouldSuppressReconcile(next?.activeEntryId ?? null, 'deckOverlay')) return;
+        const local = assignmentRef.current;
+        const changed =
+          (local?.name ?? null) !== (next?.name ?? null) ||
+          (local?.activeEntryId ?? null) !== (next?.activeEntryId ?? null);
+        if (changed) refresh();
+      } else if (role === 'deckSlot' && msg.type === 'deck') {
+        // Deck split-pane slot event: this pane's assignment rides the `deck`
+        // message's `playlistSlots` map keyed by slot ('primary' | 'secondary')
+        // — folded in by the engine, no new WS type. Line-for-line mirror of the
+        // deckOverlay branch above: find our slot, adopt its (virtual) playlist.
+        // A non-live pane serializes activeEntryId:null so its highlight clears;
+        // the live pane carries the real active id. suppress-gate included so an
+        // in-flight optimistic tap isn't bounced.
+        const slots = (msg as { playlistSlots?: Record<string, PlaylistAssignment | null> }).playlistSlots || {};
+        const next = slots[channelId] || null;
+        if (shouldSuppressReconcile(next?.activeEntryId ?? null, 'deckSlot')) return;
         const local = assignmentRef.current;
         const changed =
           (local?.name ?? null) !== (next?.name ?? null) ||
@@ -1134,6 +1156,35 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
               <IconSymbol name="arrow.clockwise" size={sz.btnFont + 4} color={C.primary} />
             </TouchableOpacity>
           </>
+        )}
+        {onClosePane && (
+          /* Close/clear the pane — deck split SECOND pane only. Clears the slot
+             binding + collapses the pane; destroys nothing, so no ConfirmSheet.
+             hitSlop lifts the visual btn to the 44pt touch floor. */
+          <TouchableOpacity
+            onPress={onClosePane}
+            // Gate with the panel's own `disabled` (deck swap in flight / plan
+            // lock) so this control isn't the one tappable thing while every
+            // sibling is frozen — the deckSwapInFlight state dims but has no
+            // scrim, so an un-disabled ✕ would leak through.
+            disabled={disabled}
+            accessibilityLabel="Close this playlist pane"
+            accessibilityRole="button"
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={{
+              width: sz.btnH,
+              height: sz.btnH,
+              borderRadius: 6,
+              borderWidth: 1,
+              borderColor: C.ghostBorder,
+              backgroundColor: C.surfaceContainerHigh,
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: disabled ? 0.4 : 1,
+            }}
+          >
+            <IconSymbol name="xmark" size={sz.btnFont + 2} color={C.icon} />
+          </TouchableOpacity>
         )}
       </View>
 
