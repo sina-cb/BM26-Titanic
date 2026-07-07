@@ -64,5 +64,5 @@ channels:
     followLeaderId: null
     followScale: 1
 mixGroups: []
-tempoBpm: 127
+tempoBpm: 98
 tempoSourcePref: osc

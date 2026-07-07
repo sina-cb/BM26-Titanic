@@ -1,0 +1,36 @@
+# Auto-written by MarsinEngine — per-scene audio state.
+# Contains:
+#   - mic selection  (capture.platform/inputFormat/device/deviceLabel/deviceId/selectedAt)
+#   - listener tuning (enabled, fftSize, hopSize, bands{...}, kick{...})
+# Written by `engine.js --choose_mic --model <scene>` (mic) and by
+# PATCH /audio/config from CaptainPad (tuning). Do not hand-edit while
+# the engine is running.
+enabled: false
+fftSize: 2048
+hopSize: 512
+bands:
+  lowMaxHz: 200
+  midMaxHz: 4000
+  attackMs: 6
+  releaseMs: 180
+  noiseGate: 0.04
+  inputGain: 1
+  sourceSmoothHz: 12000
+kick:
+  minHz: 50
+  maxHz: 110
+  threshold: 2.4
+  refractoryMs: 220
+  decayMs: 70
+sub:
+  minHz: 30
+  maxHz: 60
+structureDetector:
+  enabled: true
+  dropEdgeMode: windowed
+capture:
+  device: null
+  deviceLabel: null
+  deviceId: null
+  inputFormat: null
+  platform: auto

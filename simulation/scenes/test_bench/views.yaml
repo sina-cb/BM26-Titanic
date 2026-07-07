@@ -6,23 +6,28 @@ views:
   custom:
     - name: ParsBars
       bit: 8
+      word: 0
       groups:
         - ParLights
         - BarLights
     - name: ParsVintages
       bit: 16
+      word: 0
       groups:
         - ParLights
         - VintageLights
     - name: pars
       bit: 32
+      word: 0
       groups:
         - ParLights
     - name: bars
       bit: 64
+      word: 0
       groups:
         - BarLights
     - name: vintages
       bit: 128
+      word: 0
       groups:
         - VintageLights
