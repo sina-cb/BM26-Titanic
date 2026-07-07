@@ -30,6 +30,19 @@ import {
   computeProjection,
   projectOntoConfigs,
   isValidIp,
+  CONTROLLER_TYPE_DMX,
+  CONTROLLER_TYPE_LED,
+  isLedController,
+  setControllerType,
+  CONTROLLER_PROTOCOL_SACN,
+  CONTROLLER_PROTOCOL_ARTNET,
+  DEFAULT_CONTROLLER_PROTOCOL,
+  isArtnetController,
+  setControllerProtocol,
+  normalizeLedConfig,
+  computeLedProjection,
+  testAutoPatch,
+  clearAllPatches,
 } from '../src/dmx/controller_registry.js';
 
 const PINS = {
@@ -685,4 +698,255 @@ test('registry survives a JSON round-trip identically', () => {
   const r1 = reg(tree);
   const r2 = reg(JSON.parse(JSON.stringify(r1)));
   assert.deepEqual(r2, r1);
+});
+
+// ── LED parity: controller type + LED projection (report 20260618_6/_7) ─
+
+test('LED parity: un-typed controller migrates to DMX (loud, not silent)', () => {
+  const r = reg({ controllers: [{ id: 1, name: 'L', ip: '10.1.1.10', ports: [] }] });
+  assert.equal(r.controllers[0].type, CONTROLLER_TYPE_DMX);
+  assert.ok(r._untypedControllers.has(1));
+});
+
+test('LED parity: LED controller carries normalized led config; DMX path skips its chain', () => {
+  const r = reg({
+    controllers: [{
+      id: 1, name: 'LEDs', ip: '10.1.1.20', type: 'LED',
+      led: { order: 'GRBW' },
+      ports: [{ port: 1, universe: 2, chain: ['StrandA'] }],
+    }],
+  });
+  const c = r.controllers[0];
+  assert.ok(isLedController(c));
+  assert.equal(c.led.order, 'GRBW');
+  assert.equal(c.led.stride, 4);
+  // The DMX projection must NOT treat the strand as an orphan fixture.
+  const { violations } = computeProjection(r, new Map(), PINS);
+  assert.ok(!violations.some(v => v.code === 'orphan'));
+});
+
+test('LED parity: setControllerType toggles led config in place', () => {
+  const r = reg({});
+  const c = addController(r, { name: 'C', ip: '10.1.1.30', type: CONTROLLER_TYPE_DMX });
+  assert.equal(c.led, undefined);
+  setControllerType(c, CONTROLLER_TYPE_LED);
+  assert.equal(c.led.order, 'RGBW');
+  setControllerType(c, CONTROLLER_TYPE_DMX);
+  assert.equal(c.led, undefined);
+});
+
+test('LED parity: computeLedProjection allocates sequential RGBW patches', () => {
+  const r = reg({
+    controllers: [{
+      id: 1, name: 'LEDs', ip: '10.1.1.20', type: 'LED',
+      led: { order: 'RGBW', startAddr: 1, baseUniverse: 7 },
+      ports: [{ port: 1, universe: 7, chain: ['A', 'B'] }],
+    }],
+  });
+  const { fields } = computeLedProjection(r, new Map([['A', 50], ['B', 50]]));
+  assert.equal(fields.get('A').universe, 7);
+  assert.equal(fields.get('A').addr, 1);
+  assert.equal(fields.get('B').addr, 201); // after A's 50*4=200 ch
+});
+
+test('LED parity: normalizeLedConfig throws on bad inputs (no fallback)', () => {
+  assert.throws(() => normalizeLedConfig({ order: 'NOPE' }, 'C'), /unknown channel order/);
+  assert.throws(() => normalizeLedConfig({ whiteMode: 'x' }, 'C'), /whiteMode/);
+});
+
+// ── Test Auto-Patch / Clear All Patches (operator quick-patch tools) ────
+
+function effect(name, type = 'TEFogMachine') {
+  return { name, group: 'GlobalEffects', fixtureType: type };
+}
+
+test('testAutoPatch creates controllers and patches all DMX fixtures (0 unmapped)', () => {
+  const r = reg(null); // empty, inactive registry — nothing exists yet
+  assert.equal(registryIsActive(r), false);
+  const configs = configMap(par('P1'), par('P2'), par('P3'));
+  const result = testAutoPatch(r, configs, new Map(), PINS);
+
+  // It created a DMX controller (none existed) and patched every fixture.
+  assert.equal(result.created.length, 1);
+  assert.match(result.created[0], /DMX controller/);
+  assert.equal(result.dmxPatched, 3);
+  assert.equal(result.strandsPatched, 0);
+
+  // Zero unmapped after.
+  const mapped = mappedFixtures(r);
+  for (const name of configs.keys()) assert.ok(mapped.has(name), `${name} should be mapped`);
+
+  // Sequential addresses by footprint (UkingPar = 10 ch): 1, 11, 21 on U2.
+  const proj = computeProjection(r, configs, PINS);
+  assert.deepEqual(fieldsOf(proj, 'P1').dmxUniverse, 2);
+  assert.equal(fieldsOf(proj, 'P1').dmxAddress, 1);
+  assert.equal(fieldsOf(proj, 'P2').dmxAddress, 11);
+  assert.equal(fieldsOf(proj, 'P3').dmxAddress, 21);
+  assert.equal(proj.violations.length, 0);
+});
+
+test('testAutoPatch wraps universes at 512 by footprint', () => {
+  const r = reg(null);
+  // ShehdsBar = 119 ch. 4 of them = 476 ≤ 512 on U2; the 5th (would end at
+  // 595) wraps to U3:ch1.
+  const bar = (name) => ({ name, group: 'Bars', fixtureType: 'ShehdsBar' });
+  const configs = configMap(bar('B1'), bar('B2'), bar('B3'), bar('B4'), bar('B5'));
+  testAutoPatch(r, configs, new Map(), PINS);
+  const proj = computeProjection(r, configs, PINS);
+  assert.equal(fieldsOf(proj, 'B1').dmxAddress, 1);    // U2:1
+  assert.equal(fieldsOf(proj, 'B4').dmxAddress, 358);  // 1+3*119
+  assert.equal(fieldsOf(proj, 'B4').dmxUniverse, 2);
+  assert.equal(fieldsOf(proj, 'B5').dmxUniverse, 3);   // wrapped
+  assert.equal(fieldsOf(proj, 'B5').dmxAddress, 1);
+  assert.equal(proj.violations.length, 0);
+});
+
+test('testAutoPatch pins global effects at config.yaml addresses on U1', () => {
+  const r = reg(null);
+  const configs = configMap(par('P1'), effect('Fog 1', 'TEFogMachine'),
+    effect('Haze 1', 'ChauvetHaze4D'));
+  const result = testAutoPatch(r, configs, new Map(), PINS);
+  assert.equal(result.dmxPatched, 1);
+  assert.equal(result.effectsPatched, 2);
+  const proj = computeProjection(r, configs, PINS);
+  assert.equal(fieldsOf(proj, 'Fog 1').dmxUniverse, 1);
+  assert.equal(fieldsOf(proj, 'Fog 1').dmxAddress, 512);
+  assert.equal(fieldsOf(proj, 'Haze 1').dmxAddress, 510);
+  // Nothing unmapped, no overflow.
+  const mapped = mappedFixtures(r);
+  for (const name of configs.keys()) assert.ok(mapped.has(name));
+});
+
+test('testAutoPatch binds all LED strands to an LED controller', () => {
+  const r = reg(null);
+  const strands = new Map([['S1', 50], ['S2', 50]]);
+  const result = testAutoPatch(r, new Map(), strands, PINS);
+  assert.equal(result.strandsPatched, 2);
+  assert.equal(result.created.length, 1);
+  assert.match(result.created[0], /LED controller/);
+  const { fields } = computeLedProjection(r, strands);
+  assert.ok(fields.has('S1'));
+  assert.ok(fields.has('S2'));
+  assert.equal(fields.get('S2').addr, 201); // after S1's 50*4 = 200 ch
+  const mapped = mappedFixtures(r);
+  assert.ok(mapped.has('S1') && mapped.has('S2'));
+});
+
+test('testAutoPatch covers DMX + LED together, zero unmapped', () => {
+  const r = reg(null);
+  const configs = configMap(par('P1'), par('P2'), effect('Fog 1'));
+  const strands = new Map([['S1', 30]]);
+  const result = testAutoPatch(r, configs, strands, PINS);
+  assert.equal(result.created.length, 2); // a DMX + an LED controller
+  const mapped = mappedFixtures(r);
+  for (const name of [...configs.keys(), ...strands.keys()]) {
+    assert.ok(mapped.has(name), `${name} should be mapped`);
+  }
+});
+
+test('testAutoPatch reuses an existing usable controller (no duplicate create)', () => {
+  const r = reg({
+    controllers: [{ id: 1, name: 'Real DMX', ip: '10.0.0.9', type: 'DMX',
+      ports: [{ port: 1, universe: 2, chain: [] }] }],
+  });
+  const configs = configMap(par('P1'));
+  const result = testAutoPatch(r, configs, new Map(), PINS);
+  assert.equal(result.created.length, 0); // reused 'Real DMX'
+  assert.equal(r.controllers.length, 1);
+  assert.ok(mappedFixtures(r).has('P1'));
+});
+
+test('testAutoPatch is loud: never leaves anything unmapped (zero count after)', () => {
+  const r = reg(null);
+  const configs = configMap(par('P1'), par('P2'), effect('Fog 1'));
+  const strands = new Map([['S1', 10], ['S2', 10]]);
+  testAutoPatch(r, configs, strands, PINS);
+  const mapped = mappedFixtures(r);
+  let unmapped = 0;
+  for (const name of [...configs.keys(), ...strands.keys()]) {
+    if (!mapped.has(name)) unmapped += 1;
+  }
+  assert.equal(unmapped, 0);
+});
+
+test('clearAllPatches unpatches everything (patched count == 0 after)', () => {
+  const r = reg(null);
+  const configs = configMap(par('P1'), par('P2'), effect('Fog 1'));
+  const strands = new Map([['S1', 20]]);
+  testAutoPatch(r, configs, strands, PINS);
+  assert.ok(mappedFixtures(r).size > 0);
+
+  const { entriesCleared, freed } = clearAllPatches(r);
+  assert.ok(entriesCleared >= 4); // 2 pars + 1 effect + 1 strand
+  assert.ok(freed.includes('P1') && freed.includes('S1'));
+
+  // Nothing mapped, controllers + ports kept.
+  assert.equal(mappedFixtures(r).size, 0);
+  assert.ok(r.controllers.length > 0);
+  for (const c of r.controllers) for (const p of c.ports) assert.equal(p.chain.length, 0);
+
+  // And the projection now reports every fixture unpatched.
+  const proj = computeProjection(r, configs, PINS);
+  for (const name of configs.keys()) {
+    const f = fieldsOf(proj, name);
+    if (f) assert.equal(f.dmxUniverse, 0);
+  }
+});
+
+test('clearAllPatches on an empty/inactive registry is a no-op', () => {
+  const r = reg(null);
+  const { entriesCleared, freed } = clearAllPatches(r);
+  assert.equal(entriesCleared, 0);
+  assert.equal(freed.length, 0);
+});
+
+// ── Output transport: per-controller protocol (sACN | Art-Net) ──────────
+
+test('protocol: un-protocolled controller migrates to sACN (loud, not silent)', () => {
+  const r = reg({ controllers: [{ id: 1, name: 'C', ip: '10.1.1.10', type: 'DMX', ports: [] }] });
+  assert.equal(r.controllers[0].protocol, DEFAULT_CONTROLLER_PROTOCOL);
+  assert.equal(r.controllers[0].protocol, CONTROLLER_PROTOCOL_SACN);
+  assert.ok(r._unprotocolledControllers.has(1));
+});
+
+test('protocol: explicit artnet loads and is reported via isArtnetController', () => {
+  const r = reg({
+    controllers: [{ id: 1, name: 'C', ip: '10.1.1.10', type: 'DMX', protocol: 'artnet', ports: [] }],
+  });
+  const c = r.controllers[0];
+  assert.equal(c.protocol, CONTROLLER_PROTOCOL_ARTNET);
+  assert.ok(isArtnetController(c));
+  assert.ok(!r._unprotocolledControllers.has(1));
+});
+
+test('protocol: invalid protocol hard-stops the boot (structural)', () => {
+  assert.throws(() => reg({
+    controllers: [{ id: 1, name: 'C', ip: '10.1.1.10', protocol: 'ddp', ports: [] }],
+  }), /invalid protocol 'ddp'/);
+});
+
+test('protocol: addController defaults to sACN, honors explicit artnet', () => {
+  const r = reg({});
+  const a = addController(r, { name: 'A', ip: '10.1.1.10' });
+  assert.equal(a.protocol, CONTROLLER_PROTOCOL_SACN);
+  const b = addController(r, { name: 'B', ip: '10.1.1.20', protocol: CONTROLLER_PROTOCOL_ARTNET });
+  assert.ok(isArtnetController(b));
+});
+
+test('protocol: setControllerProtocol toggles in place; invalid throws', () => {
+  const r = reg({});
+  const c = addController(r, { name: 'C', ip: '10.1.1.30' });
+  setControllerProtocol(c, CONTROLLER_PROTOCOL_ARTNET);
+  assert.equal(c.protocol, CONTROLLER_PROTOCOL_ARTNET);
+  setControllerProtocol(c, CONTROLLER_PROTOCOL_SACN);
+  assert.equal(c.protocol, CONTROLLER_PROTOCOL_SACN);
+  assert.throws(() => setControllerProtocol(c, 'wled'), /invalid protocol/);
+});
+
+test('protocol: round-trips through createControllerRegistry (serializes)', () => {
+  const r = reg({
+    controllers: [{ id: 1, name: 'C', ip: '10.1.1.10', type: 'DMX', protocol: 'artnet', ports: [] }],
+  });
+  const r2 = reg(JSON.parse(JSON.stringify(r)));
+  assert.equal(r2.controllers[0].protocol, CONTROLLER_PROTOCOL_ARTNET);
 });

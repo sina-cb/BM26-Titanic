@@ -94,10 +94,15 @@ def snapshot(root: Path, files: list[str], include_unstaged: bool) -> Path:
     """Materialize the to-be-committed content into a temp dir, preserving
     repo-relative layout so path-based gitleaks rules apply correctly."""
     tmp = Path(tempfile.mkdtemp(prefix="bm26_seccheck_"))
-    # Index content for staged files…
+    # Index content for staged files. Paths are fed via --stdin (NUL-delimited)
+    # rather than argv so a large changeset (e.g. a tree-wide rename) can't blow
+    # the OS command-line length limit — on Windows that surfaces as
+    # `WinError 206: The filename or extension is too long` and would otherwise
+    # crash the gate before it can scan.
     out = _run(
-        ["git", "checkout-index", f"--prefix={tmp.as_posix()}/", "--"] + files,
+        ["git", "checkout-index", f"--prefix={tmp.as_posix()}/", "--stdin", "-z"],
         cwd=root,
+        input="\0".join(files),
     )
     if out.returncode != 0:
         sys.exit(f"security_check: checkout-index failed: {out.stderr.strip()}")

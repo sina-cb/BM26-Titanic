@@ -50,10 +50,15 @@ import { SignalPostProcessor, KNOWN_SIGNALS } from './audio/postproc/signal_post
 import { parseEngineFlags } from './lib/engine_cli_flags.js';
 import { handleAudioCliFlags } from './audio/capture/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
+import { buildFixtureTypeIds, fixtureTypeId } from './lib/fixture_type_constants.js';
+import { ViewBitAllocator, isPowerOfTwoBit as isWordBit, MAX_WORD_BIT } from './lib/view_word.js';
+import { deriveAutoViews } from './lib/auto_views.js';
+import { createBitFreeViewPromoter } from './lib/in_view_intrinsic.js';
+import { derivePixelLocalIndices } from './lib/pixel_local_index.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
-import { createSacnOutput } from './lib/sacn_output.js';
+import { createOutputDispatch } from './lib/output_dispatch.js';
 import http from 'http';
 import { WebSocketServer } from 'ws';
 import path from 'path';
@@ -69,6 +74,33 @@ const __dirname = path.dirname(__filename);
 // old `npx kill-port` which needs the network.
 const require = createRequire(import.meta.url);
 const { freeStackPorts } = require('../tools/port_cleanup.cjs');
+
+// Build the 7-lane per-pixel meta array (the buffer WasmHost packs for the
+// VM's *_with_meta render exports). Lane 6 (`viewMaskHi`) carries Tier-C
+// high views. Centralized so the boot pack, the hot-reload pack, and the
+// inView-promotion RE-pack stay byte-for-byte identical (a drift here would
+// silently mis-map view membership). `localIndices` is the per-pixel
+// localIndex array (see derivePixelLocalIndices) computed by the caller.
+function buildMetaArray(pixels, localIndices) {
+  return pixels.map((px, i) => ({
+    controllerId: px.cId || 0,
+    sectionId: px.sId || 0,
+    fixtureId: px.fId || 0,
+    viewMask: px.vMask || 0,
+    fixtureTypeId: fixtureTypeId(px.fixtureType),
+    pixelLocalIndex: localIndices[i],
+    viewMaskHi: px.vMaskHi || 0 // lane 6 — Tier-C high view word (views 31..61)
+  }));
+}
+
+// Re-pack the host meta buffer when a compile promoted a bit-free view to
+// an in-VM bit (host.metaDirty), so the newly-set bit reaches the VM before
+// the next render. A no-op when nothing was promoted. Clears the flag.
+function repackMetaIfDirty(wasmHost, pixels) {
+  if (!wasmHost || !wasmHost.metaDirty) return;
+  wasmHost.setPixelMeta(buildMetaArray(pixels, derivePixelLocalIndices(pixels)));
+  wasmHost.metaDirty = false;
+}
 
 function loadConfig() {
   try {
@@ -99,6 +131,11 @@ function parseArgs() {
     list: false,
     destinations: cSacn.destinations || (cSacn.destination ? [cSacn.destination] : ['127.0.0.1']),
     sourceName: cSacn.sourceName || 'MarsinEngine',
+    // Per-controller output routing (sACN vs Art-Net). Optional: with no
+    // `controllers:` block every universe streams sACN to `destinations`
+    // (the long-standing default). A declared controller picks its
+    // transport + host; see lib/output_dispatch.js.
+    controllers: Array.isArray(config.controllers) ? config.controllers : null,
     // Fail loud (below) if neither config nor --port supplies a valid port —
     // never silently guess one.
     port: Number.isInteger(cServer.port) ? cServer.port : null,
@@ -254,7 +291,15 @@ async function loadModel(modelName, bustCache = false) {
   }
 
   // Validate every declared entry and reserve explicit bits.
+  //
+  // Tier-C: a preset may pin into the high view word with `word: 1` (the
+  // `viewMaskHi` lane, views 31..61). Word 0 and word 1 are independent bit
+  // spaces — a word-1 bit value may equal a word-0 bit value without
+  // collision — so reservation is tracked per word. `reservedMask` is the
+  // WORD-0 reservation that group-bit assignment below must avoid;
+  // `reservedMaskHi` guards word-1 reuse.
   let reservedMask = 0;
+  let reservedMaskHi = 0;
   const seenNames = new Set();
   for (const entry of declaredViewMasks) {
     if (!entry || typeof entry.name !== 'string' || entry.name.length === 0) {
@@ -268,6 +313,14 @@ async function loadModel(modelName, bustCache = false) {
     const hasGroups = Array.isArray(entry.groups) && entry.groups.length > 0;
     const hasIndices = Array.isArray(entry.pixelIndices) && entry.pixelIndices.length > 0;
     const hasBit = entry.bit !== undefined;
+    const word = entry.word === 1 ? 1 : 0;
+    if (entry.word !== undefined && entry.word !== 0 && entry.word !== 1) {
+      throw new Error(`viewMasks entry '${entry.name}' in ${viewMasksSource}: word must be 0 or 1, got ${entry.word}`);
+    }
+    if (word === 1 && !hasBit) {
+      throw new Error(`viewMasks entry '${entry.name}' in ${viewMasksSource} declares word:1 (viewMaskHi) ` +
+        `and therefore needs an explicit single-bit value`);
+    }
     if (hasGroups === hasIndices) {
       throw new Error(`viewMasks entry '${entry.name}' in ${viewMasksSource} must declare exactly one of ` +
         `groups:[...] or pixelIndices:[...] for its pixel membership`);
@@ -277,8 +330,8 @@ async function loadModel(modelName, bustCache = false) {
         `therefore needs an explicit bit`);
     }
     if (hasBit) {
-      // Same cap as groupBits below: vMask is Int32 across the WASM
-      // boundary, so 0x40000000 (bit 30) is the highest safe bit.
+      // Per-word cap: vMask/vMaskHi are Int32 across the WASM boundary, so
+      // 0x40000000 (bit 30) is the highest safe bit IN EITHER WORD.
       // 0x80000000 passes the power-of-two check via Int32 coercion but
       // ORs in a NEGATIVE value, and 2^32 silently merges as zero.
       if (!Number.isInteger(entry.bit) || entry.bit <= 0 || entry.bit > 0x40000000 ||
@@ -287,10 +340,18 @@ async function loadModel(modelName, bustCache = false) {
           `power of two ≤ 0x40000000, got ${entry.bit}. Unions of base groups belong in a bit-less ` +
           `groups:[...] entry.`);
       }
-      if ((reservedMask & entry.bit) !== 0) {
-        throw new Error(`viewMasks entry '${entry.name}' in ${viewMasksSource} reuses bit 0x${entry.bit.toString(16)}`);
+      if (word === 1) {
+        if ((reservedMaskHi & entry.bit) !== 0) {
+          throw new Error(`viewMasks entry '${entry.name}' in ${viewMasksSource} reuses viewMaskHi ` +
+            `bit 0x${entry.bit.toString(16)}`);
+        }
+        reservedMaskHi |= entry.bit;
+      } else {
+        if ((reservedMask & entry.bit) !== 0) {
+          throw new Error(`viewMasks entry '${entry.name}' in ${viewMasksSource} reuses bit 0x${entry.bit.toString(16)}`);
+        }
+        reservedMask |= entry.bit;
       }
-      reservedMask |= entry.bit;
     }
   }
 
@@ -316,6 +377,7 @@ async function loadModel(modelName, bustCache = false) {
     if (!px) continue;
     px.vMask = px.vMask ?? 0;
     px.viewMask = px.viewMask ?? 0;
+    px.vMaskHi = px.vMaskHi ?? 0; // Tier-C high view word (views 31..61)
     if (typeof px.group === 'string' && px.group.length > 0 && !modelGroups.includes(px.group)) {
       modelGroups.push(px.group);
     }
@@ -390,13 +452,20 @@ async function loadModel(modelName, bustCache = false) {
   // (mapPixelsToSacn, vis, wasm meta, etc.). Computed-bit composites
   // are NOT merged — their multi-bit value already matches via
   // `(vMask & bit) !== 0` and merging would pollute base bits.
-  const mergeBit = (px, bit) => {
-    const cur = (px.vMask ?? px.viewMask ?? 0) | bit;
-    px.vMask = cur;
-    px.viewMask = cur;
+  // Word-aware merge: word 0 → px.vMask (lane 3, legacy `viewMask`),
+  // word 1 → px.vMaskHi (lane 6, Tier-C `viewMaskHi`, views 31..61).
+  const mergeWordBit = (px, word, bit) => {
+    if (word === 1) {
+      px.vMaskHi = (px.vMaskHi ?? 0) | bit;
+    } else {
+      const cur = (px.vMask ?? px.viewMask ?? 0) | bit;
+      px.vMask = cur;
+      px.viewMask = cur;
+    }
   };
 
   const viewMasks = declaredViewMasks.map((entry) => {
+    const word = entry.word === 1 ? 1 : 0;
     if (Array.isArray(entry.groups) && entry.groups.length > 0) {
       const groupSet = new Set(entry.groups);
       for (const g of groupSet) {
@@ -407,15 +476,17 @@ async function loadModel(modelName, bustCache = false) {
       }
       if (entry.bit !== undefined) {
         // Explicit reserved bit, membership by group: tag every pixel
-        // of the named groups with the bit.
+        // of the named groups with the bit, in the entry's word.
         for (const px of mod.pixels) {
-          if (px && groupSet.has(px.group)) mergeBit(px, entry.bit);
+          if (px && groupSet.has(px.group)) mergeWordBit(px, word, entry.bit);
         }
-        return { name: entry.name, bit: entry.bit, groups: [...groupSet] };
+        return { name: entry.name, bit: entry.bit, word, groups: [...groupSet] };
       }
+      // Computed composite of base-group bits — always word 0 (groups are
+      // word-0 only) and never merged (the base bits already are).
       let bit = 0;
       for (const g of groupSet) bit |= groupBits[g];
-      return { name: entry.name, bit, groups: [...groupSet] };
+      return { name: entry.name, bit, word: 0, groups: [...groupSet] };
     }
 
     for (const idx of entry.pixelIndices) {
@@ -424,9 +495,9 @@ async function loadModel(modelName, bustCache = false) {
           `pixel index ${idx} (model has ${mod.pixels.length} pixels)`);
       }
       const px = mod.pixels[idx];
-      if (px) mergeBit(px, entry.bit);
+      if (px) mergeWordBit(px, word, entry.bit);
     }
-    return { name: entry.name, bit: entry.bit, pixelIndices: [...entry.pixelIndices] };
+    return { name: entry.name, bit: entry.bit, word, pixelIndices: [...entry.pixelIndices] };
   });
 
   if (viewMasksSource) {
@@ -437,6 +508,72 @@ async function loadModel(modelName, bustCache = false) {
     }
   }
 
+  // ── Auto views (Tier-A, ZERO bit cost) — whole-ship view catalog ────
+  // Generalizes the old strand-view derivation (report 20260619_1 §5):
+  // per-strand groups + LED LEFT/RIGHT (unchanged), PLUS whole-ship
+  // PORT/STARBOARD/FORE/AFT, structural WALLS/DECKS/CHIMNEYS/AUDITORIUM,
+  // typed @PAR/@BAR/@VINTAGE/@RAW, vertical BAND_LOW/MID/HIGH, symmetric
+  // <base>_BOTH composites, and per-controller CTRL_<cId> (once patched).
+  // Every entry rides the SAME viewMasks array the mixer's MaskRegistry
+  // consumes, but with bit:0 — pure per-pixel membership, NO viewMask bit
+  // consumed, so they never pressure titanic's already-heavy 28/31
+  // group-bit budget. Names already owned by a base group / declared
+  // preset are skipped (the base group already provides that view).
+  const existingMaskNames = new Set([
+    ...Object.keys(groupBits),
+    ...viewMasks.map(vm => vm.name),
+  ]);
+  const autoViews = deriveAutoViews(mod.pixels, existingMaskNames);
+  for (const w of autoViews.warnings) console.warn(`[Model] auto-view: ${w}`);
+  if (autoViews.entries.length > 0) {
+    for (const e of autoViews.entries) viewMasks.push(e);
+    const fam = autoViews.families;
+    const summary = Object.entries(fam)
+      .filter(([, names]) => names.length > 0)
+      .map(([family, names]) => `${family}:${names.length}`)
+      .join(', ');
+    console.log(`[Model] Auto views (Tier-A, no bit cost): ${autoViews.entries.length} total ` +
+      `(${summary}) [${autoViews.entries.map(e => e.name).join(', ')}]`);
+  }
+
+  // ── Unpatched LED strands: LOUD, never silent (codex P0) ────────────
+  // A strand pixel exported without an LED-controller binding carries
+  // `unpatched:true` (patch:null). It renders in the VM but emits no sACN.
+  // Surface the count + the distinct strand groups so the operator knows
+  // exactly which strands are dark on hardware — never a silent skip.
+  const unpatchedStrandGroups = new Set();
+  let unpatchedStrandPixels = 0;
+  for (const px of mod.pixels) {
+    if (px && px.type === 'led' && (px.unpatched || !px.patch)) {
+      unpatchedStrandPixels++;
+      if (typeof px.group === 'string' && px.group.length > 0) unpatchedStrandGroups.add(px.group);
+    }
+  }
+  if (unpatchedStrandPixels > 0) {
+    console.warn(`[Model] ✋ ${unpatchedStrandPixels} LED-strand pixel(s) across ` +
+      `${unpatchedStrandGroups.size} strand(s) are UNPATCHED (no LED controller binding) — ` +
+      `they render but emit NO sACN: [${[...unpatchedStrandGroups].join(', ')}]. ` +
+      `Bind them to an LED-type controller in the sim's Controller Mapping panel and re-export.`);
+  }
+
+  // ── Tier-B fixture-type targeting (real `fixtureType` builtin) ────
+  // The rebuilt WASM exposes a per-pixel `fixtureType` integer builtin,
+  // fed from the canonical fixtureTypeId lane the host packs into the
+  // 6-int meta stride. So FIX_* constants are injected as the canonical
+  // IDS (FIX_PAR == 2, …) and a pattern targets a type with an integer
+  // equality `fixtureType == FIX_PAR` — model-independent, with no
+  // viewMask-bit pressure (the Tier-A reserved-bit merge is removed and
+  // those high bits are freed). Only PRESENT types are emitted, so a
+  // FIX_* reference to a type a model does not carry still fails loudly
+  // at compile (codex P0) rather than silently matching nothing. Works
+  // on every model including titanic (ids never exhaust a bit budget).
+  const fixtureConstants = buildFixtureTypeIds(mod.pixels);
+  const fixtureRoles = Object.keys(fixtureConstants);
+  if (fixtureRoles.length > 0) {
+    console.log(`[Model] Tier-B fixture-type ids: ` +
+      fixtureRoles.map(name => `${name}=${fixtureConstants[name]}`).join(', '));
+  }
+
   // {MASK_NAME: bit} table WasmHost injects into pattern source at
   // compile time, so patterns reference masks by name instead of magic
   // numbers. Built here (and only here) so sanitized-name collisions
@@ -444,7 +581,24 @@ async function loadModel(modelName, bustCache = false) {
   const maskConstants = buildMaskConstants({ groupBits, viewMasks });
   console.log(`[Model] Pattern constants: ${Object.keys(maskConstants).join(', ') || '(none)'}`);
 
-  return { pixelCount: mod.pixelCount, pixels: mod.pixels, specialEffects, viewMasks, groupBits, maskConstants };
+  // AUTHORED-name -> { bit, word } table for the `inView("Name")` intrinsic
+  // (see lib/in_view_intrinsic.js). Every named in-VM view is included so an
+  // unknown name fails loudly and a bit-free (Tier-A) view is recognized as
+  // PROMOTABLE (bit:0) rather than unknown. Base groups are word-0 views;
+  // presets/auto-views carry their own bit+word. A later view name wins on a
+  // (legitimately impossible — names are unique) collision.
+  const viewTable = {};
+  for (const [group, bit] of Object.entries(groupBits)) {
+    viewTable[group] = { bit, word: 0 };
+  }
+  for (const vm of viewMasks) {
+    viewTable[vm.name] = { bit: Number.isInteger(vm.bit) ? vm.bit : 0, word: vm.word === 1 ? 1 : 0 };
+  }
+
+  return {
+    pixelCount: mod.pixelCount, pixels: mod.pixels, specialEffects, viewMasks, groupBits,
+    maskConstants, fixtureConstants, viewTable,
+  };
 }
 
 // ── Render Loop ───────────────────────────────────────────────────────────
@@ -581,6 +735,12 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
 
   function tick() {
     if (!running) return;
+
+    // If a compile since the last frame promoted a bit-free view to an
+    // in-VM bit (inView("Name") on a Tier-A auto-view, e.g. from a newly
+    // added mixer channel or a live edit), re-pack the meta buffer so the
+    // newly-set bit reaches the VM. Cheap flag check; a no-op otherwise.
+    repackMetaIfDirty(mixer.wasmHost, model.pixels);
 
     const now = performance.now();
 
@@ -964,9 +1124,14 @@ async function main() {
     process.exit(1);
   }
 
-  // Model-derived MASK_* constants must be registered before ANY
-  // compile (boot pattern, mixer channels, live edits, blends).
+  // Model-derived MASK_*/FIX_* constants must be registered before ANY
+  // compile (boot pattern, mixer channels, live edits, blends). The
+  // inView("Name") view table + the on-demand bit-free-view promoter are
+  // registered alongside them so the intrinsic folds against the same model.
   wasmHost.setMaskConstants(model.maskConstants);
+  wasmHost.setFixtureConstants(model.fixtureConstants);
+  wasmHost.setViewTable(model.viewTable);
+  wasmHost.setBitFreeViewPromoter(createBitFreeViewPromoter(model, wasmHost));
 
   console.log(`  Compiling pattern...`);
   const result = wasmHost.compile(patternCode);
@@ -1014,6 +1179,9 @@ async function main() {
     // bitmask-by-name lookups just won't resolve and the picker UI
     // hides the section. See loadModel() above.
     viewMasks: model.viewMasks || [],
+    // Group → bit table so the mixer can build its Tier-A MaskRegistry
+    // (per-pixel members for unbounded host-side named-mask selection).
+    groupBits: model.groupBits || {},
   });
   mixer.patternsDir = path.join(__dirname, 'patterns');
   mixer.onChannelRemoved = (channelId) => paramCenter.unregisterChannel(channelId);
@@ -1036,14 +1204,20 @@ async function main() {
   // Set pixel coordinates for batch rendering
   wasmHost.setCoords(model.pixels);
 
-  // Set V2 metadata for batch rendering, mapping abbreviation keys
-  const metaArray = model.pixels.map(px => ({
-    controllerId: px.cId || 0,
-    sectionId: px.sId || 0,
-    fixtureId: px.fId || 0,
-    viewMask: px.vMask || 0
-  }));
+  // Set V2 metadata for batch rendering, mapping abbreviation keys.
+  // Tier-B adds two lanes: fixtureTypeId (canonical FIX_* id from the
+  // string fixtureType) and pixelLocalIndex (0-based per-fixture ordinal).
+  // derivePixelLocalIndices PREFERS the sim exporter's authoritative
+  // per-pixel `localIndex` (new models) and falls back to the (group,fId)
+  // heuristic only for legacy models that lack it (see pixel_local_index.js;
+  // a half-migrated model throws there rather than mis-derive).
+  const bootLocalIndices = derivePixelLocalIndices(model.pixels);
+  // The boot pattern compiled ABOVE; if it tested a bit-free view via
+  // inView(), the promoter already set that bit on model.pixels, so this
+  // first pack carries it. metaDirty is cleared here (the bit is now packed).
+  const metaArray = buildMetaArray(model.pixels, bootLocalIndices);
   wasmHost.setPixelMeta(metaArray);
+  wasmHost.metaDirty = false;
 
   // 4. Create global DMX mapper (reusing simulation architecture!)
   const dmxRouter = new UniverseRouter('highest_priority_source_lock');
@@ -1099,9 +1273,14 @@ async function main() {
     process.exit(0);
   }
 
-  // 6. Create sACN output
-  const sacnOut = createSacnOutput({
+  // 6. Create network output (sACN and/or Art-Net, routed per controller)
+  // `sacnOut` keeps its name — the dispatch exposes the identical sender
+  // interface (start/stop/sendFrame/addUniverse/frameCount) so every call
+  // site below is unchanged. With no `controllers:` config block this is a
+  // single flat-destinations sACN sender, byte-identical to before.
+  const sacnOut = createOutputDispatch({
     universes: universeIds,
+    controllers: opts.controllers,
     priority: opts.priority,
     destinations: opts.destinations,
     sourceName: opts.sourceName,
@@ -1209,6 +1388,30 @@ async function main() {
   engineCore.tempoArbiter = tempoArbiter;
 
   const apiServer = startApiServer(opts, engineCore, './patterns', broadcastStatsRef, intensityController, globalEffectsController);
+
+  // View defaults to the composed MIXER buffer (PatternMixer constructor:
+  // viewFader = targetViewFader = 1.0, per docs/27 §2). That is correct
+  // once CaptainPad has populated the mixer overlay stack with a live
+  // (enabled, fader > 0) layer — but the `--pattern` CLI flag installs
+  // its pattern on the DECK channel only (setDeckChannel), and
+  // startApiServer restores no view state at boot. If the mixer overlay
+  // stack has no live contribution (empty, or every overlay disabled /
+  // at fader 0 — e.g. the restored test_bench state ships a single
+  // `15_silk_prism_ribbons` overlay at fader 0), the mixer-exclusive
+  // view renders an all-zero buffer. The only thing then reaching sACN
+  // is the per-fixture dimmer skeleton mapPixelsToSacn writes
+  // unconditionally, so the rig shows DARK with no error. Pin the live
+  // view to the deck so the boot `--pattern` actually renders (the
+  // documented behaviour of the flag and of the full-stack smoke skill).
+  // Once the operator adds a live overlay and selects the mixer view
+  // from CaptainPad (a `view` POST), that explicit choice takes over.
+  const hasLiveOverlay = mixer.getMixerChannels()
+    .some(c => c.enabled && c.fader > 0.001);
+  if (!hasLiveOverlay && mixer.getDeckChannel()) {
+    mixer.viewFader = 0.0;
+    mixer.targetViewFader = 0.0;
+    console.log('  ▶ No live mixer overlay at boot — live view pinned to DECK so --pattern renders.');
+  }
 
   // Tracks the last tempo pushed to clients via the OSC auto-follow path, so the
   // render loop broadcasts a fresh mixer state ONLY when the live OSC tempo
@@ -1334,15 +1537,22 @@ async function main() {
           model.viewMasks = newModel.viewMasks;
           model.groupBits = newModel.groupBits;
           model.maskConstants = newModel.maskConstants;
+          model.fixtureConstants = newModel.fixtureConstants;
+          model.viewTable = newModel.viewTable;
           wasmHost.setMaskConstants(model.maskConstants);
+          wasmHost.setFixtureConstants(model.fixtureConstants);
+          // Refresh the inView("Name") table + re-seed the bit-free-view
+          // promoter against the reloaded model (new bits/membership).
+          wasmHost.setViewTable(model.viewTable);
+          wasmHost.setBitFreeViewPromoter(createBitFreeViewPromoter(model, wasmHost));
 
           wasmHost.setCoords(model.pixels);
-          wasmHost.setPixelMeta(model.pixels.map(px => ({
-            controllerId: px.cId || 0,
-            sectionId: px.sId || 0,
-            fixtureId: px.fId || 0,
-            viewMask: px.vMask || 0
-          })));
+          // Same precedence as boot: exporter `localIndex` when present
+          // (copied onto model.pixels by the Object.assign above), else the
+          // legacy (group,fId) heuristic — see pixel_local_index.js.
+          const reloadLocalIndices = derivePixelLocalIndices(model.pixels);
+          wasmHost.setPixelMeta(buildMetaArray(model.pixels, reloadLocalIndices));
+          wasmHost.metaDirty = false;
           
           globalEffectsController.initFromModel(model.specialEffects || model.pixels);
 
@@ -1352,7 +1562,7 @@ async function main() {
           // in the sim after engine start can never be selected.
           // (mixer.pixels === model.pixels — updated in place above —
           // so the recompile sees the fresh vMask values.)
-          mixer.setModelViewMasks(model.viewMasks);
+          mixer.setModelViewMasks(model.viewMasks, model.groupBits);
 
           const registerUniverse = (patch) => {
             if (patch && patch.universe) {

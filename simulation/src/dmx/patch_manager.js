@@ -28,8 +28,84 @@ let _universeWarningEl = null;
 let _lastUniverseWarning = ''; // dedupe
 
 /**
+ * Parse a comma-separated `sacn_universes` config string into a sorted
+ * array of positive integers (deduped). Shared by derive + validate so the
+ * two stay in lockstep.
+ */
+function _parseUniverseList(configStr) {
+  return [...new Set(
+    String(configStr || '')
+      .split(',')
+      .map((u) => parseInt(u.trim(), 10))
+      .filter((u) => !isNaN(u) && u > 0)
+  )].sort((a, b) => a - b);
+}
+
+/**
+ * Collect every DMX universe referenced by the current patches (fixtures +
+ * LED strands). This is the authoritative set the sim must subscribe to so a
+ * freshly-patched model lights up without a manual sACN-settings detour.
+ * @returns {number[]} sorted, deduped, positive universe numbers
+ */
+function deriveSubscribedUniverses(fixtures) {
+  const universes = new Set();
+  const add = (entry) => {
+    const u = entry && parseInt(entry.dmxUniverse, 10);
+    if (u > 0) universes.add(u);
+  };
+  if (fixtures) for (const f of fixtures) add(f);
+  // LED strands carry their own dmxUniverse and are NOT in params.parLights.
+  if (params.ledStrands) for (const s of params.ledStrands) add(s);
+  return [...universes].sort((a, b) => a - b);
+}
+
+/**
+ * Auto-subscribe: ensure `params.sacn_universes` contains every universe the
+ * current patches reference. Whenever patches change (boot, auto-patch,
+ * manual edit) we re-derive from the loaded model and merge any newly-patched
+ * universes into the subscribed list — no manual "add universe, restart"
+ * step. The browser sACN-IN source already auto-adds router universes on the
+ * first frame; this closes the validation/config gap so the loud mismatch
+ * banner only fires for a universe that genuinely cannot be subscribed.
+ *
+ * Loud by design: every auto-added universe is logged and the bridge is
+ * re-notified. No silent failure — if `params.sacn_universes` is missing the
+ * derived universes still flow through and the merge is reported.
+ * @returns {number[]} universes that were newly added (empty if no change)
+ */
+function autoSubscribePatchUniverses(fixtures) {
+  const referenced = deriveSubscribedUniverses(fixtures);
+  if (referenced.length === 0) return [];
+
+  const subscribed = new Set(_parseUniverseList(params.sacn_universes));
+  const added = referenced.filter((u) => !subscribed.has(u));
+  if (added.length === 0) return [];
+
+  const merged = [...new Set([...subscribed, ...added])].sort((a, b) => a - b);
+  params.sacn_universes = merged.join(', ');
+
+  // Reflect the new value in the sACN Settings control so the operator sees
+  // the live subscribed set (no stale UI).
+  const ctrl = window._guiControllers && window._guiControllers.sacn_universes;
+  if (ctrl && typeof ctrl.updateDisplay === 'function') ctrl.updateDisplay();
+
+  console.log(
+    `[PatchManager] Auto-subscribed sACN universe(s) [${added.join(', ')}] ` +
+    `from patches — subscribed set now [${merged.join(', ')}].`
+  );
+
+  // Persist + re-notify the bridge so its routing/subscription picks up the
+  // freshly-patched universes (saveAndNotify debounces the save).
+  if (typeof window.debounceAutoSave === 'function') saveAndNotify();
+
+  return added;
+}
+
+/**
  * Validate that all patched fixture universes are in the sacn_universes config.
  * Logs loud errors and shows a persistent red banner if mismatches found.
+ * Runs AFTER autoSubscribePatchUniverses, so by here a mismatch means a
+ * universe genuinely could not be subscribed — fail loudly, don't paper over.
  */
 function _validatePatchUniverses(fixtures) {
   if (!fixtures || fixtures.length === 0) return;
@@ -37,17 +113,13 @@ function _validatePatchUniverses(fixtures) {
   // Parse configured universes from params
   const configStr = params.sacn_universes || '';
   if (!configStr) return; // no config = no validation
-  const configUniverses = new Set(
-    String(configStr).split(',').map(u => parseInt(u.trim(), 10)).filter(u => !isNaN(u) && u > 0)
-  );
+  const configUniverses = new Set(_parseUniverseList(configStr));
   if (configUniverses.size === 0) return;
 
-  // Collect universes actually used by patches
+  // Collect universes actually used by patches (fixtures + LED strands).
   const missingUniverses = new Set();
-  for (const f of fixtures) {
-    if (f && f.dmxUniverse > 0 && !configUniverses.has(f.dmxUniverse)) {
-      missingUniverses.add(f.dmxUniverse);
-    }
+  for (const u of deriveSubscribedUniverses(fixtures)) {
+    if (!configUniverses.has(u)) missingUniverses.add(u);
   }
 
   if (missingUniverses.size > 0) {
@@ -168,7 +240,12 @@ function recompute() {
   _updateWarning(_patchedCount === 0 && _totalCount > 0);
   console.log(`[PatchManager] ${_patchedCount}/${_totalCount} patched, active=${window._patchesActive}`);
 
-  // ── Universe validation: warn loudly if patches reference unsubscribed universes ──
+  // ── Auto-subscribe: extend sacn_universes to cover every patched universe ──
+  // (re-derived from the loaded model on every patch change). Runs BEFORE
+  // validation so a normally-patched model just lights up — no manual
+  // "add universe + restart" step.
+  autoSubscribePatchUniverses(fixtures);
+  // ── Universe validation: warn loudly if patches still reference unsubscribed universes ──
   _validatePatchUniverses(fixtures);
   // ── Controller IP validation: warn if patched fixtures are missing IPs ──
   _validateControllerIps(fixtures);
@@ -253,8 +330,11 @@ async function saveAndNotify() {
 }
 
 // ─── Safety Poll ─────────────────────────────────────────────────────────
-// Recompute every 10s as eventual consistency fallback.
-setInterval(recompute, 10000);
+// Recompute every 10s as eventual consistency fallback. In the browser this
+// returns a numeric id; under Node (unit tests import this module) it returns
+// a Timeout — unref it so the poll never keeps the test process alive.
+const _safetyPoll = setInterval(recompute, 10000);
+if (_safetyPoll && typeof _safetyPoll.unref === 'function') _safetyPoll.unref();
 
 // ─── Global Bridge (for non-module consumers) ────────────────────────────
 window._patchesActive = false;
@@ -274,6 +354,9 @@ const PatchManager = {
   applyPatchTree,
   notifySacnBridge,
   saveAndNotify,
+  deriveSubscribedUniverses,
+  autoSubscribePatchUniverses,
 };
 window.PatchManager = PatchManager;
 export default PatchManager;
+export { deriveSubscribedUniverses, autoSubscribePatchUniverses };

@@ -2689,6 +2689,17 @@ body.edit-mode-active #engine-params-panel {
   cursor: default;
 }
 
+/* Transport toggle: Art-Net stands out (amber) from the default sACN. */
+.cm-btn.cm-proto-artnet {
+  background: color-mix(in srgb, var(--warning, #e0a030) 14%, transparent);
+  border-color: color-mix(in srgb, var(--warning, #e0a030) 36%, transparent);
+  color: var(--warning, #e0a030);
+}
+
+.cm-btn.cm-proto-artnet:hover {
+  background: color-mix(in srgb, var(--warning, #e0a030) 26%, transparent);
+}
+
 .cm-btn.cm-danger {
   background: color-mix(in srgb, var(--error) 8%, transparent);
   border-color: color-mix(in srgb, var(--error) 30%, transparent);
@@ -2725,6 +2736,29 @@ body.edit-mode-active #engine-params-panel {
 
 .cm-btn.cm-unpatched-toggle.cm-on:hover {
   background: color-mix(in srgb, var(--error) 24%, transparent);
+}
+
+/* ── TEST patch tools (whole-rig quick patch / wipe) ──────────────────── */
+.cm-main > .cm-test-tools {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+  margin: 0 0 6px;
+}
+
+.cm-test-tools > .cm-btn {
+  flex: 1 1 0;
+  padding: 4px;
+}
+
+.cm-btn.cm-test-autopatch {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  color: var(--primary);
+}
+
+.cm-btn.cm-test-autopatch:hover {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
 }
 
 .cm-error-chip {

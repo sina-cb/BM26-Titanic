@@ -346,7 +346,7 @@ async function assertSingleInstance(force = false) {
 // ── Port inspection / identity-checked cleanup ──────────────────────────
 function listenersOnPort(port) {
   if (IS_WIN) {
-    const out = execFileSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8' });
+    const out = execFileSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, maxBuffer: 10 * 1024 * 1024 });
     const pids = new Set();
     for (const line of out.split('\n')) {
       const cols = line.trim().split(/\s+/);
@@ -359,7 +359,7 @@ function listenersOnPort(port) {
   }
   try {
     const out = execFileSync('lsof', ['-t', '-nP', `-iTCP:${port}`, '-sTCP:LISTEN'], {
-      encoding: 'utf8',
+      encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, maxBuffer: 10 * 1024 * 1024,
     });
     return out.split('\n').map((s) => s.trim()).filter(Boolean).map(Number);
   } catch (err) {
@@ -377,10 +377,10 @@ function commandlineOf(pid) {
       const out = execFileSync('powershell', [
         '-NoProfile', '-Command',
         `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`,
-      ], { encoding: 'utf8' });
+      ], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, maxBuffer: 10 * 1024 * 1024 });
       return out.trim();
     }
-    return execFileSync('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf8' }).trim();
+    return execFileSync('ps', ['-o', 'args=', '-p', String(pid)], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024, maxBuffer: 10 * 1024 * 1024 }).trim();
   } catch (err) {
     return ''; // process already gone
   }

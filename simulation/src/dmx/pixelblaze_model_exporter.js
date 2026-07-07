@@ -3,6 +3,7 @@ import { params } from "../core/state.js";
 import { getProfileDef } from "../core/profile_registry.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { reconcileGroupBits, listPixelGroups, buildViewmasksSidecarJS } from "./view_registry.js";
+import { computeLedProjection, LED_CHANNEL_ORDERS, DMX_UNIVERSE_SIZE } from "./controller_registry.js";
 
 export function generatePixelMap() {
   const pixels = [];
@@ -90,6 +91,14 @@ export function generatePixelMap() {
               cId: light.controllerId || 0,
               sId: light.sectionId || 0,
               fId: light.fixtureId || 0,
+              // localIndex: TRUE 0-based ordinal of this pixel WITHIN its own
+              // fixture, straight from the loop index `j` over the fixture's
+              // own pixel list (the exporter knows the real grouping; the
+              // engine no longer has to re-derive it from (group,fId)). A
+              // multi-pixel fixture (e.g. a bar) numbers its pixels 0..N-1 in
+              // physical order, so a sweep keyed on localIndex runs ALONG the
+              // bar. See marsin_engine/lib/pixel_local_index.js (consumer).
+              localIndex: j,
               vMask: light.viewMask || 0,
               _prePatched: true,
               patch: patchObj,
@@ -144,6 +153,9 @@ export function generatePixelMap() {
             cId: light.controllerId || 0,
             sId: resolveSectionId(light),
             fId: light.fixtureId || 0,
+            // localIndex: a simple/single-pixel DMX fixture is its own fixture
+            // with exactly one pixel, so its within-fixture ordinal is 0.
+            localIndex: 0,
             vMask: light.viewMask || 0,
             _prePatched: true, // We polyfill dynamically, so they are practically patched
             patch: patchObj,
@@ -210,34 +222,108 @@ export function generatePixelMap() {
     });
   }
 
-  // LED strands
+  // ── LED strands ───────────────────────────────────────────────────────
+  // Strands are real model pixels (FIX_RAW_LED). Their patch/addressing
+  // comes from the LED projection of the controller registry: every
+  // strand bound to an LED controller gets a sequential per-pixel
+  // {universe, addr, stride, order} patch on the shared sACN/E1.31
+  // transport (report 20260618_6 §D.2). A strand NOT bound to any LED
+  // controller emits a LOUD unpatched marker (patch:null + unpatched:true)
+  // — never a silent skip (codex P0): the engine logs it and the sim
+  // paints it as undriven.
   if (params.ledStrands) {
+    const ledCounts = new Map();
+    params.ledStrands.forEach((strand) => {
+      if (strand && typeof strand.name === 'string' && strand.name.length > 0) {
+        ledCounts.set(strand.name, strand.ledCount || 10);
+      }
+    });
+    const registry = (typeof window !== 'undefined' && window.__controllerRegistry) || null;
+    const ledProj = registry
+      ? computeLedProjection(registry, ledCounts)
+      : { fields: new Map(), violations: [] };
+    if (ledProj.violations.length > 0) {
+      for (const v of ledProj.violations) console.warn(`[LED Patch] ✋ ${v.message}`);
+    }
+
     params.ledStrands.forEach((strand, i) => {
       const fixture = window.ledStrandFixtures && window.ledStrandFixtures[i] ? window.ledStrandFixtures[i] : null;
       const count = strand.ledCount || 10;
       const sx = +(strand.startX || 0), sy = +(strand.startY || 0), sz = +(strand.startZ || 0);
       const ex = +(strand.endX || 0), ey = +(strand.endY || 0), ez = +(strand.endZ || 0);
+      const proj = ledProj.fields.get(strand.name);
+      const orderMap = proj ? (LED_CHANNEL_ORDERS[proj.order] || LED_CHANNEL_ORDERS.RGBW) : null;
+      if (!proj) {
+        console.warn(`[LED Patch] Strand '${strand.name || `#${i + 1}`}' is not bound to an LED ` +
+          'controller — it exports UNPATCHED (no sACN output). Bind it in the Controller Mapping ' +
+          'panel (an LED-type controller) to light it on hardware.');
+      }
       for (let j = 0; j < count; j++) {
         const t = count > 1 ? j / (count - 1) : 0.5;
-        pixels.push({
+        // Per-pixel LED patch: each pixel occupies `stride` bytes starting
+        // `j*stride` past the strand's start address, wrapping universes at
+        // 512 (a pixel never straddles a universe boundary).
+        let pxPatch = null;
+        let pxChannels = null;
+        if (proj) {
+          const startByte = (proj.addr - 1) + j * proj.stride;
+          const uniSpan = Math.floor(startByte / DMX_UNIVERSE_SIZE);
+          const localByte = startByte % DMX_UNIVERSE_SIZE;
+          // Wrap: if this pixel's stride would cross the boundary, push it
+          // to the next universe wholesale (matches computeLedProjection).
+          let universe = proj.universe + uniSpan;
+          let addr = localByte + 1;
+          if (localByte + proj.stride > DMX_UNIVERSE_SIZE) {
+            universe += 1;
+            addr = 1;
+          }
+          pxPatch = { universe, addr, footprint: proj.stride, led: true };
+          pxChannels = { ...orderMap };
+        }
+        // The pushed pixel object — captured so the strand `apply` can read
+        // its own raw RGBWAU (animate.js writes entry.w/a/u before apply)
+        // and mix to RGB with the firmware toRGBFallback weights, so a
+        // pattern calling rgbwau(...,w,...) lights the strand white in the
+        // sim exactly as the WS2812-RGBW hardware would.
+        const px = {
           type: 'led',
+          fixtureType: '',
           name: strand.name || 'Strand',
           group: strand.name || '',
           x: +(sx + (ex - sx) * t).toFixed(3),
           y: +(sy + (ey - sy) * t).toFixed(3),
           z: +(sz + (ez - sz) * t).toFixed(3),
           nx: 0, ny: 0, nz: 0,
-          cId: strand.controllerId || 0,
+          cId: (proj ? proj.controllerId : strand.controllerId) || 0,
           sId: strand.sectionId || 0,
           fId: strand.fixtureId || 0,
+          // localIndex: TRUE 0-based ordinal of this pixel WITHIN its own
+          // strand — the loop index `j` over the strand's own LED count. A
+          // strand IS one fixture (FIX_RAW_LED), so a sweep keyed on
+          // localIndex runs ALONG the strand in true pixel order. The engine
+          // consumes this directly instead of re-deriving from (group,fId).
+          localIndex: j,
           vMask: strand.viewMask || 0,
-          patch: null,
-          channels: null,
-          apply: fixture ? ((r, g, b) => {
+          patch: pxPatch,
+          channels: pxChannels,
+          whiteMode: proj ? proj.whiteMode : 'native',
+          unpatched: !proj,
+        };
+        // The batch-render loop (animate.js) and the inbound sACN demap
+        // (sacn_mapper.js) BOTH write the rendered RGBWAU onto a CLONE of
+        // this pixel — not this closure's `px` — then call apply() with the
+        // already-mixed RGB. So the apply MUST consume its (r,g,b) args
+        // (exactly like the DMX-fixture apply above); reading px.* here read
+        // the stale clone-source and left every strand black under patched
+        // engine + sACN-in (the LED-parity output path). The RGBWAU→RGB mix
+        // already happened in the caller; route it straight to the bulb.
+        px.apply = fixture
+          ? ((r, g, b) => {
             if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
-            fixture.setLedColorRGB(j, r, g, b);
-          }) : (() => {})
-        });
+            fixture.setLedColorRGB(j, r || 0, g || 0, b || 0);
+          })
+          : (() => {});
+        pixels.push(px);
       }
     });
   }
@@ -274,7 +360,9 @@ export function saveModelJS() {
     '// the companion .effects.js model.',
     '//',
     '// Each pixel has: index, type, name, group, world coords (x,y,z),',
-    '// normalized coords (nx,ny,nz) in [0..1], and optional V2 metadata maps',
+    '// normalized coords (nx,ny,nz) in [0..1], a 0-based within-fixture',
+    '// `localIndex` (per-fixture/per-strand pixel ordinal), and optional V2',
+    '// metadata maps',
     '',
     'export const pixelCount = ' + pixels.length + ';',
     '',
@@ -282,9 +370,25 @@ export function saveModelJS() {
   ];
 
   pixels.forEach((p, i) => {
-    const patchStr = p.patch ? `{ universe: ${p.patch.universe}, addr: ${p.patch.addr}, footprint: ${p.patch.footprint} }` : 'null';
+    // LED-patched pixels carry `led: true` (+ stride footprint) so the
+    // engine's LED output mapper passes white through raw (native) instead
+    // of the DMX-fixture min(R,G,B) white-synth. An UNPATCHED strand pixel
+    // serializes patch:null + `unpatched: true` — a LOUD marker the engine
+    // surfaces, never a silent skip (codex P0).
+    let patchStr = 'null';
+    if (p.patch) {
+      patchStr = `{ universe: ${p.patch.universe}, addr: ${p.patch.addr}, ` +
+        `footprint: ${p.patch.footprint}${p.patch.led ? ', led: true' : ''} }`;
+    }
     const chStr = p.channels ? JSON.stringify(p.channels) : 'null';
-    lines.push(`  { i: ${i}, type: '${p.type}', fixtureType: '${p.fixtureType || ''}', name: '${p.name}', group: '${p.group}', x: ${p.x}, y: ${p.y}, z: ${p.z}, nx: ${p.nx}, ny: ${p.ny}, nz: ${p.nz}, cId: ${p.cId || 0}, sId: ${p.sId || 0}, fId: ${p.fId || 0}, vMask: ${p.vMask || 0}, patch: ${patchStr}, channels: ${chStr} },`);
+    const extra = (p.type === 'led')
+      ? `, whiteMode: '${p.whiteMode || 'native'}'${p.unpatched ? ', unpatched: true' : ''}`
+      : '';
+    // localIndex is the exporter-emitted 0-based within-fixture ordinal
+    // (DMX: per-fixture pixel order; LED: per-strand pixel order). The
+    // engine prefers it over its (group,fId) heuristic; a NEW export always
+    // carries it on every pixel, so it is serialized unconditionally.
+    lines.push(`  { i: ${i}, type: '${p.type}', fixtureType: '${p.fixtureType || ''}', name: '${p.name}', group: '${p.group}', x: ${p.x}, y: ${p.y}, z: ${p.z}, nx: ${p.nx}, ny: ${p.ny}, nz: ${p.nz}, cId: ${p.cId || 0}, sId: ${p.sId || 0}, fId: ${p.fId || 0}, localIndex: ${p.localIndex || 0}, vMask: ${p.vMask || 0}, patch: ${patchStr}, channels: ${chStr}${extra} },`);
   });
 
   lines.push('];');

@@ -193,29 +193,29 @@ test('compileViewSelectionMask: type=viewMask string + invert flips the mask', (
   assert.deepEqual(Array.from(m), [1, 0, 1, 1]);
 });
 
-test('compileViewSelectionMask: unknown viewMask name selects NO pixels (loud nothing, not silent all)', () => {
+test('compileViewSelectionMask: unknown viewMask name THROWS (codex P0 — no silent black-out)', () => {
   const pixels = makeTestPixels();
   const viewMasks = [{ name: 'Power', bit: 0b010 }];
-  // We expect a warn message but no throw; the returned mask is all-zero
-  // so the operator sees the bad name as "nothing selected" rather than
-  // accidentally turning a typo into a full-rig overlay.
-  const m = compileViewSelectionMask({
+  // Phase 1 (views-rehaul) tightened the old soft fallback: an unknown
+  // name used to resolve to bit 0 (all-zero mask) and only warn. It now
+  // throws, naming the known views — a typo fails loudly at config time
+  // instead of silently masking the rig to black.
+  assert.throws(() => compileViewSelectionMask({
     pixels, pixelCount: 4,
     viewSelection: { type: 'viewMask', target: 'NoSuchMask' },
     viewMasks,
-  });
-  assert.deepEqual(Array.from(m), [0, 0, 0, 0]);
+  }), /Unknown viewMask name 'NoSuchMask'.*Power/s);
 });
 
-test('compileViewSelectionMask: viewMask without dictionary AND string target → no pixels', () => {
+test('compileViewSelectionMask: viewMask string target without a dictionary THROWS', () => {
   const pixels = makeTestPixels();
-  const m = compileViewSelectionMask({
+  // No viewMasks dictionary supplied — equivalent to a model that never
+  // declared any named presets. A string target can resolve to nothing,
+  // so it is a loud error rather than a silent empty mask.
+  assert.throws(() => compileViewSelectionMask({
     pixels, pixelCount: 4,
     viewSelection: { type: 'viewMask', target: 'Power' },
-    // No viewMasks dictionary supplied — equivalent to a model that
-    // never declared any named presets.
-  });
-  assert.deepEqual(Array.from(m), [0, 0, 0, 0]);
+  }), /Unknown viewMask name 'Power'/);
 });
 
 // ─── validateViewSelection: API-facing schema gate ────────────────────
