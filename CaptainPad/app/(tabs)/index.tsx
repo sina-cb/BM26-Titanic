@@ -15,6 +15,7 @@ import { AllModulationsPanel } from '@/components/AllModulationsPanel';
 import { useFocusEffect } from 'expo-router';
 import {
   getAutopilot, setAutopilot,
+  setAutopilotProfile as apiSetAutopilotProfile,
   fetchDeckChannel, setDeckChannelControl,
   setMixerView,
   fetchDeckTransitionConfig, setDeckTransitionConfig,
@@ -208,6 +209,17 @@ export default function ControlDeckScreen() {
   const [groupMode, setGroupMode] = useState<boolean>(false);
   const [groupSize, setGroupSize] = useState<number>(3);
   const [groupDwell, setGroupDwell] = useState<number>(6);
+  // AUTOPILOT PROFILE (feat/autopilot_deck_improvement): the deck autopilot is a
+  // set of named profiles. `random` (default — today's shuffle/sequential
+  // cycling, byte-identical) and `audio_reactive` (audio-driven). The profile
+  // lives on the deck base channel's playlist.autopilot and rides the
+  // `autopilot` WS broadcast (`profile` + the selectable-list `profiles`). Seed
+  // from GET /autopilot; reconcile in the `autopilot` WS branch; write through
+  // setAutopilotProfile (POST /deck/playlist/autopilot {profile}). Defaults are
+  // the ONE documented schema default (`'random'`) and a single-item list so the
+  // dropdown renders even before the first broadcast.
+  const [autopilotProfile, setAutopilotProfile] = useState<string>('random');
+  const [autopilotProfiles, setAutopilotProfiles] = useState<string[]>(['random']);
 
   // Deck transition config (soft swap between patterns via server-side
   // double-buffer — see DECK TRANSITIONS in DeckTransitionControls.tsx
@@ -353,6 +365,18 @@ export default function ControlDeckScreen() {
         setPlaylistDelayStr(msg.delay_s as string);
       }
       if (typeof msg.shuffle === 'boolean') setIsShuffle(msg.shuffle);
+      // AUTOPILOT PROFILE: the `autopilot` broadcast carries the active `profile`
+      // (normalized string) + the selectable `profiles` list. Reconcile both so
+      // the dropdown reflects an operator POST, a per-scene restore, OR a
+      // plan-cue-driven profile change live. Defensive: only adopt well-typed
+      // values so a malformed field can't blow away a good one (mirrors the
+      // group-locality reconcile above).
+      const apProfile = (msg as { profile?: unknown }).profile;
+      if (typeof apProfile === 'string' && apProfile.length) setAutopilotProfile(apProfile);
+      const apProfiles = (msg as { profiles?: unknown }).profiles;
+      if (Array.isArray(apProfiles) && apProfiles.every((p) => typeof p === 'string') && apProfiles.length) {
+        setAutopilotProfiles(apProfiles as string[]);
+      }
       // Next-pattern-swap wall-clock ms (null when inactive) — the engine
       // re-broadcasts it on every cycle, so the deck countdown stays accurate
       // whether the operator OR a plan cue is driving the cadence.
@@ -431,6 +455,16 @@ export default function ControlDeckScreen() {
       setPlaylistActive(apResult.data.active);
       setPlaylistDelayStr(apResult.data.delay_s);
       setIsShuffle(apResult.data.shuffle);
+      // AUTOPILOT PROFILE: seed the active profile + selectable list from the
+      // same GET /autopilot the daemon fields come from (the engine folds
+      // `profile`/`profiles` into that response). Only adopt well-typed values;
+      // otherwise keep the documented `'random'` default.
+      if (typeof apResult.data.profile === 'string' && apResult.data.profile.length) {
+        setAutopilotProfile(apResult.data.profile);
+      }
+      if (Array.isArray(apResult.data.profiles) && apResult.data.profiles.length) {
+        setAutopilotProfiles(apResult.data.profiles as string[]);
+      }
     }
 
     // PATTERN-GROUP LOCALITY: the group knobs are NOT in the autopilot daemon
@@ -547,6 +581,35 @@ export default function ControlDeckScreen() {
       Alert.alert('Color autopilot not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
     });
   }, [notifyInteraction]);
+
+  // Set the AUTOPILOT PROFILE (optimistic + rollback + Alert), cloned exactly
+  // from handleDeckTxChange: snapshot the previous profile, apply optimistically,
+  // POST /deck/playlist/autopilot {profile}, and on a rejected/failed POST
+  // restore the previous value + Alert (Codex P0 — never leave the UI showing a
+  // value the engine refused; an unknown profile 400s loud). On success the
+  // engine broadcasts `autopilot` with the new profile, which the onControl
+  // handler reconciles — that broadcast is the source of truth. planGate-guarded
+  // (the panel is also `disabled`, and the PlanLockScrim blankets it).
+  const handleAutopilotProfileChange = useCallback((profile: string) => {
+    if (planGate) return;
+    notifyInteraction();
+    let prevProfile = 'random';
+    setAutopilotProfile((prev) => { prevProfile = prev; return profile; });
+    void apiSetAutopilotProfile(profile).then((res) => {
+      if (!res.ok) {
+        console.error('[Deck] Autopilot-profile POST rejected:', res.error);
+        setAutopilotProfile(prevProfile);
+        Alert.alert(
+          'Autopilot profile not applied',
+          `The engine rejected the change. ${res.error || ''} Reverted to the previous value.`.trim(),
+        );
+      }
+    }).catch((err) => {
+      console.error('[Deck] Autopilot-profile POST failed:', err);
+      setAutopilotProfile(prevProfile);
+      Alert.alert('Autopilot profile not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+    });
+  }, [notifyInteraction, planGate]);
 
   // Per-channel color metadata (docs/39 §8.4) on the DECK channel. Pure
   // operator-facing accent (no render effect) — tints the deck card for
@@ -973,6 +1036,8 @@ export default function ControlDeckScreen() {
               groupMode={groupMode}
               groupSize={groupSize}
               groupDwell={groupDwell}
+              profile={autopilotProfile}
+              profiles={autopilotProfiles}
               nextSwapAtMs={patternNextSwapAtMs}
               disabled={planGate}
               onInteraction={notifyInteraction}
@@ -1002,6 +1067,12 @@ export default function ControlDeckScreen() {
                 if (patch.groupDwell !== undefined) {
                   setGroupDwell(patch.groupDwell);
                   setAutopilot(undefined, undefined, undefined, { groupDwell: patch.groupDwell });
+                }
+                // AUTOPILOT PROFILE: the dropdown emits `profile`; route it
+                // through the dedicated optimistic-rollback handler (its own POST
+                // + Alert, NOT setAutopilot which would double-write).
+                if (patch.profile !== undefined) {
+                  handleAutopilotProfileChange(patch.profile);
                 }
               }}
               // ── DECK TRANSITIONS (nested INTO the AUTOPILOT PATTERNS card,

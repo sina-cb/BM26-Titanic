@@ -663,6 +663,27 @@ export async function setAutopilot(
   }
 }
 
+// Set the DECK autopilot PROFILE (engine `playlist.autopilot.profile`). Lives on
+// the deck base channel's playlist.autopilot alongside the group-locality knobs,
+// so it rides the SAME `POST /deck/playlist/autopilot` endpoint (NOT the
+// autopilot daemon's /autopilot state). The engine 400s an unknown profile
+// (fail loud — no silent coercion); the caller optimistically applies + rolls
+// back on !ok exactly like handleDeckTxChange.
+export async function setAutopilotProfile(profile: string): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/deck/playlist/autopilot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile }),
+    });
+    const data = await res.json();
+    return { ok: res.ok, data, error: res.ok ? undefined : (data?.error || `HTTP ${res.status}`) };
+  } catch (err: any) {
+    warnThrottled('Set autopilot profile failed:', 'Set autopilot profile failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
 export async function savePatternCode(name: string, code: string): Promise<ApiResult<any>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/save-pattern`, {
