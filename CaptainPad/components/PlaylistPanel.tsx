@@ -1163,6 +1163,11 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
              hitSlop lifts the visual btn to the 44pt touch floor. */
           <TouchableOpacity
             onPress={onClosePane}
+            // Gate with the panel's own `disabled` (deck swap in flight / plan
+            // lock) so this control isn't the one tappable thing while every
+            // sibling is frozen — the deckSwapInFlight state dims but has no
+            // scrim, so an un-disabled ✕ would leak through.
+            disabled={disabled}
             accessibilityLabel="Close this playlist pane"
             accessibilityRole="button"
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -1175,6 +1180,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
               backgroundColor: C.surfaceContainerHigh,
               alignItems: 'center',
               justifyContent: 'center',
+              opacity: disabled ? 0.4 : 1,
             }}
           >
             <IconSymbol name="xmark" size={sz.btnFont + 2} color={C.icon} />
