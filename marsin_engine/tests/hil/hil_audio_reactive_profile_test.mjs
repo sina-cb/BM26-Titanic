@@ -9,9 +9,12 @@
  *   2. A `audioSwitchPattern` pulse (with silence=0, party=1) ADVANCES the deck.
  *   3. A bare `audioSwitchColor` transient does NOT recolour (must hold).
  *   4. A STABLE descriptor change held past the dwell DOES recolour the palette.
- *   5. ENERGY ARC — a sustained calm SAGS the bpmSpeedMax ceiling; a sustained
- *      rise RECOVERS it (the energy→speed-scale that layers on bpmSpeedSync).
- *   6. ENERGY PICKUP — a fast energy rise after a calm dip ADVANCES the deck.
+ *   5. ENERGY ARC — a sustained calm SAGS the actual mapped `speed` (the
+ *      energy→speed-scale layered on bpmSpeedSync); the bpmSpeedMax WINDOW stays
+ *      fixed (F1: the old ceiling-sag inversion is gone).
+ *   6. SUSTAINED BUILD — energy that rises from a calm and HOLDS elevated past
+ *      switchConfirmMs ADVANCES the deck (a brief swell / passing art car does
+ *      NOT — that discrimination is unit-tested).
  *   7. Under `audioSilence=1` a pattern pulse is SUPPRESSED (no advance).
  *   8. Switching back to `random` RESTORES bpmSpeedSync to its prior value.
  *
@@ -169,7 +172,7 @@ function stopEngine() {
         audioSilence: 'api', audioParty: 'api', audioSwitchPattern: 'api',
         audioSwitchColor: 'api', audioNoteHue: 'api', audioNote: 'api',
         audioEnergyRatio: 'api', audioSlowZone: 'api', audioStructure: 'api',
-        audioDropPulse: 'api',
+        audioDropPulse: 'api', audioBpm: 'api',
       },
     });
 
@@ -188,8 +191,8 @@ function stopEngine() {
     console.log('\n[TEST 2] audioSwitchPattern pulse advances the deck pattern');
     await setCpc({ audioSilence: 0, audioParty: 1, audioSwitchPattern: 0 });
     const before = await deckActiveEntry();
-    // arm sets _lastAdvanceMs=now, so wait out the 6 s minInterval re-guard.
-    await sleep(6100);
+    // arm sets _lastAdvanceMs=now, so wait out the 12 s minInterval re-guard.
+    await sleep(12500);
     await setCpc({ audioSwitchPattern: 1 });   // rising to >0 → triggers advance
     await sleep(500);
     const after = await deckActiveEntry();
@@ -219,53 +222,60 @@ function stopEngine() {
     // Shift the SLOW situation (energy band, note class) to a NEW settled state
     // and HOLD it well past both energySlowTau (~10 s, so the band stabilises)
     // AND colorHoldMs (6 s) so the descriptor settles then recolours.
-    await setCpc({ audioNoteHue: 0.05, audioEnergyRatio: 0.98, audioSlowZone: 0.05, audioStructure: 2, audioNote: 9 });
-    await sleep(16000);  // > energySlowTau + colorHoldMs so the band settles + holds
+    await setCpc({ audioNoteHue: 0.05, audioEnergyRatio: 0.98, audioSlowZone: 0.05 });
+    await sleep(45000);  // energySlow band-climb (~23 s, τ25) + colorHoldMs (15 s) hold
     const palAfterHold = JSON.stringify(await cpc('colorPalette1'));
     check(palAfterHold !== palBefore,
       `a held descriptor change recoloured (${palBefore} → ${palAfterHold})`,
       'a sustained descriptor change did not recolour',
       `before=${palBefore} after=${palAfterHold}`);
 
-    // ── TEST 5: energy ARC — sustained calm sags the speed ceiling; rise lifts ─
-    console.log('\n[TEST 5] energy arc sags then recovers the bpmSpeedMax ceiling');
-    await setCpc({ audioEnergyRatio: 0.95 });
-    await sleep(2500);   // hold high → ceiling rides near the armed max (160)
-    const ceilHigh = Number(await cpc('bpmSpeedMax'));
-    await setCpc({ audioEnergyRatio: 0.03 });
-    await sleep(4000);   // sustained calm → ceiling sags toward the floor (80)
-    const ceilLow = Number(await cpc('bpmSpeedMax'));
-    check(Number.isFinite(ceilHigh) && Number.isFinite(ceilLow) && ceilLow < ceilHigh - 5,
-      `ceiling sagged on a calm (high=${ceilHigh} → low=${ceilLow})`,
-      'speed ceiling did not sag on a sustained calm',
-      `high=${ceilHigh} low=${ceilLow}`);
-    await setCpc({ audioEnergyRatio: 0.95 });
-    await sleep(4000);   // stable recovery → ceiling climbs back up
-    const ceilBack = Number(await cpc('bpmSpeedMax'));
-    check(Number.isFinite(ceilBack) && ceilBack > ceilLow + 5,
-      `ceiling recovered on a rise (low=${ceilLow} → back=${ceilBack})`,
-      'speed ceiling did not recover on a sustained rise',
-      `low=${ceilLow} back=${ceilBack}`);
+    // ── TEST 5: energy ARC — sustained calm SAGS the actual mapped SPEED ──────
+    console.log('\n[TEST 5] energy arc: a sustained calm sags the mapped speed (calm → slower)');
+    // The arc drives a MULTIPLICATIVE scale on the bpm-sync speed (NOT the window
+    // — F1 fix). Feed a live tempo (re-sent every 700 ms so the arbiter's ~1.5 s
+    // staleness never drops it) and watch the real `speed` CPC fall on a calm.
+    const bpmLoop = setInterval(() => { setCpc({ audioBpm: 128 }).catch(() => {}); }, 700);
+    try {
+      await setCpc({ audioEnergyRatio: 0.95 });
+      await sleep(6000);   // hot: scale ≈ 1 → speed near its tempo mapping
+      const speedHot = Number(await cpc('speed'));
+      await setCpc({ audioEnergyRatio: 0.03 });
+      await sleep(32000);  // sustained calm → slow envelope sags the scale → speed drops
+      const speedCalm = Number(await cpc('speed'));
+      check(Number.isFinite(speedHot) && Number.isFinite(speedCalm) && speedCalm < speedHot - 0.05,
+        `mapped speed sagged on a sustained calm (hot=${speedHot.toFixed(3)} → calm=${speedCalm.toFixed(3)})`,
+        'mapped speed did not sag on a sustained calm (energy arc / F1)',
+        `hot=${speedHot} calm=${speedCalm}`);
+      // F1 regression: the bpmSpeedMax WINDOW must NOT move (the old inversion
+      // sagged this ceiling, which perversely SPED UP the calm).
+      check(Number(await cpc('bpmSpeedMax')) === 160,
+        'bpmSpeedMax window stayed fixed (no ceiling-sag inversion — F1)',
+        'bpmSpeedMax moved (F1 regression — the window must stay put)',
+        `bpmSpeedMax=${await cpc('bpmSpeedMax')}`);
+    } finally { clearInterval(bpmLoop); }
 
-    // ── TEST 6: energy PICKUP after a calm dip advances the pattern ───────
-    console.log('\n[TEST 6] a fast energy pickup after a calm dip advances the deck');
-    // Clear the minInterval guard, hold a calm to arm, then jump energy up.
+    // ── TEST 6: a SUSTAINED build (rise from a calm, held) advances the deck ──
+    console.log('\n[TEST 6] a sustained energy build advances the deck (art-car-safe)');
+    // Arm on a calm, then hold energy elevated PAST switchConfirmMs (15 s). A
+    // brief swell shorter than the window would NOT switch (art-car rejection —
+    // unit-tested); here we prove the sustained path fires end-to-end.
     await setCpc({ audioSilence: 0, audioParty: 1, audioSwitchPattern: 0, audioDropPulse: 0 });
     await setCpc({ audioEnergyRatio: 0.08 });
-    await sleep(6200);   // clear minInterval AND arm the pickup (calm dip)
+    await sleep(13000);  // calm: arm the pickup AND clear the 12 s minInterval
     const beforeP = await deckActiveEntry();
-    await setCpc({ audioEnergyRatio: 0.95, audioDropPulse: 1 });  // sudden pickup
-    await sleep(900);
+    await setCpc({ audioEnergyRatio: 0.92 });   // build — hold it high
+    await sleep(18000);  // > switchConfirmMs (15 s) → the sustained build fires
     const afterP = await deckActiveEntry();
     check(afterP !== null && afterP !== beforeP,
-      `energy pickup advanced the deck (${beforeP} → ${afterP})`,
-      'energy pickup did not advance the deck',
+      `sustained build advanced the deck (${beforeP} → ${afterP})`,
+      'sustained build did not advance the deck',
       `before=${beforeP} after=${afterP}`);
 
     // ── TEST 7: silence suppresses the advance ────────────────────────────
     console.log('\n[TEST 7] audioSilence=1 suppresses a pattern advance');
     await setCpc({ audioSilence: 1, audioSwitchPattern: 0 });
-    await sleep(6200);   // clear minInterval so ONLY the silence gate matters
+    await sleep(12500);  // clear minInterval so ONLY the silence gate matters
     const beforeS = await deckActiveEntry();
     await setCpc({ audioSwitchPattern: 1 });   // rising, but silence gate is shut
     await sleep(600);

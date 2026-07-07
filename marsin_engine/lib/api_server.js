@@ -3463,6 +3463,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       knownPaletteIds: () => knownPaletteIds(),
       colorPalettes: () => (Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : []),
       triggerColorNext: () => { if (colorAutopilot) colorAutopilot.triggerNext(); },
+      // Energy-arc SPEED SCALE (F1 fix): the audio_reactive profile layers a
+      // multiplicative [0,1] scale on the bpm-sync speed mapping (calm → slower)
+      // instead of sagging the window ceiling (which INVERTED the mapping). We
+      // set the scale on the live BpmSpeedSync and recompute() so `speed`
+      // updates immediately. No bpmSync (unit ctx) → the profile skips the arc.
+      setSpeedScale: (scale) => {
+        if (!engineCore.bpmSync) return false;
+        engineCore.bpmSync.setSpeedScale(scale);
+        engineCore.bpmSync.recompute();
+        return true;
+      },
     };
   }
 
@@ -7656,8 +7667,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(400);
           return res.end(JSON.stringify({ error: `secondary cannot equal the primary playlist '${data.name}'` }));
         }
-        const pl = playlistManager.load(data.name);
-        if (!pl) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+        // F8 fix: tryLoad (NOT load) so a MALFORMED YAML file degrades to null
+        // and returns a 400 — load() THROWS PlaylistLoadError on corrupt YAML,
+        // and this readBody callback has no try/catch, so the throw escaped and
+        // the client hung with no response. tryLoad returns null on BOTH missing
+        // and malformed; we disambiguate: file present-but-unparseable → 400,
+        // genuinely absent → 404.
+        const pl = playlistManager.tryLoad(data.name);
+        if (!pl) {
+          // Disambiguate present-but-malformed (400) from genuinely-absent (404)
+          // by a direct disk check — tryLoad collapses both to null.
+          let filePresent = false;
+          try { filePresent = fs.existsSync(path.join(playlistsDir, `${data.name}.yaml`)); } catch { filePresent = false; }
+          res.writeHead(filePresent ? 400 : 404);
+          return res.end(JSON.stringify({
+            error: filePresent
+              ? `playlist '${data.name}' has malformed YAML`
+              : 'playlist not found',
+          }));
+        }
         // Browse-only: assigning pane 2 does NOT change what's playing. The pane
         // adopts res.playlist as canonical + a channelPlaylistData broadcast
         // primes its cache so it renders instantly.

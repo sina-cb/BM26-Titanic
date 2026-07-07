@@ -2,8 +2,8 @@
  * audio_reactive_profile.js — the `audio_reactive` autopilot profile (E2).
  *
  * GUIDING PRINCIPLE (operator, 2026-07-06):
- *   PATTERN reacts to DYNAMICS  — fast energy transients (a pickup switches the
- *                                 pattern; a sustained calm SLOWS it down).
+ *   PATTERN reacts to DYNAMICS  — a SUSTAINED energy pickup switches the pattern;
+ *                                 a sustained calm SLOWS it down.
  *   COLOR   reacts to STABLE STATE — a "situation descriptor" (coarse energy
  *                                 band + regime + held note) that must CHANGE
  *                                 and HOLD before the palette drifts. Beats and
@@ -11,30 +11,49 @@
  * Pattern and colour are therefore driven from DIFFERENT time-scales of the
  * energy signal so they don't fire together.
  *
+ * ═══ ART-CAR ROBUSTNESS (Burning Man, 2026-07-06) ═══════════════════════════
+ * From a SINGLE playa mic we cannot cleanly separate our own sound system from
+ * a passing art car's. A car is loud EXTERNAL audio for ~10–40 s, then gone.
+ * DESIGN PRINCIPLE: react to the SUSTAINED musical context of OUR track (over
+ * minutes), treat brief swells as noise. Concretely:
+ *   - a pattern switch requires energy to RISE **and STAY elevated** for a
+ *     CONFIRMATION WINDOW (`switchConfirmMs`, ~5 s) — a swell that fades inside
+ *     the window never switches;
+ *   - the energy envelopes use LONG time-constants (`energySlowTau` ~20 s) so a
+ *     20 s flyby can't dominate the sustained trend that drives speed;
+ *   - the speed arc rides the SLOW (mood) envelope, not the fast one, so a
+ *     transient can't yank the tempo scale;
+ *   - colour is corroborated (energy band AND note both stable) AND held
+ *     (`colorHoldMs` ~10 s) AND silence-gated — a transient foreign note/energy
+ *     during a flyby must NOT recolour;
+ *   - a heavy `minIntervalMs` (~12 s) means even a slipped-through false
+ *     trigger can't churn the deck.
+ * All thresholds are TUNABLE constructor params (see AUDIO_REACTIVE_DEFAULTS)
+ * with documented BM defaults — see docs/41_audio_reactive_tuning.md.
+ *
  * Behaviours:
  *   - PATTERN ADVANCE — event-driven (nextDelayMs() → null, no host timer). Two
  *     OR'd triggers into the SAME ctx.requestAdvance() path, both gated by
  *     minIntervalMs so they can't double-fire:
- *       (a) `audioSwitchPattern` pulse (drop / regime / slow-zone cue), and
- *       (b) a FAST positive slope in the smoothed energy envelope (a low→high
- *           "pickup" after a calm stretch); `audioDropPulse` is a strong
- *           confirmation. Reactive-slope is a valid v1 — predictive pre-arm via
- *           riser/dropCountdown/buildEta is optional and NOT required.
- *     SUPPRESSED during silence / non-party.
- *   - PATTERN SPEED (energy arc) — a smooth energy→speed-scale that SAGS as the
- *     music calms and recovers as energy stably rises. Implemented by ramping
- *     the bpmSpeedSync CEILING (`bpmSpeedMax`) between a floor and the armed
- *     ceiling, so it LAYERS ON bpmSpeedSync (tempo→speed) rather than fighting
- *     it for the `speed` key. Continuous (never stepwise), hysteretic (no
- *     jitter). Restored on detach.
+ *       (a) `audioSwitchPattern` pulse (drop / regime / slow-zone cue, already
+ *           beat-quantized + min-dwelled at the source), and
+ *       (b) a SUSTAINED energy pickup — energy that rises from a calm and then
+ *           STAYS above pickupSustainAbove for switchConfirmMs (no instantaneous-
+ *           slope test, no drop-pulse trigger — pure held elevation; a passing
+ *           car's brief swell fails the hold, our track's build passes it).
+ *     SUPPRESSED during silence / non-party AND when the autopilot is paused.
+ *   - PATTERN SPEED (energy arc) — a smooth energy→speed-SCALE that SAGS as the
+ *     music calms and recovers as energy stably rises. Implemented as a
+ *     MULTIPLICATIVE scale [speedScaleFloor,1] layered on the bpmSpeedSync
+ *     tempo→speed mapping via ctx.setSpeedScale() (calm → slower). Rides the
+ *     SLOW envelope so a flyby can't yank it. Restored to 1 on detach.
  *   - MAX-DWELL SAFETY — if nothing advances for maxDwellS, advance anyway so
  *     the deck never freezes in an ambiguous passage.
  *   - PICK BIAS — loud → shuffle; slow-zone → group-locality (overlays the
  *     operator's stored autopilot fields at pick time, non-persistent).
  *   - COLOR — on a STABLE descriptor change held past colorHoldMs, map settled
  *     `audioNoteHue` → nearest curated palette by c1 hue distance and apply it.
- *     `audioSwitchColor` is only a CANDIDATE moment that still must pass the
- *     hold gate — a raw drop/onset alone must NOT recolour.
+ *     Seeded on the FIRST computation (no recolour on arm — F3), silence-gated.
  *   - BRIGHTNESS — untouched (grand master never driven; operator gate A1).
  *
  * ═══ Spike 0 finding (why LEVEL-triggered, not edge-triggered) ═══
@@ -47,19 +66,21 @@
  * re-guard, NOT a strict rising edge, and never assume every pulse arrives.
  *
  * The profile holds no persisted state; attach/detach own its subscription, its
- * per-tick energy loop, and the bpmSpeed CPC restore. All thresholds are
- * explicit constants below.
+ * per-tick energy loop, the bpmSpeed CPC restore, and the speed-scale restore.
+ * All thresholds are explicit constants below.
  */
 
 import { pickNextAutoCycleEntry } from '../autopilot_pick.js';
 
 // ── Tunable behaviour constants (explicit, no magic numbers inline) ────────
+// EVERY field here is a documented tunable — see docs/41_audio_reactive_tuning.md
+// for the "more/less reactive" guidance. Override any subset via the constructor.
 export const AUDIO_REACTIVE_DEFAULTS = Object.freeze({
   // Never advance the pattern faster than this even if triggers arrive in a
-  // burst (the source already enforces a 6 s min-dwell; we re-guard so a wire
-  // glitch or a slope+pulse coincidence can't strobe). Both pattern triggers
+  // burst. BM default is HEAVY (12 s) so even a false trigger that slips through
+  // the confirmation window can't churn the deck. Both pattern triggers
   // (switchPattern pulse + energy pickup) share this one guard.
-  minIntervalMs: 6000,
+  minIntervalMs: 12000,
   // Safety advance: if nothing advances for this long, advance anyway. Seconds.
   maxDwellS: 300,
   // Pick-bias thresholds.
@@ -68,26 +89,41 @@ export const AUDIO_REACTIVE_DEFAULTS = Object.freeze({
   // Gates: hold on silence / when not party.
   silenceHi: 0.5,           // audioSilence >= this → suppress advances
   partyLo: 0.5,             // audioParty < this → suppress advances
-  // Speed window this profile arms on attach (the bpmSpeedSync ceiling floats
-  // between bpmSpeedMaxFloor and bpmSpeedMax with the energy arc).
+  // Speed window this profile arms on attach (bpmSpeedSync maps tempo into it).
+  // The energy arc no longer moves this window — it drives a MULTIPLICATIVE
+  // scale on the mapped speed instead (see speedScaleFloor).
   bpmSpeedMin: 60,
   bpmSpeedMax: 160,
-  bpmSpeedMaxFloor: 80,     // the lowest the ceiling sags to in a deep calm
 
   // ── Energy-arc envelope (the per-tick loop) ──────────────────────────────
   tickMs: 250,              // energy loop cadence
-  energyFastTau: 2.0,       // s — fast envelope EMA time-constant (dynamics)
-  energySlowTau: 10.0,      // s — slow envelope EMA (mood / stable state)
-  // Pickup: a fast positive slope of energyFast over ~1s, after a calm stretch.
-  pickupSlopePerS: 0.35,    // Δ(energyFast)/s above this = a pickup
+  energyFastTau: 2.0,       // s — fast envelope EMA time-constant (dynamics/pickup)
+  energySlowTau: 25.0,      // s — slow envelope EMA (mood / speed arc / colour
+                            //     band). LONG so a passing art-car swell can't
+                            //     dominate the sustained trend.
+  // ── Sustained-pickup detection (pattern switch) ──────────────────────────
+  // A pickup ARMS when energyFast dips below pickupArmBelow (a calm), then FIRES
+  // only if energyFast climbs to pickupSustainAbove and STAYS there CONTINUOUSLY
+  // for switchConfirmMs. There is NO instantaneous-slope test (EMA slope is too
+  // fragile — it broke real builds) and NO drop-pulse trigger (F6) — pure
+  // sustained elevation. This is the core art-car rejection: a passing car PEAKS
+  // then FADES, so its above-sustain dwell is shorter than the window and
+  // cancels; OUR track's build PLATEAUS high and fires. A car parked adjacent
+  // blasting LONGER than switchConfirmMs causes at most ONE (minInterval-capped)
+  // switch — unavoidable from one mic; raise switchConfirmMs to reject longer swells.
   pickupArmBelow: 0.45,     // must have dipped below this recently to "pick up"
-  // Speed arc: map energyFast → ceiling scale with hysteresis so the ramp is
-  // smooth, not jittery. The ceiling target = floor + arc*(ceil-floor).
-  speedArcRatePerS: 0.6,    // how fast the ceiling ramps toward its target (/s)
+  pickupSustainAbove: 0.6,  // energyFast must STAY above this through the window
+  switchConfirmMs: 15000,   // it must hold that high this long before it switches
+  // ── Speed arc scale ──────────────────────────────────────────────────────
+  // The multiplicative scale layered on bpm-sync: scale = floor + slowEnergy*(1-floor).
+  // floor is the slowest the pattern runs in a deep calm (relative to its tempo
+  // speed). 1.0 = never slow down; 0.0 = can stall on a full calm.
+  speedScaleFloor: 0.35,
+  speedArcRatePerS: 0.5,    // how fast the scale ramps toward its target (/s)
 
   // ── Colour on STABLE descriptor ──────────────────────────────────────────
-  colorHoldMs: 6000,        // a descriptor change must hold this long to recolour
-  colorMinIntervalMs: 4000, // never recolour faster than this
+  colorHoldMs: 15000,       // a descriptor change must hold this long to recolour
+  colorMinIntervalMs: 8000, // never recolour faster than this
   energyBandEdges: [0.25, 0.5, 0.75],  // quantise energySlow → 4 bands (0..3)
 });
 
@@ -125,12 +161,14 @@ export class AudioReactiveProfile {
     // Energy-arc envelope state (per-tick loop).
     this._energyFast = null;   // null = un-seeded; seeds to first sample
     this._energySlow = null;
-    this._energyFastPrev = null;
-    this._armedForPickup = false;   // dipped below pickupArmBelow → a rise counts
-    this._ceilingNow = null;        // the currently-applied bpmSpeedMax ceiling
+    // Sustained-pickup state machine.
+    this._armedForPickup = false;    // has dipped below pickupArmBelow (a calm) → latched
+    this._pickupPendingSinceMs = 0;  // when energy LANDED above sustain (0 = none pending)
+    // Speed-scale arc state (the multiplicative scale layered on bpm-sync).
+    this._speedScaleNow = 1;
     this._lastTickMs = 0;
     // Colour descriptor state.
-    this._descriptor = null;         // the last APPLIED (recoloured) descriptor
+    this._descriptor = null;         // the last APPLIED / SEEDED descriptor
     this._pendingDescriptor = null;  // a candidate that must hold colorHoldMs
     this._pendingSinceMs = 0;
     // CPC values captured at attach so detach restores EXACTLY what was there.
@@ -150,18 +188,20 @@ export class AudioReactiveProfile {
     this._lastColorMs = now;
     this._lastTickMs = now;
 
-    // SPEED: arm bpmSpeedSync so `speed` tracks tempo. Capture prior values so
-    // detach restores them verbatim. The ceiling starts at the armed max and
-    // floats with the energy arc thereafter.
+    // SPEED: arm bpmSpeedSync so `speed` tracks tempo within a fixed window.
+    // Capture prior values so detach restores them verbatim. The energy arc
+    // drives a MULTIPLICATIVE scale on the mapped speed (ctx.setSpeedScale),
+    // NOT this window — the window stays put.
     this._restore = {
       bpmSpeedSync: this._getNum(KEY.bpmSpeedSync),
       bpmSpeedMin: this._getNum(KEY.bpmSpeedMin),
       bpmSpeedMax: this._getNum(KEY.bpmSpeedMax),
     };
-    this._ceilingNow = this._p.bpmSpeedMax;
+    this._speedScaleNow = 1;
     this._set(KEY.bpmSpeedSync, 1);
     this._set(KEY.bpmSpeedMin, this._p.bpmSpeedMin);
-    this._set(KEY.bpmSpeedMax, this._ceilingNow);
+    this._set(KEY.bpmSpeedMax, this._p.bpmSpeedMax);
+    this._applySpeedScale(1);
 
     // Subscribe to the CPC for the pulse-driven triggers (switchPattern advance
     // candidate, switchColor colour candidate).
@@ -179,13 +219,15 @@ export class AudioReactiveProfile {
   detach() {
     if (this._unsub) { try { this._unsub(); } catch { /* already gone */ } this._unsub = null; }
     if (this._tickTimer) { clearInterval(this._tickTimer); this._tickTimer = null; }
-    // SPEED restore: put bpmSpeedSync + window back to what they were before we
-    // armed them (read-modify-restore, no fallback). A value we could not read
-    // at attach is left untouched (null → skip).
+    // SPEED restore: drop the energy scale back to 1 (no attenuation) then put
+    // bpmSpeedSync + window back to what they were before we armed them
+    // (read-modify-restore, no fallback). A value we could not read at attach
+    // (NaN) is left untouched — F4: guard on Number.isFinite, not `!== null`.
+    this._applySpeedScale(1);
     if (this._restore) {
-      if (this._restore.bpmSpeedSync !== null) this._set(KEY.bpmSpeedSync, this._restore.bpmSpeedSync);
-      if (this._restore.bpmSpeedMin !== null) this._set(KEY.bpmSpeedMin, this._restore.bpmSpeedMin);
-      if (this._restore.bpmSpeedMax !== null) this._set(KEY.bpmSpeedMax, this._restore.bpmSpeedMax);
+      if (Number.isFinite(this._restore.bpmSpeedSync)) this._set(KEY.bpmSpeedSync, this._restore.bpmSpeedSync);
+      if (Number.isFinite(this._restore.bpmSpeedMin)) this._set(KEY.bpmSpeedMin, this._restore.bpmSpeedMin);
+      if (Number.isFinite(this._restore.bpmSpeedMax)) this._set(KEY.bpmSpeedMax, this._restore.bpmSpeedMax);
       this._restore = null;
     }
     this._ctx = null;
@@ -210,9 +252,20 @@ export class AudioReactiveProfile {
   // (its behaviour is tuned in-code); nothing to validate.
   validateState(_wire) {}
 
+  // Whether the autopilot host is currently ACTIVE (playing). A PAUSED autopilot
+  // must not couple audio to speed/colour/advance (F2). A ctx without state()
+  // (older unit stubs) is treated as active so those tests still drive _tick().
+  _active() {
+    if (!this._ctx || typeof this._ctx.state !== 'function') return true;
+    const st = this._ctx.state();
+    // `active` absent (never toggled) → treat as active; an explicit false pauses.
+    return !(st && st.active === false);
+  }
+
   // ── CPC change handler (pulse-driven candidates) ───────────────────────────
   _onChange(ev) {
     if (!ev || !Array.isArray(ev.changedKeys)) return;
+    if (!this._active()) return;   // F2: paused autopilot = no audio coupling
     // COLOUR CANDIDATE: a switchColor pulse is ONLY a candidate moment — it
     // still has to pass the stable-descriptor hold gate in _tick(). So here we
     // just re-evaluate the descriptor immediately (a pulse coinciding with a
@@ -245,17 +298,20 @@ export class AudioReactiveProfile {
     // 1. Update the two energy envelopes (fast = dynamics, slow = mood).
     const energy = this._getNum(KEY.energyRatio);
     if (Number.isFinite(energy)) {
-      this._energyFastPrev = this._energyFast;
       this._energyFast = this._ema(this._energyFast, energy, dt, this._p.energyFastTau);
       this._energySlow = this._ema(this._energySlow, energy, dt, this._p.energySlowTau);
     }
 
-    // 2. Speed arc — ramp the bpmSpeedSync ceiling toward an energy-derived
-    //    target. Runs regardless of gating (a calm ≠ silence). Layers on
-    //    bpmSpeedSync: a lower ceiling sags the mapped speed.
-    this._rampSpeedCeiling(dt);
+    // F2: when the autopilot is PAUSED, keep the envelopes warm (so a resume
+    // isn't cold) but drive NO side-effects — no speed, no colour, no advance.
+    if (!this._active()) return;
 
-    // 3. Pattern pickup (trigger b) — a fast positive slope after a calm dip.
+    // 2. Speed arc — ramp the MULTIPLICATIVE speed scale toward an energy-derived
+    //    target (calm → slower). Rides the SLOW envelope so a transient flyby
+    //    can't yank the tempo scale. Runs regardless of gating (a calm ≠ silence).
+    this._rampSpeedScale(dt);
+
+    // 3. Pattern pickup (trigger b) — a SUSTAINED fast positive slope after a calm.
     this._detectPickup(now, dt);
 
     // 4. Colour on stable descriptor — re-evaluate + apply if a change has held.
@@ -267,45 +323,83 @@ export class AudioReactiveProfile {
     }
   }
 
-  // Ramp the ceiling continuously toward floor + arc*(ceil-floor), where the arc
-  // is the fast energy envelope. Rate-limited per second so it never steps.
-  _rampSpeedCeiling(dt) {
-    if (!Number.isFinite(this._energyFast) || this._ceilingNow === null) return;
-    const floor = this._p.bpmSpeedMaxFloor;
-    const ceil = this._p.bpmSpeedMax;
-    const arc = Math.max(0, Math.min(1, this._energyFast));
-    const target = floor + arc * (ceil - floor);
-    // Move at most speedArcRatePerS * (ceil-floor) per second toward target.
-    const maxStep = this._p.speedArcRatePerS * (ceil - floor) * (dt || 0);
-    const delta = target - this._ceilingNow;
+  // Ramp the multiplicative speed SCALE continuously toward
+  // floor + slowEnergy*(1-floor), where the arc is the SLOW energy envelope
+  // (mood, not dynamics). Rate-limited per second so it never steps. A lower
+  // scale sags `speed` below the tempo mapping — calm → slower (F1 fix).
+  _rampSpeedScale(dt) {
+    if (!Number.isFinite(this._energySlow)) return;
+    const floor = this._p.speedScaleFloor;
+    const arc = Math.max(0, Math.min(1, this._energySlow));
+    const target = floor + arc * (1 - floor);
+    const maxStep = this._p.speedArcRatePerS * (dt || 0);
+    const delta = target - this._speedScaleNow;
     const step = Math.abs(delta) <= maxStep ? delta : Math.sign(delta) * maxStep;
-    const next = this._ceilingNow + step;
+    const next = this._speedScaleNow + step;
     // Only write on a meaningful change (avoid CPC churn on a settled arc).
-    if (Math.abs(next - this._ceilingNow) >= 0.5) {
-      this._ceilingNow = next;
-      this._set(KEY.bpmSpeedMax, Math.round(this._ceilingNow));
+    if (Math.abs(next - this._speedScaleNow) >= 0.01) {
+      this._speedScaleNow = next;
+      this._applySpeedScale(this._speedScaleNow);
     }
   }
 
-  // A SUDDEN pickup: energyFast rose fast after having dipped into a calm. Uses
-  // hysteresis (arm on a dip, fire on the rise) so a steady loud passage doesn't
-  // repeatedly fire. OR's into the shared requestAdvance path (minInterval-gated).
-  _detectPickup(now, dt) {
-    if (!Number.isFinite(this._energyFast) || !Number.isFinite(this._energyFastPrev) || dt <= 0) {
+  // Push the speed scale to the live BpmSpeedSync (via ctx). A unit ctx without
+  // setSpeedScale simply skips (the arc is exercised at the HIL level).
+  _applySpeedScale(scale) {
+    if (this._ctx && typeof this._ctx.setSpeedScale === 'function') {
+      try { this._ctx.setSpeedScale(scale); } catch (e) {
+        console.warn('[audio_reactive] setSpeedScale failed:', e && e.message ? e.message : e);
+      }
+    }
+  }
+
+  // A SUSTAINED pickup, in two beats:
+  //   ARM     — energyFast dips below pickupArmBelow (a calm stretch). This is a
+  //             LATCH: it stays armed (we don't wipe progress every tick) until a
+  //             switch fires. While still in the calm the confirm clock is held
+  //             at 0 (energy hasn't picked up yet).
+  //   CONFIRM — once armed, energyFast must climb to pickupSustainAbove and STAY
+  //             there CONTINUOUSLY for switchConfirmMs. The clock starts when
+  //             energy LANDS above the sustain bar and RESETS if it sinks back
+  //             below (the swell faded) — so only an elevation that plateaus for
+  //             the whole window fires.
+  // No instantaneous-slope test (EMA slope decays as it approaches the target, so
+  // a threshold on it was met only during the earliest sub-arm ticks and got
+  // wiped by re-arming — it silently broke every real build). No drop-pulse
+  // trigger either (F6). Pure "rose from a calm and held high" — which a passing
+  // art car (peak-then-fade) fails and OUR track's build passes.
+  _detectPickup(now, _dt) {
+    if (!Number.isFinite(this._energyFast)) return;
+    // ARM latch on a calm; being in the calm also cancels any confirmation in
+    // progress (energy fell back — not a sustained pickup).
+    if (this._energyFast < this._p.pickupArmBelow) {
+      this._armedForPickup = true;
+      this._pickupPendingSinceMs = 0;
       return;
     }
-    if (this._energyFast < this._p.pickupArmBelow) this._armedForPickup = true;
-    const slope = (this._energyFast - this._energyFastPrev) / dt;   // per second
-    const drop = this._getNum(KEY.dropPulse);
-    const dropConfirms = Number.isFinite(drop) && drop >= 0.5;
-    if (this._armedForPickup && (slope >= this._p.pickupSlopePerS || dropConfirms)) {
+    if (!this._armedForPickup) return;
+    // Armed (recently calm) and now above the arm floor.
+    const elevated = this._energyFast >= this._p.pickupSustainAbove;
+    if (!elevated) {
+      // rising but not yet high enough — keep armed, hold the clock at 0
+      this._pickupPendingSinceMs = 0;
+      return;
+    }
+    if (this._pickupPendingSinceMs === 0) {
+      this._pickupPendingSinceMs = now;   // clock starts when energy LANDS high
+      return;
+    }
+    // Held above the sustain bar long enough → OUR music building, not a flyby.
+    if (now - this._pickupPendingSinceMs >= this._p.switchConfirmMs) {
       this._armedForPickup = false;
+      this._pickupPendingSinceMs = 0;
       this._maybeAdvance(now);
     }
   }
 
-  // Shared advance gate: silence/party gate + minInterval re-guard, then advance.
+  // Shared advance gate: active + silence/party gate + minInterval re-guard.
   _maybeAdvance(now) {
+    if (!this._active()) return;              // F2
     if (this._gatedSilent()) return;
     if (now - this._lastAdvanceMs < this._p.minIntervalMs) return;
     this._advance(now);
@@ -335,11 +429,23 @@ export class AudioReactiveProfile {
   // band (from energySlow), regime (slowZone + structure), and held note class.
   // A colour change is triggered ONLY when this descriptor CHANGES and then HOLDS
   // for colorHoldMs — so beats/raw drops (fast) never recolour, only sustained
-  // mood shifts do. `candidateNow` (a switchColor pulse) does NOT bypass the
-  // hold; it just prompts an immediate re-evaluation.
+  // mood shifts do. It is ALSO silence-gated (F3: a flyby's foreign note during
+  // an otherwise-silent-for-us passage must not recolour) and SEEDED on first
+  // computation (no recolour on arm). `candidateNow` (a switchColor pulse) does
+  // NOT bypass the hold; it just prompts an immediate re-evaluation.
   _evaluateColorDescriptor(now, _candidateNow) {
+    if (!this._active()) return;         // F2: paused = no recolour
+    if (this._gatedSilent()) return;     // F3: silence/non-party = no recolour
     const desc = this._currentDescriptor();
     if (desc === null) return;   // not enough signal yet
+
+    // F3: SEED on the first descriptor — adopt it as the current colour's
+    // descriptor WITHOUT recolouring, so arming never triggers a palette change.
+    if (this._descriptor === null) {
+      this._descriptor = desc;
+      this._pendingDescriptor = null;
+      return;
+    }
 
     if (desc !== this._descriptor) {
       // A different descriptor than the one we last coloured. Start (or continue)
@@ -365,18 +471,19 @@ export class AudioReactiveProfile {
   }
 
   // Coarse descriptor string, or null if the core signal (energySlow) is absent.
+  // The recolour TRIGGER is a sustained MOOD change: the coarse energy band (from
+  // the SLOW envelope, τ≈25 s) plus the slow-zone regime. It deliberately EXCLUDES
+  // the instantaneous NOTE (a passing car injects a foreign note for its whole
+  // pass — including it would recolour on every flyby) and the "under development"
+  // structure detector. The NOTE still chooses WHICH palette at recolour time
+  // (see _applyAudioColor) — it just doesn't decide WHETHER to recolour. Net:
+  // colour drifts with our track's sustained energy/mood, not with transient pitch.
   _currentDescriptor() {
     if (!Number.isFinite(this._energySlow)) return null;
     const band = this._quantizeBand(this._energySlow);
     const slow = this._getNum(KEY.slowZone);
     const regime = Number.isFinite(slow) ? (slow > this._p.slowGroupHi ? 'slow' : 'norm') : 'norm';
-    // Structure index (0/1/2) when trustworthy; else omit from the descriptor.
-    const structure = this._getNum(KEY.structure);
-    const struct = Number.isFinite(structure) ? Math.round(structure) : 'x';
-    // Held note class (0..11) as a stable harmonic anchor; NaN → 'x'.
-    const note = this._getNum(KEY.note);
-    const noteClass = Number.isFinite(note) ? Math.round(note) : 'x';
-    return `b${band}:${regime}:s${struct}:n${noteClass}`;
+    return `b${band}:${regime}`;
   }
 
   _quantizeBand(v) {
@@ -439,13 +546,22 @@ export class AudioReactiveProfile {
     }
   }
 
+  // Write a CPC scalar. ParamCenter.set returns a STATUS object (it does NOT
+  // throw), so F5: check result.status and warn on anything but 'ok' — e.g. a
+  // source-lock rejection or an unknown key — rather than silently dropping it.
   _set(key, value) {
     const pc = this._ctx && this._ctx.paramCenter;
     if (!pc || typeof pc.set !== 'function') return;
-    try { pc.set(key, value, WRITE_SOURCE); } catch (e) {
+    let result;
+    try { result = pc.set(key, value, WRITE_SOURCE); } catch (e) {
       // A missing key means audio isn't wired in this scene — that's not a
       // profile bug, so warn rather than crash the arm.
       console.warn(`[audio_reactive] could not set ${key}: ${e && e.message ? e.message : e}`);
+      return;
+    }
+    if (result && typeof result === 'object' && result.status && result.status !== 'ok') {
+      console.warn(`[audio_reactive] set ${key} ignored: ${result.reason || result.status}`
+        + (result.lockedTo ? ` (locked to ${result.lockedTo})` : ''));
     }
   }
 }
