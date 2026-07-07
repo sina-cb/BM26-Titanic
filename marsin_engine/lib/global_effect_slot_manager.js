@@ -37,10 +37,16 @@ export const DEFAULT_SLOT_CONFIG = [
   // existing dimmer-aware pixel + DMX paths keep working.
   { slotId: 7,  enabled: true, label: 'Vintage Wht',    effectId: 'vintageWhite',   presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
   { slotId: 8,  enabled: true, label: 'Blast Wht',      effectId: 'blastWhite',     presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
-  { slotId: 9,  enabled: true, label: 'UV Blast',       effectId: 'uvBlast',        presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
-  { slotId: 10, enabled: true, label: 'Fogger',         effectId: 'fogger',         presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
-  { slotId: 11, enabled: true, label: 'Long Trails',    effectId: 'feedbackTrails', presetId: 'long_afterimage', behavior: 'toggle',  paramsOverride: {} },
-  { slotId: 12, enabled: true, label: 'Cosmic Trails',  effectId: 'feedbackTrails', presetId: 'cosmic_trails',   behavior: 'toggle',  paramsOverride: {} },
+  // Slot 9 — global color Invert, now an ASSIGNABLE slot effect
+  // (channels-optimization campaign, June 2026). It used to be a
+  // dedicated fixed InvertButton in GlobalEffectMacros; it now lives
+  // in a swappable slot inside the visible 1..9 range so it still
+  // works out of the box but can be re-bound like any other slot.
+  { slotId: 9,  enabled: true, label: 'Invert',         effectId: 'invert',         presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
+  { slotId: 10, enabled: true, label: 'UV Blast',       effectId: 'uvBlast',        presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
+  { slotId: 11, enabled: true, label: 'Fogger',         effectId: 'fogger',         presetId: 'default',         behavior: 'toggle',  paramsOverride: {} },
+  { slotId: 12, enabled: true, label: 'Long Trails',    effectId: 'feedbackTrails', presetId: 'long_afterimage', behavior: 'toggle',  paramsOverride: {} },
+  { slotId: 13, enabled: true, label: 'Cosmic Trails',  effectId: 'feedbackTrails', presetId: 'cosmic_trails',   behavior: 'toggle',  paramsOverride: {} },
 ];
 
 export const MIN_SLOTS = 1;
@@ -167,8 +173,28 @@ export class GlobalEffectSlotManager {
   }
 
   patchSlot(slotId, patch) {
-    const slot = this.getSlot(slotId);
-    if (!slot) throw new Error(`Invalid slotId: ${slotId}`);
+    let slot = this.getSlot(slotId);
+    if (!slot) {
+      // Create-on-patch (June 2026): an operator can assign an effect
+      // to ANY slot in 1..MAX_SLOTS, including ones that were never
+      // pre-seeded in DEFAULT_SLOT_CONFIG (previously slots 7/8/9...
+      // could not be populated because patchSlot threw here). The new
+      // slot starts as a disabled placeholder; the patch below fills it
+      // in and is validated through resolveSlotBinding when enabled.
+      if (!Number.isInteger(slotId) || slotId < MIN_SLOTS || slotId > MAX_SLOTS) {
+        throw new Error(`Invalid slotId: ${slotId} (must be ${MIN_SLOTS}..${MAX_SLOTS})`);
+      }
+      slot = {
+        slotId,
+        enabled: false,
+        label: `Slot ${slotId}`,
+        effectId: null,
+        presetId: null,
+        behavior: 'toggle',
+        paramsOverride: {},
+      };
+      this.slots.push(slot);
+    }
     const next = { ...slot, ...patch };
     if (patch.paramsOverride !== undefined) {
       next.paramsOverride = { ...patch.paramsOverride };
@@ -224,6 +250,11 @@ export class GlobalEffectSlotManager {
         return !!c.feedbackTrailsConfig.enabled && c.feedbackTrailsConfig.preset === slot.presetId;
       case 'dropHit':
         return c.dropHitActive;
+      // Global color Invert (June 2026): now an assignable slot effect
+      // routed through controller.invert. Singleton boolean, no preset
+      // distinction.
+      case 'invert':
+        return !!c.invert;
       // Legacy effects: just look up the boolean toggle on
       // controller.effects, since they're singletons (no preset
       // distinction in the legacy path beyond the bypassDimmer twin).
@@ -334,6 +365,13 @@ export class GlobalEffectSlotManager {
       case 'feedbackTrails':
         this._dispatchFeedbackTrails({ resolved, action, nowMs });
         return;
+      // Global color Invert (June 2026): assignable slot effect routed
+      // through controller.setInvert. activate/down → on, deactivate/up
+      // → off, toggle (or bare) → flip. The legacy POST
+      // /global-effect-invert route still drives the same setInvert.
+      case 'invert':
+        this._dispatchInvert({ action });
+        return;
       // Legacy rig-globals (migrated May 2026): the slot dispatcher
       // routes through `controller.setEffect(...)` so the existing
       // dimmer-aware pixel pipeline / DMX writers keep working.
@@ -371,6 +409,18 @@ export class GlobalEffectSlotManager {
     // a slot. Now: the slot dispatcher TOUCHES THE EFFECT TOGGLE
     // ONLY. The bypass flag stays exactly where the dimmer rack
     // last put it.
+  }
+
+  _dispatchInvert({ action }) {
+    const c = this.controller;
+    if (action === 'activate' || action === 'down') {
+      c.setInvert(true);
+    } else if (action === 'deactivate' || action === 'up') {
+      c.setInvert(false);
+    } else {
+      // toggle / trigger / bare action: flip current state.
+      c.setInvert(!c.invert);
+    }
   }
 
   _dispatchStrobe({ resolved, action, frameIndex, nowMs }) {

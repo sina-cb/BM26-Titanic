@@ -1,6 +1,6 @@
 // Unit tests for ParamCenter — schema defaults, setHsvField, setMany,
 // onChange fan-out, hasPersistentDirty. See docs/24_osc_integration.md
-// §7 and .agent/02_reports/202605/20260524_1_osc_impl.md Phase 1.
+// §7 and .agent/reports/202605/20260524_1_osc_impl.md Phase 1.
 //
 // Run:  cd marsin_engine && node --test tests/param_center.test.js
 import { test } from 'node:test';

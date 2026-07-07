@@ -1,7 +1,7 @@
 /**
  * Scheduler tab — operator surface for the engine-owned scheduled
  * task list (docs/31 v3 + Phase 1 engine report
- * .agent/02_reports/202605/20260527_2_scheduler_engine.md).
+ * .agent/reports/202605/20260527_2_scheduler_engine.md).
  *
  * Canonical use case the operator asked for: "turn on the hazer for
  * 10 seconds every 1 minute." One ADD tap + one library-picker tap

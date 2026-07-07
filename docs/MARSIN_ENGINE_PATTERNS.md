@@ -6,6 +6,45 @@ For the formal grammar, syntax rules, and standard functions of the programming 
 
 ---
 
+## 0. Pattern consistency ground rules (every pattern)
+
+These rules apply to **every** pattern in `marsin_engine/patterns/` — both new
+work and upgrades of existing patterns — so the whole show reads as one
+coherent, high-definition, sound-reactive library. The full recipe lives in the
+skill `.agent/01_skills/12_highdef_pattern_generation.md`; this is the contract
+it enforces.
+
+1. **`localSpeed` is the first local control and is genuinely effective.**
+   Motion visibly accelerates/decelerates across its range (see §3.2). Never
+   declare it and leave it unused.
+2. **Direction varies — it is not always forward.** Provide a guarded
+   `direction`/sign control (§3.2, "avoid the static dead-zone") *and* give the
+   pattern autonomous direction variation: some patterns **occasionally
+   auto-switch direction on their own**, on an incommensurate (irrational)
+   cadence so the rig never flips in lockstep. Motion should feel organic.
+3. **High-definition + bright.** Crisp cores, true-black-ish negative space, a
+   real per-channel peak at musical peaks, and two palette colours spanning the
+   rig (strict `cp1`/`cp2`, §3.1, §7).
+4. **Never static at zero audio.** With no modulation and all controls at
+   default, the pattern still animates from the clock alone (never dead-static,
+   never dead-black; keep a small non-black base for silence visibility).
+5. **The direction parameter never freezes the pattern** at any value — guard
+   the slider-centre dead-zone so it changes heading, never stalls.
+6. **Validate in the gallery.** Render each pattern through the offline harness
+   and publish it to the pattern gallery (skill `13_pattern_gallery.md`) for an
+   on-device visual pass; iterate until it is visually appealing.
+7. **Expose clearly audio-reactive knobs** — at minimum a movement **radius**
+   (travel/scale extent) and a brightness **kick** (kick-driven brightness pop),
+   plus 1–2 more natural to the pattern, each an identity `slider*` meant to be
+   modulated (§3.2, §8). Audio is modulators-only — never read CPC audio globals
+   natively (§8).
+
+When upgrading an existing pattern, **preserve its identity** (concept, palette
+feel, name) and modernize it to these rules — do not rewrite it into a different
+pattern.
+
+---
+
 ## 1. Engine Architecture & Environment
 
 Every pattern is written in MarsinScript (a Javascript-like dialect compiling to stack-based bytecode) and executes inside the **MarsinVM** WebAssembly sandboxed runtime.
@@ -101,6 +140,45 @@ Local parameters are unique to each deck slot and are mapped to UI sliders in th
   ```javascript
   export var localSpeed = 0.5; // Local speed trim variable
   export function sliderLocalSpeed(v) { localSpeed = v; }
+  ```
+- **MANDATORY — `localSpeed` must actually drive motion, not merely exist.** Declaring
+  the variable is NOT enough. Every pattern MUST have autonomous, continuous motion
+  driven by the VM clock (`t`, `time(scale)`, or accumulated `delta`), and that motion's
+  *rate* MUST be scaled by `localSpeed`. Canonical idiom:
+  ```javascript
+  export function beforeRender(delta) {
+    var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0); // 0.5->1x, 1->4x, 0->0.25x
+    // advance a phase from the clock, trimmed by localSpeed (pick one style):
+    phase = (phase + (delta / 65536.0) * localMultiplier) % 1.0;   // delta-driven
+    // tPhase = time(BASE_SCALE / localMultiplier);                // time()-driven
+  }
+  ```
+- **Why this also gives you GLOBAL speed for free.** The engine advances the VM clock by
+  `wallDelta * globalSpeedMultiplier()` and hands the pattern that already-scaled clock
+  (see `engine.js` `globalSpeedMultiplier` / `beginFrame(elapsed)`). So `t`, `time(scale)`,
+  and `beforeRender`'s `delta` are ALL pre-scaled by the global SPEED fader. Drive motion
+  from those (× `localSpeed`) and the pattern automatically obeys **both** global speed
+  (engine) and local speed (slider). Do not invent a separate clock.
+- **No dead-static patterns.** A pattern whose only motion comes from audio modulation —
+  or from any control that can sit at zero — freezes when nothing is mapped or the fader
+  is centered. That is a bug. There MUST be a baseline clock-driven animation that still
+  moves (and responds to `localSpeed`) with no audio mapped and every other control at
+  default. Audio/other controls then *modulate* that baseline motion, never gate it to a
+  standstill.
+
+#### Direction / sign parameters (avoid the static dead-zone)
+- A `direction` slider commonly maps `globalDir = (v * 2.0) - 1.0` and multiplies the
+  phase increment by it — which means slider-center (`v = 0.5 → globalDir = 0`) FREEZES
+  the pattern (and the engine may apply a `0.5` default at load, so it ships frozen).
+  Never leave that dead-zone in. Guard the magnitude so the effective direction is always
+  slightly positive or slightly negative — never exactly 0:
+  ```javascript
+  export function sliderDirection(v) {
+    var d = (v * 2.0) - 1.0;
+    if (d >= 0.0 && d < 0.06) d = 0.06;       // never freeze; bias slightly forward
+    else if (d < 0.0 && d > -0.06) d = -0.06; // ...or slightly reverse
+    globalDir = d;
+  }
   ```
 
 #### Custom Parameter Sliders (`slider*`)

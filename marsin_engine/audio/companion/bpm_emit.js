@@ -43,6 +43,15 @@ export function isSaneBpm(bpm) {
 export function emitDerivedBpm(paramCenter, sendOsc) {
   const bpm = paramCenter.get('audioBpm');
   if (!isSaneBpm(bpm)) return false;   // fail safe, not silent-wrong
-  sendOsc(BPM_OSC_ADDRESS, bpm);
+  // Emit a ROUNDED integer BPM so the value is identical everywhere it's shown
+  // (operator request 2026-06-29 — "both sides show the same exact thing"): the
+  // Companion UI, CaptainPad's OSC BPM readout, the engine's `audioBpm` /
+  // `oscTempoBpm`, and the arbitrated `mixer.tempoBpm` all read the SAME integer
+  // — no toFixed-vs-Math.round drift, and no unrounded oscTempoBpm reading
+  // 127.6 while a UI shows 128. BPM is displayed as an integer everywhere and
+  // the arbiter already quantizes to integer, so the 1-BPM emit resolution loses
+  // nothing (the smoothed float stays internal to the tracker; only the
+  // published/displayed value is the integer).
+  sendOsc(BPM_OSC_ADDRESS, Math.round(bpm));
   return true;
 }

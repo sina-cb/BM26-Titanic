@@ -66,6 +66,16 @@ const TOPIC_BY_TYPE = Object.freeze({
   deck:                        TOPICS.CONTROL,
   pattern:                     TOPICS.CONTROL,
   autopilot:                   TOPICS.CONTROL,
+  // docs/19 §13 (Phase 2.3): per-mixer-channel autopilot toggle.
+  // Operator-driven, low volume — rides /ws/control next to the deck's
+  // `autopilot` event.
+  mixerAutopilot:              TOPICS.CONTROL,
+  // docs/39: COLOR autopilot (palette cycling). Broadcast on every
+  // POST /deck/color-autopilot + each timer-driven palette apply + timeline
+  // cue, so CaptainPad's deck tab mirrors the palette-cycle config live.
+  // Operator-driven, low volume → /ws/control next to the deck `autopilot`
+  // event it parallels. Replayed on /ws/control connect.
+  colorAutopilot:              TOPICS.CONTROL,
   viewOverride:                TOPICS.CONTROL,
   deckTransitionConfig:        TOPICS.CONTROL,
   deckSwapStarted:             TOPICS.CONTROL,
@@ -75,6 +85,15 @@ const TOPIC_BY_TYPE = Object.freeze({
   mixerTransitionRejected:     TOPICS.CONTROL,
   globalEffectSlots:           TOPICS.CONTROL,
   globalEffectMacroStatus:     TOPICS.CONTROL,
+  // docs/39 §F-hue: GLOBAL hue shifter knob. Broadcast on every
+  // POST /global-effect-hue so CaptainPad mirrors the global hue + auto-
+  // rotate. Operator-driven, low volume → /ws/control next to the GEM
+  // macro/blackout messages it semantically relates to.
+  globalHueShift:              TOPICS.CONTROL,
+  // docs/39 §F-invert: GLOBAL color-invert toggle. Broadcast on every POST
+  // /global-effect-invert so CaptainPad mirrors the global invert state.
+  // Same topic as globalHueShift (operator-driven, low volume → /ws/control).
+  globalInvert:                TOPICS.CONTROL,
   // docs/32: per-group fixed-color override table. Broadcast on every
   // PUT/DELETE so all connected CaptainPads mirror the Dimmer Rack's
   // FIXED COLORS chips. Low volume, operator-driven.
@@ -85,12 +104,40 @@ const TOPIC_BY_TYPE = Object.freeze({
   // when a row state-machines), so /ws/control is the right home next
   // to the GEM messages it semantically relates to.
   scheduledTasks:              TOPICS.CONTROL,
+  // docs/38 §15: the Timeline runs IN the engine now (no separate :6965
+  // companion). Its runtime snapshot is broadcast on every tick + state
+  // change (mode/autopilot/program/cue fire). Low volume, operator-facing
+  // — rides /ws/control next to scheduledTasks, replayed on connect.
+  timelineState:               TOPICS.CONTROL,
   playlistLibrary:             TOPICS.CONTROL,
   playlistSaved:               TOPICS.CONTROL,
   playlistDeleted:             TOPICS.CONTROL,
   channelPlaylistData:         TOPICS.CONTROL,
   playlistEntryCaptured:       TOPICS.CONTROL,
+  // F-A: named mixer snapshots / look recall. Broadcast on save / delete /
+  // recall so every CaptainPad mirrors the snapshot library + a recalled
+  // look. Operator-driven, low volume → /ws/control next to mixer/deck.
+  snapshots:                   TOPICS.CONTROL,
+  // round-2 #9: named per-channel parameter presets. Broadcast on capture /
+  // delete / recall so every CaptainPad mirrors the preset library + a
+  // recalled channel's params. Operator-driven, low volume → /ws/control next
+  // to the snapshot library it semantically relates to.
+  paramPresets:                TOPICS.CONTROL,
+  // round-2 #10: mixer UNDO ring depth/top. Broadcast on every push (a
+  // destructive action snapshotted) + every undo so CaptainPad's global UNDO
+  // button mirrors enable/label live. Operator-driven, low volume → /ws/control
+  // next to the snapshot/preset libraries it semantically relates to. Replayed
+  // on /ws/control connect.
+  undoState:                   TOPICS.CONTROL,
   paramRejected:               TOPICS.CONTROL,
+  // round-2 #5 FLASH/BUMP (docs/39 §10.7): the engine pushes back a typed
+  // rejection on a bad bump/unbump id (bad/non-mixer/deck channel), mirroring
+  // soloRejected. Today it's sent point-to-point via ws.send (no fan-out
+  // needed for a per-client reject), but it's registered here so the type is
+  // documented on the wire and routes to /ws/control if ever broadcast. Bump
+  // STATE itself rides the existing `mixer` broadcast's bumpedChannelIds[] —
+  // no separate broadcast type (same as solo's soloedChannelIds[]).
+  bumpRejected:                TOPICS.CONTROL,
   audioStatus:                 TOPICS.CONTROL,
   oscStats:                    TOPICS.CONTROL,
   stats:                       TOPICS.CONTROL,

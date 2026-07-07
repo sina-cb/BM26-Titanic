@@ -8,6 +8,23 @@ import { validateMidiMapping } from './midi_mapping_engine.js';
 const VALID_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const VALID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}(\/[a-z0-9][a-z0-9_-]{0,63})?$/;
 
+// Thrown by load() when a playlist file EXISTS but its YAML is corrupt.
+// Distinguishing "corrupt" from "missing" is a Codex P0 concern: the old
+// behavior collapsed both into `return null`, so a corrupt file looked
+// identical to an absent one and the operator's bad save was silently
+// swallowed. HTTP callers translate this into a 400 with `.code`; internal
+// render/restore paths use tryLoad() (below) which logs loudly and degrades
+// to null WITHOUT crashing the 40 Hz loop.
+export class PlaylistLoadError extends Error {
+  constructor(message, { name, cause } = {}) {
+    super(message);
+    this.name = 'PlaylistLoadError';
+    this.code = 'PLAYLIST_MALFORMED';
+    this.playlistName = name;
+    if (cause) this.cause = cause;
+  }
+}
+
 export class PlaylistManager {
   constructor(playlistsDir, patternsDir) {
     this.playlistsDir = playlistsDir;
@@ -101,7 +118,12 @@ export class PlaylistManager {
    * and it seems like it crashed" — that was this method throwing on
    * a stale-format file and bubbling a 500 through the iPad. Now:
    *
-   *   - bad YAML       → warn + return null (caller treats as missing)
+   *   - file missing   → return null (a genuinely-absent playlist is not
+   *                       an error; callers 404 on it)
+   *   - bad YAML       → THROW PlaylistLoadError (Codex P0: a corrupt file
+   *                       that EXISTS must not masquerade as "missing".
+   *                       HTTP callers map this to a 400; render/restore
+   *                       paths use tryLoad() to degrade safely instead)
    *   - missing entries → coerced to []
    *   - non-object entry → dropped + warned
    *   - entry without a string pattern → kept as _missing (visible in
@@ -115,10 +137,25 @@ export class PlaylistManager {
     let raw = {};
     try {
       raw = yaml.load(fs.readFileSync(filePath, 'utf8')) || {};
-      if (typeof raw !== 'object') raw = {};
     } catch (err) {
-      console.warn(`[Playlist] malformed YAML in "${name}.yaml" — treating as missing: ${err.message}`);
-      return null;
+      // Loud, structured failure — the file is on disk but unparseable.
+      // This is NOT the same as "missing"; callers must be able to tell
+      // the operator their playlist is corrupt rather than silently
+      // dropping it. See PlaylistLoadError docstring.
+      console.error(`[Playlist] MALFORMED YAML in "${name}.yaml": ${err.message}`);
+      throw new PlaylistLoadError(
+        `Playlist "${name}" has malformed YAML: ${err.message}`,
+        { name, cause: err },
+      );
+    }
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+      // A scalar/array top-level document is structurally wrong for a
+      // playlist (must be a mapping). Treat as corrupt, not missing.
+      console.error(`[Playlist] "${name}.yaml" top-level is not a mapping`);
+      throw new PlaylistLoadError(
+        `Playlist "${name}" is not a YAML mapping`,
+        { name },
+      );
     }
     const data = {
       name: typeof raw.name === 'string' ? raw.name : name,
@@ -151,6 +188,27 @@ export class PlaylistManager {
       data.entries.push(coerced);
     }
     return data;
+  }
+
+  /**
+   * Lenient sibling of load() for internal render/restore/broadcast paths
+   * that MUST NOT crash the engine on a corrupt file (the 40 Hz loop, the
+   * boot state restore, the autopilot daemon). Returns the playlist on
+   * success, or null on EITHER missing OR malformed — but a malformed file
+   * is logged loudly (load() already console.error'd it) before degrading.
+   * HTTP write paths use load() directly so the operator gets a 400 with a
+   * specific reason; only the can't-crash paths use this.
+   */
+  tryLoad(name) {
+    try {
+      return this.load(name);
+    } catch (err) {
+      if (err instanceof PlaylistLoadError) {
+        console.warn(`[Playlist] tryLoad("${name}") degraded to null: ${err.message}`);
+        return null;
+      }
+      throw err;
+    }
   }
 
   save(playlist) {

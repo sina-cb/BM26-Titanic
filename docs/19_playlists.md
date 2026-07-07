@@ -104,6 +104,15 @@ On engine boot, if `simulation/scenes/<scene>/playlists/` is empty:
 2. Create `default.yaml` with one entry per pattern, auto-generated IDs, no labels, empty defaults
 3. Write to disk immediately
 
+> Playlist-level `tags` were removed (2026-06-30): the CaptainPad UI for them
+> was dropped, so the unused engine field + coercion were removed too. Old
+> playlists that still carry a `tags` key load fine — it's ignored and stripped
+> on the next save.
+
+> Per-entry `hold` / `loop` flags were removed (2026-06). Old playlists that
+> still carry those keys load fine — the keys are ignored and stripped from the
+> entry model on the next save.
+
 ---
 
 ## 3. Playlist vs Assignment

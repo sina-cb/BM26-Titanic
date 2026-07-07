@@ -3,7 +3,7 @@
  *
  * One module owns what used to be scattered magic numbers (see the
  * 2026-06-12 layout audit in
- * .agent/02_reports/202606/20260612_4_layout_pass.md):
+ * .agent/reports/202606/20260612_4_layout_pass.md):
  *
  *  - Exclusion strip: no panel may default to or be dragged/restored above
  *    TOP_MIN (the HUD top bar's interactive strip stays reachable).

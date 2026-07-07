@@ -3,7 +3,7 @@
  *
  * Mounts the sACN IN/OUT monitors and the camera view-preset row (the
  * surfaces that became standalone Preact components in the UI rehaul,
- * see .agent/02_reports/202606/20260612_2_ui_rehaul_plan.md). The rest of
+ * see .agent/reports/202606/20260612_2_ui_rehaul_plan.md). The rest of
  * the UI is the MarsinGui control engine + the modern panel shells.
  */
 

@@ -1,63 +1,76 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 29_bar_dancers
+  pattern: 19_swaying_lattice_ballet
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
   localControls:
-    '438507424':
-      v0: 0
-      v1: 0
-      v2: 0
-    '801282547':
-      v0: 0.56
-      v1: 0
-      v2: 0
     '1037917937':
-      v0: 0
-      v1: 0
-      v2: 0
-    '1703382777':
-      v0: 0.66
-      v1: 0
-      v2: 0
-    '2032005017':
-      v0: 0.21
-      v1: 0
-      v2: 0
-    '2388682063':
-      v0: 0
-      v1: 0
-      v2: 0
-    '3884763796':
-      v0: 0.32
-      v1: 0
-      v2: 0
-    '3988485704':
-      v0: 0.25
-      v1: 0
-      v2: 0
-    '4294396969':
-      v0: 0
+      v0: 0.51
       v1: 0
       v2: 0
   playlist:
     name: default
-    activeEntryId: e_1781748878700_5868
-    cursor: 29
+    activeEntryId: e_default_19_19_swaying_lattice_ballet
+    cursor: 19
     autopilot:
-      active: false
-      delay_s: 1
+      active: true
+      delay_s: 10
       shuffle: true
   viewSelection:
     type: all
     target: null
     invert: false
+  faderMax: 1
+  color: null
+  mixGroupId: null
+  soloSafe: false
+  hue: 0
+  followsTempo: false
+  followLeaderId: null
+  followScale: 1
 transitionConfig:
-  enabled: false
-  mode: trans_crossfade
-  durationMs: 400
+  enabled: true
+  mode: trans_dissolve
+  durationMs: 1000
+  shuffle: true
+overlays:
+  - id: do_1783156629942_0
+    name: Overlay
+    pattern: test/rpm_fixtures_tune_v2
+    mode: blend_over
+    fader: 1
+    enabled: true
+    locked: false
+    faderLocked: false
+    localControls: {}
+    playlist:
+      name: test
+      activeEntryId: e_test_13_rpm_fixtures_tune_v2
+      cursor: 13
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: group
+      target: ParLights
+      invert: false
+    faderMax: 1
+    color: '#FF5252'
+    mixGroupId: null
+    soloSafe: false
+    hue: 0
+    followsTempo: false
+    followLeaderId: null
+    followScale: 1
+overlayAutopilot:
+  active: false
+  delay_s: 1
   shuffle: false
+  groupMode: false
+  groupSize: 3
+  groupDwell: 6

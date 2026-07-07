@@ -15,6 +15,15 @@
     </div>
     <div class="top-right">
       <span id="flash" class="flash"></span>
+      <div class="nav-seg" id="nav-seg">
+        <button class="nav-btn active" data-page="design">DESIGN</button>
+        <button class="nav-btn" data-page="mic">MIC TUNE</button>
+        <button class="nav-btn" data-page="osc">OSC OUT</button>
+      </div>
+      <label class="theme-pick" title="UI theme">
+        <span class="theme-lab">THEME</span>
+        <select id="theme-select" class="theme-select"></select>
+      </label>
       <span id="status" class="status">connecting…</span>
       <button id="export-btn" class="primary">Export config ▾</button>
     </div>
@@ -26,7 +35,7 @@
     <div id="gainbar" class="gainbar"></div>
   </div>
 
-  <main class="layout">
+  <main class="layout" id="page-design">
     <aside class="sidebar">
       <div class="panel-label">SIGNALS</div>
       <div id="signals" class="signals"></div>
@@ -56,8 +65,54 @@
           </div>
           <div class="derived-row">
             <span class="d-item"><span class="d-lab">BPM</span><span id="bpm-val" class="d-big">—</span><span id="beat-dot" class="beat-dot">●</span></span>
-            <span class="d-item"><span class="d-lab">NOTE</span><span id="note-val" class="d-big">—</span></span>
+            <span class="d-item"><span class="d-lab">NOTE</span><span id="note-swatch" class="note-swatch"></span><span id="note-val" class="d-big">—</span></span>
+            <span class="d-item"><span class="d-lab">GENRE</span><span id="genre-val" class="d-genre">—</span><span id="genre-conf" class="d-conf"></span></span>
             <span id="party-pill" class="party-pill">calm</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- NEW Round-2/Wave-D derived signals: BUILD · STRUCTURE · ONSETS. All
+           values come from the server `derived` frame; continuous keys meter,
+           pulse keys flash. Styled entirely with the theme CSS vars. -->
+      <div class="live-readouts derived2">
+        <div class="lr-card build">
+          <div class="lr-title">BUILD
+            <span id="countdown-flash" class="cue-flash err">⏱ COUNTDOWN</span>
+          </div>
+          <div class="build-body">
+            <div class="sbar riser"><span>riser</span><i id="riser-bar"></i></div>
+            <div class="build-stats">
+              <span class="d-item"><span class="d-lab">ETA</span><span id="eta-val" class="d-mid">—</span></span>
+              <span class="d-item"><span class="d-lab">CONF</span><span id="riser-conf" class="d-mid">—</span></span>
+            </div>
+          </div>
+        </div>
+        <div class="lr-card struct2">
+          <div class="lr-title">STRUCTURE
+            <span id="boundary-flash" class="cue-flash">▮ PHRASE</span>
+            <span id="trackchange-flash" class="cue-flash err">⤳ TRACK</span>
+          </div>
+          <div class="struct2-body">
+            <div class="phrase-ring-wrap">
+              <svg class="phrase-ring" viewBox="0 0 40 40" width="42" height="42" aria-hidden="true">
+                <circle class="pr-track" cx="20" cy="20" r="16"></circle>
+                <circle id="phrase-ring-fill" class="pr-fill" cx="20" cy="20" r="16"
+                  transform="rotate(-90 20 20)"></circle>
+              </svg>
+              <span class="d-lab">phrase</span>
+            </div>
+            <div class="sbar climax"><span>climax</span><i id="climax-bar"></i></div>
+            <span id="silence-pill" class="party-pill silence-pill">live</span>
+          </div>
+        </div>
+        <div class="lr-card onsets">
+          <div class="lr-title">ONSETS</div>
+          <div class="onsets-body">
+            <span class="onset-item"><span id="onset-low" class="onset-dot low">●</span><span class="d-lab">low</span></span>
+            <span class="onset-item"><span id="onset-mid" class="onset-dot mid">●</span><span class="d-lab">mid</span></span>
+            <span class="onset-item"><span id="onset-high" class="onset-dot high">●</span><span class="d-lab">high</span></span>
+            <span class="chest-item"><span id="chest-thump" class="chest-thump">◉</span><span class="d-lab">chest</span></span>
           </div>
         </div>
       </div>
@@ -93,6 +148,158 @@
       </div>
     </section>
   </main>
+
+  <!-- OSC OUT accounting page (TASK 1): one page = every signal sent to the
+       engine. Live table, themed, enumerated at runtime (no hardcoded list). -->
+  <section class="osc-page" id="page-osc" style="display:none">
+    <div class="osc-head">
+      <div class="osc-title">OSC OUT — signals sent to the marsin engine</div>
+      <div class="osc-stats">
+        <span class="osc-stat"><span class="osc-stat-lab">TARGET</span><span id="osc-target" class="osc-stat-val">—</span></span>
+        <span class="osc-stat"><span class="osc-stat-lab">OUTPUTS</span><span id="osc-count" class="osc-stat-val">0</span></span>
+        <span class="osc-stat"><span class="osc-stat-lab">TOTAL SENT</span><span id="osc-total" class="osc-stat-val">0</span></span>
+        <span class="osc-stat"><span class="osc-stat-lab">AGG RATE</span><span id="osc-rate" class="osc-stat-val">0/s</span></span>
+      </div>
+    </div>
+    <!-- OSC OUTPUT RATE control (report 20260621_6): how fast every output is
+         sent (a frame rate). The analyzer runs ~86 hops/s; this throttles the
+         send cadence so the wire isn't flooded. 60 fps is the smooth default. -->
+    <div class="osc-rate-ctrl">
+      <span class="orc-lab">OUTPUT RATE</span>
+      <input id="osc-rate-slider" class="orc-slider" type="range" min="1" max="90" step="1" />
+      <input id="osc-rate-num" class="orc-num" type="number" min="1" max="120" step="1" />
+      <span class="orc-unit">fps</span>
+      <span class="orc-presets" id="osc-rate-presets"></span>
+      <span class="orc-hint">how fast each output is sent — lower = lighter on the wire</span>
+    </div>
+    <div class="osc-list-hint" id="osc-list-hint">Untick <b>ON</b> to stop sending a signal. Operator-added signals can rename their OSC path (the engine re-binds it to the same CPC key); built-in 🔒 paths are fixed.</div>
+    <div class="osc-table-wrap">
+      <table class="osc-table">
+        <thead>
+          <tr>
+            <th class="osc-on-col" title="send this signal over OSC">ON</th>
+            <th>SIGNAL</th><th>OSC ADDRESS</th><th>CPC KEY</th><th>KIND</th>
+            <th class="num">VALUE</th><th class="num">RATE</th><th class="num">SENT</th>
+          </tr>
+        </thead>
+        <tbody id="osc-rows"></tbody>
+      </table>
+      <div id="osc-empty" class="osc-empty">no OSC outputs yet — add an output signal in DESIGN</div>
+    </div>
+  </section>
+
+  <!-- MIC TUNE page (report 20260621_5): tune/threshold/filter the mic for the
+       loud, dusty, windy playa. Designed automatic-first — one tap calibrates
+       the noise floor and sets all gates; everything else is manual override. -->
+  <section class="mic-page" id="page-mic" style="display:none">
+    <div class="mic-head">
+      <div class="mic-title">MIC TUNE <span class="mic-sub">quiet the noise, keep the music — for the loud/dusty/windy playa</span></div>
+      <div class="mic-link" id="mic-link">engine sync: <span id="mic-link-state" class="mic-link-state">—</span></div>
+    </div>
+    <!-- Workflow strip (report 20260621_7): the order that holds on playa —
+         gain for the LOUD state first, noise floor at the QUIET state second,
+         highs nudged when a loud source is near. -->
+    <div class="mic-flow">
+      <span class="mic-flow-step"><b>①</b> Set <b>gain</b> for when an art car / loud source is near (so LOW·MID·HIGH look good, no clipping).</span>
+      <span class="mic-flow-step"><b>②</b> At your <b>quiet baseline</b> (no loud source — needn't be silent) tap <b>Calibrate noise floor</b>: LOW·MID get gated cleanly.</span>
+      <span class="mic-flow-step"><b>③</b> When a loud source returns, nudge the <b>HIGH</b> gate down — highs don't carry over distance, so they need this last touch.</span>
+    </div>
+
+    <!-- AUTO hero: the two one-tap calibrations. Noise floor first (the new,
+         playa-critical one), then gain. -->
+    <div class="mic-auto">
+      <div class="mic-auto-card noise">
+        <div class="mac-step">①</div>
+        <div class="mac-body">
+          <div class="mac-title">Calibrate noise floor</div>
+          <div class="mac-hint">Run this at your <b>quiet baseline</b> — whatever's normal when no loud source (art car) is nearby. It does <b>not</b> need to be silent. Listens for ~4&nbsp;s and sets each band's gate to reject that ambient, so quiet moments stay calm while louder music clears the gate. Set the <b>gain</b> first (→) so the gate matches the level you'll run.</div>
+          <div class="mac-actions">
+            <button id="noisecal-btn" class="primary big">▶ Calibrate noise floor</button>
+            <span id="noisecal-status" class="mac-status"></span>
+          </div>
+          <div id="noisecal-result" class="mac-result" style="display:none">
+            <span class="mac-rec">recommended → <b id="nc-low">—</b> low · <b id="nc-mid">—</b> mid · <b id="nc-high">—</b> high</span>
+            <button id="noisecal-apply" class="primary">✓ Apply</button>
+            <button id="noisecal-save" class="primary">💾 Save to <span id="noisecal-save-name">profile</span></button>
+          </div>
+        </div>
+      </div>
+      <div class="mic-auto-card gain">
+        <div class="mac-step">②</div>
+        <div class="mac-body">
+          <div class="mac-title">Calibrate gain</div>
+          <div class="mac-hint">Do this when a loud source (art car) is near, at a <b>typical loud</b> level. Recommends an input gain so loud music sits healthy (not clipping). Set this <b>before</b> the noise floor — gain and the gates are linked, so changing gain a lot afterward means re-calibrating the floor.</div>
+          <div class="mac-actions">
+            <button id="gaincal-btn" class="primary big">▶ Calibrate gain</button>
+            <span id="gaincal-status" class="mac-status"></span>
+          </div>
+          <div id="gaincal-result" class="mac-result" style="display:none">
+            <span class="mac-rec">peak <b id="gc-peak">—</b> · <b id="gc-verdict">—</b> · recommend ×<b id="gc-rec">—</b></span>
+            <button id="gaincal-apply" class="primary">✓ Apply gain</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live per-band meters with gate lines + sliders. -->
+    <div class="mic-bands" id="mic-bands">
+      <div class="mic-bands-title">PER-BAND LEVEL &amp; GATE <span class="mic-bands-sub">live level (bar) vs gate threshold (line) — anything below the line reads as silence</span></div>
+      <div class="band-row" data-band="low">
+        <span class="band-name">LOW</span>
+        <div class="band-meter"><i class="band-fill" id="bm-low-fill"></i><span class="band-gateline" id="bm-low-gate"></span></div>
+        <span class="band-val" id="bm-low-val">0.00</span>
+        <input class="band-slider" id="bs-low" type="range" min="0" max="0.6" step="0.005" />
+        <span class="band-gateval" id="bg-low">0.04</span>
+        <button class="band-clear" id="bc-low" title="use global gate">⟲</button>
+      </div>
+      <div class="band-row" data-band="mid">
+        <span class="band-name">MID</span>
+        <div class="band-meter"><i class="band-fill" id="bm-mid-fill"></i><span class="band-gateline" id="bm-mid-gate"></span></div>
+        <span class="band-val" id="bm-mid-val">0.00</span>
+        <input class="band-slider" id="bs-mid" type="range" min="0" max="0.6" step="0.005" />
+        <span class="band-gateval" id="bg-mid">0.04</span>
+        <button class="band-clear" id="bc-mid" title="use global gate">⟲</button>
+      </div>
+      <div class="band-row" data-band="high">
+        <span class="band-name">HIGH</span>
+        <div class="band-meter"><i class="band-fill" id="bm-high-fill"></i><span class="band-gateline" id="bm-high-gate"></span></div>
+        <span class="band-val" id="bm-high-val">0.00</span>
+        <input class="band-slider" id="bs-high" type="range" min="0" max="0.6" step="0.005" />
+        <span class="band-gateval" id="bg-high">0.04</span>
+        <button class="band-clear" id="bc-high" title="use global gate">⟲</button>
+      </div>
+    </div>
+
+    <!-- Global controls. -->
+    <div class="mic-globals two">
+      <div class="mic-global">
+        <div class="mg-head"><span class="mg-name">GLOBAL GATE</span><span class="mg-val" id="mg-gate-val">0.04</span></div>
+        <input id="mg-gate" class="mic-range" type="range" min="0" max="0.6" step="0.005" />
+        <div class="mg-hint">the floor every band uses unless overridden above</div>
+      </div>
+      <div class="mic-global">
+        <div class="mg-head"><span class="mg-name">INPUT GAIN</span><span class="mg-val" id="mg-gain-val">×1.0</span></div>
+        <input id="mg-gain" class="mic-range" type="range" min="0" max="16" step="0.1" />
+        <div class="mg-hint">software mic preamp — raise on a distant/quiet capture</div>
+      </div>
+    </div>
+
+    <!-- PROFILES (report 20260621_8): named venue/condition calibrations. Click a
+         chip to apply it; the active one is what "Calibrate noise floor → Save"
+         writes into. Add your own; delete the ones you don't use. -->
+    <div class="mic-profiles-card">
+      <div class="mp-head">
+        <span class="mg-name">PROFILES</span>
+        <span class="mp-sub">click to apply · the active profile is what calibration saves into</span>
+      </div>
+      <div class="mp-chips" id="mp-chips"></div>
+      <div class="mp-active" id="mp-active"></div>
+      <div class="mp-add">
+        <input id="mp-name" class="file-input" placeholder="new profile name (e.g. Art car near)" maxlength="40" />
+        <button id="mp-add-btn" class="primary">＋ Add (saves current gates &amp; gain)</button>
+      </div>
+    </div>
+  </section>
 
   <div id="export-modal" class="modal">
     <div class="modal-box">
@@ -137,6 +344,20 @@
       </div>
       <div class="modal-foot">
         <button id="view-create" class="primary">Create view</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Themed confirm dialog (replaces native window.confirm — the designer
+       must show NO native dialogs). Message + Cancel/Confirm filled in by JS. -->
+  <div id="confirm-modal" class="modal">
+    <div class="modal-box confirm-box">
+      <div class="modal-head"><span id="confirm-title">confirm</span>
+        <button id="confirm-x" class="op-btn">✕</button></div>
+      <div id="confirm-msg" class="confirm-msg"></div>
+      <div class="modal-foot">
+        <button id="confirm-cancel" class="op-btn">Cancel</button>
+        <button id="confirm-ok" class="primary">Remove</button>
       </div>
     </div>
   </div>

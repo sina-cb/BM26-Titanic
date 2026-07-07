@@ -1,6 +1,6 @@
 // Pattern mixer fader-lock tests (slot 5 / fader_lock).
 //
-// Covers the four semantic rules from .agent/02_reports/202605/
+// Covers the four semantic rules from .agent/reports/202605/
 // 20260525_5_fader_lock.md (and the slot brief):
 //
 //   1. Manual fader writes via the engine boundary are rejected when

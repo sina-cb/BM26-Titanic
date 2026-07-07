@@ -7,7 +7,7 @@
  * Writes: tests/integration/validation_metrics.json
  *
  * The JSON is the source of the headline tables in
- * .agent/02_reports/202606/20260613_4_audio_analysis_validation.md.
+ * .agent/reports/202606/20260613_4_audio_analysis_validation.md.
  */
 
 import fs from 'node:fs';
@@ -40,7 +40,7 @@ const out = {
   perfBudgetMsPerHop: 0.5,
   configs: CONFIGS,
   realWorldEngineeringPriors: {
-    source: '.agent/02_reports/202605/20260526_2_drop_mood_detection_research.md §key-findings 2',
+    source: '.agent/reports/202605/20260526_2_drop_mood_detection_research.md §key-findings 2',
     note: 'engineering priors, NOT measured here; unmet target for a real Phase-3 corpus',
     precision: [0.65, 0.75],
     recall: [0.55, 0.70],

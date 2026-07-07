@@ -102,7 +102,7 @@ test('parseArgs: defaults when no flags', () => {
   const cfg = parseArgs([]);
   assert.equal(cfg.seconds, 10);
   assert.equal(cfg.sampleRate, 44100);
-  assert.equal(cfg.fftSize, 1024);
+  assert.equal(cfg.fftSize, 2048);   // mirrors config.yaml audio.fftSize (bumped 1024→2048)
   assert.equal(cfg.hopSize, 512);
   assert.equal(cfg.device, null);
 });
