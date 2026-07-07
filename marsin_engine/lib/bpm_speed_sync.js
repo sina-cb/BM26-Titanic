@@ -70,6 +70,35 @@ export class BpmSpeedSync {
     // Last speed value this driver wrote — lets recompute() short-circuit when
     // nothing changed, so it's safe to call per-frame (no CPC churn).
     this._lastSpeed = null;
+    // MULTIPLICATIVE SPEED SCALE (docs/25 §6.1): a [0,1] factor another driver
+    // can LAYER on top of the tempo→speed mapping so the final `speed` is
+    // `baseSpeed * scale`, then re-clamped to [0,1]. The audio_reactive autopilot
+    // profile drives this with its energy arc: a lower scale on a calm SLOWS the
+    // pattern (calm → slower), a scale of 1 on a peak leaves the tempo mapping
+    // untouched. Defaults to 1 so the sync behaves EXACTLY as before when no
+    // driver sets it. Set via setSpeedScale(); the caller must then recompute()
+    // (or wait for the next CPC/tempo event) for it to take effect.
+    this._speedScale = 1;
+  }
+
+  /**
+   * Set the multiplicative speed scale [0,1] layered on the tempo mapping.
+   * A non-finite or out-of-range value is a programming error and THROWS
+   * (Codex P0 — no silent clamp of a caller mistake). Does NOT itself write
+   * `speed`; the caller drives that via recompute() so the write cadence stays
+   * the caller's to control. Returns nothing.
+   */
+  setSpeedScale(scale) {
+    const s = Number(scale);
+    if (!Number.isFinite(s) || s < 0 || s > 1) {
+      throw new RangeError(`BpmSpeedSync.setSpeedScale requires a [0,1] number, got '${scale}'`);
+    }
+    this._speedScale = s;
+  }
+
+  /** Current multiplicative speed scale (1 = no attenuation). */
+  getSpeedScale() {
+    return this._speedScale;
   }
 
   /** Subscribe to the CPC. Idempotent. Returns the unsubscribe fn. */
@@ -149,6 +178,13 @@ export class BpmSpeedSync {
       if (speed < 0) speed = 0;
       if (speed > 1) speed = 1;
     }
+
+    // Layer the multiplicative energy scale ON TOP of the tempo mapping, then
+    // re-clamp. scale=1 (the default) is a no-op; a lower scale SAGS `speed`
+    // below the tempo-mapped value (the audio_reactive calm-slows-down arc).
+    speed = speed * this._speedScale;
+    if (speed < 0) speed = 0;
+    if (speed > 1) speed = 1;
 
     if (this._lastSpeed === speed) return;   // idempotent — no churn
     this._lastSpeed = speed;
