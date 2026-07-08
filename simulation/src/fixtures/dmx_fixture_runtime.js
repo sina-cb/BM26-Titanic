@@ -38,10 +38,87 @@ function getCachedSphere(size) {
   return _sphereCache[key];
 }
 
+// ── LED diffusion glow sprite (shared texture) ──────────────────────────
+// One procedurally generated radial-gradient texture shared by EVERY LED
+// pixel halo in the scene (generated in-code — the sim must stay offline-safe,
+// no external image assets). The falloff is a dual Gaussian (bright core +
+// wide faint tail, like a real frosted-acrylic diffuser kernel), shifted so
+// alpha reaches exactly 0 at the quad edge — no visible rim.
+const LED_GLOW_TEX_SIZE = 128;
+const LED_GLOW_CORE_K = 22.0;  // core Gaussian exponent (tight, bright)
+const LED_GLOW_TAIL_K = 8.0;   // tail Gaussian exponent (kept tight — a wide tail reads as smoke)
+const LED_GLOW_CORE_W = 0.82;  // core weight (core + tail weights sum to 1); high = clean, low = hazy
+const LED_GLOW_SPAN = 1.4;     // sprite quad size in bulb-diameter units at 1× diffusion
+const LED_GLOW_OPACITY = 0.45; // per-sprite opacity at 1× diffusion (fades with amt, see applyDiffusion)
+let _ledGlowTexture = null;
+function getLedGlowTexture() {
+  if (_ledGlowTexture) return _ledGlowTexture;
+  const size = LED_GLOW_TEX_SIZE;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const half = size / 2;
+  const kernel = (r2) =>
+    LED_GLOW_CORE_W * Math.exp(-LED_GLOW_CORE_K * r2) +
+    (1 - LED_GLOW_CORE_W) * Math.exp(-LED_GLOW_TAIL_K * r2);
+  const edge = kernel(1);       // kernel value at the quad edge (r = 1)
+  const peak = kernel(0) - edge;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = (x + 0.5 - half) / half;
+      const dy = (y + 0.5 - half) / half;
+      const g = Math.max(0, (kernel(dx * dx + dy * dy) - edge) / peak);
+      const i = (y * size + x) * 4;
+      img.data[i] = 255;
+      img.data[i + 1] = 255;
+      img.data[i + 2] = 255;
+      img.data[i + 3] = Math.round(g * 255);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  _ledGlowTexture = new THREE.CanvasTexture(canvas);
+  return _ledGlowTexture;
+}
+
+// ── LED diffusor "screen" panel ─────────────────────────────────────────
+// A flat translucent panel drawn across the fixture's front face that reads
+// the live per-pixel colors and paints a blended 2D surface — the look of
+// LEDs mounted behind a ~50% opaque milky-white polycarbonate diffuser. It is
+// a per-fixture CanvasTexture on a Plane (its own canvas/texture/mesh, so the
+// GPU cost is isolated and it's zero when OFF), and it works for ANY pixel
+// layout (grid / line / arbitrary TE-Sign map) because each pixel is stamped
+// at its own local position — no grid assumption. Distinct from the diffusion
+// glow (which is additive halo sprites); this is a real bounded surface.
+const SCREEN_TEX_LONG_EDGE = 256;   // canvas px on the panel's longer edge
+const SCREEN_MILK = 0.35;           // mix each LED color toward white (milky-diffuser pastel)
+const SCREEN_BASE_ALPHA = 0.05;     // faint body of the unlit polycarb sheet
+const SCREEN_CORE_ALPHA = 0.85;     // blob centre alpha before the radial falloff
+const SCREEN_DEFAULT_PIXEL_MM = 60; // default blob diameter (mm) — a touch over a 50mm pitch so blobs merge
+
+// Blob radius, in mm, that each pixel bleeds across the diffuser. Missing or
+// garbage → the default; clamped so a slider can't collapse it to a dot or
+// blow it up past the panel.
+function clampScreenPixelMm(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return SCREEN_DEFAULT_PIXEL_MM;
+  return THREE.MathUtils.clamp(numeric, 10, 400);
+}
+
 function clampUnit(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 0;
   return THREE.MathUtils.clamp(numeric, 0, 1);
+}
+
+// Per-axis fixture scale (LED resize). Missing/garbage → 1 (no scale), and the
+// range keeps a dragged gizmo from collapsing the fixture to zero or blowing it
+// up past the scene.
+function clampScale(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 1;
+  return THREE.MathUtils.clamp(numeric, 0.1, 20);
 }
 
 function sanitizeRgb(r, g, b) {
@@ -79,6 +156,10 @@ export class DmxFixtureRuntime {
     this.modelRadius = modelRadius;
     this.fixtureDef = fixtureDef;
     this.patchDef = patchDef;
+    // LED-bus fixtures (Ango 4 pixel panels/ropes) get resize + diffusion; a
+    // DMX par/bar keeps its spotlight semantics (scale → cone angle, no glow
+    // toggle). One flag switches both behaviours below.
+    this._isLed = !!(fixtureDef && fixtureDef.bus === 'led');
 
     const color = config.color || '#ffaa44';
     const intensity = config.intensity || 5;
@@ -165,6 +246,7 @@ export class DmxFixtureRuntime {
         let halo = null;
         let bulbMat = null;
         let haloMat = null;
+        let haloBaseSize = 0;
         let dotMeshList = [];
 
         // Always calculate local coordinates as SpotLights and Beams rely on them
@@ -224,12 +306,28 @@ export class DmxFixtureRuntime {
             }
             this.group.add(bulb);
 
-            haloMat = new THREE.MeshBasicMaterial({
-              color, transparent: true, opacity: 0.2,
-              blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
-            });
-            halo = new THREE.Mesh(getCachedSphere(bulbSize * 1.8), haloMat);
-            halo.scale.setScalar(params.globalHaloScale || 1.0);
+            if (this._isLed) {
+              // LED diffusion glow: camera-facing sprite with the shared
+              // radial-gradient texture instead of a backside sphere. A sphere
+              // shell reads as a hard-edged additive ball; the Gaussian
+              // gradient reads as light through frosted acrylic and lets
+              // neighbouring pixels blend into a continuous sheet.
+              haloMat = new THREE.SpriteMaterial({
+                map: getLedGlowTexture(), color, transparent: true,
+                opacity: LED_GLOW_OPACITY,
+                blending: THREE.AdditiveBlending, depthWrite: false,
+              });
+              halo = new THREE.Sprite(haloMat);
+              haloBaseSize = bulbSize * LED_GLOW_SPAN;
+              halo.scale.setScalar(haloBaseSize * (params.globalHaloScale || 1.0));
+            } else {
+              haloMat = new THREE.MeshBasicMaterial({
+                color, transparent: true, opacity: 0.2,
+                blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
+              });
+              halo = new THREE.Mesh(getCachedSphere(bulbSize * 1.8), haloMat);
+              halo.scale.setScalar(params.globalHaloScale || 1.0);
+            }
             halo.position.copy(bulb.position);
             this.group.add(halo);
         }
@@ -252,7 +350,7 @@ export class DmxFixtureRuntime {
         }
 
         this.pixels.push({
-          model: pixelModel, spotLight: null, beam, bulb, bulbMat, halo, haloMat, dots, localPos,
+          model: pixelModel, spotLight: null, beam, bulb, bulbMat, halo, haloMat, haloBaseSize, dots, localPos,
         });
       });
     } else {
@@ -300,8 +398,112 @@ export class DmxFixtureRuntime {
       });
     }
 
+    // Diffusor screen panel — lazily built on first enable (see update()), so
+    // an LED fixture that never turns it on allocates no canvas/texture/mesh.
+    this._screen = null;
+
     // ─── Initial positioning ─────────────────────────────────────────
     this.syncFromConfig();
+  }
+
+  // Build the per-fixture diffusor panel: a Plane across the fixture's front
+  // face carrying a CanvasTexture that `update()` repaints from the live pixel
+  // colors. Sized to the physical fixture (falls back to the pixel bounds), so
+  // it moves / rotates / resizes with the fixture (it lives in `this.group`).
+  _buildScreen() {
+    // Pixel bounds in group-local space (works for grid / line / arbitrary map).
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, sumZ = 0, n = 0;
+    for (const p of this.pixels) {
+      if (!p.localPos) continue;
+      minX = Math.min(minX, p.localPos.x); maxX = Math.max(maxX, p.localPos.x);
+      minY = Math.min(minY, p.localPos.y); maxY = Math.max(maxY, p.localPos.y);
+      sumZ += p.localPos.z; n++;
+    }
+    if (n === 0) return; // nothing to diffuse
+
+    const spanX = maxX - minX;
+    const spanY = maxY - minY;
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    const zPlane = sumZ / n;
+
+    // Prefer the physical fixture face; fall back to the pixel span (+margin)
+    // for a definition with no dimensions or a degenerate 1-row/1-col layout.
+    const margin = 0.04;
+    const width = Math.max(this._fixtureWidth || 0, spanX + margin, 0.05);
+    const height = Math.max(this._fixtureHeight || 0, spanY + margin, 0.05);
+
+    // Canvas: fixed long edge, aspect-matched, so the paint cost is bounded.
+    const long = SCREEN_TEX_LONG_EDGE;
+    const cw = width >= height ? long : Math.max(1, Math.round(long * width / height));
+    const ch = width >= height ? Math.max(1, Math.round(long * height / width)) : long;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = cw;
+    canvas.height = ch;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+
+    const mat = new THREE.MeshBasicMaterial({
+      map: texture, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), mat);
+    // A hair in front of the LEDs (−Z is the emitting/front direction here).
+    mesh.position.set(centerX, centerY, zPlane - 0.005);
+    mesh.visible = false;
+    this.group.add(mesh);
+
+    this._screen = {
+      mesh, mat, texture, canvas, ctx: canvas.getContext('2d'),
+      cw, ch,
+      originX: centerX - width / 2, originY: centerY - height / 2,
+      width, height,
+    };
+  }
+
+  // Per-frame hook (called from animate.js). Repaints the diffusor panel from
+  // the live pixel colors when it's enabled; otherwise a couple of cheap
+  // checks. Builds the panel lazily the first time it's switched on.
+  update() {
+    if (!this._isLed) return;
+    const on = !!this.config.screen && this.group.visible;
+    if (on && !this._screen) this._buildScreen();
+    if (!this._screen) return;
+    this._screen.mesh.visible = on;
+    if (on) this._paintScreen();
+  }
+
+  _paintScreen() {
+    const scr = this._screen;
+    const { ctx, cw, ch } = scr;
+    const pxPerMeter = cw / scr.width;
+    const radius = Math.max(3, clampScreenPixelMm(this.config.screenPixelSize) * 0.001 * pxPerMeter);
+
+    ctx.clearRect(0, 0, cw, ch);
+    // Faint milky body of the polycarb sheet (barely visible unlit at night).
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = `rgba(255,255,255,${SCREEN_BASE_ALPHA})`;
+    ctx.fillRect(0, 0, cw, ch);
+    // LED bleed: each pixel is an additive soft radial blob, its colour mixed
+    // toward white so the surface reads as diffused pastel, not raw neon.
+    ctx.globalCompositeOperation = 'lighter';
+    for (const p of this.pixels) {
+      if (!p.localPos || !p.bulbMat) continue;
+      const c = p.bulbMat.color;
+      const r = Math.round((c.r * (1 - SCREEN_MILK) + SCREEN_MILK) * 255);
+      const g = Math.round((c.g * (1 - SCREEN_MILK) + SCREEN_MILK) * 255);
+      const b = Math.round((c.b * (1 - SCREEN_MILK) + SCREEN_MILK) * 255);
+      const cx = (p.localPos.x - scr.originX) * pxPerMeter;
+      const cy = ch - (p.localPos.y - scr.originY) * pxPerMeter; // canvas Y is flipped
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+      grad.addColorStop(0, `rgba(${r},${g},${b},${SCREEN_CORE_ALPHA})`);
+      grad.addColorStop(0.6, `rgba(${r},${g},${b},${SCREEN_CORE_ALPHA * 0.35})`);
+      grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    scr.texture.needsUpdate = true;
   }
 
   // ── Visual sync ──────────────────────────────────────────────────────
@@ -342,6 +544,40 @@ export class DmxFixtureRuntime {
         if (p.haloMat) p.haloMat.color.set(color).multiplyScalar(gain);
       }
     });
+    this.applyDiffusion();
+  }
+
+  // Per-fixture LED diffusion — a soft additive glow that lets neighbouring
+  // pixels bleed into each other (a frosted-diffuser look). It reuses the halo
+  // meshes each pixel already owns: ON enlarges + shows them so they overlap
+  // and blend; OFF hides them so the fixture renders as crisp dots with zero
+  // halo overdraw. Opt-in PER FIXTURE, so the GPU cost is isolated — a fixture
+  // that doesn't need it pays nothing, and each fixture's halos are independent
+  // (no shared/global buffer to serialize on). No-op for DMX fixtures.
+  applyDiffusion() {
+    if (!this._isLed) return;
+    const on = !!this.config.diffusion;
+    const amt = on ? Math.max(1, Number(this.config.diffusionAmount) || 2.5) : 1;
+    const haloScale = (params.globalHaloScale || 1.0) * amt;
+    // Overlap compensation: the glow footprint grows with `amt`, so the number
+    // of sprites overlapping any screen pixel grows ~amt². Fading each sprite
+    // by 1/amt^1.5 keeps the additive sum from blowing out to flat white under
+    // the bloom pass, while the wider footprint still merges neighbouring
+    // pixels into one continuous frosted sheet.
+    const opacity = LED_GLOW_OPACITY / Math.pow(amt, 1.5);
+    // Read the profile fresh (not the cached this.profileDef) because the
+    // lighting profile is runtime state that changes without rebuilding the
+    // fixture — same reason setVisibility() re-fetches it below.
+    const profileDef = getProfileDef(params.lightingProfile || 'edit');
+    this.pixels.forEach((p, j) => {
+      if (!p.halo) return;
+      const shouldEmitter = (profileDef.render.emitterMode === 'pixel') ||
+        (profileDef.render.emitterMode === 'fixture_representative' && j === 0);
+      p.halo.visible = this.group.visible && shouldEmitter && on;
+      p.halo.scale.setScalar(p.haloBaseSize * haloScale);
+      p.haloMat.opacity = opacity;
+      p.halo.matrixWorldNeedsUpdate = true;
+    });
   }
 
   syncFromConfig() {
@@ -354,6 +590,15 @@ export class DmxFixtureRuntime {
       THREE.MathUtils.degToRad(this.config.rotY || 0),
       THREE.MathUtils.degToRad(this.config.rotZ || 0)
     ), 'YXZ');
+    // LED resize: restore the persisted per-axis scale onto the hitbox; the
+    // group (all pixel visuals) copies it in updateVisualsFromHitbox.
+    if (this._isLed) {
+      this.hitbox.scale.set(
+        clampScale(this.config.scaleX),
+        clampScale(this.config.scaleY),
+        clampScale(this.config.scaleZ)
+      );
+    }
     this.updateVisualsFromHitbox();
   }
 
@@ -480,6 +725,20 @@ export class DmxFixtureRuntime {
   // ── Transform ────────────────────────────────────────────────────────
 
   handleTransformScale() {
+    // LED fixtures: the scale gizmo is a real resize — the scale is persisted
+    // by writeTransformToConfig and kept on the hitbox (the visuals follow it).
+    // Clamp the live hitbox to the SAME bounds we persist so the preview never
+    // diverges from the saved value (drag past 20× then reload = silent snap).
+    if (this._isLed) {
+      this.hitbox.scale.set(
+        clampScale(this.hitbox.scale.x),
+        clampScale(this.hitbox.scale.y),
+        clampScale(this.hitbox.scale.z)
+      );
+      return;
+    }
+    // DMX fixtures: a par/bar has no size, so the scale gizmo widens its beam
+    // cone instead, then resets to unit scale.
     if (this.hitbox.scale.x !== 1 || this.hitbox.scale.y !== 1 || this.hitbox.scale.z !== 1) {
       this.config.angle = THREE.MathUtils.clamp(
         (this.config.angle || 20) * Math.max(this.hitbox.scale.x, this.hitbox.scale.y),
@@ -497,6 +756,11 @@ export class DmxFixtureRuntime {
     this.config.rotX = THREE.MathUtils.radToDeg(euler.x);
     this.config.rotY = THREE.MathUtils.radToDeg(euler.y);
     this.config.rotZ = THREE.MathUtils.radToDeg(euler.z);
+    if (this._isLed) {
+      this.config.scaleX = clampScale(this.hitbox.scale.x);
+      this.config.scaleY = clampScale(this.hitbox.scale.y);
+      this.config.scaleZ = clampScale(this.hitbox.scale.z);
+    }
   }
 
   // ── Visibility & Scaling ─────────────────────────────────────────────
@@ -521,6 +785,8 @@ export class DmxFixtureRuntime {
         p.halo.matrixWorldNeedsUpdate = true;
       }
     });
+    // Re-assert LED diffusion halo scale on top of the global halo scale.
+    this.applyDiffusion();
   }
 
   setVisibility(visible, conesVisible = true) {
@@ -542,6 +808,9 @@ export class DmxFixtureRuntime {
       if (p.bulb) p.bulb.visible = visible && shouldEmitter;
       if (p.dots) p.dots.forEach(d => { if (d.mesh) d.mesh.visible = visible && shouldEmitter; });
     });
+    // LED halos are gated by the per-fixture diffusion toggle — override the
+    // profile-driven visibility just set above.
+    this.applyDiffusion();
   }
 
   setSelected(selected) {
@@ -578,13 +847,28 @@ export class DmxFixtureRuntime {
     this.pixels.forEach(p => {
       if (p.beam) disposeNode(p.beam);
       if (p.bulb) disposeNode(p.bulb);
-      if (p.halo) disposeNode(p.halo);
+      if (p.halo) {
+        if (p.halo.isSprite) {
+          // Sprites share one THREE-internal geometry and the module-level
+          // glow texture — dispose only this pixel's material, never the
+          // shared geometry/texture (other fixtures still use them).
+          p.halo.material.dispose();
+        } else {
+          disposeNode(p.halo);
+        }
+      }
       
       // dots share bulb material, so disposing geometry is sufficient
       if (p.dots) p.dots.forEach(d => {
         if (d.mesh && d.mesh.geometry) d.mesh.geometry.dispose();
       });
     });
+
+    if (this._screen) {
+      this._screen.mesh.geometry.dispose();
+      this._screen.mat.dispose();
+      this._screen.texture.dispose();
+    }
 
     if (this.shell) {
        this.shell.traverse((child) => {

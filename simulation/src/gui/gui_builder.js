@@ -1962,6 +1962,53 @@ function setupGUI() {
             propagateToSelected(index, 'penumbra', v);
           });
 
+          // ── LED-only controls: diffusion (soft glow) + resize ──
+          // Shown only for LED-bus fixtures (Ango 4 panels/ropes); a DMX
+          // par/bar has no size to resize and uses its beam, not a glow.
+          const _ledDef = getDefinition(config.fixtureType);
+          if (_ledDef && _ledDef.bus === 'led') {
+            if (config.diffusion === undefined) config.diffusion = false;
+            if (config.diffusionAmount === undefined) config.diffusionAmount = 2.5;
+            if (config.screen === undefined) config.screen = false;
+            if (config.screenPixelSize === undefined) config.screenPixelSize = 60;
+            if (config.scaleX === undefined) config.scaleX = 1;
+            if (config.scaleY === undefined) config.scaleY = 1;
+            if (config.scaleZ === undefined) config.scaleZ = 1;
+
+            idxFolder.add(config, "diffusion").name("Diffusion (glow)").onChange(() => {
+              selectThisLight();
+              window.syncLightFromConfig(index);
+            });
+            idxFolder.add(config, "diffusionAmount", 1, 6, 0.1).name("Diffusion Amt").onChange(() => {
+              selectThisLight();
+              window.syncLightFromConfig(index);
+            });
+
+            // Diffusor screen: a milky-white polycarb panel across the fixture
+            // face that blends the LED colors into a 2D surface. Pixel Size is
+            // the per-LED bleed radius (mm) — bigger = softer, more merged.
+            // Live per frame, so no syncLightFromConfig() needed to repaint.
+            idxFolder.add(config, "screen").name("Screen (diffusor)").onChange(() => {
+              selectThisLight();
+            });
+            idxFolder.add(config, "screenPixelSize", 10, 300, 5).name("Pixel Size (mm)").onChange(() => {
+              selectThisLight();
+            });
+
+            // Resize (matches the S / scale gizmo — same config.scaleX/Y/Z).
+            // Deliberately NOT propagated to other selected fixtures: the scale
+            // gizmo only resizes the dragged fixture, and propagating would
+            // write dead scaleX/Y/Z keys into non-LED (DMX) configs.
+            const scaleFolder = idxFolder.addFolder("Scale (Resize)");
+            scaleFolder.close();
+            ['scaleX', 'scaleY', 'scaleZ'].forEach((ax) => {
+              scaleFolder.add(config, ax, 0.1, 20, 0.1).onChange(() => {
+                selectThisLight();
+                window.syncLightFromConfig(index);
+              });
+            });
+          }
+
           // Position
           const posFolder = idxFolder.addFolder("Position");
           posFolder.close();

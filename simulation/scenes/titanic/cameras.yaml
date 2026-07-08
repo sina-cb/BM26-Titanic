@@ -69,3 +69,33 @@ presets:
       x: -22
       'y': 6
       z: 8
+  - name: LED Grids
+    key: led-grids
+    position:
+      x: 0
+      'y': 9
+      z: 26
+    target:
+      x: 0
+      'y': 9
+      z: 17
+  - name: LED Grid Close
+    key: led-grid-close
+    position:
+      x: -4
+      'y': 9
+      z: 19.5
+    target:
+      x: -4
+      'y': 9
+      z: 17
+  - name: LED Grid Close 2
+    key: led-grid-close2
+    position:
+      x: 4
+      'y': 9
+      z: 19.5
+    target:
+      x: 4
+      'y': 9
+      z: 17
