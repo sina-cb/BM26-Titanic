@@ -29,6 +29,7 @@ import { View, Text, useWindowDimensions } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
+import { MidiStatusChip } from '@/components/MidiStatusChip';
 import { HealthChip } from '@/components/ui/HealthChip';
 import { MasterFadeGroup } from '@/components/MasterFadeGroup';
 import { useMaster, useActiveModel } from '@/hooks/useEngineState';
@@ -116,6 +117,9 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck', disabled = fals
             <Text style={styles.modelName} numberOfLines={1}>{activeModel}</Text>
           </View>
         ) : null}
+        {/* Direct-MIDI controller status, same visual language as the engine
+            badge. Grey = no device, green = connected, red = error. */}
+        <MidiStatusChip />
         {/* Engine-health warning — renders NOTHING when healthy (no layout
             shift); shows an amber "⚠ DEGRADED" chip only when the engine
             reports a degrade on /status. See HealthChip / useEngineHealth. */}

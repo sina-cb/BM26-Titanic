@@ -14,6 +14,7 @@ import {
   type ChannelRole,
 } from '@/utils/api';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
+import { useMidiWindow } from '@/hooks/useMidiControl';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -127,6 +128,9 @@ function patternDisplayName(pattern: string): string {
   return i >= 0 ? pattern.slice(i + 1) : pattern;
 }
 
+// Accent for the MIDI controller's playlist browse window (the "rectangular
+// border" Sina asked for) — amber, distinct from the active/ghost borders.
+const MIDI_WINDOW_COLOR = '#ffbf00';
 // Build the panel header title with ONE consistent separator + casing
 // pattern across every place this shared panel is mounted (deck, mixer
 // channel strips, deck overlays). Round-8 fix: the header drifted between
@@ -150,6 +154,11 @@ function playlistHeaderTitle(channelLabel?: string): string {
 
 export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce, playlistLibrary }) => {
   const C = usePalette();
+  // The APC pad browser windows 6 entries per mixer layer; mirror that as a
+  // border here so the operator sees which entries the pads will select.
+  // Read the controller's browse window for THIS channel on either tab — the
+  // deck channel gets a window too (it's layer 0 in the unified layout).
+  const midiWindow = useMidiWindow(channelId);
   // playlistLibrary is currently consumed via the local `playlists`
   // state + engineEvents `playlistLibrary` subscription further down.
   // The prop is accepted so parents (mixer/index) can pass their
@@ -380,6 +389,18 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     targetY = Math.max(0, Math.min(targetY, Math.max(0, contentH - viewportH)));
     scrollRef.current.scrollTo({ y: targetY, animated: true });
   }, []);
+
+  // ── Keep the MIDI browse window in view ─────────────────────────────
+  // When the operator moves the bordered window with the controller's scroll
+  // pads, auto-scroll the list so the windowed (bordered) entries stay visible
+  // — centre the window's middle row in the viewport.
+  useEffect(() => {
+    if (!midiWindow || !playlist) return;
+    const mid = playlist.entries[midiWindow.start + Math.floor(midiWindow.size / 2)]
+      ?? playlist.entries[midiWindow.start];
+    if (mid) scrollActiveIntoView(mid.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [midiWindow?.start, midiWindow?.size, playlist, scrollActiveIntoView]);
 
   // ── Saved-toast: visible for 1.4 s after the last save ──────────────
   const flashSaved = useCallback(() => {
@@ -1274,6 +1295,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
               // would be a destructive edit.
               const canMoveUp = editable && playlist.entries.length > 1 && idx > 0;
               const canMoveDown = editable && playlist.entries.length > 1 && idx < playlist.entries.length - 1;
+              const inMidiWindow = !!midiWindow && idx >= midiWindow.start && idx < midiWindow.start + midiWindow.size;
               return (
                 <View
                   key={e.id}
@@ -1295,8 +1317,9 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                     paddingVertical: sz.rowPadY,
                     borderRadius: 6,
                     backgroundColor: isActive ? C.primary : 'transparent',
-                    borderWidth: 1,
-                    borderColor: isActive ? 'transparent' : C.ghostBorder,
+                    // MIDI browse window → amber border (Sina's "rectangular border").
+                    borderWidth: inMidiWindow ? 2 : 1,
+                    borderColor: inMidiWindow ? MIDI_WINDOW_COLOR : (isActive ? 'transparent' : C.ghostBorder),
                     marginBottom: sz.rowGap,
                     opacity: missing ? 0.4 : 1,
                   }}

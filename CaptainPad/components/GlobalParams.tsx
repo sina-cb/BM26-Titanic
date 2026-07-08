@@ -7,7 +7,10 @@ import { ToggleButton, MomentaryButton } from '@/components/ui/ToggleButton';
 import { MiniFader } from '@/components/ui/MiniFader';
 import { useChannelExports, useDeckChannel, MixerChannelExport } from '@/hooks/useEngineState';
 import { ModulatedSlider, useEntryModulations, useModulationState, prettySliderName } from '@/components/Modulation';
+import { useEntryMidiMappings } from '@/components/MidiMap';
 import { engineEvents } from '@/utils/engineEvents';
+import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
+import { knobBadgeFor } from '@/utils/midi/knob_badge';
 
 export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant?: 'deck' | 'mixer', channelId?: string, exports?: any[], wsRef?: unknown }) => {
   const C = usePalette();
@@ -34,9 +37,12 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
   const deckPlaylistName = deckPlaylist?.name ?? null;
   const deckEntryId = deckPlaylist?.activeEntryId ?? null;
   const { mappings: entryMappings, refresh: refreshMappings } = useEntryModulations(deckPlaylistName, deckEntryId);
+  const { mappings: midiMappings, refresh: refreshMidi } = useEntryMidiMappings(deckPlaylistName, deckEntryId);
   const modulationLive = useModulationState();
   const mappingByTarget: Record<string, any> = {};
   for (const m of entryMappings) mappingByTarget[m.target.parameter] = m;
+  const midiByTarget: Record<string, any> = {};
+  for (const m of midiMappings) midiByTarget[m.target.parameter] = m;
 
   if (variant === 'mixer') {
     // BASE-PARAMS strip = the deck base channel's live exports. We
@@ -74,7 +80,11 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
   // useful in the brief window between an "add channel" action and the
   // engine's first mixer broadcast.
   const exps: MixerChannelExport[] = liveDeckExports.length > 0 ? liveDeckExports : ((exports as MixerChannelExport[] | undefined) ?? []);
-  const sliders = exps.filter((e: MixerChannelExport) => e.kind === 1);
+  // #1: render the kind-1 sliders from THE knob order, not a private filter, so
+  // the on-screen order IS the physical MFT knob order by construction. Each row
+  // carries its physical knob number (or the reason it's excluded), painted as a
+  // small badge so the operator can see which encoder drives which slider.
+  const sliderRows = deriveKnobOrder(exps as unknown as Export[]).rows;
   const toggles = exps.filter((e: MixerChannelExport) => e.kind === 2);
   const triggers = exps.filter((e: MixerChannelExport) => e.kind === 3);
   const colorPickers = exps.filter((e: MixerChannelExport) => e.kind === 6);
@@ -99,23 +109,26 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
           to the ◎ ALL pill) in `app/(tabs)/index.tsx` so it never
           reflows the slider stack when it appears/disappears. The
           `DeckSavedFlash` component is exported from this file. */}
-      {sliders.map((e: any) => {
-        // CPC-matched local exports were hidden through May 2026 — now
-        // they're surfaced as disabled with a "MATCHED · LABEL" badge
-        // so operators can see what each pattern actually declares.
-        // The slider is non-interactive (no onChange) because the CPC
-        // would clobber any write on the next tick anyway. Matched
-        // sliders also cannot be modulated — modulation writes per
-        // frame, CPC would still win.
-        const matched = !!e.cpcOwned;
-        if (matched) {
-          const niceName = prettySliderName(e.name);
+      {sliderRows.map((row) => {
+        const e = row.export as any;
+        const badge = knobBadgeFor(row);
+        // Excluded rows (matched / no-v0) render visually distinct (dimmed) and
+        // non-interactive, and — by construction — carry NO knob number, so the
+        // operator can see they don't consume a physical encoder. CPC-matched
+        // exports were hidden through May 2026; now they're surfaced disabled
+        // with a "MATCHED · LABEL" badge. A no-v0 row (rare; the engine now
+        // serializes a real v0 for local kinds) shows a subtle "—" not-knob-
+        // mapped marker rather than fabricating a 0.5 anchor.
+        if (badge.excludedReason !== null) {
+          const niceName = e.name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().substring(0, 15);
           return (
             <View key={`slider-${e.id}`} style={{ opacity: 0.5 }}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4, alignItems: 'center' }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
                   <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, textTransform: 'uppercase' }}>{niceName}</Text>
-                  <MatchedBadge cpcLabel={e.cpcLabel} />
+                  {badge.excludedReason === 'matched'
+                    ? <MatchedBadge cpcLabel={e.cpcLabel} />
+                    : <NotKnobMappedBadge />}
                 </View>
                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>{(e.v0 ?? 0.5).toFixed(2)}</Text>
               </View>
@@ -128,8 +141,11 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
             </View>
           );
         }
+        // Knob-mapped: the ModulatedSlider as before, with a "KNOB N" badge
+        // above it naming the physical encoder that drives this slider.
         return (
           <View key={`slider-${e.id}`}>
+            <KnobBadge knobNumber={badge.knobNumber!} />
             <ModulatedSlider
               exportItem={{ id: e.id, name: e.name, v0: e.v0 }}
               onChangeBase={(val: number) => writeLocal(e.id, val)}
@@ -138,6 +154,8 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
               mapping={mappingByTarget[e.name] ?? null}
               live={modulationLive[e.name] ?? null}
               onChanged={refreshMappings}
+              midiMapping={midiByTarget[e.name] ?? null}
+              onMidiChanged={refreshMidi}
             />
           </View>
         );
@@ -198,6 +216,53 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
 // May 2026 operator review: hiding silently was confusing because
 // patterns *looked* identical even when they declared different sets
 // of locals.
+
+// ── Knob-mapping indicators (#1) ────────────────────────────────────────
+//
+// The on-screen slider order is derived from `deriveKnobOrder` so it IS the
+// physical MFT bank-1 knob order. These tiny badges make that visible: a
+// "KNOB N" pill (violet, matching the MIDI accent) names the encoder that
+// drives a learnable slider; a "—" marker flags a kind-1 export that is NOT
+// knob-mapped (no numeric v0), so the operator sees it doesn't consume a knob.
+
+// Violet MIDI accent — mirrors MidiMap's MIDI_VIOLET (#7c5cff) so the "KNOB N"
+// pill reads as the same MIDI-accent family on the deck as the mixer. Kept as a
+// local literal to avoid importing the mixer's MidiMap module into this file.
+const KNOB_ACCENT = '#7c5cff';
+
+function KnobBadge({ knobNumber }: { knobNumber: number }) {
+  return (
+    <View style={{
+      alignSelf: 'flex-start',
+      paddingHorizontal: 6, paddingVertical: 1, marginBottom: 3,
+      borderRadius: 4, borderWidth: 1, borderColor: KNOB_ACCENT,
+      backgroundColor: 'rgba(124,92,255,0.12)',
+    }}>
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8,
+        color: KNOB_ACCENT, textTransform: 'uppercase', letterSpacing: 0.5,
+      }} numberOfLines={1}>
+        KNOB {knobNumber}
+      </Text>
+    </View>
+  );
+}
+
+function NotKnobMappedBadge() {
+  const C = usePalette();
+  return (
+    <View style={{
+      paddingHorizontal: 6, paddingVertical: 1,
+      borderRadius: 4, backgroundColor: C.surfaceContainerHigh,
+      borderWidth: 1, borderColor: C.ghostBorder,
+    }}>
+      <Text style={{
+        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8,
+        color: C.secondary, letterSpacing: 0.5,
+      }} numberOfLines={1}>—</Text>
+    </View>
+  );
+}
 
 function MatchedBadge({ cpcLabel }: { cpcLabel?: string }) {
   const C = usePalette();

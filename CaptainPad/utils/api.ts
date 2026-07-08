@@ -1247,6 +1247,11 @@ export interface PlaylistEntry {
   label: string | null;
   defaults: Record<string, any>;
   notes?: string | null;
+  // Per-entry binding arrays, persisted with the pattern. `modulations` are
+  // audio-reactive (engine-applied); `midiMappings` bind a physical MIDI
+  // control to a local param's STATIC value (CaptainPad-applied — see MidiMap).
+  modulations?: ModulationMapping[];
+  midiMappings?: MidiMapping[];
   _missing?: boolean;
 }
 
@@ -2166,6 +2171,112 @@ export async function deleteModulation(
     return { ok: true, data };
   } catch (err: any) {
     warnThrottled('delete-modulation', `Failed to DELETE modulation:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── MIDI mappings (docs/34) ────────────────────────────────────────
+//
+// Binds a physical MIDI control (a fader/knob) to a pattern's LOCAL
+// parameter. Stored per playlist entry, MIRRORING the modulation CRUD
+// above (same endpoint shape, same cache invalidation, same
+// `playlistSaved` broadcast) so bindings persist with the pattern and
+// sync across every connected client.
+//
+// UNLIKE modulations these are PURE METADATA to the engine — its render
+// loop never applies them. CaptainPad reads the focused pattern's
+// midiMappings and, when the bound control moves, writes the param's
+// STATIC value through the existing control path. Audio modulators stay
+// layered on top untouched. Schema mirrors
+// marsin_engine/lib/midi_mapping_engine.js validateMidiMapping.
+export type MidiControlType = 'cc' | 'note';
+
+export type MidiMapping = {
+  id: string;
+  enabled: boolean;
+  // The physical control. channel 0-15, number 0-127 (cc number / note).
+  control: { type: MidiControlType; channel: number; number: number };
+  target: { scope: 'pattern'; parameter: string };
+  // [min, max] the 0-127 control scales into. Same generous [-4, 4] window
+  // the engine allows (a learned fader may invert/scale a [0,1] param).
+  range: [number, number];
+};
+
+// Same [-4, 4] window as RANGE_MIN/RANGE_MAX in midi_mapping_engine.js (and
+// modulation_engine.js). The learn + modulation popovers pre-clamp so a typo
+// can't bounce the save with a 400.
+export const MIDI_RANGE_LIMIT = 4;
+
+/** Clamp a range value into the engine's [-MIDI_RANGE_LIMIT, MIDI_RANGE_LIMIT]
+ *  window. Non-finite → 0. The single clamp both popovers share (was three
+ *  parallel copies). */
+export function clampToRangeLimit(x: number): number {
+  if (!Number.isFinite(x)) return 0;
+  if (x < -MIDI_RANGE_LIMIT) return -MIDI_RANGE_LIMIT;
+  if (x > MIDI_RANGE_LIMIT) return MIDI_RANGE_LIMIT;
+  return x;
+}
+
+function midiMappingUrl(playlistName: string, itemId: string, mappingId: string): string {
+  return `${api_base}/api/playlists/${encodeURIComponent(playlistName)}` +
+    `/items/${encodeURIComponent(itemId)}` +
+    `/midi-mappings/${encodeURIComponent(mappingId)}`;
+}
+
+export async function putMidiMapping(
+  playlistName: string, itemId: string, mapping: MidiMapping,
+): Promise<ApiResult<{ status: string; entry: any }>> {
+  try {
+    const res = await fetchWithTimeout(midiMappingUrl(playlistName, itemId, mapping.id), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(mapping),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    // Drop the cached playlist immediately (same race-avoidance as
+    // putModulation) so the next refetch sees the new binding before the
+    // engine's `playlistSaved` WS broadcast lands.
+    invalidatePlaylistCache(playlistName);
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('put-midi-mapping', `Failed to PUT midi mapping:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function patchMidiMapping(
+  playlistName: string, itemId: string, mappingId: string, patch: Partial<MidiMapping>,
+): Promise<ApiResult<{ status: string; entry: any }>> {
+  try {
+    const res = await fetchWithTimeout(midiMappingUrl(playlistName, itemId, mappingId), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    invalidatePlaylistCache(playlistName);
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('patch-midi-mapping', `Failed to PATCH midi mapping:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function deleteMidiMapping(
+  playlistName: string, itemId: string, mappingId: string,
+): Promise<ApiResult<{ status: string; entry: any }>> {
+  try {
+    const res = await fetchWithTimeout(midiMappingUrl(playlistName, itemId, mappingId), {
+      method: 'DELETE',
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    invalidatePlaylistCache(playlistName);
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('delete-midi-mapping', `Failed to DELETE midi mapping:`, err);
     return { ok: false, error: err.message };
   }
 }

@@ -157,6 +157,13 @@ export default function TabLayout() {
             } as any}
           />
           <Tabs.Screen
+            name="midi"
+            options={{
+              title: 'MIDI',
+              tabBarIconName: 'metronome',
+            } as any}
+          />
+          <Tabs.Screen
             name="config"
             options={{
               title: 'Config',

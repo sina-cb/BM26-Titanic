@@ -17,6 +17,10 @@ import {
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
 import { useActiveModel } from '@/hooks/useEngineState';
+import { setMidiActiveContext, setMidiFocus, useIsMidiFocused } from '@/hooks/useMidiControl';
+import { MidiMapBadge, MidiMapPopover, useEntryMidiMappings, MIDI_VIOLET } from '@/components/MidiMap';
+import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
+import { knobBadgeFor } from '@/utils/midi/knob_badge';
 
 import { CPCControls } from '@/components/CPCControls';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
@@ -183,16 +187,56 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
     return m;
   }, [mappings]);
 
+  // MIDI-map bindings for this channel's active playlist entry. Mirrors the
+  // modulation fetch above (same per-entry array on the playlist), indexed by
+  // target.parameter so each slider can look up its own binding. Editable only
+  // when the channel actually has a playlist + active entry — the badge opens
+  // the ⊞ MIDI-learn popover keyed to this channel's entry, exactly like the
+  // deck's ModulatedSlider. Bindings live per playlist entry (engine-side), so
+  // touch + APC track-button focus + MFT all edit the same source of truth.
+  const { mappings: midiMappings, refresh: refreshMidi } = useEntryMidiMappings(playlistName, entryId);
+  const midiByTarget = React.useMemo(() => {
+    const m: Record<string, any> = {};
+    for (const x of midiMappings) m[x.target.parameter] = x;
+    return m;
+  }, [midiMappings]);
+  const midiEditable = !!playlistName && !!entryId;
+  // Which param's MIDI popover is open (target name), or null.
+  const [midiPopoverTarget, setMidiPopoverTarget] = React.useState<string | null>(null);
+
   const exps = channel.exports || [];
   if (exps.length === 0) {
     return <Text style={[styles.labelCaps, { textAlign: 'center', marginTop: 16 }]}>NO PARAMS</Text>;
   }
+  // #1 + N4: render the continuous MiniFaders from THE knob order (kind-1 only),
+  // so the on-screen order IS the physical MFT knob order and non-kind-1 exports
+  // (toggles kind-2, hsvPickers kind-6, triggers kind-3) are NEVER drawn as a
+  // fader — a fader drag on those used to emit a fabricated v0 with v1:0/v2:0,
+  // zeroing an hsvPicker's saturation/value. deriveKnobOrder.rows is kind-1
+  // scoped, so those exports simply don't appear here; we surface them below as
+  // a small non-interactive chip so the operator still sees the pattern declares
+  // them (but can't corrupt them from the mixer strip).
+  const sliderRows = deriveKnobOrder(exps as Export[]).rows;
+  const nonFaderExports = (exps as any[]).filter((e) => e.kind !== 1);
   return (
     <View style={{ gap: 4 }}>
-      {exps.map((exp: any) => {
+      {sliderRows.map((row) => {
+        const exp = row.export as any;
+        const badge = knobBadgeFor(row);
         const matched = !!exp.cpcOwned;
+        // no-v0 exclusion (rare — engine now serializes a real v0): the slider
+        // has no numeric anchor, so it's NOT knob-mapped and must not be driven.
+        // Render it non-interactive with a "—" marker like the deck does.
+        const noV0 = badge.excludedReason === 'no-v0';
+        const knobExcluded = matched || noV0;
         const niceLabel = prettySliderName(exp.name);
         const hasMapping = !matched && !!mappingByTarget[exp.name];
+        // MIDI-map badge — only meaningful for learnable (non-CPC-matched)
+        // sliders, matching useMidiControl's focused-export filter. Show the
+        // badge when this param already has a binding, or when the channel is
+        // editable (has a playlist + active entry) so the operator can add one.
+        const midiMapping = !matched ? (midiByTarget[exp.name] ?? null) : null;
+        const showMidiBadge = !matched && (!!midiMapping || midiEditable);
         const live = !matched ? modulationLive[exp.name] : null;
         // When a modulation is live the engine writes the MODULATED value back
         // into exp.v0, so the true anchor is the modulationState frame's base
@@ -212,27 +256,57 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
           ? live.modulated : null;
         return (
           <View key={exp.id}>
-            {/* When mapped, render the ◎ ON pill inline above the
-                MiniFader so the slider row reads the same way on the
-                deck and mixer. CPC-matched sliders still use the
-                MiniFader's own `badge` prop because that's a
-                different concept ("the global owns this"). */}
-            {hasMapping ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 1 }}>
-                <ModulationReadonlyBadge hasMapping={true} isOverride={mappingByTarget[exp.name]?.mode === 'override'} />
-                {ghost !== null ? (
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: '#00a86b' }}>
-                    →{ghost.toFixed(2)}
+            {/* Badge row above the MiniFader — the green ◎ modulation pill
+                (read-only on the mixer) and the violet ⊞ MIDI pill sit side
+                by side so the slider row reads the same way on the deck and
+                mixer. CPC-matched sliders still use the MiniFader's own
+                `badge` prop because that's a different concept ("the global
+                owns this"). The ⊞ badge opens the MIDI-learn popover keyed to
+                THIS channel's active playlist entry (editable when the channel
+                has a playlist + entry). */}
+            {/* Badge row — always rendered so the physical-knob indicator is
+                visible on EVERY kind-1 row: a violet "KNOB N" pill on a mapped
+                slider (the encoder that drives it), or a "—" marker on a no-v0
+                row that consumes no knob. The green ◎ modulation pill + violet
+                ⊞ MIDI pill join it when present. (Matched rows carry their MATCH
+                tag on the MiniFader itself, so no knob badge there.) */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 1 }}>
+              {badge.mapped ? (
+                <View style={{
+                  paddingHorizontal: 5, paddingVertical: 0,
+                  borderRadius: 4, borderWidth: 1, borderColor: MIDI_VIOLET,
+                  backgroundColor: 'rgba(124,92,255,0.12)',
+                }}>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: MIDI_VIOLET, letterSpacing: 0.5 }}>
+                    KNOB {badge.knobNumber}
                   </Text>
-                ) : null}
-              </View>
-            ) : null}
+                </View>
+              ) : null}
+              {noV0 ? (
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary }}>—</Text>
+              ) : null}
+              {hasMapping ? (
+                <ModulationReadonlyBadge hasMapping={true} isOverride={mappingByTarget[exp.name]?.mode === 'override'} />
+              ) : null}
+              {hasMapping && ghost !== null ? (
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: '#00a86b' }}>
+                  →{ghost.toFixed(2)}
+                </Text>
+              ) : null}
+              {showMidiBadge ? (
+                <MidiMapBadge
+                  mapping={midiMapping}
+                  editable={midiEditable}
+                  onEdit={() => setMidiPopoverTarget(exp.name)}
+                />
+              ) : null}
+            </View>
             <View style={{ position: 'relative' }}>
               <MiniFader
                 label={niceLabel}
                 value={base}
                 onChange={(v: number) => onControlChange(channel.id, exp.id, v)}
-                disabled={matched || !!disabled}
+                disabled={knobExcluded}
                 badge={matched ? `MATCH${exp.cpcLabel ? `·${String(exp.cpcLabel).substring(0, 4).toUpperCase()}` : ''}` : undefined}
                 fillColor={hasMapping ? undefined : undefined}
               />
@@ -257,6 +331,46 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
           </View>
         );
       })}
+      {/* N4: non-kind-1 exports (toggles / triggers / hsvPickers) are NOT
+          continuous faders — rendering one as a MiniFader used to emit a
+          fabricated v0 with v1:0/v2:0 on drag, zeroing an hsvPicker's
+          saturation/value. The mixer strip has no controls for these kinds, so
+          we surface them as a small non-interactive chip (the operator sees the
+          pattern declares them; they're edited from the deck). */}
+      {nonFaderExports.length > 0 ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+          {nonFaderExports.map((exp: any) => (
+            <View
+              key={exp.id}
+              style={{
+                paddingHorizontal: 6, paddingVertical: 2,
+                borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder,
+                backgroundColor: C.surfaceContainerHigh, opacity: 0.5,
+              }}
+            >
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary, letterSpacing: 0.4 }} numberOfLines={1}>
+                {prettySliderName(exp.name).toUpperCase()} · DECK ONLY
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+      {/* Single MIDI-learn popover for the whole strip — opened by whichever
+          param's ⊞ badge was tapped (keyed by target name). Guarded on
+          playlistName + entryId, which are non-null whenever the badge was
+          editable (the only way to open it). On save/remove we refresh the
+          per-entry bindings so the badge repaints without a full reload. */}
+      {midiPopoverTarget && playlistName && entryId ? (
+        <MidiMapPopover
+          paramName={prettySliderName(midiPopoverTarget)}
+          targetParameter={midiPopoverTarget}
+          playlistName={playlistName}
+          entryId={entryId}
+          existing={midiByTarget[midiPopoverTarget] ?? null}
+          onClose={() => setMidiPopoverTarget(null)}
+          onChanged={refreshMidi}
+        />
+      ) : null}
     </View>
   );
 }
@@ -272,7 +386,7 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, cardStyle, isOnlyChannel, activationsLocked, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, cardStyle, isOnlyChannel, activationsLocked, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -285,6 +399,18 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showTransPicker, setShowTransPicker] = useState(false);
   const [showViewPicker, setShowViewPicker] = useState(false);
+  // The MIDI-focused mixer layer (module state shared with the APC track
+  // buttons + the MFT). This strip is focused when its 0-based layer index
+  // matches. Tapping FOCUS writes the same module state, so touch and the
+  // physical controllers always agree on which channel the param faders
+  // (4-6/8) drive. `layerIndex` is the 0-based position in the channels array
+  // (NOT the 1-based display `index`), matching useMidiControl's focus math.
+  //
+  // 12a: subscribe to the BOOLEAN "is THIS layer focused?" selector, not the
+  // global focus number. React.memo(ChannelStrip) can then re-render only the
+  // two strips whose focus actually flips on a focus change — with the numeric
+  // selector, every strip re-rendered on any focus change (render churn).
+  const isFocused = useIsMidiFocused(layerIndex);
   // Overflow (⋮) menu for the secondary channel-control actions (pin fader,
   // delete). The 2026-06-22 toolbar cleanup keeps only lock, the reorder
   // chevrons, the blend-mode dropdown, and this ⋮ button inline on ONE
@@ -907,6 +1033,20 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           </TouchableOpacity>
         )}
 
+        {/* FOCUS — the on-screen twin of the APC track-button focus. Lit
+            (violet, matching the ⊞ MIDI accent) when THIS layer is the one the
+            MIDI param faders (4-6/8) drive. Writes the shared module focus
+            state via setMidiFocus(layerIndex), so touch + APC track button +
+            MFT all agree on the focused channel — one focused overlay at a
+            time. */}
+        <TouchableOpacity
+          style={[styles.toggleBtn, isFocused && { backgroundColor: MIDI_VIOLET, borderColor: MIDI_VIOLET }]}
+          onPress={() => setMidiFocus(layerIndex)}
+          accessibilityRole="button"
+          accessibilityLabel={isFocused ? 'This channel is MIDI-focused' : 'Focus this channel for MIDI param faders'}>
+          <Text style={[styles.labelCaps, isFocused && { color: '#FFF' }]}>Focus</Text>
+        </TouchableOpacity>
+
         {/* View-selection picker. Three sections in the modal: ALL,
             GROUPS, and VIEW MASKS. Sections/fixtures are still routed
             via the REST API directly — they target by numeric id which
@@ -1272,6 +1412,10 @@ export default function MixerScreen() {
   const isMixerFocusedRef = useRef(false);
   useFocusEffect(
     useCallback(() => {
+      // Switch the MIDI controller to its Mixer mapping context. setMixerView
+      // is deferred to the plan-gated effect below (main's blackout fix), so we
+      // no longer yank the output to the mixer directly on tab focus.
+      setMidiActiveContext('mixer');
       isMixerFocusedRef.current = true;
       viewGateHandledRef.current = false; // re-evaluate the switch each entry
       return () => { isMixerFocusedRef.current = false; };
@@ -2602,6 +2746,7 @@ export default function MixerScreen() {
               <ChannelStrip
                 key={channel.id}
                 index={idx + 1}
+                layerIndex={idx}
                 channel={channel}
                 isSolo={isSoloActive}
                 soloActive={anySolo}
