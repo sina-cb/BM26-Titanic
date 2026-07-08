@@ -3,6 +3,12 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 
+const {
+  isValidSceneName,
+  updateManifest,
+  duplicateSceneDir,
+} = require('./scene_duplicate.cjs');
+
 // Resolve paths relative to the simulation root (parent of server/)
 const SIM_ROOT = path.join(__dirname, '..');
 const ENGINE_ROOT = path.join(SIM_ROOT, '..', 'marsin_engine');
@@ -91,9 +97,11 @@ function listPatterns() {
 // injective — "../titanic" collapsed to "titanic", so a crafted delete
 // could destroy the wrong scene. Rejecting keeps the codex "fail loud,
 // no silent fallback" contract.
-function isValidSceneName(name) {
-  return typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name);
-}
+//
+// The grammar + validator now live in ./scene_duplicate.cjs (imported at
+// the top of this file) so the create/delete/duplicate endpoints and the
+// client all share ONE source of truth. Re-exported name kept for the
+// existing call sites below.
 
 // Minimal config a freshly-created scene starts from: the standard Model
 // Transform, an empty DMX fixture array, and an empty LED strand array.
@@ -433,6 +441,53 @@ http.createServer((req, res) => {
         res.end(JSON.stringify({ scene: name }));
       } catch (e) {
         console.error(`[SAVE SERVER] Scene create error:`, e);
+        res.statusCode = 500;
+        res.end('Error: ' + e.message);
+      }
+    });
+  } else if (req.method === 'POST' && pathname === '/scene/duplicate') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const { source, newName } = JSON.parse(body);
+        // Validate BOTH names against the shared grammar (fail loud, no
+        // sanitizing) before either touches the filesystem.
+        if (!isValidSceneName(source)) {
+          res.statusCode = 400;
+          res.end('Invalid source scene name');
+          return;
+        }
+        if (!isValidSceneName(newName)) {
+          res.statusCode = 400;
+          res.end('Invalid new scene name (use letters, numbers, _ or -)');
+          return;
+        }
+        const srcDir = path.join(SCENES_ROOT, source);
+        const destDir = path.join(SCENES_ROOT, newName);
+        // Source must be a real scene (has scene_config.yaml).
+        if (!fs.existsSync(path.join(srcDir, 'scene_config.yaml'))) {
+          res.statusCode = 404;
+          res.end('Source scene not found');
+          return;
+        }
+        // Refuse if the target already exists on disk OR in the manifest —
+        // never merge into or clobber an existing scene (codex P0).
+        if (fs.existsSync(destDir) || listScenes().includes(newName)) {
+          res.statusCode = 409;
+          res.end('Scene already exists');
+          return;
+        }
+        // Recursive copy + self-reference rewrite. duplicateSceneDir cleans
+        // up the partial destination itself if any step throws, so a failed
+        // duplicate never leaves a half-scene behind.
+        duplicateSceneDir(srcDir, destDir, source, newName);
+        console.log(`[SAVE SERVER] ✅ Duplicated scene: ${source} → ${newName}`);
+        writeSceneManifest();
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ scene: newName, scenes: listScenes() }));
+      } catch (e) {
+        console.error(`[SAVE SERVER] Scene duplicate error:`, e);
         res.statusCode = 500;
         res.end('Error: ' + e.message);
       }

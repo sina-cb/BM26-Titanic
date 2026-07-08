@@ -1,0 +1,276 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MIDI Discovery — BM26 Titanic</title>
+<style>
+  :root {
+    --bg: #0d1014;
+    --panel: #161b22;
+    --panel2: #1c232d;
+    --border: #2a3340;
+    --fg: #e6edf3;
+    --muted: #8b98a5;
+    --accent: #4aa3ff;
+    --good: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  main {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    gap: 14px;
+    padding: 14px 18px;
+    align-items: start;
+  }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+  }
+  .panel h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 0 0 10px;
+    font-weight: 600;
+  }
+  button {
+    background: var(--panel2);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: #04121f; border-color: var(--accent); font-weight: 600; }
+  button.danger { border-color: var(--bad); color: var(--bad); }
+  input[type="text"], input[type="number"], select, textarea {
+    background: #0b0e12;
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 9px;
+    font-size: 13px;
+    width: 100%;
+    font-family: inherit;
+  }
+  textarea { font-family: var(--mono); resize: vertical; }
+  label.row { display: block; margin-bottom: 8px; }
+  label.row span.lbl { display: block; color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+  .flex { display: flex; gap: 8px; align-items: center; }
+  .flex.wrap { flex-wrap: wrap; }
+  .status { font-size: 12px; color: var(--muted); }
+  .status.good { color: var(--good); }
+  .status.warn { color: var(--warn); }
+  .status.bad { color: var(--bad); }
+  .banner {
+    padding: 10px 12px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    display: none;
+  }
+  .banner.show { display: block; }
+  .banner.warn { background: #3a2d05; color: #f0c674; border: 1px solid var(--warn); }
+  .banner.bad { background: #3a1010; color: #ff9a92; border: 1px solid var(--bad); }
+  .ports { list-style: none; padding: 0; margin: 0; }
+  .ports li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .ports li:last-child { border-bottom: 0; }
+  .ports .pname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ports .pmeta { color: var(--muted); font-size: 11px; }
+  .mono { font-family: var(--mono); }
+  .log {
+    font-family: var(--mono);
+    font-size: 12px;
+    height: 320px;
+    overflow-y: auto;
+    background: #0b0e12;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    white-space: pre;
+  }
+  .log .t-noteon { color: #7ee787; }
+  .log .t-noteoff { color: #6fa8c7; }
+  .log .t-cc { color: #ffd479; }
+  .log .t-pitchbend { color: #ff9ec0; }
+  .log .t-sysex { color: #d2a8ff; }
+  .log .t-aftertouch, .log .t-polyat { color: #f0a878; }
+  .log .t-programchange { color: #9ad0ff; }
+  .log .lbl-tag { color: var(--accent); }
+  .log .ts { color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+  td.num { font-family: var(--mono); text-align: right; }
+  .scroll { max-height: 320px; overflow-y: auto; }
+  .grouplist { list-style: none; margin: 0; padding: 0; }
+  .grouplist li {
+    padding: 7px 9px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 6px;
+    background: var(--panel2);
+  }
+  .grouplist .gl-label { font-weight: 600; }
+  .grouplist .gl-sum { color: var(--muted); font-size: 11px; font-family: var(--mono); margin-top: 3px; }
+  .rec-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); display: inline-block; }
+  .rec-dot.idle { background: var(--border); }
+  small.hint { color: var(--muted); font-size: 11px; display: block; margin-top: 4px; }
+  .pathout { font-family: var(--mono); font-size: 12px; word-break: break-all; margin-top: 8px; }
+</style>
+
+<header>
+  <h1>MIDI Discovery</h1>
+  <span class="sub">BM26 Titanic · capture a controller → export JSON profile input</span>
+  <span id="access-state" class="status">Web MIDI: not requested</span>
+</header>
+
+<div id="banner-sysex" class="banner warn"></div>
+<div id="banner-nomidi" class="banner bad"></div>
+
+<main>
+  <div>
+    <div class="panel">
+      <h2>1 · Access</h2>
+      <button id="btn-request" class="primary">Request MIDI access (sysex)</button>
+      <small class="hint">Grant sysex so Grid config/screen dumps are captured too.</small>
+    </div>
+
+    <div class="panel">
+      <h2>2 · Inputs to capture</h2>
+      <ul id="inputs" class="ports"></ul>
+      <small class="hint">Default selects everything except Midi Fighter Twister & APC. Toggle any.</small>
+    </div>
+
+    <div class="panel">
+      <h2>Outputs (for test send)</h2>
+      <ul id="outputs" class="ports"></ul>
+    </div>
+
+    <div class="panel">
+      <h2>Send test</h2>
+      <label class="row">
+        <span class="lbl">Output port</span>
+        <select id="send-port"></select>
+      </label>
+      <label class="row">
+        <span class="lbl">Message</span>
+        <select id="send-kind">
+          <option value="cc">Control Change</option>
+          <option value="noteon">Note On</option>
+          <option value="noteoff">Note Off</option>
+          <option value="sysex">Sysex (hex)</option>
+        </select>
+      </label>
+      <div id="send-simple" class="flex wrap">
+        <label class="row" style="flex:1"><span class="lbl">ch (0-15)</span>
+          <input type="number" id="send-ch" value="0" min="0" max="15" /></label>
+        <label class="row" style="flex:1"><span class="lbl">number</span>
+          <input type="number" id="send-num" value="0" min="0" max="127" /></label>
+        <label class="row" style="flex:1"><span class="lbl">value</span>
+          <input type="number" id="send-val" value="127" min="0" max="127" /></label>
+      </div>
+      <label class="row" id="send-sysex-row" style="display:none">
+        <span class="lbl">Sysex hex (e.g. F0 7E 00 06 01 F7)</span>
+        <input type="text" id="send-hex" value="F0 7E 7F 06 01 F7" />
+      </label>
+      <button id="btn-send">Send</button>
+      <span id="send-status" class="status"></span>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>3 · Labeled capture</h2>
+      <label class="row">
+        <span class="lbl">Label this control/gesture</span>
+        <input type="text" id="label-text"
+          placeholder="e.g. encoder 1 turn CW slow" />
+      </label>
+      <div class="flex wrap">
+        <button id="btn-start-label" class="primary">Start labeled capture</button>
+        <button id="btn-stop-label" disabled>Stop</button>
+        <span class="rec-dot idle" id="rec-dot"></span>
+        <span id="label-status" class="status">idle</span>
+      </div>
+      <label class="row" style="margin-top:8px">
+        <span class="lbl">Auto-stop after silence (ms, 0 = manual)</span>
+        <input type="number" id="autostop" value="2000" min="0" step="250" />
+      </label>
+      <small class="hint">Label every control and every gesture: turn slow, turn
+        fast, press, release. One label per gesture, then Stop.</small>
+    </div>
+
+    <div class="panel">
+      <h2>Live monitor</h2>
+      <div class="flex wrap" style="margin-bottom:8px">
+        <button id="btn-clear-log">Clear log</button>
+        <label class="flex" style="gap:4px"><input type="checkbox" id="autoscroll" checked /> autoscroll</label>
+        <span id="msg-count" class="status">0 messages</span>
+      </div>
+      <div id="log" class="log"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Labeled groups</h2>
+      <ul id="groups" class="grouplist"></ul>
+    </div>
+
+    <div class="panel">
+      <h2>Auto-summary <span class="status" id="summary-count"></span></h2>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>port</th><th>type</th><th>ch</th><th>num</th><th>count</th>
+              <th>value range</th><th>labels</th></tr>
+          </thead>
+          <tbody id="summary-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>4 · Export</h2>
+      <div class="flex wrap">
+        <button id="btn-export" class="primary">Export &amp; save to repo</button>
+        <button id="btn-download">Download JSON</button>
+        <button id="btn-reset" class="danger">Reset session</button>
+      </div>
+      <div id="export-status" class="status" style="margin-top:8px"></div>
+      <div id="export-path" class="pathout"></div>
+    </div>
+  </div>
+</main>
+
+<script src="discovery.js"></script>

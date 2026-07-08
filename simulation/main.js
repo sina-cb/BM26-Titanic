@@ -259,6 +259,7 @@ if (window.__readonlyMode) {
     #sacn-out-monitor-panel,
     #info-panel,
     #scene-add-btn,
+    #scene-dup-btn,
     #scene-del-btn {
       display: none !important;
     }
