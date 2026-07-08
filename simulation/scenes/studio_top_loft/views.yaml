@@ -9,12 +9,14 @@ views:
   custom:
     - name: vintages
       bit: 64
+      word: 0
       groups:
         - Left Vintage
         - Back Vintage
         - Right Vintage
     - name: bars
       bit: 128
+      word: 0
       groups:
         - Left Bar
         - Back Bar

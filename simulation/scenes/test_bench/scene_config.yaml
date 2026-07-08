@@ -96,6 +96,8 @@ parLights:
       rotX: -39.99999999999999
       rotY: 180
       rotZ: 180
+      enabled: true
+      brightness: 100
     - group: ParLights
       name: Par 2
       fixtureType: UkingPar
@@ -109,6 +111,8 @@ parLights:
       rotX: -46.372989398756104
       rotY: 180
       rotZ: 180
+      enabled: true
+      brightness: 100
     - group: ParLights
       name: Par 3
       fixtureType: UkingPar
@@ -122,6 +126,8 @@ parLights:
       rotX: -35.00000000000001
       rotY: 180
       rotZ: 180
+      enabled: true
+      brightness: 100
     - group: ParLights
       name: Par 4
       fixtureType: UkingPar
@@ -135,6 +141,8 @@ parLights:
       rotX: -40.00000000000004
       rotY: 180
       rotZ: 180
+      enabled: true
+      brightness: 100
     - group: VintageLights
       name: Vintage Left
       fixtureType: VintageLed
@@ -148,6 +156,8 @@ parLights:
       rotX: 0.14186528077802948
       rotY: -145
       rotZ: -179.42083437436463
+      enabled: true
+      brightness: 100
     - group: VintageLights
       name: Vintage Right
       fixtureType: VintageLed
@@ -161,6 +171,8 @@ parLights:
       rotX: 0.01024200255279506
       rotY: 134.79537699350138
       rotZ: -177.61639847936232
+      enabled: true
+      brightness: 100
     - group: BarLights
       name: Bar Left
       fixtureType: ShehdsBar
@@ -174,6 +186,8 @@ parLights:
       rotX: -55
       rotY: -180
       rotZ: -1.0684148232492667e-14
+      enabled: true
+      brightness: 100
     - group: BarLights
       name: Bar Right
       fixtureType: ShehdsBar
@@ -187,6 +201,8 @@ parLights:
       rotX: -55.00000000000003
       rotY: -180
       rotZ: -1.0684148232492675e-14
+      enabled: true
+      brightness: 100
     - group: SpecialEffects
       name: ChauvetHaze4D 10
       fixtureType: ChauvetHaze4D
@@ -200,6 +216,8 @@ parLights:
       rotX: 0
       rotY: -175
       rotZ: 0
+      enabled: true
+      brightness: 100
     - group: SpecialEffects
       name: TEFogMachine 10
       fixtureType: TEFogMachine
@@ -213,6 +231,8 @@ parLights:
       rotX: 0
       rotY: 180
       rotZ: 0
+      enabled: true
+      brightness: 100
 ledStrands:
   _section:
     label: 💡 LED Strands

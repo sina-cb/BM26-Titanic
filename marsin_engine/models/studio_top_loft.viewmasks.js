@@ -1,6 +1,6 @@
 // Auto-generated view-mask sidecar for the studio_top_loft model — do not edit manually.
 // Source of truth: the simulation scene (Views panel → scenes/studio_top_loft/views.yaml).
-// Updated: 2026-07-07T01:38:35.680Z
+// Updated: 2026-07-07T16:50:39.015Z
 //
 // `groupBits` pins the base group → bit contract pattern code compiles
 // against; the engine validates it against the loaded model and fails

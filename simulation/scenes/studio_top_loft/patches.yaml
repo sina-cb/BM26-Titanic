@@ -1,4 +1,84 @@
 patches:
+  Left Bar 1:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Bar 2:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Bar 3:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Left Bar 4:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Bar 1:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Right Bar 2:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Back Bar 1:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Back Bar 2:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Back Bar 3:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  Back Bar 4:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
   Left Vintage 1:
     controllerIp: ''
     dmxUniverse: 0
@@ -39,7 +119,7 @@ patches:
     sectionId: 0
     fixtureId: 0
     viewMask: 0
-  Left Bar 1:
+  Right Vintage 1:
     controllerIp: ''
     dmxUniverse: 0
     dmxAddress: 0
@@ -47,7 +127,7 @@ patches:
     sectionId: 0
     fixtureId: 0
     viewMask: 0
-  Left Bar 2:
+  Right Vintage 2:
     controllerIp: ''
     dmxUniverse: 0
     dmxAddress: 0
@@ -55,15 +135,7 @@ patches:
     sectionId: 0
     fixtureId: 0
     viewMask: 0
-  Left Bar 3:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Left Bar 4:
+  Right Vintage 3:
     controllerIp: ''
     dmxUniverse: 0
     dmxAddress: 0
@@ -96,78 +168,6 @@ patches:
     fixtureId: 0
     viewMask: 0
   Back Vintage 4:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Back Bar 1:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Back Bar 2:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Back Bar 3:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Back Bar 4:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Right Vintage 1:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Right Vintage 2:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Right Vintage 3:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Right Bar 1:
-    controllerIp: ''
-    dmxUniverse: 0
-    dmxAddress: 0
-    controllerId: 0
-    sectionId: 0
-    fixtureId: 0
-    viewMask: 0
-  Right Bar 2:
     controllerIp: ''
     dmxUniverse: 0
     dmxAddress: 0
