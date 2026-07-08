@@ -18,6 +18,8 @@ function makeApi(): MidiDispatchApi {
     setChannelPlaylistEntry: vi.fn(ok),
     setDeckChannelControl: vi.fn(ok),
     setMixerChannelControl: vi.fn(ok),
+    setGlobalHue: vi.fn(ok),
+    setChannelHue: vi.fn(ok),
   };
 }
 
@@ -27,6 +29,10 @@ const baseCtx: MidiDispatchContext = {
   resolvePatternForBank: () => null,
   getLayer: () => null,
   getColorPalette: () => null,
+  getBpmSpeedSyncOn: () => false,
+  // Default: slot not in the snapshot (returns null) → dispatcher fails safe to
+  // 'toggle'. Behavior-specific tests override this per slot.
+  getGlobalEffectSlotBehavior: () => null,
 };
 
 describe('createDispatcher', () => {
@@ -68,19 +74,96 @@ describe('createDispatcher', () => {
     expect(api.updateMixerChannel).not.toHaveBeenCalled();
   });
 
-  it('runtime-only actions (focusChannel/scroll/window) THROW in the dispatcher', async () => {
+  it('runtime-only actions (focusChannel/scroll/window/hue delta+reset) THROW in the dispatcher', async () => {
     const api = makeApi();
     // These must be intercepted by the controller runtime; reaching the
     // dispatcher is a wiring bug, so it fails loud rather than silently.
     await expect(createDispatcher(api, baseCtx)({ kind: 'focusChannel', layer: 1 })).rejects.toThrow(/controller runtime/);
     await expect(createDispatcher(api, baseCtx)({ kind: 'playlistScroll', layer: 0, dir: 'up' })).rejects.toThrow(/controller runtime/);
     await expect(createDispatcher(api, baseCtx)({ kind: 'playlistWindowSelect', layer: 0, slot: 0 })).rejects.toThrow(/controller runtime/);
+    await expect(createDispatcher(api, baseCtx)({ kind: 'globalHueDelta', delta: 0.1 })).rejects.toThrow(/controller runtime/);
+    await expect(createDispatcher(api, baseCtx)({ kind: 'globalHueReset' })).rejects.toThrow(/controller runtime/);
   });
 
-  it('globalEffectSlot toggles the slot', async () => {
+  // ── MFT UX v2: BPM→Speed sync toggle + global hue write ──
+  it('bpmSyncToggle flips the live sync state via updateParamCenter({ bpmSpeedSync })', async () => {
     const api = makeApi();
-    await createDispatcher(api, baseCtx)({ kind: 'globalEffectSlot', slot: 3 });
+    await createDispatcher(api, { ...baseCtx, getBpmSpeedSyncOn: () => false })({ kind: 'bpmSyncToggle' });
+    expect(api.updateParamCenter).toHaveBeenCalledWith({ bpmSpeedSync: 1 });
+    const api2 = makeApi();
+    await createDispatcher(api2, { ...baseCtx, getBpmSpeedSyncOn: () => true })({ kind: 'bpmSyncToggle' });
+    expect(api2.updateParamCenter).toHaveBeenCalledWith({ bpmSpeedSync: 0 });
+  });
+
+  it('bpmSyncToggle double-press on a LAGGING snapshot still toggles (P3-1 pattern)', async () => {
+    const api = makeApi();
+    // Snapshot frozen at false — the sharedParams echo hasn't landed.
+    const dispatch = createDispatcher(api, { ...baseCtx, getBpmSpeedSyncOn: () => false });
+    await dispatch({ kind: 'bpmSyncToggle' }); // false → sends 1
+    await dispatch({ kind: 'bpmSyncToggle' }); // stale false, but last-sent true → sends 0
+    const calls = (api.updateParamCenter as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.map((c) => c[0])).toEqual([{ bpmSpeedSync: 1 }, { bpmSpeedSync: 0 }]);
+  });
+
+  it('globalHue posts degrees AND the preserved autoRotateDegPerSec', async () => {
+    const api = makeApi();
+    await createDispatcher(api, baseCtx)({ kind: 'globalHue', degrees: 123, autoRotateDegPerSec: 45 });
+    expect(api.setGlobalHue).toHaveBeenCalledWith(123, 45);
+  });
+
+  // ── Mixer-context hue knob: per-CHANNEL hue writes ──
+  it('channelHue on a mixer channel PATCHes that channel (no deck flag, no autoRotate)', async () => {
+    const api = makeApi();
+    await createDispatcher(api, baseCtx)({ kind: 'channelHue', role: 'mixer', channelId: 'ch_a', degrees: 120 });
+    expect(api.setChannelHue).toHaveBeenCalledWith('ch_a', 120, undefined);
+    expect(api.setGlobalHue).not.toHaveBeenCalled(); // never the global shifter
+  });
+
+  it('channelHue on the deck channel routes with { deck: true }', async () => {
+    const api = makeApi();
+    await createDispatcher(api, baseCtx)({ kind: 'channelHue', role: 'deck', channelId: 'd1', degrees: 45 });
+    expect(api.setChannelHue).toHaveBeenCalledWith('d1', 45, { deck: true });
+  });
+
+  // ── Behavior-aware global-effect slot dispatch (Iceberg-Flash / White-Drop) ──
+  it('globalEffectSlot with a TOGGLE behavior dispatches toggle', async () => {
+    const api = makeApi();
+    const ctx = { ...baseCtx, getGlobalEffectSlotBehavior: () => 'toggle' as const };
+    await createDispatcher(api, ctx)({ kind: 'globalEffectSlot', slot: 3 });
     expect(api.dispatchGlobalEffectSlotAction).toHaveBeenCalledWith(3, 'toggle');
+  });
+
+  it('globalEffectSlot with a TRIGGER behavior dispatches trigger (the Iceberg-Flash fix)', async () => {
+    const api = makeApi();
+    // Slot 5 = Iceberg Flash, behavior 'trigger'. The old hardcoded 'toggle'
+    // never fired it; now it must dispatch 'trigger'.
+    const ctx = { ...baseCtx, getGlobalEffectSlotBehavior: () => 'trigger' as const };
+    await createDispatcher(api, ctx)({ kind: 'globalEffectSlot', slot: 5 });
+    expect(api.dispatchGlobalEffectSlotAction).toHaveBeenCalledWith(5, 'trigger');
+  });
+
+  it('globalEffectSlot with an UNKNOWN/absent behavior FAILS SAFE to toggle (no crash)', async () => {
+    const api = makeApi();
+    // baseCtx returns null (slot not in the snapshot — a boot/refresh race).
+    const r = await createDispatcher(api, baseCtx)({ kind: 'globalEffectSlot', slot: 2 });
+    expect(api.dispatchGlobalEffectSlotAction).toHaveBeenCalledWith(2, 'toggle');
+    expect(r).toEqual({ ok: true });
+  });
+
+  it('globalEffectSlot with a HOLD behavior dispatches down on press and up on release', async () => {
+    const api = makeApi();
+    const ctx = { ...baseCtx, getGlobalEffectSlotBehavior: () => 'hold' as const };
+    await createDispatcher(api, ctx)({ kind: 'globalEffectSlot', slot: 4, phase: 'press' });
+    expect(api.dispatchGlobalEffectSlotAction).toHaveBeenCalledWith(4, 'down');
+    await createDispatcher(api, ctx)({ kind: 'globalEffectSlot', slot: 4, phase: 'release' });
+    expect(api.dispatchGlobalEffectSlotAction).toHaveBeenCalledWith(4, 'up');
+  });
+
+  it('globalEffectSlot defaults to the PRESS phase when none is given (hold → down)', async () => {
+    const api = makeApi();
+    const ctx = { ...baseCtx, getGlobalEffectSlotBehavior: () => 'hold' as const };
+    await createDispatcher(api, ctx)({ kind: 'globalEffectSlot', slot: 4 });
+    expect(api.dispatchGlobalEffectSlotAction).toHaveBeenCalledWith(4, 'down');
   });
 
   it('colorPalettePair applies the curated pair as HSV', async () => {

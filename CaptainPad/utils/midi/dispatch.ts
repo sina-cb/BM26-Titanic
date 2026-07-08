@@ -27,6 +27,12 @@ export interface MidiDispatchApi {
   // singleton route (no id); mixer overlays are addressed by channel id.
   setDeckChannelControl(id: number, v0: number, v1?: number, v2?: number): Promise<MidiApiResult>;
   setMixerChannelControl(channelId: string, id: number, v0: number, v1?: number, v2?: number): Promise<MidiApiResult>;
+  /** PER-CHANNEL hue (engine F-hue — hue is per-channel ONLY; the global
+   *  shifter was removed 2026-07): PATCH /mixer/channels/:id { hue } — or
+   *  PATCH /deck/channel when `opts.deck` — the same client the on-screen HUE
+   *  trim uses (utils/channelExtrasApi setChannelHue). Degrees; the engine
+   *  normalizes into [0,360) and 400s on a non-finite value. */
+  setChannelHue(channelId: string, hue: number, opts?: { deck?: boolean }): Promise<MidiApiResult>;
 }
 
 /** A resolved mixer "layer" — unified across tabs. On the Deck tab layer 0 is
@@ -48,7 +54,23 @@ export interface MidiDispatchContext {
   getLayer(layer: number): MidiLayerRef | null;
   /** Curated palette pair (hues 0..1) at index, or null when out of range. */
   getColorPalette(index: number): { c1: number; c2: number } | null;
+  /** Is the engine's BPM→Speed sync currently ON (for bpmSyncToggle)? */
+  getBpmSpeedSyncOn(): boolean;
+  /** The behavior of a global-effect slot (by 1-based slot number) from the
+   *  live engine snapshot: 'toggle' | 'trigger' | 'hold'. null when the slot
+   *  isn't in the snapshot yet (a boot/refresh race) — the dispatcher then
+   *  FAILS SAFE to 'toggle' (the historical behavior) with a status note rather
+   *  than crashing. This is what makes a pad BEHAVIOR-AWARE: a 'trigger' slot
+   *  (Iceberg Flash / White Drop) must send 'trigger', not 'toggle' (a no-op
+   *  flash-wise on a momentary effect). */
+  getGlobalEffectSlotBehavior(slot: number): GlobalEffectSlotBehavior | null;
 }
+
+/** A global-effect slot's press behavior, mirroring the engine's per-slot
+ *  `behavior` field (marsin_engine global_effect_slot_manager). 'hold' is
+ *  forward-looking — no slot currently uses it and the engine's slot pipeline
+ *  doesn't wire it yet — but the dispatch mapping is ready for it. */
+export type GlobalEffectSlotBehavior = 'toggle' | 'trigger' | 'hold';
 
 // Every dispatch RETURNS the api's MidiApiResult so the runtime can surface a
 // failed engine call (fail-loud, codex P0): a knob that silently does nothing
@@ -70,6 +92,11 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
   // caught up yet, so a rapid re-tap actually inverts. null = no send in flight
   // (trust the snapshot); cleared implicitly once the snapshot matches our send.
   let lastBlackoutSent: boolean | null = null;
+  // Same optimistic-toggle pattern for the BPM→Speed sync push (the sharedParams
+  // echo that updates the snapshot's bpmSpeedSyncOn lags the POST by a frame or
+  // two; a rapid double-press must actually invert, not send the same state
+  // twice).
+  let lastSyncSent: boolean | null = null;
 
   return async (resolved: ResolvedAction): Promise<MidiApiResult> => {
     switch (resolved.kind) {
@@ -108,8 +135,39 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
         if (L.role === 'deck') return api.updateDeckChannel({ fader: resolved.value });
         return api.updateMixerChannel(L.id, { fader: resolved.value });
       }
-      case 'globalEffectSlot':
-        return api.dispatchGlobalEffectSlotAction(resolved.slot, 'toggle');
+      case 'globalEffectSlot': {
+        // BEHAVIOR-AWARE slot dispatch (the Iceberg-Flash / White-Drop fix). The
+        // pad used to hardcode 'toggle' for EVERY slot, so a 'trigger' slot (a
+        // momentary drop-hit) got a toggle it doesn't understand and never
+        // fired. Read the slot's behavior from the live snapshot and map it to
+        // the engine's slot-action vocabulary:
+        //   'toggle'  → 'toggle'  (unchanged — flip on/off)
+        //   'trigger' → 'trigger' (one-shot flash — THE FIX)
+        //   'hold'    → 'down' on press / 'up' on release (forward-looking)
+        // Fail SAFE, not loud, on an unknown/absent behavior (a boot/refresh
+        // race where the snapshot hasn't got this slot yet): default to
+        // 'toggle' (the historical behavior) rather than crash the transport
+        // callback. Loud-but-nonfatal would need a status seam the pure
+        // dispatcher doesn't own, so the safe default IS the surfaced choice.
+        const behavior = ctx.getGlobalEffectSlotBehavior(resolved.slot);
+        const phase = resolved.phase ?? 'press';
+        let action: string;
+        if (behavior === 'trigger') {
+          action = 'trigger';
+        } else if (behavior === 'hold') {
+          // A hold slot presses 'down' and releases 'up'. NOTE (TODO): resolveEvent
+          // currently swallows every Note Off (v1 has no momentary pads), so a
+          // 'release' phase never actually reaches this dispatcher yet — no slot
+          // uses 'hold', and the engine's slot pipeline doesn't wire hold either.
+          // The mapping is here so wiring the release path later is a one-line
+          // resolver change; until then a hold slot only ever fires 'down'.
+          action = phase === 'release' ? 'up' : 'down';
+        } else {
+          // 'toggle' OR unknown/absent (fail-safe default).
+          action = 'toggle';
+        }
+        return api.dispatchGlobalEffectSlotAction(resolved.slot, action);
+      }
       case 'colorPalettePair': {
         const p = ctx.getColorPalette(resolved.palette);
         if (!p) return OK; // no palette behind this pad — loud silence
@@ -124,6 +182,28 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
         // modulators stay layered on top of this base value untouched.
         if (resolved.role === 'deck') return api.setDeckChannelControl(resolved.exportId, resolved.value);
         return api.setMixerChannelControl(resolved.channelId, resolved.exportId, resolved.value);
+      case 'bpmSyncToggle': {
+        // Toggle the engine's BPM→Speed sync via the existing param-center API
+        // ({ bpmSpeedSync: 1|0 }). Same lagging-echo protection as blackout:
+        // base the flip on the last state we SENT while the snapshot hasn't
+        // caught up yet, so a rapid re-press actually inverts.
+        const snap = ctx.getBpmSpeedSyncOn();
+        const base = lastSyncSent !== null && lastSyncSent !== snap ? lastSyncSent : snap;
+        const next = !base;
+        lastSyncSent = next;
+        return api.updateParamCenter({ bpmSpeedSync: next ? 1 : 0 });
+      }
+      case 'channelHue':
+        // Runtime-built absolute PER-CHANNEL hue write (the hue knob's ONLY
+        // engine write — hue is per-channel only; the global shifter is
+        // gone). Routed like localParam: the deck singleton via its own PATCH,
+        // a mixer overlay by channel id. No autoRotate field exists per
+        // channel, so none is sent (never invent one).
+        return api.setChannelHue(
+          resolved.channelId,
+          resolved.degrees,
+          resolved.role === 'deck' ? { deck: true } : undefined,
+        );
       case 'focusChannel':
       case 'playlistScroll':
       case 'playlistWindowSelect':
@@ -131,6 +211,8 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
       case 'paramCenterDelta':
       case 'focusedParamReset':
       case 'focusStep':
+      case 'hueDelta':
+      case 'hueReset':
         // These are RUNTIME-ONLY actions (controller-local state: focus
         // selection / per-layer window cursor / focused-channel delta math). The
         // runtime intercepts them BEFORE the dispatcher — reaching here means a

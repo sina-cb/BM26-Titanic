@@ -19,8 +19,10 @@ import { engineEvents } from '@/utils/engineEvents';
 import { useActiveModel } from '@/hooks/useEngineState';
 import { setMidiActiveContext, setMidiFocus, useIsMidiFocused } from '@/hooks/useMidiControl';
 import { MidiMapBadge, MidiMapPopover, useEntryMidiMappings, MIDI_VIOLET } from '@/components/MidiMap';
+import { KnobPill } from '@/components/ui/knob_pill';
 import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
 import { knobBadgeFor } from '@/utils/midi/knob_badge';
+import { globalKnobNumber } from '@/utils/midi/knob_page';
 
 import { CPCControls } from '@/components/CPCControls';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
@@ -271,16 +273,8 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
                 ⊞ MIDI pill join it when present. (Matched rows carry their MATCH
                 tag on the MiniFader itself, so no knob badge there.) */}
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 1 }}>
-              {badge.mapped ? (
-                <View style={{
-                  paddingHorizontal: 5, paddingVertical: 0,
-                  borderRadius: 4, borderWidth: 1, borderColor: MIDI_VIOLET,
-                  backgroundColor: 'rgba(124,92,255,0.12)',
-                }}>
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: MIDI_VIOLET, letterSpacing: 0.5 }}>
-                    KNOB {badge.knobNumber}
-                  </Text>
-                </View>
+              {badge.mapped && badge.knobNumber !== null ? (
+                <KnobPill knobNumber={badge.knobNumber} />
               ) : null}
               {noV0 ? (
                 <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary }}>—</Text>
@@ -879,11 +873,19 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
           and HUE as a clearly secondary trim. */}
       {onHueChange && (
         <View style={styles.hueRow}>
+          {/* Physical-knob badge on the FOCUSED strip only: the MFT hue knob
+              (knob 2) drives the FOCUSED CHANNEL's per-channel hue — this
+              exact trim on the mixer tab (on the deck tab it drives the DECK
+              CHANNEL's hue, badged on the deck's DeckHueRow; hue is
+              per-channel only — the global shifter was removed 2026-07).
+              The badge follows focus so it always sits
+              on the control the knob is live on (push = reset this to 0°). */}
+          {isFocused ? <KnobPill knobNumber={globalKnobNumber('hue')} style={{ marginRight: 4 }} /> : null}
           <Text style={[styles.labelCaps, { width: 52, fontSize: 10 }]}>HUE</Text>
           {/* QA round 10 fix #4: the swatch is now a CIRCLE (was a rounded
               square that mimicked the destructive Blackout/Invert chips and
               read as tappable). A circle reads as a non-interactive status dot,
-              matching the deck HUE row (global_hue_row.tsx). */}
+              matching the deck HUE row (deck_hue_row.tsx). */}
           <View
             style={[
               styles.hueSwatch,
@@ -954,6 +956,12 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
                 numberOfLines={1}
                 adjustsFontSizeToFit
               >LOCAL PARAMS</Text>
+              {/* Row-0 globals (knob 1 SPEED, knob 2 HUE) are NOT re-legended
+                  here — their canonical UI elements wear the KNOB badges
+                  directly (SPEED on the GLOBALS-row fader, HUE on this focused
+                  strip's own per-channel HUE trim above). The old read-only
+                  MftGlobalsRow duplicate was removed 2026-07 per operator
+                  request — no duplicate speed/hue UI. */}
               <MixerLocalParams channel={channel} onControlChange={onControlChange} disabled={activationsLocked} />
             </View>
           </ScrollView>
@@ -3513,7 +3521,7 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   },
   // QA round 10 fix #4: CIRCLE (borderRadius = half the 12pt box) so the live
   // hue preview reads as a non-interactive status dot, not a tappable square
-  // chip — matching the deck HUE row swatch (global_hue_row.tsx).
+  // chip — matching the deck HUE row swatch (deck_hue_row.tsx).
   hueSwatch: {
     width: 12, height: 12, borderRadius: 6,
     borderWidth: 1, borderColor: C.ghostBorder,

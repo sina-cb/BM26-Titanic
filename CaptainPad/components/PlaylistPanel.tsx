@@ -15,6 +15,7 @@ import {
 } from '@/utils/api';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 import { useMidiWindow } from '@/hooks/useMidiControl';
+import { windowPadNumber } from '@/utils/midi/window_slot';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -26,9 +27,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // Auto-save model:
 //   - Adding or removing an entry persists immediately to disk (no manual
 //     SAVE needed). A "✓ saved" toast appears briefly.
-//   - Live parameter edits also auto-save via the engine's debounced
-//     `scheduleEntryCapture()` (500 ms after last slider tick). The engine
-//     broadcasts `playlistEntryCaptured` which flashes the same toast here.
+//   - Live parameter edits are CHANNEL-LOCAL and are NOT written back into
+//     the playlist (operator ruling 2026-07-07 — playlist files are shared
+//     presets). Entry `defaults` change only via the explicit capture action
+//     (POST .../playlist/capture); the engine then broadcasts
+//     `playlistEntryCaptured`, which flashes the same toast here.
 //
 // Cross-tab consistency:
 //   - The panel subscribes to engineEvents (`mixer`, `playlistLibrary`,
@@ -115,6 +118,17 @@ interface Props {
    *  and collapse the pane. No ConfirmSheet — clearing a slot destroys nothing.
    */
   onClosePane?: () => void;
+  /** MIDI browse-window key override. The MIDI manager publishes the deck
+   *  tab's playlist browse window under the DECK CHANNEL's engine id (deck =
+   *  layer 0 in the unified layout), but the deck split panes mount with
+   *  channelId = their SLOT key ('primary' | 'secondary'), so their window
+   *  lookup misses and the blue window highlight never shows on the deck tab.
+   *  Pass the deck channel id here to read that window; combined with the
+   *  live-slot gate below, the highlight renders on the pane whose list the
+   *  pads are actually browsing — identical look and semantics to the mixer
+   *  strips (which omit this: their window is published under channelId
+   *  itself). */
+  midiWindowChannelId?: string;
 }
 
 function genEntryId() {
@@ -134,9 +148,19 @@ function patternDisplayName(pattern: string): string {
   return i >= 0 ? pattern.slice(i + 1) : pattern;
 }
 
-// Accent for the MIDI controller's playlist browse window (the "rectangular
-// border" Sina asked for) — amber, distinct from the active/ghost borders.
-const MIDI_WINDOW_COLOR = '#ffbf00';
+// Accent for the MIDI controller's playlist browse window. BLUE, matching the
+// APC mini's selectable window pads (idle velocity 45 in apc_mini_mk2.yaml —
+// the pads Sina sees lit blue on the hardware), so the highlighted rows read
+// as "these are the six blue pads". Was amber pre-2026-07-07; unified on blue
+// when the per-row highlight landed so the window presentation is ONE accent,
+// not an amber box around blue rows. A UI-tuned blue (not the LED's raw
+// saturated #00F) so the 2px border + chip text stay readable on the light
+// theme's white rows AND the dark themes' near-black rows.
+const MIDI_WINDOW_COLOR = '#3d8bff';
+// Translucent companion fill: the row-background tint inside the window and
+// the pad-number chip fill. Low alpha so the row text keeps full contrast on
+// every theme (it layers over white AND near-black surfaces).
+const MIDI_WINDOW_TINT = 'rgba(61, 139, 255, 0.14)';
 // Build the panel header title with ONE consistent separator + casing
 // pattern across every place this shared panel is mounted (deck, mixer
 // channel strips, deck overlays). Round-8 fix: the header drifted between
@@ -158,13 +182,16 @@ function playlistHeaderTitle(channelLabel?: string): string {
   return `${normalized}${HEADER_SEP}PLAYLIST`;
 }
 
-export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce, playlistLibrary, onClosePane }) => {
+export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce, playlistLibrary, onClosePane, midiWindowChannelId }) => {
   const C = usePalette();
   // The APC pad browser windows 6 entries per mixer layer; mirror that as a
-  // border here so the operator sees which entries the pads will select.
+  // blue row highlight (tint + border + pad-number chip, matching the blue
+  // pads) so the operator sees which entries the pads will select.
   // Read the controller's browse window for THIS channel on either tab — the
-  // deck channel gets a window too (it's layer 0 in the unified layout).
-  const midiWindow = useMidiWindow(channelId);
+  // deck channel gets a window too (it's layer 0 in the unified layout). The
+  // deck split panes read it under the DECK CHANNEL's id (midiWindowChannelId)
+  // because their own channelId is the slot key, not an engine channel id.
+  const rawMidiWindow = useMidiWindow(midiWindowChannelId ?? channelId);
   // playlistLibrary is currently consumed via the local `playlists`
   // state + engineEvents `playlistLibrary` subscription further down.
   // The prop is accepted so parents (mixer/index) can pass their
@@ -181,6 +208,19 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   // the new channel's id), patterns appear synchronously on first paint
   // and the panel never has to depend on refresh()'s GETs landing in time.
   const [playlist, setPlaylist] = useState<PlaylistData | null>(initialPlaylist ?? null);
+  // Live-slot gate for the MIDI browse window. The deck-tab window indexes
+  // the deck channel's LIVE playlist, and only the LIVE slot displays that
+  // playlist — the engine marks it (serializeDeckPlaylistSlot serializes
+  // live:true + the real activeEntryId on the live slot; the other pane gets
+  // live:false). Without this gate, both split panes (which share the deck
+  // channel's window key) would paint the blue window highlight, and the
+  // non-live pane would highlight wrong-index rows of a DIFFERENT playlist.
+  // Non-deckSlot
+  // roles display exactly the playlist their window indexes, so the raw
+  // window applies as-is (mixer strips keep today's behaviour untouched).
+  const slotIsLive = role !== 'deckSlot'
+    || (assignment as (PlaylistAssignment & { live?: boolean }) | null)?.live === true;
+  const midiWindow = slotIsLive ? rawMidiWindow : null;
   const [allPatterns, setAllPatterns] = useState<string[]>([]);
   // "Load directory" support: the patterns/ sub-folders the operator can
   // bulk-add from. Fetched lazily the first time the picker opens so the
@@ -397,9 +437,9 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   }, []);
 
   // ── Keep the MIDI browse window in view ─────────────────────────────
-  // When the operator moves the bordered window with the controller's scroll
-  // pads, auto-scroll the list so the windowed (bordered) entries stay visible
-  // — centre the window's middle row in the viewport.
+  // When the operator moves the highlighted window with the controller's
+  // scroll pads, auto-scroll the list so the windowed (blue-highlighted)
+  // entries stay visible — centre the window's middle row in the viewport.
   useEffect(() => {
     if (!midiWindow || !playlist) return;
     const mid = playlist.entries[midiWindow.start + Math.floor(midiWindow.size / 2)]
@@ -681,7 +721,8 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         const cur = playlistRef.current;
         if (cur && msg.name === cur.name) refresh();
       } else if (msg.type === 'playlistEntryCaptured') {
-        // The engine just auto-captured defaults on some channel. Flash the
+        // The engine captured defaults on some channel (explicit operator
+        // capture action only — live tweaks never auto-capture). Flash the
         // toast if it's ours; refresh the playlist data if we're showing it.
         if (msg.channelId === channelId) flashSaved();
         const cur = playlistRef.current;
@@ -1346,7 +1387,11 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
               // would be a destructive edit.
               const canMoveUp = editable && playlist.entries.length > 1 && idx > 0;
               const canMoveDown = editable && playlist.entries.length > 1 && idx < playlist.entries.length - 1;
-              const inMidiWindow = !!midiWindow && idx >= midiWindow.start && idx < midiWindow.start + midiWindow.size;
+              // MIDI browse-window highlight: the 6 rows the controller's blue
+              // pads select. `padNumber` (1..6, top pad = top row) doubles as
+              // the in-window predicate AND the chip label so both can't drift.
+              const padNumber = windowPadNumber(midiWindow, idx);
+              const inMidiWindow = padNumber !== null;
               return (
                 <View
                   key={e.id}
@@ -1367,8 +1412,12 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                     paddingHorizontal: sz.rowPadX,
                     paddingVertical: sz.rowPadY,
                     borderRadius: 6,
-                    backgroundColor: isActive ? C.primary : 'transparent',
-                    // MIDI browse window → amber border (Sina's "rectangular border").
+                    // MIDI browse window → blue row highlight (tint + border),
+                    // mirroring the hardware: idle window pads are blue, the
+                    // ACTIVE pad is green — so the active row keeps its primary
+                    // fill (already the strongest cue in the list) and only the
+                    // non-active window rows take the blue tint.
+                    backgroundColor: isActive ? C.primary : (inMidiWindow ? MIDI_WINDOW_TINT : 'transparent'),
                     borderWidth: inMidiWindow ? 2 : 1,
                     borderColor: inMidiWindow ? MIDI_WINDOW_COLOR : (isActive ? 'transparent' : C.ghostBorder),
                     marginBottom: sz.rowGap,
@@ -1387,6 +1436,36 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                     >
                       {(idx + 1).toString().padStart(2, '0')}
                     </Text>
+                    {padNumber !== null && (
+                      /* Pad-number chip: which physical blue pad (1 = top of
+                         the browse column) selects THIS row. On the active row
+                         (primary fill — hardware shows that pad green) the chip
+                         flips to a white outline so it stays readable instead
+                         of blue-on-primary. */
+                      <View
+                        style={{
+                          paddingHorizontal: 4,
+                          borderRadius: 3,
+                          borderWidth: 1,
+                          borderColor: isActive ? 'rgba(255,255,255,0.7)' : MIDI_WINDOW_COLOR,
+                          backgroundColor: isActive ? 'transparent' : MIDI_WINDOW_TINT,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                        accessibilityLabel={`MIDI pad ${padNumber} selects this entry`}
+                      >
+                        <Text
+                          style={{
+                            fontFamily: 'SpaceGrotesk_700Bold',
+                            fontSize: sz.fontMicro,
+                            lineHeight: sz.fontMicro + 4,
+                            color: isActive ? '#FFF' : MIDI_WINDOW_COLOR,
+                          }}
+                        >
+                          {padNumber}
+                        </Text>
+                      </View>
+                    )}
                     <TouchableOpacity
                       onPress={() => handleEntryTap(e.id)}
                       disabled={missing || disabled}

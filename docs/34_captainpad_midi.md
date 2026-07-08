@@ -700,9 +700,14 @@ flip the MFT to **relative** for the rig:
   moving the base: nothing can ever make the knob "disagree" and jump a
   param. (The APC's absolute faders need the whole soft-takeover machinery
   for exactly this reason; the MFT sidesteps it.)
-- **Velocity built in:** the fast/very-fast delta codes give coarse↔fine
-  control for free (step sizes per code are profile-tunable, default
-  ±0.005 / ±0.02 / ±0.06 of full range per tick).
+- **Velocity handled host-side:** the firmware's fast/very-fast codes are
+  treated as LINEAR relative counts (profile-tunable steps, default
+  ±0.005 / ±0.01 / ±0.015 of full range — code ±n = n detents packed into one
+  message). The speed FEEL is entirely the runtime's per-tick velocity gain
+  (`utils/midi/accel.ts`): a smoothed turn-rate estimate (EMA over inter-tick
+  transport timestamps) drives a continuous gain from sub-detent precision on
+  slow turns up to a full-range sweep on a hard flick. Tuning constants +
+  guide live in `accel.ts`.
 - The ring LED is *display-only*, driven by our projector from live engine
   state — so the ring even animates when an audio modulator drives the param.
 
@@ -808,7 +813,9 @@ per-control endpoints.
 2. **Encoder push = reset-to-entry-default** (shipped) — right call, or prefer
    fine-adjust-while-held (the MFT's native `SWACTION_ENCFINEADJUST`)? Both
    can't share the push.
-3. **Step sizes** — ±0.005/±0.02/±0.06 per tick feel right on the bench?
+3. **Feel constants** — the per-tick velocity gain (`accel.ts`: GAIN_MIN /
+   GAIN_MAX / HALF_RATE / CURVE_POWER / RATE_TAU / IDLE_RESET) right on the
+   bench? Steps are now linear ±0.005/±0.01/±0.015 per relative count.
 4. **Manual tap-tempo** — currently NOT wired (would break the sole-analyzer
    tempo contract). Want a manual tempo source? That's a deliberate engine
    change; default answer is no.

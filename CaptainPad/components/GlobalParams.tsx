@@ -11,6 +11,7 @@ import { useEntryMidiMappings } from '@/components/MidiMap';
 import { engineEvents } from '@/utils/engineEvents';
 import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
 import { knobBadgeFor } from '@/utils/midi/knob_badge';
+import { KnobPill } from '@/components/ui/knob_pill';
 
 export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant?: 'deck' | 'mixer', channelId?: string, exports?: any[], wsRef?: unknown }) => {
   const C = usePalette();
@@ -105,6 +106,12 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
 
   return (
     <View style={{ gap: 12 }}>
+      {/* The row-0 GLOBAL knobs (1 SPEED, 2 HUE) are NOT re-legended here —
+          their canonical UI elements wear the KNOB badges directly: the
+          GLOBALS row SPEED fader (CPCControls) and the deck's DeckHueRow
+          (the DECK CHANNEL's per-channel hue — the global shifter is gone).
+          (The old read-only MftGlobalsRow duplicate was removed 2026-07 per
+          operator request — no duplicate speed/hue UI.) */}
       {/* Saved indicator moved to the deck channel card header (next
           to the ◎ ALL pill) in `app/(tabs)/index.tsx` so it never
           reflows the slider stack when it appears/disappears. The
@@ -119,7 +126,10 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
         // with a "MATCHED · LABEL" badge. A no-v0 row (rare; the engine now
         // serializes a real v0 for local kinds) shows a subtle "—" not-knob-
         // mapped marker rather than fabricating a 0.5 anchor.
-        if (badge.excludedReason !== null) {
+        // 'overflow' (v2 layout: more sliders than the 12 physical local knobs)
+        // is NOT in this branch — those rows stay fully TOUCH-editable below,
+        // they just render without a KNOB badge.
+        if (badge.excludedReason === 'matched' || badge.excludedReason === 'no-v0') {
           const niceName = e.name.replace(/^(slider|toggle|trigger|hsvPicker)/i, '').replace(/([A-Z])/g, ' $1').trim().substring(0, 15);
           return (
             <View key={`slider-${e.id}`} style={{ opacity: 0.5 }}>
@@ -141,11 +151,13 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
             </View>
           );
         }
-        // Knob-mapped: the ModulatedSlider as before, with a "KNOB N" badge
-        // above it naming the physical encoder that drives this slider.
+        // Knob-mapped (or knob-less overflow): the ModulatedSlider as before,
+        // with a "KNOB N" badge naming the physical encoder when one drives it.
         return (
           <View key={`slider-${e.id}`}>
-            <KnobBadge knobNumber={badge.knobNumber!} />
+            {badge.knobNumber !== null
+              ? <KnobPill knobNumber={badge.knobNumber} style={{ alignSelf: 'flex-start', marginBottom: 3 }} />
+              : null}
             <ModulatedSlider
               exportItem={{ id: e.id, name: e.name, v0: e.v0 }}
               onChangeBase={(val: number) => writeLocal(e.id, val)}
@@ -225,28 +237,8 @@ export const GlobalParams = ({ variant = 'deck', channelId, exports }: { variant
 // drives a learnable slider; a "—" marker flags a kind-1 export that is NOT
 // knob-mapped (no numeric v0), so the operator sees it doesn't consume a knob.
 
-// Violet MIDI accent — mirrors MidiMap's MIDI_VIOLET (#7c5cff) so the "KNOB N"
-// pill reads as the same MIDI-accent family on the deck as the mixer. Kept as a
-// local literal to avoid importing the mixer's MidiMap module into this file.
-const KNOB_ACCENT = '#7c5cff';
-
-function KnobBadge({ knobNumber }: { knobNumber: number }) {
-  return (
-    <View style={{
-      alignSelf: 'flex-start',
-      paddingHorizontal: 6, paddingVertical: 1, marginBottom: 3,
-      borderRadius: 4, borderWidth: 1, borderColor: KNOB_ACCENT,
-      backgroundColor: 'rgba(124,92,255,0.12)',
-    }}>
-      <Text style={{
-        fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8,
-        color: KNOB_ACCENT, textTransform: 'uppercase', letterSpacing: 0.5,
-      }} numberOfLines={1}>
-        KNOB {knobNumber}
-      </Text>
-    </View>
-  );
-}
+// The "KNOB N" pill itself is the SHARED components/ui/knob_pill.tsx (one
+// paint, app-wide) — this file only decides WHICH rows get one (knobBadgeFor).
 
 function NotKnobMappedBadge() {
   const C = usePalette();

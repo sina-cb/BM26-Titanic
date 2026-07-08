@@ -115,13 +115,17 @@ describe('resolveEvent — unknown context fails loud (P3-7)', () => {
 describe('MFT relative encoders + side buttons (driver #2)', () => {
   // Bank-1 knob 0 = relative CC 0 on ch0 (turn) + CC 0 on ch1 (push); a bank-2
   // relative CC on ch0; the four side-button actions on ch3. Default steps
-  // [0.005, 0.02, 0.06] for the three detent speeds.
+  // [0.005, 0.01, 0.015] — LINEAR in the relative count (the speed curve is
+  // the runtime's per-tick gain in accel.ts, not the step triple).
   const p = validateProfile({
     device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0, configureOnConnect: true },
     controls: [
       { id: 'knob0_turn', match: { type: 'cc', channel: 0, cc: 0, relative: true }, action: { kind: 'focusedParamKnob', index: 0 } },
       { id: 'knob0_push', match: { type: 'cc', channel: 1, cc: 0 }, action: { kind: 'focusedParamReset', index: 0 } },
       { id: 'g_speed', match: { type: 'cc', channel: 0, cc: 5, relative: true }, action: { kind: 'paramCenterRelative', key: 'speed', steps: [0.01, 0.05, 0.1] } },
+      { id: 'sync_push', match: { type: 'cc', channel: 1, cc: 5 }, action: { kind: 'bpmSyncToggle' } },
+      { id: 'hue_turn', match: { type: 'cc', channel: 0, cc: 6, relative: true }, action: { kind: 'globalHueKnob', steps: [0.01, 0.05, 0.1] } },
+      { id: 'hue_push', match: { type: 'cc', channel: 1, cc: 6 }, action: { kind: 'globalHueReset' } },
       { id: 'f_prev', match: { type: 'cc', channel: 3, cc: 11 }, action: { kind: 'focusStep', dir: 'prev' } },
       { id: 'f_next', match: { type: 'cc', channel: 3, cc: 12 }, action: { kind: 'focusStep', dir: 'next' } },
       { id: 'f_deck', match: { type: 'cc', channel: 3, cc: 13 }, action: { kind: 'focusStep', dir: 'deck' } },
@@ -135,12 +139,12 @@ describe('MFT relative encoders + side buttons (driver #2)', () => {
 
   it('decodes a fast CCW tick (code 62 = -2) to -steps[1]', () => {
     const r = resolveEvent(p, decodeMidi([0xb0, 0, 62]));
-    expect(r?.resolved).toEqual({ kind: 'focusedParamDelta', index: 0, delta: -0.02 });
+    expect(r?.resolved).toEqual({ kind: 'focusedParamDelta', index: 0, delta: -0.01 });
   });
 
   it('decodes a very-fast CW tick (code 67 = +3) to +steps[2]', () => {
     const r = resolveEvent(p, decodeMidi([0xb0, 0, 67]));
-    expect(r?.resolved).toEqual({ kind: 'focusedParamDelta', index: 0, delta: 0.06 });
+    expect(r?.resolved).toEqual({ kind: 'focusedParamDelta', index: 0, delta: 0.015 });
   });
 
   it('a non-relative CC value (not 61-67) on a relative control resolves to null (loud silence)', () => {
@@ -156,6 +160,26 @@ describe('MFT relative encoders + side buttons (driver #2)', () => {
   it('encoder push (ch1) resolves focusedParamReset on press, null on release', () => {
     expect(resolveEvent(p, decodeMidi([0xb1, 0, 127]))?.resolved).toEqual({ kind: 'focusedParamReset', index: 0 });
     expect(resolveEvent(p, decodeMidi([0xb1, 0, 0]))).toBeNull(); // release
+  });
+
+  // ── MFT UX v2 row-0 kinds ──
+  it('bpmSyncToggle push resolves on press, null on release', () => {
+    expect(resolveEvent(p, decodeMidi([0xb1, 5, 127]))?.resolved).toEqual({ kind: 'bpmSyncToggle' });
+    expect(resolveEvent(p, decodeMidi([0xb1, 5, 0]))).toBeNull(); // release
+  });
+
+  it('globalHueKnob decodes relative ticks into globalHueDelta (continuous)', () => {
+    expect(resolveEvent(p, decodeMidi([0xb0, 6, 65]))).toEqual({
+      controlId: 'hue_turn', continuous: true,
+      resolved: { kind: 'globalHueDelta', delta: 0.01 },
+    });
+    expect(resolveEvent(p, decodeMidi([0xb0, 6, 61]))?.resolved).toEqual({ kind: 'globalHueDelta', delta: -0.1 });
+    expect(resolveEvent(p, decodeMidi([0xb0, 6, 64]))).toBeNull(); // no-movement code — loud silence
+  });
+
+  it('globalHueReset push resolves on press, null on release', () => {
+    expect(resolveEvent(p, decodeMidi([0xb1, 6, 127]))?.resolved).toEqual({ kind: 'globalHueReset' });
+    expect(resolveEvent(p, decodeMidi([0xb1, 6, 0]))).toBeNull(); // release
   });
 
   it('side buttons resolve focusStep on press, null on release', () => {

@@ -60,11 +60,6 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderLevel(v) { level = v; }        // store v directly
-export function sliderKick(v) { kick = v; }          // store v directly
-export function sliderRadius(v) { radius = v; }       // store v directly
-export function sliderSharpness(v) { sharpness = v; }       // store directly; scale in render3D
-export function sliderCount(v) { radialDensity = v; }        // store directly; scale in render3D
 export function sliderDirection(v) {
   // Dead-zone guard: slider-center would give globalDir=0 (frozen field). Keep the
   // interference always drifting — slightly forward at/above center, slightly reverse below.
@@ -73,6 +68,11 @@ export function sliderDirection(v) {
   else if (d < 0.0 && d > -0.06) d = -0.06;
   globalDir = d;
 }
+export function sliderLevel(v) { level = v; }        // store v directly
+export function sliderKick(v) { kick = v; }          // store v directly
+export function sliderRadius(v) { radius = v; }       // store v directly
+export function sliderSharpness(v) { sharpness = v; }       // store directly; scale in render3D
+export function sliderCount(v) { radialDensity = v; }        // store directly; scale in render3D
 
 // ── Palette RGB cache (strict cp1<->cp2, blend in RGB space; copied verbatim
 //    from 27_swipe.js) ────────────────────────────────────────────────────────

@@ -51,13 +51,11 @@ import {
   dispatchGlobalEffectSlotAction,
   patchGlobalEffectSlot,
   setGlobalEffectBlackout,
-  fetchGlobals,
   GlobalEffectSlot,
   GlobalEffectSlotStatus,
 } from '@/utils/api';
-import { setGlobalHue } from '@/utils/channelExtrasApi';
-import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { engineEvents } from '@/utils/engineEvents';
+// (HorizontalFader import removed 2026-07 with the global hue fader row.)
 
 // Hard UI contract (operator review May 2026): the rig surface shows
 // EXACTLY this many slots. The engine can persist up to MAX_SLOTS (16)
@@ -65,13 +63,16 @@ import { engineEvents } from '@/utils/engineEvents';
 // re-binds the visible slots via long-press swap; the engine's library
 // still contains every preset so swapping in vintageWhite, fogger,
 // blastWhite, etc. is one tap of the SWAP modal.
-// 9 slots (channels-optimization campaign, 2026-06-29): the engine supports
-// up to MAX_SLOTS=16 and ships 13 default bindings. Invert is no longer a
-// dedicated fixed button — it now lives in an assignable slot (default slot
-// 9), so the visible strip grew 8 → 9 to surface it out of the box. Every
-// visible slot is re-bindable via the long-press SWAP modal. Shared by BOTH
-// the deck and mixer bottom bars (same GlobalEffectMacros instance).
-const VISIBLE_SLOT_COUNT = 9;
+// 8 slots (global-effects parity campaign, 2026-07): the engine supports
+// up to MAX_SLOTS=16 and ships 13 default bindings. The visible strip is
+// pinned to 8 so it maps 1:1 onto the APC mini mk2's 8 Scene Launch buttons
+// (the physical column of 8), which the MIDI profile binds TOP→BOTTOM to
+// UI slots LEFT→RIGHT (slot 1 = topmost button = left-most chip). Invert
+// still ships in an assignable slot (default slot 9 engine-side) but no
+// longer has a dedicated visible chip — swap it into any of the 8 visible
+// slots via the ⋯ SWAP modal. Every visible slot is re-bindable. Shared by
+// BOTH the deck and mixer bottom bars (same GlobalEffectMacros instance).
+const VISIBLE_SLOT_COUNT = 8;
 
 type LibPreset = { id: string; label: string; defaultBehavior: string; safetyTier?: string; params: any };
 type LibEffect = { id: string; name: string; category: string; behaviorTypes: string[]; presets: Record<string, LibPreset>; legacyEffectId?: string | null };
@@ -143,29 +144,15 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   const [optimisticActive, setOptimisticActive] = useState<Record<number, boolean>>({});
   const optimisticTimersRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
 
-  // Global hue shifter (docs/39 §F-hue). `degrees` is the live rig hue offset,
-  // reflecting the engine's `globalHueShift` broadcast. The SPIN (auto-rotate)
-  // control was removed (June 2026), so we no longer track a spin rate in
-  // state — every hue write forces it to 0 and the mount clear zeroes any
-  // persisted spin.
-  const [hueShift, setHueShift] = useState<{ degrees: number }>({ degrees: 0 });
-  // While the operator is dragging the degrees fader the engine may also be
-  // auto-rotating — we don't want the incoming broadcast to yank the thumb out
-  // from under their finger. This holds the live drag target; cleared on release.
-  const hueDraggingRef = useRef(false);
+  // The GLOBAL hue shifter that used to live at the top of this surface was
+  // REMOVED end to end (2026-07, operator decision: "only the channel hue
+  // shifts, no global hidden one"). Hue is PER-CHANNEL ONLY now — the deck's
+  // DeckHueRow and each mixer strip's HUE trim are the hue controls.
 
   // Global color INVERT (docs/39 §F-invert) is no longer a dedicated control
   // here — it became an assignable slot effect (default slot 9) in the
   // channels-optimization campaign (2026-06-29) and rides the standard slot
   // dispatch + status path. No local invert state is needed in this component.
-
-  // SPIN was removed from the hue section (June 2026). The auto-rotate rate is
-  // persisted engine-side, so a previously-set spin would keep silently
-  // rotating the hue with no visible control to stop it. Guard so we send
-  // exactly ONE setGlobalHue(degrees, 0) at mount to force spin off — once the
-  // seeded degrees have landed, not while the operator is dragging the hue
-  // fader, and never more than once per mount.
-  const spinClearedRef = useRef(false);
 
   const refresh = useCallback(async () => {
     const r = await fetchGlobalEffectSlotsStatus();
@@ -236,31 +223,8 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       }
       const lib = await fetchGlobalEffectLibrary();
       if (alive && lib.ok && lib.data?.effects) setLibrary(lib.data.effects as Library);
-      // Seed the global hue knob from /globals (the engine's persisted
-      // hueShift). The globalHueShift WS broadcast keeps it live afterwards.
-      const globals = await fetchGlobals();
-      if (alive && globals.ok && globals.data) {
-        if (globals.data.hueShift && !hueDraggingRef.current) {
-          const hs = globals.data.hueShift;
-          if (typeof hs.degrees === 'number') {
-            setHueShift({ degrees: hs.degrees });
-          }
-          // SPIN control was removed (June 2026): force any persisted
-          // auto-rotate off exactly once at mount so the hue can't keep
-          // spinning invisibly. We use the SEEDED degrees as the start
-          // offset and only fire if there's actually a residual spin and
-          // the operator isn't mid-drag. The ref guards against a second
-          // fire on any later re-run of this effect.
-          if (!spinClearedRef.current && !hueDraggingRef.current
-              && typeof hs.autoRotateDegPerSec === 'number' && Math.round(hs.autoRotateDegPerSec) !== 0) {
-            spinClearedRef.current = true;
-            const seededDegrees = typeof hs.degrees === 'number' ? hs.degrees : 0;
-            setGlobalHue(seededDegrees, 0).then(r => {
-              if (!r.ok) console.warn('[GEM] failed to clear persisted hue spin:', r.error);
-            });
-          }
-        }
-      }
+      // (The /globals hue seed + persisted-spin clear were removed 2026-07
+      // with the global hue shifter — hue is per-channel only now.)
       refresh().then(() => { slotsLoadedRef.current = true; });
     })();
     const unsub = engineEvents.subscribe((msg: any) => {
@@ -293,15 +257,9 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         refresh();
       } else if (msg?.type === 'mixer' && typeof msg.blackout === 'boolean') {
         onBlackoutChangeRef.current?.(msg.blackout);
-      } else if (msg?.type === 'globalHueShift' && msg.hueShift) {
-        // The engine is authoritative for the live degrees. Reflect them
-        // UNLESS the operator is mid-drag on the degrees fader, in which case
-        // we'd be fighting their finger. SPIN was removed (June 2026), so we
-        // no longer reconcile autoRotateDegPerSec — only the hue degrees.
-        const hs = msg.hueShift;
-        const degrees = typeof hs.degrees === 'number' ? hs.degrees : 0;
-        setHueShift(prev => ({ degrees: hueDraggingRef.current ? prev.degrees : degrees }));
       }
+      // (The `globalHueShift` WS reconcile was removed 2026-07 with the
+      // global hue shifter.)
     });
     return () => {
       alive = false;
@@ -410,24 +368,6 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     const r = await setGlobalEffectBlackout(next);
     if (r.ok) onBlackoutChange?.(next);
   }, [blackout, onBlackoutChange]);
-
-  // Global hue degrees fader (0-360°). Optimistic local set + POST. The
-  // HorizontalFader throttles onChange to ~50 ms during a drag, so each POST
-  // is naturally rate-limited. Fail-loud: surface a rejection.
-  //
-  // SPIN removed (June 2026): the auto-rotate control is gone, so EVERY hue
-  // write now FORCES autoRotateDegPerSec: 0. Without this, a previously
-  // persisted spin would survive (the engine keeps the last rate) and the hue
-  // would keep rotating invisibly with no control to stop it. Pairs with the
-  // one-shot mount clear in the boot effect.
-  const onHueDegreesChange = useCallback(async (deg: number) => {
-    setHueShift({ degrees: deg });
-    const r = await setGlobalHue(deg, 0);
-    if (!r.ok) {
-      console.warn('[GEM] global hue degrees rejected:', r.error);
-      Alert.alert('Hue not applied', r.error || 'The engine rejected the global hue.');
-    }
-  }, []);
 
   // Always deactivate a slot before mutating its binding. Without
   // this an operator who swaps an active legacy effect (e.g.
@@ -556,22 +496,9 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   return (
     <View style={{ paddingTop: 6, borderTopWidth: 1, borderTopColor: C.ghostBorder, flex: isStrip ? 1 : undefined }}>
       <Header variant={variant} />
-      {/* Global hue shifter (docs/39 §F-hue). A first-class rig knob (NOT a GEM
-          slot): a continuous RGB-only hue rotation applied post-composite on
-          the whole output. W/A/UV (mission-critical exterior whites) are never
-          touched. June 2026: collapsed to a single inline row and MOVED to the
-          TOP of GLOBAL EFFECTS (above the slot grid) per operator request.
-          Omitted on the constrained mixer-strip variant — that single-row
-          strip is pinned to the bottom of the mixer surface and has no room
-          for an extra control. */}
-      {!isStrip && (
-        <HueShiftSection
-          degrees={hueShift.degrees}
-          onDegreesChange={onHueDegreesChange}
-          onDegreesDragStart={() => { hueDraggingRef.current = true; }}
-          onDegreesRelease={() => { hueDraggingRef.current = false; }}
-        />
-      )}
+      {/* (The global hue shifter row that used to sit here was REMOVED
+          2026-07 — hue is per-channel only: the deck's DeckHueRow and each
+          mixer strip's HUE trim are the hue controls.) */}
       {error ? (
         <Text style={{ color: C.error, fontSize: 10, marginBottom: 4 }}>{error}</Text>
       ) : null}
@@ -611,7 +538,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         };
 
         if (isStrip) {
-          // The 9 slot chips. In LANDSCAPE they flex:1 to fill the bar
+          // The 8 slot chips. In LANDSCAPE they flex:1 to fill the bar
           // (plenty of width per chip — labels already fit, QA round7).
           // In PORTRAIT the bar is far too narrow for that many cells: at
           // flex:1 every chip squeezed to ~70px and the 2-word labels chopped
@@ -622,7 +549,8 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           // OUTSIDE the scroller (QA round10 BLOCKER) so the e-stop never
           // scrolls off-screen. Invert is NO LONGER a dedicated button — it
           // is now an assignable slot (default slot 9), so it scrolls with
-          // the other chips. The minWidth (96px) gives a 2-line label
+          // the other chips (invert is no longer a fixed chip — swap it into
+          // any of the 8 slots via the ⋯ modal). The minWidth (96px) gives a 2-line label
           // ("Vintage\nWhite", "Iceberg\nFlash") room to render full.
           const SLOT_MIN_WIDTH = 96;
           const slotChips = visibleSlots.map((slot) =>
@@ -696,8 +624,9 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         // identical across rows — fixing the old 3-up/5-up squeeze that
         // truncated the bottom-row labels (QA round1 #1). BLACKOUT is the
         // last cell so the destructive e-stop stays bottom-right. Invert is
-        // no longer a dedicated cell — it is an assignable slot now (default
-        // slot 9) and renders as one of the slot chips above.
+        // no longer a dedicated cell — it is an assignable slot effect and
+        // renders as one of the 8 slot chips above whenever the operator
+        // swaps it in.
         const cells: React.ReactNode[] = [
           // NB: wrap in an arrow so Array.map's index arg is never passed as
           // `minWidth` — the deck grid wants flex:1 cells (minWidth undefined).
@@ -736,62 +665,9 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   );
 };
 
-// Global hue shifter UI (docs/39 §F-hue). A single HUE 0-360° fader — the
-// rig-wide chroma offset. Always reflects the engine's reported degrees, but
-// the parent suppresses the broadcast while the operator is dragging.
-//
-// SPIN removed (June 2026): the auto-rotate fader was deleted. Every hue write
-// now forces autoRotateDegPerSec: 0 (see onHueDegreesChange) and the component
-// clears any persisted spin once at mount, so the hue can never rotate
-// invisibly without a control to stop it.
-//
-// ONE-ROW LAYOUT (June 2026): the section is now a single horizontal row —
-// HUE label + fader + degree readout + live hue swatch, all inline — matching
-// the app's one-row control idiom (cf. the old CAP row / mixer strips). It is
-// rendered at the TOP of the GLOBAL EFFECTS area (above the slot grid).
-//
-// The fader is normalized 0..1 (HorizontalFader's contract); engineering units
-// map across that range at the boundary. The row is ≥44pt tall for a
-// comfortable touch target. A live swatch previews the current hue.
-const HueShiftSection: React.FC<{
-  degrees: number;
-  onDegreesChange: (deg: number) => void;
-  onDegreesDragStart: () => void;
-  onDegreesRelease: () => void;
-}> = ({ degrees, onDegreesChange, onDegreesDragStart, onDegreesRelease }) => {
-  const C = usePalette();
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44, marginBottom: 6 }}>
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 40, letterSpacing: 0.5, textTransform: 'uppercase' }}>HUE</Text>
-      {/* QA round1 #15: the track was given `flex: 1` directly, but the
-          HorizontalFader root's onLayout width didn't grow on react-native-web
-          (the flex shorthand resolved flexBasis:auto and the track sized to
-          content ~28%). Wrap it in a flex:1 / minWidth:0 spacer and let the
-          track fill that wrapper at width:100% so it spans the row; the value
-          stays right-aligned in its fixed column. */}
-      <View style={{ flex: 1, minWidth: 0, marginHorizontal: 8 }}>
-        <HorizontalFader
-          value={Math.max(0, Math.min(1, degrees / 360))}
-          onChange={(v: number) => onDegreesChange(Math.round(v * 360))}
-          onDragStart={onDegreesDragStart}
-          onRelease={onDegreesRelease}
-          trackStyle={{ width: '100%', height: 12, backgroundColor: C.surfaceContainerHigh, borderRadius: 6, justifyContent: 'center' }}
-          fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 6 }}
-          thumbStyle={{ position: 'absolute', width: 16, height: 22, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -8 }] }}
-        />
-      </View>
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, width: 40, textAlign: 'right' }}>{Math.round(degrees)}°</Text>
-      <View
-        style={{
-          width: 20, height: 20, borderRadius: 4, marginLeft: 8,
-          borderWidth: 1, borderColor: C.ghostBorder,
-          backgroundColor: `hsl(${Math.round(degrees)}, 80%, 55%)`,
-        }}
-        accessibilityLabel={`Current global hue ${Math.round(degrees)} degrees`}
-      />
-    </View>
-  );
-};
+// (HueShiftSection — the global hue fader row — was REMOVED 2026-07 with the
+// global hue shifter. Hue is per-channel only: see components/deck_hue_row.tsx
+// and the mixer strip's HUE trim.)
 
 const Header: React.FC<{ variant: 'deck' | 'mixer-strip' }> = ({ variant }) => {
   const C = usePalette();

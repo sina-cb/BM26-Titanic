@@ -59,10 +59,6 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
-export function sliderLevel(v) { level = v; }
-export function sliderKick(v) { kick = v; }
-export function sliderRadius(v) { radius = v; }
-export function sliderBeamWidth(v) { beamWidth = v; }
 export function sliderDirection(v) {
   // Dead-zone guard: slider-center would give dir=0 (frozen attack). Keep the
   // motion always advancing — slightly inward at/above center, slightly
@@ -72,6 +68,10 @@ export function sliderDirection(v) {
   else if (d < 0.0 && d > -0.06) d = -0.06;
   direction = d;
 }
+export function sliderLevel(v) { level = v; }
+export function sliderKick(v) { kick = v; }
+export function sliderRadius(v) { radius = v; }
+export function sliderBeamWidth(v) { beamWidth = v; }
 
 // ── Tunables ────────────────────────────────────────────────────────────────
 var CENTER_X = 0.6;        // physical stage center (constant offset, not a renorm)

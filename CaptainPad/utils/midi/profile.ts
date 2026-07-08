@@ -43,7 +43,7 @@ export type ProfileAction =
   // A mixer "layer" = the Nth mixer channel by order (0-based). Inert when no
   // such channel exists (and its pad column stays dark).
   | { kind: 'mixerLayerFader'; layer: number; range: Range }
-  // Focus the Nth layer (Mixer tab) so the learnable param faders (4-6) drive
+  // Focus the Nth layer (Mixer tab) so the learnable param faders (4-8) drive
   // its active pattern's MIDI bindings. Controller/UI state, not an engine call.
   | { kind: 'focusChannel'; layer: number }
   // Global-effect slot (1-based, matches CaptainPad GEM); toggles the slot.
@@ -64,12 +64,25 @@ export type ProfileAction =
   // Encoder push → reset the focused param at `index` to the entry's saved
   // default (handled app-side).
   | { kind: 'focusedParamReset'; index: number }
-  // A relative knob driving a CPC global param by key (bank-2 rings). Same
-  // step semantics as focusedParamKnob.
+  // A relative knob driving a CPC global param by key. Same step semantics as
+  // focusedParamKnob.
   | { kind: 'paramCenterRelative'; key: string; steps: [number, number, number] }
   // Side-button focus move: prev/next within the existing layers, or the deck
   // (layer 0). A secondary focus path so the MFT is self-sufficient.
-  | { kind: 'focusStep'; dir: 'prev' | 'next' | 'deck' };
+  | { kind: 'focusStep'; dir: 'prev' | 'next' | 'deck' }
+  // ── MFT UX v2 — row-0 global knobs ──
+  // Encoder push → toggle the engine's BPM→Speed sync (CPC `bpmSpeedSync`
+  // flag, via the existing param-center API). Discrete, fires on press.
+  | { kind: 'bpmSyncToggle' }
+  // Relative knob accumulating the FOCUSED CHANNEL's per-channel hue (deck
+  // tab = the DECK CHANNEL, mixer tab = the focused overlay — hue is
+  // PER-CHANNEL ONLY since 2026-07; the global shifter was removed): one
+  // full ring (0..1) maps onto 0..360°, wrapping. Runtime-handled (needs
+  // the focused snapshot).
+  | { kind: 'hueKnob'; steps: [number, number, number] }
+  // Encoder push → reset the focused channel's hue to 0° (back to red).
+  // Discrete, fires on press.
+  | { kind: 'hueReset' };
 
 /** LED feedback spec. RGB pads use { active, idle } colour velocities (with
  *  optional `channel` for brightness/behaviour, default 6 = solid 100%).
@@ -142,11 +155,17 @@ const ACTION_KINDS = new Set([
   'mixerLayerFader', 'focusChannel', 'globalEffectSlot',
   'playlistScroll', 'playlistWindowSelect', 'colorPalettePair',
   'focusedParamKnob', 'focusedParamReset', 'paramCenterRelative', 'focusStep',
+  'bpmSyncToggle', 'hueKnob', 'hueReset',
 ]);
 
 /** Default per-tick step magnitudes for a relative encoder: the three ascending
- *  deltas that codes ±1/±2/±3 map to (fraction of full range per detent). */
-export const DEFAULT_RELATIVE_STEPS: [number, number, number] = [0.005, 0.02, 0.06];
+ *  deltas that codes ±1/±2/±3 map to (fraction of full range). LINEAR in the
+ *  relative count — code ±n is n detents' worth of travel packed into one
+ *  message, so the triple is [S, 2S, 3S]. Deliberately NOT an acceleration
+ *  ramp: the speed curve lives entirely in accel.ts (per-tick velocity gain);
+ *  a superlinear triple here would re-introduce the firmware-threshold rate
+ *  jump the round-3 redesign removed. */
+export const DEFAULT_RELATIVE_STEPS: [number, number, number] = [0.005, 0.01, 0.015];
 
 /** Validate a relative-encoder `steps` triple: exactly three positive, strictly
  *  ascending magnitudes (coarse control must not be finer than normal). Absent
@@ -290,6 +309,12 @@ function validateAction(where: string, a: any): ProfileAction {
         fail(`${where}: focusStep dir must be 'prev', 'next', or 'deck'`);
       }
       return { kind: 'focusStep', dir: a.dir };
+    case 'bpmSyncToggle':
+      return { kind: 'bpmSyncToggle' };
+    case 'hueKnob':
+      return { kind: 'hueKnob', steps: validateSteps(where, a.steps) };
+    case 'hueReset':
+      return { kind: 'hueReset' };
     default:
       return fail(`${where}: unhandled action.kind`);
   }

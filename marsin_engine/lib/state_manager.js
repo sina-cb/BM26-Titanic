@@ -218,17 +218,28 @@ export class StateManager {
   }
 
   loadGlobalsState() {
-    // hueShift (F-hue, docs/39): persistent global hue knob. Default
-    // { degrees: 0, autoRotateDegPerSec: 0 } = no shift — an old file
-    // without the key loads to this documented default.
     // invert (F-invert, docs/39): persistent global color-invert toggle.
     // Default false = no invert — an old file without the key loads to this
     // documented default.
-    return this.load('globals_state.yaml', {
+    const state = this.load('globals_state.yaml', {
       blackout: false, effects: {}, params: {}, dimmers: {},
-      hueShift: { degrees: 0, autoRotateDegPerSec: 0 },
       invert: false,
     });
+    // MIGRATION (2026-07, operator decision): the GLOBAL hue shifter was
+    // removed — hue is per-channel only. A persisted `hueShift` from an
+    // older session is DISCARDED here (never silently re-applied: it was
+    // the invisible whole-rig tint that made every per-channel hue read 0
+    // while the output was shifted). One loud log line, then the key is
+    // dropped so the next save writes a clean file.
+    if (state.hueShift !== undefined) {
+      const deg = state.hueShift && typeof state.hueShift.degrees === 'number'
+        ? state.hueShift.degrees : state.hueShift;
+      console.warn(
+        `[StateManager] globals_state.yaml carried a LEGACY global hueShift (degrees=${JSON.stringify(deg)}) — ` +
+        'the global hue shifter was removed (hue is per-channel only); discarding it.');
+      delete state.hueShift;
+    }
+    return state;
   }
 
   /**
@@ -286,18 +297,9 @@ export class StateManager {
         intensityController.setSectionBrightness(parseInt(sId, 10), bright);
       }
     }
-    if (globalEffectsController && globalsState.hueShift) {
-      // F-hue restore (docs/39): re-apply the persisted global hue knob
-      // through the validating setter so a hand-edited bad YAML value
-      // fails loudly here (caught + logged by the boot caller) instead of
-      // silently half-applying. A missing field stays at the controller's
-      // 0/0 default (handled by loadGlobalsState's default).
-      const hs = globalsState.hueShift;
-      globalEffectsController.setHueShift(
-        typeof hs.degrees === 'number' ? hs.degrees : 0,
-        typeof hs.autoRotateDegPerSec === 'number' ? hs.autoRotateDegPerSec : 0,
-      );
-    }
+    // NOTE: the legacy global `hueShift` is NOT restored — the global hue
+    // shifter was removed (2026-07, per-channel hue only). loadGlobalsState
+    // discards a persisted key with a log line before we ever get here.
     if (globalEffectsController && globalsState.invert !== undefined) {
       // F-invert restore (docs/39): re-apply the persisted global invert
       // toggle through the coercing setter. A missing field stays at the

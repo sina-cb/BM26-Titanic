@@ -42,10 +42,12 @@ import {
   setDeckChannelControl,
   setMixerChannelControl,
   fetchPlaylist,
+  invalidatePlaylistCache,
   getCachedColorPalettes,
   warmColorPalettesCache,
   type PlaylistAssignment,
 } from '@/utils/api';
+import { setChannelHue } from '@/utils/channelExtrasApi';
 import {
   MidiManager,
   ControllerStatus,
@@ -53,6 +55,7 @@ import {
   FocusedBinding,
   MidiControlRef,
   LearnResult,
+  learnRejectMessage,
   selectTransportFactory,
   setSysexRequested,
   getMidiTransportKind,
@@ -61,6 +64,7 @@ import {
   profileClaims,
   describeControlRef,
   ControllerProfile,
+  GlobalEffectSlotBehavior,
 } from '@/utils/midi';
 import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
 import apcProfileRaw from '@/midi_profiles/apc_mini_mk2.yaml';
@@ -111,6 +115,15 @@ function _setNotice(notice: string | null): void {
   _set({ ..._state, notice });
 }
 
+/** Narrow the engine's bare-string slot `behavior` to the known union. An
+ *  unexpected value becomes undefined so the dispatcher's fail-safe ('toggle')
+ *  owns the odd case rather than a bad literal leaking into the snapshot. */
+function narrowSlotBehavior(behavior: string): GlobalEffectSlotBehavior | undefined {
+  return behavior === 'toggle' || behavior === 'trigger' || behavior === 'hold'
+    ? behavior
+    : undefined;
+}
+
 // Live snapshot the manager reads on every dispatch + LED projection. Kept in
 // a module ref so the manager's closures always see the latest engine state.
 let _snapshot: MidiEngineSnapshot = {
@@ -155,6 +168,12 @@ function _deriveGlobalParamValues(
   return out;
 }
 
+// NOTE (2026-07): the GLOBAL hue-shift snapshot patch (`_patchHueShift`, fed
+// by the `globalHueShift` WS broadcast + the GET /globals seed) was REMOVED
+// with the global hue shifter. The MFT hue knob now drives the FOCUSED
+// CHANNEL's per-channel hue in both contexts; the channel's `hue` is threaded
+// through `_snapshot.focused.hue` by the snapshot rebuild below.
+
 /** #10: in-place patch of `_snapshot` from a live `sharedParams` frame, WITHOUT
  *  the heavy async rebuild. Recomputes globalParamValues + bpmSpeedSyncOn +
  *  syncOwnedKeys (so the MFT bank-2 rings + the sync gate track live CPC values)
@@ -184,7 +203,7 @@ function _patchSharedParams(paramsSrc: Record<string, { value?: unknown }> | und
 // so replacement is enough to clear a stale anchor.
 let _modState: Record<string, { base: number; modulated: number }> = {};
 
-// ── Focused channel (for the MIDI-learn param faders 4-6) ──────────────────
+// ── Focused channel (for the MIDI-learn param faders 4-8) ──────────────────
 // On the Deck tab the focus is always the single deck channel. On the Mixer tab
 // the operator picks the focused overlay with a track button (focusChannel
 // action). The manager applies the focused pattern's bindings to the param
@@ -294,7 +313,10 @@ export function armMidiLearn(cb: (r: { ref: MidiControlRef } | { error: string }
   }
   return _armLearn((result) => {
     if ('ref' in result) cb({ ref: result.ref });
-    else cb({ error: conflictMessage(result.conflict) });
+    // The runtime delivers a STRUCTURED LearnRejectReason; format it here (the
+    // one copy home is learnRejectMessage) so the toast reads as one clean
+    // sentence — never a reason nested inside another template.
+    else cb({ error: learnRejectMessage(result.conflict) });
   });
 }
 
@@ -311,7 +333,7 @@ let _loadedProfiles: ControllerProfile[] = [];
 export function midiControlConflict(ref: MidiControlRef): string | null {
   for (const p of _loadedProfiles) {
     const claimed = profileClaims(p, ref, _activeContext);
-    if (claimed !== null) return conflictMessage(claimed);
+    if (claimed !== null) return learnRejectMessage({ kind: 'profile-claimed', controlId: claimed });
   }
   return null;
 }
@@ -357,21 +379,10 @@ export function midiControlLearnedConflict(ref: MidiControlRef, targetParameter:
   return `${describeControlRef(ref)} is already learned to '${collidingParam}' — free it first or pick another control`;
 }
 
-/** Human-readable conflict message naming the profile control the operator
- *  moved (e.g. "CC 54 is GLOBAL SPEED — use fader 4/5/6/8"). The controlId is
- *  the profile control's id; map the well-known reserved controls to friendly
- *  copy, else fall back to the id. */
-function conflictMessage(controlId: string): string {
-  const known: Record<string, string> = {
-    fader_7_speed: 'that fader is GLOBAL SPEED',
-    fader_9_master: 'that fader is MASTER',
-  };
-  const named = known[controlId];
-  const hint = ' — use a MIDI-learn fader (4/5/6/8) or a free pad';
-  return named
-    ? `${named}${hint}`
-    : `that control is already mapped ('${controlId}')${hint}`;
-}
+// Conflict copy lives in utils/midi/learn.ts `learnRejectMessage` — the ONE
+// formatter for every learn-rejection surface (capture toast + popover inline
+// error). Fader 7's old GLOBAL SPEED reservation is gone (speed lives on the
+// MFT (0,0) knob), so the learn-fader hint there reads 4–8.
 
 // ── Playlist browse-window state (for the mixer-UI rectangular border) ─────
 // Keyed by mixer channel id → { start, size }. The MIDI manager publishes
@@ -571,6 +582,18 @@ export function useMidiControl(): MidiControlState {
     const bump = () => setRev((r) => r + 1);
     _focusListeners.add(bump);
     const unsub = engineEvents.subscribe((m: { type?: string; name?: string }) => {
+      // LED re-sync on pattern switch: the engine broadcasts { type:'pattern' }
+      // on every pattern change (entry select / autopilot swap). fetchPlaylist's
+      // 5 s TTL cache can otherwise serve STALE entry defaults/bindings to the
+      // snapshot rebuild that follows, leaving rings/colours on the old values
+      // (the hardware staleness Sina saw). Bust the ACTIVE playlists' cache
+      // entries (deck + overlays + focused — the only ones the rebuild reads)
+      // and force a rebuild so projectAndSend repaints from fresh data.
+      if (m?.type === 'pattern') {
+        for (const name of _activePlaylistNames()) invalidatePlaylistCache(name);
+        bump();
+        return;
+      }
       // Only rebuild for a playlistSaved whose playlist is actually in the
       // deck / overlays / focused channel — an unrelated save can't change any
       // binding the manager applies, so skip the rebuild it would trigger.
@@ -621,7 +644,7 @@ export function useMidiControl(): MidiControlState {
         ? { id: deck.id, fader: typeof deck.fader === 'number' ? deck.fader : 1, playlist: await playlistFor(deck.playlist) }
         : null;
 
-      // ── Focused channel — the param faders (4-6) drive its active pattern's
+      // ── Focused channel — the param faders (4-8) drive its active pattern's
       //    learned bindings. Deck tab: the single deck channel. Mixer tab: the
       //    track-button-selected overlay. We carry its live exports (id ↔ name ↔
       //    current value, for name→id + soft-takeover) and its active entry's
@@ -702,6 +725,16 @@ export function useMidiControl(): MidiControlState {
         // fader re-picks-up after the active entry changes even when the
         // popover-derived mapping id (`midi_<param>`) is reused across entries.
         const key = `${role}:${focusChan.id}:${entryId ?? ''}:${midiMappings.map((m) => m.id).join(',')}`;
+        // Per-channel hue (engine F-hue): serialized on EVERY mixer/deck
+        // channel broadcast (a pre-field engine serializes 0 — the documented
+        // schema default, same shape the strip's HUE trim reads). Threaded so
+        // the MFT hue knob (which drives the FOCUSED channel's hue in BOTH
+        // contexts — hue is per-channel only) can anchor on / re-sync to the
+        // focused channel's live hue. Only a finite number passes; anything
+        // else stays undefined → the knob is inert with a visible note
+        // (never a fabricated anchor).
+        const hueRaw = (focusChan as { hue?: unknown }).hue;
+        const hue = typeof hueRaw === 'number' && Number.isFinite(hueRaw) ? hueRaw : undefined;
         focused = {
           role,
           layer: focusLayer,
@@ -710,6 +743,7 @@ export function useMidiControl(): MidiControlState {
           key,
           exports: exportsList,
           midiMappings,
+          hue,
         };
       }
 
@@ -809,6 +843,7 @@ export function useMidiControl(): MidiControlState {
         setChannelPlaylistEntry,
         setDeckChannelControl,
         setMixerChannelControl,
+        setChannelHue,
       },
       getSnapshot: () => _snapshot,
       getSchemaKeys: () => _schemaKeys,
@@ -857,7 +892,17 @@ export function useMidiControl(): MidiControlState {
         if (!r.ok || !r.data?.slots) return;
         _snapshot = {
           ..._snapshot,
-          globalEffectSlots: r.data.slots.map((s) => ({ slot: s.slotId, active: !!s.active })),
+          globalEffectSlots: r.data.slots.map((s) => ({
+            slot: s.slotId,
+            active: !!s.active,
+            // Thread the engine's per-slot behavior ('toggle' | 'trigger' |
+            // 'hold') so the pad dispatch is BEHAVIOR-AWARE — a 'trigger' slot
+            // (Iceberg Flash / White Drop) must fire 'trigger', not 'toggle'.
+            // The REST field is a bare string; narrow to the known union and
+            // drop anything unexpected to undefined so the dispatcher's
+            // fail-safe ('toggle') owns the odd case rather than a bad literal.
+            behavior: narrowSlotBehavior(s.behavior),
+          })),
         };
         if (!disposed) manager.onEngineUpdate();
       }).catch(() => undefined);
@@ -889,6 +934,10 @@ export function useMidiControl(): MidiControlState {
       }).catch(() => undefined);
     };
     refreshGlobalEffects();
+    // (The `globalHueShift` WS subscription was removed 2026-07 with the
+    // global hue shifter — the hue knob's ring now tracks the FOCUSED
+    // channel's hue, which rides the mixer/deck broadcasts into
+    // `_snapshot.focused.hue` via the snapshot rebuild.)
     // The slots subscription above already fires on every `*globaleffect*` WS
     // message; piggy-back the legacy toggle refresh on the SAME filter so a
     // legacy effect toggled from another surface repaints its pad LED too.

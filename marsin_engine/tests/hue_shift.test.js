@@ -1,24 +1,33 @@
 /**
- * Unit tests for the Hue Shifter (global + per-channel) — docs/39 §F-hue.
+ * Unit tests for the Hue Shifter (PER-CHANNEL ONLY) — docs/39 §F-hue.
  *
- * Contract:
- *   - Both features rotate RGB ONLY via a luminance-preserving YIQ
- *     rotation. W / A / UV are NEVER touched (mission-critical exterior
- *     whites must not be tinted/dimmed).
+ * Contract (2026-07, operator decision — the GLOBAL post-mixer hue
+ * shifter was REMOVED end to end; hue is per-channel only):
+ *   - The float rotation (effects/hue_shift.js, kept as the reference
+ *     implementation for pattern_mixer's applyHueShift6chU8) rotates RGB
+ *     ONLY via a luminance-preserving YIQ rotation. W / A / UV are NEVER
+ *     touched (mission-critical exterior whites must not be tinted/dimmed).
  *   - No-op at hue=0 (zero cost gate).
  *   - validateHue rejects non-finite (400) and normalizes any finite
  *     angle into [0,360).
- *   - Global auto-rotate advances `degrees` by autoRotateDegPerSec * dt.
  *   - Per-channel hue normalizes through the PatternChannel ctor.
+ *   - REMOVAL contract: GlobalEffectsController carries NO global hue
+ *     state/methods, getStatus has no hueShift, and a persisted legacy
+ *     globals_state.yaml hueShift key is DISCARDED at load (never
+ *     silently re-applied).
  *
  * Run: node --test marsin_engine/tests/hue_shift.test.js
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { applyHueShift } from '../effects/hue_shift.js';
 import { GlobalEffectsController } from '../lib/global_effects_controller.js';
 import { PatternChannel } from '../lib/pattern_channel.js';
+import { StateManager } from '../lib/state_manager.js';
 import { validateHue } from '../lib/api_server.js';
 
 function px(r, g, b, w = 0.2, a = 0.1, u = 0.05) {
@@ -99,67 +108,58 @@ test('applyHueShift 360deg ~= identity', () => {
   assert.ok(Math.abs(p[0].b - 0.5) < 2e-3, `b=${p[0].b}`);
 });
 
-// ── GlobalEffectsController.setHueShift / applyHueShift ──────────────────
+// ── REMOVAL contract: no global hue shifter anywhere ─────────────────────
 
-test('setHueShift normalizes degrees into [0,360) and clamps auto-rotate', () => {
+test('GlobalEffectsController carries NO global hue state or methods', () => {
   const c = new GlobalEffectsController({ engine: { fps: 40 } });
-  c.setHueShift(370, 999);
-  assert.equal(c.hueShift.degrees, 10);
-  assert.equal(c.hueShift.autoRotateDegPerSec, 360);
-  c.setHueShift(-30, -999);
-  assert.equal(c.hueShift.degrees, 330);
-  assert.equal(c.hueShift.autoRotateDegPerSec, -360);
+  assert.equal(c.hueShift, undefined, 'hueShift state must not exist');
+  assert.equal(typeof c.setHueShift, 'undefined', 'setHueShift must not exist');
+  assert.equal(typeof c.applyHueShift, 'undefined', 'applyHueShift must not exist');
 });
 
-test('setHueShift throws on non-finite (Codex P0, no silent fallback)', () => {
+test('getStatus exposes NO hueShift key', () => {
   const c = new GlobalEffectsController({ engine: { fps: 40 } });
-  assert.throws(() => c.setHueShift(NaN));
-  assert.throws(() => c.setHueShift(Infinity));
-  assert.throws(() => c.setHueShift(10, NaN));
-});
-
-test('applyHueShift global is a no-op at 0 and does not touch W/A/U', () => {
-  const c = new GlobalEffectsController({ engine: { fps: 40 } });
-  const p = [px(0.5, 0.4, 0.3, 0.2, 0.1, 0.05)];
-  c.applyHueShift(p, 0);
-  assert.equal(p[0].r, 0.5);
-  assert.equal(p[0].w, 0.2);
-});
-
-test('applyHueShift auto-rotate advances degrees by degPerSec * dt', () => {
-  const c = new GlobalEffectsController({ engine: { fps: 40 } });
-  c.setHueShift(0, 90); // 90 deg/sec
-  c.applyHueShift([px(1, 0, 0)], 1000); // first tick: seeds clock, no advance
-  assert.equal(c.hueShift.degrees, 0);
-  c.applyHueShift([px(1, 0, 0)], 1100); // +100ms => +9deg
-  assert.ok(Math.abs(c.hueShift.degrees - 9) < 1e-6, `got ${c.hueShift.degrees}`);
-  c.applyHueShift([px(1, 0, 0)], 1200); // +100ms => +9deg => 18
-  assert.ok(Math.abs(c.hueShift.degrees - 18) < 1e-6, `got ${c.hueShift.degrees}`);
-});
-
-test('applyHueShift auto-rotate wraps past 360', () => {
-  const c = new GlobalEffectsController({ engine: { fps: 40 } });
-  c.setHueShift(350, 360);
-  c.applyHueShift([px(1, 0, 0)], 0);
-  c.applyHueShift([px(1, 0, 0)], 100); // +36 => 386 => wrap 26
-  assert.ok(Math.abs(c.hueShift.degrees - 26) < 1e-6, `got ${c.hueShift.degrees}`);
-});
-
-test('panicStop leaves the global hue shift alone', () => {
-  const c = new GlobalEffectsController({ engine: { fps: 40 } });
-  c.setHueShift(123, 45);
-  c.panicStop();
-  assert.equal(c.hueShift.degrees, 123);
-  assert.equal(c.hueShift.autoRotateDegPerSec, 45);
-});
-
-test('getStatus exposes a cloned hueShift', () => {
-  const c = new GlobalEffectsController({ engine: { fps: 40 } });
-  c.setHueShift(60, 0);
   const s = c.getStatus();
-  assert.deepEqual(s.hueShift, { degrees: 60, autoRotateDegPerSec: 0 });
-  s.hueShift.degrees = 999; // mutate the clone
-  assert.equal(c.hueShift.degrees, 60); // live state unchanged
+  assert.ok(!('hueShift' in s), 'getStatus must not carry hueShift');
+});
+
+test('loadGlobalsState DISCARDS a persisted legacy hueShift (with a log line)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hue_migration_'));
+  const sm = new StateManager(dir);
+  fs.writeFileSync(path.join(dir, 'globals_state.yaml'), [
+    'blackout: false',
+    'effects: {}',
+    'params: {}',
+    'dimmers: {}',
+    'hueShift:',
+    '  degrees: 131.5',
+    '  autoRotateDegPerSec: 20',
+    'invert: false',
+    '',
+  ].join('\n'));
+  const loaded = sm.loadGlobalsState();
+  assert.ok(!('hueShift' in loaded), 'legacy hueShift must be dropped on load');
+  // Everything else survives the migration untouched.
+  assert.equal(loaded.blackout, false);
+  assert.equal(loaded.invert, false);
+});
+
+test('loadGlobalsState default carries no hueShift key', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hue_migration_'));
+  const sm = new StateManager(dir);
+  const loaded = sm.loadGlobalsState(); // no file → documented defaults
+  assert.ok(!('hueShift' in loaded));
+});
+
+test('applyGlobalsState never re-applies a hueShift (defence in depth)', () => {
+  // Even if a caller hand-feeds a globalsState still carrying the legacy
+  // key (bypassing loadGlobalsState), applyGlobalsState must ignore it —
+  // there is no controller surface left to apply it to.
+  const c = new GlobalEffectsController({ engine: { fps: 40 } });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hue_migration_'));
+  const sm = new StateManager(dir);
+  sm.applyGlobalsState({ hueShift: { degrees: 90, autoRotateDegPerSec: 5 } }, null, null, c);
+  assert.equal(c.hueShift, undefined, 'controller must stay hue-free');
 });
 
 // ── validateHue (API boundary) ───────────────────────────────────────────

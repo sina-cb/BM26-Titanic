@@ -61,12 +61,64 @@ export function describeControlRef(ref: MidiControlRef): string {
     : `Note ${ref.number}${ref.channel ? ` ch${ref.channel + 1}` : ''}`;
 }
 
+/** WHY a learn capture was rejected — DATA, not a pre-baked sentence, so every
+ *  surface (capture toast, popover inline error) formats it once through
+ *  `learnRejectMessage` and the copy composes grammatically everywhere.
+ *  Forward-compat hook: when the planned custom-mapping UI opens MFT banks 2-4
+ *  to operator assignments, only the `reserved-bank` branch (manager guard +
+ *  message) changes — the reason vocabulary already distinguishes it. */
+export type LearnRejectReason =
+  // The control resolves to a STATIC profile action (master, pads, …) —
+  // capturing it would permanently shadow that action. `controlId` names it.
+  | { kind: 'profile-claimed'; controlId: string }
+  // An MFT bank-1 endless encoder / push: knobs map to the focused pattern's
+  // params BY ORDER (and their CC "value" is a relative delta code — absolute
+  // scaling would pin the param to ~0.5 jitter), so they are never learnable.
+  | { kind: 'order-mapped-encoder' }
+  // An MFT bank-2/3/4 encoder: reserved for the future custom-mapping UI.
+  | { kind: 'reserved-bank' }
+  // The focused pattern already has an ENABLED learned binding on this control
+  // — a second binding would silently fight it (P2-2).
+  | { kind: 'already-bound'; parameter: string };
+
+/** The fader set free for MIDI-learn on the APC (7 joined when its global-speed
+ *  reservation moved to the MFT). ONE home for the hint copy. */
+const LEARN_HINT = ' Use a MIDI-learn fader (4–8) or a free pad.';
+
+/** Well-known reserved profile controls → friendly copy. Everything else names
+ *  the control id verbatim. */
+const KNOWN_CLAIMED: Record<string, string> = {
+  fader_9_master: 'That fader is MASTER.',
+};
+
+/** Format a LearnRejectReason into ONE clean operator-facing sentence. The
+ *  single copy home for both the capture toast and the popover inline error. */
+export function learnRejectMessage(reason: LearnRejectReason): string {
+  switch (reason.kind) {
+    case 'profile-claimed': {
+      const named = KNOWN_CLAIMED[reason.controlId]
+        ?? `That control is already mapped ('${reason.controlId}').`;
+      return `${named}${LEARN_HINT}`;
+    }
+    case 'order-mapped-encoder':
+      return `MFT knobs aren't learnable — they map to the focused pattern's params by order.${LEARN_HINT}`;
+    case 'reserved-bank':
+      return `That MFT bank is reserved for future custom mappings.${LEARN_HINT}`;
+    case 'already-bound':
+      return `That control is already learned to '${reason.parameter}' — free it first or pick another control.`;
+    default: {
+      // Exhaustiveness guard — a new reason kind must add a message.
+      const k = (reason as { kind: string }).kind;
+      throw new Error(`learnRejectMessage: unhandled reject reason '${k}'`);
+    }
+  }
+}
+
 /** The outcome delivered to a learn callback: a captured control, or a
- *  conflict (the moved control already resolves to a static profile action —
- *  `controlId` names it so the popover can explain, e.g. "CC 54 is GLOBAL
- *  SPEED"). Learning is REJECTED on conflict so a profile action can never be
- *  shadowed. */
-export type LearnResult = { ref: MidiControlRef } | { conflict: string };
+ *  structured rejection (see LearnRejectReason). Learning is REJECTED on
+ *  conflict so a profile action / order-mapped encoder / existing binding can
+ *  never be shadowed. */
+export type LearnResult = { ref: MidiControlRef } | { conflict: LearnRejectReason };
 
 export type LearnCallback = (result: LearnResult) => void;
 
@@ -117,27 +169,12 @@ export class LearnController {
     return true;
   }
 
-  /** Called by a runtime while armed when the moved control ALREADY resolves to
-   *  a static profile action — learning is rejected. Fires the callback once
-   *  with the conflict, disarms, and returns true (consumed). Returns false
-   *  when not armed. */
-  reportConflict(controlId: string): boolean {
-    const cb = this.cb;
-    if (!cb) return false;
-    this.cb = null;
-    cb({ conflict: controlId });
-    return true;
-  }
-
-  /** Called by a runtime while armed to REJECT a learnable-looking control that
-   *  must not be learned for a reason OTHER than a profile-action conflict — an
-   *  MFT endless encoder (its "value" is a relative delta code, so absolute
-   *  scaling would pin the param to ~0.5 jitter), a CC-hold push, or a control
-   *  already bound to another learned param on the focused pattern. Same
-   *  fire-once-then-disarm shape as reportConflict; `reason` is the human message
-   *  surfaced through the SAME `{ conflict }` channel (LearnResult is unchanged).
-   *  Returns false when not armed. */
-  reportReject(reason: string): boolean {
+  /** Called by a runtime while armed to REJECT the capture — the moved control
+   *  is profile-claimed, an order-mapped MFT encoder, a reserved-bank encoder,
+   *  or already bound (see LearnRejectReason). Fires the callback once with the
+   *  STRUCTURED reason (surfaces format it via learnRejectMessage), disarms,
+   *  and returns true (consumed). Returns false when not armed. */
+  reject(reason: LearnRejectReason): boolean {
     const cb = this.cb;
     if (!cb) return false;
     this.cb = null;

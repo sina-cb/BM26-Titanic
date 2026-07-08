@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   LearnController, scaleMidiToRange, controlRefFromEvent, bindingMatches,
-  describeControlRef, pickup, freshPickup,
+  describeControlRef, learnRejectMessage, pickup, freshPickup,
 } from './learn';
 import { decodeMidi } from './midi_message';
 
@@ -72,24 +72,14 @@ describe('LearnController', () => {
     expect(lc.capture({ type: 'cc', channel: 0, number: 52 })).toBe(false);
     expect(cb).toHaveBeenCalledTimes(1);
   });
-  it('reportConflict delivers a conflict result once, then disarms', () => {
+  it('reject delivers the STRUCTURED reason once, then disarms', () => {
     const lc = new LearnController();
     const cb = vi.fn();
     lc.arm(cb);
-    expect(lc.reportConflict('fader_7_speed')).toBe(true);
-    expect(cb).toHaveBeenCalledWith({ conflict: 'fader_7_speed' });
+    expect(lc.reject({ kind: 'profile-claimed', controlId: 'fader_9_master' })).toBe(true);
+    expect(cb).toHaveBeenCalledWith({ conflict: { kind: 'profile-claimed', controlId: 'fader_9_master' } });
     expect(lc.isArmed()).toBe(false);
-    expect(lc.reportConflict('other')).toBe(false); // disarmed
-    expect(cb).toHaveBeenCalledTimes(1);
-  });
-  it('reportReject delivers a rejection reason once, then disarms', () => {
-    const lc = new LearnController();
-    const cb = vi.fn();
-    lc.arm(cb);
-    expect(lc.reportReject("that's an endless encoder — knobs map by order, not by learn")).toBe(true);
-    expect(cb).toHaveBeenCalledWith({ conflict: "that's an endless encoder — knobs map by order, not by learn" });
-    expect(lc.isArmed()).toBe(false);
-    expect(lc.reportReject('other')).toBe(false); // disarmed
+    expect(lc.reject({ kind: 'order-mapped-encoder' })).toBe(false); // disarmed
     expect(cb).toHaveBeenCalledTimes(1);
   });
   it('cancel disarms without firing', () => {
@@ -111,6 +101,38 @@ describe('LearnController', () => {
     expect(lc.capture({ type: 'cc', channel: 0, number: 51 })).toBe(true);
     expect(cb2).toHaveBeenCalledWith({ ref: { type: 'cc', channel: 0, number: 51 } });
     expect(cb1).not.toHaveBeenCalled();
+  });
+});
+
+describe('learnRejectMessage (the ONE copy home for learn rejections)', () => {
+  it('order-mapped encoder → one clean sentence, no nested quotes, 4–8 hint', () => {
+    const msg = learnRejectMessage({ kind: 'order-mapped-encoder' });
+    expect(msg).toBe(
+      "MFT knobs aren't learnable — they map to the focused pattern's params by order. Use a MIDI-learn fader (4–8) or a free pad.",
+    );
+    // The old bug: the reason sentence nested inside the "already mapped ('…')"
+    // template. The formatted copy must never contain a quoted sentence.
+    expect(msg).not.toMatch(/\('/);
+  });
+  it('reserved bank → names the reservation (future custom mapping)', () => {
+    expect(learnRejectMessage({ kind: 'reserved-bank' }))
+      .toBe('That MFT bank is reserved for future custom mappings. Use a MIDI-learn fader (4–8) or a free pad.');
+  });
+  it('profile-claimed → friendly copy for known controls, id for the rest', () => {
+    expect(learnRejectMessage({ kind: 'profile-claimed', controlId: 'fader_9_master' }))
+      .toBe('That fader is MASTER. Use a MIDI-learn fader (4–8) or a free pad.');
+    expect(learnRejectMessage({ kind: 'profile-claimed', controlId: 'scene_blackout' }))
+      .toBe("That control is already mapped ('scene_blackout'). Use a MIDI-learn fader (4–8) or a free pad.");
+  });
+  it('already-bound → names the colliding parameter', () => {
+    expect(learnRejectMessage({ kind: 'already-bound', parameter: 'glow' }))
+      .toBe("That control is already learned to 'glow' — free it first or pick another control.");
+  });
+  it('fader 7 is no longer a known reserved control (its speed reservation moved to the MFT)', () => {
+    // A hypothetical claim on the old id would fall through to the generic
+    // copy — the friendly "GLOBAL SPEED" name is gone with the reservation.
+    expect(learnRejectMessage({ kind: 'profile-claimed', controlId: 'fader_7_speed' }))
+      .toContain("already mapped ('fader_7_speed')");
   });
 });
 

@@ -1,10 +1,12 @@
 // knob_order — THE single source of truth for the MFT bank-1 knob → local-param
-// mapping. The MFT drives the focused pattern's learnable sliders BY ORDER: the
-// physical knob at index i drives `knobMapped[i]`. Both the hook (which builds
-// `focused.exports` for the runtime) and the screens (which paint the "knob N"
-// badge next to each on-screen slider) MUST derive that order from HERE so the
-// on-screen order is provably identical to the physical knob order rather than
-// two hand-filters that can silently drift apart.
+// mapping. The MFT drives the focused pattern's learnable sliders BY ORDER
+// (v2 layout: rows 1-3, encoders 4-15 → 12 slots): the local-param knob at
+// ordered index i drives `knobMapped[i]`, and physical encoder e = i +
+// LOCAL_PARAM_KNOB_OFFSET. Both the hook (which builds `focused.exports` for
+// the runtime) and the screens (which paint the "knob N" badge next to each
+// on-screen slider) MUST derive that order from HERE so the on-screen order is
+// provably identical to the physical knob order rather than two hand-filters
+// that can silently drift apart.
 //
 // A kind-1 export is knob-mapped iff it is a slider (`kind === 1`), NOT
 // CPC-matched (`cpcOwned` — the CPC would clobber any static write), and carries
@@ -38,18 +40,29 @@ export interface Export {
   cpcLabel?: string;
 }
 
+/** MFT UX v2 layout facts — the ONE home of the bank-1 local-param geometry.
+ *  Row 0 (encoders 0-3) is globals; rows 1-3 (encoders 4-15) are the 12
+ *  local-param knobs: physical encoder `e` drives `knobMapped[e - OFFSET]`. */
+export const LOCAL_PARAM_KNOB_COUNT = 12;
+/** Encoder index of the FIRST local-param knob (row 1, col 0). Screens show
+ *  physical knob numbers as `knobIndex + 1 + LOCAL_PARAM_KNOB_OFFSET`. */
+export const LOCAL_PARAM_KNOB_OFFSET = 4;
+
 /** Why a kind-1 export is NOT knob-mapped (so screens can label it distinctly).
  *  - `matched`: CPC-owned — the CPC clobbers any static write, so no knob drives it.
- *  - `no-v0`: missing a numeric v0 — excluded rather than fabricated (pickup math). */
-export type KnobExcludedReason = 'matched' | 'no-v0';
+ *  - `no-v0`: missing a numeric v0 — excluded rather than fabricated (pickup math).
+ *  - `overflow`: the pattern has more learnable sliders than the 12 physical
+ *    local-param knobs — this one simply ran out of hardware. */
+export type KnobExcludedReason = 'matched' | 'no-v0' | 'overflow';
 
 /** One kind-1 export in on-screen render order, annotated with the physical knob
  *  that drives it (or why it is excluded). */
 export interface KnobRow {
   export: Export;
   /** 0-BASED index into `knobMapped` — the runtime drives `knobMapped[knobIndex]`
-   *  from physical knob `knobIndex`. null when this row is excluded. Screens show
-   *  the PHYSICAL knob number as `knobIndex + 1` (1..16). */
+   *  from physical encoder `knobIndex + LOCAL_PARAM_KNOB_OFFSET`. null when this
+   *  row is excluded. Screens show the PHYSICAL knob number as
+   *  `knobIndex + 1 + LOCAL_PARAM_KNOB_OFFSET` (5..16, rows 1-3 of the grid). */
   knobIndex: number | null;
   /** Present iff `knobIndex === null`; why this row is not knob-mapped. */
   excludedReason?: KnobExcludedReason;
@@ -91,6 +104,13 @@ export function deriveKnobOrder(exports: readonly Export[] | undefined | null): 
     }
     if (!hasNumericV0(e)) {
       rows.push({ export: e, knobIndex: null, excludedReason: 'no-v0' });
+      continue;
+    }
+    // Only LOCAL_PARAM_KNOB_COUNT physical knobs exist (v2 layout: rows 1-3);
+    // learnable sliders beyond that are visible but knob-less (`overflow`),
+    // never silently wrapped onto a knob that doesn't exist.
+    if (knobMapped.length >= LOCAL_PARAM_KNOB_COUNT) {
+      rows.push({ export: e, knobIndex: null, excludedReason: 'overflow' });
       continue;
     }
     const knobIndex = knobMapped.length;

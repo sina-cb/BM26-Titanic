@@ -2,8 +2,7 @@
  * Unit tests for the GLOBAL color Invert (docs/39 §F-invert).
  *
  * The per-channel invert feature was REMOVED in the channels-optimization
- * campaign and replaced by this single GLOBAL toggle, modeled exactly on the
- * global hue shifter.
+ * campaign and replaced by this single GLOBAL toggle.
  *
  * Contract:
  *   - effects/invert.js applyInvert({pixels, enabled}) inverts the RGB triad
@@ -12,10 +11,12 @@
  *   - enabled=false is a no-op (gated zero-cost).
  *   - GlobalEffectsController.setInvert coerces via !!; applyInvert delegates
  *     to the effect and is gated (no-op when off); getStatus reflects it;
- *     panicStop leaves it alone (like global hue).
+ *     panicStop leaves it alone (like the group color-locks).
  *   - Serialize round-trip via globalsState.invert; a missing field defaults
  *     to false.
- *   - Pipeline order: global HUE then global INVERT.
+ *
+ * (The old "pipeline order: global HUE then global INVERT" test was removed
+ * with the global hue shifter — 2026-07, hue is per-channel only.)
  *
  * Run: node --test marsin_engine/tests/global_invert.test.js
  */
@@ -26,7 +27,6 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { applyInvert } from '../effects/invert.js';
-import { applyHueShift } from '../effects/hue_shift.js';
 import { GlobalEffectsController } from '../lib/global_effects_controller.js';
 import { StateManager } from '../lib/state_manager.js';
 
@@ -150,27 +150,6 @@ test('applyGlobalsState restores invert through the controller', () => {
   assert.equal(c.invert, true);
 });
 
-// ── Pipeline order: global HUE then global INVERT ────────────────────────
-
-test('pipeline order is global hue THEN global invert', () => {
-  // Replay the engine.js pipeline order on a saturated pixel: hue first,
-  // then invert. The result must equal hue-alone then a hand-flip of RGB.
-  const src = () => [px(1, 0, 0, 0.4, 0.5, 0.6)];
-
-  const composed = src();
-  applyHueShift({ pixels: composed, degrees: 120 });
-  applyInvert({ pixels: composed, enabled: true });
-
-  const hueOnly = src();
-  applyHueShift({ pixels: hueOnly, degrees: 120 });
-  const expected = {
-    r: 1 - hueOnly[0].r, g: 1 - hueOnly[0].g, b: 1 - hueOnly[0].b,
-  };
-  assert.ok(Math.abs(composed[0].r - expected.r) < 1e-9);
-  assert.ok(Math.abs(composed[0].g - expected.g) < 1e-9);
-  assert.ok(Math.abs(composed[0].b - expected.b) < 1e-9);
-  // W/A/U survive both ops untouched.
-  assert.equal(composed[0].w, 0.4);
-  assert.equal(composed[0].a, 0.5);
-  assert.equal(composed[0].u, 0.6);
-});
+// (The "pipeline order: global hue THEN global invert" test was removed
+// along with the global hue shifter — 2026-07, hue is per-channel only.
+// Invert is now the only global chroma stage before group color-locks.)

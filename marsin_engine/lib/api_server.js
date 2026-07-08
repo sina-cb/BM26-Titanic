@@ -23,6 +23,7 @@ import {
   createAutopilotProfile,
 } from './autopilot_profiles/profile_registry.js';
 import { StateManager, serializeChannel as serializeChannelForState } from './state_manager.js';
+import { sceneStateDir, resolvePlaylistsDir } from './state_paths.js';
 import { SnapshotManager, SnapshotLoadError } from './snapshot_manager.js';
 import { ParamPresetManager, ParamPresetError } from './param_preset_manager.js';
 import { PlaylistManager, PlaylistLoadError } from './playlist_manager.js';
@@ -237,7 +238,8 @@ export function validateFader(raw) {
 
 // ── Hue value validation (single source of truth) ──────────────────────
 // A hue is an angle in degrees. Every write path (per-channel PATCH, deck
-// PATCH, POST /global-effect-hue) routes through this. Codex P0 (no silent
+// PATCH, timeline cue hue) routes through this. Hue is PER-CHANNEL ONLY —
+// the global hue shifter was removed 2026-07. Codex P0 (no silent
 // fallback): a NON-FINITE value (NaN / Infinity, or a non-number /
 // unparseable string) is REJECTED with 400 — we never coerce a broken
 // payload to 0. A finite value (any magnitude, including negatives like
@@ -285,49 +287,18 @@ export function validateFollowScale(raw) {
   return { ok: true, value: Math.max(0, Math.min(2, n)) };
 }
 
-// ── Per-pattern param SHARING — pure propagation core ─────────────────────
-// (operator request, feat/optimize_channels)
-//
-// Given the SOURCE channel a control was just written on, mirror that SAME
-// exported slider/param onto every OTHER live channel running the SAME pattern
-// from the SAME playlist (deck base, mixer overlays, deck overlays). Extracted
-// as a pure, dependency-injected function (no engine closure) so it is unit-
-// testable in isolation; the api_server factory's `propagatePatternParam`
-// wrapper supplies `mixer`/`wasmHost`/`paramRouter`.
-//
-// Keying is strict (mixer.channelsRunningPattern): playlist.name === L AND
-// channel.pattern === P. Mapping is by export NAME (per-handle controlIds are
-// not guaranteed identical across compiles): resolve the source export's name,
-// then find the same-named export on each target and write THROUGH
-// paramRouter.setChannelControl — which already rejects CPC-owned / CPC-blocked
-// / non-local controls per target, so only the pattern's LOCAL sliders/params
-// ever propagate (never fader/level/hue/mode — those are not pattern exports
-// and never reach here). Returns the array of channel ids that actually
-// received the value (status 'ok'); the source is never included.
-export function propagatePatternParamWith({ source, sourceChannelId, controlId, v0, v1, v2, mixer, wasmHost, paramRouter }) {
-  if (!source || !source.playlist || !source.playlist.name || !source.pattern) {
-    // No (playlist, pattern) context on the source — nothing to share by.
-    return [];
-  }
-  const playlistName = source.playlist.name;
-  const patternName = source.pattern;
-
-  const sourceExports = wasmHost.getExports(source.handle) || [];
-  const sourceExp = sourceExports.find(e => e.id === controlId);
-  if (!sourceExp) return [];
-  const exportName = sourceExp.name;
-
-  const targets = mixer.channelsRunningPattern(playlistName, patternName, { excludeId: sourceChannelId });
-  const applied = [];
-  for (const target of targets) {
-    const targetExports = wasmHost.getExports(target.handle) || [];
-    const targetExp = targetExports.find(e => e.name === exportName);
-    if (!targetExp) continue; // pattern recompiled without this export — skip, never crash
-    const result = paramRouter.setChannelControl(target.id, targetExp.id, v0, v1, v2);
-    if (result && result.status === 'ok') applied.push(target.id);
-  }
-  return applied;
-}
+// ── Per-pattern param sharing: REMOVED (operator ruling, 2026-07-07) ──────
+// The old "param SHARING" core (`propagatePatternParamWith`, from
+// feat/optimize_channels) mirrored a param write on one channel onto every
+// other live channel running the same (playlist, pattern). Sina's mixer
+// channel-isolation ruling reverses that: parameters are CHANNEL-LOCAL —
+// with the same playlist loaded on two channels, changing a parameter on one
+// channel must NEVER affect the pattern on the other. Each channel's live
+// values live only in its own WASM handle + `channel.localControls`;
+// cross-channel state travels exclusively through EXPLICIT playlist-entry
+// defaults captures (POST /deck/playlist/capture,
+// POST /mixer/channels/:id/playlist/capture) that a later load replays.
+// Regression guard: tests/channel_param_isolation.test.js.
 
 // ── Auto-cycle DELAY validation (docs/39 §auto-cycle, round-2 #2) ──────
 // The interval (seconds) between automatic playlist advances on a mixer
@@ -561,6 +532,46 @@ function buildDeckFallback(saved, failedPattern, reason, defaultPattern, build) 
 }
 
 /**
+ * Boot `--pattern` pin vs restored deck autopilot (operator-intent ruling
+ * 2026-07-07 — full-stack smoke report 20260707_2, anomaly 2).
+ *
+ * An explicit CLI `--pattern` is OPERATOR INTENT: the deck must keep
+ * rendering that pattern until an operator says otherwise. But the deck
+ * pattern autopilot persists its active flag twice — the daemon's
+ * config.yaml `playlist.active` and the per-scene deck_state.yaml
+ * `playlist.autopilot.active` mirror — and a restored-active autopilot used
+ * to resume at boot and cycle the pinned pattern away within one delay
+ * window (10 s in the smoke run).
+ *
+ * Ruling (codex: explicit operator intent beats automation): when the boot
+ * carried a CLI pattern AND either restored flag says the autopilot would
+ * resume, the deck pattern autopilot boots SUSPENDED until an operator
+ * re-enables it (CaptainPad deck ▶ / POST /autopilot {"active":true} / a
+ * timeline cue). The suspension is runtime-only — the on-disk config is
+ * rewritten only by the operator's next explicit toggle. NOTE: `--pattern`
+ * is a required flag and a scene-switch restart re-execs with the same
+ * argv, so EVERY engine boot is a pinned boot — deck cycling always starts
+ * from an explicit operator (or timeline) action, never from restored
+ * automation. Mixer-overlay and deck-overlay auto-cycling are untouched;
+ * only the deck daemon that would replace the pinned pattern is held.
+ *
+ * Pure decision seam (unit-testable without booting the engine). Returns
+ * `{ suspend, reason }` — `suspend` is true only when there is BOTH a CLI
+ * pattern to honour and a restored-active autopilot to suspend.
+ */
+export function bootPatternPinDecision({ cliPattern, daemonActive, deckMirrorActive }) {
+  const pinned = typeof cliPattern === 'string' && cliPattern.length > 0;
+  const wouldResume = !!daemonActive || !!deckMirrorActive;
+  if (!pinned || !wouldResume) return { suspend: false, reason: null };
+  return {
+    suspend: true,
+    reason: daemonActive
+      ? 'restored deck autopilot is ACTIVE'
+      : 'restored deck state mirrors autopilot ACTIVE',
+  };
+}
+
+/**
  * Enumerate every non-internal IPv4 URL the engine is reachable on,
  * for the boot-time "Reachable on:" block.
  *
@@ -619,6 +630,12 @@ function reachableUrls(port) {
 export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, intensityController, globalEffectsController) {
   const { mixer, wasmHost, paramRouter, paramCenter, model } = engineCore;
   const localControlKinds = new Set([1, 2, 3, 6]);
+  // The operator's explicit boot `--pattern`, captured BEFORE the state
+  // restore below mutates opts.pattern to whatever deck actually restored.
+  // Feeds bootPatternPinDecision (deck autopilot boots suspended on a pinned
+  // boot — see that helper's ruling doc).
+  const bootCliPattern = (typeof opts.pattern === 'string' && opts.pattern.length > 0)
+    ? opts.pattern : null;
 
   /**
    * Distinct fixture-group names declared by the loaded model, sorted
@@ -815,7 +832,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     engineCore.signalPostProcessorBroadcastRef.publish = broadcastWs;
   }
 
-  const stateDir = path.join(patternsDir, '..', 'states', opts.modelName || 'default');
+  // Resolved through lib/state_paths.js so MARSIN_STATE_DIR can redirect a
+  // test-spawned engine's state writes away from the tracked states/ tree.
+  const stateDir = sceneStateDir(path.join(patternsDir, '..'), opts.modelName || 'default');
   const stateManager = new StateManager(stateDir);
   // Named mixer snapshots / look recall (F-A). Lives in <stateDir>/snapshots
   // and reuses the StateManager's atomic writer for torn-write safety.
@@ -826,10 +845,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // pattern-scoped (see param_preset_manager.js + docs/39).
   const paramPresetManager = new ParamPresetManager(stateDir, stateManager);
 
-  // Playlist library lives in simulation/scenes/<scene>/playlists/
-  const playlistsDir = path.join(
-    patternsDir, '..', '..', 'simulation', 'scenes',
-    opts.modelName || 'default', 'playlists'
+  // Playlist library lives in simulation/scenes/<scene>/playlists/ —
+  // resolved through lib/state_paths.js so MARSIN_PLAYLISTS_DIR can redirect
+  // a test-spawned engine's playlist writes away from the tracked tree.
+  const playlistsDir = resolvePlaylistsDir(
+    path.join(patternsDir, '..'), opts.modelName || 'default',
   );
   const playlistManager = new PlaylistManager(playlistsDir, patternsDir);
 
@@ -1273,17 +1293,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return exp;
   }
 
-  // ── Debounced per-channel auto-capture ───────────────────────────────
-  // Every control change schedules a capture of the active playlist entry's
-  // defaults 500 ms after the LAST change. Coalesces fast slider drags into
-  // one disk write and one WS broadcast. The broadcast lets every open client
-  // (deck + mixer) update its UI in lockstep.
-  const captureTimers = new Map();
-  const CAPTURE_DEBOUNCE_MS = 500;
+  // ── Playlist-entry defaults: EXPLICIT capture only ────────────────────
+  // The old debounced per-channel AUTO-capture (every control change wrote
+  // the live values into the active playlist entry's `defaults` on disk
+  // 500 ms after the last tweak) is REMOVED — operator ruling 2026-07-07
+  // (mixer channel parameter isolation): playlist files are shared presets;
+  // live tweaking must NEVER silently rewrite them, and one channel's tweaks
+  // must never leak into a sibling channel via the shared on-disk entry.
+  // Entry defaults now change ONLY through the explicit capture routes
+  // (POST /deck/playlist/capture, POST /mixer/channels/:id/playlist/capture)
+  // below, which call captureActiveEntryDefaults directly. Reads are
+  // untouched: loads still replay entry defaults, and the MIDI knob-press
+  // reset still targets them.
 
   /**
    * Capture current channel state as the entry.defaults of the playlist's
-   * currently active entry. Persists to disk.
+   * currently active entry. Persists to disk. EXPLICIT operator action only —
+   * never wired to a control-write path.
    */
   function captureActiveEntryDefaults(channel) {
     if (!channel.playlist || !channel.playlist.name || !channel.playlist.activeEntryId) {
@@ -1296,40 +1322,6 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     entry.defaults = playlistManager.captureDefaults(channel, wasmHost, paramCenter);
     playlistManager.save(playlist);
     return entry.defaults;
-  }
-
-  function scheduleEntryCapture(channelId) {
-    if (!channelId) return;
-    // Locked channels intentionally do NOT auto-capture. Param edits are
-    // still applied to the live WASM handle (so the operator can tweak a
-    // show), but the playlist defaults on disk stay frozen until the user
-    // unlocks and explicitly chooses save or discard.
-    const ch0 = mixer.getChannel(channelId);
-    if (ch0 && ch0.locked) return;
-    const existing = captureTimers.get(channelId);
-    if (existing) clearTimeout(existing);
-    captureTimers.set(channelId, setTimeout(() => {
-      captureTimers.delete(channelId);
-      const ch = mixer.getChannel(channelId);
-      if (!ch || !ch.playlist || !ch.playlist.activeEntryId) return;
-      // Defensive re-check: lock may have been engaged inside the debounce
-      // window. Never let a stale timer write into a locked channel.
-      if (ch.locked) return;
-      try {
-        const defaults = captureActiveEntryDefaults(ch);
-        broadcastWs({
-          type: 'playlistEntryCaptured',
-          channelId,
-          playlist: ch.playlist.name,
-          entryId: ch.playlist.activeEntryId,
-          defaults,
-        });
-      } catch (e) {
-        // Active entry may have been removed mid-edit, etc. Surface to the
-        // operator log but never crash the request handler.
-        console.warn('[Playlist] Auto-capture skipped:', e.message);
-      }
-    }, CAPTURE_DEBOUNCE_MS));
   }
 
   /**
@@ -1366,64 +1358,6 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   }
 
   /**
-   * Per-pattern param SHARING (operator request, feat/optimize_channels).
-   *
-   * A pattern's exported SLIDERS/params are conceptually owned by the
-   * (playlist, pattern) pair, NOT by the one channel the operator happened
-   * to touch. So when a control is written on the SOURCE channel, mirror that
-   * SAME export onto every OTHER live channel currently running the SAME
-   * pattern from the SAME playlist — the deck base channel, every mixer
-   * overlay, AND every deck overlay.
-   *
-   * Keying: matched on (channel.playlist.name === L) AND (channel.pattern === P)
-   * via mixer.channelsRunningPattern. The on-disk source of truth is each
-   * matched channel's playlist-entry `defaults` (captured by
-   * scheduleEntryCapture below), so the shared value ALSO lands on disk and is
-   * re-applied when any channel later (re)loads that (playlist, pattern).
-   *
-   * Mapping is by export NAME, not by raw controlId: each channel has its own
-   * WASM handle, so we resolve the source export's name, then find the
-   * same-named export on each target and write THROUGH paramRouter
-   * (setChannelControl), which already rejects CPC-owned / CPC-blocked /
-   * non-local controls per target. This guarantees we only ever propagate the
-   * pattern's LOCAL sliders/params — never channel-level things (fader, level,
-   * hue, mode, faderMax) which are not pattern exports and never reach here.
-   *
-   * Returns the array of channel ids that actually received the value (so the
-   * caller can schedule their entry-capture too). The source channel is never
-   * in the result — the caller already wrote + captured it.
-   */
-  function propagatePatternParam(sourceChannelId, controlId, v0, v1, v2) {
-    const source = mixer.getChannel(sourceChannelId)
-      || (mixer.getDeckOverlay && mixer.getDeckOverlay(sourceChannelId));
-    return propagatePatternParamWith({
-      source,
-      sourceChannelId,
-      controlId,
-      v0, v1, v2,
-      mixer,
-      wasmHost,
-      paramRouter,
-    });
-  }
-
-  /**
-   * Convenience wrapper used by the runtime control-write routes: write the
-   * control on the source channel's OWN capture+dirty pipeline, then propagate
-   * the same export to every sibling channel running the same (playlist,
-   * pattern), scheduling their capture too. The source channel's own write +
-   * scheduleEntryCapture is done by the caller BEFORE this is invoked.
-   */
-  function propagateAndCapturePatternParam(sourceChannelId, controlId, v0, v1, v2) {
-    const applied = propagatePatternParam(sourceChannelId, controlId, v0, v1, v2);
-    for (const id of applied) {
-      scheduleEntryCapture(id);
-      markChannelDirtyIfLocked(id);
-    }
-    return applied;
-  }
-
-  /**
    * Load a playlist entry into an EXISTING channel: compile pattern, swap
    * handle, apply entry defaults, and let CPC have the last word. Updates
    * channel.playlist.activeEntryId + cursor.
@@ -1435,13 +1369,6 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (idx < 0) throw new Error(`Entry not found in ${playlistName}: ${entryId}`);
     const entry = playlist.entries[idx];
     if (entry._missing) throw new Error(`Pattern missing for entry ${entryId}: ${entry.pattern}`);
-
-    // Cancel any pending auto-capture targeting the PREVIOUS active entry —
-    // we don't want a stale timer to write old values into the entry we just
-    // left behind (which would then overwrite the on-disk defaults captured
-    // at switch time).
-    const pending = captureTimers.get(channel.id);
-    if (pending) { clearTimeout(pending); captureTimers.delete(channel.id); }
 
     const src = loadPattern(patternsDir, entry.pattern);
     const comp = wasmHost.compile(src);
@@ -1744,11 +1671,6 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (idx < 0) throw new Error(`Entry not found in ${playlistName}: ${entryId}`);
     const entry = playlist.entries[idx];
     if (entry._missing) throw new Error(`Pattern missing for entry ${entryId}: ${entry.pattern}`);
-
-    // Pre-cancel any pending auto-capture targeting the PREVIOUS entry,
-    // same reasoning as in loadPlaylistEntry.
-    const pending = captureTimers.get(channel.id);
-    if (pending) { clearTimeout(pending); captureTimers.delete(channel.id); }
 
     // ── Ping-pong handle reuse ──────────────────────────────────────
     // The mixer keeps the previously-active deck handle alive in an
@@ -2089,11 +2011,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (saved.playlist) ch.playlist = saved.playlist;
     onChannelCompiled(ch);
 
-    // Per docs/19_playlists.md §9.3 the playlist entry's `defaults` is the
-    // canonical per-slot state. If a playlist+entry survived in saved
-    // state, re-apply those defaults; otherwise just replay localControls.
-    // tryLoad (not load) so a corrupt active playlist degrades to the
-    // localControls fallback instead of aborting the channel restore.
+    // Restore order: playlist entry `defaults` first (the shared baseline an
+    // explicit capture saved), then the channel's OWN saved localControls on
+    // top (its live values at the last state save — see the isolation note
+    // at the replay below). tryLoad (not load) so a corrupt active playlist
+    // degrades to the localControls-only replay instead of aborting the
+    // channel restore.
     const pl = ch.playlist && ch.playlist.name && playlistManager.tryLoad(ch.playlist.name);
     const entry = pl && ch.playlist.activeEntryId &&
       pl.entries.find(e => e.id === ch.playlist.activeEntryId);
@@ -2114,7 +2037,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     if (entry && !entry._missing) {
       playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
-    } else if (saved.localControls) {
+    }
+    // CHANNEL-LOCAL params survive a restart (operator ruling 2026-07-07 —
+    // parameter isolation): the channel's own saved localControls (its live
+    // values at the last state save) replay ON TOP of the shared playlist
+    // entry defaults. Before this ruling the entry defaults were "canonical"
+    // and localControls were ignored when an entry existed — that only held
+    // together because every tweak was auto-captured INTO the entry. With
+    // implicit capture gone, the entry defaults are a shared baseline and
+    // each channel's own values must win, or a restart would collapse two
+    // channels on the same playlist entry back to identical params.
+    if (saved.localControls) {
       for (const [idStr, cv] of Object.entries(saved.localControls)) {
         const controlId = parseInt(idStr, 10);
         if (!getReplayableLocalExport(ch, controlId)) continue;
@@ -3998,25 +3931,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // transition the deck the moment it fires (operator: "use the settings
         // for the cue to do transition of ... color").
         setColorAutopilot: (wire) => timelineSetColorAutopilot(wire),
-        // Global HUE SHIFT (docs/39 §F-hue): a deck playlist cue's `hue` routes
-        // through the SAME internal path as POST /global-effect-hue (and the
-        // CaptainPad hue slider, which sends setGlobalHue(deg, 0)). rot/spin is
-        // fixed 0. FAIL LOUD if the controller is missing (codex P0 — never
-        // silently drop an authored hue).
-        setGlobalHue: (degrees) => {
-          if (!globalEffectsController) throw new Error('global effects controller not initialized');
+        // DECK-CHANNEL HUE (docs/39 §F-hue, per-channel only since 2026-07):
+        // a deck playlist cue's `hue` sets the DECK CHANNEL's per-channel hue
+        // through the SAME internal path as PATCH /deck/channel { hue } (the
+        // CaptainPad deck hue slider). The old GLOBAL post-mixer hue shifter
+        // was removed by operator decision — there is no hidden rig-wide hue.
+        // FAIL LOUD if the deck channel is missing (codex P0 — never silently
+        // drop an authored hue).
+        setDeckHue: (degrees) => {
+          const channel = mixer.getDeckChannel();
+          if (!channel) throw new Error('no deck channel to apply a cue hue to');
           const hv = validateHue(degrees);
           if (!hv.ok) throw new Error(hv.error);
-          // setHueShift re-validates + normalizes (degrees [0,360), rot 0) and
-          // throws on non-finite — defence in depth, mirroring the POST route.
-          globalEffectsController.setHueShift(hv.value, 0);
-          globalsState.hueShift = { ...globalEffectsController.hueShift };
-          // Persist through saveGlobalsState (NOT saveAllState, which only
-          // writes mixer/deck state) so the authored hue survives a reboot, and
-          // broadcast mixer state alongside the hue message — mirroring POST
-          // /global-effect-hue exactly.
-          stateManager.saveGlobalsState(globalsState, paramCenter);
-          broadcastWs({ type: 'globalHueShift', hueShift: { ...globalEffectsController.hueShift } });
+          channel.hue = hv.value;
+          // Persist + broadcast exactly like PATCH /deck/channel: the deck hue
+          // lives in deck_state.yaml (saveAllState) and rides the mixer-state
+          // broadcast every channel serializer already carries `hue` on.
+          saveAllState();
           broadcastMixerState();
         },
         forceDeckView: () => timelineForceDeckView(),
@@ -4407,15 +4338,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
            res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
         }
         paramRouter.setControl(data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
-        // Legacy /control targets the deck base channel; auto-capture into
-        // its active playlist entry so the deck's playlist stays in sync.
-        scheduleEntryCapture(mixer.baseChannelId);
+        // Legacy /control targets the deck base channel. CHANNEL-LOCAL write:
+        // no playlist auto-capture, no cross-channel mirroring (operator
+        // ruling 2026-07-07 — parameter isolation).
         markChannelDirtyIfLocked(mixer.baseChannelId);
-        // Per-pattern param SHARING: mirror onto siblings on the same
-        // (playlist, pattern).
-        if (mixer.baseChannelId) {
-          propagateAndCapturePatternParam(mixer.baseChannelId, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
-        }
         saveAllState();
         broadcastMixerState();
         broadcastDeckState();
@@ -4610,50 +4536,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', blackout: data.enabled }));
       });
-    // POST /global-effect-hue (docs/39 §F-hue) — the GLOBAL hue shifter.
-    // A first-class continuous knob (like blackout), NOT a GEM slot.
-    // Rotates the RGB hue of the WHOLE post-mixer buffer (W/A/UV
-    // untouched); stacks additively with any per-channel hue.
-    //   Body: { degrees, autoRotateDegPerSec? }
-    //     - degrees             required, finite ⇒ normalized [0,360),
-    //                           else 400 (Codex P0, no silent fallback).
-    //     - autoRotateDegPerSec optional (default 0), finite + clamped
-    //                           [-360,360]; else 400.
-    // Persists globalsState.hueShift so the next boot honours it, and
-    // broadcasts { type: 'globalHueShift', hueShift } + mixer state.
-    } else if (req.method === 'POST' && req.url === '/global-effect-hue') {
-      readBody(data => {
-        if (!globalEffectsController) {
-          res.writeHead(503); return res.end(JSON.stringify({ error: 'global effects controller not initialized' }));
-        }
-        const hv = validateHue(data.degrees);
-        if (!hv.ok) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ error: hv.error.replace(/^hue/, 'degrees') }));
-        }
-        let rot = 0;
-        if (data.autoRotateDegPerSec !== undefined) {
-          if (typeof data.autoRotateDegPerSec !== 'number' || !Number.isFinite(data.autoRotateDegPerSec)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: `autoRotateDegPerSec must be a finite number, got '${data.autoRotateDegPerSec}'` }));
-          }
-          rot = Math.max(-360, Math.min(360, data.autoRotateDegPerSec));
-        }
-        // setHueShift re-validates + normalizes (degrees [0,360), rot
-        // clamped) and throws on non-finite — defence in depth.
-        globalEffectsController.setHueShift(hv.value, rot);
-        globalsState.hueShift = { ...globalEffectsController.hueShift };
-        stateManager.saveGlobalsState(globalsState, paramCenter);
-        broadcastWs({ type: 'globalHueShift', hueShift: { ...globalEffectsController.hueShift } });
-        broadcastMixerState();
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', hueShift: { ...globalEffectsController.hueShift } }));
-      });
+    // POST /global-effect-hue — REMOVED (2026-07, operator decision: "only
+    // the channel hue shifts, no global hidden one"). Hue is PER-CHANNEL
+    // ONLY: PATCH /mixer/channels/:id { hue } or PATCH /deck/channel
+    // { hue }. This route answers 410 Gone — NEVER a no-op success (codex
+    // P0: a stale client must fail loudly, not think it tinted the rig).
+    } else if (req.url === '/global-effect-hue') {
+      res.writeHead(410, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'the GLOBAL hue shifter was removed — hue is per-channel only. ' +
+          'Use PATCH /deck/channel { hue } or PATCH /mixer/channels/:id { hue }.',
+        code: 'GLOBAL_HUE_REMOVED',
+      }));
     // POST /global-effect-invert (docs/39 §F-invert) — the GLOBAL color
     // invert. A first-class boolean toggle (like blackout), NOT a GEM slot.
     // Inverts the RGB of the WHOLE post-mixer buffer (1 - v; W/A/UV
-    // untouched) in the pipeline AFTER the global hue rotation. Mirrors the
-    // global-hue route's shape.
+    // untouched).
     //   Body: { enabled }
     //     - enabled  coerced via !! (pure boolean toggle — no fail-loud
     //                contract, matching the legacy effect toggles).
@@ -5742,7 +5640,6 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (!getReplayableLocalExport(channel, controlId)) continue;
         paramRouter.setChannelControl(channel.id, controlId, cv.v0, cv.v1, cv.v2);
       }
-      scheduleEntryCapture(channel.id);
       markChannelDirtyIfLocked(channel.id);
       saveAllState();
       broadcastWs({ type: 'paramPresets', action: 'recalled', name, channelId: channel.id, paramPresets: paramPresetManager.listParamPresets() });
@@ -6283,15 +6180,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
         }
         if (data.locked !== undefined) {
-          const becameLocked = !channel.locked && !!data.locked;
           channel.locked = !!data.locked;
-          // Lock just engaged — cancel any pending auto-capture so a timer
-          // that armed pre-lock can't fire after lock and silently overwrite
-          // the saved defaults the user is now trying to preserve.
-          if (becameLocked) {
-            const pending = captureTimers.get(channel.id);
-            if (pending) { clearTimeout(pending); captureTimers.delete(channel.id); }
-          }
           // Either direction: the dirty flag tracks edits made while locked.
           // Toggling the lock is a clean transition — any "dirty since last
           // resolve" state is no longer relevant after the user changes the
@@ -6415,13 +6304,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.id === undefined) {
            res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
         }
+        // CHANNEL-LOCAL write: lands only on THIS channel's WASM handle +
+        // localControls. No playlist auto-capture, no cross-channel mirroring
+        // (operator ruling 2026-07-07 — parameter isolation).
         paramRouter.setChannelControl(id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
-        scheduleEntryCapture(id);
         markChannelDirtyIfLocked(id);
-        // Per-pattern param SHARING: mirror this export onto every other live
-        // channel running the same (playlist, pattern) — deck base, mixer
-        // overlays, deck overlays.
-        propagateAndCapturePatternParam(id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         saveAllState();
         broadcastMixerState();
         broadcastDeckState();
@@ -7714,12 +7601,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           channel.followsTempo = !!data.followsTempo;
         }
         if (data.locked !== undefined) {
-          const becameLocked = !channel.locked && !!data.locked;
           channel.locked = !!data.locked;
-          if (becameLocked) {
-            const pending = captureTimers.get(channel.id);
-            if (pending) { clearTimeout(pending); captureTimers.delete(channel.id); }
-          }
           clearChannelDirty(channel);
         }
         if (data.viewSelection !== undefined) {
@@ -7750,12 +7632,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.id === undefined) {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
         }
+        // CHANNEL-LOCAL write: deck tweaks stay on the deck channel. No
+        // playlist auto-capture, no cross-channel mirroring (operator ruling
+        // 2026-07-07 — parameter isolation). Explicit save-defaults lives at
+        // POST /deck/playlist/capture.
         paramRouter.setChannelControl(channel.id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
-        scheduleEntryCapture(channel.id);
         markChannelDirtyIfLocked(channel.id);
-        // Per-pattern param SHARING: mirror onto siblings on the same
-        // (playlist, pattern) — mixer overlays + deck overlays.
-        propagateAndCapturePatternParam(channel.id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         saveAllState();
         broadcastMixerState();
         broadcastDeckState();
@@ -8253,12 +8135,6 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
         finalizeCpcValues(ch);
 
-        // Cancel any pending capture for this channel — discard is an
-        // explicit "throw away in-memory edits" action; we shouldn't let a
-        // stale timer fire after we revert.
-        const pending = captureTimers.get(id);
-        if (pending) { clearTimeout(pending); captureTimers.delete(id); }
-
         clearChannelDirty(ch);
         saveAllState();
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok', defaults: entry.defaults || {} }));
@@ -8362,6 +8238,34 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       console.error('Server error:', e);
     }
   });
+  // BOOT PATTERN PIN (operator-intent ruling — see bootPatternPinDecision's
+  // doc block): an explicit CLI `--pattern` holds the deck, so a restored-
+  // ACTIVE deck pattern autopilot boots SUSPENDED instead of cycling the
+  // pinned pattern away within one delay window. Must run BEFORE
+  // armAutopilotProfile below — arming reschedules the daemon, and a
+  // restored-active daemon would arm its first cycle timer right there.
+  {
+    const pin = bootPatternPinDecision({
+      cliPattern: bootCliPattern,
+      daemonActive: autopilot.state.active,
+      deckMirrorActive: deckAutopilotState().active,
+    });
+    if (pin.suspend) {
+      // Runtime-only daemon pause (no config.yaml write — operator state on
+      // disk is only rewritten by the operator's next explicit toggle).
+      autopilot.suspend();
+      // Clear the deck channel's persisted mirror too, so CaptainPad / the
+      // WS autopilot payload show the truth (SUSPENDED), not a stale ON.
+      const pinDeckCh = mixer.getDeckChannel();
+      if (pinDeckCh && pinDeckCh.playlist && pinDeckCh.playlist.autopilot) {
+        pinDeckCh.playlist.autopilot.active = false;
+      }
+      console.log(
+        `  ▶ Boot --pattern '${bootCliPattern}' pins the deck (${pin.reason}): ` +
+        `deck pattern autopilot boots SUSPENDED — explicit operator intent beats restored ` +
+        `automation. Re-enable via CaptainPad deck ▶ or POST /autopilot {"active":true}.`);
+    }
+  }
   // Arm the deck autopilot PROFILE from the restored per-scene state BEFORE the
   // daemon starts — armAutopilotProfile injects the timing profile the daemon's
   // first _scheduleNext will consult (timer vs event-driven). The name was
@@ -8492,22 +8396,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       try {
         const d = JSON.parse(msg);
         if (d.type === 'setControl' && d.id !== undefined) {
+          // CHANNEL-LOCAL write (deck base): no playlist auto-capture, no
+          // cross-channel mirroring (operator ruling 2026-07-07 — parameter
+          // isolation).
           paramRouter.setControl(d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
-          scheduleEntryCapture(mixer.baseChannelId);
           markChannelDirtyIfLocked(mixer.baseChannelId);
-          // Per-pattern param SHARING (see propagatePatternParam).
-          if (mixer.baseChannelId) {
-            propagateAndCapturePatternParam(mixer.baseChannelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
-          }
           saveAllState();
           broadcastMixerState();
           broadcastDeckState();
         } else if (d.type === 'setChannelControl' && d.channelId && d.id !== undefined) {
+          // CHANNEL-LOCAL write: the CaptainPad localParam path carries a
+          // channelId — the value lands ONLY on that channel's WASM handle +
+          // localControls. No playlist auto-capture, no cross-channel
+          // mirroring (operator ruling 2026-07-07 — parameter isolation).
           paramRouter.setChannelControl(d.channelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
-          scheduleEntryCapture(d.channelId);
           markChannelDirtyIfLocked(d.channelId);
-          // Per-pattern param SHARING (see propagatePatternParam).
-          propagateAndCapturePatternParam(d.channelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
           saveAllState();
           broadcastMixerState();
           broadcastDeckState();

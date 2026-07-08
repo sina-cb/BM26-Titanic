@@ -31,11 +31,16 @@ export type ResolvedAction =
   | { kind: 'sectionBrightness'; sectionId: number; value: number }
   | { kind: 'groupFixedColor'; group: string; color: number[]; brightness: number }
   | { kind: 'mixerLayerFader'; layer: number; value: number }
-  | { kind: 'globalEffectSlot'; slot: number }
+  // A global-effect slot pad. `phase` distinguishes press from release so a
+  // future HOLD slot can dispatch 'down' on press and 'up' on release; today
+  // resolveEvent only ever produces 'press' (Note Off is swallowed, so no
+  // release reaches here — see the hold TODO in dispatch.ts). Toggle/trigger
+  // slots act on press only, so the field is irrelevant to them.
+  | { kind: 'globalEffectSlot'; slot: number; phase?: 'press' | 'release' }
   | { kind: 'playlistScroll'; layer: number; dir: 'up' | 'down' }
   | { kind: 'playlistWindowSelect'; layer: number; slot: number }
   | { kind: 'colorPalettePair'; palette: number }
-  // Select which layer the learnable param faders (4-6) target. Handled in the
+  // Select which layer the learnable param faders (4-8) target. Handled in the
   // controller runtime (UI/controller state, not an engine call).
   | { kind: 'focusChannel'; layer: number }
   // ── Driver #2 — MIDI Fighter Twister (relative-encoder) resolved actions ──
@@ -50,6 +55,25 @@ export type ResolvedAction =
   | { kind: 'focusedParamReset'; index: number }
   // Side-button focus move (prev/next/deck). Runtime-handled (controller state).
   | { kind: 'focusStep'; dir: 'prev' | 'next' | 'deck' }
+  // ── MFT UX v2 — row-0 global knobs ──
+  // Encoder push → toggle the engine's BPM→Speed sync (CPC `bpmSpeedSync`).
+  // Dispatched (the dispatcher reads the current state from context).
+  | { kind: 'bpmSyncToggle' }
+  // Relative hue-knob turn: `delta` is a signed fraction of one full ring
+  // (0..1 ↔ 0..360°). Runtime-handled — it accumulates onto the FOCUSED
+  // CHANNEL's per-channel hue (deck tab = the DECK CHANNEL, auto-focused;
+  // mixer tab = the focused overlay). Hue is PER-CHANNEL ONLY — the global
+  // hue shifter was removed 2026-07 (operator decision).
+  | { kind: 'hueDelta'; delta: number }
+  // Encoder push → reset the FOCUSED CHANNEL's hue to 0°. Runtime-handled.
+  // Per-channel hue has no auto-rotate concept — nothing to preserve.
+  | { kind: 'hueReset' }
+  // A concrete PER-CHANNEL hue write, BUILT BY THE RUNTIME from the
+  // accumulated delta / reset against the FOCUSED channel (never produced by
+  // resolveEvent). Lands on the channel PATCH `hue` field (engine F-hue,
+  // docs/39): pre-blend RGB rotation on that layer only. No autoRotate field
+  // exists per-channel, so none is threaded (never invent one).
+  | { kind: 'channelHue'; role: 'deck' | 'mixer'; channelId: string; degrees: number }
   // A MIDI-learned local-param write. NOT produced by resolveEvent (which is
   // profile-driven) — the runtime builds it from the focused entry's stored
   // bindings + live exports, then routes it through the same coalescer +
@@ -212,6 +236,25 @@ export function resolveEvent(
         if (ev.type === 'cc' && ev.value === 0) return null; // side-button release
         return { controlId: control.id, continuous: false,
           resolved: { kind: 'focusStep', dir: a.dir } };
+      case 'bpmSyncToggle':
+        // Encoder push (CC-hold). Discrete; fire on press (value > 0).
+        if (ev.type === 'cc' && ev.value === 0) return null; // release — ignore
+        return { controlId: control.id, continuous: false,
+          resolved: { kind: 'bpmSyncToggle' } };
+      case 'hueKnob': {
+        // Relative endless-encoder turn on the FOCUSED CHANNEL's hue. Same
+        // delta-code semantics as focusedParamKnob: an unknown value resolves
+        // to null.
+        if (ev.type !== 'cc') return null;
+        const delta = decodeRelativeDelta(ev.value);
+        if (delta === null) return null;
+        return { controlId: control.id, continuous: true,
+          resolved: { kind: 'hueDelta', delta: relativeStep(delta, a.steps) } };
+      }
+      case 'hueReset':
+        if (ev.type === 'cc' && ev.value === 0) return null; // release — ignore
+        return { controlId: control.id, continuous: false,
+          resolved: { kind: 'hueReset' } };
       case 'globalEffectSlot':
         return { controlId: control.id, continuous: false,
           resolved: { kind: 'globalEffectSlot', slot: a.slot } };

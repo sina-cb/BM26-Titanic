@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { validateProfile } from './profile';
-import { projectLeds, MidiProjectionState, LedState } from './led_projector';
+import { projectLeds, hueDegreesToMftWheel, MidiProjectionState, LedState } from './led_projector';
 import { UnknownContextError } from './resolver';
 import * as mftMessages from './mft/messages';
 import * as midiMessage from './midi_message';
@@ -231,48 +231,76 @@ describe('projectLeds — MFT rings (driver #2, best-effort)', () => {
     expect(messages).toContainEqual([0xb2, 0, 0]); // AnimationValues.NONE
   });
 
-  // ── Task 4b: a speed paramCenterRelative ring STROBES when BPM-sync is on ──
+  // ── MFT UX v2: encoder number comes from the MATCH CC, not the action index ──
+  it('an OFFSET local knob (cc 4 → export 0) paints encoder 4, not encoder 0', () => {
+    const offset = validateProfile({
+      device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+      controls: [
+        { id: 'k4', match: { type: 'cc', channel: 0, cc: 4, relative: true }, action: { kind: 'focusedParamKnob', index: 0 } },
+      ],
+    });
+    const s = state({ getFocusedExportValue: (i) => (i === 0 ? 1.0 : null), getFocusedIdentityColor: () => 1 });
+    const { messages } = projectLeds(offset, s, {});
+    expect(messages).toContainEqual([0xb0, 4, 127]); // ring on ENCODER 4
+    expect(messages).toContainEqual([0xb1, 4, 1]);   // colour on ENCODER 4
+    expect(messages.find((m) => m[0] === 0xb0 && m[1] === 0)).toBeUndefined(); // nothing on encoder 0
+  });
+
+  // ── MFT UX v2: sync cue is a SOLID colour (green), replacing the old strobe ──
   const mftGlobal = validateProfile({
     device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
     controls: [
-      { id: 'g_speed', match: { type: 'cc', channel: 0, cc: 16, relative: true }, action: { kind: 'paramCenterRelative', key: 'speed' } },
+      { id: 'g_speed', match: { type: 'cc', channel: 0, cc: 0, relative: true }, action: { kind: 'paramCenterRelative', key: 'speed' }, led: { on: 50, off: 80 } },
     ],
   });
 
-  it('STROBES the speed ring (RGB_TOGGLE_1_BEAT, ch2) when syncOwnedKeys owns speed (#4/I4)', () => {
+  it('speed knob turns SOLID GREEN (led.on) when syncOwnedKeys owns speed — no strobe (#4/I4 + v2)', () => {
     const s = state({
       getGlobalParamValue: (k) => (k === 'speed' ? 0.5 : null),
       syncOwnedKeys: new Set(['speed']),
     });
     const { messages } = projectLeds(mftGlobal, s, {});
-    // Ring value CC 16 on ch0, then a strobe animation on ch2. RGB_TOGGLE_1_BEAT = 4.
-    expect(messages).toContainEqual([0xb0, 16, 64]); // ring at 0.5
-    expect(messages).toContainEqual([0xb2, 16, 4]); // strobe
+    expect(messages).toContainEqual([0xb0, 0, 64]); // ring at 0.5
+    expect(messages).toContainEqual([0xb1, 0, 50]); // SOLID GREEN
+    expect(messages).toContainEqual([0xb2, 0, 0]);  // animation pinned to NONE (strobe replaced)
+    expect(messages).not.toContainEqual([0xb2, 0, 4]); // the old strobe must be gone
   });
 
-  it('speed ring is steady (NONE) when syncOwnedKeys is empty (#4/I4)', () => {
+  it('speed knob rests RED (led.off) when sync is not engaged', () => {
     const s = state({
       getGlobalParamValue: (k) => (k === 'speed' ? 0.5 : null),
       syncOwnedKeys: new Set<string>(),
     });
     const { messages } = projectLeds(mftGlobal, s, {});
-    expect(messages).toContainEqual([0xb2, 16, 0]); // NONE
+    expect(messages).toContainEqual([0xb1, 0, 80]); // rest RED
+    expect(messages).toContainEqual([0xb2, 0, 0]);
   });
 
   it('reads syncOwnedKeys by the ACTUAL key — not a hardcoded speed literal (#4/I4)', () => {
     // A profile whose relative knob drives `size`; if the projector still keyed
-    // strobe on the 'speed' literal this would never strobe. It must strobe when
-    // `size` is in syncOwnedKeys and stay steady when it is not.
+    // the cue on the 'speed' literal this would never go green. It must show
+    // led.on when `size` is owned and led.off when it is not.
     const mftSize = validateProfile({
       device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
       controls: [
-        { id: 'g_size', match: { type: 'cc', channel: 0, cc: 17, relative: true }, action: { kind: 'paramCenterRelative', key: 'size' } },
+        { id: 'g_size', match: { type: 'cc', channel: 0, cc: 17, relative: true }, action: { kind: 'paramCenterRelative', key: 'size' }, led: { on: 50, off: 80 } },
       ],
     });
     const owned = projectLeds(mftSize, state({ getGlobalParamValue: (k) => (k === 'size' ? 0.5 : null), syncOwnedKeys: new Set(['size']) }), {});
-    expect(owned.messages).toContainEqual([0xb2, 17, 4]); // strobe — size is owned
+    expect(owned.messages).toContainEqual([0xb1, 17, 50]); // green — size is owned
     const free = projectLeds(mftSize, state({ getGlobalParamValue: (k) => (k === 'size' ? 0.5 : null), syncOwnedKeys: new Set(['speed']) }), {});
-    expect(free.messages).toContainEqual([0xb2, 17, 0]); // NONE — only speed owned, not size
+    expect(free.messages).toContainEqual([0xb1, 17, 80]); // rest — only speed owned, not size
+  });
+
+  it('a paramCenterRelative WITHOUT an led spec emits no colour (configured inactive colour shows)', () => {
+    const bare = validateProfile({
+      device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+      controls: [
+        { id: 'g_speed', match: { type: 'cc', channel: 0, cc: 0, relative: true }, action: { kind: 'paramCenterRelative', key: 'speed' } },
+      ],
+    });
+    const { messages } = projectLeds(bare, state({ getGlobalParamValue: () => 0.5, syncOwnedKeys: new Set(['speed']) }), {});
+    expect(messages.find((m) => m[0] === 0xb1)).toBeUndefined(); // no colour writes
   });
 
   // ── The APC LED path stays byte-identical (no animation/ring bytes leak in) ──
@@ -289,6 +317,72 @@ describe('projectLeds — MFT rings (driver #2, best-effort)', () => {
     const { messages } = projectLeds(profile, s, {});
     // Only the APC note messages (status 0x90); no CC (0xb0/0xb1/0xb2) anywhere.
     for (const m of messages) expect(m[0] & 0xf0).toBe(0x90);
+  });
+});
+
+// ── MFT UX v2: the hue knob's ring + colour track the GLOBAL hue ─────────────
+describe('hueDegreesToMftWheel (anchor points)', () => {
+  it('hits the known colour-wheel anchors exactly', () => {
+    expect(hueDegreesToMftWheel(0)).toBe(80);    // red
+    expect(hueDegreesToMftWheel(60)).toBe(64);   // yellow
+    expect(hueDegreesToMftWheel(120)).toBe(50);  // green
+    expect(hueDegreesToMftWheel(240)).toBe(1);   // blue
+    expect(hueDegreesToMftWheel(300)).toBe(100); // pink (wrapped past 125/126)
+    expect(hueDegreesToMftWheel(360)).toBe(80);  // full circle → red again
+  });
+
+  it('interpolates smoothly and stays within the device colour range [1, 126]', () => {
+    expect(hueDegreesToMftWheel(30)).toBe(72);   // midway red→yellow
+    expect(hueDegreesToMftWheel(180)).toBe(26);  // midway green→blue (cyan-ish)
+    for (let d = 0; d < 360; d += 5) {
+      const v = hueDegreesToMftWheel(d);
+      expect(v).toBeGreaterThanOrEqual(1);
+      expect(v).toBeLessThanOrEqual(126);
+    }
+  });
+
+  it('normalises out-of-range degrees (wrap, negative)', () => {
+    expect(hueDegreesToMftWheel(720)).toBe(80);
+    expect(hueDegreesToMftWheel(-60)).toBe(hueDegreesToMftWheel(300));
+  });
+});
+
+describe('projectLeds — MFT UX v2 hue knob', () => {
+  const hueProfile = validateProfile({
+    device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+    controls: [
+      { id: 'g_hue', match: { type: 'cc', channel: 0, cc: 1, relative: true }, action: { kind: 'globalHueKnob' }, led: { off: 80 } },
+    ],
+  });
+
+  it('ring = degrees/360, colour tracks the hue wheel, animation NONE', () => {
+    const { messages } = projectLeds(hueProfile, state({ getHueKnobDegrees: () => 120 }), {});
+    expect(messages).toContainEqual([0xb0, 1, Math.round((120 / 360) * 127)]); // ring third
+    expect(messages).toContainEqual([0xb1, 1, 50]); // 120° = green
+    expect(messages).toContainEqual([0xb2, 1, 0]);  // steady
+  });
+
+  it('at 0° the knob shows RED with an empty ring', () => {
+    const { messages } = projectLeds(hueProfile, state({ getHueKnobDegrees: () => 0 }), {});
+    expect(messages).toContainEqual([0xb0, 1, 0]);
+    expect(messages).toContainEqual([0xb1, 1, 80]);
+  });
+
+  it('colour FOLLOWS a hue change (diff emits the new wheel value)', () => {
+    const first = projectLeds(hueProfile, state({ getHueKnobDegrees: () => 0 }), {});
+    const second = projectLeds(hueProfile, state({ getHueKnobDegrees: () => 240 }), first.next);
+    expect(second.messages).toContainEqual([0xb1, 1, 1]); // now blue
+  });
+
+  it('hue state not loaded (null) → ring 0 + rest colour (led.off)', () => {
+    const { messages } = projectLeds(hueProfile, state({ getHueKnobDegrees: () => null }), {});
+    expect(messages).toContainEqual([0xb0, 1, 0]);
+    expect(messages).toContainEqual([0xb1, 1, 80]); // rest red, never a fabricated hue
+  });
+
+  it('is inert on a projection state without the hue getter (APC-only path)', () => {
+    const { messages } = projectLeds(hueProfile, state(), {});
+    expect(messages).toHaveLength(0);
   });
 });
 

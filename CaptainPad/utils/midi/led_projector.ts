@@ -62,9 +62,15 @@ export interface MidiProjectionState {
    *  for a `focusedParamKnob` ring, or null when no param sits behind that knob
    *  (ring dark). Optional so APC-only projection needs no new state. */
   getFocusedExportValue?(index: number): number | null;
-  /** Current value (0..1) of a CPC global param by key (bank-2 rings), or null
-   *  when the key is unknown (ring dark). */
+  /** Current value (0..1) of a CPC global param by key (relative-knob rings),
+   *  or null when the key is unknown (ring dark). */
   getGlobalParamValue?(key: string): number | null;
+  /** Current hue in degrees [0, 360) for the hue knob's ring + colour. The
+   *  caller routes it by context (manager.projectAndSend): the GLOBAL hue on
+   *  the deck tab, the FOCUSED CHANNEL's per-channel hue on the mixer tab.
+   *  null while the state hasn't loaded / nothing is focused (ring 0, rest
+   *  colour — never a fabricated hue). */
+  getHueKnobDegrees?(): number | null;
   /** Identity colour (an MFT colour-wheel value) of the focused channel, for the
    *  knob rings — deck vs overlay 1/2/3. Optional; omitted → no colour write. */
   getFocusedIdentityColor?(): number | null;
@@ -129,6 +135,41 @@ export function hueToApcVelocity(h: number): number {
     if (d < bestD) { bestD = d; best = entry; }
   }
   return best[1];
+}
+
+// ── MFT UX v2: hue degrees → MFT colour-wheel value ─────────────────────────
+// The knob's RGB must TRACK the global hue starting from red: piecewise-linear
+// interpolation through the known colour-wheel anchors
+//   0° → RED 80 · 60° → YELLOW 64 · 120° → GREEN 50 · 240° → BLUE 1
+//   300° → PINK 100 · 360° → RED 80
+// The wheel value DESCENDS as hue degrees rise and wraps past 125/126 between
+// blue (1) and pink (100): the anchors below are authored in an UNWRAPPED
+// descending space (pink = 1 − 27 = −26, red-again = 80 − 126 = −46, one full
+// circle = exactly −126) and the result wraps back into the device's [1, 126]
+// colour range — never 0 (inactive) or 127 (active).
+const HUE_WHEEL_ANCHORS: ReadonlyArray<readonly [number, number]> = [
+  [0, ColorValues.RED],      // 80
+  [60, ColorValues.YELLOW],  // 64
+  [120, ColorValues.GREEN],  // 50
+  [240, ColorValues.BLUE],   // 1
+  [300, ColorValues.PINK - 126], // 100, unwrapped past the 1 → 126 seam
+  [360, ColorValues.RED - 126],  // 80 again, one full wheel below
+];
+
+/** Map a global-hue rotation (degrees, any real) onto the MFT colour wheel
+ *  value 1..126. Pure; unit-tested at the anchor points. */
+export function hueDegreesToMftWheel(degrees: number): number {
+  const d = ((degrees % 360) + 360) % 360;
+  for (let i = 1; i < HUE_WHEEL_ANCHORS.length; i += 1) {
+    const [d0, v0] = HUE_WHEEL_ANCHORS[i - 1];
+    const [d1, v1] = HUE_WHEEL_ANCHORS[i];
+    if (d <= d1) {
+      const raw = Math.round(v0 + ((v1 - v0) * (d - d0)) / (d1 - d0));
+      return ((((raw - 1) % 126) + 126) % 126) + 1; // wrap into [1, 126]
+    }
+  }
+  // Unreachable: d < 360 always lands in a segment. Fail loud, never guess.
+  throw new Error(`hueDegreesToMftWheel: degrees ${degrees} matched no segment`);
 }
 
 /** The pad notes a match occupies, with each pad's index. */
@@ -268,39 +309,62 @@ function* ringTargets(
   state: MidiProjectionState,
 ): Generator<LedTarget> {
   const a = control.action;
+  // Every MFT relative-knob control pins its encoder number on the match's CC
+  // (encoder N → CC N on the rotary channel). Reading the encoder off the MATCH
+  // — never off the action index — is what lets the v2 layout offset the local
+  // params (encoder e drives focused.exports[e-4]).
+  const enc = control.match.type === 'cc' ? control.match.cc : null;
   if (a.kind === 'focusedParamKnob') {
-    if (!state.getFocusedExportValue) return;
+    if (!state.getFocusedExportValue || enc === null) return;
     const v = state.getFocusedExportValue(a.index);
     const ring = v === null ? 0 : Math.round(clampUnit(v) * 127);
-    yield ringTarget(a.index, ring);
+    yield ringTarget(enc, ring);
     if (v !== null && state.getFocusedIdentityColor) {
       const color = state.getFocusedIdentityColor();
-      if (color !== null) yield colorTarget(a.index, color);
+      if (color !== null) yield colorTarget(enc, color);
     } else {
-      // No param behind the knob — dark it (inactive colour).
-      yield colorTarget(a.index, ColorValues.INACTIVE);
+      // No param behind the knob — colour code 0 shows the encoder's CONFIGURED
+      // inactive colour (dim blue per the connect config), the "unmapped" look.
+      yield colorTarget(enc, ColorValues.INACTIVE);
     }
     // Ring PULSE when the param is audio-MODULATED (the ring breathes at 1 beat
     // so the operator sees the modulator is driving it); NONE otherwise. A knob
     // with no param behind it (v === null) never pulses.
     const modulated = v !== null && !!state.getFocusedExportModulated?.(a.index);
-    yield animationTarget(a.index, modulated ? AnimationValues.RGB_PULSE_1_BEAT : AnimationValues.NONE);
+    yield animationTarget(enc, modulated ? AnimationValues.RGB_PULSE_1_BEAT : AnimationValues.NONE);
     return;
   }
   if (a.kind === 'paramCenterRelative') {
-    if (!state.getGlobalParamValue) return;
-    // The ring index for a bank-2 knob is the encoder number the profile pins on
-    // the relative match's CC (encoder N → CC N on ch0). Read it off the match.
-    const enc = control.match.type === 'cc' ? control.match.cc : null;
-    if (enc === null) return;
+    if (!state.getGlobalParamValue || enc === null) return;
     const v = state.getGlobalParamValue(a.key);
     yield ringTarget(enc, v === null ? 0 : Math.round(clampUnit(v) * 127));
-    // STROBE the ring when the engine owns this key (the shared syncOwnedKeys
-    // fact — contract I4); a steady (NONE) ring otherwise. ANY sync-owned key
-    // carries the cue, and the display reads the SAME set the dispatch gate uses
-    // so the two can never drift (was a `'speed'` literal + isBpmSpeedSyncOn).
-    const strobe = state.syncOwnedKeys.has(a.key);
-    yield animationTarget(enc, strobe ? AnimationValues.RGB_TOGGLE_1_BEAT : AnimationValues.NONE);
+    // Colour cue (MFT UX v2): while the engine owns this key (the shared
+    // syncOwnedKeys fact — contract I4) the knob turns SOLID `led.on` (green
+    // for the speed knob); otherwise its rest colour `led.off` (red). This
+    // REPLACES the old strobe-animation cue — the animation is pinned to NONE
+    // so a stale strobe from a previous projection is actively cleared. A
+    // control without an led spec emits no colour (its configured inactive
+    // colour shows — the dim-blue unmapped look).
+    const led = control.led;
+    if (led && (led.on !== undefined || led.off !== undefined)) {
+      const owned = state.syncOwnedKeys.has(a.key);
+      yield colorTarget(enc, owned ? (led.on ?? ColorValues.INACTIVE) : (led.off ?? ColorValues.INACTIVE));
+    }
+    yield animationTarget(enc, AnimationValues.NONE);
+    return;
+  }
+  if (a.kind === 'hueKnob') {
+    if (!state.getHueKnobDegrees || enc === null) return;
+    const deg = state.getHueKnobDegrees();
+    // Ring = degrees/360 of the full ring; colour TRACKS the hue itself
+    // (starting from red at 0°). The DEGREES are the FOCUSED CHANNEL's hue
+    // (deck tab = the deck channel, mixer tab = the focused overlay — hue is
+    // per-channel only). While the channel's hue hasn't loaded / nothing is
+    // focused (null), ring 0 + the rest colour (`led.off`, red) — never a
+    // fabricated hue.
+    yield ringTarget(enc, deg === null ? 0 : Math.round((((deg % 360) + 360) % 360) / 360 * 127));
+    yield colorTarget(enc, deg === null ? (control.led?.off ?? ColorValues.INACTIVE) : hueDegreesToMftWheel(deg));
+    yield animationTarget(enc, AnimationValues.NONE);
   }
 }
 

@@ -85,14 +85,13 @@ const TOPIC_BY_TYPE = Object.freeze({
   mixerTransitionRejected:     TOPICS.CONTROL,
   globalEffectSlots:           TOPICS.CONTROL,
   globalEffectMacroStatus:     TOPICS.CONTROL,
-  // docs/39 §F-hue: GLOBAL hue shifter knob. Broadcast on every
-  // POST /global-effect-hue so CaptainPad mirrors the global hue + auto-
-  // rotate. Operator-driven, low volume → /ws/control next to the GEM
-  // macro/blackout messages it semantically relates to.
-  globalHueShift:              TOPICS.CONTROL,
+  // NOTE: `globalHueShift` was REMOVED (2026-07) — the global hue shifter
+  // is gone; hue is per-channel only and rides the mixer/deck state
+  // broadcasts like every other channel field.
   // docs/39 §F-invert: GLOBAL color-invert toggle. Broadcast on every POST
   // /global-effect-invert so CaptainPad mirrors the global invert state.
-  // Same topic as globalHueShift (operator-driven, low volume → /ws/control).
+  // Operator-driven, low volume → /ws/control next to the GEM macro/
+  // blackout messages it semantically relates to.
   globalInvert:                TOPICS.CONTROL,
   // docs/32: per-group fixed-color override table. Broadcast on every
   // PUT/DELETE so all connected CaptainPads mirror the Dimmer Rack's

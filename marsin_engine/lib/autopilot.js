@@ -111,6 +111,23 @@ export class Autopilot {
   }
 
   /**
+   * Runtime-only pause — used by the boot `--pattern` pin (operator-intent
+   * ruling, see api_server's bootPatternPinDecision). Sets the in-memory
+   * active flag false WITHOUT persisting to config.yaml: the on-disk value
+   * is operator state, and only an explicit operator toggle
+   * (updateState({active}), which saves) may rewrite it. Bumps the
+   * generation so any in-flight tick bails, then reschedules — which, with
+   * active now false, clears the timer and broadcasts the inactive state
+   * via onSchedule.
+   */
+  suspend() {
+    if (!this.config.playlist) this.config.playlist = {};
+    this.config.playlist.active = false;
+    this.generation++;
+    this._scheduleNext();
+  }
+
+  /**
    * Swap the active timing profile. Bumps the generation (so any in-flight
    * tick bails) and reschedules under the new profile's timing. The profile's
    * attach/detach lifecycle (subscriptions, CPC globals) is owned by the HOST

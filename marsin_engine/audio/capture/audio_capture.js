@@ -39,6 +39,15 @@ const _now = () => ((typeof performance !== 'undefined' && performance.now) ? pe
 const RESTART_BACKOFF_INITIAL_MS = 1000;
 const RESTART_BACKOFF_CAP_MS = 30_000;
 const STDERR_WARN_INTERVAL_MS = 60_000;
+// Give-up ceiling (incident 2026-07-08): a capture config that can NEVER
+// work (e.g. a bogus `capture.device` restored from a polluted
+// audio_state.yaml → ffmpeg "Malformed dshow input string") used to spin
+// the restart loop forever with no terminal signal anyone could act on.
+// After this many CONSECUTIVE failures without a single delivered frame,
+// the capture stops restarting and emits one loud, final
+// `errorCode: 'capture_failed_repeatedly'` status naming the cause — the
+// engine disables audio and keeps rendering (never dies over a mic).
+const MAX_CONSECUTIVE_FAILURES = 5;
 
 // ── Cross-platform helpers (see docs/25 §3 "Cross-platform capture rule") ──
 //
@@ -284,6 +293,15 @@ export class AudioCapture {
     this._lastFrameAtMs = null;
     this._errorCode = null;
 
+    // Give-up plumbing (see MAX_CONSECUTIVE_FAILURES above). Both knobs are
+    // constructor-injectable so the regression test can run the loop in
+    // milliseconds instead of the production seconds.
+    this._maxConsecutiveFailures = opts.maxConsecutiveFailures ?? MAX_CONSECUTIVE_FAILURES;
+    this._backoffInitialMs = opts.restartBackoffInitialMs ?? RESTART_BACKOFF_INITIAL_MS;
+    this._consecutiveFailures = 0;
+    this._gaveUp = false;
+    this._lastStderrText = null;
+
     // Each emitted frame is frameSamples * channels * 2 bytes (s16le).
     this._frameBytes = this.frameSamples * this.channels * 2;
     this._pending = []; // queued Buffer fragments awaiting reframing
@@ -292,7 +310,7 @@ export class AudioCapture {
     this._child = null;
     this._stopRequested = false;
     this._restartTimer = null;
-    this._backoffMs = RESTART_BACKOFF_INITIAL_MS;
+    this._backoffMs = this._backoffInitialMs;
 
     // captureFps tracking — incremented per onFrame call, sampled
     // once per second for the audioStatus broadcast.
@@ -318,6 +336,10 @@ export class AudioCapture {
 
   start() {
     if (this._child || this._stopRequested) return;
+    // A fresh start() is an explicit new attempt — clear any previous
+    // give-up so an operator-initiated restart gets a full failure budget.
+    this._gaveUp = false;
+    this._consecutiveFailures = 0;
     this._spawnChild();
     this._fpsTimer = setInterval(() => {
       this._captureFps = this._framesSinceLastTick;
@@ -383,12 +405,15 @@ export class AudioCapture {
       // ENOENT etc — ffmpeg not on PATH.
       this._errorCode = 'ffmpeg_missing';
       this._emitStatus({ phase: 'error', error: `spawn failed: ${err.message}` });
-      this._scheduleRestart();
+      this._scheduleRestart(`spawn failed: ${err.message}`);
       return;
     }
     this._child = child;
     this._pending = [];
     this._pendingBytes = 0;
+    // Per-spawn stderr snapshot — the give-up status reports THIS attempt's
+    // failure cause (e.g. "Malformed dshow input string"), never a stale one.
+    this._lastStderrText = null;
 
     child.stdout.on('data', (buf) => this._onStdout(buf));
     child.stderr.on('data', (buf) => this._onStderr(buf));
@@ -408,11 +433,13 @@ export class AudioCapture {
         return;
       }
       this._errorCode = 'capture_exited';
-      this._emitStatus({
-        phase: 'exited',
-        error: `ffmpeg exited (code=${code}, signal=${signal ?? 'none'})`,
-      });
-      this._scheduleRestart();
+      // Attach the last ffmpeg stderr snippet so the exit reason (e.g.
+      // "Malformed dshow input string") travels with the status instead of
+      // dying in a throttled console line.
+      const cause = `ffmpeg exited (code=${code}, signal=${signal ?? 'none'})`
+        + (this._lastStderrText ? ` — ${this._lastStderrText}` : '');
+      this._emitStatus({ phase: 'exited', error: cause });
+      this._scheduleRestart(cause);
     });
 
     // First successful frame moves us into the 'running' state and
@@ -420,8 +447,17 @@ export class AudioCapture {
     this._signaledRunning = false;
   }
 
-  _scheduleRestart() {
-    if (this._stopRequested) return;
+  _scheduleRestart(cause) {
+    if (this._stopRequested || this._gaveUp) return;
+    // Consecutive-failure budget: reset only by a successfully delivered
+    // frame (see _onStdout). When exhausted, stop restarting and surface
+    // ONE terminal error status — a capture config that can never work
+    // must not spin ffmpeg forever (incident 2026-07-08).
+    this._consecutiveFailures++;
+    if (this._consecutiveFailures >= this._maxConsecutiveFailures) {
+      this._giveUp(cause || 'ffmpeg failed repeatedly');
+      return;
+    }
     this._restartCount++;
     this._emitStatus({ phase: 'restarting', backoffMs: this._backoffMs });
     this._restartTimer = setTimeout(() => {
@@ -430,6 +466,32 @@ export class AudioCapture {
     }, this._backoffMs);
     if (this._restartTimer.unref) this._restartTimer.unref();
     this._backoffMs = Math.min(this._backoffMs * 2, RESTART_BACKOFF_CAP_MS);
+  }
+
+  /**
+   * Terminal failure path: stop all timers, never restart again, and emit
+   * one final `phase: 'error'` status with `enabled: false` and
+   * `errorCode: 'capture_failed_repeatedly'` naming the cause. The engine's
+   * onStatus handler reacts by disabling audio (and keeps rendering) — the
+   * process must NEVER die over a broken mic.
+   */
+  _giveUp(cause) {
+    this._gaveUp = true;
+    if (this._restartTimer) { clearTimeout(this._restartTimer); this._restartTimer = null; }
+    if (this._fpsTimer)     { clearInterval(this._fpsTimer);    this._fpsTimer = null; }
+    if (this._jbTimer)      { clearInterval(this._jbTimer);     this._jbTimer = null; }
+    this._errorCode = 'capture_failed_repeatedly';
+    console.error(
+      `[AudioCapture] ffmpeg failed ${this._consecutiveFailures}× in a row on device ` +
+      `"${this.device}" — giving up (no more restarts). Last failure: ${cause}`,
+    );
+    this._emitStatus({
+      phase: 'error',
+      enabled: false,
+      error: cause,
+      errorCode: 'capture_failed_repeatedly',
+      consecutiveFailures: this._consecutiveFailures,
+    });
   }
 
   _onStdout(buf) {
@@ -452,7 +514,8 @@ export class AudioCapture {
 
       if (!this._signaledRunning) {
         this._signaledRunning = true;
-        this._backoffMs = RESTART_BACKOFF_INITIAL_MS;
+        this._backoffMs = this._backoffInitialMs;
+        this._consecutiveFailures = 0; // real audio flowed — full budget back
         this._errorCode = null;
         this._emitStatus({ phase: 'running' });
       }
@@ -495,10 +558,14 @@ export class AudioCapture {
   }
 
   _onStderr(buf) {
+    const txt = buf.toString('utf8').trim().split('\n').slice(0, 3).join(' | ');
+    // Always retain the latest snippet (throttle applies only to the console
+    // warn) — the exit handler folds it into the failure cause so a give-up
+    // status names the real ffmpeg error, not just an exit code.
+    if (txt.length) this._lastStderrText = txt;
     const now = Date.now();
     if (now - this._lastStderrWarnAt < this._stderrWarnIntervalMs) return;
     this._lastStderrWarnAt = now;
-    const txt = buf.toString('utf8').trim().split('\n').slice(0, 3).join(' | ');
     if (txt.length) console.warn(`[ffmpeg] ${txt}`);
   }
 

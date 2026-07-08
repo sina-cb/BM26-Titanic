@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { deriveKnobOrder, Export, KnobRow } from './knob_order';
+import { deriveKnobOrder, Export, KnobRow, LOCAL_PARAM_KNOB_COUNT, LOCAL_PARAM_KNOB_OFFSET } from './knob_order';
 
 // Terse builder for a kind-1 slider export with a numeric v0.
 function slider(id: number, name: string, v0 = 0.5): Export {
@@ -89,6 +89,36 @@ describe('deriveKnobOrder', () => {
       expect(knobMapped).toEqual([]);
       expect(rows).toEqual([]);
     }
+  });
+
+  it('v2 layout facts: 12 local knob slots, offset 4 past the row-0 globals', () => {
+    expect(LOCAL_PARAM_KNOB_COUNT).toBe(12);
+    expect(LOCAL_PARAM_KNOB_OFFSET).toBe(4);
+  });
+
+  it('caps knobMapped at the 12 physical slots; extra sliders are excluded as overflow', () => {
+    const exps: Export[] = Array.from({ length: 15 }, (_, i) => slider(i + 1, `p${i}`, 0.5));
+    const { knobMapped, rows } = deriveKnobOrder(exps);
+    expect(knobMapped).toHaveLength(12);
+    expect(rows).toHaveLength(15);
+    // The first 12 get contiguous knob indices 0..11.
+    expect(rows.slice(0, 12).map((r) => r.knobIndex)).toEqual([...Array(12).keys()]);
+    // Sliders 13-15 ran out of hardware: visible, knob-less, reason 'overflow'.
+    for (const r of rows.slice(12)) {
+      expect(r.knobIndex).toBeNull();
+      expect(r.excludedReason).toBe('overflow');
+    }
+  });
+
+  it('excluded rows never consume one of the 12 slots (matched before the cap)', () => {
+    const exps: Export[] = [
+      { ...slider(0, 'matched', 0.5), cpcOwned: true },
+      ...Array.from({ length: 12 }, (_, i) => slider(i + 1, `p${i}`, 0.5)),
+    ];
+    const { knobMapped, rows } = deriveKnobOrder(exps);
+    expect(knobMapped).toHaveLength(12); // all 12 learnables mapped — matched consumed no slot
+    expect(rows[0].excludedReason).toBe('matched');
+    expect(rows[12].knobIndex).toBe(11);
   });
 
   it('mixed realistic case: matched, learn, no-v0, matched, learn → knobs 0,1 only', () => {

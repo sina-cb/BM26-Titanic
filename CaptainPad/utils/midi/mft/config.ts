@@ -98,24 +98,20 @@ export function buildEncoderConfigFrames(
 }
 
 /**
- * Per-bank base colours for the connect config. Inactive is always blue; the
- * active colour identifies the bank: bank1 pink, bank2 yellow, bank3 red,
- * bank4 blue.
+ * Per-ENCODER rest colour for the connect config (MFT UX v2 layout, bank 1
+ * only; banks 2-4 are reserved):
+ *   - encoders 0-1 (row 0 globals: speed, hue) → RED at rest
+ *   - everything else → BLUE — the MFT's dim "inactive" look. That covers the
+ *     unassigned row-0 knobs (2, 3), the 12 local-param knobs at rest (4-15),
+ *     and ALL of banks 2-4 (16-63): per Sina, unmapped knobs sit dim blue
+ *     (the stock inactive state), never fully dark.
+ * The runtime LED projector overrides mapped knobs with explicit colour-wheel
+ * writes (sync green, hue tracking, focus identity); colour code 0 (INACTIVE)
+ * falls back to this configured inactive colour.
  */
-function bankColors(bank: number): { active: number; inactive: number } {
-  const inactive = ColorValues.BLUE;
-  switch (bank) {
-    case 0:
-      return { active: ColorValues.PINK, inactive };
-    case 1:
-      return { active: ColorValues.YELLOW, inactive };
-    case 2:
-      return { active: ColorValues.RED, inactive };
-    case 3:
-      return { active: ColorValues.BLUE, inactive };
-    default:
-      throw new RangeError(`Invalid bank ${bank}`);
-  }
+export function encoderRestColor(encoder: number): number {
+  if (encoder === 0 || encoder === 1) return ColorValues.RED;
+  return ColorValues.BLUE;
 }
 
 /**
@@ -148,15 +144,23 @@ export function buildGlobalConfigFrame(): number[] {
  *
  * Field set + addresses follow `Config.initialize_defaults`; the per-encoder
  * values encode this port's deviations (relative encoder type,
- * velocity-sensitive movement, switch CC-hold on the switch channel,
- * blended-bar indicator, detent off, per-bank base colours).
+ * velocity-sensitive movement — kept DELIBERATELY: its ±1/±2/±3 codes are
+ * relative COUNT offsets the host maps linearly, so at speed the firmware just
+ * packs multiple detents per message; the whole feel curve is host-side in
+ * accel.ts. MOVEMENTTYPE_DIRECT_HIGHRESOLUTION would change tick density per
+ * detent in ways unverifiable without hardware in hand — switch CC-hold on
+ * the switch channel, blended-bar indicator, detent off, per-encoder rest
+ * colours via encoderRestColor).
  */
 export function buildConnectConfig(): number[][] {
   const frames: number[][] = [];
   for (let bank = 0; bank < Encoders.DEVICE_BANK_NUM; bank += 1) {
-    const { active, inactive } = bankColors(bank);
     for (let bankKnob = 0; bankKnob < Encoders.DEVICE_KNOB_PER_BANK; bankKnob += 1) {
       const i = bankKnob + Encoders.DEVICE_KNOB_PER_BANK * bank;
+      // Rest colour per encoder (v2 layout). active == inactive so a held
+      // switch press doesn't flash a foreign colour — the runtime projector
+      // owns every meaningful colour change.
+      const rest = encoderRestColor(i);
       const settings: EncoderConfigSettings = {
         detent: SysExValues.FALSE,
         movement_type: EncoderSettings.MOVEMENTTYPE_VELOCITYSENSITIVE,
@@ -173,8 +177,8 @@ export function buildConnectConfig(): number[][] {
         encoder_midi_channel: 1, // 1-based → raw ch0 (rotary/turn channel)
         encoder_midi_number: i,
         encoder_midi_type: EncoderSettings.MIDITYPE_SENDRELENC, // RELATIVE
-        active_color: active,
-        inactive_color: inactive,
+        active_color: rest,
+        inactive_color: rest,
         detent_color: ColorValues.PINK,
         indicator_display_type: EncoderSettings.INDICATORTYPE_BLENDEDBAR,
         is_super_knob: SysExValues.FALSE,

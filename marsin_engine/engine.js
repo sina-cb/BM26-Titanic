@@ -56,6 +56,7 @@ import { deriveAutoViews } from './lib/auto_views.js';
 import { createBitFreeViewPromoter } from './lib/in_view_intrinsic.js';
 import { derivePixelLocalIndices } from './lib/pixel_local_index.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
+import { sceneStateDir, stateOverridesActive } from './lib/state_paths.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
 import { createOutputDispatch } from './lib/output_dispatch.js';
@@ -616,9 +617,9 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
   let lastStatsTime = 0;
   let lastVisTime = 0;
   // Pre-dimmer composite snapshot for the deck/mixer master preview: the
-  // composite AFTER global FX (hue / invert / group color-locks) but BEFORE
-  // the section dimmer rack + blackout. So the preview tracks the global hue
-  // and shows the effects while ignoring the hardware dimmer trim. Filled only
+  // composite AFTER global FX (invert / group color-locks) but BEFORE
+  // the section dimmer rack + blackout. So the preview shows the effects
+  // while ignoring the hardware dimmer trim. Filled only
   // on frames that broadcast vis (see the snapshot point in the render loop);
   // lazily sized to pixelCount*6.
   let preDimmerVisBuf = null;
@@ -819,20 +820,15 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
       });
     }
 
-    // Global Hue Shifter (docs/39 §F-hue): rotate the RGB hue of the
-    // whole post-mixer buffer (W/A/UV untouched). Runs AFTER the show
-    // macros but BEFORE group color-locks + intensity/blackout, so a
-    // locked group's color and the e-stop safety always have the final
-    // say. Zero-cost at the default (hue=0, no auto-rotate).
-    if (globalEffectsController && globalEffectsController.applyHueShift) {
-      globalEffectsController.applyHueShift(model.pixels, now);
-    }
+    // NOTE (2026-07, operator decision): the GLOBAL post-mixer hue shifter
+    // was REMOVED — hue is PER-CHANNEL ONLY now (PatternChannel.hue via
+    // applyHueShift6chU8 in pattern_mixer.js). No global hue stage runs here.
 
     // Global color Invert (docs/39 §F-invert): flip the RGB of the whole
-    // post-mixer buffer (W/A/UV untouched). Runs AFTER the global hue
-    // rotation (documented order: global hue THEN global invert) but BEFORE
-    // group color-locks + intensity/blackout, so a locked group's color and
-    // the e-stop safety always have the final say. Zero-cost when off.
+    // post-mixer buffer (W/A/UV untouched). Runs AFTER the show macros but
+    // BEFORE group color-locks + intensity/blackout, so a locked group's
+    // color and the e-stop safety always have the final say. Zero-cost when
+    // off.
     if (globalEffectsController && globalEffectsController.applyInvert) {
       globalEffectsController.applyInvert(model.pixels);
     }
@@ -952,8 +948,8 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
         }
         visPayload['rig'] = Buffer.from(subsampleVis(rigBuffer)).toString('base64');
         // Pre-dimmer composite (after global FX, before dimmers/blackout). The
-        // deck + mixer master preview use this key so they track the global hue
-        // + show the effects while ignoring the section dimmer rack. Encoded
+        // deck + mixer master preview use this key so they show the effects
+        // while ignoring the section dimmer rack. Encoded
         // immediately (subsampleVis returns a shared scratch buffer).
         if (preDimmerVisBuf) {
           visPayload['preDimmer'] = Buffer.from(subsampleVis(preDimmerVisBuf)).toString('base64');
@@ -1017,7 +1013,7 @@ async function main() {
   const audioFlags = parseEngineFlags(process.argv.slice(2));
   const _bootCfgForAudio = loadConfig();
   const _earlySceneDir = opts.modelName
-    ? path.join(__dirname, 'states', opts.modelName)
+    ? sceneStateDir(__dirname, opts.modelName)
     : null;
   const rawFfmpegPath = _bootCfgForAudio?.audio?.capture?.ffmpegPath || 'ffmpeg';
   const resolvedFfmpegPath = await resolveFfmpegPath(rawFfmpegPath);
@@ -1055,7 +1051,19 @@ async function main() {
   ╚══════════════════════════════════════════╝
 `);
 
-  if (!opts.dryRun) {
+  // Test/harness state redirect (lib/state_paths.js): announce loudly so a
+  // boot whose runtime state is NOT going to the tracked states/ tree is
+  // unmistakable in the log.
+  if (stateOverridesActive()) {
+    console.log(`  🧪 state redirect active — MARSIN_STATE_DIR=${process.env.MARSIN_STATE_DIR || '(unset)'} MARSIN_PLAYLISTS_DIR=${process.env.MARSIN_PLAYLISTS_DIR || '(unset)'}`);
+  }
+
+  // Only a boot that will actually BIND the API port may clear it. `--dry-run`
+  // never binds; `--list` prints and exits at its check below — but that check
+  // sits AFTER this block, so pre-2026-07-07 a plain `node engine.js --list`
+  // (the auto-checks spec's own command) killed a healthy live engine on
+  // :6968 before exiting. Never kill what we won't replace.
+  if (!opts.dryRun && !opts.list) {
     // Free OUR OWN port (the API server) of any stale engine before binding —
     // offline-safe and identity-checked (no `npx kill-port`, which needs the
     // network). We deliberately do NOT touch `web_client.port`: the engine does
@@ -1063,8 +1071,16 @@ async function main() {
     // 07_run_marsin_engine.md), and `web_client.port` is CaptainPad's port —
     // killing it on a scene-switch restart would take CaptainPad down. (The old
     // code read a non-existent `client.web.port`, so it was silently dead.)
+    //
+    // MUST be `opts.port` — the port THIS boot will actually bind (--port
+    // honored), NOT `engineConfig.server.port` from config.yaml. Pre-2026-07
+    // this pushed the config port (:6968) even when --port picked another
+    // port, so every test-spawned engine (tests/playlist_api.test.js spawns
+    // three on :69xx) killed the LIVE dev-stack engine on :6968 before
+    // binding its own unrelated port. Never kill what we won't replace.
+    // (Pinned by tests/engine_port_kill_scope.test.js.)
     const portsToKill = [];
-    if (engineConfig.server && engineConfig.server.port) portsToKill.push(engineConfig.server.port);
+    if (Number.isInteger(opts.port) && opts.port > 0) portsToKill.push(opts.port);
 
     if (portsToKill.length > 0) {
       freeStackPorts(portsToKill, { log: (m) => console.log(`  🧹 ${m}`) });
@@ -1334,7 +1350,7 @@ async function main() {
   // file is loaded. Broadcast is a deferred ref filled by api_server.
   const signalPostProcessorBroadcastRef = { publish: () => {} };
   const signalPostProcessor = new SignalPostProcessor({
-    scenePath: path.join(__dirname, 'states', opts.modelName),
+    scenePath: sceneStateDir(__dirname, opts.modelName),
     paramCenter,
     broadcast: (msg) => signalPostProcessorBroadcastRef.publish(msg),
   });
@@ -1655,9 +1671,9 @@ async function main() {
   // enabled flag. Trade-off: running the same scene on a different rig
   // means re-running `--choose_mic --model <scene>` once on that rig.
   // The win: a single source of truth, no hidden machine-local file.
-  const sceneStateDir  = path.join(__dirname, 'states', opts.modelName);
-  const sceneAudioOv   = loadSceneAudio(sceneStateDir);
-  audioState.sceneDir  = sceneStateDir;
+  const sceneStateDirPath = sceneStateDir(__dirname, opts.modelName);
+  const sceneAudioOv      = loadSceneAudio(sceneStateDirPath);
+  audioState.sceneDir     = sceneStateDirPath;
   // `defaults` is what the operator gets back when they hit "Reset to
   // defaults" in the Audio Analysis tab — the portable `config.yaml`
   // audio block, BEFORE any per-scene overrides. Stored once at boot
@@ -1889,6 +1905,25 @@ async function main() {
         onStatus: (s)   => {
           audioState.lastStatus = { ...s, error: s.error || null, lastKickMs: audioState.lastKickAt };
           broadcastStatsRef.publish({ type: 'audioStatus', ...audioState.lastStatus });
+          // Terminal capture give-up (repeated ffmpeg spawn/exit failures —
+          // e.g. a bogus `capture.device` restored from a polluted
+          // audio_state.yaml). Same posture as the boot-throw catch below:
+          // disable audio LOUDLY, broadcast the error, keep rendering. The
+          // engine must never die — silently or otherwise — over a mic.
+          if (s.errorCode === 'capture_failed_repeatedly') {
+            console.error(
+              `  ❌ audio capture PERMANENTLY disabled after repeated ffmpeg failures on ` +
+              `device "${s.device}": ${s.error}\n` +
+              `     Engine keeps rendering without audio. Fix the mic selection ` +
+              `(states/${opts.modelName}/audio_state.yaml capture.*) or re-run ` +
+              `\`node engine.js --choose_mic --model ${opts.modelName}\`.`,
+            );
+            // The capture already stopped its own timers and will not
+            // restart; drop the refs so /audio/status + the 1 Hz heartbeat
+            // report audio as OFF with the terminal error, not a zombie.
+            audioState.capture = null;
+            audioState.analyzer = null;
+          }
         },
       });
       audioState.capture.start();

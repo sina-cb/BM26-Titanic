@@ -3,6 +3,7 @@ import {
   buildEncoderConfigFrames,
   buildConnectConfig,
   buildGlobalConfigFrame,
+  encoderRestColor,
 } from './config';
 import { Encoders, EncoderSettings, ColorValues } from './constants';
 
@@ -153,31 +154,33 @@ describe('buildConnectConfig', () => {
     expect(frames[frames.length - 2][6]).toBe(64);
   });
 
-  it('applies per-bank base colours (bank1 pink, bank2 yellow, bank3 red, bank4 blue)', () => {
-    // Helper: active_color = addr 19 in an encoder's first frame.
-    const activeColorOf = (encoder: number): number => {
+  it('applies the v2 per-encoder rest colours (row-0 globals red; everything else dim blue)', () => {
+    const colorOf = (encoder: number, addr: 19 | 20): number => {
       const frame = frames[encoder * 2];
       const payload = frame.slice(10, frame.length - 1);
       for (let i = 0; i < payload.length; i += 2) {
-        if (payload[i] === 19) return payload[i + 1];
+        if (payload[i] === addr) return payload[i + 1];
       }
-      throw new Error('active_color not found');
+      throw new Error(`colour addr ${addr} not found`);
     };
-    expect(activeColorOf(0)).toBe(ColorValues.PINK); // bank 1
-    expect(activeColorOf(16)).toBe(ColorValues.YELLOW); // bank 2
-    expect(activeColorOf(32)).toBe(ColorValues.RED); // bank 3
-    expect(activeColorOf(48)).toBe(ColorValues.BLUE); // bank 4
-    // inactive is always blue (addr 20).
-    const inactiveColorOf = (encoder: number): number => {
-      const frame = frames[encoder * 2];
-      const payload = frame.slice(10, frame.length - 1);
-      for (let i = 0; i < payload.length; i += 2) {
-        if (payload[i] === 20) return payload[i + 1];
-      }
-      throw new Error('inactive_color not found');
-    };
-    expect(inactiveColorOf(0)).toBe(ColorValues.BLUE);
-    expect(inactiveColorOf(48)).toBe(ColorValues.BLUE);
+    // Row-0 globals (speed, hue) rest RED — active == inactive, so a held
+    // press never flashes a foreign colour.
+    for (const enc of [0, 1]) {
+      expect(colorOf(enc, 19)).toBe(ColorValues.RED);
+      expect(colorOf(enc, 20)).toBe(ColorValues.RED);
+    }
+    // Everything else — unassigned row-0 (2, 3), the 12 local knobs (4-15),
+    // and ALL of banks 2-4 (16-63) — sits in the MFT's dim-blue inactive look.
+    for (const enc of [2, 3, 4, 15, 16, 32, 48, 63]) {
+      expect(colorOf(enc, 19)).toBe(ColorValues.BLUE);
+      expect(colorOf(enc, 20)).toBe(ColorValues.BLUE);
+    }
+  });
+
+  it('encoderRestColor is the ONE mapping (red for 0-1, blue otherwise)', () => {
+    expect(encoderRestColor(0)).toBe(ColorValues.RED);
+    expect(encoderRestColor(1)).toBe(ColorValues.RED);
+    for (const enc of [2, 3, 4, 15, 16, 63]) expect(encoderRestColor(enc)).toBe(ColorValues.BLUE);
   });
 });
 

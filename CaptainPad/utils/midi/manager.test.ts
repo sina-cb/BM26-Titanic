@@ -3,6 +3,20 @@ import { MidiManager, MidiEngineSnapshot, combineDelta } from './manager';
 import { MidiTransport, MidiEndpoint, MidiMessageEvent } from './transport';
 import { validateProfile } from './profile';
 import { MidiDispatchApi } from './dispatch';
+import { ACCEL_GAIN_MIN, TickAccelerator } from './accel';
+
+// FakeTransport emits every tick with the SAME timestamp (0) unless a test
+// passes one explicitly. Same-timestamp ticks keep the velocity estimate at
+// rest (zero-gap EMA step is a no-op), so every default-emitted tick gets the
+// deterministic PRECISION gain: effective delta = raw step × ACCEL_GAIN_MIN.
+const MIN_GAIN_STEP = 0.01 * ACCEL_GAIN_MIN; // one +1 tick of the test profiles' steps[0]
+
+/** Replicate the runtime's per-tick gaining for a synthetic tick train —
+ *  [rawDelta, timestampMs] pairs — to compute a test's expected window sum. */
+function gainedSum(ticks: Array<[number, number]>): number {
+  const acc = new TickAccelerator();
+  return ticks.reduce((s, [d, t]) => s + acc.applyTick(d, t), 0);
+}
 
 const profile = validateProfile({
   device: { id: 'apc', label: 'APC mini mk2', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
@@ -51,7 +65,7 @@ class FakeTransport implements MidiTransport {
   close() { this.msgCbs.clear(); this.epCbs.clear(); }
 
   // ── test helpers ──
-  emit(data: number[]) { for (const cb of this.msgCbs) cb({ sourceId: this.openedSource ?? '', data, timestampMs: 0 }); }
+  emit(data: number[], timestampMs = 0) { for (const cb of this.msgCbs) cb({ sourceId: this.openedSource ?? '', data, timestampMs }); }
   setEndpoints(eps: MidiEndpoint[]) { this.endpoints = eps; for (const cb of this.epCbs) cb(); }
   /** Fire N `endpointsChanged` events WITHOUT changing the endpoint set — models
    *  Web MIDI emitting one statechange per PORT (input + output) for a single
@@ -68,6 +82,7 @@ function makeApi(): MidiDispatchApi {
     dispatchGlobalEffectSlotAction: vi.fn(ok), setGlobalEffectBlackout: vi.fn(ok),
     setChannelPlaylistEntry: vi.fn(ok),
     setDeckChannelControl: vi.fn(ok), setMixerChannelControl: vi.fn(ok),
+    setGlobalHue: vi.fn(ok), setChannelHue: vi.fn(ok),
   };
 }
 
@@ -400,7 +415,7 @@ describe('MidiManager — MIDI-learn (arm, apply, focus)', () => {
     const results: unknown[] = [];
     manager.armLearn((r) => results.push(r));
     transport.emit([0xb0, 54, 100]); // CC 54 = GLOBAL SPEED → conflict, not captured
-    expect(results).toEqual([{ conflict: 'fader_7_speed' }]);
+    expect(results).toEqual([{ conflict: { kind: 'profile-claimed', controlId: 'fader_7_speed' } }]);
     expect(manager.isLearning()).toBe(false); // disarmed
     // The profile action did NOT fire while armed (it was swallowed with the conflict).
     expect(api.updateParamCenter).not.toHaveBeenCalledWith({ speed: expect.anything() });
@@ -733,27 +748,33 @@ describe('MidiManager — MIDI Fighter Twister', () => {
   it('applies a relative knob delta to the focused deck param (current value + delta)', async () => {
     const { manager, api, transport, ft } = setupMft(() => deckFocus(0.5));
     await manager.start();
-    transport.emit([0xb0, 0, 65]); // +1 tick → steps[0] = 0.01
+    transport.emit([0xb0, 0, 65]); // +1 tick → steps[0] = 0.01, gained at precision
     ft.flushDue();                  // accumulate flushes on the trailing window
-    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, expect.closeTo(0.51, 5));
+    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, expect.closeTo(0.5 + MIN_GAIN_STEP, 5));
   });
 
   it('ACCUMULATES deltas within a window (sum, not last-write-wins)', async () => {
-    const { manager, api, transport, ft } = setupMft(() => deckFocus(0.5));
+    // Anchor at 0. Same-timestamp ticks all get the precision gain, so the
+    // SUM (0.16 × GAIN_MIN = 0.08) must strictly exceed what last-write-wins
+    // (0.1 × GAIN_MIN = 0.05) could produce.
+    const { manager, api, transport, ft } = setupMft(() => deckFocus(0));
     await manager.start();
     transport.emit([0xb0, 0, 65]); // +0.01
-    transport.emit([0xb0, 0, 66]); // +0.05 (fast)
-    transport.emit([0xb0, 0, 67]); // +0.1 (very fast)
+    transport.emit([0xb0, 0, 66]); // +0.05 (2-count code)
+    transport.emit([0xb0, 0, 67]); // +0.1 (3-count code)
     ft.flushDue();
-    // 0.5 + (0.01 + 0.05 + 0.1) = 0.66 — one write with the SUM, not just +0.1.
+    // ONE write carrying the gained SUM, not just the last tick. The gain
+    // dynamics are pinned in accel.test.ts; here we assert accumulation.
     expect(api.setDeckChannelControl).toHaveBeenCalledTimes(1);
-    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, expect.closeTo(0.66, 5));
+    const value = (api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+    expect(value).toBeCloseTo(0.16 * ACCEL_GAIN_MIN, 5);
+    expect(value).toBeGreaterThan(0.1 * ACCEL_GAIN_MIN);
   });
 
   it('clamps the applied value to [0, 1]', async () => {
     const { manager, api, transport, ft } = setupMft(() => deckFocus(0.98));
     await manager.start();
-    transport.emit([0xb0, 0, 67]); // +0.1 → 1.08 → clamped to 1
+    transport.emit([0xb0, 0, 67]); // +0.1 → 0.98 + 0.05 = 1.03 → clamped to 1
     ft.flushDue();
     expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, 1);
   });
@@ -851,15 +872,15 @@ describe('MidiManager — MIDI Fighter Twister', () => {
     await manager.start();
     transport.emit([0xb0, 0, 65]); // +1 tick → steps[0] = 0.01
     ft.flushDue();
-    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, expect.closeTo(0.31, 5));
+    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, expect.closeTo(0.3 + MIN_GAIN_STEP, 5));
   });
 
   it('falls back to v0 when the export carries no base (unmodulated param)', async () => {
     const { manager, api, transport, ft } = setupMft(() => deckFocus(0.5)); // no base
     await manager.start();
-    transport.emit([0xb0, 0, 65]); // +0.01 → 0.51 off v0
+    transport.emit([0xb0, 0, 65]); // +0.01 (gained) off v0
     ft.flushDue();
-    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, expect.closeTo(0.51, 5));
+    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, expect.closeTo(0.5 + MIN_GAIN_STEP, 5));
   });
 
   // ── Task 3: speed-sync gates a paramCenterDelta with key 'speed' ──
@@ -902,9 +923,9 @@ describe('MidiManager — MIDI Fighter Twister', () => {
     };
     const { manager, api, transport, ft } = setupGlobalMft(() => snap);
     await manager.start();
-    transport.emit([0xb0, 16, 65]); // +0.01 → 0.51
+    transport.emit([0xb0, 16, 65]); // +0.01 (gained)
     ft.flushDue();
-    expect(api.updateParamCenter).toHaveBeenCalledWith({ speed: expect.closeTo(0.51, 5) });
+    expect(api.updateParamCenter).toHaveBeenCalledWith({ speed: expect.closeTo(0.5 + MIN_GAIN_STEP, 5) });
   });
 
   it('speed-sync ON gates only speed — a size knob delta still writes', async () => {
@@ -914,9 +935,9 @@ describe('MidiManager — MIDI Fighter Twister', () => {
     };
     const { manager, api, transport, ft } = setupGlobalMft(() => snap);
     await manager.start();
-    transport.emit([0xb0, 17, 65]); // +0.01 on size
+    transport.emit([0xb0, 17, 65]); // +0.01 on size (gained)
     ft.flushDue();
-    expect(api.updateParamCenter).toHaveBeenCalledWith({ size: expect.closeTo(0.51, 5) });
+    expect(api.updateParamCenter).toHaveBeenCalledWith({ size: expect.closeTo(0.5 + MIN_GAIN_STEP, 5) });
   });
 });
 
@@ -966,11 +987,12 @@ describe('MidiManager — D1 meta-review fixes', () => {
       getSnapshot: () => snap, defaultContext: 'deck', coalescerTimers: ft.timers,
     });
     await manager.start();
-    transport.emit([0xb0, 0, 65]); ft.flushDue(); // window 1: 0.5 + 0.01 = 0.51
-    transport.emit([0xb0, 0, 65]); ft.flushDue(); // window 2: 0.51 + 0.01 = 0.52 (NOT 0.51)
-    transport.emit([0xb0, 0, 65]); ft.flushDue(); // window 3: 0.53
+    const step = MIN_GAIN_STEP; // one +0.01 tick per window, precision-gained
+    transport.emit([0xb0, 0, 65]); ft.flushDue(); // window 1: 0.5 + step
+    transport.emit([0xb0, 0, 65]); ft.flushDue(); // window 2: 0.5 + 2·step (NOT 0.5 + step)
+    transport.emit([0xb0, 0, 65]); ft.flushDue(); // window 3: 0.5 + 3·step
     const calls = (api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls[calls.length - 1][1]).toBeCloseTo(0.53, 5);
+    expect(calls[calls.length - 1][1]).toBeCloseTo(0.5 + 3 * step, 5);
   });
 
   it('#3 re-seeds the optimistic anchor on an external snapshot jump (reset/other surface)', async () => {
@@ -989,11 +1011,11 @@ describe('MidiManager — D1 meta-review fixes', () => {
       getSnapshot: snap, defaultContext: 'deck', coalescerTimers: ft.timers,
     });
     await manager.start();
-    transport.emit([0xb0, 0, 65]); ft.flushDue(); // 0.5 → 0.51 (optimistic now 0.51)
+    transport.emit([0xb0, 0, 65]); ft.flushDue(); // 0.5 + step (optimistic holds it)
     v0 = 0.9;                                      // external jump (> epsilon 0.15)
-    transport.emit([0xb0, 0, 65]); ft.flushDue(); // re-seed from 0.9 → 0.91
+    transport.emit([0xb0, 0, 65]); ft.flushDue(); // re-seed from 0.9 → 0.9 + step
     const calls = (api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls[calls.length - 1][1]).toBeCloseTo(0.91, 5);
+    expect(calls[calls.length - 1][1]).toBeCloseTo(0.9 + MIN_GAIN_STEP, 5);
   });
 
   it('#3 paramCenterDelta also accumulates off the optimistic value across windows', async () => {
@@ -1010,10 +1032,11 @@ describe('MidiManager — D1 meta-review fixes', () => {
       getSnapshot: () => snap, defaultContext: 'deck', coalescerTimers: ft.timers,
     });
     await manager.start();
-    transport.emit([0xb0, 16, 65]); ft.flushDue(); // 0.5 → 0.51
-    transport.emit([0xb0, 16, 65]); ft.flushDue(); // 0.51 → 0.52 (NOT 0.51)
+    const step = MIN_GAIN_STEP;
+    transport.emit([0xb0, 16, 65]); ft.flushDue(); // 0.5 → 0.5 + step
+    transport.emit([0xb0, 16, 65]); ft.flushDue(); // → 0.5 + 2·step (NOT 0.5 + step)
     const calls = (api.updateParamCenter as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls[calls.length - 1][0]).toEqual({ size: expect.closeTo(0.52, 5) });
+    expect(calls[calls.length - 1][0]).toEqual({ size: expect.closeTo(0.5 + 2 * step, 5) });
   });
 
   // ── #4 sync gate at shared depth: ABSOLUTE paramCenter path also gated ──
@@ -1277,7 +1300,7 @@ describe('MidiManager — W1 runtime correctness + fail-loud', () => {
     // Recovery: once the first sharedParams frame lands, the knob writes normally.
     snap = { ...baseSnap, globalParamValues: { size: 0.5 } };
     transport.emit([0xb0, 16, 65]); ft.flushDue();
-    expect(api.updateParamCenter).toHaveBeenCalledWith({ size: expect.closeTo(0.51, 5) });
+    expect(api.updateParamCenter).toHaveBeenCalledWith({ size: expect.closeTo(0.5 + MIN_GAIN_STEP, 5) });
   });
 
   it('P2-1 a missing key on a LOADED map auto-CLEARS once the key appears', async () => {
@@ -1296,7 +1319,7 @@ describe('MidiManager — W1 runtime correctness + fail-loud', () => {
     snap = { ...baseSnap, globalParamValues: { speed: 0.5, size: 0.5 } };
     transport.emit([0xb0, 16, 65]); ft.flushDue();
     expect(manager.getStatuses()[0].paramErrors).toBeUndefined();
-    expect(api.updateParamCenter).toHaveBeenCalledWith({ size: expect.closeTo(0.51, 5) });
+    expect(api.updateParamCenter).toHaveBeenCalledWith({ size: expect.closeTo(0.5 + MIN_GAIN_STEP, 5) });
   });
 
   // ── P2-3: reset seeds the turn anchor so a follow-up turn keeps the reset ──
@@ -1312,8 +1335,9 @@ describe('MidiManager — W1 runtime correctness + fail-loud', () => {
     // Reset default is 0.3. After the push, the engine echo LAGS: the snapshot
     // still reports v0 = 0.35 (a small, within-epsilon echo creep toward 0.3).
     // The seeded optimistic anchor (0.3) must hold, so an immediate +0.01 turn
-    // lands at 0.31. The OLD code forgot the anchor → the turn re-seeded from the
-    // stale 0.35 snapshot → 0.36. (Only the SEED makes 0.31 vs 0.36 the outcome.)
+    // lands at 0.3 + curved step. The OLD code forgot the anchor → the turn
+    // re-seeded from the stale 0.35 snapshot → 0.35 + step. (Only the SEED
+    // makes the difference.)
     let snap: MidiEngineSnapshot = deckFocus(0.9, 0.3);
     const transport = new FakeTransport(mftEndpoints);
     const api = makeApi();
@@ -1325,10 +1349,10 @@ describe('MidiManager — W1 runtime correctness + fail-loud', () => {
     await manager.start();
     transport.emit([0xb1, 0, 127]); ft.flushDue(); // push → reset to 0.3
     snap = deckFocus(0.35, 0.3);                    // echo creeps toward 0.3 (within eps)
-    transport.emit([0xb0, 0, 65]); ft.flushDue();   // +0.01 turn off the seeded 0.3 → 0.31
+    transport.emit([0xb0, 0, 65]); ft.flushDue();   // +0.01 turn off the seeded 0.3
     const calls = (api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls[0]).toEqual([5, 0.3]);
-    expect(calls[calls.length - 1][1]).toBeCloseTo(0.31, 5); // NOT 0.36 (stale-base re-seed)
+    expect(calls[calls.length - 1][1]).toBeCloseTo(0.3 + MIN_GAIN_STEP, 5); // NOT off the stale 0.35
   });
 
   // ── P1-3: learn rejects a relative-code CC / a config-device rotary channel ─
@@ -1348,7 +1372,25 @@ describe('MidiManager — W1 runtime correctness + fail-loud', () => {
     const results: unknown[] = [];
     manager.armLearn((r) => results.push(r));
     transport.emit([0xb0, 20, 65]); // ch0 CC 20 value 65 = +1 relative delta code
-    expect(results).toEqual([{ conflict: "that's an endless encoder — knobs map by order, not by learn" }]);
+    // CC 20 ≥ 16 on a configureOnConnect device → a banks-2-4 encoder: the
+    // STRUCTURED reason is 'reserved-bank' (the future custom-mapping UI
+    // relaxes only that branch).
+    expect(results).toEqual([{ conflict: { kind: 'reserved-bank' } }]);
+    expect(manager.isLearning()).toBe(false);
+  });
+
+  it('P1-3 learn REJECTS a bank-1 endless encoder as order-mapped (relative code, CC < 16)', async () => {
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [mftLearnDevice], transportFactory: () => transport, api,
+      getSnapshot: () => deckFocus(0.5), defaultContext: 'default',
+    });
+    await manager.start();
+    const results: unknown[] = [];
+    manager.armLearn((r) => results.push(r));
+    transport.emit([0xb0, 5, 65]); // ch0 CC 5 = a bank-1 encoder turn (relative +1)
+    expect(results).toEqual([{ conflict: { kind: 'order-mapped-encoder' } }]);
     expect(manager.isLearning()).toBe(false);
   });
 
@@ -1363,7 +1405,7 @@ describe('MidiManager — W1 runtime correctness + fail-loud', () => {
     const results: unknown[] = [];
     manager.armLearn((r) => results.push(r));
     transport.emit([0xb1, 32, 127]); // ch1 (SWITCH_AND_COLOR) push, absolute value 127
-    expect(results).toEqual([{ conflict: "that's an endless encoder — knobs map by order, not by learn" }]);
+    expect(results).toEqual([{ conflict: { kind: 'reserved-bank' } }]); // CC 32 = a bank-3 push
     expect(manager.isLearning()).toBe(false);
   });
 
@@ -1391,7 +1433,7 @@ describe('MidiManager — W1 runtime correctness + fail-loud', () => {
     const results: unknown[] = [];
     manager.armLearn((r) => results.push(r));
     transport.emit([0xb0, 51, 100]); // CC 51 already bound to 'glow' → rejected
-    expect(results).toEqual([{ conflict: "that control is already learned to 'glow'" }]);
+    expect(results).toEqual([{ conflict: { kind: 'already-bound', parameter: 'glow' } }]);
     expect(manager.isLearning()).toBe(false);
   });
 
@@ -1447,5 +1489,534 @@ describe('MidiManager — W1 runtime correctness + fail-loud', () => {
     const s = manager.getStatuses()[0];
     expect(s.kind).toBe('connected'); // NON-STICKY — the controller keeps running
     expect(s.warning).toMatch(/LED feedback failing/);
+  });
+});
+
+// ── MFT UX v2: row-0 globals (sync toggle, hue knob), acceleration, LED resync ─
+describe('MidiManager — MFT UX v2 (row-0 globals + acceleration + LED resync)', () => {
+  function makeFakeTimers() {
+    let id = 0;
+    const armed = new Map<number, () => void>();
+    return {
+      timers: {
+        setTimeout: (cb: () => void) => { const h = ++id; armed.set(h, cb); return h as unknown as ReturnType<typeof setTimeout>; },
+        clearTimeout: (h: ReturnType<typeof setTimeout>) => { armed.delete(h as unknown as number); },
+      },
+      flushDue() { const due = [...armed.entries()]; armed.clear(); for (const [, cb] of due) cb(); },
+    };
+  }
+
+  const mftEndpoints: MidiEndpoint[] = [
+    { id: 'in-0', name: 'Midi Fighter Twister', portIndex: 0, kind: 'source' },
+    { id: 'out-0', name: 'Midi Fighter Twister', portIndex: 0, kind: 'destination' },
+  ];
+
+  // The v2 row-0 layout in miniature: speed knob (0,0) with sync-toggle push,
+  // hue knob (0,1) with reset push, and the first local knob on encoder 4
+  // driving focused.exports[0] (the row-1 offset).
+  const v2Profile = validateProfile({
+    device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
+    controls: [
+      { id: 'g_speed_turn', match: { type: 'cc', channel: 0, cc: 0, relative: true }, action: { kind: 'paramCenterRelative', key: 'speed', steps: [0.01, 0.05, 0.1] }, led: { on: 50, off: 80 } },
+      { id: 'g_speed_push', match: { type: 'cc', channel: 1, cc: 0 }, action: { kind: 'bpmSyncToggle' } },
+      { id: 'g_hue_turn', match: { type: 'cc', channel: 0, cc: 1, relative: true }, action: { kind: 'globalHueKnob', steps: [0.01, 0.05, 0.1] }, led: { off: 80 } },
+      { id: 'g_hue_push', match: { type: 'cc', channel: 1, cc: 1 }, action: { kind: 'globalHueReset' } },
+      { id: 'k4_turn', match: { type: 'cc', channel: 0, cc: 4, relative: true }, action: { kind: 'focusedParamKnob', index: 0, steps: [0.01, 0.05, 0.1] } },
+      { id: 'k4_push', match: { type: 'cc', channel: 1, cc: 4 }, action: { kind: 'focusedParamReset', index: 0 } },
+    ],
+  });
+
+  function setupV2(getSnap: () => MidiEngineSnapshot) {
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const ft = makeFakeTimers();
+    const manager = new MidiManager({
+      profiles: [v2Profile], transportFactory: () => transport, api,
+      getSnapshot: getSnap, defaultContext: 'deck', coalescerTimers: ft.timers,
+    });
+    return { transport, api, manager, ft };
+  }
+
+  const deckSnap = (over: Partial<MidiEngineSnapshot> = {}): MidiEngineSnapshot => ({
+    ...baseSnap,
+    activeContext: 'deck',
+    deckLayer: { id: 'd1', fader: 1 },
+    focused: {
+      role: 'deck', layer: 0, id: 'd1', entryId: 'e', key: 'deck:d1:e:',
+      exports: [{ id: 5, name: 'glow', v0: 0.2 }], midiMappings: [],
+    },
+    globalParamValues: { speed: 0.5 },
+    hueShift: { degrees: 10, autoRotateDegPerSec: 30 },
+    ...over,
+  });
+
+  // ── (0,0) push: BPM→Speed sync toggle ──
+  it('speed-knob push toggles bpmSpeedSync ON via updateParamCenter', async () => {
+    const { manager, api, transport } = setupV2(() => deckSnap({ bpmSpeedSyncOn: false }));
+    await manager.start();
+    transport.emit([0xb1, 0, 127]); // push (0,0)
+    expect(api.updateParamCenter).toHaveBeenCalledWith({ bpmSpeedSync: 1 });
+  });
+
+  it('speed-knob push toggles bpmSpeedSync OFF when the snapshot says ON', async () => {
+    const { manager, api, transport } = setupV2(() => deckSnap({ bpmSpeedSyncOn: true, syncOwnedKeys: new Set(['speed']) }));
+    await manager.start();
+    transport.emit([0xb1, 0, 127]);
+    expect(api.updateParamCenter).toHaveBeenCalledWith({ bpmSpeedSync: 0 });
+  });
+
+  it('speed-knob push RELEASE (value 0) is swallowed', async () => {
+    const { manager, api, transport } = setupV2(() => deckSnap());
+    await manager.start();
+    transport.emit([0xb1, 0, 0]); // CC-hold release
+    expect(api.updateParamCenter).not.toHaveBeenCalled();
+  });
+
+  // ── (0,0) LED: solid GREEN while sync owns speed, RED otherwise ──
+  it('paints the speed knob GREEN (led.on) while sync is ON, RED (led.off) when OFF', async () => {
+    let snap = deckSnap({ bpmSpeedSyncOn: false, syncOwnedKeys: new Set<string>() });
+    const { manager, transport } = setupV2(() => snap);
+    await manager.start();
+    expect(transport.sent).toContainEqual([0xb1, 0, 80]); // rest = RED
+    // No strobe cue any more — the animation channel is pinned to NONE.
+    expect(transport.sent).toContainEqual([0xb2, 0, 0]);
+    transport.sent.length = 0;
+    snap = deckSnap({ bpmSpeedSyncOn: true, syncOwnedKeys: new Set(['speed']) });
+    manager.onEngineUpdate();
+    expect(transport.sent).toContainEqual([0xb1, 0, 50]); // sync ON = solid GREEN
+    expect(transport.sent).not.toContainEqual([0xb2, 0, 4]); // NOT the old strobe
+  });
+
+  // ── (0,0) turn: existing paramCenterDelta machinery + sync gate kept ──
+  it('speed knob writes via paramCenter and stays INERT while sync owns speed', async () => {
+    let snap = deckSnap({ syncOwnedKeys: new Set<string>() });
+    const { manager, api, transport, ft } = setupV2(() => snap);
+    await manager.start();
+    transport.emit([0xb0, 0, 65]); ft.flushDue(); // +0.01 (gained)
+    expect(api.updateParamCenter).toHaveBeenCalledWith({ speed: expect.closeTo(0.5 + MIN_GAIN_STEP, 5) });
+    snap = deckSnap({ bpmSpeedSyncOn: true, syncOwnedKeys: new Set(['speed']) });
+    (api.updateParamCenter as ReturnType<typeof vi.fn>).mockClear();
+    transport.emit([0xb0, 0, 65]); ft.flushDue();
+    expect(api.updateParamCenter).not.toHaveBeenCalled(); // gate kept (I4)
+  });
+
+  // ── (0,1) hue knob ──
+  it('hue turn accumulates degrees (gained ring fraction × 360) and PRESERVES autoRotateDegPerSec', async () => {
+    const { manager, api, transport, ft } = setupV2(() => deckSnap());
+    await manager.start();
+    transport.emit([0xb0, 1, 65]); // +1 tick → 0.01 of the ring, gained, × 360°
+    ft.flushDue();
+    expect(api.setGlobalHue).toHaveBeenCalledWith(
+      expect.closeTo(10 + MIN_GAIN_STEP * 360, 5), 30, // spin preserved
+    );
+  });
+
+  it('hue WRAPS past 360° instead of clamping', async () => {
+    const { manager, api, transport, ft } = setupV2(() => deckSnap({ hueShift: { degrees: 359, autoRotateDegPerSec: 0 } }));
+    await manager.start();
+    transport.emit([0xb0, 1, 65]); // 359° + 1.8° → wraps past 360
+    ft.flushDue();
+    expect(api.setGlobalHue).toHaveBeenCalledWith(
+      expect.closeTo(359 + MIN_GAIN_STEP * 360 - 360, 5), 0,
+    );
+  });
+
+  it('hue knob is INERT (visible note) while hue state has not loaded', async () => {
+    const { manager, api, transport, ft } = setupV2(() => deckSnap({ hueShift: undefined }));
+    await manager.start();
+    transport.emit([0xb0, 1, 65]); ft.flushDue();
+    expect(api.setGlobalHue).not.toHaveBeenCalled();
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/hue state not loaded/);
+  });
+
+  it('hue push resets to 0° (preserving the spin) and CANCELS a pending hue turn', async () => {
+    const { manager, api, transport, ft } = setupV2(() => deckSnap());
+    await manager.start();
+    transport.emit([0xb0, 1, 66]); // pending +0.05-of-ring turn
+    transport.emit([0xb1, 1, 127]); // push → reset
+    ft.flushDue(); // the cancelled turn must NOT also flush
+    const calls = (api.setGlobalHue as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toEqual([[0, 30]]); // one write: degrees 0, autoRotate preserved
+  });
+
+  it('hue push while hue state is missing is a documented no-op (deferred)', async () => {
+    const { manager, api, transport } = setupV2(() => deckSnap({ hueShift: undefined }));
+    await manager.start();
+    transport.emit([0xb1, 1, 127]);
+    expect(api.setGlobalHue).not.toHaveBeenCalled();
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/deferred/);
+  });
+
+  it('deck context never touches the per-channel hue API', async () => {
+    const { manager, api, transport, ft } = setupV2(() => deckSnap());
+    await manager.start();
+    transport.emit([0xb0, 1, 65]); ft.flushDue(); // turn → GLOBAL hue
+    transport.emit([0xb1, 1, 127]);               // push → GLOBAL reset
+    expect(api.setGlobalHue).toHaveBeenCalled();
+    expect(api.setChannelHue).not.toHaveBeenCalled();
+  });
+
+  // ── (0,1) hue knob — MIXER context: the FOCUSED CHANNEL's hue ──
+  // Sina's spec: "in the mixer, the hue shift midi must change and sync to the
+  // FOCUSED CHANNEL's hue shift". The same profile control is context-routed
+  // by the runtime — deck stays global (above), mixer targets focused.hue.
+  function setupV2Mixer(getSnap: () => MidiEngineSnapshot) {
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    const ft = makeFakeTimers();
+    const manager = new MidiManager({
+      profiles: [v2Profile], transportFactory: () => transport, api,
+      getSnapshot: getSnap, defaultContext: 'mixer', coalescerTimers: ft.timers,
+    });
+    return { transport, api, manager, ft };
+  }
+
+  const mixerSnap = (
+    over: Partial<MidiEngineSnapshot> = {},
+    focusedOver: Partial<NonNullable<MidiEngineSnapshot['focused']>> = {},
+  ): MidiEngineSnapshot => ({
+    ...baseSnap,
+    activeContext: 'mixer',
+    layers: [{ id: 'ch_a', fader: 1 }, { id: 'ch_b', fader: 1 }],
+    focused: {
+      role: 'mixer', layer: 0, id: 'ch_a', entryId: 'e', key: 'mixer:ch_a:e:',
+      exports: [{ id: 5, name: 'glow', v0: 0.2 }], midiMappings: [], hue: 100,
+      ...focusedOver,
+    },
+    globalParamValues: { speed: 0.5 },
+    hueShift: { degrees: 10, autoRotateDegPerSec: 30 },
+    ...over,
+  });
+
+  it('mixer-context hue turn writes the FOCUSED channel hue (anchored on its value), never the global', async () => {
+    const { manager, api, transport, ft } = setupV2Mixer(() => mixerSnap());
+    await manager.start();
+    transport.emit([0xb0, 1, 65]); // +1 tick → 0.01 of the ring, gained, × 360°
+    ft.flushDue();
+    expect(api.setChannelHue).toHaveBeenCalledWith(
+      'ch_a', expect.closeTo(100 + MIN_GAIN_STEP * 360, 5), undefined,
+    );
+    expect(api.setGlobalHue).not.toHaveBeenCalled();
+  });
+
+  it('mixer-context per-channel hue WRAPS past 360° instead of clamping', async () => {
+    const { manager, api, transport, ft } = setupV2Mixer(() => mixerSnap({}, { hue: 359 }));
+    await manager.start();
+    transport.emit([0xb0, 1, 65]);
+    ft.flushDue();
+    expect(api.setChannelHue).toHaveBeenCalledWith(
+      'ch_a', expect.closeTo(359 + MIN_GAIN_STEP * 360 - 360, 5), undefined,
+    );
+  });
+
+  it('mixer-context hue push resets the FOCUSED channel to 0° and CANCELS a pending turn', async () => {
+    const { manager, api, transport, ft } = setupV2Mixer(() => mixerSnap());
+    await manager.start();
+    transport.emit([0xb0, 1, 66]);  // pending turn on ch_a
+    transport.emit([0xb1, 1, 127]); // push → per-channel reset
+    ft.flushDue(); // the cancelled turn must NOT also flush
+    const calls = (api.setChannelHue as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toEqual([['ch_a', 0, undefined]]); // one write: this channel to 0°
+    expect(api.setGlobalHue).not.toHaveBeenCalled(); // the global spin is untouched
+  });
+
+  it('mixer-context hue turn with NO focused channel is inert with a visible note', async () => {
+    const { manager, api, transport, ft } = setupV2Mixer(() => mixerSnap({ focused: null }));
+    await manager.start();
+    transport.emit([0xb0, 1, 65]); ft.flushDue();
+    expect(api.setChannelHue).not.toHaveBeenCalled();
+    expect(api.setGlobalHue).not.toHaveBeenCalled();
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/no focused channel/);
+  });
+
+  it('mixer-context hue turn is INERT (visible note) while the channel hue is not threaded', async () => {
+    const { manager, api, transport, ft } = setupV2Mixer(() => mixerSnap({}, { hue: undefined }));
+    await manager.start();
+    transport.emit([0xb0, 1, 65]); ft.flushDue();
+    expect(api.setChannelHue).not.toHaveBeenCalled();
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/channel hue not loaded/);
+  });
+
+  it('a focus switch MID-WINDOW drops the accumulated per-channel hue delta (never recolors the new channel)', async () => {
+    let snap = mixerSnap();
+    const { manager, api, transport, ft } = setupV2Mixer(() => snap);
+    await manager.start();
+    transport.emit([0xb0, 1, 65]); // accumulate against ch_a
+    // Focus swaps to ch_b before the window flushes.
+    snap = mixerSnap({}, { layer: 1, id: 'ch_b', key: 'mixer:ch_b:e:', hue: 200 });
+    ft.flushDue();
+    expect(api.setChannelHue).not.toHaveBeenCalled();
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/dropped/);
+  });
+
+  it('a focus switch re-syncs the hue ring + colour to the NEW channel\'s hue', async () => {
+    let snap = mixerSnap({}, { hue: 0 }); // ch_a at 0° → ring 0, red
+    const { manager, transport } = setupV2Mixer(() => snap);
+    await manager.start();
+    expect(transport.sent).toContainEqual([0xb0, 1, 0]);  // ring empty
+    expect(transport.sent).toContainEqual([0xb1, 1, 80]); // red (0°)
+    transport.sent.length = 0;
+    // Focus moves to ch_b (hue 120°) — the repaint must adopt ITS hue.
+    snap = mixerSnap({}, { layer: 1, id: 'ch_b', key: 'mixer:ch_b:e:', hue: 120 });
+    manager.onEngineUpdate();
+    expect(transport.sent).toContainEqual([0xb0, 1, Math.round((120 / 360) * 127)]); // ring third
+    expect(transport.sent).toContainEqual([0xb1, 1, 50]); // 120° = green
+  });
+
+  it('the hue ring/colour paint from the GLOBAL hue on deck vs the FOCUSED channel hue on mixer', async () => {
+    // Same snapshot facts (global 10°, focused channel 100°) — only the
+    // context differs, so any divergence is pure context routing.
+    const deck = setupV2(() => deckSnap({ hueShift: { degrees: 240, autoRotateDegPerSec: 0 } }));
+    await deck.manager.start();
+    expect(deck.transport.sent).toContainEqual([0xb1, 1, 1]); // global 240° = blue
+    const mixer = setupV2Mixer(() => mixerSnap({}, { hue: 120 }));
+    await mixer.manager.start();
+    expect(mixer.transport.sent).toContainEqual([0xb1, 1, 50]); // focused 120° = green
+  });
+
+  // ── velocity model: slow turns get FINER than raw, fast spins amplified —
+  // gained PER TICK from the transport-timestamp rate estimate (accel.ts) ──
+  it('a slow turn (one tick per window) is ATTENUATED below its raw step (sub-detent precision)', async () => {
+    const { manager, api, transport, ft } = setupV2(() => deckSnap());
+    await manager.start();
+    transport.emit([0xb0, 4, 65]); // one +0.01 tick in the window
+    ft.flushDue();
+    const value = (api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+    expect(value).toBeCloseTo(0.2 + MIN_GAIN_STEP, 5);
+    expect(value).toBeLessThan(0.21);     // finer than the raw +0.01 step
+    expect(value).toBeGreaterThan(0.2);   // but still moves
+  });
+
+  it('a fast burst (close timestamps) is accelerated beyond its precision-gain sum (clamped)', async () => {
+    const { manager, api, transport, ft } = setupV2(() => deckSnap());
+    await manager.start();
+    // 4 × +0.1 three-count codes 10 ms apart — a hard flick. The rate estimate
+    // ramps within the burst, so the sum far exceeds 4 × 0.1 × GAIN_MIN.
+    for (let i = 0; i < 4; i += 1) transport.emit([0xb0, 4, 67], i * 10);
+    ft.flushDue();
+    const value = (api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+    const expected = Math.min(1, 0.2 + gainedSum([[0.1, 0], [0.1, 10], [0.1, 20], [0.1, 30]]));
+    expect(value).toBeCloseTo(expected, 5);
+    expect(value).toBeGreaterThan(0.2 + 4 * 0.1 * ACCEL_GAIN_MIN); // acceleration engaged
+    expect(value).toBeLessThanOrEqual(1);
+  });
+
+  it('a fast CCW burst accelerates in the NEGATIVE direction (sign preserved)', async () => {
+    const { manager, api, transport, ft } = setupV2(() => deckSnap({
+      focused: {
+        role: 'deck', layer: 0, id: 'd1', entryId: 'e', key: 'deck:d1:e:',
+        exports: [{ id: 5, name: 'glow', v0: 0.9 }], midiMappings: [],
+      },
+    }));
+    await manager.start();
+    for (let i = 0; i < 4; i += 1) transport.emit([0xb0, 4, 61], i * 10); // 4 × −0.1, 10 ms apart
+    ft.flushDue();
+    const value = (api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+    const expected = Math.max(0, 0.9 + gainedSum([[-0.1, 0], [-0.1, 10], [-0.1, 20], [-0.1, 30]]));
+    expect(value).toBeCloseTo(expected, 5);
+    expect(value).toBeLessThan(0.9 - 4 * 0.1 * ACCEL_GAIN_MIN); // beyond precision-gain sum
+    expect(value).toBeGreaterThanOrEqual(0);
+  });
+
+  it('the SAME tick train lands on the SAME final value however the windows split (phase independence)', async () => {
+    // Three +0.01 ticks 100 ms apart. Run A flushes after every tick (three
+    // windows); run B accumulates all three into one window. The per-tick
+    // gain comes from the timestamps alone, so both runs must land exactly
+    // on the same final value — bucketing cannot distort the feel.
+    const ticks: Array<[number, number]> = [[0.01, 0], [0.01, 100], [0.01, 200]];
+    const expected = 0.2 + gainedSum(ticks);
+
+    const a = setupV2(() => deckSnap());
+    await a.manager.start();
+    for (const [, ts] of ticks) { a.transport.emit([0xb0, 4, 65], ts); a.ft.flushDue(); }
+    const aCalls = (a.api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls;
+    expect(aCalls[aCalls.length - 1][1]).toBeCloseTo(expected, 9);
+
+    const b = setupV2(() => deckSnap());
+    await b.manager.start();
+    for (const [, ts] of ticks) b.transport.emit([0xb0, 4, 65], ts);
+    b.ft.flushDue();
+    const bCalls = (b.api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls;
+    expect(bCalls[bCalls.length - 1][1]).toBeCloseTo(expected, 9);
+  });
+
+  it('a direction reversal is CLEAN: out-and-back returns exactly to the start value', async () => {
+    const { manager, api, transport, ft } = setupV2(() => deckSnap());
+    await manager.start();
+    transport.emit([0xb0, 4, 65], 0); ft.flushDue();   // +0.01 (precision gain)
+    transport.emit([0xb0, 4, 63], 30); ft.flushDue();  // −0.01 — reversal resets to precision gain
+    const calls = (api.setDeckChannelControl as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[calls.length - 1][1]).toBeCloseTo(0.2, 9); // no eaten or doubled ticks
+  });
+
+  // ── row-1 offset: encoder 4 drives focused.exports[0]; push-reset remaps too ──
+  it('encoder 4 (row 1 col 0) drives ordered export 0 and its push resets it', async () => {
+    const snap = deckSnap({
+      focused: {
+        role: 'deck', layer: 0, id: 'd1', entryId: 'e', key: 'deck:d1:e:',
+        exports: [{ id: 5, name: 'glow', v0: 0.2, defaultValue: 0.7 }], midiMappings: [],
+      },
+    });
+    const { manager, api, transport, ft } = setupV2(() => snap);
+    await manager.start();
+    transport.emit([0xb0, 4, 65]); ft.flushDue(); // turn → exports[0]
+    expect(api.setDeckChannelControl).toHaveBeenCalledWith(5, expect.closeTo(0.2 + MIN_GAIN_STEP, 5));
+    transport.emit([0xb1, 4, 127]); // push → reset exports[0] to its default
+    expect(api.setDeckChannelControl).toHaveBeenLastCalledWith(5, 0.7);
+  });
+
+  // ── LED re-sync regression: pattern switch repaints the NEW ring values ──
+  it('REGRESSION: a pattern switch (new exports) repaints the ring to the new value', async () => {
+    let snap = deckSnap(); // glow v0 = 0.2 → ring 25 on encoder 4
+    const { manager, transport } = setupV2(() => snap);
+    await manager.start();
+    expect(transport.sent).toContainEqual([0xb0, 4, Math.round(0.2 * 127)]);
+    transport.sent.length = 0;
+    // Pattern switch: the snapshot rebuild delivers the NEW pattern's exports
+    // (fresh playlist data — the hook busts the fetchPlaylist cache on the
+    // engine's `pattern` broadcast) and nudges the manager.
+    snap = deckSnap({
+      focused: {
+        role: 'deck', layer: 0, id: 'd1', entryId: 'e2', key: 'deck:d1:e2:',
+        exports: [{ id: 9, name: 'other', v0: 0.9 }], midiMappings: [],
+      },
+    });
+    manager.onEngineUpdate();
+    expect(transport.sent).toContainEqual([0xb0, 4, Math.round(0.9 * 127)]); // NEW value, promptly
+  });
+
+  // ── LED re-sync: a bank switch forces a FULL repaint (no stale diff base) ──
+  it('a bank change repaints ALL mapped LEDs from an empty diff base', async () => {
+    const { manager, transport } = setupV2(() => deckSnap());
+    await manager.start();
+    const ringMsg = [0xb0, 4, Math.round(0.2 * 127)];
+    expect(transport.sent).toContainEqual(ringMsg);
+    transport.sent.length = 0;
+    manager.onEngineUpdate();
+    expect(transport.sent).not.toContainEqual(ringMsg); // unchanged → diff sends nothing
+    transport.emit([0xb3, 1, 127]); // hardware bank switch (bank 2)
+    expect(transport.sent).toContainEqual(ringMsg); // full repaint re-sends reality
+  });
+
+  // ── optimistic ring feedback: the ring tracks the KNOB during a sweep (the
+  // runtime's just-written optimistic value), and falls back to the snapshot
+  // the moment the optimistic entry goes stale (echo landed / external jump /
+  // focus switch) — never a frozen stale ring. ──
+  describe('optimistic ring feedback', () => {
+    // One +0.1 three-count code at rest gets the precision gain (same-timestamp
+    // ticks keep the rate estimate at rest) — the optimistic value one flush
+    // writes off the deckSnap anchors.
+    const GAINED = 0.1 * ACCEL_GAIN_MIN;
+    const ring = (enc: number, v: number) => [0xb0, enc, Math.round(v * 127)];
+
+    it('ring reflects the optimistic export value immediately after a knob flush while the snapshot echo lags', async () => {
+      const { manager, transport, ft } = setupV2(() => deckSnap()); // glow v0 = 0.2, frozen (echo in flight)
+      await manager.start();
+      transport.sent.length = 0;
+      transport.emit([0xb0, 4, 67]); // +0.1 raw, precision-gained
+      ft.flushDue();
+      // The flush itself repaints: ring = the optimistic 0.2 + GAINED, sent
+      // WITHOUT any engine update (the snapshot still reads 0.2).
+      expect(transport.sent).toContainEqual(ring(4, 0.2 + GAINED));
+      // A repaint nudged by unrelated engine state keeps showing the optimistic
+      // value (echo still lagging) — no regress-then-catch-up wiggle.
+      transport.sent.length = 0;
+      manager.onEngineUpdate();
+      expect(transport.sent).not.toContainEqual(ring(4, 0.2));
+    });
+
+    it('the speed knob ring reflects the optimistic CPC value immediately after a flush', async () => {
+      const { manager, transport, ft } = setupV2(() => deckSnap()); // speed = 0.5, frozen
+      await manager.start();
+      transport.sent.length = 0;
+      transport.emit([0xb0, 0, 67]);
+      ft.flushDue();
+      expect(transport.sent).toContainEqual(ring(0, 0.5 + GAINED));
+    });
+
+    it('after an external snapshot jump with the knob idle, the ring follows the snapshot and FORGETS the stale optimistic value', async () => {
+      const glowAt = (v0: number) => deckSnap({
+        focused: { ...deckSnap().focused!, exports: [{ id: 5, name: 'glow', v0 }] },
+      });
+      let snap = glowAt(0.2);
+      const { manager, transport, ft } = setupV2(() => snap);
+      await manager.start();
+      transport.emit([0xb0, 4, 67]); ft.flushDue(); // optimistic 0.2 + GAINED, anchor 0.2
+      transport.sent.length = 0;
+      // Another surface jumps glow to 0.9 — far outside the [0.2, 0.25] echo
+      // span. The ring must adopt the snapshot, not freeze on the optimistic.
+      snap = glowAt(0.9);
+      manager.onEngineUpdate();
+      expect(transport.sent).toContainEqual(ring(4, 0.9));
+      // The entry was FORGOTTEN: a later external move back to WITHIN the
+      // reseed epsilon of the old anchor (0.3 vs 0.2) would read as "echo
+      // creep" if the stale entry survived — the ring must show 0.3, not the
+      // resurrected optimistic 0.25.
+      transport.sent.length = 0;
+      snap = glowAt(0.3);
+      manager.onEngineUpdate();
+      expect(transport.sent).toContainEqual(ring(4, 0.3));
+      expect(transport.sent).not.toContainEqual(ring(4, 0.2 + GAINED));
+    });
+
+    it('once the echo LANDS the entry is released — a small later external move is followed, not frozen', async () => {
+      const glowAt = (v0: number) => deckSnap({
+        focused: { ...deckSnap().focused!, exports: [{ id: 5, name: 'glow', v0 }] },
+      });
+      let snap = glowAt(0.2);
+      const { manager, transport, ft } = setupV2(() => snap);
+      await manager.start();
+      transport.emit([0xb0, 4, 67]); ft.flushDue(); // optimistic 0.2 + GAINED
+      // The engine echo lands exactly on our write → settle, entry forgotten.
+      snap = glowAt(0.2 + GAINED);
+      manager.onEngineUpdate();
+      transport.sent.length = 0;
+      // A small external move, still within the reseed epsilon of the old
+      // anchor — the exact case a lingering stale optimistic would mask.
+      snap = glowAt(0.2 + GAINED + 0.1);
+      manager.onEngineUpdate();
+      expect(transport.sent).toContainEqual(ring(4, 0.2 + GAINED + 0.1));
+      expect(transport.sent).not.toContainEqual(ring(4, 0.2 + GAINED));
+    });
+
+    it('a focus/entry switch never shows the previous focus\'s optimistic export value (focus-key guard)', async () => {
+      let snap = deckSnap(); // entry e, glow 0.2
+      const { manager, transport, ft } = setupV2(() => snap);
+      await manager.start();
+      transport.emit([0xb0, 4, 67]); ft.flushDue(); // optimistic 0.2 + GAINED under key deck:d1:e:
+      transport.sent.length = 0;
+      // Entry switch: the same knob index now backs a DIFFERENT param whose
+      // value (0.22) sits INSIDE the old echo span — only the focus-key guard
+      // (not the jump classifier) keeps the stale overlay off the new ring.
+      snap = deckSnap({
+        focused: {
+          role: 'deck', layer: 0, id: 'd1', entryId: 'e2', key: 'deck:d1:e2:',
+          exports: [{ id: 9, name: 'other', v0: 0.22 }], midiMappings: [],
+        },
+      });
+      manager.onEngineUpdate();
+      expect(transport.sent).toContainEqual(ring(4, 0.22));
+      expect(transport.sent).not.toContainEqual(ring(4, 0.2 + GAINED));
+    });
+
+    it('mixer: the hue ring tracks the optimistic per-channel hue, and a focus switch adopts the NEW channel\'s hue', async () => {
+      let snap = mixerSnap(); // focused ch_a, hue 100°
+      const { manager, transport, ft } = setupV2Mixer(() => snap);
+      await manager.start();
+      transport.emit([0xb0, 1, 67]); // hue turn on ch_a
+      ft.flushDue();
+      const optimisticDeg = 100 + GAINED * 360; // 118°
+      // The flush repaints the ring from ch_a's optimistic hue immediately
+      // (the snapshot still reads 100° — echo in flight).
+      expect(transport.sent).toContainEqual([0xb0, 1, Math.round((optimisticDeg / 360) * 127)]);
+      transport.sent.length = 0;
+      // Focus switches to ch_b (hue 200°) with ch_a's echo still in flight:
+      // the per-channel anchor keying means ch_b's ring reads ITS OWN entry
+      // (none) — snapshot hue, never ch_a's optimistic value.
+      snap = mixerSnap({}, { layer: 1, id: 'ch_b', key: 'mixer:ch_b:e:', hue: 200 });
+      manager.onEngineUpdate();
+      expect(transport.sent).toContainEqual([0xb0, 1, Math.round((200 / 360) * 127)]);
+      expect(transport.sent).not.toContainEqual([0xb0, 1, Math.round((optimisticDeg / 360) * 127)]);
+    });
   });
 });

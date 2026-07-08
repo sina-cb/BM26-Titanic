@@ -63,11 +63,11 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
+export function sliderDirection(v) { direction = v; }
 export function sliderRingRate(v) { ringRate = v; }
 export function sliderWedgeWidth(v) { wedgeWidth = v; }
 export function sliderTrailLength(v) { trailLength = v; }
 export function sliderBrightness(v) { brightness = v; }
-export function sliderDirection(v) { direction = v; }
 export function sliderBaselineFloor(v) { baselineFloor = v; }
 export function sliderVintageWash(v) { vintageWash = v; }
 export function sliderAudioKick(v) { audioKick = v; }

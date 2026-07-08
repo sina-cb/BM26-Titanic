@@ -44,10 +44,17 @@ export function applyFeedbackTrails({
     ta = ta * decay + px.a * injection;
     tu = tu * decay + px.u * injection;
 
-    // Chromatic bleed (green→red, red→blue)
+    // Chromatic bleed (green→red, red→blue). Snapshot the pre-bleed
+    // channel values so both bleeds read the SAME source frame — the
+    // pre-2026-07 code did `tb += tr * bleed` AFTER `tr += tg * bleed`,
+    // so blue picked up the already-bleached red and the effect was
+    // asymmetric / order-dependent (a wider bleed compounded twice).
+    // Reading from the snapshot makes each bleed a pure one-hop mix.
     if (colorBleed > 0) {
-      tr += tg * colorBleed;
-      tb += tr * colorBleed;
+      const srcR = tr;
+      const srcG = tg;
+      tr = srcR + srcG * colorBleed;
+      tb = tb + srcR * colorBleed;
     }
 
     trailBuffer[off + 0] = Math.min(1.0, tr);

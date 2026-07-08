@@ -8,17 +8,22 @@
 //
 // The mapping is intentionally exhaustive over the KnobRow shape:
 //   - knobIndex !== null → knob-mapped. The physical knob NUMBER is 1-based
-//     (`knobIndex + 1`), so a "KNOB N" badge points the operator at the encoder.
+//     row-major on the 4x4 grid AND offset past row 0's global knobs
+//     (`knobIndex + 1 + LOCAL_PARAM_KNOB_OFFSET` → 5..16), so a "KNOB N" badge
+//     points the operator at the exact physical encoder.
 //   - excludedReason === 'matched' → a CPC owns it; show the existing MATCHED
 //     (+ optional CPC label) tag, and the row is dimmed. It consumes NO knob.
 //   - excludedReason === 'no-v0'   → not knob-mapped (no numeric v0 anchor);
 //     show a subtle not-knob-mapped marker ("—"), dimmed. Consumes NO knob.
+//   - excludedReason === 'overflow' → the pattern has more learnable sliders
+//     than the 12 physical local-param knobs; same "—" marker, dimmed.
 
-import type { KnobRow } from './knob_order';
+import { LOCAL_PARAM_KNOB_OFFSET, type KnobRow } from './knob_order';
 
 /** The presentation attributes a screen paints for one KnobRow. PURE data. */
 export interface KnobBadge {
-  /** 1-based physical knob number to show ("KNOB 3"), or null when excluded. */
+  /** 1-based PHYSICAL knob number to show ("KNOB 5"), or null when excluded.
+   *  Offset past row 0's global knobs — local knobs are 5..16. */
   knobNumber: number | null;
   /** Short badge text next to the slider: "KNOB N" | "MATCHED[ · LABEL]" | "—". */
   text: string;
@@ -28,15 +33,17 @@ export interface KnobBadge {
    *  excluded row, never a knob-mapped one. */
   dimmed: boolean;
   /** The excluded reason (null when knob-mapped) — lets a screen pick an icon. */
-  excludedReason: 'matched' | 'no-v0' | null;
+  excludedReason: 'matched' | 'no-v0' | 'overflow' | null;
 }
 
 /** The subset of a CPC-matched export the badge text needs (the friendly CPC
  *  label). Pass `row.export.cpcLabel`. */
 export function knobBadgeFor(row: KnobRow): KnobBadge {
   if (row.knobIndex !== null) {
-    // 0-based knobIndex → 1-based physical knob number for the operator.
-    const knobNumber = row.knobIndex + 1;
+    // 0-based ordered index → 1-based physical knob number, offset past the
+    // row-0 global knobs (v2 layout: local param i lives on encoder i+4, i.e.
+    // physical knob i+5 counting row-major from the top-left).
+    const knobNumber = row.knobIndex + 1 + LOCAL_PARAM_KNOB_OFFSET;
     return {
       knobNumber,
       text: `KNOB ${knobNumber}`,
@@ -55,12 +62,18 @@ export function knobBadgeFor(row: KnobRow): KnobBadge {
       excludedReason: 'matched',
     };
   }
-  // no-v0 (the only remaining exclusion): not knob-mapped, subtle marker.
+  // no-v0 / overflow: not knob-mapped, subtle marker; keep the reason distinct
+  // so a screen can explain "no anchor value" vs "ran out of knobs". A row
+  // with neither a knobIndex nor a reason violates deriveKnobOrder's contract
+  // — fail loud (codex P0), never invent a reason.
+  if (row.excludedReason !== 'no-v0' && row.excludedReason !== 'overflow') {
+    throw new Error(`knobBadgeFor: excluded row '${row.export.name}' carries no excludedReason`);
+  }
   return {
     knobNumber: null,
     text: '—',
     mapped: false,
     dimmed: true,
-    excludedReason: 'no-v0',
+    excludedReason: row.excludedReason,
   };
 }

@@ -21,7 +21,7 @@ function makeDeps() {
     setDeckTransition: [],
     setDeckOverlaysEnabled: [],
     setColorAutopilot: [],
-    setGlobalHue: [],
+    setDeckHue: [],
     forceDeckView: [],
     releaseDeckView: [],
   };
@@ -58,7 +58,10 @@ function makeDeps() {
     setDeckTransition: (patch) => { calls.setDeckTransition.push(patch); },
     setDeckOverlaysEnabled: (enabled) => { calls.setDeckOverlaysEnabled.push(enabled); },
     setColorAutopilot: (wire) => { calls.setColorAutopilot.push(wire); },
-    setGlobalHue: (degrees) => { calls.setGlobalHue.push(degrees); },
+    // Mirrors the engine's setDeckHue dep (the DECK CHANNEL's per-channel
+    // hue via the PATCH /deck/channel { hue } internal path — the global
+    // hue shifter was removed 2026-07).
+    setDeckHue: (degrees) => { calls.setDeckHue.push(degrees); },
     forceDeckView: () => { calls.forceDeckView.push(true); viewState.mode = 'deck'; viewState.source = 'plan'; },
     // Mirror timelineReleaseDeckView: only clears a 'plan'-owned pin, never a
     // real 'portwatch' hardware lock.
@@ -1137,14 +1140,14 @@ test('hue schema: hue on a non-deck target throws', () => {
   assert.throws(() => validateShowPlan(plan), /hue is only valid for a deck target/);
 });
 
-test('hue apply: deck cue with hue reaches setGlobalHue with normalized degrees', async () => {
+test('hue apply: deck cue with hue reaches setDeckHue with normalized degrees', async () => {
   const plan = makePlanWithDeckKnobs({
     type: 'playlist', name: 'party_pl', target: { channel: 'deck', id: null },
     hue: 380,
   });
   const { svc, calls, setMood } = setupWithPlan(plan);
   await svc.start();
-  calls.setGlobalHue.length = 0;
+  calls.setDeckHue.length = 0;
 
   setMood({ party: 0, value: 0 });
   await svc._tick();
@@ -1152,8 +1155,8 @@ test('hue apply: deck cue with hue reaches setGlobalHue with normalized degrees'
   await svc._tick();
   svc.stop();
 
-  assert.equal(calls.setGlobalHue.length, 1, 'setGlobalHue called once for the deck cue');
-  assert.equal(calls.setGlobalHue[0], 20, 'hue normalized 380 → 20 before apply');
+  assert.equal(calls.setDeckHue.length, 1, 'setDeckHue called once for the deck cue');
+  assert.equal(calls.setDeckHue[0], 20, 'hue normalized 380 → 20 before apply');
 });
 
 test('globals schema: SPEED/SIZE/SYNC on a deck playlist action round-trip', () => {

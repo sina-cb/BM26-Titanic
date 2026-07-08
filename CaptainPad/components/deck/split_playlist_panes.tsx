@@ -168,6 +168,11 @@ export function SplitPlaylistPanes({
             cache across the switch. The slot key ('primary') is stable; the deck
             id is what changes. */}
         <View key={`primary-${deckChannelId}`} style={{ flex: 1, minHeight: 0 }}>
+          {/* midiWindowChannelId: the MIDI manager publishes the deck tab's
+              playlist browse window under the DECK CHANNEL's engine id, not
+              the slot key — pass it so this pane shows the same blue MIDI
+              window highlight the mixer strips draw (PlaylistPanel gates
+              it on the slot being the LIVE one). */}
           <PlaylistPanel
             channelId="primary"
             role="deckSlot"
@@ -177,6 +182,7 @@ export function SplitPlaylistPanes({
             disabled={disabled}
             onRefreshConnection={onRefreshConnection}
             playlistLibrary={playlistLibrary}
+            midiWindowChannelId={deckChannelId}
           />
         </View>
         <TouchableOpacity
@@ -215,6 +221,10 @@ export function SplitPlaylistPanes({
           minHeight:0 so it truly splits the container rather than sizing to its
           content. */}
       <View key={`primary-${deckChannelId}`} style={{ flexGrow: paintRatio, flexBasis: 0, minHeight: 0 }}>
+        {/* Both panes read the deck channel's MIDI browse window (the manager
+            keys it by engine channel id, not slot key); PlaylistPanel's
+            live-slot gate means only the pane hosting the deck's LIVE
+            playlist paints the blue window highlight. */}
         <PlaylistPanel
           channelId="primary"
           role="deckSlot"
@@ -224,6 +234,7 @@ export function SplitPlaylistPanes({
           disabled={disabled}
           onRefreshConnection={onRefreshConnection}
           playlistLibrary={playlistLibrary}
+          midiWindowChannelId={deckChannelId}
         />
       </View>
 
@@ -261,6 +272,7 @@ export function SplitPlaylistPanes({
           disabled={disabled}
           playlistLibrary={playlistLibrary}
           onClosePane={() => { setLocalOpen(false); onCloseSecondary(); }}
+          midiWindowChannelId={deckChannelId}
         />
       </View>
     </View>

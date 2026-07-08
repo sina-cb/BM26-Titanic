@@ -15,6 +15,8 @@ import { OscStatusPill } from '@/components/OscStatusPill';
 import { ColorPickerModal, ColorQueueModal, DualSwatch, type ColorPalettePreset } from '@/components/ColorPickerModal';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { curateDeckSignals, audioAccentHex } from '@/utils/audioSignals';
+import { KnobPill } from '@/components/ui/knob_pill';
+import { globalKnobNumber } from '@/utils/midi/knob_page';
 
 // BPM-sync "auto-driven" accent (green). Lives here as a local
 // constant so this file doesn't depend on a brand-new theme token
@@ -325,11 +327,18 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
           <View style={{ flexDirection: 'row', flexWrap: 'nowrap', alignItems: 'center', gap: globalsRowGap, paddingRight: isPortrait ? 4 : 12, flex: 1 }}>
             <View style={{ flex: 1, maxWidth: faderMaxWidth, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
               <View style={{ flex: 1 }}>
+                {/* The GLOBALS-row SPEED fader is the CANONICAL speed UI, so
+                    it wears the physical-knob badge directly: MFT knob 1
+                    (row-0 global, knob_page.ts) drives this exact value on
+                    BOTH tabs. Sync state already surfaces here — green fill +
+                    BPM badge while bpmSpeedSync owns speed (the knob's push
+                    toggles the same flag SpeedSyncToggle does). */}
                 <MiniFader
                   label="SPEED"
                   value={speedDisplay}
                   fillColor={speedFill}
                   badge={speedBadge}
+                  leading={<KnobPill knobNumber={globalKnobNumber('speed')} />}
                   disabled={disabled}
                   onChange={(v) => update('speed', v)}
                 />

@@ -26,11 +26,11 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
+export function sliderDirection(v) { spinDirection = v; }
 export function sliderBeaconWidth(v) { beaconWidth = v; }
 export function sliderBeaconPunch(v) { beaconPunch = v; }
 export function sliderStrobeRate(v) { strobeRate = v; }
 export function sliderAlarmCadence(v) { alarmCadence = v; }
-export function sliderSpinDirection(v) { spinDirection = v; }
 export function sliderHoldBlackout(v) { holdBlackout = v; }
 export function sliderAmberMix(v) { amberMix = v; }
 export function sliderBlackoutDepth(v) { blackoutDepth = v; }

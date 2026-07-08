@@ -194,10 +194,11 @@ export class TimelineService {
    *   setDeckOverlaysEnabled(bool)           — enable (honor configured) / disable ALL deck overlays
    *   setColorAutopilot({active, palettes, delay_s, shuffle}) — configure + start/stop the
    *                                            engine palette-cycling daemon (docs/39)
-   *   setGlobalHue(degrees)                  — apply the GLOBAL hue shift (post-mixer hue
-   *                                            rotation) the SAME way the operator's hue slider
-   *                                            does (globalEffectsController.setHueShift with
-   *                                            rot/spin 0). A deck playlist cue's `hue` routes here.
+   *   setDeckHue(degrees)                    — apply the DECK CHANNEL's per-channel hue the SAME
+   *                                            way the operator's deck hue slider does (the PATCH
+   *                                            /deck/channel { hue } internal path). A deck
+   *                                            playlist cue's `hue` routes here. Hue is
+   *                                            PER-CHANNEL ONLY (the global shifter was removed).
    *   forceDeckView()                        — PIN engine output to the deck via the existing
    *                                            viewOverride machinery (docs/38 §16.9) — the plan owns
    *                                            the deck-pin while it drives the deck
@@ -469,16 +470,17 @@ export class TimelineService {
     steps.push(`deck ← colorAutopilot ${JSON.stringify(colorAutopilot)}`);
   }
 
-  // Apply the GLOBAL hue shift (degrees, already normalized [0,360) by
-  // show_plan.js) from a deck playlist cue. Routes through the same internal
-  // path the operator's hue slider uses (globalEffectsController.setHueShift
-  // with rot/spin 0). FAIL LOUD if the dep is missing (codex P0 — never
-  // silently drop an authored hue).
+  // Apply the DECK CHANNEL's per-channel hue (degrees, already normalized
+  // [0,360) by show_plan.js) from a deck playlist cue. Routes through the same
+  // internal path the operator's deck hue slider uses (PATCH /deck/channel
+  // { hue }). Hue is PER-CHANNEL ONLY — the global shifter was removed
+  // (2026-07). FAIL LOUD if the dep is missing (codex P0 — never silently
+  // drop an authored hue).
   async _applyHue(hue, steps) {
-    if (typeof this.deps.setGlobalHue !== 'function') {
-      throw new Error('setGlobalHue dep is required to apply a cue hue');
+    if (typeof this.deps.setDeckHue !== 'function') {
+      throw new Error('setDeckHue dep is required to apply a cue hue');
     }
-    await this.deps.setGlobalHue(hue);
+    await this.deps.setDeckHue(hue);
     steps.push(`deck ← hue ${hue}`);
   }
 
@@ -640,7 +642,8 @@ export class TimelineService {
         // pattern autopilot (docs/39): they run in parallel.
         if (action.colorAutopilot && onDeck) await this._applyColorAutopilot(action.colorAutopilot, steps);
         // hue is validated DECK-ONLY (show_plan.js) → only when a deck target
-        // is in play. Applies the GLOBAL hue shift alongside the deck swap.
+        // is in play. Applies the DECK CHANNEL's per-channel hue alongside
+        // the deck swap (per-channel only — no global shifter).
         if (action.hue !== undefined && onDeck) await this._applyHue(action.hue, steps);
         // globals (SPEED/SIZE/bpmSpeedSync) — validated DECK-ONLY (show_plan.js).
         // Routes through _writeGlobals → setParams, exactly like a look's globals.

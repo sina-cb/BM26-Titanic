@@ -7,7 +7,7 @@ import { RigGlobals } from '@/components/RigGlobals';
 import { GlobalParams, DeckSavedFlash } from '@/components/GlobalParams';
 import { CPCControls } from '@/components/CPCControls';
 import { DeckTopBar } from '@/components/DeckTopBar';
-import { GlobalHueRow } from '@/components/global_hue_row';
+import { DeckHueRow } from '@/components/deck_hue_row';
 import { EntryLabelEditor } from '@/components/EntryLabelEditor';
 import { PixelStrip } from '@/components/ui/PixelStrip';
 import { AllModulationsPanel } from '@/components/AllModulationsPanel';
@@ -31,7 +31,7 @@ import {
 import { engineEvents } from '@/utils/engineEvents';
 import { engineVizEvents } from '@/utils/engineVizEvents';
 import { setMidiActiveContext } from '@/hooks/useMidiControl';
-import { setChannelColor } from '@/utils/channelExtrasApi';
+import { setChannelColor, setChannelHue } from '@/utils/channelExtrasApi';
 import { panicMixer } from '@/utils/channelOpsApi';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { DeckOverlayStack } from '@/components/DeckOverlayStack';
@@ -735,6 +735,28 @@ export default function ControlDeckScreen() {
     }
   }, [deckChannel?.color, planGate]);
 
+  // DECK CHANNEL per-channel hue (engine F-hue — hue is per-channel ONLY;
+  // the global rig hue shifter was removed 2026-07 by operator decision).
+  // Same optimistic + PATCH /deck/channel { hue } + revert-on-rejection
+  // shape as handleDeckColor above and the mixer strip's HUE trim. The WS
+  // `deck` broadcast reconciles the live value afterwards.
+  const handleDeckHue = useCallback(async (degrees: number) => {
+    // Soft PLAN lock — the DeckHueRow gates its own handlers too; this is
+    // the belt-and-suspenders write-path gate.
+    if (planGate) return;
+    const prev = typeof deckChannel?.hue === 'number' ? deckChannel.hue : 0;
+    setDeckChannel((c: any) => (c ? { ...c, hue: degrees } : c));
+    const res = await setChannelHue(deckChannelId ?? '', degrees, { deck: true });
+    if (!res.ok) {
+      console.error('[Deck] hue change rejected:', res.error);
+      setDeckChannel((c: any) => (c ? { ...c, hue: prev } : c));
+      Alert.alert(
+        'Hue not applied',
+        `The engine rejected this hue. ${res.error || ''} The deck kept its previous hue.`.trim(),
+      );
+    }
+  }, [deckChannel?.hue, deckChannelId, planGate]);
+
   // ── PANIC / HOME (docs/39 §6b #9) — mission-critical safe LIT reset ─────
   // Mirrors the mixer tab's PANIC tile (same panicMixer api + ConfirmSheet
   // gating). Previously the deck had NO panic, so recovery forced an
@@ -862,10 +884,11 @@ export default function ControlDeckScreen() {
           <PlanIndicatorPill />
         </View>
         {/* "LIVE OUTPUT" preview = the engine's `preDimmer` composite — the
-            composition AFTER global FX (hue shift / invert / group color-locks)
+            composition AFTER global FX (invert / group color-locks)
             but BEFORE the section dimmer rack + blackout (operator request
-            2026-06-29). So the deck preview (a) recolors with the GlobalHueRow
-            and shows the global effects, while (b) still ignoring the section
+            2026-06-29). So the deck preview (a) shows the global effects
+            (and the per-channel hues baked into the composite), while (b)
+            still ignoring the section
             dimmer-rack trim — it shows what the SHOW is producing, not the
             dimmed-down hardware output. The section dimmers are still applied to
             the actual sACN/DMX output — this is preview-only. The mixer master
@@ -913,16 +936,23 @@ export default function ControlDeckScreen() {
               full library and add it as a new entry. */}
           {deckChannelId ? (
             <View key={deckChannelId} style={{ flex: 1, minHeight: 0 }}>
-              {/* Global rig HUE shifter, pinned to the TOP of the deck's
-                  pattern list (operator request June 2026). The deck's
-                  GLOBAL EFFECTS strip (mixer-strip variant, bottom bar) has
-                  no room for a hue row, so the global hue control lives here
-                  — mirroring how the MIXER shows a compact HUE row above each
-                  channel's playlist. Self-contained wiring (own state, seed,
-                  WS reconcile, POST) so it's the deck's ONE-AND-ONLY hue
-                  control; the bottom effects bar stays hue-less. Gated under
-                  the soft PLAN lock like every other mutating deck control. */}
-              <GlobalHueRow disabled={planGate} />
+              {/* DECK CHANNEL HUE trim, pinned to the TOP of the deck's
+                  pattern list — mirroring how the MIXER shows a compact HUE
+                  row above each channel's playlist. This is the DECK
+                  CHANNEL's per-channel hue (engine F-hue): the GLOBAL rig
+                  hue shifter was REMOVED 2026-07 by operator decision
+                  ("only the channel hue shifts, no global hidden one").
+                  Value + write path live in this screen (deckChannel.hue +
+                  handleDeckHue — optimistic PATCH /deck/channel, WS `deck`
+                  reconcile), the same shape as the mixer strip's trim.
+                  It's the deck's ONE-AND-ONLY hue control; the bottom
+                  effects bar stays hue-less. Gated under the soft PLAN lock
+                  like every other mutating deck control. */}
+              <DeckHueRow
+                hue={typeof deckChannel?.hue === 'number' ? deckChannel.hue : 0}
+                onHueChange={handleDeckHue}
+                disabled={planGate}
+              />
               {/* DECK SPLIT PLAYLISTS: the single deck list is now two stacked,
                   resizable panes — DECK A (primary, today's list) and an OPTIONAL
                   DECK B (secondary). The deck still plays exactly one pattern;

@@ -7,6 +7,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
@@ -15,8 +16,53 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const engineDir = path.resolve(__dirname, '..');
 const SCENE = 'summer_camp_dome';
-const playlistsDir = path.join(repoRoot, 'simulation', 'scenes', SCENE, 'playlists');
-const stateDir = path.join(engineDir, 'states', SCENE);
+
+// ── State isolation (incident 2026-07-08) ────────────────────────────────
+// The spawned engines write ALL runtime state (states/<scene>/*.yaml +
+// playlists) into throwaway temp dirs via the MARSIN_STATE_DIR /
+// MARSIN_PLAYLISTS_DIR overrides (lib/state_paths.js). This test must
+// NEVER mutate the tracked states/ or simulation/scenes/ trees — a
+// previous run left bogus runtime state in tracked files and the next
+// real engine boot restored it (full dev-stack outage). The final test
+// in this file pins that guarantee with a byte-level before/after check.
+const tmpStateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'marsin-playlist-api-states-'));
+const playlistsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'marsin-playlist-api-playlists-'));
+const stateDir = path.join(tmpStateRoot, SCENE);
+
+// Tracked trees the spawned engines must never touch (byte-snapshot at
+// module load, compared by the last test).
+const TRACKED_DIRS = [
+  path.join(engineDir, 'states', SCENE),
+  path.join(repoRoot, 'simulation', 'scenes', SCENE, 'playlists'),
+];
+function snapshotTrackedTrees() {
+  const snap = {};
+  for (const dir of TRACKED_DIRS) {
+    if (!fs.existsSync(dir)) continue;
+    for (const f of fs.readdirSync(dir, { recursive: true })) {
+      const p = path.join(dir, String(f));
+      if (fs.statSync(p).isFile()) snap[p] = fs.readFileSync(p, 'utf8');
+    }
+  }
+  return snap;
+}
+const trackedBefore = snapshotTrackedTrees();
+
+function spawnEngine() {
+  const child = spawn('node', ['engine.js', '--pattern', '13_sparkle', '--model', SCENE, '--port', String(port)], {
+    cwd: engineDir,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      BM26_DISABLE_TIMELINE: '1',
+      MARSIN_STATE_DIR: tmpStateRoot,
+      MARSIN_PLAYLISTS_DIR: playlistsDir,
+    },
+  });
+  child.stdout.on('data', d => process.stderr.write('[engine] ' + d));
+  child.stderr.on('data', d => process.stderr.write('[engine!] ' + d));
+  return child;
+}
 
 let proc = null;
 let port = 6985 + Math.floor(Math.random() * 50);
@@ -38,24 +84,10 @@ async function waitForReady(url, timeoutMs = 25000) {
   throw new Error('Engine never became ready: ' + (lastErr?.message || 'timeout'));
 }
 
-async function cleanState() {
-  // Wipe the scene playlists dir + the scene state dir so we start fresh.
-  if (fs.existsSync(playlistsDir)) fs.rmSync(playlistsDir, { recursive: true, force: true });
-  for (const f of ['deck_state.yaml', 'mixer_state.yaml']) {
-    const p = path.join(stateDir, f);
-    if (fs.existsSync(p)) fs.unlinkSync(p);
-  }
-}
-
 before(async () => {
-  await cleanState();
-  proc = spawn('node', ['engine.js', '--pattern', '13_sparkle', '--model', SCENE, '--port', String(port)], {
-    cwd: engineDir,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, BM26_DISABLE_TIMELINE: '1' },
-  });
-  proc.stdout.on('data', d => process.stderr.write('[engine] ' + d));
-  proc.stderr.on('data', d => process.stderr.write('[engine!] ' + d));
+  // Fresh mkdtemp dirs at module load ARE the clean state — the tracked
+  // playlists/state trees are never wiped (or written) by this test.
+  proc = spawnEngine();
   await waitForReady(BASE());
 });
 
@@ -154,13 +186,7 @@ test('Playlist assignment persists across engine restart', async () => {
   proc.kill('SIGTERM');
   await new Promise(r => setTimeout(r, 1000));
   // Re-spawn
-  proc = spawn('node', ['engine.js', '--pattern', '13_sparkle', '--model', SCENE, '--port', String(port)], {
-    cwd: engineDir,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, BM26_DISABLE_TIMELINE: '1' },
-  });
-  proc.stdout.on('data', d => process.stderr.write('[engine] ' + d));
-  proc.stderr.on('data', d => process.stderr.write('[engine!] ' + d));
+  proc = spawnEngine();
   await waitForReady(BASE());
 
   const r = await api('GET', '/deck/playlist');
@@ -241,13 +267,7 @@ test('Two entries of same pattern keep independent defaults across restart', asy
   // Now the real test: restart engine while sitting on e_slow.
   proc.kill('SIGTERM');
   await new Promise(res => setTimeout(res, 1000));
-  proc = spawn('node', ['engine.js', '--pattern', '13_sparkle', '--model', SCENE, '--port', String(port)], {
-    cwd: engineDir,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, BM26_DISABLE_TIMELINE: '1' },
-  });
-  proc.stdout.on('data', d => process.stderr.write('[engine] ' + d));
-  proc.stderr.on('data', d => process.stderr.write('[engine!] ' + d));
+  proc = spawnEngine();
   await waitForReady(BASE());
 
   // Post-restart: the engine should have restored e_slow's defaults, NOT e_fast's.
@@ -442,4 +462,29 @@ test('Loading a directory bulk-adds its patterns as valid playlist entries', asy
 test('GET /pattern-dirs/:dir rejects a traversal directory name', async () => {
   const r = await api('GET', '/pattern-dirs/' + encodeURIComponent('..'));
   assert.ok(r.status === 400 || r.status === 404);
+});
+
+// ── Regression: state isolation (incident 2026-07-08) ──────────────────
+test('spawned engines wrote state to the temp dirs, never the tracked trees', () => {
+  // The isolated engine really used the override dirs…
+  assert.ok(
+    fs.existsSync(path.join(stateDir, 'deck_state.yaml')),
+    `expected deck_state.yaml under MARSIN_STATE_DIR (${stateDir})`,
+  );
+  assert.ok(
+    fs.existsSync(path.join(playlistsDir, 'default.yaml')),
+    `expected default.yaml under MARSIN_PLAYLISTS_DIR (${playlistsDir})`,
+  );
+  // …and the tracked states/ + playlists/ trees are byte-identical to
+  // before the run. A failure here means a spawned engine leaked runtime
+  // state into git-tracked files — exactly the pollution that restored a
+  // bogus capture.device into a real boot and took the dev stack down.
+  const trackedAfter = snapshotTrackedTrees();
+  assert.deepEqual(
+    Object.keys(trackedAfter).sort(), Object.keys(trackedBefore).sort(),
+    'tracked state/playlist file SET changed during the test run',
+  );
+  for (const [p, bytes] of Object.entries(trackedBefore)) {
+    assert.equal(trackedAfter[p], bytes, `tracked file mutated during test run: ${p}`);
+  }
 });

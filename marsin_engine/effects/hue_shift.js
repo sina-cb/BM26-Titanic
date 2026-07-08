@@ -1,10 +1,15 @@
 /**
- * effects/hue_shift.js — GLOBAL Hue Shifter (post-composite, RGB-only)
+ * effects/hue_shift.js — Hue rotation reference implementation (RGB-only)
  *
- * Stateless YIQ hue rotation applied to the post-mixer pixel buffer
- * (model.pixels, floats 0..1 with .r/.g/.b/.w/.a/.u). Runtime state
- * (degrees, auto-rotate speed, accumulated phase) is owned by
- * GlobalEffectsController; this module is pure math.
+ * Stateless YIQ hue rotation on float pixel objects (0..1 with
+ * .r/.g/.b/.w/.a/.u). Pure math, no runtime state.
+ *
+ * NOTE (2026-07, operator decision): the GLOBAL post-mixer hue shifter
+ * that used to call this every frame was REMOVED — hue is PER-CHANNEL
+ * ONLY now, applied on the interleaved byte buffers by
+ * `applyHueShift6chU8` in lib/pattern_mixer.js (the SAME YIQ rotation,
+ * expressed on 0-255 bytes). This float module stays as the reference
+ * implementation + unit-test ground truth for that rotation.
  *
  * RULE (mission-critical, docs/39 §F-hue): only the RGB triad is
  * rotated. W (warm white), A (amber) and U (UV) carry NO hue concept —

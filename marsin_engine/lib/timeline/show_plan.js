@@ -454,8 +454,9 @@ function validateAction(action, label, lookNames) {
         }
         out.colorAutopilot = validateCueColorAutopilot(action.colorAutopilot, `${label}.colorAutopilot`);
       }
-      // hue is a DECK-ONLY knob: it drives the GLOBAL post-mixer hue shifter,
-      // which pins to the deck output. A non-deck target with the field is an
+      // hue is a DECK-ONLY knob: it drives the DECK CHANNEL's per-channel hue
+      // (the global post-mixer shifter was removed 2026-07 — hue is
+      // per-channel only). A non-deck target with the field is an
       // authoring error → throw. Finite number, normalized into [0,360).
       if (action.hue !== undefined) {
         if (out.target.channel !== 'deck') {

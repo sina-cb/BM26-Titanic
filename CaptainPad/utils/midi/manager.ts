@@ -25,16 +25,19 @@ import { decodeMidi, DecodedMidi } from './midi_message';
 import { resolveEvent, ResolvedAction, profileClaims, UnknownContextError } from './resolver';
 import { resolveEndpoints, EndpointResolutionError } from './endpoints';
 import { ControlCoalescer, CoalescerTimers } from './coalescer';
-import { createDispatcher, MidiDispatchApi, MidiDispatcher, MidiApiResult } from './dispatch';
+import {
+  createDispatcher, MidiDispatchApi, MidiDispatcher, MidiApiResult, GlobalEffectSlotBehavior,
+} from './dispatch';
 import { projectLeds, LedState, MidiProjectionState } from './led_projector';
 import { clampUnit } from './unit_clamp';
 import {
-  LearnController, LearnResult, MidiControlRef, bindingMatches, controlRefFromEvent,
-  scaleMidiToRange, pickup, freshPickup, PickupState,
+  LearnController, LearnResult, LearnRejectReason, MidiControlRef, bindingMatches,
+  controlRefFromEvent, scaleMidiToRange, pickup, freshPickup, PickupState,
 } from './learn';
 import { decodeBankChange, decodeRelativeDelta } from './mft/messages';
-import { ColorValues, MidiChannels } from './mft/constants';
+import { ColorValues, Encoders, MidiChannels } from './mft/constants';
 import { buildConnectConfig } from './mft/config';
+import { TickAccelerator } from './accel';
 
 /** MFT identity colour for the focused channel's knob rings: deck = blue,
  *  overlay layers 1/2/3 = green/yellow/pink (docs/34 knob-layout table). The
@@ -58,6 +61,9 @@ export function combineDelta(existing: ResolvedAction, incoming: ResolvedAction)
     return { ...existing, delta: existing.delta + incoming.delta };
   }
   if (existing.kind === 'paramCenterDelta' && incoming.kind === 'paramCenterDelta') {
+    return { ...existing, delta: existing.delta + incoming.delta };
+  }
+  if (existing.kind === 'hueDelta' && incoming.kind === 'hueDelta') {
     return { ...existing, delta: existing.delta + incoming.delta };
   }
   // Both payloads target the SAME control id, so their kinds match by
@@ -116,18 +122,23 @@ export interface MidiEngineSnapshot {
    *  (Deck) or the overlay channels (Mixer). The layout is unified; only the
    *  channel TARGETS differ per tab. */
   activeContext: string;
-  /** Global-effect slots (1-based slot number + active state). */
-  globalEffectSlots: { slot: number; active: boolean }[];
+  /** Global-effect slots (1-based slot number + active state + press behavior).
+   *  `behavior` mirrors the engine's per-slot field ('toggle' | 'trigger' |
+   *  'hold') and makes the pad dispatch BEHAVIOR-AWARE: a 'trigger' slot must
+   *  fire 'trigger', not 'toggle'. Optional for staleness safety — a snapshot
+   *  that predates the field leaves it undefined and the dispatcher fails safe
+   *  to 'toggle'. */
+  globalEffectSlots: { slot: number; active: boolean; behavior?: GlobalEffectSlotBehavior }[];
   /** Curated colour palette pairs (hues 0..1), for the colour-pair pads. */
   colorPalettes: { c1: number; c2: number }[];
   /** The FOCUSED channel — whose active pattern's MIDI-learned bindings the
-   *  param faders (4-6) drive. On the Deck tab it is the single deck channel
+   *  param faders (4-8) drive. On the Deck tab it is the single deck channel
    *  (auto-focused); on the Mixer tab the operator selects it with a track
    *  button. null when nothing is focused (no channel / no active entry). */
   focused: FocusedChannel | null;
   /** Curated CPC global param VALUES (0..1) keyed by param key, for the MFT
-   *  bank-2 `paramCenterRelative` knobs (and their ring feedback). A relative
-   *  knob applies its delta to the value here. Absent key → knob is inert. */
+   *  `paramCenterRelative` knobs (and their ring feedback). A relative knob
+   *  applies its delta to the value here. Absent key → knob is inert. */
   globalParamValues?: Record<string, number>;
   /** True when the engine's BPM→Speed sync owns the `speed` param (CPC
    *  `bpmSpeedSync` on). Undefined = off. Kept as the raw fact the hook derives
@@ -174,6 +185,14 @@ export interface FocusedChannel {
   exports: { id: number; name: string; v0: number; defaultValue?: number; base?: number; modulated?: boolean }[];
   /** Active entry's stored bindings (the engine's per-entry midiMappings). */
   midiMappings: FocusedBinding[];
+  /** THIS channel's per-channel hue rotation in degrees [0,360) (engine F-hue,
+   *  serialized on every mixer/deck channel — the hook threads it through).
+   *  The hue knob accumulates onto this in BOTH contexts (hue is per-channel
+   *  only — the global shifter was removed 2026-07) and its ring/colour
+   *  track it. Optional only for staleness safety: undefined means the value
+   *  hasn't been threaded (a pre-field snapshot) → the hue knob is
+   *  INERT with a visible note, never anchored on a fabricated 0. */
+  hue?: number;
 }
 
 export interface FocusedBinding {
@@ -249,11 +268,74 @@ const REAL_RECONNECT_TIMERS: CoalescerTimers = {
  *  change (reset / other surface / modulator step) and adopted; a smaller move
  *  is the throttled engine echo merely catching up to our own writes and is
  *  ignored so a fast sweep keeps accumulating locally. The real hazard isn't one
- *  detent (the largest shipped very-fast step is 0.06, DEFAULT_RELATIVE_STEPS[2])
- *  but the echo catching up on a WHOLE coalescer window's worth of accumulated
- *  ticks at once; 0.15 sits above that per-window echo creep yet well below a
- *  deliberate reset jump. */
+ *  detent (a very-fast tick is 0.015 raw, DEFAULT_RELATIVE_STEPS[2]) but the
+ *  echo catching up on a WHOLE coalescer window's worth of accumulated gained
+ *  ticks at once; 0.15 sits above the normal per-window echo creep, and the
+ *  span classification below absorbs the flick case (where a window can
+ *  legitimately advance more than this). */
 const OPTIMISTIC_RESEED_EPSILON = 0.15;
+
+/** Margin around the [prevSnap, optimistic] span when classifying a LARGE
+ *  snapshot move as our own echo vs an external jump. Host-side acceleration
+ *  (accel.ts) lets one coalescer window write far more than the epsilon, so the
+ *  echo of a fast sweep also moves more than the epsilon — but it always lands
+ *  WITHIN the span we ourselves wrote. A small margin absorbs rounding /
+ *  interleaved-window noise. */
+const OPTIMISTIC_ECHO_SPAN_MARGIN = 0.02;
+
+/** Re-seed threshold for the HUE knob's optimistic anchor, in degrees —
+ *  the unit-space epsilon scaled onto the 360° wheel, compared with circular
+ *  distance (359° → 1° is a 2° move, not 358°). */
+const HUE_RESEED_EPSILON_DEG = OPTIMISTIC_RESEED_EPSILON * 360;
+
+/** "Echo landed" tolerance for the RING's optimistic display overlay. The ring
+ *  prefers the runtime's just-written optimistic value while the engine echo
+ *  lags (~100-200 ms), but once the snapshot has CAUGHT UP to (within this of)
+ *  the optimistic value, the entry has served its purpose and is forgotten —
+ *  so a later EXTERNAL move (another surface / touch) is followed immediately
+ *  instead of being masked by a frozen stale optimistic value. Kept well below
+ *  one precision-gained detent (0.005 × ACCEL_GAIN_MIN = 0.0025) so a live
+ *  turn can never be mistaken for a landed echo. */
+const OPTIMISTIC_SETTLE_EPSILON = 0.001;
+
+/** Circular twin of the settle tolerance for hue angles, in degrees. */
+const HUE_SETTLE_EPSILON_DEG = OPTIMISTIC_SETTLE_EPSILON * 360;
+
+/** Classify a snapshot move against an optimistic entry: `true` = a genuine
+ *  EXTERNAL jump (another surface / reset / modulator step) that must be
+ *  adopted; `false` = our own throttled echo merely creeping/catching up.
+ *  A move within the epsilon is always echo creep; a LARGER move is still our
+ *  own echo when it lands inside the [prevSnap, optimistic] span we ourselves
+ *  wrote (host-side acceleration lets one window write more than the epsilon),
+ *  with a small margin for rounding. ONE shared home of the rule, so the flush
+ *  anchor (optimisticAnchor) and the ring display overlay
+ *  (optimisticDisplayValue) can never drift. */
+function isExternalSnapshotJump(prevSnap: number, optimistic: number, snapValue: number): boolean {
+  if (Math.abs(snapValue - prevSnap) <= OPTIMISTIC_RESEED_EPSILON) return false;
+  const lo = Math.min(prevSnap, optimistic) - OPTIMISTIC_ECHO_SPAN_MARGIN;
+  const hi = Math.max(prevSnap, optimistic) + OPTIMISTIC_ECHO_SPAN_MARGIN;
+  return snapValue < lo || snapValue > hi;
+}
+
+/** Normalise degrees into [0, 360) — same wrap the engine applies. */
+function wrapDegrees(d: number): number {
+  return ((d % 360) + 360) % 360;
+}
+
+/** Circular distance between two hue angles, in degrees (0..180). */
+function circularDegreesDistance(a: number, b: number): number {
+  const d = Math.abs(wrapDegrees(a) - wrapDegrees(b));
+  return Math.min(d, 360 - d);
+}
+
+/** CHANNEL identity of a focus, for the hue knob's mid-window
+ *  focus guard + per-channel optimistic anchors. Deliberately `role:id` — NOT
+ *  `focused.key` — because a channel's hue is channel-level state: an active
+ *  ENTRY change mid-turn must not drop the window (the hue target didn't
+ *  move), only a channel change must. null = nothing focused. */
+function channelIdentity(focused: FocusedChannel | null): string | null {
+  return focused ? `${focused.role}:${focused.id}` : null;
+}
 
 interface ResolvedLayer {
   id: string;
@@ -333,6 +415,19 @@ class ControllerRuntime {
    *  our optimistic value still holds; a snapshot that JUMPED (an external write
    *  / reset / modulator step, beyond the echo epsilon) means re-seed. */
   private readonly lastSnapAnchor = new Map<string, number>();
+  /** Focus identity (focused.key) a `focusedParamDelta` optimistic entry was
+   *  written under, keyed like `optimisticValues`. The RING display overlay
+   *  only trusts an optimistic entry recorded for the CURRENT focus — a focus
+   *  or entry switch must repaint from the new focus's own snapshot values,
+   *  never show the previous focus's optimistic value. (Hue needs no such
+   *  guard: its entries are already keyed per channel.) */
+  private readonly optimisticFocusKey = new Map<string, string>();
+  /** Per-relative-control continuous velocity tracker (accel.ts round 3). Each
+   *  tick's raw step is gained HERE, at arrival time, from a smoothed turn-rate
+   *  estimate — so the acceleration is bucket-phase independent and the
+   *  coalescer window merely SUMS pre-gained deltas. Keyed by control id
+   *  (same keying as the coalescer slots). */
+  private readonly tickAccels = new Map<string, TickAccelerator>();
   /** Focus identity captured at ACCUMULATE time per relative-delta control id
    *  (N3). `focusedParamDelta`/`Reset` resolve `focused.exports[index]` at FLUSH
    *  time; a focus change inside the coalescer window would otherwise write the
@@ -542,7 +637,7 @@ class ControllerRuntime {
       this.profileParamErrors = keys && keys.size > 0 ? validateProfileParams(this.profile, keys) : [];
 
       this.teardownBindings();
-      this.unsubs.push(this.transport.addListener('midiMessage', (e) => this.onMessage(e.data)));
+      this.unsubs.push(this.transport.addListener('midiMessage', (e) => this.onMessage(e.data, e.timestampMs)));
       this.unsubs.push(this.transport.addListener('endpointsChanged', () => this.onEndpointsChanged()));
 
       this.setStatus({
@@ -601,11 +696,23 @@ class ControllerRuntime {
   setContext(name: string): void {
     if (name === this.context) return;
     this.context = name;
+    // The hue knob targets the FOCUSED CHANNEL, and a tab switch changes
+    // which channel that is (deck channel vs the focused overlay) AT FLUSH
+    // TIME — a turn accumulated on the old tab must not flush into the new
+    // tab's channel. Cancel any pending hue-turn window (sub-33 ms of travel,
+    // dropped loudly-by-design) and forget its anchors so the next turn
+    // re-seeds from the new channel's own hue.
+    const hueId = this.hueTurnControlId();
+    if (hueId !== null) {
+      this.coalescer.cancel(hueId);
+      this.deltaFocusKey.delete(hueId);
+      this.forgetOptimistic(hueId);
+    }
     this.ledState = {};
     this.projectAndSend();
   }
 
-  private onMessage(data: number[]): void {
+  private onMessage(data: number[], timestampMs: number): void {
     this.opts.onActivity?.();
     const decoded = decodeMidi(data);
 
@@ -618,6 +725,11 @@ class ControllerRuntime {
       if (bank !== this.activeBank) {
         this.activeBank = bank;
         this.setStatus({ lastEvent: `MFT bank ${bank + 1}` });
+        // FULL repaint (empty diff base), not a diff: the device latches LED
+        // state per bank and can redraw on a bank switch, so a diff against
+        // what we last SENT can silently disagree with what the hardware now
+        // SHOWS (the stale-LED bug Sina hit). ~40 CCs per bank switch is cheap.
+        this.ledState = {};
         this.projectAndSend();
       }
       return;
@@ -637,16 +749,26 @@ class ControllerRuntime {
         // an absolute position, so learning it and feeding it through absolute
         // scaleMidiToRange would pin the param to ~0.5 jitter. Reject when EITHER
         // the value decodes as a relative delta OR the event is on a
-        // configureOnConnect device's rotary/switch channel (bank-3/4 turns +
+        // configureOnConnect device's rotary/switch channel (bank-2/3/4 turns +
         // pushes never reach a static profile action, so profileClaims wouldn't
-        // catch them). Named error so the popover can explain.
+        // catch them). The reason is STRUCTURED (LearnRejectReason): bank-1
+        // encoders are `order-mapped-encoder` (they drive params by order, by
+        // design); encoder numbers ≥ 16 are `reserved-bank` — the future
+        // custom-mapping UI relaxes ONLY that branch.
         const isRelativeCode = decoded.type === 'cc' && decodeRelativeDelta(decoded.value) !== null;
         const onRotaryOrSwitch = this.profile.device.configureOnConnect
           && (decoded.type === 'cc' || decoded.type === 'noteOn' || decoded.type === 'noteOff')
           && (decoded.channel === MidiChannels.ROTARY_ENCODER || decoded.channel === MidiChannels.SWITCH_AND_COLOR);
         if (isRelativeCode || onRotaryOrSwitch) {
-          if (this.learn.reportReject("that's an endless encoder — knobs map by order, not by learn")) {
-            this.setStatus({ lastEvent: `learn ✕ ${describeEvent(decoded, null)} (endless encoder)` });
+          const encoderNumber = decoded.type === 'cc'
+            ? decoded.cc
+            : (decoded.type === 'noteOn' || decoded.type === 'noteOff' ? decoded.note : 0);
+          const reason: LearnRejectReason = onRotaryOrSwitch && encoderNumber >= Encoders.DEVICE_KNOB_PER_BANK
+            ? { kind: 'reserved-bank' }
+            : { kind: 'order-mapped-encoder' };
+          if (this.learn.reject(reason)) {
+            const tag = reason.kind === 'reserved-bank' ? 'reserved bank' : 'order-mapped encoder';
+            this.setStatus({ lastEvent: `learn ✕ ${describeEvent(decoded, null)} (${tag})` });
             return;
           }
         }
@@ -659,14 +781,14 @@ class ControllerRuntime {
         const focused = this.opts.getSnapshot().focused;
         const dup = focused?.midiMappings.find((b) => b.enabled && bindingMatches(b.control, decoded));
         if (dup) {
-          if (this.learn.reportReject(`that control is already learned to '${dup.target.parameter}'`)) {
+          if (this.learn.reject({ kind: 'already-bound', parameter: dup.target.parameter })) {
             this.setStatus({ lastEvent: `learn ✕ ${describeEvent(decoded, dup.id)} (already bound)` });
             return;
           }
         }
         const claimed = profileClaims(this.profile, cap.ref, this.context);
         if (claimed !== null) {
-          if (this.learn.reportConflict(claimed)) {
+          if (this.learn.reject({ kind: 'profile-claimed', controlId: claimed })) {
             this.setStatus({ lastEvent: `learn ✕ ${describeEvent(decoded, claimed)} (mapped)` });
             return;
           }
@@ -679,7 +801,7 @@ class ControllerRuntime {
 
     // 2) MIDI-learned binding application — a learned control drives the focused
     //    pattern's STATIC param value. Binding-first: a learned control wins
-    //    over any static profile action on the same control (faders 4-6 are
+    //    over any static profile action on the same control (faders 4-8 are
     //    unmapped in the profile, so normal use never collides).
     if (this.applyBinding(decoded)) return;
 
@@ -713,7 +835,9 @@ class ControllerRuntime {
     // ── MFT relative-encoder + side-button actions (runtime-handled) ──
     if (ev.resolved.kind === 'focusStep') { this.handleFocusStep(ev.resolved.dir); return; }
     if (ev.resolved.kind === 'focusedParamReset') { this.handleParamReset(ev.resolved.index); return; }
-    if (ev.resolved.kind === 'focusedParamDelta' || ev.resolved.kind === 'paramCenterDelta') {
+    if (ev.resolved.kind === 'hueReset') { this.handleHueReset(); return; }
+    if (ev.resolved.kind === 'focusedParamDelta' || ev.resolved.kind === 'paramCenterDelta'
+      || ev.resolved.kind === 'hueDelta') {
       // Relative deltas ACCUMULATE across the coalescer window (no tick dropped),
       // then flush as a single write against the optimistic value in
       // flushResolved. For a focused delta, capture the focus identity NOW (N3)
@@ -722,7 +846,26 @@ class ControllerRuntime {
       if (ev.resolved.kind === 'focusedParamDelta' && !this.deltaFocusKey.has(ev.controlId)) {
         this.deltaFocusKey.set(ev.controlId, this.opts.getSnapshot().focused?.key ?? null);
       }
-      this.coalescer.accumulate(ev.controlId, ev.resolved, combineDelta);
+      // Hue turn: same mid-window guard, but keyed on the CHANNEL identity
+      // (role:id) — the hue is channel-level, so an entry change mid-turn is
+      // harmless while a focus (channel) change must drop the window rather
+      // than recolor the new channel. Applies in BOTH contexts (the deck
+      // tab's single channel can't refocus, so the guard is trivially
+      // satisfied there).
+      if (ev.resolved.kind === 'hueDelta' && !this.deltaFocusKey.has(ev.controlId)) {
+        this.deltaFocusKey.set(ev.controlId, channelIdentity(this.opts.getSnapshot().focused));
+      }
+      // Velocity gain is applied PER TICK, at arrival time, from this control's
+      // continuous rate estimate (accel.ts round 3) — the coalescer then just
+      // SUMS pre-gained deltas, so the feel cannot depend on how ticks land in
+      // 33 ms buckets. The tick's transport timestamp drives the estimate.
+      let accel = this.tickAccels.get(ev.controlId);
+      if (!accel) {
+        accel = new TickAccelerator();
+        this.tickAccels.set(ev.controlId, accel);
+      }
+      const gained = { ...ev.resolved, delta: accel.applyTick(ev.resolved.delta, timestampMs) };
+      this.coalescer.accumulate(ev.controlId, gained, combineDelta);
       return;
     }
     if (ev.continuous) {
@@ -796,12 +939,15 @@ class ControllerRuntime {
     // P2-3 reset-then-turn: SEED the turn slot's optimistic anchor with the reset
     // value (not forget it). The old code cleared it, so an immediate follow-up
     // turn re-seeded from the STALE snapshot base and the reset "didn't take"
-    // under continued turning. Seeding both the optimistic value and its
-    // snap-anchor makes the next window accumulate from the reset value, and a
-    // lagging snapshot echo can't trip a re-seed back to the old base.
+    // under continued turning. The snap-anchor is seeded with the snapshot we
+    // ACTUALLY observe now (the pre-reset base), not the reset value: the echo
+    // then travels inside the [observed, reset] span, so neither the flush
+    // anchor nor the ring display can misread the reset's own echo as an
+    // external jump anywhere along its path.
     if (turnControlId !== null) {
       this.optimisticValues.set(turnControlId, value);
-      this.lastSnapAnchor.set(turnControlId, value);
+      this.lastSnapAnchor.set(turnControlId, exp.base ?? exp.v0);
+      this.optimisticFocusKey.set(turnControlId, focused.key);
     }
     // Reset unlocks the pickup slot for any binding on this param (a deliberate
     // jump), mirroring a note-press write.
@@ -809,6 +955,7 @@ class ControllerRuntime {
     this.coalescer.push(`knob:${index}`, {
       kind: 'localParam', role: focused.role, channelId: focused.id, exportId: exp.id, value,
     });
+    this.projectAndSend(); // ring shows the reset value immediately
   }
 
   /** The profile control id whose focusedParamKnob drives the focused export at
@@ -820,6 +967,107 @@ class ControllerRuntime {
       if (a.kind === 'focusedParamKnob' && a.index === index) return control.id;
     }
     return null;
+  }
+
+  /** The profile control id whose paramCenterRelative turn drives the CPC key —
+   *  the slot its optimistic value lives under, so the ring display can read
+   *  it. null when no relative knob maps this key (e.g. the APC's absolute
+   *  fader path, which has no optimistic entries). */
+  private paramCenterControlIdForKey(key: string): string | null {
+    for (const control of this.profile.controls) {
+      const a = control.action;
+      if (a.kind === 'paramCenterRelative' && a.key === key) return control.id;
+    }
+    return null;
+  }
+
+  /** The profile control id of the hue knob's turn (hueKnob) —
+   *  the slot a hue spin accumulates under, so the hue push-reset can cancel a
+   *  pending turn (same reset/turn race as #7). null when the profile maps no
+   *  hue knob. */
+  private hueTurnControlId(): string | null {
+    for (const control of this.profile.controls) {
+      if (control.action.kind === 'hueKnob') return control.id;
+    }
+    return null;
+  }
+
+  /** Encoder push on the hue knob → reset the FOCUSED CHANNEL's hue to 0°
+   *  (deck tab = the DECK CHANNEL, auto-focused; mixer tab = the focused
+   *  overlay). Hue is PER-CHANNEL ONLY (the global shifter — and its
+   *  auto-rotate — was removed 2026-07), so there is nothing to preserve:
+   *  a `{ hue: 0 }` PATCH clobbers nothing else. Mirrors handleParamReset's
+   *  reset/turn hygiene: cancel the pending accumulated turn and seed the
+   *  per-CHANNEL optimistic anchor with 0 so an immediate follow-up spin
+   *  accumulates from the reset value (P2-3 shape). */
+  private handleHueReset(): void {
+    const focused = this.opts.getSnapshot().focused;
+    const turnControlId = this.hueTurnControlId();
+    if (turnControlId !== null) {
+      this.coalescer.cancel(turnControlId);
+      this.deltaFocusKey.delete(turnControlId);
+    }
+    if (!focused) {
+      // Nothing focused (no channels on the mixer) — inert with a visible
+      // note, never a guessed target.
+      this.setStatus({ lastEvent: 'hue reset (no focused channel — inert)' });
+      return;
+    }
+    if (turnControlId !== null) {
+      const anchorKey = `${turnControlId}@${channelIdentity(focused)}`;
+      this.optimisticValues.set(anchorKey, 0);
+      // Snap-anchor = the channel hue we actually observe (P2-3 shape). When the
+      // snapshot hasn't threaded it, the write target (0) IS the best observed
+      // fact — the echo confirms it at distance 0.
+      this.lastSnapAnchor.set(anchorKey, typeof focused.hue === 'number' ? focused.hue : 0);
+    }
+    this.setStatus({
+      lastEvent: `hue ${focused.role === 'deck' ? 'deck' : `ch ${focused.layer + 1}`} reset → 0°`,
+    });
+    this.projectAndSend(); // ring + colour show the reset immediately
+    void this.runDispatch({ kind: 'channelHue', role: focused.role, channelId: focused.id, degrees: 0 });
+  }
+
+  /** Flush a hue-turn window onto the FOCUSED CHANNEL's hue (BOTH contexts —
+   *  hue is per-channel only). Circular wrap + optimistic-anchor semantics,
+   *  anchored on `focused.hue` and keyed PER CHANNEL (`controlId@role:id`) so
+   *  a focus switch lands on the new channel's own anchor slot — ring +
+   *  accumulation re-sync to that channel's hue instead of dragging the old
+   *  channel's value along. */
+  private async flushChannelHueDelta(
+    controlId: string,
+    delta: number,
+    capturedChannel: string | null | undefined,
+  ): Promise<void> {
+    const focused = this.opts.getSnapshot().focused;
+    if (!focused) {
+      this.forgetOptimistic(controlId);
+      this.setStatus({ lastEvent: 'hue (no focused channel — knob inert)' });
+      return;
+    }
+    const identity = channelIdentity(focused);
+    // Mid-window focus guard (N3 shape): if focus moved to ANOTHER CHANNEL
+    // between accumulate and flush, DROP the window rather than recolor the
+    // newly focused channel.
+    if (capturedChannel !== undefined && capturedChannel !== identity) {
+      this.setStatus({ lastEvent: 'hue delta dropped (focus changed mid-turn)' });
+      return;
+    }
+    if (typeof focused.hue !== 'number') {
+      // The snapshot didn't thread this channel's hue — never anchor a write
+      // on a fabricated 0 (it could yank an operator-set hue). Inert + visible.
+      this.setStatus({ lastEvent: 'hue (channel hue not loaded yet — knob inert)' });
+      return;
+    }
+    const anchorKey = `${controlId}@${identity}`;
+    const anchor = this.circularOptimisticAnchor(anchorKey, focused.hue);
+    const degrees = wrapDegrees(anchor + delta * 360);
+    this.optimisticValues.set(anchorKey, degrees);
+    this.setStatus({
+      lastEvent: `hue ${focused.role === 'deck' ? 'deck' : `ch ${focused.layer + 1}`} = ${Math.round(degrees)}°`,
+    });
+    this.projectAndSend(); // ring + colour track the optimistic per-channel hue now
+    await this.runDispatch({ kind: 'channelHue', role: focused.role, channelId: focused.id, degrees });
   }
 
   /** Coalescer flush for a resolved payload. Most payloads dispatch directly; the
@@ -852,9 +1100,15 @@ class ControllerRuntime {
       // operator's set value; unmodulated params omit it (base === v0).
       const snapAnchor = exp.base ?? exp.v0;
       const anchor = this.optimisticAnchor(controlId, snapAnchor);
+      // The delta was already velocity-gained PER TICK at accumulate time
+      // (accel.ts); the window sum applies as-is.
       const value = clampUnit(anchor + payload.delta);
       this.optimisticValues.set(controlId, value); // seed the next window's anchor
+      this.optimisticFocusKey.set(controlId, focused.key); // ring overlay is per-focus
       this.setStatus({ lastEvent: `knob ${exp.name} = ${value.toFixed(2)}` });
+      // Repaint NOW so the ring tracks the optimistic value during the sweep
+      // instead of lagging the engine echo round-trip and catching up after.
+      this.projectAndSend();
       await this.runDispatch({
         kind: 'localParam', role: focused.role, channelId: focused.id, exportId: exp.id, value,
       });
@@ -894,10 +1148,23 @@ class ControllerRuntime {
       }
       this.clearRuntimeParamError(payload.key); // key present now → drop any stale flag
       const anchor = this.optimisticAnchor(controlId, cur);
+      // Same per-tick velocity gain as the local-param knobs (already applied
+      // at accumulate time — global speed sweeps must feel identical).
       const value = clampUnit(anchor + payload.delta);
       this.optimisticValues.set(controlId, value);
       this.setStatus({ lastEvent: `${payload.key} = ${value.toFixed(2)}` });
+      this.projectAndSend(); // ring tracks the optimistic value, not the echo
       await this.runDispatch({ kind: 'paramCenter', key: payload.key, value });
+      return;
+    }
+    if (payload.kind === 'hueDelta') {
+      // Sina's ruling (2026-07): the hue knob targets the FOCUSED CHANNEL's
+      // per-channel hue in BOTH contexts — the DECK CHANNEL on the deck tab,
+      // the focused overlay on the mixer tab. There is NO global hue shifter
+      // any more. The captured mid-window channel guard is consumed here.
+      const capturedChannel = this.deltaFocusKey.get(controlId);
+      this.deltaFocusKey.delete(controlId);
+      await this.flushChannelHueDelta(controlId, payload.delta, capturedChannel);
       return;
     }
     // Absolute paramCenter (e.g. the APC's fader 7) shares the sync gate (#4):
@@ -948,6 +1215,7 @@ class ControllerRuntime {
   private forgetOptimistic(controlId: string): void {
     this.optimisticValues.delete(controlId);
     this.lastSnapAnchor.delete(controlId);
+    this.optimisticFocusKey.delete(controlId);
   }
 
   /** Resolve the anchor for a relative-delta window (#3 fast-turn undershoot).
@@ -961,13 +1229,73 @@ class ControllerRuntime {
    *  that gap large yet the snapshot is only creeping toward us, so re-seeding on
    *  the gap would reintroduce the undershoot. A snapshot that moved more than
    *  epsilon between windows is an external change we must adopt. */
+  /** CIRCULAR twin of optimisticAnchor for hue angles (per-channel-keyed
+   *  entries — one wrap/reseed rule): keep the local
+   *  optimistic value while the snapshot merely creeps toward it (throttled
+   *  echo), re-seed when it JUMPED beyond the circular epsilon (an external
+   *  write / reset). Distances are circular (359°→1° is a 2° creep, not 358°). */
+  private circularOptimisticAnchor(key: string, snapDegrees: number): number {
+    const optimistic = this.optimisticValues.get(key);
+    const prevSnap = this.lastSnapAnchor.get(key);
+    this.lastSnapAnchor.set(key, snapDegrees);
+    return optimistic === undefined || prevSnap === undefined
+      || circularDegreesDistance(snapDegrees, prevSnap) > HUE_RESEED_EPSILON_DEG
+      ? snapDegrees
+      : optimistic;
+  }
+
   private optimisticAnchor(controlId: string, snapValue: number): number {
     const optimistic = this.optimisticValues.get(controlId);
     const prevSnap = this.lastSnapAnchor.get(controlId);
     this.lastSnapAnchor.set(controlId, snapValue);
     if (optimistic === undefined || prevSnap === undefined) return snapValue;
-    if (Math.abs(snapValue - prevSnap) > OPTIMISTIC_RESEED_EPSILON) return snapValue; // external jump
-    return optimistic; // snapshot only lagging → keep accumulating locally
+    // Echo creep / in-span echo → keep accumulating locally; a genuine external
+    // jump (shared classifier `isExternalSnapshotJump`) → adopt the snapshot.
+    return isExternalSnapshotJump(prevSnap, optimistic, snapValue) ? snapValue : optimistic;
+  }
+
+  /** RING-DISPLAY twin of optimisticAnchor: the value the ring should show for
+   *  a relative-knob target — the LOCAL optimistic value while the engine echo
+   *  is still catching up to our own writes (so a fast sweep's ring tracks the
+   *  knob, not the ~150 ms-lagging snapshot), the SNAPSHOT otherwise. Unlike
+   *  the flush anchor it never records a new snap-anchor (observation cadence
+   *  stays at flush cadence — observing at repaint rate would make every
+   *  external move look like sub-epsilon creep and freeze the ring). Two ways
+   *  the optimistic entry dies here (both mirror what the next flush would
+   *  decide anyway, so display and flush can never disagree):
+   *    - the echo LANDED (snapshot within the settle tolerance of the
+   *      optimistic value) → the entry has served its purpose, forget it so a
+   *      later external move is followed immediately;
+   *    - the snapshot JUMPED externally (shared classifier) → trust the
+   *      snapshot and forget the entry. */
+  private optimisticDisplayValue(key: string, snapValue: number): number {
+    const optimistic = this.optimisticValues.get(key);
+    const prevSnap = this.lastSnapAnchor.get(key);
+    if (optimistic === undefined || prevSnap === undefined) return snapValue;
+    if (Math.abs(snapValue - optimistic) <= OPTIMISTIC_SETTLE_EPSILON
+      || isExternalSnapshotJump(prevSnap, optimistic, snapValue)) {
+      this.forgetOptimistic(key);
+      return snapValue;
+    }
+    return optimistic;
+  }
+
+  /** CIRCULAR twin of optimisticDisplayValue for hue rings (per-channel
+   *  keys). Consistent with circularOptimisticAnchor: distances are
+   *  circular and there is no span classification — a snapshot move beyond the
+   *  circular epsilon re-seeds (here: forgets), a smaller move is echo creep
+   *  and the optimistic degrees keep showing. Settle rule as in the linear
+   *  twin: once the echo lands on the optimistic value, forget the entry. */
+  private circularOptimisticDisplayDegrees(key: string, snapDegrees: number): number {
+    const optimistic = this.optimisticValues.get(key);
+    const prevSnap = this.lastSnapAnchor.get(key);
+    if (optimistic === undefined || prevSnap === undefined) return snapDegrees;
+    if (circularDegreesDistance(snapDegrees, optimistic) <= HUE_SETTLE_EPSILON_DEG
+      || circularDegreesDistance(snapDegrees, prevSnap) > HUE_RESEED_EPSILON_DEG) {
+      this.forgetOptimistic(key);
+      return snapDegrees;
+    }
+    return optimistic;
   }
 
   /** Handle a focusChannel track-button press — a MIDI focus intent. Routes
@@ -1166,15 +1494,43 @@ class ControllerRuntime {
       getColorPaletteHue: (index) => snap.colorPalettes[index] ?? null,
       // ── MFT ring feedback (best-effort) ──
       // Show the value the KNOB edits: the modulation base (`base ?? v0`), not
-      // the moving modulated `v0` (#6, decision D-2). The ring pulse still flags
-      // that the param is modulated; the ring position tracks the operator's set
-      // value, consistent with the delta + pickup anchors.
+      // the moving modulated `v0` (#6, decision D-2), OVERLAID with the
+      // runtime's optimistic value while a turn's engine echo is still in
+      // flight (optimisticDisplayValue) — so a fast sweep's ring tracks the
+      // knob, not the ~150 ms-lagging snapshot. The overlay is only trusted
+      // for the focus it was written under (optimisticFocusKey): a focus or
+      // entry switch repaints from the NEW focus's own snapshot values.
       getFocusedExportValue: (index) => {
         const exp = snap.focused?.exports[index];
         if (!exp) return null;
-        return exp.base ?? exp.v0;
+        const base = exp.base ?? exp.v0;
+        const controlId = this.turnControlIdForIndex(index);
+        if (controlId === null) return base;
+        if (this.optimisticFocusKey.get(controlId) !== snap.focused?.key) return base;
+        return this.optimisticDisplayValue(controlId, base);
       },
-      getGlobalParamValue: (key) => snap.globalParamValues?.[key] ?? null,
+      getGlobalParamValue: (key) => {
+        const cur = snap.globalParamValues?.[key];
+        if (typeof cur !== 'number') return null;
+        const controlId = this.paramCenterControlIdForKey(key);
+        return controlId === null ? cur : this.optimisticDisplayValue(controlId, cur);
+      },
+      // Live hue for the hue knob's ring + colour tracking — the FOCUSED
+      // CHANNEL's per-channel hue in BOTH contexts (deck tab = the deck
+      // channel, mixer tab = the focused overlay; hue is per-channel only —
+      // the global shifter was removed 2026-07). null until the channel's
+      // hue loads / nothing is focused (ring 0 + rest colour, never a
+      // fabricated hue). The optimistic overlay is keyed per channel
+      // (`controlId@role:id`, the same anchor slots the flush path writes),
+      // so a focus switch reads the NEW channel's own entry — ring + colour
+      // re-sync to that channel's hue, never dragging the previous channel's
+      // optimistic value along.
+      getHueKnobDegrees: () => {
+        const hueId = this.hueTurnControlId();
+        const hue = typeof snap.focused?.hue === 'number' ? snap.focused.hue : null;
+        if (hue === null || hueId === null) return hue;
+        return this.circularOptimisticDisplayDegrees(`${hueId}@${channelIdentity(snap.focused)}`, hue);
+      },
       getFocusedIdentityColor: () => focusedIdentityColor(snap.focused),
       getFocusedExportModulated: (index) => !!snap.focused?.exports[index]?.modulated,
       // The projector STROBES a paramCenterRelative ring whose key is engine-owned
@@ -1258,6 +1614,15 @@ export class MidiManager {
         return L ? { id: L.id, role: L.role } : null;
       },
       getColorPalette: (index) => opts.getSnapshot().colorPalettes[index] ?? null,
+      // For the MFT (0,0) push (bpmSyncToggle): the engine's live BPM→Speed
+      // sync flag. The dispatcher layers its own lagging-echo protection on top.
+      getBpmSpeedSyncOn: () => opts.getSnapshot().bpmSpeedSyncOn === true,
+      // The slot's behavior from the live snapshot — makes the pad dispatch
+      // behavior-aware (a 'trigger' slot fires 'trigger', not 'toggle'). null
+      // when the slot isn't in the snapshot yet (boot/refresh race); the
+      // dispatcher then fails safe to 'toggle'.
+      getGlobalEffectSlotBehavior: (slot) =>
+        opts.getSnapshot().globalEffectSlots.find((s) => s.slot === slot)?.behavior ?? null,
     });
     for (const profile of opts.profiles) {
       this.runtimes.push(new ControllerRuntime(profile, opts, dispatcher, this.learn, () => this.emitStatus()));

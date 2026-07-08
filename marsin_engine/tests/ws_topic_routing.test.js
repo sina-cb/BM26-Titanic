@@ -95,8 +95,8 @@ test('UI/state events ride /ws/control', () => {
     'mixerTransitionRejected',
     'globalEffectSlots',
     'globalEffectMacroStatus',
-    // docs/39 §F-hue: global hue shifter knob broadcast.
-    'globalHueShift',
+    // (globalHueShift was removed 2026-07 — global hue shifter is gone;
+    // hue is per-channel only and rides the mixer/deck broadcasts.)
     // docs/39 §F-invert: global color-invert toggle broadcast.
     'globalInvert',
     'scheduledTasks',

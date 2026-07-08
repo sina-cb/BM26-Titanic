@@ -27,8 +27,8 @@ contexts:
   # one (*unified) so there is exactly ONE layout to maintain.
   deck: &unified
     # ── Faders ────────────────────────────────────────────────────────────
-    # 1-3 → channels (layers); 4-6 + 8 → local params (MIDI-learn, per-pattern);
-    # 7 → global speed; 9 → master brightness.
+    # 1-3 → channels (layers); 4-8 → local params (MIDI-learn, per-pattern);
+    # 9 → master brightness.
     - id: fader_1_channel1
       match: { type: cc, channel: 0, cc: 48 }
       action: { kind: mixerLayerFader, layer: 0, range: [0, 1] }
@@ -38,19 +38,17 @@ contexts:
     - id: fader_3_channel3
       match: { type: cc, channel: 0, cc: 50 }
       action: { kind: mixerLayerFader, layer: 2, range: [0, 1] }
-    # Faders 4-6 (cc51-53) AND fader 8 (cc55) → local params, bound at runtime
-    # via MIDI-learn (per-pattern) on the FOCUSED channel — so they are
-    # intentionally NOT statically mapped here (binding-first in the manager).
-    # "Local speed" = learn the pattern's speed slider onto fader 8.
-    - id: fader_7_speed
-      match: { type: cc, channel: 0, cc: 54 }
-      action: { kind: paramCenter, key: speed, range: [0, 1] }
+    # Faders 4-8 (cc51-55) → local params, bound at runtime via MIDI-learn
+    # (per-pattern) on the FOCUSED channel — so they are intentionally NOT
+    # statically mapped here (binding-first in the manager). Fader 7's old
+    # static GLOBAL SPEED reservation moved to the MFT (0,0) knob (UX v2,
+    # 2026-07), so 7 is a free learn fader like the rest.
     - id: fader_9_master
       match: { type: cc, channel: 0, cc: 56 }
       action: { kind: master }
 
     # ── Track buttons 1-3 → FOCUS channels 1-3 (LED lit = focused) ─────────
-    # Pressing one focuses that channel so the local-param faders (4-6, 8)
+    # Pressing one focuses that channel so the local-param faders (4-8)
     # drive ITS active pattern's MIDI bindings. Deck tab: only channel 1
     # exists (auto-focused), so 2-3 stay dark. (Solo moved off the controller
     # in favour of the focus model — Sina's 2026-06 redesign.)
@@ -143,21 +141,42 @@ contexts:
       match: { type: column, channel: 0, column: 7, fromRow: 0, toRow: 7 }
       action: { kind: colorPalettePair, bank: 1 }
 
-    # ── Scene Launch (bottom→up): blackout, then global-effect slots 1..7 ──
-    - id: scene_blackout
-      match: { type: note, channel: 0, notes: [119] }
-      action: { kind: blackoutToggle }
-      led: { on: 2, off: 0 }   # blink when blackout engaged (alert)
+    # ── Scene Launch column → global-effect slots 1..8 (TOP → BOTTOM) ──────
+    # The APC mini mk2 Scene Launch buttons are a vertical column of EIGHT
+    # (right of the grid), notes 112..119, where note 112 = Scene 1 = the
+    # PHYSICAL TOP button and note 119 = Scene 8 = the PHYSICAL BOTTOM button
+    # (see apc_mini_mk2_reference.md → INBOUND: Scene Launch 1-8 = 0x70..0x77).
+    #
+    # Operator contract (global-effects parity, 2026-07): the MIDI column read
+    # TOP → BOTTOM maps 1:1 onto the CaptainPad GLOBAL EFFECTS strip read
+    # LEFT-MOST → RIGHT-MOST. GlobalEffectMacros renders slot 1 as the left-most
+    # chip and slot VISIBLE_SLOT_COUNT (8) as the right-most, so:
+    #
+    #   physical button (top→bottom)   note   UI slot (left→right)
+    #   ─────────────────────────────  ────   ────────────────────
+    #   Scene 1  (TOP)                  112    slot 1  (left-most)
+    #   Scene 2                         113    slot 2
+    #   Scene 3                         114    slot 3
+    #   Scene 4                         115    slot 4
+    #   Scene 5                         116    slot 5
+    #   Scene 6                         117    slot 6
+    #   Scene 7                         118    slot 7
+    #   Scene 8  (BOTTOM)              119    slot 8  (right-most)
+    #
+    # All 8 Scene buttons are now global-effect slots. BLACKOUT (the e-stop)
+    # moved OFF this column onto Track button 8 (note 107, the red single-colour
+    # button at the bottom-right of the Track row) so the whole Scene column is
+    # a clean 1:1 image of the 8-slot UI strip.
     - id: scene_ge_1
-      match: { type: note, channel: 0, notes: [118] }
+      match: { type: note, channel: 0, notes: [112] }   # Scene 1 = TOP
       action: { kind: globalEffectSlot, slot: 1 }
       led: { on: 1, off: 0 }
     - id: scene_ge_2
-      match: { type: note, channel: 0, notes: [117] }
+      match: { type: note, channel: 0, notes: [113] }
       action: { kind: globalEffectSlot, slot: 2 }
       led: { on: 1, off: 0 }
     - id: scene_ge_3
-      match: { type: note, channel: 0, notes: [116] }
+      match: { type: note, channel: 0, notes: [114] }
       action: { kind: globalEffectSlot, slot: 3 }
       led: { on: 1, off: 0 }
     - id: scene_ge_4
@@ -165,16 +184,31 @@ contexts:
       action: { kind: globalEffectSlot, slot: 4 }
       led: { on: 1, off: 0 }
     - id: scene_ge_5
-      match: { type: note, channel: 0, notes: [114] }
+      match: { type: note, channel: 0, notes: [116] }
       action: { kind: globalEffectSlot, slot: 5 }
       led: { on: 1, off: 0 }
     - id: scene_ge_6
-      match: { type: note, channel: 0, notes: [113] }
+      match: { type: note, channel: 0, notes: [117] }
       action: { kind: globalEffectSlot, slot: 6 }
       led: { on: 1, off: 0 }
     - id: scene_ge_7
-      match: { type: note, channel: 0, notes: [112] }
+      match: { type: note, channel: 0, notes: [118] }
       action: { kind: globalEffectSlot, slot: 7 }
       led: { on: 1, off: 0 }
+    - id: scene_ge_8
+      match: { type: note, channel: 0, notes: [119] }   # Scene 8 = BOTTOM
+      action: { kind: globalEffectSlot, slot: 8 }
+      led: { on: 1, off: 0 }
+
+    # ── Track button 8 → BLACKOUT e-stop ──────────────────────────────────
+    # Relocated here from Scene 8 (note 119) so the Scene column is a pure
+    # image of the 8 global-effect slots. Track button 8 (note 107) is the
+    # bottom-right red single-colour button; it BLINKS (velocity 2) while
+    # blackout is engaged. Track buttons 1-3 (100-102) are focusChannel;
+    # 4-7 (103-106) remain free.
+    - id: track_8_blackout
+      match: { type: note, channel: 0, notes: [107] }
+      action: { kind: blackoutToggle }
+      led: { on: 2, off: 0 }   # blink when blackout engaged (alert)
 
   mixer: *unified

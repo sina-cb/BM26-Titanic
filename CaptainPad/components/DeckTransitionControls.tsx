@@ -26,6 +26,7 @@ import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable, useWindowDi
 import { usePalette } from '@/hooks/use-theme';
 import { useGlobalStyles } from '@/styles/globalStyles';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { buildTransitionModePatch, isTransitionStylePickerDisabled } from '@/components/deck_tx_logic';
 
 // ── SwapCountdown ───────────────────────────────────────────────────────
 // A "🕐 M:SS" chip counting down to the next autopilot swap. Self-contained:
@@ -343,7 +344,10 @@ export function DeckTransitionControls({
 }) {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
-  const styleDisabled = shuffle; // when shuffle is on, the picked mode is ignored
+  // The STYLE picker is settable regardless of SHUFFLE STYLE (operator bug
+  // 2026-07-07: the old `shuffle` gate blocked blend-mode changes). Only
+  // DECK TX OFF greys it — see deck_tx_logic.ts (pinned by its vitest).
+  const styleDisabled = isTransitionStylePickerDisabled({ enabled, shuffle });
 
   // Card-internal header — moved INSIDE the card (May 2026 compaction)
   // to reclaim the vertical space the freestanding label used to occupy
@@ -396,10 +400,14 @@ export function DeckTransitionControls({
             {enabled ? 'ON' : 'OFF'}
           </Text>
         </TouchableOpacity>
+        {/* Picking an explicit style while SHUFFLE STYLE is on drops shuffle
+            in the SAME patch — while shuffling, the engine ignores the
+            configured mode (it rolls a random trans_* per swap), so without
+            this the pick would sit latent and appear to do nothing. */}
         <TransitionStylePicker
           current={mode}
-          onSelect={(m) => onChange({ mode: m })}
-          disabled={styleDisabled || !enabled}
+          onSelect={(m) => onChange(buildTransitionModePatch(m, shuffle))}
+          disabled={styleDisabled}
         />
       </View>
 

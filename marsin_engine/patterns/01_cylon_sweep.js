@@ -68,6 +68,14 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
+export function sliderDirection(v) {
+  // Dead-zone guard: slider-center would give 0 (frozen sweep). Keep the sign
+  // away from 0 so the user-direction component never freezes.
+  var d = (v * 2.0) - 1.0;
+  if (d >= 0.0 && d < 0.06) d = 0.06;
+  else if (d < 0.0 && d > -0.06) d = -0.06;
+  direction = d;
+}
 export function sliderLevel(v) { level = v; }
 export function sliderKick(v) { kick = v; }
 export function sliderRadius(v) { radius = v; }
@@ -77,14 +85,6 @@ export function sliderBackgroundGlow(v) { backgroundGlow = v; }
 export function sliderWhiteLevel(v) { whiteLevel = v; }
 export function sliderWhiteKick(v) { whiteKick = v; }
 export function sliderBlinderBite(v) { blinderBite = v; }
-export function sliderDirection(v) {
-  // Dead-zone guard: slider-center would give 0 (frozen sweep). Keep the sign
-  // away from 0 so the user-direction component never freezes.
-  var d = (v * 2.0) - 1.0;
-  if (d >= 0.0 && d < 0.06) d = 0.06;
-  else if (d < 0.0 && d > -0.06) d = -0.06;
-  direction = d;
-}
 
 // ── Tunables ──────────────────────────────────────────────────────────────────
 var BASE_RATE = 0.10;   // sweeps/sec at localSpeed=0 (still creeps)

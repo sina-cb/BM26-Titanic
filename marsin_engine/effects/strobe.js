@@ -24,10 +24,23 @@ export function getFrameLockedStrobeTiming({ hz, duty = 0.5, frameRate = 40 }) {
 
 /**
  * Returns 1.0 (ON) or 0.0 (OFF) for the strobe gate at this frame.
+ *
+ * `phaseOffsetFrames` (default 0) shifts the ON window within the cycle.
+ * The controller supplies a non-zero value when phase-locking the strobe
+ * to the beat grid (via signals.audioBarPhase) so the ON frame lands on
+ * the downbeat instead of free-running from startedAtFrame. Zero keeps
+ * the original free-run behavior exactly.
  */
-export function getFrameLockedStrobeGate({ frameIndex, startedAtFrame, framesPerCycle, onFrames }) {
+export function getFrameLockedStrobeGate({
+  frameIndex,
+  startedAtFrame,
+  framesPerCycle,
+  onFrames,
+  phaseOffsetFrames = 0,
+}) {
   const localFrame = Math.max(0, frameIndex - startedAtFrame);
-  const phaseFrame = localFrame % framesPerCycle;
+  // Positive modulo so a negative offset still lands in [0, framesPerCycle).
+  const phaseFrame = (((localFrame + phaseOffsetFrames) % framesPerCycle) + framesPerCycle) % framesPerCycle;
   return phaseFrame < onFrames ? 1.0 : 0.0;
 }
 
