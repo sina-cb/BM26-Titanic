@@ -15,10 +15,12 @@ _Last touched: 2026-07-07_
 
 ## Active projects
 
-- **party_20260711** — party on Saturday 2026-07-11. Plan/tracker lives in
-  the private repo: `BM26-Firmware-Deployment/PARTY_PLAN_20260711.md`
-  (tracks: MarsinLED/Angio4 hardware, MIDI tests, pattern tuning, party +
-  ambient playlists, party-detection cue).
+- **party_20260711** — party on Saturday 2026-07-11. THE current plan lives
+  in the private repo:
+  `BM26-Firmware-Deployment/.agent/plans/20260707_party_plan_20260711.md`
+  (merge wave + testing plan, MarsinLED/Angio4 hardware, MIDI tests, pattern
+  tuning, party + ambient playlists, party-detection cue). Source feat
+  branches are kept; the integration branch is the working branch.
 - **agent_os_rework** — reworking `.agent/` into the Agent OS. See
   [`../projects/agent_os_rework.md`](../projects/agent_os_rework.md).
 

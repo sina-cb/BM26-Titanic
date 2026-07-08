@@ -1,8 +1,9 @@
 # 2026-07-07 — Party merge wave: 4 branches → `feat/party_integration_20260711`
 
 **Role:** coordinator. **Goal:** integrate everything needed for the
-Saturday 2026-07-11 party. Full task tracker (with hardware/secrets context)
-lives in the private repo: `BM26-Firmware-Deployment/PARTY_PLAN_20260711.md`.
+Saturday 2026-07-11 party. Full task tracker + testing plan (with
+hardware/secrets context) lives in the private repo:
+`BM26-Firmware-Deployment/.agent/plans/20260707_party_plan_20260711.md`.
 
 ## What happened
 
