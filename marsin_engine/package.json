@@ -20,7 +20,13 @@
     "perf:gate": "node tools/perf_gauge.mjs --gate",
     "check:rainbow": "node engine.js --pattern rainbow --model test_bench --dry-run",
     "check:breathing": "node engine.js --pattern test/breathing --model test_bench --dry-run",
-    "check:fire": "node engine.js --pattern test/fire --model test_bench --dry-run"
+    "check:fire": "node engine.js --pattern test/fire --model test_bench --dry-run",
+    "check:syntax": "node --check engine.js",
+    "check:dry-run": "node engine.js --pattern test_const --model test_bench --dry-run",
+    "check": "npm run check:syntax && npm run check:dry-run",
+    "test:hil:autopilot-profile": "node tests/hil/hil_autopilot_profile_test.mjs",
+    "test:hil:audio-reactive": "node tests/hil/hil_audio_reactive_profile_test.mjs",
+    "test:hil:deck-slots": "node tests/hil/hil_deck_playlist_slots_test.mjs"
   },
   "dependencies": {
     "ffmpeg-static": "^5.3.0",

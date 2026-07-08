@@ -663,6 +663,27 @@ export async function setAutopilot(
   }
 }
 
+// Set the DECK autopilot PROFILE (engine `playlist.autopilot.profile`). Lives on
+// the deck base channel's playlist.autopilot alongside the group-locality knobs,
+// so it rides the SAME `POST /deck/playlist/autopilot` endpoint (NOT the
+// autopilot daemon's /autopilot state). The engine 400s an unknown profile
+// (fail loud — no silent coercion); the caller optimistically applies + rolls
+// back on !ok exactly like handleDeckTxChange.
+export async function setAutopilotProfile(profile: string): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/deck/playlist/autopilot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile }),
+    });
+    const data = await res.json();
+    return { ok: res.ok, data, error: res.ok ? undefined : (data?.error || `HTTP ${res.status}`) };
+  } catch (err: any) {
+    warnThrottled('Set autopilot profile failed:', 'Set autopilot profile failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
 export async function savePatternCode(name: string, code: string): Promise<ApiResult<any>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/save-pattern`, {
@@ -1528,7 +1549,15 @@ export async function deletePlaylist(name: string): Promise<ApiResult<any>> {
 // deck's. There is intentionally NO GET /deck/overlays/:id/playlist on the
 // engine — the overlay's assignment rides the `deck` WS message's
 // `overlays[]` array, so fetchChannelPlaylist reads the list for the role.
-export type ChannelRole = 'deck' | 'mixer' | 'deckOverlay';
+// 'deckSlot' is one of the deck's two split-playlist PANES (feat/
+// autopilot_deck_improvement). The deck still plays exactly one pattern; the two
+// panes are stable playlist BINDINGS by name (`primary` / `secondary`) that the
+// operator browses/drives from. `channelId` IS the slot key
+// ('primary' | 'secondary'). Its GET/POST route through the deck's slot
+// endpoints (see the branches below); the reused PlaylistPanel drives a slot's
+// playlist exactly like the deck's, reconciling off the `deck` WS message's
+// `playlistSlots` map. See .agent/projects/deck_split_playlists.md.
+export type ChannelRole = 'deck' | 'mixer' | 'deckOverlay' | 'deckSlot';
 
 // Polymorphic playlist GET. Use this instead of fetchMixerChannelPlaylist
 // from any consumer that may be wired to the deck channel.
@@ -1556,6 +1585,21 @@ export async function fetchChannelPlaylist(
       const list = Array.isArray(data?.overlays) ? data.overlays : [];
       const ov = list.find((o: any) => o && o.id === channelId);
       return { ok: true, data: (ov && ov.playlist) || null };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  }
+  if (role === 'deckSlot') {
+    // Both panes read from ONE slots endpoint: GET /deck/playlist/slots returns
+    // { primary, secondary, splitRatio } — pick the slot for this pane's
+    // channelId. A slot is null when unbound (pane shows its empty state). Fail
+    // loud on a non-2xx.
+    try {
+      const res = await fetchWithTimeout(`${api_base}/deck/playlist/slots`);
+      const data = await res.json();
+      if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+      const slot = data && typeof data === 'object' ? (data as any)[channelId] : null;
+      return { ok: true, data: (slot as PlaylistAssignment) || null };
     } catch (err: any) {
       return { ok: false, error: err.message };
     }
@@ -1598,6 +1642,30 @@ export async function setChannelPlaylist(
     } catch (err: any) {
       return { ok: false, error: err.message };
     }
+  }
+  if (role === 'deckSlot') {
+    // primary === the deck's main playlist: assigning it activates (POST
+    // /deck/playlist loads the first entry, today's behaviour). secondary is
+    // BROWSE-ONLY: POST /deck/playlist/secondary binds the pane without changing
+    // what's playing (the operator taps an entry to drive it); passing null
+    // clears the slot (clearing a live secondary promotes it to primary on the
+    // engine side). The engine 404s an unknown name and 400s secondary===primary
+    // (fail loud).
+    if (channelId === 'secondary') {
+      try {
+        const res = await fetchWithTimeout(`${api_base}/deck/playlist/secondary`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        const data = await res.json();
+        return { ok: res.ok, data, error: res.ok ? undefined : (data?.error || `HTTP ${res.status}`) };
+      } catch (err: any) {
+        return { ok: false, error: err.message };
+      }
+    }
+    // primary slot → existing deck playlist route (assign = activate).
+    return setChannelPlaylist('deck', '', name);
   }
   return setMixerChannelPlaylist(channelId, name);
 }
@@ -1642,7 +1710,70 @@ export async function setChannelPlaylistEntry(
       return { ok: false, error: err.message };
     }
   }
+  if (role === 'deckSlot') {
+    // Tap = DRIVE. Both panes route through the deck's back-compat-extended
+    // entry endpoint with an explicit `slot` so the engine resolves the slot's
+    // playlist name and swaps via loadPlaylistEntryWithTransition — the deck
+    // still plays one pattern. Same 409/EBUSY mid-transition contract as the
+    // deck branch.
+    try {
+      const res = await fetchWithTimeout(`${api_base}/deck/playlist/entry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entryId, slot: channelId }),
+      });
+      const data = await res.json();
+      const code = !res.ok && data && data.code
+        ? String(data.code)
+        : (!res.ok && res.status === 409 ? 'EBUSY' : undefined);
+      return { ok: res.ok, data, code, error: !res.ok ? (data && data.error) : undefined };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  }
   return setMixerChannelPlaylistEntry(channelId, entryId);
+}
+
+// The deck split-playlist slots as one object: { primary, secondary, splitRatio }.
+// `primary`/`secondary` are the virtual slot assignments (null when unbound);
+// `splitRatio` is the divider's pane-1 share. Used by the deck seed to hydrate
+// the divider + secondary-presence before the first `deck` WS broadcast lands.
+export interface DeckPlaylistSlots {
+  primary: PlaylistAssignment | null;
+  secondary: PlaylistAssignment | null;
+  splitRatio: number;
+}
+
+export async function fetchDeckPlaylistSlots(): Promise<ApiResult<DeckPlaylistSlots | null>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/deck/playlist/slots`);
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data: data as DeckPlaylistSlots };
+  } catch (err: any) {
+    warnThrottled('Fetch deck playlist slots failed:', 'Fetch deck playlist slots failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Set the deck split-pane divider RATIO (0..1, pane-1 share). Called once per
+// drag gesture on RELEASE (not per move). The engine 400s a non-finite ratio or
+// one outside [0.15, 0.85] (fail loud — no clamp-on-write); the caller clamps
+// its OWN drag range so a valid gesture always lands. The new ratio rides the
+// `deck` WS broadcast's `playlistSlots.splitRatio` back to every iPad.
+export async function setDeckPlaylistSplit(ratio: number): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/deck/playlist/split`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ratio }),
+    });
+    const data = await res.json();
+    return { ok: res.ok, data, error: res.ok ? undefined : (data?.error || `HTTP ${res.status}`) };
+  } catch (err: any) {
+    warnThrottled('Set deck playlist split failed:', 'Set deck playlist split failed:', err);
+    return { ok: false, error: err.message };
+  }
 }
 
 export async function fetchMixerChannelPlaylist(channelId: string): Promise<ApiResult<PlaylistAssignment | null>> {

@@ -198,3 +198,50 @@ test('recompute() does nothing when sync is disabled', () => {
   bs.recompute();
   assert.equal(pc.writes.length, 0);
 });
+
+// ── Multiplicative speed SCALE (the audio_reactive energy arc, F1 fix) ───────
+test('speed scale defaults to 1 (no attenuation) and getSpeedScale reflects it', () => {
+  const pc = fakePc();
+  const bs = new BpmSpeedSync(pc, { getTempoBpm: () => 120 });
+  assert.equal(bs.getSpeedScale(), 1);
+  pc.setParams(paramSnap()); // 120 in [60,180] → 0.5 * 1
+  bs.attach();
+  bs.recompute();
+  assert.equal(pc.writes.at(-1).value, 0.5, 'scale 1 leaves the tempo mapping untouched');
+});
+
+test('a lower speed scale SAGS the mapped speed (calm → slower)', () => {
+  const pc = fakePc();
+  const bs = new BpmSpeedSync(pc, { getTempoBpm: () => 120 });
+  bs.attach();
+  pc.setParams(paramSnap()); // base 0.5
+  bs.recompute();
+  const full = pc.writes.at(-1).value;
+  bs.setSpeedScale(0.4);
+  bs.recompute();
+  const calm = pc.writes.at(-1).value;
+  assert.equal(calm, 0.2, '0.5 * 0.4 = 0.2');
+  assert.ok(calm < full, 'a lower scale must lower the mapped speed');
+});
+
+test('setSpeedScale rejects out-of-range / non-finite (Codex P0, no silent clamp)', () => {
+  const bs = new BpmSpeedSync(fakePc(), { getTempoBpm: () => 120 });
+  assert.throws(() => bs.setSpeedScale(-0.1), RangeError);
+  assert.throws(() => bs.setSpeedScale(1.5), RangeError);
+  assert.throws(() => bs.setSpeedScale(NaN), RangeError);
+  assert.throws(() => bs.setSpeedScale('x'), RangeError);
+  bs.setSpeedScale(0); bs.setSpeedScale(1); bs.setSpeedScale(0.5); // valid ends OK
+  assert.equal(bs.getSpeedScale(), 0.5);
+});
+
+test('speed scale is idempotent through recompute() (no churn on a settled scale)', () => {
+  const pc = fakePc();
+  const bs = new BpmSpeedSync(pc, { getTempoBpm: () => 120 });
+  bs.attach();
+  pc.setParams(paramSnap());
+  bs.setSpeedScale(0.6);
+  bs.recompute();
+  const n = pc.writes.length;
+  bs.recompute(); bs.recompute();
+  assert.equal(pc.writes.length, n, 'a settled scale must not re-write speed');
+});
