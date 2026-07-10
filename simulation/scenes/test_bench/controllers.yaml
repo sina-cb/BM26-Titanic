@@ -52,7 +52,6 @@ controllers:
           - LED_0
       - port: 2
         universe: 12
-        startAddress: 1
         chain:
           - LED_1
     led:
@@ -67,7 +66,7 @@ controllers:
       boardId: angio4-old
       mac: AA:BB:CC:DD:02:02
       lastPush:
-        at: '2026-07-10T21:56:34.947Z'
-        outcome: needs-reboot
+        at: '2026-07-10T23:02:37.377Z'
+        outcome: applied
         firmwareSHA: 647928678d7b
         configHash: 9111e00c807864bf231bb60ca7e22c03247e25a0a0f99efa8f36ac9c3f750c30

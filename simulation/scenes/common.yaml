@@ -145,7 +145,7 @@ options:
     value: false
     label: Show Generators
   globalPixelScale:
-    value: 1.4
+    value: 0.1
     label: Global Pixel Size
     min: 0.1
     max: 5
@@ -165,7 +165,7 @@ colorWave:
     label: ⚡ Enable
     transient: true
   lightingMode:
-    value: pixelblaze
+    value: sacn_in
     label: Mode
     options:
       - gradient
@@ -218,9 +218,9 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: -12.1665
-    'y': 4.2871
-    z: 5.3918
+    x: -4.1055
+    'y': 3.7881
+    z: 14.3098
   target:
     x: 0.62
     'y': 2.2294

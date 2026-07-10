@@ -24,10 +24,9 @@ import {
   applyPerOutputUniverses,
 } from '../dmx/led/marsinled_client.js';
 import {
-  computeLinearLayout,
-  synthLinearConfig,
   derivePerOutputPlan,
 } from '../dmx/led/device_config_mapper.js';
+import { projectLedStrandSegments } from '../dmx/led/led_patch_projection.js';
 import {
   isLedController,
   isBoundLedController,
@@ -97,30 +96,50 @@ const DEFAULT_DEVICE_IO = {
 // ── Layout preview (no device I/O) ──────────────────────────────────────────
 
 /**
- * Compute the firmware's contiguous linear layout for the per-port derived line
- * from registry state (base universe = the first enabled output's port.universe,
- * Slice D — via synthLinearConfig, the shared builder). Returns { perOutput:
- * Map<outputIndex, layoutEntry>, universes: number[], error: string|null }.
- * Needs NO device snapshot (layout only depends on the enabled outputs, their
- * pixel counts, colorOrder, and the derived base universe).
+ * Compute the PER-OUTPUT layout for the per-port derived line from registry
+ * state. Per-output firmware contract (docs/41; operator ruling 2026-07-10/11:
+ * per-output is the ONLY layout): every port IS one device output — the cursor
+ * starts at (port.universe, ch 1) for EACH port; strands in a port's chain pack
+ * contiguously through the shared no-straddle walker. The legacy single-base
+ * linear preview (synthLinearConfig + computeLinearLayout) was removed with the
+ * rest of the linear path. Returns { perOutput: Map<outputIndex, layoutEntry>,
+ * universes: number[], error: string|null }. Needs NO device snapshot.
  */
 export function deriveLayoutPreview(controller, strandCounts) {
-  const synth = synthLinearConfig(controller, strandCounts);
-  if (!synth) {
-    return { perOutput: new Map(), universes: [], error: 'no enabled output (assign a strand first)' };
-  }
-  try {
-    const layout = computeLinearLayout(synth);
-    const perOutput = new Map();
-    const universes = new Set();
-    for (const out of layout) {
-      perOutput.set(out.outputIndex, out);
-      if (out.enabled) for (const seg of out.segments) universes.add(seg.universe);
+  const stride = (controller.led && controller.led.stride) || 4;
+  const perOutput = new Map();
+  const universes = new Set();
+  let anyEnabled = false;
+  for (const port of controller.ports || []) {
+    const outputIndex = port.port - 1;
+    const names = (port.chain || []).filter((n) => typeof n === 'string');
+    const pixelCount = names.reduce((sum, n) => sum + (strandCounts.get(n) || 0), 0);
+    if (pixelCount <= 0 || !Number.isInteger(port.universe) || port.universe < 1) {
+      perOutput.set(outputIndex, {
+        outputIndex, enabled: false, universe: port.universe,
+        startChannel: 0, endChannel: 0, endUniverse: port.universe,
+        pixelCount, segments: [],
+      });
+      continue;
     }
-    return { perOutput, universes: [...universes].sort((a, b) => a - b), error: null };
-  } catch (err) {
-    return { perOutput: new Map(), universes: [], error: err.message };
+    const walk = projectLedStrandSegments(port.universe, 1, stride, pixelCount);
+    if (walk.overflow) {
+      return { perOutput: new Map(), universes: [],
+        error: `output ${port.port} spills past the sACN universe ceiling` };
+    }
+    const last = walk.segments[walk.segments.length - 1];
+    perOutput.set(outputIndex, {
+      outputIndex, enabled: true, universe: port.universe,
+      startChannel: 1, endChannel: last.endChannel, endUniverse: last.universe,
+      pixelCount, segments: walk.segments,
+    });
+    for (const seg of walk.segments) universes.add(seg.universe);
+    anyEnabled = true;
   }
+  if (!anyEnabled) {
+    return { perOutput, universes: [], error: 'no enabled output (assign a strand first)' };
+  }
+  return { perOutput, universes: [...universes].sort((a, b) => a - b), error: null };
 }
 
 // ── Per-output universe repair (whole-universe, monotonic) ──────────────────

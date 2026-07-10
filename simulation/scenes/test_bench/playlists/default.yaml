@@ -122,7 +122,22 @@ entries:
       sliderLocalSpeed: 0.64
       sliderFalloff: 0.31
       sliderFocus: 0.17
-    modulations: []
+    modulations:
+      - id: mod_sliderKick_audioRiserScore
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: audioRiserScore
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 1
+        curve: linear
     midiMappings: []
     notes: null
   - id: e_default_6_06_neon_elevator

@@ -1,8 +1,11 @@
 /**
- * led_patch_projection.test.js — the device-linear per-strand patch projection
- * for DEVICE-BOUND MarsinLED controllers (plan 20260709_0 P4). Pure: no DOM,
- * no network. Golden cases mirror docs/41 §3 (the real .201 shape) plus the
- * spill, disabled-output-skip, and fail-loud paths.
+ * led_patch_projection.test.js — the PER-OUTPUT per-strand patch projection for
+ * DEVICE-BOUND MarsinLED controllers (plan 20260709_0 P4; per-output-only ruling
+ * 2026-07-10/11). Pure: no DOM, no network. Each controller port IS one device
+ * output whose cursor RESETS to (port.universe, ch 1); strands chained on one
+ * port pack contiguously; an empty/disabled port contributes nothing. Golden
+ * cases mirror docs/41 §3 (the real .201 shape) plus the spill, empty-port-skip,
+ * and fail-loud paths.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -31,7 +34,7 @@ function boundRegistry(ports, { baseUniverse = 3, startAddr = 1, ip = '10.1.1.20
 
 const p = (port, universe, ...chain) => ({ port, universe, chain });
 
-test('bench golden: two 40px outputs → contiguous U3 ch1–160 / ch161–320', () => {
+test('bench golden: two 40px outputs → per-port U3 ch1–160 / U4 ch1–160', () => {
   const reg = boundRegistry([
     p(1, 3, 'lineA'), p(2, 4, 'lineB'), p(3, 5), p(4, 6),
   ]);
@@ -44,47 +47,58 @@ test('bench golden: two 40px outputs → contiguous U3 ch1–160 / ch161–320',
     segments: [{ universe: 3, startChannel: 1, endChannel: 160, pixelCount: 40 }],
     endUniverse: 3, endChannel: 160,
   });
+  // Per-output firmware: lineB is an INDEPENDENT receiver on its OWN port
+  // universe (U4) channel 1 — NOT a continuation of lineA at U3:161.
   assert.deepEqual(fields.get('lineB'), {
-    controllerIp: '10.1.1.201', controllerId: 1, dmxUniverse: 3, dmxAddress: 161,
+    controllerIp: '10.1.1.201', controllerId: 1, dmxUniverse: 4, dmxAddress: 1,
     pixelCount: 40, outputIndex: 1,
-    segments: [{ universe: 3, startChannel: 161, endChannel: 320, pixelCount: 40 }],
-    endUniverse: 3, endChannel: 320,
+    segments: [{ universe: 4, startChannel: 1, endChannel: 160, pixelCount: 40 }],
+    endUniverse: 4, endChannel: 160,
   });
 });
 
-test('cursor is CONTIGUOUS across outputs, not per-port (the firmware model)', () => {
-  // If this used the sim per-port model, lineB would restart at U3:1. The
-  // device runs one contiguous stream, so lineB MUST continue at ch161.
-  const reg = boundRegistry([p(1, 3, 'lineA'), p(2, 4, 'lineB')]);
-  const { fields } = computeLedStrandPatches(reg, new Map([['lineA', 40], ['lineB', 40]]));
-  assert.notEqual(fields.get('lineB').dmxAddress, 1);
-  assert.equal(fields.get('lineB').dmxAddress, 161);
+test('cursor RESETS per-port; contiguity holds only WITHIN one port chain', () => {
+  // Per-output firmware: each output is an independent sACN receiver on its OWN
+  // universe channel 1. Two 40px strands on SEPARATE ports each restart at ch1;
+  // two 40px strands CHAINED on ONE port pack contiguously (the 2nd at ch161).
+  const perPort = boundRegistry([p(1, 3, 'lineA'), p(2, 4, 'lineB')]);
+  const pf = computeLedStrandPatches(perPort, new Map([['lineA', 40], ['lineB', 40]])).fields;
+  assert.deepEqual([pf.get('lineB').dmxUniverse, pf.get('lineB').dmxAddress], [4, 1]);
+
+  const onePort = boundRegistry([p(1, 3, 'chainA', 'chainB'), p(2, 4)]);
+  const of = computeLedStrandPatches(onePort, new Map([['chainA', 40], ['chainB', 40]])).fields;
+  assert.deepEqual([of.get('chainA').dmxUniverse, of.get('chainA').dmxAddress], [3, 1]);
+  assert.deepEqual([of.get('chainB').dmxUniverse, of.get('chainB').dmxAddress], [3, 161]);
 });
 
-test('a disabled middle output is skipped; the cursor stays contiguous', () => {
+test('a disabled/empty middle port contributes nothing and does not shift other ports', () => {
   const reg = boundRegistry([p(1, 3, 'lineA'), p(2, 4), p(3, 5, 'lineC'), p(4, 6)]);
   const { fields } = computeLedStrandPatches(reg, new Map([['lineA', 40], ['lineC', 40]]));
   assert.equal(fields.get('lineA').dmxAddress, 1);
   assert.equal(fields.get('lineA').outputIndex, 0);
-  // lineC follows lineA's 160 channels even though output 1 is empty.
+  // lineC lands at ITS OWN port universe (U5) ch1 — the empty middle port (U4)
+  // neither consumes channels nor shifts lineC off its declared universe.
   assert.deepEqual(fields.get('lineC'), {
-    controllerIp: '10.1.1.201', controllerId: 1, dmxUniverse: 3, dmxAddress: 161,
+    controllerIp: '10.1.1.201', controllerId: 1, dmxUniverse: 5, dmxAddress: 1,
     pixelCount: 40, outputIndex: 2,
-    segments: [{ universe: 3, startChannel: 161, endChannel: 320, pixelCount: 40 }],
-    endUniverse: 3, endChannel: 320,
+    segments: [{ universe: 5, startChannel: 1, endChannel: 160, pixelCount: 40 }],
+    endUniverse: 5, endChannel: 160,
   });
 });
 
-test('spill: a 200px strand fills U3 then U4; the next strand starts in U4', () => {
+test('spill stays within one output: 200px fills U3→U4; the next PORT starts at its own U4:1', () => {
   const reg = boundRegistry([p(1, 3, 'big'), p(2, 4, 'small')]);
   const { fields } = computeLedStrandPatches(reg, new Map([['big', 200], ['small', 40]]));
-  // big starts at U3:1; 128 px fill U3 (ch1..509 occupied, 512 is last full
-  // pixel boundary), remaining 72 px roll to U4:1..288.
+  // big spills WITHIN output 0's own stream: 128 px fill U3 (ch1–512), the
+  // remaining 72 px roll to U4 ch1–288.
   assert.equal(fields.get('big').dmxUniverse, 3);
   assert.equal(fields.get('big').dmxAddress, 1);
-  // small continues after big's 200 px: U4, ch 289.
+  assert.equal(fields.get('big').endUniverse, 4);
+  assert.equal(fields.get('big').endChannel, 288);
+  // small is an INDEPENDENT output: it restarts at its OWN port universe U4 ch1
+  // (per-output firmware), NOT after big's spill at ch289.
   assert.equal(fields.get('small').dmxUniverse, 4);
-  assert.equal(fields.get('small').dmxAddress, 289);
+  assert.equal(fields.get('small').dmxAddress, 1);
 });
 
 test('multiple strands chained on one output pack contiguously', () => {
@@ -103,15 +117,26 @@ test('an UNBOUND LED controller yields NO strand records', () => {
   assert.equal(violations.length, 0);
 });
 
-test('first enabled output with an out-of-range universe → violation, strands unpatched', () => {
-  // Base now derives from the first enabled output's port.universe (Slice D).
-  // A port universe > the sACN ceiling loads (operational, not corruption) and
-  // is flagged loudly at projection — strands stay unpatched.
+test('an output with an out-of-range universe → violation, its strands unpatched', () => {
+  // Per-output: each output declares its OWN universe. A port universe > the
+  // sACN ceiling loads (operational, not corruption) and is flagged loudly at
+  // projection — that output's strands stay unpatched.
   const reg = boundRegistry([p(1, 70000, 'lineA')]);
   const { fields, violations } = computeLedStrandPatches(reg, new Map([['lineA', 40]]));
   assert.equal(fields.size, 0);
   assert.equal(violations[0].code, 'led_unallocated_base');
-  assert.match(violations[0].message, /first enabled output \(port 1\)/);
+  assert.match(violations[0].message, /output 1 carries strands but has no valid universe/);
+});
+
+test('universe-ceiling overflow: a strand spilling past U63999 → loud violation, unpatched', () => {
+  // Per-output equivalent of the removed computeLinearLayout cap test: a 129 px
+  // RGBW strand at U63999 fills U63999, then its 129th pixel would roll to
+  // U64000 (past the sACN ceiling) — the walker overflows, so the strand stays
+  // unpatched rather than wrapping silently (codex P0).
+  const reg = boundRegistry([p(1, 63999, 'big')]);
+  const { fields, violations } = computeLedStrandPatches(reg, new Map([['big', 129]]));
+  assert.equal(fields.has('big'), false);
+  assert.ok(violations.some((v) => v.code === 'led_universe_overflow'));
 });
 
 // ── Slice D: manual per-output universes (base = first enabled output) ────────
@@ -124,24 +149,22 @@ test('base universe = the FIRST ENABLED output (empty port 1 ⇒ port 2 universe
   assert.equal(fields.get('lineB').outputIndex, 1);
 });
 
-test('golden .201 manual: 2×40px on U6/U7 → device U6 ch1/161 + ONE unhonorable warning', () => {
+test('golden .201 per-output: 2×40px on U6/U7 → device honors U6:1 and U7:1, zero warnings', () => {
   const reg = boundRegistry([p(1, 6, 'lineA'), p(2, 7, 'lineB'), p(3, 8), p(4, 9)]);
   const counts = new Map([['lineA', 40], ['lineB', 40]]);
   const { fields, violations } = computeLedStrandPatches(reg, counts);
   assert.equal(violations.length, 0);
   assert.equal(fields.get('lineA').dmxUniverse, 6);
   assert.equal(fields.get('lineA').dmxAddress, 1);
-  // Single-base linear device: lineB really lands at U6:161, NOT the manual U7.
-  assert.equal(fields.get('lineB').dmxUniverse, 6);
-  assert.equal(fields.get('lineB').dmxAddress, 161);
-
+  // Per-output firmware HONORS each output's declared universe: lineB streams
+  // from U7 ch1, NOT a continuation of lineA at U6:161 (the old linear defect).
+  assert.equal(fields.get('lineB').dmxUniverse, 7);
+  assert.equal(fields.get('lineB').dmxAddress, 1);
+  // A declared universe is ALWAYS honored now — the 'unhonorable' warning no
+  // longer exists, and these two disjoint universes collide with nothing.
   const warnings = validateLedManualUniverses(reg, counts, new Map());
-  const unhonorable = warnings.filter((w) => w.code === 'led_universe_unhonorable');
-  assert.equal(unhonorable.length, 1);
-  assert.equal(unhonorable[0].port, 2);
-  assert.match(unhonorable[0].message, /P2 is set to U7/);
-  assert.match(unhonorable[0].message, /will drive these pixels at U6 ch 161/);
-  // A warning NEVER empties the patch fields — projection proceeds.
+  assert.equal(warnings.length, 0);
+  // Projection places both strands.
   assert.equal(fields.size, 2);
 });
 
@@ -264,26 +287,27 @@ test('L1 equivalence property: segments reconstruct the pixel walker across a gr
 });
 
 test('L1 records: computeLedStrandPatches now carries segments/endUniverse/endChannel', () => {
-  // baseUniverse is ignored for bound controllers; base = first enabled output.
+  // Per-output: each port starts at its OWN universe channel 1.
   const reg = boundRegistry([p(1, 6, 'big'), p(2, 7, 'small')]);
   const { fields } = computeLedStrandPatches(reg, new Map([['big', 200], ['small', 40]]));
   const big = fields.get('big');
-  assert.equal(big.dmxUniverse, 6);   // start unchanged (bytes identical)
+  assert.equal(big.dmxUniverse, 6);   // output 0 starts at its universe U6 ch1
   assert.equal(big.dmxAddress, 1);
-  assert.equal(big.endUniverse, 7);
+  assert.equal(big.endUniverse, 7);   // spills WITHIN output 0's own stream
   assert.equal(big.endChannel, 288);
   assert.deepEqual(big.segments, [
     { universe: 6, startChannel: 1, endChannel: 512, pixelCount: 128 },
     { universe: 7, startChannel: 1, endChannel: 288, pixelCount: 72 },
   ]);
-  // small packs contiguously after big (U7 ch289) in one universe.
+  // small is an INDEPENDENT output starting at its OWN port universe U7 ch1 —
+  // NOT after big's spill (per-output firmware).
   const small = fields.get('small');
   assert.equal(small.dmxUniverse, 7);
-  assert.equal(small.dmxAddress, 289);
+  assert.equal(small.dmxAddress, 1);
   assert.equal(small.endUniverse, 7);
-  assert.equal(small.endChannel, 448);
+  assert.equal(small.endChannel, 160);
   assert.deepEqual(small.segments, [
-    { universe: 7, startChannel: 289, endChannel: 448, pixelCount: 40 },
+    { universe: 7, startChannel: 1, endChannel: 160, pixelCount: 40 },
   ]);
 });
 

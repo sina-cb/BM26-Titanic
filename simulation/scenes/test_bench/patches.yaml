@@ -96,14 +96,14 @@ patches:
   LED_1:
     controllerIp: 10.1.1.202
     controllerId: 2
-    dmxUniverse: 10
-    dmxAddress: 161
+    dmxUniverse: 12
+    dmxAddress: 1
     pixelCount: 40
     outputIndex: 1
-    endUniverse: 10
-    endChannel: 320
+    endUniverse: 12
+    endChannel: 160
     segments:
-      - universe: 10
-        startChannel: 161
-        endChannel: 320
+      - universe: 12
+        startChannel: 1
+        endChannel: 160
         pixelCount: 40

@@ -1,22 +1,23 @@
 /**
- * device_config_mapper.js — PURE derivation of a MarsinLED device config from
- * the sim's LED controller state, plus the firmware's exact linear channel
- * layout. NO I/O: every function is a deterministic transform of its inputs.
+ * device_config_mapper.js — PURE derivation of a MarsinLED device's PER-OUTPUT
+ * universe plan from the sim's LED controller state. NO I/O: every function is a
+ * deterministic transform of its inputs.
  *
- * This is the correctness core of the LED integration (plan 20260709_0, phase
- * P2). The firmware maps incoming sACN channels LINEARLY across enabled strands
- * from a single `(dmx.universe, dmx.startAddress)` — there is NO per-output
- * universe on the device (docs/41 §3). computeLinearLayout reproduces that
- * algorithm byte-for-byte so the sim's sACN model and the hardware agree.
+ * Per-output firmware contract (docs/41; `sacn.perOutput`; per-output-only
+ * ruling 2026-07-10/11): each physical output is an INDEPENDENT sACN receiver on
+ * its own `{universe, startAddress:1}`. The device does NOT stream one
+ * contiguous layout across outputs, so this module only derives WHICH universe
+ * each output takes (`derivePerOutputPlan`, `autoAssignPerOutputUniverses`). The
+ * per-output BYTE layout within an output lives in led_patch_projection.js
+ * (`projectLedStrandSegments`, the single source of truth). The legacy
+ * single-base linear layout (`computeLinearLayout`/`synthLinearConfig`) was
+ * removed when per-output became the only device model.
  *
- * Fail-loud everywhere (codex P0): a non-representable layout, a cap violation,
- * or a missing device snapshot THROWS with a precise message — never a silent
- * re-map or a fabricated hardware field.
+ * Fail-loud everywhere (codex P0): a bad controller or a missing device snapshot
+ * THROWS with a precise message — never a silent re-map or a fabricated field.
  */
 
 import {
-  LED_CHANNEL_ORDERS,
-  DMX_UNIVERSE_SIZE,
   MAX_UNIVERSE,
   CONTROLLER_TYPE_LED,
   entryFixtureName,
@@ -24,88 +25,7 @@ import {
 
 const PER_OUTPUT_SPAN_MAX = 16;   // ≤16-universe window per controller (firmware rule)
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-/**
- * Bytes per pixel for a device colorOrder, from the shared LED_CHANNEL_ORDERS
- * table (single source of truth with the registry). THROWS on an unknown order
- * — never a silent default stride (that would mis-address every pixel).
- */
-function bytesPerPixel(colorOrder, where) {
-  const map = LED_CHANNEL_ORDERS[colorOrder];
-  if (!map) {
-    throw new Error(`[DeviceMapper] ${where}: unknown colorOrder '${colorOrder}' — expected one ` +
-      `of ${Object.keys(LED_CHANNEL_ORDERS).join(', ')}`);
-  }
-  return Math.max(...Object.values(map));
-}
-
-// ── Device base universe (the ONE semantic change of Slice D) ─────────────────
-
-/**
- * The device-linear BASE universe for a MarsinLED controller = the FIRST
- * ENABLED output's `port.universe` (ports in physical index order; "enabled" =
- * the port's chain carries ≥1 strand entry). The firmware streams one
- * contiguous linear layout from this base across the enabled outputs (docs/41
- * §3), so a manual per-output universe only re-anchors the BASE — it is the
- * operator's declared intent, and the linear layout stays the single truth for
- * patches/export/engine. This is the single source both the patch projection
- * and the device push read, so sim, patches.yaml, the engine model and the
- * hardware stay byte-for-byte in agreement.
- *
- * @param {Object} controller - sim LED controller (registry shape).
- * @returns {{universe: number, port: Object}|null} the first enabled port and
- *   its universe, or null when no output carries a strand (caller reports it).
- */
-export function firstEnabledPortUniverse(controller) {
-  if (!controller || !Array.isArray(controller.ports)) return null;
-  const sorted = [...controller.ports].sort((a, b) => a.port - b.port);
-  for (const port of sorted) {
-    const hasStrand = (port.chain || []).some((e) => entryFixtureName(e) !== null);
-    if (hasStrand) return { universe: port.universe, port };
-  }
-  return null;
-}
-
-/**
- * Build the synthetic `{strands, dmx}` the firmware would receive for a
- * controller — one strand entry per output (0..maxPort-1), enabled when the
- * port carries ≥1 strand with a known ledCount and count = Σ ledCounts, base
- * universe from `firstEnabledPortUniverse`. Shared by the per-port layout
- * preview (the derived line) and the manual-universe validation so both read
- * the exact same device-linear layout. Returns null when no output is enabled
- * (nothing to lay out).
- *
- * @param {Object} controller - sim LED controller (must carry a normalized led).
- * @param {Map|Object} strandCounts - strand name → ledCount.
- * @returns {{strands: Array<{colorOrder, count, enabled}>, dmx: {universe, startAddress}}|null}
- */
-export function synthLinearConfig(controller, strandCounts) {
-  const led = controller && controller.led;
-  if (!led) return null;
-  const base = firstEnabledPortUniverse(controller);
-  if (!base) return null;
-  const counts = strandCounts instanceof Map
-    ? strandCounts : new Map(Object.entries(strandCounts || {}));
-  const maxOutput = controller.ports.reduce((m, p) => Math.max(m, p.port), 0);
-  const strands = [];
-  for (let i = 0; i < maxOutput; i++) {
-    const port = controller.ports.find((p) => p.port - 1 === i);
-    let assigned = 0;
-    if (port) {
-      for (const entry of port.chain || []) {
-        const name = entryFixtureName(entry);
-        if (name === null) continue;
-        const c = counts.get(name);
-        if (Number.isInteger(c) && c > 0) assigned += c;
-      }
-    }
-    strands.push({ colorOrder: led.order, count: assigned > 0 ? assigned : 1, enabled: assigned > 0 });
-  }
-  return { strands, dmx: { universe: base.universe, startAddress: led.startAddr } };
-}
-
-// ── Per-output universe plan (device-per-output DMX, not the linear model) ───
+// ── Per-output universe plan (device-per-output DMX) ─────────────────────────
 
 /**
  * Derive the PER-OUTPUT universe plan for a controller whose firmware supports
@@ -233,132 +153,4 @@ export function autoAssignPerOutputUniverses(controller, base) {
       `${PER_OUTPUT_SPAN_MAX}-universe window`);
   }
   return universeByOutputIndex;
-}
-
-// ── computeLinearLayout ──────────────────────────────────────────────────────
-
-/**
- * Reproduce the firmware's linear sACN layout for a device config (docs/41 §3).
- * Pixel 0 lands at `(dmx.universe, dmx.startAddress)`; pixels advance
- * `bytesPerPixel` channels each, skipping DISABLED outputs entirely, and spill
- * into `universe+1` when the next pixel would cross channel 512 (a pixel never
- * straddles a universe — each new universe starts fresh at channel 1). The
- * cursor carries ACROSS enabled outputs (one contiguous stream), so output N's
- * start is determined by the cumulative pixels of enabled outputs before it.
- *
- * @param {{strands: Array<Object>, dmx: Object}} config
- * @returns {Array<{outputIndex, enabled, universe, startChannel, endUniverse,
- *   endChannel, pixelCount, pixelSpan, bytesPerPixel,
- *   segments: Array<{universe, startChannel, endChannel, pixelCount}>}>}
- *   one entry per output (disabled entries carry enabled:false and null spans).
- * @throws on a missing config, a bad startAddress/universe, or a layout that
- *   spills past the sACN universe ceiling (cap violation).
- */
-export function computeLinearLayout(config) {
-  if (!config || !Array.isArray(config.strands) || !config.dmx || typeof config.dmx !== 'object') {
-    throw new Error('[DeviceMapper] computeLinearLayout: config with strands[] and dmx{} required');
-  }
-  const baseUniverse = config.dmx.universe;
-  const startAddress = config.dmx.startAddress;
-  if (!Number.isInteger(baseUniverse) || baseUniverse < 1 || baseUniverse > MAX_UNIVERSE) {
-    throw new Error(`[DeviceMapper] computeLinearLayout: dmx.universe ${baseUniverse} out of ` +
-      `range 1–${MAX_UNIVERSE}`);
-  }
-  if (!Number.isInteger(startAddress) || startAddress < 1 || startAddress > DMX_UNIVERSE_SIZE) {
-    throw new Error(`[DeviceMapper] computeLinearLayout: dmx.startAddress ${startAddress} out of ` +
-      `range 1–${DMX_UNIVERSE_SIZE}`);
-  }
-
-  const layouts = [];
-  // Single contiguous cursor across all enabled outputs.
-  let universe = baseUniverse;
-  let channel = startAddress; // 1-based next free channel
-
-  config.strands.forEach((strand, i) => {
-    if (!strand || strand.enabled !== true) {
-      layouts.push({
-        outputIndex: i,
-        enabled: false,
-        universe: null,
-        startChannel: null,
-        endUniverse: null,
-        endChannel: null,
-        pixelCount: strand ? (strand.count || 0) : 0,
-        pixelSpan: 0,
-        bytesPerPixel: null,
-        segments: [],
-      });
-      return;
-    }
-
-    const bpp = bytesPerPixel(strand.colorOrder, `output ${i + 1}`);
-    const pixelCount = strand.count;
-    if (!Number.isInteger(pixelCount) || pixelCount < 1) {
-      throw new Error(`[DeviceMapper] computeLinearLayout: output ${i + 1} enabled with invalid ` +
-        `count ${pixelCount}`);
-    }
-
-    const segments = [];
-    let startUniverse = universe;
-    let startChannel = channel;
-    let segUniverse = universe;
-    let segStartChannel = channel;
-    let segPixels = 0;
-    let endUniverse = universe;
-    let endChannel = channel;
-    let firstPixelPlaced = false;
-
-    for (let p = 0; p < pixelCount; p++) {
-      // A pixel must fit whole within the current universe (no straddling).
-      if (channel + bpp - 1 > DMX_UNIVERSE_SIZE) {
-        segments.push({
-          universe: segUniverse,
-          startChannel: segStartChannel,
-          endChannel: channel - 1,
-          pixelCount: segPixels,
-        });
-        universe += 1;
-        if (universe > MAX_UNIVERSE) {
-          throw new Error(`[DeviceMapper] computeLinearLayout: output ${i + 1} spills past the ` +
-            `sACN universe ceiling ${MAX_UNIVERSE} — layout does not fit`);
-        }
-        channel = 1;
-        segUniverse = universe;
-        segStartChannel = channel;
-        segPixels = 0;
-      }
-      if (!firstPixelPlaced) {
-        startUniverse = universe;
-        startChannel = channel;
-        segUniverse = universe;
-        segStartChannel = channel;
-        firstPixelPlaced = true;
-      }
-      endUniverse = universe;
-      endChannel = channel + bpp - 1;
-      channel += bpp;
-      segPixels += 1;
-    }
-    segments.push({
-      universe: segUniverse,
-      startChannel: segStartChannel,
-      endChannel,
-      pixelCount: segPixels,
-    });
-
-    layouts.push({
-      outputIndex: i,
-      enabled: true,
-      universe: startUniverse,
-      startChannel,
-      endUniverse,
-      endChannel,
-      pixelCount,
-      pixelSpan: pixelCount * bpp,
-      bytesPerPixel: bpp,
-      segments,
-    });
-  });
-
-  return layouts;
 }

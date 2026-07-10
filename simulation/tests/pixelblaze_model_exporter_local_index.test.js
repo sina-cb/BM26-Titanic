@@ -125,13 +125,14 @@ test('LED strand localIndex tracks physical position head→tail (sweepable)', (
   }
 });
 
-// ── LED strand patch addressing: device-linear vs generic per-port ────
+// ── LED strand patch addressing: device per-output vs generic per-port ────
 //
 // The exporter's per-pixel {universe, addr, footprint} must agree BYTE-FOR-
 // BYTE with computeLedStrandPatches (patches.yaml) and the firmware's
-// contiguous linear layout for controllers carrying a `device:` binding, and
-// must keep the generic per-port projection for UNBOUND controllers. See
-// docs/41 §3 and .agent/reports/202607/20260710_1_exporter_linear_led.md.
+// PER-OUTPUT layout for controllers carrying a `device:` binding — each output
+// is an independent receiver on its OWN (port.universe, ch 1) — and must keep
+// the generic per-port projection for UNBOUND controllers. See docs/41 §3 and
+// the per-output-only ruling (2026-07-10/11).
 
 const LED_DEVICE = { vendor: 'marsinled', controllerId: 'titanic_201', boardId: 'angio4-old' };
 
@@ -162,7 +163,7 @@ function strandPatches(pixels, name) {
   return pixels.filter(p => p.type === 'led' && p.group === name).map(p => p.patch);
 }
 
-test('device-bound: two 40px RGBW outputs → contiguous U3 ch1–160 / ch161–320', () => {
+test('device-bound: two 40px RGBW outputs → per-port U3 ch1–160 / U4 ch1–160', () => {
   resetWorld();
   window.__controllerRegistry = ledRegistry([
     port(1, 3, 'lineA'), port(2, 4, 'lineB'), port(3, 5), port(4, 6),
@@ -176,13 +177,13 @@ test('device-bound: two 40px RGBW outputs → contiguous U3 ch1–160 / ch161–
   assert.equal(a.length, 40);
   assert.equal(b.length, 40);
 
-  // Line A: U3, ch 1,5,…,157 (40 px × stride 4 = ch 1–160). Line B CONTINUES
-  // the contiguous stream at ch 161,165,…,317 (ch 161–320) — NOT restarted at
-  // ch 1, which is the old per-port defect this fix closes.
+  // Line A: U3, ch 1,5,…,157 (40 px × stride 4 = ch 1–160). Line B is an
+  // INDEPENDENT per-output receiver on its OWN port universe (U4) channel 1,
+  // ch 1,5,…,157 — NOT a continuation of A's stream at ch 161.
   assert.deepEqual(a[0], { universe: 3, addr: 1, footprint: 4, led: true });
   assert.deepEqual(a[39], { universe: 3, addr: 157, footprint: 4, led: true });
-  assert.deepEqual(b[0], { universe: 3, addr: 161, footprint: 4, led: true });
-  assert.deepEqual(b[39], { universe: 3, addr: 317, footprint: 4, led: true });
+  assert.deepEqual(b[0], { universe: 4, addr: 1, footprint: 4, led: true });
+  assert.deepEqual(b[39], { universe: 4, addr: 157, footprint: 4, led: true });
 
   // Footprint is the RGBW stride (4) on every pixel; channels carry the order.
   assert.ok(a.every(p => p.footprint === 4 && p.led === true));
@@ -190,11 +191,11 @@ test('device-bound: two 40px RGBW outputs → contiguous U3 ch1–160 / ch161–
   assert.deepEqual(chans, { r: 1, g: 2, b: 3, w: 4 });
 });
 
-test('device-bound: a disabled/unassigned middle output is skipped; cursor stays contiguous', () => {
+test('device-bound: a disabled/empty middle output contributes nothing; other ports unshifted', () => {
   resetWorld();
-  // Output 2 (port index 1) carries no strands (disabled). lineC on output 3
-  // must still follow lineA's 160 channels — U3 ch161 — exactly like the
-  // firmware, which contributes 0 pixels for a disabled output.
+  // Output 2 (port index 1) carries no strands (disabled). Per-output, lineC on
+  // output 3 lands at its OWN port universe (U5) channel 1 — the empty middle
+  // port neither consumes channels nor shifts lineC off its declared universe.
   window.__controllerRegistry = ledRegistry([
     port(1, 3, 'lineA'), port(2, 4), port(3, 5, 'lineC'), port(4, 6),
   ]);
@@ -204,8 +205,8 @@ test('device-bound: a disabled/unassigned middle output is skipped; cursor stays
   const { pixels } = generatePixelMap();
   const c = strandPatches(pixels, 'lineC');
   assert.equal(c.length, 40);
-  assert.deepEqual(c[0], { universe: 3, addr: 161, footprint: 4, led: true });
-  assert.deepEqual(c[39], { universe: 3, addr: 317, footprint: 4, led: true });
+  assert.deepEqual(c[0], { universe: 5, addr: 1, footprint: 4, led: true });
+  assert.deepEqual(c[39], { universe: 5, addr: 157, footprint: 4, led: true });
 });
 
 test('device-bound: a strand assigned to NO controller output exports UNPATCHED, loudly', () => {

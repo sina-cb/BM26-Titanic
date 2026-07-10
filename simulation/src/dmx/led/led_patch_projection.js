@@ -1,19 +1,26 @@
 /**
  * led_patch_projection.js — PURE projection of a bound MarsinLED controller's
- * strands onto the DEVICE-LINEAR sACN layout, for the scene patch records
- * (plan 20260709_0 P4). NO I/O, NO DOM.
+ * strands onto the PER-OUTPUT sACN layout, for the scene patch records
+ * (plan 20260709_0 P4; per-output-only ruling 2026-07-10/11). NO I/O, NO DOM.
  *
- * Why a separate projection from the registry's `computeLedProjection`:
- * `computeLedProjection` resets the channel cursor at the START of every PORT
- * (each port is an independent lane in the sim's generic LED model). A physical
- * MarsinLED does NOT — its firmware maps incoming channels LINEARLY and
- * CONTIGUOUSLY across the ENABLED outputs from a single (dmx.universe,
- * dmx.startAddress): output 0's pixels, then output 1 CONTINUES where output 0
- * ended (docs/41 §3, device_config_mapper.computeLinearLayout). For a device-
- * BOUND controller the patch records must match the hardware byte-for-byte, so
- * this projection walks one contiguous cursor across the outputs — the same
- * algorithm computeLinearLayout uses, but reported per STRAND (a port may chain
- * several strands) so each strand gets its own patch record.
+ * PER-OUTPUT firmware contract (docs/41; `sacn.perOutput`): a MarsinLED runs one
+ * INDEPENDENT sACN receiver per physical output. Each output listens on its own
+ * `{universe, startAddress}` with startAddress ALWAYS 1 — output 0 on ITS
+ * universe channel 1, output 1 on ITS universe channel 1, and so on. There is
+ * NO single contiguous stream across outputs. So this projection RESETS the
+ * channel cursor to (port.universe, channel 1) at the START of every port: each
+ * controller port IS one device output. Strands chained on ONE port pack
+ * contiguously (stride × count, spilling by whole pixels via the shared walker);
+ * an empty/disabled port simply contributes nothing.
+ *
+ * The legacy single-base DEVICE-LINEAR model (one contiguous cursor across the
+ * enabled outputs, skipping disabled ones — device_config_mapper.computeLinear-
+ * Layout) was REMOVED on the operator's per-output-only ruling (2026-07-10/11):
+ * it addressed output 1 as a continuation of output 0, which darkened every
+ * output past the first on real per-output firmware (output 2 listens on ITS
+ * own universe, never on output 0's tail bytes). `projectLedStrandPixels` /
+ * `projectLedStrandSegments` remain the ONE source of truth for the byte layout
+ * WITHIN a single output.
  *
  * A strand is "patched" exactly when it appears in the returned map; unbound
  * or unassigned strands are simply absent (the caller turns that into a LOUD
@@ -30,20 +37,15 @@ import {
   ledStrideForOrder,
   normalizeLedConfig,
 } from '../controller_registry.js';
-import {
-  firstEnabledPortUniverse,
-  synthLinearConfig,
-  computeLinearLayout,
-} from './device_config_mapper.js';
 
 /**
  * Walk one LED strand's pixels from a starting (universe, channel) with a
  * fixed byte `stride`, wrapping universes by WHOLE pixels (a pixel never
  * straddles a universe: when it would cross channel 512 the cursor jumps to
  * channel 1 of the next universe, leaving the tail bytes of the old universe
- * unused). This is the ONE source of truth for the firmware's contiguous
- * linear byte layout — `computeLedStrandPatches` walks it to place each
- * strand's start, and the scene exporter walks it to emit each pixel's
+ * unused). This is the ONE source of truth for the firmware's per-output byte
+ * layout WITHIN one device output — `computeLedStrandPatches` walks it to place
+ * each strand's start, and the scene exporter walks it to emit each pixel's
  * `{universe, addr}` patch, so the engine model is byte-for-byte identical to
  * both the device and patches.yaml.
  *
@@ -127,7 +129,10 @@ export function projectLedStrandSegments(universe, channel, stride, count) {
 
 /**
  * Project every DEVICE-BOUND LED controller's strands onto the firmware's
- * contiguous linear layout.
+ * PER-OUTPUT sACN layout: each controller port IS an independent device output
+ * whose cursor STARTS at (port.universe, channel 1). Strands chained on one
+ * port pack contiguously (spilling by whole pixels); an empty/disabled port
+ * contributes nothing.
  *
  * @param {Object} registry - the controller registry.
  * @param {Map<string, number>|Object} strandLedCounts - strand name → ledCount.
@@ -140,10 +145,11 @@ export function projectLedStrandSegments(universe, channel, stride, count) {
  *   violations: Array<{ code: string, controllerId: number, message: string }> }}
  *   `controllerId` is the controller's 1-based PANEL ORDINAL (docs/33
  *   decision 20), matching computeProjection/computeLedProjection.
- *   `dmxUniverse`/`dmxAddress` stay the strand's START (bytes unchanged);
- *   `segments`/`endUniverse`/`endChannel` are the derived DMX-parity view of the
- *   SAME walk (a 200 px RGBW strand at U6:1 → `[U6 ch1–512 ×128, U7 ch1–288 ×72]`,
- *   endUniverse 7, endChannel 288).
+ *   `dmxUniverse`/`dmxAddress` are the strand's START — for the FIRST strand on
+ *   an output that is (port.universe, 1); `segments`/`endUniverse`/`endChannel`
+ *   are the derived DMX-parity view of the same walk (a 200 px RGBW strand
+ *   alone on an output at U6 → `[U6 ch1–512 ×128, U7 ch1–288 ×72]`, endUniverse
+ *   7, endChannel 288 — the spill stays within THAT output's stream).
  */
 export function computeLedStrandPatches(registry, strandLedCounts) {
   const fields = new Map();
@@ -155,7 +161,7 @@ export function computeLedStrandPatches(registry, strandLedCounts) {
     : new Map(Object.entries(strandLedCounts || {}));
 
   registry.controllers.forEach((controller, index) => {
-    // ONLY device-bound LED controllers use the device-linear model. Unbound
+    // ONLY device-bound LED controllers use the per-output device layout. Unbound
     // LED controllers keep the sim's generic per-port projection
     // (computeLedProjection) — they have no hardware to agree with.
     if (!isLedController(controller) || !isBoundLedController(controller)) return;
@@ -165,24 +171,6 @@ export function computeLedStrandPatches(registry, strandLedCounts) {
     const ipOk = isValidIp(controller.ip);
     const stride = ledStrideForOrder(led.order, led.stride);
 
-    // Base universe = the FIRST ENABLED output's manual per-output universe
-    // (Slice D — the device-linear model; led.baseUniverse is no longer read
-    // for bound controllers). A controller with no strand-carrying output has
-    // nothing to patch — return quietly, exactly like an empty DMX controller.
-    const base = firstEnabledPortUniverse(controller);
-    if (!base) return;
-    // A 0/out-of-range base can't be rendered contiguously; flag it loudly and
-    // leave the strands unpatched (same recovery contract as before).
-    if (!Number.isInteger(base.universe) || base.universe < 1 || base.universe > MAX_UNIVERSE) {
-      violations.push({
-        code: 'led_unallocated_base',
-        controllerId: controller.id,
-        message: `LED controller '${controller.name}' is bound but its first enabled output ` +
-          `(port ${base.port.port}) has no valid universe (${base.universe}) — set that output's ` +
-          'universe before patching; its strands project unpatched',
-      });
-      return;
-    }
     if (!ipOk) {
       violations.push({
         code: 'led_bad_ip',
@@ -192,17 +180,36 @@ export function computeLedStrandPatches(registry, strandLedCounts) {
       });
     }
 
-    let universe = base.universe;
-    let channel = led.startAddr; // 1-based next free channel
-    let capViolation = false;
-
-    // Device outputs run in physical index order (port 1 = output 0, …). Sort
-    // by port number so the contiguous cursor visits outputs in device order.
+    // Each physical output (port) is an INDEPENDENT sACN receiver: the firmware
+    // listens on (port.universe, channel 1) per output (docs/41; startAddress is
+    // always 1). Visit ports in physical index order so outputIndex is stable
+    // and each output's cursor starts fresh at its OWN universe.
     const sortedPorts = [...controller.ports].sort((a, b) => a.port - b.port);
     for (const port of sortedPorts) {
-      if (capViolation) break;
       const outputIndex = port.port - 1;
+      const carriesStrand = (port.chain || []).some((e) => entryFixtureName(e) !== null);
+      if (!carriesStrand) continue; // empty/disabled output — nothing to patch
+
+      // Each output declares its OWN universe; a 0/out-of-range one can't be
+      // addressed. Flag it loudly and leave THIS output's strands unpatched —
+      // other outputs are independent receivers and still project.
+      if (!Number.isInteger(port.universe) || port.universe < 1 || port.universe > MAX_UNIVERSE) {
+        violations.push({
+          code: 'led_unallocated_base',
+          controllerId: controller.id,
+          message: `LED controller '${controller.name}' output ${port.port} carries strands but has ` +
+            `no valid universe (${port.universe}) — set that output's universe before patching; ` +
+            'its strands project unpatched',
+        });
+        continue;
+      }
+
+      // Per-output cursor: START at this output's universe, channel 1.
+      let universe = port.universe;
+      let channel = 1;
+      let capViolation = false;
       for (const entry of port.chain) {
+        if (capViolation) break;
         const name = entryFixtureName(entry);
         if (name === null) continue;
         const ledCount = counts.get(name);
@@ -215,17 +222,17 @@ export function computeLedStrandPatches(registry, strandLedCounts) {
           });
           continue;
         }
-        // Walk the strand's pixels with the shared contiguous-layout walker,
-        // then advance the running cursor to where it ended so the next strand
-        // packs immediately after (the firmware's single contiguous stream).
+        // Walk the strand's pixels from the running cursor with the shared
+        // byte-layout walker, then advance the cursor so the next strand on THIS
+        // output packs immediately after (one contiguous chain per output).
         const walk = projectLedStrandSegments(universe, channel, stride, ledCount);
         if (walk.overflow) {
           violations.push({
             code: 'led_universe_overflow',
             controllerId: controller.id,
-            message: `LED controller '${controller.name}': strand '${name}' spills past the ` +
-              `sACN universe ceiling ${MAX_UNIVERSE} — layout does not fit; strands from here ` +
-              'project unpatched',
+            message: `LED controller '${controller.name}': strand '${name}' on output ${port.port} ` +
+              `spills past the sACN universe ceiling ${MAX_UNIVERSE} — layout does not fit; ` +
+              'strands from here on this output project unpatched',
           });
           capViolation = true;
           break;
@@ -329,94 +336,27 @@ export function computeLedUniverseClaims(boundFields, genericFields) {
   return claims;
 }
 
-// ── Manual per-output universe validation (WARN, never block — Slice D) ───────
-
-/** Human-readable universe:channel span for one linear-layout output entry. */
-function outputSpanText(out) {
-  return out.universe === out.endUniverse
-    ? `U${out.universe} ch ${out.startChannel}–${out.endChannel}`
-    : `U${out.universe} ch ${out.startChannel} → U${out.endUniverse} ch ${out.endChannel}`;
-}
+// ── Manual per-output universe validation (WARN, never block) ─────────────────
 
 /**
- * Per-controller honorability of the manual per-output universes, given the
- * controller's already-computed device-linear layout (computeLinearLayout).
- * PURE. Emits LOUD, NON-BLOCKING warnings — the operator owns universe matching
- * (docs/41 §3); this never rewrites a universe and never blocks a push.
+ * Validate every BOUND LED controller's per-output universes against the rest
+ * of the rig. PURE (no DOM, no I/O). Returns LOUD, NON-BLOCKING warnings only —
+ * projection and push always proceed; the operator declared the universes and
+ * owns the choice (docs/41; codex P0: "loud" here means a visible warning,
+ * never a silent rewrite).
  *
- *  - `led_universe_unhonorable`: an enabled output's declared `port.universe`
- *    is not where the single-base linear device actually drives its pixels;
- *    the message spells out the REAL span the device will use.
- *  - `led_universe_duplicate`: two enabled outputs declare the SAME universe
- *    but the device lands them at different channels (only one output can start
- *    at a given universe:channel on a single-base linear device).
+ * Per-output firmware (2026-07-10/11 ruling): each output streams from its own
+ * universe channel 1, so the legacy "unhonorable" warning (declared universe vs
+ * a single-base linear landing) no longer exists — a declared universe is
+ * ALWAYS honored. What CAN still go wrong:
  *
- * @param {Object} controller - the bound LED controller (registry shape).
- * @param {Array} layout - computeLinearLayout(...) result for this controller.
- * @returns {Array<{code: string, controllerId: number, port: number, message: string}>}
- */
-export function ledUniverseHonorability(controller, layout) {
-  const warnings = [];
-  if (!controller || !Array.isArray(layout)) return warnings;
-  const portByOutput = new Map();
-  for (const port of controller.ports || []) portByOutput.set(port.port - 1, port);
-
-  for (const out of layout) {
-    if (!out || !out.enabled) continue;
-    const port = portByOutput.get(out.outputIndex);
-    if (!port) continue;
-    const declared = port.universe;
-    // Honorable iff the whole output stays inside the declared universe.
-    if (out.universe === declared && out.endUniverse === declared) continue;
-    warnings.push({
-      code: 'led_universe_unhonorable',
-      controllerId: controller.id,
-      port: port.port,
-      message: `P${port.port} is set to U${declared}, but the device is single-base linear and ` +
-        `will drive these pixels at ${outputSpanText(out)} — align the earlier outputs to a ` +
-        'universe boundary (128 px RGBW) or accept the device layout',
-    });
-  }
-
-  // Duplicate declared universes across enabled outputs that land differently.
-  const byDeclared = new Map();
-  for (const out of layout) {
-    if (!out || !out.enabled) continue;
-    const port = portByOutput.get(out.outputIndex);
-    if (!port) continue;
-    if (!byDeclared.has(port.universe)) byDeclared.set(port.universe, []);
-    byDeclared.get(port.universe).push({ port, out });
-  }
-  for (const [declared, group] of byDeclared) {
-    if (group.length < 2) continue;
-    const starts = new Set(group.map((g) => `${g.out.universe}:${g.out.startChannel}`));
-    if (starts.size < 2) continue;
-    const list = group.map((g) => `P${g.port.port}→${outputSpanText(g.out)}`).join(', ');
-    warnings.push({
-      code: 'led_universe_duplicate',
-      controllerId: controller.id,
-      port: group[0].port.port,
-      message: `outputs ${group.map((g) => `P${g.port.port}`).join(' & ')} all declare U${declared}, ` +
-        `but the single-base linear device places them at different channels (${list}) — only one ` +
-        'output can start at a given universe:channel',
-    });
-  }
-  return warnings;
-}
-
-/**
- * Validate every BOUND LED controller's manual per-output universes against the
- * device-linear reality AND against the rest of the rig. PURE (no DOM, no I/O).
- * Returns LOUD, NON-BLOCKING warnings only — projection and push always proceed;
- * the operator declared the universes and owns the choice (docs/41 §3, codex P0:
- * fail loud, but here "loud" means a visible warning, never a silent rewrite).
- *
- *  - `led_universe_unhonorable` / `led_universe_duplicate` (per controller, from
- *    ledUniverseHonorability).
- *  - `led_universe_collision`: the universes a controller ACTUALLY streams
- *    (derived spans, spills included) overlap a DMX universe (from
- *    `dmxUniverseMaps`) or another bound LED controller's streamed universes —
- *    two sources on one universe fight.
+ *  - `led_universe_duplicate`: two enabled outputs on ONE controller declare the
+ *    SAME universe. Each streams from that universe channel 1, so they overwrite
+ *    each other — a real conflict; give each output its own universe.
+ *  - `led_universe_collision`: a universe a controller ACTUALLY streams (start +
+ *    spill, from the per-output projection) also carries DMX fixtures (from
+ *    `dmxUniverseMaps`) or another bound LED controller's stream — two sources
+ *    on one universe fight.
  *
  * @param {Object} registry - the controller registry.
  * @param {Map|Object} strandCounts - strand name → ledCount.
@@ -427,27 +367,49 @@ export function validateLedManualUniverses(registry, strandCounts, dmxUniverseMa
   const warnings = [];
   if (!registry || !Array.isArray(registry.controllers)) return warnings;
   const dmxMaps = dmxUniverseMaps instanceof Map ? dmxUniverseMaps : new Map();
+  const counts = strandCounts instanceof Map
+    ? strandCounts : new Map(Object.entries(strandCounts || {}));
 
-  const ledSpans = []; // { controller, universes:Set<number> }
+  // Duplicate declared universes across a controller's enabled (strand-carrying)
+  // outputs — a real per-output collision (both stream from channel 1).
   for (const controller of registry.controllers) {
     if (!isLedController(controller) || !isBoundLedController(controller)) continue;
-    const synth = synthLinearConfig(controller, strandCounts);
-    if (!synth) continue; // no enabled output — nothing to validate
-    let layout;
-    try {
-      layout = computeLinearLayout(synth);
-    } catch {
-      // A cap overflow / out-of-range base surfaces as its OWN projection
-      // violation (computeLedStrandPatches) — don't duplicate it here.
-      continue;
+    const byUniverse = new Map(); // universe → [portNum, …]
+    for (const port of controller.ports || []) {
+      const carriesStrand = (port.chain || []).some((e) => entryFixtureName(e) !== null);
+      if (!carriesStrand) continue;
+      if (!Number.isInteger(port.universe)) continue;
+      if (!byUniverse.has(port.universe)) byUniverse.set(port.universe, []);
+      byUniverse.get(port.universe).push(port.port);
     }
-    warnings.push(...ledUniverseHonorability(controller, layout));
-    const universes = new Set();
-    for (const out of layout) {
-      if (!out || !out.enabled) continue;
-      for (let u = out.universe; u <= out.endUniverse; u++) universes.add(u);
+    for (const [universe, ports] of byUniverse) {
+      if (ports.length < 2) continue;
+      warnings.push({
+        code: 'led_universe_duplicate',
+        controllerId: controller.id,
+        port: ports[0],
+        message: `outputs ${ports.map((n) => `P${n}`).join(' & ')} all declare U${universe} — each ` +
+          `device output streams from U${universe} channel 1, so they overwrite each other; give ` +
+          'each output its own universe',
+      });
     }
-    ledSpans.push({ controller, universes });
+  }
+
+  // Streamed universes per controller, from the ONE canonical per-output
+  // projection (start + every spill), for cross-source collision checks.
+  const { fields } = computeLedStrandPatches(registry, counts);
+  const ordinalToController = new Map();
+  registry.controllers.forEach((c, i) => ordinalToController.set(i + 1, c));
+  const universesByOrdinal = new Map();
+  for (const rec of fields.values()) {
+    if (!universesByOrdinal.has(rec.controllerId)) universesByOrdinal.set(rec.controllerId, new Set());
+    const set = universesByOrdinal.get(rec.controllerId);
+    for (const seg of rec.segments) set.add(seg.universe);
+  }
+  const ledSpans = []; // { controller, universes:Set<number> }
+  for (const [ordinal, universes] of universesByOrdinal) {
+    const controller = ordinalToController.get(ordinal);
+    if (controller) ledSpans.push({ controller, universes });
   }
 
   // LED-vs-DMX collisions (real streamed universes vs DMX occupancy).

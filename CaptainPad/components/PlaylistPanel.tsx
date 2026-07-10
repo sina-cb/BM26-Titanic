@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
@@ -17,6 +17,11 @@ import { engineEvents, EngineMessage } from '@/utils/engineEvents';
 import { useMidiWindow } from '@/hooks/useMidiControl';
 import { windowPadNumber } from '@/utils/midi/window_slot';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
+// Web-safe alert: RN-web's Alert.alert is an empty stub, so raw Alert.alert
+// error surfaces were SILENT no-ops on the web build (:6967) — a rejected
+// playlist load just snapped the UI back with no message. opAlert is loud on
+// both platforms (window.alert on web, Alert.alert on native).
+import { opAlert } from '@/utils/op_alert';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // "1 list to rule them all": this component renders the active playlist's
@@ -776,7 +781,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
       if (!res.ok) {
         setAssignment(prevAssignment);
         setPlaylist(prevPlaylist);
-        Alert.alert('Load failed', res.error || 'Unknown error');
+        opAlert('Load failed', res.error || 'Unknown error');
         return;
       }
       // Engine returns `{ status, playlist }` — adopt that as the
@@ -789,7 +794,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
       if (myEpoch !== swapEpochRef.current) return;
       setAssignment(prevAssignment);
       setPlaylist(prevPlaylist);
-      Alert.alert('Load failed', err?.message || 'Network error');
+      opAlert('Load failed', err?.message || 'Network error');
       return;
     }
     // Fire-and-forget background refresh to pull the new playlist's
@@ -824,7 +829,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
         // — this is expected when a user double-taps; no alert spam.
         const code = (res as { code?: string }).code;
         if (code === 'EBUSY' || code === '409') return;
-        Alert.alert('Switch failed', (res as { error?: string }).error || 'Unknown error');
+        opAlert('Switch failed', (res as { error?: string }).error || 'Unknown error');
         return;
       }
       // Don't await refresh — the WS `mixer` broadcast will reconcile
@@ -838,7 +843,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     } catch (e) {
       clearPending();
       setAssignment(prev);
-      Alert.alert('Switch failed', (e as Error)?.message || 'Network error');
+      opAlert('Switch failed', (e as Error)?.message || 'Network error');
     }
   }, [role, assignment, channelId, disabled, refresh, armPendingWatchdog, clearPending]);
 
@@ -859,7 +864,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     setPlaylist({ ...cur, entries: nextEntries });
     const res = await savePlaylist({ name: cur.name, entries: nextEntries });
     if (!res.ok) {
-      Alert.alert('Add failed', res.error || 'Unknown error');
+      opAlert('Add failed', res.error || 'Unknown error');
       await refresh();
       return;
     }
@@ -880,11 +885,11 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   const fetchDirEntries = useCallback(async (dir: string): Promise<PlaylistEntry[] | null> => {
     const res = await fetchPatternsInDir(dir);
     if (!res.ok || !res.data) {
-      Alert.alert('Load directory failed', res.error || 'Unknown error');
+      opAlert('Load directory failed', res.error || 'Unknown error');
       return null;
     }
     if (res.data.length === 0) {
-      Alert.alert('Empty directory', `No patterns found in "${dir}".`);
+      opAlert('Empty directory', `No patterns found in "${dir}".`);
       return null;
     }
     return res.data.map((pattern) => ({
@@ -917,7 +922,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     if (!entries) { setPendingNewDir(null); return; }
     const save = await savePlaylist({ name, entries });
     if (!save.ok) {
-      Alert.alert('Create failed', save.error || 'Unknown error');
+      opAlert('Create failed', save.error || 'Unknown error');
       return;
     }
     setPendingNewDir(null);
@@ -945,7 +950,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     if (!name) return; // Create is disabled when empty; guard anyway.
     const src = await fetchPlaylist(source);
     if (!src.ok || !src.data) {
-      Alert.alert('Duplicate failed', src.error || 'Unknown error');
+      opAlert('Duplicate failed', src.error || 'Unknown error');
       return;
     }
     // Fresh entry ids so the copy doesn't alias the source's per-entry
@@ -955,7 +960,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     const entries = src.data.entries.map((e) => ({ ...e, id: genEntryId() }));
     const save = await savePlaylist({ name, entries });
     if (!save.ok) {
-      Alert.alert('Duplicate failed', save.error || 'Unknown error');
+      opAlert('Duplicate failed', save.error || 'Unknown error');
       return;
     }
     setPendingDupSource(null);
@@ -976,7 +981,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     setPlaylist({ ...cur, entries: nextEntries });
     const save = await savePlaylist({ name: cur.name, entries: nextEntries });
     if (!save.ok) {
-      Alert.alert('Load directory failed', save.error || 'Unknown error');
+      opAlert('Load directory failed', save.error || 'Unknown error');
       await refresh();
       return;
     }
@@ -1004,7 +1009,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     setPlaylist({ ...cur, entries: nextEntries });
     const res = await savePlaylist({ name: cur.name, entries: nextEntries });
     if (!res.ok) {
-      Alert.alert('Remove failed', res.error || 'Unknown error');
+      opAlert('Remove failed', res.error || 'Unknown error');
       await refresh();
       return;
     }
@@ -1061,7 +1066,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     if (!res.ok) {
       // Roll back to the prior order and surface the error.
       setPlaylist({ ...cur, entries: prevEntries });
-      Alert.alert('Reorder failed', res.error || 'Unknown error');
+      opAlert('Reorder failed', res.error || 'Unknown error');
       await refresh();
       return;
     }
@@ -1073,7 +1078,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     if (!name) return;
     const res = await savePlaylist({ name, entries: [] });
     if (!res.ok) {
-      Alert.alert('Create failed', res.error || 'Unknown error');
+      opAlert('Create failed', res.error || 'Unknown error');
       return;
     }
     setNewPlaylistName('');
@@ -1081,9 +1086,9 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   }, [handleLoadPlaylist, newPlaylistName]);
 
   const handleDeletePlaylist = useCallback(async (name: string) => {
-    if (name === 'default') { Alert.alert('Refused', 'Cannot delete the default playlist'); return; }
+    if (name === 'default') { opAlert('Refused', 'Cannot delete the default playlist'); return; }
     const res = await deletePlaylist(name);
-    if (!res.ok) Alert.alert('Delete failed', res.error || 'Unknown error');
+    if (!res.ok) opAlert('Delete failed', res.error || 'Unknown error');
     await refresh();
   }, [refresh]);
 

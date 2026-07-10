@@ -3,7 +3,7 @@
 > Updated by any agent, any time state changes. Keep it under a screen.
 > Absolute dates only.
 
-_Last touched: 2026-07-10 (late — LED integration merged into the party branch)_
+_Last touched: 2026-07-10 (night — LED per-output HARDWARE-VERIFIED, `stable` re-tagged)_
 
 ## Active branches
 
@@ -48,6 +48,17 @@ DONE + hardware-confirmed:
   the serial waiters (grid_serial/restore/write/read_config `.catch` guards).
 - **APC mini remapped** (docs/midi/apc_mini_mk2.md): shift=deck/mixer, track
   buttons=focus channels, clip_stop=combined autopilot, stop_all=blackout.
+
+DONE + hardware-confirmed (2026-07-10 night):
+- **LED per-output E2E LIVE**: MarsinLED titanic_202, BOTH outputs animating
+  from the engine (out0→U10@1, out1→U12@1); legacy linear projection removed,
+  per-output is the only layout; sim 272/272, CaptainPad 589/589 + tsc.
+  KNOWN ENGINE BUG: model hot-reload doesn't refresh the output-universe
+  send set — restart the launcher after any Save that changes universes.
+- **Playlist truth (Fable debug)**: web Alert was a silent stub (fixed,
+  op_alert); `slow` playlist EMPTY; party_high/party_low/ambient DO NOT
+  EXIST; 51 stale slider defaults across 21 default.yaml entries + 3 dead
+  modulations (report 20260710_12 + agent output).
 
 DONE + hardware-confirmed (2026-07-10):
 - **VSN1 effects UI fully landed** — auto-deploy on layout change +

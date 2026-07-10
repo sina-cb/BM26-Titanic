@@ -68,7 +68,6 @@ import {
   projectLedStrandSegments,
   validateLedManualUniverses,
 } from '../dmx/led/led_patch_projection.js';
-import { firstEnabledPortUniverse } from '../dmx/led/device_config_mapper.js';
 
 // ── Panel state ─────────────────────────────────────────────────────────
 
@@ -837,17 +836,21 @@ function renderController(controller, proj) {
       });
     };
 
-    // Base universe is DERIVED (Slice D): the first enabled output's per-output
-    // universe. Read-only here; the operator edits each output's universe on its
-    // port row below (the device is single-base linear).
-    const base = firstEnabledPortUniverse(controller);
+    // Per-output firmware (operator ruling 2026-07-10/11): there is no single
+    // base universe any more — each output streams its OWN port.universe @1.
+    // This readout shows the FIRST mapped output's universe purely as a visual
+    // anchor (the legacy firstEnabledPortUniverse helper was removed with the
+    // linear path); the real per-output universes live on the port rows below.
+    const firstMapped = (controller.ports || []).find(
+      (p) => Array.isArray(p.chain) && p.chain.length > 0 &&
+        Number.isInteger(p.universe) && p.universe >= 1);
     const baseOut = document.createElement('span');
     baseOut.className = 'cm-led-base';
-    baseOut.textContent = base ? `U${base.universe}` : '—';
-    baseOut.title = base
-      ? `Derived base universe = first enabled output (P${base.port.port}). ` +
-        'Edit per-output universes on the port rows below.'
-      : 'No enabled output yet — assign a strand to a port to set the base universe.';
+    baseOut.textContent = firstMapped ? `U${firstMapped.universe}` : '—';
+    baseOut.title = firstMapped
+      ? `First mapped output (P${firstMapped.port}) streams U${firstMapped.universe}. ` +
+        'Per-output firmware: edit each output\'s universe on its port row below.'
+      : 'No mapped output yet — assign a strand to a port; each output streams its own universe.';
 
     const addrInp = document.createElement('input');
     addrInp.className = 'cm-input cm-num';
@@ -1056,8 +1059,9 @@ function renderLedPort(controller, port, proj) {
     }
     row.appendChild(chain);
 
-    // Read-only derived-layout line (plan P3): the device-linear span for THIS
-    // output from computeLinearLayout, live-updating with chain edits.
+    // Read-only derived-layout line (plan P3): the per-output span for THIS
+    // output from deriveLayoutPreview's per-output walker, live-updating with
+    // chain edits.
     const preview = deriveLayoutPreview(controller, strandLedCounts());
     const derivedLine = document.createElement('div');
     derivedLine.className = 'cm-led-derived';
