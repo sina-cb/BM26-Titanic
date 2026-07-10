@@ -13,10 +13,14 @@ vis:
   maxPixels: 100
 server:
   port: 6968
+vsn1:
+  deployLayout: true
+  deployDebounceMs: 1200
+  deployOnBoot: true
 playlist:
-  active: true
-  delay_s: '10'
-  shuffle: true
+  active: false
+  delay_s: '5'
+  shuffle: false
 web_client:
   enabled: false
   port: 6967
@@ -175,8 +179,10 @@ colorPalettes:
     c1: 0.69
     c2: 0.1
 colorAutopilot:
-  active: false
-  palettes: []
-  delay_s: 30
+  active: true
+  palettes:
+    - plasma_core
+    - phoenix
+  delay_s: 5
   shuffle: false
-  transitionMs: 0
+  transitionMs: 1000

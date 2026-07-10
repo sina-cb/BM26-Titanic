@@ -17,6 +17,7 @@ function state(over: Partial<MidiProjectionState> = {}): MidiProjectionState {
   return {
     blackout: false,
     activePattern: null,
+    getCombinedAutopilotActive: () => false,
     getGlobalEffectState: () => false,
     resolvePatternForBank: () => null,
     layerExists: () => false,
@@ -351,7 +352,7 @@ describe('projectLeds — MFT UX v2 hue knob', () => {
   const hueProfile = validateProfile({
     device: { id: 'mft', label: 'MFT', nameContains: 'Midi Fighter Twister', sourcePort: 0, destinationPort: 0 },
     controls: [
-      { id: 'g_hue', match: { type: 'cc', channel: 0, cc: 1, relative: true }, action: { kind: 'globalHueKnob' }, led: { off: 80 } },
+      { id: 'g_hue', match: { type: 'cc', channel: 0, cc: 1, relative: true }, action: { kind: 'hueKnob' }, led: { off: 80 } },
     ],
   });
 

@@ -33,6 +33,10 @@ import { invertEffect } from '../effects/invert.js';
 import { beatPumpEffect } from '../effects/e1_beat_pump.js';
 import { waterlineSweepEffect } from '../effects/e2_waterline_sweep.js';
 import { kickPunchEffect } from '../effects/e3_kick_punch.js';
+import { freezeFrameEffect } from '../effects/freeze_frame.js';
+import { paletteCrushEffect } from '../effects/palette_crush.js';
+import { oceanBreathEffect } from '../effects/ocean_breath.js';
+import { frostSparkleEffect } from '../effects/frost_sparkle.js';
 
 // Wave-1 party effect defaults. Kept here (not the library) because they
 // are controller runtime tuning, mirrored by the GLOBAL_EFFECT_LIBRARY
@@ -178,6 +182,41 @@ export class GlobalEffectsController {
     };
     this._kickLastFireMs = -Infinity;
 
+    // ── Wave-2 party effects (report 20260708_3 / GEM-wired 20260708_7) ─
+    // E4/E6/E9/E10 are Builder B's standalone modules, now assignable to
+    // GEM slots. Each carries its runtime config here; the two stateful
+    // ones (freeze, sparkle) also own an explicit module-state holder. The
+    // apply calls run at their documented chain anchors via the extra-stage
+    // registrations below.
+
+    // E4 Freeze Frame — captures + replays the frame. FIRST in applyMacros
+    // (preWash) so wash/sweep/strobe still animate on the frozen base.
+    // panicStop kills it (releases the freeze; next engage re-captures).
+    this.freeze = { active: false, holdFadeMs: 0, presetId: null, slotId: null };
+    this._freezeState = freezeFrameEffect.createState();
+
+    // E6 Palette Crush — RGB posterize. Chroma stage AFTER invert
+    // (postInvert), so a crushed image inverts crisply. panicStop PRESERVES
+    // it (static chroma, like invert — no flash/brightness hazard).
+    this.crush = { enabled: false, levels: 4, amount: 1, presetId: null, slotId: null };
+
+    // E9 Ocean Breath — slow ambient swell. END of applyMacros (gate family)
+    // so dimmers/blackout still cap it. Self-clocked off nowMs. panicStop
+    // PRESERVES it (slow ambient, no flash hazard — report-3 recommendation).
+    this.breath = {
+      enabled: false, periodMs: 8000, depth: 0.4, warmth: 0.2,
+      presetId: null, slotId: null,
+    };
+
+    // E10 Frost Sparkle — W-channel glint overlay AFTER trails (postTrails)
+    // so glints stay crisp. Optional audio density off signals.micHigh.
+    // panicStop kills it AND clears the field (glints must not linger).
+    this.sparkle = {
+      enabled: false, density: 0.02, decayMs: 200, intensity: 1,
+      audioDensity: false, presetId: null, slotId: null,
+    };
+    this._sparkleState = frostSparkleEffect.createState();
+
     // Strobe beat phase-lock (report Table 1 strobe fix): when the active
     // strobe config opts in (config.phaseLock), the ON frame lands on the
     // downbeat via signals.audioBarPhase instead of free-running.
@@ -199,6 +238,52 @@ export class GlobalEffectsController {
       postInvert: [],    // chroma stage after invert (E6 Palette Crush) — see engine.js
       end: [],           // END of applyMacros, beside pump (E7/E9)
     };
+
+    // ── Register Builder B's party effects at their chain anchors ──────
+    // (report 20260708_3 wiring spec / 20260708_7 GEM wiring). Each stage
+    // gates itself (zero cost when its effect is off), mirroring the inline
+    // E1/E2/E3 stages. E6 registers on 'postInvert', which engine.js runs
+    // via applyPostInvert() right after applyInvert — so a crushed frame
+    // inverts crisply.
+
+    // E4 Freeze Frame — preWash (step 0). The freeze call is a cheap no-op
+    // when inactive (early-returns + clears the prior capture), so no outer
+    // gate is required, but we keep the symmetry guard for clarity.
+    this.registerChainStage('preWash', ({ pixels, nowMs }) => {
+      freezeFrameEffect.apply({
+        pixels, state: this._freezeState,
+        active: this.freeze.active, nowMs, holdFadeMs: this.freeze.holdFadeMs,
+      });
+    });
+
+    // E10 Frost Sparkle — postTrails (after trails, before dropHit).
+    this.registerChainStage('postTrails', ({ pixels, nowMs, signals }) => {
+      if (!this.sparkle.enabled) return; // zero cost when off
+      frostSparkleEffect.apply({
+        pixels, state: this._sparkleState, enabled: true, nowMs,
+        density: this.sparkle.density, decayMs: this.sparkle.decayMs,
+        intensity: this.sparkle.intensity,
+        audioDensity: this.sparkle.audioDensity,
+        signals, // report-3 signals bag; may be undefined — module is safe
+      });
+    });
+
+    // E6 Palette Crush — postInvert (chroma stage after invert).
+    this.registerChainStage('postInvert', ({ pixels }) => {
+      if (!this.crush.enabled) return; // zero cost when off
+      paletteCrushEffect.apply({
+        pixels, levels: this.crush.levels, amount: this.crush.amount,
+      });
+    });
+
+    // E9 Ocean Breath — END of applyMacros (gate family).
+    this.registerChainStage('end', ({ pixels, nowMs }) => {
+      if (!this.breath.enabled) return; // zero cost when off
+      oceanBreathEffect.apply({
+        pixels, nowMs,
+        periodMs: this.breath.periodMs, depth: this.breath.depth, warmth: this.breath.warmth,
+      });
+    });
   }
 
   // ── Legacy methods ────────────────────────────────────────────────
@@ -639,6 +724,46 @@ export class GlobalEffectsController {
       return;
     }
     const timing = strobeEffect.getTiming({ hz, duty, frameRate: this.frameRate });
+
+    // GLITCH-FREE LIVE RE-APPLY (glitch-fix campaign 2026-07): when a strobe is
+    // ALREADY running for THIS slot/preset and the operator tweaks a param mid-
+    // flight (Flash Strength jog-wheel → intensity, or Frequency encoder → hz),
+    // the change must land WITHOUT restarting the ON/OFF cycle. The pre-fix code
+    // hard-reset `strobeStartedAtFrame = frameIndex` on every call, so a live
+    // intensity tweak re-anchored the phase and the gate snapped — a visible
+    // dark hiccup mid-strobe. Here we detect the in-place case and PRESERVE the
+    // phase anchor. For an intensity/duty-only change nothing about the cycle
+    // grid moves. For an hz change the cycle LENGTH (framesPerCycle) changes, so
+    // we RE-QUANTIZE the anchor: keep the operator's current fractional position
+    // within the cycle so the beat alignment carries over rather than blanking.
+    const sameRun = this.strobeActive
+      && !this.strobeFadingOut
+      && this.strobeConfig
+      && this.strobeConfig.slotId === (meta.slotId || null)
+      && this.strobeConfig.presetId === (meta.presetId || null);
+
+    let anchor = frameIndex;
+    if (sameRun) {
+      const prevFpc = this.strobeConfig.framesPerCycle;
+      const newFpc = timing.framesPerCycle;
+      // Where are we in the CURRENT cycle right now (0..prevFpc)?
+      const localFrame = Math.max(0, frameIndex - this.strobeStartedAtFrame);
+      const prevPhaseFrame = ((localFrame % prevFpc) + prevFpc) % prevFpc;
+      if (newFpc === prevFpc) {
+        // Same cycle length (intensity/duty tweak): anchor is unchanged so the
+        // gate keeps ticking exactly where it was.
+        anchor = this.strobeStartedAtFrame;
+      } else {
+        // hz changed → cycle length changed. Map the current fractional phase
+        // (prevPhaseFrame / prevFpc) onto the new cycle and re-anchor so
+        // getGate reports that SAME fraction on this frame — the pulse train
+        // re-tempos in place instead of jumping to a fresh cycle start.
+        const frac = prevPhaseFrame / prevFpc;
+        const newPhaseFrame = Math.round(frac * newFpc) % newFpc;
+        anchor = frameIndex - newPhaseFrame;
+      }
+    }
+
     this.strobeConfig = {
       hz, duty, intensity,
       framesPerCycle: timing.framesPerCycle,
@@ -648,8 +773,12 @@ export class GlobalEffectsController {
       slotId: meta.slotId || null,
       fadeOutMs: meta.fadeOutMs,
     };
-    this.strobeStartedAtFrame = frameIndex;
-    this.strobeBurstEndFrame = null;
+    this.strobeStartedAtFrame = anchor;
+    // A live re-apply must not resurrect a burst window from a prior toggle:
+    // only a fresh (non-sameRun) activation clears it, and a sameRun re-apply
+    // keeps whatever burst frame was already set (burst re-apply goes through
+    // triggerStrobeBurst which sets it after this call).
+    if (!sameRun) this.strobeBurstEndFrame = null;
     this.strobeActive = true;
     this.strobeFadingOut = false;
     this.activeStrobePresetId = meta.presetId || null;
@@ -689,17 +818,47 @@ export class GlobalEffectsController {
   }
 
   // ── Drop hit ──────────────────────────────────────────────────────
+  //
+  // Every call fires a NEW voice — this is the hand-drumming trigger path
+  // (Sina drums the VSN1 keys; a fast re-press MUST re-fire, never be
+  // dropped/coalesced). There is no retrigger suppression or refractory
+  // window here on purpose. The only bound is DROP_HIT_MAX_POLY, and when
+  // we hit it we RECYCLE the OLDEST ringing voice (steal its slot) so the
+  // newest press always lands (voice-steal, never drop-the-new-press). The
+  // constant used to be dead — declared but never enforced, so rapid drums
+  // grew the array unbounded (a latent perf/memory hazard under sustained
+  // hand-drumming); this makes the cap real without ever eating a press.
   triggerDropHit(params, nowMs) {
     const duration = dropHitEffect.envelopeDurationMs({
       attackMs: params.attackMs,
       holdMs: params.holdMs,
       releaseMs: params.releaseMs,
     });
+    // Voice-steal: at cap, evict the OLDEST voice(s) so there is room for
+    // the new one. `>=` (not `>`) because we are about to push one.
+    while (this.dropHits.length >= DROP_HIT_MAX_POLY) {
+      this.dropHits.shift();
+    }
     this.dropHits.push({
       params: { ...params },
       triggeredAtMs: nowMs,
       durationMs: duration,
     });
+  }
+
+  /**
+   * Immediately silence every ringing dropHit voice. dropHit is a TRIGGER
+   * effect with no toggle-off action of its own — a hit "rings out" over its
+   * release envelope. The global "disable all effects" (blackout) action needs
+   * to stop a ringing trigger too, so this clears the live voice pool. panicStop
+   * clears the same array; this is the surgical, per-effect version the slot
+   * manager's disableAll() calls so it doesn't reach into controller internals.
+   * Returns the number of voices that were cleared (0 = nothing was ringing).
+   */
+  clearDropHits() {
+    const cleared = this.dropHits.length;
+    this.dropHits.length = 0;
+    return cleared;
   }
 
   // ── Color wash ────────────────────────────────────────────────────
@@ -728,6 +887,26 @@ export class GlobalEffectsController {
     if (!preset) {
       throw new Error(`Unknown colorWash preset: ${presetId}`);
     }
+
+    // GLITCH-FREE LIVE RE-APPLY (glitch-fix campaign 2026-07): a live tweak on a
+    // RUNNING wash (Wash Depth jog-wheel → amount, Blend encoder → mode) re-
+    // enters here via _reapplyIfActive('activate'). colorWash holds no phase or
+    // buffer, so the pre-fix full rebuild wasn't a hard glitch, but rebuilding
+    // the config each frame dropped any in-progress fade and re-allocated the
+    // color array needlessly. In-place update keeps it clean and consistent with
+    // the strobe/trails fixes: same slot+preset → mutate amount/mode/color in
+    // place, leave fade fields as-is (a live tweak is not a fade event).
+    const inPlace = this.colorWashConfig.enabled
+      && !this.colorWashConfig.fadingOut
+      && this.colorWashConfig.preset === presetId
+      && this.colorWashConfig.slotId === (meta.slotId || null);
+    if (inPlace) {
+      this.colorWashConfig.amount = amount;
+      this.colorWashConfig.mode = mode;
+      this.colorWashConfig.color = [...preset.params.color];
+      return;
+    }
+
     this.colorWashConfig = {
       enabled: true,
       preset: presetId,
@@ -773,6 +952,30 @@ export class GlobalEffectsController {
       throw new Error(`Unknown feedbackTrails preset: ${presetId}`);
     }
     const merged = { ...preset.params, ...paramsOverride };
+
+    // GLITCH-FREE LIVE RE-APPLY (glitch-fix campaign 2026-07): a live param tweak
+    // on a RUNNING trails effect (Trail Mix jog-wheel → mix, Blend encoder →
+    // blendMode) re-enters here via _reapplyIfActive('activate'). The pre-fix
+    // code rebuilt the whole config AND honoured `resetOnEnable` every time, so
+    // it WIPED the accumulated trail buffer on each tweak — the ghost image
+    // popped to black and re-accumulated from scratch. A buffer reset is a
+    // FRESH-ENABLE gesture (off→on / preset swap), NOT a param tweak.
+    //
+    // In-place case: already enabled for THIS slot+preset → update params only,
+    // keep the trail buffer (and the fade fields, which stay cleared) intact.
+    const inPlace = this.feedbackTrailsConfig.enabled
+      && !this.feedbackTrailsConfig.fadingOut
+      && this.feedbackTrailsConfig.preset === presetId
+      && this.feedbackTrailsConfig.slotId === (meta.slotId || null);
+    if (inPlace) {
+      this.feedbackTrailsConfig.params = merged;
+      // No buffer reset — the history the operator is watching is preserved.
+      return;
+    }
+
+    // Fresh enable (or a preset/slot switch): a full (re)build. resetOnEnable
+    // clears the buffer here — this is exactly the off→on / swap moment where a
+    // clean slate is wanted (a swapped preset shouldn't inherit stale history).
     this.feedbackTrailsConfig = {
       enabled: true,
       preset: presetId,
@@ -872,6 +1075,147 @@ export class GlobalEffectsController {
     invertEffect.apply({ pixels, enabled: true });
   }
 
+  // ── Party effect setters (report 20260708_7 GEM wiring) ───────────
+  // The slot manager flips these from activate/deactivate/toggle/trigger,
+  // exactly like setStrobe/setColorWash/setFeedbackTrails. Each merges the
+  // resolved slot params (preset defaults ⊕ paramsOverride, already
+  // validated by resolveSlotBinding) onto the controller's runtime config.
+
+  /**
+   * E1 Beat Pump. `enabled` false clears the pump; true applies the merged
+   * params (depth/rate/curve). No fade — the pump self-recovers each beat.
+   */
+  setBeatPump(enabled, params = {}, meta = {}) {
+    if (!enabled) {
+      this.beatPump.enabled = false;
+      return;
+    }
+    if (params.depth !== undefined) this.beatPump.depth = params.depth;
+    if (params.rate !== undefined) this.beatPump.rate = params.rate;
+    if (params.curve !== undefined) this.beatPump.curve = params.curve;
+    this.beatPump.enabled = true;
+    this.beatPump.presetId = meta.presetId || null;
+    this.beatPump.slotId = meta.slotId || null;
+  }
+
+  /**
+   * E2 Waterline Sweep. `enabled` false stops the band; true applies the
+   * merged spatial params. The head position keeps accumulating in
+   * _applyWaterlineSweepStage so a re-enable doesn't jump.
+   */
+  setWaterlineSweep(enabled, params = {}, meta = {}) {
+    if (!enabled) {
+      this.sweep.enabled = false;
+      return;
+    }
+    if (params.axis !== undefined) this.sweep.axis = params.axis;
+    if (params.width !== undefined) this.sweep.width = params.width;
+    if (params.amount !== undefined) this.sweep.amount = params.amount;
+    if (params.mode !== undefined) this.sweep.mode = params.mode;
+    if (params.color !== undefined) this.sweep.color = [...params.color];
+    if (params.speedHz !== undefined) this.sweep.speedHz = params.speedHz;
+    if (params.sync !== undefined) this.sweep.sync = params.sync;
+    this.sweep.enabled = true;
+    this.sweep.presetId = meta.presetId || null;
+    this.sweep.slotId = meta.slotId || null;
+  }
+
+  /**
+   * E3 Kick Punch router (AUTO mode). Arms/disarms the controller-level
+   * trigger router that fires dropHit on live kicks. `enabled` false disarms
+   * it; true arms it with the merged params + the dropHit preset it fires.
+   * (The one-shot `trigger` path is handled directly in the slot dispatcher
+   * via triggerDropHit — this setter only owns the auto router.)
+   */
+  setKickRouter(enabled, params = {}, meta = {}) {
+    if (!enabled) {
+      this.kickRouter.enabled = false;
+      return;
+    }
+    if (params.threshold !== undefined) this.kickRouter.threshold = params.threshold;
+    if (params.minGapMs !== undefined) this.kickRouter.minGapMs = params.minGapMs;
+    if (params.source !== undefined) this.kickRouter.source = params.source;
+    if (params.intensityFloor !== undefined) this.kickRouter.intensityFloor = params.intensityFloor;
+    if (params.intensityCeil !== undefined) this.kickRouter.intensityCeil = params.intensityCeil;
+    // The dropHit envelope the router fires (color6 + AHR + blend).
+    this.kickRouter.preset = {
+      color: params.color,
+      attackMs: params.attackMs,
+      holdMs: params.holdMs,
+      releaseMs: params.releaseMs,
+      blendMode: params.blendMode,
+    };
+    this.kickRouter.enabled = true;
+  }
+
+  /**
+   * E4 Freeze Frame. `active` false releases the freeze (next engage
+   * re-captures); true engages it with the merged holdFadeMs.
+   */
+  setFreeze(active, params = {}, meta = {}) {
+    if (!active) {
+      this.freeze.active = false;
+      return;
+    }
+    if (params.holdFadeMs !== undefined) this.freeze.holdFadeMs = params.holdFadeMs;
+    this.freeze.active = true;
+    this.freeze.presetId = meta.presetId || null;
+    this.freeze.slotId = meta.slotId || null;
+  }
+
+  /**
+   * E6 Palette Crush. `enabled` false disables it; true applies the merged
+   * levels/amount. Static chroma — no fade.
+   */
+  setPaletteCrush(enabled, params = {}, meta = {}) {
+    if (!enabled) {
+      this.crush.enabled = false;
+      return;
+    }
+    if (params.levels !== undefined) this.crush.levels = params.levels;
+    if (params.amount !== undefined) this.crush.amount = params.amount;
+    this.crush.enabled = true;
+    this.crush.presetId = meta.presetId || null;
+    this.crush.slotId = meta.slotId || null;
+  }
+
+  /**
+   * E9 Ocean Breath. `enabled` false stops the swell; true applies the
+   * merged period/depth/warmth. periodMs must be > 0 (validated upstream).
+   */
+  setOceanBreath(enabled, params = {}, meta = {}) {
+    if (!enabled) {
+      this.breath.enabled = false;
+      return;
+    }
+    if (params.periodMs !== undefined) this.breath.periodMs = params.periodMs;
+    if (params.depth !== undefined) this.breath.depth = params.depth;
+    if (params.warmth !== undefined) this.breath.warmth = params.warmth;
+    this.breath.enabled = true;
+    this.breath.presetId = meta.presetId || null;
+    this.breath.slotId = meta.slotId || null;
+  }
+
+  /**
+   * E10 Frost Sparkle. `enabled` false disables it AND clears the live glint
+   * field (report-3: a plain early-return would freeze glints mid-air); true
+   * applies the merged density/decay/intensity/audioDensity.
+   */
+  setFrostSparkle(enabled, params = {}, meta = {}) {
+    if (!enabled) {
+      this.sparkle.enabled = false;
+      frostSparkleEffect.reset(this._sparkleState);
+      return;
+    }
+    if (params.density !== undefined) this.sparkle.density = params.density;
+    if (params.decayMs !== undefined) this.sparkle.decayMs = params.decayMs;
+    if (params.intensity !== undefined) this.sparkle.intensity = params.intensity;
+    if (params.audioDensity !== undefined) this.sparkle.audioDensity = params.audioDensity;
+    this.sparkle.enabled = true;
+    this.sparkle.presetId = meta.presetId || null;
+    this.sparkle.slotId = meta.slotId || null;
+  }
+
   _ensureFeedbackBuffer(pixelCount) {
     if (!this.feedbackTrailBuffer || this.feedbackTrailPixelCount !== pixelCount) {
       this.feedbackTrailBuffer = new Float32Array(pixelCount * 6);
@@ -917,6 +1261,15 @@ export class GlobalEffectsController {
       // per-channel only now, so getStatus carries no hue state.
       // Global color invert (docs/39 §F-invert) — a plain boolean toggle.
       invert: this.invert,
+      // Party effects (report 20260708_7 GEM wiring) — active flags +
+      // config so status consumers / _isSlotActive can mirror engine state.
+      beatPump: { ...this.beatPump },
+      sweep: { ...this.sweep, color: [...this.sweep.color] },
+      kickRouter: { enabled: this.kickRouter.enabled },
+      freeze: { ...this.freeze },
+      crush: { ...this.crush },
+      breath: { ...this.breath },
+      sparkle: { ...this.sparkle },
       // Legacy rig-globals state surfaced here too so CaptainPad's
       // RigContext consumers (dimmer_rack bypass checkboxes) can
       // mirror engine-side changes without a separate /globals poll.
@@ -948,6 +1301,24 @@ export class GlobalEffectsController {
       this.setEffect(k, false);
     }
     this.setColorWash(false, null, 0, 'tint', { immediate: true });
+
+    // ── Party effects (report 20260708_7) ────────────────────────────
+    // Kill everything that is ANIMATION or a FREEZE/OVERLAY hazard; PRESERVE
+    // the static/ambient chroma ops (crush, breath) that carry no flash or
+    // brightness hazard — same precedent as invert/group-locks above.
+    // E1 Beat Pump — animation. E2 Waterline Sweep — animation. E3 Kick
+    // router — disarm so it stops firing (pending dropHits already cleared
+    // above). E4 Freeze — release. E10 Frost Sparkle — disable + clear field.
+    this.setBeatPump(false);
+    this.setWaterlineSweep(false);
+    this.setKickRouter(false);
+    this.setFreeze(false);
+    this.setFrostSparkle(false); // also clears the live glint field
+    // E6 Palette Crush and E9 Ocean Breath are intentionally LEFT ALONE:
+    // crush is a static chroma op (like invert); breath is a slow ambient
+    // swell with no flash hazard. Blackout still zeroes output, so safety
+    // is unaffected (report-3 GEM table: E6/E9 = NO panic).
+
     // Global invert (docs/39 §F-invert) is intentionally LEFT ALONE here:
     // panic kills active animation/flash, but invert is a persistent static
     // chroma op (like the group color-locks, which panic also preserves),

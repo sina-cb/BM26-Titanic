@@ -126,4 +126,14 @@ export function applyFreezeFrame({ pixels, state, active, nowMs, holdFadeMs = 0 
 export const freezeFrameEffect = {
   apply: applyFreezeFrame,
   createState: createFreezeState,
+  // Primary intensity: the hold-fade time — how long the frozen frame lingers
+  // before fading to black (0 = hold forever, higher = a shorter freeze that
+  // melts away). Normalized 0..1 maps onto [0..10000] ms. This is the one
+  // effect whose primary is NOT a 0..1 magnitude, hence the explicit ms range.
+  primaryIntensity: { label: 'Hold Fade', param: 'holdFadeMs', default: 0, min: 0, max: 10000 },
+  // Primary mode: hold-forever vs. melt-away presets for the frozen frame.
+  // The VSN1 encoder press cycles these; writes the `holdFadeMs` param (the
+  // same param the jog-wheel writes, quantized to a few musical stops).
+  //   0     = hold forever;  2000/5000 = fade to black over 2 s / 5 s.
+  primaryMode: { label: 'Hold', param: 'holdFadeMs', values: [0, 2000, 5000], default: 0 },
 };

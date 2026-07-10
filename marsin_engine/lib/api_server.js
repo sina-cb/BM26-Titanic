@@ -33,6 +33,7 @@ import {
 import { validateMidiMapping } from './midi_mapping_engine.js';
 import { describeLibrary, GLOBAL_EFFECT_LIBRARY } from './global_effect_library.js';
 import { validateSlotsConfig } from './global_effect_slot_manager.js';
+import { createLayoutDeployHook, isLayoutDeployEnabled } from './vsn1_layout_deploy.js';
 import {
   ScheduledTaskService,
   ScheduledTaskValidationError,
@@ -1017,17 +1018,75 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // If validation throws (e.g. old yaml references a removed effect),
   // we leave the defaults in place and log — never silently fall back.
   const globalEffectSlotManager = engineCore.globalEffectSlotManager || null;
+  // ── VSN1 MIDI-layout deploy hook (effects_v2_midi_layout, Track E) ────
+  // The engine is the source of truth for the 32-slot layout. When an effect
+  // is ADDED or REMOVED from a slot (assign/clear/rename/recolor/reorder or a
+  // whole-config replace) the slot manager emits a layout-changed event
+  // carrying the AFFECTED PAGE(S); this hook writes the layout JSON and — WHEN
+  // CONFIG-GATED ON — deploys ONLY the changed page(s) to the VSN1 via the
+  // pinned single-page CLI (`--from-engine --page N --live`). Edits are
+  // DEBOUNCED (coalesced per page) and the deploy is SERIALIZED (COM12 is a
+  // single-holder port — never two overlapping flashes). Default OFF so tests/
+  // dev never flash hardware. Value/mode/active changes are runtime feedback,
+  // never a layout deploy.
+  let vsn1DeployStatus = null;
   if (globalEffectSlotManager) {
+    const { hook, status } = createLayoutDeployHook({
+      stateDir,
+      engineConfig: engineCore.engineConfig,
+      broadcast: broadcastWs,
+    });
+    vsn1DeployStatus = status;
+    globalEffectSlotManager.setLayoutChangedHook((evt) => {
+      // Fire-and-report: a deploy failure fails loud into the status flag +
+      // WS broadcast (the hook handles that) but must not crash the request
+      // that changed the layout. No silent retry.
+      Promise.resolve(hook(evt)).catch((e) => {
+        console.error(`[VSN1] layout deploy failed: ${e.message}`);
+      });
+    });
     const persistedSlots = stateManager.loadGlobalEffectSlots();
     if (persistedSlots && Array.isArray(persistedSlots.slots)) {
       try {
         validateSlotsConfig(persistedSlots.slots);
+        // Boot restore is NOT a layout deploy (emitLayout defaults false).
         globalEffectSlotManager.setSlots(persistedSlots.slots);
-        console.log(`  ✅ Global effect slots: restored ${persistedSlots.slots.length} from disk`);
+        if (Number.isInteger(persistedSlots.effectsPage)) {
+          try { globalEffectSlotManager.setEffectsPage(persistedSlots.effectsPage); }
+          catch (e) { console.warn(`[GlobalEffectSlots] bad persisted effectsPage: ${e.message}`); }
+        }
+        console.log(`  ✅ Global effect slots: restored ${persistedSlots.slots.length} from disk (page ${globalEffectSlotManager.getEffectsPage()})`);
       } catch (e) {
         console.warn(`[GlobalEffectSlots] persisted config invalid, keeping defaults: ${e.message}`);
       }
     }
+
+    // ── DEPLOY-ON-LOAD ────────────────────────────────────────────────────
+    // Sync the VSN1 to the CURRENT layout on boot, so a fresh stack shows the
+    // right names/colors/grid without waiting for an edit. Only fires when
+    // deploy is enabled (config `vsn1.deployLayout`) AND not opted out
+    // (`vsn1.deployOnBoot`, default true) — so tests + dev-without-hardware
+    // never flash. The hook debounces/serializes; boot restore itself stays
+    // deploy-silent (emitLayout false above) — this is the single, explicit
+    // boot deploy. Populated pages only (empty pages have nothing to show).
+    const vsn1Cfg = (engineCore.engineConfig && engineCore.engineConfig.vsn1) || {};
+    if (isLayoutDeployEnabled(engineCore.engineConfig) && vsn1Cfg.deployOnBoot !== false) {
+      const pages = globalEffectSlotManager.requestFullDeploy();
+      if (pages.length) {
+        console.log(`  🎛  VSN1 deploy-on-load: syncing page(s) ${pages.join(', ')} to the device.`);
+      }
+    }
+  }
+
+  // Persist slot bindings + the engine-owned page in one write. Single
+  // helper so every GEM mutation path saves the page alongside the slots
+  // (effects_v2). No-op when the slot manager is absent.
+  function persistGlobalEffectSlots() {
+    if (!globalEffectSlotManager) return;
+    stateManager.saveGlobalEffectSlots(
+      globalEffectSlotManager.getSlots(),
+      globalEffectSlotManager.getEffectsPage(),
+    );
   }
 
   // ── Scheduler service (docs/31_scheduled_tasks.md v3) ───────────────
@@ -4471,10 +4530,36 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         slots: globalEffectSlotManager.getStatus(),
+        // effects_v2: the engine-owned page VIEW travels with every status so
+        // CaptainPad + VSN1 mirror it (single source of truth).
+        effectsPage: globalEffectSlotManager.getEffectsPage(),
         controller: globalEffectsController && globalEffectsController.getStatus
           ? globalEffectsController.getStatus()
           : null,
       }));
+    // ── effects_v2: engine-owned page VIEW (0..3) ────────────────────
+    // The page is a VIEW over the 32 flat slots (page p = slots 8p+1..8p+8).
+    // It lives in engine state so CaptainPad's page switcher and the VSN1
+    // side buttons both read + write the SAME page — no surface keeps a
+    // private one. GET returns it; PATCH sets it, persists it, and broadcasts.
+    } else if (req.method === 'GET' && req.url === '/global-effects/page') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ effectsPage: globalEffectSlotManager.getEffectsPage() }));
+    } else if (req.method === 'PATCH' && req.url === '/global-effects/page') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      readBody(data => {
+        try {
+          const page = data && data.effectsPage;
+          const resolved = globalEffectSlotManager.setEffectsPage(page);
+          persistGlobalEffectSlots();
+          broadcastWs({ type: 'effectsPage', effectsPage: resolved });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', effectsPage: resolved }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
     } else if (req.method === 'PATCH' && req.url === '/global-effect-slots') {
       if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
       readBody(data => {
@@ -4482,8 +4567,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           if (!Array.isArray(data.slots)) {
             res.writeHead(400); return res.end(JSON.stringify({ error: 'body must include slots: array' }));
           }
-          globalEffectSlotManager.setSlots(data.slots);
-          stateManager.saveGlobalEffectSlots(globalEffectSlotManager.getSlots());
+          // Whole-config replace IS a layout change → emitLayout deploys.
+          globalEffectSlotManager.setSlots(data.slots, { emitLayout: true });
+          persistGlobalEffectSlots();
           broadcastWs({ type: 'globalEffectSlots', slots: globalEffectSlotManager.getSlots() });
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ slots: globalEffectSlotManager.getSlots() }));
@@ -4580,7 +4666,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       readBody(data => {
         try {
           const slot = globalEffectSlotManager.patchSlot(slotId, data || {});
-          stateManager.saveGlobalEffectSlots(globalEffectSlotManager.getSlots());
+          persistGlobalEffectSlots();
           broadcastWs({ type: 'globalEffectSlots', slots: globalEffectSlotManager.getSlots() });
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ slot }));
@@ -4588,9 +4674,190 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
         }
       });
+    // POST /global-effect-slots/:slotId/intensity  (docs/42 VSN1 jog-wheel)
+    //   Body: { value: 0..1 } — normalized primary intensity for the slot's
+    //   bound effect. Mapped onto the effect's real primary-param range,
+    //   written into the slot's paramsOverride, persisted, and applied LIVE
+    //   when the effect is currently running. 400 on a non-finite value or a
+    //   slot/effect that has no primary intensity.
+    } else if (req.method === 'POST' && /^\/global-effect-slots\/\d+\/intensity$/.test(req.url)) {
+      const slotId = parseInt(req.url.match(/^\/global-effect-slots\/(\d+)\/intensity$/)[1], 10);
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      readBody(data => {
+        try {
+          const value = data && data.value;
+          if (typeof value !== 'number' || !Number.isFinite(value)) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: 'body must include value: a finite number in [0..1]' }));
+          }
+          const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+          const nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+          const result = globalEffectSlotManager.setSlotIntensity(slotId, value, { frameIndex, nowMs });
+          persistGlobalEffectSlots();
+          broadcastWs({ type: 'globalEffectMacroStatus',
+            slots: globalEffectSlotManager.getStatus(),
+            controller: globalEffectsController ? globalEffectsController.getStatus() : null,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            status: 'ok', slotId,
+            intensity: result.intensity, paramValue: result.paramValue, applied: result.applied,
+          }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    // POST /global-effect-slots/:slotId/intensity/reset — clear the touched
+    // intensity so the effect's default primary value applies again. Applies
+    // live when the effect is running. 400 for a slot/effect with no primary.
+    } else if (req.method === 'POST' && /^\/global-effect-slots\/\d+\/intensity\/reset$/.test(req.url)) {
+      const slotId = parseInt(req.url.match(/^\/global-effect-slots\/(\d+)\/intensity\/reset$/)[1], 10);
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      try {
+        const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+        const nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const result = globalEffectSlotManager.resetSlotIntensity(slotId, { frameIndex, nowMs });
+        persistGlobalEffectSlots();
+        broadcastWs({ type: 'globalEffectMacroStatus',
+          slots: globalEffectSlotManager.getStatus(),
+          controller: globalEffectsController ? globalEffectsController.getStatus() : null,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', slotId, intensity: result.intensity, applied: result.applied }));
+      } catch (e) {
+        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      }
+    // ── effects_v2: primary MODE (VSN1 encoder press) ────────────────
+    // POST /global-effect-slots/:slotId/mode/cycle — step the slot's mode to
+    //   the NEXT value in its effect's discrete list (wraps). The encoder-
+    //   press gesture. Applies LIVE when the effect is running.
+    // POST /global-effect-slots/:slotId/mode  { value } — set the mode to an
+    //   explicit value (must be a member of the effect's values list). 400 on
+    //   a stranger value or a slot/effect with no mode. Mode is RUNTIME
+    //   FEEDBACK, so neither route triggers a layout deploy.
+    } else if (req.method === 'POST' && /^\/global-effect-slots\/\d+\/mode\/cycle$/.test(req.url)) {
+      const slotId = parseInt(req.url.match(/^\/global-effect-slots\/(\d+)\/mode\/cycle$/)[1], 10);
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      try {
+        const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+        const nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const result = globalEffectSlotManager.cycleSlotMode(slotId, { frameIndex, nowMs });
+        persistGlobalEffectSlots();
+        broadcastWs({ type: 'globalEffectMacroStatus',
+          slots: globalEffectSlotManager.getStatus(),
+          controller: globalEffectsController ? globalEffectsController.getStatus() : null,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', slotId, mode: result.mode, modeIndex: result.modeIndex, applied: result.applied }));
+      } catch (e) {
+        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.method === 'POST' && /^\/global-effect-slots\/\d+\/mode$/.test(req.url)) {
+      const slotId = parseInt(req.url.match(/^\/global-effect-slots\/(\d+)\/mode$/)[1], 10);
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      readBody(data => {
+        try {
+          if (!data || !Object.prototype.hasOwnProperty.call(data, 'value')) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: 'body must include value (a member of the effect mode values list)' }));
+          }
+          const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+          const nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+          const result = globalEffectSlotManager.setSlotMode(slotId, data.value, { frameIndex, nowMs });
+          persistGlobalEffectSlots();
+          broadcastWs({ type: 'globalEffectMacroStatus',
+            slots: globalEffectSlotManager.getStatus(),
+            controller: globalEffectsController ? globalEffectsController.getStatus() : null,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', slotId, mode: result.mode, modeIndex: result.modeIndex, applied: result.applied }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    // ── effects_v2: layout model (GET the serialized 32-slot layout) ──
+    // GET /global-effects/layout — the engine-owned 32-slot layout (effect id
+    // + display name + color per populated slot, page assignment) plus the
+    // last VSN1 deploy status. This is what Track T's deploy_layout.cjs
+    // consumes; deploys fire automatically on layout change, but this lets a
+    // client inspect the current layout + deploy health.
+    } else if (req.method === 'GET' && req.url === '/global-effects/layout') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        layout: globalEffectSlotManager.getLayout(),
+        deploy: vsn1DeployStatus,
+      }));
+    // ── effects_v2: whole-grid global actions (VSN1 side-buttons) ─────
+    // POST /global-effects/reset-all — reset EVERY slot's primary intensity
+    //   AND mode back to its effect's registry default across all 32 slots /
+    //   all pages. Values-only: enabled/active state and effect assignment are
+    //   untouched; running effects are re-dispatched so the reset applies live.
+    //   Idempotent (all-default grid → clean no-op). No body.
+    // POST /global-effects/disable-all — turn OFF every currently-active effect
+    //   (blackout) across all slots while KEEPING every binding intact. Behavior
+    //   aware (toggles/holds deactivate, a ringing trigger is silenced).
+    //   Idempotent (all-off grid → clean no-op). No body.
+    // Both are RUNTIME ops (no layout change → no deploy) and broadcast the same
+    // runtime-status WS topic the per-slot ops use so CaptainPad + VSN1 re-sync.
+    } else if (req.method === 'POST' && req.url === '/global-effects/reset-all') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      try {
+        const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+        const nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const result = globalEffectSlotManager.resetAllToDefault({ frameIndex, nowMs });
+        persistGlobalEffectSlots();
+        broadcastWs({ type: 'globalEffectMacroStatus',
+          slots: globalEffectSlotManager.getStatus(),
+          controller: globalEffectsController ? globalEffectsController.getStatus() : null,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok',
+          slotsReset: result.slotsReset,
+          intensityReset: result.intensityReset,
+          modeReset: result.modeReset,
+          reapplied: result.reapplied,
+        }));
+      } catch (e) {
+        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.method === 'POST' && req.url === '/global-effects/disable-all') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      try {
+        const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+        const nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const result = globalEffectSlotManager.disableAll({ frameIndex, nowMs });
+        persistGlobalEffectSlots();
+        broadcastWs({ type: 'globalEffectMacroStatus',
+          slots: globalEffectSlotManager.getStatus(),
+          controller: globalEffectsController ? globalEffectsController.getStatus() : null,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', disabled: result.disabled }));
+      } catch (e) {
+        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      }
+    // ── effects_v2: force a VSN1 layout re-deploy (sync the device) ──────
+    // POST /global-effects/deploy — push the CURRENT layout to the VSN1 (the
+    // populated pages), independent of any edit. This is the "update the UI
+    // with the layout" action for LOAD: a client (CaptainPad opening the
+    // effects screen) or an operator can call it to guarantee the device
+    // shows the live layout. Add/remove/rename already deploy on change; this
+    // covers the load case + a manual re-sync. No body. Returns the pages
+    // queued + the deploy status. No-op pages=[] when deploy is disabled or
+    // nothing is populated (never an error — a no-hardware/gated engine just
+    // reports it did nothing).
+    } else if (req.method === 'POST' && req.url === '/global-effects/deploy') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      const triggeredPages = globalEffectSlotManager.requestFullDeploy();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', triggeredPages, deploy: vsn1DeployStatus }));
     } else if (req.method === 'POST' && req.url.startsWith('/global-effect-slots/')) {
-      // POST /global-effect-slots/:slotId/{activate,deactivate,trigger}
-      const m = req.url.match(/^\/global-effect-slots\/(\d+)\/(activate|deactivate|trigger|toggle|down|up)$/);
+      // POST /global-effect-slots/:slotId/{press,activate,deactivate,trigger,toggle,down,up}
+      // `press` is behavior-resolved server-side (trigger→fire, toggle→flip,
+      // hold→down) so a physical key press does the right thing per the slot's
+      // own behavior — the host can send `press` instead of guessing the action
+      // from a possibly-stale behavior snapshot (RCA 20260709_7 fix spec #1).
+      const m = req.url.match(/^\/global-effect-slots\/(\d+)\/(press|activate|deactivate|trigger|toggle|down|up)$/);
       if (!m) { res.writeHead(404); return res.end('Not Found'); }
       const slotId = parseInt(m[1], 10);
       const action = m[2];

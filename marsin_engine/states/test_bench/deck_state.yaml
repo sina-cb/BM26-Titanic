@@ -1,33 +1,45 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 18_deep_space_lattice
+  pattern: 38_prism_helix
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
   localControls:
-    '667518146':
-      v0: 0.5
+    '23515769':
+      v0: 0.83
+      v1: 0
+      v2: 0
+    '729588226':
+      v0: 0
       v1: 0
       v2: 0
     '1037917937':
-      v0: 0.66
+      v0: 0
       v1: 0
       v2: 0
-    '1393164903':
-      v0: 0.5
+    '1943188854':
+      v0: 0
+      v1: 0
+      v2: 0
+    '3319710180':
+      v0: 0
+      v1: 0
+      v2: 0
+    '4234014351':
+      v0: 0
       v1: 0
       v2: 0
   playlist:
     name: default
-    activeEntryId: e_default_18_18_deep_space_lattice
-    cursor: 18
+    activeEntryId: e_1781818974092_2409
+    cursor: 38
     autopilot:
       active: true
-      delay_s: 10
-      shuffle: true
+      delay_s: 5
+      shuffle: false
   viewSelection:
     type: all
     target: null
@@ -41,40 +53,11 @@ channel:
   followLeaderId: null
   followScale: 1
 transitionConfig:
-  enabled: true
-  mode: trans_dissolve
+  enabled: false
+  mode: trans_flash
   durationMs: 1000
-  shuffle: true
-overlays:
-  - id: do_1783156629942_0
-    name: Overlay
-    pattern: test/rpm_fixtures_tune_v2
-    mode: blend_over
-    fader: 1
-    enabled: true
-    locked: false
-    faderLocked: false
-    localControls: {}
-    playlist:
-      name: test
-      activeEntryId: e_test_13_rpm_fixtures_tune_v2
-      cursor: 13
-      autopilot:
-        active: false
-        delay_s: 30
-        shuffle: false
-    viewSelection:
-      type: group
-      target: ParLights
-      invert: false
-    faderMax: 1
-    color: '#FF5252'
-    mixGroupId: null
-    soloSafe: false
-    hue: 0
-    followsTempo: false
-    followLeaderId: null
-    followScale: 1
+  shuffle: false
+overlays: []
 overlayAutopilot:
   active: false
   delay_s: 1
@@ -82,3 +65,7 @@ overlayAutopilot:
   groupMode: false
   groupSize: 3
   groupDwell: 6
+playlistSlots:
+  primary: default
+  secondary: null
+  splitRatio: 0.5

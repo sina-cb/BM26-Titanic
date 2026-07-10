@@ -5,11 +5,9 @@
 // and a slot whose behavior hasn't reached the snapshot yet (a boot/refresh
 // race) fails SAFE to 'toggle' rather than crashing.
 //
-// This lives in its own file (not manager.test.ts) only because that suite
-// currently can't LOAD — it references a removed `globalHueKnob` profile action
-// from a concurrent global-hue removal, which throws at validateProfile time
-// before any test runs. This file is self-contained so it exercises the same
-// MidiManager → resolveEvent → dispatcher path without inheriting that red.
+// This lives in its own file (not manager.test.ts) as a focused, self-contained
+// proof: it exercises the full MidiManager → resolveEvent → dispatcher path for
+// the behavior-aware slot fix with its own minimal fixtures.
 
 import { describe, it, expect, vi } from 'vitest';
 import { MidiManager, MidiEngineSnapshot } from './manager';
@@ -68,9 +66,13 @@ function makeApi(): MidiDispatchApi {
     setGlobalBlackout: vi.fn(ok), setGlobalEffect: vi.fn(ok), setSectionBrightness: vi.fn(ok),
     setGroupFixedColor: vi.fn(ok), updateMixerChannel: vi.fn(ok), updateDeckChannel: vi.fn(ok),
     dispatchGlobalEffectSlotAction: vi.fn(ok), setGlobalEffectBlackout: vi.fn(ok),
+    setGlobalEffectSlotIntensity: vi.fn(ok), resetGlobalEffectSlotIntensity: vi.fn(ok),
+    setEffectsPage: vi.fn(ok), cycleGlobalEffectSlotMode: vi.fn(ok),
+    resetAllGlobalEffects: vi.fn(ok), disableAllGlobalEffects: vi.fn(ok),
     setChannelPlaylistEntry: vi.fn(ok),
     setDeckChannelControl: vi.fn(ok), setMixerChannelControl: vi.fn(ok),
     setChannelHue: vi.fn(ok),
+    toggleDeckMixerView: vi.fn(ok), toggleCombinedAutopilot: vi.fn(ok), toggleMasterFade: vi.fn(ok),
   };
 }
 
@@ -128,6 +130,16 @@ describe('behavior-aware global-effect slot dispatch (full manager path)', () =>
 
   it('a slot missing from the snapshot entirely FAILS SAFE to toggle', async () => {
     const api = await pressSlotPad([{ slot: 1, active: false, behavior: 'toggle' }]); // slot 2 absent
+    expect(api.dispatchGlobalEffectSlotAction).toHaveBeenCalledWith(2, 'toggle');
+  });
+
+  // Regression: Sina's TWO-STEP contract is VSN1-ONLY. A non-VSN1 device (this
+  // APC profile) must keep the historical DIRECT behavior — a SINGLE press
+  // dispatches immediately, no select-first gate. (The two-step select/commit is
+  // proven for the VSN1 in vsn1_intensity.test.ts.)
+  it('a NON-VSN1 device dispatches on the FIRST press (no two-step gate)', async () => {
+    const api = await pressSlotPad([{ slot: 2, active: false, behavior: 'toggle' }]);
+    expect(api.dispatchGlobalEffectSlotAction).toHaveBeenCalledTimes(1);
     expect(api.dispatchGlobalEffectSlotAction).toHaveBeenCalledWith(2, 'toggle');
   });
 });

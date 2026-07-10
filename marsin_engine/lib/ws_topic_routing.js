@@ -85,6 +85,16 @@ const TOPIC_BY_TYPE = Object.freeze({
   mixerTransitionRejected:     TOPICS.CONTROL,
   globalEffectSlots:           TOPICS.CONTROL,
   globalEffectMacroStatus:     TOPICS.CONTROL,
+  // effects_v2 (project effects_v2_midi_layout): the engine-owned page VIEW
+  // (0..3) over the 32 GEM slots. Broadcast on every PATCH /global-effects/page
+  // so CaptainPad's page switcher + the VSN1 side buttons mirror the SAME page
+  // (single source of truth). Operator-driven, low volume → /ws/control next
+  // to the GEM slot/macro messages it relates to.
+  effectsPage:                 TOPICS.CONTROL,
+  // effects_v2: VSN1 MIDI-layout deploy result. Broadcast when a layout change
+  // is written/flashed to the controller so a client can surface deploy health
+  // (ok / disabled / error). Low volume — fires only on layout changes.
+  vsn1LayoutDeploy:            TOPICS.CONTROL,
   // NOTE: `globalHueShift` was REMOVED (2026-07) — the global hue shifter
   // is gone; hue is per-channel only and rides the mixer/deck state
   // broadcasts like every other channel field.

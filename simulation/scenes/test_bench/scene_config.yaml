@@ -237,8 +237,31 @@ ledStrands:
   _section:
     label: 💡 LED Strands
     type: ledStrandArray
-    collapsed: true
+    collapsed: false
   strandsEnabled:
     value: true
     label: Master Enabled
-  strands: []
+  strands:
+    - name: LED_0
+      startX: -1.5
+      startY: 3
+      startZ: 2.5
+      endX: 2.5
+      endY: 3
+      endZ: 2.5
+      color: '#ff8800'
+      intensity: 1
+      ledCount: 40
+      sectionId: 5
+      fixtureId: 11
+      viewMask: 0
+      group: ''
+      controllerIp: ''
+      controllerId: 0
+      dmxUniverse: 0
+      dmxAddress: 0
+      pixelCount: 0
+      outputIndex: -1
+      segments: []
+      endUniverse: 0
+      endChannel: 0

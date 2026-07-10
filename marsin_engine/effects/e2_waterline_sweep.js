@@ -108,4 +108,11 @@ export function applyWaterlineSweep({ pixels, head, width, amount, axis = 'y', m
 export const waterlineSweepEffect = {
   apply: applyWaterlineSweep,
   axisCoord,
+  // Primary intensity: the sweep depth — how strongly the moving band
+  // boosts ('add') or shadows ('darken') the rig (0 = invisible, 1 = full
+  // strength). Normalized 0..1 maps straight onto the `amount` param.
+  primaryIntensity: { label: 'Sweep Depth', param: 'amount', default: 0.7, min: 0, max: 1 },
+  // Primary mode: the clock the head runs on — free-run, one sweep per beat,
+  // one per bar. The VSN1 encoder press cycles these; writes the `sync` param.
+  primaryMode: { label: 'Sync', param: 'sync', values: ['free', 'beat', 'bar'], default: 'free' },
 };

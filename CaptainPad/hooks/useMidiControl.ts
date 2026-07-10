@@ -15,6 +15,7 @@
 // frozen MidiTransport interface doing its job.
 
 import { useEffect, useState } from 'react';
+import { router } from 'expo-router';
 
 import { useEngineState, MixerChannel } from '@/hooks/useEngineState';
 import { engineEvents } from '@/utils/engineEvents';
@@ -33,8 +34,17 @@ import {
   updateDeckChannel,
   dispatchGlobalEffectSlotAction,
   setGlobalEffectBlackout,
+  setGlobalEffectSlotIntensity,
+  resetGlobalEffectSlotIntensity,
+  setEffectsPage,
+  cycleGlobalEffectSlotMode,
+  resetAllGlobalEffects,
+  disableAllGlobalEffects,
+  fetchEffectsPage,
   getAutopilot,
   setAutopilot,
+  fetchDeckColorAutopilot,
+  setDeckColorAutopilot,
   fetchDeckTransitionConfig,
   setDeckTransitionConfig,
   fetchGlobalEffectSlotsStatus,
@@ -48,6 +58,8 @@ import {
   type PlaylistAssignment,
 } from '@/utils/api';
 import { setChannelHue } from '@/utils/channelExtrasApi';
+import { fadeMaster } from '@/utils/masterApi';
+import { getSelectedFadeSeconds } from '@/components/MasterFadeGroup';
 import {
   MidiManager,
   ControllerStatus,
@@ -67,8 +79,17 @@ import {
   GlobalEffectSlotBehavior,
 } from '@/utils/midi';
 import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
+import {
+  combinedAutopilotTarget,
+  combinedAutopilotLedOn,
+  colorAutopilotWritable,
+  masterFadeTarget,
+  createAutopilotToggleExemption,
+  deckMixerToggleTarget,
+} from '@/utils/midi/apc_button_logic';
 import apcProfileRaw from '@/midi_profiles/apc_mini_mk2.yaml';
 import mftProfileRaw from '@/midi_profiles/mft.yaml';
+import vsn1ProfileRaw from '@/midi_profiles/vsn1.yaml';
 
 export interface MidiControlState {
   /** A transport exists on this platform (desktop Chromium / native module). */
@@ -118,7 +139,7 @@ function _setNotice(notice: string | null): void {
 /** Narrow the engine's bare-string slot `behavior` to the known union. An
  *  unexpected value becomes undefined so the dispatcher's fail-safe ('toggle')
  *  owns the odd case rather than a bad literal leaking into the snapshot. */
-function narrowSlotBehavior(behavior: string): GlobalEffectSlotBehavior | undefined {
+function narrowSlotBehavior(behavior: unknown): GlobalEffectSlotBehavior | undefined {
   return behavior === 'toggle' || behavior === 'trigger' || behavior === 'hold'
     ? behavior
     : undefined;
@@ -141,7 +162,46 @@ let _snapshot: MidiEngineSnapshot = {
   // drives itself (e.g. 'speed' while BPM→Speed sync is on). Empty at boot;
   // populated from `bpmSpeedSyncOn` in the snapshot rebuild + the in-place patch.
   syncOwnedKeys: new Set<string>(),
+  // combinedAutopilotActive: drives the APC clip_stop LED (lit when BOTH the
+  // pattern autopilot AND the deck colour autopilot are on). Off at boot;
+  // patched live from the engine's `autopilot` / `colorAutopilot` WS broadcasts
+  // (below) so the LED tracks the state a clip_stop press would turn off.
+  combinedAutopilotActive: false,
 };
+
+// ── APC clip_stop LED: combined (pattern + colour) autopilot state ─────────
+// The engine broadcasts pattern autopilot on `{ type:'autopilot', active }` and
+// deck colour autopilot on `{ type:'colorAutopilot', active }` (separate WS
+// events). We mirror each `active` flag into a module cache and recompute the
+// COMBINED state (both-on) into the snapshot on any change, then nudge an LED
+// repaint. Seeded false; the connect replay of both events fills them in on the
+// first frame (a pre-field engine simply never flips them → LED stays dark).
+let _patternAutopilotOn = false;
+let _colorAutopilotOn = false;
+// Whether the deck COLOUR autopilot is WRITABLE (a non-empty palette set is
+// configured). The engine rejects EVERY color-autopilot write when palettes are
+// empty (codex P0 strict validation) — for both directions — so an unconfigured
+// colour autopilot can never be on, and the clip_stop toggle must degrade to a
+// pattern-only toggle. Mirrored from the `colorAutopilot` WS broadcast's
+// `palettes` (which colorAutopilotState() always serializes). Seeded false: a
+// pre-field engine that never broadcasts palettes reads as not-writable, so the
+// LED tracks the pattern autopilot alone rather than a permanently-dark combined.
+let _colorAutopilotWritable = false;
+
+/** Recompute the APC clip_stop LED state into `combinedAutopilotActive` and nudge
+ *  a repaint. The field feeds manager.ts's getCombinedAutopilotActive → the
+ *  clip_stop LED. Its MEANING is "the autopilot is on" as the operator reads it
+ *  (the state a press turns OFF): BOTH autopilots on when the colour side is
+ *  writable, else PATTERN autopilot alone (an unconfigured colour autopilot can
+ *  never be on, so requiring both-on would leave the LED permanently dark even
+ *  though a press turns pattern autopilot on). Called on either autopilot's
+ *  `active`/palettes change (WS) or after a clip_stop toggle writes. */
+function _patchCombinedAutopilot(): void {
+  const ledOn = combinedAutopilotLedOn(_patternAutopilotOn, _colorAutopilotOn, _colorAutopilotWritable);
+  if (_snapshot.combinedAutopilotActive === ledOn) return; // no churn on repeats
+  _snapshot = { ..._snapshot, combinedAutopilotActive: ledOn };
+  _nudge?.();
+}
 
 /** Derive `syncOwnedKeys` (contract I4) from the BPM→Speed sync flag: when the
  *  engine's BPM→Speed sync owns `speed`, a manual write to it (via ANY surface)
@@ -418,6 +478,22 @@ let _idleTimer: ReturnType<typeof setTimeout> | null = null;
 let _priorAutopilot: boolean | null = null;
 let _priorTransitions: boolean | null = null;
 
+// ── clip_stop / combined-autopilot exemption from the activity auto-disable ──
+// The APC clip_stop press (autopilotToggle → toggleCombinedAutopilot) is the ONE
+// inbound action whose whole point is to turn PATTERN autopilot ON. But the
+// auto-disable above turns PATTERN autopilot OFF on the first inbound MIDI after
+// a long idle — so a clip_stop that is that first activity would have its own
+// "turn ON" write stomped by the idle auto-disable's `setAutopilot(false)`.
+//
+// The exemption is a one-shot claim/consume pair (pure factory in
+// apc_button_logic — the ordering rationale lives on it): the toggle CLAIMS the
+// current activity window synchronously (before any await); the auto-disable
+// then asks shouldRunPatternDisable(), which returns false exactly once per
+// claim. Only the pattern-autopilot disable is skipped for a clip_stop window
+// (the deck-transition disable is untouched — that side never fights clip_stop);
+// every OTHER inbound MIDI is unclaimed and its auto-disable is unchanged.
+const _autopilotToggleExemption = createAutopilotToggleExemption();
+
 /** Idle-restore guard (P3-5). We only re-enable a subsystem on idle when TWO
  *  things hold: it was ON when activity began (`prior === true`), AND the
  *  operator has NOT touched it since — i.e. it is STILL sitting at the `false`
@@ -446,14 +522,27 @@ async function _onMidiActivity(): Promise<void> {
     const tx = await fetchDeckTransitionConfig();
     _priorTransitions = tx.ok && tx.data ? !!tx.data.enabled : null;
   } catch { _priorTransitions = null; }
+  // clip_stop exemption: if THIS activity is a combined-autopilot toggle, its
+  // synchronous prefix has already run (see the flag's note) and it OWNS the
+  // pattern-autopilot direction. Skip our pattern `setAutopilot(false)` so we
+  // don't stomp its intended turn-on; consume the one-shot flag so the NEXT
+  // (non-toggle) activity disables normally. The deck-transition disable is
+  // unaffected either way. NOTE: we also leave `_priorAutopilot` as captured —
+  // the idle-restore guard (shouldRestoreOnIdle) already only re-enables when
+  // the live state is still the `false` we wrote, and we wrote nothing here, so
+  // it won't fight the toggle's result on idle.
   // Disable. These ApiResults capture transport errors as { ok: false } (they
   // don't throw), so a swallowed .catch would HIDE a real disable failure and
   // leave autopilot fighting the operator's faders with no indication. Surface
-  // it as a header-chip notice instead (codex P0: fail LOUD).
-  setAutopilot(false).then((r) => {
-    if (!r.ok) _setNotice('autopilot disable FAILED — it may keep fighting the faders');
-    else _setNotice(null);
-  }).catch(() => _setNotice('autopilot disable FAILED — it may keep fighting the faders'));
+  // it as a header-chip notice instead (codex P0: fail LOUD). The pattern
+  // disable is skipped exactly for a clip_stop-claimed window (consumes the
+  // claim); every other activity runs it as before.
+  if (_autopilotToggleExemption.shouldRunPatternDisable()) {
+    setAutopilot(false).then((r) => {
+      if (!r.ok) _setNotice('autopilot disable FAILED — it may keep fighting the faders');
+      else _setNotice(null);
+    }).catch(() => _setNotice('autopilot disable FAILED — it may keep fighting the faders'));
+  }
   setDeckTransitionConfig({ enabled: false }).then((r) => {
     if (!r.ok) _setNotice('deck-transition disable FAILED — transitions may still fire');
   }).catch(() => _setNotice('deck-transition disable FAILED — transitions may still fire'));
@@ -514,6 +603,138 @@ export function setMidiActiveContext(name: string): void {
   _bumpFocus();
 }
 
+// ── APC operator re-layout (2026-07): live state the three new buttons read ──
+// The grand-master value (0..1), mirrored from the engine so the APC master-fade
+// toggle (stop_all_clips) can decide TO BLACK vs UP without a React hook. Updated
+// by the LED-nudge effect (which already depends on `engine`). Seeded to the
+// engine's cold-boot default (1 = full up).
+let _liveMaster = 1;
+
+/** Toggle the active CaptainPad tab Deck ↔ Mixer (APC Shift). Reads the current
+ *  tab from `_activeContext` (the same signal the tabs publish on focus) and
+ *  navigates the OTHER. From a non-Deck/Mixer tab (e.g. Config) the operator's
+ *  Shift lands them on the Deck — a sensible, documented home. Returns a
+ *  MidiApiResult so a navigation throw surfaces through the fail-loud path. */
+export async function toggleDeckMixerView(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    // From Mixer → Deck; from Deck (or any other tab) → Mixer. `_activeContext`
+    // is 'mixer' only while the Mixer tab is focused; every other tab (deck +
+    // the utility tabs) reads as non-mixer, so Shift always reaches Deck/Mixer.
+    // Derive the route AND the MIDI context from the SAME current context, so
+    // navigation and the published mapping context can never diverge.
+    const { route, context } = deckMixerToggleTarget(_activeContext);
+    // `route` is one of the two static tab routes ('/(tabs)' | '/(tabs)/mixer')
+    // — both valid expo-router hrefs. The helper types it as the wider `string`
+    // (it is transport-agnostic), so assert the href type at the navigate call.
+    router.navigate(route as Parameters<typeof router.navigate>[0]);
+    // Publish the MIDI context HERE, alongside the navigation. The destination
+    // screen's useFocusEffect ALSO calls setMidiActiveContext, but on the
+    // APC-Shift router.navigate path that effect can be skipped/slow — leaving
+    // the knobs in 'deck' context while the operator stares at the mixer (the
+    // mixer-locals-do-nothing bug). setMidiActiveContext is idempotent, so the
+    // redundant effect call is a no-op; the point is that context is set NO
+    // MATTER how the mixer is reached. `setMixerView` (the engine output
+    // switch) stays owned by the screen effects — we only move the MIDI mapping
+    // context here.
+    setMidiActiveContext(context);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Combined pattern+color autopilot toggle (APC clip_stop). Reads BOTH current
+ *  states; if AT LEAST ONE is on the press turns BOTH on, if BOTH are on it turns
+ *  BOTH off. A failed READ surfaces as a fail-loud result (we never guess a state
+ *  and then fight the engine).
+ *
+ *  THE 4TH-FADER-CLASS BUG (why this "already correct on paper" toggle didn't
+ *  toggle on hardware): the engine validates EVERY `/deck/color-autopilot` write
+ *  strictly — the merged config must carry a NON-EMPTY palette set or the POST
+ *  400s, in BOTH directions. Out of the box no palettes are configured, so the
+ *  old unconditional `setDeckColorAutopilot({ active: next })` ALWAYS 400'd:
+ *  `setAutopilot(next)` (pattern) had already landed, so the press half-applied
+ *  and returned {ok:false}. Worse, with the colour side unwritable "both on" is
+ *  unreachable, so the both-aware direction could never reach its "turn OFF"
+ *  branch — the toggle looked dead. Fix: when the colour autopilot is NOT
+ *  writable, this becomes a PURE PATTERN toggle — we write only the pattern
+ *  autopilot and skip the guaranteed-400 colour write. When palettes ARE
+ *  configured, both flip together as before. */
+export async function toggleCombinedAutopilot(): Promise<{ ok: boolean; error?: string }> {
+  // Claim this activity window SYNCHRONOUSLY (before any await) so the
+  // activity-based auto-disable — which fired first this turn but only reaches
+  // its pattern `setAutopilot(false)` after two awaited round-trips — skips the
+  // pattern-autopilot disable and lets our intended direction below win.
+  _autopilotToggleExemption.claim();
+  const patternRes = await getAutopilot();
+  const colorRes = await fetchDeckColorAutopilot();
+  if (!patternRes.ok || !patternRes.data) {
+    return { ok: false, error: `pattern autopilot read failed: ${patternRes.error ?? 'no data'}` };
+  }
+  if (!colorRes.ok || !colorRes.data) {
+    return { ok: false, error: `color autopilot read failed: ${colorRes.error ?? 'no data'}` };
+  }
+  const patternOn = !!patternRes.data.active;
+  const colorOn = !!colorRes.data.active;
+  // Is the colour autopilot writable this instant? (Non-empty palette set — the
+  // engine rejects an empty-palette write in either direction.) Read from the
+  // SAME config we just fetched, so the decision matches the engine's own view.
+  const colorToggleable = colorAutopilotWritable(colorRes.data.palettes);
+  // Direction (pure): with colour toggleable → both on → off, else on. Without it
+  // → pure pattern toggle (!patternOn), and we write ONLY the pattern autopilot.
+  const next = combinedAutopilotTarget(patternOn, colorOn, colorToggleable);
+  const wPattern = await setAutopilot(next);
+  if (!wPattern.ok) return { ok: false, error: `pattern autopilot write failed: ${wPattern.error ?? 'unknown'}` };
+  // Keep the LED cache honest immediately (the WS `autopilot` broadcast will also
+  // arrive, but this makes the light follow the press without waiting on it).
+  _patternAutopilotOn = next;
+  if (colorToggleable) {
+    const wColor = await setDeckColorAutopilot({ active: next });
+    if (!wColor.ok) return { ok: false, error: `color autopilot write failed: ${wColor.error ?? 'unknown'}` };
+    _colorAutopilotOn = next;
+    _colorAutopilotWritable = true;
+  } else {
+    // Unconfigured colour autopilot: it's definitionally off and we sent no write.
+    _colorAutopilotOn = false;
+    _colorAutopilotWritable = false;
+  }
+  _patchCombinedAutopilot();
+  return { ok: true };
+}
+
+/** Master FADE toggle (APC stop_all_clips). If the master is NOT already black,
+ *  fade TO BLACK (target 0); if it IS black, fade UP (target 1). Duration comes
+ *  from the MasterFadeGroup store (`getSelectedFadeSeconds`) — the same pill the
+ *  operator picks on-screen, never hardcoded. 0 s = INSTANT snap (the timed-fade
+ *  route rejects durationMs<=0), matching the UI's runFade(). */
+export async function toggleMasterFade(): Promise<{ ok: boolean; error?: string }> {
+  // Direction (pure): not-black → fade to black (0); already black → fade up (1).
+  const target = masterFadeTarget(_liveMaster);
+  const seconds = getSelectedFadeSeconds();
+  const res = seconds > 0
+    ? await fadeMaster(target, seconds * 1000)
+    : await updateMixerMaster(target);
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
+}
+
+// Effects v2 WELCOME: the effects panel calls this on mount so CaptainPad sends
+// the VSN1 a one-shot hello + a full feedback re-sync (task: "hello + full state
+// on effects load"). Routed to the live MidiManager (only the VSN1 profile acts;
+// a no-op while no manager is mounted / disconnected — the reconnect path then
+// carries the hello). Cleared in the boot-effect cleanup.
+let _requestVsn1Welcome: (() => void) | null = null;
+
+/** Called by the effects panel when it first loads: emit the VSN1 WELCOME (hello
+ *  + full feedback re-sync). Safe before the manager mounts (no-op). */
+export function notifyEffectsPanelLoaded(): void {
+  _requestVsn1Welcome?.();
+}
+
+// Item 2: the live manager's post-deploy re-sync, published by the boot effect.
+// The `vsn1LayoutDeploy` WS subscription routes here on a completed flash so the
+// device restores its view mode + feedback WITHOUT re-arming the welcome.
+let _resyncVsn1AfterDeploy: (() => void) | null = null;
+
 // Live CPC schema keys (for paramCenter validation). The engine schema loads
 // async AFTER the manager connects, so we read it through a getter and re-run
 // validation when it changes — otherwise every key flashes "unknown" on boot.
@@ -558,6 +779,7 @@ function loadProfiles(): { profiles: ControllerProfile[]; error: string | null }
   const specs: { name: string; raw: unknown }[] = [
     { name: 'apc_mini_mk2.yaml', raw: (apcProfileRaw as { default?: unknown }).default ?? apcProfileRaw },
     { name: 'mft.yaml', raw: (mftProfileRaw as { default?: unknown }).default ?? mftProfileRaw },
+    { name: 'vsn1.yaml', raw: (vsn1ProfileRaw as { default?: unknown }).default ?? vsn1ProfileRaw },
   ];
   try {
     const profiles = specs.map((s) => validateProfile(s.raw, s.name));
@@ -840,10 +1062,23 @@ export function useMidiControl(): MidiControlState {
         updateDeckChannel,
         dispatchGlobalEffectSlotAction,
         setGlobalEffectBlackout,
+        setGlobalEffectSlotIntensity,
+        resetGlobalEffectSlotIntensity,
+        setEffectsPage,
+        cycleGlobalEffectSlotMode,
+        resetAllGlobalEffects,
+        disableAllGlobalEffects,
         setChannelPlaylistEntry,
         setDeckChannelControl,
         setMixerChannelControl,
         setChannelHue,
+        // APC operator re-layout (2026-07): the three buttons that read live app
+        // state (current tab / autopilot states / master + selected duration)
+        // are implemented HERE (the hook owns the router + engine reads) and
+        // injected as api methods so the manager/dispatcher stay pure + DI'd.
+        toggleDeckMixerView,
+        toggleCombinedAutopilot,
+        toggleMasterFade,
       },
       getSnapshot: () => _snapshot,
       getSchemaKeys: () => _schemaKeys,
@@ -870,6 +1105,11 @@ export function useMidiControl(): MidiControlState {
     _armLearn = (cb) => manager.armLearn(cb);
     // Forward CPC-schema arrival so param-key validation re-runs.
     _revalidate = () => manager.revalidate();
+    // Effects v2 WELCOME: the effects panel's mount routes here → VSN1 hello + full re-sync.
+    _requestVsn1Welcome = () => manager.requestVsn1Welcome();
+    // Item 2: a completed VSN1 layout auto-deploy routes here → re-echo view mode
+    // + full feedback re-sync (device VM was re-flashed), never the welcome.
+    _resyncVsn1AfterDeploy = () => manager.resyncVsn1AfterLayoutDeploy();
     // Seed the pattern list for pattern-bank dispatch + LED highlight. Named so
     // the engine-connected transition (P2-6) can re-run it — if CaptainPad
     // booted BEFORE the engine, the initial fetch fails silently and the 16
@@ -885,31 +1125,99 @@ export function useMidiControl(): MidiControlState {
     };
     refreshPatterns();
 
+    // Map one engine status-slot (REST GET or the inline WS broadcast payload —
+    // SAME shape, `globalEffectSlotManager.getStatus()`) to the manager snapshot
+    // slot. Shared so the GET path and the inline-broadcast path can never drift.
+    const mapStatusSlot = (s: {
+      slotId: number; active?: unknown; behavior?: unknown;
+      effectId?: unknown; label?: unknown; enabled?: unknown;
+      intensity?: unknown; intensityDefault?: unknown;
+      mode?: unknown; modeLabel?: unknown; modeValues?: unknown;
+    }) => ({
+      slot: s.slotId,
+      active: !!s.active,
+      // Effects v2 LAYOUT identity for the VSN1 feedback path: the bound effect
+      // id + display label, so a swap/clear (from any surface) is detected and a
+      // full device re-send forced. A DISABLED slot reports empty effectId — the
+      // engine's clear only flips `enabled` and keeps the stale effectId, so the
+      // layout identity must reflect the disabled state, mirroring the UI's
+      // enabled+effectId "bound" predicate. Only carried when present.
+      effectId: (s.enabled === false)
+        ? ''
+        : (typeof s.effectId === 'string' ? s.effectId : undefined),
+      label: typeof s.label === 'string' ? s.label : undefined,
+      // Thread the engine's per-slot behavior ('toggle' | 'trigger' | 'hold') so
+      // the pad dispatch is BEHAVIOR-AWARE — a 'trigger' slot (Iceberg Flash /
+      // White Drop) must fire 'trigger', not 'toggle'. The REST field is a bare
+      // string; narrow to the known union and drop anything unexpected to
+      // undefined so the dispatcher's fail-safe ('toggle') owns the odd case.
+      behavior: narrowSlotBehavior(s.behavior),
+      // Driver #3 (VSN1): the slot's live intensity + its default. Only carried
+      // when numeric — a pre-field engine leaves them undefined (jog stays inert,
+      // never a fabricated 0).
+      intensity: typeof s.intensity === 'number' ? s.intensity : undefined,
+      intensityDefault: typeof s.intensityDefault === 'number' ? s.intensityDefault : undefined,
+      // Effects v2: the slot's discrete `primaryMode` (current value, label, list).
+      mode: (s.mode as string | number | boolean | null | undefined) ?? undefined,
+      modeLabel: typeof s.modeLabel === 'string' ? s.modeLabel : undefined,
+      modeValues: Array.isArray(s.modeValues) ? (s.modeValues as (string | number | boolean)[]) : undefined,
+    });
+
+    const applySlots = (slots: { slotId: number }[]) => {
+      _snapshot = { ..._snapshot, globalEffectSlots: slots.map(mapStatusSlot) };
+      if (!disposed) manager.onEngineUpdate();
+    };
+
     // Global-effect slots: count (for "off when out of slots") + active state
-    // (for scene-button LEDs). Re-fetched on global-effect WS broadcasts.
-    const refreshSlots = () => {
+    // (for scene-button LEDs) + intensity/mode (VSN1 feedback). A WS broadcast
+    // that CARRIES `slots` inline (globalEffectMacroStatus / globalEffectSlots)
+    // is consumed DIRECTLY — no GET round-trip, no race between the broadcast and
+    // a re-fetch that could read a pre-change status. Only a payload-less trigger
+    // (or the boot/reconnect seed) falls back to the REST GET. This is the
+    // low-latency UI→device path: a UI tap's broadcast repaints the device on the
+    // very next frame instead of after an HTTP round-trip.
+    const refreshSlots = (inlineSlots?: { slotId: number }[]) => {
+      if (inlineSlots && inlineSlots.length) { applySlots(inlineSlots); return; }
       fetchGlobalEffectSlotsStatus().then((r) => {
         if (!r.ok || !r.data?.slots) return;
-        _snapshot = {
-          ..._snapshot,
-          globalEffectSlots: r.data.slots.map((s) => ({
-            slot: s.slotId,
-            active: !!s.active,
-            // Thread the engine's per-slot behavior ('toggle' | 'trigger' |
-            // 'hold') so the pad dispatch is BEHAVIOR-AWARE — a 'trigger' slot
-            // (Iceberg Flash / White Drop) must fire 'trigger', not 'toggle'.
-            // The REST field is a bare string; narrow to the known union and
-            // drop anything unexpected to undefined so the dispatcher's
-            // fail-safe ('toggle') owns the odd case rather than a bad literal.
-            behavior: narrowSlotBehavior(s.behavior),
-          })),
-        };
-        if (!disposed) manager.onEngineUpdate();
+        applySlots(r.data.slots);
       }).catch(() => undefined);
     };
     refreshSlots();
-    const unsubSlots = engineEvents.subscribe((m: { type?: string }) => {
-      if (typeof m?.type === 'string' && m.type.toLowerCase().includes('globaleffect')) refreshSlots();
+
+    // Effects v2: the active effects PAGE (0..3) — the engine's single source of
+    // truth. Seed it once and re-fetch on any global-effect WS broadcast (the
+    // engine broadcasts `effectsPage` on a page change). Threading it into the
+    // snapshot lets the VSN1 side-button LEDs + the MIDI feedback report the
+    // current page, and keeps the manager's page-select dispatch converging.
+    const refreshEffectsPage = () => {
+      fetchEffectsPage().then((r) => {
+        if (!r.ok || !r.data || typeof r.data.effectsPage !== 'number') return;
+        _snapshot = { ..._snapshot, effectsPage: r.data.effectsPage };
+        if (!disposed) manager.onEngineUpdate();
+      }).catch(() => undefined);
+    };
+    refreshEffectsPage();
+    const unsubPage = engineEvents.subscribe((m: { type?: string; effectsPage?: unknown }) => {
+      // The engine broadcasts `{ type:'effectsPage', effectsPage }` (canonical key).
+      // Consume the inline page when present (no extra GET); otherwise a
+      // global-effect broadcast re-fetches. Kept inert for unrelated messages.
+      if (m?.type === 'effectsPage') {
+        if (typeof m.effectsPage === 'number') {
+          _snapshot = { ..._snapshot, effectsPage: m.effectsPage };
+          if (!disposed) manager.onEngineUpdate();
+        } else {
+          refreshEffectsPage();
+        }
+      }
+    });
+    const unsubSlots = engineEvents.subscribe((m: { type?: string; slots?: unknown }) => {
+      if (typeof m?.type !== 'string' || !m.type.toLowerCase().includes('globaleffect')) return;
+      // Consume the inline slots payload when the broadcast carries it
+      // (globalEffectMacroStatus / globalEffectSlots both do) — no GET, no race;
+      // a blackout-only status (no `slots`) falls back to the REST GET.
+      const inline = Array.isArray(m.slots) ? (m.slots as { slotId: number }[]) : undefined;
+      refreshSlots(inline);
     });
 
     // Legacy global-effect toggle state (P3-4). The `globalEffect` action kind
@@ -945,6 +1253,48 @@ export function useMidiControl(): MidiControlState {
       if (typeof m?.type === 'string' && m.type.toLowerCase().includes('globaleffect')) refreshGlobalEffects();
     });
 
+    // Item 2: VSN1 layout auto-deploy → device VM restart. When a CaptainPad
+    // effect change triggers the engine's layout auto-deploy, the engine
+    // broadcasts `{ type:'vsn1LayoutDeploy', deploying, lastResult, ... }`
+    // (lib/vsn1_layout_deploy.js). A deploy re-flashes the device, restarting its
+    // Lua VM and resetting every device global to its INIT default (view mode →
+    // DRUM, active/value/mode → empty). On a COMPLETED, SUCCESSFUL deploy
+    // (deploying === false && lastResult === 'ok') we re-echo the host-owned view
+    // mode + force a full feedback re-sync so the device returns to its prior
+    // mode + live state. This must NOT re-arm the welcome (item 1) — a re-flash is
+    // not a fresh connect — so it routes to resyncVsn1AfterLayoutDeploy, which
+    // never sets vsn1WelcomePending. In-flight (`deploying === true`) and
+    // failed/disabled results are ignored: nothing to restore until a good flash
+    // lands (fail-loud is the engine's job; a dark device on a failed flash is
+    // truthful).
+    const unsubDeploy = engineEvents.subscribe(
+      (m: { type?: string; deploying?: unknown; lastResult?: unknown }) => {
+        if (m?.type !== 'vsn1LayoutDeploy') return;
+        if (m.deploying === false && m.lastResult === 'ok') _resyncVsn1AfterDeploy?.();
+      },
+    );
+
+    // ── APC clip_stop LED: track combined (pattern + colour) autopilot ───────
+    // The engine broadcasts pattern autopilot as `{ type:'autopilot', active }`
+    // and deck colour autopilot as `{ type:'colorAutopilot', active }`. Both are
+    // replayed on WS connect, so the LED shows the true state on (re)connect and
+    // updates on every subsequent change (from ANY surface — a screen toggle, the
+    // clip_stop press, the activity auto-disable). Mirror each flag + recompute.
+    const unsubAutopilot = engineEvents.subscribe((m: { type?: string; active?: unknown; palettes?: unknown }) => {
+      if (m?.type === 'autopilot') {
+        _patternAutopilotOn = !!m.active;
+        _patchCombinedAutopilot();
+      } else if (m?.type === 'colorAutopilot') {
+        _colorAutopilotOn = !!m.active;
+        // Track writability from the broadcast's palette set: an empty set means
+        // the colour autopilot can't be toggled (engine 400s), so the clip_stop
+        // LED + toggle degrade to pattern-only. colorAutopilotState() always
+        // serializes `palettes`, so a real engine populates this every broadcast.
+        _colorAutopilotWritable = colorAutopilotWritable(m.palettes);
+        _patchCombinedAutopilot();
+      }
+    });
+
     // Curated colour palette pairs for the colour-pair pads (warmed at boot).
     // Named so the engine-connected transition (P2-6) can re-warm it — if the
     // cache warm failed because the engine wasn't up yet, the 16 colour-pair
@@ -974,24 +1324,68 @@ export function useMidiControl(): MidiControlState {
         refreshColorPalettes();
         refreshSlots();
         refreshGlobalEffects();
+        refreshEffectsPage();
       }
       _wasConnected = st.connected;
     });
 
+    // ── Single-instance guard (review D4, 2026-07-10) ────────────────────────
+    // Web MIDI delivers device input to EVERY open tab; each tab's MidiManager
+    // then independently dispatches (a toggle key pressed once → two toggle
+    // POSTs → net no-op = "buttons dead") and paints device feedback from its
+    // own diff map (stale tab's paint can land after the fresh one's). Newest
+    // boot wins: every booting instance posts its nonce; any OLDER instance
+    // that hears a foreign nonce disposes its manager and banners itself.
+    // BroadcastChannel never delivers to its own poster, so a tab cannot yield
+    // to itself; native (Expo) has no BroadcastChannel and exactly one
+    // instance, so the guard is web-only by the typeof check.
+    const instanceNonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    let instanceChannel: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      instanceChannel = new BroadcastChannel('captainpad-midi-single-instance');
+      instanceChannel.onmessage = (ev: MessageEvent) => {
+        if (disposed || !ev?.data?.boot || ev.data.boot === instanceNonce) return;
+        // A newer CaptainPad instance booted — this tab yields MIDI, loudly.
+        manager.dispose();
+        _set({
+          available: true,
+          transportKind,
+          profileError:
+            'MIDI yielded to a newer CaptainPad tab. Reload this tab to reclaim control.',
+          statuses: [],
+        });
+      };
+      instanceChannel.postMessage({ boot: instanceNonce });
+    }
+
     manager.start().then(() => {
       if (!disposed) manager.onEngineUpdate();
-    }).catch(() => undefined);
+    }).catch((e) => {
+      // A start() crash means NO controller works while the app looks alive —
+      // never swallow it silently (the 2026-07-10 freeze hunt learned this the
+      // hard way; the old `.catch(() => undefined)` hid every boot failure).
+      // eslint-disable-next-line no-console
+      console.error('[MIDI] manager.start() failed — all controllers dead:', e);
+    });
 
     return () => {
       disposed = true;
+      if (instanceChannel) {
+        instanceChannel.close();
+      }
       _nudge = null;
       _setFocusIntent = null;
       _applyContext = null;
       _armLearn = null;
       _revalidate = null;
+      _requestVsn1Welcome = null;
+      _resyncVsn1AfterDeploy = null;
       _loadedProfiles = [];
       unsubSlots();
       unsubEffects();
+      unsubDeploy();
+      unsubAutopilot();
+      unsubPage();
       unsubConn();
       unsubMod();
       _modState = {};
@@ -1002,6 +1396,15 @@ export function useMidiControl(): MidiControlState {
     // schema arrivals are rare (engine restart) and don't need a re-boot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Mirror the live grand-master (0..1) into the module ref the APC master-fade
+  // toggle reads to decide TO BLACK vs UP. Kept in sync here (not in the async
+  // snapshot rebuild) so it tracks the engine's mixer/deck broadcasts directly.
+  useEffect(() => {
+    if (typeof engine.master === 'number' && Number.isFinite(engine.master)) {
+      _liveMaster = engine.master;
+    }
+  }, [engine.master]);
 
   // ── Push LED updates whenever engine state changes ───────────────────────
   // (handled by the manager via the snapshot; nudge a repaint on key changes)

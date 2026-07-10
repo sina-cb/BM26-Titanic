@@ -61,4 +61,12 @@ export function applyColorWash({ pixels, color6, amount, mode = 'tint' }) {
 
 export const colorWashEffect = {
   apply: applyColorWash,
+  // Primary intensity: the wash depth — how far the rig is pulled toward
+  // the wash color (0 = original palette, 1 = full takeover). Normalized
+  // 0..1 maps straight onto the `amount` param.
+  primaryIntensity: { label: 'Wash Depth', param: 'amount', default: 0.7, min: 0, max: 1 },
+  // Primary mode (VSN1 encoder press): how the wash color combines with the
+  // live frame — tint (default), full replace, multiply, or max. Cycles the
+  // `mode` param.
+  primaryMode: { label: 'Blend', param: 'mode', values: ['tint', 'replace', 'multiply', 'max'], default: 'tint' },
 };

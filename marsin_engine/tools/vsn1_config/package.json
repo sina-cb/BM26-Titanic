@@ -1,0 +1,25 @@
+{
+  "name": "vsn1-config",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Headless read/write config tools for the Intech VSN1 (Grid module) over USB serial. Read dumps, dry-run-by-default writes, and dump-replay rollback.",
+  "type": "commonjs",
+  "bin": {
+    "vsn1-read": "./read_config.cjs",
+    "vsn1-write": "./write_config.cjs",
+    "vsn1-restore": "./restore_config.cjs",
+    "vsn1-layout": "./deploy_layout.cjs"
+  },
+  "scripts": {
+    "read": "node read_config.cjs",
+    "write": "node write_config.cjs",
+    "restore": "node restore_config.cjs",
+    "test": "node test_offline.cjs",
+    "layout": "node deploy_layout.cjs"
+  },
+  "dependencies": {
+    "@intechstudio/grid-protocol": "^1.20260615.942",
+    "serialport": "^13.0.0",
+    "tslib": "^2.6.2"
+  }
+}

@@ -31,7 +31,8 @@ describe('mft builders', () => {
 });
 
 describe('decodeRelativeDelta', () => {
-  it('maps all six relative codes to signed steps', () => {
+  it('maps the original six named codes (binary-offset value − 64)', () => {
+    // Parity with the old partial map — these must not regress.
     expect(decodeRelativeDelta(61)).toBe(-3);
     expect(decodeRelativeDelta(62)).toBe(-2);
     expect(decodeRelativeDelta(63)).toBe(-1);
@@ -40,12 +41,29 @@ describe('decodeRelativeDelta', () => {
     expect(decodeRelativeDelta(67)).toBe(3);
   });
 
-  it('returns null for 64 (no movement) and any other value', () => {
+  it('decodes the FULL fast-twist range (the dropped-fast-move fix)', () => {
+    // The velocity-sensitive firmware emits LARGER offset codes on a fast twist;
+    // the old switch returned null for these and DROPPED the movement. Now every
+    // valid CC value decodes to its signed count `value − 64`.
+    expect(decodeRelativeDelta(70)).toBe(6);
+    expect(decodeRelativeDelta(55)).toBe(-9);
+    expect(decodeRelativeDelta(127)).toBe(63); // hardest CW
+    expect(decodeRelativeDelta(1)).toBe(-63); // hardest CCW
+    expect(decodeRelativeDelta(0)).toBe(-64); // extreme edge is still a valid move
+    expect(decodeRelativeDelta(68)).toBe(4);
+    expect(decodeRelativeDelta(60)).toBe(-4);
+  });
+
+  it('returns null ONLY for 64 (genuine no-movement)', () => {
     expect(decodeRelativeDelta(64)).toBeNull();
-    expect(decodeRelativeDelta(0)).toBeNull();
-    expect(decodeRelativeDelta(127)).toBeNull();
-    expect(decodeRelativeDelta(60)).toBeNull();
-    expect(decodeRelativeDelta(68)).toBeNull();
+  });
+
+  it('throws on malformed MIDI (non-CC-byte), never silently drops', () => {
+    // Fail-loud (codex P0): a value outside a legal 7-bit data byte is a real
+    // protocol violation, not a movement to swallow.
+    expect(() => decodeRelativeDelta(128)).toThrow(RangeError);
+    expect(() => decodeRelativeDelta(-1)).toThrow(RangeError);
+    expect(() => decodeRelativeDelta(1.5)).toThrow(RangeError);
   });
 });
 

@@ -45,6 +45,7 @@ describe('per-tab contexts', () => {
     const s: MidiProjectionState = {
       blackout: false,
       activePattern: 'p0',
+      getCombinedAutopilotActive: () => false,
       getGlobalEffectState: () => false,
       resolvePatternForBank: (_b, i) => `p${i}`,
       layerExists: () => false,

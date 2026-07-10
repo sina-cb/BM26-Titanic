@@ -29,15 +29,40 @@ import {
   createDispatcher, MidiDispatchApi, MidiDispatcher, MidiApiResult, GlobalEffectSlotBehavior,
 } from './dispatch';
 import { projectLeds, LedState, MidiProjectionState } from './led_projector';
+import { projectVsn1Feedback, Vsn1FeedbackDiff, vsn1WelcomeMessage, vsn1SelectCueMessage, vsn1ViewModeMessage, decodeDevicePageCc, isDeviceHello, FB_ACTIVE_CH } from './vsn1_feedback';
+import { Vsn1ViewMode, viewModeCcValue } from './vsn1_view_mode';
 import { clampUnit } from './unit_clamp';
 import {
   LearnController, LearnResult, LearnRejectReason, MidiControlRef, bindingMatches,
   controlRefFromEvent, scaleMidiToRange, pickup, freshPickup, PickupState,
 } from './learn';
-import { decodeBankChange, decodeRelativeDelta } from './mft/messages';
+import { decodeBankChange, isClassicRelativeCode } from './mft/messages';
 import { ColorValues, Encoders, MidiChannels } from './mft/constants';
 import { buildConnectConfig } from './mft/config';
-import { TickAccelerator } from './accel';
+import { TickAccelerator, MAX_WINDOW_STEP } from './accel';
+
+/** A stable LAYOUT signature for the 8 slots the given VSN1 page views. Keys on
+ *  the LAYOUT identity — effect id + behavior + label — of each on-page slot, so
+ *  a swap/clear (from any surface) changes it while a runtime value/mode/active
+ *  twist does NOT. `sendVsn1Feedback` compares it frame-to-frame to force a full
+ *  re-send on a layout edit (the device re-flashes + restarts its VM on a layout
+ *  change; a diff would leave the rest of the frame dark after the restart). Uses
+ *  a delimiter no field can contain so distinct layouts never alias. */
+function vsn1PageLayoutSig(
+  page: number,
+  slots: { slot: number; effectId?: string; behavior?: string; label?: string }[],
+): string {
+  const byId = new Map<number, { effectId?: string; behavior?: string; label?: string }>();
+  for (const s of slots) byId.set(s.slot, s);
+  const parts: string[] = [];
+  for (let i = 0; i < 8; i += 1) {
+    const rec = byId.get(page * 8 + i + 1);
+    // effectId '' or undefined = empty slot; the tuple still positionally encodes
+    // "slot i is empty" so a clear flips the signature.
+    parts.push(`${rec?.effectId ?? ''}␟${rec?.behavior ?? ''}␟${rec?.label ?? ''}`);
+  }
+  return parts.join('␞');
+}
 
 /** MFT identity colour for the focused channel's knob rings: deck = blue,
  *  overlay layers 1/2/3 = green/yellow/pink (docs/34 knob-layout table). The
@@ -128,7 +153,38 @@ export interface MidiEngineSnapshot {
    *  fire 'trigger', not 'toggle'. Optional for staleness safety — a snapshot
    *  that predates the field leaves it undefined and the dispatcher fails safe
    *  to 'toggle'. */
-  globalEffectSlots: { slot: number; active: boolean; behavior?: GlobalEffectSlotBehavior }[];
+  globalEffectSlots: {
+    slot: number;
+    active: boolean;
+    behavior?: GlobalEffectSlotBehavior;
+    /** Effects v2: the slot's LAYOUT identity — the bound effect id + its display
+     *  label. Threaded so the VSN1 feedback path can detect a layout change (a
+     *  swap/clear from any surface) and force a full device re-send. Optional for
+     *  staleness safety — a pre-field engine leaves them undefined (the layout
+     *  signature then falls back to behavior/mode structure, still catching most
+     *  swaps). `effectId` empty/undefined = the slot is empty. */
+    effectId?: string;
+    label?: string;
+    /** Driver #3 (VSN1): the slot's live `intensity` (0..1) + its `intensityDefault`
+     *  (the jog-press reset target). Threaded so the VSN1 jog's soft-takeover
+     *  pickup guard seeds the SELECTED slot's current value on a selection change.
+     *  Optional for staleness safety — a pre-field engine leaves them undefined and
+     *  the jog stays inert with a note (never anchors on a fabricated 0). */
+    intensity?: number;
+    intensityDefault?: number;
+    /** Effects v2: the slot's discrete `primaryMode` — current value, display
+     *  label, and the ordered value list. Threaded so the VSN1 encoder-press
+     *  mode cycle + the MIDI feedback path can render it. Optional for staleness
+     *  safety (a pre-field engine leaves them undefined). */
+    mode?: string | number | boolean | null;
+    modeLabel?: string;
+    modeValues?: (string | number | boolean)[];
+  }[];
+  /** Effects v2: the active effects PAGE (0..3), the engine's single source of
+   *  truth. Every surface (CaptainPad page switcher, VSN1 side buttons) follows
+   *  it. Threaded so the MIDI feedback path can report the current page index to
+   *  the device Lua. Optional/undefined = page 0 until the engine threads it. */
+  effectsPage?: number;
   /** Curated colour palette pairs (hues 0..1), for the colour-pair pads. */
   colorPalettes: { c1: number; c2: number }[];
   /** The FOCUSED channel — whose active pattern's MIDI-learned bindings the
@@ -152,6 +208,13 @@ export interface MidiEngineSnapshot {
    *  path and the APC absolute path can't drift (contract I4). D2 populates it
    *  from `bpmSpeedSyncOn`; defaults to an empty set. */
   syncOwnedKeys: ReadonlySet<string>;
+  /** COMBINED autopilot state for the APC clip_stop button LED: true only when
+   *  BOTH the pattern autopilot AND the deck colour autopilot are active. The
+   *  clip_stop toggle drives the two together, so this mirrors the state a press
+   *  would turn off; the hook threads it from the engine's `autopilot` /
+   *  `colorAutopilot` WS broadcasts. Optional/undefined = off (a pre-field
+   *  snapshot leaves the LED dark rather than lit from a half-truth). */
+  combinedAutopilotActive?: boolean;
 }
 
 /** Empty default for the `syncOwnedKeys` snapshot fact — used wherever the
@@ -268,19 +331,20 @@ const REAL_RECONNECT_TIMERS: CoalescerTimers = {
  *  change (reset / other surface / modulator step) and adopted; a smaller move
  *  is the throttled engine echo merely catching up to our own writes and is
  *  ignored so a fast sweep keeps accumulating locally. The real hazard isn't one
- *  detent (a very-fast tick is 0.015 raw, DEFAULT_RELATIVE_STEPS[2]) but the
- *  echo catching up on a WHOLE coalescer window's worth of accumulated gained
- *  ticks at once; 0.15 sits above the normal per-window echo creep, and the
- *  span classification below absorbs the flick case (where a window can
- *  legitimately advance more than this). */
+ *  detent (a slow tick is 0.0025 effective at precision gain) but the echo
+ *  catching up on a WHOLE coalescer window's worth of accumulated gained ticks
+ *  at once; 0.15 sits above the normal per-window echo creep, and the span
+ *  classification below absorbs the flick case (where a window can legitimately
+ *  advance more than this). */
 const OPTIMISTIC_RESEED_EPSILON = 0.15;
 
 /** Margin around the [prevSnap, optimistic] span when classifying a LARGE
  *  snapshot move as our own echo vs an external jump. Host-side acceleration
- *  (accel.ts) lets one coalescer window write far more than the epsilon, so the
- *  echo of a fast sweep also moves more than the epsilon — but it always lands
- *  WITHIN the span we ourselves wrote. A small margin absorbs rounding /
- *  interleaved-window noise. */
+ *  (accel.ts) on top of the firmware's fast ±17 counts lets one coalescer
+ *  window write far more than the epsilon, so the echo of a fast sweep also
+ *  moves more than the epsilon — but it always lands WITHIN the span we
+ *  ourselves wrote. A small margin absorbs rounding / interleaved-window
+ *  noise. */
 const OPTIMISTIC_ECHO_SPAN_MARGIN = 0.02;
 
 /** Re-seed threshold for the HUE knob's optimistic anchor, in degrees —
@@ -321,6 +385,7 @@ function isExternalSnapshotJump(prevSnap: number, optimistic: number, snapValue:
 function wrapDegrees(d: number): number {
   return ((d % 360) + 360) % 360;
 }
+
 
 /** Circular distance between two hue angles, in degrees (0..180). */
 function circularDegreesDistance(a: number, b: number): number {
@@ -367,6 +432,8 @@ function describeFlush(payload: ResolvedAction): string {
     case 'sectionBrightness': return `section ${payload.sectionId} = ${payload.value.toFixed(2)}`;
     case 'mixerLayerFader': return `layer ${payload.layer} fader = ${payload.value.toFixed(2)}`;
     case 'localParam': return `param #${payload.exportId} = ${payload.value.toFixed(2)}`;
+    // VSN1 keyed value (self-addressed slot intensity, coalesced per slot).
+    case 'effectIntensitySlot': return `VSN1 slot ${payload.slotId} intensity = ${payload.value.toFixed(2)}`;
     default: return payload.kind;
   }
 }
@@ -390,6 +457,66 @@ class ControllerRuntime {
   private readonly notify: () => void;
 
   private ledState: LedState = {};
+  /** Effects v2: last VSN1 slot-state/page feedback frame sent, so only changed
+   *  feedback re-sends (diffed like ledState). Only used for the VSN1 profile;
+   *  inert for every other driver. Reset (→ full re-send) on a (re)connect. */
+  private vsn1FeedbackState: Vsn1FeedbackDiff = {};
+  /** The effects page the LAST VSN1 feedback frame was projected for. The
+   *  firmware RESTARTS its Lua VM on every page load (2026-07-11 redeploy),
+   *  wiping all device-side state — so ANY page change must re-send the FULL
+   *  feedback frame, not a diff against state the device no longer holds.
+   *  null until the first frame. */
+  private lastVsn1FeedbackPage: number | null = null;
+  /** The LAYOUT signature (effect id + behavior + label per on-page slot) the last
+   *  VSN1 feedback frame was projected for. A slot swap/clear from ANY surface
+   *  (CaptainPad UI, another client) changes this — a LAYOUT change, which on the
+   *  device triggers a Lua re-flash + VM restart (the deploy is a separate wave;
+   *  here we only guarantee the runtime feedback stays whole). So a layout change
+   *  forces a FULL feedback re-send exactly like a page change, rather than a diff
+   *  that could leave the swapped slot's active/value/mode dark. null until the
+   *  first frame. */
+  private lastVsn1LayoutSig: string | null = null;
+  /** Set to force the NEXT VSN1 feedback frame to be FULL (diff reset), regardless
+   *  of what changed. Decouples "the device needs a whole frame" from the diff
+   *  comparison so an unrelated onEngineUpdate landing between the trigger and the
+   *  emit can't repopulate the diff and swallow the resync (the page-flakiness
+   *  root cause). Set by: a page difference (engine-origin change), a VSN1
+   *  side-button press (device-origin, incl. re-selecting the SAME page — the VM
+   *  still restarts), and the welcome/reconnect path. Consumed exactly once by
+   *  sendVsn1Feedback. */
+  private vsn1ForceFullResync = false;
+  /** Effects v2 WELCOME: a one-shot "hello" (`vsn1WelcomeMessage()`) sent to the
+   *  VSN1 ALONGSIDE the next full feedback re-sync — armed on a genuine
+   *  (re)connect and when the effects panel first loads (`requestVsn1Welcome()`),
+   *  consumed exactly once by `sendVsn1Feedback`. Never diffed into the steady
+   *  stream (a distinct address from the page LEDs), so it fires once per arm. */
+  private vsn1WelcomePending = false;
+  /** Item 2 (device-hello-driven welcome): armed on a genuine host (re)connect —
+   *  the NEXT device hello (the device's "VM ready" ping, sent on its first VM
+   *  start after we connect) arms the welcome logo. Consumed by the FIRST device
+   *  hello of the connection (`handleDeviceHello`), which sets vsn1WelcomePending
+   *  and clears this; every SUBSEQUENT hello (page load / post-flash VM restart)
+   *  only re-pushes state and does NOT re-arm the welcome. This makes the welcome
+   *  a per-connection greeting driven by the device's own readiness signal — never
+   *  a page-change flash (item 1) and never lost to a restart race (item 2). */
+  private vsn1WelcomeArmNextHello = false;
+  /** KEEPALIVE full-frame resync (review D3, 2026-07-10): the device renders
+   *  ONLY from inbound host MIDI, and every VM-wipe repair path hinges on the
+   *  device hello reaching a healthy, singular host. A hello missed during a
+   *  tab reload / manager reconnect / stale-twin window leaves the host's diff
+   *  map suppressing every frame — a permanently frozen LCD with no repair
+   *  path. This low-rate interval (≈25 MIDI messages per fire) makes ALL such
+   *  failures self-heal within one period. VSN1 profile only; armed on a
+   *  successful connect, cleared on dispose. */
+  private vsn1KeepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  private static readonly VSN1_KEEPALIVE_MS = 15000;
+  /** VSN1 LCD render selector (Sina, 2026-07-10 evening): 'effect' = the 2×4
+   *  color-only GRID + compact detail (device `vm = 1`, the DEFAULT), 'drum' =
+   *  the full-screen readout (`vm = 0`). Toggled by sb_1, one press per flip —
+   *  PRESENTATION ONLY: key behavior is DRUM (fire immediately) in both views;
+   *  nothing behavioral reads this field. Echoed to the device on every full
+   *  re-sync so it survives the VM wipe. */
+  private vsn1ViewMode: Vsn1ViewMode = 'effect';
   private unsubs: (() => void)[] = [];
   private context: string;
   /** Per-layer playlist browse-window top index (controller-local state). */
@@ -422,11 +549,12 @@ class ControllerRuntime {
    *  never show the previous focus's optimistic value. (Hue needs no such
    *  guard: its entries are already keyed per channel.) */
   private readonly optimisticFocusKey = new Map<string, string>();
-  /** Per-relative-control continuous velocity tracker (accel.ts round 3). Each
-   *  tick's raw step is gained HERE, at arrival time, from a smoothed turn-rate
-   *  estimate — so the acceleration is bucket-phase independent and the
-   *  coalescer window merely SUMS pre-gained deltas. Keyed by control id
-   *  (same keying as the coalescer slots). */
+  /** Per-relative-control continuous velocity tracker (accel.ts round 4). Each
+   *  tick's raw step (linear in the firmware count) is gained HERE, at arrival
+   *  time, from a smoothed turn-rate estimate — a MODEST gain (GAIN_MAX 3.0) on
+   *  top of the firmware's own 1→17 velocity multiply, the combination the
+   *  operator hardware-confirmed. Bucket-phase independent (the coalescer just
+   *  SUMS pre-gained deltas). Keyed by control id (same as the coalescer slots). */
   private readonly tickAccels = new Map<string, TickAccelerator>();
   /** Focus identity captured at ACCUMULATE time per relative-delta control id
    *  (N3). `focusedParamDelta`/`Reset` resolve `focused.exports[index]` at FLUSH
@@ -438,6 +566,19 @@ class ControllerRuntime {
   /** Soft-takeover state per binding id (locks a fader until it crosses the
    *  param's current value, so focus/pattern switches don't jump the value). */
   private readonly pickupStates = new Map<string, PickupState>();
+  /** Driver #3 (VSN1): the SELECTED global-effect slot — the 1-based slot of the
+   *  LAST key pressed on THIS device. null until any key is pressed; while null the
+   *  jog wheel is IGNORED (defined behavior, logged once at debug). The jog's
+   *  absolute intensity write + its reset both target this selection. */
+  private selectedSlot: number | null = null;
+  /** Soft-takeover ("pickup") state for the VSN1 jog wheel against the SELECTED
+   *  slot's intensity: a stale wheel position must not yank the value after a
+   *  selection change — the wheel re-picks-up (crosses the slot's live intensity)
+   *  before it writes. Re-locked whenever the selection changes. */
+  private intensityPickup: PickupState = freshPickup();
+  /** Debounce the "jog before any selection" debug log to once per idle stretch
+   *  (a jog spin fires ~30 CCs/turn); reset when a selection lands. */
+  private loggedJogWithoutSelection = false;
   /** Identity of the focus the pickup map was built for; a change re-locks. */
   private lastFocusKey: string | null = null;
   /** Active MFT virtual bank (0-3), tracked from the device's ch3 bank-change
@@ -586,6 +727,9 @@ class ControllerRuntime {
         this.deviceConfigured = false;
         this.teardownBindings();
         this.ledState = {};
+        this.vsn1FeedbackState = {}; // replug re-sends a full feedback frame
+        this.lastVsn1FeedbackPage = null; // forget the page so a replug forces a full frame
+        this.lastVsn1LayoutSig = null; // and the layout, so a replug can't diff-suppress it
         this.setStatus({ kind: 'disconnected', error: undefined, sourceName: undefined, destinationName: undefined });
         // Still listen for hotplug so a later plug-in connects us.
         this.bindHotplugOnly();
@@ -651,8 +795,38 @@ class ControllerRuntime {
       // the device was already configured and merely stayed connected across a
       // foreign hotplug, keep `ledState` so the diff sends nothing unchanged (#11
       // — don't blast a full repaint on every other device's plug).
-      if (!wasConfigured) this.ledState = {};
+      // A genuine (re)connect resets the feedback diff (→ full re-send) AND arms
+      // the VSN1 WELCOME so the hello rides with that full re-sync (task: hello +
+      // full state on reconnect). A foreign hotplug that kept us connected does
+      // neither — no re-blast, no spurious hello.
+      // A genuine (re)connect forces a FULL feedback frame (flag + diff reset +
+      // forget the last page) carrying the CURRENT on/off truth for every key,
+      // and arms the WELCOME. So the device's LEDs/screen show the real live
+      // state the instant it reconnects — never stale or dark.
+      if (!wasConfigured) {
+        this.ledState = {};
+        this.vsn1FeedbackState = {};
+        this.lastVsn1FeedbackPage = null;
+        this.lastVsn1LayoutSig = null;
+        this.vsn1ForceFullResync = true;
+        // Item 2: the welcome is now DEVICE-HELLO-DRIVEN. Arm the NEXT device
+        // hello (the device pings "VM ready" on its first VM start after we
+        // connect) to raise the logo — never a blind on-connect send that could
+        // race the device's restart. The immediate re-sync below still paints the
+        // live state; the logo rides the device's own readiness signal.
+        this.vsn1WelcomeArmNextHello = true;
+      }
       this.projectAndSend();
+      // Arm the VSN1 keepalive resync (review D3). Idempotent across hotplug
+      // reconnects (one timer per runtime); the tick self-guards on live
+      // connection state so a greyed-out device costs nothing.
+      if (this.profile.device.id === 'vsn1' && this.vsn1KeepaliveTimer === null) {
+        this.vsn1KeepaliveTimer = setInterval(() => {
+          if (this.status.kind !== 'connected') return;
+          this.vsn1ForceFullResync = true;
+          this.projectAndSend();
+        }, ControllerRuntime.VSN1_KEEPALIVE_MS);
+      }
     } catch (err) {
       const message = err instanceof EndpointResolutionError
         ? err.message
@@ -735,6 +909,57 @@ class ControllerRuntime {
       return;
     }
 
+    // 0.5) VSN1 DEVICE → APP page follow (item 5). The PHYSICAL side button is
+    //    the firmware-native page switcher: it changes the device page (and
+    //    restarts the Lua VM) and emits the page CC (controller 40, value = the
+    //    new page 0..3). CaptainPad must FOLLOW it so the app + engine converge on
+    //    the SAME page (the app → device direction already rides the outbound
+    //    page-index feedback). We intercept it HERE — before resolve — because the
+    //    profile leaves inbound CC 40 UNBOUND (its value stream moved to the keyed
+    //    per-slot CCs 32..39), so it would otherwise be loud silence. Matched by
+    //    controller number regardless of channel (the device rides channel = page,
+    //    like the keys' anyChannel). PATCHing the engine page makes the engine's
+    //    `effectsPage` broadcast converge every surface; the resulting VM-restart
+    //    full re-sync (a page difference arms vsn1ForceFullResync in
+    //    sendVsn1Feedback) repaints the device — WITHOUT re-arming the welcome
+    //    (item 1: only a genuine connect / panel load ever arms the hello).
+    if (this.profile.device.id === 'vsn1' && decoded.type === 'cc') {
+      // 0.4) DEVICE HELLO (item 2): the device pings "VM ready" (CC controller
+      //    DEVICE_HELLO_CC = 1) on EVERY VM restart — power-on, page load, and
+      //    every layout re-flash — the moment its receiver re-registers. Answer it
+      //    with a full state re-push so the device restores its view mode + all
+      //    active/value/mode/page feedback. Because the DEVICE asks only once its
+      //    receiver is live, this re-push can't be lost to a restart still in
+      //    flight (the race a timed re-echo would hit). The FIRST hello of a
+      //    connection arms the welcome logo; subsequent ones only re-push.
+      if (isDeviceHello(0xb0 | (decoded.channel & 0x0f), decoded.cc, decoded.value)) {
+        this.handleDeviceHello();
+        return;
+      }
+      const page = decodeDevicePageCc(0xb0 | (decoded.channel & 0x0f), decoded.cc, decoded.value);
+      if (page !== null) {
+        // Don't PATCH when the engine is already on this page (the device merely
+        // echoed the page we pushed it): avoids a redundant round-trip + a
+        // needless full re-sync. A genuine physical-button change differs.
+        if ((this.opts.getSnapshot().effectsPage ?? 0) !== page) {
+          this.setStatus({ lastEvent: `VSN1 side button → page ${page}` });
+          // The physical side button restarted the device VM (a page load). Arm
+          // the full re-sync and repaint once the PATCH settles, so the device
+          // gets a WHOLE frame carrying the ENGINE's authoritative page — even if
+          // the engine rejects/ignores the request (the device never keeps a
+          // private page). If the engine ACCEPTS, its effectsPage broadcast lands
+          // via onEngineUpdate and the page difference re-arms the resync there
+          // too; either way the flag consumes exactly once.
+          this.vsn1ForceFullResync = true;
+          void this.runDispatch({ kind: 'effectsPageSelect', page }).then(() => {
+            this.vsn1ForceFullResync = true;
+            this.projectAndSend();
+          });
+        }
+        return;
+      }
+    }
+
     // 1) MIDI-learn capture — while armed, the next learnable control BINDS
     //    (the popover supplied the callback) and is swallowed, never dispatched.
     //    BUT: a control that already resolves to a STATIC profile action (global
@@ -745,17 +970,22 @@ class ControllerRuntime {
       const cap = controlRefFromEvent(decoded);
       if (cap) {
         // P1-3: an MFT endless encoder / CC-hold push is learnable-LOOKING but a
-        // footgun (codex P0). Its CC "value" is a relative-delta code (61-67), not
-        // an absolute position, so learning it and feeding it through absolute
+        // footgun (codex P0). Its CC "value" is a relative-delta code, not an
+        // absolute position, so learning it and feeding it through absolute
         // scaleMidiToRange would pin the param to ~0.5 jitter. Reject when EITHER
-        // the value decodes as a relative delta OR the event is on a
-        // configureOnConnect device's rotary/switch channel (bank-2/3/4 turns +
-        // pushes never reach a static profile action, so profileClaims wouldn't
-        // catch them). The reason is STRUCTURED (LearnRejectReason): bank-1
-        // encoders are `order-mapped-encoder` (they drive params by order, by
-        // design); encoder numbers ≥ 16 are `reserved-bank` — the future
-        // custom-mapping UI relaxes ONLY that branch.
-        const isRelativeCode = decoded.type === 'cc' && decodeRelativeDelta(decoded.value) !== null;
+        // the value looks like a CLASSIC relative code (the narrow 61-67 band a
+        // slow/moderate encoder turn emits — isClassicRelativeCode, NOT the
+        // full-range decodeRelativeDelta, which since the fast-twist decode fix
+        // covers every value 0..127 and would misclassify any absolute fader
+        // position as a relative turn) OR the event is on a configureOnConnect
+        // device's rotary/switch channel (bank-2/3/4 turns + pushes never reach
+        // a static profile action, so profileClaims wouldn't catch them; this
+        // branch also catches an MFT turn arriving as a fast out-of-band code).
+        // The reason is STRUCTURED (LearnRejectReason): bank-1 encoders are
+        // `order-mapped-encoder` (they drive params by order, by design);
+        // encoder numbers ≥ 16 are `reserved-bank` — the future custom-mapping
+        // UI relaxes ONLY that branch.
+        const isRelativeCode = decoded.type === 'cc' && isClassicRelativeCode(decoded.value);
         const onRotaryOrSwitch = this.profile.device.configureOnConnect
           && (decoded.type === 'cc' || decoded.type === 'noteOn' || decoded.type === 'noteOff')
           && (decoded.channel === MidiChannels.ROTARY_ENCODER || decoded.channel === MidiChannels.SWITCH_AND_COLOR);
@@ -836,6 +1066,49 @@ class ControllerRuntime {
     if (ev.resolved.kind === 'focusStep') { this.handleFocusStep(ev.resolved.dir); return; }
     if (ev.resolved.kind === 'focusedParamReset') { this.handleParamReset(ev.resolved.index); return; }
     if (ev.resolved.kind === 'hueReset') { this.handleHueReset(); return; }
+    // ── Driver #3 (VSN1) — selected-slot model (runtime-handled) ──
+    // A slot KEY press records the selection for THIS device (the jog then targets
+    // it). The VSN1 uses Sina's TWO-STEP contract (handleVsn1SlotKey); every OTHER
+    // device keeps the historical direct behavior (select + dispatch on every
+    // press). The jog's absolute intensity + its reset resolve against
+    // `selectedSlot` here.
+    if (ev.resolved.kind === 'globalEffectSlot') {
+      if (this.profile.device.id === 'vsn1') { this.handleVsn1SlotKey(ev.resolved); return; }
+      this.selectSlot(ev.resolved.slot); void this.runDispatch(ev.resolved); return;
+    }
+    // VSN1 SMALL BUTTONS (sb_0..sb_3). The small panel buttons never change
+    // pages (the physical side button does that); the host owns the policy.
+    if (ev.resolved.kind === 'vsn1SmallButton') {
+      this.handleVsn1SmallButton(ev.resolved.button, timestampMs);
+      return;
+    }
+    if (ev.resolved.kind === 'effectIntensityReset') { this.handleIntensityReset(); return; }
+    if (ev.resolved.kind === 'effectIntensityAbs') { this.handleIntensityAbs(ev.controlId, ev.resolved.value); return; }
+    // Effects v2: encoder press → cycle the SELECTED slot's mode (runtime-resolved
+    // against the selection, like the intensity reset it replaced).
+    if (ev.resolved.kind === 'effectModeCycle') { this.handleModeCycle(); return; }
+    // A VSN1 side-button page select: the firmware restarts its Lua VM on EVERY
+    // page load — including re-selecting the CURRENT page — wiping all device
+    // state. ARM the full-resync flag NOW (before the async dispatch), so the
+    // full frame fires whether or not the page actually changed:
+    //   - page CHANGED → the engine `effectsPage` broadcast lands via
+    //     onEngineUpdate → sendVsn1Feedback with the NEW page's slots, and the
+    //     flag guarantees a full frame there.
+    //   - SAME page re-selected → no broadcast arrives, so we also repaint once
+    //     the dispatch settles; the flag is still set, forcing a full frame.
+    // Arming the flag (not resetting the diff inline) means an unrelated
+    // onEngineUpdate racing in between can't consume-and-lose the resync — the
+    // NEXT emit from any path honours it. The post-dispatch repaint covers the
+    // same-page case; the .then re-arms in case an interleaved emit already
+    // consumed the flag for the (unchanged) page.
+    if (ev.resolved.kind === 'effectsPageSelect' && this.profile.device.id === 'vsn1') {
+      this.vsn1ForceFullResync = true;
+      void this.runDispatch(ev.resolved).then(() => {
+        this.vsn1ForceFullResync = true;
+        this.projectAndSend();
+      });
+      return;
+    }
     if (ev.resolved.kind === 'focusedParamDelta' || ev.resolved.kind === 'paramCenterDelta'
       || ev.resolved.kind === 'hueDelta') {
       // Relative deltas ACCUMULATE across the coalescer window (no tick dropped),
@@ -856,9 +1129,11 @@ class ControllerRuntime {
         this.deltaFocusKey.set(ev.controlId, channelIdentity(this.opts.getSnapshot().focused));
       }
       // Velocity gain is applied PER TICK, at arrival time, from this control's
-      // continuous rate estimate (accel.ts round 3) — the coalescer then just
-      // SUMS pre-gained deltas, so the feel cannot depend on how ticks land in
-      // 33 ms buckets. The tick's transport timestamp drives the estimate.
+      // continuous rate estimate (accel.ts round 4) — a MODEST gain on top of
+      // the firmware's own 1→17 velocity multiply (the operator-confirmed feel).
+      // The coalescer then just SUMS pre-gained deltas, so the feel cannot
+      // depend on how ticks land in 33 ms buckets. The tick's transport
+      // timestamp drives the estimate.
       let accel = this.tickAccels.get(ev.controlId);
       if (!accel) {
         accel = new TickAccelerator();
@@ -869,7 +1144,14 @@ class ControllerRuntime {
       return;
     }
     if (ev.continuous) {
-      this.coalescer.push(ev.controlId, ev.resolved);
+      // VSN1 keyed values: one profile control covers 8 CCs × 4 page-channels,
+      // each addressing a DIFFERENT slot — coalesce PER SLOT (suffix the key) so
+      // two keys turned inside one window can't last-write-wins each other's
+      // value. Every other continuous control keeps its plain control-id key.
+      const key = ev.resolved.kind === 'effectIntensitySlot'
+        ? `${ev.controlId}#s${ev.resolved.slotId}`
+        : ev.controlId;
+      this.coalescer.push(key, ev.resolved);
     } else {
       void this.runDispatch(ev.resolved);
     }
@@ -1029,7 +1311,11 @@ class ControllerRuntime {
   }
 
   /** Flush a hue-turn window onto the FOCUSED CHANNEL's hue (BOTH contexts —
-   *  hue is per-channel only). Circular wrap + optimistic-anchor semantics,
+   *  hue is per-channel only). CLAMPED like every other param (Sina,
+   *  2026-07-10: "not rotating around"): the knob sweeps 0°..360° with HARD
+   *  STOPS at both ends — no circular wrap-around past the top or bottom. The
+   *  top stop is held a hair under 360 so the engine's own wheel-wrap can't
+   *  fold it back to 0 (360 ≡ 0 on the wheel). Optimistic-anchor semantics,
    *  anchored on `focused.hue` and keyed PER CHANNEL (`controlId@role:id`) so
    *  a focus switch lands on the new channel's own anchor slot — ring +
    *  accumulation re-sync to that channel's hue instead of dragging the old
@@ -1061,13 +1347,255 @@ class ControllerRuntime {
     }
     const anchorKey = `${controlId}@${identity}`;
     const anchor = this.circularOptimisticAnchor(anchorKey, focused.hue);
-    const degrees = wrapDegrees(anchor + delta * 360);
+    // The window delta arrives PRE-CAPPED by the shared MAX_WINDOW_STEP in
+    // flushResolved (identical speed contract to every other knob — Sina
+    // 2026-07-10); hue is simply that unit value × 360.
+    // Hard stops, no wrap: clamp to [0, ~360). 359.99 (not 360) at the top so
+    // the engine's wheel-wrap can't fold the top stop back to 0.
+    const degrees = Math.min(359.99, Math.max(0, anchor + delta * 360));
     this.optimisticValues.set(anchorKey, degrees);
     this.setStatus({
       lastEvent: `hue ${focused.role === 'deck' ? 'deck' : `ch ${focused.layer + 1}`} = ${Math.round(degrees)}°`,
     });
     this.projectAndSend(); // ring + colour track the optimistic per-channel hue now
     await this.runDispatch({ kind: 'channelHue', role: focused.role, channelId: focused.id, degrees });
+  }
+
+  // ── Driver #3 (VSN1) — selected-slot global-effects surface ─────────────────
+
+  /** The live global-effect slot record for the SELECTED slot, or null when
+   *  nothing is selected / the slot vanished from the snapshot. */
+  private selectedSlotRecord():
+    { slot: number; intensity?: number; intensityDefault?: number; mode?: string | number | boolean | null } | null {
+    if (this.selectedSlot === null) return null;
+    return this.opts.getSnapshot().globalEffectSlots.find((s) => s.slot === this.selectedSlot) ?? null;
+  }
+
+  /** Record the SELECTED slot (the last key pressed on THIS device). A change of
+   *  selection re-LOCKS the jog's soft-takeover so the wheel must re-cross the new
+   *  slot's live intensity before it writes — a stale wheel position never yanks
+   *  the value on selection change. Re-arms the jog-without-selection debug log. */
+  private selectSlot(slot: number): void {
+    this.loggedJogWithoutSelection = false;
+    if (slot === this.selectedSlot) return;
+    this.selectedSlot = slot;
+    this.intensityPickup = freshPickup(); // re-lock for the new slot's value
+    this.setStatus({ lastEvent: `VSN1 slot ${slot} selected` });
+  }
+
+  /** VSN1 slot-key press — DRUM contract, the only behavior (Sina, 2026-07-10
+   *  evening): pressing ANY key immediately fires that slot's behavior-aware
+   *  action (toggle flips, trigger fires) AND snaps the LCD detail to it. No
+   *  two-step select-then-commit anywhere — the two-view system is retired to
+   *  ONE view (grid visual + drum behavior). Applies to the VSN1 path ONLY;
+   *  UI taps in CaptainPad keep their own direct dispatch. */
+  private handleVsn1SlotKey(resolved: ResolvedAction & { kind: 'globalEffectSlot' }): void {
+    // PAGE-AWARE key → slot mapping (the "keys hit the wrong slot on page 2-4"
+    // fix). The VSN1 profile pins each key to slot 1..8 (its key index k+1 on
+    // page 0). The 32 flat slots are viewed 8 at a time, so a key on page p must
+    // address flat slot 8*p + k + 1, following the ENGINE's effectsPage (the
+    // single source of truth — the same value the outbound feedback projects).
+    // We derive the page from the engine snapshot, NOT the note's MIDI channel:
+    // the channel is a moving firmware detail (and the note match is anyChannel),
+    // whereas effectsPage is authoritative and always present. On page 0 this is
+    // the identity (slot 1..8), so nothing regresses there.
+    const keyIndex = resolved.slot - 1;               // 0..7 (the physical key)
+    const page = this.opts.getSnapshot().effectsPage ?? 0;
+    const slot = page * 8 + keyIndex + 1;             // flat slot id 1..32
+    // Dispatch the flat slot, not the raw page-0 slot.
+    const flatResolved: ResolvedAction & { kind: 'globalEffectSlot' } = { ...resolved, slot };
+    const behavior = this.opts.getSnapshot().globalEffectSlots.find((s) => s.slot === slot)?.behavior;
+    // DRUM contract: pressing ANY key (even one that isn't the slot the LCD
+    // currently details) IMMEDIATELY fires that slot AND snaps the LCD to it.
+    // The select-cue moves the device's `sel` (grid border + detail line) so
+    // the display follows the finger; the dispatch fires the slot's behavior
+    // (toggle flips, trigger/hold fire) and we echo the new active state so
+    // the ON marker + key LED update without waiting on the engine
+    // round-trip. A trigger slot's momentary active is engine-owned — the
+    // broadcast corrects it — but echoing the toggle flip keeps it snappy.
+    this.selectSlot(slot);
+    this.emitVsn1SelectCue(slot); // snap the LCD grid border + detail to the pressed slot
+    const wasActive = !!this.opts.getSnapshot().globalEffectSlots.find((s) => s.slot === slot)?.active;
+    this.setStatus({ lastEvent: `VSN1 slot ${slot} triggered` });
+    void this.runDispatch(flatResolved).then((r) => {
+      if (r.ok && behavior !== 'trigger') this.emitVsn1ActiveEcho(slot, !wasActive);
+    });
+  }
+
+  /** Immediately send the VSN1 the active-LED feedback for one slot (the prompt
+   *  toggle echo). Skipped when the slot isn't on the current page (its key
+   *  isn't visible) or when the diff says that exact value was ALREADY sent
+   *  (the engine broadcast beat us to it — no duplicate frame). Recorded into
+   *  `vsn1FeedbackState` so the trailing broadcast's matching value is
+   *  diff-suppressed; a disagreeing engine value still re-sends (engine wins). */
+  private emitVsn1ActiveEcho(slot: number, active: boolean): void {
+    const page = this.opts.getSnapshot().effectsPage ?? 0;
+    const idx = slot - (page * 8 + 1);
+    if (idx < 0 || idx > 7) return; // slot not on the visible page — no key to light
+    const status = 0x90 | FB_ACTIVE_CH;
+    const note = 32 + idx;
+    const value = active ? 127 : 0;
+    const key = `${status}:${note}`;
+    if (this.vsn1FeedbackState[key] === String(value)) return; // already painted
+    this.vsn1FeedbackState = { ...this.vsn1FeedbackState, [key]: String(value) };
+    try {
+      this.transport.send([status, note, value]);
+    } catch {
+      this.ledFailStreak += 1; // same fail-loud accounting as the feedback stream
+    }
+  }
+
+  /** Emit the VSN1 SELECT CUE for the just-selected slot (the two-step "you're
+   *  about to toggle THIS slot" signal). Sends the SELECTED key's index (0..7)
+   *  on the current page, or the "none" sentinel when the selection is off the
+   *  visible page (so the device clears its cue LED rather than pointing at a key
+   *  that isn't showing). One-shot, NOT diffed into the steady feedback stream:
+   *  a re-select of the same key must re-assert the cue, and it never means a
+   *  slot went active (so it can't be mistaken for the active-LED echo). */
+  private emitVsn1SelectCue(slot: number): void {
+    const page = this.opts.getSnapshot().effectsPage ?? 0;
+    const idx = slot - (page * 8 + 1); // 0..7 on-page, else off-page → cleared
+    try {
+      this.transport.send(vsn1SelectCueMessage(idx));
+    } catch {
+      this.ledFailStreak += 1; // same fail-loud accounting as the feedback stream
+    }
+  }
+
+  /** VSN1 SMALL BUTTON (sb_0..sb_3) — the four small panel buttons. They NEVER
+   *  change pages (the physical side button does, firmware-native); the host
+   *  owns every action. Sina's layout (2026-07-10 evening):
+   *    sb_0 → MODE:  cycle the SELECTED effect's discrete mode (same action as
+   *                  the encoder press — a second, easier-to-hit mode button).
+   *    sb_1 → VIEW:  toggle the LCD visual — grid (colors) ↔ full readout.
+   *                  KEY BEHAVIOR IS DRUM IN BOTH (fire immediately); the view
+   *                  is presentation only.
+   *    sb_2 → empty (deliberate no-op, reserved).
+   *    sb_3 → LOGO:  show the MarsinLED wordmark on the LCD (the welcome
+   *                  screen; any next key press / feedback dismisses it).
+   *  NOTE (highest priority, Sina 2026-07-10): the layout AUTO-DEPLOY must be
+   *  made bulletproof (an effect swap in the UI failed to re-flash the device)
+   *  and every re-flash must land back in this drum/grid state. */
+  private handleVsn1SmallButton(button: number, _timestampMs: number): void {
+    if (button === 0) {
+      this.setStatus({ lastEvent: 'VSN1 sb_0 → cycle mode' });
+      this.handleModeCycle(); // same runtime path as the encoder press
+      return;
+    }
+    if (button === 1) {
+      // Simple per-press toggle — no click/double-click gesture (that
+      // complexity died with the two-view behavior split; this is visual only).
+      this.vsn1ViewMode = this.vsn1ViewMode === 'effect' ? 'drum' : 'effect';
+      this.setStatus({ lastEvent: `VSN1 sb_1 → view: ${this.vsn1ViewMode === 'effect' ? 'GRID' : 'READOUT'}` });
+      this.emitVsn1ViewMode();
+      return;
+    }
+    if (button === 2) {
+      // Deliberate no-op (Sina 2026-07-10). Still emits its note so it can be
+      // bound later; loud silence until then.
+      this.setStatus({ lastEvent: 'VSN1 sb_2 (empty)' });
+      return;
+    }
+    // button === 3 — show the MarsinLED logo: the device's welcome screen is
+    // driven by the hello CC (hi = 1 in the receiver); it holds until the next
+    // key press / feedback frame dismisses it. A party flourish, not state.
+    this.setStatus({ lastEvent: 'VSN1 sb_3 → MarsinLED logo' });
+    try {
+      this.transport.send(vsn1WelcomeMessage());
+    } catch {
+      this.ledFailStreak += 1; // same fail-loud accounting as the feedback stream
+    }
+  }
+
+  /** Send the VSN1 the VIEW render-selector CC (1 = grid visual, 0 = full
+   *  readout; toggled by sb_1, default grid). One-shot, NOT diffed into the
+   *  steady feedback stream; the full re-sync re-emits it so the device
+   *  rebuilds `vm` after its VM is wiped on a page change. Key behavior is
+   *  DRUM regardless of this — the view is presentation only. */
+  private emitVsn1ViewMode(): void {
+    if (this.profile.device.id !== 'vsn1') return;
+    try {
+      this.transport.send(vsn1ViewModeMessage(viewModeCcValue(this.vsn1ViewMode)));
+    } catch {
+      this.ledFailStreak += 1; // same fail-loud accounting as the feedback stream
+    }
+  }
+
+  /** VSN1 jog turn (absolute) → coalesce onto the SELECTED slot's intensity. Ignored
+   *  (with a once-logged debug note) until a slot key has been pressed — before any
+   *  selection there is no target (defined behavior, never a guessed slot). */
+  private handleIntensityAbs(controlId: string, value: number): void {
+    if (this.selectedSlot === null) {
+      if (!this.loggedJogWithoutSelection) {
+        this.loggedJogWithoutSelection = true;
+        // eslint-disable-next-line no-console
+        console.debug('[MIDI] VSN1 jog ignored — no slot selected yet (press a key first)');
+      }
+      return;
+    }
+    // Coalesced last-write-wins (absolute position), flushed at ~30 Hz.
+    this.coalescer.push(controlId, { kind: 'effectIntensityAbs', value });
+  }
+
+  /** Flush the coalesced VSN1 jog value onto the SELECTED slot's intensity through
+   *  the soft-takeover pickup guard. The wheel stays LOCKED (swallowed) until its
+   *  position crosses the slot's live intensity, then tracks — so a selection
+   *  change (which re-locks in selectSlot) can't jump the value from a stale wheel
+   *  position. Seeds the pickup crossing from the slot's snapshot `intensity`;
+   *  inert (never a fabricated anchor) while that hasn't threaded through. */
+  private async flushEffectIntensity(value: number): Promise<void> {
+    const rec = this.selectedSlotRecord();
+    if (this.selectedSlot === null || !rec) {
+      // Selection cleared / slot vanished between accumulate and flush — drop it.
+      this.setStatus({ lastEvent: 'VSN1 jog (no selected slot — inert)' });
+      return;
+    }
+    if (typeof rec.intensity !== 'number') {
+      // The snapshot hasn't threaded this slot's intensity — never anchor the
+      // pickup crossing on a fabricated value. Inert + visible until it loads.
+      this.setStatus({ lastEvent: `VSN1 slot ${rec.slot} intensity not loaded yet — jog inert` });
+      return;
+    }
+    const { write, next } = pickup(this.intensityPickup, rec.intensity, value);
+    this.intensityPickup = next;
+    if (!write) {
+      this.setStatus({ lastEvent: `VSN1 slot ${rec.slot} intensity = ${value.toFixed(2)} (locked)` });
+      return; // locked — swallow until the wheel picks up the slot's value
+    }
+    this.setStatus({ lastEvent: `VSN1 slot ${rec.slot} intensity = ${value.toFixed(2)}` });
+    await this.runDispatch({ kind: 'effectIntensitySlot', slotId: rec.slot, value });
+  }
+
+  /** VSN1 jog PRESS → reset the SELECTED slot's intensity to its default. Inert
+   *  (visible note) when nothing is selected. Unlocks the jog's pickup (a reset is
+   *  a deliberate jump) so the next turn tracks from the reset value rather than
+   *  staying locked. */
+  private handleIntensityReset(): void {
+    const rec = this.selectedSlotRecord();
+    if (this.selectedSlot === null || !rec) {
+      this.setStatus({ lastEvent: 'VSN1 jog reset (no selected slot — inert)' });
+      return;
+    }
+    // A reset is an intentional jump: unlock the pickup, anchored on the default
+    // (the value the wheel now conceptually sits at) so a follow-up turn tracks.
+    this.intensityPickup = { locked: false, last: rec.intensityDefault ?? null };
+    this.setStatus({ lastEvent: `VSN1 slot ${rec.slot} intensity reset` });
+    void this.runDispatch({ kind: 'effectIntensitySlotReset', slotId: rec.slot });
+  }
+
+  /** VSN1 encoder PRESS → cycle the SELECTED slot's discrete `primaryMode` to its
+   *  next value (Effects v2 — replaces the old press=intensity-reset). Inert (with
+   *  a visible note) when nothing is selected: before any key press there is no
+   *  target, so the press is IGNORED — never a guessed slot. The engine owns the
+   *  value ring and broadcasts the new mode; the runtime just fires the cycle. */
+  private handleModeCycle(): void {
+    const rec = this.selectedSlotRecord();
+    if (this.selectedSlot === null || !rec) {
+      this.setStatus({ lastEvent: 'VSN1 mode cycle (no selected slot — inert)' });
+      return;
+    }
+    this.setStatus({ lastEvent: `VSN1 slot ${rec.slot} mode cycle` });
+    void this.runDispatch({ kind: 'effectModeCycleSlot', slotId: rec.slot });
   }
 
   /** Coalescer flush for a resolved payload. Most payloads dispatch directly; the
@@ -1081,6 +1609,22 @@ class ControllerRuntime {
     // us ~30 Hz, so recording the monitor line here — instead of at raw MIDI
     // rate — keeps React consumers from re-rendering >100/s. Error/inert-note
     // status still fires immediately inside the branches below.
+    //
+    // THE shared speed ceiling (Sina 2026-07-10): every relative knob controls
+    // a 0..1 parameter, so every window sum is capped at the SAME
+    // MAX_WINDOW_STEP — identical top speed for locals, the speed knob, AND
+    // hue (hue is just unit × 360 downstream). Applied ONCE here so the three
+    // branches below cannot drift apart.
+    if (
+      (payload.kind === 'focusedParamDelta' || payload.kind === 'paramCenterDelta'
+        || payload.kind === 'hueDelta')
+      && Number.isFinite(payload.delta)
+    ) {
+      payload = {
+        ...payload,
+        delta: Math.max(-MAX_WINDOW_STEP, Math.min(MAX_WINDOW_STEP, payload.delta)),
+      };
+    }
     if (payload.kind === 'focusedParamDelta') {
       const capturedKey = this.deltaFocusKey.get(controlId);
       this.deltaFocusKey.delete(controlId);
@@ -1165,6 +1709,14 @@ class ControllerRuntime {
       const capturedChannel = this.deltaFocusKey.get(controlId);
       this.deltaFocusKey.delete(controlId);
       await this.flushChannelHueDelta(controlId, payload.delta, capturedChannel);
+      return;
+    }
+    if (payload.kind === 'effectIntensityAbs') {
+      // Driver #3 (VSN1): flush the coalesced absolute jog value onto the SELECTED
+      // slot's intensity, gated by soft-takeover so a stale wheel position can't
+      // yank the value after a selection change. Applying at FLUSH time (not on
+      // every raw CC) means the write lands on the slot's value as it is NOW.
+      await this.flushEffectIntensity(payload.value);
       return;
     }
     // Absolute paramCenter (e.g. the APC's fader 7) shares the sync gate (#4):
@@ -1476,6 +2028,7 @@ class ControllerRuntime {
     const projState: MidiProjectionState = {
       blackout: snap.blackout,
       activePattern: snap.activePattern,
+      getCombinedAutopilotActive: () => snap.combinedAutopilotActive === true,
       getGlobalEffectState: (effect) => !!snap.globalEffects[effect],
       resolvePatternForBank: (bank, index) => snap.patterns[bank * pageSize + index] ?? null,
       layerExists: (layer) => !!layerInfo(snap, layer),
@@ -1581,6 +2134,160 @@ class ControllerRuntime {
       this.ledFailStreak = 0;
       this.setStatus({ warning: undefined });
     }
+
+    // Effects v2: VSN1 slot-state + page MIDI feedback. Emitted ONLY for the VSN1
+    // profile (the device whose on-device Lua renders key LEDs / ring / LCD from
+    // incoming MIDI). Diffed against the last frame so only changed state re-sends.
+    this.sendVsn1Feedback(snap);
+  }
+
+  /** Emit the VSN1 slot-state/page feedback frames (Effects v2). No-op for every
+   *  other driver. Uses the live snapshot's effectsPage + globalEffectSlots and
+   *  diffs against `vsn1FeedbackState` so a knob twist that changes one slot's
+   *  value sends one CC, not a full repaint. The device Lua reads these
+   *  (`eventrx_cb`) to render active/value/mode per key + the current page. */
+  private sendVsn1Feedback(snap: MidiEngineSnapshot): void {
+    if (this.profile.device.id !== 'vsn1') return;
+    const page = snap.effectsPage ?? 0;
+    // FULL re-send on EVERY page change (firmware 2026-07-11): the device
+    // restarts its Lua VM on each page load, wiping all rendered state — a diff
+    // against what we last sent would leave the new page's LEDs/screen dark for
+    // any value that happens to be byte-identical across the page switch. So the
+    // whole frame (actives/values/modes/page/side-button LEDs) must repaint.
+    //
+    // The trigger is a one-shot FLAG (vsn1ForceFullResync), not just a page
+    // compare: onEngineUpdate fires on EVERY engine change (patterns, colours,
+    // slots, …), and any of those landing between the page-change and this emit
+    // would otherwise repopulate the diff and swallow the resync — the reported
+    // page flakiness. The flag is set by every page-change origin (engine-origin
+    // page difference here; a device side-button press, which also restarts the
+    // VM even when re-selecting the CURRENT page; welcome/reconnect) and consumed
+    // exactly once. A page DIFFERENCE also arms it (covers a change we didn't
+    // originate), so engine-origin changes are always caught even if no other
+    // path set the flag.
+    if (this.lastVsn1FeedbackPage !== null && this.lastVsn1FeedbackPage !== page) {
+      this.vsn1ForceFullResync = true;
+    }
+    // LAYOUT change (slot swap/clear from the CaptainPad UI or any surface) also
+    // forces a FULL re-send. A layout edit re-flashes the device Lua + restarts
+    // its VM (the deploy is a separate wave; the runtime feedback must still be
+    // whole), so a diff that only touched the changed slot's bytes could leave
+    // the rest dark after the restart. The signature keys on the LAYOUT identity
+    // (effectId + behavior + label) of the ON-PAGE slots — NOT the runtime
+    // active/value/mode, which stay diffed (a knob twist must not re-blast the
+    // frame). Computed against the SAME page window the frame projects.
+    const layoutSig = vsn1PageLayoutSig(page, snap.globalEffectSlots);
+    if (this.lastVsn1LayoutSig !== null && this.lastVsn1LayoutSig !== layoutSig) {
+      this.vsn1ForceFullResync = true;
+    }
+    if (this.vsn1ForceFullResync) {
+      this.vsn1ForceFullResync = false;
+      this.vsn1FeedbackState = {}; // full frame — device VM was (or will be) wiped
+    }
+    this.lastVsn1FeedbackPage = page;
+    this.lastVsn1LayoutSig = layoutSig;
+    const { messages, next } = projectVsn1Feedback(
+      { page, slots: snap.globalEffectSlots },
+      this.vsn1FeedbackState,
+    );
+    this.vsn1FeedbackState = next;
+    // WELCOME: when armed (a genuine (re)connect or the effects-panel load), emit
+    // the one-shot hello FIRST so the device greets before the state paints, then
+    // disarm. Consumed here (not diffed) so it fires exactly once per arm.
+    if (this.vsn1WelcomePending) {
+      this.vsn1WelcomePending = false;
+      messages.unshift(vsn1WelcomeMessage());
+    }
+    for (const msg of messages) {
+      try {
+        this.transport.send(msg);
+      } catch {
+        // A failed feedback send shares the LED-send fail-loud accounting: bump
+        // the same streak so a dead destination surfaces once, without breaking
+        // the dispatch path. (Feedback and LED sends go to the same endpoint.)
+        this.ledFailStreak += 1;
+      }
+    }
+  }
+
+  /** Effects v2 WELCOME: arm the one-shot VSN1 hello and immediately emit it
+   *  ALONGSIDE a full feedback re-sync. Called when the effects panel first
+   *  loads (the panel + the hook route here). No-op for non-VSN1 profiles and
+   *  while disconnected (projectAndSend early-returns; the flag stays armed and
+   *  the next connect's re-sync carries it). */
+  requestVsn1Welcome(): void {
+    if (this.profile.device.id !== 'vsn1') return;
+    // Re-echo the host-owned VIEW MODE FIRST — symmetric with
+    // resyncAfterLayoutDeploy() and handleDeviceHello(). The device resets `vm`
+    // to its INIT default (0 = DRUM) on every Lua-VM restart; a panel remount
+    // (navigate away + back, or a reset) routes here, so without this the grid
+    // silently drops to DRUM regardless of the operator's chosen mode. (Fixes
+    // the "mode reverts to DRUM after reset" regression — the three re-sync
+    // entry points must all restore `vm`.)
+    this.emitVsn1ViewMode();
+    this.vsn1WelcomePending = true;
+    // Re-send the FULL feedback frame with the hello: ARM the resync flag so the
+    // panel load re-paints the whole slot/page state (matching "full re-sync +
+    // hello") even if an unrelated onEngineUpdate races in first.
+    this.vsn1ForceFullResync = true;
+    this.projectAndSend();
+  }
+
+  /** Item 2: an engine layout AUTO-DEPLOY completed — the device was RE-FLASHED,
+   *  which restarts its Lua VM and resets EVERY device global to its INIT default
+   *  (vm = 0 DRUM, hi = 0, empty vals/mods/acts). Re-echo the host-owned VIEW MODE
+   *  and force a FULL feedback re-sync so the device restores its prior mode +
+   *  active/value/mode/page state after the flash.
+   *
+   *  Crucially this must NOT re-arm the WELCOME (item 1): a re-flash is not a fresh
+   *  device connect, so `vsn1WelcomePending` is left untouched — the logo stays
+   *  hidden and the live layout paints immediately, exactly like a page change.
+   *  No-op for non-VSN1 profiles / while disconnected (projectAndSend
+   *  early-returns; the flag stays armed for the next paint). */
+  resyncAfterLayoutDeploy(): void {
+    if (this.profile.device.id !== 'vsn1') return;
+    // Re-echo the view mode FIRST (its own one-shot CC) so `vm` is restored before
+    // the feedback frame paints the grid-vs-drum layout.
+    this.emitVsn1ViewMode();
+    // Full frame — the device VM was wiped by the flash. This does NOT set
+    // vsn1WelcomePending, so no hello rides along (no logo on a re-flash).
+    this.vsn1ForceFullResync = true;
+    this.projectAndSend();
+  }
+
+  /** Item 2 (device-hello-driven resync — the PRIMARY, race-free guarantee): the
+   *  device pinged "VM ready" (it restarts its Lua VM on every power-on / page
+   *  load / layout re-flash and emits the hello the moment its receiver is live).
+   *  Re-push the FULL device state so it restores after the restart:
+   *    1. re-echo the host-owned VIEW MODE (its one-shot CC) so `vm` is right
+   *       BEFORE the feedback frame paints the grid-vs-drum layout, and
+   *    2. force a full feedback re-sync (active/value/mode/page/side-button LEDs).
+   *  Because the DEVICE asks only once its receiver is registered, neither can be
+   *  lost to a restart still in flight (the failure mode of a blind timed re-echo
+   *  after a deploy). The FIRST hello of a fresh host connection ALSO arms the
+   *  welcome logo (vsn1WelcomeArmNextHello, set on connect); every SUBSEQUENT hello
+   *  (page load / post-flash) only re-pushes state — so the logo is a per-connection
+   *  greeting, never a page-change / re-flash flash (item 1). */
+  private handleDeviceHello(): void {
+    if (this.vsn1WelcomeArmNextHello) {
+      // First hello of this connection → greet with the logo (rides the re-sync).
+      this.vsn1WelcomeArmNextHello = false;
+      this.vsn1WelcomePending = true;
+      this.setStatus({ lastEvent: 'VSN1 device hello → welcome + state re-sync' });
+    } else {
+      this.setStatus({ lastEvent: 'VSN1 device hello → state re-sync' });
+    }
+    // Re-echo the view mode, then full re-sync (same as a post-flash restore).
+    this.emitVsn1ViewMode();
+    // Re-emit the SELECT CUE too (audit 2026-07-10 #3): the cue is a one-shot
+    // that is NOT part of the diffed feedback frame, so a cue that landed in
+    // the VM-restart window was silently lost — the device forgot which slot
+    // the encoder targets until the next key press. The hello is the "receiver
+    // is live again" signal, so re-asserting the current selection here makes
+    // it restart-proof. No selection yet → nothing to re-assert.
+    if (this.selectedSlot !== null) this.emitVsn1SelectCue(this.selectedSlot);
+    this.vsn1ForceFullResync = true;
+    this.projectAndSend();
   }
 
   private teardownBindings(): void {
@@ -1589,6 +2296,10 @@ class ControllerRuntime {
   }
 
   dispose(): void {
+    if (this.vsn1KeepaliveTimer !== null) {
+      clearInterval(this.vsn1KeepaliveTimer);
+      this.vsn1KeepaliveTimer = null;
+    }
     this.coalescer.dispose();
     this.teardownBindings();
     this.transport.close();
@@ -1656,6 +2367,20 @@ export class MidiManager {
   /** Engine state changed — repaint LEDs across all connected controllers. */
   onEngineUpdate(): void {
     for (const r of this.runtimes) r.projectAndSend();
+  }
+
+  /** Effects v2 WELCOME: the effects panel loaded — send the one-shot VSN1 hello
+   *  + a full feedback re-sync. Fans out to every runtime (only the VSN1 acts). */
+  requestVsn1Welcome(): void {
+    for (const r of this.runtimes) r.requestVsn1Welcome();
+  }
+
+  /** Item 2: a VSN1 layout auto-deploy completed (the device was re-flashed → VM
+   *  restart). Re-echo the view mode + full feedback re-sync so the device
+   *  restores its prior state — WITHOUT re-arming the welcome. Fans out to every
+   *  runtime (only the VSN1 acts). */
+  resyncVsn1AfterLayoutDeploy(): void {
+    for (const r of this.runtimes) r.resyncAfterLayoutDeploy();
   }
 
   /** Active CaptainPad tab changed — switch every controller's mapping context

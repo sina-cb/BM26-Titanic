@@ -1,8 +1,8 @@
 master: 1
 channels:
-  - id: ch_1779852690909_20
-    name: New Layer
-    pattern: 15_silk_prism_ribbons
+  - id: ch_1783569272925_219
+    name: latency_0
+    pattern: 05_orbital_attractor_field
     mode: blend_screen
     fader: 0
     enabled: true
@@ -11,23 +11,94 @@ channels:
     transitionMode: trans_crossfade
     transitionTime: 1
     localControls:
-      '66806020':
-        v0: 0.5
-        v1: 0
-        v2: 0
       '614525773':
         v0: 0
         v1: 0
         v2: 0
-      '729588226':
+      '1037917937':
+        v0: 0
+        v1: 0
+        v2: 0
+      '1217857879':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '1690775821':
+        v0: 0
+        v1: 0
+        v2: 0
+      '2073951030':
+        v0: 0.2975
+        v1: 0
+        v2: 0
+      '2504041261':
+        v0: 0
+        v1: 0
+        v2: 0
+      '3165284047':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '3334264878':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '3612063211':
+        v0: 0.31
+        v1: 0
+        v2: 0
+      '3909762385':
+        v0: 0.17
+        v1: 0
+        v2: 0
+      '3994789032':
+        v0: 0.9099999999999998
+        v1: 0
+        v2: 0
+      '4234014351':
+        v0: 0.5
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_5_05_orbital_attractor_field
+      cursor: 5
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: all
+      target: null
+      invert: false
+    faderMax: 1
+    color: null
+    mixGroupId: null
+    soloSafe: false
+    hue: 0
+    followsTempo: false
+    followLeaderId: null
+    followScale: 1
+  - id: ch_1783569272960_220
+    name: latency_1
+    pattern: 10_chasers
+    mode: blend_screen
+    fader: 0
+    enabled: true
+    locked: false
+    faderLocked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls:
+      '614525773':
         v0: 0.5
         v1: 0
         v2: 0
       '1037917937':
-        v0: 0.5
+        v0: 0.4975
         v1: 0
         v2: 0
-      '2384393854':
+      '1323486710':
         v0: 0.5
         v1: 0
         v2: 0
@@ -40,13 +111,72 @@ channels:
         v1: 0
         v2: 0
       '4234014351':
-        v0: 1
+        v0: 0.5
         v1: 0
         v2: 0
     playlist:
       name: default
-      activeEntryId: e_default_15_15_silk_prism_ribbons
-      cursor: 15
+      activeEntryId: e_default_10_10_chasers
+      cursor: 10
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: all
+      target: null
+      invert: false
+    faderMax: 1
+    color: null
+    mixGroupId: null
+    soloSafe: false
+    hue: 0
+    followsTempo: false
+    followLeaderId: null
+    followScale: 1
+  - id: ch_1783569272994_221
+    name: hil3_0
+    pattern: 02_phase_cathedral
+    mode: blend_screen
+    fader: 0
+    enabled: true
+    locked: false
+    faderLocked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls:
+      '149283354':
+        v0: 0.26
+        v1: 0
+        v2: 0
+      '614525773':
+        v0: 0
+        v1: 0
+        v2: 0
+      '1037917937':
+        v0: 0.84
+        v1: 0
+        v2: 0
+      '1323486710':
+        v0: 0.76
+        v1: 0
+        v2: 0
+      '2504041261':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '3994789032':
+        v0: 0.6
+        v1: 0
+        v2: 0
+      '4234014351':
+        v0: 0.5
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_2_02_phase_cathedral
+      cursor: 2
       autopilot:
         active: false
         delay_s: 30
@@ -64,5 +194,5 @@ channels:
     followLeaderId: null
     followScale: 1
 mixGroups: []
-tempoBpm: 98
+tempoBpm: 120
 tempoSourcePref: osc

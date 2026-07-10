@@ -16,11 +16,34 @@ export type ControlMatch =
   // VALUE is a signed relative-delta code (decoded via mft/messages), not an
   // absolute 0-127 position. The resolver decodes it to a delta action; an
   // unknown code resolves to null (loud silence). Absolute faders omit it.
-  | { type: 'cc'; channel: number; cc: number; relative?: boolean }
+  //
+  // `anyChannel: true` matches this CC on ANY MIDI channel, ignoring `channel`
+  // entirely. This is NOT a silent fallback — it is an EXPLICIT, opt-in property
+  // for a device whose control DELIBERATELY emits on a moving channel. The Intech
+  // VSN1 jog wheel (CC 40) emits on channel = the current EFFECTS PAGE (0-3): the
+  // encoder that walked a value on page 0 (channel 0) walks it on channel 1 once
+  // page 1 is selected. Pinning the match to channel 0 (the historical single
+  // capture, taken on page 0) silently dropped every jog turn on pages 1-3 — the
+  // "knob does nothing" bug. `anyChannel` binds all four page-channels with one
+  // control instead of four near-duplicate rows. `channel` is still REQUIRED (a
+  // documented placeholder, and the value profileClaims/led-projection synthesise
+  // against) but is not compared when `anyChannel` is set.
+  //
+  // `ccTo` makes the match an inclusive CC RANGE [cc, ccTo] (mirroring the note
+  // match's [lo, hi] form): the matched CC's offset from `cc` becomes the action
+  // index. Used by the VSN1's keyed value contract (CCs 32..39 = the 8 per-page
+  // keys; index k = which key). Absent → the single-CC match, unchanged.
+  | { type: 'cc'; channel: number; cc: number; ccTo?: number; relative?: boolean; anyChannel?: boolean }
   // `notes`: length 1 = a single note; length 2 = inclusive [lo, hi] range
   // (e.g. a pad row). The matched note's offset from lo becomes the action
   // index (used by patternBank to pick which pattern within the bank).
-  | { type: 'note'; channel: number; notes: number[] }
+  //
+  // `anyChannel: true` matches the note on ANY MIDI channel (same opt-in as the
+  // CC form). The Intech VSN1 keys / jog press / side buttons emit on channel =
+  // the current effects page (0-3): a channel-pinned note match would drop every
+  // press off page 0. Explicit opt-in, never a fallback; `channel` stays REQUIRED
+  // as the documented placeholder profileClaims/led-projection synthesise against.
+  | { type: 'note'; channel: number; notes: number[]; anyChannel?: boolean }
   // A strided grid COLUMN: APC pad note = row*8 + column (row 0 = bottom).
   // Matches pads in `column` whose row is in [fromRow, toRow]; the matched
   // pad's index becomes the action index. Used by the per-layer playlist
@@ -48,6 +71,28 @@ export type ProfileAction =
   | { kind: 'focusChannel'; layer: number }
   // Global-effect slot (1-based, matches CaptainPad GEM); toggles the slot.
   | { kind: 'globalEffectSlot'; slot: number }
+  // ── APC operator re-layout (2026-07) ──
+  // Toggle the active CaptainPad TAB between Deck and Mixer (APC Shift button).
+  // Dispatched: the injected api reads the current tab + navigates the other.
+  | { kind: 'viewToggle' }
+  // Combined AUTOPILOT toggle (APC clip_stop button): pattern autopilot AND
+  // color autopilot together. If AT LEAST ONE is on → turn BOTH on; if BOTH are
+  // on → turn BOTH off. Dispatched: the injected api reads both current states
+  // and writes both. (No profile fields — the read/decision lives app-side.)
+  | { kind: 'autopilotToggle' }
+  // Master FADE toggle (APC stop_all_clips button): fade the grand master TO
+  // BLACK when it is up, or UP when it is already black, over the CURRENTLY
+  // SELECTED duration (read from the MasterFadeGroup store — never hardcoded).
+  // Dispatched: the injected api reads the live master + selected duration.
+  // NOTE: no longer bound by the APC (stop_all_clips is now blackoutToggle);
+  // kept as valid vocabulary + still exercised by unit tests.
+  | { kind: 'masterFadeToggle' }
+  // A DELIBERATELY DARK button (APC unused arrows + scene buttons). It carries
+  // no engine action — pressing it resolves to nothing — but it IS projected,
+  // always at velocity 0, so CaptainPad drives an explicit note-off to it on
+  // connect and holds it dark. Needed because the APC LATCHES LED state: a
+  // button merely absent from the profile keeps whatever light it last had.
+  | { kind: 'ledOff' }
   // ── Stage 2 ──
   // Per-layer playlist window browser: scroll the 6-entry window up/down…
   | { kind: 'playlistScroll'; layer: number; dir: 'up' | 'down' }
@@ -82,7 +127,48 @@ export type ProfileAction =
   | { kind: 'hueKnob'; steps: [number, number, number] }
   // Encoder push → reset the focused channel's hue to 0° (back to red).
   // Discrete, fires on press.
-  | { kind: 'hueReset' };
+  | { kind: 'hueReset' }
+  // ── Driver #3 — Intech VSN1 global-effects surface ──
+  // The endless jog-wheel in ABSOLUTE mode (CC 0..127, clamps at ends) drives
+  // the SELECTED global-effect slot's `intensity` (0..1). The absolute CC value
+  // maps value/127 → 0..1 and dispatches the intensity write for whichever slot
+  // the operator last pressed on THIS device (the selected-slot model lives in
+  // the runtime — this action carries no slot, it always targets the selection).
+  // A soft-takeover pickup guard (runtime) stops a stale wheel position from
+  // yanking the intensity on a selection change. Continuous (coalesced).
+  | { kind: 'effectIntensityAbs' }
+  // Jog press → reset the SELECTED slot's intensity to its default. Discrete,
+  // fires on press. Runtime-resolved against the current selection.
+  | { kind: 'effectIntensityReset' }
+  // ── VSN1 keyed value contract (firmware redeploy, 2026-07-11) ──
+  // The encoder's value message now ADDRESSES ITS SLOT ITSELF: CC on channel =
+  // the current effects page (0-3), controller = 32+k (k = key index 0-7 of the
+  // selected slot on that page), value = absolute 0..127. So flat slot id =
+  // 8*channel + (controller-32) + 1 — no host-side selection is needed for
+  // VALUE writes (selection remains for the two-step toggle + mode cycle).
+  // Bind with a `ccTo` range + `anyChannel` match; the resolver computes the
+  // slot from the event's channel + CC offset and produces a concrete
+  // `effectIntensitySlot` write (value/127 → 0..1). Continuous (coalesced
+  // PER SLOT). Replaces the old CC 40 `effectIntensityAbs` binding — CC 40 no
+  // longer carries values (the old kind stays valid profile vocabulary for
+  // other devices; the VSN1 no longer binds it).
+  | { kind: 'effectIntensityKeyed' }
+  // ── Effects v2 — 32 paged slots + discrete mode ──
+  // A side button → select the effects PAGE `page` (0..3) on the ENGINE (the
+  // single source of truth). Discrete; fires on press. Dispatched (PATCH
+  // /global-effects/page) so every surface converges via the WS broadcast.
+  | { kind: 'effectsPageSelect'; page: number }
+  // VSN1 small panel button (sb_0..sb_3, notes 41..44). `button` 0..3. Discrete;
+  // fires on press. The manager's VSN1 path owns the per-button policy (sb_0
+  // view mode, sb_1 no-op, sb_2 reset-all, sb_3 disable-all). The small buttons
+  // NEVER change pages — that is the physical side button's firmware-native job.
+  | { kind: 'vsn1SmallButton'; button: number }
+  // Encoder PRESS → cycle the SELECTED slot's discrete `primaryMode` to the next
+  // value (POST /global-effect-slots/:id/mode/cycle). REPLACES the old
+  // press=intensity-reset (intensity reset moved to the CaptainPad UI). Discrete;
+  // fires on press. Runtime-resolved against the current selection (carries no
+  // slot), mirroring effectIntensityReset.
+  | { kind: 'effectModeCycle' };
 
 /** LED feedback spec. RGB pads use { active, idle } colour velocities (with
  *  optional `channel` for brightness/behaviour, default 6 = solid 100%).
@@ -153,9 +239,12 @@ const ACTION_KINDS = new Set([
   'paramCenter', 'master', 'pattern', 'patternBank',
   'blackoutToggle', 'globalEffect', 'sectionBrightness', 'groupFixedColor',
   'mixerLayerFader', 'focusChannel', 'globalEffectSlot',
+  'viewToggle', 'autopilotToggle', 'masterFadeToggle', 'ledOff',
   'playlistScroll', 'playlistWindowSelect', 'colorPalettePair',
   'focusedParamKnob', 'focusedParamReset', 'paramCenterRelative', 'focusStep',
   'bpmSyncToggle', 'hueKnob', 'hueReset',
+  'effectIntensityAbs', 'effectIntensityReset', 'effectIntensityKeyed',
+  'effectsPageSelect', 'effectModeCycle', 'vsn1SmallButton',
 ]);
 
 /** Default per-tick step magnitudes for a relative encoder: the three ascending
@@ -204,8 +293,17 @@ function validateMatch(where: string, m: any): ControlMatch {
   }
   if (m.type === 'cc') {
     if (!isByte(m.cc)) fail(`${where}: match.cc must be 0-127`);
+    if (m.ccTo !== undefined) {
+      if (!isByte(m.ccTo)) fail(`${where}: match.ccTo must be 0-127`);
+      if (m.ccTo < m.cc) fail(`${where}: match.ccTo must be >= cc (inclusive range [cc, ccTo])`);
+    }
     if (m.relative !== undefined && typeof m.relative !== 'boolean') fail(`${where}: match.relative must be a boolean`);
-    return { type: 'cc', channel: m.channel, cc: m.cc, relative: m.relative === true };
+    if (m.anyChannel !== undefined && typeof m.anyChannel !== 'boolean') fail(`${where}: match.anyChannel must be a boolean`);
+    return {
+      type: 'cc', channel: m.channel, cc: m.cc,
+      ...(m.ccTo !== undefined ? { ccTo: m.ccTo } : {}),
+      relative: m.relative === true, anyChannel: m.anyChannel === true,
+    };
   }
   if (m.type === 'note') {
     if (!Array.isArray(m.notes) || (m.notes.length !== 1 && m.notes.length !== 2)) {
@@ -215,7 +313,11 @@ function validateMatch(where: string, m: any): ControlMatch {
     if (m.notes.length === 2 && m.notes[0] > m.notes[1]) {
       fail(`${where}: match.notes range lo must be <= hi`);
     }
-    return { type: 'note', channel: m.channel, notes: [...m.notes] };
+    if (m.anyChannel !== undefined && typeof m.anyChannel !== 'boolean') fail(`${where}: match.anyChannel must be a boolean`);
+    return {
+      type: 'note', channel: m.channel, notes: [...m.notes],
+      ...(m.anyChannel === true ? { anyChannel: true } : {}),
+    };
   }
   if (m.type === 'column') {
     if (typeof m.column !== 'number' || m.column < 0 || m.column > 7) fail(`${where}: match.column must be 0-7`);
@@ -275,6 +377,14 @@ function validateAction(where: string, a: any): ProfileAction {
         fail(`${where}: globalEffectSlot requires a positive integer 'slot' (1-based)`);
       }
       return { kind: 'globalEffectSlot', slot: a.slot };
+    case 'viewToggle':
+      return { kind: 'viewToggle' };
+    case 'autopilotToggle':
+      return { kind: 'autopilotToggle' };
+    case 'masterFadeToggle':
+      return { kind: 'masterFadeToggle' };
+    case 'ledOff':
+      return { kind: 'ledOff' };
     case 'playlistScroll':
       if (typeof a.layer !== 'number' || a.layer < 0 || !Number.isInteger(a.layer)) {
         fail(`${where}: playlistScroll requires a non-negative integer 'layer'`);
@@ -315,6 +425,24 @@ function validateAction(where: string, a: any): ProfileAction {
       return { kind: 'hueKnob', steps: validateSteps(where, a.steps) };
     case 'hueReset':
       return { kind: 'hueReset' };
+    case 'effectIntensityAbs':
+      return { kind: 'effectIntensityAbs' };
+    case 'effectIntensityReset':
+      return { kind: 'effectIntensityReset' };
+    case 'effectIntensityKeyed':
+      return { kind: 'effectIntensityKeyed' };
+    case 'effectsPageSelect':
+      if (typeof a.page !== 'number' || a.page < 0 || a.page > 3 || !Number.isInteger(a.page)) {
+        fail(`${where}: effectsPageSelect requires an integer 'page' 0-3`);
+      }
+      return { kind: 'effectsPageSelect', page: a.page };
+    case 'vsn1SmallButton':
+      if (typeof a.button !== 'number' || a.button < 0 || a.button > 3 || !Number.isInteger(a.button)) {
+        fail(`${where}: vsn1SmallButton requires an integer 'button' 0-3`);
+      }
+      return { kind: 'vsn1SmallButton', button: a.button };
+    case 'effectModeCycle':
+      return { kind: 'effectModeCycle' };
     default:
       return fail(`${where}: unhandled action.kind`);
   }
@@ -334,7 +462,12 @@ function validateLed(where: string, led: any): LedSpec | undefined {
 /** Expand a match into the concrete (channel, kind, number) keys it occupies,
  *  so we can detect two controls claiming the same message. */
 function matchKeys(m: ControlMatch): string[] {
-  if (m.type === 'cc') return [`cc:${m.channel}:${m.cc}`];
+  if (m.type === 'cc') {
+    const hi = m.ccTo ?? m.cc;
+    const keys: string[] = [];
+    for (let n = m.cc; n <= hi; n++) keys.push(`cc:${m.channel}:${n}`);
+    return keys;
+  }
   if (m.type === 'column') {
     const keys: string[] = [];
     for (let row = m.fromRow; row <= m.toRow; row++) keys.push(`note:${m.channel}:${row * 8 + m.column}`);

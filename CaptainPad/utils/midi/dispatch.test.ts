@@ -15,11 +15,19 @@ function makeApi(): MidiDispatchApi {
     updateDeckChannel: vi.fn(ok),
     dispatchGlobalEffectSlotAction: vi.fn(ok),
     setGlobalEffectBlackout: vi.fn(ok),
+    setGlobalEffectSlotIntensity: vi.fn(ok),
+    resetGlobalEffectSlotIntensity: vi.fn(ok),
+    setEffectsPage: vi.fn(ok),
+    cycleGlobalEffectSlotMode: vi.fn(ok),
+    resetAllGlobalEffects: vi.fn(ok),
+    disableAllGlobalEffects: vi.fn(ok),
     setChannelPlaylistEntry: vi.fn(ok),
     setDeckChannelControl: vi.fn(ok),
     setMixerChannelControl: vi.fn(ok),
-    setGlobalHue: vi.fn(ok),
     setChannelHue: vi.fn(ok),
+    toggleDeckMixerView: vi.fn(ok),
+    toggleCombinedAutopilot: vi.fn(ok),
+    toggleMasterFade: vi.fn(ok),
   };
 }
 
@@ -81,11 +89,11 @@ describe('createDispatcher', () => {
     await expect(createDispatcher(api, baseCtx)({ kind: 'focusChannel', layer: 1 })).rejects.toThrow(/controller runtime/);
     await expect(createDispatcher(api, baseCtx)({ kind: 'playlistScroll', layer: 0, dir: 'up' })).rejects.toThrow(/controller runtime/);
     await expect(createDispatcher(api, baseCtx)({ kind: 'playlistWindowSelect', layer: 0, slot: 0 })).rejects.toThrow(/controller runtime/);
-    await expect(createDispatcher(api, baseCtx)({ kind: 'globalHueDelta', delta: 0.1 })).rejects.toThrow(/controller runtime/);
-    await expect(createDispatcher(api, baseCtx)({ kind: 'globalHueReset' })).rejects.toThrow(/controller runtime/);
+    await expect(createDispatcher(api, baseCtx)({ kind: 'hueDelta', delta: 0.1 })).rejects.toThrow(/controller runtime/);
+    await expect(createDispatcher(api, baseCtx)({ kind: 'hueReset' })).rejects.toThrow(/controller runtime/);
   });
 
-  // ── MFT UX v2: BPM→Speed sync toggle + global hue write ──
+  // ── MFT UX v2: BPM→Speed sync toggle + per-channel hue write ──
   it('bpmSyncToggle flips the live sync state via updateParamCenter({ bpmSpeedSync })', async () => {
     const api = makeApi();
     await createDispatcher(api, { ...baseCtx, getBpmSpeedSyncOn: () => false })({ kind: 'bpmSyncToggle' });
@@ -105,18 +113,14 @@ describe('createDispatcher', () => {
     expect(calls.map((c) => c[0])).toEqual([{ bpmSpeedSync: 1 }, { bpmSpeedSync: 0 }]);
   });
 
-  it('globalHue posts degrees AND the preserved autoRotateDegPerSec', async () => {
-    const api = makeApi();
-    await createDispatcher(api, baseCtx)({ kind: 'globalHue', degrees: 123, autoRotateDegPerSec: 45 });
-    expect(api.setGlobalHue).toHaveBeenCalledWith(123, 45);
-  });
-
-  // ── Mixer-context hue knob: per-CHANNEL hue writes ──
+  // ── Per-CHANNEL hue knob: the hue knob's ONLY engine write (the global hue
+  //    shifter — setGlobalHue and its autoRotate field — was removed 2026-07).
+  //    Both contexts target a channel: deck tab → the deck channel, mixer tab →
+  //    the focused overlay. ──
   it('channelHue on a mixer channel PATCHes that channel (no deck flag, no autoRotate)', async () => {
     const api = makeApi();
     await createDispatcher(api, baseCtx)({ kind: 'channelHue', role: 'mixer', channelId: 'ch_a', degrees: 120 });
     expect(api.setChannelHue).toHaveBeenCalledWith('ch_a', 120, undefined);
-    expect(api.setGlobalHue).not.toHaveBeenCalled(); // never the global shifter
   });
 
   it('channelHue on the deck channel routes with { deck: true }', async () => {
@@ -164,6 +168,33 @@ describe('createDispatcher', () => {
     const ctx = { ...baseCtx, getGlobalEffectSlotBehavior: () => 'hold' as const };
     await createDispatcher(api, ctx)({ kind: 'globalEffectSlot', slot: 4 });
     expect(api.dispatchGlobalEffectSlotAction).toHaveBeenCalledWith(4, 'down');
+  });
+
+  // ── APC operator re-layout (2026-07): the three new button kinds route to
+  //    the injected api methods (the read/decision lives in the impl). ──
+  it('viewToggle → toggleDeckMixerView()', async () => {
+    const api = makeApi();
+    await createDispatcher(api, baseCtx)({ kind: 'viewToggle' });
+    expect(api.toggleDeckMixerView).toHaveBeenCalledTimes(1);
+  });
+
+  it('autopilotToggle → toggleCombinedAutopilot()', async () => {
+    const api = makeApi();
+    await createDispatcher(api, baseCtx)({ kind: 'autopilotToggle' });
+    expect(api.toggleCombinedAutopilot).toHaveBeenCalledTimes(1);
+  });
+
+  it('masterFadeToggle → toggleMasterFade()', async () => {
+    const api = makeApi();
+    await createDispatcher(api, baseCtx)({ kind: 'masterFadeToggle' });
+    expect(api.toggleMasterFade).toHaveBeenCalledTimes(1);
+  });
+
+  it('the three new toggles THREAD the api result (fail-loud)', async () => {
+    const api = makeApi();
+    (api.toggleCombinedAutopilot as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, error: 'read failed' });
+    const r = await createDispatcher(api, baseCtx)({ kind: 'autopilotToggle' });
+    expect(r).toEqual({ ok: false, error: 'read failed' });
   });
 
   it('colorPalettePair applies the curated pair as HSV', async () => {

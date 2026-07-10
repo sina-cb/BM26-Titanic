@@ -76,4 +76,12 @@ export const paletteCrushEffect = {
   quantize,
   MIN_LEVELS,
   MAX_LEVELS,
+  // Primary intensity: the crush amount — the blend between the original
+  // smooth gradient and the fully-posterized version (0 = untouched, 1 =
+  // fully crushed). Normalized 0..1 maps straight onto the `amount` param.
+  primaryIntensity: { label: 'Crush', param: 'amount', default: 1.0, min: 0, max: 1 },
+  // Primary mode: the number of quantization levels per channel — the
+  // discrete "how many bands" selector. The VSN1 encoder press cycles these;
+  // writes the `levels` param (2 = hardest posterize, 8 = subtle).
+  primaryMode: { label: 'Levels', param: 'levels', values: [2, 3, 4, 6, 8], default: 4 },
 };

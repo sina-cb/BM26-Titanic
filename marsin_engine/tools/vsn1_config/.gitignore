@@ -1,0 +1,6 @@
+# Isolated deps for this standalone tool — never vendored into the repo.
+node_modules/
+package-lock.json
+
+# Device config dumps are local artifacts, not source.
+dumps/*.json

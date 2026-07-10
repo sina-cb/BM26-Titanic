@@ -89,4 +89,13 @@ export function applyOceanBreath({ pixels, nowMs, periodMs, depth, warmth }) {
 export const oceanBreathEffect = {
   apply: applyOceanBreath,
   phase: oceanBreathPhase,
+  // Primary intensity: the swell depth — how far the rig dims at the trough
+  // of each breath (0 = no swell, 0.6 = deep breath). Capped at 0.6 so an
+  // ambient mode never fully blacks the rig. Normalized 0..1 maps onto
+  // [0..0.6] and drives the `depth` param.
+  primaryIntensity: { label: 'Breath Depth', param: 'depth', default: 0.4, min: 0, max: 0.6 },
+  // Primary mode: the swell period — how long one full breath takes. The
+  // VSN1 encoder press cycles these; writes the `periodMs` param (8 s calm,
+  // 14 s deep, 20 s sunrise). All > 0 (periodMs must be positive).
+  primaryMode: { label: 'Period', param: 'periodMs', values: [8000, 14000, 20000], default: 8000 },
 };

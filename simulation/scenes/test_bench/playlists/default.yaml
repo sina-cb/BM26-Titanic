@@ -18,11 +18,27 @@ entries:
           scope: pattern
           parameter: sliderLocalSpeed
         mode: offset
+        polarity: bipolar
+        range:
+          - -0.6
+          - 0.6
+        curve: easeOut
+      - id: mod_sliderKick_micDomEnergy1
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomEnergy1
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: offset
         polarity: unipolar
         range:
           - 0
-          - 0.2
-        curve: easeOut
+          - 0.35
+        curve: linear
+    midiMappings: []
     notes: null
   - id: e_default_1_01_cylon_sweep
     pattern: 01_cylon_sweep
@@ -64,6 +80,7 @@ entries:
           - 0
           - 1
         curve: easeOut
+    midiMappings: []
     notes: null
   - id: e_default_2_02_phase_cathedral
     pattern: 02_phase_cathedral
@@ -74,6 +91,7 @@ entries:
       sliderSharpness: 0.26
       sliderDirection: 0.6
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_3_03_dual_axis_crush
     pattern: 03_dual_axis_crush
@@ -84,6 +102,7 @@ entries:
       sliderBeamWidth: 0.77
       sliderDirection: 0.67
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_4_04_beat_folded_helix
     pattern: 04_beat_folded_helix
@@ -94,6 +113,7 @@ entries:
       sliderTwistFreq: 0.22
       sliderContrast: 0.41
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_5_05_orbital_attractor_field
     pattern: 05_orbital_attractor_field
@@ -103,6 +123,7 @@ entries:
       sliderFalloff: 0.31
       sliderFocus: 0.17
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_6_06_neon_elevator
     pattern: 06_neon_elevator
@@ -113,6 +134,7 @@ entries:
       sliderThickness: 0.17
       sliderBloom: 0.73
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_7_07_shimmer
     pattern: 07_shimmer
@@ -123,6 +145,7 @@ entries:
       sliderDensity: 0.5
       sliderBreathing: 0.78
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_8_08_ocean_liner
     pattern: 08_ocean_liner
@@ -133,6 +156,7 @@ entries:
       sliderWindowCount: 0.5
       sliderWindowFocus: 0.5
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_9_09_cyclone
     pattern: 09_cyclone
@@ -142,6 +166,7 @@ entries:
       sliderDensity: 0.5
       sliderParticleSize: 0.5
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_10_10_chasers
     pattern: 10_chasers
@@ -151,6 +176,7 @@ entries:
       sliderParticleCount: 0.5
       sliderTailLength: 0.5
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_11_11_bioluminescence
     pattern: 11_bioluminescence
@@ -161,6 +187,7 @@ entries:
       sliderUvGlow: 0.32
       sliderPartyMode: 0.28
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_12_12_breathing
     pattern: 12_breathing
@@ -170,6 +197,7 @@ entries:
       sliderRipple: 0
       sliderSharpness: 0.5
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_13_13_sparkle
     pattern: 13_sparkle
@@ -179,6 +207,7 @@ entries:
       sliderSparkleSpeedTrim: 0.5
       sliderSparkleDensity: 0.5
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_14_14_lunar_current
     pattern: 14_lunar_current
@@ -189,6 +218,7 @@ entries:
       sliderWhiteLift: 0.5
       sliderUvLift: 1
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_15_15_silk_prism_ribbons
     pattern: 15_silk_prism_ribbons
@@ -198,6 +228,7 @@ entries:
       sliderRibbonCount: 0.5
       sliderSoftness: 0.5
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_16_16_ghost_tide_uv
     pattern: 16_ghost_tide_uv
@@ -208,6 +239,7 @@ entries:
       sliderWhiteLevel: 0.85
       sliderUvLevel: 1
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_17_17_rolling_color_dunes
     pattern: 17_rolling_color_dunes
@@ -217,6 +249,7 @@ entries:
       sliderScale: 0.5
       sliderContrast: 0.5
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_18_18_deep_space_lattice
     pattern: 18_deep_space_lattice
@@ -226,6 +259,7 @@ entries:
       sliderLatticeScale: 0.5
       sliderLineSoftness: 0.5
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_19_19_swaying_lattice_ballet
     pattern: 19_swaying_lattice_ballet
@@ -238,6 +272,7 @@ entries:
       sliderContrast: 0.32
       sliderAfterglow: 0.22
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_20_20_parametric_sway_field
     pattern: 20_parametric_sway_field
@@ -248,6 +283,7 @@ entries:
       sliderFocus: 0.5
       sliderTrailBlend: 0.55
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_21_21_pelagic_manta_rays
     pattern: 21_pelagic_manta_rays
@@ -259,6 +295,7 @@ entries:
       sliderWhiteFoam: 0.55
       sliderUvUndertow: 1
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_22_22_abyssal_sway_garden
     pattern: 22_abyssal_sway_garden
@@ -271,6 +308,7 @@ entries:
       sliderContrast: 0.5
       sliderAfterglow: 0.18
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_23_23_prismatic_strange_attractors
     pattern: 23_prismatic_strange_attractors
@@ -285,6 +323,7 @@ entries:
       sliderUvGhost: 1
       sliderColorSpread: 0.5
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_24_24_chromatic_murmuration
     pattern: 24_chromatic_murmuration
@@ -297,6 +336,7 @@ entries:
       sliderContrast: 0.5
       sliderAfterglow: 0.18
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_25_25_heartbeat
     pattern: 25_heartbeat
@@ -306,6 +346,7 @@ entries:
       sliderDormantGlow: 0.04
       sliderRippleSweep: 0
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_26_26_dom_dancers_chevron
     pattern: 26_dom_dancers_chevron
@@ -367,12 +408,14 @@ entries:
           - 0
           - 0.4
         curve: easeOut
+    midiMappings: []
     notes: null
   - id: e_default_58_rainbow
     pattern: rainbow
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_1781814289959_1677
     pattern: 28_spectrum_bloom
@@ -429,6 +472,7 @@ entries:
           - 0
           - 0.35
         curve: linear
+    midiMappings: []
     notes: null
   - id: e_1781814380742_5872
     pattern: 29_kick_shockwave
@@ -470,6 +514,7 @@ entries:
           - 0
           - 0.35
         curve: linear
+    midiMappings: []
     notes: null
   - id: e_1781814384871_7633
     pattern: 30_bass_comet
@@ -495,6 +540,7 @@ entries:
           - 0
           - 0.35
         curve: linear
+    midiMappings: []
     notes: null
   - id: e_1781814388425_3530
     pattern: 31_strobe_lattice
@@ -506,6 +552,7 @@ entries:
       sliderScale: 0
       sliderSharp: 0
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_1781814603757_5600
     pattern: 32_caustic_shimmer
@@ -547,6 +594,7 @@ entries:
           - -0.2
           - 0.4
         curve: linear
+    midiMappings: []
     notes: null
   - id: e_1781818512417_4971
     pattern: 33_aurora_breath
@@ -574,6 +622,7 @@ entries:
           - 0
           - 0.1
         curve: easeIn
+    midiMappings: []
     notes: null
   - id: e_1781818516232_636
     pattern: 34_moire_interference
@@ -600,6 +649,7 @@ entries:
           - 0
           - 0.35
         curve: linear
+    midiMappings: []
     notes: null
   - id: e_1781818519453_9498
     pattern: 35_sparkle_rain
@@ -641,12 +691,14 @@ entries:
           - 0
           - 0.35
         curve: linear
+    midiMappings: []
     notes: null
   - id: e_1781818523376_7175
     pattern: 36_orbital_pulse
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_1781818903803_5066
     pattern: 37_chevron_chase
@@ -658,6 +710,7 @@ entries:
       sliderWidth: 0
       sliderCount: 0
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_1781818974092_2409
     pattern: 38_prism_helix
@@ -670,12 +723,14 @@ entries:
       sliderContrast: 0.83
       sliderArms: 0
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_1781818978052_756
     pattern: 39_tide_riser
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_1781818981643_4306
     pattern: 40_lissajous_weave
@@ -703,100 +758,117 @@ entries:
           - 0
           - 0.35
         curve: linear
+    midiMappings: []
     notes: null
   - id: e_default_41_reaction_diffusion
     pattern: 41_reaction_diffusion
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_42_phyllotaxis_spiral
     pattern: 42_phyllotaxis_spiral
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_43_golden_hour_pulse
     pattern: 43_golden_hour_pulse
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_44_biolume_swell
     pattern: 44_biolume_swell
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_45_manta_drift
     pattern: 45_manta_drift
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_46_abyssal_fronds
     pattern: 46_abyssal_fronds
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_47_quasicrystal_dunes
     pattern: 47_quasicrystal_dunes
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_48_heartbeat_drive
     pattern: 48_heartbeat_drive
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_49_cylon_crush
     pattern: 49_cylon_crush
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_50_phase_cathedral_hd
     pattern: 50_phase_cathedral_hd
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_51_confetti_cyclone
     pattern: 51_confetti_cyclone
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_52_silk_ribbons
     pattern: 52_silk_ribbons
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_53_neon_elevator_hd
     pattern: 53_neon_elevator_hd
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_54_murmuration_storm
     pattern: 54_murmuration_storm
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_57_ink_diffuse
     pattern: 57_ink_diffuse
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null
   - id: e_default_58_lighthouse_solo
     pattern: 58_lighthouse_solo
     label: null
     defaults: {}
     modulations: []
+    midiMappings: []
     notes: null

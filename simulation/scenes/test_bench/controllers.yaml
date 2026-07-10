@@ -1,5 +1,5 @@
-nextControllerId: 2
-nextUniverse: 6
+nextControllerId: 5
+nextUniverse: 19
 controllers:
   - id: 1
     name: Test Bench 1
@@ -39,3 +39,19 @@ controllers:
             at: 510
           - fixture: TEFogMachine 10
             at: 512
+  - id: 4
+    name: Titanic_202
+    ip: 10.1.1.202
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 10
+        chain:
+          - LED_0
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native

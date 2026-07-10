@@ -16,6 +16,7 @@ import {
   DEFAULT_SLOT_CONFIG,
   resolveSlotBinding,
   validateSlotsConfig,
+  MAX_SLOTS,
 } from '../lib/global_effect_slot_manager.js';
 import { GlobalEffectsController } from '../lib/global_effects_controller.js';
 import { getFrameLockedStrobeTiming, getFrameLockedStrobeGate, applySoftwareStrobe } from '../effects/strobe.js';
@@ -102,9 +103,10 @@ test('validateColor6 rejects wrong shape and out-of-range', () => {
 test('validateSlotsConfig rejects empty / too-large arrays + duplicate slotIds', () => {
   assert.throws(() => validateSlotsConfig([]),
     /between/);
-  // Too many — current MAX_SLOTS = 16, so 17 must fail.
+  // Too many — one past MAX_SLOTS must fail (boundary-relative so it stays
+  // correct as the cap grows; effects_v2 raised it 16 → 32).
   const tooMany = [];
-  for (let i = 1; i <= 17; i++) {
+  for (let i = 1; i <= MAX_SLOTS + 1; i++) {
     tooMany.push({ slotId: i, enabled: false, label: `x${i}`, effectId: 'strobe', presetId: 'sync_4hz', behavior: 'toggle', paramsOverride: {} });
   }
   assert.throws(() => validateSlotsConfig(tooMany), /between/);
@@ -235,6 +237,104 @@ test('drop hit envelope expires after duration', () => {
   // Advance to after envelope finishes (white_drop: 25+75+300=400ms)
   ctrl.applyMacros({ pixels, frameIndex: 1, nowMs: 500 });
   assert.equal(ctrl.dropHitActive, false);
+});
+
+// ── Hand-drummed trigger reliability (RCA 20260709_7 STABILIZATION WAVE) ──
+//
+// Sina hand-drums the VSN1 effect keys and wants EVERY fast press to fire a
+// trigger. These assert the three engine-side hardening rules:
+//   #1  a mismatched action on a trigger slot fails LOUDLY (no 200-ok no-op),
+//   #2  a burst of N rapid presses fires N times (no drop / no coalescing),
+//       and the poly cap RECYCLES the oldest voice instead of dropping the new,
+//   #3  a behavior-resolved `press` does the right thing per slot behavior.
+
+test('rapid trigger burst below the poly cap fires every press (no drops)', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  const mgr = new GlobalEffectSlotManager(ctrl);
+  // 5 presses within ~0.5 s (hand-drumming ~10/s), all below the cap.
+  const N = 5;
+  for (let i = 0; i < N; i++) {
+    mgr.dispatchSlotAction({ slotId: 5, action: 'trigger', frameIndex: i, nowMs: i * 100 });
+  }
+  // Every press pushed its own voice — nothing coalesced or suppressed.
+  assert.equal(ctrl.dropHits.length, N, `expected ${N} voices, got ${ctrl.dropHits.length}`);
+});
+
+test('poly cap recycles the OLDEST voice under a rapid burst — never drops the new press', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  const mgr = new GlobalEffectSlotManager(ctrl);
+  // Fire far more presses than the cap, hand-drumming fast (every 20ms).
+  // Tag each voice by its unique trigger time so we can prove WHICH voices
+  // survived: the newest ones, not the oldest.
+  const BURST = 20;
+  for (let i = 0; i < BURST; i++) {
+    mgr.dispatchSlotAction({ slotId: 5, action: 'trigger', frameIndex: i, nowMs: i * 20 });
+  }
+  // The array is capped (never grows unbounded under sustained drumming)…
+  assert.ok(ctrl.dropHits.length > 0, 'at least one voice must ring');
+  assert.ok(ctrl.dropHits.length < BURST,
+    `poly cap must bound the ringing voices (got ${ctrl.dropHits.length} of ${BURST})`);
+  // …and the MOST RECENT press is always present (voice-steal, not drop-new):
+  // the last-triggered voice has the max triggeredAtMs.
+  const lastNowMs = (BURST - 1) * 20;
+  const newestPresent = ctrl.dropHits.some(v => v.triggeredAtMs === lastNowMs);
+  assert.ok(newestPresent, 'the newest press must always land (oldest voice is recycled)');
+  // The oldest presses (t=0, t=20) must have been stolen — proof it recycled
+  // the OLDEST rather than refusing the new one.
+  const oldestStolen = !ctrl.dropHits.some(v => v.triggeredAtMs === 0);
+  assert.ok(oldestStolen, 'the oldest voice must be recycled, not the newest press dropped');
+  // Surviving voices are exactly the newest contiguous run (monotonic times).
+  const times = ctrl.dropHits.map(v => v.triggeredAtMs);
+  const sorted = [...times].sort((a, b) => a - b);
+  assert.deepEqual(times, sorted, 'surviving voices stay in trigger order (FIFO steal)');
+});
+
+test('toggle action on a trigger (dropHit) slot is REJECTED loudly — not a silent 200-ok no-op', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  const mgr = new GlobalEffectSlotManager(ctrl);
+  // Slot 5 is Iceberg Flash — dropHit, behavior 'trigger'.
+  assert.throws(
+    () => mgr.dispatchSlotAction({ slotId: 5, action: 'toggle', frameIndex: 0, nowMs: 0 }),
+    /behavior 'trigger'.*action 'toggle' is not a firing action/s,
+    'a toggle on a trigger slot must throw (route → 400), never silently succeed',
+  );
+  // And it must NOT have half-fired: no voice was pushed.
+  assert.equal(ctrl.dropHits.length, 0, 'the rejected action must not fire a voice');
+});
+
+test('hold and up actions on a trigger slot are also rejected loudly', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  const mgr = new GlobalEffectSlotManager(ctrl);
+  for (const action of ['hold', 'up', 'deactivate']) {
+    assert.throws(
+      () => mgr.dispatchSlotAction({ slotId: 5, action, frameIndex: 0, nowMs: 0 }),
+      /is not a firing action/,
+      `action '${action}' on a trigger slot must be rejected`,
+    );
+  }
+  assert.equal(ctrl.dropHits.length, 0);
+});
+
+test('behavior-resolved `press` FIRES a trigger slot every press (hand-drum path)', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  const mgr = new GlobalEffectSlotManager(ctrl);
+  // A press on a trigger slot must fire — repeatedly, no drops.
+  const N = 4;
+  for (let i = 0; i < N; i++) {
+    mgr.dispatchSlotAction({ slotId: 5, action: 'press', frameIndex: i, nowMs: i * 100 });
+  }
+  assert.equal(ctrl.dropHits.length, N, 'each press must fire one voice');
+});
+
+test('behavior-resolved `press` TOGGLES a toggle slot (flip on/off)', () => {
+  const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
+  const mgr = new GlobalEffectSlotManager(ctrl);
+  // Slot 1 is a strobe, behavior 'toggle'.
+  assert.equal(ctrl.strobeActive, false);
+  mgr.dispatchSlotAction({ slotId: 1, action: 'press', frameIndex: 0, nowMs: 0 });
+  assert.equal(ctrl.strobeActive, true, 'first press turns the toggle ON');
+  mgr.dispatchSlotAction({ slotId: 1, action: 'press', frameIndex: 1, nowMs: 0 });
+  assert.equal(ctrl.strobeActive, false, 'second press turns the toggle OFF');
 });
 
 // ── Color wash ──────────────────────────────────────────────────────
@@ -640,7 +740,7 @@ test('patchSlot still rejects an out-of-range slotId (1..MAX_SLOTS)', () => {
   const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
   const mgr = new GlobalEffectSlotManager(ctrl);
   assert.throws(() => mgr.patchSlot(0, { enabled: false }), /Invalid slotId/);
-  assert.throws(() => mgr.patchSlot(17, { enabled: false }), /Invalid slotId/);
+  assert.throws(() => mgr.patchSlot(MAX_SLOTS + 1, { enabled: false }), /Invalid slotId/);
   assert.throws(() => mgr.patchSlot(1.5, { enabled: false }), /Invalid slotId/);
 });
 

@@ -9,6 +9,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['utils/midi/**/*.test.ts', 'components/**/*.test.ts'],
+    // `utils/*.test.ts` (non-recursive) admits PURE api-contract tests that stub
+    // the RN/engine/apiBase deps themselves — it must NOT be `utils/**` or it
+    // would re-glob the midi tests. Keep RN-only .tsx component tests excluded.
+    include: ['utils/*.test.ts', 'utils/midi/**/*.test.ts', 'components/**/*.test.ts'],
   },
 });

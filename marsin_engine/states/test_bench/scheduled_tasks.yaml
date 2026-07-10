@@ -1,0 +1,9 @@
+scheduledTasks:
+  - id: 5e89aba4-33a8-4bbf-bb09-e46d2987fc7c
+    label: fogger / default
+    effectId: fogger
+    presetId: default
+    enabled: false
+    mode: duration
+    onDurationMs: 30000
+    intervalMs: 30000

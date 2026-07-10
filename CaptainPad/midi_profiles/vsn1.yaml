@@ -1,0 +1,207 @@
+# Intech VSN1 — CaptainPad MIDI profile (driver #3), a dedicated GLOBAL-EFFECTS
+# surface. Authored from a live Web MIDI capture on the dev PC
+# (marsin_engine/tools/midi_discovery/captures/intech_grid_midi_device_20260708_201118.json).
+# Loaded/validated by utils/midi/profile.ts; dispatched through utils/api.ts.
+#
+# Device layout (from the capture labels):
+#   8 KEYS — a 4×2 grid, notes 32..39 (0x20..0x27), channel 0. The capture
+#   labels b0_0..b0_3 = the TOP row (notes 32..35, left→right) and b1_0..b1_3 =
+#   the BOTTOM row (notes 36..39, left→right). Each key emits a Note On (vel 127)
+#   on press and a Note Off on release.
+#
+#     physical key (top→bottom, left→right)   note   → key index k (0-7)
+#     ─────────────────────────────────────   ────     ──────────────────────
+#     top-left      (b0_0)                     32       k=0
+#     top row       (b0_1)                     33       k=1
+#     top row       (b0_2)                     34       k=2
+#     top-right     (b0_3)                     35       k=3
+#     bottom-left   (b1_0)                     36       k=4
+#     bottom row    (b1_1)                     37       k=5
+#     bottom row    (b1_2)                     38       k=6
+#     bottom-right  (b1_3)                     39       k=7
+#
+#   PAGE-AWARE (Effects v2): a key press addresses FLAT slot id
+#   `8*effectsPage + k + 1`, following the ENGINE's effectsPage (0-3) — the same
+#   value the outbound feedback projects. So the top-left key hits slot 1 on
+#   page 0, slot 9 on page 1, slot 17 on page 2, slot 25 on page 3 — always the
+#   slots the device is DISPLAYING. The action's `slot: 1..8` is the key INDEX
+#   +1 (its page-0 slot); the manager derives the page-aware flat slot from
+#   effectsPage (NOT from the note channel — the note match is `anyChannel`, and
+#   the page is the engine's single source of truth). On page 0 this is the
+#   identity, so nothing regresses there.
+#
+#   Slots are 1-based and match the CaptainPad GLOBAL EFFECTS strip read
+#   LEFT-MOST → RIGHT-MOST (same operator contract as the APC Scene column). The
+#   globalEffectSlot action is BEHAVIOR-AWARE (toggle / trigger / hold), with
+#   Sina's DRUM contract on THIS device (2026-07-10 evening — the two-step
+#   select-then-commit is retired): EVERY key press fires immediately (toggle
+#   flips, trigger fires) AND selects the slot (LCD detail + grid border follow
+#   the finger). The selection targets the encoder turn + the mode cycle.
+#
+#   ENCODER VALUES — KEYED contract (firmware redeploy 2026-07-11; REPLACES the
+#   old CC 40 value stream, which the firmware constraint forced to relative
+#   63/65 codes — useless for absolute values). A jog turn now emits a CC that
+#   ADDRESSES ITS SLOT ITSELF:
+#     channel    = the CURRENT EFFECTS PAGE (0-3)
+#     controller = 32 + k   (k = key index 0-7 of the SELECTED slot on that page)
+#     value      = absolute 0..127   (value/127 → the slot's intensity 0..1)
+#   Flat slot id = 8*channel + (controller-32) + 1. The HOST therefore needs no
+#   selected-slot state for VALUE writes — the message carries its own target.
+#   (Selection tracking REMAINS for the mode cycle — encoder press / sb_0 —
+#   which acts on "the slot on the LCD".) Continuous, coalesced ~30 Hz PER SLOT
+#   (two keys turned inside one window can't clobber each other).
+#
+#   NO PICKUP GUARD on this path (deliberate decision, documented): the device
+#   renders the value it displays FROM OUR FEEDBACK STREAM (CC ch1 32+i, below),
+#   so the absolute position it emits is anchored on the slot's live value by
+#   construction — a takeover jump can't originate host-side, and a host lock
+#   would only swallow legitimate writes. (The legacy selected-slot
+#   `effectIntensityAbs` + pickup machinery stays valid profile vocabulary for
+#   other devices; this profile no longer binds it.)
+#
+#   CC 40 NO LONGER CARRIES VALUES inbound — it is UNBOUND (loud silence if the
+#   device ever emits it). The OUTBOUND page-index feedback still rides CC 40 on
+#   the FEEDBACK channel (ch1, see the table below) — a different direction and
+#   channel, no collision.
+#
+#   JOG PRESS — note 40 (0x28), channel 0: CYCLES the SELECTED slot's discrete
+#   `primaryMode` to its next value (POST /global-effect-slots/:id/mode/cycle).
+#   UNCHANGED by the keyed-value redeploy. This REPLACES the old
+#   press=intensity-reset (Effects v2, Sina 2026-07-08): the encoder press is
+#   the slot's SECOND MIDI control (value on turn, mode on press). Intensity
+#   RESET moved to the CaptainPad UI (the device sends no long-press, so there's
+#   no on-device gesture for it). Before any key is pressed there is no
+#   selection, so the jog PRESS is ignored (value turns need no selection — they
+#   self-address).
+#
+#   SMALL PANEL BUTTONS — notes 41..44 (sb_0..sb_3): host-mapped actions, NEVER
+#   page selection (THE physical side button changes pages, firmware-native; the
+#   device's page CC then follows into the engine). Sina's layout (2026-07-10
+#   evening) — see the controls section below for the authoritative map:
+#     note 41 (sb_0) → MODE cycle     note 43 (sb_2) → empty (reserved)
+#     note 42 (sb_1) → VIEW toggle    note 44 (sb_3) → MarsinLED logo
+#
+#   OUTBOUND FEEDBACK (Effects v2) — CaptainPad does NOT drive per-control `led:`
+#   frames from the profile; instead the manager emits a DIFFED slot-state/page
+#   feedback stream (utils/midi/vsn1_feedback.ts) the device Lua (`eventrx_cb`,
+#   another track) renders. For the active page p (0..3), per on-page slot i (0..7):
+#     • active → Note On  ch1 note 32+i vel 127|0
+#     • value  → CC        ch1 cc  32+i  0..127   (intensity*127)
+#     • mode   → CC        ch2 cc  32+i  0..N      (index in modeValues)
+#   Page:  CC ch1 cc 40 = page (0..3);  side-button LEDs Note On ch1 note 41+p.
+#   FULL RE-SEND ON EVERY PAGE CHANGE (firmware 2026-07-11): the device restarts
+#   its Lua VM on each page load, wiping all rendered state — so any page change
+#   (engine broadcast) AND any VSN1 side-button press (even re-selecting the
+#   CURRENT page — the VM still restarts) re-emits the whole frame, not a diff.
+#   Toggle keys are STATELESS on-device now: a sticky key LED comes ONLY from the
+#   active feedback above, so CaptainPad echoes a slot's new active state
+#   immediately when a toggle dispatch is ACKed (no broadcast round-trip wait).
+#
+#   WELCOME / hello — a DEDICATED one-shot the manager sends the device ALONGSIDE
+#   the full feedback re-sync (a) when the effects panel first loads and (b) on
+#   every MIDI (re)connect. It greets the device (logo screen render is another
+#   track's job). Pinned address (never collides with the side-button page LEDs,
+#   which are Note On ch1 note 41 — this is a CC on ch2):
+#     WELCOME → CC channel 2 (0-based), controller 41, value 1   ([0xB2, 41, 1])
+#   Emitted once per arm, never diffed into the steady stream.
+#
+#   SELECT CUE — a one-shot the manager sends on every key press (drum contract:
+#   the press both fires the slot AND selects it), so the LCD grid border +
+#   detail line follow the finger. Value = the selected key index 0-7 on the
+#   current page (127 = no on-page selection — clear the cue). Pinned so it
+#   collides with nothing (WELCOME is ch2 cc41, the mode feedback ch2 cc32..39,
+#   the page index ch1 cc40):
+#     SELECT CUE → CC channel 2 (0-based), controller 42, value = key index 0-7
+#   Fired from the select path only, never diffed — a re-select re-asserts it.
+#
+# destinationPort is still opened for the feedback + welcome sends above.
+
+device:
+  id: vsn1
+  label: "Intech VSN1"
+  nameContains: "Intech Grid MIDI device"
+  sourcePort: 0
+  destinationPort: 0
+
+controls:
+  # ── 8 keys (notes 32..39) → global-effect slots, PAGE-AWARE ────────────────
+  # `slot: 1..8` is the KEY INDEX (k+1) on page 0. The device views the 32 flat
+  # slots 8 at a time; the manager's VSN1 path maps a key press to flat slot
+  # `8*effectsPage + k + 1`, following the ENGINE's page (the single source of
+  # truth). So the SAME key hits slot 1 on page 0, slot 9 on page 1, slot 17 on
+  # page 2, slot 25 on page 3 — the slots the device is DISPLAYING.
+  # `anyChannel: true`: the firmware rides these notes on channel = the current
+  # page (0-3), the same moving-channel constraint the keyed value CCs have. A
+  # channel-pinned match silently dropped every press off page 0 (the "keys do
+  # nothing on page 2-4" bug); anyChannel matches the note regardless, and the
+  # page-aware slot comes from effectsPage, never from this channel.
+  - id: key_1_slot1
+    match: { type: note, channel: 0, notes: [32], anyChannel: true }
+    action: { kind: globalEffectSlot, slot: 1 }
+  - id: key_2_slot2
+    match: { type: note, channel: 0, notes: [33], anyChannel: true }
+    action: { kind: globalEffectSlot, slot: 2 }
+  - id: key_3_slot3
+    match: { type: note, channel: 0, notes: [34], anyChannel: true }
+    action: { kind: globalEffectSlot, slot: 3 }
+  - id: key_4_slot4
+    match: { type: note, channel: 0, notes: [35], anyChannel: true }
+    action: { kind: globalEffectSlot, slot: 4 }
+  - id: key_5_slot5
+    match: { type: note, channel: 0, notes: [36], anyChannel: true }
+    action: { kind: globalEffectSlot, slot: 5 }
+  - id: key_6_slot6
+    match: { type: note, channel: 0, notes: [37], anyChannel: true }
+    action: { kind: globalEffectSlot, slot: 6 }
+  - id: key_7_slot7
+    match: { type: note, channel: 0, notes: [38], anyChannel: true }
+    action: { kind: globalEffectSlot, slot: 7 }
+  - id: key_8_slot8
+    match: { type: note, channel: 0, notes: [39], anyChannel: true }
+    action: { kind: globalEffectSlot, slot: 8 }
+
+  # ── Keyed encoder values (CCs 32..39, any channel) → slot intensity ───────
+  # Firmware 2026-07-11 contract: channel = page (0-3), controller = 32+k
+  # (k = key 0-7), value = absolute 0..127 → flat slot 8*channel + k + 1.
+  # The message addresses its own slot — no host selection, no pickup guard
+  # (see the header note). channel 0 is a placeholder (anyChannel).
+  - id: key_values
+    match: { type: cc, channel: 0, cc: 32, ccTo: 39, anyChannel: true }
+    action: { kind: effectIntensityKeyed }
+
+  # ── Jog press (note 40) → CYCLE the SELECTED slot's discrete mode ─────────
+  # Effects v2: the encoder press is the slot's second MIDI control (mode).
+  # Intensity reset moved to the CaptainPad UI (see the header note).
+  - id: jog_press_mode
+    match: { type: note, channel: 0, notes: [40], anyChannel: true }
+    action: { kind: effectModeCycle }
+
+  # ── Small panel buttons (notes 41..44) → host-mapped actions ──────────────
+  # The four SMALL PANEL buttons (device elements 9..12) NEVER change pages —
+  # that is the physical SIDE button's firmware-native job. Each small button
+  # just emits its note (side_button.lua dropped page_load), and the HOST owns
+  # the policy via the manager's VSN1 path. Sina's layout (2026-07-10 evening):
+  #   sb_0 (note 41) → MODE: cycle the SELECTED effect's discrete mode (same
+  #                    action as the encoder press).
+  #   sb_1 (note 42) → VIEW: toggle the LCD visual — grid (colors) ↔ full
+  #                    readout. Presentation only; key behavior is DRUM (fire
+  #                    immediately) in both views.
+  #   sb_2 (note 43) → empty (deliberate no-op, reserved).
+  #   sb_3 (note 44) → LOGO: show the MarsinLED wordmark (the welcome screen;
+  #                    the next key press / feedback frame dismisses it).
+  # `anyChannel: true`: like the keys, the small-button notes ride channel = the
+  # current page (a moving firmware detail); anyChannel matches regardless so a
+  # press is never dropped off page 0. `button` carries WHICH button; the
+  # manager decides the action.
+  - id: sb0_mode
+    match: { type: note, channel: 0, notes: [41], anyChannel: true }
+    action: { kind: vsn1SmallButton, button: 0 }
+  - id: sb1_view
+    match: { type: note, channel: 0, notes: [42], anyChannel: true }
+    action: { kind: vsn1SmallButton, button: 1 }
+  - id: sb2_empty
+    match: { type: note, channel: 0, notes: [43], anyChannel: true }
+    action: { kind: vsn1SmallButton, button: 2 }
+  - id: sb3_logo
+    match: { type: note, channel: 0, notes: [44], anyChannel: true }
+    action: { kind: vsn1SmallButton, button: 3 }

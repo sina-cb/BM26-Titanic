@@ -40,6 +40,59 @@ describe('validateProfile', () => {
     expect(() => validateProfile(bad)).toThrow(/led\.on/);
   });
 
+  it('accepts and normalises a CC match with anyChannel (VSN1 jog)', () => {
+    const p = validateProfile({
+      ...valid,
+      controls: [{ id: 'jog', match: { type: 'cc', channel: 0, cc: 40, anyChannel: true }, action: { kind: 'effectIntensityAbs' } }],
+    });
+    const m = p.controls[0].match;
+    expect(m).toMatchObject({ type: 'cc', cc: 40, anyChannel: true });
+  });
+
+  it('defaults anyChannel to false when absent', () => {
+    const p = validateProfile({
+      ...valid,
+      controls: [{ id: 'c', match: { type: 'cc', channel: 0, cc: 40 }, action: { kind: 'effectIntensityAbs' } }],
+    });
+    expect(p.controls[0].match).toMatchObject({ anyChannel: false });
+  });
+
+  it('throws on a non-boolean anyChannel', () => {
+    const bad = { ...valid, controls: [{ id: 'c', match: { type: 'cc', channel: 0, cc: 40, anyChannel: 'yes' }, action: { kind: 'effectIntensityAbs' } }] };
+    expect(() => validateProfile(bad)).toThrow(/anyChannel must be a boolean/);
+  });
+
+  // `ccTo` — the inclusive CC range form (VSN1 keyed value contract).
+  it('accepts a CC range match (ccTo) + effectIntensityKeyed', () => {
+    const p = validateProfile({
+      ...valid,
+      controls: [{ id: 'kv', match: { type: 'cc', channel: 0, cc: 32, ccTo: 39, anyChannel: true }, action: { kind: 'effectIntensityKeyed' } }],
+    });
+    expect(p.controls[0].match).toMatchObject({ type: 'cc', cc: 32, ccTo: 39, anyChannel: true });
+    expect(p.controls[0].action).toEqual({ kind: 'effectIntensityKeyed' });
+  });
+
+  it('throws when ccTo < cc (an inverted range)', () => {
+    const bad = { ...valid, controls: [{ id: 'c', match: { type: 'cc', channel: 0, cc: 39, ccTo: 32 }, action: { kind: 'effectIntensityKeyed' } }] };
+    expect(() => validateProfile(bad)).toThrow(/ccTo must be >= cc/);
+  });
+
+  it('throws on an out-of-range ccTo', () => {
+    const bad = { ...valid, controls: [{ id: 'c', match: { type: 'cc', channel: 0, cc: 32, ccTo: 200 }, action: { kind: 'effectIntensityKeyed' } }] };
+    expect(() => validateProfile(bad)).toThrow(/ccTo must be 0-127/);
+  });
+
+  it('detects an overlap INSIDE a CC range (the range occupies every CC in it)', () => {
+    const bad = {
+      ...valid,
+      controls: [
+        { id: 'kv', match: { type: 'cc', channel: 0, cc: 32, ccTo: 39 }, action: { kind: 'effectIntensityKeyed' } },
+        { id: 'x', match: { type: 'cc', channel: 0, cc: 35 }, action: { kind: 'master' } },
+      ],
+    };
+    expect(() => validateProfile(bad)).toThrow(/overlaps/);
+  });
+
   it('throws on overlapping matches', () => {
     const bad = {
       ...valid,

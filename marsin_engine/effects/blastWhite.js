@@ -21,4 +21,8 @@ export const blastWhiteEffect = {
       }
     }
   },
+  // Primary intensity: NONE. Full-channel white slam, no tunable magnitude.
+  primaryIntensity: null,
+  // Primary mode: NONE. On/off slam, no discrete mode — explicit null.
+  primaryMode: null,
 };

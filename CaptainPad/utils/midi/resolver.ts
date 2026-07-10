@@ -37,6 +37,16 @@ export type ResolvedAction =
   // release reaches here — see the hold TODO in dispatch.ts). Toggle/trigger
   // slots act on press only, so the field is irrelevant to them.
   | { kind: 'globalEffectSlot'; slot: number; phase?: 'press' | 'release' }
+  // ── APC operator re-layout (2026-07) — discrete button actions ──
+  // Toggle the active CaptainPad tab (Deck ↔ Mixer). Dispatched: the injected
+  // api reads the current tab and navigates the other.
+  | { kind: 'viewToggle' }
+  // Combined pattern+color autopilot toggle (any-on → both-on; both-on →
+  // both-off). Dispatched: the injected api reads both states and writes both.
+  | { kind: 'autopilotToggle' }
+  // Master fade TO BLACK / UP toggle over the selected duration. Dispatched: the
+  // injected api reads the live master + the selected fade duration.
+  | { kind: 'masterFadeToggle' }
   | { kind: 'playlistScroll'; layer: number; dir: 'up' | 'down' }
   | { kind: 'playlistWindowSelect'; layer: number; slot: number }
   | { kind: 'colorPalettePair'; palette: number }
@@ -78,7 +88,52 @@ export type ResolvedAction =
   // profile-driven) — the runtime builds it from the focused entry's stored
   // bindings + live exports, then routes it through the same coalescer +
   // dispatcher seam as every other continuous control.
-  | { kind: 'localParam'; role: 'deck' | 'mixer'; channelId: string; exportId: number; value: number };
+  | { kind: 'localParam'; role: 'deck' | 'mixer'; channelId: string; exportId: number; value: number }
+  // ── Driver #3 — Intech VSN1 global-effects surface ──
+  // Absolute jog-wheel turn (CC 0..127). `value` is ALREADY scaled to 0..1
+  // (value/127). Runtime-handled: the runtime maps it onto the SELECTED slot's
+  // intensity (last-write-wins, with a soft-takeover pickup guard on selection
+  // change), never dispatched directly — the selection lives in runtime state.
+  | { kind: 'effectIntensityAbs'; value: number }
+  // Jog press → reset the SELECTED slot's intensity to its default. Runtime-
+  // handled (needs the selection).
+  | { kind: 'effectIntensityReset' }
+  // A concrete slot intensity WRITE. Two producers: (a) the RUNTIME, from a
+  // legacy selected-slot jog value (effectIntensityAbs + pickup guard); (b)
+  // resolveEvent DIRECTLY, from the VSN1 keyed value contract (2026-07-11
+  // firmware): CC channel = page, controller = 32+k → flat slot id
+  // 8*channel + k + 1, value/127 → 0..1 — the message addresses its own slot,
+  // no selection needed. Dispatched: POST the slot's intensity.
+  | { kind: 'effectIntensitySlot'; slotId: number; value: number }
+  // A concrete slot intensity RESET, BUILT BY THE RUNTIME against the selected
+  // slot (never produced by resolveEvent). Dispatched: POST intensity/reset.
+  | { kind: 'effectIntensitySlotReset'; slotId: number }
+  // ── Effects v2 — 32 paged slots + discrete mode ──
+  // A side-button page select (0..3). Dispatched: PATCH /global-effects/page.
+  // The engine broadcasts the change so every surface converges.
+  | { kind: 'effectsPageSelect'; page: number }
+  // Encoder press → cycle the SELECTED slot's mode. Runtime-handled (needs the
+  // selection); the runtime builds the concrete effectModeCycleSlot below.
+  | { kind: 'effectModeCycle' }
+  // A concrete slot MODE cycle, BUILT BY THE RUNTIME against the selected slot
+  // (never produced by resolveEvent). Dispatched: POST mode/cycle.
+  | { kind: 'effectModeCycleSlot'; slotId: number }
+  // ── VSN1 SMALL BUTTONS (sb_0..sb_3, notes 41..44) — 2026-07-09 ──
+  // The four small PANEL buttons (device elements 9..12). They NEVER change
+  // pages (the physical side button does that, firmware-native). `button` is
+  // 0..3. RUNTIME-HANDLED in the VSN1 path (the manager owns the policy):
+  //   sb_0 → VIEW MODE: single click = DRUM, double click = EFFECT (host-side
+  //          click/double-click detection from note timestamps; the mode is
+  //          echoed back to the device as a feedback CC so it survives page
+  //          changes). sb_1 → no-op for now (TODO). sb_2 → reset-all, sb_3 →
+  //          disable-all (the manager builds the dispatched actions below).
+  | { kind: 'vsn1SmallButton'; button: number }
+  // Reset EVERY global-effect slot to default (VSN1 sb_2). BUILT BY THE RUNTIME
+  // from a vsn1SmallButton press. Dispatched: POST /global-effects/reset-all.
+  | { kind: 'globalEffectsResetAll' }
+  // Turn OFF every active global effect (VSN1 sb_3). BUILT BY THE RUNTIME from a
+  // vsn1SmallButton press. Dispatched: POST /global-effects/disable-all.
+  | { kind: 'globalEffectsDisableAll' };
 
 export interface ResolvedEvent {
   controlId: string;
@@ -139,22 +194,74 @@ function scale(value: number, range: Range): number {
   return scaleMidiToRange(value, range);
 }
 
-/** Map a decoded relative-encoder delta (±1/±2/±3) + the profile's ascending
- *  step triple to a SIGNED magnitude: sign(delta) × steps[|delta|-1]. So a
- *  normal tick (±1) uses steps[0], fast (±2) steps[1], very-fast (±3) steps[2].
- */
-function relativeStep(delta: number, steps: [number, number, number]): number {
-  const mag = steps[Math.min(Math.abs(delta), 3) - 1];
-  return delta < 0 ? -mag : mag;
+// ── MFT relative-encoder step mapping ──
+//
+// THE TRUE FIRMWARE MODEL (verified against the DJTT firmware encoders.c and
+// the operator's live MIDI capture, 2026-07): per message the MFT sends
+//
+//     value = 64 + ticks × mult
+//
+// where `mult` is the FIRMWARE's velocity multiplier ramping 1 → 17 with turn
+// speed (encoders.c; the live capture confirms it — a hard sustained spin
+// saturates at exactly value 81 = +17 with messages every ~2-10 ms, and a slow
+// twist is a stream of 65 = +1). decodeRelativeDelta returns that whole count
+// (value − 64) — the fast-twist fix: the old six-code decoder returned null for
+// every value outside 61-67, so nearly all fast motion (47..81 during a spin)
+// was DROPPED.
+//
+// THE STEP MAPPING is LINEAR in the count: raw travel = count × steps[0]. The
+// host then applies a light per-tick velocity gain in accel.ts (round-4,
+// GAIN_MAX = 3.0) on top. This combined model is what the operator
+// HARDWARE-CONFIRMED as the correct feel (slow precise, fast sweeps to the
+// ends, no jumpiness) — do NOT alter the slope or re-introduce a per-code clamp
+// without a fresh hardware feel test.
+
+/** SAFETY-ONLY per-message count cap. Purely defensive: the firmware multiplier
+ *  never exceeds 17 (encoders.c) and the live capture never showed a count past
+ *  ±17, so this ceiling — set FAR above that real range — NEVER triggers in
+ *  normal use and does NOT touch the confirmed sweep feel. It exists only to
+ *  bound a single out-of-spec/glitch code so it cannot teleport the value.
+ *  Clamps the COUNT (not the scaled travel) so the guard stays proportional to
+ *  each knob's own steps[0]. RAISE if a legitimate future firmware mult exceeds
+ *  it (a real fast turn must never be clamped); it is intentionally generous. */
+export const RELATIVE_COUNT_CEILING = 48;
+
+/** Map a decoded relative-encoder count (the FULL binary-offset value − 64,
+ *  never just ±1/±2/±3) + the profile's step triple to the SIGNED raw travel,
+ *  LINEAR in the count:
+ *
+ *    raw = clamp(count, ±RELATIVE_COUNT_CEILING) × steps[0]
+ *
+ *  A slow detent (±1) is `steps[0]` (fine-grained); a saturated fast message
+ *  (±17) is 17 × steps[0] (well within the safety cap, untouched). The per-tick
+ *  velocity gain that shapes fast-vs-slow feel lives in accel.ts, applied
+ *  downstream. Exported for the end-to-end pipeline tests. */
+export function relativeStep(delta: number, steps: [number, number, number]): number {
+  const count = Math.max(-RELATIVE_COUNT_CEILING, Math.min(RELATIVE_COUNT_CEILING, delta));
+  return count * steps[0];
 }
 
 function matches(control: ControlDef, ev: DecodedMidi): { hit: boolean; index: number } {
   const m = control.match;
   if (m.type === 'cc' && ev.type === 'cc') {
-    return { hit: ev.channel === m.channel && ev.cc === m.cc, index: 0 };
+    // `anyChannel` (VSN1): match on the CC number ALONE — the device emits its
+    // value CCs on channel = the current effects page (0-3), so a channel-pinned
+    // match would drop every turn off page 0. Explicit opt-in, never a fallback.
+    const channelHit = m.anyChannel === true || ev.channel === m.channel;
+    // `ccTo` (inclusive range, mirrors the note [lo, hi] form): the matched CC's
+    // offset from `cc` becomes the action index (VSN1 keyed values: which key).
+    const hi = m.ccTo ?? m.cc;
+    if (!channelHit || ev.cc < m.cc || ev.cc > hi) return { hit: false, index: 0 };
+    return { hit: true, index: ev.cc - m.cc };
   }
   if (m.type === 'note' && (ev.type === 'noteOn' || ev.type === 'noteOff')) {
-    if (ev.channel !== m.channel) return { hit: false, index: 0 };
+    // `anyChannel` (VSN1): match on the NOTE alone. The device's keys, jog press,
+    // and side buttons ride channel = the current effects page (0-3) — the same
+    // moving-channel firmware constraint the CC values have — so a channel-pinned
+    // note match would silently drop every press off page 0 (the "keys do nothing
+    // on page 2-4" bug). Explicit opt-in, never a fallback; the page-aware slot is
+    // derived downstream from the engine's effectsPage, not from this channel.
+    if (m.anyChannel !== true && ev.channel !== m.channel) return { hit: false, index: 0 };
     const lo = m.notes[0];
     const hi = m.notes.length === 2 ? m.notes[1] : m.notes[0];
     if (ev.note < lo || ev.note > hi) return { hit: false, index: 0 };
@@ -258,6 +365,63 @@ export function resolveEvent(
       case 'globalEffectSlot':
         return { controlId: control.id, continuous: false,
           resolved: { kind: 'globalEffectSlot', slot: a.slot } };
+      case 'viewToggle':
+        // Discrete button (Note On already the only survivor — Note Off swallowed).
+        return { controlId: control.id, continuous: false,
+          resolved: { kind: 'viewToggle' } };
+      case 'autopilotToggle':
+        return { controlId: control.id, continuous: false,
+          resolved: { kind: 'autopilotToggle' } };
+      case 'masterFadeToggle':
+        return { controlId: control.id, continuous: false,
+          resolved: { kind: 'masterFadeToggle' } };
+      case 'effectIntensityAbs':
+        // Absolute jog-wheel CC → the selected slot's intensity. The CC value
+        // is an ABSOLUTE 0-127 position (jog in absolute mode), so scale
+        // value/127 → 0..1 here (no relative decode, no acceleration —
+        // last-write-wins). Continuous: coalesced at flush cadence.
+        if (ev.type !== 'cc') return null;
+        return { controlId: control.id, continuous: true,
+          resolved: { kind: 'effectIntensityAbs', value: ev.value / MIDI_MAX } };
+      case 'effectIntensityReset':
+        // Jog press (a note). Discrete; fire on press (Note Off already
+        // swallowed above).
+        return { controlId: control.id, continuous: false,
+          resolved: { kind: 'effectIntensityReset' } };
+      case 'effectIntensityKeyed': {
+        // VSN1 keyed value contract: the CC message ADDRESSES ITS SLOT — channel
+        // = the effects page (0-3), matched index = the key (0-7), so flat slot
+        // id = 8*channel + index + 1; value is absolute 0..127 → 0..1. Resolves
+        // a CONCRETE effectIntensitySlot (no runtime selection, no pickup: the
+        // device renders its displayed value from our feedback stream, so its
+        // absolute position is anchored on the slot's live value by
+        // construction — a host-side takeover lock would only swallow
+        // legitimate writes). A channel beyond 3 addresses a slot beyond 32 and
+        // the engine rejects it — surfaced fail-loud, never silently clamped.
+        if (ev.type !== 'cc') return null;
+        return { controlId: control.id, continuous: true,
+          resolved: { kind: 'effectIntensitySlot', slotId: 8 * ev.channel + index + 1, value: ev.value / MIDI_MAX } };
+      }
+      case 'effectsPageSelect':
+        // Side-button press → select the effects page on the engine. Discrete.
+        // A CC-form side button releases at value 0 — ignore that (fire on press).
+        if (ev.type === 'cc' && ev.value === 0) return null;
+        return { controlId: control.id, continuous: false,
+          resolved: { kind: 'effectsPageSelect', page: a.page } };
+      case 'vsn1SmallButton':
+        // VSN1 small panel button (sb_0..sb_3). Discrete; fires on press (Note
+        // Off is swallowed above; a CC-form release at 0 is ignored). The VSN1
+        // path in the manager owns the per-button policy (view mode / reset-all
+        // / disable-all) — this only carries WHICH button was pressed.
+        if (ev.type === 'cc' && ev.value === 0) return null;
+        return { controlId: control.id, continuous: false,
+          resolved: { kind: 'vsn1SmallButton', button: a.button } };
+      case 'effectModeCycle':
+        // Encoder press (a note) → cycle the SELECTED slot's mode. Discrete;
+        // fire on press (Note Off already swallowed above). Runtime-resolved
+        // against the current selection.
+        return { controlId: control.id, continuous: false,
+          resolved: { kind: 'effectModeCycle' } };
       case 'playlistScroll':
         return { controlId: control.id, continuous: false,
           resolved: { kind: 'playlistScroll', layer: a.layer, dir: a.dir } };
@@ -282,6 +446,12 @@ export function resolveEvent(
       case 'groupFixedColor':
         return { controlId: control.id, continuous: false,
           resolved: { kind: 'groupFixedColor', group: a.group, color: a.color, brightness: a.brightness } };
+      case 'ledOff':
+        // A deliberately-dark button (unused APC arrows/scene keys). It exists
+        // ONLY to be projected dark (see led_projector) — pressing it maps to
+        // nothing. Return null: no ResolvedAction, so nothing is dispatched and
+        // no other control shadows it. This IS the loud silence, made explicit.
+        return null;
       default:
         return null;
     }

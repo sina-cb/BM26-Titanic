@@ -22,7 +22,43 @@ export interface MidiDispatchApi {
   updateDeckChannel(updates: Record<string, unknown>): Promise<MidiApiResult>;
   dispatchGlobalEffectSlotAction(slotId: number, action: string): Promise<MidiApiResult>;
   setGlobalEffectBlackout(enabled: boolean): Promise<MidiApiResult>;
+  /** Driver #3 (VSN1): write the SELECTED global-effect slot's `intensity`
+   *  (0..1). POST /global-effect-slots/:slotId/intensity { value }. The jog
+   *  wheel (absolute) drives this for whichever slot the operator last pressed
+   *  on the VSN1. */
+  setGlobalEffectSlotIntensity(slotId: number, value: number): Promise<MidiApiResult>;
+  /** Driver #3 (VSN1): reset the SELECTED slot's intensity to its default.
+   *  POST /global-effect-slots/:slotId/intensity/reset (jog press). */
+  resetGlobalEffectSlotIntensity(slotId: number): Promise<MidiApiResult>;
+  /** Effects v2: select the effects PAGE (0..3) on the engine (the single
+   *  source of truth). PATCH /global-effects/page { page }. Driven by the VSN1
+   *  side buttons (and the CaptainPad page switcher). */
+  setEffectsPage(page: number): Promise<MidiApiResult>;
+  /** Effects v2: cycle the SELECTED slot's discrete `primaryMode` to the next
+   *  value. POST /global-effect-slots/:slotId/mode/cycle (VSN1 encoder press). */
+  cycleGlobalEffectSlotMode(slotId: number): Promise<MidiApiResult>;
+  /** Effects v2 (VSN1 small button sb_2): reset EVERY global-effect slot's
+   *  intensity + mode to default. POST /global-effects/reset-all. */
+  resetAllGlobalEffects(): Promise<MidiApiResult>;
+  /** Effects v2 (VSN1 small button sb_3): turn OFF every active global effect.
+   *  POST /global-effects/disable-all. */
+  disableAllGlobalEffects(): Promise<MidiApiResult>;
   setChannelPlaylistEntry(role: 'deck' | 'mixer', channelId: string, entryId: string): Promise<MidiApiResult>;
+  // ── APC operator re-layout (2026-07) ──
+  /** Toggle the active CaptainPad tab Deck ↔ Mixer (APC Shift button). The
+   *  implementation (injected from useMidiControl, which owns the router +
+   *  active-tab signal) reads the current tab and navigates the other. */
+  toggleDeckMixerView(): Promise<MidiApiResult>;
+  /** Combined pattern+color autopilot toggle (APC clip_stop button): read BOTH
+   *  autopilot states, then — if AT LEAST ONE is on turn BOTH on; if BOTH are on
+   *  turn BOTH off. The read/decision lives in the injected impl (it needs the
+   *  live engine reads), not in the pure dispatcher. */
+  toggleCombinedAutopilot(): Promise<MidiApiResult>;
+  /** Master FADE toggle (APC stop_all_clips button): if the master is NOT
+   *  already black, fade TO BLACK over the currently-selected duration; if it IS
+   *  black, fade UP. The injected impl reads the live master + the selected
+   *  duration (MasterFadeGroup store) — never a hardcoded duration. */
+  toggleMasterFade(): Promise<MidiApiResult>;
   // Per-control STATIC writes for MIDI-learned local params. The deck has a
   // singleton route (no id); mixer overlays are addressed by channel id.
   setDeckChannelControl(id: number, v0: number, v1?: number, v2?: number): Promise<MidiApiResult>;
@@ -204,6 +240,43 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
           resolved.degrees,
           resolved.role === 'deck' ? { deck: true } : undefined,
         );
+      case 'effectIntensitySlot':
+        // Driver #3 (VSN1): runtime-built SELECTED-slot intensity write — the jog
+        // value already resolved against the selection + pickup guard. POST
+        // /global-effect-slots/:slotId/intensity { value }.
+        return api.setGlobalEffectSlotIntensity(resolved.slotId, resolved.value);
+      case 'effectIntensitySlotReset':
+        // Driver #3 (VSN1): runtime-built SELECTED-slot intensity reset (jog press).
+        // POST /global-effect-slots/:slotId/intensity/reset.
+        return api.resetGlobalEffectSlotIntensity(resolved.slotId);
+      case 'effectsPageSelect':
+        // Effects v2: side-button page select → PATCH the engine's effectsPage.
+        // The engine broadcasts the change so the UI + every controller converge.
+        return api.setEffectsPage(resolved.page);
+      case 'effectModeCycleSlot':
+        // Effects v2: runtime-built SELECTED-slot mode cycle (encoder press).
+        // POST /global-effect-slots/:slotId/mode/cycle.
+        return api.cycleGlobalEffectSlotMode(resolved.slotId);
+      case 'globalEffectsResetAll':
+        // Effects v2: VSN1 small button sb_2 → reset EVERY slot to default.
+        return api.resetAllGlobalEffects();
+      case 'globalEffectsDisableAll':
+        // Effects v2: VSN1 small button sb_3 → turn OFF every active effect.
+        return api.disableAllGlobalEffects();
+      case 'viewToggle':
+        // APC Shift → flip the active CaptainPad tab. The injected impl owns the
+        // current-tab read + the router navigate (it lives in the hook layer).
+        return api.toggleDeckMixerView();
+      case 'autopilotToggle':
+        // APC clip_stop → combined pattern+color autopilot toggle. The injected
+        // impl reads BOTH states and applies the any-on→both-on / both-on→both-off
+        // rule (it needs the live engine reads, which the pure dispatcher lacks).
+        return api.toggleCombinedAutopilot();
+      case 'masterFadeToggle':
+        // APC stop_all_clips → master fade TO BLACK / UP over the selected
+        // duration. The injected impl reads the live master + the selected fade
+        // duration (never hardcoded).
+        return api.toggleMasterFade();
       case 'focusChannel':
       case 'playlistScroll':
       case 'playlistWindowSelect':
@@ -213,11 +286,20 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
       case 'focusStep':
       case 'hueDelta':
       case 'hueReset':
+      // The RAW (slotless) VSN1 jog actions carry no slot — the runtime resolves
+      // them against the SELECTED slot + pickup guard and dispatches the concrete
+      // effectIntensitySlot / effectIntensitySlotReset instead. Reaching the
+      // dispatcher with the raw form is a wiring bug.
+      case 'effectIntensityAbs':
+      case 'effectIntensityReset':
+      // The RAW (slotless) encoder-press mode cycle carries no slot — the runtime
+      // resolves it against the SELECTED slot and dispatches effectModeCycleSlot.
+      case 'effectModeCycle':
         // These are RUNTIME-ONLY actions (controller-local state: focus
-        // selection / per-layer window cursor / focused-channel delta math). The
-        // runtime intercepts them BEFORE the dispatcher — reaching here means a
-        // wiring bug, so fail loud rather than silently swallow (codex P0: no
-        // silent no-ops).
+        // selection / per-layer window cursor / focused-channel delta math /
+        // VSN1 selected-slot). The runtime intercepts them BEFORE the dispatcher
+        // — reaching here means a wiring bug, so fail loud rather than silently
+        // swallow (codex P0: no silent no-ops).
         throw new Error(`dispatch: '${resolved.kind}' must be handled by the controller runtime, not dispatched`);
       default:
         // Exhaustiveness guard — a new ResolvedAction kind must add a case.

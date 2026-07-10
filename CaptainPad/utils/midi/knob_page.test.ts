@@ -39,8 +39,8 @@ describe('knob_page (the ONE on-screen first-page model)', () => {
     // speed: the paramCenterRelative 'speed' control sits on the model's speed encoder.
     const speed = p.controls.find((c) => c.action.kind === 'paramCenterRelative' && c.action.key === 'speed')!;
     expect(speed.match.type === 'cc' && speed.match.cc).toBe(KNOB_PAGE_GLOBALS[0].encoder);
-    // hue: the globalHueKnob control sits on the model's hue encoder.
-    const hue = p.controls.find((c) => c.action.kind === 'globalHueKnob')!;
+    // hue: the per-channel hueKnob control sits on the model's hue encoder.
+    const hue = p.controls.find((c) => c.action.kind === 'hueKnob')!;
     expect(hue.match.type === 'cc' && hue.match.cc).toBe(KNOB_PAGE_GLOBALS[1].encoder);
     // unassigned encoders carry NO control in the profile.
     for (const slot of KNOB_PAGE_GLOBALS.filter((s) => s.assignment === 'unassigned')) {

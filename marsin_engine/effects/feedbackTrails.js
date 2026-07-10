@@ -92,4 +92,12 @@ export function applyFeedbackTrails({
 
 export const feedbackTrailsEffect = {
   apply: applyFeedbackTrails,
+  // Primary intensity: the trail mix — how strongly the decayed history is
+  // blended back over the live frame (0 = no trails, 1 = full ghosting).
+  // Normalized 0..1 maps straight onto the `mix` param.
+  primaryIntensity: { label: 'Trail Mix', param: 'mix', default: 0.5, min: 0, max: 1 },
+  // Primary mode (VSN1 encoder press): how the decayed history composites
+  // back over the live frame — additive (default), replace, or max. Cycles
+  // the `blendMode` param.
+  primaryMode: { label: 'Blend', param: 'blendMode', values: ['add', 'replace', 'max'], default: 'add' },
 };

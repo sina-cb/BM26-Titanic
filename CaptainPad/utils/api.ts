@@ -1885,8 +1885,13 @@ export async function setMixerChannelControl(channelId: string, id: number, v0: 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    // Codex P0 — fail loud: an engine rejection of a mixer control write
+    // (404 unknown channel, 400 bad param id, 500) used to be swallowed as
+    // { ok: true }, so the manager's surfaceApiResult never saw the failure and
+    // a rejected mixer knob looked like a silent no-op. Report the real status,
+    // mirroring setDeckChannelControl / updateMixerChannel.
     const data = await res.json();
-    return { ok: true, data };
+    return { ok: res.ok, data, error: res.ok ? undefined : (data?.error || `HTTP ${res.status}`) };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }
@@ -1907,7 +1912,142 @@ export type GlobalEffectSlotStatus = GlobalEffectSlot & {
   active: boolean;
   safetyTier: string | null;
   resolveError: string | null;
+  // Driver #3 (VSN1) intensity surface. The slot's current intensity (0..1),
+  // its default (the jog-press reset target), and a display label — carried on
+  // the status so the VSN1 jog's soft-takeover pickup guard can seed the
+  // selected slot's live value. Optional for staleness safety: an engine that
+  // predates the field leaves them undefined and the jog stays inert until the
+  // value threads through (never anchors on a fabricated 0).
+  intensity?: number;
+  intensityDefault?: number;
+  intensityLabel?: string;
+  // Effects v2 (32 paged slots): the slot's discrete `primaryMode`. `mode` is the
+  // current value (a boolean, a tempo division like '1/4', or any registry value);
+  // `modeLabel` is the display label (e.g. 'Direction'); `modeValues` is the full
+  // ordered value list the VSN1 encoder-press cycles through. Optional for
+  // staleness safety — a pre-field engine leaves them undefined and the mode UI /
+  // MIDI cycle stays inert (never invents a value).
+  mode?: string | number | boolean | null;
+  modeLabel?: string;
+  modeValues?: (string | number | boolean)[];
 };
+
+// Effects v2: the active effects PAGE (0..3). Page p views the 32 flat slots
+// `8p+1 .. 8p+8`. The engine is the single source of truth — every surface
+// (CaptainPad page switcher, VSN1 side buttons) reads/writes it through here and
+// follows the WS `effectsPage` broadcast, so no surface keeps a private page.
+export async function fetchEffectsPage(): Promise<ApiResult<{ effectsPage: number }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/page`);
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('fetch-effects-page', 'Failed to fetch effects page:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// PATCH the active effects page (0..3). The engine's canonical contract is the
+// body key `effectsPage` (GET/PATCH + the `effectsPage` WS broadcast all use it);
+// it 400s on `undefined`. On success the engine broadcasts `effectsPage` so every
+// surface converges. Mirrors the fail-loud error shape.
+export async function setEffectsPage(page: number): Promise<ApiResult<{ effectsPage: number }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/page`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ effectsPage: page }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('set-effects-page', 'Failed to set effects page:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Effects v2: cycle a slot's discrete `primaryMode` to the NEXT value in its
+// `modeValues` list (the VSN1 encoder press). POST /global-effect-slots/:id/mode/cycle.
+export async function cycleGlobalEffectSlotMode(slotId: number): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-slots/${slotId}/mode/cycle`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled(`slot-${slotId}-mode-cycle`, `Failed to cycle slot ${slotId} mode:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Effects v2 (VSN1 small buttons, 2026-07-09): reset EVERY global-effect slot's
+// primary intensity + mode back to its default. POST /global-effects/reset-all.
+// Bound to VSN1 small button sb_2. The engine broadcasts the change so every
+// surface converges.
+export async function resetAllGlobalEffects(): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/reset-all`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('global-effects-reset-all', 'Failed to reset all global effects:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Effects v2 (VSN1 small buttons, 2026-07-09): turn OFF every currently-active
+// global effect (values kept). POST /global-effects/disable-all. Bound to VSN1
+// small button sb_3. The engine broadcasts the change so every surface converges.
+export async function disableAllGlobalEffects(): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/disable-all`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('global-effects-disable-all', 'Failed to disable all global effects:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Effects v2: SET a slot's discrete `primaryMode` to an explicit value (the UI
+// mode picker). POST /global-effect-slots/:id/mode { value }.
+export async function setGlobalEffectSlotMode(
+  slotId: number,
+  value: string | number | boolean,
+): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-slots/${slotId}/mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled(`slot-${slotId}-mode-set`, `Failed to set slot ${slotId} mode:`, err);
+    return { ok: false, error: err.message };
+  }
+}
 
 export async function fetchGlobalEffectSlots(): Promise<ApiResult<{ slots: GlobalEffectSlot[] }>> {
   try {
@@ -1946,6 +2086,49 @@ export async function dispatchGlobalEffectSlotAction(
     return { ok: true, data: await res.json() };
   } catch (err: any) {
     warnThrottled(`slot-${slotId}-${action}`, `Failed to ${action} slot ${slotId}:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Driver #3 (Intech VSN1): write a global-effect slot's `intensity` (0..1). The
+// VSN1 jog wheel (absolute mode) drives this for whichever slot the operator
+// last pressed on that surface. POST /global-effect-slots/:slotId/intensity
+// { value }. Mirrors dispatchGlobalEffectSlotAction's fail-loud error shape.
+export async function setGlobalEffectSlotIntensity(
+  slotId: number,
+  value: number,
+): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-slots/${slotId}/intensity`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled(`slot-${slotId}-intensity`, `Failed to set slot ${slotId} intensity:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Driver #3 (Intech VSN1): reset a global-effect slot's intensity to its
+// default (the VSN1 jog press). POST /global-effect-slots/:slotId/intensity/reset.
+export async function resetGlobalEffectSlotIntensity(slotId: number): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-slots/${slotId}/intensity/reset`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled(`slot-${slotId}-intensity-reset`, `Failed to reset slot ${slotId} intensity:`, err);
     return { ok: false, error: err.message };
   }
 }

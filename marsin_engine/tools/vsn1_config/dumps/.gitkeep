@@ -1,0 +1,1 @@
+# Keeps the dumps/ directory in git. Actual dumps (*.json) are gitignored.

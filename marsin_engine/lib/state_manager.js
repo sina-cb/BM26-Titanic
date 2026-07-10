@@ -261,8 +261,13 @@ export class StateManager {
     }
   }
 
-  saveGlobalEffectSlots(slotsConfig) {
-    this.save('global_effect_slots.yaml', { slots: slotsConfig });
+  /**
+   * Persist the slot bindings and (effects_v2) the engine-owned page VIEW.
+   * `effectsPage` is optional so old callers/tests that pass only slots still
+   * work — it defaults to 0 on load when the key is absent.
+   */
+  saveGlobalEffectSlots(slotsConfig, effectsPage = 0) {
+    this.save('global_effect_slots.yaml', { slots: slotsConfig, effectsPage });
   }
 
   applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController) {

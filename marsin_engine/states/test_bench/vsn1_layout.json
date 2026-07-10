@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "slotsPerPage": 8,
+  "pageCount": 4,
+  "slots": [
+    {
+      "slotId": 1,
+      "page": 0,
+      "effectId": "colorWash",
+      "presetId": "ocean_blue",
+      "name": "Ocean Blue",
+      "color": "#1e78ff"
+    },
+    {
+      "slotId": 2,
+      "page": 0,
+      "effectId": "strobe",
+      "presetId": "sync_4hz",
+      "name": "Strobe",
+      "color": "#ffffff"
+    },
+    {
+      "slotId": 3,
+      "page": 0,
+      "effectId": "feedbackTrails",
+      "presetId": "ghost_ship",
+      "name": "Ghost Ship",
+      "color": "#a03cff"
+    },
+    {
+      "slotId": 4,
+      "page": 0,
+      "effectId": "beatPump",
+      "presetId": "deep",
+      "name": "Deep Pump",
+      "color": "#ff8c00"
+    },
+    {
+      "slotId": 5,
+      "page": 0,
+      "effectId": "blastWhite",
+      "presetId": "default",
+      "name": "Blast White",
+      "color": "#fff0d2"
+    },
+    {
+      "slotId": 6,
+      "page": 0,
+      "effectId": "dropHit",
+      "presetId": "iceberg_flash",
+      "name": "Iceberg",
+      "color": "#00c8dc"
+    },
+    {
+      "slotId": 7,
+      "page": 0,
+      "effectId": "sparkle",
+      "presetId": "blizzard",
+      "name": "Blizzard",
+      "color": "#50e6a0"
+    },
+    {
+      "slotId": 8,
+      "page": 0,
+      "effectId": "uvBlast",
+      "presetId": "default",
+      "name": "UV Blast",
+      "color": "#c828ff"
+    }
+  ]
+}

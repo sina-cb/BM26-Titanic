@@ -20,7 +20,7 @@ bands:
   attackMs: 6
   releaseMs: 180
   noiseGate: 0.04
-  inputGain: 12.7
+  inputGain: 15
   sourceSmoothHz: 12000
 kick:
   minHz: 50

@@ -55,4 +55,12 @@ function clamp01(v) {
 
 export const invertEffect = {
   apply: applyInvert,
+  // Primary intensity: NONE. Invert is a pure boolean chroma flip with no
+  // tunable magnitude, so it declares `null` explicitly (a deliberate "no
+  // primary" — distinct from a MISSING declaration, which the registry
+  // treats as a loud startup error). A slot bound to invert reports no
+  // intensity and the intensity endpoints 400 for it.
+  primaryIntensity: null,
+  // Primary mode: NONE. No discrete secondary control — explicit null.
+  primaryMode: null,
 };

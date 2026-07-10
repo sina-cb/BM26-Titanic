@@ -33,6 +33,13 @@ import { ColorValues, AnimationValues, MidiChannels } from './mft/constants';
 export interface MidiProjectionState {
   blackout: boolean;
   activePattern: string | null;
+  /** Is the COMBINED autopilot (pattern AND colour) currently on? Drives the
+   *  APC clip_stop button LED (lit when both autopilots are active — the
+   *  "autopilot is on" state, which is also the state a press turns off). Both
+   *  must be on because the toggle drives them together; a half-on state (one
+   *  autopilot from another surface) reads as off so the light never lies that
+   *  a press would turn autopilot off when it would turn it on. */
+  getCombinedAutopilotActive(): boolean;
   getGlobalEffectState(effect: string): boolean;
   resolvePatternForBank(bank: number, index: number): string | null;
   /** Does the Nth mixer layer exist? */
@@ -210,7 +217,20 @@ function* padVelocities(
 
   switch (a.kind) {
     case 'blackoutToggle':
+      // stop_all_clips (and any blackout button): lit when the engine is
+      // blacked out, dark otherwise — the state the app tracks via the WS
+      // `blackout` field.
       yield { note: pads[0].note, velocity: onOff(control.led, state.blackout) };
+      return;
+    case 'autopilotToggle':
+      // clip_stop: lit when the COMBINED (pattern + colour) autopilot is on.
+      yield { note: pads[0].note, velocity: onOff(control.led, state.getCombinedAutopilotActive()) };
+      return;
+    case 'ledOff':
+      // A deliberately-dark button: always velocity 0. Projecting it (rather
+      // than omitting the control) is what drives the explicit note-off that
+      // clears the APC's latched LED on connect and keeps it dark.
+      yield { note: pads[0].note, velocity: 0 };
       return;
     case 'globalEffect':
       yield { note: pads[0].note, velocity: onOff(control.led, state.getGlobalEffectState(a.effect)) };

@@ -15,4 +15,8 @@ export const uvBlastEffect = {
       }
     }
   },
+  // Primary intensity: NONE. UV channel slam, no tunable magnitude.
+  primaryIntensity: null,
+  // Primary mode: NONE. On/off slam, no discrete mode — explicit null.
+  primaryMode: null,
 };

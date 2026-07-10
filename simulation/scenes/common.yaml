@@ -97,7 +97,7 @@ atmosphere:
 options:
   _section:
     label: ⚙️ Options
-    collapsed: true
+    collapsed: false
   rendererMode:
     value: webgl
     label: 🚀 Graphics Engine
@@ -165,7 +165,7 @@ colorWave:
     label: ⚡ Enable
     transient: true
   lightingMode:
-    value: sacn_in
+    value: pixelblaze
     label: Mode
     options:
       - gradient
@@ -189,7 +189,7 @@ colorWave:
     value: true
     label: 📡 Bridge Enabled
   sacn_universes:
-    value: 1, 2, 3, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
+    value: 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
     label: 📡 Subscribed Universes
   sacn_lockout_ms:
     value: 1000
@@ -218,10 +218,10 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: 1.6008
-    'y': 73.0487
-    z: 10.5445
+    x: -12.1665
+    'y': 4.2871
+    z: 5.3918
   target:
-    x: 1.2848
-    'y': 3.1479
-    z: 3.1649
+    x: 0.62
+    'y': 2.2294
+    z: 1.8351

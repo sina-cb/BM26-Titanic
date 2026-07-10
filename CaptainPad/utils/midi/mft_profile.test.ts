@@ -108,24 +108,24 @@ describe('MFT profile-layer additions', () => {
     expect(a.kind === 'paramCenterRelative' && a.steps).toEqual(DEFAULT_RELATIVE_STEPS);
   });
 
-  it('validates the v2 row-0 kinds: bpmSyncToggle, globalHueKnob (steps), globalHueReset', () => {
+  it('validates the v2 row-0 kinds: bpmSyncToggle, hueKnob (steps), hueReset', () => {
     const p = validateProfile({
       ...base,
       controls: [
         { id: 'sync', match: { type: 'cc', channel: 1, cc: 0 }, action: { kind: 'bpmSyncToggle' } },
-        { id: 'hue', match: { type: 'cc', channel: 0, cc: 1, relative: true }, action: { kind: 'globalHueKnob' } },
-        { id: 'hue_reset', match: { type: 'cc', channel: 1, cc: 1 }, action: { kind: 'globalHueReset' } },
+        { id: 'hue', match: { type: 'cc', channel: 0, cc: 1, relative: true }, action: { kind: 'hueKnob' } },
+        { id: 'hue_reset', match: { type: 'cc', channel: 1, cc: 1 }, action: { kind: 'hueReset' } },
       ],
     });
-    expect(p.controls.map((c) => c.action.kind)).toEqual(['bpmSyncToggle', 'globalHueKnob', 'globalHueReset']);
+    expect(p.controls.map((c) => c.action.kind)).toEqual(['bpmSyncToggle', 'hueKnob', 'hueReset']);
     const hue = p.controls[1].action;
-    expect(hue.kind === 'globalHueKnob' && hue.steps).toEqual(DEFAULT_RELATIVE_STEPS);
+    expect(hue.kind === 'hueKnob' && hue.steps).toEqual(DEFAULT_RELATIVE_STEPS);
   });
 
-  it('globalHueKnob steps are validated like every relative knob (ascending triple)', () => {
+  it('hueKnob steps are validated like every relative knob (ascending triple)', () => {
     expect(() => validateProfile({
       ...base,
-      controls: [{ id: 'hue', match: { type: 'cc', channel: 0, cc: 1, relative: true }, action: { kind: 'globalHueKnob', steps: [0.1, 0.05, 0.2] } }],
+      controls: [{ id: 'hue', match: { type: 'cc', channel: 0, cc: 1, relative: true }, action: { kind: 'hueKnob', steps: [0.1, 0.05, 0.2] } }],
     })).toThrow(/strictly ascending/);
   });
 
@@ -166,13 +166,13 @@ describe('shipped midi_profiles/mft.yaml (UX v2 layout)', () => {
     const syncPush = p.controls.find((c) => c.id === 'global_speed_push_sync')!;
     expect(syncPush.match).toMatchObject({ type: 'cc', channel: 1, cc: 0 });
     expect(syncPush.action).toEqual({ kind: 'bpmSyncToggle' });
-    const hue = p.controls.find((c) => c.id === 'global_hue_turn')!;
+    const hue = p.controls.find((c) => c.id === 'hue_turn')!;
     expect(hue.match).toMatchObject({ type: 'cc', channel: 0, cc: 1, relative: true });
-    expect(hue.action).toMatchObject({ kind: 'globalHueKnob' });
-    expect(hue.led).toMatchObject({ off: 80 }); // rest RED until hue state loads
-    const hueReset = p.controls.find((c) => c.id === 'global_hue_push_reset')!;
+    expect(hue.action).toMatchObject({ kind: 'hueKnob' });
+    expect(hue.led).toMatchObject({ off: 80 }); // rest RED until the channel hue loads
+    const hueReset = p.controls.find((c) => c.id === 'hue_push_reset')!;
     expect(hueReset.match).toMatchObject({ type: 'cc', channel: 1, cc: 1 });
-    expect(hueReset.action).toEqual({ kind: 'globalHueReset' });
+    expect(hueReset.action).toEqual({ kind: 'hueReset' });
   });
 
   it('row 0: encoders 2 and 3 are UNASSIGNED (no control on ch0/ch1 cc 2-3, nothing resolves)', () => {
@@ -252,14 +252,15 @@ describe('shipped mft.yaml — deck and mixer contexts are IDENTICAL', () => {
     // row missing on the mixer" regression guard).
     expect(resolveEvent(p, decodeMidi([0xb0, 0, 65]), 'mixer')?.resolved).toMatchObject({ kind: 'paramCenterDelta', key: 'speed' });
     expect(resolveEvent(p, decodeMidi([0xb1, 0, 127]), 'mixer')?.resolved).toEqual({ kind: 'bpmSyncToggle' });
-    expect(resolveEvent(p, decodeMidi([0xb0, 1, 65]), 'mixer')?.resolved).toMatchObject({ kind: 'globalHueDelta' });
-    expect(resolveEvent(p, decodeMidi([0xb1, 1, 127]), 'mixer')?.resolved).toEqual({ kind: 'globalHueReset' });
+    expect(resolveEvent(p, decodeMidi([0xb0, 1, 65]), 'mixer')?.resolved).toMatchObject({ kind: 'hueDelta' });
+    expect(resolveEvent(p, decodeMidi([0xb1, 1, 127]), 'mixer')?.resolved).toEqual({ kind: 'hueReset' });
   });
 
   it('LED projection paints byte-identical messages in deck and mixer contexts (red global row included)', () => {
     const state: MidiProjectionState = {
       blackout: false,
       activePattern: null,
+      getCombinedAutopilotActive: () => false,
       getGlobalEffectState: () => false,
       resolvePatternForBank: () => null,
       layerExists: () => true,

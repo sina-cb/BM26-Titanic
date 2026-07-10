@@ -820,7 +820,14 @@ per-control endpoints.
    tempo contract). Want a manual tempo source? That's a deliberate engine
    change; default answer is no.
 
-## Driver #3 — Intech Grid VSN1-L (the PUNCH surface) — LOCKED, ordered 2026-07-02
+## Driver #3 — Intech Grid VSN1-L (the PUNCH surface) — IMPLEMENTED 2026-07
+
+> **Status update (2026-07):** the VSN1 is now the live **Global Effects
+> controller** — profiled, host-driven, with engine auto-deploy of the layout,
+> DRUM/EFFECT view modes, small-button utilities, welcome-logo + page sync.
+> The canonical, up-to-date reference is **[docs/42](42_vsn1_controller.md) →
+> "Effects UI + auto-deploy"**. The planning notes below are kept for history;
+> where they differ from docs/42, docs/42 wins.
 
 The VSN1 is the **effects/punch** surface — the third verb the rig couldn't
 speak. Hardware: 8 **analog hall-effect keys** (Gateron, continuous travel),

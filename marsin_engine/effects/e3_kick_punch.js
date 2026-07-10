@@ -51,4 +51,14 @@ export function kickIntensity({ signalValue, floor = 0.6, ceil = 1.0 }) {
 export const kickPunchEffect = {
   shouldFire: shouldFireKick,
   intensity: kickIntensity,
+  // Primary intensity: the punch strength — the ceiling intensity of the
+  // dropHit fired on a hard kick (0 = no punch, 1 = full-force hit). The
+  // router maps a kick's magnitude onto [floor..ceil]; this knob drives the
+  // ceiling, so a higher value hits harder. Normalized 0..1 maps straight
+  // onto the `intensityCeil` param.
+  primaryIntensity: { label: 'Punch Strength', param: 'intensityCeil', default: 1.0, min: 0, max: 1 },
+  // Primary mode: the signal the router listens to — auto (onset-shaped
+  // dropPulse, falling back to raw kick), the dropPulse only, or the raw
+  // kick only. The VSN1 encoder press cycles these; writes the `source` param.
+  primaryMode: { label: 'Source', param: 'source', values: ['auto', 'dropPulse', 'kick'], default: 'auto' },
 };

@@ -198,4 +198,14 @@ export const frostSparkleEffect = {
   apply: applyFrostSparkle,
   createState: createSparkleState,
   reset: resetSparkle,
+  // Primary intensity: the sparkle density — the expected fraction of pixels
+  // that glint each tick (0 = still, 0.2 = blizzard). Capped at 0.2 so the
+  // knob spans ambient fizz → peak chaos. Normalized 0..1 maps onto [0..0.2]
+  // and drives the `density` param.
+  primaryIntensity: { label: 'Sparkle Density', param: 'density', default: 0.02, min: 0, max: 0.2 },
+  // Primary mode: audio-reactive spawn on/off — a boolean toggle (2-value
+  // list per the locked design). When true the hi-hat band (signals.micHigh)
+  // adds to the spawn density so hi-hats literally sparkle. The VSN1 encoder
+  // press flips it; writes the `audioDensity` param.
+  primaryMode: { label: 'Audio', param: 'audioDensity', values: [false, true], default: false },
 };

@@ -89,4 +89,11 @@ export const dropHitEffect = {
   apply: applyDropHit,
   envelopeValue,
   envelopeDurationMs,
+  // Primary intensity: the punch strength — the peak brightness of the
+  // whiteout hit (0 = no hit, 1 = full-force drop). Normalized 0..1 maps
+  // straight onto the envelope `intensity` scalar.
+  primaryIntensity: { label: 'Punch', param: 'intensity', default: 1.0, min: 0, max: 1 },
+  // Primary mode (VSN1 encoder press): how the hit composites over the live
+  // frame — additive (default), replace, or max. Cycles the `blendMode` param.
+  primaryMode: { label: 'Blend', param: 'blendMode', values: ['add', 'replace', 'max'], default: 'add' },
 };

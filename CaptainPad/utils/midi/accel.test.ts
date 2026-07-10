@@ -71,12 +71,32 @@ describe('TickAccelerator — feel anchors', () => {
     }
   });
 
-  it('a hard flick (~1.5 revolutions at 100 counts/s) sweeps ≈ the full range', () => {
-    // 18 messages of a ±2 code, 20 ms apart = 36 detents ≈ 1.5 rev on the
-    // MFT's detented encoder. The whole-range flick target.
-    const effs = run(new TickAccelerator(), 18, 2 * S, 20);
-    expect(sum(effs)).toBeGreaterThanOrEqual(0.75);
-    expect(sum(effs)).toBeLessThanOrEqual(1.15);
+  it('a hard flick (real saturated +17 codes at high rate) sweeps the FULL range', () => {
+    // Ground truth: a hard sustained spin is a stream of value 81 = +17 (the
+    // firmware multiplier's ceiling) every ~2-10 ms. Raw travel per message is
+    // 17 × S = 0.085. 8 such messages 5 ms apart ≈ a hard flick — it must reach
+    // (and legitimately exceed, the manager clamps to 1) the full 0..1 range.
+    // The modest host gain keeps this bounded — no runaway blow-up.
+    const effs = run(new TickAccelerator(), 8, 17 * S, 5);
+    expect(sum(effs)).toBeGreaterThanOrEqual(1.0); // reaches the ends
+    expect(sum(effs)).toBeLessThanOrEqual(3.0);    // bounded — modest gain, no runaway
+  });
+
+  it('a SHORT wrist flick sweeps most of the range (round-4 fast-attack)', () => {
+    // A quick wrist snap: a handful of moderate-code ticks. 8 messages of a +4
+    // code (raw 4S), 15 ms apart ≈ a real short flick. Fast attack + the raw
+    // magnitude must sweep a large fraction of range, NOT crawl at precision.
+    const effs = run(new TickAccelerator(), 8, 4 * S, 15);
+    expect(sum(effs)).toBeGreaterThanOrEqual(0.35);
+  });
+
+  it('a fast flick sweeps FAR more than the same MESSAGES turned slowly', () => {
+    // The whole point of acceleration: fast must dwarf slow. Fast = the large
+    // firmware codes at speed (raw 6S); slow = the same message COUNT of single
+    // slow detents (raw S) at a lazy cadence.
+    const fast = sum(run(new TickAccelerator(), 12, 6 * S, 15));
+    const slow = sum(run(new TickAccelerator(), 12, S, 250));
+    expect(fast / slow).toBeGreaterThan(10);
   });
 
   it('output rate rises strictly monotonically with the physical turn rate', () => {
@@ -99,13 +119,15 @@ describe('TickAccelerator — feel anchors', () => {
   });
 });
 
-describe('TickAccelerator — dynamics (the round-3 smoothness properties)', () => {
+describe('TickAccelerator — dynamics (the round-4 smoothness + seed properties)', () => {
   it('PROPERTY: constant tick rate in → constant per-tick output out, regardless of bucket phase', () => {
     // The round-2 bug: gain was computed from a 33 ms bucket's SUM, so the
     // same physical rate produced per-window outputs alternating ~3.5× with
-    // bucket population (1 vs 2 ticks). Round 3 gains each tick from the
+    // bucket population (1 vs 2 ticks). Round 3+ gains each tick from the
     // continuous rate estimate, so windowing is a plain partition of equal
-    // per-tick contributions — for EVERY bucket phase.
+    // per-tick contributions — for EVERY bucket phase. (At constant rate attack
+    // and release converge to the SAME steady state, so asymmetry is invisible
+    // here.)
     const WINDOW_MS = 33;
     const DT_MS = 22; // ≈45.45 ticks/s — deliberately incommensurate with 33 ms
     const effs = run(new TickAccelerator(), 120, S, DT_MS); // ~2.6 s train
@@ -147,6 +169,16 @@ describe('TickAccelerator — dynamics (the round-3 smoothness properties)', () 
     expect(asTwos / asOnes).toBeLessThan(1.1);
   });
 
+  it('the FIRST tick of ANY gesture starts at precision (no first-tick seed)', () => {
+    // Round 4 deliberately does NOT seed gain from the first tick's magnitude:
+    // profile step size is unknown to accel.ts, so a ±1 and a ±2 first tick are
+    // indistinguishable without timing. Every gesture starts at rest; the flick
+    // is read from the NEXT tick's short gap. A hard ±3 first tick therefore
+    // still lands at its own precision value.
+    const first = new TickAccelerator().applyTick(3 * S, 500);
+    expect(first).toBeCloseTo(3 * S * ACCEL_GAIN_MIN, 10);
+  });
+
   it('an idle gap resets to precision gain (a fresh gesture starts fine-grained)', () => {
     const acc = new TickAccelerator();
     run(acc, 30, 2 * S, 10); // fast spin — gain far above minimum
@@ -164,6 +196,9 @@ describe('TickAccelerator — dynamics (the round-3 smoothness properties)', () 
   });
 
   it('a symmetric out-and-back at speed nets EXACTLY zero (reversal cleanliness)', () => {
+    // Forward and back are timing-identical mirror gestures: each starts with
+    // the same seed and evolves through the same alphas, so term-by-term the
+    // reverse ticks equal the negated forward ticks.
     const acc = new TickAccelerator();
     const fwd = run(acc, 20, S, 25, 0);
     const back = run(acc, 20, -S, 25, 20 * 25);

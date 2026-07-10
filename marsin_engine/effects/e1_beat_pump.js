@@ -69,4 +69,12 @@ export function applyBeatPump({ pixels, scale }) {
 export const beatPumpEffect = {
   apply: applyBeatPump,
   scale: beatPumpScale,
+  // Primary intensity: the pump depth — how deep the rig dips on each beat
+  // (0 = no duck, 1 = full blackout on the kick). Normalized 0..1 maps
+  // straight onto the `depth` param.
+  primaryIntensity: { label: 'Pump Depth', param: 'depth', default: 0.5, min: 0, max: 1 },
+  // Primary mode: the tempo division the pump locks to (half-time, on-beat,
+  // double-time). The VSN1 encoder press cycles these; writes the `rate`
+  // param (beats-per-pump multiplier).
+  primaryMode: { label: 'Tempo', param: 'rate', values: [0.5, 1, 2], default: 1 },
 };

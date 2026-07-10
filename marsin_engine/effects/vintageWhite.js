@@ -34,4 +34,9 @@ export const vintageWhiteEffect = {
       }
     }
   },
+  // Primary intensity: NONE. A legacy on/off channel slam with no tunable
+  // magnitude — declared `null` explicitly (deliberate "no primary").
+  primaryIntensity: null,
+  // Primary mode: NONE. On/off channel slam, no discrete mode — explicit null.
+  primaryMode: null,
 };
