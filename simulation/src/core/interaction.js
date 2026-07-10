@@ -374,6 +374,11 @@ export function onPointerDown(event) {
     intersects = intersects.filter(i => !i.object.userData.isTrace && !i.object.userData.isTraceVisual);
   }
 
+  // Same Three.js caveat for LED strand handles: they stay in interactiveObjects
+  // but are hidden in the beauty view (guides off + strand unselected). Drop any
+  // invisible strand handle so it can't be picked while hidden.
+  intersects = intersects.filter(i => !(i.object.userData.isLedStrand && i.object.visible === false));
+
   if (intersects.length > 0) {
     const hit = intersects[0].object;
 

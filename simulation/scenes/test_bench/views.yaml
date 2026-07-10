@@ -4,6 +4,7 @@ views:
     VintageLights: 2
     BarLights: 4
     LED_0: 256
+    LED_1: 512
   custom:
     - name: ParsBars
       bit: 8

@@ -256,12 +256,17 @@ ledStrands:
       fixtureId: 11
       viewMask: 0
       group: ''
-      controllerIp: ''
-      controllerId: 0
-      dmxUniverse: 0
-      dmxAddress: 0
-      pixelCount: 0
-      outputIndex: -1
-      segments: []
-      endUniverse: 0
-      endChannel: 0
+    - name: LED_1
+      startX: -3
+      startY: 5
+      startZ: 0
+      endX: 3
+      endY: 5
+      endZ: 0
+      color: '#ff8800'
+      intensity: 1
+      ledCount: 40
+      group: ''
+      sectionId: 6
+      fixtureId: 12
+      viewMask: 0

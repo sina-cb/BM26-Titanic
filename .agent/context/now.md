@@ -3,15 +3,20 @@
 > Updated by any agent, any time state changes. Keep it under a screen.
 > Absolute dates only.
 
-_Last touched: 2026-07-10 (evening — VSN1 handoff, see reports/202607/20260710_11)_
+_Last touched: 2026-07-10 (late — LED integration merged into the party branch)_
 
 ## Active branches
 
 - **`main`** — integration branch. Push/merge is operator-gated.
-- **`feat/party_integration_20260711`** — party merge wave: studio model +
-  LED fixtures + CaptainPad MIDI + autopilot deck, all merged, conflicts
-  resolved, awaiting full-stack smoke then operator merge to `main`. See
-  report `reports/202607/20260707_1_party_merge_wave.md`.
+- **`feat/party_integration_20260711`** — party merge wave (studio model +
+  LED fixtures + CaptainPad MIDI + autopilot deck) **+ `feat/led_integration`
+  merged 2026-07-10**: MarsinLED discovery, per-output DMX push (force +
+  confirm, legacy path removed), LED strand sim parity + pixelblaze direct
+  paint. Source branch kept per branch policy. `stable` tag still points at
+  6a64084 (pre-LED party build) — NOT retagged, per Sina.
+- **`feat/led_integration`** — merged into the party branch (kept as
+  per-feature history). Plan: `.agent/plans/20260709_0_led_integration_execution.md`;
+  reference: `docs/41_led_controller_onboarding.md`.
 
 ## Active projects
 

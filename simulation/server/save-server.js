@@ -194,7 +194,16 @@ http.createServer((req, res) => {
           allFixtureArrays.push(configTree.dmxLights.fixtures);
         }
 
-        if (allFixtureArrays.length > 0) {
+        // LED strands (configTree.ledStrands.strands) carry their own patch
+        // record (plan 20260709_0 P4): a device-linear layout, computed sim-
+        // side by led_patch_projection.computeLedStrandPatches. A strand is
+        // "patched" exactly when it has a universe/address; unassigned strands
+        // get NO record (their fields are just stripped). The strand patch
+        // shape differs from a fixture's — it adds pixelCount + outputIndex.
+        const ledStrandArray = (configTree && configTree.ledStrands &&
+          Array.isArray(configTree.ledStrands.strands)) ? configTree.ledStrands.strands : null;
+
+        if (allFixtureArrays.length > 0 || ledStrandArray) {
           const patches = { patches: {} };
           for (const fixtureArray of allFixtureArrays) {
             fixtureArray.forEach(fixture => {
@@ -221,9 +230,56 @@ http.createServer((req, res) => {
             });
           }
 
+          let strandRecords = 0;
+          if (ledStrandArray) {
+            ledStrandArray.forEach(strand => {
+              const name = strand && strand.name;
+              // The six LED-patch fields always leave the structural tree
+              // (scene_config.yaml stays clean); a record is emitted only when
+              // the strand is actually patched (dmxUniverse > 0).
+              const patched = name && (strand.dmxUniverse || 0) > 0;
+              if (patched) {
+                patches.patches[name] = {
+                  controllerIp: strand.controllerIp || '',
+                  controllerId: strand.controllerId || 0,
+                  dmxUniverse: strand.dmxUniverse || 0,
+                  dmxAddress: strand.dmxAddress || 0,
+                  pixelCount: strand.pixelCount || 0,
+                  outputIndex: (strand.outputIndex === undefined || strand.outputIndex === null)
+                    ? -1 : strand.outputIndex,
+                  // Per-segment DMX-parity view (G1): universe + start/end channel
+                  // per run the strand occupies as it spills across universes.
+                  // dmxUniverse/dmxAddress stay the START (bytes unchanged); these
+                  // are additive — old files without them still load.
+                  endUniverse: strand.endUniverse || 0,
+                  endChannel: strand.endChannel || 0,
+                  segments: Array.isArray(strand.segments)
+                    ? strand.segments.map((s) => ({
+                      universe: s.universe, startChannel: s.startChannel,
+                      endChannel: s.endChannel, pixelCount: s.pixelCount,
+                    }))
+                    : [],
+                };
+                strandRecords += 1;
+              }
+              if (name) {
+                delete strand.controllerIp;
+                delete strand.controllerId;
+                delete strand.dmxUniverse;
+                delete strand.dmxAddress;
+                delete strand.pixelCount;
+                delete strand.outputIndex;
+                delete strand.segments;
+                delete strand.endUniverse;
+                delete strand.endChannel;
+              }
+            });
+          }
+
           // Write extracted patches.yaml
           writeFileAtomic(patchesPath, yaml.dump(patches, { lineWidth: -1 }));
-          console.log(`[SAVE SERVER] ✅ Wrote ${patchesPath} (${Object.keys(patches.patches).length} fixture(s))`);
+          console.log(`[SAVE SERVER] ✅ Wrote ${patchesPath} ` +
+            `(${Object.keys(patches.patches).length} record(s); ${strandRecords} LED strand(s))`);
 
           // Re-serialize the cleaned structural tree
           body = yaml.dump(configTree, { lineWidth: -1 });

@@ -54,8 +54,24 @@ function deriveSubscribedUniverses(fixtures) {
     if (u > 0) universes.add(u);
   };
   if (fixtures) for (const f of fixtures) add(f);
-  // LED strands carry their own dmxUniverse and are NOT in params.parLights.
-  if (params.ledStrands) for (const s of params.ledStrands) add(s);
+  // LED strands carry their own patch record and are NOT in params.parLights.
+  // A strand may SPILL across universes (128 RGBW px/universe): subscribe to
+  // EVERY universe its segments touch, not just the start — otherwise spill
+  // universes render dark under sACN-in (G2). Legacy records with no segments
+  // field (freshly loaded, pre-first-projection) fall back to the start
+  // universe only — identical to the old behavior, never a silent drop.
+  if (params.ledStrands) {
+    for (const s of params.ledStrands) {
+      if (s && Array.isArray(s.segments) && s.segments.length > 0) {
+        for (const seg of s.segments) {
+          const u = parseInt(seg && seg.universe, 10);
+          if (u > 0) universes.add(u);
+        }
+      } else {
+        add(s);
+      }
+    }
+  }
   return [...universes].sort((a, b) => a - b);
 }
 
