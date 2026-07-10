@@ -79,3 +79,31 @@ patches:
     sectionId: 4
     fixtureId: 10
     viewMask: 0
+  LED_0:
+    controllerIp: 10.1.1.202
+    controllerId: 2
+    dmxUniverse: 10
+    dmxAddress: 1
+    pixelCount: 40
+    outputIndex: 0
+    endUniverse: 10
+    endChannel: 160
+    segments:
+      - universe: 10
+        startChannel: 1
+        endChannel: 160
+        pixelCount: 40
+  LED_1:
+    controllerIp: 10.1.1.202
+    controllerId: 2
+    dmxUniverse: 10
+    dmxAddress: 161
+    pixelCount: 40
+    outputIndex: 1
+    endUniverse: 10
+    endChannel: 320
+    segments:
+      - universe: 10
+        startChannel: 161
+        endChannel: 320
+        pixelCount: 40

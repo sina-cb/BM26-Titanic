@@ -17,10 +17,19 @@
  * adopted controller-by-controller without forcing every rig to enumerate
  * its sACN controllers.
  *
+ * DUAL-SEND (opt-in). A controller may set `alsoFlat: true` (default false).
+ * Normally a universe claimed by a controller stops reaching the flat
+ * `sacn.destinations`, so the sim bridge (127.0.0.1) would go dark for that
+ * universe. With `alsoFlat: true` the controller's universes are streamed to
+ * the controller's transport AND continue to the flat destinations, keeping
+ * the sim in parity with the hardware. This is an explicit per-controller
+ * opt-in, never automatic.
+ *
  * FAIL LOUD (codex P0). A DECLARED controller with an unset or unrecognized
  * protocol THROWS — never a silent drop. A declared controller with no host
  * THROWS. Two controllers claiming the same universe THROWS (ambiguous
- * routing). Nothing here invents a default for declared-but-broken state.
+ * routing). A non-boolean `alsoFlat` THROWS. Nothing here invents a default
+ * for declared-but-broken state.
  */
 
 import { createSacnOutput } from './sacn_output.js';
@@ -62,6 +71,16 @@ export function normalizeControllerRouting(controllers) {
     if (host.length === 0) {
       throw new Error(`[Output] controller '${name}' (${protocol}) has no host — cannot route`);
     }
+    // alsoFlat (opt-in dual-send): when true, this controller's universes are
+    // ALSO streamed to the flat `sacn.destinations` (sim parity). Default
+    // false. Only its mistype is rejected — other unknown keys stay ignored
+    // to preserve existing configs (codex P0: fail loud on the typed field).
+    const alsoFlatRaw = raw.alsoFlat;
+    if (alsoFlatRaw !== undefined && typeof alsoFlatRaw !== 'boolean') {
+      throw new Error(`[Output] controller '${name}': alsoFlat must be a boolean ` +
+        `(got ${JSON.stringify(alsoFlatRaw)})`);
+    }
+    const alsoFlat = alsoFlatRaw === true;
     const universes = Array.isArray(raw.universes) ? raw.universes : [];
     const normUniverses = [];
     for (const u of universes) {
@@ -74,10 +93,10 @@ export function normalizeControllerRouting(controllers) {
         throw new Error(`[Output] universe ${uid} is claimed by two controllers ` +
           `('${other.name}' and '${name}') — routing is ambiguous`);
       }
-      byUniverse.set(uid, { host, protocol, name });
+      byUniverse.set(uid, { host, protocol, name, alsoFlat });
       normUniverses.push(uid);
     }
-    normalized.push({ name, host, protocol, universes: normUniverses });
+    normalized.push({ name, host, protocol, alsoFlat, universes: normUniverses });
   }
   return { byUniverse, controllers: normalized };
 }
@@ -108,6 +127,8 @@ export function createOutputDispatch({
   // Partition universes by transport. A universe with no declaration is
   // routed to the flat sACN destinations (legacy default). Declared
   // universes route to their controller's host over the chosen transport.
+  // A declared universe whose controller set `alsoFlat: true` ALSO joins the
+  // flat destinations (dual-send parity) — it is owned by two senders.
   const sacnDefaultUniverses = []; // → flat destinations
   // host → universe[] for each Art-Net and per-controller-sACN target.
   const artnetByHost = new Map();
@@ -118,6 +139,9 @@ export function createOutputDispatch({
     if (!decl) {
       sacnDefaultUniverses.push(uid);
       continue;
+    }
+    if (decl.alsoFlat) {
+      sacnDefaultUniverses.push(uid); // dual-send: also to flat destinations
     }
     const bucket = decl.protocol === PROTOCOL_ARTNET ? artnetByHost : sacnUnicastByHost;
     if (!bucket.has(decl.host)) bucket.set(decl.host, []);
@@ -205,7 +229,12 @@ export function createOutputDispatch({
   return {
     start, stop, sendFrame, addUniverse,
     get frameCount() { return _frameCount; },
-    // Exposed for tests/introspection.
-    _routing: { byUniverse, routes, senderCount: senders.length },
+    // Exposed for tests/introspection. `flatUniverses` is every universe the
+    // flat-destinations sACN sender carries — undeclared universes plus any
+    // declared universe whose controller opted into `alsoFlat` (dual-send).
+    _routing: {
+      byUniverse, routes, senderCount: senders.length,
+      flatUniverses: [...sacnDefaultUniverses],
+    },
   };
 }

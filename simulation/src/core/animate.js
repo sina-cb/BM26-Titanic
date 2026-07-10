@@ -19,6 +19,7 @@ import PatchManager from "../dmx/patch_manager.js";
 import { engineHttpUrl } from "./engine_endpoint.js";
 import { applyFixtureOutputOverrides } from "../dmx/dmx_output_overrides.js";
 import { blendRgbwau } from "./rgbwau_blend.js";
+import { entryPaintsDirect } from "./render_paint_rule.js";
 // sACN output — lazily initialized
 let sacnOutputClient = null;
 let sacnOutputEnabled = false;
@@ -300,9 +301,9 @@ export function animate() {
          const [r, g, b] = scale(phase).gl();
          entry.r = r; entry.g = g; entry.b = b;
          entry.w = 0; entry.a = 0; entry.u = 0; // standard colors
-         // Direct mode only (all unpatched) — when patches active, DMX router handles it.
-         // Headless skips the visual write (nothing renders); colors still stored above.
-         if (!window._patchesActive && entry.apply && !_headless) entry.apply(r, g, b);
+         // Direct-paint when unpatched OR an LED strand (LEDs have no wire
+         // read-back — see render_paint_rule.js). Headless skips the visual write.
+         if (entryPaintsDirect(entry, window._patchesActive) && entry.apply && !_headless) entry.apply(r, g, b);
       }
     }
   }
@@ -335,9 +336,11 @@ export function animate() {
         entry.r = R / 255; entry.g = G / 255; entry.b = B / 255;
         entry.w = W / 255; entry.a = A / 255; entry.u = U / 255;
 
-        // Direct mode only (all unpatched) — when patches active, DMX router handles it.
+        // Direct-paint when unpatched OR an LED strand (LEDs have no wire
+        // read-back — see render_paint_rule.js). When a DMX entry is patched the
+        // DMX router path repaints it from the universe buffer instead.
         // Headless skips the visual write (nothing renders); colors still stored above.
-        if (!window._patchesActive && entry.apply && !_headless) {
+        if (entryPaintsDirect(entry, window._patchesActive) && entry.apply && !_headless) {
           const [rn, gn, bn] = blendRgbwau(entry.r, entry.g, entry.b, entry.w, entry.a, entry.u);
           entry.apply(rn, gn, bn);
         }
@@ -355,7 +358,9 @@ export function animate() {
         const entry = _batchRenderList[i];
         entry.r = 0; entry.g = 0; entry.b = 0;
         entry.w = 0; entry.a = 0; entry.u = 0;
-        if (!window._patchesActive && entry.apply && !_headless) {
+        // Clear the visual too — LED strands included, so a patched strand goes
+        // black when lighting is disabled instead of freezing (see render_paint_rule.js).
+        if (entryPaintsDirect(entry, window._patchesActive) && entry.apply && !_headless) {
           entry.apply(0, 0, 0);
         }
       }

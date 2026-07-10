@@ -29,6 +29,9 @@ import { animate } from "./src/core/animate.js";
 import { initRegistry } from "./src/dmx/fixture_definition_registry.js";
 import { createViewRegistry } from "./src/dmx/view_registry.js";
 import { createControllerRegistry, projectOntoConfigs, registryIsActive } from "./src/dmx/controller_registry.js";
+import { computeLedStrandPatches } from "./src/dmx/led/led_patch_projection.js";
+import { assignLedStrandMetadata } from "./src/dmx/led/led_metadata.js";
+import { gatherAllConfigs } from "./src/dmx/auto_patcher.js";
 import { UniverseRouter } from "./src/dmx/universe_router.js";
 import { isStaticHost, logStaticHostSkip } from "./src/core/static_host.js";
 import { engineHttpUrl } from "./src/core/engine_endpoint.js";
@@ -414,6 +417,82 @@ Promise.all([
     return result;
   };
 
+  // LED-strand patch projection (plan 20260709_0 P4): device-bound LED
+  // controllers address their strands with the firmware's contiguous linear
+  // layout (led_patch_projection). This projects those records onto
+  // params.ledStrands (so the sim auto-subscribes the LED universe) and the
+  // global patch tree (so the save-server writes them into patches.yaml). A
+  // strand not covered by a bound controller is returned to the unpatched
+  // state — never a silent stale address (codex P0).
+  window.projectLedStrandPatches = function () {
+    const registry = window.__controllerRegistry;
+    const strands = Array.isArray(params.ledStrands) ? params.ledStrands : [];
+    if (strands.length === 0) return { fields: new Map(), violations: [] };
+    const counts = new Map();
+    for (const s of strands) {
+      if (s && typeof s.name === 'string' && s.name.length > 0) counts.set(s.name, s.ledCount || 10);
+    }
+    const result = (registry && registryIsActive(registry))
+      ? computeLedStrandPatches(registry, counts)
+      : { fields: new Map(), violations: [] };
+    for (const v of result.violations) console.error(`[LED Patch] ✋ ${v.message}`);
+    for (const strand of strands) {
+      if (!strand || typeof strand.name !== 'string' || strand.name.length === 0) continue;
+      const rec = result.fields.get(strand.name);
+      if (rec) {
+        strand.controllerIp = rec.controllerIp;
+        strand.controllerId = rec.controllerId;
+        strand.dmxUniverse = rec.dmxUniverse;
+        strand.dmxAddress = rec.dmxAddress;
+        strand.pixelCount = rec.pixelCount;
+        strand.outputIndex = rec.outputIndex;
+        // Per-segment DMX-parity view (G1): a strand spilling across universes
+        // records every universe:channel run it occupies, not just its start.
+        strand.segments = rec.segments;
+        strand.endUniverse = rec.endUniverse;
+        strand.endChannel = rec.endChannel;
+      } else {
+        // Unpatched: clear any stale record so patches.yaml drops it.
+        strand.controllerIp = '';
+        strand.controllerId = 0;
+        strand.dmxUniverse = 0;
+        strand.dmxAddress = 0;
+        strand.pixelCount = 0;
+        strand.outputIndex = -1;
+        strand.segments = [];
+        strand.endUniverse = 0;
+        strand.endChannel = 0;
+      }
+      if (window.__globalPatchTree) {
+        window.__globalPatchTree[strand.name] = rec
+          ? { ...rec }
+          : {
+            controllerIp: '', controllerId: 0, dmxUniverse: 0, dmxAddress: 0,
+            pixelCount: 0, outputIndex: -1, segments: [], endUniverse: 0, endChannel: 0,
+          };
+      }
+    }
+
+    // LED metadata (sectionId/fixtureId) — the LED mirror of the DMX
+    // projectOntoConfigs numbering. Gated on the SAME active-registry
+    // condition DMX uses, and run HERE (strictly after
+    // projectControllerMappings at every call site — boot line ~605, editor
+    // recompute) so the DMX ids are final: LED ids continue in the SHARED id
+    // space, strictly above the DMX max (mutually exclusive + monotonic).
+    // These fields ride scene_config.yaml structurally (like DMX group/
+    // sectionId/fixtureId) — NOT the patch tree — so nothing is mirrored into
+    // window.__globalPatchTree here.
+    if (registry && registryIsActive(registry)) {
+      const meta = assignLedStrandMetadata(strands, gatherAllConfigs(params));
+      if (meta.assigned.length > 0) {
+        console.log(`[LED Meta] assigned section/fixture ids to ${meta.assigned.length} ` +
+          `strand(s) (LED sections/fixtures continue after DMX max; ` +
+          `maxSectionId=${meta.maxSectionId}, maxFixtureId=${meta.maxFixtureId})`);
+      }
+    }
+    return result;
+  };
+
   // Load scene config
   try {
     if (sceneYaml || commonYaml) {
@@ -555,6 +634,10 @@ Promise.all([
   if (window.__bootProjectionConfigs) {
     window.projectControllerMappings(window.__bootProjectionConfigs);
     delete window.__bootProjectionConfigs;
+    // LED strands restore their device-linear patch records from the registry
+    // the same way (a bound controller re-derives its strands' universe/addr
+    // on every boot; unbound strands stay unpatched).
+    if (window.projectLedStrandPatches) window.projectLedStrandPatches();
     // Patch state may have changed — re-derive the active flag.
     if (window.recomputePatchesActive) window.recomputePatchesActive();
   }

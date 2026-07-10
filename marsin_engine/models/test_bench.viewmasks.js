@@ -1,6 +1,6 @@
 // Auto-generated view-mask sidecar for the test_bench model — do not edit manually.
 // Source of truth: the simulation scene (Views panel → scenes/test_bench/views.yaml).
-// Updated: 2026-07-07T03:49:31.996Z
+// Updated: 2026-07-10T22:03:33.565Z
 //
 // `groupBits` pins the base group → bit contract pattern code compiles
 // against; the engine validates it against the loaded model and fails
@@ -10,6 +10,8 @@ export const groupBits = {
   'ParLights': 0x00000001,
   'VintageLights': 0x00000002,
   'BarLights': 0x00000004,
+  'LED_0': 0x00000100,
+  'LED_1': 0x00000200,
 };
 
 export const viewMasks = [

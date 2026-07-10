@@ -2583,6 +2583,17 @@ body.edit-mode-active #engine-params-panel {
   opacity: 1;
 }
 
+/* LED stream occupancy on a shared universe (G5) — a distinct amber tint so a
+   DMX port sharing its universe with an LED strand is visible at a glance. Sits
+   in the lower half of the bar so it reads alongside DMX claims rather than
+   masking them. */
+.cm-occ-seg.cm-occ-led {
+  top: auto;
+  height: 4px;
+  background: var(--warning, #e0a030);
+  opacity: 0.85;
+}
+
 .cm-occ-count {
   font-size: 8.5px;
   font-family: var(--font-mono);
@@ -2761,6 +2772,69 @@ body.edit-mode-active #engine-params-panel {
   background: color-mix(in srgb, var(--primary) 22%, transparent);
 }
 
+/* ── Collapsible type groups (DMX / MarsinLED) ───────────────────────── */
+.cm-group {
+  grid-column: 1 / -1;
+  margin-bottom: 8px;
+}
+
+.cm-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 2px;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+  margin-bottom: 6px;
+}
+
+.cm-group-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--secondary);
+  text-transform: uppercase;
+}
+
+.cm-group-spacer {
+  flex: 1 1 auto;
+}
+
+.cm-group-empty {
+  font-size: 9px;
+  color: var(--secondary);
+  padding: 4px 2px 8px 18px;
+  font-style: italic;
+}
+
+/* Cards inside a group flow into as many ~330px columns as fit (exactly
+   one at the 380px default width) — the multi-column behavior that used to
+   live on .cm-main, now scoped per group. */
+.cm-group-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 0 10px;
+  align-items: start;
+}
+
+.cm-btn.cm-push-all-led,
+.cm-btn.cm-discover-led {
+  padding: 2px 8px;
+  font-size: 9px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  color: var(--primary);
+}
+
+.cm-btn.cm-push-all-led:hover,
+.cm-btn.cm-discover-led:hover {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+.cm-btn.cm-push-all-led:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .cm-error-chip {
   display: inline-block;
   background: color-mix(in srgb, var(--error) 12%, transparent);
@@ -2770,6 +2844,26 @@ body.edit-mode-active #engine-params-panel {
   font-size: 8.5px;
   padding: 1px 6px;
   margin: 2px 0;
+}
+
+/* Manual per-output universe advisory (Slice D): loud but NON-blocking, so it
+   reads as a warning (amber), distinct from the red error chip that unpatches. */
+.cm-warn-chip {
+  display: inline-block;
+  background: color-mix(in srgb, var(--warning, #e0a030) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #e0a030) 40%, transparent);
+  border-radius: 6px;
+  color: var(--warning, #e0a030);
+  font-size: 8.5px;
+  padding: 1px 6px;
+  margin: 2px 0;
+}
+
+/* Derived (read-only) base universe on the LED config sub-panel. */
+.cm-led-base {
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--primary) 80%, transparent);
+  padding: 0 2px;
 }
 
 .cm-tray {
@@ -2937,6 +3031,255 @@ body.edit-mode-active #engine-params-panel {
   color: var(--error);
   font-weight: 700;
   border-color: color-mix(in srgb, var(--error) 70%, transparent);
+}
+
+/* ── LED discovery / bind / push (plan 20260709_0 P3) ─────────────────── */
+
+/* Read-only device-linear derived-layout line per LED output. */
+.cm-led-derived {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  color: color-mix(in srgb, var(--primary) 72%, var(--text));
+  padding: 1px 2px 2px;
+  letter-spacing: 0.02em;
+}
+
+.cm-led-derived.cm-led-derived-warn {
+  color: var(--warning, #e0a030);
+}
+
+/* Per-controller device binding block on the LED card. */
+.led-device-section {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 4px 0 2px;
+  padding-top: 4px;
+  border-top: 1px dashed color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.led-device-id {
+  flex: 1 1 100%;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--secondary);
+}
+
+.led-device-chip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 100%;
+}
+
+.led-device-prov {
+  font-size: 8px;
+  color: var(--secondary);
+}
+
+/* Sync chip states. */
+.led-sync-chip {
+  display: inline-block;
+  border-radius: 8px;
+  font-size: 8.5px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border: 1px solid transparent;
+}
+
+.led-sync-in-sync {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+}
+
+.led-sync-drift {
+  color: var(--warning, #e0a030);
+  background: color-mix(in srgb, var(--warning, #e0a030) 14%, transparent);
+  border-color: color-mix(in srgb, var(--warning, #e0a030) 42%, transparent);
+}
+
+.led-sync-unreachable {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  border-color: color-mix(in srgb, var(--error) 40%, transparent);
+}
+
+.led-sync-never,
+.led-sync-checking {
+  color: var(--secondary);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  border-color: color-mix(in srgb, var(--text) 20%, transparent);
+}
+
+/* Discovery modal. */
+.led-disc-card,
+.led-push-card {
+  min-width: 460px;
+  max-width: 640px;
+  max-height: 84vh;
+  overflow-y: auto;
+}
+
+.led-disc-row {
+  display: flex;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.led-disc-subnet {
+  flex: 1;
+  font-family: var(--font-mono);
+}
+
+.led-disc-progress {
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.led-disc-progress-bar {
+  height: 100%;
+  width: 0;
+  background: var(--primary);
+  transition: width 0.15s linear;
+}
+
+.led-disc-progress-text {
+  font-size: 9px;
+  color: var(--secondary);
+  margin: 4px 0;
+  min-height: 12px;
+}
+
+.led-disc-progress-text.led-disc-error {
+  color: var(--error);
+}
+
+.led-disc-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.led-disc-device {
+  border: 1px solid var(--ghost-border);
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: color-mix(in srgb, var(--text) 2%, transparent);
+}
+
+.led-disc-device-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.led-disc-device-name {
+  font-weight: 700;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.led-disc-device-ip {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--primary);
+}
+
+.led-disc-device-meta,
+.led-disc-device-outputs {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  color: var(--secondary);
+  margin-top: 3px;
+}
+
+.led-disc-device-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* Push confirm dialog. */
+.led-push-warn {
+  color: var(--warning, #e0a030);
+  background: color-mix(in srgb, var(--warning, #e0a030) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #e0a030) 38%, transparent);
+  border-radius: 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 6px 8px;
+  margin: 6px 0;
+}
+
+/* Unhonorable manual-universe block inside the push dialog (Slice D): the
+   device will place these outputs somewhere the operator did NOT declare. */
+.led-push-unhonorable-head {
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+.led-push-unhonorable-line {
+  font-size: 9.5px;
+  line-height: 1.4;
+  padding: 1px 0;
+}
+
+.led-push-subhead {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--primary) 65%, transparent);
+  margin: 8px 0 3px;
+}
+
+.led-push-snip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.led-push-diff {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text);
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.led-push-diff-line {
+  padding: 1px 0;
+}
+
+.led-push-pre {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  border: 1px solid var(--ghost-border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre;
+}
+
+.led-push-status {
+  font-size: 10px;
+  color: var(--secondary);
+  margin: 6px 0;
+  min-height: 14px;
+}
+
+.led-push-status.led-push-ok { color: var(--ok); }
+.led-push-status.led-push-error {
+  color: var(--error);
+  font-weight: 700;
 }
 
 /* ─── 2D Pixel Map — full-screen viewport for the 2d_pixels profile ─── */

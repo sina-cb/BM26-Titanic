@@ -11,7 +11,7 @@
     "fire": "node engine.js --pattern test/fire --model test_bench",
     "bio": "node engine.js --pattern 11_bioluminescence --model test_bench",
     "golden": "node engine.js --pattern 00_golden_hour_wash --model test_bench",
-    "test": "node --test tests/*.test.js",
+    "test": "node --import ./tests/setup_config_guard.mjs --test tests/*.test.js",
     "check:syntax": "node --check engine.js",
     "check:dry-run": "node engine.js --pattern test_const --model test_bench --dry-run",
     "check": "npm run check:syntax && npm run check:dry-run",

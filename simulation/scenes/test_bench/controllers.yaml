@@ -1,5 +1,5 @@
-nextControllerId: 2
-nextUniverse: 6
+nextControllerId: 6
+nextUniverse: 24
 controllers:
   - id: 1
     name: Test Bench 1
@@ -39,3 +39,35 @@ controllers:
             at: 510
           - fixture: TEFogMachine 10
             at: 512
+  - id: 5
+    name: Titanic_202
+    ip: 10.1.1.202
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 10
+        startAddress: 1
+        chain:
+          - LED_0
+      - port: 2
+        universe: 12
+        startAddress: 1
+        chain:
+          - LED_1
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+    device:
+      vendor: marsinled
+      controllerId: titanic_202
+      boardId: angio4-old
+      mac: AA:BB:CC:DD:02:02
+      lastPush:
+        at: '2026-07-10T21:56:34.947Z'
+        outcome: needs-reboot
+        firmwareSHA: 647928678d7b
+        configHash: 9111e00c807864bf231bb60ca7e22c03247e25a0a0f99efa8f36ac9c3f750c30

@@ -5,7 +5,10 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const CONFIG_FILE = path.join(__dirname, '..', 'config.yaml');
+// Persistence target. Tests (and any harness that must not mutate the tracked,
+// comment-bearing config.yaml) set MARSIN_CONFIG_FILE to a scratch copy; the
+// spawned engine inherits it. Unset in production → the real config.yaml.
+const CONFIG_FILE = process.env.MARSIN_CONFIG_FILE || path.join(__dirname, '..', 'config.yaml');
 
 /**
  * Autopilot daemon — cycles the deck's pattern on a self-rescheduling
