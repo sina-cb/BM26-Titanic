@@ -1300,7 +1300,15 @@ export default function ControlDeckScreen() {
             me back to safe" button, visually separate from the GEM grid + the
             e-stop BLACKOUT inside it. */}
         <TouchableOpacity
-          style={[styles.panicBtn, panicBusy && { opacity: 0.5 }]}
+          // party 2026-07-11 — PANIC pins to the effect-chip row height (the
+          // GEM strip btnHeight: 48 landscape / 60 portrait) and bottom-aligns
+          // with the chips, instead of alignSelf:'stretch' towering over the
+          // row now that the strip's header label rides in-row.
+          style={[
+            styles.panicBtn,
+            { height: isWide ? 48 : 60, minHeight: 0, alignSelf: 'flex-end' },
+            panicBusy && { opacity: 0.5 },
+          ]}
           onPress={() => setPanicPrompt(true)}
           disabled={panicBusy}
           accessibilityRole="button"

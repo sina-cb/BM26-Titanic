@@ -626,7 +626,8 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   if (visibleSlots === null) {
     return (
       <View style={{ paddingTop: 8 }}>
-        <Header variant={variant} page={renderPage} />
+        {/* Strip: header line removed (label rides in-row once loaded). */}
+        {isStrip ? null : <Header variant={variant} page={renderPage} />}
         {/* party 2026-07-11 — pager chrome hidden (single-page layout). */}
         {SHOW_EFFECT_PAGES ? (
           <PageSwitcher page={page} onSelect={onSelectPage} pageActivity={pageActivity} />
@@ -648,7 +649,10 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     // GEM adding its own produced a doubled hairline mid-bar, so the inner
     // border only ships with the standalone deck grid.
     <View style={{ paddingTop: 6, borderTopWidth: isStrip ? 0 : 1, borderTopColor: C.ghostBorder, flex: isStrip ? 1 : undefined }}>
-      <Header variant={variant} page={renderPage} />
+      {/* party 2026-07-11 — in the STRIP the header line is gone: the label
+          rides IN the chip row (StripLabel below) to save a full line of
+          vertical space in the bottom bar. The deck grid keeps its header. */}
+      {isStrip ? null : <Header variant={variant} page={renderPage} />}
       {/* party 2026-07-11 — the 4-page switcher is HIDDEN (single-page layout;
           VSN1 side buttons no longer page). Flip SHOW_EFFECT_PAGES to restore. */}
       {SHOW_EFFECT_PAGES ? (
@@ -718,6 +722,22 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           const slotChips = visibleSlots.map((slot) =>
             renderCell(slot, isPortrait ? SLOT_MIN_WIDTH : undefined),
           );
+          // party 2026-07-11 — the "Global Effects" label moved INTO the chip
+          // row (two-line, narrow) so the strip drops its whole header line:
+          // the bottom bar gets that vertical space back for the chips.
+          const stripLabel = (
+            <Text
+              key="strip-label"
+              style={{
+                fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+                color: C.secondary, letterSpacing: 1.1,
+                textTransform: 'uppercase', lineHeight: 12,
+                marginRight: 8, alignSelf: 'center',
+              }}
+            >
+              {'Global\nEffects'}
+            </Text>
+          );
           // Blackout gets a FIXED width so it never shrinks — the e-stop
           // must keep a stable, recognisable footprint regardless of
           // orientation or how many slots are bound.
@@ -743,6 +763,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
             // on-screen.
             return (
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                {stripLabel}
                 {/* Slots-only scroller. A right-edge fade peek hints there's
                     more to scroll (the chips run under the pinned group). */}
                 <View style={{ flex: 1, minWidth: 0, position: 'relative' }}>
@@ -774,6 +795,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           // Landscape: ONE flat flex row, no scroll — the bar is wide enough.
           return (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap }}>
+              {stripLabel}
               {slotChips}
               {Divider}
               {blackoutCell}
