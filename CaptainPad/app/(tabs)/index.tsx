@@ -980,8 +980,9 @@ export default function ControlDeckScreen() {
           // (deck_split_playlists.md §Resizable split): below 2·MIN_PANE_PT the
           // divider forces a fixed 0.5, so the extra height keeps the drag live.
           // party 2026-07-11: PATTERNS weight 1.1→1.6 (operator: the pattern
-          // list is "too small" horizontally in landscape). See the column-weights
-          // note above; PARAMETERS/SETTINGS were rebalanced to match.
+          // list is "too small" horizontally in landscape), then pinned to an
+          // exact 40/30/30 split (flex 4/3/3) — operator: "patterns column 40%
+          // and the other 60%".
           // PATTERNS-PIN (narrow): a FIXED height so the column is pinned in
           // place — it never grows or scrolls as a unit; its own pattern list
           // scrolls INTERNALLY within this fixed panel while PARAMETERS +
@@ -994,7 +995,7 @@ export default function ControlDeckScreen() {
           // room), else 400pt — both leave a clear scroll area under it on an
           // iPad portrait (1080pt tall).
           isWide
-            ? { flex: 1.6, minWidth: 0 }
+            ? { flex: 4, minWidth: 0 }
             : { flexGrow: 0, flexShrink: 0, flexBasis: deckSecondaryBound ? 500 : 400, height: deckSecondaryBound ? 500 : 400 },
         ]}>
           {isConnected === false && <OfflineBanner error={connectionError} />}
@@ -1066,7 +1067,7 @@ export default function ControlDeckScreen() {
           // minWidth:0 lets the column actually shrink to its flex share in
           // the row (RN children otherwise refuse below content width and
           // shove the SETTINGS column off-screen). Stacked: content-sized.
-          isWide ? { flex: 1, minWidth: 0 } : {},
+          isWide ? { flex: 3, minWidth: 0 } : {},
         ]}>
           <SectionHost dataSet={{ layouthost: "section" }} {...sectionHostProps}>
             {/* Channel parameters for the deck (base) channel. The deck is
@@ -1210,11 +1211,11 @@ export default function ControlDeckScreen() {
             DYNAMIC VIEW OVERRIDES stack. Independently scrollable. */}
         <View style={[
           { padding: 0 },
-          // party 2026-07-11: SETTINGS weight 1.2→1 to free horizontal room for
-          // the widened PATTERNS column (see the column-weights note above).
+          // party 2026-07-11: SETTINGS weight 1.2→1, then 3 in the 40/30/30
+          // split (see the column-weights note above).
           // minWidth:0 = same shrink guard as the PARAMETERS column; stacked
           // mode is content-sized inside the outer page scroll.
-          isWide ? { flex: 1, minWidth: 0 } : {},
+          isWide ? { flex: 3, minWidth: 0 } : {},
         ]}>
           {/* Padding tightened from 48 → 16 (QA round8 #1): the old 48px
               gutter plus the cards' inner paddingRight:24 wasted ~72px of the
