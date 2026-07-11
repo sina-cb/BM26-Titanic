@@ -27,7 +27,7 @@ vsn1:
   deployOnBoot: true
 playlist:
   active: false
-  delay_s: '5'
+  delay_s: '30'
   shuffle: false
 web_client:
   enabled: false
@@ -187,10 +187,11 @@ colorPalettes:
     c1: 0.69
     c2: 0.1
 colorAutopilot:
-  active: false
+  active: true
   palettes:
     - plasma_core
     - phoenix
+    - deep_sea
   delay_s: 5
   shuffle: false
   transitionMs: 1000

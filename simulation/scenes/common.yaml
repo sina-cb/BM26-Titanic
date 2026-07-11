@@ -159,7 +159,7 @@ options:
 colorWave:
   _section:
     label: ⚡ Lighting Engine
-    collapsed: false
+    collapsed: true
   lightingEnabled:
     value: true
     label: ⚡ Enable
@@ -189,7 +189,7 @@ colorWave:
     value: true
     label: 📡 Bridge Enabled
   sacn_universes:
-    value: 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
+    value: 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 24
     label: 📡 Subscribed Universes
   sacn_lockout_ms:
     value: 1000
@@ -218,10 +218,10 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: -4.1055
-    'y': 3.7881
-    z: 14.3098
+    x: 28.3135
+    'y': 39.7941
+    z: 30.0414
   target:
-    x: 0.62
-    'y': 2.2294
-    z: 1.8351
+    x: -2.0706
+    'y': 5.1317
+    z: 7.1601

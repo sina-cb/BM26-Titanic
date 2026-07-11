@@ -1,0 +1,103 @@
+slots:
+  - slotId: 1
+    enabled: true
+    label: UV Blast
+    effectId: uvBlast
+    presetId: default
+    behavior: toggle
+    paramsOverride: {}
+    intensity: null
+    mode: null
+  - slotId: 2
+    enabled: true
+    label: White Drop
+    effectId: dropHit
+    presetId: white_drop
+    behavior: trigger
+    paramsOverride:
+      intensity: 0.5039370078740157
+    intensity: 0.5039370078740157
+  - slotId: 3
+    enabled: true
+    label: Purple
+    effectId: colorWash
+    presetId: purple
+    behavior: toggle
+    paramsOverride: {}
+    mode: null
+    intensity: null
+  - slotId: 4
+    enabled: true
+    label: Ghost Trails
+    effectId: feedbackTrails
+    presetId: ghost_ship
+    behavior: toggle
+    paramsOverride:
+      blendMode: add
+    mode: add
+  - slotId: 5
+    enabled: true
+    label: Iceberg Flash
+    effectId: dropHit
+    presetId: iceberg_flash
+    behavior: trigger
+    paramsOverride:
+      blendMode: add
+    mode: add
+  - slotId: 6
+    enabled: true
+    label: 20 Hz Max
+    effectId: strobe
+    presetId: max_20hz
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 7
+    enabled: true
+    label: Vintage Wht
+    effectId: vintageWhite
+    presetId: default
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 8
+    enabled: true
+    label: Blast Wht
+    effectId: blastWhite
+    presetId: default
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 9
+    enabled: true
+    label: Invert
+    effectId: invert
+    presetId: default
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 10
+    enabled: true
+    label: UV Blast
+    effectId: uvBlast
+    presetId: default
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 11
+    enabled: true
+    label: Fogger
+    effectId: fogger
+    presetId: default
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 12
+    enabled: true
+    label: Long Trails
+    effectId: feedbackTrails
+    presetId: long_afterimage
+    behavior: toggle
+    paramsOverride: {}
+  - slotId: 13
+    enabled: true
+    label: Cosmic Trails
+    effectId: feedbackTrails
+    presetId: cosmic_trails
+    behavior: toggle
+    paramsOverride: {}
+effectsPage: 0

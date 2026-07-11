@@ -54,9 +54,9 @@
     {
       "slotId": 7,
       "page": 0,
-      "effectId": "sparkle",
-      "presetId": "blizzard",
-      "name": "Blizzard",
+      "effectId": "waterlineSweep",
+      "presetId": "rising_tide",
+      "name": "Rising Tide",
       "color": "#50e6a0"
     },
     {

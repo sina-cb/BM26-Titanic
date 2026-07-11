@@ -6,9 +6,10 @@ slots:
     presetId: pulse_2hz
     behavior: toggle
     paramsOverride:
-      hz: 5
-    intensity: null
-    mode: 5
+      hz: 2
+      intensity: 0.7244094488188977
+    intensity: 0.7244094488188977
+    mode: 2
     color: '#1e78ff'
   - slotId: 2
     enabled: true
@@ -16,8 +17,9 @@ slots:
     effectId: dropHit
     presetId: iceberg_flash
     behavior: trigger
-    paramsOverride: {}
-    intensity: null
+    paramsOverride:
+      intensity: 0
+    intensity: 0
     mode: null
     color: '#ffffff'
   - slotId: 3
@@ -63,15 +65,14 @@ slots:
     color: '#00c8dc'
   - slotId: 7
     enabled: true
-    label: Blizzard
-    effectId: sparkle
-    presetId: blizzard
+    label: Rising Tide
+    effectId: waterlineSweep
+    presetId: rising_tide
     behavior: toggle
     paramsOverride:
-      audioDensity: false
-      density: 0.2
-    intensity: 1
-    mode: false
+      amount: 0.7165354330708661
+    intensity: 0.7165354330708661
+    mode: null
     color: '#50e6a0'
   - slotId: 8
     enabled: true

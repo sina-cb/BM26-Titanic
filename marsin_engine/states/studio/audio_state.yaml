@@ -5,35 +5,32 @@
 # Written by `engine.js --choose_mic --model <scene>` (mic) and by
 # PATCH /audio/config from CaptainPad (tuning). Do not hand-edit while
 # the engine is running.
-capture:
-  device: audio=Microphone (Amazon USB Streaming Mic)
-  deviceLabel: Microphone (Amazon USB Streaming Mic)
-  deviceId: dshow-audio-Microphone (Amazon USB Streaming Mic)
-  inputFormat: dshow
-  platform: win32
-enabled: true
-fftSize: 1024
+enabled: false
+fftSize: 2048
 hopSize: 512
 bands:
   lowMaxHz: 200
   midMaxHz: 4000
   attackMs: 6
   releaseMs: 180
-  noiseGate: 0.06
+  noiseGate: 0.04
   inputGain: 1
   sourceSmoothHz: 12000
-  lowGate: 0.12
-  midGate: 0.1
-  highGate: 0.14
 kick:
   minHz: 50
   maxHz: 110
   threshold: 2.4
   refractoryMs: 220
   decayMs: 70
-structureDetector:
-  enabled: true
-  dropEdgeMode: windowed
 sub:
   minHz: 30
   maxHz: 60
+structureDetector:
+  enabled: true
+  dropEdgeMode: windowed
+capture:
+  device: audio=Microphone (Amazon USB Streaming Mic)
+  deviceLabel: null
+  deviceId: null
+  inputFormat: null
+  platform: auto
