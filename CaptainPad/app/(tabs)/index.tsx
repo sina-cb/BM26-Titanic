@@ -116,6 +116,26 @@ const MomentaryButton = ({ id, name, onChange }: { id: number, name: string, onC
   );
 };
 
+// Portrait/narrow deck layout: the PATTERNS column is PINNED (fixed height, does
+// NOT scroll), and the PARAMETERS + AUTOPILOT columns scroll together BELOW it
+// (operator request 2026-07-11). This wrapper IS that scroll region: a Fragment
+// in the wide 3-column row (so col2/col3 stay flex siblings of the pinned col1),
+// and a ScrollView in the narrow stack. Module-scoped so its component identity
+// is stable — defining it inline in render would remount col2/col3 (losing their
+// scroll position + state) on every parent render.
+function ColumnsScrollRest({ isWide, children }: { isWide: boolean; children: React.ReactNode }) {
+  if (isWide) return <>{children}</>;
+  return (
+    <ScrollView
+      style={{ flex: 1 }}
+      contentContainerStyle={{ paddingBottom: 16 }}
+      showsVerticalScrollIndicator={false}
+    >
+      {children}
+    </ScrollView>
+  );
+}
+
 // ── Connection Status Banner ────────────────────────────────────────────
 const OfflineBanner = ({ error }: { error: string }) => {
   const C = usePalette();
@@ -161,10 +181,11 @@ export default function ControlDeckScreen() {
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const isPortrait = winWidth < winHeight;
   const isWide = !isPortrait && winWidth >= 900;
-  // Stacked layout scrolls as ONE page (see the layout-fix note at the
-  // columns host below); wide layout is a plain row. Capitalized so JSX
-  // accepts it as a component.
-  const ColumnsHost: React.ComponentType<any> = isWide ? View : ScrollView;
+  // PATTERNS-PIN (operator request 2026-07-11): the columns host is now ALWAYS a
+  // plain View. Wide = the 3-column row (unchanged). Narrow = a flex COLUMN whose
+  // first child (PATTERNS) is pinned at a fixed height and whose remaining columns
+  // (PARAMETERS + AUTOPILOT) scroll together inside <ColumnsScrollRest> below — so
+  // the pattern list stays put while the rest of the deck scrolls under it.
   // Section host for the PARAMETERS + SETTINGS columns: ScrollView only when
   // the column has a bounded height (wide row); a plain View in the stacked
   // page-scroll (an inner ScrollView there collapses to zero height — the
@@ -932,10 +953,11 @@ export default function ControlDeckScreen() {
           plain 3-column row. The sections' inner ScrollViews scroll only in
           wide mode (scrollEnabled={isWide}) so stacked mode has a single,
           predictable scroll surface. */}
-      <ColumnsHost
-        dataSet={{ layouthost: 'columns' }}
+      <View
+        // dataSet is an RN-web DOM marker (→ data-layouthost); it's not on the
+        // native View prop types, so cast it in like the SectionHost host did.
+        {...({ dataSet: { layouthost: 'columns' } } as object)}
         style={[globalStyles.container, !isWide && { flexDirection: 'column' }]}
-        {...(!isWide ? { contentContainerStyle: { paddingBottom: 16 } } : {})}
       >
         {/* ── COLUMN 1 — PATTERNS ──────────────────────────────────────────
             The one-and-only pattern list (active playlist) + the global rig HUE
@@ -960,7 +982,20 @@ export default function ControlDeckScreen() {
           // party 2026-07-11: PATTERNS weight 1.1→1.6 (operator: the pattern
           // list is "too small" horizontally in landscape). See the column-weights
           // note above; PARAMETERS/SETTINGS were rebalanced to match.
-          isWide ? { flex: 1.6, minWidth: 0 } : { flex: 0, minHeight: deckSecondaryBound ? 480 : 320 },
+          // PATTERNS-PIN (narrow): a FIXED height so the column is pinned in
+          // place — it never grows or scrolls as a unit; its own pattern list
+          // scrolls INTERNALLY within this fixed panel while PARAMETERS +
+          // AUTOPILOT scroll below it. We pin via flexBasis + flexGrow/Shrink:0
+          // (NOT `flex:0`+height): leftPane sets flex:1, and in the narrow COLUMN
+          // container a bare `height` is defeated by the flex model (the item
+          // collapses to ~content height and the inner flex:1 goes to 0). An
+          // explicit non-flexible basis is what actually fixes the box. 500pt
+          // when a second playlist pane is bound (two MIN_PANE panes need the
+          // room), else 400pt — both leave a clear scroll area under it on an
+          // iPad portrait (1080pt tall).
+          isWide
+            ? { flex: 1.6, minWidth: 0 }
+            : { flexGrow: 0, flexShrink: 0, flexBasis: deckSecondaryBound ? 500 : 400, height: deckSecondaryBound ? 500 : 400 },
         ]}>
           {isConnected === false && <OfflineBanner error={connectionError} />}
 
@@ -1015,6 +1050,10 @@ export default function ControlDeckScreen() {
           )}
         </View>
 
+        {/* PARAMETERS + AUTOPILOT scroll together below the pinned PATTERNS
+            column in the narrow stack; in the wide row this is a Fragment so the
+            two columns stay flex siblings of PATTERNS. See ColumnsScrollRest. */}
+        <ColumnsScrollRest isWide={isWide}>
         {/* ── COLUMN 2 — PARAMETERS ────────────────────────────────────────
             ONLY the deck's (local) parameter controls — the DECK MAIN channel
             card: entry-label editor, SAVED flash, color swatch, ◎ ALL
@@ -1305,7 +1344,8 @@ export default function ControlDeckScreen() {
             />
           </SectionHost>
         </View>
-      </ColumnsHost>
+        </ColumnsScrollRest>
+      </View>
         {/* Hermetic plan-lock scrim — blankets the whole content region above
             (top bar → 3 columns → overlays) with one tap-catching layer.
             Active only under the soft PLAN lock and NOT during an operator

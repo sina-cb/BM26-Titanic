@@ -201,7 +201,10 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
   // resets on app cold-boot which matches the operator's expectation
   // (they want to start every show with the full picture).
   const [globalsCollapsed, setGlobalsCollapsed] = useState(false);
-  const [audioCollapsed, setAudioCollapsed] = useState(false);
+  // AUDIO row (party 2026-07-11): no collapse/expand any more — it's a single,
+  // always-visible MINIMAL-height strip (operator request). The disclosure
+  // chevron + collapsed/expanded variants were removed; the meters are thin
+  // (label + tiny bar) and read-only.
   // Customizable AUDIO row: which signal plots to show (persisted per screen) +
   // the picker modal open state.
   const [audioSelected, setAudioSelected] = useAudioPlotSelection(screen);
@@ -267,7 +270,7 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
   const bpmSyncStale  = bpmSyncOn && bpm <= 0;
 
   return (
-    <View style={{ backgroundColor: C.surfaceContainerLowest, padding: isPortrait ? 8 : 12, borderBottomWidth: 1, borderBottomColor: C.ghostBorder, gap: isPortrait ? 8 : 10 }}>
+    <View style={{ backgroundColor: C.surfaceContainerLowest, padding: isPortrait ? 6 : 8, borderBottomWidth: 1, borderBottomColor: C.ghostBorder, gap: isPortrait ? 6 : 6 }}>
 
       {/* ── Warning banner: BPM sync expects OSC but it's not flowing ─ */}
       {bpmSyncStale ? (
@@ -432,23 +435,20 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
           are intentionally NOT touch-responsive (they show the effective
           post-chain value already being driven into the CPC).
        */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: C.ghostBorder, paddingTop: isPortrait ? 6 : 8 }}>
-        {/* Same labelWidth + labelGap as row 1 so AUDIO lines up
-            directly under SPEED — no white-space gap. The label
-            cell also doubles as the collapse-toggle hit target. */}
-        <TouchableOpacity
-          onPress={() => setAudioCollapsed(c => !c)}
-          accessibilityLabel={audioCollapsed ? 'Expand audio signals' : 'Collapse audio signals'}
+      <View style={{ flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: C.ghostBorder, paddingTop: isPortrait ? 4 : 6 }}>
+        {/* Same labelWidth + labelGap as row 1 so AUDIO lines up directly under
+            SPEED — no white-space gap. STATIC label now (party 2026-07-11): the
+            row is always the minimal strip, so the old collapse chevron/toggle
+            is gone. */}
+        <View
           style={{ width: labelWidth, marginRight: labelGap, justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: 4 }}
         >
-          <IconSymbol name={audioCollapsed ? 'chevron.right' : 'chevron.down'} size={10} color={C.secondary} />
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: isPortrait ? 9 : 10, color: C.secondary, textTransform: 'uppercase' }}>{isPortrait ? 'AUDIO' : 'AUDIO SIGNALS'}</Text>
-        </TouchableOpacity>
+        </View>
 
         <DynamicAudioRow
           signals={audioSignals}
           isPortrait={isPortrait}
-          collapsed={audioCollapsed}
           selectedKeys={audioSelected}
         />
 
@@ -509,7 +509,9 @@ export const CPCControls = ({ trailing, screen = 'deck', disabled = false }: CPC
 // status cluster) distinct from the SPEED/SIZE sliders.
 const GLOBALS_TILE_WIDTH_PORTRAIT  = 60;
 const GLOBALS_TILE_WIDTH_LANDSCAPE = 86;
-const GLOBALS_TILE_HEIGHT = 48;
+// party 2026-07-11: dropped 48→40 to compact the GLOBALS row into a dense
+// single line. 40pt still clears the operator's ~40pt tap-target floor.
+const GLOBALS_TILE_HEIGHT = 40;
 
 function ColorPairButton({ h1, h2, isPortrait, disabled, onPress }: { h1: number; h2: number; isPortrait: boolean; disabled?: boolean; onPress: () => void }) {
   const C = usePalette();
@@ -644,10 +646,9 @@ function QueuedColorSlot({ queued, onPress, onClear, isPortrait, disabled }: {
  * simply omitted. A "+N on AUDIO tab" hint flags how many live signals
  * aren't shown here so the operator knows where the rest are.
  */
-function DynamicAudioRow({ signals, isPortrait, collapsed, selectedKeys }: {
+function DynamicAudioRow({ signals, isPortrait, selectedKeys }: {
   signals: AudioSignalDescriptor[];
   isPortrait: boolean;
-  collapsed: boolean;
   selectedKeys: string[] | null;
 }) {
   const C = usePalette();
@@ -705,29 +706,8 @@ function DynamicAudioRow({ signals, isPortrait, collapsed, selectedKeys }: {
   const shownSet = baseSet.slice(0, maxCells);
   const remainder = signals.length - shownSet.length;
 
-  if (collapsed) {
-    // One-line micro-meter summary — the curated cues only, so the row
-    // stays ~24px regardless of how many the Companion publishes.
-    return (
-      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 14, paddingRight: 8, height: 24 }}>
-        {shownSet.map((s) => (
-          <CollapsedMeter
-            key={s.key}
-            label={s.label}
-            value={normalizeAudio(s, valueOf(s.postKey))}
-            accent={/kick/i.test(s.key)}
-          />
-        ))}
-        {remainder > 0 ? (
-          // QA round8 #4: was 8px / C.icon (faint grey) — below the
-          // legibility floor in a glare environment. Bumped to 9px and the
-          // higher-contrast secondary so the "more signals live" hint reads.
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary }}>+{remainder}</Text>
-        ) : null}
-      </View>
-    );
-  }
-
+  // Single, always-visible MINIMAL strip — thin meters (label + tiny bar),
+  // read-only. No collapsed/expanded variants (party 2026-07-11).
   return (
     <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 6 : 10 }}>
       {shownSet.map((s) => (
@@ -873,31 +853,29 @@ function LiveMeterColumn({ isPortrait, signal, value }: {
   value: number;
 }) {
   const C = usePalette();
-  const cellMinWidth = isPortrait ? 52 : 72;
+  const cellMinWidth = isPortrait ? 48 : 64;
   const fill = normalizeAudio(signal, value);
   // Identity colour — the curated bands read with their Companion accent
   // (teal LOW, blue MID, red KICK, …) so the deck cue matches the AUDIO
   // tab trace and the modulation source trail. One shared source of truth
   // in utils/audioSignals.ts.
   const accentHex = audioAccentHex(signal);
+  // party 2026-07-11: MINIMAL meter — no bordered/filled box, no vertical
+  // padding, thin 5pt bar. Just label + value + a tiny bar, so the whole AUDIO
+  // row reads as one dense, short strip (~18px) instead of a 41px card row.
   return (
     <View style={{
       flex: 1, minWidth: cellMinWidth, maxWidth: isPortrait ? 80 : 110,
-      paddingVertical: 4, paddingHorizontal: 6,
-      borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder,
-      backgroundColor: C.surface,
       justifyContent: 'center',
     }}>
-      {/* QA round1 #21: bumped 8→9px and secondary→text so the band labels
-          and values read at the edge of the venue; the label is abbreviated
-          to its first word (audioMeterLabel) so it stays whole instead of
-          clipping mid-word ("ENERGY RA…"). */}
+      {/* Label abbreviated to its first word (audioMeterLabel) so it stays
+          whole instead of clipping mid-word ("ENERGY RA…"). */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
         <Text numberOfLines={1} style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.text, textTransform: 'uppercase', letterSpacing: 0.6, flex: 1, marginRight: 4 }}>{audioMeterLabel(signal.label)}</Text>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.text }}>{audioValueText(signal, value)}</Text>
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary }}>{audioValueText(signal, value)}</Text>
       </View>
       <View style={{
-        height: 8, borderRadius: 4,
+        height: 5, borderRadius: 3,
         backgroundColor: C.surfaceContainerHigh,
         overflow: 'hidden',
       }}>
@@ -949,7 +927,7 @@ function SpeedSyncToggle({ on, starving, disabled, onToggle }: {
       }
       hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
       style={{
-        width: 34, height: 44,
+        width: 34, height: GLOBALS_TILE_HEIGHT,
         borderRadius: 7, borderWidth: 1,
         borderColor: on ? accent : C.ghostBorder,
         backgroundColor: on ? `${accent}22` : C.surface,
@@ -1079,8 +1057,8 @@ function BpmTile({ bpm, isPortrait, source, sourcePref, disabled, onSelectOsc, o
       {/* SOURCE selector (OSC vs TAP) — chooses the clock source only; it does
           NOT tap (the GlobalTapTile is the tap target). The active segment
           fills in its source accent so "what's driving the clock" reads at a
-          glance. */}
-      <View style={{ width: 30, height: 40, borderRadius: 6, overflow: 'hidden', borderWidth: 1, borderColor: C.ghostBorder, opacity: disabled ? 0.45 : 1 }}>
+          glance. Height tracks the compacted tile (40 − 8pt tile padding). */}
+      <View style={{ width: 30, height: 32, borderRadius: 6, overflow: 'hidden', borderWidth: 1, borderColor: C.ghostBorder, opacity: disabled ? 0.45 : 1 }}>
         <TouchableOpacity
           onPress={onSelectOsc}
           disabled={disabled}
@@ -1183,15 +1161,3 @@ function CollapsedReadout({ label, value, unit, accent, badge }: { label: string
   );
 }
 
-function CollapsedMeter({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
-  const C = usePalette();
-  const v = Math.max(0, Math.min(1, value));
-  return (
-    <View style={{ flex: 1, minWidth: 36, maxWidth: 70, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary, textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</Text>
-      <View style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: C.surfaceContainerHigh, overflow: 'hidden' }}>
-        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${v * 100}%`, backgroundColor: accent ? C.primaryContainer : C.primary }} />
-      </View>
-    </View>
-  );
-}

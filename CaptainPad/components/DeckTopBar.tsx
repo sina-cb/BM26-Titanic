@@ -35,6 +35,7 @@ import { MasterFadeGroup } from '@/components/MasterFadeGroup';
 import { useMaster, useActiveModel } from '@/hooks/useEngineState';
 import { useMasterFade } from '@/hooks/use_master_fade';
 import { updateMixerMaster } from '@/utils/api';
+import { HEADER_MIN_HEIGHT, HEADER_PADDING_VERTICAL } from '@/constants/header_layout';
 
 interface Props {
   /** Connection state passed in from the deck screen. */
@@ -191,7 +192,12 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck', disabled = fals
 function makeStyles(C: Palette) {
   return {
     header: {
-      height: 64,
+      // Compact title-row envelope shared with the mixer tab (see
+      // constants/header_layout.ts). minHeight (not a fixed height) so the
+      // status chrome can breathe, but the resting bar is thin — this row used
+      // to be a fixed 64pt and ate vertical space above the pattern list.
+      minHeight: HEADER_MIN_HEIGHT,
+      paddingVertical: HEADER_PADDING_VERTICAL,
       backgroundColor: C.surfaceContainerLow,
       borderBottomWidth: 1,
       borderBottomColor: C.ghostBorder,

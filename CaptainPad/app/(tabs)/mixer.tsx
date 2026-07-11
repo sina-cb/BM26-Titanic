@@ -25,6 +25,7 @@ import { knobBadgeFor } from '@/utils/midi/knob_badge';
 import { globalKnobNumber } from '@/utils/midi/knob_page';
 
 import { CPCControls } from '@/components/CPCControls';
+import { HEADER_MIN_HEIGHT, HEADER_PADDING_VERTICAL } from '@/constants/header_layout';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { TRANSITION_DURATION_PRESETS_MS } from '@/components/DeckTransitionControls';
 import { MiniFader } from '@/components/ui/MiniFader';
@@ -3054,7 +3055,9 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     // a second line in landscape instead of clipping `+ FROM PLAYLIST…` off the
     // screen edge (QA round1 #5). flexWrap lets the brand/status cluster and the
     // master/add cluster stack when the viewport is too narrow to seat both.
-    minHeight: 64,
+    // party 2026-07-11: envelope shared with the deck top bar
+    // (constants/header_layout.ts) so the two title rows stay unified + thin.
+    minHeight: HEADER_MIN_HEIGHT,
     backgroundColor: C.surfaceContainerLow,
     borderBottomWidth: 1,
     borderBottomColor: C.ghostBorder,
@@ -3064,7 +3067,7 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     justifyContent: 'space-between',
     rowGap: 8,
     paddingHorizontal: 24,
-    paddingVertical: 8,
+    paddingVertical: HEADER_PADDING_VERTICAL,
   },
   globalParamsBar: {
     backgroundColor: C.surfaceContainerHigh,
@@ -3186,13 +3189,14 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     textTransform: 'uppercase',
   },
   // Compact GROUPS button seated at the right end of the GLOBALS row (mixer
-  // only). Matches the GLOBALS tile cluster height (48) so it reads as part
-  // of that strip; carries a small count badge when groups exist.
+  // only). Matches the compacted GLOBALS tile cluster height (40, party
+  // 2026-07-11) so it reads as part of that dense strip rather than setting a
+  // taller floor for the whole row; carries a small count badge when groups exist.
   groupsButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    height: 48,
+    height: 40,
     paddingHorizontal: 10,
     borderRadius: 8,
     borderWidth: 1,
