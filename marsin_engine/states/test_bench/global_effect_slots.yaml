@@ -6,15 +6,15 @@ slots:
     presetId: hard_2
     behavior: toggle
     paramsOverride:
-      amount: 0.44881889763779526
-    intensity: 0.44881889763779526
+      amount: 0
+    intensity: 0
     mode: null
     color: '#1e78ff'
   - slotId: 2
     enabled: true
-    label: Shadow Pass
-    effectId: waterlineSweep
-    presetId: shadow_pass
+    label: Deep 14s
+    effectId: breath
+    presetId: deep
     behavior: toggle
     paramsOverride: {}
     intensity: null
@@ -27,7 +27,6 @@ slots:
     presetId: ghost_ship
     behavior: toggle
     paramsOverride:
-      mix: 0.2204724409448819
     intensity: 0.2204724409448819
     mode: null
     color: '#a03cff'
@@ -59,10 +58,9 @@ slots:
     presetId: iceberg_flash
     behavior: trigger
     paramsOverride:
-      amount: 0.3779527559055118
-      blendMode: max
+      blendMode: add
     intensity: null
-    mode: max
+    mode: add
     color: '#00c8dc'
   - slotId: 7
     enabled: true

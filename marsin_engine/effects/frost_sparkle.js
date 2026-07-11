@@ -50,6 +50,12 @@ const DEFAULT_DECAY_MS = 200;
 const REFERENCE_DT_MS = 25;
 // Below this energy a glint is considered dead and cleared to exactly 0.
 const DEAD_EPSILON = 0.01;
+// Audio-density scale (T2 guard): micHigh is a full-range [0..1] signal, so
+// adding it RAW to the spawn density let a hot hi-hat spawn glints on ~100%
+// of pixels — a full-rig white flash, ~5× the Blizzard preset's 0.15 ceiling.
+// Scale the audio contribution so a peak hi-hat tops out near the Blizzard
+// density instead of whiting out the rig.
+const AUDIO_DENSITY_SCALE = 0.15;
 
 /**
  * Create the explicit per-effect state holder. The controller owns one of
@@ -147,7 +153,7 @@ export function applyFrostSparkle({
 
   // ── effective spawn density ───────────────────────────────────────
   let dens = density < 0 ? 0 : density;
-  if (audioDensity) dens += readMicHigh(signals);
+  if (audioDensity) dens += readMicHigh(signals) * 0.15;
   // Expected number of glints this frame, scaled by the real frame delta so
   // the look is frame-rate independent.
   const dtScale = dt / REFERENCE_DT_MS;

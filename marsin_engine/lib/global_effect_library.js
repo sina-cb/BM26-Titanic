@@ -111,6 +111,12 @@ export const GLOBAL_EFFECT_LIBRARY = {
     singleton: true,
     safetySensitive: false,
     legacyEffectId: 'fogger',
+    // Declarative: the fogger is a bare on/off haze burst with NO magnitude
+    // knob, so the VSN1 value encoder / jog-wheel has nothing to drive.
+    // Surfaced on the slot-status API (`valueParam`) so the UI disables the
+    // encoder for this slot instead of showing a dead knob. Purely
+    // informational — no behavior change (primaryIntensity is already null).
+    valueParam: 'none',
     presets: {
       default: {
         label: 'Fogger',
@@ -124,14 +130,19 @@ export const GLOBAL_EFFECT_LIBRARY = {
   // ── Modern macro effects ─────────────────────────────────────────
   strobe: {
     id: 'strobe',
-    // Presented as "Pulse" (Sina's name for it). The frequency is no longer in
-    // the effect NAME — it moved to the primaryMode 'Frequency' wheel (VSN1
-    // encoder press) on strobeEffect.primaryMode, so ONE "Pulse" slot walks
-    // 2/4/5/10/20 Hz and the jog-wheel sets Flash Strength. The five per-Hz
-    // presets below are KEPT verbatim (backward-compat: old playlists / state
-    // files / DEFAULT_SLOT_CONFIG reference pulse_2hz…max_20hz) and each still
-    // carries its own display label + safety tier.
-    name: 'Pulse',
+    // Presented as "Strobe" (operator-approved party spec, 2026-07-11). The
+    // frequency is no longer in the effect NAME — it moved to the primaryMode
+    // 'Frequency' wheel (VSN1 encoder press) on strobeEffect.primaryMode, so
+    // ONE "Strobe" slot walks 2/4/5/10/20 Hz and the jog-wheel sets Flash
+    // Strength. The five per-Hz presets below are KEPT verbatim (backward-
+    // compat: old playlists / state files / DEFAULT_SLOT_CONFIG reference
+    // pulse_2hz…max_20hz) and each still carries its own display label +
+    // safety tier. This IS the synced implementation (getFrameLockedStrobe*,
+    // frame-locked to the 40 fps engine grid; each mode is an EXACT integer
+    // divisor of 40 fps so there is zero quantization drift) — it supersedes
+    // the pre-consolidation fixed-frequency strobe the operator found badly
+    // tuned. There is no separate strobe module/id left to migrate.
+    name: 'Strobe',
     category: 'gate',
     // Operator review May 2026 #10: all strobes are toggle-only now.
     // `hold` is removed across the entire library (hardware hold-to-
@@ -195,7 +206,9 @@ export const GLOBAL_EFFECT_LIBRARY = {
     safetySensitive: false,
     presets: {
       white_drop: {
-        label: 'White Drop',
+        // Display label only (operator-approved party spec 2026-07-11);
+        // preset id `white_drop` stays stable for state/playlist compat.
+        label: 'White Flash',
         params: {
           color: [1.0, 1.0, 1.0, 1.0, 0.2, 0.0],
           intensity: 1.0,
@@ -209,7 +222,7 @@ export const GLOBAL_EFFECT_LIBRARY = {
       iceberg_flash: {
         label: 'Iceberg Flash',
         params: {
-          color: [0.3, 0.7, 1.0, 0.5, 0.0, 0.2],
+          color: [0.3, 0.7, 1.0, 0.15, 0.0, 0.2],
           intensity: 1.0,
           attackMs: 20,
           holdMs: 90,
@@ -253,7 +266,7 @@ export const GLOBAL_EFFECT_LIBRARY = {
       },
       iceberg_cyan: {
         label: 'Iceberg Cyan',
-        params: { color: [0.15, 0.85, 1.00, 0.20, 0.00, 0.10], amount: 0.75, mode: 'tint' },
+        params: { color: [0.15, 0.85, 1.00, 0.00, 0.00, 0.10], amount: 0.75, mode: 'tint' },
         defaultBehavior: 'toggle',
       },
       emergency_red: {
@@ -264,6 +277,11 @@ export const GLOBAL_EFFECT_LIBRARY = {
       vintage_amber: {
         label: 'Vintage Amber',
         params: { color: [1.00, 0.45, 0.05, 0.10, 1.00, 0.00], amount: 0.65, mode: 'tint' },
+        defaultBehavior: 'toggle',
+      },
+      purple: {
+        label: 'Purple',
+        params: { color: [0.55, 0.00, 1.00, 0.00, 0.00, 0.25], amount: 0.75, mode: 'tint' },
         defaultBehavior: 'toggle',
       },
     },
@@ -436,7 +454,7 @@ export const GLOBAL_EFFECT_LIBRARY = {
     presets: {
       hold:    { label: 'Hold',     params: { holdFadeMs: 0 },    defaultBehavior: 'toggle' },
       fade_2s: { label: 'Fade 2s',  params: { holdFadeMs: 2000 }, defaultBehavior: 'toggle' },
-      stutter: { label: 'Stutter',  params: { holdFadeMs: 0 },    defaultBehavior: 'hold' },
+      stutter: { label: 'Stutter',  params: { holdFadeMs: 0 },    defaultBehavior: 'toggle' },
     },
     apply: freezeFrameEffect.apply,
   },
@@ -777,6 +795,9 @@ export function describeLibrary(library = GLOBAL_EFFECT_LIBRARY) {
       singleton: !!fx.singleton,
       safetySensitive: !!fx.safetySensitive,
       legacyEffectId: fx.legacyEffectId || null,
+      // Declarative value-encoder opt-out (e.g. fogger → 'none'); null when
+      // the effect declares nothing, so the VSN1/UI knows to disable the knob.
+      valueParam: fx.valueParam !== undefined ? fx.valueParam : null,
       presets: Object.fromEntries(
         Object.entries(fx.presets).map(([pid, p]) => [pid, {
           id: pid,

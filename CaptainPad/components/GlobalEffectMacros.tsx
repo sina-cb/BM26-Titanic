@@ -70,6 +70,13 @@ import {
   computeVisibleSlots,
   computePageActivity,
 } from './global_effect_macros_logic';
+import {
+  buildPickerSections,
+  isFavoritePreset,
+  slotDisablesEncoder,
+  resolveSlotEffectName,
+  PickerLibrary,
+} from './effect_picker_logic';
 // (HorizontalFader import removed 2026-07 with the global hue fader row.)
 
 // Hard UI contract (operator review May 2026): the rig surface shows
@@ -341,6 +348,25 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       return changed ? next : prev;
     });
   }, [slots]);
+
+  // "Lost strobe" guard (Codex P0: fail loud). Warn ONCE per unknown id when a
+  // BOUND slot references an effectId the engine library doesn't ship — a
+  // renamed/removed effect must announce itself instead of silently
+  // misbehaving. The chip still renders its own label (generic card); this is
+  // just the alarm. resolveSlotEffectName emits the console.warn; the ref
+  // dedupes so it fires once, not every status broadcast.
+  const warnedUnknownRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!library || !slots) return;
+    for (const s of slots) {
+      if (!slotIsBound(s)) continue;
+      const id = s.effectId;
+      if (id && !library[id] && !warnedUnknownRef.current.has(id)) {
+        warnedUnknownRef.current.add(id);
+        resolveSlotEffectName(s, library as PickerLibrary);
+      }
+    }
+  }, [library, slots]);
 
   // Cell tap: toggle/trigger/burst dispatch with optimistic local state.
   // The empty-cell path is handled by `onPressEmpty` (opens swap sheet).
@@ -931,6 +957,8 @@ const SlotButton: React.FC<{
 }> = ({ slot, isOn, height, fontSize, minWidth, onPress, onEdit, onSetIntensity, onResetIntensity, onCycleMode, onSetMode }) => {
   const C = usePalette();
   const isMomentary = slot.behavior === 'trigger' || slot.behavior === 'burst';
+  // Favorite (⭐) marker — the operator's party picks (effect_picker_logic).
+  const isFav = isFavoritePreset(slot.effectId, slot.presetId);
   const [ackAt, setAckAt] = useState<number | null>(null);
   // Effects v2: the value/mode detail sheet (precise intensity slider + mode
   // picker + reset) opens from the small "value" affordance on the chip.
@@ -1041,6 +1069,19 @@ const SlotButton: React.FC<{
         }}>⋯</Text>
       </TouchableOpacity>
 
+      {/* Favorite (⭐) marker — bottom-right corner (mirror of the ⋯ edit chip),
+          out of the centred label band. Rendered only for the operator's party
+          picks so a starred effect is recognisable at a glance on the strip. */}
+      {isFav ? (
+        <View
+          pointerEvents="none"
+          accessibilityLabel={`Favorite slot ${slot.slotId}`}
+          style={{ position: 'absolute', bottom: 3, right: 5 }}
+        >
+          <Text style={{ fontSize: 10, lineHeight: 12 }}>⭐</Text>
+        </View>
+      ) : null}
+
       {/* Effects v2: value + mode badge (top-left). Shows the slot's intensity %
           and current mode at a glance; tapping opens the detail sheet where the
           operator edits BOTH (a precise intensity slider + reset, and a mode
@@ -1105,6 +1146,11 @@ const SlotDetailSheet: React.FC<{
   if (!open) return null;
   const intensity = typeof slot.intensity === 'number' ? slot.intensity : null;
   const modeValues = Array.isArray(slot.modeValues) ? slot.modeValues : [];
+  // Fogger & friends: an effect with NO magnitude knob disables the value
+  // encoder / intensity editor entirely (a dead knob is a live-show trap). The
+  // engine's `valueParam:'none'` on the slot status drives this when present;
+  // otherwise a hardcoded fallback table does (effect_picker_logic).
+  const encoderDisabled = slotDisablesEncoder(slot);
   // The 5 quick intensity steps (0/25/50/75/100%) — a compact, touch-friendly
   // editor that avoids a drag-fader inside a modal (reliable on RN-web + native).
   const steps = [0, 0.25, 0.5, 0.75, 1];
@@ -1138,11 +1184,37 @@ const SlotDetailSheet: React.FC<{
               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, letterSpacing: 1, textTransform: 'uppercase' }}>
                 {slot.intensityLabel || 'Intensity'}
               </Text>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: intensity !== null ? C.primary : C.icon, letterSpacing: 0.5 }}>
-                {intensity !== null ? `${Math.round(intensity * 100)}%` : 'N/A'}
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: (intensity !== null && !encoderDisabled) ? C.primary : C.icon, letterSpacing: 0.5 }}>
+                {encoderDisabled ? 'NO KNOB' : intensity !== null ? `${Math.round(intensity * 100)}%` : 'N/A'}
               </Text>
             </View>
-            {intensity !== null ? (
+            {encoderDisabled ? (
+              // Value encoder disabled — this effect has no magnitude knob. Show
+              // the greyed step row (non-interactive) so the operator sees WHY
+              // the encoder does nothing, instead of a bare missing control.
+              <>
+                <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8, opacity: 0.35 }} pointerEvents="none">
+                  {steps.map((v) => (
+                    <View
+                      key={v}
+                      style={{
+                        flex: 1, height: 40, borderRadius: 8,
+                        backgroundColor: C.surfaceContainerHigh,
+                        borderWidth: 1, borderColor: C.ghostBorder,
+                        alignItems: 'center', justifyContent: 'center',
+                      }}
+                    >
+                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.icon }}>
+                        {Math.round(v * 100)}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+                <Text style={{ color: C.secondary, fontSize: 11, marginBottom: 10 }}>
+                  This effect has no value knob — the encoder is disabled for it.
+                </Text>
+              </>
+            ) : intensity !== null ? (
               <View style={{ flexDirection: 'row', gap: 6, marginBottom: 10 }}>
                 {steps.map((v) => {
                   const active = Math.abs(intensity - v) < 0.001;
@@ -1171,7 +1243,7 @@ const SlotDetailSheet: React.FC<{
                 This slot has not reported an intensity value.
               </Text>
             )}
-            {intensity !== null ? (
+            {intensity !== null && !encoderDisabled ? (
               <TouchableOpacity
                 onPress={onResetIntensity}
                 activeOpacity={0.8}
@@ -1423,21 +1495,31 @@ const SwapSheet: React.FC<{
               <Text style={{ color: C.secondary, fontSize: 12 }}>Loading library…</Text>
             ) : (
               <ScrollView style={{ maxHeight: 480 }}>
-                {Object.values(library).map(fx => (
-                  <View key={fx.id} style={{ marginBottom: 16 }}>
+                {/* Sections are built from the engine registry (auto-discovery):
+                    a few families get named group headers (Blast Effects /
+                    Flashes / Color Replacement), every other effect renders
+                    ungrouped under its ENGINE display name (fx.name) — so the
+                    Pulse→Strobe rename flows through and nothing is ever
+                    filtered out. Favorites render a ⭐. See effect_picker_logic. */}
+                {buildPickerSections(library as PickerLibrary).map((section) => (
+                  <View key={section.title} style={{ marginBottom: 16 }}>
                     <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, marginBottom: 6, letterSpacing: 1, textTransform: 'uppercase' }}>
-                      {fx.name}
+                      {section.title}
                     </Text>
-                    {Object.entries(fx.presets).map(([pid, p]) => (
+                    {section.rows.map((row) => (
                       <TouchableOpacity
-                        key={pid}
-                        onPress={() => onPicked(fx.id, pid, p)}
+                        key={`${row.effectId}/${row.presetId}`}
+                        onPress={() => onPicked(row.effectId, row.presetId, row.preset as unknown as LibPreset)}
                         style={{ minHeight: 44, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, marginBottom: 4, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder, flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                        accessibilityLabel={`${row.favorite ? 'Favorite ' : ''}${row.preset.label} (${row.effectId} / ${row.presetId})`}
                       >
-                        <Text numberOfLines={1} style={{ flex: 1, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.text }}>{p.label}</Text>
+                        {row.favorite ? (
+                          <Text style={{ fontSize: 12, lineHeight: 16 }} accessibilityLabel="Favorite">⭐</Text>
+                        ) : null}
+                        <Text numberOfLines={1} style={{ flex: 1, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.text }}>{row.preset.label}</Text>
                         <View style={{ paddingHorizontal: 7, height: 18, borderRadius: 9, backgroundColor: C.surfaceDim, borderWidth: 1, borderColor: C.ghostBorder, alignItems: 'center', justifyContent: 'center' }}>
                           <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.secondary, letterSpacing: 0.4 }}>
-                            {p.defaultBehavior}
+                            {row.preset.defaultBehavior}
                           </Text>
                         </View>
                       </TouchableOpacity>

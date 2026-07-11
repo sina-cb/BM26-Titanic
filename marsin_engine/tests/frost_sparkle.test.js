@@ -101,15 +101,17 @@ test('resetSparkle clears all live glints (panicStop path)', () => {
   for (let i = 0; i < st.spark.length; i++) assert.equal(st.spark[i], 0);
 });
 
-test('audioDensity adds signals.micHigh to the spawn density', () => {
-  // density 0, but micHigh=1 → effective density 1 → expected=4 on a 4px frame.
+test('audioDensity adds signals.micHigh SCALED x0.15 to the spawn density', () => {
+  // density 0, micHigh=1 → effective density 0.15 (scaled — unscaled it was a
+  // full-rig white flash 5x the Blizzard ceiling; R2 guard 2026-07-10). With
+  // the scripted rng only 0.0 < 0.15 ⇒ exactly 1 of 4 px spawns.
   const st = createSparkleState({ rng: scriptedRng([0.0, 0.25, 0.5, 0.75]) });
   const p = blackFrame(4);
   applyFrostSparkle({
     pixels: p, state: st, enabled: true, nowMs: 0,
     density: 0, decayMs: 200, audioDensity: true, signals: { micHigh: 1 },
   });
-  assert.equal(st.activeCount, 4);
+  assert.equal(st.activeCount, 1);
 });
 
 test('audioDensity is safe when signals is undefined (treats micHigh as 0)', () => {

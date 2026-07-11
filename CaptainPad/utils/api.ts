@@ -1930,6 +1930,13 @@ export type GlobalEffectSlotStatus = GlobalEffectSlot & {
   mode?: string | number | boolean | null;
   modeLabel?: string;
   modeValues?: (string | number | boolean)[];
+  // Declarative value-encoder opt-out mirrored from the engine effect
+  // (global_effect_library.js — e.g. fogger.valueParam='none'). When 'none' the
+  // effect has NO magnitude knob and the UI/VSN1 disables the value encoder for
+  // this slot. Optional for staleness safety: a pre-field engine leaves it
+  // undefined and the UI falls back to its own override table
+  // (effect_picker_logic.ts slotDisablesEncoder).
+  valueParam?: string | null;
 };
 
 // Effects v2: the active effects PAGE (0..3). Page p views the 32 flat slots

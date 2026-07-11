@@ -52,6 +52,7 @@ controllers:
           - LED_0
       - port: 2
         universe: 12
+        startAddress: 1
         chain:
           - LED_1
     led:

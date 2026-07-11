@@ -2,9 +2,9 @@ master: 1
 channels:
   - id: ch_1783569272925_219
     name: latency_0
-    pattern: 05_orbital_attractor_field
+    pattern: 29_kick_shockwave
     mode: blend_screen
-    fader: 0
+    fader: 1
     enabled: true
     locked: false
     faderLocked: false
@@ -12,57 +12,29 @@ channels:
     transitionTime: 1
     localControls:
       '614525773':
-        v0: 0
+        v0: 0.44
         v1: 0
         v2: 0
       '1037917937':
-        v0: 0
+        v0: 0.46
         v1: 0
         v2: 0
-      '1217857879':
-        v0: 0.5
+      '2010909319':
+        v0: 0.11
         v1: 0
         v2: 0
-      '1690775821':
-        v0: 0
-        v1: 0
-        v2: 0
-      '2073951030':
-        v0: 0.2975
-        v1: 0
-        v2: 0
-      '2504041261':
-        v0: 0
-        v1: 0
-        v2: 0
-      '3165284047':
-        v0: 0.5
-        v1: 0
-        v2: 0
-      '3334264878':
-        v0: 0.5
-        v1: 0
-        v2: 0
-      '3612063211':
-        v0: 0.31
-        v1: 0
-        v2: 0
-      '3909762385':
-        v0: 0.17
-        v1: 0
-        v2: 0
-      '3994789032':
-        v0: 0.9099999999999998
+      '2750033883':
+        v0: 0.92
         v1: 0
         v2: 0
       '4234014351':
-        v0: 0.5
+        v0: 0.28
         v1: 0
         v2: 0
     playlist:
       name: default
-      activeEntryId: e_default_5_05_orbital_attractor_field
-      cursor: 5
+      activeEntryId: e_1781814380742_5872
+      cursor: 29
       autopilot:
         active: false
         delay_s: 30
@@ -81,7 +53,7 @@ channels:
     followScale: 1
   - id: ch_1783569272960_220
     name: latency_1
-    pattern: 10_chasers
+    pattern: 12_breathing
     mode: blend_screen
     fader: 0
     enabled: true
@@ -90,20 +62,40 @@ channels:
     transitionMode: trans_crossfade
     transitionTime: 1
     localControls:
-      '614525773':
+      '149283354':
         v0: 0.5
+        v1: 0
+        v2: 0
+      '370771973':
+        v0: 0
+        v1: 0
+        v2: 0
+      '614525773':
+        v0: 0
         v1: 0
         v2: 0
       '1037917937':
-        v0: 0.4975
+        v0: 0.35
         v1: 0
         v2: 0
-      '1323486710':
+      '1765712648':
         v0: 0.5
+        v1: 0
+        v2: 0
+      '2073951030':
+        v0: 0
         v1: 0
         v2: 0
       '2504041261':
         v0: 0.5
+        v1: 0
+        v2: 0
+      '3165284047':
+        v0: 0.6
+        v1: 0
+        v2: 0
+      '3334264878':
+        v0: 0.45
         v1: 0
         v2: 0
       '3994789032':
@@ -111,13 +103,13 @@ channels:
         v1: 0
         v2: 0
       '4234014351':
-        v0: 0.5
+        v0: 1
         v1: 0
         v2: 0
     playlist:
       name: default
-      activeEntryId: e_default_10_10_chasers
-      cursor: 10
+      activeEntryId: e_default_12_12_breathing
+      cursor: 12
       autopilot:
         active: false
         delay_s: 30
@@ -136,7 +128,7 @@ channels:
     followScale: 1
   - id: ch_1783569272994_221
     name: hil3_0
-    pattern: 02_phase_cathedral
+    pattern: 13_sparkle
     mode: blend_screen
     fader: 0
     enabled: true
@@ -145,38 +137,70 @@ channels:
     transitionMode: trans_crossfade
     transitionTime: 1
     localControls:
-      '149283354':
-        v0: 0.26
+      '537253481':
+        v0: 0.5
         v1: 0
         v2: 0
       '614525773':
         v0: 0
         v1: 0
         v2: 0
-      '1037917937':
-        v0: 0.84
+      '943150003':
+        v0: 0.3
         v1: 0
         v2: 0
-      '1323486710':
-        v0: 0.76
+      '1037917937':
+        v0: 0.5428844616568043
+        v1: 0
+        v2: 0
+      '1353359884':
+        v0: 0.7
+        v1: 0
+        v2: 0
+      '1682493228':
+        v0: 0.3
+        v1: 0
+        v2: 0
+      '2073951030':
+        v0: 0
+        v1: 0
+        v2: 0
+      '2114735942':
+        v0: 0.5
         v1: 0
         v2: 0
       '2504041261':
         v0: 0.5
         v1: 0
         v2: 0
+      '3334264878':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '3555808870':
+        v0: 0.3
+        v1: 0
+        v2: 0
+      '3680310977':
+        v0: 0.5
+        v1: 0
+        v2: 0
       '3994789032':
-        v0: 0.6
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '4059689628':
+        v0: 0.5
         v1: 0
         v2: 0
       '4234014351':
-        v0: 0.5
+        v0: 1
         v1: 0
         v2: 0
     playlist:
       name: default
-      activeEntryId: e_default_2_02_phase_cathedral
-      cursor: 2
+      activeEntryId: e_default_13_13_sparkle
+      cursor: 13
       autopilot:
         active: false
         delay_s: 30
@@ -194,5 +218,5 @@ channels:
     followLeaderId: null
     followScale: 1
 mixGroups: []
-tempoBpm: 120
+tempoBpm: 117
 tempoSourcePref: osc

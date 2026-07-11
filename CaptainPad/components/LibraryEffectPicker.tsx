@@ -23,6 +23,7 @@
 import React, { useMemo } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, Pressable } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
+import { isFavoritePreset } from './effect_picker_logic';
 
 export type LibPreset = {
   id: string;
@@ -241,7 +242,9 @@ export const LibraryEffectPicker: React.FC<Props> = ({
                                   fontSize: 12,
                                   color: active ? C.primary : C.text,
                                 }}>
-                                  {preset.label || pid}
+                                  {/* Operator party favorite (⭐) — same picks as the
+                                      GEM swap picker (effect_picker_logic). */}
+                                  {isFavoritePreset(fx.id, pid) ? '⭐ ' : ''}{preset.label || pid}
                                 </Text>
                                 <Text style={{
                                   fontFamily: 'Inter_400Regular',

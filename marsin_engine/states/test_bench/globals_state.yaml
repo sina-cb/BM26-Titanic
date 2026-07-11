@@ -5,14 +5,14 @@ effects:
   vintageWhite: false
   blastWhite: false
 params:
-  revision: 4628620
+  revision: 118446
   sourceLock: null
   params:
     speed:
-      value: 0.47619047619047616
+      value: 0.44761904761904764
       lastSource: bpm-sync
       lastOrigin: bpm-sync:auto
-      lastRevision: 4598162
+      lastRevision: 117375
     size:
       value: 0.5
       lastSource: init
@@ -28,17 +28,17 @@ params:
         h: 0
         s: 1
         v: 1
-      lastSource: colorAutopilot
-      lastOrigin: colorAutopilot
-      lastRevision: 4627490
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 4
     colorPalette2:
       value:
         h: 0.13
         s: 1
         v: 1
-      lastSource: colorAutopilot
-      lastOrigin: colorAutopilot
-      lastRevision: 4627491
+      lastSource: init
+      lastOrigin: init
+      lastRevision: 5
     colorTransitionMs:
       value: 800
       lastSource: init
@@ -50,55 +50,55 @@ params:
       lastOrigin: init
       lastRevision: 7
     micLow:
-      value: 1
+      value: 0.9999999999998851
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628584
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118405
     micMid:
-      value: 0.6214449771461843
+      value: 0.5101064628786917
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628586
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118407
     micHigh:
-      value: 0.3052600344560932
+      value: 0.14668076756430073
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628588
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118409
     micKick:
       value: 1
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628590
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118411
     micFlux:
-      value: 0.22576244605872814
+      value: 0.2620839035820239
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 4628567
+      lastRevision: 118388
     micLowRaw:
-      value: 0.6846974492073059
+      value: 0.7227033376693726
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628585
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118406
     micMidRaw:
-      value: 0.6582910418510437
+      value: 0.5276212096214294
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628587
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118408
     micHighRaw:
-      value: 0.331157922744751
+      value: 0.1514563411474228
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628589
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118410
     micKickRaw:
-      value: 0.5499740242958069
+      value: 0.17278032004833221
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628591
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118412
     micFluxRaw:
-      value: 0.1383540817165805
+      value: 0.3474907364075402
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 4628572
+      lastRevision: 118393
     micLowGain:
       value: 1.92
       lastSource: init
@@ -125,20 +125,20 @@ params:
       lastOrigin: init
       lastRevision: 22
     audioStructure:
-      value: 1
+      value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628562
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118446
     audioBuildScore:
-      value: 0.9574632048606873
+      value: 0.9474914073944092
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628558
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118442
     audioEnergyRatio:
-      value: 0.5597096085548401
+      value: 0.61829674243927
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628561
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118445
     audioVocalsHot:
       value: 0
       lastSource: init
@@ -147,193 +147,193 @@ params:
     audioDropPulse:
       value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628559
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118443
     audioSlowZone:
-      value: 0.000001253886921404046
+      value: 0.00012534091365523636
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628560
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118444
     micDomFreq1:
-      value: 67.1703109741211
+      value: 55.0184440612793
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628592
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118413
     micDomEnergy1:
-      value: 0.4669586718082428
+      value: 0.31815609335899353
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628594
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118415
     micDomFreq2:
-      value: 591.069091796875
+      value: 95.80579376220703
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628593
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118414
     micDomEnergy2:
-      value: 0.08982201665639877
+      value: 0.00010048208787338808
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628595
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118416
     audioBpm:
-      value: 120
+      value: 117
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628596
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118417
     audioBeat:
-      value: 0.9980614185333252
+      value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628597
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118418
     audioParty:
       value: 1
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628598
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118419
     audioNote:
-      value: 11
+      value: 1
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628599
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118420
     audioNoteHue:
-      value: 0.9166666865348816
+      value: 0.0833333358168602
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628600
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118421
     audioSwitchPattern:
       value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628601
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118422
     audioSwitchColor:
       value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628602
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118423
     audioBeatInBar:
       value: 4
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628603
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118424
     audioBarPhase:
-      value: 0.7512617707252502
+      value: 0.8412954211235046
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628604
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118425
     audioDownbeat:
       value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628605
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118426
     audioGenre:
-      value: 4
+      value: 6
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628610
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118431
     audioGenreConf:
-      value: 0.07426048070192337
+      value: 0.03759264945983887
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628611
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118432
     audioRiserScore:
-      value: 0.8192417025566101
+      value: 0.3030804991722107
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628612
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118433
     audioBuildEta:
-      value: 27.510162353515625
+      value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628613
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118434
     audioRiserConf:
-      value: 0.8055379390716553
+      value: 0.18949827551841736
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628614
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118435
     audioSilence:
       value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628615
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118436
     audioTrackChange:
       value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628616
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118437
     audioClimax:
       value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628617
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118438
     audioPhrasePhase:
-      value: 0.5939077138900757
+      value: 0.10516192764043808
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628618
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118439
     audioPhraseBoundary:
       value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628619
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118440
     audioDropCountdown:
       value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628620
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118441
     micOnsetLowRaw:
-      value: 0
+      value: 0.2819523856604659
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 4628577
+      lastRevision: 118398
     micOnsetMidRaw:
-      value: 0.126912126235639
+      value: 0.11191521539893036
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 4628578
+      lastRevision: 118399
     micOnsetHighRaw:
-      value: 0.014981586675503299
+      value: 0.013671860233680043
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 4628579
+      lastRevision: 118400
     micSubRaw:
-      value: 0.3269632794320954
+      value: 0.3170228652815993
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 4628580
+      lastRevision: 118401
     micOnsetLow:
       value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628606
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118427
     micOnsetMid:
       value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628607
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118428
     micOnsetHigh:
       value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628608
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118429
     audioChestHit:
       value: 0
       lastSource: osc
-      lastOrigin: osc:127.0.0.1:49394
-      lastRevision: 4628609
+      lastOrigin: osc:127.0.0.1:60137
+      lastRevision: 118430
     micTonalStabilityRaw:
-      value: 0.2667866469044805
+      value: 0.27371130890686535
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 4628581
+      lastRevision: 118402
     micChromaFluxRaw:
-      value: 0.10525905880595299
+      value: 0.10278245908554871
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 4628582
+      lastRevision: 118403
     micChromaTiltRaw:
-      value: 0.3711340421334528
+      value: 0.29538332731153344
       lastSource: audio
       lastOrigin: audio:mic
-      lastRevision: 4628583
+      lastRevision: 118404
     bpmSpeedSync:
       value: 1
       lastSource: init

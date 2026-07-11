@@ -6,17 +6,17 @@
     {
       "slotId": 1,
       "page": 0,
-      "effectId": "colorWash",
-      "presetId": "ocean_blue",
-      "name": "Ocean Blue",
+      "effectId": "crush",
+      "presetId": "hard_2",
+      "name": "2-level",
       "color": "#1e78ff"
     },
     {
       "slotId": 2,
       "page": 0,
-      "effectId": "strobe",
-      "presetId": "sync_4hz",
-      "name": "Strobe",
+      "effectId": "breath",
+      "presetId": "deep",
+      "name": "Deep 14s",
       "color": "#ffffff"
     },
     {

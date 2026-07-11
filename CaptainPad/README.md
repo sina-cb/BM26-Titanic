@@ -17,6 +17,7 @@ npx eas-cli whoami                                    # proves the token works; 
 # 2. Register the iPad (open the link on the iPad), then build a standalone Release
 npx eas-cli device:create
 npx eas-cli build --profile preview --platform ios    # preview = Release, offline-capable, full speed
+npx eas-cli build --profile preview --platform ios --clear-cache --non-interactive
 
 # 3. Wipe traces when done
 Remove-Item Env:EXPO_TOKEN

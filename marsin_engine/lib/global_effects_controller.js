@@ -179,6 +179,8 @@ export class GlobalEffectsController {
       intensityFloor: 0.6,
       intensityCeil: 1.0,
       preset: null,     // dropHit params to fire (color6/AHR/blend)
+      presetId: null,   // library preset id (punch|ice_punch) for preset-aware active check
+      slotId: null,
     };
     this._kickLastFireMs = -Infinity;
 
@@ -1145,6 +1147,8 @@ export class GlobalEffectsController {
       releaseMs: params.releaseMs,
       blendMode: params.blendMode,
     };
+    this.kickRouter.presetId = meta.presetId || null;
+    this.kickRouter.slotId = meta.slotId || null;
     this.kickRouter.enabled = true;
   }
 
@@ -1265,7 +1269,11 @@ export class GlobalEffectsController {
       // config so status consumers / _isSlotActive can mirror engine state.
       beatPump: { ...this.beatPump },
       sweep: { ...this.sweep, color: [...this.sweep.color] },
-      kickRouter: { enabled: this.kickRouter.enabled },
+      kickRouter: {
+        enabled: this.kickRouter.enabled,
+        presetId: this.kickRouter.presetId,
+        slotId: this.kickRouter.slotId,
+      },
       freeze: { ...this.freeze },
       crush: { ...this.crush },
       breath: { ...this.breath },

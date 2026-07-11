@@ -808,6 +808,29 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // Apply global DMX-override level effects (Vintage .w boost, UV boost)
     if (globalEffectsController) globalEffectsController.applyPixels(model.pixels);
 
+    // Assemble the per-frame audio/beat SIGNALS bag the macros read (B2 fix:
+    // the bag was documented as "assembled in engine.js tick()" but never was,
+    // so beat-reactive effects — beatPump, beat-synced waterlineSweep, strobe
+    // phase-lock — silently ran at phase 0). beatPhase/barPhase derive from the
+    // ARBITRATED tempo (mixer.tempoBpm, which TempoArbiter auto-follows off the
+    // live DJ BPM), so the pump family grooves at the DJ's tempo with no OSC
+    // plumbing. Fail-loud: audio-reactive channels (micHigh Hi-Hat density,
+    // kick router, dropPulse) are NOT invented here — they stay 0 with
+    // audioPresent:false until the OSC audio path is wired (follow-up: read
+    // paramCenter 'micHigh'/'micKick' + Companion drop/beat when audio is live;
+    // kick threshold also needs live calibration before the auto router fires).
+    const tempoBpm = (typeof mixer.tempoBpm === 'number' && mixer.tempoBpm > 0)
+      ? mixer.tempoBpm : 0;
+    const beats = tempoBpm > 0 ? (now / 1000) * (tempoBpm / 60) : 0;
+    const signals = {
+      beatPhase: tempoBpm > 0 ? beats - Math.floor(beats) : 0,
+      barPhase: tempoBpm > 0 ? (beats / 4) - Math.floor(beats / 4) : 0,
+      audioPresent: false,
+      micHigh: 0,
+      kick: 0,
+      dropPulse: 0,
+    };
+
     // NEW: Apply Global Effect Macros (color wash, feedback trails,
     // drop hit envelopes, software sync strobe). Runs before
     // intensity / blackout per docs/28 §2.2 so master dimmers and
@@ -817,6 +840,7 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
         pixels: model.pixels,
         frameIndex: frameCount,
         nowMs: now,
+        signals,
       });
     }
 
@@ -831,6 +855,22 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
     // off.
     if (globalEffectsController && globalEffectsController.applyInvert) {
       globalEffectsController.applyInvert(model.pixels);
+    }
+
+    // Chroma stage AFTER invert (B1 fix): the E6 Palette Crush stage registers
+    // on the 'postInvert' anchor, which is ONLY run by applyPostInvert() — and
+    // nothing in the show loop called it (only the gem unit test did), so the
+    // crush family (party-8 '2-level' etc.) never rendered live. Run it right
+    // after applyInvert per the library design note ("postInvert runs right
+    // after applyInvert so a crushed frame inverts crisply"). Zero-cost when
+    // no postInvert-anchored effect is enabled.
+    if (globalEffectsController && globalEffectsController.applyPostInvert) {
+      globalEffectsController.applyPostInvert({
+        pixels: model.pixels,
+        frameIndex: frameCount,
+        nowMs: now,
+        signals,
+      });
     }
 
     // Group fixed-color locks (docs/32): repaint operator-locked groups

@@ -726,6 +726,15 @@ export class GlobalEffectSlotManager {
       //   - modeIndex   the current value's index in modeValues.
       // All null when the bound effect declares no mode / is unknown.
       const modeInfo = this._resolveModeInfo(slot);
+      // Declarative value-encoder flag (docs/42 VSN1 jog-wheel): an effect
+      // may opt out of the value encoder entirely by declaring
+      // `valueParam: 'none'` on its library def (e.g. fogger — a bare
+      // on/off haze with no magnitude). Surfaced verbatim so the UI can
+      // grey out the encoder; null when the effect declares nothing.
+      const effectDef = slot.effectId ? GLOBAL_EFFECT_LIBRARY[slot.effectId] : null;
+      const valueParam = effectDef && effectDef.valueParam !== undefined
+        ? effectDef.valueParam
+        : null;
       return {
         slotId: slot.slotId,
         enabled: slot.enabled,
@@ -735,6 +744,7 @@ export class GlobalEffectSlotManager {
         behavior: slot.behavior,
         color: slot.color ?? null,
         page: pageOfSlot(slot.slotId),
+        valueParam,
         paramsOverride: { ...(slot.paramsOverride || {}) },
         safetyTier: resolved ? resolved.safetyTier : null,
         active: this._isSlotActive(slot),
@@ -893,23 +903,30 @@ export class GlobalEffectSlotManager {
       case 'dropHit':
         return c.dropHitActive;
       // ── Party effects (report 20260708_7) ────────────────────────────
+      // PRESET-AWARE (RCA: Hi-Hat↔Blizzard pad crosstalk). These are
+      // singleton effects with MULTIPLE presets; the controller already
+      // stamps the running preset id on enable, so two slots bound to
+      // DIFFERENT presets of the same effect must NOT both report active.
+      // Mirror the strobe/colorWash/feedbackTrails preset guard above.
       case 'beatPump':
-        return !!c.beatPump.enabled;
+        return !!c.beatPump.enabled && c.beatPump.presetId === slot.presetId;
       case 'waterlineSweep':
-        return !!c.sweep.enabled;
+        return !!c.sweep.enabled && c.sweep.presetId === slot.presetId;
       // Kick Punch: the AUTO router is the toggle-able state. The one-shot
       // trigger fires a dropHit and holds no lasting state of its own, so
-      // active-ness tracks the armed router.
+      // active-ness tracks the armed router — but the router now stamps the
+      // firing preset id, so two kickPunch slots (punch vs ice_punch) don't
+      // both light.
       case 'kickPunch':
-        return !!c.kickRouter.enabled;
+        return !!c.kickRouter.enabled && c.kickRouter.presetId === slot.presetId;
       case 'freeze':
-        return !!c.freeze.active;
+        return !!c.freeze.active && c.freeze.presetId === slot.presetId;
       case 'crush':
-        return !!c.crush.enabled;
+        return !!c.crush.enabled && c.crush.presetId === slot.presetId;
       case 'breath':
-        return !!c.breath.enabled;
+        return !!c.breath.enabled && c.breath.presetId === slot.presetId;
       case 'sparkle':
-        return !!c.sparkle.enabled;
+        return !!c.sparkle.enabled && c.sparkle.presetId === slot.presetId;
       // Global color Invert (June 2026): now an assignable slot effect
       // routed through controller.invert. Singleton boolean, no preset
       // distinction.
@@ -1196,6 +1213,7 @@ export class GlobalEffectSlotManager {
       case 'breath': return c.breath.presetId === resolved.presetId;
       case 'sparkle': return c.sparkle.presetId === resolved.presetId;
       case 'freeze': return c.freeze.presetId === resolved.presetId;
+      case 'kickPunch': return c.kickRouter.presetId === resolved.presetId;
       default: return true;
     }
   }

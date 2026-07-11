@@ -49,8 +49,8 @@ function strobeSlotId(mgr) {
 // 1. Presentation: name is "Pulse", not a frequency
 // ════════════════════════════════════════════════════════════════════
 
-test('the effect is presented as "Pulse" (frequency dropped from the name)', () => {
-  assert.equal(GLOBAL_EFFECT_LIBRARY.strobe.name, 'Pulse');
+test('the effect is presented as "Strobe" (frequency dropped from the name)', () => {
+  assert.equal(GLOBAL_EFFECT_LIBRARY.strobe.name, 'Strobe');
   assert.ok(!/hz/i.test(GLOBAL_EFFECT_LIBRARY.strobe.name), 'no frequency in the name');
 });
 

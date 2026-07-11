@@ -1,43 +1,47 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 38_prism_helix
+  pattern: 02_phase_cathedral
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
   localControls:
-    '23515769':
-      v0: 0.83
+    '149283354':
+      v0: 0.26
       v1: 0
       v2: 0
-    '729588226':
+    '614525773':
       v0: 0
       v1: 0
       v2: 0
     '1037917937':
-      v0: 0
+      v0: 0.84
       v1: 0
       v2: 0
-    '1943188854':
-      v0: 0
+    '1323486710':
+      v0: 0.76
       v1: 0
       v2: 0
-    '3319710180':
-      v0: 0
+    '2504041261':
+      v0: 0.5
+      v1: 0
+      v2: 0
+    '3994789032':
+      v0: 0.6
       v1: 0
       v2: 0
     '4234014351':
-      v0: 0
+      v0: 0.5
       v1: 0
       v2: 0
   playlist:
     name: default
-    activeEntryId: e_1781818974092_2409
-    cursor: 38
+    activeEntryId: e_default_2_02_phase_cathedral
+    cursor: 2
     autopilot:
-      active: true
+      active: false
       delay_s: 5
       shuffle: false
   viewSelection:
