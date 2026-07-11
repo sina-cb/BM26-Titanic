@@ -15,6 +15,8 @@ import {
   computeVisibleSlots,
   computePageActivity,
   slotIdForPage,
+  resolveEffectsPage,
+  SHOW_EFFECT_PAGES,
   VISIBLE_SLOT_COUNT,
   SlotBindingLike,
 } from './global_effect_macros_logic';
@@ -85,6 +87,34 @@ describe('computeVisibleSlots — page window', () => {
     // Page 0 does NOT show slot 17.
     const p0 = computeVisibleSlots(slots, 0, empty);
     expect(p0.every((c) => !slotIsBound(c))).toBe(true);
+  });
+});
+
+describe('resolveEffectsPage — party single-page layout (SHOW_EFFECT_PAGES)', () => {
+  it('the party ships with the pager HIDDEN (single-page layout)', () => {
+    // Guards the intended shipping state: the 4-page switcher is off because
+    // the VSN1 side buttons no longer page. Flipping the flag on is a deliberate
+    // choice, and flipping it should light up the switcher tests below.
+    expect(SHOW_EFFECT_PAGES).toBe(false);
+  });
+
+  it('pins the render page to 0 when the pager is hidden, whatever the engine page', () => {
+    // Even a stale/persisted non-zero engine page renders page 0 (the grid shows
+    // the party-8 layout). This is the "render page 1 anyway" contract.
+    expect(resolveEffectsPage(0, false)).toBe(0);
+    expect(resolveEffectsPage(2, false)).toBe(0);
+    expect(resolveEffectsPage(3, false)).toBe(0);
+  });
+
+  it('honours the engine page verbatim when the pager is shown', () => {
+    expect(resolveEffectsPage(0, true)).toBe(0);
+    expect(resolveEffectsPage(2, true)).toBe(2);
+  });
+
+  it('defaults to the shipping SHOW_EFFECT_PAGES flag when no override is passed', () => {
+    // With the flag false, the one-arg form pins page 0 — the grid can never
+    // render a non-party page while the switcher is hidden.
+    expect(resolveEffectsPage(3)).toBe(SHOW_EFFECT_PAGES ? 3 : 0);
   });
 });
 

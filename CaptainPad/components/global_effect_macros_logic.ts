@@ -22,6 +22,31 @@
 export const VISIBLE_SLOT_COUNT = 8;
 export const EFFECTS_PAGE_COUNT = 4;
 
+// party 2026-07-11 — single-page effects layout. FLIP TO `true` TO RESTORE the
+// 4-page switcher. The party redesign remapped the VSN1 side buttons (they used
+// to drive the effects page) to MODE/VIEW/empty/LOGO, so ONLY page 0 (the
+// party-8 layout) is ever in use. The 4-page switcher chrome + the "PAGE Pn"
+// badge were eating vertical space in the deck/mixer bottom bar (and squeezing
+// the deck pattern column), so with this false the grid renders page 0 ONLY and
+// the pager UI is hidden. ALL engine paging PLUMBING stays wired underneath —
+// the `page` state, GET/PATCH /global-effects/page, and the `effectsPage` WS
+// broadcast are untouched — so restoring the switcher is this one-line change.
+export const SHOW_EFFECT_PAGES = false;
+
+/**
+ * The page the strip should actually RENDER. When the pager UI is hidden
+ * (SHOW_EFFECT_PAGES=false, the party single-page layout) we pin page 0
+ * regardless of the engine's active `effectsPage`; when it's shown we honour the
+ * engine page verbatim. Pure + total so the "pages hidden ⇒ always page 0"
+ * contract is unit-tested without react-native.
+ */
+export function resolveEffectsPage(
+  enginePage: number,
+  showPages: boolean = SHOW_EFFECT_PAGES,
+): number {
+  return showPages ? enginePage : 0;
+}
+
 /** Flat slot id (1..32) for the `index0`-th visible cell on `page`. */
 export const slotIdForPage = (page: number, index0: number): number =>
   page * VISIBLE_SLOT_COUNT + index0 + 1;

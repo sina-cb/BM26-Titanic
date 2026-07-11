@@ -903,9 +903,13 @@ export default function ControlDeckScreen() {
           back to a single vertical stack (the previous behavior) so nothing is
           crushed in portrait. `globalStyles.container` is `flexDirection:'row',
           flex:1` already; we widen it to wrap on narrow so the columns stack.
-          Column flex weights: PATTERNS 1.1 / PARAMETERS 1 / SETTINGS 1.2 — the
-          pattern grid and the settings stack are a touch wider than the params
-          column to seat their wider controls (pill bars, palette swatches). */}
+          Column flex weights: PATTERNS 1.6 / PARAMETERS 1 / SETTINGS 1 — the
+          pattern list is the operator's primary browsing surface and was
+          reported "too small" in landscape (party 2026-07-11), so it now carries
+          the widest weight (~44% of the row, up from ~33%). PARAMETERS and
+          SETTINGS share the rest evenly; SETTINGS dropped 1.2→1 (its pill bars /
+          palette swatches still fit at the narrower width). To nudge live, bump
+          the PATTERNS weight below. */}
       <View style={[globalStyles.container, !isWide && { flexDirection: 'column' }]}>
         {/* ── COLUMN 1 — PATTERNS ──────────────────────────────────────────
             The one-and-only pattern list (active playlist) + the global rig HUE
@@ -927,7 +931,10 @@ export default function ControlDeckScreen() {
           // 320→480 so the split card is tall enough to seat two MIN_PANE panes
           // (deck_split_playlists.md §Resizable split): below 2·MIN_PANE_PT the
           // divider forces a fixed 0.5, so the extra height keeps the drag live.
-          isWide ? { flex: 1.1 } : { flex: 0, minHeight: deckSecondaryBound ? 480 : 320 },
+          // party 2026-07-11: PATTERNS weight 1.1→1.6 (operator: the pattern
+          // list is "too small" horizontally in landscape). See the column-weights
+          // note above; PARAMETERS/SETTINGS were rebalanced to match.
+          isWide ? { flex: 1.6 } : { flex: 0, minHeight: deckSecondaryBound ? 480 : 320 },
         ]}>
           {isConnected === false && <OfflineBanner error={connectionError} />}
 
@@ -1135,7 +1142,9 @@ export default function ControlDeckScreen() {
             DYNAMIC VIEW OVERRIDES stack. Independently scrollable. */}
         <View style={[
           { padding: 0 },
-          isWide ? { flex: 1.2 } : { flex: 0 },
+          // party 2026-07-11: SETTINGS weight 1.2→1 to free horizontal room for
+          // the widened PATTERNS column (see the column-weights note above).
+          isWide ? { flex: 1 } : { flex: 0 },
         ]}>
           {/* Padding tightened from 48 → 16 (QA round8 #1): the old 48px
               gutter plus the cards' inner paddingRight:24 wasted ~72px of the

@@ -66,6 +66,8 @@ import { engineEvents } from '@/utils/engineEvents';
 import {
   VISIBLE_SLOT_COUNT,
   EFFECTS_PAGE_COUNT,
+  SHOW_EFFECT_PAGES,
+  resolveEffectsPage,
   slotIsBound,
   computeVisibleSlots,
   computePageActivity,
@@ -206,6 +208,12 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // slots/:id can fill them in. The engine creates a slot record on first
   // PATCH if it doesn't exist (or, if it strictly validates, we'll find
   // out from the PATCH response and surface the error).
+  // party 2026-07-11 single-page layout: `renderPage` is the page the GRID
+  // actually shows. With SHOW_EFFECT_PAGES=false it is pinned to 0 even when the
+  // engine broadcasts a non-zero `effectsPage` (VSN1 side buttons no longer page
+  // — see resolveEffectsPage). The `page` state + all its plumbing (fetch/WS/
+  // PATCH) stays live; only the RENDER page and the pager chrome are suppressed.
+  const renderPage = resolveEffectsPage(page);
   const visibleSlots = useMemo(() => {
     if (!slots) return null;
     // The 8 cells show the ACTIVE PAGE's flat slot ids (8*page+1 .. 8*page+8).
@@ -213,10 +221,27 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     // EMPTY via slotIsBound — the "can't remove an effect" fix.
     return computeVisibleSlots<GlobalEffectSlotStatus>(
       slots,
-      page,
+      renderPage,
       (slotId) => ({ ...EMPTY_STENCIL, slotId } as unknown as GlobalEffectSlotStatus),
     );
-  }, [slots, page]);
+  }, [slots, renderPage]);
+
+  // party 2026-07-11 single-page guard (Codex P0: fail loud, but don't spam).
+  // If the pager UI is hidden yet the engine reports a page other than 0 — a
+  // stale persisted effectsPage, or a surface that still pages — we render page
+  // 0 anyway (renderPage above) and warn ONCE so the discrepancy is visible in
+  // the console without flooding it on every status broadcast.
+  const warnedHiddenPageRef = useRef(false);
+  useEffect(() => {
+    if (!SHOW_EFFECT_PAGES && page !== 0 && !warnedHiddenPageRef.current) {
+      warnedHiddenPageRef.current = true;
+      console.warn(
+        `[GEM] effects pages are hidden (party single-page layout) but the engine `
+        + `reports page ${page}; rendering page 1 (index 0). Flip SHOW_EFFECT_PAGES `
+        + `to restore the pager.`,
+      );
+    }
+  }, [page]);
 
   // Per-page "something is running" flags for the page switcher's activity
   // dots — pure presentation derived from the SAME engine status array that
@@ -601,8 +626,11 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   if (visibleSlots === null) {
     return (
       <View style={{ paddingTop: 8 }}>
-        <Header variant={variant} page={page} />
-        <PageSwitcher page={page} onSelect={onSelectPage} pageActivity={pageActivity} />
+        <Header variant={variant} page={renderPage} />
+        {/* party 2026-07-11 — pager chrome hidden (single-page layout). */}
+        {SHOW_EFFECT_PAGES ? (
+          <PageSwitcher page={page} onSelect={onSelectPage} pageActivity={pageActivity} />
+        ) : null}
         <View style={{ flexDirection: 'row', gap }}>
           {Array.from({ length: VISIBLE_SLOT_COUNT }).map((_, i) => (
             <View key={i} style={{ flex: 1, height: btnHeight, borderRadius: 8, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }} />
@@ -620,8 +648,12 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     // GEM adding its own produced a doubled hairline mid-bar, so the inner
     // border only ships with the standalone deck grid.
     <View style={{ paddingTop: 6, borderTopWidth: isStrip ? 0 : 1, borderTopColor: C.ghostBorder, flex: isStrip ? 1 : undefined }}>
-      <Header variant={variant} page={page} />
-      <PageSwitcher page={page} onSelect={onSelectPage} pageActivity={pageActivity} />
+      <Header variant={variant} page={renderPage} />
+      {/* party 2026-07-11 — the 4-page switcher is HIDDEN (single-page layout;
+          VSN1 side buttons no longer page). Flip SHOW_EFFECT_PAGES to restore. */}
+      {SHOW_EFFECT_PAGES ? (
+        <PageSwitcher page={page} onSelect={onSelectPage} pageActivity={pageActivity} />
+      ) : null}
       {/* (The global hue shifter row that used to sit here was REMOVED
           2026-07 — hue is per-channel only: the deck's DeckHueRow and each
           mixer strip's HUE trim are the hue controls.) */}
@@ -887,21 +919,27 @@ const Header: React.FC<{ variant: 'deck' | 'mixer-strip'; page: number }> = ({ p
       }}>
         Global Effects
       </Text>
-      <View
-        accessibilityLabel={`Effects page ${page}`}
-        style={{
-          paddingHorizontal: 8, height: 18, borderRadius: 9,
-          backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder,
-          alignItems: 'center', justifyContent: 'center',
-        }}
-      >
-        <Text style={{
-          fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
-          color: C.primary, letterSpacing: 0.8,
-        }}>
-          {`PAGE P${page}`}
-        </Text>
-      </View>
+      {/* party 2026-07-11 — the "PAGE Pn" badge rides with the pager: hidden in
+          the single-page layout (SHOW_EFFECT_PAGES=false) since there is only
+          ever page 0. Flip SHOW_EFFECT_PAGES to restore it alongside the
+          switcher. */}
+      {SHOW_EFFECT_PAGES ? (
+        <View
+          accessibilityLabel={`Effects page ${page}`}
+          style={{
+            paddingHorizontal: 8, height: 18, borderRadius: 9,
+            backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder,
+            alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+            color: C.primary, letterSpacing: 0.8,
+          }}>
+            {`PAGE P${page}`}
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 };
