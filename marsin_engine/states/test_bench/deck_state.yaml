@@ -1,15 +1,19 @@
 channel:
   id: ch_base_1778870620551
   name: Base
-  pattern: 02_phase_cathedral
+  pattern: 00_golden_hour_wash
   mode: blend_screen
   fader: 1
   enabled: true
   locked: false
   faderLocked: false
   localControls:
-    '149283354':
-      v0: 0.26
+    '537253481':
+      v0: 0.25
+      v1: 0
+      v2: 0
+    '590147806':
+      v0: 0.5
       v1: 0
       v2: 0
     '614525773':
@@ -17,19 +21,23 @@ channel:
       v1: 0
       v2: 0
     '1037917937':
-      v0: 0.84
+      v0: 0.33
       v1: 0
       v2: 0
-    '1323486710':
-      v0: 0.76
+    '2073951030':
+      v0: 0.2
       v1: 0
       v2: 0
     '2504041261':
       v0: 0.5
       v1: 0
       v2: 0
+    '3334264878':
+      v0: 0.45
+      v1: 0
+      v2: 0
     '3994789032':
-      v0: 0.6
+      v0: 1
       v1: 0
       v2: 0
     '4234014351':
@@ -38,8 +46,8 @@ channel:
       v2: 0
   playlist:
     name: default
-    activeEntryId: e_default_2_02_phase_cathedral
-    cursor: 2
+    activeEntryId: e_default_0_00_golden_hour_wash
+    cursor: 0
     autopilot:
       active: false
       delay_s: 5

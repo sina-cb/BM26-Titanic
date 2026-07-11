@@ -6,49 +6,49 @@
     {
       "slotId": 1,
       "page": 0,
-      "effectId": "crush",
-      "presetId": "hard_2",
-      "name": "2-level",
+      "effectId": "strobe",
+      "presetId": "pulse_2hz",
+      "name": "2 Hz Pulse",
       "color": "#1e78ff"
     },
     {
       "slotId": 2,
       "page": 0,
-      "effectId": "breath",
-      "presetId": "deep",
-      "name": "Deep 14s",
+      "effectId": "dropHit",
+      "presetId": "iceberg_flash",
+      "name": "Iceberg Flash",
       "color": "#ffffff"
     },
     {
       "slotId": 3,
       "page": 0,
-      "effectId": "feedbackTrails",
-      "presetId": "ghost_ship",
-      "name": "Ghost Ship",
+      "effectId": "colorWash",
+      "presetId": "ocean_blue",
+      "name": "Ocean Blue",
       "color": "#a03cff"
     },
     {
       "slotId": 4,
       "page": 0,
-      "effectId": "beatPump",
-      "presetId": "deep",
-      "name": "Deep Pump",
+      "effectId": "feedbackTrails",
+      "presetId": "cosmic_trails",
+      "name": "Cosmic Trails",
       "color": "#ff8c00"
     },
     {
       "slotId": 5,
       "page": 0,
-      "effectId": "blastWhite",
-      "presetId": "default",
-      "name": "Blast White",
+      "effectId": "beatPump",
+      "presetId": "deep",
+      "name": "Deep Pump",
       "color": "#fff0d2"
     },
     {
       "slotId": 6,
       "page": 0,
-      "effectId": "dropHit",
-      "presetId": "iceberg_flash",
-      "name": "Iceberg",
+      "effectId": "sparkle",
+      "presetId": "fizz",
+      "name": "Fizz",
       "color": "#00c8dc"
     },
     {

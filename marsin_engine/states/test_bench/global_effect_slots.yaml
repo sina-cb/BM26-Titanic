@@ -1,51 +1,51 @@
 slots:
   - slotId: 1
     enabled: true
-    label: 2-level
-    effectId: crush
-    presetId: hard_2
+    label: 2 Hz Pulse
+    effectId: strobe
+    presetId: pulse_2hz
     behavior: toggle
     paramsOverride:
-      amount: 0
-    intensity: 0
-    mode: null
+      hz: 5
+    intensity: null
+    mode: 5
     color: '#1e78ff'
   - slotId: 2
     enabled: true
-    label: Deep 14s
-    effectId: breath
-    presetId: deep
-    behavior: toggle
+    label: Iceberg Flash
+    effectId: dropHit
+    presetId: iceberg_flash
+    behavior: trigger
     paramsOverride: {}
     intensity: null
     mode: null
     color: '#ffffff'
   - slotId: 3
     enabled: true
-    label: Ghost Ship
-    effectId: feedbackTrails
-    presetId: ghost_ship
+    label: Ocean Blue
+    effectId: colorWash
+    presetId: ocean_blue
     behavior: toggle
     paramsOverride:
-    intensity: 0.2204724409448819
+      amount: 0.13385826771653545
+    intensity: 0.13385826771653545
     mode: null
     color: '#a03cff'
   - slotId: 4
     enabled: true
-    label: Deep Pump
-    effectId: beatPump
-    presetId: deep
+    label: Cosmic Trails
+    effectId: feedbackTrails
+    presetId: cosmic_trails
     behavior: toggle
-    paramsOverride:
-      rate: 2
-    mode: 2
+    paramsOverride: {}
+    mode: null
     intensity: null
     color: '#ff8c00'
   - slotId: 5
     enabled: true
-    label: Blast White
-    effectId: blastWhite
-    presetId: default
+    label: Deep Pump
+    effectId: beatPump
+    presetId: deep
     behavior: toggle
     paramsOverride: {}
     intensity: null
@@ -53,14 +53,13 @@ slots:
     color: '#fff0d2'
   - slotId: 6
     enabled: true
-    label: Iceberg
-    effectId: dropHit
-    presetId: iceberg_flash
-    behavior: trigger
-    paramsOverride:
-      blendMode: add
+    label: Fizz
+    effectId: sparkle
+    presetId: fizz
+    behavior: toggle
+    paramsOverride: {}
     intensity: null
-    mode: add
+    mode: null
     color: '#00c8dc'
   - slotId: 7
     enabled: true
