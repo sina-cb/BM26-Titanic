@@ -161,6 +161,18 @@ export default function ControlDeckScreen() {
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const isPortrait = winWidth < winHeight;
   const isWide = !isPortrait && winWidth >= 900;
+  // Stacked layout scrolls as ONE page (see the layout-fix note at the
+  // columns host below); wide layout is a plain row. Capitalized so JSX
+  // accepts it as a component.
+  const ColumnsHost: React.ComponentType<any> = isWide ? View : ScrollView;
+  // Section host for the PARAMETERS + SETTINGS columns: ScrollView only when
+  // the column has a bounded height (wide row); a plain View in the stacked
+  // page-scroll (an inner ScrollView there collapses to zero height — the
+  // party 2026-07-11 'third column missing' bug).
+  const SectionHost: React.ComponentType<any> = isWide ? ScrollView : View;
+  const sectionHostProps = isWide
+    ? { contentContainerStyle: { padding: 16, paddingBottom: 80 }, showsVerticalScrollIndicator: false }
+    : { style: { padding: 16, paddingBottom: 24 } };
   const [deckChannel, setDeckChannel] = useState<any | null>(null);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [connectionError, setConnectionError] = useState<string>('');
@@ -910,7 +922,21 @@ export default function ControlDeckScreen() {
           SETTINGS share the rest evenly; SETTINGS dropped 1.2→1 (its pill bars /
           palette swatches still fit at the narrower width). To nudge live, bump
           the PATTERNS weight below. */}
-      <View style={[globalStyles.container, !isWide && { flexDirection: 'column' }]}>
+      {/* party 2026-07-11 LAYOUT FIX: in the STACKED (non-wide) layout the
+          PARAMETERS + SETTINGS sections collapsed to ZERO height (flex:0
+          wrappers whose only children are ScrollViews have no intrinsic
+          height) and there was no outer scroll to reach them — the operator
+          saw ONLY the patterns card. Fix: the stacked layout hosts the three
+          sections in ONE outer ScrollView (sections size to their content and
+          the page scrolls, the standard RN pattern); the wide layout keeps the
+          plain 3-column row. The sections' inner ScrollViews scroll only in
+          wide mode (scrollEnabled={isWide}) so stacked mode has a single,
+          predictable scroll surface. */}
+      <ColumnsHost
+        dataSet={{ layouthost: 'columns' }}
+        style={[globalStyles.container, !isWide && { flexDirection: 'column' }]}
+        {...(!isWide ? { contentContainerStyle: { paddingBottom: 16 } } : {})}
+      >
         {/* ── COLUMN 1 — PATTERNS ──────────────────────────────────────────
             The one-and-only pattern list (active playlist) + the global rig HUE
             shifter pinned above it. DECK MAIN's live preview strip stays in the
@@ -934,7 +960,7 @@ export default function ControlDeckScreen() {
           // party 2026-07-11: PATTERNS weight 1.1→1.6 (operator: the pattern
           // list is "too small" horizontally in landscape). See the column-weights
           // note above; PARAMETERS/SETTINGS were rebalanced to match.
-          isWide ? { flex: 1.6 } : { flex: 0, minHeight: deckSecondaryBound ? 480 : 320 },
+          isWide ? { flex: 1.6, minWidth: 0 } : { flex: 0, minHeight: deckSecondaryBound ? 480 : 320 },
         ]}>
           {isConnected === false && <OfflineBanner error={connectionError} />}
 
@@ -998,9 +1024,12 @@ export default function ControlDeckScreen() {
             the middle column, independently scrollable. */}
         <View style={[
           { padding: 0 },
-          isWide ? { flex: 1 } : { flex: 0 },
+          // minWidth:0 lets the column actually shrink to its flex share in
+          // the row (RN children otherwise refuse below content width and
+          // shove the SETTINGS column off-screen). Stacked: content-sized.
+          isWide ? { flex: 1, minWidth: 0 } : {},
         ]}>
-          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
+          <SectionHost dataSet={{ layouthost: "section" }} {...sectionHostProps}>
             {/* Channel parameters for the deck (base) channel. The deck is
                 hard-wired to the base channel; CaptainPad's MIXER tab is
                 where multi-channel routing lives. */}
@@ -1132,7 +1161,7 @@ export default function ControlDeckScreen() {
                 );
               })}
             </View>
-          </ScrollView>
+          </SectionHost>
         </View>
 
         {/* ── COLUMN 3 — AUTOPILOT & SETTINGS ──────────────────────────────
@@ -1144,14 +1173,16 @@ export default function ControlDeckScreen() {
           { padding: 0 },
           // party 2026-07-11: SETTINGS weight 1.2→1 to free horizontal room for
           // the widened PATTERNS column (see the column-weights note above).
-          isWide ? { flex: 1 } : { flex: 0 },
+          // minWidth:0 = same shrink guard as the PARAMETERS column; stacked
+          // mode is content-sized inside the outer page scroll.
+          isWide ? { flex: 1, minWidth: 0 } : {},
         ]}>
           {/* Padding tightened from 48 → 16 (QA round8 #1): the old 48px
               gutter plus the cards' inner paddingRight:24 wasted ~72px of the
               column's width, forcing the AUTOPILOT / OVERLAYS pill bars
               into horizontal scroll. paddingBottom keeps the last card clear
               of the bottom GLOBAL EFFECTS bar (its intrinsic height ~58px). */}
-          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
+          <SectionHost dataSet={{ layouthost: "section" }} {...sectionHostProps}>
             {/* Offline Banner (settings column) */}
             {isConnected === false && (
               <OfflineBanner error={connectionError} />
@@ -1272,9 +1303,9 @@ export default function ControlDeckScreen() {
               // over.
               disabled={isConnected === false || planGate}
             />
-          </ScrollView>
+          </SectionHost>
         </View>
-      </View>
+      </ColumnsHost>
         {/* Hermetic plan-lock scrim — blankets the whole content region above
             (top bar → 3 columns → overlays) with one tap-catching layer.
             Active only under the soft PLAN lock and NOT during an operator
