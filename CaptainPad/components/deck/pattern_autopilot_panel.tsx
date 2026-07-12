@@ -133,9 +133,9 @@ export const PatternAutopilotPanel: React.FC<PatternAutopilotPanelProps> = ({
       {/* Header sits on the SAME row as PLAY/PAUSE + SHUFFLE + GROUP so it costs
           zero extra vertical height — the label rides the baseline of the
           tallest control next to it. */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>{title}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 6, columnGap: 8 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', flexShrink: 1 }}>{title}</Text>
           {/* Next-pattern-swap countdown — rides right after the label, only
               while a swap is scheduled. Self-ticking (its own 1 Hz interval) so
               it never re-renders the deck screen; reads identically whether the
@@ -152,7 +152,7 @@ export const PatternAutopilotPanel: React.FC<PatternAutopilotPanelProps> = ({
           </TouchableOpacity>
         </View>
 
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 0 }}>
           <TouchableOpacity
             onPress={() => { onInteraction?.(); onChange({ shuffle: !shuffle }); }}
             style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}

@@ -992,14 +992,14 @@ export default function ControlDeckScreen() {
           // collapses to ~content height and the inner flex:1 goes to 0). An
           // explicit non-flexible basis is what actually fixes the box.
           // Height scales with the window (operator: 400pt fixed was "very
-          // short and not usable" on iPad portrait): 55% of window height,
-          // floored at 400pt (500pt with a second playlist bound — two
-          // MIN_PANE panes need the room). iPad portrait 1080pt → ~594pt of
-          // patterns, still leaving a clear scroll area below.
+          // short and not usable" on iPad portrait; 55% was then too tall —
+          // "reduce by 30%"): 38.5% of window height, floored at 400pt
+          // (500pt with a second playlist bound — two MIN_PANE panes need
+          // the room). iPad portrait 1080pt → ~416pt; 12.9" 1366pt → ~526pt.
           isWide
             ? { flex: 4, minWidth: 0 }
             : (() => {
-                const h = Math.max(deckSecondaryBound ? 500 : 400, Math.round(winHeight * 0.55));
+                const h = Math.max(deckSecondaryBound ? 500 : 400, Math.round(winHeight * 0.385));
                 return { flexGrow: 0, flexShrink: 0, flexBasis: h, height: h };
               })(),
         ]}>

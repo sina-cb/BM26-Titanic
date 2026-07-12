@@ -251,6 +251,10 @@ export function TransitionStylePicker({
           backgroundColor: disabled ? 'transparent' : 'rgba(95, 35, 199, 0.10)',
           opacity: disabled ? 0.4 : 1,
           flex: 1,
+          // Wrap onto its own full-width line (parent row has flexWrap) rather
+          // than compress below its label width and clip the mode name
+          // (e.g. "CROSSFADE") in the ~275px landscape col3.
+          minWidth: 140,
         }}
       >
         <Text style={{
@@ -367,7 +371,7 @@ export function DeckTransitionControls({
           Hoisting the "DECK TRANSITIONS" label onto the controls row
           (May 2026 compaction) eliminates the dedicated header row's
           ~24px and lets the card breathe horizontally instead. */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', rowGap: 6 }}>
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
           letterSpacing: 1.2, color: C.secondary,
