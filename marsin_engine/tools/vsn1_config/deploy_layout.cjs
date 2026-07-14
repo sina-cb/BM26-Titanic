@@ -41,8 +41,29 @@ const { spawnSync } = require('child_process');
 
 const gs = require('./grid_serial.cjs');
 
-const TPL = path.join(__dirname, 'templates', 'effects_layout');
+// Template sets, one per controllerProfile (effects_v2 PLAY/EDIT split).
+//   edit → templates/effects_layout       (the full detail-edit surface)
+//   play → templates/effects_layout_play  (big-cell performance surface)
+// The PLAY set only overrides the templates that DIFFER (lcd_init / lcd_draw +
+// the encoder templates); every other element (keys, side buttons, system,
+// encoder receiver) is SHARED and read from the base edit set. `readTplFor`
+// resolves a play override when present, else the base file — a missing file
+// in BOTH dirs still throws (fail-loud, no behavioral fallback). This is
+// theme-style template resolution, not a silent behavior fallback.
+const TPL_ROOT = path.join(__dirname, 'templates');
+const TPL_DIR_BY_PROFILE = { edit: 'effects_layout', play: 'effects_layout_play' };
 const OUT = path.join(__dirname, 'dumps');
+
+// Resolve a template file for a given profile: the play override if it exists,
+// else the base edit template. `fs.readFileSync` in the caller throws loudly if
+// the file is missing from BOTH sets (no silent fallback — Codex P0).
+function tplPathFor(profile, file) {
+  if (profile === 'play') {
+    const override = path.join(TPL_ROOT, TPL_DIR_BY_PROFILE.play, file);
+    if (fs.existsSync(override)) return override;
+  }
+  return path.join(TPL_ROOT, TPL_DIR_BY_PROFILE.edit, file);
+}
 
 const PAGES = 4;
 const KEYS_PER_PAGE = 8;
@@ -75,11 +96,13 @@ const FACTORY_KEY_BC =
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const args = { layout: null, live: false, port: null, fromEngine: false, engineUrl: 'http://127.0.0.1:6968', page: null };
+  const args = { layout: null, live: false, port: null, fromEngine: false, engineUrl: 'http://127.0.0.1:6968', page: null, allowNonzeroPage: false };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--page') {
       args.page = parseInt(argv[++i], 10);
+    } else if (a === '--allow-nonzero-page') {
+      args.allowNonzeroPage = true;
     } else if (a === '--layout') {
       args.layout = argv[++i];
     } else if (a === '--from-engine') {
@@ -115,8 +138,16 @@ Usage:
 toggle|trigger, colors, primaryMode value names). Missing colors fall back to
 the built-in palette by key position.
 
---page N (0..3) deploys only that page — the fast path the engine's auto-deploy
-hook uses when a single slot changes. Dry-run default + read-back verify apply.
+--page N deploys only that page. OWN-PAGE RETIREMENT (effects_v2 2026-07): the
+device is a fixed PAGE-0 surface, so a normal deploy is PAGE 0 ONLY and a
+non-zero --page is refused. Pass --allow-nonzero-page for deliberate MANUAL
+RECOVERY of a stale page 1-3 (restores the legacy 3->2->1->0 full order + leaves
+page changes enabled). A normal deploy ends with page 0 active and page changes
+LOCKED (side button inert).
+
+controllerProfile: --from-engine reads GET /global-effects/profile to pick the
+device template set — 'edit' (detail-edit surface) or 'play' (big-cell
+performance surface). A --layout file may carry "profile": "edit"|"play".
 
 Layout schema: README.md "Layout schema". Emits dumps/layout_<name>_page{0..3}.json.
 `);
@@ -132,6 +163,11 @@ function validateLayout(layout) {
   }
   if (layout.module !== 'VSN1L' && layout.module !== 'VSN1R') {
     throw new Error(`layout.module must be VSN1L or VSN1R, got ${layout.module}.`);
+  }
+  // controllerProfile selects the device template set. Optional (defaults to
+  // 'edit'); a stranger fails loud (Codex P0 — no silent fallback to edit).
+  if (layout.profile !== undefined && layout.profile !== 'edit' && layout.profile !== 'play') {
+    throw new Error(`layout.profile must be "edit" or "play" (or omitted = edit), got ${layout.profile}.`);
   }
 
   // MIDI feedback contract — Track C pins: feedbackChannel 1 (active notes,
@@ -264,6 +300,19 @@ async function loadLayoutFromEngine(engineUrl) {
   };
   const layoutRes = await get('/global-effects/layout');
   const statusRes = await get('/global-effect-slots/status');
+  // controllerProfile (edit|play) selects the device template set. Read from
+  // the engine so a play/edit switch re-flashes the right surface. Tolerant of
+  // an older engine that lacks the endpoint (404 → 'edit'); a present-but-bad
+  // value fails loud below in validateLayout.
+  let profile = 'edit';
+  try {
+    const profRes = await get('/global-effects/profile');
+    if (profRes && typeof profRes.controllerProfile === 'string') {
+      profile = profRes.controllerProfile;
+    }
+  } catch (e) {
+    console.warn(`  (GET /global-effects/profile unavailable — defaulting to 'edit': ${e.message})`);
+  }
   // The engine's CURRENT page: after a live deploy the device must be put
   // back on THIS page (restore_config leaves it on whatever page it wrote —
   // the "device stuck on the wrong page" bug, 2026-07-10). effectsPage rides
@@ -295,6 +344,7 @@ async function loadLayoutFromEngine(engineUrl) {
     version: 1,
     name: 'engine',
     module: 'VSN1L',
+    profile,
     midi: { feedbackChannel: 1, modeChannel: 2, slotBase: 32, pageCc: 40, sbNoteBase: 41, helloCc: 41, selectCc: 42, viewCc: 43 },
     effectsPage,
     slots,
@@ -307,6 +357,87 @@ function slotAt(layout, page, key) {
   return layout.slots.find((s) => s.id === id) || null;
 }
 
+// ── LCD-INIT budget shrink ladder ────────────────────────────────────────────
+// The LCD INIT is the one budget-critical element (per-page names + colors +
+// mode-name tables). A fully-loaded 8-slot page (8×10-char names + 8×multi-mode
+// tables) bakes ~990 chars — past the 909-char device ceiling (froze the device
+// live 2026-07-10). Rather than fail the whole flash, progressively TIGHTEN the
+// ON-SCREEN display until it fits, logging every reduction LOUDLY:
+//   1. name display cap 10 → 9 → 8 → 7 → 6
+//   2. mode-name display cap 3 → 2
+//   3. drop the mode table entirely for the longest-mode slots, one at a time
+// This is DISPLAY NORMALIZATION (the operator's stored names/modes are
+// unchanged — only the on-device text shortens), NOT a silent behavioral
+// fallback. It throws only if the tightest rung (6-char names, no mode tables)
+// still overflows — a genuine "too many slots on one page" error.
+function compileLcdInitShrink({ compile, sub, lcdInitTpl, page, names, modes, luaColors, maxLength }) {
+  const truncate = (s, cap) => String(s).slice(0, cap);
+  // Per-slot total mode-name chars — picks which slots to drop first (longest).
+  const modeWeight = modes.map((mm) => mm.reduce((t, x) => t + String(x).length, 0));
+  const dropOrder = modes.map((_, i) => i).sort((a, b) => modeWeight[b] - modeWeight[a]);
+
+  // Rungs, least → most aggressive. `drop` = number of longest-mode slots whose
+  // mode table is emptied on-device.
+  const rungs = [];
+  for (const nameCap of [MAX_NAME_LEN, 9, 8, 7, 6]) {
+    rungs.push({ nameCap, modeCap: MAX_MODE_LEN, drop: 0 });
+  }
+  rungs.push({ nameCap: 6, modeCap: 2, drop: 0 });
+  for (let drop = 1; drop <= KEYS_PER_PAGE; drop++) {
+    rungs.push({ nameCap: 6, modeCap: 2, drop });
+  }
+
+  // The compile budget guard throws exactly "...device limit is N (grid
+  // CONFIG_LENGTH)..." — match that precisely so a Lua SYNTAX error (a real bug)
+  // is re-thrown, never swallowed as "over budget".
+  const overBudget = (e) => /device limit is \d+/.test(e.message);
+  const sizeOf = (e) => { const mm = /is (\d+) chars/.exec(e.message); return mm ? Number(mm[1]) : null; };
+
+  let lastErr = null;
+  for (let r = 0; r < rungs.length; r++) {
+    const { nameCap, modeCap, drop } = rungs[r];
+    const dropSet = new Set(dropOrder.slice(0, drop));
+    const dispNames = names.map((n) => truncate(n, nameCap));
+    const dispModes = modes.map((mm, i) => (dropSet.has(i) ? [] : mm.map((x) => truncate(x, modeCap))));
+    const luaNames = `{${dispNames.map((n) => `"${n}"`).join(',')}}`;
+    const luaModes = `{${dispModes.map((mm) => `{${mm.map((x) => `"${x}"`).join(',')}}`).join(',')}}`;
+    try {
+      const lcdInit = compile(
+        sub(lcdInitTpl, { __NAMES__: luaNames, __COLORS__: luaColors, __MODES__: luaModes }),
+        `p${page} LCD INIT`,
+      );
+      if (r > 0) {
+        console.warn(
+          `⚠ VSN1 page ${page} LCD INIT was over the ${maxLength}-char device budget at full ` +
+            `display; NORMALIZED to fit (${lcdInit.length}/${maxLength}): name cap ${nameCap}, ` +
+            `mode-name cap ${modeCap}` +
+            (drop > 0 ? `, mode tables dropped for ${drop} slot(s)` : '') +
+            `. On-device names/modes are shortened — the operator's stored data is unchanged.`,
+        );
+      }
+      return lcdInit;
+    } catch (e) {
+      if (!overBudget(e)) throw e; // a real (non-budget) compile error — fail loud
+      lastErr = e;
+      const sz = sizeOf(e);
+      console.warn(
+        `⚠ VSN1 page ${page} LCD INIT ${sz ? `${sz}/${maxLength}` : 'over budget'} at name cap ` +
+          `${nameCap}, mode-name cap ${modeCap}` +
+          (drop > 0 ? `, ${drop} mode table(s) dropped` : '') + ' — tightening display.',
+      );
+    }
+  }
+  // Floor exhausted: even 6-char names with NO mode tables overflow. Fail loud.
+  const nameChars = names.reduce((s, n) => s + String(n).length, 0);
+  throw new Error(
+    `VSN1 page ${page} LCD INIT exceeds the ${maxLength}-char device budget even after the full ` +
+      `display-shrink ladder (6-char names, no mode tables): ${lastErr && lastErr.message}. This ` +
+      `page has too many slots / too much text to flash — it was NOT deployed and the device ` +
+      `keeps its previous page ${page}. Reduce the number of populated slots on this page (it ` +
+      `carries ${nameChars} chars of names across ${names.length} cells).`,
+  );
+}
+
 // ── Build the per-page patch dumps ───────────────────────────────────────────
 function buildLayout(gp, layout) {
   validateLayout(layout);
@@ -314,7 +445,9 @@ function buildLayout(gp, layout) {
   const maxLength = Number(grid.getProperty('CONFIG_LENGTH'));
   const m = layout.midi;
 
-  const readTpl = (f) => fs.readFileSync(path.join(TPL, f), 'utf8');
+  // Template set follows the layout's controllerProfile (default 'edit').
+  const profile = layout.profile === 'play' ? 'play' : 'edit';
+  const readTpl = (f) => fs.readFileSync(tplPathFor(profile, f), 'utf8');
   const compile = (src, label) => {
     const device = gs.buildActionStringFromLua(gp, src, maxLength);
     return { device, label, length: device.length };
@@ -436,9 +569,7 @@ function buildLayout(gp, layout) {
       });
     }
 
-    const luaNames = `{${names.map((n) => `"${n}"`).join(',')}}`;
     const luaColors = `{${colors.map((c) => `{${c.join(',')}}`).join(',')}}`;
-    const luaModes = `{${modes.map((mm) => `{${mm.map((x) => `"${x}"`).join(',')}}`).join(',')}}`;
     // ONE VIEW (Sina, 2026-07-10 evening): the grid draws COLORS ONLY — the
     // per-cell abbreviations (and their `__ABBRS__` array) are gone, buying
     // permanent LCD-INIT budget headroom on dense pages. `knd` (32-entry
@@ -447,33 +578,14 @@ function buildLayout(gp, layout) {
     // LCD INIT is still the budget-critical element: it carries the per-page
     // names + colors + MODE-name tables, so a dense page (8 named slots, each
     // with a couple of mode names) is the one that can breach the 909-char
-    // device ceiling. If it does, `compile` throws a generic length error deep
-    // in the flash — turn that into a LOUD, ACTIONABLE failure naming the page
-    // and the fix, so the operator learns WHY a page didn't flash instead of
-    // seeing a silently-stale screen (Codex P0 fail-loud; review C1 2026-07-10).
-    let lcdInit;
-    try {
-      lcdInit = compile(
-        sub(lcdInitTpl, {
-          __NAMES__: luaNames,
-          __COLORS__: luaColors,
-          __MODES__: luaModes,
-        }),
-        `p${page} LCD INIT`,
-      );
-    } catch (e) {
-      const nameChars = names.reduce((s, n) => s + String(n).length, 0);
-      const modeChars = modes.reduce(
-        (s, mm) => s + mm.reduce((t, x) => t + String(x).length, 0), 0);
-      throw new Error(
-        `VSN1 page ${page} LCD INIT exceeds the ${maxLength}-char device budget ` +
-          `(${e.message}). This page has too much on-screen text to flash — it was ` +
-          `NOT deployed and the device keeps its previous page ${page}. Trim it: ` +
-          `shorten slot names (page ${page} carries ${nameChars} chars of names, ` +
-          `cap ${MAX_NAME_LEN}/name) and/or reduce mode-name lists ` +
-          `(${modeChars} chars of mode names on this page).`,
-      );
-    }
+    // device ceiling. `compileLcdInitShrink` first tries full display, then a
+    // LOUD, LOGGED display-normalization ladder (shorter names, then mode
+    // names, then dropped mode tables) so a packed page still flashes instead
+    // of silently keeping a stale screen; it throws only if the tightest rung
+    // still overflows (Codex P0 fail-loud; review C1 2026-07-10).
+    const lcdInit = compileLcdInitShrink({
+      compile, sub, lcdInitTpl, page, names, modes, luaColors, maxLength,
+    });
     budgets.push(lcdInit);
 
     elements.push({
@@ -548,10 +660,26 @@ async function main() {
   if (args.page !== null && (!Number.isInteger(args.page) || args.page < 0 || args.page > 3)) {
     throw new Error(`--page must be 0..3, got ${args.page}.`);
   }
-  // Deploy order: single page = just that one; full = 3->2->1->0 (page 0 last
-  // so it ends active). Always write ALL patch files (cheap; keeps a full set
-  // on disk for rollback), but only validate/deploy the selected page(s).
-  const pageOrder = args.page !== null ? [args.page] : [3, 2, 1, 0];
+  // OWN-PAGE RETIREMENT (effects_v2, 2026-07): the device only ever shows PAGE 0.
+  // Logical pages 1-3 live in the engine/CaptainPad; flashing them changes an
+  // invisible surface (and a multi-page boot burst is what wedged the pad scan).
+  // So a NON-ZERO --page is hard-guarded off unless the operator passes the
+  // explicit manual-recovery escape hatch. Fail loud, no silent clamp.
+  if (args.page !== null && args.page !== 0 && !args.allowNonzeroPage) {
+    throw new Error(
+      `--page ${args.page}: the device only shows page 0 now (own-page retirement). ` +
+        `Flashing pages 1-3 changes an invisible surface. Pass --allow-nonzero-page ` +
+        `only for deliberate manual recovery of a stale page.`,
+    );
+  }
+  // Deploy order: single page = just that one; a full deploy is now PAGE 0 ONLY
+  // (own-page retirement — pages 1-3 are never flashed). `--allow-nonzero-page`
+  // restores the legacy 3->2->1->0 full order for manual recovery. Always write
+  // ALL patch files (cheap; keeps a full set on disk for rollback), but only
+  // validate/deploy the selected page(s).
+  const pageOrder = args.page !== null
+    ? [args.page]
+    : (args.allowNonzeroPage ? [3, 2, 1, 0] : [0]);
 
   console.log(`Layout "${layout.name}": ${layout.slots.length}/32 slots assigned.`);
   console.log('Budgets:');
@@ -606,27 +734,30 @@ async function main() {
       );
     }
   }
-  // ── Snap the device back to the ENGINE's current page ─────────────────────
-  // restore_config MUST activate the page it writes (firmware NACKs CONFIG
-  // writes to a non-active page) and leaves the device there. Without this
-  // step a single-page deploy (the auto-deploy hook's normal shape) strands
-  // the device on the deployed page while the engine stays on effectsPage —
-  // every key press then maps to the wrong flat slot ("buttons do nothing",
-  // hit live 2026-07-10). From-engine deploys know the engine's page; manual
-  // --layout deploys fall back to the last deployed page (unchanged behavior).
-  const lastDeployed = pageOrder[pageOrder.length - 1];
-  const wantPage = args.fromEngine && Number.isInteger(layout.effectsPage)
-    ? layout.effectsPage
-    : lastDeployed;
-  // ALWAYS run the activation, even when wantPage === lastDeployed (review D2,
-  // 2026-07-10): restore_config's own page-change re-enable is a single
-  // fire-and-forget TYPE-255 heartbeat that the reader can drop (grid_serial
-  // documents this) — if it drops, the side button AND host page CCs are
-  // silently ignored ("device stuck on a page"). activate_page's retry loop
-  // re-sends the enable heartbeat every round and CONFIRMS via
-  // PAGEACTIVE/REPORT, so it doubles as the robust re-latch.
-  console.log(`\nActivating engine page ${wantPage} (post-deploy confirm + page-change re-latch) ...`);
+  // ── End state: PAGE 0 active, page changes LOCKED ─────────────────────────
+  // OWN-PAGE RETIREMENT (effects_v2, 2026-07): the device is a fixed PAGE-0
+  // surface now. Logical paging (and the PLAY/EDIT profile switch) live in the
+  // engine + CaptainPad; the physical side button no longer navigates to stale
+  // pages 1-3. So post-deploy we always snap to PAGE 0 and — via activate_page
+  // --lock — leave page changes DISABLED as the final device state, inverting
+  // the old "re-enable page changes in the finally" policy (which existed to
+  // keep the side button paging). activate_page WITHOUT --lock still re-enables
+  // and stays a manual recovery tool. On a manual --allow-nonzero-page recovery
+  // deploy we keep the legacy behavior (activate the last-deployed page, page
+  // changes left enabled) so the operator can inspect that page.
+  const manualRecovery = args.allowNonzeroPage;
+  const wantPage = manualRecovery ? pageOrder[pageOrder.length - 1] : 0;
+  // ALWAYS run the activation, even when wantPage is already active (review D2,
+  // 2026-07-10): restore_config's own page-change heartbeat is a single
+  // fire-and-forget TYPE-255 that the reader can drop — activate_page's retry
+  // loop re-sends it every round and CONFIRMS via PAGEACTIVE/REPORT, so it
+  // doubles as the robust re-latch.
+  console.log(
+    `\nActivating page ${wantPage} (post-deploy confirm` +
+      (manualRecovery ? ', page changes left enabled for recovery' : ' + LOCK page changes') + ') ...',
+  );
   const cmd = [path.join(__dirname, 'activate_page.cjs'), '--page', String(wantPage)];
+  if (!manualRecovery) cmd.push('--lock');
   if (args.port) {
     cmd.push('--port', args.port);
   }
@@ -634,12 +765,12 @@ async function main() {
   if (r.status !== 0) {
     throw new Error(
       `Deploy succeeded but activating page ${wantPage} FAILED (exit ${r.status}). ` +
-        `The device may be showing page ${lastDeployed} with page changes ` +
-        `locked — key presses can hit the wrong slots. ` +
-        `Run: node activate_page.cjs --page ${wantPage}`,
+        `The device may be showing a different page with page changes locked — key ` +
+        `presses can hit the wrong slots. Run: node activate_page.cjs --page ${wantPage}`,
     );
   }
-  console.log(`\nLayout deployed. Page ${wantPage} is active.`);
+  console.log(`\nLayout deployed. Page ${wantPage} is active` +
+    (manualRecovery ? '.' : ' and page changes are locked (own-page retirement).'));
   return 0;
 }
 
@@ -652,4 +783,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { buildLayout, validateLayout, loadLayoutFromEngine };
+module.exports = { buildLayout, validateLayout, loadLayoutFromEngine, compileLcdInitShrink, tplPathFor };

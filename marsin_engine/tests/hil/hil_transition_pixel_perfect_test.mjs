@@ -53,6 +53,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_ROOT = path.resolve(__dirname, '../..');
 const STATE_DIR = path.join(ENGINE_ROOT, 'states', 'test_bench');
@@ -376,6 +378,10 @@ async function runTransition(transitionMode) {
     restoreState();
     process.exit(1);
   }
+
+  // Guard: if our slot port was already bound by a real engine the boot poll
+  // would have latched onto IT — refuse to mutate a non-test_bench model.
+  await assertDisposableEngine(ENGINE_BASE);
 
   // Provision the test playlist (idempotent — same name as
   // hil_deck_swap_test so we don't duplicate cleanup logic).

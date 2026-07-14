@@ -92,6 +92,11 @@ export interface MidiProjectionState {
    *  set the dispatch gate consults, so the display can never disagree with the
    *  gate (was a hardcoded `'speed'` literal + `isBpmSpeedSyncOn`). */
   syncOwnedKeys: ReadonlySet<string>;
+  /** Is the engine's PERFORMANCE MODE (live-show structural lock) active?
+   *  Drives the APC solo button's LED (lit while a show is live — the state a
+   *  press opens the exit sheet for). Optional so pre-field projection states
+   *  (tests, other drivers) read as inactive → LED dark. */
+  getPerformanceModeActive?(): boolean;
 }
 
 /** LED diff key -> the last message bytes sent for it (as "b0:b1:b2"), so only
@@ -225,6 +230,12 @@ function* padVelocities(
     case 'autopilotToggle':
       // clip_stop: lit when the COMBINED (pattern + colour) autopilot is on.
       yield { note: pads[0].note, velocity: onOff(control.led, state.getCombinedAutopilotActive()) };
+      return;
+    case 'performanceDialog':
+      // solo: lit while PERFORMANCE MODE is active (the live-show structural
+      // lock), dark in edit mode. Tracks the engine's performanceMode
+      // broadcast via the snapshot; a pre-field state reads as inactive.
+      yield { note: pads[0].note, velocity: onOff(control.led, state.getPerformanceModeActive?.() === true) };
       return;
     case 'ledOff':
       // A deliberately-dark button: always velocity 0. Projecting it (rather

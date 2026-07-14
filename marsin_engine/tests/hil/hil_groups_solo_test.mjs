@@ -34,6 +34,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const portIdx = process.argv.indexOf('--port');
 const PORT = portIdx !== -1 && process.argv[portIdx + 1] ? parseInt(process.argv[portIdx + 1], 10) : 31268;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -92,6 +94,9 @@ async function main() {
   try {
     const deck = await httpJson('GET', '/deck/channel');
     deckId = deck.body?.channel?.id || null;
+
+    // Refuse to mutate a non-disposable engine BEFORE adding any channel.
+    await assertDisposableEngine(BASE);
 
     // Add two overlays we can solo / group. test_const paints a constant
     // field so a lit channel shows up in the master vis.

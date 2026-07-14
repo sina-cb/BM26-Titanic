@@ -40,6 +40,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const PORT = process.env.MARSIN_HIL_PORT || 6968;
 const ENGINE_BASE = `http://127.0.0.1:${PORT}`;
 const WS_URL = `ws://127.0.0.1:${PORT}`;
@@ -156,6 +158,10 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     await restore();
     process.exit(1);
   }
+
+  // Refuse to mutate a non-disposable engine BEFORE deleting/adding channels.
+  await assertDisposableEngine(ENGINE_BASE);
+
   await deleteAllOverlays();
   await sleep(150);
 

@@ -46,6 +46,7 @@ import { validateShowPlan as validateTimelineShowPlan } from './timeline/show_pl
 import { parsePatternDefaults } from './pattern_defaults.js';
 import { UndoStack, UNDO_MAX } from './undo_stack.js';
 import { DECK_OVERLAY_MAX } from './pattern_mixer.js';
+import { SessionParamCache } from './session_param_cache.js';
 
 /**
  * Validate a `viewSelection` payload before it reaches the mixer.
@@ -950,6 +951,88 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   let deckState = stateManager.loadDeckState();
   let globalsState = stateManager.loadGlobalsState();
 
+  // ── Engine-wide settings (auto-save toggle) ──────────────────────────
+  // `autoSave` (default TRUE) is the single choke that gates EVERY
+  // automatic persistence trigger — deck/mixer state, globals, and the
+  // deck's capture-on-entry-switch. When OFF, the engine writes ZERO bytes
+  // to deck_state / mixer_state / globals_state from any auto trigger and
+  // never auto-captures a playlist entry; a restart reverts to the last
+  // save. Explicit content-authoring (playlist CRUD, explicit captures,
+  // snapshots, param presets, GEM slots, timeline/scheduled files,
+  // settings_state.yaml itself, and POST /settings/save-now) still writes.
+  // Persisted in its OWN file so the toggle survives even when it's OFF.
+  const engineSettings = stateManager.loadSettingsState();
+
+  // ── PERFORMANCE MODE (in-memory ONLY — never persisted) ──────────────
+  // A live "show is running" lock. While active:
+  //   • auto-persistence is suppressed (effectiveAutoSave() forces the
+  //     auto-save gate CLOSED regardless of the stored engineSettings.autoSave),
+  //     so nobody's mid-show fader/param tweak silently rewrites the
+  //     pre-show state on disk;
+  //   • structural / persistent-change routes 409 (rejectIfPerformanceMode);
+  //   • a `performance-preshow` snapshot captured on ENTRY holds the exact
+  //     look + globals so EXIT/restore can put the rig back deterministically.
+  // Deliberately NOT persisted: a crash/restart boots active:false, and the
+  // last-saved pre-show disk state is the implicit RESTORE (we never entered
+  // a state where the pre-show wasn't already on disk). Boot cleanup below
+  // removes any stale pre-show snapshot left by a mid-performance crash.
+  const PERF_SNAPSHOT_NAME = 'performance-preshow';
+  const performanceMode = { active: false, enteredAt: null };
+  // The single effective auto-save predicate. Every automatic persistence
+  // choke reads THIS (not engineSettings.autoSave directly) so performance
+  // mode transparently freezes disk writes without touching the operator's
+  // stored autoSave preference.
+  function effectiveAutoSave() {
+    return engineSettings.autoSave && !performanceMode.active;
+  }
+
+  // ── SESSION PARAM RETENTION (feature A) ──────────────────────────────
+  // In-memory, never-persisted per-channel cache of operator-tuned LOCAL
+  // control values, keyed by (channelId → patternName). It keeps a pattern's
+  // tuning alive across A→B→A pattern switches for the whole engine session
+  // even when file auto-save is gated off (autoSave OFF or performance mode) —
+  // ONLY the file write is gated, never in-session continuity. Dies with the
+  // process (restart/crash reverts to last on-disk save). See
+  // lib/session_param_cache.js for the keying rationale.
+  const sessionParamCache = new SessionParamCache();
+
+  // ── DECK DIRTY-CAPTURE FLUSH (feature B) ─────────────────────────────
+  // While effectiveAutoSave() is false, every DECK capture-on-switch that
+  // WOULD have written the outgoing entry's tuned defaults to its playlist file
+  // is instead SNAPSHOTTED here (the exact bytes captureActiveEntryDefaults
+  // would have written, taken from the still-live outgoing handle) and keyed by
+  // playlistName → entryId → defaults-object. When saving becomes enabled again
+  // (POST /settings autoSave:true with perf off, or performance-exit KEEP with
+  // stored autoSave ON) these pending captures are FLUSHED to disk through the
+  // one shared playlist-write path. In-memory only: a crash flushes nothing.
+  // Deck role ONLY — mixer/overlay channels never write playlist files
+  // (2026-07-07 parameter-isolation ruling), so they are never dirty-flagged.
+  const pendingDeckFlush = new Map(); // playlistName -> Map(entryId -> defaults)
+
+  function recordPendingDeckFlush(playlistName, entryId, defaults) {
+    if (!playlistName || !entryId || !defaults) return;
+    let entries = pendingDeckFlush.get(playlistName);
+    if (!entries) {
+      entries = new Map();
+      pendingDeckFlush.set(playlistName, entries);
+    }
+    entries.set(entryId, defaults);
+  }
+
+  // Boot cleanup: performance mode is never persisted, so a live pre-show
+  // snapshot on disk at startup can only mean the engine was SIGKILLed
+  // mid-performance. In that case the disk deck/mixer/globals state IS the
+  // pre-show state (we froze auto-save the moment we entered), so the restore
+  // already happened implicitly — the stale snapshot is dead weight. Delete it
+  // loudly (codex P0 — visible, never silent).
+  if (snapshotManager.has(PERF_SNAPSHOT_NAME)) {
+    snapshotManager.delete(PERF_SNAPSHOT_NAME);
+    console.log(
+      '[PerformanceMode] stale performance-mode pre-show snapshot — engine ' +
+      'restarted mid-performance; disk already holds the pre-show state ' +
+      '(implicit restore). Deleted the orphaned snapshot.');
+  }
+
   // ── Deck transition config ───────────────────────────────────────────
   // Operator picks (deck tab → DECK TRANSITIONS row) for how playlist
   // entry switches on the deck should look:
@@ -1002,8 +1085,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
   }
 
+  // Gated globals persistence. Every automatic write of globals_state.yaml
+  // goes through here so the auto-save toggle has ONE choke point (mirrors
+  // saveAllState for deck/mixer). `withParams` re-snapshots the ParamCenter
+  // canonical state into globalsState.params before the write — call sites
+  // that only touched a dimmer/effect/blackout pass false (matching the
+  // pre-existing `saveGlobalsState(globalsState)` no-paramCenter calls);
+  // sites that changed shared params (or want the freshest snapshot) pass
+  // true. When autoSave is OFF this is a no-op — nothing hits disk.
+  function saveGlobals(withParams = false) {
+    if (!effectiveAutoSave()) return;
+    stateManager.saveGlobalsState(globalsState, withParams ? paramCenter : undefined);
+  }
+
   if (paramCenter) {
-    paramCenter.saveHook = () => stateManager.saveGlobalsState(globalsState, paramCenter);
+    // ParamCenter's debounced save() funnels here; gated so shared-param
+    // writes stop hitting globals_state.yaml when auto-save is OFF.
+    paramCenter.saveHook = () => saveGlobals(true);
   }
 
   try {
@@ -1055,7 +1153,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           try { globalEffectSlotManager.setEffectsPage(persistedSlots.effectsPage); }
           catch (e) { console.warn(`[GlobalEffectSlots] bad persisted effectsPage: ${e.message}`); }
         }
-        console.log(`  ✅ Global effect slots: restored ${persistedSlots.slots.length} from disk (page ${globalEffectSlotManager.getEffectsPage()})`);
+        // Controller profile ('edit'|'play'). Tolerant of an OLD file with no
+        // profile field — a missing/absent value keeps the default 'edit'. A
+        // present-but-invalid value logs and keeps 'edit' (never crashes boot on
+        // a hand-edited stray, but never silently accepts garbage either).
+        if (persistedSlots.controllerProfile !== undefined) {
+          try { globalEffectSlotManager.setControllerProfile(persistedSlots.controllerProfile); }
+          catch (e) { console.warn(`[GlobalEffectSlots] bad persisted controllerProfile: ${e.message}`); }
+        }
+        console.log(`  ✅ Global effect slots: restored ${persistedSlots.slots.length} from disk (page ${globalEffectSlotManager.getEffectsPage()}, profile ${globalEffectSlotManager.getControllerProfile()})`);
       } catch (e) {
         console.warn(`[GlobalEffectSlots] persisted config invalid, keeping defaults: ${e.message}`);
       }
@@ -1086,6 +1192,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     stateManager.saveGlobalEffectSlots(
       globalEffectSlotManager.getSlots(),
       globalEffectSlotManager.getEffectsPage(),
+      globalEffectSlotManager.getControllerProfile(),
     );
   }
 
@@ -1316,7 +1423,141 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     };
   }
 
+  // Deck capture-on-switch flag. Set true by the deck control-write paths
+  // (legacy /control, POST /deck/channel/control, WS setControl) so that the
+  // NEXT deck entry switch knows the operator tuned this entry's params and
+  // captures them into the outgoing entry's defaults before loadPlaylistEntry
+  // wipes localControls. Deck role ONLY — mixer/overlay writes never set it
+  // (their params are ephemeral, never auto-captured). Transient, never saved.
+  function markDeckParamsTouched() {
+    const deckCh = mixer.getDeckChannel && mixer.getDeckChannel();
+    if (deckCh) deckCh._paramsTouchedSinceLoad = true;
+  }
+
+  // ── Per-control touched tracking (feature A) ─────────────────────────
+  // Records the exact LOCAL control ids an OPERATOR tuned since the current
+  // pattern loaded, so the session cache stores only genuine operator intent —
+  // NOT the seeded pattern-code defaults / applied entry defaults that also
+  // populate channel.localControls. Called ONLY from the operator control-write
+  // routes (never from applyEntryDefaults, which reuses paramRouter internally),
+  // so default-application never pollutes the touched set. Reset on every load
+  // (see loadPlaylistEntry) alongside _paramsTouchedSinceLoad.
+  function markChannelParamTouched(channelId, controlId) {
+    if (!channelId || controlId === undefined || controlId === null) return;
+    const ch = mixer.getChannelAnyRole
+      ? mixer.getChannelAnyRole(channelId)
+      : mixer.getChannel(channelId);
+    if (!ch) return;
+    if (!ch._touchedControlIds) ch._touchedControlIds = new Set();
+    ch._touchedControlIds.add(controlId);
+  }
+
+  // Collect the operator-touched local controls of a channel as a plain
+  // { controlId: {v0,v1,v2} } map (reads live values from channel.localControls).
+  // Returns null when nothing was touched, so an untouched switch-away is a
+  // no-op store that never erases a pattern's prior cached intent.
+  function collectTouchedControls(channel) {
+    const touched = channel && channel._touchedControlIds;
+    if (!touched || touched.size === 0) return null;
+    const out = {};
+    for (const id of touched) {
+      const cv = channel.localControls && channel.localControls[id];
+      if (cv) out[id] = { v0: cv.v0, v1: cv.v1, v2: cv.v2 };
+    }
+    return Object.keys(out).length ? out : null;
+  }
+
+  // Session-cache KEY for a channel slot. Prefer the playlist ENTRY id (so two
+  // playlist entries that happen to share a pattern keep INDEPENDENT session
+  // tuning — this is the per-slot-preset contract the landed playlist_api test
+  // asserts), falling back to the pattern NAME when the channel has no active
+  // playlist entry (a pure direct /pattern set with no playlist). This DEVIATES
+  // from the "pattern name beats entry id" hint in the task: keying by pattern
+  // would make same-pattern entries alias each other and break that test.
+  function sessionKeyFor(channel) {
+    const entryId = channel && channel.playlist && channel.playlist.activeEntryId;
+    return entryId || (channel && channel.pattern) || null;
+  }
+
+  // Store the OUTGOING slot's touched tuning into the session cache BEFORE a
+  // localControls wipe. UNCONDITIONAL (independent of effectiveAutoSave) — this
+  // is in-session continuity, not a file write. `key` identifies the slot
+  // (entry id or pattern name); computed from the still-outgoing channel state.
+  function stowSessionParams(channel, key) {
+    if (!channel || !key) return;
+    const controls = collectTouchedControls(channel);
+    if (controls) sessionParamCache.store(channel.id, key, controls);
+  }
+
+  // Deck capture-on-switch, file-writeback side (shared by the instant AND the
+  // transition swap paths). DECK channel + touched-since-load + active entry:
+  //   • auto-save ON  → write the outgoing entry's live tuning straight to its
+  //     playlist file (the "night of deck tuning lost on switch" fix).
+  //   • auto-save OFF → SNAPSHOT it into pendingDeckFlush (feature B) so it
+  //     lands the moment saving is re-enabled.
+  // Reads the STILL-LIVE outgoing handle, so call BEFORE the wipe with
+  // channel.pattern/playlist still pointing at the outgoing entry. Mixer/overlay
+  // channels are never captured to playlist files (2026-07-07 isolation ruling).
+  function captureOrDeferOutgoingDeckEntry(channel) {
+    if (!(channel.id === mixer.baseChannelId
+        && channel._paramsTouchedSinceLoad
+        && channel.playlist && channel.playlist.name && channel.playlist.activeEntryId)) {
+      return;
+    }
+    if (effectiveAutoSave()) {
+      try {
+        captureActiveEntryDefaults(channel);
+      } catch (err) {
+        console.error(
+          `[DeckCapture] failed to auto-capture outgoing deck entry ` +
+          `'${channel.playlist.name}/${channel.playlist.activeEntryId}' on switch: ` +
+          `${err && err.message}`);
+      }
+    } else {
+      try {
+        const snap = playlistManager.captureDefaults(channel, wasmHost, paramCenter);
+        recordPendingDeckFlush(channel.playlist.name, channel.playlist.activeEntryId, snap);
+      } catch (err) {
+        console.error(
+          `[DeckFlush] failed to snapshot deferred deck capture for ` +
+          `'${channel.playlist.name}/${channel.playlist.activeEntryId}' on switch: ` +
+          `${err && err.message}`);
+      }
+    }
+  }
+
+  // Overlay the session cache onto a freshly-loaded pattern — the LAST word in
+  // the precedence stack (pattern defaults → entry defaults → session cache).
+  // Mirrors playlistManager.applyEntryDefaults' filtering: resolves each cached
+  // control id against the loaded pattern's exports, skips missing ids
+  // (tolerate mismatches, never crash) and CPC-owned / blocked controls, and
+  // applies through the SAME paramRouter path. Call AFTER applyEntryDefaults +
+  // finalizeCpcValues with channel.pattern set to the NEW pattern.
+  function applySessionParamOverlay(channel, key) {
+    if (!channel || !key || !channel.handle) return;
+    const cached = sessionParamCache.get(channel.id, key);
+    if (!cached) return;
+    const exports = wasmHost.getExports(channel.handle) || [];
+    const byId = new Map();
+    for (const e of exports) byId.set(e.id, e);
+    for (const [idStr, cv] of Object.entries(cached)) {
+      // control ids are numbers; localControls / exports key on the number.
+      const id = Number(idStr);
+      const exp = byId.get(id);
+      if (!exp) continue; // stale id — pattern export table shifted; tolerate.
+      if (paramCenter && paramCenter.isSharedExport(channel.id, exp.name)) continue;
+      if (paramCenter && paramCenter.getBlockedIds(channel.id).has(id)) continue;
+      paramRouter.setChannelControl(channel.id, id, cv.v0, cv.v1, cv.v2);
+    }
+  }
+
   function saveAllState() {
+    // AUTO-SAVE GATE (single choke for ~80 auto deck/mixer persistence
+    // triggers). When OFF, zero bytes hit deck_state/mixer_state from any
+    // automatic trigger; a restart reverts to the last save. Explicit
+    // content-authoring routes never call saveAllState — they persist their
+    // own files directly, so they keep working when auto-save is OFF.
+    if (!effectiveAutoSave()) return;
     stateManager.saveMixerState(mixer);
     stateManager.saveDeckState(mixer, {
       transitionConfig: { ...deckTransitionConfig },
@@ -1345,6 +1586,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     });
   }
 
+  // Confirm a DECK LOCAL-PARAM write was PERSISTED, so the deck's "✓ SAVED"
+  // flash fires honestly. Emitted ONLY when auto-save actually wrote to disk
+  // (engineSettings.autoSave) — with auto-save OFF a deck tweak is NOT persisted,
+  // so we must never claim it was (codex P0 — no false confirmation; the badge
+  // simply stays hidden). Scoped to the deck param-write paths (NOT saveAllState,
+  // which fires on ~80 unrelated triggers) so the flash means exactly "your deck
+  // tuning was saved". Call AFTER saveAllState().
+  function broadcastDeckParamsSaved() {
+    if (!effectiveAutoSave()) return;
+    const deckCh = mixer.getDeckChannel && mixer.getDeckChannel();
+    if (!deckCh) return;
+    broadcastWs({ type: 'deckParamsSaved', channelId: deckCh.id });
+  }
+
   function getReplayableLocalExport(channel, controlId) {
     if (paramCenter && paramCenter.isSharedControlId(channel.id, controlId)) return null;
     const exp = wasmHost.getExports(channel.handle).find(e => e.id === controlId);
@@ -1352,18 +1607,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return exp;
   }
 
-  // ── Playlist-entry defaults: EXPLICIT capture only ────────────────────
-  // The old debounced per-channel AUTO-capture (every control change wrote
-  // the live values into the active playlist entry's `defaults` on disk
-  // 500 ms after the last tweak) is REMOVED — operator ruling 2026-07-07
-  // (mixer channel parameter isolation): playlist files are shared presets;
-  // live tweaking must NEVER silently rewrite them, and one channel's tweaks
-  // must never leak into a sibling channel via the shared on-disk entry.
-  // Entry defaults now change ONLY through the explicit capture routes
-  // (POST /deck/playlist/capture, POST /mixer/channels/:id/playlist/capture)
-  // below, which call captureActiveEntryDefaults directly. Reads are
-  // untouched: loads still replay entry defaults, and the MIDI knob-press
-  // reset still targets them.
+  // ── Playlist-entry defaults: capture policy ───────────────────────────
+  // The old debounced per-channel AUTO-capture (every control change on ANY
+  // channel wrote live values into the active entry's `defaults` 500 ms after
+  // the last tweak) is REMOVED — operator ruling 2026-07-07 (mixer channel
+  // parameter isolation): playlist files are shared presets; a MIXER/overlay
+  // channel's live tweaking must NEVER silently rewrite them, and one
+  // channel's tweaks must never leak into a sibling via the shared on-disk
+  // entry.
+  //
+  // Entry defaults change through TWO paths now:
+  //   1. Explicit capture routes (POST /deck/playlist/capture,
+  //      POST /mixer/channels/:id/playlist/capture) — any role, on demand.
+  //   2. DECK-ONLY capture-on-entry-switch (auto-save wave): when auto-save
+  //      is ON and the operator tuned the deck since the entry loaded, the
+  //      NEXT deck entry switch flushes that tuning into the OUTGOING entry's
+  //      defaults (see the block at the top of loadPlaylistEntry). This is
+  //      the fix for "a night of deck tuning lost on pattern switch". It is
+  //      scoped to the deck channel precisely so the shared-preset isolation
+  //      ruling still holds for mixer/overlay channels.
+  // Reads are untouched: loads still replay entry defaults, and the MIDI
+  // knob-press reset still targets them.
 
   /**
    * Capture current channel state as the entry.defaults of the playlist's
@@ -1374,13 +1638,111 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (!channel.playlist || !channel.playlist.name || !channel.playlist.activeEntryId) {
       throw new Error('Channel has no active playlist entry');
     }
-    const playlist = playlistManager.load(channel.playlist.name);
-    if (!playlist) throw new Error(`Playlist not found: ${channel.playlist.name}`);
-    const entry = playlist.entries.find(e => e.id === channel.playlist.activeEntryId);
-    if (!entry) throw new Error(`Active entry not found: ${channel.playlist.activeEntryId}`);
-    entry.defaults = playlistManager.captureDefaults(channel, wasmHost, paramCenter);
+    const defaults = playlistManager.captureDefaults(channel, wasmHost, paramCenter);
+    writeEntryDefaults(channel.playlist.name, channel.playlist.activeEntryId, defaults);
+    return defaults;
+  }
+
+  // The single playlist-file writeback path: load a playlist, set ONE entry's
+  // defaults, and persist. Shared by the live capture-on-switch, the explicit
+  // capture routes (via captureActiveEntryDefaults) AND the dirty-flush (feature
+  // B) so there is exactly ONE place that mutates entry.defaults on disk.
+  function writeEntryDefaults(playlistName, entryId, defaults) {
+    const playlist = playlistManager.load(playlistName);
+    if (!playlist) throw new Error(`Playlist not found: ${playlistName}`);
+    const entry = playlist.entries.find(e => e.id === entryId);
+    if (!entry) throw new Error(`Active entry not found: ${entryId}`);
+    entry.defaults = defaults;
     playlistManager.save(playlist);
     return entry.defaults;
+  }
+
+  // Flush every pending deck dirty-capture (feature B) to its playlist file when
+  // saving becomes enabled again. Also captures the CURRENTLY-loaded deck entry
+  // live if it was touched (so enabling auto-save lands the whole session on
+  // disk without needing one more switch). Reuses writeEntryDefaults — the same
+  // path the live capture-on-switch uses. Entries deleted meanwhile are
+  // tolerated (skipped). Returns the count of entries written. Fires a single
+  // honest deckParamsSaved on any real write.
+  function flushPendingDeckCaptures() {
+    // 1. Fold the currently-loaded deck entry's live tuning into the pending
+    //    set if the operator touched it this session (B3).
+    const deckCh = mixer.getDeckChannel && mixer.getDeckChannel();
+    if (deckCh
+        && deckCh._paramsTouchedSinceLoad
+        && deckCh.playlist && deckCh.playlist.name && deckCh.playlist.activeEntryId) {
+      try {
+        const snap = playlistManager.captureDefaults(deckCh, wasmHost, paramCenter);
+        recordPendingDeckFlush(deckCh.playlist.name, deckCh.playlist.activeEntryId, snap);
+        // The live entry is now queued for a real write — it is no longer
+        // "touched but unsaved", so a subsequent switch must not re-capture it.
+        deckCh._paramsTouchedSinceLoad = false;
+      } catch (err) {
+        console.error(`[DeckFlush] failed to snapshot live deck entry on flush: ${err && err.message}`);
+      }
+    }
+    // 2. Write every pending snapshot to disk through the shared path.
+    let wrote = 0;
+    for (const [plName, entries] of pendingDeckFlush) {
+      for (const [entryId, defaults] of entries) {
+        try {
+          writeEntryDefaults(plName, entryId, defaults);
+          wrote++;
+        } catch (err) {
+          // Entry/playlist deleted since the skip — tolerate, log loudly.
+          console.error(`[DeckFlush] skipped stale pending capture '${plName}/${entryId}': ${err && err.message}`);
+        }
+      }
+    }
+    pendingDeckFlush.clear();
+    if (wrote > 0) broadcastDeckParamsSaved();
+    return wrote;
+  }
+
+  // Summarize the PENDING DIRTY deck tuning so the performance→edit exit sheet
+  // can ask, warmly and specifically, whether to save. Counts the deferred
+  // playlist-entry captures (pendingDeckFlush) PLUS the currently-loaded deck
+  // entry if the operator touched it this session — the exact set
+  // flushPendingDeckCaptures() would write, so the number the operator sees is
+  // the number that would land on disk. Small payload: a count + one thin row
+  // per entry ({playlist, entryId, label}); label prefers the entry's label and
+  // falls back to its pattern name. Deleted playlists/entries are tolerated
+  // (null label, row kept). Cheap-path only — called on GET /performance-mode
+  // and the (infrequent) performanceMode broadcast/replay, never per render.
+  function computeDirtyDeckState() {
+    // Dedupe by (playlist, entryId) — the live entry may also already be pending.
+    const rows = new Map(); // `${playlist} ${entryId}` -> { playlist, entryId }
+    for (const [plName, entries] of pendingDeckFlush) {
+      for (const entryId of entries.keys()) {
+        rows.set(`${plName} ${entryId}`, { playlist: plName, entryId });
+      }
+    }
+    const deckCh = mixer.getDeckChannel && mixer.getDeckChannel();
+    if (deckCh
+        && deckCh._paramsTouchedSinceLoad
+        && deckCh.playlist && deckCh.playlist.name && deckCh.playlist.activeEntryId) {
+      rows.set(`${deckCh.playlist.name} ${deckCh.playlist.activeEntryId}`, {
+        playlist: deckCh.playlist.name,
+        entryId: deckCh.playlist.activeEntryId,
+      });
+    }
+    // Resolve labels, loading each distinct playlist file at most once.
+    const plCache = new Map();
+    const dirtyEntries = [];
+    for (const { playlist, entryId } of rows.values()) {
+      let label = null;
+      try {
+        if (!plCache.has(playlist)) plCache.set(playlist, playlistManager.load(playlist) || null);
+        const pl = plCache.get(playlist);
+        const entry = pl && pl.entries.find(e => e.id === entryId);
+        if (entry) label = entry.label || entry.pattern || null;
+      } catch (err) {
+        // Stale pending capture (playlist deleted mid-session) — keep the row
+        // with a null label rather than crash the summary.
+      }
+      dirtyEntries.push({ playlist, entryId, label });
+    }
+    return { dirtyCount: dirtyEntries.length, dirtyEntries };
   }
 
   /**
@@ -1421,7 +1783,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
    * handle, apply entry defaults, and let CPC have the last word. Updates
    * channel.playlist.activeEntryId + cursor.
    */
-  function loadPlaylistEntry(channel, playlistName, entryId) {
+  function loadPlaylistEntry(channel, playlistName, entryId, { stowOutgoing = true } = {}) {
+    // ── SESSION PARAM RETENTION: stow the outgoing pattern (feature A) ──
+    // Before we tear down the outgoing entry (line below wipes
+    // channel.localControls), snapshot the OPERATOR-TOUCHED local controls of
+    // the STILL-LIVE outgoing pattern into the in-memory session cache —
+    // UNCONDITIONALLY (independent of auto-save), for ALL channels. This is
+    // in-session continuity, not a file write: it is what makes A→B→A restore
+    // A's tuning even with file auto-save OFF. `stowOutgoing:false` skips this
+    // for the mixer/overlay playlist-SWAP path (the layer's cache is cleared
+    // and starts fresh on a playlist change — see the scoping rule there).
+    if (stowOutgoing) stowSessionParams(channel, sessionKeyFor(channel));
+    // Deck capture-on-switch (file writeback when auto-save ON, deferred
+    // pending-flush snapshot when OFF). Reads the STILL-LIVE outgoing handle
+    // (destroyed a few lines down), so it must happen here at the top.
+    captureOrDeferOutgoingDeckEntry(channel);
+
     const playlist = playlistManager.load(playlistName);
     if (!playlist) throw new Error(`Playlist not found: ${playlistName}`);
     const idx = playlist.entries.findIndex(e => e.id === entryId);
@@ -1441,6 +1818,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
     playlistManager.applyEntryDefaults(channel, entry, wasmHost, paramRouter, paramCenter);
     finalizeCpcValues(channel);
+    // SESSION PARAM RETENTION overlay (feature A): the LAST word in the
+    // precedence stack — pattern defaults → entry defaults → session cache. If
+    // this SLOT (entry id) was tuned earlier in the session, re-apply that
+    // tuning so A→B→A restores A exactly (even with file auto-save OFF). Keyed
+    // by the INCOMING entry id (channel.playlist.activeEntryId isn't updated
+    // until the cursor block below, so pass entryId explicitly). Loads with an
+    // empty cache (fresh session, restored layer) are a no-op.
+    applySessionParamOverlay(channel, entryId);
 
     // Update assignment cursor
     channel.playlist = channel.playlist || {};
@@ -1466,6 +1851,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // new entry's own defaults are now the canonical reference, and any
     // edits made in the previous entry are no longer relevant here.
     channel._dirty = false;
+    // The (possibly-captured) outgoing entry's tuning is now flushed; the
+    // freshly-loaded entry starts un-touched. Cleared on EVERY load (deck or
+    // not) so the flag can never carry across a switch and cause a stale
+    // capture on a later, untouched swap.
+    channel._paramsTouchedSinceLoad = false;
+    // Per-control operator-touched set resets with the load — the session
+    // overlay we just applied is NOT counted as operator intent (the cache
+    // already holds those values and merges across visits), so only fresh
+    // operator writes on the new pattern will re-populate it.
+    if (channel._touchedControlIds) channel._touchedControlIds.clear();
 
     // Push the entry's modulations into the ModulationController if this
     // load lands on the deck channel.
@@ -1724,6 +2119,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       throw err;
     }
 
+    // ── SESSION PARAM RETENTION + deck capture on the TRANSITION path ──
+    // The transition-enabled deck swap bypasses loadPlaylistEntry (the wipe
+    // happens later in onComplete), so we stow the outgoing pattern's touched
+    // tuning into the session cache AND run the deck capture-on-switch HERE,
+    // while channel.pattern/localControls still reference the OUTGOING entry
+    // (the mixer reassigns channel.pattern to the new pattern during promotion,
+    // so onComplete is too late to key the cache correctly). This closes the
+    // previously-documented gap where crossfade-enabled swaps lost both the
+    // session continuity and the auto-capture. Deck-only path by construction.
+    stowSessionParams(channel, sessionKeyFor(channel));
+    captureOrDeferOutgoingDeckEntry(channel);
+
     const playlist = playlistManager.load(playlistName);
     if (!playlist) throw new Error(`Playlist not found: ${playlistName}`);
     const idx = playlist.entries.findIndex(e => e.id === entryId);
@@ -1868,6 +2275,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // then let CPC have the last word.
         playlistManager.applyEntryDefaults(channel, entry, wasmHost, paramRouter, paramCenter);
         finalizeCpcValues(channel);
+        // SESSION PARAM RETENTION overlay (feature A) — LAST word in the
+        // precedence stack, same as the instant path. Keyed by the INCOMING
+        // entry id (the closure's `entryId`).
+        applySessionParamOverlay(channel, entryId);
         // Clean up the shadow CPC registration.
         if (paramCenter && paramCenter.unregisterChannel) {
           paramCenter.unregisterChannel('__deck_swap__');
@@ -1879,6 +2290,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         channel.playlist.cursor = idx;
         channel.playlist.autopilot = channel.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
         channel._dirty = false;
+        // The outgoing entry was already captured/deferred + stowed at the TOP
+        // of this function (before the swap was triggered). Clear the touched
+        // flag + per-control set here so the freshly-loaded entry starts clean
+        // and the session overlay we just applied is not mistaken for operator
+        // intent (the cache already holds those values, keyed by pattern).
+        channel._paramsTouchedSinceLoad = false;
+        if (channel._touchedControlIds) channel._touchedControlIds.clear();
 
         // Refresh modulation context for the new entry now that the
         // deck channel's handle and playlist tuple reflect the swap.
@@ -2097,16 +2515,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (entry && !entry._missing) {
       playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
     }
-    // CHANNEL-LOCAL params survive a restart (operator ruling 2026-07-07 —
-    // parameter isolation): the channel's own saved localControls (its live
-    // values at the last state save) replay ON TOP of the shared playlist
-    // entry defaults. Before this ruling the entry defaults were "canonical"
-    // and localControls were ignored when an entry existed — that only held
-    // together because every tweak was auto-captured INTO the entry. With
-    // implicit capture gone, the entry defaults are a shared baseline and
-    // each channel's own values must win, or a restart would collapse two
-    // channels on the same playlist entry back to identical params.
-    if (saved.localControls) {
+    // CHANNEL-LOCAL params survive a restart for the DECK + deck overlays:
+    // their own saved localControls (live values at the last state save)
+    // replay ON TOP of the shared playlist entry defaults so the deck's look
+    // is exactly what the operator left. MIXER channels are the exception
+    // (operator ruling, 2026-07 auto-save wave): their parameters are never
+    // persisted (saveMixerState emits `localControls: {}`), so on restore we
+    // SKIP the replay entirely — a mixer channel restores to its playlist
+    // entry defaults only. An OLD state file that still carries mixer
+    // localControls is read tolerantly and simply ignored here (never
+    // crashes) rather than replayed.
+    if (saved.localControls && role !== 'mixer') {
       for (const [idStr, cv] of Object.entries(saved.localControls)) {
         const controlId = parseInt(idStr, 10);
         if (!getReplayableLocalExport(ch, controlId)) continue;
@@ -2346,6 +2765,30 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         id: g.id, name: g.name, fader: g.fader, muted: g.muted, color: g.color,
       })),
     };
+  }
+
+  // PERFORMANCE MODE: capture the globals bucket for the pre-show snapshot.
+  // captureLook() covers master + deck + overlays + mixGroups but NOT the
+  // shared ParamCenter params, effects, dimmers, blackout, etc. — those live
+  // in globalsState. We mirror StateManager.saveGlobalsState (state_manager.js
+  // §saveGlobalsState): deep-clone the live globalsState, re-snapshot the
+  // canonical ParamCenter state into .params, and strip the session-scoped
+  // *BypassDimmer effect flags (they must never round-trip a restore, exactly
+  // as they never round-trip a disk save). The result is a plain object safe
+  // to hand to snapshotManager.save() under the `globals` key; applyGlobalsState
+  // consumes the identical shape on restore.
+  function captureGlobalsForSnapshot() {
+    const out = JSON.parse(JSON.stringify(globalsState));
+    if (paramCenter) out.params = paramCenter.getCanonicalState();
+    if (out.effects && typeof out.effects === 'object') {
+      const filtered = {};
+      for (const [k, v] of Object.entries(out.effects)) {
+        if (k.endsWith('BypassDimmer')) continue;
+        filtered[k] = v;
+      }
+      out.effects = filtered;
+    }
+    return out;
   }
 
   // WAVE 15: rebuild the gang-fader group registry from saved/snapshot state.
@@ -2984,6 +3427,26 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return null;
   }
 
+  // ── Performance-mode structural lock ─────────────────────────────────
+  // Guard for every STRUCTURAL / PERSISTENT-change route while a show is
+  // live. Returns true (and writes a 409) when performance mode is active —
+  // the handler must `return` immediately. Placed as the FIRST line of each
+  // gated handler (before readBody) so a locked mutation never touches state.
+  // The broadcastMixerState() is the snap-back: it re-pushes the authoritative
+  // mixer truth so any optimistic CaptainPad edit (a dragged fader-lock, a
+  // half-rendered delete) visibly re-pegs to the engine's real state. Runtime
+  // control, selection, safety (blackout / panic), and every GET stay OPEN.
+  function rejectIfPerformanceMode(res) {
+    if (!performanceMode.active) return false;
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: 'performance mode is active — structural/persistent changes are locked',
+      code: 'PERFORMANCE_MODE',
+    }));
+    broadcastMixerState();
+    return true;
+  }
+
   // Push the FULL playlist content (entries + defaults) for a channel
   // out over WS as a dedicated event, so every connected client can
   // prime its per-name playlist cache without having to issue a
@@ -3374,7 +3837,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if ((globalsState.controlLock || null) !== next) {
       globalsState.controlLock = next;
       try {
-        stateManager.saveGlobalsState(globalsState, paramCenter);
+        saveGlobals(true);
       } catch (err) {
         // Persistence failure shouldn't break the in-memory state —
         // worst case the lock isn't restored on the next engine
@@ -4143,6 +4606,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // { active, from, to, durationMs, elapsedMs, remainingMs }.
         master: mixer.master,
         masterFade: mixer.getMasterFade ? mixer.getMasterFade() : null,
+        // PERFORMANCE MODE: live-show structural lock (in-memory only). A
+        // fresh boot is always {active:false} — a smoke check / CaptainPad can
+        // read this to see whether the rig is currently locked.
+        performanceMode: {
+          active: performanceMode.active,
+          enteredAt: performanceMode.enteredAt,
+        },
       }));
     } else if (req.method === 'GET' && req.url === '/exports') {
       // Legacy endpoint, return exports of base channel
@@ -4167,6 +4637,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(404); res.end('Not Found');
       }
     } else if (req.method === 'POST' && req.url === '/save-pattern') {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         if (!data.name || !data.code) {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'name and code required' }));
@@ -4217,6 +4688,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ status: 'ok' }));
       });
     } else if ((req.method === 'PUT' || req.method === 'POST') && (req.url === '/pattern' || req.url === '/set-pattern')) {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         try {
           if (!data.pattern) {
@@ -4254,6 +4726,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           const oldPlaylist = oldBase ? oldBase.playlist : null;
           const oldBaseId = oldBase ? oldBase.id : null;
           const oldHandle = oldBase ? oldBase.handle : null;
+
+          // SESSION PARAM RETENTION + deck capture on the DIRECT /pattern path.
+          // The handle swap below wipes localControls, so stow the outgoing
+          // pattern's touched tuning + run the deck capture-on-switch while
+          // oldBase.pattern still points at the outgoing pattern.
+          if (oldBase) {
+            stowSessionParams(oldBase, sessionKeyFor(oldBase));
+            captureOrDeferOutgoingDeckEntry(oldBase);
+          }
 
           let newChannel;
           if (oldBase) {
@@ -4309,6 +4790,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           opts.pattern = patternName;
           onChannelCompiled(newChannel);
           finalizeCpcValues(newChannel);
+          // SESSION PARAM RETENTION overlay (feature A): re-apply this slot's
+          // session tuning if it was tuned earlier. The direct set re-attaches
+          // the playlist + resolves the matching entry, so key on that entry id
+          // (fallback pattern name when no playlist). Reset the touched set so
+          // the overlay isn't mistaken for operator intent.
+          applySessionParamOverlay(newChannel, sessionKeyFor(newChannel) || patternName);
+          newChannel._paramsTouchedSinceLoad = false;
+          if (newChannel._touchedControlIds) newChannel._touchedControlIds.clear();
           saveAllState();
 
           broadcastWs({ type: 'pattern', name: patternName });
@@ -4329,6 +4818,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
       });
     } else if (req.method === 'POST' && req.url === '/scene') {
+      if (rejectIfPerformanceMode(res)) return;
       // Scene/model coordination (sim → engine). When the operator picks a
       // different scene in the sim's #scene-select dropdown, the sim POSTs the
       // new scene name here so the engine follows and renders that scene's
@@ -4396,12 +4886,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.id === undefined) {
            res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
         }
-        paramRouter.setControl(data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        const ctlRes = paramRouter.setControl(data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         // Legacy /control targets the deck base channel. CHANNEL-LOCAL write:
-        // no playlist auto-capture, no cross-channel mirroring (operator
-        // ruling 2026-07-07 — parameter isolation).
+        // no cross-channel mirroring (operator ruling 2026-07-07 — parameter
+        // isolation). It DOES mark the deck's params touched so the next entry
+        // switch auto-captures this tuning into the outgoing entry's defaults
+        // (auto-save wave) — the params-survive-a-pattern-switch fix.
         markChannelDirtyIfLocked(mixer.baseChannelId);
+        markDeckParamsTouched();
+        if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(mixer.baseChannelId, data.id);
         saveAllState();
+        broadcastDeckParamsSaved(); // deck "✓ SAVED" flash — only when persisted
         broadcastMixerState();
         broadcastDeckState();
 
@@ -4452,7 +4947,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       if (req.method === 'DELETE') {
         const removed = globalEffectsController.clearGroupFixedColor(group);
         if (globalsState.groupFixedColors) delete globalsState.groupFixedColors[group];
-        stateManager.saveGlobalsState(globalsState);
+        saveGlobals(false);
         broadcastWs({ type: 'groupFixedColors', overrides: globalEffectsController.groupFixedColors });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ status: 'ok', group, removed }));
@@ -4472,7 +4967,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             color: [...data.color],
             brightness: data.brightness,
           };
-          stateManager.saveGlobalsState(globalsState);
+          saveGlobals(false);
           broadcastWs({ type: 'groupFixedColors', overrides: globalEffectsController.groupFixedColors });
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ status: 'ok', group, override: globalEffectsController.groupFixedColors[group] }));
@@ -4488,7 +4983,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (intensityController) intensityController.setSectionBrightness(data.sectionId, data.brightness);
         if (!globalsState.dimmers) globalsState.dimmers = {};
         globalsState.dimmers[data.sectionId] = data.brightness;
-        stateManager.saveGlobalsState(globalsState);
+        saveGlobals(false);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', sectionId: data.sectionId, brightness: data.brightness }));
       });
@@ -4499,7 +4994,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         if (intensityController) intensityController.setBlackout(data.state);
         globalsState.blackout = data.state;
-        stateManager.saveGlobalsState(globalsState);
+        saveGlobals(false);
         broadcastMixerState();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', blackoutActive: data.state }));
@@ -4512,7 +5007,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (globalEffectsController) globalEffectsController.setEffect(data.effect, data.state);
         if (!globalsState.effects) globalsState.effects = {};
         globalsState.effects[data.effect] = data.state;
-        stateManager.saveGlobalsState(globalsState);
+        saveGlobals(false);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', effect: data.effect, state: data.state }));
       });
@@ -4560,7 +5055,47 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
         }
       });
+    // ── effects_v2: engine-owned CONTROLLER PROFILE ('edit' | 'play') ────
+    // Mirrors /global-effects/page: the profile lives in engine state so
+    // CaptainPad's PLAY/EDIT switch and the VSN1 (sb_2) both read + write the
+    // SAME profile (single source of truth). GET returns it; PATCH validates
+    // the enum (400 on garbage — fail loud, no silent fallback), persists it,
+    // broadcasts { type: 'controllerProfile', profile }, and triggers a page-0
+    // re-deploy so the device re-flashes to the new surface (edit vs play
+    // template set). Deliberately NOT performance-mode-gated: switching to PLAY
+    // IS a performance action (the whole point is a live-show surface), so the
+    // 409 structural lock must not block it.
+    } else if (req.method === 'GET' && req.url === '/global-effects/profile') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ controllerProfile: globalEffectSlotManager.getControllerProfile() }));
+    } else if (req.method === 'PATCH' && req.url === '/global-effects/profile') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      readBody(data => {
+        try {
+          const profile = data && data.controllerProfile;
+          const prev = globalEffectSlotManager.getControllerProfile();
+          const resolved = globalEffectSlotManager.setControllerProfile(profile);
+          // Audit trail: profile flips have been observed with no operator
+          // action — every change must name its origin (client-supplied
+          // `source` tag + remote address) so a spurious writer is traceable.
+          console.log(`[ControllerProfile] ${prev} -> ${resolved} ` +
+            `(source=${typeof data.source === 'string' ? data.source : 'unspecified'}, ` +
+            `remote=${req.socket.remoteAddress || '?'})`);
+          persistGlobalEffectSlots();
+          broadcastWs({ type: 'controllerProfile', profile: resolved,
+            source: typeof data.source === 'string' ? data.source : undefined });
+          // Re-flash the device to the new surface (page 0 only, per own-page
+          // retirement — requestFullDeploy emits [0] iff populated).
+          const triggeredPages = globalEffectSlotManager.requestFullDeploy();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', controllerProfile: resolved, triggeredPages }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
     } else if (req.method === 'PATCH' && req.url === '/global-effect-slots') {
+      if (rejectIfPerformanceMode(res)) return;
       if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
       readBody(data => {
         try {
@@ -4612,7 +5147,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.enabled && globalEffectsController && globalEffectsController.panicStop) {
           globalEffectsController.panicStop();
         }
-        stateManager.saveGlobalsState(globalsState);
+        saveGlobals(false);
         broadcastMixerState();
         broadcastWs({ type: 'globalEffectMacroStatus',
           controller: globalEffectsController ? globalEffectsController.getStatus() : null,
@@ -4651,13 +5186,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         const enabled = !!(data && data.enabled);
         globalEffectsController.setInvert(enabled);
         globalsState.invert = globalEffectsController.invert;
-        stateManager.saveGlobalsState(globalsState, paramCenter);
+        saveGlobals(true);
         broadcastWs({ type: 'globalInvert', invert: globalEffectsController.invert });
         broadcastMixerState();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', invert: globalEffectsController.invert }));
       });
     } else if (req.method === 'PATCH' && req.url.startsWith('/global-effect-slots/')) {
+      if (rejectIfPerformanceMode(res)) return;
       // PATCH /global-effect-slots/:slotId
       const m = req.url.match(/^\/global-effect-slots\/(\d+)$/);
       if (!m) { res.writeHead(404); return res.end('Not Found'); }
@@ -4847,6 +5383,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // nothing is populated (never an error — a no-hardware/gated engine just
     // reports it did nothing).
     } else if (req.method === 'POST' && req.url === '/global-effects/deploy') {
+      if (rejectIfPerformanceMode(res)) return;
       if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
       const triggeredPages = globalEffectSlotManager.requestFullDeploy();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -5506,6 +6043,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ mixGroups: mixer.getMixGroups() }));
     } else if (req.method === 'POST' && req.url === '/mixer/groups') {
+      if (rejectIfPerformanceMode(res)) return;
       // Create a group. name/color optional; fader=1, muted=false to start.
       readBody(data => {
         if (data.name !== undefined && data.name !== null && typeof data.name !== 'string') {
@@ -5523,6 +6061,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ status: 'ok', group }));
       });
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/groups\/[^\/]+\/members$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       // Add a mixer channel to this group (single membership).
       const gid = decodeURIComponent(req.url.split('/')[3]);
       readBody(data => {
@@ -5540,6 +6079,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
       });
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/groups\/[^\/]+\/members\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       // Remove a channel from this group.
       const parts = req.url.split('/');
       const gid = decodeURIComponent(parts[3]);
@@ -5584,6 +6124,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok', group }));
       });
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/groups\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       // Delete a group (clears every member's mixGroupId first).
       const gid = decodeURIComponent(req.url.split('/')[3]);
       const removed = mixer.deleteMixGroup(gid);
@@ -5633,11 +6174,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ snapshots: snapshotManager.list() }));
     } else if (req.method === 'POST' && req.url === '/mixer/snapshots') {
+      if (rejectIfPerformanceMode(res)) return;
       // Capture the current full mixer state under a name.
       readBody(data => {
         if (typeof data.name !== 'string' || data.name.trim() === '') {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ error: 'name (non-empty string) required' }));
+        }
+        // Reserved name: `performance-preshow` is owned by performance mode's
+        // pre-show capture — refuse a manual snapshot under it even OUTSIDE the
+        // mode so an operator can never clobber (or pre-seed) that slot.
+        if (data.name === PERF_SNAPSHOT_NAME) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `'${PERF_SNAPSHOT_NAME}' is a reserved snapshot name (performance mode)`,
+            code: 'SNAPSHOT_NAME_RESERVED',
+          }));
         }
         try {
           const saved = snapshotManager.save(data.name, captureLook());
@@ -5665,6 +6217,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/snapshots\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const name = decodeURIComponent(req.url.split('/')[3]);
       try {
         const removed = snapshotManager.delete(name);
@@ -5676,6 +6229,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/snapshots\/[^\/]+\/recall$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const name = decodeURIComponent(req.url.split('/')[3]);
       let look;
       try {
@@ -5710,6 +6264,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       broadcastMixerState();
       res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name }));
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/snapshots\/[^\/]+\/recall-fade$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       // ── SNAPSHOT CROSSFADE / MORPH (round-2 #1, docs/39 §10.8) ──────────
       // Recall a saved look by RAMPING current→target over durationMs instead
       // of the instant cut /recall does. Body: { durationMs } (finite > 0).
@@ -5777,6 +6332,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // (fail loud, NOT a silent no-op — Codex P0). GET /mixer/undo → {depth,
     // top} for the UI button enable/label.
     else if (req.method === 'POST' && req.url === '/mixer/undo') {
+      if (rejectIfPerformanceMode(res)) return;
       if (undoStack.isEmpty) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'nothing to undo', code: 'UNDO_EMPTY' }));
@@ -5831,6 +6387,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/param-presets$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       // Capture the addressed channel's current params under a name.
       const id = decodeURIComponent(req.url.split('/')[3]);
       readBody(data => {
@@ -5913,6 +6470,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       broadcastMixerState();
       res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name, channelId: channel.id }));
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/param-presets\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const name = decodeURIComponent(req.url.split('/')[3]);
       try {
         const removed = paramPresetManager.deleteParamPreset(name);
@@ -5924,6 +6482,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.method === 'POST' && req.url === '/mixer/channels') {
+      if (rejectIfPerformanceMode(res)) return;
       // Add a mixer channel. Two ways to call this, both are playlist-driven:
       //  1. {playlist:'<name>', playlistEntryId?:'<id>'} — load that playlist
       //     onto the new channel; pattern comes from the entry.
@@ -6092,6 +6651,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // additive fields (faderMax, color, mixGroupId, soloSafe, viewSelection,
     // locks, transition prefs) ride along in the serialized blob for free.
     else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/duplicate$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const id = decodeURIComponent(req.url.split('/')[3]);
       // Decks can't be duplicated via /mixer routes (single deck identity).
       const reject = rejectIfWrongRole(id, 'mixer');
@@ -6145,6 +6705,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // permutation BEFORE mutating (fail loud, no partial apply).
     // order[0] = bottom of the mix, order[last] = top.
     else if (req.method === 'POST' && req.url === '/mixer/channels/reorder') {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         const order = data && data.order;
         const current = mixer.getMixerChannels();
@@ -6202,7 +6763,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         const forceLit = () => {
           if (intensityController) intensityController.setBlackout(false);
           globalsState.blackout = false;
-          stateManager.saveGlobalsState(globalsState, paramCenter);
+          saveGlobals(true);
           mixer.setMaster(1.0);
           mixer.targetViewFader = 1.0;
         };
@@ -6422,6 +6983,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         if (data.transitionMode !== undefined) channel.transitionMode = data.transitionMode;
         if (data.transitionTime !== undefined) channel.transitionTime = data.transitionTime;
+        // PERFORMANCE MODE: viewSelection is a structural (view-mask) change —
+        // gate ONLY that field while live; sibling fields in the same PATCH
+        // (fader, mode, hue, enabled, lock) stay allowed.
+        if (data.viewSelection !== undefined && rejectIfPerformanceMode(res)) return;
         // View-selection update: validate first so a typo can't brick
         // the render loop. The mixer recompiles the channel's
         // compiledPixelMask synchronously; the next frame composites
@@ -6460,6 +7025,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           const src = loadPattern(patternsDir, patternName);
           const comp = wasmHost.compile(src);
           if (comp.ok) {
+            // SESSION PARAM RETENTION: a DIRECT pattern swap (the entry pointer
+            // is unchanged, only the pattern changes), so key by PATTERN NAME
+            // here — not the entry id. Stow the outgoing pattern's touched
+            // tuning before the wipe (mixer layer gets in-session continuity;
+            // never a file write — 2026-07-07 isolation ruling stands).
+            stowSessionParams(channel, channel.pattern);
             // Destroy old handle
             if (channel.handle) wasmHost.destroy(channel.handle);
             channel.handle = comp.handle;
@@ -6467,6 +7038,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             channel.localControls = {};
             onChannelCompiled(channel);
             finalizeCpcValues(channel);
+            // Overlay this pattern's session tuning (last word), then reset the
+            // touched set so the overlay isn't recorded as fresh operator intent.
+            applySessionParamOverlay(channel, patternName);
+            if (channel._touchedControlIds) channel._touchedControlIds.clear();
           } else {
             console.warn(`[Mixer] Pattern swap FAILED: ${patternName} compile error:`, comp.error);
           }
@@ -6541,6 +7116,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
       });
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/channels\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const id = req.url.split('/')[3];
       const reject = rejectIfWrongRole(id, 'mixer');
       if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
@@ -6560,6 +7136,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // broadcast below carry the cleared followLeaderId values.
       mixer.clearFollowersOf(id);
       mixer.removeMixerChannel(id);
+      // Deleting the channel drops its session-cache tuning (nothing to retain).
+      sessionParamCache.clearChannel(id);
       saveAllState();
       broadcastMixerState();
       res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
@@ -6574,8 +7152,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // CHANNEL-LOCAL write: lands only on THIS channel's WASM handle +
         // localControls. No playlist auto-capture, no cross-channel mirroring
         // (operator ruling 2026-07-07 — parameter isolation).
-        paramRouter.setChannelControl(id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        const ctlRes = paramRouter.setChannelControl(id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         markChannelDirtyIfLocked(id);
+        // Session-cache continuity: record the operator-touched control so the
+        // mixer layer's tuning is retained across in-playlist pattern switches.
+        if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(id, data.id);
         saveAllState();
         broadcastMixerState();
         broadcastDeckState();
@@ -7139,6 +7720,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.method === 'POST' && req.url === '/playlists') {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         try {
           if (!data || !data.name) {
@@ -7189,6 +7771,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
       });
     } else if (req.method === 'DELETE' && req.url.match(/^\/playlists\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       try {
         let name;
         try {
@@ -7221,6 +7804,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // mappings to the ModulationController IF the entry is currently
     // active on the deck.
     else if (req.url.match(/^\/api\/playlists\/[^\/]+\/items\/[^\/]+\/modulations\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const parts = req.url.split('/');
       let playlistName, itemId, mappingId;
       try {
@@ -7327,6 +7911,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     //   PATCH  /api/playlists/:name/items/:itemId/midi-mappings/:mappingId
     //   DELETE /api/playlists/:name/items/:itemId/midi-mappings/:mappingId
     else if (req.url.match(/^\/api\/playlists\/[^\/]+\/items\/[^\/]+\/midi-mappings\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const parts = req.url.split('/');
       let playlistName, itemId, mappingId;
       try {
@@ -7442,6 +8027,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // the deck-overlay stack: REQUIRES an explicit, non-'all' view (never-dark
     // guard), rejects a taken view (409), and the cap (400 over 4).
     else if (req.method === 'POST' && req.url === '/deck/overlays') {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         // viewSelection is REQUIRED (an all-view overlay would defeat the
         // feature AND violate never-dark). Validate first (fail loud).
@@ -7552,6 +8138,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     // POST /deck/overlays/reorder { order:[ids] } (armed before :id regexes).
     else if (req.method === 'POST' && req.url === '/deck/overlays/reorder') {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         const order = data && data.order;
         const current = mixer.getDeckOverlays ? mixer.getDeckOverlays() : [];
@@ -7635,11 +8222,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     // POST /deck/overlays/:id/playlist { name } — swap the overlay's playlist.
     else if (req.method === 'POST' && req.url.match(/^\/deck\/overlays\/[^\/]+\/playlist$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const id = decodeURIComponent(req.url.split('/')[3]);
       readBody(data => {
         const overlay = mixer.getDeckOverlay(id);
         if (!overlay) { res.writeHead(404); return res.end(JSON.stringify({ error: 'deck overlay not found' })); }
         try {
+          // MIXER-LAYER SESSION-CACHE SCOPING: a deck-overlay layer's retained
+          // tuning lives only until its playlist changes/reloads — same rule as
+          // mixer layers. Clear it; the fresh load runs with stowOutgoing:false.
+          sessionParamCache.clearChannel(overlay.id);
           if (data.name === null) {
             overlay.playlist = null;
             saveAllState();
@@ -7656,7 +8248,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             broadcastChannelPlaylistData(overlay);
             broadcastDeckState(); return;
           }
-          loadPlaylistEntry(overlay, pl.name, firstEntry.id);
+          loadPlaylistEntry(overlay, pl.name, firstEntry.id, { stowOutgoing: false });
           saveAllState();
           res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: overlay.playlist, playlistData: pl }));
           broadcastChannelPlaylistData(overlay);
@@ -7742,6 +8334,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           if (!hv.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: hv.error })); }
           overlay.hue = hv.value;
         }
+        // PERFORMANCE MODE: gate ONLY the viewSelection field on a deck
+        // overlay while live; other fields in the same PATCH stay allowed.
+        if (data.viewSelection !== undefined && rejectIfPerformanceMode(res)) return;
         if (data.viewSelection !== undefined) {
           const v = validateViewSelection(data.viewSelection);
           if (!v.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: v.error })); }
@@ -7761,12 +8356,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           const src = loadPattern(patternsDir, patternName);
           const comp = wasmHost.compile(src);
           if (comp.ok) {
+            // SESSION PARAM RETENTION: DIRECT pattern swap → key by pattern name
+            // (entry pointer unchanged). Stow outgoing before wipe (deck overlay
+            // layer gets in-session continuity; never a file write).
+            stowSessionParams(overlay, overlay.pattern);
             if (overlay.handle) wasmHost.destroy(overlay.handle);
             overlay.handle = comp.handle;
             overlay.pattern = patternName;
             overlay.localControls = {};
             onChannelCompiled(overlay);
             finalizeCpcValues(overlay);
+            applySessionParamOverlay(overlay, patternName);
+            if (overlay._touchedControlIds) overlay._touchedControlIds.clear();
           } else {
             console.warn(`[DeckOverlay] Pattern swap FAILED: ${patternName} compile error:`, comp.error);
           }
@@ -7778,10 +8379,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     // DELETE /deck/overlays/:id — remove an overlay (free its WASM handle).
     else if (req.method === 'DELETE' && req.url.match(/^\/deck\/overlays\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const id = decodeURIComponent(req.url.split('/')[3]);
       if (paramCenter) paramCenter.unregisterChannel(id);
       const removed = mixer.removeDeckOverlay(id);
       if (!removed) { res.writeHead(404); return res.end(JSON.stringify({ error: 'deck overlay not found' })); }
+      // Deleting the overlay drops its session-cache tuning.
+      sessionParamCache.clearChannel(id);
       saveAllState();
       broadcastDeckState();
       res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
@@ -7871,6 +8475,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           channel.locked = !!data.locked;
           clearChannelDirty(channel);
         }
+        // PERFORMANCE MODE: gate ONLY the viewSelection field on the deck
+        // channel while live; other fields in the same PATCH stay allowed.
+        if (data.viewSelection !== undefined && rejectIfPerformanceMode(res)) return;
         if (data.viewSelection !== undefined) {
           const v = validateViewSelection(data.viewSelection);
           if (!v.ok) {
@@ -7900,12 +8507,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
         }
         // CHANNEL-LOCAL write: deck tweaks stay on the deck channel. No
-        // playlist auto-capture, no cross-channel mirroring (operator ruling
-        // 2026-07-07 — parameter isolation). Explicit save-defaults lives at
-        // POST /deck/playlist/capture.
-        paramRouter.setChannelControl(channel.id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        // cross-channel mirroring (operator ruling 2026-07-07 — parameter
+        // isolation). Explicit save-defaults still lives at POST
+        // /deck/playlist/capture; additionally, marking the deck touched here
+        // means the NEXT entry switch auto-captures this tuning into the
+        // outgoing entry (auto-save wave) so it survives the pattern change.
+        const ctlRes = paramRouter.setChannelControl(channel.id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         markChannelDirtyIfLocked(channel.id);
+        markDeckParamsTouched();
+        if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(channel.id, data.id);
         saveAllState();
+        broadcastDeckParamsSaved(); // deck "✓ SAVED" flash — only when persisted
         broadcastMixerState();
         broadcastDeckState();
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
@@ -7917,6 +8529,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(baseCh && baseCh.playlist ? baseCh.playlist : null));
     } else if (req.method === 'POST' && req.url === '/deck/playlist') {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
@@ -7971,6 +8584,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         splitRatio: deckPlaylistSlots.splitRatio,
       }));
     } else if (req.method === 'POST' && req.url === '/deck/playlist/secondary') {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
@@ -8115,6 +8729,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
       });
     } else if (req.method === 'POST' && req.url === '/deck/playlist/capture') {
+      if (rejectIfPerformanceMode(res)) return;
       const baseCh = mixer.getDeckChannel();
       if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
       try {
@@ -8227,6 +8842,248 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify(deckTransitionConfig));
       });
     }
+    // ── ENGINE SETTINGS (auto-save toggle) ───────────────────────────────
+    else if (req.method === 'GET' && req.url === '/settings') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(engineSettings));
+    } else if (req.method === 'POST' && req.url === '/settings') {
+      if (rejectIfPerformanceMode(res)) return;
+      readBody(data => {
+        // Fail loud (codex P0): autoSave MUST be a real boolean. No coercion —
+        // a truthy/falsy string or number is a broken client, not a valid
+        // toggle, and silently coercing it would let the operator think they
+        // changed a safety-critical persistence gate when they didn't.
+        if (typeof data.autoSave !== 'boolean') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `settings.autoSave must be a boolean, got '${data.autoSave}'`,
+          }));
+        }
+        engineSettings.autoSave = data.autoSave;
+        // ALWAYS persist the setting itself — this write BYPASSES the auto-save
+        // gate on purpose (the toggle lives in its own file precisely so that
+        // "turn auto-save OFF" is itself durable).
+        stateManager.saveSettingsState(engineSettings);
+        broadcastWs({ type: 'engineSettings', ...engineSettings });
+        // DIRTY-CAPTURE FLUSH (feature B2): re-enabling auto-save while
+        // performance mode is OFF flushes every deck capture that was deferred
+        // while saving was gated — plus the currently-loaded entry's live tuning
+        // — so the whole session lands on disk. This route is perf-gated (409s
+        // during a show), so effectiveAutoSave() here is exactly data.autoSave;
+        // enabling auto-save mid-performance can't reach this and won't flush
+        // until performance exit KEEP.
+        if (effectiveAutoSave()) flushPendingDeckCaptures();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(engineSettings));
+      });
+    } else if (req.method === 'POST' && req.url === '/settings/save-now') {
+      if (rejectIfPerformanceMode(res)) return;
+      // Operator checkpoint: force a full persistence of deck/mixer + globals
+      // RIGHT NOW, ignoring the auto-save gate. The single manual "save my
+      // current look" button for when auto-save is OFF. Writes the same files
+      // the auto triggers would, so a subsequent restart restores this state.
+      const wasAutoSave = engineSettings.autoSave;
+      try {
+        engineSettings.autoSave = true; // temporarily lift the gate for this write
+        saveAllState();
+        saveGlobals(true);
+      } finally {
+        engineSettings.autoSave = wasAutoSave;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', saved: true, autoSave: engineSettings.autoSave }));
+    }
+    // ── PERFORMANCE MODE (live-show structural lock) ─────────────────────
+    // GET returns the current {active, enteredAt}. POST toggles it:
+    //   { active: true }                        → ENTER
+    //   { active: false, exitAction: 'keep' }    → EXIT keeping the live look
+    //   { active: false, exitAction: 'restore' } → EXIT restoring the pre-show
+    // The engine WS broadcast ({type:'performanceMode'}) is authoritative —
+    // CaptainPad never optimistically flips. Fail loud on every misuse.
+    else if (req.method === 'GET' && req.url === '/performance-mode') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        active: performanceMode.active,
+        enteredAt: performanceMode.enteredAt,
+        // Pending dirty deck tuning so the exit sheet can ask whether to save.
+        ...computeDirtyDeckState(),
+      }));
+    } else if (req.method === 'POST' && req.url === '/performance-mode') {
+      readBody(data => {
+        // Fail loud (codex P0): `active` MUST be a real boolean — mirrors the
+        // /settings boolean check. No coercion of a safety-critical toggle.
+        if (typeof data.active !== 'boolean') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `performance-mode.active must be a boolean, got '${data.active}'`,
+            code: 'INVALID_BODY',
+          }));
+        }
+        // ── ENTER ──────────────────────────────────────────────────────
+        if (data.active) {
+          if (performanceMode.active) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'performance mode is already active',
+              code: 'PERFORMANCE_MODE_ALREADY_ACTIVE',
+            }));
+          }
+          // Capture the pre-show snapshot FIRST — a failure aborts the entry
+          // with 500 so we NEVER enter unprotected (no snapshot ⇒ no restore).
+          try {
+            snapshotManager.save(PERF_SNAPSHOT_NAME, {
+              ...captureLook(),
+              globals: captureGlobalsForSnapshot(),
+            });
+          } catch (err) {
+            console.error(
+              `[PerformanceMode] pre-show snapshot capture FAILED — aborting ` +
+              `entry: ${err && err.message}`);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `failed to capture pre-show snapshot: ${err && err.message}`,
+              code: 'PERFORMANCE_MODE_SNAPSHOT_FAILED',
+            }));
+          }
+          performanceMode.active = true;
+          performanceMode.enteredAt = new Date().toISOString();
+          broadcastWs({
+            type: 'performanceMode',
+            active: true,
+            enteredAt: performanceMode.enteredAt,
+            ...computeDirtyDeckState(),
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            active: true,
+            enteredAt: performanceMode.enteredAt,
+          }));
+        }
+        // ── EXIT ───────────────────────────────────────────────────────
+        if (!performanceMode.active) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'performance mode is not active',
+            code: 'PERFORMANCE_MODE_NOT_ACTIVE',
+          }));
+        }
+        const exitAction = data.exitAction;
+        // Three exit semantics (fail loud on anything else):
+        //   'keep-save' → leave the live look AND flush the dirty deck captures
+        //                 to their playlist files (the previous KEEP behaviour).
+        //   'keep'      → KEEP WITHOUT SAVING: leave the live look but DISCARD
+        //                 the pending playlist-file backlog; the session cache +
+        //                 live in-memory tuning stay, and normal edit-mode
+        //                 auto-capture resumes for future switches.
+        //   'restore'   → revert the whole rig to the pre-show snapshot.
+        if (exitAction !== 'keep' && exitAction !== 'keep-save' && exitAction !== 'restore') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `exit requires exitAction 'keep', 'keep-save' or 'restore', got '${exitAction}'`,
+            code: 'PERFORMANCE_MODE_INVALID_EXIT',
+          }));
+        }
+        // Force one full persist regardless of the stored autoSave toggle
+        // (the save-now pattern). Called AFTER active is cleared so
+        // effectiveAutoSave() tracks engineSettings.autoSave again; we lift
+        // that flag too so KEEP/RESTORE land on disk even with auto-save OFF.
+        const forcePersist = () => {
+          const wasAutoSave = engineSettings.autoSave;
+          try {
+            engineSettings.autoSave = true;
+            saveAllState();
+            saveGlobals(true);
+          } finally {
+            engineSettings.autoSave = wasAutoSave;
+          }
+        };
+        if (exitAction === 'keep' || exitAction === 'keep-save') {
+          performanceMode.active = false;
+          performanceMode.enteredAt = null;
+          forcePersist();
+          // SESSION CACHE (feature A6): both KEEP variants keep the session cache
+          // — the live look is what we're keeping, so its in-memory tuning stays
+          // valid across later A→B→A switches.
+          if (exitAction === 'keep-save') {
+            // KEEP & SAVE TUNING: if stored auto-save is ON, effectiveAutoSave()
+            // is now true (active just cleared) — flush the deck captures
+            // deferred during the show to their playlist files, in addition to
+            // forcePersist. If auto-save is OFF, nothing hits disk and the
+            // pending flags survive for a later POST /settings {autoSave:true}.
+            if (effectiveAutoSave()) flushPendingDeckCaptures();
+          } else {
+            // KEEP WITHOUT SAVING: discard the pending playlist-file backlog so
+            // the mid-show deck tuning never bakes into the shared presets. The
+            // session cache is left intact (in-session continuity) and the live
+            // entry stays touched, so normal edit-mode auto-capture resumes on
+            // the next switch — this only declines the exit-time flush.
+            pendingDeckFlush.clear();
+          }
+          snapshotManager.delete(PERF_SNAPSHOT_NAME);
+          broadcastWs({
+            type: 'performanceMode', active: false, enteredAt: null,
+            ...computeDirtyDeckState(),
+          });
+          broadcastMixerState();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ active: false, exitAction }));
+        }
+        // exitAction === 'restore': put the whole rig back to the pre-show
+        // capture. A missing snapshot is a fail-loud 500 (we should always
+        // have one while active) — never a silent no-op.
+        let look;
+        try {
+          look = snapshotManager.load(PERF_SNAPSHOT_NAME);
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `pre-show snapshot is corrupt: ${err && err.message}`,
+            code: 'PERFORMANCE_MODE_SNAPSHOT_MALFORMED',
+          }));
+        }
+        if (!look) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'pre-show snapshot missing — cannot restore',
+            code: 'PERFORMANCE_MODE_SNAPSHOT_MISSING',
+          }));
+        }
+        // Clear any effects the operator enabled mid-performance (same call as
+        // e-stop) so the restore lands on the exact pre-show effect state.
+        if (globalEffectsController && globalEffectsController.panicStop) {
+          globalEffectsController.panicStop();
+        }
+        // SESSION CACHE + DIRTY FLUSH (features A6 / B1): RESTORE reverts the
+        // whole rig to the pre-show snapshot, so ALL mid-show tuning must
+        // vanish — clear the entire session cache (so no mid-show param
+        // resurfaces on a later switch) AND drop every pending deck capture (so
+        // mid-show tuning never reaches a playlist file). Cleared BEFORE
+        // recallLook so nothing the restore does can re-seed them.
+        sessionParamCache.clearAll();
+        pendingDeckFlush.clear();
+        recallLook(look);
+        stateManager.applyGlobalsState(
+          look.globals, paramCenter, intensityController, globalEffectsController);
+        performanceMode.active = false;
+        performanceMode.enteredAt = null;
+        forcePersist();
+        snapshotManager.delete(PERF_SNAPSHOT_NAME);
+        // applyGlobalsState routes params through paramCenter.set(..., 'init')
+        // which does NOT emit a sharedParams WS frame — push one explicitly so
+        // clients see the restored shared params immediately.
+        if (paramCenter) {
+          broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+        }
+        broadcastWs({
+          type: 'performanceMode', active: false, enteredAt: null,
+          ...computeDirtyDeckState(),
+        });
+        broadcastMixerState();
+        broadcastAutopilot();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ active: false, exitAction: 'restore' }));
+      });
+    }
     // ── MIXER CHANNEL PLAYLIST ASSIGNMENT ────────────────────────────────
     else if (req.method === 'GET' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist$/)) {
       const id = req.url.split('/')[3];
@@ -8237,6 +9094,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(ch.playlist || null));
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const id = req.url.split('/')[3];
       const reject = rejectIfWrongRole(id, 'mixer');
       if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
@@ -8244,6 +9102,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         const ch = mixer.getMixerChannel(id);
         if (!ch) { res.writeHead(404); return res.end(JSON.stringify({ error: 'channel not found' })); }
         try {
+          // MIXER-LAYER SESSION-CACHE SCOPING (operator refinement): a mixer
+          // layer's retained tuning lives only until its PLAYLIST is changed or
+          // (re)loaded. Any playlist assignment on this layer — detach, load, or
+          // reload of the same playlist — starts the layer's session cache
+          // FRESH. Clear it here; the fresh loadPlaylistEntry below runs with
+          // stowOutgoing:false so the outgoing (old-playlist) tuning is not
+          // re-cached, and the new first entry applies its own defaults with no
+          // stale overlay. Entry switches WITHIN the assigned playlist keep
+          // their tuning (they don't hit this route).
+          sessionParamCache.clearChannel(ch.id);
           if (data.name === null) {
             ch.playlist = null;
             saveAllState();
@@ -8263,7 +9131,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             broadcastChannelPlaylistData(ch);
             broadcastMixerState(); return;
           }
-          loadPlaylistEntry(ch, pl.name, firstEntry.id);
+          loadPlaylistEntry(ch, pl.name, firstEntry.id, { stowOutgoing: false });
           saveAllState();
           // playlistData mirrors POST /mixer/channels — entries are
           // included inline so the panel never needs to GET
@@ -8348,6 +9216,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastMixerState();
       });
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist\/capture$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const id = req.url.split('/')[3];
       const reject = rejectIfWrongRole(id, 'mixer');
       if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
@@ -8401,6 +9270,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         ch.seedLocalControlDefaults(wasmHost);
         playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
         finalizeCpcValues(ch);
+        // DISCARD = reset to on-disk defaults. Drop this slot's session tuning +
+        // touched set so the session overlay does NOT resurrect the edit the
+        // operator just discarded (no applySessionParamOverlay here). Keyed by
+        // the same slot key (entry id) the load path uses.
+        sessionParamCache.clearPattern(ch.id, sessionKeyFor(ch));
+        if (ch._touchedControlIds) ch._touchedControlIds.clear();
 
         clearChannelDirty(ch);
         saveAllState();
@@ -8659,16 +9534,57 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // never let a snapshot send break a fresh WS handshake
     }
 
+    // Replay engine settings (auto-save toggle) so a fresh CaptainPad config
+    // screen paints the current state without a focus fetch. Same posture as
+    // the deckTransitionConfig / timeline replays above.
+    try {
+      ws.send(JSON.stringify({ type: 'engineSettings', ...engineSettings }));
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+
+    // Replay performance-mode state so a fresh CaptainPad paints the live-show
+    // lock badge immediately (same posture as the engineSettings replay).
+    try {
+      ws.send(JSON.stringify({
+        type: 'performanceMode',
+        active: performanceMode.active,
+        enteredAt: performanceMode.enteredAt,
+        ...computeDirtyDeckState(),
+      }));
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+
+    // Replay the engine-owned CONTROLLER PROFILE ('edit'|'play') so a fresh
+    // CaptainPad paints the PLAY/EDIT switch in the right state immediately,
+    // without a focus fetch (same posture as the effectsPage/performanceMode
+    // single-source-of-truth state). effects_v2.
+    try {
+      if (globalEffectSlotManager) {
+        ws.send(JSON.stringify({
+          type: 'controllerProfile',
+          profile: globalEffectSlotManager.getControllerProfile(),
+        }));
+      }
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+
     ws.on('message', msg => {
       try {
         const d = JSON.parse(msg);
         if (d.type === 'setControl' && d.id !== undefined) {
-          // CHANNEL-LOCAL write (deck base): no playlist auto-capture, no
-          // cross-channel mirroring (operator ruling 2026-07-07 — parameter
-          // isolation).
-          paramRouter.setControl(d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
+          // CHANNEL-LOCAL write (deck base): no cross-channel mirroring
+          // (operator ruling 2026-07-07 — parameter isolation). Marks the deck
+          // touched so the next entry switch auto-captures this tuning into the
+          // outgoing entry (auto-save wave — survives the pattern change).
+          const ctlRes = paramRouter.setControl(d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
           markChannelDirtyIfLocked(mixer.baseChannelId);
+          markDeckParamsTouched();
+          if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(mixer.baseChannelId, d.id);
           saveAllState();
+          broadcastDeckParamsSaved(); // deck "✓ SAVED" flash — only when persisted
           broadcastMixerState();
           broadcastDeckState();
         } else if (d.type === 'setChannelControl' && d.channelId && d.id !== undefined) {
@@ -8676,8 +9592,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // channelId — the value lands ONLY on that channel's WASM handle +
           // localControls. No playlist auto-capture, no cross-channel
           // mirroring (operator ruling 2026-07-07 — parameter isolation).
-          paramRouter.setChannelControl(d.channelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
+          const ctlRes = paramRouter.setChannelControl(d.channelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
           markChannelDirtyIfLocked(d.channelId);
+          if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(d.channelId, d.id);
           saveAllState();
           broadcastMixerState();
           broadcastDeckState();

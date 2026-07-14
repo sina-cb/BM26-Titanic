@@ -199,6 +199,10 @@ test('R5: pushAllLedControllers force-pushes (even in sync), serializes, binds u
   const c = reg.controllers[2];
   assert.equal(isBoundLedController(c), true, 'pushing an unbound card binds it');
   assert.equal(c.device.controllerId, 'titanic_3');
+  // The device status carries a mac (deviceStatus() fixture) — auto-bind-on-push
+  // must NOT carry it into the persisted device block (public repo, gitleaks
+  // bm26-mac-address rule).
+  assert.equal('mac' in c.device, false);
 
   // Sequential: A processed before B before C (first getStatus proves order).
   const s1 = calls.indexOf('getStatus:10.0.0.1');

@@ -26,8 +26,8 @@ vsn1:
   deployDebounceMs: 1200
   deployOnBoot: true
 playlist:
-  active: false
-  delay_s: '30'
+  active: true
+  delay_s: '1'
   shuffle: false
 web_client:
   enabled: false

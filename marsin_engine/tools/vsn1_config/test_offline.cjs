@@ -18,7 +18,30 @@ const fs = require('fs');
 const path = require('path');
 
 const gs = require('./grid_serial.cjs');
-const { buildLayout, validateLayout } = require('./deploy_layout.cjs');
+const { buildLayout, validateLayout, tplPathFor } = require('./deploy_layout.cjs');
+
+// A pathological, fully-loaded page-0 layout: 8 slots, 10-char names, 4 mode
+// names each. Compiles ~990 chars at full display — past the 909 device budget —
+// so it exercises the LCD-INIT display-shrink ladder (edit) and proves PLAY
+// (which carries no mode tables) fits without any shrink. Only page 0 is
+// populated (own-page retirement: the device is a fixed page-0 surface).
+function pathologicalLayout(profile) {
+  const names = ['Ocean Wash', 'Vapor Lasr', 'Plasma Cor', 'Midnght La',
+    'Laser Lime', 'Ultraviole', 'Bass Dropp', 'Sunset Cor'];
+  const colors = [[255, 40, 40], [255, 140, 0], [0, 200, 200], [160, 220, 255],
+    [60, 220, 60], [60, 120, 255], [255, 220, 0], [255, 255, 255]];
+  const layout = {
+    version: 1, name: 'pathological', module: 'VSN1L',
+    midi: { feedbackChannel: 1, modeChannel: 2, slotBase: 32, pageCc: 40,
+      sbNoteBase: 41, helloCc: 41, selectCc: 42, viewCc: 43 },
+    slots: names.map((name, i) => ({
+      id: i + 1, effect: 'colorWash', name, color: colors[i],
+      behavior: 'toggle', modeNames: ['tin', 'rep', 'mul', 'max'],
+    })),
+  };
+  if (profile) layout.profile = profile;
+  return layout;
+}
 
 let passed = 0;
 let failed = 0;
@@ -302,6 +325,100 @@ async function main() {
       }
       assert(threw, `expected validation error matching ${want}`);
     }
+  });
+
+  // 8. tplPathFor resolves play overrides + shares the rest with edit.
+  check('tplPathFor: play overrides lcd/encoder_press, shares keys/system', () => {
+    const playOverrides = ['lcd_init.lua', 'lcd_draw.lua', 'encoder_press.lua'];
+    for (const f of playOverrides) {
+      const p = tplPathFor('play', f);
+      assert(p.includes('effects_layout_play'), `${f} must resolve to the play set (got ${p})`);
+    }
+    // Shared templates fall through to the base edit set.
+    for (const f of ['key_init.lua', 'side_button.lua', 'system_init.lua',
+      'encoder_init.lua', 'encoder_turn.lua']) {
+      const p = tplPathFor('play', f);
+      assert(p.includes('effects_layout') && !p.includes('effects_layout_play'),
+        `${f} must be SHARED from the edit set (got ${p})`);
+    }
+    // edit profile always uses the base set.
+    assert(tplPathFor('edit', 'lcd_init.lua').includes('effects_layout') &&
+      !tplPathFor('edit', 'lcd_init.lua').includes('effects_layout_play'),
+      'edit profile must use the base template set');
+  });
+
+  // 9. The LCD-INIT display-shrink ladder rescues a 990-char-class page (edit).
+  check('shrink ladder: a 928+ char page-0 compiles in budget, with logged reductions', () => {
+    const maxLength = Number(grid.getProperty('CONFIG_LENGTH'));
+    const warnings = [];
+    const origWarn = console.warn;
+    console.warn = (...a) => { warnings.push(a.join(' ')); };
+    let out;
+    try {
+      out = buildLayout(gp, pathologicalLayout('edit'));
+    } finally {
+      console.warn = origWarn;
+    }
+    // Every element (incl. the shrunk page-0 LCD INIT) is now in budget.
+    for (const b of out.budgets) {
+      assert(b.length <= maxLength, `${b.label} over budget: ${b.length} > ${maxLength}`);
+    }
+    // The page-0 LCD INIT specifically was over budget at full display and got
+    // normalized down (proves the ladder ran, not that the page was small).
+    const p0lcd = out.budgets.find((b) => b.label === 'p0 LCD INIT');
+    assert(p0lcd && p0lcd.length <= maxLength, `p0 LCD INIT must be in budget (${p0lcd && p0lcd.length})`);
+    assert(warnings.some((w) => /tightening display/.test(w)),
+      'shrink ladder must log each reduction loudly');
+    assert(warnings.some((w) => /NORMALIZED to fit/.test(w)),
+      'shrink ladder must log the final normalized fit loudly');
+  });
+
+  // 10. PLAY profile: the same pathological page fits with NO shrink (no modes).
+  check('PLAY profile builds page 0 in budget with no mode-table shrink', () => {
+    const maxLength = Number(grid.getProperty('CONFIG_LENGTH'));
+    const warnings = [];
+    const origWarn = console.warn;
+    console.warn = (...a) => { warnings.push(a.join(' ')); };
+    let out;
+    try {
+      out = buildLayout(gp, pathologicalLayout('play'));
+    } finally {
+      console.warn = origWarn;
+    }
+    for (const b of out.budgets) {
+      assert(b.length <= maxLength, `PLAY ${b.label} over budget: ${b.length} > ${maxLength}`);
+    }
+    // PLAY carries no mode tables, so the pathological page fits at full display.
+    assert(!warnings.some((w) => /tightening display/.test(w)),
+      'PLAY should NOT need the shrink ladder on this page');
+    // The PLAY LCD INIT round-trips through the device codec (decodable).
+    const p0 = out.patches[0];
+    const lcd = p0.elements.find((e) => e.elementIndex === 13)
+      .events.find((e) => e.eventKey === 'INIT').shortLua;
+    const descr = gs.configExecuteDescriptor(gp, 0, 0, 0, 13, 0, lcd);
+    const packet = grid.encode_packet(descr);
+    assert(packet !== undefined, 'PLAY LCD INIT must encode');
+    const classArray = grid.decode_packet_frame([...packet.serial]);
+    grid.decode_packet_classes(classArray);
+    const c = classArray.find((x) => x.class_name === 'CONFIG');
+    assert(c.class_parameters.ACTIONSTRING === lcd, 'PLAY LCD INIT must round-trip');
+    // PLAY encoder press is inert (no midi_send → no mode-cycle note).
+    const enc = p0.elements.find((e) => e.elementIndex === 8)
+      .events.find((e) => e.eventKey === 'BC').shortLua;
+    assert(!/gms|midi_send|mi\(/.test(gs.toHumanActionString(gp, enc)),
+      'PLAY encoder press must emit no MIDI (no-op)');
+  });
+
+  // 11. Both profiles honour the invalid-profile guard.
+  check('layout.profile validation: edit/play accepted, stranger rejected', () => {
+    const okEdit = pathologicalLayout('edit');
+    const okPlay = pathologicalLayout('play');
+    validateLayout(okEdit); // no throw
+    validateLayout(okPlay); // no throw
+    const bad = pathologicalLayout('performance');
+    let threw = false;
+    try { validateLayout(bad); } catch (e) { threw = /profile/.test(e.message); }
+    assert(threw, 'an unknown layout.profile must be rejected loudly');
   });
 
   console.log(`\n${passed} passed, ${failed} failed`);

@@ -11,7 +11,11 @@
 --   in-band linear ramp, selected slot's color, layer 2. Flip i -> 4 - i
 --   if the physical order is inverted.
 -- wdw(s): the MarsinLED boot welcome artwork.
--- fdw(s): the page-flash overlay box (big centered P<n>).
+-- fdw(s): the deploy TOAST — the MarsinLED logo (no page number). Paging is
+--   retired (always page 0), so the old "P<n>" flash carried no signal; this
+--   now flashes the brand wordmark for pf frames when a (re)deploy lands.
+--   Reuses wdw's known-good wordmark coords minus the "welcome aboard" line,
+--   over a full-screen clear so it reads as a clean overlay on any view.
 
 ebar = function(v)
   local q = cls and cls[sel + 1] or {255, 255, 255}
@@ -31,7 +35,9 @@ wdw = function(s)
   s:draw_text_fast("welcome aboard", 48, 184, 16, {170, 170, 170})
 end
 fdw = function(s)
-  s:draw_area_filled(90, 70, 229, 170, {0, 0, 0})
-  s:draw_rectangle_rounded(90, 70, 229, 170, 10, {226, 88, 34})
-  s:draw_text_fast("P" .. page_current(), 96, 88, 64, {255, 255, 255})
+  s:draw_area_filled(0, 0, 319, 199, {0, 0, 0})
+  s:draw_rectangle_rounded_filled(130, 30, 190, 90, 30, {226, 88, 34})
+  s:draw_text_fast("Marsin", 16, 116, 32, {255, 255, 255})
+  s:draw_text_fast("LED", 208, 116, 32, {226, 88, 34})
+  s:draw_area_filled(16, 158, 303, 163, {226, 88, 34})
 end

@@ -34,3 +34,34 @@ export function windowPadNumber(window: BrowseWindow | null | undefined, idx: nu
   if (idx < window.start || idx >= window.start + window.size) return null;
   return idx - window.start + 1;
 }
+
+/**
+ * New browse-window START so the window SURROUNDS the active entry — the
+ * "recenter the pad window around what's playing" rule. When the active row
+ * already sits inside the window the start is returned UNCHANGED (so a manual
+ * pad-scroll browse is never yanked back); when it falls outside, the window
+ * re-centers on the active row, clamped to `[0, max]` where
+ * `max = max(0, length - size)` (the window never runs past either end, and a
+ * playlist shorter than the window pins to 0). No active row (`activeIndex < 0`
+ * or out of range) leaves the window where it is (clamped in-bounds).
+ *
+ * Pure + dependency-free so both the MIDI manager (which owns the live cursor)
+ * and the unit tests can call it without the controller stack.
+ */
+export function recenterWindowStart(args: {
+  activeIndex: number;
+  currentStart: number;
+  size: number;
+  length: number;
+}): number {
+  const { activeIndex, currentStart, size, length } = args;
+  const max = Math.max(0, length - size);
+  const clampedCur = Math.min(Math.max(0, currentStart), max);
+  // No active row to follow → hold position (clamped in-bounds).
+  if (activeIndex < 0 || activeIndex >= length) return clampedCur;
+  // Already inside the window → don't churn (preserves a manual browse scroll).
+  if (activeIndex >= clampedCur && activeIndex < clampedCur + size) return clampedCur;
+  // Outside → centre the active row, clamped to the ends.
+  const centered = activeIndex - Math.floor(size / 2);
+  return Math.min(Math.max(0, centered), max);
+}

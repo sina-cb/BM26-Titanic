@@ -65,7 +65,6 @@ controllers:
       vendor: marsinled
       controllerId: titanic_202
       boardId: angio4-old
-      mac: AA:BB:CC:DD:02:02
       lastPush:
         at: '2026-07-10T23:02:37.377Z'
         outcome: applied

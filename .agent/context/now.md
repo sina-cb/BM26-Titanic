@@ -3,7 +3,7 @@
 > Updated by any agent, any time state changes. Keep it under a screen.
 > Absolute dates only.
 
-_Last touched: 2026-07-10 (night — LED per-output HARDWARE-VERIFIED, `stable` re-tagged)_
+_Last touched: 2026-07-13 (studiodj black-pixel fix + scene backups + engine auto-save — report `202607/20260713_0`)_
 
 ## Active branches
 
@@ -86,6 +86,104 @@ OPEN (tracked in session task list):
 - Playlists (party_high/low + ambient), pattern tuning on the bench.
 - Everything uncommitted on `feat/party_integration_20260711` — commit is
   operator-gated; security check + subsystem auto-checks first.
+
+## 2026-07-13 wave (uncommitted, report `202607/20260713_0`)
+
+- **studiodj black pixels FIXED**: scene had saved `simBrightness: 0` →
+  now 0.4. Reload any pre-fix browser tab (it holds 0 dirty in memory).
+- **Scene save backups LANDED**: pre-save snapshots →
+  `simulation/.scene_backups/` (gitignored, keep 20), ⟲ Recover UI in the
+  HUD top bar, `GET /backups` + `POST /restore-backup` on :6970. 281/281
+  sim tests, security check PASS.
+- **Engine auto-save LANDED**: deck tuning loss root-caused (capture-on-switch
+  removed in c513108) and fixed; `autoSave` setting (default ON) in new
+  `settings_state.yaml`; mixer `localControls` never persisted; CaptainPad
+  `/config` toggle. Engine 1925/1935 (10 pre-existing/env fails),
+  CaptainPad 639/639 + tsc. **Performance mode: analysis only, parked** —
+  operator decision pending (see report).
+- **Deck UI fixes LANDED**: pattern-list no longer jumps to the blue MIDI
+  window on tap (window now recenters around the selection, pads+UI agree);
+  green "✓ SAVED" badge restored via new `deckParamsSaved` WS broadcast
+  (honest — silent when autoSave OFF). CaptainPad 666/666 + tsc.
+- **APC window desync FIXED** (ID-keyed auto-follow baseline; pads always ≡
+  blue highlight; manual browse sticks). CaptainPad 672/672.
+- **PERFORMANCE MODE LANDED** (operator-authorized): 39 engine gates (409
+  `PERFORMANCE_MODE`), pre-show snapshot on entry, KEEP/RESTORE exit,
+  crash = implicit restore, effective-save suspension; shared control in
+  deck + mixer headers. Engine 1936/1945 (env fails only), CaptainPad
+  686/686 + tsc. Screenshots `pm_a..pm_h`.
+- **Perf-mode follow-up LANDED**: all 39 gates greyed comprehensively on
+  deck+mixer UI; APC SOLO = performance/edit dialog switch (LED lit when
+  active); active button = RED "EDIT". CaptainPad 696/696 + tsc.
+- **Evening wave LANDED**: engine session param retention (all channels,
+  transition path covered; mixer scoped to playlist assignment) + dirty
+  flush on auto-save re-enable / exit-KEEP (engine 1968/1977, +22 tests);
+  perf-mode pattern rows 1.73× taller for touch (703/703); APC SOLO
+  press-again-to-confirm enter + exit-sheet hint (711/711 + tsc). Dev-only
+  `?fakeMidi=apc` transport added for headless MIDI testing.
+- **Night wave LANDED**: performance-exit save ask (keep-save / keep /
+  restore + dirty summary); VSN1 silent-deploy root cause = 909-char LCD
+  budget overflow (fixed: auto-shrink + loud errors + requeue); page-0-only
+  deploys; controllerProfile edit/play (sb_2 toggle, PLAY big-cell surface
+  device+CaptainPad); device paging retired (page changes locked post-
+  deploy). Joint smoke fixed a REST key mismatch (controllerProfile vs
+  profile). Engine 1973+/1982, CaptainPad 739/739 + tsc.
+- **ENGINE DEPLOY GATE:** current engine process runs with
+  MARSIN_VSN1_DEPLOY=0 (no hardware flashes possible). Restart engine
+  without that env var to re-enable VSN1 deploy-on-change. Hardware
+  verification checklist (page-0 flashes, sb_2 E2E, pages 1-3 wipe) is in
+  report 20260713_0 §8 — operator-gated.
+- **COMMIT BLOCKER:** security check flags 3 pre-existing MAC addresses in
+  `simulation/scenes/**/controllers.yaml` — must be resolved before the
+  operator-gated commit of this branch. All 2026-07-13 work is uncommitted
+  on `feat/party_integration_20260711` only (operator directive).
+
+## 2026-07-14 (uncommitted, continues report 20260713_0)
+
+- **HIL leak cleaned + guarded**: hil_mixer_autocycle_test leaked playlist
+  `hil_autocycle_test` into studiodj (removed; backup in ~/tmp);
+  assertDisposableEngine() pre-flight added (HIL tests exit 2 unless
+  activeModel=test_bench). Follow-up chip: apply guard to all ~40 HIL tests.
+- **Effects UI "regression" = engine controllerProfile stuck on 'play'**
+  (CaptainPad renders faithfully; edit path verified byte-identical +
+  regression-guard tests). THEN found profile flips edit→play at runtime
+  with no operator action: only writer is the VSN1 sb_2 handler; ranked
+  cause = stale Web MIDI replay / self-echo alias (fw TXes sb notes on
+  ch=page; our page-2 LED feedback == sb_2 note 43!). HARDENED
+  (manager.ts handleVsn1ProfileButton): stale>2s drop, 400ms debounce,
+  in-flight ignore, refuse-unseeded (no more blind 'edit' default),
+  50ms self-echo guard, accepted/dropped audit via lastEvent. Engine PATCH
+  handler now logs `[ControllerProfile] prev -> next (source, remote)` +
+  accepts/echoes body `source` ('vsn1_sb2' threaded). CaptainPad 756/756 +
+  tsc. Engine logging needs engine restart.
+- **APC window policy (operator ruling)**: recenter ONLY on mouse/touch UI
+  tap; APC pad-select, autopilot, external changes NEVER move the window
+  (explicit source signal, non-UI sources don't republish). 747-base tests.
+- **Page-follow code DELETED** (was gated): constant + device-page-CC block
+  + dead vsn1 branch gone; decoder + hello handler + effectsPage plumbing
+  kept.
+- **Perf-mode exit save-ask, session param cache, dirty flush, colorWash
+  multi-instance, MAC write-path removal, MarsinLED logo toast**: see
+  report §7-9.
+- **Effects mode badge LANDED**: PLAY mode was silently hiding all authoring
+  UI (the only hint was gated !isStrip and never rendered; sb_2 hardware was
+  the only escape). Now an always-visible badge in the strip header: amber
+  "PLAY — tap for EDIT" (TAPPABLE → PATCH profile edit, source
+  captainpad_badge) / red "LOCKED — performance mode". PLAYLIST_DBG console
+  spam gated behind a flag (fixes screenshot starvation). Metro evicted from
+  :6967 (again) → serve dist. CaptainPad 761/761 + tsc. studiodj persisted
+  profile = edit.
+- **Dynamic VSN1 deploy: config-persistent now** — `config.yaml
+  vsn1.deployLayout: true` (operator hit the disabled-gate trap 3× in one
+  day; env var no longer required). Boot deploy verified ok to page 0,
+  operator confirmed working. NOTE for commit review: `true` means any
+  machine with a board on COM12 auto-flashes on layout change.
+- **PARKED (operator stopped the agent)**: performance-button
+  state-sync hardening (render from authoritative state, reconnect re-seed,
+  disconnected-neutral) — relaunch only if operator asks.
+- **Sim stack pre-MAC-fix**: the running sim re-wrote `mac:` into
+  studiodj/controllers.yaml (pre-fix code in memory); strip recurs until
+  the sim stack is restarted onto the fixed code.
 
 ## Hot notes
 

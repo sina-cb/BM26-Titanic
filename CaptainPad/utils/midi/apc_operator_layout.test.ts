@@ -7,7 +7,7 @@
 //   volume=100 pan=101 send=102 device=103  → FOCUS channel 0/1/2/3
 //   up=104 down=105 left=106 right=107       → UNASSIGNED, DRIVEN DARK (ledOff)
 //   clip_stop=112                            → combined AUTOPILOT toggle (LED tracks it)
-//   solo=113 mute=114 rec_arm=115 select=116 drum=117 note=118 → UNASSIGNED, DRIVEN DARK
+//   mute=114 rec_arm=115 select=116 drum=117 note=118 → UNASSIGNED, DRIVEN DARK; solo=113 → performanceDialog
 //   stop_all_clips=119                       → e-stop BLACKOUT toggle (LED tracks blackout)
 //   shift=122                                → Deck ↔ Mixer view toggle (no LED)
 // Faders: CC 48-51 → mixer channels 0-3 (the 4th-fader fix); CC 52-55 learn;
@@ -38,7 +38,9 @@ const apc = validateProfile(apcRaw, 'apc_mini_mk2.yaml');
 
 // Notes that must resolve to nothing in the new layout (arrows + the unused
 // scene-column buttons). An unmapped control is loud silence AND stays dark.
-const UNASSIGNED_NOTES = [104, 105, 106, 107, 113, 114, 115, 116, 117, 118];
+// solo (113) left this list 2026-07-13: it is now the PERFORMANCE/EDIT mode
+// dialog summon (see the dedicated tests below).
+const UNASSIGNED_NOTES = [104, 105, 106, 107, 114, 115, 116, 117, 118];
 
 describe('apc_mini_mk2 operator re-layout — inbound button/fader mapping', () => {
   for (const ctxName of ['deck', 'mixer']) {
@@ -57,6 +59,10 @@ describe('apc_mini_mk2 operator re-layout — inbound button/fader mapping', () 
         expect(on(112)?.resolved).toEqual({ kind: 'autopilotToggle' });
       });
 
+      it('solo (113) → performance-mode dialog summon (never a blind engine toggle)', () => {
+        expect(on(113)?.resolved).toEqual({ kind: 'performanceDialog' });
+      });
+
       it('stop_all_clips (119) → e-stop blackout toggle (NOT master fade)', () => {
         expect(on(119)?.resolved).toEqual({ kind: 'blackoutToggle' });
       });
@@ -65,7 +71,7 @@ describe('apc_mini_mk2 operator re-layout — inbound button/fader mapping', () 
         expect(on(122)?.resolved).toEqual({ kind: 'viewToggle' });
       });
 
-      it('arrows + unused scene buttons (104-107, 113-118) resolve to NOTHING', () => {
+      it('arrows + unused scene buttons (104-107, 114-118) resolve to NOTHING', () => {
         for (const note of UNASSIGNED_NOTES) {
           expect(on(note), `note ${note} must be unmapped`).toBeNull();
         }
@@ -185,6 +191,20 @@ describe('apc_mini_mk2 operator re-layout — state-tracking button LEDs', () =>
         const dark = projectLeds(apc, projState({ blackout: false }), {}, ctxName);
         expect(dark.messages).toContainEqual([0x90, 119, 0]);
       });
+
+      it('solo (113) LED lights while performance mode is ACTIVE, dark in edit mode', () => {
+        const lit = projectLeds(apc, projState({ getPerformanceModeActive: () => true }), {}, ctxName);
+        expect(lit.messages).toContainEqual([0x90, 113, 1]);
+        const dark = projectLeds(apc, projState({ getPerformanceModeActive: () => false }), {}, ctxName);
+        expect(dark.messages).toContainEqual([0x90, 113, 0]);
+      });
+
+      it('solo (113) LED is dark on a pre-field projection state (no getter)', () => {
+        // A snapshot that predates performanceModeActive must read as inactive,
+        // never lit-from-undefined.
+        const { messages } = projectLeds(apc, projState({}), {}, ctxName);
+        expect(messages).toContainEqual([0x90, 113, 0]);
+      });
     });
   }
 });
@@ -223,11 +243,11 @@ function makeApi(): MidiDispatchApi {
     setGroupFixedColor: vi.fn(ok), updateMixerChannel: vi.fn(ok), updateDeckChannel: vi.fn(ok),
     dispatchGlobalEffectSlotAction: vi.fn(ok), setGlobalEffectBlackout: vi.fn(ok),
     setGlobalEffectSlotIntensity: vi.fn(ok), resetGlobalEffectSlotIntensity: vi.fn(ok),
-    setEffectsPage: vi.fn(ok), cycleGlobalEffectSlotMode: vi.fn(ok),
+    setEffectsPage: vi.fn(ok), cycleGlobalEffectSlotMode: vi.fn(ok), setControllerProfile: vi.fn(ok),
     resetAllGlobalEffects: vi.fn(ok), disableAllGlobalEffects: vi.fn(ok),
     setChannelPlaylistEntry: vi.fn(ok), setDeckChannelControl: vi.fn(ok),
     setMixerChannelControl: vi.fn(ok), setChannelHue: vi.fn(ok),
-    toggleDeckMixerView: vi.fn(ok), toggleCombinedAutopilot: vi.fn(ok), toggleMasterFade: vi.fn(ok),
+    toggleDeckMixerView: vi.fn(ok), toggleCombinedAutopilot: vi.fn(ok), toggleMasterFade: vi.fn(ok), summonPerformanceDialog: vi.fn(ok),
   };
 }
 
@@ -302,6 +322,32 @@ describe('apc_mini_mk2 operator re-layout — real-profile integration (fake tra
     await manager.start();
     transport.emit([0x90, 122, 127]);
     expect(api.toggleDeckMixerView).toHaveBeenCalledTimes(1);
+  });
+
+  it('solo (113) → summonPerformanceDialog() — the UI sheet, never an engine write', async () => {
+    const { manager, api, transport } = integrationSetup(fourChannelSnap);
+    await manager.start();
+    transport.emit([0x90, 113, 127]);
+    expect(api.summonPerformanceDialog).toHaveBeenCalledTimes(1);
+    // The press must NOT blind-toggle anything engine-side.
+    expect(api.setGlobalBlackout).not.toHaveBeenCalled();
+    expect(api.updateMixerChannel).not.toHaveBeenCalled();
+  });
+
+  it('SOLO → open, SOLO again → confirm: both presses reach the summon seam', async () => {
+    // The press-twice-to-GO-LIVE contract end-to-end at the MIDI layer: two
+    // physical presses = two summons. The FIRST opens the enter-confirm sheet
+    // and the SECOND confirms — that decision is the UI-side
+    // performanceSummonOutcome ('confirmEnter'), pinned in
+    // components/performance_mode_logic.test.ts; the dispatcher's job (proven
+    // here) is to deliver EVERY press to the summon seam, never swallowing the
+    // second one or writing to the engine itself.
+    const { manager, api, transport } = integrationSetup(fourChannelSnap);
+    await manager.start();
+    transport.emit([0x90, 113, 127]); // opens the enter-confirm sheet
+    transport.emit([0x90, 113, 127]); // confirms (GO LIVE) via the outcome fn
+    expect(api.summonPerformanceDialog).toHaveBeenCalledTimes(2);
+    expect(api.setGlobalBlackout).not.toHaveBeenCalled();
   });
 
   it('an arrow (105) and an unused scene button (114) dispatch NOTHING', async () => {

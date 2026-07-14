@@ -15,8 +15,13 @@
 // A "singleton" effect here = one whose engine active-state is NOT scoped by
 // preset. For those, two enabled slots on the same VSN1 page collide. For a
 // PRESET-AWARE effect (strobe / colorWash / feedbackTrails), two presets on one
-// page are independent and legitimate (e.g. summer_camp_dome page 0 runs
-// feedbackTrails/soft_afterimage AND feedbackTrails/long_afterimage — fine).
+// page are independent and legitimate — in BOTH pad-LED reporting AND RUNTIME.
+// (Until 2026-07-13 colorWash was preset-aware only for the pad LED; its runtime
+// still shared ONE wash layer, so Ocean Wash + Emergency Red replaced each other
+// even though the pads looked independent. The engine's colorWash is now keyed
+// per slot — see global_effects_controller.js `colorWashes` Map — so two washes
+// genuinely coexist. e.g. summer_camp_dome page 0 runs feedbackTrails/
+// soft_afterimage AND feedbackTrails/long_afterimage — fine.)
 //
 // PRESET_AWARE_EFFECT_IDS is a DOCUMENTED MIRROR of the engine's `_isSlotActive`
 // preset-scoped cases. It is the ONE place the CaptainPad side encodes that
@@ -36,7 +41,7 @@
 export const PRESET_AWARE_EFFECT_IDS: ReadonlySet<string> = new Set<string>([
   // Original preset-scoped effects:
   'strobe',         // c.strobeActive && c.activeStrobePresetId === slot.presetId
-  'colorWash',      // c.colorWashConfig.preset === slot.presetId
+  'colorWash',      // c.colorWashes.get(`slot:${slotId}`).preset === slot.presetId
   'feedbackTrails', // c.feedbackTrailsConfig.preset === slot.presetId
   // Made preset-aware by the Hi-Hat↔Blizzard RCA fix (engine, 2026-07-11): these
   // singleton effects now stamp the running preset id, so two slots on different

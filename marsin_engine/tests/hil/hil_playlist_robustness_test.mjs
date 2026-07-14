@@ -63,6 +63,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const ENGINE_BASE = 'http://127.0.0.1:6968';
 const WS_URL = 'ws://127.0.0.1:6968';
 
@@ -233,6 +235,9 @@ function installSignalCleanup() {
   }
   cleanupState.snapshot = JSON.parse(JSON.stringify(mixer));
   console.log(`  snapshot: ${mixer.channels.length} channel(s), base=${mixer.baseChannelId}`);
+
+  // Refuse to mutate a non-disposable engine BEFORE creating any playlist.
+  await assertDisposableEngine(ENGINE_BASE);
 
   // Pick the operator's first available playlist as PL_A (we never
   // mutate it). Create a throwaway HIL playlist as PL_B so the

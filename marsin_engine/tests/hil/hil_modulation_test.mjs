@@ -30,6 +30,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ENGINE_ROOT = path.resolve(__dirname, '..', '..');
@@ -187,6 +189,10 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     console.error('  FATAL: engine boot failed:', e.message);
     process.exit(2);
   }
+
+  // Guard: if our slot port was already bound by a real engine the boot poll
+  // would have latched onto IT — refuse to mutate a non-test_bench model.
+  await assertDisposableEngine(ENGINE_BASE);
 
   // 1. Create the test playlist with one entry. localSpeed default 0.3,
   //    no modulation yet (we'll PUT it next).

@@ -38,6 +38,8 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const ENGINE_PORT = parseInt(process.env.ENGINE_PORT || '6968', 10);
 const ENGINE_BASE = `http://127.0.0.1:${ENGINE_PORT}`;
 
@@ -121,6 +123,9 @@ async function getControllerEffects() {
     console.error(`  Start with: node engine.js --pattern test_const --model test_bench --port ${ENGINE_PORT}`);
     process.exit(2);
   }
+
+  // Refuse to mutate a non-disposable engine BEFORE any slot write.
+  await assertDisposableEngine(ENGINE_BASE);
 
   snapshotState();
   console.log(`  snapshotted ${SNAPSHOT_FILES.join(', ')} → ${SNAPSHOT_DIR}`);

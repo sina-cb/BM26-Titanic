@@ -9,6 +9,16 @@ const {
   duplicateSceneDir,
 } = require('./scene_duplicate.cjs');
 
+const {
+  writeFileAtomic,
+  filesForSave,
+  filesForCameras,
+  filesForModel,
+  snapshotBeforeWrite,
+  listBackups,
+  restoreBackup,
+} = require('./scene_backup.cjs');
+
 // Resolve paths relative to the simulation root (parent of server/)
 const SIM_ROOT = path.join(__dirname, '..');
 const ENGINE_ROOT = path.join(SIM_ROOT, '..', 'marsin_engine');
@@ -31,29 +41,9 @@ function resolveSceneCamerasPath(sceneName) {
 const { loadSimPorts } = require('../lib/load_ports.cjs');
 const SAVE_PORT = loadSimPorts(path.join(SIM_ROOT, 'config.yaml')).save_port;
 
-// Atomic + durable write: write to a sibling temp file, fsync it, then
-// rename over the target. A crash mid-write can no longer leave a
-// truncated yaml/model behind for the next boot to load as "stale but
-// parseable" state, and the fsync makes the rename survive a power cut
-// (the playa runs on generators). On any failure the temp file is
-// removed before rethrowing, so crash residue never lands next to
-// tracked files.
-function writeFileAtomic(targetPath, contents) {
-  const tmpPath = `${targetPath}.tmp-${process.pid}`;
-  try {
-    const fd = fs.openSync(tmpPath, 'w');
-    try {
-      fs.writeSync(fd, contents);
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    fs.renameSync(tmpPath, targetPath);
-  } catch (err) {
-    fs.rmSync(tmpPath, { force: true });
-    throw err;
-  }
-}
+// writeFileAtomic (atomic + durable tmp+fsync+rename write) now lives in
+// ./scene_backup.cjs as the single source of truth — the backup module and
+// this server share ONE definition. Imported at the top of this file.
 
 // ─── Static manifests (single source of truth for the client) ───────────
 // The simulation client (main.js, pattern_editor.js) discovers the scene
@@ -177,6 +167,12 @@ http.createServer((req, res) => {
       const patchesPath = path.join(path.dirname(outPath), 'patches.yaml');
       console.log(`[SAVE SERVER] POST /save (scene=${sceneName || 'default'}). Body: ${body.length} bytes`);
       try {
+        // Snapshot the files this save will overwrite BEFORE touching them.
+        // Throws on failure → caught below → 500 (codex P0: never write live
+        // state without a backup).
+        const backupScene = sceneName || 'titanic';
+        snapshotBeforeWrite(backupScene, filesForSave(backupScene), 'save');
+
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
 
         // Parse and decouple patching logic
@@ -351,6 +347,10 @@ http.createServer((req, res) => {
       const outPath = resolveSceneCamerasPath(sceneName);
       console.log(`[SAVE SERVER] POST /save-cameras (scene=${sceneName || 'default'}). Body: ${body.length} bytes`);
       try {
+        // Snapshot before overwrite (see /save). Throws → 500.
+        const backupScene = sceneName || 'titanic';
+        snapshotBeforeWrite(backupScene, filesForCameras(backupScene), 'save-cameras');
+
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
         fs.writeFileSync(outPath, body);
         console.log(`[SAVE SERVER] ✅ Wrote ${outPath}`);
@@ -457,6 +457,12 @@ http.createServer((req, res) => {
           : '.js';
         const modelFilename = `${safeScene}${suffix}`;
         const outDir = path.join(ENGINE_ROOT, 'models');
+
+        // Snapshot the model file this write will overwrite BEFORE touching
+        // it. The client fires model+effects+viewmasks in a burst, so these
+        // three coalesce into one snapshot dir. Throws → 500.
+        snapshotBeforeWrite(safeScene, filesForModel(safeScene, type), 'save-model');
+
         fs.mkdirSync(outDir, { recursive: true });
         const outPath = path.join(outDir, modelFilename);
         writeFileAtomic(outPath, body);
@@ -577,6 +583,49 @@ http.createServer((req, res) => {
         console.error(`[SAVE SERVER] Scene delete error:`, e);
         res.statusCode = 500;
         res.end('Error: ' + e.message);
+      }
+    });
+  } else if (req.method === 'GET' && pathname === '/backups') {
+    // List a scene's pre-save snapshots, newest-first, for the in-sim
+    // "Recover scene" UI. Reject a bad/missing scene name (never sanitize).
+    try {
+      if (!isValidSceneName(sceneName)) {
+        res.statusCode = 400;
+        res.end('Invalid or missing scene name');
+        return;
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify(listBackups(sceneName)));
+    } catch (e) {
+      console.error(`[SAVE SERVER] Backups list error:`, e);
+      res.statusCode = 500;
+      res.end('Error');
+    }
+  } else if (req.method === 'POST' && pathname === '/restore-backup') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        if (!isValidSceneName(sceneName)) {
+          res.statusCode = 400;
+          res.end('Invalid or missing scene name');
+          return;
+        }
+        const { id } = JSON.parse(body);
+        // restoreBackup snapshots the current live files first (pre-restore),
+        // then atomically writes the backed-up bytes over them. It sets
+        // err.statusCode (400 bad id / 404 unknown snapshot) for us to map.
+        const result = restoreBackup(sceneName, id);
+        // A restore can add/remove scene files — keep the manifest live.
+        writeSceneManifest();
+        console.log(`[SAVE SERVER] ♻️  Restored ${sceneName} to ${id} ` +
+          `(${result.restored.length} file(s); pre-restore ${result.preRestoreId})`);
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(result));
+      } catch (e) {
+        console.error(`[SAVE SERVER] Restore error:`, e);
+        res.statusCode = e.statusCode || 500;
+        res.end(`Error: ${e.message}`);
       }
     });
   } else if (req.method === 'GET' && pathname === '/list-scenes') {

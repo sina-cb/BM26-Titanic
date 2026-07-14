@@ -1,0 +1,146 @@
+nextControllerId: 7
+nextUniverse: 26
+controllers:
+  - id: 1
+    name: LED Lights
+    ip: 10.1.1.203
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 2
+        startAddress: 1
+        chain:
+          - Left
+      - port: 2
+        universe: 3
+        startAddress: 1
+        chain:
+          - Right
+      - port: 3
+        universe: 4
+        chain: []
+      - port: 4
+        universe: 5
+        chain: []
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+    device:
+      vendor: marsinled
+      controllerId: titanic_203
+      boardId: angio4-old
+      lastPush:
+        at: '2026-07-12T00:29:20.693Z'
+        outcome: needs-reboot
+        firmwareSHA: 829aac0ac05a
+        configHash: 37d9d5f652a9e4a16c1a8f6df245a7057263470c4f2d98e3e02c4e1154bccb06
+  - id: 4
+    name: DMX Center
+    ip: 10.1.1.23
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 10
+        chain:
+          - fixture: Front 1
+            at: 1
+          - fixture: Front 2
+            at: 120
+      - port: 2
+        universe: 11
+        chain:
+          - fixture: FrontTowers 1
+            at: 1
+          - fixture: FrontTowers 2
+            at: 34
+          - fixture: FrontTowers 3
+            at: 67
+          - fixture: FrontTowers 4
+            at: 100
+      - port: 3
+        universe: 4
+        chain:
+          - fixture: Line 3 3
+            at: 1
+          - fixture: Line 3 2
+            at: 120
+          - fixture: Line 3 1
+            at: 239
+      - port: 4
+        universe: 5
+        chain: []
+  - id: 5
+    name: DMX Left
+    ip: 10.1.1.18
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 6
+        chain:
+          - fixture: LeftSmokeStack 6
+            at: 1
+          - fixture: LeftSmokeStack 7
+            at: 11
+          - fixture: LeftSmokeStack 8
+            at: 21
+          - fixture: LeftSmokeStack 1
+            at: 31
+      - port: 2
+        universe: 7
+        chain:
+          - fixture: LeftSmokeStack 5
+            at: 1
+          - fixture: LeftSmokeStack 4
+            at: 11
+          - fixture: LeftSmokeStack 3
+            at: 21
+          - fixture: LeftSmokeStack 2
+            at: 31
+      - port: 3
+        universe: 20
+        chain: []
+      - port: 4
+        universe: 1
+        chain:
+          - fixture: TEFogMachine 27
+            at: 512
+  - id: 6
+    name: DMX Right
+    ip: 10.1.1.17
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 8
+        chain:
+          - fixture: RightSmokeStack 5
+            at: 1
+          - fixture: RightSmokeStack 4
+            at: 11
+          - fixture: RightSmokeStack 3
+            at: 21
+          - fixture: RightSmokeStack 2
+            at: 31
+      - port: 2
+        universe: 9
+        chain:
+          - fixture: RightSmokeStack 6
+            at: 1
+          - fixture: RightSmokeStack 7
+            at: 11
+          - fixture: RightSmokeStack 8
+            at: 21
+          - fixture: RightSmokeStack 1
+            at: 31
+      - port: 3
+        universe: 24
+        chain: []
+      - port: 4
+        universe: 1
+        chain: []

@@ -25,6 +25,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const ENGINE_PORT = Number(process.env.ENGINE_PORT) || 31268;
 const ENGINE_BASE = `http://127.0.0.1:${ENGINE_PORT}`;
 const WS_URL = `ws://127.0.0.1:${ENGINE_PORT}/ws/viz`;
@@ -106,6 +108,10 @@ async function main() {
 
   const created = [];
   try {
+    // Refuse to mutate a non-disposable engine BEFORE adding any channel.
+    // (Also serves as the reachability check — fails loudly if unreachable.)
+    await assertDisposableEngine(ENGINE_BASE);
+
     // ── Add two overlays on the SAME moving pattern ──────────────────
     const aRes = await httpJson('POST', '/mixer/channels', { pattern: MOVING_PATTERN, name: 'tempo-A' });
     const bRes = await httpJson('POST', '/mixer/channels', { pattern: MOVING_PATTERN, name: 'tempo-B' });

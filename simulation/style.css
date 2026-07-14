@@ -1701,8 +1701,51 @@ body.edit-mode-active #engine-params-panel {
 .scene-modal-overlay.hidden,
 .scene-modal-input.hidden,
 .scene-modal-message.hidden,
+.scene-modal-list.hidden,
+.scene-modal-ok.hidden,
 .scene-modal-cancel.hidden {
   display: none;
+}
+
+/* ─── Recover-scene picker list (reuses the scene-modal overlay) ─── */
+.scene-modal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(50vh, 360px);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.scene-modal-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid var(--ghost-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  color: var(--text);
+  font-family: var(--font-headline);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.scene-modal-list-item:hover {
+  border-color: color-mix(in srgb, var(--primary) 50%, transparent);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.scene-modal-list-primary {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.scene-modal-list-secondary {
+  font-size: 0.68rem;
+  color: var(--secondary);
 }
 
 .scene-modal-card {

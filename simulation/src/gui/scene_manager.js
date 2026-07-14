@@ -44,6 +44,13 @@ function ensureOverlay() {
   const message = document.createElement('div');
   message.className = 'scene-modal-message';
 
+  // Optional scrollable list (used by the "Recover scene" picker). Hidden
+  // for the plain add/delete/duplicate modals. Kept inside the SAME overlay
+  // singleton so isSceneModalOpen() (interaction.js keyboard guard) covers
+  // it too.
+  const list = document.createElement('div');
+  list.className = 'scene-modal-list hidden';
+
   const input = document.createElement('input');
   input.className = 'scene-modal-input';
   input.type = 'text';
@@ -63,6 +70,7 @@ function ensureOverlay() {
 
   card.appendChild(title);
   card.appendChild(message);
+  card.appendChild(list);
   card.appendChild(input);
   card.appendChild(actions);
   overlay.appendChild(card);
@@ -82,7 +90,7 @@ export function isSceneModalOpen() {
  * Show the themed modal. Resolves to the trimmed input string (when
  * withInput) or `true` on confirm, and `null` on cancel / Esc / backdrop.
  */
-function showModal({ title, message = '', withInput = false, placeholder = '', okLabel = 'OK', danger = false }) {
+export function showModal({ title, message = '', withInput = false, placeholder = '', okLabel = 'OK', danger = false }) {
   // Re-entrancy guard: the overlay and its listeners are a singleton, so a
   // second open while one is live would stack duplicate listeners and let a
   // single click/Enter resolve two flows. Ignore overlapping opens.
@@ -93,6 +101,9 @@ function showModal({ title, message = '', withInput = false, placeholder = '', o
   const input = overlay.querySelector('.scene-modal-input');
   const cancelBtn = overlay.querySelector('.scene-modal-cancel');
   const okBtn = overlay.querySelector('.scene-modal-ok');
+
+  // Plain modals never show the recovery list.
+  overlay.querySelector('.scene-modal-list').classList.add('hidden');
 
   titleEl.textContent = title;
   msgEl.textContent = message;
@@ -131,13 +142,87 @@ function showModal({ title, message = '', withInput = false, placeholder = '', o
   });
 }
 
-/** A bare informational modal (single OK button, no Cancel). */
-function showAlert(title, message) {
+/** A bare informational modal (single OK button, no Cancel). Exported so
+ *  the recovery module reuses this ONE overlay singleton. */
+export function showAlert(title, message) {
   const overlay = ensureOverlay();
   const p = showModal({ title, message, okLabel: 'OK' });
   // Hide the Cancel button for a pure alert.
   overlay.querySelector('.scene-modal-cancel').classList.add('hidden');
   return p;
+}
+
+/**
+ * Themed single-select list modal, reusing the overlay singleton (so the
+ * interaction.js keyboard guard via isSceneModalOpen() keeps working).
+ *
+ * @param {object}   opts
+ * @param {string}   opts.title
+ * @param {string}   [opts.message]
+ * @param {Array<{primary:string, secondary?:string, value:*}>} opts.items
+ * @returns {Promise<*|null>} the selected item's `value`, or null on cancel.
+ */
+export function showListModal({ title, message = '', items = [] }) {
+  if (isSceneModalOpen()) return Promise.resolve(null);
+  const overlay = ensureOverlay();
+  const titleEl = overlay.querySelector('.scene-modal-title');
+  const msgEl = overlay.querySelector('.scene-modal-message');
+  const listEl = overlay.querySelector('.scene-modal-list');
+  const input = overlay.querySelector('.scene-modal-input');
+  const cancelBtn = overlay.querySelector('.scene-modal-cancel');
+  const okBtn = overlay.querySelector('.scene-modal-ok');
+
+  titleEl.textContent = title;
+  msgEl.textContent = message;
+  msgEl.classList.toggle('hidden', !message);
+  input.classList.add('hidden');
+  // This is a pick-list: selection IS the confirm, so there is no OK button.
+  okBtn.classList.add('hidden');
+  cancelBtn.classList.remove('hidden');
+
+  // Rebuild the list fresh each open.
+  listEl.textContent = '';
+  listEl.classList.remove('hidden');
+
+  return new Promise((resolve) => {
+    function cleanup(result) {
+      overlay.classList.add('hidden');
+      listEl.classList.add('hidden');
+      okBtn.classList.remove('hidden'); // restore for the next plain modal
+      cancelBtn.removeEventListener('click', onCancel);
+      overlay.removeEventListener('pointerdown', onBackdrop);
+      document.removeEventListener('keydown', onKey, true);
+      resolve(result);
+    }
+    function onCancel() { cleanup(null); }
+    function onBackdrop(e) { if (e.target === overlay) onCancel(); }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+    }
+
+    items.forEach((item) => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'scene-modal-list-item';
+      const primary = document.createElement('div');
+      primary.className = 'scene-modal-list-primary';
+      primary.textContent = item.primary;
+      row.appendChild(primary);
+      if (item.secondary) {
+        const secondary = document.createElement('div');
+        secondary.className = 'scene-modal-list-secondary';
+        secondary.textContent = item.secondary;
+        row.appendChild(secondary);
+      }
+      row.addEventListener('click', () => cleanup(item.value));
+      listEl.appendChild(row);
+    });
+
+    cancelBtn.addEventListener('click', onCancel);
+    overlay.addEventListener('pointerdown', onBackdrop);
+    document.addEventListener('keydown', onKey, true);
+    overlay.classList.remove('hidden');
+  });
 }
 
 async function handleAdd() {

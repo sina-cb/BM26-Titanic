@@ -9,6 +9,7 @@ import { useChannelExports, useDeckChannel, MixerChannelExport } from '@/hooks/u
 import { ModulatedSlider, useEntryModulations, useModulationState, prettySliderName } from '@/components/Modulation';
 import { useEntryMidiMappings } from '@/components/MidiMap';
 import { engineEvents } from '@/utils/engineEvents';
+import { isDeckSaveConfirmation } from '@/components/deck_saved_logic';
 import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
 import { knobBadgeFor } from '@/utils/midi/knob_badge';
 import { KnobPill } from '@/components/ui/knob_pill';
@@ -276,10 +277,17 @@ function MatchedBadge({ cpcLabel }: { cpcLabel?: string }) {
 
 // ── Saved flash (deck-only) ─────────────────────────────────────────
 //
-// Tiny ✓ SAVED pill that briefly appears whenever the engine auto-
-// captures the deck's current params into the active playlist entry
-// (debounced ~600 ms after the last slider tweak). Mirrors the
-// "✓ SAVED" badge in PlaylistPanel so operators get the same signal
+// Tiny ✓ SAVED pill that briefly appears whenever the deck's params are
+// PERSISTED. Two engine events mean that (see isDeckSaveConfirmation):
+//   - `deckParamsSaved` — a deck LOCAL-PARAM write hit deck_state.yaml. Emitted
+//     by the deck control-write paths ONLY when auto-save is ON, so with
+//     auto-save OFF the flash honestly never fires (nothing was saved). This is
+//     the signal for the operator's day-to-day "I moved a slider" confirmation
+//     (the debounced auto-capture that used to drive it was retired 2026-07-07;
+//     the honest persistence signal is now the deck save itself).
+//   - `playlistEntryCaptured` — an explicit / on-switch capture wrote the deck's
+//     params into the active playlist entry's defaults.
+// Mirrors the "✓ SAVED" badge in PlaylistPanel so operators get the same signal
 // no matter which pane they were watching.
 
 export function DeckSavedFlash({ deckChannelId }: { deckChannelId?: string }) {
@@ -287,7 +295,7 @@ export function DeckSavedFlash({ deckChannelId }: { deckChannelId?: string }) {
   useEffect(() => {
     if (!deckChannelId) return;
     return engineEvents.subscribe((m) => {
-      if (m && m.type === 'playlistEntryCaptured' && m.channelId === deckChannelId) {
+      if (isDeckSaveConfirmation(m, deckChannelId)) {
         setSavedAt(Date.now());
       }
     });

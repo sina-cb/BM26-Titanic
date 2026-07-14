@@ -78,6 +78,14 @@ const TOPIC_BY_TYPE = Object.freeze({
   colorAutopilot:              TOPICS.CONTROL,
   viewOverride:                TOPICS.CONTROL,
   deckTransitionConfig:        TOPICS.CONTROL,
+  // Engine-wide settings (auto-save toggle). Broadcast on every POST /settings
+  // + replayed on /ws/control connect so every CaptainPad config screen
+  // mirrors the persistence gate. Operator-driven, low volume.
+  engineSettings:              TOPICS.CONTROL,
+  // Performance mode (live-show structural lock). Broadcast on enter/exit +
+  // replayed on /ws/control connect so every CaptainPad mirrors the lock badge.
+  // Operator-driven, low volume → /ws/control next to engineSettings.
+  performanceMode:             TOPICS.CONTROL,
   deckSwapStarted:             TOPICS.CONTROL,
   deckSwapComplete:            TOPICS.CONTROL,
   mixerTransitionStarted:      TOPICS.CONTROL,
@@ -91,6 +99,12 @@ const TOPIC_BY_TYPE = Object.freeze({
   // (single source of truth). Operator-driven, low volume → /ws/control next
   // to the GEM slot/macro messages it relates to.
   effectsPage:                 TOPICS.CONTROL,
+  // effects_v2: engine-owned CONTROLLER PROFILE ('edit' | 'play'). Broadcast on
+  // every PATCH /global-effects/profile + replayed on /ws/control connect so
+  // CaptainPad's PLAY/EDIT switch + the VSN1 mirror the SAME profile (single
+  // source of truth). Operator-driven, low volume → /ws/control next to
+  // effectsPage, the sibling page-view state it parallels.
+  controllerProfile:           TOPICS.CONTROL,
   // effects_v2: VSN1 MIDI-layout deploy result. Broadcast when a layout change
   // is written/flashed to the controller so a client can surface deploy health
   // (ok / disabled / error). Low volume — fires only on layout changes.
@@ -123,6 +137,12 @@ const TOPIC_BY_TYPE = Object.freeze({
   playlistDeleted:             TOPICS.CONTROL,
   channelPlaylistData:         TOPICS.CONTROL,
   playlistEntryCaptured:       TOPICS.CONTROL,
+  // Deck LOCAL-PARAM save confirmation: emitted after a deck control write is
+  // PERSISTED to deck_state.yaml (auto-save ON), so the deck's "✓ SAVED" flash
+  // can fire honestly. Operator-driven, low volume → /ws/control next to the
+  // deck/mixer state it confirms. Never emitted while auto-save is OFF (nothing
+  // hits disk, so there is nothing to confirm).
+  deckParamsSaved:             TOPICS.CONTROL,
   // F-A: named mixer snapshots / look recall. Broadcast on save / delete /
   // recall so every CaptainPad mirrors the snapshot library + a recalled
   // look. Operator-driven, low volume → /ws/control next to mixer/deck.

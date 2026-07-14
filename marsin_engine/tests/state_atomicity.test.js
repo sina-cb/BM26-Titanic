@@ -184,6 +184,26 @@ test('saveMixerState persists faderMax and color on overlays', () => {
   assert.equal(onDisk.channels[0].color, '#abcdef');
 });
 
+test('saveMixerState NEVER persists overlay localControls (always emits {})', () => {
+  // Operator ruling (2026-07 auto-save wave): mixer channel PARAMETERS are
+  // ephemeral live tweaks, not saved show state. saveMixerState must emit an
+  // EMPTY localControls map regardless of the channel's live params — the key
+  // stays (byte-shape) but its value is always {}. The restore path
+  // (buildChannelFromSaved) mirrors this by skipping the mixer localControls
+  // replay.
+  const dir = tmpStateDir();
+  const sm = new StateManager(dir);
+  const overlay = fakeChannel({
+    id: 'ch_overlay_lc',
+    localControls: { '111': { v0: 0.5, v1: 0, v2: 0 }, '222': { v0: 0.9, v1: 0, v2: 0 } },
+  });
+  const mixer = { master: 1, getMixerChannels: () => [overlay] };
+  sm.saveMixerState(mixer);
+  const onDisk = yaml.load(fs.readFileSync(path.join(dir, 'mixer_state.yaml'), 'utf8'));
+  assert.deepEqual(onDisk.channels[0].localControls, {},
+    'mixer overlay localControls must be stripped to {} on save');
+});
+
 test('legacy state file without faderMax/color still loads (backward-compatible)', () => {
   const dir = tmpStateDir();
   const sm = new StateManager(dir);

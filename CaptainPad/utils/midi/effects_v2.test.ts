@@ -129,12 +129,12 @@ function makeApi(): MidiDispatchApi {
     setGroupFixedColor: vi.fn(ok), updateMixerChannel: vi.fn(ok), updateDeckChannel: vi.fn(ok),
     dispatchGlobalEffectSlotAction: vi.fn(ok), setGlobalEffectBlackout: vi.fn(ok),
     setGlobalEffectSlotIntensity: vi.fn(ok), resetGlobalEffectSlotIntensity: vi.fn(ok),
-    setEffectsPage: vi.fn(ok), cycleGlobalEffectSlotMode: vi.fn(ok),
+    setEffectsPage: vi.fn(ok), cycleGlobalEffectSlotMode: vi.fn(ok), setControllerProfile: vi.fn(ok),
     resetAllGlobalEffects: vi.fn(ok), disableAllGlobalEffects: vi.fn(ok),
     setChannelPlaylistEntry: vi.fn(ok),
     setDeckChannelControl: vi.fn(ok), setMixerChannelControl: vi.fn(ok),
     setChannelHue: vi.fn(ok),
-    toggleDeckMixerView: vi.fn(ok), toggleCombinedAutopilot: vi.fn(ok), toggleMasterFade: vi.fn(ok),
+    toggleDeckMixerView: vi.fn(ok), toggleCombinedAutopilot: vi.fn(ok), toggleMasterFade: vi.fn(ok), summonPerformanceDialog: vi.fn(ok),
   };
 }
 
@@ -166,6 +166,23 @@ describe('dispatcher — effects v2 kinds', () => {
     const api = makeApi();
     await expect(createDispatcher(api, baseCtx)({ kind: 'effectModeCycle' }))
       .rejects.toThrow(/controller runtime/);
+  });
+
+  it('controllerProfileSet → setControllerProfile(profile, "vsn1_sb2")', async () => {
+    // The dispatcher tags the flip with the 'vsn1_sb2' provenance source (the only
+    // producer of controllerProfileSet) so the engine can log + echo who flipped it.
+    const api = makeApi();
+    await createDispatcher(api, baseCtx)({ kind: 'controllerProfileSet', profile: 'play' });
+    expect(api.setControllerProfile).toHaveBeenCalledWith('play', 'vsn1_sb2');
+    await createDispatcher(api, baseCtx)({ kind: 'controllerProfileSet', profile: 'edit' });
+    expect(api.setControllerProfile).toHaveBeenCalledWith('edit', 'vsn1_sb2');
+  });
+
+  it('threads a failed setControllerProfile result back (fail-loud)', async () => {
+    const api = makeApi();
+    (api.setControllerProfile as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: false, error: 'engine 400' });
+    const r = await createDispatcher(api, baseCtx)({ kind: 'controllerProfileSet', profile: 'play' });
+    expect(r).toEqual({ ok: false, error: 'engine 400' });
   });
 
   it('threads a failed setEffectsPage result back (fail-loud)', async () => {
@@ -245,37 +262,70 @@ const drain = () => new Promise((r) => setTimeout(r, 0));
 // (double-click sb_0 → EFFECT) is gone; there is no gesture that reaches EFFECT.
 
 describe('manager — effects v2 runtime (VSN1)', () => {
-  // Item 5: the PHYSICAL side button (firmware-native page switcher) emits the
-  // page CC (controller 40, value = new page). CaptainPad follows it → PATCHes
-  // the engine page so app + engine converge. (The four SMALL buttons sb_0..sb_3
-  // no longer page — see the sb reset/disable/view tests.)
-  it('a device page CC (physical side button) PATCHes the engine effects page', async () => {
+  // Page-follow retirement (2026-07) COMPLETE: device-native paging is gone
+  // (page-0-only deploys), so the PHYSICAL side-button page CC (controller 40) no
+  // longer does anything in CaptainPad. (The four SMALL buttons sb_0..sb_3 also
+  // never page — see the sb reset/disable/view tests.)
+  it('a device page CC is IGNORED — page-follow deleted (no device→app PATCH)', async () => {
+    // The device→app follow path was DELETED, so CaptainPad no longer follows the
+    // device page CC into an engine effectsPage PATCH. The pure decodeDevicePageCc
+    // decoder + its unit tests below stay (in vsn1_feedback); the manager just no
+    // longer consumes it.
     const { manager, api, transport } = setup(); // baseSnap.effectsPage = 0
     await manager.start();
     transport.emit([0xb1, 40, 2]); // device → page 2 (feedback channel, CC 40)
-    expect(api.setEffectsPage).toHaveBeenCalledWith(2);
-  });
-
-  it('a device page CC for the CURRENT page is a NO-OP (device merely echoed us)', async () => {
-    const { manager, api, transport } = setup(); // already on page 0
-    await manager.start();
-    transport.emit([0xb1, 40, 0]); // page 0 = current → no redundant PATCH
     expect(api.setEffectsPage).not.toHaveBeenCalled();
   });
 
-  it('the four SMALL buttons do NOT page — sb_2 is empty, sb_3 shows the logo', async () => {
-    // Sina's map (2026-07-10 evening): sb_0 MODE / sb_1 VIEW / sb_2 empty /
-    // sb_3 LOGO. Reset-all + disable-all moved off the small buttons (they
-    // stay reachable in the CaptainPad UI).
+  it('a device page CC for the CURRENT page is also a NO-OP (nothing follows the device page)', async () => {
+    const { manager, api, transport } = setup(); // already on page 0
+    await manager.start();
+    transport.emit([0xb1, 40, 0]); // page-follow retired → no PATCH either way
+    expect(api.setEffectsPage).not.toHaveBeenCalled();
+  });
+
+  it('the four SMALL buttons do NOT page — sb_2 is PROFILE, sb_3 shows the logo', async () => {
+    // Sina's map: sb_0 MODE / sb_1 VIEW / sb_2 PROFILE (2026-07) / sb_3 LOGO.
+    // Reset-all + disable-all moved off the small buttons (they stay reachable in
+    // the CaptainPad UI); no small button changes the effects page.
     const { manager, api, transport } = setup();
     await manager.start();
     transport.sent.length = 0;
-    transport.emit([0x90, 43, 127]); // sb_2 (note 43) → empty no-op, NOT page
+    transport.emit([0x90, 43, 127]); // sb_2 (note 43) → PROFILE toggle, NOT page
     expect(api.resetAllGlobalEffects).not.toHaveBeenCalled();
     expect(api.setEffectsPage).not.toHaveBeenCalled();
     transport.emit([0x90, 44, 127]); // sb_3 (note 44) → MarsinLED logo CC
     expect(api.disableAllGlobalEffects).not.toHaveBeenCalled();
     expect(transport.sent).toContainEqual([0xb2, 41, 1]); // welcome/logo one-shot
+  });
+
+  it('sb_2 with an UNSEEDED snapshot REFUSES to toggle (no blind default, zero PATCH)', async () => {
+    // baseSnap carries no controllerProfile. There is no defined OPPOSITE to flip
+    // to, and a blind 'edit' default would be a forbidden fallback — so sb_2
+    // refuses loudly and waits for the engine to seed the profile. (This replaces
+    // the old `?? 'edit'` blind default; part of the spurious-flip hardening.)
+    const { manager, api, transport } = setup();
+    await manager.start();
+    transport.emit([0x90, 43, 127]); // sb_2
+    await drain();
+    expect(api.setControllerProfile).not.toHaveBeenCalled();
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/not seeded/);
+  });
+
+  it('sb_2 with the snapshot already PLAY PATCHes back to EDIT (tagged vsn1_sb2)', async () => {
+    const { manager, api, transport } = setup(() => ({ ...baseSnap, controllerProfile: 'play' }));
+    await manager.start();
+    transport.emit([0x90, 43, 127]); // sb_2
+    await drain();
+    expect(api.setControllerProfile).toHaveBeenCalledWith('edit', 'vsn1_sb2');
+  });
+
+  it('sb_2 with the snapshot EDIT PATCHes to PLAY (explicit profile in snapshot, tagged vsn1_sb2)', async () => {
+    const { manager, api, transport } = setup(() => ({ ...baseSnap, controllerProfile: 'edit' }));
+    await manager.start();
+    transport.emit([0x90, 43, 127]); // sb_2
+    await drain();
+    expect(api.setControllerProfile).toHaveBeenCalledWith('play', 'vsn1_sb2');
   });
 
   it('the encoder press cycles the SELECTED slot mode; inert with no selection', async () => {
@@ -288,6 +338,109 @@ describe('manager — effects v2 runtime (VSN1)', () => {
     transport.emit([0x90, 33, 127]);
     transport.emit([0x90, 40, 127]);
     expect(api.cycleGlobalEffectSlotMode).toHaveBeenCalledWith(2);
+  });
+});
+
+// ── sb_2 PROFILE flip — anti-spurious-flip guards ───────────────────────────
+// sb_2 is the ONLY controller-profile writer in CaptainPad; a live bug flips
+// edit↔play with no operator action. Four guards reject every non-operator
+// source: a stale queued Web MIDI replay, a MIDI loopback of our own page-2
+// side-LED feedback (Note On note 43 — same note the device's sb_2 emits), a
+// still-in-flight PATCH, and a mechanical double-tap. The monotonic clock is
+// INJECTED so every window is deterministic (no wall-clock flake).
+describe('manager — VSN1 sb_2 anti-spurious-flip guards', () => {
+  // A mutable injected clock ({ t } advanced by the test) + a mutable snapshot
+  // (so a test can simulate the WS profile echo, then onEngineUpdate to converge).
+  function guardSetup(getSnap: () => MidiEngineSnapshot, clock: { t: number }) {
+    const transport = new FakeTransport(vsn1Endpoints);
+    const api = makeApi();
+    const profile = validateProfile(rawVsn1, 'vsn1.yaml');
+    const manager = new MidiManager({
+      profiles: [profile], transportFactory: () => transport, api,
+      getSnapshot: getSnap, defaultContext: 'deck', coalesceMs: 0, reconnectDebounceMs: 0,
+      now: () => clock.t,
+    });
+    return { transport, api, manager };
+  }
+
+  it('STALE: an sb_2 event older than ~2s vs the clock is DROPPED (no PATCH)', async () => {
+    const clock = { t: 10000 };
+    const { manager, api, transport } = guardSetup(() => ({ ...baseSnap, controllerProfile: 'edit' }), clock);
+    await manager.start();
+    transport.emit([0x90, 43, 127], 5000); // stamped 5s ago on the shared clock
+    await drain();
+    expect(api.setControllerProfile).not.toHaveBeenCalled();
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/stale/i);
+  });
+
+  it('MISSING TIMESTAMP: a zero/absent stamp is treated FRESH and toggles', async () => {
+    const clock = { t: 10000 };
+    const { manager, api, transport } = guardSetup(() => ({ ...baseSnap, controllerProfile: 'edit' }), clock);
+    await manager.start();
+    transport.emit([0x90, 43, 127]); // FakeTransport default stamp 0 → fresh
+    await drain();
+    expect(api.setControllerProfile).toHaveBeenCalledWith('play', 'vsn1_sb2');
+  });
+
+  it('IN-FLIGHT: a second press while the PATCH is round-tripping is ignored', async () => {
+    const clock = { t: 1000 };
+    const { manager, api, transport } = guardSetup(() => ({ ...baseSnap, controllerProfile: 'edit' }), clock);
+    await manager.start();
+    transport.emit([0x90, 43, 127]); // accept → PATCH play, in-flight (no echo yet)
+    await drain();
+    clock.t = 1050; // 50ms later, echo has NOT landed
+    transport.emit([0x90, 43, 127]); // dropped: in flight
+    await drain();
+    expect(api.setControllerProfile).toHaveBeenCalledTimes(1);
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/in flight/i);
+  });
+
+  it('DEBOUNCE: a repeat within ~400ms AFTER the echo cleared in-flight → one dispatch', async () => {
+    const clock = { t: 1000 };
+    const snap = { ...baseSnap, controllerProfile: 'edit' as 'edit' | 'play' };
+    const { manager, api, transport } = guardSetup(() => snap, clock);
+    await manager.start();
+    transport.emit([0x90, 43, 127]); // accept → PATCH play, in-flight
+    await drain();
+    // Simulate the WS controllerProfile echo landing → onEngineUpdate clears in-flight.
+    snap.controllerProfile = 'play';
+    manager.onEngineUpdate();
+    clock.t = 1150; // 150ms after the accept — inside the 400ms debounce window
+    transport.emit([0x90, 43, 127]); // dropped: debounce
+    await drain();
+    expect(api.setControllerProfile).toHaveBeenCalledTimes(1);
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/debounce/i);
+    // Past the debounce window → the next press is accepted (flips back to edit).
+    clock.t = 1500;
+    transport.emit([0x90, 43, 127]);
+    await drain();
+    expect(api.setControllerProfile).toHaveBeenCalledTimes(2);
+    expect(api.setControllerProfile).toHaveBeenLastCalledWith('edit', 'vsn1_sb2');
+  });
+
+  it('SELF-ECHO: a loopback of our own page-2 side-LED (note 43) is DROPPED', async () => {
+    // On page 2 the feedback stream sends Note On note 43 vel 127 (the page-2 LED).
+    // A MIDI loopback echoes that exact note straight back — it must NOT read as an
+    // sb_2 press. Seeded profile so refuse-unseeded can't be what stops it.
+    const clock = { t: 2000 };
+    const { manager, api, transport } = guardSetup(
+      () => ({ ...baseSnap, effectsPage: 2, controllerProfile: 'edit' }), clock);
+    await manager.start(); // projectAndSend records outbound note 43 (vel 127) at t=2000
+    transport.emit([0x90, 43, 127]); // handled at t=2000 → 0ms after our send → self-echo
+    await drain();
+    expect(api.setControllerProfile).not.toHaveBeenCalled();
+    expect(manager.getStatuses()[0].lastEvent).toMatch(/self-echo/i);
+  });
+
+  it('SELF-ECHO does NOT shadow a real press outside the ~50ms window', async () => {
+    const clock = { t: 2000 };
+    const { manager, api, transport } = guardSetup(
+      () => ({ ...baseSnap, effectsPage: 2, controllerProfile: 'edit' }), clock);
+    await manager.start(); // outbound note 43 recorded at t=2000
+    clock.t = 2100; // 100ms later — well past the 50ms self-echo window
+    transport.emit([0x90, 43, 127]); // a genuine press now
+    await drain();
+    expect(api.setControllerProfile).toHaveBeenCalledWith('play', 'vsn1_sb2');
   });
 });
 
@@ -320,20 +473,21 @@ describe('manager — full feedback re-send on page change (Lua VM restart)', ()
     expect(transport.sent).toContainEqual([0x90 | FB_PAGE_CH, 42, 127]);                      // sb1 lit
   });
 
-  it('a device page CC to a DIFFERENT page re-sends the full frame after the engine converges', async () => {
-    // Item 5: the physical side button changes the page (VM restart). CaptainPad
-    // PATCHes the engine; when the engine's effectsPage broadcast lands, the page
-    // DIFFERENCE arms the full re-sync so the new page's whole frame repaints (a
-    // pure diff could leave byte-identical slots dark after the VM wipe).
+  it('page-follow retired: a device page CC does NOT PATCH, but an ENGINE page change still full-resyncs', async () => {
+    // Page-follow is retired, so the device page CC is ignored (no PATCH). But a
+    // page change from the engine's own logical page (any surface) must STILL
+    // full-resync — the page DIFFERENCE arms the re-sync so the new page's whole
+    // frame repaints (a pure diff could leave byte-identical slots dark after the
+    // device VM wipe).
     let snap: MidiEngineSnapshot = { ...baseSnap, effectsPage: 0 };
     const { manager, api, transport } = setup(() => snap);
     await manager.start();
     transport.sent.length = 0;
-    transport.emit([0xb1, 40, 1]); // device side button → page 1
+    transport.emit([0xb1, 40, 1]); // device side button → page 1 (now IGNORED)
     await drain();
-    expect(api.setEffectsPage).toHaveBeenCalledWith(1);
-    // Simulate the engine's effectsPage broadcast converging the snapshot to
-    // page 1 (slot 9 identical bytes to the old slot 1) + the LED repaint.
+    expect(api.setEffectsPage).not.toHaveBeenCalled();
+    // The engine changes its logical page and broadcasts effectsPage=1 (slot 9
+    // identical bytes to the old slot 1) → the page DIFFERENCE arms the resync.
     snap = { ...baseSnap, effectsPage: 1, globalEffectSlots: [
       { slot: 9, active: true, behavior: 'toggle', intensity: 0.5, mode: 'up', modeValues: ['up', 'down'] },
     ] };
@@ -486,22 +640,19 @@ describe('manager — downward propagation (UI/engine/device → device)', () =>
     expect(transport.sent).toHaveLength(0);
   });
 
-  it('the device is authoritative for NOTHING re: page — the engine snapshot wins', async () => {
-    // Even a device page CC (physical side button) converges on the engine page:
-    // the manager PATCHes setEffectsPage and the DEVICE reflects whatever the
-    // engine reports back (the snapshot), never a device-local page. Here the
-    // engine stays on page 0 (rejects/ignores) — the feedback must show page 0.
+  it('the device is authoritative for NOTHING re: page — a device page CC is ignored (page-follow retired)', async () => {
+    // Page-follow retired: a device page CC no longer even PATCHes. The device is
+    // authoritative for nothing re: page — the engine snapshot (page 0) is the
+    // only source of truth, and the ignored CC never yields a page-3 feedback
+    // frame.
     const snap: MidiEngineSnapshot = { ...baseSnap, effectsPage: 0 };
     const { manager, api, transport } = setup(() => snap);
     await manager.start();
     transport.sent.length = 0;
-    transport.emit([0xb1, 40, 3]); // device side button → request page 3
+    transport.emit([0xb1, 40, 3]); // device side button → request page 3 (IGNORED)
     await drain();
-    expect(api.setEffectsPage).toHaveBeenCalledWith(3);
-    // The engine snapshot is still page 0, so the device feedback reports page 0
-    // (authoritative), NOT the requested 3 — no private device page.
-    expect(transport.sent).toContainEqual([0xb0 | FB_PAGE_CH, 40, 0]);
-    expect(transport.sent).not.toContainEqual([0xb0 | FB_PAGE_CH, 40, 3]);
+    expect(api.setEffectsPage).not.toHaveBeenCalled();               // no follow PATCH
+    expect(transport.sent).not.toContainEqual([0xb0 | FB_PAGE_CH, 40, 3]); // never page 3
   });
 });
 

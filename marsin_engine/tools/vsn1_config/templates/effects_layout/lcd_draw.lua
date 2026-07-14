@@ -50,7 +50,7 @@ if (dirty or 0) > 0 and cls ~= nil then
       if fdw ~= nil then
         fdw(self)
       else
-        self:draw_text_fast("P" .. page_current(), 96, 88, 64, {255, 255, 255})
+        self:draw_text_fast("MarsinLED", 72, 88, 32, {226, 88, 34})
       end
     end
     self:draw_swap()

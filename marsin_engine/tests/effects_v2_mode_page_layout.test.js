@@ -179,23 +179,61 @@ test('populatedPages lists only pages that hold a populated slot', () => {
   assert.ok(mgr.populatedPages().includes(3), 'page 3 populated after assigning slot 32');
 });
 
-test('requestFullDeploy re-emits the current layout for the populated pages', () => {
+test('requestFullDeploy emits ONLY page 0 (own-page retirement), never pages 1-3', () => {
   const events = [];
   const mgr = mkMgr({ onLayoutChanged: (evt) => events.push(evt) });
+  // Populate page 3 too — but the device is a fixed page-0 surface, so a full
+  // re-sync must STILL only emit page 0 (kills the multi-page boot flash burst).
+  mgr.patchSlot(32, { enabled: true, label: 'p3', effectId: 'crush', presetId: 'bold_4', behavior: 'toggle' });
+  assert.ok(mgr.populatedPages().includes(0) && mgr.populatedPages().includes(3),
+    'both pages 0 and 3 are populated');
+  const before = events.length;
+  const pages = mgr.requestFullDeploy();
+  assert.deepEqual(pages, [0], 'returns page 0 ONLY, even though page 3 is populated');
+  assert.equal(events.length, before + 1, 'emits exactly one layout-changed');
+  const last = events[events.length - 1];
+  assert.deepEqual(last.pages, [0], 'event carries page 0 only');
+  assert.ok(last.layout && Array.isArray(last.layout.slots), 'event carries the current layout');
+});
+
+test('requestFullDeploy emits nothing when page 0 is NOT populated', () => {
+  const events = [];
+  const mgr = mkMgr({ onLayoutChanged: (evt) => events.push(evt) });
+  // Clear every page-0 slot (1..8); populate only page 3.
+  for (let id = 1; id <= 8; id++) mgr.patchSlot(id, { enabled: false, effectId: null });
   mgr.patchSlot(32, { enabled: true, label: 'p3', effectId: 'crush', presetId: 'bold_4', behavior: 'toggle' });
   const before = events.length;
   const pages = mgr.requestFullDeploy();
-  assert.deepEqual(pages, mgr.populatedPages(), 'returns exactly the populated pages');
-  assert.ok(pages.includes(0) && pages.includes(3), 'covers pages 0 and 3');
-  assert.equal(events.length, before + 1, 'emits exactly one layout-changed');
-  const last = events[events.length - 1];
-  assert.deepEqual(last.pages, pages, 'event carries those pages');
-  assert.ok(last.layout && Array.isArray(last.layout.slots), 'event carries the current layout');
+  assert.deepEqual(pages, [], 'no page 0 content → nothing to flash on the page-0 device');
+  assert.equal(events.length, before, 'no layout-changed emitted');
 });
 
 test('requestFullDeploy is a safe no-op (returns []) when no deploy hook is wired', () => {
   const mgr = mkMgr(); // boot/tests without a hook must never emit or throw
   assert.deepEqual(mgr.requestFullDeploy(), []);
+});
+
+// ── controllerProfile (engine-owned edit|play surface selector) ──────────
+
+test('controllerProfile is engine-owned, defaults to edit, validated on set', () => {
+  const mgr = mkMgr();
+  assert.equal(mgr.getControllerProfile(), 'edit');
+  assert.equal(mgr.setControllerProfile('play'), 'play');
+  assert.equal(mgr.getControllerProfile(), 'play');
+  assert.equal(mgr.setControllerProfile('edit'), 'edit');
+  assert.throws(() => mgr.setControllerProfile('performance'), /controllerProfile must be/);
+  assert.throws(() => mgr.setControllerProfile(2), /controllerProfile must be/);
+  assert.throws(() => mgr.setControllerProfile(null), /controllerProfile must be/);
+});
+
+test('switching controllerProfile is not a slot mutation and fires no layout deploy', () => {
+  let deploys = 0;
+  const mgr = mkMgr({ onLayoutChanged: () => { deploys += 1; } });
+  const slotsBefore = mgr.getSlots();
+  mgr.setControllerProfile('play');
+  mgr.setControllerProfile('edit');
+  assert.deepEqual(mgr.getSlots(), slotsBefore, 'slot bindings unchanged by a profile switch');
+  assert.equal(deploys, 0, 'a profile switch never emits layout-changed by itself');
 });
 
 // ════════════════════════════════════════════════════════════════════
@@ -466,8 +504,9 @@ test('deploy hook ENABLED deploys the pinned single-page CLI contract and report
     spawnFn: mkFakeSpawn(calls),
   });
   assert.equal(status.enabled, true);
-  // A page-2 change coalesces + debounces; flush() forces the deploy.
-  const res = await hook({ type: 'layout-changed', revision: 7, pages: [2], layout: { version: 1, slots: [] } });
+  // A page-0 change coalesces + debounces; flush() forces the deploy. (Page 0 is
+  // the only page the device shows — own-page retirement.)
+  const res = await hook({ type: 'layout-changed', revision: 7, pages: [0], layout: { version: 1, slots: [] } });
   assert.equal(res.deployed, false);
   assert.equal(res.reason, 'debounced');
   await flush();
@@ -478,14 +517,14 @@ test('deploy hook ENABLED deploys the pinned single-page CLI contract and report
   const a = calls[0].args;
   assert.ok(a.some(x => x.endsWith(path.join('tools', 'vsn1_config', 'deploy_layout.cjs'))));
   assert.ok(a.includes('--from-engine'));
-  assert.equal(a[a.indexOf('--page') + 1], '2', 'deploys ONLY the changed page');
+  assert.equal(a[a.indexOf('--page') + 1], '0', 'deploys ONLY page 0');
   assert.ok(a.includes('--live'));
   assert.equal(status.lastResult, 'ok');
   assert.equal(status.lastRevision, 7);
-  assert.deepEqual(status.lastPages, [2]);
+  assert.deepEqual(status.lastPages, [0]);
 });
 
-test('deploy is INCREMENTAL: only the changed pages are flashed, one CLI call each', async () => {
+test('deploy is a SINGLE page-0 flash even for a multi-page change (own-page retirement)', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vsn1-inc-'));
   const calls = [];
   const { hook, flush } = createLayoutDeployHook({
@@ -493,15 +532,15 @@ test('deploy is INCREMENTAL: only the changed pages are flashed, one CLI call ea
     engineConfig: { vsn1: { deployLayout: true } },
     spawnFn: mkFakeSpawn(calls),
   });
-  // Two DISTINCT pages changed (a whole-config replace touching 0 and 3).
+  // A whole-config replace touching pages 0 and 3 — only page 0 reaches COM12.
   await hook(layoutEvt([0, 3], 1));
   await flush();
-  const pagesFlashed = calls.map(c => c.args[c.args.indexOf('--page') + 1]).sort();
-  assert.deepEqual(pagesFlashed, ['0', '3'], 'exactly pages 0 and 3, no others');
-  assert.equal(calls.length, 2, 'never a 4-page full flash for a 2-page change');
+  const pagesFlashed = calls.map(c => c.args[c.args.indexOf('--page') + 1]);
+  assert.deepEqual(pagesFlashed, ['0'], 'only page 0, never page 3');
+  assert.equal(calls.length, 1, 'never a multi-page flash burst');
 });
 
-test('DEBOUNCE: a burst of edits on one page coalesces into ONE deploy', async () => {
+test('DEBOUNCE: a burst of page-0 edits coalesces into ONE deploy', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vsn1-debounce-'));
   const calls = [];
   const timer = mkFakeTimer();
@@ -512,17 +551,17 @@ test('DEBOUNCE: a burst of edits on one page coalesces into ONE deploy', async (
     setTimeoutFn: timer.setTimeoutFn,
     clearTimeoutFn: timer.clearTimeoutFn,
   });
-  // Five rapid edits, all on page 1 (reassigning several slots on one page).
-  for (let i = 0; i < 5; i++) await hook(layoutEvt([1], i + 1));
+  // Five rapid edits on page 0 (reassigning several slots on the visible page).
+  for (let i = 0; i < 5; i++) await hook(layoutEvt([0], i + 1));
   assert.equal(calls.length, 0, 'nothing deploys during the quiet period');
   assert.ok(timer.armed(), 'debounce timer is armed');
   timer.fire();          // quiet period elapses
   await flush();
-  assert.equal(calls.length, 1, 'a burst on one page = exactly ONE deploy');
-  assert.equal(calls[0].args[calls[0].args.indexOf('--page') + 1], '1');
+  assert.equal(calls.length, 1, 'a burst on page 0 = exactly ONE deploy');
+  assert.equal(calls[0].args[calls[0].args.indexOf('--page') + 1], '0');
 });
 
-test('DEBOUNCE: edits across two pages during the window coalesce to one deploy PER page', async () => {
+test('DEBOUNCE: edits spanning pages 0-2 during the window collapse to ONE page-0 deploy', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vsn1-debounce2-'));
   const calls = [];
   const timer = mkFakeTimer();
@@ -533,13 +572,13 @@ test('DEBOUNCE: edits across two pages during the window coalesce to one deploy 
     setTimeoutFn: timer.setTimeoutFn,
     clearTimeoutFn: timer.clearTimeoutFn,
   });
-  await hook(layoutEvt([1], 1));
-  await hook(layoutEvt([2], 2));
-  await hook(layoutEvt([1], 3)); // page 1 again — collapses with the first
+  await hook(layoutEvt([0], 1));
+  await hook(layoutEvt([1], 2)); // invisible — dropped
+  await hook(layoutEvt([2], 3)); // invisible — dropped
   timer.fire();
   await flush();
-  const pages = calls.map(c => c.args[c.args.indexOf('--page') + 1]).sort();
-  assert.deepEqual(pages, ['1', '2'], 'one deploy for page 1, one for page 2');
+  const pages = calls.map(c => c.args[c.args.indexOf('--page') + 1]);
+  assert.deepEqual(pages, ['0'], 'only page 0 flashes; the invisible-page edits are dropped');
 });
 
 test('BUSY-GUARD: overlapping changes never open COM12 twice — deploys serialize', async () => {
@@ -569,16 +608,17 @@ test('BUSY-GUARD: overlapping changes never open COM12 twice — deploys seriali
     setTimeoutFn: timer.setTimeoutFn,
     clearTimeoutFn: timer.clearTimeoutFn,
   });
-  // Two pages queued; fire the debounce to start the drain.
+  // Page-0-only clamp (own-page retirement): every layout change queues page 0.
+  // A first page-0 flash goes in flight; a SECOND page-0 change lands mid-flight
+  // and must NOT open a second COM12 handle — it waits for the drain to advance.
   await hook(layoutEvt([0], 1));
-  await hook(layoutEvt([1], 2));
   timer.fire();
   // Let the first spawn start.
   await new Promise(r => setImmediate(r));
   assert.equal(alive, 1, 'exactly one CLI in flight');
   assert.equal(status.deploying, true);
-  // Even if a NEW change lands mid-flight, it must not launch a second child.
-  await hook(layoutEvt([2], 3));
+  // A NEW page-0 change mid-flight must not launch a second child.
+  await hook(layoutEvt([0], 2));
   timer.fire();
   await new Promise(r => setImmediate(r));
   assert.equal(alive, 1, 'a mid-flight change does NOT open a second COM12 handle');
@@ -589,9 +629,14 @@ test('BUSY-GUARD: overlapping changes never open COM12 twice — deploys seriali
   }
   await flush();
   assert.equal(maxAlive, 1, 'never more than one deploy process alive at once');
-  // Pages 0, 1, 2 each flashed exactly once.
-  const pages = calls.map(c => c.args[c.args.indexOf('--page') + 1]).sort();
-  assert.deepEqual(pages, ['0', '1', '2']);
+  // Only page 0 is ever flashed — pages 1-3 are dropped at the clamp. (Filter to
+  // the deploy CLI calls; a 2+-flash drain also spawns the soft_reset mitigation
+  // CLI, which carries no --page.)
+  const pages = calls
+    .filter(c => c.args.includes('--page'))
+    .map(c => c.args[c.args.indexOf('--page') + 1]);
+  assert.ok(pages.length >= 1 && pages.every(p => p === '0'),
+    'every flash is page 0 (serialized), never a second COM12 handle');
 });
 
 test('deploy hook fails LOUDLY on a non-zero CLI exit (no silent retry)', async () => {
@@ -608,6 +653,61 @@ test('deploy hook fails LOUDLY on a non-zero CLI exit (no silent retry)', async 
   assert.match(status.lastError, /port busy/);
   // No silent retry storm: the single failed page did not respawn.
   assert.equal(calls.length, 1, 'exactly one attempt — no retry loop');
+});
+
+// ── page-0-only clamp + failed-page retention (own-page retirement) ──────
+
+test('deploy hook CLAMPS to page 0 — pages 1-3 are dropped, never flashed', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vsn1-clamp-'));
+  const calls = [];
+  const { hook, flush } = createLayoutDeployHook({
+    stateDir: dir,
+    engineConfig: { vsn1: { deployLayout: true } },
+    spawnFn: mkFakeSpawn(calls),
+  });
+  // A whole-config replace marks ALL pages [0,1,2,3]; only page 0 reaches COM12.
+  const res = await hook(layoutEvt([0, 1, 2, 3], 1));
+  assert.deepEqual(res.pages, [0], 'only page 0 is queued');
+  assert.deepEqual(res.droppedPages, [1, 2, 3], 'pages 1-3 dropped as invisible');
+  await flush();
+  assert.equal(calls.length, 1, 'exactly one CLI call — never a multi-page burst');
+  assert.equal(calls[0].args[calls[0].args.indexOf('--page') + 1], '0', 'flashes ONLY --page 0');
+});
+
+test('a layout change confined to pages 1-3 flashes NOTHING (no-visible-page)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vsn1-novis-'));
+  const calls = [];
+  const { hook, flush } = createLayoutDeployHook({
+    stateDir: dir,
+    engineConfig: { vsn1: { deployLayout: true } },
+    spawnFn: mkFakeSpawn(calls),
+  });
+  const res = await hook(layoutEvt([2], 1)); // an edit on invisible page 2
+  assert.equal(res.reason, 'no-visible-page');
+  assert.deepEqual(res.pages, []);
+  await flush();
+  assert.equal(calls.length, 0, 'nothing flashed for an invisible-page-only change');
+});
+
+test('a FAILED page-0 deploy is RETAINED in pendingPages and RETRIED on the next change', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vsn1-retain-'));
+  const calls = [];
+  const { hook, status, flush } = createLayoutDeployHook({
+    stateDir: dir,
+    engineConfig: { vsn1: { deployLayout: true } },
+    spawnFn: mkFakeSpawn(calls, { code: 2, stderr: 'LCD INIT over budget' }),
+  });
+  await hook(layoutEvt([0], 1));
+  await assert.rejects(flush(), /VSN1 layout deploy failed/);
+  assert.equal(status.lastResult, 'error');
+  // The stranded-queue bug: the old code deleted the page before the attempt and
+  // never re-added it on failure. Now the failed page stays queued.
+  assert.deepEqual(status.pendingPages, [0], 'the failed page stays queued for retry');
+  assert.equal(calls.length, 1, 'one attempt — no busy retry loop');
+  // The NEXT layout event retries the retained page (not stranded forever).
+  await hook(layoutEvt([0], 2));
+  await assert.rejects(flush(), /VSN1 layout deploy failed/);
+  assert.equal(calls.length, 2, 'the retained page is retried on the next change');
 });
 
 test('isLayoutDeployEnabled honours env + config gates', () => {

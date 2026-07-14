@@ -48,6 +48,24 @@ export function getSyncState(controllerId) {
   return syncCache.get(controllerId) || null;
 }
 
+// ── Live MAC cache (display-only; NEVER persisted) ───────────────────────────
+// controller.id → MAC string, refreshed from the device's live HTTP status
+// (marsinled_client.js) at discover/bind/push/verify time. The MAC is
+// deliberately absent from controller.device (see controller_registry.js
+// normalizeDeviceBlock) so it never round-trips into controllers.yaml — this
+// repo is public and a persisted MAC trips the gitleaks security gate. This
+// cache is memory-only and resets on reload; that's fine, it repopulates the
+// next time the panel talks to the device.
+const liveMacCache = new Map();
+
+function setLiveMac(controllerId, mac) {
+  if (mac) liveMacCache.set(controllerId, mac);
+}
+
+export function getLiveMac(controllerId) {
+  return liveMacCache.get(controllerId) || null;
+}
+
 // ── Small DOM helpers ───────────────────────────────────────────────────────
 
 function el(tag, className, text) {
@@ -346,7 +364,6 @@ async function createFromDevice(ctx, device, closeModal) {
         controllerId: device.controllerId,
         deviceName: config.deviceName,
         boardId: device.boardId,
-        mac: device.mac,
       },
     });
     // Auto-allocate the base universe so the derived layout + strand patches
@@ -354,6 +371,7 @@ async function createFromDevice(ctx, device, closeModal) {
     const u = nextFreeUniverse(registry);
     created.led.baseUniverse = u;
     noteUniverseUsed(registry, u);
+    setLiveMac(created.id, device.mac); // display-only — never persisted (see controller_registry.js)
   });
   ctx.showToast(`Created '${deviceName}' (${portCount} ports) — assign strands, then Push`, { ttl: 9000 });
   closeModal();
@@ -376,13 +394,13 @@ async function bindToController(ctx, device, controller, closeModal) {
       controllerId: device.controllerId,
       deviceName: config.deviceName,
       boardId: device.boardId,
-      mac: device.mac,
     });
     if (!controller.led.baseUniverse || controller.led.baseUniverse < 1) {
       const u = nextFreeUniverse(registry);
       controller.led.baseUniverse = u;
       noteUniverseUsed(registry, u);
     }
+    setLiveMac(controller.id, device.mac); // display-only — never persisted
   });
   ctx.showToast(`Bound '${controller.name}' → ${config.deviceName || device.controllerId} ` +
     `(${device.ip})`, { ttl: 8000 });
@@ -428,6 +446,7 @@ export function refreshSyncChips(ctx) {
 async function computeSyncState(ctx, controller) {
   const snapshot = await getConfig(controller.ip);
   const status = await getStatus(controller.ip);
+  setLiveMac(controller.id, status.mac); // display-only — never persisted
   // Per-output DMX is the only supported mapping. Firmware without it is stale —
   // report drift so the operator updates it (no silent legacy fallback, codex P0).
   if (!deviceSupportsPerOutput(status)) {
@@ -467,10 +486,15 @@ export function renderDeviceBindingSection(ctx, controller) {
 
   if (bound) {
     const dev = controller.device;
+    // MAC is NOT part of the persisted device block (never written to
+    // controllers.yaml — public repo, gitleaks bm26-mac-address). Source it
+    // from the live cache (populated from the device's runtime HTTP status by
+    // discover/bind/push/sync-chip refresh) so the display still works.
+    const liveMac = getLiveMac(controller.id);
     const idLine = el('div', 'led-device-id');
     idLine.textContent =
       `${dev.deviceName || dev.controllerId} · ${dev.boardId || 'board ?'}` +
-      (dev.mac ? ` · ${dev.mac}` : '');
+      (liveMac ? ` · ${liveMac}` : '');
     section.appendChild(idLine);
 
     const chipRow = el('div', 'led-device-chip-row');
@@ -653,7 +677,6 @@ async function pushPerOutputVerifyRecord(ctx, controller, universeByOutputIndex,
         controllerId: verifyStatus.controllerId,
         deviceName: verifyStatus.deviceName,
         boardId: verifyStatus.boardId,
-        mac: verifyStatus.mac,
       });
     }
     recordDevicePush(controller, {
@@ -664,6 +687,7 @@ async function pushPerOutputVerifyRecord(ctx, controller, universeByOutputIndex,
       perOutput: reported,
     });
   });
+  setLiveMac(controller.id, verifyStatus.mac); // display-only — never persisted
   return { needsReboot, reply, reported };
 }
 

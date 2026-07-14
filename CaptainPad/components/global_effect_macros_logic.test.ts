@@ -19,6 +19,12 @@ import {
   SHOW_EFFECT_PAGES,
   VISIBLE_SLOT_COUNT,
   SlotBindingLike,
+  resolveEffectsPresentation,
+  DEFAULT_CONTROLLER_PROFILE,
+  reconcileControllerProfile,
+  isControllerProfileMessage,
+  deployBannerMessage,
+  modeBadge,
 } from './global_effect_macros_logic';
 
 const empty = (slotId: number): SlotBindingLike & { slotId: number } => ({
@@ -129,5 +135,163 @@ describe('computePageActivity — cleared slots drop their dot', () => {
     // stale effectId; since it is disabled it must count as empty (no dot).
     const slots: SlotBindingLike[] = [{ slotId: 17, effectId: 'strobe', enabled: false, active: true }];
     expect(computePageActivity(slots)).toEqual([false, false, false, false]);
+  });
+});
+
+// ── Effects grid presentation is INVARIANT across the controller profile ─────
+// Operator requirement (2026-07): the CaptainPad effects UI must ALWAYS look and
+// behave the same regardless of the VSN1 controller profile. The profile is a
+// device-surface concept only — it must have ZERO effect on this grid. These
+// tests pin the full authoring presentation as the ONE thing the grid renders.
+
+describe('resolveEffectsPresentation — the invariant full-authoring presentation', () => {
+  it('renders the full authoring UI: every editing affordance on, base cell size', () => {
+    const p = resolveEffectsPresentation();
+    expect(p.showEditAffordances).toBe(true);    // ⋯ swap + value/mode detail badge
+    expect(p.showEmptySockets).toBe(true);        // tappable "+" bind sockets
+    expect(p.showBlackout).toBe(true);            // e-stop always present
+    expect(p.cellHeightScale).toBe(1);            // no growth — original sizing
+  });
+
+  it('exposes no profile / isPlay coupling (the grid never branches on profile)', () => {
+    const p = resolveEffectsPresentation() as unknown as Record<string, unknown>;
+    // The presentation must NOT carry a profile or an isPlay flag any more — the
+    // grid has nothing to branch on.
+    expect('profile' in p).toBe(false);
+    expect('isPlay' in p).toBe(false);
+  });
+});
+
+// ── THE decoupling proof: identical UI for BOTH profile values ───────────────
+// resolveEffectsPresentation takes no profile now, so the grid presentation is
+// literally the same object shape for every profile. This pins the operator
+// contract: ⋯ swap, value/mode param badges, "+" bind sockets, and cell sizing
+// are IDENTICAL whether the VSN1 profile is 'edit' or 'play'.
+
+describe('effects grid presentation is IDENTICAL for profile edit AND play', () => {
+  it('the resolved presentation does not vary with the (former) profile input', () => {
+    // Whatever the controller profile, the grid resolves the SAME presentation.
+    const a = resolveEffectsPresentation();
+    const b = resolveEffectsPresentation();
+    expect(a).toEqual(b);
+  });
+
+  it('⋯ swap + value/mode/param badges are shown for BOTH profiles', () => {
+    // showEditAffordances gates BOTH the ⋯ swap affordance and the intensity/mode
+    // detail badge — it is unconditionally true, so both render for edit AND play.
+    expect(resolveEffectsPresentation().showEditAffordances).toBe(true);
+  });
+
+  it('the tappable "+" empty sockets are shown for BOTH profiles', () => {
+    expect(resolveEffectsPresentation().showEmptySockets).toBe(true);
+  });
+
+  it('the cell sizing is the base size (no growth) for BOTH profiles', () => {
+    // btnHeight = round(baseHeight * cellHeightScale); scale 1 = tuned base
+    // heights, identical regardless of profile (no PLAY 1.5× enlargement).
+    expect(resolveEffectsPresentation().cellHeightScale).toBe(1);
+  });
+
+  it('the profile type + engine-down default still exist (profile drives the DEVICE)', () => {
+    // The profile concept is preserved for the VSN1 device (hook + reconcile +
+    // sb_2), it just no longer touches this grid. Default stays 'edit'.
+    expect(DEFAULT_CONTROLLER_PROFILE).toBe('edit');
+  });
+});
+
+describe('controller-profile reconcile + WS message guard', () => {
+  it('a valid edit/play value wins; anything else keeps last-known-good', () => {
+    expect(reconcileControllerProfile('edit', 'play')).toBe('play');
+    expect(reconcileControllerProfile('play', 'edit')).toBe('edit');
+    // Garbage / partial payloads never flip the operator's surface.
+    expect(reconcileControllerProfile('play', undefined)).toBe('play');
+    expect(reconcileControllerProfile('edit', 'PLAY')).toBe('edit');
+    expect(reconcileControllerProfile('edit', null)).toBe('edit');
+    expect(reconcileControllerProfile('edit', 2)).toBe('edit');
+  });
+
+  it('isControllerProfileMessage only accepts the exact broadcast shape', () => {
+    expect(isControllerProfileMessage({ type: 'controllerProfile', profile: 'play' })).toBe(true);
+    expect(isControllerProfileMessage({ type: 'controllerProfile', profile: 'edit' })).toBe(true);
+    expect(isControllerProfileMessage({ type: 'controllerProfile', profile: 'nope' })).toBe(false);
+    expect(isControllerProfileMessage({ type: 'effectsPage', profile: 'play' })).toBe(false);
+    expect(isControllerProfileMessage({ type: 'controllerProfile' })).toBe(false);
+    expect(isControllerProfileMessage(null)).toBe(false);
+    expect(isControllerProfileMessage('controllerProfile')).toBe(false);
+  });
+});
+
+// ── Mode badge — the performance-mode LOCKED indicator ONLY ──────────────────
+// The grid no longer changes with the controller profile, so the old PLAY badge
+// variant (escape hatch) is gone. The only remaining badge is LOCKED, and it is
+// driven SOLELY by performance mode — never by the profile.
+
+describe('modeBadge — performance-mode LOCKED indicator (no profile coupling)', () => {
+  it('perfLocked → a passive LOCKED badge (explains the inert ⋯/＋)', () => {
+    const b = modeBadge(true);
+    expect(b).not.toBeNull();
+    expect(b!.kind).toBe('locked');
+    expect(b!.label).toBe('LOCKED — performance mode');
+  });
+
+  it('unlocked → NO badge (the grid looks exactly as it always has)', () => {
+    expect(modeBadge(false)).toBeNull();
+  });
+
+  it('there is NO play badge variant any more (removed with the UI degradation)', () => {
+    // modeBadge only ever returns a LOCKED badge or null — the profile can never
+    // produce a badge (the grid is invariant across profiles).
+    expect(modeBadge(false)).toBeNull();
+    expect(modeBadge(true)!.kind).toBe('locked');
+  });
+});
+
+// ── VSN1 layout auto-deploy error banner reducer ─────────────────────────────
+
+describe('deployBannerMessage — surface deploy errors, clear on ok, ignore noise', () => {
+  it('a settled ERROR result surfaces the reason string', () => {
+    const out = deployBannerMessage({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'error', lastError: 'LCD budget overflow (page 0)' });
+    expect(out).toBe('VSN1 layout NOT deployed: LCD budget overflow (page 0)');
+  });
+
+  it('an error with no detail still surfaces (never a silent failure)', () => {
+    const out = deployBannerMessage({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'error' });
+    expect(out).toBe('VSN1 layout NOT deployed: unknown error');
+    const blank = deployBannerMessage({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'error', lastError: '   ' });
+    expect(blank).toBe('VSN1 layout NOT deployed: unknown error');
+  });
+
+  it('a successful OK result CLEARS the banner (returns null)', () => {
+    expect(deployBannerMessage({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'ok' })).toBeNull();
+  });
+
+  it('an in-flight (deploying:true) frame is NO CHANGE — the previous banner holds', () => {
+    // In-flight frames carry a STALE lastResult from the prior flash; ignore them.
+    expect(deployBannerMessage({ type: 'vsn1LayoutDeploy', deploying: true, lastResult: 'error', lastError: 'stale' })).toBeUndefined();
+    expect(deployBannerMessage({ type: 'vsn1LayoutDeploy', deploying: true, lastResult: 'ok' })).toBeUndefined();
+  });
+
+  it('unrelated messages + non-terminal results are NO CHANGE', () => {
+    expect(deployBannerMessage({ type: 'effectsPage', effectsPage: 1 } as any)).toBeUndefined();
+    expect(deployBannerMessage({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'disabled' })).toBeUndefined();
+    expect(deployBannerMessage({ type: 'vsn1LayoutDeploy', deploying: false })).toBeUndefined();
+    expect(deployBannerMessage({} as any)).toBeUndefined();
+  });
+
+  it('an error then a later ok models the full surface→clear lifecycle', () => {
+    // The component stores the last non-undefined value; simulate that fold.
+    let banner: string | null = null;
+    const apply = (m: Parameters<typeof deployBannerMessage>[0]) => {
+      const n = deployBannerMessage(m);
+      if (n !== undefined) banner = n;
+    };
+    apply({ type: 'vsn1LayoutDeploy', deploying: true, lastResult: 'ok' });        // in-flight: no change
+    expect(banner).toBeNull();
+    apply({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'error', lastError: 'boom' }); // surface
+    expect(banner).toBe('VSN1 layout NOT deployed: boom');
+    apply({ type: 'vsn1LayoutDeploy', deploying: true, lastResult: 'error' });     // in-flight retry: holds
+    expect(banner).toBe('VSN1 layout NOT deployed: boom');
+    apply({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'ok' });        // success clears
+    expect(banner).toBeNull();
   });
 });

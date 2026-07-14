@@ -14,8 +14,14 @@ import {
   type ChannelRole,
 } from '@/utils/api';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
-import { useMidiWindow } from '@/hooks/useMidiControl';
+import { usePerfLock } from '@/hooks/usePerformanceMode';
+import { useMidiWindow, noteMidiPatternSelect } from '@/hooks/useMidiControl';
 import { windowPadNumber } from '@/utils/midi/window_slot';
+import {
+  isUserInitiated, isRowVisible, shouldScrollIntoView,
+  centeredScrollTarget, clampScrollTarget,
+} from '@/components/pattern_scroll_logic';
+import { playlistRowSizing } from '@/components/playlist_row_sizing';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 // Web-safe alert: RN-web's Alert.alert is an empty stub, so raw Alert.alert
 // error surfaces were SILENT no-ops on the web build (:6967) — a rejected
@@ -23,6 +29,14 @@ import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 // both platforms (window.alert on web, Alert.alert on native).
 import { opAlert } from '@/utils/op_alert';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Playlist reconcile debug tracing. The activeEntryId reconcile path (below) is
+// chatty — it logs on every WS status broadcast, GET refresh, and tap. Left ON,
+// that console.log firehose starves headless screenshot capture (the render
+// agent's CDP console pipe drowns) and clutters the operator's web console. Gate
+// every trace behind this single flag: flip to `true` ONLY when debugging a
+// stuck/ghost active-entry reconcile. No behaviour changes when false.
+const PLAYLIST_DBG = false;
 
 // "1 list to rule them all": this component renders the active playlist's
 // entries AS the channel's pattern queue. There's no separate "all patterns"
@@ -189,6 +203,9 @@ function playlistHeaderTitle(channelLabel?: string): string {
 
 export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', channelLabel, compact, locked, disabled, initialAssignment, initialPlaylist, onRefreshConnection, refreshNonce, playlistLibrary, onClosePane, midiWindowChannelId }) => {
   const C = usePalette();
+  // Live-show structural lock (shared component — gate by performance-mode
+  // state, not by tab). See the `editable` derivation below.
+  const perfLocked = usePerfLock();
   // The APC pad browser windows 6 entries per mixer layer; mirror that as a
   // blue row highlight (tint + border + pad-number chip, matching the blue
   // pads) so the operator sees which entries the pads will select.
@@ -323,15 +340,15 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     const pending = pendingActiveEntryIdRef.current;
     const local = assignmentRef.current?.activeEntryId ?? null;
     if (!pending) {
-      console.log(`[PLAYLIST_DBG] reconcile/${source}: no pending, incoming=${incomingActiveEntryId} local=${local} → ACCEPT`);
+      if (PLAYLIST_DBG) console.log(`[PLAYLIST_DBG] reconcile/${source}: no pending, incoming=${incomingActiveEntryId} local=${local} → ACCEPT`);
       return false;
     }
     if (incomingActiveEntryId === pending) {
-      console.log(`[PLAYLIST_DBG] reconcile/${source}: pending=${pending} matched, clearing → ACCEPT`);
+      if (PLAYLIST_DBG) console.log(`[PLAYLIST_DBG] reconcile/${source}: pending=${pending} matched, clearing → ACCEPT`);
       clearPending();
       return false;
     }
-    console.log(`[PLAYLIST_DBG] reconcile/${source}: pending=${pending} ≠ incoming=${incomingActiveEntryId} → SUPPRESS`);
+    if (PLAYLIST_DBG) console.log(`[PLAYLIST_DBG] reconcile/${source}: pending=${pending} ≠ incoming=${incomingActiveEntryId} → SUPPRESS`);
     return true;
   }, [clearPending]);
   useEffect(() => {
@@ -419,39 +436,72 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   // visible — otherwise on a 20-entry playlist they have no idea
   // which one is playing.
   //
-  // We track per-row y offsets via onLayout, plus the ScrollView's
-  // visible height. When the active id changes we scroll to centre
-  // that row in the viewport (clamped to [0, contentHeight - height]).
+  // We track per-row y offsets via onLayout, plus the ScrollView's visible
+  // height and live scroll offset. An EXTERNAL change (autopilot, a MIDI pad,
+  // a cross-tab switch) scrolls the target row into view only when it's
+  // off-screen; a change the operator just made by TAPPING a row never scrolls
+  // (operator report 2026-07: tapping a pattern outside the blue window jumped
+  // the list back to the window). The split is enforced by the grace timestamp
+  // below + the pure gate in pattern_scroll_logic.
   const scrollRef = useRef<ScrollView>(null);
   const rowOffsetsRef = useRef<Map<string, { y: number; h: number }>>(new Map());
   const viewportHeightRef = useRef<number>(0);
   const contentHeightRef = useRef<number>(0);
-  const scrollActiveIntoView = useCallback((entryId: string | null | undefined) => {
+  const scrollYRef = useRef<number>(0);
+  // Wall-clock ms of the operator's last entry TAP. Both auto-scroll effects
+  // suppress scrolling while inside USER_SELECT_GRACE_MS of it — this covers
+  // BOTH the synchronous optimistic selection AND the MIDI browse-window
+  // recenter that arrives a beat later (the window follows the tapped entry via
+  // the engine → manager round-trip), so neither yanks the list off the tap.
+  const userSelectAtRef = useRef<number>(0);
+
+  // Low-level: centre a row in the viewport (clamped). Callers decide WHETHER.
+  const scrollRowToCenter = useCallback((entryId: string | null | undefined) => {
     if (!entryId || !scrollRef.current) return;
     const row = rowOffsetsRef.current.get(entryId);
     if (!row) return;
     const viewportH = viewportHeightRef.current || 0;
-    const contentH = contentHeightRef.current || 0;
     if (viewportH <= 0) return;
-    // Centre the row vertically; clamp so we don't try to scroll
-    // past the content edges (which RN would clip silently anyway,
-    // but explicit clamping avoids janky overscroll bounce).
-    let targetY = row.y + row.h / 2 - viewportH / 2;
-    targetY = Math.max(0, Math.min(targetY, Math.max(0, contentH - viewportH)));
+    const targetY = clampScrollTarget(
+      centeredScrollTarget(row.y, row.h, viewportH),
+      contentHeightRef.current || 0,
+      viewportH,
+    );
     scrollRef.current.scrollTo({ y: targetY, animated: true });
   }, []);
 
+  // Gate: scroll `entryId` into view ONLY for an external change (not the
+  // operator's own recent tap) AND only when it's currently off-screen.
+  const maybeScrollRowIntoView = useCallback((entryId: string | null | undefined) => {
+    if (!entryId) return;
+    const row = rowOffsetsRef.current.get(entryId);
+    if (!row) return;
+    const userInitiated = isUserInitiated(userSelectAtRef.current, Date.now());
+    const visible = isRowVisible({
+      rowY: row.y, rowH: row.h,
+      scrollY: scrollYRef.current, viewportH: viewportHeightRef.current || 0,
+    });
+    if (!shouldScrollIntoView({ userInitiated, visible })) return;
+    scrollRowToCenter(entryId);
+  }, [scrollRowToCenter]);
+
   // ── Keep the MIDI browse window in view ─────────────────────────────
-  // When the operator moves the highlighted window with the controller's
-  // scroll pads, auto-scroll the list so the windowed (blue-highlighted)
-  // entries stay visible — centre the window's middle row in the viewport.
+  // When the window moves from ELSEWHERE (the controller's scroll pads, or an
+  // external active-entry change that recenters it), auto-scroll so the
+  // windowed (blue-highlighted) entries stay visible — but NEVER when the move
+  // was the operator's own tap (grace) and never when they're already visible.
+  // Reads the playlist via playlistRef (NOT a dep) so this effect fires only on
+  // an actual window MOVE — depending on `playlist` re-fired it on every
+  // refresh() object swap, which is what jumped the list back on a tap.
   useEffect(() => {
-    if (!midiWindow || !playlist) return;
-    const mid = playlist.entries[midiWindow.start + Math.floor(midiWindow.size / 2)]
-      ?? playlist.entries[midiWindow.start];
-    if (mid) scrollActiveIntoView(mid.id);
+    if (!midiWindow) return;
+    const pl = playlistRef.current;
+    if (!pl) return;
+    const mid = pl.entries[midiWindow.start + Math.floor(midiWindow.size / 2)]
+      ?? pl.entries[midiWindow.start];
+    if (mid) maybeScrollRowIntoView(mid.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [midiWindow?.start, midiWindow?.size, playlist, scrollActiveIntoView]);
+  }, [midiWindow?.start, midiWindow?.size, maybeScrollRowIntoView]);
 
   // ── Saved-toast: visible for 1.4 s after the last save ──────────────
   const flashSaved = useCallback(() => {
@@ -513,13 +563,13 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
       // confirms.
       const pending = pendingActiveEntryIdRef.current;
       if (pending && effectiveAssign && effectiveAssign.activeEntryId !== pending) {
-        console.log(`[PLAYLIST_DBG] refresh() GET returned activeEntryId=${effectiveAssign?.activeEntryId} but pending=${pending} → SKIP setAssignment`);
+        if (PLAYLIST_DBG) console.log(`[PLAYLIST_DBG] refresh() GET returned activeEntryId=${effectiveAssign?.activeEntryId} but pending=${pending} → SKIP setAssignment`);
       } else {
         if (pending && effectiveAssign && effectiveAssign.activeEntryId === pending) {
-          console.log(`[PLAYLIST_DBG] refresh() GET returned activeEntryId=${effectiveAssign?.activeEntryId} matches pending → clear + setAssignment`);
+          if (PLAYLIST_DBG) console.log(`[PLAYLIST_DBG] refresh() GET returned activeEntryId=${effectiveAssign?.activeEntryId} matches pending → clear + setAssignment`);
           clearPending();
         } else {
-          console.log(`[PLAYLIST_DBG] refresh() GET → setAssignment activeEntryId=${effectiveAssign?.activeEntryId}`);
+          if (PLAYLIST_DBG) console.log(`[PLAYLIST_DBG] refresh() GET → setAssignment activeEntryId=${effectiveAssign?.activeEntryId}`);
         }
         setAssignment(effectiveAssign);
       }
@@ -565,16 +615,19 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     };
   }, [refresh]);
 
-  // When the active entry id changes (autopilot tick, manual tap, or
-  // cross-tab sync), scroll the matching row into view. Defer one tick
-  // so the row's onLayout has a chance to run for newly-rendered
-  // entries (e.g. when assignment + playlist arrive together on first
-  // load).
+  // When the active entry id changes (autopilot tick, MIDI select, or cross-tab
+  // sync), scroll the matching row into view — but ONLY when the change came
+  // from ELSEWHERE (maybeScrollRowIntoView skips it inside the tap grace) and
+  // only when the row is off-screen. A user tap sets userSelectAtRef just below
+  // in handleEntryTap, so this stays put on the operator's own selection. Defer
+  // one tick so the row's onLayout has run for newly-rendered entries (e.g. when
+  // assignment + playlist arrive together on first load).
   useEffect(() => {
     if (!assignment?.activeEntryId) return;
-    const t = setTimeout(() => scrollActiveIntoView(assignment.activeEntryId), 50);
+    const id = assignment.activeEntryId;
+    const t = setTimeout(() => maybeScrollRowIntoView(id), 50);
     return () => clearTimeout(t);
-  }, [assignment?.activeEntryId, scrollActiveIntoView]);
+  }, [assignment?.activeEntryId, maybeScrollRowIntoView]);
 
   // Refresh whenever this tab gains focus (e.g. switching between Deck and
   // Mixer) so cross-tab edits show up immediately.
@@ -626,7 +679,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           (local?.name ?? null) !== (next?.name ?? null) ||
           (local?.activeEntryId ?? null) !== (next?.activeEntryId ?? null);
         if (changed) {
-          console.log(`[PLAYLIST_DBG] mixer event triggers refresh: local=${local?.activeEntryId} next=${next?.activeEntryId}`);
+          if (PLAYLIST_DBG) console.log(`[PLAYLIST_DBG] mixer event triggers refresh: local=${local?.activeEntryId} next=${next?.activeEntryId}`);
           refresh();
         }
       } else if (role === 'deck' && msg.type === 'deck') {
@@ -640,7 +693,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
           (local?.name ?? null) !== (next?.name ?? null) ||
           (local?.activeEntryId ?? null) !== (next?.activeEntryId ?? null);
         if (changed) {
-          console.log(`[PLAYLIST_DBG] deck event triggers refresh: local=${local?.activeEntryId} next=${next?.activeEntryId}`);
+          if (PLAYLIST_DBG) console.log(`[PLAYLIST_DBG] deck event triggers refresh: local=${local?.activeEntryId} next=${next?.activeEntryId}`);
           refresh();
         }
       } else if (role === 'deckOverlay' && msg.type === 'deck') {
@@ -697,7 +750,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
               // active id, skip the assignment swap so the UI stays
               // on the requested entry instead of bouncing.
               if (!shouldSuppressReconcile(incoming.activeEntryId ?? null, 'channelPlaylistData')) {
-                console.log(`[PLAYLIST_DBG] channelPlaylistData → setAssignment activeEntryId=${incoming.activeEntryId}`);
+                if (PLAYLIST_DBG) console.log(`[PLAYLIST_DBG] channelPlaylistData → setAssignment activeEntryId=${incoming.activeEntryId}`);
                 setAssignment(incoming);
               }
             }
@@ -814,13 +867,25 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     // refresh in the background — if the server rejects we roll back
     // and surface the error.
     const prev = assignment;
+    // Mark this as an operator-driven selection so neither auto-scroll effect
+    // moves the list off the tap — including the MIDI browse-window recenter
+    // that lands a beat later (the window follows this entry through the engine
+    // → manager round-trip). The grace window (USER_SELECT_GRACE_MS) outlasts
+    // that round-trip. Set BEFORE the optimistic setAssignment so the
+    // activeEntryId effect below sees it on this same render.
+    userSelectAtRef.current = Date.now();
+    // This tap is the ONE source allowed to recenter the APC browse window around
+    // the newly-active entry (operator policy 2026-07). Tell the MIDI manager so
+    // syncWindowsToActiveEntries recenters when this entry's echo lands; every other
+    // source (APC pad-select, autopilot, echoes) leaves the window put.
+    noteMidiPatternSelect(channelId, entryId);
     pendingActiveEntryIdRef.current = entryId;
     armPendingWatchdog();
-    console.log(`[PLAYLIST_DBG] handleEntryTap: from=${assignment.activeEntryId} to=${entryId}, pending set`);
+    if (PLAYLIST_DBG) console.log(`[PLAYLIST_DBG] handleEntryTap: from=${assignment.activeEntryId} to=${entryId}, pending set`);
     setAssignment({ ...assignment, activeEntryId: entryId });
     try {
       const res = await setChannelPlaylistEntry(role, channelId, entryId);
-      console.log(`[PLAYLIST_DBG] POST returned ok=${res.ok}, pending=${pendingActiveEntryIdRef.current}`);
+      if (PLAYLIST_DBG) console.log(`[PLAYLIST_DBG] POST returned ok=${res.ok}, pending=${pendingActiveEntryIdRef.current}`);
       if (!res.ok) {
         clearPending();
         setAssignment(prev);   // roll back optimistic flip
@@ -1114,8 +1179,28 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
     panelGap: compact ? 4 : 6,
   };
 
-  const editable = !locked;
+  // PERFORMANCE MODE: playlist CRUD (create/save/delete, entry add/remove/
+  // reorder/rename) AND playlist re-assignment are 409-gated engine routes
+  // while a show is live. Fold the perf lock into the panel's existing
+  // read-only "locked" idiom: the dropdown becomes a static "(locked)" label,
+  // the folder/+ buttons and per-row chevrons/− hide — while entry TAPS (an
+  // ALLOWED route) stay fully live so the operator can keep performing.
+  const editable = !locked && !perfLocked;
   const showSaved = savedAt !== null;
+
+  // ── Entry-row sizing ────────────────────────────────────────────────────
+  // The row is the operator's primary live touch surface. In PERFORMANCE MODE
+  // the structural lock hides the per-row control sub-row (chevrons + remove),
+  // which used to collapse each row to a single thin line (operator complaint:
+  // "pattern rows are too thin to hit during a show"). `playlistRowSizing`
+  // boosts the row to ~70% taller with a legible larger name, a uniform min
+  // height for touch, and more inter-row spacing WHEN perf mode is active — and
+  // is byte-for-byte the prior sizing otherwise, so edit-mode rows are
+  // unchanged. Chrome (header buttons / panel padding) stays on `sz` above and
+  // is intentionally untouched by the perf boost. Scroll targeting is
+  // onLayout-measured (rowOffsetsRef), so the taller rows re-measure
+  // automatically — no scroll-offset math depends on a hardcoded row height.
+  const rowSz = playlistRowSizing({ compact, perfActive: perfLocked });
 
   return (
     <View
@@ -1233,10 +1318,13 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
             // Gate with the panel's own `disabled` (deck swap in flight / plan
             // lock) so this control isn't the one tappable thing while every
             // sibling is frozen — the deckSwapInFlight state dims but has no
-            // scrim, so an un-disabled ✕ would leak through.
-            disabled={disabled}
+            // scrim, so an un-disabled ✕ would leak through. ALSO perf-locked:
+            // closing pane 2 clears the secondary slot binding, which is the
+            // 409-gated POST /deck/playlist/secondary route.
+            disabled={disabled || perfLocked}
             accessibilityLabel="Close this playlist pane"
             accessibilityRole="button"
+            accessibilityState={{ disabled: disabled || perfLocked }}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             style={{
               width: sz.btnH,
@@ -1247,7 +1335,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
               backgroundColor: C.surfaceContainerHigh,
               alignItems: 'center',
               justifyContent: 'center',
-              opacity: disabled ? 0.4 : 1,
+              opacity: (disabled || perfLocked) ? 0.4 : 1,
             }}
           >
             <IconSymbol name="xmark" size={sz.btnFont + 2} color={C.icon} />
@@ -1380,6 +1468,10 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
             contentContainerStyle={{ paddingBottom: 4, paddingRight: 6 }}
             onLayout={(ev) => { viewportHeightRef.current = ev.nativeEvent.layout.height; }}
             onContentSizeChange={(_w, h) => { contentHeightRef.current = h; }}
+            // Track the live scroll offset so the auto-scroll gate can tell
+            // whether a row is already visible (scroll-only-if-off-screen).
+            scrollEventThrottle={16}
+            onScroll={(ev) => { scrollYRef.current = ev.nativeEvent.contentOffset.y; }}
           >
             {playlist.entries.map((e, idx) => {
               const isActive = assignment?.activeEntryId === e.id;
@@ -1413,9 +1505,13 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                     // "tran…"/"0…"; stacking the controls underneath gives the
                     // name the full strip width with no strip-width change.
                     flexDirection: 'column',
+                    // Perf mode hides line 2 and floors the row to a big uniform
+                    // tap target — center the single-line content within it.
+                    justifyContent: rowSz.centerContent ? 'center' : 'flex-start',
+                    minHeight: rowSz.rowMinHeight || undefined,
                     gap: 2,
-                    paddingHorizontal: sz.rowPadX,
-                    paddingVertical: sz.rowPadY,
+                    paddingHorizontal: rowSz.rowPadX,
+                    paddingVertical: rowSz.rowPadY,
                     borderRadius: 6,
                     // MIDI browse window → blue row highlight (tint + border),
                     // mirroring the hardware: idle window pads are blue, the
@@ -1425,7 +1521,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                     backgroundColor: isActive ? C.primary : (inMidiWindow ? MIDI_WINDOW_TINT : 'transparent'),
                     borderWidth: inMidiWindow ? 2 : 1,
                     borderColor: inMidiWindow ? MIDI_WINDOW_COLOR : (isActive ? 'transparent' : C.ghostBorder),
-                    marginBottom: sz.rowGap,
+                    marginBottom: rowSz.rowGap,
                     opacity: missing ? 0.4 : 1,
                   }}
                 >
@@ -1434,9 +1530,9 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                     <Text
                       style={{
                         fontFamily: 'SpaceGrotesk_700Bold',
-                        fontSize: sz.fontMicro,
+                        fontSize: rowSz.fontSub,
                         color: isActive ? 'rgba(255,255,255,0.75)' : C.icon,
-                        width: sz.indexWidth,
+                        width: rowSz.indexWidth,
                       }}
                     >
                       {(idx + 1).toString().padStart(2, '0')}
@@ -1462,8 +1558,8 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                         <Text
                           style={{
                             fontFamily: 'SpaceGrotesk_700Bold',
-                            fontSize: sz.fontMicro,
-                            lineHeight: sz.fontMicro + 4,
+                            fontSize: rowSz.fontSub,
+                            lineHeight: rowSz.fontSub + 4,
                             color: isActive ? '#FFF' : MIDI_WINDOW_COLOR,
                           }}
                         >
@@ -1487,8 +1583,8 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                         // `wordBreak` is a web-only CSS prop, hence `as any`.
                         style={{
                           fontFamily: 'SpaceGrotesk_700Bold',
-                          fontSize: sz.fontPrimary,
-                          lineHeight: sz.fontPrimary + 4,
+                          fontSize: rowSz.fontPrimary,
+                          lineHeight: rowSz.fontPrimary + 4,
                           color: isActive ? '#FFF' : C.text,
                           wordBreak: 'normal',
                         } as any}
@@ -1510,8 +1606,8 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                           // varied with the glyphs and looked unevenly spaced).
                           style={{
                             fontFamily: 'Inter_400Regular',
-                            fontSize: sz.fontMicro,
-                            lineHeight: sz.fontMicro + 4,
+                            fontSize: rowSz.fontSub,
+                            lineHeight: rowSz.fontSub + 4,
                             marginTop: 1,
                             color: isActive ? 'rgba(255,255,255,0.85)' : C.secondary,
                             wordBreak: 'normal',

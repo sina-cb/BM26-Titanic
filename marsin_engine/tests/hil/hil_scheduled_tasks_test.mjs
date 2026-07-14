@@ -29,6 +29,8 @@ import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { WebSocket } from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
@@ -192,6 +194,10 @@ async function main() {
   snapshotState();
   await startEngine();
   console.log(`Engine up on ${BASE}\n`);
+
+  // Guard: if our slot port was already bound by a real engine the boot poll
+  // would have latched onto IT — refuse to mutate a non-test_bench model.
+  await assertDisposableEngine(BASE);
 
   let createdId = null;
   let ws = null;

@@ -106,7 +106,7 @@ toggled by `sb_1`, owned by the host and re-echoed on every resync
   value bar) renders under the grid.
 - **READOUT (`vm = 0`)** — no grid; a full-screen readout of the pressed
   effect (large name, very large value, mode line, raised value bar) plus the
-  small-button labels along the bottom (`MODE VIEW - LOGO`).
+  small-button labels along the bottom (`MODE VIEW PROF LOGO`).
 
 ### Small buttons (panel elements 9–12, `sb_0..sb_3`)
 
@@ -117,7 +117,12 @@ Sina's map (2026-07-10 evening):
   as the encoder press)
 - `sb_1` → **VIEW** — toggle the LCD visual (grid ↔ readout), one press per
   flip
-- `sb_2` → **empty** (reserved no-op)
+- `sb_2` → **PROFILE** — toggle the controller profile **edit ↔ play** (the
+  manager PATCHes `/global-effects/profile` with the opposite of the current
+  profile; the engine broadcasts `controllerProfile` and runs a page-0 redeploy,
+  and CaptainPad's effects grid switches to the PLAY presentation — bigger cells,
+  no editing affordances — on the echo). No optimistic flip; the engine broadcast
+  is authoritative.
 - `sb_3` → **LOGO** — show the MarsinLED wordmark (the welcome screen; the
   next key press or feedback frame dismisses it)
 

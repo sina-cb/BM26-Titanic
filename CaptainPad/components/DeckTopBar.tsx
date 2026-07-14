@@ -32,6 +32,7 @@ import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { MidiStatusChip } from '@/components/MidiStatusChip';
 import { HealthChip } from '@/components/ui/HealthChip';
 import { MasterFadeGroup } from '@/components/MasterFadeGroup';
+import { PerformanceModeControl } from '@/components/PerformanceModeControl';
 import { useMaster, useActiveModel } from '@/hooks/useEngineState';
 import { useMasterFade } from '@/hooks/use_master_fade';
 import { updateMixerMaster } from '@/utils/api';
@@ -127,6 +128,10 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck', disabled = fals
         <HealthChip compact={isPortrait} />
       </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
+        {/* PERFORMANCE MODE — live-show structural lock. Same shared control the
+            mixer header mounts, first in the right cluster so it reads before the
+            master group. Idle chip → confirm → GO LIVE; active badge → exit sheet. */}
+        <PerformanceModeControl isPortrait={isPortrait} />
         {/* FADE affordance — the GENTLE path down (and back up) must be
             reachable in BOTH orientations (QA round 8 fix #2): without it,
             portrait left only the HARD blackout cut as a way down. Shared

@@ -63,6 +63,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const ENGINE_BASE = 'http://127.0.0.1:6968';
 const WS_URL = 'ws://127.0.0.1:6968';
 const PIXEL_COUNT = 52;
@@ -183,6 +185,10 @@ async function main() {
     console.error('  Start with: node engine.js --pattern test_const --model test_bench');
     return 1;
   }
+
+  // Refuse to mutate a non-disposable engine BEFORE deleting/adding channels.
+  await assertDisposableEngine(ENGINE_BASE);
+
   cleanupState.started = true;
   installSignalCleanup();
 

@@ -31,6 +31,8 @@
 
 import http from 'http';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const portIdx = process.argv.indexOf('--port');
 const PORT = portIdx !== -1 && process.argv[portIdx + 1]
   ? parseInt(process.argv[portIdx + 1], 10)
@@ -84,6 +86,9 @@ async function main() {
     console.error(`  Start with: node engine.js --pattern test_const --model test_bench --port ${PORT}`);
     return 1;
   }
+
+  // Refuse to mutate a non-disposable engine BEFORE adding any channel.
+  await assertDisposableEngine(BASE);
 
   const originalOverlayCount = (baseline.channels || []).length;
   const originalMaster = baseline.master;

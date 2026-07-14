@@ -40,6 +40,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import yaml from 'js-yaml';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATE_DIR = path.join(__dirname, '..', '..', 'states', 'test_bench');
 const STATE_FILES = ['deck_state.yaml', 'mixer_state.yaml', 'globals_state.yaml'];
@@ -145,6 +147,9 @@ const TEST_PLAYLIST = 'hil_concurrent_entry_test';
       console.error(`  FATAL: /status returned ${status.status}`);
       process.exit(2);
     }
+
+    // Refuse to mutate a non-disposable engine BEFORE any /set-pattern or write.
+    await assertDisposableEngine(ENGINE_BASE);
 
     // 1. Ensure a deck channel exists, then snapshot its identity.
     //    A fresh boot whose saved deck_state.yaml references a pattern that

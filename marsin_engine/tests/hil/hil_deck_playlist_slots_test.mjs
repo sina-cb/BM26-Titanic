@@ -37,6 +37,8 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ENGINE_DIR = path.resolve(__dirname, '..', '..');
@@ -148,6 +150,11 @@ function stopEngine() {
     console.error('  FATAL: engine did not become ready');
     await stopEngine(); restoreState(); process.exit(2);
   }
+
+  // Guard: even though we self-boot a test_bench engine, if our slot port was
+  // already bound by a real engine the readiness poll above would have latched
+  // onto IT — refuse to mutate anything but the disposable test_bench model.
+  await assertDisposableEngine(ENGINE_BASE);
 
   let made = false;
   try {

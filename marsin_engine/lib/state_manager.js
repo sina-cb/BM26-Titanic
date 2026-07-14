@@ -217,6 +217,26 @@ export class StateManager {
     return this.load('deck_state.yaml', { channel: null });
   }
 
+  /**
+   * Engine-wide settings (currently just `autoSave`). Persisted in its OWN
+   * per-scene file so the toggle survives even when auto-save is OFF — the
+   * setting that GATES the auto-persistence can never live in a file whose
+   * writes it gates (that would make "turn auto-save off" un-persistable).
+   *
+   * DEFAULT autoSave = TRUE (auto-persist on, the pre-feature behaviour).
+   * A missing file returns the default. A present-but-malformed `autoSave`
+   * (hand-edited junk) coerces to TRUE, not false: the SAFE direction is
+   * "keep saving the operator's work", never "silently stop persisting".
+   */
+  loadSettingsState() {
+    const raw = this.load('settings_state.yaml', { autoSave: true });
+    return { autoSave: typeof raw.autoSave === 'boolean' ? raw.autoSave : true };
+  }
+
+  saveSettingsState(settings) {
+    this.save('settings_state.yaml', { autoSave: !!(settings && settings.autoSave) });
+  }
+
   loadGlobalsState() {
     // invert (F-invert, docs/39): persistent global color-invert toggle.
     // Default false = no invert — an old file without the key loads to this
@@ -262,12 +282,13 @@ export class StateManager {
   }
 
   /**
-   * Persist the slot bindings and (effects_v2) the engine-owned page VIEW.
-   * `effectsPage` is optional so old callers/tests that pass only slots still
-   * work — it defaults to 0 on load when the key is absent.
+   * Persist the slot bindings, the engine-owned page VIEW (effects_v2), and the
+   * controller PROFILE ('edit'|'play'). `effectsPage` / `controllerProfile` are
+   * optional so old callers/tests that pass only slots still work — they default
+   * to 0 / 'edit' on load when the key is absent.
    */
-  saveGlobalEffectSlots(slotsConfig, effectsPage = 0) {
-    this.save('global_effect_slots.yaml', { slots: slotsConfig, effectsPage });
+  saveGlobalEffectSlots(slotsConfig, effectsPage = 0, controllerProfile = 'edit') {
+    this.save('global_effect_slots.yaml', { slots: slotsConfig, effectsPage, controllerProfile });
   }
 
   applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController) {
@@ -354,7 +375,15 @@ export class StateManager {
           faderLocked: core.faderLocked,
           transitionMode: c.transitionMode || 'trans_crossfade',
           transitionTime: c.transitionTime || 1.0,
-          localControls: core.localControls,
+          // Mixer channel PARAMETERS are NEVER persisted (operator ruling,
+          // 2026-07 auto-save wave): mixer overlays are ephemeral live
+          // tweaks, not saved show state. We emit an EMPTY localControls map
+          // (not core.localControls) so a restart restores the channel's
+          // playlist-entry defaults only — the on-disk key + its position are
+          // preserved for byte-shape compatibility, just always `{}`. The
+          // restore path (buildChannelFromSaved) mirrors this by skipping the
+          // localControls replay for the mixer role.
+          localControls: {},
           playlist: core.playlist,
           viewSelection: core.viewSelection,
           // Additive (channel_features wave): persisted AFTER the existing

@@ -23,6 +23,7 @@
 import React, { useRef, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, PanResponder, type LayoutChangeEvent } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
+import { usePerfLock } from '@/hooks/usePerformanceMode';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import type { PlaylistAssignment } from '@/utils/api';
 
@@ -84,6 +85,11 @@ export function SplitPlaylistPanes({
   // stays open on its own; ✕ clears the binding AND collapses.
   const [localOpen, setLocalOpen] = useState(false);
   const expanded = !!secondaryBound || localOpen;
+  // PERFORMANCE MODE: binding/clearing the secondary pane is a 409-gated route
+  // (POST /deck/playlist/secondary) — grey the "+ SECOND PLAYLIST" affordance
+  // while a show is live (the pane's own dropdown is separately perf-locked
+  // inside PlaylistPanel, so an already-open pane can't bind either).
+  const perfLocked = usePerfLock();
 
   // Container height (from onLayout) drives the MIN_PANE clamp + px→ratio math.
   const containerHRef = useRef(1);
@@ -187,9 +193,10 @@ export function SplitPlaylistPanes({
         </View>
         <TouchableOpacity
           onPress={() => setLocalOpen(true)}
-          disabled={disabled}
+          disabled={disabled || perfLocked}
           accessibilityRole="button"
           accessibilityLabel="Add a second playlist pane"
+          accessibilityState={{ disabled: disabled || perfLocked }}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           style={{
             marginTop: 8,
@@ -200,7 +207,7 @@ export function SplitPlaylistPanes({
             borderColor: C.ghostBorder,
             alignItems: 'center',
             justifyContent: 'center',
-            opacity: disabled ? 0.4 : 1,
+            opacity: (disabled || perfLocked) ? 0.4 : 1,
           }}
         >
           <Text style={{

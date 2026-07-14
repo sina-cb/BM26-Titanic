@@ -49,6 +49,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const ENGINE_PORT = parseInt(process.env.ENGINE_PORT || '6968', 10);
 const ENGINE_BASE = `http://127.0.0.1:${ENGINE_PORT}`;
 const WS_URL = `ws://127.0.0.1:${ENGINE_PORT}`;
@@ -192,6 +194,9 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     : null;
   console.log(`  deck channel id: ${deckId}`);
   console.log(`  initial playlist: ${cleanupState.snapshotDeckAssignment ? cleanupState.snapshotDeckAssignment.name : '(none)'}`);
+
+  // Refuse to mutate a non-disposable engine BEFORE creating any playlist.
+  await assertDisposableEngine(ENGINE_BASE);
 
   // 2. Create a throwaway test playlist with two entries. test_const is
   //    the lightest pattern the engine ships, so this stays cheap.

@@ -377,15 +377,22 @@ test('toggling a second strobe preset switches config instead of stopping', () =
   assert.equal(ctrl.activeStrobePresetId, 'pulse_2hz');
 });
 
-test('toggling a second colorWash preset switches without disabling', () => {
+test('two colorWash slots COEXIST as independent washes (RCA 2026-07-13)', () => {
+  // Pre-fix bug: colorWash was a single runtime layer, so activating a second
+  // wash preset REPLACED the first (Emergency Red turned off Ocean Wash). It is
+  // now keyed per slot, so both coexist. Two distinct slots = two entries.
   const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
   const mgr = new GlobalEffectSlotManager(ctrl);
   // Slot 3 = ocean_blue toggle. Patch slot 5 to emergency_red toggle.
   mgr.patchSlot(5, { effectId: 'colorWash', presetId: 'emergency_red', behavior: 'toggle' });
   mgr.dispatchSlotAction({ slotId: 3, action: 'activate', frameIndex: 0, nowMs: 0 });
-  assert.equal(ctrl.colorWashConfig.enabled, true);
-  assert.equal(ctrl.colorWashConfig.preset, 'ocean_blue');
+  assert.equal(ctrl.colorWashes.size, 1);
   mgr.dispatchSlotAction({ slotId: 5, action: 'activate', frameIndex: 0, nowMs: 0 });
+  // BOTH washes are now active — neither replaced the other.
+  assert.equal(ctrl.colorWashes.size, 2, 'both washes coexist');
+  assert.equal(mgr.getStatus().find(s => s.slotId === 3).active, true, 'ocean still active');
+  assert.equal(mgr.getStatus().find(s => s.slotId === 5).active, true, 'emergency also active');
+  // The legacy single-object VIEW tracks the primary (highest-slotId) wash.
   assert.equal(ctrl.colorWashConfig.enabled, true);
   assert.equal(ctrl.colorWashConfig.preset, 'emergency_red');
 });

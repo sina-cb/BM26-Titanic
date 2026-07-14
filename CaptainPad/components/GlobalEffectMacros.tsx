@@ -63,14 +63,19 @@ import {
   GlobalEffectSlotStatus,
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
+import { usePerfLock, usePerformanceMode } from '@/hooks/usePerformanceMode';
 import {
   VISIBLE_SLOT_COUNT,
   EFFECTS_PAGE_COUNT,
   SHOW_EFFECT_PAGES,
   resolveEffectsPage,
+  resolveEffectsPresentation,
+  deployBannerMessage,
+  modeBadge,
   slotIsBound,
   computeVisibleSlots,
   computePageActivity,
+  ModeBadge as ModeBadgeInfo,
 } from './global_effect_macros_logic';
 import {
   buildPickerSections,
@@ -164,6 +169,23 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   const [slots, setSlots] = useState<GlobalEffectSlotStatus[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [library, setLibrary] = useState<Library | null>(null);
+  // The effects grid presentation is INVARIANT across the VSN1 controller profile
+  // (operator: the CaptainPad effects UI must ALWAYS look and behave the same
+  // regardless of profile). The profile is a VSN1 device-surface concept only —
+  // it swaps the physical device's template set (via sb_2) but never touches this
+  // grid, which always renders the full authoring UI. resolveEffectsPresentation
+  // returns those constants; kept as a call for a stable shape + pinned tests.
+  const presentation = resolveEffectsPresentation();
+  // Performance mode (live-show structural lock) dims the ⋯ swap / "+" bind
+  // affordances and drives the LOCKED mode badge. Read live so the badge clears
+  // the moment performance mode is exited. This is SEPARATE from the profile.
+  const performanceActive = usePerformanceMode().active;
+  // VSN1 layout auto-deploy error banner (dismissible). The engine broadcasts
+  // `vsn1LayoutDeploy` around every device re-flash; deployBannerMessage folds the
+  // stream into an error string (a failed flash — e.g. the LCD budget overflow) or
+  // clears it on a later `ok`. Pre-2026-07 CaptainPad ignored deploy errors, so a
+  // silently-failed flash was invisible; this surfaces it.
+  const [deployError, setDeployError] = useState<string | null>(null);
   // Effects v2: the active effects page (0..3). Mirrors ENGINE state — seeded
   // from GET /global-effects/page, followed via the `effectsPage` WS broadcast,
   // and changed ONLY by PATCHing the engine (never a private optimistic page).
@@ -333,6 +355,12 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         // change from ANY source (this switcher, a VSN1 side button, another surface)
         // converges here.
         setPage(msg.effectsPage);
+      } else if (msg?.type === 'vsn1LayoutDeploy') {
+        // VSN1 layout auto-deploy result → surface (or clear) the error banner.
+        // deployBannerMessage returns `undefined` for in-flight/irrelevant frames
+        // (no change), `null` on a successful `ok` (clear), or the error string.
+        const next = deployBannerMessage(msg);
+        if (next !== undefined) setDeployError(next);
       }
       // (The `globalHueShift` WS reconcile was removed 2026-07 with the
       // global hue shifter.)
@@ -601,9 +629,13 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // Strip landscape grew 44→48 (2026-07 visual polish): the value/mode badge
   // gained 2px of height for legibility, and the chip needs the extra room so
   // a centred label clears it (see SlotButton's conditional paddingTop).
-  const btnHeight = isStrip
+  // The chip height is the tuned base height (presentation.cellHeightScale is a
+  // constant 1 now — the profile never grows the cells; the scale hook is kept
+  // only so the geometry has a single documented multiplier point).
+  const baseBtnHeight = isStrip
     ? (isPortrait ? 60 : 48)
     : (isPortrait ? 52 : 48);
+  const btnHeight = Math.round(baseBtnHeight * presentation.cellHeightScale);
   // Deck portrait left-pane is the tightest 3-up width, so it drops to 9px to
   // guarantee a 7-char word ("Vintage", "Iceberg") fits a wrapped line clear of
   // the ⋯ gutter. The mixer strip (now 4-up wrapped) keeps 10px.
@@ -620,6 +652,16 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // wrapped label (QA round3: 4-up portrait chips were ~90px and truncated).
   const deckCols  = isPortrait ? 3 : 4;
 
+  // MODE BADGE — the passive LOCKED pill shown while performance mode is active
+  // (it explains why the ⋯ swap / ＋ bind affordances are inert during a show).
+  // Unlocked → no badge (the grid looks exactly as always). The controller
+  // profile is NOT an input — it never changes this grid. Derived purely so the
+  // state (locked vs no-badge) is unit-tested.
+  const badge = modeBadge(performanceActive);
+  const modeBadgeEl = badge ? (
+    <ModeBadge key="mode-badge" badge={badge} />
+  ) : null;
+
   // While we wait for the first /global-effect-slots response render
   // a thin skeleton row (matches final layout so the deck doesn't
   // visually jump). If both fetches fail, surface the error.
@@ -627,7 +669,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     return (
       <View style={{ paddingTop: 8 }}>
         {/* Strip: header line removed (label rides in-row once loaded). */}
-        {isStrip ? null : <Header variant={variant} page={renderPage} />}
+        {isStrip ? null : <Header variant={variant} page={renderPage} badge={modeBadgeEl} />}
         {/* party 2026-07-11 — pager chrome hidden (single-page layout). */}
         {SHOW_EFFECT_PAGES ? (
           <PageSwitcher page={page} onSelect={onSelectPage} pageActivity={pageActivity} />
@@ -652,7 +694,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       {/* party 2026-07-11 — in the STRIP the header line is gone: the label
           rides IN the chip row (StripLabel below) to save a full line of
           vertical space in the bottom bar. The deck grid keeps its header. */}
-      {isStrip ? null : <Header variant={variant} page={renderPage} />}
+      {isStrip ? null : <Header variant={variant} page={renderPage} badge={modeBadgeEl} />}
       {/* party 2026-07-11 — the 4-page switcher is HIDDEN (single-page layout;
           VSN1 side buttons no longer page). Flip SHOW_EFFECT_PAGES to restore. */}
       {SHOW_EFFECT_PAGES ? (
@@ -664,6 +706,16 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       {error ? (
         <Text style={{ color: C.error, fontSize: 11, marginBottom: 4 }}>{error}</Text>
       ) : null}
+      {/* VSN1 layout deploy FAILED — visible + dismissible (a silently failed
+          flash used to be invisible). A later successful deploy clears it. */}
+      {deployError ? (
+        <DeployErrorBanner message={deployError} onDismiss={() => setDeployError(null)} />
+      ) : null}
+      {/* (The old `!isStrip`-gated "PLAY profile active" hint was REMOVED here:
+          BOTH deck and mixer render the STRIP variant, so it never showed and
+          PLAY was indistinguishable from a broken UI. The always-visible
+          <ModeBadge> in the header/strip label supersedes it — it shows in
+          BOTH variants and, in PLAY, is the tappable escape hatch to EDIT.) */}
       {(() => {
         // `minWidth` (set only for the portrait scroll strip) switches a
         // chip from flex:1 (share the bar width) to a fixed minWidth so it
@@ -673,6 +725,9 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           const slotId = slot.slotId as number;
           const isEmpty = !slotIsBound(slot);
           if (isEmpty) {
+            // Empty slot → the tappable "+" socket that opens the swap sheet.
+            // Always present (the authoring UI is invariant across profiles);
+            // performance mode dims/disables it inside EmptySlotButton.
             return (
               <EmptySlotButton
                 key={slotId}
@@ -764,6 +819,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
             return (
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 {stripLabel}
+                {modeBadgeEl}
                 {/* Slots-only scroller. A right-edge fade peek hints there's
                     more to scroll (the chips run under the pinned group). */}
                 <View style={{ flex: 1, minWidth: 0, position: 'relative' }}>
@@ -796,6 +852,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           return (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap }}>
               {stripLabel}
+              {modeBadgeEl}
               {slotChips}
               {Divider}
               {blackoutCell}
@@ -929,18 +986,23 @@ const PageSwitcher: React.FC<{
 // (2026-07 visual polish: the title now renders at 10px in BOTH variants —
 // the 9px strip size was below the app's smallest legible caption step —
 // so `variant` stays in the prop contract but is not consumed here.)
-const Header: React.FC<{ variant: 'deck' | 'mixer-strip'; page: number }> = ({ page }) => {
+const Header: React.FC<{ variant: 'deck' | 'mixer-strip'; page: number; badge?: React.ReactNode }> = ({ page, badge }) => {
   const C = usePalette();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-      <Text style={{
-        fontFamily: 'SpaceGrotesk_700Bold',
-        fontSize: 10,
-        color: C.secondary, letterSpacing: 1.2,
-        textTransform: 'uppercase',
-      }}>
-        Global Effects
-      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold',
+          fontSize: 10,
+          color: C.secondary, letterSpacing: 1.2,
+          textTransform: 'uppercase',
+        }}>
+          Global Effects
+        </Text>
+        {/* Always-visible mode badge (PLAY escape hatch / LOCKED status) rides
+            next to the label — the non-strip twin of the strip's in-row badge. */}
+        {badge}
+      </View>
       {/* party 2026-07-11 — the "PAGE Pn" badge rides with the pager: hidden in
           the single-page layout (SHOW_EFFECT_PAGES=false) since there is only
           ever page 0. Flip SHOW_EFFECT_PAGES to restore it alongside the
@@ -962,6 +1024,42 @@ const Header: React.FC<{ variant: 'deck' | 'mixer-strip'; page: number }> = ({ p
           </Text>
         </View>
       ) : null}
+    </View>
+  );
+};
+
+// MODE BADGE — the passive LOCKED indicator that rides next to the "GLOBAL
+// EFFECTS" label (deck Header) and the strip label (both variants).
+//
+//   - LOCKED → a passive RED status pill "LOCKED — performance mode" (palette
+//     error tokens) explaining why the ⋯ swap / ＋ bind affordances are inert
+//     while a show is live.
+//
+// (The old PLAY variant + on-screen escape hatch was removed with the profile
+// UI-degradation: the grid no longer changes with the controller profile, so
+// there is nothing to warn about or escape from.) The kind/copy decision is the
+// pure `modeBadge()` derivation; this component only paints it.
+const ModeBadge: React.FC<{ badge: ModeBadgeInfo }> = ({ badge }) => {
+  const C = usePalette();
+  return (
+    <View
+      accessibilityRole="alert"
+      accessibilityLabel={badge.label}
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        alignSelf: 'center',
+        paddingHorizontal: 8, height: 18, borderRadius: 9,
+        backgroundColor: C.errorContainer, borderWidth: 1, borderColor: C.error,
+        ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
+      }}
+    >
+      <Text
+        numberOfLines={1}
+        style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.error, letterSpacing: 0.6 }}
+      >
+        {badge.label}
+      </Text>
     </View>
   );
 };
@@ -1016,6 +1114,11 @@ const SlotButton: React.FC<{
   onSetMode: (value: string | number | boolean) => void;
 }> = ({ slot, isOn, height, fontSize, minWidth, onPress, onEdit, onSetIntensity, onResetIntensity, onCycleMode, onSetMode }) => {
   const C = usePalette();
+  // PERFORMANCE MODE: rebinding/clearing a slot (the ⋯ swap sheet →
+  // PATCH /global-effect-slots/:id) is a LAYOUT edit, 409-gated while a show
+  // is live. Firing the effect (cell body), intensity and mode stay live —
+  // those are runtime routes the engine deliberately allows.
+  const perfLocked = usePerfLock();
   const isMomentary = slot.behavior === 'trigger' || slot.behavior === 'burst';
   // Favorite (⭐) marker — the operator's party picks (effect_picker_logic).
   const isFav = isFavoritePreset(slot.effectId, slot.presetId);
@@ -1100,12 +1203,17 @@ const SlotButton: React.FC<{
           {slot.label}
         </Text>
       </TouchableOpacity>
+      {/* ⋯ swap/edit affordance — ALWAYS present (the authoring UI is invariant
+          across controller profiles). Performance mode dims + disables it. */}
       <TouchableOpacity
         onPress={onEdit}
+        disabled={perfLocked}
         activeOpacity={0.6}
         hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
         accessibilityLabel={`Edit slot ${slot.slotId}`}
+        accessibilityState={{ disabled: perfLocked }}
         style={{
+          opacity: perfLocked ? 0.45 : 1,
           // 2026-07 visual polish: back to the TOP-right corner — the chip
           // now reserves its whole top band for meta (paddingTop on the
           // body pushes the label below), so the corner is guaranteed clear
@@ -1146,7 +1254,8 @@ const SlotButton: React.FC<{
           and current mode at a glance; tapping opens the detail sheet where the
           operator edits BOTH (a precise intensity slider + reset, and a mode
           cycle/picker). Only rendered when the engine threads intensity/mode —
-          a pre-field slot shows nothing here rather than a fabricated 0. */}
+          a pre-field slot shows nothing here rather than a fabricated 0. Always
+          present (invariant across controller profiles). */}
       {(hasIntensity || hasMode) ? (
         <TouchableOpacity
           onPress={() => setDetailOpen(true)}
@@ -1395,15 +1504,21 @@ const EmptySlotButton: React.FC<{
   onPress: () => void;
 }> = ({ slotId, height, minWidth, onPress }) => {
   const C = usePalette();
+  // PERFORMANCE MODE: binding an effect into an empty slot is a layout edit
+  // (PATCH /global-effect-slots/:id — 409-gated while a show is live).
+  const perfLocked = usePerfLock();
   const sizing = minWidth !== undefined
     ? { width: minWidth, minWidth, flexGrow: 0, flexShrink: 0 }
     : { flex: 1 };
   return (
     <TouchableOpacity
       onPress={onPress}
+      disabled={perfLocked}
       activeOpacity={1}
       accessibilityLabel={`Add effect to slot ${slotId}`}
+      accessibilityState={{ disabled: perfLocked }}
       style={{
+        opacity: perfLocked ? 0.45 : 1,
         ...sizing, height, borderRadius: 8,
         backgroundColor: C.surfaceDim,
         borderWidth: 1,
@@ -1423,6 +1538,37 @@ const EmptySlotButton: React.FC<{
         +
       </Text>
     </TouchableOpacity>
+  );
+};
+
+// VSN1 layout-deploy FAILURE strip — visible + dismissible. Reuses the error
+// idiom (C.error) already used for the load-failure Text above, wrapped in a
+// tinted row with a ✕ so the operator can clear a handled failure. A later
+// successful deploy clears it automatically (deployBannerMessage → null).
+const DeployErrorBanner: React.FC<{ message: string; onDismiss: () => void }> = ({ message, onDismiss }) => {
+  const C = usePalette();
+  return (
+    <View
+      accessibilityRole="alert"
+      style={{
+        flexDirection: 'row', alignItems: 'center', gap: 8,
+        paddingVertical: 4, paddingHorizontal: 8, marginBottom: 4,
+        borderRadius: 8, backgroundColor: C.errorContainer,
+        borderWidth: 1, borderColor: C.error,
+      }}
+    >
+      <Text style={{ flex: 1, color: C.error, fontSize: 11, fontFamily: 'SpaceGrotesk_700Bold', letterSpacing: 0.2 }}>
+        {message}
+      </Text>
+      <TouchableOpacity
+        onPress={onDismiss}
+        hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+        accessibilityLabel="Dismiss deploy error"
+        style={{ width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surfaceContainerLowest, borderWidth: 1, borderColor: C.error }}
+      >
+        <Text style={{ color: C.error, fontSize: 12, lineHeight: 12, fontFamily: 'SpaceGrotesk_700Bold' }}>×</Text>
+      </TouchableOpacity>
+    </View>
   );
 };
 

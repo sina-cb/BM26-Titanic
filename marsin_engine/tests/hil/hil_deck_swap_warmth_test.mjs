@@ -43,6 +43,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const ENGINE_BASE = process.env.ENGINE_BASE || 'http://127.0.0.1:6968';
 const WS_URL = process.env.WS_URL || 'ws://127.0.0.1:6968';
 const PIXEL_COUNT = 52;
@@ -185,6 +187,9 @@ async function subscribeWs() {
   } catch {
     cleanupState.savedDeckPlaylistName = 'default';
   }
+
+  // Refuse to mutate a non-disposable engine BEFORE creating any playlist.
+  await assertDisposableEngine(ENGINE_BASE);
 
   const HIL_PL = 'hil_deck_swap_warmth';
   cleanupState.hilPlaylistName = HIL_PL;

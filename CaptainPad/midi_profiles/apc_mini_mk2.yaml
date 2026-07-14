@@ -32,7 +32,11 @@
 #                                      No colour palettes configured → degrades to
 #                                      a PATTERN-only toggle (colour can't be
 #                                      written), LED then tracks pattern alone.
-#   solo/mute/rec_arm/select/drum/note (113-118) → UNASSIGNED, EXPLICITLY DARK (ledOff).
+#   solo (113)                       → PERFORMANCE/EDIT mode switch: summons the
+#                                      guarded enter-confirm / KEEP-RESTORE exit
+#                                      sheet on the iPad (never a blind toggle).
+#                                      LED lit while performance mode is active.
+#   mute/rec_arm/select/drum/note (114-118) → UNASSIGNED, EXPLICITLY DARK (ledOff).
 #   stop_all_clips (119)             → e-stop BLACKOUT toggle; LED lit when blacked out.
 #   shift (122)                      → toggle Deck ↔ Mixer tab (no LED on this key).
 #   faders 1-4 (CC 48-51)            → mixer channel faders 0-3 (the 4th-fader fix).
@@ -160,14 +164,26 @@ contexts:
       action: { kind: autopilotToggle }
       led: { on: 1, off: 0 }
 
-    # ── solo/mute/rec_arm/select/drum/note (113-118) → UNASSIGNED, DARK ────
+    # ── solo (113) → PERFORMANCE-MODE dialog summon ────────────────────────
+    # Operator ruling 2026-07-13: SOLO is the performance/edit mode switch.
+    # The press NEVER blind-toggles the engine — it summons the SAME guarded
+    # flows the header control drives: idle → the "Enter performance mode?"
+    # confirm sheet (with a "PRESS SOLO AGAIN TO GO LIVE" row while an APC is
+    # connected); a SECOND press on that open sheet CONFIRMS (GO LIVE). Active
+    # → the KEEP LIVE STATE / RESTORE PRE-SHOW exit sheet; there a second press
+    # only CLOSES the sheet — one button cannot pick between the two exits, so
+    # the keep-vs-restore choice can only be answered on the iPad. LED lit while performance mode is
+    # ACTIVE (tracks the engine's `performanceMode` broadcast), dark in edit
+    # mode. (Scene-column LEDs are single-colour hardware — velocity 1 = lit.)
+    - id: solo_performance_dialog
+      match: { type: note, channel: 0, notes: [113] }
+      action: { kind: performanceDialog }
+      led: { on: 1, off: 0 }
+
+    # ── mute/rec_arm/select/drum/note (114-118) → UNASSIGNED, DARK ─────────
     # Same explicit-dark rule as the arrows: the APC keeps REC ARM / MUTE / etc.
     # lit from whatever state it latched, so each gets an `ledOff` control that
     # drives a note-off on connect and holds it dark.
-    - id: solo_dark
-      match: { type: note, channel: 0, notes: [113] }
-      action: { kind: ledOff }
-      led: { on: 0, off: 0 }
     - id: mute_dark
       match: { type: note, channel: 0, notes: [114] }
       action: { kind: ledOff }

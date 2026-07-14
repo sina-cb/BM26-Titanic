@@ -87,11 +87,11 @@ function makeApi(): MidiDispatchApi {
     dispatchGlobalEffectSlotAction: vi.fn(ok), setGlobalEffectBlackout: vi.fn(ok),
     setChannelPlaylistEntry: vi.fn(ok),
     setGlobalEffectSlotIntensity: vi.fn(ok), resetGlobalEffectSlotIntensity: vi.fn(ok),
-    setEffectsPage: vi.fn(ok), cycleGlobalEffectSlotMode: vi.fn(ok),
+    setEffectsPage: vi.fn(ok), cycleGlobalEffectSlotMode: vi.fn(ok), setControllerProfile: vi.fn(ok),
     resetAllGlobalEffects: vi.fn(ok), disableAllGlobalEffects: vi.fn(ok),
     setDeckChannelControl: vi.fn(ok), setMixerChannelControl: vi.fn(ok),
     setChannelHue: vi.fn(ok),
-    toggleDeckMixerView: vi.fn(ok), toggleCombinedAutopilot: vi.fn(ok), toggleMasterFade: vi.fn(ok),
+    toggleDeckMixerView: vi.fn(ok), toggleCombinedAutopilot: vi.fn(ok), toggleMasterFade: vi.fn(ok), summonPerformanceDialog: vi.fn(ok),
   };
 }
 
@@ -218,6 +218,41 @@ describe('MidiManager (integration, fake transport)', () => {
     expect(windowCalls).toContainEqual(['ch_a', 1, 6]);
     transport.emit([0x90, 8, 127]); // slot 0 now → entry e1
     expect(api.setChannelPlaylistEntry).toHaveBeenLastCalledWith('mixer', 'ch_a', 'e1');
+  });
+
+  it('auto-follows a UI list tap only; ignores engine-driven / autopilot switches', async () => {
+    // Operator policy 2026-07: the browse window recenters ONLY for a CaptainPad
+    // list UI tap (noteUiPatternSelect). Autopilot / engine-driven / cross-tab
+    // active-entry changes leave the window exactly where it is.
+    const entries = Array.from({ length: 20 }, (_, i) => ({ id: `e${i}` }));
+    let snap: MidiEngineSnapshot = {
+      ...baseSnap,
+      layers: [{ id: 'ch_a', fader: 1, playlist: { entries, activeEntryId: 'e0' } }],
+    };
+    const windowCalls: [string, number, number][] = [];
+    const transport = new FakeTransport(fullEndpoints);
+    const api = makeApi();
+    const manager = new MidiManager({
+      profiles: [profile], transportFactory: () => transport, api,
+      getSnapshot: () => snap, defaultContext: 'mixer',
+      onWindowChange: (id, start, size) => windowCalls.push([id, start, size]),
+    });
+    await manager.start();
+    // On connect the window is established once at the top (cursor 0) around e0.
+    expect(windowCalls).toContainEqual(['ch_a', 0, 6]);
+
+    // ENGINE-DRIVEN switch to e12 (outside [0..5]) — autopilot / cross-tab echo,
+    // NOT a UI tap → must NOT recenter or republish.
+    windowCalls.length = 0;
+    snap = { ...snap, layers: [{ id: 'ch_a', fader: 1, playlist: { entries, activeEntryId: 'e12' } }] };
+    manager.onEngineUpdate();
+    expect(windowCalls).toEqual([]); // window stays put at 0
+
+    // A CaptainPad LIST TAP on e15 (the panel notes it) DOES recenter: 15 - 3 = 12.
+    manager.noteUiPatternSelect('ch_a', 'e15');
+    snap = { ...snap, layers: [{ id: 'ch_a', fader: 1, playlist: { entries, activeEntryId: 'e15' } }] };
+    manager.onEngineUpdate();
+    expect(windowCalls).toContainEqual(['ch_a', 12, 6]); // window [12..17] surrounds e15
   });
 
   it('scene button dispatches a global-effect slot toggle', async () => {
@@ -1282,6 +1317,26 @@ describe('MidiManager — W1 runtime correctness + fail-loud', () => {
     fail.mockResolvedValue({ ok: true });
     transport.emit([0x90, 50, 127]); await flush();
     expect(manager.getStatuses()[0].warning).toBeUndefined();
+  });
+
+  it('a PERFORMANCE_MODE 409 is quiet: soft lastEvent, no fail-streak, no warning', async () => {
+    const transport = new FakeTransport(mftEndpoints);
+    const api = makeApi();
+    // Every dispatch of this action is locked by performance mode.
+    (api.setGlobalEffectBlackout as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false, error: 'performance mode is active', code: 'PERFORMANCE_MODE',
+    });
+    const manager = new MidiManager({
+      profiles: [apcSpeed], transportFactory: () => transport, api,
+      getSnapshot: () => baseSnap, defaultContext: 'default',
+    });
+    await manager.start();
+    // Fire well past the warn threshold — a locked action must NEVER escalate.
+    for (let i = 0; i < 5; i++) { transport.emit([0x90, 50, 127]); await flush(); }
+    const s = manager.getStatuses()[0];
+    expect(s.lastEvent).toMatch(/🔒 blackoutToggle locked \(performance mode\)/);
+    expect(s.warning).toBeUndefined();
+    expect(s.kind).toBe('connected'); // never sticky-red
   });
 
   // ── P2-1: boot race (globalParamValues undefined) is inert, not sticky-red ─

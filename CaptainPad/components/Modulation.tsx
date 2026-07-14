@@ -30,6 +30,7 @@ import {
 } from '@/utils/api';
 import { MidiMapBadge, MidiMapPopover, useEntryBindings } from '@/components/MidiMap';
 import { SectionLabel, Chip, NumberInput } from '@/components/ui/PopoverKit';
+import { usePerfLock } from '@/hooks/usePerformanceMode';
 
 // ── modulationState frame subscription ──────────────────────────────
 //
@@ -180,9 +181,17 @@ function ModulationBadges({
   onClear?: () => void;
 }) {
   const C = usePalette();
-  if (!hasMapping && !showAddHint) return null;
-  const canEdit = editable && !!onEdit;
-  const canClear = hasMapping && editable && !!onClear;
+  // PERFORMANCE MODE: modulation mappings live in the playlist file — editing
+  // or clearing one is a 409-gated route (PUT/PATCH/DELETE .../modulations/:id)
+  // while a show is live. The green ◎ ON pill keeps reading as "live signal";
+  // only the edit/clear affordances go inert. Shared component — gated by
+  // performance-mode state, not by tab.
+  const perfLocked = usePerfLock();
+  // While performance mode is live the empty ◎ add-hint HIDES (an inert pill
+  // wouldn't read as locked); a mapped ◎ ON pill stays (live status), inert.
+  if (!hasMapping && (!showAddHint || perfLocked)) return null;
+  const canEdit = editable && !perfLocked && !!onEdit;
+  const canClear = hasMapping && editable && !perfLocked && !!onClear;
   const bgColor = hasMapping ? MOD_GREEN : 'transparent';
   const bColor = hasMapping ? MOD_GREEN : C.ghostBorder;
   const fgColor = hasMapping ? '#fff' : C.secondary;

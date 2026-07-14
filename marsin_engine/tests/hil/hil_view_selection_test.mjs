@@ -44,6 +44,8 @@
 
 import http from 'http';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 // Slot 1 engine port per .agent/os/multi_agent.md.
 const portIdx = process.argv.indexOf('--port');
 const PORT = portIdx !== -1 && process.argv[portIdx + 1]
@@ -95,6 +97,9 @@ async function main() {
     console.error(`  Start with: node engine.js --pattern test_const --model test_bench --port ${PORT}`);
     return 1;
   }
+
+  // Refuse to mutate a non-disposable engine BEFORE any channel/view write.
+  await assertDisposableEngine(BASE);
 
   // ─── Test 1: enumerate view-selection options ────────────────────
   console.log('[TEST 1] GET /model/view-selection-options');

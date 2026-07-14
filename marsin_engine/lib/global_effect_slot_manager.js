@@ -223,6 +223,14 @@ export class GlobalEffectSlotManager {
     // the VSN1 both follow + write this through the engine so no surface keeps
     // a private page (project "Locked design" §Slot model).
     this.effectsPage = MIN_PAGE;
+    // Engine-owned CONTROLLER PROFILE (effects_v2 PLAY/EDIT split). Selects the
+    // VSN1 device template set + CaptainPad surface:
+    //   'edit' — the full detail-edit surface (default, the assign/tune screen)
+    //   'play' — the big-cell performance surface (a live-show play mode)
+    // Single source of truth: CaptainPad + the VSN1 both follow + write this
+    // through the engine (mirrors effectsPage). Default 'edit' so an old
+    // persisted file with no profile field restores as the edit surface.
+    this.controllerProfile = 'edit';
     // Layout-changed hook (deploy trigger). Default is a no-op so unit tests
     // and the boot path never spawn a child process; the API layer wires the
     // real deploy hook in.
@@ -256,6 +264,29 @@ export class GlobalEffectSlotManager {
   /** The { firstSlotId, lastSlotId } range the current page views. */
   currentPageRange() {
     return pageSlotRange(this.effectsPage);
+  }
+
+  // ── Controller profile (engine = source of truth) ───────────────────
+
+  /** The current controller profile ('edit' | 'play'). */
+  getControllerProfile() {
+    return this.controllerProfile;
+  }
+
+  /**
+   * Set the controller profile. Validates the enum (loud on garbage — Codex
+   * P0, no silent fallback to 'edit'). Switching profiles is NOT a slot
+   * mutation — it never touches bindings, active state, or the layout — so it
+   * does not itself fire a layout deploy; the API layer triggers a page-0
+   * re-deploy after the switch so the device re-flashes to the new surface.
+   * Returns the resolved profile.
+   */
+  setControllerProfile(profile) {
+    if (profile !== 'edit' && profile !== 'play') {
+      throw new Error(`controllerProfile must be 'edit' or 'play' (got ${JSON.stringify(profile)})`);
+    }
+    this.controllerProfile = profile;
+    return this.controllerProfile;
   }
 
   /**
@@ -858,10 +889,18 @@ export class GlobalEffectSlotManager {
    * The hook itself decides whether deploy is enabled + coalesces/serializes.
    *
    * @returns {number[]} the pages emitted for (empty if none / no hook).
+   *
+   * OWN-PAGE RETIREMENT (effects_v2, 2026-07): the VSN1 is a fixed PAGE-0
+   * surface now, so a full re-sync only ever emits PAGE 0 (iff it's populated).
+   * This kills the multi-page boot flash BURST that could wedge the device's
+   * pad scan (docs/42 initial-load wedge) — the pad-wedge trigger becomes
+   * unreachable, though the soft_reset mitigation stays in the deploy hook as a
+   * belt-and-braces guard. Logical pages 1-3 still live in engine state
+   * (effectsPage plumbing); they simply never reach the device.
    */
   requestFullDeploy() {
     if (!this._onLayoutChanged) return [];
-    const pages = this.populatedPages();
+    const pages = this.populatedPages().includes(0) ? [0] : [];
     if (pages.length > 0) this._emitLayoutChanged({ pages });
     return pages;
   }
@@ -896,8 +935,13 @@ export class GlobalEffectSlotManager {
     switch (slot.effectId) {
       case 'strobe':
         return c.strobeActive && c.activeStrobePresetId === slot.presetId;
-      case 'colorWash':
-        return !!c.colorWashConfig.enabled && c.colorWashConfig.preset === slot.presetId;
+      case 'colorWash': {
+        // MULTI-INSTANCE (RCA 2026-07-13): each slot owns its OWN wash entry,
+        // keyed `slot:${slotId}`, so this slot reports its own truth — two
+        // colorWash slots (Ocean / Emergency) no longer share one flag.
+        const w = c.colorWashes.get(`slot:${slot.slotId}`);
+        return !!(w && w.enabled && w.preset === slot.presetId);
+      }
       case 'feedbackTrails':
         return !!c.feedbackTrailsConfig.enabled && c.feedbackTrailsConfig.preset === slot.presetId;
       case 'dropHit':
@@ -1308,15 +1352,24 @@ export class GlobalEffectSlotManager {
 
   _dispatchColorWash({ resolved, action, nowMs }) {
     const p = resolved.params;
+    // Target ONLY this slot's wash (multi-instance). Threading slotId+presetId
+    // into the disable path fixes the latent untargeted-kill bug: the pre-fix
+    // `setColorWash(false, null, ...)` cleared whatever single wash was up, so a
+    // deactivate on slot A (API deactivate, or CaptainPad's pre-swap deactivate)
+    // could kill slot B's wash. For a slotless scheduler dispatch resolved.slotId
+    // is null, so the key falls back to `sched:${presetId}` — it disables only
+    // its own entry.
+    const targetMeta = { nowMs, slotId: resolved.slotId };
     if (action === 'deactivate' || action === 'up') {
-      this.controller.setColorWash(false, null, 0, 'tint', { nowMs });
+      this.controller.setColorWash(false, resolved.presetId, 0, 'tint', targetMeta);
       return;
     }
     if (resolved.behavior === 'toggle') {
-      const sameWash = this.controller.colorWashConfig.enabled &&
-        this.controller.colorWashConfig.preset === resolved.presetId;
+      const key = resolved.slotId != null ? `slot:${resolved.slotId}` : `sched:${resolved.presetId}`;
+      const w = this.controller.colorWashes.get(key);
+      const sameWash = !!(w && w.enabled && w.preset === resolved.presetId);
       if (sameWash && (action === 'toggle' || action === undefined)) {
-        this.controller.setColorWash(false, null, 0, 'tint', { nowMs });
+        this.controller.setColorWash(false, resolved.presetId, 0, 'tint', targetMeta);
       } else {
         this.controller.setColorWash(true, resolved.presetId, p.amount, p.mode, {
           slotId: resolved.slotId,

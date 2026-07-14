@@ -82,6 +82,30 @@ test('normalizeDeviceBlock: array/non-object THROWS', () => {
   assert.throws(() => normalizeDeviceBlock([1, 2], 'C'), /must be a mapping/);
 });
 
+// ── MAC is never persisted (public repo — gitleaks bm26-mac-address) ────────
+
+test('normalizeDeviceBlock: a raw block WITH a mac is normalized WITHOUT one', () => {
+  const d = normalizeDeviceBlock({ ...IDENTITY }, 'C');
+  assert.equal('mac' in d, false);
+  // Sanity: the rest of the identity still made it through.
+  assert.equal(d.deviceName, 'Titanic-201');
+  assert.equal(d.boardId, 'angio4-old');
+});
+
+test('normalizeDeviceBlock: legacy on-disk block with a mac silently drops it on reload (migration)', () => {
+  // Simulates loading a pre-existing controllers.yaml written before this
+  // rule existed: it still has a `mac` key on disk. Re-normalizing it (as
+  // createControllerRegistry does at load, and as a save does on write) must
+  // not carry the mac forward.
+  const legacyOnDisk = { vendor: 'marsinled', controllerId: 'titanic_201', mac: 'AA:BB:CC:DD:02:01' };
+  const reg = createControllerRegistry(ledControllerTree({ device: legacyOnDisk }));
+  const c = reg.controllers[0];
+  assert.equal('mac' in c.device, false);
+  // Re-serializing (what a save does) carries no mac either.
+  const resaved = JSON.parse(JSON.stringify(c.device));
+  assert.equal('mac' in resaved, false);
+});
+
 // ── createControllerRegistry load-time validation ────────────────────────────
 
 test('createControllerRegistry: LED controller with a valid device loads bound', () => {
@@ -120,6 +144,15 @@ test('bindControllerDevice binds an LED controller and preserves prior push', ()
   bindControllerDevice(c, { vendor: 'marsinled', controllerId: 'titanic_201', deviceName: 'Renamed' });
   assert.equal(c.device.deviceName, 'Renamed');
   assert.equal(c.device.lastPush.at, 't0'); // provenance preserved across a re-bind
+});
+
+test('bindControllerDevice: an identity with a mac produces a device block with NO mac', () => {
+  const reg = createControllerRegistry(ledControllerTree());
+  const c = reg.controllers[0];
+  const device = bindControllerDevice(c, IDENTITY); // IDENTITY includes mac: 'AA:BB:CC:DD:02:01'
+  assert.equal('mac' in device, false);
+  assert.equal('mac' in c.device, false);
+  assert.equal(c.device.controllerId, 'titanic_201'); // rest of the identity persisted fine
 });
 
 test('bindControllerDevice on a DMX controller THROWS', () => {
@@ -164,6 +197,7 @@ test('addLedControllerFromDevice creates N ports, RGBW, and the binding', () => 
   assert.equal(c.led.order, 'RGBW');
   assert.equal(c.device.vendor, LED_DEVICE_VENDOR_MARSINLED);
   assert.equal(reg.controllers.length, 1);
+  assert.equal('mac' in c.device, false); // IDENTITY carries a mac — must not persist
 });
 
 // ── Persistence round-trip: a bound registry re-loads cleanly ────────────────
@@ -184,4 +218,9 @@ test('a bound controller survives a save/load round-trip', () => {
   assert.equal(rc.device.controllerId, 'titanic_201');
   assert.equal(rc.device.lastPush.configHash, 'h');
   assert.equal(isBoundLedController(rc), true);
+  // IDENTITY (bound above) carries a mac — the serialized/reloaded YAML-shaped
+  // object must never carry it (gitleaks bm26-mac-address on this public repo).
+  assert.equal('mac' in c.device, false);
+  assert.equal(JSON.stringify(serialized).includes('mac'), false);
+  assert.equal('mac' in rc.device, false);
 });

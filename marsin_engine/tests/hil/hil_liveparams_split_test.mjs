@@ -37,6 +37,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const ENGINE_BASE = 'http://127.0.0.1:6968';
 // Post-topic-split (May 2026), sharedParams is on /ws/params and
 // liveParams is on /ws/signals. Subscribe to both so the assertions
@@ -123,6 +125,9 @@ async function main() {
     console.error('\u2717 Cannot reach engine at ' + ENGINE_BASE);
     return 1;
   }
+
+  // Refuse to mutate a non-disposable engine BEFORE any /param-center write.
+  await assertDisposableEngine(ENGINE_BASE);
 
   // Audio analyser running? If not, skip live-rate assertions with a
   // soft warn — most contributors run with mic off.

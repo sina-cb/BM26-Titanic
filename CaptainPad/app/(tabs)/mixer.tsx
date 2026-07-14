@@ -34,6 +34,8 @@ import { TimerWheel } from '@/components/ui/TimerWheel';
 import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { SnapshotBar } from '@/components/SnapshotBar';
+import { PerformanceModeControl } from '@/components/PerformanceModeControl';
+import { usePerformanceMode, usePerfLock } from '@/hooks/usePerformanceMode';
 import { MasterFadeGroup } from '@/components/MasterFadeGroup';
 import { useMasterFade } from '@/hooks/use_master_fade';
 import { setChannelColor, setChannelHue } from '@/utils/channelExtrasApi';
@@ -394,6 +396,11 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showTransPicker, setShowTransPicker] = useState(false);
   const [showViewPicker, setShowViewPicker] = useState(false);
+  // PERFORMANCE MODE: structural channel edits (reorder, delete, view
+  // re-target) are 409-gated engine routes while a show is live. Runtime
+  // controls (fader, blend mode, lock, pin, mute/solo/bump, params) stay
+  // fully live — only the structural affordances grey.
+  const perfLocked = usePerfLock();
   // The MIDI-focused mixer layer (module state shared with the APC track
   // buttons + the MFT). This strip is focused when its 0-based layer index
   // matches. Tapping FOCUS writes the same module state, so touch and the
@@ -684,28 +691,29 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
               by the channel lock. */}
           {onMoveUp && (
             <TouchableOpacity
-              style={[styles.titleBtn, (!canMoveUp || activationsLocked) && { opacity: 0.3 }]}
+              style={[styles.titleBtn, (!canMoveUp || activationsLocked || perfLocked) && { opacity: 0.3 }]}
               hitSlop={ICON_BTN_HIT_SLOP}
               // Reorder changes the composite order of the live mix — gated
-              // under the soft PLAN lock with the other channel edits.
-              disabled={!canMoveUp || activationsLocked}
+              // under the soft PLAN lock AND performance mode (the engine
+              // 409s /mixer/channels/reorder while a show is live).
+              disabled={!canMoveUp || activationsLocked || perfLocked}
               onPress={() => onMoveUp(channel.id)}
               accessibilityLabel="Move channel up (toward top of mix)"
               accessibilityRole="button"
-              accessibilityState={{ disabled: !canMoveUp || !!activationsLocked }}
+              accessibilityState={{ disabled: !canMoveUp || !!activationsLocked || perfLocked }}
             >
               <IconSymbol name="chevron.up" size={14} color={C.secondary} />
             </TouchableOpacity>
           )}
           {onMoveDown && (
             <TouchableOpacity
-              style={[styles.titleBtn, (!canMoveDown || activationsLocked) && { opacity: 0.3 }]}
+              style={[styles.titleBtn, (!canMoveDown || activationsLocked || perfLocked) && { opacity: 0.3 }]}
               hitSlop={ICON_BTN_HIT_SLOP}
-              disabled={!canMoveDown || activationsLocked}
+              disabled={!canMoveDown || activationsLocked || perfLocked}
               onPress={() => onMoveDown(channel.id)}
               accessibilityLabel="Move channel down (toward bottom of mix)"
               accessibilityRole="button"
-              accessibilityState={{ disabled: !canMoveDown || !!activationsLocked }}
+              accessibilityState={{ disabled: !canMoveDown || !!activationsLocked || perfLocked }}
             >
               <IconSymbol name="chevron.down" size={14} color={C.secondary} />
             </TouchableOpacity>
@@ -790,17 +798,26 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
                 <>
                   <View style={styles.actionsMenuDivider} />
                   <TouchableOpacity
-                    style={[styles.actionsMenuRow, styles.actionsMenuRowDestructive, isOnlyChannel && { opacity: 0.4 }]}
-                    onPress={() => { if (isOnlyChannel) return; onDelete(channel.id); setShowActionsMenu(false); }}
-                    disabled={!!isOnlyChannel}
-                    accessibilityLabel={isOnlyChannel ? 'Delete channel (unavailable — at least one channel must remain)' : 'Delete channel'}
+                    style={[styles.actionsMenuRow, styles.actionsMenuRowDestructive, (isOnlyChannel || perfLocked) && { opacity: 0.4 }]}
+                    onPress={() => { if (isOnlyChannel || perfLocked) return; onDelete(channel.id); setShowActionsMenu(false); }}
+                    // PERFORMANCE MODE: deleting a channel is a structural
+                    // change (engine 409s DELETE /mixer/channels/:id while a
+                    // show is live). Greyed with a hint, like the last-channel
+                    // case, so the operator sees WHY it's unavailable.
+                    disabled={!!isOnlyChannel || perfLocked}
+                    accessibilityLabel={
+                      perfLocked ? 'Delete channel (locked — performance mode)'
+                        : isOnlyChannel ? 'Delete channel (unavailable — at least one channel must remain)'
+                          : 'Delete channel'}
                     accessibilityRole="button"
-                    accessibilityState={{ disabled: !!isOnlyChannel }}
+                    accessibilityState={{ disabled: !!isOnlyChannel || perfLocked }}
                   >
                     <IconSymbol name="trash" size={16} color={C.error} />
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.actionsMenuLabel, { color: C.error }]}>Delete channel</Text>
-                      {isOnlyChannel ? (
+                      {perfLocked ? (
+                        <Text style={styles.actionsMenuHint}>🔒 Locked — performance mode</Text>
+                      ) : isOnlyChannel ? (
                         <Text style={styles.actionsMenuHint}>At least one channel must remain</Text>
                       ) : null}
                     </View>
@@ -1066,11 +1083,13 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
         {!locked && onViewSelectionChange && (
           <>
             <TouchableOpacity
-              style={[styles.toggleBtn, viewSel.type !== 'all' && { backgroundColor: C.primary, borderColor: C.primary }, activationsLocked && { opacity: 0.45 }]}
-              // Soft PLAN lock: view selection re-targets which pixels this
-              // channel drives — a live-mix change.
-              disabled={activationsLocked}
-              accessibilityState={{ disabled: !!activationsLocked }}
+              style={[styles.toggleBtn, viewSel.type !== 'all' && { backgroundColor: C.primary, borderColor: C.primary }, (activationsLocked || perfLocked) && { opacity: 0.45 }]}
+              // Soft PLAN lock + PERFORMANCE MODE: view selection re-targets
+              // which pixels this channel drives — a structural change (the
+              // engine 409s the viewSelection PATCH field while a show is
+              // live; sibling fields like fader/mode stay allowed).
+              disabled={activationsLocked || perfLocked}
+              accessibilityState={{ disabled: !!activationsLocked || perfLocked }}
               onPress={() => setShowViewPicker(true)}>
               {/* Round8 #4: the "VIEW:" prefix pushed "ALL" off the end of the
                   narrow toggle ("VIEW: A…"). Drop the prefix and show just the
@@ -1262,6 +1281,13 @@ export default function MixerScreen() {
   // control touch fires the operator lease) clears the gate and re-enables them.
   const { planLocked } = useEngineLock();
   const activationsLocked = planLocked && !leaseHeld;
+  // PERFORMANCE MODE — the engine's live-show structural lock. The engine 409s
+  // every structural route while active; this flag is the UI mirror used to
+  // grey the STRUCTURAL affordances (channel add, snapshots) so the operator
+  // sees they're locked before the round-trip. Runtime controls (faders, solo,
+  // master) stay live — those are NOT gated by the engine.
+  const performanceActive = usePerformanceMode().active;
+  const structuralLocked = activationsLocked || performanceActive;
   // ── Entering the mixer while a plan forces the deck (CP-VIEWSWITCH) ─────
   // `forcingDeckView` (engine, on timelineState) = plan active AND output
   // pinned to the deck under plan control. The old behaviour popped a blue
@@ -2522,7 +2548,7 @@ export default function MixerScreen() {
               narrow header uncrowded (matches the model chip's behaviour).
               RECALL/CAPTURE rebuild the live mix, so they're gated under the
               soft PLAN lock with the rest of the mutating controls. */}
-          {!isPortrait ? <SnapshotBar disabled={activationsLocked} /> : null}
+          {!isPortrait ? <SnapshotBar disabled={structuralLocked} /> : null}
           {/* Plan-lock / takeover status moved OUT of this row (operator
               request 2026-07-02: the header must fit ONE row on an iPad).
               The inline "PLAN LIVE · CONTROLS LOCKED" chip, the "TOOK OVER ·
@@ -2545,6 +2571,11 @@ export default function MixerScreen() {
           columnGap: isPortrait ? 6 : 12,
           rowGap: 8,
         }}>
+          {/* PERFORMANCE MODE — live-show structural lock. Same shared control
+              the deck header mounts, first in the right cluster (operator ruling:
+              the lock affordance leads). Idle chip → confirm → GO LIVE; active
+              badge → exit sheet (KEEP / RESTORE). */}
+          <PerformanceModeControl isPortrait={isPortrait} />
           {/* CLEAR SOLO — only shown while a server-authoritative solo is
               engaged. Sends WS clearSolo (all) + REST mirror; the broadcast's
               empty soloedChannelIds[] reconciles every strip back to lit. */}
@@ -2611,19 +2642,20 @@ export default function MixerScreen() {
               operator visual feedback while the POST is in flight, so they
               don't mash and queue 5 of them. */}
           <TouchableOpacity
-            style={[styles.addBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }, activationsLocked && { opacity: 0.45 }]}
+            style={[styles.addBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }, structuralLocked && { opacity: 0.45 }]}
             onPress={() => handleAddChannelWithPlaylist('default')}
-            // Soft PLAN lock: adding a channel changes the live mix.
-            disabled={addBusy || activationsLocked}
-            accessibilityState={{ disabled: addBusy || activationsLocked }}
+            // Soft PLAN lock + performance mode: adding a channel is a
+            // structural change (engine 409s it while a show is live).
+            disabled={addBusy || structuralLocked}
+            accessibilityState={{ disabled: addBusy || structuralLocked }}
           >
             <Text style={[styles.labelCaps, {color: '#FFF'}, isPortrait && { fontSize: 9 }]}>{addBusy ? 'ADDING…' : '+ DEFAULT'}</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }, activationsLocked && { opacity: 0.45 }]}
+            style={[styles.addBtn, { backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }, structuralLocked && { opacity: 0.45 }]}
             onPress={openAddChannelPicker}
-            disabled={addBusy || activationsLocked}
-            accessibilityState={{ disabled: addBusy || activationsLocked }}
+            disabled={addBusy || structuralLocked}
+            accessibilityState={{ disabled: addBusy || structuralLocked }}
           >
             <Text style={[styles.labelCaps, {color: C.primary}, isPortrait && { fontSize: 9 }]} numberOfLines={1}>{isPortrait ? '+ PLAYLIST' : '+ FROM PLAYLIST…'}</Text>
           </TouchableOpacity>
@@ -3009,12 +3041,18 @@ export default function MixerScreen() {
               </Text>
               <View style={{ gap: 8 }}>
                 <TouchableOpacity
-                  style={[styles.unlockPromptBtn, styles.unlockPromptSave]}
+                  style={[styles.unlockPromptBtn, styles.unlockPromptSave, performanceActive && { opacity: 0.45 }]}
                   onPress={() => resolveUnlockPrompt('save')}
-                  disabled={!!unlockPrompt?.pending}
+                  // PERFORMANCE MODE: the SAVE path is an explicit playlist
+                  // capture (engine 409s /playlist/capture while a show is
+                  // live). Discard + cancel stay available.
+                  disabled={!!unlockPrompt?.pending || performanceActive}
+                  accessibilityState={{ disabled: !!unlockPrompt?.pending || performanceActive }}
                 >
                   <Text style={[styles.unlockPromptBtnText, { color: C.primary }]}>SAVE TO PLAYLIST</Text>
-                  <Text style={styles.unlockPromptHint}>Capture current params into the active entry</Text>
+                  <Text style={styles.unlockPromptHint}>
+                    {performanceActive ? '🔒 Locked — performance mode' : 'Capture current params into the active entry'}
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.unlockPromptBtn, styles.unlockPromptDiscard]}

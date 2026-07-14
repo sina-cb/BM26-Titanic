@@ -10,10 +10,16 @@
 // pattern on the other.
 //
 // The three requirements pinned here:
-//   1. Loading/tweaking NEVER writes parameter state into a playlist file —
-//      playlist files are shared presets. Entry `defaults` change only via
-//      the EXPLICIT capture routes (POST /deck/playlist/capture,
-//      POST /mixer/channels/:id/playlist/capture).
+//   1. For MIXER/OVERLAY channels, loading/tweaking NEVER writes parameter
+//      state into a playlist file — playlist files are shared presets. Their
+//      entry `defaults` change only via the EXPLICIT capture routes
+//      (POST /deck/playlist/capture, POST /mixer/channels/:id/playlist/capture).
+//      NARROWED (2026-07 auto-save wave): the DECK channel is the sole
+//      exception — it auto-captures the operator's live tuning into the
+//      OUTGOING entry on an entry SWITCH (scoped to the deck at the top of
+//      loadPlaylistEntry, gated on the auto-save toggle) so a night of deck
+//      tuning survives a pattern change. Mixer/overlay isolation is unchanged:
+//      a sibling on the same playlist can never trigger that writeback.
 //   2. Parameters are CHANNEL-LOCAL: each channel keeps its own live values
 //      (own WASM handle + own `localControls`) for its active pattern.
 //   3. Same playlist on two channels: a param write on channel A must not

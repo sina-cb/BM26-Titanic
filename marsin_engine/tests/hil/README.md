@@ -3,9 +3,39 @@
 End-to-end tests that exercise the **live MarsinEngine** through its REST + WebSocket API.
 These tests use real WASM compilation, actual blend scripts, and live pixel output — no mocks.
 
+## ⚠️ The `test_bench` prerequisite is MANDATORY, and enforced
+
+Most HIL tests **MUTATE** engine state — they create playlists, add / patch /
+delete mixer channels, write deck overlays + slots, save snapshots, and drive
+the param center. They connect to whatever engine already answers on their
+port (default `6968`); they do **not** spawn an isolated engine, and so they
+**cannot** redirect writes via `MARSIN_STATE_DIR` / `MARSIN_PLAYLISTS_DIR` the
+way the spawned-engine unit tests do.
+
+Point one of them at a **real scene** (e.g. a live `studiodj` engine on `:6968`)
+and its writes leak straight into the tracked `states/` + `simulation/scenes/`
+trees. This actually happened once: a spurious `hil_autocycle_test` playlist
+landed in `simulation/scenes/studiodj/playlists/`.
+
+To make that impossible, every state-mutating HIL test calls the shared guard
+**`hil_guard.mjs` → `assertDisposableEngine(engineBase)`** as a pre-flight,
+*after* its engine-reachability/boot check and *before* its first mutation:
+
+- It does `GET <engineBase>/status` and, unless `activeModel === 'test_bench'`,
+  prints a loud `FATAL` naming the offending model and **`process.exit(2)`**
+  BEFORE writing anything.
+- An unreachable engine also fails loudly (exit 2) — never a silent pass.
+- No fallback (codex P0): a wrong or missing target aborts rather than quietly
+  corrupting a real scene.
+
+The one genuinely **read-only** test — `hil_audio_realtime_test.mjs` (it spawns
+the Audio Companion and only reads diag frames; it never touches the engine) —
+does not carry the guard.
+
 ## Prerequisites
 
-1. Engine running with `test_bench` model:
+1. Engine running with `test_bench` model (the guard **enforces** this — any
+   other model aborts the test at exit 2 before it can mutate state):
    ```bash
    cd marsin_engine
    node engine.js --pattern test_const --model test_bench

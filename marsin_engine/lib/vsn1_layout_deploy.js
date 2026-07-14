@@ -164,9 +164,13 @@ export function createLayoutDeployHook({
     if (debounceTimer) clearTimeoutFn(debounceTimer);
     debounceTimer = setTimeoutFn(() => {
       debounceTimer = null;
-      // Fire-and-report: the flush loop owns its own error reporting (status +
-      // broadcast). A rejection here must not crash the timer callback.
-      runFlush().catch(() => {});
+      // Fire-and-report: the flush loop owns its own status/broadcast reporting
+      // AND now logs each page failure loudly (see runFlush). A rejection here
+      // must not crash the timer callback, but it must not be silently swallowed
+      // either — log it so a debounced auto-deploy failure is visible.
+      runFlush().catch((e) => {
+        console.error(`[VSN1] debounced layout deploy failed: ${e.message}`);
+      });
     }, quietMs);
   }
 
@@ -225,9 +229,25 @@ export function createLayoutDeployHook({
           } else {
             status.lastResult = 'error';
             status.lastError = result.stderr || `deploy CLI exited ${result.code}`;
+            // Re-queue the FAILED page so the next hook event retries it. The
+            // old code deleted it above BEFORE the attempt and never re-added it
+            // on failure — a page that overflowed the LCD budget was stranded
+            // out of the queue forever (live evidence: page 1 pending never
+            // cleared). Re-adding on failure keeps exactly one retry per future
+            // change, NOT a busy retry loop (we still `break` the drain).
+            pendingPages.add(page);
+            status.pendingPages = [...pendingPages].sort((a, b) => a - b);
+            // LOUD failure surfacing (Codex P0 fail-loud): the old flush path
+            // only set status.lastError with no console output, so a failed
+            // flash was triple-silenced (debounce .catch(()=>{}), no api_server
+            // log for flush failures). Print the page + the CLI stderr so the
+            // operator learns WHY a page didn't flash.
+            console.error(
+              `[VSN1] page ${page} deploy FAILED: ${status.lastError}`,
+            );
             if (broadcast) broadcast({ type: 'vsn1LayoutDeploy', ...status });
             // Fail loud — no silent retry loop (Codex P0). Stop the drain; the
-            // remaining pages stay pending for the operator's next change.
+            // failed + remaining pages stay pending for the operator's next change.
             firstError = new Error(`VSN1 layout deploy failed (page ${page}): ${status.lastError}`);
             break;
           }
@@ -298,13 +318,37 @@ export function createLayoutDeployHook({
       return { deployed: false, reason: 'disabled', layoutFile, pages };
     }
 
+    // PAGE-0-ONLY CLAMP (own-page retirement, effects_v2 2026-07): the device
+    // is a fixed page-0 surface. A layout change on an INVISIBLE page (1-3)
+    // flashes nothing the operator can see AND a multi-page flash burst is what
+    // wedged the pad scan — so we drop pages 1-3 entirely and only ever queue
+    // page 0. The engine still tracks logical pages 1-3 (effectsPage plumbing);
+    // they just never reach the device. Pass --allow-nonzero-page to the CLI by
+    // hand for deliberate manual recovery of a stale page.
+    const clampedPages = pages.filter((p) => p === 0);
+    const droppedPages = pages.filter((p) => p !== 0);
+    if (droppedPages.length > 0) {
+      console.log(
+        `🎛 VSN1 deploy: page(s) ${droppedPages.join(', ')} are invisible on the fixed ` +
+          `page-0 device (own-page retirement) — not flashed. ` +
+          `${clampedPages.length ? 'Page 0 queued.' : 'Nothing to flash.'}`,
+      );
+    }
+
     // Coalesce the affected pages and (re)arm the debounce. The actual CLI
     // spawn happens later, serialized, in runFlush — never inline here, so a
     // burst of hook() calls can't launch overlapping COM12 deploys.
-    for (const p of pages) pendingPages.add(p);
+    for (const p of clampedPages) pendingPages.add(p);
     status.pendingPages = [...pendingPages].sort((a, b) => a - b);
     if (pendingPages.size > 0) armDebounce();
-    return { deployed: false, reason: 'debounced', layoutFile, pages, pendingPages: status.pendingPages };
+    return {
+      deployed: false,
+      reason: clampedPages.length ? 'debounced' : 'no-visible-page',
+      layoutFile,
+      pages: clampedPages,
+      droppedPages,
+      pendingPages: status.pendingPages,
+    };
   }
 
   /**

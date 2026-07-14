@@ -15,6 +15,7 @@ import {
 import { usePalette } from '@/hooks/use-theme';
 import { engineEvents } from '@/utils/engineEvents';
 import { armMidiLearn, midiControlConflict, midiControlLearnedConflict } from '@/hooks/useMidiControl';
+import { usePerfLock } from '@/hooks/usePerformanceMode';
 import { describeControlRef, MidiControlRef } from '@/utils/midi';
 import {
   clampToRangeLimit, deleteMidiMapping, fetchPlaylist, MidiMapping,
@@ -96,14 +97,23 @@ export function MidiMapBadge({
   onEdit?: () => void;
 }) {
   const C = usePalette();
+  // PERFORMANCE MODE: MIDI mappings live in the playlist file — creating or
+  // editing one is a 409-gated route (PUT/PATCH .../midi-mappings/:id) while a
+  // show is live. The violet mapped pill keeps reading as "mapped"; the edit
+  // affordance goes inert. Shared component — gated by performance-mode state.
+  const perfLocked = usePerfLock();
   const hasMapping = !!mapping;
-  const canEdit = editable && !!onEdit;
+  const effEditable = editable && !perfLocked;
+  const canEdit = effEditable && !!onEdit;
   const label = hasMapping ? describeControlRef(mapping!.control) : '⊞ MIDI';
   const bg = hasMapping ? MIDI_VIOLET : 'transparent';
   const border = hasMapping ? MIDI_VIOLET : C.ghostBorder;
   const fg = hasMapping ? '#fff' : C.secondary;
-  // On a read-only surface (mixer) with no mapping there's nothing to show.
-  if (!hasMapping && !editable) return null;
+  // On a read-only surface (mixer, or ANY surface while performance mode is
+  // live) with no mapping there's nothing to show — hide the add affordance
+  // rather than render an inert pill that doesn't read as locked. A MAPPED
+  // pill stays visible (it's live status), just not editable.
+  if (!hasMapping && !effEditable) return null;
   return (
     <TouchableOpacity
       onPress={canEdit ? onEdit : undefined}

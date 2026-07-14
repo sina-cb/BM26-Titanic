@@ -29,7 +29,7 @@ import {
   createDispatcher, MidiDispatchApi, MidiDispatcher, MidiApiResult, GlobalEffectSlotBehavior,
 } from './dispatch';
 import { projectLeds, LedState, MidiProjectionState } from './led_projector';
-import { projectVsn1Feedback, Vsn1FeedbackDiff, vsn1WelcomeMessage, vsn1SelectCueMessage, vsn1ViewModeMessage, decodeDevicePageCc, isDeviceHello, FB_ACTIVE_CH } from './vsn1_feedback';
+import { projectVsn1Feedback, Vsn1FeedbackDiff, vsn1WelcomeMessage, vsn1SelectCueMessage, vsn1ViewModeMessage, isDeviceHello, FB_ACTIVE_CH } from './vsn1_feedback';
 import { Vsn1ViewMode, viewModeCcValue } from './vsn1_view_mode';
 import { clampUnit } from './unit_clamp';
 import {
@@ -38,6 +38,7 @@ import {
 } from './learn';
 import { decodeBankChange, isClassicRelativeCode } from './mft/messages';
 import { ColorValues, Encoders, MidiChannels } from './mft/constants';
+import { recenterWindowStart } from './window_slot';
 import { buildConnectConfig } from './mft/config';
 import { TickAccelerator, MAX_WINDOW_STEP } from './accel';
 
@@ -185,6 +186,12 @@ export interface MidiEngineSnapshot {
    *  it. Threaded so the MIDI feedback path can report the current page index to
    *  the device Lua. Optional/undefined = page 0 until the engine threads it. */
   effectsPage?: number;
+  /** VSN1 CONTROLLER PROFILE ('edit' | 'play'), the engine's single source of
+   *  truth (GET/PATCH /global-effects/profile, WS-broadcast `controllerProfile`).
+   *  The VSN1 sb_2 toggle reads it here to compute the OPPOSITE to PATCH (no
+   *  optimistic flip — the engine broadcast updates this). Optional/undefined =
+   *  'edit' until the engine threads it. */
+  controllerProfile?: 'edit' | 'play';
   /** Curated colour palette pairs (hues 0..1), for the colour-pair pads. */
   colorPalettes: { c1: number; c2: number }[];
   /** The FOCUSED channel — whose active pattern's MIDI-learned bindings the
@@ -215,6 +222,11 @@ export interface MidiEngineSnapshot {
    *  `colorAutopilot` WS broadcasts. Optional/undefined = off (a pre-field
    *  snapshot leaves the LED dark rather than lit from a half-truth). */
   combinedAutopilotActive?: boolean;
+  /** PERFORMANCE MODE (live-show structural lock) active? Drives the APC solo
+   *  button's LED (lit while a show is live). The hook threads it from the
+   *  engine's `performanceMode` WS broadcast. Optional/undefined = inactive
+   *  (a pre-field snapshot leaves the LED dark). */
+  performanceModeActive?: boolean;
 }
 
 /** Empty default for the `syncOwnedKeys` snapshot fact — used wherever the
@@ -301,7 +313,46 @@ export interface MidiManagerOptions {
    *  The hook updates focus state + rebuilds the snapshot's `focused`. */
   onFocusChange?: (layer: number) => void;
   onStatusChange?: (statuses: ControllerStatus[]) => void;
+  /** Monotonic clock (ms) for the VSN1 sb_2 anti-spurious-flip guards (stale
+   *  event / debounce / in-flight / self-echo). Web MIDI event timestamps share
+   *  performance.now()'s clock, so the default reads that; injectable so tests
+   *  drive the guards deterministically. */
+  now?: () => number;
 }
+
+/** Default monotonic clock for the sb_2 guards — performance.now() when present
+ *  (the SAME DOMHighResTimeStamp clock Web MIDI event timestamps ride), else
+ *  Date.now() (node/test fallback). */
+function defaultNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+// ── VSN1 sb_2 (controller-profile flip) anti-spurious-flip guards ────────────
+// The ONLY writer of the controller profile in CaptainPad is sb_2. A live bug
+// flips edit↔play with no operator action; these constants bound the four guard
+// windows that reject the spurious sources (stale queued Web MIDI replays, a
+// too-fast repeat, a still-in-flight PATCH, and a MIDI loopback of our own
+// page-2 side-LED feedback frame). See handleVsn1SmallButton.
+/** Base note of the four small panel buttons sb_0..sb_3 (notes 41..44). */
+const VSN1_SB_NOTE_BASE = 41;
+/** Drop an sb_2 event whose timestamp is older than this vs the current clock —
+ *  a stale queued Web MIDI event (Chrome buffers input for a backgrounded tab
+ *  and replays it on refocus). A missing/zero timestamp is treated as FRESH. */
+const SB2_STALE_MS = 2000;
+/** Minimum time between two ACCEPTED sb_2 presses — swallows a mechanical
+ *  double-tap / contact bounce after the in-flight PATCH has already settled. */
+const SB2_DEBOUNCE_MS = 400;
+/** Safety cap on the in-flight guard: if the WS `controllerProfile` echo never
+ *  lands (engine wedged), the in-flight lock self-clears after this so sb_2 is
+ *  never permanently dead. Normal clears come from the echo or a failed PATCH. */
+const SB2_INFLIGHT_TIMEOUT_MS = 3000;
+/** Self-echo window: an inbound sb_2 note (43) within this long of our OWN
+ *  outbound page-2 side-LED feedback frame (also Note On note 43) is a MIDI
+ *  loopback of our feedback, not a press — drop it. Local MIDI loops back in
+ *  ~single-digit ms, so this is generous without shadowing a real press. */
+const SB2_SELF_ECHO_MS = 50;
 
 /** Playlist browse-window size (pads), per Sina's spec. */
 export const WINDOW_SIZE = 6;
@@ -318,6 +369,19 @@ const DEFAULT_RECONNECT_DEBOUNCE_MS = 50;
  *  LED-send). One transient 404 shouldn't nag; a dead engine / dead strip
  *  should. Non-sticky: the next success clears it. */
 const FAILURE_WARN_THRESHOLD = 3;
+
+// Page-follow retirement (2026-07, party wave) — COMPLETED. CaptainPad used to
+// FOLLOW the VSN1's firmware-native side-button page changes: it intercepted the
+// device page CC (controller 40) and PATCHed the engine's `effectsPage` so
+// app + engine converged. That device→app follow path is now DELETED: deploys
+// are page-0-only, the device no longer pages natively, and the CaptainPad
+// effects strip renders page 0 ONLY (`SHOW_EFFECT_PAGES=false` in
+// global_effect_macros_logic.ts). The engine keeps `effectsPage` as a LOGICAL
+// page, and CaptainPad KEEPS its effectsPage subscription + feedback plumbing —
+// only the device→app PATCH path is gone. The DEVICE HELLO handler (a VM-restart
+// re-sync ping) is independent and stays live. The pure `decodeDevicePageCc`
+// decoder still lives in vsn1_feedback.ts with its own unit tests; the manager
+// simply no longer consumes it.
 
 /** Real-timer implementation for the reconnect debounce (used when the caller
  *  injects none). */
@@ -517,10 +581,55 @@ class ControllerRuntime {
    *  nothing behavioral reads this field. Echoed to the device on every full
    *  re-sync so it survives the VM wipe. */
   private vsn1ViewMode: Vsn1ViewMode = 'effect';
+  /** VSN1 sb_2 (controller-profile flip) anti-spurious-flip state. sb_2 is the
+   *  ONLY writer of the profile in CaptainPad; a live bug flips edit↔play with no
+   *  operator touch. These fields back the four guards in handleVsn1SmallButton
+   *  (stale / debounce / in-flight / self-echo). VSN1 profile only; inert for
+   *  every other driver + button. */
+  /** Clock (ms) of the last ACCEPTED sb_2 press (0 = none yet) — debounce base. */
+  private sb2LastAcceptedMs = 0;
+  /** True while an sb_2 profile PATCH is in flight / awaiting the WS echo. Set on
+   *  accept, cleared when the snapshot's controllerProfile reaches the target
+   *  (echo landed, in projectAndSend), on a failed PATCH, or after the timeout. */
+  private sb2PatchInFlight = false;
+  /** Clock (ms) the in-flight lock was armed — bounds it by SB2_INFLIGHT_TIMEOUT_MS. */
+  private sb2InFlightSince = 0;
+  /** The profile the in-flight PATCH is driving toward — the echo-clear compares
+   *  the snapshot against THIS (null when no PATCH is pending). */
+  private sb2PendingTarget: 'edit' | 'play' | null = null;
+  /** note → clock (ms) of the last OUTBOUND Note On (velocity > 0) we sent the
+   *  device. The self-echo guard checks the sb_2 note (43) against this to reject
+   *  a MIDI loopback of our own page-2 side-LED feedback frame. Bounded (keyed by
+   *  the ~128 note numbers). */
+  private readonly recentOutboundNotes = new Map<number, number>();
   private unsubs: (() => void)[] = [];
   private context: string;
   /** Per-layer playlist browse-window top index (controller-local state). */
   private readonly windowCursor = new Map<number, number>();
+  /** Per-layer last-seen ACTIVE entry ID — drives the browse-window auto-follow.
+   *  When a layer's active entry changes to a DIFFERENT entry (a UI tap,
+   *  autopilot, or a cross-tab switch), the window re-centres around it so the
+   *  pads (and the published blue UI highlight) always map around what's
+   *  playing. Keyed by entry ID — NOT index — deliberately: a playlist refresh
+   *  that swaps the entries array (or a momentary null between selections) makes
+   *  the active INDEX flicker while the active ID is unchanged, and an
+   *  index-keyed baseline would read that flicker as a "change" and yank a manual
+   *  pad-scroll browse back onto what's playing (the 2026-07 desync). An
+   *  unresolved active (null / not-in-list) is NEVER recorded as the baseline —
+   *  the window holds and the last known id is kept — so its return to the same
+   *  entry is a no-op, and only a genuine switch to a different entry re-centres.
+   *  `handleScroll` seeds this to the current active entry so a projection tick
+   *  landing mid-browse can't mistake the standing active entry for a change. */
+  private readonly lastActiveIdByLayer = new Map<number, string | null>();
+  /** Per-CHANNEL entry id whose activation should recenter the browse window —
+   *  set ONLY by a CaptainPad list UI tap (`noteUiPatternSelect`, wired from
+   *  PlaylistPanel.handleEntryTap). Operator policy (2026-07): the window
+   *  auto-follow recenters ONLY for a mouse/touch list tap; EVERY other active-entry
+   *  source — APC pad-select, autopilot advance, engine/cross-tab echo — leaves the
+   *  window exactly where it is (baseline advanced so no later catch-up jump).
+   *  syncWindowsToActiveEntries recenters when the tapped entry's echo lands, then
+   *  clears the marker. Keyed by channel id (L.id) so it needs no layer-index map. */
+  private readonly uiTapRecenterByChannel = new Map<string, string>();
   /** The layer the operator just requested focus on (set SYNCHRONOUSLY in the
    *  focusChannel handler). The onFocusChange → React → async snapshot swap is
    *  authoritative-but-late; until `snapshot.focused.layer` catches up we (a)
@@ -680,6 +789,16 @@ class ControllerRuntime {
         this.dispatchFailStreak = 0;
         this.setStatus({ warning: undefined });
       }
+      return;
+    }
+    // PERFORMANCE MODE: a 409 PERFORMANCE_MODE is not a failure — it's the
+    // engine deliberately declining a structural change while a show is live.
+    // Surface it QUIETLY (soft status, no alert) and DON'T bump the fail streak,
+    // so a pad bound to a locked action (pattern swap, view select) doesn't
+    // drive the controller chip red mid-show. A live control (fader/param)
+    // isn't gated, so it never lands here.
+    if (result.code === 'PERFORMANCE_MODE') {
+      this.setStatus({ lastEvent: `🔒 ${kind} locked (performance mode)` });
       return;
     }
     this.dispatchFailStreak += 1;
@@ -936,28 +1055,12 @@ class ControllerRuntime {
         this.handleDeviceHello();
         return;
       }
-      const page = decodeDevicePageCc(0xb0 | (decoded.channel & 0x0f), decoded.cc, decoded.value);
-      if (page !== null) {
-        // Don't PATCH when the engine is already on this page (the device merely
-        // echoed the page we pushed it): avoids a redundant round-trip + a
-        // needless full re-sync. A genuine physical-button change differs.
-        if ((this.opts.getSnapshot().effectsPage ?? 0) !== page) {
-          this.setStatus({ lastEvent: `VSN1 side button → page ${page}` });
-          // The physical side button restarted the device VM (a page load). Arm
-          // the full re-sync and repaint once the PATCH settles, so the device
-          // gets a WHOLE frame carrying the ENGINE's authoritative page — even if
-          // the engine rejects/ignores the request (the device never keeps a
-          // private page). If the engine ACCEPTS, its effectsPage broadcast lands
-          // via onEngineUpdate and the page difference re-arms the resync there
-          // too; either way the flag consumes exactly once.
-          this.vsn1ForceFullResync = true;
-          void this.runDispatch({ kind: 'effectsPageSelect', page }).then(() => {
-            this.vsn1ForceFullResync = true;
-            this.projectAndSend();
-          });
-        }
-        return;
-      }
+      // DEVICE → APP PAGE FOLLOW — DELETED (page-follow retirement complete).
+      // Deploys are page-0-only and the device no longer pages natively, so
+      // CaptainPad no longer follows a device page CC into an engine effectsPage
+      // PATCH. A stray page CC simply falls through to resolve (unmapped = loud
+      // silence); the engine's own effectsPage broadcast is the single source of
+      // truth CaptainPad renders.
     }
 
     // 1) MIDI-learn capture — while armed, the next learnable control BINDS
@@ -1087,28 +1190,11 @@ class ControllerRuntime {
     // Effects v2: encoder press → cycle the SELECTED slot's mode (runtime-resolved
     // against the selection, like the intensity reset it replaced).
     if (ev.resolved.kind === 'effectModeCycle') { this.handleModeCycle(); return; }
-    // A VSN1 side-button page select: the firmware restarts its Lua VM on EVERY
-    // page load — including re-selecting the CURRENT page — wiping all device
-    // state. ARM the full-resync flag NOW (before the async dispatch), so the
-    // full frame fires whether or not the page actually changed:
-    //   - page CHANGED → the engine `effectsPage` broadcast lands via
-    //     onEngineUpdate → sendVsn1Feedback with the NEW page's slots, and the
-    //     flag guarantees a full frame there.
-    //   - SAME page re-selected → no broadcast arrives, so we also repaint once
-    //     the dispatch settles; the flag is still set, forcing a full frame.
-    // Arming the flag (not resetting the diff inline) means an unrelated
-    // onEngineUpdate racing in between can't consume-and-lose the resync — the
-    // NEXT emit from any path honours it. The post-dispatch repaint covers the
-    // same-page case; the .then re-arms in case an interleaved emit already
-    // consumed the flag for the (unchanged) page.
-    if (ev.resolved.kind === 'effectsPageSelect' && this.profile.device.id === 'vsn1') {
-      this.vsn1ForceFullResync = true;
-      void this.runDispatch(ev.resolved).then(() => {
-        this.vsn1ForceFullResync = true;
-        this.projectAndSend();
-      });
-      return;
-    }
+    // (Page-follow retirement, 2026-07 — COMPLETE.) The VSN1 device→app
+    // page-select path is gone: no VSN1 profile control produces
+    // `effectsPageSelect`, so the former VM-restart-resync special-case for it was
+    // deleted. A non-VSN1 `effectsPageSelect` (should any profile bind one) still
+    // dispatches normally through the discrete-action path below.
     if (ev.resolved.kind === 'focusedParamDelta' || ev.resolved.kind === 'paramCenterDelta'
       || ev.resolved.kind === 'hueDelta') {
       // Relative deltas ACCUMULATE across the coalescer window (no tick dropped),
@@ -1470,13 +1556,15 @@ class ControllerRuntime {
    *    sb_1 → VIEW:  toggle the LCD visual — grid (colors) ↔ full readout.
    *                  KEY BEHAVIOR IS DRUM IN BOTH (fire immediately); the view
    *                  is presentation only.
-   *    sb_2 → empty (deliberate no-op, reserved).
+   *    sb_2 → PROFILE: toggle the controller profile edit ↔ play (PATCH
+   *                  /global-effects/profile with the opposite of the snapshot's
+   *                  profile; the engine broadcast is the source of truth).
    *    sb_3 → LOGO:  show the MarsinLED wordmark on the LCD (the welcome
    *                  screen; any next key press / feedback dismisses it).
    *  NOTE (highest priority, Sina 2026-07-10): the layout AUTO-DEPLOY must be
    *  made bulletproof (an effect swap in the UI failed to re-flash the device)
    *  and every re-flash must land back in this drum/grid state. */
-  private handleVsn1SmallButton(button: number, _timestampMs: number): void {
+  private handleVsn1SmallButton(button: number, timestampMs: number): void {
     if (button === 0) {
       this.setStatus({ lastEvent: 'VSN1 sb_0 → cycle mode' });
       this.handleModeCycle(); // same runtime path as the encoder press
@@ -1491,9 +1579,7 @@ class ControllerRuntime {
       return;
     }
     if (button === 2) {
-      // Deliberate no-op (Sina 2026-07-10). Still emits its note so it can be
-      // bound later; loud silence until then.
-      this.setStatus({ lastEvent: 'VSN1 sb_2 (empty)' });
+      this.handleVsn1ProfileButton(timestampMs);
       return;
     }
     // button === 3 — show the MarsinLED logo: the device's welcome screen is
@@ -1505,6 +1591,93 @@ class ControllerRuntime {
     } catch {
       this.ledFailStreak += 1; // same fail-loud accounting as the feedback stream
     }
+  }
+
+  /** Monotonic clock (ms) for the sb_2 guards — the injected `now` (deterministic
+   *  tests) or performance.now() (the SAME clock Web MIDI event timestamps ride). */
+  private nowMs(): number {
+    return this.opts.now ? this.opts.now() : defaultNow();
+  }
+
+  /** Release the sb_2 in-flight lock (echo landed / PATCH failed / timed out). */
+  private clearSb2InFlight(): void {
+    this.sb2PatchInFlight = false;
+    this.sb2PendingTarget = null;
+  }
+
+  /** VSN1 sb_2 → PROFILE toggle (edit ↔ play), the ONLY controller-profile writer
+   *  in CaptainPad — and the source of a live spurious-flip bug. Four guards reject
+   *  every non-operator flip before it PATCHes, and EVERY accepted / dropped press
+   *  is logged (with its drop reason) via the lastEvent status idiom so the next
+   *  flip is fully attributable. Guard order runs cheapest-and-most-diagnostic
+   *  first: a stale replay and a self-echo are misfires that shouldn't even count
+   *  as a press; in-flight + debounce collapse rapid repeats; the unseeded refusal
+   *  is last (it needs the snapshot). No optimistic flip: the engine broadcasts
+   *  `controllerProfile` and every surface converges on the echo. */
+  private handleVsn1ProfileButton(timestampMs: number): void {
+    const now = this.nowMs();
+
+    // 1) STALE-EVENT GUARD. Web MIDI event timestamps ride performance.now()'s
+    //    clock; Chrome QUEUES input for a backgrounded tab and replays it on
+    //    refocus — an old queued sb_2 must not flip the profile. A missing/zero
+    //    timestamp (FakeTransport, transports that don't stamp) is treated as
+    //    FRESH (never dropped) — we only reject a timestamp we can trust is old.
+    if (timestampMs && timestampMs > 0 && now - timestampMs > SB2_STALE_MS) {
+      this.setStatus({ lastEvent: `VSN1 sb_2 DROPPED — stale event (${Math.round(now - timestampMs)}ms old)` });
+      return;
+    }
+
+    // 4) SELF-ECHO GUARD. Our OWN outbound page-2 side-LED feedback is a Note On
+    //    on note 43 (SIDE_BASE + 2) — identical to the device's sb_2 note. A MIDI
+    //    loopback echoes it straight back as an inbound "sb_2 press". If we sent
+    //    that exact note within the loopback window, this inbound note is our echo,
+    //    not a press. (Channel-tightening the binding is NOT viable: the firmware
+    //    TXes small-button notes on channel = the current page — see
+    //    side_button.lua — so there is no fixed device channel to pin to.)
+    const echoTs = this.recentOutboundNotes.get(VSN1_SB_NOTE_BASE + 2);
+    if (echoTs !== undefined && now - echoTs <= SB2_SELF_ECHO_MS) {
+      this.setStatus({ lastEvent: `VSN1 sb_2 DROPPED — self-echo (own LED feedback, ${Math.round(now - echoTs)}ms)` });
+      return;
+    }
+
+    // 2a) IN-FLIGHT GUARD. A profile PATCH is already round-tripping (awaiting the
+    //     WS `controllerProfile` echo); a second press here would PATCH again off a
+    //     stale snapshot. Held until the echo lands / the PATCH fails, with a safety
+    //     timeout so a lost echo can never wedge sb_2 dead.
+    if (this.sb2PatchInFlight && now - this.sb2InFlightSince < SB2_INFLIGHT_TIMEOUT_MS) {
+      this.setStatus({ lastEvent: 'VSN1 sb_2 DROPPED — profile PATCH in flight (awaiting echo)' });
+      return;
+    }
+    if (this.sb2PatchInFlight) this.clearSb2InFlight(); // in-flight lock timed out
+
+    // 2b) DEBOUNCE. A mechanical double-tap / contact bounce AFTER the echo cleared
+    //     the in-flight lock still lands within a few hundred ms — swallow it.
+    if (this.sb2LastAcceptedMs !== 0 && now - this.sb2LastAcceptedMs < SB2_DEBOUNCE_MS) {
+      this.setStatus({ lastEvent: `VSN1 sb_2 DROPPED — debounce (${Math.round(now - this.sb2LastAcceptedMs)}ms since last)` });
+      return;
+    }
+
+    // 3) REFUSE-UNSEEDED. Without a seeded profile there is no defined OPPOSITE to
+    //    toggle to — a blind default ('edit') is a fallback, which is forbidden.
+    //    Refuse loudly and wait for the engine to thread the profile.
+    const current = this.opts.getSnapshot().controllerProfile;
+    if (current !== 'edit' && current !== 'play') {
+      this.setStatus({ lastEvent: 'VSN1 sb_2 IGNORED — profile unknown (engine not seeded)' });
+      return;
+    }
+
+    // ACCEPT. Arm the debounce + in-flight guards, then PATCH the OPPOSITE with the
+    // 'vsn1_sb2' provenance tag. A failed PATCH releases the in-flight lock at once
+    // (fail-loud, retry allowed); a success holds it until the echo converges.
+    const next: 'edit' | 'play' = current === 'play' ? 'edit' : 'play';
+    this.sb2LastAcceptedMs = now;
+    this.sb2PatchInFlight = true;
+    this.sb2InFlightSince = now;
+    this.sb2PendingTarget = next;
+    this.setStatus({ lastEvent: `VSN1 sb_2 ACCEPTED → profile: ${next.toUpperCase()}` });
+    void this.runDispatch({ kind: 'controllerProfileSet', profile: next }).then((result) => {
+      if (!result.ok) this.clearSb2InFlight();
+    });
   }
 
   /** Send the VSN1 the VIEW render-selector CC (1 = grid visual, 0 = full
@@ -2003,9 +2176,102 @@ class ControllerRuntime {
     const cur = this.windowCursor.get(layer) ?? 0;
     const next = dir === 'up' ? Math.max(0, cur - 1) : Math.min(max, cur + 1);
     if (next === cur) return;
+    // Claim the auto-follow baseline for the CURRENT active entry: the operator
+    // is now browsing, so a projection tick that lands between this scroll and
+    // the next GENUINE active-entry change must read "no change" and leave the
+    // browse put — never re-centre it back onto what's playing. (Only seed a
+    // RESOLVABLE active entry; an unresolved one leaves the baseline alone so it
+    // isn't fabricated.) Only a later switch to a DIFFERENT entry re-centres.
+    const activeId = L.playlist?.activeEntryId ?? null;
+    if (activeId !== null && L.playlist!.entries.some((e) => e.id === activeId)) {
+      this.lastActiveIdByLayer.set(layer, activeId);
+    }
     this.windowCursor.set(layer, next);
     this.opts.onWindowChange?.(L.id, next, WINDOW_SIZE);
     this.projectAndSend(); // repaint the window
+  }
+
+  /** Advance each layer's browse-window follow baseline on an active-entry change,
+   *  and recenter the window around the new entry ONLY when that change came from a
+   *  CaptainPad list UI tap (operator policy 2026-07). Runs at the top of
+   *  projectAndSend (every engine repaint). Every NON-UI-tap source — APC
+   *  pad-select, autopilot advance, engine/cross-tab echo — advances the baseline
+   *  (so a later tick can't catch up and jump) but leaves the window EXACTLY where
+   *  the operator has it; it never even republishes (a same-start republish mints a
+   *  fresh window object that retriggers the list auto-scroll — the observed
+   *  "jump"). The one exception is the FIRST resolvable active entry per layer,
+   *  which establishes the window once (at the current cursor, no recenter) so the
+   *  UI shows a browse rectangle and the pads map. A manual pad-scroll (handleScroll)
+   *  moves + sticks on its own path.
+   *
+   *  Change detection is by entry ID and TOLERATES a transient unresolved active
+   *  entry (a playlist refresh swapping the entries array, or a null between
+   *  selections): an unresolved active holds the window and is NOT recorded as
+   *  the baseline, so its return to the SAME entry is a no-op rather than a
+   *  spurious "change" that stomps the operator's browse (the 2026-07 desync
+   *  root cause — an index-keyed baseline flickered to -1 and back). */
+  private syncWindowsToActiveEntries(snap: MidiEngineSnapshot): void {
+    // Only the active context's layers own a window (layerInfo returns null for
+    // the rest): deck context = layer 0, mixer = the overlay layers.
+    const layerCount = snap.activeContext === 'deck' ? 1 : snap.layers.length;
+    for (let layer = 0; layer < layerCount; layer += 1) {
+      const L = layerInfo(snap, layer);
+      if (!L?.playlist) continue;
+      const entries = L.playlist.entries;
+      const activeId = L.playlist.activeEntryId;
+      // Unresolved active (null, or not in the current entries array mid-refresh)
+      // → hold the window, DON'T touch the baseline. The last known id stays, so
+      // when the same entry resolves again it reads as unchanged.
+      const activeIndex = activeId == null ? -1 : entries.findIndex((e) => e.id === activeId);
+      if (activeIndex < 0) continue;
+      // Was this activation requested by a CaptainPad list UI TAP? That is the
+      // ONLY source allowed to recenter the window (operator policy 2026-07).
+      // Consume the marker whenever its entry becomes current (changed or not) so a
+      // stale request can't later hijack an autopilot/echo change to the same id.
+      const uiTap = this.uiTapRecenterByChannel.get(L.id) === activeId;
+      if (uiTap) this.uiTapRecenterByChannel.delete(L.id);
+      const known = this.lastActiveIdByLayer.has(layer);
+      if (activeId === this.lastActiveIdByLayer.get(layer)) continue; // unchanged → leave the browse put
+      this.lastActiveIdByLayer.set(layer, activeId);
+      if (uiTap) {
+        // UI list tap on a (possibly out-of-window) pattern → recenter the window
+        // around it, exactly as before. This is the sole recentering path.
+        const cur = this.windowCursor.get(layer) ?? 0;
+        const next = recenterWindowStart({
+          activeIndex, currentStart: cur, size: WINDOW_SIZE, length: entries.length,
+        });
+        this.windowCursor.set(layer, next);
+        this.opts.onWindowChange?.(L.id, next, WINDOW_SIZE);
+        continue;
+      }
+      // Any OTHER source (APC pad-select, autopilot advance, engine/cross-tab
+      // echo): advance the follow baseline (done above) so a later tick can't
+      // catch up and jump, but DON'T move OR republish the window — the operator's
+      // browse stays exactly where it is. A same-start republish is NOT harmless
+      // here: onWindowChange mints a fresh window object that retriggers the
+      // PlaylistPanel list auto-scroll (the observed "jump"). EXCEPTION: the FIRST
+      // time this layer sees a resolvable active entry, establish the window once
+      // (at the current cursor, no recenter) so the UI shows a browse rectangle and
+      // the pads map.
+      if (!known) {
+        this.opts.onWindowChange?.(L.id, this.windowCursor.get(layer) ?? 0, WINDOW_SIZE);
+      } else {
+        // A DIFFERENT entry took over from a non-UI source — drop any stale UI-tap
+        // marker for this channel so it can't recenter on a future coincidental
+        // activation of that id.
+        this.uiTapRecenterByChannel.delete(L.id);
+      }
+    }
+  }
+
+  /** Called by the CaptainPad list UI (PlaylistPanel.handleEntryTap, via the
+   *  `noteMidiPatternSelect` bridge in useMidiControl) when the OPERATOR taps a
+   *  pattern row with mouse/touch. This is the ONLY source that may recenter the
+   *  browse window around the newly-active entry; every other active-entry change
+   *  leaves the window put (operator policy 2026-07). Records the tapped entry per
+   *  channel; syncWindowsToActiveEntries recenters when that entry's echo lands. */
+  noteUiPatternSelect(channelId: string, entryId: string): void {
+    this.uiTapRecenterByChannel.set(channelId, entryId);
   }
 
   private handleWindowSelect(layer: number, slot: number): void {
@@ -2014,6 +2280,10 @@ class ControllerRuntime {
     if (!L?.playlist) return;
     const entry = L.playlist.entries[(this.windowCursor.get(layer) ?? 0) + slot];
     if (!entry) return; // pad past the end of the playlist — no-op
+    // NB: a pad-select does NOT recenter the window (it targets an in-window entry
+    // already). It sets NO uiTapRecenterByChannel marker, so syncWindows advances
+    // the follow baseline on its echo but leaves the window put — the default for
+    // every non-UI-tap source (operator policy 2026-07).
     // Direct api call (not a ResolvedAction), but its result is surfaced through
     // the same fail-loud path (P2-5) so a failed entry select isn't silent.
     void this.opts.api.setChannelPlaylistEntry(L.role, L.id, entry.id)
@@ -2024,11 +2294,25 @@ class ControllerRuntime {
   projectAndSend(): void {
     if (this.status.kind !== 'connected') return;
     const snap = this.opts.getSnapshot();
+    // sb_2 in-flight release: this runs on every engine update (onEngineUpdate →
+    // projectAndSend), so the WS `controllerProfile` echo lands here. When the
+    // snapshot's profile reaches the target our PATCH was driving toward, the flip
+    // has converged — release the in-flight lock so the next legitimate press is
+    // accepted (the debounce still guards a too-fast repeat).
+    if (this.sb2PatchInFlight && this.sb2PendingTarget !== null
+        && snap.controllerProfile === this.sb2PendingTarget) {
+      this.clearSb2InFlight();
+    }
+    // Keep the browse window centred on what's playing BEFORE we read the cursor
+    // for the LED projection below, so the pads and the published UI highlight
+    // both reflect the follow in the same frame.
+    this.syncWindowsToActiveEntries(snap);
     const pageSize = this.opts.patternBankPageSize ?? 8;
     const projState: MidiProjectionState = {
       blackout: snap.blackout,
       activePattern: snap.activePattern,
       getCombinedAutopilotActive: () => snap.combinedAutopilotActive === true,
+      getPerformanceModeActive: () => snap.performanceModeActive === true,
       getGlobalEffectState: (effect) => !!snap.globalEffects[effect],
       resolvePatternForBank: (bank, index) => snap.patterns[bank * pageSize + index] ?? null,
       layerExists: (layer) => !!layerInfo(snap, layer),
@@ -2201,6 +2485,7 @@ class ControllerRuntime {
     for (const msg of messages) {
       try {
         this.transport.send(msg);
+        this.recordOutboundNote(msg);
       } catch {
         // A failed feedback send shares the LED-send fail-loud accounting: bump
         // the same streak so a dead destination surfaces once, without breaking
@@ -2208,6 +2493,20 @@ class ControllerRuntime {
         this.ledFailStreak += 1;
       }
     }
+  }
+
+  /** Record an outbound Note On (velocity > 0) for the sb_2 self-echo guard. The
+   *  side-button page LEDs ride Note On note 41+p — the SAME notes the device's
+   *  small buttons emit — so a MIDI loopback of our page-2 LED (note 43) aliases
+   *  an sb_2 press. Stamping every outbound Note On lets handleVsn1ProfileButton
+   *  reject an inbound note 43 that is really our own echo. Velocity-0 frames
+   *  (LED "off") decode inbound as Note Off and are swallowed by the resolver, so
+   *  they can't alias — we don't record them. No-op for non-note frames. */
+  private recordOutboundNote(msg: number[]): void {
+    if (msg.length < 3) return;
+    if ((msg[0] & 0xf0) !== 0x90) return; // not a Note On
+    if (msg[2] <= 0) return; // velocity 0 = a Note Off alias; can't be a press
+    this.recentOutboundNotes.set(msg[1], this.nowMs());
   }
 
   /** Effects v2 WELCOME: arm the one-shot VSN1 hello and immediately emit it
@@ -2387,6 +2686,14 @@ export class MidiManager {
    *  (Deck vs Mixer map the same hardware to different actions). */
   setContext(name: string): void {
     for (const r of this.runtimes) r.setContext(name);
+  }
+
+  /** A CaptainPad list UI tap (PlaylistPanel.handleEntryTap) — the ONLY active-entry
+   *  source allowed to recenter the browse window (operator policy 2026-07). Fans
+   *  out to every runtime; each recenters that channel's window when the tapped
+   *  entry's engine echo lands. */
+  noteUiPatternSelect(channelId: string, entryId: string): void {
+    for (const r of this.runtimes) r.noteUiPatternSelect(channelId, entryId);
   }
 
   /** Set the focus intent from ANY source (contract I2). Touch focus (the hook)

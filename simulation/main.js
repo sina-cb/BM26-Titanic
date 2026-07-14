@@ -55,6 +55,7 @@ import {
 import { initPanelVisibility } from "./src/gui/panel_visibility.js";
 import { setupHelpPanel } from "./src/gui/help_panel.js";
 import { setupSceneManager } from "./src/gui/scene_manager.js";
+import { setupSceneRecovery } from "./src/gui/scene_recovery.js";
 import { setupLeftDrawers } from "./src/gui/left_drawer.js";
 import "./src/gui/control_schema.js";
 
@@ -728,6 +729,7 @@ Promise.all([
     initPixelMapPanel();
     setupSceneIndicator();
     setupSceneManager();
+    setupSceneRecovery();
     loadPatternPresets().then(() => {
       initPatternEngine().then(() => {
         if (window.onLightingChange) window.onLightingChange();

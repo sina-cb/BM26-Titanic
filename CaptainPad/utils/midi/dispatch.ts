@@ -7,7 +7,7 @@
 
 import { ResolvedAction } from './resolver';
 
-export interface MidiApiResult { ok: boolean; error?: string }
+export interface MidiApiResult { ok: boolean; error?: string; code?: string }
 
 /** The subset of utils/api.ts the MIDI layer dispatches through. */
 export interface MidiDispatchApi {
@@ -37,6 +37,13 @@ export interface MidiDispatchApi {
   /** Effects v2: cycle the SELECTED slot's discrete `primaryMode` to the next
    *  value. POST /global-effect-slots/:slotId/mode/cycle (VSN1 encoder press). */
   cycleGlobalEffectSlotMode(slotId: number): Promise<MidiApiResult>;
+  /** VSN1 controller profile switch (sb_2): PATCH /global-effects/profile
+   *  { controllerProfile, source? }. The manager reads the current profile from
+   *  the snapshot and sends the OPPOSITE — no optimistic flip; the engine
+   *  broadcasts `controllerProfile` (+ runs a page-0 redeploy) and every surface
+   *  converges. `source` is an optional provenance tag the engine logs + echoes
+   *  in its broadcast (the operator can see WHICH surface flipped the profile). */
+  setControllerProfile(profile: 'edit' | 'play', source?: string): Promise<MidiApiResult>;
   /** Effects v2 (VSN1 small button sb_2): reset EVERY global-effect slot's
    *  intensity + mode to default. POST /global-effects/reset-all. */
   resetAllGlobalEffects(): Promise<MidiApiResult>;
@@ -59,6 +66,13 @@ export interface MidiDispatchApi {
    *  black, fade UP. The injected impl reads the live master + the selected
    *  duration (MasterFadeGroup store) — never a hardcoded duration. */
   toggleMasterFade(): Promise<MidiApiResult>;
+  /** PERFORMANCE-MODE dialog summon (APC solo button, 2026-07-13): open the
+   *  state-appropriate guarded sheet in the CaptainPad UI (idle → enter-confirm;
+   *  active → KEEP/RESTORE exit; second press cancels). NEVER a blind engine
+   *  toggle — the exit choice can only be answered on the iPad. The injected
+   *  impl pokes the performance-dialog summon bus (hooks/usePerformanceMode)
+   *  and fails loud when no UI control is mounted to receive it. */
+  summonPerformanceDialog(): Promise<MidiApiResult>;
   // Per-control STATIC writes for MIDI-learned local params. The deck has a
   // singleton route (no id); mixer overlays are addressed by channel id.
   setDeckChannelControl(id: number, v0: number, v1?: number, v2?: number): Promise<MidiApiResult>;
@@ -257,6 +271,14 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
         // Effects v2: runtime-built SELECTED-slot mode cycle (encoder press).
         // POST /global-effect-slots/:slotId/mode/cycle.
         return api.cycleGlobalEffectSlotMode(resolved.slotId);
+      case 'controllerProfileSet':
+        // VSN1 sb_2: runtime-built profile switch — the manager already computed
+        // the target ('edit'/'play', the opposite of the snapshot's) and this
+        // just PATCHes it. The engine broadcasts `controllerProfile` so the grid
+        // + device converge (no optimistic flip). `controllerProfileSet` is ONLY
+        // produced by the sb_2 path, so the provenance tag is a constant here —
+        // the engine logs + echoes it so a spurious flip is traceable to sb_2.
+        return api.setControllerProfile(resolved.profile, 'vsn1_sb2');
       case 'globalEffectsResetAll':
         // Effects v2: VSN1 small button sb_2 → reset EVERY slot to default.
         return api.resetAllGlobalEffects();
@@ -277,6 +299,12 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
         // duration. The injected impl reads the live master + the selected fade
         // duration (never hardcoded).
         return api.toggleMasterFade();
+      case 'performanceDialog':
+        // APC solo → summon the performance-mode dialog in the UI. Never a
+        // blind engine toggle: the injected impl opens the guarded sheet
+        // (enter-confirm / KEEP-RESTORE exit) and the operator answers on the
+        // iPad. Fails loud when no dialog UI is mounted.
+        return api.summonPerformanceDialog();
       case 'focusChannel':
       case 'playlistScroll':
       case 'playlistWindowSelect':

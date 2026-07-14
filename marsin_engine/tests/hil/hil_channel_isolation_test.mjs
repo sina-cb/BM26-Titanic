@@ -37,6 +37,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const ENGINE_PORT = Number(process.env.ENGINE_PORT) || 6968;
 const ENGINE_BASE = `http://127.0.0.1:${ENGINE_PORT}`;
 const WS_URL = `ws://127.0.0.1:${ENGINE_PORT}`;
@@ -104,6 +106,9 @@ async function main() {
   } else {
     pass('GET /deck/channel returns the deck channel');
   }
+
+  // Refuse to mutate a non-disposable engine BEFORE any write attempt.
+  await assertDisposableEngine(ENGINE_BASE);
 
   // 3. Mixer routes reject deck id with 400 WRONG_ROLE.
   const mixerRouteCases = [

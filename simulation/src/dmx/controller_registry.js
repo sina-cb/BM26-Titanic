@@ -123,8 +123,16 @@ export const LED_DEVICE_PUSH_OUTCOMES = ['applied', 'needs-reboot'];
  * structural problem THROWS: an LED controller whose binding block is
  * malformed or names an unknown vendor must hard-stop the boot, exactly like a
  * malformed port (codex P0 — no silent migration). Returns
- *   { vendor, controllerId, deviceName?, boardId?, mac?,
+ *   { vendor, controllerId, deviceName?, boardId?,
  *     lastPush?: { at, outcome, firmwareSHA?, configHash? } }.
+ *
+ * NOTE: the device MAC address is deliberately NEVER part of this shape. This
+ * repo is public and a persisted MAC trips the gitleaks security gate
+ * (rule bm26-mac-address). The MAC is a live, display-only value read from
+ * the device's runtime status (see led_discovery_panel.js) — it must never be
+ * written to controllers.yaml. A `raw.mac` (old caller payload, or a legacy
+ * on-disk block from before this rule) is silently ignored here: loading and
+ * re-saving a legacy scene drops it, which is the intended migration.
  */
 export function normalizeDeviceBlock(raw, controllerName) {
   if (raw === undefined || raw === null) return undefined; // unbound — legitimate
@@ -142,7 +150,7 @@ export function normalizeDeviceBlock(raw, controllerName) {
       'be a non-empty string (the device fingerprint)');
   }
   const device = { vendor, controllerId: raw.controllerId };
-  for (const opt of ['deviceName', 'boardId', 'mac']) {
+  for (const opt of ['deviceName', 'boardId']) {
     if (raw[opt] !== undefined && raw[opt] !== null) {
       if (typeof raw[opt] !== 'string') {
         throw new Error(`[Controllers] LED controller '${controllerName}': device.${opt} must be ` +
@@ -608,10 +616,12 @@ export function isBoundLedController(controller) {
 
 /**
  * Bind an LED controller to a discovered device: records the identity block
- * (vendor + controllerId fingerprint + optional deviceName/boardId/mac),
+ * (vendor + controllerId fingerprint + optional deviceName/boardId),
  * preserving any existing push provenance. The identity key stays the
  * controller's `ip` (operator decision) — the block is the fingerprint the
  * scene remembers. THROWS on a non-LED controller or an invalid identity.
+ * `identity.mac`, if present, is IGNORED — the MAC is never persisted (see
+ * normalizeDeviceBlock).
  */
 export function bindControllerDevice(controller, identity) {
   if (!isLedController(controller)) {
@@ -623,7 +633,6 @@ export function bindControllerDevice(controller, identity) {
     controllerId: identity.controllerId,
     deviceName: identity.deviceName,
     boardId: identity.boardId,
-    mac: identity.mac,
     lastPush: controller.device ? controller.device.lastPush : undefined,
   };
   controller.device = normalizeDeviceBlock(raw, controller.name);

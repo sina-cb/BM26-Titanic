@@ -21,6 +21,8 @@ controllers:
         chain:
           - fixture: ShehdsBar 6
             at: 120
+          - fixture: Bars_5_6_7 4
+            at: 239
       - port: 3
         universe: 6
         chain:
@@ -112,7 +114,6 @@ controllers:
       vendor: marsinled
       controllerId: titanic_201
       boardId: angio4-old
-      mac: 24:58:7C:54:A5:E0 # gitleaks:allow
       lastPush:
         at: '2026-07-11T07:10:30.162Z'
         outcome: needs-reboot

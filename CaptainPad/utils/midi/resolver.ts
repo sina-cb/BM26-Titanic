@@ -47,6 +47,10 @@ export type ResolvedAction =
   // Master fade TO BLACK / UP toggle over the selected duration. Dispatched: the
   // injected api reads the live master + the selected fade duration.
   | { kind: 'masterFadeToggle' }
+  // PERFORMANCE-MODE dialog summon (APC solo, 2026-07-13): opens the guarded
+  // enter-confirm / exit sheet in the CaptainPad UI. Never a blind engine
+  // toggle — the injected api pokes the summon bus; the choice is on the iPad.
+  | { kind: 'performanceDialog' }
   | { kind: 'playlistScroll'; layer: number; dir: 'up' | 'down' }
   | { kind: 'playlistWindowSelect'; layer: number; slot: number }
   | { kind: 'colorPalettePair'; palette: number }
@@ -118,6 +122,12 @@ export type ResolvedAction =
   // A concrete slot MODE cycle, BUILT BY THE RUNTIME against the selected slot
   // (never produced by resolveEvent). Dispatched: POST mode/cycle.
   | { kind: 'effectModeCycleSlot'; slotId: number }
+  // VSN1 controller PROFILE switch (sb_2). BUILT BY THE RUNTIME: the manager reads
+  // the current profile from the snapshot and sets `profile` to the OPPOSITE
+  // ('edit' ↔ 'play') — never produced by resolveEvent. Dispatched: PATCH
+  // /global-effects/profile { profile }. The engine broadcast is the source of
+  // truth (no optimistic flip).
+  | { kind: 'controllerProfileSet'; profile: 'edit' | 'play' }
   // ── VSN1 SMALL BUTTONS (sb_0..sb_3, notes 41..44) — 2026-07-09 ──
   // The four small PANEL buttons (device elements 9..12). They NEVER change
   // pages (the physical side button does that, firmware-native). `button` is
@@ -375,6 +385,11 @@ export function resolveEvent(
       case 'masterFadeToggle':
         return { controlId: control.id, continuous: false,
           resolved: { kind: 'masterFadeToggle' } };
+      case 'performanceDialog':
+        // Discrete button (Note On only — Note Off swallowed above). Summons
+        // the performance-mode dialog in the UI; nothing engine-side.
+        return { controlId: control.id, continuous: false,
+          resolved: { kind: 'performanceDialog' } };
       case 'effectIntensityAbs':
         // Absolute jog-wheel CC → the selected slot's intensity. The CC value
         // is an ABSOLUTE 0-127 position (jog in absolute mode), so scale

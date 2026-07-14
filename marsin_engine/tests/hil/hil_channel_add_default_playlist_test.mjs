@@ -50,6 +50,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const PORT = process.env.MARSIN_HIL_PORT || 6968;
 const ENGINE_BASE = `http://127.0.0.1:${PORT}`;
 const WS_URL = `ws://127.0.0.1:${PORT}`;
@@ -171,6 +173,10 @@ function waitForChannelPlaylistData(events, predicate, timeoutMs = 500) {
   }
   console.log(`\n── Setup ──`);
   console.log(`  initial: ${cleanup.snapshot.channels.length} channel(s), base=${cleanup.snapshot.baseChannelId}, max=${cleanup.snapshot.maxChannels}`);
+
+  // Refuse to mutate a non-disposable engine BEFORE deleting/adding channels.
+  await assertDisposableEngine(ENGINE_BASE);
+
   await deleteAllOverlays();
   await sleep(150);
 

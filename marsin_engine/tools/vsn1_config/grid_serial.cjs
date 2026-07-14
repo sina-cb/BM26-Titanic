@@ -412,6 +412,30 @@ async function enablePageChange(gp, conn) {
   await new Promise((r) => setTimeout(r, 100));
 }
 
+// Editor-connected heartbeat that LOCKS page changes: TYPE > 127 marks "editor
+// connected" but page_change_enabled = (TYPE == 255), so a TYPE-128 heartbeat
+// keeps the editor session alive while DISABLING device-side page changes
+// (physical side button + host page CCs are refused). Used by the own-page
+// retirement (effects_v2, 2026-07): the device is a fixed page-0 surface, so a
+// deploy ends with page changes locked. Fire-and-forget (no heartbeat reply).
+function lockPageChangeDescriptor() {
+  return {
+    brc_parameters: { DX: -127, DY: -127 },
+    class_name: 'HEARTBEAT',
+    class_instr: 'EXECUTE',
+    class_parameters: { TYPE: 128, HWCFG: 255, VMAJOR: 0, VMINOR: 0, VPATCH: 0 },
+  };
+}
+
+// Disable page changes on the device (see lockPageChangeDescriptor). The final
+// device state after an own-page-retirement deploy: the side button no longer
+// navigates to stale pages 1-3. Reversible — a TYPE-255 heartbeat
+// (enablePageChange / activate_page without --lock) or a reboot re-enables.
+async function disablePageChange(gp, conn) {
+  await conn.send(lockPageChangeDescriptor());
+  await new Promise((r) => setTimeout(r, 100));
+}
+
 // Page-activation retry policy. The single-heartbeat-then-PAGEACTIVE approach
 // is fragile: the re-enable heartbeat can be DROPPED at the reader (deploy-time
 // Lua-error debug text interleaves with frames and surfaces as checksum
@@ -672,6 +696,8 @@ module.exports = {
   SYNC_CLEAR_LUA,
   editorHeartbeatDescriptor,
   enablePageChange,
+  lockPageChangeDescriptor,
+  disablePageChange,
   activatePage,
   waitForConfigAck,
   toDeviceActionString,

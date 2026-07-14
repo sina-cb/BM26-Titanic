@@ -41,6 +41,8 @@ import {
   resetAllGlobalEffects,
   disableAllGlobalEffects,
   fetchEffectsPage,
+  fetchControllerProfile,
+  patchControllerProfile,
   getAutopilot,
   setAutopilot,
   fetchDeckColorAutopilot,
@@ -58,6 +60,7 @@ import {
   type PlaylistAssignment,
 } from '@/utils/api';
 import { setChannelHue } from '@/utils/channelExtrasApi';
+import { summonPerformanceDialog } from '@/hooks/usePerformanceMode';
 import { fadeMaster } from '@/utils/masterApi';
 import { getSelectedFadeSeconds } from '@/components/MasterFadeGroup';
 import {
@@ -158,6 +161,10 @@ let _snapshot: MidiEngineSnapshot = {
   globalEffectSlots: [],
   colorPalettes: [],
   focused: null,
+  // VSN1 controller profile — 'edit' (full authoring UI) until the engine threads
+  // it via GET/WS. The sb_2 toggle reads this to PATCH the opposite; the engine
+  // broadcast keeps it live.
+  controllerProfile: 'edit',
   // syncOwnedKeys (contract I4): the global-param keys the engine currently
   // drives itself (e.g. 'speed' while BPM→Speed sync is on). Empty at boot;
   // populated from `bpmSpeedSyncOn` in the snapshot rebuild + the in-place patch.
@@ -167,6 +174,10 @@ let _snapshot: MidiEngineSnapshot = {
   // patched live from the engine's `autopilot` / `colorAutopilot` WS broadcasts
   // (below) so the LED tracks the state a clip_stop press would turn off.
   combinedAutopilotActive: false,
+  // performanceModeActive: drives the APC solo LED (lit while performance mode
+  // is active). Off at boot; patched live from the engine's `performanceMode`
+  // WS broadcast (below — replayed on connect).
+  performanceModeActive: false,
 };
 
 // ── APC clip_stop LED: combined (pattern + colour) autopilot state ─────────
@@ -591,6 +602,20 @@ let _nudge: (() => void) | null = null;
 let _activeContext = 'deck';
 let _applyContext: ((name: string) => void) | null = null;
 
+// PlaylistPanel publishes a UI list TAP here so the MIDI manager can recenter the
+// APC browse window around the tapped entry — the ONLY active-entry source allowed
+// to recenter (operator policy 2026-07; APC pad-select / autopilot / echoes never
+// move the window). Bound to the live manager in the boot effect, nulled on dispose.
+let _noteUiPatternSelect: ((channelId: string, entryId: string) => void) | null = null;
+
+/** Called by the CaptainPad list UI (PlaylistPanel.handleEntryTap) when the
+ *  operator taps a pattern row with mouse/touch. Forwards to the live MidiManager
+ *  so the browse window recenters around the tapped entry. No-op until the manager
+ *  boots (a tap before boot simply doesn't recenter — the window isn't live yet). */
+export function noteMidiPatternSelect(channelId: string, entryId: string): void {
+  _noteUiPatternSelect?.(channelId, entryId);
+}
+
 /** Called by a tab on focus to switch the controller's mapping context. The
  *  layout is unified; the context only decides whether the channel controls
  *  target the deck channel (deck) or the overlay layers (mixer). */
@@ -750,6 +775,38 @@ export function useMidiStatus(): MidiControlState {
     return () => { _listeners.delete(setS); };
   }, []);
   return s;
+}
+
+// ── Performance-dialog controller affordance ───────────────────────────────
+// The physical button name of a CONNECTED controller that binds the
+// `performanceDialog` action ("SOLO" on the APC mini mk2). The enter-confirm
+// sheet renders a "PRESS SOLO AGAIN TO GO LIVE" row only when this is non-null;
+// with no such controller connected the sheets render exactly as before.
+// Names are per-device (the physical print on the button), with a generic
+// fallback for a future profile that binds the action under another key.
+const PERFORMANCE_DIALOG_BUTTON_BY_DEVICE: Record<string, string> = {
+  apc_mini_mk2: 'SOLO',
+};
+
+/** True iff this profile binds a performanceDialog control in any context. */
+function profileHasPerformanceDialog(p: ControllerProfile): boolean {
+  return Object.values(p.contexts).some(
+    (controls) => controls.some((c) => c.action.kind === 'performanceDialog'),
+  );
+}
+
+/** The performanceDialog button name of the first CONNECTED controller that
+ *  binds it, or null (no controller / none connected binds the action). */
+export function usePerformanceDialogButton(): string | null {
+  const s = useMidiStatus();
+  for (const st of s.statuses) {
+    if (st.kind !== 'connected') continue;
+    const profile = _loadedProfiles.find((p) => p.device.id === st.deviceId);
+    if (profile && profileHasPerformanceDialog(profile)) {
+      return PERFORMANCE_DIALOG_BUTTON_BY_DEVICE[st.deviceId] ?? 'THE MODE BUTTON';
+    }
+  }
+  return null;
 }
 
 /** Aggregate the per-controller statuses into one chip state. */
@@ -1068,6 +1125,10 @@ export function useMidiControl(): MidiControlState {
         cycleGlobalEffectSlotMode,
         resetAllGlobalEffects,
         disableAllGlobalEffects,
+        // VSN1 sb_2 profile switch: the manager computes the target ('edit'/'play')
+        // from the snapshot and PATCHes it here. utils/api exposes it as
+        // `patchControllerProfile`; the dispatch API key is `setControllerProfile`.
+        setControllerProfile: patchControllerProfile,
         setChannelPlaylistEntry,
         setDeckChannelControl,
         setMixerChannelControl,
@@ -1079,6 +1140,16 @@ export function useMidiControl(): MidiControlState {
         toggleDeckMixerView,
         toggleCombinedAutopilot,
         toggleMasterFade,
+        // APC solo (2026-07-13): summon the performance-mode dialog in the UI.
+        // Never a blind engine toggle — the header control opens the guarded
+        // enter-confirm / KEEP-RESTORE sheet and the operator answers on the
+        // iPad. Fail loud when no dialog UI is mounted to receive the summon.
+        summonPerformanceDialog: async () => {
+          const handled = summonPerformanceDialog();
+          return handled
+            ? { ok: true }
+            : { ok: false, error: 'performance-mode dialog UI not mounted' };
+        },
       },
       getSnapshot: () => _snapshot,
       getSchemaKeys: () => _schemaKeys,
@@ -1101,6 +1172,9 @@ export function useMidiControl(): MidiControlState {
     _setFocusIntent = (layer) => manager.setFocusIntent(layer);
     // Forward active-tab changes (Deck/Mixer) to the manager's mapping context.
     _applyContext = (name) => manager.setContext(name);
+    // Forward CaptainPad list UI taps so the manager recenters the browse window
+    // around the tapped entry (the sole recentering source — operator policy).
+    _noteUiPatternSelect = (channelId, entryId) => manager.noteUiPatternSelect(channelId, entryId);
     // Expose MIDI-learn arming for the per-param map popover.
     _armLearn = (cb) => manager.armLearn(cb);
     // Forward CPC-schema arrival so param-key validation re-runs.
@@ -1211,6 +1285,37 @@ export function useMidiControl(): MidiControlState {
         }
       }
     });
+    // VSN1 CONTROLLER PROFILE ('edit' | 'play') — the engine's single source of
+    // truth (GET/PATCH /global-effects/profile, WS-broadcast `controllerProfile`,
+    // replayed on connect). Thread it into the MIDI snapshot so the sb_2 toggle
+    // reads the current profile to PATCH the opposite, and so the VSN1 feedback
+    // path reflects the active profile. The UI grid presentation follows the SAME
+    // broadcast via the separate useControllerProfile hook — this is the MIDI-side
+    // mirror. NO optimistic flip (the sb_2 press awaits this echo). On a profile
+    // change the engine also runs a page-0 device redeploy → the `vsn1LayoutDeploy`
+    // ok path already fires the full feedback resync; we ALSO resync here so the
+    // device repaints even if the profile broadcast lands without/before a deploy
+    // frame (the resync flag is idempotent — it consumes exactly once).
+    const refreshControllerProfile = () => {
+      fetchControllerProfile().then((r) => {
+        if (!r.ok || !r.data || (r.data.profile !== 'edit' && r.data.profile !== 'play')) return;
+        if (_snapshot.controllerProfile === r.data.profile) return;
+        _snapshot = { ..._snapshot, controllerProfile: r.data.profile };
+        if (!disposed) manager.onEngineUpdate();
+      }).catch(() => undefined);
+    };
+    refreshControllerProfile();
+    const unsubProfile = engineEvents.subscribe((m: { type?: string; profile?: unknown }) => {
+      if (m?.type !== 'controllerProfile') return;
+      if (m.profile !== 'edit' && m.profile !== 'play') return;
+      if (_snapshot.controllerProfile === m.profile) return;
+      _snapshot = { ..._snapshot, controllerProfile: m.profile };
+      if (disposed) return;
+      manager.onEngineUpdate();
+      // Full feedback resync (the device VM was re-flashed by the page-0 redeploy
+      // the profile change triggered). Idempotent with the deploy-ok path.
+      _resyncVsn1AfterDeploy?.();
+    });
     const unsubSlots = engineEvents.subscribe((m: { type?: string; slots?: unknown }) => {
       if (typeof m?.type !== 'string' || !m.type.toLowerCase().includes('globaleffect')) return;
       // Consume the inline slots payload when the broadcast carries it
@@ -1292,6 +1397,15 @@ export function useMidiControl(): MidiControlState {
         // serializes `palettes`, so a real engine populates this every broadcast.
         _colorAutopilotWritable = colorAutopilotWritable(m.palettes);
         _patchCombinedAutopilot();
+      } else if (m?.type === 'performanceMode') {
+        // APC solo LED: lit while PERFORMANCE MODE is active. Broadcast on
+        // enter/exit + replayed on WS connect (same posture as the autopilot
+        // events above), so the LED is truthful on (re)connect.
+        const active = m.active === true;
+        if (_snapshot.performanceModeActive !== active) {
+          _snapshot = { ..._snapshot, performanceModeActive: active };
+          _nudge?.();
+        }
       }
     });
 
@@ -1325,6 +1439,7 @@ export function useMidiControl(): MidiControlState {
         refreshSlots();
         refreshGlobalEffects();
         refreshEffectsPage();
+        refreshControllerProfile();
       }
       _wasConnected = st.connected;
     });
@@ -1376,6 +1491,7 @@ export function useMidiControl(): MidiControlState {
       _nudge = null;
       _setFocusIntent = null;
       _applyContext = null;
+      _noteUiPatternSelect = null;
       _armLearn = null;
       _revalidate = null;
       _requestVsn1Welcome = null;
@@ -1386,6 +1502,7 @@ export function useMidiControl(): MidiControlState {
       unsubDeploy();
       unsubAutopilot();
       unsubPage();
+      unsubProfile();
       unsubConn();
       unsubMod();
       _modState = {};

@@ -251,3 +251,83 @@ test('a slot layout change (PATCH slot) writes the layout JSON but does NOT depl
   const st = await api('GET', '/global-effects/layout');
   assert.equal(st.data.deploy.lastResult, 'disabled');
 });
+
+// ── Controller profile (edit | play) ─────────────────────────────────
+
+test('GET /global-effects/profile returns the engine-owned profile (default edit)', async () => {
+  const r = await api('GET', '/global-effects/profile');
+  assert.equal(r.status, 200);
+  assert.equal(r.data.controllerProfile, 'edit');
+});
+
+test('PATCH /global-effects/profile sets + broadcasts + persists the profile', async () => {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/control`);
+  const bcPromise = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { ws.close(); reject(new Error('no controllerProfile broadcast')); }, 4000);
+    ws.on('message', (buf) => {
+      let m; try { m = JSON.parse(buf.toString()); } catch { return; }
+      // Skip the connect-replay (carries the CURRENT profile, 'edit'); wait for
+      // the PATCH-driven broadcast that flips it to 'play'.
+      if (m.type === 'controllerProfile' && m.profile === 'play') {
+        clearTimeout(timer); ws.close(); resolve(m);
+      }
+    });
+    ws.on('error', (e) => { clearTimeout(timer); reject(e); });
+  });
+  await new Promise((resolve, reject) => { ws.on('open', resolve); ws.on('error', reject); });
+
+  const r = await api('PATCH', '/global-effects/profile', { controllerProfile: 'play' });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.controllerProfile, 'play');
+
+  const bc = await bcPromise;
+  assert.equal(bc.profile, 'play', 'profile change broadcast on /ws/control');
+
+  // GET reflects it.
+  const g = await api('GET', '/global-effects/profile');
+  assert.equal(g.data.controllerProfile, 'play');
+
+  // Persisted to disk.
+  const file = path.join(stateDir, 'global_effect_slots.yaml');
+  const onDisk = yaml.load(fs.readFileSync(file, 'utf8'));
+  assert.equal(onDisk.controllerProfile, 'play', 'profile persisted in global_effect_slots.yaml');
+});
+
+test('PATCH /global-effects/profile rejects a stranger value (400, fail loud)', async () => {
+  const r = await api('PATCH', '/global-effects/profile', { controllerProfile: 'performance' });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /controllerProfile must be/);
+  // A rejected write must not have changed the engine's profile.
+  const g = await api('GET', '/global-effects/profile');
+  assert.equal(g.data.controllerProfile, 'play', 'a 400 leaves the profile unchanged');
+});
+
+test('a fresh /ws/control subscriber gets the profile replayed on connect', async () => {
+  // The previous test switched the engine to 'play'; a late joiner must see it
+  // without a GET (single source of truth, connect replay).
+  const conn = collectWs(['controllerProfile'], (seen) => seen.length >= 1, 4000);
+  const { ws, seen, timer } = await conn;
+  await new Promise(res => setTimeout(res, 300));
+  clearTimeout(timer); try { ws.close(); } catch {}
+  assert.ok(seen.length >= 1, 'controllerProfile replayed on connect');
+  assert.equal(seen[0].profile, 'play', 'replay carries the current profile');
+  // Put the engine back to edit for any later assertions (leave a clean state).
+  await api('PATCH', '/global-effects/profile', { controllerProfile: 'edit' });
+});
+
+test('profile PATCH is NOT performance-mode-gated (switching to PLAY is a performance action)', async () => {
+  // Enter performance mode (structural lock), then confirm a profile switch is
+  // still ALLOWED (200) — a 409 here would defeat the purpose of PLAY mode.
+  const enter = await api('POST', '/performance-mode', { active: true });
+  const entered = enter.status === 200;
+  try {
+    const r = await api('PATCH', '/global-effects/profile', { controllerProfile: 'play' });
+    assert.equal(r.status, 200, entered
+      ? 'profile PATCH must be allowed DURING performance mode (not 409-gated)'
+      : 'profile PATCH must be allowed');
+    assert.equal(r.data.controllerProfile, 'play');
+  } finally {
+    if (entered) await api('POST', '/performance-mode', { active: false });
+    await api('PATCH', '/global-effects/profile', { controllerProfile: 'edit' });
+  }
+});

@@ -463,6 +463,19 @@ function setupGUI() {
   }
   window.flushAndDisarmUnloadGuard = flushAndDisarmUnloadGuard;
 
+  // Scene recovery variant: DISARM the pending autosave WITHOUT flushing it.
+  // Recovery must call this before POSTing /restore-backup — otherwise the
+  // pending debounced save (or the beforeunload sendBeacon fired by the
+  // window.location.reload after a restore) would re-save the bad in-browser
+  // state right back over the freshly restored files. We drop the pending
+  // write on purpose: the operator asked to discard unsaved changes.
+  function disarmUnloadGuard() {
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+    window.__sceneDirty = false;
+  }
+  window.disarmUnloadGuard = disarmUnloadGuard;
+
   window.addEventListener('beforeunload', (e) => {
     if (!flushPendingSaveBeacon()) return;
     // Still prompt: the beacon is fire-and-forget, the operator should

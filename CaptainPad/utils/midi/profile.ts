@@ -87,6 +87,13 @@ export type ProfileAction =
   // NOTE: no longer bound by the APC (stop_all_clips is now blackoutToggle);
   // kept as valid vocabulary + still exercised by unit tests.
   | { kind: 'masterFadeToggle' }
+  // PERFORMANCE-MODE dialog summon (APC solo button, 2026-07-13): the press
+  // NEVER blind-toggles the engine — it summons the SAME guarded flows the
+  // header control drives (idle → enter-confirm sheet; active → KEEP/RESTORE
+  // exit sheet; second press cancels). The choice is answered on the iPad.
+  // Dispatched: the injected api pokes the performance-dialog summon bus. LED
+  // lit while performance mode is ACTIVE (tracks the engine broadcast).
+  | { kind: 'performanceDialog' }
   // A DELIBERATELY DARK button (APC unused arrows + scene buttons). It carries
   // no engine action — pressing it resolves to nothing — but it IS projected,
   // always at velocity 0, so CaptainPad drives an explicit note-off to it on
@@ -239,7 +246,7 @@ const ACTION_KINDS = new Set([
   'paramCenter', 'master', 'pattern', 'patternBank',
   'blackoutToggle', 'globalEffect', 'sectionBrightness', 'groupFixedColor',
   'mixerLayerFader', 'focusChannel', 'globalEffectSlot',
-  'viewToggle', 'autopilotToggle', 'masterFadeToggle', 'ledOff',
+  'viewToggle', 'autopilotToggle', 'masterFadeToggle', 'ledOff', 'performanceDialog',
   'playlistScroll', 'playlistWindowSelect', 'colorPalettePair',
   'focusedParamKnob', 'focusedParamReset', 'paramCenterRelative', 'focusStep',
   'bpmSyncToggle', 'hueKnob', 'hueReset',
@@ -383,6 +390,8 @@ function validateAction(where: string, a: any): ProfileAction {
       return { kind: 'autopilotToggle' };
     case 'masterFadeToggle':
       return { kind: 'masterFadeToggle' };
+    case 'performanceDialog':
+      return { kind: 'performanceDialog' };
     case 'ledOff':
       return { kind: 'ledOff' };
     case 'playlistScroll':

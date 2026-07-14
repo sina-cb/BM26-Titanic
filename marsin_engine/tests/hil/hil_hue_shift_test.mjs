@@ -37,6 +37,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocket } from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -140,6 +142,9 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 
   try { await httpJson('GET', '/status'); }
   catch { console.error('  FATAL: engine unreachable at ' + ENGINE_BASE); process.exit(2); }
+
+  // Refuse to mutate a non-disposable engine BEFORE any write.
+  await assertDisposableEngine(ENGINE_BASE);
 
   takeSnapshot();
 

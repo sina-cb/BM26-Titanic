@@ -78,7 +78,7 @@
 #   page selection (THE physical side button changes pages, firmware-native; the
 #   device's page CC then follows into the engine). Sina's layout (2026-07-10
 #   evening) — see the controls section below for the authoritative map:
-#     note 41 (sb_0) → MODE cycle     note 43 (sb_2) → empty (reserved)
+#     note 41 (sb_0) → MODE cycle     note 43 (sb_2) → PROFILE toggle (edit↔play)
 #     note 42 (sb_1) → VIEW toggle    note 44 (sb_3) → MarsinLED logo
 #
 #   OUTBOUND FEEDBACK (Effects v2) — CaptainPad does NOT drive per-control `led:`
@@ -186,7 +186,10 @@ controls:
   #   sb_1 (note 42) → VIEW: toggle the LCD visual — grid (colors) ↔ full
   #                    readout. Presentation only; key behavior is DRUM (fire
   #                    immediately) in both views.
-  #   sb_2 (note 43) → empty (deliberate no-op, reserved).
+  #   sb_2 (note 43) → PROFILE: toggle the controller profile edit ↔ play (the
+  #                    manager PATCHes /global-effects/profile with the opposite
+  #                    of the snapshot's profile; the engine broadcast is the
+  #                    source of truth — no optimistic flip).
   #   sb_3 (note 44) → LOGO: show the MarsinLED wordmark (the welcome screen;
   #                    the next key press / feedback frame dismisses it).
   # `anyChannel: true`: like the keys, the small-button notes ride channel = the
@@ -199,7 +202,7 @@ controls:
   - id: sb1_view
     match: { type: note, channel: 0, notes: [42], anyChannel: true }
     action: { kind: vsn1SmallButton, button: 1 }
-  - id: sb2_empty
+  - id: sb2_profile
     match: { type: note, channel: 0, notes: [43], anyChannel: true }
     action: { kind: vsn1SmallButton, button: 2 }
   - id: sb3_logo

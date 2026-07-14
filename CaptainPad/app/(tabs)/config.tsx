@@ -5,8 +5,15 @@ import { useGlobalStyles, shadow } from '@/styles/globalStyles';
 import { usePalette, useTheme, ThemeMode } from '@/hooks/use-theme';
 import { THEMES, THEME_ORDER } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { getApiBase, getApiBaseAsync, getDefaultApiBase, setApiBase, testConnection, ConnectionResult } from '@/utils/api';
+import { getApiBase, getApiBaseAsync, getDefaultApiBase, setApiBase, testConnection, ConnectionResult, fetchEngineSettings, setEngineSettings } from '@/utils/api';
 import { useServerDiscovery, DiscoveredServer, normalizeSubnetPrefix } from '@/hooks/useServerDiscovery';
+import { engineEvents } from '@/utils/engineEvents';
+import {
+  DEFAULT_ENGINE_SETTINGS,
+  EngineSettingsState,
+  autoSaveHint,
+  reconcileEngineSettings,
+} from '@/components/engine_settings_logic';
 
 // AsyncStorage key for the operator-picked subnet prefix (e.g. "10.1.1").
 // iOS getIpAddressAsync() is unreliable when multiple interfaces are
@@ -217,6 +224,9 @@ export default function ConfigScreen() {
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* ── Section 1a: Engine settings (auto-save) ───────────────────── */}
+        <EngineSettingsCard />
 
         {/* ── Section 1b: Appearance (dark / light / system) ────────────── */}
         <AppearancePicker />
@@ -519,6 +529,152 @@ export default function ConfigScreen() {
         </View>
 
       </ScrollView>
+    </View>
+  );
+}
+
+// ── EngineSettingsCard ────────────────────────────────────────────────
+// AUTO-SAVE toggle — the engine-wide persistence gate (GET/POST /settings).
+// ON (default): all deck tuning, playlists, and mixer/global state persist
+// automatically (mixer channel parameters are never saved). OFF: nothing
+// persists until the operator saves explicitly — a restart reverts to the
+// last save. Loads on mount, reconciles from the `engineSettings` WS
+// broadcast, and toggles optimistically (rolls back + surfaces the error if
+// the engine rejects the write). A fetch failure shows a visible error row —
+// never a silent default that lies about the persistence state.
+function EngineSettingsCard() {
+  const globalStyles = useGlobalStyles();
+  const C = usePalette();
+  const [settings, setSettings] = useState<EngineSettingsState>(DEFAULT_ENGINE_SETTINGS);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Load current state on mount.
+  useEffect(() => {
+    let alive = true;
+    fetchEngineSettings().then((r) => {
+      if (!alive) return;
+      if (r.ok && r.data) {
+        setSettings((prev) => reconcileEngineSettings(prev, r.data));
+        setError(null);
+      } else {
+        setError(r.error || 'Could not load engine settings');
+      }
+      setLoaded(true);
+    });
+    return () => { alive = false; };
+  }, []);
+
+  // LIVE reconcile: the engine broadcasts `engineSettings` on every POST and
+  // replays it on /ws/control connect, so another operator's toggle (or a
+  // reconnect) keeps this card in sync without a re-fetch.
+  useEffect(() => {
+    const unsub = engineEvents.subscribe((msg) => {
+      if (msg.type === 'engineSettings') {
+        setSettings((prev) => reconcileEngineSettings(prev, msg));
+        setError(null);
+        setLoaded(true);
+      }
+    });
+    return unsub;
+  }, []);
+
+  const handleSet = useCallback(async (value: boolean) => {
+    if (busy || value === settings.autoSave) return;
+    // Optimistic flip, then reconcile from the engine's authoritative echo.
+    setSettings({ autoSave: value });
+    setBusy(true);
+    const r = await setEngineSettings({ autoSave: value });
+    setBusy(false);
+    if (r.ok && r.data) {
+      setSettings((prev) => reconcileEngineSettings(prev, r.data));
+      setError(null);
+    } else {
+      // Roll back the optimistic flip and surface the rejection (codex P0 —
+      // never show a value the engine never accepted).
+      setSettings({ autoSave: !value });
+      setError(r.error || 'Engine rejected the change');
+    }
+  }, [busy, settings.autoSave]);
+
+  const options: { value: boolean; label: string }[] = [
+    { value: true, label: 'ON' },
+    { value: false, label: 'OFF' },
+  ];
+
+  return (
+    <View style={[globalStyles.card, { alignSelf: 'stretch', padding: 24, marginBottom: 24 }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <IconSymbol name="externaldrive.fill.badge.checkmark" size={24} color={C.primary} />
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.text, letterSpacing: 1 }}>
+          AUTO-SAVE
+        </Text>
+      </View>
+
+      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.secondary, marginBottom: 16, lineHeight: 18 }}>
+        Whether the engine persists your show state to disk automatically.
+      </Text>
+
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        {options.map((opt) => {
+          const active = loaded && opt.value === settings.autoSave;
+          return (
+            <TouchableOpacity
+              key={String(opt.value)}
+              onPress={() => handleSet(opt.value)}
+              disabled={busy}
+              accessibilityLabel={`Set auto-save ${opt.label}`}
+              accessibilityRole="button"
+              style={{
+                flexGrow: 1,
+                flexBasis: '40%',
+                paddingVertical: 14,
+                paddingHorizontal: 12,
+                borderRadius: 10,
+                borderWidth: active ? 2 : 1,
+                borderColor: active ? C.primary : C.ghostBorder,
+                backgroundColor: active ? C.primaryContainer : C.surfaceContainerLow,
+                alignItems: 'center',
+                opacity: busy ? 0.6 : 1,
+              }}
+            >
+              <Text style={{
+                fontFamily: 'SpaceGrotesk_700Bold',
+                fontSize: 13,
+                color: active ? C.primary : C.text,
+                letterSpacing: 1.2,
+              }}>
+                {opt.label}
+              </Text>
+              {active ? (
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.primary, marginTop: 4 }}>
+                  ACTIVE
+                </Text>
+              ) : null}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {/* Hint for the current position. */}
+      <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: C.icon, marginTop: 14, lineHeight: 17 }}>
+        {autoSaveHint(settings.autoSave)}
+      </Text>
+
+      {/* Fetch/POST failure — visible, never a silent default. */}
+      {error && (
+        <View style={{
+          marginTop: 12,
+          backgroundColor: 'rgba(186, 26, 26, 0.08)',
+          borderRadius: 8, padding: 12,
+          borderWidth: 1, borderColor: 'rgba(186, 26, 26, 0.3)',
+        }}>
+          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 13, color: C.error }}>
+            {error}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }

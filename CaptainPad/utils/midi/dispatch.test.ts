@@ -19,6 +19,7 @@ function makeApi(): MidiDispatchApi {
     resetGlobalEffectSlotIntensity: vi.fn(ok),
     setEffectsPage: vi.fn(ok),
     cycleGlobalEffectSlotMode: vi.fn(ok),
+    setControllerProfile: vi.fn(ok),
     resetAllGlobalEffects: vi.fn(ok),
     disableAllGlobalEffects: vi.fn(ok),
     setChannelPlaylistEntry: vi.fn(ok),
@@ -27,7 +28,7 @@ function makeApi(): MidiDispatchApi {
     setChannelHue: vi.fn(ok),
     toggleDeckMixerView: vi.fn(ok),
     toggleCombinedAutopilot: vi.fn(ok),
-    toggleMasterFade: vi.fn(ok),
+    toggleMasterFade: vi.fn(ok), summonPerformanceDialog: vi.fn(ok),
   };
 }
 

@@ -79,19 +79,25 @@ export class GlobalEffectsController {
     // overlapping envelopes are summed via the additive blend mode).
     this.dropHits = []; // [{ params, triggeredAtMs, durationMs }]
 
-    // Color wash.
-    this.colorWashConfig = {
-      enabled: false,
-      preset: null,
-      color: null,
-      amount: 0,
-      mode: 'tint',
-      slotId: null,
-      fadingOut: false,
-      fadeStartMs: 0,
-      fadeDurationMs: 0,
-      fadeStartAmount: 0,
-    };
+    // Color wash — MULTI-INSTANCE, keyed per slot (RCA 2026-07-13: Ocean Wash
+    // slot 3 + Emergency Red slot 8 are two PRESETS of the SAME `colorWash`
+    // effect; the pre-fix single runtime layer meant activating one REPLACED
+    // the other). Each active wash now owns its own entry so two slots (even
+    // two of the SAME preset) coexist as independent layers. Keying:
+    //   slot dispatch  → `slot:${slotId}`
+    //   slotless (scheduler dispatchEffectAction slotId:null, or a direct
+    //     setColorWash with no slotId) → `sched:${presetId}`  (one entry per
+    //     scheduled preset — re-dispatch upserts, never piles up).
+    // Entry shape mirrors the old single config so per-entry fadeOut logic is
+    // unchanged. `colorWashConfig` is kept as a LEGACY single-object VIEW that
+    // points at the "primary" (highest-slotId) active entry — or a reset
+    // default when none — so existing status/test consumers that read the
+    // singular shape (getStatus().colorWash, ctrl.colorWashConfig) keep
+    // working. The library still flags colorWash `singleton:true`; that flag
+    // now scopes the SCHEDULER (one scheduled task per effect), NOT the
+    // controller's runtime instance count (scheduled_tasks.js left as-is).
+    this.colorWashes = new Map();
+    this.colorWashConfig = this._makeColorWashDefault();
 
     // Feedback trails — lazy-allocated when first enabled.
     this.feedbackTrailsConfig = {
@@ -477,28 +483,36 @@ export class GlobalEffectsController {
   // ── Chain stages (each self-gates: zero cost when its effect is off) ──
 
   _applyColorWashStage({ pixels, nowMs }) {
-    if ((this.colorWashConfig.enabled || this.colorWashConfig.fadingOut) && this.colorWashConfig.color) {
-      let amount = this.colorWashConfig.amount;
-      if (this.colorWashConfig.fadingOut) {
-        const elapsed = nowMs - this.colorWashConfig.fadeStartMs;
-        if (elapsed >= this.colorWashConfig.fadeDurationMs) {
-          this.colorWashConfig.fadingOut = false;
-          this.colorWashConfig.color = null;
-          this.colorWashConfig.preset = null;
-          amount = 0;
-        } else {
-          const ratio = 1 - (elapsed / this.colorWashConfig.fadeDurationMs);
-          amount = this.colorWashConfig.fadeStartAmount * ratio;
+    if (this.colorWashes.size === 0) return;
+    // Deterministic render order: ascending slotId. Slotless entries (slotId
+    // null → sort key -1) render FIRST; higher slotIds render LAST. For the
+    // 'replace'/'tint' blend that means the LATER (higher-slotId) wash WINS
+    // where two washes overlap the same pixel, because it composites over the
+    // earlier ones. 'multiply'/'max' compose order-independently. Each entry
+    // runs its OWN fadeOut; finished fades are deleted after the sweep.
+    const entries = [...this.colorWashes.values()].sort(
+      (a, b) => (a.slotId ?? -1) - (b.slotId ?? -1),
+    );
+    let finished = null;
+    for (let i = 0; i < entries.length; i++) {
+      const w = entries[i];
+      if (!(w.enabled || w.fadingOut) || !w.color) continue;
+      let amount = w.amount;
+      if (w.fadingOut) {
+        const elapsed = nowMs - w.fadeStartMs;
+        if (elapsed >= w.fadeDurationMs) {
+          (finished || (finished = [])).push(w.key);
+          continue;
         }
+        amount = w.fadeStartAmount * (1 - elapsed / w.fadeDurationMs);
       }
-      if (amount > 0 && this.colorWashConfig.color) {
-        colorWashEffect.apply({
-          pixels,
-          color6: this.colorWashConfig.color,
-          amount,
-          mode: this.colorWashConfig.mode,
-        });
+      if (amount > 0 && w.color) {
+        colorWashEffect.apply({ pixels, color6: w.color, amount, mode: w.mode });
       }
+    }
+    if (finished) {
+      for (let i = 0; i < finished.length; i++) this.colorWashes.delete(finished[i]);
+      this._syncColorWashCompat();
     }
   }
 
@@ -863,25 +877,105 @@ export class GlobalEffectsController {
     return cleared;
   }
 
-  // ── Color wash ────────────────────────────────────────────────────
+  // ── Color wash (multi-instance, keyed per slot) ───────────────────
+  _makeColorWashDefault() {
+    return {
+      enabled: false, preset: null, color: null, amount: 0, mode: 'tint',
+      slotId: null, key: null, fadingOut: false, fadeStartMs: 0,
+      fadeDurationMs: 0, fadeStartAmount: 0,
+    };
+  }
+
+  /**
+   * Derive a wash entry's collection key. A slot-bound wash keys by its SLOT
+   * so two slots (even the same preset) are two independent washes; a slotless
+   * caller (scheduler dispatch, direct API) keys by preset. Returns null only
+   * when NEITHER is known (the legacy "untargeted" disable — see setColorWash).
+   */
+  _colorWashKey({ slotId = null, presetId = null } = {}) {
+    if (slotId !== null && slotId !== undefined) return `slot:${slotId}`;
+    if (presetId) return `sched:${presetId}`;
+    return null;
+  }
+
+  /**
+   * Re-point the legacy single-object VIEW (`colorWashConfig`) at the PRIMARY
+   * active wash — the highest-slotId entry (slotless entries rank below slotted;
+   * newest wins on a tie), matching the render "later slot wins" rule. When no
+   * wash is active it points at a reset default. Called after every mutation so
+   * consumers reading the singular shape stay consistent. Identity is preserved
+   * for an in-place tweak (the same entry object stays primary).
+   */
+  _syncColorWashCompat() {
+    if (this.colorWashes.size === 0) {
+      this.colorWashConfig = this._makeColorWashDefault();
+      return;
+    }
+    let primary = null;
+    for (const w of this.colorWashes.values()) {
+      if (!primary || (w.slotId ?? -1) >= (primary.slotId ?? -1)) primary = w;
+    }
+    this.colorWashConfig = primary;
+  }
+
+  /** Begin the fade-out of one wash entry (idempotent while already fading). */
+  _startColorWashFade(entry, time) {
+    if (!entry.enabled && entry.fadingOut) return;
+    entry.fadingOut = true;
+    entry.enabled = false;
+    entry.fadeStartMs = time;
+    const params = entry.preset && GLOBAL_EFFECT_LIBRARY.colorWash.presets[entry.preset]?.params;
+    entry.fadeDurationMs = params?.fadeOutMs ?? 1000;
+    entry.fadeStartAmount = entry.amount;
+  }
+
+  /**
+   * Clear EVERY active wash. `immediate` drops them instantly (blackout /
+   * panic); otherwise each entry fades out on its own preset's fadeOutMs.
+   */
+  clearAllColorWashes({ immediate = false, nowMs = null } = {}) {
+    if (immediate) {
+      this.colorWashes.clear();
+      this._syncColorWashCompat();
+      return;
+    }
+    const time = nowMs ?? performance.now();
+    for (const w of this.colorWashes.values()) this._startColorWashFade(w, time);
+    this._syncColorWashCompat();
+  }
+
+  /**
+   * Enable / disable a color wash for the caller's key (slot or slotless).
+   *
+   * enable  → UPSERT this key's entry (an in-place live tweak on the SAME
+   *           running key+preset mutates the existing entry object so no fade
+   *           is dropped and consumer refs / object identity survive).
+   * disable → target ONLY the caller's key. A disable with NEITHER slotId nor
+   *           presetId (the legacy "untargeted" call, e.g. an old panic path)
+   *           falls back to clearing ALL washes — matching pre-fix broad
+   *           semantics without reintroducing the cross-slot kill for TARGETED
+   *           callers.
+   */
   setColorWash(enabled, presetId = null, amount = 0, mode = 'tint', meta = {}) {
+    const key = this._colorWashKey({ slotId: meta.slotId, presetId });
     if (!enabled) {
-      const immediate = meta && meta.immediate;
+      const immediate = !!(meta && meta.immediate);
       const nowMs = meta && meta.nowMs;
-      if (!immediate && this.colorWashConfig.enabled) {
-        this.colorWashConfig.fadingOut = true;
-        this.colorWashConfig.fadeStartMs = nowMs ?? performance.now();
-        const params = this.colorWashConfig.preset && GLOBAL_EFFECT_LIBRARY.colorWash.presets[this.colorWashConfig.preset]?.params;
-        const fadeMs = params?.fadeOutMs ?? 1000;
-        this.colorWashConfig.fadeDurationMs = fadeMs;
-        this.colorWashConfig.fadeStartAmount = this.colorWashConfig.amount;
-      } else if (immediate || !this.colorWashConfig.fadingOut) {
-        this.colorWashConfig = {
-          enabled: false, preset: null, color: null, amount: 0, mode: 'tint', slotId: null,
-          fadingOut: false, fadeStartMs: 0, fadeDurationMs: 0, fadeStartAmount: 0,
-        };
+      // Untargeted (no key): legacy broad kill of every wash.
+      if (key === null) {
+        this.clearAllColorWashes({ immediate, nowMs });
+        return;
       }
-      this.colorWashConfig.enabled = false;
+      const entry = this.colorWashes.get(key);
+      if (!entry) return; // nothing bound to this key — clean no-op
+      if (immediate) {
+        this.colorWashes.delete(key);
+      } else if (entry.enabled) {
+        this._startColorWashFade(entry, nowMs ?? performance.now());
+      } else if (!entry.fadingOut) {
+        this.colorWashes.delete(key);
+      }
+      this._syncColorWashCompat();
       return;
     }
     const fx = GLOBAL_EFFECT_LIBRARY.colorWash;
@@ -889,38 +983,39 @@ export class GlobalEffectsController {
     if (!preset) {
       throw new Error(`Unknown colorWash preset: ${presetId}`);
     }
+    const upsertKey = key; // an enable always carries a preset → key is non-null
+    const existing = this.colorWashes.get(upsertKey);
 
-    // GLITCH-FREE LIVE RE-APPLY (glitch-fix campaign 2026-07): a live tweak on a
-    // RUNNING wash (Wash Depth jog-wheel → amount, Blend encoder → mode) re-
-    // enters here via _reapplyIfActive('activate'). colorWash holds no phase or
-    // buffer, so the pre-fix full rebuild wasn't a hard glitch, but rebuilding
-    // the config each frame dropped any in-progress fade and re-allocated the
-    // color array needlessly. In-place update keeps it clean and consistent with
-    // the strobe/trails fixes: same slot+preset → mutate amount/mode/color in
-    // place, leave fade fields as-is (a live tweak is not a fade event).
-    const inPlace = this.colorWashConfig.enabled
-      && !this.colorWashConfig.fadingOut
-      && this.colorWashConfig.preset === presetId
-      && this.colorWashConfig.slotId === (meta.slotId || null);
-    if (inPlace) {
-      this.colorWashConfig.amount = amount;
-      this.colorWashConfig.mode = mode;
-      this.colorWashConfig.color = [...preset.params.color];
+    // GLITCH-FREE LIVE RE-APPLY: a live tweak (Wash Depth / Blend encoder) on a
+    // RUNNING wash re-enters here via _reapplyIfActive('activate'). Same
+    // key+preset, enabled, not fading → mutate the SAME entry object in place
+    // (leave fade fields alone; a tweak is not a fade), preserving identity for
+    // any held reference.
+    if (existing && existing.enabled && !existing.fadingOut && existing.preset === presetId) {
+      existing.amount = amount;
+      existing.mode = mode;
+      existing.color = [...preset.params.color];
+      this._syncColorWashCompat();
       return;
     }
 
-    this.colorWashConfig = {
-      enabled: true,
-      preset: presetId,
-      color: [...preset.params.color],
-      amount: amount,
-      mode: mode,
-      slotId: meta.slotId || null,
-      fadingOut: false,
-      fadeStartMs: 0,
-      fadeDurationMs: 0,
-      fadeStartAmount: 0,
-    };
+    // Fresh enable (or a re-enable after fade / a preset swap on this key).
+    // Reuse the existing entry object when present so a mid-fade re-enable keeps
+    // object identity (mirrors the interrupted-fade contract).
+    const entry = existing || this._makeColorWashDefault();
+    entry.enabled = true;
+    entry.preset = presetId;
+    entry.color = [...preset.params.color];
+    entry.amount = amount;
+    entry.mode = mode;
+    entry.slotId = meta.slotId ?? null;
+    entry.key = upsertKey;
+    entry.fadingOut = false;
+    entry.fadeStartMs = 0;
+    entry.fadeDurationMs = 0;
+    entry.fadeStartAmount = 0;
+    this.colorWashes.set(upsertKey, entry);
+    this._syncColorWashCompat();
   }
 
   // ── Feedback trails ───────────────────────────────────────────────
@@ -1246,7 +1341,14 @@ export class GlobalEffectsController {
         config: this.strobeConfig ? { ...this.strobeConfig } : null,
         burstEndFrame: this.strobeBurstEndFrame,
       },
+      // Legacy single-object VIEW (primary wash) — kept for status/HIL
+      // consumers that read the singular shape (controller.colorWash.enabled).
       colorWash: { ...this.colorWashConfig },
+      // Full multi-instance collection (RCA 2026-07-13). Each active/ fading
+      // wash, deep-cloned so consumers can't mutate the live entries.
+      colorWashes: [...this.colorWashes.values()].map(w => ({
+        ...w, color: w.color ? [...w.color] : null,
+      })),
       feedbackTrails: {
         enabled: this.feedbackTrailsConfig.enabled,
         preset: this.feedbackTrailsConfig.preset,
@@ -1308,7 +1410,7 @@ export class GlobalEffectsController {
     ]) {
       this.setEffect(k, false);
     }
-    this.setColorWash(false, null, 0, 'tint', { immediate: true });
+    this.clearAllColorWashes({ immediate: true });
 
     // ── Party effects (report 20260708_7) ────────────────────────────
     // Kill everything that is ANIMATION or a FREEZE/OVERLAY hazard; PRESERVE

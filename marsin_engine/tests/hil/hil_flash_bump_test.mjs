@@ -38,6 +38,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const portIdx = process.argv.indexOf('--port');
 const PORT = portIdx !== -1 && process.argv[portIdx + 1] ? parseInt(process.argv[portIdx + 1], 10) : 31268;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -128,6 +130,9 @@ async function main() {
   try {
     const deck = await httpJson('GET', '/deck/channel');
     deckId = deck.body?.channel?.id || null;
+
+    // Refuse to mutate a non-disposable engine BEFORE adding any channel.
+    await assertDisposableEngine(BASE);
 
     // Two overlays parked LOW (fader 0.2) so a bump-to-full is unmistakable.
     const a = await httpJson('POST', '/mixer/channels', { pattern: 'test_const', name: 'ACCENT' });

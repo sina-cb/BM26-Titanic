@@ -163,6 +163,11 @@ export interface ApiResult<T> {
   error?: string;
   /** HTTP status when the response was received (absent on transport failures). */
   status?: number;
+  /** Machine-readable error code from the engine's rejection body (e.g.
+   *  'PERFORMANCE_MODE', 'WRONG_ROLE'). Absent on success + transport failures.
+   *  Lets callers branch on the reason (the MIDI runtime quiets a 409 that is a
+   *  performance-mode lock rather than counting it as a dispatch failure). */
+  code?: string;
 }
 
 export async function sendControl(id: number, v0: number, v1?: number, v2?: number): Promise<ApiResult<any>> {
@@ -322,6 +327,100 @@ export async function setDeckTransitionConfig(patch: Partial<DeckTransitionConfi
   }
 }
 
+// ── Engine settings (auto-save toggle) ─────────────────────────────────────
+// Engine-wide persistence gate. When autoSave is ON (default), all deck
+// tuning, playlists, and mixer/global state persist automatically (mixer
+// channel PARAMETERS are never saved). When OFF, nothing persists until the
+// operator saves explicitly — a restart reverts to the last save. Mirrors the
+// deck-transition-config fetch/set posture (GET returns it, POST accepts a
+// partial patch; the engine 400s a non-boolean autoSave — no coercion).
+export type EngineSettings = {
+  autoSave: boolean;
+};
+
+export async function fetchEngineSettings(): Promise<ApiResult<EngineSettings>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/settings`);
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('Fetch engine settings failed:', 'Fetch engine settings failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function setEngineSettings(patch: Partial<EngineSettings>): Promise<ApiResult<EngineSettings>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    // Codex P0 — fail loud: surface an engine rejection so the toggle's
+    // optimistic update can roll back instead of showing a value the engine
+    // never accepted.
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('Set engine settings failed:', 'Set engine settings failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── Performance mode (live-show structural lock) ───────────────────────────
+// The engine's in-memory "show is running" lock. While active it freezes
+// auto-persistence and 409s every structural/persistent-change route (the
+// engine is the enforcement layer — CaptainPad only mirrors + greys). GET
+// returns {active, enteredAt}; POST enters ({active:true}) or exits
+// ({active:false, exitAction:'keep'|'restore'}). The engine's WS broadcast is
+// authoritative — the UI never optimistically flips. Mirrors the fetch/set
+// posture of engine settings; the engine 400s a non-boolean active (no coercion).
+export type PerformanceModeState = {
+  active: boolean;
+  enteredAt: string | null;
+  // Pending dirty deck tuning (present since the save-ask exit sheet landed).
+  dirtyCount?: number;
+  dirtyEntries?: { playlist: string; entryId: string; label: string | null }[];
+};
+
+export type PerformanceExitAction = 'keep' | 'keep-save' | 'restore';
+
+export async function fetchPerformanceMode(): Promise<ApiResult<PerformanceModeState>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/performance-mode`);
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('Fetch performance mode failed:', 'Fetch performance mode failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function setPerformanceMode(
+  body: { active: true } | { active: false; exitAction: PerformanceExitAction },
+): Promise<ApiResult<PerformanceModeState>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/performance-mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    // Codex P0 — fail loud: surface the engine's rejection (+ code) so the
+    // control can show the real error instead of a phantom success.
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data, code: data?.code };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('Set performance mode failed:', 'Set performance mode failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
 // ── Deck COLOR autopilot (operator request: "in the autopilot, select a set
 // of palettes that switch on their own timer") ─────────────────────────────
 // A second, INDEPENDENT autopilot on the deck that cycles a chosen SET of
@@ -397,6 +496,13 @@ export async function setActivePattern(pattern: string): Promise<ApiResult<any>>
       body: JSON.stringify({ pattern }),
     });
     const data = await res.json();
+    // Codex P0 — fail loud + thread `code`: a pattern swap is gated (409
+    // PERFORMANCE_MODE) while a show is live. Surface the rejection + its code
+    // so a pattern-bound MIDI pad quiets to "locked" instead of counting a
+    // dispatch failure, and so callers never see a phantom success.
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data, code: data?.code };
+    }
     return { ok: true, data };
   } catch (err: any) {
     warnThrottled('Set active pattern failed:', 'Set active pattern failed:', err);
@@ -1173,7 +1279,7 @@ export async function updateDeckChannel(updates: any): Promise<ApiResult<any>> {
       body: JSON.stringify(updates),
     });
     const data = await res.json();
-    return { ok: res.ok, data, error: res.ok ? undefined : data?.error };
+    return { ok: res.ok, data, error: res.ok ? undefined : data?.error, code: res.ok ? undefined : data?.code };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }
@@ -1212,7 +1318,7 @@ export async function updateMixerChannel(id: string, updates: any): Promise<ApiR
     // rejected PATCH. Mirror updateDeckChannel's res.ok handling.
     const data = await res.json();
     if (!res.ok) {
-      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data, code: data?.code };
     }
     return { ok: true, data };
   } catch (err: any) {
@@ -1972,6 +2078,65 @@ export async function setEffectsPage(page: number): Promise<ApiResult<{ effectsP
     return { ok: true, data: await res.json() };
   } catch (err: any) {
     warnThrottled('set-effects-page', 'Failed to set effects page:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── VSN1 controller profile — 'edit' (full authoring UI) ↔ 'play' (performance
+// presentation). The ENGINE is the single source of truth: GET/PATCH
+// /global-effects/profile, WS-broadcast `{type:'controllerProfile', profile}` on
+// change + replayed on connect, persisted engine-side in global_effect_slots.yaml.
+// A PATCH triggers a page-0 device redeploy engine-side. Every surface (CaptainPad
+// grid presentation, the VSN1 sb_2 toggle) follows the broadcast — no surface
+// keeps a private profile.
+export type ControllerProfileValue = 'edit' | 'play';
+
+export async function fetchControllerProfile(): Promise<ApiResult<{ profile: ControllerProfileValue }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/profile`);
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    // REST wire key is `controllerProfile` (matching the engine's state field);
+    // the WS broadcast uses `profile`. Normalize to `profile` for all callers.
+    const json = await res.json();
+    return { ok: true, data: { profile: json.controllerProfile } };
+  } catch (err: any) {
+    warnThrottled('fetch-controller-profile', 'Failed to fetch controller profile:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// PATCH the controller profile. The engine's REST contract is the body key
+// `controllerProfile` ('edit' | 'play'); it 400s on any other value. On success
+// the engine broadcasts `{type:'controllerProfile', profile}` (and runs the
+// page-0 redeploy) so every surface converges — callers must NOT optimistically
+// flip; await the echo. Mirrors the fail-loud shape.
+//
+// Optional `source` is a provenance tag sent as the body key `source` (the
+// profile itself stays under `controllerProfile`). The engine logs the flip as
+// `[ControllerProfile] prev -> next (source=..., remote=...)` and echoes `source`
+// in its WS `controllerProfile` broadcast, so an unexplained edit↔play flip can
+// be traced to the surface that caused it (e.g. 'vsn1_sb2'). Omitted → the
+// engine records the default/unknown source; the body key is not sent.
+export async function patchControllerProfile(
+  profile: ControllerProfileValue,
+  source?: string,
+): Promise<ApiResult<{ profile: ControllerProfileValue }>> {
+  try {
+    const body: { controllerProfile: ControllerProfileValue; source?: string } = { controllerProfile: profile };
+    if (source) body.source = source;
+    const res = await fetchWithTimeout(`${api_base}/global-effects/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    const json = await res.json();
+    return { ok: true, data: { profile: json.controllerProfile } };
+  } catch (err: any) {
+    warnThrottled('patch-controller-profile', 'Failed to set controller profile:', err);
     return { ok: false, error: err.message };
   }
 }

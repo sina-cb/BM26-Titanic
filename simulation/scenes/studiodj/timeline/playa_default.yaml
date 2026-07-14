@@ -1,0 +1,192 @@
+schemaVersion: 2
+name: playa_default
+location:
+  lat: 40.7864
+  lon: -119.2065
+  tz: America/Los_Angeles
+  elevationM: 1190
+festival:
+  startDate: '2026-08-30'
+  days: 8
+autopilot:
+  enabled: true
+  playlist: default
+  delay_s: 45
+  shuffle: true
+  target:
+    channel: deck
+    id: null
+  mood: true
+phases:
+  philharmonic:
+    start:
+      sun: sunset
+      offsetMin: -30
+    end:
+      sun: sunset
+      offsetMin: 60
+  party_night:
+    start:
+      sun: sunset
+      offsetMin: 120
+    end:
+      sun: sunrise
+      offsetMin: -60
+  sunrise_set:
+    start:
+      sun: sunrise
+      offsetMin: -30
+    end:
+      sun: sunrise
+      offsetMin: 90
+looks:
+  daytime:
+    playlist: default
+    palette: deep_sea
+    globals:
+      master: 0.5
+    target:
+      channel: deck
+      id: null
+  philharmonic:
+    playlist: default
+    autopilot:
+      active: true
+      delay_s: 90
+      shuffle: false
+    palette: sunset_coral
+    target:
+      channel: deck
+      id: null
+  party:
+    playlist: default
+    autopilot:
+      active: true
+      delay_s: 30
+      shuffle: true
+    palette: bass_drop
+    target:
+      channel: deck
+      id: null
+  sunrise:
+    playlist: default
+    palette: aurora
+    globals:
+      master: 0.6
+    target:
+      channel: deck
+      id: null
+  burn_night:
+    playlist: default
+    palette: bass_drop
+    globals:
+      master: 1
+    target:
+      channel: deck
+      id: null
+  temple:
+    playlist: default
+    palette: aurora
+    globals:
+      master: 0.4
+    target:
+      channel: deck
+      id: null
+cues:
+  - id: c_visibility_on
+    label: Exterior up at golden hour
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunset
+      offsetMin: -45
+    action:
+      type: look
+      look: philharmonic
+    kind: program
+    hold:
+      min: 90
+    days: all
+  - id: c_party_start
+    label: Party night ramp
+    enabled: true
+    catchUp: true
+    trigger:
+      type: phase
+      phase: party_night
+    action:
+      type: look
+      look: party
+    kind: ambient
+    days: all
+  - id: c_mood_to_party
+    label: 'Follow the DJ: calm -> party'
+    enabled: true
+    catchUp: true
+    trigger:
+      type: mood
+      from: calm
+      to: party
+      minDwellSec: 20
+      cooldownSec: 300
+      whenPhase: party_night
+    action:
+      type: playlist
+      name: default
+      target:
+        channel: deck
+        id: null
+      autopilot:
+        active: true
+        delay_s: 30
+        shuffle: true
+    kind: mood
+    days: all
+  - id: c_sunrise
+    label: Sunrise wind-down
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunrise
+      offsetMin: -15
+    action:
+      type: look
+      look: sunrise
+    kind: program
+    hold:
+      min: 90
+    days: all
+  - id: c_burn_night
+    label: Burn night spectacle
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunset
+      offsetMin: 90
+    action:
+      type: look
+      look: burn_night
+    kind: program
+    hold:
+      min: 120
+    days:
+      - 6
+  - id: c_temple
+    label: Temple burn — reverent
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunset
+      offsetMin: 60
+    action:
+      type: look
+      look: temple
+    kind: program
+    hold:
+      min: 120
+    days:
+      - 7

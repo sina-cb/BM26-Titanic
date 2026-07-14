@@ -75,7 +75,7 @@ not a wrapped no-op).
 | Button | Note | Function | LED |
 |--------|-----:|----------|-----|
 | Clip Stop | 112 | **Combined AUTOPILOT toggle** (pattern + colour) | Lit when the autopilot is on (see below) |
-| Solo | 113 | *(unassigned)* | Driven dark (`ledOff`) |
+| Solo | 113 | **PERFORMANCE/EDIT mode switch** (summons the dialog, see below) | Lit while performance mode is active |
 | Mute | 114 | *(unassigned)* | Driven dark |
 | Rec Arm | 115 | *(unassigned)* | Driven dark |
 | Select | 116 | *(unassigned)* | Driven dark |
@@ -115,6 +115,40 @@ state a press turns off:
 It tracks state from any surface (a screen toggle, the Clip Stop press, the
 idle auto-disable) via the engine's `autopilot` / `colorAutopilot` WS
 broadcasts.
+
+### Solo (113) — performance/edit mode switch (2026-07-13)
+
+Summons the **performance-mode dialog** in the CaptainPad UI — the SAME
+guarded flows tapping the header PERFORMANCE/EDIT control drives. The press
+**never blind-toggles the engine**:
+
+- **idle** → opens the "Enter performance mode?" confirm sheet (GO LIVE /
+  CANCEL). While an APC is connected the sheet shows an amber
+  "● PRESS SOLO AGAIN TO GO LIVE" row;
+- **enter sheet open** → the second press **CONFIRMS** (GO LIVE) — press SOLO,
+  press SOLO again, you're live. On-screen CANCEL / backdrop tap still cancels;
+- **performance mode active** → opens the exit sheet (**KEEP LIVE STATE** /
+  **RESTORE PRE-SHOW** / CANCEL) — the keep-vs-restore choice can only be
+  answered on the iPad, and the sheet says so ("SOLO closes this sheet — choose
+  KEEP or RESTORE here on the iPad.");
+- **exit sheet open** → the second press only **closes** the sheet (one button
+  cannot pick between KEEP and RESTORE; closing is safe and reversible).
+
+Mechanics: the profile's `performanceDialog` kind dispatches to the injected
+`summonPerformanceDialog` api method (hook-side), which pokes the
+performance-dialog summon bus (pure module: `components/performance_mode_logic.ts`,
+re-exported by `hooks/usePerformanceMode.ts`); the shared `PerformanceModeControl`
+(mounted in both the deck and mixer headers) claims the summon and applies
+`performanceSummonOutcome` — the vitest-pinned press matrix above. Fails loud (status
+`✕`) if no dialog UI is mounted.
+
+**LED.** Lit while performance mode is **active** (tracks the engine's
+`performanceMode` WS broadcast, replayed on connect), dark in edit mode. The
+scene-column LEDs are single-colour hardware, so "red" is not addressable —
+lit/dark is the full palette on this button.
+
+> This button was previously **unassigned** (explicitly driven dark) — nothing
+> was displaced by the rebind.
 
 ### Stop All Clips (119) — blackout toggle
 
@@ -176,8 +210,9 @@ Action **kinds** used by this surface:
 | `mixerLayerFader` | faders 1–4 | Set a mixer channel's fader (`layer`). |
 | `master` | fader 9 | Set the grand master. |
 | `focusChannel` | 100–103 | Focus a mixer channel (`layer`). |
-| `ledOff` | 104–107, 113–118 | Inert on press; projected at velocity 0 so the LED is driven dark and held. |
+| `ledOff` | 104–107, 114–118 | Inert on press; projected at velocity 0 so the LED is driven dark and held. |
 | `autopilotToggle` | 112 | Combined autopilot toggle. Decision logic in `utils/midi/apc_button_logic.ts` (`combinedAutopilotTarget` / `combinedAutopilotLedOn` / `colorAutopilotWritable`); the read-both / write logic in `hooks/useMidiControl.ts` (`toggleCombinedAutopilot`), injected as an api method. |
+| `performanceDialog` | 113 | Summon the performance-mode dialog (enter-confirm / exit sheet) in the UI; LED lit while performance mode is active. Injected api method `summonPerformanceDialog` → summon bus in `hooks/usePerformanceMode.ts`. |
 | `blackoutToggle` | 119 | e-stop blackout toggle. |
 | `viewToggle` | 122 | Toggle Deck ↔ Mixer tab (`toggleDeckMixerView` in the hook). |
 | `playlistScroll` / `playlistWindowSelect` | grid cols 1–4 | Playlist window browser. |

@@ -6,6 +6,7 @@
 
 import { MidiTransport } from './transport';
 import { WebMidiTransport, isMidiAvailable } from './web_midi_transport';
+import { FakeApcDemoTransport, demoFakeMidiRequested } from './fake_demo_transport';
 
 export * from './transport';
 export * from './profile';
@@ -36,6 +37,9 @@ export function isNativeMidiAvailable(): boolean {
 export type MidiTransportKind = 'native' | 'web' | 'none';
 
 export function getMidiTransportKind(): MidiTransportKind {
+  // Explicit, loud demo gate (?fakeMidi=apc — see fake_demo_transport.ts).
+  // Never a fallback: without the URL flag this line is inert.
+  if (demoFakeMidiRequested()) return 'web';
   if (isNativeMidiAvailable()) return 'native';
   if (isMidiAvailable()) return 'web';
   return 'none';
@@ -44,6 +48,9 @@ export function getMidiTransportKind(): MidiTransportKind {
 /** Returns a factory that builds a fresh transport per controller, or null
  *  when MIDI is unavailable on this platform. */
 export function selectTransportFactory(): (() => MidiTransport) | null {
+  // Explicit demo gate first (see fake_demo_transport.ts — loud, URL-flagged,
+  // enumerates a VIRTUAL APC only; real Web MIDI is never touched).
+  if (demoFakeMidiRequested()) return () => new FakeApcDemoTransport();
   const kind = getMidiTransportKind();
   if (kind === 'web') return () => new WebMidiTransport();
   // 'native' wiring lands with the Expo module (Phase 3).
