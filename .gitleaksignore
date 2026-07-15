@@ -24,3 +24,7 @@
 72de1ef7cfc15b14ef3c3e95fac02f4296ffb0e2:.agent/02_reports/202606/20260619_2_test_auto_patch.md:bm26-report-ip:52
 72de1ef7cfc15b14ef3c3e95fac02f4296ffb0e2:.agent/02_reports/202606/20260619_2_test_auto_patch.md:bm26-report-ip:137
 94e59ac3397e77f27c968903fab60882cca1130b:.agent/02_reports/202606/20260618_10_led_dmx_parity_impl.md:bm26-report-ip:31
+# Tailscale IP in a June report (introduced on the old .agent/02_reports/ path;
+# moved to .agent/reports/ AND redacted to 100.x.x.90 at HEAD — history-only).
+48817bd5239ce0bbab1aa34aa0d102137b87fce9:.agent/02_reports/202606/20260618_13_gallery_regen_and_launcher.md:bm26-public-ip:44
+48817bd5239ce0bbab1aa34aa0d102137b87fce9:.agent/02_reports/202606/20260618_13_gallery_regen_and_launcher.md:bm26-report-ip:44
