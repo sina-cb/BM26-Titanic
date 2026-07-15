@@ -36,6 +36,7 @@ import { createLayoutDeployHook, isLayoutDeployEnabled } from '../lib/vsn1_layou
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import yaml from 'js-yaml';
 
 function mkMgr(opts) {
   const ctrl = new GlobalEffectsController({ engine: { fps: 40 } });
@@ -213,27 +214,66 @@ test('requestFullDeploy is a safe no-op (returns []) when no deploy hook is wire
   assert.deepEqual(mgr.requestFullDeploy(), []);
 });
 
-// ── controllerProfile (engine-owned edit|play surface selector) ──────────
+// ── named BANKS (engine-owned active-bank selector) ──────────────────────
 
-test('controllerProfile is engine-owned, defaults to edit, validated on set', () => {
+test('a fresh manager has one edit bank; setActiveBank swaps + fails loud on unknown', () => {
   const mgr = mkMgr();
-  assert.equal(mgr.getControllerProfile(), 'edit');
-  assert.equal(mgr.setControllerProfile('play'), 'play');
-  assert.equal(mgr.getControllerProfile(), 'play');
-  assert.equal(mgr.setControllerProfile('edit'), 'edit');
-  assert.throws(() => mgr.setControllerProfile('performance'), /controllerProfile must be/);
-  assert.throws(() => mgr.setControllerProfile(2), /controllerProfile must be/);
-  assert.throws(() => mgr.setControllerProfile(null), /controllerProfile must be/);
+  const meta = mgr.getBanksMeta();
+  assert.equal(meta.banks.length, 1);
+  assert.equal(meta.activeBankId, 'edit');
+  mgr.createBank();                 // bank_1 (empty)
+  assert.equal(mgr.setActiveBank('bank_1'), 'bank_1');
+  assert.equal(mgr.getActiveBankId(), 'bank_1');
+  assert.equal(mgr.setActiveBank('edit'), 'edit');
+  assert.throws(() => mgr.setActiveBank('performance'), /unknown bank id/);
+  assert.throws(() => mgr.setActiveBank(2), /unknown bank id/);
+  assert.throws(() => mgr.setActiveBank(null), /unknown bank id/);
 });
 
-test('switching controllerProfile is not a slot mutation and fires no layout deploy', () => {
+test('switching the active bank is not a slot mutation and fires no layout deploy', () => {
   let deploys = 0;
   const mgr = mkMgr({ onLayoutChanged: () => { deploys += 1; } });
   const slotsBefore = mgr.getSlots();
-  mgr.setControllerProfile('play');
-  mgr.setControllerProfile('edit');
-  assert.deepEqual(mgr.getSlots(), slotsBefore, 'slot bindings unchanged by a profile switch');
-  assert.equal(deploys, 0, 'a profile switch never emits layout-changed by itself');
+  mgr.createBank();
+  mgr.setActiveBank('bank_1');
+  mgr.setActiveBank('edit');
+  assert.deepEqual(mgr.getSlots(), slotsBefore, 'slot bindings unchanged by a bank switch');
+  assert.equal(deploys, 0, 'a bank switch never emits layout-changed by itself');
+});
+
+test('the API bank-switch flow (swap + requestFullDeploy) fires exactly one page-0 deploy', async () => {
+  // Model the api_server handler: setActiveBank (no emit) THEN requestFullDeploy
+  // (emits page 0 iff populated). Wire a real ENABLED deploy hook with an
+  // injected fake spawn so we can count device flashes. The target bank is
+  // seeded with the default (page-0-populated) config so the re-flash fires.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vsn1-bank-deploy-'));
+  const calls = [];
+  const { hook, flush } = createLayoutDeployHook({
+    stateDir: dir,
+    engineConfig: { vsn1: { deployLayout: true } },
+    spawnFn: mkFakeSpawn(calls),
+  });
+  const mgr = mkMgr({ onLayoutChanged: (evt) => { hook(evt); } });
+  // A second bank that ALSO has page-0 content (clone of the default config).
+  mgr.setBanks([
+    { id: 'edit', name: 'Edit', slots: mgr.getSlots() },
+    { id: 'play', name: 'Play', slots: mgr.getSlots() },
+  ], 'edit');
+
+  mgr.setActiveBank('play');            // swap only — no emit
+  const pages = mgr.requestFullDeploy(); // re-flash the new bank (page 0)
+  assert.deepEqual(pages, [0], 'requestFullDeploy emits page 0 (bank is populated there)');
+  await flush();
+  assert.equal(calls.length, 1, 'exactly one page-0 deploy for the bank switch');
+  assert.equal(calls[0].args[calls[0].args.indexOf('--page') + 1], '0', 'deploys ONLY page 0');
+});
+
+test('nextBank cycles + wraps; a single-bank list is a no-op', () => {
+  const mgr = mkMgr();
+  assert.deepEqual(mgr.nextBank(), { activeBankId: 'edit', bankName: 'Edit', index: 0, count: 1 });
+  mgr.createBank('B'); // bank_1
+  assert.equal(mgr.nextBank().activeBankId, 'bank_1');
+  assert.equal(mgr.nextBank().activeBankId, 'edit', 'wraps');
 });
 
 // ════════════════════════════════════════════════════════════════════
@@ -351,7 +391,7 @@ test('getLayout serializes populated slots (id, page, effect, name, color); JSON
   const layout = mgr.getLayout();
   assert.equal(layout.version, 1);
   assert.equal(layout.slotsPerPage, 8);
-  assert.equal(layout.pageCount, 4);
+  assert.equal(layout.pageCount, undefined, 'pageCount removed (D8, zero readers)');
   const s3 = layout.slots.find(s => s.slotId === 3);
   assert.equal(s3.effectId, 'colorWash');
   assert.equal(s3.name, 'Ocean');
@@ -489,9 +529,11 @@ test('deploy hook is DISABLED by default: writes layout JSON but does not spawn'
   assert.equal(res.reason, 'disabled');
   await flush(); // even after a forced flush, nothing spawns when disabled
   assert.equal(spawned, 0, 'no child process spawned when disabled');
-  // The layout JSON IS written for tools/operator inspection.
-  const written = JSON.parse(fs.readFileSync(path.join(dir, 'vsn1_layout.json'), 'utf8'));
+  // The layout YAML IS written for tools/operator inspection (v3 switched the
+  // artifact from vsn1_layout.json to vsn1_layout.yaml).
+  const written = yaml.load(fs.readFileSync(path.join(dir, 'vsn1_layout.yaml'), 'utf8'));
   assert.equal(written.slots[0].effectId, 'strobe');
+  assert.ok(!fs.existsSync(path.join(dir, 'vsn1_layout.json')), 'no stale JSON artifact');
   assert.equal(status.lastResult, 'disabled');
 });
 

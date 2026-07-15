@@ -55,7 +55,30 @@ export const DEFAULT_SLOT_CONFIG = [
   { slotId: 13, enabled: true, label: 'Cosmic Trails',  effectId: 'feedbackTrails', presetId: 'cosmic_trails',   behavior: 'toggle',  paramsOverride: {} },
 ];
 
-export const MIN_SLOTS = 1;
+/**
+ * Named effect BANKS (v3). A bank is an INDEPENDENT set of global-effect slots
+ * with a stable string `id` (never an index) and a display `name`. Banks form
+ * an ORDERED list, cycled by the VSN1 sb_2 side button (POST .../banks/next),
+ * and there is ALWAYS >= 1 bank. Migrated legacy files keep the ids
+ * 'edit'/'play'; banks created at runtime get 'bank_<n>' (first free integer).
+ * The engine owns the active-bank pointer (`activeBankId`); switching it swaps
+ * the LIVE slot set (see setActiveBank). An unknown id fails loud (Codex P0, no
+ * silent fallback).
+ */
+
+// The bank a fresh manager (no persisted file) seeds — ONE bank holding the
+// default slot config. Migration keeps legacy ids ('edit'/'play'); this is the
+// from-code seed only.
+export const DEFAULT_BANK_ID = 'edit';
+export const DEFAULT_BANK_NAME = 'Edit';
+
+// A zero-banks file recovers to this bank (D7), with a loud log.
+export const FALLBACK_BANK_ID = 'default';
+export const FALLBACK_BANK_NAME = 'Default';
+
+// A bank's slot array may be EMPTY (0 slots) — banks are allowed to be empty
+// (D7). The per-bank UPPER bound is still MAX_SLOTS.
+export const MIN_SLOTS = 0;
 // Effects v2 (project effects_v2_midi_layout): the GEM grid is now 4 pages
 // of 8 slots = 32 flat slots, IDs 1..32. Page p (0..3) is a VIEW over slots
 // `8p+1 .. 8p+8`; the flat slot IDs and their semantics are unchanged —
@@ -205,6 +228,140 @@ export function validateSlotsConfig(slotsConfig, library = GLOBAL_EFFECT_LIBRARY
   }
 }
 
+/**
+ * Migrate a raw parsed global_effect_slots file to the canonical v3 (named
+ * BANKS) shape. Pure (no I/O) so it is unit-testable and reusable by the boot
+ * layer.
+ *
+ *   v1  — top-level `slots: []`, no `version`. The single legacy slot set is
+ *         promoted into ONE bank `{ id:'edit', name:'Edit' }` (active). NO
+ *         phantom second bank (D6). `effectsPage` is carried through. One loud
+ *         log line records the migration — no silent data loss.
+ *   v2  — `{ version:2, activeProfile, effectsPage, profiles:{edit,play} }`.
+ *         Becomes banks `[{id:edit,name:Edit,slots},{id:play,name:Play,slots}]`
+ *         with `activeBankId` = activeProfile. VALIDATED (both profile banks
+ *         present with array `slots`; activeProfile in [edit,play]) → else THROW.
+ *   v3  — already `{ version:3, activeBankId, effectsPage, banks:[…] }`.
+ *         VALIDATED (banks is an array; each bank has a string id + name + array
+ *         slots; ids unique; activeBankId names a real bank) and returned
+ *         unchanged. A ZERO-banks file recovers to a single Default bank (D7,
+ *         loud log) rather than throwing. Any other malformation → THROW.
+ *   anything else — unknown/garbage version → THROW.
+ *
+ * @param {object} raw  parsed YAML (StateManager.loadGlobalEffectSlots()).
+ * @returns {{version:3, activeBankId:string, effectsPage:number, banks:Array}}
+ */
+export function migrateSlotFile(raw) {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('migrateSlotFile: raw must be a parsed object');
+  }
+
+  // ── v3: validate + pass through (with zero-banks recovery) ───────────
+  if (raw.version === 3) {
+    if (!Array.isArray(raw.banks)) {
+      throw new Error('v3 global_effect_slots: `banks` must be an array');
+    }
+    const effectsPage = Number.isInteger(raw.effectsPage) ? raw.effectsPage : 0;
+    // D7: a zero-banks file is recoverable (never fail-loud) — the engine seeds
+    // a single Default bank so the >= 1 invariant holds. Loud so it's noticed.
+    if (raw.banks.length === 0) {
+      console.warn(
+        '[GEM] v3 global_effect_slots carried ZERO banks — seeding a single ' +
+        `'${FALLBACK_BANK_ID}' bank (${FALLBACK_BANK_NAME}) to satisfy the >=1 invariant.`
+      );
+      return {
+        version: 3,
+        activeBankId: FALLBACK_BANK_ID,
+        effectsPage,
+        banks: [{ id: FALLBACK_BANK_ID, name: FALLBACK_BANK_NAME, slots: [] }],
+      };
+    }
+    const seenIds = new Set();
+    for (const bank of raw.banks) {
+      if (!bank || typeof bank !== 'object') {
+        throw new Error('v3 global_effect_slots: every bank must be an object');
+      }
+      if (typeof bank.id !== 'string' || bank.id.length === 0) {
+        throw new Error('v3 global_effect_slots: every bank needs a non-empty string id');
+      }
+      if (seenIds.has(bank.id)) {
+        throw new Error(`v3 global_effect_slots: duplicate bank id '${bank.id}'`);
+      }
+      seenIds.add(bank.id);
+      if (typeof bank.name !== 'string' || bank.name.length === 0) {
+        throw new Error(`v3 global_effect_slots: bank '${bank.id}' needs a non-empty string name`);
+      }
+      if (!Array.isArray(bank.slots)) {
+        throw new Error(`v3 global_effect_slots: bank '${bank.id}' must carry a slots array`);
+      }
+    }
+    if (!seenIds.has(raw.activeBankId)) {
+      throw new Error(
+        `v3 global_effect_slots: activeBankId ${JSON.stringify(raw.activeBankId)} ` +
+        `names no bank (have ${JSON.stringify([...seenIds])})`
+      );
+    }
+    return { version: 3, activeBankId: raw.activeBankId, effectsPage, banks: raw.banks };
+  }
+
+  // ── v2: per-profile PLAY/EDIT banks → named banks ────────────────────
+  if (raw.version === 2) {
+    if (!raw.profiles || typeof raw.profiles !== 'object') {
+      throw new Error('v2 global_effect_slots: missing `profiles` object');
+    }
+    const V2_PROFILES = [
+      { id: 'edit', name: 'Edit' },
+      { id: 'play', name: 'Play' },
+    ];
+    for (const { id } of V2_PROFILES) {
+      const bank = raw.profiles[id];
+      if (!bank || !Array.isArray(bank.slots)) {
+        throw new Error(`v2 global_effect_slots: profile '${id}' must carry a slots array`);
+      }
+    }
+    if (raw.activeProfile !== 'edit' && raw.activeProfile !== 'play') {
+      throw new Error(
+        'v2 global_effect_slots: activeProfile must be one of ["edit","play"] ' +
+        `(got ${JSON.stringify(raw.activeProfile)})`
+      );
+    }
+    const banks = V2_PROFILES.map(({ id, name }) => ({
+      id, name, slots: JSON.parse(JSON.stringify(raw.profiles[id].slots)),
+    }));
+    console.log(
+      `[GEM] migrated global_effect_slots v2 → v3: profiles [edit, play] became named banks; ` +
+      `active bank '${raw.activeProfile}'.`
+    );
+    return {
+      version: 3,
+      activeBankId: raw.activeProfile,
+      effectsPage: Number.isInteger(raw.effectsPage) ? raw.effectsPage : 0,
+      banks,
+    };
+  }
+
+  // ── v1: top-level slots[], no version → ONE named bank (D6) ──────────
+  if (raw.version === undefined && Array.isArray(raw.slots)) {
+    console.log(
+      `[GEM] migrated global_effect_slots v1 → v3: ${raw.slots.length} slots promoted into a ` +
+      `single '${DEFAULT_BANK_ID}' bank (${DEFAULT_BANK_NAME}) — no phantom second bank.`
+    );
+    return {
+      version: 3,
+      activeBankId: DEFAULT_BANK_ID,
+      effectsPage: raw.effectsPage ?? 0,
+      banks: [
+        { id: DEFAULT_BANK_ID, name: DEFAULT_BANK_NAME, slots: raw.slots },
+      ],
+    };
+  }
+
+  throw new Error(
+    `migrateSlotFile: unrecognized global_effect_slots shape ` +
+    `(version=${JSON.stringify(raw.version)})`
+  );
+}
+
 export class GlobalEffectSlotManager {
   /**
    * @param {object} controller  GlobalEffectsController.
@@ -223,21 +380,43 @@ export class GlobalEffectSlotManager {
     // the VSN1 both follow + write this through the engine so no surface keeps
     // a private page (project "Locked design" §Slot model).
     this.effectsPage = MIN_PAGE;
-    // Engine-owned CONTROLLER PROFILE (effects_v2 PLAY/EDIT split). Selects the
-    // VSN1 device template set + CaptainPad surface:
-    //   'edit' — the full detail-edit surface (default, the assign/tune screen)
-    //   'play' — the big-cell performance surface (a live-show play mode)
-    // Single source of truth: CaptainPad + the VSN1 both follow + write this
-    // through the engine (mirrors effectsPage). Default 'edit' so an old
-    // persisted file with no profile field restores as the edit surface.
-    this.controllerProfile = 'edit';
     // Layout-changed hook (deploy trigger). Default is a no-op so unit tests
     // and the boot path never spawn a child process; the API layer wires the
     // real deploy hook in.
     this._onLayoutChanged = typeof opts.onLayoutChanged === 'function'
       ? opts.onLayoutChanged
       : null;
-    this.setSlots(slotsConfig);
+    // Engine-owned named BANKS (v3). A fresh manager (no persisted file) seeds
+    // ONE bank holding the default slot config; boot-restore replaces this with
+    // setBanks() when a file exists. Ordered list, always >= 1 bank. Validate
+    // the seed once.
+    validateSlotsConfig(slotsConfig);
+    this.banks = [{
+      id: DEFAULT_BANK_ID,
+      name: DEFAULT_BANK_NAME,
+      slots: JSON.parse(JSON.stringify(slotsConfig)),
+    }];
+    // Engine-owned ACTIVE BANK pointer (stable id, never an index). Switching it
+    // swaps the LIVE slot set (see setActiveBank). CaptainPad + the VSN1 both
+    // follow + write this through the engine (mirrors effectsPage).
+    this.activeBankId = DEFAULT_BANK_ID;
+    // `this.slots` ALIASES the active bank's slot array (same array reference) —
+    // every method that reads/mutates `this.slots` (patchSlot, setSlotIntensity/
+    // Mode, resetAllToDefault, disableAll, getStatus, getLayout,
+    // dispatchSlotAction…) then operates on the active bank unchanged.
+    this.slots = this._activeBank().slots;
+  }
+
+  /** The active bank object `{ id, name, slots }` (fail-loud if it vanished). */
+  _activeBank() {
+    const bank = this.banks.find(b => b.id === this.activeBankId);
+    if (!bank) {
+      throw new Error(
+        `GlobalEffectSlotManager: activeBankId '${this.activeBankId}' names no bank ` +
+        `(have ${JSON.stringify(this.banks.map(b => b.id))})`
+      );
+    }
+    return bank;
   }
 
   // ── Page view (engine = source of truth) ────────────────────────────
@@ -266,27 +445,182 @@ export class GlobalEffectSlotManager {
     return pageSlotRange(this.effectsPage);
   }
 
-  // ── Controller profile (engine = source of truth) ───────────────────
+  // ── Named banks (engine = source of truth) ──────────────────────────
 
-  /** The current controller profile ('edit' | 'play'). */
-  getControllerProfile() {
-    return this.controllerProfile;
+  /** The active bank id (stable string, never an index). */
+  getActiveBankId() {
+    return this.activeBankId;
   }
 
   /**
-   * Set the controller profile. Validates the enum (loud on garbage — Codex
-   * P0, no silent fallback to 'edit'). Switching profiles is NOT a slot
-   * mutation — it never touches bindings, active state, or the layout — so it
-   * does not itself fire a layout deploy; the API layer triggers a page-0
-   * re-deploy after the switch so the device re-flashes to the new surface.
-   * Returns the resolved profile.
+   * Bank metadata for the API GET surface: the ordered list of
+   * `{ id, name, slotCount }` plus the active id. No slot contents.
    */
-  setControllerProfile(profile) {
-    if (profile !== 'edit' && profile !== 'play') {
-      throw new Error(`controllerProfile must be 'edit' or 'play' (got ${JSON.stringify(profile)})`);
+  getBanksMeta() {
+    return {
+      banks: this.banks.map(b => ({ id: b.id, name: b.name, slotCount: b.slots.length })),
+      activeBankId: this.activeBankId,
+    };
+  }
+
+  /**
+   * SWAP the active bank by stable id. Fail-loud on an unknown id (Codex P0, no
+   * silent fallback), points `activeBankId` at it, and re-aliases `this.slots`
+   * to that bank's array so every slot method now reads/writes the new set.
+   * This does NOT itself emit a layout change: the API layer runs
+   * requestFullDeploy AFTER the swap to re-flash the device (the swap MUST
+   * precede that call, and it does). Returns the resolved bank id.
+   */
+  setActiveBank(id) {
+    if (!this.banks.some(b => b.id === id)) {
+      throw new Error(
+        `setActiveBank: unknown bank id ${JSON.stringify(id)} ` +
+        `(have ${JSON.stringify(this.banks.map(b => b.id))})`
+      );
     }
-    this.controllerProfile = profile;
-    return this.controllerProfile;
+    this.activeBankId = id;
+    this.slots = this._activeBank().slots;
+    return this.activeBankId;
+  }
+
+  /**
+   * Cycle to the NEXT bank in order, wrapping around (the VSN1 sb_2 gesture). A
+   * single-bank list is a clean no-op (stays on the only bank). Re-aliases
+   * `this.slots`. Returns `{ activeBankId, bankName, index, count }`.
+   */
+  nextBank() {
+    const idx = this.banks.findIndex(b => b.id === this.activeBankId);
+    const nextIdx = (idx + 1) % this.banks.length;
+    this.setActiveBank(this.banks[nextIdx].id);
+    return {
+      activeBankId: this.activeBankId,
+      bankName: this.banks[nextIdx].name,
+      index: nextIdx,
+      count: this.banks.length,
+    };
+  }
+
+  /**
+   * Create a new EMPTY bank at the end of the order. `id` is the first free
+   * `bank_<n>` integer; `name` defaults to `Bank <n>` (D4 auto-name) unless the
+   * caller supplies one. Does NOT change the active bank. Returns the new bank
+   * `{ id, name, slotCount:0 }`.
+   */
+  createBank(name) {
+    let n = 1;
+    while (this.banks.some(b => b.id === `bank_${n}`)) n += 1;
+    const id = `bank_${n}`;
+    const resolvedName = (typeof name === 'string' && name.trim().length > 0)
+      ? name.trim()
+      : `Bank ${n}`;
+    this.banks.push({ id, name: resolvedName, slots: [] });
+    return { id, name: resolvedName, slotCount: 0 };
+  }
+
+  /**
+   * Delete a bank by id. Enforces the >= 1 invariant: deleting the LAST bank
+   * throws (the API converts to a 409/400). If the DELETED bank was active, the
+   * NEXT bank in order becomes active (re-aliasing `this.slots`) so a live
+   * surface never dangles. Returns `{ deletedId, activeBankId }` (activeBankId
+   * unchanged unless the active bank was the one removed).
+   */
+  deleteBank(id) {
+    const idx = this.banks.findIndex(b => b.id === id);
+    if (idx === -1) {
+      throw new Error(
+        `deleteBank: unknown bank id ${JSON.stringify(id)} ` +
+        `(have ${JSON.stringify(this.banks.map(b => b.id))})`
+      );
+    }
+    if (this.banks.length <= 1) {
+      throw new Error('deleteBank: cannot delete the last bank (>= 1 bank required)');
+    }
+    const wasActive = this.activeBankId === id;
+    this.banks.splice(idx, 1);
+    if (wasActive) {
+      // The removed bank's slot: the next bank in order (wrapping to index 0 if
+      // the last was removed) becomes active.
+      const nextActive = this.banks[idx % this.banks.length];
+      this.setActiveBank(nextActive.id);
+    }
+    return { deletedId: id, activeBankId: this.activeBankId };
+  }
+
+  /**
+   * Rename a bank by id. Fail-loud on an unknown id or an empty name. Returns
+   * the resolved `{ id, name }`.
+   */
+  renameBank(id, name) {
+    const bank = this.banks.find(b => b.id === id);
+    if (!bank) {
+      throw new Error(
+        `renameBank: unknown bank id ${JSON.stringify(id)} ` +
+        `(have ${JSON.stringify(this.banks.map(b => b.id))})`
+      );
+    }
+    if (typeof name !== 'string' || name.trim().length === 0) {
+      throw new Error('renameBank: name must be a non-empty string');
+    }
+    bank.name = name.trim();
+    return { id: bank.id, name: bank.name };
+  }
+
+  /**
+   * Restore ALL banks at once (boot restore). `banks` is the ordered on-disk /
+   * migrated shape `[{ id, name, slots:[…] }]`. Validates EVERY bank's slots
+   * with validateSlotsConfig (per-bank fail-loud — Codex P0), checks unique ids
+   * and that `activeBankId` names a real bank, deep-clones each into an
+   * independent array, sets the active pointer, and re-aliases `this.slots`.
+   * NEVER emits a layout change (boot is deploy-silent — the explicit boot
+   * deploy is a separate step).
+   */
+  setBanks(banks, activeBankId) {
+    if (!Array.isArray(banks) || banks.length === 0) {
+      throw new Error('setBanks: banks must be a non-empty array');
+    }
+    const seen = new Set();
+    const next = [];
+    for (const bank of banks) {
+      if (!bank || typeof bank !== 'object') {
+        throw new Error('setBanks: every bank must be an object');
+      }
+      if (typeof bank.id !== 'string' || bank.id.length === 0) {
+        throw new Error('setBanks: every bank needs a non-empty string id');
+      }
+      if (seen.has(bank.id)) {
+        throw new Error(`setBanks: duplicate bank id '${bank.id}'`);
+      }
+      seen.add(bank.id);
+      if (typeof bank.name !== 'string' || bank.name.length === 0) {
+        throw new Error(`setBanks: bank '${bank.id}' needs a non-empty string name`);
+      }
+      if (!Array.isArray(bank.slots)) {
+        throw new Error(`setBanks: bank '${bank.id}' must carry a slots array`);
+      }
+      validateSlotsConfig(bank.slots);
+      next.push({ id: bank.id, name: bank.name, slots: JSON.parse(JSON.stringify(bank.slots)) });
+    }
+    if (!seen.has(activeBankId)) {
+      throw new Error(
+        `setBanks: activeBankId ${JSON.stringify(activeBankId)} names no bank ` +
+        `(have ${JSON.stringify([...seen])})`
+      );
+    }
+    this.banks = next;
+    this.activeBankId = activeBankId;
+    this.slots = this._activeBank().slots;
+  }
+
+  /**
+   * Deep-cloned ordered list of ALL banks in the on-disk shape
+   * `[{ id, name, slots:[…] }]` — for persistence.
+   */
+  getBanks() {
+    return this.banks.map(b => ({
+      id: b.id,
+      name: b.name,
+      slots: JSON.parse(JSON.stringify(b.slots)),
+    }));
   }
 
   /**
@@ -297,8 +631,12 @@ export class GlobalEffectSlotManager {
    */
   setSlots(slotsConfig, { emitLayout = false } = {}) {
     validateSlotsConfig(slotsConfig);
-    // Deep clone so external mutations to the input array don't bleed.
-    this.slots = JSON.parse(JSON.stringify(slotsConfig));
+    // Replace ONLY the active bank's slot array, then re-point the alias so
+    // `this.slots` still references the live active array. Deep clone so
+    // external mutations to the input array don't bleed.
+    const bank = this._activeBank();
+    bank.slots = JSON.parse(JSON.stringify(slotsConfig));
+    this.slots = bank.slots;
     // A whole-config replace can touch ANY page, so it deploys every page.
     if (emitLayout) this._emitLayoutChanged({ pages: ALL_PAGES });
   }
@@ -320,8 +658,10 @@ export class GlobalEffectSlotManager {
       // could not be populated because patchSlot threw here). The new
       // slot starts as a disabled placeholder; the patch below fills it
       // in and is validated through resolveSlotBinding when enabled.
-      if (!Number.isInteger(slotId) || slotId < MIN_SLOTS || slotId > MAX_SLOTS) {
-        throw new Error(`Invalid slotId: ${slotId} (must be ${MIN_SLOTS}..${MAX_SLOTS})`);
+      // Slot IDs are 1..MAX_SLOTS. (This is distinct from MIN_SLOTS, which is
+      // the minimum NUMBER of slots in a bank — 0, i.e. empty banks allowed.)
+      if (!Number.isInteger(slotId) || slotId < 1 || slotId > MAX_SLOTS) {
+        throw new Error(`Invalid slotId: ${slotId} (must be 1..${MAX_SLOTS})`);
       }
       slot = {
         slotId,
@@ -805,7 +1145,7 @@ export class GlobalEffectSlotManager {
    * bound effect (disabled/empty slots are omitted — the device renders them
    * dark). Pure data: effectId, display name, color, page, slot id.
    *
-   * @returns {{version, slotsPerPage, pageCount, slots: Array}}
+   * @returns {{version, slotsPerPage, slots: Array}}
    */
   getLayout() {
     const slots = this.slots
@@ -819,10 +1159,10 @@ export class GlobalEffectSlotManager {
         name: s.label ?? s.effectId,
         color: s.color ?? null,
       }));
+    // pageCount was removed (D8, zero readers) — per-slot page geometry stays.
     return {
       version: 1,
       slotsPerPage: SLOTS_PER_PAGE,
-      pageCount: PAGE_COUNT,
       slots,
     };
   }

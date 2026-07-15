@@ -5,16 +5,18 @@
  * (project effects_v2_midi_layout). When the layout CHANGES (an effect is
  * ADDED or REMOVED from a slot — slot assign / clear / rename / recolor /
  * reorder, or a whole-config replace), the slot manager emits a layout-changed
- * event carrying the AFFECTED PAGE(S). This module converts the layout to a
- * JSON file and hands it to the proven VSN1 serial deploy CLI, ONE PAGE AT A
- * TIME, per the pinned single-page contract:
+ * event carrying the AFFECTED PAGE(S). This module writes the layout to a YAML
+ * file and hands OFF to the proven VSN1 serial deploy CLI, ONE PAGE AT A TIME,
+ * per the pinned single-page contract:
  *
  *     node tools/vsn1_config/deploy_layout.cjs --from-engine --page N --live
  *
- * The CLI (built in parallel by the device/tools track) reads the engine's
- * vsn1_layout.json (`--from-engine`), turns page N into per-element Lua, and
- * flashes just that page of the controller, where it persists until the next
- * deploy. We code ONLY to that CLI contract here.
+ * The CLI reads the LIVE engine over HTTP (`--from-engine` → GET
+ * /global-effects/layout etc.), turns page N into per-element Lua, and flashes
+ * just that page of the controller, where it persists until the next deploy.
+ * The `vsn1_layout.yaml` this module writes is the on-disk INSPECTION artifact
+ * of the current layout (for tools/operator), NOT the CLI's input. We code ONLY
+ * to that CLI contract here.
  *
  * WHY INCREMENTAL: a full 4-page flash is ~2-3 min; one page is ~10-40s. A UI
  * edit changes exactly one page (the slot's page), so we re-flash only that
@@ -40,7 +42,7 @@
  *   - Failures fail LOUDLY (rejected promise + status flag); there is no
  *     silent retry loop and no fallback (Codex P0).
  *
- * This module holds NO device state. It writes a layout JSON into the state
+ * This module holds NO device state. It writes a layout YAML into the state
  * dir and spawns the CLI; the last-deploy result is reported back to the
  * caller (api_server surfaces it in engine status).
  */
@@ -48,6 +50,8 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+
+import yaml from 'js-yaml';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -129,7 +133,10 @@ export function createLayoutDeployHook({
   const softResetAfterMultiPage = !(
     engineConfig && engineConfig.vsn1 && engineConfig.vsn1.softResetAfterMultiPage === false
   );
-  const layoutFile = path.join(stateDir, 'vsn1_layout.json');
+  const layoutFile = path.join(stateDir, 'vsn1_layout.yaml');
+  // A pre-v3 build wrote vsn1_layout.json here; delete that sibling on write so
+  // a stale JSON artifact never lingers next to the canonical YAML (D9).
+  const staleJsonFile = path.join(stateDir, 'vsn1_layout.json');
   const quietMs = Number.isFinite(debounceMs)
     ? debounceMs
     : (engineConfig && engineConfig.vsn1 && Number.isFinite(engineConfig.vsn1.deployDebounceMs)
@@ -175,15 +182,22 @@ export function createLayoutDeployHook({
   }
 
   /**
-   * Persist the layout JSON (crash-safe: write temp then rename). Always runs
+   * Persist the layout YAML (crash-safe: write temp then rename). Always runs
    * — even when deploy is disabled — so tools/operator can read the current
-   * layout. Fails loud on a write error (Codex P0).
+   * layout. Fails loud on a write error (Codex P0). After the rename, delete any
+   * lingering pre-v3 `vsn1_layout.json` sibling (D9) — a warn on unlink failure,
+   * never fatal (the YAML write already succeeded).
    */
   function writeLayoutFile(layout) {
     fs.mkdirSync(stateDir, { recursive: true });
     const tmp = `${layoutFile}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(layout, null, 2));
+    fs.writeFileSync(tmp, yaml.dump(layout));
     fs.renameSync(tmp, layoutFile);
+    try {
+      if (fs.existsSync(staleJsonFile)) fs.unlinkSync(staleJsonFile);
+    } catch (e) {
+      console.warn(`[VSN1] could not remove stale ${staleJsonFile}: ${e.message}`);
+    }
   }
 
   /**

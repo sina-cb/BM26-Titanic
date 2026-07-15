@@ -32,7 +32,7 @@ import {
 } from './modulation_engine.js';
 import { validateMidiMapping } from './midi_mapping_engine.js';
 import { describeLibrary, GLOBAL_EFFECT_LIBRARY } from './global_effect_library.js';
-import { validateSlotsConfig } from './global_effect_slot_manager.js';
+import { migrateSlotFile } from './global_effect_slot_manager.js';
 import { createLayoutDeployHook, isLayoutDeployEnabled } from './vsn1_layout_deploy.js';
 import {
   ScheduledTaskService,
@@ -1144,24 +1144,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       });
     });
     const persistedSlots = stateManager.loadGlobalEffectSlots();
-    if (persistedSlots && Array.isArray(persistedSlots.slots)) {
+    if (persistedSlots) {
       try {
-        validateSlotsConfig(persistedSlots.slots);
-        // Boot restore is NOT a layout deploy (emitLayout defaults false).
-        globalEffectSlotManager.setSlots(persistedSlots.slots);
-        if (Number.isInteger(persistedSlots.effectsPage)) {
-          try { globalEffectSlotManager.setEffectsPage(persistedSlots.effectsPage); }
+        // Migrate to the canonical v3 named-BANKS shape (v1 top-level slots[] →
+        // one 'edit' bank; v2 profiles → edit/play banks; v3 validated + passed
+        // through, zero-banks recovers to Default; garbage throws). Then restore
+        // EVERY bank at once — setBanks validates each bank's slots (fail-loud
+        // P0) and is deploy-silent (boot never flashes on restore).
+        const migrated = migrateSlotFile(persistedSlots);
+        globalEffectSlotManager.setBanks(migrated.banks, migrated.activeBankId);
+        if (Number.isInteger(migrated.effectsPage)) {
+          try { globalEffectSlotManager.setEffectsPage(migrated.effectsPage); }
           catch (e) { console.warn(`[GlobalEffectSlots] bad persisted effectsPage: ${e.message}`); }
         }
-        // Controller profile ('edit'|'play'). Tolerant of an OLD file with no
-        // profile field — a missing/absent value keeps the default 'edit'. A
-        // present-but-invalid value logs and keeps 'edit' (never crashes boot on
-        // a hand-edited stray, but never silently accepts garbage either).
-        if (persistedSlots.controllerProfile !== undefined) {
-          try { globalEffectSlotManager.setControllerProfile(persistedSlots.controllerProfile); }
-          catch (e) { console.warn(`[GlobalEffectSlots] bad persisted controllerProfile: ${e.message}`); }
-        }
-        console.log(`  ✅ Global effect slots: restored ${persistedSlots.slots.length} from disk (page ${globalEffectSlotManager.getEffectsPage()}, profile ${globalEffectSlotManager.getControllerProfile()})`);
+        const meta = globalEffectSlotManager.getBanksMeta();
+        const ids = meta.banks.map(b => b.id).join(', ');
+        console.log(`  ✅ Global effect slots: restored banks [${ids}] from disk (page ${globalEffectSlotManager.getEffectsPage()}, active bank ${meta.activeBankId})`);
       } catch (e) {
         console.warn(`[GlobalEffectSlots] persisted config invalid, keeping defaults: ${e.message}`);
       }
@@ -1189,11 +1187,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // (effects_v2). No-op when the slot manager is absent.
   function persistGlobalEffectSlots() {
     if (!globalEffectSlotManager) return;
-    stateManager.saveGlobalEffectSlots(
-      globalEffectSlotManager.getSlots(),
-      globalEffectSlotManager.getEffectsPage(),
-      globalEffectSlotManager.getControllerProfile(),
-    );
+    stateManager.saveGlobalEffectSlots({
+      banks: globalEffectSlotManager.getBanks(),
+      activeBankId: globalEffectSlotManager.getActiveBankId(),
+      effectsPage: globalEffectSlotManager.getEffectsPage(),
+    });
+  }
+
+  // Broadcast the named-BANKS meta over /ws/control (effects_v2 v3). Fired on
+  // any bank switch/create/delete/rename AND replayed on connect so every
+  // surface (CaptainPad's bank switcher, the VSN1 sb_2) mirrors the SAME
+  // ordered list + active id — single source of truth. Payload matches the
+  // frozen contract: { type:'effectBanks', banks:[{id,name}], activeBankId,
+  // source? }. `source` names the origin of a switch (audit trail).
+  function broadcastEffectBanks(source) {
+    if (!globalEffectSlotManager) return;
+    const meta = globalEffectSlotManager.getBanksMeta();
+    broadcastWs({
+      type: 'effectBanks',
+      banks: meta.banks.map(b => ({ id: b.id, name: b.name })),
+      activeBankId: meta.activeBankId,
+      source: typeof source === 'string' ? source : undefined,
+    });
   }
 
   // ── Scheduler service (docs/31_scheduled_tasks.md v3) ───────────────
@@ -5055,41 +5070,143 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
         }
       });
-    // ── effects_v2: engine-owned CONTROLLER PROFILE ('edit' | 'play') ────
-    // Mirrors /global-effects/page: the profile lives in engine state so
-    // CaptainPad's PLAY/EDIT switch and the VSN1 (sb_2) both read + write the
-    // SAME profile (single source of truth). GET returns it; PATCH validates
-    // the enum (400 on garbage — fail loud, no silent fallback), persists it,
-    // broadcasts { type: 'controllerProfile', profile }, and triggers a page-0
-    // re-deploy so the device re-flashes to the new surface (edit vs play
-    // template set). Deliberately NOT performance-mode-gated: switching to PLAY
-    // IS a performance action (the whole point is a live-show surface), so the
-    // 409 structural lock must not block it.
-    } else if (req.method === 'GET' && req.url === '/global-effects/profile') {
+    // ── effects_v2 v3: engine-owned named effect BANKS ───────────────────
+    // A bank is an INDEPENDENT set of global-effect slots with a stable string
+    // id + display name; banks form an ORDERED list (>= 1) cycled by the VSN1
+    // sb_2. The engine owns the active-bank pointer; switching it swaps the
+    // LIVE slot set. Every mutation persists + broadcasts `effectBanks` so
+    // CaptainPad's bank switcher + the VSN1 mirror the SAME list (single source
+    // of truth). GET/switch/next are NOT performance-gated (switching banks is
+    // a performance action); create/delete/rename ARE structural → 409-gated.
+    //
+    // GET /global-effects/banks — the bank meta list + active id (ungated).
+    } else if (req.method === 'GET' && req.url === '/global-effects/banks') {
       if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ controllerProfile: globalEffectSlotManager.getControllerProfile() }));
-    } else if (req.method === 'PATCH' && req.url === '/global-effects/profile') {
+      res.end(JSON.stringify(globalEffectSlotManager.getBanksMeta()));
+    // PATCH /global-effects/banks/active { bankId, source? } — SWAP the active
+    //   bank (fail-loud on an unknown id, 400). NOT performance-gated. Persists,
+    //   broadcasts effectBanks + a one-shot globalEffectMacroStatus (so the grid
+    //   swaps to the new slots), and re-flashes page 0 (requestFullDeploy).
+    } else if (req.method === 'PATCH' && req.url === '/global-effects/banks/active') {
       if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
       readBody(data => {
         try {
-          const profile = data && data.controllerProfile;
-          const prev = globalEffectSlotManager.getControllerProfile();
-          const resolved = globalEffectSlotManager.setControllerProfile(profile);
-          // Audit trail: profile flips have been observed with no operator
-          // action — every change must name its origin (client-supplied
+          const bankId = data && data.bankId;
+          const prev = globalEffectSlotManager.getActiveBankId();
+          const resolved = globalEffectSlotManager.setActiveBank(bankId);
+          // Audit trail: a bank switch names its origin (client-supplied
           // `source` tag + remote address) so a spurious writer is traceable.
-          console.log(`[ControllerProfile] ${prev} -> ${resolved} ` +
-            `(source=${typeof data.source === 'string' ? data.source : 'unspecified'}, ` +
-            `remote=${req.socket.remoteAddress || '?'})`);
+          const source = typeof data.source === 'string' ? data.source : undefined;
+          console.log(`[EffectBanks] active ${prev} -> ${resolved} ` +
+            `(source=${source || 'unspecified'}, remote=${req.socket.remoteAddress || '?'})`);
           persistGlobalEffectSlots();
-          broadcastWs({ type: 'controllerProfile', profile: resolved,
-            source: typeof data.source === 'string' ? data.source : undefined });
-          // Re-flash the device to the new surface (page 0 only, per own-page
-          // retirement — requestFullDeploy emits [0] iff populated).
+          broadcastEffectBanks(source);
+          // Swapping the bank swaps the LIVE slot set — broadcast the new bank's
+          // content ONCE so CaptainPad's grid (globalEffectMacroStatus) swaps.
+          broadcastWs({ type: 'globalEffectMacroStatus',
+            slots: globalEffectSlotManager.getStatus(),
+            controller: globalEffectsController ? globalEffectsController.getStatus() : null });
+          // Re-flash the device to the new bank (page 0 only, own-page retirement).
           const triggeredPages = globalEffectSlotManager.requestFullDeploy();
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'ok', controllerProfile: resolved, triggeredPages }));
+          res.end(JSON.stringify({ status: 'ok', activeBankId: resolved, triggeredPages }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    // POST /global-effects/banks/next { source? } — ATOMIC cycle+wrap to the
+    //   next bank (engine-side, no client-computed target). NOT performance-
+    //   gated. Same side effects as an active-switch. Returns
+    //   { activeBankId, bankName, index, count }.
+    } else if (req.method === 'POST' && req.url === '/global-effects/banks/next') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      readBody(data => {
+        try {
+          const prev = globalEffectSlotManager.getActiveBankId();
+          const cycled = globalEffectSlotManager.nextBank();
+          const source = data && typeof data.source === 'string' ? data.source : undefined;
+          console.log(`[EffectBanks] next ${prev} -> ${cycled.activeBankId} ` +
+            `(${cycled.index + 1}/${cycled.count}, source=${source || 'unspecified'}, ` +
+            `remote=${req.socket.remoteAddress || '?'})`);
+          persistGlobalEffectSlots();
+          broadcastEffectBanks(source);
+          broadcastWs({ type: 'globalEffectMacroStatus',
+            slots: globalEffectSlotManager.getStatus(),
+            controller: globalEffectsController ? globalEffectsController.getStatus() : null });
+          globalEffectSlotManager.requestFullDeploy();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', ...cycled }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    // POST /global-effects/banks { name? } — CREATE an empty bank (auto-named
+    //   `Bank N` when name omitted). Structural → performance-gated (409).
+    } else if (req.method === 'POST' && req.url === '/global-effects/banks') {
+      if (rejectIfPerformanceMode(res)) return;
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      readBody(data => {
+        try {
+          const created = globalEffectSlotManager.createBank(data && data.name);
+          persistGlobalEffectSlots();
+          broadcastEffectBanks();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', bank: created }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    // DELETE /global-effects/banks/:id — remove a bank. Structural → 409-gated.
+    //   Refuses the LAST bank (409, >= 1 invariant). If the ACTIVE bank is
+    //   deleted, the NEXT bank in order becomes active (full switch side
+    //   effects: grid status broadcast + page-0 re-flash).
+    } else if (req.method === 'DELETE' && /^\/global-effects\/banks\/[A-Za-z0-9_]+$/.test(req.url)) {
+      if (rejectIfPerformanceMode(res)) return;
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      const id = req.url.match(/^\/global-effects\/banks\/([A-Za-z0-9_]+)$/)[1];
+      const meta = globalEffectSlotManager.getBanksMeta();
+      if (!meta.banks.some(b => b.id === id)) {
+        res.writeHead(404); return res.end(JSON.stringify({ error: `unknown bank id '${id}'` }));
+      }
+      if (meta.banks.length <= 1) {
+        res.writeHead(409);
+        return res.end(JSON.stringify({ error: 'cannot delete the last bank (>= 1 bank required)', code: 'LAST_BANK' }));
+      }
+      try {
+        const prevActive = globalEffectSlotManager.getActiveBankId();
+        const result = globalEffectSlotManager.deleteBank(id);
+        const activeChanged = result.activeBankId !== prevActive;
+        persistGlobalEffectSlots();
+        broadcastEffectBanks();
+        let triggeredPages = [];
+        if (activeChanged) {
+          // The active bank was removed — the successor is now live. Full switch
+          // side effects so the grid + device follow.
+          broadcastWs({ type: 'globalEffectMacroStatus',
+            slots: globalEffectSlotManager.getStatus(),
+            controller: globalEffectsController ? globalEffectsController.getStatus() : null });
+          triggeredPages = globalEffectSlotManager.requestFullDeploy();
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', deletedId: result.deletedId, activeBankId: result.activeBankId, triggeredPages }));
+      } catch (e) {
+        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      }
+    // PATCH /global-effects/banks/:id { name } — rename a bank. Structural →
+    //   409-gated. (The `/active` route above is matched first, so it never
+    //   collides with a bank literally reachable here.)
+    } else if (req.method === 'PATCH' && /^\/global-effects\/banks\/[A-Za-z0-9_]+$/.test(req.url)) {
+      if (rejectIfPerformanceMode(res)) return;
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      const id = req.url.match(/^\/global-effects\/banks\/([A-Za-z0-9_]+)$/)[1];
+      readBody(data => {
+        try {
+          const renamed = globalEffectSlotManager.renameBank(id, data && data.name);
+          persistGlobalEffectSlots();
+          broadcastEffectBanks();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', bank: renamed }));
         } catch (e) {
           res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
         }
@@ -9556,15 +9673,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // never let a snapshot send break a fresh WS handshake
     }
 
-    // Replay the engine-owned CONTROLLER PROFILE ('edit'|'play') so a fresh
-    // CaptainPad paints the PLAY/EDIT switch in the right state immediately,
-    // without a focus fetch (same posture as the effectsPage/performanceMode
-    // single-source-of-truth state). effects_v2.
+    // Replay the engine-owned named effect BANKS (ordered list + active id) so
+    // a fresh CaptainPad paints its bank switcher in the right state
+    // immediately, without a focus fetch (same posture as the effectsPage/
+    // performanceMode single-source-of-truth state). effects_v2 v3.
     try {
       if (globalEffectSlotManager) {
+        const meta = globalEffectSlotManager.getBanksMeta();
         ws.send(JSON.stringify({
-          type: 'controllerProfile',
-          profile: globalEffectSlotManager.getControllerProfile(),
+          type: 'effectBanks',
+          banks: meta.banks.map(b => ({ id: b.id, name: b.name })),
+          activeBankId: meta.activeBankId,
         }));
       }
     } catch (e) {

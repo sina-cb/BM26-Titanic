@@ -37,13 +37,12 @@ export interface MidiDispatchApi {
   /** Effects v2: cycle the SELECTED slot's discrete `primaryMode` to the next
    *  value. POST /global-effect-slots/:slotId/mode/cycle (VSN1 encoder press). */
   cycleGlobalEffectSlotMode(slotId: number): Promise<MidiApiResult>;
-  /** VSN1 controller profile switch (sb_2): PATCH /global-effects/profile
-   *  { controllerProfile, source? }. The manager reads the current profile from
-   *  the snapshot and sends the OPPOSITE — no optimistic flip; the engine
-   *  broadcasts `controllerProfile` (+ runs a page-0 redeploy) and every surface
-   *  converges. `source` is an optional provenance tag the engine logs + echoes
-   *  in its broadcast (the operator can see WHICH surface flipped the profile). */
-  setControllerProfile(profile: 'edit' | 'play', source?: string): Promise<MidiApiResult>;
+  /** VSN1 sb_2 → cycle to the NEXT named effect bank: POST /global-effects/banks/next
+   *  { source? }. The engine computes the target (atomic cycle+wrap) — no
+   *  client-computed target, no optimistic switch; it broadcasts `effectBanks` and
+   *  every surface converges. `source` is an optional provenance tag the engine
+   *  logs + echoes (the operator can see WHICH surface cycled the bank). */
+  nextEffectBank(source?: string): Promise<MidiApiResult>;
   /** Effects v2 (VSN1 small button sb_2): reset EVERY global-effect slot's
    *  intensity + mode to default. POST /global-effects/reset-all. */
   resetAllGlobalEffects(): Promise<MidiApiResult>;
@@ -271,14 +270,14 @@ export function createDispatcher(api: MidiDispatchApi, ctx: MidiDispatchContext)
         // Effects v2: runtime-built SELECTED-slot mode cycle (encoder press).
         // POST /global-effect-slots/:slotId/mode/cycle.
         return api.cycleGlobalEffectSlotMode(resolved.slotId);
-      case 'controllerProfileSet':
-        // VSN1 sb_2: runtime-built profile switch — the manager already computed
-        // the target ('edit'/'play', the opposite of the snapshot's) and this
-        // just PATCHes it. The engine broadcasts `controllerProfile` so the grid
-        // + device converge (no optimistic flip). `controllerProfileSet` is ONLY
-        // produced by the sb_2 path, so the provenance tag is a constant here —
-        // the engine logs + echoes it so a spurious flip is traceable to sb_2.
-        return api.setControllerProfile(resolved.profile, 'vsn1_sb2');
+      case 'effectBankNext':
+        // VSN1 sb_2: runtime-built bank CYCLE — the engine computes the next bank
+        // (atomic cycle+wrap) and broadcasts `effectBanks` so the badge + device
+        // converge (no client-computed target, no optimistic switch).
+        // `effectBankNext` is ONLY produced by the sb_2 path, so the provenance tag
+        // is a constant here — the engine logs + echoes it so a spurious cycle is
+        // traceable to sb_2.
+        return api.nextEffectBank('vsn1_sb2');
       case 'globalEffectsResetAll':
         // Effects v2: VSN1 small button sb_2 → reset EVERY slot to default.
         return api.resetAllGlobalEffects();

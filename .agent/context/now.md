@@ -178,6 +178,37 @@ OPEN (tracked in session task list):
   day; env var no longer required). Boot deploy verified ok to page 0,
   operator confirmed working. NOTE for commit review: `true` means any
   machine with a board on COM12 auto-flashes on layout change.
+- **NAMED EFFECT BANKS (v3) LANDED (uncommitted, post-PR)** — supersedes the
+  2-profile model. controllerProfile edit/play → an ORDERED LIST of NAMED
+  banks (each its own effect set), cycled by sb_2 (atomic POST
+  /global-effects/banks/next, wrap), always >=1 (engine + UI auto-create
+  'Default' if none). Engine: this.banks + this.slots alias (all slot
+  endpoints bank-aware for free), migrateSlotFile v1/v2→v3 (studiodj v1 → one
+  'edit' bank, no phantom), 6 bank endpoints (GET banks / PATCH active /
+  POST next / POST create+DELETE+PATCH rename — switch/next ungated, CRUD
+  perf-gated), effectBanks broadcast + connect replay. CaptainPad: sb_2
+  cycle (all guards kept), "BANK: name (i/n)" badge, +/delete controls
+  (last-bank disabled), ensure-default; chrome INVARIANT. Cleanups:
+  pageCount REMOVED from getLayout (zero readers); vsn1_layout.json → .yaml
+  (js-yaml, stale .json deleted on write + 3 checked-in artifacts removed);
+  D1 banks replace profiles → ONE device surface (base detail;
+  effects_layout_play/ deleted). Engine global_effect_banks + effects_v2_api
+  54/54, full suite env-fails only; CaptainPad 778/778 + tsc.
+  effect_layout_guard loader taught v3 + fail-loud on unknown shape (12/12).
+  LIVE 3-bank cycle render verified (throwaway :7008: Ambient/Party/Peak,
+  chrome identical, wrap works) + migration + empty-recovery. NEEDS engine
+  restart on :6968. FOLLOW-UPS: device LCD sb_2 label still 'PROF' (cosmetic,
+  lcd_draw.lua); bank rename UI deferred (endpoint exists); studiodj scene
+  has a secondary sACN dest on the LAN (unrelated).
+- **BANKS UX SHELVED (operator decision 2026-07-14)** — multi-bank switching
+  gated OFF behind `BANKS_UI_ENABLED=false` (global_effect_macros_logic.ts:20).
+  CaptainPad now a plain single grid of 8 effects: no BANK badge, no +/delete
+  controls; sb_2 DISABLED (handleVsn1BankButton early-returns; vsn1.yaml
+  sb2_disabled). ALL banks machinery KEPT as dormant TODO (engine endpoints,
+  useEffectBanks hook, guards, pageCount removal, vsn1_layout.yaml, v3 guard
+  fix) — flip the flag + re-enable sb_2 + vsn1.yaml to restore. CaptainPad
+  772 pass + 6 skipped (shelved-guard tests) + tsc. Device LCD 'PROF' label
+  (engine lcd_draw.lua) still needs relabel when the shelf lands.
 - **PARKED (operator stopped the agent)**: performance-button
   state-sync hardening (render from authoritative state, reconnect re-seed,
   disconnected-neutral) — relaunch only if operator asks.

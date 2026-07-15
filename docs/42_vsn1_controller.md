@@ -117,12 +117,13 @@ Sina's map (2026-07-10 evening):
   as the encoder press)
 - `sb_1` → **VIEW** — toggle the LCD visual (grid ↔ readout), one press per
   flip
-- `sb_2` → **PROFILE** — toggle the controller profile **edit ↔ play** (the
-  manager PATCHes `/global-effects/profile` with the opposite of the current
-  profile; the engine broadcasts `controllerProfile` and runs a page-0 redeploy,
-  and CaptainPad's effects grid switches to the PLAY presentation — bigger cells,
-  no editing affordances — on the echo). No optimistic flip; the engine broadcast
-  is authoritative.
+- `sb_2` → **BANK** — cycle to the next named effect **bank** (v3: banks
+  replaced the old edit/play profile split). The manager POSTs
+  `/global-effects/banks/next` (atomic engine-side cycle+wrap, no client-computed
+  target); the engine broadcasts `effectBanks` + `globalEffectMacroStatus` and
+  runs a page-0 redeploy, and CaptainPad's effects grid switches to the new
+  bank's slots on the echo. No optimistic flip; the engine broadcast is
+  authoritative.
 - `sb_3` → **LOGO** — show the MarsinLED wordmark (the welcome screen; the
   next key press or feedback frame dismisses it)
 

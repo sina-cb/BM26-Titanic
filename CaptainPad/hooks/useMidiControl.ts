@@ -41,8 +41,8 @@ import {
   resetAllGlobalEffects,
   disableAllGlobalEffects,
   fetchEffectsPage,
-  fetchControllerProfile,
-  patchControllerProfile,
+  fetchEffectBanks,
+  nextEffectBank,
   getAutopilot,
   setAutopilot,
   fetchDeckColorAutopilot,
@@ -161,10 +161,10 @@ let _snapshot: MidiEngineSnapshot = {
   globalEffectSlots: [],
   colorPalettes: [],
   focused: null,
-  // VSN1 controller profile — 'edit' (full authoring UI) until the engine threads
-  // it via GET/WS. The sb_2 toggle reads this to PATCH the opposite; the engine
-  // broadcast keeps it live.
-  controllerProfile: 'edit',
+  // Active named effect bank id — null until the engine threads it via GET/WS.
+  // The sb_2 button reads this only to refuse when unseeded + record the pre-cycle
+  // id for echo convergence; the engine `effectBanks` broadcast keeps it live.
+  activeBankId: null,
   // syncOwnedKeys (contract I4): the global-param keys the engine currently
   // drives itself (e.g. 'speed' while BPM→Speed sync is on). Empty at boot;
   // populated from `bpmSpeedSyncOn` in the snapshot rebuild + the in-place patch.
@@ -1125,10 +1125,10 @@ export function useMidiControl(): MidiControlState {
         cycleGlobalEffectSlotMode,
         resetAllGlobalEffects,
         disableAllGlobalEffects,
-        // VSN1 sb_2 profile switch: the manager computes the target ('edit'/'play')
-        // from the snapshot and PATCHes it here. utils/api exposes it as
-        // `patchControllerProfile`; the dispatch API key is `setControllerProfile`.
-        setControllerProfile: patchControllerProfile,
+        // VSN1 sb_2 bank cycle: the engine computes the next bank (atomic
+        // cycle+wrap) and broadcasts `effectBanks`; the dispatch API key is
+        // `nextEffectBank` (utils/api exposes the same name).
+        nextEffectBank,
         setChannelPlaylistEntry,
         setDeckChannelControl,
         setMixerChannelControl,
@@ -1285,35 +1285,35 @@ export function useMidiControl(): MidiControlState {
         }
       }
     });
-    // VSN1 CONTROLLER PROFILE ('edit' | 'play') — the engine's single source of
-    // truth (GET/PATCH /global-effects/profile, WS-broadcast `controllerProfile`,
-    // replayed on connect). Thread it into the MIDI snapshot so the sb_2 toggle
-    // reads the current profile to PATCH the opposite, and so the VSN1 feedback
-    // path reflects the active profile. The UI grid presentation follows the SAME
-    // broadcast via the separate useControllerProfile hook — this is the MIDI-side
-    // mirror. NO optimistic flip (the sb_2 press awaits this echo). On a profile
-    // change the engine also runs a page-0 device redeploy → the `vsn1LayoutDeploy`
-    // ok path already fires the full feedback resync; we ALSO resync here so the
-    // device repaints even if the profile broadcast lands without/before a deploy
-    // frame (the resync flag is idempotent — it consumes exactly once).
-    const refreshControllerProfile = () => {
-      fetchControllerProfile().then((r) => {
-        if (!r.ok || !r.data || (r.data.profile !== 'edit' && r.data.profile !== 'play')) return;
-        if (_snapshot.controllerProfile === r.data.profile) return;
-        _snapshot = { ..._snapshot, controllerProfile: r.data.profile };
+    // ACTIVE NAMED EFFECT BANK — the engine's single source of truth
+    // (GET /global-effects/banks, WS-broadcast `effectBanks`, replayed on connect).
+    // Thread the active bank id into the MIDI snapshot so the sb_2 button can
+    // refuse when unseeded + record the pre-cycle id for echo convergence, and so
+    // the VSN1 feedback path reflects the active bank. The UI badge follows the
+    // SAME broadcast via the separate useEffectBanks hook — this is the MIDI-side
+    // mirror. NO optimistic switch (the sb_2 press awaits this echo). A bank switch
+    // re-flashes the device → the `vsn1LayoutDeploy` ok path already fires the full
+    // feedback resync; we ALSO resync here so the device repaints even if the
+    // `effectBanks` broadcast lands without/before a deploy frame (the resync flag
+    // is idempotent — it consumes exactly once).
+    const refreshEffectBanks = () => {
+      fetchEffectBanks().then((r) => {
+        if (!r.ok || !r.data) return;
+        if (_snapshot.activeBankId === r.data.activeBankId) return;
+        _snapshot = { ..._snapshot, activeBankId: r.data.activeBankId };
         if (!disposed) manager.onEngineUpdate();
       }).catch(() => undefined);
     };
-    refreshControllerProfile();
-    const unsubProfile = engineEvents.subscribe((m: { type?: string; profile?: unknown }) => {
-      if (m?.type !== 'controllerProfile') return;
-      if (m.profile !== 'edit' && m.profile !== 'play') return;
-      if (_snapshot.controllerProfile === m.profile) return;
-      _snapshot = { ..._snapshot, controllerProfile: m.profile };
+    refreshEffectBanks();
+    const unsubProfile = engineEvents.subscribe((m: { type?: string; activeBankId?: unknown }) => {
+      if (m?.type !== 'effectBanks') return;
+      if (typeof m.activeBankId !== 'string' && m.activeBankId !== null) return;
+      if (_snapshot.activeBankId === m.activeBankId) return;
+      _snapshot = { ..._snapshot, activeBankId: m.activeBankId };
       if (disposed) return;
       manager.onEngineUpdate();
-      // Full feedback resync (the device VM was re-flashed by the page-0 redeploy
-      // the profile change triggered). Idempotent with the deploy-ok path.
+      // Full feedback resync (the device VM was re-flashed by the bank switch).
+      // Idempotent with the deploy-ok path.
       _resyncVsn1AfterDeploy?.();
     });
     const unsubSlots = engineEvents.subscribe((m: { type?: string; slots?: unknown }) => {
@@ -1439,7 +1439,7 @@ export function useMidiControl(): MidiControlState {
         refreshSlots();
         refreshGlobalEffects();
         refreshEffectsPage();
-        refreshControllerProfile();
+        refreshEffectBanks();
       }
       _wasConnected = st.connected;
     });

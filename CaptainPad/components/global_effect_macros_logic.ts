@@ -17,6 +17,27 @@
  * this one predicate so they can never disagree.
  */
 
+// ── Multi-bank effects UX — SHELVED 2026-07-14 (operator decision) ────────────
+// FEATURE FLAG, OFF. The multi-bank effects UX — the BANK badge, the ＋/delete
+// BankControls, and the VSN1 sb_2 bank-cycle — is SHELVED. The rig runs a SINGLE
+// FIXED set of 8 effects: the engine already serves one migrated bank via the
+// BANK-AGNOSTIC /global-effect-slots/status path, so the grid renders those 8
+// effects with the full authoring UI (⋯ swap / param+value badges / "+" sockets)
+// with NO bank chrome — single-bank "just works".
+//
+// The banks INFRASTRUCTURE stays in place as a TODO (do NOT rip it out): the
+// engine banks endpoints, the useEffectBanks hook, the pure bank helpers below
+// (EffectBank / reconcileEffectBanks / ensureAtLeastOneBank / bankBadgeLabel …),
+// and the sb_2 anti-spurious-flip guard machinery in utils/midi/manager.ts all
+// remain, DORMANT behind this one flag.
+//
+// TO RESTORE multi-bank: flip this to `true`, re-enable the sb_2 dispatch in
+// utils/midi/manager.ts (handleVsn1BankButton), and re-enable sb_2 in
+// midi_profiles/vsn1.yaml (see `sb2_disabled`). The `: boolean` annotation is
+// deliberate — it keeps the type-checker from narrowing the flag to the literal
+// `false` and pruning the still-live guard machinery as "unreachable".
+export const BANKS_UI_ENABLED: boolean = false;
+
 /** The visible-slot window size + page geometry (mirrors the engine's paging:
  *  page p views flat slot ids `8p+1 .. 8p+8`). */
 export const VISIBLE_SLOT_COUNT = 8;
@@ -106,43 +127,125 @@ export function computePageActivity(slots: SlotBindingLike[]): boolean[] {
   return arr;
 }
 
-// ── VSN1 controller profile (2026-07) ────────────────────────────────────────
-// The VSN1 has two profiles (engine-owned, GET/PATCH /global-effects/profile,
-// WS-broadcast `controllerProfile`): 'edit' and 'play'. This is a VSN1
-// DEVICE-SURFACE concept ONLY — the physical device swaps its Lua template set
-// on toggle (sb_2). It has ZERO effect on the CaptainPad effects grid: the iPad
-// grid ALWAYS renders the full authoring UI (swap ⋯, per-slot value/mode editor,
-// empty "+" sockets to bind, normal sizing) regardless of profile. Earlier this
-// profile degraded the CaptainPad presentation ('play' hid affordances + grew
-// cells); that coupling was removed (operator: the effects UI must always look
-// and behave the same). The type + reconcile/guard below stay so the hook can
-// keep following the broadcast for the DEVICE — the presentation is decoupled.
+// ── Named effect banks (2026-07) ─────────────────────────────────────────────
+// The effects controller owns an ORDERED LIST of NAMED effect banks (engine-
+// owned, GET /global-effects/banks, WS-broadcast `effectBanks`). Each bank is its
+// own effect set; the VSN1 sb_2 CYCLES to the next bank (POST /global-effects/
+// banks/next), always with >= 1 bank present. This replaces the old two-profile
+// (edit/play) concept.
+//
+// PRESENTATION vs CONTENT — a bank switch touches ONE of these, never the other:
+//   - CHROME / PRESENTATION is INVARIANT. The iPad grid ALWAYS renders the full
+//     authoring UI (swap ⋯, per-slot value/mode editor, empty "+" sockets to
+//     bind, normal sizing) regardless of which bank is active. The chrome is
+//     bank-invariant; resolveEffectsPresentation() takes no bank — nothing
+//     branches on it.
+//   - CONTENT (which effects populate the slots) + the bank NAME label DO change
+//     with the active bank. The engine persists each bank's slots (state YAML v3
+//     `{ version:3, activeBankId, effectsPage, banks:[{id,name,slots}] }`) and
+//     broadcasts the new bank's `globalEffectMacroStatus` on a switch so the grid
+//     swaps slot CONTENT. Only the badge NAME + slot content move; the chrome
+//     stays put.
+// The types + reconcile/guard below let the hook follow the `effectBanks`
+// broadcast (it drives the DEVICE cycle AND the neutral BANK badge — see
+// bankBadgeLabel).
 
-export type ControllerProfile = 'edit' | 'play';
-
-/** Shipping default when the engine hasn't reported a profile yet: EDIT, i.e.
- *  today's full UI (never guess PLAY and silently hide the authoring controls). */
-export const DEFAULT_CONTROLLER_PROFILE: ControllerProfile = 'edit';
-
-/** Type guard for the engine's `{type:'controllerProfile', profile}` WS message
- *  (and its connect replay). Only 'edit'/'play' are accepted — a malformed value
- *  is rejected here so the reconcile below keeps the last-known-good profile. */
-export function isControllerProfileMessage(
-  msg: unknown,
-): msg is { type: 'controllerProfile'; profile: ControllerProfile } {
-  if (!msg || typeof msg !== 'object') return false;
-  const m = msg as { type?: unknown; profile?: unknown };
-  return m.type === 'controllerProfile' && (m.profile === 'edit' || m.profile === 'play');
+/** One named effect bank as the UI knows it (id + display name). The full slot
+ *  content lives engine-side; the badge + controls only need id/name. */
+export interface EffectBank {
+  id: string;
+  name: string;
 }
 
-/** Fold an incoming profile value onto the previous one. A valid 'edit'/'play'
- *  wins; anything else is ignored (keep last-known-good — never fall back to a
- *  guessed profile that would flip the operator's surface out from under them). */
-export function reconcileControllerProfile(
-  prev: ControllerProfile,
+/** The ordered bank list + which one is active. `activeBankId` is null only in
+ *  the never-seeded / engine-reports-zero edge; ensureAtLeastOneBank surfaces a
+ *  synthetic Default so the empty state is shown, never hidden (decision D7). */
+export interface EffectBanksState {
+  banks: EffectBank[];
+  activeBankId: string | null;
+}
+
+/** The synthetic Default surfaced (NOT hidden) when the engine reports zero
+ *  banks — the client-side >= 1 mirror (decision D7). Its id is deliberately
+ *  sentinel-shaped so a real engine bank can never collide with it. */
+export const SYNTHETIC_DEFAULT_BANK_ID = '__default__';
+export const SYNTHETIC_DEFAULT_BANK_NAME = 'Default';
+
+/** Shipping default before the engine has threaded any banks: a single surfaced
+ *  Default (never an empty list that would blank the badge). */
+export const DEFAULT_EFFECT_BANKS_STATE: EffectBanksState = {
+  banks: [{ id: SYNTHETIC_DEFAULT_BANK_ID, name: SYNTHETIC_DEFAULT_BANK_NAME }],
+  activeBankId: SYNTHETIC_DEFAULT_BANK_ID,
+};
+
+/** Type guard for the engine's `{type:'effectBanks', banks:[{id,name}],
+ *  activeBankId, source?}` WS message (and its connect replay). A well-formed
+ *  frame is accepted even with an EMPTY banks list / null activeBankId (a genuine
+ *  engine-zero report) — ensureAtLeastOneBank then surfaces the synthetic Default
+ *  rather than the reconcile silently keeping stale non-empty banks. A malformed
+ *  value is rejected so the reconcile keeps last-known-good. */
+export function isEffectBanksMessage(
+  msg: unknown,
+): msg is { type: 'effectBanks'; banks: EffectBank[]; activeBankId: string | null; source?: string } {
+  if (!msg || typeof msg !== 'object') return false;
+  const m = msg as { type?: unknown; banks?: unknown; activeBankId?: unknown };
+  if (m.type !== 'effectBanks') return false;
+  if (!Array.isArray(m.banks)) return false;
+  if (typeof m.activeBankId !== 'string' && m.activeBankId !== null) return false;
+  return m.banks.every(
+    (b) => !!b && typeof b === 'object'
+      && typeof (b as { id?: unknown }).id === 'string'
+      && typeof (b as { name?: unknown }).name === 'string',
+  );
+}
+
+/** Fold an incoming `effectBanks` frame onto the previous state. A well-formed
+ *  frame wins (adopting its banks + activeBankId verbatim — the engine is the
+ *  ordered source of truth); anything else is ignored (keep last-known-good — a
+ *  malformed payload never blanks the operator's bank list). */
+export function reconcileEffectBanks(
+  prev: EffectBanksState,
   incoming: unknown,
-): ControllerProfile {
-  return incoming === 'edit' || incoming === 'play' ? incoming : prev;
+): EffectBanksState {
+  if (!isEffectBanksMessage(incoming)) return prev;
+  return {
+    banks: incoming.banks.map((b) => ({ id: b.id, name: b.name })),
+    activeBankId: incoming.activeBankId,
+  };
+}
+
+/** The client-side >= 1 mirror (decision D7). If the engine ever reports zero
+ *  banks, SURFACE a synthetic Default (don't hide the empty state); if the active
+ *  id doesn't point at a present bank, pin the first so the badge can always
+ *  resolve a position. A coherent state passes through unchanged. */
+export function ensureAtLeastOneBank(state: EffectBanksState): EffectBanksState {
+  if (state.banks.length === 0) {
+    return {
+      banks: [{ id: SYNTHETIC_DEFAULT_BANK_ID, name: SYNTHETIC_DEFAULT_BANK_NAME }],
+      activeBankId: SYNTHETIC_DEFAULT_BANK_ID,
+    };
+  }
+  const hasActive = state.banks.some((b) => b.id === state.activeBankId);
+  if (hasActive) return state;
+  return { ...state, activeBankId: state.banks[0].id };
+}
+
+/** The neutral, informational BANK badge copy for the active bank — e.g.
+ *  'BANK: Default' or, when more than one bank exists, 'BANK: Party (2/3)'. The
+ *  position `(i/n)` is shown ONLY when n > 1 (a single bank has no position to
+ *  disambiguate). Names WHICH effect bank populates the slots so the operator
+ *  sees the active set at a glance. CONTENT/informational ONLY — it must never
+ *  alter chrome/sizing/affordances (distinct from the LOCKED performance-mode
+ *  badge). Pure so the copy is unit-tested without react-native. */
+export function bankBadgeLabel(state: EffectBanksState): string {
+  const ensured = ensureAtLeastOneBank(state);
+  const n = ensured.banks.length;
+  const idx = ensured.banks.findIndex((b) => b.id === ensured.activeBankId);
+  const active = idx >= 0 ? ensured.banks[idx] : ensured.banks[0];
+  const pos = idx >= 0 ? idx + 1 : 1;
+  const name = (active.name || '').trim() || active.id;
+  const base = `BANK: ${name}`;
+  return n > 1 ? `${base} (${pos}/${n})` : base;
 }
 
 /** The presentation the effects grid renders. This is now INVARIANT — the same

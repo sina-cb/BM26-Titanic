@@ -38,6 +38,10 @@ import {
 } from './learn';
 import { decodeBankChange, isClassicRelativeCode } from './mft/messages';
 import { ColorValues, Encoders, MidiChannels } from './mft/constants';
+// Multi-bank effects UX SHELVED 2026-07-14 (operator) — a single feature flag,
+// OFF. Gates the VSN1 sb_2 bank-cycle dispatch below. Pure/RN-free logic module,
+// so this relative import is safe in the framework-free midi layer + vitest.
+import { BANKS_UI_ENABLED } from '../../components/global_effect_macros_logic';
 import { recenterWindowStart } from './window_slot';
 import { buildConnectConfig } from './mft/config';
 import { TickAccelerator, MAX_WINDOW_STEP } from './accel';
@@ -186,12 +190,12 @@ export interface MidiEngineSnapshot {
    *  it. Threaded so the MIDI feedback path can report the current page index to
    *  the device Lua. Optional/undefined = page 0 until the engine threads it. */
   effectsPage?: number;
-  /** VSN1 CONTROLLER PROFILE ('edit' | 'play'), the engine's single source of
-   *  truth (GET/PATCH /global-effects/profile, WS-broadcast `controllerProfile`).
-   *  The VSN1 sb_2 toggle reads it here to compute the OPPOSITE to PATCH (no
-   *  optimistic flip — the engine broadcast updates this). Optional/undefined =
-   *  'edit' until the engine threads it. */
-  controllerProfile?: 'edit' | 'play';
+  /** The ACTIVE named effect bank id, the engine's single source of truth
+   *  (GET /global-effects/banks, WS-broadcast `effectBanks`). The VSN1 sb_2 button
+   *  reads it here only to (a) refuse when unseeded and (b) record the pre-cycle id
+   *  for echo convergence — the engine computes the next bank (no optimistic
+   *  switch). Optional/undefined/null = not seeded yet. */
+  activeBankId?: string | null;
   /** Curated colour palette pairs (hues 0..1), for the colour-pair pads. */
   colorPalettes: { c1: number; c2: number }[];
   /** The FOCUSED channel — whose active pattern's MIDI-learned bindings the
@@ -344,9 +348,9 @@ const SB2_STALE_MS = 2000;
 /** Minimum time between two ACCEPTED sb_2 presses — swallows a mechanical
  *  double-tap / contact bounce after the in-flight PATCH has already settled. */
 const SB2_DEBOUNCE_MS = 400;
-/** Safety cap on the in-flight guard: if the WS `controllerProfile` echo never
+/** Safety cap on the in-flight guard: if the WS `effectBanks` echo never
  *  lands (engine wedged), the in-flight lock self-clears after this so sb_2 is
- *  never permanently dead. Normal clears come from the echo or a failed PATCH. */
+ *  never permanently dead. Normal clears come from the echo or a failed POST. */
 const SB2_INFLIGHT_TIMEOUT_MS = 3000;
 /** Self-echo window: an inbound sb_2 note (43) within this long of our OWN
  *  outbound page-2 side-LED feedback frame (also Note On note 43) is a MIDI
@@ -581,22 +585,22 @@ class ControllerRuntime {
    *  nothing behavioral reads this field. Echoed to the device on every full
    *  re-sync so it survives the VM wipe. */
   private vsn1ViewMode: Vsn1ViewMode = 'effect';
-  /** VSN1 sb_2 (controller-profile flip) anti-spurious-flip state. sb_2 is the
-   *  ONLY writer of the profile in CaptainPad; a live bug flips edit↔play with no
-   *  operator touch. These fields back the four guards in handleVsn1SmallButton
-   *  (stale / debounce / in-flight / self-echo). VSN1 profile only; inert for
-   *  every other driver + button. */
+  /** VSN1 sb_2 (bank-cycle) anti-spurious-flip state. sb_2 is the ONLY bank cycler
+   *  in CaptainPad; a live bug fired it with no operator touch. These fields back
+   *  the four guards in handleVsn1BankButton (stale / debounce / in-flight /
+   *  self-echo). VSN1 sb_2 only; inert for every other driver + button. */
   /** Clock (ms) of the last ACCEPTED sb_2 press (0 = none yet) — debounce base. */
   private sb2LastAcceptedMs = 0;
-  /** True while an sb_2 profile PATCH is in flight / awaiting the WS echo. Set on
-   *  accept, cleared when the snapshot's controllerProfile reaches the target
-   *  (echo landed, in projectAndSend), on a failed PATCH, or after the timeout. */
+  /** True while an sb_2 bank-cycle POST is in flight / awaiting the WS echo. Set on
+   *  accept, cleared when the snapshot's activeBankId CHANGES off the pre-cycle id
+   *  (echo landed, in projectAndSend), on a failed POST, or after the timeout. */
   private sb2PatchInFlight = false;
   /** Clock (ms) the in-flight lock was armed — bounds it by SB2_INFLIGHT_TIMEOUT_MS. */
   private sb2InFlightSince = 0;
-  /** The profile the in-flight PATCH is driving toward — the echo-clear compares
-   *  the snapshot against THIS (null when no PATCH is pending). */
-  private sb2PendingTarget: 'edit' | 'play' | null = null;
+  /** The active bank id captured just BEFORE the in-flight cycle — the echo-clear
+   *  releases when the snapshot's activeBankId differs from THIS (any change = the
+   *  cycle landed). null when no cycle is pending. */
+  private sb2PrevBankId: string | null = null;
   /** note → clock (ms) of the last OUTBOUND Note On (velocity > 0) we sent the
    *  device. The self-echo guard checks the sb_2 note (43) against this to reject
    *  a MIDI loopback of our own page-2 side-LED feedback frame. Bounded (keyed by
@@ -1556,9 +1560,10 @@ class ControllerRuntime {
    *    sb_1 → VIEW:  toggle the LCD visual — grid (colors) ↔ full readout.
    *                  KEY BEHAVIOR IS DRUM IN BOTH (fire immediately); the view
    *                  is presentation only.
-   *    sb_2 → PROFILE: toggle the controller profile edit ↔ play (PATCH
-   *                  /global-effects/profile with the opposite of the snapshot's
-   *                  profile; the engine broadcast is the source of truth).
+   *    sb_2 → DISABLED (banks shelved 2026-07-14): the multi-bank effects UX is
+   *                  off (BANKS_UI_ENABLED=false), so sb_2 does NOTHING — see
+   *                  handleVsn1BankButton, which early-returns behind the flag.
+   *                  The bank-cycle path is preserved as a TODO.
    *    sb_3 → LOGO:  show the MarsinLED wordmark on the LCD (the welcome
    *                  screen; any next key press / feedback dismisses it).
    *  NOTE (highest priority, Sina 2026-07-10): the layout AUTO-DEPLOY must be
@@ -1579,7 +1584,7 @@ class ControllerRuntime {
       return;
     }
     if (button === 2) {
-      this.handleVsn1ProfileButton(timestampMs);
+      this.handleVsn1BankButton(timestampMs);
       return;
     }
     // button === 3 — show the MarsinLED logo: the device's welcome screen is
@@ -1599,27 +1604,39 @@ class ControllerRuntime {
     return this.opts.now ? this.opts.now() : defaultNow();
   }
 
-  /** Release the sb_2 in-flight lock (echo landed / PATCH failed / timed out). */
+  /** Release the sb_2 in-flight lock (echo landed / POST failed / timed out). */
   private clearSb2InFlight(): void {
     this.sb2PatchInFlight = false;
-    this.sb2PendingTarget = null;
+    this.sb2PrevBankId = null;
   }
 
-  /** VSN1 sb_2 → PROFILE toggle (edit ↔ play), the ONLY controller-profile writer
-   *  in CaptainPad — and the source of a live spurious-flip bug. Four guards reject
-   *  every non-operator flip before it PATCHes, and EVERY accepted / dropped press
+  /** VSN1 sb_2 → CYCLE to the next named effect bank, the ONLY bank cycler in
+   *  CaptainPad — and the source of a live spurious-flip bug. Four guards reject
+   *  every non-operator press before it POSTs, and EVERY accepted / dropped press
    *  is logged (with its drop reason) via the lastEvent status idiom so the next
-   *  flip is fully attributable. Guard order runs cheapest-and-most-diagnostic
+   *  cycle is fully attributable. Guard order runs cheapest-and-most-diagnostic
    *  first: a stale replay and a self-echo are misfires that shouldn't even count
    *  as a press; in-flight + debounce collapse rapid repeats; the unseeded refusal
-   *  is last (it needs the snapshot). No optimistic flip: the engine broadcasts
-   *  `controllerProfile` and every surface converges on the echo. */
-  private handleVsn1ProfileButton(timestampMs: number): void {
+   *  is last (it needs the snapshot). No client-computed target, no optimistic
+   *  switch: the engine cycles + broadcasts `effectBanks` and every surface
+   *  converges on the echo. */
+  private handleVsn1BankButton(timestampMs: number): void {
+    // SHELVED 2026-07-14 (BANKS_UI_ENABLED=false): the multi-bank effects UX is
+    // off, so sb_2 does NOTHING — it neither cycles a bank nor POSTs. The four
+    // anti-spurious-flip guards + the accept/dispatch path below are KEPT intact
+    // as a TODO (they document + protect the shelved feature). To restore bank
+    // cycling: flip BANKS_UI_ENABLED (components/global_effect_macros_logic.ts)
+    // AND re-enable sb_2 in midi_profiles/vsn1.yaml. The status line still names
+    // the press so the operator sees the button is deliberately inert.
+    if (!BANKS_UI_ENABLED) {
+      this.setStatus({ lastEvent: 'VSN1 sb_2 disabled — banks shelved' });
+      return;
+    }
     const now = this.nowMs();
 
     // 1) STALE-EVENT GUARD. Web MIDI event timestamps ride performance.now()'s
     //    clock; Chrome QUEUES input for a backgrounded tab and replays it on
-    //    refocus — an old queued sb_2 must not flip the profile. A missing/zero
+    //    refocus — an old queued sb_2 must not cycle the bank. A missing/zero
     //    timestamp (FakeTransport, transports that don't stamp) is treated as
     //    FRESH (never dropped) — we only reject a timestamp we can trust is old.
     if (timestampMs && timestampMs > 0 && now - timestampMs > SB2_STALE_MS) {
@@ -1640,12 +1657,12 @@ class ControllerRuntime {
       return;
     }
 
-    // 2a) IN-FLIGHT GUARD. A profile PATCH is already round-tripping (awaiting the
-    //     WS `controllerProfile` echo); a second press here would PATCH again off a
-    //     stale snapshot. Held until the echo lands / the PATCH fails, with a safety
+    // 2a) IN-FLIGHT GUARD. A bank-cycle POST is already round-tripping (awaiting the
+    //     WS `effectBanks` echo); a second press here would cycle again off a stale
+    //     snapshot. Held until the echo lands / the POST fails, with a safety
     //     timeout so a lost echo can never wedge sb_2 dead.
     if (this.sb2PatchInFlight && now - this.sb2InFlightSince < SB2_INFLIGHT_TIMEOUT_MS) {
-      this.setStatus({ lastEvent: 'VSN1 sb_2 DROPPED — profile PATCH in flight (awaiting echo)' });
+      this.setStatus({ lastEvent: 'VSN1 sb_2 DROPPED — bank cycle in flight (awaiting echo)' });
       return;
     }
     if (this.sb2PatchInFlight) this.clearSb2InFlight(); // in-flight lock timed out
@@ -1657,25 +1674,26 @@ class ControllerRuntime {
       return;
     }
 
-    // 3) REFUSE-UNSEEDED. Without a seeded profile there is no defined OPPOSITE to
-    //    toggle to — a blind default ('edit') is a fallback, which is forbidden.
-    //    Refuse loudly and wait for the engine to thread the profile.
-    const current = this.opts.getSnapshot().controllerProfile;
-    if (current !== 'edit' && current !== 'play') {
-      this.setStatus({ lastEvent: 'VSN1 sb_2 IGNORED — profile unknown (engine not seeded)' });
+    // 3) REFUSE-UNSEEDED. Without a seeded active bank there is no known pre-cycle
+    //    id to converge against — cycling blind is a fallback, which is forbidden.
+    //    Refuse loudly and wait for the engine to thread the banks.
+    const current = this.opts.getSnapshot().activeBankId;
+    if (typeof current !== 'string' || current === '') {
+      this.setStatus({ lastEvent: 'VSN1 sb_2 IGNORED — banks unseeded/empty (engine not seeded)' });
       return;
     }
 
-    // ACCEPT. Arm the debounce + in-flight guards, then PATCH the OPPOSITE with the
-    // 'vsn1_sb2' provenance tag. A failed PATCH releases the in-flight lock at once
-    // (fail-loud, retry allowed); a success holds it until the echo converges.
-    const next: 'edit' | 'play' = current === 'play' ? 'edit' : 'play';
+    // ACCEPT. Arm the debounce + in-flight guards, record the pre-cycle bank id for
+    // echo convergence, then POST the atomic next-bank cycle with the 'vsn1_sb2'
+    // provenance tag. A failed POST releases the in-flight lock at once (fail-loud,
+    // retry allowed); a success holds it until the echo (a changed activeBankId)
+    // converges.
     this.sb2LastAcceptedMs = now;
     this.sb2PatchInFlight = true;
     this.sb2InFlightSince = now;
-    this.sb2PendingTarget = next;
-    this.setStatus({ lastEvent: `VSN1 sb_2 ACCEPTED → profile: ${next.toUpperCase()}` });
-    void this.runDispatch({ kind: 'controllerProfileSet', profile: next }).then((result) => {
+    this.sb2PrevBankId = current;
+    this.setStatus({ lastEvent: 'VSN1 sb_2 ACCEPTED → bank cycle (next)' });
+    void this.runDispatch({ kind: 'effectBankNext' }).then((result) => {
       if (!result.ok) this.clearSb2InFlight();
     });
   }
@@ -2295,12 +2313,12 @@ class ControllerRuntime {
     if (this.status.kind !== 'connected') return;
     const snap = this.opts.getSnapshot();
     // sb_2 in-flight release: this runs on every engine update (onEngineUpdate →
-    // projectAndSend), so the WS `controllerProfile` echo lands here. When the
-    // snapshot's profile reaches the target our PATCH was driving toward, the flip
-    // has converged — release the in-flight lock so the next legitimate press is
-    // accepted (the debounce still guards a too-fast repeat).
-    if (this.sb2PatchInFlight && this.sb2PendingTarget !== null
-        && snap.controllerProfile === this.sb2PendingTarget) {
+    // projectAndSend), so the WS `effectBanks` echo lands here. When the snapshot's
+    // activeBankId has CHANGED off the pre-cycle id we recorded, the cycle has
+    // converged (any change = the echo) — release the in-flight lock so the next
+    // legitimate press is accepted (the debounce still guards a too-fast repeat).
+    if (this.sb2PatchInFlight && this.sb2PrevBankId !== null
+        && snap.activeBankId !== this.sb2PrevBankId) {
       this.clearSb2InFlight();
     }
     // Keep the browse window centred on what's playing BEFORE we read the cursor

@@ -122,12 +122,13 @@ export type ResolvedAction =
   // A concrete slot MODE cycle, BUILT BY THE RUNTIME against the selected slot
   // (never produced by resolveEvent). Dispatched: POST mode/cycle.
   | { kind: 'effectModeCycleSlot'; slotId: number }
-  // VSN1 controller PROFILE switch (sb_2). BUILT BY THE RUNTIME: the manager reads
-  // the current profile from the snapshot and sets `profile` to the OPPOSITE
-  // ('edit' ↔ 'play') — never produced by resolveEvent. Dispatched: PATCH
-  // /global-effects/profile { profile }. The engine broadcast is the source of
-  // truth (no optimistic flip).
-  | { kind: 'controllerProfileSet'; profile: 'edit' | 'play' }
+  // VSN1 sb_2 → CYCLE to the NEXT named effect bank. BUILT BY THE RUNTIME (a
+  // vsn1SmallButton press through the anti-spurious-flip guards) — never produced
+  // by resolveEvent. Dispatched: POST /global-effects/banks/next (an ATOMIC
+  // cycle+wrap, always >= 1 bank). NO client-computed target; the engine picks the
+  // next bank and broadcasts `effectBanks` + the new bank's slots (no optimistic
+  // switch).
+  | { kind: 'effectBankNext' }
   // ── VSN1 SMALL BUTTONS (sb_0..sb_3, notes 41..44) — 2026-07-09 ──
   // The four small PANEL buttons (device elements 9..12). They NEVER change
   // pages (the physical side button does that, firmware-native). `button` is

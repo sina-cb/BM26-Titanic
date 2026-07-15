@@ -19,7 +19,7 @@ function makeApi(): MidiDispatchApi {
     resetGlobalEffectSlotIntensity: vi.fn(ok),
     setEffectsPage: vi.fn(ok),
     cycleGlobalEffectSlotMode: vi.fn(ok),
-    setControllerProfile: vi.fn(ok),
+    nextEffectBank: vi.fn(ok),
     resetAllGlobalEffects: vi.fn(ok),
     disableAllGlobalEffects: vi.fn(ok),
     setChannelPlaylistEntry: vi.fn(ok),

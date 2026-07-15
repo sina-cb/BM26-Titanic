@@ -41,29 +41,12 @@ const { spawnSync } = require('child_process');
 
 const gs = require('./grid_serial.cjs');
 
-// Template sets, one per controllerProfile (effects_v2 PLAY/EDIT split).
-//   edit → templates/effects_layout       (the full detail-edit surface)
-//   play → templates/effects_layout_play  (big-cell performance surface)
-// The PLAY set only overrides the templates that DIFFER (lcd_init / lcd_draw +
-// the encoder templates); every other element (keys, side buttons, system,
-// encoder receiver) is SHARED and read from the base edit set. `readTplFor`
-// resolves a play override when present, else the base file — a missing file
-// in BOTH dirs still throws (fail-loud, no behavioral fallback). This is
-// theme-style template resolution, not a silent behavior fallback.
-const TPL_ROOT = path.join(__dirname, 'templates');
-const TPL_DIR_BY_PROFILE = { edit: 'effects_layout', play: 'effects_layout_play' };
+// The ONE device template set (effects_v2 v3: named banks replace the old
+// PLAY/EDIT profile split — every bank flashes through this single surface).
+// `fs.readFileSync` in the caller throws loudly if a file is missing (no silent
+// fallback — Codex P0).
+const TPL_DIR = path.join(__dirname, 'templates', 'effects_layout');
 const OUT = path.join(__dirname, 'dumps');
-
-// Resolve a template file for a given profile: the play override if it exists,
-// else the base edit template. `fs.readFileSync` in the caller throws loudly if
-// the file is missing from BOTH sets (no silent fallback — Codex P0).
-function tplPathFor(profile, file) {
-  if (profile === 'play') {
-    const override = path.join(TPL_ROOT, TPL_DIR_BY_PROFILE.play, file);
-    if (fs.existsSync(override)) return override;
-  }
-  return path.join(TPL_ROOT, TPL_DIR_BY_PROFILE.edit, file);
-}
 
 const PAGES = 4;
 const KEYS_PER_PAGE = 8;
@@ -97,6 +80,8 @@ const FACTORY_KEY_BC =
 // ── CLI ──────────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const args = { layout: null, live: false, port: null, fromEngine: false, engineUrl: 'http://127.0.0.1:6968', page: null, allowNonzeroPage: false };
+  // (effects_v2 v3: the controllerProfile template split was removed — one
+  // template surface flashes every named bank.)
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--page') {
@@ -145,10 +130,6 @@ RECOVERY of a stale page 1-3 (restores the legacy 3->2->1->0 full order + leaves
 page changes enabled). A normal deploy ends with page 0 active and page changes
 LOCKED (side button inert).
 
-controllerProfile: --from-engine reads GET /global-effects/profile to pick the
-device template set — 'edit' (detail-edit surface) or 'play' (big-cell
-performance surface). A --layout file may carry "profile": "edit"|"play".
-
 Layout schema: README.md "Layout schema". Emits dumps/layout_<name>_page{0..3}.json.
 `);
 }
@@ -164,12 +145,6 @@ function validateLayout(layout) {
   if (layout.module !== 'VSN1L' && layout.module !== 'VSN1R') {
     throw new Error(`layout.module must be VSN1L or VSN1R, got ${layout.module}.`);
   }
-  // controllerProfile selects the device template set. Optional (defaults to
-  // 'edit'); a stranger fails loud (Codex P0 — no silent fallback to edit).
-  if (layout.profile !== undefined && layout.profile !== 'edit' && layout.profile !== 'play') {
-    throw new Error(`layout.profile must be "edit" or "play" (or omitted = edit), got ${layout.profile}.`);
-  }
-
   // MIDI feedback contract — Track C pins: feedbackChannel 1 (active notes,
   // value CCs, page CC), modeChannel 2 (mode CCs), slotBase 32 (i = 0..7,
   // over the ACTIVE page's slots), pageCc 40, sbNoteBase 41.
@@ -300,19 +275,6 @@ async function loadLayoutFromEngine(engineUrl) {
   };
   const layoutRes = await get('/global-effects/layout');
   const statusRes = await get('/global-effect-slots/status');
-  // controllerProfile (edit|play) selects the device template set. Read from
-  // the engine so a play/edit switch re-flashes the right surface. Tolerant of
-  // an older engine that lacks the endpoint (404 → 'edit'); a present-but-bad
-  // value fails loud below in validateLayout.
-  let profile = 'edit';
-  try {
-    const profRes = await get('/global-effects/profile');
-    if (profRes && typeof profRes.controllerProfile === 'string') {
-      profile = profRes.controllerProfile;
-    }
-  } catch (e) {
-    console.warn(`  (GET /global-effects/profile unavailable — defaulting to 'edit': ${e.message})`);
-  }
   // The engine's CURRENT page: after a live deploy the device must be put
   // back on THIS page (restore_config leaves it on whatever page it wrote —
   // the "device stuck on the wrong page" bug, 2026-07-10). effectsPage rides
@@ -344,7 +306,6 @@ async function loadLayoutFromEngine(engineUrl) {
     version: 1,
     name: 'engine',
     module: 'VSN1L',
-    profile,
     midi: { feedbackChannel: 1, modeChannel: 2, slotBase: 32, pageCc: 40, sbNoteBase: 41, helloCc: 41, selectCc: 42, viewCc: 43 },
     effectsPage,
     slots,
@@ -445,9 +406,8 @@ function buildLayout(gp, layout) {
   const maxLength = Number(grid.getProperty('CONFIG_LENGTH'));
   const m = layout.midi;
 
-  // Template set follows the layout's controllerProfile (default 'edit').
-  const profile = layout.profile === 'play' ? 'play' : 'edit';
-  const readTpl = (f) => fs.readFileSync(tplPathFor(profile, f), 'utf8');
+  // ONE template set for every bank (effects_v2 v3 — no profile split).
+  const readTpl = (f) => fs.readFileSync(path.join(TPL_DIR, f), 'utf8');
   const compile = (src, label) => {
     const device = gs.buildActionStringFromLua(gp, src, maxLength);
     return { device, label, length: device.length };
@@ -783,4 +743,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { buildLayout, validateLayout, loadLayoutFromEngine, compileLcdInitShrink, tplPathFor };
+module.exports = { buildLayout, validateLayout, loadLayoutFromEngine, compileLcdInitShrink };

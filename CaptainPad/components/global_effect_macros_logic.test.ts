@@ -20,15 +20,45 @@ import {
   VISIBLE_SLOT_COUNT,
   SlotBindingLike,
   resolveEffectsPresentation,
-  DEFAULT_CONTROLLER_PROFILE,
-  reconcileControllerProfile,
-  isControllerProfileMessage,
+  DEFAULT_EFFECT_BANKS_STATE,
+  SYNTHETIC_DEFAULT_BANK_ID,
+  reconcileEffectBanks,
+  ensureAtLeastOneBank,
+  isEffectBanksMessage,
   deployBannerMessage,
   modeBadge,
+  bankBadgeLabel,
+  BANKS_UI_ENABLED,
+  type EffectBanksState,
 } from './global_effect_macros_logic';
 
 const empty = (slotId: number): SlotBindingLike & { slotId: number } => ({
   slotId, effectId: '', enabled: false, active: false,
+});
+
+// ── Multi-bank effects UX — SHELVED (BANKS_UI_ENABLED) ───────────────────────
+// Operator decision 2026-07-14: revert to a SINGLE fixed set of 8 effects. The
+// multi-bank UX (BANK badge + ＋/delete BankControls + VSN1 sb_2 cycle) is gated
+// OFF behind BANKS_UI_ENABLED. These tests pin the flag's shipped value AND that
+// the bank MACHINERY (pure helpers below) is KEPT dormant so a flag flip restores
+// the feature with no other change. The "no badge / no controls / no sb_2
+// dispatch" behaviors are asserted at their call sites: BankControls returns null
+// + bankBadgeEl is null in GlobalEffectMacros.tsx (proven by the render
+// screenshot), and sb_2's inert dispatch in utils/midi/effects_v2.test.ts.
+describe('BANKS_UI_ENABLED — multi-bank UX shelved (single fixed bank)', () => {
+  it('ships OFF — the rig runs a single fixed set of 8 effects, no bank chrome', () => {
+    expect(BANKS_UI_ENABLED).toBe(false);
+  });
+
+  it('KEEPS the bank machinery dormant (helpers intact behind the flag)', () => {
+    // The engine still serves a single migrated bank via the bank-agnostic
+    // status path; these pure helpers stay wired so flipping the flag restores
+    // the badge/controls verbatim. Guard that they still resolve a coherent >=1
+    // bank state (a synthetic Default is surfaced, never hidden).
+    const ensured = ensureAtLeastOneBank({ banks: [], activeBankId: null });
+    expect(ensured.banks.length).toBeGreaterThanOrEqual(1);
+    expect(bankBadgeLabel(DEFAULT_EFFECT_BANKS_STATE)).toMatch(/BANK:/);
+  });
 });
 
 describe('slotIsBound (the can-not-remove fix)', () => {
@@ -192,32 +222,62 @@ describe('effects grid presentation is IDENTICAL for profile edit AND play', () 
     expect(resolveEffectsPresentation().cellHeightScale).toBe(1);
   });
 
-  it('the profile type + engine-down default still exist (profile drives the DEVICE)', () => {
-    // The profile concept is preserved for the VSN1 device (hook + reconcile +
-    // sb_2), it just no longer touches this grid. Default stays 'edit'.
-    expect(DEFAULT_CONTROLLER_PROFILE).toBe('edit');
+  it('the bank state default still surfaces >= 1 (banks drive the CONTENT + badge)', () => {
+    // The bank concept drives the VSN1 device cycle (hook + reconcile + sb_2), it
+    // just no longer touches this grid's chrome. The shipping default surfaces a
+    // single synthetic Default so the badge is never blank.
+    expect(DEFAULT_EFFECT_BANKS_STATE.banks.length).toBe(1);
+    expect(DEFAULT_EFFECT_BANKS_STATE.activeBankId).toBe(SYNTHETIC_DEFAULT_BANK_ID);
   });
 });
 
-describe('controller-profile reconcile + WS message guard', () => {
-  it('a valid edit/play value wins; anything else keeps last-known-good', () => {
-    expect(reconcileControllerProfile('edit', 'play')).toBe('play');
-    expect(reconcileControllerProfile('play', 'edit')).toBe('edit');
-    // Garbage / partial payloads never flip the operator's surface.
-    expect(reconcileControllerProfile('play', undefined)).toBe('play');
-    expect(reconcileControllerProfile('edit', 'PLAY')).toBe('edit');
-    expect(reconcileControllerProfile('edit', null)).toBe('edit');
-    expect(reconcileControllerProfile('edit', 2)).toBe('edit');
+describe('reconcileEffectBanks + effectBanks WS message guard', () => {
+  const prev: EffectBanksState = { banks: [{ id: 'a', name: 'A' }], activeBankId: 'a' };
+
+  it('a well-formed effectBanks frame wins (adopts banks + activeBankId verbatim)', () => {
+    const next = reconcileEffectBanks(prev, {
+      type: 'effectBanks', banks: [{ id: 'x', name: 'X' }, { id: 'y', name: 'Y' }], activeBankId: 'y',
+    });
+    expect(next.activeBankId).toBe('y');
+    expect(next.banks).toEqual([{ id: 'x', name: 'X' }, { id: 'y', name: 'Y' }]);
   });
 
-  it('isControllerProfileMessage only accepts the exact broadcast shape', () => {
-    expect(isControllerProfileMessage({ type: 'controllerProfile', profile: 'play' })).toBe(true);
-    expect(isControllerProfileMessage({ type: 'controllerProfile', profile: 'edit' })).toBe(true);
-    expect(isControllerProfileMessage({ type: 'controllerProfile', profile: 'nope' })).toBe(false);
-    expect(isControllerProfileMessage({ type: 'effectsPage', profile: 'play' })).toBe(false);
-    expect(isControllerProfileMessage({ type: 'controllerProfile' })).toBe(false);
-    expect(isControllerProfileMessage(null)).toBe(false);
-    expect(isControllerProfileMessage('controllerProfile')).toBe(false);
+  it('garbage / partial payloads keep last-known-good (never blank the list)', () => {
+    expect(reconcileEffectBanks(prev, undefined)).toBe(prev);
+    expect(reconcileEffectBanks(prev, { type: 'effectsPage', effectsPage: 1 })).toBe(prev);
+    expect(reconcileEffectBanks(prev, { type: 'effectBanks', banks: 'nope', activeBankId: 'a' })).toBe(prev);
+    expect(reconcileEffectBanks(prev, { type: 'effectBanks', banks: [{ id: 1 }], activeBankId: 'a' })).toBe(prev);
+  });
+
+  it('isEffectBanksMessage accepts the exact broadcast shape (incl. an engine-zero report)', () => {
+    expect(isEffectBanksMessage({ type: 'effectBanks', banks: [{ id: 'a', name: 'A' }], activeBankId: 'a' })).toBe(true);
+    // A genuine engine-zero report (empty banks, null active) is ACCEPTED so
+    // ensureAtLeastOneBank can surface the synthetic Default (D7 — don't hide it).
+    expect(isEffectBanksMessage({ type: 'effectBanks', banks: [], activeBankId: null })).toBe(true);
+    expect(isEffectBanksMessage({ type: 'effectBanks', banks: [{ id: 'a', name: 5 }], activeBankId: 'a' })).toBe(false);
+    expect(isEffectBanksMessage({ type: 'effectBanks', activeBankId: 'a' })).toBe(false);
+    expect(isEffectBanksMessage({ type: 'controllerProfile', profile: 'play' })).toBe(false);
+    expect(isEffectBanksMessage(null)).toBe(false);
+    expect(isEffectBanksMessage('effectBanks')).toBe(false);
+  });
+});
+
+describe('ensureAtLeastOneBank — the client >= 1 mirror (D7)', () => {
+  it('surfaces a synthetic Default when the engine reports ZERO banks (not hidden)', () => {
+    const out = ensureAtLeastOneBank({ banks: [], activeBankId: null });
+    expect(out.banks.length).toBe(1);
+    expect(out.banks[0].id).toBe(SYNTHETIC_DEFAULT_BANK_ID);
+    expect(out.activeBankId).toBe(SYNTHETIC_DEFAULT_BANK_ID);
+  });
+
+  it('re-points a stale activeBankId at the first present bank', () => {
+    const out = ensureAtLeastOneBank({ banks: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], activeBankId: 'gone' });
+    expect(out.activeBankId).toBe('a');
+  });
+
+  it('passes a coherent state through unchanged (reference-stable)', () => {
+    const state: EffectBanksState = { banks: [{ id: 'a', name: 'A' }], activeBankId: 'a' };
+    expect(ensureAtLeastOneBank(state)).toBe(state);
   });
 });
 
@@ -243,6 +303,48 @@ describe('modeBadge — performance-mode LOCKED indicator (no profile coupling)'
     // produce a badge (the grid is invariant across profiles).
     expect(modeBadge(false)).toBeNull();
     expect(modeBadge(true)!.kind).toBe('locked');
+  });
+});
+
+// ── Bank badge — the neutral, informational active-bank label + position ─────
+// The active bank selects WHICH effects populate the slots (content). A small
+// neutral badge names the active bank (and, when n>1, its position i/n) so the
+// operator can see which set they're looking at. It is CONTENT-only — it never
+// changes chrome/sizing/affordances (that's the invariant presentation) and is
+// styled neutrally (NOT the amber/red LOCKED alarm). This pins the pure copy.
+
+describe('bankBadgeLabel — active-bank name + position', () => {
+  it('a single bank shows the NAME only (no position — nothing to disambiguate)', () => {
+    expect(bankBadgeLabel({ banks: [{ id: 'a', name: 'Default' }], activeBankId: 'a' }))
+      .toBe('BANK: Default');
+  });
+
+  it('multiple banks show the active NAME + its 1-based position (i/n)', () => {
+    const state: EffectBanksState = {
+      banks: [{ id: 'a', name: 'Chill' }, { id: 'b', name: 'Party' }, { id: 'c', name: 'Peak' }],
+      activeBankId: 'b',
+    };
+    expect(bankBadgeLabel(state)).toBe('BANK: Party (2/3)');
+  });
+
+  it('a zero-bank state surfaces the synthetic Default (>= 1 mirror, no position)', () => {
+    expect(bankBadgeLabel({ banks: [], activeBankId: null })).toBe('BANK: Default');
+  });
+
+  it('a stale activeBankId falls back to the first bank + position 1', () => {
+    const state: EffectBanksState = {
+      banks: [{ id: 'a', name: 'Chill' }, { id: 'b', name: 'Party' }],
+      activeBankId: 'gone',
+    };
+    expect(bankBadgeLabel(state)).toBe('BANK: Chill (1/2)');
+  });
+
+  it('is a plain informational string — carries no alarm/LOCKED wording', () => {
+    // Distinct from the performance-mode LOCKED badge: the bank badge must never
+    // read as an alarm. It only ever names the bank.
+    const label = bankBadgeLabel({ banks: [{ id: 'a', name: 'Default' }], activeBankId: 'a' });
+    expect(label.startsWith('BANK: ')).toBe(true);
+    expect(label).not.toContain('LOCKED');
   });
 });
 

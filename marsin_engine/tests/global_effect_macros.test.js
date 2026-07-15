@@ -100,9 +100,11 @@ test('validateColor6 rejects wrong shape and out-of-range', () => {
   assert.doesNotThrow(() => validateColor6([0, 0.5, 1, 0.2, 0.1, 0]));
 });
 
-test('validateSlotsConfig rejects empty / too-large arrays + duplicate slotIds', () => {
-  assert.throws(() => validateSlotsConfig([]),
-    /between/);
+test('validateSlotsConfig ACCEPTS an empty array + rejects too-large arrays + duplicate slotIds', () => {
+  // Empty banks are now allowed (effects_v2 v3, D7: MIN_SLOTS lowered 1 → 0 so a
+  // freshly-created bank can start with zero slots).
+  assert.doesNotThrow(() => validateSlotsConfig([]),
+    'an empty slot array is valid (empty banks allowed)');
   // Too many — one past MAX_SLOTS must fail (boundary-relative so it stays
   // correct as the cap grows; effects_v2 raised it 16 → 32).
   const tooMany = [];

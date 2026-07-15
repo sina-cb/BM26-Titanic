@@ -156,7 +156,7 @@ function makeApi(): MidiDispatchApi {
     setGroupFixedColor: vi.fn(ok), updateMixerChannel: vi.fn(ok), updateDeckChannel: vi.fn(ok),
     dispatchGlobalEffectSlotAction: vi.fn(ok), setGlobalEffectBlackout: vi.fn(ok),
     setGlobalEffectSlotIntensity: vi.fn(ok), resetGlobalEffectSlotIntensity: vi.fn(ok),
-    setEffectsPage: vi.fn(ok), cycleGlobalEffectSlotMode: vi.fn(ok), setControllerProfile: vi.fn(ok),
+    setEffectsPage: vi.fn(ok), cycleGlobalEffectSlotMode: vi.fn(ok), nextEffectBank: vi.fn(ok),
     resetAllGlobalEffects: vi.fn(ok), disableAllGlobalEffects: vi.fn(ok),
     setChannelPlaylistEntry: vi.fn(ok),
     setDeckChannelControl: vi.fn(ok), setMixerChannelControl: vi.fn(ok),
@@ -277,12 +277,12 @@ describe('VSN1 drum-always slot key (fire immediately)', () => {
 // ── Small buttons — Sina's map (2026-07-10 evening) ─────────────────────────
 // sb_0 = MODE (cycle the SELECTED effect's mode, same runtime path as the
 // encoder press) · sb_1 = VIEW (toggle grid ↔ readout; presentation only,
-// keys stay drum) · sb_2 = PROFILE toggle (edit↔play) · sb_3 = MarsinLED logo
-// (the welcome-screen CC; the next press/feedback dismisses it on-device).
-// NB drumSnap carries no controllerProfile, so sb_2 here REFUSES to flip (no
-// blind default) — nothing is sent and nothing dispatched; the seeded PROFILE
-// toggle + its anti-spurious-flip guards are covered in effects_v2.test.ts.
-describe('VSN1 small buttons (mode / view / profile / logo)', () => {
+// keys stay drum) · sb_2 = BANK CYCLE (next named effect bank) · sb_3 = MarsinLED
+// logo (the welcome-screen CC; the next press/feedback dismisses it on-device).
+// NB drumSnap carries no activeBankId, so sb_2 here REFUSES to cycle (no blind
+// default) — nothing is sent and nothing dispatched; the seeded BANK cycle + its
+// anti-spurious-flip guards are covered in effects_v2.test.ts.
+describe('VSN1 small buttons (mode / view / bank / logo)', () => {
   it('sb_0 cycles the SELECTED slot mode (after a key press selects it)', async () => {
     const { manager, api, transport } = setup(drumSnap);
     await manager.start();
@@ -317,7 +317,7 @@ describe('VSN1 small buttons (mode / view / profile / logo)', () => {
   });
 
   it('sb_2 on an UNSEEDED snapshot refuses (nothing sent, nothing dispatched)', async () => {
-    // drumSnap has no controllerProfile → sb_2 refuses the flip (no blind default),
+    // drumSnap has no activeBankId → sb_2 refuses the cycle (no blind default),
     // so it neither sends a MIDI frame nor dispatches any slot/reset action.
     const { manager, api, transport } = setup(drumSnap);
     await manager.start();
@@ -326,7 +326,7 @@ describe('VSN1 small buttons (mode / view / profile / logo)', () => {
     expect(transport.sent).toHaveLength(0);
     expect(api.dispatchGlobalEffectSlotAction).not.toHaveBeenCalled();
     expect(api.resetAllGlobalEffects).not.toHaveBeenCalled();
-    expect(api.setControllerProfile).not.toHaveBeenCalled();
+    expect(api.nextEffectBank).not.toHaveBeenCalled();
   });
 
   it('sb_3 shows the MarsinLED logo (the welcome CC, one-shot)', async () => {

@@ -125,11 +125,50 @@ describe('findSamePageSingletonCollisions — the crosstalk rule', () => {
 const REPO_ROOT = join(__dirname, '../../..');
 const STATES_DIR = join(REPO_ROOT, 'marsin_engine', 'states');
 
+// The state YAML has three shapes across the effect-bank campaign (2026-07):
+//   v3 (named banks): { version:3, activeBankId, effectsPage,
+//                       banks:[ {id, name, slots:[…]}, … ] }
+//   v2 (fixed profiles): { version:2, activeProfile, profiles:{ edit:{slots}, play:{slots} } }
+//   v1 (flat): { slots:[…] }
+// The crosstalk scan runs against the ACTIVE bank/profile. We read whichever
+// shape a given checkout/scene ships. CRITICAL (codex P0 — never a silent
+// pass): a shape we don't recognize must THROW, not return [] — an empty slot
+// array makes the collision scan pass vacuously, which is a false green.
+type V1Doc = { slots?: LayoutSlot[] };
+type V2Doc = {
+  version?: number;
+  activeProfile?: string;
+  profiles?: Record<string, { slots?: LayoutSlot[] }>;
+};
+type V3Doc = {
+  version?: number;
+  activeBankId?: string;
+  banks?: { id?: string; name?: string; slots?: LayoutSlot[] }[];
+};
+
 function loadSceneSlots(scene: string): LayoutSlot[] {
   const doc = yaml.load(
     readFileSync(join(STATES_DIR, scene, 'global_effect_slots.yaml'), 'utf8'),
-  ) as { slots?: LayoutSlot[] };
-  return Array.isArray(doc?.slots) ? doc.slots : [];
+  ) as (V1Doc & V2Doc & V3Doc) | null;
+  // v3: read the ACTIVE bank (default to the first bank if unspecified).
+  if (Array.isArray(doc?.banks)) {
+    const bank =
+      doc!.banks.find((b) => b.id === doc!.activeBankId) ?? doc!.banks[0];
+    return Array.isArray(bank?.slots) ? bank!.slots : [];
+  }
+  // v2: read the ACTIVE profile's bank (default to 'edit' if unspecified).
+  if (doc?.profiles) {
+    const profile = typeof doc.activeProfile === 'string' ? doc.activeProfile : 'edit';
+    const bank = doc.profiles[profile] ?? doc.profiles.edit;
+    return Array.isArray(bank?.slots) ? bank!.slots : [];
+  }
+  // v1: top-level `slots`.
+  if (Array.isArray(doc?.slots)) return doc!.slots;
+  // Unknown shape → fail loud rather than scan an empty array (false green).
+  throw new Error(
+    `effect_layout_guard: unrecognized global_effect_slots.yaml shape for scene '${scene}' ` +
+      `(no v3 banks[], v2 profiles{}, or v1 slots[]) — refusing a vacuous pass`,
+  );
 }
 
 describe('shipped VSN1 layouts — no same-page singleton crosstalk', () => {

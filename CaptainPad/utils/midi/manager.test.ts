@@ -87,7 +87,7 @@ function makeApi(): MidiDispatchApi {
     dispatchGlobalEffectSlotAction: vi.fn(ok), setGlobalEffectBlackout: vi.fn(ok),
     setChannelPlaylistEntry: vi.fn(ok),
     setGlobalEffectSlotIntensity: vi.fn(ok), resetGlobalEffectSlotIntensity: vi.fn(ok),
-    setEffectsPage: vi.fn(ok), cycleGlobalEffectSlotMode: vi.fn(ok), setControllerProfile: vi.fn(ok),
+    setEffectsPage: vi.fn(ok), cycleGlobalEffectSlotMode: vi.fn(ok), nextEffectBank: vi.fn(ok),
     resetAllGlobalEffects: vi.fn(ok), disableAllGlobalEffects: vi.fn(ok),
     setDeckChannelControl: vi.fn(ok), setMixerChannelControl: vi.fn(ok),
     setChannelHue: vi.fn(ok),

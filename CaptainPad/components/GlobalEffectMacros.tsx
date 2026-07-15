@@ -59,6 +59,8 @@ import {
   setGlobalEffectSlotMode,
   fetchEffectsPage,
   setEffectsPage,
+  createEffectBank,
+  deleteEffectBank,
   GlobalEffectSlot,
   GlobalEffectSlotStatus,
 } from '@/utils/api';
@@ -68,6 +70,7 @@ import {
   VISIBLE_SLOT_COUNT,
   EFFECTS_PAGE_COUNT,
   SHOW_EFFECT_PAGES,
+  BANKS_UI_ENABLED,
   resolveEffectsPage,
   resolveEffectsPresentation,
   deployBannerMessage,
@@ -75,8 +78,12 @@ import {
   slotIsBound,
   computeVisibleSlots,
   computePageActivity,
+  isEffectBanksMessage,
+  bankBadgeLabel,
   ModeBadge as ModeBadgeInfo,
+  type EffectBanksState,
 } from './global_effect_macros_logic';
+import { useEffectBanks } from '@/hooks/useEffectBanks';
 import {
   buildPickerSections,
   isFavoritePreset,
@@ -180,6 +187,14 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // affordances and drives the LOCKED mode badge. Read live so the badge clears
   // the moment performance mode is exited. This is SEPARATE from the profile.
   const performanceActive = usePerformanceMode().active;
+  // Named effect banks (ordered, >= 1). This drives ONLY the neutral BANK badge
+  // (informational — names the active bank + its position) and the minimal
+  // add/delete controls. It must NEVER touch chrome/sizing/affordances — the
+  // presentation is bank-invariant (resolveEffectsPresentation takes no bank). The
+  // engine broadcasts the active bank's slot CONTENT via globalEffectMacroStatus
+  // on a switch; the WS subscriber below also refresh()es on an effectBanks frame
+  // as a belt-and-braces convergence so a missed status frame still swaps content.
+  const effectBanks = useEffectBanks();
   // VSN1 layout auto-deploy error banner (dismissible). The engine broadcasts
   // `vsn1LayoutDeploy` around every device re-flash; deployBannerMessage folds the
   // stream into an error string (a failed flash — e.g. the LCD budget overflow) or
@@ -361,6 +376,17 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         // (no change), `null` on a successful `ok` (clear), or the error string.
         const next = deployBannerMessage(msg);
         if (next !== undefined) setDeployError(next);
+      } else if (isEffectBanksMessage(msg)) {
+        // BANK SWITCH/CREATE/DELETE/RENAME → the active effect BANK may have
+        // changed, so the slot CONTENT must swap. The engine already broadcasts the
+        // new bank's globalEffectMacroStatus on a switch (consumed inline above), so
+        // the grid normally converges with no fetch. This refresh() is
+        // belt-and-braces: if that status frame is dropped or races the effectBanks
+        // frame, re-fetching /global-effect-slots/status re-converges the grid to
+        // the active bank. The status arrays fully REPLACE `slots`, so a stale bank
+        // can't linger. NB: chrome/presentation is untouched — only content
+        // re-fetches (the badge NAME follows the useEffectBanks hook).
+        refresh();
       }
       // (The `globalHueShift` WS reconcile was removed 2026-07 with the
       // global hue shifter.)
@@ -662,6 +688,21 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     <ModeBadge key="mode-badge" badge={badge} />
   ) : null;
 
+  // BANK BADGE — a small NEUTRAL, informational pill naming the active effect
+  // bank + its position ('BANK: Default' / 'BANK: Party (2/3)'). The active bank
+  // selects WHICH effects populate the slots (content); this badge tells the
+  // operator which set they see. It is CONTENT-only — deliberately NOT the LOCKED
+  // alarm styling and it never alters chrome/sizing/affordances (the presentation
+  // stays bank-invariant).
+  //
+  // SHELVED 2026-07-14 (BANKS_UI_ENABLED=false): the multi-bank UX is off, so the
+  // badge is NOT rendered — the grid shows the single active bank's 8 slots as a
+  // plain effects grid with no bank chrome. The useEffectBanks hook stays wired
+  // (dormant) so a flip of the flag restores the badge with no other change.
+  const bankBadgeEl = BANKS_UI_ENABLED ? (
+    <BankBadge key="bank-badge" label={bankBadgeLabel(effectBanks)} />
+  ) : null;
+
   // While we wait for the first /global-effect-slots response render
   // a thin skeleton row (matches final layout so the deck doesn't
   // visually jump). If both fetches fail, surface the error.
@@ -669,7 +710,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     return (
       <View style={{ paddingTop: 8 }}>
         {/* Strip: header line removed (label rides in-row once loaded). */}
-        {isStrip ? null : <Header variant={variant} page={renderPage} badge={modeBadgeEl} />}
+        {isStrip ? null : <Header variant={variant} page={renderPage} badge={modeBadgeEl} bankBadge={bankBadgeEl} />}
         {/* party 2026-07-11 — pager chrome hidden (single-page layout). */}
         {SHOW_EFFECT_PAGES ? (
           <PageSwitcher page={page} onSelect={onSelectPage} pageActivity={pageActivity} />
@@ -694,7 +735,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       {/* party 2026-07-11 — in the STRIP the header line is gone: the label
           rides IN the chip row (StripLabel below) to save a full line of
           vertical space in the bottom bar. The deck grid keeps its header. */}
-      {isStrip ? null : <Header variant={variant} page={renderPage} badge={modeBadgeEl} />}
+      {isStrip ? null : <Header variant={variant} page={renderPage} badge={modeBadgeEl} bankBadge={bankBadgeEl} />}
       {/* party 2026-07-11 — the 4-page switcher is HIDDEN (single-page layout;
           VSN1 side buttons no longer page). Flip SHOW_EFFECT_PAGES to restore. */}
       {SHOW_EFFECT_PAGES ? (
@@ -819,6 +860,11 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
             return (
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 {stripLabel}
+                {bankBadgeEl}
+                {/* Minimal add/delete bank controls (D5) — ride next to the badge
+                    on the always-visible strip. Perf-lock-dimmed, delete confirm +
+                    last-bank disabled are handled inside BankControls. */}
+                <BankControls />
                 {modeBadgeEl}
                 {/* Slots-only scroller. A right-edge fade peek hints there's
                     more to scroll (the chips run under the pinned group). */}
@@ -852,6 +898,11 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           return (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap }}>
               {stripLabel}
+              {bankBadgeEl}
+              {/* Minimal add/delete bank controls (D5) — ride next to the badge on
+                  the always-visible strip. Perf-lock-dimmed, delete confirm +
+                  last-bank disabled are handled inside BankControls. */}
+              <BankControls />
               {modeBadgeEl}
               {slotChips}
               {Divider}
@@ -986,7 +1037,7 @@ const PageSwitcher: React.FC<{
 // (2026-07 visual polish: the title now renders at 10px in BOTH variants —
 // the 9px strip size was below the app's smallest legible caption step —
 // so `variant` stays in the prop contract but is not consumed here.)
-const Header: React.FC<{ variant: 'deck' | 'mixer-strip'; page: number; badge?: React.ReactNode }> = ({ page, badge }) => {
+const Header: React.FC<{ variant: 'deck' | 'mixer-strip'; page: number; badge?: React.ReactNode; bankBadge?: React.ReactNode }> = ({ page, badge, bankBadge }) => {
   const C = usePalette();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -999,8 +1050,15 @@ const Header: React.FC<{ variant: 'deck' | 'mixer-strip'; page: number; badge?: 
         }}>
           Global Effects
         </Text>
-        {/* Always-visible mode badge (PLAY escape hatch / LOCKED status) rides
-            next to the label — the non-strip twin of the strip's in-row badge. */}
+        {/* Neutral BANK badge (informational — names the active bank + position).
+            Content-only; never alters chrome/sizing/affordances. */}
+        {bankBadge}
+        {/* Minimal add/delete bank controls (D5) — deck grid only (the roomy
+            authoring surface). Perf-lock-dimmed, delete confirm + last-bank
+            disabled are handled inside BankControls. */}
+        <BankControls />
+        {/* Always-visible LOCKED status badge rides next to the label — the
+            non-strip twin of the strip's in-row badge. */}
         {badge}
       </View>
       {/* party 2026-07-11 — the "PAGE Pn" badge rides with the pager: hidden in
@@ -1024,6 +1082,139 @@ const Header: React.FC<{ variant: 'deck' | 'mixer-strip'; page: number; badge?: 
           </Text>
         </View>
       ) : null}
+    </View>
+  );
+};
+
+// BANK BADGE — a small NEUTRAL, informational pill naming the active effect bank
+// + its position ('BANK: Default' / 'BANK: Party (2/3)'). The active bank selects
+// WHICH effects populate the slots (content); this badge just names the active set
+// (and, when there's more than one, its position i/n) so the operator can tell
+// which one they're looking at. It is deliberately styled NEUTRAL (surface +
+// secondary tokens) — NOT the amber/red LOCKED alarm — because it is purely
+// informational and must NOT read as a warning. It is CONTENT-only: it never
+// alters chrome, sizing, or any affordance (the effects presentation stays
+// bank-invariant). Copy comes from the pure `bankBadgeLabel()`.
+const BankBadge: React.FC<{ label: string }> = ({ label }) => {
+  const C = usePalette();
+  return (
+    <View
+      accessibilityLabel={label}
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        alignSelf: 'center',
+        paddingHorizontal: 8, height: 18, borderRadius: 9,
+        backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder,
+        ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
+      }}
+    >
+      <Text
+        numberOfLines={1}
+        style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, letterSpacing: 0.6 }}
+      >
+        {label}
+      </Text>
+    </View>
+  );
+};
+
+// BANK CONTROLS (decision D5) — the MINIMAL add / delete affordances that ride
+// next to the bank badge in the deck Header. Deliberately tiny: a "+" that POSTs a
+// new bank and a trash that DELETEs the active one. Both are DIMMED + inert under
+// performance-mode lock (usePerfLock — same structural lock that dims the ⋯/＋
+// slot affordances). Delete is DISABLED whenever there is <= 1 bank (the engine's
+// >= 1 invariant — the client mirror surfaces a synthetic Default, whose delete is
+// therefore always disabled). Delete is TWO-STEP (tap → the trash turns into a
+// confirm) so a single mis-tap can't drop a bank. Rename is deferred: the
+// renameEffectBank endpoint exists (a minimal inline rename is a follow-up).
+//
+// Self-contained: it reads useEffectBanks + usePerfLock itself, so the deck Header
+// can drop it in with no prop plumbing. It is rendered ONLY on the deck grid
+// (the roomy authoring surface), not the space-constrained bottom-bar strip.
+const BankControls: React.FC = () => {
+  const C = usePalette();
+  const perfLocked = usePerfLock();
+  const banks = useEffectBanks();
+  // SHELVED 2026-07-14 (BANKS_UI_ENABLED=false): the multi-bank UX is off, so the
+  // ＋/delete bank controls DO NOT render at any of their call sites (deck Header +
+  // both strip rows). The hooks above still run (Rules of Hooks — the early return
+  // is AFTER them) so the component stays hook-stable; flipping the flag restores
+  // the controls verbatim. The create/delete machinery below is kept as a TODO.
+  if (!BANKS_UI_ENABLED) return null;
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  // The engine enforces >= 1 bank (409 on the last delete); the client mirror
+  // surfaces a synthetic Default. Either way, delete is disabled at count <= 1.
+  const canDelete = banks.banks.length > 1;
+  const disabled = perfLocked || busy;
+
+  const onAdd = useCallback(() => {
+    if (disabled) return;
+    setBusy(true);
+    // No name — the engine names an untitled bank. The `effectBanks` broadcast
+    // re-seeds the badge/list; no optimistic local mutation (fail-loud on !ok).
+    createEffectBank()
+      .then((r) => { if (!r.ok) console.warn(`[BankControls] create failed: ${r.error}`); })
+      .finally(() => setBusy(false));
+  }, [disabled]);
+
+  const onDeletePress = useCallback(() => {
+    if (disabled || !canDelete) return;
+    if (!confirmingDelete) { setConfirmingDelete(true); return; }
+    setConfirmingDelete(false);
+    setBusy(true);
+    const id = banks.activeBankId;
+    if (!id) { setBusy(false); return; }
+    // The engine 409s on the last bank; that error is surfaced (logged), not
+    // swallowed. The `effectBanks` broadcast re-seeds on success.
+    deleteEffectBank(id)
+      .then((r) => { if (!r.ok) console.warn(`[BankControls] delete failed: ${r.error}`); })
+      .finally(() => setBusy(false));
+  }, [disabled, canDelete, confirmingDelete, banks.activeBankId]);
+
+  const pillStyle = (active: boolean) => ({
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    minWidth: 18, height: 18, paddingHorizontal: 6, borderRadius: 9,
+    backgroundColor: active ? C.errorContainer : C.surfaceContainerHigh,
+    borderWidth: 1, borderColor: active ? C.error : C.ghostBorder,
+    ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
+  });
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'center' }}>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel="Add effect bank"
+        accessibilityState={{ disabled }}
+        disabled={disabled}
+        onPress={onAdd}
+        style={{ ...pillStyle(false), opacity: disabled ? 0.45 : 1 }}
+      >
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.secondary }}>＋</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel={confirmingDelete ? 'Confirm delete effect bank' : 'Delete effect bank'}
+        accessibilityState={{ disabled: disabled || !canDelete }}
+        disabled={disabled || !canDelete}
+        onPress={onDeletePress}
+        onBlur={() => setConfirmingDelete(false)}
+        style={{ ...pillStyle(confirmingDelete), opacity: (disabled || !canDelete) ? 0.45 : 1 }}
+      >
+        <Text
+          numberOfLines={1}
+          style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: confirmingDelete ? 8 : 11,
+            letterSpacing: 0.4, color: confirmingDelete ? C.error : C.secondary,
+          }}
+        >
+          {confirmingDelete ? 'SURE?' : '🗑'}
+        </Text>
+      </TouchableOpacity>
     </View>
   );
 };

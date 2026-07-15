@@ -2082,49 +2082,81 @@ export async function setEffectsPage(page: number): Promise<ApiResult<{ effectsP
   }
 }
 
-// ── VSN1 controller profile — 'edit' (full authoring UI) ↔ 'play' (performance
-// presentation). The ENGINE is the single source of truth: GET/PATCH
-// /global-effects/profile, WS-broadcast `{type:'controllerProfile', profile}` on
-// change + replayed on connect, persisted engine-side in global_effect_slots.yaml.
-// A PATCH triggers a page-0 device redeploy engine-side. Every surface (CaptainPad
-// grid presentation, the VSN1 sb_2 toggle) follows the broadcast — no surface
-// keeps a private profile.
-export type ControllerProfileValue = 'edit' | 'play';
+// ── Named effect banks — an ORDERED LIST of NAMED effect sets, cycled by the
+// VSN1 sb_2 (always >= 1). The ENGINE is the single source of truth: state YAML
+// v3 `{ version:3, activeBankId, effectsPage, banks:[{id,name,slots}] }`,
+// GET /global-effects/banks, WS-broadcast `{type:'effectBanks', banks, activeBankId,
+// source?}` on any switch/create/delete/rename + replayed on connect. A switch
+// broadcasts the new bank's `globalEffectMacroStatus` so the grid swaps slot
+// CONTENT. Every surface follows the broadcast — no surface keeps a private bank.
+export interface EffectBankSummary {
+  id: string;
+  name: string;
+  slotCount: number;
+}
 
-export async function fetchControllerProfile(): Promise<ApiResult<{ profile: ControllerProfileValue }>> {
+export interface EffectBanksPayload {
+  banks: EffectBankSummary[];
+  activeBankId: string | null;
+}
+
+// GET the ordered bank list + the active id (the seed for the UI badge/controls
+// and the MIDI snapshot). Fail-loud on a non-ok status.
+export async function fetchEffectBanks(): Promise<ApiResult<EffectBanksPayload>> {
   try {
-    const res = await fetchWithTimeout(`${api_base}/global-effects/profile`);
+    const res = await fetchWithTimeout(`${api_base}/global-effects/banks`);
     if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
-    // REST wire key is `controllerProfile` (matching the engine's state field);
-    // the WS broadcast uses `profile`. Normalize to `profile` for all callers.
     const json = await res.json();
-    return { ok: true, data: { profile: json.controllerProfile } };
+    return { ok: true, data: { banks: json.banks, activeBankId: json.activeBankId } };
   } catch (err: any) {
-    warnThrottled('fetch-controller-profile', 'Failed to fetch controller profile:', err);
+    warnThrottled('fetch-effect-banks', 'Failed to fetch effect banks:', err);
     return { ok: false, error: err.message };
   }
 }
 
-// PATCH the controller profile. The engine's REST contract is the body key
-// `controllerProfile` ('edit' | 'play'); it 400s on any other value. On success
-// the engine broadcasts `{type:'controllerProfile', profile}` (and runs the
-// page-0 redeploy) so every surface converges — callers must NOT optimistically
-// flip; await the echo. Mirrors the fail-loud shape.
-//
-// Optional `source` is a provenance tag sent as the body key `source` (the
-// profile itself stays under `controllerProfile`). The engine logs the flip as
-// `[ControllerProfile] prev -> next (source=..., remote=...)` and echoes `source`
-// in its WS `controllerProfile` broadcast, so an unexplained edit↔play flip can
-// be traced to the surface that caused it (e.g. 'vsn1_sb2'). Omitted → the
-// engine records the default/unknown source; the body key is not sent.
-export async function patchControllerProfile(
-  profile: ControllerProfileValue,
-  source?: string,
-): Promise<ApiResult<{ profile: ControllerProfileValue }>> {
+export interface EffectBankCycleResult {
+  activeBankId: string;
+  bankName: string;
+  index: number;
+  count: number;
+}
+
+// POST an ATOMIC cycle+wrap to the NEXT bank (the VSN1 sb_2 dispatch). The engine
+// computes the target server-side — NO client-computed target — and broadcasts
+// `effectBanks` so every surface converges (no optimistic switch). Optional
+// `source` is a provenance tag threaded into the body so the engine can log +
+// echo WHICH surface cycled (e.g. 'vsn1_sb2'); omitted → the body key is not sent.
+export async function nextEffectBank(source?: string): Promise<ApiResult<EffectBankCycleResult>> {
   try {
-    const body: { controllerProfile: ControllerProfileValue; source?: string } = { controllerProfile: profile };
+    const body: { source?: string } = {};
     if (source) body.source = source;
-    const res = await fetchWithTimeout(`${api_base}/global-effects/profile`, {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/banks/next`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('next-effect-bank', 'Failed to cycle effect bank:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// PATCH the ACTIVE bank directly to `bankId` (a UI bank tap). The engine
+// broadcasts `effectBanks` so every surface converges. Optional `source` provenance
+// tag, same contract as nextEffectBank. Fail-loud on a non-ok status.
+export async function setActiveEffectBank(
+  bankId: string,
+  source?: string,
+): Promise<ApiResult<{ activeBankId: string }>> {
+  try {
+    const body: { bankId: string; source?: string } = { bankId };
+    if (source) body.source = source;
+    const res = await fetchWithTimeout(`${api_base}/global-effects/banks/active`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -2133,10 +2165,70 @@ export async function patchControllerProfile(
       const txt = await res.text();
       return { ok: false, error: `HTTP ${res.status}: ${txt}` };
     }
-    const json = await res.json();
-    return { ok: true, data: { profile: json.controllerProfile } };
+    return { ok: true, data: await res.json() };
   } catch (err: any) {
-    warnThrottled('patch-controller-profile', 'Failed to set controller profile:', err);
+    warnThrottled('set-active-effect-bank', 'Failed to set active effect bank:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// POST a new bank (optional `name`; the engine names an untitled one). The engine
+// broadcasts `effectBanks` so the list converges. Fail-loud on a non-ok status.
+export async function createEffectBank(name?: string): Promise<ApiResult<{ id: string; name: string }>> {
+  try {
+    const body: { name?: string } = {};
+    if (name) body.name = name;
+    const res = await fetchWithTimeout(`${api_base}/global-effects/banks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('create-effect-bank', 'Failed to create effect bank:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// DELETE a bank by id. The engine 409s on the LAST bank (>= 1 invariant) — that
+// status is surfaced verbatim (fail-loud), not swallowed. On success it
+// broadcasts `effectBanks`. `id` is path-encoded so an arbitrary bank id is safe.
+export async function deleteEffectBank(id: string): Promise<ApiResult<{ activeBankId: string }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/banks/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('delete-effect-bank', 'Failed to delete effect bank:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// PATCH a bank's `name` by id. The engine broadcasts `effectBanks` so the badge +
+// list converge. Fail-loud on a non-ok status.
+export async function renameEffectBank(id: string, name: string): Promise<ApiResult<{ id: string; name: string }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/banks/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('rename-effect-bank', 'Failed to rename effect bank:', err);
     return { ok: false, error: err.message };
   }
 }

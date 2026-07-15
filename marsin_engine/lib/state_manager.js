@@ -282,13 +282,24 @@ export class StateManager {
   }
 
   /**
-   * Persist the slot bindings, the engine-owned page VIEW (effects_v2), and the
-   * controller PROFILE ('edit'|'play'). `effectsPage` / `controllerProfile` are
-   * optional so old callers/tests that pass only slots still work — they default
-   * to 0 / 'edit' on load when the key is absent.
+   * Persist the v3 global-effect-slots file: the ORDERED named BANKS, the
+   * active bank id, and the engine-owned page VIEW (effects_v2). `banks` is the
+   * on-disk shape `[{ id, name, slots:[…] }]` (straight from
+   * GlobalEffectSlotManager.getBanks()). `effectsPage` is a single top-level
+   * field (NOT per-bank).
+   *
+   *   version: 3
+   *   activeBankId: <stable id>
+   *   effectsPage: <0..3>
+   *   banks: [ { id, name, slots }, … ]   # ordered, >= 1
    */
-  saveGlobalEffectSlots(slotsConfig, effectsPage = 0, controllerProfile = 'edit') {
-    this.save('global_effect_slots.yaml', { slots: slotsConfig, effectsPage, controllerProfile });
+  saveGlobalEffectSlots({ banks, activeBankId, effectsPage = 0 }) {
+    this.save('global_effect_slots.yaml', {
+      version: 3,
+      activeBankId,
+      effectsPage,
+      banks,
+    });
   }
 
   applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController) {

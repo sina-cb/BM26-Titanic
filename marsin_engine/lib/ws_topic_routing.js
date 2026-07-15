@@ -99,12 +99,12 @@ const TOPIC_BY_TYPE = Object.freeze({
   // (single source of truth). Operator-driven, low volume → /ws/control next
   // to the GEM slot/macro messages it relates to.
   effectsPage:                 TOPICS.CONTROL,
-  // effects_v2: engine-owned CONTROLLER PROFILE ('edit' | 'play'). Broadcast on
-  // every PATCH /global-effects/profile + replayed on /ws/control connect so
-  // CaptainPad's PLAY/EDIT switch + the VSN1 mirror the SAME profile (single
-  // source of truth). Operator-driven, low volume → /ws/control next to
-  // effectsPage, the sibling page-view state it parallels.
-  controllerProfile:           TOPICS.CONTROL,
+  // effects_v2 v3: engine-owned named effect BANKS (ordered list + active id).
+  // Broadcast on every bank switch/next/create/delete/rename + replayed on
+  // /ws/control connect so CaptainPad's bank switcher + the VSN1 sb_2 mirror the
+  // SAME list (single source of truth). Operator-driven, low volume →
+  // /ws/control next to effectsPage, the sibling page-view state it parallels.
+  effectBanks:                 TOPICS.CONTROL,
   // effects_v2: VSN1 MIDI-layout deploy result. Broadcast when a layout change
   // is written/flashed to the controller so a client can surface deploy health
   // (ok / disabled / error). Low volume — fires only on layout changes.
