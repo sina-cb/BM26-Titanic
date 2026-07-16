@@ -110,32 +110,11 @@ const PAGE_CC = 40;
 /** The four side-button notes (page-select LEDs). */
 const SIDE_BASE = 41;
 
-// ── VSN1 DEVICE → APP page follow (item 5, 2026-07-10) ───────────────────────
-// The PHYSICAL side button is the firmware-native page switcher — it changes the
-// device page (and restarts the Lua VM) with NO involvement from the four small
-// panel buttons. On that change the device emits the page CC (controller 40) so
-// CaptainPad can FOLLOW it: the app + engine move to the same page in lockstep
-// (device → app; the app → device direction is the outbound page-index feedback
-// above, CC ch1 40 = page). The device rides its outgoing MIDI on channel = page
-// (a moving firmware detail), so this is matched by CONTROLLER number regardless
-// of channel — mirroring the keys' `anyChannel`. The CC VALUE carries the new
-// page 0..3 (page index, same payload the host-side feedback sends back).
-/** The controller number the device's native page-change CC rides (== PAGE_CC).
- *  Exported so the manager's inbound intercept and its tests name one constant. */
-export const DEVICE_PAGE_CC = PAGE_CC;
-
-/** Decode an inbound device MIDI message into the NEW effects page (0..3) when it
- *  is the device's native page-change CC (controller `DEVICE_PAGE_CC`), else null.
- *  Pure: `status` is the raw status byte, `cc` the controller, `value` the data
- *  byte. Only a Control Change (0xB0..0xBF) on controller 40 with a value in
- *  0..3 is a page follow; anything else (a different CC, a note, an out-of-range
- *  value) returns null so the caller ignores it (never a fabricated page). */
-export function decodeDevicePageCc(status: number, cc: number, value: number): number | null {
-  if ((status & 0xf0) !== STATUS_CC) return null;
-  if (cc !== DEVICE_PAGE_CC) return null;
-  if (!Number.isInteger(value) || value < 0 || value > 3) return null;
-  return value;
-}
+// Page-follow retirement (2026-07): the device→app page CC follow is gone. The
+// PHYSICAL side button no longer pages (deploys are page-0-only), so there is no
+// inbound page CC to decode — the old `decodeDevicePageCc` filter was deleted
+// with its consumer. PAGE_CC lives on only as the OUTBOUND page-index feedback
+// address (host → device).
 
 // ── VSN1 DEVICE → APP hello / "VM ready, re-push me" (item 2, 2026-07-10) ─────
 // The device restarts its Lua VM on EVERY VM (re)start — power-on, page load, and

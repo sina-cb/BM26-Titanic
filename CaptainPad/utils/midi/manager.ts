@@ -384,8 +384,8 @@ const FAILURE_WARN_THRESHOLD = 3;
 // page, and CaptainPad KEEPS its effectsPage subscription + feedback plumbing —
 // only the device→app PATCH path is gone. The DEVICE HELLO handler (a VM-restart
 // re-sync ping) is independent and stays live. The pure `decodeDevicePageCc`
-// decoder still lives in vsn1_feedback.ts with its own unit tests; the manager
-// simply no longer consumes it.
+// decoder that used to filter the inbound page CC has been deleted along with
+// this path — there is no inbound page CC to consume any more.
 
 /** Real-timer implementation for the reconnect debounce (used when the caller
  *  injects none). */

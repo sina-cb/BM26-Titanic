@@ -44,7 +44,8 @@ const empty = (slotId: number): SlotBindingLike & { slotId: number } => ({
 // the feature with no other change. The "no badge / no controls / no sb_2
 // dispatch" behaviors are asserted at their call sites: BankControls returns null
 // + bankBadgeEl is null in GlobalEffectMacros.tsx (proven by the render
-// screenshot), and sb_2's inert dispatch in utils/midi/effects_v2.test.ts.
+// screenshot), and sb_2's inert dispatch in
+// utils/midi/scenarios/vsn1_feedback_pipeline.test.ts.
 describe('BANKS_UI_ENABLED — multi-bank UX shelved (single fixed bank)', () => {
   it('ships OFF — the rig runs a single fixed set of 8 effects, no bank chrome', () => {
     expect(BANKS_UI_ENABLED).toBe(false);

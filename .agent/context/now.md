@@ -209,6 +209,24 @@ OPEN (tracked in session task list):
   fix) — flip the flag + re-enable sb_2 + vsn1.yaml to restore. CaptainPad
   772 pass + 6 skipped (shelved-guard tests) + tsc. Device LCD 'PROF' label
   (engine lcd_draw.lua) still needs relabel when the shelf lands.
+- **TEST-SUITE CLEANUP LANDED (uncommitted, 2026-07-15)** — 2 Fable reviews →
+  adversarial consolidation → 2 Opus implementers (engine + CaptainPad,
+  disjoint). ENGINE: 135 flat tests/*.test.js → 8 domain subdirs
+  (audio/companion/timeline/mixer/effects/state/playlist/io) + helpers/ +
+  hil/ + integration/; SAFE explicit glob `tests/**/*.test.{js,mjs}` (NEVER
+  bare `node --test tests/` — sweeps HIL on Node v24; verified 0 hil in
+  default suite); 7 silently-dead node:test suites reactivated (+61 tests,
+  all pass); detector_eval → test:eval (53s); spawn_engine helper extracted
+  (7 dups); HIL: hil_client.mjs + run_hil.mjs dispatcher + single test:hil +
+  NODE_TEST_CONTEXT inertness guard + README backfill (43 harnesses);
+  package.json dup keys removed. CaptainPad: FakeTransport → test_support/;
+  decodeDevicePageCc DELETED (0 callers); VSN1 runtime tests deduped 4→1 home
+  + scenarios/ dir (window_sync, vsn1_runtime, vsn1_feedback_pipeline, …);
+  762 pass/6 skip/tsc. New law `.agent/os/testing.md` (naming boundary:
+  *.test.* = default suite, *_test.mjs = HIL, *.eval.mjs = eval). Zero
+  coverage loss (every delete grep-proven to survive; reorg = pure move).
+  FOLLOW-UP CHIP: HIL httpJson mass-migration deferred (36 harnesses resolve
+  {status,data}, 7 resolve body — semantic drift, needs per-file verify).
 - **PARKED (operator stopped the agent)**: performance-button
   state-sync hardening (render from authoritative state, reconnect re-seed,
   disconnected-neutral) — relaunch only if operator asks.

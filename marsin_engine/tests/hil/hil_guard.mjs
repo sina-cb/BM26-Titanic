@@ -28,6 +28,20 @@
 
 import http from 'http';
 
+// ── Inert under the unit test runner ────────────────────────────────────────
+// HIL harnesses talk to (and MUTATE) a LIVE engine; they must NEVER execute
+// inside `node --test`, which would hang on or corrupt a real engine. Node sets
+// NODE_TEST_CONTEXT for every file it loads under --test, and nearly every
+// harness imports this guard — so tripping here at import time turns a stray
+// recursive/glob sweep into a clean no-op (exit 0, zero tests) instead of a
+// hang. HIL is run via `npm run test:hil` (→ tests/hil/run_hil.mjs), never the
+// default suite. (The default suite's glob already excludes `_test.mjs`; this
+// is the belt-and-suspenders second line of defence.)
+if (process.env.NODE_TEST_CONTEXT) {
+  console.log('HIL harness — run via `npm run test:hil` (skipped under node --test)');
+  process.exit(0);
+}
+
 // Dependency-free GET <engineBase>/status → { status, body }. Node builtins only.
 function _getStatus(engineBase) {
   return new Promise((resolve, reject) => {

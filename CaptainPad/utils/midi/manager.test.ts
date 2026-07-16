@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { MidiManager, MidiEngineSnapshot, combineDelta } from './manager';
-import { MidiTransport, MidiEndpoint, MidiMessageEvent } from './transport';
+import { MidiEndpoint } from './transport';
 import { validateProfile } from './profile';
-import { MidiDispatchApi } from './dispatch';
 import { ACCEL_GAIN_MIN, MAX_WINDOW_STEP, TickAccelerator } from './accel';
+import { FakeTransport, makeApi } from './test_support/fake_transport';
 
 // MFT relative model (operator-confirmed feel): decodeRelativeDelta returns the
 // FULL firmware count (value − 64 — the fast-twist fix; the old six-code map
@@ -38,62 +38,6 @@ const fullEndpoints: MidiEndpoint[] = [
   { id: 'out-0', name: 'APC mini mk2', portIndex: 0, kind: 'destination' },
   { id: 'out-1', name: 'MIDIOUT2 (APC mini mk2)', portIndex: 1, kind: 'destination' },
 ];
-
-class FakeTransport implements MidiTransport {
-  sent: number[][] = [];
-  private endpoints: MidiEndpoint[];
-  private msgCbs = new Set<(e: MidiMessageEvent) => void>();
-  private epCbs = new Set<() => void>();
-  private openedSource: string | null = null;
-  private openedDest: string | null = null;
-
-  constructor(endpoints: MidiEndpoint[]) { this.endpoints = endpoints; }
-  async listEndpoints() { return this.endpoints; }
-  async openSource(id: string) {
-    if (!this.endpoints.find((e) => e.id === id && e.kind === 'source')) throw new Error('no source');
-    this.openedSource = id;
-  }
-  async openDestination(id: string) {
-    if (!this.endpoints.find((e) => e.id === id && e.kind === 'destination')) throw new Error('no dest');
-    this.openedDest = id;
-  }
-  send(bytes: number[]) {
-    if (!this.openedDest) throw new Error('no dest opened');
-    this.sent.push(bytes);
-  }
-  addListener(event: 'midiMessage', cb: (e: MidiMessageEvent) => void): () => void;
-  addListener(event: 'endpointsChanged', cb: () => void): () => void;
-  addListener(event: 'midiMessage' | 'endpointsChanged', cb: ((e: MidiMessageEvent) => void) | (() => void)) {
-    if (event === 'midiMessage') { this.msgCbs.add(cb as (e: MidiMessageEvent) => void); return () => this.msgCbs.delete(cb as (e: MidiMessageEvent) => void); }
-    this.epCbs.add(cb as () => void); return () => this.epCbs.delete(cb as () => void);
-  }
-  close() { this.msgCbs.clear(); this.epCbs.clear(); }
-
-  // ── test helpers ──
-  emit(data: number[], timestampMs = 0) { for (const cb of this.msgCbs) cb({ sourceId: this.openedSource ?? '', data, timestampMs }); }
-  setEndpoints(eps: MidiEndpoint[]) { this.endpoints = eps; for (const cb of this.epCbs) cb(); }
-  /** Fire N `endpointsChanged` events WITHOUT changing the endpoint set — models
-   *  Web MIDI emitting one statechange per PORT (input + output) for a single
-   *  physical plug, all fanned to this transport's listeners. */
-  fireEndpointsChanged(times = 1) { for (let i = 0; i < times; i++) for (const cb of this.epCbs) cb(); }
-}
-
-function makeApi(): MidiDispatchApi {
-  const ok = async () => ({ ok: true });
-  return {
-    updateParamCenter: vi.fn(ok), updateMixerMaster: vi.fn(ok), setActivePattern: vi.fn(ok),
-    setGlobalBlackout: vi.fn(ok), setGlobalEffect: vi.fn(ok), setSectionBrightness: vi.fn(ok),
-    setGroupFixedColor: vi.fn(ok), updateMixerChannel: vi.fn(ok), updateDeckChannel: vi.fn(ok),
-    dispatchGlobalEffectSlotAction: vi.fn(ok), setGlobalEffectBlackout: vi.fn(ok),
-    setChannelPlaylistEntry: vi.fn(ok),
-    setGlobalEffectSlotIntensity: vi.fn(ok), resetGlobalEffectSlotIntensity: vi.fn(ok),
-    setEffectsPage: vi.fn(ok), cycleGlobalEffectSlotMode: vi.fn(ok), nextEffectBank: vi.fn(ok),
-    resetAllGlobalEffects: vi.fn(ok), disableAllGlobalEffects: vi.fn(ok),
-    setDeckChannelControl: vi.fn(ok), setMixerChannelControl: vi.fn(ok),
-    setChannelHue: vi.fn(ok),
-    toggleDeckMixerView: vi.fn(ok), toggleCombinedAutopilot: vi.fn(ok), toggleMasterFade: vi.fn(ok), summonPerformanceDialog: vi.fn(ok),
-  };
-}
 
 function setup(snapshot: MidiEngineSnapshot, endpoints = fullEndpoints) {
   const transport = new FakeTransport(endpoints);
@@ -188,72 +132,13 @@ describe('MidiManager (integration, fake transport)', () => {
     expect(api.updateMixerChannel).toHaveBeenCalledTimes(1);
   });
 
-  it('pad window browser scrolls + selects a layer playlist entry', async () => {
-    const browseProfile = validateProfile({
-      device: { id: 'apc', label: 'APC mini mk2', nameContains: 'APC mini mk2', sourcePort: 0, destinationPort: 0 },
-      contexts: {
-        mixer: [
-          { id: 'down', match: { type: 'column', channel: 0, column: 0, fromRow: 0, toRow: 0 }, action: { kind: 'playlistScroll', layer: 0, dir: 'down' }, led: { on: 1, off: 0 } },
-          { id: 'win', match: { type: 'column', channel: 0, column: 0, fromRow: 1, toRow: 6 }, action: { kind: 'playlistWindowSelect', layer: 0 }, led: { active: 21, idle: 1, channel: 6 } },
-        ],
-      },
-    });
-    const entries = Array.from({ length: 10 }, (_, i) => ({ id: `e${i}` }));
-    const snap: MidiEngineSnapshot = {
-      ...baseSnap,
-      layers: [{ id: 'ch_a', fader: 1, playlist: { entries, activeEntryId: 'e0' } }],
-    };
-    const windowCalls: [string, number, number][] = [];
-    const transport = new FakeTransport(fullEndpoints);
-    const api = makeApi();
-    const manager = new MidiManager({
-      profiles: [browseProfile], transportFactory: () => transport, api,
-      getSnapshot: () => snap, defaultContext: 'mixer',
-      onWindowChange: (id, start, size) => windowCalls.push([id, start, size]),
-    });
-    await manager.start();
-    transport.emit([0x90, 8, 127]); // column0 row1 = slot 0 → entry e0 (cursor 0)
-    expect(api.setChannelPlaylistEntry).toHaveBeenCalledWith('mixer', 'ch_a', 'e0');
-    transport.emit([0x90, 0, 127]); // column0 row0 = scroll down → cursor 1
-    expect(windowCalls).toContainEqual(['ch_a', 1, 6]);
-    transport.emit([0x90, 8, 127]); // slot 0 now → entry e1
-    expect(api.setChannelPlaylistEntry).toHaveBeenLastCalledWith('mixer', 'ch_a', 'e1');
-  });
-
-  it('auto-follows a UI list tap only; ignores engine-driven / autopilot switches', async () => {
-    // Operator policy 2026-07: the browse window recenters ONLY for a CaptainPad
-    // list UI tap (noteUiPatternSelect). Autopilot / engine-driven / cross-tab
-    // active-entry changes leave the window exactly where it is.
-    const entries = Array.from({ length: 20 }, (_, i) => ({ id: `e${i}` }));
-    let snap: MidiEngineSnapshot = {
-      ...baseSnap,
-      layers: [{ id: 'ch_a', fader: 1, playlist: { entries, activeEntryId: 'e0' } }],
-    };
-    const windowCalls: [string, number, number][] = [];
-    const transport = new FakeTransport(fullEndpoints);
-    const api = makeApi();
-    const manager = new MidiManager({
-      profiles: [profile], transportFactory: () => transport, api,
-      getSnapshot: () => snap, defaultContext: 'mixer',
-      onWindowChange: (id, start, size) => windowCalls.push([id, start, size]),
-    });
-    await manager.start();
-    // On connect the window is established once at the top (cursor 0) around e0.
-    expect(windowCalls).toContainEqual(['ch_a', 0, 6]);
-
-    // ENGINE-DRIVEN switch to e12 (outside [0..5]) — autopilot / cross-tab echo,
-    // NOT a UI tap → must NOT recenter or republish.
-    windowCalls.length = 0;
-    snap = { ...snap, layers: [{ id: 'ch_a', fader: 1, playlist: { entries, activeEntryId: 'e12' } }] };
-    manager.onEngineUpdate();
-    expect(windowCalls).toEqual([]); // window stays put at 0
-
-    // A CaptainPad LIST TAP on e15 (the panel notes it) DOES recenter: 15 - 3 = 12.
-    manager.noteUiPatternSelect('ch_a', 'e15');
-    snap = { ...snap, layers: [{ id: 'ch_a', fader: 1, playlist: { entries, activeEntryId: 'e15' } }] };
-    manager.onEngineUpdate();
-    expect(windowCalls).toContainEqual(['ch_a', 12, 6]); // window [12..17] surrounds e15
-  });
+  // The APC pad-window browse contract — scroll advances the window, a window
+  // pad selects the entry the UI highlights at that slot, and the window
+  // recenters ONLY for a CaptainPad list UI tap (never an engine/autopilot
+  // switch) — is proven, in stronger dedicated form, in
+  // scenarios/window_sync.test.ts: the "pressing pad slot s selects window[s]"
+  // invariant and the "only a UI list tap recenters the browse window" block.
+  // (window_slot.test.ts covers the pure windowing functions.)
 
   it('scene button dispatches a global-effect slot toggle', async () => {
     const geProfile = validateProfile({
