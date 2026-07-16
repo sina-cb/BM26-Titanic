@@ -56,6 +56,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 // Port is overridable via env so the test can run alongside an already-
 // running operator engine on 6968 (cursor IDE setups commonly auto-
 // spawn one). Default keeps backwards compat.
@@ -187,6 +189,9 @@ async function main() {
   cleanupState.savedDeckPlaylist = (await httpJson('GET', '/deck/playlist')).body?.name || 'default';
   // Snapshot GEM slots for T6.
   cleanupState.gemSnap = JSON.stringify((await httpJson('GET', '/global-effect-slots')).body);
+
+  // Refuse to mutate a non-disposable engine BEFORE any deck/playlist write.
+  await assertDisposableEngine(BASE);
 
   // Force view = deck so vis.master surfaces ONLY the deck output (no
   // mixer overlays leaking into our pattern-identity assertions). The

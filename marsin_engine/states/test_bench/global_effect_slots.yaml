@@ -1,43 +1,107 @@
 slots:
   - slotId: 1
     enabled: true
-    label: 5 Hz Punch
+    label: 2 Hz Pulse
     effectId: strobe
-    presetId: punch_5hz
+    presetId: pulse_2hz
     behavior: toggle
-    paramsOverride: {}
+    paramsOverride:
+      hz: 2
+      intensity: 0.7244094488188977
+    intensity: 0.7244094488188977
+    mode: 2
+    color: '#1e78ff'
   - slotId: 2
     enabled: true
-    label: Vintage White
-    effectId: vintageWhite
-    presetId: default
-    behavior: toggle
-    paramsOverride: {}
+    label: Iceberg Flash
+    effectId: dropHit
+    presetId: iceberg_flash
+    behavior: trigger
+    paramsOverride:
+      intensity: 0
+    intensity: 0
+    mode: null
+    color: '#ffffff'
   - slotId: 3
     enabled: true
-    label: Fogger
-    effectId: fogger
-    presetId: default
+    label: Ocean Blue
+    effectId: colorWash
+    presetId: ocean_blue
     behavior: toggle
-    paramsOverride: {}
+    paramsOverride:
+      amount: 0.13385826771653545
+    intensity: 0.13385826771653545
+    mode: null
+    color: '#a03cff'
   - slotId: 4
     enabled: true
-    label: Ghost Trails
+    label: Cosmic Trails
     effectId: feedbackTrails
-    presetId: ghost_ship
+    presetId: cosmic_trails
     behavior: toggle
     paramsOverride: {}
+    mode: null
+    intensity: null
+    color: '#ff8c00'
   - slotId: 5
+    enabled: true
+    label: Deep Pump
+    effectId: beatPump
+    presetId: deep
+    behavior: toggle
+    paramsOverride: {}
+    intensity: null
+    mode: null
+    color: '#fff0d2'
+  - slotId: 6
+    enabled: true
+    label: Fizz
+    effectId: sparkle
+    presetId: fizz
+    behavior: toggle
+    paramsOverride: {}
+    intensity: null
+    mode: null
+    color: '#00c8dc'
+  - slotId: 7
+    enabled: true
+    label: Rising Tide
+    effectId: waterlineSweep
+    presetId: rising_tide
+    behavior: toggle
+    paramsOverride:
+      amount: 0.7165354330708661
+    intensity: 0.7165354330708661
+    mode: null
+    color: '#50e6a0'
+  - slotId: 8
     enabled: true
     label: UV Blast
     effectId: uvBlast
     presetId: default
     behavior: toggle
     paramsOverride: {}
-  - slotId: 6
-    enabled: true
-    label: Iceberg Flash
-    effectId: dropHit
-    presetId: iceberg_flash
-    behavior: trigger
+    intensity: null
+    mode: null
+    color: '#c828ff'
+  - slotId: 17
+    enabled: false
+    label: Vintage White
+    effectId: vintageWhite
+    presetId: default
+    behavior: toggle
     paramsOverride: {}
+    intensity: null
+    mode: null
+    color: null
+  - slotId: 9
+    enabled: false
+    label: Blast White
+    effectId: blastWhite
+    presetId: default
+    behavior: toggle
+    paramsOverride: {}
+    intensity: null
+    mode: null
+    color: null
+effectsPage: 0

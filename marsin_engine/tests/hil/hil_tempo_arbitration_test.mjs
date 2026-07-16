@@ -50,6 +50,8 @@
 import http from 'http';
 import { WebSocket } from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const ENGINE_PORT = parseInt(process.env.ENGINE_PORT || '31268', 10);
 const ENGINE_BASE = `http://127.0.0.1:${ENGINE_PORT}`;
 const WS_URL = `ws://127.0.0.1:${ENGINE_PORT}/ws/control`;
@@ -155,6 +157,9 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     console.error('  FATAL: CPC key audioBpm not registered — cannot simulate OSC BPM.');
     process.exit(2);
   }
+
+  // Refuse to mutate a non-disposable engine BEFORE any tempo write.
+  await assertDisposableEngine(ENGINE_BASE);
 
   try { await connectWs(); }
   catch (e) { console.error('  FATAL: WS connect failed: ' + e.message); process.exit(2); }

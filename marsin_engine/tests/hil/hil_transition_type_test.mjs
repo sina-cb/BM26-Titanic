@@ -49,6 +49,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const ENGINE_BASE = 'http://127.0.0.1:6968';
 const WS_URL = 'ws://127.0.0.1:6968';
 
@@ -116,6 +118,10 @@ async function main() {
   if (overlays.length < 2) { console.error(`\u2717 Need >=2 overlays; got ${overlays.length}`); return 1; }
   const [A, B] = overlays.map(c => c.id);
   const SAVED_MODES = Object.fromEntries(overlays.map(c => [c.id, c.mode]));
+
+  // Refuse to mutate a non-disposable engine BEFORE any channel-mode write.
+  await assertDisposableEngine(ENGINE_BASE);
+
   cleanupState.started = true;
   cleanupState.originalChannels = overlays.slice(0, 2);
   installSignalCleanup();

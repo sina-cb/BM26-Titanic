@@ -17,8 +17,15 @@ import {
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
 import { useActiveModel } from '@/hooks/useEngineState';
+import { setMidiActiveContext, setMidiFocus, useIsMidiFocused } from '@/hooks/useMidiControl';
+import { MidiMapBadge, MidiMapPopover, useEntryMidiMappings, MIDI_VIOLET } from '@/components/MidiMap';
+import { KnobPill } from '@/components/ui/knob_pill';
+import { deriveKnobOrder, type Export } from '@/utils/midi/knob_order';
+import { knobBadgeFor } from '@/utils/midi/knob_badge';
+import { globalKnobNumber } from '@/utils/midi/knob_page';
 
 import { CPCControls } from '@/components/CPCControls';
+import { HEADER_MIN_HEIGHT, HEADER_PADDING_VERTICAL } from '@/constants/header_layout';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { TRANSITION_DURATION_PRESETS_MS } from '@/components/DeckTransitionControls';
 import { MiniFader } from '@/components/ui/MiniFader';
@@ -27,6 +34,8 @@ import { TimerWheel } from '@/components/ui/TimerWheel';
 import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { SnapshotBar } from '@/components/SnapshotBar';
+import { PerformanceModeControl } from '@/components/PerformanceModeControl';
+import { usePerformanceMode, usePerfLock } from '@/hooks/usePerformanceMode';
 import { MasterFadeGroup } from '@/components/MasterFadeGroup';
 import { useMasterFade } from '@/hooks/use_master_fade';
 import { setChannelColor, setChannelHue } from '@/utils/channelExtrasApi';
@@ -183,16 +192,56 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
     return m;
   }, [mappings]);
 
+  // MIDI-map bindings for this channel's active playlist entry. Mirrors the
+  // modulation fetch above (same per-entry array on the playlist), indexed by
+  // target.parameter so each slider can look up its own binding. Editable only
+  // when the channel actually has a playlist + active entry — the badge opens
+  // the ⊞ MIDI-learn popover keyed to this channel's entry, exactly like the
+  // deck's ModulatedSlider. Bindings live per playlist entry (engine-side), so
+  // touch + APC track-button focus + MFT all edit the same source of truth.
+  const { mappings: midiMappings, refresh: refreshMidi } = useEntryMidiMappings(playlistName, entryId);
+  const midiByTarget = React.useMemo(() => {
+    const m: Record<string, any> = {};
+    for (const x of midiMappings) m[x.target.parameter] = x;
+    return m;
+  }, [midiMappings]);
+  const midiEditable = !!playlistName && !!entryId;
+  // Which param's MIDI popover is open (target name), or null.
+  const [midiPopoverTarget, setMidiPopoverTarget] = React.useState<string | null>(null);
+
   const exps = channel.exports || [];
   if (exps.length === 0) {
     return <Text style={[styles.labelCaps, { textAlign: 'center', marginTop: 16 }]}>NO PARAMS</Text>;
   }
+  // #1 + N4: render the continuous MiniFaders from THE knob order (kind-1 only),
+  // so the on-screen order IS the physical MFT knob order and non-kind-1 exports
+  // (toggles kind-2, hsvPickers kind-6, triggers kind-3) are NEVER drawn as a
+  // fader — a fader drag on those used to emit a fabricated v0 with v1:0/v2:0,
+  // zeroing an hsvPicker's saturation/value. deriveKnobOrder.rows is kind-1
+  // scoped, so those exports simply don't appear here; we surface them below as
+  // a small non-interactive chip so the operator still sees the pattern declares
+  // them (but can't corrupt them from the mixer strip).
+  const sliderRows = deriveKnobOrder(exps as Export[]).rows;
+  const nonFaderExports = (exps as any[]).filter((e) => e.kind !== 1);
   return (
     <View style={{ gap: 4 }}>
-      {exps.map((exp: any) => {
+      {sliderRows.map((row) => {
+        const exp = row.export as any;
+        const badge = knobBadgeFor(row);
         const matched = !!exp.cpcOwned;
+        // no-v0 exclusion (rare — engine now serializes a real v0): the slider
+        // has no numeric anchor, so it's NOT knob-mapped and must not be driven.
+        // Render it non-interactive with a "—" marker like the deck does.
+        const noV0 = badge.excludedReason === 'no-v0';
+        const knobExcluded = matched || noV0;
         const niceLabel = prettySliderName(exp.name);
         const hasMapping = !matched && !!mappingByTarget[exp.name];
+        // MIDI-map badge — only meaningful for learnable (non-CPC-matched)
+        // sliders, matching useMidiControl's focused-export filter. Show the
+        // badge when this param already has a binding, or when the channel is
+        // editable (has a playlist + active entry) so the operator can add one.
+        const midiMapping = !matched ? (midiByTarget[exp.name] ?? null) : null;
+        const showMidiBadge = !matched && (!!midiMapping || midiEditable);
         const live = !matched ? modulationLive[exp.name] : null;
         // When a modulation is live the engine writes the MODULATED value back
         // into exp.v0, so the true anchor is the modulationState frame's base
@@ -212,27 +261,49 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
           ? live.modulated : null;
         return (
           <View key={exp.id}>
-            {/* When mapped, render the ◎ ON pill inline above the
-                MiniFader so the slider row reads the same way on the
-                deck and mixer. CPC-matched sliders still use the
-                MiniFader's own `badge` prop because that's a
-                different concept ("the global owns this"). */}
-            {hasMapping ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 1 }}>
+            {/* Badge row above the MiniFader — the green ◎ modulation pill
+                (read-only on the mixer) and the violet ⊞ MIDI pill sit side
+                by side so the slider row reads the same way on the deck and
+                mixer. CPC-matched sliders still use the MiniFader's own
+                `badge` prop because that's a different concept ("the global
+                owns this"). The ⊞ badge opens the MIDI-learn popover keyed to
+                THIS channel's active playlist entry (editable when the channel
+                has a playlist + entry). */}
+            {/* Badge row — always rendered so the physical-knob indicator is
+                visible on EVERY kind-1 row: a violet "KNOB N" pill on a mapped
+                slider (the encoder that drives it), or a "—" marker on a no-v0
+                row that consumes no knob. The green ◎ modulation pill + violet
+                ⊞ MIDI pill join it when present. (Matched rows carry their MATCH
+                tag on the MiniFader itself, so no knob badge there.) */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 1 }}>
+              {badge.mapped && badge.knobNumber !== null ? (
+                <KnobPill knobNumber={badge.knobNumber} />
+              ) : null}
+              {noV0 ? (
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary }}>—</Text>
+              ) : null}
+              {hasMapping ? (
                 <ModulationReadonlyBadge hasMapping={true} isOverride={mappingByTarget[exp.name]?.mode === 'override'} />
-                {ghost !== null ? (
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: '#00a86b' }}>
-                    →{ghost.toFixed(2)}
-                  </Text>
-                ) : null}
-              </View>
-            ) : null}
+              ) : null}
+              {hasMapping && ghost !== null ? (
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: '#00a86b' }}>
+                  →{ghost.toFixed(2)}
+                </Text>
+              ) : null}
+              {showMidiBadge ? (
+                <MidiMapBadge
+                  mapping={midiMapping}
+                  editable={midiEditable}
+                  onEdit={() => setMidiPopoverTarget(exp.name)}
+                />
+              ) : null}
+            </View>
             <View style={{ position: 'relative' }}>
               <MiniFader
                 label={niceLabel}
                 value={base}
                 onChange={(v: number) => onControlChange(channel.id, exp.id, v)}
-                disabled={matched || !!disabled}
+                disabled={knobExcluded}
                 badge={matched ? `MATCH${exp.cpcLabel ? `·${String(exp.cpcLabel).substring(0, 4).toUpperCase()}` : ''}` : undefined}
                 fillColor={hasMapping ? undefined : undefined}
               />
@@ -257,6 +328,46 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
           </View>
         );
       })}
+      {/* N4: non-kind-1 exports (toggles / triggers / hsvPickers) are NOT
+          continuous faders — rendering one as a MiniFader used to emit a
+          fabricated v0 with v1:0/v2:0 on drag, zeroing an hsvPicker's
+          saturation/value. The mixer strip has no controls for these kinds, so
+          we surface them as a small non-interactive chip (the operator sees the
+          pattern declares them; they're edited from the deck). */}
+      {nonFaderExports.length > 0 ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+          {nonFaderExports.map((exp: any) => (
+            <View
+              key={exp.id}
+              style={{
+                paddingHorizontal: 6, paddingVertical: 2,
+                borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder,
+                backgroundColor: C.surfaceContainerHigh, opacity: 0.5,
+              }}
+            >
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: C.secondary, letterSpacing: 0.4 }} numberOfLines={1}>
+                {prettySliderName(exp.name).toUpperCase()} · DECK ONLY
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+      {/* Single MIDI-learn popover for the whole strip — opened by whichever
+          param's ⊞ badge was tapped (keyed by target name). Guarded on
+          playlistName + entryId, which are non-null whenever the badge was
+          editable (the only way to open it). On save/remove we refresh the
+          per-entry bindings so the badge repaints without a full reload. */}
+      {midiPopoverTarget && playlistName && entryId ? (
+        <MidiMapPopover
+          paramName={prettySliderName(midiPopoverTarget)}
+          targetParameter={midiPopoverTarget}
+          playlistName={playlistName}
+          entryId={entryId}
+          existing={midiByTarget[midiPopoverTarget] ?? null}
+          onClose={() => setMidiPopoverTarget(null)}
+          onChanged={refreshMidi}
+        />
+      ) : null}
     </View>
   );
 }
@@ -272,7 +383,7 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, cardStyle, isOnlyChannel, activationsLocked, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, cardStyle, isOnlyChannel, activationsLocked, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -285,6 +396,23 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showTransPicker, setShowTransPicker] = useState(false);
   const [showViewPicker, setShowViewPicker] = useState(false);
+  // PERFORMANCE MODE: structural channel edits (reorder, delete, view
+  // re-target) are 409-gated engine routes while a show is live. Runtime
+  // controls (fader, blend mode, lock, pin, mute/solo/bump, params) stay
+  // fully live — only the structural affordances grey.
+  const perfLocked = usePerfLock();
+  // The MIDI-focused mixer layer (module state shared with the APC track
+  // buttons + the MFT). This strip is focused when its 0-based layer index
+  // matches. Tapping FOCUS writes the same module state, so touch and the
+  // physical controllers always agree on which channel the param faders
+  // (4-6/8) drive. `layerIndex` is the 0-based position in the channels array
+  // (NOT the 1-based display `index`), matching useMidiControl's focus math.
+  //
+  // 12a: subscribe to the BOOLEAN "is THIS layer focused?" selector, not the
+  // global focus number. React.memo(ChannelStrip) can then re-render only the
+  // two strips whose focus actually flips on a focus change — with the numeric
+  // selector, every strip re-rendered on any focus change (render churn).
+  const isFocused = useIsMidiFocused(layerIndex);
   // Overflow (⋮) menu for the secondary channel-control actions (pin fader,
   // delete). The 2026-06-22 toolbar cleanup keeps only lock, the reorder
   // chevrons, the blend-mode dropdown, and this ⋮ button inline on ONE
@@ -563,28 +691,29 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
               by the channel lock. */}
           {onMoveUp && (
             <TouchableOpacity
-              style={[styles.titleBtn, (!canMoveUp || activationsLocked) && { opacity: 0.3 }]}
+              style={[styles.titleBtn, (!canMoveUp || activationsLocked || perfLocked) && { opacity: 0.3 }]}
               hitSlop={ICON_BTN_HIT_SLOP}
               // Reorder changes the composite order of the live mix — gated
-              // under the soft PLAN lock with the other channel edits.
-              disabled={!canMoveUp || activationsLocked}
+              // under the soft PLAN lock AND performance mode (the engine
+              // 409s /mixer/channels/reorder while a show is live).
+              disabled={!canMoveUp || activationsLocked || perfLocked}
               onPress={() => onMoveUp(channel.id)}
               accessibilityLabel="Move channel up (toward top of mix)"
               accessibilityRole="button"
-              accessibilityState={{ disabled: !canMoveUp || !!activationsLocked }}
+              accessibilityState={{ disabled: !canMoveUp || !!activationsLocked || perfLocked }}
             >
               <IconSymbol name="chevron.up" size={14} color={C.secondary} />
             </TouchableOpacity>
           )}
           {onMoveDown && (
             <TouchableOpacity
-              style={[styles.titleBtn, (!canMoveDown || activationsLocked) && { opacity: 0.3 }]}
+              style={[styles.titleBtn, (!canMoveDown || activationsLocked || perfLocked) && { opacity: 0.3 }]}
               hitSlop={ICON_BTN_HIT_SLOP}
-              disabled={!canMoveDown || activationsLocked}
+              disabled={!canMoveDown || activationsLocked || perfLocked}
               onPress={() => onMoveDown(channel.id)}
               accessibilityLabel="Move channel down (toward bottom of mix)"
               accessibilityRole="button"
-              accessibilityState={{ disabled: !canMoveDown || !!activationsLocked }}
+              accessibilityState={{ disabled: !canMoveDown || !!activationsLocked || perfLocked }}
             >
               <IconSymbol name="chevron.down" size={14} color={C.secondary} />
             </TouchableOpacity>
@@ -669,17 +798,26 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
                 <>
                   <View style={styles.actionsMenuDivider} />
                   <TouchableOpacity
-                    style={[styles.actionsMenuRow, styles.actionsMenuRowDestructive, isOnlyChannel && { opacity: 0.4 }]}
-                    onPress={() => { if (isOnlyChannel) return; onDelete(channel.id); setShowActionsMenu(false); }}
-                    disabled={!!isOnlyChannel}
-                    accessibilityLabel={isOnlyChannel ? 'Delete channel (unavailable — at least one channel must remain)' : 'Delete channel'}
+                    style={[styles.actionsMenuRow, styles.actionsMenuRowDestructive, (isOnlyChannel || perfLocked) && { opacity: 0.4 }]}
+                    onPress={() => { if (isOnlyChannel || perfLocked) return; onDelete(channel.id); setShowActionsMenu(false); }}
+                    // PERFORMANCE MODE: deleting a channel is a structural
+                    // change (engine 409s DELETE /mixer/channels/:id while a
+                    // show is live). Greyed with a hint, like the last-channel
+                    // case, so the operator sees WHY it's unavailable.
+                    disabled={!!isOnlyChannel || perfLocked}
+                    accessibilityLabel={
+                      perfLocked ? 'Delete channel (locked — performance mode)'
+                        : isOnlyChannel ? 'Delete channel (unavailable — at least one channel must remain)'
+                          : 'Delete channel'}
                     accessibilityRole="button"
-                    accessibilityState={{ disabled: !!isOnlyChannel }}
+                    accessibilityState={{ disabled: !!isOnlyChannel || perfLocked }}
                   >
                     <IconSymbol name="trash" size={16} color={C.error} />
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.actionsMenuLabel, { color: C.error }]}>Delete channel</Text>
-                      {isOnlyChannel ? (
+                      {perfLocked ? (
+                        <Text style={styles.actionsMenuHint}>🔒 Locked — performance mode</Text>
+                      ) : isOnlyChannel ? (
                         <Text style={styles.actionsMenuHint}>At least one channel must remain</Text>
                       ) : null}
                     </View>
@@ -753,11 +891,19 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           and HUE as a clearly secondary trim. */}
       {onHueChange && (
         <View style={styles.hueRow}>
+          {/* Physical-knob badge on the FOCUSED strip only: the MFT hue knob
+              (knob 2) drives the FOCUSED CHANNEL's per-channel hue — this
+              exact trim on the mixer tab (on the deck tab it drives the DECK
+              CHANNEL's hue, badged on the deck's DeckHueRow; hue is
+              per-channel only — the global shifter was removed 2026-07).
+              The badge follows focus so it always sits
+              on the control the knob is live on (push = reset this to 0°). */}
+          {isFocused ? <KnobPill knobNumber={globalKnobNumber('hue')} style={{ marginRight: 4 }} /> : null}
           <Text style={[styles.labelCaps, { width: 52, fontSize: 10 }]}>HUE</Text>
           {/* QA round 10 fix #4: the swatch is now a CIRCLE (was a rounded
               square that mimicked the destructive Blackout/Invert chips and
               read as tappable). A circle reads as a non-interactive status dot,
-              matching the deck HUE row (global_hue_row.tsx). */}
+              matching the deck HUE row (deck_hue_row.tsx). */}
           <View
             style={[
               styles.hueSwatch,
@@ -828,6 +974,12 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
                 numberOfLines={1}
                 adjustsFontSizeToFit
               >LOCAL PARAMS</Text>
+              {/* Row-0 globals (knob 1 SPEED, knob 2 HUE) are NOT re-legended
+                  here — their canonical UI elements wear the KNOB badges
+                  directly (SPEED on the GLOBALS-row fader, HUE on this focused
+                  strip's own per-channel HUE trim above). The old read-only
+                  MftGlobalsRow duplicate was removed 2026-07 per operator
+                  request — no duplicate speed/hue UI. */}
               <MixerLocalParams channel={channel} onControlChange={onControlChange} disabled={activationsLocked} />
             </View>
           </ScrollView>
@@ -907,6 +1059,20 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
           </TouchableOpacity>
         )}
 
+        {/* FOCUS — the on-screen twin of the APC track-button focus. Lit
+            (violet, matching the ⊞ MIDI accent) when THIS layer is the one the
+            MIDI param faders (4-6/8) drive. Writes the shared module focus
+            state via setMidiFocus(layerIndex), so touch + APC track button +
+            MFT all agree on the focused channel — one focused overlay at a
+            time. */}
+        <TouchableOpacity
+          style={[styles.toggleBtn, isFocused && { backgroundColor: MIDI_VIOLET, borderColor: MIDI_VIOLET }]}
+          onPress={() => setMidiFocus(layerIndex)}
+          accessibilityRole="button"
+          accessibilityLabel={isFocused ? 'This channel is MIDI-focused' : 'Focus this channel for MIDI param faders'}>
+          <Text style={[styles.labelCaps, isFocused && { color: '#FFF' }]}>Focus</Text>
+        </TouchableOpacity>
+
         {/* View-selection picker. Three sections in the modal: ALL,
             GROUPS, and VIEW MASKS. Sections/fixtures are still routed
             via the REST API directly — they target by numeric id which
@@ -917,11 +1083,13 @@ const ChannelStrip = React.memo(({ channel, index, blends, transitions, isSolo, 
         {!locked && onViewSelectionChange && (
           <>
             <TouchableOpacity
-              style={[styles.toggleBtn, viewSel.type !== 'all' && { backgroundColor: C.primary, borderColor: C.primary }, activationsLocked && { opacity: 0.45 }]}
-              // Soft PLAN lock: view selection re-targets which pixels this
-              // channel drives — a live-mix change.
-              disabled={activationsLocked}
-              accessibilityState={{ disabled: !!activationsLocked }}
+              style={[styles.toggleBtn, viewSel.type !== 'all' && { backgroundColor: C.primary, borderColor: C.primary }, (activationsLocked || perfLocked) && { opacity: 0.45 }]}
+              // Soft PLAN lock + PERFORMANCE MODE: view selection re-targets
+              // which pixels this channel drives — a structural change (the
+              // engine 409s the viewSelection PATCH field while a show is
+              // live; sibling fields like fader/mode stay allowed).
+              disabled={activationsLocked || perfLocked}
+              accessibilityState={{ disabled: !!activationsLocked || perfLocked }}
               onPress={() => setShowViewPicker(true)}>
               {/* Round8 #4: the "VIEW:" prefix pushed "ALL" off the end of the
                   narrow toggle ("VIEW: A…"). Drop the prefix and show just the
@@ -1113,6 +1281,13 @@ export default function MixerScreen() {
   // control touch fires the operator lease) clears the gate and re-enables them.
   const { planLocked } = useEngineLock();
   const activationsLocked = planLocked && !leaseHeld;
+  // PERFORMANCE MODE — the engine's live-show structural lock. The engine 409s
+  // every structural route while active; this flag is the UI mirror used to
+  // grey the STRUCTURAL affordances (channel add, snapshots) so the operator
+  // sees they're locked before the round-trip. Runtime controls (faders, solo,
+  // master) stay live — those are NOT gated by the engine.
+  const performanceActive = usePerformanceMode().active;
+  const structuralLocked = activationsLocked || performanceActive;
   // ── Entering the mixer while a plan forces the deck (CP-VIEWSWITCH) ─────
   // `forcingDeckView` (engine, on timelineState) = plan active AND output
   // pinned to the deck under plan control. The old behaviour popped a blue
@@ -1272,6 +1447,10 @@ export default function MixerScreen() {
   const isMixerFocusedRef = useRef(false);
   useFocusEffect(
     useCallback(() => {
+      // Switch the MIDI controller to its Mixer mapping context. setMixerView
+      // is deferred to the plan-gated effect below (main's blackout fix), so we
+      // no longer yank the output to the mixer directly on tab focus.
+      setMidiActiveContext('mixer');
       isMixerFocusedRef.current = true;
       viewGateHandledRef.current = false; // re-evaluate the switch each entry
       return () => { isMixerFocusedRef.current = false; };
@@ -2369,7 +2548,7 @@ export default function MixerScreen() {
               narrow header uncrowded (matches the model chip's behaviour).
               RECALL/CAPTURE rebuild the live mix, so they're gated under the
               soft PLAN lock with the rest of the mutating controls. */}
-          {!isPortrait ? <SnapshotBar disabled={activationsLocked} /> : null}
+          {!isPortrait ? <SnapshotBar disabled={structuralLocked} /> : null}
           {/* Plan-lock / takeover status moved OUT of this row (operator
               request 2026-07-02: the header must fit ONE row on an iPad).
               The inline "PLAN LIVE · CONTROLS LOCKED" chip, the "TOOK OVER ·
@@ -2392,6 +2571,11 @@ export default function MixerScreen() {
           columnGap: isPortrait ? 6 : 12,
           rowGap: 8,
         }}>
+          {/* PERFORMANCE MODE — live-show structural lock. Same shared control
+              the deck header mounts, first in the right cluster (operator ruling:
+              the lock affordance leads). Idle chip → confirm → GO LIVE; active
+              badge → exit sheet (KEEP / RESTORE). */}
+          <PerformanceModeControl isPortrait={isPortrait} />
           {/* CLEAR SOLO — only shown while a server-authoritative solo is
               engaged. Sends WS clearSolo (all) + REST mirror; the broadcast's
               empty soloedChannelIds[] reconciles every strip back to lit. */}
@@ -2458,19 +2642,20 @@ export default function MixerScreen() {
               operator visual feedback while the POST is in flight, so they
               don't mash and queue 5 of them. */}
           <TouchableOpacity
-            style={[styles.addBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }, activationsLocked && { opacity: 0.45 }]}
+            style={[styles.addBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }, structuralLocked && { opacity: 0.45 }]}
             onPress={() => handleAddChannelWithPlaylist('default')}
-            // Soft PLAN lock: adding a channel changes the live mix.
-            disabled={addBusy || activationsLocked}
-            accessibilityState={{ disabled: addBusy || activationsLocked }}
+            // Soft PLAN lock + performance mode: adding a channel is a
+            // structural change (engine 409s it while a show is live).
+            disabled={addBusy || structuralLocked}
+            accessibilityState={{ disabled: addBusy || structuralLocked }}
           >
             <Text style={[styles.labelCaps, {color: '#FFF'}, isPortrait && { fontSize: 9 }]}>{addBusy ? 'ADDING…' : '+ DEFAULT'}</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }, activationsLocked && { opacity: 0.45 }]}
+            style={[styles.addBtn, { backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }, structuralLocked && { opacity: 0.45 }]}
             onPress={openAddChannelPicker}
-            disabled={addBusy || activationsLocked}
-            accessibilityState={{ disabled: addBusy || activationsLocked }}
+            disabled={addBusy || structuralLocked}
+            accessibilityState={{ disabled: addBusy || structuralLocked }}
           >
             <Text style={[styles.labelCaps, {color: C.primary}, isPortrait && { fontSize: 9 }]} numberOfLines={1}>{isPortrait ? '+ PLAYLIST' : '+ FROM PLAYLIST…'}</Text>
           </TouchableOpacity>
@@ -2602,6 +2787,7 @@ export default function MixerScreen() {
               <ChannelStrip
                 key={channel.id}
                 index={idx + 1}
+                layerIndex={idx}
                 channel={channel}
                 isSolo={isSoloActive}
                 soloActive={anySolo}
@@ -2855,12 +3041,18 @@ export default function MixerScreen() {
               </Text>
               <View style={{ gap: 8 }}>
                 <TouchableOpacity
-                  style={[styles.unlockPromptBtn, styles.unlockPromptSave]}
+                  style={[styles.unlockPromptBtn, styles.unlockPromptSave, performanceActive && { opacity: 0.45 }]}
                   onPress={() => resolveUnlockPrompt('save')}
-                  disabled={!!unlockPrompt?.pending}
+                  // PERFORMANCE MODE: the SAVE path is an explicit playlist
+                  // capture (engine 409s /playlist/capture while a show is
+                  // live). Discard + cancel stay available.
+                  disabled={!!unlockPrompt?.pending || performanceActive}
+                  accessibilityState={{ disabled: !!unlockPrompt?.pending || performanceActive }}
                 >
                   <Text style={[styles.unlockPromptBtnText, { color: C.primary }]}>SAVE TO PLAYLIST</Text>
-                  <Text style={styles.unlockPromptHint}>Capture current params into the active entry</Text>
+                  <Text style={styles.unlockPromptHint}>
+                    {performanceActive ? '🔒 Locked — performance mode' : 'Capture current params into the active entry'}
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.unlockPromptBtn, styles.unlockPromptDiscard]}
@@ -2901,7 +3093,9 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     // a second line in landscape instead of clipping `+ FROM PLAYLIST…` off the
     // screen edge (QA round1 #5). flexWrap lets the brand/status cluster and the
     // master/add cluster stack when the viewport is too narrow to seat both.
-    minHeight: 64,
+    // party 2026-07-11: envelope shared with the deck top bar
+    // (constants/header_layout.ts) so the two title rows stay unified + thin.
+    minHeight: HEADER_MIN_HEIGHT,
     backgroundColor: C.surfaceContainerLow,
     borderBottomWidth: 1,
     borderBottomColor: C.ghostBorder,
@@ -2911,7 +3105,7 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     justifyContent: 'space-between',
     rowGap: 8,
     paddingHorizontal: 24,
-    paddingVertical: 8,
+    paddingVertical: HEADER_PADDING_VERTICAL,
   },
   globalParamsBar: {
     backgroundColor: C.surfaceContainerHigh,
@@ -3033,13 +3227,14 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
     textTransform: 'uppercase',
   },
   // Compact GROUPS button seated at the right end of the GLOBALS row (mixer
-  // only). Matches the GLOBALS tile cluster height (48) so it reads as part
-  // of that strip; carries a small count badge when groups exist.
+  // only). Matches the compacted GLOBALS tile cluster height (40, party
+  // 2026-07-11) so it reads as part of that dense strip rather than setting a
+  // taller floor for the whole row; carries a small count badge when groups exist.
   groupsButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    height: 48,
+    height: 40,
     paddingHorizontal: 10,
     borderRadius: 8,
     borderWidth: 1,
@@ -3368,7 +3563,7 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
   },
   // QA round 10 fix #4: CIRCLE (borderRadius = half the 12pt box) so the live
   // hue preview reads as a non-interactive status dot, not a tappable square
-  // chip — matching the deck HUE row swatch (global_hue_row.tsx).
+  // chip — matching the deck HUE row swatch (deck_hue_row.tsx).
   hueSwatch: {
     width: 12, height: 12, borderRadius: 6,
     borderWidth: 1, borderColor: C.ghostBorder,

@@ -35,6 +35,7 @@ import { Palette } from '@/constants/theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
+import { usePerfLock } from '@/hooks/usePerformanceMode';
 import {
   type MixGroup,
   createMixGroup, updateMixGroup, deleteMixGroup,
@@ -136,6 +137,10 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
+  // PERFORMANCE MODE: group STRUCTURE (create, delete, member add/remove) is
+  // 409-gated while a show is live. The gang fader + mute (PATCH group) stay
+  // fully live — they're runtime controls the engine deliberately allows.
+  const perfLocked = usePerfLock();
 
   const [deletePrompt, setDeletePrompt] = useState<{ id: string; name: string } | null>(null);
   // Assign picker: which group are we adding a channel to.
@@ -238,11 +243,13 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
         </View>
         {mixGroups.length > 0 ? (
           <TouchableOpacity
-            style={styles.newGroupBtn}
+            style={[styles.newGroupBtn, perfLocked && { opacity: 0.45 }]}
             hitSlop={HIT_SLOP}
             onPress={handleCreate}
+            disabled={perfLocked}
             accessibilityRole="button"
             accessibilityLabel="Create group"
+            accessibilityState={{ disabled: perfLocked }}
           >
             <Text style={[styles.labelCaps, { color: C.primary }]}>+ NEW GROUP</Text>
           </TouchableOpacity>
@@ -254,11 +261,13 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
             // Empty state IS the create affordance — tap it to spin up the
             // first group (mirrors the prior empty-rail behaviour).
             <TouchableOpacity
-              style={styles.emptyCreateBtn}
+              style={[styles.emptyCreateBtn, perfLocked && { opacity: 0.45 }]}
               hitSlop={HIT_SLOP}
               onPress={handleCreate}
+              disabled={perfLocked}
               accessibilityRole="button"
               accessibilityLabel="Create group"
+              accessibilityState={{ disabled: perfLocked }}
             >
               <Text style={[styles.labelCaps, { color: C.primary }]}>+ NEW GROUP</Text>
             </TouchableOpacity>
@@ -284,11 +293,13 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
                     placeholderTextColor={C.icon}
                   />
                   <TouchableOpacity
-                    style={[styles.groupIconBtn, { borderColor: 'rgba(217,48,37,0.4)' }]}
+                    style={[styles.groupIconBtn, { borderColor: 'rgba(217,48,37,0.4)' }, perfLocked && { opacity: 0.45 }]}
                     hitSlop={HIT_SLOP}
                     onPress={() => setDeletePrompt({ id: g.id, name: groupName(g, idx) })}
+                    disabled={perfLocked}
                     accessibilityRole="button"
                     accessibilityLabel={`Delete ${groupName(g, idx)}`}
+                    accessibilityState={{ disabled: perfLocked }}
                   >
                     <Text style={{ color: C.error, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13 }}>✕</Text>
                   </TouchableOpacity>
@@ -318,10 +329,12 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
                     <Text style={[styles.labelCaps, g.muted && { color: '#FFF' }]}>{g.muted ? 'MUTED' : 'MUTE'}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={styles.groupToggle}
+                    style={[styles.groupToggle, perfLocked && { opacity: 0.45 }]}
                     onPress={() => setAssignTo(g)}
+                    disabled={perfLocked}
                     accessibilityRole="button"
                     accessibilityLabel={`Add channel to ${groupName(g, idx)}`}
+                    accessibilityState={{ disabled: perfLocked }}
                   >
                     <Text style={[styles.labelCaps, { color: C.primary }]}>+ CHANNEL</Text>
                   </TouchableOpacity>
@@ -335,11 +348,13 @@ export function GroupRailBody({ mixGroups, channels }: GroupRailBodyProps) {
                   {members.map((m) => (
                     <TouchableOpacity
                       key={m.id}
-                      style={styles.memberChip}
+                      style={[styles.memberChip, perfLocked && { opacity: 0.45 }]}
                       hitSlop={HIT_SLOP}
                       onPress={() => handleUnassign(g.id, m.id)}
+                      disabled={perfLocked}
                       accessibilityRole="button"
                       accessibilityLabel={`Remove ${m.name || m.id} from group`}
+                      accessibilityState={{ disabled: perfLocked }}
                     >
                       <Text style={styles.memberChipText} numberOfLines={1}>{m.name || m.id}</Text>
                       <Text style={styles.memberChipX}>✕</Text>

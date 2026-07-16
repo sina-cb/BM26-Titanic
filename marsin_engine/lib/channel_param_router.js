@@ -17,9 +17,11 @@ export class ChannelParamRouter {
     }
 
     // Resolve across EVERY role (deck base, mixer overlays, deck overlays):
-    // per-pattern param sharing must be able to write a propagated slider
-    // onto a deck overlay, which `getChannel` alone does not reach. Falls
-    // back to getChannel for engines/tests whose mixer predates the accessor.
+    // a channel-local write must land on a deck overlay too, which
+    // `getChannel` alone does not reach. Falls back to getChannel for
+    // engines/tests whose mixer predates the accessor. The write below
+    // touches ONLY this channel's handle + localControls — never a sibling
+    // (parameter isolation, operator ruling 2026-07-07).
     const channel = this.mixer.getChannelAnyRole
       ? this.mixer.getChannelAnyRole(channelId)
       : this.mixer.getChannel(channelId);

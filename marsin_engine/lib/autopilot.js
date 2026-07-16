@@ -5,7 +5,10 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const CONFIG_FILE = path.join(__dirname, '..', 'config.yaml');
+// Persistence target. Tests (and any harness that must not mutate the tracked,
+// comment-bearing config.yaml) set MARSIN_CONFIG_FILE to a scratch copy; the
+// spawned engine inherits it. Unset in production → the real config.yaml.
+const CONFIG_FILE = process.env.MARSIN_CONFIG_FILE || path.join(__dirname, '..', 'config.yaml');
 
 /**
  * Autopilot daemon — cycles the deck's pattern on a self-rescheduling
@@ -38,6 +41,15 @@ export class Autopilot {
     this.patternsDir = patternsDir;
     this.currentPatternCb = currentPatternCb;
     this.changePattern = changePatternFn;
+    // The active autopilot PROFILE (timing behaviour). Injected by the host
+    // (api_server) via setProfile(). A profile's `nextDelayMs(state)` decides
+    // HOW the daemon schedules: a finite number arms the self-rescheduling
+    // setTimeout at that delay (the classic `random` timer path); `null` means
+    // EVENT-DRIVEN — the daemon arms NO timer and instead waits for the profile
+    // to call `requestAdvance()` (e.g. on an audio pulse). Until a profile is
+    // injected we default to the legacy fixed-delay timing so an un-wired host
+    // still cycles exactly as before. `_profile` never null after boot wiring.
+    this._profile = null;
     // Optional hook fired on EVERY (re)schedule — including after each swap — so
     // the server can re-broadcast the fresh next-swap time for the deck
     // countdown (operator request 2026-07-02: show when the next pattern
@@ -102,9 +114,53 @@ export class Autopilot {
   }
 
   /**
-   * Schedule the next tick `delay_s` seconds from now, if active.
-   * Clears any existing timer first. Captures the current generation
-   * so the scheduled callback can bail if state has since changed.
+   * Runtime-only pause — used by the boot `--pattern` pin (operator-intent
+   * ruling, see api_server's bootPatternPinDecision). Sets the in-memory
+   * active flag false WITHOUT persisting to config.yaml: the on-disk value
+   * is operator state, and only an explicit operator toggle
+   * (updateState({active}), which saves) may rewrite it. Bumps the
+   * generation so any in-flight tick bails, then reschedules — which, with
+   * active now false, clears the timer and broadcasts the inactive state
+   * via onSchedule.
+   */
+  suspend() {
+    if (!this.config.playlist) this.config.playlist = {};
+    this.config.playlist.active = false;
+    this.generation++;
+    this._scheduleNext();
+  }
+
+  /**
+   * Swap the active timing profile. Bumps the generation (so any in-flight
+   * tick bails) and reschedules under the new profile's timing. The profile's
+   * attach/detach lifecycle (subscriptions, CPC globals) is owned by the HOST
+   * (api_server), not here — this method only governs the daemon's timer.
+   */
+  setProfile(profile) {
+    this._profile = profile || null;
+    this.generation++;
+    this._scheduleNext();
+  }
+
+  /**
+   * Compute the next delay in ms from the active profile, or null for an
+   * event-driven profile (no timer). Falls back to the legacy fixed-delay
+   * timing when no profile is injected, so an un-wired host still cycles as
+   * before (parseInt(delay_s)||30 seconds).
+   */
+  _nextDelayMs() {
+    if (this._profile && typeof this._profile.nextDelayMs === 'function') {
+      return this._profile.nextDelayMs(this.state);
+    }
+    return (parseInt(this.state.delay_s, 10) || 30) * 1000;
+  }
+
+  /**
+   * Schedule the next tick, if active. TIMER profiles arm a setTimeout
+   * `delay_s` seconds out (classic behaviour); EVENT-DRIVEN profiles
+   * (`nextDelayMs` → null) arm NO timer and rely on `requestAdvance()`.
+   * Clears any existing timer first. Captures the current generation so the
+   * scheduled callback can bail if state has since changed.
    */
   _scheduleNext() {
     if (this.cycleTimer) {
@@ -116,11 +172,29 @@ export class Autopilot {
       if (this.onSchedule) this.onSchedule();
       return;
     }
-    const delayMs = (parseInt(this.state.delay_s, 10) || 30) * 1000;
+    const delayMs = this._nextDelayMs();
+    // EVENT-DRIVEN: a null (or non-finite) delay means the profile advances on
+    // its own external trigger (audio pulse, etc.), not on a wall-clock timer.
+    // Arm no timer; the countdown is meaningless, so surface no next-swap time.
+    if (delayMs === null || !Number.isFinite(delayMs)) {
+      this._nextSwapAtMs = null;
+      if (this.onSchedule) this.onSchedule();
+      return;
+    }
     const gen = this.generation;
     this._nextSwapAtMs = Date.now() + delayMs;
     this.cycleTimer = setTimeout(() => this._runTick(gen), delayMs);
     if (this.onSchedule) this.onSchedule();
+  }
+
+  /**
+   * Event-driven advance entry point. A profile calls this (via its ctx) when
+   * an external trigger says "advance now". Routes through the SAME _runTick
+   * path as the timer so generation guards, await-swap, and the EBUSY skip all
+   * still apply. A call while paused or mid-swap is a harmless no-op.
+   */
+  requestAdvance() {
+    return this._runTick(this.generation);
   }
 
   /** Wall-clock ms when the next pattern swap fires, or null when inactive. */

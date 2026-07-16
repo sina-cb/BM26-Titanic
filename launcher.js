@@ -185,7 +185,8 @@ function usage(stream = process.stdout) {
     `    --pattern <name>   Engine boot pattern (default: ${DEFAULT_PATTERN})`,
     '    --no-kill          Don\'t kill stale stack listeners on our ports',
     '    -f, --force        Force-kill ANY process on our ports (incl. foreign); prod forces by default',
-    '    --no-open          Don\'t auto-open the sim/CaptainPad in a browser',
+    '    --no-launch        Start every server but DON\'T auto-open any browser',
+    '                       windows (URLs still printed). Alias: --no-open',
     '    --split            OPT-IN: tile sim + CaptainPad side-by-side in two Chrome',
     '                       windows (falls back to the default browser if Chrome is',
     '                       missing). DEFAULT is off — open in your existing browser.',
@@ -215,7 +216,7 @@ function parseArgs(argv) {
       case '--pattern': opts.pattern = takeValue(arg, argv[++i]); break;
       case '--no-kill': opts.kill = false; break;
       case '-f': case '--force': opts.force = true; break;
-      case '--no-open': opts.open = false; break;
+      case '--no-open': case '--no-launch': opts.open = false; break;
       case '--split': opts.split = 'on'; break;
       case '--no-split': opts.split = 'off'; break;
       case '--help': case '-h': usage(); process.exit(0); break;

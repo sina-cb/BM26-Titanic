@@ -553,36 +553,11 @@ export async function postTempoSource(
   }
 }
 
-// ── Global hue shifter (F-hue, docs/39 §F-hue) ────────────────────────────
-// A first-class rig knob (NOT a GEM slot): a continuous hue rotation applied
-// POST-composite on the whole output buffer, plus an optional auto-rotate
-// (deg/sec). RGB-only, leaves W/A/UV byte-for-byte. POST /global-effect-hue
-// { degrees, autoRotateDegPerSec? } → validates (400 on non-finite), persists
-// `globalsState.hueShift`, and broadcasts { type:'globalHueShift', hueShift }
-// on /ws/control. `degrees` normalizes into [0,360); `autoRotateDegPerSec`
-// clamps to [-360,360].
-
-export async function setGlobalHue(
-  degrees: number,
-  autoRotateDegPerSec?: number,
-): Promise<ApiResult<{ status: string; hueShift: { degrees: number; autoRotateDegPerSec: number } }>> {
-  try {
-    const body: { degrees: number; autoRotateDegPerSec?: number } = { degrees };
-    if (autoRotateDegPerSec !== undefined) body.autoRotateDegPerSec = autoRotateDegPerSec;
-    const res = await fetchWithTimeout(`${api_base}/global-effect-hue`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
-    }
-    return { ok: true, data };
-  } catch (err: any) {
-    return { ok: false, error: err.message };
-  }
-}
+// ── Global hue shifter — REMOVED (2026-07, operator decision) ─────────────
+// `setGlobalHue` / POST /global-effect-hue are GONE: hue is PER-CHANNEL ONLY
+// now (the engine answers that route with 410 GLOBAL_HUE_REMOVED). Use
+// `setChannelHue(channelId, hue, { deck?: true })` above — the same client
+// every on-screen HUE trim and the MFT hue knob dispatch through.
 
 // ── Per-channel param presets (#9 engine, merged at 8ec8a7d) ──────────────
 // A param preset is a NAMED capture of ONE channel's current local pattern

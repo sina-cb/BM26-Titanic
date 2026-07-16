@@ -105,6 +105,89 @@ export const DEFAULT_LED_STRIDE = 4;
 export const DEFAULT_LED_WHITE_MODE = 'native';
 export const LED_WHITE_MODES = ['native', 'synth'];
 
+// ── LED device binding (physical controller identity + push provenance) ──
+// An LED controller MAY be bound to a physical device discovered on the
+// network (plan 20260709_0 P4). The binding records WHICH device backs this
+// controller (identity key = ip, but the fingerprint is stored too) plus the
+// provenance of the last config push. Recognized vendors are an explicit
+// allow-list — an unknown vendor in a loaded controllers.yaml is structural
+// corruption and hard-stops the boot (codex P0), never a silent migration. An
+// ABSENT device block is the legitimate "unbound controller" state.
+export const LED_DEVICE_VENDOR_MARSINLED = 'marsinled';
+export const LED_DEVICE_VENDORS = [LED_DEVICE_VENDOR_MARSINLED];
+export const LED_DEVICE_PUSH_OUTCOMES = ['applied', 'needs-reboot'];
+
+/**
+ * Normalize a controller's `device:` binding block (or undefined) to a
+ * complete, validated shape. Undefined/null → undefined (unbound — fine). Any
+ * structural problem THROWS: an LED controller whose binding block is
+ * malformed or names an unknown vendor must hard-stop the boot, exactly like a
+ * malformed port (codex P0 — no silent migration). Returns
+ *   { vendor, controllerId, deviceName?, boardId?,
+ *     lastPush?: { at, outcome, firmwareSHA?, configHash? } }.
+ *
+ * NOTE: the device MAC address is deliberately NEVER part of this shape. This
+ * repo is public and a persisted MAC trips the gitleaks security gate
+ * (rule bm26-mac-address). The MAC is a live, display-only value read from
+ * the device's runtime status (see led_discovery_panel.js) — it must never be
+ * written to controllers.yaml. A `raw.mac` (old caller payload, or a legacy
+ * on-disk block from before this rule) is silently ignored here: loading and
+ * re-saving a legacy scene drops it, which is the intended migration.
+ */
+export function normalizeDeviceBlock(raw, controllerName) {
+  if (raw === undefined || raw === null) return undefined; // unbound — legitimate
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`[Controllers] LED controller '${controllerName}': device block must be a ` +
+      'mapping (vendor, controllerId, …)');
+  }
+  const vendor = raw.vendor;
+  if (typeof vendor !== 'string' || !LED_DEVICE_VENDORS.includes(vendor)) {
+    throw new Error(`[Controllers] LED controller '${controllerName}': device.vendor ` +
+      `'${vendor}' is not a recognized LED vendor (expected one of ${LED_DEVICE_VENDORS.join(', ')})`);
+  }
+  if (typeof raw.controllerId !== 'string' || raw.controllerId.length === 0) {
+    throw new Error(`[Controllers] LED controller '${controllerName}': device.controllerId must ` +
+      'be a non-empty string (the device fingerprint)');
+  }
+  const device = { vendor, controllerId: raw.controllerId };
+  for (const opt of ['deviceName', 'boardId']) {
+    if (raw[opt] !== undefined && raw[opt] !== null) {
+      if (typeof raw[opt] !== 'string') {
+        throw new Error(`[Controllers] LED controller '${controllerName}': device.${opt} must be ` +
+          'a string');
+      }
+      device[opt] = raw[opt];
+    }
+  }
+  if (raw.lastPush !== undefined && raw.lastPush !== null) {
+    const lp = raw.lastPush;
+    if (typeof lp !== 'object' || Array.isArray(lp)) {
+      throw new Error(`[Controllers] LED controller '${controllerName}': device.lastPush must be ` +
+        'a mapping');
+    }
+    if (typeof lp.at !== 'string' || lp.at.length === 0) {
+      throw new Error(`[Controllers] LED controller '${controllerName}': device.lastPush.at must ` +
+        'be a non-empty ISO8601 timestamp string');
+    }
+    if (typeof lp.outcome !== 'string' || !LED_DEVICE_PUSH_OUTCOMES.includes(lp.outcome)) {
+      throw new Error(`[Controllers] LED controller '${controllerName}': device.lastPush.outcome ` +
+        `'${lp.outcome}' must be one of ${LED_DEVICE_PUSH_OUTCOMES.join(', ')}`);
+    }
+    const lastPush = { at: lp.at, outcome: lp.outcome };
+    for (const opt of ['firmwareSHA', 'configHash']) {
+      if (lp[opt] !== undefined && lp[opt] !== null) {
+        if (typeof lp[opt] !== 'string') {
+          throw new Error(`[Controllers] LED controller '${controllerName}': ` +
+            `device.lastPush.${opt} must be a string`);
+        }
+        lastPush[opt] = lp[opt];
+      }
+    }
+    device.lastPush = lastPush;
+  }
+  return device;
+}
+
 /** Stride (bytes per pixel) for a channel order, or its explicit override. */
 export function ledStrideForOrder(order, overrideStride) {
   if (Number.isInteger(overrideStride) && overrideStride >= 1) return overrideStride;
@@ -271,6 +354,16 @@ export function createControllerRegistry(tree) {
     };
     if (type === CONTROLLER_TYPE_LED) {
       controller.led = normalizeLedConfig(rawCtl.led, controller.name);
+    }
+    // Optional device binding (LED controllers only). Absent = unbound; a
+    // block on a non-LED controller, or a malformed/unknown-vendor block, is
+    // structural corruption and hard-stops the boot (codex P0).
+    if (rawCtl.device !== undefined && rawCtl.device !== null) {
+      if (type !== CONTROLLER_TYPE_LED) {
+        throw new Error(`[Controllers] Controller '${controller.name}': a device binding block is ` +
+          'only valid on an LED controller');
+      }
+      controller.device = normalizeDeviceBlock(rawCtl.device, controller.name);
     }
 
     if (rawCtl.ports !== undefined && !Array.isArray(rawCtl.ports)) {
@@ -459,6 +552,43 @@ export function isLedController(controller) {
   return !!controller && controller.type === CONTROLLER_TYPE_LED;
 }
 
+// ── Strict type gating (LED strands ↔ LED controllers, DMX ↔ DMX) ────────
+// A controller accepts exactly ONE kind of mappable name: an LED controller
+// takes LED strands, a DMX controller takes DMX fixtures. Cross-type mapping
+// is meaningless hardware-wise (an LED strand has no DMX footprint; a moving
+// head is not a pixel run) and is refused loudly at every add path (codex P0 —
+// never silently mis-map). The `kind` string is 'strand' | 'fixture'.
+
+/** The single kind of mappable name a controller accepts: 'strand' | 'fixture'. */
+export function controllerFixtureKind(controller) {
+  return isLedController(controller) ? 'strand' : 'fixture';
+}
+
+/** True when a name of `kind` ('strand'|'fixture') may be mapped onto this controller. */
+export function controllerAcceptsKind(controller, kind) {
+  return controllerFixtureKind(controller) === kind;
+}
+
+/**
+ * Split fixture + strand name lists into the still-unmapped ones. The default
+ * (non-picking) tray shows BOTH so an unmapped LED strand is visible even when
+ * no LED controller exists yet (operator requirement, Round 2 R1). Pure so the
+ * tray-content decision is unit-testable without the DOM.
+ *
+ * @param {Object} registry
+ * @param {string[]} fixtureNames - all DMX fixture config names.
+ * @param {string[]} strandNames - all LED strand names.
+ * @returns {{ fixtures: string[], strands: string[] }} unmapped by kind.
+ */
+export function unmappedNamesByKind(registry, fixtureNames, strandNames) {
+  const mapped = mappedFixtures(registry);
+  const keep = (name) => typeof name === 'string' && name.length > 0 && !mapped.has(name);
+  return {
+    fixtures: (fixtureNames || []).filter(keep),
+    strands: (strandNames || []).filter(keep),
+  };
+}
+
 /**
  * Switch a controller's type in place. DMX→LED installs a default LED
  * config (preserving any existing one); LED→DMX drops it. The chain
@@ -476,6 +606,85 @@ export function setControllerType(controller, type) {
   } else {
     delete controller.led;
   }
+  return controller;
+}
+
+/** True when the LED controller is bound to a physical device (has a device block). */
+export function isBoundLedController(controller) {
+  return isLedController(controller) && !!controller.device;
+}
+
+/**
+ * Bind an LED controller to a discovered device: records the identity block
+ * (vendor + controllerId fingerprint + optional deviceName/boardId),
+ * preserving any existing push provenance. The identity key stays the
+ * controller's `ip` (operator decision) — the block is the fingerprint the
+ * scene remembers. THROWS on a non-LED controller or an invalid identity.
+ * `identity.mac`, if present, is IGNORED — the MAC is never persisted (see
+ * normalizeDeviceBlock).
+ */
+export function bindControllerDevice(controller, identity) {
+  if (!isLedController(controller)) {
+    throw new Error(`[Controllers] bindControllerDevice: '${controller && controller.name}' is ` +
+      'not an LED controller — only LED controllers bind to a device');
+  }
+  const raw = {
+    vendor: identity.vendor || LED_DEVICE_VENDOR_MARSINLED,
+    controllerId: identity.controllerId,
+    deviceName: identity.deviceName,
+    boardId: identity.boardId,
+    lastPush: controller.device ? controller.device.lastPush : undefined,
+  };
+  controller.device = normalizeDeviceBlock(raw, controller.name);
+  return controller.device;
+}
+
+/** Drop an LED controller's device binding (return it to the unbound state). */
+export function unbindControllerDevice(controller) {
+  if (controller) delete controller.device;
+  return controller;
+}
+
+/**
+ * Record the provenance of a config push onto a bound controller's device
+ * block: { at (ISO8601), outcome, firmwareSHA?, configHash? }. THROWS on an
+ * unbound controller or an invalid push record (codex P0 — a push we can't
+ * describe must not be silently recorded).
+ */
+export function recordDevicePush(controller, push) {
+  if (!controller || !controller.device) {
+    throw new Error(`[Controllers] recordDevicePush: controller '${controller && controller.name}' ` +
+      'is not bound to a device — bind it before recording a push');
+  }
+  const lastPush = { at: push.at, outcome: push.outcome };
+  if (push.firmwareSHA !== undefined && push.firmwareSHA !== null) lastPush.firmwareSHA = push.firmwareSHA;
+  if (push.configHash !== undefined && push.configHash !== null) lastPush.configHash = push.configHash;
+  // Round-trip through the validator so an invalid outcome/shape throws.
+  controller.device = normalizeDeviceBlock({ ...controller.device, lastPush }, controller.name);
+  return controller.device;
+}
+
+/**
+ * Add a new LED controller pre-populated from a discovered device: `portCount`
+ * ports (= the board's output count), the given channel order, and the device
+ * binding block. Mirrors addController's port allocation. Returns the new
+ * controller.
+ */
+export function addLedControllerFromDevice(registry, { name, ip, portCount, order, device }) {
+  const controller = {
+    id: registry.nextControllerId,
+    name: String(name || `LED ${registry.nextControllerId}`),
+    ip: String(ip || ''),
+    type: CONTROLLER_TYPE_LED,
+    protocol: DEFAULT_CONTROLLER_PROTOCOL,
+    ports: [],
+  };
+  controller.led = normalizeLedConfig({ order: order || DEFAULT_LED_ORDER }, controller.name);
+  if (device) controller.device = normalizeDeviceBlock(device, controller.name);
+  registry.nextControllerId += 1;
+  registry.controllers.push(controller);
+  const n = Number.isInteger(portCount) && portCount > 0 ? portCount : DEFAULT_PORT_COUNT;
+  for (let i = 0; i < n; i++) addPort(registry, controller);
   return controller;
 }
 

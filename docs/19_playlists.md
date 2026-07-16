@@ -339,16 +339,25 @@ When **capturing** current params into entry defaults:
 
 ### Capture Timing
 
-Defaults are captured **automatically** at these moments (not just on explicit save):
+**EXPLICIT capture only** (operator ruling 2026-07-07 — mixer channel
+parameter isolation). Playlist files are shared presets: loading a playlist
+onto a channel, switching entries, and live parameter tweaks NEVER write
+parameter state back into the playlist. Live values are **channel-local**
+(each channel's own WASM handle + `localControls`), so the same playlist can
+sit on two channels with independent params — a tweak on one channel never
+moves the other.
+
+Entry `defaults` change on disk only when the operator explicitly captures:
 
 | Trigger | What happens |
 |---------|-------------|
-| User switches to a different entry | Capture active entry defaults into in-memory dirty state |
-| User removes an entry | Capture before removal (so undo could restore it) |
-| User taps SAVE | Capture active entry, then persist entire playlist to disk |
-| User switches playlists | Prompt if dirty: "Save changes to X?" |
+| `POST /deck/playlist/capture` | Capture deck channel params into the active entry, persist playlist |
+| `POST /mixer/channels/:id/playlist/capture` | Capture that channel's params into its active entry, persist playlist |
 
-The in-memory playlist tracks `dirtyDefaults` per entry ID. On save, dirty defaults are merged into the entry's `defaults` field.
+(The historical debounced auto-capture — every control change persisted to
+the active entry 500 ms after the last tweak — was removed with this ruling.
+Reads are unchanged: loads still replay entry defaults, and the MIDI
+knob-press reset still targets them.)
 
 ---
 

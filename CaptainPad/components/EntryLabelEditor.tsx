@@ -8,6 +8,7 @@ import {
   PlaylistData, PlaylistAssignment,
 } from '@/utils/api';
 import { engineEvents, EngineMessage } from '@/utils/engineEvents';
+import { usePerfLock } from '@/hooks/usePerformanceMode';
 
 // Time we wait after the last keystroke before persisting. Long enough to feel
 // like one save per edit-burst, short enough that walking away from an iPad
@@ -51,7 +52,13 @@ interface Props {
   locked?: boolean;
 }
 
-export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, locked }) => {
+export const EntryLabelEditor: React.FC<Props> = ({ channelId, channelLabel, locked: lockedProp }) => {
+  // PERFORMANCE MODE: renaming an entry saves the whole playlist (POST
+  // /playlists — a 409-gated route while a show is live), so the editor drops
+  // to its read-only static-label mode. Shared component — gated by
+  // performance-mode state, not by tab.
+  const perfLocked = usePerfLock();
+  const locked = !!lockedProp || perfLocked;
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
   const [assignment, setAssignment] = useState<PlaylistAssignment | null>(null);

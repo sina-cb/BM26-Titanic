@@ -97,7 +97,7 @@ atmosphere:
 options:
   _section:
     label: ⚙️ Options
-    collapsed: true
+    collapsed: false
   rendererMode:
     value: webgl
     label: 🚀 Graphics Engine
@@ -105,13 +105,14 @@ options:
       - webgpu
       - webgl
   lightingProfile:
-    value: full
+    value: 2d_pixels
     label: 💡 Lighting Profile
     options:
       - edit
       - pixel_mapping
       - emissive
       - full
+      - 2d_pixels
   spotlightSamplingMode:
     value: uniform
     label: Sim Spotlight Sampling
@@ -144,7 +145,7 @@ options:
     value: false
     label: Show Generators
   globalPixelScale:
-    value: 1.4
+    value: 5
     label: Global Pixel Size
     min: 0.1
     max: 5
@@ -188,7 +189,7 @@ colorWave:
     value: true
     label: 📡 Bridge Enabled
   sacn_universes:
-    value: 1, 2, 3, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
+    value: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24
     label: 📡 Subscribed Universes
   sacn_lockout_ms:
     value: 1000
@@ -217,10 +218,10 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: -0.8278
-    'y': 2.5757
-    z: 8.7226
+    x: 27.2039
+    'y': 17.3925
+    z: 4.8452
   target:
-    x: 0.0946
-    'y': 1.758
-    z: 5.405
+    x: -27.519
+    'y': -14.931
+    z: -6.6466

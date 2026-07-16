@@ -1,0 +1,686 @@
+modelTransform:
+  _section:
+    label: 📦 Model Transform
+    collapsed: true
+  modelX:
+    value: 0
+    label: Pos X
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  modelY:
+    value: 0
+    label: Pos Y
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  modelZ:
+    value: 0
+    label: Pos Z
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  rotX:
+    value: 0
+    label: Rot X °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+  rotY:
+    value: 0
+    label: Rot Y °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+  rotZ:
+    value: 0
+    label: Rot Z °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+parLights:
+  _section:
+    label: 🔌 DMX Fixtures
+    type: fixtureArray
+    collapsed: false
+  parsEnabled:
+    value: true
+    label: Master Enabled
+  masterExposure:
+    value: 0.2
+    label: Sim Exposure (Preview Only)
+    min: 0
+    max: 2
+    step: 0.05
+  simBrightness:
+    value: 1
+    label: Sim Brightness (Preview Only)
+    min: 0
+    max: 2
+    step: 0.05
+  simSurfaceReflectance:
+    value: 0.3
+    label: Sim Ground Reflectance (Preview Only)
+    min: 0.1
+    max: 1
+    step: 0.05
+  maxSpotlights:
+    value: 60
+    label: Max Spotlights
+    min: 1
+    max: 200
+    step: 1
+  conesEnabled:
+    value: false
+    label: Show Light Cones
+  generatorsVisible:
+    value: false
+    label: Show Generators
+  fixtures:
+    - group: Left Bar
+      name: Left Bar 1
+      fixtureType: ShehdsBar
+      color: '#33aaff'
+      intensity: 12
+      angle: 30
+      penumbra: 0.5
+      x: -6
+      'y': 1.5
+      z: -3
+      rotX: -14.036243467926479
+      rotY: 90
+      rotZ: 180
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Bar
+      name: Left Bar 2
+      fixtureType: ShehdsBar
+      color: '#33aaff'
+      intensity: 12
+      angle: 30
+      penumbra: 0.5
+      x: -6
+      'y': 1.5
+      z: -1
+      rotX: -14.036243467926479
+      rotY: 90
+      rotZ: 180
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Bar
+      name: Left Bar 3
+      fixtureType: ShehdsBar
+      color: '#33aaff'
+      intensity: 12
+      angle: 30
+      penumbra: 0.5
+      x: -6
+      'y': 1.5
+      z: 1
+      rotX: -14.036243467926479
+      rotY: 90
+      rotZ: 180
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Bar
+      name: Left Bar 4
+      fixtureType: ShehdsBar
+      color: '#33aaff'
+      intensity: 12
+      angle: 30
+      penumbra: 0.5
+      x: -6
+      'y': 1.5
+      z: 3
+      rotX: -14.036243467926479
+      rotY: 90
+      rotZ: 180
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Bar
+      name: Right Bar 1
+      fixtureType: ShehdsBar
+      color: '#33aaff'
+      intensity: 12
+      angle: 30
+      penumbra: 0.5
+      x: 6
+      'y': 1.5
+      z: -2
+      rotX: -21.80140948635181
+      rotY: -90
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Bar
+      name: Right Bar 2
+      fixtureType: ShehdsBar
+      color: '#33aaff'
+      intensity: 12
+      angle: 30
+      penumbra: 0.5
+      x: 6
+      'y': 1.5
+      z: 2
+      rotX: -21.80140948635181
+      rotY: -90
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Back Bar
+      name: Back Bar 1
+      fixtureType: ShehdsBar
+      color: '#33aaff'
+      intensity: 12
+      angle: 30
+      penumbra: 0.5
+      x: -3
+      'y': 1.5
+      z: -4
+      rotX: -14.036243467926479
+      rotY: 0
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Back Bar
+      name: Back Bar 2
+      fixtureType: ShehdsBar
+      color: '#33aaff'
+      intensity: 12
+      angle: 30
+      penumbra: 0.5
+      x: -1
+      'y': 1.5
+      z: -4
+      rotX: -14.036243467926479
+      rotY: 0
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Back Bar
+      name: Back Bar 3
+      fixtureType: ShehdsBar
+      color: '#33aaff'
+      intensity: 12
+      angle: 30
+      penumbra: 0.5
+      x: 1
+      'y': 1.5
+      z: -4
+      rotX: -14.036243467926479
+      rotY: 0
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Back Bar
+      name: Back Bar 4
+      fixtureType: ShehdsBar
+      color: '#33aaff'
+      intensity: 12
+      angle: 30
+      penumbra: 0.5
+      x: 3
+      'y': 1.5
+      z: -4
+      rotX: -14.036243467926479
+      rotY: 0
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Vintage
+      name: Left Vintage 1
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -6
+      'y': 1
+      z: -4
+      rotX: -10.142106156573984
+      rotY: -153.43494882292202
+      rotZ: 41.20267222364876
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Vintage
+      name: Left Vintage 2
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -6
+      'y': 1
+      z: -2
+      rotX: -14.363302674070399
+      rotY: -140.19442890773482
+      rotZ: 38.37880233734615
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Vintage
+      name: Left Vintage 3
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -6
+      'y': 1
+      z: 0
+      rotX: -20.374527188735197
+      rotY: -111.80140948635183
+      rotZ: 29.72955125255403
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Vintage
+      name: Left Vintage 4
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -6
+      'y': 1
+      z: 2
+      rotX: -20.374527188735193
+      rotY: -68.19859051364818
+      rotZ: 13.873267720149599
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Vintage
+      name: Left Vintage 5
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -6
+      'y': 1
+      z: 4
+      rotX: -14.363302674070406
+      rotY: -39.805571092265204
+      rotZ: 5.224016635357474
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Vintage
+      name: Right Vintage 1
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 6
+      'y': 1
+      z: -4
+      rotX: -10.99320149859691
+      rotY: 150.94539590092285
+      rotZ: -40.746015135133554
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Vintage
+      name: Right Vintage 2
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 6
+      'y': 1
+      z: 0
+      rotX: -21.41671403303362
+      rotY: 101.3099324740202
+      rotZ: -25.978286577027717
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Vintage
+      name: Right Vintage 3
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 6
+      'y': 1
+      z: 4
+      rotX: -13.088476085833271
+      rotY: 35.537677791974374
+      rotZ: -4.210838401837984
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Back Vintage
+      name: Back Vintage 1
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -4.5
+      'y': 1
+      z: -4
+      rotX: -10.519734890658619
+      rotY: -111.80140948635182
+      rotZ: 15.486809564696124
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Back Vintage
+      name: Back Vintage 2
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -1.5
+      'y': 1
+      z: -4
+      rotX: -19.47122063449069
+      rotY: -135
+      rotZ: 44.99999999999999
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Back Vintage
+      name: Back Vintage 3
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 1.5
+      'y': 1
+      z: -4
+      rotX: -24.094842552110688
+      rotY: 153.43494882292202
+      rotZ: -84.23152048359228
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Back Vintage
+      name: Back Vintage 4
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 4.5
+      'y': 1
+      z: -4
+      rotX: -12.604382648379179
+      rotY: 116.56505117707799
+      rotZ: -20.263093765060837
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+  traces: &ref_0
+    - name: Left Vintage
+      shape: line
+      startX: -6
+      startY: 1
+      startZ: -4
+      endX: -6
+      endY: 1
+      endZ: 4
+      aimMode: lookAt
+      aimX: -3.5
+      aimY: 0
+      aimZ: 1
+      lightColor: '#f07100'
+      lightIntensity: 22
+      lightAngle: 50
+      groupName: Left Vintage
+      generated: true
+      fixtureType: VintageLed
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+      controllerIp: ''
+      count: 5
+    - name: Left Bar
+      shape: line
+      startX: -6
+      startY: 1.5
+      startZ: -3
+      endX: -6
+      endY: 1.5
+      endZ: 3
+      aimMode: direction
+      aimX: -10
+      aimY: 0.5
+      aimZ: -3
+      lightColor: '#33aaff'
+      lightIntensity: 12
+      lightAngle: 30
+      groupName: Left Bar
+      generated: true
+      fixtureType: ShehdsBar
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+      controllerIp: ''
+      count: 4
+    - name: Back Vintage
+      shape: line
+      startX: -4.5
+      startY: 1
+      startZ: -4
+      endX: 4.5
+      endY: 1
+      endZ: -4
+      aimMode: lookAt
+      aimX: 0.5
+      aimY: 0
+      aimZ: -2
+      lightColor: '#f07100'
+      lightIntensity: 22
+      lightAngle: 50
+      groupName: Back Vintage
+      generated: true
+      fixtureType: VintageLed
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+      controllerIp: ''
+      count: 4
+    - name: Back Bar
+      shape: line
+      startX: -3
+      startY: 1.5
+      startZ: -4
+      endX: 3
+      endY: 1.5
+      endZ: -4
+      aimMode: direction
+      aimX: -3
+      aimY: 0.5
+      aimZ: -8
+      lightColor: '#33aaff'
+      lightIntensity: 12
+      lightAngle: 30
+      groupName: Back Bar
+      generated: true
+      fixtureType: ShehdsBar
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+      controllerIp: ''
+      count: 4
+    - name: Right Vintage
+      shape: line
+      startX: 6
+      startY: 1
+      startZ: -4
+      endX: 6
+      endY: 1
+      endZ: 4
+      aimMode: lookAt
+      aimX: 3.5
+      aimY: 0
+      aimZ: 0.5
+      lightColor: '#f07100'
+      lightIntensity: 22
+      lightAngle: 50
+      groupName: Right Vintage
+      generated: true
+      fixtureType: VintageLed
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+      controllerIp: ''
+      count: 3
+    - name: Right Bar
+      shape: line
+      startX: 6
+      startY: 1.5
+      startZ: -2
+      endX: 6
+      endY: 1.5
+      endZ: 2
+      aimMode: direction
+      aimX: 8.5
+      aimY: 0.5
+      aimZ: -2
+      lightColor: '#33aaff'
+      lightIntensity: 12
+      lightAngle: 30
+      groupName: Right Bar
+      generated: true
+      fixtureType: ShehdsBar
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+      controllerIp: ''
+      count: 2
+ledStrands:
+  _section:
+    label: 💡 LED Strands
+    type: ledStrandArray
+    collapsed: true
+  strandsEnabled:
+    value: true
+    label: Master Enabled
+  strands: []
+pixelMap2d:
+  enabled: true
+  canvas:
+    w: 1200
+    h: 1000
+  fixtures:
+    Left Vintage 1:
+      x: 112
+      'y': 912
+      rot: -180
+    Left Vintage 2:
+      x: 112
+      'y': 704
+      rot: -180
+    Left Vintage 3:
+      x: 112
+      'y': 496
+      rot: -180
+    Left Vintage 4:
+      x: 112
+      'y': 296
+      rot: -180
+    Left Vintage 5:
+      x: 112
+      'y': 72
+      rot: -180
+    Left Bar 1:
+      x: 56
+      'y': 808
+      rot: -90
+    Left Bar 2:
+      x: 56
+      'y': 600
+      rot: -90
+    Left Bar 3:
+      x: 56
+      'y': 400
+      rot: -90
+    Left Bar 4:
+      x: 56
+      'y': 184
+      rot: -90
+    Back Vintage 1:
+      x: 384
+      'y': 112
+      rot: 90
+    Back Vintage 2:
+      x: 592
+      'y': 112
+      rot: 90
+    Back Vintage 3:
+      x: 792
+      'y': 112
+      rot: 90
+    Back Vintage 4:
+      x: 1008
+      'y': 112
+      rot: 90
+    Back Bar 1:
+      x: 264
+      'y': 48
+      rot: 0
+    Back Bar 2:
+      x: 488
+      'y': 56
+      rot: 0
+    Back Bar 3:
+      x: 696
+      'y': 56
+      rot: 0
+    Back Bar 4:
+      x: 904
+      'y': 64
+      rot: 0
+    Right Vintage 1:
+      x: 1072
+      'y': 688
+      rot: 0
+    Right Vintage 2:
+      x: 1072
+      'y': 488
+      rot: 0
+    Right Vintage 3:
+      x: 1088
+      'y': 288
+      rot: 0
+    Right Bar 1:
+      x: 1144
+      'y': 592
+      rot: -90
+    Right Bar 2:
+      x: 1144
+      'y': 392
+      rot: -90
+traces: *ref_0

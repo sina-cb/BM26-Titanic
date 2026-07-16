@@ -3,7 +3,10 @@ import { params } from "../core/state.js";
 import { getProfileDef } from "../core/profile_registry.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { reconcileGroupBits, listPixelGroups, buildViewmasksSidecarJS } from "./view_registry.js";
-import { computeLedProjection, LED_CHANNEL_ORDERS, DMX_UNIVERSE_SIZE } from "./controller_registry.js";
+import { computeLedProjection, LED_CHANNEL_ORDERS, MAX_UNIVERSE } from "./controller_registry.js";
+import { computeLedStrandPatches, projectLedStrandPixels } from "./led/led_patch_projection.js";
+import { groupKeyForStrand } from "./led/led_metadata.js";
+import { saveHttpUrl } from "../core/save_endpoint.js";
 
 export function generatePixelMap() {
   const pixels = [];
@@ -78,6 +81,11 @@ export function generatePixelMap() {
               type: 'dmx',
               fixtureType: light.type || light.fixtureType || 'UkingPar',
               name: (light.name || `Fixture ${i + 1}`) + (px.model ? ` - ${px.model.id}` : ` (Ch ${j + 1})`),
+              // Runtime-only grouping keys for the 2D Pixel Map: fixIndex is an
+              // unambiguous per-fixture cluster key (fId is often 0), fixKey is
+              // a stable persist key. NOT serialized into the engine model.
+              fixIndex: i,
+              fixKey: light.name || `Fixture ${i + 1}`,
               group: light.group || '',
               x: +(worldPos.x).toFixed(3),
               y: +(worldPos.y).toFixed(3),
@@ -136,13 +144,17 @@ export function generatePixelMap() {
             type: 'dmx',
             fixtureType: light.type || light.fixtureType || 'Generic',
             name: light.name || `Fixture ${i + 1}`,
+            // Runtime-only grouping keys for the 2D Pixel Map (see multi-pixel
+            // push above). NOT serialized into the engine model.
+            fixIndex: i,
+            fixKey: light.name || `Fixture ${i + 1}`,
             group: light.group || '',
             x: +(worldPos.x).toFixed(3),
             y: +(worldPos.y).toFixed(3),
             z: +(worldPos.z).toFixed(3),
             nx: 0, ny: 0, nz: 0,
             cId: light.controllerId || 0,
-            sId: resolveSectionId(light),
+            sId: light.sectionId || 0,
             fId: light.fixtureId || 0,
             // localIndex: a simple/single-pixel DMX fixture is its own fixture
             // with exactly one pixel, so its within-fixture ordinal is 0.
@@ -230,11 +242,48 @@ export function generatePixelMap() {
       }
     });
     const registry = (typeof window !== 'undefined' && window.__controllerRegistry) || null;
-    const ledProj = registry
+    // Two projections of the SAME registry. `computeLedProjection` is the
+    // sim's GENERIC per-port model (each port restarts at the controller's
+    // base lane). `computeLedStrandPatches` is the DEVICE-linear model (one
+    // contiguous cursor across the enabled outputs, skipping disabled ones) —
+    // the firmware's real byte layout, and exactly what patches.yaml records.
+    // A controller carrying a `device:` binding declares those firmware
+    // semantics, so its strands MUST export the device-linear addresses or the
+    // engine model would disagree with both the hardware and patches.yaml
+    // (report 20260710_1; docs/41 §3). NON-bound controllers have no hardware
+    // to agree with, so they keep the generic per-port projection unchanged.
+    const genericProj = registry
       ? computeLedProjection(registry, ledCounts)
       : { fields: new Map(), violations: [] };
-    if (ledProj.violations.length > 0) {
-      for (const v of ledProj.violations) console.warn(`[LED Patch] ✋ ${v.message}`);
+    const deviceProj = registry
+      ? computeLedStrandPatches(registry, ledCounts)
+      : { fields: new Map(), violations: [] };
+    for (const v of genericProj.violations) console.warn(`[LED Patch] ✋ ${v.message}`);
+    for (const v of deviceProj.violations) console.warn(`[LED Patch/device] ✋ ${v.message}`);
+
+    // Merge: the generic per-strand projection is the base; every DEVICE-bound
+    // strand OVERRIDES its universe/addr with the firmware's contiguous start.
+    // Order, stride and whiteMode are firmware semantics read from the SAME
+    // `controller.led`, so they carry over from the generic entry unchanged —
+    // only the address differs. A device-linear strand with no generic lane is
+    // impossible (both projections walk the same ports/chains); if it ever
+    // happens the registry is internally inconsistent — fail LOUD (codex P0),
+    // never guess an address.
+    const ledFields = new Map(genericProj.fields);
+    for (const [name, dev] of deviceProj.fields) {
+      const gen = genericProj.fields.get(name);
+      if (!gen) {
+        throw new Error(`[pixelblaze] LED strand '${name}' has a device-linear patch but no ` +
+          'generic projection lane — the controller registry is internally inconsistent (a ' +
+          'device-bound strand must also resolve in computeLedProjection). Refusing to export ' +
+          'a guessed address.');
+      }
+      ledFields.set(name, {
+        ...gen,
+        universe: dev.dmxUniverse,
+        addr: dev.dmxAddress,
+        deviceLinear: true,
+      });
     }
 
     params.ledStrands.forEach((strand, i) => {
@@ -242,8 +291,34 @@ export function generatePixelMap() {
       const count = strand.ledCount || 10;
       const sx = +(strand.startX || 0), sy = +(strand.startY || 0), sz = +(strand.startZ || 0);
       const ex = +(strand.endX || 0), ey = +(strand.endY || 0), ez = +(strand.endZ || 0);
-      const proj = ledProj.fields.get(strand.name);
+      const proj = ledFields.get(strand.name);
       const orderMap = proj ? (LED_CHANNEL_ORDERS[proj.order] || LED_CHANNEL_ORDERS.RGBW) : null;
+      // EVERY patched strand — device-bound AND generic (unbound) — places its
+      // per-pixel {universe, addr} through the SAME contiguous walker
+      // (projectLedStrandPixels), the ONE source of truth for the firmware's
+      // whole-pixel-spill / 128-px-per-universe / no-straddle byte layout. A
+      // device-bound strand starts at the firmware's contiguous cursor
+      // (proj.universe/addr set in the merge above); an unbound strand starts at
+      // its generic per-port lane — but from that start the wrap math is
+      // identical, so the exported model is byte-for-byte identical to
+      // patches.yaml and the walker. This closes G3: the old unbound path used a
+      // dense-byte formula (uniSpan = floor(startByte/512)) that ignored the tail
+      // bytes skipped at each no-straddle wrap, diverging from the walker whenever
+      // (startAddr − 1) % stride ≠ 0 (e.g. stride 4, startAddr 3: pixel 128 at
+      // U+1 ch5 per the walker vs ch3 per the old formula).
+      let ledPixels = null;
+      if (proj) {
+        const walk = projectLedStrandPixels(proj.universe, proj.addr, proj.stride, count);
+        // codex P0 — an unbound strand past the sACN ceiling must NOT export a
+        // silently truncated model. Fail loud (the device-bound path shares this
+        // walker, so both are protected).
+        if (walk.overflow) {
+          throw new Error(`[pixelblaze] LED strand '${strand.name || `#${i + 1}`}' spills past the ` +
+            `sACN universe ceiling ${MAX_UNIVERSE} (stride ${proj.stride} × ${count} px from ` +
+            `U${proj.universe} ch${proj.addr}) — refusing to export a truncated model.`);
+        }
+        ledPixels = walk.pixels;
+      }
       if (!proj) {
         console.warn(`[LED Patch] Strand '${strand.name || `#${i + 1}`}' is not bound to an LED ` +
           'controller — it exports UNPATCHED (no sACN output). Bind it in the Controller Mapping ' +
@@ -257,18 +332,10 @@ export function generatePixelMap() {
         let pxPatch = null;
         let pxChannels = null;
         if (proj) {
-          const startByte = (proj.addr - 1) + j * proj.stride;
-          const uniSpan = Math.floor(startByte / DMX_UNIVERSE_SIZE);
-          const localByte = startByte % DMX_UNIVERSE_SIZE;
-          // Wrap: if this pixel's stride would cross the boundary, push it
-          // to the next universe wholesale (matches computeLedProjection).
-          let universe = proj.universe + uniSpan;
-          let addr = localByte + 1;
-          if (localByte + proj.stride > DMX_UNIVERSE_SIZE) {
-            universe += 1;
-            addr = 1;
-          }
-          pxPatch = { universe, addr, footprint: proj.stride, led: true };
+          // Device-bound AND unbound both read the same walker placement — the
+          // no-straddle contiguous layout, ONE source of truth.
+          const dp = ledPixels[j];
+          pxPatch = { universe: dp.universe, addr: dp.addr, footprint: proj.stride, led: true };
           pxChannels = { ...orderMap };
         }
         // The pushed pixel object — captured so the strand `apply` can read
@@ -280,7 +347,11 @@ export function generatePixelMap() {
           type: 'led',
           fixtureType: '',
           name: strand.name || 'Strand',
-          group: strand.name || '',
+          // Effective group key — the SINGLE source of truth shared with the
+          // section-numbering pass (led_metadata.assignLedStrandMetadata), so a
+          // named group and its section id can never disagree. Ungrouped
+          // strands key off their name (unchanged bit-for-bit for old scenes).
+          group: groupKeyForStrand(strand),
           x: +(sx + (ex - sx) * t).toFixed(3),
           y: +(sy + (ey - sy) * t).toFixed(3),
           z: +(sz + (ez - sz) * t).toFixed(3),
@@ -434,18 +505,18 @@ export function saveModelJS() {
     logStaticHostSkip('save-model POSTs (port 6970)');
     return;
   }
-  fetch(`http://localhost:6970/save-model${sceneParam}`, {
+  fetch(saveHttpUrl(`/save-model${sceneParam}`), {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain' },
     body: modelJS,
   }).catch(err => console.warn('[PB] Failed to save model:', err));
-  fetch(`http://localhost:6970/save-model${sceneParam ? sceneParam + '&' : '?'}type=effects`, {
+  fetch(saveHttpUrl(`/save-model${sceneParam ? sceneParam + '&' : '?'}type=effects`), {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain' },
     body: effectsJS,
   }).catch(err => console.warn('[PB] Failed to save effects model:', err));
   if (viewmasksJS !== null) {
-    fetch(`http://localhost:6970/save-model${sceneParam ? sceneParam + '&' : '?'}type=viewmasks`, {
+    fetch(saveHttpUrl(`/save-model${sceneParam ? sceneParam + '&' : '?'}type=viewmasks`), {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: viewmasksJS,

@@ -1,0 +1,172 @@
+# MIDI Fighter Twister (DJTT) — CaptainPad MIDI profile (driver #2), UX v2.
+#
+# BANK 1 ONLY (4x4 grid, row-major: row 0 col 0 = encoder 0, top-left).
+# Banks 2-4 are COMPLETELY unmapped — reserved for the future custom-mapping
+# UI — and sit in the MFT's dim-blue inactive state (the sysex connect config
+# sets their rest colour).
+#
+#   Row 0 (encoders 0-3) — GLOBALS, red at rest:
+#     (0,0) enc 0  GLOBAL SPEED  turn → paramCenter 'speed' delta; ring = live
+#                  speed. Push → toggle BPM→Speed sync; while sync is ON the
+#                  knob turns solid GREEN (led.on) and manual speed writes are
+#                  inert (syncOwnedKeys gate); OFF → back to RED (led.off).
+#     (0,1) enc 1  HUE (per-channel ONLY — the global hue shifter was removed
+#                  2026-07, operator decision) — turn → accumulate degrees
+#                  (one full ring = 0..360°, wrapping) onto the FOCUSED
+#                  CHANNEL's hue (channel PATCH `hue`). DECK tab: the DECK
+#                  CHANNEL (auto-focused). MIXER tab: the focused overlay.
+#                  Ring = degrees/360 and knob colour TRACKS the targeted hue
+#                  from red — re-syncing to the newly focused channel on a
+#                  focus switch. Push → reset that channel's hue to 0° (back
+#                  to red). The focus routing lives in the runtime (manager.ts
+#                  flush/reset/LED paths), not here — the profile stays
+#                  context-free.
+#     (0,2)+(0,3)  UNASSIGNED — no actions; dim blue at rest.
+#
+#   Rows 1-3 (encoders 4-15) — 12 FOCUSED-pattern local params, blue at rest:
+#     encoder e drives focused.exports[e - 4] (deriveKnobOrder order); push =
+#     reset that param to the entry's saved default. A knob with no param
+#     behind it is inert and sits dim blue (loud silence).
+#
+# Step magnitudes are the profile defaults [0.005, 0.01, 0.015] — LINEAR in
+# the firmware's relative count (code ±n = n detents of travel in one
+# message). The entire speed curve is the runtime's per-tick velocity gain
+# (utils/midi/accel.ts): a smoothed turn-rate estimate drives a continuous
+# gain from sub-detent precision (slow) up to a fast-flick sweep.
+#
+# Protocol per Sina's pymft (https://github.com/sina-cb/pymft), ported to
+# utils/midi/mft/*. Channel map (raw 0-indexed status nibbles): ch0 rotary
+# turns · ch1 encoder push (CC-hold) + colour · ch3 system (bank changes +
+# side buttons; bank switching is HARDWARE-NATIVE via the sysex config push).
+#
+# configureOnConnect: on connect the runtime pushes buildConnectConfig() sysex
+# to force all 64 encoders into RELATIVE / velocity-sensitive / blended-bar
+# mode with the v2 rest colours. Requires a transport that can send sysex (Web
+# MIDI needs sysex:true); if it can't, the controller goes RED with the reason.
+
+device:
+  id: mft
+  label: "MIDI Fighter Twister"
+  nameContains: "Midi Fighter Twister"
+  sourcePort: 0
+  destinationPort: 0
+  configureOnConnect: true
+
+controls:
+  # ── Row 0 — GLOBALS ─────────────────────────────────────────────────────────
+  # (0,0) GLOBAL SPEED. led: on = sync-engaged colour (green), off = rest (red).
+  - id: global_speed_turn
+    match: { type: cc, channel: 0, cc: 0, relative: true }
+    action: { kind: paramCenterRelative, key: speed }
+    led: { on: 50, off: 80 }
+  - id: global_speed_push_sync
+    match: { type: cc, channel: 1, cc: 0 }
+    action: { kind: bpmSyncToggle }
+  # (0,1) HUE — the FOCUSED CHANNEL's per-channel hue in BOTH contexts (deck
+  # tab = the DECK CHANNEL, mixer tab = the focused overlay). led.off = rest
+  # colour (red) shown until the targeted channel's hue loads; once live, the
+  # knob colour tracks that hue.
+  - id: hue_turn
+    match: { type: cc, channel: 0, cc: 1, relative: true }
+    action: { kind: hueKnob }
+    led: { off: 80 }
+  - id: hue_push_reset
+    match: { type: cc, channel: 1, cc: 1 }
+    action: { kind: hueReset }
+  # (0,2) encoder 2 + (0,3) encoder 3 — UNASSIGNED (reserved), dim blue.
+
+  # ── Rows 1-3 — 12 focused-pattern local params (enc e → export e-4) ────────
+  - id: knob_4_turn
+    match: { type: cc, channel: 0, cc: 4, relative: true }
+    action: { kind: focusedParamKnob, index: 0 }
+  - id: knob_4_push
+    match: { type: cc, channel: 1, cc: 4 }
+    action: { kind: focusedParamReset, index: 0 }
+  - id: knob_5_turn
+    match: { type: cc, channel: 0, cc: 5, relative: true }
+    action: { kind: focusedParamKnob, index: 1 }
+  - id: knob_5_push
+    match: { type: cc, channel: 1, cc: 5 }
+    action: { kind: focusedParamReset, index: 1 }
+  - id: knob_6_turn
+    match: { type: cc, channel: 0, cc: 6, relative: true }
+    action: { kind: focusedParamKnob, index: 2 }
+  - id: knob_6_push
+    match: { type: cc, channel: 1, cc: 6 }
+    action: { kind: focusedParamReset, index: 2 }
+  - id: knob_7_turn
+    match: { type: cc, channel: 0, cc: 7, relative: true }
+    action: { kind: focusedParamKnob, index: 3 }
+  - id: knob_7_push
+    match: { type: cc, channel: 1, cc: 7 }
+    action: { kind: focusedParamReset, index: 3 }
+  - id: knob_8_turn
+    match: { type: cc, channel: 0, cc: 8, relative: true }
+    action: { kind: focusedParamKnob, index: 4 }
+  - id: knob_8_push
+    match: { type: cc, channel: 1, cc: 8 }
+    action: { kind: focusedParamReset, index: 4 }
+  - id: knob_9_turn
+    match: { type: cc, channel: 0, cc: 9, relative: true }
+    action: { kind: focusedParamKnob, index: 5 }
+  - id: knob_9_push
+    match: { type: cc, channel: 1, cc: 9 }
+    action: { kind: focusedParamReset, index: 5 }
+  - id: knob_10_turn
+    match: { type: cc, channel: 0, cc: 10, relative: true }
+    action: { kind: focusedParamKnob, index: 6 }
+  - id: knob_10_push
+    match: { type: cc, channel: 1, cc: 10 }
+    action: { kind: focusedParamReset, index: 6 }
+  - id: knob_11_turn
+    match: { type: cc, channel: 0, cc: 11, relative: true }
+    action: { kind: focusedParamKnob, index: 7 }
+  - id: knob_11_push
+    match: { type: cc, channel: 1, cc: 11 }
+    action: { kind: focusedParamReset, index: 7 }
+  - id: knob_12_turn
+    match: { type: cc, channel: 0, cc: 12, relative: true }
+    action: { kind: focusedParamKnob, index: 8 }
+  - id: knob_12_push
+    match: { type: cc, channel: 1, cc: 12 }
+    action: { kind: focusedParamReset, index: 8 }
+  - id: knob_13_turn
+    match: { type: cc, channel: 0, cc: 13, relative: true }
+    action: { kind: focusedParamKnob, index: 9 }
+  - id: knob_13_push
+    match: { type: cc, channel: 1, cc: 13 }
+    action: { kind: focusedParamReset, index: 9 }
+  - id: knob_14_turn
+    match: { type: cc, channel: 0, cc: 14, relative: true }
+    action: { kind: focusedParamKnob, index: 10 }
+  - id: knob_14_push
+    match: { type: cc, channel: 1, cc: 14 }
+    action: { kind: focusedParamReset, index: 10 }
+  - id: knob_15_turn
+    match: { type: cc, channel: 0, cc: 15, relative: true }
+    action: { kind: focusedParamKnob, index: 11 }
+  - id: knob_15_push
+    match: { type: cc, channel: 1, cc: 15 }
+    action: { kind: focusedParamReset, index: 11 }
+
+  # ── Banks 2-4 (encoders 16-63) — RESERVED, completely unmapped ─────────────
+  # (The old bank-2 speed/size/rotate globals moved to / were retired by the
+  # v2 layout: speed is (0,0); size/rotate return with the custom-mapping UI.)
+
+  # ── Side buttons (bank 1, ch3) — a self-sufficient focus path ──────────────
+  # LEFT column (CC 8, 9 = BANKUP / BANKDOWN) is HARDWARE-NATIVE bank nav set in
+  # the sysex config push, so it is intentionally NOT mapped here. LEFT-3 (CC 10)
+  # is reserved; manual tap-tempo intentionally not wired — Audio Companion is
+  # the sole tempo source per the 2026-06-17 contract. RIGHT column (CC 11/12/13)
+  # → focus prev / next / deck, so the MFT can steer focus when the APC is absent
+  # (the APC track buttons remain the primary handler in the mixer). Fires on
+  # press (value 127), ignores release.
+  - id: side_right1_focus_prev
+    match: { type: cc, channel: 3, cc: 11 }
+    action: { kind: focusStep, dir: prev }
+  - id: side_right2_focus_next
+    match: { type: cc, channel: 3, cc: 12 }
+    action: { kind: focusStep, dir: next }
+  - id: side_right3_focus_deck
+    match: { type: cc, channel: 3, cc: 13 }
+    action: { kind: focusStep, dir: deck }

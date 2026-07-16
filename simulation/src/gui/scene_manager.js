@@ -20,6 +20,13 @@ import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 const SAVE_URL = 'http://localhost:6970';
 const MANIFEST_URL = './scenes/manifest.json';
 
+// SINGLE SOURCE OF TRUTH mirror: this grammar MUST stay identical to
+// SCENE_NAME_RE in simulation/server/scene_duplicate.cjs (and the server's
+// isValidSceneName). A scene name is one safe path segment — starts with an
+// alphanumeric, then alphanumerics, underscore or hyphen. We validate here
+// only for fast UX feedback; the server re-validates and is authoritative.
+const SCENE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
 let _overlay = null;
 
 function ensureOverlay() {
@@ -36,6 +43,13 @@ function ensureOverlay() {
 
   const message = document.createElement('div');
   message.className = 'scene-modal-message';
+
+  // Optional scrollable list (used by the "Recover scene" picker). Hidden
+  // for the plain add/delete/duplicate modals. Kept inside the SAME overlay
+  // singleton so isSceneModalOpen() (interaction.js keyboard guard) covers
+  // it too.
+  const list = document.createElement('div');
+  list.className = 'scene-modal-list hidden';
 
   const input = document.createElement('input');
   input.className = 'scene-modal-input';
@@ -56,6 +70,7 @@ function ensureOverlay() {
 
   card.appendChild(title);
   card.appendChild(message);
+  card.appendChild(list);
   card.appendChild(input);
   card.appendChild(actions);
   overlay.appendChild(card);
@@ -75,7 +90,7 @@ export function isSceneModalOpen() {
  * Show the themed modal. Resolves to the trimmed input string (when
  * withInput) or `true` on confirm, and `null` on cancel / Esc / backdrop.
  */
-function showModal({ title, message = '', withInput = false, placeholder = '', okLabel = 'OK', danger = false }) {
+export function showModal({ title, message = '', withInput = false, placeholder = '', okLabel = 'OK', danger = false }) {
   // Re-entrancy guard: the overlay and its listeners are a singleton, so a
   // second open while one is live would stack duplicate listeners and let a
   // single click/Enter resolve two flows. Ignore overlapping opens.
@@ -86,6 +101,9 @@ function showModal({ title, message = '', withInput = false, placeholder = '', o
   const input = overlay.querySelector('.scene-modal-input');
   const cancelBtn = overlay.querySelector('.scene-modal-cancel');
   const okBtn = overlay.querySelector('.scene-modal-ok');
+
+  // Plain modals never show the recovery list.
+  overlay.querySelector('.scene-modal-list').classList.add('hidden');
 
   titleEl.textContent = title;
   msgEl.textContent = message;
@@ -124,13 +142,87 @@ function showModal({ title, message = '', withInput = false, placeholder = '', o
   });
 }
 
-/** A bare informational modal (single OK button, no Cancel). */
-function showAlert(title, message) {
+/** A bare informational modal (single OK button, no Cancel). Exported so
+ *  the recovery module reuses this ONE overlay singleton. */
+export function showAlert(title, message) {
   const overlay = ensureOverlay();
   const p = showModal({ title, message, okLabel: 'OK' });
   // Hide the Cancel button for a pure alert.
   overlay.querySelector('.scene-modal-cancel').classList.add('hidden');
   return p;
+}
+
+/**
+ * Themed single-select list modal, reusing the overlay singleton (so the
+ * interaction.js keyboard guard via isSceneModalOpen() keeps working).
+ *
+ * @param {object}   opts
+ * @param {string}   opts.title
+ * @param {string}   [opts.message]
+ * @param {Array<{primary:string, secondary?:string, value:*}>} opts.items
+ * @returns {Promise<*|null>} the selected item's `value`, or null on cancel.
+ */
+export function showListModal({ title, message = '', items = [] }) {
+  if (isSceneModalOpen()) return Promise.resolve(null);
+  const overlay = ensureOverlay();
+  const titleEl = overlay.querySelector('.scene-modal-title');
+  const msgEl = overlay.querySelector('.scene-modal-message');
+  const listEl = overlay.querySelector('.scene-modal-list');
+  const input = overlay.querySelector('.scene-modal-input');
+  const cancelBtn = overlay.querySelector('.scene-modal-cancel');
+  const okBtn = overlay.querySelector('.scene-modal-ok');
+
+  titleEl.textContent = title;
+  msgEl.textContent = message;
+  msgEl.classList.toggle('hidden', !message);
+  input.classList.add('hidden');
+  // This is a pick-list: selection IS the confirm, so there is no OK button.
+  okBtn.classList.add('hidden');
+  cancelBtn.classList.remove('hidden');
+
+  // Rebuild the list fresh each open.
+  listEl.textContent = '';
+  listEl.classList.remove('hidden');
+
+  return new Promise((resolve) => {
+    function cleanup(result) {
+      overlay.classList.add('hidden');
+      listEl.classList.add('hidden');
+      okBtn.classList.remove('hidden'); // restore for the next plain modal
+      cancelBtn.removeEventListener('click', onCancel);
+      overlay.removeEventListener('pointerdown', onBackdrop);
+      document.removeEventListener('keydown', onKey, true);
+      resolve(result);
+    }
+    function onCancel() { cleanup(null); }
+    function onBackdrop(e) { if (e.target === overlay) onCancel(); }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+    }
+
+    items.forEach((item) => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'scene-modal-list-item';
+      const primary = document.createElement('div');
+      primary.className = 'scene-modal-list-primary';
+      primary.textContent = item.primary;
+      row.appendChild(primary);
+      if (item.secondary) {
+        const secondary = document.createElement('div');
+        secondary.className = 'scene-modal-list-secondary';
+        secondary.textContent = item.secondary;
+        row.appendChild(secondary);
+      }
+      row.addEventListener('click', () => cleanup(item.value));
+      listEl.appendChild(row);
+    });
+
+    cancelBtn.addEventListener('click', onCancel);
+    overlay.addEventListener('pointerdown', onBackdrop);
+    document.addEventListener('keydown', onKey, true);
+    overlay.classList.remove('hidden');
+  });
 }
 
 async function handleAdd() {
@@ -167,6 +259,50 @@ async function handleAdd() {
   } catch (e) {
     console.error('[Scene] Create failed:', e);
     await showAlert('Create failed', String(e && e.message ? e.message : e));
+  }
+}
+
+async function handleDuplicate() {
+  const select = document.getElementById('scene-select');
+  const source = (select && select.value) || window.__activeScene;
+  if (!source) return;
+  const name = await showModal({
+    title: 'Duplicate scene',
+    message: `Copy "${source}" to a new scene. Name (letters, numbers, _ or -):`,
+    withInput: true,
+    placeholder: `e.g. ${source}_copy`,
+    okLabel: 'Duplicate',
+  });
+  if (!name) return;
+  // Normalize the same way Add does (spaces → underscores, strip the rest),
+  // then validate against the shared grammar before hitting the server.
+  const safe = name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_-]/g, '').replace(/^_+|_+$/g, '');
+  if (!safe || !SCENE_NAME_RE.test(safe)) {
+    await showAlert('Invalid name', 'Use letters, numbers, _ or -.');
+    return;
+  }
+  try {
+    const resp = await fetch(`${SAVE_URL}/scene/duplicate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, newName: safe }),
+    });
+    if (resp.status === 409) {
+      await showAlert('Already exists', `A scene named "${safe}" already exists.`);
+      return;
+    }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json().catch(() => null);
+    const scene = data && typeof data.scene === 'string' ? data.scene : '';
+    if (!scene) throw new Error('Server did not return a scene name');
+    // Switch to the freshly-duplicated scene the same way the picker does:
+    // set ?scene= and reload so every other query param survives.
+    const url = new URL(window.location.href);
+    url.searchParams.set('scene', scene);
+    window.location.href = url.toString();
+  } catch (e) {
+    console.error('[Scene] Duplicate failed:', e);
+    await showAlert('Duplicate failed', String(e && e.message ? e.message : e));
   }
 }
 
@@ -213,18 +349,21 @@ async function handleDelete() {
 /** Wire the HUD add/delete scene buttons. Safe to call once on boot. */
 export function setupSceneManager() {
   const addBtn = document.getElementById('scene-add-btn');
+  const dupBtn = document.getElementById('scene-dup-btn');
   const delBtn = document.getElementById('scene-del-btn');
-  if (!addBtn || !delBtn) return;
+  if (!addBtn || !dupBtn || !delBtn) return;
 
   // Scene mutation needs the dev save-server (port 6970); a static host
   // can't reach it, so hide the controls instead of offering dead buttons.
   if (isStaticHost()) {
-    logStaticHostSkip('scene add/delete (port 6970)');
+    logStaticHostSkip('scene add/duplicate/delete (port 6970)');
     addBtn.style.display = 'none';
+    dupBtn.style.display = 'none';
     delBtn.style.display = 'none';
     return;
   }
 
   addBtn.addEventListener('click', handleAdd);
+  dupBtn.addEventListener('click', handleDuplicate);
   delBtn.addEventListener('click', handleDelete);
 }

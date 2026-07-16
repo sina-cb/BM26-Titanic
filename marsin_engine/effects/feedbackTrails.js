@@ -44,10 +44,17 @@ export function applyFeedbackTrails({
     ta = ta * decay + px.a * injection;
     tu = tu * decay + px.u * injection;
 
-    // Chromatic bleed (green→red, red→blue)
+    // Chromatic bleed (green→red, red→blue). Snapshot the pre-bleed
+    // channel values so both bleeds read the SAME source frame — the
+    // pre-2026-07 code did `tb += tr * bleed` AFTER `tr += tg * bleed`,
+    // so blue picked up the already-bleached red and the effect was
+    // asymmetric / order-dependent (a wider bleed compounded twice).
+    // Reading from the snapshot makes each bleed a pure one-hop mix.
     if (colorBleed > 0) {
-      tr += tg * colorBleed;
-      tb += tr * colorBleed;
+      const srcR = tr;
+      const srcG = tg;
+      tr = srcR + srcG * colorBleed;
+      tb = tb + srcR * colorBleed;
     }
 
     trailBuffer[off + 0] = Math.min(1.0, tr);
@@ -85,4 +92,12 @@ export function applyFeedbackTrails({
 
 export const feedbackTrailsEffect = {
   apply: applyFeedbackTrails,
+  // Primary intensity: the trail mix — how strongly the decayed history is
+  // blended back over the live frame (0 = no trails, 1 = full ghosting).
+  // Normalized 0..1 maps straight onto the `mix` param.
+  primaryIntensity: { label: 'Trail Mix', param: 'mix', default: 0.5, min: 0, max: 1 },
+  // Primary mode (VSN1 encoder press): how the decayed history composites
+  // back over the live frame — additive (default), replace, or max. Cycles
+  // the `blendMode` param.
+  primaryMode: { label: 'Blend', param: 'blendMode', values: ['add', 'replace', 'max'], default: 'add' },
 };

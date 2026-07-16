@@ -41,6 +41,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const ENGINE_BASE = 'http://127.0.0.1:6968';
 const WS_URL = 'ws://127.0.0.1:6968';
 
@@ -132,6 +134,10 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
   console.log(`  snapshot: ${cleanup.snapshot.channels.length} channel(s), base=${cleanup.snapshot.baseChannelId}`);
   const maxChannels = cleanup.snapshot.maxChannels || 4;
   const burstSize = Math.max(1, maxChannels - 1);
+
+  // Refuse to mutate a non-disposable engine BEFORE deleting/adding channels.
+  await assertDisposableEngine(ENGINE_BASE);
+
   await deleteAllOverlays();
   await sleep(150);
 

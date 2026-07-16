@@ -5,6 +5,10 @@
 .agent_renders/
 .puppeteer-endpoint
 
+# Pre-save scene snapshots written by simulation/server/scene_backup.cjs
+# (source for the in-sim "Recover scene" UI). Local safety net, never committed.
+simulation/.scene_backups/
+
 # Dependencies
 node_modules/
 # Also ignore a node_modules SYMLINK (worktree shares deps via a symlink, which
@@ -172,3 +176,8 @@ simulation/scenes/*/playlists/hil_*.yaml
 
 # Timeline companion runtime state (regenerated on boot)
 marsin_engine/states/*/timeline_state.yaml
+
+# Local-only dev scene for the physical LED-controller bench (contains real
+# device MACs/provenance — never commit; Sina 2026-07-10).
+simulation/scenes/dev_test_bench/
+marsin_engine/models/dev_test_bench*

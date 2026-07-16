@@ -79,7 +79,10 @@ export function OscStatusPill({ compact = false }: Props) {
   // from the SPEED / SIZE sliders to the left. Operator request
   // 2026-05-28.
   const w = compact ? 60 : 86;
-  const TILE_HEIGHT = 48;
+  // party 2026-07-11: 48→40 to match the compacted GLOBALS tile cluster
+  // (CPCControls GLOBALS_TILE_HEIGHT) so the OSC pill no longer sets the row's
+  // height floor. This pill is only rendered inside that GLOBALS row.
+  const TILE_HEIGHT = 40;
 
   if (!status) {
     // First frame before any WS message lands — placeholder that

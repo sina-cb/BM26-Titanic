@@ -3,6 +3,22 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 
+const {
+  isValidSceneName,
+  updateManifest,
+  duplicateSceneDir,
+} = require('./scene_duplicate.cjs');
+
+const {
+  writeFileAtomic,
+  filesForSave,
+  filesForCameras,
+  filesForModel,
+  snapshotBeforeWrite,
+  listBackups,
+  restoreBackup,
+} = require('./scene_backup.cjs');
+
 // Resolve paths relative to the simulation root (parent of server/)
 const SIM_ROOT = path.join(__dirname, '..');
 const ENGINE_ROOT = path.join(SIM_ROOT, '..', 'marsin_engine');
@@ -25,29 +41,9 @@ function resolveSceneCamerasPath(sceneName) {
 const { loadSimPorts } = require('../lib/load_ports.cjs');
 const SAVE_PORT = loadSimPorts(path.join(SIM_ROOT, 'config.yaml')).save_port;
 
-// Atomic + durable write: write to a sibling temp file, fsync it, then
-// rename over the target. A crash mid-write can no longer leave a
-// truncated yaml/model behind for the next boot to load as "stale but
-// parseable" state, and the fsync makes the rename survive a power cut
-// (the playa runs on generators). On any failure the temp file is
-// removed before rethrowing, so crash residue never lands next to
-// tracked files.
-function writeFileAtomic(targetPath, contents) {
-  const tmpPath = `${targetPath}.tmp-${process.pid}`;
-  try {
-    const fd = fs.openSync(tmpPath, 'w');
-    try {
-      fs.writeSync(fd, contents);
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    fs.renameSync(tmpPath, targetPath);
-  } catch (err) {
-    fs.rmSync(tmpPath, { force: true });
-    throw err;
-  }
-}
+// writeFileAtomic (atomic + durable tmp+fsync+rename write) now lives in
+// ./scene_backup.cjs as the single source of truth — the backup module and
+// this server share ONE definition. Imported at the top of this file.
 
 // ─── Static manifests (single source of truth for the client) ───────────
 // The simulation client (main.js, pattern_editor.js) discovers the scene
@@ -91,9 +87,11 @@ function listPatterns() {
 // injective — "../titanic" collapsed to "titanic", so a crafted delete
 // could destroy the wrong scene. Rejecting keeps the codex "fail loud,
 // no silent fallback" contract.
-function isValidSceneName(name) {
-  return typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name);
-}
+//
+// The grammar + validator now live in ./scene_duplicate.cjs (imported at
+// the top of this file) so the create/delete/duplicate endpoints and the
+// client all share ONE source of truth. Re-exported name kept for the
+// existing call sites below.
 
 // Minimal config a freshly-created scene starts from: the standard Model
 // Transform, an empty DMX fixture array, and an empty LED strand array.
@@ -169,6 +167,12 @@ http.createServer((req, res) => {
       const patchesPath = path.join(path.dirname(outPath), 'patches.yaml');
       console.log(`[SAVE SERVER] POST /save (scene=${sceneName || 'default'}). Body: ${body.length} bytes`);
       try {
+        // Snapshot the files this save will overwrite BEFORE touching them.
+        // Throws on failure → caught below → 500 (codex P0: never write live
+        // state without a backup).
+        const backupScene = sceneName || 'titanic';
+        snapshotBeforeWrite(backupScene, filesForSave(backupScene), 'save');
+
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
 
         // Parse and decouple patching logic
@@ -186,7 +190,16 @@ http.createServer((req, res) => {
           allFixtureArrays.push(configTree.dmxLights.fixtures);
         }
 
-        if (allFixtureArrays.length > 0) {
+        // LED strands (configTree.ledStrands.strands) carry their own patch
+        // record (plan 20260709_0 P4): a device-linear layout, computed sim-
+        // side by led_patch_projection.computeLedStrandPatches. A strand is
+        // "patched" exactly when it has a universe/address; unassigned strands
+        // get NO record (their fields are just stripped). The strand patch
+        // shape differs from a fixture's — it adds pixelCount + outputIndex.
+        const ledStrandArray = (configTree && configTree.ledStrands &&
+          Array.isArray(configTree.ledStrands.strands)) ? configTree.ledStrands.strands : null;
+
+        if (allFixtureArrays.length > 0 || ledStrandArray) {
           const patches = { patches: {} };
           for (const fixtureArray of allFixtureArrays) {
             fixtureArray.forEach(fixture => {
@@ -213,9 +226,56 @@ http.createServer((req, res) => {
             });
           }
 
+          let strandRecords = 0;
+          if (ledStrandArray) {
+            ledStrandArray.forEach(strand => {
+              const name = strand && strand.name;
+              // The six LED-patch fields always leave the structural tree
+              // (scene_config.yaml stays clean); a record is emitted only when
+              // the strand is actually patched (dmxUniverse > 0).
+              const patched = name && (strand.dmxUniverse || 0) > 0;
+              if (patched) {
+                patches.patches[name] = {
+                  controllerIp: strand.controllerIp || '',
+                  controllerId: strand.controllerId || 0,
+                  dmxUniverse: strand.dmxUniverse || 0,
+                  dmxAddress: strand.dmxAddress || 0,
+                  pixelCount: strand.pixelCount || 0,
+                  outputIndex: (strand.outputIndex === undefined || strand.outputIndex === null)
+                    ? -1 : strand.outputIndex,
+                  // Per-segment DMX-parity view (G1): universe + start/end channel
+                  // per run the strand occupies as it spills across universes.
+                  // dmxUniverse/dmxAddress stay the START (bytes unchanged); these
+                  // are additive — old files without them still load.
+                  endUniverse: strand.endUniverse || 0,
+                  endChannel: strand.endChannel || 0,
+                  segments: Array.isArray(strand.segments)
+                    ? strand.segments.map((s) => ({
+                      universe: s.universe, startChannel: s.startChannel,
+                      endChannel: s.endChannel, pixelCount: s.pixelCount,
+                    }))
+                    : [],
+                };
+                strandRecords += 1;
+              }
+              if (name) {
+                delete strand.controllerIp;
+                delete strand.controllerId;
+                delete strand.dmxUniverse;
+                delete strand.dmxAddress;
+                delete strand.pixelCount;
+                delete strand.outputIndex;
+                delete strand.segments;
+                delete strand.endUniverse;
+                delete strand.endChannel;
+              }
+            });
+          }
+
           // Write extracted patches.yaml
           writeFileAtomic(patchesPath, yaml.dump(patches, { lineWidth: -1 }));
-          console.log(`[SAVE SERVER] ✅ Wrote ${patchesPath} (${Object.keys(patches.patches).length} fixture(s))`);
+          console.log(`[SAVE SERVER] ✅ Wrote ${patchesPath} ` +
+            `(${Object.keys(patches.patches).length} record(s); ${strandRecords} LED strand(s))`);
 
           // Re-serialize the cleaned structural tree
           body = yaml.dump(configTree, { lineWidth: -1 });
@@ -287,6 +347,10 @@ http.createServer((req, res) => {
       const outPath = resolveSceneCamerasPath(sceneName);
       console.log(`[SAVE SERVER] POST /save-cameras (scene=${sceneName || 'default'}). Body: ${body.length} bytes`);
       try {
+        // Snapshot before overwrite (see /save). Throws → 500.
+        const backupScene = sceneName || 'titanic';
+        snapshotBeforeWrite(backupScene, filesForCameras(backupScene), 'save-cameras');
+
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
         fs.writeFileSync(outPath, body);
         console.log(`[SAVE SERVER] ✅ Wrote ${outPath}`);
@@ -393,6 +457,12 @@ http.createServer((req, res) => {
           : '.js';
         const modelFilename = `${safeScene}${suffix}`;
         const outDir = path.join(ENGINE_ROOT, 'models');
+
+        // Snapshot the model file this write will overwrite BEFORE touching
+        // it. The client fires model+effects+viewmasks in a burst, so these
+        // three coalesce into one snapshot dir. Throws → 500.
+        snapshotBeforeWrite(safeScene, filesForModel(safeScene, type), 'save-model');
+
         fs.mkdirSync(outDir, { recursive: true });
         const outPath = path.join(outDir, modelFilename);
         writeFileAtomic(outPath, body);
@@ -437,6 +507,53 @@ http.createServer((req, res) => {
         res.end('Error: ' + e.message);
       }
     });
+  } else if (req.method === 'POST' && pathname === '/scene/duplicate') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const { source, newName } = JSON.parse(body);
+        // Validate BOTH names against the shared grammar (fail loud, no
+        // sanitizing) before either touches the filesystem.
+        if (!isValidSceneName(source)) {
+          res.statusCode = 400;
+          res.end('Invalid source scene name');
+          return;
+        }
+        if (!isValidSceneName(newName)) {
+          res.statusCode = 400;
+          res.end('Invalid new scene name (use letters, numbers, _ or -)');
+          return;
+        }
+        const srcDir = path.join(SCENES_ROOT, source);
+        const destDir = path.join(SCENES_ROOT, newName);
+        // Source must be a real scene (has scene_config.yaml).
+        if (!fs.existsSync(path.join(srcDir, 'scene_config.yaml'))) {
+          res.statusCode = 404;
+          res.end('Source scene not found');
+          return;
+        }
+        // Refuse if the target already exists on disk OR in the manifest —
+        // never merge into or clobber an existing scene (codex P0).
+        if (fs.existsSync(destDir) || listScenes().includes(newName)) {
+          res.statusCode = 409;
+          res.end('Scene already exists');
+          return;
+        }
+        // Recursive copy + self-reference rewrite. duplicateSceneDir cleans
+        // up the partial destination itself if any step throws, so a failed
+        // duplicate never leaves a half-scene behind.
+        duplicateSceneDir(srcDir, destDir, source, newName);
+        console.log(`[SAVE SERVER] ✅ Duplicated scene: ${source} → ${newName}`);
+        writeSceneManifest();
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ scene: newName, scenes: listScenes() }));
+      } catch (e) {
+        console.error(`[SAVE SERVER] Scene duplicate error:`, e);
+        res.statusCode = 500;
+        res.end('Error: ' + e.message);
+      }
+    });
   } else if (req.method === 'POST' && pathname === '/delete-scene') {
     let body = '';
     req.on('data', chunk => body += chunk);
@@ -466,6 +583,49 @@ http.createServer((req, res) => {
         console.error(`[SAVE SERVER] Scene delete error:`, e);
         res.statusCode = 500;
         res.end('Error: ' + e.message);
+      }
+    });
+  } else if (req.method === 'GET' && pathname === '/backups') {
+    // List a scene's pre-save snapshots, newest-first, for the in-sim
+    // "Recover scene" UI. Reject a bad/missing scene name (never sanitize).
+    try {
+      if (!isValidSceneName(sceneName)) {
+        res.statusCode = 400;
+        res.end('Invalid or missing scene name');
+        return;
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify(listBackups(sceneName)));
+    } catch (e) {
+      console.error(`[SAVE SERVER] Backups list error:`, e);
+      res.statusCode = 500;
+      res.end('Error');
+    }
+  } else if (req.method === 'POST' && pathname === '/restore-backup') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        if (!isValidSceneName(sceneName)) {
+          res.statusCode = 400;
+          res.end('Invalid or missing scene name');
+          return;
+        }
+        const { id } = JSON.parse(body);
+        // restoreBackup snapshots the current live files first (pre-restore),
+        // then atomically writes the backed-up bytes over them. It sets
+        // err.statusCode (400 bad id / 404 unknown snapshot) for us to map.
+        const result = restoreBackup(sceneName, id);
+        // A restore can add/remove scene files — keep the manifest live.
+        writeSceneManifest();
+        console.log(`[SAVE SERVER] ♻️  Restored ${sceneName} to ${id} ` +
+          `(${result.restored.length} file(s); pre-restore ${result.preRestoreId})`);
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(result));
+      } catch (e) {
+        console.error(`[SAVE SERVER] Restore error:`, e);
+        res.statusCode = e.statusCode || 500;
+        res.end(`Error: ${e.message}`);
       }
     });
   } else if (req.method === 'GET' && pathname === '/list-scenes') {

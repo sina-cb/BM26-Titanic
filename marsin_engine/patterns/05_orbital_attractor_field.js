@@ -84,10 +84,10 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
+export function sliderDirection(v) { direction = v; }
 export function sliderLevel(v) { level = v; }
 export function sliderKick(v) { kick = v; }
 export function sliderRadius(v) { radius = v; }
-export function sliderDirection(v) { direction = v; }
 export function sliderFalloff(v) { falloff = v; }
 export function sliderFocus(v) { focus = v; }
 export function sliderColorVariation(v) { colorVariation = v; }

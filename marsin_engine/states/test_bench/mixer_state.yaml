@@ -1,8 +1,8 @@
-master: 1
+master: 0.9212598425196851
 channels:
-  - id: ch_1779852690909_20
-    name: New Layer
-    pattern: 15_silk_prism_ribbons
+  - id: ch_1783569272925_219
+    name: latency_0
+    pattern: 29_kick_shockwave
     mode: blend_screen
     fader: 0
     enabled: true
@@ -11,27 +11,82 @@ channels:
     transitionMode: trans_crossfade
     transitionTime: 1
     localControls:
-      '66806020':
-        v0: 0.5
-        v1: 0
-        v2: 0
       '614525773':
-        v0: 0
+        v0: 0.44
         v1: 0
         v2: 0
-      '729588226':
+      '1037917937':
+        v0: 0.46
+        v1: 0
+        v2: 0
+      '2010909319':
+        v0: 0.11
+        v1: 0
+        v2: 0
+      '2750033883':
+        v0: 0.92
+        v1: 0
+        v2: 0
+      '4234014351':
+        v0: 0.28
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_1781814380742_5872
+      cursor: 29
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: all
+      target: null
+      invert: false
+    faderMax: 1
+    color: null
+    mixGroupId: null
+    soloSafe: false
+    hue: 0
+    followsTempo: false
+    followLeaderId: null
+    followScale: 1
+  - id: ch_1783569272960_220
+    name: latency_1
+    pattern: 09_cyclone
+    mode: blend_screen
+    fader: 0
+    enabled: true
+    locked: false
+    faderLocked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls:
+      '614525773':
         v0: 0.5
         v1: 0
         v2: 0
       '1037917937':
-        v0: 0.5
+        v0: 0.64
         v1: 0
         v2: 0
-      '2384393854':
+      '2073951030':
         v0: 0.5
         v1: 0
         v2: 0
       '2504041261':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '3165284047':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '3334264878':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '3680310977':
         v0: 0.5
         v1: 0
         v2: 0
@@ -40,13 +95,80 @@ channels:
         v1: 0
         v2: 0
       '4234014351':
-        v0: 1
+        v0: 0.5
         v1: 0
         v2: 0
     playlist:
       name: default
-      activeEntryId: e_default_15_15_silk_prism_ribbons
-      cursor: 15
+      activeEntryId: e_default_9_09_cyclone
+      cursor: 9
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: all
+      target: null
+      invert: false
+    faderMax: 1
+    color: null
+    mixGroupId: null
+    soloSafe: false
+    hue: 0
+    followsTempo: false
+    followLeaderId: null
+    followScale: 1
+  - id: ch_1783569272994_221
+    name: hil3_0
+    pattern: 06_neon_elevator
+    mode: blend_screen
+    fader: 0
+    enabled: true
+    locked: false
+    faderLocked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls:
+      '614525773':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '1037917937':
+        v0: 0.5932234683882963
+        v1: 0
+        v2: 0
+      '1628509418':
+        v0: 0.16
+        v1: 0
+        v2: 0
+      '2073951030':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '2504041261':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '3165284047':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '3334264878':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '3994789032':
+        v0: 0.5
+        v1: 0
+        v2: 0
+      '4234014351':
+        v0: 0.5
+        v1: 0
+        v2: 0
+    playlist:
+      name: default
+      activeEntryId: e_default_6_06_neon_elevator
+      cursor: 6
       autopilot:
         active: false
         delay_s: 30
@@ -64,5 +186,5 @@ channels:
     followLeaderId: null
     followScale: 1
 mixGroups: []
-tempoBpm: 127
+tempoBpm: 83
 tempoSourcePref: osc

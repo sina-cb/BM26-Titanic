@@ -70,10 +70,10 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
+export function sliderDirection(v) { direction = v; }
 export function sliderBass(v) { bass = v; }
 export function sliderHeadKick(v) { headKick = v; }
 export function sliderTail(v) { tail = v; }
-export function sliderDirection(v) { direction = v; }
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
 // RIG-AGNOSTIC: the trail is a fixed N=128-cell lane along the normalized X axis,

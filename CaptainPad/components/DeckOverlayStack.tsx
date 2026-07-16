@@ -33,6 +33,7 @@ import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { AutopilotTimerPills } from '@/components/DeckTransitionControls';
 import { fetchViewSelectionOptions } from '@/utils/api';
+import { usePerfLock } from '@/hooks/usePerformanceMode';
 import {
   addDeckOverlay,
   patchDeckOverlay,
@@ -183,6 +184,10 @@ const OverlayCard: React.FC<{
   onReorder: (id: string, direction: -1 | 1) => void;
 }> = ({ overlay, index, count, expanded, onToggleExpand, groups, viewMasks, playlistLibrary, disabled, onReorder }) => {
   const C = usePalette();
+  // PERFORMANCE MODE: overlay STRUCTURE (remove, reorder, view re-target) is
+  // 409-gated while a show is live. Runtime controls (enable eye, blend mode,
+  // fader, playlist entry taps) stay live.
+  const perfLocked = usePerfLock();
   const accent = (typeof overlay.color === 'string' && overlay.color) || C.primary;
   const [showBlendPicker, setShowBlendPicker] = useState(false);
   const [showViewPicker, setShowViewPicker] = useState(false);
@@ -269,9 +274,11 @@ const OverlayCard: React.FC<{
         <TouchableOpacity
           onPress={() => setConfirmRemove(true)}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          disabled={disabled}
+          disabled={disabled || perfLocked}
+          style={perfLocked ? { opacity: 0.45 } : null}
           accessibilityLabel="Remove overlay"
           accessibilityRole="button"
+          accessibilityState={{ disabled: disabled || perfLocked }}
         >
           <IconSymbol name="xmark" size={15} color={C.error} />
         </TouchableOpacity>
@@ -285,8 +292,9 @@ const OverlayCard: React.FC<{
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
             <TouchableOpacity
               onPress={() => setShowViewPicker(true)}
-              disabled={disabled}
-              style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerHigh }}
+              disabled={disabled || perfLocked}
+              style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 6, borderWidth: 1, borderColor: C.ghostBorder, backgroundColor: C.surfaceContainerHigh, opacity: perfLocked ? 0.45 : 1 }}
+              accessibilityState={{ disabled: disabled || perfLocked }}
             >
               <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text }}>VIEW: {viewLabel} ▾</Text>
             </TouchableOpacity>
@@ -303,17 +311,17 @@ const OverlayCard: React.FC<{
                 Reorder is handled by the parent (it owns the full ordered list). */}
             <TouchableOpacity
               onPress={() => onReorder(overlay.id, -1)}
-              disabled={disabled || index === count - 1}
+              disabled={disabled || perfLocked || index === count - 1}
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-              style={{ padding: 6, opacity: index === count - 1 ? 0.3 : 1 }}
+              style={{ padding: 6, opacity: (index === count - 1 || perfLocked) ? 0.3 : 1 }}
             >
               <IconSymbol name="arrow.up" size={16} color={C.text} />
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => onReorder(overlay.id, 1)}
-              disabled={disabled || index === 0}
+              disabled={disabled || perfLocked || index === 0}
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-              style={{ padding: 6, opacity: index === 0 ? 0.3 : 1 }}
+              style={{ padding: 6, opacity: (index === 0 || perfLocked) ? 0.3 : 1 }}
             >
               <IconSymbol name="arrow.down" size={16} color={C.text} />
             </TouchableOpacity>
@@ -385,6 +393,10 @@ export const DeckOverlayStack: React.FC<{
   disabled?: boolean;
 }> = ({ overlays, overlayAutopilot, playlistLibrary, disabled = false }) => {
   const C = usePalette();
+  // PERFORMANCE MODE: adding an overlay is structural (engine 409s
+  // POST /deck/overlays while a show is live). The shared AUTO/SHUFFLE/timer
+  // controls are runtime (allowed) and stay live.
+  const perfLocked = usePerfLock();
   const [groups, setGroups] = useState<string[]>([]);
   const [viewMasks, setViewMasks] = useState<ViewMaskOption[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -550,8 +562,9 @@ export const DeckOverlayStack: React.FC<{
       ) : (
         <TouchableOpacity
           onPress={() => { setAddView(null); setShowAdd(true); }}
-          disabled={disabled}
-          style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: C.ghostBorder, opacity: disabled ? 0.5 : 1 }}
+          disabled={disabled || perfLocked}
+          style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: C.ghostBorder, opacity: (disabled || perfLocked) ? 0.5 : 1 }}
+          accessibilityState={{ disabled: disabled || perfLocked }}
         >
           <IconSymbol name="plus" size={16} color={C.primary} />
           <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, letterSpacing: 0.5, color: C.primary }}>ADD OVERLAY</Text>

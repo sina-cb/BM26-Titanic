@@ -113,6 +113,13 @@ export class SnapshotManager {
       // that no longer exist on recall and the gang-faders vanish. Empty array
       // when the look has no groups (or an older capture omitted them).
       mixGroups: Array.isArray(look.mixGroups) ? look.mixGroups : [],
+      // PERFORMANCE MODE: the globals bucket (shared ParamCenter params +
+      // effects/dimmers/blackout/invert/group-colors) captured on mode ENTRY
+      // so EXIT/restore can put the whole rig back, not just the mixer look.
+      // Additive + optional — a normal mixer snapshot omits it (null), and
+      // load() passes it through untouched, so this stays backward compatible
+      // with every pre-existing on-disk snapshot.
+      globals: (look.globals && typeof look.globals === 'object') ? look.globals : null,
     };
     this.stateManager.writeFileAtomic(this._filePath(safe), yaml.dump(out));
     return out;

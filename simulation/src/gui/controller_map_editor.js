@@ -35,6 +35,10 @@ import {
   CONTROLLER_TYPE_DMX,
   CONTROLLER_TYPE_LED,
   isLedController,
+  isBoundLedController,
+  controllerFixtureKind,
+  controllerAcceptsKind,
+  unmappedNamesByKind,
   setControllerType,
   CONTROLLER_PROTOCOL_SACN,
   CONTROLLER_PROTOCOL_ARTNET,
@@ -51,6 +55,19 @@ import {
 import { gatherAllConfigs, isGlobalEffect, getFootprint } from '../dmx/auto_patcher.js';
 import { showCustomConfirm } from './view_masks_editor.js';
 import { pinForCornerResize } from './panel_layout.js';
+import {
+  openLedDiscoveryPanel,
+  renderDeviceBindingSection,
+  refreshSyncChips,
+  deriveLayoutPreview,
+  startPushAll,
+} from './led_discovery_panel.js';
+import {
+  computeLedStrandPatches,
+  computeLedUniverseClaims,
+  projectLedStrandSegments,
+  validateLedManualUniverses,
+} from '../dmx/led/led_patch_projection.js';
 
 // ── Panel state ─────────────────────────────────────────────────────────
 
@@ -59,8 +76,17 @@ let trayFilter = '';
 let undoState = null;    // { snapshot, timer } — single-step undo (docs/33)
 let hoverRestore = null; // pending hover flash restore
 let lastProj = null;     // latest computeProjection result (universeEnds cache rides it)
+let lastLedWarnings = []; // latest validateLedManualUniverses result (Slice D warn chips)
+let lastLedClaims = new Map(); // latest computeLedUniverseClaims (LED occupancy in the bars)
 const collapsedControllers = new Set(); // controller ids
 const collapsedPorts = new Set();       // '<controllerId>:<portNum>' keys
+const collapsedGroups = new Set();      // 'DMX' | 'LED' — collapsed type sections
+
+// Operator-facing label for the LED controller type (Round 2 R3). The single
+// LED vendor today is MarsinLED; CONTROLLER_TYPE_LED / vendor 'marsinled' stay
+// the underlying identifiers (extensible for future vendors), but the UI reads
+// "MarsinLED" everywhere the type is named.
+const LED_TYPE_LABEL = 'MarsinLED';
 
 function registry() {
   // No fallback (codex P0): main.js installs the registry for every
@@ -97,8 +123,83 @@ function strandLedCounts() {
   return m;
 }
 
+/**
+ * The per-universe LED occupancy claim map (mirror of computeProjection's
+ * universeMaps, for LED strands). Bound strands come from the device-linear
+ * `computeLedStrandPatches` segments; unbound strands from the generic
+ * `computeLedProjection`. `computeLedProjection` covers ALL LED controllers, so
+ * strands already resolved by the bound path are dropped from the generic input
+ * — each strand claims exactly once.
+ * @returns {Map<number, Array<{start,end,name,controllerId,portNum?,led}>>}
+ */
+function ledUniverseClaims() {
+  const reg = registry();
+  if (!registryIsActive(reg)) return new Map();
+  const counts = strandLedCounts();
+  const bound = computeLedStrandPatches(reg, counts).fields;
+  const generic = computeLedProjection(reg, counts).fields;
+  const unbound = new Map();
+  for (const [name, rec] of generic) if (!bound.has(name)) unbound.set(name, rec);
+  return computeLedUniverseClaims(bound, unbound);
+}
+
+/**
+ * The operator-facing universe:channel SPAN string for a strand's segments —
+ * `U6:1–160` for a single universe, `U6:1 → U7:288` when it spills. PURE (no
+ * DOM), so it is unit-tested directly (led_segments_persistence.test.js).
+ * @param {Array<{universe,startChannel,endChannel}>} segments
+ * @returns {string} '' when there are no segments (unresolved).
+ */
+export function ledStrandSpanText(segments) {
+  if (!Array.isArray(segments) || segments.length === 0) return '';
+  const first = segments[0];
+  const last = segments[segments.length - 1];
+  if (segments.length === 1) {
+    return `U${first.universe}:${first.startChannel}–${first.endChannel}`;
+  }
+  return `U${first.universe}:${first.startChannel} → U${last.universe}:${last.endChannel}`;
+}
+
+/** Verbose per-segment tooltip: `U6 ch1–512 ×128px · U7 ch1–288 ×72px`. */
+export function ledStrandSpanTooltip(segments) {
+  if (!Array.isArray(segments) || segments.length === 0) return '';
+  return segments
+    .map((s) => `U${s.universe} ch${s.startChannel}–${s.endChannel} ×${s.pixelCount}px`)
+    .join(' · ');
+}
+
+/**
+ * Resolve a strand projection record (bound = carries `segments`; unbound =
+ * START-only `{universe,addr,stride,ledCount}`) into `{segments, px}` for the
+ * chip. Unbound records are walked with the shared segment walker so bound and
+ * unbound chips read identically.
+ */
+function strandSegmentsFor(rec) {
+  if (!rec) return null;
+  if (Array.isArray(rec.segments)) return { segments: rec.segments, px: rec.pixelCount };
+  const walk = projectLedStrandSegments(rec.universe, rec.addr, rec.stride, rec.ledCount);
+  return { segments: walk.segments, px: rec.ledCount };
+}
+
 function allConfigs() {
   return gatherAllConfigs(params).filter(c => c && typeof c.name === 'string' && c.name.length > 0);
+}
+
+/**
+ * Context handed to the LED discovery panel (plan P3): the primitives it needs
+ * to read the registry, run mutations through THIS panel's mutate()/undo/save
+ * pipeline, read strand counts, re-render, and toast — without importing the
+ * editor's private state.
+ */
+function ledCtx() {
+  return {
+    registry,
+    mutate,
+    strandLedCounts,
+    refresh: renderIfOpen,
+    showToast,
+    activeScene: () => window.__activeScene || 'default',
+  };
 }
 
 function configsByName() {
@@ -138,6 +239,19 @@ function recomputeAndMark() {
     window.__controllerViolations = [];
     console.warn('[Controllers] Last controller deleted — all fixtures returned to unpatched');
     mapperWasActive = false;
+  }
+  // LED strands carry their own device-linear patch records (plan P4) —
+  // re-derive them on every mapping change so a bound controller's strands
+  // auto-subscribe and persist alongside the DMX projection.
+  if (window.projectLedStrandPatches) window.projectLedStrandPatches();
+  // Spill-universe reservation (G4): reserve EVERY universe an LED strand
+  // streams into (start + spills) so a later addPort's nextFreeUniverse never
+  // hands out a universe an LED strand already occupies — the LED mirror of the
+  // DMX high-water contract (controller_registry noteUniverseUsed). Mutation-
+  // time only (projection functions stay pure); the registry save then persists
+  // nextUniverse past every LED spill.
+  if (registryIsActive(registry())) {
+    for (const u of ledUniverseClaims().keys()) noteUniverseUsed(registry(), u);
   }
   if (window.recomputePatchesActive) window.recomputePatchesActive();
   if (window.debounceAutoSave) window.debounceAutoSave();
@@ -294,21 +408,42 @@ function makeAllocator(universe) {
 }
 
 function unmappedNames() {
-  const mapped = mappedFixtures(registry());
-  return allConfigs().map(c => c.name).filter(name => !mapped.has(name));
+  return unmappedNamesByKind(registry(), allConfigs().map(c => c.name), []).fixtures;
 }
 
 /** Unmapped LED-strand names (the tray source when picking onto LED). */
 function unmappedStrandNames() {
-  const mapped = mappedFixtures(registry());
-  return strandList()
-    .map(s => s && s.name)
-    .filter(name => typeof name === 'string' && name.length > 0 && !mapped.has(name));
+  return unmappedNamesByKind(registry(), [], strandList().map(s => s && s.name)).strands;
+}
+
+/** The set of LED-strand names in the scene (for strict type gating). */
+function strandNameSet() {
+  const set = new Set();
+  for (const s of strandList()) {
+    if (s && typeof s.name === 'string' && s.name.length > 0) set.add(s.name);
+  }
+  return set;
+}
+
+/** Kind ('strand'|'fixture'|'unknown') of a mappable name, for cross-type guards. */
+function nameKind(name) {
+  return strandNameSet().has(name) ? 'strand' : 'fixture';
 }
 
 function violationsFor(violations, controller, port) {
   return violations.filter(v =>
     v.controllerId === controller.id && (port === null ? v.port === 0 : v.port === port.port));
+}
+
+/**
+ * LED manual-universe warnings (Slice D) for a controller (portNum === null ⇒
+ * controller-level, e.g. collisions at port 0) or a specific port. These are
+ * NON-BLOCKING advisories — the operator owns universe matching; the projection
+ * and every push proceed regardless (rendered as cm-warn-chip, not error).
+ */
+function ledWarningsFor(controllerId, portNum) {
+  return lastLedWarnings.filter(w =>
+    w.controllerId === controllerId && (portNum === null ? w.port === 0 : w.port === portNum));
 }
 
 // ── Rendering ───────────────────────────────────────────────────────────
@@ -324,15 +459,29 @@ function renderIfOpen() {
 function render() {
   const reg = registry();
   const proj = projection();
+  // Slice D: manual per-output universe warnings (unhonorable / collision /
+  // duplicate). Loud but non-blocking — rendered as warn chips on the cards.
+  lastLedWarnings = validateLedManualUniverses(reg, strandLedCounts(), proj.universeMaps);
+  // LED occupancy for the universe bars (G5): a DMX port whose universe also
+  // carries an LED stream renders the LED claim alongside its DMX claims.
+  lastLedClaims = ledUniverseClaims();
   const unmapped = unmappedNames();
+  const unmappedStrands = unmappedStrandNames();
+  const unmappedTotal = unmapped.length + unmappedStrands.length;
+  // Preserve the controllers scroll region across the full re-render. Collapsing
+  // a port/controller/group rebuilds the whole panel via renderIfOpen(); without
+  // this the pane jumps back to the top on every toggle.
+  const prevMainScroll = bodyEl.querySelector('.cm-main')?.scrollTop ?? 0;
   bodyEl.replaceChildren();
 
-  // Header status: the operator's "fully patched" signal (docs/33).
+  // Header status: the operator's "fully patched" signal (docs/33). LED
+  // strands are fixtures too — an unbound LED line must count as unmapped, so
+  // the panel never reads "fully patched" while a strand is still unpatched.
   if (!registryIsActive(reg)) {
     headerStatusEl.textContent = '';
     headerStatusEl.className = 'cm-header-status';
-  } else if (unmapped.length > 0) {
-    headerStatusEl.textContent = `Unmapped: ${unmapped.length} ⚠`;
+  } else if (unmappedTotal > 0) {
+    headerStatusEl.textContent = `Unmapped: ${unmappedTotal} ⚠`;
     headerStatusEl.className = 'cm-header-status cm-warn';
   } else if (proj.violations.length > 0) {
     headerStatusEl.textContent = `${proj.violations.length} violation(s) ⚠`;
@@ -409,12 +558,17 @@ function render() {
 
   main.appendChild(testRow);
 
-  for (const controller of reg.controllers) {
-    main.appendChild(renderController(controller, proj));
-  }
+  // Two independently-collapsible type sections (Round 2 R6): DMX controllers
+  // and MarsinLED controllers, split by controller.type. The Discover + Push-all
+  // buttons live in the MarsinLED group header.
+  const dmxControllers = reg.controllers.filter(c => !isLedController(c));
+  const ledControllers = reg.controllers.filter(c => isLedController(c));
+  main.appendChild(renderControllerGroup('DMX', 'DMX Controllers', dmxControllers, proj));
+  main.appendChild(renderControllerGroup('LED', `${LED_TYPE_LABEL} Controllers`, ledControllers, proj));
   bodyEl.appendChild(main);
+  main.scrollTop = prevMainScroll; // restore scroll after the rebuild (see above)
 
-  bodyEl.appendChild(renderTray(unmapped, proj));
+  bodyEl.appendChild(renderTray(unmapped, unmappedStrands, proj));
 
   // Save button — same contract as the Views panel save.
   const saveBtn = document.createElement('button');
@@ -436,6 +590,82 @@ function render() {
     'type any address to move a fixture (conflicts go red but stand), clear it to send it to ' +
     'the end. Saved to controllers.yaml, projected into patches.yaml.';
   bodyEl.appendChild(hint);
+}
+
+// ── Collapsible type group (DMX / MarsinLED) ────────────────────────────
+// Two sections, split by controller.type, each independently collapsible
+// (state persisted in collapsedGroups for the session, like
+// collapsedControllers). The MarsinLED header carries the Discover + Push-all
+// buttons. An empty group shows a muted hint (so Discover stays reachable with
+// zero LED controllers) rather than vanishing (Round 2 R6).
+
+function renderControllerGroup(kind, title, controllers, proj) {
+  const group = document.createElement('div');
+  group.className = `cm-group cm-group-${kind.toLowerCase()}`;
+
+  const head = document.createElement('div');
+  head.className = 'cm-group-head';
+
+  const isCollapsed = collapsedGroups.has(kind);
+  const toggleBtn = document.createElement('button');
+  toggleBtn.className = 'cm-toggle';
+  toggleBtn.textContent = isCollapsed ? '▸' : '▾';
+  toggleBtn.title = isCollapsed ? `Expand ${title}` : `Collapse ${title}`;
+  toggleBtn.onclick = () => {
+    if (isCollapsed) collapsedGroups.delete(kind);
+    else collapsedGroups.add(kind);
+    renderIfOpen();
+  };
+  head.appendChild(toggleBtn);
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'cm-group-title';
+  titleEl.textContent = `${title} (${controllers.length})`;
+  head.appendChild(titleEl);
+
+  // MarsinLED group header: Discover (create-only) + Push-all bound controllers.
+  if (kind === 'LED') {
+    const spacer = document.createElement('span');
+    spacer.className = 'cm-group-spacer';
+    head.appendChild(spacer);
+
+    const discoverBtn = document.createElement('button');
+    discoverBtn.className = 'cm-btn cm-discover-led';
+    discoverBtn.textContent = '🔍 Discover';
+    discoverBtn.title = 'Scan a subnet for MarsinLED LED-string controllers and create one from a device';
+    discoverBtn.onclick = () => openLedDiscoveryPanel(ledCtx(), { controller: null });
+    head.appendChild(discoverBtn);
+
+    const boundCount = controllers.filter(isBoundLedController).length;
+    const pushAllBtn = document.createElement('button');
+    pushAllBtn.className = 'cm-btn cm-push-all-led';
+    pushAllBtn.textContent = '⬆ Push all';
+    pushAllBtn.title = 'Push every BOUND MarsinLED controller sequentially (each device reboots)';
+    pushAllBtn.disabled = boundCount === 0;
+    pushAllBtn.onclick = () => startPushAll(ledCtx());
+    head.appendChild(pushAllBtn);
+  }
+  group.appendChild(head);
+
+  if (isCollapsed) return group;
+
+  if (controllers.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'cm-group-empty';
+    empty.textContent = kind === 'LED'
+      ? 'No MarsinLED controllers yet — Discover one, or add an LED controller.'
+      : 'No DMX controllers yet — “+ Add Controller” creates one.';
+    group.appendChild(empty);
+    return group;
+  }
+
+  const cards = document.createElement('div');
+  cards.className = 'cm-group-cards';
+  for (const controller of controllers) {
+    cards.appendChild(renderController(controller, proj));
+  }
+  group.appendChild(cards);
+  return group;
 }
 
 // ── Controller card ─────────────────────────────────────────────────────
@@ -491,13 +721,14 @@ function renderController(controller, proj) {
   const typeBtn = document.createElement('button');
   const isLed = isLedController(controller);
   typeBtn.className = 'cm-btn cm-type-toggle' + (isLed ? ' cm-type-led' : ' cm-type-dmx');
-  typeBtn.textContent = isLed ? 'LED' : 'DMX';
+  typeBtn.textContent = isLed ? LED_TYPE_LABEL : 'DMX';
   typeBtn.title = isLed
-    ? 'LED controller (patches LED strands). Click to switch to DMX.'
-    : 'DMX controller (patches DMX fixtures). Click to switch to LED.';
+    ? `${LED_TYPE_LABEL} controller (patches LED strands). Click to switch to DMX.`
+    : `DMX controller (patches DMX fixtures). Click to switch to ${LED_TYPE_LABEL}.`;
   typeBtn.onclick = () => {
     const next = isLed ? CONTROLLER_TYPE_DMX : CONTROLLER_TYPE_LED;
-    mutate(`Set '${controller.name}' to ${next}`, () => {
+    const nextLabel = next === CONTROLLER_TYPE_LED ? LED_TYPE_LABEL : 'DMX';
+    mutate(`Set '${controller.name}' to ${nextLabel}`, () => {
       setControllerType(controller, next);
     });
   };
@@ -571,6 +802,13 @@ function renderController(controller, proj) {
     chip.textContent = v.message;
     card.appendChild(chip);
   }
+  // Controller-level LED universe warnings (collisions) — non-blocking (Slice D).
+  for (const w of ledWarningsFor(controller.id, null)) {
+    const chip = document.createElement('span');
+    chip.className = 'cm-warn-chip';
+    chip.textContent = w.message;
+    card.appendChild(chip);
+  }
 
   // ── LED config sub-panel (LED controllers only) ────────────────────
   // Channel order (→ stride), start universe/address, and white mode.
@@ -598,15 +836,21 @@ function renderController(controller, proj) {
       });
     };
 
-    const uniInp = document.createElement('input');
-    uniInp.className = 'cm-input cm-num';
-    uniInp.type = 'number'; uniInp.min = '0';
-    uniInp.value = led.baseUniverse || 0;
-    uniInp.title = 'Base universe (0 = auto-allocate from the port universe)';
-    uniInp.onchange = () => {
-      const v = parseInt(uniInp.value, 10);
-      mutate(null, () => { led.baseUniverse = Number.isInteger(v) && v >= 0 ? v : 0; });
-    };
+    // Per-output firmware (operator ruling 2026-07-10/11): there is no single
+    // base universe any more — each output streams its OWN port.universe @1.
+    // This readout shows the FIRST mapped output's universe purely as a visual
+    // anchor (the legacy firstEnabledPortUniverse helper was removed with the
+    // linear path); the real per-output universes live on the port rows below.
+    const firstMapped = (controller.ports || []).find(
+      (p) => Array.isArray(p.chain) && p.chain.length > 0 &&
+        Number.isInteger(p.universe) && p.universe >= 1);
+    const baseOut = document.createElement('span');
+    baseOut.className = 'cm-led-base';
+    baseOut.textContent = firstMapped ? `U${firstMapped.universe}` : '—';
+    baseOut.title = firstMapped
+      ? `First mapped output (P${firstMapped.port}) streams U${firstMapped.universe}. ` +
+        'Per-output firmware: edit each output\'s universe on its port row below.'
+      : 'No mapped output yet — assign a strand to a port; each output streams its own universe.';
 
     const addrInp = document.createElement('input');
     addrInp.className = 'cm-input cm-num';
@@ -644,10 +888,15 @@ function renderController(controller, proj) {
     strideOut.className = 'cm-led-stride';
     strideOut.textContent = String(led.stride);
     cfg.appendChild(strideOut);
-    cfg.appendChild(lbl('U')); cfg.appendChild(uniInp);
+    cfg.appendChild(lbl('base')); cfg.appendChild(baseOut);
     cfg.appendChild(lbl('@')); cfg.appendChild(addrInp);
     cfg.appendChild(whiteSel);
     card.appendChild(cfg);
+
+    // Device binding: identity + sync chip + Push (bound), or a Discover/bind
+    // button (unbound). All device I/O lives in led_discovery_panel.
+    const deviceSection = renderDeviceBindingSection(ledCtx(), controller);
+    if (deviceSection) card.appendChild(deviceSection);
   }
 
   if (isCollapsed) {
@@ -693,13 +942,46 @@ function renderLedPort(controller, port, proj) {
   };
   head.appendChild(toggleBtn);
 
-  const led = controller.led || normalizeLedConfig(null, controller.name);
-  const baseU = (led.baseUniverse && led.baseUniverse > 0) ? led.baseUniverse : port.universe;
   const strandCount = port.chain.filter(e => entryFixtureName(e) !== null).length;
   const label = document.createElement('span');
   label.className = 'cm-port-label';
-  label.textContent = `P${port.port} · U${baseU} · ${strandCount} strand(s)`;
+  label.textContent = `P${port.port} · U`;
   head.appendChild(label);
+
+  // Per-output universe is MANUAL and EDITABLE (Slice D): the operator declares
+  // each output's universe; the device is single-base linear, so the FIRST
+  // ENABLED output's universe is the base and the projection/push warn loudly
+  // (never block) on any output the device can't honor.
+  const uniInp = document.createElement('input');
+  uniInp.className = 'cm-input cm-num';
+  uniInp.type = 'number';
+  uniInp.min = '1';
+  uniInp.max = String(MAX_UNIVERSE);
+  uniInp.value = port.universe;
+  uniInp.title = `Manual per-output universe (1–${MAX_UNIVERSE}). The device streams one ` +
+    'contiguous layout from the first enabled output; a universe it cannot honor is flagged, ' +
+    'not overridden.';
+  uniInp.onchange = () => {
+    const next = parseInt(uniInp.value, 10);
+    if (!Number.isInteger(next) || next < 1 || next > MAX_UNIVERSE) {
+      showToast(`Universe must be 1–${MAX_UNIVERSE}`, { error: true, ttl: 5000 });
+      uniInp.value = port.universe;
+      return;
+    }
+    if (next === port.universe) return;
+    mutate(null, () => {
+      port.universe = next;
+      // Manual universes move the allocation high-water mark so a later addPort
+      // never hands this universe out again.
+      noteUniverseUsed(registry(), next);
+    });
+  };
+  head.appendChild(uniInp);
+
+  const strandsLbl = document.createElement('span');
+  strandsLbl.className = 'cm-port-label cm-port-strandcount';
+  strandsLbl.textContent = ` · ${strandCount} strand(s)`;
+  head.appendChild(strandsLbl);
 
   const delBtn = document.createElement('button');
   delBtn.className = 'cm-btn cm-danger';
@@ -729,10 +1011,24 @@ function renderLedPort(controller, port, proj) {
     chip.textContent = v.message;
     row.appendChild(chip);
   }
+  // Manual per-output universe warnings for THIS output (unhonorable / duplicate)
+  // — loud but non-blocking (Slice D).
+  for (const w of ledWarningsFor(controller.id, port.port)) {
+    const chip = document.createElement('span');
+    chip.className = 'cm-warn-chip';
+    chip.textContent = w.message;
+    row.appendChild(chip);
+  }
 
   if (!portCollapsed) {
-    // Per-strand address preview from the live LED projection.
-    const ledProj = computeLedProjection(registry(), strandLedCounts()).fields;
+    // Per-strand address preview. A DEVICE-BOUND controller renders with the
+    // firmware's contiguous linear layout (led_patch_projection) so the chips
+    // agree with the hardware; an unbound controller uses the sim's generic
+    // per-port projection (computeLedProjection).
+    const bound = isBoundLedController(controller);
+    const ledProj = bound
+      ? computeLedStrandPatches(registry(), strandLedCounts()).fields
+      : computeLedProjection(registry(), strandLedCounts()).fields;
     const chain = document.createElement('div');
     chain.className = 'cm-chain';
     for (const entry of port.chain) {
@@ -741,8 +1037,12 @@ function renderLedPort(controller, port, proj) {
       const chip = document.createElement('span');
       chip.className = 'cm-chip cm-chip-strand';
       const p = ledProj.get(name);
-      const addr = p ? ` U${p.universe}:${p.addr} ×${p.ledCount}px ${p.order}` : ' (unresolved)';
+      const info = strandSegmentsFor(p);
+      // Multi-universe strands render the full span (U6:1 → U7:288); a strand
+      // inside one universe keeps the U6:1–160 form (G5).
+      const addr = info ? ` ${ledStrandSpanText(info.segments)} ×${info.px}px` : ' (unresolved)';
       chip.textContent = `💡 ${name}${addr}`;
+      if (info) chip.title = ledStrandSpanTooltip(info.segments);
       const unbind = document.createElement('button');
       unbind.className = 'cm-chip-x';
       unbind.textContent = '×';
@@ -758,6 +1058,26 @@ function renderLedPort(controller, port, proj) {
       chain.appendChild(empty);
     }
     row.appendChild(chain);
+
+    // Read-only derived-layout line (plan P3): the per-output span for THIS
+    // output from deriveLayoutPreview's per-output walker, live-updating with
+    // chain edits.
+    const preview = deriveLayoutPreview(controller, strandLedCounts());
+    const derivedLine = document.createElement('div');
+    derivedLine.className = 'cm-led-derived';
+    const out = preview.perOutput.get(port.port - 1);
+    if (preview.error) {
+      derivedLine.classList.add('cm-led-derived-warn');
+      derivedLine.textContent = `⌁ output ${port.port}: ${preview.error}`;
+    } else if (out && out.enabled) {
+      const span = out.endUniverse === out.universe
+        ? `U${out.universe} ch ${out.startChannel}–${out.endChannel}`
+        : `U${out.universe} ch ${out.startChannel} → U${out.endUniverse} ch ${out.endChannel}`;
+      derivedLine.textContent = `⌁ output ${port.port}: ${span} · ${out.pixelCount}px`;
+    } else {
+      derivedLine.textContent = `⌁ output ${port.port}: disabled (no strands)`;
+    }
+    row.appendChild(derivedLine);
 
     const addBtn = document.createElement('button');
     addBtn.className = 'cm-btn cm-add-strand';
@@ -869,6 +1189,22 @@ function renderPort(controller, port, proj) {
     seg.style.width = `${Math.max(segWidth, 0.6)}%`;
     seg.title = `${c.name || `${width}-ch gap`} @ ${c.start}–${c.end} ` +
       `(${c.controllerName} P${c.portNum})` + (c.item.conflict ? ' ⚠ CONFLICT' : '');
+    bar.appendChild(seg);
+  }
+  // LED occupancy (G5): any LED strand streaming into THIS universe renders as
+  // a distinct-tint claim so the operator SEES a DMX port sharing a universe
+  // with an LED stream (the led_universe_collision warnings stay the loud path;
+  // DMX allocation math is unchanged — S4 warn-never-block).
+  for (const c of lastLedClaims.get(port.universe) || []) {
+    const width = c.end - c.start + 1;
+    const seg = document.createElement('div');
+    seg.className = 'cm-occ-seg cm-occ-led';
+    const left = Math.min(100, ((c.start - 1) / DMX_UNIVERSE_SIZE) * 100);
+    const segWidth = Math.min(100 - left, (width / DMX_UNIVERSE_SIZE) * 100);
+    seg.style.left = `${left}%`;
+    seg.style.width = `${Math.max(segWidth, 0.6)}%`;
+    seg.title = `💡 ${c.name} @ ${c.start}–${c.end} (LED controller ${c.controllerId}` +
+      `${c.portNum ? ` P${c.portNum}` : ''})`;
     bar.appendChild(seg);
   }
   head.appendChild(bar);
@@ -1198,6 +1534,22 @@ function renderPortActions(controller, port, layout, isEffectsPort, isPicking) {
 function addNamesToPort(controller, port, names) {
   const snapshot = snapshotRegistry();
 
+  // ── Strict type gating (Round 2 R2) ─────────────────────────────────
+  // An LED controller accepts ONLY LED strands; a DMX controller accepts
+  // ONLY DMX fixtures — across EVERY add path (+ sel / + list / + add
+  // strands). A name whose kind doesn't match the target is refused
+  // loudly and never mapped (codex P0 — no silent cross-type mis-map).
+  const accepted = [];
+  const wrongType = [];
+  for (const name of names) {
+    if (controllerAcceptsKind(controller, nameKind(name))) accepted.push(name);
+    else wrongType.push(name);
+  }
+  const wrongTypeMsg = wrongType.length > 0
+    ? `Refused ${wrongType.length} (${controllerFixtureKind(controller) === 'strand'
+      ? 'not an LED strand' : 'not a DMX fixture'}): ${wrongType.join(', ')}`
+    : null;
+
   // ── LED controllers: bind strands (no DMX address allocation) ───────
   // LED strands are addressed sequentially by the LED projection at
   // export time (computeLedProjection), so the chain only records WHICH
@@ -1207,7 +1559,7 @@ function addNamesToPort(controller, port, names) {
     const mappedLed = mappedFixtures(registry());
     const addedLed = [];
     const rejectedLed = [];
-    for (const name of names) {
+    for (const name of accepted) {
       const hit = mappedLed.get(name);
       if (hit) {
         rejectedLed.push({ name, where: `${hit.controller.name} · Port ${hit.port.port}` });
@@ -1219,9 +1571,13 @@ function addNamesToPort(controller, port, names) {
     }
     recomputeAndMark();
     renderIfOpen();
+    const parts = [];
+    if (wrongTypeMsg) parts.push(wrongTypeMsg);
     if (rejectedLed.length > 0) {
-      showToast(`Rejected (already mapped): ${rejectedLed.map(r => `${r.name} → ${r.where}`).join(', ')}`,
-        { error: true, undoSnapshot: addedLed.length > 0 ? snapshot : null });
+      parts.push(`already mapped: ${rejectedLed.map(r => `${r.name} → ${r.where}`).join(', ')}`);
+    }
+    if (parts.length > 0) {
+      showToast(parts.join(' · '), { error: true, undoSnapshot: addedLed.length > 0 ? snapshot : null });
     } else if (addedLed.length > 0) {
       showToast(`Bound ${addedLed.length} strand(s) to ${controller.name} · Port ${port.port}`,
         { undoSnapshot: snapshot });
@@ -1235,7 +1591,7 @@ function addNamesToPort(controller, port, names) {
   const allocate = makeAllocator(port.universe);
   const added = [];
   const rejected = [];
-  for (const name of names) {
+  for (const name of accepted) {
     const hit = mapped.get(name);
     if (hit) {
       rejected.push({ name, where: `${hit.controller.name} · Port ${hit.port.port}` });
@@ -1266,11 +1622,15 @@ function addNamesToPort(controller, port, names) {
   }
   recomputeAndMark();
   renderIfOpen();
+  const parts = [];
+  if (wrongTypeMsg) parts.push(wrongTypeMsg);
   if (rejected.length > 0) {
     // Loud per docs/33: name them and where they live — never silently
     // skipped, never silently moved.
-    showToast(`Rejected (already mapped): ${rejected.map(r => `${r.name} → ${r.where}`).join(', ')}`,
-      { error: true, undoSnapshot: added.length > 0 ? snapshot : null });
+    parts.push(`already mapped: ${rejected.map(r => `${r.name} → ${r.where}`).join(', ')}`);
+  }
+  if (parts.length > 0) {
+    showToast(parts.join(' · '), { error: true, undoSnapshot: added.length > 0 ? snapshot : null });
   } else if (added.length > 0) {
     showToast(`Added ${added.length} to ${controller.name} · Port ${port.port}`,
       { undoSnapshot: snapshot });
@@ -1349,7 +1709,7 @@ function runClearAllPatches() {
 
 // ── Unmapped tray ───────────────────────────────────────────────────────
 
-function renderTray(unmapped, proj) {
+function renderTray(unmapped, unmappedStrands, proj) {
   // Resolve (and possibly invalidate) the pick target BEFORE the
   // picking style is derived — a dangling target must not leave the
   // tray rendered in pick mode for one frame.
@@ -1382,7 +1742,12 @@ function renderTray(unmapped, proj) {
     title.textContent = `adding to ${pickController.name} · Port ${pickPort.port} ` +
       `(U${pickPort.universe}) — next: ch ${nextCh}`;
   } else {
-    title.textContent = `Unmapped fixtures (${unmapped.length})`;
+    // Default (non-picking) view lists BOTH unmapped DMX fixtures and unmapped
+    // LED strands (Round 2 R1) — a strand must never be invisible just because
+    // no LED controller exists yet.
+    title.textContent = unmappedStrands.length > 0
+      ? `Unmapped — ${unmapped.length} fixture(s), ${unmappedStrands.length} strand(s)`
+      : `Unmapped fixtures (${unmapped.length})`;
   }
   head.appendChild(title);
 
@@ -1473,12 +1838,31 @@ function renderTray(unmapped, proj) {
       chips.appendChild(chip);
       shown++;
     }
+
+    // Default view: also list unmapped LED strands (💡) so they are visible
+    // even with no LED controller present (Round 2 R1). Strands are not in the
+    // 3D fixture list, so these chips are informational (no locate); picking a
+    // strand onto an output happens through an LED controller's port.
+    if (!pickPort) {
+      for (const name of unmappedStrands) {
+        if (needle && !name.toLowerCase().includes(needle)) continue;
+        const chip = document.createElement('span');
+        chip.className = 'cm-tray-chip cm-tray-strand';
+        chip.textContent = '💡 ' + name;
+        chip.title = `Unmapped LED strand '${name}' — add/select a ${LED_TYPE_LABEL} controller, ` +
+          'then pick this strand onto one of its outputs.';
+        chips.appendChild(chip);
+        shown++;
+      }
+    }
+
     if (shown === 0) {
       const done = document.createElement('div');
       done.className = 'cm-fully-patched';
+      const bothEmpty = unmapped.length === 0 && unmappedStrands.length === 0;
       done.textContent = (pickPort && pickingLed)
         ? (unmappedStrandNames().length === 0 ? '✓ every strand is mapped' : '(no matches)')
-        : (unmapped.length === 0 ? '✓ every fixture is mapped' : '(no matches)');
+        : (bothEmpty ? '✓ every fixture & strand is mapped' : '(no matches)');
       chips.appendChild(done);
     }
   }
@@ -1514,7 +1898,8 @@ function showAddControllerModal() {
   // LED controllers default their config to RGBW/native.
   const typeSel = document.createElement('select');
   typeSel.className = 'vm-modal-input';
-  for (const [val, lbl] of [[CONTROLLER_TYPE_DMX, 'DMX (fixtures)'], [CONTROLLER_TYPE_LED, 'LED (strands)']]) {
+  for (const [val, lbl] of [[CONTROLLER_TYPE_DMX, 'DMX (fixtures)'],
+    [CONTROLLER_TYPE_LED, `${LED_TYPE_LABEL} (LED strands)`]]) {
     const opt = document.createElement('option');
     opt.value = val; opt.textContent = lbl;
     typeSel.appendChild(opt);
@@ -1635,6 +2020,9 @@ export function setupControllerMapEditor() {
     if (!panelEl.classList.contains('hidden')) {
       pickTarget = null;
       render();
+      // Recompute the sync chip for every bound LED controller on open (one
+      // getConfig+getStatus each; no background polling — plan P3).
+      refreshSyncChips(ledCtx());
     } else {
       dismissToast();
     }

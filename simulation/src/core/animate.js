@@ -3,7 +3,7 @@
  */
 import chroma from "chroma-js";
 import {
-  controls, composer, params,
+  controls, composer, renderer, params,
   frameCount, lastFpsTime, setFrameCount, setLastFpsTime,
   lightingEnabled, lightingMode, engineReady, engineEnabled,
   scene, selectedFixtureIndices, selectedDmxIndices
@@ -18,9 +18,42 @@ import { scaleSimulationPreviewRgb } from "./sim_preview.js";
 import PatchManager from "../dmx/patch_manager.js";
 import { engineHttpUrl } from "./engine_endpoint.js";
 import { applyFixtureOutputOverrides } from "../dmx/dmx_output_overrides.js";
+import { blendRgbwau } from "./rgbwau_blend.js";
+import { entryPaintsDirect } from "./render_paint_rule.js";
 // sACN output — lazily initialized
 let sacnOutputClient = null;
 let sacnOutputEnabled = false;
+
+// ─── Per-frame pixel observers (2D Pixel Map, future taps) ────────────────
+// Listeners fire once per rendered frame AFTER every color source has written
+// r/g/b/w/a/u onto the entries — so a subscriber sees exactly what the 3D GPU
+// flush saw. Kept a Set so subscribe/unsubscribe is O(1).
+const _pixelFrameListeners = new Set();
+
+/**
+ * Subscribe to the per-frame pixel list. `fn(list, builtVersion)` is called
+ * once per rendered frame; `list` is the live _batchRenderList (or null when
+ * there are no pixels), `builtVersion` bumps whenever topology is rebuilt.
+ * Returns an unsubscribe function.
+ */
+export function onPixelFrame(fn) {
+  _pixelFrameListeners.add(fn);
+  return () => _pixelFrameListeners.delete(fn);
+}
+
+function _dispatchPixelFrame() {
+  if (_pixelFrameListeners.size === 0) return;
+  for (const fn of _pixelFrameListeners) {
+    try {
+      fn(_batchRenderList, _batchLastBuiltVersion);
+    } catch (err) {
+      // Never let a listener bug kill the 3D render loop. Drop the offender
+      // (its view visibly freezes — that IS the loud failure) and keep going.
+      console.error('[PixelFrame] listener threw — unsubscribed (fix the listener):', err);
+      _pixelFrameListeners.delete(fn);
+    }
+  }
+}
 
 // Warning banner + patch state managed by PatchManager (../dmx/patch_manager.js)
 
@@ -58,6 +91,8 @@ const _pixelTransformObj = new THREE.Object3D(); // For easy local-to-world extr
 // matrices every frame (membership can change live via Assign/Unassign),
 // and run exactly one restore pass when isolation exits.
 let _isolationWasActive = false;
+// Tracks headless (2d_pixels) enter/exit so we toggle the 3D canvas once.
+let _headlessLatched = false;
 
 /** Increment cache version — call when topology, position, or metadata changes. */
 window.invalidateMarsinBatchCache = function(reason) {
@@ -229,6 +264,26 @@ export function animate() {
     setLastFpsTime(now);
   }
 
+  // Headless (2d_pixels) profile: run the engine + DMX + 2D pixel tap, but
+  // skip every per-frame GPU 3D operation (scene render, bloom, shadows,
+  // spotlight pool, instanced-dot flush, fixture visuals) so the sim runs
+  // light on a no-GPU box. Color computation for pixels/sACN still happens.
+  const _headless = !!getProfileDef(params.lightingProfile).headless;
+
+  // Headless (2d_pixels) enter/exit — the single, authoritative switch between
+  // the 3D view and the 2D Pixel Map (the profile dropdown handler doesn't call
+  // onLightingChange, so this per-frame latch is what makes EVERY entry path —
+  // dropdown, URL, boot — behave). On enter: hide the 3D canvas (page goes truly
+  // black, body is #000) at ZERO GPU cost and show the full-screen 2D map. On
+  // exit: un-hide the canvas (composer.render() resumes next frame) and hide the
+  // 2D map — the 3D vis comes right back. No renderer guard: it exists before
+  // the first frame (a missing one is a boot bug that must crash, per repo P0).
+  if (_headless !== _headlessLatched) {
+    renderer.domElement.style.display = _headless ? 'none' : '';
+    if (window.showPixelMap2d) window.showPixelMap2d(_headless);
+    _headlessLatched = _headless;
+  }
+
   // ─── Gradient Mode (chroma.js LAB interpolation) ───
   if (lightingEnabled && lightingMode === 'gradient' && getProfileDef(params.lightingProfile).mappingEnabled) {
     const scale = getChromaScale();
@@ -246,8 +301,9 @@ export function animate() {
          const [r, g, b] = scale(phase).gl();
          entry.r = r; entry.g = g; entry.b = b;
          entry.w = 0; entry.a = 0; entry.u = 0; // standard colors
-         // Direct mode only (all unpatched) — when patches active, DMX router handles it
-         if (!window._patchesActive && entry.apply) entry.apply(r, g, b);
+         // Direct-paint when unpatched OR an LED strand (LEDs have no wire
+         // read-back — see render_paint_rule.js). Headless skips the visual write.
+         if (entryPaintsDirect(entry, window._patchesActive) && entry.apply && !_headless) entry.apply(r, g, b);
       }
     }
   }
@@ -280,11 +336,12 @@ export function animate() {
         entry.r = R / 255; entry.g = G / 255; entry.b = B / 255;
         entry.w = W / 255; entry.a = A / 255; entry.u = U / 255;
 
-        // Direct mode only (all unpatched) — when patches active, DMX router handles it
-        if (!window._patchesActive && entry.apply) {
-          const rn = Math.min(1, entry.r + entry.w * 0.8 + entry.a * 0.9 + entry.u * 0.4);
-          const gn = Math.min(1, entry.g + entry.w * 0.8 + entry.a * 0.6);
-          const bn = Math.min(1, entry.b + entry.w * 0.8 + entry.u * 0.7);
+        // Direct-paint when unpatched OR an LED strand (LEDs have no wire
+        // read-back — see render_paint_rule.js). When a DMX entry is patched the
+        // DMX router path repaints it from the universe buffer instead.
+        // Headless skips the visual write (nothing renders); colors still stored above.
+        if (entryPaintsDirect(entry, window._patchesActive) && entry.apply && !_headless) {
+          const [rn, gn, bn] = blendRgbwau(entry.r, entry.g, entry.b, entry.w, entry.a, entry.u);
           entry.apply(rn, gn, bn);
         }
       }
@@ -301,7 +358,9 @@ export function animate() {
         const entry = _batchRenderList[i];
         entry.r = 0; entry.g = 0; entry.b = 0;
         entry.w = 0; entry.a = 0; entry.u = 0;
-        if (!window._patchesActive && entry.apply) {
+        // Clear the visual too — LED strands included, so a patched strand goes
+        // black when lighting is disabled instead of freezing (see render_paint_rule.js).
+        if (entryPaintsDirect(entry, window._patchesActive) && entry.apply && !_headless) {
           entry.apply(0, 0, 0);
         }
       }
@@ -370,7 +429,7 @@ export function animate() {
 
   // ─── V2 InstancedMesh Raw Flush ─────────────────────────
   // Streams all colors computed in the current frame straight to GPU
-  if (_pixelInstancedMesh && getProfileDef(params.lightingProfile).mappingEnabled) {
+  if (_pixelInstancedMesh && getProfileDef(params.lightingProfile).mappingEnabled && !_headless) {
      const count = _batchRenderList.length;
      const activeView = window.__activePreviewView;
      // Update instance matrices while isolating (and once on exit to
@@ -396,9 +455,7 @@ export function animate() {
          if (!isIsolated) {
             if (!window._patchesActive) {
                // All-unpatched direct mode: show pattern colors
-               rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
-               gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
-               bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
+               [rn, gn, bn] = blendRgbwau(entry.r, entry.g, entry.b, entry.w, entry.a, entry.u);
             } else if (!entry.patch || !entry.patch.universe || entry.patch.universe <= 0) {
                // Mixed mode: unpatched pixels stay black — unless the operator
                // has enabled the unpatched-red overlay (a sim-only diagnostic;
@@ -406,9 +463,7 @@ export function animate() {
                if (params.showUnpatchedRed) { rn = 0.8; gn = 0; bn = 0; }
                else { rn = 0; gn = 0; bn = 0; }
             } else {
-               rn = Math.min(1, (entry.r||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.9 + (entry.u||0) * 0.4);
-               gn = Math.min(1, (entry.g||0) + (entry.w||0) * 0.8 + (entry.a||0) * 0.6);
-               bn = Math.min(1, (entry.b||0) + (entry.w||0) * 0.8 + (entry.u||0) * 0.7);
+               [rn, gn, bn] = blendRgbwau(entry.r, entry.g, entry.b, entry.w, entry.a, entry.u);
             }
          }
         
@@ -430,15 +485,22 @@ export function animate() {
      _pixelInstancedMesh.visible = false;
   }
 
-  // Always run visual animations of fixtures regardless of DMX mode
+  // ─── Per-frame pixel observers (2D Pixel Map) ───
+  // Entries' r/g/b/w/a/u are final for the frame at this point (every color
+  // source and the GPU flush have run); hand them to any live 2D taps.
+  _dispatchPixelFrame();
+
+  // Visual animations of fixtures — skipped in headless (nothing renders).
   const updateVisuals = (fixtureList) => {
     if (!fixtureList) return;
     for (const fixture of fixtureList) {
       if (fixture && fixture.update) fixture.update();
     }
   };
-  updateVisuals(window.dmxSceneFixtures);
-  updateVisuals(window.parFixtures);
+  if (!_headless) {
+    updateVisuals(window.dmxSceneFixtures);
+    updateVisuals(window.parFixtures);
+  }
 
   // ─── Unpatched-red overlay (sim-only diagnostic) ───
   // Tints the bodies of fixtures with no valid DMX patch red so the
@@ -528,8 +590,11 @@ export function animate() {
   }
 
   // ─── SpotLight Pool Orchestrator ───
-  // Assigns the 10 closest-to-camera pixels to the pre-allocated SpotLight pool
-  updateLightPool();
-
-  composer.render();
+  // Assigns the 10 closest-to-camera pixels to the pre-allocated SpotLight pool.
+  // In headless (2d_pixels) we skip the spotlight pool AND the composer render
+  // entirely — this is the bulk of the GPU cost we're cutting for the Pi.
+  if (!_headless) {
+    updateLightPool();
+    composer.render();
+  }
 }

@@ -1,0 +1,23 @@
+views:
+  groupBits:
+    Left Vintage: 1
+    Back Vintage: 2
+    Right Vintage: 4
+    Left Bar: 8
+    Back Bar: 16
+    Right Bar: 32
+  custom:
+    - name: vintages
+      bit: 64
+      word: 0
+      groups:
+        - Left Vintage
+        - Back Vintage
+        - Right Vintage
+    - name: bars
+      bit: 128
+      word: 0
+      groups:
+        - Left Bar
+        - Back Bar
+        - Right Bar

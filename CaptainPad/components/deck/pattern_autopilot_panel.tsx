@@ -26,6 +26,7 @@ import {
   SwapCountdown,
   DeckTransitionControls,
 } from '@/components/DeckTransitionControls';
+import { AutopilotProfilePicker } from '@/components/deck/autopilot_profile_picker';
 
 /** The nested DECK TX config the panel forwards verbatim to
  *  <DeckTransitionControls>. Same shape as api.ts's DeckTransitionConfig, but
@@ -46,6 +47,9 @@ export interface PatternAutopilotPatch {
   groupMode?: boolean;
   groupSize?: number;
   groupDwell?: number;
+  /** Active autopilot PROFILE id (engine `playlist.autopilot.profile`). Emitted
+   *  by the PROFILE dropdown; the parent maps it onto setAutopilotProfile(). */
+  profile?: string;
 }
 
 export interface PatternAutopilotPanelProps {
@@ -63,6 +67,13 @@ export interface PatternAutopilotPanelProps {
   groupSize: number;
   /** Swaps to linger in a group window before grabbing a fresh one. */
   groupDwell: number;
+  /** Active autopilot PROFILE id (engine `playlist.autopilot.profile`). When
+   *  `profiles` is provided a PROFILE dropdown renders under the header; when
+   *  omitted (e.g. the cue editor reuse) no profile row shows. */
+  profile?: string;
+  /** Selectable profile ids (engine `AUTOPILOT_PROFILES`). The PROFILE row
+   *  renders only when this is a non-empty array. */
+  profiles?: string[];
   /** Absolute wall-clock ms of the next pattern swap (null when none scheduled).
    *  Rendered by the self-ticking <SwapCountdown>. */
   nextSwapAtMs?: number | null;
@@ -94,6 +105,8 @@ export const PatternAutopilotPanel: React.FC<PatternAutopilotPanelProps> = ({
   groupMode,
   groupSize,
   groupDwell,
+  profile,
+  profiles,
   nextSwapAtMs,
   onChange,
   deckTx,
@@ -120,9 +133,9 @@ export const PatternAutopilotPanel: React.FC<PatternAutopilotPanelProps> = ({
       {/* Header sits on the SAME row as PLAY/PAUSE + SHUFFLE + GROUP so it costs
           zero extra vertical height — the label rides the baseline of the
           tallest control next to it. */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>{title}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 6, columnGap: 8 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', flexShrink: 1 }}>{title}</Text>
           {/* Next-pattern-swap countdown — rides right after the label, only
               while a swap is scheduled. Self-ticking (its own 1 Hz interval) so
               it never re-renders the deck screen; reads identically whether the
@@ -139,7 +152,7 @@ export const PatternAutopilotPanel: React.FC<PatternAutopilotPanelProps> = ({
           </TouchableOpacity>
         </View>
 
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 0 }}>
           <TouchableOpacity
             onPress={() => { onInteraction?.(); onChange({ shuffle: !shuffle }); }}
             style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8 }}
@@ -164,6 +177,29 @@ export const PatternAutopilotPanel: React.FC<PatternAutopilotPanelProps> = ({
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* PROFILE row — the active autopilot behaviour (engine
+          `playlist.autopilot.profile`). Sits directly under the header so the
+          operator reads it as "what KIND of autopilot" before the cadence /
+          shuffle / group knobs that tune it. Only rendered when the parent
+          supplies the profile list (the deck does; the cue-editor reuse omits
+          it, so no profile row appears there). A tiny caps label mirrors the
+          TimerPillBar `label` recipe so the row reads consistently. */}
+      {profiles && profiles.length ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, letterSpacing: 1.2,
+            color: C.icon, textTransform: 'uppercase',
+          }}>
+            PROFILE
+          </Text>
+          <AutopilotProfilePicker
+            profile={profile ?? 'random'}
+            profiles={profiles}
+            onSelect={(id) => { onInteraction?.(); onChange({ profile: id }); }}
+          />
+        </View>
+      ) : null}
 
       {/* Row 2: timer pill-bar */}
       <AutopilotTimerPills

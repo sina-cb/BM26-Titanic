@@ -50,6 +50,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const ENGINE_BASE = 'http://127.0.0.1:6968';
 const WS_URL = 'ws://127.0.0.1:6968';
 const DEFAULT_DURATION_MS = 1000;
@@ -184,6 +186,10 @@ async function main() {
     return 1;
   }
   const [A, B] = overlays.map(c => c.id);
+
+  // Refuse to mutate a non-disposable engine BEFORE any transition/PATCH.
+  await assertDisposableEngine(ENGINE_BASE);
+
   cleanupState.started = true;
   cleanupState.originalChannels = overlays.slice(0, 2);
   installSignalCleanup();

@@ -37,6 +37,10 @@ export interface ConfirmSheetProps {
   confirmLabel?: string;
   /** Label for the safe escape button. Defaults to "CANCEL". */
   cancelLabel?: string;
+  /** Optional extra content rendered between the message and the button row —
+   *  e.g. the performance-mode sheet's "PRESS SOLO AGAIN TO GO LIVE" MIDI
+   *  controller affordance. Omitted → the sheet renders exactly as before. */
+  extra?: React.ReactNode;
   /** Fired when the operator confirms the destructive action. */
   onConfirm: () => void;
   /** Fired on cancel button, backdrop tap, or hardware back. */
@@ -49,6 +53,7 @@ export const ConfirmSheet: React.FC<ConfirmSheetProps> = ({
   message,
   confirmLabel = 'DELETE',
   cancelLabel = 'CANCEL',
+  extra,
   onConfirm,
   onCancel,
 }) => {
@@ -70,6 +75,7 @@ export const ConfirmSheet: React.FC<ConfirmSheetProps> = ({
               <Text style={styles.title}>{title}</Text>
             </View>
             <Text style={styles.message}>{message}</Text>
+            {extra ?? null}
             <View style={styles.btnRow}>
               <TouchableOpacity
                 style={[styles.btn, styles.cancelBtn]}

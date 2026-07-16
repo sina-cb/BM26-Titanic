@@ -3,6 +3,7 @@ import path from 'path';
 import yaml from 'js-yaml';
 
 import { validateModulationMapping } from './modulation_engine.js';
+import { validateMidiMapping } from './midi_mapping_engine.js';
 
 const VALID_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const VALID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}(\/[a-z0-9][a-z0-9_-]{0,63})?$/;
@@ -180,6 +181,7 @@ export class PlaylistManager {
         label: typeof entry.label === 'string' ? entry.label : null,
         defaults: (entry.defaults && typeof entry.defaults === 'object') ? entry.defaults : {},
         modulations: this._coerceModulations(name, entry),
+        midiMappings: this._coerceMidiMappings(name, entry),
         notes: typeof entry.notes === 'string' ? entry.notes : null,
       };
       if (!this.patternExists(coerced.pattern)) coerced._missing = true;
@@ -242,12 +244,28 @@ export class PlaylistManager {
           seenTargets.add(v.target.parameter);
           validatedMods.push(v);
         }
+        // MIDI mappings: same strict-on-save policy as modulations, and the
+        // same one-per-target rule (a local param is driven by ONE fader).
+        const midi = Array.isArray(e.midiMappings) ? e.midiMappings : [];
+        const validatedMidi = [];
+        const seenMidiTargets = new Set();
+        for (const m of midi) {
+          const v = validateMidiMapping(m);
+          if (seenMidiTargets.has(v.target.parameter)) {
+            throw new Error(
+              `Entry ${e.id}: multiple MIDI mappings target '${v.target.parameter}' (one per target)`,
+            );
+          }
+          seenMidiTargets.add(v.target.parameter);
+          validatedMidi.push(v);
+        }
         return {
           id: e.id,
           pattern: e.pattern,
           label: e.label || null,
           defaults: e.defaults && typeof e.defaults === 'object' ? e.defaults : {},
           modulations: validatedMods,
+          midiMappings: validatedMidi,
           notes: e.notes || null,
         };
       }),
@@ -302,6 +320,34 @@ export class PlaylistManager {
       } catch (err) {
         console.warn(
           `[Playlist] "${playlistName}" entry ${entry.id}: dropping invalid modulation — ${err.message}`,
+        );
+      }
+    }
+    return out;
+  }
+
+  // Lenient load-side coercion for MIDI mappings — mirrors _coerceModulations.
+  // Invalid mappings are dropped with a warning so one bad binding can't take
+  // out a playlist load; one-per-target (param) is enforced.
+  _coerceMidiMappings(playlistName, entry) {
+    const raw = Array.isArray(entry.midiMappings) ? entry.midiMappings : [];
+    if (raw.length === 0) return [];
+    const out = [];
+    const seenTargets = new Set();
+    for (const m of raw) {
+      try {
+        const v = validateMidiMapping(m);
+        if (seenTargets.has(v.target.parameter)) {
+          console.warn(
+            `[Playlist] "${playlistName}" entry ${entry.id}: duplicate MIDI mapping for '${v.target.parameter}' dropped (one-per-target)`,
+          );
+          continue;
+        }
+        seenTargets.add(v.target.parameter);
+        out.push(v);
+      } catch (err) {
+        console.warn(
+          `[Playlist] "${playlistName}" entry ${entry.id}: dropping invalid MIDI mapping — ${err.message}`,
         );
       }
     }
@@ -389,5 +435,40 @@ export class PlaylistManager {
         paramRouter.setChannelControl(channel.id, exp.id, value, 0, 0);
       }
     }
+  }
+
+  /**
+   * Upsert-by-target for a single MIDI mapping on a playlist entry.
+   *
+   * One binding per target parameter is a structural rule: this drops ANY
+   * existing mapping that shares the incoming id (a normal update) OR the
+   * incoming target parameter (a re-bind of an already-bound param, possibly
+   * under a different id), then pushes the incoming one. This is the FRIENDLY
+   * enforcement point — re-binding a param cleanly REPLACES the old binding,
+   * no throw, no duplicate. The strict one-per-target check in `save()` is the
+   * BACKSTOP (defense in depth) for any duplicate that slips in another way.
+   *
+   * Mutates `entry.midiMappings` in place and returns it. Does NOT validate or
+   * persist — the caller validates `incoming` (fail loud on bad shape) and
+   * calls `save()` (which re-validates + writes). Extracted so the PUT route
+   * and the engine test exercise ONE code path instead of two copy-pasted
+   * filters kept in lockstep.
+   *
+   * @param {object} entry     playlist entry (must already exist)
+   * @param {object} incoming  fully-formed mapping (id + control + target + range)
+   * @returns {Array} the entry's updated midiMappings array
+   */
+  upsertMidiMapping(entry, incoming) {
+    if (!entry || typeof entry !== 'object') {
+      throw new Error('upsertMidiMapping: entry required');
+    }
+    if (!incoming || !incoming.target || typeof incoming.target.parameter !== 'string') {
+      throw new Error('upsertMidiMapping: incoming mapping missing target.parameter');
+    }
+    entry.midiMappings = (entry.midiMappings || []).filter(
+      m => m.id !== incoming.id && m.target?.parameter !== incoming.target.parameter,
+    );
+    entry.midiMappings.push(incoming);
+    return entry.midiMappings;
   }
 }

@@ -29,6 +29,9 @@ import { animate } from "./src/core/animate.js";
 import { initRegistry } from "./src/dmx/fixture_definition_registry.js";
 import { createViewRegistry } from "./src/dmx/view_registry.js";
 import { createControllerRegistry, projectOntoConfigs, registryIsActive } from "./src/dmx/controller_registry.js";
+import { computeLedStrandPatches } from "./src/dmx/led/led_patch_projection.js";
+import { assignLedStrandMetadata } from "./src/dmx/led/led_metadata.js";
+import { gatherAllConfigs } from "./src/dmx/auto_patcher.js";
 import { UniverseRouter } from "./src/dmx/universe_router.js";
 import { isStaticHost, logStaticHostSkip } from "./src/core/static_host.js";
 import { engineHttpUrl } from "./src/core/engine_endpoint.js";
@@ -44,6 +47,7 @@ import { initModernSacnMonitors, initModernViewPresets } from "./src/gui/modern/
 import { initModernPatternEditorShell } from "./src/gui/modern/pattern_editor_panel.js";
 import { initModernViewMasksShell } from "./src/gui/modern/view_masks_panel.js";
 import { initModernControllerMapShell } from "./src/gui/modern/controller_map_panel.js";
+import { initPixelMapPanel } from "./src/gui/modern/pixel_map_panel.js";
 import {
   registerPanel, getStoredGeometry,
   sanitizeStore, clampAllPanels,
@@ -51,6 +55,7 @@ import {
 import { initPanelVisibility } from "./src/gui/panel_visibility.js";
 import { setupHelpPanel } from "./src/gui/help_panel.js";
 import { setupSceneManager } from "./src/gui/scene_manager.js";
+import { setupSceneRecovery } from "./src/gui/scene_recovery.js";
 import { setupLeftDrawers } from "./src/gui/left_drawer.js";
 import "./src/gui/control_schema.js";
 
@@ -258,6 +263,7 @@ if (window.__readonlyMode) {
     #sacn-out-monitor-panel,
     #info-panel,
     #scene-add-btn,
+    #scene-dup-btn,
     #scene-del-btn {
       display: none !important;
     }
@@ -302,8 +308,9 @@ Promise.all([
   fetch("dmx/fixtures/vintage_led_stage_light/model_33.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_te_machines/model_1.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_chauvet_4d/model_2.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch("dmx/fixtures/te_led_grid/model_120.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("config.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, controllersYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, rootConfigYaml]) => {
+]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, controllersYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, teLedGridModelYaml, rootConfigYaml]) => {
 
   // Load root config
   if (rootConfigYaml) {
@@ -409,6 +416,82 @@ Promise.all([
       console.warn(`[Controllers] patches.yaml drift corrected for '${d.name}': ` +
         `U${d.before.dmxUniverse}:${d.before.dmxAddress}@${d.before.controllerIp || '—'} → ` +
         `U${d.after.dmxUniverse}:${d.after.dmxAddress}@${d.after.controllerIp || '—'}`);
+    }
+    return result;
+  };
+
+  // LED-strand patch projection (plan 20260709_0 P4): device-bound LED
+  // controllers address their strands with the firmware's contiguous linear
+  // layout (led_patch_projection). This projects those records onto
+  // params.ledStrands (so the sim auto-subscribes the LED universe) and the
+  // global patch tree (so the save-server writes them into patches.yaml). A
+  // strand not covered by a bound controller is returned to the unpatched
+  // state — never a silent stale address (codex P0).
+  window.projectLedStrandPatches = function () {
+    const registry = window.__controllerRegistry;
+    const strands = Array.isArray(params.ledStrands) ? params.ledStrands : [];
+    if (strands.length === 0) return { fields: new Map(), violations: [] };
+    const counts = new Map();
+    for (const s of strands) {
+      if (s && typeof s.name === 'string' && s.name.length > 0) counts.set(s.name, s.ledCount || 10);
+    }
+    const result = (registry && registryIsActive(registry))
+      ? computeLedStrandPatches(registry, counts)
+      : { fields: new Map(), violations: [] };
+    for (const v of result.violations) console.error(`[LED Patch] ✋ ${v.message}`);
+    for (const strand of strands) {
+      if (!strand || typeof strand.name !== 'string' || strand.name.length === 0) continue;
+      const rec = result.fields.get(strand.name);
+      if (rec) {
+        strand.controllerIp = rec.controllerIp;
+        strand.controllerId = rec.controllerId;
+        strand.dmxUniverse = rec.dmxUniverse;
+        strand.dmxAddress = rec.dmxAddress;
+        strand.pixelCount = rec.pixelCount;
+        strand.outputIndex = rec.outputIndex;
+        // Per-segment DMX-parity view (G1): a strand spilling across universes
+        // records every universe:channel run it occupies, not just its start.
+        strand.segments = rec.segments;
+        strand.endUniverse = rec.endUniverse;
+        strand.endChannel = rec.endChannel;
+      } else {
+        // Unpatched: clear any stale record so patches.yaml drops it.
+        strand.controllerIp = '';
+        strand.controllerId = 0;
+        strand.dmxUniverse = 0;
+        strand.dmxAddress = 0;
+        strand.pixelCount = 0;
+        strand.outputIndex = -1;
+        strand.segments = [];
+        strand.endUniverse = 0;
+        strand.endChannel = 0;
+      }
+      if (window.__globalPatchTree) {
+        window.__globalPatchTree[strand.name] = rec
+          ? { ...rec }
+          : {
+            controllerIp: '', controllerId: 0, dmxUniverse: 0, dmxAddress: 0,
+            pixelCount: 0, outputIndex: -1, segments: [], endUniverse: 0, endChannel: 0,
+          };
+      }
+    }
+
+    // LED metadata (sectionId/fixtureId) — the LED mirror of the DMX
+    // projectOntoConfigs numbering. Gated on the SAME active-registry
+    // condition DMX uses, and run HERE (strictly after
+    // projectControllerMappings at every call site — boot line ~605, editor
+    // recompute) so the DMX ids are final: LED ids continue in the SHARED id
+    // space, strictly above the DMX max (mutually exclusive + monotonic).
+    // These fields ride scene_config.yaml structurally (like DMX group/
+    // sectionId/fixtureId) — NOT the patch tree — so nothing is mirrored into
+    // window.__globalPatchTree here.
+    if (registry && registryIsActive(registry)) {
+      const meta = assignLedStrandMetadata(strands, gatherAllConfigs(params));
+      if (meta.assigned.length > 0) {
+        console.log(`[LED Meta] assigned section/fixture ids to ${meta.assigned.length} ` +
+          `strand(s) (LED sections/fixtures continue after DMX max; ` +
+          `maxSectionId=${meta.maxSectionId}, maxFixtureId=${meta.maxFixtureId})`);
+      }
     }
     return result;
   };
@@ -530,7 +613,8 @@ Promise.all([
     { raw: shehdsModelYaml, file: 'model_119.yaml' },
     { raw: vintageModelYaml, file: 'model_33.yaml' },
     { raw: teFogModelYaml, file: 'fog_te_machines/model_1.yaml' },
-    { raw: chauvetHazeModelYaml, file: 'fog_chauvet_4d/model_2.yaml' }
+    { raw: chauvetHazeModelYaml, file: 'fog_chauvet_4d/model_2.yaml' },
+    { raw: teLedGridModelYaml, file: 'te_led_grid/model_120.yaml' }
   ].forEach(({ raw, file }) => {
     try {
       if (raw) {
@@ -538,6 +622,11 @@ Promise.all([
         if (parsed && parsed.model && parsed.model.fixture_type) {
           window.fixtureModels[parsed.model.fixture_type] = parsed.model;
         }
+      } else {
+        // Empty raw = the fetch degraded to '' upstream (404/failed load). A
+        // registered fixture type that never loads here silently falls back to
+        // a generic par, losing its bus:led gating — so fail loudly.
+        console.error("[FixtureModels] " + file + " failed to load (empty response) — fixtures of this type will render as a generic par");
       }
     } catch (err) {
       console.warn("Failed to parse fixture model " + file + ":", err);
@@ -554,6 +643,10 @@ Promise.all([
   if (window.__bootProjectionConfigs) {
     window.projectControllerMappings(window.__bootProjectionConfigs);
     delete window.__bootProjectionConfigs;
+    // LED strands restore their device-linear patch records from the registry
+    // the same way (a bound controller re-derives its strands' universe/addr
+    // on every boot; unbound strands stay unpatched).
+    if (window.projectLedStrandPatches) window.projectLedStrandPatches();
     // Patch state may have changed — re-derive the active flag.
     if (window.recomputePatchesActive) window.recomputePatchesActive();
   }
@@ -633,8 +726,10 @@ Promise.all([
     setupViewMasksEditor();
     setupControllerMapEditor();
     initModernSacnMonitors();
+    initPixelMapPanel();
     setupSceneIndicator();
     setupSceneManager();
+    setupSceneRecovery();
     loadPatternPresets().then(() => {
       initPatternEngine().then(() => {
         if (window.onLightingChange) window.onLightingChange();

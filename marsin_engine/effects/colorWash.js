@@ -39,17 +39,34 @@ export function applyColorWash({ pixels, color6, amount, mode = 'tint' }) {
       px.a = Math.max(px.a, color6[4] * a);
       px.u = Math.max(px.u, color6[5] * a);
     } else {
-      // Default tint/additive hybrid
-      px.r = Math.min(1, px.r * ia + (px.r + color6[0]) * 0.5 * a);
-      px.g = Math.min(1, px.g * ia + (px.g + color6[1]) * 0.5 * a);
-      px.b = Math.min(1, px.b * ia + (px.b + color6[2]) * 0.5 * a);
-      px.w = Math.min(1, px.w * ia + (px.w + color6[3]) * 0.5 * a);
-      px.a = Math.min(1, px.a * ia + (px.a + color6[4]) * 0.5 * a);
-      px.u = Math.min(1, px.u * ia + (px.u + color6[5]) * 0.5 * a);
+      // Default 'tint' — a TRUE lerp toward the tint target: px*(1-a) +
+      // color*a. The pre-2026-07 formula was a muddy additive hybrid
+      // (`px*ia + (px+c)*0.5*a`) that BRIGHTENED as it tinted (the `px`
+      // term appears in both halves), so a wash never reached the target
+      // color and always pushed luminance up. This clean lerp keeps
+      // luminance where the mixer put it and lands exactly on `color6` at
+      // amount=1. Mathematically identical to 'replace' — 'tint' stays a
+      // distinct named mode so presets/UI read intuitively and a future
+      // curve tweak has a home. W/A/UV are lerp'd the same as 'replace'
+      // (this is a brightness-family wash, not a chroma op).
+      px.r = px.r * ia + color6[0] * a;
+      px.g = px.g * ia + color6[1] * a;
+      px.b = px.b * ia + color6[2] * a;
+      px.w = px.w * ia + color6[3] * a;
+      px.a = px.a * ia + color6[4] * a;
+      px.u = px.u * ia + color6[5] * a;
     }
   }
 }
 
 export const colorWashEffect = {
   apply: applyColorWash,
+  // Primary intensity: the wash depth — how far the rig is pulled toward
+  // the wash color (0 = original palette, 1 = full takeover). Normalized
+  // 0..1 maps straight onto the `amount` param.
+  primaryIntensity: { label: 'Wash Depth', param: 'amount', default: 0.7, min: 0, max: 1 },
+  // Primary mode (VSN1 encoder press): how the wash color combines with the
+  // live frame — tint (default), full replace, multiply, or max. Cycles the
+  // `mode` param.
+  primaryMode: { label: 'Blend', param: 'mode', values: ['tint', 'replace', 'multiply', 'max'], default: 'tint' },
 };

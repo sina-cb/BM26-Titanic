@@ -14,7 +14,7 @@
 // and more width than the narrow header has), keeping FADE + TO BLACK + UP
 // reachable in both orientations (QA round 8 fix #2).
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, Alert } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
@@ -30,6 +30,44 @@ import { updateMixerMaster } from '@/utils/api';
 export const FADE_SECONDS = [0, 1, 3, 5, 10] as const;
 const DEFAULT_FADE_SECONDS = 3;
 
+// ── Shared selected-duration store ──────────────────────────────────────────
+// The selected fade duration used to be per-instance React state, so the deck
+// top bar and the mixer header each held their OWN pill selection — and it was
+// invisible to any non-React caller. The APC "stop_all_clips → master fade"
+// button (utils/midi) must fade over the CURRENTLY-SELECTED duration, not a
+// hardcoded one, so the selection is lifted into a module store: both on-screen
+// instances read/write it (staying in lockstep) and the MIDI layer reads it via
+// `getSelectedFadeSeconds()`. Mirrors the useMidiWindow module-store pattern.
+let _selectedFadeSeconds: number = DEFAULT_FADE_SECONDS;
+const _fadeSecondsListeners = new Set<(s: number) => void>();
+
+/** The currently-selected master-fade duration in seconds (one of FADE_SECONDS).
+ *  Read by the APC master-fade toggle so it fades over the duration the operator
+ *  picked on-screen — never a hardcoded value. */
+export function getSelectedFadeSeconds(): number {
+  return _selectedFadeSeconds;
+}
+
+/** Set the selected fade duration and fan out to every subscriber (both
+ *  MasterFadeGroup instances). No churn when unchanged. */
+export function setSelectedFadeSeconds(seconds: number): void {
+  if (seconds === _selectedFadeSeconds) return;
+  _selectedFadeSeconds = seconds;
+  _fadeSecondsListeners.forEach((cb) => { try { cb(seconds); } catch { /* one bad subscriber must not break the rest */ } });
+}
+
+/** Subscribe a component to the shared selected duration (re-renders on change).
+ *  The pills read + write through this so the two surfaces never diverge. */
+function useSelectedFadeSeconds(): number {
+  const [s, setS] = useState(_selectedFadeSeconds);
+  useEffect(() => {
+    _fadeSecondsListeners.add(setS);
+    setS(_selectedFadeSeconds);
+    return () => { _fadeSecondsListeners.delete(setS); };
+  }, []);
+  return s;
+}
+
 interface Props {
   /** Compact (portrait) layout when true — pills collapse to a cycler. */
   isPortrait: boolean;
@@ -43,8 +81,10 @@ interface Props {
 export function MasterFadeGroup({ isPortrait, disabled = false }: Props) {
   const palette = usePalette();
   const styles = useMemo(() => makeStyles(palette), [palette]);
-  // Selected fade duration (seconds). Local UI state only.
-  const [fadeSeconds, setFadeSeconds] = useState<number>(DEFAULT_FADE_SECONDS);
+  // Selected fade duration (seconds) — SHARED across both MasterFadeGroup
+  // instances and readable by the MIDI layer via getSelectedFadeSeconds().
+  const fadeSeconds = useSelectedFadeSeconds();
+  const setFadeSeconds = setSelectedFadeSeconds;
 
   const runFade = async (target: number) => {
     // Soft PLAN lock — the buttons below are disabled too; this is the

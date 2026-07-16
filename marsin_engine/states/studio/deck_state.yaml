@@ -1,0 +1,83 @@
+channel:
+  id: ch_base
+  name: Base
+  pattern: 09_cyclone
+  mode: blend_screen
+  fader: 1
+  enabled: true
+  locked: false
+  faderLocked: false
+  localControls:
+    '614525773':
+      v0: 0.5
+      v1: 0
+      v2: 0
+    '1037917937':
+      v0: 0.6000000000000001
+      v1: 0
+      v2: 0
+    '2073951030':
+      v0: 0.5
+      v1: 0
+      v2: 0
+    '2504041261':
+      v0: 0.5
+      v1: 0
+      v2: 0
+    '3165284047':
+      v0: 0.5
+      v1: 0
+      v2: 0
+    '3334264878':
+      v0: 0.5
+      v1: 0
+      v2: 0
+    '3680310977':
+      v0: 0.5
+      v1: 0
+      v2: 0
+    '3994789032':
+      v0: 0.5
+      v1: 0
+      v2: 0
+    '4234014351':
+      v0: 0.5
+      v1: 0
+      v2: 0
+  playlist:
+    name: studio
+    activeEntryId: e_1783789527763_4507
+    cursor: 9
+    autopilot:
+      active: false
+      delay_s: 30
+      shuffle: false
+  viewSelection:
+    type: all
+    target: null
+    invert: false
+  faderMax: 1
+  color: null
+  mixGroupId: null
+  soloSafe: false
+  hue: 163.41681502712254
+  followsTempo: false
+  followLeaderId: null
+  followScale: 1
+transitionConfig:
+  enabled: false
+  mode: trans_crossfade
+  durationMs: 1000
+  shuffle: false
+overlays: []
+overlayAutopilot:
+  active: false
+  delay_s: 30
+  shuffle: false
+  groupMode: false
+  groupSize: 3
+  groupDwell: 6
+playlistSlots:
+  primary: studio
+  secondary: null
+  splitRatio: 0.5

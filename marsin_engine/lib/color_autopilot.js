@@ -5,7 +5,11 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const CONFIG_FILE = path.join(__dirname, '..', 'config.yaml');
+// Default persistence target when no explicit configFile is injected. Tests set
+// MARSIN_CONFIG_FILE to a scratch copy so the tracked, comment-bearing
+// config.yaml is never rewritten; the spawned engine inherits it. Unset in
+// production → the real config.yaml.
+const CONFIG_FILE = process.env.MARSIN_CONFIG_FILE || path.join(__dirname, '..', 'config.yaml');
 
 const DEFAULT_DELAY_S = 30;
 // Default transition (crossfade) duration when the wire omits the field. 0 ==

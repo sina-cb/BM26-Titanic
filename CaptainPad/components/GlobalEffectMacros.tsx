@@ -44,6 +44,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, Modal, ScrollView, Alert, Platform, useWindowDimensions } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
+import { shadow } from '@/styles/globalStyles';
+import { notifyEffectsPanelLoaded } from '@/hooks/useMidiControl';
 import {
   fetchGlobalEffectSlots,
   fetchGlobalEffectSlotsStatus,
@@ -51,13 +53,45 @@ import {
   dispatchGlobalEffectSlotAction,
   patchGlobalEffectSlot,
   setGlobalEffectBlackout,
-  fetchGlobals,
+  setGlobalEffectSlotIntensity,
+  resetGlobalEffectSlotIntensity,
+  cycleGlobalEffectSlotMode,
+  setGlobalEffectSlotMode,
+  fetchEffectsPage,
+  setEffectsPage,
+  createEffectBank,
+  deleteEffectBank,
   GlobalEffectSlot,
   GlobalEffectSlotStatus,
 } from '@/utils/api';
-import { setGlobalHue } from '@/utils/channelExtrasApi';
-import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { engineEvents } from '@/utils/engineEvents';
+import { usePerfLock, usePerformanceMode } from '@/hooks/usePerformanceMode';
+import {
+  VISIBLE_SLOT_COUNT,
+  EFFECTS_PAGE_COUNT,
+  SHOW_EFFECT_PAGES,
+  BANKS_UI_ENABLED,
+  resolveEffectsPage,
+  resolveEffectsPresentation,
+  deployBannerMessage,
+  modeBadge,
+  slotIsBound,
+  computeVisibleSlots,
+  computePageActivity,
+  isEffectBanksMessage,
+  bankBadgeLabel,
+  ModeBadge as ModeBadgeInfo,
+  type EffectBanksState,
+} from './global_effect_macros_logic';
+import { useEffectBanks } from '@/hooks/useEffectBanks';
+import {
+  buildPickerSections,
+  isFavoritePreset,
+  slotDisablesEncoder,
+  resolveSlotEffectName,
+  PickerLibrary,
+} from './effect_picker_logic';
+// (HorizontalFader import removed 2026-07 with the global hue fader row.)
 
 // Hard UI contract (operator review May 2026): the rig surface shows
 // EXACTLY this many slots. The engine can persist up to MAX_SLOTS (16)
@@ -65,13 +99,24 @@ import { engineEvents } from '@/utils/engineEvents';
 // re-binds the visible slots via long-press swap; the engine's library
 // still contains every preset so swapping in vintageWhite, fogger,
 // blastWhite, etc. is one tap of the SWAP modal.
-// 9 slots (channels-optimization campaign, 2026-06-29): the engine supports
-// up to MAX_SLOTS=16 and ships 13 default bindings. Invert is no longer a
-// dedicated fixed button — it now lives in an assignable slot (default slot
-// 9), so the visible strip grew 8 → 9 to surface it out of the box. Every
-// visible slot is re-bindable via the long-press SWAP modal. Shared by BOTH
-// the deck and mixer bottom bars (same GlobalEffectMacros instance).
-const VISIBLE_SLOT_COUNT = 9;
+// 8 slots (global-effects parity campaign, 2026-07): the engine supports
+// up to MAX_SLOTS=16 and ships 13 default bindings. The visible strip is
+// pinned to 8 so it maps 1:1 onto the APC mini mk2's 8 Scene Launch buttons
+// (the physical column of 8), which the MIDI profile binds TOP→BOTTOM to
+// UI slots LEFT→RIGHT (slot 1 = topmost button = left-most chip). Invert
+// still ships in an assignable slot (default slot 9 engine-side) but no
+// longer has a dedicated visible chip — swap it into any of the 8 visible
+// slots via the ⋯ SWAP modal. Every visible slot is re-bindable. Shared by
+// BOTH the deck and mixer bottom bars (same GlobalEffectMacros instance).
+// Effects v2 (Sina 2026-07-08): the engine scales to 4 pages × 8 = 32 flat slots
+// (ids 1..32); the strip shows 8 at a time (the ACTIVE PAGE). The slot geometry
+// (VISIBLE_SLOT_COUNT / EFFECTS_PAGE_COUNT / slotIdForPage) and the bound/empty
+// derivations (slotIsBound / computeVisibleSlots / computePageActivity) live in
+// ./global_effect_macros_logic so they're unit-testable without react-native.
+// The active page lives in ENGINE state (GET/PATCH /global-effects/page,
+// WS-broadcast) — this component FOLLOWS the broadcast and writes changes
+// THROUGH the engine, never keeping a private page (so the VSN1 side buttons +
+// any other surface stay in lockstep).
 
 type LibPreset = { id: string; label: string; defaultBehavior: string; safetyTier?: string; params: any };
 type LibEffect = { id: string; name: string; category: string; behaviorTypes: string[]; presets: Record<string, LibPreset>; legacyEffectId?: string | null };
@@ -131,6 +176,35 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   const [slots, setSlots] = useState<GlobalEffectSlotStatus[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [library, setLibrary] = useState<Library | null>(null);
+  // The effects grid presentation is INVARIANT across the VSN1 controller profile
+  // (operator: the CaptainPad effects UI must ALWAYS look and behave the same
+  // regardless of profile). The profile is a VSN1 device-surface concept only —
+  // it swaps the physical device's template set (via sb_2) but never touches this
+  // grid, which always renders the full authoring UI. resolveEffectsPresentation
+  // returns those constants; kept as a call for a stable shape + pinned tests.
+  const presentation = resolveEffectsPresentation();
+  // Performance mode (live-show structural lock) dims the ⋯ swap / "+" bind
+  // affordances and drives the LOCKED mode badge. Read live so the badge clears
+  // the moment performance mode is exited. This is SEPARATE from the profile.
+  const performanceActive = usePerformanceMode().active;
+  // Named effect banks (ordered, >= 1). This drives ONLY the neutral BANK badge
+  // (informational — names the active bank + its position) and the minimal
+  // add/delete controls. It must NEVER touch chrome/sizing/affordances — the
+  // presentation is bank-invariant (resolveEffectsPresentation takes no bank). The
+  // engine broadcasts the active bank's slot CONTENT via globalEffectMacroStatus
+  // on a switch; the WS subscriber below also refresh()es on an effectBanks frame
+  // as a belt-and-braces convergence so a missed status frame still swaps content.
+  const effectBanks = useEffectBanks();
+  // VSN1 layout auto-deploy error banner (dismissible). The engine broadcasts
+  // `vsn1LayoutDeploy` around every device re-flash; deployBannerMessage folds the
+  // stream into an error string (a failed flash — e.g. the LCD budget overflow) or
+  // clears it on a later `ok`. Pre-2026-07 CaptainPad ignored deploy errors, so a
+  // silently-failed flash was invisible; this surfaces it.
+  const [deployError, setDeployError] = useState<string | null>(null);
+  // Effects v2: the active effects page (0..3). Mirrors ENGINE state — seeded
+  // from GET /global-effects/page, followed via the `effectsPage` WS broadcast,
+  // and changed ONLY by PATCHing the engine (never a private optimistic page).
+  const [page, setPage] = useState(0);
   // Swap sheet target: slotId of the slot being edited, or null.
   const [swapTargetId, setSwapTargetId] = useState<number | null>(null);
   // Per-slot optimistic active override. Set immediately on tap; cleared
@@ -143,29 +217,15 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   const [optimisticActive, setOptimisticActive] = useState<Record<number, boolean>>({});
   const optimisticTimersRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
 
-  // Global hue shifter (docs/39 §F-hue). `degrees` is the live rig hue offset,
-  // reflecting the engine's `globalHueShift` broadcast. The SPIN (auto-rotate)
-  // control was removed (June 2026), so we no longer track a spin rate in
-  // state — every hue write forces it to 0 and the mount clear zeroes any
-  // persisted spin.
-  const [hueShift, setHueShift] = useState<{ degrees: number }>({ degrees: 0 });
-  // While the operator is dragging the degrees fader the engine may also be
-  // auto-rotating — we don't want the incoming broadcast to yank the thumb out
-  // from under their finger. This holds the live drag target; cleared on release.
-  const hueDraggingRef = useRef(false);
+  // The GLOBAL hue shifter that used to live at the top of this surface was
+  // REMOVED end to end (2026-07, operator decision: "only the channel hue
+  // shifts, no global hidden one"). Hue is PER-CHANNEL ONLY now — the deck's
+  // DeckHueRow and each mixer strip's HUE trim are the hue controls.
 
   // Global color INVERT (docs/39 §F-invert) is no longer a dedicated control
   // here — it became an assignable slot effect (default slot 9) in the
   // channels-optimization campaign (2026-06-29) and rides the standard slot
   // dispatch + status path. No local invert state is needed in this component.
-
-  // SPIN was removed from the hue section (June 2026). The auto-rotate rate is
-  // persisted engine-side, so a previously-set spin would keep silently
-  // rotating the hue with no visible control to stop it. Guard so we send
-  // exactly ONE setGlobalHue(degrees, 0) at mount to force spin off — once the
-  // seeded degrees have landed, not while the operator is dragging the hue
-  // fader, and never more than once per mount.
-  const spinClearedRef = useRef(false);
 
   const refresh = useCallback(async () => {
     const r = await fetchGlobalEffectSlotsStatus();
@@ -185,23 +245,49 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // slots/:id can fill them in. The engine creates a slot record on first
   // PATCH if it doesn't exist (or, if it strictly validates, we'll find
   // out from the PATCH response and surface the error).
+  // party 2026-07-11 single-page layout: `renderPage` is the page the GRID
+  // actually shows. With SHOW_EFFECT_PAGES=false it is pinned to 0 even when the
+  // engine broadcasts a non-zero `effectsPage` (VSN1 side buttons no longer page
+  // — see resolveEffectsPage). The `page` state + all its plumbing (fetch/WS/
+  // PATCH) stays live; only the RENDER page and the pager chrome are suppressed.
+  const renderPage = resolveEffectsPage(page);
   const visibleSlots = useMemo(() => {
     if (!slots) return null;
-    const realById = new Map<number, GlobalEffectSlotStatus>();
-    for (const s of slots) {
-      if (typeof s.slotId === 'number') realById.set(s.slotId, s);
+    // The 8 cells show the ACTIVE PAGE's flat slot ids (8*page+1 .. 8*page+8).
+    // A cleared slot (enabled:false, stale effectId kept by the engine) renders
+    // EMPTY via slotIsBound — the "can't remove an effect" fix.
+    return computeVisibleSlots<GlobalEffectSlotStatus>(
+      slots,
+      renderPage,
+      (slotId) => ({ ...EMPTY_STENCIL, slotId } as unknown as GlobalEffectSlotStatus),
+    );
+  }, [slots, renderPage]);
+
+  // party 2026-07-11 single-page guard (Codex P0: fail loud, but don't spam).
+  // If the pager UI is hidden yet the engine reports a page other than 0 — a
+  // stale persisted effectsPage, or a surface that still pages — we render page
+  // 0 anyway (renderPage above) and warn ONCE so the discrepancy is visible in
+  // the console without flooding it on every status broadcast.
+  const warnedHiddenPageRef = useRef(false);
+  useEffect(() => {
+    if (!SHOW_EFFECT_PAGES && page !== 0 && !warnedHiddenPageRef.current) {
+      warnedHiddenPageRef.current = true;
+      console.warn(
+        `[GEM] effects pages are hidden (party single-page layout) but the engine `
+        + `reports page ${page}; rendering page 1 (index 0). Flip SHOW_EFFECT_PAGES `
+        + `to restore the pager.`,
+      );
     }
-    const out: GlobalEffectSlotStatus[] = [];
-    for (let i = 1; i <= VISIBLE_SLOT_COUNT; i++) {
-      const real = realById.get(i);
-      if (real && real.effectId) {
-        out.push(real);
-      } else {
-        out.push({ ...EMPTY_STENCIL, slotId: i } as unknown as GlobalEffectSlotStatus);
-      }
-    }
-    return out;
-  }, [slots]);
+  }, [page]);
+
+  // Per-page "something is running" flags for the page switcher's activity
+  // dots — pure presentation derived from the SAME engine status array that
+  // paints the chips (no extra fetch, no new state). Lets the operator see at
+  // a glance that e.g. P3 has a live effect without leaving the current page.
+  const pageActivity = useMemo(
+    () => computePageActivity(slots ?? []),
+    [slots],
+  );
 
   // Refs that let the boot useEffect run ONCE and never tear down
   // when a parent prop changes. Pre-fix the deps `[refresh,
@@ -216,6 +302,10 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
 
   useEffect(() => {
     let alive = true;
+    // Effects v2 WELCOME: the effects panel just loaded — send the VSN1 a hello
+    // + full feedback re-sync (task: hello on effects load). No-op when no VSN1
+    // is connected; the reconnect path carries the hello otherwise.
+    notifyEffectsPanelLoaded();
     (async () => {
       // Paint layout immediately from /global-effect-slots so operator
       // sees button placement even before /status lands. Skip if we
@@ -236,31 +326,13 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       }
       const lib = await fetchGlobalEffectLibrary();
       if (alive && lib.ok && lib.data?.effects) setLibrary(lib.data.effects as Library);
-      // Seed the global hue knob from /globals (the engine's persisted
-      // hueShift). The globalHueShift WS broadcast keeps it live afterwards.
-      const globals = await fetchGlobals();
-      if (alive && globals.ok && globals.data) {
-        if (globals.data.hueShift && !hueDraggingRef.current) {
-          const hs = globals.data.hueShift;
-          if (typeof hs.degrees === 'number') {
-            setHueShift({ degrees: hs.degrees });
-          }
-          // SPIN control was removed (June 2026): force any persisted
-          // auto-rotate off exactly once at mount so the hue can't keep
-          // spinning invisibly. We use the SEEDED degrees as the start
-          // offset and only fire if there's actually a residual spin and
-          // the operator isn't mid-drag. The ref guards against a second
-          // fire on any later re-run of this effect.
-          if (!spinClearedRef.current && !hueDraggingRef.current
-              && typeof hs.autoRotateDegPerSec === 'number' && Math.round(hs.autoRotateDegPerSec) !== 0) {
-            spinClearedRef.current = true;
-            const seededDegrees = typeof hs.degrees === 'number' ? hs.degrees : 0;
-            setGlobalHue(seededDegrees, 0).then(r => {
-              if (!r.ok) console.warn('[GEM] failed to clear persisted hue spin:', r.error);
-            });
-          }
-        }
-      }
+      // (The /globals hue seed + persisted-spin clear were removed 2026-07
+      // with the global hue shifter — hue is per-channel only now.)
+      // Effects v2: seed the active page from ENGINE state (single source of
+      // truth). The WS `effectsPage` broadcast below keeps it live thereafter.
+      fetchEffectsPage().then((r) => {
+        if (alive && r.ok && typeof r.data?.effectsPage === 'number') setPage(r.data.effectsPage);
+      });
       refresh().then(() => { slotsLoadedRef.current = true; });
     })();
     const unsub = engineEvents.subscribe((msg: any) => {
@@ -293,15 +365,31 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         refresh();
       } else if (msg?.type === 'mixer' && typeof msg.blackout === 'boolean') {
         onBlackoutChangeRef.current?.(msg.blackout);
-      } else if (msg?.type === 'globalHueShift' && msg.hueShift) {
-        // The engine is authoritative for the live degrees. Reflect them
-        // UNLESS the operator is mid-drag on the degrees fader, in which case
-        // we'd be fighting their finger. SPIN was removed (June 2026), so we
-        // no longer reconcile autoRotateDegPerSec — only the hue degrees.
-        const hs = msg.hueShift;
-        const degrees = typeof hs.degrees === 'number' ? hs.degrees : 0;
-        setHueShift(prev => ({ degrees: hueDraggingRef.current ? prev.degrees : degrees }));
+      } else if (msg?.type === 'effectsPage' && typeof msg.effectsPage === 'number') {
+        // Follow the engine's page broadcast (canonical key `effectsPage`) — a page
+        // change from ANY source (this switcher, a VSN1 side button, another surface)
+        // converges here.
+        setPage(msg.effectsPage);
+      } else if (msg?.type === 'vsn1LayoutDeploy') {
+        // VSN1 layout auto-deploy result → surface (or clear) the error banner.
+        // deployBannerMessage returns `undefined` for in-flight/irrelevant frames
+        // (no change), `null` on a successful `ok` (clear), or the error string.
+        const next = deployBannerMessage(msg);
+        if (next !== undefined) setDeployError(next);
+      } else if (isEffectBanksMessage(msg)) {
+        // BANK SWITCH/CREATE/DELETE/RENAME → the active effect BANK may have
+        // changed, so the slot CONTENT must swap. The engine already broadcasts the
+        // new bank's globalEffectMacroStatus on a switch (consumed inline above), so
+        // the grid normally converges with no fetch. This refresh() is
+        // belt-and-braces: if that status frame is dropped or races the effectBanks
+        // frame, re-fetching /global-effect-slots/status re-converges the grid to
+        // the active bank. The status arrays fully REPLACE `slots`, so a stale bank
+        // can't linger. NB: chrome/presentation is untouched — only content
+        // re-fetches (the badge NAME follows the useEffectBanks hook).
+        refresh();
       }
+      // (The `globalHueShift` WS reconcile was removed 2026-07 with the
+      // global hue shifter.)
     });
     return () => {
       alive = false;
@@ -339,6 +427,25 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
       return changed ? next : prev;
     });
   }, [slots]);
+
+  // "Lost strobe" guard (Codex P0: fail loud). Warn ONCE per unknown id when a
+  // BOUND slot references an effectId the engine library doesn't ship — a
+  // renamed/removed effect must announce itself instead of silently
+  // misbehaving. The chip still renders its own label (generic card); this is
+  // just the alarm. resolveSlotEffectName emits the console.warn; the ref
+  // dedupes so it fires once, not every status broadcast.
+  const warnedUnknownRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!library || !slots) return;
+    for (const s of slots) {
+      if (!slotIsBound(s)) continue;
+      const id = s.effectId;
+      if (id && !library[id] && !warnedUnknownRef.current.has(id)) {
+        warnedUnknownRef.current.add(id);
+        resolveSlotEffectName(s, library as PickerLibrary);
+      }
+    }
+  }, [library, slots]);
 
   // Cell tap: toggle/trigger/burst dispatch with optimistic local state.
   // The empty-cell path is handled by `onPressEmpty` (opens swap sheet).
@@ -389,6 +496,50 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     // and no double-fetch race.
   }, [optimisticActive]);
 
+  // Page switch: write THROUGH the engine (PATCH /global-effects/page). The
+  // engine's `effectsPage` broadcast flips our `page` state, so every surface —
+  // this switcher, the VSN1 side buttons, any other client — converges. We
+  // deliberately do NOT optimistically set `page` locally: the engine is the
+  // single source of truth, so a rejected PATCH leaves the UI truthful. To keep
+  // the tap feeling instant despite the round-trip, we set `page` immediately
+  // AND write; if the PATCH fails we roll back to the engine-confirmed page.
+  const onSelectPage = useCallback(async (next: number) => {
+    if (next === page) return;
+    const prev = page;
+    setPage(next); // optimistic — reconciled by the broadcast (or rolled back)
+    const r = await setEffectsPage(next);
+    if (!r.ok) {
+      console.warn(`[GEM] set effects page ${next} failed:`, r.error);
+      setPage(prev);
+      setError(r.error || 'Failed to change effects page');
+    }
+  }, [page]);
+
+  // Slot intensity edit (UI): write the slot's value (0..1) to the engine. The
+  // status broadcast reconciles the rendered value.
+  const onSetIntensity = useCallback(async (slotId: number, value: number) => {
+    const r = await setGlobalEffectSlotIntensity(slotId, value);
+    if (!r.ok) console.warn(`[GEM] set slot ${slotId} intensity failed:`, r.error);
+  }, []);
+
+  // Slot intensity RESET (UI): the VSN1 encoder press is now mode-cycle, so the
+  // intensity reset lives here (Effects v2 decision — documented in vsn1.yaml).
+  const onResetIntensity = useCallback(async (slotId: number) => {
+    const r = await resetGlobalEffectSlotIntensity(slotId);
+    if (!r.ok) console.warn(`[GEM] reset slot ${slotId} intensity failed:`, r.error);
+  }, []);
+
+  // Slot mode edit (UI): cycle to the next mode value (same op the VSN1 encoder
+  // press fires) or set an explicit value from the mode chip's picker.
+  const onCycleMode = useCallback(async (slotId: number) => {
+    const r = await cycleGlobalEffectSlotMode(slotId);
+    if (!r.ok) console.warn(`[GEM] cycle slot ${slotId} mode failed:`, r.error);
+  }, []);
+  const onSetMode = useCallback(async (slotId: number, value: string | number | boolean) => {
+    const r = await setGlobalEffectSlotMode(slotId, value);
+    if (!r.ok) console.warn(`[GEM] set slot ${slotId} mode failed:`, r.error);
+  }, []);
+
   // Empty cell tapped: open the swap sheet immediately (no tap-the-+
   // first / open-modal-second double action).
   const onPressEmpty = useCallback((slotId: number) => {
@@ -411,24 +562,6 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
     if (r.ok) onBlackoutChange?.(next);
   }, [blackout, onBlackoutChange]);
 
-  // Global hue degrees fader (0-360°). Optimistic local set + POST. The
-  // HorizontalFader throttles onChange to ~50 ms during a drag, so each POST
-  // is naturally rate-limited. Fail-loud: surface a rejection.
-  //
-  // SPIN removed (June 2026): the auto-rotate control is gone, so EVERY hue
-  // write now FORCES autoRotateDegPerSec: 0. Without this, a previously
-  // persisted spin would survive (the engine keeps the last rate) and the hue
-  // would keep rotating invisibly with no control to stop it. Pairs with the
-  // one-shot mount clear in the boot effect.
-  const onHueDegreesChange = useCallback(async (deg: number) => {
-    setHueShift({ degrees: deg });
-    const r = await setGlobalHue(deg, 0);
-    if (!r.ok) {
-      console.warn('[GEM] global hue degrees rejected:', r.error);
-      Alert.alert('Hue not applied', r.error || 'The engine rejected the global hue.');
-    }
-  }, []);
-
   // Always deactivate a slot before mutating its binding. Without
   // this an operator who swaps an active legacy effect (e.g.
   // vintageWhite) to another effect leaves the controller's
@@ -442,7 +575,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   const ensureSlotOff = useCallback(async (slotId: number) => {
     const slot = visibleSlots?.find(s => s.slotId === slotId);
     if (!slot) return;
-    if (!slot.effectId) return;       // empty slot — nothing to deactivate
+    if (!slotIsBound(slot)) return;   // empty/disabled slot — nothing to deactivate
     const optActive = optimisticActive[slotId];
     const isOn = optActive !== undefined ? optActive : slot.active;
     if (!isOn) return;
@@ -519,20 +652,56 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   // orientations (operator request 2026-06-22). Portrait chips are narrower,
   // so they're made TALLER (60px) to give a 2-line wrapped label room without
   // truncating; landscape bumps to 44px to match the beefier touch target.
-  const btnHeight = isStrip
-    ? (isPortrait ? 60 : 44)
+  // Strip landscape grew 44→48 (2026-07 visual polish): the value/mode badge
+  // gained 2px of height for legibility, and the chip needs the extra room so
+  // a centred label clears it (see SlotButton's conditional paddingTop).
+  // The chip height is the tuned base height (presentation.cellHeightScale is a
+  // constant 1 now — the profile never grows the cells; the scale hook is kept
+  // only so the geometry has a single documented multiplier point).
+  const baseBtnHeight = isStrip
+    ? (isPortrait ? 60 : 48)
     : (isPortrait ? 52 : 48);
+  const btnHeight = Math.round(baseBtnHeight * presentation.cellHeightScale);
   // Deck portrait left-pane is the tightest 3-up width, so it drops to 9px to
   // guarantee a 7-char word ("Vintage", "Iceberg") fits a wrapped line clear of
   // the ⋯ gutter. The mixer strip (now 4-up wrapped) keeps 10px.
+  // Landscape strip chips are ~150 px wide — plenty of room for a 12 px
+  // label, and the extra point matters for arm's-length legibility at the
+  // podium. The tight portrait sizes are unchanged (they were fitted to the
+  // narrowest pane in QA round3/7).
   const btnFont   = isStrip
-    ? (isPortrait ? 10 : 11)
+    ? (isPortrait ? 10 : 12)
     : (isPortrait ? 9 : 11);
-  const gap       = isStrip ? 4 : 5;
+  const gap       = 6;
   // Uniform deck grid columns. Landscape fits 4-up comfortably; the narrow
   // portrait left-pane needs 3-up so each chip is wide enough for its full
   // wrapped label (QA round3: 4-up portrait chips were ~90px and truncated).
   const deckCols  = isPortrait ? 3 : 4;
+
+  // MODE BADGE — the passive LOCKED pill shown while performance mode is active
+  // (it explains why the ⋯ swap / ＋ bind affordances are inert during a show).
+  // Unlocked → no badge (the grid looks exactly as always). The controller
+  // profile is NOT an input — it never changes this grid. Derived purely so the
+  // state (locked vs no-badge) is unit-tested.
+  const badge = modeBadge(performanceActive);
+  const modeBadgeEl = badge ? (
+    <ModeBadge key="mode-badge" badge={badge} />
+  ) : null;
+
+  // BANK BADGE — a small NEUTRAL, informational pill naming the active effect
+  // bank + its position ('BANK: Default' / 'BANK: Party (2/3)'). The active bank
+  // selects WHICH effects populate the slots (content); this badge tells the
+  // operator which set they see. It is CONTENT-only — deliberately NOT the LOCKED
+  // alarm styling and it never alters chrome/sizing/affordances (the presentation
+  // stays bank-invariant).
+  //
+  // SHELVED 2026-07-14 (BANKS_UI_ENABLED=false): the multi-bank UX is off, so the
+  // badge is NOT rendered — the grid shows the single active bank's 8 slots as a
+  // plain effects grid with no bank chrome. The useEffectBanks hook stays wired
+  // (dormant) so a flip of the flag restores the badge with no other change.
+  const bankBadgeEl = BANKS_UI_ENABLED ? (
+    <BankBadge key="bank-badge" label={bankBadgeLabel(effectBanks)} />
+  ) : null;
 
   // While we wait for the first /global-effect-slots response render
   // a thin skeleton row (matches final layout so the deck doesn't
@@ -540,41 +709,54 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   if (visibleSlots === null) {
     return (
       <View style={{ paddingTop: 8 }}>
-        <Header variant={variant} />
+        {/* Strip: header line removed (label rides in-row once loaded). */}
+        {isStrip ? null : <Header variant={variant} page={renderPage} badge={modeBadgeEl} bankBadge={bankBadgeEl} />}
+        {/* party 2026-07-11 — pager chrome hidden (single-page layout). */}
+        {SHOW_EFFECT_PAGES ? (
+          <PageSwitcher page={page} onSelect={onSelectPage} pageActivity={pageActivity} />
+        ) : null}
         <View style={{ flexDirection: 'row', gap }}>
           {Array.from({ length: VISIBLE_SLOT_COUNT }).map((_, i) => (
-            <View key={i} style={{ flex: 1, height: btnHeight, borderRadius: 6, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }} />
+            <View key={i} style={{ flex: 1, height: btnHeight, borderRadius: 8, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }} />
           ))}
         </View>
         {error ? (
-          <Text style={{ color: C.error, fontSize: 10, marginTop: 6 }}>{error}</Text>
+          <Text style={{ color: C.error, fontSize: 11, marginTop: 6 }}>{error}</Text>
         ) : null}
       </View>
     );
   }
 
   return (
-    <View style={{ paddingTop: 6, borderTopWidth: 1, borderTopColor: C.ghostBorder, flex: isStrip ? 1 : undefined }}>
-      <Header variant={variant} />
-      {/* Global hue shifter (docs/39 §F-hue). A first-class rig knob (NOT a GEM
-          slot): a continuous RGB-only hue rotation applied post-composite on
-          the whole output. W/A/UV (mission-critical exterior whites) are never
-          touched. June 2026: collapsed to a single inline row and MOVED to the
-          TOP of GLOBAL EFFECTS (above the slot grid) per operator request.
-          Omitted on the constrained mixer-strip variant — that single-row
-          strip is pinned to the bottom of the mixer surface and has no room
-          for an extra control. */}
-      {!isStrip && (
-        <HueShiftSection
-          degrees={hueShift.degrees}
-          onDegreesChange={onHueDegreesChange}
-          onDegreesDragStart={() => { hueDraggingRef.current = true; }}
-          onDegreesRelease={() => { hueDraggingRef.current = false; }}
-        />
-      )}
-      {error ? (
-        <Text style={{ color: C.error, fontSize: 10, marginBottom: 4 }}>{error}</Text>
+    // In the strip variant the host bottom bar already draws the top rule —
+    // GEM adding its own produced a doubled hairline mid-bar, so the inner
+    // border only ships with the standalone deck grid.
+    <View style={{ paddingTop: 6, borderTopWidth: isStrip ? 0 : 1, borderTopColor: C.ghostBorder, flex: isStrip ? 1 : undefined }}>
+      {/* party 2026-07-11 — in the STRIP the header line is gone: the label
+          rides IN the chip row (StripLabel below) to save a full line of
+          vertical space in the bottom bar. The deck grid keeps its header. */}
+      {isStrip ? null : <Header variant={variant} page={renderPage} badge={modeBadgeEl} bankBadge={bankBadgeEl} />}
+      {/* party 2026-07-11 — the 4-page switcher is HIDDEN (single-page layout;
+          VSN1 side buttons no longer page). Flip SHOW_EFFECT_PAGES to restore. */}
+      {SHOW_EFFECT_PAGES ? (
+        <PageSwitcher page={page} onSelect={onSelectPage} pageActivity={pageActivity} />
       ) : null}
+      {/* (The global hue shifter row that used to sit here was REMOVED
+          2026-07 — hue is per-channel only: the deck's DeckHueRow and each
+          mixer strip's HUE trim are the hue controls.) */}
+      {error ? (
+        <Text style={{ color: C.error, fontSize: 11, marginBottom: 4 }}>{error}</Text>
+      ) : null}
+      {/* VSN1 layout deploy FAILED — visible + dismissible (a silently failed
+          flash used to be invisible). A later successful deploy clears it. */}
+      {deployError ? (
+        <DeployErrorBanner message={deployError} onDismiss={() => setDeployError(null)} />
+      ) : null}
+      {/* (The old `!isStrip`-gated "PLAY profile active" hint was REMOVED here:
+          BOTH deck and mixer render the STRIP variant, so it never showed and
+          PLAY was indistinguishable from a broken UI. The always-visible
+          <ModeBadge> in the header/strip label supersedes it — it shows in
+          BOTH variants and, in PLAY, is the tappable escape hatch to EDIT.) */}
       {(() => {
         // `minWidth` (set only for the portrait scroll strip) switches a
         // chip from flex:1 (share the bar width) to a fixed minWidth so it
@@ -582,8 +764,11 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         // mid-word-chopping ~70px (QA round7 BLOCKER).
         const renderCell = (slot: GlobalEffectSlotStatus, minWidth?: number) => {
           const slotId = slot.slotId as number;
-          const isEmpty = !slot.effectId;
+          const isEmpty = !slotIsBound(slot);
           if (isEmpty) {
+            // Empty slot → the tappable "+" socket that opens the swap sheet.
+            // Always present (the authoring UI is invariant across profiles);
+            // performance mode dims/disables it inside EmptySlotButton.
             return (
               <EmptySlotButton
                 key={slotId}
@@ -606,12 +791,16 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
               minWidth={minWidth}
               onPress={() => onPressSlot(slot)}
               onEdit={() => onPressEdit(slotId)}
+              onSetIntensity={(v) => onSetIntensity(slotId, v)}
+              onResetIntensity={() => onResetIntensity(slotId)}
+              onCycleMode={() => onCycleMode(slotId)}
+              onSetMode={(v) => onSetMode(slotId, v)}
             />
           );
         };
 
         if (isStrip) {
-          // The 9 slot chips. In LANDSCAPE they flex:1 to fill the bar
+          // The 8 slot chips. In LANDSCAPE they flex:1 to fill the bar
           // (plenty of width per chip — labels already fit, QA round7).
           // In PORTRAIT the bar is far too narrow for that many cells: at
           // flex:1 every chip squeezed to ~70px and the 2-word labels chopped
@@ -622,11 +811,28 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           // OUTSIDE the scroller (QA round10 BLOCKER) so the e-stop never
           // scrolls off-screen. Invert is NO LONGER a dedicated button — it
           // is now an assignable slot (default slot 9), so it scrolls with
-          // the other chips. The minWidth (96px) gives a 2-line label
+          // the other chips (invert is no longer a fixed chip — swap it into
+          // any of the 8 slots via the ⋯ modal). The minWidth (96px) gives a 2-line label
           // ("Vintage\nWhite", "Iceberg\nFlash") room to render full.
           const SLOT_MIN_WIDTH = 96;
           const slotChips = visibleSlots.map((slot) =>
             renderCell(slot, isPortrait ? SLOT_MIN_WIDTH : undefined),
+          );
+          // party 2026-07-11 — the "Global Effects" label moved INTO the chip
+          // row (two-line, narrow) so the strip drops its whole header line:
+          // the bottom bar gets that vertical space back for the chips.
+          const stripLabel = (
+            <Text
+              key="strip-label"
+              style={{
+                fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+                color: C.secondary, letterSpacing: 1.1,
+                textTransform: 'uppercase', lineHeight: 12,
+                marginRight: 8, alignSelf: 'center',
+              }}
+            >
+              {'Global\nEffects'}
+            </Text>
           );
           // Blackout gets a FIXED width so it never shrinks — the e-stop
           // must keep a stable, recognisable footprint regardless of
@@ -638,7 +844,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           // from the slot chips so it never reads as "just another slot"
           // (QA round7 MAJOR).
           const Divider = (
-            <View key="divider" style={{ width: 1, alignSelf: 'stretch', marginHorizontal: 4, backgroundColor: C.ghostBorder }} />
+            <View key="divider" style={{ width: 1, alignSelf: 'stretch', marginHorizontal: 6, backgroundColor: C.ghostBorder }} />
           );
 
           if (isPortrait) {
@@ -653,6 +859,13 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
             // on-screen.
             return (
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                {stripLabel}
+                {bankBadgeEl}
+                {/* Minimal add/delete bank controls (D5) — ride next to the badge
+                    on the always-visible strip. Perf-lock-dimmed, delete confirm +
+                    last-bank disabled are handled inside BankControls. */}
+                <BankControls />
+                {modeBadgeEl}
                 {/* Slots-only scroller. A right-edge fade peek hints there's
                     more to scroll (the chips run under the pinned group). */}
                 <View style={{ flex: 1, minWidth: 0, position: 'relative' }}>
@@ -669,7 +882,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
                     style={{
                       position: 'absolute', right: 0, top: 0, bottom: 0, width: 16,
                       backgroundColor: C.surfaceContainerHigh, opacity: 0.55,
-                      borderTopRightRadius: 6, borderBottomRightRadius: 6,
+                      borderTopRightRadius: 8, borderBottomRightRadius: 8,
                     }}
                   />
                 </View>
@@ -684,6 +897,13 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           // Landscape: ONE flat flex row, no scroll — the bar is wide enough.
           return (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap }}>
+              {stripLabel}
+              {bankBadgeEl}
+              {/* Minimal add/delete bank controls (D5) — ride next to the badge on
+                  the always-visible strip. Perf-lock-dimmed, delete confirm +
+                  last-bank disabled are handled inside BankControls. */}
+              <BankControls />
+              {modeBadgeEl}
               {slotChips}
               {Divider}
               {blackoutCell}
@@ -696,8 +916,9 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
         // identical across rows — fixing the old 3-up/5-up squeeze that
         // truncated the bottom-row labels (QA round1 #1). BLACKOUT is the
         // last cell so the destructive e-stop stays bottom-right. Invert is
-        // no longer a dedicated cell — it is an assignable slot now (default
-        // slot 9) and renders as one of the slot chips above.
+        // no longer a dedicated cell — it is an assignable slot effect and
+        // renders as one of the 8 slot chips above whenever the operator
+        // swaps it in.
         const cells: React.ReactNode[] = [
           // NB: wrap in an arrow so Array.map's index arg is never passed as
           // `minWidth` — the deck grid wants flex:1 cells (minWidth undefined).
@@ -709,7 +930,7 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
           rows.push(cells.slice(i, i + deckCols));
         }
         return rows.map((row, ri) => (
-          <View key={ri} style={{ flexDirection: 'row', gap, marginBottom: 4 }}>
+          <View key={ri} style={{ flexDirection: 'row', gap, marginBottom: 6 }}>
             {row}
             {row.length < deckCols
               ? Array.from({ length: deckCols - row.length }).map((_, i) => (
@@ -736,75 +957,301 @@ export const GlobalEffectMacros: React.FC<Props> = ({ blackout, onBlackoutChange
   );
 };
 
-// Global hue shifter UI (docs/39 §F-hue). A single HUE 0-360° fader — the
-// rig-wide chroma offset. Always reflects the engine's reported degrees, but
-// the parent suppresses the broadcast while the operator is dragging.
-//
-// SPIN removed (June 2026): the auto-rotate fader was deleted. Every hue write
-// now forces autoRotateDegPerSec: 0 (see onHueDegreesChange) and the component
-// clears any persisted spin once at mount, so the hue can never rotate
-// invisibly without a control to stop it.
-//
-// ONE-ROW LAYOUT (June 2026): the section is now a single horizontal row —
-// HUE label + fader + degree readout + live hue swatch, all inline — matching
-// the app's one-row control idiom (cf. the old CAP row / mixer strips). It is
-// rendered at the TOP of the GLOBAL EFFECTS area (above the slot grid).
-//
-// The fader is normalized 0..1 (HorizontalFader's contract); engineering units
-// map across that range at the boundary. The row is ≥44pt tall for a
-// comfortable touch target. A live swatch previews the current hue.
-const HueShiftSection: React.FC<{
-  degrees: number;
-  onDegreesChange: (deg: number) => void;
-  onDegreesDragStart: () => void;
-  onDegreesRelease: () => void;
-}> = ({ degrees, onDegreesChange, onDegreesDragStart, onDegreesRelease }) => {
+// (HueShiftSection — the global hue fader row — was REMOVED 2026-07 with the
+// global hue shifter. Hue is per-channel only: see components/deck_hue_row.tsx
+// and the mixer strip's HUE trim.)
+
+// Effects v2 page switcher: four segmented buttons (P1..P4) selecting the
+// engine's active effects page. The active page is highlighted; a tap writes
+// THROUGH the engine (onSelect → PATCH), and the `effectsPage` WS broadcast
+// flips the highlight so this switcher, the VSN1 side buttons, and every other
+// surface stay in lockstep.
+// Restyled as ONE recessed segmented control (2026-07 visual polish): the four
+// loose ghost-bordered slabs became joined segments in a surfaceDim track —
+// the same recessed-vs-raised language the empty slot sockets use, so "where
+// you can go" (track) reads distinctly from "what you can fire" (chips).
+// The active segment is a solid primary fill with `onPrimary` text — the old
+// hardcoded '#FFF' washed out on the bright cyan/amber primaries of the dark
+// themes. `pageActivity[p]` draws a small tertiary ("running" green) dot so a
+// live effect on another page stays visible at a glance.
+const PageSwitcher: React.FC<{
+  page: number;
+  onSelect: (p: number) => void;
+  pageActivity?: boolean[];
+}> = ({ page, onSelect, pageActivity }) => {
   const C = usePalette();
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 44, marginBottom: 6 }}>
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, width: 40, letterSpacing: 0.5, textTransform: 'uppercase' }}>HUE</Text>
-      {/* QA round1 #15: the track was given `flex: 1` directly, but the
-          HorizontalFader root's onLayout width didn't grow on react-native-web
-          (the flex shorthand resolved flexBasis:auto and the track sized to
-          content ~28%). Wrap it in a flex:1 / minWidth:0 spacer and let the
-          track fill that wrapper at width:100% so it spans the row; the value
-          stays right-aligned in its fixed column. */}
-      <View style={{ flex: 1, minWidth: 0, marginHorizontal: 8 }}>
-        <HorizontalFader
-          value={Math.max(0, Math.min(1, degrees / 360))}
-          onChange={(v: number) => onDegreesChange(Math.round(v * 360))}
-          onDragStart={onDegreesDragStart}
-          onRelease={onDegreesRelease}
-          trackStyle={{ width: '100%', height: 12, backgroundColor: C.surfaceContainerHigh, borderRadius: 6, justifyContent: 'center' }}
-          fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primaryFixedDim, borderRadius: 6 }}
-          thumbStyle={{ position: 'absolute', width: 16, height: 22, backgroundColor: C.surfaceContainerLowest, borderRadius: 4, borderWidth: 1, borderColor: C.ghostBorder, transform: [{ translateX: -8 }] }}
-        />
-      </View>
-      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, width: 40, textAlign: 'right' }}>{Math.round(degrees)}°</Text>
-      <View
-        style={{
-          width: 20, height: 20, borderRadius: 4, marginLeft: 8,
-          borderWidth: 1, borderColor: C.ghostBorder,
-          backgroundColor: `hsl(${Math.round(degrees)}, 80%, 55%)`,
-        }}
-        accessibilityLabel={`Current global hue ${Math.round(degrees)} degrees`}
-      />
+    <View
+      style={{
+        flexDirection: 'row', gap: 2, marginBottom: 6, padding: 2,
+        borderRadius: 8, backgroundColor: C.surfaceDim,
+        borderWidth: 1, borderColor: C.ghostBorder,
+      }}
+      accessibilityRole="tablist"
+    >
+      {Array.from({ length: EFFECTS_PAGE_COUNT }).map((_, p) => {
+        const active = p === page;
+        const hasLive = !!pageActivity?.[p];
+        return (
+          <TouchableOpacity
+            key={p}
+            onPress={() => onSelect(p)}
+            activeOpacity={0.8}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={`Effects page ${p + 1}`}
+            style={{
+              flex: 1, height: 22, borderRadius: 6,
+              backgroundColor: active ? C.primary : 'transparent',
+              flexDirection: 'row', gap: 5,
+              alignItems: 'center', justifyContent: 'center',
+              ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
+            }}
+          >
+            {hasLive ? (
+              <View style={{
+                width: 5, height: 5, borderRadius: 3,
+                backgroundColor: active ? C.onPrimary : C.tertiary,
+              }} />
+            ) : null}
+            <Text style={{
+              fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10,
+              color: active ? C.onPrimary : C.secondary, letterSpacing: 0.8,
+            }}>
+              P{p + 1}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
     </View>
   );
 };
 
-const Header: React.FC<{ variant: 'deck' | 'mixer-strip' }> = ({ variant }) => {
+// Top band: the "Global Effects" title + the CURRENT effects page index badge
+// (P0-P3, Sina 2026-07-11). The badge shows the ENGINE's active page (0-based, the
+// same index the VSN1 reports on its LCD) right next to the page switcher below,
+// so the operator always sees which page the 8 visible slots belong to — the
+// switcher's highlight tells you what you can select, this badge names where you
+// ARE. 0-based on purpose: it matches the engine `effectsPage` value and the VSN1
+// side-button/LCD numbering (the switcher buttons stay 1-based P1-P4 for humans).
+// (2026-07 visual polish: the title now renders at 10px in BOTH variants —
+// the 9px strip size was below the app's smallest legible caption step —
+// so `variant` stays in the prop contract but is not consumed here.)
+const Header: React.FC<{ variant: 'deck' | 'mixer-strip'; page: number; badge?: React.ReactNode; bankBadge?: React.ReactNode }> = ({ page, badge, bankBadge }) => {
   const C = usePalette();
   return (
-    <Text style={{
-      fontFamily: 'SpaceGrotesk_700Bold',
-      fontSize: variant === 'mixer-strip' ? 9 : 10,
-      color: C.secondary, letterSpacing: 1.2,
-      textTransform: 'uppercase',
-      marginBottom: 4,
-    }}>
-      Global Effects
-    </Text>
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 }}>
+        <Text style={{
+          fontFamily: 'SpaceGrotesk_700Bold',
+          fontSize: 10,
+          color: C.secondary, letterSpacing: 1.2,
+          textTransform: 'uppercase',
+        }}>
+          Global Effects
+        </Text>
+        {/* Neutral BANK badge (informational — names the active bank + position).
+            Content-only; never alters chrome/sizing/affordances. */}
+        {bankBadge}
+        {/* Minimal add/delete bank controls (D5) — deck grid only (the roomy
+            authoring surface). Perf-lock-dimmed, delete confirm + last-bank
+            disabled are handled inside BankControls. */}
+        <BankControls />
+        {/* Always-visible LOCKED status badge rides next to the label — the
+            non-strip twin of the strip's in-row badge. */}
+        {badge}
+      </View>
+      {/* party 2026-07-11 — the "PAGE Pn" badge rides with the pager: hidden in
+          the single-page layout (SHOW_EFFECT_PAGES=false) since there is only
+          ever page 0. Flip SHOW_EFFECT_PAGES to restore it alongside the
+          switcher. */}
+      {SHOW_EFFECT_PAGES ? (
+        <View
+          accessibilityLabel={`Effects page ${page}`}
+          style={{
+            paddingHorizontal: 8, height: 18, borderRadius: 9,
+            backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder,
+            alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9,
+            color: C.primary, letterSpacing: 0.8,
+          }}>
+            {`PAGE P${page}`}
+          </Text>
+        </View>
+      ) : null}
+    </View>
+  );
+};
+
+// BANK BADGE — a small NEUTRAL, informational pill naming the active effect bank
+// + its position ('BANK: Default' / 'BANK: Party (2/3)'). The active bank selects
+// WHICH effects populate the slots (content); this badge just names the active set
+// (and, when there's more than one, its position i/n) so the operator can tell
+// which one they're looking at. It is deliberately styled NEUTRAL (surface +
+// secondary tokens) — NOT the amber/red LOCKED alarm — because it is purely
+// informational and must NOT read as a warning. It is CONTENT-only: it never
+// alters chrome, sizing, or any affordance (the effects presentation stays
+// bank-invariant). Copy comes from the pure `bankBadgeLabel()`.
+const BankBadge: React.FC<{ label: string }> = ({ label }) => {
+  const C = usePalette();
+  return (
+    <View
+      accessibilityLabel={label}
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        alignSelf: 'center',
+        paddingHorizontal: 8, height: 18, borderRadius: 9,
+        backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder,
+        ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
+      }}
+    >
+      <Text
+        numberOfLines={1}
+        style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, letterSpacing: 0.6 }}
+      >
+        {label}
+      </Text>
+    </View>
+  );
+};
+
+// BANK CONTROLS (decision D5) — the MINIMAL add / delete affordances that ride
+// next to the bank badge in the deck Header. Deliberately tiny: a "+" that POSTs a
+// new bank and a trash that DELETEs the active one. Both are DIMMED + inert under
+// performance-mode lock (usePerfLock — same structural lock that dims the ⋯/＋
+// slot affordances). Delete is DISABLED whenever there is <= 1 bank (the engine's
+// >= 1 invariant — the client mirror surfaces a synthetic Default, whose delete is
+// therefore always disabled). Delete is TWO-STEP (tap → the trash turns into a
+// confirm) so a single mis-tap can't drop a bank. Rename is deferred: the
+// renameEffectBank endpoint exists (a minimal inline rename is a follow-up).
+//
+// Self-contained: it reads useEffectBanks + usePerfLock itself, so the deck Header
+// can drop it in with no prop plumbing. It is rendered ONLY on the deck grid
+// (the roomy authoring surface), not the space-constrained bottom-bar strip.
+const BankControls: React.FC = () => {
+  const C = usePalette();
+  const perfLocked = usePerfLock();
+  const banks = useEffectBanks();
+  // SHELVED 2026-07-14 (BANKS_UI_ENABLED=false): the multi-bank UX is off, so the
+  // ＋/delete bank controls DO NOT render at any of their call sites (deck Header +
+  // both strip rows). The hooks above still run (Rules of Hooks — the early return
+  // is AFTER them) so the component stays hook-stable; flipping the flag restores
+  // the controls verbatim. The create/delete machinery below is kept as a TODO.
+  if (!BANKS_UI_ENABLED) return null;
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  // The engine enforces >= 1 bank (409 on the last delete); the client mirror
+  // surfaces a synthetic Default. Either way, delete is disabled at count <= 1.
+  const canDelete = banks.banks.length > 1;
+  const disabled = perfLocked || busy;
+
+  const onAdd = useCallback(() => {
+    if (disabled) return;
+    setBusy(true);
+    // No name — the engine names an untitled bank. The `effectBanks` broadcast
+    // re-seeds the badge/list; no optimistic local mutation (fail-loud on !ok).
+    createEffectBank()
+      .then((r) => { if (!r.ok) console.warn(`[BankControls] create failed: ${r.error}`); })
+      .finally(() => setBusy(false));
+  }, [disabled]);
+
+  const onDeletePress = useCallback(() => {
+    if (disabled || !canDelete) return;
+    if (!confirmingDelete) { setConfirmingDelete(true); return; }
+    setConfirmingDelete(false);
+    setBusy(true);
+    const id = banks.activeBankId;
+    if (!id) { setBusy(false); return; }
+    // The engine 409s on the last bank; that error is surfaced (logged), not
+    // swallowed. The `effectBanks` broadcast re-seeds on success.
+    deleteEffectBank(id)
+      .then((r) => { if (!r.ok) console.warn(`[BankControls] delete failed: ${r.error}`); })
+      .finally(() => setBusy(false));
+  }, [disabled, canDelete, confirmingDelete, banks.activeBankId]);
+
+  const pillStyle = (active: boolean) => ({
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    minWidth: 18, height: 18, paddingHorizontal: 6, borderRadius: 9,
+    backgroundColor: active ? C.errorContainer : C.surfaceContainerHigh,
+    borderWidth: 1, borderColor: active ? C.error : C.ghostBorder,
+    ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
+  });
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'center' }}>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel="Add effect bank"
+        accessibilityState={{ disabled }}
+        disabled={disabled}
+        onPress={onAdd}
+        style={{ ...pillStyle(false), opacity: disabled ? 0.45 : 1 }}
+      >
+        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.secondary }}>＋</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        accessibilityRole="button"
+        accessibilityLabel={confirmingDelete ? 'Confirm delete effect bank' : 'Delete effect bank'}
+        accessibilityState={{ disabled: disabled || !canDelete }}
+        disabled={disabled || !canDelete}
+        onPress={onDeletePress}
+        onBlur={() => setConfirmingDelete(false)}
+        style={{ ...pillStyle(confirmingDelete), opacity: (disabled || !canDelete) ? 0.45 : 1 }}
+      >
+        <Text
+          numberOfLines={1}
+          style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: confirmingDelete ? 8 : 11,
+            letterSpacing: 0.4, color: confirmingDelete ? C.error : C.secondary,
+          }}
+        >
+          {confirmingDelete ? 'SURE?' : '🗑'}
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+};
+
+// MODE BADGE — the passive LOCKED indicator that rides next to the "GLOBAL
+// EFFECTS" label (deck Header) and the strip label (both variants).
+//
+//   - LOCKED → a passive RED status pill "LOCKED — performance mode" (palette
+//     error tokens) explaining why the ⋯ swap / ＋ bind affordances are inert
+//     while a show is live.
+//
+// (The old PLAY variant + on-screen escape hatch was removed with the profile
+// UI-degradation: the grid no longer changes with the controller profile, so
+// there is nothing to warn about or escape from.) The kind/copy decision is the
+// pure `modeBadge()` derivation; this component only paints it.
+const ModeBadge: React.FC<{ badge: ModeBadgeInfo }> = ({ badge }) => {
+  const C = usePalette();
+  return (
+    <View
+      accessibilityRole="alert"
+      accessibilityLabel={badge.label}
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        alignSelf: 'center',
+        paddingHorizontal: 8, height: 18, borderRadius: 9,
+        backgroundColor: C.errorContainer, borderWidth: 1, borderColor: C.error,
+        ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
+      }}
+    >
+      <Text
+        numberOfLines={1}
+        style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.error, letterSpacing: 0.6 }}
+      >
+        {badge.label}
+      </Text>
+    </View>
   );
 };
 
@@ -815,7 +1262,7 @@ const Header: React.FC<{ variant: 'deck' | 'mixer-strip' }> = ({ variant }) => {
 // touch (gesture races with simple taps).
 //
 // Visual contract:
-//   - toggle/hold ON  → primary (teal) fill, white text
+//   - toggle/hold ON  → primary fill, `onPrimary` text (theme-safe pairing)
 //   - toggle/hold OFF → ghost-bordered grey fill, dark text
 //   - trigger/burst   → MOMENTARY. Tap pulses the body for 180 ms
 //     (subtle surface lift), never tracks the engine `active` flag.
@@ -833,6 +1280,14 @@ const Header: React.FC<{ variant: 'deck' | 'mixer-strip' }> = ({ variant }) => {
 // right-side gutter — it uses the full chip width and wraps cleanly to 2
 // lines. (The old EDIT_AFFORDANCE_GUTTER constant was removed with that fix.)
 
+// Effects v2: format a slot's discrete mode value for the inline chip. A boolean
+// shows ON/OFF; a string/number shows as-is; absent → a dim '—'.
+function formatMode(mode: string | number | boolean | null | undefined): string {
+  if (mode === undefined || mode === null) return '—';
+  if (typeof mode === 'boolean') return mode ? 'ON' : 'OFF';
+  return String(mode);
+}
+
 const SlotButton: React.FC<{
   slot: GlobalEffectSlotStatus;
   isOn: boolean;
@@ -843,10 +1298,27 @@ const SlotButton: React.FC<{
   minWidth?: number;
   onPress: () => void;
   onEdit: () => void;
-}> = ({ slot, isOn, height, fontSize, minWidth, onPress, onEdit }) => {
+  // Effects v2 value/mode edit callbacks.
+  onSetIntensity: (value: number) => void;
+  onResetIntensity: () => void;
+  onCycleMode: () => void;
+  onSetMode: (value: string | number | boolean) => void;
+}> = ({ slot, isOn, height, fontSize, minWidth, onPress, onEdit, onSetIntensity, onResetIntensity, onCycleMode, onSetMode }) => {
   const C = usePalette();
+  // PERFORMANCE MODE: rebinding/clearing a slot (the ⋯ swap sheet →
+  // PATCH /global-effect-slots/:id) is a LAYOUT edit, 409-gated while a show
+  // is live. Firing the effect (cell body), intensity and mode stay live —
+  // those are runtime routes the engine deliberately allows.
+  const perfLocked = usePerfLock();
   const isMomentary = slot.behavior === 'trigger' || slot.behavior === 'burst';
+  // Favorite (⭐) marker — the operator's party picks (effect_picker_logic).
+  const isFav = isFavoritePreset(slot.effectId, slot.presetId);
   const [ackAt, setAckAt] = useState<number | null>(null);
+  // Effects v2: the value/mode detail sheet (precise intensity slider + mode
+  // picker + reset) opens from the small "value" affordance on the chip.
+  const [detailOpen, setDetailOpen] = useState(false);
+  const hasIntensity = typeof slot.intensity === 'number';
+  const hasMode = slot.mode !== undefined && slot.mode !== null;
   useEffect(() => {
     if (ackAt === null) return;
     const t = setTimeout(() => setAckAt(null), 180);
@@ -865,7 +1337,10 @@ const SlotButton: React.FC<{
     : showAck
       ? C.surface
       : C.surfaceContainerHigh;
-  const fg = showOn ? '#FFF' : C.text;
+  // `onPrimary`, not '#FFF': the dark themes use BRIGHT primaries (cyan,
+  // amber) where white text washes out — onPrimary is each palette's
+  // guaranteed-contrast pairing (2026-07 visual polish).
+  const fg = showOn ? C.onPrimary : C.text;
 
   // flex:1 (share the bar) vs. fixed minWidth + flexGrow:0 (portrait scroll
   // strip — the chip must keep a width that fits its full label).
@@ -886,11 +1361,18 @@ const SlotButton: React.FC<{
         // both makes ON solid blue, OFF solid grey, instant.
         activeOpacity={1}
         style={{
-          flex: 1, paddingHorizontal: 6, borderRadius: 6,
+          flex: 1, paddingHorizontal: 6, borderRadius: 8,
           backgroundColor: bg,
           borderWidth: 1,
           borderColor: showOn ? 'transparent' : C.ghostBorder,
           justifyContent: 'center', alignItems: 'center',
+          // Two-band chip layout (2026-07 visual polish): the TOP band is
+          // reserved for meta — value/mode badge (left) and the ⋯ edit
+          // affordance (right) — and the label owns the band below it.
+          // Uniform on every chip so labels sit on one shared baseline
+          // across the strip instead of jumping per-chip with badge
+          // presence.
+          paddingTop: 14,
           // RN-Web only: kills the auto bg-color transition. Ignored
           // by native React Native (no-op there).
           ...(Platform.OS === 'web' ? { transitionDuration: '0s' as any } : {}),
@@ -912,25 +1394,26 @@ const SlotButton: React.FC<{
           {slot.label}
         </Text>
       </TouchableOpacity>
+      {/* ⋯ swap/edit affordance — ALWAYS present (the authoring UI is invariant
+          across controller profiles). Performance mode dims + disables it. */}
       <TouchableOpacity
         onPress={onEdit}
+        disabled={perfLocked}
         activeOpacity={0.6}
         hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
         accessibilityLabel={`Edit slot ${slot.slotId}`}
+        accessibilityState={{ disabled: perfLocked }}
         style={{
-          // QA round7: MOVED to the BOTTOM-right corner (was top-right, where
-          // it overlapped the first line of the centred 2-line label). The
-          // label is now vertically centred, so the bottom corner is clear of
-          // its text band. Raised contrast (visible chip background + bolder
-          // glyph colour) and a touch larger (16px) so the edit affordance is
-          // legible, while staying small enough that it never steals label
-          // width (no gutter reserved on the label any more).
-          // QA round10 MINOR: was inset bottom/right:1 so the glyph straddled
-          // the chip border and read as a floating sticker. Inset to a
-          // consistent 3px corner padding so it sits fully WITHIN the chip
-          // bounds and reads as an integrated control.
-          position: 'absolute', bottom: 3, right: 3,
-          width: 16, height: 16, borderRadius: 8,
+          opacity: perfLocked ? 0.45 : 1,
+          // 2026-07 visual polish: back to the TOP-right corner — the chip
+          // now reserves its whole top band for meta (paddingTop on the
+          // body pushes the label below), so the corner is guaranteed clear
+          // of the text. Pairs with the value/mode badge in the top-LEFT for
+          // a symmetric meta row. (QA round7 had moved it to the bottom
+          // corner because the label was vertically centred back then and
+          // collided — that constraint no longer exists.)
+          position: 'absolute', top: 4, right: 4,
+          width: 18, height: 18, borderRadius: 9,
           backgroundColor: showOn ? 'rgba(255,255,255,0.28)' : C.surfaceContainerLowest,
           borderWidth: 1,
           borderColor: showOn ? 'transparent' : C.ghostBorder,
@@ -939,12 +1422,251 @@ const SlotButton: React.FC<{
       >
         <Text style={{
           fontFamily: 'SpaceGrotesk_700Bold',
-          fontSize: 11,
-          color: showOn ? '#FFF' : C.text,
-          lineHeight: 11,
+          fontSize: 12,
+          color: showOn ? C.onPrimary : C.text,
+          lineHeight: 12,
         }}>⋯</Text>
       </TouchableOpacity>
+
+      {/* Favorite (⭐) marker — bottom-right corner (mirror of the ⋯ edit chip),
+          out of the centred label band. Rendered only for the operator's party
+          picks so a starred effect is recognisable at a glance on the strip. */}
+      {isFav ? (
+        <View
+          pointerEvents="none"
+          accessibilityLabel={`Favorite slot ${slot.slotId}`}
+          style={{ position: 'absolute', bottom: 3, right: 5 }}
+        >
+          <Text style={{ fontSize: 10, lineHeight: 12 }}>⭐</Text>
+        </View>
+      ) : null}
+
+      {/* Effects v2: value + mode badge (top-left). Shows the slot's intensity %
+          and current mode at a glance; tapping opens the detail sheet where the
+          operator edits BOTH (a precise intensity slider + reset, and a mode
+          cycle/picker). Only rendered when the engine threads intensity/mode —
+          a pre-field slot shows nothing here rather than a fabricated 0. Always
+          present (invariant across controller profiles). */}
+      {(hasIntensity || hasMode) ? (
+        <TouchableOpacity
+          onPress={() => setDetailOpen(true)}
+          activeOpacity={0.6}
+          hitSlop={{ top: 6, right: 6, bottom: 6, left: 6 }}
+          accessibilityLabel={`Edit slot ${slot.slotId} value and mode`}
+          style={{
+            position: 'absolute', top: 4, left: 4,
+            flexDirection: 'row', alignItems: 'center', gap: 4,
+            paddingHorizontal: 5, height: 16, borderRadius: 8,
+            backgroundColor: showOn ? 'rgba(255,255,255,0.22)' : C.surfaceContainerLowest,
+            borderWidth: 1, borderColor: showOn ? 'transparent' : C.ghostBorder,
+          }}
+        >
+          {hasIntensity ? (
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: showOn ? C.onPrimary : C.secondary, lineHeight: 11 }}>
+              {Math.round((slot.intensity as number) * 100)}%
+            </Text>
+          ) : null}
+          {hasMode ? (
+            <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: showOn ? C.onPrimary : C.icon, lineHeight: 11 }}>
+              {formatMode(slot.mode)}
+            </Text>
+          ) : null}
+        </TouchableOpacity>
+      ) : null}
+
+      <SlotDetailSheet
+        open={detailOpen}
+        slot={slot}
+        onClose={() => setDetailOpen(false)}
+        onSetIntensity={onSetIntensity}
+        onResetIntensity={onResetIntensity}
+        onCycleMode={onCycleMode}
+        onSetMode={onSetMode}
+      />
     </View>
+  );
+};
+
+// Effects v2: per-slot value + mode editor. A precise intensity slider (0..100%)
+// with a RESET (the intensity reset moved here from the VSN1 encoder press, which
+// is now mode-cycle) and a mode editor — a CYCLE button plus, when the slot
+// exposes its `modeValues`, a tappable list to pick an explicit value. Reads the
+// LIVE slot values (engine is the source of truth); edits round-trip through the
+// engine and the status broadcast reconciles the display.
+const SlotDetailSheet: React.FC<{
+  open: boolean;
+  slot: GlobalEffectSlotStatus;
+  onClose: () => void;
+  onSetIntensity: (value: number) => void;
+  onResetIntensity: () => void;
+  onCycleMode: () => void;
+  onSetMode: (value: string | number | boolean) => void;
+}> = ({ open, slot, onClose, onSetIntensity, onResetIntensity, onCycleMode, onSetMode }) => {
+  const C = usePalette();
+  if (!open) return null;
+  const intensity = typeof slot.intensity === 'number' ? slot.intensity : null;
+  const modeValues = Array.isArray(slot.modeValues) ? slot.modeValues : [];
+  // Fogger & friends: an effect with NO magnitude knob disables the value
+  // encoder / intensity editor entirely (a dead knob is a live-show trap). The
+  // engine's `valueParam:'none'` on the slot status drives this when present;
+  // otherwise a hardcoded fallback table does (effect_picker_logic).
+  const encoderDisabled = slotDisablesEncoder(slot);
+  // The 5 quick intensity steps (0/25/50/75/100%) — a compact, touch-friendly
+  // editor that avoids a drag-fader inside a modal (reliable on RN-web + native).
+  const steps = [0, 0.25, 0.5, 0.75, 1];
+  return (
+    <Modal transparent animationType="fade" visible={open} onRequestClose={onClose}>
+      <TouchableOpacity activeOpacity={1} onPress={onClose} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 }}>
+        <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ alignSelf: 'center', width: '100%', maxWidth: 420 }}>
+          {/* Sheet card (2026-07 visual polish): matches the app's card
+              language — 16px radius, ghost border (essential in the dark
+              themes where the sheet fill nearly matches the scrim), soft
+              ambient drop. Sections read as label row (name left, LIVE value
+              right in primary) + control row, separated by one hairline. */}
+          <View style={{
+            backgroundColor: C.surfaceContainerLowest, borderRadius: 16, padding: 20,
+            borderWidth: 1, borderColor: C.ghostBorder,
+            boxShadow: shadow(0, 12, 32, '#000000', 0.35),
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingBottom: 12, marginBottom: 14, borderBottomWidth: 1, borderBottomColor: C.ghostBorder }}>
+              <View style={{ paddingHorizontal: 7, height: 18, borderRadius: 9, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder, alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, letterSpacing: 0.8 }}>
+                  {`SLOT ${slot.slotId}`}
+                </Text>
+              </View>
+              <Text numberOfLines={1} style={{ flex: 1, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: C.text, letterSpacing: 0.3 }}>
+                {slot.label || slot.effectId || 'Empty'}
+              </Text>
+            </View>
+
+            {/* Intensity (value) */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, letterSpacing: 1, textTransform: 'uppercase' }}>
+                {slot.intensityLabel || 'Intensity'}
+              </Text>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: (intensity !== null && !encoderDisabled) ? C.primary : C.icon, letterSpacing: 0.5 }}>
+                {encoderDisabled ? 'NO KNOB' : intensity !== null ? `${Math.round(intensity * 100)}%` : 'N/A'}
+              </Text>
+            </View>
+            {encoderDisabled ? (
+              // Value encoder disabled — this effect has no magnitude knob. Show
+              // the greyed step row (non-interactive) so the operator sees WHY
+              // the encoder does nothing, instead of a bare missing control.
+              <>
+                <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8, opacity: 0.35 }} pointerEvents="none">
+                  {steps.map((v) => (
+                    <View
+                      key={v}
+                      style={{
+                        flex: 1, height: 40, borderRadius: 8,
+                        backgroundColor: C.surfaceContainerHigh,
+                        borderWidth: 1, borderColor: C.ghostBorder,
+                        alignItems: 'center', justifyContent: 'center',
+                      }}
+                    >
+                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.icon }}>
+                        {Math.round(v * 100)}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+                <Text style={{ color: C.secondary, fontSize: 11, marginBottom: 10 }}>
+                  This effect has no value knob — the encoder is disabled for it.
+                </Text>
+              </>
+            ) : intensity !== null ? (
+              <View style={{ flexDirection: 'row', gap: 6, marginBottom: 10 }}>
+                {steps.map((v) => {
+                  const active = Math.abs(intensity - v) < 0.001;
+                  return (
+                    <TouchableOpacity
+                      key={v}
+                      onPress={() => onSetIntensity(v)}
+                      activeOpacity={0.8}
+                      style={{
+                        flex: 1, height: 40, borderRadius: 8,
+                        backgroundColor: active ? C.primary : C.surfaceContainerHigh,
+                        borderWidth: 1, borderColor: active ? 'transparent' : C.ghostBorder,
+                        alignItems: 'center', justifyContent: 'center',
+                      }}
+                      accessibilityLabel={`Set intensity ${Math.round(v * 100)} percent`}
+                    >
+                      <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: active ? C.onPrimary : C.text }}>
+                        {Math.round(v * 100)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ) : (
+              <Text style={{ color: C.secondary, fontSize: 11, marginBottom: 10 }}>
+                This slot has not reported an intensity value.
+              </Text>
+            )}
+            {intensity !== null && !encoderDisabled ? (
+              <TouchableOpacity
+                onPress={onResetIntensity}
+                activeOpacity={0.8}
+                style={{ alignSelf: 'flex-start', paddingHorizontal: 12, height: 32, justifyContent: 'center', borderRadius: 8, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder, marginBottom: 16 }}
+              >
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.text, letterSpacing: 0.8 }}>RESET INTENSITY</Text>
+              </TouchableOpacity>
+            ) : null}
+
+            <View style={{ height: 1, backgroundColor: C.ghostBorder, marginBottom: 14 }} />
+
+            {/* Mode */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, letterSpacing: 1, textTransform: 'uppercase' }}>
+                {slot.modeLabel || 'Mode'}
+              </Text>
+              {slot.mode !== undefined && slot.mode !== null ? (
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.primary, letterSpacing: 0.5 }}>
+                  {formatMode(slot.mode)}
+                </Text>
+              ) : null}
+            </View>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+              <TouchableOpacity
+                onPress={onCycleMode}
+                activeOpacity={0.8}
+                style={{ paddingHorizontal: 14, height: 40, justifyContent: 'center', borderRadius: 8, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }}
+                accessibilityLabel={`Cycle slot ${slot.slotId} mode`}
+              >
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text, letterSpacing: 0.8 }}>CYCLE</Text>
+              </TouchableOpacity>
+              {modeValues.map((v, i) => {
+                const active = v === slot.mode;
+                return (
+                  <TouchableOpacity
+                    key={`${i}:${String(v)}`}
+                    onPress={() => onSetMode(v)}
+                    activeOpacity={0.8}
+                    style={{
+                      paddingHorizontal: 12, height: 40, justifyContent: 'center', borderRadius: 8,
+                      backgroundColor: active ? C.primary : C.surfaceContainerHigh,
+                      borderWidth: 1, borderColor: active ? 'transparent' : C.ghostBorder,
+                    }}
+                    accessibilityLabel={`Set mode ${formatMode(v)}`}
+                  >
+                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: active ? C.onPrimary : C.text }}>
+                      {formatMode(v)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+              {modeValues.length === 0 ? (
+                <Text style={{ color: C.secondary, fontSize: 11 }}>No mode values reported.</Text>
+              ) : null}
+            </View>
+
+            <TouchableOpacity onPress={onClose} style={{ marginTop: 20, height: 46, borderRadius: 10, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder, alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, letterSpacing: 1 }}>CLOSE</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
   );
 };
 
@@ -973,16 +1695,22 @@ const EmptySlotButton: React.FC<{
   onPress: () => void;
 }> = ({ slotId, height, minWidth, onPress }) => {
   const C = usePalette();
+  // PERFORMANCE MODE: binding an effect into an empty slot is a layout edit
+  // (PATCH /global-effect-slots/:id — 409-gated while a show is live).
+  const perfLocked = usePerfLock();
   const sizing = minWidth !== undefined
     ? { width: minWidth, minWidth, flexGrow: 0, flexShrink: 0 }
     : { flex: 1 };
   return (
     <TouchableOpacity
       onPress={onPress}
+      disabled={perfLocked}
       activeOpacity={1}
       accessibilityLabel={`Add effect to slot ${slotId}`}
+      accessibilityState={{ disabled: perfLocked }}
       style={{
-        ...sizing, height, borderRadius: 6,
+        opacity: perfLocked ? 0.45 : 1,
+        ...sizing, height, borderRadius: 8,
         backgroundColor: C.surfaceDim,
         borderWidth: 1,
         borderStyle: 'dashed',
@@ -1001,6 +1729,37 @@ const EmptySlotButton: React.FC<{
         +
       </Text>
     </TouchableOpacity>
+  );
+};
+
+// VSN1 layout-deploy FAILURE strip — visible + dismissible. Reuses the error
+// idiom (C.error) already used for the load-failure Text above, wrapped in a
+// tinted row with a ✕ so the operator can clear a handled failure. A later
+// successful deploy clears it automatically (deployBannerMessage → null).
+const DeployErrorBanner: React.FC<{ message: string; onDismiss: () => void }> = ({ message, onDismiss }) => {
+  const C = usePalette();
+  return (
+    <View
+      accessibilityRole="alert"
+      style={{
+        flexDirection: 'row', alignItems: 'center', gap: 8,
+        paddingVertical: 4, paddingHorizontal: 8, marginBottom: 4,
+        borderRadius: 8, backgroundColor: C.errorContainer,
+        borderWidth: 1, borderColor: C.error,
+      }}
+    >
+      <Text style={{ flex: 1, color: C.error, fontSize: 11, fontFamily: 'SpaceGrotesk_700Bold', letterSpacing: 0.2 }}>
+        {message}
+      </Text>
+      <TouchableOpacity
+        onPress={onDismiss}
+        hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+        accessibilityLabel="Dismiss deploy error"
+        style={{ width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surfaceContainerLowest, borderWidth: 1, borderColor: C.error }}
+      >
+        <Text style={{ color: C.error, fontSize: 12, lineHeight: 12, fontFamily: 'SpaceGrotesk_700Bold' }}>×</Text>
+      </TouchableOpacity>
+    </View>
   );
 };
 
@@ -1026,7 +1785,11 @@ const BlackoutButton: React.FC<{
   // no confirm/hold gate).
   const isOn = !!blackout;
   const bg = isOn ? C.error : C.errorContainer;
-  const fg = isOn ? '#FFF' : C.error;
+  // ON label: `background`, not '#FFF' — the dark themes soften `error` to a
+  // LIGHT salmon/red where white text loses contrast; each palette's
+  // background is its guaranteed opposite pole (near-black on the dark
+  // themes, and light still gets its white-on-deep-red).
+  const fg = isOn ? C.background : C.error;
   const sizing = fixedWidth !== undefined
     ? { width: fixedWidth, minWidth: fixedWidth, flexGrow: 0, flexShrink: 0 }
     : { flex: 1 };
@@ -1035,7 +1798,7 @@ const BlackoutButton: React.FC<{
       onPress={onPress}
       activeOpacity={1}
       style={{
-        ...sizing, height, paddingHorizontal: 6, borderRadius: 6,
+        ...sizing, height, paddingHorizontal: 6, borderRadius: 8,
         backgroundColor: bg,
         // Persistent red outline in BOTH states. When ON the fill is solid
         // red so the border merges into it; when OFF the 2px error border is
@@ -1053,7 +1816,7 @@ const BlackoutButton: React.FC<{
         // The e-stop label MUST stay fully legible. "BLACKOUT" fits on one
         // line at `fontSize` in the fixed-width cell; "tail" is a safety net
         // only (never expected to trigger).
-        style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, letterSpacing: 0.5 }}
+        style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize, color: fg, letterSpacing: 0.8 }}
       >
         BLACKOUT
       </Text>
@@ -1084,29 +1847,44 @@ const SwapSheet: React.FC<{
 }> = ({ slotId, slot, library, onClose, onPicked, onClear }) => {
   const C = usePalette();
   if (slotId === null) return null;
-  const isBound = !!slot?.effectId;
-  const title = isBound
-    ? `Slot ${slotId} — ${slot?.label ?? ''}`
-    : `Slot ${slotId} — Empty`;
+  // A disabled slot still reports its old effectId (the engine's clear only
+  // flips `enabled`), so gate the REMOVE button + bound header on the SAME
+  // enabled+effectId predicate the grid uses — a cleared slot's sheet shows
+  // "Empty" and no REMOVE, not a phantom bound effect.
+  const isBound = slotIsBound(slot);
   return (
     <Modal transparent animationType="fade" visible={slotId !== null} onRequestClose={onClose}>
       <TouchableOpacity activeOpacity={1} onPress={onClose} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 }}>
         <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ alignSelf: 'center', width: '100%', maxWidth: 560 }}>
-          <View style={{ backgroundColor: C.surfaceContainerLowest, borderRadius: 12, padding: 16, maxHeight: '85%' }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.secondary, letterSpacing: 1, textTransform: 'uppercase', flex: 1 }}>
-                {title}
+          {/* Sheet card — same visual contract as SlotDetailSheet (16px
+              radius, ghost border, ambient drop) so the two slot sheets read
+              as one family. Preset rows carry the behavior as a right-aligned
+              tag instead of a sub-line: one-line rows scan faster in a long
+              library list and the tap target stays a comfortable 44px. */}
+          <View style={{
+            backgroundColor: C.surfaceContainerLowest, borderRadius: 16, padding: 20, maxHeight: '85%',
+            borderWidth: 1, borderColor: C.ghostBorder,
+            boxShadow: shadow(0, 12, 32, '#000000', 0.35),
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingBottom: 12, marginBottom: 14, borderBottomWidth: 1, borderBottomColor: C.ghostBorder }}>
+              <View style={{ paddingHorizontal: 7, height: 18, borderRadius: 9, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder, alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, letterSpacing: 0.8 }}>
+                  {`SLOT ${slotId}`}
+                </Text>
+              </View>
+              <Text numberOfLines={1} style={{ flex: 1, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: C.text, letterSpacing: 0.3 }}>
+                {isBound ? (slot?.label ?? '') : 'Empty'}
               </Text>
               {isBound ? (
                 <TouchableOpacity
                   onPress={onClear}
                   style={{
-                    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6,
-                    backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.error,
+                    paddingHorizontal: 12, height: 32, justifyContent: 'center', borderRadius: 8,
+                    backgroundColor: C.errorContainer, borderWidth: 1, borderColor: C.error,
                   }}
                   accessibilityLabel="Remove effect from slot"
                 >
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.error, letterSpacing: 0.5 }}>REMOVE</Text>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.error, letterSpacing: 0.8 }}>REMOVE</Text>
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -1114,21 +1892,31 @@ const SwapSheet: React.FC<{
               <Text style={{ color: C.secondary, fontSize: 12 }}>Loading library…</Text>
             ) : (
               <ScrollView style={{ maxHeight: 480 }}>
-                {Object.values(library).map(fx => (
-                  <View key={fx.id} style={{ marginBottom: 14 }}>
-                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.icon, marginBottom: 6, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-                      {fx.name}
+                {/* Sections are built from the engine registry (auto-discovery):
+                    a few families get named group headers (Blast Effects /
+                    Flashes / Color Replacement), every other effect renders
+                    ungrouped under its ENGINE display name (fx.name) — so the
+                    Pulse→Strobe rename flows through and nothing is ever
+                    filtered out. Favorites render a ⭐. See effect_picker_logic. */}
+                {buildPickerSections(library as PickerLibrary).map((section) => (
+                  <View key={section.title} style={{ marginBottom: 16 }}>
+                    <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.secondary, marginBottom: 6, letterSpacing: 1, textTransform: 'uppercase' }}>
+                      {section.title}
                     </Text>
-                    {Object.entries(fx.presets).map(([pid, p]) => (
+                    {section.rows.map((row) => (
                       <TouchableOpacity
-                        key={pid}
-                        onPress={() => onPicked(fx.id, pid, p)}
-                        style={{ paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6, marginBottom: 4, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder, flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                        key={`${row.effectId}/${row.presetId}`}
+                        onPress={() => onPicked(row.effectId, row.presetId, row.preset as unknown as LibPreset)}
+                        style={{ minHeight: 44, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, marginBottom: 4, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder, flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                        accessibilityLabel={`${row.favorite ? 'Favorite ' : ''}${row.preset.label} (${row.effectId} / ${row.presetId})`}
                       >
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }}>{p.label}</Text>
-                          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.secondary, marginTop: 2 }}>
-                            {p.defaultBehavior}
+                        {row.favorite ? (
+                          <Text style={{ fontSize: 12, lineHeight: 16 }} accessibilityLabel="Favorite">⭐</Text>
+                        ) : null}
+                        <Text numberOfLines={1} style={{ flex: 1, fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: C.text }}>{row.preset.label}</Text>
+                        <View style={{ paddingHorizontal: 7, height: 18, borderRadius: 9, backgroundColor: C.surfaceDim, borderWidth: 1, borderColor: C.ghostBorder, alignItems: 'center', justifyContent: 'center' }}>
+                          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 10, color: C.secondary, letterSpacing: 0.4 }}>
+                            {row.preset.defaultBehavior}
                           </Text>
                         </View>
                       </TouchableOpacity>
@@ -1137,8 +1925,8 @@ const SwapSheet: React.FC<{
                 ))}
               </ScrollView>
             )}
-            <TouchableOpacity onPress={onClose} style={{ marginTop: 12, padding: 12, borderRadius: 6, backgroundColor: C.surfaceContainerHigh, alignItems: 'center' }}>
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text }}>CLOSE</Text>
+            <TouchableOpacity onPress={onClose} style={{ marginTop: 16, height: 46, borderRadius: 10, backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder, alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, letterSpacing: 1 }}>CLOSE</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>

@@ -11,6 +11,9 @@ type MiniFaderProps = {
   fillColor?: string;
   /** Optional tag rendered to the right of the value, e.g. "BPM". */
   badge?: string;
+  /** Optional node rendered BEFORE the label (e.g. the shared "KNOB N" pill
+   *  naming the physical MFT encoder that drives this fader). */
+  leading?: React.ReactNode;
   /** When true, render at reduced opacity and drop all touch handlers.
    *  Used to surface CPC-matched local exports — the operator can see
    *  what each pattern declares, but the slider is non-interactive
@@ -18,13 +21,16 @@ type MiniFaderProps = {
   disabled?: boolean;
 };
 
-export const MiniFader = ({ label, value, onChange, fillColor, badge, disabled }: MiniFaderProps) => {
+export const MiniFader = ({ label, value, onChange, fillColor, badge, leading, disabled }: MiniFaderProps) => {
   const C = usePalette();
   const bar = fillColor || (disabled ? C.secondary : C.primaryFixedDim);
   return (
     <View style={{ marginBottom: 6, opacity: disabled ? 0.5 : 1 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
-        <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase' }}>{label}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 }}>
+          {leading ?? null}
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 9, color: C.secondary, textTransform: 'uppercase' }}>{label}</Text>
+        </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
           {badge ? (
             <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 8, color: bar, textTransform: 'uppercase', letterSpacing: 0.5 }}>{badge}</Text>

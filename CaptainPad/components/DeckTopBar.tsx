@@ -29,11 +29,14 @@ import { View, Text, useWindowDimensions } from 'react-native';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
 import { HorizontalFader } from '@/components/ui/HorizontalFader';
+import { MidiStatusChip } from '@/components/MidiStatusChip';
 import { HealthChip } from '@/components/ui/HealthChip';
 import { MasterFadeGroup } from '@/components/MasterFadeGroup';
+import { PerformanceModeControl } from '@/components/PerformanceModeControl';
 import { useMaster, useActiveModel } from '@/hooks/useEngineState';
 import { useMasterFade } from '@/hooks/use_master_fade';
 import { updateMixerMaster } from '@/utils/api';
+import { HEADER_MIN_HEIGHT, HEADER_PADDING_VERTICAL } from '@/constants/header_layout';
 
 interface Props {
   /** Connection state passed in from the deck screen. */
@@ -116,12 +119,19 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck', disabled = fals
             <Text style={styles.modelName} numberOfLines={1}>{activeModel}</Text>
           </View>
         ) : null}
+        {/* Direct-MIDI controller status, same visual language as the engine
+            badge. Grey = no device, green = connected, red = error. */}
+        <MidiStatusChip />
         {/* Engine-health warning — renders NOTHING when healthy (no layout
             shift); shows an amber "⚠ DEGRADED" chip only when the engine
             reports a degrade on /status. See HealthChip / useEngineHealth. */}
         <HealthChip compact={isPortrait} />
       </View>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
+        {/* PERFORMANCE MODE — live-show structural lock. Same shared control the
+            mixer header mounts, first in the right cluster so it reads before the
+            master group. Idle chip → confirm → GO LIVE; active badge → exit sheet. */}
+        <PerformanceModeControl isPortrait={isPortrait} />
         {/* FADE affordance — the GENTLE path down (and back up) must be
             reachable in BOTH orientations (QA round 8 fix #2): without it,
             portrait left only the HARD blackout cut as a way down. Shared
@@ -187,7 +197,12 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck', disabled = fals
 function makeStyles(C: Palette) {
   return {
     header: {
-      height: 64,
+      // Compact title-row envelope shared with the mixer tab (see
+      // constants/header_layout.ts). minHeight (not a fixed height) so the
+      // status chrome can breathe, but the resting bar is thin — this row used
+      // to be a fixed 64pt and ate vertical space above the pattern list.
+      minHeight: HEADER_MIN_HEIGHT,
+      paddingVertical: HEADER_PADDING_VERTICAL,
       backgroundColor: C.surfaceContainerLow,
       borderBottomWidth: 1,
       borderBottomColor: C.ghostBorder,

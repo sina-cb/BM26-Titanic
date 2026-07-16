@@ -114,9 +114,9 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
       : { marginBottom: 12, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8, borderRadius: 8, backgroundColor: C.surfaceContainerHigh, ...globalStyles.ghostBorder, gap: 8, opacity: disabled ? 0.6 : 1 }}>
       {/* Header row: label + ON/PAUSE + SHUFFLE — same recipe as the pattern
           AUTOPILOT card so the two read as a matched pair. */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase' }}>{title}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', rowGap: 6, columnGap: 8 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', flexShrink: 1 }}>{title}</Text>
           {/* Next-palette-swap countdown — matched pair with the pattern
               autopilot's timer chip; self-ticking, only shows while a swap is
               scheduled. */}
@@ -142,7 +142,7 @@ export const ColorAutopilotPanel: React.FC<ColorAutopilotPanelProps> = ({ config
         <TouchableOpacity
           disabled={disabled || noPalettes}
           onPress={() => { if (!noPalettes) onChange({ shuffle: !config.shuffle }); }}
-          style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8, opacity: noPalettes ? 0.4 : 1 }}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 8, opacity: noPalettes ? 0.4 : 1, flexShrink: 0 }}
           accessibilityRole="switch"
           accessibilityState={{ checked: config.shuffle, disabled: !!disabled || noPalettes }}
           accessibilityLabel={noPalettes ? 'Add a palette to enable color shuffle' : (config.shuffle ? 'Disable color shuffle' : 'Enable color shuffle')}

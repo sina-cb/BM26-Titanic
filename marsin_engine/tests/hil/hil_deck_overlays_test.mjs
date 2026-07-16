@@ -33,6 +33,8 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const PORT = parseInt(process.env.ENGINE_PORT || '31268', 10);
 const BASE = `http://127.0.0.1:${PORT}`;
 const WS_URL = `ws://127.0.0.1:${PORT}`;
@@ -180,6 +182,10 @@ async function main() {
   console.log(`\n== HIL: Deck Dynamic View Overrides (engine :${PORT}, test_bench) ==\n`);
   await startEngine();
   if (!await waitReady()) { console.error('✗ engine never became ready'); return 1; }
+
+  // Guard: if our slot port was already bound by a real engine the readiness
+  // poll would have latched onto IT — refuse to mutate a non-test_bench model.
+  await assertDisposableEngine(BASE);
 
   // Clean slate: remove any persisted overlays.
   const existing = (await httpJson('GET', '/deck/overlays')).body.overlays || [];

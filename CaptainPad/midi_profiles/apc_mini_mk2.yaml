@@ -1,0 +1,303 @@
+# APC mini mk2 — CaptainPad MIDI profile (driver #1).
+#
+# Authored from the Akai APC mini mk2 Communications Protocol v1.0 + live Web
+# MIDI captures on the dev PC. See apc_mini_mk2_reference.md for in/out note
+# tables + colour palette. Loaded/validated by utils/midi/profile.ts; dispatched
+# through existing utils/api.ts functions.
+#
+# UNIFIED LAYOUT (one map to learn): the deck and mixer tabs share ONE control
+# list (YAML anchor below). Only the channel TARGETS differ per tab — on the
+# Mixer tab the channel faders/focus/pad-columns address the overlay layers; on
+# the Deck tab they address the single deck channel (layer 0; layers 1-3 are
+# inert, their columns off). The manager resolves that via the active tab.
+#
+# ── OPERATOR RE-LAYOUT (2026-07, fresh mk2 discovery capture) ──────────────────
+# Note map (Port 0, Ch 0; note-on 0x90 vel 127, note-off 0x80 vel 0):
+#   Top soft-button row : volume=100 pan=101 send=102 device=103
+#   Arrows              : up=104 down=105 left=106 right=107   (UNASSIGNED, dark)
+#   Right "scene" column : clip_stop=112 solo=113 mute=114 rec_arm=115
+#                          select=116 drum=117 note=118 stop_all_clips=119
+#   Shift               : 122 (no LED)
+#   Grid pads (8×8)     : 0-63
+# Faders send CC (not notes): CC 48-55 = Fader 1-8, CC 56 = Fader 9 (master).
+#
+# Button assignment (this layout):
+#   volume/pan/send/device (100-103) → FOCUS channel 0/1/2/3 (the same focus the
+#                                      MFT hue/local-param faders follow).
+#   arrows (104-107)                 → UNASSIGNED, but EXPLICITLY DRIVEN DARK
+#                                      (ledOff): the APC latches whatever LED it
+#                                      had, so an absent control leaves them lit.
+#   clip_stop (112)                  → combined AUTOPILOT toggle (pattern + colour);
+#                                      LED tracks the combined autopilot state.
+#                                      No colour palettes configured → degrades to
+#                                      a PATTERN-only toggle (colour can't be
+#                                      written), LED then tracks pattern alone.
+#   solo (113)                       → PERFORMANCE/EDIT mode switch: summons the
+#                                      guarded enter-confirm / KEEP-RESTORE exit
+#                                      sheet on the iPad (never a blind toggle).
+#                                      LED lit while performance mode is active.
+#   mute/rec_arm/select/drum/note (114-118) → UNASSIGNED, EXPLICITLY DARK (ledOff).
+#   stop_all_clips (119)             → e-stop BLACKOUT toggle; LED lit when blacked out.
+#   shift (122)                      → toggle Deck ↔ Mixer tab (no LED on this key).
+#   faders 1-4 (CC 48-51)            → mixer channel faders 0-3 (the 4th-fader fix).
+#   faders 5-8 (CC 52-55)            → local params (MIDI-learn, per-pattern).
+#   fader 9 (CC 56)                  → master brightness.
+#   grid pads                        → per-channel playlist browser + colour pairs
+#                                      (unchanged from the prior layout).
+
+device:
+  id: apc_mini_mk2
+  label: "APC mini mk2"
+  nameContains: "APC mini mk2"
+  sourcePort: 0
+  destinationPort: 0
+
+contexts:
+  # The deck tab carries the canonical list; the mixer tab references the same
+  # one (*unified) so there is exactly ONE layout to maintain.
+  deck: &unified
+    # ── Faders ────────────────────────────────────────────────────────────
+    # 1-4 → mixer channels 0-3 (layers); 5-8 → local params (MIDI-learn,
+    # per-pattern); 9 → master brightness.
+    #
+    # THE 4TH-FADER FIX (operator bug: "fader 3 does not move the 4th channel's
+    # fader in the mixer view"). Physical fader 4 = CC 51 was previously a LEARN
+    # fader (unmapped here), so moving it did nothing to any mixer channel. The
+    # party plan reassigned faders 5-8-9 but left the 4th CHANNEL fader unmapped
+    # — this row binds CC 51 → mixerLayerFader layer 3 so fader 4 drives the 4th
+    # mixer channel (0-indexed layer 3). Faders 1-3 (CC 48-50) are unchanged.
+    - id: fader_1_channel1
+      match: { type: cc, channel: 0, cc: 48 }
+      action: { kind: mixerLayerFader, layer: 0, range: [0, 1] }
+    - id: fader_2_channel2
+      match: { type: cc, channel: 0, cc: 49 }
+      action: { kind: mixerLayerFader, layer: 1, range: [0, 1] }
+    - id: fader_3_channel3
+      match: { type: cc, channel: 0, cc: 50 }
+      action: { kind: mixerLayerFader, layer: 2, range: [0, 1] }
+    - id: fader_4_channel4
+      match: { type: cc, channel: 0, cc: 51 }
+      action: { kind: mixerLayerFader, layer: 3, range: [0, 1] }
+    # Faders 5-8 (cc52-55) → local params, bound at runtime via MIDI-learn
+    # (per-pattern) on the FOCUSED channel — intentionally NOT statically mapped
+    # here (binding-first in the manager).
+    - id: fader_9_master
+      match: { type: cc, channel: 0, cc: 56 }
+      action: { kind: master }
+
+    # ── Top soft-button row (100-103) → FOCUS channels 0-3 ────────────────
+    # volume=100 → channel 0, pan=101 → channel 1, send=102 → channel 2,
+    # device=103 → channel 3. Pressing one focuses that mixer channel so the
+    # MFT hue/local-param faders drive ITS active pattern (the SAME focus the
+    # on-screen mixer FOCUS button + the MFT follow — one focused channel at a
+    # time). LED lit solid on the focused channel; BLINKS (velocity `flash`)
+    # while a bound fader is pickup-locked; dark on absent / non-focused
+    # channels. Deck tab: only channel 0 exists (auto-focused), so 101-103 stay
+    # dark.
+    - id: soft_volume_focus_channel1
+      match: { type: note, channel: 0, notes: [100] }
+      action: { kind: focusChannel, layer: 0 }
+      led: { on: 1, off: 0, flash: 2 }
+    - id: soft_pan_focus_channel2
+      match: { type: note, channel: 0, notes: [101] }
+      action: { kind: focusChannel, layer: 1 }
+      led: { on: 1, off: 0, flash: 2 }
+    - id: soft_send_focus_channel3
+      match: { type: note, channel: 0, notes: [102] }
+      action: { kind: focusChannel, layer: 2 }
+      led: { on: 1, off: 0, flash: 2 }
+    - id: soft_device_focus_channel4
+      match: { type: note, channel: 0, notes: [103] }
+      action: { kind: focusChannel, layer: 3 }
+      led: { on: 1, off: 0, flash: 2 }
+
+    # ── Arrows (104-107) → UNASSIGNED, DRIVEN DARK ────────────────────────
+    # These carry no control, but "absent from the profile" is NOT enough to
+    # keep them dark: the APC latches whatever LED state it last held, so an
+    # unmapped button that was ever lit STAYS lit (the operator's "REC ARM /
+    # MUTE still lit" bug). We therefore give each unused button an explicit
+    # `ledOff` control — inert on press (resolves to nothing, dispatches
+    # nothing) but PROJECTED at velocity 0 so a note-off is sent on connect and
+    # kept dark thereafter. (Codex P0: this is loud silence made visible on the
+    # hardware, not a wrapped no-op.)
+    - id: arrow_up_dark
+      match: { type: note, channel: 0, notes: [104] }
+      action: { kind: ledOff }
+      led: { on: 0, off: 0 }
+    - id: arrow_down_dark
+      match: { type: note, channel: 0, notes: [105] }
+      action: { kind: ledOff }
+      led: { on: 0, off: 0 }
+    - id: arrow_left_dark
+      match: { type: note, channel: 0, notes: [106] }
+      action: { kind: ledOff }
+      led: { on: 0, off: 0 }
+    - id: arrow_right_dark
+      match: { type: note, channel: 0, notes: [107] }
+      action: { kind: ledOff }
+      led: { on: 0, off: 0 }
+
+    # ── clip_stop (112) → combined AUTOPILOT toggle ───────────────────────
+    # Pattern autopilot AND colour autopilot together: if AT LEAST ONE is on the
+    # press turns BOTH on; if BOTH are on it turns BOTH off. The read-both /
+    # decide / write-both logic lives in the injected api (useMidiControl) — it
+    # needs the live engine reads the pure dispatcher lacks. LED tracks the
+    # COMBINED autopilot state: lit when BOTH autopilots are on (the "autopilot
+    # is on" state — also the state a press turns OFF), dark otherwise. The hook
+    # threads pattern+colour autopilot `active` into the snapshot from the
+    # engine's `autopilot` / `colorAutopilot` WS broadcasts.
+    #
+    # COLOUR-UNCONFIGURED DEGRADE (the fix): the engine REJECTS every
+    # /deck/color-autopilot write (either direction) unless a NON-EMPTY palette
+    # set is configured (color_autopilot.js strict validate, codex P0). Out of
+    # the box no palettes are set, so the colour autopilot can never be on and an
+    # unconditional colour write always 400'd — the pattern write had already
+    # landed, so the press half-applied and the toggle looked dead. When colour
+    # is UNWRITABLE the toggle degrades to a PURE PATTERN toggle: it writes only
+    # the pattern autopilot, skips the guaranteed-400 colour write, and the LED
+    # tracks the pattern autopilot alone. Configure a palette set (deck →
+    # AUTOPILOT COLORS) to get the full both-flip-together behaviour and a LED
+    # that needs both on. (Decision logic: utils/midi/apc_button_logic.ts —
+    # combinedAutopilotTarget / combinedAutopilotLedOn / colorAutopilotWritable.)
+    - id: clip_stop_autopilot_toggle
+      match: { type: note, channel: 0, notes: [112] }
+      action: { kind: autopilotToggle }
+      led: { on: 1, off: 0 }
+
+    # ── solo (113) → PERFORMANCE-MODE dialog summon ────────────────────────
+    # Operator ruling 2026-07-13: SOLO is the performance/edit mode switch.
+    # The press NEVER blind-toggles the engine — it summons the SAME guarded
+    # flows the header control drives: idle → the "Enter performance mode?"
+    # confirm sheet (with a "PRESS SOLO AGAIN TO GO LIVE" row while an APC is
+    # connected); a SECOND press on that open sheet CONFIRMS (GO LIVE). Active
+    # → the KEEP LIVE STATE / RESTORE PRE-SHOW exit sheet; there a second press
+    # only CLOSES the sheet — one button cannot pick between the two exits, so
+    # the keep-vs-restore choice can only be answered on the iPad. LED lit while performance mode is
+    # ACTIVE (tracks the engine's `performanceMode` broadcast), dark in edit
+    # mode. (Scene-column LEDs are single-colour hardware — velocity 1 = lit.)
+    - id: solo_performance_dialog
+      match: { type: note, channel: 0, notes: [113] }
+      action: { kind: performanceDialog }
+      led: { on: 1, off: 0 }
+
+    # ── mute/rec_arm/select/drum/note (114-118) → UNASSIGNED, DARK ─────────
+    # Same explicit-dark rule as the arrows: the APC keeps REC ARM / MUTE / etc.
+    # lit from whatever state it latched, so each gets an `ledOff` control that
+    # drives a note-off on connect and holds it dark.
+    - id: mute_dark
+      match: { type: note, channel: 0, notes: [114] }
+      action: { kind: ledOff }
+      led: { on: 0, off: 0 }
+    - id: rec_arm_dark
+      match: { type: note, channel: 0, notes: [115] }
+      action: { kind: ledOff }
+      led: { on: 0, off: 0 }
+    - id: select_dark
+      match: { type: note, channel: 0, notes: [116] }
+      action: { kind: ledOff }
+      led: { on: 0, off: 0 }
+    - id: drum_dark
+      match: { type: note, channel: 0, notes: [117] }
+      action: { kind: ledOff }
+      led: { on: 0, off: 0 }
+    - id: note_dark
+      match: { type: note, channel: 0, notes: [118] }
+      action: { kind: ledOff }
+      led: { on: 0, off: 0 }
+
+    # ── stop_all_clips (119) → e-stop BLACKOUT toggle ─────────────────────
+    # DROP the master-fade integration (operator decision 2026-07): the button
+    # now toggles the engine's e-stop BLACKOUT — the SAME unified GEM blackout
+    # the on-screen e-stop uses (POST /global-effect-macros/blackout
+    # { enabled }), which blacks out pixels AND clears active macros/global
+    # effects. Toggle direction reads the CURRENT blackout state (the WS
+    # `blackout` field the app already tracks); the shared `blackoutToggle`
+    # dispatch adds optimistic-echo protection for a panic double-tap. LED lit
+    # when blacked out. (No fade path: MasterFadeGroup + its duration store are
+    # untouched but this button no longer calls them.)
+    - id: stop_all_clips_blackout
+      match: { type: note, channel: 0, notes: [119] }
+      action: { kind: blackoutToggle }
+      led: { on: 1, off: 0 }
+
+    # ── Shift (122) → toggle Deck ↔ Mixer tab ─────────────────────────────
+    # The Shift key has NO LED (protocol: 0x7A is a light-less button), so no
+    # `led` spec. Reads the active tab (deck vs mixer) and navigates the other.
+    - id: shift_view_toggle
+      match: { type: note, channel: 0, notes: [122] }
+      action: { kind: viewToggle }
+
+    # ── Pad columns 1-4 → per-channel playlist window browser ──────────────
+    # Column c browses channel (c+1)'s playlist: bottom pad scroll-down, top
+    # pad scroll-up, middle 6 pads select within a 6-entry window (top pad =
+    # top entry). Active entry green, selectable blue, empty slots a dim frame;
+    # an absent channel keeps its whole column dark; scroll pads light white
+    # only when scrollable. (Unchanged from the prior layout.)
+    - id: pad_col1_scroll_down
+      match: { type: column, channel: 0, column: 0, fromRow: 0, toRow: 0 }
+      action: { kind: playlistScroll, layer: 0, dir: down }
+      led: { on: 3, off: 0, channel: 6 }
+    - id: pad_col1_scroll_up
+      match: { type: column, channel: 0, column: 0, fromRow: 7, toRow: 7 }
+      action: { kind: playlistScroll, layer: 0, dir: up }
+      led: { on: 3, off: 0, channel: 6 }
+    - id: pad_col1_window
+      match: { type: column, channel: 0, column: 0, fromRow: 1, toRow: 6, reverse: true }
+      action: { kind: playlistWindowSelect, layer: 0 }
+      led: { active: 21, idle: 45, channel: 6 }
+    - id: pad_col2_scroll_down
+      match: { type: column, channel: 0, column: 1, fromRow: 0, toRow: 0 }
+      action: { kind: playlistScroll, layer: 1, dir: down }
+      led: { on: 3, off: 0, channel: 6 }
+    - id: pad_col2_scroll_up
+      match: { type: column, channel: 0, column: 1, fromRow: 7, toRow: 7 }
+      action: { kind: playlistScroll, layer: 1, dir: up }
+      led: { on: 3, off: 0, channel: 6 }
+    - id: pad_col2_window
+      match: { type: column, channel: 0, column: 1, fromRow: 1, toRow: 6, reverse: true }
+      action: { kind: playlistWindowSelect, layer: 1 }
+      led: { active: 21, idle: 45, channel: 6 }
+    - id: pad_col3_scroll_down
+      match: { type: column, channel: 0, column: 2, fromRow: 0, toRow: 0 }
+      action: { kind: playlistScroll, layer: 2, dir: down }
+      led: { on: 3, off: 0, channel: 6 }
+    - id: pad_col3_scroll_up
+      match: { type: column, channel: 0, column: 2, fromRow: 7, toRow: 7 }
+      action: { kind: playlistScroll, layer: 2, dir: up }
+      led: { on: 3, off: 0, channel: 6 }
+    - id: pad_col3_window
+      match: { type: column, channel: 0, column: 2, fromRow: 1, toRow: 6, reverse: true }
+      action: { kind: playlistWindowSelect, layer: 2 }
+      led: { active: 21, idle: 45, channel: 6 }
+    - id: pad_col4_scroll_down
+      match: { type: column, channel: 0, column: 3, fromRow: 0, toRow: 0 }
+      action: { kind: playlistScroll, layer: 3, dir: down }
+      led: { on: 3, off: 0, channel: 6 }
+    - id: pad_col4_scroll_up
+      match: { type: column, channel: 0, column: 3, fromRow: 7, toRow: 7 }
+      action: { kind: playlistScroll, layer: 3, dir: up }
+      led: { on: 3, off: 0, channel: 6 }
+    - id: pad_col4_window
+      match: { type: column, channel: 0, column: 3, fromRow: 1, toRow: 6, reverse: true }
+      action: { kind: playlistWindowSelect, layer: 3 }
+      led: { active: 21, idle: 45, channel: 6 }
+
+    # ── Pad columns 5-8 → colour-pair pads ────────────────────────────────
+    # Cols 5-6 = palettes 1-8 (bank 0), cols 7-8 = palettes 9-16 (bank 1). Each
+    # row = one curated CaptainPad palette; pressing any pad applies the pair
+    # (c1→colorPalette1, c2→colorPalette2). Pad LEDs show the hues (c1 column
+    # shows colour 1, c2 column shows colour 2). (Unchanged from the prior layout.)
+    - id: pad_col5_palette_c1
+      match: { type: column, channel: 0, column: 4, fromRow: 0, toRow: 7 }
+      action: { kind: colorPalettePair, bank: 0 }
+    - id: pad_col6_palette_c2
+      match: { type: column, channel: 0, column: 5, fromRow: 0, toRow: 7 }
+      action: { kind: colorPalettePair, bank: 0 }
+    - id: pad_col7_palette_c1
+      match: { type: column, channel: 0, column: 6, fromRow: 0, toRow: 7 }
+      action: { kind: colorPalettePair, bank: 1 }
+    - id: pad_col8_palette_c2
+      match: { type: column, channel: 0, column: 7, fromRow: 0, toRow: 7 }
+      action: { kind: colorPalettePair, bank: 1 }
+
+  mixer: *unified

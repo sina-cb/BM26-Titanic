@@ -1,0 +1,64 @@
+# Camera presets framed for the studio_top_loft hull (X∈[-6,6], Z∈[-4,4]).
+# Keys match the renderer's default view list (front/side/aerial/dramatic/
+# night-walk) plus a dedicated top-down "loft" view.
+presets:
+  - name: Front
+    key: front
+    position:
+      x: 0
+      'y': 6
+      z: 22
+    target:
+      x: 0
+      'y': 1
+      z: 0
+  - name: Side
+    key: side
+    position:
+      x: 22
+      'y': 6
+      z: 0
+    target:
+      x: 0
+      'y': 1
+      z: 0
+  - name: Aerial
+    key: aerial
+    position:
+      x: 2
+      'y': 24
+      z: 14
+    target:
+      x: 0
+      'y': 0
+      z: 0
+  - name: Dramatic
+    key: dramatic
+    position:
+      x: -15
+      'y': 3
+      z: 15
+    target:
+      x: 0
+      'y': 1.5
+      z: 1
+  - name: Night Walk
+    key: night-walk
+    position:
+      x: -7
+      'y': 2
+      z: 11
+    target:
+      x: 0
+      'y': 1.5
+      z: 0
+  - name: Top Loft
+    key: top
+    position:
+      x: 0
+      'y': 30
+      z: 0.01
+    target:
+      x: 0
+      'y': 0
+      z: 0

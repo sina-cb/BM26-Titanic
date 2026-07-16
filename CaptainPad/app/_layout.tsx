@@ -10,6 +10,7 @@ import { SpaceGrotesk_400Regular, SpaceGrotesk_700Bold } from '@expo-google-font
 
 import { ThemeProvider, useTheme } from '@/hooks/use-theme';
 import { warmColorPalettesCache } from '@/utils/api';
+import { useMidiControl } from '@/hooks/useMidiControl';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -21,6 +22,9 @@ SplashScreen.preventAutoHideAsync();
 // Inner shell — needs to live below <ThemeProvider> so it can call useTheme().
 function RootShell() {
   const { scheme } = useTheme();
+  // Drive the direct-MIDI lifecycle once, app-wide (same altitude as the
+  // engine buses). No-op on platforms without Web MIDI / a native module.
+  useMidiControl();
 
   return (
     <NavThemeProvider value={scheme === 'dark' ? DarkTheme : DefaultTheme}>

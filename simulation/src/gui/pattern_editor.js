@@ -13,6 +13,7 @@ import { TOP_MIN, registerPanel } from "./panel_layout.js";
 import { setupSyntaxHighlight } from "./syntax_highlight.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { engineHttpUrl } from "../core/engine_endpoint.js";
+import { saveHttpUrl } from "../core/save_endpoint.js";
 // Shared with the engine — single source of truth for parsing a pattern's
 // `export var` slider code defaults from source. Served from the repo root
 // (the sim's static host serves `../`), so this is offline/self-contained.
@@ -624,7 +625,7 @@ export function setupPatternEditor() {
       selectedPattern = name.toLowerCase().replace(/\s+/g, '_');
     }
     try {
-      const resp = await fetch('http://localhost:6970/save-pattern', {
+      const resp = await fetch(saveHttpUrl('/save-pattern'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: selectedPattern, code }),
@@ -654,7 +655,7 @@ export function setupPatternEditor() {
     const key = name.toLowerCase().replace(/\s+/g, '_');
     const template = '// ' + titleCase(key) + '\nexport function beforeRender(delta) {\n  t1 = time(0.1)\n}\nexport function render(index) {\n  hsv(t1 + index / pixelCount, 1, 1)\n}\n';
     try {
-      const resp = await fetch('http://localhost:6970/save-pattern', {
+      const resp = await fetch(saveHttpUrl('/save-pattern'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: key, code: template }),
@@ -681,7 +682,7 @@ export function setupPatternEditor() {
     if (!selectedPattern) return;
     if (!confirm(`Delete pattern "${selectedPattern}"?`)) return;
     try {
-      const resp = await fetch('http://localhost:6970/delete-pattern', {
+      const resp = await fetch(saveHttpUrl('/delete-pattern'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: selectedPattern }),
@@ -828,6 +829,13 @@ export function onLightingChange() {
       window.sacnInput.disable();
       if (window.sacnLog) window.sacnLog('sACN input disabled', 'warn');
     }
+  }
+
+  // The 2D Pixel Map is exclusively the 2d_pixels profile's viewport: show it
+  // (full-screen, replacing the blacked-out 3D) when that profile is active,
+  // hide it otherwise.
+  if (window.showPixelMap2d) {
+    window.showPixelMap2d(params.lightingProfile === '2d_pixels');
   }
 }
 

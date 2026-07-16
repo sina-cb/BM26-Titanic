@@ -1,0 +1,756 @@
+modelTransform:
+  _section:
+    label: 📦 Model Transform
+    collapsed: true
+  modelX:
+    value: 0
+    label: Pos X
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  modelY:
+    value: 0
+    label: Pos Y
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  modelZ:
+    value: 0
+    label: Pos Z
+    min: -500
+    max: 500
+    step: 1
+    listen: true
+  rotX:
+    value: 0
+    label: Rot X °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+  rotY:
+    value: 0
+    label: Rot Y °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+  rotZ:
+    value: 0
+    label: Rot Z °
+    min: -180
+    max: 180
+    step: 1
+    listen: true
+parLights:
+  _section:
+    label: 🔌 DMX Fixtures
+    type: fixtureArray
+    collapsed: false
+  parsEnabled:
+    value: true
+    label: Master Enabled
+  masterExposure:
+    value: 0.45
+    label: Sim Exposure (Preview Only)
+    min: 0
+    max: 2
+    step: 0.05
+  simBrightness:
+    value: 1.45
+    label: Sim Brightness (Preview Only)
+    min: 0
+    max: 2
+    step: 0.05
+  maxSpotlights:
+    value: 60
+    label: Max Spotlights
+    min: 1
+    max: 200
+    step: 1
+  fixtures:
+    - group: Fogger
+      name: TEFogMachine 27
+      fixtureType: TEFogMachine
+      color: '#ffaa44'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      enabled: true
+      brightness: 100
+      x: 0
+      'y': 1.5
+      z: 0
+      rotX: 0
+      rotY: 0
+      rotZ: 0
+    - group: LeftSmokeStack
+      name: LeftSmokeStack 1
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 5
+      'y': 5
+      z: 18
+      rotX: -44.857472597316935
+      rotY: 95.71059313749963
+      rotZ: -49.03465057969689
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: LeftSmokeStack
+      name: LeftSmokeStack 2
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 3.5355339059327378
+      'y': 5
+      z: 21.535533905932738
+      rotX: -47.016535632548994
+      rotY: 49.35131591358596
+      rotZ: -22.602942087735048
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: LeftSmokeStack
+      name: LeftSmokeStack 3
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 3.061616997868383e-16
+      'y': 5
+      z: 23
+      rotX: -48.01278750418336
+      rotY: 3.898171832519378e-15
+      rotZ: -1.7360991812933693e-15
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: LeftSmokeStack
+      name: LeftSmokeStack 4
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -3.5355339059327355
+      'y': 5
+      z: 21.535533905932738
+      rotX: -47.01653563254899
+      rotY: -49.35131591358593
+      rotZ: 22.60294208773504
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: LeftSmokeStack
+      name: LeftSmokeStack 5
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -5
+      'y': 5
+      z: 18
+      rotX: -44.857472597316935
+      rotY: -95.71059313749963
+      rotZ: 49.03465057969689
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: LeftSmokeStack
+      name: LeftSmokeStack 6
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -3.5355339059327386
+      'y': 5
+      z: 14.464466094067262
+      rotX: -42.98203559406586
+      rotY: -138.77837721590245
+      rotZ: 92.62515444907385
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: LeftSmokeStack
+      name: LeftSmokeStack 7
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -5.3593771978611406e-15
+      'y': 5
+      z: 13
+      rotX: -42.27368900609374
+      rotY: -179.99999999999994
+      rotZ: 179.99999999999986
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: LeftSmokeStack
+      name: LeftSmokeStack 8
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 3.535533905932737
+      'y': 5
+      z: 14.464466094067262
+      rotX: -42.98203559406586
+      rotY: 138.77837721590248
+      rotZ: -92.6251544490739
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: RightSmokeStack
+      name: RightSmokeStack 1
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 5
+      'y': 5
+      z: -14.5
+      rotX: -45.00000000000001
+      rotY: 90
+      rotZ: -45
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: RightSmokeStack
+      name: RightSmokeStack 2
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 3.5355339059327378
+      'y': 5
+      z: -10.964466094067262
+      rotX: -45.000000000000014
+      rotY: 45.00000000000001
+      rotZ: -19.47122063449069
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: RightSmokeStack
+      name: RightSmokeStack 3
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 3.061616997868383e-16
+      'y': 5
+      z: -9.5
+      rotX: -45.00000000000001
+      rotY: 3.5083546492674388e-15
+      rotZ: -1.453208077341276e-15
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: RightSmokeStack
+      name: RightSmokeStack 4
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -3.5355339059327355
+      'y': 5
+      z: -10.96446609406726
+      rotX: -44.99999999999999
+      rotY: -44.99999999999997
+      rotZ: 19.471220634490674
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: RightSmokeStack
+      name: RightSmokeStack 5
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -5
+      'y': 5
+      z: -14.5
+      rotX: -45.00000000000001
+      rotY: -90
+      rotZ: 45
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: RightSmokeStack
+      name: RightSmokeStack 6
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -3.5355339059327386
+      'y': 5
+      z: -18.035533905932738
+      rotX: -44.99999999999999
+      rotY: -135
+      rotZ: 89.99999999999999
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: RightSmokeStack
+      name: RightSmokeStack 7
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -5.3593771978611406e-15
+      'y': 5
+      z: -19.5
+      rotX: -45.000000000000014
+      rotY: -179.99999999999994
+      rotZ: 179.99999999999986
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: RightSmokeStack
+      name: RightSmokeStack 8
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 3.535533905932737
+      'y': 5
+      z: -18.035533905932738
+      rotX: -45.00000000000001
+      rotY: 135.00000000000003
+      rotZ: -90.00000000000004
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Line 3
+      name: Line 3 1
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -11.5
+      'y': 5
+      z: 4.5
+      rotX: -49.55230042441244
+      rotY: 93.57633437499736
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Line 3
+      name: Line 3 2
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -11.75
+      'y': 5
+      z: 0.5
+      rotX: -49.55230042441244
+      rotY: 93.57633437499736
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Line 3
+      name: Line 3 3
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -12
+      'y': 5
+      z: -3.5
+      rotX: -49.55230042441244
+      rotY: 93.57633437499736
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Front
+      name: Front 1
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -8.5
+      'y': 4.5
+      z: 2
+      rotX: -63.43494882292202
+      rotY: -90
+      rotZ: 180
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Front
+      name: Front 2
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -8.5
+      'y': 4.5
+      z: -1
+      rotX: -63.43494882292202
+      rotY: -90
+      rotZ: 180
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: FrontTowers
+      name: FrontTowers 1
+      fixtureType: VintageLed
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -7
+      'y': 5
+      z: -4
+      rotX: -41.18592516570964
+      rotY: -90
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: FrontTowers
+      name: FrontTowers 2
+      fixtureType: VintageLed
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -7
+      'y': 5
+      z: -1.166666666666667
+      rotX: -41.18592516570964
+      rotY: -90
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: FrontTowers
+      name: FrontTowers 3
+      fixtureType: VintageLed
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -7
+      'y': 5
+      z: 1.666666666666666
+      rotX: -41.18592516570964
+      rotY: -90
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: FrontTowers
+      name: FrontTowers 4
+      fixtureType: VintageLed
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -7
+      'y': 5
+      z: 4.5
+      rotX: -41.18592516570964
+      rotY: -90
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+ledStrands:
+  _section:
+    label: 💡 LED Strands
+    type: ledStrandArray
+    collapsed: true
+  strandsEnabled:
+    value: false
+    label: Master Enabled
+  strands:
+    - name: Left
+      startX: -3
+      startY: 5
+      startZ: 3
+      endX: 3
+      endY: 5
+      endZ: 13.5
+      color: '#ff8800'
+      intensity: 1
+      ledCount: 60
+      group: ''
+      sectionId: 1
+      fixtureId: 1
+      viewMask: 0
+    - name: Right
+      startX: -3
+      startY: 5
+      startZ: 0
+      endX: 3
+      endY: 5
+      endZ: -9
+      color: '#ff8800'
+      intensity: 1
+      ledCount: 60
+      group: ''
+      sectionId: 2
+      fixtureId: 2
+      viewMask: 0
+traces:
+  - name: LeftSmokeStack
+    shape: circle
+    radius: 5
+    arc: 360
+    count: 8
+    x: 0
+    'y': 5
+    z: 18
+    rotX: 0
+    rotY: 0
+    rotZ: 0
+    aimMode: lookAt
+    aimX: 0
+    aimY: 0
+    aimZ: 18.5
+    lightColor: '#ffaa44'
+    lightIntensity: 10
+    lightAngle: 30
+    groupName: LeftSmokeStack
+    fixtureType: UkingPar
+    generated: true
+    controllerIp: ''
+    fixtureRotOffX: 0
+    fixtureRotOffY: 0
+    fixtureRotOffZ: 0
+    locked: false
+  - name: RightSmokeStack
+    shape: circle
+    radius: 5
+    arc: 360
+    count: 8
+    x: 0
+    'y': 5
+    z: -14.5
+    rotX: -0.0
+    rotY: 0
+    rotZ: 0
+    aimMode: lookAt
+    aimX: 0
+    aimY: 0
+    aimZ: -14.5
+    lightColor: '#ffaa44'
+    lightIntensity: 10
+    lightAngle: 30
+    groupName: RightSmokeStack
+    fixtureType: UkingPar
+    generated: true
+    controllerIp: ''
+    fixtureRotOffX: 0
+    fixtureRotOffY: 0
+    fixtureRotOffZ: 0
+    locked: false
+  - name: Line 3
+    shape: line
+    startX: -11.5
+    startY: 5
+    startZ: 4.5
+    endX: -12
+    endY: 5
+    endZ: -3.5
+    count: 3
+    aimMode: direction
+    aimX: -13
+    aimY: 3.5
+    aimZ: 1
+    lightColor: '#ffaa44'
+    lightIntensity: 10
+    lightAngle: 30
+    groupName: Line 3
+    fixtureType: ShehdsBar
+    generated: true
+    controllerIp: ''
+    fixtureRotOffX: 0
+    fixtureRotOffY: 0
+    fixtureRotOffZ: 0
+    locked: false
+  - name: Front
+    shape: line
+    startX: -8.5
+    startY: 4.5
+    startZ: 2
+    endX: -8.5
+    endY: 4.5
+    endZ: -1
+    count: 2
+    aimMode: direction
+    aimX: -7
+    aimY: 1.5
+    aimZ: 1
+    lightColor: '#ffaa44'
+    lightIntensity: 10
+    lightAngle: 30
+    groupName: Front
+    fixtureType: ShehdsBar
+    generated: true
+    controllerIp: ''
+    fixtureRotOffX: 0
+    fixtureRotOffY: 0
+    fixtureRotOffZ: 0
+    locked: false
+  - name: FrontTowers
+    shape: line
+    startX: -7
+    startY: 5
+    startZ: -4
+    endX: -7
+    endY: 5
+    endZ: 4.5
+    count: 4
+    aimMode: direction
+    aimX: -3
+    aimY: 1.5
+    aimZ: 0.5
+    lightColor: '#ffaa44'
+    lightIntensity: 10
+    lightAngle: 30
+    groupName: FrontTowers
+    fixtureType: VintageLed
+    generated: true
+    controllerIp: ''
+    fixtureRotOffX: 0
+    fixtureRotOffY: 0
+    fixtureRotOffZ: 0
+    locked: false
+pixelMap2d:
+  fixtures:
+    LeftSmokeStack 1:
+      x: 742
+      'y': 107
+      rot: 0
+    LeftSmokeStack 2:
+      x: 805.5
+      'y': 133.5
+      rot: 0
+    LeftSmokeStack 3:
+      x: 832
+      'y': 197
+      rot: 0
+    LeftSmokeStack 4:
+      x: 805.5
+      'y': 260.5
+      rot: 0
+    LeftSmokeStack 5:
+      x: 742
+      'y': 287
+      rot: 0
+    LeftSmokeStack 6:
+      x: 678.5
+      'y': 260.5
+      rot: 0
+    LeftSmokeStack 7:
+      x: 652
+      'y': 197
+      rot: 0
+    LeftSmokeStack 8:
+      x: 678.5
+      'y': 133.5
+      rot: 0
+    RightSmokeStack 1:
+      x: 158
+      'y': 107
+      rot: 0
+    RightSmokeStack 2:
+      x: 221.5
+      'y': 133.5
+      rot: 0
+    RightSmokeStack 3:
+      x: 168
+      'y': 256
+      rot: 0
+    RightSmokeStack 4:
+      x: 144
+      'y': 272
+      rot: 0
+    RightSmokeStack 5:
+      x: 120
+      'y': 272
+      rot: 0
+    RightSmokeStack 6:
+      x: 94.5
+      'y': 260.5
+      rot: 0
+    RightSmokeStack 7:
+      x: 80
+      'y': 240
+      rot: 0
+    RightSmokeStack 8:
+      x: 94.5
+      'y': 133.5
+      rot: 0
+    Line 3 1:
+      x: 499.5
+      'y': 404
+      rot: 180
+    Line 3 2:
+      x: 323
+      'y': 415
+      rot: 180
+    Line 3 3:
+      x: 323
+      'y': 592
+      rot: 180
+    Front 1:
+      x: 448
+      'y': 128
+      rot: -180
+    Front 2:
+      x: 448
+      'y': 64
+      rot: -180
+    FrontTowers 1:
+      x: 305
+      'y': 343.5
+      rot: -90
+    FrontTowers 2:
+      x: 410
+      'y': 377.5
+      rot: -90
+    FrontTowers 3:
+      x: 478.5
+      'y': 344.5
+      rot: -90
+    FrontTowers 4:
+      x: 515
+      'y': 281.5
+      rot: -90
+    Left:
+      x: 272
+      'y': 376
+      rot: -150

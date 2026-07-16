@@ -38,6 +38,8 @@
 
 import http from 'http';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const ENGINE_PORT = parseInt(process.env.ENGINE_PORT || '6968', 10);
 const ENGINE_BASE = `http://127.0.0.1:${ENGINE_PORT}`;
 
@@ -154,6 +156,9 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     console.error('  Start with: node engine.js --pattern test_const --model test_bench --port ' + ENGINE_PORT);
     process.exit(2);
   }
+
+  // Refuse to mutate a non-disposable engine BEFORE creating any state.
+  await assertDisposableEngine(ENGINE_BASE);
 
   cleanupState.started = true;
 

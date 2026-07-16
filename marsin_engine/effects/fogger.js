@@ -17,4 +17,9 @@ export const foggerEffect = {
   apply(_args) {
     // intentionally empty
   },
+  // Primary intensity: NONE. The fogger is an on/off DMX trigger with no
+  // tunable magnitude — declared `null` explicitly (deliberate "no primary").
+  primaryIntensity: null,
+  // Primary mode: NONE. On/off DMX trigger, no discrete mode — explicit null.
+  primaryMode: null,
 };

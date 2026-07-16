@@ -32,6 +32,7 @@ import {
   setChannelPlaylistEntry,
 } from '@/utils/api';
 import { engineEvents } from '@/utils/engineEvents';
+import { usePerfLock } from '@/hooks/usePerformanceMode';
 import {
   ModulationPopover, MOD_GREEN, useModulationState,
 } from '@/components/Modulation';
@@ -92,6 +93,9 @@ export const AllModulationsPanel: React.FC<Props> = ({
   visible, onClose, playlistName, activeEntryId,
 }) => {
   const C = usePalette();
+  // PERFORMANCE MODE: mapping CRUD is 409-gated while a show is live — the
+  // panel stays viewable but CLEAR ALL / per-row edit/toggle/delete go inert.
+  const perfLocked = usePerfLock();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [tick, setTick] = useState(0);
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
@@ -238,11 +242,14 @@ export const AllModulationsPanel: React.FC<Props> = ({
           <TouchableOpacity
             onPress={() => handleClearAll(entry.id, mods)}
             hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            disabled={perfLocked}
             accessibilityLabel={`Clear all modulations on ${entry.label || entry.pattern}`}
+            accessibilityState={{ disabled: perfLocked }}
             style={{
               paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4,
               borderWidth: 1, borderColor: C.error,
               backgroundColor: 'transparent',
+              opacity: perfLocked ? 0.45 : 1,
             }}
           >
             <Text style={{
@@ -265,7 +272,7 @@ export const AllModulationsPanel: React.FC<Props> = ({
         ))}
       </View>
     );
-  }, [activeEntryId, liveActive, handleRowTap, handleToggle, handleDelete, handleClearAll]);
+  }, [activeEntryId, liveActive, handleRowTap, handleToggle, handleDelete, handleClearAll, perfLocked]);
 
   if (!visible) return null;
 
@@ -418,6 +425,10 @@ function ModulationRow({
   onDelete: () => void;
 }) {
   const C = usePalette();
+  // PERFORMANCE MODE: every mutation here (edit popover save, long-press
+  // enable/disable PATCH, trash DELETE) is a 409-gated playlist-mapping route
+  // while a show is live — the row goes read-only (still listed, greyed).
+  const perfLocked = usePerfLock();
   const enabled = !!mapping.enabled;
   return (
     <View style={{
@@ -429,8 +440,10 @@ function ModulationRow({
         onPress={onTap}
         onLongPress={onToggle}
         delayLongPress={400}
-        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}
+        disabled={perfLocked}
+        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, opacity: perfLocked ? 0.45 : 1 }}
         accessibilityLabel={`Edit modulation ${mapping.target.parameter}`}
+        accessibilityState={{ disabled: perfLocked }}
       >
         <View style={{
           width: 14, height: 14, borderRadius: 7,
@@ -489,10 +502,13 @@ function ModulationRow({
       <TouchableOpacity
         onPress={onDelete}
         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+        disabled={perfLocked}
         accessibilityLabel="Delete modulation"
+        accessibilityState={{ disabled: perfLocked }}
         style={{
           paddingHorizontal: 6, paddingVertical: 4, borderRadius: 4,
           borderWidth: 1, borderColor: C.ghostBorder,
+          opacity: perfLocked ? 0.45 : 1,
         }}
       >
         <IconSymbol name="trash" size={12} color={C.secondary} />

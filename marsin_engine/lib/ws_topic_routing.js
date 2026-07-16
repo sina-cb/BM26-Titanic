@@ -78,6 +78,14 @@ const TOPIC_BY_TYPE = Object.freeze({
   colorAutopilot:              TOPICS.CONTROL,
   viewOverride:                TOPICS.CONTROL,
   deckTransitionConfig:        TOPICS.CONTROL,
+  // Engine-wide settings (auto-save toggle). Broadcast on every POST /settings
+  // + replayed on /ws/control connect so every CaptainPad config screen
+  // mirrors the persistence gate. Operator-driven, low volume.
+  engineSettings:              TOPICS.CONTROL,
+  // Performance mode (live-show structural lock). Broadcast on enter/exit +
+  // replayed on /ws/control connect so every CaptainPad mirrors the lock badge.
+  // Operator-driven, low volume → /ws/control next to engineSettings.
+  performanceMode:             TOPICS.CONTROL,
   deckSwapStarted:             TOPICS.CONTROL,
   deckSwapComplete:            TOPICS.CONTROL,
   mixerTransitionStarted:      TOPICS.CONTROL,
@@ -85,14 +93,29 @@ const TOPIC_BY_TYPE = Object.freeze({
   mixerTransitionRejected:     TOPICS.CONTROL,
   globalEffectSlots:           TOPICS.CONTROL,
   globalEffectMacroStatus:     TOPICS.CONTROL,
-  // docs/39 §F-hue: GLOBAL hue shifter knob. Broadcast on every
-  // POST /global-effect-hue so CaptainPad mirrors the global hue + auto-
-  // rotate. Operator-driven, low volume → /ws/control next to the GEM
-  // macro/blackout messages it semantically relates to.
-  globalHueShift:              TOPICS.CONTROL,
+  // effects_v2 (project effects_v2_midi_layout): the engine-owned page VIEW
+  // (0..3) over the 32 GEM slots. Broadcast on every PATCH /global-effects/page
+  // so CaptainPad's page switcher + the VSN1 side buttons mirror the SAME page
+  // (single source of truth). Operator-driven, low volume → /ws/control next
+  // to the GEM slot/macro messages it relates to.
+  effectsPage:                 TOPICS.CONTROL,
+  // effects_v2 v3: engine-owned named effect BANKS (ordered list + active id).
+  // Broadcast on every bank switch/next/create/delete/rename + replayed on
+  // /ws/control connect so CaptainPad's bank switcher + the VSN1 sb_2 mirror the
+  // SAME list (single source of truth). Operator-driven, low volume →
+  // /ws/control next to effectsPage, the sibling page-view state it parallels.
+  effectBanks:                 TOPICS.CONTROL,
+  // effects_v2: VSN1 MIDI-layout deploy result. Broadcast when a layout change
+  // is written/flashed to the controller so a client can surface deploy health
+  // (ok / disabled / error). Low volume — fires only on layout changes.
+  vsn1LayoutDeploy:            TOPICS.CONTROL,
+  // NOTE: `globalHueShift` was REMOVED (2026-07) — the global hue shifter
+  // is gone; hue is per-channel only and rides the mixer/deck state
+  // broadcasts like every other channel field.
   // docs/39 §F-invert: GLOBAL color-invert toggle. Broadcast on every POST
   // /global-effect-invert so CaptainPad mirrors the global invert state.
-  // Same topic as globalHueShift (operator-driven, low volume → /ws/control).
+  // Operator-driven, low volume → /ws/control next to the GEM macro/
+  // blackout messages it semantically relates to.
   globalInvert:                TOPICS.CONTROL,
   // docs/32: per-group fixed-color override table. Broadcast on every
   // PUT/DELETE so all connected CaptainPads mirror the Dimmer Rack's
@@ -114,6 +137,12 @@ const TOPIC_BY_TYPE = Object.freeze({
   playlistDeleted:             TOPICS.CONTROL,
   channelPlaylistData:         TOPICS.CONTROL,
   playlistEntryCaptured:       TOPICS.CONTROL,
+  // Deck LOCAL-PARAM save confirmation: emitted after a deck control write is
+  // PERSISTED to deck_state.yaml (auto-save ON), so the deck's "✓ SAVED" flash
+  // can fire honestly. Operator-driven, low volume → /ws/control next to the
+  // deck/mixer state it confirms. Never emitted while auto-save is OFF (nothing
+  // hits disk, so there is nothing to confirm).
+  deckParamsSaved:             TOPICS.CONTROL,
   // F-A: named mixer snapshots / look recall. Broadcast on save / delete /
   // recall so every CaptainPad mirrors the snapshot library + a recalled
   // look. Operator-driven, low volume → /ws/control next to mixer/deck.

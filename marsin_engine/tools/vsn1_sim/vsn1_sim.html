@@ -1,0 +1,915 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VSN1 — effects surface mock</title>
+<style>
+  /* ── Offline: system font stack only, no external fonts/CDNs (codex rule). ── */
+  :root {
+    --u: 1;                       /* device scale unit; LCD renders at 2x by default */
+    --lcd-w: 640px;              /* 320 * 2 */
+    --lcd-h: 480px;             /* 240 * 2 */
+    --bg: #0c0d10;
+    --body: #17181c;
+    --body-edge: #2a2c33;
+    --sys: -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: "Consolas", "Cascadia Mono", "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: #c8ccd4;
+    font-family: var(--sys);
+    -webkit-font-smoothing: antialiased;
+  }
+  .stage {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    padding: 28px 16px 48px;
+  }
+  .chrome-top {
+    width: 100%;
+    max-width: 980px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .title { font-size: 15px; font-weight: 600; letter-spacing: .3px; color: #d8dbe2; }
+  .title .sub { color: #6b6f78; font-weight: 400; margin-left: 8px; font-size: 13px; }
+  .live-controls { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .live-controls input[type=text] {
+    background: #101216; border: 1px solid var(--body-edge); color: #c8ccd4;
+    border-radius: 6px; padding: 5px 8px; font-family: var(--mono); font-size: 12px; width: 190px;
+  }
+  .btn {
+    background: #1d1f24; border: 1px solid var(--body-edge); color: #c8ccd4;
+    border-radius: 7px; padding: 6px 12px; font-size: 13px; cursor: pointer; user-select: none;
+  }
+  .btn:hover { background: #24272d; }
+  .live-dot { font-size: 15px; line-height: 1; }
+  .live-status { font-family: var(--mono); font-size: 12px; color: #6b6f78; }
+  .live-status.on { color: #43d477; }
+  .live-status.err { color: #ff5a4d; }
+
+  /* ── Device body (VSN1L: LCD + 4 side buttons left, wheel + 2x4 keys right) ── */
+  .device {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 40px;
+    align-items: start;
+    padding: 34px 40px 40px;
+    border-radius: 16px;
+    background: linear-gradient(180deg, #1c1d22 0%, #17181c 22%, #16171b 100%);
+    border: 1px solid var(--body-edge);
+    box-shadow: 0 24px 80px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.03);
+  }
+  .wordmark {
+    position: absolute; right: 22px; bottom: 12px;
+    font-size: 13px; letter-spacing: 4px; color: #3a3d45; font-weight: 700; user-select: none;
+  }
+
+  /* Left column */
+  .left { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  .lcd-bezel {
+    padding: 8px;
+    background: #000;
+    border-radius: 4px;
+    border: 1px solid var(--body-edge);
+    box-shadow: 0 0 24px rgba(80,120,200,.08), inset 0 0 0 2px #000;
+  }
+  #lcd {
+    width: var(--lcd-w);
+    height: var(--lcd-h);
+    image-rendering: pixelated;
+    display: block;
+    background: #000;
+    border-radius: 2px;
+  }
+  .side-buttons {
+    display: flex;
+    justify-content: space-between;
+    width: var(--lcd-w);
+    padding: 0 6px;
+  }
+  .sb { display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+  .sb-cap {
+    width: 52px; height: 34px;
+    background: #26282e; border: 1px solid var(--body-edge); border-radius: 7px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 2px 3px rgba(0,0,0,.4);
+    transition: transform .04s;
+  }
+  .sb:active .sb-cap { transform: translateY(2px); }
+  .sb-led {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #202226; box-shadow: inset 0 0 2px #000;
+  }
+  .sb-label { font-size: 9px; color: #5a5d66; letter-spacing: .5px; }
+
+  /* Right column */
+  .right { display: flex; flex-direction: column; align-items: center; gap: 34px; padding-top: 6px; }
+  .wheel-wrap { position: relative; width: 170px; height: 170px; }
+  .wheel {
+    position: absolute; inset: 0; border-radius: 50%;
+    background:
+      repeating-conic-gradient(from 0deg,
+        #0d0e11 0deg, #131418 1deg, #0d0e11 2deg);
+    box-shadow: 0 6px 16px rgba(0,0,0,.5), inset 0 0 0 1px #0a0b0d;
+    cursor: grab;
+  }
+  .wheel:active { cursor: grabbing; }
+  .wheel-cap {
+    position: absolute; inset: 22%;
+    border-radius: 50%;
+    background: radial-gradient(circle at 42% 34%, #26282e 0%, #1d1f24 55%, #151619 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 3px 8px rgba(0,0,0,.5);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .wheel-cap:active { transform: translateY(1px); }
+  .wheel-cap-label { font-size: 9px; color: #4a4d55; letter-spacing: 1px; user-select: none; }
+  .wheel-dot {
+    position: absolute; left: 50%; top: 7px;
+    width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%;
+    background: #3a3d45;
+    transform-origin: 2.5px 78px;
+  }
+  .enc-led {
+    position: absolute; width: 9px; height: 9px; border-radius: 50%;
+    background: #1a1b1f; box-shadow: inset 0 0 2px #000;
+    margin: -4.5px 0 0 -4.5px;
+  }
+
+  .keys {
+    display: grid;
+    grid-template-columns: repeat(4, 64px);
+    grid-template-rows: repeat(2, 64px);
+    gap: 12px;
+  }
+  .key {
+    position: relative;
+    width: 64px; height: 64px;
+    border-radius: 7px;
+    background: linear-gradient(180deg, #24262c 0%, #202227 60%, #1a1c20 100%);
+    box-shadow:
+      0 3px 0 #101114,               /* skirt */
+      0 4px 6px rgba(0,0,0,.5),
+      inset 0 1px 0 rgba(255,255,255,.05);
+    cursor: pointer; user-select: none;
+    transition: transform .04s, box-shadow .04s;
+    overflow: hidden;
+  }
+  .key.pressed {
+    transform: translateY(2px);
+    box-shadow: 0 1px 0 #101114, 0 2px 4px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.05);
+  }
+  .key-glow {
+    position: absolute; inset: 0;
+    border-radius: 7px;
+    opacity: 0;                      /* driven by LED brightness 0..1 */
+    pointer-events: none;
+    /* background set inline per key color */
+  }
+  .key-num { position: absolute; right: 5px; bottom: 3px; font-size: 9px; color: #4a4d55; }
+
+  /* MIDI log */
+  .log-wrap { width: 100%; max-width: 980px; }
+  .log-head {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; color: #6b6f78; cursor: pointer; user-select: none; padding: 4px 0;
+  }
+  .log-head .caret { transition: transform .1s; }
+  .log-head.collapsed .caret { transform: rotate(-90deg); }
+  #midilog {
+    font-family: var(--mono); font-size: 12px; line-height: 1.5;
+    background: #0a0b0d; border: 1px solid #191b1f; border-radius: 8px;
+    padding: 8px 12px; height: 150px; overflow-y: auto; color: #8b8f98;
+    white-space: pre;
+  }
+  #midilog.hidden { display: none; }
+  #midilog .out { color: #7fb0ff; }
+  #midilog .t { color: #4a4d55; }
+
+  .banner {
+    display: none;
+    width: 100%; max-width: 980px;
+    background: #2a0f0d; border: 1px solid #6b201a; color: #ff8a80;
+    border-radius: 8px; padding: 10px 14px; font-size: 13px; font-weight: 600;
+  }
+  .banner.show { display: block; }
+  .hint {
+    font-size: 12px; color: #6b6f78; max-width: 980px; text-align: center; line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="chrome-top">
+    <div class="title">VSN1 — effects surface mock<span class="sub">effects_layout · VSN1L</span></div>
+    <div class="live-controls">
+      <input type="text" id="engineUrl" value="http://127.0.0.1:6968" spellcheck="false">
+      <button class="btn" id="liveToggle"><span class="live-dot" style="color:#5a5d66">●</span> LIVE</button>
+      <span class="live-status" id="liveStatus">off</span>
+    </div>
+  </div>
+
+  <div class="banner" id="banner"></div>
+
+  <div class="device">
+    <div class="left">
+      <div class="lcd-bezel">
+        <canvas id="lcd" width="320" height="240"></canvas>
+      </div>
+      <div class="side-buttons" id="sideButtons"></div>
+    </div>
+    <div class="right">
+      <div class="wheel-wrap" id="wheelWrap">
+        <div class="wheel" id="wheel">
+          <div class="wheel-dot" id="wheelDot"></div>
+        </div>
+        <div class="wheel-cap" id="wheelCap"><span class="wheel-cap-label">MODE</span></div>
+      </div>
+      <div class="keys" id="keys"></div>
+    </div>
+    <div class="wordmark">VSN1</div>
+  </div>
+
+  <div class="hint">
+    Press a key to select · press again to toggle (triggers fire every press) · drag / scroll the wheel to set 0–127 · click the wheel center to cycle mode · sb0–3 switch pages.
+  </div>
+
+  <div class="log-wrap">
+    <div class="log-head" id="logHead"><span class="caret">▾</span> MIDI event log (what the real device emits)</div>
+    <div id="midilog"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* =====================================================================
+   VSN1 effects-surface mock — 1:1 transliteration of the deployed
+   effects_layout Lua (marsin_engine/tools/vsn1_config/templates/effects_layout/*.lua)
+   Design spec: .agent/projects/vsn1_mock_ui_design.md
+   Every LCD pixel / LED formula is traceable to a source-of-truth file.
+   Offline by construction: the only network touch is operator-initiated
+   live mode (engine on :6968, CORS ACAO:* already open).
+   ===================================================================== */
+
+/* ── MIDI contract (deploy_layout.cjs loadLayoutFromEngine defaults) ──
+   feedbackChannel=1, modeChannel=2, slotBase=32, pageCc=40,
+   sbNoteBase=41, helloCc=41. Device->engine (README "Device -> engine"):
+   key press   Note On  ch=page  note 32+k  vel 127
+   jog turn    CC       ch=page  cc 32+sel  val (absolute 0..127)
+   jog press   Note On  ch=page  note 40    vel 127  (mode cycle)
+   sb press    Note On  ch=page  note 41+N  vel 127  (page select)          */
+const MIDI = { slotBase: 32, pageCc: 40, sbNoteBase: 41, encPressNote: 40 };
+
+/* ── Empty-slot + palette constants (deploy_layout.cjs) ── */
+const EMPTY_COLOR = [30, 30, 30];
+const EMPTY_NAME = '-';
+const PALETTE = [
+  [255, 40, 40], [255, 140, 0], [255, 220, 0], [60, 220, 60],
+  [0, 200, 200], [60, 120, 255], [160, 60, 255], [255, 60, 200],
+];
+const MAX_NAME_LEN = 12;   // deploy_layout.cjs MAX_NAME_LEN
+const MAX_MODE_LEN = 10;   // deploy_layout.cjs mode-name clamp
+
+/* ── abbreviate() — verbatim from deploy_layout.cjs (grid-cell labels) ── */
+function abbreviate(name) {
+  const words = String(name).split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '-';
+  if (words.length === 1) return words[0].slice(0, 4);
+  if (words.length === 2) return words[0].slice(0, 2) + words[1].slice(0, 2);
+  return words.map((w) => w[0]).join('').slice(0, 4);
+}
+const clampStr = (s, max) => String(s).replace(/["\\\n]/g, '').slice(0, max);
+
+/* =====================================================================
+   Embedded demo layout (design §2.5) — engine layout+status merged shape.
+   Slots absent from this list are EMPTY. ids are 1-based; page = (id-1)//8,
+   key = (id-1)%8. Keeps >=1 trigger, >=1 empty page, multi-word names.
+   ===================================================================== */
+const DEMO_LAYOUT = [
+  { id: 1,  name: "Freeze",        color: [255,40,40],  behavior: "toggle",  modeNames: ["hold","decay"] },
+  { id: 2,  name: "5 Hz Punch",    color: [255,140,0],  behavior: "toggle",  modeNames: ["kick","auto"] },
+  { id: 3,  name: "Ghost Trails",  color: [255,220,0],  behavior: "toggle",  modeNames: ["add","replace","max"] },
+  { id: 4,  name: "Palette Crush", color: [60,220,60],  behavior: "toggle",  modeNames: [] },
+  { id: 5,  name: "Sparkle",       color: [0,200,200],  behavior: "toggle",  modeNames: [] },
+  { id: 6,  name: "Iceberg Flash", color: [60,120,255], behavior: "trigger", modeNames: [] },
+  { id: 9,  name: "UV Blast",      color: [160,60,255], behavior: "toggle",  modeNames: [] },
+  { id: 10, name: "Ocean Breath",  color: [255,60,200], behavior: "toggle",  modeNames: ["slow","fast"] },
+];
+
+/* =====================================================================
+   Mock-host + device state.  32 slots (4 pages x 8 keys).
+   The device is stateless by design: sel/page live on the device;
+   vals/mods/acts are the host truth (mirrored here).
+   ===================================================================== */
+const N = 32;
+const State = {
+  // per-slot (1-based index maps to id; we use 0-based arrays 0..31)
+  names:  new Array(N).fill(EMPTY_NAME),
+  colors: new Array(N).fill(null),        // slot color or null (empty -> EMPTY_COLOR at draw)
+  kinds:  new Array(N).fill('toggle'),    // 'toggle' | 'trigger' | 'empty'
+  modeNames: Array.from({length: N}, () => []),
+  vals: new Array(N).fill(0),             // 0..127
+  mods: new Array(N).fill(0),             // mode index
+  acts: new Array(N).fill(0),             // active flag (sticky, toggle)
+  // device
+  page: 0,
+  sel: 0,
+  // Host-side selection tracker (mock host = CaptainPad's manager.handleVsn1SlotKey).
+  // The device is stateless; the HOST decides select-vs-toggle from whether THIS
+  // key is the one it currently has selected. Starts -1 (nothing selected at boot),
+  // so the very first press of ANY key — including key 0 — is "select only", not a
+  // toggle (report 20260709_4: "unselected press = select only"). Also reset on
+  // page change (VM restart re-selects). Combined page*8+key so cross-page presses
+  // are always "unselected" first.
+  hostSel: -1,
+  hi: 1,                                  // welcome armed (Lua `hi`)
+  flashUntil: 0,                          // page-flash overlay end (ms)
+};
+
+/* fill State from a layout array (demo or live) */
+function loadLayout(layoutArr) {
+  for (let i = 0; i < N; i++) {
+    State.names[i] = EMPTY_NAME;
+    State.colors[i] = null;
+    State.kinds[i] = 'empty';
+    State.modeNames[i] = [];
+  }
+  for (const s of layoutArr) {
+    const i = s.id - 1;
+    if (i < 0 || i >= N) continue;
+    const key = i % 8;
+    State.names[i] = clampStr(s.name, MAX_NAME_LEN);
+    State.colors[i] = (Array.isArray(s.color) && s.color.length === 3) ? s.color.slice() : PALETTE[key].slice();
+    State.kinds[i] = (s.behavior === 'trigger') ? 'trigger' : 'toggle';
+    State.modeNames[i] = Array.isArray(s.modeNames) ? s.modeNames.map((m) => clampStr(m, MAX_MODE_LEN)) : [];
+  }
+}
+
+/* slot color at 0-based index (empty -> EMPTY_COLOR) — matches cls[] in Lua */
+function slotColor(i) { return State.kinds[i] === 'empty' ? EMPTY_COLOR : (State.colors[i] || EMPTY_COLOR); }
+
+/* current-page helpers mirroring Lua page_current()*8 + key */
+function idxOf(page, key) { return page * 8 + key; }
+
+/* =====================================================================
+   LCD Grid draw API — implemented 1:1 per design §1.4.
+   Lua coords are INCLUSIVE corners. All drawing in device pixels on the
+   320x240 surface.
+   ===================================================================== */
+const canvas = document.getElementById('lcd');
+const ctx = canvas.getContext('2d');
+const rgb = (c) => `rgb(${c[0]|0},${c[1]|0},${c[2]|0})`;
+
+function draw_area_filled(x1, y1, x2, y2, c) {
+  ctx.fillStyle = rgb(c);
+  ctx.fillRect(x1, y1, (x2 - x1 + 1), (y2 - y1 + 1));   // inclusive corners
+}
+function draw_rectangle_rounded_filled(x1, y1, x2, y2, r, c) {
+  const w = x2 - x1 + 1, h = y2 - y1 + 1;
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.fillStyle = rgb(c);
+  ctx.beginPath();
+  roundedPath(x1, y1, w, h, rr);
+  ctx.fill();
+}
+function draw_rectangle_rounded(x1, y1, x2, y2, r, c) {
+  const w = x2 - x1 + 1, h = y2 - y1 + 1;
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.strokeStyle = rgb(c);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  // offset 0.5 so a 1px stroke lands crisply on the pixel grid
+  roundedPath(x1 + 0.5, y1 + 0.5, w - 1, h - 1, rr);
+  ctx.stroke();
+}
+function roundedPath(x, y, w, h, r) {
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y,     x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x,     y + h, r);
+  ctx.arcTo(x,     y + h, x,     y,     r);
+  ctx.arcTo(x,     y,     x + w, y,     r);
+  ctx.closePath();
+}
+
+/* draw_text_fast — FIXED glyph advance == size, y = TOP of glyph box.
+   Proof (welcome): "Marsin" x=16 size32 ends at 16+6*32=208 where "LED" starts.
+   Each char centered in box [x+i*size, y] .. [x+(i+1)*size, y+size], bold mono,
+   font-size ~= 0.9*size (metrics fidelity, not glyph shapes). §1.4. */
+const GLYPH_FACTOR = 0.9;
+function draw_text_fast(text, x, y, size, c) {
+  const str = String(text);
+  ctx.fillStyle = rgb(c);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `700 ${Math.round(size * GLYPH_FACTOR)}px "Consolas","Cascadia Mono","Courier New",monospace`;
+  for (let i = 0; i < str.length; i++) {
+    const cx = x + i * size + size / 2;
+    const cy = y + size / 2;
+    ctx.fillText(str[i], cx, cy);
+  }
+}
+function draw_swap() { /* single canvas: no-op; kept to mirror Lua structure */ }
+
+/* =====================================================================
+   Transliterated Lua screen artwork.
+   ===================================================================== */
+
+/* wdw — MarsinLED welcome (system_init.lua) */
+function wdw() {
+  draw_rectangle_rounded_filled(130, 30, 190, 90, 30, [226, 88, 34]);   // r=30 on 61x61 = disc
+  draw_text_fast("Marsin", 16, 116, 32, [255, 255, 255]);
+  draw_text_fast("LED", 208, 116, 32, [226, 88, 34]);
+  draw_area_filled(16, 158, 303, 163, [226, 88, 34]);
+  draw_text_fast("welcome aboard", 48, 184, 16, [170, 170, 170]);
+}
+
+/* fdw — page-flash overlay box (system_init.lua) */
+function fdw() {
+  draw_area_filled(90, 70, 229, 170, [0, 0, 0]);
+  draw_rectangle_rounded(90, 70, 229, 170, 10, [226, 88, 34]);
+  draw_text_fast("P" + State.page, 96, 88, 64, [255, 255, 255]);
+}
+
+/* gdw — 2x4 slot grid (lcd_init.lua). cells 80x53, 4 cols x 2 rows. */
+function gdw() {
+  for (let i = 0; i < 8; i++) {
+    const x = (i % 4) * 80, y = Math.floor(i / 4) * 53;
+    const gi = idxOf(State.page, i);           // slot index for this page+key
+    const q = slotColor(gi);
+    const ab = (State.kinds[gi] === 'empty') ? EMPTY_NAME : abbreviate(State.names[gi]);
+    if (i === State.sel) {
+      draw_area_filled(x + 2, y + 2, x + 78, y + 51, q);
+      // contrast text: luma rule (r*3 + g*6 + b > 1280) ? black : white — exact
+      const t = (q[0] * 3 + q[1] * 6 + q[2] > 1280) ? [0, 0, 0] : [255, 255, 255];
+      draw_text_fast(ab, x + 8, y + 18, 16, t);
+    } else {
+      draw_text_fast(ab, x + 8, y + 18, 16, q);   // empty slots -> rgb(30,30,30), near-invisible (faithful)
+    }
+  }
+}
+
+/* lcd_draw.lua body — transliterated. Welcome vs live screen; flash overlay. */
+function drawLCD() {
+  const now = performance.now();
+  const fl = now < State.flashUntil;           // page flash active
+
+  draw_area_filled(0, 0, 319, 239, [0, 0, 0]);  // clear black
+
+  if (State.hi === 1 && !fl) {
+    wdw();
+  } else {
+    const si = idxOf(State.page, State.sel);    // 0-based slot index
+    const v = State.vals[si] || 0;
+    const c = slotColor(si);
+    gdw();
+    draw_text_fast(State.names[si], 16, 118, 24, c);
+    draw_text_fast(String(v), 250, 118, 24, [255, 255, 255]);
+    const mn = (State.modeNames[si] || [])[State.mods[si] || 0] || "-";
+    draw_text_fast(mn, 16, 156, 16, [200, 200, 200]);
+    if ((State.acts[si] || 0) > 0) {
+      draw_text_fast("ON", 200, 156, 16, [60, 255, 60]);
+    }
+    draw_text_fast("P" + State.page, 286, 156, 16, [140, 140, 140]);
+    const w = Math.floor(v * 288 / 127);        // (v * 288) // 127
+    draw_area_filled(16, 200, 303, 222, [40, 40, 40]);
+    if (w > 0) {
+      draw_area_filled(16, 200, 16 + w, 222, c);
+    }
+  }
+  if (fl) fdw();
+  draw_swap();
+}
+
+/* Dirty-flag + rAF repaint (mirrors device `dirty` gate). Keeps ticking
+   while a flash is active so it clears itself. */
+let dirty = true;
+function markDirty() { dirty = true; }
+function frame() {
+  const flashing = performance.now() < State.flashUntil;
+  if (dirty || flashing) {
+    drawLCD();
+    updateLEDs();
+    dirty = flashing;                           // one final clean repaint after flash ends
+  }
+  requestAnimationFrame(frame);
+}
+
+/* =====================================================================
+   LEDs
+   ===================================================================== */
+
+/* Encoder 5-LED bottom-fill bar — ebar(v) from system_init.lua.
+   b = clamp(floor((v*5 - i*127) * 255 / 127), 0, 255).  Color = SELECTED slot.
+   Edge cases: v=0 all off; v=127 all 255; v=64 -> LED0/1 full, LED2~=33, LED3/4 off. */
+function encBrightness(v, i) {
+  let b = Math.floor((v * 5 - i * 127) * 255 / 127);
+  if (b < 0) b = 0; else if (b > 255) b = 255;
+  return b;
+}
+
+/* momentary tap-flash tracking for trigger/empty keys and encoder-press ON pulse */
+const keyFlashUntil = new Array(8).fill(0);   // per visible key (0..7)
+let triggerOnUntil = 0;                       // LCD "ON" pulse for triggers (~300ms)
+
+function updateLEDs() {
+  const now = performance.now();
+  // Key LEDs
+  for (let k = 0; k < 8; k++) {
+    const gi = idxOf(State.page, k);
+    const col = slotColor(gi);
+    const el = keyEls[k];
+    const glow = el.querySelector('.key-glow');
+    let bright;   // 0..1
+    if (State.kinds[gi] === 'toggle') {
+      // sticky: 255 when active, 0 when not (feedback-driven)
+      bright = (State.acts[gi] > 0) ? 1 : 0;
+    } else {
+      // trigger + empty: momentary tap-flash
+      bright = (now < keyFlashUntil[k]) ? 1 : 0;
+    }
+    glow.style.background = `radial-gradient(circle at 50% 42%, rgba(${col[0]},${col[1]},${col[2]},.95) 0%, rgba(${col[0]},${col[1]},${col[2]},.35) 55%, rgba(${col[0]},${col[1]},${col[2]},0) 78%)`;
+    glow.style.opacity = String(bright);
+    // tinted cap edge when lit
+    el.style.boxShadow = bright > 0
+      ? `0 3px 0 #101114, 0 4px 10px rgba(${col[0]},${col[1]},${col[2]},.45), inset 0 0 0 1px rgba(${col[0]},${col[1]},${col[2]},.5)`
+      : '';
+  }
+  // Encoder ring — color = selected slot, bottom-fill per encBrightness
+  const selCol = slotColor(idxOf(State.page, State.sel));
+  const v = State.vals[idxOf(State.page, State.sel)] || 0;
+  for (let i = 0; i < 5; i++) {
+    const b = encBrightness(v, i) / 255;
+    const dot = encEls[i];
+    dot.style.background = b > 0.01
+      ? `rgba(${selCol[0]},${selCol[1]},${selCol[2]},${0.15 + 0.85 * b})`
+      : '#1a1b1f';
+    dot.style.boxShadow = b > 0.01
+      ? `0 0 6px rgba(${selCol[0]},${selCol[1]},${selCol[2]},${b})`
+      : 'inset 0 0 2px #000';
+  }
+  // Side-button LEDs — current page lit (soft orange)
+  for (let p = 0; p < 4; p++) {
+    const led = sbEls[p].querySelector('.sb-led');
+    if (p === State.page) {
+      led.style.background = 'rgba(226,88,34,.95)';
+      led.style.boxShadow = '0 0 6px rgba(226,88,34,.8)';
+    } else {
+      led.style.background = '#202226';
+      led.style.boxShadow = 'inset 0 0 2px #000';
+    }
+  }
+}
+
+/* =====================================================================
+   MIDI event log (design §2.6) — prints what the REAL device emits.
+   ===================================================================== */
+const logEl = document.getElementById('midilog');
+function logMidi(gesture, msg) {
+  const div = document.createElement('div');
+  const t = new Date().toLocaleTimeString('en-US', { hour12: false });
+  div.innerHTML = `<span class="t">${t}</span>  ${pad(gesture, 14)}<span class="out">→ ${msg}</span>`;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+  while (logEl.childElementCount > 200) logEl.removeChild(logEl.firstChild);
+}
+function pad(s, n) { s = String(s); return s + ' '.repeat(Math.max(0, n - s.length)); }
+
+/* =====================================================================
+   Interactions — mirror the verified hardware loop (report 20260709_4).
+   The mock plays BOTH the device (selection/LCD) and the mock host
+   (toggle/trigger/mode/value truth). Live mode overrides the host role.
+   ===================================================================== */
+
+function dismissWelcome() { if (State.hi === 1) { State.hi = 0; markDirty(); } }
+
+/* KEY PRESS — press always selects; toggles need 2nd press; triggers fire every press. */
+function keyPress(k) {
+  dismissWelcome();
+  const gi = idxOf(State.page, k);
+  const kind = State.kinds[gi];
+  const id = gi + 1;
+  // Host's select-vs-toggle decision: was THIS slot the host's current selection?
+  // (hostSel is a global 0..31 index; -1 at boot => first press is always select-only.)
+  const wasSelected = (State.hostSel === gi);
+
+  // Selection happens on EVERY press (design §2.1 step 2) — device highlight + host.
+  State.sel = k;
+  State.hostSel = gi;
+
+  // Device emits its note regardless (Note On 32+k, ch=page, vel 127).
+  logMidi(`key ${k} press`, `Note On  ch${State.page} note ${MIDI.slotBase + k} vel 127`);
+
+  if (kind === 'trigger') {
+    // fires on EVERY press — momentary
+    keyFlashUntil[k] = performance.now() + 130;
+    triggerOnUntil = performance.now() + 300;
+    State.acts[gi] = 1;                          // brief ON pulse
+    setTimeout(() => { State.acts[gi] = 0; markDirty(); }, 300);
+    if (LIVE.on) livePost(`/global-effect-slots/${id}/trigger`, {});
+  } else if (kind === 'toggle') {
+    if (wasSelected) {
+      // two-step: 2nd press toggles active (ON and OFF)
+      State.acts[gi] = State.acts[gi] > 0 ? 0 : 1;   // sticky LED follows via feedback semantics
+      if (LIVE.on) livePost(`/global-effect-slots/${id}/toggle`, {});
+    }
+    // else: select only, no state change
+  } else {
+    // empty key: select only + momentary tap-flash (factory)
+    keyFlashUntil[k] = performance.now() + 130;
+  }
+  markDirty();
+}
+
+/* JOG TURN — each detent +-1 (Shift = +-5), clamp 0..127 on selected slot. */
+function jogTurn(delta) {
+  dismissWelcome();
+  const si = idxOf(State.page, State.sel);
+  const before = State.vals[si] || 0;
+  let nv = before + delta;
+  if (nv < 0) nv = 0; else if (nv > 127) nv = 127;
+  State.vals[si] = nv;
+  if (nv !== before) {
+    logMidi(`jog ${delta > 0 ? '+' : ''}${delta}`, `CC       ch${State.page} cc ${MIDI.slotBase + State.sel} val ${nv}`);
+    if (LIVE.on) livePostIntensity(si + 1, nv);
+  }
+  markDirty();
+}
+
+/* JOG PRESS — mode cycle with wrap. No modes -> no-op (real engine ignores). */
+function jogPress() {
+  dismissWelcome();
+  const si = idxOf(State.page, State.sel);
+  const modes = State.modeNames[si] || [];
+  logMidi('jog press', `Note On  ch${State.page} note ${MIDI.encPressNote} vel 127`);
+  if (modes.length > 0) {
+    State.mods[si] = ((State.mods[si] || 0) + 1) % modes.length;
+    if (LIVE.on) livePost(`/global-effect-slots/${si + 1}/mode/cycle`, {});
+  }
+  markDirty();
+}
+
+/* SIDE BUTTON — page change to p: flash 0.5s, sel reset to 0. Idempotent. */
+function sbPress(p) {
+  dismissWelcome();
+  logMidi(`sb${p} press`, `Note On  ch${State.page} note ${MIDI.sbNoteBase + p} vel 127`);
+  State.page = p;
+  State.sel = 0;                                // VM-restart semantics: sel resets
+  State.hostSel = -1;                           // host re-selection: first press on new page is select-only
+  State.flashUntil = performance.now() + 500;   // 0.5s page flash
+  if (LIVE.on) livePatch('/global-effects/page', { effectsPage: p });
+  markDirty();
+}
+
+/* =====================================================================
+   DOM build + wiring
+   ===================================================================== */
+const keyEls = [];
+const encEls = [];
+const sbEls = [];
+
+/* keys: 2 rows x 4 cols, key k -> col k%4, row k//4 */
+const keysContainer = document.getElementById('keys');
+for (let k = 0; k < 8; k++) {
+  const el = document.createElement('div');
+  el.className = 'key';
+  el.innerHTML = `<div class="key-glow"></div><div class="key-num">${k}</div>`;
+  el.addEventListener('mousedown', (e) => { e.preventDefault(); el.classList.add('pressed'); keyPress(k); });
+  el.addEventListener('mouseup', () => el.classList.remove('pressed'));
+  el.addEventListener('mouseleave', () => el.classList.remove('pressed'));
+  keysContainer.appendChild(el);
+  keyEls.push(el);
+}
+
+/* encoder LEDs: 5 dots on the ring. Placement (design §1.6): LED 0 at
+   6 o'clock rising up the LEFT side to LED 4 at 12 o'clock — "fill from
+   the bottom". Physical positions on the real unit are UNVERIFIED. */
+const wheelWrap = document.getElementById('wheelWrap');
+const RING_R = 78;                              // px from center to LED channel
+const CX = 85, CY = 85;                         // wheel center (170/2)
+const ENC_ANGLES = [180, 135, 90, 45, 0];       // deg: 6 o'clock ... up left ... 12 o'clock
+for (let i = 0; i < 5; i++) {
+  const a = (ENC_ANGLES[i]) * Math.PI / 180;
+  // 6 o'clock = bottom => (0, +R). Rotate CCW up the LEFT side to top.
+  const px = CX - Math.sin(a) * RING_R;         // left side => negative x
+  const py = CY + Math.cos(a) * RING_R;
+  const dot = document.createElement('div');
+  dot.className = 'enc-led';
+  dot.style.left = px + 'px';
+  dot.style.top = py + 'px';
+  wheelWrap.appendChild(dot);
+  encEls.push(dot);
+}
+
+/* side buttons */
+const sbContainer = document.getElementById('sideButtons');
+for (let p = 0; p < 4; p++) {
+  const el = document.createElement('div');
+  el.className = 'sb';
+  el.innerHTML = `<div class="sb-cap"></div><div class="sb-led"></div><div class="sb-label">sb${p}</div>`;
+  el.addEventListener('mousedown', (e) => { e.preventDefault(); sbPress(p); });
+  sbContainer.appendChild(el);
+  sbEls.push(el);
+}
+
+/* jog wheel — drag (vertical/horizontal) + wheel scroll -> detents. Rotation dot. */
+const wheel = document.getElementById('wheel');
+const wheelDot = document.getElementById('wheelDot');
+const wheelCap = document.getElementById('wheelCap');
+let wheelRot = 0;
+let dragActive = false, dragAccum = 0, lastY = 0, lastX = 0;
+const PX_PER_DETENT = 6;
+
+wheel.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  dragActive = true; dragAccum = 0; lastY = e.clientY; lastX = e.clientX;
+});
+window.addEventListener('mousemove', (e) => {
+  if (!dragActive) return;
+  // upward drag or rightward drag = increase
+  const dy = lastY - e.clientY;
+  const dx = e.clientX - lastX;
+  lastY = e.clientY; lastX = e.clientX;
+  dragAccum += (dy + dx);
+  const step = e.shiftKey ? 5 : 1;
+  while (Math.abs(dragAccum) >= PX_PER_DETENT) {
+    const dir = dragAccum > 0 ? 1 : -1;
+    dragAccum -= dir * PX_PER_DETENT;
+    jogTurn(dir * step);
+    wheelRot += dir * 12;
+    wheelDot.style.transform = `rotate(${wheelRot}deg)`;
+  }
+});
+window.addEventListener('mouseup', () => { dragActive = false; });
+wheel.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const dir = e.deltaY < 0 ? 1 : -1;
+  const step = e.shiftKey ? 5 : 1;
+  jogTurn(dir * step);
+  wheelRot += dir * 12;
+  wheelDot.style.transform = `rotate(${wheelRot}deg)`;
+}, { passive: false });
+wheelCap.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); jogPress(); });
+
+/* MIDI log collapse */
+const logHead = document.getElementById('logHead');
+logHead.addEventListener('click', () => {
+  logHead.classList.toggle('collapsed');
+  logEl.classList.toggle('hidden');
+});
+
+/* =====================================================================
+   LIVE MODE (design §3) — read-only mirror + optimistic 2-way POSTs.
+   Fail loudly on any fetch failure: red banner + STOP (no silent fallback).
+   ===================================================================== */
+const LIVE = { on: false, url: '', pollTimer: null, layoutTimer: null };
+const banner = document.getElementById('banner');
+const liveStatus = document.getElementById('liveStatus');
+const liveToggle = document.getElementById('liveToggle');
+const engineUrlInput = document.getElementById('engineUrl');
+const liveDot = liveToggle.querySelector('.live-dot');
+
+try {
+  const saved = localStorage.getItem('vsn1_engine_url');
+  if (saved) engineUrlInput.value = saved;
+} catch (e) { /* localStorage unavailable from file:// in some browsers — ignore */ }
+
+function liveHalt(reason) {
+  LIVE.on = false;
+  if (LIVE.pollTimer) clearInterval(LIVE.pollTimer);
+  if (LIVE.layoutTimer) clearInterval(LIVE.layoutTimer);
+  LIVE.pollTimer = LIVE.layoutTimer = null;
+  banner.textContent = 'ENGINE OFFLINE — live mode halted: ' + reason;
+  banner.classList.add('show');
+  liveStatus.textContent = 'error';
+  liveStatus.className = 'live-status err';
+  liveDot.style.color = '#ff5a4d';
+}
+function liveClearBanner() { banner.classList.remove('show'); banner.textContent = ''; }
+
+async function liveGet(path) {
+  const res = await fetch(LIVE.url + path);
+  if (!res.ok) throw new Error(`${path} -> HTTP ${res.status}`);
+  return res.json();
+}
+async function livePost(path, body) {
+  try { await fetch(LIVE.url + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }); }
+  catch (e) { liveHalt(e.message); }
+}
+async function livePatch(path, body) {
+  try { await fetch(LIVE.url + path, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }); }
+  catch (e) { liveHalt(e.message); }
+}
+/* intensity: coalesce to <=1 in-flight per slot */
+const intensityInflight = {};
+const intensityPending = {};
+async function livePostIntensity(id, val) {
+  intensityPending[id] = val;
+  if (intensityInflight[id]) return;
+  intensityInflight[id] = true;
+  try {
+    while (intensityPending[id] !== undefined) {
+      const v = intensityPending[id]; delete intensityPending[id];
+      await fetch(`${LIVE.url}/global-effect-slots/${id}/intensity`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: v / 127 }),
+      });
+    }
+  } catch (e) { liveHalt(e.message); }
+  finally { intensityInflight[id] = false; }
+}
+
+/* Map engine layout+status into DEMO_LAYOUT-shaped array */
+async function liveFetchLayout() {
+  const layoutRes = await liveGet('/global-effects/layout');
+  const statusRes = await liveGet('/global-effect-slots/status');
+  const statusById = new Map((statusRes.slots || []).map((x) => [x.slotId, x]));
+  const arr = (layoutRes.layout.slots || []).map((s) => {
+    const info = statusById.get(s.slotId) || {};
+    const key = (s.slotId - 1) % 8;
+    return {
+      id: s.slotId,
+      name: s.name || s.effectId || '-',
+      color: (Array.isArray(s.color) && s.color.length === 3) ? s.color : PALETTE[key],
+      behavior: info.behavior === 'trigger' ? 'trigger' : 'toggle',
+      modeNames: Array.isArray(info.modeValues) ? info.modeValues : [],
+    };
+  });
+  loadLayout(arr);
+}
+async function liveApplyStatus() {
+  const statusRes = await liveGet('/global-effect-slots/status');
+  for (const x of (statusRes.slots || [])) {
+    const i = x.slotId - 1;
+    if (i < 0 || i >= N) continue;
+    if (typeof x.intensity === 'number') State.vals[i] = Math.round(x.intensity * 127);
+    if (typeof x.active === 'boolean') State.acts[i] = x.active ? 1 : 0;
+    if (typeof x.modeIndex === 'number') State.mods[i] = x.modeIndex;
+  }
+  const pageRes = await liveGet('/global-effects/page');
+  if (typeof pageRes.effectsPage === 'number' && pageRes.effectsPage !== State.page) {
+    State.page = pageRes.effectsPage;
+  }
+}
+
+async function liveConnect() {
+  LIVE.url = engineUrlInput.value.trim().replace(/\/$/, '');
+  try { localStorage.setItem('vsn1_engine_url', LIVE.url); } catch (e) {}
+  liveClearBanner();
+  liveStatus.textContent = 'connecting…';
+  liveStatus.className = 'live-status';
+  try {
+    await liveFetchLayout();
+    await liveApplyStatus();
+  } catch (e) {
+    liveHalt(e.message + '  (is the engine running on ' + LIVE.url + '?)');
+    return;
+  }
+  LIVE.on = true;
+  State.hi = 0;                                 // first successful round dismisses welcome
+  liveStatus.textContent = '● ' + LIVE.url;
+  liveStatus.className = 'live-status on';
+  liveDot.style.color = '#43d477';
+  markDirty();
+  LIVE.pollTimer = setInterval(async () => {
+    try { await liveApplyStatus(); markDirty(); } catch (e) { liveHalt(e.message); }
+  }, 500);
+  LIVE.layoutTimer = setInterval(async () => {
+    try { await liveFetchLayout(); markDirty(); } catch (e) { liveHalt(e.message); }
+  }, 5000);
+}
+function liveDisconnect() {
+  LIVE.on = false;
+  if (LIVE.pollTimer) clearInterval(LIVE.pollTimer);
+  if (LIVE.layoutTimer) clearInterval(LIVE.layoutTimer);
+  LIVE.pollTimer = LIVE.layoutTimer = null;
+  liveClearBanner();
+  liveStatus.textContent = 'off';
+  liveStatus.className = 'live-status';
+  liveDot.style.color = '#5a5d66';
+}
+liveToggle.addEventListener('click', () => {
+  if (LIVE.on || liveStatus.className.includes('err')) { liveDisconnect(); }
+  else { liveConnect(); }
+});
+
+/* =====================================================================
+   Boot
+   ===================================================================== */
+loadLayout(DEMO_LAYOUT);
+State.hi = 1;                                   // welcome armed at boot
+requestAnimationFrame(frame);
+markDirty();
+</script>
+</body>
+</html>

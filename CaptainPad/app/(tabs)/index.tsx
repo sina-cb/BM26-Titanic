@@ -7,24 +7,31 @@ import { RigGlobals } from '@/components/RigGlobals';
 import { GlobalParams, DeckSavedFlash } from '@/components/GlobalParams';
 import { CPCControls } from '@/components/CPCControls';
 import { DeckTopBar } from '@/components/DeckTopBar';
-import { PlaylistPanel } from '@/components/PlaylistPanel';
-import { GlobalHueRow } from '@/components/global_hue_row';
+import { DeckHueRow } from '@/components/deck_hue_row';
 import { EntryLabelEditor } from '@/components/EntryLabelEditor';
 import { PixelStrip } from '@/components/ui/PixelStrip';
 import { AllModulationsPanel } from '@/components/AllModulationsPanel';
 import { useFocusEffect } from 'expo-router';
 import {
   getAutopilot, setAutopilot,
+  setAutopilotProfile as apiSetAutopilotProfile,
   fetchDeckChannel, setDeckChannelControl,
   setMixerView,
   fetchDeckTransitionConfig, setDeckTransitionConfig,
   fetchDeckColorAutopilot, setDeckColorAutopilot,
   fetchPlaylists,
   fetchChannelPlaylist,
+  setChannelPlaylist,
+  setDeckPlaylistSplit,
+  fetchDeckPlaylistSlots,
   type DeckTransitionConfig,
   type DeckColorAutopilotConfig,
+  type PlaylistAssignment,
 } from '@/utils/api';
-import { setChannelColor } from '@/utils/channelExtrasApi';
+import { engineEvents } from '@/utils/engineEvents';
+import { engineVizEvents } from '@/utils/engineVizEvents';
+import { setMidiActiveContext } from '@/hooks/useMidiControl';
+import { setChannelColor, setChannelHue } from '@/utils/channelExtrasApi';
 import { panicMixer } from '@/utils/channelOpsApi';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { DeckOverlayStack } from '@/components/DeckOverlayStack';
@@ -38,6 +45,7 @@ import { PlanLockBanner } from '@/components/PlanLockBanner';
 import { PlanLockScrim } from '@/components/PlanLockScrim';
 import { ColorAutopilotPanel } from '@/components/deck/ColorAutopilotPanel';
 import { PatternAutopilotPanel } from '@/components/deck/pattern_autopilot_panel';
+import { SplitPlaylistPanes } from '@/components/deck/split_playlist_panes';
 
 // 8pt hitSlop on every edge → a 28×28 visual button gets a 44×44 interactive
 // area (28 + 8 + 8 = 44), matching the mixer's touch-target floor.
@@ -108,6 +116,26 @@ const MomentaryButton = ({ id, name, onChange }: { id: number, name: string, onC
   );
 };
 
+// Portrait/narrow deck layout: the PATTERNS column is PINNED (fixed height, does
+// NOT scroll), and the PARAMETERS + AUTOPILOT columns scroll together BELOW it
+// (operator request 2026-07-11). This wrapper IS that scroll region: a Fragment
+// in the wide 3-column row (so col2/col3 stay flex siblings of the pinned col1),
+// and a ScrollView in the narrow stack. Module-scoped so its component identity
+// is stable — defining it inline in render would remount col2/col3 (losing their
+// scroll position + state) on every parent render.
+function ColumnsScrollRest({ isWide, children }: { isWide: boolean; children: React.ReactNode }) {
+  if (isWide) return <>{children}</>;
+  return (
+    <ScrollView
+      style={{ flex: 1 }}
+      contentContainerStyle={{ paddingBottom: 16 }}
+      showsVerticalScrollIndicator={false}
+    >
+      {children}
+    </ScrollView>
+  );
+}
+
 // ── Connection Status Banner ────────────────────────────────────────────
 const OfflineBanner = ({ error }: { error: string }) => {
   const C = usePalette();
@@ -153,6 +181,19 @@ export default function ControlDeckScreen() {
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const isPortrait = winWidth < winHeight;
   const isWide = !isPortrait && winWidth >= 900;
+  // PATTERNS-PIN (operator request 2026-07-11): the columns host is now ALWAYS a
+  // plain View. Wide = the 3-column row (unchanged). Narrow = a flex COLUMN whose
+  // first child (PATTERNS) is pinned at a fixed height and whose remaining columns
+  // (PARAMETERS + AUTOPILOT) scroll together inside <ColumnsScrollRest> below — so
+  // the pattern list stays put while the rest of the deck scrolls under it.
+  // Section host for the PARAMETERS + SETTINGS columns: ScrollView only when
+  // the column has a bounded height (wide row); a plain View in the stacked
+  // page-scroll (an inner ScrollView there collapses to zero height — the
+  // party 2026-07-11 'third column missing' bug).
+  const SectionHost: React.ComponentType<any> = isWide ? ScrollView : View;
+  const sectionHostProps = isWide
+    ? { contentContainerStyle: { padding: 16, paddingBottom: 80 }, showsVerticalScrollIndicator: false }
+    : { style: { padding: 16, paddingBottom: 24 } };
   const [deckChannel, setDeckChannel] = useState<any | null>(null);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [connectionError, setConnectionError] = useState<string>('');
@@ -208,6 +249,30 @@ export default function ControlDeckScreen() {
   const [groupMode, setGroupMode] = useState<boolean>(false);
   const [groupSize, setGroupSize] = useState<number>(3);
   const [groupDwell, setGroupDwell] = useState<number>(6);
+  // AUTOPILOT PROFILE (feat/autopilot_deck_improvement): the deck autopilot is a
+  // set of named profiles. `random` (default — today's shuffle/sequential
+  // cycling, byte-identical) and `audio_reactive` (audio-driven). The profile
+  // lives on the deck base channel's playlist.autopilot and rides the
+  // `autopilot` WS broadcast (`profile` + the selectable-list `profiles`). Seed
+  // from GET /autopilot; reconcile in the `autopilot` WS branch; write through
+  // setAutopilotProfile (POST /deck/playlist/autopilot {profile}). Defaults are
+  // the ONE documented schema default (`'random'`) and a single-item list so the
+  // dropdown renders even before the first broadcast.
+  const [autopilotProfile, setAutopilotProfile] = useState<string>('random');
+  const [autopilotProfiles, setAutopilotProfiles] = useState<string[]>(['random']);
+
+  // DECK SPLIT PLAYLISTS (feat/autopilot_deck_improvement): the PATTERNS column
+  // is two stacked, resizable playlist panes — `primary` (DECK A, today's main
+  // list) and an OPTIONAL `secondary` (DECK B). The deck still plays one
+  // pattern; the panes are stable name bindings the operator browses/drives.
+  // These fields ride the `deck` WS message's `playlistSlots` (no new WS type),
+  // seeded from GET /deck/playlist/slots. `splitRatio` is the divider's pane-1
+  // share (0.15..0.85; the ONE documented default is 0.5). `secondaryBound`
+  // drives whether pane 2 is shown expanded. PlaylistPanel (role="deckSlot")
+  // reconciles each pane's own playlist off the same message, so this state only
+  // needs the binding presence + ratio, not the full entry lists.
+  const [deckSplitRatio, setDeckSplitRatio] = useState<number>(0.5);
+  const [deckSecondaryBound, setDeckSecondaryBound] = useState<boolean>(false);
 
   // Deck transition config (soft swap between patterns via server-side
   // double-buffer — see DECK TRANSITIONS in DeckTransitionControls.tsx
@@ -302,6 +367,8 @@ export default function ControlDeckScreen() {
   useFocusEffect(
     useCallback(() => {
       setMixerView('deck');
+      // Switch the MIDI controller to its Deck mapping context.
+      setMidiActiveContext('deck');
       // Tab unmount cleanup: any in-flight swap is finalized by the
       // engine when we navigate away (the /mixer/view POST does that
       // server-side), so clear the local flag so the next mount starts
@@ -347,12 +414,37 @@ export default function ControlDeckScreen() {
           shuffle: !!ap.shuffle,
         });
       }
+      // DECK SPLIT PLAYLISTS: the two panes' bindings + divider ratio ride the
+      // same `deck` message's `playlistSlots` map (the engine folds it in — no
+      // new WS type). We only track secondary presence + the ratio here; each
+      // pane's PlaylistPanel (role="deckSlot") reconciles its own list off the
+      // same map. Defensive: only adopt a well-typed ratio so a malformed field
+      // can't jump the divider.
+      const slots = (msg as { playlistSlots?: { secondary?: unknown; splitRatio?: unknown } }).playlistSlots;
+      if (slots && typeof slots === 'object') {
+        setDeckSecondaryBound(!!slots.secondary);
+        if (typeof slots.splitRatio === 'number' && Number.isFinite(slots.splitRatio)) {
+          setDeckSplitRatio(slots.splitRatio);
+        }
+      }
     } else if (msg.type === 'autopilot') {
       if (typeof msg.active === 'boolean') setPlaylistActive(msg.active);
       if (typeof msg.delay_s === 'string' && (msg.delay_s as string).length) {
         setPlaylistDelayStr(msg.delay_s as string);
       }
       if (typeof msg.shuffle === 'boolean') setIsShuffle(msg.shuffle);
+      // AUTOPILOT PROFILE: the `autopilot` broadcast carries the active `profile`
+      // (normalized string) + the selectable `profiles` list. Reconcile both so
+      // the dropdown reflects an operator POST, a per-scene restore, OR a
+      // plan-cue-driven profile change live. Defensive: only adopt well-typed
+      // values so a malformed field can't blow away a good one (mirrors the
+      // group-locality reconcile above).
+      const apProfile = (msg as { profile?: unknown }).profile;
+      if (typeof apProfile === 'string' && apProfile.length) setAutopilotProfile(apProfile);
+      const apProfiles = (msg as { profiles?: unknown }).profiles;
+      if (Array.isArray(apProfiles) && apProfiles.every((p) => typeof p === 'string') && apProfiles.length) {
+        setAutopilotProfiles(apProfiles as string[]);
+      }
       // Next-pattern-swap wall-clock ms (null when inactive) — the engine
       // re-broadcasts it on every cycle, so the deck countdown stays accurate
       // whether the operator OR a plan cue is driving the cadence.
@@ -431,6 +523,16 @@ export default function ControlDeckScreen() {
       setPlaylistActive(apResult.data.active);
       setPlaylistDelayStr(apResult.data.delay_s);
       setIsShuffle(apResult.data.shuffle);
+      // AUTOPILOT PROFILE: seed the active profile + selectable list from the
+      // same GET /autopilot the daemon fields come from (the engine folds
+      // `profile`/`profiles` into that response). Only adopt well-typed values;
+      // otherwise keep the documented `'random'` default.
+      if (typeof apResult.data.profile === 'string' && apResult.data.profile.length) {
+        setAutopilotProfile(apResult.data.profile);
+      }
+      if (Array.isArray(apResult.data.profiles) && apResult.data.profiles.length) {
+        setAutopilotProfiles(apResult.data.profiles as string[]);
+      }
     }
 
     // PATTERN-GROUP LOCALITY: the group knobs are NOT in the autopilot daemon
@@ -465,6 +567,19 @@ export default function ControlDeckScreen() {
     if (deckRes.ok && deckRes.data) {
       const ch = deckRes.data.channel || null;
       setDeckChannel(ch);
+    }
+
+    // DECK SPLIT PLAYLISTS: hydrate the divider ratio + secondary-slot presence
+    // before the first `deck` broadcast so the panes render at the right split
+    // (and pane 2 opens if a secondary was bound in a previous session). The
+    // per-pane entry lists still come from each PlaylistPanel's own deckSlot
+    // fetch/reconcile — this only seeds the parent-owned split chrome.
+    const slotsRes = await fetchDeckPlaylistSlots();
+    if (slotsRes.ok && slotsRes.data) {
+      setDeckSecondaryBound(!!slotsRes.data.secondary);
+      if (typeof slotsRes.data.splitRatio === 'number' && Number.isFinite(slotsRes.data.splitRatio)) {
+        setDeckSplitRatio(slotsRes.data.splitRatio);
+      }
     }
 
     // Seed the parent-owned playlist library (see comment on the
@@ -548,6 +663,88 @@ export default function ControlDeckScreen() {
     });
   }, [notifyInteraction]);
 
+  // Set the AUTOPILOT PROFILE (optimistic + rollback + Alert), cloned exactly
+  // from handleDeckTxChange: snapshot the previous profile, apply optimistically,
+  // POST /deck/playlist/autopilot {profile}, and on a rejected/failed POST
+  // restore the previous value + Alert (Codex P0 — never leave the UI showing a
+  // value the engine refused; an unknown profile 400s loud). On success the
+  // engine broadcasts `autopilot` with the new profile, which the onControl
+  // handler reconciles — that broadcast is the source of truth. planGate-guarded
+  // (the panel is also `disabled`, and the PlanLockScrim blankets it).
+  const handleAutopilotProfileChange = useCallback((profile: string) => {
+    if (planGate) return;
+    notifyInteraction();
+    let prevProfile = 'random';
+    setAutopilotProfile((prev) => { prevProfile = prev; return profile; });
+    void apiSetAutopilotProfile(profile).then((res) => {
+      if (!res.ok) {
+        console.error('[Deck] Autopilot-profile POST rejected:', res.error);
+        setAutopilotProfile(prevProfile);
+        Alert.alert(
+          'Autopilot profile not applied',
+          `The engine rejected the change. ${res.error || ''} Reverted to the previous value.`.trim(),
+        );
+      }
+    }).catch((err) => {
+      console.error('[Deck] Autopilot-profile POST failed:', err);
+      setAutopilotProfile(prevProfile);
+      Alert.alert('Autopilot profile not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+    });
+  }, [notifyInteraction, planGate]);
+
+  // DECK SPLIT: POST the new divider ratio on drag release (optimistic +
+  // rollback + Alert). The split component already applied the ratio locally
+  // during the drag; we snapshot the pre-drag stored ratio and restore it if the
+  // engine rejects (an out-of-band ratio 400s — fail loud). On success the
+  // engine broadcasts `deck` with the new splitRatio, which the onControl
+  // handler reconciles (source of truth). planGate-guarded.
+  const handleSplitRelease = useCallback((ratio: number) => {
+    if (planGate) return;
+    notifyInteraction();
+    let prevRatio = 0.5;
+    setDeckSplitRatio((prev) => { prevRatio = prev; return ratio; });
+    void setDeckPlaylistSplit(ratio).then((res) => {
+      if (!res.ok) {
+        console.error('[Deck] Split-ratio POST rejected:', res.error);
+        setDeckSplitRatio(prevRatio);
+        Alert.alert(
+          'Split not applied',
+          `The engine rejected the divider position. ${res.error || ''} Reverted.`.trim(),
+        );
+      }
+    }).catch((err) => {
+      console.error('[Deck] Split-ratio POST failed:', err);
+      setDeckSplitRatio(prevRatio);
+      Alert.alert('Split not applied', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+    });
+  }, [notifyInteraction, planGate]);
+
+  // DECK SPLIT: clear the SECONDARY pane's slot binding (✕ on pane 2). No
+  // ConfirmSheet — clearing a slot destroys nothing. Optimistic collapse +
+  // rollback + Alert; on success the engine broadcasts `deck` with the slot
+  // cleared (source of truth). Clearing a LIVE secondary promotes it to primary
+  // engine-side, which the WS reconcile then reflects.
+  const handleCloseSecondary = useCallback(() => {
+    if (planGate) return;
+    notifyInteraction();
+    const prevBound = deckSecondaryBound;
+    setDeckSecondaryBound(false);
+    void setChannelPlaylist('deckSlot', 'secondary', null).then((res) => {
+      if (!res.ok) {
+        console.error('[Deck] Clear secondary slot rejected:', res.error);
+        setDeckSecondaryBound(prevBound);
+        Alert.alert(
+          'Second playlist not cleared',
+          `The engine rejected the change. ${res.error || ''} Reverted.`.trim(),
+        );
+      }
+    }).catch((err) => {
+      console.error('[Deck] Clear secondary slot failed:', err);
+      setDeckSecondaryBound(prevBound);
+      Alert.alert('Second playlist not cleared', `Could not reach the engine. ${err?.message || ''} Reverted.`.trim());
+    });
+  }, [notifyInteraction, planGate, deckSecondaryBound]);
+
   // Per-channel color metadata (docs/39 §8.4) on the DECK channel. Pure
   // operator-facing accent (no render effect) — tints the deck card for
   // at-a-glance identification, matching the mixer strips. Same optimistic +
@@ -570,6 +767,28 @@ export default function ControlDeckScreen() {
       );
     }
   }, [deckChannel?.color, planGate]);
+
+  // DECK CHANNEL per-channel hue (engine F-hue — hue is per-channel ONLY;
+  // the global rig hue shifter was removed 2026-07 by operator decision).
+  // Same optimistic + PATCH /deck/channel { hue } + revert-on-rejection
+  // shape as handleDeckColor above and the mixer strip's HUE trim. The WS
+  // `deck` broadcast reconciles the live value afterwards.
+  const handleDeckHue = useCallback(async (degrees: number) => {
+    // Soft PLAN lock — the DeckHueRow gates its own handlers too; this is
+    // the belt-and-suspenders write-path gate.
+    if (planGate) return;
+    const prev = typeof deckChannel?.hue === 'number' ? deckChannel.hue : 0;
+    setDeckChannel((c: any) => (c ? { ...c, hue: degrees } : c));
+    const res = await setChannelHue(deckChannelId ?? '', degrees, { deck: true });
+    if (!res.ok) {
+      console.error('[Deck] hue change rejected:', res.error);
+      setDeckChannel((c: any) => (c ? { ...c, hue: prev } : c));
+      Alert.alert(
+        'Hue not applied',
+        `The engine rejected this hue. ${res.error || ''} The deck kept its previous hue.`.trim(),
+      );
+    }
+  }, [deckChannel?.hue, deckChannelId, planGate]);
 
   // ── PANIC / HOME (docs/39 §6b #9) — mission-critical safe LIT reset ─────
   // Mirrors the mixer tab's PANIC tile (same panicMixer api + ConfirmSheet
@@ -698,10 +917,11 @@ export default function ControlDeckScreen() {
           <PlanIndicatorPill />
         </View>
         {/* "LIVE OUTPUT" preview = the engine's `preDimmer` composite — the
-            composition AFTER global FX (hue shift / invert / group color-locks)
+            composition AFTER global FX (invert / group color-locks)
             but BEFORE the section dimmer rack + blackout (operator request
-            2026-06-29). So the deck preview (a) recolors with the GlobalHueRow
-            and shows the global effects, while (b) still ignoring the section
+            2026-06-29). So the deck preview (a) shows the global effects
+            (and the per-channel hues baked into the composite), while (b)
+            still ignoring the section
             dimmer-rack trim — it shows what the SHOW is producing, not the
             dimmed-down hardware output. The section dimmers are still applied to
             the actual sACN/DMX output — this is preview-only. The mixer master
@@ -716,10 +936,29 @@ export default function ControlDeckScreen() {
           back to a single vertical stack (the previous behavior) so nothing is
           crushed in portrait. `globalStyles.container` is `flexDirection:'row',
           flex:1` already; we widen it to wrap on narrow so the columns stack.
-          Column flex weights: PATTERNS 1.1 / PARAMETERS 1 / SETTINGS 1.2 — the
-          pattern grid and the settings stack are a touch wider than the params
-          column to seat their wider controls (pill bars, palette swatches). */}
-      <View style={[globalStyles.container, !isWide && { flexDirection: 'column' }]}>
+          Column flex weights: PATTERNS 1.6 / PARAMETERS 1 / SETTINGS 1 — the
+          pattern list is the operator's primary browsing surface and was
+          reported "too small" in landscape (party 2026-07-11), so it now carries
+          the widest weight (~44% of the row, up from ~33%). PARAMETERS and
+          SETTINGS share the rest evenly; SETTINGS dropped 1.2→1 (its pill bars /
+          palette swatches still fit at the narrower width). To nudge live, bump
+          the PATTERNS weight below. */}
+      {/* party 2026-07-11 LAYOUT FIX: in the STACKED (non-wide) layout the
+          PARAMETERS + SETTINGS sections collapsed to ZERO height (flex:0
+          wrappers whose only children are ScrollViews have no intrinsic
+          height) and there was no outer scroll to reach them — the operator
+          saw ONLY the patterns card. Fix: the stacked layout hosts the three
+          sections in ONE outer ScrollView (sections size to their content and
+          the page scrolls, the standard RN pattern); the wide layout keeps the
+          plain 3-column row. The sections' inner ScrollViews scroll only in
+          wide mode (scrollEnabled={isWide}) so stacked mode has a single,
+          predictable scroll surface. */}
+      <View
+        // dataSet is an RN-web DOM marker (→ data-layouthost); it's not on the
+        // native View prop types, so cast it in like the SectionHost host did.
+        {...({ dataSet: { layouthost: 'columns' } } as object)}
+        style={[globalStyles.container, !isWide && { flexDirection: 'column' }]}
+      >
         {/* ── COLUMN 1 — PATTERNS ──────────────────────────────────────────
             The one-and-only pattern list (active playlist) + the global rig HUE
             shifter pinned above it. DECK MAIN's live preview strip stays in the
@@ -735,8 +974,34 @@ export default function ControlDeckScreen() {
           // Wide: this column flexes to ~1.1 of the row. Narrow (stacked): the
           // leftPane's default flex:1 inside a column container would let it
           // eat all vertical space — pin a sensible min height instead so the
-          // stack scrolls naturally with the columns below it.
-          isWide ? { flex: 1.1 } : { flex: 0, minHeight: 320 },
+          // stack scrolls naturally with the columns below it. When a SECOND
+          // playlist pane is bound in the narrow/stacked layout, raise the floor
+          // 320→480 so the split card is tall enough to seat two MIN_PANE panes
+          // (deck_split_playlists.md §Resizable split): below 2·MIN_PANE_PT the
+          // divider forces a fixed 0.5, so the extra height keeps the drag live.
+          // party 2026-07-11: PATTERNS weight 1.1→1.6 (operator: the pattern
+          // list is "too small" horizontally in landscape), then pinned to an
+          // exact 40/30/30 split (flex 4/3/3) — operator: "patterns column 40%
+          // and the other 60%".
+          // PATTERNS-PIN (narrow): a FIXED height so the column is pinned in
+          // place — it never grows or scrolls as a unit; its own pattern list
+          // scrolls INTERNALLY within this fixed panel while PARAMETERS +
+          // AUTOPILOT scroll below it. We pin via flexBasis + flexGrow/Shrink:0
+          // (NOT `flex:0`+height): leftPane sets flex:1, and in the narrow COLUMN
+          // container a bare `height` is defeated by the flex model (the item
+          // collapses to ~content height and the inner flex:1 goes to 0). An
+          // explicit non-flexible basis is what actually fixes the box.
+          // Height scales with the window (operator: 400pt fixed was "very
+          // short and not usable" on iPad portrait; 55% was then too tall —
+          // "reduce by 30%"): 38.5% of window height, floored at 400pt
+          // (500pt with a second playlist bound — two MIN_PANE panes need
+          // the room). iPad portrait 1080pt → ~416pt; 12.9" 1366pt → ~526pt.
+          isWide
+            ? { flex: 4, minWidth: 0 }
+            : (() => {
+                const h = Math.max(deckSecondaryBound ? 500 : 400, Math.round(winHeight * 0.385));
+                return { flexGrow: 0, flexShrink: 0, flexBasis: h, height: h };
+              })(),
         ]}>
           {isConnected === false && <OfflineBanner error={connectionError} />}
 
@@ -745,34 +1010,43 @@ export default function ControlDeckScreen() {
               full library and add it as a new entry. */}
           {deckChannelId ? (
             <View key={deckChannelId} style={{ flex: 1, minHeight: 0 }}>
-              {/* Global rig HUE shifter, pinned to the TOP of the deck's
-                  pattern list (operator request June 2026). The deck's
-                  GLOBAL EFFECTS strip (mixer-strip variant, bottom bar) has
-                  no room for a hue row, so the global hue control lives here
-                  — mirroring how the MIXER shows a compact HUE row above each
-                  channel's playlist. Self-contained wiring (own state, seed,
-                  WS reconcile, POST) so it's the deck's ONE-AND-ONLY hue
-                  control; the bottom effects bar stays hue-less. Gated under
-                  the soft PLAN lock like every other mutating deck control. */}
-              <GlobalHueRow disabled={planGate} />
-              <PlaylistPanel
-                channelId={deckChannelId}
-                role="deck"
-                channelLabel="DECK MAIN"
+              {/* DECK CHANNEL HUE trim, pinned to the TOP of the deck's
+                  pattern list — mirroring how the MIXER shows a compact HUE
+                  row above each channel's playlist. This is the DECK
+                  CHANNEL's per-channel hue (engine F-hue): the GLOBAL rig
+                  hue shifter was REMOVED 2026-07 by operator decision
+                  ("only the channel hue shifts, no global hidden one").
+                  Value + write path live in this screen (deckChannel.hue +
+                  handleDeckHue — optimistic PATCH /deck/channel, WS `deck`
+                  reconcile), the same shape as the mixer strip's trim.
+                  It's the deck's ONE-AND-ONLY hue control; the bottom
+                  effects bar stays hue-less. Gated under the soft PLAN lock
+                  like every other mutating deck control. */}
+              <DeckHueRow
+                hue={typeof deckChannel?.hue === 'number' ? deckChannel.hue : 0}
+                onHueChange={handleDeckHue}
+                disabled={planGate}
+              />
+              {/* DECK SPLIT PLAYLISTS: the single deck list is now two stacked,
+                  resizable panes — DECK A (primary, today's list) and an OPTIONAL
+                  DECK B (secondary). The deck still plays exactly one pattern;
+                  tapping an entry in either pane drives it. Pane 2 is collapsed
+                  by default (a "+ SECOND PLAYLIST" bar) so operators who never
+                  add one see today's single list, pixel-identical. Both panes are
+                  disabled during a soft-swap OR under the soft PLAN lock, exactly
+                  as the single deck panel was. The PARAMETERS column (col 2) is
+                  untouched — it still renders off the live deck channel. */}
+              <SplitPlaylistPanes
+                deckChannelId={deckChannelId}
                 locked={!!deckChannel?.locked}
-                initialAssignment={deckChannel?.playlist || null}
-                // During a deck pattern soft-swap we grey out the list +
-                // disable taps. The engine also rejects taps server-side
-                // with 409 — this is just the UX layer of the contract.
-                // ALSO disabled under the soft PLAN lock (planGate): pattern
-                // selection changes "what's playing", which the plan owns until
-                // the operator takes over. The greyed/disabled list IS the
-                // "take over to change" affordance — taking over (any control
-                // touch fires the takeover lease) clears planGate and re-enables
-                // it.
+                primaryAssignment={(deckChannel?.playlist as PlaylistAssignment) || null}
                 disabled={deckSwapInFlight || planGate}
                 onRefreshConnection={connectToEngine}
                 playlistLibrary={playlistLibrary}
+                splitRatio={deckSplitRatio}
+                secondaryBound={deckSecondaryBound}
+                onSplitRelease={handleSplitRelease}
+                onCloseSecondary={handleCloseSecondary}
               />
             </View>
           ) : (
@@ -782,6 +1056,10 @@ export default function ControlDeckScreen() {
           )}
         </View>
 
+        {/* PARAMETERS + AUTOPILOT scroll together below the pinned PATTERNS
+            column in the narrow stack; in the wide row this is a Fragment so the
+            two columns stay flex siblings of PATTERNS. See ColumnsScrollRest. */}
+        <ColumnsScrollRest isWide={isWide}>
         {/* ── COLUMN 2 — PARAMETERS ────────────────────────────────────────
             ONLY the deck's (local) parameter controls — the DECK MAIN channel
             card: entry-label editor, SAVED flash, color swatch, ◎ ALL
@@ -791,9 +1069,12 @@ export default function ControlDeckScreen() {
             the middle column, independently scrollable. */}
         <View style={[
           { padding: 0 },
-          isWide ? { flex: 1 } : { flex: 0 },
+          // minWidth:0 lets the column actually shrink to its flex share in
+          // the row (RN children otherwise refuse below content width and
+          // shove the SETTINGS column off-screen). Stacked: content-sized.
+          isWide ? { flex: 3, minWidth: 0 } : {},
         ]}>
-          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
+          <SectionHost dataSet={{ layouthost: "section" }} {...sectionHostProps}>
             {/* Channel parameters for the deck (base) channel. The deck is
                 hard-wired to the base channel; CaptainPad's MIXER tab is
                 where multi-channel routing lives. */}
@@ -925,7 +1206,7 @@ export default function ControlDeckScreen() {
                 );
               })}
             </View>
-          </ScrollView>
+          </SectionHost>
         </View>
 
         {/* ── COLUMN 3 — AUTOPILOT & SETTINGS ──────────────────────────────
@@ -935,14 +1216,18 @@ export default function ControlDeckScreen() {
             DYNAMIC VIEW OVERRIDES stack. Independently scrollable. */}
         <View style={[
           { padding: 0 },
-          isWide ? { flex: 1.2 } : { flex: 0 },
+          // party 2026-07-11: SETTINGS weight 1.2→1, then 3 in the 40/30/30
+          // split (see the column-weights note above).
+          // minWidth:0 = same shrink guard as the PARAMETERS column; stacked
+          // mode is content-sized inside the outer page scroll.
+          isWide ? { flex: 3, minWidth: 0 } : {},
         ]}>
           {/* Padding tightened from 48 → 16 (QA round8 #1): the old 48px
               gutter plus the cards' inner paddingRight:24 wasted ~72px of the
               column's width, forcing the AUTOPILOT / OVERLAYS pill bars
               into horizontal scroll. paddingBottom keeps the last card clear
               of the bottom GLOBAL EFFECTS bar (its intrinsic height ~58px). */}
-          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 80 }} showsVerticalScrollIndicator={false}>
+          <SectionHost dataSet={{ layouthost: "section" }} {...sectionHostProps}>
             {/* Offline Banner (settings column) */}
             {isConnected === false && (
               <OfflineBanner error={connectionError} />
@@ -973,6 +1258,8 @@ export default function ControlDeckScreen() {
               groupMode={groupMode}
               groupSize={groupSize}
               groupDwell={groupDwell}
+              profile={autopilotProfile}
+              profiles={autopilotProfiles}
               nextSwapAtMs={patternNextSwapAtMs}
               disabled={planGate}
               onInteraction={notifyInteraction}
@@ -1002,6 +1289,12 @@ export default function ControlDeckScreen() {
                 if (patch.groupDwell !== undefined) {
                   setGroupDwell(patch.groupDwell);
                   setAutopilot(undefined, undefined, undefined, { groupDwell: patch.groupDwell });
+                }
+                // AUTOPILOT PROFILE: the dropdown emits `profile`; route it
+                // through the dedicated optimistic-rollback handler (its own POST
+                // + Alert, NOT setAutopilot which would double-write).
+                if (patch.profile !== undefined) {
+                  handleAutopilotProfileChange(patch.profile);
                 }
               }}
               // ── DECK TRANSITIONS (nested INTO the AUTOPILOT PATTERNS card,
@@ -1055,8 +1348,9 @@ export default function ControlDeckScreen() {
               // over.
               disabled={isConnected === false || planGate}
             />
-          </ScrollView>
+          </SectionHost>
         </View>
+        </ColumnsScrollRest>
       </View>
         {/* Hermetic plan-lock scrim — blankets the whole content region above
             (top bar → 3 columns → overlays) with one tap-catching layer.
@@ -1083,7 +1377,15 @@ export default function ControlDeckScreen() {
             me back to safe" button, visually separate from the GEM grid + the
             e-stop BLACKOUT inside it. */}
         <TouchableOpacity
-          style={[styles.panicBtn, panicBusy && { opacity: 0.5 }]}
+          // party 2026-07-11 — PANIC pins to the effect-chip row height (the
+          // GEM strip btnHeight: 48 landscape / 60 portrait) and bottom-aligns
+          // with the chips, instead of alignSelf:'stretch' towering over the
+          // row now that the strip's header label rides in-row.
+          style={[
+            styles.panicBtn,
+            { height: isWide ? 48 : 60, minHeight: 0, alignSelf: 'flex-end' },
+            panicBusy && { opacity: 0.5 },
+          ]}
           onPress={() => setPanicPrompt(true)}
           disabled={panicBusy}
           accessibilityRole="button"

@@ -34,8 +34,10 @@ import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
+import { groupKeyForStrand } from "../dmx/led/led_metadata.js";
 import { updateFloodLights } from "../core/flood_lights.js";
 import { engineHttpUrl } from "../core/engine_endpoint.js";
+import { saveHttpUrl } from "../core/save_endpoint.js";
 
 // NOTE: engineEnabled / lightingEnabled / lightingMode live in state.js.
 // Use the setters imported above to update them so animate.js sees changes.
@@ -349,7 +351,7 @@ function setupGUI() {
     if (isStaticHost()) {
       logStaticHostSkip('save scene config (port 6970)');
     } else {
-      fetch(`http://localhost:6970/save${sceneParam}`, {
+      fetch(saveHttpUrl(`/save${sceneParam}`), {
         method: "POST",
         body: yamlStr,
       })
@@ -436,7 +438,7 @@ function setupGUI() {
       }
       if (window.__lastConfigYaml && navigator.sendBeacon) {
         const sceneParam = window.__activeScene ? `?scene=${window.__activeScene}` : '';
-        navigator.sendBeacon(`http://localhost:6970/save${sceneParam}`,
+        navigator.sendBeacon(saveHttpUrl(`/save${sceneParam}`),
           new Blob([window.__lastConfigYaml], { type: 'text/plain' }));
       }
     } catch (err) {
@@ -460,6 +462,19 @@ function setupGUI() {
     window.__sceneDirty = false;
   }
   window.flushAndDisarmUnloadGuard = flushAndDisarmUnloadGuard;
+
+  // Scene recovery variant: DISARM the pending autosave WITHOUT flushing it.
+  // Recovery must call this before POSTing /restore-backup — otherwise the
+  // pending debounced save (or the beforeunload sendBeacon fired by the
+  // window.location.reload after a restore) would re-save the bad in-browser
+  // state right back over the freshly restored files. We drop the pending
+  // write on purpose: the operator asked to discard unsaved changes.
+  function disarmUnloadGuard() {
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+    window.__sceneDirty = false;
+  }
+  window.disarmUnloadGuard = disarmUnloadGuard;
 
   window.addEventListener('beforeunload', (e) => {
     if (!flushPendingSaveBeacon()) return;
@@ -1961,6 +1976,53 @@ function setupGUI() {
             window.syncLightFromConfig(index);
             propagateToSelected(index, 'penumbra', v);
           });
+
+          // ── LED-only controls: diffusion (soft glow) + resize ──
+          // Shown only for LED-bus fixtures (Ango 4 panels/ropes); a DMX
+          // par/bar has no size to resize and uses its beam, not a glow.
+          const _ledDef = getDefinition(config.fixtureType);
+          if (_ledDef && _ledDef.bus === 'led') {
+            if (config.diffusion === undefined) config.diffusion = false;
+            if (config.diffusionAmount === undefined) config.diffusionAmount = 2.5;
+            if (config.screen === undefined) config.screen = false;
+            if (config.screenPixelSize === undefined) config.screenPixelSize = 60;
+            if (config.scaleX === undefined) config.scaleX = 1;
+            if (config.scaleY === undefined) config.scaleY = 1;
+            if (config.scaleZ === undefined) config.scaleZ = 1;
+
+            idxFolder.add(config, "diffusion").name("Diffusion (glow)").onChange(() => {
+              selectThisLight();
+              window.syncLightFromConfig(index);
+            });
+            idxFolder.add(config, "diffusionAmount", 1, 6, 0.1).name("Diffusion Amt").onChange(() => {
+              selectThisLight();
+              window.syncLightFromConfig(index);
+            });
+
+            // Diffusor screen: a milky-white polycarb panel across the fixture
+            // face that blends the LED colors into a 2D surface. Pixel Size is
+            // the per-LED bleed radius (mm) — bigger = softer, more merged.
+            // Live per frame, so no syncLightFromConfig() needed to repaint.
+            idxFolder.add(config, "screen").name("Screen (diffusor)").onChange(() => {
+              selectThisLight();
+            });
+            idxFolder.add(config, "screenPixelSize", 10, 300, 5).name("Pixel Size (mm)").onChange(() => {
+              selectThisLight();
+            });
+
+            // Resize (matches the S / scale gizmo — same config.scaleX/Y/Z).
+            // Deliberately NOT propagated to other selected fixtures: the scale
+            // gizmo only resizes the dragged fixture, and propagating would
+            // write dead scaleX/Y/Z keys into non-LED (DMX) configs.
+            const scaleFolder = idxFolder.addFolder("Scale (Resize)");
+            scaleFolder.close();
+            ['scaleX', 'scaleY', 'scaleZ'].forEach((ax) => {
+              scaleFolder.add(config, ax, 0.1, 20, 0.1).onChange(() => {
+                selectThisLight();
+                window.syncLightFromConfig(index);
+              });
+            });
+          }
 
           // Position
           const posFolder = idxFolder.addFolder("Position");
@@ -4040,11 +4102,27 @@ function setupGUI() {
     });
 
     // Guides toggle — hide the connector wires + endpoint handles so only the
-    // LED pixels render (clean "pixels only" view). On by default.
-    if (params.ledGuidesVisible === undefined) params.ledGuidesVisible = true;
+    // LED pixels render (clean "pixels only" view). OFF by default so the beauty
+    // render is clean; a strand's handles appear when its folder is opened
+    // (openStrandFolder selects it) or the strand is picked in 3D.
+    if (params.ledGuidesVisible === undefined) params.ledGuidesVisible = false;
     strandFolder.add(params, 'ledGuidesVisible').name('Show Guides').onChange(v => {
       (window.ledStrandFixtures || []).forEach(f => f.setGuidesVisible(v));
     });
+
+    // ── Global LED visual size ── ONE bulb + halo radius (world units) applied
+    // to EVERY strand. Lives here (above the strand list) so it reads as a
+    // global control, not per-strand. onChange re-renders all strands live via
+    // each fixture's applyVisualSize(). Ranges are tuned tight around the
+    // current look (operator: pixel 0.08–0.25, halo 0.05–0.25).
+    if (params.ledPixelSize === undefined) params.ledPixelSize = 0.08;
+    if (params.ledHaloSize === undefined) params.ledHaloSize = 0.14;
+    const applyLedSizeToAll = () => {
+      (window.ledStrandFixtures || []).forEach(f => { if (f) f.applyVisualSize(); });
+      debounceAutoSave();
+    };
+    strandFolder.add(params, 'ledPixelSize', 0.08, 0.25, 0.005).name('Pixel Size').onChange(applyLedSizeToAll);
+    strandFolder.add(params, 'ledHaloSize', 0.05, 0.25, 0.005).name('Halo Size').onChange(applyLedSizeToAll);
 
     window.ledStrandFixtures = [];
 
@@ -4059,6 +4137,15 @@ function setupGUI() {
         fixture.setGuidesVisible(params.ledGuidesVisible !== false);
         window.ledStrandFixtures.push(fixture);
       });
+      // Every strand instance was just DESTROYED and re-created, but the batch
+      // render list (animate.js) still holds apply() closures that captured the
+      // OLD LedStrand instances — writing to disposed InstancedMeshes, so the
+      // strand renders dark until the next unrelated invalidation. rebuildDmx-
+      // Fixtures already invalidates on rebuild (fixtures.js); this path was
+      // missing that call, leaving stale closures after any strand edit
+      // (count/color/position/add/delete). Invalidate so generatePixelMap re-runs
+      // and rebinds apply() to the new instances (operator report 2026-07-10).
+      if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('led_strands_rebuilt');
     }
     window.rebuildLedStrands = rebuildLedStrands;
 
@@ -4084,6 +4171,11 @@ function setupGUI() {
         window.strandGuiFolders[strandIndex].open();
         window.strandGuiFolders[strandIndex].domElement.classList.add('gui-card-selected');
       }
+      // Beauty view hides handles by default; opening a strand's folder selects
+      // it so its edit handles appear (and deselects every other strand).
+      (window.ledStrandFixtures || []).forEach((f, i) => {
+        if (f && typeof f.setSelected === 'function') f.setSelected(i === strandIndex);
+      });
     };
 
     function renderStrandGUI() {
@@ -4107,6 +4199,7 @@ function setupGUI() {
           color: '#ff8800',
           intensity: 1.0,
           ledCount: 10,
+          group: '',
           controllerId: 0, sectionId: 0, fixtureId: 0, viewMask: 0,
         });
         rebuildLedStrands();
@@ -4142,10 +4235,79 @@ function setupGUI() {
           });
         }
 
-        sFolder.add(strand, 'name').name('Name').onFinishChange(() => {
+        const nameCtrl = sFolder.add(strand, 'name').name('Name').onFinishChange(() => {
           renderStrandGUI();
           debounceAutoSave();
         });
+
+        // ── Read-only patch line (G5) ── the strand's DMX-parity universe span,
+        // sourced from the persisted `strand.segments` (the same per-segment
+        // records save-server writes to patches.yaml). A strand spilling across
+        // universes shows the full span + universe count; an unpatched strand
+        // shows `unpatched`. Purely informational — patching is owned by the
+        // Controller Mapping panel.
+        const patchRow = document.createElement('div');
+        patchRow.style.cssText = 'padding:2px 8px 4px;color:var(--icon);font-size:10px;font-family:var(--font-mono,monospace);';
+        const segs = Array.isArray(strand.segments) ? strand.segments : [];
+        if ((strand.dmxUniverse || 0) > 0 && segs.length > 0) {
+          const first = segs[0];
+          const last = segs[segs.length - 1];
+          const span = segs.length === 1
+            ? `U${first.universe}:${first.startChannel}–${first.endChannel}`
+            : `U${first.universe}:${first.startChannel} → U${last.universe}:${last.endChannel}`;
+          const uniWord = segs.length === 1 ? 'universe' : 'universes';
+          patchRow.textContent = `📡 ${span} · ${strand.pixelCount || 0}px · ${segs.length} ${uniWord}`;
+        } else {
+          patchRow.textContent = '📡 unpatched';
+        }
+        const patchChildren = sFolder.domElement.querySelector('.children');
+        if (patchChildren) patchChildren.appendChild(patchRow);
+
+        // ── Group ── the strand's effective group is `strand.group ||
+        // strand.name` (groupKeyForStrand). An ungrouped strand stays its own
+        // group of one — bit-for-bit identical to old scenes. Strands sharing a
+        // group get ONE section id (led_metadata) and ONE view bit
+        // (reconcileGroupBits), i.e. they "always work together". Fixed, named
+        // groups only — no generators. Datalist suggests existing group keys.
+        if (strand.group === undefined) strand.group = '';
+        const groupRow = document.createElement('div');
+        groupRow.style.cssText = 'display:flex;gap:6px;align-items:center;padding:2px 8px 4px;';
+        const groupLbl = document.createElement('span');
+        groupLbl.style.cssText = 'color:var(--icon);font-size:11px;min-width:70px;';
+        groupLbl.textContent = 'Group';
+        const groupInp = document.createElement('input');
+        groupInp.type = 'text';
+        groupInp.value = strand.group || '';
+        groupInp.placeholder = strand.name || 'ungrouped';
+        const listId = `strand-groups-${i}`;
+        groupInp.setAttribute('list', listId);
+        groupInp.style.cssText = 'flex:1;padding:3px 6px;border:1px solid var(--ghost-border);border-radius:3px;background:var(--input-bg);color:var(--text);font-size:11px;font-family:inherit;';
+        const dataList = document.createElement('datalist');
+        dataList.id = listId;
+        const distinctGroups = new Set();
+        (params.ledStrands || []).forEach((s) => {
+          const hasName = s && typeof s.name === 'string' && s.name.trim().length > 0;
+          const hasGroup = s && typeof s.group === 'string' && s.group.trim().length > 0;
+          if (hasName || hasGroup) distinctGroups.add(groupKeyForStrand(s));
+        });
+        distinctGroups.forEach((g) => {
+          const opt = document.createElement('option');
+          opt.value = g;
+          dataList.appendChild(opt);
+        });
+        groupInp.onchange = () => {
+          strand.group = groupInp.value.trim();
+          // A group change moves the strand's section id and view bit; the batch
+          // metadata cache must rebuild so animate.js re-reads the mapping.
+          if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('led_group');
+          debounceAutoSave();
+        };
+        groupRow.appendChild(groupLbl);
+        groupRow.appendChild(groupInp);
+        groupRow.appendChild(dataList);
+        if (nameCtrl && nameCtrl.domElement) {
+          nameCtrl.domElement.insertAdjacentElement('afterend', groupRow);
+        }
 
         sFolder.addColor(strand, 'color').name('Color').onChange(() => {
           rebuildLedStrands();
@@ -4160,6 +4322,9 @@ function setupGUI() {
           rebuildLedStrands();
           debounceAutoSave();
         });
+
+        // Bulb + halo radius are now a GLOBAL control (params.ledPixelSize /
+        // params.ledHaloSize) above the strand list — not per-strand.
 
         // Start/End position folders
         const startF = sFolder.addFolder('Start Point (green)');

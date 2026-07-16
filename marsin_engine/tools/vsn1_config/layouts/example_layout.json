@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "name": "example",
+  "module": "VSN1L",
+  "midi": {
+    "feedbackChannel": 1,
+    "modeChannel": 2,
+    "slotBase": 32,
+    "pageCc": 40,
+    "sbNoteBase": 41,
+    "helloCc": 41,
+    "selectCc": 42,
+    "viewCc": 43
+  },
+  "slots": [
+    {
+      "id": 1,
+      "effect": "freeze_frame",
+      "name": "Freeze",
+      "color": [
+        255,
+        40,
+        40
+      ],
+      "behavior": "toggle",
+      "modeNames": [
+        "HOLD",
+        "DECAY"
+      ]
+    },
+    {
+      "id": 2,
+      "effect": "palette_crush",
+      "name": "Crush",
+      "color": [
+        255,
+        140,
+        0
+      ],
+      "behavior": "toggle",
+      "modeNames": []
+    },
+    {
+      "id": 3,
+      "effect": "ocean_breath",
+      "name": "Ocean",
+      "color": [
+        0,
+        200,
+        200
+      ],
+      "behavior": "toggle",
+      "modeNames": []
+    },
+    {
+      "id": 4,
+      "effect": "frost_sparkle",
+      "name": "Frost",
+      "color": [
+        160,
+        220,
+        255
+      ],
+      "behavior": "toggle",
+      "modeNames": []
+    },
+    {
+      "id": 5,
+      "effect": "e1_beat_pump",
+      "name": "Beat Pump",
+      "color": [
+        60,
+        220,
+        60
+      ],
+      "behavior": "toggle",
+      "modeNames": []
+    },
+    {
+      "id": 6,
+      "effect": "e2_waterline_sweep",
+      "name": "Waterline",
+      "color": [
+        60,
+        120,
+        255
+      ],
+      "behavior": "toggle",
+      "modeNames": []
+    },
+    {
+      "id": 7,
+      "effect": "e3_kick_punch",
+      "name": "Kick Punch",
+      "color": [
+        255,
+        220,
+        0
+      ],
+      "behavior": "trigger",
+      "modeNames": []
+    },
+    {
+      "id": 8,
+      "effect": "strobe",
+      "name": "Strobe",
+      "color": [
+        255,
+        255,
+        255
+      ],
+      "behavior": "trigger",
+      "modeNames": [
+        "5HZ",
+        "10HZ"
+      ]
+    },
+    {
+      "id": 9,
+      "effect": "uvBlast",
+      "name": "UV Blast",
+      "color": [
+        160,
+        60,
+        255
+      ],
+      "behavior": "toggle",
+      "modeNames": []
+    },
+    {
+      "id": 10,
+      "effect": "vintageWhite",
+      "name": "Vintage",
+      "color": [
+        255,
+        200,
+        140
+      ],
+      "behavior": "toggle",
+      "modeNames": []
+    },
+    {
+      "id": 17,
+      "effect": "fogger",
+      "name": "Fogger",
+      "color": [
+        180,
+        180,
+        180
+      ],
+      "behavior": "toggle",
+      "modeNames": []
+    }
+  ]
+}

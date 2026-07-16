@@ -1,0 +1,18 @@
+# Minimal starter playlist — expand once patterns are dialed in for this model.
+schemaVersion: 1
+name: default
+entries:
+  - id: e_studio_0_rainbow
+    pattern: rainbow
+    label: null
+    defaults: {}
+    modulations: []
+    notes: null
+  - id: e_studio_1_00_golden_hour_wash
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.33
+      sliderNoiseScale: 0.15
+    modulations: []
+    notes: null

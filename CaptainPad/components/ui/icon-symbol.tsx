@@ -86,6 +86,9 @@ const MAPPING = {
   // Studio console + config split-screen toggle, likewise unmapped on web.
   'terminal': 'terminal',
   'circle.lefthalf.filled': 'contrast',
+  // Engine AUTO-SAVE card (config tab): a disk-with-check reads as
+  // "your show state is being written to disk".
+  'externaldrive.fill.badge.checkmark': 'save',
 } as IconMapping;
 
 /**

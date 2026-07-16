@@ -217,18 +217,49 @@ export class StateManager {
     return this.load('deck_state.yaml', { channel: null });
   }
 
+  /**
+   * Engine-wide settings (currently just `autoSave`). Persisted in its OWN
+   * per-scene file so the toggle survives even when auto-save is OFF — the
+   * setting that GATES the auto-persistence can never live in a file whose
+   * writes it gates (that would make "turn auto-save off" un-persistable).
+   *
+   * DEFAULT autoSave = TRUE (auto-persist on, the pre-feature behaviour).
+   * A missing file returns the default. A present-but-malformed `autoSave`
+   * (hand-edited junk) coerces to TRUE, not false: the SAFE direction is
+   * "keep saving the operator's work", never "silently stop persisting".
+   */
+  loadSettingsState() {
+    const raw = this.load('settings_state.yaml', { autoSave: true });
+    return { autoSave: typeof raw.autoSave === 'boolean' ? raw.autoSave : true };
+  }
+
+  saveSettingsState(settings) {
+    this.save('settings_state.yaml', { autoSave: !!(settings && settings.autoSave) });
+  }
+
   loadGlobalsState() {
-    // hueShift (F-hue, docs/39): persistent global hue knob. Default
-    // { degrees: 0, autoRotateDegPerSec: 0 } = no shift — an old file
-    // without the key loads to this documented default.
     // invert (F-invert, docs/39): persistent global color-invert toggle.
     // Default false = no invert — an old file without the key loads to this
     // documented default.
-    return this.load('globals_state.yaml', {
+    const state = this.load('globals_state.yaml', {
       blackout: false, effects: {}, params: {}, dimmers: {},
-      hueShift: { degrees: 0, autoRotateDegPerSec: 0 },
       invert: false,
     });
+    // MIGRATION (2026-07, operator decision): the GLOBAL hue shifter was
+    // removed — hue is per-channel only. A persisted `hueShift` from an
+    // older session is DISCARDED here (never silently re-applied: it was
+    // the invisible whole-rig tint that made every per-channel hue read 0
+    // while the output was shifted). One loud log line, then the key is
+    // dropped so the next save writes a clean file.
+    if (state.hueShift !== undefined) {
+      const deg = state.hueShift && typeof state.hueShift.degrees === 'number'
+        ? state.hueShift.degrees : state.hueShift;
+      console.warn(
+        `[StateManager] globals_state.yaml carried a LEGACY global hueShift (degrees=${JSON.stringify(deg)}) — ` +
+        'the global hue shifter was removed (hue is per-channel only); discarding it.');
+      delete state.hueShift;
+    }
+    return state;
   }
 
   /**
@@ -250,8 +281,25 @@ export class StateManager {
     }
   }
 
-  saveGlobalEffectSlots(slotsConfig) {
-    this.save('global_effect_slots.yaml', { slots: slotsConfig });
+  /**
+   * Persist the v3 global-effect-slots file: the ORDERED named BANKS, the
+   * active bank id, and the engine-owned page VIEW (effects_v2). `banks` is the
+   * on-disk shape `[{ id, name, slots:[…] }]` (straight from
+   * GlobalEffectSlotManager.getBanks()). `effectsPage` is a single top-level
+   * field (NOT per-bank).
+   *
+   *   version: 3
+   *   activeBankId: <stable id>
+   *   effectsPage: <0..3>
+   *   banks: [ { id, name, slots }, … ]   # ordered, >= 1
+   */
+  saveGlobalEffectSlots({ banks, activeBankId, effectsPage = 0 }) {
+    this.save('global_effect_slots.yaml', {
+      version: 3,
+      activeBankId,
+      effectsPage,
+      banks,
+    });
   }
 
   applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController) {
@@ -286,18 +334,9 @@ export class StateManager {
         intensityController.setSectionBrightness(parseInt(sId, 10), bright);
       }
     }
-    if (globalEffectsController && globalsState.hueShift) {
-      // F-hue restore (docs/39): re-apply the persisted global hue knob
-      // through the validating setter so a hand-edited bad YAML value
-      // fails loudly here (caught + logged by the boot caller) instead of
-      // silently half-applying. A missing field stays at the controller's
-      // 0/0 default (handled by loadGlobalsState's default).
-      const hs = globalsState.hueShift;
-      globalEffectsController.setHueShift(
-        typeof hs.degrees === 'number' ? hs.degrees : 0,
-        typeof hs.autoRotateDegPerSec === 'number' ? hs.autoRotateDegPerSec : 0,
-      );
-    }
+    // NOTE: the legacy global `hueShift` is NOT restored — the global hue
+    // shifter was removed (2026-07, per-channel hue only). loadGlobalsState
+    // discards a persisted key with a log line before we ever get here.
     if (globalEffectsController && globalsState.invert !== undefined) {
       // F-invert restore (docs/39): re-apply the persisted global invert
       // toggle through the coercing setter. A missing field stays at the
@@ -347,7 +386,15 @@ export class StateManager {
           faderLocked: core.faderLocked,
           transitionMode: c.transitionMode || 'trans_crossfade',
           transitionTime: c.transitionTime || 1.0,
-          localControls: core.localControls,
+          // Mixer channel PARAMETERS are NEVER persisted (operator ruling,
+          // 2026-07 auto-save wave): mixer overlays are ephemeral live
+          // tweaks, not saved show state. We emit an EMPTY localControls map
+          // (not core.localControls) so a restart restores the channel's
+          // playlist-entry defaults only — the on-disk key + its position are
+          // preserved for byte-shape compatibility, just always `{}`. The
+          // restore path (buildChannelFromSaved) mirrors this by skipping the
+          // localControls replay for the mixer role.
+          localControls: {},
           playlist: core.playlist,
           viewSelection: core.viewSelection,
           // Additive (channel_features wave): persisted AFTER the existing

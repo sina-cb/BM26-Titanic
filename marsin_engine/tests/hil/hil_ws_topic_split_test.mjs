@@ -47,6 +47,8 @@ import fs from 'fs';
 import { spawn } from 'child_process';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE_ROOT = path.resolve(__dirname, '..', '..');
 const STATE_DIR = path.join(ENGINE_ROOT, 'states', 'test_bench');
@@ -87,8 +89,8 @@ const EXPECTED_TOPIC_BY_TYPE = {
   mixerTransitionRejected:     'control',
   globalEffectSlots:           'control',
   globalEffectMacroStatus:     'control',
-  // docs/39 §F-hue / §F-invert: global hue shifter knob + color-invert toggle.
-  globalHueShift:              'control',
+  // docs/39 §F-invert: global color-invert toggle. (globalHueShift was
+  // removed 2026-07 — hue is per-channel only.)
   globalInvert:                'control',
   playlistLibrary:             'control',
   playlistSaved:               'control',
@@ -277,6 +279,10 @@ async function main() {
   snapshotState();
   await startEngine();
   console.log(`Engine up on ${BASE}\n`);
+
+  // Guard: if our slot port was already bound by a real engine the boot poll
+  // would have latched onto IT — refuse to mutate a non-test_bench model.
+  await assertDisposableEngine(BASE);
 
   try {
     // ─── TEST 1: upgrade routing ────────────────────────────────────────

@@ -58,6 +58,8 @@
 import http from 'http';
 import WebSocket from 'ws';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const ENGINE_BASE = process.env.ENGINE_BASE || 'http://127.0.0.1:6968';
 const WS_URL = process.env.WS_URL || 'ws://127.0.0.1:6968';
 const PIXEL_COUNT = 52;
@@ -300,6 +302,9 @@ async function resetDeckTo(entryId, restoreCfg) {
     process.exit(1);
   }
   const baseChId = baseCh.id;
+
+  // Refuse to mutate a non-disposable engine BEFORE creating any playlist.
+  await assertDisposableEngine(ENGINE_BASE);
 
   // Snapshot the deck's CURRENT playlist BEFORE we point it at our
   // throwaway test playlist. Cleanup uses this to swing the deck back

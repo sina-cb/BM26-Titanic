@@ -56,8 +56,8 @@ export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
 export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
 
 export function sliderLocalSpeed(v) { localSpeed = v; }
+export function sliderDirection(v) { swipeDir = v; }
 export function sliderSwipePos(v) { swipePos = v; }
-export function sliderSwipeDir(v) { swipeDir = v; }
 export function sliderBlur(v) { blur = v; }
 export function sliderTrail(v) { trail = v; }
 export function sliderShift(v) { shift = v; }

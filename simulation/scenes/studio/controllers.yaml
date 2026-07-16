@@ -1,0 +1,121 @@
+nextControllerId: 6
+nextUniverse: 28
+controllers:
+  - id: 1
+    name: controller_10.1.1.11
+    ip: 10.1.1.11
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 2
+        chain:
+          - fixture: Bars_0_1_2 1
+            at: 1
+          - fixture: Bars_0_1_2 2
+            at: 120
+          - fixture: Bars_0_1_2 3
+            at: 239
+      - port: 2
+        universe: 3
+        chain:
+          - fixture: ShehdsBar 6
+            at: 120
+          - fixture: Bars_5_6_7 4
+            at: 239
+      - port: 3
+        universe: 6
+        chain:
+          - fixture: Vintage_0_1_2_3 1
+            at: 1
+          - fixture: Vintage_0_1_2_3 2
+            at: 34
+          - fixture: Vintage_0_1_2_3 3
+            at: 67
+          - fixture: Vintage_0_1_2_3 4
+            at: 100
+  - id: 2
+    name: controller_10.1.1.13
+    ip: 10.1.1.13
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 4
+        chain:
+          - fixture: Bars_5_6_7 1
+            at: 1
+          - fixture: Bars_5_6_7 2
+            at: 120
+          - fixture: Bars_5_6_7 3
+            at: 239
+      - port: 2
+        universe: 7
+        chain:
+          - fixture: Vintage_4_5_6_7 1
+            at: 1
+          - fixture: Vintage_4_5_6_7 2
+            at: 34
+          - fixture: Vintage_4_5_6_7 3
+            at: 67
+          - fixture: Vintage_4_5_6_7 4
+            at: 100
+  - id: 3
+    name: controller_10.1.1.12
+    ip: 10.1.1.12
+    type: DMX
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 5
+        chain:
+          - fixture: Bars_8_9 1
+            at: 1
+          - fixture: Bars_8_9 2
+            at: 120
+      - port: 2
+        universe: 8
+        chain:
+          - fixture: Vintage_8_9_10_11 1
+            at: 1
+          - fixture: Vintage_8_9_10_11 2
+            at: 34
+          - fixture: Vintage_8_9_10_11 3
+            at: 67
+          - fixture: Vintage_8_9_10_11 4
+            at: 100
+  - id: 5
+    name: Titanic
+    ip: 10.1.1.201
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 24
+        startAddress: 1
+        chain:
+          - Strand 1
+      - port: 2
+        universe: 25
+        chain: []
+      - port: 3
+        universe: 26
+        chain: []
+      - port: 4
+        universe: 27
+        chain: []
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+    device:
+      vendor: marsinled
+      controllerId: titanic_201
+      boardId: angio4-old
+      lastPush:
+        at: '2026-07-11T07:10:30.162Z'
+        outcome: needs-reboot
+        firmwareSHA: 829aac0ac05a
+        configHash: 55f655e4b5e153c63824c574af97eed0563850fa4c5f2ca2c699bd1f8042613f

@@ -374,6 +374,11 @@ export function onPointerDown(event) {
     intersects = intersects.filter(i => !i.object.userData.isTrace && !i.object.userData.isTraceVisual);
   }
 
+  // Same Three.js caveat for LED strand handles: they stay in interactiveObjects
+  // but are hidden in the beauty view (guides off + strand unselected). Drop any
+  // invisible strand handle so it can't be picked while hidden.
+  intersects = intersects.filter(i => !(i.object.userData.isLedStrand && i.object.visible === false));
+
   if (intersects.length > 0) {
     const hit = intersects[0].object;
 
@@ -519,6 +524,12 @@ export function onKeyDown(event) {
   // B key: collapse/expand the Lighting Controls drawer
   if (event.key.toLowerCase() === 'b' && !event.ctrlKey && !event.metaKey) {
     toggleControlDrawer();
+    return;
+  }
+
+  // M key: toggle the 2D Pixel Map window
+  if (event.key.toLowerCase() === 'm' && !event.ctrlKey && !event.metaKey) {
+    if (window.togglePixelMap2d) window.togglePixelMap2d();
     return;
   }
 

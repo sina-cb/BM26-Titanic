@@ -163,6 +163,11 @@ export interface ApiResult<T> {
   error?: string;
   /** HTTP status when the response was received (absent on transport failures). */
   status?: number;
+  /** Machine-readable error code from the engine's rejection body (e.g.
+   *  'PERFORMANCE_MODE', 'WRONG_ROLE'). Absent on success + transport failures.
+   *  Lets callers branch on the reason (the MIDI runtime quiets a 409 that is a
+   *  performance-mode lock rather than counting it as a dispatch failure). */
+  code?: string;
 }
 
 export async function sendControl(id: number, v0: number, v1?: number, v2?: number): Promise<ApiResult<any>> {
@@ -322,6 +327,100 @@ export async function setDeckTransitionConfig(patch: Partial<DeckTransitionConfi
   }
 }
 
+// ── Engine settings (auto-save toggle) ─────────────────────────────────────
+// Engine-wide persistence gate. When autoSave is ON (default), all deck
+// tuning, playlists, and mixer/global state persist automatically (mixer
+// channel PARAMETERS are never saved). When OFF, nothing persists until the
+// operator saves explicitly — a restart reverts to the last save. Mirrors the
+// deck-transition-config fetch/set posture (GET returns it, POST accepts a
+// partial patch; the engine 400s a non-boolean autoSave — no coercion).
+export type EngineSettings = {
+  autoSave: boolean;
+};
+
+export async function fetchEngineSettings(): Promise<ApiResult<EngineSettings>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/settings`);
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('Fetch engine settings failed:', 'Fetch engine settings failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function setEngineSettings(patch: Partial<EngineSettings>): Promise<ApiResult<EngineSettings>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    // Codex P0 — fail loud: surface an engine rejection so the toggle's
+    // optimistic update can roll back instead of showing a value the engine
+    // never accepted.
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('Set engine settings failed:', 'Set engine settings failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── Performance mode (live-show structural lock) ───────────────────────────
+// The engine's in-memory "show is running" lock. While active it freezes
+// auto-persistence and 409s every structural/persistent-change route (the
+// engine is the enforcement layer — CaptainPad only mirrors + greys). GET
+// returns {active, enteredAt}; POST enters ({active:true}) or exits
+// ({active:false, exitAction:'keep'|'restore'}). The engine's WS broadcast is
+// authoritative — the UI never optimistically flips. Mirrors the fetch/set
+// posture of engine settings; the engine 400s a non-boolean active (no coercion).
+export type PerformanceModeState = {
+  active: boolean;
+  enteredAt: string | null;
+  // Pending dirty deck tuning (present since the save-ask exit sheet landed).
+  dirtyCount?: number;
+  dirtyEntries?: { playlist: string; entryId: string; label: string | null }[];
+};
+
+export type PerformanceExitAction = 'keep' | 'keep-save' | 'restore';
+
+export async function fetchPerformanceMode(): Promise<ApiResult<PerformanceModeState>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/performance-mode`);
+    const data = await res.json();
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('Fetch performance mode failed:', 'Fetch performance mode failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function setPerformanceMode(
+  body: { active: true } | { active: false; exitAction: PerformanceExitAction },
+): Promise<ApiResult<PerformanceModeState>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/performance-mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    // Codex P0 — fail loud: surface the engine's rejection (+ code) so the
+    // control can show the real error instead of a phantom success.
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data, code: data?.code };
+    }
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('Set performance mode failed:', 'Set performance mode failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
 // ── Deck COLOR autopilot (operator request: "in the autopilot, select a set
 // of palettes that switch on their own timer") ─────────────────────────────
 // A second, INDEPENDENT autopilot on the deck that cycles a chosen SET of
@@ -397,6 +496,13 @@ export async function setActivePattern(pattern: string): Promise<ApiResult<any>>
       body: JSON.stringify({ pattern }),
     });
     const data = await res.json();
+    // Codex P0 — fail loud + thread `code`: a pattern swap is gated (409
+    // PERFORMANCE_MODE) while a show is live. Surface the rejection + its code
+    // so a pattern-bound MIDI pad quiets to "locked" instead of counting a
+    // dispatch failure, and so callers never see a phantom success.
+    if (!res.ok) {
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data, code: data?.code };
+    }
     return { ok: true, data };
   } catch (err: any) {
     warnThrottled('Set active pattern failed:', 'Set active pattern failed:', err);
@@ -659,6 +765,27 @@ export async function setAutopilot(
     return { ok: true, data };
   } catch(err: any) {
     warnThrottled('Set autopilot failed:', 'Set autopilot failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Set the DECK autopilot PROFILE (engine `playlist.autopilot.profile`). Lives on
+// the deck base channel's playlist.autopilot alongside the group-locality knobs,
+// so it rides the SAME `POST /deck/playlist/autopilot` endpoint (NOT the
+// autopilot daemon's /autopilot state). The engine 400s an unknown profile
+// (fail loud — no silent coercion); the caller optimistically applies + rolls
+// back on !ok exactly like handleDeckTxChange.
+export async function setAutopilotProfile(profile: string): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/deck/playlist/autopilot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile }),
+    });
+    const data = await res.json();
+    return { ok: res.ok, data, error: res.ok ? undefined : (data?.error || `HTTP ${res.status}`) };
+  } catch (err: any) {
+    warnThrottled('Set autopilot profile failed:', 'Set autopilot profile failed:', err);
     return { ok: false, error: err.message };
   }
 }
@@ -1152,7 +1279,7 @@ export async function updateDeckChannel(updates: any): Promise<ApiResult<any>> {
       body: JSON.stringify(updates),
     });
     const data = await res.json();
-    return { ok: res.ok, data, error: res.ok ? undefined : data?.error };
+    return { ok: res.ok, data, error: res.ok ? undefined : data?.error, code: res.ok ? undefined : data?.code };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }
@@ -1191,7 +1318,7 @@ export async function updateMixerChannel(id: string, updates: any): Promise<ApiR
     // rejected PATCH. Mirror updateDeckChannel's res.ok handling.
     const data = await res.json();
     if (!res.ok) {
-      return { ok: false, error: data?.error || `HTTP ${res.status}`, data };
+      return { ok: false, error: data?.error || `HTTP ${res.status}`, data, code: data?.code };
     }
     return { ok: true, data };
   } catch (err: any) {
@@ -1247,6 +1374,11 @@ export interface PlaylistEntry {
   label: string | null;
   defaults: Record<string, any>;
   notes?: string | null;
+  // Per-entry binding arrays, persisted with the pattern. `modulations` are
+  // audio-reactive (engine-applied); `midiMappings` bind a physical MIDI
+  // control to a local param's STATIC value (CaptainPad-applied — see MidiMap).
+  modulations?: ModulationMapping[];
+  midiMappings?: MidiMapping[];
   _missing?: boolean;
 }
 
@@ -1523,7 +1655,15 @@ export async function deletePlaylist(name: string): Promise<ApiResult<any>> {
 // deck's. There is intentionally NO GET /deck/overlays/:id/playlist on the
 // engine — the overlay's assignment rides the `deck` WS message's
 // `overlays[]` array, so fetchChannelPlaylist reads the list for the role.
-export type ChannelRole = 'deck' | 'mixer' | 'deckOverlay';
+// 'deckSlot' is one of the deck's two split-playlist PANES (feat/
+// autopilot_deck_improvement). The deck still plays exactly one pattern; the two
+// panes are stable playlist BINDINGS by name (`primary` / `secondary`) that the
+// operator browses/drives from. `channelId` IS the slot key
+// ('primary' | 'secondary'). Its GET/POST route through the deck's slot
+// endpoints (see the branches below); the reused PlaylistPanel drives a slot's
+// playlist exactly like the deck's, reconciling off the `deck` WS message's
+// `playlistSlots` map. See .agent/projects/deck_split_playlists.md.
+export type ChannelRole = 'deck' | 'mixer' | 'deckOverlay' | 'deckSlot';
 
 // Polymorphic playlist GET. Use this instead of fetchMixerChannelPlaylist
 // from any consumer that may be wired to the deck channel.
@@ -1551,6 +1691,21 @@ export async function fetchChannelPlaylist(
       const list = Array.isArray(data?.overlays) ? data.overlays : [];
       const ov = list.find((o: any) => o && o.id === channelId);
       return { ok: true, data: (ov && ov.playlist) || null };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  }
+  if (role === 'deckSlot') {
+    // Both panes read from ONE slots endpoint: GET /deck/playlist/slots returns
+    // { primary, secondary, splitRatio } — pick the slot for this pane's
+    // channelId. A slot is null when unbound (pane shows its empty state). Fail
+    // loud on a non-2xx.
+    try {
+      const res = await fetchWithTimeout(`${api_base}/deck/playlist/slots`);
+      const data = await res.json();
+      if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+      const slot = data && typeof data === 'object' ? (data as any)[channelId] : null;
+      return { ok: true, data: (slot as PlaylistAssignment) || null };
     } catch (err: any) {
       return { ok: false, error: err.message };
     }
@@ -1593,6 +1748,30 @@ export async function setChannelPlaylist(
     } catch (err: any) {
       return { ok: false, error: err.message };
     }
+  }
+  if (role === 'deckSlot') {
+    // primary === the deck's main playlist: assigning it activates (POST
+    // /deck/playlist loads the first entry, today's behaviour). secondary is
+    // BROWSE-ONLY: POST /deck/playlist/secondary binds the pane without changing
+    // what's playing (the operator taps an entry to drive it); passing null
+    // clears the slot (clearing a live secondary promotes it to primary on the
+    // engine side). The engine 404s an unknown name and 400s secondary===primary
+    // (fail loud).
+    if (channelId === 'secondary') {
+      try {
+        const res = await fetchWithTimeout(`${api_base}/deck/playlist/secondary`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        const data = await res.json();
+        return { ok: res.ok, data, error: res.ok ? undefined : (data?.error || `HTTP ${res.status}`) };
+      } catch (err: any) {
+        return { ok: false, error: err.message };
+      }
+    }
+    // primary slot → existing deck playlist route (assign = activate).
+    return setChannelPlaylist('deck', '', name);
   }
   return setMixerChannelPlaylist(channelId, name);
 }
@@ -1637,7 +1816,70 @@ export async function setChannelPlaylistEntry(
       return { ok: false, error: err.message };
     }
   }
+  if (role === 'deckSlot') {
+    // Tap = DRIVE. Both panes route through the deck's back-compat-extended
+    // entry endpoint with an explicit `slot` so the engine resolves the slot's
+    // playlist name and swaps via loadPlaylistEntryWithTransition — the deck
+    // still plays one pattern. Same 409/EBUSY mid-transition contract as the
+    // deck branch.
+    try {
+      const res = await fetchWithTimeout(`${api_base}/deck/playlist/entry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entryId, slot: channelId }),
+      });
+      const data = await res.json();
+      const code = !res.ok && data && data.code
+        ? String(data.code)
+        : (!res.ok && res.status === 409 ? 'EBUSY' : undefined);
+      return { ok: res.ok, data, code, error: !res.ok ? (data && data.error) : undefined };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  }
   return setMixerChannelPlaylistEntry(channelId, entryId);
+}
+
+// The deck split-playlist slots as one object: { primary, secondary, splitRatio }.
+// `primary`/`secondary` are the virtual slot assignments (null when unbound);
+// `splitRatio` is the divider's pane-1 share. Used by the deck seed to hydrate
+// the divider + secondary-presence before the first `deck` WS broadcast lands.
+export interface DeckPlaylistSlots {
+  primary: PlaylistAssignment | null;
+  secondary: PlaylistAssignment | null;
+  splitRatio: number;
+}
+
+export async function fetchDeckPlaylistSlots(): Promise<ApiResult<DeckPlaylistSlots | null>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/deck/playlist/slots`);
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    return { ok: true, data: data as DeckPlaylistSlots };
+  } catch (err: any) {
+    warnThrottled('Fetch deck playlist slots failed:', 'Fetch deck playlist slots failed:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Set the deck split-pane divider RATIO (0..1, pane-1 share). Called once per
+// drag gesture on RELEASE (not per move). The engine 400s a non-finite ratio or
+// one outside [0.15, 0.85] (fail loud — no clamp-on-write); the caller clamps
+// its OWN drag range so a valid gesture always lands. The new ratio rides the
+// `deck` WS broadcast's `playlistSlots.splitRatio` back to every iPad.
+export async function setDeckPlaylistSplit(ratio: number): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/deck/playlist/split`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ratio }),
+    });
+    const data = await res.json();
+    return { ok: res.ok, data, error: res.ok ? undefined : (data?.error || `HTTP ${res.status}`) };
+  } catch (err: any) {
+    warnThrottled('Set deck playlist split failed:', 'Set deck playlist split failed:', err);
+    return { ok: false, error: err.message };
+  }
 }
 
 export async function fetchMixerChannelPlaylist(channelId: string): Promise<ApiResult<PlaylistAssignment | null>> {
@@ -1749,8 +1991,13 @@ export async function setMixerChannelControl(channelId: string, id: number, v0: 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    // Codex P0 — fail loud: an engine rejection of a mixer control write
+    // (404 unknown channel, 400 bad param id, 500) used to be swallowed as
+    // { ok: true }, so the manager's surfaceApiResult never saw the failure and
+    // a rejected mixer knob looked like a silent no-op. Report the real status,
+    // mirroring setDeckChannelControl / updateMixerChannel.
     const data = await res.json();
-    return { ok: true, data };
+    return { ok: res.ok, data, error: res.ok ? undefined : (data?.error || `HTTP ${res.status}`) };
   } catch (err: any) {
     return { ok: false, error: err.message };
   }
@@ -1771,7 +2018,300 @@ export type GlobalEffectSlotStatus = GlobalEffectSlot & {
   active: boolean;
   safetyTier: string | null;
   resolveError: string | null;
+  // Driver #3 (VSN1) intensity surface. The slot's current intensity (0..1),
+  // its default (the jog-press reset target), and a display label — carried on
+  // the status so the VSN1 jog's soft-takeover pickup guard can seed the
+  // selected slot's live value. Optional for staleness safety: an engine that
+  // predates the field leaves them undefined and the jog stays inert until the
+  // value threads through (never anchors on a fabricated 0).
+  intensity?: number;
+  intensityDefault?: number;
+  intensityLabel?: string;
+  // Effects v2 (32 paged slots): the slot's discrete `primaryMode`. `mode` is the
+  // current value (a boolean, a tempo division like '1/4', or any registry value);
+  // `modeLabel` is the display label (e.g. 'Direction'); `modeValues` is the full
+  // ordered value list the VSN1 encoder-press cycles through. Optional for
+  // staleness safety — a pre-field engine leaves them undefined and the mode UI /
+  // MIDI cycle stays inert (never invents a value).
+  mode?: string | number | boolean | null;
+  modeLabel?: string;
+  modeValues?: (string | number | boolean)[];
+  // Declarative value-encoder opt-out mirrored from the engine effect
+  // (global_effect_library.js — e.g. fogger.valueParam='none'). When 'none' the
+  // effect has NO magnitude knob and the UI/VSN1 disables the value encoder for
+  // this slot. Optional for staleness safety: a pre-field engine leaves it
+  // undefined and the UI falls back to its own override table
+  // (effect_picker_logic.ts slotDisablesEncoder).
+  valueParam?: string | null;
 };
+
+// Effects v2: the active effects PAGE (0..3). Page p views the 32 flat slots
+// `8p+1 .. 8p+8`. The engine is the single source of truth — every surface
+// (CaptainPad page switcher, VSN1 side buttons) reads/writes it through here and
+// follows the WS `effectsPage` broadcast, so no surface keeps a private page.
+export async function fetchEffectsPage(): Promise<ApiResult<{ effectsPage: number }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/page`);
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('fetch-effects-page', 'Failed to fetch effects page:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// PATCH the active effects page (0..3). The engine's canonical contract is the
+// body key `effectsPage` (GET/PATCH + the `effectsPage` WS broadcast all use it);
+// it 400s on `undefined`. On success the engine broadcasts `effectsPage` so every
+// surface converges. Mirrors the fail-loud error shape.
+export async function setEffectsPage(page: number): Promise<ApiResult<{ effectsPage: number }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/page`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ effectsPage: page }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('set-effects-page', 'Failed to set effects page:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── Named effect banks — an ORDERED LIST of NAMED effect sets, cycled by the
+// VSN1 sb_2 (always >= 1). The ENGINE is the single source of truth: state YAML
+// v3 `{ version:3, activeBankId, effectsPage, banks:[{id,name,slots}] }`,
+// GET /global-effects/banks, WS-broadcast `{type:'effectBanks', banks, activeBankId,
+// source?}` on any switch/create/delete/rename + replayed on connect. A switch
+// broadcasts the new bank's `globalEffectMacroStatus` so the grid swaps slot
+// CONTENT. Every surface follows the broadcast — no surface keeps a private bank.
+export interface EffectBankSummary {
+  id: string;
+  name: string;
+  slotCount: number;
+}
+
+export interface EffectBanksPayload {
+  banks: EffectBankSummary[];
+  activeBankId: string | null;
+}
+
+// GET the ordered bank list + the active id (the seed for the UI badge/controls
+// and the MIDI snapshot). Fail-loud on a non-ok status.
+export async function fetchEffectBanks(): Promise<ApiResult<EffectBanksPayload>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/banks`);
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const json = await res.json();
+    return { ok: true, data: { banks: json.banks, activeBankId: json.activeBankId } };
+  } catch (err: any) {
+    warnThrottled('fetch-effect-banks', 'Failed to fetch effect banks:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export interface EffectBankCycleResult {
+  activeBankId: string;
+  bankName: string;
+  index: number;
+  count: number;
+}
+
+// POST an ATOMIC cycle+wrap to the NEXT bank (the VSN1 sb_2 dispatch). The engine
+// computes the target server-side — NO client-computed target — and broadcasts
+// `effectBanks` so every surface converges (no optimistic switch). Optional
+// `source` is a provenance tag threaded into the body so the engine can log +
+// echo WHICH surface cycled (e.g. 'vsn1_sb2'); omitted → the body key is not sent.
+export async function nextEffectBank(source?: string): Promise<ApiResult<EffectBankCycleResult>> {
+  try {
+    const body: { source?: string } = {};
+    if (source) body.source = source;
+    const res = await fetchWithTimeout(`${api_base}/global-effects/banks/next`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('next-effect-bank', 'Failed to cycle effect bank:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// PATCH the ACTIVE bank directly to `bankId` (a UI bank tap). The engine
+// broadcasts `effectBanks` so every surface converges. Optional `source` provenance
+// tag, same contract as nextEffectBank. Fail-loud on a non-ok status.
+export async function setActiveEffectBank(
+  bankId: string,
+  source?: string,
+): Promise<ApiResult<{ activeBankId: string }>> {
+  try {
+    const body: { bankId: string; source?: string } = { bankId };
+    if (source) body.source = source;
+    const res = await fetchWithTimeout(`${api_base}/global-effects/banks/active`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('set-active-effect-bank', 'Failed to set active effect bank:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// POST a new bank (optional `name`; the engine names an untitled one). The engine
+// broadcasts `effectBanks` so the list converges. Fail-loud on a non-ok status.
+export async function createEffectBank(name?: string): Promise<ApiResult<{ id: string; name: string }>> {
+  try {
+    const body: { name?: string } = {};
+    if (name) body.name = name;
+    const res = await fetchWithTimeout(`${api_base}/global-effects/banks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('create-effect-bank', 'Failed to create effect bank:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// DELETE a bank by id. The engine 409s on the LAST bank (>= 1 invariant) — that
+// status is surfaced verbatim (fail-loud), not swallowed. On success it
+// broadcasts `effectBanks`. `id` is path-encoded so an arbitrary bank id is safe.
+export async function deleteEffectBank(id: string): Promise<ApiResult<{ activeBankId: string }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/banks/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('delete-effect-bank', 'Failed to delete effect bank:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// PATCH a bank's `name` by id. The engine broadcasts `effectBanks` so the badge +
+// list converge. Fail-loud on a non-ok status.
+export async function renameEffectBank(id: string, name: string): Promise<ApiResult<{ id: string; name: string }>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/banks/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('rename-effect-bank', 'Failed to rename effect bank:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Effects v2: cycle a slot's discrete `primaryMode` to the NEXT value in its
+// `modeValues` list (the VSN1 encoder press). POST /global-effect-slots/:id/mode/cycle.
+export async function cycleGlobalEffectSlotMode(slotId: number): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-slots/${slotId}/mode/cycle`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled(`slot-${slotId}-mode-cycle`, `Failed to cycle slot ${slotId} mode:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Effects v2 (VSN1 small buttons, 2026-07-09): reset EVERY global-effect slot's
+// primary intensity + mode back to its default. POST /global-effects/reset-all.
+// Bound to VSN1 small button sb_2. The engine broadcasts the change so every
+// surface converges.
+export async function resetAllGlobalEffects(): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/reset-all`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('global-effects-reset-all', 'Failed to reset all global effects:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Effects v2 (VSN1 small buttons, 2026-07-09): turn OFF every currently-active
+// global effect (values kept). POST /global-effects/disable-all. Bound to VSN1
+// small button sb_3. The engine broadcasts the change so every surface converges.
+export async function disableAllGlobalEffects(): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effects/disable-all`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled('global-effects-disable-all', 'Failed to disable all global effects:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Effects v2: SET a slot's discrete `primaryMode` to an explicit value (the UI
+// mode picker). POST /global-effect-slots/:id/mode { value }.
+export async function setGlobalEffectSlotMode(
+  slotId: number,
+  value: string | number | boolean,
+): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-slots/${slotId}/mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled(`slot-${slotId}-mode-set`, `Failed to set slot ${slotId} mode:`, err);
+    return { ok: false, error: err.message };
+  }
+}
 
 export async function fetchGlobalEffectSlots(): Promise<ApiResult<{ slots: GlobalEffectSlot[] }>> {
   try {
@@ -1810,6 +2350,49 @@ export async function dispatchGlobalEffectSlotAction(
     return { ok: true, data: await res.json() };
   } catch (err: any) {
     warnThrottled(`slot-${slotId}-${action}`, `Failed to ${action} slot ${slotId}:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Driver #3 (Intech VSN1): write a global-effect slot's `intensity` (0..1). The
+// VSN1 jog wheel (absolute mode) drives this for whichever slot the operator
+// last pressed on that surface. POST /global-effect-slots/:slotId/intensity
+// { value }. Mirrors dispatchGlobalEffectSlotAction's fail-loud error shape.
+export async function setGlobalEffectSlotIntensity(
+  slotId: number,
+  value: number,
+): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-slots/${slotId}/intensity`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled(`slot-${slotId}-intensity`, `Failed to set slot ${slotId} intensity:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// Driver #3 (Intech VSN1): reset a global-effect slot's intensity to its
+// default (the VSN1 jog press). POST /global-effect-slots/:slotId/intensity/reset.
+export async function resetGlobalEffectSlotIntensity(slotId: number): Promise<ApiResult<any>> {
+  try {
+    const res = await fetchWithTimeout(`${api_base}/global-effect-slots/${slotId}/intensity/reset`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      return { ok: false, error: `HTTP ${res.status}: ${txt}` };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err: any) {
+    warnThrottled(`slot-${slotId}-intensity-reset`, `Failed to reset slot ${slotId} intensity:`, err);
     return { ok: false, error: err.message };
   }
 }
@@ -2166,6 +2749,112 @@ export async function deleteModulation(
     return { ok: true, data };
   } catch (err: any) {
     warnThrottled('delete-modulation', `Failed to DELETE modulation:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── MIDI mappings (docs/34) ────────────────────────────────────────
+//
+// Binds a physical MIDI control (a fader/knob) to a pattern's LOCAL
+// parameter. Stored per playlist entry, MIRRORING the modulation CRUD
+// above (same endpoint shape, same cache invalidation, same
+// `playlistSaved` broadcast) so bindings persist with the pattern and
+// sync across every connected client.
+//
+// UNLIKE modulations these are PURE METADATA to the engine — its render
+// loop never applies them. CaptainPad reads the focused pattern's
+// midiMappings and, when the bound control moves, writes the param's
+// STATIC value through the existing control path. Audio modulators stay
+// layered on top untouched. Schema mirrors
+// marsin_engine/lib/midi_mapping_engine.js validateMidiMapping.
+export type MidiControlType = 'cc' | 'note';
+
+export type MidiMapping = {
+  id: string;
+  enabled: boolean;
+  // The physical control. channel 0-15, number 0-127 (cc number / note).
+  control: { type: MidiControlType; channel: number; number: number };
+  target: { scope: 'pattern'; parameter: string };
+  // [min, max] the 0-127 control scales into. Same generous [-4, 4] window
+  // the engine allows (a learned fader may invert/scale a [0,1] param).
+  range: [number, number];
+};
+
+// Same [-4, 4] window as RANGE_MIN/RANGE_MAX in midi_mapping_engine.js (and
+// modulation_engine.js). The learn + modulation popovers pre-clamp so a typo
+// can't bounce the save with a 400.
+export const MIDI_RANGE_LIMIT = 4;
+
+/** Clamp a range value into the engine's [-MIDI_RANGE_LIMIT, MIDI_RANGE_LIMIT]
+ *  window. Non-finite → 0. The single clamp both popovers share (was three
+ *  parallel copies). */
+export function clampToRangeLimit(x: number): number {
+  if (!Number.isFinite(x)) return 0;
+  if (x < -MIDI_RANGE_LIMIT) return -MIDI_RANGE_LIMIT;
+  if (x > MIDI_RANGE_LIMIT) return MIDI_RANGE_LIMIT;
+  return x;
+}
+
+function midiMappingUrl(playlistName: string, itemId: string, mappingId: string): string {
+  return `${api_base}/api/playlists/${encodeURIComponent(playlistName)}` +
+    `/items/${encodeURIComponent(itemId)}` +
+    `/midi-mappings/${encodeURIComponent(mappingId)}`;
+}
+
+export async function putMidiMapping(
+  playlistName: string, itemId: string, mapping: MidiMapping,
+): Promise<ApiResult<{ status: string; entry: any }>> {
+  try {
+    const res = await fetchWithTimeout(midiMappingUrl(playlistName, itemId, mapping.id), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(mapping),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    // Drop the cached playlist immediately (same race-avoidance as
+    // putModulation) so the next refetch sees the new binding before the
+    // engine's `playlistSaved` WS broadcast lands.
+    invalidatePlaylistCache(playlistName);
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('put-midi-mapping', `Failed to PUT midi mapping:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function patchMidiMapping(
+  playlistName: string, itemId: string, mappingId: string, patch: Partial<MidiMapping>,
+): Promise<ApiResult<{ status: string; entry: any }>> {
+  try {
+    const res = await fetchWithTimeout(midiMappingUrl(playlistName, itemId, mappingId), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    invalidatePlaylistCache(playlistName);
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('patch-midi-mapping', `Failed to PATCH midi mapping:`, err);
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function deleteMidiMapping(
+  playlistName: string, itemId: string, mappingId: string,
+): Promise<ApiResult<{ status: string; entry: any }>> {
+  try {
+    const res = await fetchWithTimeout(midiMappingUrl(playlistName, itemId, mappingId), {
+      method: 'DELETE',
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+    invalidatePlaylistCache(playlistName);
+    return { ok: true, data };
+  } catch (err: any) {
+    warnThrottled('delete-midi-mapping', `Failed to DELETE midi mapping:`, err);
     return { ok: false, error: err.message };
   }
 }

@@ -6,17 +6,27 @@
  * envelope.
  */
 
-export function envelopeValue({ elapsedMs, attackMs, holdMs, releaseMs }) {
+/**
+ * A/H/R envelope value in [0..1]. `curve` (default 1 = linear) shapes the
+ * attack and release ramps via a power law: the attack ramp rises as
+ * `t^curve` and the release ramp falls as `t^curve`, giving a punchier
+ * snap at curve>1 (fast onset that eases into the hold, sharp initial
+ * decay). curve=1 preserves the original linear envelope exactly.
+ */
+export function envelopeValue({ elapsedMs, attackMs, holdMs, releaseMs, curve = 1 }) {
   if (elapsedMs < 0) return 0;
+  const c = curve > 0 ? curve : 1;
   if (elapsedMs < attackMs) {
-    return attackMs > 0 ? elapsedMs / attackMs : 1.0;
+    const t = attackMs > 0 ? elapsedMs / attackMs : 1.0;
+    return c === 1 ? t : Math.pow(t, c);
   }
   if (elapsedMs < attackMs + holdMs) {
     return 1.0;
   }
   const r = elapsedMs - attackMs - holdMs;
   if (r < releaseMs) {
-    return releaseMs > 0 ? 1.0 - r / releaseMs : 0.0;
+    const t = releaseMs > 0 ? 1.0 - r / releaseMs : 0.0;
+    return c === 1 ? t : Math.pow(t, c);
   }
   return 0.0;
 }
@@ -79,4 +89,11 @@ export const dropHitEffect = {
   apply: applyDropHit,
   envelopeValue,
   envelopeDurationMs,
+  // Primary intensity: the punch strength — the peak brightness of the
+  // whiteout hit (0 = no hit, 1 = full-force drop). Normalized 0..1 maps
+  // straight onto the envelope `intensity` scalar.
+  primaryIntensity: { label: 'Punch', param: 'intensity', default: 1.0, min: 0, max: 1 },
+  // Primary mode (VSN1 encoder press): how the hit composites over the live
+  // frame — additive (default), replace, or max. Cycles the `blendMode` param.
+  primaryMode: { label: 'Blend', param: 'blendMode', values: ['add', 'replace', 'max'], default: 'add' },
 };

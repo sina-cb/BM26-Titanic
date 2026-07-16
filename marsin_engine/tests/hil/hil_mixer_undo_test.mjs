@@ -39,6 +39,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import { assertDisposableEngine } from './hil_guard.mjs';
+
 const portIdx = process.argv.indexOf('--port');
 const PORT = portIdx !== -1 && process.argv[portIdx + 1]
   ? parseInt(process.argv[portIdx + 1], 10)
@@ -103,6 +105,8 @@ async function main() {
   try {
     const mx0 = await httpJson('GET', '/mixer');
     check(mx0.status === 200, 'GET /mixer reachable', `status=${mx0.status}`);
+    // Refuse to mutate a non-disposable engine BEFORE deleting/adding channels.
+    await assertDisposableEngine(BASE);
     // Clean slate: remove any existing overlays so id/order math is exact.
     for (const c of mx0.body.channels) await httpJson('DELETE', `/mixer/channels/${c.id}`);
 

@@ -6,15 +6,34 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { Autopilot } from './autopilot.js';
 import { ColorAutopilot } from './color_autopilot.js';
+import {
+  AUTO_GROUP_SIZE_MIN,
+  AUTO_GROUP_SIZE_MAX,
+  AUTO_GROUP_SIZE_DEFAULT,
+  AUTO_GROUP_DWELL_MIN,
+  AUTO_GROUP_DWELL_MAX,
+  AUTO_GROUP_DWELL_DEFAULT,
+  clampInt,
+  pickNextAutoCycleEntry,
+} from './autopilot_pick.js';
+import {
+  AUTOPILOT_PROFILES,
+  AUTOPILOT_PROFILE_DEFAULT,
+  normalizeAutopilotProfile,
+  createAutopilotProfile,
+} from './autopilot_profiles/profile_registry.js';
 import { StateManager, serializeChannel as serializeChannelForState } from './state_manager.js';
+import { sceneStateDir, resolvePlaylistsDir } from './state_paths.js';
 import { SnapshotManager, SnapshotLoadError } from './snapshot_manager.js';
 import { ParamPresetManager, ParamPresetError } from './param_preset_manager.js';
 import { PlaylistManager, PlaylistLoadError } from './playlist_manager.js';
 import {
   validateModulationMapping,
 } from './modulation_engine.js';
+import { validateMidiMapping } from './midi_mapping_engine.js';
 import { describeLibrary, GLOBAL_EFFECT_LIBRARY } from './global_effect_library.js';
-import { validateSlotsConfig } from './global_effect_slot_manager.js';
+import { migrateSlotFile } from './global_effect_slot_manager.js';
+import { createLayoutDeployHook, isLayoutDeployEnabled } from './vsn1_layout_deploy.js';
 import {
   ScheduledTaskService,
   ScheduledTaskValidationError,
@@ -27,6 +46,7 @@ import { validateShowPlan as validateTimelineShowPlan } from './timeline/show_pl
 import { parsePatternDefaults } from './pattern_defaults.js';
 import { UndoStack, UNDO_MAX } from './undo_stack.js';
 import { DECK_OVERLAY_MAX } from './pattern_mixer.js';
+import { SessionParamCache } from './session_param_cache.js';
 
 /**
  * Validate a `viewSelection` payload before it reaches the mixer.
@@ -220,7 +240,8 @@ export function validateFader(raw) {
 
 // ── Hue value validation (single source of truth) ──────────────────────
 // A hue is an angle in degrees. Every write path (per-channel PATCH, deck
-// PATCH, POST /global-effect-hue) routes through this. Codex P0 (no silent
+// PATCH, timeline cue hue) routes through this. Hue is PER-CHANNEL ONLY —
+// the global hue shifter was removed 2026-07. Codex P0 (no silent
 // fallback): a NON-FINITE value (NaN / Infinity, or a non-number /
 // unparseable string) is REJECTED with 400 — we never coerce a broken
 // payload to 0. A finite value (any magnitude, including negatives like
@@ -268,49 +289,18 @@ export function validateFollowScale(raw) {
   return { ok: true, value: Math.max(0, Math.min(2, n)) };
 }
 
-// ── Per-pattern param SHARING — pure propagation core ─────────────────────
-// (operator request, feat/optimize_channels)
-//
-// Given the SOURCE channel a control was just written on, mirror that SAME
-// exported slider/param onto every OTHER live channel running the SAME pattern
-// from the SAME playlist (deck base, mixer overlays, deck overlays). Extracted
-// as a pure, dependency-injected function (no engine closure) so it is unit-
-// testable in isolation; the api_server factory's `propagatePatternParam`
-// wrapper supplies `mixer`/`wasmHost`/`paramRouter`.
-//
-// Keying is strict (mixer.channelsRunningPattern): playlist.name === L AND
-// channel.pattern === P. Mapping is by export NAME (per-handle controlIds are
-// not guaranteed identical across compiles): resolve the source export's name,
-// then find the same-named export on each target and write THROUGH
-// paramRouter.setChannelControl — which already rejects CPC-owned / CPC-blocked
-// / non-local controls per target, so only the pattern's LOCAL sliders/params
-// ever propagate (never fader/level/hue/mode — those are not pattern exports
-// and never reach here). Returns the array of channel ids that actually
-// received the value (status 'ok'); the source is never included.
-export function propagatePatternParamWith({ source, sourceChannelId, controlId, v0, v1, v2, mixer, wasmHost, paramRouter }) {
-  if (!source || !source.playlist || !source.playlist.name || !source.pattern) {
-    // No (playlist, pattern) context on the source — nothing to share by.
-    return [];
-  }
-  const playlistName = source.playlist.name;
-  const patternName = source.pattern;
-
-  const sourceExports = wasmHost.getExports(source.handle) || [];
-  const sourceExp = sourceExports.find(e => e.id === controlId);
-  if (!sourceExp) return [];
-  const exportName = sourceExp.name;
-
-  const targets = mixer.channelsRunningPattern(playlistName, patternName, { excludeId: sourceChannelId });
-  const applied = [];
-  for (const target of targets) {
-    const targetExports = wasmHost.getExports(target.handle) || [];
-    const targetExp = targetExports.find(e => e.name === exportName);
-    if (!targetExp) continue; // pattern recompiled without this export — skip, never crash
-    const result = paramRouter.setChannelControl(target.id, targetExp.id, v0, v1, v2);
-    if (result && result.status === 'ok') applied.push(target.id);
-  }
-  return applied;
-}
+// ── Per-pattern param sharing: REMOVED (operator ruling, 2026-07-07) ──────
+// The old "param SHARING" core (`propagatePatternParamWith`, from
+// feat/optimize_channels) mirrored a param write on one channel onto every
+// other live channel running the same (playlist, pattern). Sina's mixer
+// channel-isolation ruling reverses that: parameters are CHANNEL-LOCAL —
+// with the same playlist loaded on two channels, changing a parameter on one
+// channel must NEVER affect the pattern on the other. Each channel's live
+// values live only in its own WASM handle + `channel.localControls`;
+// cross-channel state travels exclusively through EXPLICIT playlist-entry
+// defaults captures (POST /deck/playlist/capture,
+// POST /mixer/channels/:id/playlist/capture) that a later load replays.
+// Regression guard: tests/channel_param_isolation.test.js.
 
 // ── Auto-cycle DELAY validation (docs/39 §auto-cycle, round-2 #2) ──────
 // The interval (seconds) between automatic playlist advances on a mixer
@@ -361,24 +351,22 @@ export function autoCycleDueDecision(channel, nowMs) {
   return (nowMs - channel._autoCycleLastAdvanceMs >= delayMs) ? 'due' : 'wait';
 }
 
-// ── Auto-cycle group-locality clamps (single source of truth) ─────────
-// PATTERN-GROUP LOCALITY (feat/optimize_channels): the autopilot grabs a
-// small WINDOW of adjacent playlist entries, dwells within it for a number of
-// swaps, then releases and grabs a fresh window. The window size and dwell
-// count are clamped here so a stale/garbage on-disk value can't form a
-// degenerate (1-wide) or runaway window. Defaults match the field docs.
-export const AUTO_GROUP_SIZE_MIN = 2;
-export const AUTO_GROUP_SIZE_MAX = 8;
-export const AUTO_GROUP_SIZE_DEFAULT = 3;
-export const AUTO_GROUP_DWELL_MIN = 1;
-export const AUTO_GROUP_DWELL_MAX = 50;
-export const AUTO_GROUP_DWELL_DEFAULT = 6;
-
-const clampInt = (raw, lo, hi, dflt) => {
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return dflt;
-  return Math.max(lo, Math.min(hi, Math.trunc(n)));
-};
+// ── Auto-cycle group-locality clamps + pure picker ────────────────────
+// PATTERN-GROUP LOCALITY (feat/optimize_channels): these clamps + the pure
+// `pickNextAutoCycleEntry` picker were EXTRACTED to `lib/autopilot_pick.js`
+// (autopilot profile seam, 2026-07-06) so the autopilot profiles can import
+// the picker without a circular dependency on this module. They are re-exported
+// here VERBATIM so every historical import path (`from './api_server.js'`) —
+// unit tests, external tooling — keeps resolving the identical symbols.
+export {
+  AUTO_GROUP_SIZE_MIN,
+  AUTO_GROUP_SIZE_MAX,
+  AUTO_GROUP_SIZE_DEFAULT,
+  AUTO_GROUP_DWELL_MIN,
+  AUTO_GROUP_DWELL_MAX,
+  AUTO_GROUP_DWELL_DEFAULT,
+  pickNextAutoCycleEntry,
+} from './autopilot_pick.js';
 
 // Normalize the three group-locality fields off any autopilot-ish object for
 // serialize / broadcast / restore (single shape, single source of clamps).
@@ -389,82 +377,10 @@ const autoGroupFields = (ap) => ({
   groupDwell: clampInt(ap && ap.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT),
 });
 
-// ── Auto-cycle next-entry pick (pure, unit-tested) ────────────────────
-// MIRRORS the deck Autopilot advance pick (api_server deck daemon): when
-// group-locality is armed, dwell within a window of adjacent entries, else
-// shuffle picks a random OTHER usable entry, else sequential walks forward
-// skipping `_missing`. `usable` excludes `_missing` entries.
-// Returns the chosen entry, or null when there is nothing to advance to (no
-// usable entries).
-//
-// PATTERN-GROUP LOCALITY: when `autopilot.groupMode` is true AND there are
-// strictly more usable entries than the window size, dwell state lives in the
-// caller-owned mutable `groupRuntime` ({ windowIds, swapsLeft }) so the window
-// + remaining-swap count persist ACROSS advances. The function reads and
-// MUTATES `groupRuntime` in place (the contract); randomness via Math.random
-// matches shuffle. With group-locality off (default), or too few usable
-// entries, group mode is a no-op and the existing shuffle/sequential logic
-// runs unchanged — `groupRuntime` may be omitted by those callers.
-export function pickNextAutoCycleEntry(pl, autopilot, curEntryId, groupRuntime) {
-  if (!pl || !Array.isArray(pl.entries) || pl.entries.length === 0) return null;
-  const usable = pl.entries.filter(e => !e._missing);
-  if (usable.length === 0) return null;
-  // PATTERN-GROUP LOCALITY: dwell inside a rolling window of adjacent usable
-  // entries. No-op (fall through) unless armed AND the playlist is bigger than
-  // one window — otherwise the "window" would be the whole list, defeating the
-  // point. Needs a mutable runtime to carry dwell state across advances.
-  const groupSize = clampInt(
-    autopilot && autopilot.groupSize, AUTO_GROUP_SIZE_MIN, AUTO_GROUP_SIZE_MAX,
-    AUTO_GROUP_SIZE_DEFAULT,
-  );
-  if (autopilot && autopilot.groupMode && groupRuntime && usable.length > groupSize) {
-    const groupDwell = clampInt(
-      autopilot.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX,
-      AUTO_GROUP_DWELL_DEFAULT,
-    );
-    const win = groupRuntime.windowIds;
-    const haveWindow = Array.isArray(win) && win.length > 0;
-    const curInWindow = haveWindow && win.includes(curEntryId);
-    // Form a FRESH window when there is none, the dwell expired, or we've
-    // wandered out of the current window (manual tap / loop release landed
-    // elsewhere). A fresh random start is fine even when re-forming.
-    if (!haveWindow || groupRuntime.swapsLeft <= 0 || !curInWindow) {
-      const start = Math.floor(Math.random() * usable.length);
-      const windowIds = [];
-      for (let i = 0; i < groupSize; i++) {
-        windowIds.push(usable[(start + i) % usable.length].id);
-      }
-      groupRuntime.windowIds = windowIds;
-      groupRuntime.swapsLeft = groupDwell;
-    }
-    // Pick a random entry from the window that is NOT the current one (no
-    // immediate repeat); if the window collapsed to only the current entry,
-    // replay it. Decrement the dwell counter (mutate in place — the contract).
-    const choices = groupRuntime.windowIds.filter(id => id !== curEntryId);
-    const pickId = choices.length
-      ? choices[Math.floor(Math.random() * choices.length)]
-      : curEntryId;
-    groupRuntime.swapsLeft -= 1;
-    const picked = usable.find(e => e.id === pickId);
-    if (picked) return picked;
-    // The chosen id is no longer usable (entry removed mid-dwell) — force a
-    // fresh window next call and fall through to sequential this beat.
-    groupRuntime.windowIds = null;
-    groupRuntime.swapsLeft = 0;
-  }
-  if (autopilot && autopilot.shuffle) {
-    const others = usable.filter(e => e.id !== curEntryId);
-    return others.length ? others[Math.floor(Math.random() * others.length)] : usable[0];
-  }
-  // Sequential: walk forward from the current index, skipping _missing.
-  const idx = pl.entries.findIndex(e => e.id === curEntryId);
-  let nextIdx = (idx + 1) % pl.entries.length;
-  for (let i = 0; i < pl.entries.length; i++) {
-    if (!pl.entries[nextIdx]._missing) return pl.entries[nextIdx];
-    nextIdx = (nextIdx + 1) % pl.entries.length;
-  }
-  return null;
-}
+// `pickNextAutoCycleEntry` now lives in `lib/autopilot_pick.js` (see the
+// re-export block above). It is unchanged — the deck daemon, the mixer/overlay
+// auto-cycle ticks, and the `random` autopilot profile all call the SAME pure
+// picker via that module.
 
 // ── Deck transition durationMs bounds (single source of truth) ─────────
 // The /deck/transition-config POST and the internal
@@ -618,6 +534,46 @@ function buildDeckFallback(saved, failedPattern, reason, defaultPattern, build) 
 }
 
 /**
+ * Boot `--pattern` pin vs restored deck autopilot (operator-intent ruling
+ * 2026-07-07 — full-stack smoke report 20260707_2, anomaly 2).
+ *
+ * An explicit CLI `--pattern` is OPERATOR INTENT: the deck must keep
+ * rendering that pattern until an operator says otherwise. But the deck
+ * pattern autopilot persists its active flag twice — the daemon's
+ * config.yaml `playlist.active` and the per-scene deck_state.yaml
+ * `playlist.autopilot.active` mirror — and a restored-active autopilot used
+ * to resume at boot and cycle the pinned pattern away within one delay
+ * window (10 s in the smoke run).
+ *
+ * Ruling (codex: explicit operator intent beats automation): when the boot
+ * carried a CLI pattern AND either restored flag says the autopilot would
+ * resume, the deck pattern autopilot boots SUSPENDED until an operator
+ * re-enables it (CaptainPad deck ▶ / POST /autopilot {"active":true} / a
+ * timeline cue). The suspension is runtime-only — the on-disk config is
+ * rewritten only by the operator's next explicit toggle. NOTE: `--pattern`
+ * is a required flag and a scene-switch restart re-execs with the same
+ * argv, so EVERY engine boot is a pinned boot — deck cycling always starts
+ * from an explicit operator (or timeline) action, never from restored
+ * automation. Mixer-overlay and deck-overlay auto-cycling are untouched;
+ * only the deck daemon that would replace the pinned pattern is held.
+ *
+ * Pure decision seam (unit-testable without booting the engine). Returns
+ * `{ suspend, reason }` — `suspend` is true only when there is BOTH a CLI
+ * pattern to honour and a restored-active autopilot to suspend.
+ */
+export function bootPatternPinDecision({ cliPattern, daemonActive, deckMirrorActive }) {
+  const pinned = typeof cliPattern === 'string' && cliPattern.length > 0;
+  const wouldResume = !!daemonActive || !!deckMirrorActive;
+  if (!pinned || !wouldResume) return { suspend: false, reason: null };
+  return {
+    suspend: true,
+    reason: daemonActive
+      ? 'restored deck autopilot is ACTIVE'
+      : 'restored deck state mirrors autopilot ACTIVE',
+  };
+}
+
+/**
  * Enumerate every non-internal IPv4 URL the engine is reachable on,
  * for the boot-time "Reachable on:" block.
  *
@@ -676,6 +632,12 @@ function reachableUrls(port) {
 export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, intensityController, globalEffectsController) {
   const { mixer, wasmHost, paramRouter, paramCenter, model } = engineCore;
   const localControlKinds = new Set([1, 2, 3, 6]);
+  // The operator's explicit boot `--pattern`, captured BEFORE the state
+  // restore below mutates opts.pattern to whatever deck actually restored.
+  // Feeds bootPatternPinDecision (deck autopilot boots suspended on a pinned
+  // boot — see that helper's ruling doc).
+  const bootCliPattern = (typeof opts.pattern === 'string' && opts.pattern.length > 0)
+    ? opts.pattern : null;
 
   /**
    * Distinct fixture-group names declared by the loaded model, sorted
@@ -711,7 +673,19 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (paramCenter) {
       // We also broadcast so clients know the new schema bindings
       broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+    } else {
+      // Even without CPC we still need the top-level scope executed once so
+      // the seed below sits on a properly-initialized VM.
+      wasmHost.beginFrame(channel.handle, 0);
     }
+    // Seed every untouched local-control export (slider/toggle/hsvPicker) with
+    // its Pixelblaze default so the serializer broadcasts a REAL v0 for it —
+    // root fix for the MIDI knob-index off-by-k (docs/34 §#1). Runs AFTER the
+    // beginFrame(0) top-level pass and BEFORE applyEntryDefaults (the caller),
+    // so a saved playlist default cleanly overrides the seed. localControls was
+    // reset to {} by the caller immediately before this, so nothing real is
+    // clobbered.
+    channel.seedLocalControlDefaults(wasmHost);
   }
 
   /**
@@ -860,7 +834,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     engineCore.signalPostProcessorBroadcastRef.publish = broadcastWs;
   }
 
-  const stateDir = path.join(patternsDir, '..', 'states', opts.modelName || 'default');
+  // Resolved through lib/state_paths.js so MARSIN_STATE_DIR can redirect a
+  // test-spawned engine's state writes away from the tracked states/ tree.
+  const stateDir = sceneStateDir(path.join(patternsDir, '..'), opts.modelName || 'default');
   const stateManager = new StateManager(stateDir);
   // Named mixer snapshots / look recall (F-A). Lives in <stateDir>/snapshots
   // and reuses the StateManager's atomic writer for torn-write safety.
@@ -871,10 +847,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // pattern-scoped (see param_preset_manager.js + docs/39).
   const paramPresetManager = new ParamPresetManager(stateDir, stateManager);
 
-  // Playlist library lives in simulation/scenes/<scene>/playlists/
-  const playlistsDir = path.join(
-    patternsDir, '..', '..', 'simulation', 'scenes',
-    opts.modelName || 'default', 'playlists'
+  // Playlist library lives in simulation/scenes/<scene>/playlists/ —
+  // resolved through lib/state_paths.js so MARSIN_PLAYLISTS_DIR can redirect
+  // a test-spawned engine's playlist writes away from the tracked tree.
+  const playlistsDir = resolvePlaylistsDir(
+    path.join(patternsDir, '..'), opts.modelName || 'default',
   );
   const playlistManager = new PlaylistManager(playlistsDir, patternsDir);
 
@@ -974,6 +951,88 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   let deckState = stateManager.loadDeckState();
   let globalsState = stateManager.loadGlobalsState();
 
+  // ── Engine-wide settings (auto-save toggle) ──────────────────────────
+  // `autoSave` (default TRUE) is the single choke that gates EVERY
+  // automatic persistence trigger — deck/mixer state, globals, and the
+  // deck's capture-on-entry-switch. When OFF, the engine writes ZERO bytes
+  // to deck_state / mixer_state / globals_state from any auto trigger and
+  // never auto-captures a playlist entry; a restart reverts to the last
+  // save. Explicit content-authoring (playlist CRUD, explicit captures,
+  // snapshots, param presets, GEM slots, timeline/scheduled files,
+  // settings_state.yaml itself, and POST /settings/save-now) still writes.
+  // Persisted in its OWN file so the toggle survives even when it's OFF.
+  const engineSettings = stateManager.loadSettingsState();
+
+  // ── PERFORMANCE MODE (in-memory ONLY — never persisted) ──────────────
+  // A live "show is running" lock. While active:
+  //   • auto-persistence is suppressed (effectiveAutoSave() forces the
+  //     auto-save gate CLOSED regardless of the stored engineSettings.autoSave),
+  //     so nobody's mid-show fader/param tweak silently rewrites the
+  //     pre-show state on disk;
+  //   • structural / persistent-change routes 409 (rejectIfPerformanceMode);
+  //   • a `performance-preshow` snapshot captured on ENTRY holds the exact
+  //     look + globals so EXIT/restore can put the rig back deterministically.
+  // Deliberately NOT persisted: a crash/restart boots active:false, and the
+  // last-saved pre-show disk state is the implicit RESTORE (we never entered
+  // a state where the pre-show wasn't already on disk). Boot cleanup below
+  // removes any stale pre-show snapshot left by a mid-performance crash.
+  const PERF_SNAPSHOT_NAME = 'performance-preshow';
+  const performanceMode = { active: false, enteredAt: null };
+  // The single effective auto-save predicate. Every automatic persistence
+  // choke reads THIS (not engineSettings.autoSave directly) so performance
+  // mode transparently freezes disk writes without touching the operator's
+  // stored autoSave preference.
+  function effectiveAutoSave() {
+    return engineSettings.autoSave && !performanceMode.active;
+  }
+
+  // ── SESSION PARAM RETENTION (feature A) ──────────────────────────────
+  // In-memory, never-persisted per-channel cache of operator-tuned LOCAL
+  // control values, keyed by (channelId → patternName). It keeps a pattern's
+  // tuning alive across A→B→A pattern switches for the whole engine session
+  // even when file auto-save is gated off (autoSave OFF or performance mode) —
+  // ONLY the file write is gated, never in-session continuity. Dies with the
+  // process (restart/crash reverts to last on-disk save). See
+  // lib/session_param_cache.js for the keying rationale.
+  const sessionParamCache = new SessionParamCache();
+
+  // ── DECK DIRTY-CAPTURE FLUSH (feature B) ─────────────────────────────
+  // While effectiveAutoSave() is false, every DECK capture-on-switch that
+  // WOULD have written the outgoing entry's tuned defaults to its playlist file
+  // is instead SNAPSHOTTED here (the exact bytes captureActiveEntryDefaults
+  // would have written, taken from the still-live outgoing handle) and keyed by
+  // playlistName → entryId → defaults-object. When saving becomes enabled again
+  // (POST /settings autoSave:true with perf off, or performance-exit KEEP with
+  // stored autoSave ON) these pending captures are FLUSHED to disk through the
+  // one shared playlist-write path. In-memory only: a crash flushes nothing.
+  // Deck role ONLY — mixer/overlay channels never write playlist files
+  // (2026-07-07 parameter-isolation ruling), so they are never dirty-flagged.
+  const pendingDeckFlush = new Map(); // playlistName -> Map(entryId -> defaults)
+
+  function recordPendingDeckFlush(playlistName, entryId, defaults) {
+    if (!playlistName || !entryId || !defaults) return;
+    let entries = pendingDeckFlush.get(playlistName);
+    if (!entries) {
+      entries = new Map();
+      pendingDeckFlush.set(playlistName, entries);
+    }
+    entries.set(entryId, defaults);
+  }
+
+  // Boot cleanup: performance mode is never persisted, so a live pre-show
+  // snapshot on disk at startup can only mean the engine was SIGKILLed
+  // mid-performance. In that case the disk deck/mixer/globals state IS the
+  // pre-show state (we froze auto-save the moment we entered), so the restore
+  // already happened implicitly — the stale snapshot is dead weight. Delete it
+  // loudly (codex P0 — visible, never silent).
+  if (snapshotManager.has(PERF_SNAPSHOT_NAME)) {
+    snapshotManager.delete(PERF_SNAPSHOT_NAME);
+    console.log(
+      '[PerformanceMode] stale performance-mode pre-show snapshot — engine ' +
+      'restarted mid-performance; disk already holds the pre-show state ' +
+      '(implicit restore). Deleted the orphaned snapshot.');
+  }
+
   // ── Deck transition config ───────────────────────────────────────────
   // Operator picks (deck tab → DECK TRANSITIONS row) for how playlist
   // entry switches on the deck should look:
@@ -997,8 +1056,52 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     ...(deckState && deckState.transitionConfig ? deckState.transitionConfig : {}),
   };
 
+  // ── Deck playlist SLOTS (split playlists — two stacked panes) ──────────
+  // The deck plays exactly ONE pattern (channel.playlist stays the single live
+  // pointer). These SLOTS are stable name bindings the two CaptainPad panes
+  // browse independently; the live pointer moves between them. `primary` = pane
+  // 1 (as today), `secondary` = an optional pane 2, `splitRatio` = the divider
+  // position. Persisted per-scene in deck_state.yaml under `playlistSlots` (see
+  // saveAllState). Boot-validated below (unbound-null / dead-secondary / bad
+  // ratio) before first use.
+  const DECK_SPLIT_RATIO_MIN = 0.15;
+  const DECK_SPLIT_RATIO_MAX = 0.85;
+  const DECK_SPLIT_RATIO_DEFAULT = 0.5;
+  const deckPlaylistSlots = {
+    primary: null,
+    secondary: null,
+    splitRatio: DECK_SPLIT_RATIO_DEFAULT,
+    ...(deckState && deckState.playlistSlots ? deckState.playlistSlots : {}),
+  };
+
+  // Keep pane 1 (primary) following any live playlist-name change that is NOT
+  // the secondary. Called at the two choke points where channel.playlist.name
+  // changes (instant load + transition onComplete), so timeline cues / legacy
+  // POST /deck/playlist / autopilot advances all keep pane 1 pointed at the
+  // deck's main list — and structurally prevents both panes binding one name.
+  function noteDeckLivePlaylist(name) {
+    if (name && name !== deckPlaylistSlots.secondary) {
+      deckPlaylistSlots.primary = name;
+    }
+  }
+
+  // Gated globals persistence. Every automatic write of globals_state.yaml
+  // goes through here so the auto-save toggle has ONE choke point (mirrors
+  // saveAllState for deck/mixer). `withParams` re-snapshots the ParamCenter
+  // canonical state into globalsState.params before the write — call sites
+  // that only touched a dimmer/effect/blackout pass false (matching the
+  // pre-existing `saveGlobalsState(globalsState)` no-paramCenter calls);
+  // sites that changed shared params (or want the freshest snapshot) pass
+  // true. When autoSave is OFF this is a no-op — nothing hits disk.
+  function saveGlobals(withParams = false) {
+    if (!effectiveAutoSave()) return;
+    stateManager.saveGlobalsState(globalsState, withParams ? paramCenter : undefined);
+  }
+
   if (paramCenter) {
-    paramCenter.saveHook = () => stateManager.saveGlobalsState(globalsState, paramCenter);
+    // ParamCenter's debounced save() funnels here; gated so shared-param
+    // writes stop hitting globals_state.yaml when auto-save is OFF.
+    paramCenter.saveHook = () => saveGlobals(true);
   }
 
   try {
@@ -1013,17 +1116,99 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // If validation throws (e.g. old yaml references a removed effect),
   // we leave the defaults in place and log — never silently fall back.
   const globalEffectSlotManager = engineCore.globalEffectSlotManager || null;
+  // ── VSN1 MIDI-layout deploy hook (effects_v2_midi_layout, Track E) ────
+  // The engine is the source of truth for the 32-slot layout. When an effect
+  // is ADDED or REMOVED from a slot (assign/clear/rename/recolor/reorder or a
+  // whole-config replace) the slot manager emits a layout-changed event
+  // carrying the AFFECTED PAGE(S); this hook writes the layout JSON and — WHEN
+  // CONFIG-GATED ON — deploys ONLY the changed page(s) to the VSN1 via the
+  // pinned single-page CLI (`--from-engine --page N --live`). Edits are
+  // DEBOUNCED (coalesced per page) and the deploy is SERIALIZED (COM12 is a
+  // single-holder port — never two overlapping flashes). Default OFF so tests/
+  // dev never flash hardware. Value/mode/active changes are runtime feedback,
+  // never a layout deploy.
+  let vsn1DeployStatus = null;
   if (globalEffectSlotManager) {
+    const { hook, status } = createLayoutDeployHook({
+      stateDir,
+      engineConfig: engineCore.engineConfig,
+      broadcast: broadcastWs,
+    });
+    vsn1DeployStatus = status;
+    globalEffectSlotManager.setLayoutChangedHook((evt) => {
+      // Fire-and-report: a deploy failure fails loud into the status flag +
+      // WS broadcast (the hook handles that) but must not crash the request
+      // that changed the layout. No silent retry.
+      Promise.resolve(hook(evt)).catch((e) => {
+        console.error(`[VSN1] layout deploy failed: ${e.message}`);
+      });
+    });
     const persistedSlots = stateManager.loadGlobalEffectSlots();
-    if (persistedSlots && Array.isArray(persistedSlots.slots)) {
+    if (persistedSlots) {
       try {
-        validateSlotsConfig(persistedSlots.slots);
-        globalEffectSlotManager.setSlots(persistedSlots.slots);
-        console.log(`  ✅ Global effect slots: restored ${persistedSlots.slots.length} from disk`);
+        // Migrate to the canonical v3 named-BANKS shape (v1 top-level slots[] →
+        // one 'edit' bank; v2 profiles → edit/play banks; v3 validated + passed
+        // through, zero-banks recovers to Default; garbage throws). Then restore
+        // EVERY bank at once — setBanks validates each bank's slots (fail-loud
+        // P0) and is deploy-silent (boot never flashes on restore).
+        const migrated = migrateSlotFile(persistedSlots);
+        globalEffectSlotManager.setBanks(migrated.banks, migrated.activeBankId);
+        if (Number.isInteger(migrated.effectsPage)) {
+          try { globalEffectSlotManager.setEffectsPage(migrated.effectsPage); }
+          catch (e) { console.warn(`[GlobalEffectSlots] bad persisted effectsPage: ${e.message}`); }
+        }
+        const meta = globalEffectSlotManager.getBanksMeta();
+        const ids = meta.banks.map(b => b.id).join(', ');
+        console.log(`  ✅ Global effect slots: restored banks [${ids}] from disk (page ${globalEffectSlotManager.getEffectsPage()}, active bank ${meta.activeBankId})`);
       } catch (e) {
         console.warn(`[GlobalEffectSlots] persisted config invalid, keeping defaults: ${e.message}`);
       }
     }
+
+    // ── DEPLOY-ON-LOAD ────────────────────────────────────────────────────
+    // Sync the VSN1 to the CURRENT layout on boot, so a fresh stack shows the
+    // right names/colors/grid without waiting for an edit. Only fires when
+    // deploy is enabled (config `vsn1.deployLayout`) AND not opted out
+    // (`vsn1.deployOnBoot`, default true) — so tests + dev-without-hardware
+    // never flash. The hook debounces/serializes; boot restore itself stays
+    // deploy-silent (emitLayout false above) — this is the single, explicit
+    // boot deploy. Populated pages only (empty pages have nothing to show).
+    const vsn1Cfg = (engineCore.engineConfig && engineCore.engineConfig.vsn1) || {};
+    if (isLayoutDeployEnabled(engineCore.engineConfig) && vsn1Cfg.deployOnBoot !== false) {
+      const pages = globalEffectSlotManager.requestFullDeploy();
+      if (pages.length) {
+        console.log(`  🎛  VSN1 deploy-on-load: syncing page(s) ${pages.join(', ')} to the device.`);
+      }
+    }
+  }
+
+  // Persist slot bindings + the engine-owned page in one write. Single
+  // helper so every GEM mutation path saves the page alongside the slots
+  // (effects_v2). No-op when the slot manager is absent.
+  function persistGlobalEffectSlots() {
+    if (!globalEffectSlotManager) return;
+    stateManager.saveGlobalEffectSlots({
+      banks: globalEffectSlotManager.getBanks(),
+      activeBankId: globalEffectSlotManager.getActiveBankId(),
+      effectsPage: globalEffectSlotManager.getEffectsPage(),
+    });
+  }
+
+  // Broadcast the named-BANKS meta over /ws/control (effects_v2 v3). Fired on
+  // any bank switch/create/delete/rename AND replayed on connect so every
+  // surface (CaptainPad's bank switcher, the VSN1 sb_2) mirrors the SAME
+  // ordered list + active id — single source of truth. Payload matches the
+  // frozen contract: { type:'effectBanks', banks:[{id,name}], activeBankId,
+  // source? }. `source` names the origin of a switch (audit trail).
+  function broadcastEffectBanks(source) {
+    if (!globalEffectSlotManager) return;
+    const meta = globalEffectSlotManager.getBanksMeta();
+    broadcastWs({
+      type: 'effectBanks',
+      banks: meta.banks.map(b => ({ id: b.id, name: b.name })),
+      activeBankId: meta.activeBankId,
+      source: typeof source === 'string' ? source : undefined,
+    });
   }
 
   // ── Scheduler service (docs/31_scheduled_tasks.md v3) ───────────────
@@ -1253,7 +1438,141 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     };
   }
 
+  // Deck capture-on-switch flag. Set true by the deck control-write paths
+  // (legacy /control, POST /deck/channel/control, WS setControl) so that the
+  // NEXT deck entry switch knows the operator tuned this entry's params and
+  // captures them into the outgoing entry's defaults before loadPlaylistEntry
+  // wipes localControls. Deck role ONLY — mixer/overlay writes never set it
+  // (their params are ephemeral, never auto-captured). Transient, never saved.
+  function markDeckParamsTouched() {
+    const deckCh = mixer.getDeckChannel && mixer.getDeckChannel();
+    if (deckCh) deckCh._paramsTouchedSinceLoad = true;
+  }
+
+  // ── Per-control touched tracking (feature A) ─────────────────────────
+  // Records the exact LOCAL control ids an OPERATOR tuned since the current
+  // pattern loaded, so the session cache stores only genuine operator intent —
+  // NOT the seeded pattern-code defaults / applied entry defaults that also
+  // populate channel.localControls. Called ONLY from the operator control-write
+  // routes (never from applyEntryDefaults, which reuses paramRouter internally),
+  // so default-application never pollutes the touched set. Reset on every load
+  // (see loadPlaylistEntry) alongside _paramsTouchedSinceLoad.
+  function markChannelParamTouched(channelId, controlId) {
+    if (!channelId || controlId === undefined || controlId === null) return;
+    const ch = mixer.getChannelAnyRole
+      ? mixer.getChannelAnyRole(channelId)
+      : mixer.getChannel(channelId);
+    if (!ch) return;
+    if (!ch._touchedControlIds) ch._touchedControlIds = new Set();
+    ch._touchedControlIds.add(controlId);
+  }
+
+  // Collect the operator-touched local controls of a channel as a plain
+  // { controlId: {v0,v1,v2} } map (reads live values from channel.localControls).
+  // Returns null when nothing was touched, so an untouched switch-away is a
+  // no-op store that never erases a pattern's prior cached intent.
+  function collectTouchedControls(channel) {
+    const touched = channel && channel._touchedControlIds;
+    if (!touched || touched.size === 0) return null;
+    const out = {};
+    for (const id of touched) {
+      const cv = channel.localControls && channel.localControls[id];
+      if (cv) out[id] = { v0: cv.v0, v1: cv.v1, v2: cv.v2 };
+    }
+    return Object.keys(out).length ? out : null;
+  }
+
+  // Session-cache KEY for a channel slot. Prefer the playlist ENTRY id (so two
+  // playlist entries that happen to share a pattern keep INDEPENDENT session
+  // tuning — this is the per-slot-preset contract the landed playlist_api test
+  // asserts), falling back to the pattern NAME when the channel has no active
+  // playlist entry (a pure direct /pattern set with no playlist). This DEVIATES
+  // from the "pattern name beats entry id" hint in the task: keying by pattern
+  // would make same-pattern entries alias each other and break that test.
+  function sessionKeyFor(channel) {
+    const entryId = channel && channel.playlist && channel.playlist.activeEntryId;
+    return entryId || (channel && channel.pattern) || null;
+  }
+
+  // Store the OUTGOING slot's touched tuning into the session cache BEFORE a
+  // localControls wipe. UNCONDITIONAL (independent of effectiveAutoSave) — this
+  // is in-session continuity, not a file write. `key` identifies the slot
+  // (entry id or pattern name); computed from the still-outgoing channel state.
+  function stowSessionParams(channel, key) {
+    if (!channel || !key) return;
+    const controls = collectTouchedControls(channel);
+    if (controls) sessionParamCache.store(channel.id, key, controls);
+  }
+
+  // Deck capture-on-switch, file-writeback side (shared by the instant AND the
+  // transition swap paths). DECK channel + touched-since-load + active entry:
+  //   • auto-save ON  → write the outgoing entry's live tuning straight to its
+  //     playlist file (the "night of deck tuning lost on switch" fix).
+  //   • auto-save OFF → SNAPSHOT it into pendingDeckFlush (feature B) so it
+  //     lands the moment saving is re-enabled.
+  // Reads the STILL-LIVE outgoing handle, so call BEFORE the wipe with
+  // channel.pattern/playlist still pointing at the outgoing entry. Mixer/overlay
+  // channels are never captured to playlist files (2026-07-07 isolation ruling).
+  function captureOrDeferOutgoingDeckEntry(channel) {
+    if (!(channel.id === mixer.baseChannelId
+        && channel._paramsTouchedSinceLoad
+        && channel.playlist && channel.playlist.name && channel.playlist.activeEntryId)) {
+      return;
+    }
+    if (effectiveAutoSave()) {
+      try {
+        captureActiveEntryDefaults(channel);
+      } catch (err) {
+        console.error(
+          `[DeckCapture] failed to auto-capture outgoing deck entry ` +
+          `'${channel.playlist.name}/${channel.playlist.activeEntryId}' on switch: ` +
+          `${err && err.message}`);
+      }
+    } else {
+      try {
+        const snap = playlistManager.captureDefaults(channel, wasmHost, paramCenter);
+        recordPendingDeckFlush(channel.playlist.name, channel.playlist.activeEntryId, snap);
+      } catch (err) {
+        console.error(
+          `[DeckFlush] failed to snapshot deferred deck capture for ` +
+          `'${channel.playlist.name}/${channel.playlist.activeEntryId}' on switch: ` +
+          `${err && err.message}`);
+      }
+    }
+  }
+
+  // Overlay the session cache onto a freshly-loaded pattern — the LAST word in
+  // the precedence stack (pattern defaults → entry defaults → session cache).
+  // Mirrors playlistManager.applyEntryDefaults' filtering: resolves each cached
+  // control id against the loaded pattern's exports, skips missing ids
+  // (tolerate mismatches, never crash) and CPC-owned / blocked controls, and
+  // applies through the SAME paramRouter path. Call AFTER applyEntryDefaults +
+  // finalizeCpcValues with channel.pattern set to the NEW pattern.
+  function applySessionParamOverlay(channel, key) {
+    if (!channel || !key || !channel.handle) return;
+    const cached = sessionParamCache.get(channel.id, key);
+    if (!cached) return;
+    const exports = wasmHost.getExports(channel.handle) || [];
+    const byId = new Map();
+    for (const e of exports) byId.set(e.id, e);
+    for (const [idStr, cv] of Object.entries(cached)) {
+      // control ids are numbers; localControls / exports key on the number.
+      const id = Number(idStr);
+      const exp = byId.get(id);
+      if (!exp) continue; // stale id — pattern export table shifted; tolerate.
+      if (paramCenter && paramCenter.isSharedExport(channel.id, exp.name)) continue;
+      if (paramCenter && paramCenter.getBlockedIds(channel.id).has(id)) continue;
+      paramRouter.setChannelControl(channel.id, id, cv.v0, cv.v1, cv.v2);
+    }
+  }
+
   function saveAllState() {
+    // AUTO-SAVE GATE (single choke for ~80 auto deck/mixer persistence
+    // triggers). When OFF, zero bytes hit deck_state/mixer_state from any
+    // automatic trigger; a restart reverts to the last save. Explicit
+    // content-authoring routes never call saveAllState — they persist their
+    // own files directly, so they keep working when auto-save is OFF.
+    if (!effectiveAutoSave()) return;
     stateManager.saveMixerState(mixer);
     stateManager.saveDeckState(mixer, {
       transitionConfig: { ...deckTransitionConfig },
@@ -1271,7 +1590,29 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         shuffle: !!(mixer.deckOverlayAutopilot && mixer.deckOverlayAutopilot.shuffle),
         ...autoGroupFields(mixer.deckOverlayAutopilot),
       },
+      // Split-playlist SLOTS: persist the two name bindings + the divider ratio
+      // per-scene so the panes + split survive an engine restart. Plain scalars
+      // (name strings / null / a number) — restored + validated at boot.
+      playlistSlots: {
+        primary: deckPlaylistSlots.primary,
+        secondary: deckPlaylistSlots.secondary,
+        splitRatio: deckPlaylistSlots.splitRatio,
+      },
     });
+  }
+
+  // Confirm a DECK LOCAL-PARAM write was PERSISTED, so the deck's "✓ SAVED"
+  // flash fires honestly. Emitted ONLY when auto-save actually wrote to disk
+  // (engineSettings.autoSave) — with auto-save OFF a deck tweak is NOT persisted,
+  // so we must never claim it was (codex P0 — no false confirmation; the badge
+  // simply stays hidden). Scoped to the deck param-write paths (NOT saveAllState,
+  // which fires on ~80 unrelated triggers) so the flash means exactly "your deck
+  // tuning was saved". Call AFTER saveAllState().
+  function broadcastDeckParamsSaved() {
+    if (!effectiveAutoSave()) return;
+    const deckCh = mixer.getDeckChannel && mixer.getDeckChannel();
+    if (!deckCh) return;
+    broadcastWs({ type: 'deckParamsSaved', channelId: deckCh.id });
   }
 
   function getReplayableLocalExport(channel, controlId) {
@@ -1281,63 +1622,142 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return exp;
   }
 
-  // ── Debounced per-channel auto-capture ───────────────────────────────
-  // Every control change schedules a capture of the active playlist entry's
-  // defaults 500 ms after the LAST change. Coalesces fast slider drags into
-  // one disk write and one WS broadcast. The broadcast lets every open client
-  // (deck + mixer) update its UI in lockstep.
-  const captureTimers = new Map();
-  const CAPTURE_DEBOUNCE_MS = 500;
+  // ── Playlist-entry defaults: capture policy ───────────────────────────
+  // The old debounced per-channel AUTO-capture (every control change on ANY
+  // channel wrote live values into the active entry's `defaults` 500 ms after
+  // the last tweak) is REMOVED — operator ruling 2026-07-07 (mixer channel
+  // parameter isolation): playlist files are shared presets; a MIXER/overlay
+  // channel's live tweaking must NEVER silently rewrite them, and one
+  // channel's tweaks must never leak into a sibling via the shared on-disk
+  // entry.
+  //
+  // Entry defaults change through TWO paths now:
+  //   1. Explicit capture routes (POST /deck/playlist/capture,
+  //      POST /mixer/channels/:id/playlist/capture) — any role, on demand.
+  //   2. DECK-ONLY capture-on-entry-switch (auto-save wave): when auto-save
+  //      is ON and the operator tuned the deck since the entry loaded, the
+  //      NEXT deck entry switch flushes that tuning into the OUTGOING entry's
+  //      defaults (see the block at the top of loadPlaylistEntry). This is
+  //      the fix for "a night of deck tuning lost on pattern switch". It is
+  //      scoped to the deck channel precisely so the shared-preset isolation
+  //      ruling still holds for mixer/overlay channels.
+  // Reads are untouched: loads still replay entry defaults, and the MIDI
+  // knob-press reset still targets them.
 
   /**
    * Capture current channel state as the entry.defaults of the playlist's
-   * currently active entry. Persists to disk.
+   * currently active entry. Persists to disk. EXPLICIT operator action only —
+   * never wired to a control-write path.
    */
   function captureActiveEntryDefaults(channel) {
     if (!channel.playlist || !channel.playlist.name || !channel.playlist.activeEntryId) {
       throw new Error('Channel has no active playlist entry');
     }
-    const playlist = playlistManager.load(channel.playlist.name);
-    if (!playlist) throw new Error(`Playlist not found: ${channel.playlist.name}`);
-    const entry = playlist.entries.find(e => e.id === channel.playlist.activeEntryId);
-    if (!entry) throw new Error(`Active entry not found: ${channel.playlist.activeEntryId}`);
-    entry.defaults = playlistManager.captureDefaults(channel, wasmHost, paramCenter);
+    const defaults = playlistManager.captureDefaults(channel, wasmHost, paramCenter);
+    writeEntryDefaults(channel.playlist.name, channel.playlist.activeEntryId, defaults);
+    return defaults;
+  }
+
+  // The single playlist-file writeback path: load a playlist, set ONE entry's
+  // defaults, and persist. Shared by the live capture-on-switch, the explicit
+  // capture routes (via captureActiveEntryDefaults) AND the dirty-flush (feature
+  // B) so there is exactly ONE place that mutates entry.defaults on disk.
+  function writeEntryDefaults(playlistName, entryId, defaults) {
+    const playlist = playlistManager.load(playlistName);
+    if (!playlist) throw new Error(`Playlist not found: ${playlistName}`);
+    const entry = playlist.entries.find(e => e.id === entryId);
+    if (!entry) throw new Error(`Active entry not found: ${entryId}`);
+    entry.defaults = defaults;
     playlistManager.save(playlist);
     return entry.defaults;
   }
 
-  function scheduleEntryCapture(channelId) {
-    if (!channelId) return;
-    // Locked channels intentionally do NOT auto-capture. Param edits are
-    // still applied to the live WASM handle (so the operator can tweak a
-    // show), but the playlist defaults on disk stay frozen until the user
-    // unlocks and explicitly chooses save or discard.
-    const ch0 = mixer.getChannel(channelId);
-    if (ch0 && ch0.locked) return;
-    const existing = captureTimers.get(channelId);
-    if (existing) clearTimeout(existing);
-    captureTimers.set(channelId, setTimeout(() => {
-      captureTimers.delete(channelId);
-      const ch = mixer.getChannel(channelId);
-      if (!ch || !ch.playlist || !ch.playlist.activeEntryId) return;
-      // Defensive re-check: lock may have been engaged inside the debounce
-      // window. Never let a stale timer write into a locked channel.
-      if (ch.locked) return;
+  // Flush every pending deck dirty-capture (feature B) to its playlist file when
+  // saving becomes enabled again. Also captures the CURRENTLY-loaded deck entry
+  // live if it was touched (so enabling auto-save lands the whole session on
+  // disk without needing one more switch). Reuses writeEntryDefaults — the same
+  // path the live capture-on-switch uses. Entries deleted meanwhile are
+  // tolerated (skipped). Returns the count of entries written. Fires a single
+  // honest deckParamsSaved on any real write.
+  function flushPendingDeckCaptures() {
+    // 1. Fold the currently-loaded deck entry's live tuning into the pending
+    //    set if the operator touched it this session (B3).
+    const deckCh = mixer.getDeckChannel && mixer.getDeckChannel();
+    if (deckCh
+        && deckCh._paramsTouchedSinceLoad
+        && deckCh.playlist && deckCh.playlist.name && deckCh.playlist.activeEntryId) {
       try {
-        const defaults = captureActiveEntryDefaults(ch);
-        broadcastWs({
-          type: 'playlistEntryCaptured',
-          channelId,
-          playlist: ch.playlist.name,
-          entryId: ch.playlist.activeEntryId,
-          defaults,
-        });
-      } catch (e) {
-        // Active entry may have been removed mid-edit, etc. Surface to the
-        // operator log but never crash the request handler.
-        console.warn('[Playlist] Auto-capture skipped:', e.message);
+        const snap = playlistManager.captureDefaults(deckCh, wasmHost, paramCenter);
+        recordPendingDeckFlush(deckCh.playlist.name, deckCh.playlist.activeEntryId, snap);
+        // The live entry is now queued for a real write — it is no longer
+        // "touched but unsaved", so a subsequent switch must not re-capture it.
+        deckCh._paramsTouchedSinceLoad = false;
+      } catch (err) {
+        console.error(`[DeckFlush] failed to snapshot live deck entry on flush: ${err && err.message}`);
       }
-    }, CAPTURE_DEBOUNCE_MS));
+    }
+    // 2. Write every pending snapshot to disk through the shared path.
+    let wrote = 0;
+    for (const [plName, entries] of pendingDeckFlush) {
+      for (const [entryId, defaults] of entries) {
+        try {
+          writeEntryDefaults(plName, entryId, defaults);
+          wrote++;
+        } catch (err) {
+          // Entry/playlist deleted since the skip — tolerate, log loudly.
+          console.error(`[DeckFlush] skipped stale pending capture '${plName}/${entryId}': ${err && err.message}`);
+        }
+      }
+    }
+    pendingDeckFlush.clear();
+    if (wrote > 0) broadcastDeckParamsSaved();
+    return wrote;
+  }
+
+  // Summarize the PENDING DIRTY deck tuning so the performance→edit exit sheet
+  // can ask, warmly and specifically, whether to save. Counts the deferred
+  // playlist-entry captures (pendingDeckFlush) PLUS the currently-loaded deck
+  // entry if the operator touched it this session — the exact set
+  // flushPendingDeckCaptures() would write, so the number the operator sees is
+  // the number that would land on disk. Small payload: a count + one thin row
+  // per entry ({playlist, entryId, label}); label prefers the entry's label and
+  // falls back to its pattern name. Deleted playlists/entries are tolerated
+  // (null label, row kept). Cheap-path only — called on GET /performance-mode
+  // and the (infrequent) performanceMode broadcast/replay, never per render.
+  function computeDirtyDeckState() {
+    // Dedupe by (playlist, entryId) — the live entry may also already be pending.
+    const rows = new Map(); // `${playlist} ${entryId}` -> { playlist, entryId }
+    for (const [plName, entries] of pendingDeckFlush) {
+      for (const entryId of entries.keys()) {
+        rows.set(`${plName} ${entryId}`, { playlist: plName, entryId });
+      }
+    }
+    const deckCh = mixer.getDeckChannel && mixer.getDeckChannel();
+    if (deckCh
+        && deckCh._paramsTouchedSinceLoad
+        && deckCh.playlist && deckCh.playlist.name && deckCh.playlist.activeEntryId) {
+      rows.set(`${deckCh.playlist.name} ${deckCh.playlist.activeEntryId}`, {
+        playlist: deckCh.playlist.name,
+        entryId: deckCh.playlist.activeEntryId,
+      });
+    }
+    // Resolve labels, loading each distinct playlist file at most once.
+    const plCache = new Map();
+    const dirtyEntries = [];
+    for (const { playlist, entryId } of rows.values()) {
+      let label = null;
+      try {
+        if (!plCache.has(playlist)) plCache.set(playlist, playlistManager.load(playlist) || null);
+        const pl = plCache.get(playlist);
+        const entry = pl && pl.entries.find(e => e.id === entryId);
+        if (entry) label = entry.label || entry.pattern || null;
+      } catch (err) {
+        // Stale pending capture (playlist deleted mid-session) — keep the row
+        // with a null label rather than crash the summary.
+      }
+      dirtyEntries.push({ playlist, entryId, label });
+    }
+    return { dirtyCount: dirtyEntries.length, dirtyEntries };
   }
 
   /**
@@ -1374,82 +1794,32 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   }
 
   /**
-   * Per-pattern param SHARING (operator request, feat/optimize_channels).
-   *
-   * A pattern's exported SLIDERS/params are conceptually owned by the
-   * (playlist, pattern) pair, NOT by the one channel the operator happened
-   * to touch. So when a control is written on the SOURCE channel, mirror that
-   * SAME export onto every OTHER live channel currently running the SAME
-   * pattern from the SAME playlist — the deck base channel, every mixer
-   * overlay, AND every deck overlay.
-   *
-   * Keying: matched on (channel.playlist.name === L) AND (channel.pattern === P)
-   * via mixer.channelsRunningPattern. The on-disk source of truth is each
-   * matched channel's playlist-entry `defaults` (captured by
-   * scheduleEntryCapture below), so the shared value ALSO lands on disk and is
-   * re-applied when any channel later (re)loads that (playlist, pattern).
-   *
-   * Mapping is by export NAME, not by raw controlId: each channel has its own
-   * WASM handle, so we resolve the source export's name, then find the
-   * same-named export on each target and write THROUGH paramRouter
-   * (setChannelControl), which already rejects CPC-owned / CPC-blocked /
-   * non-local controls per target. This guarantees we only ever propagate the
-   * pattern's LOCAL sliders/params — never channel-level things (fader, level,
-   * hue, mode, faderMax) which are not pattern exports and never reach here.
-   *
-   * Returns the array of channel ids that actually received the value (so the
-   * caller can schedule their entry-capture too). The source channel is never
-   * in the result — the caller already wrote + captured it.
-   */
-  function propagatePatternParam(sourceChannelId, controlId, v0, v1, v2) {
-    const source = mixer.getChannel(sourceChannelId)
-      || (mixer.getDeckOverlay && mixer.getDeckOverlay(sourceChannelId));
-    return propagatePatternParamWith({
-      source,
-      sourceChannelId,
-      controlId,
-      v0, v1, v2,
-      mixer,
-      wasmHost,
-      paramRouter,
-    });
-  }
-
-  /**
-   * Convenience wrapper used by the runtime control-write routes: write the
-   * control on the source channel's OWN capture+dirty pipeline, then propagate
-   * the same export to every sibling channel running the same (playlist,
-   * pattern), scheduling their capture too. The source channel's own write +
-   * scheduleEntryCapture is done by the caller BEFORE this is invoked.
-   */
-  function propagateAndCapturePatternParam(sourceChannelId, controlId, v0, v1, v2) {
-    const applied = propagatePatternParam(sourceChannelId, controlId, v0, v1, v2);
-    for (const id of applied) {
-      scheduleEntryCapture(id);
-      markChannelDirtyIfLocked(id);
-    }
-    return applied;
-  }
-
-  /**
    * Load a playlist entry into an EXISTING channel: compile pattern, swap
    * handle, apply entry defaults, and let CPC have the last word. Updates
    * channel.playlist.activeEntryId + cursor.
    */
-  function loadPlaylistEntry(channel, playlistName, entryId) {
+  function loadPlaylistEntry(channel, playlistName, entryId, { stowOutgoing = true } = {}) {
+    // ── SESSION PARAM RETENTION: stow the outgoing pattern (feature A) ──
+    // Before we tear down the outgoing entry (line below wipes
+    // channel.localControls), snapshot the OPERATOR-TOUCHED local controls of
+    // the STILL-LIVE outgoing pattern into the in-memory session cache —
+    // UNCONDITIONALLY (independent of auto-save), for ALL channels. This is
+    // in-session continuity, not a file write: it is what makes A→B→A restore
+    // A's tuning even with file auto-save OFF. `stowOutgoing:false` skips this
+    // for the mixer/overlay playlist-SWAP path (the layer's cache is cleared
+    // and starts fresh on a playlist change — see the scoping rule there).
+    if (stowOutgoing) stowSessionParams(channel, sessionKeyFor(channel));
+    // Deck capture-on-switch (file writeback when auto-save ON, deferred
+    // pending-flush snapshot when OFF). Reads the STILL-LIVE outgoing handle
+    // (destroyed a few lines down), so it must happen here at the top.
+    captureOrDeferOutgoingDeckEntry(channel);
+
     const playlist = playlistManager.load(playlistName);
     if (!playlist) throw new Error(`Playlist not found: ${playlistName}`);
     const idx = playlist.entries.findIndex(e => e.id === entryId);
     if (idx < 0) throw new Error(`Entry not found in ${playlistName}: ${entryId}`);
     const entry = playlist.entries[idx];
     if (entry._missing) throw new Error(`Pattern missing for entry ${entryId}: ${entry.pattern}`);
-
-    // Cancel any pending auto-capture targeting the PREVIOUS active entry —
-    // we don't want a stale timer to write old values into the entry we just
-    // left behind (which would then overwrite the on-disk defaults captured
-    // at switch time).
-    const pending = captureTimers.get(channel.id);
-    if (pending) { clearTimeout(pending); captureTimers.delete(channel.id); }
 
     const src = loadPattern(patternsDir, entry.pattern);
     const comp = wasmHost.compile(src);
@@ -1463,6 +1833,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
     playlistManager.applyEntryDefaults(channel, entry, wasmHost, paramRouter, paramCenter);
     finalizeCpcValues(channel);
+    // SESSION PARAM RETENTION overlay (feature A): the LAST word in the
+    // precedence stack — pattern defaults → entry defaults → session cache. If
+    // this SLOT (entry id) was tuned earlier in the session, re-apply that
+    // tuning so A→B→A restores A exactly (even with file auto-save OFF). Keyed
+    // by the INCOMING entry id (channel.playlist.activeEntryId isn't updated
+    // until the cursor block below, so pass entryId explicitly). Loads with an
+    // empty cache (fresh session, restored layer) are a no-op.
+    applySessionParamOverlay(channel, entryId);
 
     // Update assignment cursor
     channel.playlist = channel.playlist || {};
@@ -1488,11 +1866,24 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // new entry's own defaults are now the canonical reference, and any
     // edits made in the previous entry are no longer relevant here.
     channel._dirty = false;
+    // The (possibly-captured) outgoing entry's tuning is now flushed; the
+    // freshly-loaded entry starts un-touched. Cleared on EVERY load (deck or
+    // not) so the flag can never carry across a switch and cause a stale
+    // capture on a later, untouched swap.
+    channel._paramsTouchedSinceLoad = false;
+    // Per-control operator-touched set resets with the load — the session
+    // overlay we just applied is NOT counted as operator intent (the cache
+    // already holds those values and merges across visits), so only fresh
+    // operator writes on the new pattern will re-populate it.
+    if (channel._touchedControlIds) channel._touchedControlIds.clear();
 
     // Push the entry's modulations into the ModulationController if this
     // load lands on the deck channel.
     if (mixer.getDeckChannel && mixer.getDeckChannel()?.id === channel.id) {
       pushActiveEntryToModulation();
+      // Split-playlist choke point (instant path): keep pane 1 (primary)
+      // following the live playlist name unless it's the secondary slot.
+      noteDeckLivePlaylist(playlistName);
     }
 
     return { entry, index: idx, total: playlist.entries.length };
@@ -1743,17 +2134,24 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       throw err;
     }
 
+    // ── SESSION PARAM RETENTION + deck capture on the TRANSITION path ──
+    // The transition-enabled deck swap bypasses loadPlaylistEntry (the wipe
+    // happens later in onComplete), so we stow the outgoing pattern's touched
+    // tuning into the session cache AND run the deck capture-on-switch HERE,
+    // while channel.pattern/localControls still reference the OUTGOING entry
+    // (the mixer reassigns channel.pattern to the new pattern during promotion,
+    // so onComplete is too late to key the cache correctly). This closes the
+    // previously-documented gap where crossfade-enabled swaps lost both the
+    // session continuity and the auto-capture. Deck-only path by construction.
+    stowSessionParams(channel, sessionKeyFor(channel));
+    captureOrDeferOutgoingDeckEntry(channel);
+
     const playlist = playlistManager.load(playlistName);
     if (!playlist) throw new Error(`Playlist not found: ${playlistName}`);
     const idx = playlist.entries.findIndex(e => e.id === entryId);
     if (idx < 0) throw new Error(`Entry not found in ${playlistName}: ${entryId}`);
     const entry = playlist.entries[idx];
     if (entry._missing) throw new Error(`Pattern missing for entry ${entryId}: ${entry.pattern}`);
-
-    // Pre-cancel any pending auto-capture targeting the PREVIOUS entry,
-    // same reasoning as in loadPlaylistEntry.
-    const pending = captureTimers.get(channel.id);
-    if (pending) { clearTimeout(pending); captureTimers.delete(channel.id); }
 
     // ── Ping-pong handle reuse ──────────────────────────────────────
     // The mixer keeps the previously-active deck handle alive in an
@@ -1881,11 +2279,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           paramCenter.registerChannel(channel.id, channel.handle, wasmHost.getExports(channel.handle));
           wasmHost.beginFrame(channel.handle, 0);
           broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+        } else {
+          wasmHost.beginFrame(channel.handle, 0);
         }
+        // Seed Pixelblaze defaults for untouched local controls BEFORE the
+        // saved defaults replay (same ordering as onChannelCompiled) so every
+        // slider broadcasts a real v0 on the transition path too (docs/34 §#1).
+        channel.seedLocalControlDefaults(wasmHost);
         // Replay per-entry defaults onto the now-installed base handle,
         // then let CPC have the last word.
         playlistManager.applyEntryDefaults(channel, entry, wasmHost, paramRouter, paramCenter);
         finalizeCpcValues(channel);
+        // SESSION PARAM RETENTION overlay (feature A) — LAST word in the
+        // precedence stack, same as the instant path. Keyed by the INCOMING
+        // entry id (the closure's `entryId`).
+        applySessionParamOverlay(channel, entryId);
         // Clean up the shadow CPC registration.
         if (paramCenter && paramCenter.unregisterChannel) {
           paramCenter.unregisterChannel('__deck_swap__');
@@ -1897,10 +2305,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         channel.playlist.cursor = idx;
         channel.playlist.autopilot = channel.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
         channel._dirty = false;
+        // The outgoing entry was already captured/deferred + stowed at the TOP
+        // of this function (before the swap was triggered). Clear the touched
+        // flag + per-control set here so the freshly-loaded entry starts clean
+        // and the session overlay we just applied is not mistaken for operator
+        // intent (the cache already holds those values, keyed by pattern).
+        channel._paramsTouchedSinceLoad = false;
+        if (channel._touchedControlIds) channel._touchedControlIds.clear();
 
         // Refresh modulation context for the new entry now that the
         // deck channel's handle and playlist tuple reflect the swap.
         pushActiveEntryToModulation();
+        // Split-playlist choke point (transition path): keep pane 1 (primary)
+        // following the live playlist name unless it's the secondary slot. This
+        // runs BEFORE saveAllState so the persisted slots reflect the swap.
+        noteDeckLivePlaylist(playlistName);
 
         opts.pattern = channel.pattern;
         saveAllState();
@@ -2084,11 +2503,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (saved.playlist) ch.playlist = saved.playlist;
     onChannelCompiled(ch);
 
-    // Per docs/19_playlists.md §9.3 the playlist entry's `defaults` is the
-    // canonical per-slot state. If a playlist+entry survived in saved
-    // state, re-apply those defaults; otherwise just replay localControls.
-    // tryLoad (not load) so a corrupt active playlist degrades to the
-    // localControls fallback instead of aborting the channel restore.
+    // Restore order: playlist entry `defaults` first (the shared baseline an
+    // explicit capture saved), then the channel's OWN saved localControls on
+    // top (its live values at the last state save — see the isolation note
+    // at the replay below). tryLoad (not load) so a corrupt active playlist
+    // degrades to the localControls-only replay instead of aborting the
+    // channel restore.
     const pl = ch.playlist && ch.playlist.name && playlistManager.tryLoad(ch.playlist.name);
     const entry = pl && ch.playlist.activeEntryId &&
       pl.entries.find(e => e.id === ch.playlist.activeEntryId);
@@ -2109,7 +2529,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     if (entry && !entry._missing) {
       playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
-    } else if (saved.localControls) {
+    }
+    // CHANNEL-LOCAL params survive a restart for the DECK + deck overlays:
+    // their own saved localControls (live values at the last state save)
+    // replay ON TOP of the shared playlist entry defaults so the deck's look
+    // is exactly what the operator left. MIXER channels are the exception
+    // (operator ruling, 2026-07 auto-save wave): their parameters are never
+    // persisted (saveMixerState emits `localControls: {}`), so on restore we
+    // SKIP the replay entirely — a mixer channel restores to its playlist
+    // entry defaults only. An OLD state file that still carries mixer
+    // localControls is read tolerantly and simply ignored here (never
+    // crashes) rather than replayed.
+    if (saved.localControls && role !== 'mixer') {
       for (const [idStr, cv] of Object.entries(saved.localControls)) {
         const controlId = parseInt(idStr, 10);
         if (!getReplayableLocalExport(ch, controlId)) continue;
@@ -2169,6 +2600,66 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         fader: 1.0,
         enabled: true
       }, 'deck');
+    }
+
+    // AUTOPILOT PROFILE restore validation (per-scene). The profile name rides
+    // baseCh.playlist.autopilot.profile via serializeChannel. A present-but-
+    // UNKNOWN value (e.g. an old scene saved a profile since removed) is a
+    // restore-time bomb — the boot arm would throw. Detect it, WARN loudly, and
+    // clear to the documented default so the daemon boots clean (clone of the
+    // dangling-activeEntryId precedent above). Absent → leave absent; the
+    // normalizer applies the default at read time.
+    {
+      const deckCh = mixer.getDeckChannel();
+      const ap = deckCh && deckCh.playlist ? deckCh.playlist.autopilot : null;
+      if (ap && ap.profile !== undefined && ap.profile !== null && ap.profile !== '') {
+        try {
+          normalizeAutopilotProfile(ap.profile);
+        } catch (e) {
+          console.warn(
+            `[Restore] deck autopilot profile '${ap.profile}' is unknown ` +
+            `(${e.message}) — clearing to '${AUTOPILOT_PROFILE_DEFAULT}'.`);
+          ap.profile = AUTOPILOT_PROFILE_DEFAULT;
+        }
+      }
+    }
+
+    // DECK PLAYLIST SLOTS restore validation (per-scene). Runs after the deck
+    // channel is rebuilt so `primary` can seed from the live playlist name.
+    {
+      const deckCh = mixer.getDeckChannel();
+      const livePlaylistName = deckCh && deckCh.playlist ? deckCh.playlist.name : null;
+      // primary unbound → seed it from the live deck playlist (pane 1 = today's
+      // deck list). null when the deck has no playlist at all.
+      if (deckPlaylistSlots.primary == null) {
+        deckPlaylistSlots.primary = livePlaylistName ?? null;
+      }
+      // secondary bound to a playlist that no longer exists → warn + clear
+      // (clone of the dangling-activeEntryId precedent).
+      if (deckPlaylistSlots.secondary != null
+          && !playlistManager.tryLoad(deckPlaylistSlots.secondary)) {
+        console.warn(
+          `[Restore] deck secondary playlist '${deckPlaylistSlots.secondary}' ` +
+          `not found — clearing the slot.`);
+        deckPlaylistSlots.secondary = null;
+      }
+      // secondary === primary is a structural violation (both panes one name) →
+      // clear secondary.
+      if (deckPlaylistSlots.secondary != null
+          && deckPlaylistSlots.secondary === deckPlaylistSlots.primary) {
+        console.warn(
+          `[Restore] deck secondary playlist equals primary ` +
+          `('${deckPlaylistSlots.secondary}') — clearing the secondary slot.`);
+        deckPlaylistSlots.secondary = null;
+      }
+      // splitRatio non-finite / out of [0.15, 0.85] → warn + reset to 0.5.
+      const r = deckPlaylistSlots.splitRatio;
+      if (!Number.isFinite(r) || r < DECK_SPLIT_RATIO_MIN || r > DECK_SPLIT_RATIO_MAX) {
+        console.warn(
+          `[Restore] deck splitRatio '${r}' out of [${DECK_SPLIT_RATIO_MIN}, ` +
+          `${DECK_SPLIT_RATIO_MAX}] — resetting to ${DECK_SPLIT_RATIO_DEFAULT}.`);
+        deckPlaylistSlots.splitRatio = DECK_SPLIT_RATIO_DEFAULT;
+      }
     }
 
     if (hasMixer) {
@@ -2289,6 +2780,30 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         id: g.id, name: g.name, fader: g.fader, muted: g.muted, color: g.color,
       })),
     };
+  }
+
+  // PERFORMANCE MODE: capture the globals bucket for the pre-show snapshot.
+  // captureLook() covers master + deck + overlays + mixGroups but NOT the
+  // shared ParamCenter params, effects, dimmers, blackout, etc. — those live
+  // in globalsState. We mirror StateManager.saveGlobalsState (state_manager.js
+  // §saveGlobalsState): deep-clone the live globalsState, re-snapshot the
+  // canonical ParamCenter state into .params, and strip the session-scoped
+  // *BypassDimmer effect flags (they must never round-trip a restore, exactly
+  // as they never round-trip a disk save). The result is a plain object safe
+  // to hand to snapshotManager.save() under the `globals` key; applyGlobalsState
+  // consumes the identical shape on restore.
+  function captureGlobalsForSnapshot() {
+    const out = JSON.parse(JSON.stringify(globalsState));
+    if (paramCenter) out.params = paramCenter.getCanonicalState();
+    if (out.effects && typeof out.effects === 'object') {
+      const filtered = {};
+      for (const [k, v] of Object.entries(out.effects)) {
+        if (k.endsWith('BypassDimmer')) continue;
+        filtered[k] = v;
+      }
+      out.effects = filtered;
+    }
+    return out;
   }
 
   // WAVE 15: rebuild the gang-fader group registry from saved/snapshot state.
@@ -2682,6 +3197,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return deck ? serializeChannel(deck) : null;
   }
 
+  // Serialize one deck playlist SLOT (a name binding) into the wire shape the
+  // CaptainPad panes consume. A slot reflects LIVE-ness: only the slot whose
+  // name matches the live deck pointer carries the real activeEntryId/cursor —
+  // a NON-live slot has activeEntryId:null (so the pane draws no highlight and
+  // every tap fires the drive path). Returns null for an unbound slot.
+  function serializeDeckPlaylistSlot(slotName) {
+    if (!slotName) return null;
+    const live = (mixer.getDeckChannel && mixer.getDeckChannel())
+      ? mixer.getDeckChannel().playlist : null;
+    const isLive = !!(live && live.name === slotName);
+    return {
+      name: slotName,
+      activeEntryId: isLive ? (live.activeEntryId || null) : null,
+      cursor: isLive ? (live.cursor || 0) : 0,
+      autopilot: (isLive && live.autopilot) || { active: false, delay_s: 30, shuffle: false },
+      live: isLive,
+    };
+  }
+
   function serializeDeckState() {
     return {
       type: 'deck',
@@ -2691,6 +3225,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // Lets the deck tab show a fade-in-progress affordance.
       masterFade: mixer.getMasterFade ? mixer.getMasterFade() : null,
       channel: serializeDeckChannel(),
+      // Split-playlist SLOTS (two stacked panes). Folded into the `deck` message
+      // (NO new WS type) — connect-replay carries it for free. Same slot object
+      // shape GET /deck/playlist/slots returns, byte-identical, so CaptainPad
+      // feeds both into one assignment path.
+      playlistSlots: {
+        primary: serializeDeckPlaylistSlot(deckPlaylistSlots.primary),
+        secondary: serializeDeckPlaylistSlot(deckPlaylistSlots.secondary),
+        splitRatio: deckPlaylistSlots.splitRatio,
+      },
       // Deck dynamic view overrides (deck overlays). Folded into the `deck`
       // WS message (the deck tab already subscribes) so existing subscribers
       // get them free — NO new WS type. order[0] = bottom, order[last] = top.
@@ -2899,6 +3442,26 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     return null;
   }
 
+  // ── Performance-mode structural lock ─────────────────────────────────
+  // Guard for every STRUCTURAL / PERSISTENT-change route while a show is
+  // live. Returns true (and writes a 409) when performance mode is active —
+  // the handler must `return` immediately. Placed as the FIRST line of each
+  // gated handler (before readBody) so a locked mutation never touches state.
+  // The broadcastMixerState() is the snap-back: it re-pushes the authoritative
+  // mixer truth so any optimistic CaptainPad edit (a dragged fader-lock, a
+  // half-rendered delete) visibly re-pegs to the engine's real state. Runtime
+  // control, selection, safety (blackout / panic), and every GET stay OPEN.
+  function rejectIfPerformanceMode(res) {
+    if (!performanceMode.active) return false;
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: 'performance mode is active — structural/persistent changes are locked',
+      code: 'PERFORMANCE_MODE',
+    }));
+    broadcastMixerState();
+    return true;
+  }
+
   // Push the FULL playlist content (entries + defaults) for a channel
   // out over WS as a dedicated event, so every connected client can
   // prime its per-name playlist cache without having to issue a
@@ -2984,18 +3547,30 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     const ap = baseCh && baseCh.playlist ? baseCh.playlist.autopilot : null;
     return ap || { active: false, delay_s: 30, shuffle: false };
   }
-  function broadcastAutopilot() {
+  // Single builder for the `autopilot` WS payload — used by broadcastAutopilot()
+  // AND the connect-replay so a late joiner and a live update carry byte-
+  // identical fields (incl. the profile dropdown state). Centralizing this is
+  // why the connect replay below no longer hand-builds its own object.
+  function buildAutopilotPayload() {
     const st = deckAutopilotState();
-    broadcastWs({
+    return {
       type: 'autopilot',
       active: !!st.active,
       delay_s: st.delay_s !== undefined ? String(st.delay_s) : '30',
       shuffle: !!st.shuffle,
-      // Wall-clock ms of the next pattern swap (null when inactive) — drives the
-      // deck's "next pattern in M:SS" countdown. Re-broadcast on every cycle via
-      // the daemon's onSchedule hook so it stays fresh after each swap.
+      // Active profile (normalized) + the full list of selectable profiles, so
+      // the CaptainPad dropdown paints the current pick and its options without
+      // a separate GET. Absent → the documented default via the normalizer.
+      profile: normalizeAutopilotProfile(st.profile),
+      profiles: AUTOPILOT_PROFILES,
+      // Wall-clock ms of the next pattern swap (null when inactive OR event-
+      // driven) — drives the deck's "next pattern in M:SS" countdown. Re-
+      // broadcast on every cycle via the daemon's onSchedule hook.
       nextSwapAtMs: (typeof autopilot !== 'undefined' && autopilot) ? autopilot.nextSwapAtMs : null,
-    });
+    };
+  }
+  function broadcastAutopilot() {
+    broadcastWs(buildAutopilotPayload());
   }
 
   // Autopilot advance is main's frame-driven system: the deck `autopilot`
@@ -3277,7 +3852,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if ((globalsState.controlLock || null) !== next) {
       globalsState.controlLock = next;
       try {
-        stateManager.saveGlobalsState(globalsState, paramCenter);
+        saveGlobals(true);
       } catch (err) {
         // Persistence failure shouldn't break the in-memory state —
         // worst case the lock isn't restored on the next engine
@@ -3326,13 +3901,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (usable.length === 0) return;
 
         const cur = baseCh.playlist.activeEntryId;
-        // Selection is the SHARED pure picker (group→shuffle→sequential) —
-        // the SAME `pickNextAutoCycleEntry` the mixer overlay ticks use, so
-        // the deck and overlays can never drift. It applies group-locality,
-        // then shuffle/sequential. Group dwell state lives on the deck base
+        // Selection dispatches on the active PROFILE. The `random` profile wraps
+        // the SHARED pure picker (group→shuffle→sequential) — the SAME
+        // `pickNextAutoCycleEntry` the mixer overlay ticks use, so the deck and
+        // overlays can never drift. Group dwell state lives on the deck base
         // channel's transient `_autoGroup` (reset by loadPlaylistEntry on every
-        // manual tap / (re-)load, so a manual tap starts a fresh group).
-        const nextEntry = pickNextAutoCycleEntry(
+        // manual tap / (re-)load, so a manual tap starts a fresh group). A
+        // missing profile is a wiring bug — throw (the daemon's catch warns).
+        if (!activeAutopilotProfile) {
+          throw new Error('no active autopilot profile');
+        }
+        const nextEntry = activeAutopilotProfile.pickNextEntry(
           pl, baseCh.playlist.autopilot, cur, baseCh._autoGroup);
         if (!nextEntry) return;
         // Route through the deck-transition path: if the operator has
@@ -3367,6 +3946,72 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // pattern-autopilot countdown stays accurate after each swap.
     () => broadcastAutopilot(),
   );
+
+  // ── Autopilot PROFILE management ─────────────────────────────────────
+  // The active profile instance drives BOTH the daemon timing (via
+  // autopilot.setProfile → nextDelayMs) AND the next-entry pick (via the
+  // selection callback above → activeAutopilotProfile.pickNextEntry). One
+  // instance is live at a time; swapping detaches the old and attaches the new.
+  //
+  // Persistence: the profile NAME lives on `baseCh.playlist.autopilot.profile`
+  // (per-scene, rides serializeChannel → deck_state.yaml — zero new plumbing).
+  // The instance itself is transient runtime state, re-derived from that name.
+  let activeAutopilotProfile = null;
+
+  // The ctx a profile's attach() receives. `requestAdvance` routes through the
+  // daemon's generation-guarded _runTick (so audio-driven advances honour the
+  // same await-swap + EBUSY-skip as timer advances). `applyColorPalette`/
+  // `resolveColorPaletteParams`/`colorAutopilot` are captured lazily (resolved
+  // at call time, long after boot) so the audio-reactive profile can drive
+  // palette + speed without re-wiring this block in E2.
+  function buildAutopilotProfileCtx() {
+    return {
+      paramCenter,
+      requestAdvance: () => autopilot.requestAdvance(),
+      state: () => autopilot.state,
+      applyColorPalette: (id) => applyColorPalette(id),
+      knownPaletteIds: () => knownPaletteIds(),
+      colorPalettes: () => (Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : []),
+      triggerColorNext: () => { if (colorAutopilot) colorAutopilot.triggerNext(); },
+      // Energy-arc SPEED SCALE (F1 fix): the audio_reactive profile layers a
+      // multiplicative [0,1] scale on the bpm-sync speed mapping (calm → slower)
+      // instead of sagging the window ceiling (which INVERTED the mapping). We
+      // set the scale on the live BpmSpeedSync and recompute() so `speed`
+      // updates immediately. No bpmSync (unit ctx) → the profile skips the arc.
+      setSpeedScale: (scale) => {
+        if (!engineCore.bpmSync) return false;
+        engineCore.bpmSync.setSpeedScale(scale);
+        engineCore.bpmSync.recompute();
+        return true;
+      },
+    };
+  }
+
+  // Read the persisted profile name off the live deck channel (documented
+  // default when absent). NEVER throws here — restore-time validation already
+  // cleared any unknown value to 'random' (see the deck restore block), so a
+  // live read is always a known name.
+  function currentAutopilotProfileName() {
+    const baseCh = mixer.getDeckChannel();
+    const ap = baseCh && baseCh.playlist ? baseCh.playlist.autopilot : null;
+    return normalizeAutopilotProfile(ap && ap.profile);
+  }
+
+  // (Re)build the active profile instance from a name, detaching any prior one.
+  // Throws on an unknown name (createAutopilotProfile → normalize) — callers at
+  // the route boundary map that to a 400 BEFORE persisting.
+  function armAutopilotProfile(name) {
+    const next = createAutopilotProfile(name);
+    if (activeAutopilotProfile && typeof activeAutopilotProfile.detach === 'function') {
+      try { activeAutopilotProfile.detach(); } catch (e) {
+        console.warn('[Autopilot] profile detach failed:', e && e.message ? e.message : e);
+      }
+    }
+    activeAutopilotProfile = next;
+    autopilot.setProfile(next);
+    if (typeof next.attach === 'function') next.attach(buildAutopilotProfileCtx());
+    return next;
+  }
 
   // ── COLOR autopilot (palette cycling, docs/39) ──────────────────────
   // Resolve a colorPalette id → CPC params and WRITE it (the SAME path looks /
@@ -3823,25 +4468,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // transition the deck the moment it fires (operator: "use the settings
         // for the cue to do transition of ... color").
         setColorAutopilot: (wire) => timelineSetColorAutopilot(wire),
-        // Global HUE SHIFT (docs/39 §F-hue): a deck playlist cue's `hue` routes
-        // through the SAME internal path as POST /global-effect-hue (and the
-        // CaptainPad hue slider, which sends setGlobalHue(deg, 0)). rot/spin is
-        // fixed 0. FAIL LOUD if the controller is missing (codex P0 — never
-        // silently drop an authored hue).
-        setGlobalHue: (degrees) => {
-          if (!globalEffectsController) throw new Error('global effects controller not initialized');
+        // DECK-CHANNEL HUE (docs/39 §F-hue, per-channel only since 2026-07):
+        // a deck playlist cue's `hue` sets the DECK CHANNEL's per-channel hue
+        // through the SAME internal path as PATCH /deck/channel { hue } (the
+        // CaptainPad deck hue slider). The old GLOBAL post-mixer hue shifter
+        // was removed by operator decision — there is no hidden rig-wide hue.
+        // FAIL LOUD if the deck channel is missing (codex P0 — never silently
+        // drop an authored hue).
+        setDeckHue: (degrees) => {
+          const channel = mixer.getDeckChannel();
+          if (!channel) throw new Error('no deck channel to apply a cue hue to');
           const hv = validateHue(degrees);
           if (!hv.ok) throw new Error(hv.error);
-          // setHueShift re-validates + normalizes (degrees [0,360), rot 0) and
-          // throws on non-finite — defence in depth, mirroring the POST route.
-          globalEffectsController.setHueShift(hv.value, 0);
-          globalsState.hueShift = { ...globalEffectsController.hueShift };
-          // Persist through saveGlobalsState (NOT saveAllState, which only
-          // writes mixer/deck state) so the authored hue survives a reboot, and
-          // broadcast mixer state alongside the hue message — mirroring POST
-          // /global-effect-hue exactly.
-          stateManager.saveGlobalsState(globalsState, paramCenter);
-          broadcastWs({ type: 'globalHueShift', hueShift: { ...globalEffectsController.hueShift } });
+          channel.hue = hv.value;
+          // Persist + broadcast exactly like PATCH /deck/channel: the deck hue
+          // lives in deck_state.yaml (saveAllState) and rides the mixer-state
+          // broadcast every channel serializer already carries `hue` on.
+          saveAllState();
           broadcastMixerState();
         },
         forceDeckView: () => timelineForceDeckView(),
@@ -3978,6 +4621,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // { active, from, to, durationMs, elapsedMs, remainingMs }.
         master: mixer.master,
         masterFade: mixer.getMasterFade ? mixer.getMasterFade() : null,
+        // PERFORMANCE MODE: live-show structural lock (in-memory only). A
+        // fresh boot is always {active:false} — a smoke check / CaptainPad can
+        // read this to see whether the rig is currently locked.
+        performanceMode: {
+          active: performanceMode.active,
+          enteredAt: performanceMode.enteredAt,
+        },
       }));
     } else if (req.method === 'GET' && req.url === '/exports') {
       // Legacy endpoint, return exports of base channel
@@ -4002,6 +4652,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(404); res.end('Not Found');
       }
     } else if (req.method === 'POST' && req.url === '/save-pattern') {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         if (!data.name || !data.code) {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'name and code required' }));
@@ -4052,6 +4703,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ status: 'ok' }));
       });
     } else if ((req.method === 'PUT' || req.method === 'POST') && (req.url === '/pattern' || req.url === '/set-pattern')) {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         try {
           if (!data.pattern) {
@@ -4089,6 +4741,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           const oldPlaylist = oldBase ? oldBase.playlist : null;
           const oldBaseId = oldBase ? oldBase.id : null;
           const oldHandle = oldBase ? oldBase.handle : null;
+
+          // SESSION PARAM RETENTION + deck capture on the DIRECT /pattern path.
+          // The handle swap below wipes localControls, so stow the outgoing
+          // pattern's touched tuning + run the deck capture-on-switch while
+          // oldBase.pattern still points at the outgoing pattern.
+          if (oldBase) {
+            stowSessionParams(oldBase, sessionKeyFor(oldBase));
+            captureOrDeferOutgoingDeckEntry(oldBase);
+          }
 
           let newChannel;
           if (oldBase) {
@@ -4144,6 +4805,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           opts.pattern = patternName;
           onChannelCompiled(newChannel);
           finalizeCpcValues(newChannel);
+          // SESSION PARAM RETENTION overlay (feature A): re-apply this slot's
+          // session tuning if it was tuned earlier. The direct set re-attaches
+          // the playlist + resolves the matching entry, so key on that entry id
+          // (fallback pattern name when no playlist). Reset the touched set so
+          // the overlay isn't mistaken for operator intent.
+          applySessionParamOverlay(newChannel, sessionKeyFor(newChannel) || patternName);
+          newChannel._paramsTouchedSinceLoad = false;
+          if (newChannel._touchedControlIds) newChannel._touchedControlIds.clear();
           saveAllState();
 
           broadcastWs({ type: 'pattern', name: patternName });
@@ -4164,6 +4833,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
       });
     } else if (req.method === 'POST' && req.url === '/scene') {
+      if (rejectIfPerformanceMode(res)) return;
       // Scene/model coordination (sim → engine). When the operator picks a
       // different scene in the sim's #scene-select dropdown, the sim POSTs the
       // new scene name here so the engine follows and renders that scene's
@@ -4231,17 +4901,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.id === undefined) {
            res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
         }
-        paramRouter.setControl(data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
-        // Legacy /control targets the deck base channel; auto-capture into
-        // its active playlist entry so the deck's playlist stays in sync.
-        scheduleEntryCapture(mixer.baseChannelId);
+        const ctlRes = paramRouter.setControl(data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        // Legacy /control targets the deck base channel. CHANNEL-LOCAL write:
+        // no cross-channel mirroring (operator ruling 2026-07-07 — parameter
+        // isolation). It DOES mark the deck's params touched so the next entry
+        // switch auto-captures this tuning into the outgoing entry's defaults
+        // (auto-save wave) — the params-survive-a-pattern-switch fix.
         markChannelDirtyIfLocked(mixer.baseChannelId);
-        // Per-pattern param SHARING: mirror onto siblings on the same
-        // (playlist, pattern).
-        if (mixer.baseChannelId) {
-          propagateAndCapturePatternParam(mixer.baseChannelId, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
-        }
+        markDeckParamsTouched();
+        if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(mixer.baseChannelId, data.id);
         saveAllState();
+        broadcastDeckParamsSaved(); // deck "✓ SAVED" flash — only when persisted
         broadcastMixerState();
         broadcastDeckState();
 
@@ -4292,7 +4962,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       if (req.method === 'DELETE') {
         const removed = globalEffectsController.clearGroupFixedColor(group);
         if (globalsState.groupFixedColors) delete globalsState.groupFixedColors[group];
-        stateManager.saveGlobalsState(globalsState);
+        saveGlobals(false);
         broadcastWs({ type: 'groupFixedColors', overrides: globalEffectsController.groupFixedColors });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ status: 'ok', group, removed }));
@@ -4312,7 +4982,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             color: [...data.color],
             brightness: data.brightness,
           };
-          stateManager.saveGlobalsState(globalsState);
+          saveGlobals(false);
           broadcastWs({ type: 'groupFixedColors', overrides: globalEffectsController.groupFixedColors });
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ status: 'ok', group, override: globalEffectsController.groupFixedColors[group] }));
@@ -4328,7 +4998,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (intensityController) intensityController.setSectionBrightness(data.sectionId, data.brightness);
         if (!globalsState.dimmers) globalsState.dimmers = {};
         globalsState.dimmers[data.sectionId] = data.brightness;
-        stateManager.saveGlobalsState(globalsState);
+        saveGlobals(false);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', sectionId: data.sectionId, brightness: data.brightness }));
       });
@@ -4339,7 +5009,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         if (intensityController) intensityController.setBlackout(data.state);
         globalsState.blackout = data.state;
-        stateManager.saveGlobalsState(globalsState);
+        saveGlobals(false);
         broadcastMixerState();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', blackoutActive: data.state }));
@@ -4352,7 +5022,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (globalEffectsController) globalEffectsController.setEffect(data.effect, data.state);
         if (!globalsState.effects) globalsState.effects = {};
         globalsState.effects[data.effect] = data.state;
-        stateManager.saveGlobalsState(globalsState);
+        saveGlobals(false);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', effect: data.effect, state: data.state }));
       });
@@ -4370,19 +5040,188 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         slots: globalEffectSlotManager.getStatus(),
+        // effects_v2: the engine-owned page VIEW travels with every status so
+        // CaptainPad + VSN1 mirror it (single source of truth).
+        effectsPage: globalEffectSlotManager.getEffectsPage(),
         controller: globalEffectsController && globalEffectsController.getStatus
           ? globalEffectsController.getStatus()
           : null,
       }));
+    // ── effects_v2: engine-owned page VIEW (0..3) ────────────────────
+    // The page is a VIEW over the 32 flat slots (page p = slots 8p+1..8p+8).
+    // It lives in engine state so CaptainPad's page switcher and the VSN1
+    // side buttons both read + write the SAME page — no surface keeps a
+    // private one. GET returns it; PATCH sets it, persists it, and broadcasts.
+    } else if (req.method === 'GET' && req.url === '/global-effects/page') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ effectsPage: globalEffectSlotManager.getEffectsPage() }));
+    } else if (req.method === 'PATCH' && req.url === '/global-effects/page') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      readBody(data => {
+        try {
+          const page = data && data.effectsPage;
+          const resolved = globalEffectSlotManager.setEffectsPage(page);
+          persistGlobalEffectSlots();
+          broadcastWs({ type: 'effectsPage', effectsPage: resolved });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', effectsPage: resolved }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    // ── effects_v2 v3: engine-owned named effect BANKS ───────────────────
+    // A bank is an INDEPENDENT set of global-effect slots with a stable string
+    // id + display name; banks form an ORDERED list (>= 1) cycled by the VSN1
+    // sb_2. The engine owns the active-bank pointer; switching it swaps the
+    // LIVE slot set. Every mutation persists + broadcasts `effectBanks` so
+    // CaptainPad's bank switcher + the VSN1 mirror the SAME list (single source
+    // of truth). GET/switch/next are NOT performance-gated (switching banks is
+    // a performance action); create/delete/rename ARE structural → 409-gated.
+    //
+    // GET /global-effects/banks — the bank meta list + active id (ungated).
+    } else if (req.method === 'GET' && req.url === '/global-effects/banks') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(globalEffectSlotManager.getBanksMeta()));
+    // PATCH /global-effects/banks/active { bankId, source? } — SWAP the active
+    //   bank (fail-loud on an unknown id, 400). NOT performance-gated. Persists,
+    //   broadcasts effectBanks + a one-shot globalEffectMacroStatus (so the grid
+    //   swaps to the new slots), and re-flashes page 0 (requestFullDeploy).
+    } else if (req.method === 'PATCH' && req.url === '/global-effects/banks/active') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      readBody(data => {
+        try {
+          const bankId = data && data.bankId;
+          const prev = globalEffectSlotManager.getActiveBankId();
+          const resolved = globalEffectSlotManager.setActiveBank(bankId);
+          // Audit trail: a bank switch names its origin (client-supplied
+          // `source` tag + remote address) so a spurious writer is traceable.
+          const source = typeof data.source === 'string' ? data.source : undefined;
+          console.log(`[EffectBanks] active ${prev} -> ${resolved} ` +
+            `(source=${source || 'unspecified'}, remote=${req.socket.remoteAddress || '?'})`);
+          persistGlobalEffectSlots();
+          broadcastEffectBanks(source);
+          // Swapping the bank swaps the LIVE slot set — broadcast the new bank's
+          // content ONCE so CaptainPad's grid (globalEffectMacroStatus) swaps.
+          broadcastWs({ type: 'globalEffectMacroStatus',
+            slots: globalEffectSlotManager.getStatus(),
+            controller: globalEffectsController ? globalEffectsController.getStatus() : null });
+          // Re-flash the device to the new bank (page 0 only, own-page retirement).
+          const triggeredPages = globalEffectSlotManager.requestFullDeploy();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', activeBankId: resolved, triggeredPages }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    // POST /global-effects/banks/next { source? } — ATOMIC cycle+wrap to the
+    //   next bank (engine-side, no client-computed target). NOT performance-
+    //   gated. Same side effects as an active-switch. Returns
+    //   { activeBankId, bankName, index, count }.
+    } else if (req.method === 'POST' && req.url === '/global-effects/banks/next') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      readBody(data => {
+        try {
+          const prev = globalEffectSlotManager.getActiveBankId();
+          const cycled = globalEffectSlotManager.nextBank();
+          const source = data && typeof data.source === 'string' ? data.source : undefined;
+          console.log(`[EffectBanks] next ${prev} -> ${cycled.activeBankId} ` +
+            `(${cycled.index + 1}/${cycled.count}, source=${source || 'unspecified'}, ` +
+            `remote=${req.socket.remoteAddress || '?'})`);
+          persistGlobalEffectSlots();
+          broadcastEffectBanks(source);
+          broadcastWs({ type: 'globalEffectMacroStatus',
+            slots: globalEffectSlotManager.getStatus(),
+            controller: globalEffectsController ? globalEffectsController.getStatus() : null });
+          globalEffectSlotManager.requestFullDeploy();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', ...cycled }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    // POST /global-effects/banks { name? } — CREATE an empty bank (auto-named
+    //   `Bank N` when name omitted). Structural → performance-gated (409).
+    } else if (req.method === 'POST' && req.url === '/global-effects/banks') {
+      if (rejectIfPerformanceMode(res)) return;
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      readBody(data => {
+        try {
+          const created = globalEffectSlotManager.createBank(data && data.name);
+          persistGlobalEffectSlots();
+          broadcastEffectBanks();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', bank: created }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    // DELETE /global-effects/banks/:id — remove a bank. Structural → 409-gated.
+    //   Refuses the LAST bank (409, >= 1 invariant). If the ACTIVE bank is
+    //   deleted, the NEXT bank in order becomes active (full switch side
+    //   effects: grid status broadcast + page-0 re-flash).
+    } else if (req.method === 'DELETE' && /^\/global-effects\/banks\/[A-Za-z0-9_]+$/.test(req.url)) {
+      if (rejectIfPerformanceMode(res)) return;
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      const id = req.url.match(/^\/global-effects\/banks\/([A-Za-z0-9_]+)$/)[1];
+      const meta = globalEffectSlotManager.getBanksMeta();
+      if (!meta.banks.some(b => b.id === id)) {
+        res.writeHead(404); return res.end(JSON.stringify({ error: `unknown bank id '${id}'` }));
+      }
+      if (meta.banks.length <= 1) {
+        res.writeHead(409);
+        return res.end(JSON.stringify({ error: 'cannot delete the last bank (>= 1 bank required)', code: 'LAST_BANK' }));
+      }
+      try {
+        const prevActive = globalEffectSlotManager.getActiveBankId();
+        const result = globalEffectSlotManager.deleteBank(id);
+        const activeChanged = result.activeBankId !== prevActive;
+        persistGlobalEffectSlots();
+        broadcastEffectBanks();
+        let triggeredPages = [];
+        if (activeChanged) {
+          // The active bank was removed — the successor is now live. Full switch
+          // side effects so the grid + device follow.
+          broadcastWs({ type: 'globalEffectMacroStatus',
+            slots: globalEffectSlotManager.getStatus(),
+            controller: globalEffectsController ? globalEffectsController.getStatus() : null });
+          triggeredPages = globalEffectSlotManager.requestFullDeploy();
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', deletedId: result.deletedId, activeBankId: result.activeBankId, triggeredPages }));
+      } catch (e) {
+        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      }
+    // PATCH /global-effects/banks/:id { name } — rename a bank. Structural →
+    //   409-gated. (The `/active` route above is matched first, so it never
+    //   collides with a bank literally reachable here.)
+    } else if (req.method === 'PATCH' && /^\/global-effects\/banks\/[A-Za-z0-9_]+$/.test(req.url)) {
+      if (rejectIfPerformanceMode(res)) return;
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      const id = req.url.match(/^\/global-effects\/banks\/([A-Za-z0-9_]+)$/)[1];
+      readBody(data => {
+        try {
+          const renamed = globalEffectSlotManager.renameBank(id, data && data.name);
+          persistGlobalEffectSlots();
+          broadcastEffectBanks();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', bank: renamed }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
     } else if (req.method === 'PATCH' && req.url === '/global-effect-slots') {
+      if (rejectIfPerformanceMode(res)) return;
       if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
       readBody(data => {
         try {
           if (!Array.isArray(data.slots)) {
             res.writeHead(400); return res.end(JSON.stringify({ error: 'body must include slots: array' }));
           }
-          globalEffectSlotManager.setSlots(data.slots);
-          stateManager.saveGlobalEffectSlots(globalEffectSlotManager.getSlots());
+          // Whole-config replace IS a layout change → emitLayout deploys.
+          globalEffectSlotManager.setSlots(data.slots, { emitLayout: true });
+          persistGlobalEffectSlots();
           broadcastWs({ type: 'globalEffectSlots', slots: globalEffectSlotManager.getSlots() });
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ slots: globalEffectSlotManager.getSlots() }));
@@ -4425,7 +5264,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.enabled && globalEffectsController && globalEffectsController.panicStop) {
           globalEffectsController.panicStop();
         }
-        stateManager.saveGlobalsState(globalsState);
+        saveGlobals(false);
         broadcastMixerState();
         broadcastWs({ type: 'globalEffectMacroStatus',
           controller: globalEffectsController ? globalEffectsController.getStatus() : null,
@@ -4435,50 +5274,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', blackout: data.enabled }));
       });
-    // POST /global-effect-hue (docs/39 §F-hue) — the GLOBAL hue shifter.
-    // A first-class continuous knob (like blackout), NOT a GEM slot.
-    // Rotates the RGB hue of the WHOLE post-mixer buffer (W/A/UV
-    // untouched); stacks additively with any per-channel hue.
-    //   Body: { degrees, autoRotateDegPerSec? }
-    //     - degrees             required, finite ⇒ normalized [0,360),
-    //                           else 400 (Codex P0, no silent fallback).
-    //     - autoRotateDegPerSec optional (default 0), finite + clamped
-    //                           [-360,360]; else 400.
-    // Persists globalsState.hueShift so the next boot honours it, and
-    // broadcasts { type: 'globalHueShift', hueShift } + mixer state.
-    } else if (req.method === 'POST' && req.url === '/global-effect-hue') {
-      readBody(data => {
-        if (!globalEffectsController) {
-          res.writeHead(503); return res.end(JSON.stringify({ error: 'global effects controller not initialized' }));
-        }
-        const hv = validateHue(data.degrees);
-        if (!hv.ok) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ error: hv.error.replace(/^hue/, 'degrees') }));
-        }
-        let rot = 0;
-        if (data.autoRotateDegPerSec !== undefined) {
-          if (typeof data.autoRotateDegPerSec !== 'number' || !Number.isFinite(data.autoRotateDegPerSec)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: `autoRotateDegPerSec must be a finite number, got '${data.autoRotateDegPerSec}'` }));
-          }
-          rot = Math.max(-360, Math.min(360, data.autoRotateDegPerSec));
-        }
-        // setHueShift re-validates + normalizes (degrees [0,360), rot
-        // clamped) and throws on non-finite — defence in depth.
-        globalEffectsController.setHueShift(hv.value, rot);
-        globalsState.hueShift = { ...globalEffectsController.hueShift };
-        stateManager.saveGlobalsState(globalsState, paramCenter);
-        broadcastWs({ type: 'globalHueShift', hueShift: { ...globalEffectsController.hueShift } });
-        broadcastMixerState();
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', hueShift: { ...globalEffectsController.hueShift } }));
-      });
+    // POST /global-effect-hue — REMOVED (2026-07, operator decision: "only
+    // the channel hue shifts, no global hidden one"). Hue is PER-CHANNEL
+    // ONLY: PATCH /mixer/channels/:id { hue } or PATCH /deck/channel
+    // { hue }. This route answers 410 Gone — NEVER a no-op success (codex
+    // P0: a stale client must fail loudly, not think it tinted the rig).
+    } else if (req.url === '/global-effect-hue') {
+      res.writeHead(410, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'the GLOBAL hue shifter was removed — hue is per-channel only. ' +
+          'Use PATCH /deck/channel { hue } or PATCH /mixer/channels/:id { hue }.',
+        code: 'GLOBAL_HUE_REMOVED',
+      }));
     // POST /global-effect-invert (docs/39 §F-invert) — the GLOBAL color
     // invert. A first-class boolean toggle (like blackout), NOT a GEM slot.
     // Inverts the RGB of the WHOLE post-mixer buffer (1 - v; W/A/UV
-    // untouched) in the pipeline AFTER the global hue rotation. Mirrors the
-    // global-hue route's shape.
+    // untouched).
     //   Body: { enabled }
     //     - enabled  coerced via !! (pure boolean toggle — no fail-loud
     //                contract, matching the legacy effect toggles).
@@ -4492,13 +5303,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         const enabled = !!(data && data.enabled);
         globalEffectsController.setInvert(enabled);
         globalsState.invert = globalEffectsController.invert;
-        stateManager.saveGlobalsState(globalsState, paramCenter);
+        saveGlobals(true);
         broadcastWs({ type: 'globalInvert', invert: globalEffectsController.invert });
         broadcastMixerState();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', invert: globalEffectsController.invert }));
       });
     } else if (req.method === 'PATCH' && req.url.startsWith('/global-effect-slots/')) {
+      if (rejectIfPerformanceMode(res)) return;
       // PATCH /global-effect-slots/:slotId
       const m = req.url.match(/^\/global-effect-slots\/(\d+)$/);
       if (!m) { res.writeHead(404); return res.end('Not Found'); }
@@ -4507,7 +5319,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       readBody(data => {
         try {
           const slot = globalEffectSlotManager.patchSlot(slotId, data || {});
-          stateManager.saveGlobalEffectSlots(globalEffectSlotManager.getSlots());
+          persistGlobalEffectSlots();
           broadcastWs({ type: 'globalEffectSlots', slots: globalEffectSlotManager.getSlots() });
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ slot }));
@@ -4515,9 +5327,191 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
         }
       });
+    // POST /global-effect-slots/:slotId/intensity  (docs/42 VSN1 jog-wheel)
+    //   Body: { value: 0..1 } — normalized primary intensity for the slot's
+    //   bound effect. Mapped onto the effect's real primary-param range,
+    //   written into the slot's paramsOverride, persisted, and applied LIVE
+    //   when the effect is currently running. 400 on a non-finite value or a
+    //   slot/effect that has no primary intensity.
+    } else if (req.method === 'POST' && /^\/global-effect-slots\/\d+\/intensity$/.test(req.url)) {
+      const slotId = parseInt(req.url.match(/^\/global-effect-slots\/(\d+)\/intensity$/)[1], 10);
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      readBody(data => {
+        try {
+          const value = data && data.value;
+          if (typeof value !== 'number' || !Number.isFinite(value)) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: 'body must include value: a finite number in [0..1]' }));
+          }
+          const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+          const nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+          const result = globalEffectSlotManager.setSlotIntensity(slotId, value, { frameIndex, nowMs });
+          persistGlobalEffectSlots();
+          broadcastWs({ type: 'globalEffectMacroStatus',
+            slots: globalEffectSlotManager.getStatus(),
+            controller: globalEffectsController ? globalEffectsController.getStatus() : null,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            status: 'ok', slotId,
+            intensity: result.intensity, paramValue: result.paramValue, applied: result.applied,
+          }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    // POST /global-effect-slots/:slotId/intensity/reset — clear the touched
+    // intensity so the effect's default primary value applies again. Applies
+    // live when the effect is running. 400 for a slot/effect with no primary.
+    } else if (req.method === 'POST' && /^\/global-effect-slots\/\d+\/intensity\/reset$/.test(req.url)) {
+      const slotId = parseInt(req.url.match(/^\/global-effect-slots\/(\d+)\/intensity\/reset$/)[1], 10);
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      try {
+        const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+        const nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const result = globalEffectSlotManager.resetSlotIntensity(slotId, { frameIndex, nowMs });
+        persistGlobalEffectSlots();
+        broadcastWs({ type: 'globalEffectMacroStatus',
+          slots: globalEffectSlotManager.getStatus(),
+          controller: globalEffectsController ? globalEffectsController.getStatus() : null,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', slotId, intensity: result.intensity, applied: result.applied }));
+      } catch (e) {
+        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      }
+    // ── effects_v2: primary MODE (VSN1 encoder press) ────────────────
+    // POST /global-effect-slots/:slotId/mode/cycle — step the slot's mode to
+    //   the NEXT value in its effect's discrete list (wraps). The encoder-
+    //   press gesture. Applies LIVE when the effect is running.
+    // POST /global-effect-slots/:slotId/mode  { value } — set the mode to an
+    //   explicit value (must be a member of the effect's values list). 400 on
+    //   a stranger value or a slot/effect with no mode. Mode is RUNTIME
+    //   FEEDBACK, so neither route triggers a layout deploy.
+    } else if (req.method === 'POST' && /^\/global-effect-slots\/\d+\/mode\/cycle$/.test(req.url)) {
+      const slotId = parseInt(req.url.match(/^\/global-effect-slots\/(\d+)\/mode\/cycle$/)[1], 10);
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      try {
+        const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+        const nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const result = globalEffectSlotManager.cycleSlotMode(slotId, { frameIndex, nowMs });
+        persistGlobalEffectSlots();
+        broadcastWs({ type: 'globalEffectMacroStatus',
+          slots: globalEffectSlotManager.getStatus(),
+          controller: globalEffectsController ? globalEffectsController.getStatus() : null,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', slotId, mode: result.mode, modeIndex: result.modeIndex, applied: result.applied }));
+      } catch (e) {
+        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.method === 'POST' && /^\/global-effect-slots\/\d+\/mode$/.test(req.url)) {
+      const slotId = parseInt(req.url.match(/^\/global-effect-slots\/(\d+)\/mode$/)[1], 10);
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      readBody(data => {
+        try {
+          if (!data || !Object.prototype.hasOwnProperty.call(data, 'value')) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: 'body must include value (a member of the effect mode values list)' }));
+          }
+          const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+          const nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+          const result = globalEffectSlotManager.setSlotMode(slotId, data.value, { frameIndex, nowMs });
+          persistGlobalEffectSlots();
+          broadcastWs({ type: 'globalEffectMacroStatus',
+            slots: globalEffectSlotManager.getStatus(),
+            controller: globalEffectsController ? globalEffectsController.getStatus() : null,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', slotId, mode: result.mode, modeIndex: result.modeIndex, applied: result.applied }));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    // ── effects_v2: layout model (GET the serialized 32-slot layout) ──
+    // GET /global-effects/layout — the engine-owned 32-slot layout (effect id
+    // + display name + color per populated slot, page assignment) plus the
+    // last VSN1 deploy status. This is what Track T's deploy_layout.cjs
+    // consumes; deploys fire automatically on layout change, but this lets a
+    // client inspect the current layout + deploy health.
+    } else if (req.method === 'GET' && req.url === '/global-effects/layout') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        layout: globalEffectSlotManager.getLayout(),
+        deploy: vsn1DeployStatus,
+      }));
+    // ── effects_v2: whole-grid global actions (VSN1 side-buttons) ─────
+    // POST /global-effects/reset-all — reset EVERY slot's primary intensity
+    //   AND mode back to its effect's registry default across all 32 slots /
+    //   all pages. Values-only: enabled/active state and effect assignment are
+    //   untouched; running effects are re-dispatched so the reset applies live.
+    //   Idempotent (all-default grid → clean no-op). No body.
+    // POST /global-effects/disable-all — turn OFF every currently-active effect
+    //   (blackout) across all slots while KEEPING every binding intact. Behavior
+    //   aware (toggles/holds deactivate, a ringing trigger is silenced).
+    //   Idempotent (all-off grid → clean no-op). No body.
+    // Both are RUNTIME ops (no layout change → no deploy) and broadcast the same
+    // runtime-status WS topic the per-slot ops use so CaptainPad + VSN1 re-sync.
+    } else if (req.method === 'POST' && req.url === '/global-effects/reset-all') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      try {
+        const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+        const nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const result = globalEffectSlotManager.resetAllToDefault({ frameIndex, nowMs });
+        persistGlobalEffectSlots();
+        broadcastWs({ type: 'globalEffectMacroStatus',
+          slots: globalEffectSlotManager.getStatus(),
+          controller: globalEffectsController ? globalEffectsController.getStatus() : null,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok',
+          slotsReset: result.slotsReset,
+          intensityReset: result.intensityReset,
+          modeReset: result.modeReset,
+          reapplied: result.reapplied,
+        }));
+      } catch (e) {
+        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.method === 'POST' && req.url === '/global-effects/disable-all') {
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      try {
+        const frameIndex = engineCore.getFrameIndex ? engineCore.getFrameIndex() : 0;
+        const nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const result = globalEffectSlotManager.disableAll({ frameIndex, nowMs });
+        persistGlobalEffectSlots();
+        broadcastWs({ type: 'globalEffectMacroStatus',
+          slots: globalEffectSlotManager.getStatus(),
+          controller: globalEffectsController ? globalEffectsController.getStatus() : null,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', disabled: result.disabled }));
+      } catch (e) {
+        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+      }
+    // ── effects_v2: force a VSN1 layout re-deploy (sync the device) ──────
+    // POST /global-effects/deploy — push the CURRENT layout to the VSN1 (the
+    // populated pages), independent of any edit. This is the "update the UI
+    // with the layout" action for LOAD: a client (CaptainPad opening the
+    // effects screen) or an operator can call it to guarantee the device
+    // shows the live layout. Add/remove/rename already deploy on change; this
+    // covers the load case + a manual re-sync. No body. Returns the pages
+    // queued + the deploy status. No-op pages=[] when deploy is disabled or
+    // nothing is populated (never an error — a no-hardware/gated engine just
+    // reports it did nothing).
+    } else if (req.method === 'POST' && req.url === '/global-effects/deploy') {
+      if (rejectIfPerformanceMode(res)) return;
+      if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
+      const triggeredPages = globalEffectSlotManager.requestFullDeploy();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', triggeredPages, deploy: vsn1DeployStatus }));
     } else if (req.method === 'POST' && req.url.startsWith('/global-effect-slots/')) {
-      // POST /global-effect-slots/:slotId/{activate,deactivate,trigger}
-      const m = req.url.match(/^\/global-effect-slots\/(\d+)\/(activate|deactivate|trigger|toggle|down|up)$/);
+      // POST /global-effect-slots/:slotId/{press,activate,deactivate,trigger,toggle,down,up}
+      // `press` is behavior-resolved server-side (trigger→fire, toggle→flip,
+      // hold→down) so a physical key press does the right thing per the slot's
+      // own behavior — the host can send `press` instead of guessing the action
+      // from a possibly-stale behavior snapshot (RCA 20260709_7 fix spec #1).
+      const m = req.url.match(/^\/global-effect-slots\/(\d+)\/(press|activate|deactivate|trigger|toggle|down|up)$/);
       if (!m) { res.writeHead(404); return res.end('Not Found'); }
       const slotId = parseInt(m[1], 10);
       const action = m[2];
@@ -4814,7 +5808,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.end(JSON.stringify(live));
     } else if (req.method === 'GET' && req.url === '/autopilot') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(deckAutopilotState()));
+      // Return a NEW object carrying the dropdown fields (CaptainPad seeds
+      // profile state from this GET). deckAutopilotState() returns the LIVE
+      // `playlist.autopilot` ref, which is persisted to deck_state.yaml — we
+      // must NOT add `profiles` in place or the array leaks into saved state.
+      const st = deckAutopilotState();
+      res.end(JSON.stringify({
+        ...st,
+        profile: normalizeAutopilotProfile(st.profile),
+        profiles: AUTOPILOT_PROFILES,
+      }));
     } else if (req.method === 'POST' && req.url === '/autopilot') {
       readBody(data => {
         // Deck autopilot route (PortWatch over LoRa, scripts, CaptainPad's
@@ -5157,6 +6160,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ mixGroups: mixer.getMixGroups() }));
     } else if (req.method === 'POST' && req.url === '/mixer/groups') {
+      if (rejectIfPerformanceMode(res)) return;
       // Create a group. name/color optional; fader=1, muted=false to start.
       readBody(data => {
         if (data.name !== undefined && data.name !== null && typeof data.name !== 'string') {
@@ -5174,6 +6178,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ status: 'ok', group }));
       });
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/groups\/[^\/]+\/members$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       // Add a mixer channel to this group (single membership).
       const gid = decodeURIComponent(req.url.split('/')[3]);
       readBody(data => {
@@ -5191,6 +6196,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
       });
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/groups\/[^\/]+\/members\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       // Remove a channel from this group.
       const parts = req.url.split('/');
       const gid = decodeURIComponent(parts[3]);
@@ -5235,6 +6241,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok', group }));
       });
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/groups\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       // Delete a group (clears every member's mixGroupId first).
       const gid = decodeURIComponent(req.url.split('/')[3]);
       const removed = mixer.deleteMixGroup(gid);
@@ -5284,11 +6291,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ snapshots: snapshotManager.list() }));
     } else if (req.method === 'POST' && req.url === '/mixer/snapshots') {
+      if (rejectIfPerformanceMode(res)) return;
       // Capture the current full mixer state under a name.
       readBody(data => {
         if (typeof data.name !== 'string' || data.name.trim() === '') {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ error: 'name (non-empty string) required' }));
+        }
+        // Reserved name: `performance-preshow` is owned by performance mode's
+        // pre-show capture — refuse a manual snapshot under it even OUTSIDE the
+        // mode so an operator can never clobber (or pre-seed) that slot.
+        if (data.name === PERF_SNAPSHOT_NAME) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `'${PERF_SNAPSHOT_NAME}' is a reserved snapshot name (performance mode)`,
+            code: 'SNAPSHOT_NAME_RESERVED',
+          }));
         }
         try {
           const saved = snapshotManager.save(data.name, captureLook());
@@ -5316,6 +6334,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/snapshots\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const name = decodeURIComponent(req.url.split('/')[3]);
       try {
         const removed = snapshotManager.delete(name);
@@ -5327,6 +6346,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/snapshots\/[^\/]+\/recall$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const name = decodeURIComponent(req.url.split('/')[3]);
       let look;
       try {
@@ -5361,6 +6381,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       broadcastMixerState();
       res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name }));
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/snapshots\/[^\/]+\/recall-fade$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       // ── SNAPSHOT CROSSFADE / MORPH (round-2 #1, docs/39 §10.8) ──────────
       // Recall a saved look by RAMPING current→target over durationMs instead
       // of the instant cut /recall does. Body: { durationMs } (finite > 0).
@@ -5428,6 +6449,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // (fail loud, NOT a silent no-op — Codex P0). GET /mixer/undo → {depth,
     // top} for the UI button enable/label.
     else if (req.method === 'POST' && req.url === '/mixer/undo') {
+      if (rejectIfPerformanceMode(res)) return;
       if (undoStack.isEmpty) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'nothing to undo', code: 'UNDO_EMPTY' }));
@@ -5482,6 +6504,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/param-presets$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       // Capture the addressed channel's current params under a name.
       const id = decodeURIComponent(req.url.split('/')[3]);
       readBody(data => {
@@ -5558,13 +6581,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (!getReplayableLocalExport(channel, controlId)) continue;
         paramRouter.setChannelControl(channel.id, controlId, cv.v0, cv.v1, cv.v2);
       }
-      scheduleEntryCapture(channel.id);
       markChannelDirtyIfLocked(channel.id);
       saveAllState();
       broadcastWs({ type: 'paramPresets', action: 'recalled', name, channelId: channel.id, paramPresets: paramPresetManager.listParamPresets() });
       broadcastMixerState();
       res.writeHead(200); res.end(JSON.stringify({ status: 'ok', name, channelId: channel.id }));
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/param-presets\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const name = decodeURIComponent(req.url.split('/')[3]);
       try {
         const removed = paramPresetManager.deleteParamPreset(name);
@@ -5576,6 +6599,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.method === 'POST' && req.url === '/mixer/channels') {
+      if (rejectIfPerformanceMode(res)) return;
       // Add a mixer channel. Two ways to call this, both are playlist-driven:
       //  1. {playlist:'<name>', playlistEntryId?:'<id>'} — load that playlist
       //     onto the new channel; pattern comes from the entry.
@@ -5744,6 +6768,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // additive fields (faderMax, color, mixGroupId, soloSafe, viewSelection,
     // locks, transition prefs) ride along in the serialized blob for free.
     else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/duplicate$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const id = decodeURIComponent(req.url.split('/')[3]);
       // Decks can't be duplicated via /mixer routes (single deck identity).
       const reject = rejectIfWrongRole(id, 'mixer');
@@ -5797,6 +6822,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // permutation BEFORE mutating (fail loud, no partial apply).
     // order[0] = bottom of the mix, order[last] = top.
     else if (req.method === 'POST' && req.url === '/mixer/channels/reorder') {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         const order = data && data.order;
         const current = mixer.getMixerChannels();
@@ -5854,7 +6880,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         const forceLit = () => {
           if (intensityController) intensityController.setBlackout(false);
           globalsState.blackout = false;
-          stateManager.saveGlobalsState(globalsState, paramCenter);
+          saveGlobals(true);
           mixer.setMaster(1.0);
           mixer.targetViewFader = 1.0;
         };
@@ -6074,6 +7100,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         if (data.transitionMode !== undefined) channel.transitionMode = data.transitionMode;
         if (data.transitionTime !== undefined) channel.transitionTime = data.transitionTime;
+        // PERFORMANCE MODE: viewSelection is a structural (view-mask) change —
+        // gate ONLY that field while live; sibling fields in the same PATCH
+        // (fader, mode, hue, enabled, lock) stay allowed.
+        if (data.viewSelection !== undefined && rejectIfPerformanceMode(res)) return;
         // View-selection update: validate first so a typo can't brick
         // the render loop. The mixer recompiles the channel's
         // compiledPixelMask synchronously; the next frame composites
@@ -6099,15 +7129,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           }
         }
         if (data.locked !== undefined) {
-          const becameLocked = !channel.locked && !!data.locked;
           channel.locked = !!data.locked;
-          // Lock just engaged — cancel any pending auto-capture so a timer
-          // that armed pre-lock can't fire after lock and silently overwrite
-          // the saved defaults the user is now trying to preserve.
-          if (becameLocked) {
-            const pending = captureTimers.get(channel.id);
-            if (pending) { clearTimeout(pending); captureTimers.delete(channel.id); }
-          }
           // Either direction: the dirty flag tracks edits made while locked.
           // Toggling the lock is a clean transition — any "dirty since last
           // resolve" state is no longer relevant after the user changes the
@@ -6120,6 +7142,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           const src = loadPattern(patternsDir, patternName);
           const comp = wasmHost.compile(src);
           if (comp.ok) {
+            // SESSION PARAM RETENTION: a DIRECT pattern swap (the entry pointer
+            // is unchanged, only the pattern changes), so key by PATTERN NAME
+            // here — not the entry id. Stow the outgoing pattern's touched
+            // tuning before the wipe (mixer layer gets in-session continuity;
+            // never a file write — 2026-07-07 isolation ruling stands).
+            stowSessionParams(channel, channel.pattern);
             // Destroy old handle
             if (channel.handle) wasmHost.destroy(channel.handle);
             channel.handle = comp.handle;
@@ -6127,6 +7155,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             channel.localControls = {};
             onChannelCompiled(channel);
             finalizeCpcValues(channel);
+            // Overlay this pattern's session tuning (last word), then reset the
+            // touched set so the overlay isn't recorded as fresh operator intent.
+            applySessionParamOverlay(channel, patternName);
+            if (channel._touchedControlIds) channel._touchedControlIds.clear();
           } else {
             console.warn(`[Mixer] Pattern swap FAILED: ${patternName} compile error:`, comp.error);
           }
@@ -6201,6 +7233,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
       });
     } else if (req.method === 'DELETE' && req.url.match(/^\/mixer\/channels\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const id = req.url.split('/')[3];
       const reject = rejectIfWrongRole(id, 'mixer');
       if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
@@ -6220,6 +7253,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // broadcast below carry the cleared followLeaderId values.
       mixer.clearFollowersOf(id);
       mixer.removeMixerChannel(id);
+      // Deleting the channel drops its session-cache tuning (nothing to retain).
+      sessionParamCache.clearChannel(id);
       saveAllState();
       broadcastMixerState();
       res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
@@ -6231,13 +7266,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.id === undefined) {
            res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
         }
-        paramRouter.setChannelControl(id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
-        scheduleEntryCapture(id);
+        // CHANNEL-LOCAL write: lands only on THIS channel's WASM handle +
+        // localControls. No playlist auto-capture, no cross-channel mirroring
+        // (operator ruling 2026-07-07 — parameter isolation).
+        const ctlRes = paramRouter.setChannelControl(id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         markChannelDirtyIfLocked(id);
-        // Per-pattern param SHARING: mirror this export onto every other live
-        // channel running the same (playlist, pattern) — deck base, mixer
-        // overlays, deck overlays.
-        propagateAndCapturePatternParam(id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        // Session-cache continuity: record the operator-touched control so the
+        // mixer layer's tuning is retained across in-playlist pattern switches.
+        if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(id, data.id);
         saveAllState();
         broadcastMixerState();
         broadcastDeckState();
@@ -6801,6 +7837,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.method === 'POST' && req.url === '/playlists') {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         try {
           if (!data || !data.name) {
@@ -6851,6 +7888,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
       });
     } else if (req.method === 'DELETE' && req.url.match(/^\/playlists\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       try {
         let name;
         try {
@@ -6883,6 +7921,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // mappings to the ModulationController IF the entry is currently
     // active on the deck.
     else if (req.url.match(/^\/api\/playlists\/[^\/]+\/items\/[^\/]+\/modulations\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const parts = req.url.split('/');
       let playlistName, itemId, mappingId;
       try {
@@ -6977,6 +8016,108 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       }
       res.writeHead(405); res.end(JSON.stringify({ error: 'method not allowed' }));
     }
+    // ── PLAYLIST MIDI MAPPINGS (docs/34) ─────────────────────────────────
+    //
+    // Mirror of the modulation routes above. CRUD by mapping id, scoped to a
+    // playlist item; one mapping per target parameter (enforced by save). These
+    // are PURE METADATA — the render loop never applies them; CaptainPad reads
+    // the active entry's midiMappings and writes the param's static value when
+    // the bound MIDI control moves. No ModulationController push needed.
+    //
+    //   PUT    /api/playlists/:name/items/:itemId/midi-mappings/:mappingId
+    //   PATCH  /api/playlists/:name/items/:itemId/midi-mappings/:mappingId
+    //   DELETE /api/playlists/:name/items/:itemId/midi-mappings/:mappingId
+    else if (req.url.match(/^\/api\/playlists\/[^\/]+\/items\/[^\/]+\/midi-mappings\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
+      const parts = req.url.split('/');
+      let playlistName, itemId, mappingId;
+      try {
+        playlistName = decodeURIComponent(parts[3]);
+        itemId = decodeURIComponent(parts[5]);
+        mappingId = decodeURIComponent(parts[7]);
+      } catch (e) {
+        res.writeHead(400); return res.end(JSON.stringify({ error: 'invalid URI encoding' }));
+      }
+
+      const finishOk = (savedEntry) => {
+        broadcastWs({ type: 'playlistSaved', name: playlistName });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', entry: savedEntry }));
+      };
+
+      if (req.method === 'PUT') {
+        readBody(data => {
+          try {
+            if (!data || typeof data !== 'object') {
+              res.writeHead(400); return res.end(JSON.stringify({ error: 'request body required' }));
+            }
+            const playlist = playlistManager.load(playlistName);
+            if (!playlist) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+            const entry = playlist.entries.find(e => e.id === itemId);
+            if (!entry) { res.writeHead(404); return res.end(JSON.stringify({ error: 'item not found' })); }
+            const incoming = { ...data, id: mappingId };
+            try { validateMidiMapping(incoming); }
+            catch (ve) { res.writeHead(400); return res.end(JSON.stringify({ error: ve.message })); }
+            // Upsert-by-target: one binding per target parameter. The friendly
+            // replace-in-place lives on PlaylistManager.upsertMidiMapping (shared
+            // with the engine test so the two never drift); save() re-validates
+            // and is the strict one-per-target BACKSTOP (defense in depth).
+            playlistManager.upsertMidiMapping(entry, incoming);
+            const saved = playlistManager.save(playlist);
+            const savedEntry = saved.entries.find(e => e.id === itemId);
+            finishOk(savedEntry);
+          } catch (e) {
+            res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          }
+        });
+        return;
+      }
+      if (req.method === 'PATCH') {
+        readBody(data => {
+          try {
+            if (!data || typeof data !== 'object') {
+              res.writeHead(400); return res.end(JSON.stringify({ error: 'request body required' }));
+            }
+            const playlist = playlistManager.load(playlistName);
+            if (!playlist) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+            const entry = playlist.entries.find(e => e.id === itemId);
+            if (!entry) { res.writeHead(404); return res.end(JSON.stringify({ error: 'item not found' })); }
+            const existing = (entry.midiMappings || []).find(m => m.id === mappingId);
+            if (!existing) { res.writeHead(404); return res.end(JSON.stringify({ error: 'mapping not found' })); }
+            const merged = { ...existing, ...data, id: mappingId };
+            try { validateMidiMapping(merged); }
+            catch (ve) { res.writeHead(400); return res.end(JSON.stringify({ error: ve.message })); }
+            entry.midiMappings = (entry.midiMappings || []).map(m => m.id === mappingId ? merged : m);
+            const saved = playlistManager.save(playlist);
+            const savedEntry = saved.entries.find(e => e.id === itemId);
+            finishOk(savedEntry);
+          } catch (e) {
+            res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          }
+        });
+        return;
+      }
+      if (req.method === 'DELETE') {
+        try {
+          const playlist = playlistManager.load(playlistName);
+          if (!playlist) { res.writeHead(404); return res.end(JSON.stringify({ error: 'playlist not found' })); }
+          const entry = playlist.entries.find(e => e.id === itemId);
+          if (!entry) { res.writeHead(404); return res.end(JSON.stringify({ error: 'item not found' })); }
+          const before = (entry.midiMappings || []).length;
+          entry.midiMappings = (entry.midiMappings || []).filter(m => m.id !== mappingId);
+          if (entry.midiMappings.length === before) {
+            res.writeHead(404); return res.end(JSON.stringify({ error: 'mapping not found' }));
+          }
+          const saved = playlistManager.save(playlist);
+          const savedEntry = saved.entries.find(e => e.id === itemId);
+          finishOk(savedEntry);
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+        return;
+      }
+      res.writeHead(405); res.end(JSON.stringify({ error: 'method not allowed' }));
+    }
     // ── DECK DYNAMIC VIEW OVERRIDES (deck overlays) ──────────────────────
     // Layered, view-scoped overlay decks composited OVER the main deck. Mirror
     // the mixer overlay routes (fail loud, no silent fallback). Literal-segment
@@ -7003,6 +8144,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // the deck-overlay stack: REQUIRES an explicit, non-'all' view (never-dark
     // guard), rejects a taken view (409), and the cap (400 over 4).
     else if (req.method === 'POST' && req.url === '/deck/overlays') {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         // viewSelection is REQUIRED (an all-view overlay would defeat the
         // feature AND violate never-dark). Validate first (fail loud).
@@ -7113,6 +8255,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     // POST /deck/overlays/reorder { order:[ids] } (armed before :id regexes).
     else if (req.method === 'POST' && req.url === '/deck/overlays/reorder') {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         const order = data && data.order;
         const current = mixer.getDeckOverlays ? mixer.getDeckOverlays() : [];
@@ -7196,11 +8339,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     // POST /deck/overlays/:id/playlist { name } — swap the overlay's playlist.
     else if (req.method === 'POST' && req.url.match(/^\/deck\/overlays\/[^\/]+\/playlist$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const id = decodeURIComponent(req.url.split('/')[3]);
       readBody(data => {
         const overlay = mixer.getDeckOverlay(id);
         if (!overlay) { res.writeHead(404); return res.end(JSON.stringify({ error: 'deck overlay not found' })); }
         try {
+          // MIXER-LAYER SESSION-CACHE SCOPING: a deck-overlay layer's retained
+          // tuning lives only until its playlist changes/reloads — same rule as
+          // mixer layers. Clear it; the fresh load runs with stowOutgoing:false.
+          sessionParamCache.clearChannel(overlay.id);
           if (data.name === null) {
             overlay.playlist = null;
             saveAllState();
@@ -7217,7 +8365,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             broadcastChannelPlaylistData(overlay);
             broadcastDeckState(); return;
           }
-          loadPlaylistEntry(overlay, pl.name, firstEntry.id);
+          loadPlaylistEntry(overlay, pl.name, firstEntry.id, { stowOutgoing: false });
           saveAllState();
           res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: overlay.playlist, playlistData: pl }));
           broadcastChannelPlaylistData(overlay);
@@ -7303,6 +8451,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           if (!hv.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: hv.error })); }
           overlay.hue = hv.value;
         }
+        // PERFORMANCE MODE: gate ONLY the viewSelection field on a deck
+        // overlay while live; other fields in the same PATCH stay allowed.
+        if (data.viewSelection !== undefined && rejectIfPerformanceMode(res)) return;
         if (data.viewSelection !== undefined) {
           const v = validateViewSelection(data.viewSelection);
           if (!v.ok) { res.writeHead(400, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ error: v.error })); }
@@ -7322,12 +8473,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           const src = loadPattern(patternsDir, patternName);
           const comp = wasmHost.compile(src);
           if (comp.ok) {
+            // SESSION PARAM RETENTION: DIRECT pattern swap → key by pattern name
+            // (entry pointer unchanged). Stow outgoing before wipe (deck overlay
+            // layer gets in-session continuity; never a file write).
+            stowSessionParams(overlay, overlay.pattern);
             if (overlay.handle) wasmHost.destroy(overlay.handle);
             overlay.handle = comp.handle;
             overlay.pattern = patternName;
             overlay.localControls = {};
             onChannelCompiled(overlay);
             finalizeCpcValues(overlay);
+            applySessionParamOverlay(overlay, patternName);
+            if (overlay._touchedControlIds) overlay._touchedControlIds.clear();
           } else {
             console.warn(`[DeckOverlay] Pattern swap FAILED: ${patternName} compile error:`, comp.error);
           }
@@ -7339,10 +8496,13 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     // DELETE /deck/overlays/:id — remove an overlay (free its WASM handle).
     else if (req.method === 'DELETE' && req.url.match(/^\/deck\/overlays\/[^\/]+$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const id = decodeURIComponent(req.url.split('/')[3]);
       if (paramCenter) paramCenter.unregisterChannel(id);
       const removed = mixer.removeDeckOverlay(id);
       if (!removed) { res.writeHead(404); return res.end(JSON.stringify({ error: 'deck overlay not found' })); }
+      // Deleting the overlay drops its session-cache tuning.
+      sessionParamCache.clearChannel(id);
       saveAllState();
       broadcastDeckState();
       res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
@@ -7429,14 +8589,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           channel.followsTempo = !!data.followsTempo;
         }
         if (data.locked !== undefined) {
-          const becameLocked = !channel.locked && !!data.locked;
           channel.locked = !!data.locked;
-          if (becameLocked) {
-            const pending = captureTimers.get(channel.id);
-            if (pending) { clearTimeout(pending); captureTimers.delete(channel.id); }
-          }
           clearChannelDirty(channel);
         }
+        // PERFORMANCE MODE: gate ONLY the viewSelection field on the deck
+        // channel while live; other fields in the same PATCH stay allowed.
+        if (data.viewSelection !== undefined && rejectIfPerformanceMode(res)) return;
         if (data.viewSelection !== undefined) {
           const v = validateViewSelection(data.viewSelection);
           if (!v.ok) {
@@ -7465,13 +8623,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.id === undefined) {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'id required' }));
         }
-        paramRouter.setChannelControl(channel.id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
-        scheduleEntryCapture(channel.id);
+        // CHANNEL-LOCAL write: deck tweaks stay on the deck channel. No
+        // cross-channel mirroring (operator ruling 2026-07-07 — parameter
+        // isolation). Explicit save-defaults still lives at POST
+        // /deck/playlist/capture; additionally, marking the deck touched here
+        // means the NEXT entry switch auto-captures this tuning into the
+        // outgoing entry (auto-save wave) so it survives the pattern change.
+        const ctlRes = paramRouter.setChannelControl(channel.id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
         markChannelDirtyIfLocked(channel.id);
-        // Per-pattern param SHARING: mirror onto siblings on the same
-        // (playlist, pattern) — mixer overlays + deck overlays.
-        propagateAndCapturePatternParam(channel.id, data.id, data.v0 || 0, data.v1 || 0, data.v2 || 0);
+        markDeckParamsTouched();
+        if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(channel.id, data.id);
         saveAllState();
+        broadcastDeckParamsSaved(); // deck "✓ SAVED" flash — only when persisted
         broadcastMixerState();
         broadcastDeckState();
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok' }));
@@ -7483,6 +8646,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(baseCh && baseCh.playlist ? baseCh.playlist : null));
     } else if (req.method === 'POST' && req.url === '/deck/playlist') {
+      if (rejectIfPerformanceMode(res)) return;
       readBody(data => {
         const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
@@ -7509,11 +8673,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
               name: pl.name, activeEntryId: null, cursor: 0,
               autopilot: (baseCh.playlist && baseCh.playlist.autopilot) || { active: false, delay_s: 30, shuffle: false }
             };
+            // Split-playlist: pane 1 (primary) follows this live-name change.
+            noteDeckLivePlaylist(pl.name);
             saveAllState();
             res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: baseCh.playlist }));
             broadcastMixerState();
             return;
           }
+          // loadPlaylistEntry calls noteDeckLivePlaylist internally (deck path).
           loadPlaylistEntry(baseCh, pl.name, firstEntry.id);
           saveAllState();
           opts.pattern = baseCh.pattern;
@@ -7524,15 +8691,120 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
         }
       });
+    } else if (req.method === 'GET' && req.url === '/deck/playlist/slots') {
+      // Split-playlist SLOTS snapshot. Byte-identical shape to the `deck` WS
+      // message's `playlistSlots` (CaptainPad feeds both into one path).
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        primary: serializeDeckPlaylistSlot(deckPlaylistSlots.primary),
+        secondary: serializeDeckPlaylistSlot(deckPlaylistSlots.secondary),
+        splitRatio: deckPlaylistSlots.splitRatio,
+      }));
+    } else if (req.method === 'POST' && req.url === '/deck/playlist/secondary') {
+      if (rejectIfPerformanceMode(res)) return;
+      readBody(data => {
+        const baseCh = mixer.getDeckChannel();
+        if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
+        // CLEAR: {name:null} detaches pane 2 (the ✕ button sends this). If the
+        // secondary is currently LIVE, promote it to primary so the deck keeps
+        // playing (primary = live name), then clear secondary.
+        if (data.name === null) {
+          const live = baseCh.playlist ? baseCh.playlist.name : null;
+          if (live && live === deckPlaylistSlots.secondary) {
+            deckPlaylistSlots.primary = live;
+          }
+          deckPlaylistSlots.secondary = null;
+          saveAllState();
+          res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: null }));
+          broadcastDeckState();
+          return;
+        }
+        if (typeof data.name !== 'string' || !data.name) {
+          res.writeHead(400); return res.end(JSON.stringify({ error: 'name must be a playlist name string or null' }));
+        }
+        // 400 if it would bind the same name to both panes (structural rule).
+        if (data.name === deckPlaylistSlots.primary) {
+          res.writeHead(400);
+          return res.end(JSON.stringify({ error: `secondary cannot equal the primary playlist '${data.name}'` }));
+        }
+        // F8 fix: tryLoad (NOT load) so a MALFORMED YAML file degrades to null
+        // and returns a 400 — load() THROWS PlaylistLoadError on corrupt YAML,
+        // and this readBody callback has no try/catch, so the throw escaped and
+        // the client hung with no response. tryLoad returns null on BOTH missing
+        // and malformed; we disambiguate: file present-but-unparseable → 400,
+        // genuinely absent → 404.
+        const pl = playlistManager.tryLoad(data.name);
+        if (!pl) {
+          // Disambiguate present-but-malformed (400) from genuinely-absent (404)
+          // by a direct disk check — tryLoad collapses both to null.
+          let filePresent = false;
+          try { filePresent = fs.existsSync(path.join(playlistsDir, `${data.name}.yaml`)); } catch { filePresent = false; }
+          res.writeHead(filePresent ? 400 : 404);
+          return res.end(JSON.stringify({
+            error: filePresent
+              ? `playlist '${data.name}' has malformed YAML`
+              : 'playlist not found',
+          }));
+        }
+        // Browse-only: assigning pane 2 does NOT change what's playing. The pane
+        // adopts res.playlist as canonical + a channelPlaylistData broadcast
+        // primes its cache so it renders instantly.
+        deckPlaylistSlots.secondary = data.name;
+        const slot = serializeDeckPlaylistSlot(data.name);
+        saveAllState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: slot }));
+        broadcastWs({
+          type: 'channelPlaylistData', channelId: 'secondary',
+          playlist: slot, playlistData: pl,
+        });
+        broadcastDeckState();
+      });
+    } else if (req.method === 'POST' && req.url === '/deck/playlist/split') {
+      readBody(data => {
+        // Bounds are INCLUSIVE [0.15, 0.85] — CaptainPad clamps its drag to
+        // exactly those boundary values and WILL POST them, so use </> (NOT
+        // <=/>=) or every full drag would 400. Fail loud on a bad value
+        // (no clamp-on-write, codex P0).
+        const ratio = Number(data.ratio);
+        if (!Number.isFinite(ratio) || ratio < DECK_SPLIT_RATIO_MIN || ratio > DECK_SPLIT_RATIO_MAX) {
+          res.writeHead(400);
+          return res.end(JSON.stringify({
+            error: `ratio must be a finite number in [${DECK_SPLIT_RATIO_MIN}, ${DECK_SPLIT_RATIO_MAX}], got '${data.ratio}'`,
+          }));
+        }
+        deckPlaylistSlots.splitRatio = ratio;
+        saveAllState();
+        res.writeHead(200); res.end(JSON.stringify({ status: 'ok', splitRatio: ratio }));
+        broadcastDeckState();
+      });
     } else if (req.method === 'POST' && req.url === '/deck/playlist/entry') {
       readBody(data => {
         const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
-        if (!baseCh.playlist || !baseCh.playlist.name) {
-          res.writeHead(400); return res.end(JSON.stringify({ error: 'no playlist loaded' }));
-        }
         if (!data.entryId) {
           res.writeHead(400); return res.end(JSON.stringify({ error: 'entryId required' }));
+        }
+        // SPLIT PLAYLISTS: an optional `slot` names which pane drives. Omitted →
+        // legacy behaviour (drive the live playlist). Given → resolve the slot's
+        // bound playlist NAME and drive it (this is what flips the live pointer
+        // between panes). A given-but-unbound slot is a 400.
+        let playlistName;
+        if (data.slot !== undefined) {
+          if (data.slot !== 'primary' && data.slot !== 'secondary') {
+            res.writeHead(400);
+            return res.end(JSON.stringify({ error: `slot must be 'primary' or 'secondary', got '${data.slot}'` }));
+          }
+          playlistName = deckPlaylistSlots[data.slot];
+          if (!playlistName) {
+            res.writeHead(400);
+            return res.end(JSON.stringify({ error: `deck ${data.slot} slot is not bound to a playlist` }));
+          }
+        } else {
+          // Legacy path: drive the currently-live playlist.
+          if (!baseCh.playlist || !baseCh.playlist.name) {
+            res.writeHead(400); return res.end(JSON.stringify({ error: 'no playlist loaded' }));
+          }
+          playlistName = baseCh.playlist.name;
         }
         try {
           // Route through the deck-transition helper. With transitions
@@ -7541,7 +8813,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // swap and broadcasts a `deckSwapStarted` event so the UI can
           // show pending state, then `deckSwapComplete` on landing.
           const r = loadPlaylistEntryWithTransition(
-            baseCh, baseCh.playlist.name, data.entryId, deckTransitionConfig,
+            baseCh, playlistName, data.entryId, deckTransitionConfig,
           );
           res.writeHead(200);
           res.end(JSON.stringify({
@@ -7574,6 +8846,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
       });
     } else if (req.method === 'POST' && req.url === '/deck/playlist/capture') {
+      if (rejectIfPerformanceMode(res)) return;
       const baseCh = mixer.getDeckChannel();
       if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
       try {
@@ -7589,6 +8862,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       readBody(data => {
         const baseCh = mixer.getDeckChannel();
         if (!baseCh) { res.writeHead(404); return res.end(JSON.stringify({ error: 'no deck channel' })); }
+        // PROFILE: validate BEFORE mutating anything so an unknown value fails
+        // the whole request atomically (400, loud — codex P0, no silent coerce).
+        // Clone the trans_* validation posture at /deck/transition-config.
+        let nextProfileName = null;
+        if (data.profile !== undefined) {
+          try {
+            nextProfileName = normalizeAutopilotProfile(data.profile);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: e.message }));
+          }
+        }
         baseCh.playlist = baseCh.playlist || { name: null, activeEntryId: null, cursor: 0, autopilot: { active: false, delay_s: 30, shuffle: false } };
         const ap = baseCh.playlist.autopilot = baseCh.playlist.autopilot || { active: false, delay_s: 30, shuffle: false };
         if (data.active !== undefined) ap.active = !!data.active;
@@ -7605,14 +8890,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           ap.groupDwell = clampInt(
             data.groupDwell, AUTO_GROUP_DWELL_MIN, AUTO_GROUP_DWELL_MAX, AUTO_GROUP_DWELL_DEFAULT);
         }
+        // PROFILE: persist the name + re-arm the profile instance when it
+        // changed. Re-arm detaches the old profile (unsubscribes / restores any
+        // CPC globals it set) and attaches the new one, so switching from
+        // audio_reactive back to random tears down the audio subscriptions
+        // cleanly. Also reset the group window (mirrors the group-field reset)
+        // so the new profile starts from a fresh baseline.
+        const profileChanged = nextProfileName !== null
+          && nextProfileName !== normalizeAutopilotProfile(ap.profile);
+        if (nextProfileName !== null) ap.profile = nextProfileName;
         // Reconfiguring group-locality starts a fresh group (drop the window).
-        if (data.groupMode !== undefined || data.groupSize !== undefined || data.groupDwell !== undefined) {
+        if (data.groupMode !== undefined || data.groupSize !== undefined
+            || data.groupDwell !== undefined || profileChanged) {
           if (baseCh._autoGroup) { baseCh._autoGroup.windowIds = null; baseCh._autoGroup.swapsLeft = 0; }
         }
+        if (profileChanged) armAutopilotProfile(nextProfileName);
         saveAllState();
         // Drive main's deck daemon timer from the now-updated autopilot block
         // (active/delay reschedule the self-rescheduling setTimeout; shuffle +
         // group are read live from baseCh.playlist.autopilot by the picker).
+        // NOTE: armAutopilotProfile already bumped the generation + rescheduled
+        // under the new profile's timing; updateState reschedules again with the
+        // active/delay change — both converge on the same profile.nextDelayMs.
         autopilot.updateState({ active: ap.active, delay_s: String(ap.delay_s), shuffle: ap.shuffle });
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok', autopilot: ap }));
         broadcastMixerState();
@@ -7660,6 +8959,248 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify(deckTransitionConfig));
       });
     }
+    // ── ENGINE SETTINGS (auto-save toggle) ───────────────────────────────
+    else if (req.method === 'GET' && req.url === '/settings') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(engineSettings));
+    } else if (req.method === 'POST' && req.url === '/settings') {
+      if (rejectIfPerformanceMode(res)) return;
+      readBody(data => {
+        // Fail loud (codex P0): autoSave MUST be a real boolean. No coercion —
+        // a truthy/falsy string or number is a broken client, not a valid
+        // toggle, and silently coercing it would let the operator think they
+        // changed a safety-critical persistence gate when they didn't.
+        if (typeof data.autoSave !== 'boolean') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `settings.autoSave must be a boolean, got '${data.autoSave}'`,
+          }));
+        }
+        engineSettings.autoSave = data.autoSave;
+        // ALWAYS persist the setting itself — this write BYPASSES the auto-save
+        // gate on purpose (the toggle lives in its own file precisely so that
+        // "turn auto-save OFF" is itself durable).
+        stateManager.saveSettingsState(engineSettings);
+        broadcastWs({ type: 'engineSettings', ...engineSettings });
+        // DIRTY-CAPTURE FLUSH (feature B2): re-enabling auto-save while
+        // performance mode is OFF flushes every deck capture that was deferred
+        // while saving was gated — plus the currently-loaded entry's live tuning
+        // — so the whole session lands on disk. This route is perf-gated (409s
+        // during a show), so effectiveAutoSave() here is exactly data.autoSave;
+        // enabling auto-save mid-performance can't reach this and won't flush
+        // until performance exit KEEP.
+        if (effectiveAutoSave()) flushPendingDeckCaptures();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(engineSettings));
+      });
+    } else if (req.method === 'POST' && req.url === '/settings/save-now') {
+      if (rejectIfPerformanceMode(res)) return;
+      // Operator checkpoint: force a full persistence of deck/mixer + globals
+      // RIGHT NOW, ignoring the auto-save gate. The single manual "save my
+      // current look" button for when auto-save is OFF. Writes the same files
+      // the auto triggers would, so a subsequent restart restores this state.
+      const wasAutoSave = engineSettings.autoSave;
+      try {
+        engineSettings.autoSave = true; // temporarily lift the gate for this write
+        saveAllState();
+        saveGlobals(true);
+      } finally {
+        engineSettings.autoSave = wasAutoSave;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', saved: true, autoSave: engineSettings.autoSave }));
+    }
+    // ── PERFORMANCE MODE (live-show structural lock) ─────────────────────
+    // GET returns the current {active, enteredAt}. POST toggles it:
+    //   { active: true }                        → ENTER
+    //   { active: false, exitAction: 'keep' }    → EXIT keeping the live look
+    //   { active: false, exitAction: 'restore' } → EXIT restoring the pre-show
+    // The engine WS broadcast ({type:'performanceMode'}) is authoritative —
+    // CaptainPad never optimistically flips. Fail loud on every misuse.
+    else if (req.method === 'GET' && req.url === '/performance-mode') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        active: performanceMode.active,
+        enteredAt: performanceMode.enteredAt,
+        // Pending dirty deck tuning so the exit sheet can ask whether to save.
+        ...computeDirtyDeckState(),
+      }));
+    } else if (req.method === 'POST' && req.url === '/performance-mode') {
+      readBody(data => {
+        // Fail loud (codex P0): `active` MUST be a real boolean — mirrors the
+        // /settings boolean check. No coercion of a safety-critical toggle.
+        if (typeof data.active !== 'boolean') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `performance-mode.active must be a boolean, got '${data.active}'`,
+            code: 'INVALID_BODY',
+          }));
+        }
+        // ── ENTER ──────────────────────────────────────────────────────
+        if (data.active) {
+          if (performanceMode.active) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: 'performance mode is already active',
+              code: 'PERFORMANCE_MODE_ALREADY_ACTIVE',
+            }));
+          }
+          // Capture the pre-show snapshot FIRST — a failure aborts the entry
+          // with 500 so we NEVER enter unprotected (no snapshot ⇒ no restore).
+          try {
+            snapshotManager.save(PERF_SNAPSHOT_NAME, {
+              ...captureLook(),
+              globals: captureGlobalsForSnapshot(),
+            });
+          } catch (err) {
+            console.error(
+              `[PerformanceMode] pre-show snapshot capture FAILED — aborting ` +
+              `entry: ${err && err.message}`);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              error: `failed to capture pre-show snapshot: ${err && err.message}`,
+              code: 'PERFORMANCE_MODE_SNAPSHOT_FAILED',
+            }));
+          }
+          performanceMode.active = true;
+          performanceMode.enteredAt = new Date().toISOString();
+          broadcastWs({
+            type: 'performanceMode',
+            active: true,
+            enteredAt: performanceMode.enteredAt,
+            ...computeDirtyDeckState(),
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            active: true,
+            enteredAt: performanceMode.enteredAt,
+          }));
+        }
+        // ── EXIT ───────────────────────────────────────────────────────
+        if (!performanceMode.active) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'performance mode is not active',
+            code: 'PERFORMANCE_MODE_NOT_ACTIVE',
+          }));
+        }
+        const exitAction = data.exitAction;
+        // Three exit semantics (fail loud on anything else):
+        //   'keep-save' → leave the live look AND flush the dirty deck captures
+        //                 to their playlist files (the previous KEEP behaviour).
+        //   'keep'      → KEEP WITHOUT SAVING: leave the live look but DISCARD
+        //                 the pending playlist-file backlog; the session cache +
+        //                 live in-memory tuning stay, and normal edit-mode
+        //                 auto-capture resumes for future switches.
+        //   'restore'   → revert the whole rig to the pre-show snapshot.
+        if (exitAction !== 'keep' && exitAction !== 'keep-save' && exitAction !== 'restore') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `exit requires exitAction 'keep', 'keep-save' or 'restore', got '${exitAction}'`,
+            code: 'PERFORMANCE_MODE_INVALID_EXIT',
+          }));
+        }
+        // Force one full persist regardless of the stored autoSave toggle
+        // (the save-now pattern). Called AFTER active is cleared so
+        // effectiveAutoSave() tracks engineSettings.autoSave again; we lift
+        // that flag too so KEEP/RESTORE land on disk even with auto-save OFF.
+        const forcePersist = () => {
+          const wasAutoSave = engineSettings.autoSave;
+          try {
+            engineSettings.autoSave = true;
+            saveAllState();
+            saveGlobals(true);
+          } finally {
+            engineSettings.autoSave = wasAutoSave;
+          }
+        };
+        if (exitAction === 'keep' || exitAction === 'keep-save') {
+          performanceMode.active = false;
+          performanceMode.enteredAt = null;
+          forcePersist();
+          // SESSION CACHE (feature A6): both KEEP variants keep the session cache
+          // — the live look is what we're keeping, so its in-memory tuning stays
+          // valid across later A→B→A switches.
+          if (exitAction === 'keep-save') {
+            // KEEP & SAVE TUNING: if stored auto-save is ON, effectiveAutoSave()
+            // is now true (active just cleared) — flush the deck captures
+            // deferred during the show to their playlist files, in addition to
+            // forcePersist. If auto-save is OFF, nothing hits disk and the
+            // pending flags survive for a later POST /settings {autoSave:true}.
+            if (effectiveAutoSave()) flushPendingDeckCaptures();
+          } else {
+            // KEEP WITHOUT SAVING: discard the pending playlist-file backlog so
+            // the mid-show deck tuning never bakes into the shared presets. The
+            // session cache is left intact (in-session continuity) and the live
+            // entry stays touched, so normal edit-mode auto-capture resumes on
+            // the next switch — this only declines the exit-time flush.
+            pendingDeckFlush.clear();
+          }
+          snapshotManager.delete(PERF_SNAPSHOT_NAME);
+          broadcastWs({
+            type: 'performanceMode', active: false, enteredAt: null,
+            ...computeDirtyDeckState(),
+          });
+          broadcastMixerState();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ active: false, exitAction }));
+        }
+        // exitAction === 'restore': put the whole rig back to the pre-show
+        // capture. A missing snapshot is a fail-loud 500 (we should always
+        // have one while active) — never a silent no-op.
+        let look;
+        try {
+          look = snapshotManager.load(PERF_SNAPSHOT_NAME);
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: `pre-show snapshot is corrupt: ${err && err.message}`,
+            code: 'PERFORMANCE_MODE_SNAPSHOT_MALFORMED',
+          }));
+        }
+        if (!look) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'pre-show snapshot missing — cannot restore',
+            code: 'PERFORMANCE_MODE_SNAPSHOT_MISSING',
+          }));
+        }
+        // Clear any effects the operator enabled mid-performance (same call as
+        // e-stop) so the restore lands on the exact pre-show effect state.
+        if (globalEffectsController && globalEffectsController.panicStop) {
+          globalEffectsController.panicStop();
+        }
+        // SESSION CACHE + DIRTY FLUSH (features A6 / B1): RESTORE reverts the
+        // whole rig to the pre-show snapshot, so ALL mid-show tuning must
+        // vanish — clear the entire session cache (so no mid-show param
+        // resurfaces on a later switch) AND drop every pending deck capture (so
+        // mid-show tuning never reaches a playlist file). Cleared BEFORE
+        // recallLook so nothing the restore does can re-seed them.
+        sessionParamCache.clearAll();
+        pendingDeckFlush.clear();
+        recallLook(look);
+        stateManager.applyGlobalsState(
+          look.globals, paramCenter, intensityController, globalEffectsController);
+        performanceMode.active = false;
+        performanceMode.enteredAt = null;
+        forcePersist();
+        snapshotManager.delete(PERF_SNAPSHOT_NAME);
+        // applyGlobalsState routes params through paramCenter.set(..., 'init')
+        // which does NOT emit a sharedParams WS frame — push one explicitly so
+        // clients see the restored shared params immediately.
+        if (paramCenter) {
+          broadcastWs({ type: 'sharedParams', ...paramCenter.getCanonicalState() });
+        }
+        broadcastWs({
+          type: 'performanceMode', active: false, enteredAt: null,
+          ...computeDirtyDeckState(),
+        });
+        broadcastMixerState();
+        broadcastAutopilot();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ active: false, exitAction: 'restore' }));
+      });
+    }
     // ── MIXER CHANNEL PLAYLIST ASSIGNMENT ────────────────────────────────
     else if (req.method === 'GET' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist$/)) {
       const id = req.url.split('/')[3];
@@ -7670,6 +9211,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(ch.playlist || null));
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const id = req.url.split('/')[3];
       const reject = rejectIfWrongRole(id, 'mixer');
       if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
@@ -7677,6 +9219,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         const ch = mixer.getMixerChannel(id);
         if (!ch) { res.writeHead(404); return res.end(JSON.stringify({ error: 'channel not found' })); }
         try {
+          // MIXER-LAYER SESSION-CACHE SCOPING (operator refinement): a mixer
+          // layer's retained tuning lives only until its PLAYLIST is changed or
+          // (re)loaded. Any playlist assignment on this layer — detach, load, or
+          // reload of the same playlist — starts the layer's session cache
+          // FRESH. Clear it here; the fresh loadPlaylistEntry below runs with
+          // stowOutgoing:false so the outgoing (old-playlist) tuning is not
+          // re-cached, and the new first entry applies its own defaults with no
+          // stale overlay. Entry switches WITHIN the assigned playlist keep
+          // their tuning (they don't hit this route).
+          sessionParamCache.clearChannel(ch.id);
           if (data.name === null) {
             ch.playlist = null;
             saveAllState();
@@ -7696,7 +9248,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
             broadcastChannelPlaylistData(ch);
             broadcastMixerState(); return;
           }
-          loadPlaylistEntry(ch, pl.name, firstEntry.id);
+          loadPlaylistEntry(ch, pl.name, firstEntry.id, { stowOutgoing: false });
           saveAllState();
           // playlistData mirrors POST /mixer/channels — entries are
           // included inline so the panel never needs to GET
@@ -7781,6 +9333,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastMixerState();
       });
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist\/capture$/)) {
+      if (rejectIfPerformanceMode(res)) return;
       const id = req.url.split('/')[3];
       const reject = rejectIfWrongRole(id, 'mixer');
       if (reject) { res.writeHead(reject.status, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(reject.body)); }
@@ -7823,14 +9376,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // on a fresh swap. Clear localControls first so any keys NOT present
         // in the saved defaults snap back to the WASM export's initial value.
         ch.localControls = {};
+        // Seed Pixelblaze defaults for untouched local controls BEFORE the
+        // saved-defaults replay — same ordering as onChannelCompiled (~:319)
+        // and the transition onComplete (~:1129). Without this, discarding an
+        // in-memory edit strips v0 off every untouched, no-saved-default slider
+        // and re-opens the MIDI knob off-by-k on this channel (docs/34 §#1).
+        // The handle is already installed and has been ticking (beginFrame runs
+        // every render frame), so getExports() is valid here — no extra
+        // beginFrame(0) needed.
+        ch.seedLocalControlDefaults(wasmHost);
         playlistManager.applyEntryDefaults(ch, entry, wasmHost, paramRouter, paramCenter);
         finalizeCpcValues(ch);
-
-        // Cancel any pending capture for this channel — discard is an
-        // explicit "throw away in-memory edits" action; we shouldn't let a
-        // stale timer fire after we revert.
-        const pending = captureTimers.get(id);
-        if (pending) { clearTimeout(pending); captureTimers.delete(id); }
+        // DISCARD = reset to on-disk defaults. Drop this slot's session tuning +
+        // touched set so the session overlay does NOT resurrect the edit the
+        // operator just discarded (no applySessionParamOverlay here). Keyed by
+        // the same slot key (entry id) the load path uses.
+        sessionParamCache.clearPattern(ch.id, sessionKeyFor(ch));
+        if (ch._touchedControlIds) ch._touchedControlIds.clear();
 
         clearChannelDirty(ch);
         saveAllState();
@@ -7935,6 +9497,39 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       console.error('Server error:', e);
     }
   });
+  // BOOT PATTERN PIN (operator-intent ruling — see bootPatternPinDecision's
+  // doc block): an explicit CLI `--pattern` holds the deck, so a restored-
+  // ACTIVE deck pattern autopilot boots SUSPENDED instead of cycling the
+  // pinned pattern away within one delay window. Must run BEFORE
+  // armAutopilotProfile below — arming reschedules the daemon, and a
+  // restored-active daemon would arm its first cycle timer right there.
+  {
+    const pin = bootPatternPinDecision({
+      cliPattern: bootCliPattern,
+      daemonActive: autopilot.state.active,
+      deckMirrorActive: deckAutopilotState().active,
+    });
+    if (pin.suspend) {
+      // Runtime-only daemon pause (no config.yaml write — operator state on
+      // disk is only rewritten by the operator's next explicit toggle).
+      autopilot.suspend();
+      // Clear the deck channel's persisted mirror too, so CaptainPad / the
+      // WS autopilot payload show the truth (SUSPENDED), not a stale ON.
+      const pinDeckCh = mixer.getDeckChannel();
+      if (pinDeckCh && pinDeckCh.playlist && pinDeckCh.playlist.autopilot) {
+        pinDeckCh.playlist.autopilot.active = false;
+      }
+      console.log(
+        `  ▶ Boot --pattern '${bootCliPattern}' pins the deck (${pin.reason}): ` +
+        `deck pattern autopilot boots SUSPENDED — explicit operator intent beats restored ` +
+        `automation. Re-enable via CaptainPad deck ▶ or POST /autopilot {"active":true}.`);
+    }
+  }
+  // Arm the deck autopilot PROFILE from the restored per-scene state BEFORE the
+  // daemon starts — armAutopilotProfile injects the timing profile the daemon's
+  // first _scheduleNext will consult (timer vs event-driven). The name was
+  // validated + cleared to 'random' at restore, so this never throws.
+  armAutopilotProfile(currentAutopilotProfileName());
   // Start main's deck Autopilot daemon. Its active/delay live in config.yaml
   // (autopilot.state); the next-entry pick reads the restored deck
   // playlist.autopilot live. Mixer + deck overlays resume on their own — the
@@ -7965,17 +9560,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // see the same values that the existing one-shot REST loads would
     // have given them — without having to wait for the next change.
     try {
-      const st = deckAutopilotState();
-      ws.send(JSON.stringify({
-        type: 'autopilot',
-        active: !!st.active,
-        delay_s: st.delay_s !== undefined ? String(st.delay_s) : '30',
-        shuffle: !!st.shuffle,
-        // Include the next-swap time so a late-joining deck paints the pattern
-        // countdown immediately (mirrors broadcastAutopilot + the colorAutopilot
-        // snapshot below, which already spreads the field).
-        nextSwapAtMs: (typeof autopilot !== 'undefined' && autopilot) ? autopilot.nextSwapAtMs : null,
-      }));
+      // Shared builder so the late-joiner replay carries the SAME fields as a
+      // live broadcastAutopilot() — including `profile` + `profiles` for the
+      // dropdown, and the next-swap countdown time.
+      ws.send(JSON.stringify(buildAutopilotPayload()));
     } catch (e) {
       // never let a snapshot send break a fresh WS handshake
     }
@@ -8063,26 +9651,69 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // never let a snapshot send break a fresh WS handshake
     }
 
+    // Replay engine settings (auto-save toggle) so a fresh CaptainPad config
+    // screen paints the current state without a focus fetch. Same posture as
+    // the deckTransitionConfig / timeline replays above.
+    try {
+      ws.send(JSON.stringify({ type: 'engineSettings', ...engineSettings }));
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+
+    // Replay performance-mode state so a fresh CaptainPad paints the live-show
+    // lock badge immediately (same posture as the engineSettings replay).
+    try {
+      ws.send(JSON.stringify({
+        type: 'performanceMode',
+        active: performanceMode.active,
+        enteredAt: performanceMode.enteredAt,
+        ...computeDirtyDeckState(),
+      }));
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+
+    // Replay the engine-owned named effect BANKS (ordered list + active id) so
+    // a fresh CaptainPad paints its bank switcher in the right state
+    // immediately, without a focus fetch (same posture as the effectsPage/
+    // performanceMode single-source-of-truth state). effects_v2 v3.
+    try {
+      if (globalEffectSlotManager) {
+        const meta = globalEffectSlotManager.getBanksMeta();
+        ws.send(JSON.stringify({
+          type: 'effectBanks',
+          banks: meta.banks.map(b => ({ id: b.id, name: b.name })),
+          activeBankId: meta.activeBankId,
+        }));
+      }
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+
     ws.on('message', msg => {
       try {
         const d = JSON.parse(msg);
         if (d.type === 'setControl' && d.id !== undefined) {
-          paramRouter.setControl(d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
-          scheduleEntryCapture(mixer.baseChannelId);
+          // CHANNEL-LOCAL write (deck base): no cross-channel mirroring
+          // (operator ruling 2026-07-07 — parameter isolation). Marks the deck
+          // touched so the next entry switch auto-captures this tuning into the
+          // outgoing entry (auto-save wave — survives the pattern change).
+          const ctlRes = paramRouter.setControl(d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
           markChannelDirtyIfLocked(mixer.baseChannelId);
-          // Per-pattern param SHARING (see propagatePatternParam).
-          if (mixer.baseChannelId) {
-            propagateAndCapturePatternParam(mixer.baseChannelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
-          }
+          markDeckParamsTouched();
+          if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(mixer.baseChannelId, d.id);
           saveAllState();
+          broadcastDeckParamsSaved(); // deck "✓ SAVED" flash — only when persisted
           broadcastMixerState();
           broadcastDeckState();
         } else if (d.type === 'setChannelControl' && d.channelId && d.id !== undefined) {
-          paramRouter.setChannelControl(d.channelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
-          scheduleEntryCapture(d.channelId);
+          // CHANNEL-LOCAL write: the CaptainPad localParam path carries a
+          // channelId — the value lands ONLY on that channel's WASM handle +
+          // localControls. No playlist auto-capture, no cross-channel
+          // mirroring (operator ruling 2026-07-07 — parameter isolation).
+          const ctlRes = paramRouter.setChannelControl(d.channelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
           markChannelDirtyIfLocked(d.channelId);
-          // Per-pattern param SHARING (see propagatePatternParam).
-          propagateAndCapturePatternParam(d.channelId, d.id, d.v0 || 0, d.v1 || 0, d.v2 || 0);
+          if (ctlRes && ctlRes.status === 'ok') markChannelParamTouched(d.channelId, d.id);
           saveAllState();
           broadcastMixerState();
           broadcastDeckState();
