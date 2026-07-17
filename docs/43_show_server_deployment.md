@@ -119,6 +119,11 @@ Every link is required; any missing link breaks unattended recovery.
    the `titanic` user auto-logs-in. Set up with **Sysinternals Autologon**
    (stores the password as an LSA secret, not plaintext registry). This is
    an operator-performed step — no script in this repo touches passwords.
+   Autologon already means **no password is ever typed at boot**. Do NOT
+   reach for a blank-password account instead: Windows default policy
+   blocks blank-password accounts from network logon, which would break
+   the SMB/SSH deploy path — and weakening that policy hands admin to
+   anyone on the show LAN.
 3. **Power hygiene.** Never sleep, never hibernate, disable Fast Startup
    (`powercfg /h off` kills both), display timeout is fine. Windows Update
    set to notify-only so it can never auto-reboot mid-show (moot on the
