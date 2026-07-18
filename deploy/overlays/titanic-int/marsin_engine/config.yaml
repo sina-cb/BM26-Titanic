@@ -1,0 +1,198 @@
+sacn:
+  priority: 100
+  sourceName: MarsinEngine
+  destinations:
+    - 127.0.0.1
+  multicast: false
+controllers:
+  - name: TestBench-10
+    host: 10.1.1.10
+    protocol: sACN
+    universes:
+      - 10
+      - 12
+    alsoFlat: true
+engine:
+  fps: 40
+mixer:
+  maxChannels: 8
+vis:
+  broadcastHz: 5
+  maxPixels: 100
+server:
+  port: 6968
+vsn1:
+  # Servers never auto-flash VSN1 hardware (docs/43) - keep these false here.
+  deployLayout: false
+  deployDebounceMs: 1200
+  deployOnBoot: false
+playlist:
+  active: false
+  delay_s: '30'
+  shuffle: false
+web_client:
+  enabled: false
+  port: 6967
+  build_dir: ../CaptainPad/dist
+osc:
+  enabled: true
+  port: 10000
+  host: 0.0.0.0
+  gainMax: 2
+  allowedSenders: []
+  bindings: {}
+audio:
+  enabled: false
+  capture:
+    backend: ffmpeg
+    ffmpegPath: ffmpeg
+    platform: auto
+    device: null
+    deviceLabel: null
+    deviceId: null
+    sampleRate: 44100
+    channels: 1
+    inputFormat: null
+    loop: true
+    captureBufferMs: 50
+    jitterBufferHops: 4
+    stopTimeoutMs: 2000
+    stderrWarnIntervalMs: 60000
+  fftSize: 2048
+  hopSize: 512
+  bands:
+    lowMaxHz: 200
+    midMaxHz: 4000
+    attackMs: 6
+    releaseMs: 180
+    noiseGate: 0.04
+    inputGain: 1
+    sourceSmoothHz: 12000
+  kick:
+    minHz: 50
+    maxHz: 110
+    threshold: 2.4
+    refractoryMs: 220
+    decayMs: 70
+  sub:
+    minHz: 30
+    maxHz: 60
+  structureDetector:
+    enabled: true
+    dropEdgeMode: windowed
+companion:
+  osc:
+    host: 127.0.0.1
+    port: 10000
+  source: mic
+  device: null
+  engine:
+    host: 127.0.0.1
+    port: 6968
+  bpmSmoothing:
+    enabled: true
+    tauMs: 250
+companions: {}
+timeline:
+  enabled: true
+  activePlan: playa_default
+  tickMs: 1000
+  programLeaseSec: 30
+  operatorLeaseSec: 120
+  mood:
+    key: audioParty
+    partyThreshold: 0.5
+tempo:
+  oscBpmSmoothing:
+    enabled: false
+    tauMs: 250
+colorPalettes:
+  - id: laser_lime
+    name: Laser Lime ★
+    c1: 0.28
+    c2: 0.78
+  - id: ultraviolet
+    name: Ultraviolet ★
+    c1: 0.74
+    c2: 0.52
+  - id: bass_drop
+    name: Bass Drop ★
+    c1: 0.64
+    c2: 0.9
+  - id: midnight_laser
+    name: Midnight Laser ★
+    c1: 0.66
+    c2: 0.33
+  - id: vapor_laser
+    name: Vapor Laser ★
+    c1: 0.91
+    c2: 0.45
+  - id: sunset_coral
+    name: Sunset Coral
+    c1: 0.03
+    c2: 0.5
+  - id: aurora
+    name: Aurora
+    c1: 0.35
+    c2: 0.85
+  - id: phoenix
+    name: Phoenix
+    c1: 0
+    c2: 0.13
+  - id: deep_sea
+    name: Deep Sea
+    c1: 0.62
+    c2: 0.48
+  - id: cyberpunk
+    name: Cyberpunk
+    c1: 0.92
+    c2: 0.6
+  - id: forest_fire
+    name: Forest Fire
+    c1: 0.07
+    c2: 0.25
+  - id: lavender_dream
+    name: Lavender Dream
+    c1: 0.75
+    c2: 0.95
+  - id: tropical
+    name: Tropical
+    c1: 0.46
+    c2: 0.04
+  - id: royal
+    name: Royal
+    c1: 0.78
+    c2: 0.13
+  - id: plasma_core
+    name: Plasma Core
+    c1: 0.07
+    c2: 0.8
+  - id: toxic_wave
+    name: Toxic Wave
+    c1: 0.31
+    c2: 0.6
+  - id: neon_jungle
+    name: Neon Jungle
+    c1: 0.36
+    c2: 0.18
+  - id: electric_ice
+    name: Electric Ice
+    c1: 0.5
+    c2: 0.76
+  - id: acid_sunset
+    name: Acid Sunset
+    c1: 0.08
+    c2: 0.26
+  - id: afterhours
+    name: Afterhours
+    c1: 0.69
+    c2: 0.1
+colorAutopilot:
+  active: true
+  palettes:
+    - plasma_core
+    - phoenix
+    - deep_sea
+  delay_s: 5
+  shuffle: false
+  transitionMs: 1000

@@ -1,0 +1,366 @@
+# Bringing up a show server
+
+Hi Sina! This folder turns a blank Windows machine into a BM26 Titanic show
+server: a box that powers itself back on after a power cut, logs itself in,
+and starts the lighting stack on a scene you choose -- with zero human
+touches -- plus the plumbing to deploy code to it from the laptop. The full
+design lives in
+[docs/43_show_server_deployment.md](../docs/43_show_server_deployment.md),
+and the agent-facing version of this guide is
+[interior1_agent_brief.md](interior1_agent_brief.md). This README is the
+human path.
+
+After BIOS, the whole flow is **three commands**, in order:
+
+1. **user** -- `create_titanic_user.ps1` (create the `titanic` account; it
+   prints a bold Autologon banner to follow).
+2. **config** -- `server_setup.ps1` (one idempotent machine-config pass;
+   because the account now exists, the SMB grant and boot task complete in
+   this same pass).
+3. **deploy** -- `set_boot.ps1 -Scene <scene>` (pick the boot scene and wire
+   the boot task to the supervisor).
+
+## Quick start
+
+| # | Step | Who | Rough time |
+|---|------|-----|------------|
+| 0 | Clone the repo | You | 2 min |
+| 1 | BIOS: power on after power loss | You | 5 min |
+| 2 | **user:** `create_titanic_user.ps1` + Autologon | You | 10 min |
+| 3 | **config:** `server_setup.ps1` (elevated!) | Script | 5-10 min |
+| 4 | **deploy:** `set_boot.ps1 -Scene <scene>` | Script | 1 min |
+| 5 | Verify + reboot test | You | 5 min |
+| 6 | The plug test (twice) | You | 10 min |
+
+Everything the scripts do is safe to re-run -- an already-done step just says
+`SKIP` and moves on. When in doubt, run it again.
+
+## Step 0 -- get the code
+
+From any PowerShell window:
+
+```powershell
+git clone -b feat/auto_start https://github.com/sina-cb/BM26-Titanic.git C:\titanic\BM26-Titanic
+```
+
+This clone is for setup. Later, the deploy pipeline will sync the laptop's
+working tree into this same path -- so don't hand-edit files here.
+
+## Step 1 -- BIOS: wake up after a power cut
+
+Reboot into the BIOS/UEFI setup and enable **"Restore on AC Power Loss ->
+Power On"** (your board may call it "AC Power Recovery" or "After Power
+Failure"). Pick **always on**, not "last state".
+
+Why: on the playa, generators die and come back with nobody standing at the
+machine -- this setting is what makes the box turn itself back on, and "last
+state" would leave a deliberately-shut-down machine dark forever.
+
+## Step 2 -- the titanic user + Autologon (command 1: "user")
+
+The stack runs as a local user named `titanic`. Create it with the
+self-elevating one-liner (say Yes to the UAC prompt; the window stays open so
+you can read the banner it prints):
+
+```powershell
+Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File C:\titanic\BM26-Titanic\deploy\create_titanic_user.ps1'
+```
+
+It asks you to type the password twice, right there at the console. The
+password is never stored, logged, or passed as an argument. When it finishes
+it prints a **bold yellow banner** with the exact Autologon instructions --
+follow it:
+
+1. Run the Autologon tool (it self-elevates via UAC, or right-click -> Run as
+   administrator):
+   `C:\titanic\BM26-Titanic\deploy\setup\tools\autologon\Autologon64.exe`
+   The tool is **not in the repo** -- the Sysinternals license forbids
+   republishing it and this repo is public. `create_titanic_user.ps1`
+   downloads it automatically on first use into that gitignored path (you'll
+   need internet at setup time; fine right after the `git clone`). If that
+   download failed (offline), the banner it printed says so -- fetch it
+   manually via `deploy\setup\get_autologon.ps1` or from
+   <https://learn.microsoft.com/sysinternals/downloads/autologon>. Microsoft's
+   `Eula.txt` lands alongside the exe (it applies).
+2. In the Autologon window: **Username** `titanic`, **Domain** = this
+   machine's hostname (the banner fills in the real value), **Password** =
+   the one you just typed, then click **Enable**.
+3. Log in as `titanic` once (creates the profile), then reboot to test.
+
+Two things to never do here:
+
+- **Never use a blank password.** Windows blocks blank-password accounts
+  from network logons, which would break the SSH/SMB deploy path -- and
+  weakening that policy hands admin to anyone on the LAN.
+- **Never set autologon via registry keys.** The `DefaultPassword` value is
+  stored in plaintext. Autologon (the Sysinternals tool) is the only
+  approved way.
+
+**Quick check -- reboot lands on the `titanic` desktop with no prompt.** You
+can confirm Autologon is wired the safe way (LSA secret, not plaintext)
+without touching any secret:
+
+```powershell
+Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' |
+  Select-Object AutoAdminLogon, DefaultUserName, DefaultDomainName, DefaultPassword
+```
+
+Expect `AutoAdminLogon = 1`, `DefaultUserName = titanic`,
+`DefaultDomainName = <hostname>`, and **`DefaultPassword` absent**. A
+`DefaultPassword` with a value means someone used the forbidden registry
+method -- fix that (use Autologon instead).
+
+## Step 3 -- the config pass (command 2: "config")
+
+`server_setup.ps1` does the machine prep in one go: runtimes (Node, Git,
+Python), power hygiene, Windows Update notify-only, OpenSSH server, SMB
+share, firewall rules, the boot task, and (optionally) a static IP.
+
+**It must run as Administrator.** Paste this into any normal PowerShell
+window -- it opens an elevated window (say Yes to UAC), runs the setup, and
+stays open so you can read the summary table:
+
+```powershell
+Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File C:\titanic\BM26-Titanic\deploy\server_setup.ps1'
+```
+
+For the full run, add the laptop's SSH public key and the static address for
+the show LAN inside the quotes (example values -- use the real ones):
+
+```powershell
+Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File C:\titanic\BM26-Titanic\deploy\server_setup.ps1 -SshPublicKey C:\keys\laptop.pub -StaticIp 10.1.1.152 -PrefixLength 24 -Gateway 10.1.1.1 -Dns 10.1.1.1'
+```
+
+Because you created the `titanic` account in Step 2, the SMB share grant and
+the boot task **complete in this single pass** -- no deferred WARNs. Reading
+the summary table:
+
+- **DONE** -- the step made a change and succeeded.
+- **SKIP** -- already configured (or you didn't pass a needed param, like
+  `-SshPublicKey` / `-StaticIp`). Fine.
+- **WARN** -- worked partially; something needs a later step or a re-run.
+- **FAIL** -- something is actually wrong. The row carries the exact error;
+  nothing is silently worked around. Fix the cause and re-run.
+
+> **Order note.** If you ever run `config` *before* the `titanic` user
+> exists (the very first machine was brought up that way), you'll get WARNs
+> for the SMB grant and the boot task -- that's expected. Just re-run
+> `server_setup.ps1` after the account exists; it's idempotent and picks up
+> whatever it deferred.
+
+Two things that surprised us on the first bring-up (both benign):
+
+- **OpenSSH install can sit silent for minutes.** The OpenSSH Server
+  capability is a Feature-on-Demand download with no progress output. Signs
+  it's alive: `sshd` shows up in `Get-Service` partway through, and
+  TiWorker / TrustedInstaller are busy. Ctrl+C and re-run is safe (the step
+  is idempotent).
+- **winget Python can fail with a per-user collision.** If a USER-scoped
+  `Python.Python.3.12` was installed earlier, the machine-scope install
+  collides (exit code `-1978335226`). Fix: `winget uninstall
+  Python.Python.3.12`, then re-run `config`. Machine scope is required so the
+  `titanic` account (which the stack runs as) actually sees Python.
+
+## Step 4 -- set the boot scene (command 3: "deploy")
+
+Tell this machine which scene to boot. `set_boot.ps1` writes this hostname's
+entry in `deploy/machines.yaml`, makes sure the `BM26TitanicStack` task
+points at the supervisor `deploy/boot_server.ps1`, and confirms the chain.
+Self-elevating (it edits the `titanic` user's task):
+
+```powershell
+Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File C:\titanic\BM26-Titanic\deploy\set_boot.ps1 -Scene test_bench'
+```
+
+`-Scene` is required and is validated (it must have a
+`simulation\scenes\<scene>\scene_config.yaml` and a
+`marsin_engine\models\<scene>.js`, exactly what the launcher needs).
+Optional: `-LauncherProfile` (default `prod`) and `-Pattern`. It ends with a
+"BOOT SCENE SET" confirmation showing the hostname, scene, profile, and the
+exact launcher line the boot task will run -- effective at the next
+`titanic` logon / reboot.
+
+**Config overlay.** After writing the manifest and ensuring the boot task,
+`set_boot.ps1` applies this machine's config overlay if one exists --
+`deploy\overlays\<hostname-lowercase>\` mirrored over the repo tree, so the
+box drives its real controllers instead of the tracked laptop/dev config
+(loopback sACN, no physical controllers). No overlay is a loud WARN, not a
+failure. A brand-new machine starts by copying an existing overlay dir to
+`deploy\overlays\<its-hostname>\` and editing the controller IPs in
+`marsin_engine\config.yaml` -- see
+[`deploy\overlays\README.md`](overlays/README.md).
+
+**Browser at boot (`open_browser`).** Add `-OpenBrowser` (toggle off with
+`-NoOpenBrowser`, or edit `open_browser` in `machines.yaml`) to have the
+supervisor auto-open the sim (`localhost:6969`) and audio companion
+(`localhost:6966`) pages in the default browser at boot. They open on the
+**titanic console desktop only** -- the session the supervisor runs in -- not
+in any other logged-in user's session (a fast-user-switching nuance). Default
+is off: servers stay headless.
+
+At boot the chain is: autologon -> `BM26TitanicStack` task ->
+`deploy\boot_server.ps1` -> `node launcher.js <profile> --scene <scene>
+--no-launch`. The supervisor streams to a dated log under `C:\titanic\logs\`
+and relaunches loudly if the launcher ever exits.
+
+## Step 5 -- verify + reboot test
+
+Read-only state report (no admin needed, run it as often as you like):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\titanic\BM26-Titanic\deploy\verify_server.ps1
+```
+
+It prints hostname, addresses, runtime versions vs the pins, OpenSSH state,
+firewall rules, the share, the account, the boot task, hibernate state, and
+any COM ports. One quirk: from a **non-elevated** window a couple of rows
+(the SMB share and the boot task) show `UNKNOWN (needs elevation to
+confirm)` -- Windows won't let a normal user read them. Re-run elevated for a
+definitive yes/no.
+
+**Reboot test.** Reboot and confirm:
+
+1. the machine lands on the `titanic` desktop with **no prompt**;
+2. the boot task fired -- check its last run time (elevated):
+
+```powershell
+Get-ScheduledTask BM26TitanicStack | Get-ScheduledTaskInfo
+```
+
+`LastRunTime` should be about your boot time. Now that `boot_server.ps1`
+ships in the repo, the task actually launches the supervisor -- so also look
+for a fresh `boot_server_*.log` under `C:\titanic\logs\`, and (once the code
+tree + `node_modules` are present on the box) the sim answering at
+`http://localhost:6969/simulation/`. If the tree isn't fully seeded yet, the
+supervisor will loudly retry every 10 s -- that's the expected in-between
+state until the deploy pipeline seeds the code + deps.
+
+## Step 6 -- the plug test
+
+The whole point. With the machine up and the lights/sim animating:
+
+1. Pull the wall plug.
+2. Plug it back in.
+3. Watch: power on -> autologon as `titanic` -> boot task -> supervisor ->
+   stack up, with you touching nothing.
+
+Do it **twice** -- once is luck, twice is a boot chain.
+
+## Running a single step
+
+The full `server_setup.ps1` is the normal path (and is what the Phase 2
+deploy pipeline will drive remotely), but every step is a standalone script
+you can run on its own -- to fix one thing or re-check it. Each is **exactly
+as safe to re-run** as the full orchestrator (SKIP on already-done work), and
+each prints its own conclusive `==== <step>: DONE/SKIP/WARN/FAIL ====` line
+when run directly.
+
+| Script | What it does | Admin? | Params worth knowing |
+|---|---|---|---|
+| `create_titanic_user.ps1` | Create the `titanic` local admin (interactive password), then print the Autologon banner | Yes | `-UserName` (default `titanic`) |
+| `setup\get_autologon.ps1` | Download Sysinternals Autologon into the gitignored local tools dir (not committed - license) | No | (none) |
+| `setup\setup_prereqs.ps1` | Install/verify Node + Git + Python; set git `core.hooksPath` | Yes | `-NodeVersion` 24.18.0, `-PythonVersion` 3.12, `-RepoRoot` |
+| `setup\setup_power.ps1` | No sleep / no hibernate / no Fast Startup | Yes | (none) |
+| `setup\setup_windows_update.ps1` | Windows Update notify-only, no auto-reboot | Yes | (none) |
+| `setup\setup_openssh.ps1` | Enable OpenSSH Server, service Automatic + started | Yes | (none) |
+| `setup\install_ssh_key.ps1` | Install the laptop's public key for the `titanic` admin | Yes | `-PublicKey` (**mandatory**: key line or `.pub` path) |
+| `setup\setup_smb_share.ps1` | Share `C:\titanic` as `titanic`, Full access for `titanic` | Yes | `-SharePath`, `-ShareName`, `-GrantUser` |
+| `setup\setup_firewall.ps1` | Inbound allow: TCP 6966-6972, UDP 5568, TCP 22, TCP 445 | Yes | (none) |
+| `setup\setup_boot_task.ps1` | Create `BM26TitanicStack` (at logon of `titanic` -> `boot_server.ps1`) | Yes | `-RepoRoot`, `-TaskName`, `-LogonUser` |
+| `setup\setup_static_ip.ps1` | Static IPv4 on the one physical adapter | Yes | `-StaticIp` (**mandatory**), `-PrefixLength` 24, `-Gateway`, `-Dns` |
+| `set_boot.ps1` | Set this machine's boot scene + wire the task to the supervisor | Yes | `-Scene` (**mandatory**), `-LauncherProfile` prod, `-Pattern` |
+| `verify_server.ps1` | Read-only state report | No | `-NodeVersion`, `-PythonVersion`, `-RepoRoot` |
+
+The two mandatory-param steps (`install_ssh_key.ps1 -PublicKey`,
+`setup_static_ip.ps1 -StaticIp`) refuse to guess -- omit the value and
+PowerShell prompts for it. Example: run just the OpenSSH step, elevated:
+
+```powershell
+Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File C:\titanic\BM26-Titanic\deploy\setup\setup_openssh.ps1'
+```
+
+## Troubleshooting
+
+**"The script 'server_setup.ps1' cannot be run because it contains a
+"#requires" statement for running as Administrator."** -- You ran it from a
+normal PowerShell window. Nothing happened and nothing broke; use the
+`Start-Process ... -Verb RunAs` one-liner from Step 3 (it opens an elevated
+window for you). The same applies to any single step -- they all need
+elevation except `verify_server.ps1`.
+
+**OpenSSH install seems frozen.** It's a silent Feature-on-Demand download
+(see Step 3). It's working if `Get-Service sshd` appears partway through and
+TiWorker/TrustedInstaller are busy. Ctrl+C + re-run is safe.
+
+**winget Python fails (`-1978335226`).** A per-user Python collided with the
+machine-scope install. `winget uninstall Python.Python.3.12`, then re-run
+`config` (see Step 3).
+
+**Reboot lands on the desktop but no lights; boot task `Last Result = 1`; no
+log in `C:\titanic\logs`.** (interior1 first bring-up.) *Symptom:* autologon
+works, the `titanic` desktop appears, but the stack never comes up;
+`Get-ScheduledTask BM26TitanicStack | Get-ScheduledTaskInfo` shows
+`LastTaskResult = 1`, and there is no fresh `boot_server_*.log`. *Cause:* a
+runtime (usually **node**) was installed **per-user** for the setup account
+(e.g. `tech`), so it is invisible to the `titanic` service account the stack
+runs as -- the supervisor died resolving node before it wrote anything.
+*Check:* does the **Machine** PATH contain a `nodejs` directory?
+
+```powershell
+[Environment]::GetEnvironmentVariable('Path','Machine')
+```
+
+If no `nodejs` dir appears, node is per-user only. *Fix (elevated):*
+
+```powershell
+winget install --id OpenJS.NodeJS.LTS --version 24.18.0 --exact --silent --accept-package-agreements --accept-source-agreements --scope machine
+```
+
+(It must be the `.LTS` package id -- plain `OpenJS.NodeJS` does not carry the
+24.x LTS patch releases and answers "No version found matching".) If that
+returns `-1978335226`, the per-user copy is blocking it -- `winget uninstall
+OpenJS.NodeJS.LTS` first, then re-run the install (same collision dance as
+Python above). Better: just re-run `config` -- `setup_prereqs.ps1` now
+detects the per-user trap for node/git/python, WARNs loudly naming the
+per-user path, and installs machine-scope anyway. Note: after this hardening,
+`boot_server.ps1` **always leaves a dated log** under `C:\titanic\logs\` even
+on an instant setup failure -- so "no log at all" now specifically points at a
+failure *before* the supervisor ran (task/permissions/RepoRoot), not a runtime
+resolution error.
+
+**Machine went dark after exactly ~3 days.** The stack ran fine, then the
+whole thing stopped roughly 72 h after the last boot. *Cause:* an old boot
+task carried Task Scheduler's default `ExecutionTimeLimit = PT72H`, so the
+scheduler killed the supervisor (and its whole process tree) 72 hours after
+logon. *Fix (elevated, once):* re-run `config` (or `set_boot.ps1`) after
+updating the tree -- `setup_boot_task.ps1` now sets the limit to unlimited
+(`PT0S`) and, on an already-configured machine, **detects the stale 72 h limit
+and repairs the existing task in place** (reports `repaired settings
+(ExecutionTimeLimit unlimited)`). One elevated re-run heals it; the change
+takes effect at the next `titanic` logon / reboot.
+
+**WARN vs FAIL.** WARN means "did what it could; a later step or re-run
+finishes it". FAIL means "stopped, here is the exact error" -- these scripts
+never quietly work around a problem, so a FAIL is always worth reading. On a
+machine where `config` ran before the `titanic` user existed, the SMB grant
+and boot task WARN until you re-run `config` with the account in place.
+
+**`create_titanic_user.ps1` errors on an OLD clone.** Two bugs were fixed in
+the current file: a PS 5.1 encoding bug (em-dashes in a no-BOM UTF-8 file
+mis-decoding into a stray quote -> parser error) and a `New-LocalUser
+-Description` string exceeding this Windows build's 48-char cap. If you see
+either symptom (a parser error about a stray quote, or a `-Description`
+length error), your clone is stale -- `git pull` to update it.
+
+**"titanic already exists" when re-running `create_titanic_user.ps1`.** It
+hard-stops on purpose (no silent password reset). If the account is fine and
+you only need to finish its config, run `setup\setup_smb_share.ps1` and
+`setup\setup_boot_task.ps1` individually, or just re-run `server_setup.ps1`.
+
+**Where's the rest of the stack?** `boot_server.ps1` (the supervisor) and
+`machines.yaml` (the per-machine scene manifest) now **ship in this folder** --
+so the boot task actually launches the lighting stack, and the boot-task
+step reports DONE (no more "boot_server.ps1 missing" WARN). Still Phase 2:
+`deploy.py`, the one-command laptop-to-server sync that seeds the code tree +
+`node_modules`. Until that lands, the supervisor runs but the launcher needs
+the tree present to bring the stack fully up. docs/43 tracks the plan.

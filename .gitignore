@@ -181,3 +181,8 @@ marsin_engine/states/*/timeline_state.yaml
 # device MACs/provenance — never commit; Sina 2026-07-10).
 simulation/scenes/dev_test_bench/
 marsin_engine/models/dev_test_bench*
+
+# Third-party setup tools live here locally, downloaded on first setup by
+# deploy\setup\get_autologon.ps1 - the Sysinternals license forbids
+# republishing them, and this repo is public.
+deploy/setup/tools/

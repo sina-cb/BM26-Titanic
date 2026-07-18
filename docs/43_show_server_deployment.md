@@ -1,6 +1,11 @@
 # Design: Show Servers — power-safe boot + one-command deploy
 
-**Status:** Draft v1 (design; scripts not yet implemented)
+**Status:** Draft v1. Phase 1 bring-up scripts are implemented
+(`deploy/server_setup.ps1` + `deploy/setup/*.ps1`, `deploy/create_titanic_user.ps1`,
+`deploy/verify_server.ps1`). The supervisor `deploy/boot_server.ps1`, the
+machine manifest `deploy/machines.yaml`, and the boot-scene command
+`deploy/set_boot.ps1` now exist too, so the boot task launches the real stack.
+Still to come (Phase 2): `deploy/deploy.py` (laptop->server sync + overlays).
 **Operator request (verbatim):**
 > "This machine is my laptop, I do design and testing on this. But then I
 > wanna deploy to the servers running the software. The servers are Windows
@@ -189,7 +194,7 @@ port-shuffling.)
 
 | Phase | What happens | Fails loudly when |
 |---|---|---|
-| 1 preflight | Manifest entry exists; SSH and SMB reachable; remote `node --version` == local (v24.16.0 today); warn with a diff summary of what will change (`robocopy /L`) | host down, node mismatch, share missing |
+| 1 preflight | Manifest entry exists; SSH and SMB reachable; remote `node --version` == local (v24.18.0 today); warn with a diff summary of what will change (`robocopy /L`) | host down, node mismatch, share missing |
 | 2 stop | `ssh titanic@host "schtasks /End /TN BM26TitanicStack"` then `node launcher.js stop` for stragglers | stack won't die |
 | 3 sync | `robocopy <repo> <share> /MIR` with the exclusion list below | any robocopy error class ≥ 8 |
 | 4 overlay | Mirror `deploy/overlays/<machine>/` over the destination | overlay dir missing (every machine MUST have one — no machine silently runs laptop config) |
@@ -294,7 +299,7 @@ session on the server can do it; L = from the laptop.
    lands on the desktop with no prompt.
 3. **(A) Power hygiene**: `powercfg /change standby-timeout-ac 0`,
    `powercfg /h off`; set Windows Update to notify-only.
-4. **(A) Runtime**: install Node **v24.16.0** (must match laptop) + Git for
+4. **(A) Runtime**: install Node **v24.18.0** (must match laptop) + Git for
    Windows; `git config core.hooksPath .githooks` after first sync.
 5. **(A) Remote access**: enable the **OpenSSH Server** optional feature
    (auto-start service); install the laptop's public key in
