@@ -34,6 +34,9 @@ After BIOS, the whole flow is **three commands**, in order:
 3. **deploy** -- `set_boot.ps1 -Scene <scene>` (pick the boot scene and wire
    the boot task to the supervisor).
 
+Passing `-Scene <scene>` to the `config` command folds step 3 into step 2, so
+a fully-specified `config` run is the whole flow in one elevated pass.
+
 ## Quick start
 
 | # | Step | Who | Rough time |
@@ -76,7 +79,7 @@ repo), never hardcoded and never checked into this public repo.
 From any PowerShell window:
 
 ```powershell
-git clone -b feat/auto_start https://github.com/sina-cb/BM26-Titanic.git C:\titanic\BM26-Titanic
+git clone https://github.com/sina-cb/BM26-Titanic.git C:\titanic\BM26-Titanic
 ```
 
 This clone is for setup. Later, the deploy pipeline will sync the laptop's
@@ -172,6 +175,12 @@ generating it and handing it to this pass:
 ```powershell
 Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File C:\titanic\BM26-Titanic\deploy\server_setup.ps1 -SshPublicKey C:\keys\laptop.pub -StaticIp <static-ip> -PrefixLength 24 -Gateway <gateway> -Dns <dns>'
 ```
+
+Optionally add `-Scene <scene>` (with `-LauncherProfile` / `-Pattern` if you
+want them) and this pass also does Step 4 -- it folds in `set_boot.ps1` after
+the machine config, so a single elevated run configures the box **and** sets
+its boot scene. Omit it and the boot-scene step just reports `SKIP`; run
+`set_boot.ps1` on its own later (Step 4).
 
 Because you created the `titanic` account in Step 2, the SMB share grant and
 the boot task **complete in this single pass** -- no deferred WARNs. Reading
@@ -439,7 +448,7 @@ when run directly.
 | `setup\setup_network_profile.ps1` | Set the gateway-less show LAN's Unidentified profile to Private (so the Private-scoped firewall rules apply); named Wi-Fi SSIDs untouched | Yes | (none) |
 | `setup\setup_boot_task.ps1` | Create `BM26TitanicStack` (at logon of `titanic` -> `boot_server.ps1`) | Yes | `-RepoRoot`, `-TaskName`, `-LogonUser` |
 | `setup\setup_static_ip.ps1` | Static IPv4 on the one physical adapter | Yes | `-StaticIp` (**mandatory**), `-PrefixLength` 24, `-Gateway`, `-Dns` |
-| `set_boot.ps1` | Set this machine's boot scene + wire the task to the supervisor | Yes | `-Scene` (**mandatory**), `-LauncherProfile` prod, `-Pattern` |
+| `set_boot.ps1` | Set this machine's boot scene + wire the task to the supervisor (also foldable into `server_setup.ps1 -Scene`) | Yes | `-Scene` (**mandatory**), `-LauncherProfile` prod, `-Pattern` |
 | `verify_server.ps1` | Read-only state report | No | `-NodeVersion`, `-PythonVersion`, `-RepoRoot` |
 
 The two mandatory-param steps (`install_ssh_key.ps1 -PublicKey`,
@@ -509,6 +518,33 @@ updating the tree -- `setup_boot_task.ps1` now sets the limit to unlimited
 and repairs the existing task in place** (reports `repaired settings
 (ExecutionTimeLimit unlimited)`). One elevated re-run heals it; the change
 takes effect at the next `titanic` logon / reboot.
+
+**Power-cut resilience (what survives a plug pull, and what doesn't).** A power
+cut can interrupt the launcher mid-write of its single-instance lock
+(`~\tmp\bm26_titanic_launcher.lock.json`), leaving a truncated / whitespace-only
+file. Two nets now cover the aftermath:
+
+- **Corrupt lock is auto-recovered, loudly.** On the next start the launcher
+  treats a lock that does not parse as JSON as the signature of an interrupted
+  write (a healthy launcher always leaves a complete, valid lock), logs a single
+  loud `Interrupted-write lock ... deleting it ...` line, deletes it, and
+  proceeds. A *valid* lock naming a live launcher still blocks as before. This
+  closes the field incident where a restart-cut lock made startup refuse to
+  begin and the supervisor crash-looped **409 times (~68 min)** before manual
+  intervention.
+- **A dead supervisor is auto-restarted.** The `BM26TitanicStack` task fires
+  **at logon**, so a reboot always brings the supervisor back -- but a supervisor
+  that dies or is killed *mid-session* (e.g. closing its interactive window) is
+  not a logon event and previously stayed dead until the next reboot. The task
+  now carries **restart-on-failure (3 attempts, 1 min apart)**, so an abnormally
+  ended supervisor comes back on its own. Re-run `config` (or
+  `setup_boot_task.ps1`) elevated to heal an older task in place; it reports
+  `repaired settings (... restart-on-failure 3 x 1 min)`.
+
+**Caveat:** killing the supervisor is only covered within that 3-restart budget.
+Beyond it (or after a deliberate stop) the box stays parked until a reboot/logon
+-- bring it back explicitly with `python deploy\deploy.py start --machine
+<machine>`.
 
 **SSH/SMB refused from the laptop even though `sshd` runs and the firewall
 rules exist.** (interior1, field-verified.) *Symptom:* `Get-Service sshd`
