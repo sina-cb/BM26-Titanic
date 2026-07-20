@@ -14,7 +14,7 @@
 # Run from an elevated PowerShell prompt (all params optional):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\server_setup.ps1 `
 #       -SshPublicKey C:\keys\laptop.pub `
-#       -StaticIp 10.1.1.50 -PrefixLength 24 -Gateway 10.1.1.1 -Dns 10.1.1.1
+#       -StaticIp 192.0.2.50 -PrefixLength 24 -Gateway 192.0.2.1 -Dns 192.0.2.1
 #
 # Steps that need a value you did not supply are SKIPPED (reported as SKIP):
 #   - no -SshPublicKey  -> SSH key install skipped

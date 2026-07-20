@@ -3,9 +3,15 @@
 **Status:** Draft v1. Phase 1 bring-up scripts are implemented
 (`deploy/server_setup.ps1` + `deploy/setup/*.ps1`, `deploy/create_titanic_user.ps1`,
 `deploy/verify_server.ps1`). The supervisor `deploy/boot_server.ps1`, the
-machine manifest `deploy/machines.yaml`, and the boot-scene command
-`deploy/set_boot.ps1` now exist too, so the boot task launches the real stack.
-Still to come (Phase 2): `deploy/deploy.py` (laptop->server sync + overlays).
+machine manifest `machines.yaml` (private — `$BM26_MACHINES` in the
+BM26-Firmware-Deployment repo, shipped to the server at deploy time), and the
+boot-scene command `deploy/set_boot.ps1` now exist too, so the boot task
+launches the real stack.
+**Phase 2 is implemented**: `deploy/deploy.py` on the laptop does the full
+prod pipeline (preflight → stop → robocopy /MIR → --scene → overlay → stamp →
+start → verify), a protected code-only sync to the server's scratch
+workspace, and bundle-based fetch of on-server git work + state snapshots.
+Laptop-side usage: `deploy/README.md` §"Deploying from the laptop".
 **Operator request (verbatim):**
 > "This machine is my laptop, I do design and testing on this. But then I
 > wanna deploy to the servers running the software. The servers are Windows
@@ -33,7 +39,7 @@ Two deliverables, one doc:
 1. **Power-safe boot chain** — wall power returns ⇒ machine powers on,
    logs in, and the stack comes up on that machine's configured scene, with
    no human touch.
-2. **One-command deploy** — `python deploy/deploy.py --machine interior1`
+2. **One-command deploy** — `python deploy/deploy.py deploy --machine titanic-int`
    on the laptop ⇒ the server has the laptop's exact working tree, its
    per-machine config applied, the stack restarted, and health verified.
 
@@ -45,9 +51,9 @@ an isolated LAN. No internet is used at deploy time or boot time.
 | Term | Meaning |
 |---|---|
 | **Design station** | Sina's laptop (this machine). The single source of truth for code. Deploys are always laptop → server, never sideways. |
-| **Show server** | A Windows machine on the playa LAN running the stack unattended. First one: **`interior1`** (interior/rooms lighting). Later: exterior, spares. |
-| **Machine manifest** | `deploy/machines.yaml` — one entry per server: host, scene, profile, notes. Checked in. |
-| **Overlay** | `deploy/overlays/<machine>/…` — per-machine files (chiefly `marsin_engine/config.yaml`) mirrored over the tree after sync. Checked in. |
+| **Show server** | A Windows machine on the playa LAN running the stack unattended. First one: **`titanic-int`** (interior/rooms lighting). Later: exterior, spares. |
+| **Machine manifest** | `machines.yaml` — one entry per server: host, scene, profile, notes. **Private** (real hostnames/IPs/shares): lives in the BM26-Firmware-Deployment repo, exported as `$BM26_MACHINES`, shipped to each server at deploy time. Public shape reference: `deploy/machines.yaml.example`. |
+| **Overlay** | `deploy/overlays/<machine>/…` — per-machine config **override fragments** (chiefly `marsin_engine/config.yaml`), deep-merged over the tracked tree at deploy time. Minimal diff only, never a full copy; a machine that needs no changes carries no overlay and runs the tracked default. Checked in. |
 | **Boot task** | The Windows Scheduled Task on the server that starts the supervisor at logon. |
 | **Supervisor** | `deploy/boot_server.ps1` on the server — reads the machine's manifest entry, runs `node launcher.js prod --scene <scene> --no-launch`, relaunches it loudly if it ever exits. |
 
@@ -55,10 +61,10 @@ an isolated LAN. No internet is used at deploy time or boot time.
 
 ```
 ┌──────────────────────────────┐            ┌─────────────────────────────────────┐
-│  DESIGN STATION (laptop)     │            │  SHOW SERVER (e.g. interior1)       │
+│  DESIGN STATION (laptop)     │            │  SHOW SERVER (e.g. titanic-int)     │
 │                              │            │                                     │
 │  python deploy/deploy.py     │   SSH      │  OpenSSH server (control channel)   │
-│    --machine interior1       │───────────▶│    · stop stack · run boot task     │
+│    --machine titanic-int     │───────────▶│    · stop stack · run boot task     │
 │                              │            │                                     │
 │  1 preflight (node ver,      │   SMB      │  C:\titanic\BM26-Titanic\           │
 │    manifest, reachability)   │───────────▶│    · robocopy delta sync            │
@@ -86,7 +92,7 @@ Design choices, and why:
   headless (`--no-launch`).** The sim's servers are cheap (http + save +
   sACN bridges; the heavy WebGL only runs when a browser opens the page),
   and keeping them means the operator can open
-  `http://interior1:6969/simulation/…` from the laptop to *see* what the
+  `http://titanic-int:6969/simulation/…` from the laptop to *see* what the
   server thinks it's rendering, and the in-sim scene switcher keeps working
   remotely. If server CPU ever becomes a problem, a slimmer `server`
   profile (engine + companion only) is a 10-line launcher PR — deferred.
@@ -101,14 +107,18 @@ Design choices, and why:
   the remote stop/start; SMB + robocopy moves files with proper
   timestamp-delta behavior. Key-based SSH auth only — no passwords in any
   script (public repo, and Claude never handles credentials).
-- **Per-machine config is an overlay, not a fork.** The tracked
-  `marsin_engine/config.yaml` is the laptop's dev config (loopback sACN,
-  `vsn1.deployLayout: true`, …). Each server gets its own copy in
-  `deploy/overlays/<machine>/marsin_engine/config.yaml` — real controller
-  IPs, **`vsn1.deployLayout: false`** (a server must never auto-flash a
-  VSN1 that happens to be on a COM port), audio device for that box.
-  Overlays are applied AFTER sync, so a deploy can never regress a server
-  to laptop config.
+- **Per-machine config is an overlay of MINIMAL override fragments, not a
+  fork or a full copy.** The tracked `marsin_engine/config.yaml` is the
+  operator-blessed default (VSN1 auto-deploy on — see below). A server that
+  needs something different carries only the changed keys in
+  `deploy/overlays/<machine>/marsin_engine/config.yaml`; the deploy
+  **deep-merges** that fragment over the tracked file (maps recurse; arrays and
+  scalars replace) and writes the result. A machine that needs no changes
+  carries no overlay at all and runs the tracked config (operator ruling,
+  2026-07-20 — a missing or empty overlay dir is the default path, not a
+  failure). Overlays are applied AFTER sync, so a deploy can never regress a
+  server below its intended config. Full-copy overlays are banned: they rot
+  silently against the tracked config and hide what a machine really overrides.
 
 ## The boot chain (server side)
 
@@ -154,33 +164,46 @@ Every link is required; any missing link breaks unattended recovery.
    (model = scene) → audio companion, ports claimed, scene switches via
    exit-75 handled *inside* one supervisor run.
 
-**Scene selection** is therefore: edit that machine's `scene:` in
-`deploy/machines.yaml`, redeploy (or `--restart-only`). The scene is
-versioned, reviewable, and identical in the manifest and on the machine.
+**Scene selection** is therefore: edit that machine's `scene:` in the private
+`machines.yaml` (`$BM26_MACHINES`) — or run `deploy.py deploy --scene`, which
+edits it there — then redeploy (or `--restart-only`). `deploy.py` ships the
+private manifest to the server, so the scene is identical in the source of
+truth and on the machine.
 
 ## Machine manifest
 
+The manifest is **private** and does not live in this repo: it is
+`machines.yaml` in the BM26-Firmware-Deployment repo, exported as
+`$BM26_MACHINES` by that repo's `setup_env` scripts, and shipped to each
+server's `deploy\machines.yaml` by `deploy.py` at deploy time. `deploy.py`
+fails loudly if `$BM26_MACHINES` is unset — there is no repo-local fallback.
+The shape (placeholder values only) is in `deploy/machines.yaml.example`:
+
 ```yaml
-# deploy/machines.yaml — one entry per show server. Checked in (LAN
-# hostnames/IPs only — never credentials; MACs are banned by the security check).
+# machines.yaml — one entry per show server. PRIVATE (LAN hostnames/IPs only —
+# never credentials; MACs are banned by the security check). Placeholder values:
 machines:
-  interior1:
-    host: 10.1.1.50          # static IP on the show LAN (or DNS name)
+  example-server:
+    host: 192.0.2.10         # static IP on the show LAN (or DNS name)
     role: interior lights
-    scene: titanic           # sim scene AND engine model at boot
+    scene: test_bench        # sim scene AND engine model at boot
     pattern: 00_golden_hour_wash
     profile: prod
-    dest: 'C:\titanic\BM26-Titanic'
-    share: '\\10.1.1.50\titanic'   # SMB share rooted at C:\titanic
+    open_browser: true       # auto-open sim + audio pages on the console at boot
+    dest: C:\titanic\BM26-Titanic
+    share: \\192.0.2.10\titanic    # SMB share rooted at share_root
+    share_root: C:\titanic         # dest must live under this (dest_unc maps it)
+    scratch_dest: C:\Users\tech\workspace\BM26-Titanic  # on-server dev tree
     ssh_user: titanic
-    notes: first server — interior/rooms universes
+    notes: placeholder — real values live in the private repo
 ```
 
-Overlay layout mirrors the repo tree:
+Overlay layout mirrors the repo tree (each `.yaml` is a MINIMAL override
+fragment — only the changed keys — deep-merged over the tracked file, not a copy):
 
 ```
-deploy/overlays/interior1/
-  marsin_engine/config.yaml      # real controllers, deployLayout:false, audio device
+deploy/overlays/titanic-int/
+  marsin_engine/config.yaml      # ONLY the changed keys: real controllers, audio device
   simulation/config.yaml         # only if a machine ever needs port changes (it shouldn't)
 ```
 
@@ -190,30 +213,36 @@ port-shuffling.)
 
 ## The deploy pipeline — `deploy/deploy.py`
 
-`python deploy/deploy.py --machine interior1 [--seed-state] [--restart-only] [--dry-run]`
+`python deploy/deploy.py deploy --machine titanic-int [--scene <scene>] [--restart-only] [--dry-run]`
+
+The prod pipeline prints **eight** loud phases (`1/8`…`8/8`); the exact
+sequence and phase names below are what `deploy_prod` emits:
 
 | Phase | What happens | Fails loudly when |
 |---|---|---|
-| 1 preflight | Manifest entry exists; SSH and SMB reachable; remote `node --version` == local (v24.18.0 today); warn with a diff summary of what will change (`robocopy /L`) | host down, node mismatch, share missing |
-| 2 stop | `ssh titanic@host "schtasks /End /TN BM26TitanicStack"` then `node launcher.js stop` for stragglers | stack won't die |
-| 3 sync | `robocopy <repo> <share> /MIR` with the exclusion list below | any robocopy error class ≥ 8 |
-| 4 overlay | Mirror `deploy/overlays/<machine>/` over the destination | overlay dir missing (every machine MUST have one — no machine silently runs laptop config) |
-| 5 stamp | Write `deploy_info.yaml` at the destination root: git HEAD, branch, dirty-file count, timestamp, source hostname | — |
-| 6 start | `ssh … "schtasks /Run /TN BM26TitanicStack"` (runs in the logged-on session, so audio/devices work — never start the stack directly from the SSH session) | task missing |
-| 7 verify | From the laptop: poll `http://host:6968/status` until up (timeout 3 min), assert reported model == manifest scene; probe sim `:6969`; print the supervisor `restart_count` | probes time out, wrong scene |
+| 1/8 preflight | Manifest entry exists; SSH reaches the right host; remote `node --version` == local (v24.18.0 today); `--scene` (if given) validated NOW while the stack is still up; SMB reachable + a `robocopy /L` diff summary of what will change | host down, wrong box, node mismatch, share missing, bad `--scene` |
+| 2/8 stop stack | `ssh … "schtasks /End /TN BM26TitanicStack"` then `node launcher.js stop` for stragglers, then confirm both ports go quiet | stack won't die (orphaned port) |
+| 3/8 sync working tree | `robocopy <repo> <share> /MIR` with the exclusion list below | any robocopy error class ≥ 8 |
+| 4/8 boot scene + ship manifest | If `--scene`, write it into the private `machines.yaml` (`$BM26_MACHINES`, same validation as `set_boot.ps1`); then ship that private manifest to `<dest>\deploy\machines.yaml` on the server | scene missing its files, manifest unparseable/unwritable |
+| 5/8 apply overlay | Deep-merge each `deploy/overlays/<machine>/` `.yaml` override fragment over the tracked file at the same path and write the result (non-`.yaml` files full-copy); a missing or empty overlay dir is fine — the tracked config is the operator-blessed default | a malformed/empty `.yaml` fragment, a `.yaml` with no tracked base, or a `.yml` fragment |
+| 6/8 stamp deploy_info.yaml | Write `deploy_info.yaml` at the destination root: git HEAD, branch, dirty-file count, timestamp, source hostname | — |
+| 7/8 start stack | Capture the server wall clock, then `ssh … "schtasks /Run /TN BM26TitanicStack"` (runs in the logged-on session, so audio/devices work — never start the stack directly from the SSH session) | task missing |
+| 8/8 verify | From the laptop: poll `http://host:6968/status` until up (5-min budget — a cold boot plus one benign supervisor restart can exceed 3 min), assert reported model == expected scene; probe sim `:6969`; bind `boot_status.yaml` to THIS run (server wall clock captured just before start) and confirm the supervisor is **stable** — two `restart_count` reads ~15 s apart, failing on any change (rise = crash loop, fall = supervisor restart) | probes time out, wrong scene, stale/crash-looping supervisor |
 
 **Sync exclusions** (`/XD` / `/XF`) — the server *owns* its live state, the
 laptop owns code:
 
 - `marsin_engine/states/**` — deck/mixer/effects runtime state (tracked in
   git, but runtime-mutated; clobbering it mid-event would wipe the server's
-  live tuning). `--seed-state` includes it for the very first deploy.
+  live tuning), so it is excluded on **every** deploy. First-deploy state is
+  seeded to the server by hand (there is no state-seeding flag).
 - `simulation/.scene_backups/`, `.agent_renders/`, `deploy_info.yaml`,
-  supervisor logs/status.
-- Overlay-managed files are synced normally, then overwritten in phase 4.
+  `machines.yaml`, supervisor logs/status.
+- Overlay-managed files are synced normally, then overwritten in phase 5.
 
-`--restart-only` skips 3–5 (fast path for "same code, new scene").
-`--dry-run` runs phases 1 + the robocopy `/L` listing and stops.
+`--restart-only` skips phases 3–6 (fast path for "same code, new scene" — but
+`--scene` needs a sync so it cannot combine with `--restart-only`).
+`--dry-run` runs phase 1 + the robocopy `/L` listing and stops.
 
 ## Edges
 
@@ -233,8 +262,14 @@ laptop owns code:
 - **Two people deploy at once**: last robocopy wins; verify catches an
   inconsistent result. Fleet locking is deliberately out of scope (one
   operator, one laptop).
-- **VSN1/MIDI hardware on a server COM port**: overlays force
-  `vsn1.deployLayout: false`; servers never flash controller hardware.
+- **VSN1/MIDI hardware on a server COM port**: `vsn1.deployLayout` /
+  `vsn1.deployOnBoot` were once a per-machine overlay choice defaulting off. Per
+  operator decision 2026-07-20 they are now **default TRUE everywhere** — the
+  tracked `marsin_engine/config.yaml` turns auto-deploy on, and the engine reads
+  that single file with no per-scene override path — so `titanic-int` needs **no
+  overlay override** to auto-flash. A machine that must never auto-flash pins it
+  off with the `MARSIN_VSN1_DEPLOY=0` env var (or a fragment setting
+  `vsn1.deployLayout: false`).
 
 ## What it deliberately is not
 
@@ -243,29 +278,30 @@ laptop owns code:
   last deployed, verbatim.
 - **Not fleet orchestration.** One machine per invocation; `--machine all`
   can come later as a loop, nothing smarter.
-- **Not a backup system.** `--seed-state` seeds; it does not sync state
-  back. Pulling server state to the laptop is a separate (future) skill.
+- **Not a backup system.** A deploy pushes code and (by hand) seeds initial
+  state; it does not sync live state back. Pulling server state to the laptop
+  is `fetch --state` (snapshot into `~/tmp`, inspection only — never committed).
 - **Not a Windows-hardening guide.** Only the settings the boot chain
   needs. Kiosk mode, auto-repair loops, disk imaging: out of scope.
 
 ## Open questions for the operator
 
 1. **Server hardware + names**: what are the actual boxes, and do we bless
-   `interior1` / `exterior1` naming? Static IP plan on the show LAN?
+   the `titanic-int` / exterior naming? Static IP plan on the show LAN?
 2. **Windows user**: create a dedicated `titanic` local account (recommend
    yes — clean profile, known password for Autologon) or reuse existing?
 3. **UPS**: any battery between generator and servers? (Changes nothing in
    design; shortens the dark window.)
-4. **Interior scene**: is `titanic` the boot scene for interior1, or does
+4. **Interior scene**: is `titanic` the boot scene for titanic-int, or does
    the interior get its own scene/model?
-5. **Audio on servers**: does interior1 need live audio reactivity (mic on
+5. **Audio on servers**: does titanic-int need live audio reactivity (mic on
    the server), or is the companion effectively idle there?
 
 ## Implementation phases
 
 ### Phase 1 — server bring-up, by hand (no new code)
 
-Prove the boot chain on interior1 manually: BIOS, autologon, power
+Prove the boot chain on titanic-int manually: BIOS, autologon, power
 hygiene, one hand-run `robocopy` seed, hand-created scheduled task
 pointing at a minimal `boot_server.ps1`, then the pull-the-plug test.
 (Checklist below — this is the "get the first server ready for testing"
@@ -273,9 +309,9 @@ deliverable.)
 
 ### Phase 2 — `deploy/` tooling
 
-- `deploy/machines.yaml` + `deploy/overlays/interior1/…`
+- `machines.yaml` (private, `$BM26_MACHINES`) + `deploy/overlays/titanic-int/…`
 - `deploy/boot_server.ps1` (manifest-driven supervisor, logging, status file)
-- `deploy/deploy.py` (phases 1–7, python_style.md, no fallback behaviors)
+- `deploy/deploy.py` (phases 1–8, python_style.md, no fallback behaviors)
 - `.agent/ops/show_server_ops.md` runbook + auto-checks (deploy `--dry-run`
   green, verify probes green).
 
@@ -285,7 +321,7 @@ deliverable.)
   CaptainPad/laptop).
 - `--machine all`; state pull-back skill; spare-server cold-standby doc.
 
-## First-server bring-up checklist (interior1)
+## First-server bring-up checklist (titanic-int)
 
 Operator (O) = must be done by Sina at the machine; Agent (A) = an agent
 session on the server can do it; L = from the laptop.
@@ -307,10 +343,10 @@ session on the server can do it; L = from the laptop.
    (read/write for the deploy user).
 6. **(A) Firewall**: allow inbound TCP 6966–6972 and UDP 5568 (LAN scope)
    plus SSH 22 / SMB 445.
-7. **(O/L) Network**: static IP on the show LAN; record it in
-   `deploy/machines.yaml`.
+7. **(O/L) Network**: static IP on the show LAN; record it in the private
+   `machines.yaml` (`$BM26_MACHINES`, BM26-Firmware-Deployment repo).
 8. **(L) Seed**: first robocopy of the working tree (node_modules
-   included), then apply the interior1 overlay by hand until Phase 2 lands.
+   included), then apply the titanic-int overlay by hand until Phase 2 lands.
 9. **(A) Boot task**: create `BM26TitanicStack` (at logon, highest
    privileges → `boot_server.ps1`).
 10. **(O) The plug test**: with the stack up and lights/sim animating, pull

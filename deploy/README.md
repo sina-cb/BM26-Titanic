@@ -10,6 +10,20 @@ and the agent-facing version of this guide is
 [interior1_agent_brief.md](interior1_agent_brief.md). This README is the
 human path.
 
+## TL;DR — day-to-day commands (run on the laptop)
+
+```powershell
+python deploy\deploy.py deploy --machine titanic-int --dry-run          # preview, touches nothing
+python deploy\deploy.py deploy --machine titanic-int --restart-only     # bounce the stack
+python deploy\deploy.py deploy --machine titanic-int --scene <scene>    # full deploy + set boot scene
+python deploy\deploy.py stop   --machine titanic-int                    # park it (lights OFF until start/reboot/deploy)
+python deploy\deploy.py start  --machine titanic-int                    # bring it back + verify (add --no-verify to skip the poll)
+python deploy\deploy.py fetch  --machine titanic-int --state            # collect server-side work + state snapshot
+```
+
+Details in ["Deploying from the laptop"](#deploying-from-the-laptop-deploypy)
+below. The rest of this README is the one-time **server bring-up** path.
+
 After BIOS, the whole flow is **three commands**, in order:
 
 1. **user** -- `create_titanic_user.ps1` (create the `titanic` account; it
@@ -34,6 +48,28 @@ After BIOS, the whole flow is **three commands**, in order:
 
 Everything the scripts do is safe to re-run -- an already-done step just says
 `SKIP` and moves on. When in doubt, run it again.
+
+## The two machines: who does what
+
+Deployment always has two sides: the **design laptop** (the machine you
+design/test on -- also the ONLY machine with git/GitHub access) and each
+**show server** (the box that runs the stack unattended). For the laptop to
+act as the deployment machine, each side needs its own setup, and they meet
+at five handshake points:
+
+| # | On each show server | On the design laptop | The handshake |
+|---|---|---|---|
+| 1 | `create_titanic_user.ps1` + Autologon (Step 2) | -- | The `titanic` account exists; you know its password. |
+| 2 | `server_setup.ps1` config pass (Step 3): OpenSSH on, firewall, SMB share, boot task | Generate the dedicated deploy keypair (`id_ed25519_titanic`, quick start below) | Laptop's **public** key goes into the server's config pass (`-SshPublicKey`); after this, `ssh` from the laptop needs no password. |
+| 3 | Node installed **machine-scope** by the config pass | Node installed at the **same exact version** | Versions must match -- `node_modules` ship as-is; the deploy preflight hard-fails on a mismatch. |
+| 4 | SMB share `titanic` exposed by the config pass | `cmdkey /add:<server> /user:<SERVER-HOSTNAME>\titanic /pass` (once) | You type the `titanic` password into Windows Credential Manager; robocopy (prod deploys) can now write the share. |
+| 5 | `set_boot.ps1 -Scene <scene>` picks what boots | Entry for the machine in the private `machines.yaml` (`$BM26_MACHINES`) | The manifest tells the laptop where the server is and what it should run; `deploy.py` ships it to the server, which reads that derived copy at boot. |
+
+After that, day-to-day is laptop-only: `deploy.py` (below) ships code,
+bounces the stack, and verifies it -- the server is never touched by hand.
+Server details (host, paths, scene) always come from the private show-server
+manifest (`$BM26_MACHINES` -> `machines.yaml` in the BM26-Firmware-Deployment
+repo), never hardcoded and never checked into this public repo.
 
 ## Step 0 -- get the code
 
@@ -127,10 +163,14 @@ Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy 
 ```
 
 For the full run, add the laptop's SSH public key and the static address for
-the show LAN inside the quotes (example values -- use the real ones):
+the show LAN inside the quotes (placeholders below -- fill in this machine's
+real show-LAN values; its `host` address is the one recorded in
+`deploy\machines.yaml`). The public key is the design laptop's deploy keypair
+-- see **The two machines** above and **New laptop quick start** below for
+generating it and handing it to this pass:
 
 ```powershell
-Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File C:\titanic\BM26-Titanic\deploy\server_setup.ps1 -SshPublicKey C:\keys\laptop.pub -StaticIp 10.1.1.152 -PrefixLength 24 -Gateway 10.1.1.1 -Dns 10.1.1.1'
+Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File C:\titanic\BM26-Titanic\deploy\server_setup.ps1 -SshPublicKey C:\keys\laptop.pub -StaticIp <static-ip> -PrefixLength 24 -Gateway <gateway> -Dns <dns>'
 ```
 
 Because you created the `titanic` account in Step 2, the SMB share grant and
@@ -182,15 +222,13 @@ Optional: `-LauncherProfile` (default `prod`) and `-Pattern`. It ends with a
 exact launcher line the boot task will run -- effective at the next
 `titanic` logon / reboot.
 
-**Config overlay.** After writing the manifest and ensuring the boot task,
-`set_boot.ps1` applies this machine's config overlay if one exists --
-`deploy\overlays\<hostname-lowercase>\` mirrored over the repo tree, so the
-box drives its real controllers instead of the tracked laptop/dev config
-(loopback sACN, no physical controllers). No overlay is a loud WARN, not a
-failure. A brand-new machine starts by copying an existing overlay dir to
-`deploy\overlays\<its-hostname>\` and editing the controller IPs in
-`marsin_engine\config.yaml` -- see
-[`deploy\overlays\README.md`](overlays/README.md).
+**Config overlay.** `set_boot.ps1` does **not** touch config -- per-machine
+config overlays are applied by `deploy\deploy.py` at deploy time (its overlay
+phase deep-merges each machine's `.yaml` override fragments over the tracked
+tree on the server). A machine that needs no config changes carries no overlay
+and simply runs the tracked config (the operator-blessed default). See
+[`deploy\overlays\README.md`](overlays/README.md) for the fragment format and
+deep-merge semantics.
 
 **Browser at boot (`open_browser`).** Add `-OpenBrowser` (toggle off with
 `-NoOpenBrowser`, or edit `open_browser` in `machines.yaml`) to have the
@@ -247,6 +285,136 @@ The whole point. With the machine up and the lights/sim animating:
    stack up, with you touching nothing.
 
 Do it **twice** -- once is luck, twice is a boot chain.
+
+## Deploying from the laptop (`deploy.py`)
+
+Once a server is brought up, day-to-day code movement is **one command from
+the design laptop** (the only machine with git/GitHub access). `deploy.py`
+knows two operations against the two trees on a server:
+
+| Tree | Path (titanic-int) | Role |
+|---|---|---|
+| **prod** | `C:\titanic\BM26-Titanic` | The deployed, running show software (boot task launches it). |
+| **scratch** | `C:\Users\tech\workspace\BM26-Titanic` | On-server dev/agent workspace. |
+
+### New laptop quick start (one-time, per design laptop)
+
+The laptop is the deploy + git gate, so a fresh one needs a little
+plumbing before `deploy.py` works. Each step here is the laptop half of a
+handshake in **The two machines** above (its server half is done during
+Steps 2-4 of the server bring-up). Hostnames and addresses live in the private
+`machines.yaml` (see step 2 below) - wherever you see `<server>` below, use that
+machine's `host` value from the manifest.
+
+1. **Clone the repo** and check out the working branch.
+2. **Private manifest + secrets**: clone the private **BM26-Firmware-Deployment**
+   repo and run its `setup_env.ps1` (Windows) or `source setup_env.sh`
+   (macOS/Linux), then open a NEW terminal. That exports `$BM26_MACHINES`
+   pointing at the private `machines.yaml` (real hostnames/IPs/shares/scenes).
+   `deploy.py` requires this var and fails loudly if it is unset - there is no
+   repo-local manifest. (`deploy/machines.yaml.example` shows the shape only.)
+3. **Runtimes**: Node **exactly matching the servers** (`ssh` in and run
+   `node --version` to see theirs - a mismatch hard-fails the deploy
+   preflight on purpose), plus Git and Python 3.11+.
+4. **Dedicated SSH key** (no passphrase - deploys run unattended):
+   ```powershell
+   ssh-keygen -t ed25519 -f $env:USERPROFILE\.ssh\id_ed25519_titanic -C titanic-deploy@laptop
+   ```
+   Add a block to `~\.ssh\config` so every show-LAN box gets the right
+   user + key automatically (`User titanic`, `IdentityFile
+   ~/.ssh/id_ed25519_titanic`, `IdentitiesOnly yes` under a `Host` entry
+   covering the show LAN).
+5. **Install the public key on each server**: hand `id_ed25519_titanic.pub`
+   to the server's config pass (`setup\install_ssh_key.ps1`, or
+   `server_setup.ps1 -SshPublicKey <path>`).
+6. **Store the SMB credential** (per server, once - this is the one people
+   forget):
+   ```powershell
+   cmdkey /add:<server> /user:<SERVER-HOSTNAME>\titanic /pass
+   ```
+   It prompts for the `titanic` password and stores it in Windows
+   Credential Manager. Only **prod** deploys need it (robocopy over SMB);
+   fetch and scratch deploys are pure SSH. If a prod deploy ever fails
+   with "not reachable over SMB", this credential is missing or stale -
+   the error message prints the exact `cmdkey` line to run, and
+   `cmdkey /delete:<server>` first replaces a bad one.
+7. **Prove it end-to-end** (safe, read-only / non-prod):
+   ```powershell
+   ssh <server> hostname                                      # key auth, no password prompt
+   python deploy\deploy.py fetch  --machine <name>            # SSH-only
+   python deploy\deploy.py deploy --machine <name> --dry-run  # exercises SMB, changes nothing
+   ```
+
+### Deploy to prod - the full docs/43 pipeline
+
+```powershell
+python deploy\deploy.py deploy --machine titanic-int                  # ship current tree
+python deploy\deploy.py deploy --machine titanic-int --scene titanic  # ship + set boot scene
+python deploy\deploy.py deploy --machine titanic-int --dry-run        # preview only
+python deploy\deploy.py deploy --machine titanic-int --restart-only   # bounce stack, no files
+python deploy\deploy.py stop  --machine titanic-int                   # park it safely (lights OFF) - e.g. before generator work
+python deploy\deploy.py start --machine titanic-int                   # bring it back + verify (--no-verify skips the poll)
+```
+
+Eight loud phases: preflight (manifest, SSH identity, **node version must
+match the laptop**, SMB, robocopy `/L` preview of every path that would
+change) -> stop stack (`schtasks /End` + `launcher.js stop`) -> robocopy
+`/MIR` (excludes `marsin_engine\states\**`, `simulation\.scene_backups\`,
+`.agent_renders\`, `deploy_info.yaml`, `machines.yaml`; **includes
+`node_modules`** - offline playa rule) -> optional `--scene` written into the
+*private* `machines.yaml` (`$BM26_MACHINES`, same validation as `set_boot.ps1`)
+then that private manifest shipped to `<dest>\deploy\machines.yaml` on the
+server -> overlay override fragments deep-merged over the dest (missing/empty
+overlay dir = OK; the tracked config is the operator-blessed default) ->
+`deploy_info.yaml` stamp (git
+head/branch/dirty count/source host) -> `schtasks /Run` (the stack must run
+in titanic's logged-on session, never inside the SSH session) -> verify from
+the laptop (engine `/status` `activeModel` == expected scene, sim `:6969`
+up, supervisor **not crash-looping**). The supervisor check is a **stability
+check, not an absolute zero**: `restart_count` is monotonic per supervisor
+lifetime (a benign relaunch bumps it), so verify reads it twice ~15 s apart
+and fails on **any change** between reads — a *rise* is a launcher crash loop,
+a *fall* means the supervisor itself restarted (the count resets with a fresh
+supervisor lifetime) — both unhealthy. A stable nonzero count with the engine
+up on the right scene is healthy.
+
+A deploy **overwrites/deletes server-side edits to synced paths by design**
+(laptop is the single source of truth) - the `/L` preview names every such
+path before bytes move. Durable server-side work must round-trip via
+`fetch` + laptop curation instead. That includes the prod tree's `.git`: it
+is **disposable — mirrored from the laptop on every deploy**, so never commit
+durable work in the prod tree; server-side commits belong in the **scratch**
+tree (`fetch` collects them).
+
+### Deploy to scratch - safe code hand-off
+
+```powershell
+python deploy\deploy.py deploy --machine titanic-int --target scratch [--force]
+```
+
+Streams the laptop's **tracked files except `marsin_engine\states\**`** (tar
+over SSH), printing how many server-owned state files it excluded. Deliberate
+semantics: the server's `.git`, `marsin_engine\states\**` (engine-mutated live
+tuning), and untracked files are never touched; laptop-side deletions do NOT
+propagate (it is a working tree people live in, not a mirror); a dirty scratch
+tree aborts with the file list unless `--force`. Ends with sha256 spot-checks.
+
+### Fetch - collect on-server work (never merges)
+
+```powershell
+python deploy\deploy.py fetch --machine titanic-int                 # both trees' branches
+python deploy\deploy.py fetch --machine titanic-int --source prod --state
+```
+
+Each tree's branches arrive as `refs/remotes/titanic-int-<prod|scratch>/*`
+via a git bundle (created server-side at `C:\titanic\fetch_*.bundle`,
+copied with scp - git-over-SSH direct is broken by cmd.exe quoting on
+Windows OpenSSH, so bundles are the *primary* path, not a fallback).
+Nothing is merged; curation follows `.agent/os/git.md` (`dev/*` residue is
+cherry-picked on the laptop, runtime state dropped). `--state` snapshots
+`marsin_engine\states\**` + `boot_status.yaml` into
+`~\tmp\bm26_state_snapshots\<machine>\<timestamp>\` for inspection - state
+is read, never committed.
 
 ## Running a single step
 
@@ -373,6 +541,15 @@ registry write) -- so the step reports **WARN** until it is applied, meaning
 "access is unblocked now, but not yet reboot-durable." Set the policy once
 via `secpol.msc` on the box to close it.
 
+**`deploy.py` says `BM26_MACHINES` is not set even after `setup_env.ps1`.**
+A long-running app (an IDE or editor like Antigravity, VS Code) hands every
+terminal it spawns a **stale environment captured before `setup_env` ran**, so
+`os.environ` lacks the var even though it was persisted. `deploy.py` reads the
+persisted User-scope value straight from the registry (`HKCU\Environment`), so
+this only truly fails if `setup_env` never ran — it prints a one-line `note:`
+that it fell back to the registry because the terminal is stale. Restart the
+IDE (so its children inherit a fresh environment) to silence the note.
+
 **WARN vs FAIL.** WARN means "did what it could; a later step or re-run
 finishes it". FAIL means "stopped, here is the exact error" -- these scripts
 never quietly work around a problem, so a FAIL is always worth reading. On a
@@ -391,10 +568,12 @@ hard-stops on purpose (no silent password reset). If the account is fine and
 you only need to finish its config, run `setup\setup_smb_share.ps1` and
 `setup\setup_boot_task.ps1` individually, or just re-run `server_setup.ps1`.
 
-**Where's the rest of the stack?** `boot_server.ps1` (the supervisor) and
-`machines.yaml` (the per-machine scene manifest) now **ship in this folder** --
-so the boot task actually launches the lighting stack, and the boot-task
-step reports DONE (no more "boot_server.ps1 missing" WARN). Still Phase 2:
+**Where's the rest of the stack?** `boot_server.ps1` (the supervisor) ships in
+this folder, so the boot task actually launches the lighting stack and the
+boot-task step reports DONE (no more "boot_server.ps1 missing" WARN). The
+per-machine scene manifest `machines.yaml` is NOT in this repo -- it is private
+(`$BM26_MACHINES`, BM26-Firmware-Deployment repo) and `deploy.py` ships it to
+`<dest>\deploy\machines.yaml` on the server at deploy time. Still Phase 2:
 `deploy.py`, the one-command laptop-to-server sync that seeds the code tree +
 `node_modules`. Until that lands, the supervisor runs but the launcher needs
 the tree present to bring the stack fully up. docs/43 tracks the plan.

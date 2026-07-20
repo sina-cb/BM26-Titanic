@@ -107,7 +107,8 @@ Scripted: `deploy\server_setup.ps1` (firewall step) / run
 
 **Step 7 — network (OPERATOR decides, you apply).** Static IP on the show
 LAN — ask the operator which address. Report hostname + chosen IP back so
-they go into `deploy/machines.yaml`.
+they go into the private `machines.yaml` (`$BM26_MACHINES`, the
+BM26-Firmware-Deployment repo — never this public repo).
 Scripted (apply the operator's chosen address):
 `deploy\server_setup.ps1 -StaticIp <ip> -PrefixLength 24 -Gateway <gw> -Dns <dns>`
 / run `deploy\setup\setup_static_ip.ps1` alone. Fails loudly if more than one
@@ -118,12 +119,13 @@ trigger *at log on of `titanic`*, run with highest privileges, action:
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File C:\titanic\BM26-Titanic\deploy\boot_server.ps1
 ```
-NOTE: `boot_server.ps1` (the supervisor) and `deploy\machines.yaml` (the
-per-machine scene manifest) now SHIP in this repo, so the boot task launches
-the real stack and the boot-task step reports DONE (no more "boot_server.ps1
-missing" WARN). Pick this machine's boot scene with
-`deploy\set_boot.ps1 -Scene <scene>` (writes `machines.yaml` + ensures the
-task). Still Phase 2: `deploy.py`, which seeds the code tree + `node_modules`;
+NOTE: `boot_server.ps1` (the supervisor) ships in this repo, so the boot task
+launches the real stack and the boot-task step reports DONE (no more
+"boot_server.ps1 missing" WARN). The per-machine scene manifest `machines.yaml`
+is NOT in this repo — it is private (`$BM26_MACHINES`) and `deploy.py` ships it
+to `deploy\machines.yaml` on the server at deploy time. Pick this machine's boot
+scene with `deploy\set_boot.ps1 -Scene <scene>` (writes the server's local
+`machines.yaml` + ensures the task). Still Phase 2: `deploy.py`, which seeds the code tree + `node_modules`;
 until it lands the supervisor runs but the launcher needs the tree present to
 come fully up.
 Scripted: `deploy\server_setup.ps1` (boot-task step) / run

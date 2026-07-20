@@ -13,13 +13,11 @@
 #   3. Ensures the BM26TitanicStack boot task exists and points at
 #      deploy\boot_server.ps1, by invoking deploy\setup\setup_boot_task.ps1
 #      (reused, not duplicated).
-#   4. Applies this machine's config overlay - deploy\overlays\<hostname,
-#      lowercase>\ mirrored over the repo root - if one exists. No overlay is a
-#      LOUD WARN (the machine would run the repo's tracked laptop/dev config:
-#      engine sACN to loopback, no physical controllers), but not a failure -
-#      a sim-only machine is legitimate. INTERIM: per docs/43, overlay
-#      application belongs to the Phase 2 deploy.py pipeline (phase 4); this
-#      step covers the gap until that lands, and moves there when it does.
+#   4. (Config overlays are NOT applied here.) Per-machine config overlays live
+#      in deploy\overlays\<hostname-lowercase>\ and are deep-merged over the
+#      tree by deploy\deploy.py at deploy time (Phase 2 landed). set_boot.ps1
+#      only sets the boot scene + task, so a local run can never diverge from
+#      what a deploy produces. See deploy\overlays\README.md and docs/43.
 #   5. Prints a clear confirmation of what will run at the next titanic logon.
 #
 # -OpenBrowser / -NoOpenBrowser toggle this machine's 'open_browser' manifest
@@ -91,6 +89,12 @@ function Read-MachineManifest {
         if ($indent -eq 2) {
             if ($content -match '^([^:#]+):\s*$') {
                 $current = $matches[1].Trim()
+                # A duplicate machine name would collapse silently (last wins) while
+                # the block rewrite below edits the FIRST match - the two diverge.
+                # FAIL loudly naming the machine (no fallback, codex P0).
+                if ($machines.Contains($current)) {
+                    throw "machines.yaml line ${lineNo}: duplicate machine name '$current' - machine keys must be unique (no fallback)."
+                }
                 $machines[$current] = [ordered]@{}
                 continue
             }
@@ -260,40 +264,13 @@ Write-Host ''
 Write-Host 'Ensuring the BM26TitanicStack boot task:' -ForegroundColor Cyan
 & $bootTaskScript -RepoRoot $RepoRoot | Out-Null
 
-# --- 4. Apply this machine's config overlay -------------------------------
-# deploy\overlays\<hostname-lowercase>\ mirrors the repo tree; every file in it
-# is copied over the repo root, preserving relative paths (see
-# deploy\overlays\README.md). INTERIM mechanism: docs/43 assigns overlay
-# application to the Phase 2 deploy.py pipeline (phase 4) - this moves there.
-$overlayRoot = Join-Path $PSScriptRoot ('overlays\' + $hostName.ToLower())
-$overlayApplied = @()          # repo-relative paths applied (for the confirmation)
-$overlayMissing = -not (Test-Path -LiteralPath $overlayRoot -PathType Container)
-Write-Host ''
-if ($overlayMissing) {
-    Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' -ForegroundColor Yellow
-    Write-Host ("  WARN: no config overlay for this machine ($overlayRoot).") -ForegroundColor Yellow
-    Write-Host '  This machine will run the repo''s tracked (laptop/dev) config -' -ForegroundColor Yellow
-    Write-Host '  engine sACN goes to LOOPBACK and NO physical controllers will' -ForegroundColor Yellow
-    Write-Host '  light up. Fine for a sim-only box; wrong for a show server.' -ForegroundColor Yellow
-    Write-Host '  How to create one: deploy\overlays\README.md (or docs/43).' -ForegroundColor Yellow
-    Write-Host '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!' -ForegroundColor Yellow
-} else {
-    Write-Host ("Applying config overlay: $overlayRoot") -ForegroundColor Cyan
-    foreach ($f in @(Get-ChildItem -LiteralPath $overlayRoot -Recurse -File)) {
-        $rel = $f.FullName.Substring($overlayRoot.Length).TrimStart('\')
-        $dest = Join-Path $RepoRoot $rel
-        $destDir = Split-Path -Parent $dest
-        if (-not (Test-Path -LiteralPath $destDir)) {
-            New-Item -ItemType Directory -Path $destDir -Force | Out-Null
-        }
-        Copy-Item -LiteralPath $f.FullName -Destination $dest -Force
-        Write-Host ("  overlay: $rel -> applied") -ForegroundColor Green
-        $overlayApplied += $rel
-    }
-    if ($overlayApplied.Count -eq 0) {
-        Write-Host ("  WARN: overlay dir exists but contains no files - nothing applied.") -ForegroundColor Yellow
-    }
-}
+# --- 4. Config overlays are applied at DEPLOY time, not here --------------
+# Per-machine config overlays (deploy\overlays\<hostname-lowercase>\) are
+# applied by deploy\deploy.py during the prod deploy (its overlay phase deep-
+# merges the .yaml fragments over the tracked tree on the server). set_boot.ps1
+# only wires the boot scene + task; it deliberately does NOT touch config, so a
+# local run can never diverge from what a deploy produces. See
+# deploy\overlays\README.md and docs/43_show_server_deployment.md.
 
 # --- 5. Confirmation ------------------------------------------------------
 $launcherLine = "node launcher.js $LauncherProfile --scene $Scene --no-launch"
@@ -331,22 +308,7 @@ if ($freshEntry) {
     Write-Host ''
 }
 
-# Overlay status - repeat prominently here so the operator cannot miss that a
-# missing overlay means this box runs the tracked laptop/dev config.
-if ($overlayMissing) {
-    Write-Host '  !! NO CONFIG OVERLAY for this machine - it will run the repo''s tracked' -ForegroundColor Yellow
-    Write-Host '     (laptop/dev) config: engine sACN to LOOPBACK, NO physical controllers.' -ForegroundColor Yellow
-    Write-Host '     Fine for a sim-only box; create deploy\overlays\' -ForegroundColor Yellow -NoNewline
-    Write-Host ($hostName.ToLower() + '\ for a show server') -ForegroundColor Yellow
-    Write-Host '     (see deploy\overlays\README.md).' -ForegroundColor Yellow
-} elseif ($overlayApplied.Count -eq 0) {
-    Write-Host '  !! overlay dir exists but is EMPTY - nothing applied; running tracked config.' -ForegroundColor Yellow
-} else {
-    Write-Host ("  overlay  : applied " + [string]$overlayApplied.Count + " file(s) from deploy\overlays\" + $hostName.ToLower() + '\:') -ForegroundColor Green
-    foreach ($rel in $overlayApplied) {
-        Write-Host ("               $rel") -ForegroundColor Green
-    }
-}
+Write-Host '  overlays : applied at deploy time by deploy\deploy.py (not by this script).' -ForegroundColor Cyan
 Write-Host ''
 if ($task) {
     Write-Host '  Boot task BM26TitanicStack is present. At next titanic logon it runs:' -ForegroundColor Green

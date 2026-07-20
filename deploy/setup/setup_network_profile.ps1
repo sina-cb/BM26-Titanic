@@ -117,7 +117,7 @@ foreach ($u in $untouched) {
 #   whether a standard user may change the location.
 #
 # WHY IT IS A TODO AND NOT A WRITE (local ground truth gathered read-only on
-# this machine, Titanic-Int, 2026-07):
+# this machine, the interior server, 2026-07):
 #   - The policy path HKLM\SOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\
 #     NetworkList is ABSENT (no policy currently set), so there is no local,
 #     already-correct example key to copy the exact signature string from.

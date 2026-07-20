@@ -15,8 +15,8 @@
 #
 # Run standalone from an elevated PowerShell prompt:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\setup\setup_static_ip.ps1 `
-#       -StaticIp 10.1.1.50 -PrefixLength 24 -Gateway 10.1.1.1 -Dns 10.1.1.1
-# Or via the orchestrator: deploy\server_setup.ps1 -StaticIp 10.1.1.50 ...
+#       -StaticIp 192.0.2.50 -PrefixLength 24 -Gateway 192.0.2.1 -Dns 192.0.2.1
+# Or via the orchestrator: deploy\server_setup.ps1 -StaticIp 192.0.2.50 ...
 #
 # Full design: docs/43_show_server_deployment.md.
 
