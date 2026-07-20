@@ -79,7 +79,7 @@ repo), never hardcoded and never checked into this public repo.
 From any PowerShell window:
 
 ```powershell
-git clone -b feat/auto_start https://github.com/sina-cb/BM26-Titanic.git C:\titanic\BM26-Titanic
+git clone https://github.com/sina-cb/BM26-Titanic.git C:\titanic\BM26-Titanic
 ```
 
 This clone is for setup. Later, the deploy pipeline will sync the laptop's
