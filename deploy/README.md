@@ -34,6 +34,9 @@ After BIOS, the whole flow is **three commands**, in order:
 3. **deploy** -- `set_boot.ps1 -Scene <scene>` (pick the boot scene and wire
    the boot task to the supervisor).
 
+Passing `-Scene <scene>` to the `config` command folds step 3 into step 2, so
+a fully-specified `config` run is the whole flow in one elevated pass.
+
 ## Quick start
 
 | # | Step | Who | Rough time |
@@ -172,6 +175,12 @@ generating it and handing it to this pass:
 ```powershell
 Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NoExit -File C:\titanic\BM26-Titanic\deploy\server_setup.ps1 -SshPublicKey C:\keys\laptop.pub -StaticIp <static-ip> -PrefixLength 24 -Gateway <gateway> -Dns <dns>'
 ```
+
+Optionally add `-Scene <scene>` (with `-LauncherProfile` / `-Pattern` if you
+want them) and this pass also does Step 4 -- it folds in `set_boot.ps1` after
+the machine config, so a single elevated run configures the box **and** sets
+its boot scene. Omit it and the boot-scene step just reports `SKIP`; run
+`set_boot.ps1` on its own later (Step 4).
 
 Because you created the `titanic` account in Step 2, the SMB share grant and
 the boot task **complete in this single pass** -- no deferred WARNs. Reading
@@ -439,7 +448,7 @@ when run directly.
 | `setup\setup_network_profile.ps1` | Set the gateway-less show LAN's Unidentified profile to Private (so the Private-scoped firewall rules apply); named Wi-Fi SSIDs untouched | Yes | (none) |
 | `setup\setup_boot_task.ps1` | Create `BM26TitanicStack` (at logon of `titanic` -> `boot_server.ps1`) | Yes | `-RepoRoot`, `-TaskName`, `-LogonUser` |
 | `setup\setup_static_ip.ps1` | Static IPv4 on the one physical adapter | Yes | `-StaticIp` (**mandatory**), `-PrefixLength` 24, `-Gateway`, `-Dns` |
-| `set_boot.ps1` | Set this machine's boot scene + wire the task to the supervisor | Yes | `-Scene` (**mandatory**), `-LauncherProfile` prod, `-Pattern` |
+| `set_boot.ps1` | Set this machine's boot scene + wire the task to the supervisor (also foldable into `server_setup.ps1 -Scene`) | Yes | `-Scene` (**mandatory**), `-LauncherProfile` prod, `-Pattern` |
 | `verify_server.ps1` | Read-only state report | No | `-NodeVersion`, `-PythonVersion`, `-RepoRoot` |
 
 The two mandatory-param steps (`install_ssh_key.ps1 -PublicKey`,

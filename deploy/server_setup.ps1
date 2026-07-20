@@ -19,6 +19,12 @@
 # Steps that need a value you did not supply are SKIPPED (reported as SKIP):
 #   - no -SshPublicKey  -> SSH key install skipped
 #   - no -StaticIp      -> static IP step skipped (keep DHCP)
+#   - no -Scene         -> boot scene step skipped (run deploy\set_boot.ps1 later)
+#
+# -Scene folds the "deploy" command (set_boot.ps1) into this pass: after the
+# machine config it validates the scene, writes this hostname's entry in
+# deploy\machines.yaml, and wires the boot task to the supervisor - one
+# elevated run instead of two. -LauncherProfile / -Pattern pass through.
 #
 # Full design: docs/43_show_server_deployment.md.
 
@@ -32,7 +38,10 @@ param(
     [string[]]$Dns,
     [string]$NodeVersion = '24.18.0',
     [string]$PythonVersion = '3.12',
-    [string]$RepoRoot = 'C:\titanic\BM26-Titanic'
+    [string]$RepoRoot = 'C:\titanic\BM26-Titanic',
+    [string]$Scene,
+    [string]$LauncherProfile = 'prod',
+    [string]$Pattern
 )
 
 $ErrorActionPreference = 'Stop'
@@ -144,6 +153,33 @@ if ($StaticIp) {
     Write-Host ('=== Static IP === [' + (Get-Date -Format 'HH:mm:ss') + ']') -ForegroundColor Cyan
     Write-Host '  SKIP: no -StaticIp supplied. Leaving current addressing (DHCP) as-is.' -ForegroundColor Yellow
     Add-Result -Step 'Static IP' -Status 'SKIP' -Detail 'no -StaticIp supplied'
+}
+
+# --- Step: boot scene (skipped if no -Scene supplied) --------------------
+# set_boot.ps1 lives in $PSScriptRoot (NOT setup\), and prints its own
+# BOOT SCENE SET banner rather than returning a status object, so it is
+# invoked directly here instead of through Invoke-Step. -Pattern is passed
+# through only when the operator bound it (set_boot.ps1 treats a bound-but-
+# empty -Pattern as "remove pattern", so we preserve exactly what was bound).
+if ($Scene) {
+    Write-Host ''
+    Write-Host ('=== Boot scene === [' + (Get-Date -Format 'HH:mm:ss') + ']') -ForegroundColor Cyan
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $bootScript = Join-Path $PSScriptRoot 'set_boot.ps1'
+    try {
+        $bootParams = @{ Scene = $Scene; LauncherProfile = $LauncherProfile; RepoRoot = $RepoRoot }
+        if ($PSBoundParameters.ContainsKey('Pattern')) { $bootParams['Pattern'] = $Pattern }
+        & $bootScript @bootParams
+        Add-Result -Step 'Boot scene' -Status 'DONE' -Detail ("scene '$Scene', profile '$LauncherProfile'") -Elapsed (Format-Elapsed $sw.Elapsed)
+    } catch {
+        Write-Host "  FAIL: $($_.Exception.Message)" -ForegroundColor Red
+        Add-Result -Step 'Boot scene' -Status 'FAIL' -Detail $_.Exception.Message -Elapsed (Format-Elapsed $sw.Elapsed)
+    }
+} else {
+    Write-Host ''
+    Write-Host ('=== Boot scene === [' + (Get-Date -Format 'HH:mm:ss') + ']') -ForegroundColor Cyan
+    Write-Host '  SKIP: no -Scene supplied. Run deploy\set_boot.ps1 -Scene <scene> later.' -ForegroundColor Yellow
+    Add-Result -Step 'Boot scene' -Status 'SKIP' -Detail 'no -Scene supplied'
 }
 
 # --- Summary -------------------------------------------------------------
