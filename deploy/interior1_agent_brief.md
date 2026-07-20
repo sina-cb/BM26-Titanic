@@ -50,7 +50,7 @@ the source of truth; this is the executable expansion.
 
 **Step 0 — get the code.**
 ```powershell
-git clone -b feat/auto_start https://github.com/sina-cb/BM26-Titanic.git C:\titanic\BM26-Titanic
+git clone https://github.com/sina-cb/BM26-Titanic.git C:\titanic\BM26-Titanic
 ```
 (This clone is for setup + review. Show code will later be robocopy-synced
 from the laptop into this same path by the deploy pipeline; don't hand-edit
