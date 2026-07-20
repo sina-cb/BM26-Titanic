@@ -6,8 +6,19 @@
 #   - RunLevel: Highest (the stack claims ports / touches devices)
 #   - Action:  powershell -NoProfile -ExecutionPolicy Bypass -File
 #              C:\titanic\BM26-Titanic\deploy\boot_server.ps1
-# No Task-Scheduler restart settings - restart logic belongs in the supervisor
-# where it can log properly (docs/43, boot chain).
+#   - Restart-on-failure: every 1 min, up to 3 times (RestartCount/Interval).
+#
+# Two independent restart layers, at two levels (do not conflate them):
+#   - The SUPERVISOR (boot_server.ps1) relaunches the LAUNCHER in its own loop,
+#     where it can log every relaunch properly (docs/43, boot chain).
+#   - This task's Task-Scheduler restart-on-failure revives the SUPERVISOR
+#     ITSELF. The trigger only fires AT LOGON, so before this a supervisor that
+#     died or was killed mid-session (e.g. the operator closing its interactive
+#     window - the field incident) stayed dead until the next reboot: nothing
+#     restarted it. Restart-on-failure now brings the supervisor back when its
+#     process ends abnormally, every 1 min for up to 3 attempts. Beyond that
+#     budget it stays down until a reboot/logon (or `deploy.py start`) - a
+#     bounded net, not an infinite one, so a genuinely broken box still parks.
 #
 # No-fallback / idempotency rules (codex P0):
 #   - task exists with the SAME action -> SKIP;
@@ -88,9 +99,14 @@ $principal = New-ScheduledTaskPrincipal -UserId $LogonUser -RunLevel Highest -Lo
 # ExecutionTimeLimit PT0S = unlimited in PS 5.1. The DEFAULT is PT72H: Task
 # Scheduler would KILL the supervisor (and the whole stack's process tree)
 # exactly 72 h after boot - fatal across a multi-day burn. Battery flags keep
-# the supervisor alive on a laptop that loses AC.
+# the supervisor alive on a laptop that loses AC. RestartCount/RestartInterval
+# revive the supervisor if its process ends abnormally (killed / crashed):
+# 3 attempts, 1 min apart. This is the supervisor's own safety net - the trigger
+# only fires at logon, so without it a mid-session death stayed dead until the
+# next reboot.
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+    -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
+    -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($existing) {
@@ -101,16 +117,21 @@ if ($existing) {
     if ($sameExe -and ($curArgs -ieq $argLine)) {
         # Action matches. Now inspect the SETTINGS: a task created by an older
         # revision of this script (or the Task Scheduler default) carries the
-        # fatal 72 h ExecutionTimeLimit and/or battery flags that differ from
-        # ours. If so, REPAIR by re-registering with the same
-        # action/trigger/principal and the corrected settings, so a single
+        # fatal 72 h ExecutionTimeLimit, battery flags, and/or NO restart-on-
+        # failure that differ from ours. If so, REPAIR by re-registering with the
+        # same action/trigger/principal and the corrected settings, so a single
         # elevated re-run heals the live machine. Same action + same settings ->
         # SKIP as before.
         $curLimit = "$($existing.Settings.ExecutionTimeLimit)".Trim()
         $limitOk = ($curLimit -ieq 'PT0S')
         $batteryOk = (-not $existing.Settings.DisallowStartIfOnBatteries) -and `
             (-not $existing.Settings.StopIfGoingOnBatteries)
-        if ($limitOk -and $batteryOk) {
+        # Restart-on-failure: an older task predating this setting reports
+        # RestartCount 0 and an empty RestartInterval - REPAIR heals it to 3 / PT1M.
+        $curRestartCount = [int]$existing.Settings.RestartCount
+        $curRestartInterval = "$($existing.Settings.RestartInterval)".Trim()
+        $restartOk = ($curRestartCount -eq 3) -and ($curRestartInterval -ieq 'PT1M')
+        if ($limitOk -and $batteryOk -and $restartOk) {
             Write-Host "  SKIP: task '$TaskName' already exists with the expected action and settings." -ForegroundColor Green
             $status = 'SKIP'
             if ($warn) { $status = 'WARN' }
@@ -121,18 +142,19 @@ if ($existing) {
             }))
         }
         Write-Host ("  REPAIR: task '$TaskName' exists but its settings are stale " +
-            "(ExecutionTimeLimit '$curLimit', expected 'PT0S'; battery flags off). " +
+            "(ExecutionTimeLimit '$curLimit', expected 'PT0S'; battery flags off; " +
+            "restart-on-failure '$curRestartCount x $curRestartInterval', expected '3 x PT1M'). " +
             'Re-registering with corrected settings.') -ForegroundColor Yellow
         Register-ScheduledTask -TaskName $TaskName `
             -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
             -Description 'BM26 Titanic show-stack supervisor at logon (docs/43).' -Force | Out-Null
-        Write-Host "  DONE: repaired task '$TaskName' settings (ExecutionTimeLimit unlimited)." -ForegroundColor Green
+        Write-Host "  DONE: repaired task '$TaskName' settings (ExecutionTimeLimit unlimited; restart-on-failure 3 x 1 min)." -ForegroundColor Green
         $status = 'DONE'
         if ($warn) { $status = 'WARN' }
         return (Write-StepResult ([PSCustomObject]@{
             Step   = 'Boot task'
             Status = $status
-            Detail = ("repaired settings (ExecutionTimeLimit unlimited); " + (@($warnNote) -join '')).TrimEnd('; ').Trim()
+            Detail = ("repaired settings (ExecutionTimeLimit unlimited; restart-on-failure 3 x 1 min); " + (@($warnNote) -join '')).TrimEnd('; ').Trim()
         }))
     } else {
         throw ("Scheduled task '$TaskName' already exists but its action differs " +

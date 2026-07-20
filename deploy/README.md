@@ -510,6 +510,33 @@ and repairs the existing task in place** (reports `repaired settings
 (ExecutionTimeLimit unlimited)`). One elevated re-run heals it; the change
 takes effect at the next `titanic` logon / reboot.
 
+**Power-cut resilience (what survives a plug pull, and what doesn't).** A power
+cut can interrupt the launcher mid-write of its single-instance lock
+(`~\tmp\bm26_titanic_launcher.lock.json`), leaving a truncated / whitespace-only
+file. Two nets now cover the aftermath:
+
+- **Corrupt lock is auto-recovered, loudly.** On the next start the launcher
+  treats a lock that does not parse as JSON as the signature of an interrupted
+  write (a healthy launcher always leaves a complete, valid lock), logs a single
+  loud `Interrupted-write lock ... deleting it ...` line, deletes it, and
+  proceeds. A *valid* lock naming a live launcher still blocks as before. This
+  closes the field incident where a restart-cut lock made startup refuse to
+  begin and the supervisor crash-looped **409 times (~68 min)** before manual
+  intervention.
+- **A dead supervisor is auto-restarted.** The `BM26TitanicStack` task fires
+  **at logon**, so a reboot always brings the supervisor back -- but a supervisor
+  that dies or is killed *mid-session* (e.g. closing its interactive window) is
+  not a logon event and previously stayed dead until the next reboot. The task
+  now carries **restart-on-failure (3 attempts, 1 min apart)**, so an abnormally
+  ended supervisor comes back on its own. Re-run `config` (or
+  `setup_boot_task.ps1`) elevated to heal an older task in place; it reports
+  `repaired settings (... restart-on-failure 3 x 1 min)`.
+
+**Caveat:** killing the supervisor is only covered within that 3-restart budget.
+Beyond it (or after a deliberate stop) the box stays parked until a reboot/logon
+-- bring it back explicitly with `python deploy\deploy.py start --machine
+<machine>`.
+
 **SSH/SMB refused from the laptop even though `sshd` runs and the firewall
 rules exist.** (interior1, field-verified.) *Symptom:* `Get-Service sshd`
 is Running, `verify_server.ps1` shows the `BM26 Titanic -` inbound rules
