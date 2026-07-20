@@ -278,7 +278,12 @@ function readLock() {
   try {
     return JSON.parse(text);
   } catch (err) {
-    throw new Error(`Corrupt lock file ${LOCK_PATH}: ${err.message}. Inspect/delete it and retry.`);
+    // Tag the parse failure so the single-instance check can recognize an
+    // unparseable lock as an interrupted-write artifact and recover from it,
+    // while every other caller still surfaces it loudly (unchanged behavior).
+    const corrupt = new Error(`Corrupt lock file ${LOCK_PATH}: ${err.message}. Inspect/delete it and retry.`);
+    corrupt.code = 'ELOCKCORRUPT';
+    throw corrupt;
   }
 }
 
@@ -319,7 +324,25 @@ function lockLauncherAlive(lock) {
 }
 
 async function assertSingleInstance(force = false) {
-  const lock = readLock();
+  let lock;
+  try {
+    lock = readLock();
+  } catch (err) {
+    if (err.code !== 'ELOCKCORRUPT') throw err; // e.g. EACCES — not ours to swallow
+    // Deterministic lifecycle handling of a KNOWN artifact — not a silent
+    // fallback. A lock that exists but does not parse as JSON is the signature
+    // of a launcher whose writeLock() was interrupted mid-write (a crash or a
+    // power cut). A live, healthy launcher always leaves a fully-written, valid
+    // JSON lock (writeLock serializes the whole object in a single writeFileSync
+    // before returning), so an unparseable lock can NEVER belong to a running
+    // instance. Delete it loudly as the interrupted-write artifact it is and
+    // continue startup. Field incident: a Windows restart cut writeLock
+    // mid-flight, leaving a whitespace-only lock; startup then refused to begin
+    // over it and the supervisor crash-looped 409 times (~68 min).
+    logError(`Interrupted-write lock ${LOCK_PATH} does not parse as JSON (${err.message}) — deleting it as a crashed/power-cut launcher artifact and continuing startup.`);
+    try { fs.unlinkSync(LOCK_PATH); } catch { /* already gone */ }
+    return;
+  }
   if (!lock) return;
   if (lockLauncherAlive(lock)) {
     if (!force) {
