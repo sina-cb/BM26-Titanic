@@ -422,7 +422,7 @@ def stop_stack(entry: dict) -> bool:
     print(f'  schtasks /End -> rc {end_proc.returncode} '
           f'({"stopped" if end_proc.returncode == 0 else "was not running"})')
     launcher = f"{entry['dest']}\\launcher.js"
-    stop_proc = ssh_run(entry, f'node {launcher} stop', check=False, timeout=120)
+    stop_proc = ssh_run(entry, f'node "{launcher}" stop', check=False, timeout=120)
     if stop_proc.returncode not in (0, 1):  # 1 = "no stack is running" - fine after /End
         fail(f'launcher stop failed (rc {stop_proc.returncode}):\n'
              f'{stop_proc.stdout}\n{stop_proc.stderr}')
@@ -975,7 +975,7 @@ def start_machine(name: str, entry: dict, args: argparse.Namespace) -> None:
 
 def scratch_dirty_files(entry: dict) -> list[str]:
     """List uncommitted changes in the server's scratch tree (empty = clean)."""
-    proc = ssh_run(entry, f'git -C {entry["scratch_dest"]} status --porcelain', timeout=60)
+    proc = ssh_run(entry, f'git -C "{entry["scratch_dest"]}" status --porcelain', timeout=60)
     return [l for l in proc.stdout.splitlines() if l.strip()]
 
 
@@ -1027,7 +1027,7 @@ def deploy_scratch(name: str, entry: dict, args: argparse.Namespace) -> None:
     count = len(tracked_files)
     tar_cmd = ['tar', '-c', '-f', '-', '-C', str(REPO_ROOT), '--null', '-T', str(list_file)]
     ssh_cmd = ['ssh', *SSH_OPTS, f"{entry['ssh_user']}@{entry['host']}",
-               f'tar -x -f - -C {entry["scratch_dest"]}']
+               f'tar -x -f - -C "{entry["scratch_dest"]}"']
     tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE)
     ssh_proc = subprocess.Popen(ssh_cmd, stdin=tar_proc.stdout,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -1054,7 +1054,7 @@ def deploy_scratch(name: str, entry: dict, args: argparse.Namespace) -> None:
     for rel in SCRATCH_SPOT_CHECK:
         local_hash = hashlib.sha256((REPO_ROOT / rel).read_bytes()).hexdigest()
         remote = rel.replace('/', '\\')
-        proc = ssh_run(entry, f'certutil -hashfile {entry["scratch_dest"]}\\{remote} SHA256',
+        proc = ssh_run(entry, f'certutil -hashfile "{entry["scratch_dest"]}\\{remote}" SHA256',
                        timeout=60)
         remote_hash = proc.stdout.splitlines()[1].strip().lower()
         if remote_hash != local_hash:
@@ -1075,7 +1075,7 @@ def fetch_tree(name: str, entry: dict, source: str) -> None:
     tree = entry['dest'] if source == 'prod' else entry['scratch_dest']
     remote_bundle = f'C:\\titanic\\fetch_{source}.bundle'
     step(f'fetch {source} ({tree})')
-    ssh_run(entry, f'cd /d {tree} && git bundle create {remote_bundle} --branches',
+    ssh_run(entry, f'cd /d "{tree}" && git bundle create {remote_bundle} --branches',
             timeout=300)
     FETCH_DIR.mkdir(parents=True, exist_ok=True)
     local_bundle = FETCH_DIR / f'{name}_{source}.bundle'
