@@ -1,0 +1,30 @@
+# machines.yaml.example - SHAPE ONLY, placeholder values (docs/43).
+#
+# The REAL machines.yaml is NOT in this repo. It lives in the private
+# BM26-Firmware-Deployment repo and is exported as the BM26_MACHINES env var by
+# that repo's setup_env.ps1 / setup_env.sh. deploy.py reads $BM26_MACHINES
+# (failing loudly if unset) and ships the file to each server at deploy time.
+# This example exists only to document the structure - copy it into the private
+# repo and fill in real values there, never here.
+#
+# LAN hostnames/IPs only - NEVER credentials, and no MACs (the security check
+# bans them). Each machine is keyed by its Windows hostname (matched
+# case-insensitively by deploy\boot_server.ps1 at boot).
+#
+# Strict two-level structure only - 'machines:' -> '<name>:' -> '<key>: value'
+# at 0 / 2 / 4-space indent. The supervisor's parser FAILs loudly on anything
+# else, so keep the shape below.
+machines:
+  example-server:
+    host: 192.0.2.10
+    role: interior lights
+    scene: test_bench
+    pattern: 00_golden_hour_wash
+    profile: prod
+    open_browser: true
+    dest: C:\titanic\BM26-Titanic
+    share: \\192.0.2.10\titanic
+    share_root: C:\titanic
+    scratch_dest: C:\Users\tech\workspace\BM26-Titanic
+    ssh_user: titanic
+    notes: placeholder - real values live in the private BM26-Firmware-Deployment repo

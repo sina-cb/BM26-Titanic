@@ -3,7 +3,7 @@
 > Updated by any agent, any time state changes. Keep it under a screen.
 > Absolute dates only.
 
-_Last touched: 2026-07-13 (studiodj black-pixel fix + scene backups + engine auto-save — report `202607/20260713_0`)_
+_Last touched: 2026-07-20 (show-server deployment tooling wave on `feat/auto_start` — docs/43)_
 
 ## Active branches
 
@@ -49,7 +49,7 @@ DONE + hardware-confirmed:
 - **APC mini remapped** (docs/midi/apc_mini_mk2.md): shift=deck/mixer, track
   buttons=focus channels, clip_stop=combined autopilot, stop_all=blackout.
 
-DONE + hardware-confirmed (2026-07-10 night):
+DONE + hardware-confirmed (2026-07-10):
 - **LED per-output E2E LIVE**: MarsinLED titanic_202, BOTH outputs animating
   from the engine (out0→U10@1, out1→U12@1); legacy linear projection removed,
   per-output is the only layout; sim 272/272, CaptainPad 589/589 + tsc.
@@ -66,7 +66,7 @@ DONE + hardware-confirmed (2026-07-10):
   card; welcome logo first-connect only (host hello-driven); side-button ↔
   CaptainPad page sync; UI-lab tool `tools/vsn1_utils/ui_lab.cjs`.
   Docs: **[docs/42](../../docs/42_vsn1_controller.md)**.
-- **2026-07-10 EVENING — freeze hunt + final redesign** (FULL HANDOFF:
+- **2026-07-10 — freeze hunt + final redesign** (FULL HANDOFF:
   [`../reports/202607/20260710_11_vsn1_freeze_hunt_and_redesign.md`](../reports/202607/20260710_11_vsn1_freeze_hunt_and_redesign.md)):
   three stacked freeze causes found (wedged pad-scan → USB replug; zombie
   tabs double-dispatching; deploy pipeline bugs) and fixed; VSN1 redesigned
@@ -115,13 +115,13 @@ OPEN (tracked in session task list):
 - **Perf-mode follow-up LANDED**: all 39 gates greyed comprehensively on
   deck+mixer UI; APC SOLO = performance/edit dialog switch (LED lit when
   active); active button = RED "EDIT". CaptainPad 696/696 + tsc.
-- **Evening wave LANDED**: engine session param retention (all channels,
+- **Later wave LANDED**: engine session param retention (all channels,
   transition path covered; mixer scoped to playlist assignment) + dirty
   flush on auto-save re-enable / exit-KEEP (engine 1968/1977, +22 tests);
   perf-mode pattern rows 1.73× taller for touch (703/703); APC SOLO
   press-again-to-confirm enter + exit-sheet hint (711/711 + tsc). Dev-only
   `?fakeMidi=apc` transport added for headless MIDI testing.
-- **Night wave LANDED**: performance-exit save ask (keep-save / keep /
+- **Final wave LANDED**: performance-exit save ask (keep-save / keep /
   restore + dirty summary); VSN1 silent-deploy root cause = 909-char LCD
   budget overflow (fixed: auto-shrink + loud errors + requeue); page-0-only
   deploys; controllerProfile edit/play (sb_2 toggle, PLAY big-cell surface
@@ -234,7 +234,37 @@ OPEN (tracked in session task list):
   studiodj/controllers.yaml (pre-fix code in memory); strip recurs until
   the sim stack is restarted onto the fixed code.
 
+## 2026-07-20 show-server deployment wave (uncommitted, `feat/auto_start`, docs/43)
+
+- **Deployment tooling COMPLETE on `feat/auto_start`** (docs/43): server
+  bring-up suite fetched from the interior server and pushed — commits
+  8650735 + db3aa43. Laptop `deploy/deploy.py` now does deploy / fetch /
+  stop / start, per-machine overlay merge-fragments, and hardened `verify`
+  (crash-loop check is a STABILITY check — reads boot_status twice ~15 s
+  apart, fails only if `restart_count` rose; hardened after adversarial
+  review).
+- **interior1 SET UP**: the interior server (manifest key `titanic-int`) fully
+  provisioned; stack running `test_bench`; SSH + SMB from the laptop proven.
+- **Scratch residue curated** to `feat/test_bench_tuning` (pushed; engine
+  runtime states dropped per operator).
+- **VSN1 auto-deploy default = TRUE everywhere** (operator ruling
+  2026-07-20); `titanic-int` carries NO overlay overrides.
+- **PENDING — operator-run live gates**: `deploy --restart-only`, then full
+  `deploy --scene test_bench` (both blink/bounce the live rig). After those
+  pass → operator-gated commit + PR of the tooling wave.
+- **OPEN ITEM**: dropped the `TestBench-10` (bench LED controller) override
+  (bench-LEDs question still unresolved).
+
 ## Hot notes
+
+- **Show-server deployment DESIGNED (2026-07-17)**: `docs/43_show_server_deployment.md`
+  — power-safe boot chain (BIOS AC-restore → autologon → scheduled task →
+  `deploy/boot_server.ps1` supervisor → `launcher.js prod --scene <X> --no-launch`)
+  + one-command laptop→server deploy (`deploy/deploy.py`: SSH control, robocopy
+  /MIR sync incl. node_modules, per-machine overlays, verify probes). Phase 1 =
+  manual bring-up of first interior server (`interior1`); Phase 2 = the deploy/
+  tooling (IMPLEMENTED — see the "2026-07-20 show-server deployment wave"
+  section above). Open questions for Sina in doc §Open questions.
 
 - **Effects v2 Track C (CaptainPad) LANDED** on `feat/party_integration_20260711`
   (uncommitted): 4-page effects switcher + per-slot value/mode UI; VSN1 side
