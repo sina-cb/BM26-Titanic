@@ -120,6 +120,44 @@ foreach ($fn in $fwNames) {
     else          { Write-Field $fn.Replace('BM26 Titanic - ', '') 'MISSING (n)' 'Yellow' }
 }
 
+# --- Network profile category --------------------------------------------
+# On the gateway-less show LAN a physical adapter comes up as an "Unidentified
+# network" -> Public profile, on which the Private+Domain firewall rules above
+# are inert. Report each physical adapter's NetworkCategory (Public here is the
+# smell) and whether the durable "Unidentified Networks -> Private" NLM policy
+# is set. Both reads are non-elevated-safe: Get-NetConnectionProfile and the
+# HKLM\...\Policies key read without admin; if a read is denied, say UNKNOWN.
+Write-Host ''
+Write-Host 'Network profile (Public on show LAN = firewall rules inert)' -ForegroundColor Cyan
+$physIdx = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty ifIndex)
+$connProfiles = @(Get-NetConnectionProfile -ErrorAction SilentlyContinue |
+    Where-Object { $physIdx -contains $_.InterfaceIndex })
+if ($connProfiles.Count -eq 0) {
+    Write-Field 'physical adapters' '(none with a connection profile)' 'Yellow'
+} else {
+    foreach ($cp in $connProfiles) {
+        if ($cp.NetworkCategory -eq 'Private' -or $cp.NetworkCategory -eq 'DomainAuthenticated') { $c = 'Green' } else { $c = 'Yellow' }
+        Write-Field $cp.InterfaceAlias ("'{0}' -> {1}" -f $cp.Name, $cp.NetworkCategory) $c
+    }
+}
+# NLM "Unidentified Networks -> Private" policy: presence of the policy path is
+# the read-only signal. Absent = not set (matches the setup step's TODO).
+$nlmPolicyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\NetworkList\Signatures'
+$nlmSet = $null
+try {
+    $nlmSet = Test-Path $nlmPolicyPath -ErrorAction Stop
+} catch {
+    $nlmSet = $null
+}
+if ($null -eq $nlmSet) {
+    Write-Field 'unidentified->Private policy' 'UNKNOWN (read denied - run elevated)' 'Yellow'
+} elseif ($nlmSet) {
+    Write-Field 'unidentified->Private policy' 'set (y)' 'Green'
+} else {
+    Write-Field 'unidentified->Private policy' 'NOT set (n) - setup step TODO' 'Yellow'
+}
+
 # --- SMB share -----------------------------------------------------------
 Write-Host ''
 Write-Host 'SMB share' -ForegroundColor Cyan

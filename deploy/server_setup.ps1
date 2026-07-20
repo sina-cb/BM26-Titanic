@@ -124,6 +124,12 @@ Invoke-Step -Name 'SMB share' -Script 'setup_smb_share.ps1' -Params @{}
 # --- Step: firewall ------------------------------------------------------
 Invoke-Step -Name 'Firewall rules' -Script 'setup_firewall.ps1' -Params @{}
 
+# --- Step: network profile (Private) -------------------------------------
+# Must follow the firewall step: the gateway-less show LAN comes up as an
+# "Unidentified network" -> Public profile, on which the Private+Domain-scoped
+# firewall rules above are inert. This sets the profile Private so they apply.
+Invoke-Step -Name 'Network profile (Private)' -Script 'setup_network_profile.ps1' -Params @{}
+
 # --- Step: boot task -----------------------------------------------------
 Invoke-Step -Name 'Boot task' -Script 'setup_boot_task.ps1' -Params @{ RepoRoot = $RepoRoot }
 

@@ -53,7 +53,11 @@ $authFile = 'C:\ProgramData\ssh\administrators_authorized_keys'
 $keyLine = $null
 if (Test-Path -LiteralPath $PublicKey -PathType Leaf) {
     Write-Host "Reading public key from file: $PublicKey" -ForegroundColor Cyan
-    $fileLines = Get-Content -LiteralPath $PublicKey | Where-Object { $_.Trim().Length -gt 0 }
+    # @(...) forces array context: a one-line file makes Get-Content return a
+    # scalar string, and $fileLines[0] would then index the first CHARACTER
+    # (System.Char has no .Trim()) instead of the line. Wrapping guarantees an
+    # array so [0] is the line.
+    $fileLines = @(Get-Content -LiteralPath $PublicKey | Where-Object { $_.Trim().Length -gt 0 })
     if ($fileLines.Count -ne 1) {
         throw "Public key file '$PublicKey' must contain exactly one key line (found $($fileLines.Count))."
     }

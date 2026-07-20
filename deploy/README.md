@@ -114,7 +114,9 @@ method -- fix that (use Autologon instead).
 
 `server_setup.ps1` does the machine prep in one go: runtimes (Node, Git,
 Python), power hygiene, Windows Update notify-only, OpenSSH server, SMB
-share, firewall rules, the boot task, and (optionally) a static IP.
+share, firewall rules, the network profile (forces the gateway-less show LAN
+to Private so those firewall rules actually apply -- see the Troubleshooting
+note on SSH/SMB refused), the boot task, and (optionally) a static IP.
 
 **It must run as Administrator.** Paste this into any normal PowerShell
 window -- it opens an elevated window (say Yes to UAC), runs the setup, and
@@ -266,6 +268,7 @@ when run directly.
 | `setup\install_ssh_key.ps1` | Install the laptop's public key for the `titanic` admin | Yes | `-PublicKey` (**mandatory**: key line or `.pub` path) |
 | `setup\setup_smb_share.ps1` | Share `C:\titanic` as `titanic`, Full access for `titanic` | Yes | `-SharePath`, `-ShareName`, `-GrantUser` |
 | `setup\setup_firewall.ps1` | Inbound allow: TCP 6966-6972, UDP 5568, TCP 22, TCP 445 | Yes | (none) |
+| `setup\setup_network_profile.ps1` | Set the gateway-less show LAN's Unidentified profile to Private (so the Private-scoped firewall rules apply); named Wi-Fi SSIDs untouched | Yes | (none) |
 | `setup\setup_boot_task.ps1` | Create `BM26TitanicStack` (at logon of `titanic` -> `boot_server.ps1`) | Yes | `-RepoRoot`, `-TaskName`, `-LogonUser` |
 | `setup\setup_static_ip.ps1` | Static IPv4 on the one physical adapter | Yes | `-StaticIp` (**mandatory**), `-PrefixLength` 24, `-Gateway`, `-Dns` |
 | `set_boot.ps1` | Set this machine's boot scene + wire the task to the supervisor | Yes | `-Scene` (**mandatory**), `-LauncherProfile` prod, `-Pattern` |
@@ -338,6 +341,37 @@ updating the tree -- `setup_boot_task.ps1` now sets the limit to unlimited
 and repairs the existing task in place** (reports `repaired settings
 (ExecutionTimeLimit unlimited)`). One elevated re-run heals it; the change
 takes effect at the next `titanic` logon / reboot.
+
+**SSH/SMB refused from the laptop even though `sshd` runs and the firewall
+rules exist.** (interior1, field-verified.) *Symptom:* `Get-Service sshd`
+is Running, `verify_server.ps1` shows the `BM26 Titanic -` inbound rules
+present, but connecting to port 22 (SSH) or 445 (SMB) from the laptop is
+refused/times out. *Cause:* the show LAN has **no gateway**, so Windows can't
+identify it and classifies the Ethernet as an **"Unidentified network" ->
+Public** firewall profile. Every suite rule is scoped **Private+Domain**, so
+on a Public interface the inbound allow is inert and Windows drops the
+traffic. `verify_server.ps1` now surfaces this: the *Network profile* row
+shows the adapter's category (a yellow **Public** on the show-LAN adapter is
+the tell). *Fix:* re-run `config` -- the **network profile** step sets the
+current Unidentified/Network profile on the physical adapter to Private
+(named Wi-Fi SSIDs are never touched). Quick manual one-liner (elevated),
+if you just need access back this second:
+
+```powershell
+Set-NetConnectionProfile -InterfaceAlias Ethernet -NetworkCategory Private
+```
+
+*Durability caveat:* setting the profile fixes it **until the next
+reconnect/reboot**, when Windows can mint a fresh Unidentified profile that
+reverts to Public. The permanent fix is the Network List Manager policy
+"Unidentified Networks -> Private" (`secpol.msc` > Network List Manager
+Policies > Unidentified Networks > Location type = Private), which makes it
+**survive reboots**. That policy write is a documented TODO in
+`setup\setup_network_profile.ps1` (the exact policy-key signature could not
+be verified read-only without elevation, and the suite never ships a guessed
+registry write) -- so the step reports **WARN** until it is applied, meaning
+"access is unblocked now, but not yet reboot-durable." Set the policy once
+via `secpol.msc` on the box to close it.
 
 **WARN vs FAIL.** WARN means "did what it could; a later step or re-run
 finishes it". FAIL means "stopped, here is the exact error" -- these scripts
