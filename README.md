@@ -16,6 +16,7 @@ to the physical DMX rig.
 - [Prerequisites](#-prerequisites)
 - [One-Command Launch](#-one-command-launch-recommended)
 - [Manual Start (per-component)](#-manual-start-per-component)
+- [Show-Server Ops Cheatsheet →](deploy/CHEATSHEET.md)
 - [Mission](#-mission)
 - [Repository Structure](#-repository-structure)
 - [System Architecture](#-system-architecture)
