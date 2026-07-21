@@ -7,26 +7,44 @@ CaptainPad is the native remote-control surface for the MarsinEngine environment
 Building a **Release** `.ipa` from Windows with **no persistent login left on this machine**. Secrets live in session-only env vars and Apple certs are stored on Expo's servers, not here. Do steps in **your own PowerShell terminal** — never paste the token/password into an agent chat.
 
 ```powershell
-# 1. Auth for THIS SESSION ONLY (no `eas login` — that would persist full account access on disk)
-$env:EXPO_TOKEN = "paste-your-expo-token-here"                       # expo.dev → Account settings → Access tokens
-$env:EXPO_APPLE_APP_SPECIFIC_PASSWORD = "paste-app-specific-pw-here" # account.apple.com → Sign-In and Security → App-Specific Passwords
+# 1. Authenticate for this session only (avoids leaving persistent login credentials on disk)
+$env:EXPO_TOKEN = "your_expo_token_here"
+$env:EXPO_APPLE_APP_SPECIFIC_PASSWORD = "your_apple_app_specific_password_here"
 
+# 2. Change directory to CaptainPad root
 cd "C:\Users\Titanic's End\workspace\BM26-Titanic\CaptainPad"
-npx eas-cli whoami                                    # proves the token works; nothing installed/stored
 
-# 2. Register the iPad (open the link on the iPad), then build a standalone Release
-npx eas-cli device:create
-npx eas-cli build --profile preview --platform ios    # preview = Release, offline-capable, full speed
+# 3. (Optional but Recommended) Run a local bundle check to catch compilation issues before uploading to the cloud
+npx expo export:embed --eager --platform ios --dev false --reset-cache
+
+# 4. Trigger the EAS preview build (internal Release profile)
 npx eas-cli build --profile preview --platform ios --clear-cache --non-interactive
 
-# 3. Wipe traces when done
+# 5. Clean up environment variables when done
 Remove-Item Env:EXPO_TOKEN
-Remove-Item Env:EXPO_APPLE_APP_SPECIFIC_PASSWORD       # then close the terminal
+Remove-Item Env:EXPO_APPLE_APP_SPECIFIC_PASSWORD
 ```
 
 - `preview` is a **Release** build (`buildConfiguration: "Release"` in `eas.json`) — optimized bundle baked in, no Metro, runs offline. This is the one you want for the playa.
 - Requires an active **Apple Developer Program** membership ($99/yr) to sign for a physical device.
 - Using `npx eas-cli` (not a global install) keeps this shared box clean. To lock the token to *only* CaptainPad, generate it from a **Robot user** scoped to the CaptainPad project instead of a personal account token, and delete it when done.
+
+> [!TIP]
+> **Updating the Provisioning Profile for a New iPad:**
+> If you just registered a new device (e.g. via `npx eas-cli device:create`), the cached provisioning profile on EAS won't automatically include it. 
+> Run the build **interactively** (without `--non-interactive`) just this once to update the profile:
+> ```powershell
+> npx eas-cli build --profile preview --platform ios --clear-cache
+> ```
+> During this interactive build:
+> - EAS will see the new device you registered.
+> - It will ask if it should update the provisioning profile to include it. Choose **Yes**.
+> - It will use your active Apple session to automatically update the credentials on Expo's servers.
+> 
+> Once this build succeeds (or starts compiling), your provisioning profile on EAS will be permanently updated. For all future builds, you can safely return to using the `--non-interactive` command:
+> ```powershell
+> npx eas-cli build --profile preview --platform ios --clear-cache --non-interactive
+> ```
 
 ---
 
