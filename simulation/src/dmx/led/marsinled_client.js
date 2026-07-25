@@ -116,9 +116,21 @@ function delay(ms) {
 
 async function fetchWithTimeout(url, opts, timeoutMs) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   try {
     return await fetch(url, { ...opts, signal: controller.signal });
+  } catch (err) {
+    // The only thing that aborts this signal is OUR timer (scanSubnet's own
+    // cancel signal is checked between batches, never wired into fetch here), so
+    // a fire from `timedOut` is unambiguously a timeout. Translate the raw
+    // AbortError ("signal is aborted without reason") into a legible, human-
+    // readable timeout — fail loud, but not cryptic (G6). Every other fetch
+    // rejection (connection refused, DNS, etc.) propagates verbatim.
+    if (timedOut) {
+      throw new Error(`timed out after ${timeoutMs} ms — device did not respond`);
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }

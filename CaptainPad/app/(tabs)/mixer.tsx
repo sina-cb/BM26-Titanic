@@ -33,6 +33,8 @@ import { HealthChip } from '@/components/ui/HealthChip';
 import { TimerWheel } from '@/components/ui/TimerWheel';
 import { ChannelVizStrip } from '@/components/ChannelVizStrip';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
+import { ViewSelectionPicker } from '@/components/ViewSelectionPicker';
+import { type NamedView } from '@/components/view_selection_picker_logic';
 import { SnapshotBar } from '@/components/SnapshotBar';
 import { PerformanceModeControl } from '@/components/PerformanceModeControl';
 import { usePerformanceMode, usePerfLock } from '@/hooks/usePerformanceMode';
@@ -383,7 +385,7 @@ function MixerLocalParams({ channel, onControlChange, disabled }: {
 // mounted PlaylistPanel synchronous entry-list content on first paint,
 // so the operator doesn't have to re-pick from the dropdown when their
 // iPad's wifi is too slow for refresh()'s GETs to land in time.
-const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, cardStyle, isOnlyChannel, activationsLocked, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionGroups, viewSelectionViewMasks, onViewSelectionChange }: any) => {
+const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitions, isSolo, soloActive, dimmedBySolo, isBumped, onBumpOn, onBumpOff, group, collapsed, isDeck, playlistLibrary, initialPlaylist, cardStyle, isOnlyChannel, activationsLocked, onRename, onFaderChange, onHueChange, onMuteToggle, onSoloToggle, onSoloSafeToggle, onModeChange, onControlChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown, onLockToggle, onFaderLockToggle, onTransition, onTransitionSettingsChange, viewSelectionNamedViews, onViewSelectionChange }: any) => {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
@@ -1103,62 +1105,15 @@ const ChannelStrip = React.memo(({ channel, index, layerIndex, blends, transitio
                 {viewSelLabel} ▾
               </Text>
             </TouchableOpacity>
-            <Modal transparent visible={showViewPicker} animationType="fade" onRequestClose={() => setShowViewPicker(false)}>
-              <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowViewPicker(false)}>
-                <View style={styles.modalContent}>
-                  <Text style={[styles.labelCaps, { marginBottom: 12 }]}>VIEW SELECTION</Text>
-                  <ScrollView style={{ maxHeight: 420 }}>
-                    {/* ── ALL ────────────────────────────────────── */}
-                    <TouchableOpacity
-                      style={[styles.modalRow, viewSel.type === 'all' && styles.modalRowActive]}
-                      onPress={() => { onViewSelectionChange(channel.id, { type: 'all', target: null, invert: false }); setShowViewPicker(false); }}>
-                      <Text style={[styles.valueReadout, viewSel.type === 'all' && { color: C.primary }]}>ALL PIXELS</Text>
-                    </TouchableOpacity>
-
-                    {/* ── GROUPS ─────────────────────────────────── */}
-                    {(viewSelectionGroups || []).length > 0 && (
-                      <Text style={[styles.labelCaps, { marginTop: 12, marginBottom: 4, paddingHorizontal: 16 }]}>GROUPS</Text>
-                    )}
-                    {(viewSelectionGroups || []).map((g: string) => {
-                      const active = viewSel.type === 'group' && viewSel.target === g;
-                      return (
-                        <TouchableOpacity
-                          key={`g_${g}`}
-                          style={[styles.modalRow, active && styles.modalRowActive]}
-                          onPress={() => { onViewSelectionChange(channel.id, { type: 'group', target: g, invert: false }); setShowViewPicker(false); }}>
-                          <Text style={[styles.valueReadout, active && { color: C.primary }]}>GROUP · {g.toUpperCase()}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-
-                    {/* ── VIEW MASKS ─────────────────────────────── */}
-                    {(viewSelectionViewMasks || []).length > 0 && (
-                      <Text style={[styles.labelCaps, { marginTop: 12, marginBottom: 4, paddingHorizontal: 16 }]}>VIEW MASKS</Text>
-                    )}
-                    {(viewSelectionViewMasks || []).map((vm: { name: string; bit: number; inUse: boolean }) => {
-                      const active = viewSel.type === 'viewMask' && viewSel.target === vm.name;
-                      // `inUse=false` presets are kept visible but
-                      // dimmed — the operator may have just added the
-                      // preset and not yet tagged any fixtures with the
-                      // bit. Better to show "no pixels yet" than to
-                      // hide the row entirely.
-                      return (
-                        <TouchableOpacity
-                          key={`vm_${vm.name}`}
-                          style={[styles.modalRow, active && styles.modalRowActive, !vm.inUse && { opacity: 0.5 }]}
-                          onPress={() => { onViewSelectionChange(channel.id, { type: 'viewMask', target: vm.name, invert: false }); setShowViewPicker(false); }}>
-                          <Text style={[styles.valueReadout, active && { color: C.primary }]}>MASK · {vm.name.toUpperCase()}{!vm.inUse ? ' (NO PIXELS)' : ''}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-
-                    {(viewSelectionGroups || []).length === 0 && (viewSelectionViewMasks || []).length === 0 && (
-                      <Text style={[styles.labelCaps, { textAlign: 'center', marginTop: 8 }]}>NO GROUPS OR VIEW MASKS IN MODEL</Text>
-                    )}
-                  </ScrollView>
-                </View>
-              </TouchableOpacity>
-            </Modal>
+            <ViewSelectionPicker
+              visible={showViewPicker}
+              namedViews={viewSelectionNamedViews}
+              current={viewSel}
+              includeAll
+              title={`VIEW · ${(channel.name || 'CHANNEL').toUpperCase()}`}
+              onSelect={(sel) => onViewSelectionChange(channel.id, sel)}
+              onClose={() => setShowViewPicker(false)}
+            />
           </>
         )}
       </View>
@@ -1320,12 +1275,13 @@ export default function MixerScreen() {
   // Used by the channel-strip view-selection picker. Sections /
   // fixtures stay backend-only (they target by numeric id which isn't
   // operator-friendly); view masks ship alongside groups now.
-  const [viewSelectionGroups, setViewSelectionGroups] = useState<string[]>([]);
-  // Named view-mask presets the model author declared (via an
-  // inline `viewMasks` export).
-  // The picker renders these in a "VIEW MASKS" section under groups;
-  // the channel's viewSelection is then `{type:'viewMask', target:<name>}`.
-  const [viewSelectionViewMasks, setViewSelectionViewMasks] = useState<{ name: string; bit: number; inUse: boolean }[]>([]);
+  // The engine's FULL named-view catalog (groups + composites + Tier-A
+  // auto-views), from GET /model/view-selection-options `namedViews`. The
+  // shared ViewSelectionPicker sections + filters this for the channel-strip
+  // view picker; selection resolves to {type:'group'} for base groups and
+  // {type:'viewMask', target:<name>} for every other named view (report
+  // 20260724_8).
+  const [viewSelectionNamedViews, setViewSelectionNamedViews] = useState<NamedView[] | undefined>(undefined);
 
   // Pre-May-2026 we owned a WebSocket per tab. The May 2026 topic
   // split moved that into singleton buses (utils/engineEvents +
@@ -1649,8 +1605,10 @@ export default function MixerScreen() {
     if (bRes.ok && bRes.data) setBlends(bRes.data);
     if (tRes.ok && tRes.data) setTransitionsList(tRes.data);
     if (vsRes.ok && vsRes.data) {
-      setViewSelectionGroups(vsRes.data.groups || []);
-      setViewSelectionViewMasks(vsRes.data.viewMasks || []);
+      // Pass the array straight through (possibly undefined on a stale engine);
+      // the picker fails LOUD on a missing catalog rather than us papering over
+      // it with `|| []` here (codex P0 — no silent fallback).
+      setViewSelectionNamedViews(vsRes.data.namedViews as NamedView[]);
     }
     if (pLib.ok && pLib.data) setPlaylistLibrary(pLib.data);
 
@@ -2824,8 +2782,7 @@ export default function MixerScreen() {
                 onFaderLockToggle={handleFaderLockToggle}
                 onTransition={handleTransition}
                 onTransitionSettingsChange={handleTransitionSettingsChange}
-                viewSelectionGroups={viewSelectionGroups}
-                viewSelectionViewMasks={viewSelectionViewMasks}
+                viewSelectionNamedViews={viewSelectionNamedViews}
                 onViewSelectionChange={handleViewSelectionChange}
               />
             );

@@ -114,6 +114,20 @@ export function nextFixtureName(baseName) {
   return candidate;
 }
 
+// ─── Canvas-relative NDC ─────────────────────────────────────────────────
+// Pick rays must be computed from the RENDER CANVAS rect, never the window.
+// Under the split-screen layout the canvas is narrower than the window and
+// no longer window-origin-aligned, so window-based NDC silently mis-hits
+// every fixture (see split_layout.js). getBoundingClientRect() is the single
+// source of truth for both the canvas size and its on-screen offset.
+function pointerToCanvasNdc(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  return {
+    x: ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    y: -((event.clientY - rect.top) / rect.height) * 2 + 1,
+  };
+}
+
 // ─── Pointer Move (snap cursor tracking) ─────────────────────────────────
 export function onPointerMove(event) {
   if (!snapMode || !snapCursorGroup) return;
@@ -122,8 +136,9 @@ export function onPointerMove(event) {
     return;
   }
 
-  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+  const ndc = pointerToCanvasNdc(event);
+  mouse.x = ndc.x;
+  mouse.y = ndc.y;
 
   raycaster.setFromCamera(mouse, camera);
   const intersects = raycaster.intersectObjects(modelMeshes, true);
@@ -156,7 +171,11 @@ export function onPointerMove(event) {
 }
 
 // ─── GUI Folder Sync ─────────────────────────────────────────────────────
-function syncGuiFolders() {
+// Exported so the Lighting Controls "☑ Select All" group button
+// (gui_builder.js) can mirror the folder-open/highlight state after a batch
+// select — it was calling this as an undefined global (ReferenceError on every
+// click); a static import is the fix, never an optional-chained window fallback.
+export function syncGuiFolders() {
   if (!window.parGuiFolders) return;
   window.parGuiFolders.forEach((folder, idx) => {
     if (!folder) return;
@@ -251,10 +270,8 @@ export function onTransformChange() {
 let traceDotDragging = false;
 
 function buildPointerRay(event) {
-  const ndc = new THREE.Vector2(
-    (event.clientX / window.innerWidth) * 2 - 1,
-    -(event.clientY / window.innerHeight) * 2 + 1
-  );
+  const c = pointerToCanvasNdc(event);
+  const ndc = new THREE.Vector2(c.x, c.y);
   raycaster.setFromCamera(ndc, camera);
   return {
     origin: raycaster.ray.origin.clone(),
@@ -300,14 +317,15 @@ export function onPointerDown(event) {
     event.target.closest(".vm-modal-overlay") ||
     event.target.closest(
       "#view-masks-panel, #vm-isolation-hud, #pattern-editor-panel, " +
-      "#controller-map-panel, #cm-toast, " +
+      "#controller-map-panel, #cm-toast, #sim-split-divider, #sim-split-restore-tab, " +
       "#sacn-in-monitor-panel, #sacn-out-monitor-panel, #view-presets, #info-panel"
     )
   )
     return;
 
-  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+  const ndc = pointerToCanvasNdc(event);
+  mouse.x = ndc.x;
+  mouse.y = ndc.y;
 
   // ─── Snap Mode ───
   if (snapMode && lastSnapPoint) {
@@ -423,13 +441,15 @@ export function onPointerDown(event) {
     }
     syncGuiFolders();
     if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
-    if (window.refreshControllerMapPanel) window.refreshControllerMapPanel();
+    // Selection-only: patch chip highlights + counters (+ scroll the picked
+    // fixture's/strand's chip into view) without rebuilding the mapping panel.
+    if (window.syncControllerMapSelection) window.syncControllerMapSelection();
   } else if (!transformControl.axis) {
     transformControl.detach();
     deselectAllFixtures();
     syncGuiFolders();
     if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
-    if (window.refreshControllerMapPanel) window.refreshControllerMapPanel();
+    if (window.syncControllerMapSelection) window.syncControllerMapSelection();
   }
 }
 

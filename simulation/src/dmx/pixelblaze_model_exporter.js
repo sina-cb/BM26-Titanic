@@ -286,6 +286,14 @@ export function generatePixelMap() {
       });
     }
 
+    // Strands continue the DMX cluster-index space so every strand becomes its
+    // OWN 2D-Pixel-Map cluster (fixIndex is the cluster key). DMX fixtures used
+    // 0..dmxList.length-1, so the first strand starts at dmxList.length — no
+    // collision. fixIndex/fixKey are runtime-only grouping keys (like the DMX
+    // pixels above): NOT serialized by saveModelJS, so the engine model stays
+    // byte-identical. Without them buildClusters (fixIndex-contiguity) collapsed
+    // ALL strands into one mega-cluster (report 20260724_9 §1.3).
+    const dmxIndexBase = dmxList ? dmxList.length : 0;
     params.ledStrands.forEach((strand, i) => {
       const fixture = window.ledStrandFixtures && window.ledStrandFixtures[i] ? window.ledStrandFixtures[i] : null;
       const count = strand.ledCount || 10;
@@ -346,6 +354,11 @@ export function generatePixelMap() {
         const px = {
           type: 'led',
           fixtureType: '',
+          // Runtime-only 2D-Pixel-Map cluster keys (NOT serialized — see
+          // saveModelJS field list). fixIndex makes each strand its own cluster;
+          // fixKey is the stable per-strand persist/placement key.
+          fixIndex: dmxIndexBase + i,
+          fixKey: strand.name || `Strand ${i + 1}`,
           name: strand.name || 'Strand',
           // Effective group key — the SINGLE source of truth shared with the
           // section-numbering pass (led_metadata.assignLedStrandMetadata), so a

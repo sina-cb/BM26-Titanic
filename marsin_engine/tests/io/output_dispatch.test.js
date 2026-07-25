@@ -226,3 +226,153 @@ test('createOutputDispatch — alsoFlat:true reaches the per-controller wire (Ar
   assert.equal(msg[14], 4);
   assert.equal(msg[18], 77);
 });
+
+// ── addUniverse — hot-reload / live re-patch (G10 regression) ───────────────
+//
+// The playa bug: boot the engine with universe set A, re-patch fixtures onto a
+// universe declared for a controller in config.yaml but NOT patched at boot,
+// regenerate the model → the hot-reload path calls dispatch.addUniverse(uid).
+// Before the fix that universe had no sender (its controller's sender was never
+// built) and addUniverse fell through to `return` — the controller stayed dark
+// until a full engine restart. These prove the universe is now routed live.
+
+test('addUniverse — declared-but-unpatched-at-boot universe transmits after add (Art-Net wire, G10)', async () => {
+  const rx = dgram.createSocket('udp4');
+  const received = new Promise((resolve) => rx.once('message', (msg) => resolve(msg)));
+  await new Promise((resolve) => rx.bind(0, '127.0.0.1', resolve));
+  const port = rx.address().port;
+
+  // Boot: only undeclared U2 is patched (→ flat sACN). The Art-Net controller
+  // for U4 is declared in config but U4 is NOT in the boot universe list, so no
+  // Art-Net sender exists at boot. This is the exact playa 0-patched scenario.
+  const d = createOutputDispatch({
+    universes: [2],
+    controllers: [{ name: 'led', host: '127.0.0.1', protocol: 'artnet', universes: [4] }],
+    destinations: ['127.0.0.1'],
+    artnetPort: port,
+  });
+  d.start();
+  // Boot state: just the flat sACN default sender; U4 unrouted.
+  assert.equal(d._routing.senderCount, 1);
+
+  // Live re-patch: the hot-reload path adds U4.
+  d.addUniverse(4);
+  // A dedicated Art-Net sender was created for the controller.
+  assert.equal(d._routing.senderCount, 2);
+
+  const data = new Uint8Array(512);
+  data[0] = 88;
+  await d.sendFrame({ 4: data });
+
+  const msg = await received;
+  d.stop();
+  rx.close();
+
+  // Universe 4 reached the controller over Art-Net — no engine restart needed.
+  assert.equal(msg.toString('latin1', 0, 8), 'Art-Net\0');
+  assert.equal(msg[14], 4);
+  assert.equal(msg[18], 88);
+});
+
+test('addUniverse — declared sACN universe unpatched at boot gets a per-controller sender', () => {
+  const d = createOutputDispatch({
+    universes: [2], // only U2 (undeclared → flat)
+    controllers: [{ name: 'led', host: '10.1.1.201', protocol: 'sACN', universes: [10] }],
+    destinations: ['127.0.0.1'],
+  });
+  d.start();
+  assert.equal(d._routing.senderCount, 1); // flat only
+
+  d.addUniverse(10);
+  // New per-controller sACN unicast sender; U10 does NOT leak to the flat set
+  // (which still carries only the boot-time undeclared U2).
+  assert.equal(d._routing.senderCount, 2);
+  assert.deepEqual(d._routing.flatUniverses, [2]);
+});
+
+test('addUniverse — reuses the controller sender when it already had a boot universe', () => {
+  // Controller declares U4+U5 but only U4 is patched at boot. Adding U5 must
+  // reuse the same Art-Net sender, not spawn a second one for the same host.
+  const d = createOutputDispatch({
+    universes: [4],
+    controllers: [{ name: 'art', host: '10.0.0.9', protocol: 'artnet', universes: [4, 5] }],
+    destinations: ['127.0.0.1'],
+  });
+  d.start();
+  assert.equal(d._routing.senderCount, 1); // one Art-Net sender (no undeclared → no flat)
+
+  d.addUniverse(5);
+  assert.equal(d._routing.senderCount, 1); // reused, not duplicated
+});
+
+test('addUniverse — alsoFlat declared universe added live reaches controller AND flat', async () => {
+  const rx = dgram.createSocket('udp4');
+  const received = new Promise((resolve) => rx.once('message', (msg) => resolve(msg)));
+  await new Promise((resolve) => rx.bind(0, '127.0.0.1', resolve));
+  const port = rx.address().port;
+
+  // No universe patched at boot: no flat sender, no controller sender exist.
+  const d = createOutputDispatch({
+    universes: [],
+    controllers: [{
+      name: 'led', host: '127.0.0.1', protocol: 'artnet', universes: [4], alsoFlat: true,
+    }],
+    destinations: ['127.0.0.1'],
+    artnetPort: port,
+  });
+  d.start();
+  assert.equal(d._routing.senderCount, 0);
+
+  d.addUniverse(4);
+  // Both a controller Art-Net sender AND the flat sACN default were created.
+  assert.equal(d._routing.senderCount, 2);
+  assert.deepEqual(d._routing.flatUniverses, [4]); // dual-send parity
+
+  const data = new Uint8Array(512);
+  data[0] = 55;
+  await d.sendFrame({ 4: data });
+
+  const msg = await received;
+  d.stop();
+  rx.close();
+
+  assert.equal(msg.toString('latin1', 0, 8), 'Art-Net\0');
+  assert.equal(msg[14], 4);
+  assert.equal(msg[18], 55);
+});
+
+test('addUniverse — undeclared universe creates the flat sender if the rig had none', () => {
+  // Boot with only a declared Art-Net universe → no flat sender exists.
+  const d = createOutputDispatch({
+    universes: [4],
+    controllers: [{ name: 'art', host: '10.0.0.9', protocol: 'artnet', universes: [4] }],
+    destinations: ['127.0.0.1'],
+  });
+  d.start();
+  assert.equal(d._routing.senderCount, 1); // Art-Net only
+  assert.deepEqual(d._routing.flatUniverses, []);
+
+  d.addUniverse(7); // undeclared → flat default
+  assert.equal(d._routing.senderCount, 2);
+  assert.deepEqual(d._routing.flatUniverses, [7]);
+});
+
+test('addUniverse — idempotent: repeat adds do not duplicate senders or flat entries', () => {
+  const d = createOutputDispatch({
+    universes: [2],
+    controllers: [{
+      name: 'led', host: '10.1.1.201', protocol: 'sACN', universes: [10], alsoFlat: true,
+    }],
+    destinations: ['127.0.0.1'],
+  });
+  d.start();
+
+  d.addUniverse(10);
+  const countAfterFirst = d._routing.senderCount;
+  d.addUniverse(10);
+  d.addUniverse(10);
+  assert.equal(d._routing.senderCount, countAfterFirst); // no new senders
+  // Flat carries boot-time undeclared U2 plus the alsoFlat U10 — each once,
+  // not duplicated by the repeat adds.
+  assert.deepEqual(d._routing.flatUniverses, [2, 10]);
+});

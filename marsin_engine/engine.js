@@ -75,6 +75,7 @@ const __dirname = path.dirname(__filename);
 // old `npx kill-port` which needs the network.
 const require = createRequire(import.meta.url);
 const { freeStackPorts } = require('../tools/port_cleanup.cjs');
+const { resolvePriorityRequest, elevateSelf } = require('../tools/process_priority.cjs');
 
 // Build the 7-lane per-pixel meta array (the buffer WasmHost packs for the
 // VM's *_with_meta render exports). Lane 6 (`viewMaskHi`) carries Tier-C
@@ -140,6 +141,11 @@ function parseArgs() {
     // Fail loud (below) if neither config nor --port supplies a valid port —
     // never silently guess one.
     port: Number.isInteger(cServer.port) ? cServer.port : null,
+    // OS process-priority request for the render loop. CLI value (may be null);
+    // the config default is captured separately so main() can resolve the full
+    // precedence chain (env > CLI > config > 'high'). See tools/process_priority.cjs.
+    enginePriority: null,
+    enginePriorityConfig: cEngine.priority ?? config.enginePriority ?? null,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -148,6 +154,7 @@ function parseArgs() {
       case '--model': case '-m':    opts.modelName = args[++i]; break;
       case '--fps':                 opts.fps = parseInt(args[++i], 10) || 40; break;
       case '--priority':            opts.priority = parseInt(args[++i], 10) || 100; break;
+      case '--engine-priority':     opts.enginePriority = args[++i]; break;
       case '--port':                opts.port = parseInt(args[++i], 10); break;
       case '--dry-run':             opts.dryRun = true; break;
       case '--list': case '-l':     opts.list = true; break;
@@ -164,6 +171,9 @@ function parseArgs() {
     --model, -m <name>     Model file to load (required)
     --fps <n>              Target framerate (default: 40)
     --priority <n>         sACN priority (default: 100)
+    --engine-priority <c>  OS process priority for the render loop: high|realtime
+                           (default: high · HIGH_PRIORITY_CLASS). realtime is
+                           opt-in and usually needs admin; see process_priority.cjs
     --dry-run              Load and compile only, no sACN output
     --list, -l             List available patterns
     --dest <ip>            sACN destination IP (default: 127.0.0.1)
@@ -1091,6 +1101,24 @@ async function main() {
   ╚══════════════════════════════════════════╝
 `);
 
+  // ── Realtime priority for pattern generation (P0: never starve the show) ──
+  // Elevate THIS node process above the NORMAL class Chrome sits in, so the
+  // 40 fps sACN render loop keeps getting scheduled even when a browser window
+  // grabs the foreground boost. This is the authoritative self-elevation
+  // (belt-and-braces with the launcher's parent-side elevation). Precedence:
+  //   env BM26_ENGINE_PRIORITY (set by the launcher) > --engine-priority CLI >
+  //   config engine.priority/enginePriority > 'high'. ALWAYS reads the achieved
+  //   class back and logs it — an un-elevated engine is loud, never silent.
+  // Skipped for --list / --dry-run (they never run the loop).
+  if (!opts.list && !opts.dryRun) {
+    const { request } = resolvePriorityRequest([
+      { value: process.env.BM26_ENGINE_PRIORITY, origin: 'env BM26_ENGINE_PRIORITY' },
+      { value: opts.enginePriority, origin: '--engine-priority' },
+      { value: opts.enginePriorityConfig, origin: 'config engine.priority' },
+    ], { fallback: 'high', label: 'EnginePriority' });
+    elevateSelf(request, { label: 'EnginePriority' });
+  }
+
   // Test/harness state redirect (lib/state_paths.js): announce loudly so a
   // boot whose runtime state is NOT going to the tracked states/ tree is
   // unmistakable in the log.
@@ -1397,6 +1425,14 @@ async function main() {
 
   const engineCore = {
     mixer, wasmHost, paramRouter, paramCenter, model, audioState,
+    // The composite output dispatch. api_server surfaces its declared
+    // per-controller routing on GET /status (`outputRouting`) so the sim's
+    // sACN bridge can EXCLUDE any (universe → host) pair this engine already
+    // delivers directly — without this, the bridge relayed the engine's own
+    // loopback frames back to declared controllers and the hardware received
+    // two interleaved sACN sources on one universe (physical flicker,
+    // 2026-07-24 root cause).
+    sacnOut,
     globalEffectSlotManager,
     modulationController,
     modulationBroadcastRef,

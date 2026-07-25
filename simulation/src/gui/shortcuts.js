@@ -53,4 +53,23 @@ export const SHORTCUT_GROUPS = [
       { keys: ['Ctrl', 'Shift', 'W'], desc: 'Open this shortcuts help' },
     ],
   },
+  {
+    // 2D Pixel Map multiview — these fire only while a vis pane has focus; they
+    // are stopPropagation'd so the 3D scene shortcuts never collide with them.
+    category: '2D Vis (focused)',
+    items: [
+      { keys: ['\\'], desc: 'Split pane vertically (side-by-side)' },
+      { keys: ['-'], desc: 'Split pane horizontally (stacked)' },
+      { keys: ['X'], desc: 'Close focused pane' },
+      { keys: ['Z'], desc: 'Zoom (maximize) focused pane, toggle' },
+      { keys: ['Tab'], desc: 'Cycle pane focus (Shift = reverse)' },
+      { keys: ['Alt', '←↑↓→'], desc: 'Directional pane focus' },
+      { keys: ['[', ']'], desc: 'Previous / next view in the focused pane' },
+      { keys: ['1', '–', '9'], desc: 'Bind the Nth view to the focused pane' },
+      { keys: ['F'], desc: 'Fit (reset pan/zoom) in the focused pane' },
+      { keys: ['Ctrl', 'Alt', '←→↑↓'], desc: 'Grow / shrink the focused pane' },
+      { keys: ['Q', 'E'], desc: 'EDIT: rotate selection (Alt = 1°)' },
+      { keys: ['Arrows'], desc: 'EDIT: nudge selection (Shift = 8u)' },
+    ],
+  },
 ];

@@ -306,3 +306,35 @@ test('awaitReboot hard-errors on timeout', async () => {
       );
     });
 });
+
+// ── G6 — a hung host surfaces a legible timeout, not the raw AbortError ───────
+
+test('getStatus on a hung host throws a legible timeout, not "signal is aborted"', async () => {
+  await withFetch(neverResolvesFetch(), async () => {
+    await assert.rejects(
+      () => getStatus('10.1.1.201', { timeoutMs: 10 }),
+      (err) => {
+        // The clean, human-readable message (fail loud, but legibly — G6)…
+        assert.match(err.message, /timed out after 10 ms — device did not respond/);
+        // …and NEVER the raw AbortError string the operator saw before.
+        assert.doesNotMatch(err.message, /signal is aborted/i);
+        return true;
+      },
+    );
+  });
+});
+
+test('getConfig on a hung host throws the same legible timeout', async () => {
+  await withFetch(neverResolvesFetch(), async () => {
+    await assert.rejects(
+      () => getConfig('10.1.1.201', { timeoutMs: 10 }),
+      /timed out after 10 ms — device did not respond/,
+    );
+  });
+});
+
+test('a NON-timeout fetch failure still propagates verbatim (no masking)', async () => {
+  await withFetch(async () => { throw new Error('Failed to fetch'); }, async () => {
+    await assert.rejects(() => getStatus('10.1.1.201'), /Failed to fetch/);
+  });
+});

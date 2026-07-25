@@ -49,6 +49,7 @@ const path = require('path');
 
 const portCleanup = require('./tools/port_cleanup.cjs');
 const browserSplit = require('./tools/browser_split.cjs');
+const processPriority = require('./tools/process_priority.cjs');
 
 const ROOT = __dirname;
 const SIM_DIR = path.join(ROOT, 'simulation');
@@ -183,6 +184,8 @@ function usage(stream = process.stdout) {
     '  Options:',
     `    --scene <name>     Sim scene AND engine model (default: ${DEFAULT_SCENE})`,
     `    --pattern <name>   Engine boot pattern (default: ${DEFAULT_PATTERN})`,
+    '    --engine-priority <c>  OS priority for the render loop: high|realtime',
+    '                       (default: high). realtime is opt-in and usually needs admin.',
     '    --no-kill          Don\'t kill stale stack listeners on our ports',
     '    -f, --force        Force-kill ANY process on our ports (incl. foreign); prod forces by default',
     '    --no-launch        Start every server but DON\'T auto-open any browser',
@@ -201,6 +204,10 @@ function parseArgs(argv) {
   const opts = {
     command: null, scene: DEFAULT_SCENE, pattern: DEFAULT_PATTERN,
     kill: true, open: true, force: false, split: 'auto',
+    // OS process priority for the engine (and, at 'high', the sACN bridges).
+    // Default 'high' (HIGH_PRIORITY_CLASS) so the render loop never gets
+    // starved by Chrome's foreground boost. 'realtime' is opt-in.
+    enginePriority: 'high',
   };
   const takeValue = (flag, value) => {
     if (value === undefined || value.startsWith('-')) {
@@ -214,6 +221,15 @@ function parseArgs(argv) {
     switch (arg) {
       case '--scene':   opts.scene = takeValue(arg, argv[++i]); break;
       case '--pattern': opts.pattern = takeValue(arg, argv[++i]); break;
+      case '--engine-priority': {
+        const v = takeValue(arg, argv[++i]);
+        if (processPriority.normalizePriorityRequest(v, { fallback: null }) === null) {
+          logError(`--engine-priority must be 'high' or 'realtime' (got '${v}').`);
+          process.exit(2);
+        }
+        opts.enginePriority = v.trim().toLowerCase();
+        break;
+      }
       case '--no-kill': opts.kill = false; break;
       case '-f': case '--force': opts.force = true; break;
       case '--no-open': case '--no-launch': opts.open = false; break;
@@ -1026,7 +1042,14 @@ async function main() {
 
   // 1. Simulation servers (HTTP, save, sACN in/out).
   await assertSacnUdpAvailable(ports.sacn_udp_port, opts.kill);
-  startChild('sim', 'node', ['start.js', '--scene', opts.scene], SIM_DIR);
+  // The sACN bridges relay every frame — a starved bridge is the same symptom as
+  // a starved engine. They default to HIGH (lightweight relays); REALTIME is
+  // reserved for the engine, so the bridges track the engine request only up to
+  // HIGH. BM26_BRIDGE_PRIORITY flows sim → start.js → both bridge children
+  // (inherited env); start.js and each bridge use it. See tools/process_priority.cjs.
+  const bridgePriority = opts.enginePriority === 'realtime' ? 'high' : opts.enginePriority;
+  startChild('sim', 'node', ['start.js', '--scene', opts.scene], SIM_DIR,
+    { BM26_BRIDGE_PRIORITY: bridgePriority });
   await waitForHttp('sim http', `http://127.0.0.1:${ports.http_port}/simulation/`, 90000);
   await waitForTcp('sim save server', ports.save_port, 30000);
   await waitForTcp('sim sACN in bridge', ports.sacn_port, 30000);
@@ -1041,11 +1064,38 @@ async function main() {
   const engineUrl = `http://127.0.0.1:${ports.marsin_engine_port}`;
 
   async function startEngine(scene) {
+    // BM26_ENGINE_PRIORITY makes the launcher the authority on the engine's OS
+    // priority (the engine self-elevates off this env first). See
+    // tools/process_priority.cjs.
     startChild('engine', 'node',
       ['engine.js', '--model', scene, '--pattern', opts.pattern], ENGINE_DIR,
-      { BM26_SUPERVISED: '1', BM26_SCENE_SWITCH_FILE: SCENE_SWITCH_FILE },
+      {
+        BM26_SUPERVISED: '1', BM26_SCENE_SWITCH_FILE: SCENE_SWITCH_FILE,
+        BM26_ENGINE_PRIORITY: opts.enginePriority,
+      },
       handleEngineExit);
     await waitForHttp('engine api', `${engineUrl}/status`, 120000);
+    // Belt (parent-side) elevation, now that the engine is confirmed up. We
+    // resolve the engine's REAL pid via the API port it just bound — robust on
+    // Windows where `engineChild.pid` is the shell wrapper, not node (the
+    // listening socket is owned by the actual engine process). The engine's OWN
+    // self-elevation (logged [EnginePriority]) is the guarantee; this reinforces
+    // it and gives a parent-side read-back. Never fatal.
+    try {
+      const enginePids = listenersOnPort(ports.marsin_engine_port).filter((p) => p !== process.pid);
+      if (enginePids.length === 0) {
+        log('launcher', `[EnginePriority] ⚠ could not resolve the engine pid on :${ports.marsin_engine_port} ` +
+          `for parent-side elevation — relying on the engine's own self-elevation (its [EnginePriority] line is authoritative).`);
+      } else {
+        for (const pid of enginePids) {
+          processPriority.elevatePid(pid, opts.enginePriority,
+            { label: 'EnginePriority', logger: (m) => log('launcher', m) });
+        }
+      }
+    } catch (err) {
+      log('launcher', `[EnginePriority] ⚠ parent-side elevation probe failed (${err.message}) — ` +
+        `relying on the engine's own self-elevation.`);
+    }
     // The engine restores persisted deck state at boot, which overrides the
     // --pattern CLI flag; re-assert it so a launch/restart is deterministic.
     await httpPostJson(`${engineUrl}/pattern`, { pattern: opts.pattern });

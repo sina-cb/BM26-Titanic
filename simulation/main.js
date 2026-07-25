@@ -57,6 +57,7 @@ import { setupHelpPanel } from "./src/gui/help_panel.js";
 import { setupSceneManager } from "./src/gui/scene_manager.js";
 import { setupSceneRecovery } from "./src/gui/scene_recovery.js";
 import { setupLeftDrawers } from "./src/gui/left_drawer.js";
+import { setupSplitLayout } from "./src/gui/split_layout.js";
 import "./src/gui/control_schema.js";
 
 const VALID_RENDERER_MODES = new Set(["webgpu", "webgl"]);
@@ -227,6 +228,9 @@ async function init() {
   loadModel((obj) => onModelLoaded(obj, setupGUI, rebuildParLights, rebuildDmxFixtures));
 
   // Events
+  // split_layout drives the canvas size through this hook (sim pane, not the
+  // window). onResize itself reads window.__getSimViewport.
+  window.__applySimResize = onResize;
   window.addEventListener("resize", onResize);
   // Separate, debounced resize listener: re-clamp floating panels into the
   // (possibly shrunk) viewport so they can never drift unreachable. Kept
@@ -309,8 +313,10 @@ Promise.all([
   fetch("dmx/fixtures/fog_te_machines/model_1.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_chauvet_4d/model_2.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/te_led_grid/model_120.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch("dmx/fixtures/te_sign_v3/model_a_120.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch("dmx/fixtures/te_sign_v3/model_b_102.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("config.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, controllersYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, teLedGridModelYaml, rootConfigYaml]) => {
+]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, controllersYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, teLedGridModelYaml, teSignV3AModelYaml, teSignV3BModelYaml, rootConfigYaml]) => {
 
   // Load root config
   if (rootConfigYaml) {
@@ -614,7 +620,9 @@ Promise.all([
     { raw: vintageModelYaml, file: 'model_33.yaml' },
     { raw: teFogModelYaml, file: 'fog_te_machines/model_1.yaml' },
     { raw: chauvetHazeModelYaml, file: 'fog_chauvet_4d/model_2.yaml' },
-    { raw: teLedGridModelYaml, file: 'te_led_grid/model_120.yaml' }
+    { raw: teLedGridModelYaml, file: 'te_led_grid/model_120.yaml' },
+    { raw: teSignV3AModelYaml, file: 'te_sign_v3/model_a_120.yaml' },
+    { raw: teSignV3BModelYaml, file: 'te_sign_v3/model_b_102.yaml' }
   ].forEach(({ raw, file }) => {
     try {
       if (raw) {
@@ -725,6 +733,9 @@ Promise.all([
     setupPatternEditor();
     setupViewMasksEditor();
     setupControllerMapEditor();
+    // Split-screen mapping layout — must follow setupControllerMapEditor so
+    // window.toggleControllerMapPanel and the panel ids already exist.
+    setupSplitLayout();
     initModernSacnMonitors();
     initPixelMapPanel();
     setupSceneIndicator();

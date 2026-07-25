@@ -32,6 +32,8 @@ import { HorizontalFader } from '@/components/ui/HorizontalFader';
 import { PlaylistPanel } from '@/components/PlaylistPanel';
 import { ConfirmSheet } from '@/components/ui/ConfirmSheet';
 import { AutopilotTimerPills } from '@/components/DeckTransitionControls';
+import { ViewSelectionPicker } from '@/components/ViewSelectionPicker';
+import { type NamedView } from '@/components/view_selection_picker_logic';
 import { fetchViewSelectionOptions } from '@/utils/api';
 import { usePerfLock } from '@/hooks/usePerformanceMode';
 import {
@@ -48,7 +50,6 @@ import {
 } from '@/utils/deckOverlaysApi';
 
 // ── View-selection helpers ─────────────────────────────────────────────────
-type ViewMaskOption = { name: string; bit: number; inUse: boolean };
 
 // Human label for a viewSelection, mirroring the mixer strip's inline logic.
 // Prefixed with the kind so the operator reads "GROUP: bow" / "MASK: starboard"
@@ -70,70 +71,10 @@ function blendLabel(mode: string | undefined): string {
   return (mode || 'blend_screen').replace(/^(blend_|trans_)/, '').toUpperCase();
 }
 
-// ── View picker modal (reuse of the mixer's view-selection modal pattern) ──
-// "all" is intentionally OMITTED — a deck overlay must target a specific view
-// (the engine refuses {type:'all'} with DECK_OVERLAY_VIEW_REQUIRED, and an
-// all-view overlay defeats the never-dark feature).
-const ViewPickerModal: React.FC<{
-  visible: boolean;
-  groups: string[];
-  viewMasks: ViewMaskOption[];
-  current: ViewSelection | null;
-  onSelect: (v: ViewSelection) => void;
-  onClose: () => void;
-}> = ({ visible, groups, viewMasks, current, onSelect, onClose }) => {
-  const C = usePalette();
-  return (
-    <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
-      <TouchableOpacity
-        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
-        activeOpacity={1}
-        onPress={onClose}
-      >
-        <View style={{ width: '100%', maxWidth: 420, backgroundColor: C.surfaceContainerLowest, borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder, padding: 16 }}>
-          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', marginBottom: 12 }}>
-            OVERLAY VIEW
-          </Text>
-          <ScrollView style={{ maxHeight: 420 }}>
-            {groups.length > 0 && (
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', marginTop: 4, marginBottom: 4, paddingHorizontal: 8 }}>GROUPS</Text>
-            )}
-            {groups.map((g) => {
-              const active = current?.type === 'group' && current?.target === g;
-              return (
-                <TouchableOpacity
-                  key={`g_${g}`}
-                  style={{ paddingVertical: 12, paddingHorizontal: 8, borderRadius: 8, backgroundColor: active ? C.surfaceContainerHigh : 'transparent' }}
-                  onPress={() => { onSelect({ type: 'group', target: g, invert: false }); onClose(); }}
-                >
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: active ? C.primary : C.text }}>GROUP · {g.toUpperCase()}</Text>
-                </TouchableOpacity>
-              );
-            })}
-            {viewMasks.length > 0 && (
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, letterSpacing: 1.2, color: C.secondary, textTransform: 'uppercase', marginTop: 12, marginBottom: 4, paddingHorizontal: 8 }}>VIEW MASKS</Text>
-            )}
-            {viewMasks.map((vm) => {
-              const active = current?.type === 'viewMask' && current?.target === vm.name;
-              return (
-                <TouchableOpacity
-                  key={`vm_${vm.name}`}
-                  style={{ paddingVertical: 12, paddingHorizontal: 8, borderRadius: 8, backgroundColor: active ? C.surfaceContainerHigh : 'transparent', opacity: vm.inUse ? 1 : 0.5 }}
-                  onPress={() => { onSelect({ type: 'viewMask', target: vm.name, invert: false }); onClose(); }}
-                >
-                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 13, color: active ? C.primary : C.text }}>MASK · {vm.name.toUpperCase()}{vm.inUse ? '' : ' (NO PIXELS)'}</Text>
-                </TouchableOpacity>
-              );
-            })}
-            {groups.length === 0 && viewMasks.length === 0 && (
-              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.secondary, textAlign: 'center', marginTop: 8 }}>NO GROUPS OR VIEW MASKS IN MODEL</Text>
-            )}
-          </ScrollView>
-        </View>
-      </TouchableOpacity>
-    </Modal>
-  );
-};
+// The overlay view picker is the shared <ViewSelectionPicker> (includeAll
+// omitted): a deck overlay MUST target a specific view — the engine refuses
+// {type:'all'} with DECK_OVERLAY_VIEW_REQUIRED, and an all-view overlay
+// defeats the never-dark feature.
 
 // ── Blend-mode picker modal (only steady channel-blend modes) ──────────────
 const BlendPickerModal: React.FC<{
@@ -177,12 +118,11 @@ const OverlayCard: React.FC<{
   count: number;
   expanded: boolean;
   onToggleExpand: () => void;
-  groups: string[];
-  viewMasks: ViewMaskOption[];
+  namedViews: NamedView[] | undefined;
   playlistLibrary: string[];
   disabled: boolean;
   onReorder: (id: string, direction: -1 | 1) => void;
-}> = ({ overlay, index, count, expanded, onToggleExpand, groups, viewMasks, playlistLibrary, disabled, onReorder }) => {
+}> = ({ overlay, index, count, expanded, onToggleExpand, namedViews, playlistLibrary, disabled, onReorder }) => {
   const C = usePalette();
   // PERFORMANCE MODE: overlay STRUCTURE (remove, reorder, view re-target) is
   // 409-gated while a show is live. Runtime controls (enable eye, blend mode,
@@ -359,11 +299,11 @@ const OverlayCard: React.FC<{
         </View>
       )}
 
-      <ViewPickerModal
+      <ViewSelectionPicker
         visible={showViewPicker}
-        groups={groups}
-        viewMasks={viewMasks}
+        namedViews={namedViews}
         current={overlay.viewSelection || null}
+        title="OVERLAY VIEW"
         onSelect={(v) => onPatch({ viewSelection: v }, 'Set view failed')}
         onClose={() => setShowViewPicker(false)}
       />
@@ -397,8 +337,10 @@ export const DeckOverlayStack: React.FC<{
   // POST /deck/overlays while a show is live). The shared AUTO/SHUFFLE/timer
   // controls are runtime (allowed) and stay live.
   const perfLocked = usePerfLock();
-  const [groups, setGroups] = useState<string[]>([]);
-  const [viewMasks, setViewMasks] = useState<ViewMaskOption[]>([]);
+  // The engine's full named-view catalog (groups + composites + Tier-A
+  // auto-views). `undefined` until the fetch lands / when the payload omits it
+  // — the shared picker fails LOUD on a missing catalog (codex P0).
+  const [namedViews, setNamedViews] = useState<NamedView[] | undefined>(undefined);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   // Add flow: pick a view (required) then a playlist, then POST.
@@ -413,8 +355,9 @@ export const DeckOverlayStack: React.FC<{
     (async () => {
       const res = await fetchViewSelectionOptions();
       if (cancelled || !res.ok || !res.data) return;
-      setGroups(Array.isArray(res.data.groups) ? res.data.groups : []);
-      setViewMasks(Array.isArray(res.data.viewMasks) ? res.data.viewMasks : []);
+      // Pass through as-is (possibly undefined on a stale engine); the picker
+      // surfaces a missing catalog loudly rather than us masking it here.
+      setNamedViews(res.data.namedViews as NamedView[] | undefined);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -545,8 +488,7 @@ export const DeckOverlayStack: React.FC<{
               count={overlays.length}
               expanded={expandedId === o.id}
               onToggleExpand={() => setExpandedId((cur) => (cur === o.id ? null : o.id))}
-              groups={groups}
-              viewMasks={viewMasks}
+              namedViews={namedViews}
               playlistLibrary={playlistLibrary}
               disabled={disabled}
               onReorder={handleReorder}
@@ -619,11 +561,11 @@ export const DeckOverlayStack: React.FC<{
         </TouchableOpacity>
       </Modal>
 
-      <ViewPickerModal
+      <ViewSelectionPicker
         visible={showAddViewPicker}
-        groups={groups}
-        viewMasks={viewMasks}
+        namedViews={namedViews}
         current={addView}
+        title="OVERLAY VIEW"
         onSelect={(v) => setAddView(v)}
         onClose={() => setShowAddViewPicker(false)}
       />

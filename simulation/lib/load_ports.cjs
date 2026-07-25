@@ -31,6 +31,9 @@ function loadSimPorts(configPath = path.join(__dirname, '..', 'config.yaml')) {
     sacn_port: requireInt('sacn_port'),
     sacn_output_port: requireInt('sacn_output_port'),
     sacn_udp_port: Number.isInteger(cfg.sacn_udp_port) ? cfg.sacn_udp_port : SACN_E131_UDP_PORT,
+    // The engine's API port — the sACN bridge polls :<port>/status so the
+    // hardware relay follows the ENGINE's active scene (2026-07-24 fix).
+    marsin_engine_port: requireInt('marsin_engine_port'),
   };
 }
 

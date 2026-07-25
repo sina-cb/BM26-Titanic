@@ -78,6 +78,27 @@ let hoverRestore = null; // pending hover flash restore
 let lastProj = null;     // latest computeProjection result (universeEnds cache rides it)
 let lastLedWarnings = []; // latest validateLedManualUniverses result (Slice D warn chips)
 let lastLedClaims = new Map(); // latest computeLedUniverseClaims (LED occupancy in the bars)
+// LED per-strand projection fields, computed ONCE per structural render (G2) and
+// threaded into every LED port row — the pre-Slice-3 code recomputed both maps
+// per LED port (O(ports×strands)), so a full ship reprojected LEDs 3–4× + once
+// per port on every render. Now: bound = device-linear layout, generic = the
+// sim's per-port projection; renderLedPort reads the map its controller needs.
+let lastLedBoundFields = new Map();
+let lastLedGenericFields = new Map();
+// Camera focus on chip click (G5 reverse link). Persisted per-machine; when on,
+// clicking a chip flies the 3D camera to frame that fixture/strand. A power-user
+// pinning the map while orbiting turns it off. Default on.
+const CAMERA_FOCUS_KEY = 'bm26.map.cameraFocusOnChip';
+let cameraFocusOnChip = readCameraFocusPref();
+
+function readCameraFocusPref() {
+  try {
+    return localStorage.getItem(CAMERA_FOCUS_KEY) !== '0';
+  } catch (err) {
+    console.error('[Controllers] read camera-focus pref', err);
+    return true;
+  }
+}
 const collapsedControllers = new Set(); // controller ids
 const collapsedPorts = new Set();       // '<controllerId>:<portNum>' keys
 const collapsedGroups = new Set();      // 'DMX' | 'LED' — collapsed type sections
@@ -348,6 +369,26 @@ function setFixtureSelectedVisual(index, selected) {
   }
 }
 
+/** Strand index (into params.ledStrands / window.ledStrandFixtures) by name. */
+function strandIndexByName(name) {
+  const list = strandList();
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] && list[i].name === name) return i;
+  }
+  return -1;
+}
+
+/**
+ * Fly the 3D camera to frame a world-space point (G5 reverse link). Delegates
+ * to view_presets' focusCameraOnPoint (installed on window at boot). No-op when
+ * the operator has turned camera-focus off. THREE is not imported here, so the
+ * point is passed as a plain {x,y,z} and the focus helper builds the vector.
+ */
+function focusCameraOn(point) {
+  if (!cameraFocusOnChip || !point) return;
+  if (typeof window.focusCameraOnPoint === 'function') window.focusCameraOnPoint(point);
+}
+
 function selectFixtureIn3D(name) {
   const index = fixtureIndexByName(name);
   if (index < 0) return;
@@ -355,7 +396,40 @@ function selectFixtureIn3D(name) {
   selectedFixtureIndices.clear();
   selectedFixtureIndices.add(index);
   setFixtureSelectedVisual(index, true);
+  // Clear any lingering strand selection so the panel highlight is unambiguous.
+  for (const f of window.ledStrandFixtures || []) if (f && f._selected) f.setSelected(false);
+  const fixture = (window.parFixtures || [])[index];
+  if (fixture && fixture.hitbox) {
+    const p = fixture.hitbox.position;
+    focusCameraOn({ x: p.x, y: p.y, z: p.z });
+  }
   if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
+  syncSelectionUi();
+}
+
+/**
+ * Reverse link for LED strands (G5): select a strand in 3D from its panel chip.
+ * Strands are real 3D objects (window.ledStrandFixtures) but are absent from the
+ * DMX fixture list, so they get their own select path: light the strand's
+ * visuals, clear the par selection, open its GUI folder, and fly the camera to
+ * the strand midpoint.
+ */
+function selectStrandIn3D(name) {
+  const index = strandIndexByName(name);
+  if (index < 0) return;
+  for (const i of selectedFixtureIndices) setFixtureSelectedVisual(i, false);
+  selectedFixtureIndices.clear();
+  const fixtures = window.ledStrandFixtures || [];
+  fixtures.forEach((f, i) => { if (f && typeof f.setSelected === 'function') f.setSelected(i === index); });
+  if (window.openStrandFolder) window.openStrandFolder(index);
+  const strand = fixtures[index];
+  if (strand && strand.startPos && strand.endPos) {
+    const a = strand.startPos;
+    const b = strand.endPos;
+    focusCameraOn({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 });
+  }
+  if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
+  syncSelectionUi();
 }
 
 /** Hover flash: light the fixture's selection visuals without selecting. */
@@ -456,15 +530,82 @@ function renderIfOpen() {
   if (panelEl && !panelEl.classList.contains('hidden')) render();
 }
 
+/**
+ * Compute EVERY projection this render needs, exactly once (G2). Pre-Slice-3
+ * render() recomputed the DMX projection once but the LED projection 3–4×
+ * (validateLedManualUniverses + ledUniverseClaims' two computes) and then AGAIN
+ * per LED port inside renderLedPort. Here the DMX projection, both LED field
+ * maps, the per-universe LED claims, and the manual-universe warnings are each
+ * built once; renderLedPort reads the cached bound/generic maps. Selection
+ * changes no longer reach this path at all (they call syncSelectionUi).
+ */
+function computeRenderProjection() {
+  const reg = registry();
+  const proj = computeProjection(reg, configsByName(), pins());
+  lastProj = proj; // makeAllocator rides universeEnds off this
+  if (registryIsActive(reg)) {
+    const counts = strandLedCounts();
+    lastLedBoundFields = computeLedStrandPatches(reg, counts).fields;
+    lastLedGenericFields = computeLedProjection(reg, counts).fields;
+    const unbound = new Map();
+    for (const [name, rec] of lastLedGenericFields) {
+      if (!lastLedBoundFields.has(name)) unbound.set(name, rec);
+    }
+    lastLedClaims = computeLedUniverseClaims(lastLedBoundFields, unbound);
+    lastLedWarnings = validateLedManualUniverses(reg, counts, proj.universeMaps);
+  } else {
+    lastLedBoundFields = new Map();
+    lastLedGenericFields = new Map();
+    lastLedClaims = new Map();
+    lastLedWarnings = [];
+  }
+  return proj;
+}
+
+/**
+ * Lightweight selection sync (G2): patch ONLY the selection-dependent DOM — chip
+ * highlights + the "+ sel (n)" counters — without tearing down and rebuilding
+ * #cm-body or recomputing any projection. interaction.js fires this on every 3D
+ * pick (window.syncControllerMapSelection). Also scrolls the freshly-selected
+ * chip into view (G5 forward link): a 3D selection whose chip is off-screen now
+ * scrolls into the panel instead of silently highlighting nothing.
+ *
+ * Par selection wins over strand: when any DMX fixture is selected only its
+ * chips highlight; with none selected the strand chips mirror the 3D strands'
+ * own `_selected` flag (window.ledStrandFixtures), so a strand picked in 3D
+ * lights its chip too.
+ */
+function syncSelectionUi() {
+  if (!panelEl || panelEl.classList.contains('hidden') || !bodyEl) return;
+  const parSelected = selectedFixtureIndices.size > 0;
+  const selNames = new Set(selectedFixtureNames());
+  const strandFixtures = window.ledStrandFixtures || [];
+  let scrollTarget = null;
+  for (const chip of bodyEl.querySelectorAll('.cm-chip[data-cm-fixture]')) {
+    const name = chip.getAttribute('data-cm-fixture');
+    let on = false;
+    if (chip.getAttribute('data-cm-kind') === 'strand') {
+      if (!parSelected) {
+        const idx = strandIndexByName(name);
+        on = idx >= 0 && !!(strandFixtures[idx] && strandFixtures[idx]._selected);
+      }
+    } else {
+      on = selNames.has(name);
+    }
+    chip.classList.toggle('cm-chip-selected', on);
+    if (on && !scrollTarget) scrollTarget = chip;
+  }
+  const n = selNames.size;
+  for (const btn of bodyEl.querySelectorAll('.cm-sel-btn')) {
+    btn.textContent = `+ sel (${n})`;
+    btn.disabled = n === 0;
+  }
+  if (scrollTarget) scrollTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
 function render() {
   const reg = registry();
-  const proj = projection();
-  // Slice D: manual per-output universe warnings (unhonorable / collision /
-  // duplicate). Loud but non-blocking — rendered as warn chips on the cards.
-  lastLedWarnings = validateLedManualUniverses(reg, strandLedCounts(), proj.universeMaps);
-  // LED occupancy for the universe bars (G5): a DMX port whose universe also
-  // carries an LED stream renders the LED claim alongside its DMX claims.
-  lastLedClaims = ledUniverseClaims();
+  const proj = computeRenderProjection();
   const unmapped = unmappedNames();
   const unmappedStrands = unmappedStrandNames();
   const unmappedTotal = unmapped.length + unmappedStrands.length;
@@ -524,6 +665,26 @@ function render() {
     renderIfOpen(); // refresh this button's label/state (the lil-gui checkbox self-syncs via .listen())
   };
   main.appendChild(overlayBtn);
+
+  // Camera-focus toggle (G5): when on, clicking a fixture/strand chip flies the
+  // 3D camera to frame it. Off pins the map for a power-user orbiting the ship.
+  const focusBtn = document.createElement('button');
+  focusBtn.className = cameraFocusOnChip
+    ? 'cm-btn cm-camera-focus-toggle cm-on'
+    : 'cm-btn cm-camera-focus-toggle';
+  focusBtn.textContent = cameraFocusOnChip
+    ? '🎯 Camera Follows Chip: ON'
+    : '🎯 Camera Follows Chip: OFF';
+  focusBtn.title = 'When ON, clicking a fixture or strand chip flies the 3D camera to frame it. ' +
+    'Turn OFF to select without moving the camera (e.g. while orbiting the ship).';
+  focusBtn.onclick = () => {
+    cameraFocusOnChip = !cameraFocusOnChip;
+    try { localStorage.setItem(CAMERA_FOCUS_KEY, cameraFocusOnChip ? '1' : '0'); } catch (err) {
+      console.error('[Controllers] persist camera-focus pref', err);
+    }
+    renderIfOpen();
+  };
+  main.appendChild(focusBtn);
 
   const addBtn = document.createElement('button');
   addBtn.className = 'cm-btn cm-add';
@@ -590,6 +751,11 @@ function render() {
     'type any address to move a fixture (conflicts go red but stand), clear it to send it to ' +
     'the end. Saved to controllers.yaml, projected into patches.yaml.';
   bodyEl.appendChild(hint);
+
+  // Set chip highlights + "+ sel" counters on the freshly-built DOM (covers
+  // strand chips, which read the 3D strands' _selected flag rather than the par
+  // selection set). Cheap DOM patch over the just-rendered nodes.
+  syncSelectionUi();
 }
 
 // ── Collapsible type group (DMX / MarsinLED) ────────────────────────────
@@ -1026,9 +1192,7 @@ function renderLedPort(controller, port, proj) {
     // agree with the hardware; an unbound controller uses the sim's generic
     // per-port projection (computeLedProjection).
     const bound = isBoundLedController(controller);
-    const ledProj = bound
-      ? computeLedStrandPatches(registry(), strandLedCounts()).fields
-      : computeLedProjection(registry(), strandLedCounts()).fields;
+    const ledProj = bound ? lastLedBoundFields : lastLedGenericFields;
     const chain = document.createElement('div');
     chain.className = 'cm-chain';
     for (const entry of port.chain) {
@@ -1036,18 +1200,26 @@ function renderLedPort(controller, port, proj) {
       if (name === null) continue;
       const chip = document.createElement('span');
       chip.className = 'cm-chip cm-chip-strand';
+      // Reverse link (G5): a mapped strand chip locates + frames its strand in
+      // 3D, exactly as a DMX fixture chip does. data-cm-* lets syncSelectionUi
+      // patch this chip's highlight without a full re-render.
+      chip.dataset.cmFixture = name;
+      chip.dataset.cmKind = 'strand';
       const p = ledProj.get(name);
       const info = strandSegmentsFor(p);
       // Multi-universe strands render the full span (U6:1 → U7:288); a strand
       // inside one universe keeps the U6:1–160 form (G5).
       const addr = info ? ` ${ledStrandSpanText(info.segments)} ×${info.px}px` : ' (unresolved)';
       chip.textContent = `💡 ${name}${addr}`;
-      if (info) chip.title = ledStrandSpanTooltip(info.segments);
+      chip.title = info
+        ? `${ledStrandSpanTooltip(info.segments)} — click to locate in 3D`
+        : 'click to locate in 3D';
+      chip.onclick = () => selectStrandIn3D(name);
       const unbind = document.createElement('button');
       unbind.className = 'cm-chip-x';
       unbind.textContent = '×';
       unbind.title = `Unbind '${name}'`;
-      unbind.onclick = () => mutate(null, () => { unmapFixture(registry(), name); });
+      unbind.onclick = (e) => { e.stopPropagation(); mutate(null, () => { unmapFixture(registry(), name); }); };
       chip.appendChild(unbind);
       chain.appendChild(chip);
     }
@@ -1294,10 +1466,9 @@ function renderChain(controller, port, layout) {
       chip.appendChild(document.createTextNode(`⌷ gap ${item.entry.gap}`));
       chip.title = `Reserved ${item.entry.gap} channel(s) at ${item.address} — click to edit width`;
       chip.onclick = () => {
-        const next = parseInt(window.prompt(`Gap width (channels):`, item.entry.gap), 10);
-        if (Number.isInteger(next) && next >= 1) {
+        promptForGapWidth(item.entry.gap, (next) => {
           mutate(null, () => { item.entry.gap = next; });
-        }
+        });
       };
     } else if (isPinnedEntry(item.entry) && !item.manual) {
       chip.classList.add('cm-chip-pinned');
@@ -1342,10 +1513,11 @@ function renderChain(controller, port, layout) {
 
     const name = item.name;
     if (name !== null) {
-      const index3d = fixtureIndexByName(name);
-      if (index3d >= 0 && selectedFixtureIndices.has(index3d)) {
-        chip.classList.add('cm-chip-selected');
-      }
+      // data-cm-* lets syncSelectionUi patch this chip's highlight on a 3D pick
+      // without rebuilding the panel (G2); the initial highlight is set by that
+      // same pass at the end of render().
+      chip.dataset.cmFixture = name;
+      chip.dataset.cmKind = 'fixture';
       chip.onclick = () => selectFixtureIn3D(name);
       chip.onmouseenter = () => flashFixture(name, true);
       chip.onmouseleave = () => flashFixture(name, false);
@@ -1460,11 +1632,14 @@ function renderPortActions(controller, port, layout, isEffectsPort, isPicking) {
   if (!isEffectsPort) {
     const names = selectedFixtureNames();
     const fromSelBtn = document.createElement('button');
-    fromSelBtn.className = 'cm-btn';
+    // cm-sel-btn: syncSelectionUi live-updates the label + disabled state on
+    // every 3D pick without rebuilding the panel, so the click must read the
+    // CURRENT selection (the render-time `names` closure would be stale).
+    fromSelBtn.className = 'cm-btn cm-sel-btn';
     fromSelBtn.textContent = `+ sel (${names.length})`;
     fromSelBtn.title = 'Append the 3D selection to this chain, in selection order';
     fromSelBtn.disabled = names.length === 0;
-    fromSelBtn.onclick = () => addNamesToPort(controller, port, names);
+    fromSelBtn.onclick = () => addNamesToPort(controller, port, selectedFixtureNames());
     actions.appendChild(fromSelBtn);
   }
 
@@ -1486,15 +1661,15 @@ function renderPortActions(controller, port, layout, isEffectsPort, isPicking) {
     gapBtn.title = 'Reserve channels for hardware not modeled in the sim (allocated at the ' +
       'universe end; type its address box to move it)';
     gapBtn.onclick = () => {
-      const width = parseInt(window.prompt('Gap width (channels):', '10'), 10);
-      if (!Number.isInteger(width) || width < 1) return;
-      const allocate = makeAllocator(port.universe);
-      const at = allocate(width);
-      if (at === null) {
-        showToast(`U${port.universe} has no room at the end for a ${width}-ch gap`, { error: true, ttl: 6000 });
-        return;
-      }
-      mutate(null, () => { port.chain.push({ gap: width, at }); });
+      promptForGapWidth(10, (width) => {
+        const allocate = makeAllocator(port.universe);
+        const at = allocate(width);
+        if (at === null) {
+          showToast(`U${port.universe} has no room at the end for a ${width}-ch gap`, { error: true, ttl: 6000 });
+          return;
+        }
+        mutate(null, () => { port.chain.push({ gap: width, at }); });
+      });
     };
     actions.appendChild(gapBtn);
   } else {
@@ -1849,8 +2024,11 @@ function renderTray(unmapped, unmappedStrands, proj) {
         const chip = document.createElement('span');
         chip.className = 'cm-tray-chip cm-tray-strand';
         chip.textContent = '💡 ' + name;
-        chip.title = `Unmapped LED strand '${name}' — add/select a ${LED_TYPE_LABEL} controller, ` +
-          'then pick this strand onto one of its outputs.';
+        // Reverse link (G5): strands ARE 3D objects, so even an unmapped strand
+        // chip locates + frames its strand — no longer purely informational.
+        chip.title = `Unmapped LED strand '${name}' — click to locate in 3D. Add/select a ` +
+          `${LED_TYPE_LABEL} controller, then pick this strand onto one of its outputs.`;
+        chip.onclick = () => selectStrandIn3D(name);
         chips.appendChild(chip);
         shown++;
       }
@@ -1869,6 +2047,67 @@ function renderTray(unmapped, unmappedStrands, proj) {
   renderChips();
 
   return tray;
+}
+
+// ── Gap-width prompt (non-blocking; replaces window.prompt — G3) ─────────
+
+/**
+ * Non-blocking replacement for the old window.prompt() gap-width entry (G3).
+ * The native prompt() was a synchronous OS modal that froze the entire render
+ * thread — the 3D view stopped, the compositor wedged, and there was no styling
+ * or validation. This is a small styled modal on the existing vm-modal-* chrome
+ * that validates a positive integer and calls onConfirm(width); the render loop
+ * keeps running behind it.
+ */
+function promptForGapWidth(current, onConfirm) {
+  const overlay = document.createElement('div');
+  overlay.className = 'vm-modal-overlay';
+  const card = document.createElement('div');
+  card.className = 'vm-modal-card';
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'vm-modal-title';
+  titleEl.textContent = 'Gap width (channels)';
+  card.appendChild(titleEl);
+
+  const input = document.createElement('input');
+  input.className = 'vm-modal-input';
+  input.type = 'number';
+  input.min = '1';
+  input.max = String(DMX_UNIVERSE_SIZE);
+  input.value = String(Number.isInteger(current) && current >= 1 ? current : 10);
+  card.appendChild(input);
+
+  const actions = document.createElement('div');
+  actions.className = 'vm-modal-actions';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'vm-modal-btn';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.onclick = () => overlay.remove();
+  const okBtn = document.createElement('button');
+  okBtn.className = 'vm-modal-btn vm-modal-btn-primary';
+  okBtn.textContent = 'OK';
+  okBtn.onclick = () => {
+    const width = parseInt(input.value, 10);
+    if (!Number.isInteger(width) || width < 1) {
+      input.focus();
+      return;
+    }
+    overlay.remove();
+    onConfirm(width);
+  };
+  actions.appendChild(cancelBtn);
+  actions.appendChild(okBtn);
+  card.appendChild(actions);
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+  input.focus();
+  input.select();
+
+  overlay.onkeydown = (e) => {
+    if (e.key === 'Enter') okBtn.click();
+    else if (e.key === 'Escape') cancelBtn.click();
+  };
 }
 
 // ── Add-controller modal (name + IP in one dialog) ──────────────────────
@@ -1991,9 +2230,15 @@ export function setupControllerMapEditor() {
     }
   });
 
-  // interaction.js calls this after every selection change so the
-  // "+ sel (n)" counters and chip highlights track the 3D view live.
+  // Data/structural refresh (full re-render): undo, the unpatched-overlay
+  // toggle, and any caller that CHANGED the mapping data use this.
   window.refreshControllerMapPanel = renderIfOpen;
+
+  // Selection-only sync (G2): interaction.js fires this on every 3D pick. It
+  // patches chip highlights + "+ sel" counters and scrolls the selected chip
+  // into view WITHOUT rebuilding #cm-body or recomputing any projection — the
+  // hot path that used to cost 16–38 ms per selection.
+  window.syncControllerMapSelection = syncSelectionUi;
 
   // gui_builder calls this when fixture configs are DELETED (single
   // remove, trace delete, regeneration shrink). Addresses are absolute

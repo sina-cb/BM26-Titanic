@@ -9,6 +9,14 @@ const path = require('path');
 const yaml = require('js-yaml');
 
 const { loadSimPorts } = require('./lib/load_ports.cjs');
+const processPriority = require('../tools/process_priority.cjs');
+
+// OS priority for the frame-relaying sACN bridges. Default HIGH so a bridge is
+// never starved by Chrome's foreground boost (same symptom as a starved
+// engine). The launcher passes BM26_BRIDGE_PRIORITY; a bare `node start.js`
+// still defaults to 'high'. See tools/process_priority.cjs.
+const BRIDGE_PRIORITY = processPriority.normalizePriorityRequest(
+  process.env.BM26_BRIDGE_PRIORITY, { fallback: 'high' }) || 'high';
 
 const ports = loadSimPorts();
 const HTTP_PORT = ports.http_port;
@@ -59,6 +67,15 @@ const sacnOutputBridge = spawn('node', ['server/sacn_output_bridge.js'], {
 sacnOutputBridge.on('exit', (code) => {
   if (code !== null && code !== 0) console.log(`[start] sACN output bridge exited with code ${code}`);
 });
+
+// Belt (parent-side) priority elevation for the bridge children. These are
+// spawned WITHOUT a shell, so child.pid is the real node process and
+// os.setPriority hits it directly (the bridges ALSO self-elevate — braces).
+// Each call reads the achieved class back and logs the [BridgePriority] line.
+processPriority.elevatePid(sacnBridge.pid, BRIDGE_PRIORITY,
+  { label: 'BridgePriority', logger: (m) => console.log(`[start] ${m}`) });
+processPriority.elevatePid(sacnOutputBridge.pid, BRIDGE_PRIORITY,
+  { label: 'BridgePriority', logger: (m) => console.log(`[start] ${m}`) });
 
 function cleanup() {
   httpServer.kill();

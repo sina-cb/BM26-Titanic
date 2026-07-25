@@ -14,6 +14,12 @@ controllers:
     alsoFlat: true
 engine:
   fps: 40
+  # OS process-priority class for the render loop (tools/process_priority.cjs).
+  # high = HIGH_PRIORITY_CLASS (default) keeps 40 fps sACN generation scheduled
+  # even when Chrome grabs the foreground boost. realtime = REALTIME_PRIORITY_CLASS
+  # (opt-in, usually needs admin — can starve input/audio/kernel). When launched
+  # via launcher.js, BM26_ENGINE_PRIORITY / --engine-priority overrides this.
+  priority: high
 mixer:
   maxChannels: 8
 vis:

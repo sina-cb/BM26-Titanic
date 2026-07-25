@@ -1,6 +1,6 @@
 // Auto-generated view-mask sidecar for the titanic model — do not edit manually.
 // Source of truth: the simulation scene (Views panel → scenes/titanic/views.yaml).
-// Updated: 2026-06-18T09:18:40.074Z
+// Updated: 2026-07-25T01:14:37.007Z
 //
 // `groupBits` pins the base group → bit contract pattern code compiles
 // against; the engine validates it against the loaded model and fails
@@ -35,6 +35,9 @@ export const groupBits = {
   'Small_Right_1': 0x02000000,
   'Right Back Deck Generator': 0x04000000,
   'Left Back Deck Generator': 0x08000000,
+  'Left Center Auditorium': 0x10000000,
+  'Left Back Wall': 0x20000000,
+  'TE Sign': 0x40000000,
 };
 
 export const viewMasks = [

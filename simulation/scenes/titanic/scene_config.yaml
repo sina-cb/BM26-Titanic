@@ -1202,14 +1202,14 @@ parLights:
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: TE LED Grids
-      name: TE LED Grid 1
-      fixtureType: TeLedGrid40
+    - group: TE Sign
+      name: TE Sign V3 A
+      fixtureType: TeSignV3A40
       color: '#ffffff'
       intensity: 5
       angle: 20
       penumbra: 0.5
-      x: -4
+      x: 0
       'y': 9
       z: 17
       rotX: 0
@@ -1223,14 +1223,14 @@ parLights:
       scaleX: 1
       scaleY: 1
       scaleZ: 1
-    - group: TE LED Grids
-      name: TE LED Grid 2
-      fixtureType: TeLedGrid40
-      color: '#00d0ff'
+    - group: TE Sign
+      name: TE Sign V3 B
+      fixtureType: TeSignV3B34
+      color: '#ffffff'
       intensity: 5
       angle: 20
       penumbra: 0.5
-      x: 4
+      x: 0
       'y': 9
       z: 17
       rotX: 0
@@ -1239,10 +1239,8 @@ parLights:
       traceGenerated: false
       enabled: true
       brightness: 100
-      diffusion: false
-      diffusionAmount: 2.5
-      screen: true
-      screenPixelSize: 70
+      diffusion: true
+      diffusionAmount: 1.5
       scaleX: 1
       scaleY: 1
       scaleZ: 1

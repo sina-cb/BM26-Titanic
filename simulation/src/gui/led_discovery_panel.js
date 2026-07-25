@@ -39,17 +39,34 @@ import {
   isValidIp,
 } from '../dmx/controller_registry.js';
 
+// ── Scene-scoped cache key (G7) ──────────────────────────────────────────────
+// nextControllerId RESTARTS at 1 in every scene (controller_registry.js
+// createControllerRegistry), so controller.id alone is NOT unique across scenes:
+// a stale entry keyed by id 1 from the previous scene could be served for THIS
+// scene's id-1 controller (a wrong sync chip / wrong MAC). Namespacing every
+// cache key by the active scene makes a cross-scene collision impossible — a
+// different scene simply reads under a different key. `ctx.activeScene()` is the
+// same source main.js installs at boot; threading ctx keeps this module free of
+// hidden window globals (it already takes ctx for everything else).
+function cacheKey(ctx, controllerId) {
+  return `${ctx.activeScene()}::${controllerId}`;
+}
+
 // ── Sync-chip cache (computed on panel open + after push; no polling) ───────
-// controller.id → { state: 'in-sync'|'drift'|'unreachable'|'never'|'checking',
-//                    detail?: string, changes?: Array }
+// key = `${scene}::${controllerId}` → { state:
+//   'in-sync'|'drift'|'unreachable'|'never'|'checking', detail?, changes? }
 const syncCache = new Map();
 
-export function getSyncState(controllerId) {
-  return syncCache.get(controllerId) || null;
+function setSyncState(ctx, controllerId, state) {
+  syncCache.set(cacheKey(ctx, controllerId), state);
+}
+
+export function getSyncState(ctx, controllerId) {
+  return syncCache.get(cacheKey(ctx, controllerId)) || null;
 }
 
 // ── Live MAC cache (display-only; NEVER persisted) ───────────────────────────
-// controller.id → MAC string, refreshed from the device's live HTTP status
+// key → MAC string, refreshed from the device's live HTTP status
 // (marsinled_client.js) at discover/bind/push/verify time. The MAC is
 // deliberately absent from controller.device (see controller_registry.js
 // normalizeDeviceBlock) so it never round-trips into controllers.yaml — this
@@ -58,12 +75,12 @@ export function getSyncState(controllerId) {
 // next time the panel talks to the device.
 const liveMacCache = new Map();
 
-function setLiveMac(controllerId, mac) {
-  if (mac) liveMacCache.set(controllerId, mac);
+function setLiveMac(ctx, controllerId, mac) {
+  if (mac) liveMacCache.set(cacheKey(ctx, controllerId), mac);
 }
 
-export function getLiveMac(controllerId) {
-  return liveMacCache.get(controllerId) || null;
+export function getLiveMac(ctx, controllerId) {
+  return liveMacCache.get(cacheKey(ctx, controllerId)) || null;
 }
 
 // ── Small DOM helpers ───────────────────────────────────────────────────────
@@ -366,12 +383,13 @@ async function createFromDevice(ctx, device, closeModal) {
         boardId: device.boardId,
       },
     });
-    // Auto-allocate the base universe so the derived layout + strand patches
-    // resolve immediately (the operator can still override the field).
-    const u = nextFreeUniverse(registry);
-    created.led.baseUniverse = u;
-    noteUniverseUsed(registry, u);
-    setLiveMac(created.id, device.mac); // display-only — never persisted (see controller_registry.js)
+    // G9: a bound controller addresses PER OUTPUT — each port already carries its
+    // own universe from addPort (computeLedStrandPatches is the one source of
+    // truth and IGNORES led.baseUniverse). Do NOT stamp a vestigial baseUniverse
+    // here: it never reaches the wire, but it collapses the generic projection
+    // onto one lane and reads like it controls addressing. Leaving it 0 keeps a
+    // single source of truth (port.universe).
+    setLiveMac(ctx, created.id, device.mac); // display-only — never persisted (see controller_registry.js)
   });
   ctx.showToast(`Created '${deviceName}' (${portCount} ports) — assign strands, then Push`, { ttl: 9000 });
   closeModal();
@@ -387,7 +405,6 @@ async function bindToController(ctx, device, controller, closeModal) {
     return;
   }
   ctx.mutate(`Bound '${controller.name}' to ${device.controllerId}`, () => {
-    const registry = ctx.registry();
     controller.ip = device.ip; // identity key
     bindControllerDevice(controller, {
       vendor: LED_DEVICE_VENDOR_MARSINLED,
@@ -395,12 +412,12 @@ async function bindToController(ctx, device, controller, closeModal) {
       deviceName: config.deviceName,
       boardId: device.boardId,
     });
-    if (!controller.led.baseUniverse || controller.led.baseUniverse < 1) {
-      const u = nextFreeUniverse(registry);
-      controller.led.baseUniverse = u;
-      noteUniverseUsed(registry, u);
-    }
-    setLiveMac(controller.id, device.mac); // display-only — never persisted
+    // G9: binding switches this controller onto the PER-OUTPUT device layout
+    // (computeLedStrandPatches, keyed off each port.universe) which ignores
+    // led.baseUniverse entirely — so no baseUniverse is allocated on bind. The
+    // per-output universes live on the port rows; baseUniverse stays the unbound
+    // generic model's field only (single source of truth per controller state).
+    setLiveMac(ctx, controller.id, device.mac); // display-only — never persisted
   });
   ctx.showToast(`Bound '${controller.name}' → ${config.deviceName || device.controllerId} ` +
     `(${device.ip})`, { ttl: 8000 });
@@ -429,14 +446,14 @@ export function refreshSyncChips(ctx) {
   const bound = registry.controllers.filter(isBoundLedController);
   for (const controller of bound) {
     if (!controller.device.lastPush) {
-      syncCache.set(controller.id, { state: 'never' });
+      setSyncState(ctx, controller.id, { state: 'never' });
       continue;
     }
-    syncCache.set(controller.id, { state: 'checking' });
+    setSyncState(ctx, controller.id, { state: 'checking' });
     computeSyncState(ctx, controller)
-      .then((res) => { syncCache.set(controller.id, res); ctx.refresh(); })
+      .then((res) => { setSyncState(ctx, controller.id, res); ctx.refresh(); })
       .catch((err) => {
-        syncCache.set(controller.id, { state: 'unreachable', detail: err.message });
+        setSyncState(ctx, controller.id, { state: 'unreachable', detail: err.message });
         ctx.refresh();
       });
   }
@@ -446,7 +463,7 @@ export function refreshSyncChips(ctx) {
 async function computeSyncState(ctx, controller) {
   const snapshot = await getConfig(controller.ip);
   const status = await getStatus(controller.ip);
-  setLiveMac(controller.id, status.mac); // display-only — never persisted
+  setLiveMac(ctx, controller.id, status.mac); // display-only — never persisted
   // Per-output DMX is the only supported mapping. Firmware without it is stale —
   // report drift so the operator updates it (no silent legacy fallback, codex P0).
   if (!deviceSupportsPerOutput(status)) {
@@ -490,7 +507,7 @@ export function renderDeviceBindingSection(ctx, controller) {
     // controllers.yaml — public repo, gitleaks bm26-mac-address). Source it
     // from the live cache (populated from the device's runtime HTTP status by
     // discover/bind/push/sync-chip refresh) so the display still works.
-    const liveMac = getLiveMac(controller.id);
+    const liveMac = getLiveMac(ctx, controller.id);
     const idLine = el('div', 'led-device-id');
     idLine.textContent =
       `${dev.deviceName || dev.controllerId} · ${dev.boardId || 'board ?'}` +
@@ -498,7 +515,7 @@ export function renderDeviceBindingSection(ctx, controller) {
     section.appendChild(idLine);
 
     const chipRow = el('div', 'led-device-chip-row');
-    const sync = getSyncState(controller.id) || { state: dev.lastPush ? 'checking' : 'never' };
+    const sync = getSyncState(ctx, controller.id) || { state: dev.lastPush ? 'checking' : 'never' };
     const chip = el('span', `led-sync-chip led-sync-${sync.state}`, SYNC_LABELS[sync.state] || sync.state);
     if (sync.detail) chip.title = sync.detail;
     else if (sync.changes && sync.changes.length) {
@@ -556,7 +573,7 @@ async function startPush(ctx, controller) {
     status = await getStatus(controller.ip);
   } catch (err) {
     ctx.showToast(`✋ ${controller.ip} unreachable: ${err.message}`, { error: true, ttl: 8000 });
-    syncCache.set(controller.id, { state: 'unreachable', detail: err.message });
+    setSyncState(ctx, controller.id, { state: 'unreachable', detail: err.message });
     ctx.refresh();
     return;
   }
@@ -566,7 +583,7 @@ async function startPush(ctx, controller) {
   if (!deviceSupportsPerOutput(status)) {
     const detail = 'firmware too old — update MarsinLED to a per-output build';
     ctx.showToast(`✋ '${controller.name}': ${detail}`, { error: true, ttl: 10000 });
-    syncCache.set(controller.id, { state: 'drift', detail });
+    setSyncState(ctx, controller.id, { state: 'drift', detail });
     ctx.refresh();
     return;
   }
@@ -637,6 +654,18 @@ function perOutputChanges(reported, universeByOutputIndex) {
 }
 
 /**
+ * True iff `controller` is STILL the live registry object (by reference). Delete
+ * or undo swaps the registry's controller objects out, so a stale async
+ * continuation can detect it lost the world (G8). Reference identity is exact:
+ * removeController splices this object out, and restoreSnapshot rebuilds the
+ * array with freshly-parsed objects, so neither leaves this reference in place.
+ */
+function controllerIsLive(ctx, controller) {
+  const reg = ctx.registry();
+  return !!(reg && Array.isArray(reg.controllers) && reg.controllers.includes(controller));
+}
+
+/**
  * Shared per-output push core (single-push + push-all use the SAME path). POST
  * the per-output plan (full read-modify-write), wait out the reboot, then VERIFY
  * by re-reading `sacn.perOutput` and asserting it matches the plan, and record
@@ -666,6 +695,19 @@ async function pushPerOutputVerifyRecord(ctx, controller, universeByOutputIndex,
     throw err;
   }
 
+  // G8 — liveness guard. The reboot wait above can take up to 30 s; during it the
+  // operator may delete this controller or undo (restoreSnapshot replaces the
+  // registry's controller objects). Writing provenance onto a controller that is
+  // no longer in the registry would mutate a detached object and trigger a save
+  // of a phantom — fail LOUD instead of silently recording onto the wrong world.
+  // (A scene switch is a full page reload, so this same reference check also
+  // covers "the scene changed": the old controller object is simply gone.)
+  if (!controllerIsLive(ctx, controller)) {
+    throw new Error(`'${controller.name}' was removed (or the scene changed) during the reboot ` +
+      'wait — the device WAS written, but the push result is discarded; re-add the controller ' +
+      'and re-verify');
+  }
+
   const configHash = await sha256Hex(JSON.stringify(universeByOutputIndex));
   const firmwareSHA = verifyStatus.firmwareSHA;
   ctx.mutate(`Pushed per-output universes to '${controller.name}'`, () => {
@@ -687,7 +729,7 @@ async function pushPerOutputVerifyRecord(ctx, controller, universeByOutputIndex,
       perOutput: reported,
     });
   });
-  setLiveMac(controller.id, verifyStatus.mac); // display-only — never persisted
+  setLiveMac(ctx, controller.id, verifyStatus.mac); // display-only — never persisted
   return { needsReboot, reply, reported };
 }
 
@@ -781,7 +823,7 @@ async function runPerOutputPush(ctx, controller, universeByOutputIndex, io, ui) 
 
   try {
     await pushPerOutputVerifyRecord(ctx, controller, universeByOutputIndex, io, (m) => setStatus(m));
-    syncCache.set(controller.id, { state: 'in-sync' });
+    setSyncState(ctx, controller.id, { state: 'in-sync' });
     setStatus('✓ pushed, rebooted, verified — per-output mapping confirmed', 'led-push-ok');
     cancelBtn.disabled = false;
     cancelBtn.textContent = 'Done';
@@ -790,7 +832,7 @@ async function runPerOutputPush(ctx, controller, universeByOutputIndex, io, ui) 
   } catch (err) {
     setStatus(`✋ per-output push failed: ${err.message}` +
       (err.field ? ` (field=${err.field})` : ''), 'led-push-error');
-    syncCache.set(controller.id, err.perOutputMismatch
+    setSyncState(ctx, controller.id, err.perOutputMismatch
       ? { state: 'drift', detail: err.message }
       : { state: 'unreachable', detail: err.message });
     cancelBtn.disabled = false;
@@ -836,7 +878,7 @@ export async function pushAllLedControllers(ctx, io = DEFAULT_DEVICE_IO) {
       // Per-output DMX is the only push style — refuse stale firmware loudly.
       if (!deviceSupportsPerOutput(status)) {
         const detail = 'firmware too old — update MarsinLED to a per-output build';
-        syncCache.set(controller.id, { state: 'drift', detail });
+        setSyncState(ctx, controller.id, { state: 'drift', detail });
         results.push({ ...base, state: 'failed', detail });
         continue;
       }
@@ -845,11 +887,11 @@ export async function pushAllLedControllers(ctx, io = DEFAULT_DEVICE_IO) {
         derivePerOutputPlan(controller, ctx.strandLedCounts(), snapshot);
       // FORCE: always push + reboot + verify, even when the device already matches.
       await pushPerOutputVerifyRecord(ctx, controller, universeByOutputIndex, io, null);
-      syncCache.set(controller.id, { state: 'in-sync' });
+      setSyncState(ctx, controller.id, { state: 'in-sync' });
       results.push({ ...base, state: 'pushed' });
     } catch (err) {
       // Fail loud PER controller — record the state, keep going.
-      syncCache.set(controller.id, err.perOutputMismatch
+      setSyncState(ctx, controller.id, err.perOutputMismatch
         ? { state: 'drift', detail: err.message }
         : { state: 'unreachable', detail: err.message });
       results.push({ ...base, state: 'failed', detail: err.message });

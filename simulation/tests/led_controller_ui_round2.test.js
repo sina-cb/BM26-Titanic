@@ -155,6 +155,7 @@ function makeCtx(reg, counts) {
     mutate: (_msg, fn) => fn(),
     refresh: () => {},
     showToast: () => {},
+    activeScene: () => 'test',   // sync/MAC caches are scene-scoped (G7)
   };
 }
 

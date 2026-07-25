@@ -14,6 +14,7 @@
  */
 
 import { isStaticHost, logStaticHostSkip } from '../core/static_host.js';
+import { handleClientCensus } from '../gui/multi_client_warning.js';
 
 const RECONNECT_DELAY_MS = 3000;
 const SACN_SOURCE_ID = 'sacn_in';
@@ -124,6 +125,9 @@ export class SacnInputSource {
       this._ws.onclose = () => {
         this._connected = false;
         this.stats.connected = false;
+        // Census unknown while disconnected — hide the multi-client banner
+        // rather than display stale information (it re-arms on reconnect).
+        handleClientCensus(null);
         if (this._enabled) {
           if (window.sacnLog) window.sacnLog('Disconnected — reconnecting...', 'warn');
           this._reconnectTimer = setTimeout(() => this._connect(), RECONNECT_DELAY_MS);
@@ -191,6 +195,11 @@ export class SacnInputSource {
       const parsed = JSON.parse(text);
       if (parsed.type === 'log' && window.sacnLog) {
         window.sacnLog(parsed.msg, parsed.level || 'info');
+      } else if (parsed.type === 'clients') {
+        // Bridge client census — >1 connected sim window is a production
+        // hazard (GPU contention + duplicate sACN writers, report
+        // 20260724_15). Surface the HUD banner in THIS window too.
+        handleClientCensus(parsed.count);
       }
     } catch (e) { /* ignore non-JSON */ }
   }

@@ -31,6 +31,16 @@ const _simPorts = loadSimPorts(path.join(SIM_ROOT, 'config.yaml'));
 const SACN_PORT = _simPorts.sacn_port;
 const SACN_UDP_PORT = _simPorts.sacn_udp_port;
 
+// ── Realtime priority (self-elevation) ──────────────────────────────────
+// This bridge relays every DMX frame; a starved relay freezes the rig just
+// like a starved engine. Elevate above the NORMAL class Chrome sits in.
+// Default HIGH; the launcher can pass BM26_BRIDGE_PRIORITY. Reads the achieved
+// class back and logs [BridgePriority] — an un-elevated bridge is never silent.
+const processPriority = require('../../tools/process_priority.cjs');
+processPriority.elevateSelf(
+  processPriority.normalizePriorityRequest(process.env.BM26_BRIDGE_PRIORITY, { fallback: 'high' }) || 'high',
+  { label: 'BridgePriority', logger: (m) => console.log(`[sacn_bridge] ${m}`) });
+
 // ── Derive universes from ALL scene patches.yaml files ─────────────────
 function getAllPatchUniverses() {
   const universes = new Set([1, 2]); // always include 1+2 as baseline
@@ -104,89 +114,305 @@ try { WebSocketServer = require('ws').Server; } catch (e) {
   process.exit(1);
 }
 
-// ── Build Outward Network Map (Option B) ───────────────────────────────
-// `outgoingSenders` is universe -> Map<ip, entry>. Each entry wraps the
-// underlying sacn Sender along with per-target dedup state so we don't spam
-// `[sACN Bridge] Relay Error: send EHOSTDOWN <ip>:5568` once per inbound
-// frame (≈30+/s) when a controller is offline. Same pattern as
-// sacn_output_bridge.js — log on first occurrence and on transition, then
-// suppress identical errors and emit a single heartbeat per
+// ── Build Outward Network Map ───────────────────────────────────────────
+// `outgoingSenders` is universe -> Map<ip, entry> (read by routeFrame). Each
+// entry wraps the underlying sacn Sender along with per-target dedup state so
+// we don't spam `Relay Error: send EHOSTDOWN <ip>:5568` once per inbound
+// frame (≈30+/s) when a controller is offline: log on first occurrence and on
+// transition, then suppress identical errors and emit a single heartbeat per
 // RELAY_ERROR_LOG_INTERVAL_MS until the target recovers.
+//
+// ROUTE OWNERSHIP (2026-07-24 flicker/freeze fix, report 20260724_15): the
+// route table used to be GLOBAL LAST-WRITER state — every browser's
+// `setScene` replaced it wholesale, so a titanic viewer (0 routes) silently
+// disconnected the test_bench hardware and the bench lights froze with plain
+// browser activity. Routes are now the UNION of:
+//   - the CLI `--scene` pin (deploy-time intent),
+//   - the ENGINE's active scene (polled from :<enginePort>/status — hardware
+//     follows the data generator, not browser windows),
+//   - each connected client's tagged scene (a client only ADDS its scene),
+// MINUS every (universe → host) pair the engine's declared controllers
+// deliver directly (from /status `outputRouting`) — relaying those would put
+// two interleaved sACN sources on one universe and flicker the fixtures.
+// Pure computation lives in lib/bridge_routing.cjs (unit-tested).
+const { computeEffectiveRoutes, engineOwnedPairs, routeKey } =
+  require('../lib/bridge_routing.cjs');
+
 const outgoingSenders = new Map();
 const RELAY_ERROR_LOG_INTERVAL_MS = 30000;
+const ENGINE_PORT = _simPorts.marsin_engine_port;
+const ENGINE_POLL_MS = 3000;
 
-function loadRoutesForScene(sName) {
-  // Clear old
-  for (const uMap of outgoingSenders.values()) {
-    for (const entry of uMap.values()) {
-      try { entry.sender.close(); } catch(e){}
-    }
-  }
-  outgoingSenders.clear();
+const pinnedScene = sceneName;              // CLI --scene (always a string)
+const clientScenes = new Map();             // ws → scene tag (set by setScene)
+let engineState = { reachable: false, scene: null, owned: new Set() };
 
+const _routeEntries = new Map();            // routeKey → sender entry
+let _lastExcludedSig = '';
+let _lastConflictSig = '';
+const _warnedMissingScenes = new Set();
+
+/**
+ * Read one scene's declared (universe → controllerIp) pairs from its
+ * patches.yaml. Returns [] for a scene whose patches declare no controller
+ * IPs (a legitimate zero — e.g. titanic today) and null for a missing /
+ * unreadable file (logged loudly by the caller, once per scene).
+ */
+function readSceneRoutePairs(sName) {
+  const patchesYamlPath = path.join(SIM_ROOT, 'scenes', sName, 'patches.yaml');
+  let pConf;
   try {
-    const patchesYamlPath = path.join(SIM_ROOT, 'scenes', sName, 'patches.yaml');
-    if (fs.existsSync(patchesYamlPath)) {
-      const pConf = yaml.load(fs.readFileSync(patchesYamlPath, 'utf8'));
-      if (pConf && pConf.patches) {
-        let routeCount = 0;
-        for (const patch of Object.values(pConf.patches)) {
-          const u = patch.dmxUniverse;
-          const ip = patch.controllerIp;
-          if (u > 0 && ip && ip !== '127.0.0.1' && ip !== '0.0.0.0' && ip.toLowerCase() !== 'localhost') {
-             if (!outgoingSenders.has(u)) outgoingSenders.set(u, new Map());
-             const uMap = outgoingSenders.get(u);
-             if (!uMap.has(ip)) {
-               const sender = new Sender({
-                 universe: u,
-                 useUnicastDestination: ip,
-                 // Destination port only — reuseAddr would bind this sender to
-                 // *:5568 and steal datagrams from our own Receiver (task 010).
-                 port: SACN_UDP_PORT
-               });
-               uMap.set(ip, {
-                 sender,
-                 universe: u,
-                 ip,
-                 lastErrorMsg: null,
-                 lastErrorLoggedAt: 0,
-                 errorsSinceLog: 0,
-               });
-               console.log(`[sACN Bridge] Route Created: Universe ${u} -> Unicast ${ip}`);
-               routeCount++;
-             }
-          }
+    if (!fs.existsSync(patchesYamlPath)) return null;
+    pConf = yaml.load(fs.readFileSync(patchesYamlPath, 'utf8'));
+  } catch (e) {
+    console.warn(`[sACN Bridge] Could not parse ${sName}/patches.yaml for routing:`, e.message);
+    return null;
+  }
+  const pairs = [];
+  const seen = new Set();
+  if (pConf && pConf.patches) {
+    for (const patch of Object.values(pConf.patches)) {
+      const u = parseInt(patch.dmxUniverse, 10);
+      const ip = patch.controllerIp;
+      if (u > 0 && ip && ip !== '127.0.0.1' && ip !== '0.0.0.0' && String(ip).toLowerCase() !== 'localhost') {
+        const key = routeKey(u, ip);
+        if (!seen.has(key)) {
+          seen.add(key);
+          pairs.push({ universe: u, ip });
         }
-        console.log(`[sACN Bridge] Loaded ${routeCount} route(s) for scene: ${sName}`);
       }
     }
-  } catch(e) {
-    console.warn('[sACN Bridge] Could not parse patches.yaml for routing:', e.message);
+  }
+  return pairs;
+}
+
+/**
+ * Recompute the effective route set and diff it onto the live senders.
+ * Called on: boot, client setScene, client disconnect, engine poll change.
+ * Every route add/remove/suppression is logged AND broadcast to the sim's
+ * monitor panel — on playa someone WILL wonder why a universe isn't relayed.
+ */
+function recomputeRoutes(reason) {
+  const candidateScenes = new Set([pinnedScene]);
+  if (engineState.scene) candidateScenes.add(engineState.scene);
+  for (const s of clientScenes.values()) candidateScenes.add(s);
+
+  const sceneRoutes = new Map();
+  for (const s of candidateScenes) {
+    const pairs = readSceneRoutePairs(s);
+    if (pairs === null) {
+      if (!_warnedMissingScenes.has(s)) {
+        _warnedMissingScenes.add(s);
+        console.warn(`[sACN Bridge] ⚠ No readable patches.yaml for scene '${s}' — it contributes no relay routes.`);
+        broadcastLog(`⚠ Unknown scene '${s}' — no relay routes from it`, 'warn');
+      }
+      continue;
+    }
+    sceneRoutes.set(s, pairs);
+  }
+
+  const { routes, excluded, conflicts, activeScenes } = computeEffectiveRoutes({
+    sceneRoutes,
+    pinnedScene,
+    engineScene: engineState.scene,
+    clientScenes: clientScenes.values(),
+    engineOwned: engineState.owned,
+  });
+
+  // Annotate scene provenance for the logs: "test_bench[engine]".
+  const provenance = (scene) => {
+    const tags = [];
+    if (scene === pinnedScene) tags.push('pin');
+    if (scene === engineState.scene) tags.push('engine');
+    for (const s of clientScenes.values()) { if (s === scene) { tags.push('client'); break; } }
+    return tags.length ? `${scene}[${tags.join('+')}]` : scene;
+  };
+
+  // Diff → close removed senders, create added ones.
+  const nextKeys = new Set(routes.map(r => routeKey(r.universe, r.ip)));
+  for (const [key, entry] of _routeEntries) {
+    if (!nextKeys.has(key)) {
+      try { entry.sender.close(); } catch (e) {}
+      _routeEntries.delete(key);
+      console.log(`[sACN Bridge] Route removed: U${entry.universe} → ${entry.ip} (${reason})`);
+      broadcastLog(`Relay route removed: U${entry.universe} → ${entry.ip}`, 'warn');
+    }
+  }
+  for (const r of routes) {
+    const key = routeKey(r.universe, r.ip);
+    if (_routeEntries.has(key)) continue;
+    const sender = new Sender({
+      universe: r.universe,
+      useUnicastDestination: r.ip,
+      // Destination port only — reuseAddr would bind this sender to *:5568
+      // and steal datagrams from our own Receiver (task 010).
+      port: SACN_UDP_PORT,
+    });
+    _routeEntries.set(key, {
+      sender,
+      universe: r.universe,
+      ip: r.ip,
+      lastErrorMsg: null,
+      lastErrorLoggedAt: 0,
+      errorsSinceLog: 0,
+    });
+    console.log(`[sACN Bridge] Route created: U${r.universe} → ${r.ip} (scenes: ${r.scenes.map(provenance).join(', ')}; ${reason})`);
+    broadcastLog(`Relay route created: U${r.universe} → ${r.ip}`, 'source');
+  }
+
+  // Rebuild the universe-indexed view routeFrame reads.
+  outgoingSenders.clear();
+  for (const entry of _routeEntries.values()) {
+    if (!outgoingSenders.has(entry.universe)) outgoingSenders.set(entry.universe, new Map());
+    outgoingSenders.get(entry.universe).set(entry.ip, entry);
+  }
+
+  // Engine-owned suppressions: say WHAT was excluded and WHY, on every change.
+  const excludedSig = excluded.map(e => routeKey(e.universe, e.ip)).join(',');
+  if (excludedSig !== _lastExcludedSig) {
+    _lastExcludedSig = excludedSig;
+    for (const e of excluded) {
+      console.log(`[sACN Bridge] 🚫 Relay suppressed: U${e.universe} → ${e.ip} — the engine delivers this universe to that controller ITSELF (declared in marsin_engine/config.yaml); relaying too would double-source it and flicker the fixture. (scenes: ${e.scenes.join(', ')})`);
+      broadcastLog(`Relay suppressed U${e.universe} → ${e.ip}: engine owns this route`, 'warn');
+    }
+    if (excluded.length === 0 && excludedSig === '') {
+      // nothing suppressed any more — no log needed beyond route transitions
+    }
+  }
+
+  // Cross-scene conflicts: same universe → different controllers. All are
+  // relayed (each scene's declaration is explicit intent) but this is almost
+  // always two rigs' scenes active at once — shout about it.
+  const conflictSig = conflicts.map(c => `${c.universe}:${c.ips.join('|')}`).join(',');
+  if (conflictSig !== _lastConflictSig) {
+    _lastConflictSig = conflictSig;
+    for (const c of conflicts) {
+      console.warn(`[sACN Bridge] ⚠ Universe ${c.universe} is relayed to MULTIPLE controllers (${c.ips.join(', ')}) — two active scenes claim it. Check which scenes are open/pinned (active: ${activeScenes.join(', ')}).`);
+      broadcastLog(`⚠ U${c.universe} relayed to multiple controllers: ${c.ips.join(', ')}`, 'warn');
+    }
   }
 }
 
-// Load initial routes
-loadRoutesForScene(sceneName);
+// ── Engine poll: hardware follows the ENGINE's active scene ─────────────
+// GET /status on the engine every ENGINE_POLL_MS. Reachability transitions
+// are logged ONCE (not per poll). Unreachable engine ⇒ no engine-scene
+// routes and no ownership suppression (no dual writer can exist then).
+let _enginePollBusy = false;
+async function pollEngineStatus() {
+  if (_enginePollBusy) return; // never stack slow polls
+  _enginePollBusy = true;
+  const next = { reachable: false, scene: null, owned: new Set() };
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ENGINE_POLL_MS - 500);
+    const res = await fetch(`http://127.0.0.1:${ENGINE_PORT}/status`, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (res.ok) {
+      const j = await res.json();
+      if (j && j.service === 'marsin-engine') {
+        next.reachable = true;
+        next.scene = (typeof j.activeScene === 'string' && j.activeScene !== 'unknown') ? j.activeScene : null;
+        next.owned = engineOwnedPairs(j.outputRouting);
+        if (j.outputRouting === undefined) {
+          // Older engine without the introspection field: suppression is
+          // unavailable — warn on transition below via the signature change.
+          next.ownedUnavailable = true;
+        }
+      }
+    }
+  } catch (e) { /* unreachable — reflected in next.reachable */ }
+  _enginePollBusy = false;
+
+  const sig = `${next.reachable}|${next.scene}|${[...next.owned].sort().join(',')}|${!!next.ownedUnavailable}`;
+  const prevSig = `${engineState.reachable}|${engineState.scene}|${[...engineState.owned].sort().join(',')}|${!!engineState.ownedUnavailable}`;
+  if (sig === prevSig) return;
+
+  const prev = engineState;
+  engineState = next;
+  if (next.reachable !== prev.reachable) {
+    if (next.reachable) {
+      console.log(`[sACN Bridge] Engine reachable on :${ENGINE_PORT} — active scene '${next.scene}', ${next.owned.size} engine-owned route(s).`);
+      broadcastLog(`Engine up — hardware routes follow scene '${next.scene}'`, 'source');
+    } else {
+      console.warn(`[sACN Bridge] ⚠ Engine on :${ENGINE_PORT} unreachable — engine-scene routes and dual-source suppression are OFF until it returns.`);
+      broadcastLog('⚠ Engine unreachable — engine-scene relay routes off', 'warn');
+    }
+  } else if (next.scene !== prev.scene) {
+    console.log(`[sACN Bridge] Engine active scene changed: '${prev.scene}' → '${next.scene}'.`);
+    broadcastLog(`Engine scene → '${next.scene}'`, 'source');
+  }
+  if (next.ownedUnavailable && !prev.ownedUnavailable) {
+    console.warn('[sACN Bridge] ⚠ Engine /status has no outputRouting field (older engine build) — cannot suppress engine-owned relay routes. Restart the engine on current code.');
+    broadcastLog('⚠ Engine too old for dual-source suppression', 'warn');
+  }
+  recomputeRoutes('engine poll');
+}
+// NOTE: the boot-time recomputeRoutes / pollEngineStatus calls and the poll
+// interval start at the BOTTOM of this file — they broadcast to the WS
+// clients, so `wss` and `broadcastLog` must exist first.
 
 // ── WebSocket Server ───────────────────────────────────────────────────
 const wss = new WebSocketServer({ port: SACN_PORT });
 let clientCount = 0;
 
+// ── Client census broadcast (multi-window contention warning) ───────────
+// >1 connected sim window is a production hazard (2026-07-24 operator
+// decision): extra windows contend for the GPU and — in sacn_in mode — each
+// is an independent prio-150 sACN writer to the hardware. Every transition
+// is pushed to ALL clients as `{type:'clients', count}` so each window can
+// show the HUD banner (src/gui/multi_client_warning.js), plus loud log +
+// monitor lines here. Warning only — NO auto-kick: the writer-arbitration
+// decision (report 20260724_15 §2.3 options i/ii/iii) belongs to the
+// operator and must not be preempted.
+let _lastCensusCount = 0;
+function broadcastClientCensus() {
+  const json = JSON.stringify({ type: 'clients', count: clientCount });
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1) client.send(json);
+  });
+  if (clientCount !== _lastCensusCount) {
+    if (clientCount > 1) {
+      console.warn(`[sACN Bridge] ⚠ ${clientCount} sim clients connected — hardware output contention risk (multiple windows can double-drive controllers and starve the GPU; close extra sim windows).`);
+      broadcastLog(`⚠ ${clientCount} sim windows connected — hardware output contention risk`, 'warn');
+    } else if (_lastCensusCount > 1) {
+      console.log(`[sACN Bridge] ✅ Back to ${clientCount} sim client(s) — multi-window contention cleared.`);
+      broadcastLog(`✅ Single sim window again — contention cleared`, 'source');
+    }
+    _lastCensusCount = clientCount;
+  }
+}
+
 wss.on('connection', (ws) => {
   clientCount++;
   broadcastLog(`Browser connected (${clientCount} client(s))`, 'source');
-  
+  broadcastClientCensus();
+
   ws.on('message', (msg) => {
     try {
       const data = JSON.parse(msg);
       if (data.type === 'setScene' && data.scene) {
-        console.log(`[sACN Bridge] Browser requested route switch to scene: ${data.scene}`);
-        loadRoutesForScene(data.scene);
+        // A client TAGS ITSELF with its scene. Its scene's routes join the
+        // union (and its patches.yaml is re-read, so a just-saved patch
+        // change lands — PatchManager.notifySacnBridge re-sends this after
+        // every save). It can no longer clobber other scenes' routes: the
+        // old last-writer-wins table let every titanic tab disconnect the
+        // test_bench hardware (2026-07-24 freeze root cause).
+        const prev = clientScenes.get(ws);
+        clientScenes.set(ws, String(data.scene));
+        console.log(`[sACN Bridge] Client tagged scene '${data.scene}'${prev && prev !== data.scene ? ` (was '${prev}')` : ''}`);
+        recomputeRoutes(`client scene '${data.scene}'`);
       }
     } catch(e) {}
   });
 
-  ws.on('close', () => { clientCount--; broadcastLog(`Browser disconnected (${clientCount} client(s))`, 'warn'); });
+  ws.on('close', () => {
+    clientCount--;
+    const scene = clientScenes.get(ws);
+    clientScenes.delete(ws);
+    broadcastLog(`Browser disconnected (${clientCount} client(s))`, 'warn');
+    broadcastClientCensus();
+    if (scene) recomputeRoutes(`client of scene '${scene}' disconnected`);
+  });
   ws.on('error', (err) => console.error('[sACN Bridge] WS error:', err.message));
 });
 
@@ -333,4 +559,15 @@ console.log(`  WebSocket Port      : ${SACN_PORT}`);
 console.log(`  Priority Threshold  : ≥${HIGH_PRIORITY}`);
 console.log(`  Lockout Duration    : ${LOCKOUT_MS / 1000}s`);
 console.log(`  Source Stale        : ${sacnOpts.sourceStaleMs}ms`);
+console.log(`  Pinned Scene        : ${pinnedScene} (--scene)`);
+console.log(`  Engine Poll         : http://127.0.0.1:${ENGINE_PORT}/status every ${ENGINE_POLL_MS}ms`);
 console.log('═'.repeat(56));
+
+// ── Boot the relay route table ──────────────────────────────────────────
+// Runs LAST so `wss` / `broadcastLog` exist for the transition broadcasts.
+// Initial set = the CLI pin's routes; the engine poll and client scene tags
+// join the union as they arrive.
+recomputeRoutes('boot');
+pollEngineStatus();
+const _enginePollTimer = setInterval(pollEngineStatus, ENGINE_POLL_MS);
+if (_enginePollTimer.unref) _enginePollTimer.unref();

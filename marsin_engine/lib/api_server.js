@@ -4628,6 +4628,18 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           active: performanceMode.active,
           enteredAt: performanceMode.enteredAt,
         },
+        // OUTPUT ROUTING introspection (2026-07-24 flicker root cause): the
+        // per-controller routes this engine delivers ITSELF (declared in
+        // config.yaml `controllers:`). The sim's sACN bridge polls this and
+        // suppresses its own hardware relay for every (universe → host) pair
+        // listed here — otherwise the controller receives the same universe
+        // from two sACN sources (engine-direct + bridge relay of the
+        // engine's alsoFlat loopback stream) and the lights flicker.
+        // Shape: { controllers: [{ name, host, protocol, alsoFlat,
+        // universes: [..] }] } — null only if the dispatch is absent.
+        outputRouting: (engineCore.sacnOut && engineCore.sacnOut._routing)
+          ? { controllers: engineCore.sacnOut._routing.routes }
+          : null,
       }));
     } else if (req.method === 'GET' && req.url === '/exports') {
       // Legacy endpoint, return exports of base channel

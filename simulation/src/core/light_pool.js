@@ -466,9 +466,12 @@ function _collectLightRequests() {
         const dirLocal = new THREE.Vector3(0, 0, -1);
         const worldDir = dirLocal.transformDirection(fixture.group.matrixWorld).normalize();
 
-        // Read live color from bulb material (set by pattern engine each frame)
+        // Read live per-pixel color (set by the pattern engine each frame). The
+        // emitter meshes are now instanced, so the per-pixel color lives on
+        // p.color (the source of truth written by _writePixelColor), not a
+        // per-pixel material.
         const liveColor = getSafeLightColor(
-          p.bulbMat && p.bulbMat.color,
+          p.color,
           config.color
         );
 
@@ -490,7 +493,7 @@ function _collectLightRequests() {
 
       const firstPixel = fixture.pixels[0];
       const liveColor = getSafeLightColor(
-        firstPixel && firstPixel.bulbMat && firstPixel.bulbMat.color,
+        firstPixel && firstPixel.color,
         config.color
       );
 

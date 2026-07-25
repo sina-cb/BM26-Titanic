@@ -148,26 +148,72 @@ export function createOutputDispatch({
     bucket.get(decl.host).push(uid);
   }
 
-  const senders = []; // { send: fn(buffers), start, stop, universes:Set }
+  // Each sender is tagged with the transport that owns it so a universe that
+  // appears AFTER boot (hot-reload / re-patch) can be routed to the right
+  // sender — or a new one created — instead of being dropped. `host === null`
+  // marks the single flat-destinations sACN default sender; per-controller
+  // senders match on host + protocol.
+  const senders = []; // { out, universes:Set, host, protocol }
+  let _started = false;
 
   // Default flat-destinations sACN sender (covers every undeclared universe).
   if (sacnDefaultUniverses.length > 0) {
     const out = createSacnOutput({
       universes: sacnDefaultUniverses, priority, sourceName, destinations,
     });
-    senders.push({ out, universes: new Set(sacnDefaultUniverses) });
+    senders.push({ out, universes: new Set(sacnDefaultUniverses), host: null, protocol: PROTOCOL_SACN });
   }
   // Per-controller sACN unicast senders.
   for (const [host, uids] of sacnUnicastByHost) {
     const out = createSacnOutput({
       universes: uids, priority, sourceName, destinations: [host],
     });
-    senders.push({ out, universes: new Set(uids) });
+    senders.push({ out, universes: new Set(uids), host, protocol: PROTOCOL_SACN });
   }
   // Per-controller Art-Net senders.
   for (const [host, uids] of artnetByHost) {
     const out = createArtnetOutput({ universes: uids, destinations: [host], port: artnetPort });
-    senders.push({ out, universes: new Set(uids) });
+    senders.push({ out, universes: new Set(uids), host, protocol: PROTOCOL_ARTNET });
+  }
+
+  // Find the sender for a given transport target. Flat default = host null.
+  function findSender(host, protocol) {
+    return senders.find(s => s.host === host && s.protocol === protocol);
+  }
+
+  // Get (creating if absent) the flat-destinations sACN default sender.
+  function ensureFlatSender() {
+    let flat = findSender(null, PROTOCOL_SACN);
+    if (flat) return flat;
+    const out = createSacnOutput({ universes: [], priority, sourceName, destinations });
+    if (_started) out.start();
+    flat = { out, universes: new Set(), host: null, protocol: PROTOCOL_SACN };
+    senders.push(flat);
+    return flat;
+  }
+
+  // Get (creating if absent) the sender for a declared controller's transport.
+  // This is what makes a controller declared in config.yaml but not patched at
+  // boot come alive when its universe is patched later — no restart needed.
+  function ensureControllerSender(host, protocol) {
+    let sender = findSender(host, protocol);
+    if (sender) return sender;
+    const out = protocol === PROTOCOL_ARTNET
+      ? createArtnetOutput({ universes: [], destinations: [host], port: artnetPort })
+      : createSacnOutput({ universes: [], priority, sourceName, destinations: [host] });
+    if (_started) out.start();
+    sender = { out, universes: new Set(), host, protocol };
+    senders.push(sender);
+    return sender;
+  }
+
+  // Route universe `id` to `sender` (idempotent). `isFlat` keeps the
+  // introspection array (`_routing.flatUniverses`) in step with the flat sender.
+  function routeInto(sender, id, isFlat) {
+    if (sender.universes.has(id)) return;
+    sender.out.addUniverse(id);
+    sender.universes.add(id);
+    if (isFlat && !sacnDefaultUniverses.includes(id)) sacnDefaultUniverses.push(id);
   }
 
   let _frameCount = 0;
@@ -190,27 +236,30 @@ export function createOutputDispatch({
     _frameCount++;
   }
 
+  // Add a universe to the output at runtime (hot-reload / re-patch). The
+  // universe may be brand-new to this dispatch — including one whose controller
+  // was declared in config.yaml but had NO universe patched at boot, so its
+  // sender was never built. Such a universe MUST still reach its controller
+  // without an engine restart (codex P0: no dark hardware after a live patch).
   function addUniverse(uid) {
     const id = parseInt(uid, 10);
     const decl = byUniverse.get(id);
-    // A newly-appearing universe with no declaration joins the default sACN
-    // sender (creating it if the rig had none). Declared universes are
-    // already owned by their sender at construction.
-    if (decl) {
-      for (const s of senders) {
-        if (s.universes.has(id)) return;
-      }
-      return; // declared but its sender was pruned (no universes) — nothing to do
+    if (!decl) {
+      // Undeclared → flat-destinations sACN default (legacy contract).
+      routeInto(ensureFlatSender(), id, true);
+      return;
     }
-    for (const s of senders) {
-      if (s.universes.has(id)) return;
-    }
-    const out = createSacnOutput({ universes: [id], priority, sourceName, destinations });
-    out.start();
-    senders.push({ out, universes: new Set([id]) });
+    // Declared → its controller's transport. Reuse the controller's existing
+    // sender when it already had a boot-time universe; otherwise create it now
+    // (the declared-but-unpatched-at-boot case — the playa re-patch fix).
+    routeInto(ensureControllerSender(decl.host, decl.protocol), id, false);
+    // alsoFlat dual-send: the universe ALSO joins the flat destinations so the
+    // sim bridge stays in parity with the hardware.
+    if (decl.alsoFlat) routeInto(ensureFlatSender(), id, true);
   }
 
   function start() {
+    _started = true;
     _frameCount = 0;
     for (const s of senders) s.out.start();
     const sacnCount = sacnDefaultUniverses.length +
@@ -232,9 +281,12 @@ export function createOutputDispatch({
     // Exposed for tests/introspection. `flatUniverses` is every universe the
     // flat-destinations sACN sender carries — undeclared universes plus any
     // declared universe whose controller opted into `alsoFlat` (dual-send).
+    // Getters, not snapshots: `addUniverse` can add senders and grow the flat
+    // set at runtime, and introspection must reflect the live state.
     _routing: {
-      byUniverse, routes, senderCount: senders.length,
-      flatUniverses: [...sacnDefaultUniverses],
+      byUniverse, routes,
+      get senderCount() { return senders.length; },
+      get flatUniverses() { return [...sacnDefaultUniverses]; },
     },
   };
 }

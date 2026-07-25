@@ -24,7 +24,7 @@ import { saveModelJS as exportModelJS } from "../dmx/pixelblaze_model_exporter.j
 import { GUI } from "./gui_engine.js";
 import { setupControlDrawer } from "./control_drawer.js";
 import { rebuildParLights, rebuildDmxFixtures } from "../core/fixtures.js";
-import { deselectAllFixtures, nextFixtureName } from "../core/interaction.js";
+import { deselectAllFixtures, nextFixtureName, syncGuiFolders } from "../core/interaction.js";
 import { listTypes, getDefinition } from "../dmx/fixture_definition_registry.js";
 import { clearMetadata, gatherAllConfigs } from "../dmx/auto_patcher.js";
 import { getProfileDef, getProfileRebuildKey } from "../core/profile_registry.js";
@@ -35,6 +35,7 @@ import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
 import { groupKeyForStrand } from "../dmx/led/led_metadata.js";
+import { buildTeSign } from "../fixtures/te_sign_generator.js";
 import { updateFloodLights } from "../core/flood_lights.js";
 import { engineHttpUrl } from "../core/engine_endpoint.js";
 import { saveHttpUrl } from "../core/save_endpoint.js";
@@ -546,16 +547,15 @@ function setupGUI() {
     
     if (window.parFixtures) {
       window.parFixtures.forEach(f => {
-        if (f && f.pixels) {
-          f.pixels.forEach(p => {
-            if (p.beam && p.beam.material) {
-              p.beam.material.transparent = isTransparent;
-              p.beam.material.opacity = isTransparent ? opacity : 1.0;
-              p.beam.material.depthWrite = !isTransparent;
-              p.beam.material.blending = isTransparent ? THREE.AdditiveBlending : THREE.NormalBlending;
-              p.beam.material.needsUpdate = true;
-            }
-          });
+        // Cones are now one InstancedMesh per fixture — style its single shared
+        // material once (was per-pixel p.beam.material before instancing).
+        const coneMat = f && f.coneInst && f.coneInst.material;
+        if (coneMat) {
+          coneMat.transparent = isTransparent;
+          coneMat.opacity = isTransparent ? opacity : 1.0;
+          coneMat.depthWrite = !isTransparent;
+          coneMat.blending = isTransparent ? THREE.AdditiveBlending : THREE.NormalBlending;
+          coneMat.needsUpdate = true;
         }
       });
     }
@@ -1320,6 +1320,33 @@ function setupGUI() {
     toolbarDiv.appendChild(selectBtn);
     toolbarDiv.appendChild(clearBtn);
     parListFolder.domElement.querySelector('.children').prepend(toolbarDiv);
+
+    // ─── TE Sign generator ───
+    // Instantiates the TE Sign as its two coplanar halves (Side A + Side B) in
+    // ONE group ('TE Sign'), both at the identical default pose — the pair moves
+    // as one rigid unit (see te_sign_generator.js HARD INVARIANT). Grouping
+    // parity: the two halves land in one group, so they list, select, and
+    // derive a view bit together exactly like a DMX group.
+    const teSignRow = document.createElement('div');
+    teSignRow.style.cssText = 'display:flex;gap:2px;padding:0 8px 4px;';
+    const teSignBtn = document.createElement('button');
+    teSignBtn.textContent = '✨ + TE Sign (A+B)';
+    teSignBtn.style.cssText = btnStyle;
+    teSignBtn.onmouseenter = () => teSignBtn.style.background = 'var(--control-bg-hover)';
+    teSignBtn.onmouseleave = () => teSignBtn.style.background = 'var(--control-bg)';
+    teSignBtn.onclick = () => {
+      pushUndo();
+      const [sideA, sideB] = buildTeSign();
+      params.parLights.push(sideA, sideB);
+      if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+      renderParGUI();
+      rebuildParLights();
+      if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+      debounceAutoSave();
+      _showAutoToast('✨ Added TE Sign (Side A + Side B) — group "TE Sign"');
+    };
+    teSignRow.appendChild(teSignBtn);
+    parListFolder.domElement.querySelector('.children').prepend(teSignRow);
 
     function renderParGUI() {
       // Remember which groups were open before rebuild

@@ -32,6 +32,16 @@ const _simPorts = loadSimPorts(path.join(__dirname, '..', 'config.yaml'));
 const port = _simPorts.sacn_output_port;
 const udpPort = _simPorts.sacn_udp_port;
 
+// ── Realtime priority (self-elevation) ──────────────────────────────────
+// This bridge sends every DMX frame out to the real controllers; a starved
+// sender freezes the rig. Elevate above Chrome's NORMAL class. Default HIGH;
+// the launcher can pass BM26_BRIDGE_PRIORITY. Reads the achieved class back and
+// logs [BridgePriority] — an un-elevated bridge is never silent.
+const processPriority = require('../../tools/process_priority.cjs');
+processPriority.elevateSelf(
+  processPriority.normalizePriorityRequest(process.env.BM26_BRIDGE_PRIORITY, { fallback: 'high' }) || 'high',
+  { label: 'BridgePriority', logger: (m) => console.log(`[sacn_output_bridge] ${m}`) });
+
 const STALE_SENDER_MS = 15000; // Close senders after 15s of no data
 const SOURCE_NAME = 'BM26-Simulation';
 const ERROR_LOG_INTERVAL_MS = 30000; // Re-log a still-failing sender at most this often

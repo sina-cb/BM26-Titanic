@@ -1245,11 +1245,27 @@ export async function fetchViewSelectionOptions(): Promise<ApiResult<{
   // strip's view-selection picker renders these in a dedicated
   // "VIEW MASKS" section, alongside ALL and GROUPS.
   viewMasks: { name: string; bit: number; inUse: boolean }[];
+  // The FULL Tier-A named-view catalog the engine's MaskRegistry interns:
+  // base groups (kind:'group'), composites (kind:'composite'), and every
+  // derived auto-view (kind:'pixelSet' — PORT/STARBOARD, WALLS/DECKS/CHIMNEYS,
+  // @PAR/@BAR/…, BAND_*, `_BOTH` pairs, CTRL_<n>). `bit` is the in-VM viewMask
+  // bit (0 for bit-less Tier-A views); `memberCount` is the live pixel count.
+  // Consumed by the shared ViewSelectionPicker (report 20260724_8). Optional
+  // in the type so a stale engine that omits it is detectable — the picker
+  // fails LOUD (visible banner) rather than silently hiding the catalog.
+  namedViews?: { name: string; kind: string; bit: number; memberCount: number }[];
   pixelCount: number;
 }>> {
   try {
     const res = await fetchWithTimeout(`${api_base}/model/view-selection-options`);
+    // Codex P0 — fail loud: a non-2xx or non-object body must not be fed to
+    // the picker as if it were a valid enumeration (the old `return {ok:true,
+    // data}` would have handed an `{error:...}` payload straight through).
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
     const data = await res.json();
+    if (!data || typeof data !== 'object') {
+      return { ok: false, error: 'Malformed /model/view-selection-options response' };
+    }
     return { ok: true, data };
   } catch (err: any) {
     return { ok: false, error: err.message };
