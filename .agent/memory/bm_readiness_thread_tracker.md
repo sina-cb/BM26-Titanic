@@ -17,32 +17,50 @@ their report link. Reports live in `.agent/reports/202607/20260724_N_*.md`.
 
 ## In flight (as of 2026-07-24)
 
-1. **Commit snapshot agent** (Opus, deployment role) — operator
-   authorized commit on feat/bm_readiness ("commit so it's safe so
-   far"). Checklist: fresh titanic model re-export (TE Sign present,
-   1141 px), residue exclusions, security gate, 1–3 logical commits,
-   NO push. → `20260724_21`.
+**LED feedback round 2 (operator tested, "chef's kiss" overall):**
+**OPERATOR IS OFFLINE (announced ~this update). Autonomy mode within
+the law; document all judgment calls; nothing pushed; commits were
+explicitly ordered.**
 
-**LED Fixtures wave (operator-ordered, Opus implementers) — QUEUED,
-launches AFTER the commit lands** (safe baseline first):
-1. TE sign renders a BLACK BACKGROUND causing visual conflicts in the
-   vis — remove/fix (operator screenshot referenced; reproduce via
-   renders).
-2. Rename Lighting Profile menu "LED strands" → **"LED Fixtures"**;
-   TE sign must live there (TE Sign = LED type, standing ruling).
-3. LED fixtures get FULL DMX-fixture-like grouping in the UI.
-4. Group LOCK button: fixtures in a group lock relative to each other
-   so the whole group moves as one.
-5. LED generator: TE-sign generator adds both fixtures together and
-   allows relative movement as previously designed.
-Constraints (operator, verbatim intent): LED models MUST follow the
-TE Sign V3 model YAMLs (te_sign_v3/model_a_120.yaml + model_b_102.yaml,
-dots byte-identical, A≡B transform invariant); **each SIDE is ONE
-single continuous strand, mapped on its OWN LED controller — A and B
-independent at transport/mapping level** (corrected from earlier "one
-big strand for whole sign"); operator will send a pixel-ORDER update
-to the models soon — design so a model order update drops in cleanly.
-Aesthetic bar: "a beautiful TE sign as a LED fixture."
+1. **Commit #2** (Opus, deployment) — operator: "but first commit now,
+   and then start". Checklist: gui_builder.js integrity check (S2
+   agent was CANCELLED by the operator interrupt mid-flight — possible
+   partial edit; hand-repair minimally, NEVER git-revert the file);
+   NUL sentinel fix (safe now, no other writer); RE-EXPORT titanic
+   engine model (strand removals invalidated `_21` export; expect
+   <1141 px, TE Sign 74 still present); residue exclusions per `_21`;
+   security gate; 1–3 commits, NO push. → `20260724_31`. IN FLIGHT.
+2. **Station-mapping implementation wave QUEUED behind Commit #2**
+   (design `_32` LANDED — see Landed). Plan `S0 ∥ S1 → S2 → S3 → S4`:
+   S0 = reconcile "_30": **KEY FINDING — the cancelled S2/S3 generator
+   UI code is FULLY PRESENT AND WIRED in the tree** (✨ Generators,
+   LED Fixture Instances, ordering, second-sign modal; tests green);
+   only report `_30` + live proof missing → S0 runs
+   `led_generator_verify.cjs` and writes `_30`. S1 = new pure
+   `simulation/src/dmx/trace_chains.js` (startAngle/splits chainPlan)
+   + tests. S2 = gui_builder + config.js wiring (single-owner).
+   S3 = scene restructure through the LIVE app UI (autosave on,
+   ~/tmp backup, never restart). S4 = engine model re-export + pixel
+   census + campaign report. Reports: S0→`_30`, S1..S4→`_33+`.
+3. **Follow-up flag from `_27` (unconfirmed, task chip spawned):** the
+   global instanced-dot flush reads raw entry color for patched DMX
+   pixels too — a DMX group's OFF master may leave parallel un-gated
+   dot residue. Not user-reported; worth a check.
+**Design `_26` LANDED** (see Landed). Operator decision points from it:
+(D1) stateless generator buttons (RECOMMENDED, designed) vs persistent
+trace-style cards with Regenerate; (D2) second sign click: confirm +
+`TE Sign 2` (designed) vs hard-block (only one physical sign exists);
+(D3) cosmetic rename DMX "Light Instances" → "DMX Fixture Instances";
+(D4) sign groups pinned top (designed) vs bottom; (D5) glyph ✨ vs 📐.
+Proceeding on designed defaults unless operator objects.
+Scene change (operator): several LED strands REMOVED as unneeded —
+agents must re-read live state, never restore them. **Pre-commit
+consequence: titanic engine model needs RE-EXPORT again** (strand
+removal changed the pixel map after the _21 export).
+Standing constraints: TE Sign V3 YAMLs canonical/read-only; each side
+one strand on its own controller; pixel-ORDER model update INCOMING.
+Held: punch (g) doubled strands.
+
 
 **Observation #11 RESOLVED by machine reboot:** whole-machine/all-
 Chrome flicker was accumulated Chrome-GPU-process/driver state —
@@ -169,6 +187,142 @@ Phase 1 fix still on the table (decision #12).
   pre-session — restarted by agent. Ops rule codified in
   `os/multi_agent.md` §9: agents close every sim page they open.
 
+- **Titanic station mapping design `20260724_32` (Fable, DESIGN ONLY):
+  LANDED** — target: 64 pars / 16 groups / 8 strands unchanged / 1
+  custom view. 4 wall stations = existing wall traces renamed
+  (Left/Right Front/Back Wall, 5× ShehdsBar each); 4 top-deck vintage
+  stations renamed + 8 NEW top-deck pars in 2 side groups of 4
+  (REPLACING 7-count Center Auditorium par groups; reading "16 vintage
+  + 8 pars" flagged as D3); smokestacks: per stack 2 chains × 4 pars,
+  index 1 nearest start, CCW/CW fan ±22.5° for even 360°; umbrella
+  "all together" = custom VIEW `Smokestacks` (groups don't nest; NOT a
+  power master — flagged); TE Sign 2 starboard via ✨ generator flow
+  (U10–13 proposed, patching deferred to bench). NEW FEATURE: circle
+  trace params `startAngle`+`splits` (+splitLayout) with pure
+  `trace_chains.js`; `splits:1` byte-identical to today. CLEANUP: 12
+  orphan duplicate fixtures found (trace-RENAME ORPHANING BUG at
+  gui_builder.js ~L3743) — design says delete; all patches currently
+  EMPTY = cheap window for renames. 14 offline defaults in §8; 7 open
+  questions for operator in §9 (headliner: 4+4-per-station vs
+  16v+8p reading — changes fixture counts).
+- **LED blackout semantics `20260724_27`: LANDED (absorbs punch (f))**
+  — root cause: each LED strand pixel has FOUR consumers; `_24` gated
+  only the per-strand meshes, while the global V2 instanced-dot flush
+  (`_pixelInstancedMesh` in animate.js — the visible residue dots),
+  the 2D pixel map tap, and the sACN output map all read the raw
+  `_batchRenderList` entry color ungated. Punch (f) same bug: Master
+  Enabled OFF only hid the THREE group. Keying trap: live scene now
+  has 8 strands ALL Ungrouped; exporter tags pixels by strand name but
+  the master keys on the 'Ungrouped' display bucket — an entry.group
+  gate would have silently no-op'd; fixed with runtime-only
+  `entry.displayGroup` field. Fix: ONE authority `ledOutputScale()` in
+  group_lock.js (master OFF⇒0, group OFF⇒0, else brightness) applied
+  by `_applyLedOutputGate()` in animate.js after all color sources,
+  before sACN out + dot flush + 2D tap, plus exporter/static-preview
+  scaling. Proof live: GROUP OFF and MASTER OFF ⇒ entry/2dDecode/bulb/
+  halo ALL exactly 0 (ON baseline 1.9961); remaining glow = DMX
+  generators, correctly ungoverned. 484/484 tests. Verify tool:
+  `agent_tools/led_blackout_verify.cjs`. No gui_builder edits.
+- **LED drawer flatten + rename `20260724_28`: LANDED** — Sign
+  Fixtures / LED Strands subfolders removed; TE Sign group + strand
+  groups + toolbar render as ONE flat list under 🔌 LED Fixtures;
+  `window._ledFixtureInstancesFolder` = the section folder; par/strand
+  renderers share the parent but tear down only their own folders
+  (strand edit can no longer destroy TE Sign folders). REAL rename bug
+  fixed: strand rename orphaned `ledGroupOverrides` (lock+brightness)
+  — now carried old→new; fail-loud collision guard (empty/reserved/
+  duplicate) on strand Rename, Add Group, Move→New, and TE Sign
+  rename. 483/483 tests; 15/15 isolated live DOM checks (autosave
+  aborted, operator scene untouched); 3 captures inspected.
+- **LED generator S1 catalog `20260724_29`: LANDED (new files only)**
+  — `led_generator_catalog.js`: pure fail-loud catalog, sole entry TE
+  Sign (target parLights, bornLocked, build→buildTeSign), load-time
+  validation; `uniqueGroupName` dodges target groups + trace names +
+  reserved Ungrouped; `runLedGenerator` enforces one-group output
+  contract. API for S2: LED_GENERATORS / LED_GENERATOR_TARGETS /
+  RESERVED_GROUP_NAME / getLedGenerator / uniqueGroupName /
+  runLedGenerator / assertGeneratorFixtures (+ per-entry
+  `defaultGroup`). 23 new tests; suite 478/478.
+- **LED generator workflow design `20260724_26` (Fable, DESIGN ONLY):
+  LANDED** — mirrors the DMX split: `✨ Generators` folder under LED
+  Fixtures driven by a pure catalog module (`led_generator_catalog.js`,
+  sole entry TE Sign); flat list titled **"LED Fixture Instances"** as
+  a VIEW not a data store (data stays in params.parLights — patching/
+  select/master/rename/lock/A≡B unchanged); generator STATELESS
+  (option A, no new YAML keys; the locked group is the editing
+  surface); second-click guard: confirm + unique `TE Sign 2` group
+  (prevents silent 4-halves fusion); future-generator seam = catalog
+  `target` dispatch. ZERO scene migration. Slices S1 (catalog, new
+  files) / S2 (gui_builder, after flatten+rename) / S3 (live verify
+  tool). Incidental: `\0` in gui_builder.js is the intentional
+  `' ungroup'` Move…-dropdown sentinel, not corruption.
+- **LED-C group lock + generator + real LED master `20260724_24`:
+  LANDED** — new pure module `simulation/src/core/group_lock.js` (lock
+  predicate, member collection, TE-sign classifier, LED master RGB
+  scale; 13 unit tests). 🔒 on both group toolbars; `locked` flag in
+  `groupOverrides` (par) / new `ledGroupOverrides` (strand), persists
+  via save/load. Rigid moves: par groups via gizmo differential
+  (`interaction.js computeRigidMoveIndices`) AND numeric inputs;
+  strand groups via numeric Start/End. TE Sign rigid moves route
+  through `applyTeSignPlacement()` in BOTH paths — A≡B unbreakable.
+  Generator `✨ + TE Sign (A+B)` births groups locked. REAL LED group
+  master: brightness/On-Off scales the direct-paint path
+  (exporter apply closure → `scaleRgbForGroup`, live per frame) +
+  static preview; blackout unbeatable. Live verify ALL PASS
+  (`agent_tools/group_lock_verify.cjs`, `.agent_renders/glock_*`);
+  455/455 tests (442+13). OPERATOR NOTES: existing scene TE Sign group
+  loads UNLOCKED until 🔒 pressed + saved (no `locked` in old YAML;
+  regenerated signs are born locked); don't name a strand group
+  literally "Ungrouped"; strand gizmo handle-drag writeback is a
+  pre-existing unwired path, untouched (strand rigid moves are
+  numeric-input driven).
+- **LED-B "LED Fixtures" rename + grouping parity `20260724_23`:
+  LANDED (absorbs punch (e)+(h))** — section renamed `🔌 LED Lights` →
+  `🔌 LED Fixtures` (titanic + test_bench scene_config + new-scene
+  template in save-server.js); TE Sign STAYS in `params.parLights`
+  (patching/groups/`TE Sign (2)`/A≡B byte-untouched) but UI-homed under
+  LED Fixtures → 🪧 Sign Fixtures via `bus: led` classification in
+  renderParGUI. LED strands got DMX-style group folders: Select All,
+  visibility, Rename (carries view-mask bit), +Strand, Ungroup, ➕Add
+  Group, per-strand →Move…; TE Sign full parity incl. group master via
+  groupOverrides. DMX Fixtures regression-guarded (14 groups, no TE
+  Sign). 442/442 tests; drawer capture `.agent_renders/
+  led_fixtures_drawer.png`. Extension points for LED-C documented in
+  report §. LED-strand group master OUTPUT effect deliberately deferred
+  to LED-C (would've been a fake control — strands direct-paint).
+- **LED-A TE sign black background `20260724_22`: LANDED** — root
+  cause: TE Sign V3 YAMLs declare `shell: {type: box, color: #0a0a0a}`
+  and `dmx_fixture_runtime.js` drew it as an opaque unlit black box
+  (shell = physical fixture body, right for pars, wrong for a luminous
+  sign; other LED fixtures carry no body). Fix: shell construction
+  gated on `!this._isLed` — LED-bus fixtures build NO body mesh; DMX
+  untouched; model YAMLs untouched (robust to pixel-order regen);
+  A≡B/patch/groups/instancing unchanged. Artifact was 3D-only (2D
+  clean). Before/after renders in .agent_renders/ (1784943103/334
+  led-grids etc.); 442/442 tests. All render browsers closed.
+- **beforeunload removal `20260724_25`: LANDED** — sole active handler
+  was `gui_builder.js` ~:480 (unsaved-changes net for :6970 save flow):
+  kept the on-unload `sendBeacon` save flush, deleted only
+  preventDefault/returnValue. **Safety net gone by operator order** —
+  remaining protection: beacon flush + `● UNSAVED CHANGES` chip +
+  Recover-scene backups. Live-verified: reload + navigate-away → zero
+  dialogs, beacon still fires; 442/442 tests. Surgical one-hunk edit;
+  gui_builder.js overlap with LED-B noted (handler block only).
+- **Commit snapshot `20260724_21`: COMMITTED on feat/bm_readiness (NOT
+  pushed)** — `d631c5c6` product code (78 files, incl. fresh titanic
+  model re-export: 1147→1141 px, 74 TE Sign entries present, TE LED
+  Grid 80→0, viewmasks groupBit updated; export via readonly puppeteer
+  tab + saveModelJS, live show untouched) + `22d57138` Agent OS docs
+  (30 files, reports _0.._20 + laws + tracker). Security gate PASS —
+  first run FAILED with 24 show-LAN IP findings in today's reports;
+  redacted to 10.x.x.NNN per security_privacy.md, re-ran, PASS. No
+  bypass. Exclusions left uncommitted: marsin_engine/states/** runtime,
+  test_bench model timestamp churn, common.yaml lightingProfile flip,
+  test_bench scene_config preview values, CRLF-only files, a
+  pre-existing 0-byte junk file. **Operator eye: common.yaml
+  lightingProfile 2d_pixels→full + test_bench masterExposure/
+  maxSpotlights judged session churn and excluded — still in working
+  tree if actually intended.**
 - **Cold review A `20260724_17`: diagnosis complete, AGREES with `_15`,
   CONVERGES with B** — H1 (high confidence): in `sacn_in` mode the sim
   tab is a prio-150 sACN hardware writer inside Chrome's rAF loop

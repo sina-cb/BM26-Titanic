@@ -16,3 +16,7 @@ Protocol (format, rules, when to write): [`../os/memory.md`](../os/memory.md).
 - [operator-uses-launcher](operator_uses_launcher.md) — Sina always starts
   the system via repo-root `launcher.js`; give launcher commands, never
   per-component start instructions.
+- [sim-perf-per-object-explosion](sim_perf_per_object_explosion.md) —
+  WebGPU perf dies by scene-graph object count: per-pixel meshes must be
+  InstancedMesh; one color-write path = vivid, consistent LEDs; measure
+  FPS with a fresh browser.
