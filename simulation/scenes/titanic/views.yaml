@@ -18,14 +18,9 @@ views:
     Right_Back_Right: 32768
     Right_Front_Right: 65536
     Right_Front_Left: 131072
-    Small_Left_4: 262144
-    Small_Left_3: 524288
-    Small_Left_2: 1048576
-    Small_Left_1: 2097152
-    Small_Right_4: 4194304
-    Small_Right_3: 8388608
-    Small_Right_2: 16777216
-    Small_Right_1: 33554432
     Right Back Deck Generator: 67108864
     Left Back Deck Generator: 134217728
+    Left Center Auditorium: 262144
+    Left Back Wall: 524288
+    TE Sign: 1048576
   custom: []
