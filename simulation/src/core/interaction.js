@@ -10,6 +10,8 @@ import {
 } from "./state.js";
 import { pushUndo, undo, redo } from "./undo.js";
 import { rebuildParLights } from "./fixtures.js";
+import { isGroupLocked, parGroupMemberIndices, isTeSignConfigs } from "./group_lock.js";
+import { applyTeSignPlacement } from "../fixtures/te_sign_generator.js";
 import { cyclePanelVisibility } from "../gui/panel_visibility.js";
 import { toggleControlDrawer } from "../gui/control_drawer.js";
 import { toggleHelpPanel, hideHelpPanel, isHelpPanelOpen } from "../gui/help_panel.js";
@@ -195,6 +197,26 @@ export function syncGuiFolders() {
   });
 }
 
+// ─── Group-lock rigid-move set ───────────────────────────────────────────
+// The par-fixture indices that must move rigidly with `dragIdx`: every
+// currently-selected fixture, PLUS — when the dragged fixture's group is LOCKED
+// — every member of that group. So moving any single member of a locked group
+// (even the only selected one) drags the WHOLE group as one rigid body, while an
+// unlocked drag stays exactly the classic multi-select behavior. Always includes
+// dragIdx. Exported so main.js captures start state for the same set on drag begin.
+export function computeRigidMoveIndices(dragIdx) {
+  const set = new Set(selectedFixtureIndices);
+  if (Number.isInteger(dragIdx)) {
+    set.add(dragIdx);
+    const cfg = params.parLights[dragIdx];
+    const group = cfg ? (cfg.group || 'Default') : null;
+    if (group && isGroupLocked(params.groupOverrides, group)) {
+      for (const i of parGroupMemberIndices(params.parLights, group)) set.add(i);
+    }
+  }
+  return [...set];
+}
+
 // ─── Transform Change Handler ────────────────────────────────────────────
 export function onTransformChange() {
   const obj = transformControl.object;
@@ -219,10 +241,12 @@ export function onTransformChange() {
   fixture.writeTransformToConfig();
   fixture.updateVisualsFromHitbox();
 
-  // Apply differential transform to all other selected fixtures
-  if (dragStartState && dragStartState.dragIdx === dragIdx && selectedFixtureIndices.size > 1) {
+  // Apply the differential transform to the whole rigid-move set (multi-select
+  // AND locked-group siblings — captured on drag begin in main.js).
+  if (dragStartState && dragStartState.dragIdx === dragIdx) {
     const startDrag = dragStartState.fixtures[dragIdx];
-    if (startDrag) {
+    const moveIndices = dragStartState.indices || [];
+    if (startDrag && moveIndices.length > 1) {
       const dx = fixture.hitbox.position.x - startDrag.x;
       const dy = fixture.hitbox.position.y - startDrag.y;
       const dz = fixture.hitbox.position.z - startDrag.z;
@@ -231,7 +255,7 @@ export function onTransformChange() {
       const startQuatInv = startDrag.quat.clone().invert();
       const deltaQuat = new THREE.Quaternion().multiplyQuaternions(currentQuat, startQuatInv);
 
-      for (const idx of selectedFixtureIndices) {
+      for (const idx of moveIndices) {
         if (idx === dragIdx) continue;
         const startOther = dragStartState.fixtures[idx];
         const otherFixture = window.parFixtures[idx];
@@ -248,6 +272,24 @@ export function onTransformChange() {
 
         otherFixture.writeTransformToConfig();
         otherFixture.updateVisualsFromHitbox();
+      }
+
+      // TE Sign A ≡ B guard: when the whole moved set is TE-sign halves (the
+      // locked TE Sign group), route the placement through the generator so both
+      // halves carry ONE bit-identical transform — never per-fixture edits that
+      // could drift the seam. Copies the LEAD's just-written transform into both.
+      const movedConfigs = moveIndices.map((i) => params.parLights[i]);
+      if (isTeSignConfigs(movedConfigs)) {
+        const lead = params.parLights[dragIdx];
+        applyTeSignPlacement(movedConfigs, {
+          x: lead.x, y: lead.y, z: lead.z,
+          rotX: lead.rotX, rotY: lead.rotY, rotZ: lead.rotZ,
+          scaleX: lead.scaleX ?? 1, scaleY: lead.scaleY ?? 1, scaleZ: lead.scaleZ ?? 1,
+        });
+        for (const idx of moveIndices) {
+          const f = window.parFixtures[idx];
+          if (f) f.syncFromConfig();
+        }
       }
     }
   }

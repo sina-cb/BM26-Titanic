@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { params } from '../core/state.js';
 import { scaleSimulationPreviewRgb, mixRgbwauToRgb } from "../core/sim_preview.js";
+import { ledDisplayGroup, scaleRgbForLedOutput } from "../core/group_lock.js";
 
 // ── Shared, never-disposed module geometry ───────────────────────────────
 // Endpoint handles: small draggable spheres (was 0.3 — ~6× the bulb radius,
@@ -111,7 +112,16 @@ export class LedStrand {
     const dir = end.clone().sub(start);
     const length = dir.length();
     const color = this.config.color || '#ff8800';
-    const colorObj = new THREE.Color(color);
+    // Static-preview color scaled by the GLOBAL master (params.strandsEnabled) +
+    // this strand's group master (On/Off + Brightness) so an OFF master/group
+    // dims/blacks the pixels even when no pattern is painting — the same override
+    // the direct-paint path applies live. Either OFF ⇒ black. One source of
+    // truth (scaleRgbForLedOutput → ledOutputScale) across every LED path.
+    const baseColor = new THREE.Color(color);
+    const [gr, gg, gb] = scaleRgbForLedOutput(
+      params.strandsEnabled, params.ledGroupOverrides, ledDisplayGroup(this.config),
+      baseColor.r, baseColor.g, baseColor.b);
+    const colorObj = new THREE.Color(gr, gg, gb);
 
     // ─── Thin wire between endpoints (guide — hidden in the beauty render) ───
     if (length > 0.01) {

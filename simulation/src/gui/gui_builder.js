@@ -34,8 +34,14 @@ import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
-import { groupKeyForStrand } from "../dmx/led/led_metadata.js";
-import { buildTeSign } from "../fixtures/te_sign_generator.js";
+import { applyTeSignPlacement } from "../fixtures/te_sign_generator.js";
+import {
+  isGroupLocked, parGroupMemberIndices, strandGroupMemberIndices, isTeSignConfigs,
+} from "../core/group_lock.js";
+import {
+  LED_GENERATORS, uniqueGroupName, runLedGenerator,
+} from "../fixtures/led_generator_catalog.js";
+import { showModal } from "./scene_manager.js";
 import { updateFloodLights } from "../core/flood_lights.js";
 import { engineHttpUrl } from "../core/engine_endpoint.js";
 import { saveHttpUrl } from "../core/save_endpoint.js";
@@ -43,6 +49,19 @@ import { saveHttpUrl } from "../core/save_endpoint.js";
 // NOTE: engineEnabled / lightingEnabled / lightingMode live in state.js.
 // Use the setters imported above to update them so animate.js sees changes.
 const OPTIONS_SPOTLIGHT_PREVIEW_KEYS = ["masterExposure", "maxSpotlights", "simBrightness", "simSurfaceReflectance"];
+
+// A fixture config is "LED-class" when its fixture-type definition rides the LED
+// bus (bus:'led' — Ango 4 pixel controller), e.g. the TE Sign V3 halves. These
+// stay in params.parLights (so their DMX patching / group / A≡B-transform
+// machinery is byte-for-byte unchanged) but are HOMED under the "LED Fixtures"
+// drawer section, per the operator ruling "TE Sign = LED type". DMX-bus fixtures
+// stay under "DMX Fixtures". A missing definition ⇒ treated as DMX (the registry
+// defaults bus to 'dmx'), so legacy scenes are unaffected.
+function isLedClassConfig(config) {
+  if (!config || !config.fixtureType) return false;
+  const def = getDefinition(config.fixtureType);
+  return !!def && def.bus === 'led';
+}
 
 // Shared compact "🔖 Metadata (V2)" panel for fixture editor cards.
 // Single source of truth — used by every fixture-rendering path (regular PARs,
@@ -477,12 +496,13 @@ function setupGUI() {
   }
   window.disarmUnloadGuard = disarmUnloadGuard;
 
-  window.addEventListener('beforeunload', (e) => {
-    if (!flushPendingSaveBeacon()) return;
-    // Still prompt: the beacon is fire-and-forget, the operator should
-    // get the chance to stay and save deliberately on an accidental close.
-    e.preventDefault();
-    e.returnValue = '';
+  // Flush the latest config on unload as a fire-and-forget sendBeacon, but
+  // NEVER raise the browser's blocking "Leave site?" confirmation — per
+  // operator order (2026-07-24) the sim must never gate leave/reload. The
+  // unsaved-changes safety net (the native confirm prompt) is intentionally
+  // gone; the sendBeacon flush + UNSAVED CHANGES chip are what remain.
+  window.addEventListener('beforeunload', () => {
+    flushPendingSaveBeacon();
   });
 
   function _showAutoToast(msg) {
@@ -1321,43 +1341,37 @@ function setupGUI() {
     toolbarDiv.appendChild(clearBtn);
     parListFolder.domElement.querySelector('.children').prepend(toolbarDiv);
 
-    // ─── TE Sign generator ───
-    // Instantiates the TE Sign as its two coplanar halves (Side A + Side B) in
-    // ONE group ('TE Sign'), both at the identical default pose — the pair moves
-    // as one rigid unit (see te_sign_generator.js HARD INVARIANT). Grouping
-    // parity: the two halves land in one group, so they list, select, and
-    // derive a view bit together exactly like a DMX group.
-    const teSignRow = document.createElement('div');
-    teSignRow.style.cssText = 'display:flex;gap:2px;padding:0 8px 4px;';
-    const teSignBtn = document.createElement('button');
-    teSignBtn.textContent = '✨ + TE Sign (A+B)';
-    teSignBtn.style.cssText = btnStyle;
-    teSignBtn.onmouseenter = () => teSignBtn.style.background = 'var(--control-bg-hover)';
-    teSignBtn.onmouseleave = () => teSignBtn.style.background = 'var(--control-bg)';
-    teSignBtn.onclick = () => {
-      pushUndo();
-      const [sideA, sideB] = buildTeSign();
-      params.parLights.push(sideA, sideB);
-      if (window._setGuiRebuilding) window._setGuiRebuilding(true);
-      renderParGUI();
-      rebuildParLights();
-      if (window._setGuiRebuilding) window._setGuiRebuilding(false);
-      debounceAutoSave();
-      _showAutoToast('✨ Added TE Sign (Side A + Side B) — group "TE Sign"');
-    };
-    teSignRow.appendChild(teSignBtn);
-    parListFolder.domElement.querySelector('.children').prepend(teSignRow);
+    // NOTE: the ✨ + TE Sign (A+B) generator button used to live here on the DMX
+    // "Light Instances" toolbar. It moved to the LED Fixtures section's
+    // ✨ Generators area (catalog-driven — buildLedStrandsSection), mirroring the
+    // DMX 📐 Group Generator split: generators live in their own area, and what
+    // they produce lands in the instances list. See report
+    // 20260724_30_led_generator_s2_s3.md and design 20260724_26.
 
     function renderParGUI() {
-      // Remember which groups were open before rebuild
+      // Remember which groups were open before rebuild — from BOTH homes, since
+      // LED-class groups (TE Sign) live under the "LED Fixtures" section folder.
       const openGroups = new Set();
       parListFolder.folders.forEach((f) => {
         if (!f._closed) openGroups.add(f._title);
       });
+      if (window._ledFixtureInstancesFolder) {
+        window._ledFixtureInstancesFolder.folders.forEach((f) => {
+          if (!f._closed) openGroups.add(f._title);
+        });
+      }
 
       const children = [...parListFolder.folders];
       children.forEach((f) => f.destroy());
       window.parGuiFolders = [];
+
+      // LED-class group folders live under window._ledFixtureInstancesFolder
+      // (the "LED Fixtures" section), NOT parListFolder — so the destroy() above
+      // does not reach them. Tear down the ones we made last pass before we
+      // rebuild, or the TE Sign group would duplicate on every render.
+      if (!window._parLedGroupFolders) window._parLedGroupFolders = [];
+      window._parLedGroupFolders.forEach((f) => f.destroy());
+      window._parLedGroupFolders = [];
 
       // ─── Patch tools ───
       // Patching is owned by the Controller Mapping panel (docs/33) —
@@ -1422,6 +1436,40 @@ function setupGUI() {
         }
       }
 
+      // Rigid numeric move for a LOCKED par group: a Position/Rotation edit on
+      // one member moves the WHOLE group by the same delta, preserving relative
+      // offsets. Returns true when the group is locked (caller then SKIPS the
+      // normal per-selection propagate, so the two never double-apply). The TE
+      // Sign group routes through applyTeSignPlacement so A ≡ B never drifts.
+      function applyLockedParNumericMove(sourceIndex, field, newVal, prevVal) {
+        const cfg = params.parLights[sourceIndex];
+        if (!cfg) return false;
+        const group = cfg.group || 'Default';
+        if (!isGroupLocked(params.groupOverrides, group)) return false;
+        const members = parGroupMemberIndices(params.parLights, group);
+        if (members.length <= 1) return true; // locked but alone — nothing to move
+        const memberConfigs = members.map((i) => params.parLights[i]);
+        if (isTeSignConfigs(memberConfigs)) {
+          applyTeSignPlacement(memberConfigs, {
+            x: cfg.x, y: cfg.y, z: cfg.z,
+            rotX: cfg.rotX, rotY: cfg.rotY, rotZ: cfg.rotZ,
+            scaleX: cfg.scaleX ?? 1, scaleY: cfg.scaleY ?? 1, scaleZ: cfg.scaleZ ?? 1,
+          });
+          members.forEach((i) => { if (window.syncLightFromConfig) window.syncLightFromConfig(i); });
+          return true;
+        }
+        const delta = newVal - prevVal;
+        if (delta !== 0) {
+          members.forEach((i) => {
+            if (i === sourceIndex) return;
+            const c = params.parLights[i];
+            c[field] = (c[field] || 0) + delta;
+            if (window.syncLightFromConfig) window.syncLightFromConfig(i);
+          });
+        }
+        return true;
+      }
+
       // Collect unique groups in order of appearance
       const groupOrder = [];
       const groupMap = new Map();
@@ -1439,7 +1487,20 @@ function setupGUI() {
 
       groupOrder.forEach((groupName) => {
         const items = groupMap.get(groupName) || [];
-        const groupFolder = parListFolder.addFolder(`${groupName} (${items.length})`);
+        // Route LED-class groups (every member rides the LED bus, e.g. the two
+        // TE Sign halves) into the "LED Fixtures" section; DMX-bus groups stay
+        // here. Everything below — per-fixture cards, group select, the group
+        // override, patch — is identical either way; only the parent folder
+        // differs, so patching / 'TE Sign' group / 'TE Sign (2)' select / the
+        // A≡B transform are untouched by the relocation. If the LED section is
+        // not built yet (the very first render runs during the DMX-section build,
+        // before the LED section exists) we fall back to this folder so the sign
+        // is never hidden; the LED section calls renderParGUI() again once ready.
+        const isLedClassGroup = items.length > 0 && items.every(({ config }) => isLedClassConfig(config));
+        const ledHome = window._ledFixtureInstancesFolder || null;
+        const targetFolder = (isLedClassGroup && ledHome) ? ledHome : parListFolder;
+        const groupFolder = targetFolder.addFolder(`${groupName} (${items.length})`);
+        if (targetFolder === ledHome) window._parLedGroupFolders.push(groupFolder);
 
         // Check if this is a trace-generated group (read-only)
         const isTraceGroup = items.some(({ config }) => config.traceGenerated);
@@ -1463,6 +1524,7 @@ function setupGUI() {
         const groupOv = params.groupOverrides[groupName];
         if (groupOv.enabled === undefined) groupOv.enabled = true;
         if (groupOv.brightness === undefined) groupOv.brightness = 100;
+        if (groupOv.locked === undefined) groupOv.locked = false;
         const resyncGroupMembers = () => {
           (groupMap.get(groupName) || []).forEach(({ index }) => {
             if (window.syncLightFromConfig) window.syncLightFromConfig(index);
@@ -1756,8 +1818,29 @@ function setupGUI() {
           document.activeElement?.blur?.();
         };
 
+        // 🔒 Group lock — tie every fixture in this group together so the whole
+        // group moves as ONE rigid body (transform gizmo or numeric Position/
+        // Rotation inputs). Preserves relative offsets; unlocked members move
+        // individually as before. The flag lives in groupOv (persisted with the
+        // scene). For the TE Sign group, rigid moves route through
+        // applyTeSignPlacement so the A ≡ B identical transform can never drift.
+        const lockBtn = document.createElement('button');
+        const paintLock = () => {
+          lockBtn.textContent = groupOv.locked ? '🔒 Locked' : '🔓 Lock';
+          lockBtn.style.cssText = gBtnStyle + (groupOv.locked ? 'color:var(--ok);' : 'color:var(--secondary);');
+        };
+        paintLock();
+        lockBtn.title = 'Lock this group so all its fixtures move together as one rigid body';
+        lockBtn.onclick = () => {
+          groupOv.locked = !groupOv.locked;
+          paintLock();
+          debounceAutoSave();
+          document.activeElement?.blur?.();
+        };
+
         row1.appendChild(selBtn);
         row1.appendChild(visBtn);
+        row1.appendChild(lockBtn);
 
         // Row 2: Rename | + Light | ✕ Delete
         const row2 = document.createElement('div');
@@ -1768,23 +1851,29 @@ function setupGUI() {
         renameBtn.style.cssText = gBtnStyle;
         renameBtn.onclick = () => {
           const newName = prompt('Rename group:', groupName);
-          if (newName && newName !== groupName) {
-            params.parLights.forEach((c) => {
-              if (c.group === groupName) c.group = newName;
-            });
-            // Carry the group master override across the rename (keyed by name).
-            if (params.groupOverrides && params.groupOverrides[groupName]) {
-              params.groupOverrides[newName] = params.groupOverrides[groupName];
-              delete params.groupOverrides[groupName];
-            }
-            // Carry the group's view-mask bit across the rename so
-            // patterns compiled against MASK_* names stay stable.
-            if (window.viewRegistryRenameGroup) window.viewRegistryRenameGroup(groupName, newName);
-            if (window._setGuiRebuilding) window._setGuiRebuilding(true);
-            renderParGUI();
-            if (window._setGuiRebuilding) window._setGuiRebuilding(false);
-            debounceAutoSave();
+          if (newName === null) return;
+          const nn = newName.trim();
+          if (!nn || nn === groupName) return;
+          // Fail loud (codex P0) on a reserved / colliding name — a merge would
+          // fuse two groups' overrides + view bits. "Ungrouped" is reserved for
+          // the LED-strand catch-all bucket (TE Sign + strands share one list).
+          if (nn === 'Ungrouped') { alert('"Ungrouped" is a reserved group name.'); return; }
+          if (groupOrder.includes(nn)) { alert(`A group named "${nn}" already exists.`); return; }
+          params.parLights.forEach((c) => {
+            if (c.group === groupName) c.group = nn;
+          });
+          // Carry the group master override across the rename (keyed by name).
+          if (params.groupOverrides && params.groupOverrides[groupName]) {
+            params.groupOverrides[nn] = params.groupOverrides[groupName];
+            delete params.groupOverrides[groupName];
           }
+          // Carry the group's view-mask bit across the rename so
+          // patterns compiled against MASK_* names stay stable.
+          if (window.viewRegistryRenameGroup) window.viewRegistryRenameGroup(groupName, nn);
+          if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+          renderParGUI();
+          if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+          debounceAutoSave();
         };
 
         // Fixture type selector + add button
@@ -2051,32 +2140,45 @@ function setupGUI() {
             });
           }
 
+          // Lock-aware Position/Rotation binding. In a LOCKED group a numeric
+          // edit moves the WHOLE group rigidly (applyLockedParNumericMove); in an
+          // unlocked group it behaves exactly as before (propagateToSelected). We
+          // snapshot the pre-edit value in the CAPTURE phase of every input event
+          // (pointer/keyboard/wheel/focus) so the rigid delta is always correct,
+          // even after an intervening gizmo move.
+          const addLockAwareAxis = (folder, field, min, max, stepArg) => {
+            const ctrl = folder.add(config, field, min, max, stepArg);
+            let prev = config[field];
+            const snap = () => { prev = config[field]; };
+            if (ctrl.domElement) {
+              ['pointerdown', 'focusin', 'wheel', 'keydown'].forEach((ev) =>
+                ctrl.domElement.addEventListener(ev, snap, { capture: true }));
+            }
+            ctrl.onChange((v) => {
+              selectThisLight();
+              window.syncLightFromConfig(index);
+              if (!applyLockedParNumericMove(index, field, v, prev)) {
+                propagateToSelected(index, field, v);
+              }
+              prev = v;
+            });
+            return ctrl;
+          };
+
           // Position
           const posFolder = idxFolder.addFolder("Position");
           posFolder.close();
-          posFolder.add(config, "x", -200, 200, 0.01).onChange((v) => {
-            selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'x', v);
-          });
-          posFolder.add(config, "y", 0, 100, 0.01).onChange((v) => {
-            selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'y', v);
-          });
-          posFolder.add(config, "z", -200, 200, 0.01).onChange((v) => {
-            selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'z', v);
-          });
+          addLockAwareAxis(posFolder, "x", -200, 200, 0.01);
+          addLockAwareAxis(posFolder, "y", 0, 100, 0.01);
+          addLockAwareAxis(posFolder, "z", -200, 200, 0.01);
 
           // Rotation
           const rotFolder = idxFolder.addFolder("Rotation");
           rotFolder.close();
           const step = params.snapAngle || 5;
-          rotFolder.add(config, "rotX", -180, 180, step).onChange((v) => {
-            selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'rotX', v);
-          });
-          rotFolder.add(config, "rotY", -180, 180, step).onChange((v) => {
-            selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'rotY', v);
-          });
-          rotFolder.add(config, "rotZ", -180, 180, step).onChange((v) => {
-            selectThisLight(); window.syncLightFromConfig(index); propagateToSelected(index, 'rotZ', v);
-          });
+          addLockAwareAxis(rotFolder, "rotX", -180, 180, step);
+          addLockAwareAxis(rotFolder, "rotY", -180, 180, step);
+          addLockAwareAxis(rotFolder, "rotZ", -180, 180, step);
 
           // 🔖 Metadata (V2) — compact DOM panel (shared helper, see top of file)
           const idxChildrenForMeta = idxFolder.domElement.querySelector('.children');
@@ -2228,6 +2330,12 @@ function setupGUI() {
           if (actChildren) actChildren.appendChild(actDiv);
         });
       });
+
+      // LED-class (sign) group folders were just (re-)appended to the LED Fixture
+      // Instances list AFTER any strand group folders. Pin them to the TOP of that
+      // list for deterministic ordering (design D4: sign groups top, Ungrouped
+      // last). No-op when the LED section is not built yet (DMX-first render).
+      if (window._orderLedFixtureInstances) window._orderLedFixtureInstances();
     }
 
     // ─── Add Group button ───
@@ -4187,10 +4295,235 @@ function setupGUI() {
       return true;
     };
 
+    // ── "LED Fixtures" section layout ──
+    // Operator ruling (2026-07-24): "they are all LED fixtures" — no sub-category
+    // split. Below the section's global controls sit exactly two children,
+    // mirroring the DMX split (📐 Group Generator + Light Instances): the
+    // ✨ Generators area and the ONE flat landing list, LED Fixture Instances.
+    // Generators live in their own area; what they produce lands in the instances
+    // list and behaves like any other group thereafter (design 20260724_26 §2.1).
+    // Inside LED Fixture Instances every group folder — sign OR strand — renders
+    // as one flat list with the full DMX-style grammar (toolbars, lock, Select
+    // All, On, group master, rename, per-fixture cards).
+    //   • TE Sign — LED-class DMX fixtures (the TE Sign V3 pair) that physically
+    //     STAY in params.parLights; renderParGUI OWNS those group folders (routed
+    //     into LED Fixture Instances via window._ledFixtureInstancesFolder), so
+    //     patching / the 'TE Sign' group / 'TE Sign (2)' select / the A≡B
+    //     transform are all unchanged.
+    //   • LED strands — the pixel strands (params.ledStrands), grouped DMX-style.
+    // Both renderers write into this ONE list, so each tears down ONLY its own
+    // folders: renderParGUI via window._parLedGroupFolders, renderStrandGUI via
+    // window._ledStrandGroupFolders.
+
+    // ── ✨ Generators — mirror of the DMX 📐 Group Generator ──
+    // Stateless catalog area (design §2.4 Option A): one "add" button per
+    // LED_GENERATORS entry, no persisted generator card. Clicking runs the generic
+    // flow below — a future generator is ONE catalog entry, zero code here.
+    const ledGenFolder = strandFolder.addFolder('✨ Generators');
+    ledGenFolder.close();
+
+    // Generic generator click. Async because the second-sign guard uses the themed
+    // inline modal (showModal) — never the native confirm()/prompt() (G3 convention).
+    async function runLedGeneratorClick(entry) {
+      const target = entry.target;
+      const arr = params[target];
+      // Fail loud (codex P0): the target params array must exist — no silent bail.
+      if (!Array.isArray(arr)) {
+        throw new Error(`[gui_builder] LED generator '${entry.id}' target params.${target} is not an array`);
+      }
+      // Union of group names already in the target array + every trace groupName,
+      // so a generated group can never collide with a trace group (config.js
+      // re-stamps traceGenerated on group-name match) — uniqueGroupName dodges it.
+      const existing = new Set();
+      arr.forEach((f) => {
+        if (f && typeof f.group === 'string' && f.group.trim()) existing.add(f.group.trim());
+      });
+      (params.traces || []).forEach((t) => {
+        if (t && typeof t.groupName === 'string' && t.groupName.trim()) existing.add(t.groupName.trim());
+      });
+
+      // Second-sign guard: the default group already exists ⇒ CONFIRM before
+      // spawning a unique-suffixed sibling. We NEVER fuse a second sign into the
+      // existing (locked) group — that would rigidly co-locate two signs at one
+      // transform. Inline themed modal, not native confirm().
+      if (existing.has(entry.defaultGroup)) {
+        const ok = await showModal({
+          title: `Add another ${entry.defaultGroup}?`,
+          message: `A "${entry.defaultGroup}" group already exists. Add another as its own separate locked group?`,
+          okLabel: 'Add',
+        });
+        if (!ok) return;
+      }
+
+      const group = uniqueGroupName(existing, entry.defaultGroup);
+      const fixtures = runLedGenerator(entry, { group });
+
+      pushUndo();
+      arr.push(...fixtures);
+      if (entry.bornLocked) {
+        // Born LOCKED so the freshly generated group moves as one rigid unit out
+        // of the gate. parLights → groupOverrides (DMX master); ledStrands →
+        // ledGroupOverrides (the future strand-generator seam, design §2.3).
+        const ovKey = target === 'ledStrands' ? 'ledGroupOverrides' : 'groupOverrides';
+        if (!params[ovKey]) params[ovKey] = {};
+        params[ovKey][group] = { enabled: true, brightness: 100, locked: true };
+      }
+
+      if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+      if (target === 'ledStrands') {
+        rebuildLedStrands();
+        renderStrandGUI();
+      } else {
+        if (window.renderParGUI) window.renderParGUI();
+        rebuildParLights();
+      }
+      if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+      debounceAutoSave();
+      const shortLabel = entry.label.replace(/^✨\s*\+?\s*/, '').trim();
+      _showAutoToast(`✨ Added ${shortLabel} — group "${group}"${entry.bornLocked ? ' (🔒 locked)' : ''}`);
+    }
+
+    const ledGenBtnStyle = 'flex:1 1 0;min-width:0;padding:4px 8px;border:1px solid var(--ghost-border);border-radius:3px;background:var(--control-bg);color:var(--text);cursor:pointer;font-size:11px;font-family:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;';
+    const ledGenChildren = ledGenFolder.domElement.querySelector('.children');
+    LED_GENERATORS.forEach((entry) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:2px;padding:2px 8px 4px;';
+      const btn = document.createElement('button');
+      btn.textContent = entry.label;
+      btn.style.cssText = ledGenBtnStyle;
+      btn.onmouseenter = () => btn.style.background = 'var(--control-bg-hover)';
+      btn.onmouseleave = () => btn.style.background = 'var(--control-bg)';
+      btn.onclick = () => {
+        // Fail loud on any generator error rather than swallow it (codex P0).
+        runLedGeneratorClick(entry).catch((err) => {
+          console.error(`[gui_builder] LED generator '${entry.id}' failed:`, err);
+          _showAutoToast(`⚠ Generator failed: ${err.message}`);
+        });
+      };
+      row.appendChild(btn);
+      if (ledGenChildren) ledGenChildren.appendChild(row);
+    });
+
+    // ── LED Fixture Instances — THE one flat landing list ──
+    // Titled wrapper (design §2.1, mirror of the DMX "Light Instances" folder):
+    // both renderers project their group folders into this ONE folder. Pointing
+    // window._ledFixtureInstancesFolder at it re-homes the LED-class (sign) groups
+    // out of the DMX list — everything below renderParGUI's routing line is
+    // unchanged, so patching / 'TE Sign' group / A≡B are untouched.
+    const ledInstancesFolder = strandFolder.addFolder('LED Fixture Instances');
+    window._ledFixtureInstancesFolder = ledInstancesFolder;
+    if (!window._parLedGroupFolders) window._parLedGroupFolders = [];
+    if (!window._ledStrandGroupFolders) window._ledStrandGroupFolders = [];
+
+    // Deterministic ordering (design D4): inside LED Fixture Instances, sign
+    // (parLights) group folders are pinned to the TOP, above the strand group
+    // folders; renderStrandGUI emits strand groups named-first with Ungrouped
+    // last. Both renderers append at the tail in an order that depends on which
+    // ran last, so this single helper — called at the end of BOTH renderParGUI
+    // and renderStrandGUI — re-seats the sign folders right after the toolbar
+    // every time. Idempotent; a no-op before the section exists.
+    window._orderLedFixtureInstances = function _orderLedFixtureInstances() {
+      const home = window._ledFixtureInstancesFolder;
+      if (!home || !home.domElement) return;
+      const children = home.domElement.querySelector('.children');
+      if (!children) return;
+      const toolbar = children.querySelector('.strand-new-btn');
+      let ref = toolbar ? toolbar.nextSibling : children.firstChild;
+      (window._parLedGroupFolders || []).forEach((f) => {
+        const el = f && f.domElement;
+        if (!el || el.parentNode !== children) return;
+        if (el === ref) { ref = el.nextSibling; return; }
+        children.insertBefore(el, ref);
+        ref = el.nextSibling;
+      });
+    };
+
+    // Instances toolbar (+ New Strand | ➕ Add Group) — created ONCE here, at the
+    // top of the LED Fixture Instances list (mirrors the DMX Light Instances
+    // toolbar). Not rebuilt per render, so it holds a stable position as the group
+    // folders re-render beneath it.
+    const strandToolbarStyle = 'flex:1;padding:4px 0;border:none;border-radius:3px;' +
+      'background:var(--control-bg);color:var(--ok);cursor:pointer;font-size:11px;' +
+      'font-family:inherit;font-weight:600;';
+    const strandToolbarDiv = document.createElement('div');
+    strandToolbarDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
+    strandToolbarDiv.classList.add('strand-new-btn');
+    const newStrandBtn = document.createElement('button');
+    newStrandBtn.textContent = '+ New Strand';
+    newStrandBtn.style.cssText = strandToolbarStyle;
+    newStrandBtn.onclick = () => {
+      pushUndo();
+      params.ledStrands.push(_newStrandConfig(''));
+      rebuildLedStrands();
+      renderStrandGUI();
+      debounceAutoSave();
+    };
+    const addStrandGroupBtn = document.createElement('button');
+    addStrandGroupBtn.textContent = '➕ Add Group';
+    addStrandGroupBtn.style.cssText = strandToolbarStyle + 'color:var(--secondary);';
+    addStrandGroupBtn.onclick = () => {
+      const name = prompt('New LED group name:');
+      if (name === null) return;
+      const nn = (name || '').trim();
+      // Fail loud (codex P0) on an empty / reserved / colliding name — mirror the
+      // rename guard so a seeded group never collides with an existing one.
+      const clash = _ledGroupNameClash(nn, null);
+      if (clash) { alert(clash); return; }
+      pushUndo();
+      // A group persists only through a member strand's `group` field, so —
+      // exactly like the DMX "➕ Add Group" seeds a fixture — seed one strand.
+      params.ledStrands.push(_newStrandConfig(nn));
+      window._openStrandGroups.add(nn);
+      rebuildLedStrands();
+      renderStrandGUI();
+      debounceAutoSave();
+    };
+    strandToolbarDiv.appendChild(newStrandBtn);
+    strandToolbarDiv.appendChild(addStrandGroupBtn);
+    const strandSectionChildren = ledInstancesFolder.domElement.querySelector('.children');
+    if (strandSectionChildren) strandSectionChildren.appendChild(strandToolbarDiv);
+
+    // Display bucket for a strand: its named group, else "Ungrouped". Bucketing
+    // is VISUAL only — a strand's DATA `group` stays '' when ungrouped, so
+    // groupKeyForStrand (strand.group || strand.name), the section numbering
+    // (led_metadata) and the view bits (reconcileGroupBits) are all unchanged.
+    const UNGROUPED = 'Ungrouped';
+    const displayGroupOf = (s) =>
+      (s && typeof s.group === 'string' && s.group.trim()) ? s.group.trim() : UNGROUPED;
+    const selectStrandGroup = (indices) => {
+      const set = new Set(indices);
+      (window.ledStrandFixtures || []).forEach((f, i) => {
+        if (f && typeof f.setSelected === 'function') f.setSelected(set.has(i));
+      });
+    };
+    if (!window._openStrandGroups) window._openStrandGroups = new Set();
+
+    // Guard for a new/renamed LED group name. Returns an operator-facing error
+    // string when the name is empty, the reserved "Ungrouped" bucket, or collides
+    // with an existing named group; '' when the name is OK. `currentName` (the
+    // group being renamed) is exempt from the collision check. Fail loud (codex
+    // P0): a silent accept would orphan or merge two groups' lock+brightness state.
+    function _ledGroupNameClash(name, currentName) {
+      const nn = (name || '').trim();
+      if (!nn) return 'Group name cannot be empty.';
+      if (nn === UNGROUPED) return `"${UNGROUPED}" is reserved for strands with no group.`;
+      if (nn === currentName) return '';
+      const existing = new Set(
+        (params.ledStrands || []).map((s) => displayGroupOf(s)).filter((g) => g !== UNGROUPED),
+      );
+      if (existing.has(nn)) return `An LED group named "${nn}" already exists.`;
+      return '';
+    }
+
     // --- LED Strand GUI ---
     window.strandGuiFolders = [];
+    window._strandGroupFolderByIndex = [];
     window.openStrandFolder = function(strandIndex) {
       strandFolder.open();
+      ledInstancesFolder.open();
+      // Strand cards now nest inside their group folder — open that too.
+      const gf = window._strandGroupFolderByIndex[strandIndex];
+      if (gf) gf.open();
       if (window.strandGuiFolders) {
         window.strandGuiFolders.forEach(f => { if (f) f.domElement.classList.remove('gui-card-selected'); });
       }
@@ -4205,192 +4538,424 @@ function setupGUI() {
       });
     };
 
-    function renderStrandGUI() {
-      const existing = [...strandFolder.folders];
-      existing.forEach(f => f.destroy());
-      window.strandGuiFolders = [];
-
-      // New Strand button
-      const newBtnDiv = document.createElement('div');
-      newBtnDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
-      const btnStyle = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:var(--control-bg);color:var(--ok);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
-      const newBtn = document.createElement('button');
-      newBtn.textContent = '+ New Strand';
-      newBtn.style.cssText = btnStyle;
-      newBtn.onclick = () => {
-        pushUndo();
-        params.ledStrands.push({
-          name: `Strand ${params.ledStrands.length + 1}`,
-          startX: -3, startY: 5, startZ: 0,
-          endX: 3, endY: 5, endZ: 0,
-          color: '#ff8800',
-          intensity: 1.0,
-          ledCount: 10,
-          group: '',
-          controllerId: 0, sectionId: 0, fixtureId: 0, viewMask: 0,
-        });
-        rebuildLedStrands();
-        renderStrandGUI();
-        debounceAutoSave();
+    // Seed config for a fresh LED strand (optionally into a named group).
+    function _newStrandConfig(group) {
+      return {
+        name: (group ? `${group} ` : 'Strand ') + (params.ledStrands.length + 1),
+        startX: -3, startY: 5, startZ: 0,
+        endX: 3, endY: 5, endZ: 0,
+        color: '#ff8800',
+        intensity: 1.0,
+        ledCount: 10,
+        group: group || '',
+        controllerId: 0, sectionId: 0, fixtureId: 0, viewMask: 0,
       };
-      newBtnDiv.appendChild(newBtn);
-      const children = strandFolder.domElement.querySelector('.children');
-      if (children) {
-        const old = children.querySelector('.strand-new-btn');
-        if (old) old.remove();
-        newBtnDiv.classList.add('strand-new-btn');
-        children.prepend(newBtnDiv);
-      }
+    }
 
-      // Strand sub-folders
-      params.ledStrands.forEach((strand, i) => {
-        const label = `💡 ${strand.name || `Strand ${i + 1}`}`;
-        const sFolder = strandFolder.addFolder(label);
-        sFolder.domElement.classList.add('gui-card');
-        sFolder.close();
-        window.strandGuiFolders[i] = sFolder;
+    function renderStrandGUI() {
+      // Tear down ONLY our strand group folders. TE Sign group folders share this
+      // same parent (renderParGUI routes LED-class groups here) and are torn down
+      // by renderParGUI via window._parLedGroupFolders — never destroy them here,
+      // or the sign would vanish on any strand edit. The section toolbar (+ New
+      // Strand / ➕ Add Group) is created ONCE in buildLedStrandsSection and is not
+      // rebuilt here, so it keeps a stable position above the flat group list.
+      if (!window._ledStrandGroupFolders) window._ledStrandGroupFolders = [];
+      window._ledStrandGroupFolders.forEach(f => f.destroy());
+      window._ledStrandGroupFolders = [];
+      window.strandGuiFolders = [];
+      window._strandGroupFolderByIndex = [];
 
-        // Selection highlight
-        if (typeof sFolder.onOpenClose === 'function') {
-          sFolder.onOpenClose((open) => {
-            if (open) {
-              (window.strandGuiFolders || []).forEach(f => { if (f) f.domElement.classList.remove('gui-card-selected'); });
-              sFolder.domElement.classList.add('gui-card-selected');
-            } else {
-              sFolder.domElement.classList.remove('gui-card-selected');
-            }
+      // ── Bucket strands by DISPLAY group (visual only) ──
+      const groupOrder = [];
+      const groupMap = new Map();
+      params.ledStrands.forEach((strand, index) => {
+        if (strand.group === undefined) strand.group = '';
+        const key = displayGroupOf(strand);
+        if (!groupMap.has(key)) { groupMap.set(key, []); groupOrder.push(key); }
+        groupMap.get(key).push({ strand, index });
+      });
+      const namedGroups = groupOrder.filter(g => g !== UNGROUPED);
+
+      const gBtnStyle = 'flex:1 1 0;min-width:0;padding:3px 6px;border:none;border-radius:3px;background:var(--control-bg);color:var(--secondary);cursor:pointer;font-size:10px;font-family:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;';
+
+      // Rebuild the visuals of every strand in a display group so a live change
+      // to its group master (On/Off + Brightness) shows immediately even when no
+      // pattern is painting — led_strand.rebuildVisuals scales the static preview
+      // by the same master the direct-paint path uses (single source of truth).
+      const resyncLedGroup = (gName) => {
+        strandGroupMemberIndices(params.ledStrands, gName).forEach((i) => {
+          const f = window.ledStrandFixtures && window.ledStrandFixtures[i];
+          if (f && typeof f.rebuildVisuals === 'function') f.rebuildVisuals();
+        });
+      };
+
+      // Rigid numeric move for a LOCKED strand group: a Start/End coordinate edit
+      // on one strand translates the WHOLE group along that axis (both endpoints
+      // of every member), preserving relative offsets. Returns true when the
+      // group is locked (caller then just rebuilds; unlocked edits move only the
+      // one endpoint as before). Strands are two points with no orientation, so a
+      // rigid move is a pure per-axis translation of every endpoint.
+      const applyLockedStrandNumericMove = (strandIndex, field, newVal, prevVal) => {
+        const s = params.ledStrands[strandIndex];
+        if (!s) return false;
+        const gName = displayGroupOf(s);
+        if (!isGroupLocked(params.ledGroupOverrides, gName)) return false;
+        const members = strandGroupMemberIndices(params.ledStrands, gName);
+        if (members.length <= 1) return true;
+        const delta = newVal - prevVal;
+        if (delta !== 0) {
+          const axis = field.slice(-1); // 'X' | 'Y' | 'Z'
+          const startKey = `start${axis}`;
+          const endKey = `end${axis}`;
+          members.forEach((i) => {
+            const m = params.ledStrands[i];
+            [startKey, endKey].forEach((k) => {
+              // lil-gui already wrote the exact field the operator edited.
+              if (i === strandIndex && k === field) return;
+              m[k] = (m[k] || 0) + delta;
+            });
+          });
+        }
+        return true;
+      };
+
+      // Deterministic strand ordering (design D4): named groups in appearance
+      // order, then the Ungrouped bucket LAST (sign groups are pinned above all
+      // of these by _orderLedFixtureInstances after this render).
+      const orderedGroups = [...namedGroups];
+      if (groupMap.has(UNGROUPED)) orderedGroups.push(UNGROUPED);
+
+      orderedGroups.forEach((groupName) => {
+        const items = groupMap.get(groupName) || [];
+        const isUngrouped = groupName === UNGROUPED;
+        const gFolder = ledInstancesFolder.addFolder(`${groupName} (${items.length})`);
+        window._ledStrandGroupFolders.push(gFolder);
+        if (window._openStrandGroups.has(groupName)) gFolder.open(); else gFolder.close();
+        if (typeof gFolder.onOpenClose === 'function') {
+          gFolder.onOpenClose((open) => {
+            if (open) window._openStrandGroups.add(groupName);
+            else window._openStrandGroups.delete(groupName);
           });
         }
 
-        const nameCtrl = sFolder.add(strand, 'name').name('Name').onFinishChange(() => {
-          renderStrandGUI();
-          debounceAutoSave();
-        });
-
-        // ── Read-only patch line (G5) ── the strand's DMX-parity universe span,
-        // sourced from the persisted `strand.segments` (the same per-segment
-        // records save-server writes to patches.yaml). A strand spilling across
-        // universes shows the full span + universe count; an unpatched strand
-        // shows `unpatched`. Purely informational — patching is owned by the
-        // Controller Mapping panel.
-        const patchRow = document.createElement('div');
-        patchRow.style.cssText = 'padding:2px 8px 4px;color:var(--icon);font-size:10px;font-family:var(--font-mono,monospace);';
-        const segs = Array.isArray(strand.segments) ? strand.segments : [];
-        if ((strand.dmxUniverse || 0) > 0 && segs.length > 0) {
-          const first = segs[0];
-          const last = segs[segs.length - 1];
-          const span = segs.length === 1
-            ? `U${first.universe}:${first.startChannel}–${first.endChannel}`
-            : `U${first.universe}:${first.startChannel} → U${last.universe}:${last.endChannel}`;
-          const uniWord = segs.length === 1 ? 'universe' : 'universes';
-          patchRow.textContent = `📡 ${span} · ${strand.pixelCount || 0}px · ${segs.length} ${uniWord}`;
-        } else {
-          patchRow.textContent = '📡 unpatched';
+        // ── Per-group override bag (On/Off + Brightness master + lock) ──
+        // Keyed by the DISPLAY group (same key the exporter's direct-paint scale
+        // reads), persisted in params.ledGroupOverrides like the DMX map.
+        if (!params.ledGroupOverrides) params.ledGroupOverrides = {};
+        if (!params.ledGroupOverrides[groupName]) {
+          params.ledGroupOverrides[groupName] = { enabled: true, brightness: 100 };
         }
-        const patchChildren = sFolder.domElement.querySelector('.children');
-        if (patchChildren) patchChildren.appendChild(patchRow);
+        const ledOv = params.ledGroupOverrides[groupName];
+        if (ledOv.enabled === undefined) ledOv.enabled = true;
+        if (ledOv.brightness === undefined) ledOv.brightness = 100;
+        if (ledOv.locked === undefined) ledOv.locked = false;
 
-        // ── Group ── the strand's effective group is `strand.group ||
-        // strand.name` (groupKeyForStrand). An ungrouped strand stays its own
-        // group of one — bit-for-bit identical to old scenes. Strands sharing a
-        // group get ONE section id (led_metadata) and ONE view bit
-        // (reconcileGroupBits), i.e. they "always work together". Fixed, named
-        // groups only — no generators. Datalist suggests existing group keys.
-        if (strand.group === undefined) strand.group = '';
-        const groupRow = document.createElement('div');
-        groupRow.style.cssText = 'display:flex;gap:6px;align-items:center;padding:2px 8px 4px;';
-        const groupLbl = document.createElement('span');
-        groupLbl.style.cssText = 'color:var(--icon);font-size:11px;min-width:70px;';
-        groupLbl.textContent = 'Group';
-        const groupInp = document.createElement('input');
-        groupInp.type = 'text';
-        groupInp.value = strand.group || '';
-        groupInp.placeholder = strand.name || 'ungrouped';
-        const listId = `strand-groups-${i}`;
-        groupInp.setAttribute('list', listId);
-        groupInp.style.cssText = 'flex:1;padding:3px 6px;border:1px solid var(--ghost-border);border-radius:3px;background:var(--input-bg);color:var(--text);font-size:11px;font-family:inherit;';
-        const dataList = document.createElement('datalist');
-        dataList.id = listId;
-        const distinctGroups = new Set();
-        (params.ledStrands || []).forEach((s) => {
-          const hasName = s && typeof s.name === 'string' && s.name.trim().length > 0;
-          const hasGroup = s && typeof s.group === 'string' && s.group.trim().length > 0;
-          if (hasName || hasGroup) distinctGroups.add(groupKeyForStrand(s));
-        });
-        distinctGroups.forEach((g) => {
-          const opt = document.createElement('option');
-          opt.value = g;
-          dataList.appendChild(opt);
-        });
-        groupInp.onchange = () => {
-          strand.group = groupInp.value.trim();
-          // A group change moves the strand's section id and view bit; the batch
-          // metadata cache must rebuild so animate.js re-reads the mapping.
-          if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('led_group');
-          debounceAutoSave();
+        // ── Group toolbar ──
+        const gtbWrap = document.createElement('div');
+        gtbWrap.style.cssText = 'padding:2px 6px 4px;';
+
+        // Row 1: Select All | Visible toggle (sim visibility) | 🔒 Lock.
+        const row1 = document.createElement('div');
+        row1.style.cssText = 'display:flex;gap:2px;margin-bottom:2px;';
+        const selBtn = document.createElement('button');
+        selBtn.textContent = '☑ Select All';
+        selBtn.style.cssText = gBtnStyle;
+        selBtn.onclick = () => {
+          selectStrandGroup(items.map(x => x.index));
+          strandFolder.open();
+          ledInstancesFolder.open();
+          document.activeElement?.blur?.();
         };
-        groupRow.appendChild(groupLbl);
-        groupRow.appendChild(groupInp);
-        groupRow.appendChild(dataList);
-        if (nameCtrl && nameCtrl.domElement) {
-          nameCtrl.domElement.insertAdjacentElement('afterend', groupRow);
+        const visBtn = document.createElement('button');
+        const groupHidden = items.length > 0 && items.every(({ index }) =>
+          window.ledStrandFixtures[index] && window.ledStrandFixtures[index]._visible === false);
+        visBtn.textContent = groupHidden ? '○ Off' : '● On';
+        visBtn.style.cssText = gBtnStyle + (groupHidden ? 'color:var(--icon);' : 'color:var(--ok);');
+        visBtn.onclick = () => {
+          const turnOn = visBtn.textContent.includes('Off');
+          items.forEach(({ index }) => {
+            const f = window.ledStrandFixtures[index];
+            if (f) f.setVisibility(turnOn);
+          });
+          visBtn.textContent = turnOn ? '● On' : '○ Off';
+          visBtn.style.cssText = gBtnStyle + (turnOn ? 'color:var(--ok);' : 'color:var(--icon);');
+          document.activeElement?.blur?.();
+        };
+        // 🔒 Group lock — tie every strand in this group together so a Start/End
+        // numeric edit moves the WHOLE group rigidly (see applyLockedStrandNumericMove).
+        const lockBtn = document.createElement('button');
+        const paintStrandLock = () => {
+          lockBtn.textContent = ledOv.locked ? '🔒 Locked' : '🔓 Lock';
+          lockBtn.style.cssText = gBtnStyle + (ledOv.locked ? 'color:var(--ok);' : 'color:var(--secondary);');
+        };
+        paintStrandLock();
+        lockBtn.title = 'Lock this group so all its strands move together as one rigid body';
+        lockBtn.onclick = () => {
+          ledOv.locked = !ledOv.locked;
+          paintStrandLock();
+          debounceAutoSave();
+          document.activeElement?.blur?.();
+        };
+        row1.appendChild(selBtn);
+        row1.appendChild(visBtn);
+        row1.appendChild(lockBtn);
+        gtbWrap.appendChild(row1);
+
+        // Row 2 (named groups only): Rename | + Strand | Ungroup
+        if (!isUngrouped) {
+          const row2 = document.createElement('div');
+          row2.style.cssText = 'display:flex;gap:2px;';
+          const renameBtn = document.createElement('button');
+          renameBtn.textContent = '✏ Rename';
+          renameBtn.style.cssText = gBtnStyle;
+          renameBtn.onclick = () => {
+            const newName = prompt('Rename LED group:', groupName);
+            if (newName === null) return;
+            const nn = (newName || '').trim();
+            if (nn === groupName) return;
+            // Fail loud (codex P0): empty / reserved / colliding names would
+            // orphan or merge this group's lock+brightness state — reject them.
+            const clash = _ledGroupNameClash(nn, groupName);
+            if (clash) { alert(clash); return; }
+            pushUndo();
+            params.ledStrands.forEach((s) => { if (displayGroupOf(s) === groupName) s.group = nn; });
+            // Carry the per-group override bag (⏻ On / Brightness / 🔒 locked)
+            // across the rename. It is keyed by group name in
+            // params.ledGroupOverrides, so WITHOUT this move the rename would
+            // ORPHAN the group's lock + brightness (mirror of the DMX rename which
+            // carries params.groupOverrides at ~L1900).
+            if (params.ledGroupOverrides && params.ledGroupOverrides[groupName]) {
+              params.ledGroupOverrides[nn] = params.ledGroupOverrides[groupName];
+              delete params.ledGroupOverrides[groupName];
+            }
+            // Carry the group's view-mask bit across the rename so patterns
+            // compiled against MASK_* names stay stable (mirror of DMX rename).
+            if (window.viewRegistryRenameGroup) window.viewRegistryRenameGroup(groupName, nn);
+            if (window._openStrandGroups.has(groupName)) {
+              window._openStrandGroups.delete(groupName);
+              window._openStrandGroups.add(nn);
+            }
+            if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('led_group_rename');
+            renderStrandGUI();
+            debounceAutoSave();
+          };
+          const addStrandBtn = document.createElement('button');
+          addStrandBtn.textContent = '+ Strand';
+          addStrandBtn.style.cssText = gBtnStyle + 'color:var(--ok);';
+          addStrandBtn.onclick = () => {
+            pushUndo();
+            params.ledStrands.push(_newStrandConfig(groupName));
+            window._openStrandGroups.add(groupName);
+            rebuildLedStrands();
+            renderStrandGUI();
+            debounceAutoSave();
+          };
+          const delBtn = document.createElement('button');
+          delBtn.textContent = '✕ Ungroup';
+          delBtn.style.cssText = gBtnStyle;
+          delBtn.title = 'Dissolve this group — its strands become Ungrouped (no strands deleted)';
+          delBtn.onclick = () => {
+            pushUndo();
+            params.ledStrands.forEach((s) => { if (displayGroupOf(s) === groupName) s.group = ''; });
+            window._openStrandGroups.delete(groupName);
+            if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('led_group_dissolve');
+            renderStrandGUI();
+            debounceAutoSave();
+          };
+          row2.appendChild(renameBtn);
+          row2.appendChild(addStrandBtn);
+          row2.appendChild(delBtn);
+          gtbWrap.appendChild(row2);
         }
+        const gChildren = gFolder.domElement.querySelector('.children');
+        if (gChildren) gChildren.prepend(gtbWrap);
 
-        sFolder.addColor(strand, 'color').name('Color').onChange(() => {
-          rebuildLedStrands();
+        // ── Group master: On/Off + Brightness (REAL output override) ──
+        // Scales the LED direct-paint path (pixelblaze_model_exporter apply →
+        // scaleRgbForGroup) AND the static preview (led_strand.rebuildVisuals),
+        // so a slider move dims the whole group live — the LED analogue of the
+        // DMX groupOverrides master. NOT a no-op: report 20260724_23 deliberately
+        // withheld this until the direct-paint scale existed; it now does.
+        gFolder.add(ledOv, 'enabled').name('⏻ Group On').onChange(() => {
+          resyncLedGroup(groupName);
+          debounceAutoSave();
+        });
+        gFolder.add(ledOv, 'brightness', 0, 100, 1).name('Group Brightness %').onChange(() => {
+          resyncLedGroup(groupName);
           debounceAutoSave();
         });
 
-        sFolder.add(strand, 'intensity', 0.1, 5, 0.1).name('Intensity').onChange(() => {
-          debounceAutoSave();
+        // ── Strands in this group ──
+        items.forEach(({ strand, index: i }) => {
+          const label = `💡 ${strand.name || `Strand ${i + 1}`}`;
+          const sFolder = gFolder.addFolder(label);
+          sFolder.domElement.classList.add('gui-card');
+          sFolder.close();
+          window.strandGuiFolders[i] = sFolder;
+          window._strandGroupFolderByIndex[i] = gFolder;
+
+          // Selection highlight + pick the strand in 3D when opened.
+          if (typeof sFolder.onOpenClose === 'function') {
+            sFolder.onOpenClose((open) => {
+              if (open) {
+                (window.strandGuiFolders || []).forEach(f => { if (f) f.domElement.classList.remove('gui-card-selected'); });
+                sFolder.domElement.classList.add('gui-card-selected');
+                (window.ledStrandFixtures || []).forEach((f, k) => {
+                  if (f && typeof f.setSelected === 'function') f.setSelected(k === i);
+                });
+              } else {
+                sFolder.domElement.classList.remove('gui-card-selected');
+              }
+            });
+          }
+
+          sFolder.add(strand, 'name').name('Name').onFinishChange(() => {
+            renderStrandGUI();
+            debounceAutoSave();
+          });
+
+          // ── Read-only patch line (G5) ── the strand's DMX-parity universe
+          // span from persisted `strand.segments`. Purely informational —
+          // patching is owned by the Controller Mapping panel.
+          const patchRow = document.createElement('div');
+          patchRow.style.cssText = 'padding:2px 8px 4px;color:var(--icon);font-size:10px;font-family:var(--font-mono,monospace);';
+          const segs = Array.isArray(strand.segments) ? strand.segments : [];
+          if ((strand.dmxUniverse || 0) > 0 && segs.length > 0) {
+            const first = segs[0];
+            const last = segs[segs.length - 1];
+            const span = segs.length === 1
+              ? `U${first.universe}:${first.startChannel}–${first.endChannel}`
+              : `U${first.universe}:${first.startChannel} → U${last.universe}:${last.endChannel}`;
+            const uniWord = segs.length === 1 ? 'universe' : 'universes';
+            patchRow.textContent = `📡 ${span} · ${strand.pixelCount || 0}px · ${segs.length} ${uniWord}`;
+          } else {
+            patchRow.textContent = '📡 unpatched';
+          }
+          const patchChildren = sFolder.domElement.querySelector('.children');
+          if (patchChildren) patchChildren.appendChild(patchRow);
+
+          sFolder.addColor(strand, 'color').name('Color').onChange(() => {
+            rebuildLedStrands();
+            debounceAutoSave();
+          });
+          sFolder.add(strand, 'intensity', 0.1, 5, 0.1).name('Intensity').onChange(() => {
+            debounceAutoSave();
+          });
+          sFolder.add(strand, 'ledCount', 2, 100, 1).name('LED Count').onChange(() => {
+            rebuildLedStrands();
+            debounceAutoSave();
+          });
+
+          // Bulb + halo radius are a GLOBAL control (params.ledPixelSize /
+          // params.ledHaloSize) above the strand list — not per-strand.
+
+          // Start/End position folders. Lock-aware: in a LOCKED strand group a
+          // Start/End edit translates the WHOLE group rigidly along that axis
+          // (applyLockedStrandNumericMove); unlocked, only this endpoint moves.
+          const addLockAwareStrandAxis = (folder, field) => {
+            const ctrl = folder.add(strand, field, -100, 100, 0.5).name(field.slice(-1));
+            let prev = strand[field];
+            const snap = () => { prev = strand[field]; };
+            if (ctrl.domElement) {
+              ['pointerdown', 'focusin', 'wheel', 'keydown'].forEach((ev) =>
+                ctrl.domElement.addEventListener(ev, snap, { capture: true }));
+            }
+            ctrl.onChange(() => {
+              const v = strand[field];
+              applyLockedStrandNumericMove(i, field, v, prev);
+              prev = v;
+              rebuildLedStrands();
+              debounceAutoSave();
+            });
+            return ctrl;
+          };
+          const startF = sFolder.addFolder('Start Point (green)');
+          startF.close();
+          addLockAwareStrandAxis(startF, 'startX');
+          addLockAwareStrandAxis(startF, 'startY');
+          addLockAwareStrandAxis(startF, 'startZ');
+          const endF = sFolder.addFolder('End Point (red)');
+          endF.close();
+          addLockAwareStrandAxis(endF, 'endX');
+          addLockAwareStrandAxis(endF, 'endY');
+          addLockAwareStrandAxis(endF, 'endZ');
+
+          // 🔖 Metadata (V2) — compact DOM panel (shared helper)
+          const sChildrenForMeta = sFolder.domElement.querySelector('.children');
+          appendMetadataPanelV2(sChildrenForMeta, strand, { onChange: debounceAutoSave });
+
+          // ── Action row: Move to group | Delete ──
+          const actDiv = document.createElement('div');
+          actDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
+          const moveSelect = document.createElement('select');
+          moveSelect.style.cssText = 'flex:1;padding:2px;border:none;border-radius:3px;background:var(--control-bg);color:var(--secondary);font-size:10px;font-family:inherit;cursor:pointer;';
+          const defOpt = document.createElement('option');
+          defOpt.textContent = '→ Move…'; defOpt.disabled = true; defOpt.selected = true;
+          moveSelect.appendChild(defOpt);
+          if (!isUngrouped) {
+            const uOpt = document.createElement('option');
+            uOpt.value = '::ungroup::'; uOpt.textContent = 'Ungrouped';
+            moveSelect.appendChild(uOpt);
+          }
+          namedGroups.forEach((g) => {
+            if (g === groupName) return;
+            const opt = document.createElement('option');
+            opt.value = g; opt.textContent = g;
+            moveSelect.appendChild(opt);
+          });
+          const newOpt = document.createElement('option');
+          newOpt.value = '::new::'; newOpt.textContent = '＋ New group…';
+          moveSelect.appendChild(newOpt);
+          moveSelect.onchange = () => {
+            let target = moveSelect.value;
+            if (target === '::new::') {
+              const nm = prompt('New group name:');
+              if (!nm || !nm.trim()) { moveSelect.selectedIndex = 0; return; }
+              target = nm.trim();
+              // Fail loud on a reserved / existing name — to move into an existing
+              // group pick it from the list; "Ungrouped" removes the group.
+              const clash = _ledGroupNameClash(target, null);
+              if (clash) { alert(clash); moveSelect.selectedIndex = 0; return; }
+            } else if (target === '::ungroup::') {
+              target = '';
+            }
+            pushUndo();
+            strand.group = target;
+            if (target) window._openStrandGroups.add(target);
+            if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('led_group_move');
+            renderStrandGUI();
+            debounceAutoSave();
+          };
+          const delBtn = document.createElement('button');
+          delBtn.textContent = '✕ Delete';
+          delBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:color-mix(in srgb, var(--error) 15%, var(--surface));color:var(--error);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
+          delBtn.onclick = () => {
+            pushUndo();
+            params.ledStrands.splice(i, 1);
+            rebuildLedStrands();
+            renderStrandGUI();
+            debounceAutoSave();
+          };
+          actDiv.appendChild(moveSelect);
+          actDiv.appendChild(delBtn);
+          const sChildren = sFolder.domElement.querySelector('.children');
+          if (sChildren) sChildren.appendChild(actDiv);
         });
-
-        sFolder.add(strand, 'ledCount', 2, 100, 1).name('LED Count').onChange(() => {
-          rebuildLedStrands();
-          debounceAutoSave();
-        });
-
-        // Bulb + halo radius are now a GLOBAL control (params.ledPixelSize /
-        // params.ledHaloSize) above the strand list — not per-strand.
-
-        // Start/End position folders
-        const startF = sFolder.addFolder('Start Point (green)');
-        startF.close();
-        startF.add(strand, 'startX', -100, 100, 0.5).name('X').onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
-        startF.add(strand, 'startY', -100, 100, 0.5).name('Y').onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
-        startF.add(strand, 'startZ', -100, 100, 0.5).name('Z').onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
-        const endF = sFolder.addFolder('End Point (red)');
-        endF.close();
-        endF.add(strand, 'endX', -100, 100, 0.5).name('X').onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
-        endF.add(strand, 'endY', -100, 100, 0.5).name('Y').onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
-        endF.add(strand, 'endZ', -100, 100, 0.5).name('Z').onChange(() => { rebuildLedStrands(); debounceAutoSave(); });
-
-        // 🔖 Metadata (V2) — compact DOM panel (shared helper)
-        const sChildrenForMeta = sFolder.domElement.querySelector('.children');
-        appendMetadataPanelV2(sChildrenForMeta, strand, { onChange: debounceAutoSave });
-
-        // Delete button
-        const actDiv = document.createElement('div');
-        actDiv.style.cssText = 'display:flex;gap:2px;padding:4px 6px;';
-        const delBtn = document.createElement('button');
-        delBtn.textContent = '✕ Delete';
-        delBtn.style.cssText = 'flex:1;padding:4px 0;border:none;border-radius:3px;background:color-mix(in srgb, var(--error) 15%, var(--surface));color:var(--error);cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;';
-        delBtn.onclick = () => {
-          pushUndo();
-          params.ledStrands.splice(i, 1);
-          rebuildLedStrands();
-          renderStrandGUI();
-          debounceAutoSave();
-        };
-        actDiv.appendChild(delBtn);
-        const sChildren = sFolder.domElement.querySelector('.children');
-        if (sChildren) sChildren.appendChild(actDiv);
       });
+
+      // Pin the sign (parLights) group folders to the top of the list (design D4).
+      if (window._orderLedFixtureInstances) window._orderLedFixtureInstances();
     }
     window.renderStrandGUI = renderStrandGUI;
 
     renderStrandGUI();
     rebuildLedStrands();
+    // The LED Fixtures section (and its LED Fixture Instances list) now exists, so
+    // re-run renderParGUI to route the LED-class TE Sign group out of the DMX
+    // section and into LED Fixture Instances. (On the DMX-section's own first
+    // render this folder did not exist yet, so the sign was parked in the DMX
+    // list.) renderParGUI ends by pinning the sign folders to the top of the list.
+    if (window.renderParGUI) window.renderParGUI();
   }
 
   // ─── Build the entire GUI from the config tree ───

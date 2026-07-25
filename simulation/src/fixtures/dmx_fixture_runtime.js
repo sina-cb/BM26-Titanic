@@ -195,35 +195,47 @@ export class DmxFixtureRuntime {
     this.scene.add(this.hitbox);
 
     // ─── Build Shell (fixture body) ──────────────────────────────────
+    // Only DMX pars/bars/fog machines get an opaque physical body. LED-bus
+    // fixtures (Ango-4 pixel panels/signs — the TE Sign, te_led_grid) are
+    // luminous: they must read as their pixels floating in space, NOT sit on an
+    // opaque backing slab. A dark shell box renders (via unlit MeshBasicMaterial)
+    // as a flat black rectangle that occludes and visually conflicts with the
+    // night scene behind it. LED strands set the precedent — no body mesh at all.
+    // Selection/unpatched feedback still shows via the TransformControls gizmo
+    // (interaction.js attaches it to the hitbox); setSelected / setUnpatchedRed
+    // no-op safely while shellMat is null.
     this.shellMat = null;
-    if (fixtureDef && fixtureDef.shell) {
-      this.shellMat = defaultShellMat.clone();
-      this.shellMat.color.set(fixtureDef.shell.color || '#111111');
-      let shellGeo;
-      if (fixtureDef.shell.type === 'cylinder') {
-        const d = fixtureDef.shell.dimensions;
-        const r = (d[0] / 2) * 0.001;
-        const h = d[2] * 0.001;
-        shellGeo = new THREE.CylinderGeometry(r, r, h, 16);
-        shellGeo.rotateX(Math.PI / 2);
+    this.shell = null;
+    if (!this._isLed) {
+      if (fixtureDef && fixtureDef.shell) {
+        this.shellMat = defaultShellMat.clone();
+        this.shellMat.color.set(fixtureDef.shell.color || '#111111');
+        let shellGeo;
+        if (fixtureDef.shell.type === 'cylinder') {
+          const d = fixtureDef.shell.dimensions;
+          const r = (d[0] / 2) * 0.001;
+          const h = d[2] * 0.001;
+          shellGeo = new THREE.CylinderGeometry(r, r, h, 16);
+          shellGeo.rotateX(Math.PI / 2);
+        } else {
+          const d = fixtureDef.shell.dimensions;
+          shellGeo = new THREE.BoxGeometry(d[0] * 0.001, d[1] * 0.001, d[2] * 0.001);
+        }
+        this.shell = new THREE.Mesh(shellGeo, this.shellMat);
+        if (fixtureDef.shell.offset) {
+          const o = fixtureDef.shell.offset;
+          // Negate Z to match the dot coordinate convention (-Z = forward/emitting direction)
+          this.shell.position.set(o[0] * 0.001, o[1] * 0.001, -o[2] * 0.001);
+        }
+        this.group.add(this.shell);
       } else {
-        const d = fixtureDef.shell.dimensions;
-        shellGeo = new THREE.BoxGeometry(d[0] * 0.001, d[1] * 0.001, d[2] * 0.001);
+        // No shell definition — create a simple can geometry (like old ParLight)
+        const canGeo = new THREE.CylinderGeometry(0.08, 0.06, 0.2, 12);
+        canGeo.rotateX(Math.PI / 2);
+        this.shellMat = defaultShellMat.clone();
+        this.shell = new THREE.Mesh(canGeo, this.shellMat);
+        this.group.add(this.shell);
       }
-      this.shell = new THREE.Mesh(shellGeo, this.shellMat);
-      if (fixtureDef.shell.offset) {
-        const o = fixtureDef.shell.offset;
-        // Negate Z to match the dot coordinate convention (-Z = forward/emitting direction)
-        this.shell.position.set(o[0] * 0.001, o[1] * 0.001, -o[2] * 0.001);
-      }
-      this.group.add(this.shell);
-    } else {
-      // No shell definition — create a simple can geometry (like old ParLight)
-      const canGeo = new THREE.CylinderGeometry(0.08, 0.06, 0.2, 12);
-      canGeo.rotateX(Math.PI / 2);
-      this.shellMat = defaultShellMat.clone();
-      this.shell = new THREE.Mesh(canGeo, this.shellMat);
-      this.group.add(this.shell);
     }
 
     // ─── Build Pixels (instanced emitter geometry) ───────────────────

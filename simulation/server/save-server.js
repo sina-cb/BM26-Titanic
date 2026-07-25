@@ -117,7 +117,7 @@ const NEW_SCENE_TEMPLATE = {
     fixtures: [],
   },
   ledStrands: {
-    _section: { label: '💡 LED Strands', type: 'ledStrandArray', collapsed: true },
+    _section: { label: '🔌 LED Fixtures', type: 'ledStrandArray', collapsed: true },
     strandsEnabled: { value: true, label: 'Master Enabled' },
     strands: [],
   },

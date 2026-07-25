@@ -20,6 +20,7 @@ import { engineHttpUrl } from "./engine_endpoint.js";
 import { applyFixtureOutputOverrides } from "../dmx/dmx_output_overrides.js";
 import { blendRgbwau } from "./rgbwau_blend.js";
 import { entryPaintsDirect } from "./render_paint_rule.js";
+import { ledOutputScale } from "./group_lock.js";
 // sACN output — lazily initialized
 let sacnOutputClient = null;
 let sacnOutputEnabled = false;
@@ -245,6 +246,39 @@ function _applyUnpatchedRedOverlay() {
   _unpatchedOverlayWasActive = show;
 }
 
+// ─── LED-strand last-layer output gate ────────────────────────────────────
+// The LED analogue of applyFixtureOutputOverrides: apply the GLOBAL LED master
+// (params.strandsEnabled) and each strand's per-group master (On/Off +
+// Brightness, params.ledGroupOverrides) to the entry's rendered RGBWAU IN PLACE,
+// for LED entries only. Runs AFTER every color source (pattern / gradient / sACN
+// demap) has written the entry colors and BEFORE every consumer that reads the
+// RAW entry color — the sACN output map (mapPixelsToSacn), the global
+// instanced-dot flush, and the 2D Pixel Map frame tap — so an OFF group or
+// master is BLACK on EVERY path, not only the per-strand bulb/halo meshes (which
+// the exporter apply closure + the static preview already scale). Keyed by
+// entry.displayGroup — the 'Ungrouped'-bucket key the GUI master writes under,
+// NOT the name-based entry.group used for section/view numbering. Off ⇒ 0;
+// brightness scales linearly; a full-on group (scale 1) is left untouched so
+// there is zero behavior change when nothing is disabled.
+function _applyLedOutputGate(list) {
+  if (!list) return;
+  const strandsEnabled = params.strandsEnabled;
+  const overrides = params.ledGroupOverrides;
+  for (let i = 0; i < list.length; i++) {
+    const entry = list[i];
+    if (!entry || entry.type !== 'led') continue;
+    const s = ledOutputScale(strandsEnabled, overrides, entry.displayGroup);
+    if (s >= 1) continue;
+    if (s <= 0) {
+      entry.r = 0; entry.g = 0; entry.b = 0;
+      entry.w = 0; entry.a = 0; entry.u = 0;
+      continue;
+    }
+    entry.r *= s; entry.g *= s; entry.b *= s;
+    entry.w *= s; entry.a *= s; entry.u *= s;
+  }
+}
+
 export function animate() {
   requestAnimationFrame(animate);
   controls.update();
@@ -382,11 +416,17 @@ export function animate() {
         _rebuildBatchCache();
       }
       demapSacnToPixels(_batchRenderList, window.dmxRouter);
+      // LED master/group blackout AFTER the demap writes entry colors, BEFORE
+      // the global flush + 2D tap read them.
+      _applyLedOutputGate(_batchRenderList);
 
     } else if (mappingEnabled) {
       if (_batchCacheVersion !== _batchLastBuiltVersion) {
         _rebuildBatchCache();
       }
+      // Gate BEFORE mapping so the LED sACN OUTPUT honors an OFF master/group
+      // too (parity with applyFixtureOutputOverrides zeroing DMX universe bytes).
+      _applyLedOutputGate(_batchRenderList);
       if (window._patchesActive) {
          // Only write to DMX router when patches exist (avoid writing to unmapped addresses)
          mapPixelsToSacn(_batchRenderList, window.dmxRouter);

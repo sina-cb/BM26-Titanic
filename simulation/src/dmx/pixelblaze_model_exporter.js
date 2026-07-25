@@ -6,6 +6,7 @@ import { reconcileGroupBits, listPixelGroups, buildViewmasksSidecarJS } from "./
 import { computeLedProjection, LED_CHANNEL_ORDERS, MAX_UNIVERSE } from "./controller_registry.js";
 import { computeLedStrandPatches, projectLedStrandPixels } from "./led/led_patch_projection.js";
 import { groupKeyForStrand } from "./led/led_metadata.js";
+import { ledDisplayGroup, scaleRgbForLedOutput } from "../core/group_lock.js";
 import { saveHttpUrl } from "../core/save_endpoint.js";
 
 export function generatePixelMap() {
@@ -301,6 +302,14 @@ export function generatePixelMap() {
       const ex = +(strand.endX || 0), ey = +(strand.endY || 0), ez = +(strand.endZ || 0);
       const proj = ledFields.get(strand.name);
       const orderMap = proj ? (LED_CHANNEL_ORDERS[proj.order] || LED_CHANNEL_ORDERS.RGBW) : null;
+      // The strand's DISPLAY group — the SINGLE key the GUI group master + Master
+      // Enabled write under and the exporter's paint scale reads. Distinct from
+      // `groupKeyForStrand` below (which keys an UNGROUPED strand by its NAME for
+      // section/view numbering); the master keys ungrouped strands by the shared
+      // 'Ungrouped' bucket. Carried on every LED pixel as `displayGroup` so the
+      // last-layer output gate (animate.js) resolves the master by the SAME key
+      // the bulb-mesh apply closure uses — never by the name-based `group` field.
+      const dispGroup = ledDisplayGroup(strand);
       // EVERY patched strand — device-bound AND generic (unbound) — places its
       // per-pixel {universe, addr} through the SAME contiguous walker
       // (projectLedStrandPixels), the ONE source of truth for the firmware's
@@ -365,6 +374,10 @@ export function generatePixelMap() {
           // named group and its section id can never disagree. Ungrouped
           // strands key off their name (unchanged bit-for-bit for old scenes).
           group: groupKeyForStrand(strand),
+          // Runtime-only display-group key (NOT serialized — see saveModelJS
+          // field list) for the last-layer LED output gate; keeps ungrouped
+          // strands under the shared 'Ungrouped' master bucket.
+          displayGroup: dispGroup,
           x: +(sx + (ex - sx) * t).toFixed(3),
           y: +(sy + (ey - sy) * t).toFixed(3),
           z: +(sz + (ez - sz) * t).toFixed(3),
@@ -395,7 +408,15 @@ export function generatePixelMap() {
         px.apply = fixture
           ? ((r, g, b) => {
             if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
-            fixture.setLedColorRGB(j, r || 0, g || 0, b || 0);
+            // LED-strand GLOBAL master (params.strandsEnabled) + per-group master
+            // (On/Off + Brightness) — a REAL last-layer output override on the
+            // direct-paint path, the LED analogue of applyFixtureOutputOverrides
+            // for DMX. Read live each frame (keyed by the strand DISPLAY group) so
+            // a slider move dims the group on the very next frame; either OFF ⇒
+            // black. Same authority (ledOutputScale) the raw-color paths gate on.
+            const [sr, sg, sb] = scaleRgbForLedOutput(
+              params.strandsEnabled, params.ledGroupOverrides, dispGroup, r || 0, g || 0, b || 0);
+            fixture.setLedColorRGB(j, sr, sg, sb);
           })
           : (() => {});
         pixels.push(px);

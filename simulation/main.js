@@ -24,7 +24,7 @@ import { extractParams } from "./src/core/config.js";
 import { applyBootUrlOverrides } from "./src/core/url_overrides.js";
 import { createGround, createStarField, loadModel, onModelLoaded } from "./src/core/environment.js";
 import { rebuildParLights, rebuildDmxFixtures } from "./src/core/fixtures.js";
-import { onPointerMove, onPointerDown, onKeyDown, onTransformChange } from "./src/core/interaction.js";
+import { onPointerMove, onPointerDown, onKeyDown, onTransformChange, computeRigidMoveIndices } from "./src/core/interaction.js";
 import { animate } from "./src/core/animate.js";
 import { initRegistry } from "./src/dmx/fixture_definition_registry.js";
 import { createViewRegistry } from "./src/dmx/view_registry.js";
@@ -195,12 +195,18 @@ async function init() {
     controls.enabled = !event.value;
     if (event.value) {
       pushUndo();
-      // Capture starting state for differential multi-select transforms
-      if (selectedFixtureIndices.size > 1) {
-        const obj = transformControl.object;
-        const dragIdx = obj?.userData?.fixture?.index;
-        const dragStartState = { dragIdx, fixtures: {} };
-        for (const idx of selectedFixtureIndices) {
+      // Capture starting state for differential transforms across the rigid-move
+      // set: multi-select AND (when the dragged fixture's group is LOCKED) the
+      // whole group. computeRigidMoveIndices is the single source of truth for
+      // which fixtures move together — see interaction.js.
+      const obj = transformControl.object;
+      const dragIdx = obj?.userData?.fixture?.index;
+      const moveIndices = (Number.isInteger(dragIdx))
+        ? computeRigidMoveIndices(dragIdx)
+        : [...selectedFixtureIndices];
+      if (moveIndices.length > 1 && Number.isInteger(dragIdx)) {
+        const dragStartState = { dragIdx, indices: moveIndices, fixtures: {} };
+        for (const idx of moveIndices) {
           const cfg = params.parLights[idx];
           const f = window.parFixtures[idx];
           if (cfg && f) {
