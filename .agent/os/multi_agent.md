@@ -370,6 +370,15 @@ git branch -d dev/<slug>     # safe delete (only if merged)
 
 ## 9. Anti-patterns (don't do these)
 
+- **Leaving sim browser pages/probe browsers alive after your task.**
+  A live sim page is not passive: in sacn_in mode it RELAYS sACN to
+  hardware (a second writer = physical light flicker), its `setScene`
+  handshake rewrites bridge hardware routes (loading a scene with no
+  routes silently disconnects hardware), and it burns GPU (viewport
+  freezes for everyone). Close every page/browser you opened, every
+  time. (Root-caused the hard way on 2026-07-24 — report
+  `202607/20260724_15`.)
+
 - **Sub-agent edits files outside its worktree.** Causes silent corruption
   of other sub-agents' trees.
 - **Sub-agent pushes to `origin`** before the instigator has reviewed and

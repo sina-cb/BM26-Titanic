@@ -18,7 +18,7 @@ The full map, precedence stack, and boot pointer live in
 | Dir | What it is | When to use it |
 |---|---|---|
 | `.agent/codex.md` | **The holy word** — mission + P0 rules. Sina-only, never edit. | Read first, every session. |
-| `.agent/os/` | **The laws** — git, style guides, ui_design, multi_agent, task_tracking, security_privacy, autonomy, memory. | Before committing, writing code, fanning out, or acting on initiative. |
+| `.agent/os/` | **The laws** — git, style guides, ui_design, multi_agent, interface_agent, task_tracking, security_privacy, autonomy, memory. | Before committing, writing code, fanning out, or acting on initiative. |
 | `.agent/ops/` | **Runbooks + auto-checks** per subsystem. | Before running, or before claiming merge-readiness. |
 | `.agent/skills/` | **How-tos** — reusable procedures. | When the task matches a skill, follow it. |
 | `.agent/roles/` | **Role briefs** — coordinator, planner, developer, subsystem experts, reviewer, deployment, artist, investigator, validator, task_manager. | Adopt the matching role's mindset. |
