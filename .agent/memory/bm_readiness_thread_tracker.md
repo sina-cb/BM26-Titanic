@@ -17,35 +17,136 @@ their report link. Reports live in `.agent/reports/202607/20260724_N_*.md`.
 
 ## In flight (as of 2026-07-24)
 
+- **Commit wave #3 (Opus, operator-ordered 2026-07-25)** — commits all
+  uncommitted work on `feat/bm_readiness` (rename-orphan _37, DMX gate
+  _40, trail/selection fix _1/_2, audio kick fix _39, trace_chains _33,
+  partial color-transition + S2 wiring marked WIP): explicit staging
+  only, security check per commit, residue triage on
+  `marsin_engine/states/**`, NO PUSH. Report reserved: `20260725_3`.
+- **TE sign test_bench pattern debug (Fable)** — operator (verbatim):
+  "why the TE sign in the test_bench scene not showing patterns? even
+  on pixelblaze lighting engine from the sim not from marsin engine
+  over sacn". Read-only diagnosis (probe with `&readonly=1`, own
+  browser, no scene switch), both drive paths, fix plan for Opus.
+  Report reserved: `20260725_4`. Next slice number free: `_5`.
+
+
 **LED feedback round 2 (operator tested, "chef's kiss" overall):**
 **OPERATOR IS OFFLINE (announced ~this update). Autonomy mode within
 the law; document all judgment calls; nothing pushed; commits were
 explicitly ordered.**
 
-1. **Commit #2** (Opus, deployment) — operator: "but first commit now,
-   and then start". Checklist: gui_builder.js integrity check (S2
-   agent was CANCELLED by the operator interrupt mid-flight — possible
-   partial edit; hand-repair minimally, NEVER git-revert the file);
-   NUL sentinel fix (safe now, no other writer); RE-EXPORT titanic
-   engine model (strand removals invalidated `_21` export; expect
-   <1141 px, TE Sign 74 still present); residue exclusions per `_21`;
-   security gate; 1–3 commits, NO push. → `20260724_31`. IN FLIGHT.
-2. **Station-mapping implementation wave QUEUED behind Commit #2**
-   (design `_32` LANDED — see Landed). Plan `S0 ∥ S1 → S2 → S3 → S4`:
-   S0 = reconcile "_30": **KEY FINDING — the cancelled S2/S3 generator
-   UI code is FULLY PRESENT AND WIRED in the tree** (✨ Generators,
-   LED Fixture Instances, ordering, second-sign modal; tests green);
-   only report `_30` + live proof missing → S0 runs
-   `led_generator_verify.cjs` and writes `_30`. S1 = new pure
-   `simulation/src/dmx/trace_chains.js` (startAngle/splits chainPlan)
-   + tests. S2 = gui_builder + config.js wiring (single-owner).
-   S3 = scene restructure through the LIVE app UI (autosave on,
-   ~/tmp backup, never restart). S4 = engine model re-export + pixel
-   census + campaign report. Reports: S0→`_30`, S1..S4→`_33+`.
-3. **Follow-up flag from `_27` (unconfirmed, task chip spawned):** the
-   global instanced-dot flush reads raw entry color for patched DMX
-   pixels too — a DMX group's OFF master may leave parallel un-gated
-   dot residue. Not user-reported; worth a check.
+**HOST-PROCESS RESTART EVENT (2026-07-25):** the Claude Code session
+restarted; the in-flight agents (S0, S2-wiring, color-transitions)
+were marked stopped-by-user and CANNOT be resumed (harness policy:
+relaunch only on explicit operator ask). Tree verified HEALTHY after
+the interruption: touched files syntax-clean, sim suite 526/526.
+Awaiting operator "continue" to relaunch fresh agents for:
+1. **S0 generator live proof** — report `_30` missing; committed
+   generator UI code is valid but live proof/design-audit not done.
+2. **S2 chain wiring** (`_34` missing) — `trace_chains` module (`_33`)
+   DONE+tested; gui_builder/config wiring (startAngle/splits UI,
+   chainPlan generation, multi-chain sweep) not confirmed complete;
+   any partial edits in tree are syntax-clean and test-green.
+3. **Color transitions** (`_38` missing) — substantial partial work ON
+   DISK (sim `src/core/color_transition.js`, engine
+   `lib/color_transition.js`, passing math tests, param_center/
+   test_bench.effects wiring edits); missing integration proof,
+   benchmarks, visual side-by-sides, report.
+**Stale task chip:** "fix 4 NUL bytes in gui_builder.js" is ALREADY
+DONE (commit 34c8c52f, '::new::'/'::ungroup::', 0 NULs on disk) — do
+not redo.
+
+**Landed 2026-07-25 — LED move trail + sticky selection DEBUG (Fable,
+`20260725_1_led_move_trail_debug.md`):** all 3 operator symptoms
+reproduced live on :6969/titanic, screenshots inspected. Root causes
+(both LONGSTANDING — byte-identical since the main.js split 30495f12,
+NOT introduced by the LED-wave campaign): (1) trail = 3D-handle move
+path never invalidates the marsin batch cache — interaction.js:231-234
+early-returns into `_onStrandTransformChange` (gui_builder.js:4329)
+which skips the `invalidateMarsinBatchCache` PAR drags hit at L298;
+`_batchRenderList` positions are snapshotted at generatePixelMap
+(pixelblaze_model_exporter.js:393-395) and the dot flush writes colors
+only → measured 40/40 dots at old line, 40/40 bulbs at new line; also
+stales 2D map + engine normalized coords. Sliders don't trail
+(rebuildLedStrands → invalidate at :4324) — confirming asymmetry.
+(2+3) sticky selection + orange line = `deselectAllFixtures()`
+(interaction.js:98-105) clears PARs only; empty-click (L489-495) and
+Escape (L541-543) never call strand `setSelected(false)`; orange line
+is the strand's selection glow tube (`led_strand.js:146-159`, colored
+`config.color`, 7/8 titanic strands #ff8800). SIDE FINDING (filed, not
+fixed): locked strand groups don't rigid-move on 3D handle drags —
+slider path honors the lock, handle path doesn't. PROBE LESSON: load
+sim probe pages with `&readonly=1` — main.js:267 overwrites
+`__readonlyMode`, otherwise the probe becomes a live sACN writer.
+
+**Landed 2026-07-25 — LED move trail + sticky selection FIX (Opus,
+`20260725_2_led_move_trail_fix.md`, UNCOMMITTED):** surgical 2-file
+diff per the `_1` plan. (1) `_onStrandTransformChange`
+(gui_builder.js:4329-4345) now calls guarded
+`invalidateMarsinBatchCache('strand_transform')` after
+`rebuildVisuals()` — one bump cures global dots + 2D map + engine
+`_batchCoords` + sACN pattern geometry. (2) `deselectAllFixtures()`
+(interaction.js:98-118) also clears `ledStrandFixtures`
+`setSelected(false)` + strips `gui-card-selected` from
+`strandGuiFolders`; strand-pick order preserved; PAR/TE-Sign path
+untouched. Live probe (readonly=1, autoSave asserted false): dots at
+old/new line 40/1 → **0/41**; 2D-map 0 stale / 40 new; click-away AND
+Escape now clear `_selected`/tube/handles/card (was true×4 → false×4);
+84 PARs still selectable; **542/542**; screenshots inspected (post-fix
+old diagonal = bare hull, glow gone after Escape). Probe lesson: on
+SwiftShader allow ≥3000 ms settle — cache rebuild lands next frame and
+this box runs ~1-2 fps; a 1500 ms settle false-failed once. Drag-FPS
+delta unbenchmarkable on this box (structurally cheaper than the
+slider path). Locked-group rigid-move side-finding still OPEN (operator
+decision queue).
+
+**Station-mapping wave plan (paused at S2):** `S0 ∥ S1(done) → S2 →
+S3 → S4`.
+**STACK EVENT (2026-07-25 ~04:17 local):** operator's stack went DOWN
+while he was offline (all 6 ports dead; not caused by any agent —
+possibly shut down before leaving). Coordinator restarted it per the
+launcher law: `node launcher.js prod --scene titanic`. All services
+up; **`_20` priority hardening verified live: engine + both bridges +
+launcher parent all log requested=HIGH achieved=HIGH.** Engine:
+titanic 981 px, render-only (0 patched — expected, patches empty).
+Noise flags: VSN1 page-0 deploy FAILED (Lua action string 5960 chars >
+device limit 909) + a libuv assertion in that path — engine kept
+running; pre-existing device-config issue, follow up separately. A
+stale browser client tagged 'test_bench' reconnected to the bridge at
+boot (old tab somewhere) — bench controllers offline, harmless.
+**FOLLOW-UP EVENT (~04:18):** a real Chrome window loaded
+`?scene=test_bench` and an explicit /scene switch restarted the
+engine titanic→test_bench (now healthy on test_bench,
+02_phase_cathedral, renderHealth ok). The LAUNCHER PARENT exited
+code 1 around the engine-child restart (VSN1 libuv assertion
+suspected aggravator) — ALL SIX SERVICES SURVIVED and run unsupervised
+(`node launcher.js stop` still the clean stop). Coordinator did NOT
+switch the engine back (unknown whether the switch was the operator —
+no last-writer-wins fights). NEW FOLLOW-UP CANDIDATES: (a) VSN1
+deploy Lua exceeds device 909-char limit + crashes native assertion —
+needs guard/fix; (b) launcher parent dying on engine scene-switch
+restart deserves a look (supervision gap).
+3. **S2 QUEUED** (after S0+S1+`_37`; gui_builder + config.js
+   single-owner): wire trace_chains into circle traces +
+   traceGenerated re-stamp. → `20260724_34`.
+4. **S3 QUEUED** (after S2): scene restructure through the LIVE app UI
+   per design `_32` (stations rename, par replacement, smokestack
+   chains, TE Sign 2, orphan cleanup, Smokestacks view; ~/tmp backup;
+   autosave on; never restart stack). → `20260724_35`.
+5. **S4 QUEUED** (after S3): engine model re-export + pixel census +
+   campaign report. → `20260724_36`.
+6. **Color transition optimization** (Fable, research+implement+test,
+   operator order, IN FLIGHT) — replace naive RGB lerp with
+   perceptually optimal interpolation (evaluate OKLab/OKLCH vs
+   CIELAB/CIELCH vs CAM16-UCS; operator's "Java colors lab library" =
+   CIELAB family). Inventory ALL transition sites (sim gradient
+   stops, engine crossfades/mixer; VM-side pattern math report-only);
+   pure modules, no runtime deps, per-pixel-per-frame perf budget
+   with benchmarks; hue shortest-arc + achromatic + gamut mapping;
+   gui_builder.js LOCKED (owned by `_37`) — document any needed UI
+   edit instead of making it. Visual side-by-side proof on hard pairs.
+   → `20260724_38`.
 **Design `_26` LANDED** (see Landed). Operator decision points from it:
 (D1) stateless generator buttons (RECOMMENDED, designed) vs persistent
 trace-style cards with Regenerate; (D2) second sign click: confirm +
@@ -187,6 +288,90 @@ Phase 1 fix still on the table (decision #12).
   pre-session — restarted by agent. Ops rule codified in
   `os/multi_agent.md` §9: agents close every sim page they open.
 
+- **DMX dot-gate fix `20260724_40`: LANDED — bug was WORSE than
+  filed**: titanic scene has ZERO patched fixtures, and
+  `applyFixtureOutputOverrides` skips unpatched fixtures entirely →
+  DMX group masters had NO effect on ANY rendered pixel (not just
+  dots). Fix: `dmxOutputScale()`+`applyDmxEntryOutputGate()` (pure, in
+  dmx_output_overrides.js) as one authority; `_applyDmxOutputGate()`
+  in animate.js AFTER `applyFixtureOutputOverrides` (single-scaling on
+  wire proven: 159→64 not 25.4); join by `entry.fixtureConfig` (same
+  live object as the buffer gate — _27 keying trap structurally
+  impossible); repaints direct-painted bulbs when unpatched;
+  `outputGain()` delegates to same fn. Post-fix OFF ⇒ exact 0 on
+  entry/2D/dot/bulb both regimes; 40% ⇒ exact ×0.4; 0.013 ms/frame.
+  LED gate untouched (led_blackout_verify re-run PASS). New
+  `dmx_blackout_verify.cjs` (+`--patch` in-memory patched regime) +
+  16 tests. 542/542. **OPERATOR NOTES:** (1) visible change at boot —
+  `Left Front Deck Generator` persisted at brightness:0 was rendering
+  FULL, now correctly black (ties to `_32` open question #6: reset
+  that override?); (2) NEW DECISION: DMX section's global Master
+  Enabled (parsEnabled/dmxEnabled) is STILL visibility-only — the
+  exact pre-_27 shape of punch (f); folding it in touches
+  `outputGain()`/light pool, held for operator.
+- **Audio Companion kick/distortion fix `20260724_39`: LANDED** — TWO
+  independent bugs on the test source: (1) kick-always-off
+  (long-standing): the `tone` synth's steady 55 Hz sub sits INSIDE the
+  50–110 Hz kick window, pinning the adaptive ratio threshold
+  (instant > ema×2.4) so the 80 Hz transient never fired — retuned
+  synth (sub 0.28, kick 1.0, longer burst; ~10 kicks/6s both FFT
+  sizes) + regression test; (2) distortion: engine runtime tuning had
+  drifted `inputGain: 8.83` (stale mic calibration in
+  states/test_bench/audio_state.yaml), synced over ws/control and
+  applied to the full-scale synthetic source → 81.9% samples clipped.
+  Durable guard: test source now renders at UNITY gain (immune to any
+  persisted mic preamp — verified clean even with 8.83 still synced);
+  `applyInputGain` fails loud on bad values; stale param-seed literal
+  in companion_server removed. Engine's persisted 8.83 NOT hand-edited
+  (engine-owned runtime state; test source decoupled anyway) —
+  operator can reset inputGain in MIC TUNE if the real mic path runs
+  hot. OSC out proven (/marsin/mic/kick ~55 Hz w/ envelope). Engine
+  suite 2126/2133 (7 pre-existing env fails, zero new). Only the
+  Companion process was restarted; engine/sim untouched.
+- **Generator rename-orphan fix `20260724_37`: LANDED** — root cause:
+  trace-name onFinishChange set `trace.groupName` to the NEW name
+  BEFORE regenerating, so the sweep (which removes by current name)
+  matched nothing → old fixtures orphaned as duplicates (with orphaned
+  overrides + view bits); the exact mechanism behind the 12 committed
+  orphans from `_32`. Fix: remove-old-first semantics — fail-loud name
+  guard (reverts input), carry group master override + view-mask bit,
+  set new name, regenerate sweeping OLD name via new
+  `previousGroupName` param on `generateGroupFromTrace` (3rd param
+  defaults null = prior behavior). New pure
+  `simulation/src/gui/trace_group_rename.js` + 12 tests + live
+  `agent_tools/trace_rename_verify.cjs`. config.js unchanged (re-stamp
+  pinned by test). LED ✨ flow unaffected (renames via _28 paths).
+  Both directions + double-rename proven live (REPRO→FIX→GUARD, zero
+  scene writes). 519/519. Pre-existing 12 scene orphans left for S3.
+- **S1 trace_chains `20260724_33`: LANDED (new files only)** — pure
+  `simulation/src/dmx/trace_chains.js` (`chainPlan`/`chainGroupNames`;
+  splits ∈ [1,4], mirror/sequential layouts, startAngle fold, fail-
+  loud on all bad inputs) + 23 tests; suite 519/519. KEY FINDING for
+  S2: gui_builder's arclength arithmetic is NOT reproducible by naive
+  degree math (1-ULP divergence) — module replicates the exact
+  sequence; splits=1 proven strict `===` against a verbatim oracle on
+  real titanic smokestack params (10/10 dots bit-identical + 6 more
+  geometries). S2 contract: place fixtures from `points` (authoritative,
+  local space, pre-transform), chain-major naming `<group> <i+1>`,
+  `angles` display-only; buildTracePath change must use
+  `startRad + (s/length)*arcRad`; count is per-chain when splits>1;
+  pointOffsets kept for splits=1, disabled for splits>1; group names
+  union with legacy `trace.groupName` in regeneration sweep AND
+  config.js traceGenerated re-stamp.
+- **Commit snapshot #2 `20260724_31`: COMMITTED on feat/bm_readiness
+  (NOT pushed)** — `34c8c52f` sim LED-wave code (16 files, slices
+  22–29 + NUL sentinel fix `'::new::'`/`'::ungroup::'` — file diffs
+  as text again); `cdccabde` titanic scene state + re-exported model
+  (**1141 → 981 px** after the 8 `Small_*` strand removals; TE Sign
+  74 px present; viewmasks bit matches views.yaml); `d091977b` .agent
+  docs (_21.._32). gui_builder.js integrity: NO broken partial edit —
+  the cancelled S2 generator UI is complete and valid; committed.
+  484/484 tests. Security: commits 1–2 first-try PASS; docs commit
+  failed on a `_21` self-leak (its security section quoted the IPs it
+  redacted) — re-redacted → PASS. Exclusions documented in `_31`
+  (engine runtime, timestamp churn, session churn, CRLF-only, junk
+  files incl. stray `led202.*` 0-pixel export). Model re-export via
+  readonly tab, zero sACN, show undisturbed.
 - **Titanic station mapping design `20260724_32` (Fable, DESIGN ONLY):
   LANDED** — target: 64 pars / 16 groups / 8 strands unchanged / 1
   custom view. 4 wall stations = existing wall traces renamed
