@@ -73,8 +73,13 @@ test('mid-ramp injects an eased interpolant, not the target', () => {
   pc.flushDirty(host);
   const h = host.last[11].h;
   assert.ok(h > 0.0 && h < 0.5, `mid-ramp hue ${h} strictly between endpoints`);
-  // smoothstep(0.5) = 0.5, so hue ≈ 0.25 at the time-midpoint.
-  assert.ok(Math.abs(h - 0.25) < 1e-6, `eased hue ${h} ≈ 0.25`);
+  // Since 2026-07-24 the ramp runs through OKLCH (perceptual), not linear
+  // HSV, so the time-midpoint hue is the PERCEPTUAL midpoint between red
+  // (h=0) and cyan (h=0.5) — not exactly 0.25. It must still be well clear
+  // of both endpoints, fully saturated-ish, and finite.
+  assert.ok(h > 0.05 && h < 0.45, `mid-ramp hue ${h} well inside (0.05, 0.45)`);
+  assert.ok(Number.isFinite(host.last[11].s) && host.last[11].s >= 0 && host.last[11].s <= 1);
+  assert.ok(Number.isFinite(host.last[11].v) && host.last[11].v >= 0 && host.last[11].v <= 1);
 });
 
 test('ramp completes and stops dirtying after the duration', () => {

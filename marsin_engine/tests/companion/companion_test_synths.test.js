@@ -87,6 +87,20 @@ test('kick_4floor produces multiple kick fires', () => {
   assert.ok(r.kickFires >= 2, `expected >=2 kick fires, got ${r.kickFires}`);
 });
 
+// Regression guard (report 202607/20260724_39): the 'tone' synth's steady 55 Hz
+// sub used to sit inside the 50–110 Hz kick window at a level that masked the
+// periodic kick transient, so micKick read ALWAYS OFF on the default test source
+// — the operator's "kick is always off on the random data source" bug. The synth
+// name ("Tones + kick") promises a kick; assert it actually fires. Warmup eats
+// the first ~0.6 s of kicks, so 3 s gives clear margin over the >=2 threshold.
+test('tone (default test source) actually fires the kick', () => {
+  const r = runSynth('tone', 3.0);
+  assert.ok(r.kickFires >= 2, `expected 'tone' to fire the kick (>=2), got ${r.kickFires}`);
+  // and it should still drive all three bands (a sane "signals look right" ref).
+  assert.ok(r.meanLow > 0.05 && r.meanMid > 0.05 && r.meanHigh > 0.05,
+    `expected all bands active, got low=${r.meanLow.toFixed(3)} mid=${r.meanMid.toFixed(3)} high=${r.meanHigh.toFixed(3)}`);
+});
+
 test('bassline is low-heavy (mean low > mean high)', () => {
   const r = runSynth('bassline', 2.0);
   assert.ok(r.meanLow > r.meanHigh, `expected meanLow(${r.meanLow.toFixed(3)}) > meanHigh(${r.meanHigh.toFixed(3)})`);

@@ -532,13 +532,18 @@ setInterval(() => {
 // absurd BPM is dropped so the engine fails SAFE (no stale fallback) rather
 // than syncing SPEED to a wrong tempo.
 
-// Tweakable test-signal source (the UI edits these in 'test' mode).
+// Tweakable test-signal source (the UI edits these in 'test' mode). The param
+// seed comes from the chosen synth's OWN defaults (one source of truth) — NOT a
+// hand-copied literal that can silently drift from the synth. This matters: the
+// params here OVERRIDE the synth defaults in fillFrame (genFrame passes `source`
+// as the params object), so a stale copy would defeat a synth-default fix. The
+// 'tone' kick-fix (report 202607/20260724_39) lives in SYNTHS.tone.defaults and
+// is picked up here automatically.
 const source = {
   // Which test SYNTHESIZER drives the 'test' source (see audio/synth/
-  // test_synths.js). Default 'tone' is byte-identical to the legacy generator.
+  // test_synths.js). Default 'tone' = steady band tones + a periodic kick.
   synth: 'tone',
-  subLevel: 0.5, midLevel: 0.3, highLevel: 0.25,
-  kickLevel: 0.8, kickHz: 2.0, noiseLevel: 0.02,
+  ...SYNTHS.tone.defaults,
 };
 // Global software preamp (the analyzer's bands.inputGain) — applies to EVERY
 // source (test/mic/file). This is the "microphone gain" the operator tunes.
@@ -596,10 +601,39 @@ function diagReport() {
   };
 }
 
+// The gain ACTUALLY applied to the analyzer's PCM. `inputGain` is the MIC
+// PREAMP (synced from the engine, tuned for a quiet real mic). The synthetic
+// 'test' source is generated at FULL SCALE ([-1,1]) — it is NOT a microphone, so
+// applying the mic preamp to it is a category error: a mic-tuned gain (e.g. the
+// 8.83 that had drifted into the engine's audio_state) multiplies a full-scale
+// tone to ~9× and hard-clips it, saturating every band toward 1 and turning the
+// oscilloscope into a square wave — the operator's "it's all distorted" on the
+// RANDOM (test) source (report 202607/20260724_39). So the test source ALWAYS
+// renders at unity: the designer's synthetic reference must look clean no matter
+// what mic gain is persisted/synced. mic/file (real captured audio) still get
+// the preamp. NOT a fallback (codex P0): a synthetic generator genuinely needs
+// no preamp — this is correct source-stage semantics, not error-masking.
+function effectiveInputGain() {
+  return mode === 'test' ? 1 : inputGain;
+}
+function applyEffectiveGain() {
+  const g = effectiveInputGain();
+  analyzer.reconfigure({ bands: { ...analyzer.bands, inputGain: g }, kick: analyzer.kick });
+  specAnalyzer.reconfigure({ bands: { ...specAnalyzer.bands, inputGain: g }, kick: specAnalyzer.kick });
+}
 function applyInputGain(v) {
-  inputGain = Math.max(0, Math.min(64, +v));
-  analyzer.reconfigure({ bands: { ...analyzer.bands, inputGain }, kick: analyzer.kick });
-  specAnalyzer.reconfigure({ bands: { ...specAnalyzer.bands, inputGain }, kick: specAnalyzer.kick });
+  const g = +v;
+  // Fail loud on a non-finite / out-of-range gain instead of silently clamping
+  // it into a distorting value (codex P0: no silent fallback). The engine's
+  // PATCH validator + the analyzer's reconfigure both bound gain to [0,64]; this
+  // is the Companion's own guard so a malformed synced/echoed value can't
+  // silently corrupt the analyzer — it keeps the last good gain and warns.
+  if (!(Number.isFinite(g) && g >= 0 && g <= 64)) {
+    console.warn(`[companion] rejecting invalid inputGain ${v} (must be finite in [0,64]); keeping ${inputGain}`);
+    return;
+  }
+  inputGain = g;
+  applyEffectiveGain();
 }
 function applySmooth(v) {
   sourceSmoothHz = Math.max(0, Math.min(22050, +v));
@@ -1229,6 +1263,10 @@ function setMode(next, opts = {}) {
   diag.lastWall = 0; diag.startWall = 0; diag.frames = 0; diag.samples = 0; diag.deltas.length = 0;
   adiag.last = 0; adiag.prevLow = null; adiag.deltas.length = 0; adiag.steps.length = 0;
   mode = (next === 'mic' || next === 'file') ? next : 'test';
+  // Re-apply the mode-appropriate analyzer gain: unity for the synthetic 'test'
+  // source (no mic preamp on a full-scale generator), the real mic preamp for
+  // mic/file. Must run AFTER `mode` is set and analyzers are reset above.
+  applyEffectiveGain();
   if (mode === 'test') { startTest(); broadcast({ type: 'sourceStatus', mode, status: { enabled: true } }); }
   else if (mode === 'mic') startCapture(opts.device != null ? opts.device : configDevice);
   else if (mode === 'file') {

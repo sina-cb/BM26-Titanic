@@ -12,6 +12,7 @@ import fs from 'fs';
 import yaml from 'js-yaml';
 
 import { audioRegistryEntries, isLiveAudioSharedFnName } from '../audio/postproc/audio_signals.js';
+import { makeHsvTransition } from './color_transition.js';
 
 // ── Shared Parameter Registry ─────────────────────────────────────────────
 //
@@ -199,27 +200,15 @@ function easeInOut(t) {
   return t * t * (3 - 2 * t);
 }
 
-// Hue lives on a circle (0..1 wraps). Interpolate the SHORTEST arc so
-// e.g. 0.95 → 0.05 crosses red, not the entire spectrum.
-function lerpHue(a, b, t) {
-  let d = b - a;
-  if (d > 0.5) d -= 1;
-  if (d < -0.5) d += 1;
-  return (a + d * t + 1) % 1;
-}
-
-function lerpFloat(a, b, t) {
-  return a + (b - a) * t;
-}
-
-// Interpolate an {h,s,v} value: hue along the short arc, s/v linear.
-function lerpHsv(from, to, t) {
-  return {
-    h: lerpHue(from.h ?? 0, to.h ?? 0, t),
-    s: lerpFloat(from.s ?? 1, to.s ?? 1, t),
-    v: lerpFloat(from.v ?? 1, to.v ?? 1, t),
-  };
-}
+// The color path itself is PERCEPTUAL: makeHsvTransition (lib/
+// color_transition.js) converts both endpoints to OKLab once per ramp,
+// interpolates lightness/chroma linearly with hue on the shortest OKLCH
+// arc (achromatic endpoints adopt the other side's hue), gamut-maps back
+// to sRGB, and re-expresses the result as {h,s,v} for VM injection.
+// This replaced the old naive HSV lerp (2026-07-24): HSV's hue wheel is
+// perceptually lumpy, so equal ramp time used to produce visibly uneven
+// color motion. Endpoints are returned EXACTLY at t=0/t=1 (no round-trip
+// drift). See .agent/reports/202607/20260724_38_color_transition_optimization.md.
 
 /**
  * Extract the semantic role from a shared function name.
@@ -312,14 +301,22 @@ export class ParamCenter {
     //   _rampFrom[key]   — HSV at the moment the target last changed
     //                      (null === no active ramp)
     //   _rampStartMs[key]— clock at ramp start (null === start on next tick)
+    //   _rampSample[key] — cached perceptual interpolator for the CURRENT
+    //                      (from, to) endpoint pair. Endpoint OKLab
+    //                      conversion happens once per ramp here, not per
+    //                      tick; invalidated whenever either endpoint
+    //                      object changes (set() re-arms with fresh
+    //                      objects, so identity comparison suffices).
     this._slewKeys = this._registry.filter(e => e.slew).map(e => e.key);
     this._rendered = {};
     this._rampFrom = {};
     this._rampStartMs = {};
+    this._rampSample = {};
     for (const key of this._slewKeys) {
       this._rendered[key] = deepCopy(this._store[key].value);
       this._rampFrom[key] = null;
       this._rampStartMs[key] = null;
+      this._rampSample[key] = null;
     }
   }
 
@@ -810,6 +807,7 @@ export class ParamCenter {
       this._rendered[key] = deepCopy(this._store[key].value);
       this._rampFrom[key] = null;
       this._rampStartMs[key] = null;
+      this._rampSample[key] = null;
     }
     for (const chId in this._channels) {
       this._applyToHandle(wasmHost, this._channels[chId]);
@@ -837,12 +835,20 @@ export class ParamCenter {
       const t = transMs <= 0
         ? 1
         : clamp01((nowMs - this._rampStartMs[key]) / transMs);
-      this._rendered[key] = lerpHsv(from, target, easeInOut(t));
+      // (Re)build the perceptual interpolator when either endpoint object
+      // changed — set() deep-copies both, so identity checks are exact.
+      let cached = this._rampSample[key];
+      if (!cached || cached.from !== from || cached.to !== target) {
+        cached = { from, to: target, sample: makeHsvTransition(from, target) };
+        this._rampSample[key] = cached;
+      }
+      this._rendered[key] = cached.sample(easeInOut(t));
       this._store[key].dirty = true; // force injection of _rendered
       if (t >= 1) {
         this._rendered[key] = deepCopy(target);
         this._rampFrom[key] = null;
         this._rampStartMs[key] = null;
+        this._rampSample[key] = null;
       }
     }
   }
