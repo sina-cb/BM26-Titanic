@@ -4,14 +4,30 @@ entries:
   - id: e_1783728658515_6963
     pattern: 00_golden_hour_wash
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.4
+      sliderDirection: 0.69
+      sliderLevel: 0.5
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderWarmth: 0.5
+      sliderWhiteLevel: 0.45
+      sliderWhiteKick: 0.2
+      sliderWhiteWarmth: 0.25
     modulations: []
     midiMappings: []
     notes: null
   - id: e_1783728694045_3380
     pattern: 02_phase_cathedral
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.5
+      sliderDirection: 0.75
+      sliderLevel: 0.5
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderSharpness: 0.5
+      sliderCount: 0.5
     modulations: []
     midiMappings: []
     notes: null
@@ -25,21 +41,60 @@ entries:
   - id: e_1783728697160_5470
     pattern: 01_cylon_sweep
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.5
+      sliderDirection: 0.69
+      sliderLevel: 0.72
+      sliderKick: 0.62
+      sliderRadius: 0.5
+      sliderTrail: 0.5
+      sliderEyeWidth: 0.5
+      sliderBackgroundGlow: 0.15
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0.3
+      sliderBlinderBite: 0.5
     modulations: []
     midiMappings: []
     notes: null
   - id: e_1783728697160_1251
     pattern: 02_phase_cathedral
     label: null
-    defaults: {}
-    modulations: []
+    defaults:
+      sliderLocalSpeed: 0.5
+      sliderDirection: 0.7
+      sliderLevel: 0.5
+      sliderKick: 0
+      sliderRadius: 0.28
+      sliderSharpness: 0.29
+      sliderCount: 0.64
+    modulations:
+      - id: mod_sliderKick_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderKick
+        mode: override
+        polarity: unipolar
+        range:
+          - 0
+          - 0.4
+        curve: easeIn
     midiMappings: []
     notes: null
   - id: e_1783728697160_532
     pattern: 03_dual_axis_crush
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.34
+      sliderDirection: 0.71
+      sliderLevel: 0.5
+      sliderKick: 0.5
+      sliderRadius: 0.5
+      sliderBeamWidth: 0.5
     modulations: []
     midiMappings: []
     notes: null
@@ -95,28 +150,74 @@ entries:
   - id: e_1783728697160_7216
     pattern: 11_bioluminescence
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.77
+      sliderDirection: 0.5
+      sliderLevel: 0.5
+      sliderKick: 0.5
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderDensity: 0.5
+      sliderUvGlow: 0.5
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0.5
+      sliderWhiteWarmth: 0.5
     modulations: []
     midiMappings: []
     notes: null
   - id: e_1783728697160_1250
     pattern: 12_breathing
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.1
+      sliderDirection: 0.5
+      sliderLevel: 0.5
+      sliderKick: 0.11
+      sliderRadius: 0.5
+      sliderDepth: 0.5
+      sliderRipple: 0.5
+      sliderSharpness: 0.5
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0.5
+      sliderBlinderBite: 0.5
     modulations: []
     midiMappings: []
     notes: null
   - id: e_1783728697160_9091
     pattern: 13_sparkle
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.05
+      sliderDirection: 0.5
+      sliderLevel: 0.5
+      sliderKick: 0.5
+      sliderRadius: 0.5
+      sliderDensity: 0.5
+      sliderSparkleIntensity: 0.5
+      sliderSparkleSize: 0.5
+      sliderBackgroundLevel: 0.5
+      sliderWhiteGlint: 0.5
+      sliderAmberGlint: 0.5
+      sliderUvGlint: 0.5
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0.5
+      sliderWhiteWarmth: 0.5
     modulations: []
     midiMappings: []
     notes: null
   - id: e_1783728697160_5343
     pattern: 14_lunar_current
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.6
+      sliderDirection: 0.5
+      sliderLevel: 0.5
+      sliderKick: 0.5
+      sliderRadius: 0.5
+      sliderShimmer: 0.5
+      sliderDensity: 0.5
+      sliderWhiteLift: 0.5
+      sliderUvLift: 0.5
     modulations: []
     midiMappings: []
     notes: null

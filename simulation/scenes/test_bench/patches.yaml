@@ -79,6 +79,22 @@ patches:
     sectionId: 4
     fixtureId: 10
     viewMask: 0
+  TE Sign V3 A:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
+  TE Sign V3 B:
+    controllerIp: ''
+    dmxUniverse: 0
+    dmxAddress: 0
+    controllerId: 0
+    sectionId: 0
+    fixtureId: 0
+    viewMask: 0
   LED_0:
     controllerIp: 10.1.1.202
     controllerId: 2
