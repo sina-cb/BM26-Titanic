@@ -1,7 +1,6 @@
 /**
  * animate.js — Main render/animation loop with gradient and Pixelblaze lighting.
  */
-import chroma from "chroma-js";
 import {
   controls, composer, renderer, params,
   frameCount, lastFpsTime, setFrameCount, setLastFpsTime,
@@ -17,10 +16,11 @@ import { updateLightPool } from "./light_pool.js";
 import { scaleSimulationPreviewRgb } from "./sim_preview.js";
 import PatchManager from "../dmx/patch_manager.js";
 import { engineHttpUrl } from "./engine_endpoint.js";
-import { applyFixtureOutputOverrides } from "../dmx/dmx_output_overrides.js";
+import { applyFixtureOutputOverrides, applyDmxEntryOutputGate } from "../dmx/dmx_output_overrides.js";
 import { blendRgbwau } from "./rgbwau_blend.js";
 import { entryPaintsDirect } from "./render_paint_rule.js";
 import { ledOutputScale } from "./group_lock.js";
+import { buildGradientLut } from "./color_transition.js";
 // sACN output — lazily initialized
 let sacnOutputClient = null;
 let sacnOutputEnabled = false;
@@ -58,18 +58,24 @@ function _dispatchPixelFrame() {
 
 // Warning banner + patch state managed by PatchManager (../dmx/patch_manager.js)
 
-// Cached chroma scale — rebuilt when stops change
-let chromaScale = null;
+// Cached gradient LUT — rebuilt when stops change. Perceptual (OKLCH,
+// shortest hue arc, gamut-mapped) via color_transition.js; replaced the old
+// per-pixel chroma.js CIELAB scale (2026-07-24), which both bent hues in the
+// blue region and allocated a chroma Color object per pixel per frame.
+// POWER OF TWO so the per-pixel sample is a mask, not a bounds check.
+const GRADIENT_LUT_SIZE = 1024;
+const GRADIENT_LUT_MASK = GRADIENT_LUT_SIZE - 1;
+let gradientLut = null;
 let lastStopsKey = '';
 
-function getChromaScale() {
+function getGradientLut() {
   const stops = params.gradientStops || ['#8cc0ff', '#cc8cff'];
   const key = stops.join(',');
-  if (key !== lastStopsKey) {
-    chromaScale = chroma.scale(stops).mode('lab');
+  if (key !== lastStopsKey || !gradientLut) {
+    gradientLut = buildGradientLut(stops, GRADIENT_LUT_SIZE);
     lastStopsKey = key;
   }
-  return chromaScale;
+  return gradientLut;
 }
 
 // ─── Metadata-Aware Batch Cache ──────────────────────────────────────────
@@ -279,6 +285,57 @@ function _applyLedOutputGate(list) {
   }
 }
 
+// ─── DMX last-layer output gate (rendered-color side) ─────────────────────
+// `applyFixtureOutputOverrides` makes the DMX group/fixture master real on the
+// UNIVERSE BUFFER — which covers the sACN output and, through applyDmxFrame(),
+// the patched fixture bulbs. It does NOT cover the consumers that read the RAW
+// _batchRenderList entry color: the global V2 instanced-dot flush and the 2D
+// Pixel Map frame tap. And when NOTHING is patched (window._patchesActive ===
+// false — the state the titanic show scene ships in) it covers nothing at all:
+// it skips every fixture whose universe < 1, so the bulbs, painted directly
+// from the entry by entry.apply(), stay lit too. Measured pre-fix on the live
+// show scene: group Off left entry, 2D decode, dot and bulb ALL at their full
+// ON values (report 20260724_40).
+//
+// This runs AFTER every color source AND AFTER applyFixtureOutputOverrides /
+// applyDmxFrame — never before mapPixelsToSacn, or a dimmed group would be
+// scaled twice on the wire (once here, once on the buffer) — and BEFORE the
+// dot flush and the 2D tap. `entry.fixtureConfig` is the live config object the
+// buffer gate reads, so the two can never key differently.
+let _dmxGateConfigWarned = false;
+
+function _applyDmxOutputGate(list, headless) {
+  if (!list) return;
+  const overrides = params.groupOverrides;
+  const patchesActive = window._patchesActive;
+  for (let i = 0; i < list.length; i++) {
+    const entry = list[i];
+    if (!entry || entry.type !== 'dmx') continue;
+    if (!entry.fixtureConfig) {
+      // A DMX pixel with no config handle cannot be gated — say so once, loudly
+      // (codex P0: never fail silently), then keep the render loop alive.
+      if (!_dmxGateConfigWarned) {
+        _dmxGateConfigWarned = true;
+        console.error(`[DmxOutputGate] DMX pixel '${entry.name}' carries no fixtureConfig — ` +
+          'its group/fixture master CANNOT be applied to the dots or the 2D map. The exporter ' +
+          'must attach it (pixelblaze_model_exporter.js).');
+      }
+      continue;
+    }
+    const scale = applyDmxEntryOutputGate(entry, overrides);
+    if (scale >= 1) continue;
+    // While unpatched a DMX entry paints its fixture visual DIRECTLY (the color
+    // sources already called apply() with the un-gated color this frame), and
+    // no universe buffer exists to gate. Repaint from the gated color so the
+    // bulb/halo/cone match the dots. Patched entries never take this branch —
+    // applyDmxFrame owns their visual, from the already-gated buffer.
+    if (!headless && entry.apply && entryPaintsDirect(entry, patchesActive)) {
+      const [rn, gn, bn] = blendRgbwau(entry.r, entry.g, entry.b, entry.w, entry.a, entry.u);
+      entry.apply(rn, gn, bn);
+    }
+  }
+}
+
 export function animate() {
   requestAnimationFrame(animate);
   controls.update();
@@ -318,21 +375,23 @@ export function animate() {
     _headlessLatched = _headless;
   }
 
-  // ─── Gradient Mode (chroma.js LAB interpolation) ───
+  // ─── Gradient Mode (OKLCH perceptual interpolation, LUT-sampled) ───
   if (lightingEnabled && lightingMode === 'gradient' && getProfileDef(params.lightingProfile).mappingEnabled) {
-    const scale = getChromaScale();
+    const lut = getGradientLut();
     const speed = (params.waveSpeed || 0.3) * 0.001;
     const t = now * speed;
-    
+
     // Ensure batch cache is fresh so we can map gradient to the unified _batchRenderList
     if (_batchCacheVersion !== _batchLastBuiltVersion) _rebuildBatchCache();
-    
+
     if (_batchRenderList && _batchRenderList.length > 0) {
       const count = _batchRenderList.length;
       for (let i = 0; i < count; i++) {
          const entry = _batchRenderList[i];
          const phase = ((entry.nx || 0) + (entry.ny || 0) + t) % 1.0;
-         const [r, g, b] = scale(phase).gl();
+         // Allocation-free LUT sample; mask handles the phase===1.0 edge.
+         const off = ((phase * GRADIENT_LUT_SIZE) & GRADIENT_LUT_MASK) * 3;
+         const r = lut[off], g = lut[off + 1], b = lut[off + 2];
          entry.r = r; entry.g = g; entry.b = b;
          entry.w = 0; entry.a = 0; entry.u = 0; // standard colors
          // Direct-paint when unpatched OR an LED strand (LEDs have no wire
@@ -466,6 +525,13 @@ export function animate() {
     applyDmx(window.dmxSceneFixtures);
     applyDmx(window.parFixtures);
   }
+
+  // ─── DMX group/fixture master on the RENDERED color ───────────────────────
+  // Last layer, outside the router block (it must run even with no router /
+  // nothing patched — that is exactly when the buffer gate does nothing) and
+  // ahead of BOTH raw-entry consumers below: the instanced-dot flush and the
+  // 2D Pixel Map tap.
+  _applyDmxOutputGate(_batchRenderList, _headless);
 
   // ─── V2 InstancedMesh Raw Flush ─────────────────────────
   // Streams all colors computed in the current frame straight to GPU

@@ -23,6 +23,9 @@ import { reconstructYAML } from "../core/config.js";
 import { saveModelJS as exportModelJS } from "../dmx/pixelblaze_model_exporter.js";
 import { GUI } from "./gui_engine.js";
 import { setupControlDrawer } from "./control_drawer.js";
+import {
+  traceRenameError, sweepGeneratedInstances, carryTraceGroupOverride,
+} from "./trace_group_rename.js";
 import { rebuildParLights, rebuildDmxFixtures } from "../core/fixtures.js";
 import { deselectAllFixtures, nextFixtureName, syncGuiFolders } from "../core/interaction.js";
 import { listTypes, getDefinition } from "../dmx/fixture_definition_registry.js";
@@ -3338,13 +3341,15 @@ function setupGUI() {
       });
     }
 
-    function generateGroupFromTrace(traceIndex, skipUndo = false) {
+    function generateGroupFromTrace(traceIndex, skipUndo = false, previousGroupName = null) {
       const trace = params.traces[traceIndex];
       if (!trace) return;
 
       if (!skipUndo) pushUndo();
 
-      // Remove existing lights from this trace's group name.
+      // Remove existing lights from this trace's group name AND from any prior
+      // name (a rename passes previousGroupName) — otherwise the old-named set
+      // is orphaned into duplicate fixtures (report 20260724_37).
       // Regeneration contract with the controller mapping (operator
       // request 2026-06-12): names are stable per index ("<group> N"),
       // so survivors keep their chain entries and re-project to the
@@ -3352,8 +3357,9 @@ function setupGUI() {
       // (addresses are absolute — nothing shifts). New extras land
       // in the Unmapped tray.
       const groupName = trace.groupName || trace.name || `Trace ${traceIndex + 1}`;
-      const previousGenerated = params.parLights.filter(l => l.group === groupName && l.traceGenerated);
-      params.parLights = params.parLights.filter(l => l.group !== groupName || !l.traceGenerated);
+      const { kept, removed: previousGenerated } =
+        sweepGeneratedInstances(params.parLights, groupName, previousGroupName);
+      params.parLights = kept;
 
       // Compute points
       const pts = computeTracePoints(trace);
@@ -3740,10 +3746,45 @@ function setupGUI() {
           });
         }
 
-        tFolder.add(trace, 'name').name('Name').onFinishChange(() => {
-          trace.groupName = trace.name;
-          tFolder.title(`${traceGlyph(trace.shape)} ${trace.name}`);
-          if (trace.generated) generateGroupFromTrace(i, true);
+        // Track the last committed name so a rejected rename can revert cleanly
+        // (lil-gui has already mutated trace.name by the time onFinishChange runs).
+        let committedTraceName = trace.name || `Trace ${i + 1}`;
+        const traceNameCtrl = tFolder.add(trace, 'name').name('Name');
+        traceNameCtrl.onFinishChange(() => {
+          const newName = (trace.name || '').trim();
+          const oldGroupName = trace.groupName || committedTraceName;
+          if (newName === committedTraceName) {
+            // No-op (or whitespace-only edit) — normalize back and bail.
+            trace.name = committedTraceName;
+            traceNameCtrl.updateDisplay();
+            return;
+          }
+          // Fail loud (codex P0) on a reserved / colliding name — a silent merge
+          // would fuse two groups' overrides + view bits. Revert the input.
+          const err = traceRenameError(newName, {
+            traces: params.traces, parLights: params.parLights,
+            traceIndex: i, oldGroupName,
+          });
+          if (err) {
+            alert(err);
+            trace.name = committedTraceName;
+            traceNameCtrl.updateDisplay();
+            return;
+          }
+          trace.name = newName;
+          trace.groupName = newName;
+          // Carry the group master override (enabled / brightness / lock) and the
+          // view-mask bit across the rename so nothing is orphaned under the old
+          // name (mirrors the LED / par ✏ Rename plumbing, report _28).
+          carryTraceGroupOverride(params.groupOverrides, oldGroupName, newName);
+          if (window.viewRegistryRenameGroup) {
+            window.viewRegistryRenameGroup(oldGroupName, newName);
+          }
+          tFolder.title(`${traceGlyph(trace.shape)} ${newName}`);
+          // Regenerate under the new name, sweeping the OLD name too so its
+          // previously generated instances are removed instead of orphaned.
+          if (trace.generated) generateGroupFromTrace(i, true, oldGroupName);
+          committedTraceName = newName;
           debounceAutoSave();
         });
 
@@ -4291,6 +4332,14 @@ function setupGUI() {
       if (!fixture) return false;
       fixture.writeTransformToConfig(obj.userData.handleType);
       fixture.rebuildVisuals();
+      // rebuildVisuals() only moves THIS strand's own bulb/halo meshes. Every
+      // batch-list consumer (global instanced dot mesh, 2D pixel map, engine
+      // pattern coords) holds x/y/z snapshotted by generatePixelMap() at cache
+      // build time, so without this bump the old pixel positions keep rendering
+      // — the ghost "trail" the operator sees after a 3D-handle move. The
+      // Start/End sliders never showed it because they call rebuildLedStrands(),
+      // which invalidates at L4324 (operator report 2026-07-25).
+      if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('strand_transform');
       debounceAutoSave();
       return true;
     };

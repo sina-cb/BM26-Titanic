@@ -74,6 +74,61 @@ export function resolveCombinedOverride(config, groupOverrides) {
 }
 
 /**
+ * The scalar (0–1) a DMX pixel's RENDERED color must be multiplied by, from the
+ * SAME combined (group ▸ fixture) override `applyFixtureOutputOverrides` applies
+ * to the universe bytes. Off ⇒ 0 (BLACK); otherwise the effective brightness
+ * fraction (1 at ≥100 %, so a full-on fixture is a no-op).
+ *
+ * This is the DMX twin of `ledOutputScale` (core/group_lock.js): the universe
+ * buffer is NOT the only consumer of a DMX pixel's color. The global V2
+ * instanced-dot mesh and the 2D Pixel Map read the RAW `_batchRenderList` entry
+ * color, and while NO fixture is patched (`window._patchesActive === false` —
+ * the state the titanic show scene is actually in) the fixture bulbs are
+ * direct-painted from it too, with `applyFixtureOutputOverrides` a complete
+ * no-op because there are no universes to gate. Deriving those paths from this
+ * one function is what makes "group Off" mean BLACK everywhere.
+ *
+ * `config` is the LIVE fixture config object — the very object
+ * `applyFixtureOutputOverrides` reads as `fixture.config` — so the group key can
+ * never diverge between the two gates.
+ * @param {Object|null|undefined} config — a fixture config (enabled, brightness, group)
+ * @param {Object|null|undefined} groupOverrides — params.groupOverrides
+ * @returns {number} 0..1 (1 when there is no config to resolve — the caller is
+ *          responsible for reporting a DMX pixel that carries none)
+ */
+export function dmxOutputScale(config, groupOverrides) {
+  if (!config) return 1;
+  const { enabled, brightness } = resolveCombinedOverride(config, groupOverrides);
+  if (!enabled) return 0;
+  if (brightness >= 100) return 1;
+  return brightness / 100;
+}
+
+/**
+ * Scale ONE batch-render entry's rendered RGBWAU **in place** by its fixture's
+ * combined override (`dmxOutputScale` of `entry.fixtureConfig`). Off ⇒ hard 0 on
+ * every lane; a full-on fixture is left byte-identical so there is zero behavior
+ * change when nothing is disabled.
+ *
+ * Pure (no THREE/DOM) so the render loop's gate is unit-testable.
+ * @param {Object} entry — a _batchRenderList entry (r,g,b,w,a,u + fixtureConfig)
+ * @param {Object|null|undefined} groupOverrides — params.groupOverrides
+ * @returns {number} the scale that was applied (1 = untouched)
+ */
+export function applyDmxEntryOutputGate(entry, groupOverrides) {
+  const s = dmxOutputScale(entry.fixtureConfig, groupOverrides);
+  if (s >= 1) return 1;
+  if (s <= 0) {
+    entry.r = 0; entry.g = 0; entry.b = 0;
+    entry.w = 0; entry.a = 0; entry.u = 0;
+    return 0;
+  }
+  entry.r *= s; entry.g *= s; entry.b *= s;
+  entry.w *= s; entry.a *= s; entry.u *= s;
+  return s;
+}
+
+/**
  * Apply On/Off + Brightness overrides onto the merged universe buffers.
  * @param {{ getFullFrame: (u:number)=>(Uint8Array|null|undefined) }} router
  * @param {Array<Array<object>>} fixtureLists — lists of fixture runtimes, each

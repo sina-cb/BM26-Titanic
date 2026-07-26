@@ -88,6 +88,15 @@ export function generatePixelMap() {
               fixIndex: i,
               fixKey: light.name || `Fixture ${i + 1}`,
               group: light.group || '',
+              // Runtime-only LIVE handle on this pixel's fixture config (NOT in
+              // the saveModelJS field list, so the engine model is unchanged).
+              // It is the SAME object applyFixtureOutputOverrides reads as
+              // `fixture.config`, which is what lets the last-layer DMX entry
+              // gate (animate.js) resolve the group master by exactly the key
+              // the universe-buffer gate uses — no `group`-string join, no
+              // keying drift, and the per-fixture On/Off + Brightness comes
+              // along for free (report 20260724_40).
+              fixtureConfig: light,
               x: +(worldPos.x).toFixed(3),
               y: +(worldPos.y).toFixed(3),
               z: +(worldPos.z).toFixed(3),
@@ -150,6 +159,9 @@ export function generatePixelMap() {
             fixIndex: i,
             fixKey: light.name || `Fixture ${i + 1}`,
             group: light.group || '',
+            // Runtime-only LIVE fixture-config handle for the last-layer DMX
+            // output gate — see the multi-pixel push above.
+            fixtureConfig: light,
             x: +(worldPos.x).toFixed(3),
             y: +(worldPos.y).toFixed(3),
             z: +(worldPos.z).toFixed(3),

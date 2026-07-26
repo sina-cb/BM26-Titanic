@@ -102,6 +102,19 @@ export function deselectAllFixtures() {
     }
   }
   selectedFixtureIndices.clear();
+
+  // LED strands carry their selection per-fixture (`_selected`), not in
+  // selectedFixtureIndices, so the PAR loop above never cleared them: the
+  // selection glow tube (led_strand.js) and endpoint handles stayed lit after
+  // an empty-space click / Escape / picking another fixture — the persistent
+  // "orange line" the operator sees. Clearing them here keeps ONE deselect
+  // authority that every entry point already routes through.
+  (window.ledStrandFixtures || []).forEach((f) => {
+    if (f && typeof f.setSelected === 'function') f.setSelected(false);
+  });
+  (window.strandGuiFolders || []).forEach((f) => {
+    if (f && f.domElement) f.domElement.classList.remove('gui-card-selected');
+  });
 }
 
 // ─── Helper: next fixture name ──────────────────────────────────────────
