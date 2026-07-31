@@ -32,6 +32,8 @@
 
 import dgram from 'dgram';
 
+import { createSendErrorThrottle } from './send_error_throttle.js';
+
 // ── Constants ─────────────────────────────────────────────────────────────
 export const ARTNET_PORT = 6454;
 export const ARTNET_OPCODE_OUTPUT = 0x5000; // OpOutput / ArtDMX
@@ -150,6 +152,9 @@ export function createArtnetOutput({
   // One rolling ArtDMX sequence per (universe) so receivers can reorder.
   const sequences = new Map();
   const socket = dgram.createSocket('udp4');
+  // Same per-destination transmit-error rate limiter the sACN path uses — an
+  // unreachable node must not fill the disk at 40 fps (report 20260725_16).
+  const sendErrors = createSendErrorThrottle({ prefix: '[Art-Net Out]' });
   let _started = false;
   let _frameCount = 0;
 
@@ -181,10 +186,13 @@ export function createArtnetOutput({
         sequence: nextSequence(uid),
       });
       for (const dest of destArray) {
+        const key = `U${uid} → ${dest}`;
         promises.push(new Promise((resolve) => {
           socket.send(packet, port, dest, (err) => {
-            if (err && _started) {
-              console.error(`[Art-Net Out] Send error (U${uid} → ${dest}):`, err.message);
+            if (err) {
+              if (_started) sendErrors.noteError(key, err.message);
+            } else if (sendErrors.hasFailures()) {
+              sendErrors.noteSuccess(key);
             }
             resolve();
           });
@@ -204,6 +212,7 @@ export function createArtnetOutput({
 
   function stop() {
     _started = false;
+    sendErrors.reset();
     try { socket.close(); } catch (_) {}
     console.log(`[Art-Net Out] Sender stopped after ${_frameCount} frames`);
   }

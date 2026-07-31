@@ -1,0 +1,108 @@
+schemaVersion: 1
+name: burn_night
+entries:
+  - id: e_burn_night_0_01_cylon_sweep
+    pattern: 01_cylon_sweep
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_burn_night_1_03_dual_axis_crush
+    pattern: 03_dual_axis_crush
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_burn_night_2_04_beat_folded_helix
+    pattern: 04_beat_folded_helix
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_burn_night_3_09_cyclone
+    pattern: 09_cyclone
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_burn_night_4_25_heartbeat
+    pattern: 25_heartbeat
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_burn_night_5_28_spectrum_bloom
+    pattern: 28_spectrum_bloom
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_burn_night_6_29_kick_shockwave
+    pattern: 29_kick_shockwave
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_burn_night_7_30_bass_comet
+    pattern: 30_bass_comet
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_burn_night_8_31_strobe_lattice
+    pattern: 31_strobe_lattice
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_burn_night_9_36_orbital_pulse
+    pattern: 36_orbital_pulse
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_burn_night_10_48_heartbeat_drive
+    pattern: 48_heartbeat_drive
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_burn_night_11_49_cylon_crush
+    pattern: 49_cylon_crush
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_burn_night_12_51_confetti_cyclone
+    pattern: 51_confetti_cyclone
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_burn_night_13_54_murmuration_storm
+    pattern: 54_murmuration_storm
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_burn_night_14_63_white_chase
+    pattern: 63_white_chase
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null

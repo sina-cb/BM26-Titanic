@@ -43,6 +43,7 @@ import {
 import { topicForType, TOPICS } from './ws_topic_routing.js';
 import { TimelineService, buildOverview } from './timeline/timeline_service.js';
 import { validateShowPlan as validateTimelineShowPlan } from './timeline/show_plan.js';
+import { MoodSource } from './timeline/mood_source.js';
 import { parsePatternDefaults } from './pattern_defaults.js';
 import { UndoStack, UNDO_MAX } from './undo_stack.js';
 import { DECK_OVERLAY_MAX } from './pattern_mixer.js';
@@ -570,6 +571,134 @@ export function bootPatternPinDecision({ cliPattern, daemonActive, deckMirrorAct
     reason: daemonActive
       ? 'restored deck autopilot is ACTIVE'
       : 'restored deck state mirrors autopilot ACTIVE',
+  };
+}
+
+/**
+ * Decide what `POST /scene/reload` does — the SAME-scene deliberate restart.
+ *
+ * Why this exists (report `_33` §5 step 4): the on-disk model watcher
+ * hot-reloads a same-scene re-export in place, but it REFUSES a pixel-count
+ * change (engine.js: sets `modelSync.stale`, surfaced as
+ * `GET /status.modelStale`) — the engine keeps rendering the OLD model until
+ * it restarts, because the render loop / WASM buffers are sized once at boot.
+ * `POST /scene` with the currently-active scene is a documented no-op, so
+ * before this endpoint the only way to apply a re-export was a scene-bounce
+ * (switch away, switch back = two restarts) or an out-of-band kill.
+ *
+ * The reload is DELIBERATE BY CONSTRUCTION — never implicit:
+ *   - the caller must NAME the scene, and it must equal the active model
+ *     (a mismatch is a 409, not a redirect into a scene switch — use
+ *     `POST /scene` for that);
+ *   - it is blocked in performance mode by the caller (the shared
+ *     `rejectIfPerformanceMode` gate, exactly like `POST /scene`);
+ *   - it restarts through the ONE sanctioned path — the engine's
+ *     `requestSceneSwitch` hook (graceful shutdown → supervisor handoff or
+ *     detached self-respawn → exit 75). It never frees the API port by any
+ *     other means, and it never starts a second engine.
+ *
+ * Pure decision seam (unit-testable without booting the engine): the caller
+ * supplies the facts, this returns `{ status, body, restart }` and performs
+ * no I/O. `restart: true` means "respond first, then call
+ * `engineCore.requestSceneSwitch(scene)`".
+ *
+ * Codex P0 (fail loudly, no fallback): every refusal is an explicit status +
+ * `code`, never a silent success and never a substituted scene.
+ *
+ * @param {object}  facts
+ * @param {*}       facts.requestedScene       — raw `scene` from the request body
+ * @param {?string} facts.activeScene          — engine's active model name
+ * @param {boolean} facts.modelExists          — models/<scene>.js exists on disk
+ * @param {boolean} facts.hasSwitchHook        — engineCore.requestSceneSwitch is wired
+ * @param {boolean} facts.supervised           — BM26_SUPERVISED=1 (launcher owns respawn)
+ * @returns {{status:number, body:object, restart:boolean}}
+ */
+export function sceneReloadDecision({
+  requestedScene,
+  activeScene,
+  modelExists,
+  hasSwitchHook,
+  supervised,
+}) {
+  const scene = typeof requestedScene === 'string' ? requestedScene.trim() : '';
+  if (!scene) {
+    return {
+      status: 400,
+      restart: false,
+      body: {
+        error: 'scene (string) required — name the scene you intend to reload',
+        code: 'SCENE_REQUIRED',
+        activeModel: activeScene || null,
+      },
+    };
+  }
+  // Reject path-traversal / nested names — model files are flat under
+  // marsin_engine/models/ (mirrors the POST /scene guard).
+  if (scene !== path.basename(scene)) {
+    return {
+      status: 400,
+      restart: false,
+      body: { error: `invalid scene name '${scene}'`, code: 'INVALID_SCENE' },
+    };
+  }
+  if (!activeScene) {
+    return {
+      status: 500,
+      restart: false,
+      body: {
+        error: 'engine has no active model name — refusing to reload',
+        code: 'NO_ACTIVE_MODEL',
+      },
+    };
+  }
+  if (scene !== activeScene) {
+    return {
+      status: 409,
+      restart: false,
+      body: {
+        error: `engine is rendering '${activeScene}' — refusing to reload '${scene}'. `
+          + 'POST /scene to switch scenes; /scene/reload only restarts the ACTIVE one.',
+        code: 'SCENE_MISMATCH',
+        activeModel: activeScene,
+      },
+    };
+  }
+  if (!modelExists) {
+    return {
+      status: 404,
+      restart: false,
+      body: {
+        error: `Engine model not found: models/${scene}.js. Save/export the scene's model from the sim first.`,
+        code: 'MODEL_NOT_FOUND',
+        activeModel: activeScene,
+      },
+    };
+  }
+  if (!hasSwitchHook) {
+    return {
+      status: 500,
+      restart: false,
+      body: {
+        error: 'engine does not support scene switching (no requestSceneSwitch hook)',
+        code: 'NO_RELOAD_HOOK',
+        activeModel: activeScene,
+      },
+    };
+  }
+  return {
+    status: 200,
+    restart: true,
+    body: {
+      status: 'ok',
+      scene,
+      restarting: true,
+      activeModel: activeScene,
+      supervised: !!supervised,
+      // What the caller should expect next, so a runbook/curator can poll the
+      // right thing: a supervised engine is respawned by the launcher after
+      // the exit-75 handoff; a standalone engine respawns itself (detached).
+      mode: supervised ? 'supervised-handoff' : 'standalone-respawn',
+    },
   };
 }
 
@@ -1128,13 +1257,15 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // dev never flash hardware. Value/mode/active changes are runtime feedback,
   // never a layout deploy.
   let vsn1DeployStatus = null;
+  let vsn1DeployHook = null;
   if (globalEffectSlotManager) {
-    const { hook, status } = createLayoutDeployHook({
+    const { hook, status, probeAttach, dispose } = createLayoutDeployHook({
       stateDir,
       engineConfig: engineCore.engineConfig,
       broadcast: broadcastWs,
     });
     vsn1DeployStatus = status;
+    vsn1DeployHook = { probeAttach, dispose };
     globalEffectSlotManager.setLayoutChangedHook((evt) => {
       // Fire-and-report: a deploy failure fails loud into the status flag +
       // WS broadcast (the hook handles that) but must not crash the request
@@ -1173,12 +1304,28 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // never flash. The hook debounces/serializes; boot restore itself stays
     // deploy-silent (emitLayout false above) — this is the single, explicit
     // boot deploy. Populated pages only (empty pages have nothing to show).
+    //
+    // ATTACH GATE (report _30 §5, fix plan step 7): ask whether a VSN1 is
+    // actually plugged in BEFORE announcing a sync. Previously this fired on
+    // every boot of every machine — the committed config has deployLayout +
+    // deployOnBoot ON — so a laptop with no device printed "syncing page 0",
+    // spawned the full deploy CLI, and failed ~2-3 s later. Now a detached
+    // boot prints ONE "not attached" line (from the hook's transition latch)
+    // and queues nothing. The probe is fire-and-forget: boot must never block
+    // on a child process, and the drain re-probes anyway.
     const vsn1Cfg = (engineCore.engineConfig && engineCore.engineConfig.vsn1) || {};
     if (isLayoutDeployEnabled(engineCore.engineConfig) && vsn1Cfg.deployOnBoot !== false) {
-      const pages = globalEffectSlotManager.requestFullDeploy();
-      if (pages.length) {
-        console.log(`  🎛  VSN1 deploy-on-load: syncing page(s) ${pages.join(', ')} to the device.`);
-      }
+      Promise.resolve(vsn1DeployHook.probeAttach())
+        .then((attachState) => {
+          if (attachState === 'detached') return; // the hook already said it, once
+          const pages = globalEffectSlotManager.requestFullDeploy();
+          if (pages.length) {
+            console.log(`  🎛  VSN1 deploy-on-load: syncing page(s) ${pages.join(', ')} to the device.`);
+          }
+        })
+        .catch((e) => {
+          console.error(`[VSN1] deploy-on-load attach probe failed: ${e.message}`);
+        });
     }
   }
 
@@ -3514,6 +3661,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     broadcastMixerState();
   };
 
+  // ── Deck-swap cancellation → release every client's "swap in flight" UI ──
+  // A cancelled swap (PANIC, look/snapshot morph kickoff, deck channel
+  // remove/replace, shutdown mid-fade) never runs the swap's onComplete
+  // closure — by design, since that would commit the cancelled target — so
+  // the `deckSwapComplete` broadcast inside it never fires. Clients that
+  // dim + disable their playlist on `deckSwapStarted` (CaptainPad deck tab)
+  // would then stay wedged until a remount. Reuse the SAME message type so
+  // every existing client heals with no client-side change; `cancelled:true`
+  // is additive for anyone who wants to distinguish.
+  mixer.onDeckSwapCancelled = ({ transitionId } = {}) => {
+    broadcastWs({
+      type: 'deckSwapComplete',
+      cancelled: true,
+      transitionId: transitionId || null,
+    });
+  };
+
   // ── Snapshot morph finalizer (round-2 #1) ──────────────────────────────
   // The mixer's _tickMorph() fires this exactly once when a morph's wall-clock
   // window elapses (the descriptor is already cleared by the time we run).
@@ -4381,6 +4545,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   const timelineMoodKey = timelineMoodCfg.key || 'audioParty';
   const timelinePartyThreshold = typeof timelineMoodCfg.partyThreshold === 'number'
     ? timelineMoodCfg.partyThreshold : 0.5;
+  // STALENESS BUDGET for the mood key (report 20260725_10 build item 5). The
+  // companion is a separate process; if it dies the CPC key FREEZES at its last
+  // value, and a frozen 1 would pin the rig in party mode forever. MoodSource
+  // watches the key's write revision and forces CALM when it stops moving —
+  // loudly, and visibly on GET /timeline/state. See lib/timeline/mood_source.js.
+  const timelineMoodStaleSec = typeof timelineMoodCfg.staleSec === 'number'
+    ? timelineMoodCfg.staleSec : 10;
+
+  // Built once, before the service, so getMood() closes over a stable instance
+  // (its stale/fresh edge state must survive across ticks). Null when there is
+  // no CPC at all — then the timeline reads permanent CALM, which is correct.
+  const moodSource = paramCenter
+    ? new MoodSource({
+      paramCenter,
+      key: timelineMoodKey,
+      partyThreshold: timelinePartyThreshold,
+      staleSec: timelineMoodStaleSec,
+    })
+    : null;
 
   let timelineService = null;
   if (timelineEnabled) {
@@ -4393,19 +4576,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       sceneDir: timelineSceneDir,
       stateDir,
       getMood: () => {
-        // Read the mood key DIRECTLY off the CPC (docs/38 §15). The audio
-        // companion populates audioParty; default CALM (0) when unknown so a
-        // mood cue never spuriously fires before the first analyser frame.
-        let value = 0;
-        try {
-          if (paramCenter) {
-            const v = paramCenter.get(timelineMoodKey);
-            value = typeof v === 'number' ? v : (v && typeof v.value === 'number' ? v.value : 0);
-          }
-        } catch (_) {
-          value = 0; // key not registered yet → calm
-        }
-        return { party: value >= timelinePartyThreshold ? 1 : 0, value };
+        // Read the mood key off the CPC through the STALENESS GUARD (docs/38
+        // §15 + report 20260725_10). The companion publishes `audioPartyStrong`
+        // at 5 Hz; MoodSource trusts it only while it is being republished, and
+        // forces CALM (→ the ambient default cue) the moment it freezes —
+        // logging loud and exposing `moodStale` on the timeline state so the
+        // failure is SEEN, not silently absorbed.
+        if (!moodSource) return { party: 0, value: 0 };
+        return moodSource.read();
       },
       deps: {
         loadPlaylist: ({ target, name }) => {
@@ -4504,7 +4682,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         tickMs: timelineConfigBlock.tickMs || 1000,
         programLeaseSec: timelineConfigBlock.programLeaseSec || 30,
         operatorLeaseSec: timelineConfigBlock.operatorLeaseSec || 120,
-        mood: { key: timelineMoodKey, partyThreshold: timelinePartyThreshold },
+        mood: { key: timelineMoodKey, partyThreshold: timelinePartyThreshold, staleSec: timelineMoodStaleSec },
         colorPalettes: Array.isArray(engineCore.colorPalettes) ? engineCore.colorPalettes : [],
       },
     });
@@ -4883,10 +5061,22 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
           const current = opts.modelName || null;
           if (scene === current) {
-            // Already rendering this scene — nothing to switch. The on-disk
-            // file watcher already hot-reloads same-scene edits in place.
+            // Already rendering this scene — nothing to SWITCH. The on-disk
+            // file watcher hot-reloads same-scene edits in place, EXCEPT a
+            // pixel-count change (which goes `modelStale` and keeps the old
+            // model live). Applying that needs a deliberate same-scene
+            // restart: POST /scene/reload. Point the caller at it rather than
+            // silently doing nothing (no fallback — the caller must choose).
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ status: 'ok', scene, restarting: false, activeModel: current }));
+            return res.end(JSON.stringify({
+              status: 'ok',
+              scene,
+              restarting: false,
+              activeModel: current,
+              modelStale: !!(engineCore.modelSync && engineCore.modelSync.stale),
+              hint: 'already rendering this scene — POST /scene/reload {"scene":"'
+                + scene + '"} to restart the engine on the re-exported model',
+            }));
           }
 
           if (typeof engineCore.requestSceneSwitch !== 'function') {
@@ -4901,6 +5091,58 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.end(JSON.stringify({ status: 'ok', scene, restarting: true, from: current }));
           // Defer the restart a tick so the HTTP response fully flushes.
           setTimeout(() => engineCore.requestSceneSwitch(scene), 50);
+        } catch (err) {
+          try {
+            res.writeHead(500);
+            res.end(JSON.stringify({ error: String(err && err.message || err) }));
+          } catch (_) { /* response already sent */ }
+        }
+      });
+    } else if (req.method === 'POST' && req.url === '/scene/reload') {
+      if (rejectIfPerformanceMode(res)) return;
+      // SAME-scene deliberate model reload (report `_33` §5 step 4). Applies a
+      // re-exported model that the on-disk hot reloader REFUSED — i.e. one
+      // whose pixelCount changed (`GET /status.modelStale: true`) — by
+      // restarting this engine on the same `--model` through the existing
+      // requestSceneSwitch path. Same ports, same argv, one engine.
+      //
+      // Guards live in the pure `sceneReloadDecision` seam above; this handler
+      // only supplies the facts and executes the verdict. Performance mode is
+      // gated here (shared 409 + mixer snap-back), exactly like POST /scene.
+      readBody(data => {
+        try {
+          const requested = data && data.scene;
+          const activeScene = opts.modelName || null;
+          const safeName = typeof requested === 'string'
+            && requested.trim() === path.basename(requested.trim());
+          const modelExists = !!(safeName && fs.existsSync(
+            path.join(patternsDir, '..', 'models', `${requested.trim()}.js`),
+          ));
+          const verdict = sceneReloadDecision({
+            requestedScene: requested,
+            activeScene,
+            modelExists,
+            hasSwitchHook: typeof engineCore.requestSceneSwitch === 'function',
+            supervised: process.env.BM26_SUPERVISED === '1',
+          });
+          if (!verdict.restart) {
+            console.warn(`  ⛔ /scene/reload refused (${verdict.body.code}): ${verdict.body.error}`);
+            res.writeHead(verdict.status, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify(verdict.body));
+          }
+          // Carry the staleness that motivated the reload into the ack, so the
+          // caller's log records WHY it restarted.
+          verdict.body.modelStale = !!(engineCore.modelSync && engineCore.modelSync.stale);
+          verdict.body.modelStaleMessage = (engineCore.modelSync && engineCore.modelSync.message) || null;
+
+          console.log(`\n  ♻️  Same-scene model reload requested via /scene/reload: '${activeScene}'`
+            + ` (${verdict.body.mode}, modelStale=${verdict.body.modelStale}). Restarting engine…`);
+          // Respond BEFORE the restart tears the process down, so the caller
+          // gets a clean acknowledgement instead of a dropped connection.
+          res.writeHead(verdict.status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(verdict.body));
+          // Defer a tick so the HTTP response fully flushes.
+          setTimeout(() => engineCore.requestSceneSwitch(activeScene), 50);
         } catch (err) {
           try {
             res.writeHead(500);
@@ -5514,9 +5756,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.method === 'POST' && req.url === '/global-effects/deploy') {
       if (rejectIfPerformanceMode(res)) return;
       if (!globalEffectSlotManager) { res.writeHead(503); return res.end(JSON.stringify({ error: 'slot manager not initialized' })); }
-      const triggeredPages = globalEffectSlotManager.requestFullDeploy();
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', triggeredPages, deploy: vsn1DeployStatus }));
+      // PROBE FIRST (report _30 §5): a manual re-sync is one of the attach
+      // decision points, and the caller deserves a truthful answer NOW rather
+      // than an optimistic "ok" followed by a failure banner seconds later.
+      // With nothing plugged in this returns triggeredPages: [] and
+      // attachState: 'detached' — a clean, non-error "there is no device".
+      (async () => {
+        const attachState = await vsn1DeployHook.probeAttach();
+        const triggeredPages = attachState === 'detached'
+          ? []
+          : globalEffectSlotManager.requestFullDeploy();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', triggeredPages, attachState, deploy: vsn1DeployStatus }));
+      })().catch((e) => {
+        console.error(`[VSN1] manual deploy request failed: ${e.message}`);
+        try {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        } catch (_) { /* response already sent */ }
+      });
     } else if (req.method === 'POST' && req.url.startsWith('/global-effect-slots/')) {
       // POST /global-effect-slots/:slotId/{press,activate,deactivate,trigger,toggle,down,up}
       // `press` is behavior-resolved server-side (trigger→fire, toggle→flip,
@@ -5612,6 +5870,52 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         const code = e instanceof ScheduledTaskValidationError ? 400 : 500;
         res.writeHead(code); res.end(JSON.stringify({ error: e.message }));
       }
+
+    // ── PARTY OVERRIDE API (report 20260725_19) ──────────────────────────
+    // The operator's SHOW POLICY for detection-driven party sessions, owned and
+    // persisted by the engine (states/<scene>/timeline_state.yaml) so it
+    // survives a supervisor restart. Both clients (CaptainPad + the Audio
+    // Companion's PARTY tab) read/write THIS — neither stores it itself.
+    //
+    //   GET /party-config → { enabled, playlist, availablePlaylists: [...] }
+    //   PUT /party-config   body { enabled?, playlist? } (partial)
+    //
+    // `enabled:false` means the mood→party cue CANNOT fire and a live session
+    // ends immediately. The DETECTOR is untouched: `audioPartyStrong` keeps
+    // publishing, so the companion's meters stay live while the policy says no.
+    // Validation is strict and all-or-nothing (unknown playlist / non-boolean
+    // ⇒ 400 with nothing applied — codex P0, no clamping).
+    } else if (req.url === '/party-config' && req.method === 'GET') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      try {
+        // getPartyStatus() = the persisted { enabled, playlist } PLUS the
+        // derived `effectiveState` (armed | disabled | no_plan | manual |
+        // in_session | cooldown) so no client paints ARMED while the plan
+        // isn't running or a human holds the deck. Additive to the contract.
+        const cfg = timelineService.getPartyStatus();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ...cfg, availablePlaylists: timelineService.listAvailablePlaylists() }));
+      } catch (e) {
+        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+      }
+    } else if (req.url === '/party-config' && req.method === 'PUT') {
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(async (data) => {
+        try {
+          await timelineService.setPartyConfig(data);
+          const payload = {
+            ...timelineService.getPartyStatus(),
+            availablePlaylists: timelineService.listAvailablePlaylists(),
+          };
+          // Live-sync BOTH clients (CaptainPad + the companion PARTY tab) —
+          // same posture as engineSettings / playlistLibrary.
+          broadcastWs({ type: 'partyConfig', ...payload });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(payload));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
 
     // ── TIMELINE API (docs/38 §15 — timeline runs IN the engine) ────────
     // GET /timeline/state · GET/POST /timeline/plans · GET/PUT/DELETE
@@ -9663,6 +9967,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // never let a snapshot send break a fresh WS handshake
     }
 
+    // Replay the PARTY OVERRIDE (report 20260725_19) so a fresh CaptainPad /
+    // companion PARTY tab paints ARMED-or-DISABLED immediately, without a focus
+    // fetch. Same posture as the timeline replay directly above.
+    try {
+      if (timelineService) {
+        ws.send(JSON.stringify({
+          type: 'partyConfig',
+          ...timelineService.getPartyStatus(),
+          availablePlaylists: timelineService.listAvailablePlaylists(),
+        }));
+      }
+    } catch (e) {
+      // never let a snapshot send break a fresh WS handshake
+    }
+
     // Replay engine settings (auto-save toggle) so a fresh CaptainPad config
     // screen paints the current state without a focus fetch. Same posture as
     // the deckTransitionConfig / timeline replays above.
@@ -10037,7 +10356,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     if (timelineService) {
       timelineService.start()
         .then(() => console.log(`  ⏱ Timeline service started (scene "${opts.modelName}", plan "${timelineService.activePlan}")`))
-        .catch((err) => console.warn(`  ⚠ Timeline service start failed: ${err && err.message}`));
+        // A BROKEN persisted file (unparseable YAML, or an invalid party field —
+        // both throw out of loadTimelineState) means the timeline does NOT run
+        // at all: say so ONCE, loudly, naming the file + field. It never ticks,
+        // so there is no per-tick spam and nothing half-runs.
+        .catch((err) => console.error(
+          `  ⛔ TIMELINE DID NOT START — the show plan/state is not running: ${err && err.message}`));
     }
   });
 
@@ -10109,6 +10433,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // server.close() and the port release) and stop accepting connections so a
   // replacement engine can re-bind :6968 immediately.
   server.closeNow = () => {
+    // TEARDOWN HYGIENE (report _30 step 10): drop the VSN1 deploy hook's live
+    // handles — its debounce timer and any CLI child whose stdout/stderr pipes
+    // this process still holds. The libuv `!(handle->flags & UV_HANDLE_CLOSING)`
+    // abort can only be tripped while handles are torn down, so every live
+    // handle we can retire before exit is abort surface removed.
+    try { if (vsn1DeployHook) vsn1DeployHook.dispose(); } catch (_) { /* ignore */ }
     try { if (timelineService) timelineService.stop(); } catch (_) { /* ignore */ }
     try {
       for (const wssInst of Object.values(wssByTopic)) {

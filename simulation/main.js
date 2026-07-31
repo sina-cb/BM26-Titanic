@@ -33,8 +33,11 @@ import { computeLedStrandPatches } from "./src/dmx/led/led_patch_projection.js";
 import { assignLedStrandMetadata } from "./src/dmx/led/led_metadata.js";
 import { gatherAllConfigs } from "./src/dmx/auto_patcher.js";
 import { UniverseRouter } from "./src/dmx/universe_router.js";
+import { hasPendingRegens } from "./src/dmx/trace_regen_scheduler.js";
+import { prunePatchTreeEntries } from "./src/dmx/rename_invalidation.js";
 import { isStaticHost, logStaticHostSkip } from "./src/core/static_host.js";
 import { engineHttpUrl } from "./src/core/engine_endpoint.js";
+import { detectGpuAdapter } from "./src/core/gpu_adapter.js";
 
 // ─── GUI modules ────────────────────────────────────────────────────────
 import { setupGUI } from "./src/gui/gui_builder.js";
@@ -43,17 +46,21 @@ import { setupPatternEditor, loadPatternPresets, initPatternEngine } from "./src
 import { setupViewMasksEditor } from "./src/gui/view_masks_editor.js";
 import { setupControllerMapEditor } from "./src/gui/controller_map_editor.js";
 import { setupEngineBlackoutWarning } from "./src/gui/engine_blackout_warning.js";
+import { setupGpuAdapterWarning } from "./src/gui/gpu_adapter_warning.js";
 import { initModernSacnMonitors, initModernViewPresets } from "./src/gui/modern/modern_root.js";
 import { initModernPatternEditorShell } from "./src/gui/modern/pattern_editor_panel.js";
 import { initModernViewMasksShell } from "./src/gui/modern/view_masks_panel.js";
 import { initModernControllerMapShell } from "./src/gui/modern/controller_map_panel.js";
 import { initPixelMapPanel } from "./src/gui/modern/pixel_map_panel.js";
+import { createViewsContainer } from "./src/gui/pixel_map/pixel_map_views.js";
+import { PIXEL_MAP_VIEWS_FILE } from "./src/gui/pixel_map/pixel_map_persist.js";
 import {
   registerPanel, getStoredGeometry,
   sanitizeStore, clampAllPanels,
 } from "./src/gui/panel_layout.js";
 import { initPanelVisibility } from "./src/gui/panel_visibility.js";
 import { setupHelpPanel } from "./src/gui/help_panel.js";
+import { installWheelGuard } from "./src/gui/wheel_guard.js";
 import { setupSceneManager } from "./src/gui/scene_manager.js";
 import { setupSceneRecovery } from "./src/gui/scene_recovery.js";
 import { setupLeftDrawers } from "./src/gui/left_drawer.js";
@@ -79,6 +86,18 @@ function getRequestedRendererMode() {
 }
 
 // ─── Init ───────────────────────────────────────────────────────────────
+// ─── Cold-move release seam (report 20260725_44 steps 2-5) ───────────────
+// Runs the work that a generator/strand drag deferred: one regenerate per
+// dirty trace, one LED batch-cache invalidation, one autosave. The doer lives
+// in gui_builder's setupGUI closure (it owns generateGroupFromTrace); this is
+// the seam that fires it. NO optional-chaining guard on purpose: if there is
+// pending work and the hook is missing, that is a boot-order bug and must
+// crash loudly rather than silently strand the operator's fixtures.
+function flushPendingEditorRegens() {
+  if (!hasPendingRegens()) return;
+  window._flushPendingEditorRegens();
+}
+
 async function init() {
   setupEngineBlackoutWarning({ readonly: window.__readonlyMode });
 
@@ -113,6 +132,15 @@ async function init() {
   setRenderer(renderer);
 
   console.log('[WebGPU] Renderer initialized:', renderer.backend?.constructor?.name || 'unknown backend');
+
+  // Which GPU is ACTUALLY rendering? On a dual-GPU box Windows can park the
+  // browser's GPU process on the integrated adapter, which drops this scene
+  // from ~60 FPS to ~10 (report `20260725_38`) and looks exactly like a code
+  // regression. Detect, log one line, stash on `window.__gpuAdapter` for any
+  // FPS measurement to record, and raise a loud banner when it is the wrong
+  // GPU. Diagnostic only — the render path above is untouched by the result.
+  const gpuAdapter = await detectGpuAdapter({ rendererMode: requestedRendererMode });
+  setupGpuAdapterWarning(gpuAdapter);
 
   // Scene
   const scene = new THREE.Scene();
@@ -224,9 +252,27 @@ async function init() {
       }
     } else {
       setDragStartState(null);
+      // ── COLD-MOVE RELEASE SEAM (report 20260725_44 step 3) ───────────────
+      // While the gizmo was dragging, the expensive work (generator fixture
+      // regeneration, LED batch-cache invalidation) was marked dirty instead of
+      // run per tick. The pointer is up: do it ONCE, now. This is inside the
+      // same undo step (pushUndo above fired at drag start) and it is the ONLY
+      // place the deferred work can land, so it is never conditional — a
+      // skipped flush would leave stale fixtures / stale batch coordinates,
+      // which is exactly the LED move-trail bug (report 20260725_2).
+      flushPendingEditorRegens();
     }
   });
-  transformControl.addEventListener("change", onTransformChange);
+  // `objectChange` — NOT `change`. TransformControls dispatches `change` from
+  // the setter of EVERY tracked property (TransformControls.js:123-124), so
+  // `attach()` (object) and gizmo hover (axis) fired the full transform
+  // handler: one select-click cost a whole generateGroupFromTrace →
+  // rebuildParLights → shader-recompile storm (2,719 ms rAF stall measured,
+  // report 20260725_44 §1). `objectChange` fires ONLY when a transform was
+  // really applied to the object (TransformControls.js:721, :794).
+  // Audited: nothing rode `change` for rendering — animate() is an
+  // unconditional rAF loop, so no render-only listener is needed.
+  transformControl.addEventListener("objectChange", onTransformChange);
   scene.add(transformControl.getHelper());
   setTransformControl(transformControl);
 
@@ -253,6 +299,12 @@ async function init() {
   setupHUD();
   // Keyboard-shortcuts help overlay + bottom-right hint.
   setupHelpPanel();
+  // The wheel SCROLLS the GUI; it never edits a value (operator order
+  // 2026-07-29). ONE document-level capture listener covers every panel —
+  // Lighting Controls, the docked Controllers pane, the LED gamma boxes, the
+  // 2D Pixel Map controls — so a new panel is guarded the day it is written.
+  // Canvas wheel gestures (3D orbit zoom, pixel-map zoom) are untouched.
+  window.__wheelGuard = installWheelGuard(document);
 
   // Start render loop
   animate();
@@ -286,6 +338,7 @@ const _camerasPath = `scenes/${_activeScene}/cameras.yaml`;
 const _patchesPath = `scenes/${_activeScene}/patches.yaml`;
 const _viewsPath = `scenes/${_activeScene}/views.yaml`;
 const _controllersPath = `scenes/${_activeScene}/controllers.yaml`;
+const _pixelMapViewsPath = `scenes/${_activeScene}/${PIXEL_MAP_VIEWS_FILE}`;
 console.log(`[Scene] Loading: ${_activeScene} → ${_sceneConfigPath}${window.__readonlyMode ? ' (READONLY)' : ''}`);
 
 // Deliberate boot halt: paints a fullscreen explanation and flags the
@@ -322,7 +375,8 @@ Promise.all([
   fetch("dmx/fixtures/te_sign_v3/model_a_120.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/te_sign_v3/model_b_102.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("config.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, controllersYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, teLedGridModelYaml, teSignV3AModelYaml, teSignV3BModelYaml, rootConfigYaml]) => {
+  fetch(_pixelMapViewsPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, controllersYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, teLedGridModelYaml, teSignV3AModelYaml, teSignV3BModelYaml, rootConfigYaml, pixelMapViewsYaml]) => {
 
   // Load root config
   if (rootConfigYaml) {
@@ -370,6 +424,29 @@ Promise.all([
     return;
   }
 
+  // Scene-owned 2D Pixel Map layout (pixel_map_views.yaml, report
+  // 20260725_66) — the operator's EDIT-tab arrangement: panels, hand-placed
+  // anchors, per-view framing and per-fixture offsets. Same hard-stop
+  // philosophy as views.yaml: booting past a present-but-broken file would
+  // seed the four shipped defaults and let the map's own auto-save write them
+  // straight over his arrangement. A MISSING file is the legitimate "never
+  // saved a layout yet" case and seeds the defaults on purpose.
+  try {
+    const pmTree = pixelMapViewsYaml ? (yaml.load(pixelMapViewsYaml) || null) : null;
+    createViewsContainer(pmTree);   // validate now; throws on a corrupt tree
+    if (pmTree) {
+      params.pixelMapViews = pmTree;
+      console.log(`[PixelMap] loaded ${(pmTree.views || []).length} saved view(s) from ` +
+        `${_pixelMapViewsPath}`);
+    }
+  } catch (err) {
+    fatalBootError(
+      `${_pixelMapViewsPath} is corrupt or invalid — refusing to boot.\n\n${err.message}\n\n` +
+      `Fix the file (or delete it to start the 2D Pixel Map from the shipped default ` +
+      `views) and reload. Nothing has been overwritten.`, err);
+    return;
+  }
+
   // Install the registry UNCONDITIONALLY — scenes with no scene/common
   // yaml (and scene-config parse failures, which are forgiven below)
   // must still get the real registry, or the Controllers panel would
@@ -395,12 +472,29 @@ Promise.all([
       `had no explicit protocol — defaulted to sACN (schema migration, id(s): ${ids}). ` +
       `Re-save the scene to persist 'protocol: sACN'.`);
   }
+  // One line per LED CARD (not per port) for port rows that loaded with no
+  // explicit `output` and were migrated to the identity mapping (output = port)
+  // — the exact rule in force before report 20260725_70, so nothing moved on the
+  // wire. The next save writes the field and this map goes empty (codex P0).
+  if (_controllerRegistry._ledOutputMigrations &&
+      _controllerRegistry._ledOutputMigrations.size > 0) {
+    for (const [id, { name, ports }] of _controllerRegistry._ledOutputMigrations) {
+      console.warn(`[Controllers] LED controller '${name}' (id ${id}): port(s) ` +
+        `${ports.join(', ')} had no explicit 'output' — defaulted to the identity mapping ` +
+        '(port N drives board output N; schema migration). Re-save the scene to persist it.');
+    }
+  }
   window.__controllerRegistry = _controllerRegistry;
   window.projectControllerMappings = function (configs) {
     const registry = window.__controllerRegistry;
     if (!registry || !registryIsActive(registry)) return { violations: [], drift: [] };
     const pins = (window.serverConfig && window.serverConfig.global_effects) || {};
-    const result = projectOntoConfigs(registry, configs, pins);
+    // LED strands ride along READ-ONLY: DMX and LED section/fixture ids
+    // share one id space, so the DMX pass has to see the strand ids or it
+    // mints on top of them (report 20260725_4 secondary finding 1). Same
+    // expression the LED pass uses below, so both see the same union.
+    const ledStrands = Array.isArray(params.ledStrands) ? params.ledStrands : [];
+    const result = projectOntoConfigs(registry, configs, pins, ledStrands);
     if (window.__globalPatchTree) {
       for (const config of configs) {
         if (!config || !config.name) continue;
@@ -421,6 +515,14 @@ Promise.all([
         'to absolute addresses (docs/33 decision 19) — addresses unchanged, saved with the ' +
         'next normal save:', result.migrated);
     }
+    if (result.collisions && result.collisions.length > 0) {
+      for (const c of result.collisions) {
+        console.warn(`[Controllers] ⚠ ${c.field} collision repaired: '${c.name}' had ` +
+          `${c.field} ${c.before}, already owned by LED strand '${c.strand}' — moved to ` +
+          `${c.after}. Baked in by the pre-fix DMX-only metadata pass; persists with the ` +
+          `next normal save. Re-export the model so the engine sees the new ids.`);
+      }
+    }
     for (const v of result.violations) {
       console.error(`[Controllers] ✋ ${v.message}`);
     }
@@ -430,6 +532,20 @@ Promise.all([
         `U${d.after.dmxUniverse}:${d.after.dmxAddress}@${d.after.controllerIp || '—'}`);
     }
     return result;
+  };
+
+  // Rename hygiene (operator ruling 2026-07-29, plan 20260725_44 step 10).
+  // `window.__globalPatchTree` is NAME-KEYED, so a rename leaves the old
+  // name's record behind forever: a phantom that silently re-attaches the
+  // moment a fixture is created with that name again, and that keeps
+  // claiming an address nothing owns. Every rename path prunes its old keys
+  // through here, one loud line each. Values are NEVER copied to the new
+  // name — that would be the silent carry-over the ruling bans; the renamed
+  // fixture comes out honestly unmapped.
+  // Returns the pruned rows so the caller folds them into its own
+  // fixture-by-fixture invalidation report.
+  window.pruneGlobalPatchTreeKeys = function (names) {
+    return prunePatchTreeEntries(window.__globalPatchTree, names);
   };
 
   // LED-strand patch projection (plan 20260709_0 P4): device-bound LED

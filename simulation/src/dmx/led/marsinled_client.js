@@ -25,16 +25,43 @@
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-// Probe timeout: a COLD MarsinLED takes ~5s to first HTTP byte (measured on
-// titanic_202 2026-07-10: first GET 4984ms, warm GETs 162–236ms — ARP/WiFi
-// wake-up, not CORS). 600ms aborted before any cold device could answer, so
+// ── Device timing budgets (measured on the live rig, not guessed) ───────────
+// Two measurements set every budget below:
+//   1. A COLD MarsinLED takes ~5 s to first HTTP byte (titanic_202 2026-07-10:
+//      first GET 4984 ms, warm GETs 162–236 ms — ARP/WiFi wake-up, not CORS).
+//   2. A per-output config write makes the device REBOOT, and the reboot was
+//      measured at ~11 s on the live rig (report 20260725_56 addendum) —
+//      POST reply to the device answering HTTP again.
+// A single flat 5000 ms budget spanning the write is therefore GUARANTEED to
+// fail on healthy hardware; that is exactly the failure the operator hit
+// ("timed out after 5000 ms — device did not respond", report 20260725_69).
+// Every phase of a push now carries its own budget, sized off (1) and (2).
+
+// Probe timeout: 600ms aborted before any cold device could answer, so
 // discovery reported an empty subnet. 6500ms covers the cold case with margin;
 // the larger batch keeps the full /24 sweep ≈4 batches (~26s worst case).
 const DEFAULT_PROBE_TIMEOUT_MS = 6500;  // per-IP scan probe (docs/41 §2)
 const DEFAULT_BATCH_SIZE = 64;          // 254 IPs / 64 ≈ 4 Promise.all batches
-const DEFAULT_HTTP_TIMEOUT_MS = 5000;   // getConfig/pushConfig on a chosen device
-const DEFAULT_REBOOT_TIMEOUT_MS = 30000;
-const DEFAULT_REBOOT_POLL_MS = 1000;
+
+// One read (or a legacy write) on a device the operator CHOSE. 5000 ms sat
+// right on top of the ~5 s cold-first-byte measurement — a coin flip on the
+// first call after the device has been idle. 8000 ms clears it with margin and
+// still fails fast on a genuinely dead host.
+export const DEFAULT_HTTP_TIMEOUT_MS = 8000;
+
+// POST /api/config carrying a per-output plan. The firmware persists the new
+// strand table to flash and then reboots — and on the live rig it reboots
+// BEFORE flushing the HTTP reply, so the socket simply goes quiet. This budget
+// gives a slow flash commit room to answer, and costs nothing when the reply is
+// lost: it overlaps the ~11 s reboot, so the reboot poll that follows finds a
+// device that is already back.
+export const PER_OUTPUT_WRITE_TIMEOUT_MS = 12000;
+
+// Overall budget for "the device is rebooting — wait for it to answer again".
+// Reboot measured at ~11 s; 45 s is honest headroom for a cold WiFi
+// re-associate on top of it, and it is a HARD deadline (no infinite spinner).
+export const REBOOT_WAIT_TIMEOUT_MS = 45000;
+export const REBOOT_POLL_INTERVAL_MS = 1000;
 
 // docs/41 §4.2 validation bounds — mirrored client-side so a bad payload is
 // rejected before it ever leaves the browser (loud, with the offending field).
@@ -128,7 +155,12 @@ async function fetchWithTimeout(url, opts, timeoutMs) {
     // readable timeout — fail loud, but not cryptic (G6). Every other fetch
     // rejection (connection refused, DNS, etc.) propagates verbatim.
     if (timedOut) {
-      throw new Error(`timed out after ${timeoutMs} ms — device did not respond`);
+      const timeoutErr = new Error(`timed out after ${timeoutMs} ms — device did not respond`);
+      // Marked so a caller can tell "the device gave us NO answer" (ambiguous —
+      // the write may still have applied) from "the device answered and said no"
+      // (definite). The per-output push reads the device back on the former.
+      timeoutErr.timedOut = true;
+      throw timeoutErr;
     }
     throw err;
   } finally {
@@ -432,10 +464,16 @@ async function postConfigBody(ip, body, timeoutMs) {
     err.detail = errBody.detail;
     err.fields = errBody.fields;
     err.deviceError = errBody;
+    err.httpStatus = 400;
     throw err;
   }
   if (!res.ok) {
-    throw new Error(`[MarsinLED] POST /api/config ${ip} failed: HTTP ${res.status} ${res.statusText}`);
+    const err = new Error(`[MarsinLED] POST /api/config ${ip} failed: ` +
+      `HTTP ${res.status} ${res.statusText}`);
+    // The device ANSWERED — this write definitively did not apply. Carrying the
+    // status lets the per-output push tell it apart from a lost reply.
+    err.httpStatus = res.status;
+    throw err;
   }
   return res.json();
 }
@@ -599,19 +637,64 @@ export function validatePerOutputPlan(strands, universeByOutputIndex) {
 }
 
 /**
- * Read-modify-write helper: return a NEW strands array where every ENABLED
- * strand that has an assigned universe carries `dmxUniverse` + `dmxStartAddress:
- * 1`, and every DISABLED (or unassigned) strand is copied UNTOUCHED — the array
- * is replaced wholesale on the device, so every field of every strand is
- * preserved. Pure (no I/O); the caller validates the plan first.
+ * Assert `plan` is a per-output plan object (`derivePerOutputPlan`'s result) and
+ * return it. There is NO bare-map path: a caller that hands over only a universe
+ * map would silently restore the pre-20260725_70 behaviour of leaving every
+ * output's enable state alone, which is exactly what made "drive output 4 from
+ * one port row" impossible (codex P0 — no fallbacks).
  */
-export function applyPerOutputUniverses(strands, universeByOutputIndex) {
-  const uni = normalizeUniverseMap(universeByOutputIndex);
-  return strands.map((s, i) => {
-    if (s && s.enabled === true && uni.has(i)) {
-      return { ...s, dmxUniverse: uni.get(i), dmxStartAddress: PER_OUTPUT_START_ADDRESS };
+function assertPerOutputPlan(plan, where) {
+  if (!plan || typeof plan !== 'object' || !plan.universeByOutputIndex) {
+    throw new Error(`[MarsinLED] ${where}: a per-output PLAN is required ` +
+      '({universeByOutputIndex, enables, parked, …} from derivePerOutputPlan) — a bare universe ' +
+      'map cannot express which outputs the push must enable');
+  }
+  return plan;
+}
+
+/**
+ * Read-modify-write helper: return a NEW strands array carrying the plan.
+ *
+ *  - every output in `plan.enables` (a port drives it, but the board has it
+ *    DISABLED) gets `enabled: true` + `count` = the port's mapped pixel count.
+ *    This is the ONE asymmetric write (report 20260725_70 §2.3): the push may
+ *    switch an output ON, NEVER off, so it can never dark a strand somebody
+ *    wired outside the sim;
+ *  - every key of `plan.universeByOutputIndex` (assigned AND parked) gets
+ *    `dmxUniverse` + `dmxStartAddress: 1`;
+ *  - `count` on an ALREADY-enabled output is never touched — the physical strand
+ *    length is hardware truth and the sim's model is a belief. A mismatch is a
+ *    warning from the derive, never a write;
+ *  - every other strand, and every other field, is copied through untouched (the
+ *    array is replaced wholesale on the device).
+ *
+ * Pure (no I/O). The caller validates the APPLIED array — not the device's —
+ * because only the applied array expresses the post-push enable state.
+ */
+export function applyPerOutputPlan(strands, plan) {
+  assertPerOutputPlan(plan, 'applyPerOutputPlan');
+  const uni = normalizeUniverseMap(plan.universeByOutputIndex);
+  const enableByIndex = new Map();
+  for (const entry of plan.enables || []) {
+    if (!Number.isInteger(entry.outputIndex) || entry.outputIndex < 0) {
+      throw new Error(`[MarsinLED] applyPerOutputPlan: enables[].outputIndex ` +
+        `'${entry.outputIndex}' must be a non-negative integer`);
     }
-    return { ...(s || {}) };
+    assertInt(entry.count, 1, Number.MAX_SAFE_INTEGER,
+      `enables[output ${entry.outputIndex}].count`);
+    enableByIndex.set(entry.outputIndex, entry.count);
+  }
+  return strands.map((s, i) => {
+    const next = { ...(s || {}) };
+    if (enableByIndex.has(i)) {
+      next.enabled = true;
+      next.count = enableByIndex.get(i);
+    }
+    if (next.enabled === true && uni.has(i)) {
+      next.dmxUniverse = uni.get(i);
+      next.dmxStartAddress = PER_OUTPUT_START_ADDRESS;
+    }
+    return next;
   });
 }
 
@@ -621,31 +704,64 @@ export function applyPerOutputUniverses(strands, universeByOutputIndex) {
  * (a device that lacks per-output must take the legacy path instead).
  *
  *  1. GET /api/config.
- *  2. Validate the plan against the live strands (`validatePerOutputPlan`).
- *  3. Set dmxUniverse + dmxStartAddress:1 on every enabled strand, leave
- *     disabled strands untouched, replace the strands array WHOLESALE.
+ *  2. APPLY the plan to the live strands (`applyPerOutputPlan`): enable the
+ *     outputs a port drives that the board has off (with their pixel count), and
+ *     stamp `dmxUniverse` + `dmxStartAddress:1` on every assigned AND parked
+ *     output. Nothing is ever disabled.
+ *  3. Validate the APPLIED array (`validatePerOutputPlan`), not the device's —
+ *     the applied array is the intended POST-push state, so the firmware's
+ *     ALL-OR-NONE / only-enabled-carry-a-universe / span / no-overlap rules are
+ *     checked against what the device will actually hold. Validating the
+ *     pre-push array could not express an enable and would refuse a legal plan.
  *  4. POST { strands, dmx:{enabled:true, protocol:0, timeoutMs:3000} }.
  *
  * The device REBOOTS on success ({outcome:"needs-reboot", reboot:true}); the
  * caller runs `awaitReboot` then `readPerOutput(getStatus)`.
  *
+ * PHASE BUDGETS (report 20260725_69): the read and the write are timed
+ * SEPARATELY — the write spans a reboot, the read does not. A flat `timeoutMs`
+ * covering both is the bug this function was fixed for, so passing one is
+ * refused rather than silently half-honoured.
+ *
+ * AMBIGUOUS WRITES: if the POST produces no ANSWER (our timeout, or a socket the
+ * rebooting device dropped) the returned rejection carries
+ * `err.writeResponseLost === true`. That is NOT proof the write failed — the
+ * firmware persists the config and reboots, and on the live rig it reboots
+ * before flushing the reply. The caller must wait out the reboot and read the
+ * device back to find out. A device that ANSWERED (400 or any other non-2xx)
+ * definitively did not apply the plan and is never flagged.
+ *
  * @param {string} ip
- * @param {{universeByOutputIndex: Map|Object, opts?: Object}} params
+ * @param {{plan: Object,
+ *          opts?: {readTimeoutMs?: number, writeTimeoutMs?: number}}} params
+ *   `plan` is `derivePerOutputPlan`'s result and is REQUIRED.
  * @returns {Promise<Object>} the device's apply/reboot reply.
  */
-export async function pushPerOutputUniverses(ip, { universeByOutputIndex, opts = {} } = {}) {
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
-  const config = await getConfig(ip, { timeoutMs });
+export async function pushPerOutputUniverses(ip, { plan, opts = {} } = {}) {
+  if (opts.timeoutMs !== undefined) {
+    throw new Error('[MarsinLED] pushPerOutputUniverses: one flat timeoutMs cannot cover ' +
+      'both the read and the reboot-spanning write — pass {readTimeoutMs, writeTimeoutMs}');
+  }
+  assertPerOutputPlan(plan, 'pushPerOutputUniverses');
+  const readTimeoutMs = opts.readTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
+  const writeTimeoutMs = opts.writeTimeoutMs ?? PER_OUTPUT_WRITE_TIMEOUT_MS;
+  const config = await getConfig(ip, { timeoutMs: readTimeoutMs });
   if (!config || !Array.isArray(config.strands)) {
     throw new Error(`[MarsinLED] pushPerOutputUniverses: ${ip} GET /api/config returned no strands[]`);
   }
-  validatePerOutputPlan(config.strands, universeByOutputIndex);
-  const strands = applyPerOutputUniverses(config.strands, universeByOutputIndex);
+  const strands = applyPerOutputPlan(config.strands, plan);
+  validatePerOutputPlan(strands, plan.universeByOutputIndex);
   const body = {
     strands,
     dmx: { enabled: true, protocol: PER_OUTPUT_PROTOCOL_SACN, timeoutMs: DMX_HOLD_TIMEOUT_MS },
   };
-  return postConfigBody(ip, body, timeoutMs);
+  try {
+    return await postConfigBody(ip, body, writeTimeoutMs);
+  } catch (err) {
+    if (err.httpStatus !== undefined) throw err;   // the device answered — definite failure
+    err.writeResponseLost = true;                  // no answer at all — the read-back decides
+    throw err;
+  }
 }
 
 /**
@@ -653,17 +769,32 @@ export async function pushPerOutputUniverses(ip, { universeByOutputIndex, opts =
  * reboot (the receiver latches the live sACN stream on boot — keep the source
  * streaming). HARD errors on timeout (codex P0 — no infinite spinner).
  *
+ * This is the reboot-wait PHASE of a per-output push: it is the only phase
+ * allowed to span the measured ~11 s reboot, and its budget
+ * (REBOOT_WAIT_TIMEOUT_MS) is deliberately much larger than any single-request
+ * budget. `onProgress({elapsedMs, timeoutMs, attempts})` fires after every miss
+ * so the push dialog can say how long it has been waiting.
+ *
+ * @param {string} ip
+ * @param {{timeoutMs?: number, pollIntervalMs?: number, probeTimeoutMs?: number,
+ *          onProgress?: Function}} [opts]
  * @returns {Promise<DiscoveredDevice>} the device once it is back.
  */
 export async function awaitReboot(ip, opts = {}) {
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_REBOOT_TIMEOUT_MS;
-  const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_REBOOT_POLL_MS;
+  const timeoutMs = opts.timeoutMs ?? REBOOT_WAIT_TIMEOUT_MS;
+  const pollIntervalMs = opts.pollIntervalMs ?? REBOOT_POLL_INTERVAL_MS;
   const probeTimeoutMs = opts.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
+  const onProgress = opts.onProgress;
+  const started = Date.now();
+  const deadline = started + timeoutMs;
+  let attempts = 0;
   while (Date.now() < deadline) {
     const dev = await probeDevice(ip, { timeoutMs: probeTimeoutMs });
+    attempts += 1;
     if (dev) return dev;
+    if (onProgress) onProgress({ elapsedMs: Date.now() - started, timeoutMs, attempts });
     await delay(pollIntervalMs);
   }
-  throw new Error(`[MarsinLED] device ${ip} did not come back within ${timeoutMs}ms after reboot`);
+  throw new Error(`[MarsinLED] device ${ip} did not come back within ${timeoutMs}ms after ` +
+    `reboot (${attempts} probe(s))`);
 }

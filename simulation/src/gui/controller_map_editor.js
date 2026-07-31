@@ -15,6 +15,7 @@
  * deletes; everything invalid renders loudly and projects unpatched.
  */
 import { params, selectedFixtureIndices } from '../core/state.js';
+import { compareNatural } from '../core/natural_sort.js';
 import {
   DMX_UNIVERSE_SIZE,
   EFFECTS_UNIVERSE,
@@ -48,6 +49,7 @@ import {
   LED_CHANNEL_ORDERS,
   LED_WHITE_MODES,
   ledStrideForOrder,
+  parkedUniverseFor,
   computeLedProjection,
   testAutoPatch,
   clearAllPatches,
@@ -60,14 +62,21 @@ import {
   renderDeviceBindingSection,
   refreshSyncChips,
   deriveLayoutPreview,
+  outputSelectorOptions,
+  getDeviceOutputs,
   startPushAll,
 } from './led_discovery_panel.js';
+import {
+  renderGammaSection,
+  startFleetGammaPush,
+} from './led_gamma_ui.js';
 import {
   computeLedStrandPatches,
   computeLedUniverseClaims,
   projectLedStrandSegments,
   validateLedManualUniverses,
 } from '../dmx/led/led_patch_projection.js';
+import { collectClaimedUniverses } from '../dmx/led/device_config_mapper.js';
 
 // ── Panel state ─────────────────────────────────────────────────────────
 
@@ -102,6 +111,59 @@ function readCameraFocusPref() {
 const collapsedControllers = new Set(); // controller ids
 const collapsedPorts = new Set();       // '<controllerId>:<portNum>' keys
 const collapsedGroups = new Set();      // 'DMX' | 'LED' — collapsed type sections
+
+// Controllers-section hide/show (operator request while live-mapping): the
+// controllers list owns 3/4 of the pane (.cm-user-sized .cm-main flex:3), so a
+// rig with a dozen controllers buries the UNMAPPED TRAY + Save row underneath
+// it. Hiding the section gives the tray the whole pane; the section header
+// stays put so it is always one click back. Persisted per-machine, same idiom
+// as the camera-focus pref above.
+const CONTROLLERS_COLLAPSED_KEY = 'bm26.map.controllersCollapsed';
+export const CONTROLLERS_COLLAPSED_CLASS = 'cm-controllers-collapsed';
+let controllersCollapsed = readControllersCollapsedPref();
+let controllersToggleBtn = null; // live button, patched in place (no re-render)
+
+/**
+ * Normalize a persisted controllers-collapsed value. Only the exact string the
+ * writer emits counts as collapsed — anything else (absent, junk, legacy) reads
+ * as expanded, which is the state that shows the operator everything.
+ * PURE — unit-tested in tests/controllers_pane_toggle.test.js.
+ * @param {string|null} raw
+ * @returns {boolean}
+ */
+export function parseControllersCollapsed(raw) {
+  return raw === '1';
+}
+
+/**
+ * Glyph + title for the controllers-section hide/show button, given the state
+ * it is currently IN. Mirrors the ▾/▸ chevron idiom of the DMX/MarsinLED group
+ * heads. PURE — unit-tested.
+ * @param {boolean} collapsed
+ * @returns {{glyph: string, title: string}}
+ */
+export function controllersToggleState(collapsed) {
+  return collapsed
+    ? {
+      glyph: '▸',
+      title: 'Show the controllers list (currently hidden — the unmapped tray ' +
+        'and Save row below have the whole pane)',
+    }
+    : {
+      glyph: '▾',
+      title: 'Hide the controllers list so the unmapped tray and Save row ' +
+        'below get the whole pane. Nothing is unpatched — display only.',
+    };
+}
+
+function readControllersCollapsedPref() {
+  try {
+    return parseControllersCollapsed(localStorage.getItem(CONTROLLERS_COLLAPSED_KEY));
+  } catch (err) {
+    console.error('[Controllers] read controllers-collapsed pref', err);
+    return false;
+  }
+}
 
 // Operator-facing label for the LED controller type (Round 2 R3). The single
 // LED vendor today is MarsinLED; CONTROLLER_TYPE_LED / vendor 'marsinled' stay
@@ -217,10 +279,28 @@ function ledCtx() {
     registry,
     mutate,
     strandLedCounts,
+    claimedUniverses: claimedUniversesFor,
     refresh: renderIfOpen,
     showToast,
     activeScene: () => window.__activeScene || 'default',
   };
+}
+
+/**
+ * The registry-wide universe claim index for the per-output plan gate (slice S2,
+ * report 20260725_58 §4): every universe owned by a controller OTHER than
+ * `controller`, from the DMX projection (`universeMaps`) plus the LED occupancy
+ * claims. Computed FRESH (never off the render cache) so a push always gates
+ * against the current mapping, and threaded into the LED panel via ledCtx.
+ */
+function claimedUniversesFor(controller) {
+  const reg = registry();
+  const proj = computeProjection(reg, configsByName(), pins());
+  return collectClaimedUniverses(controller, {
+    dmxUniverseMaps: proj.universeMaps,
+    ledClaims: ledUniverseClaims(),
+    controllers: reg.controllers,
+  });
 }
 
 function configsByName() {
@@ -311,7 +391,13 @@ function dismissToast() {
   undoState = null;
 }
 
-function showToast(message, { undoSnapshot = null, error = false, ttl = 10000 } = {}) {
+/**
+ * The scene's one transient operator notice. Exported (report 20260725_83) so
+ * the generator can announce a re-snap through the same affordance the mapping
+ * editor uses instead of minting a second toast widget. Calling it without an
+ * `undoSnapshot` is the plain-notice form.
+ */
+export function showToast(message, { undoSnapshot = null, error = false, ttl = 10000 } = {}) {
   dismissToast();
   const toast = document.createElement('div');
   toast.id = 'cm-toast';
@@ -481,13 +567,25 @@ function makeAllocator(universe) {
   };
 }
 
+// The tray + picker lists are what the operator HUNTS through while mapping,
+// so both are sorted by name — naturally (operator request 2026-07-29). The
+// scene order they used to arrive in is creation order, which reads as random
+// once a rig has ~90 fixtures. `compareNatural` is the shared comparator
+// (src/core/natural_sort.js): "Left Back Wall 2" lands before
+// "Left Back Wall 10", not after it.
+//
+// Sorted HERE, at the source, so every consumer agrees; and the tray then
+// caches the result for the lifetime of one render (see renderTray) so typing
+// in the filter box never re-derives or re-sorts anything.
 function unmappedNames() {
-  return unmappedNamesByKind(registry(), allConfigs().map(c => c.name), []).fixtures;
+  return unmappedNamesByKind(registry(), allConfigs().map(c => c.name), [])
+    .fixtures.sort(compareNatural);
 }
 
 /** Unmapped LED-strand names (the tray source when picking onto LED). */
 function unmappedStrandNames() {
-  return unmappedNamesByKind(registry(), [], strandList().map(s => s && s.name)).strands;
+  return unmappedNamesByKind(registry(), [], strandList().map(s => s && s.name))
+    .strands.sort(compareNatural);
 }
 
 /** The set of LED-strand names in the scene (for strict type gating). */
@@ -642,6 +740,11 @@ function render() {
     bodyEl.appendChild(banner);
   }
 
+  // Controllers section header — carries the hide/show toggle. Lives OUTSIDE
+  // .cm-main (a direct child of #cm-body) so it survives the section being
+  // hidden and the operator always has the way back.
+  bodyEl.appendChild(renderControllersSectionHead(reg.controllers.length));
+
   // Controllers live in their own scroll region; the tray, save button
   // and hint stay fixed below it so they're always reachable — sized
   // for rigs with 15+ controllers and hundreds of fixtures.
@@ -649,17 +752,19 @@ function render() {
   main.className = 'cm-main';
 
   // Unpatched-red overlay toggle (sim-only diagnostic; no DMX is sent).
-  // Synced with the "Show Unpatched (Red)" checkbox in the DMX Fixtures
-  // panel — both write the same params.showUnpatchedRed flag.
+  // Synced with BOTH "Show Unpatched (Red)" checkboxes — Lighting Control →
+  // ⚙️ Options and the top of the fixtures panel. All three are views of the
+  // one params.showUnpatchedRed flag; the checkboxes `.listen()`, so they
+  // update themselves the moment this button writes it.
   const overlayOn = !!params.showUnpatchedRed;
   const overlayBtn = document.createElement('button');
   overlayBtn.className = overlayOn ? 'cm-btn cm-unpatched-toggle cm-on' : 'cm-btn cm-unpatched-toggle';
   overlayBtn.textContent = overlayOn
     ? '🔴 Unpatched Highlight: ON'
     : '⚪ Unpatched Highlight: OFF';
-  overlayBtn.title = 'Tint fixtures with no DMX patch red in the 3D view ' +
-    '(preview only — no DMX data is sent). Synced with "Show Unpatched (Red)" ' +
-    'in the DMX Fixtures panel.';
+  overlayBtn.title = 'Tint fixtures with no patch red in the 3D view — LED strands ' +
+    'and DMX alike (preview only — no DMX data is sent). Same switch as ' +
+    '"Show Unpatched (Red)" in Lighting Control → Options and in the fixtures panel.';
   overlayBtn.onclick = () => {
     params.showUnpatchedRed = !params.showUnpatchedRed;
     renderIfOpen(); // refresh this button's label/state (the lil-gui checkbox self-syncs via .listen())
@@ -731,18 +836,32 @@ function render() {
 
   bodyEl.appendChild(renderTray(unmapped, unmappedStrands, proj));
 
-  // Save button — same contract as the Views panel save.
+  // Save row — its OWN anchored toolbar at the foot of the pane (report
+  // 20260725_85). The button used to be a bare flex item dropped between the
+  // tray and the hint with nothing reserving its space, so a tray squeezed by
+  // the taller MarsinLED cards overflowed its box and the button painted on top
+  // of the tray chips. `.cm-footer` is `flex: 0 0 auto` — it never shrinks, so
+  // the tray and the hint yield first and Save is always reachable.
+  const footer = document.createElement('div');
+  footer.className = 'cm-footer';
+
   const saveBtn = document.createElement('button');
   const isDirty = window.__sceneDirty || false;
   saveBtn.className = isDirty ? 'vm-btn vm-save vm-dirty' : 'vm-btn vm-save';
   saveBtn.textContent = isDirty ? '💾 Save Configuration *' : '💾 Save Configuration';
-  saveBtn.onclick = () => {
-    if (window.exportConfig) {
-      window.exportConfig();
-      setTimeout(() => renderIfOpen(), 400);
-    }
+  // AWAITED (report 20260725_86): the save may now put the 📡 Subscribed
+  // Universes Yes/No/Cancel dialog in front of the operator, so "when is the
+  // save done" is no longer a 400 ms guess — re-render when it actually
+  // resolves. exportConfig never rejects (slice S1), so there is nothing to
+  // catch; a cancelled save resolves `{ok:false}` and the pane repaints
+  // unchanged.
+  saveBtn.onclick = async () => {
+    if (!window.exportConfig) return;
+    await window.exportConfig();
+    renderIfOpen();
   };
-  bodyEl.appendChild(saveBtn);
+  footer.appendChild(saveBtn);
+  bodyEl.appendChild(footer);
 
   const hint = document.createElement('div');
   hint.className = 'cm-hint';
@@ -752,10 +871,61 @@ function render() {
     'the end. Saved to controllers.yaml, projected into patches.yaml.';
   bodyEl.appendChild(hint);
 
+  // Re-apply the controllers-section hide state to the freshly-built DOM (the
+  // rebuild above dropped the class along with the old children).
+  applyControllersCollapsed();
+
   // Set chip highlights + "+ sel" counters on the freshly-built DOM (covers
   // strand chips, which read the 3D strands' _selected flag rather than the par
   // selection set). Cheap DOM patch over the just-rendered nodes.
   syncSelectionUi();
+}
+
+// ── Controllers section head + hide/show ────────────────────────────────
+// The toggle is DISPLAY ONLY: it flips one class on #cm-body and repaints one
+// button. It never rebuilds the pane, never recomputes a projection and never
+// touches the registry — safe to hit mid-mapping (an in-flight pick mode, a
+// half-typed address, the tray filter all survive it untouched).
+
+function renderControllersSectionHead(controllerCount) {
+  const head = document.createElement('div');
+  head.className = 'cm-section-head';
+
+  controllersToggleBtn = document.createElement('button');
+  controllersToggleBtn.className = 'cm-toggle cm-controllers-toggle';
+  controllersToggleBtn.onclick = toggleControllersSection;
+  head.appendChild(controllersToggleBtn);
+  paintControllersToggle();
+
+  const title = document.createElement('span');
+  title.className = 'cm-section-title';
+  title.textContent = `Controllers (${controllerCount})`;
+  head.appendChild(title);
+
+  return head;
+}
+
+function paintControllersToggle() {
+  if (!controllersToggleBtn) return;
+  const { glyph, title } = controllersToggleState(controllersCollapsed);
+  controllersToggleBtn.textContent = glyph;
+  controllersToggleBtn.title = title;
+}
+
+/** Apply the current hide state to the live DOM. Idempotent, no rebuild. */
+function applyControllersCollapsed() {
+  if (bodyEl) bodyEl.classList.toggle(CONTROLLERS_COLLAPSED_CLASS, controllersCollapsed);
+  paintControllersToggle();
+}
+
+function toggleControllersSection() {
+  controllersCollapsed = !controllersCollapsed;
+  try {
+    localStorage.setItem(CONTROLLERS_COLLAPSED_KEY, controllersCollapsed ? '1' : '0');
+  } catch (err) {
+    console.error('[Controllers] persist controllers-collapsed pref', err);
+  }
+  applyControllersCollapsed();
 }
 
 // ── Collapsible type group (DMX / MarsinLED) ────────────────────────────
@@ -810,6 +980,18 @@ function renderControllerGroup(kind, title, controllers, proj) {
     pushAllBtn.disabled = boundCount === 0;
     pushAllBtn.onclick = () => startPushAll(ledCtx());
     head.appendChild(pushAllBtn);
+
+    // Fleet gamma: write EVERY LED controller's gamma curve to its hardware,
+    // sequentially, with a per-controller result. Independent of the mapping
+    // push above — gamma normally applies live, no reboot.
+    const gammaAllBtn = document.createElement('button');
+    gammaAllBtn.className = 'cm-btn cm-push-all-gamma';
+    gammaAllBtn.textContent = '⬆ Push gamma to all';
+    gammaAllBtn.title = 'Push every LED controller\'s gamma curve sequentially ' +
+      '(backup → gamma-only write → read-back verify), with a per-controller result';
+    gammaAllBtn.disabled = controllers.filter((c) => isValidIp(c.ip)).length === 0;
+    gammaAllBtn.onclick = () => startFleetGammaPush(ledCtx());
+    head.appendChild(gammaAllBtn);
   }
   group.appendChild(head);
 
@@ -853,7 +1035,6 @@ function renderController(controller, proj) {
     else collapsedControllers.add(controller.id);
     renderIfOpen();
   };
-  head.appendChild(toggleBtn);
 
   const nameInp = document.createElement('input');
   nameInp.className = 'cm-input cm-name';
@@ -954,12 +1135,30 @@ function renderController(controller, proj) {
     }
   };
 
-  head.appendChild(nameInp);
-  head.appendChild(ipInp);
-  head.appendChild(typeBtn);
-  head.appendChild(protoBtn);
-  head.appendChild(addPortBtn);
-  head.appendChild(delBtn);
+  // TWO rows (operator request): identity on top, actions underneath.
+  // One row could not hold both — the name input is the only flexible item
+  // (`.cm-name { flex: 1 }` → flex-basis 0), so the fixed-width IP box plus
+  // four text buttons ate the row and the name collapsed to ~5 characters on
+  // a docked pane. Row 1 gives the name everything except the chevron and the
+  // IP box; row 2 owns the type / transport / +port / delete buttons.
+  const idRow = document.createElement('div');
+  idRow.className = 'cm-controller-head-row cm-controller-id-row';
+  idRow.appendChild(toggleBtn);
+  idRow.appendChild(nameInp);
+  idRow.appendChild(ipInp);
+
+  const actionRow = document.createElement('div');
+  actionRow.className = 'cm-controller-head-row cm-controller-action-row';
+  actionRow.appendChild(typeBtn);
+  actionRow.appendChild(protoBtn);
+  actionRow.appendChild(addPortBtn);
+  const actionSpacer = document.createElement('span');
+  actionSpacer.className = 'cm-head-spacer';
+  actionRow.appendChild(actionSpacer);
+  actionRow.appendChild(delBtn); // pushed right, away from the everyday buttons
+
+  head.appendChild(idRow);
+  head.appendChild(actionRow);
   card.appendChild(head);
 
   for (const v of violationsFor(proj.violations, controller, null)) {
@@ -1059,10 +1258,68 @@ function renderController(controller, proj) {
     cfg.appendChild(whiteSel);
     card.appendChild(cfg);
 
+    // Per-channel gamma: the scene MIRROR of the curve the controller runs
+    // (the one and only gamma in the chain), editable here, with a per-card
+    // push that verifies against the hardware. LED controllers only.
+    const gammaSection = renderGammaSection(ledCtx(), controller);
+    if (gammaSection) card.appendChild(gammaSection);
+
     // Device binding: identity + sync chip + Push (bound), or a Discover/bind
     // button (unbound). All device I/O lives in led_discovery_panel.
     const deviceSection = renderDeviceBindingSection(ledCtx(), controller);
     if (deviceSection) card.appendChild(deviceSection);
+
+    // Board outputs: what every PHYSICAL output on this board is doing — driven
+    // by a port, parked (enabled but nothing routed here), or disabled. Rendered
+    // only when the device has actually been read, so the line is never a guess.
+    // This is where a portless enabled output becomes visible BEFORE anyone
+    // opens the push dialog (report 20260725_70 §5.2).
+    const boardOutputs = getDeviceOutputs(ledCtx(), controller.id);
+    if (boardOutputs && boardOutputs.length) {
+      const boardRow = document.createElement('div');
+      boardRow.className = 'cm-led-board-outputs';
+      const portByOutput = new Map();
+      for (const p of controller.ports || []) portByOutput.set(p.output, p);
+      const parts = [];
+      for (let n = 1; n <= boardOutputs.length; n++) {
+        const p = portByOutput.get(n);
+        if (p) { parts.push(`${n}←P${p.port}(U${p.universe})`); continue; }
+        const parkedU = parkedUniverseFor(controller, n - 1);
+        if (boardOutputs[n - 1].enabled) {
+          parts.push(parkedU ? `${n} parked U${parkedU}` : `${n} parked (universe on next push)`);
+        } else {
+          parts.push(`${n} disabled`);
+        }
+      }
+      const boardLbl = document.createElement('span');
+      boardLbl.className = 'cm-led-lbl';
+      boardLbl.textContent = 'Board outputs:';
+      boardLbl.title = 'PARKED = enabled on the board with no card port driving it. It keeps a ' +
+        'universe nobody routes to, so it receives no packets and stays dark. The push NEVER ' +
+        'disables an output.';
+      boardRow.appendChild(boardLbl);
+      const boardTxt = document.createElement('span');
+      boardTxt.className = 'cm-led-board-outputs-text';
+      boardTxt.textContent = parts.join('  ');
+      boardRow.appendChild(boardTxt);
+
+      // Re-park: drop the stored parked universes so the next derive allocates
+      // fresh ones (the escape hatch for the span/claim cases in §2.2).
+      if (Array.isArray(controller.parkedOutputs) && controller.parkedOutputs.length) {
+        const reparkBtn = document.createElement('button');
+        reparkBtn.className = 'cm-btn cm-led-repark';
+        reparkBtn.textContent = '↻ re-park';
+        reparkBtn.title = 'Forget the stored parked universes on this card. The next push ' +
+          'allocates fresh ones (lowest free inside the 16-universe window).';
+        reparkBtn.onclick = () => {
+          mutate(`Re-parked unmapped outputs on ${controller.name}`, () => {
+            delete controller.parkedOutputs;
+          });
+        };
+        boardRow.appendChild(reparkBtn);
+      }
+      card.appendChild(boardRow);
+    }
   }
 
   if (isCollapsed) {
@@ -1071,7 +1328,12 @@ function renderController(controller, proj) {
     const universes = [...new Set(controller.ports.map(p => `U${p.universe}`))].join(' ');
     const summary = document.createElement('div');
     summary.className = 'cm-summary';
-    summary.textContent = `${controller.ports.length} port(s) · ${fixtureCount} fixture(s) · ${universes}`;
+    // A CROSSED port→output mapping must be readable without expanding the card.
+    const crossings = isLed
+      ? controller.ports.filter((p) => p.output !== p.port).map((p) => `P${p.port}→O${p.output}`)
+      : [];
+    summary.textContent = `${controller.ports.length} port(s) · ${fixtureCount} fixture(s) · ` +
+      universes + (crossings.length ? ` · ${crossings.join(' ')}` : '');
     card.appendChild(summary);
     return card;
   }
@@ -1109,10 +1371,68 @@ function renderLedPort(controller, port, proj) {
   head.appendChild(toggleBtn);
 
   const strandCount = port.chain.filter(e => entryFixtureName(e) !== null).length;
+  const crossed = port.output !== port.port;
   const label = document.createElement('span');
-  label.className = 'cm-port-label';
-  label.textContent = `P${port.port} · U`;
+  // A CROSSED mapping (P1 driving output 4) must be visible without expanding
+  // anything — the accent class is the same one the warn chips use.
+  label.className = 'cm-port-label' + (crossed ? ' cm-port-label-crossed' : '');
+  label.textContent = `P${port.port} →`;
+  label.title = crossed
+    ? `Port row ${port.port} drives PHYSICAL output ${port.output} on the board — a crossed mapping.`
+    : 'Port row and physical board output match (the default identity mapping).';
   head.appendChild(label);
+
+  // ── The physical board output this port drives (report 20260725_70 §5.1) ──
+  // The operator's "use output 4 only" case is ONE row with this set to 4: no
+  // filler rows, no unused universes. Outputs 1–3, if enabled on the board,
+  // become PARKED — they keep a universe nobody routes to, so they stay dark
+  // without ever being disabled.
+  const devOutputs = getDeviceOutputs(ledCtx(), controller.id);
+  const selModel = outputSelectorOptions(controller, port, devOutputs);
+  const outSel = document.createElement('select');
+  outSel.className = 'cm-input cm-num cm-led-output';
+  outSel.title = 'Physical output on the board this port drives. Two ports may not drive the ' +
+    "same output. The device's strands[] index is this number − 1." +
+    (selModel.verified
+      ? ` This board reports ${selModel.max} output(s).`
+      : ' The board has not been read yet, so the range 1–16 is UNVERIFIED — discover or push ' +
+        'the card to confirm how many outputs it actually has.');
+  for (const opt of selModel.options) {
+    const o = document.createElement('option');
+    o.value = String(opt.value);
+    o.textContent = opt.label;
+    o.disabled = opt.disabled;
+    if (opt.selected) o.selected = true;
+    outSel.appendChild(o);
+  }
+  outSel.onchange = () => {
+    const next = parseInt(outSel.value, 10);
+    if (next === port.output) return;
+    // Layer 1 of the uniqueness rule: the duplicate option is already disabled,
+    // so this only fires if something bypassed the widget. Refuse + revert; the
+    // push gate is layer 2 and blocks it no matter who authored the file.
+    const clash = (controller.ports || []).find((p) => p !== port && p.output === next);
+    if (clash) {
+      showToast(`Output ${next} is already driven by P${clash.port} — one physical output ` +
+        'cannot take two universes', { error: true, ttl: 6000 });
+      outSel.value = String(port.output);
+      return;
+    }
+    mutate(`Port ${port.port} → output ${next} on ${controller.name}`, () => {
+      // The output this port now drives can no longer be parked.
+      port.output = next;
+      if (Array.isArray(controller.parkedOutputs)) {
+        controller.parkedOutputs = controller.parkedOutputs.filter((p) => p.output !== next);
+        if (controller.parkedOutputs.length === 0) delete controller.parkedOutputs;
+      }
+    });
+  };
+  head.appendChild(outSel);
+
+  const uniLbl = document.createElement('span');
+  uniLbl.className = 'cm-port-label';
+  uniLbl.textContent = 'U';
+  head.appendChild(uniLbl);
 
   // Per-output universe is MANUAL and EDITABLE (Slice D): the operator declares
   // each output's universe; the device is single-base linear, so the FIRST
@@ -1237,17 +1557,20 @@ function renderLedPort(controller, port, proj) {
     const preview = deriveLayoutPreview(controller, strandLedCounts());
     const derivedLine = document.createElement('div');
     derivedLine.className = 'cm-led-derived';
-    const out = preview.perOutput.get(port.port - 1);
+    // Keyed by the PORT ROW, labelled with the PHYSICAL OUTPUT it drives — the
+    // old `output ${port.port}` text was a lie under a crossed mapping.
+    const out = preview.perOutput.get(port.port);
+    const where = `P${port.port} → output ${port.output}`;
     if (preview.error) {
       derivedLine.classList.add('cm-led-derived-warn');
-      derivedLine.textContent = `⌁ output ${port.port}: ${preview.error}`;
+      derivedLine.textContent = `⌁ ${where}: ${preview.error}`;
     } else if (out && out.enabled) {
       const span = out.endUniverse === out.universe
         ? `U${out.universe} ch ${out.startChannel}–${out.endChannel}`
         : `U${out.universe} ch ${out.startChannel} → U${out.endUniverse} ch ${out.endChannel}`;
-      derivedLine.textContent = `⌁ output ${port.port}: ${span} · ${out.pixelCount}px`;
+      derivedLine.textContent = `⌁ ${where}: ${span} · ${out.pixelCount}px`;
     } else {
-      derivedLine.textContent = `⌁ output ${port.port}: disabled (no strands)`;
+      derivedLine.textContent = `⌁ ${where}: no data routed (no strands)`;
     }
     row.appendChild(derivedLine);
 
@@ -1432,6 +1755,15 @@ function renderPort(controller, port, proj) {
 function renderChain(controller, port, layout) {
   const chain = document.createElement('div');
   chain.className = 'cm-chain';
+  // The chain is CABLE DOCUMENTATION, not a derived list: chips sit in the
+  // order they were added and are NEVER re-sorted behind the operator's back,
+  // so a generator renumber (which rewrites which physical light each
+  // `<group> N` name means) leaves these chips exactly where they were. Say so
+  // — otherwise chips reading "… 10, 2, 3" look like a bug rather than the
+  // wiring order somebody actually cabled (report 20260725_44 §2).
+  chain.title = 'Daisy-chain order = the order the fixtures are CABLED on this port. ' +
+    'It is never re-derived from fixture numbers or re-sorted automatically — ' +
+    'drag chips to match the real cable.';
 
   layout.forEach((item, index) => {
     const chip = document.createElement('span');
@@ -1927,8 +2259,9 @@ function renderTray(unmapped, unmappedStrands, proj) {
   head.appendChild(title);
 
   const filter = document.createElement('input');
-  filter.className = 'cm-input';
-  filter.style.width = '90px';
+  // Width lives in the stylesheet (.cm-input.cm-tray-filter) so the docked
+  // pane can widen it; an inline width could not be overridden per state.
+  filter.className = 'cm-input cm-tray-filter';
   filter.placeholder = 'filter…';
   filter.value = trayFilter;
   filter.oninput = () => {
@@ -1957,6 +2290,16 @@ function renderTray(unmapped, unmappedStrands, proj) {
   const pickingEffects = pickPort && pickPort.universe === EFFECTS_UNIVERSE;
   const byName = configsByName();
 
+  // Source lists resolved ONCE per render, already name-sorted. renderChips()
+  // runs on every keystroke in the filter box, and it used to call
+  // unmappedNames()/unmappedStrandNames() from inside that loop — re-walking
+  // every scene config and every chain entry (and now re-sorting) per
+  // character typed. Every mapping change routes through mutate(), which
+  // always re-renders, so these can never go stale within one render; the
+  // filter is a pure subset and preserves the order it is handed.
+  const trayFixtureNames = unmappedNames();
+  const trayStrandNames = unmappedStrandNames();
+
   function renderChips() {
     chips.replaceChildren();
     const needle = trayFilter.trim().toLowerCase();
@@ -1966,7 +2309,7 @@ function renderTray(unmapped, unmappedStrands, proj) {
     // default (and DMX picking) lists fixtures. The chain-entry namespace
     // is shared, so a strand and fixture can each be mapped at most once.
     const ledTray = pickPort && pickingLed;
-    const names = ledTray ? unmappedStrandNames() : unmappedNames();
+    const names = ledTray ? trayStrandNames : trayFixtureNames;
 
     for (const name of names) {
       if (ledTray) {
@@ -2039,7 +2382,7 @@ function renderTray(unmapped, unmappedStrands, proj) {
       done.className = 'cm-fully-patched';
       const bothEmpty = unmapped.length === 0 && unmappedStrands.length === 0;
       done.textContent = (pickPort && pickingLed)
-        ? (unmappedStrandNames().length === 0 ? '✓ every strand is mapped' : '(no matches)')
+        ? (trayStrandNames.length === 0 ? '✓ every strand is mapped' : '(no matches)')
         : (bothEmpty ? '✓ every fixture & strand is mapped' : '(no matches)');
       chips.appendChild(done);
     }

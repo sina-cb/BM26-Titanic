@@ -68,6 +68,30 @@ export function resolveEffectsPage(
   return showPages ? enginePage : 0;
 }
 
+/**
+ * Split the strip's visible slots into fixed-size CLIENT-SIDE pages.
+ *
+ * This is a VIEW-ONLY pager for the portrait mixer/deck bottom strip (operator
+ * request 2026-07-27: "no scrolling in the effects bar"). It has NOTHING to do
+ * with the engine's `effectsPage` — SHOW_EFFECT_PAGES stays false and the strip
+ * still renders engine page 0's 8 slots; this only decides which 4 of those 8
+ * are on screen at once so each chip is wide enough for a single-line label.
+ *
+ * Total + pure: an empty input yields NO pages (the caller renders nothing
+ * rather than an empty page), and a partial last group is kept as-is (never
+ * padded) so callers can't mistake a spacer for a slot. Throws on a
+ * non-positive size — a 0 chunk would loop forever, and silently "fixing" it
+ * would be a fallback (codex P0).
+ */
+export function chunkStripPages<T>(slots: readonly T[], size: number): T[][] {
+  if (!Number.isFinite(size) || size < 1) {
+    throw new Error(`chunkStripPages: size must be >= 1, got ${size}`);
+  }
+  const pages: T[][] = [];
+  for (let i = 0; i < slots.length; i += size) pages.push(slots.slice(i, i + size));
+  return pages;
+}
+
 /** Flat slot id (1..32) for the `index0`-th visible cell on `page`. */
 export const slotIdForPage = (page: number, index0: number): number =>
   page * VISIBLE_SLOT_COUNT + index0 + 1;
@@ -318,17 +342,29 @@ export function modeBadge(perfLocked: boolean): ModeBadge | null {
 // surfaces the reason; a later `ok` clears it. Pure so the derivation is tested
 // without react-native.
 
-/** Fold a `vsn1LayoutDeploy` broadcast into the deploy-error banner state.
+/** The deploy banner, with its SEVERITY.
+ *
+ *  `offline` exists because "the controller is not plugged in" is a completely
+ *  normal state — the operator runs CaptainPad without the VSN1 all the time —
+ *  and it must NOT look like a failure. Before the engine had an attach state
+ *  (report _30 §4) a detached device produced a real deploy error per edit, so
+ *  the only available idiom was the red NOT-deployed banner. Now the engine
+ *  reports `skipped-detached` and this renders as a neutral, informational
+ *  badge. Red stays reserved for something actually being wrong. */
+export type DeployBanner = { kind: 'error' | 'offline'; message: string };
+
+/** Fold a `vsn1LayoutDeploy` broadcast into the deploy banner state.
  *  Returns:
  *    - `undefined` → NO CHANGE (an unrelated message, or an in-flight
  *      `deploying:true` frame — the previous banner holds until a result lands),
  *    - `null` → CLEAR the banner (a successful `ok` result), or
- *    - a string → SHOW this error message (a settled `error` result).
+ *    - a `DeployBanner` → SHOW it (`error` = a settled failure, `offline` = the
+ *      engine skipped the deploy because no device is attached).
  *  The caller stores the last non-`undefined` value in component state and may
  *  additionally set it to `null` on an operator dismiss. */
 export function deployBannerMessage(
   msg: { type?: unknown; deploying?: unknown; lastResult?: unknown; lastError?: unknown },
-): string | null | undefined {
+): DeployBanner | null | undefined {
   if (!msg || msg.type !== 'vsn1LayoutDeploy') return undefined;
   // Only ACT on a settled result. An in-flight frame (deploying:true) carries a
   // STALE lastResult from the previous flash, so ignore it — the previous banner
@@ -339,7 +375,10 @@ export function deployBannerMessage(
     const detail = typeof msg.lastError === 'string' && msg.lastError.trim()
       ? msg.lastError.trim()
       : 'unknown error';
-    return `VSN1 layout NOT deployed: ${detail}`;
+    return { kind: 'error', message: `VSN1 layout NOT deployed: ${detail}` };
+  }
+  if (msg.lastResult === 'skipped-detached') {
+    return { kind: 'offline', message: 'VSN1 offline — layout deploy skipped' };
   }
   // Any other result (e.g. 'disabled', or a frame with no result yet) — no change.
   return undefined;

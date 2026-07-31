@@ -17,12 +17,38 @@ Introduced 2026-07-01 (PR #43). Companion git rules: `git.md`.
 | Home / dev LAN + Tailscale IPs | Nowhere. Redact in prose as `10.x.x.NNN` (keep the last octet for readability — the `x` breaks IP parsing) |
 | WiFi SSIDs / AP passphrases | Env-provided build secrets. (Exception: the panel's broadcast AP name is documented non-secret in its `config.yaml`) |
 | Personal emails, addresses, operator PII | Nowhere. Bot plumbing (`noreply@...`) is fine |
+| Future dates, deadlines, schedules (operator order 2026-07-28) | Gitignored + deploy-excluded `.agent/reports_local/` (see below) |
 
 Committed show-LAN topology in FUNCTIONAL config (scene `patches.yaml`
 controller IPs, test fixtures, `docs/` references) is accepted — the playa
 network is offline and non-routable. Reports are different: **no IP of any
 kind goes in `.agent/`** (reports are debug-log dumping grounds and that is
 exactly where home-network PII leaks).
+
+### Local-only planning reports — `.agent/reports_local/`
+
+Operator rule (Sina, 2026-07-28): this repo is public, so **dated
+deadline/schedule planning never goes in tracked files** — no "deploy by
+X", no milestone tables, no countdowns. (Dates of past events in Log
+entries are fine; future dates as commitments are not.)
+
+That material lives in `.agent/reports_local/` which is private twice
+over — both layers are required, and any new private-local dir must get
+both:
+
+1. **Gitignored** (`.gitignore` → `.agent/reports_local/`) so it can
+   never be committed.
+2. **Deploy-excluded** (`deploy/deploy.py` → `SYNC_EXCLUDE_DIRS`) —
+   gitignore alone is NOT enough, because the prod deploy is a
+   `robocopy /MIR` of the whole working tree and would happily ship
+   gitignored files to the show server.
+
+Rules of the dir itself (naming, pruning, what still belongs in tracked
+reports) are in its `README.md`. Tracked docs record **what and why,
+never when-by**; when a tracked doc needs to reference the schedule, it
+points at `reports_local` without repeating any dates. Never `git add
+-f` anything from this dir, and never quote its dates into a tracked
+file, a report, or a commit message.
 
 ## The CI scanner
 

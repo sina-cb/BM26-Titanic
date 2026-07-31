@@ -600,6 +600,7 @@ export class PatternMixer {
     this._inactiveDeckChannel = null;
     this._swapTransition = null;
     this.onDeckSwapComplete = null; // Callback: ({ pattern, transitionId }) => void
+    this.onDeckSwapCancelled = null; // Callback: ({ transitionId }) => void
   }
 
   // ── patternsDir: setting it triggers a one-time blend precompile ─────
@@ -2428,11 +2429,23 @@ export class PatternMixer {
    */
   cancelDeckPatternSwap() {
     if (!this._swapTransition) return false;
+    const cancelled = this._swapTransition;
     this._swapTransition = null;
     if (this._inactiveDeckChannel) {
       // Reset render state so a stale fader doesn't leak into the next
       // render frame.
       this._inactiveDeckChannel.fader = 0;
+    }
+    // Tell listeners the swap is over. The swap's own onComplete is
+    // deliberately NOT run (that would commit the cancelled target) —
+    // but clients that dimmed/disabled their UI on deckSwapStarted must
+    // be released, or they wedge until a remount.
+    if (this.onDeckSwapCancelled) {
+      try {
+        this.onDeckSwapCancelled({ transitionId: cancelled.id });
+      } catch (e) {
+        console.warn('[Mixer] onDeckSwapCancelled threw:', e.message);
+      }
     }
     return true;
   }

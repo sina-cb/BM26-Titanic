@@ -81,6 +81,34 @@ export function animateCamera(viewName) {
   }
 }
 
+/**
+ * Fly the camera to an ARBITRARY pose — a raw {position, target} pair with no
+ * preset behind it. This is the seam agent tooling uses to frame a detail
+ * (one fixture, one seam, one halo) without writing a throwaway preset into
+ * the operator-owned `scenes/<scene>/cameras.yaml`. `agent_render.cjs
+ * --camera x,y,z --target x,y,z` calls it through `window.animateCameraToPose`.
+ *
+ * Codex P0 — no fallbacks: a malformed pose throws instead of silently leaving
+ * the camera where it was (a silent no-op would make a capture tool screenshot
+ * the WRONG view and report success).
+ *
+ * @param {{x:number,y:number,z:number}} position - world-space camera position
+ * @param {{x:number,y:number,z:number}} target   - world-space look-at / orbit target
+ * @param {number} [duration=1200] - animation length in ms
+ */
+export function animateCameraToPose(position, target, duration = 1200) {
+  const vec = (v, label) => {
+    if (!v || !Number.isFinite(v.x) || !Number.isFinite(v.y) || !Number.isFinite(v.z)) {
+      throw new Error(`[view_presets] animateCameraToPose: '${label}' must be {x,y,z} finite numbers, got ${JSON.stringify(v)}`);
+    }
+    return new THREE.Vector3(v.x, v.y, v.z);
+  };
+  if (!Number.isFinite(duration) || duration < 0) {
+    throw new Error(`[view_presets] animateCameraToPose: 'duration' must be a non-negative number, got ${JSON.stringify(duration)}`);
+  }
+  animateCameraTo(vec(position, 'position'), vec(target, 'target'), duration);
+}
+
 export function saveCameraPresets() {
   if (isStaticHost()) {
     logStaticHostSkip('save-cameras (port 6970)');
@@ -115,4 +143,5 @@ export function onResize() {
 
 // Expose for external use
 window.animateCamera = animateCamera;
+window.animateCameraToPose = animateCameraToPose;
 window.focusCameraOnPoint = focusCameraOnPoint;

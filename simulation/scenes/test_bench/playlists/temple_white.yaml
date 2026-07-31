@@ -1,0 +1,48 @@
+schemaVersion: 1
+name: temple_white
+entries:
+  - id: e_temple_white_0_64_temple_warm_white
+    pattern: 64_temple_warm_white
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.75
+      sliderDirection: 1
+      sliderLevel: 0.5
+      sliderKick: 0
+      sliderRadius: 0.45
+      sliderCeiling: 0.32
+      sliderWarmth: 0.92
+      sliderWhiteLevel: 0.7
+      sliderWhiteKick: 0.03
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_temple_white_1_61_white_breathe
+    pattern: 61_white_breathe
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.15
+      sliderDirection: 0.5
+      sliderLevel: 0.13
+      sliderKick: 0.5
+      sliderRadius: 0.5
+      sliderDepth: 0.3
+      sliderWhiteLevel: 0.7
+      sliderWhiteKick: 0.02
+      sliderWarmth: 0.9
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_temple_white_2_60_white_wash
+    pattern: 60_white_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.14
+      sliderLevel: 0.3
+      sliderEvenness: 0.7
+      sliderWarmth: 0.9
+      sliderWhiteLevel: 0.7
+      sliderWhiteKick: 0
+    modulations: []
+    midiMappings: []
+    notes: null

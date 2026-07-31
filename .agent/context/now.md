@@ -53,8 +53,13 @@ DONE + hardware-confirmed (2026-07-10):
 - **LED per-output E2E LIVE**: MarsinLED titanic_202, BOTH outputs animating
   from the engine (out0→U10@1, out1→U12@1); legacy linear projection removed,
   per-output is the only layout; sim 272/272, CaptainPad 589/589 + tsc.
-  KNOWN ENGINE BUG: model hot-reload doesn't refresh the output-universe
-  send set — restart the launcher after any Save that changes universes.
+  ~~KNOWN ENGINE BUG: model hot-reload doesn't refresh the output-universe
+  send set — restart the launcher after any Save that changes universes.~~
+  **CORRECTED 2026-07-28 (`_36`)**: fixed by G10 (2026-07-24) — hot reload
+  registers new universes on the fly. The real restart trigger is a
+  **pixel-count change**, which the watcher refuses (`/status.modelStale`).
+  Apply it deliberately with `POST /scene/reload {"scene":"<active>"}` —
+  runbook `.agent/ops/engine_model_refresh.md`. Never bounce scenes for this.
 - **Playlist truth (Fable debug)**: web Alert was a silent stub (fixed,
   op_alert); `slow` playlist EMPTY; party_high/party_low/ambient DO NOT
   EXIST; 51 stale slider defaults across 21 default.yaml entries + 3 dead

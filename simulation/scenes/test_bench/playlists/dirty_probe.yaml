@@ -1,0 +1,24 @@
+schemaVersion: 1
+name: dirty_probe
+entries:
+  - id: dp_a
+    pattern: 01_cylon_sweep
+    label: Alpha
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: dp_b
+    pattern: 13_sparkle
+    label: Bravo
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: dp_c
+    pattern: 01_cylon_sweep
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null

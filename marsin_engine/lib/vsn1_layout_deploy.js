@@ -42,9 +42,32 @@
  *   - Failures fail LOUDLY (rejected promise + status flag); there is no
  *     silent retry loop and no fallback (Codex P0).
  *
- * This module holds NO device state. It writes a layout YAML into the state
- * dir and spawns the CLI; the last-deploy result is reported back to the
- * caller (api_server surfaces it in engine status).
+ * ATTACH STATE (2026-07-28, report _30 §4/§5 — the "is it even plugged in?"
+ * gate):
+ *   Before this, the engine deployed BLIND. The only gate was config, so with
+ *   no VSN1 attached every layout change still spawned the full CLI, burned a
+ *   ~2-3 s compile, failed with "No VSN1 found", RE-QUEUED the page, and
+ *   painted a red NOT-deployed banner in CaptainPad — per change, forever.
+ *   There was no concept of "not attached" anywhere in the system.
+ *
+ *   Now a tri-state `attachState: 'attached' | 'detached' | 'unknown'` is
+ *   resolved by a short-lived PROBE CHILD (tools/vsn1_config/probe_vsn1.cjs)
+ *   at every decision point — start of a flush drain, boot, explicit deploy.
+ *   No polling loop: without native code there are no cheap USB events, and
+ *   probing at decision points is exactly sufficient. Serial stays OUT of the
+ *   engine process (the crash isolation that has kept device faults away from
+ *   the show).
+ *
+ *   `detached` is an EXPLICIT DESIGNED STATE, not a fallback (Codex P0):
+ *   pending pages are cleared, `lastResult` becomes 'skipped-detached', and
+ *   EXACTLY ONE line is logged per attached→detached transition — never a
+ *   per-change spam, never a crash, never a red error banner. `unknown` (the
+ *   probe itself failed) deliberately does NOT block the deploy: we could not
+ *   tell, so we do what we always did and let the deploy CLI fail loud.
+ *
+ * This module holds NO device state beyond that last probe result. It writes a
+ * layout YAML into the state dir and spawns the CLI; the last-deploy result is
+ * reported back to the caller (api_server surfaces it in engine status).
  */
 import fs from 'fs';
 import path from 'path';
@@ -61,6 +84,21 @@ const DEPLOY_CLI_REL = path.join('tools', 'vsn1_config', 'deploy_layout.cjs');
 // multi-page flash burst to re-init the device's pad scan (docs/42 Known
 // issues: the initial-load pad wedge).
 const SOFT_RESET_CLI_REL = path.join('tools', 'vsn1_config', 'soft_reset.cjs');
+// Attach probe: enumerates serial ports and answers "is a VSN1 present?".
+// NEVER opens the port, so it can run at any moment without colliding with a
+// deploy's exclusive hold. Exit 0 = attached, 3 = detached, 1 = probe error.
+const PROBE_CLI_REL = path.join('tools', 'vsn1_config', 'probe_vsn1.cjs');
+
+// Probe exit codes → attach state. The 3-vs-anything-else split is load
+// bearing: "no device" (3) and "the probe broke" (1) are DIFFERENT states and
+// must never collapse, or one broken probe would silently disable deploys.
+const PROBE_EXIT_ATTACHED = 0;
+const PROBE_EXIT_DETACHED = 3;
+
+// The one line the operator sees when a layout change lands with no device.
+// Printed ONCE per attached→detached transition (never per change).
+const DETACHED_SKIP_LINE =
+  'VSN1 not attached — layout deploy skipped (deploys resume on next change once attached)';
 
 // Default quiet period before a coalesced burst of layout edits deploys. Kept
 // in the 1-2s band the brief specifies; overridable via engine config
@@ -106,11 +144,17 @@ export function isLayoutDeployEnabled(engineConfig) {
  * @param {(cmd:string,cliArgs:string[],opts:object)=>object} [args.spawnFn]
  *        Injectable spawn (defaults to child_process.spawn) so tests can
  *        assert the CLI invocation WITHOUT launching a process.
+ * @param {()=>Promise<'attached'|'detached'|'unknown'>} [args.probeFn]
+ *        Injectable attach probe (defaults to running probe_vsn1.cjs through
+ *        `spawnFn`) so tests can drive attach/detach transitions WITHOUT a
+ *        device and without a process.
  * @param {(msg:object)=>void} [args.broadcast]  Optional WS broadcaster for
  *        the deploy result (`{ type: 'vsn1LayoutDeploy', ... }`).
  * @param {(ms:number)=>any} [args.setTimeoutFn]  Injectable timer (tests).
  * @param {(t:any)=>void} [args.clearTimeoutFn]   Injectable clear (tests).
- * @returns {{ hook: (evt:object)=>Promise<object>, status: object, flush: ()=>Promise<void> }}
+ * @returns {{ hook: (evt:object)=>Promise<object>, status: object,
+ *            flush: ()=>Promise<void>, probeAttach: ()=>Promise<string>,
+ *            dispose: ()=>void }}
  */
 export function createLayoutDeployHook({
   stateDir,
@@ -118,6 +162,7 @@ export function createLayoutDeployHook({
   engineRoot,
   debounceMs,
   spawnFn = spawn,
+  probeFn,
   broadcast,
   setTimeoutFn = setTimeout,
   clearTimeoutFn = clearTimeout,
@@ -128,6 +173,7 @@ export function createLayoutDeployHook({
   const root = engineRoot || path.resolve(__dirname, '..');
   const cliPath = path.join(root, DEPLOY_CLI_REL);
   const softResetCliPath = path.join(root, SOFT_RESET_CLI_REL);
+  const probeCliPath = path.join(root, PROBE_CLI_REL);
   // Pad-wedge mitigation gate: ON unless explicitly disabled in config
   // (`vsn1: { softResetAfterMultiPage: false }`). See runFlush.
   const softResetAfterMultiPage = !(
@@ -148,11 +194,16 @@ export function createLayoutDeployHook({
     enabled: isLayoutDeployEnabled(engineConfig),
     lastRevision: null,
     lastAt: null,
-    lastResult: null,   // 'ok' | 'error' | 'disabled'
+    lastResult: null,   // 'ok' | 'error' | 'disabled' | 'skipped-detached'
     lastError: null,
     lastPages: null,    // pages flushed in the last deploy run
     pendingPages: [],   // pages waiting for the next flush
     deploying: false,   // busy-guard: a CLI is in flight right now
+    // Attach tri-state (report _30 §5). 'unknown' until the first probe runs —
+    // we have genuinely not looked yet, and saying 'detached' before looking
+    // would be a lie the UI would render.
+    attachState: 'unknown',
+    lastProbeAt: null,
     layoutFile,
     debounceMs: quietMs,
   };
@@ -166,6 +217,114 @@ export function createLayoutDeployHook({
   let debounceTimer = null;   // the quiet-period timer
   let flushing = false;       // busy-guard: a flush loop is running
   let flushPromise = null;    // the in-flight runFlush() promise (or null)
+  // Teardown handle (step 10): the CLI child currently running, so shutdown can
+  // kill it instead of exiting with a live pipe attached.
+  let activeChild = null;
+
+  // ── Attach state (report _30 §5) ──────────────────────────────────────
+  // lastAttachState is the LATCH that makes the skip message fire exactly once
+  // per transition. Without it, an operator who unplugs the VSN1 and keeps
+  // editing would get one skip line per edit — the spam this whole state
+  // machine exists to prevent.
+  let lastAttachState = null;
+  // The layout revision we declined to deploy because nothing was plugged in.
+  // On the next probe that finds the device, page 0 is re-queued ONCE so the
+  // device catches up on the edits it missed (§5 "Reattach").
+  let deferredRevision = null;
+  let lastDeployedRevision = null;
+
+  /**
+   * Default attach probe: run probe_vsn1.cjs and map its EXIT CODE (never its
+   * text) to the tri-state. Uses the injected spawnFn so a test can drive the
+   * probe without a process.
+   */
+  async function probeViaCli() {
+    const r = await runCli(spawnFn, [probeCliPath], { cwd: root }, (c) => { activeChild = c; });
+    if (r.code === PROBE_EXIT_ATTACHED) return 'attached';
+    if (r.code === PROBE_EXIT_DETACHED) return 'detached';
+    // Any other code is the probe itself failing — NOT evidence of absence.
+    console.warn(
+      `⚠ VSN1 attach probe exited ${r.code} (expected 0=attached / 3=detached) — ` +
+        `attach state UNKNOWN. ${(r.stderr || '').slice(0, 200)}`,
+    );
+    return 'unknown';
+  }
+
+  const runProbe = typeof probeFn === 'function' ? probeFn : probeViaCli;
+
+  /**
+   * Resolve the current attach state and update `status`. NEVER throws: a
+   * probe that blows up (spawn error, bad return) resolves to 'unknown', which
+   * is a real designed state that lets the deploy proceed and fail loud on its
+   * own — it does not silently suppress deploys.
+   */
+  async function resolveAttachState() {
+    let state;
+    try {
+      state = await runProbe();
+    } catch (e) {
+      console.warn(`⚠ VSN1 attach probe FAILED: ${e.message} — attach state UNKNOWN.`);
+      state = 'unknown';
+    }
+    if (state !== 'attached' && state !== 'detached' && state !== 'unknown') {
+      console.warn(
+        `⚠ VSN1 attach probe returned an invalid state ${JSON.stringify(state)} — ` +
+          `treating as UNKNOWN.`,
+      );
+      state = 'unknown';
+    }
+    status.attachState = state;
+    status.lastProbeAt = Date.now();
+    logAttachTransition(state);
+    return state;
+  }
+
+  /** Log ONCE per state transition — the anti-spam latch. */
+  function logAttachTransition(state) {
+    if (state === lastAttachState) return;
+    const previous = lastAttachState;
+    lastAttachState = state;
+    if (state === 'detached') {
+      console.log(`🎛 ${DETACHED_SKIP_LINE}`);
+    } else if (state === 'attached') {
+      // Silent on the very first probe of a healthy boot — "it works" is not
+      // news. Only a RECOVERY is worth a line.
+      if (previous !== null) console.log('🎛 VSN1 attached — layout deploy resumed.');
+    } else {
+      console.warn(
+        '⚠ VSN1 attach state UNKNOWN (probe did not answer) — attempting the deploy anyway; ' +
+          'the deploy CLI fails loud if the device is absent.',
+      );
+    }
+  }
+
+  /**
+   * Detached is a designed terminal state for this drain, not an error: drop
+   * the queued pages (they would only pile up), record it, and say nothing
+   * further — the ONE transition line above is the whole operator signal.
+   */
+  function settleDetached() {
+    deferredRevision = status.lastRevision;
+    pendingPages.clear();
+    status.pendingPages = [];
+    status.lastAt = Date.now();
+    status.lastResult = 'skipped-detached';
+    status.lastError = null;
+    status.lastPages = [];
+  }
+
+  /**
+   * Reattach catch-up (§5): the device is back and the layout moved on while
+   * it was gone, so queue page 0 exactly once.
+   */
+  function queueDeferredOnReattach() {
+    if (deferredRevision === null) return;
+    if (deferredRevision === lastDeployedRevision) { deferredRevision = null; return; }
+    deferredRevision = null;
+    pendingPages.add(0);
+    status.pendingPages = [...pendingPages].sort((a, b) => a - b);
+    console.log('🎛 VSN1 back — re-queuing page 0 to catch up on edits made while it was unplugged.');
+  }
 
   function armDebounce() {
     if (debounceTimer) clearTimeoutFn(debounceTimer);
@@ -226,18 +385,29 @@ export function createLayoutDeployHook({
       // guarantees the reset + final broadcast on every exit path; the
       // rejection itself still propagates (fail loud, no retry).
       try {
+        // ── ATTACH GATE (report _30 §5) ───────────────────────────────
+        // Ask ONCE per drain, before burning a ~2-3 s compile in a child that
+        // can only end in "No VSN1 found". This is also what catches the
+        // device VANISHING between the debounce and the drain.
+        const attach = await resolveAttachState();
+        if (attach === 'detached') {
+          settleDetached();
+          return; // finally below resets the guards and broadcasts
+        }
+        queueDeferredOnReattach();
         while (pendingPages.size > 0) {
           // Deploy pages in ascending order for deterministic behavior/tests.
           const page = [...pendingPages].sort((a, b) => a - b)[0];
           pendingPages.delete(page);
           status.pendingPages = [...pendingPages].sort((a, b) => a - b);
           const cliArgs = [cliPath, '--from-engine', '--page', String(page), '--live'];
-          const result = await runCli(spawnFn, cliArgs, { cwd: root });
+          const result = await runCli(spawnFn, cliArgs, { cwd: root }, (c) => { activeChild = c; });
           status.lastAt = Date.now();
           status.lastPages = [page];
           if (result.code === 0) {
             status.lastResult = 'ok';
             status.lastError = null;
+            lastDeployedRevision = status.lastRevision;
             pagesFlashed += 1;
             if (broadcast) broadcast({ type: 'vsn1LayoutDeploy', ...status });
           } else {
@@ -276,7 +446,7 @@ export function createLayoutDeployHook({
         // Single-page flashes (the common mid-session case) are proven safe
         // and skip this. Gate: vsn1.softResetAfterMultiPage !== false.
         if (pagesFlashed >= 2 && firstError === null && softResetAfterMultiPage) {
-          const r = await runCli(spawnFn, [softResetCliPath], { cwd: root });
+          const r = await runCli(spawnFn, [softResetCliPath], { cwd: root }, (c) => { activeChild = c; });
           if (r.code === 0) {
             console.log('🎛 VSN1 soft reset after multi-page flash (pad-scan re-init).');
           } else {
@@ -291,6 +461,7 @@ export function createLayoutDeployHook({
         }
       } finally {
         flushing = false;
+        activeChild = null;
         status.deploying = false;
         status.pendingPages = [...pendingPages].sort((a, b) => a - b);
         // FINAL broadcast with deploying=false — the per-page broadcasts above
@@ -386,15 +557,61 @@ export function createLayoutDeployHook({
     }
   }
 
-  return { hook, status, flush };
+  /**
+   * Probe the device on demand and report the tri-state. Used by the BOOT
+   * deploy path and the deploy-status endpoint so "should I even try?" is
+   * answered the same way everywhere. Queues the reattach catch-up if the
+   * device came back while the layout moved on.
+   */
+  async function probeAttach() {
+    // Deploy gated OFF ⇒ we do not touch the device layer AT ALL, not even to
+    // look. The gate's whole purpose is that a test machine or a dev laptop
+    // never spawns a VSN1 child; a probe is still a child. 'unknown' is the
+    // honest answer here — we did not look, which is not the same as absent.
+    if (!isLayoutDeployEnabled(engineConfig)) return 'unknown';
+    const state = await resolveAttachState();
+    if (state !== 'detached') {
+      queueDeferredOnReattach();
+      if (pendingPages.size > 0) armDebounce();
+    }
+    return state;
+  }
+
+  /**
+   * Release everything this module owns, for engine shutdown (report _30 step
+   * 10). The libuv `!(handle->flags & UV_HANDLE_CLOSING)` abort can only be
+   * tripped while handles are being torn down, so the fix direction is to
+   * SHRINK the set of live handles at exit: cancel the debounce timer and kill
+   * any CLI child whose stdout/stderr pipes we are still holding. Idempotent.
+   */
+  function dispose() {
+    if (debounceTimer) { clearTimeoutFn(debounceTimer); debounceTimer = null; }
+    const child = activeChild;
+    activeChild = null;
+    if (!child) return;
+    try {
+      if (typeof child.kill === 'function') child.kill();
+      if (typeof child.unref === 'function') child.unref();
+    } catch (e) {
+      // Loud but non-fatal: we are already shutting down, and a child that
+      // refuses to die must not block the blackout frame.
+      console.warn(`⚠ VSN1 deploy child could not be killed on shutdown: ${e.message}`);
+    }
+  }
+
+  return { hook, status, flush, probeAttach, dispose };
 }
 
 /**
  * Run the deploy CLI, resolving with { code, stdout, stderr }. Never rejects
  * on a non-zero exit (the caller decides) — it rejects only on a spawn error
  * (e.g. node missing), which is a genuine fail-loud condition.
+ *
+ * `onSpawn` hands the live child back to the caller so shutdown can kill it
+ * (report _30 step 10: exiting with a child's pipes still attached is one of
+ * the live-handle teardown surfaces behind the libuv async.c:94 abort).
  */
-function runCli(spawnFn, cliArgs, opts) {
+function runCli(spawnFn, cliArgs, opts, onSpawn) {
   return new Promise((resolve, reject) => {
     let child;
     try {
@@ -402,6 +619,7 @@ function runCli(spawnFn, cliArgs, opts) {
     } catch (e) {
       return reject(e);
     }
+    if (typeof onSpawn === 'function') onSpawn(child);
     let stdout = '';
     let stderr = '';
     if (child.stdout) child.stdout.on('data', d => { stdout += d.toString(); });

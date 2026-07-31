@@ -7,9 +7,12 @@
  *     (glob) / view (resolved through the Views-Rehaul `view_registry`), with
  *     an optional `exclude` list,
  *   - a *projection* (top | front | side) — the world plane a spatial seed uses,
- *   - a *layout* type (spatial | radial | planar | lanes).
- * Placements (fixKey → {x,y,rot}) and per-type style overrides are stored PER
- * VIEW, so the same fixture can sit differently in "top-down" vs "front".
+ *   - a *layout* type (spatial | radial | planar | lanes),
+ *   - an optional *rotate* (0 | 90 | 180 | 270, degrees counter-clockwise) that
+ *     re-orients a TRUE projection (spatial | planar) as a whole.
+ * Placements (fixKey → {x,y,rot}), per-type style overrides and the operator's
+ * FRAMING (pan/zoom) are stored PER VIEW, so the same fixture can sit
+ * differently — and be framed differently — in "top-down" vs "front".
  *
  * This module is pure logic — NO DOM, NO canvas, NO signals. It owns:
  *   - schema validation (fail-loud: throws on unknown keys / bad structure),
@@ -36,6 +39,17 @@ export const SELECTOR_KEYS = ['kind', 'fixtureType', 'group', 'name', 'view'];
 export const KINDS = ['dmx', 'led'];
 export const LAYOUTS = ['spatial', 'radial', 'planar', 'lanes'];
 export const PROJECTIONS = ['top', 'front', 'side'];
+// Quarter-turn re-orientation of a TRUE projection (degrees COUNTER-CLOCKWISE).
+// Only the projected layouts have an orientation to turn; radial/lanes place
+// fixtures from per-fixture anchors, so `rotate` there would be meaningless and
+// is rejected rather than ignored (codex P0: fail loud).
+export const ROTATIONS = [0, 90, 180, 270];
+// Persisted per-view framing (operator pan/zoom). Bounds MUST match the
+// interaction layer's wheel clamp (pixel_map_interaction ZOOM_MIN/ZOOM_MAX) or a
+// framing he can reach by scrolling would be rejected on reload.
+export const FRAMING_ZOOM_MIN = 0.3;
+export const FRAMING_ZOOM_MAX = 8;
+export const ROTATABLE_LAYOUTS = ['spatial', 'planar'];
 
 export const VIEWS_SCHEMA_VERSION = 1;
 
@@ -43,6 +57,8 @@ const SELECTOR_KEY_SET = new Set(SELECTOR_KEYS);
 const KIND_SET = new Set(KINDS);
 const LAYOUT_SET = new Set(LAYOUTS);
 const PROJECTION_SET = new Set(PROJECTIONS);
+const ROTATION_SET = new Set(ROTATIONS);
+const ROTATABLE_LAYOUT_SET = new Set(ROTATABLE_LAYOUTS);
 
 // ─── Glob matching (name / group selectors) ───────────────────────────────
 // A pattern with no glob metacharacter is an exact, case-sensitive match; `*`
@@ -120,11 +136,115 @@ export function validatePanelDef(panel, where) {
     throw new Error(`[PixelMapViews] ${pWhere}: projection must be one of ` +
       `${PROJECTIONS.join(' | ')}, got ${JSON.stringify(panel.projection)}`);
   }
+  if (panel.rotate !== undefined) {
+    if (!ROTATION_SET.has(panel.rotate)) {
+      throw new Error(`[PixelMapViews] ${pWhere}: rotate must be one of ` +
+        `${ROTATIONS.join(' | ')} (degrees counter-clockwise), got ` +
+        `${JSON.stringify(panel.rotate)}`);
+    }
+    if (!ROTATABLE_LAYOUT_SET.has(panel.layout)) {
+      throw new Error(`[PixelMapViews] ${pWhere}: rotate is only meaningful on a ` +
+        `TRUE projection (${ROTATABLE_LAYOUTS.join(' | ')}) — layout is ` +
+        `'${panel.layout}', whose fixtures are placed from per-fixture anchors`);
+    }
+  }
+  // ─── The two operator-ordered departures from the true projection ────────
+  // Both only make sense where the projected axes ARE world axes, i.e. on a
+  // `spatial` panel — anywhere else they are a wiring bug, not a preference.
+  if (panel.compress !== undefined) {
+    const c = panel.compress;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) {
+      throw new Error(`[PixelMapViews] ${pWhere}: compress must be an object ` +
+        '{ minWorldGap, gapWorld }');
+    }
+    for (const k of ['minWorldGap', 'gapWorld']) {
+      if (typeof c[k] !== 'number' || !Number.isFinite(c[k]) || c[k] < 0) {
+        throw new Error(`[PixelMapViews] ${pWhere}: compress.${k} must be a ` +
+          `non-negative finite number, got ${JSON.stringify(c[k])}`);
+      }
+    }
+    if (!(c.gapWorld < c.minWorldGap)) {
+      throw new Error(`[PixelMapViews] ${pWhere}: compress.gapWorld ` +
+        `(${c.gapWorld}) must be SMALLER than compress.minWorldGap ` +
+        `(${c.minWorldGap}) — otherwise a collapsed band would come out wider ` +
+        'than the gap that qualified it, which is not a compression');
+    }
+    if (panel.layout !== 'spatial') {
+      throw new Error(`[PixelMapViews] ${pWhere}: compress needs a 'spatial' ` +
+        `layout (its axes are real world axes) — layout is '${panel.layout}'`);
+    }
+  }
+  if (panel.expandPitch !== undefined) {
+    const e = panel.expandPitch;
+    if (!e || typeof e !== 'object' || Array.isArray(e)) {
+      throw new Error(`[PixelMapViews] ${pWhere}: expandPitch must be an object ` +
+        'keyed by fixtureType, e.g. { VintageLed: 0.6 }');
+    }
+    for (const [type, pitch] of Object.entries(e)) {
+      if (typeof pitch !== 'number' || !(pitch > 0)) {
+        throw new Error(`[PixelMapViews] ${pWhere}: expandPitch['${type}'] must ` +
+          `be a positive number of WORLD units, got ${JSON.stringify(pitch)}`);
+      }
+    }
+    if (panel.layout !== 'spatial') {
+      throw new Error(`[PixelMapViews] ${pWhere}: expandPitch needs a 'spatial' ` +
+        `layout — layout is '${panel.layout}'`);
+    }
+  }
   if (panel.weight !== undefined &&
       (typeof panel.weight !== 'number' || !(panel.weight > 0))) {
     throw new Error(`[PixelMapViews] ${pWhere}: weight must be a positive number`);
   }
   return true;
+}
+
+/**
+ * Per-fixture MOVE offsets for a view, in design units (report 20260725_55).
+ *
+ * Distinct from `placements` on purpose. `placements` are ABSOLUTE anchors and
+ * only the `radial`/`lanes` layouts read them — a `spatial`/`planar` panel is a
+ * TRUE projection that computes every position from world coordinates, which is
+ * why dragging a fixture in the shipped Top-Down view moved nothing at all
+ * before this existed (the operator's "has no move"). An offset is a DELTA
+ * applied after the projection's fit, so the projection stays the source of
+ * truth and his adjustment layers on top of it — the same relationship the
+ * defaults and his other adjustments already have.
+ */
+export function validateOffsets(offsets, where) {
+  if (offsets === undefined || offsets === null) return;
+  if (typeof offsets !== 'object' || Array.isArray(offsets)) {
+    throw new Error(`[PixelMapViews] ${where}: offsets must be an object keyed by fixture`);
+  }
+  for (const [k, v] of Object.entries(offsets)) {
+    if (!v || typeof v.dx !== 'number' || typeof v.dy !== 'number'
+        || !Number.isFinite(v.dx) || !Number.isFinite(v.dy)) {
+      throw new Error(`[PixelMapViews] ${where}: offset '${k}' must have finite ` +
+        `numeric dx and dy, got ${JSON.stringify(v)}`);
+    }
+  }
+}
+
+/**
+ * The operator's saved pan/zoom for a view (report 20260725_54). Optional; a
+ * view without one opens at the shipped fit, which is what every view did
+ * before this existed.
+ */
+export function validateFraming(framing, where) {
+  if (framing === undefined || framing === null) return;
+  if (typeof framing !== 'object' || Array.isArray(framing)) {
+    throw new Error(`[PixelMapViews] ${where}: framing must be an object ` +
+      '{ zoom, panX, panY }');
+  }
+  for (const k of ['zoom', 'panX', 'panY']) {
+    if (typeof framing[k] !== 'number' || !Number.isFinite(framing[k])) {
+      throw new Error(`[PixelMapViews] ${where}: framing.${k} must be a finite ` +
+        `number, got ${JSON.stringify(framing[k])}`);
+    }
+  }
+  if (framing.zoom < FRAMING_ZOOM_MIN || framing.zoom > FRAMING_ZOOM_MAX) {
+    throw new Error(`[PixelMapViews] ${where}: framing.zoom must be between ` +
+      `${FRAMING_ZOOM_MIN} and ${FRAMING_ZOOM_MAX}, got ${framing.zoom}`);
+  }
 }
 
 function validatePlacements(placements, where) {
@@ -166,6 +286,8 @@ export function validateViewDef(view, where = `view '${view && view.id}'`) {
     seen.add(p.id);
   }
   validatePlacements(view.placements, where);
+  validateOffsets(view.offsets, where);
+  validateFraming(view.framing, where);
   if (view.typeStyles !== undefined &&
       (typeof view.typeStyles !== 'object' || Array.isArray(view.typeStyles))) {
     throw new Error(`[PixelMapViews] ${where}: typeStyles must be an object`);
@@ -193,6 +315,9 @@ function normalizePanel(panel) {
   if (panel.label !== undefined) out.label = panel.label;
   if (panel.exclude !== undefined) out.exclude = panel.exclude.map(normalizeSelector);
   if (panel.projection !== undefined) out.projection = panel.projection;
+  if (panel.rotate !== undefined) out.rotate = panel.rotate;
+  if (panel.compress !== undefined) out.compress = { ...panel.compress };
+  if (panel.expandPitch !== undefined) out.expandPitch = { ...panel.expandPitch };
   if (panel.weight !== undefined) out.weight = panel.weight;
   return out;
 }
@@ -216,6 +341,15 @@ export function normalizeViewDef(view) {
     placements: normalizePlacements(view.placements),
     typeStyles: view.typeStyles ? JSON.parse(JSON.stringify(view.typeStyles)) : {},
   };
+  // Absent framing stays ABSENT (not defaulted to 1/0/0) so "he never framed
+  // this view" is distinguishable from "he framed it back to the shipped fit".
+  if (view.framing) {
+    out.framing = { zoom: view.framing.zoom, panX: view.framing.panX, panY: view.framing.panY };
+  }
+  if (view.offsets && Object.keys(view.offsets).length) {
+    out.offsets = {};
+    for (const [k, v] of Object.entries(view.offsets)) out.offsets[k] = { dx: v.dx, dy: v.dy };
+  }
   return out;
 }
 
@@ -312,6 +446,115 @@ export function duplicateView(container, id, newId, newLabel) {
   return addView(container, clone);
 }
 
+/**
+ * Migrate `{group: '<old>'}` selectors across a group rename (plan
+ * 20260725_44 step 12).
+ *
+ * A view's panels reference groups BY NAME, so renaming a group in the editor
+ * silently dropped that group out of every view that named it — exactly what
+ * happened to the right chimney ring when the operator renamed 'Right Top
+ * Chimney Generator' (report `_44` §3.6): the panel just went quiet.
+ *
+ * Only EXACT matches migrate. A glob (`*`, `?`) is deliberate operator intent
+ * about a family of names, not a reference to one group, so rewriting it would
+ * be guessing — those are left alone and the caller's zero-match warning
+ * surfaces any that stop matching.
+ *
+ * Returns one row per rewritten selector so the caller logs it loudly.
+ *
+ * @returns {Array<{view: string, panel: string, where: 'select'|'exclude', index: number}>}
+ */
+export function renameGroupInViews(container, oldName, newName) {
+  const changed = [];
+  if (!container || !Array.isArray(container.views)) return changed;
+  if (typeof oldName !== 'string' || oldName.length === 0) {
+    throw new Error('[PixelMapViews] renameGroupInViews needs a non-empty oldName');
+  }
+  if (typeof newName !== 'string' || newName.length === 0) {
+    throw new Error('[PixelMapViews] renameGroupInViews needs a non-empty newName');
+  }
+  if (oldName === newName) return changed;
+  for (const view of container.views) {
+    for (const panel of view.panels || []) {
+      for (const where of ['select', 'exclude']) {
+        const list = panel[where];
+        if (!Array.isArray(list)) continue;
+        list.forEach((sel, index) => {
+          if (!sel || sel.group !== oldName) return;
+          sel.group = newName;
+          changed.push({ view: view.id, panel: panel.id, where, index });
+        });
+      }
+    }
+  }
+  return changed;
+}
+
+/**
+ * Drop every reference to a DELETED fixture: exact `{name: '<fixture>'}`
+ * selectors, plus the per-view `offsets` / `placements` entries keyed by its
+ * name (the layout's `fixKey` defaults to the fixture name).
+ *
+ * Used by the orphan-fixture removal path (report 20260725_76). Deleting a
+ * fixture without this leaves a selector that can never match again and a move
+ * offset that silently re-attaches the day a fixture is created with the same
+ * name — the same phantom class the rename hygiene work eliminated for the
+ * patch tree.
+ *
+ * Globs are left alone for the same reason `renameGroupInViews` leaves them:
+ * a glob is intent about a family of names, not a reference to this fixture.
+ *
+ * THROWS when removal would empty a panel's `select` — `validatePanelDef`
+ * rejects an empty `select`, so silently corrupting the tree (or silently
+ * skipping the removal) are both worse than refusing. The caller enumerates
+ * this case up front (`pixelMapReferences().selectors[].lastInSelect`) and
+ * refuses the delete before anything is mutated.
+ *
+ * @returns {{selectors: Array<{view, panel, where, index}>, offsets: string[],
+ *   placements: string[]}}
+ */
+export function removeFixtureFromViews(container, fixtureName) {
+  const removed = { selectors: [], offsets: [], placements: [] };
+  if (!container || !Array.isArray(container.views)) return removed;
+  if (typeof fixtureName !== 'string' || fixtureName.length === 0) {
+    throw new Error('[PixelMapViews] removeFixtureFromViews needs a non-empty fixtureName');
+  }
+  for (const view of container.views) {
+    for (const panel of view.panels || []) {
+      for (const where of ['select', 'exclude']) {
+        const list = panel[where];
+        if (!Array.isArray(list)) continue;
+        const keep = [];
+        const dropped = [];
+        list.forEach((sel, index) => {
+          if (sel && sel.name === fixtureName) dropped.push(index);
+          else keep.push(sel);
+        });
+        if (dropped.length === 0) continue;
+        if (where === 'select' && keep.length === 0) {
+          throw new Error(`[PixelMapViews] removeFixtureFromViews: '${fixtureName}' is the ` +
+            `ONLY selector of panel '${panel.id}' in view '${view.id}' — removing it would ` +
+            'leave an empty `select`, which the schema rejects. Re-point or delete that ' +
+            'panel first.');
+        }
+        panel[where] = keep;
+        for (const index of dropped) {
+          removed.selectors.push({ view: view.id, panel: panel.id, where, index });
+        }
+      }
+    }
+    if (view.offsets && Object.prototype.hasOwnProperty.call(view.offsets, fixtureName)) {
+      delete view.offsets[fixtureName];
+      removed.offsets.push(view.id);
+    }
+    if (view.placements && Object.prototype.hasOwnProperty.call(view.placements, fixtureName)) {
+      delete view.placements[fixtureName];
+      removed.placements.push(view.id);
+    }
+  }
+  return removed;
+}
+
 // ─── Persistence (↔ params.pixelMapViews) ──────────────────────────────────
 
 /** Plain, serializable snapshot for `params.pixelMapViews` (scene YAML). */
@@ -324,6 +567,9 @@ export function toParams(container) {
       panels: v.panels.map(normalizePanel),
       placements: normalizePlacements(v.placements),
       typeStyles: JSON.parse(JSON.stringify(v.typeStyles || {})),
+      ...(v.framing ? { framing: { ...v.framing } } : {}),
+      ...(v.offsets && Object.keys(v.offsets).length
+        ? { offsets: JSON.parse(JSON.stringify(v.offsets)) } : {}),
     })),
   };
 }
@@ -480,7 +726,27 @@ export function resolveView(viewDef, clusters, list, ctx = {}) {
   const styles = viewDef.typeStyles || {};
   const panels = viewDef.panels.map((p) => {
     const r = resolvePanel(p, clusters || [], registry);
+    // The pane paints the error on the canvas (pixel_map_pane_view
+    // `_drawError`), but a group rename that empties a panel is most often
+    // noticed in the console — so say it there too, ONCE per distinct
+    // panel+reason (resolveView runs on every structural rebuild).
+    if (r.error) warnPanelErrorOnce(viewDef.id, r.error);
     return { ...r, placements, styles };
   });
   return { id: viewDef.id, label: viewDef.label || viewDef.id, panels };
+}
+
+const _warnedPanelErrors = new Set();
+
+function warnPanelErrorOnce(viewId, error) {
+  const key = `${viewId}::${error}`;
+  if (_warnedPanelErrors.has(key)) return;
+  _warnedPanelErrors.add(key);
+  console.warn(`[PixelMapViews] ⚠ view '${viewId}': ${error}. A renamed or deleted ` +
+    'group leaves its selector pointing at nothing — re-point it in the view editor.');
+}
+
+/** Forget the once-per-reason warning ledger (a rename may fix or break panels). */
+export function resetPanelErrorWarnings() {
+  _warnedPanelErrors.clear();
 }

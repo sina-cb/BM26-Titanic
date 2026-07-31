@@ -32,6 +32,7 @@ import { render } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 
 import { PixelMapPaneView } from '../pixel_map/pixel_map_pane_view.js';
+import { FRAMING_ZOOM_MIN, FRAMING_ZOOM_MAX } from '../pixel_map/pixel_map_views.js';
 import {
   createState, splitPane, closePane, setRatio, bindView, toggleZoom,
   cycleFocus, moveFocus, resizeFocused, computeLayout, getNode,
@@ -117,8 +118,54 @@ function buildPanels(deps, viewId, clusters, list) {
   });
 }
 
+/**
+ * Measure what is sitting ON TOP of a pane canvas, as pane-local CSS-px rects
+ * (operator order, 2026-07-30: "fit to the area not under any menu, active").
+ *
+ * MEASURED, never assumed: every rect comes from `getBoundingClientRect()` at
+ * click time, so a moved split divider, a resized Lighting Controls panel or a
+ * banner that is not currently showing all produce the right answer with no
+ * hardcoded widths.
+ *
+ * The candidates are `document.body`'s own element children — that is where the
+ * sim appends every floating panel, banner and chip strip — filtered to the
+ * visible ones that are neither an ancestor nor a descendant of the pane. Using
+ * the body's child list rather than a list of element ids is deliberate: an id
+ * list is exactly the kind of hardcoded name that has gone stale three times in
+ * this repo already, whereas the child list cannot.
+ *
+ * The Views manager overlay is INSIDE the pixel-map panel, so it is skipped by
+ * the ancestor test — on purpose. It is transient: he clicks Fit from it and
+ * then closes it, and fitting into the sliver beside it would be wrong.
+ */
+export function measureObstructions(canvasEl, doc) {
+  const d = doc || (typeof document !== 'undefined' ? document : null);
+  if (!canvasEl || !d || !d.body) return [];
+  const pr = canvasEl.getBoundingClientRect();
+  if (!(pr.width > 0 && pr.height > 0)) return [];
+  const out = [];
+  for (const el of d.body.children) {
+    if (el === canvasEl || el.contains(canvasEl) || canvasEl.contains(el)) continue;
+    const cs = typeof getComputedStyle === 'function' ? getComputedStyle(el) : null;
+    if (cs && (cs.display === 'none' || cs.visibility === 'hidden'
+      || Number(cs.opacity) === 0 || cs.pointerEvents === 'none')) continue;
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) continue;
+    const x = Math.max(pr.left, r.left), y = Math.max(pr.top, r.top);
+    const right = Math.min(pr.right, r.right), bottom = Math.min(pr.bottom, r.bottom);
+    if (!(right > x && bottom > y)) continue;
+    out.push({ x: x - pr.left, y: y - pr.top, w: right - x, h: bottom - y, id: el.id || el.className });
+  }
+  return out;
+}
+
+// Must match pixel_map_interaction's wheel clamp and the view schema's
+// FRAMING_ZOOM_MIN/MAX — a fit he cannot reach by scrolling, or that the
+// schema would refuse to persist, would be a silent loss.
+const ZOOM_RANGE = { min: FRAMING_ZOOM_MIN, max: FRAMING_ZOOM_MAX };
+
 // ── The pane element ──────────────────────────────────────────────────────
-function Pane({ pane, focused, deps, records, topoRef, onFocus, onSplit, onClose, onZoom, onBind }) {
+function Pane({ pane, focused, deps, records, topoRef, onFocus, onSplit, onClose, onZoom, onFit, onBind }) {
   const views = deps.listViews ? deps.listViews() : [];
   const onCanvas = (el) => {
     const key = pane.path;
@@ -148,6 +195,25 @@ function Pane({ pane, focused, deps, records, topoRef, onFocus, onSplit, onClose
       // (Re)load this pane's data when its bound view changes or on first mount.
       if (rec.viewId !== pane.view) {
         rec.viewId = pane.view;
+        // Operator framing (report 20260725_54): restore what he saved for THIS
+        // view, then start reporting his pan/zoom back so it persists. The sink
+        // is re-pointed on every rebind so a pane always writes to the view it
+        // is actually showing. Debounced, because a drag fires per pointermove.
+        if (deps.getViewFraming || deps.onViewFraming) {
+          rec.viewInst.setFramingSink(null);
+          const saved = deps.getViewFraming ? deps.getViewFraming(pane.view) : null;
+          rec.viewInst.setViewTransform(
+            saved ? saved.zoom : 1,
+            saved ? { x: saved.panX, y: saved.panY } : { x: 0, y: 0 },
+            { persist: false });
+          if (deps.onViewFraming) {
+            const boundView = pane.view;
+            rec.viewInst.setFramingSink((f) => {
+              clearTimeout(rec.framingTimer);
+              rec.framingTimer = setTimeout(() => deps.onViewFraming(boundView, f), 400);
+            });
+          }
+        }
         const topo = topoRef.current || (deps.currentTopology ? deps.currentTopology() : null);
         rec.viewInst.setPanels(topo ? panelsFor(deps, pane.view, topo) : []);
       }
@@ -168,6 +234,8 @@ function Pane({ pane, focused, deps, records, topoRef, onFocus, onSplit, onClose
         </select>
         <button class="pmv-btn" title="split vertical (\\)" onClick=${() => onSplit(pane.path, 'v')}>⊞</button>
         <button class="pmv-btn" title="split horizontal (-)" onClick=${() => onSplit(pane.path, 'h')}>⊟</button>
+        <button class="pmv-btn" title="fit content to the visible area (not under any panel)"
+                onClick=${() => onFit(pane.path)}>⤢</button>
         <button class="pmv-btn" title="zoom (z)" onClick=${() => onZoom(pane.path)}>⛶</button>
         <button class="pmv-btn" title="close (x)" onClick=${() => onClose(pane.path)}>✕</button>
       </div>
@@ -252,6 +320,7 @@ function Multiview({ deps, initial }) {
         if (rec.detach) rec.detach();
         if (rec.unregister) rec.unregister();
         if (rec.ro) rec.ro.disconnect();
+        clearTimeout(rec.framingTimer);
         rec.viewInst.dispose();
         records.current.delete(path);
       }
@@ -264,6 +333,7 @@ function Multiview({ deps, initial }) {
       if (rec.detach) rec.detach();
       if (rec.unregister) rec.unregister();
       if (rec.ro) rec.ro.disconnect();
+      clearTimeout(rec.framingTimer);
       rec.viewInst.dispose();
     }
     records.current.clear();
@@ -293,6 +363,21 @@ function Multiview({ deps, initial }) {
   const onSplit = (path, dir) => commit(splitPane(layoutRef.current, path, dir));
   const onClose = (path) => commit(closePane(layoutRef.current, path));
   const onZoom = (path) => commit(toggleZoom(layoutRef.current, path));
+  // Fit THIS pane's content into the part of it nothing else is covering
+  // (operator order, 2026-07-30). Obstructions are measured from the live DOM
+  // at click time; the result rides the normal framing sink, so it persists
+  // exactly like a pan or a wheel-zoom.
+  const onFit = (path) => {
+    const rec = records.current.get(path);
+    if (!rec || !rec.canvas) return;
+    const obstructions = measureObstructions(rec.canvas);
+    const r = rec.viewInst.fitToVisible(obstructions, ZOOM_RANGE);
+    if (!r) { console.info('[PixelMap] fit: this pane has no content to fit'); return; }
+    console.info(`[PixelMap] fit '${rec.viewId}': zoom ${r.zoom.toFixed(2)}× into ` +
+      `${Math.round(r.free.w)}×${Math.round(r.free.h)} px free of ${r.obstructed} overlay(s)` +
+      `${r.clamped ? ' (zoom hit its limit)' : ''}` +
+      (obstructions.length ? ` — over: ${obstructions.map((o) => o.id).join(', ')}` : ''));
+  };
   const onBind = (path, viewId) => {
     const next = bindView(layoutRef.current, viewId, path);
     commit(next);
@@ -395,7 +480,7 @@ function Multiview({ deps, initial }) {
       <div class="pmv-panes">
         ${panes.map((pane) => html`<${Pane} key=${pane.path} pane=${pane}
             focused=${pane.path === layout.focus} deps=${deps} records=${records} topoRef=${topoRef}
-            onFocus=${onFocus} onSplit=${onSplit} onClose=${onClose} onZoom=${onZoom} onBind=${onBind} />`)}
+            onFocus=${onFocus} onSplit=${onSplit} onClose=${onClose} onZoom=${onZoom} onFit=${onFit} onBind=${onBind} />`)}
         ${dividers.map((d) => {
           const pb = parentBox(d.path);
           const div = { ...d, parentX: pb.x, parentY: pb.y, parentW: pb.w, parentH: pb.h };

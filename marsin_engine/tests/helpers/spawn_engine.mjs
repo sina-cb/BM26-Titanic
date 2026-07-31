@@ -7,12 +7,16 @@
 // drive the HTTP API. They had drifted copies of the same scaffolding; this
 // factory is the single reconciled source.
 //
-// `createEngineHarness({ scene, pattern, prefix, portBase, portSpan, extraEnv })`
-// returns the shared pieces: `spawnEngine()`, `waitForReady()`, `api()`,
-// `teardown()`, the resolved temp dirs (`tmpStateRoot`, `playlistsDir`,
-// `stateDir`), the `port`, and `base()` (→ `http://127.0.0.1:<port>`). Each
-// spawned engine gets `BM26_DISABLE_TIMELINE=1` plus the isolation env; pass
-// `extraEnv` for suite-specific overrides (e.g. `MARSIN_VSN1_DEPLOY: '0'`).
+// `createEngineHarness({ scene, pattern, prefix, portBase, portSpan, extraEnv,
+// extraArgs })` returns the shared pieces: `spawnEngine()`, `waitForReady()`,
+// `api()`, `teardown()`, the resolved temp dirs (`tmpStateRoot`,
+// `playlistsDir`, `stateDir`), the `port`, and `base()` (→
+// `http://127.0.0.1:<port>`). Each spawned engine gets
+// `BM26_DISABLE_TIMELINE=1` plus the isolation env; pass `extraEnv` for
+// suite-specific overrides (e.g. `MARSIN_VSN1_DEPLOY: '0'`) and `extraArgs`
+// for extra CLI flags (e.g. `['--dest', '127.0.0.9']` to black-hole the
+// spawned engine's sACN output so it can never reach the operator's live sim
+// bridge on 127.0.0.1:5568).
 //
 // This file is NOT a `*.test.*` module, so no test runner picks it up.
 import { spawn } from 'node:child_process';
@@ -33,7 +37,9 @@ export function createEngineHarness(options = {}) {
     portBase = 7100,
     portSpan = 300,
     extraEnv = {},
+    extraArgs = [],
   } = options;
+  if (!Array.isArray(extraArgs)) throw new TypeError('createEngineHarness: `extraArgs` must be an array');
   if (!scene) throw new Error('createEngineHarness: `scene` is required');
   if (!prefix) throw new Error('createEngineHarness: `prefix` is required');
 
@@ -49,7 +55,7 @@ export function createEngineHarness(options = {}) {
   function spawnEngine() {
     proc = spawn(
       'node',
-      ['engine.js', '--pattern', pattern, '--model', scene, '--port', String(port)],
+      ['engine.js', '--pattern', pattern, '--model', scene, '--port', String(port), ...extraArgs],
       {
         cwd: engineDir,
         stdio: ['ignore', 'pipe', 'pipe'],

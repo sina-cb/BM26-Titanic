@@ -8,6 +8,7 @@ import { computeLedStrandPatches, projectLedStrandPixels } from "./led/led_patch
 import { groupKeyForStrand } from "./led/led_metadata.js";
 import { ledDisplayGroup, scaleRgbForLedOutput } from "../core/group_lock.js";
 import { saveHttpUrl } from "../core/save_endpoint.js";
+import { fixtureModelScale } from "../fixtures/fixture_model_scale.js";
 
 export function generatePixelMap() {
   const pixels = [];
@@ -64,12 +65,30 @@ export function generatePixelMap() {
       if (fixture && fixture.pixels && fixture.pixels.length > 0) {
         if (fixture.hitbox) fixture.hitbox.updateMatrixWorld(true);
         if (fixture.group) fixture.group.updateMatrixWorld(true);
+        // The type's RENDER multiplier (fixture_model_scale.js — the one table
+        // that says "draw fixture type X at N× its physical size"), read from
+        // the same authority DmxFixtureRuntime uses to build px.renderPos, so
+        // the exported drawn geometry below cannot drift from what is drawn.
+        // A class that renders 1:1 carries no fixtureDef here and gets 1.
+        const renderScale = fixtureModelScale(fixture.fixtureDef);
         fixture.pixels.forEach((px, j) => {
+          // TWO positions, deliberately. `worldPos` is the PHYSICAL one (from
+          // px.localPos) — it is what the engine model, the sACN patching and
+          // the analytic light pool sample, and an exported model must describe
+          // the real rig, never the exaggerated drawing of it. `renderWorld` is
+          // the DRAWN one (localPos × renderScale — the same product
+          // DmxFixtureRuntime stores as px.renderPos) and exists ONLY for the
+          // sim's own scene-wide instanced-dot mesh, which is a render path.
+          // They are equal at render scale 1.
           const worldPos = new THREE.Vector3();
+          const renderWorld = new THREE.Vector3();
           if (fixture.group && px.localPos) {
             worldPos.copy(px.localPos).applyMatrix4(fixture.group.matrixWorld);
+            renderWorld.copy(px.localPos).multiplyScalar(renderScale)
+              .applyMatrix4(fixture.group.matrixWorld);
           } else {
             worldPos.set(light.x || 0, light.y || 0, light.z || 0);
+            renderWorld.copy(worldPos);
           }
             let u = light.dmxUniverse;
             let addr = light.dmxAddress;
@@ -116,8 +135,22 @@ export function generatePixelMap() {
               _prePatched: true,
               patch: patchObj,
               channels: standardizeChannels(px.model && px.model.channels ? px.model.channels : null),
-              // Per-pixel size from fixture model definition (in mm)
+              // Per-pixel size from fixture model definition (in mm). PHYSICAL,
+              // like x/y/z above — it goes into the exported model.
               pixelSize: px.model && typeof px.model.size === 'number' ? px.model.size : 14,
+              // ── Runtime-only DRAWN geometry (NOT in the saveModelJS field
+              // list, so the engine model is byte-identical). The sim renders a
+              // scene-wide instanced-dot mesh over EVERY pixel (animate.js);
+              // that is a render path, so it must place and size its dots from
+              // the DRAWN geometry, not from the physical x/y/z + pixelSize
+              // above. Without these the dots ignored fixture_model_scale
+              // entirely: a 2.5× Vintage LED drew its heads at pre-scale size,
+              // clustered at pre-scale spacing inside a 2.5× housing — visible
+              // only on fixtures whose dots are lit, i.e. the PATCHED ones.
+              rx: +(renderWorld.x).toFixed(3),
+              ry: +(renderWorld.y).toFixed(3),
+              rz: +(renderWorld.z).toFixed(3),
+              renderScale,
               // Bind the apply callback natively for the simulator
               apply: (r, g, b) => {
                 if (!getProfileDef(params.lightingProfile).mappingEnabled) return;
@@ -169,6 +202,15 @@ export function generatePixelMap() {
             cId: light.controllerId || 0,
             sId: light.sectionId || 0,
             fId: light.fixtureId || 0,
+            // Runtime-only DRAWN geometry (see the multi-pixel push above). This
+            // branch's fixture has no pixel model — its single emitter sits at
+            // the GROUP ORIGIN, and a uniform scale about that origin cannot
+            // move it, so the drawn position IS the physical one. The size
+            // multiplier still applies.
+            rx: +(worldPos.x).toFixed(3),
+            ry: +(worldPos.y).toFixed(3),
+            rz: +(worldPos.z).toFixed(3),
+            renderScale: fixtureModelScale(fixture.fixtureDef),
             // localIndex: a simple/single-pixel DMX fixture is its own fixture
             // with exactly one pixel, so its within-fixture ordinal is 0.
             localIndex: 0,
@@ -393,6 +435,14 @@ export function generatePixelMap() {
           x: +(sx + (ex - sx) * t).toFixed(3),
           y: +(sy + (ey - sy) * t).toFixed(3),
           z: +(sz + (ez - sz) * t).toFixed(3),
+          // Runtime-only DRAWN geometry (see the DMX push above). A strand's
+          // pixels are laid out directly on its start→end line — led_strand.js
+          // draws them at exactly these coordinates — and no strand carries a
+          // fixture type, so there is no render multiplier: drawn === physical.
+          rx: +(sx + (ex - sx) * t).toFixed(3),
+          ry: +(sy + (ey - sy) * t).toFixed(3),
+          rz: +(sz + (ez - sz) * t).toFixed(3),
+          renderScale: 1,
           nx: 0, ny: 0, nz: 0,
           cId: (proj ? proj.controllerId : strand.controllerId) || 0,
           sId: strand.sectionId || 0,
@@ -407,6 +457,9 @@ export function generatePixelMap() {
           patch: pxPatch,
           channels: pxChannels,
           whiteMode: proj ? proj.whiteMode : 'native',
+          // Scene-level LED colour-encode override (null unless the
+          // controller config sets one) — see led_wire.js.
+          ledWire: (proj && proj.wire) ? proj.wire : null,
           unpatched: !proj,
         };
         // The batch-render loop (animate.js) and the inbound sACN demap
@@ -489,8 +542,13 @@ export function saveModelJS() {
         `footprint: ${p.patch.footprint}${p.patch.led ? ', led: true' : ''} }`;
     }
     const chStr = p.channels ? JSON.stringify(p.channels) : 'null';
+    // LED strands may carry a scene-level colour-encode override
+    // (`ledWire`) — serialized ONLY when the scene sets one, so a default
+    // rig exports byte-for-byte the same model file as before.
     const extra = (p.type === 'led')
-      ? `, whiteMode: '${p.whiteMode || 'native'}'${p.unpatched ? ', unpatched: true' : ''}`
+      ? `, whiteMode: '${p.whiteMode || 'native'}'` +
+        `${p.ledWire ? `, ledWire: ${JSON.stringify(p.ledWire)}` : ''}` +
+        `${p.unpatched ? ', unpatched: true' : ''}`
       : '';
     // localIndex is the exporter-emitted 0-based within-fixture ordinal
     // (DMX: per-fixture pixel order; LED: per-strand pixel order). The

@@ -14,11 +14,6 @@ controllers:
     alsoFlat: true
 engine:
   fps: 40
-  # OS process-priority class for the render loop (tools/process_priority.cjs).
-  # high = HIGH_PRIORITY_CLASS (default) keeps 40 fps sACN generation scheduled
-  # even when Chrome grabs the foreground boost. realtime = REALTIME_PRIORITY_CLASS
-  # (opt-in, usually needs admin — can starve input/audio/kernel). When launched
-  # via launcher.js, BM26_ENGINE_PRIORITY / --engine-priority overrides this.
   priority: high
 mixer:
   maxChannels: 8
@@ -33,8 +28,8 @@ vsn1:
   deployOnBoot: true
 playlist:
   active: false
-  delay_s: '30'
-  shuffle: false
+  delay_s: '90'
+  shuffle: true
 web_client:
   enabled: false
   port: 6967
@@ -105,8 +100,21 @@ timeline:
   programLeaseSec: 30
   operatorLeaseSec: 120
   mood:
-    key: audioParty
+    key: audioPartyStrong
     partyThreshold: 0.5
+    staleSec: 10
+party:
+  ambientFloor: 0.09
+  marginX: 2.5
+  kickRateMin: 1.2
+  kickRateMax: 3.2
+  kickRegMin: 0.45
+  requireBpmLock: true
+  shapeLowMin: 0.2
+  shapeHighMin: 0.12
+  silenceMax: 0.5
+  onSustainMs: 20000
+  offConfirmMs: 30000
 tempo:
   oscBpmSmoothing:
     enabled: false
@@ -193,11 +201,17 @@ colorPalettes:
     c1: 0.69
     c2: 0.1
 colorAutopilot:
-  active: true
+  active: false
   palettes:
     - plasma_core
     - phoenix
     - deep_sea
+    - laser_lime
+    - ultraviolet
+    - bass_drop
+    - midnight_laser
+    - vapor_laser
+    - sunset_coral
   delay_s: 5
   shuffle: false
   transitionMs: 1000

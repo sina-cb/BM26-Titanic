@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 
 import { buildClusters } from '../src/gui/pixel_map/pixel_map_layout.js';
 import { resolveView, findView } from '../src/gui/pixel_map/pixel_map_views.js';
-import { buildDefaultViews } from '../src/gui/pixel_map/pixel_map_view_defaults.js';
+import { buildDefaultViews, TE_SIGN_GROUPS } from '../src/gui/pixel_map/pixel_map_view_defaults.js';
 
 function entry(type, fixIndex, name, fixtureType, group, wx, wy, wz) {
   return { type, fixIndex, fixKey: name, name, fixtureType, group, wx, wy, wz };
@@ -29,23 +29,32 @@ function scene() {
   list.push(...Array.from({ length: 4 }, (_, k) => entry('dmx', 0, 'Bar A', 'ShehdsBar', 'Bars', k, 0, 0)));
   list.push(...Array.from({ length: 3 }, (_, k) => entry('dmx', 1, 'Vint A', 'VintageLed', 'Vint', 10 + k, 1, 0)));
   list.push(...Array.from({ length: 5 }, (_, k) => entry('led', 2, 'Left_Hull', '', 'Hull', -5, 0, k)));
-  // The two sign halves, DMX-transported (type 'dmx'), real V3 fixtureTypes.
-  list.push(...Array.from({ length: 6 }, (_, k) => entry('dmx', 3, 'TE Sign V3 A', 'TeSignV3A40', 'TE Sign', k, 0, 20)));
-  list.push(...Array.from({ length: 6 }, (_, k) => entry('dmx', 4, 'TE Sign V3 B', 'TeSignV3B34', 'TE Sign', k, 0, 20)));
+  // BOTH signs' halves, DMX-transported (type 'dmx'), real V3 fixtureTypes. The
+  // operator added a second sign ('TE Sign 2') on 2026-07-29; the te_sign view
+  // gives each its own panel (report 20260725_48 addendum 2), and the excludes
+  // on top_down/strands must keep EVERY sign out.
+  // One fixIndex PER HALF (buildClusters clusters on it) — resolve it outside
+  // the Array.from callback, or every pixel becomes its own cluster.
+  let fi = 3;
+  TE_SIGN_GROUPS.forEach((g, s) => {
+    const a = fi++, b = fi++;
+    list.push(...Array.from({ length: 6 }, (_, k) => entry('dmx', a, `${g} V3 A`, 'TeSignV3A40', g, k + s * 40, 0, 20)));
+    list.push(...Array.from({ length: 6 }, (_, k) => entry('dmx', b, `${g} V3 B`, 'TeSignV3B34', g, k + s * 40, 0, 20)));
+  });
   return list;
 }
 
 test('buildClusters classifies the DMX-transported TE Sign V3 halves as kind:led', () => {
   const clusters = buildClusters(scene());
   const sign = clusters.filter((c) => c.fixtureType === 'TeSignV3A40' || c.fixtureType === 'TeSignV3B34');
-  assert.equal(sign.length, 2);
+  assert.equal(sign.length, 2 * TE_SIGN_GROUPS.length);
   assert.ok(sign.every((c) => c.kind === 'led'), 'TE sign halves are LED-class');
   // The real strand stays led; the bar/vintage stay dmx.
   assert.equal(clusters.find((c) => c.fixKey === 'Bar A').kind, 'dmx');
   assert.equal(clusters.find((c) => c.fixKey === 'Vint A').kind, 'dmx');
   assert.equal(clusters.find((c) => c.fixKey === 'Left_Hull').kind, 'led');
-  // Total led clusters = 1 strand + 2 sign halves.
-  assert.equal(clusters.filter((c) => c.kind === 'led').length, 3);
+  // Total led clusters = 1 strand + two halves per sign.
+  assert.equal(clusters.filter((c) => c.kind === 'led').length, 1 + 2 * TE_SIGN_GROUPS.length);
 });
 
 test('default views keep TE sign membership to spec after reclassification', () => {
@@ -68,8 +77,14 @@ test('default views keep TE sign membership to spec after reclassification', () 
   const strands = resolveMembers('strands', 'main');
   assert.deepEqual([...new Set(strands)], ['LedStrand'], 'strands are strands alone');
 
-  // te_sign "main" = the two sign halves.
-  const sign = resolveMembers('te_sign', 'main');
-  assert.deepEqual([...new Set(sign)].sort(), ['TeSignV3A40', 'TeSignV3B34']);
-  assert.equal(sign.length, 2);
+  // te_sign = ONE panel per sign, each holding that sign's two halves.
+  const r = resolveView(findView(c, 'te_sign'), clusters, list);
+  assert.equal(r.panels.length, TE_SIGN_GROUPS.length);
+  for (const [i, panel] of r.panels.entries()) {
+    assert.equal(panel.error, undefined);
+    assert.deepEqual([...new Set(panel.clusters.map((cl) => cl.fixtureType))].sort(),
+      ['TeSignV3A40', 'TeSignV3B34']);
+    assert.equal(panel.clusters.length, 2);
+    assert.deepEqual([...new Set(panel.clusters.map((cl) => cl.group))], [TE_SIGN_GROUPS[i]]);
+  }
 });

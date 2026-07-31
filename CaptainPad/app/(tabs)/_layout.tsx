@@ -129,13 +129,6 @@ export default function TabLayout() {
             } as any}
           />
           <Tabs.Screen
-            name="monitor"
-            options={{
-              title: 'Monitor',
-              tabBarIconName: 'desktopcomputer',
-            } as any}
-          />
-          <Tabs.Screen
             name="timeline"
             options={{
               title: 'Timeline',

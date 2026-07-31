@@ -8,6 +8,10 @@ import { GlobalParams, DeckSavedFlash } from '@/components/GlobalParams';
 import { CPCControls } from '@/components/CPCControls';
 import { DeckTopBar } from '@/components/DeckTopBar';
 import { DeckHueRow } from '@/components/deck_hue_row';
+import {
+  deckSwapCompleteReleasesLock,
+  deckSwapWatchdogDelayMs,
+} from '@/components/deck_swap_watchdog';
 import { EntryLabelEditor } from '@/components/EntryLabelEditor';
 import { PixelStrip } from '@/components/ui/PixelStrip';
 import { AllModulationsPanel } from '@/components/AllModulationsPanel';
@@ -124,6 +128,11 @@ const MomentaryButton = ({ id, name, onChange }: { id: number, name: string, onC
 // is stable — defining it inline in render would remount col2/col3 (losing their
 // scroll position + state) on every parent render.
 function ColumnsScrollRest({ isWide, children }: { isWide: boolean; children: React.ReactNode }) {
+  // WIDE: a Fragment, so PARAMETERS and AUTOPILOT stay flex SIBLINGS of the
+  // pinned PATTERNS column and render SIDE BY SIDE, each with its own scroll
+  // (SectionHost). 2026-07-27: a stacked-in-one-scroll variant was tried and
+  // REVERSED by the operator on the iPad — he wants the two columns beside
+  // each other; only the PATTERNS column narrowed (flex 4→2).
   if (isWide) return <>{children}</>;
   return (
     <ScrollView
@@ -187,9 +196,10 @@ export default function ControlDeckScreen() {
   // (PARAMETERS + AUTOPILOT) scroll together inside <ColumnsScrollRest> below — so
   // the pattern list stays put while the rest of the deck scrolls under it.
   // Section host for the PARAMETERS + SETTINGS columns: ScrollView only when
-  // the column has a bounded height (wide row); a plain View in the stacked
-  // page-scroll (an inner ScrollView there collapses to zero height — the
-  // party 2026-07-11 'third column missing' bug).
+  // the column has a bounded height (wide row — each column scrolls on its
+  // own); a plain View in the stacked page-scroll (an inner ScrollView there
+  // collapses to zero height — the party 2026-07-11 'third column missing'
+  // bug). There is never a same-axis ScrollView nested inside another.
   const SectionHost: React.ComponentType<any> = isWide ? ScrollView : View;
   const sectionHostProps = isWide
     ? { contentContainerStyle: { padding: 16, paddingBottom: 80 }, showsVerticalScrollIndicator: false }
@@ -319,6 +329,21 @@ export default function ControlDeckScreen() {
   // come back this flag is stale by definition.
   const [deckSwapInFlight, setDeckSwapInFlight] = useState(false);
 
+  // Watchdog for a LOST `deckSwapComplete` (belt-and-braces vs the engine-side
+  // cancelled-swap broadcast). While `deckSwapInFlight` is true the playlist
+  // renders at 0.55 and every row is disabled — so if the completion event
+  // never arrives (WS blip between started/complete; deckSwap events are not
+  // replayed on reconnect) the list stays dim with all taps swallowed until a
+  // tab switch remounts it. Armed on `deckSwapStarted` for the broadcast's own
+  // durationMs + 2 s of slack, disarmed by the matching complete.
+  const swapWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // `transitionId` of the swap the lock is currently held for, captured from
+  // `deckSwapStarted`. A `deckSwapComplete` only releases the lock when its id
+  // matches (or when either side has no id — see deckSwapCompleteReleasesLock),
+  // so a stale complete for a superseded swap can never unlock a live one.
+  const swapTransitionIdRef = useRef<string | null>(null);
+
   // Last engine-picked transition mode. When shuffle is enabled the
   // engine rolls a new style per swap (pickRandomTransitionMode in
   // api_server.js) and broadcasts it on `deckSwapStarted`. Without
@@ -373,7 +398,14 @@ export default function ControlDeckScreen() {
       // engine when we navigate away (the /mixer/view POST does that
       // server-side), so clear the local flag so the next mount starts
       // with the lock OFF instead of a stale in-flight assumption.
-      return () => setDeckSwapInFlight(false);
+      return () => {
+        if (swapWatchdogRef.current) {
+          clearTimeout(swapWatchdogRef.current);
+          swapWatchdogRef.current = null;
+        }
+        swapTransitionIdRef.current = null;
+        setDeckSwapInFlight(false);
+      };
     }, [])
   );
 
@@ -484,10 +516,30 @@ export default function ControlDeckScreen() {
       setColorNextSwapAtMs(typeof nextColorSwap === 'number' ? nextColorSwap : null);
     } else if (msg.type === 'deckSwapStarted') {
       setDeckSwapInFlight(true);
+      const startedId = (msg as unknown as { transitionId?: unknown }).transitionId;
+      swapTransitionIdRef.current = typeof startedId === 'string' && startedId
+        ? startedId
+        : null;
+      if (swapWatchdogRef.current) clearTimeout(swapWatchdogRef.current);
+      swapWatchdogRef.current = setTimeout(() => {
+        swapWatchdogRef.current = null;
+        swapTransitionIdRef.current = null;
+        setDeckSwapInFlight(false);
+      }, deckSwapWatchdogDelayMs((msg as unknown as { durationMs?: unknown }).durationMs));
       const tm = (msg as unknown as { transitionMode?: string }).transitionMode;
       if (typeof tm === 'string') setLastSwapMode(tm);
     } else if (msg.type === 'deckSwapComplete') {
-      setDeckSwapInFlight(false);
+      // Only the swap we are actually locked for may release the lock; a
+      // complete for a superseded swap is ignored (watchdog stays armed).
+      const completeId = (msg as unknown as { transitionId?: unknown }).transitionId;
+      if (deckSwapCompleteReleasesLock(swapTransitionIdRef.current, completeId)) {
+        if (swapWatchdogRef.current) {
+          clearTimeout(swapWatchdogRef.current);
+          swapWatchdogRef.current = null;
+        }
+        swapTransitionIdRef.current = null;
+        setDeckSwapInFlight(false);
+      }
       const tm = (msg as unknown as { transitionMode?: string }).transitionMode;
       if (typeof tm === 'string') setLastSwapMode(tm);
     }
@@ -936,13 +988,13 @@ export default function ControlDeckScreen() {
           back to a single vertical stack (the previous behavior) so nothing is
           crushed in portrait. `globalStyles.container` is `flexDirection:'row',
           flex:1` already; we widen it to wrap on narrow so the columns stack.
-          Column flex weights: PATTERNS 1.6 / PARAMETERS 1 / SETTINGS 1 — the
-          pattern list is the operator's primary browsing surface and was
-          reported "too small" in landscape (party 2026-07-11), so it now carries
-          the widest weight (~44% of the row, up from ~33%). PARAMETERS and
-          SETTINGS share the rest evenly; SETTINGS dropped 1.2→1 (its pill bars /
-          palette swatches still fit at the narrower width). To nudge live, bump
-          the PATTERNS weight below. */}
+          Column weights, wide: PATTERNS 4 / PARAMETERS 3 / AUTOPILOT 3 — the
+          40/30/30 split. 2026-07-27 journey, recorded so nobody re-litigates
+          it: the operator asked to halve PATTERNS (→2, 20/40/40) and to stack
+          PARAMETERS over AUTOPILOT; he then tested both on the iPad and
+          reversed both — the stack (he wants the two side by side) and the
+          cut (20% truncated pattern names too hard). Final answer = these
+          original weights. Do not "fix" this back to 20% without him. */}
       {/* party 2026-07-11 LAYOUT FIX: in the STACKED (non-wide) layout the
           PARAMETERS + SETTINGS sections collapsed to ZERO height (flex:0
           wrappers whose only children are ScrollViews have no intrinsic
@@ -950,9 +1002,9 @@ export default function ControlDeckScreen() {
           saw ONLY the patterns card. Fix: the stacked layout hosts the three
           sections in ONE outer ScrollView (sections size to their content and
           the page scrolls, the standard RN pattern); the wide layout keeps the
-          plain 3-column row. The sections' inner ScrollViews scroll only in
-          wide mode (scrollEnabled={isWide}) so stacked mode has a single,
-          predictable scroll surface. */}
+          plain 3-column row. The sections' inner ScrollViews exist only in wide
+          mode (SectionHost is a View when stacked) so stacked mode has a
+          single, predictable scroll surface. */}
       <View
         // dataSet is an RN-web DOM marker (→ data-layouthost); it's not on the
         // native View prop types, so cast it in like the SectionHost host did.
@@ -982,7 +1034,10 @@ export default function ControlDeckScreen() {
           // party 2026-07-11: PATTERNS weight 1.1→1.6 (operator: the pattern
           // list is "too small" horizontally in landscape), then pinned to an
           // exact 40/30/30 split (flex 4/3/3) — operator: "patterns column 40%
-          // and the other 60%".
+          // and the other 60%". 2026-07-27: briefly halved to flex 2 (20%) at
+          // the operator's request, then restored to 4 after he tested it —
+          // 20% truncated the pattern names too hard. See the column-weights
+          // note above for the full journey.
           // PATTERNS-PIN (narrow): a FIXED height so the column is pinned in
           // place — it never grows or scrolls as a unit; its own pattern list
           // scrolls INTERNALLY within this fixed panel while PARAMETERS +

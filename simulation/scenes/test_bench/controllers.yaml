@@ -41,7 +41,7 @@ controllers:
             at: 512
   - id: 5
     name: Titanic_202
-    ip: 10.1.1.202
+    ip: 10.1.1.60
     type: LED
     protocol: sACN
     ports:
@@ -61,6 +61,18 @@ controllers:
       order: RGBW
       stride: 4
       whiteMode: native
+      wire:
+        foldAmber: true
+        amberRgb:
+          - 0.9
+          - 0.6
+          - 0
+        controllerGamma:
+          r: 2.2
+          g: 2.2
+          b: 2.2
+          w: 1
+        controllerWhite: fold_extract
     device:
       vendor: marsinled
       controllerId: titanic_202

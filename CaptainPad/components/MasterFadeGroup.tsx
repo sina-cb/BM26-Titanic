@@ -71,6 +71,11 @@ function useSelectedFadeSeconds(): number {
 interface Props {
   /** Compact (portrait) layout when true — pills collapse to a cycler. */
   isPortrait: boolean;
+  /** Force the compact cycler even in landscape. The mixer header sets this so
+   *  its title bar fits ONE row on an iPad (operator request 2026-07-27): the
+   *  5-pill row costs ~140pt more than the cycler, and every duration is still
+   *  reachable by tapping through it — a merge, not a removal. */
+  compact?: boolean;
   /** Soft PLAN lock gate (planLocked && !leaseHeld). When true the whole FADE
    *  cluster (duration pills / cycler, TO BLACK, UP) is disabled — dimmed,
    *  handlers blocked — until the operator takes over. Default false so the
@@ -78,7 +83,9 @@ interface Props {
   disabled?: boolean;
 }
 
-export function MasterFadeGroup({ isPortrait, disabled = false }: Props) {
+export function MasterFadeGroup({ isPortrait, compact = false, disabled = false }: Props) {
+  // One flag downstream: portrait implies compact, landscape can opt in.
+  const useCycler = isPortrait || compact;
   const palette = usePalette();
   const styles = useMemo(() => makeStyles(palette), [palette]);
   // Selected fade duration (seconds) — SHARED across both MasterFadeGroup
@@ -112,7 +119,7 @@ export function MasterFadeGroup({ isPortrait, disabled = false }: Props) {
   return (
     <View style={[styles.fadeGroup, disabled && { opacity: 0.45 }]}>
       <Text style={styles.labelCaps}>FADE</Text>
-      {!isPortrait ? (
+      {!useCycler ? (
         <View style={styles.fadePills}>
           {FADE_SECONDS.map((s) => {
             const selected = s === fadeSeconds;

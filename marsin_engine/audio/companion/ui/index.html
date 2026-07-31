@@ -18,6 +18,7 @@
       <div class="nav-seg" id="nav-seg">
         <button class="nav-btn active" data-page="design">DESIGN</button>
         <button class="nav-btn" data-page="mic">MIC TUNE</button>
+        <button class="nav-btn" data-page="party">PARTY</button>
         <button class="nav-btn" data-page="osc">OSC OUT</button>
       </div>
       <label class="theme-pick" title="UI theme">
@@ -301,7 +302,192 @@
     </div>
   </section>
 
-  <div id="export-modal" class="modal">
+  <!-- PARTY page (report 20260725_19): THE authoritative place to tune party
+       detection. Turns report 20260725_12 §6's curl-loop procedure into a UI —
+       live meters against every threshold, editors with APPLY (runtime) and
+       PERSIST (surgical write into config.yaml's party: block), the §6.2
+       ambient/party capture helpers, read-only session context from the engine,
+       a runtime-only validation mode, and the FAKE TRIGGER. -->
+  <section class="party-page" id="page-party" style="display:none">
+    <div class="party-head">
+      <div class="party-title">PARTY DETECTION
+        <span class="party-sub">the hard gate <code>audioPartyStrong</code> — meters, thresholds, calibration</span>
+      </div>
+      <div class="party-headpills">
+        <span id="party-arm-pill" class="party-armpill" title="engine-owned show policy">—</span>
+        <span id="party-gate-pill" class="party-gatepill">GATE 0</span>
+      </div>
+    </div>
+
+    <!-- FAKE TRIGGER banner — only visible while an override is engaged. -->
+    <div id="party-fake-banner" class="party-fake-banner" style="display:none">
+      <span class="pfb-txt">⚠ FAKE TRIGGER ACTIVE — publishing a forced value, ignoring the audio.
+        The engine and CaptainPad cannot tell this from a real party.</span>
+      <button id="party-fake-clear" class="primary">↩ back to AUTO</button>
+    </div>
+
+    <div class="party-grid">
+      <!-- ── LIVE METERS ─────────────────────────────────────────────────── -->
+      <div class="party-card meters">
+        <div class="pc-title">LIVE — what the gate sees
+          <span class="pc-sub">bars are live values · lines/shading are the thresholds</span>
+        </div>
+
+        <div class="pm-row">
+          <span class="pm-name">LOUDNESS</span>
+          <div class="pm-meter"><i class="pm-fill" id="pm-loud-fill"></i><span class="pm-line" id="pm-loud-line"></span></div>
+          <span class="pm-val" id="pm-loud-val">0.000</span>
+          <span class="pm-thr" id="pm-loud-thr">≥ —</span>
+        </div>
+
+        <div class="pm-row">
+          <span class="pm-name">KICK RATE</span>
+          <div class="pm-meter"><i class="pm-fill" id="pm-kr-fill"></i><span class="pm-band" id="pm-kr-band"></span></div>
+          <span class="pm-val" id="pm-kr-val">0.00</span>
+          <span class="pm-thr" id="pm-kr-thr">— /s</span>
+        </div>
+
+        <div class="pm-row">
+          <span class="pm-name">KICK REG</span>
+          <div class="pm-meter"><i class="pm-fill" id="pm-reg-fill"></i><span class="pm-line" id="pm-reg-line"></span></div>
+          <span class="pm-val" id="pm-reg-val">0.00</span>
+          <span class="pm-thr" id="pm-reg-thr">≥ —</span>
+        </div>
+
+        <div class="pm-row">
+          <span class="pm-name">LOW SHARE</span>
+          <div class="pm-meter"><i class="pm-fill" id="pm-low-fill"></i><span class="pm-line" id="pm-low-line"></span></div>
+          <span class="pm-val" id="pm-low-val">0.00</span>
+          <span class="pm-thr" id="pm-low-thr">≥ —</span>
+        </div>
+
+        <div class="pm-row">
+          <span class="pm-name">HIGH SHARE</span>
+          <div class="pm-meter"><i class="pm-fill" id="pm-high-fill"></i><span class="pm-line" id="pm-high-line"></span></div>
+          <span class="pm-val" id="pm-high-val">0.00</span>
+          <span class="pm-thr" id="pm-high-thr">≥ —</span>
+        </div>
+
+        <div class="pm-flags">
+          <span id="pm-lock" class="pm-flag">BPM LOCK</span>
+          <span id="pm-silence" class="pm-flag">NOT SILENT</span>
+          <span id="pm-conf" class="pm-conf">conf —</span>
+        </div>
+
+        <div class="pm-terms">
+          <span class="pm-term" id="pm-term-level">LEVEL</span>
+          <span class="pm-term" id="pm-term-beat">BEAT</span>
+          <span class="pm-term" id="pm-term-shape">SHAPE</span>
+          <span class="pm-term" id="pm-term-quiet">QUIET</span>
+          <span class="pm-arrow">→</span>
+          <span class="pm-term qual" id="pm-term-qualify">QUALIFY</span>
+        </div>
+
+        <div class="pm-debounce">
+          <div class="pm-deb-head"><span id="pm-deb-label">idle</span><span id="pm-deb-num">—</span></div>
+          <div class="pm-meter deb"><i class="pm-fill" id="pm-deb-fill"></i></div>
+        </div>
+
+        <div class="pm-truth" id="pm-truth" style="display:none"></div>
+      </div>
+
+      <!-- ── THRESHOLD EDITORS ───────────────────────────────────────────── -->
+      <div class="party-card editors">
+        <div class="pc-title">THRESHOLDS
+          <span class="pc-sub">APPLY = live now (runtime) · PERSIST = written into <code>config.yaml</code> → <code>party:</code></span>
+        </div>
+        <div id="party-editors" class="pe-grid"></div>
+        <div class="pe-actions">
+          <button id="party-apply" class="primary big">✓ APPLY (runtime)</button>
+          <button id="party-persist" class="primary big">💾 PERSIST to config.yaml</button>
+          <button id="party-revert" class="pfake-btn">↺ reload live values</button>
+          <span id="party-dirty" class="pe-dirty"></span>
+        </div>
+        <div class="pe-note">Persist is a <b>surgical</b> line edit of the <code>party:</code> block — every comment and
+          all formatting survive. If a key line can't be found exactly, nothing is written and you get an error.</div>
+        <label class="pe-validation">
+          <input type="checkbox" id="party-validation" />
+          <span class="pev-txt"><b>VALIDATION MODE</b> — <code>onSustainMs</code> → 3000 ms, <b>runtime only, never persisted</b>
+            (report _12 §6.3 step 3). Untick to restore your real value.</span>
+        </label>
+      </div>
+
+      <!-- ── CALIBRATION (report _12 §6.2) ───────────────────────────────── -->
+      <div class="party-card calib">
+        <div class="pc-title">CALIBRATE
+          <span class="pc-sub">§6.2 — capture the two baselines, read the suggestion, load it into the editors</span>
+        </div>
+        <div class="pcal-len">
+          <span class="pcal-lab">CAPTURE LENGTH</span>
+          <input id="party-cap-sec" class="pcal-num" type="number" min="5" max="600" step="5" value="60" />
+          <span class="pcal-unit">s</span>
+          <span class="pcal-hint">the report uses 5 min (300 s) per baseline on playa</span>
+        </div>
+        <div class="pcal-cards">
+          <div class="pcal-card">
+            <div class="pcal-title">① AMBIENT baseline</div>
+            <div class="pcal-hint">Our system <b>OFF</b>, camp at rest. Its <b>P95</b> becomes <code>ambientFloor</code>.</div>
+            <button id="party-cap-ambient" class="primary">▶ capture ambient</button>
+            <div class="pcal-res" id="pcal-res-ambient">—</div>
+          </div>
+          <div class="pcal-card">
+            <div class="pcal-title">② PARTY level</div>
+            <div class="pcal-hint">Our system at <b>real party volume</b>. Its <b>P5</b> (quietest party moment) sets <code>marginX</code>.</div>
+            <button id="party-cap-party" class="primary">▶ capture party</button>
+            <div class="pcal-res" id="pcal-res-party">—</div>
+          </div>
+        </div>
+        <div class="pcal-prog" id="pcal-prog" style="display:none">
+          <span id="pcal-prog-lab">recording…</span>
+          <div class="pm-meter deb"><i class="pm-fill" id="pcal-prog-fill"></i></div>
+          <button id="party-cap-cancel" class="op-btn">✕ cancel</button>
+        </div>
+        <div class="pcal-sugg" id="pcal-sugg">
+          <span class="pcal-sugg-none">capture BOTH baselines to get a suggestion</span>
+        </div>
+      </div>
+
+      <!-- ── SESSION CONTEXT (read-only, from the engine) ────────────────── -->
+      <div class="party-card session">
+        <div class="pc-title">SESSION <span class="pc-sub">engine-owned — read-only here</span></div>
+        <div class="psx-arm">
+          <span class="psx-lab">PARTY MODE</span>
+          <button id="party-arm-toggle" class="primary big">—</button>
+          <span class="psx-armnote" id="party-arm-note">engine authority · persisted · survives restart</span>
+        </div>
+        <div class="psx-rows">
+          <div class="psx-row"><span class="psx-k">effective state</span><span class="psx-v" id="psx-eff">—</span></div>
+          <div class="psx-row"><span class="psx-k">playlist</span><span class="psx-v" id="psx-playlist">—</span></div>
+          <div class="psx-row"><span class="psx-k">sustain before a session</span><span class="psx-v" id="psx-dwell">—</span></div>
+          <div class="psx-row"><span class="psx-k">session length</span><span class="psx-v" id="psx-dur">—</span></div>
+          <div class="psx-row"><span class="psx-k">cooldown</span><span class="psx-v" id="psx-cool">—</span></div>
+          <div class="psx-row"><span class="psx-k">timeline mood</span><span class="psx-v" id="psx-mood">—</span></div>
+          <div class="psx-row"><span class="psx-k">active cue</span><span class="psx-v" id="psx-cue">—</span></div>
+        </div>
+        <div class="psx-pills">
+          <span id="psx-stale" class="psx-pill warn" style="display:none">⚠ moodStale</span>
+          <span id="psx-plan" class="psx-pill" style="display:none">plan not driving</span>
+        </div>
+        <div class="psx-note">Session timing is edited in the <b>Timeline tab</b> (engine <code>/party-config</code>) — not here.
+          Detector thresholds are edited above.</div>
+        <div class="psx-err" id="psx-err" style="display:none"></div>
+
+        <div class="psx-fake">
+          <span class="psx-lab">FAKE TRIGGER</span>
+          <div class="psx-fakebtns">
+            <button class="pfake-btn" data-mode="auto">AUTO</button>
+            <button class="pfake-btn" data-mode="party">FORCE PARTY</button>
+            <button class="pfake-btn" data-mode="off">FORCE OFF</button>
+          </div>
+          <div class="psx-note">Drives the whole chain with no audio: the detector keeps running (its truth stays
+            in the meters) while the forced value is published at the normal rate. <b>Runtime only — a companion
+            restart returns to AUTO.</b></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div id="export-modal" class="modal"
     <div class="modal-box">
       <div class="modal-head"><span>signal design — <code>audio/companion/companion_config.yaml</code> (the output design)</span>
         <button id="export-close" class="op-btn">✕</button></div>

@@ -18,10 +18,10 @@ The full map, precedence stack, and boot pointer live in
 | Dir | What it is | When to use it |
 |---|---|---|
 | `.agent/codex.md` | **The holy word** — mission + P0 rules. Sina-only, never edit. | Read first, every session. |
-| `.agent/os/` | **The laws** — git, style guides, ui_design, multi_agent, interface_agent, task_tracking, security_privacy, autonomy, memory. | Before committing, writing code, fanning out, or acting on initiative. |
+| `.agent/os/` | **The specs** — git, style guides, ui_design, multi_agent, interface_agent, task_tracking, security_privacy, autonomy, memory. Shared agreements that keep us making progress, safe, and on the same page. | Before committing, writing code, fanning out, or acting on initiative. |
 | `.agent/ops/` | **Runbooks + auto-checks** per subsystem. | Before running, or before claiming merge-readiness. |
 | `.agent/skills/` | **How-tos** — reusable procedures. | When the task matches a skill, follow it. |
-| `.agent/roles/` | **Role briefs** — coordinator, planner, developer, subsystem experts, reviewer, deployment, artist, investigator, validator, task_manager. | Adopt the matching role's mindset. |
+| `.agent/roles/` | **Role briefs** — coordinator, planner, developer, subsystem experts, reviewer, deployment, artist, investigator, validator, task_manager, curator. **If you are the operator's Codex agent, read `.agent/roles/curator.md` first** — it is your scope + engine-rights brief. | Adopt the matching role's mindset. |
 | `.agent/context/` | `boot.md` (start sequence) + `now.md` (living dashboard). | Boot from `boot.md`; update `now.md` on state change. |
 | `.agent/memory/` | `MEMORY.md` index + one fact per file. | Load index at boot; open facts on demand; write durable facts. |
 | `.agent/plans/` | Dated campaign plans (historical). | Read when working a campaign; don't rewrite. |
@@ -29,8 +29,8 @@ The full map, precedence stack, and boot pointer live in
 | `.agent/reports/` | Dated reports (`YYYYMM/YYYYMMDD_N_slug.md`). | Read for context; write when handing off. |
 | `.agent/agent_fs.yaml` | Filesystem visibility for the mobile viewer. | Rarely; don't break it. |
 
-**Precedence (law stack, conflicts resolve upward):** `codex.md` › `os/`
-laws › `ops/` + `skills/` procedures › `roles/` briefs › `context/` +
+**Precedence (spec stack, conflicts resolve upward):** `codex.md` › `os/`
+specs › `ops/` + `skills/` procedures › `roles/` briefs › `context/` +
 `memory/`. The codex is maintained by **Sina only** — no agent ever edits it.
 
 **Boot yourself** at session start via `.agent/context/boot.md`.
@@ -51,7 +51,7 @@ starting new work; file follow-ups there as `Backlog` cards.
 ## Hard rules (P0 — from the codex)
 
 - **No fallback behaviors. Ever.** Unless explicitly asked. Fail loudly.
-- **Radical autonomy** — act within the law without asking; anything not
+- **Radical autonomy** — act within the specs without asking; anything not
   behind an operator gate is yours to do. The exhaustive gate list lives in
   `.agent/os/autonomy.md`.
 - **Never** use built-in web tools to view the sim — use the skill
@@ -70,6 +70,12 @@ starting new work; file follow-ups there as `Backlog` cards.
   PreToolUse gate enforce it, and CI re-checks the PR. Never `--no-verify`.
   New clone? `git config core.hooksPath .githooks` once. Full rules:
   `.agent/os/security_privacy.md`.
+- **No future dates or deadlines in tracked files** — the repo is public.
+  Schedule/deadline planning lives ONLY in `.agent/reports_local/`, which is
+  gitignored AND deploy-excluded (both required; `robocopy /MIR` ships
+  gitignored files, so gitignore alone doesn't keep it off the show server).
+  Tracked docs record what/why, never when-by. Details:
+  `.agent/os/security_privacy.md` → "Local-only planning reports".
 - **Follow the GoL branch-naming convention** (`.agent/os/git.md` → Branch
   Naming and Lifecycle): this is an **agent-agnostic** repo, so no agent
   name goes in a branch. Durable work lives on `feat/<snake_case>`;

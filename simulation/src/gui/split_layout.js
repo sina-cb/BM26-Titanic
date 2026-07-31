@@ -109,6 +109,27 @@ function applySimResize() {
   if (typeof window.__applySimResize === 'function') window.__applySimResize();
 }
 
+// ─── HUD keep-out ─────────────────────────────────────────────────────────
+// Fixed bottom-LEFT HUD chrome (the `⚠ UNPATCHED — SIM-ONLY MODE` pill lives
+// at bottom:140px/left:14px, z-index 9999) was authored for a full-window 3D
+// view. With the map pane docked to the left edge that spot is INSIDE the
+// pane — it lands on the tray chip grid and covers fixture names while the
+// operator is picking them (it is pointer-events:none, so chips stayed
+// clickable but unreadable). Publishing the sim pane's left edge as a CSS
+// variable lets the stylesheet park that chrome over the 3D view instead, and
+// it tracks divider drags for free.
+//   split  → keep-out on, var = the sim pane's left edge
+//   simMax → pane is off-screen: keep-out off (badge returns to its home)
+//   mapMax → no 3D pane at all: keep-out on + `full`, which parks the badge in
+//            the pane's bottom-right hint area (static text, nothing to pick)
+function setHudKeepOut(mode, simPaneLeft) {
+  const b = document.body;
+  if (!b) return;
+  b.classList.toggle('sim-map-docked', mode === 'split' || mode === 'mapMax');
+  b.classList.toggle('sim-map-full', mode === 'mapMax');
+  document.documentElement.style.setProperty('--sim-pane-left', `${simPaneLeft}px`);
+}
+
 // ─── Canvas placement ─────────────────────────────────────────────────────
 // With the map pane on the LEFT the render canvas must SHIFT right to the sim
 // pane (the raycaster reads getBoundingClientRect(), so a correct x-offset is
@@ -284,6 +305,7 @@ export function applyLayout() {
     placeCanvas(null, true);
     if (_divider) _divider.style.display = 'none';
     if (_tab) _tab.style.display = 'none';
+    setHudKeepOut('none', 0);
     applySimResize();
     return;
   }
@@ -293,6 +315,7 @@ export function applyLayout() {
   if (_mode === 'mapMax') {
     placeCanvas(null, false);
     dockPanel(0, window.innerWidth);
+    setHudKeepOut('mapMax', 0);
     if (_divider) _divider.style.display = 'none';
     if (_tab) _tab.style.display = 'none';
   } else if (_mode === 'simMax') {
@@ -300,6 +323,7 @@ export function applyLayout() {
     // at the left edge.
     slidePanelOff();
     placeCanvas(null, true);
+    setHudKeepOut('simMax', 0);
     if (_divider) _divider.style.display = 'none';
     if (_tab) _tab.style.display = '';
     applySimResize();
@@ -308,6 +332,7 @@ export function applyLayout() {
     const { mapW } = computeWidths();
     dockPanel(0, mapW);
     placeCanvas(mapW + DIVIDER_W, true);
+    setHudKeepOut('split', mapW + DIVIDER_W);
     if (_divider) {
       _divider.style.display = '';
       _divider.style.left = `${mapW}px`;

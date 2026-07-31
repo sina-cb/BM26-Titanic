@@ -34,8 +34,10 @@ import {
   isLedController,
   isBoundLedController,
   isValidIp,
+  ledOutputIndexForPort,
   ledStrideForOrder,
   normalizeLedConfig,
+  LED_MAX_OUTPUTS,
 } from '../controller_registry.js';
 
 /**
@@ -138,7 +140,7 @@ export function projectLedStrandSegments(universe, channel, stride, count) {
  * @param {Map<string, number>|Object} strandLedCounts - strand name → ledCount.
  * @returns {{ fields: Map<string, {
  *   controllerIp: string, controllerId: number, dmxUniverse: number,
- *   dmxAddress: number, pixelCount: number, outputIndex: number,
+ *   dmxAddress: number, pixelCount: number, outputIndex: number, portNum: number,
  *   segments: Array<{universe: number, startChannel: number,
  *     endChannel: number, pixelCount: number}>,
  *   endUniverse: number, endChannel: number }>,
@@ -186,7 +188,10 @@ export function computeLedStrandPatches(registry, strandLedCounts) {
     // and each output's cursor starts fresh at its OWN universe.
     const sortedPorts = [...controller.ports].sort((a, b) => a.port - b.port);
     for (const port of sortedPorts) {
-      const outputIndex = port.port - 1;
+      // The physical board output is the one this port DECLARES (report
+      // 20260725_70): under a crossed mapping P1 may drive output 2. The 0-based
+      // strands[] index happens in exactly one place (ledOutputIndexForPort).
+      const outputIndex = ledOutputIndexForPort(port);
       const carriesStrand = (port.chain || []).some((e) => entryFixtureName(e) !== null);
       if (!carriesStrand) continue; // empty/disabled output — nothing to patch
 
@@ -248,6 +253,11 @@ export function computeLedStrandPatches(registry, strandLedCounts) {
           dmxAddress: start.startChannel,
           pixelCount: ledCount,
           outputIndex,
+          // The CARD port row that owns this strand. Kept beside outputIndex
+          // because the two diverge under a crossed mapping, and every
+          // operator-facing label (claims, collision refusals) must name the
+          // port the operator edits — not the board output it happens to drive.
+          portNum: port.port,
           segments: walk.segments,
           endUniverse: end.universe,
           endChannel: end.endChannel,
@@ -306,8 +316,11 @@ export function computeLedUniverseClaims(boundFields, genericFields) {
         start: seg.startChannel,
         end: seg.endChannel,
         name,
+        // The CARD port, never `outputIndex + 1` — under a crossed mapping that
+        // named the wrong port row in every claim label (and in the push's
+        // collision refusal text, report 20260725_70 §1.4).
         controllerId: rec.controllerId,
-        portNum: Number.isInteger(rec.outputIndex) ? rec.outputIndex + 1 : undefined,
+        portNum: Number.isInteger(rec.portNum) ? rec.portNum : undefined,
         led: true,
       });
     }
@@ -357,6 +370,16 @@ export function computeLedUniverseClaims(boundFields, genericFields) {
  *    spill, from the per-output projection) also carries DMX fixtures (from
  *    `dmxUniverseMaps`) or another bound LED controller's stream — two sources
  *    on one universe fight.
+ *  - `led_output_duplicate`: two port rows DECLARE the same physical board
+ *    output (report 20260725_70 §4). One output cannot take two universes. The
+ *    UI selector cannot express it, but a hand-edited controllers.yaml can — and
+ *    the file must LOAD (fixable in the pane) while the push REFUSES. This chip
+ *    is what turns the row red before anyone presses Push.
+ *  - `led_output_out_of_card_range`: a port declares an output outside
+ *    1…LED_MAX_OUTPUTS (only reachable on an object that bypassed the loader).
+ *  - `led_parked_output_conflict`: a persisted `parkedOutputs` entry names an
+ *    output a port row already drives — the park is stale and the next push
+ *    re-derives it.
  *
  * @param {Object} registry - the controller registry.
  * @param {Map|Object} strandCounts - strand name → ledCount.
@@ -391,6 +414,50 @@ export function validateLedManualUniverses(registry, strandCounts, dmxUniverseMa
         message: `outputs ${ports.map((n) => `P${n}`).join(' & ')} all declare U${universe} — each ` +
           `device output streams from U${universe} channel 1, so they overwrite each other; give ` +
           'each output its own universe',
+      });
+    }
+  }
+
+  // Port → physical board output declarations (report 20260725_70 §4). Checked
+  // on EVERY LED card (bound or not): a duplicate is an operator-fixable
+  // mapping error, and the pane must show it before the push refuses.
+  for (const controller of registry.controllers) {
+    if (!isLedController(controller)) continue;
+    const byOutput = new Map();   // declared output → [portNum, …]
+    for (const port of controller.ports || []) {
+      const declared = port.output;
+      if (!Number.isInteger(declared) || declared < 1 || declared > LED_MAX_OUTPUTS) {
+        warnings.push({
+          code: 'led_output_out_of_card_range',
+          controllerId: controller.id,
+          port: port.port,
+          message: `P${port.port} declares output ${JSON.stringify(declared)} — a MarsinLED ` +
+            `addresses outputs 1–${LED_MAX_OUTPUTS}; pick one this board actually has`,
+        });
+        continue;
+      }
+      if (!byOutput.has(declared)) byOutput.set(declared, []);
+      byOutput.get(declared).push(port.port);
+    }
+    for (const [output, ports] of byOutput) {
+      if (ports.length < 2) continue;
+      warnings.push({
+        code: 'led_output_duplicate',
+        controllerId: controller.id,
+        port: ports[0],
+        message: `ports ${ports.map((n) => `P${n}`).join(' and ')} both drive output ${output} — ` +
+          'one physical output cannot take two universes; give each port its own output',
+      });
+    }
+    for (const parked of controller.parkedOutputs || []) {
+      if (!byOutput.has(parked.output)) continue;
+      warnings.push({
+        code: 'led_parked_output_conflict',
+        controllerId: controller.id,
+        port: byOutput.get(parked.output)[0],
+        message: `output ${parked.output} is parked on U${parked.universe} but ` +
+          `P${byOutput.get(parked.output)[0]} drives it — the park is stale; the next push ` +
+          'drops it',
       });
     }
   }

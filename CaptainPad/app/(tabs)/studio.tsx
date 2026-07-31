@@ -1,9 +1,37 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, TextInput, ScrollView, Modal, KeyboardAvoidingView, Platform, SafeAreaView, useWindowDimensions } from 'react-native';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { View, Text, TouchableOpacity, TextInput, ScrollView, Modal, KeyboardAvoidingView, Platform, SafeAreaView, useWindowDimensions, type TextStyle } from 'react-native';
 import { useGlobalStyles, shadow } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { CodeHighlight } from '@/components/code_highlight';
+import { caretScrollTarget, TAB_INSERTION } from '@/components/studio_editor_logic';
 import { fetchPatterns, fetchPatternCode, savePatternCode, setActivePattern, getApiBaseAsync } from '@/utils/api';
+
+// ---------------------------------------------------------------------------
+// Editor geometry constants. The highlight sub-layer and the transparent
+// <textarea> laid over it MUST use byte-identical metrics or their soft-wrap
+// points diverge, the textarea grows taller than the glyphs you can see, and
+// every tap lands on the wrong line (debug report 20260725_27, D2/D3).
+// Change these ONLY in pairs.
+const EDITOR_FONT_FAMILY = 'Courier';
+const EDITOR_FONT_SIZE = 14;
+const EDITOR_LINE_HEIGHT = 20;
+const EDITOR_PADDING = 24;
+// Keep the caret this far from the top/bottom edge while typing (A5).
+const CARET_SCROLL_MARGIN = 60;
+
+// Web-only CSS the RN style types don't model:
+//   caretColor  — react-native-web 0.21 DROPS the `selectionColor` prop
+//                 entirely, so with transparent text the caret inherits
+//                 `currentColor` = fully transparent. This single line is the
+//                 headline "cursor is broken" fix (D1).
+//   overflow    — kills the textarea's internal scrollbar: the ~15px it stole
+//                 from the wrap width is what desynced the two layers, and an
+//                 internally scrollable textarea is what permanently broke the
+//                 editor after one trip to EOF (D2/D3).
+const WEB_EDITOR_INPUT_STYLE = (Platform.OS === 'web'
+  ? { caretColor: '#00daf3', overflow: 'hidden' }
+  : null) as TextStyle | null;
 
 export default function StudioScreen() {
   const globalStyles = useGlobalStyles();
@@ -17,6 +45,146 @@ export default function StudioScreen() {
 
   const { width, height } = useWindowDimensions();
   const isPortrait = height > width;
+
+  // --- Editor plumbing (web DOM; no-ops on native) -------------------------
+  const inputRef = useRef<TextInput>(null);
+  const editorScrollRef = useRef<ScrollView>(null);
+  const caretMirrorRef = useRef<HTMLDivElement | null>(null);
+  const caretRafRef = useRef<number | null>(null);
+  // A4: react-native-web's KeyboardAvoidingView is a literal no-op
+  // (onKeyboardChange() {}), so the iPad's on-screen keyboard used to cover
+  // ~40-60% of the modal with zero relayout. visualViewport.height is the
+  // only truthful "space left above the keyboard" signal on web.
+  const [webViewportHeight, setWebViewportHeight] = useState<number | null>(null);
+
+  const getTextArea = useCallback((): HTMLTextAreaElement | null => {
+    if (Platform.OS !== 'web') return null;
+    return (inputRef.current as unknown as HTMLTextAreaElement | null);
+  }, []);
+
+  const getScrollNode = useCallback((): HTMLElement | null => {
+    if (Platform.OS !== 'web') return null;
+    const sv = editorScrollRef.current as unknown as { getScrollableNode?: () => HTMLElement } | null;
+    if (!sv) return null;
+    if (typeof sv.getScrollableNode !== 'function') {
+      // Loud, not silent: caret-follow depends on this RNW API.
+      console.error('[studio] ScrollView.getScrollableNode() missing — caret follow disabled (RNW API changed).');
+      return null;
+    }
+    return sv.getScrollableNode();
+  }, []);
+
+  // A5: caret-follow. The textarea can no longer scroll itself (A2 pins it),
+  // and the browser never scrolls the OUTER RN ScrollView, so we measure the
+  // caret's Y with a hidden mirror div (valid only because A2 guarantees the
+  // mirror, the textarea and the highlight all wrap identically) and scroll
+  // the outer scroller ourselves.
+  const syncCaretIntoView = useCallback(() => {
+    const ta = getTextArea();
+    const scroller = getScrollNode();
+    if (!ta || !scroller) return;
+
+    let mirror = caretMirrorRef.current;
+    if (!mirror) {
+      mirror = document.createElement('div');
+      mirror.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(mirror);
+      caretMirrorRef.current = mirror;
+    }
+    const cs = window.getComputedStyle(ta);
+    mirror.style.cssText = [
+      'position:absolute', 'top:0', 'left:-99999px', 'visibility:hidden',
+      'box-sizing:border-box', 'white-space:pre-wrap',
+      'overflow-wrap:break-word', 'word-wrap:break-word',
+      `width:${ta.clientWidth}px`,
+      `font-family:${cs.fontFamily}`, `font-size:${cs.fontSize}`,
+      `line-height:${cs.lineHeight}`, `letter-spacing:${cs.letterSpacing}`,
+      `padding:${cs.paddingTop} ${cs.paddingRight} ${cs.paddingBottom} ${cs.paddingLeft}`,
+      `tab-size:${cs.tabSize}`,
+    ].join(';');
+
+    const caretIndex = ta.selectionDirection === 'backward' ? ta.selectionStart : ta.selectionEnd;
+    mirror.textContent = ta.value.slice(0, caretIndex);
+    const marker = document.createElement('span');
+    marker.textContent = String.fromCharCode(0x200b); // zero-width space probe
+    mirror.appendChild(marker);
+
+    const next = caretScrollTarget({
+      caretTop: marker.offsetTop,
+      caretHeight: EDITOR_LINE_HEIGHT,
+      scrollTop: scroller.scrollTop,
+      viewportHeight: scroller.clientHeight,
+      margin: CARET_SCROLL_MARGIN,
+      contentHeight: scroller.scrollHeight,
+    });
+    if (next != null) editorScrollRef.current?.scrollTo({ y: next, animated: false });
+  }, [getScrollNode, getTextArea]);
+
+  const scheduleCaretSync = useCallback(() => {
+    if (Platform.OS !== 'web') return;
+    if (caretRafRef.current != null) return;
+    caretRafRef.current = window.requestAnimationFrame(() => {
+      caretRafRef.current = null;
+      syncCaretIntoView();
+    });
+  }, [syncCaretIntoView]);
+
+  // A6 (Tab -> 2 spaces, keeping the native undo stack) + A5 listeners.
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !isEditing) return;
+    const ta = getTextArea();
+    if (!ta) {
+      console.error('[studio] editor textarea ref missing — Tab key + caret follow inactive.');
+      return;
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      e.preventDefault();
+      // execCommand('insertText') is the ONLY insert that preserves the
+      // browser's native undo stack — a setState value splice destroys it.
+      document.execCommand('insertText', false, TAB_INSERTION);
+    };
+    const onCaretEvent = () => scheduleCaretSync();
+    ta.addEventListener('keydown', onKeyDown);
+    ta.addEventListener('input', onCaretEvent);
+    ta.addEventListener('keyup', onCaretEvent);
+    ta.addEventListener('click', onCaretEvent);
+    ta.addEventListener('select', onCaretEvent);
+    return () => {
+      ta.removeEventListener('keydown', onKeyDown);
+      ta.removeEventListener('input', onCaretEvent);
+      ta.removeEventListener('keyup', onCaretEvent);
+      ta.removeEventListener('click', onCaretEvent);
+      ta.removeEventListener('select', onCaretEvent);
+      if (caretRafRef.current != null) {
+        window.cancelAnimationFrame(caretRafRef.current);
+        caretRafRef.current = null;
+      }
+    };
+  }, [isEditing, getTextArea, scheduleCaretSync]);
+
+  // A4: track the space left above the on-screen keyboard while the modal is open.
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !isEditing) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => setWebViewportHeight(vv.height);
+    update();
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+      setWebViewportHeight(null);
+    };
+  }, [isEditing]);
+
+  // Drop the caret mirror when the screen unmounts.
+  useEffect(() => () => {
+    const mirror = caretMirrorRef.current;
+    if (mirror && mirror.parentNode) mirror.parentNode.removeChild(mirror);
+    caretMirrorRef.current = null;
+  }, []);
 
   const showToast = (title: string, message: string, type: 'success'|'error') => {
     setToastMessage({ title, message, type });
@@ -172,30 +340,34 @@ export default function StudioScreen() {
           </View>
         </View>
 
-        {/* Custom Syntax Highlighted Render (Read-Only Preview) */}
-        <View style={{ flex: 4, backgroundColor: '#1E1E1E', borderRadius: 12, padding: 16, ...globalStyles.ghostBorder, ...globalStyles.ambientShadow }}>
-          <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={true}>
-              <Text style={{ fontFamily: 'Courier', fontSize: 13, lineHeight: 18 }}>
-                {code.split(/(\b(?:function|var|let|const|if|else|return|for|while|import|export)\b|\/\*[\s\S]*?\*\/|\/\/.*|'.*?'|".*?"|\b\d+(?:\.\d+)?\b|[{}()\[\]=+\-/*<>!&|]+)/g).map((token, i) => {
-                  if (!token) return null;
-                  if (token.startsWith('//') || token.startsWith('/*')) return <Text key={i} style={{color: '#6A9955'}}>{token}</Text>;
-                  if (/^(?:function|var|let|const|if|else|return|for|while|import|export)$/.test(token)) return <Text key={i} style={{color: '#569CD6', fontWeight: 'bold'}}>{token}</Text>;
-                  if (/^\d+(?:\.\d+)?$/.test(token)) return <Text key={i} style={{color: '#B5CEA8'}}>{token}</Text>;
-                  if (token.startsWith("'") || token.startsWith('"')) return <Text key={i} style={{color: '#CE9178'}}>{token}</Text>;
-                  if (/^[{}()\[\]=+\-/*<>!&|]+$/.test(token)) return <Text key={i} style={{color: '#D4D4D4'}}>{token}</Text>;
-                  if (/^(?:time|wave|sin|cos|rgb|hsv|rgbwau|triangle|square|max|min|abs|floor|pow|random)\b/.test(token)) return <Text key={i} style={{color: '#DCDCAA'}}>{token}</Text>;
-                  if (/^(?:beforeRender|render3D)\b/.test(token)) return <Text key={i} style={{color: '#4EC9B0', fontWeight: 'bold'}}>{token}</Text>;
-                  return <Text key={i} style={{color: '#9CDCFE'}}>{token}</Text>;
-                })}
-              </Text>
-          </ScrollView>
-        </View>
+        {/* Custom Syntax Highlighted Render (Read-Only Preview).
+            A7: tapping it opens the editor — you no longer have to hunt for
+            the EDIT button. A3: it is NOT rendered while the modal is open;
+            it is fully covered anyway and re-tokenizing the whole file a
+            second time on every keystroke was half the typing latency. */}
+        <TouchableOpacity
+          activeOpacity={activeFile ? 0.85 : 1}
+          disabled={!activeFile}
+          onPress={() => setIsEditing(true)}
+          style={{ flex: 4 }}
+        >
+          <View style={{ flex: 1, backgroundColor: '#1E1E1E', borderRadius: 12, padding: 16, ...globalStyles.ghostBorder, ...globalStyles.ambientShadow }}>
+            <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={true}>
+              {!isEditing && <CodeHighlight code={code} fontSize={13} lineHeight={18} />}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
 
       </View>
 
       {/* Fullscreen Editor Modal */}
       <Modal visible={isEditing} animationType="slide" presentationStyle="pageSheet">
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, backgroundColor: '#0A0A0A' }}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={webViewportHeight != null
+            ? { height: webViewportHeight, backgroundColor: '#0A0A0A' }
+            : { flex: 1, backgroundColor: '#0A0A0A' }}
+        >
           <SafeAreaView style={{ flex: 1 }}>
             
             {/* Header */}
@@ -226,50 +398,46 @@ export default function StudioScreen() {
               
               {/* Left/Top Column - Full Code IDE */}
               <View style={{ flex: isPortrait ? 3 : 13, backgroundColor: '#1E1E1E', margin: 16, marginBottom: isPortrait ? 8 : 16, borderRadius: 12, overflow: 'hidden' }}>
-                <ScrollView showsVerticalScrollIndicator={true} style={{ flex: 1 }}>
+                <ScrollView ref={editorScrollRef} showsVerticalScrollIndicator={true} style={{ flex: 1 }}>
                    <View style={{ position: 'relative' }}>
-                      
-                      {/* Sub-Layer: Syntax Display (Provides height natively) */}
-                      <Text style={{ 
-                          fontFamily: 'Courier', 
-                          fontSize: 14, 
-                          lineHeight: 20, 
-                          color: '#d4d4d4',
-                          padding: 24,
-                          margin: 0
-                      }}>
-                        {code.split(/(\b(?:function|var|let|const|if|else|return|for|while|import|export)\b|\/\*[\s\S]*?\*\/|\/\/.*|'.*?'|".*?"|\b\d+(?:\.\d+)?\b|[{}()\[\]=+\-/*<>!&|]+)/g).map((token, i) => {
-                          if (!token) return null;
-                          if (token.startsWith('//') || token.startsWith('/*')) return <Text key={i} style={{color: '#6A9955'}}>{token}</Text>;
-                          if (/^(?:function|var|let|const|if|else|return|for|while|import|export)$/.test(token)) return <Text key={i} style={{color: '#569CD6', fontWeight: 'bold'}}>{token}</Text>;
-                          if (/^\d+(?:\.\d+)?$/.test(token)) return <Text key={i} style={{color: '#B5CEA8'}}>{token}</Text>;
-                          if (token.startsWith("'") || token.startsWith('"')) return <Text key={i} style={{color: '#CE9178'}}>{token}</Text>;
-                          if (/^[{}()\[\]=+\-/*<>!&|]+$/.test(token)) return <Text key={i} style={{color: '#D4D4D4'}}>{token}</Text>;
-                          if (/^(?:time|wave|sin|cos|rgb|hsv|rgbwau|triangle|square|max|min|abs|floor|pow|random)\b/.test(token)) return <Text key={i} style={{color: '#DCDCAA'}}>{token}</Text>;
-                          if (/^(?:beforeRender|render3D)\b/.test(token)) return <Text key={i} style={{color: '#4EC9B0', fontWeight: 'bold'}}>{token}</Text>;
-                          return <Text key={i} style={{color: '#9CDCFE'}}>{token}</Text>;
-                        })}
-                      </Text>
 
-                      {/* Top-Layer: Transparent Interactive Input (Overlays perfectly) */}
-                      <TextInput 
+                      {/* Sub-Layer: Syntax Display (Provides height natively).
+                          Per-line memoized — a keystroke re-tokenizes ONE line. */}
+                      <CodeHighlight
+                        code={code}
+                        fontFamily={EDITOR_FONT_FAMILY}
+                        fontSize={EDITOR_FONT_SIZE}
+                        lineHeight={EDITOR_LINE_HEIGHT}
+                        padding={EDITOR_PADDING}
+                        color="#d4d4d4"
+                      />
+
+                      {/* Top-Layer: Transparent Interactive Input (Overlays perfectly).
+                          Metrics MUST stay byte-identical to CodeHighlight above. */}
+                      <TextInput
+                        ref={inputRef}
                         multiline={true}
                         value={code}
                         onChangeText={setCode}
-                        style={{ 
+                        scrollEnabled={false}
+                        onSelectionChange={scheduleCaretSync}
+                        style={[{
                           position: 'absolute', top: 0, bottom: 0, left: 0, right: 0,
-                          fontFamily: 'Courier', 
-                          fontSize: 14, 
-                          lineHeight: 20, 
+                          fontFamily: EDITOR_FONT_FAMILY,
+                          fontSize: EDITOR_FONT_SIZE,
+                          lineHeight: EDITOR_LINE_HEIGHT,
                           color: 'rgba(255, 255, 255, 0)',
-                          padding: 24,
+                          padding: EDITOR_PADDING,
                           margin: 0,
                           textAlignVertical: 'top',
-                          zIndex: 10
-                        }}
+                          zIndex: 10,
+                        }, WEB_EDITOR_INPUT_STYLE]}
                         autoCapitalize="none"
+                        autoComplete="off"
                         autoCorrect={false}
                         spellCheck={false}
+                        smartInsertDelete={false}
+                        textContentType="none"
                         keyboardType="ascii-capable"
                         selectionColor="#00daf3"
                       />

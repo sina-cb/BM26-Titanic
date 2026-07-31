@@ -34,8 +34,8 @@ views:
         sizeY: 14
     framing:
       zoom: 0.8928571428571429
-      panX: -213.25871192498198
-      panY: 101.94385249039823
+      panX: 27.74128807501802
+      panY: -26.05614750960177
     offsets:
       Right_Back_Left:
         dx: 16
@@ -211,6 +211,10 @@ views:
       VintageLed:
         sizeX: 16
         sizeY: 16
+    framing:
+      zoom: 0.7971938775510204
+      panX: -167.93539540816334
+      panY: 32.708877551020294
     offsets:
       Left Front Wall 5:
         dx: -40

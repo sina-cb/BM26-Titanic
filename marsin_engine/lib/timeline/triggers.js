@@ -158,9 +158,20 @@ function cloneState(state) {
  * Evaluate one tick. PURE: returns { fires: [{cueId, reason}], state }. The
  * input `state` is treated as immutable; a NEW state is returned.
  *
- * @param {{ now:number, plan, state, mood:{party:0|1}, dayTimes }} args
+ * @param {{ now:number, plan, state, mood:{party:0|1}, dayTimes,
+ *           partyEnabled?:boolean,
+ *           partyTiming?:{minDwellSec?:number, cooldownSec?:number}|null }} args
+ *        partyEnabled — the operator's PARTY OVERRIDE (default true). When
+ *        false, no cue may transition the show INTO party; see the mood branch.
+ *        partyTiming  — the ENGINE-OWNED session numbers for a cue that moves
+ *        INTO party (`/party-config`). When given they REPLACE the cue's
+ *        authored `minDwellSec` / `cooldownSec`, so the operator's live edit
+ *        takes effect on the next evaluation with no plan reload. Absent (or
+ *        null) ⇒ the cue's own numbers, exactly as before.
  */
-export function evaluateTick({ now, plan, state, mood, dayTimes }) {
+export function evaluateTick({
+  now, plan, state, mood, dayTimes, partyEnabled = true, partyTiming = null,
+}) {
   const tz = plan.location.tz;
   const next = cloneState(state);
   const fires = [];
@@ -222,11 +233,26 @@ export function evaluateTick({ now, plan, state, mood, dayTimes }) {
       }
       if (party !== toVal) continue;      // mood at neither endpoint (n/a for binary)
       if (next.moodArmed[cue.id] !== true) continue; // never observed `from` → don't fire
+      // PARTY OVERRIDE (operator authority): while party mode is disabled, a cue
+      // that moves the show INTO party cannot fire. Checked AFTER arming and
+      // BEFORE the fire bookkeeping so re-enabling later finds the cue still
+      // armed and its cooldown unburned — disabling suppresses the SHOW, it does
+      // not consume the trigger. The detector is untouched: `mood` still tracks
+      // audioPartyStrong, moodSince still stamps, the meters stay live.
+      if (toVal === 1 && partyEnabled === false) continue;
+      // SINGLE AUTHORITY for the party session numbers: a cue moving INTO party
+      // reads dwell/cooldown from /party-config when the caller supplies them,
+      // NOT from the plan YAML. Every other mood cue keeps its authored numbers.
+      const useParty = toVal === 1 && partyTiming !== null && partyTiming !== undefined;
+      const minDwellSec = (useParty && typeof partyTiming.minDwellSec === 'number')
+        ? partyTiming.minDwellSec : (t.minDwellSec || 0);
+      const cooldownSec = (useParty && typeof partyTiming.cooldownSec === 'number')
+        ? partyTiming.cooldownSec : (t.cooldownSec || 0);
       const phaseOk = t.whenPhase === undefined || phaseNow === t.whenPhase;
-      const dwellOk = now - next.moodSince >= (t.minDwellSec || 0) * 1000;
+      const dwellOk = now - next.moodSince >= minDwellSec * 1000;
       const last = next.moodLastFire[cue.id];
       const cooldownOk = last === undefined || last === null
-        || now - last >= (t.cooldownSec || 0) * 1000;
+        || now - last >= cooldownSec * 1000;
       if (phaseOk && dwellOk && cooldownOk) {
         next.moodLastFire[cue.id] = now;
         next.moodArmed[cue.id] = false; // latch: one fire per arrival at `to`

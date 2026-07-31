@@ -223,5 +223,9 @@ export function render3D(index, x, y, z) {
   var white = min(1.0, pow(glow, 2.4) * whiteCore * (1.0 + kick * 1.5));
   var uv = min(1.0, (filament * 0.35 + (1.0 - ny) * curl * 0.35) * uvGhost);
 
-  rgbwau(min(1.0, r), min(1.0, g), min(1.0, b), white, 0.0, uv);
+  // LANE MATCH (w == a): the bare W emitter reads cold and the bare A emitter
+  // reads yellow — matched W+A is the ship's warm white, and it is what the LED
+  // strands already render (they fold amber into RGB). Convention:
+  // docs/MARSIN_ENGINE_PATTERNS.md -> "White handling: the w == a convention".
+  rgbwau(min(1.0, r), min(1.0, g), min(1.0, b), white, white, uv);
 }

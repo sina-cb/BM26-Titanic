@@ -5,6 +5,7 @@ views:
     BarLights: 4
     LED_0: 256
     LED_1: 512
+    TE Sign: 1024
   custom:
     - name: ParsBars
       bit: 8

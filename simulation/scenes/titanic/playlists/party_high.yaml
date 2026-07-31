@@ -1,0 +1,108 @@
+schemaVersion: 1
+name: party_high
+entries:
+  - id: e_party_high_0_01_cylon_sweep
+    pattern: 01_cylon_sweep
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_high_1_03_dual_axis_crush
+    pattern: 03_dual_axis_crush
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_high_2_04_beat_folded_helix
+    pattern: 04_beat_folded_helix
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_high_3_09_cyclone
+    pattern: 09_cyclone
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_high_4_25_heartbeat
+    pattern: 25_heartbeat
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_high_5_28_spectrum_bloom
+    pattern: 28_spectrum_bloom
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_high_6_29_kick_shockwave
+    pattern: 29_kick_shockwave
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_high_7_30_bass_comet
+    pattern: 30_bass_comet
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_high_8_31_strobe_lattice
+    pattern: 31_strobe_lattice
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_high_9_36_orbital_pulse
+    pattern: 36_orbital_pulse
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_high_10_48_heartbeat_drive
+    pattern: 48_heartbeat_drive
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_high_11_49_cylon_crush
+    pattern: 49_cylon_crush
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_high_12_50_phase_cathedral_hd
+    pattern: 50_phase_cathedral_hd
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_high_13_51_confetti_cyclone
+    pattern: 51_confetti_cyclone
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_party_high_14_54_murmuration_storm
+    pattern: 54_murmuration_storm
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null

@@ -48,7 +48,9 @@ const MAX_BACKUPS = 20;
 // The triggers a snapshot can be tagged with. pre-restore always gets a
 // fresh dir (it must never coalesce into the snapshot it is about to
 // overwrite from).
-const VALID_TRIGGERS = new Set(['save', 'save-cameras', 'save-model', 'pre-restore']);
+const VALID_TRIGGERS = new Set([
+  'save', 'save-cameras', 'save-model', 'save-pixel-map-views', 'pre-restore',
+]);
 
 // ── Roots ────────────────────────────────────────────────────────────────
 // Derived from this file's location (server/ lives under the simulation
@@ -129,12 +131,21 @@ function filesForSave(scene) {
     `scenes/${scene}/patches.yaml`,
     `scenes/${scene}/views.yaml`,
     `scenes/${scene}/controllers.yaml`,
+    // The 2D Pixel Map layout sidecar. /save never writes it (it has its own
+    // scoped endpoint), but a scene snapshot that omitted it would restore a
+    // scene whose pixel-map arrangement belonged to a different point in time.
+    `scenes/${scene}/pixel_map_views.yaml`,
     'scenes/common.yaml',
   ];
 }
 
 function filesForCameras(scene) {
   return [`scenes/${scene}/cameras.yaml`];
+}
+
+/** The single file POST /save-pixel-map-views overwrites (report 20260725_66). */
+function filesForPixelMapViews(scene) {
+  return [`scenes/${scene}/pixel_map_views.yaml`];
 }
 
 function filesForModel(scene, type) {
@@ -341,6 +352,7 @@ module.exports = {
   filesForSave,
   filesForCameras,
   filesForModel,
+  filesForPixelMapViews,
   snapshotBeforeWrite,
   listBackups,
   restoreBackup,

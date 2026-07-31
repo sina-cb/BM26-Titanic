@@ -7,6 +7,8 @@
 
 import { Sender } from 'sacn';
 
+import { createSendErrorThrottle } from './send_error_throttle.js';
+
 /**
  * Create an sACN output sender.
  * @param {Object} opts
@@ -29,11 +31,17 @@ export function createSacnOutput({
     addUniverse(uid);
   }
 
+  // Per-(universe,destination) transmit-error rate limiter. A downed
+  // controller used to log every failed send at 40 fps × N universes (88 MB
+  // in 4 h on titanic-ext — report 20260725_16); errors still surface, they
+  // just don't repeat 80×/second. See send_error_throttle.js.
+  const sendErrors = createSendErrorThrottle({ prefix: '[sACN Out]' });
+
   function addUniverse(uid) {
     if (senders[uid]) return;
     senders[uid] = [];
     for (const dest of destArray) {
-      senders[uid].push(new Sender({
+      senders[uid].push({ dest, sender: new Sender({
         universe: parseInt(uid, 10),
         // Destination port only — never pass reuseAddr here. With reuseAddr
         // the sacn lib binds the sender socket to *:5568 and steals inbound
@@ -45,7 +53,7 @@ export function createSacnOutput({
           sourceName,
           priority,
         },
-      }));
+      }) });
     }
   }
 
@@ -71,14 +79,19 @@ export function createSacnOutput({
         }
       }
 
-      for (const sender of uSenders) {
+      for (const { sender, dest } of uSenders) {
+        const key = `U${uid} → ${dest}`;
         promises.push(
           sender.send({
             payload,
             sourceName,
             priority,
-          }).catch(err => {
-            if (_started) console.error(`[sACN Out] Send error (U${uid}):`, err.message);
+          }).then(() => {
+            // Only touch the throttle when something is actually failing —
+            // keeps the all-healthy 40 fps path free of a map lookup.
+            if (sendErrors.hasFailures()) sendErrors.noteSuccess(key);
+          }, err => {
+            if (_started) sendErrors.noteError(key, err.message);
           })
         );
       }
@@ -95,8 +108,9 @@ export function createSacnOutput({
 
   function stop() {
     _started = false;
+    sendErrors.reset();
     for (const uSenders of Object.values(senders)) {
-      for (const sender of uSenders) {
+      for (const { sender } of uSenders) {
         try { sender.close(); } catch (_) {}
       }
     }

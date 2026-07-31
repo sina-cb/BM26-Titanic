@@ -5,8 +5,15 @@ entries:
     pattern: 00_golden_hour_wash
     label: null
     defaults:
-      sliderLocalSpeed: 0.33
-      sliderNoiseScale: 0.15
+      sliderLocalSpeed: 0.44
+      sliderDirection: 1
+      sliderLevel: 0.5
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderWarmth: 0.5
+      sliderWhiteLevel: 0.45
+      sliderWhiteKick: 0.2
+      sliderWhiteWarmth: 0.25
     modulations:
       - id: mod_sliderLocalSpeed_micMid
         type: continuous

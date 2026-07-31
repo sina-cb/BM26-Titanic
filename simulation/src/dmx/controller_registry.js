@@ -49,6 +49,7 @@
  */
 
 import { getFootprint, isGlobalEffect } from './auto_patcher.js';
+import { normalizeLedWireConfig } from './led_wire.js';
 import { getDefinition } from './fixture_definition_registry.js';
 
 // ── Constants ───────────────────────────────────────────────────────────
@@ -57,6 +58,14 @@ export const DMX_UNIVERSE_SIZE = 512;   // full budget, channels 1–512 (docs/3
 export const EFFECTS_UNIVERSE = 1;      // reserved for global effects (docs/33 decision 2)
 export const MAX_UNIVERSE = 63999;      // sACN (E1.31) universe ceiling
 export const DEFAULT_PORT_COUNT = 4;
+
+// Maximum number of outputs a MarsinLED controller can carry. The device's own
+// /api/config validation accepts a `strands` array of 1–16 entries
+// (docs/41_led_controller_onboarding.md §4.2), and every LED port DECLARES the
+// physical output it drives (`port.output`, 1-based; report 20260725_70 §1.2).
+// A 17th output could therefore never be addressed, so neither the port-row
+// numbering nor the output selector goes past 16.
+export const LED_MAX_OUTPUTS = 16;
 
 const IP_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 
@@ -185,6 +194,42 @@ export function normalizeDeviceBlock(raw, controllerName) {
     }
     device.lastPush = lastPush;
   }
+  // Provenance of the last GAMMA push — a separate stamp from lastPush because
+  // it describes a different write (the per-channel curve, docs/41 §4.1c) that
+  // the device applies live, without the strand/dmx reboot. The gamma it
+  // carries is what the hardware CONFIRMED on read-back, so scene mirror vs
+  // hardware divergence is always visible (led_gamma.js).
+  if (raw.lastGammaPush !== undefined && raw.lastGammaPush !== null) {
+    const lg = raw.lastGammaPush;
+    if (typeof lg !== 'object' || Array.isArray(lg)) {
+      throw new Error(`[Controllers] LED controller '${controllerName}': device.lastGammaPush must ` +
+        'be a mapping');
+    }
+    if (typeof lg.at !== 'string' || lg.at.length === 0) {
+      throw new Error(`[Controllers] LED controller '${controllerName}': device.lastGammaPush.at ` +
+        'must be a non-empty ISO8601 timestamp string');
+    }
+    if (typeof lg.outcome !== 'string' || !LED_DEVICE_PUSH_OUTCOMES.includes(lg.outcome)) {
+      throw new Error(`[Controllers] LED controller '${controllerName}': device.lastGammaPush.outcome ` +
+        `'${lg.outcome}' must be one of ${LED_DEVICE_PUSH_OUTCOMES.join(', ')}`);
+    }
+    const lastGammaPush = { at: lg.at, outcome: lg.outcome };
+    if (lg.gamma !== undefined && lg.gamma !== null) {
+      // Validated by the SAME rules as the scene mirror (led_wire.js) — a
+      // stamp the mirror would reject is corruption, not a curiosity.
+      const verified = normalizeLedWireConfig({ controllerGamma: lg.gamma },
+        `LED controller '${controllerName}' device.lastGammaPush`).controllerGamma;
+      lastGammaPush.gamma = { ...verified };
+    }
+    if (lg.firmwareSHA !== undefined && lg.firmwareSHA !== null) {
+      if (typeof lg.firmwareSHA !== 'string') {
+        throw new Error(`[Controllers] LED controller '${controllerName}': ` +
+          'device.lastGammaPush.firmwareSHA must be a string');
+      }
+      lastGammaPush.firmwareSHA = lg.firmwareSHA;
+    }
+    device.lastGammaPush = lastGammaPush;
+  }
   return device;
 }
 
@@ -230,7 +275,31 @@ export function normalizeLedConfig(raw, controllerName) {
     throw new Error(`[Controllers] LED controller '${controllerName}': whiteMode '${whiteMode}' must ` +
       `be one of ${LED_WHITE_MODES.join(', ')}`);
   }
-  return { baseUniverse, startAddr, order, stride, whiteMode };
+  // ── LED wire settings (colour translation, LED path only) ──────────
+  // Optional per-controller overrides for the strand colour encode:
+  //   foldAmber        - fold the amber render lane into strand RGB
+  //   amberRgb         - the amber → RGB weights used for that fold
+  //   controllerGamma  - MIRROR of the per-channel gamma configured on
+  //                      the LED controller itself, used by the sim
+  //                      preview so screen matches strand. It is NOT
+  //                      applied to any wire byte (the controller owns
+  //                      the one and only gamma curve in the chain).
+  // Absent ⇒ null, and the mapper's defaults apply; present ⇒ validated
+  // here so a typo hard-stops the boot (see led_wire.js).
+  // Accepted BOTH nested (`led.wire: {...}` — the form the registry writes
+  // back on save, so a saved scene round-trips) and flat on `led` (handy
+  // when hand-editing controllers.yaml). Nested wins if both are present.
+  const wireKeys = ['foldAmber', 'amberRgb', 'controllerGamma', 'controllerWhite', 'gamma'];
+  const flat = Object.fromEntries(wireKeys.filter(k => src[k] !== undefined).map(k => [k, src[k]]));
+  const nested = (src.wire && typeof src.wire === 'object') ? src.wire : null;
+  const rawWire = nested || (Object.keys(flat).length ? flat : null);
+  const wire = rawWire
+    ? normalizeLedWireConfig(rawWire, `LED controller '${controllerName}'`)
+    : null;
+
+  const out = { baseUniverse, startAddr, order, stride, whiteMode };
+  if (wire) out.wire = wire;
+  return out;
 }
 
 export function isValidIp(ip) {
@@ -289,6 +358,18 @@ export function createControllerRegistry(tree) {
   // defaults. NON-ENUMERABLE so it never serializes into controllers.yaml.
   Object.defineProperty(registry, '_unprotocolledControllers', {
     value: new Set(),
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  });
+  // LED port rows that loaded with no explicit `output` and were schema-migrated
+  // to the IDENTITY mapping (`output = port`) — the exact rule in force before
+  // report 20260725_70, so nothing moves on load. Keyed by controller id →
+  // {name, ports:[portNum,…]} so the caller logs ONE line per card (not per
+  // port). Same contract as _untypedControllers: surfaced, never swallowed, and
+  // NON-ENUMERABLE so it never serializes into controllers.yaml.
+  Object.defineProperty(registry, '_ledOutputMigrations', {
+    value: new Map(),
     enumerable: false,
     writable: true,
     configurable: true,
@@ -400,6 +481,40 @@ export function createControllerRegistry(tree) {
       }
 
       const port = { port: portNum, universe, startAddress, chain: [] };
+
+      // ── LED only: the PHYSICAL board output this row drives (report
+      // 20260725_70 §1.2). 1-based to match the `port:` key beside it and every
+      // operator-facing string ("output 3"); the device's 0-based strands[]
+      // index is DERIVED at the device boundary only (ledOutputIndexForPort).
+      // DMX port numbers are chain labels, not hardware indices — the field is
+      // never stamped on a DMX card, because it would invent meaning there.
+      if (type === CONTROLLER_TYPE_LED) {
+        const rawOutput = rawPort.output;
+        if (rawOutput === undefined || rawOutput === null) {
+          // Schema migration, materialized at load: identity (output = port) is
+          // exactly the rule in force before this field existed, so nothing on
+          // the wire moves. Logged once per card by the caller, then the file
+          // becomes explicit on the next save. NOT a runtime fallback (codex P0).
+          port.output = portNum;
+          if (!registry._ledOutputMigrations.has(id)) {
+            registry._ledOutputMigrations.set(id, { name: controller.name, ports: [] });
+          }
+          registry._ledOutputMigrations.get(id).ports.push(portNum);
+        } else if (!Number.isInteger(rawOutput) ||
+                   rawOutput < 1 || rawOutput > LED_MAX_OUTPUTS) {
+          // Structural corruption — a non-integer or unaddressable output makes
+          // the row's TARGET meaningless. Same treatment as a malformed `port:`.
+          // (A DUPLICATE output is different: identity stays intact and only the
+          // mapping is invalid, so it LOADS and is caught by the chips + the
+          // push gate — see validateLedManualUniverses / derivePerOutputPlan.)
+          throw new Error(`[Controllers] Controller '${controller.name}' port ${portNum}: ` +
+            `output ${JSON.stringify(rawOutput)} must be an integer in 1–${LED_MAX_OUTPUTS} ` +
+            '(the physical board output this port drives)');
+        } else {
+          port.output = rawOutput;
+        }
+      }
+
       if (rawPort.chain !== undefined && !Array.isArray(rawPort.chain)) {
         throw new Error(`[Controllers] Controller '${controller.name}' port ${portNum}: ` +
           'chain must be a list');
@@ -450,6 +565,51 @@ export function createControllerRegistry(tree) {
       }
       controller.ports.push(port);
     }
+
+    // ── LED only: STICKY parked outputs (report 20260725_70 §2.2) ─────────
+    // A board output that no card port drives is not disabled — it is PARKED on
+    // a universe nobody routes to, so it sits enabled, subscribed and dark. The
+    // universe is PERSISTED here so it is stable across pushes: a re-derived
+    // park would move whenever any other card took a universe, and the sync chip
+    // would then report drift on a card nobody touched.
+    if (rawCtl.parkedOutputs !== undefined && rawCtl.parkedOutputs !== null) {
+      if (type !== CONTROLLER_TYPE_LED) {
+        throw new Error(`[Controllers] Controller '${controller.name}': parkedOutputs is only ` +
+          'valid on an LED controller (a DMX port number is a chain label, not a board output)');
+      }
+      if (!Array.isArray(rawCtl.parkedOutputs)) {
+        throw new Error(`[Controllers] Controller '${controller.name}': parkedOutputs must be a list`);
+      }
+      const seenParked = new Set();
+      controller.parkedOutputs = [];
+      for (const rawParked of rawCtl.parkedOutputs) {
+        if (!rawParked || typeof rawParked !== 'object') {
+          throw new Error(`[Controllers] Controller '${controller.name}': invalid parkedOutputs ` +
+            `entry ${JSON.stringify(rawParked)} — expected {output, universe}`);
+        }
+        const output = rawParked.output;
+        if (!Number.isInteger(output) || output < 1 || output > LED_MAX_OUTPUTS) {
+          throw new Error(`[Controllers] Controller '${controller.name}': parkedOutputs output ` +
+            `${JSON.stringify(output)} must be an integer in 1–${LED_MAX_OUTPUTS}`);
+        }
+        if (seenParked.has(output)) {
+          throw new Error(`[Controllers] Controller '${controller.name}': duplicate parkedOutputs ` +
+            `entry for output ${output}`);
+        }
+        seenParked.add(output);
+        const parkedUniverse = rawParked.universe;
+        if (!Number.isInteger(parkedUniverse) || parkedUniverse < 1 ||
+            parkedUniverse > MAX_UNIVERSE) {
+          throw new Error(`[Controllers] Controller '${controller.name}': parkedOutputs output ` +
+            `${output} universe ${JSON.stringify(parkedUniverse)} must be an integer in ` +
+            `1–${MAX_UNIVERSE}`);
+        }
+        // A park that collides with a port's declared output is OPERATIONAL, not
+        // structural: it LOADS (so the operator can fix it in the UI) and is
+        // flagged by validateLedManualUniverses + re-derived by the push.
+        controller.parkedOutputs.push({ output, universe: parkedUniverse });
+      }
+    }
     registry.controllers.push(controller);
   }
 
@@ -466,6 +626,10 @@ export function createControllerRegistry(tree) {
   let maxU = 1; // U1 (effects) never counts as allocatable
   for (const controller of registry.controllers) {
     for (const port of controller.ports) maxU = Math.max(maxU, port.universe);
+    // A PARKED universe is real gear's neighbour: the device subscribes to it.
+    // It must move the high-water mark or a later addPort would hand the same
+    // number to a strand somebody actually routes.
+    for (const parked of controller.parkedOutputs || []) maxU = Math.max(maxU, parked.universe);
   }
   const rawNextU = src.nextUniverse;
   registry.nextUniverse = Math.max(
@@ -603,8 +767,25 @@ export function setControllerType(controller, type) {
   controller.type = type;
   if (type === CONTROLLER_TYPE_LED) {
     if (!controller.led) controller.led = normalizeLedConfig(null, controller.name);
+    // On an LED card every port DECLARES the physical board output it drives
+    // (report 20260725_70). A card flipped over from DMX has none, and every
+    // consumer refuses to guess an output index — materialize the identity
+    // mapping here, the same default the loader applies. A row past the 16-output
+    // device ceiling cannot be addressed at all, so it takes the lowest free one.
+    for (const port of controller.ports || []) {
+      if (Number.isInteger(port.output)) continue;
+      port.output = (port.port >= 1 && port.port <= LED_MAX_OUTPUTS &&
+        !(controller.ports || []).some((p) => p.output === port.port))
+        ? port.port
+        : nextLedOutputNumber(controller);
+    }
   } else {
     delete controller.led;
+    // DMX port numbers are chain labels, not hardware indices — carrying an
+    // `output` (or a park) across would invent meaning that does not exist there,
+    // and the loader would refuse to re-parse it on a DMX card.
+    delete controller.parkedOutputs;
+    for (const port of controller.ports || []) delete port.output;
   }
   return controller;
 }
@@ -634,6 +815,7 @@ export function bindControllerDevice(controller, identity) {
     deviceName: identity.deviceName,
     boardId: identity.boardId,
     lastPush: controller.device ? controller.device.lastPush : undefined,
+    lastGammaPush: controller.device ? controller.device.lastGammaPush : undefined,
   };
   controller.device = normalizeDeviceBlock(raw, controller.name);
   return controller.device;
@@ -661,6 +843,27 @@ export function recordDevicePush(controller, push) {
   if (push.configHash !== undefined && push.configHash !== null) lastPush.configHash = push.configHash;
   // Round-trip through the validator so an invalid outcome/shape throws.
   controller.device = normalizeDeviceBlock({ ...controller.device, lastPush }, controller.name);
+  return controller.device;
+}
+
+/**
+ * Record the provenance of a GAMMA push onto a bound controller's device
+ * block: { at (ISO8601), outcome, gamma (the HARDWARE-VERIFIED curve),
+ * firmwareSHA? }. Separate from recordDevicePush — a gamma write is a
+ * different config key with different apply semantics. THROWS on an unbound
+ * controller or an invalid record (codex P0 — never stamp a push we can't
+ * describe, and never stamp a curve the mirror would reject).
+ */
+export function recordDeviceGammaPush(controller, push) {
+  if (!controller || !controller.device) {
+    throw new Error(`[Controllers] recordDeviceGammaPush: controller ` +
+      `'${controller && controller.name}' is not bound to a device — bind it before recording`);
+  }
+  const lastGammaPush = { at: push.at, outcome: push.outcome, gamma: push.gamma };
+  if (push.firmwareSHA !== undefined && push.firmwareSHA !== null) {
+    lastGammaPush.firmwareSHA = push.firmwareSHA;
+  }
+  controller.device = normalizeDeviceBlock({ ...controller.device, lastGammaPush }, controller.name);
   return controller.device;
 }
 
@@ -925,8 +1128,139 @@ export function clearAllPatches(registry) {
   return { entriesCleared, freed };
 }
 
+// ── LED port → physical board output (report 20260725_70) ───────────────
+// `port.output` is the 1-based PHYSICAL board output a port row drives. The
+// device's `strands[]` array is 0-based, and the conversion happens in EXACTLY
+// one place — here — so no caller ever re-invents a `- 1`.
+
+/**
+ * The device `strands[]` index for an LED port row: `port.output - 1`.
+ *
+ * THROWS on a port with no integer `output`. Every port that came through
+ * `createControllerRegistry` carries one (absent = identity-migrated at load),
+ * so a missing field means a hand-built object bypassed the loader — guessing
+ * an index there would silently address the wrong physical strand (codex P0).
+ *
+ * @param {Object} port
+ * @returns {number} 0-based device output index
+ */
+export function ledOutputIndexForPort(port) {
+  if (!port || typeof port !== 'object' || !Number.isInteger(port.output)) {
+    throw new Error('[Controllers] ledOutputIndexForPort: LED port ' +
+      `${JSON.stringify(port && port.port)} has no integer 'output' — the physical board output ` +
+      'it drives is unknown; load the controller through createControllerRegistry (which ' +
+      'materializes the identity default) rather than guessing an index');
+  }
+  return port.output - 1;
+}
+
+/**
+ * The 1-based board output a NEW port row on an LED card should drive: the
+ * lowest output not already claimed by another port on this card. On a fresh
+ * card this reproduces the pre-selector behaviour exactly (port N → output N).
+ * Throws when every output up to the device ceiling is claimed.
+ */
+export function nextLedOutputNumber(controller) {
+  if (!controller || !Array.isArray(controller.ports)) {
+    throw new Error('[Controllers] nextLedOutputNumber: controller.ports must be an array');
+  }
+  const taken = new Set(controller.ports.map((p) => p && p.output).filter(Number.isInteger));
+  for (let n = 1; n <= LED_MAX_OUTPUTS; n++) {
+    if (!taken.has(n)) return n;
+  }
+  throw new Error(`[Controllers] '${controller.name || 'LED controller'}' already drives all ` +
+    `${LED_MAX_OUTPUTS} board output(s) — a MarsinLED addresses at most ${LED_MAX_OUTPUTS} ` +
+    'outputs (docs/41 §4.2). Free one before adding a port.');
+}
+
+/**
+ * The persisted parked universe for a 0-based device output index, or null.
+ * A parked output is ENABLED on the board with no card port driving it: it
+ * carries a universe nobody routes to, so it receives no packets and sits dark.
+ */
+export function parkedUniverseFor(controller, outputIndex) {
+  if (!Number.isInteger(outputIndex) || outputIndex < 0) {
+    throw new Error(`[Controllers] parkedUniverseFor: outputIndex ${outputIndex} must be a ` +
+      'non-negative integer (0-based device strands[] index)');
+  }
+  const entry = (controller && controller.parkedOutputs || [])
+    .find((p) => p.output === outputIndex + 1);
+  return entry ? entry.universe : null;
+}
+
+/** Persist (or move) a parked universe for a 0-based device output index. */
+export function setParkedUniverse(controller, outputIndex, universe) {
+  if (!Number.isInteger(outputIndex) || outputIndex < 0 || outputIndex >= LED_MAX_OUTPUTS) {
+    throw new Error(`[Controllers] setParkedUniverse: outputIndex ${outputIndex} must be in ` +
+      `0–${LED_MAX_OUTPUTS - 1}`);
+  }
+  if (!Number.isInteger(universe) || universe < 1 || universe > MAX_UNIVERSE) {
+    throw new Error(`[Controllers] setParkedUniverse: universe ${universe} must be an integer ` +
+      `in 1–${MAX_UNIVERSE}`);
+  }
+  if (!Array.isArray(controller.parkedOutputs)) controller.parkedOutputs = [];
+  const output = outputIndex + 1;
+  const existing = controller.parkedOutputs.find((p) => p.output === output);
+  if (existing) existing.universe = universe;
+  else controller.parkedOutputs.push({ output, universe });
+  controller.parkedOutputs.sort((a, b) => a.output - b.output);
+  return controller.parkedOutputs;
+}
+
+/** Drop the parked entry for a 0-based device output index (a port now drives it). */
+export function clearParkedUniverse(controller, outputIndex) {
+  if (!Array.isArray(controller.parkedOutputs)) return false;
+  const output = outputIndex + 1;
+  const at = controller.parkedOutputs.findIndex((p) => p.output === output);
+  if (at === -1) return false;
+  controller.parkedOutputs.splice(at, 1);
+  if (controller.parkedOutputs.length === 0) delete controller.parkedOutputs;
+  return true;
+}
+
+/**
+ * The port number the next `+port` on an LED controller should take: the LOWEST
+ * free port-ROW slot in 1…LED_MAX_OUTPUTS, not `max + 1`.
+ *
+ * WHY (operator report 2026-07-29: "I can remove, but not add one back in").
+ * The port number used to BE the physical device output, so deleting output 2 of
+ * [1,2,3] and pressing `+port` minted port 4 — which on a 4-output board
+ * addressed the FOURTH output while output 2 stayed permanently unreachable.
+ * Since report 20260725_70 the physical output is `port.output` (its own
+ * selector) and the port number is just a stable ROW IDENTITY — but the
+ * lowest-free rule stays: it keeps the rows tidy, keeps `P1 P2 P3` stable across
+ * a delete + re-add, and on a fresh card it still lands port N on output N.
+ *
+ * Throws when every slot up to the device ceiling is taken — a 17th output cannot
+ * be addressed by any MarsinLED, and silently minting a dead port is exactly the
+ * kind of quiet clamp the codex forbids (P0).
+ *
+ * Pure (no registry, no allocation) so it is unit-testable directly.
+ *
+ * @param {Object} controller
+ * @returns {number} 1-based output slot
+ */
+export function nextLedOutputPortNumber(controller) {
+  if (!controller || !Array.isArray(controller.ports)) {
+    throw new Error('[Controllers] nextLedOutputPortNumber: controller.ports must be an array');
+  }
+  const taken = new Set(controller.ports.map((p) => p && p.port));
+  for (let n = 1; n <= LED_MAX_OUTPUTS; n++) {
+    if (!taken.has(n)) return n;
+  }
+  throw new Error(`[Controllers] '${controller.name || 'LED controller'}' already has all ` +
+    `${LED_MAX_OUTPUTS} output(s) — a MarsinLED addresses at most ${LED_MAX_OUTPUTS} outputs ` +
+    '(device /api/config accepts 1–16 strands, docs/41 §4.2). Delete an output before adding one.');
+}
+
 export function addPort(registry, controller) {
-  const portNum = controller.ports.reduce((m, p) => Math.max(m, p.port), 0) + 1;
+  // LED controllers: a port is a physical device OUTPUT, so re-fill the lowest
+  // free slot (and refuse past the device ceiling). DMX controllers keep the
+  // append-only `max + 1` numbering — their port numbers are chain labels, not
+  // hardware output indices, and holes there are harmless by design.
+  const portNum = isLedController(controller)
+    ? nextLedOutputPortNumber(controller)
+    : controller.ports.reduce((m, p) => Math.max(m, p.port), 0) + 1;
   const universe = nextFreeUniverse(registry);
   if (universe > MAX_UNIVERSE) {
     throw new Error(`[Controllers] Universe allocation exhausted (next would be ` +
@@ -934,7 +1268,17 @@ export function addPort(registry, controller) {
   }
   registry.nextUniverse = universe + 1;
   const port = { port: portNum, universe, startAddress: 1, chain: [] };
-  controller.ports.push(port);
+  // LED cards: the new row drives the lowest board output no other port claims
+  // (report 20260725_70 §1.4) — identical to the pre-selector behaviour on a
+  // fresh card, and never a duplicate on a card with a crossed mapping.
+  if (isLedController(controller)) port.output = nextLedOutputNumber(controller);
+  // Insert in port-number order so a re-filled LED output slot renders where the
+  // hardware output actually sits (P1 P2 P3, not P1 P3 P2). Appending is still
+  // exactly what happens for the append-only DMX numbering, and for a fresh
+  // controller seeded 1..n — the scan finds no larger port and falls through.
+  const at = controller.ports.findIndex((p) => p && p.port > portNum);
+  if (at === -1) controller.ports.push(port);
+  else controller.ports.splice(at, 0, port);
   return port;
 }
 
@@ -1000,6 +1344,70 @@ export function unmapFixture(registry, name) {
   return false;
 }
 
+/**
+ * Rename hygiene, step 1 of 2 — ENUMERATE (read-only) everything the
+ * registry maps under a set of fixture names. This is what makes a rename
+ * *checkable*: the caller can print one line per fixture naming exactly
+ * what is about to be freed (controller, IP, port, universe, address)
+ * before anything is mutated (operator ruling 2026-07-29).
+ *
+ * `names` is any iterable of strings. Order follows the registry walk
+ * (controller → port → chain position), which is the operator's cable
+ * order — not the order the caller happened to pass.
+ *
+ * @returns {Array<{fixture: string, controllerName: string, controllerIp: string,
+ *   port: number, universe: number, address: number}>}
+ */
+export function describeFixtureMappings(registry, names) {
+  const wanted = new Set(names);
+  const rows = [];
+  if (!registryIsActive(registry) || wanted.size === 0) return rows;
+  for (const controller of registry.controllers) {
+    for (const port of controller.ports) {
+      for (const entry of port.chain) {
+        const name = entryFixtureName(entry);
+        if (name === null || !wanted.has(name)) continue;
+        rows.push({
+          fixture: name,
+          controllerName: controller.name || '',
+          controllerIp: controller.ip || '',
+          port: port.port,
+          universe: port.universe || 0,
+          address: isPinnedEntry(entry) && Number.isInteger(entry.at) ? entry.at : 0,
+        });
+      }
+    }
+  }
+  return rows;
+}
+
+/**
+ * Rename hygiene, step 2 of 2 — INVALIDATE the mapping of every listed
+ * fixture name and return the rows describing what was freed, so the
+ * caller reports it fixture by fixture.
+ *
+ * This is the DEFAULT rename policy (operator ruling 2026-07-29): a
+ * renamed fixture comes out honestly UNMAPPED. Addresses are absolute
+ * (docs/33 decision 19), so each entry simply drops and the freed
+ * channels become a visible hole in the universe map — nothing else
+ * shifts, and nothing is silently carried to the new name. The opt-in
+ * migrate escape hatch is `renameFixtureInChains` below, still gated.
+ *
+ * THROWS if an enumerated entry cannot be removed — an enumerate/remove
+ * disagreement means the registry moved under us, and half an
+ * invalidation is exactly the silent-partial state the codex forbids.
+ */
+export function invalidateFixtureMappings(registry, names) {
+  const rows = describeFixtureMappings(registry, names);
+  for (const row of rows) {
+    if (!unmapFixture(registry, row.fixture)) {
+      throw new Error(`invalidateFixtureMappings: '${row.fixture}' was enumerated in a ` +
+        'chain but could not be unmapped — the registry changed mid-invalidation.');
+    }
+  }
+  return rows;
+}
+
 /** Reorder a chain entry within its port. */
 export function moveChainEntry(port, fromIndex, toIndex) {
   if (fromIndex === toIndex) return;
@@ -1008,11 +1416,19 @@ export function moveChainEntry(port, fromIndex, toIndex) {
 }
 
 /**
- * Rename support: updates a fixture's chain reference atomically so a
- * rename can never orphan a mapping (docs/33). NO production caller
- * yet — fixture names are not editable in today's UI. Wire this into
- * the rename path BEFORE adding a rename control, or deletions of this
- * guarantee will be silent.
+ * Rename MIGRATION (opt-in, NOT the default): moves a fixture's chain
+ * reference to a new name atomically, keeping its address byte-identical.
+ *
+ * STILL NO PRODUCTION CALLER, and that is deliberate. The operator's
+ * ruling (2026-07-29) makes CHECK + INVALIDATE the default rename
+ * policy — see `invalidateFixtureMappings` above, which every rename
+ * path in gui_builder now calls. Silently carrying an address to a new
+ * name is exactly what the ruling forbids.
+ *
+ * This function is the machinery for the explicit, operator-gated
+ * "⇄ Migrate addresses to new name" affordance (plan 20260725_44 step
+ * 11b, gate §5 Q4 — unanswered, so unbuilt). Wire it ONLY behind that
+ * opt-in; never into the default path.
  */
 export function renameFixtureInChains(registry, oldName, newName) {
   if (!registryIsActive(registry) || oldName === newName) return false;
@@ -1209,6 +1625,9 @@ export function computeLedProjection(registry, strandLedCounts) {
           stride: led.stride,
           order: led.order,
           whiteMode: led.whiteMode,
+          // Scene-level LED colour-encode overrides (null unless the
+          // controller sets one) — ride through to the exported pixels.
+          wire: led.wire || null,
           footprint,
           ledCount,
         });
@@ -1623,13 +2042,43 @@ export function computeProjection(registry, configsByName, pins) {
  *  - controllerId: derived (mapped → controller's panel ordinal,
  *    1-based array position per docs/33 decision 20, unmapped → 0).
  *
- * Returns { violations, drift, migrated } — `drift` lists fixtures
- * whose stored fields differed from the projection; `migrated` lists
- * legacy packed entries converted to absolute addresses this pass
- * (both logged loudly by callers).
+ * section/fixture ids live in ONE id space SHARED with the LED strands:
+ * `led_metadata.js::assignLedStrandMetadata` floors its counters at the
+ * DMX max precisely so the two passes cannot mint the same id. That
+ * makes `ledStrands` REQUIRED here — this pass has to floor over the
+ * SAME union (DMX configs ∪ LED strands). Computing the max over DMX
+ * configs alone is what produced report 20260725_4's secondary finding
+ * 1: test_bench's TE Sign V3 A was minted at `sectionId 5 / fixtureId
+ * 11`, byte-identical to LED_0's, so every consumer keyed on section or
+ * fixture metadata (Dimmer Rack, per-section saved state, engine
+ * section masks) treated two distinct fixtures as one. Handing in an
+ * empty array for a scene that HAS strands silently re-opens that bug,
+ * so a non-array argument throws (codex P0: fail loud, no fallback).
+ *
+ * Returns { violations, drift, migrated, collisions } — `drift` lists
+ * fixtures whose stored fields differed from the projection;
+ * `migrated` lists legacy packed entries converted to absolute
+ * addresses this pass; `collisions` lists ids repaired because the
+ * pre-fix pass had already baked a DMX id on top of a strand id (all
+ * three logged loudly by callers).
+ *
+ * @param {Object} registry - the controller registry
+ * @param {Array<Object>} configs - DMX fixture configs (mutated in place)
+ * @param {Object} pins - global_effects pin table
+ * @param {Array<Object>} ledStrands - params.ledStrands, READ ONLY here;
+ *   the LED half of the shared section/fixture id space
  */
-export function projectOntoConfigs(registry, configs, pins) {
-  if (!registryIsActive(registry)) return { violations: [], drift: [], migrated: [] };
+export function projectOntoConfigs(registry, configs, pins, ledStrands) {
+  if (!Array.isArray(ledStrands)) {
+    throw new Error(
+      '[controller_registry] projectOntoConfigs: `ledStrands` is required and must be ' +
+      'an array (pass [] only when the scene genuinely has no LED strands). DMX and LED ' +
+      'section/fixture ids share ONE id space — without the strands this pass mints ids ' +
+      'that collide with them (codex P0: fail loud, no fallback)');
+  }
+  if (!registryIsActive(registry)) {
+    return { violations: [], drift: [], migrated: [], collisions: [] };
+  }
 
   const configsByName = new Map();
   for (const config of configs) {
@@ -1669,15 +2118,79 @@ export function projectOntoConfigs(registry, configs, pins) {
   }
 
   // ── Metadata: sectionId per group, fixtureId monotonic ───────────────
-  const groupToSectionId = new Map();
+  // Floors are the max over the DMX ∪ LED union — the SAME union
+  // assignLedStrandMetadata floors on — so neither pass can mint an id
+  // the other already owns. A gap is respected: the floor is the MAX,
+  // never a count.
+  const ledSectionOwner = new Map(); // sectionId -> owning strand name
+  const ledFixtureOwner = new Map(); // fixtureId -> owning strand name
   let maxSectionId = 0;
   let maxFixtureId = 0;
+  for (const strand of ledStrands) {
+    if (!strand) continue;
+    if (strand.sectionId > 0) {
+      maxSectionId = Math.max(maxSectionId, strand.sectionId);
+      if (!ledSectionOwner.has(strand.sectionId)) {
+        ledSectionOwner.set(strand.sectionId, strand.name);
+      }
+    }
+    if (strand.fixtureId > 0) {
+      maxFixtureId = Math.max(maxFixtureId, strand.fixtureId);
+      if (!ledFixtureOwner.has(strand.fixtureId)) {
+        ledFixtureOwner.set(strand.fixtureId, strand.name);
+      }
+    }
+  }
+  for (const config of configsByName.values()) {
+    if (config.sectionId > 0) maxSectionId = Math.max(maxSectionId, config.sectionId);
+    if (config.fixtureId > 0) maxFixtureId = Math.max(maxFixtureId, config.fixtureId);
+  }
+
+  // One-time repair of collisions the PRE-FIX pass already baked into
+  // stored scene data (test_bench TE Sign V3 A/B vs LED_0/LED_1).
+  // Stickiness alone would preserve them forever, so a stored DMX id
+  // that lands on a strand id is moved above the union max and REPORTED
+  // — never silently kept, never silently swapped. The DMX side yields
+  // because the LED pass mints with full knowledge of the DMX ids
+  // (call order), so only the DMX side can ever have minted blind: the
+  // repair undoes exactly the damage the bug caused. A whole section
+  // moves together (keyed by group) so group↔section stays bijective;
+  // a group-less config moves alone. Idempotent: once repaired the
+  // intersection is empty and re-runs change nothing.
+  const collisions = [];
+  const repairedSections = new Map();
+  for (const config of configsByName.values()) {
+    if (config.sectionId > 0 && ledSectionOwner.has(config.sectionId)) {
+      const key = config.group ? `g:${config.group}` : `f:${config.name}`;
+      if (!repairedSections.has(key)) {
+        maxSectionId += 1;
+        repairedSections.set(key, maxSectionId);
+      }
+      const after = repairedSections.get(key);
+      collisions.push({
+        name: config.name, field: 'sectionId', before: config.sectionId,
+        after, strand: ledSectionOwner.get(config.sectionId),
+      });
+      config.sectionId = after;
+    }
+    if (config.fixtureId > 0 && ledFixtureOwner.has(config.fixtureId)) {
+      maxFixtureId += 1;
+      collisions.push({
+        name: config.name, field: 'fixtureId', before: config.fixtureId,
+        after: maxFixtureId, strand: ledFixtureOwner.get(config.fixtureId),
+      });
+      config.fixtureId = maxFixtureId;
+    }
+  }
+
+  // Seed the group→section map AFTER the repair, so a repaired group
+  // hands its NEW id to every later member instead of resurrecting the
+  // colliding one.
+  const groupToSectionId = new Map();
   for (const config of configsByName.values()) {
     if (config.group && config.sectionId > 0 && !groupToSectionId.has(config.group)) {
       groupToSectionId.set(config.group, config.sectionId);
     }
-    if (config.sectionId > 0) maxSectionId = Math.max(maxSectionId, config.sectionId);
-    if (config.fixtureId > 0) maxFixtureId = Math.max(maxFixtureId, config.fixtureId);
   }
   for (const config of configsByName.values()) {
     if (config.group && (!config.sectionId || config.sectionId <= 0)) {
@@ -1693,5 +2206,5 @@ export function projectOntoConfigs(registry, configs, pins) {
     }
   }
 
-  return { violations, drift, migrated };
+  return { violations, drift, migrated, collisions };
 }

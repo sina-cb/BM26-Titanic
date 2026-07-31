@@ -63,7 +63,20 @@ const S = {
   countdownFlash: 0, boundaryFlash: 0, trackChangeFlash: 0,
   onsetLowFlash: 0, onsetMidFlash: 0, onsetHighFlash: 0, chestFlash: 0,
   genreNames: [],      // index-aligned GENRE name list (from the server)
-  page: 'design',      // 'design' | 'mic' | 'osc' — top-bar nav
+  page: 'design',      // 'design' | 'mic' | 'osc' | 'party' — top-bar nav
+  // ── PARTY page (report 20260725_19) ────────────────────────────────────────
+  partyTunables: [],   // [{key,kind,label,unit,min,max,step,hint}] from the server
+  partyParams: null,   // live detector thresholds (server truth)
+  partyEdits: {},      // operator's un-applied editor values (key → value)
+  partyState: null,    // 10 Hz meter snapshot
+  partyOverride: 'auto',
+  partyValidation: false,
+  partyCaptures: { ambient: null, party: null },
+  partySuggestions: null,
+  partySession: null,  // last GET /party/session (engine timeline state)
+  partyConfig: null,   // last GET /party/config (engine party authority)
+  partySessionError: null,
+  partyBuilt: false,
   oscAcc: null,        // latest OSC OUT accounting snapshot { target, totalSent, outputs }
   // MIC TUNE page (report 20260621_5): noise gate state (global + per-band; null
   // per-band → uses the global gate), live band levels for the meters, and the
@@ -177,6 +190,13 @@ function connect() {
       if (m.gates) S.gates = { ...S.gates, ...m.gates };
       if (Array.isArray(m.profiles)) { S.profiles = m.profiles; S.activeProfileId = m.activeProfileId || null; }
       if (m.engineLink) S.engineLinkConnected = !!m.engineLink.connected;
+      // PARTY page seed (report 20260725_19).
+      if (Array.isArray(m.partyTunables)) S.partyTunables = m.partyTunables;
+      if (m.partyParams) { S.partyParams = m.partyParams; S.partyEdits = { ...m.partyParams }; }
+      if (m.partyOverride) S.partyOverride = m.partyOverride;
+      S.partyValidation = !!m.partyValidationMode;
+      if (m.partyCaptures) S.partyCaptures = m.partyCaptures;
+      S.partySuggestions = m.partySuggestions || null;
       seedTraces();
       frameQueue.length = 0;
       buildSidebar(); buildSource(); renderChain(); buildSourceBar(); buildGainBar();
@@ -195,6 +215,33 @@ function connect() {
     } else if (m.type === 'oscRate') {
       S.osc.rateHz = m.rateHz;
       if (S.page === 'osc') syncOscRateControl();
+    } else if (m.type === 'partyState') {
+      S.partyState = m;
+      if (S.page === 'party') renderPartyMeters();
+    } else if (m.type === 'partyParams') {
+      S.partyParams = m.params;
+      // Adopt server truth for any field the operator has NOT edited away from
+      // the previous server value — never stomp a half-typed edit.
+      for (const k of Object.keys(m.params)) {
+        if (S.partyEdits[k] === undefined) S.partyEdits[k] = m.params[k];
+      }
+      if (S.page === 'party') { renderPartyEditors(); renderPartyDirty(); }
+    } else if (m.type === 'partyOverride') {
+      S.partyOverride = m.mode;
+      if (S.page === 'party') renderPartyOverride();
+    } else if (m.type === 'partyCapStatus') {
+      if (S.page === 'party') renderPartyCalib();
+    } else if (m.type === 'partyCapResult') {
+      if (m.ok) {
+        S.partyCaptures[m.kind] = m.stats;
+        S.partySuggestions = m.suggestions || null;
+        flash(`${m.kind} capture done (${m.stats.n} samples)`);
+      } else {
+        flash(`capture failed: ${m.error}`, true);
+      }
+      if (S.page === 'party') renderPartyCalib();
+    } else if (m.type === 'partyPersisted') {
+      if (S.page === 'party') renderPartyDirty();
     } else if (m.type === 'dropFired') {
       S.dropFlash = 1; flash('▼ DROP ' + (m.confidence != null ? m.confidence.toFixed(2) : ''));
     } else if (m.type === 'sourceStatus') {
@@ -1427,17 +1474,414 @@ function updateMicMeters() {
   }
 }
 
+// ── PARTY page (report 20260725_19) ──────────────────────────────────────────
+// THE place party detection is tuned. Report 20260725_12 §6's curl-loop
+// procedure, as a UI: live meters drawn against the live thresholds, editors
+// with APPLY (runtime) + PERSIST (surgical config.yaml write), the §6.2 capture
+// helpers, read-only engine session context, validation mode and FAKE TRIGGER.
+
+// Meter full-scales. Loudness is auto-ranged off the threshold so a 0.002
+// ambient floor is still readable; the rest are their natural [0,1] / kicks-s.
+const PARTY_KICK_MAX = 8;
+
+const pctOf = (v, max) => (100 * Math.max(0, Math.min(1, (v || 0) / max))).toFixed(1) + '%';
+const fmtMs = (ms) => (ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms) + 'ms');
+const fmtSec = (s) => (s == null ? '—' : (s >= 60 ? `${Math.round(s / 60)}min ${s % 60 ? (s % 60) + 's' : ''}`.trim() : `${s}s`));
+
+function buildPartyPage() {
+  if (!S.partyBuilt) {
+    $('party-apply').onclick = () => {
+      send({ type: 'setPartyParams', params: partyEditPayload() });
+    };
+    $('party-persist').onclick = () => {
+      confirmModal(
+        'Write these thresholds into marsin_engine/config.yaml → party: ?\n\n'
+        + 'Only the individual value lines are replaced — comments and formatting survive.',
+        () => send({ type: 'persistPartyParams', params: partyEditPayload() }),
+        'Write',
+      );
+    };
+    $('party-revert').onclick = () => {
+      if (S.partyParams) S.partyEdits = { ...S.partyParams };
+      renderPartyEditors(); renderPartyDirty();
+    };
+    $('party-validation').onchange = () => {
+      send({ type: 'setPartyValidationMode', on: $('party-validation').checked });
+    };
+    $('party-cap-ambient').onclick = () => startCapture('ambient');
+    $('party-cap-party').onclick = () => startCapture('party');
+    $('party-cap-cancel').onclick = () => send({ type: 'cancelPartyCapture' });
+    $('party-fake-clear').onclick = () => send({ type: 'setPartyOverride', mode: 'auto' });
+    for (const b of document.querySelectorAll('.pfake-btn')) {
+      b.onclick = () => send({ type: 'setPartyOverride', mode: b.dataset.mode });
+    }
+    $('party-arm-toggle').onclick = () => {
+      const cfg = S.partyConfig;
+      if (!cfg) { flash('party config not loaded from the engine yet', true); return; }
+      const next = !cfg.enabled;
+      confirmModal(
+        next
+          ? 'ARM party mode? Detection-driven party sessions will be allowed to fire.'
+          : 'DISABLE party mode? No party session can fire, and a live session ends immediately.',
+        () => putPartyConfig({ enabled: next }),
+        next ? 'Arm' : 'Disable',
+      );
+    };
+    S.partyBuilt = true;
+  }
+  renderPartyEditors();
+  renderPartyDirty();
+  renderPartyOverride();
+  renderPartyCalib();
+  renderPartyMeters();
+  refreshPartySession();
+}
+
+/** The editor values to send — numbers coerced, booleans as-is. */
+function partyEditPayload() {
+  const out = {};
+  for (const t of S.partyTunables) {
+    const v = S.partyEdits[t.key];
+    if (v === undefined) continue;
+    out[t.key] = t.kind === 'boolean' ? !!v : Number(v);
+  }
+  return out;
+}
+
+function startCapture(kind) {
+  const seconds = Number($('party-cap-sec').value);
+  send({ type: 'startPartyCapture', kind, seconds });
+}
+
+function renderPartyEditors() {
+  const grid = $('party-editors');
+  if (!grid || !S.partyTunables.length) return;
+  // Don't rebuild under a focused input — it would eat a half-typed number.
+  const ae = document.activeElement;
+  if (ae && grid.contains(ae)) return;
+  grid.innerHTML = '';
+  for (const t of S.partyTunables) {
+    const row = el('div', 'pe-row');
+    row.appendChild(el('span', 'pe-lab', `${t.label}<span class="pe-key">${t.key}</span>`));
+    if (t.kind === 'boolean') {
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'pe-check';
+      cb.checked = !!S.partyEdits[t.key];
+      cb.onchange = () => { S.partyEdits[t.key] = cb.checked; renderPartyDirty(); };
+      row.appendChild(cb);
+      row.appendChild(el('span', 'pe-unit', ''));
+    } else {
+      const num = document.createElement('input');
+      num.type = 'number';
+      num.className = 'pe-num';
+      num.min = t.min; num.max = t.max; num.step = t.step;
+      const v = S.partyEdits[t.key];
+      num.value = v === undefined ? '' : v;
+      num.oninput = () => { S.partyEdits[t.key] = num.value === '' ? undefined : Number(num.value); renderPartyDirty(); };
+      row.appendChild(num);
+      row.appendChild(el('span', 'pe-unit', t.unit || ''));
+    }
+    row.appendChild(el('span', 'pe-hint', t.hint || ''));
+    grid.appendChild(row);
+  }
+  const chk = $('party-validation');
+  if (chk) chk.checked = S.partyValidation;
+}
+
+/** Show which editor values differ from what the detector is actually running. */
+function renderPartyDirty() {
+  const out = $('party-dirty');
+  if (!out || !S.partyParams) return;
+  const changed = S.partyTunables
+    .filter((t) => S.partyEdits[t.key] !== undefined
+      && String(S.partyEdits[t.key]) !== String(S.partyParams[t.key]))
+    .map((t) => t.key);
+  out.textContent = changed.length ? `${changed.length} unapplied: ${changed.join(', ')}` : 'in sync with the live detector';
+  out.classList.toggle('on', changed.length > 0);
+}
+
+function renderPartyOverride() {
+  const banner = $('party-fake-banner');
+  const active = S.partyOverride !== 'auto';
+  if (banner) banner.style.display = active ? 'flex' : 'none';
+  for (const b of document.querySelectorAll('.pfake-btn')) {
+    b.classList.toggle('active', b.dataset.mode === S.partyOverride);
+    b.classList.toggle('forced', b.dataset.mode !== 'auto' && b.dataset.mode === S.partyOverride);
+  }
+}
+
+function renderPartyMeters() {
+  const st = S.partyState;
+  if (!st || !$('pm-loud-fill')) return;
+  const p = st.params || {};
+
+  // LOUDNESS — auto-ranged so a tiny calibrated floor is still legible: full
+  // scale is 2× the threshold (never below 0.05, so an idle room isn't jumpy).
+  const thr = st.levelThreshold || 0;
+  const loudMax = Math.max(0.05, thr * 2, (st.loudness || 0) * 1.2);
+  $('pm-loud-fill').style.width = pctOf(st.loudness, loudMax);
+  $('pm-loud-fill').classList.toggle('ok', !!st.levelOk);
+  $('pm-loud-line').style.left = pctOf(thr, loudMax);
+  $('pm-loud-val').textContent = (st.loudness || 0).toFixed(4);
+  $('pm-loud-thr').textContent = `≥ ${thr.toFixed(4)} (floor ${(p.ambientFloor ?? 0)} × ${(p.marginX ?? 0)})`;
+
+  // KICK RATE — shaded acceptance window between min and max.
+  $('pm-kr-fill').style.width = pctOf(st.kickRate, PARTY_KICK_MAX);
+  $('pm-kr-fill').classList.toggle('ok', !!st.beatOk);
+  const bandEl = $('pm-kr-band');
+  const lo = (p.kickRateMin ?? 0) / PARTY_KICK_MAX, hi = (p.kickRateMax ?? 0) / PARTY_KICK_MAX;
+  bandEl.style.left = (100 * lo).toFixed(1) + '%';
+  bandEl.style.width = (100 * Math.max(0, hi - lo)).toFixed(1) + '%';
+  $('pm-kr-val').textContent = (st.kickRate || 0).toFixed(2);
+  $('pm-kr-thr').textContent = `${p.kickRateMin ?? '—'}–${p.kickRateMax ?? '—'} /s`;
+
+  const line = (fillId, lineId, valId, thrId, value, limit, ok, digits = 2) => {
+    $(fillId).style.width = pctOf(value, 1);
+    $(fillId).classList.toggle('ok', !!ok);
+    $(lineId).style.left = pctOf(limit, 1);
+    $(valId).textContent = (value || 0).toFixed(digits);
+    $(thrId).textContent = `≥ ${limit ?? '—'}`;
+  };
+  line('pm-reg-fill', 'pm-reg-line', 'pm-reg-val', 'pm-reg-thr', st.kickReg, p.kickRegMin, st.kickReg >= (p.kickRegMin ?? 1));
+  line('pm-low-fill', 'pm-low-line', 'pm-low-val', 'pm-low-thr', st.lowShare, p.shapeLowMin, st.lowShare >= (p.shapeLowMin ?? 1));
+  line('pm-high-fill', 'pm-high-line', 'pm-high-val', 'pm-high-thr', st.highShare, p.shapeHighMin, st.highShare >= (p.shapeHighMin ?? 1));
+
+  const locked = (st.bpmLocked || 0) >= 0.5;
+  const lockEl = $('pm-lock');
+  lockEl.textContent = locked ? 'BPM LOCKED' : 'BPM UNLOCKED';
+  lockEl.classList.toggle('ok', locked);
+  lockEl.classList.toggle('off', !locked);
+  lockEl.classList.toggle('muted', p.requireBpmLock === false);
+  lockEl.title = p.requireBpmLock === false ? 'requireBpmLock is off — this term is not gating' : 'the BPM tracker lock state';
+
+  const sil = (st.silence || 0);
+  const silEl = $('pm-silence');
+  silEl.textContent = st.quietOk ? 'NOT SILENT' : 'SILENT';
+  silEl.classList.toggle('ok', !!st.quietOk);
+  silEl.classList.toggle('off', !st.quietOk);
+  silEl.title = `audioSilence ${sil} (must be < ${p.silenceMax})`;
+  $('pm-conf').textContent = 'conf ' + (st.bpmConf == null ? '—' : st.bpmConf.toFixed(2));
+
+  const term = (id, ok) => {
+    const e = $(id);
+    e.classList.toggle('ok', !!ok);
+    e.classList.toggle('off', !ok);
+  };
+  term('pm-term-level', st.levelOk); term('pm-term-beat', st.beatOk);
+  term('pm-term-shape', st.shapeOk); term('pm-term-quiet', st.quietOk);
+  term('pm-term-qualify', st.qualify);
+
+  // DEBOUNCE progress — qualifying toward ON, or disqualifying toward OFF.
+  const onMs = p.onSustainMs || 1, offMs = p.offConfirmMs || 1;
+  let label, num, frac;
+  if (!st.party && st.qualifyingForMs > 0) {
+    label = 'qualifying → ON'; frac = st.qualifyingForMs / onMs;
+    num = `${fmtMs(st.qualifyingForMs)} / ${fmtMs(onMs)}`;
+  } else if (st.party && st.disqualifyingForMs > 0) {
+    label = 'disqualifying → OFF'; frac = st.disqualifyingForMs / offMs;
+    num = `${fmtMs(st.disqualifyingForMs)} / ${fmtMs(offMs)}`;
+  } else {
+    label = st.party ? 'PARTY held' : (st.warmedUp ? 'idle — not qualifying' : 'warming up');
+    frac = st.party ? 1 : 0; num = '—';
+  }
+  $('pm-deb-label').textContent = label;
+  $('pm-deb-num').textContent = num;
+  const debFill = $('pm-deb-fill');
+  debFill.style.width = pctOf(frac, 1);
+  debFill.classList.toggle('ok', !!st.party);
+
+  // GATE pill = the PUBLISHED value; the truth line appears only when forced.
+  const gate = $('party-gate-pill');
+  const published = st.publishedParty;
+  gate.textContent = 'GATE ' + (published ? '1' : '0');
+  gate.classList.toggle('on', !!published);
+  const truth = $('pm-truth');
+  if (st.overrideMode && st.overrideMode !== 'auto') {
+    truth.style.display = 'block';
+    truth.innerHTML = `detector says <b>${st.party ? 'PARTY' : 'no party'}</b> · `
+      + `publishing <b>${published ? '1' : '0'}</b> (FORCED — ${st.overrideMode})`;
+  } else {
+    truth.style.display = 'none';
+  }
+
+  if (S.partyValidation !== !!st.validationMode) {
+    S.partyValidation = !!st.validationMode;
+    const chk = $('party-validation'); if (chk) chk.checked = S.partyValidation;
+  }
+  renderPartyCaptureProgress(st.capture);
+}
+
+function renderPartyCaptureProgress(cap) {
+  const wrap = $('pcal-prog');
+  if (!wrap || !cap) return;
+  wrap.style.display = cap.recording ? 'flex' : 'none';
+  if (!cap.recording) return;
+  $('pcal-prog-lab').textContent = `recording ${cap.kind}… ${(cap.elapsedMs / 1000).toFixed(0)}s / ${(cap.durationMs / 1000).toFixed(0)}s`;
+  $('pcal-prog-fill').style.width = pctOf(cap.elapsedMs / (cap.durationMs || 1), 1);
+}
+
+function renderPartyCalib() {
+  for (const kind of ['ambient', 'party']) {
+    const out = $('pcal-res-' + kind);
+    if (!out) continue;
+    const st = S.partyCaptures[kind];
+    if (!st) { out.textContent = 'not captured'; out.classList.remove('on'); continue; }
+    out.classList.add('on');
+    out.innerHTML = kind === 'ambient'
+      ? `<b>P95 ${st.p95.toFixed(4)}</b> · median ${st.p50.toFixed(4)} · max ${st.max.toFixed(4)} · n=${st.n}`
+      : `<b>P5 ${st.p5.toFixed(4)}</b> · median ${st.p50.toFixed(4)} · kickReg ${st.kickReg == null ? '—' : st.kickReg.toFixed(2)}`
+        + ` · bpm locked ${(st.bpmLockedFrac * 100).toFixed(0)}% · n=${st.n}`;
+  }
+  const sg = $('pcal-sugg');
+  if (!sg) return;
+  const s = S.partySuggestions;
+  if (!s) {
+    sg.innerHTML = '<span class="pcal-sugg-none">capture BOTH baselines to get a suggestion</span>';
+    return;
+  }
+  sg.innerHTML = '<span class="pcal-sugg-lab">SUGGESTED</span>';
+  const vals = el('span', 'pcal-sugg-vals',
+    `ambientFloor <b>${s.ambientFloor.toFixed(4)}</b> · marginX <b>${s.marginX.toFixed(2)}</b>`
+    + (s.kickRegMin !== undefined ? ` · kickRegMin <b>${s.kickRegMin.toFixed(2)}</b>` : ''));
+  sg.appendChild(vals);
+  const btn = el('button', 'primary', '↧ load into the editors');
+  btn.title = 'fills the editors above — nothing is applied until you press APPLY';
+  btn.onclick = () => {
+    S.partyEdits.ambientFloor = +s.ambientFloor.toFixed(4);
+    S.partyEdits.marginX = +s.marginX.toFixed(2);
+    if (s.kickRegMin !== undefined) S.partyEdits.kickRegMin = +s.kickRegMin.toFixed(2);
+    renderPartyEditors(); renderPartyDirty();
+    flash('suggestions loaded — press APPLY to make them live');
+  };
+  sg.appendChild(btn);
+}
+
+// ── engine-owned session context (read-only) + the arm/disable authority ─────
+// Both go through the companion's own /party/* proxies (the engine lives on a
+// different port). Polled slowly — this is show state, not a meter.
+const PARTY_SESSION_POLL_MS = 3000;
+let partySessionTimer = null;
+
+async function refreshPartySession() {
+  try {
+    const [sess, cfg] = await Promise.all([
+      fetch('/party/session').then((r) => r.json()),
+      fetch('/party/config').then((r) => r.json()),
+    ]);
+    if (sess && sess.error) throw new Error(sess.error);
+    if (cfg && cfg.error) throw new Error(cfg.error);
+    S.partySession = sess; S.partyConfig = cfg; S.partySessionError = null;
+  } catch (e) {
+    S.partySession = null; S.partyConfig = null;
+    S.partySessionError = String(e && e.message);
+  }
+  renderPartySession();
+}
+
+async function putPartyConfig(patch) {
+  try {
+    const r = await fetch('/party/config', {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    S.partyConfig = j; S.partySessionError = null;
+    flash(`party mode ${j.enabled ? 'ARMED' : 'DISABLED'}`);
+    renderPartySession();
+  } catch (e) {
+    flash('party config: ' + (e && e.message), true);
+  }
+}
+
+const EFFECTIVE_LABEL = {
+  armed: 'ARMED — a real party can start a session',
+  disabled: 'DISABLED by the operator',
+  no_plan: 'no plan driving — the mood trigger lives in the plan, so nothing can fire',
+  manual: 'a human has taken over — the plan (and party) yields',
+  in_session: 'PARTY SESSION RUNNING',
+  cooldown: 'cooling down since the last session',
+};
+
+function renderPartySession() {
+  const err = $('psx-err');
+  if (!err) return;
+  if (S.partySessionError) {
+    err.style.display = 'block';
+    err.textContent = 'engine unreachable: ' + S.partySessionError;
+  } else {
+    err.style.display = 'none';
+  }
+  const cfg = S.partyConfig, sess = S.partySession;
+  const armPill = $('party-arm-pill'), armBtn = $('party-arm-toggle');
+  if (cfg) {
+    const on = !!cfg.enabled;
+    armPill.textContent = on ? 'ARMED' : 'DISABLED';
+    armPill.classList.toggle('on', on);
+    armPill.classList.toggle('off', !on);
+    armPill.title = EFFECTIVE_LABEL[cfg.effectiveState] || cfg.effectiveState || '';
+    armBtn.textContent = on ? '⏻ DISABLE party mode' : '⏻ ARM party mode';
+    armBtn.classList.toggle('danger', on);
+    $('psx-eff').textContent = EFFECTIVE_LABEL[cfg.effectiveState] || cfg.effectiveState || '—';
+    $('psx-playlist').textContent = cfg.playlist || '—';
+    $('psx-dwell').textContent = fmtSec(cfg.minDwellSec) + ' (always enforced)';
+    // FOLLOW-THE-MUSIC: no fixed length, and the release sustain is the
+    // detector's own offConfirmMs — the editor above, not a second timer.
+    if (cfg.durationEnabled === false) {
+      const off = S.partyParams ? S.partyParams.offConfirmMs : null;
+      $('psx-dur').textContent = 'follow the music — ends ~'
+        + (off == null ? 'offConfirmMs' : fmtSec(Math.round(off / 1000)))
+        + ' after the music stops (that is offConfirmMs above)';
+      $('psx-cool').textContent = 'none in follow-the-music mode';
+    } else {
+      $('psx-dur').textContent = cfg.durationMin == null ? '—' : `${cfg.durationMin} min`;
+      $('psx-cool').textContent = cfg.effectiveCooldownEnabled === false
+        ? 'off'
+        : fmtSec(cfg.cooldownSec)
+          + (cfg.cooldownRemainingSec > 0 ? ` (${fmtSec(cfg.cooldownRemainingSec)} left)` : '');
+    }
+  } else {
+    armPill.textContent = '—'; armPill.classList.remove('on', 'off');
+    armBtn.textContent = '—';
+    for (const id of ['psx-eff', 'psx-playlist', 'psx-dwell', 'psx-dur', 'psx-cool']) $(id).textContent = '—';
+  }
+  if (sess) {
+    $('psx-mood').textContent = `${sess.currentMood || '—'} (value ${sess.moodValue ?? '—'}, key ${sess.moodKey || '—'})`;
+    $('psx-cue').textContent = sess.activeCue ? `${sess.activeCue.label} [${sess.activeCue.id}]` : 'none (baseline)';
+    const stale = $('psx-stale');
+    stale.style.display = sess.moodStale ? 'inline-block' : 'none';
+    stale.textContent = `⚠ moodStale ${sess.moodStaleForSec ?? '?'}s — party detection looks DOWN, the show is on ambient because of it`;
+    const plan = $('psx-plan');
+    const driving = sess.planActive === true;
+    plan.style.display = driving ? 'none' : 'inline-block';
+    plan.textContent = sess.inFestivalWindow === false
+      ? `plan dormant — festival starts in ${sess.festivalStartsInDays ?? '?'} days`
+      : `plan not driving (controller ${sess.controller || '—'})`;
+  } else {
+    $('psx-mood').textContent = '—';
+    $('psx-cue').textContent = '—';
+  }
+}
+
 function setPage(page) {
-  S.page = (page === 'osc' || page === 'mic') ? page : 'design';
-  const design = $('page-design'), osc = $('page-osc'), mic = $('page-mic');
+  S.page = (page === 'osc' || page === 'mic' || page === 'party') ? page : 'design';
+  const design = $('page-design'), osc = $('page-osc'), mic = $('page-mic'), party = $('page-party');
   if (design) design.style.display = S.page === 'design' ? '' : 'none';
   if (osc) osc.style.display = S.page === 'osc' ? 'flex' : 'none';
   if (mic) mic.style.display = S.page === 'mic' ? 'flex' : 'none';
+  if (party) party.style.display = S.page === 'party' ? 'flex' : 'none';
   for (const b of document.querySelectorAll('.nav-btn')) {
     b.classList.toggle('active', b.dataset.page === S.page);
   }
   if (S.page === 'osc') renderOscPage();
   if (S.page === 'mic') buildMicPage();
+  // The session poll only runs while the PARTY page is open — off the page it
+  // is pure noise on the engine.
+  if (partySessionTimer) { clearInterval(partySessionTimer); partySessionTimer = null; }
+  if (S.page === 'party') {
+    buildPartyPage();
+    partySessionTimer = setInterval(refreshPartySession, PARTY_SESSION_POLL_MS);
+  }
 }
 function buildNav() {
   for (const b of document.querySelectorAll('.nav-btn')) {

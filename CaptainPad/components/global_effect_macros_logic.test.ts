@@ -26,10 +26,12 @@ import {
   ensureAtLeastOneBank,
   isEffectBanksMessage,
   deployBannerMessage,
+  DeployBanner,
   modeBadge,
   bankBadgeLabel,
   BANKS_UI_ENABLED,
   type EffectBanksState,
+  chunkStripPages,
 } from './global_effect_macros_logic';
 
 const empty = (slotId: number): SlotBindingLike & { slotId: number } => ({
@@ -354,14 +356,50 @@ describe('bankBadgeLabel — active-bank name + position', () => {
 describe('deployBannerMessage — surface deploy errors, clear on ok, ignore noise', () => {
   it('a settled ERROR result surfaces the reason string', () => {
     const out = deployBannerMessage({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'error', lastError: 'LCD budget overflow (page 0)' });
-    expect(out).toBe('VSN1 layout NOT deployed: LCD budget overflow (page 0)');
+    expect(out).toEqual({ kind: 'error', message: 'VSN1 layout NOT deployed: LCD budget overflow (page 0)' });
   });
 
   it('an error with no detail still surfaces (never a silent failure)', () => {
     const out = deployBannerMessage({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'error' });
-    expect(out).toBe('VSN1 layout NOT deployed: unknown error');
+    expect(out).toEqual({ kind: 'error', message: 'VSN1 layout NOT deployed: unknown error' });
     const blank = deployBannerMessage({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'error', lastError: '   ' });
-    expect(blank).toBe('VSN1 layout NOT deployed: unknown error');
+    expect(blank).toEqual({ kind: 'error', message: 'VSN1 layout NOT deployed: unknown error' });
+  });
+
+  // ── attach state (report _30 §5): "no device" is NOT an error ──────────
+  it('skipped-detached surfaces a NEUTRAL offline banner, never the red error one', () => {
+    const out = deployBannerMessage({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'skipped-detached' });
+    expect(out).toEqual({ kind: 'offline', message: 'VSN1 offline — layout deploy skipped' });
+    // The whole point: running without the controller must not look like a fault.
+    expect(out && out.kind).not.toBe('error');
+    expect(out && out.message).not.toMatch(/NOT deployed/);
+  });
+
+  it('a detached skip carries no lastError to leak into the message', () => {
+    // The engine sets lastError:null on a skip. Even if a stale one rode along,
+    // the offline branch must not interpolate it.
+    const out = deployBannerMessage({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'skipped-detached', lastError: 'stale overflow text' });
+    expect(out).toEqual({ kind: 'offline', message: 'VSN1 offline — layout deploy skipped' });
+  });
+
+  it('unplug → edit → replug → deploy models the full attach lifecycle', () => {
+    let banner: DeployBanner | null = null;
+    const apply = (m: Parameters<typeof deployBannerMessage>[0]) => {
+      const n = deployBannerMessage(m);
+      if (n !== undefined) banner = n;
+    };
+    apply({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'ok' });
+    expect(banner).toBeNull();
+    // Device unplugged, operator keeps editing: neutral offline badge, and it
+    // does NOT escalate no matter how many skips arrive.
+    apply({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'skipped-detached' });
+    apply({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'skipped-detached' });
+    expect(banner).toEqual({ kind: 'offline', message: 'VSN1 offline — layout deploy skipped' });
+    // Replug + a real deploy clears it.
+    apply({ type: 'vsn1LayoutDeploy', deploying: true, lastResult: 'skipped-detached' }); // in-flight: holds
+    expect(banner).toEqual({ kind: 'offline', message: 'VSN1 offline — layout deploy skipped' });
+    apply({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'ok' });
+    expect(banner).toBeNull();
   });
 
   it('a successful OK result CLEARS the banner (returns null)', () => {
@@ -383,7 +421,7 @@ describe('deployBannerMessage — surface deploy errors, clear on ok, ignore noi
 
   it('an error then a later ok models the full surface→clear lifecycle', () => {
     // The component stores the last non-undefined value; simulate that fold.
-    let banner: string | null = null;
+    let banner: DeployBanner | null = null;
     const apply = (m: Parameters<typeof deployBannerMessage>[0]) => {
       const n = deployBannerMessage(m);
       if (n !== undefined) banner = n;
@@ -391,10 +429,47 @@ describe('deployBannerMessage — surface deploy errors, clear on ok, ignore noi
     apply({ type: 'vsn1LayoutDeploy', deploying: true, lastResult: 'ok' });        // in-flight: no change
     expect(banner).toBeNull();
     apply({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'error', lastError: 'boom' }); // surface
-    expect(banner).toBe('VSN1 layout NOT deployed: boom');
+    expect(banner).toEqual({ kind: 'error', message: 'VSN1 layout NOT deployed: boom' });
     apply({ type: 'vsn1LayoutDeploy', deploying: true, lastResult: 'error' });     // in-flight retry: holds
-    expect(banner).toBe('VSN1 layout NOT deployed: boom');
+    expect(banner).toEqual({ kind: 'error', message: 'VSN1 layout NOT deployed: boom' });
     apply({ type: 'vsn1LayoutDeploy', deploying: false, lastResult: 'ok' });        // success clears
     expect(banner).toBeNull();
+  });
+});
+
+describe('chunkStripPages (portrait strip pager \u2014 view-only)', () => {
+  it('splits the 8 visible slots into exactly two groups of 4', () => {
+    const slots = [1, 2, 3, 4, 5, 6, 7, 8];
+    const pages = chunkStripPages(slots, 4);
+    expect(pages).toEqual([[1, 2, 3, 4], [5, 6, 7, 8]]);
+  });
+
+  it('keeps VISIBLE_SLOT_COUNT slots on exactly 2 half-pages', () => {
+    const slots = Array.from({ length: VISIBLE_SLOT_COUNT }, (_, i) => i);
+    expect(chunkStripPages(slots, 4)).toHaveLength(2);
+  });
+
+  it('never pads a short last group (a spacer must not look like a slot)', () => {
+    expect(chunkStripPages([1, 2, 3, 4, 5], 4)).toEqual([[1, 2, 3, 4], [5]]);
+  });
+
+  it('yields no pages at all for an empty slot list', () => {
+    expect(chunkStripPages([], 4)).toEqual([]);
+  });
+
+  it('is total for size >= the list length (one page, everything on it)', () => {
+    expect(chunkStripPages([1, 2, 3], 8)).toEqual([[1, 2, 3]]);
+  });
+
+  it('does not mutate or alias the input array', () => {
+    const slots = [1, 2, 3, 4, 5, 6, 7, 8];
+    const pages = chunkStripPages(slots, 4);
+    pages[0][0] = 99;
+    expect(slots[0]).toBe(1);
+  });
+
+  it('throws loudly on a non-positive size instead of silently correcting it', () => {
+    expect(() => chunkStripPages([1, 2], 0)).toThrow(/size must be >= 1/);
+    expect(() => chunkStripPages([1, 2], -3)).toThrow(/size must be >= 1/);
   });
 });

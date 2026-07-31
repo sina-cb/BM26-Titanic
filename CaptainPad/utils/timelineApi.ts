@@ -156,6 +156,14 @@ export interface TimelineState {
   currentPhase: string | null;
   currentMood: string | null;
   party: number | boolean;
+  // PARTY MODE hard gate (2026-07-27) — mirrors GET /party-config.enabled so
+  // any surface watching the control bus sees the operator's disable
+  // immediately. OPTIONAL: engines built before the party-config route omit
+  // it, and the Audio tab's PARTY MODE card then reads the REST config
+  // instead (both are the same server truth, not a guessed default).
+  partyEnabled?: boolean;
+  // Seconds until another party session may trigger; absent/0 when clear.
+  partyCooldownRemainingSec?: number;
   moodValue: number;
   engineConnected: boolean;
   nextCue: TimelineNextCue | null;

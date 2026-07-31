@@ -7,10 +7,18 @@
  * View mode: left-drag pans, wheel zooms to the cursor, hover updates the
  * status strip, double-click on a multi-panel pane toggles panel focus-maximize
  * (else fits). Edit mode: click a fixture to select (Shift toggles / adds),
- * drag to move (8u snap, Alt bypass), Q/E rotate the selection (15° / Alt 1°),
- * arrows nudge, Escape/empty-click clears. Layout edits persist once per gesture
+ * RIGHT-click selects its whole GROUP (Shift adds the group), drag to move
+ * (8u snap, Alt bypass), Q/E rotate the selection, arrows nudge,
+ * Escape/empty-click clears. Layout edits persist once per gesture
  * (ctx.commit), never per pointermove — a continuous relayout would reset the
  * autosave debounce forever.
+ *
+ * MOVE MODEL (report 20260725_55). A move goes through `ctx.getAnchor` /
+ * `ctx.setAnchor`, which route it to whichever model the fixture's PANEL uses:
+ * an OFFSET from the projected position on a spatial/planar panel, or the
+ * absolute anchor on radial/lanes. Before that routing existed the drag wrote a
+ * `placement` that the projected layouts never read, so dragging in the shipped
+ * views silently did nothing — the operator's "the edit view … has no move".
  *
  * EVERY key/pointer event on the pane canvas is stopPropagation'd so the 3D
  * scene shortcuts (T/R/S/M/…) can never fire while a pane has focus.
@@ -31,6 +39,7 @@ const normRot = (r) => ((r + 180) % 360 + 360) % 360 - 180;
 export function attachPaneInteraction(canvas, paneView, ctx) {
   let panning = null;   // { sx, sy, ox, oy }
   let drag = null;      // fixture move: { start:{x,y}, origins:Map<fixKey,{x,y}> }
+  let warnedRotate = false;
   let downX = 0, downY = 0, moved = false;
   let spaceDown = false;
 
@@ -60,8 +69,7 @@ export function attachPaneInteraction(canvas, paneView, ctx) {
         for (const [key, o] of drag.origins) {
           let nx = o.x + dx, ny = o.y + dy;
           if (snap) { nx = Math.round(nx / 8) * 8; ny = Math.round(ny / 8) * 8; }
-          const cur = ctx.getPlacement(key) || o;
-          ctx.setPlacement(key, { x: Math.round(nx * 2) / 2, y: Math.round(ny * 2) / 2, rot: cur.rot || 0 });
+          ctx.setAnchor(key, Math.round(nx * 2) / 2, Math.round(ny * 2) / 2, o.rot);
         }
         ctx.rebuild();
       }
@@ -87,6 +95,21 @@ export function attachPaneInteraction(canvas, paneView, ctx) {
 
     // Space / middle button → pan (overrides everything).
     if (e.button === 1 || (e.button === 0 && spaceDown)) { startPan(p); e.preventDefault(); return; }
+
+    // RIGHT button in edit mode → select this fixture's whole GROUP; Shift adds
+    // it to what is already selected (operator order, 2026-07-30). The browser
+    // context menu is suppressed separately, on `contextmenu`.
+    if (e.button === 2) {
+      if (ctx.getMode() !== 'edit' || !ctx.groupOf) return;
+      e.preventDefault();
+      const hit = paneView.pixelAt(p.cx, p.cy);
+      if (!hit || !hit.fixKey) { if (!e.shiftKey) ctx.setSelection(new Set()); return; }
+      const group = ctx.groupOf(hit.fixKey);
+      const sel = e.shiftKey ? new Set(ctx.getSelection()) : new Set();
+      for (const k of group) sel.add(k);
+      ctx.setSelection(sel);
+      return;
+    }
     if (e.button !== 0) return;
 
     if (ctx.getMode() === 'edit') {
@@ -99,7 +122,10 @@ export function attachPaneInteraction(canvas, paneView, ctx) {
         ctx.setSelection(sel);
         const start = paneView.clientToContent(p.cx, p.cy);
         const origins = new Map();
-        for (const key of sel) { const pl = ctx.getPlacement(key); if (pl) origins.set(key, { x: pl.x, y: pl.y }); }
+        for (const key of sel) {
+          const a = ctx.getAnchor(key);
+          if (a) origins.set(key, { x: a.x, y: a.y, rot: a.rot || 0 });
+        }
         if (start) drag = { start, origins };
         canvas.style.cursor = 'grabbing';
         return;
@@ -149,18 +175,28 @@ export function attachPaneInteraction(canvas, paneView, ctx) {
   };
 
   const rotateSelection = (deg) => {
-    let any = false;
+    let any = false, refused = 0;
     for (const key of ctx.getSelection()) {
-      const pl = ctx.getPlacement(key);
-      if (pl) { ctx.setPlacement(key, { x: pl.x, y: pl.y, rot: normRot((pl.rot || 0) + deg) }); any = true; }
+      // A projected fixture's angle comes from its real world coordinates —
+      // there is nothing to rotate. Say so ONCE rather than doing nothing,
+      // which is exactly the silent no-op this whole change is fixing.
+      if (ctx.canRotate && !ctx.canRotate(key)) { refused += 1; continue; }
+      const a = ctx.getAnchor(key);
+      if (a) { ctx.setAnchor(key, a.x, a.y, normRot((a.rot || 0) + deg)); any = true; }
+    }
+    if (refused && !warnedRotate) {
+      warnedRotate = true;
+      console.info(`[PixelMap] ${refused} selected fixture(s) sit on a TRUE projection — ` +
+        'their angle comes from the real world coordinates, so there is nothing to ' +
+        'rotate. Move (drag / arrows) works on them; rotation does not.');
     }
     if (any) { ctx.rebuild(); ctx.commit(); }
   };
   const nudge = (dx, dy) => {
     let any = false;
     for (const key of ctx.getSelection()) {
-      const pl = ctx.getPlacement(key);
-      if (pl) { ctx.setPlacement(key, { x: pl.x + dx, y: pl.y + dy, rot: pl.rot || 0 }); any = true; }
+      const a = ctx.getAnchor(key);
+      if (a) { ctx.setAnchor(key, a.x + dx, a.y + dy, a.rot || 0); any = true; }
     }
     if (any) { ctx.rebuild(); ctx.commit(); }
   };
@@ -183,6 +219,12 @@ export function attachPaneInteraction(canvas, paneView, ctx) {
   };
   const onKeyUp = (e) => { e.stopPropagation(); if (e.key === ' ') spaceDown = false; };
 
+  // The canvas owns the right button in edit mode, so the browser menu must
+  // never appear over it; suppressed unconditionally so a right-drag that
+  // starts on a pixel and ends on empty space cannot pop one either.
+  const onContextMenu = (e) => { e.preventDefault(); e.stopPropagation(); };
+
+  canvas.addEventListener('contextmenu', onContextMenu);
   canvas.addEventListener('pointermove', onMove);
   canvas.addEventListener('pointerdown', onDown);
   window.addEventListener('pointerup', onUp);
@@ -192,6 +234,7 @@ export function attachPaneInteraction(canvas, paneView, ctx) {
   canvas.addEventListener('keyup', onKeyUp);
 
   return () => {
+    canvas.removeEventListener('contextmenu', onContextMenu);
     canvas.removeEventListener('pointermove', onMove);
     canvas.removeEventListener('pointerdown', onDown);
     window.removeEventListener('pointerup', onUp);

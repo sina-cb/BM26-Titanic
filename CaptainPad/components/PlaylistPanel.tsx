@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, Pressable } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { usePalette } from '@/hooks/use-theme';
 import { Palette } from '@/constants/theme';
@@ -1161,9 +1161,10 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
   // The deck (non-compact) path was tuned tighter on 2026-05-25 so the
   // landscape layout shows ≥5 pattern rows on an 11" iPad alongside the
   // (now-also-compacted) Rig globals strip. Touch targets stay ≥44 pt
-  // because the entry's <TouchableOpacity flex:1> spans the full row
-  // width plus the surrounding rowPadY; the visible row chrome is just
-  // smaller, the tap area isn't.
+  // because the ENTRY ROW CONTAINER itself is the Pressable (2026-07-27):
+  // every pixel of the bordered row — index badge, pad chip, name, padding,
+  // and (in perf mode) the boosted min-height — selects the pattern. The
+  // visible row chrome is just smaller, the tap area isn't.
   const sz = {
     rowPadY: compact ? 4 : 5,
     rowPadX: compact ? 6 : 8,
@@ -1490,13 +1491,29 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
               const padNumber = windowPadNumber(midiWindow, idx);
               const inMidiWindow = padNumber !== null;
               return (
-                <View
+                <Pressable
                   key={e.id}
                   onLayout={(ev) => {
                     const { y, height } = ev.nativeEvent.layout;
                     rowOffsetsRef.current.set(e.id, { y, h: height });
                   }}
-                  style={{
+                  // WHOLE-ROW tap target (2026-07-27 operator fix). Before this
+                  // the only thing that selected a pattern was the name
+                  // <TouchableOpacity> on line 1, so the index badge, the MIDI
+                  // pad chip, the row padding, all of line 2, and — worst — the
+                  // extra height perf mode adds for "touch" were DEAD ZONES.
+                  // Taps that visually landed on the button did nothing. The
+                  // nested line-2 <TouchableOpacity>s (chevrons, −) still win
+                  // the responder over this outer Pressable (standard RN
+                  // precedence), so reorder/remove keep working. A touch that
+                  // starts here and drags scrolls the list — Pressable cancels
+                  // on move by default.
+                  onPress={() => handleEntryTap(e.id)}
+                  disabled={missing || disabled}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Select ${e.label || patternDisplayName(e.pattern)}`}
+                  accessibilityState={{ disabled: !!(missing || disabled), selected: isActive }}
+                  style={({ pressed }) => ({
                     // 2-line layout (2026-06-20, mixer readability): line 1 is
                     // the index badge + full-width name; line 2 is the compact
                     // control sub-row (reorder chevrons + remove). In a
@@ -1522,8 +1539,12 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                     borderWidth: inMidiWindow ? 2 : 1,
                     borderColor: inMidiWindow ? MIDI_WINDOW_COLOR : (isActive ? 'transparent' : C.ghostBorder),
                     marginBottom: rowSz.rowGap,
-                    opacity: missing ? 0.4 : 1,
-                  }}
+                    // Pressed feedback: a registered tap visibly dims the row
+                    // even while the deck soft-swap POST is still in flight
+                    // (disabled={deckSwapInFlight} used to swallow taps with
+                    // only a static 0.55 dim — it read as "didn't register").
+                    opacity: missing ? 0.4 : (pressed ? 0.6 : 1),
+                  })}
                 >
                   {/* Line 1: index badge + full-width name (≥44pt tap row). */}
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -1567,11 +1588,10 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                         </Text>
                       </View>
                     )}
-                    <TouchableOpacity
-                      onPress={() => handleEntryTap(e.id)}
-                      disabled={missing || disabled}
-                      style={{ flex: 1 }}
-                    >
+                    {/* Name column. Plain View — the onPress/disabled it used
+                        to carry moved up to the row Pressable so the whole
+                        row selects. */}
+                    <View style={{ flex: 1 }}>
                       <Text
                         // Underscored pattern names (e.g.
                         // "05_orbital_attractor_field") have no spaces, so
@@ -1620,7 +1640,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                           {paramCount > 0 ? `${paramCount} ${paramCount === 1 ? 'param' : 'params'}` : ''}
                         </Text>
                       )}
-                    </TouchableOpacity>
+                    </View>
                   </View>
                   {/* Line 2: compact control sub-row — reorder chevrons +
                       remove. Only rendered when there is at least one
@@ -1638,7 +1658,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       <TouchableOpacity
                         onPress={canMoveUp ? () => handleMoveEntry(e.id, -1) : undefined}
                         disabled={!canMoveUp}
-                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                         style={{
                           width: sz.btnH - 4,
                           height: sz.btnH - 4,
@@ -1658,7 +1678,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       <TouchableOpacity
                         onPress={canMoveDown ? () => handleMoveEntry(e.id, 1) : undefined}
                         disabled={!canMoveDown}
-                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                         style={{
                           width: sz.btnH - 4,
                           height: sz.btnH - 4,
@@ -1687,8 +1707,14 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                       // fill — so the row chrome recedes and the track name
                       // dominates. The remove only takes on its destructive
                       // identity at the confirm sheet (which is already armed
-                      // by requestRemoveEntry). Still >= 44pt tap area via hitSlop.
-                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                      // by requestRemoveEntry).
+                      //
+                      // hitSlop trimmed 12 -> 6 on 2026-07-27: with the whole
+                      // row now selecting the pattern, a generous slop here
+                      // ANNEXED the surrounding dead zone, so a near-miss
+                      // "select" tap fired remove instead. 6pt + the button box
+                      // + the row min height keep the target comfortable.
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                       style={{
                         width: sz.btnH - 6,
                         height: sz.btnH - 4,
@@ -1704,7 +1730,7 @@ export const PlaylistPanel: React.FC<Props> = ({ channelId, role = 'mixer', chan
                   )}
                   </View>
                   )}
-                </View>
+                </Pressable>
               );
             })}
           </ScrollView>

@@ -2469,16 +2469,37 @@ export default function MixerScreen() {
       <View style={{ flex: 1, position: 'relative' }}>
       {/* ── Top Header Bar ─────────────────────────────────────────── */}
       <View style={[styles.header, isPortrait && { paddingHorizontal: 8 }]}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 16 }}>
-          <Text style={[styles.brandText, isPortrait && { fontSize: 16 }]}>Marsin Mixer</Text>
-          <View style={[styles.statusBadge, isPortrait && { paddingHorizontal: 8, paddingVertical: 4 }]}>
+        {/* LEFT cluster — identity + status + LOOKS. ONE-ROW LANDSCAPE HEADER
+            (operator request 2026-07-27: "the mixer title bar must be 1 row in
+            horizontal — there is very little vertical space"). Measured, the
+            two clusters wanted ~1620pt inside ~1014pt of usable width, so the
+            right cluster wrapped to a second line. Nothing is dropped; every
+            element is compressed instead: this side shrinks (flex:1/minWidth:0)
+            with the MODEL chip absorbing first, the brand tightens, LOOKS loses
+            only its caption, and the right side switches to its compact
+            variants. */}
+        <View style={[
+          { flexDirection: 'row', alignItems: 'center', gap: 8 },
+          // Landscape ONLY: yield width so the right cluster fits one row. In
+          // PORTRAIT this must NOT apply — the right cluster wraps there, so a
+          // shrinking+clipping left cluster would hide the connection badge and
+          // the model chip behind `overflow:hidden` (caught in portrait QA).
+          !isPortrait && { flex: 1, minWidth: 0, overflow: 'hidden' as const },
+        ]}>
+          <Text numberOfLines={1} style={[styles.brandText, { flexShrink: 0 }, isPortrait ? { fontSize: 16 } : { fontSize: 14 }]}>Marsin Mixer</Text>
+          <View style={[styles.statusBadge, { flexShrink: 0 }, isPortrait && { paddingHorizontal: 8, paddingVertical: 4 }, !isPortrait && { paddingHorizontal: 8 }]}>
             <View style={[styles.statusDot, !isConnected && {backgroundColor: C.error}]} />
             {/* Connection label — ALWAYS rendered (both orientations), mirroring
                 the deck top bar (DeckTopBar.tsx). A bare dot is not an acceptable
                 disconnect indicator: the OFFLINE state especially must read as a
                 WORD, never a single red pixel (QA round 10 fix #1). */}
+            {/* The CONNECTED word shortens to "LIVE" in landscape to buy ~40pt
+                for the one-row header. The FAILURE state keeps its full
+                "OFFLINE" word in BOTH orientations — QA round-10 fix #1 was
+                specifically that a disconnect must never read as a bare dot,
+                and that requirement is untouched. */}
             <Text style={[styles.labelCaps, {color: isConnected ? '#00a86b' : C.error}]}>
-              {isConnected ? 'CONNECTED' : 'OFFLINE'}
+              {isConnected ? (isPortrait ? 'CONNECTED' : 'LIVE') : 'OFFLINE'}
             </Text>
           </View>
           {/* Active model chip — secondary status, after the connection pill.
@@ -2491,9 +2512,11 @@ export default function MixerScreen() {
               subtle in the narrow header while still telling the operator which
               model is live. */}
           {activeModel ? (
-            <View style={[styles.modelChip, isPortrait && { paddingHorizontal: 8, paddingVertical: 4, maxWidth: 120 }]}>
-              {!isPortrait && <Text style={styles.labelCaps}>MODEL</Text>}
-              <Text style={[styles.modelName, isPortrait && { fontSize: 10 }]} numberOfLines={1}>{activeModel}</Text>
+            <View style={[styles.modelChip, { flexShrink: 1, minWidth: 0 }, { paddingHorizontal: 8, paddingVertical: 4, maxWidth: isPortrait ? 120 : 110 }]}>
+              {/* The "MODEL" caption is dropped in BOTH orientations now — the
+                  name alone identifies it and the caption cost ~45pt of the
+                  one-row budget. The name still tail-truncates. */}
+              <Text style={[styles.modelName, { fontSize: 10 }]} numberOfLines={1}>{activeModel}</Text>
             </View>
           ) : null}
           {/* Engine-health warning — renders NOTHING when healthy (no layout
@@ -2506,7 +2529,7 @@ export default function MixerScreen() {
               narrow header uncrowded (matches the model chip's behaviour).
               RECALL/CAPTURE rebuild the live mix, so they're gated under the
               soft PLAN lock with the rest of the mutating controls. */}
-          {!isPortrait ? <SnapshotBar disabled={structuralLocked} /> : null}
+          {!isPortrait ? <SnapshotBar disabled={structuralLocked} compact /> : null}
           {/* Plan-lock / takeover status moved OUT of this row (operator
               request 2026-07-02: the header must fit ONE row on an iPad).
               The inline "PLAN LIVE · CONTROLS LOCKED" chip, the "TOOK OVER ·
@@ -2516,24 +2539,30 @@ export default function MixerScreen() {
               header — zero row width), which carries the lease countdown +
               RESUME NOW when taken over. */}
         </View>
-        {/* Right control cluster (QA round1 #5). flexWrap + justify-end lets the
-            MASTER readout and the two add buttons reflow to a second line rather
-            than push `+ FROM PLAYLIST…` past the screen edge. The columnGap is
-            the spacing the cramped landscape header was missing. */}
+        {/* Right control cluster. PORTRAIT still wraps to a second line (QA
+            round1 #5 — there is no way to fit this on one narrow line, and
+            portrait has the vertical room). LANDSCAPE must NOT wrap (operator
+            2026-07-27): it is nowrap + flexShrink:0 so it keeps its intrinsic
+            width and the left cluster yields instead. Its own width is bought
+            down by the compact FADE cycler, the compact PERFORMANCE chip and a
+            narrower master fader below. */}
         <View style={{
           flexDirection: 'row',
           alignItems: 'center',
-          flexWrap: 'wrap',
+          flexWrap: isPortrait ? 'wrap' : 'nowrap',
           justifyContent: 'flex-end',
-          flexShrink: 1,
-          columnGap: isPortrait ? 6 : 12,
+          flexShrink: isPortrait ? 1 : 0,
+          columnGap: 6,
           rowGap: 8,
         }}>
           {/* PERFORMANCE MODE — live-show structural lock. Same shared control
               the deck header mounts, first in the right cluster (operator ruling:
               the lock affordance leads). Idle chip → confirm → GO LIVE; active
               badge → exit sheet (KEEP / RESTORE). */}
-          <PerformanceModeControl isPortrait={isPortrait} />
+          {/* `isPortrait` here is really "compact": landscape borrows the
+              portrait chip ("PERF" instead of "PERFORMANCE") to buy ~55pt for
+              the one-row header. The ACTIVE badge wording is unchanged. */}
+          <PerformanceModeControl isPortrait />
           {/* CLEAR SOLO — only shown while a server-authoritative solo is
               engaged. Sends WS clearSolo (all) + REST mirror; the broadcast's
               empty soloedChannelIds[] reconciles every strip back to lit. */}
@@ -2558,11 +2587,14 @@ export default function MixerScreen() {
               never drift. Gated under the soft PLAN lock (the e-stop BLACKOUT
               in the rig bar stays live — this is the timed fade, not the
               safety cut). */}
-          <MasterFadeGroup isPortrait={isPortrait} disabled={activationsLocked} />
+          {/* compact in BOTH orientations here: the 5 duration pills are the
+              single widest thing in this header. The cycler exposes the same
+              FADE_SECONDS by tapping through them. */}
+          <MasterFadeGroup isPortrait={isPortrait} compact disabled={activationsLocked} />
           {/* MASTER label + fader + readout travel together as one cluster so
               they never split across a wrap and the value keeps a reserved
               column (no more cramped overlap with the slider). */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 6 : 10 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             {/* MASTER label — ALWAYS rendered (both orientations), mirroring the
                 deck top bar (QA round 10 fix #2). Portrait used to drop it,
                 leaving the highest-consequence fader on the surface as an
@@ -2584,7 +2616,7 @@ export default function MixerScreen() {
                 // deck) instead of snapping to each broadcast value.
                 fadingTarget={fading ? masterFade?.to : null}
                 fadingDurationMs={masterFade?.remainingMs}
-                trackStyle={[styles.faderTrack, { width: isPortrait ? 120 : 160 }]}
+                trackStyle={[styles.faderTrack, { width: isPortrait ? 120 : 110 }]}
                 fillStyle={[styles.faderFill, fading && { backgroundColor: C.tertiary }]}
                 // Visible, grabbable THUMB (QA round 10 fix #2) — same pattern as
                 // the deck master (DeckTopBar.tsx faderThumb). Without it the
@@ -2594,13 +2626,13 @@ export default function MixerScreen() {
                 thumbStyle={styles.masterFaderThumb}
               />
             </View>
-            <Text style={[styles.displayMono, {fontSize: 16, width: 36, textAlign: 'right'}, isPortrait && { fontSize: 14, width: 28 }]}>{Math.round(master * 100)}</Text>
+            <Text style={[styles.displayMono, {fontSize: 14, width: 28, textAlign: 'right'}]}>{Math.round(master * 100)}</Text>
           </View>
           {/* One-tap default add: fastest path. disabled+opacity gives the
               operator visual feedback while the POST is in flight, so they
               don't mash and queue 5 of them. */}
           <TouchableOpacity
-            style={[styles.addBtn, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }, structuralLocked && { opacity: 0.45 }]}
+            style={[styles.addBtn, { paddingHorizontal: isPortrait ? 6 : 8, paddingVertical: 6 }, addBusy && { opacity: 0.5 }, structuralLocked && { opacity: 0.45 }]}
             onPress={() => handleAddChannelWithPlaylist('default')}
             // Soft PLAN lock + performance mode: adding a channel is a
             // structural change (engine 409s it while a show is live).
@@ -2610,12 +2642,15 @@ export default function MixerScreen() {
             <Text style={[styles.labelCaps, {color: '#FFF'}, isPortrait && { fontSize: 9 }]}>{addBusy ? 'ADDING…' : '+ DEFAULT'}</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder }, isPortrait && { paddingHorizontal: 6, paddingVertical: 6 }, addBusy && { opacity: 0.5 }, structuralLocked && { opacity: 0.45 }]}
+            style={[styles.addBtn, { backgroundColor: C.surfaceContainerHigh, borderWidth: 1, borderColor: C.ghostBorder, paddingHorizontal: isPortrait ? 6 : 8, paddingVertical: 6 }, addBusy && { opacity: 0.5 }, structuralLocked && { opacity: 0.45 }]}
             onPress={openAddChannelPicker}
             disabled={addBusy || structuralLocked}
             accessibilityState={{ disabled: addBusy || structuralLocked }}
           >
-            <Text style={[styles.labelCaps, {color: C.primary}, isPortrait && { fontSize: 9 }]} numberOfLines={1}>{isPortrait ? '+ PLAYLIST' : '+ FROM PLAYLIST…'}</Text>
+            {/* Landscape now uses the short portrait label too — same action,
+                ~45pt cheaper, and "+ PLAYLIST" is unambiguous next to
+                "+ DEFAULT". */}
+            <Text style={[styles.labelCaps, {color: C.primary}, isPortrait && { fontSize: 9 }]} numberOfLines={1}>+ PLAYLIST</Text>
           </TouchableOpacity>
         </View>
       </View>

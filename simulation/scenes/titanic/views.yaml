@@ -1,15 +1,7 @@
 views:
   groupBits:
-    Right Front Wall Generator: 1
-    Right Top Chimney Generator: 2
-    Right Front Deck Generator: 4
-    Right Center Auditorium Generator: 8
-    Left Back Wall Generator: 16
-    Right Back Wall Generator: 32
-    Left Front Wall Generator: 64
-    Left Top Chimney Generator: 128
-    Left Front Deck Generator: 256
-    Left Center Auditorium Generator: 512
+    Left Back Wall: 16
+    Left Front Wall: 64
     Left_Front_Left: 1024
     Left_Back_Left: 2048
     Left_Back_Right: 4096
@@ -18,9 +10,18 @@ views:
     Right_Back_Right: 32768
     Right_Front_Right: 65536
     Right_Front_Left: 131072
-    Right Back Deck Generator: 67108864
-    Left Back Deck Generator: 134217728
-    Left Center Auditorium: 262144
-    Left Back Wall: 524288
     TE Sign: 1048576
+    Right SmokeStacks: 2
+    Left Small SmokeStack: 2097152
+    Right Small SmokeStack: 4194304
+    Right Front Wall: 1
+    Right Front Rails: 4
+    Right Auditorium: 8
+    Left Auditorium: 512
+    Right Back Wall: 32
+    Left SmokeStack: 128
+    Left Front Rails: 256
+    Right Back Rails: 67108864
+    Left Back Rails: 134217728
+    TE Sign 2: 8388608
   custom: []

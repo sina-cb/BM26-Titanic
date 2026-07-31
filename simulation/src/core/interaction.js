@@ -357,6 +357,21 @@ function beginTraceDotDrag(traceIndex, pointIndex) {
   window.addEventListener('pointerup', onTraceDotDragEnd, true);
 }
 
+/**
+ * Is this object actually drawn? `Object3D.visible` is local — an object whose
+ * own flag is true is still invisible if any ancestor is hidden. Raycasts
+ * against an explicit object array skip Three.js's own traversal check, so
+ * pickability has to ask this question itself.
+ */
+function _visibleInSceneGraph(object) {
+  let node = object;
+  while (node) {
+    if (node.visible === false) return false;
+    node = node.parent;
+  }
+  return true;
+}
+
 // ─── Pointer Down ────────────────────────────────────────────────────────
 export function onPointerDown(event) {
   // Only handle left clicks, ignore UI clicks. The handler is on
@@ -446,6 +461,15 @@ export function onPointerDown(event) {
   if (!params.generatorsVisible) {
     intersects = intersects.filter(i => !i.object.userData.isTrace && !i.object.userData.isTraceVisual);
   }
+
+  // The toggle is not the only thing that hides them: the beauty profiles keep
+  // trace visuals off by default (src/gui/trace_visual_gate.js), which hides the
+  // GROUP while `generatorsVisible` stays true — and a preview dot is a child of
+  // that group, so its own `.visible` is still true. Ask the scene graph instead
+  // of any flag: an invisible trace object is never pickable, whatever hid it.
+  intersects = intersects.filter(
+    (i) => !((i.object.userData.isTrace || i.object.userData.isTraceVisual) &&
+             !_visibleInSceneGraph(i.object)));
 
   // Same Three.js caveat for LED strand handles: they stay in interactiveObjects
   // but are hidden in the beauty view (guides off + strand unselected). Drop any

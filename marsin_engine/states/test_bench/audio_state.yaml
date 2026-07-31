@@ -6,7 +6,7 @@
 # PATCH /audio/config from CaptainPad (tuning). Do not hand-edit while
 # the engine is running.
 capture:
-  device: audio=Microphone (Amazon USB Streaming Mic)
+  device: test
   deviceLabel: Microphone (Amazon USB Streaming Mic)
   deviceId: dshow-audio-Microphone (Amazon USB Streaming Mic)
   inputFormat: dshow
@@ -20,7 +20,7 @@ bands:
   attackMs: 6
   releaseMs: 180
   noiseGate: 0.06
-  inputGain: 1
+  inputGain: 8.83
   sourceSmoothHz: 12000
   lowGate: 0.12
   midGate: 0.1

@@ -65,6 +65,10 @@ import {
   resolveOscOut, oscOutTapOf, outputCpcKeyOf,
 } from './companion_config.js';
 import { EngineConfigLink, resolveEngineEndpoint } from './engine_config_link.js';
+import {
+  PARTY_TUNABLES, PARTY_TUNABLE_KEYS, persistPartyConfig,
+  percentile, calibrationSuggestions,
+} from './party_tuning.js';
 import { loadMicProfiles, saveMicProfiles, validateProfile, uniqueProfileId } from './mic_profiles.js';
 import { audioRegistryEntries } from '../postproc/audio_signals.js';
 import { emitDerivedBpm, BPM_OSC_ADDRESS } from './bpm_emit.js';
@@ -73,6 +77,10 @@ import { SYNTHS, SYNTH_NAMES, fillFrame } from '../synth/test_synths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(__dirname, 'ui');
+// The ENGINE's config.yaml — read at boot for the shared tuning, and the file
+// the PARTY tab's PERSIST writes its `party:` thresholds back into (surgically:
+// see party_tuning.js, comments must survive).
+const ENGINE_CONFIG_PATH = path.join(__dirname, '..', '..', 'config.yaml');
 
 // FFT must track config.yaml audio.fftSize so the companion's analysis + derived
 // signals (genre / note / dom / sub) match the engine's exactly. (The spectrum
@@ -305,6 +313,17 @@ const ENGINE_INTERNAL_DERIVED = Object.freeze([
   { cpcKey: 'audioPhrasePhase',   label: 'phase 0→1 across the 8-bar phrase' },
   { cpcKey: 'audioPhraseBoundary',label: 'phrase-boundary pulse' },
   { cpcKey: 'audioDropCountdown', label: 'beat-synced drop count-in' },
+  // party_detection (R1, report 20260725_10). audioPartyStrong is the key the
+  // SHOW DIRECTOR reads (`timeline.mood.key`) — if it is not on this list it
+  // never reaches the engine's CPC and party mode can never fire. The five
+  // metrics beside it are what the operator watches on GET /param-center to
+  // calibrate the `party:` thresholds; they must travel for the same reason.
+  { cpcKey: 'audioPartyStrong',   label: 'HARD party gate (show director)' },
+  { cpcKey: 'audioLoudness',      label: 'loudness scalar the party gate thresholds on' },
+  { cpcKey: 'audioKickRate',      label: 'kick onsets per second' },
+  { cpcKey: 'audioKickReg',       label: 'kick regularity (1 − CV)' },
+  { cpcKey: 'audioBpmLocked',     label: 'BPM tracker lock state' },
+  { cpcKey: 'audioBpmConf',       label: 'BPM tracker confidence 0–1' },
   // structure-detector primitives (audio/detector) — also engine-internal.
   { cpcKey: 'audioBuildScore',    label: 'build-up score (detector)' },
   { cpcKey: 'audioDropPulse',     label: 'drop pulse (detector)' },
@@ -774,6 +793,18 @@ function applyEngineSharedTuning(config) {
  * through) must NOT restart the source, or every echo would churn the capture
  * stream. We compare against the current { mode, configDevice, currentFile }.
  * The selection is also broadcast so the UI's source bar reflects it.
+ *
+ * EXCEPTION — a mic capture that has TERMINALLY GIVEN UP (captureGaveUp():
+ * AudioCapture burned its restart budget and will never retry) is re-armed
+ * even when the device string is unchanged. Reason (report 202607/20260725_6):
+ * when the USB mic isn't enumerable at boot the Companion gives up for good;
+ * the operator then re-picks that same mic in CaptainPad — the natural "try
+ * again" — and the unchanged-guard silently swallowed it, leaving the SOLE
+ * analyzer deaf. The documented field workaround (pick the default mic, then
+ * re-pick the USB one) existed only to force `changed` true. This is
+ * RECONCILIATION to the declared config, not a fallback: the config says
+ * "capture from X", the actual state is "capturing nothing", so we converge —
+ * loudly, with a log line, and only from a state that can never self-heal.
  */
 function applyEngineCaptureDevice(device) {
   const target = parseCaptureDevice(device);
@@ -785,8 +816,12 @@ function applyEngineCaptureDevice(device) {
     }
   } else { // mic
     const changed = mode !== 'mic' || configDevice !== target.device;
+    const reArm = !changed && captureGaveUp();
+    if (reArm) {
+      console.warn(`[companion] mic capture had given up on "${configDevice ?? 'default input'}"; config re-asserted the same device — re-arming capture`);
+    }
     configDevice = target.device;
-    if (changed) setMode('mic', { device: configDevice });
+    if (changed || reArm) setMode('mic', { device: configDevice });
     broadcast({ type: 'engineDevice', device: configDevice });
   }
 }
@@ -875,6 +910,146 @@ const detector = new AudioStructureDetector({
 const derived = new DerivedSignals({ paramCenter });
 
 let clockMs = 0, lastMs = 0;
+
+// ── PARTY TAB: fake trigger, validation mode, calibration capture ────────────
+// (report 20260725_19 — the UI for report 20260725_12 §6.)
+
+/**
+ * FAKE TRIGGER — a manual override of the PUBLISHED `audioPartyStrong`, so the
+ * operator can drive the whole downstream chain (engine dwell → 12-min session
+ * → CaptainPad) with no audio at all.
+ *
+ *   'auto'  — publish the detector's real verdict (the default)
+ *   'party' — publish 1 regardless of the audio
+ *   'off'   — publish 0 regardless of the audio
+ *
+ * It sits at the PUBLISH stage on purpose: the detector keeps running and its
+ * true output stays visible in the meters, so truth and forced value can be
+ * compared side by side. Because the publish keeps flowing at the normal rate,
+ * the engine's staleness guard stays happy and the timeline cannot tell a fake
+ * session from a real one — which is exactly the point of the test.
+ *
+ * RUNTIME ONLY. Never persisted, never written to config.yaml: a companion
+ * restart returns to 'auto'. That is the safety.
+ */
+const PARTY_OVERRIDE_MODES = Object.freeze(['auto', 'party', 'off']);
+let partyOverride = 'auto';
+
+/**
+ * VALIDATION MODE (report 20260725_12 §6.3 step 3): drop `onSustainMs` to 3 s so
+ * the plumbing can be proven in seconds instead of 20. RUNTIME ONLY — the saved
+ * real value is restored on exit and is what PERSIST writes, so a validation
+ * session can never leak 3000 ms into config.yaml.
+ */
+const VALIDATION_ON_SUSTAIN_MS = 3000;
+const validation = { on: false, savedOnSustainMs: null };
+
+/** Live capture for the §6.2 baselines. Samples the loudness scalar per hop. */
+const PARTY_CAPTURE_KINDS = Object.freeze(['ambient', 'party']);
+const partyCap = {
+  recording: false, kind: null, startClock: 0, durationMs: 0,
+  loud: [], kickReg: [], lockedHops: 0, hops: 0,
+};
+/** Last finished capture per kind → the suggestion math needs both. */
+const partyCapResults = { ambient: null, party: null };
+
+/** Snapshot of the capture for the 10 Hz party-state broadcast. */
+function partyCaptureSnapshot() {
+  return {
+    recording: partyCap.recording,
+    kind: partyCap.kind,
+    elapsedMs: partyCap.recording ? Math.max(0, clockMs - partyCap.startClock) : 0,
+    durationMs: partyCap.durationMs,
+    samples: partyCap.loud.length,
+  };
+}
+
+function startPartyCapture(kind, seconds) {
+  if (!PARTY_CAPTURE_KINDS.includes(kind)) {
+    throw new Error(`party capture: kind must be one of ${PARTY_CAPTURE_KINDS.join('/')}, got ${JSON.stringify(kind)}`);
+  }
+  const s = Number(seconds);
+  if (!Number.isFinite(s) || s < 5 || s > 600) {
+    throw new Error(`party capture: seconds must be 5..600, got ${JSON.stringify(seconds)}`);
+  }
+  partyCap.recording = true;
+  partyCap.kind = kind;
+  partyCap.startClock = clockMs;
+  partyCap.durationMs = s * 1000;
+  partyCap.loud = [];
+  partyCap.kickReg = [];
+  partyCap.lockedHops = 0;
+  partyCap.hops = 0;
+  broadcast({ type: 'partyCapStatus', phase: 'recording', kind, ...partyCaptureSnapshot() });
+}
+
+function cancelPartyCapture() {
+  if (!partyCap.recording) return;
+  partyCap.recording = false;
+  const kind = partyCap.kind;
+  partyCap.kind = null;
+  broadcast({ type: 'partyCapStatus', phase: 'cancelled', kind, ...partyCaptureSnapshot() });
+}
+
+/** Per-hop capture sampling. Called from the analysis callback. */
+function tickPartyCapture() {
+  if (!partyCap.recording) return;
+  const loud = paramCenter.get('audioLoudness');
+  if (Number.isFinite(loud)) partyCap.loud.push(loud);
+  const reg = paramCenter.get('audioKickReg');
+  if (Number.isFinite(reg) && reg > 0) partyCap.kickReg.push(reg);
+  if (paramCenter.get('audioBpmLocked') >= 0.5) partyCap.lockedHops++;
+  partyCap.hops++;
+  if ((clockMs - partyCap.startClock) >= partyCap.durationMs) finishPartyCapture();
+}
+
+/** Median of a non-empty list (used for the "typical" party kickReg). */
+function medianOf(values) {
+  if (!values.length) return null;
+  return percentile(values, 50);
+}
+
+function finishPartyCapture() {
+  partyCap.recording = false;
+  const kind = partyCap.kind;
+  partyCap.kind = null;
+  if (partyCap.loud.length === 0) {
+    // No samples at all ⇒ nothing was analysed (no source running). Say so —
+    // a zeroed "result" would look like a real, very quiet measurement.
+    broadcast({
+      type: 'partyCapResult', ok: false, kind,
+      error: 'capture recorded 0 samples — is a source running? (the analyzer clock never advanced)',
+    });
+    return;
+  }
+  const stats = {
+    n: partyCap.loud.length,
+    p5: percentile(partyCap.loud, 5),
+    p50: percentile(partyCap.loud, 50),
+    p95: percentile(partyCap.loud, 95),
+    max: Math.max(...partyCap.loud),
+    kickReg: medianOf(partyCap.kickReg),
+    bpmLockedFrac: partyCap.hops > 0 ? partyCap.lockedHops / partyCap.hops : 0,
+  };
+  partyCapResults[kind] = stats;
+  broadcast({
+    type: 'partyCapResult', ok: true, kind, stats,
+    suggestions: buildPartySuggestions(),
+  });
+}
+
+/**
+ * The §6.2 suggestion arithmetic against the two stored captures. Null until
+ * BOTH exist — a suggestion from one capture would be a guess with a number
+ * attached, which is worse than no suggestion.
+ */
+function buildPartySuggestions() {
+  const a = partyCapResults.ambient, p = partyCapResults.party;
+  if (!a || !p) return null;
+  return calibrationSuggestions({
+    ambientP95: a.p95, partyP5: p.p5, partyKickReg: p.kickReg,
+  });
+}
 
 /**
  * Run every designed signal's chain for this analyzer hop. Returns a
@@ -992,6 +1167,15 @@ const analyzer = new AudioAnalyzer({
     // BPM is a DERIVED signal (not an operator-designed osc_out tap), so the
     // Companion emits it as a built-in, always-on output right after the
     // derived-signals tick produces audioBpm → engine /marsin/audio/bpm.
+    // FAKE TRIGGER: override the PUBLISHED party flag before anything reads or
+    // emits it. The detector above already ran and its own state is untouched,
+    // so `getPartyStrongState()` still reports the TRUTH for the meters while
+    // the wire carries the forced value. Runtime-only (see partyOverride).
+    if (partyOverride !== 'auto') {
+      paramCenter.set('audioPartyStrong', partyOverride === 'party' ? 1 : 0, 'partyOverride');
+    }
+    // Calibration capture (report 20260725_12 §6.2) samples the SAME hop.
+    tickPartyCapture();
     emitDerivedBpm(paramCenter, sendOsc);
     // Companion = sole analyzer: emit the FULL derived/detector set over OSC so
     // the engine receives them (instead of computing its own). (report 20260621_11)
@@ -1086,11 +1270,46 @@ setInterval(() => {
   broadcast({ type: 'oscAccounting', ...buildOscAccounting() });
 }, OSC_ACCOUNTING_MS);
 
+// PARTY TAB live state → UI at 10 Hz, matching `audioLoudness`'s own publish
+// rate (report 20260725_12 §3): the natural update rate of the numbers being
+// shown. Its own cadence, off the hot path, and skipped when nobody is looking.
+const PARTY_STATE_MS = 100;
+
+/** Everything the PARTY tab meters + verdict pills render from. */
+function buildPartyState() {
+  const st = derived.getPartyStrongState(clockMs);
+  const published = paramCenter.get('audioPartyStrong');
+  return {
+    ...st,
+    // The two other CPC inputs the gate decides on, shown next to their limits.
+    silence: safeGet('audioSilence'),
+    bpmLocked: safeGet('audioBpmLocked'),
+    bpmConf: safeGet('audioBpmConf'),
+    // FAKE TRIGGER: `party` above is the DETECTOR's truth; this is what is
+    // actually on the wire. They differ only while an override is engaged.
+    overrideMode: partyOverride,
+    publishedParty: Number.isFinite(published) ? published >= 0.5 : null,
+    // VALIDATION MODE: on, plus the real onSustainMs being held for restore.
+    validationMode: validation.on,
+    validationSavedOnSustainMs: validation.savedOnSustainMs,
+    capture: partyCaptureSnapshot(),
+  };
+}
+setInterval(() => {
+  if (clients.size === 0) return;
+  broadcast({ type: 'partyState', ...buildPartyState() });
+}, PARTY_STATE_MS);
+
 // ── Audio sources ──────────────────────────────────────────────────────────
 let mode = 'test';        // 'test' | 'mic' | 'file'
 let testTimer = null;
 let capture = null;
 let ffmpegPath = 'ffmpeg';
+// Last AudioCapture status seen for the CURRENT mic capture (null before the
+// first one, and reset on every setMode). Retained so the config-echo path can
+// tell a HEALTHY capture from one that has terminally given up — see
+// captureGaveUp() / applyEngineCaptureDevice.
+let lastCaptureStatus = null;
 
 // File mode is BROWSER-SOURCED (see ui/companion_app.js filePlayer).
 let browserSource = false;
@@ -1227,8 +1446,22 @@ function startReplay() {
   }, Math.round((HOP / SR) * 1000));
 }
 
+/**
+ * True when the MIC source is in a state it can never leave on its own:
+ * AudioCapture exhausted its consecutive-failure budget and gave up
+ * (`capture_failed_repeatedly`, audio_capture.js _giveUp — deliberately
+ * terminal), or the capture object was never constructed at all. Restarting
+ * / exited / starting are NOT dead — those recover by themselves.
+ */
+function captureGaveUp() {
+  if (mode !== 'mic') return false;
+  if (!capture) return true;
+  return !!(lastCaptureStatus && lastCaptureStatus.errorCode === 'capture_failed_repeatedly');
+}
+
 function stopSource() {
   if (testTimer) { clearInterval(testTimer); testTimer = null; }
+  lastCaptureStatus = null;
   if (capture) { try { capture.stop(); } catch { /* ignore */ } capture = null; }
   if (cal.replayTimer) { clearInterval(cal.replayTimer); cal.replayTimer = null; }
   cal.recording = false; cal.replaying = false;
@@ -1245,7 +1478,7 @@ function startCapture(device) {
       captureBufferMs: 50,
       jitterBufferHops: 4,
       onFrame: (i16) => pushFrame(i16),
-      onStatus: (st) => broadcast({ type: 'sourceStatus', mode, status: st }),
+      onStatus: (st) => { lastCaptureStatus = st; broadcast({ type: 'sourceStatus', mode, status: st }); },
     });
     capture.start();
     broadcast({ type: 'sourceStatus', mode, status: { enabled: true } });
@@ -1473,6 +1706,109 @@ function handleMessage(ws, raw) {
     );
   }
   else if (m.type === 'startNoiseCal') startNoiseCal();
+  // ── PARTY TAB (report 20260725_19) ─────────────────────────────────────────
+  // APPLY: runtime-only threshold change on the LIVE detector. Fails LOUD back
+  // to the operator (unknown key / bad type) instead of half-applying.
+  else if (m.type === 'setPartyParams') {
+    try {
+      const params = m.params;
+      if (!params || typeof params !== 'object' || Array.isArray(params)) {
+        throw new Error('setPartyParams: params must be an object');
+      }
+      for (const k of Object.keys(params)) {
+        if (!PARTY_TUNABLE_KEYS.includes(k)) {
+          throw new Error(`unknown party tunable "${k}" (known: ${PARTY_TUNABLE_KEYS.join(', ')})`);
+        }
+      }
+      // While VALIDATION MODE holds onSustainMs at 3 s, an edit to that field
+      // updates the SHADOW value (what gets restored + persisted) rather than
+      // the live one — otherwise leaving validation mode would clobber the edit.
+      const apply = { ...params };
+      if (validation.on && apply.onSustainMs !== undefined) {
+        validation.savedOnSustainMs = apply.onSustainMs;
+        delete apply.onSustainMs;
+      }
+      if (Object.keys(apply).length > 0) derived.setPartyStrongParams(apply);
+      broadcast({ type: 'partyParams', params: derived.getPartyStrongParams() });
+      ws.send(JSON.stringify({ type: 'flash', text: `party thresholds applied (${Object.keys(params).length})` }));
+    } catch (e) {
+      ws.send(JSON.stringify({ type: 'flash', text: `party apply: ${e.message}`, error: true }));
+    }
+  }
+  // PERSIST: surgical write-back into config.yaml's `party:` block. Comments
+  // and formatting survive; a key line we cannot locate exactly throws and
+  // NOTHING is written (see party_tuning.js).
+  else if (m.type === 'persistPartyParams') {
+    try {
+      const params = m.params;
+      if (!params || typeof params !== 'object' || Array.isArray(params)) {
+        throw new Error('persistPartyParams: params must be an object');
+      }
+      const edits = { ...params };
+      // VALIDATION MODE is a TEMPORARY probe — its 3 s onSustainMs must never
+      // reach the operator's config. Persist the real (shadow) value instead.
+      let substituted = false;
+      if (validation.on && validation.savedOnSustainMs !== null) {
+        edits.onSustainMs = validation.savedOnSustainMs;
+        substituted = true;
+      }
+      const res = persistPartyConfig(ENGINE_CONFIG_PATH, edits);
+      broadcast({ type: 'partyPersisted', ok: true, keys: res.keys, path: res.path });
+      ws.send(JSON.stringify({
+        type: 'flash',
+        text: `party thresholds written → config.yaml (${res.keys.length} keys)`
+          + (substituted ? ' — onSustainMs written as the real value, not the validation 3 s' : ''),
+      }));
+    } catch (e) {
+      broadcast({ type: 'partyPersisted', ok: false, error: e.message });
+      ws.send(JSON.stringify({ type: 'flash', text: `party persist: ${e.message}`, error: true }));
+    }
+  }
+  // VALIDATION MODE toggle (runtime-only onSustainMs → 3 s).
+  else if (m.type === 'setPartyValidationMode') {
+    try {
+      const on = m.on === true;
+      if (on && !validation.on) {
+        validation.savedOnSustainMs = derived.getPartyStrongParams().onSustainMs;
+        derived.setPartyStrongParams({ onSustainMs: VALIDATION_ON_SUSTAIN_MS });
+        validation.on = true;
+      } else if (!on && validation.on) {
+        derived.setPartyStrongParams({ onSustainMs: validation.savedOnSustainMs });
+        validation.on = false;
+        validation.savedOnSustainMs = null;
+      }
+      broadcast({ type: 'partyParams', params: derived.getPartyStrongParams() });
+      ws.send(JSON.stringify({
+        type: 'flash',
+        text: validation.on
+          ? `VALIDATION MODE on — onSustainMs ${VALIDATION_ON_SUSTAIN_MS} (runtime only)`
+          : 'validation mode off — onSustainMs restored',
+      }));
+    } catch (e) {
+      ws.send(JSON.stringify({ type: 'flash', text: `validation mode: ${e.message}`, error: true }));
+    }
+  }
+  // FAKE TRIGGER: force the PUBLISHED audioPartyStrong. Runtime-only.
+  else if (m.type === 'setPartyOverride') {
+    if (!PARTY_OVERRIDE_MODES.includes(m.mode)) {
+      ws.send(JSON.stringify({
+        type: 'flash', error: true,
+        text: `party override must be one of ${PARTY_OVERRIDE_MODES.join('/')}, got ${JSON.stringify(m.mode)}`,
+      }));
+    } else {
+      partyOverride = m.mode;
+      broadcast({ type: 'partyOverride', mode: partyOverride });
+      console.log(partyOverride === 'auto'
+        ? '  🎉 party publish override CLEARED — publishing the detector again'
+        : `  ⚠ party publish override ACTIVE — publishing audioPartyStrong=${partyOverride === 'party' ? 1 : 0} regardless of audio`);
+    }
+  }
+  // CALIBRATION CAPTURE (report 20260725_12 §6.2).
+  else if (m.type === 'startPartyCapture') {
+    try { startPartyCapture(m.kind, m.seconds); }
+    catch (e) { ws.send(JSON.stringify({ type: 'flash', text: e.message, error: true })); }
+  }
+  else if (m.type === 'cancelPartyCapture') cancelPartyCapture();
   // OSC OUTPUT RATE (report 20260621_6): set the frames/sec all OSC outputs are
   // sent at. Live + persisted into design.osc so "Export config" keeps it.
   else if (m.type === 'setOscRate') {
@@ -1638,6 +1974,51 @@ function handleMessage(ws, raw) {
   }
 }
 
+/**
+ * One JSON round-trip to the ENGINE's REST API, for the PARTY tab's proxies.
+ * FAILS LOUD: no engine endpoint (standalone companion), a down engine, or a
+ * non-2xx all reject with a message the UI shows — never an empty "looks fine"
+ * object. A rejected 400 carries `.status` so the proxy can forward it as a 400
+ * (an operator's bad input) rather than a 502 (a broken link).
+ *
+ * @param {'GET'|'PUT'} method
+ * @param {string} route
+ * @param {object|null} body
+ */
+async function engineJson(method, route, body = null) {
+  if (!engineEndpoint) {
+    throw new Error('no engine endpoint resolved from config.yaml — the companion is running standalone');
+  }
+  const url = `http://${engineEndpoint.host}:${engineEndpoint.port}${route}`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 3000);
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      signal: ctrl.signal,
+      ...(body === null ? {} : {
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    });
+  } catch (e) {
+    throw new Error(`engine ${method} ${route} failed (${url}): ${e && e.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
+  const text = await res.text();
+  let parsed = null;
+  try { parsed = text ? JSON.parse(text) : null; } catch { /* non-JSON body */ }
+  if (!res.ok) {
+    const err = new Error(
+      (parsed && parsed.error) ? parsed.error : `engine ${method} ${route} → HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return parsed;
+}
+
 // ── HTTP (serve the UI) + WS ────────────────────────────────────────────────
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
 const MIME_AUDIO = {
@@ -1651,6 +2032,66 @@ const server = http.createServer((req, res) => {
   if (p === '/catalog') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(catalog()));
+    return;
+  }
+  // ── PARTY TAB → ENGINE proxies (report 20260725_19) ────────────────────────
+  // The session/authority state lives ENGINE-side (:6968). The companion UI is
+  // served from :6966, so it reaches the engine through these two proxies
+  // rather than a cross-origin fetch — same posture as every other bit of
+  // engine data this page needs. Read-only for /party/session; /party/config
+  // forwards the operator's arm/disable straight to the engine, which OWNS and
+  // PERSISTS it (the companion never stores that boolean itself).
+  if (p === '/party/session' && req.method === 'GET') {
+    engineJson('GET', '/timeline/state')
+      .then((state) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(state));
+      })
+      .catch((e) => {
+        res.writeHead(502, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: String(e && e.message) }));
+      });
+    return;
+  }
+  if (p === '/party/config') {
+    if (req.method === 'GET') {
+      engineJson('GET', '/party-config')
+        .then((cfg) => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(cfg));
+        })
+        .catch((e) => {
+          res.writeHead(502, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: String(e && e.message) }));
+        });
+      return;
+    }
+    if (req.method === 'PUT') {
+      let body = '';
+      req.on('data', (c) => { body += c; if (body.length > 65536) req.destroy(); });
+      req.on('end', () => {
+        let parsed;
+        try { parsed = JSON.parse(body || '{}'); }
+        catch (e) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: `bad JSON body: ${e.message}` }));
+          return;
+        }
+        engineJson('PUT', '/party-config', parsed)
+          .then((cfg) => {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify(cfg));
+          })
+          .catch((e) => {
+            // The engine's own 400 message (unknown playlist, bad bounds) is
+            // forwarded verbatim — the operator must see WHY it was refused.
+            res.writeHead(e && e.status === 400 ? 400 : 502, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ error: String(e && e.message) }));
+          });
+      });
+      return;
+    }
+    res.writeHead(405); res.end('method not allowed');
     return;
   }
   if (p === '/osc_accounting') {
@@ -1734,6 +2175,15 @@ wss.on('connection', (ws) => {
     // smooth / device are mirrored to the engine (single source of truth)
     // or running local-only (engine offline → graceful degradation).
     engineLink: { connected: !!(engineLink && engineLink.connected) },
+    // PARTY tab (report 20260725_19): the tunable SPEC (labels/ranges/hints),
+    // the live threshold values, and the runtime-only override/validation
+    // state, so the tab paints correctly on a reload mid-session.
+    partyTunables: PARTY_TUNABLES,
+    partyParams: derived.getPartyStrongParams(),
+    partyOverride,
+    partyValidationMode: validation.on,
+    partyCaptures: partyCapResults,
+    partySuggestions: buildPartySuggestions(),
   }));
   ws.on('message', (d, isBinary) => {
     if (isBinary) {
@@ -1769,7 +2219,7 @@ let configDevice = null;
 // endpoint is set but the engine isn't up yet.
 let engineEndpoint = null;
 function applyEngineConfig() {
-  const cfgPath = path.join(__dirname, '..', '..', 'config.yaml');
+  const cfgPath = ENGINE_CONFIG_PATH;
   let cfg;
   try { cfg = yaml.load(fs.readFileSync(cfgPath, 'utf8')); }
   catch { return 'test'; }   // standalone (no engine config) → boot in test
@@ -1799,6 +2249,19 @@ function applyEngineConfig() {
   // against (single source of truth). Loopback default — engine + Companion
   // share the Pi (same rationale as the OSC target above).
   engineEndpoint = resolveEngineEndpoint(cfg);
+  // party_detection (R1, report 20260725_10): the HARD party gate's thresholds
+  // are OPERATOR tunables, not corpus constants — they are calibrated against
+  // the real venue (see the `party:` block in config.yaml). Absent ⇒ the coded
+  // PARTY_MODE_STRONG_DEFAULTS. A bad key/value THROWS here: a typo in the
+  // operator's calibration must stop the companion loudly, never leave the gate
+  // silently running on defaults while he believes he tuned it (codex P0).
+  if (cfg && cfg.party !== undefined && cfg.party !== null) {
+    if (typeof cfg.party !== 'object' || Array.isArray(cfg.party)) {
+      throw new Error(`config.yaml "party:" must be a mapping of tunables, got ${JSON.stringify(cfg.party)}`);
+    }
+    derived.setPartyStrongParams(cfg.party);
+    console.log(`  🎉 party gate tunables applied from config.yaml (${Object.keys(cfg.party).length} keys)`);
+  }
   // BPM smoothing (operator request 2026-06-29). config.yaml
   // `companion.bpmSmoothing: { enabled, tauMs }` — absent ⇒ the BpmSmoother
   // defaults (on, 250 ms). Applied to audioBpm before the UI + OSC read it.

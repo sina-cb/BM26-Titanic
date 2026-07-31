@@ -45,12 +45,12 @@ channel:
       v1: 0
       v2: 0
   playlist:
-    name: slow
-    activeEntryId: e_1783728658515_6963
-    cursor: 17
+    name: dirty_probe
+    activeEntryId: null
+    cursor: 0
     autopilot:
       active: false
-      delay_s: 5
+      delay_s: 10
       shuffle: false
   viewSelection:
     type: all
@@ -66,7 +66,7 @@ channel:
   followScale: 1
 transitionConfig:
   enabled: false
-  mode: trans_flash
+  mode: trans_crossfade
   durationMs: 1000
   shuffle: false
 overlays: []
@@ -78,6 +78,6 @@ overlayAutopilot:
   groupSize: 3
   groupDwell: 6
 playlistSlots:
-  primary: slow
+  primary: dirty_probe
   secondary: null
   splitRatio: 0.5

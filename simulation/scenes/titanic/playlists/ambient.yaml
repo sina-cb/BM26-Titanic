@@ -1,0 +1,171 @@
+schemaVersion: 1
+name: ambient
+entries:
+  - id: e_ambient_0_00_golden_hour_wash
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_1_02_phase_cathedral
+    pattern: 02_phase_cathedral
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_2_07_shimmer
+    pattern: 07_shimmer
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_3_08_ocean_liner
+    pattern: 08_ocean_liner
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_4_11_bioluminescence
+    pattern: 11_bioluminescence
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_5_12_breathing
+    pattern: 12_breathing
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_6_13_sparkle
+    pattern: 13_sparkle
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_7_14_lunar_current
+    pattern: 14_lunar_current
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_8_16_ghost_tide_uv
+    pattern: 16_ghost_tide_uv
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_9_18_deep_space_lattice
+    pattern: 18_deep_space_lattice
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_10_19_swaying_lattice_ballet
+    pattern: 19_swaying_lattice_ballet
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_11_20_parametric_sway_field
+    pattern: 20_parametric_sway_field
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_12_21_pelagic_manta_rays
+    pattern: 21_pelagic_manta_rays
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_13_22_abyssal_sway_garden
+    pattern: 22_abyssal_sway_garden
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_14_32_caustic_shimmer
+    pattern: 32_caustic_shimmer
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_15_33_aurora_breath
+    pattern: 33_aurora_breath
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_16_35_sparkle_rain
+    pattern: 35_sparkle_rain
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_17_41_reaction_diffusion
+    pattern: 41_reaction_diffusion
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_18_43_golden_hour_pulse
+    pattern: 43_golden_hour_pulse
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_19_44_biolume_swell
+    pattern: 44_biolume_swell
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_20_45_manta_drift
+    pattern: 45_manta_drift
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_21_46_abyssal_fronds
+    pattern: 46_abyssal_fronds
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_22_57_ink_diffuse
+    pattern: 57_ink_diffuse
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_ambient_23_58_lighthouse_solo
+    pattern: 58_lighthouse_solo
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null

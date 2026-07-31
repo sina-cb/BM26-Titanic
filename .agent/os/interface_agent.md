@@ -1,9 +1,9 @@
-# interface_agent.md — The Interface-Agent Law
+# interface_agent.md — The Interface-Agent Spec
 
 Operator ruling (Sina, 2026-07-24): **any agent that faces the operator
 directly** (the session the human is talking to) operates as an
 **interface agent** whenever the work is non-trivial or multi-slice.
-This law makes the coordinator posture (`.agent/roles/coordinator.md`)
+This spec makes the coordinator posture (`.agent/roles/coordinator.md`)
 **mandatory** for human-facing sessions — not an opt-in mindset.
 
 ## The rules
@@ -47,5 +47,5 @@ This law makes the coordinator posture (`.agent/roles/coordinator.md`)
 At session start on a non-trivial request: boot per `context/boot.md`,
 create/update the project dossier, then route everything through
 sub-agents per `roles/coordinator.md` (briefing format, role table,
-pipelining). This law wins over any role brief that suggests doing the
+pipelining). This spec wins over any role brief that suggests doing the
 work inline.

@@ -9,6 +9,15 @@
  *   audioBpm          — realtime tempo (Kalman-smoothed), [0,180] (BpmTracker v2 clamp)
  *   audioBeat         — phase-locked beat pulse [0,1]
  *   audioParty        — loud-music gate, 0/1 (hysteresis + hold)
+ *   audioPartyStrong  — HARD party gate, 0/1 (level×calibrated-floor AND rhythmic
+ *                       evidence AND spectral shape AND not-silent, 20 s on /
+ *                       30 s off). THIS is the key the show director trusts.
+ *   audioLoudness     — the slow loudness scalar audioPartyStrong thresholds on
+ *                       (the number the operator watches to calibrate)
+ *   audioKickRate     — kick onsets per second, 0 when the beat stops
+ *   audioKickReg      — kick regularity, 1 - CV of the interval ring
+ *   audioBpmLocked    — BpmTracker lock state 0/1 (was computed + thrown away)
+ *   audioBpmConf      — BpmTracker confidence [0,1] (was computed + thrown away)
  *   audioNote         — dominant pitch class 0–11 (−1→0 when no stable note)
  *   audioNoteHue      — pitchClass/12 → [0,1], for "play the notes as colour"
  *   audioSwitchPattern— pulse: a musically-sensible moment to change PATTERN
@@ -37,6 +46,7 @@
  */
 import { BpmTracker } from './bpm_tracker.js';
 import { PartyMode } from './party_mode.js';
+import { PartyModeStrong } from './party_mode_strong.js';
 import { NoteEstimator } from './note_estimator.js';
 import { SwitchSignals } from './switch_signals.js';
 // ── analyzer_features (slot 3): per-band onsets + sub-bass chest hit ──────────
@@ -68,9 +78,14 @@ const PARAMS = Object.freeze({
 // These mirror the field names the publish step reads, holding the neutral /
 // zero value so a single failing module degrades to "off" rather than poisoning
 // the others. (Frozen — never mutated; the publish step only reads them.)
-const SAFE_BPM = Object.freeze({ bpm: 0, beat: 0, beatEdge: false, locked: false, beatInBar: 0, barPhase: 0, downbeat: false });
+const SAFE_BPM = Object.freeze({ bpm: 0, beat: 0, beatEdge: false, locked: false, confidence: 0, beatInBar: 0, barPhase: 0, downbeat: false });
 const SAFE_NOTE = Object.freeze({ pitchClass: -1, hue: 0, stable: false });
 const SAFE_PARTY = Object.freeze({ party: false });
+// partyStrong's safe shape: OFF + all metrics zero. A failing detector must read
+// "no party" (ambient), never a frozen 1 — the whole point of the hard gate.
+const SAFE_PARTY_STRONG = Object.freeze({
+  party: false, loudness: 0, kickRate: 0, kickReg: 0, lowShare: 0, highShare: 0, qualify: false,
+});
 const SAFE_SWITCH = Object.freeze({ switchPattern: false, switchColor: false });
 const SAFE_ONSETS = Object.freeze({ low: 0, mid: 0, high: 0 });
 const SAFE_SUB = Object.freeze({ pulse: 0 });
@@ -90,6 +105,10 @@ export class DerivedSignals {
     this.paramCenter = paramCenter;
     this._bpm = new BpmTracker();   // v2: tuned DEFAULTS baked in (2-state lock + beat/bar)
     this._party = new PartyMode(PARAMS.party);
+    // Hard party gate (report 20260725_10 §4.1). Its thresholds are OPERATOR
+    // tunables, not corpus constants: the companion applies config.yaml's
+    // `party:` block on boot via setPartyStrongParams().
+    this._partyStrong = new PartyModeStrong();
     this._note = new NoteEstimator(PARAMS.note);
     this._switch = new SwitchSignals(PARAMS.sw);
     // analyzer_features (slot 3): band-onset chase + sub-bass chest hit shapers.
@@ -154,6 +173,15 @@ export class DerivedSignals {
       { kind: 'scalar', key: 'audioPhrasePhase',    value: 0.0 },
       { kind: 'scalar', key: 'audioPhraseBoundary', value: 0.0 },
       { kind: 'scalar', key: 'audioDropCountdown',  value: 0.0 },
+      // party_detection (R1, report 20260725_10): the hard party gate + the five
+      // raw metrics it decides on. Published so the operator can WATCH the gate
+      // decide (GET /param-center) and calibrate the thresholds on the playa.
+      { kind: 'scalar', key: 'audioPartyStrong',    value: 0.0 },
+      { kind: 'scalar', key: 'audioLoudness',       value: 0.0 },
+      { kind: 'scalar', key: 'audioKickRate',       value: 0.0 },
+      { kind: 'scalar', key: 'audioKickReg',        value: 0.0 },
+      { kind: 'scalar', key: 'audioBpmLocked',      value: 0.0 },
+      { kind: 'scalar', key: 'audioBpmConf',        value: 0.0 },
     ];
     // Index map for O(1) in-place writes by key in the publish step.
     this._wIdx = {};
@@ -162,8 +190,35 @@ export class DerivedSignals {
     }
   }
 
+  /**
+   * Apply the operator's `party:` tunables (config.yaml) to the hard party gate.
+   * Throws on an unknown key / non-finite value — a typo in the operator's
+   * config must fail LOUD at boot, not run silently on defaults.
+   * @param {object} opts — see PARTY_MODE_STRONG_DEFAULTS
+   */
+  setPartyStrongParams(opts) {
+    return this._partyStrong.setParams(opts);
+  }
+
+  /** The hard party gate's live tunables (for the operator read-out). */
+  getPartyStrongParams() {
+    return { ...this._partyStrong.p };
+  }
+
+  /**
+   * The hard party gate's full operator read model — metrics, per-term
+   * verdicts, the level threshold, debounce progress and the live tunables.
+   * Backs the Audio Companion's PARTY tab (report 20260725_19).
+   *
+   * @param {number} nowMs — the analyzer hop clock
+   */
+  getPartyStrongState(nowMs) {
+    return this._partyStrong.getState(nowMs);
+  }
+
   reset() {
-    this._bpm.reset(); this._party.reset(); this._note.reset(); this._switch.reset();
+    this._bpm.reset(); this._party.reset(); this._partyStrong.reset();
+    this._note.reset(); this._switch.reset();
     this._onsets.reset(); this._sub.reset();   // analyzer_features (slot 3)
     this._genre.reset();                        // genre_signals (slot 0)
     // new_derived_signals: anticipation/track-change/climax/phrase/countdown.
@@ -271,6 +326,14 @@ export class DerivedSignals {
       bpm: b.bpm, bpmLocked: b.locked,
       pitchClass: n.pitchClass, noteStable: n.stable, dt, nowMs: now,
     }), SAFE_TRACK);
+    // ── party_detection (R1): the HARD party gate. Runs AFTER trackChange so
+    //    it can use this hop's silence flag, and reads the BPM tracker's lock
+    //    state directly (not the published key) so it never lags a hop.
+    const ps = this._runModule('partyStrong', () => this._partyStrong.update({
+      low: g('micLowRaw'), mid: g('micMidRaw'), high: g('micHighRaw'),
+      kick: g('micKickRaw'), silence: tc.silence ? 1 : 0,
+      bpmLocked: b.locked === true, dt, nowMs: now,
+    }), SAFE_PARTY_STRONG);
     const cx = this._runModule('climax', () => this._climax.update({
       low: g('micLowRaw'), mid: g('micMidRaw'), high: g('micHighRaw'),
       dropPulse: g('audioDropPulse'), dt, nowMs: now,
@@ -313,6 +376,13 @@ export class DerivedSignals {
     w[idx.audioPhrasePhase].value    = ph.phrasePhase;
     w[idx.audioPhraseBoundary].value = ph.phraseBoundary ? 1.0 : 0.0;
     w[idx.audioDropCountdown].value  = cd.countdown;
+    // party_detection (R1): the gate + the metrics it decided on.
+    w[idx.audioPartyStrong].value    = ps.party ? 1.0 : 0.0;
+    w[idx.audioLoudness].value       = ps.loudness;
+    w[idx.audioKickRate].value       = ps.kickRate;
+    w[idx.audioKickReg].value        = ps.kickReg;
+    w[idx.audioBpmLocked].value      = b.locked ? 1.0 : 0.0;
+    w[idx.audioBpmConf].value        = b.confidence || 0;
 
     // Only a failure of the PUBLISH PATH itself (the CPC target is gone) is
     // truly fatal — there is nowhere left to write any signal. That escalates

@@ -1,0 +1,75 @@
+schemaVersion: 1
+name: white_only
+entries:
+  - id: e_white_only_0_60_white_wash
+    pattern: 60_white_wash
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.5
+      sliderDirection: 1
+      sliderLevel: 0.17
+      sliderKick: 0
+      sliderRadius: 0.94
+      sliderEvenness: 0.05
+      sliderWhiteLevel: 0.7
+      sliderWhiteKick: 0.15
+      sliderWarmth: 0.15
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_1_61_white_breathe
+    pattern: 61_white_breathe
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.35
+      sliderDirection: 0.76
+      sliderLevel: 0.2
+      sliderKick: 0
+      sliderRadius: 0.09
+      sliderDepth: 0.92
+      sliderWhiteLevel: 0.65
+      sliderWhiteKick: 0.2
+      sliderWarmth: 0.2
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_2_62_white_shimmer
+    pattern: 62_white_shimmer
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_3_63_white_chase
+    pattern: 63_white_chase
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.5
+      sliderDirection: 1
+      sliderLevel: 0.07
+      sliderKick: 0
+      sliderRadius: 0.4
+      sliderTailLength: 0.45
+      sliderCount: 0.35
+      sliderWhiteLevel: 0.93
+      sliderWhiteKick: 0.86
+      sliderWarmth: 0.7
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_4_64_temple_warm_white
+    pattern: 64_temple_warm_white
+    label: null
+    defaults:
+      sliderLocalSpeed: 0.83
+      sliderDirection: 0.59
+      sliderLevel: 0.05
+      sliderKick: 0
+      sliderRadius: 0.06
+      sliderCeiling: 0.29
+      sliderWarmth: 0.94
+      sliderWhiteLevel: 0.95
+      sliderWhiteKick: 0.76
+    modulations: []
+    midiMappings: []
+    notes: null

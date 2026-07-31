@@ -22,7 +22,6 @@ const MAPPING = {
   'chevron.up': 'keyboard-arrow-up',
   'chevron.down': 'keyboard-arrow-down',
   'slider.vertical.3': 'tune',
-  'desktopcomputer': 'monitor',
   'shippingbox.fill': 'local-shipping',
   'curlybraces': 'code',
   'gear': 'settings',
@@ -39,6 +38,9 @@ const MAPPING = {
   'pin.fill': 'push-pin',
   'pin.slash.fill': 'location-off',
   'waveform': 'graphic-eq',
+  // PARTY MODE card (audio tab) — the hard enable/disable gate for party
+  // sessions. Unmapped SF names render a blank 0×0 glyph on web, so map it.
+  'sparkles': 'celebration',
   'waveform.path.ecg': 'monitor-heart',
   'mic': 'mic',
   'power': 'power-settings-new',

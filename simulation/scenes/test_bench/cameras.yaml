@@ -2,13 +2,13 @@ presets:
   - name: Front
     key: front
     position:
-      x: 0.618
-      'y': 2.562
-      z: 9.901
+      x: -12.629
+      'y': 4.84
+      z: 13.797
     target:
-      x: 0.895
-      'y': 0.71
-      z: 0.207
+      x: 1.876
+      'y': 1.338
+      z: 0.115
   - name: Side
     key: side
     position:

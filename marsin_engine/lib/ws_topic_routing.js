@@ -132,6 +132,12 @@ const TOPIC_BY_TYPE = Object.freeze({
   // change (mode/autopilot/program/cue fire). Low volume, operator-facing
   // — rides /ws/control next to scheduledTasks, replayed on connect.
   timelineState:               TOPICS.CONTROL,
+  // PARTY OVERRIDE (report 20260725_19): the operator's engine-owned party
+  // policy — { enabled, playlist }. Broadcast on every PUT /party-config +
+  // replayed on /ws/control connect so CaptainPad and the Audio Companion's
+  // PARTY tab mirror the SAME armed/disabled state live. Operator-driven, low
+  // volume → /ws/control next to timelineState, the state it gates.
+  partyConfig:                 TOPICS.CONTROL,
   playlistLibrary:             TOPICS.CONTROL,
   playlistSaved:               TOPICS.CONTROL,
   playlistDeleted:             TOPICS.CONTROL,

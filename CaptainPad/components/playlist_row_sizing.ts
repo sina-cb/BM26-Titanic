@@ -6,7 +6,14 @@
 // but that ALSO collapsed each row to a single thin line (operator complaint:
 // "pattern rows are too thin to hit during a show"). This module owns the row's
 // sizing so the perf-mode height boost is one place, unit-testable without React
-// or layout, and can't silently drift from the "~70% taller" contract.
+// or layout, and can't silently drift from its stated contract.
+//
+// PERF SIZING WAS CUT 30% on 2026-07-27 (operator, live on the iPad: the boosted
+// rows were "too big" — they ate the list, so fewer patterns were reachable
+// during a show). Every perf token below is the previous value × 0.7, rounded.
+// The row is still comfortably bigger than an edit row and, since 2026-07-27,
+// the WHOLE row is the tap target (PlaylistPanel's Pressable), so the smaller
+// box is still an easy hit — that fix is what makes this cut safe.
 //
 // Normal (edit-mode) rows keep their exact pre-existing sizing — this ONLY
 // changes the perf-mode path. The chrome tokens (header buttons, panel padding)
@@ -55,23 +62,33 @@ export interface RowSizingOpts {
 /**
  * Sizing tokens for one playlist entry row.
  *
- * Perf-mode rows are ~70% taller than the normal edit-mode row (which includes
- * the control sub-row), with a larger legible name, a guaranteed uniform min
- * height for touch, and more inter-row spacing. See estimatedRowHeight() +
- * playlist_row_sizing.test.ts for the pinned ratio.
+ * Perf-mode rows are ~20% taller than the normal edit-mode row (which includes
+ * the control sub-row), with a guaranteed uniform min height for touch and more
+ * inter-row spacing. The boost was ~70% until the operator cut it 30% on
+ * 2026-07-27. See estimatedRowHeight() + playlist_row_sizing.test.ts for the
+ * pinned ratio.
  */
 export function playlistRowSizing(opts: RowSizingOpts): PlaylistRowSizing {
   const compact = !!opts.compact;
   if (opts.perfActive) {
+    // All values = the pre-2026-07-27 perf tokens × 0.7 (see the note at the
+    // top of the file). Kept as literals rather than a computed scale so the
+    // rendered numbers are greppable and the unit test can pin them.
     return {
-      rowPadX: compact ? 10 : 12,
-      rowPadY: compact ? 12 : 14,
-      rowGap: compact ? 5 : 6,
-      fontPrimary: compact ? 16 : 18,
-      fontSub: compact ? 11 : 12,
-      indexWidth: compact ? 22 : 26,
-      // ~1.7× the normal edit-mode row height (45 compact / 51 regular → 78 / 88).
-      rowMinHeight: compact ? 78 : 88,
+      rowPadX: compact ? 7 : 8,        // was 10 / 12
+      rowPadY: compact ? 8 : 10,       // was 12 / 14
+      rowGap: compact ? 4 : 4,         // was 5 / 6
+      // FLOORED AT THE EDIT-MODE VALUE. A straight x0.7 put these BELOW the
+      // edit-mode tokens (compact name 16->11 vs edit 13), i.e. the live show
+      // would render smaller text than the editing surface — clearly not what
+      // "make live 30% smaller" means. The row box still takes the full 30%
+      // cut (rowMinHeight below); the glyphs stop at edit size.
+      fontPrimary: 13,                 // was 16 / 18 (edit is 13)
+      fontSub: compact ? 8 : 9,        // was 11 / 12 (edit is 8 / 9)
+      indexWidth: compact ? 16 : 20,   // was 22 / 26 (edit is 16 / 20)
+      // ~1.2× the normal edit-mode row height (45 compact / 51 regular → 55 / 62).
+      // Was ~1.7× (78 / 88) before the operator's 30% cut.
+      rowMinHeight: compact ? 55 : 62,
       centerContent: true,
     };
   }

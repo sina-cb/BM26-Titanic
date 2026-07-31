@@ -58,9 +58,9 @@ function makeMockIo(devices, { onAwaitReboot } = {}) {
   return {
     getStatus: async (ip) => clone(devices[ip].status),
     getConfig: async (ip) => clone(devices[ip].config),
-    pushPerOutputUniverses: async (ip, { universeByOutputIndex }) => {
+    pushPerOutputUniverses: async (ip, { plan }) => {
       // Device confirms the plan back on verify (start=1, enabled).
-      devices[ip].status.sacn.perOutput = Object.entries(universeByOutputIndex)
+      devices[ip].status.sacn.perOutput = Object.entries(plan.universeByOutputIndex)
         .map(([index, universe]) => ({ index: Number(index), universe, startAddress: 1, enabled: true }));
       return { outcome: 'needs-reboot', reboot: true };
     },
@@ -83,6 +83,9 @@ function makeCtx(reg, counts, sceneRef) {
   return {
     registry: () => reg,
     strandLedCounts: () => counts,
+    // Per-output plan gate (slice S2): single-card rigs, so nothing else claims a
+    // universe — the gate's own coverage lives in per_output_push.test.js.
+    claimedUniverses: () => new Map(),
     mutate: (_msg, fn) => fn(),
     refresh: () => {},
     showToast: () => {},

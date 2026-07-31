@@ -3,7 +3,7 @@
 //
 // Why global: the pending-program lease only arms while the operator is
 // hand-driving in MANUAL and a scheduled show wants the deck. The operator
-// could be on ANY tab (Mixer, Deck, Studio, Audio, OSC, Monitor, Timeline,
+// could be on ANY tab (Mixer, Deck, Studio, Audio, OSC, Timeline,
 // Scheduler, Dimmer, Config) when that happens — so the warning has to float
 // over all of them, not hide inside the Timeline tab. This component is mounted
 // ONCE in app/(tabs)/_layout.tsx as an absolutely-positioned sibling of <Tabs>.

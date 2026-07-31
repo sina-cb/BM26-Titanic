@@ -20,6 +20,8 @@ import {
 } from '../src/gui/pixel_map/pixel_map_views.js';
 import {
   DEFAULT_VIEWS, buildDefaultViews, seedDefaultViews, CHIMNEY_GROUPS,
+  SMALL_SMOKESTACK_GROUPS, FRONT_BAR_GROUPS, FRONT_VINTAGE_GROUPS,
+  FRONT_STRAND_GROUPS, ORPHAN_GROUPS, TE_SIGN_GROUPS,
 } from '../src/gui/pixel_map/pixel_map_view_defaults.js';
 import { createViewRegistry } from '../src/dmx/view_registry.js';
 
@@ -45,11 +47,12 @@ function titanicClusters() {
   const out = [];
   for (let i = 1; i <= 24; i++) out.push(cluster('ShehdsBar', 'dmx', 'Bars', `Bar ${i}`, 60));
   for (let i = 1; i <= 20; i++) out.push(cluster('VintageLed', 'dmx', 'Vintage', `Vintage ${i}`, 1));
-  for (let i = 1; i <= 10; i++) {
-    out.push(cluster('UkingPar', 'dmx', 'Left Top Chimney Generator', `Left Top Chimney Generator ${i}`, 1));
-  }
-  for (let i = 1; i <= 10; i++) {
-    out.push(cluster('UkingPar', 'dmx', 'Right Top Chimney Generator', `Right Top Chimney Generator ${i}`, 1));
+  // The two chimney par rings, named off the module rather than spelled out:
+  // these group names are the operator's to rename (he already renamed the
+  // right one), and this synthetic rig only has to mirror whatever the shipped
+  // defaults currently select.
+  for (const g of CHIMNEY_GROUPS) {
+    for (let i = 1; i <= 10; i++) out.push(cluster('UkingPar', 'dmx', g, `${g} ${i}`, 1));
   }
   for (let i = 1; i <= 18; i++) out.push(cluster('UkingPar', 'dmx', 'Deck Pars', `Deck Par ${i}`, 1));
   // The real TE Sign V3 pair (LED-class, DMX transport). Kept kind:'dmx' here so
@@ -68,6 +71,56 @@ function titanicClusters() {
 
 const CL = titanicClusters();
 const TOTAL = CL.length; // 24+20+38+2+16 = 100
+
+// ─── A cluster set with the REAL titanic group vocabulary ──────────────────
+// The generic rig above is deliberately abstract ('Bars', 'Vintage', …), but the
+// shipped defaults select the operator's ACTUAL group names, so the default-view
+// tests need a rig that speaks them. Built from the exported constants, never
+// from spelled-out literals, so a re-point after a rename moves the fixtures
+// with the selectors instead of orphaning the test. Census mirrors the live
+// scene: 25 ShehdsBar, 16 VintageLed, 47 UkingPar, 8 LED strands, the sign pair.
+// Back-of-ship groups, as the operator named them (his 2026-07-29 rename batch,
+// plus the 2026-07-30 'Left Back Wall Generator' → 'Left Back Wall' rename that
+// followed his ghost-fixture delete). These are only DECOYS for the membership
+// assertions (the Front view must not pick them up); nothing here is a selector
+// under test, so if they go stale the tests still mean what they say — they just
+// stop mirroring the scene.
+const BACK_BAR_GROUPS = ['Left Back Wall', 'Right Back Wall'];
+const BACK_VINTAGE_GROUPS = ['Left Back Rails', 'Right Back Rails'];
+const AUDITORIUM_GROUPS = ['Left Auditorium', 'Right Auditorium'];
+const ALL_STRAND_GROUPS = [
+  'Left_Front_Left', 'Left_Back_Left', 'Left_Back_Right', 'Left_Front_Right',
+  'Right_Back_Left', 'Right_Back_Right', 'Right_Front_Right', 'Right_Front_Left',
+];
+
+function defaultsClusters() {
+  _fi = 0;
+  const out = [];
+  const many = (n, type, kind, group, pix) => {
+    for (let i = 1; i <= n; i++) out.push(cluster(type, kind, group, `${group} ${i}`, pix));
+  };
+  for (const g of [...FRONT_BAR_GROUPS, ...BACK_BAR_GROUPS]) many(5, 'ShehdsBar', 'dmx', g, 18);
+  for (const g of [...FRONT_VINTAGE_GROUPS, ...BACK_VINTAGE_GROUPS]) many(4, 'VintageLed', 'dmx', g, 6);
+  for (const g of CHIMNEY_GROUPS) many(8, 'UkingPar', 'dmx', g, 1);
+  for (const g of SMALL_SMOKESTACK_GROUPS) many(4, 'UkingPar', 'dmx', g, 1);
+  for (const g of AUDITORIUM_GROUPS) many(8, 'UkingPar', 'dmx', g, 1);
+  // The remaining ghosts: coordinates duplicate a real group's, no generator
+  // trace. The 5 ghost bars were deleted by the operator on 2026-07-30, so this
+  // is now the 7 'Left Center Auditorium' pars alone.
+  for (const g of ORPHAN_GROUPS) many(7, 'UkingPar', 'dmx', g, 1);
+  // LED-class by the 2026-07-24 ruling — kind 'led' here (unlike the generic
+  // rig) precisely so the top_down/strands fixtureType excludes have to work.
+  // BOTH signs: the operator added 'TE Sign 2' on 2026-07-29, which is what
+  // broke the single-panel te_sign view (report 20260725_48 addendum 2).
+  for (const g of TE_SIGN_GROUPS) {
+    out.push(cluster('TeSignV3A40', 'led', g, `${g} V3 A`, 40));
+    out.push(cluster('TeSignV3B34', 'led', g, `${g} V3 B`, 34));
+  }
+  for (const g of ALL_STRAND_GROUPS) out.push(cluster('LedStrand', 'led', g, g, 40));
+  return out;
+}
+
+const DCL = defaultsClusters();
 
 // A view_registry with a base group + a custom "Stacks" view over both chimneys.
 function stubRegistry() {
@@ -113,14 +166,30 @@ test('fixtureType selector is exact-match', () => {
 });
 
 test('group selector: exact string', () => {
-  const p = onePanel(selView('v', [{ group: 'Left Top Chimney Generator' }]));
+  // Off the constant, never a literal: the operator renames these groups often
+  // (three times so far), and a spelled-out name turns this into a silent
+  // no-match the moment he does — the very failure mode under test elsewhere.
+  const p = onePanel(selView('v', [{ group: CHIMNEY_GROUPS[0] }]));
   assert.equal(p.clusters.length, 10);
-  assert.ok(p.clusters.every((c) => c.group === 'Left Top Chimney Generator'));
+  assert.ok(p.clusters.every((c) => c.group === CHIMNEY_GROUPS[0]));
 });
 
+// Globs onto the two chimney rings, derived from whatever they are CURRENTLY
+// called ('Left …' / 'Right …'). Spelling the names out here meant that the
+// operator's 'Right Top Chimney Generator' → 'Right SmokeStacks' rename turned
+// a glob test into a silent no-match — the same failure mode as the default
+// view losing his right ring (report 20260725_44 §3.6).
+const CHIMNEY_GLOBS = CHIMNEY_GROUPS.map((g) => ({ group: `${g.split(' ')[0]} *` }));
+
 test('group selector: glob matches both chimney rings', () => {
-  const p = onePanel(selView('v', [{ group: '* Top Chimney Generator' }]));
+  const p = onePanel(selView('v', CHIMNEY_GLOBS));
   assert.equal(p.clusters.length, 20);
+  // …and matches ONLY them — a glob that over-matches is as wrong as one that
+  // misses (the strand groups are 'Left_Front' etc, no space, so they are out).
+  assert.deepEqual(
+    [...new Set(p.clusters.map((c) => c.group))].sort(),
+    [...CHIMNEY_GROUPS].sort(),
+  );
 });
 
 test('name selector: glob on fixKey', () => {
@@ -133,7 +202,7 @@ test('name selector: glob on fixKey', () => {
 test('multiple keys in one selector are ANDed', () => {
   // UkingPar AND the left chimney group → 10; UkingPar AND kind led → 0.
   assert.equal(onePanel(selView('v', [
-    { fixtureType: 'UkingPar', group: 'Left Top Chimney Generator' },
+    { fixtureType: 'UkingPar', group: CHIMNEY_GROUPS[0] },
   ])).clusters.length, 10);
   assert.equal(onePanel(selView('v', [
     { fixtureType: 'UkingPar', kind: 'led' },
@@ -155,7 +224,7 @@ test('empty selector {} matches every cluster', () => {
 test('exclude removes matched clusters', () => {
   // All UkingPar minus the two chimney rings = 18 deck pars.
   const p = onePanel(selView('v', [{ fixtureType: 'UkingPar' }], {
-    exclude: [{ group: '* Top Chimney Generator' }],
+    exclude: CHIMNEY_GLOBS,
   }));
   assert.equal(p.clusters.length, 18);
   assert.ok(p.clusters.every((c) => c.group === 'Deck Pars'));
@@ -413,33 +482,174 @@ test('seedDefaultViews fills an empty container, no-ops a populated one', () => 
   assert.equal(c.views.length, 4);
 });
 
-test('default top_down: main panel = bars+strands, stacks panel = BOTH chimney rings', () => {
+test('default top_down: ONE spatial panel = bars + strands + rings + small stacks', () => {
   const c = buildDefaultViews();
-  const r = resolveView(findView(c, 'top_down'), CL, null);
+  const view = findView(c, 'top_down');
+  // The chimney pars ride the same spatial projection as the rest of the rig, so
+  // each ring renders at the centre of the cluster it crowns — no side panel.
+  assert.deepEqual(view.panels.map((p) => p.id), ['main']);
+  const r = resolveView(view, DCL, null);
   const main = r.panels.find((p) => p.def.id === 'main');
-  const stacks = r.panels.find((p) => p.def.id === 'stacks');
-  assert.equal(main.clusters.length, 24 + 16); // ShehdsBar + LED strands
-  assert.equal(stacks.def.layout, 'radial');
-  assert.equal(stacks.clusters.length, 20);    // 10 + 10 chimney pars
-  assert.equal(stacks.error, undefined);
+  assert.equal(main.def.layout, 'spatial');
+  assert.equal(main.def.projection, 'top');
+  assert.equal(main.error, undefined);
+  // 20 bars (no ghost bars left to drop) + 8 strands + 8+8 chimney + 4+4 stacks
+  assert.equal(main.clusters.length, 20 + 8 + 16 + 8);
+  // The de-orphaned real back wall is DRAWN, not excluded (2026-07-30).
+  assert.equal(main.clusters.filter((c2) => c2.group === BACK_BAR_GROUPS[0]).length, 5,
+    'the real (de-orphaned) Left Back Wall must appear on Top-Down');
   // Both rings represented (the shipped two-group default, not one 8-par ring).
-  const groups = new Set(stacks.clusters.map((c2) => c2.group));
-  assert.deepEqual([...groups].sort(), [...CHIMNEY_GROUPS].sort());
+  const chimney = main.clusters.filter((c2) => CHIMNEY_GROUPS.includes(c2.group));
+  assert.equal(chimney.length, 16);
+  assert.deepEqual([...new Set(chimney.map((c2) => c2.group))].sort(),
+    [...CHIMNEY_GROUPS].sort());
+  // The operator's third Top-Down order: BOTH small smoke stacks are on the view.
+  for (const g of SMALL_SMOKESTACK_GROUPS) {
+    assert.equal(main.clusters.filter((c2) => c2.group === g).length, 4,
+      `small smoke stack '${g}' must contribute its 4 pars to the Top-Down view`);
+  }
+  // The auditorium pars must NOT be dragged in by the group selectors.
+  assert.equal(main.clusters.filter((c2) => AUDITORIUM_GROUPS.includes(c2.group)).length, 0);
+  // Neither the TE sign (LED-class) nor the 12 orphan duplicates pollute it.
+  assert.equal(main.clusters.filter((c2) => c2.group === 'TE Sign').length, 0);
+  assert.equal(main.clusters.filter((c2) => ORPHAN_GROUPS.includes(c2.group)).length, 0);
+  // Per-view glyph styles: a readable par ring, and thin strand lines that leave
+  // the rings room (operator, report 20260725_48).
+  assert.equal(main.styles.UkingPar.sizeX, 13);
+  assert.equal(main.styles.LedStrand.sizeX, 5);
+  // Distinct bar boxes with visible gaps (operator, 2026-07-30) — trimmed from
+  // the shipped 17, still square so a diagonal bar reads the same.
+  assert.equal(main.styles.ShehdsBar.sizeX, 14);
+  assert.equal(main.styles.ShehdsBar.sizeY, 14);
+  // …and the operator-ordered side-gap compression is declared on the panel.
+  assert.deepEqual(main.def.compress, { minWorldGap: 5, gapWorld: 4 });
 });
 
-test('default front resolves to bars + vintage', () => {
+test('default front: one panel per side, front lights + TWO ropes each', () => {
   const c = buildDefaultViews();
-  assert.equal(onePanel(findView(c, 'front')).clusters.length, 24 + 20);
+  const view = findView(c, 'front');
+  assert.deepEqual(view.panels.map((p) => p.id), ['left', 'right']);
+  const r = resolveView(view, DCL, null);
+  for (const [i, panel] of r.panels.entries()) {
+    assert.equal(panel.error, undefined);
+    assert.equal(panel.def.layout, 'spatial');
+    assert.equal(panel.def.projection, 'front');
+    // 5 bars + 4 vintage + exactly 2 smoke-stack ropes on this side.
+    assert.equal(panel.clusters.length, 11);
+    assert.equal(panel.clusters.filter((c2) => c2.group === FRONT_BAR_GROUPS[i]).length, 5);
+    assert.equal(panel.clusters.filter((c2) => c2.group === FRONT_VINTAGE_GROUPS[i]).length, 4);
+    const strands = panel.clusters.filter((c2) => c2.kind === 'led');
+    assert.equal(strands.length, 2, 'exactly two LED ropes per side (operator spec)');
+    assert.deepEqual(strands.map((c2) => c2.group).sort(),
+      [...FRONT_STRAND_GROUPS[i]].sort());
+  }
+  // Nothing from the BACK of the ship, and no orphans, on either panel.
+  const all = r.panels.flatMap((p) => p.clusters);
+  assert.equal(all.length, 22);
+  assert.equal(all.filter((c2) => c2.kind === 'led').length, 4,
+    'four smoke-stack ropes in total across the two panels');
+  for (const g of ['Left_Back_Left', 'Left_Back_Right', 'Right_Back_Left', 'Right_Back_Right']) {
+    assert.equal(all.filter((c2) => c2.group === g).length, 0,
+      `'${g}' is a BACK rope and must not appear on the Front view`);
+  }
+  for (const g of [...BACK_BAR_GROUPS, ...BACK_VINTAGE_GROUPS, ...ORPHAN_GROUPS]) {
+    assert.equal(all.filter((c2) => c2.group === g).length, 0,
+      `'${g}' is not a front fixture and must not appear on the Front view`);
+  }
 });
 
-test('default strands resolves to the 16 LED strands', () => {
+test('default strands resolves to the 8 LED strands, sign excluded', () => {
   const c = buildDefaultViews();
-  assert.equal(onePanel(findView(c, 'strands')).clusters.length, 16);
+  const p = onePanel(findView(c, 'strands'), DCL);
+  assert.equal(p.clusters.length, 8);
+  assert.ok(p.clusters.every((c2) => c2.fixtureType === 'LedStrand'));
 });
 
-test('default te_sign resolves to the TE Sign V3 pair, planar layout', () => {
+test('default te_sign: ONE planar panel per sign, each rotated 90° CCW', () => {
+  // `planar` scales by true world CELL size and never fits to the canvas, so two
+  // signs 34 world units apart in ONE panel render mostly off-screen. A panel per
+  // sign keeps each logo at honest scale while its interlocking A/B halves stay
+  // in a shared frame (report 20260725_48 addendum 2).
   const c = buildDefaultViews();
-  const p = onePanel(findView(c, 'te_sign'));
-  assert.equal(p.clusters.length, 2); // TeSignV3A40 + TeSignV3B34
-  assert.equal(p.def.layout, 'planar');
+  const r = resolveView(findView(c, 'te_sign'), DCL, null);
+  assert.equal(r.panels.length, TE_SIGN_GROUPS.length);
+  for (const [i, p] of r.panels.entries()) {
+    assert.equal(p.error, undefined);
+    assert.equal(p.def.layout, 'planar');
+    // The operator's third order (report 20260725_48). 90 = counter-clockwise.
+    assert.equal(p.def.rotate, 90);
+    assert.equal(p.clusters.length, 2); // TeSignV3A40 + TeSignV3B34
+    assert.deepEqual([...new Set(p.clusters.map((x) => x.group))], [TE_SIGN_GROUPS[i]],
+      'each panel holds exactly ONE sign — never both');
+  }
+});
+
+test('a second sign cannot leak into top_down or strands', () => {
+  // Those two exclude by fixtureType, so they were right about sign 2 from day
+  // one — unlike te_sign, which selected by type and swallowed both.
+  const c = buildDefaultViews();
+  for (const id of ['top_down', 'strands']) {
+    const p = onePanel(findView(c, id), DCL);
+    assert.equal(p.clusters.filter((x) => TE_SIGN_GROUPS.includes(x.group)).length, 0,
+      `view '${id}' must exclude every TE sign`);
+  }
+});
+
+test('panel `rotate` is validated: quarter turns, projected layouts only', () => {
+  const rot = (extra) => validateViewDef(selView('v', [{}], extra));
+  for (const deg of [0, 90, 180, 270]) assert.doesNotThrow(() => rot({ rotate: deg }));
+  assert.throws(() => rot({ rotate: 45 }), /rotate must be one of/);
+  assert.throws(() => rot({ rotate: '90' }), /rotate must be one of/);
+  assert.throws(() => rot({ rotate: 90, layout: 'lanes' }), /only meaningful on a TRUE projection/);
+  assert.throws(() => rot({ rotate: 90, layout: 'radial' }), /only meaningful on a TRUE projection/);
+  assert.doesNotThrow(() => rot({ rotate: 180, layout: 'planar' }));
+});
+
+test('panel `compress` is validated: spatial only, and a real compression', () => {
+  const v = (extra) => validateViewDef(selView('v', [{}], extra));
+  assert.doesNotThrow(() => v({ compress: { minWorldGap: 5, gapWorld: 4 } }));
+  assert.doesNotThrow(() => v({ compress: { minWorldGap: 5, gapWorld: 0 } }));
+  // gapWorld must be SMALLER than the threshold, or a "collapsed" band comes
+  // out wider than the gap that qualified it.
+  assert.throws(() => v({ compress: { minWorldGap: 4, gapWorld: 4 } }), /must be SMALLER/);
+  assert.throws(() => v({ compress: { minWorldGap: 4, gapWorld: 9 } }), /must be SMALLER/);
+  assert.throws(() => v({ compress: { minWorldGap: -1, gapWorld: 0 } }), /non-negative finite/);
+  assert.throws(() => v({ compress: { minWorldGap: 5 } }), /non-negative finite/);
+  assert.throws(() => v({ compress: 5 }), /must be an object/);
+  // Only a TRUE world-axis projection can be compressed meaningfully.
+  assert.throws(() => v({ compress: { minWorldGap: 5, gapWorld: 4 }, layout: 'lanes' }),
+    /needs a 'spatial' layout/);
+  assert.throws(() => v({ compress: { minWorldGap: 5, gapWorld: 4 }, layout: 'planar' }),
+    /needs a 'spatial' layout/);
+});
+
+test('panel `expandPitch` is validated: spatial only, positive world pitches', () => {
+  const v = (extra) => validateViewDef(selView('v', [{}], extra));
+  assert.doesNotThrow(() => v({ expandPitch: { VintageLed: 0.6 } }));
+  assert.doesNotThrow(() => v({ expandPitch: {} }));
+  assert.throws(() => v({ expandPitch: { VintageLed: 0 } }), /positive number of WORLD units/);
+  assert.throws(() => v({ expandPitch: { VintageLed: -1 } }), /positive number of WORLD units/);
+  assert.throws(() => v({ expandPitch: { VintageLed: '0.6' } }), /positive number of WORLD units/);
+  assert.throws(() => v({ expandPitch: [0.6] }), /must be an object/);
+  assert.throws(() => v({ expandPitch: { VintageLed: 0.6 }, layout: 'radial' }),
+    /needs a 'spatial' layout/);
+});
+
+test('`compress` and `expandPitch` survive the persistence round-trip', () => {
+  const c = createViewsContainer(undefined);
+  addView(c, selView('v', [{}], {
+    compress: { minWorldGap: 5, gapWorld: 4 },
+    expandPitch: { VintageLed: 0.6 },
+  }));
+  const round = createViewsContainer(toParams(c));
+  const panel = findView(round, 'v').panels[0];
+  assert.deepEqual(panel.compress, { minWorldGap: 5, gapWorld: 4 });
+  assert.deepEqual(panel.expandPitch, { VintageLed: 0.6 });
+});
+
+test('panel `rotate` survives the persistence round-trip', () => {
+  const c = createViewsContainer(undefined);
+  addView(c, selView('v', [{}], { rotate: 270 }));
+  const round = createViewsContainer(toParams(c));
+  assert.equal(findView(round, 'v').panels[0].rotate, 270);
 });

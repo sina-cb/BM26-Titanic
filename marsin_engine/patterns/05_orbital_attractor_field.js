@@ -367,6 +367,12 @@ export function render3D(index, x, y, z) {
   if (outG < floorG) outG = floorG;
   if (outB < floorB) outB = floorB;
 
+  // LANE MATCH (w == a): the bare W emitter reads cold and the bare A emitter
+  // reads yellow — matched W+A is the ship's warm white, and it is what the LED
+  // strands already render (they fold amber into RGB). Convention:
+  // docs/MARSIN_ENGINE_PATTERNS.md -> "White handling: the w == a convention".
+  outA = outW;
+
   rgbwau(clamp01(outR), clamp01(outG), clamp01(outB),
          clamp01(outW), clamp01(outA), 0.0);
 }

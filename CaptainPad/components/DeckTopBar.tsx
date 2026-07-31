@@ -94,9 +94,22 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck', disabled = fals
 
   return (
     <View style={[styles.header, isPortrait && { paddingHorizontal: 8 }]}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 16 }}>
-        <Text style={[styles.brandText, isPortrait && { fontSize: 16 }]}>{title}</Text>
-        <View style={[styles.statusBadge, isPortrait && { paddingHorizontal: 8, paddingVertical: 4 }]}>
+      {/* LEFT cluster — identity + status. THIS is the side that yields when
+          the bar runs out of width (2026-07-27 fix): it was a rigid row, so at
+          iPad-10 landscape (1180pt) the right cluster ran to x=1327 and the
+          MASTER fader + its readout were pushed clean off the right edge — the
+          operator reported "the MASTER slider doesn't show up in horizontal".
+          `flex:1 + minWidth:0` lets it absorb the shortfall and `overflow
+          hidden` keeps the squeezed chips inside their box; the MODEL chip
+          truncates first (it already tail-truncates its name). Nothing is
+          dropped — only the least load-bearing text narrows. */}
+      <View style={{ flex: 1, minWidth: 0, overflow: 'hidden', flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 8 : 12 }}>
+        {/* The brand never wraps or shrinks — a 2-line "Marsin
+Deck" makes the
+            whole header taller, which is the opposite of what a tight bar needs.
+            Shrink pressure is routed to the MODEL chip below instead. */}
+        <Text numberOfLines={1} style={[styles.brandText, { flexShrink: 0 }, isPortrait && { fontSize: 16 }]}>{title}</Text>
+        <View style={[styles.statusBadge, { flexShrink: 0 }, isPortrait && { paddingHorizontal: 8, paddingVertical: 4 }]}>
           <View style={[styles.statusDot, !isConnected && { backgroundColor: palette.error }]} />
           {/* Connection label — ALWAYS rendered (both orientations). A bare
               dot is not an acceptable disconnect indicator: the OFFLINE state
@@ -114,7 +127,7 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck', disabled = fals
             kept visually subordinate (the MODEL caps label is dropped in
             portrait to save width — the name alone is enough). */}
         {activeModel ? (
-          <View style={styles.modelChip}>
+          <View style={[styles.modelChip, { flexShrink: 1, minWidth: 0 }]}>
             {!isPortrait && <Text style={styles.labelCaps}>MODEL</Text>}
             <Text style={styles.modelName} numberOfLines={1}>{activeModel}</Text>
           </View>
@@ -127,7 +140,12 @@ export function DeckTopBar({ isConnected, title = 'Marsin Deck', disabled = fals
             reports a degrade on /status. See HealthChip / useEngineHealth. */}
         <HealthChip compact={isPortrait} />
       </View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
+      {/* RIGHT cluster — PERFORMANCE · FADE group · MASTER fader · readout.
+          `flexShrink: 0` is load-bearing: the master fader is the deck's
+          grand-master and the e-stop-adjacent control, so it must NEVER be the
+          thing that gets clipped when the bar is tight. The left cluster
+          absorbs the shortfall instead (see its note above). */}
+      <View style={{ flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: isPortrait ? 4 : 12 }}>
         {/* PERFORMANCE MODE — live-show structural lock. Same shared control the
             mixer header mounts, first in the right cluster so it reads before the
             master group. Idle chip → confirm → GO LIVE; active badge → exit sheet. */}

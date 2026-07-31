@@ -38,7 +38,7 @@
 // mid-drag and makes the sliders feel broken.
 
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Linking } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePalette } from '@/hooks/use-theme';
@@ -56,6 +56,7 @@ import { useTempoState } from '@/hooks/use_tempo_tap';
 import { AudioTraceCanvas } from '@/components/audio/AudioTraceCanvas';
 import { PulseFlash } from '@/components/audio/PulseFlash';
 import { audioAccentHex, audioGenreName, isGenreKey, isPulseKey } from '@/utils/audioSignals';
+import { companionUrlFromApiBase } from '@/utils/companion_url';
 
 // "Auto-driven" accent — mirrors C.tertiary in theme.ts.
 // Local copy keeps this screen working even when the theme's TS shape
@@ -110,6 +111,43 @@ interface AudioDevice {
   ffmpegDevice: string;
   isDefault?: boolean;
   alternativeName?: string;
+}
+
+// ── What `capture.device` actually SELECTS ──────────────────────────────
+//
+// `capture.device` is a SHARED field: the Audio Companion (the sole
+// analyzer) uses it to carry its whole SOURCE MODE, not just a mic —
+// 'test' = its synthetic generator, 'file:<path>' = clip replay, '' / null
+// = the platform default input, anything else = that pinned mic
+// (marsin_engine/audio/companion/companion_config.js parseCaptureDevice).
+//
+// `deviceLabel` / `deviceId` are NOT cleared when the source flips to
+// test/file, so rendering `deviceLabel` blindly names a MICROPHONE that is
+// demonstrably not the source. Observed live 2026-07-27 on this rig and
+// checked into marsin_engine/states/test_bench/audio_state.yaml:
+// `device: test` alongside `deviceLabel: Microphone (Amazon USB Streaming
+// Mic)` — the AUDIO tab claimed a USB mic was the running capture device
+// while the Companion was on its test generator. Read the sentinel, never
+// the stale label (codex P0: the UI must not report a source we aren't on).
+type CaptureSource =
+  | { kind: 'mic'; label: string }
+  | { kind: 'default' }
+  | { kind: 'test' }
+  | { kind: 'file'; file: string };
+
+function describeCaptureSource(capture: AudioConfig['capture']): CaptureSource {
+  const dev = capture?.device;
+  if (dev === 'test') return { kind: 'test' };
+  if (typeof dev === 'string' && dev.startsWith('file:')) return { kind: 'file', file: dev.slice('file:'.length) };
+  if (dev == null || dev === '') return { kind: 'default' };
+  return { kind: 'mic', label: capture.deviceLabel || dev };
+}
+
+function captureSourceText(src: CaptureSource): string {
+  if (src.kind === 'test') return 'TEST SIGNAL — Companion synthetic generator';
+  if (src.kind === 'file') return `FILE — ${src.file.split(/[\\/]/).pop() || src.file}`;
+  if (src.kind === 'default') return 'Platform default input (no mic pinned)';
+  return src.label;
 }
 
 // ── Card primitives ─────────────────────────────────────────────────────
@@ -912,6 +950,88 @@ function CompactBpmCard({
   );
 }
 
+// ── Audio Companion launcher ───────────────────────────────────────────
+//
+// One-tap jump from the iPad to the Marsin Audio Companion's own web UI
+// (signal/chain DESIGN lives there since 2026-06-17 — this tab is the lean
+// control surface). The Companion runs on the SAME machine as the engine
+// (launcher.js → COMPANIONS.audio), so its address is derived from the
+// EFFECTIVE api_base (Config-tab AsyncStorage override included) with the
+// port swapped — never a hardcoded host, never 127.0.0.1 on the operator's
+// iPad. Derivation is the pure, unit-tested companionUrlFromApiBase().
+//
+// Codex P0: a base we cannot parse throws, and we render the LOUD error
+// instead of a link to a guessed address.
+
+function CompanionLinkCard() {
+  const C = usePalette();
+  const globalStyles = useGlobalStyles();
+  const CARD = useMemo(() => makeCard(C, globalStyles), [C, globalStyles]);
+  const [url, setUrl] = useState<string | null>(null);
+  const [urlError, setUrlError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const base = await getApiBaseAsync();
+      if (!alive) return;
+      try {
+        setUrl(companionUrlFromApiBase(base));
+        setUrlError(null);
+      } catch (err: any) {
+        setUrl(null);
+        setUrlError(err?.message || String(err));
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const open = useCallback(() => {
+    if (url) void Linking.openURL(url);
+  }, [url]);
+
+  return (
+    <View style={CARD}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <View style={{
+          width: 36, height: 36, borderRadius: 8,
+          backgroundColor: C.primaryContainer, alignItems: 'center', justifyContent: 'center',
+        }}>
+          <IconSymbol name="waveform" size={20} color={C.primary} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 16, color: C.text, letterSpacing: 0.8 }}>
+            AUDIO COMPANION
+          </Text>
+          <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 12, color: urlError ? C.error : C.secondary, marginTop: 2 }}>
+            {urlError
+              ? `Cannot derive the Companion address — ${urlError}`
+              : `Design signals + chains in the analyzer · ${url ?? 'resolving…'}`}
+          </Text>
+        </View>
+        <TouchableOpacity
+          onPress={open}
+          disabled={!url}
+          activeOpacity={0.7}
+          style={{
+            paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8,
+            backgroundColor: url ? C.primary : C.surfaceContainerLowest,
+            borderWidth: 1, borderColor: url ? C.primary : C.ghostBorder,
+            opacity: url ? 1 : 0.6,
+          }}
+        >
+          <Text style={{
+            fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11,
+            color: url ? '#fff' : C.secondary, textTransform: 'uppercase', letterSpacing: 0.8,
+          }}>
+            Open Companion ↗
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 // ── Cross-machine mic-not-found banner (engine commit 5d830d6) ──────────
 //
 // When the engine boots a scene whose saved mic isn't on this machine
@@ -1118,14 +1238,28 @@ export default function AudioAnalysisScreen() {
   const [cfg, setCfg] = useState<AudioConfig | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // One fetch at a time. Guards the mount effect + first focus from
+  // double-fetching, and makes the RETRY button mash-safe.
+  const inFlightRef = useRef(false);
   const reload = useCallback(async () => {
-    await getApiBaseAsync();
-    const r = await fetchAudioConfig();
-    if (r.ok) { setCfg(r.data as AudioConfig); setLoadError(null); }
-    else { setLoadError(r.error || 'unknown error'); }
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      await getApiBaseAsync();
+      const r = await fetchAudioConfig();
+      if (r.ok) { setCfg(r.data as AudioConfig); setLoadError(null); }
+      else { setLoadError(r.error || 'unknown error'); }
+    } finally { inFlightRef.current = false; }
   }, []);
 
   useEffect(() => { reload(); }, [reload]);
+
+  // The expo-router tab screen never remounts, so without this a single
+  // failed GET /audio/config latches the error (or the spinner) until the
+  // operator hits RETRY or reloads the app. Re-attempt on every focus while
+  // we still have no config. This is a RETRY, not a fallback: a failing
+  // refetch re-renders the same loud error.
+  useFocusEffect(useCallback(() => { if (!cfg) void reload(); }, [cfg, reload]));
 
   if (loadError) {
     return (
@@ -1337,6 +1471,9 @@ function AudioConfigBody({
   }, [devices, loadDevices]);
 
   // ── Derived ────────────────────────────────────────────────────────
+  // What `capture.device` actually selects right now (mic / default input /
+  // Companion test generator / file replay) — see describeCaptureSource.
+  const capSource = describeCaptureSource(cfg?.capture);
   const enabled  = cfg?.enabled ?? false;
   const phase    = status?.phase ?? (enabled ? 'unknown' : 'off');
   const phaseColor =
@@ -1441,6 +1578,12 @@ function AudioConfigBody({
             were removed here. Restore from git history if the editor ever
             comes back to CaptainPad. */}
 
+        {/* ── Audio Companion launcher ─────────────────────────────────
+            Sits with the config controls, ABOVE the SETTINGS disclosure so
+            it is visible without expanding anything. Address is derived
+            from the effective api_base (see CompanionLinkCard). */}
+        <CompanionLinkCard />
+
         {/* ── 4. SETTINGS (collapsed by default) ───────────────────────
             Pinned bottom disclosure that holds everything rarely touched
             mid-show. Operator brief 2026-05-26: the old BPM mapping,
@@ -1518,12 +1661,17 @@ function AudioConfigBody({
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 }}>
                   <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: phaseColor }} />
                   <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', color: C.text, fontSize: 14 }}>
-                    {cfg.capture.deviceLabel || cfg.capture.device || 'No device selected'}
+                    {captureSourceText(capSource)}
                   </Text>
                   <Text style={{ fontFamily: 'Inter_400Regular', color: C.secondary, fontSize: 11 }}>
                     {enabled ? `· ${phase}` : '· disabled'}
                   </Text>
                 </View>
+                {capSource.kind === 'test' || capSource.kind === 'file' ? (
+                  <Text style={{ fontFamily: 'Inter_400Regular', color: C.error, fontSize: 11, marginBottom: 4 }}>
+                    Not listening to a microphone — the Audio Companion is running its {capSource.kind === 'test' ? 'synthetic test signal' : 'file replay'}. Pick a device below to go back to live mic input.
+                  </Text>
+                ) : null}
                 <Text style={{ fontFamily: 'Inter_400Regular', color: C.icon, fontSize: 11 }}>
                   {cfg.capture.inputFormat || '—'} · {cfg.capture.sampleRate} Hz · {cfg.capture.channels} ch · {cfg.fftSize}-pt FFT · {status?.captureFps ?? 0} fps
                 </Text>
@@ -1562,9 +1710,14 @@ function AudioConfigBody({
                       <MicPickerRow
                         key={d.id}
                         device={d}
+                        // Only a PINNED mic can mark a row ACTIVE. On 'test' /
+                        // 'file:' / default-input the stale deviceId would
+                        // otherwise light up a row that is not the source.
                         isCurrent={
-                          cfg.capture.deviceId === d.id ||
-                          (cfg.capture.device === d.ffmpegDevice && cfg.capture.inputFormat === d.inputFormat)
+                          capSource.kind === 'mic' && (
+                            cfg.capture.deviceId === d.id ||
+                            (cfg.capture.device === d.ffmpegDevice && cfg.capture.inputFormat === d.inputFormat)
+                          )
                         }
                         onPress={() => selectDevice(d)}
                         busy={busy === `mic:${d.id}`}

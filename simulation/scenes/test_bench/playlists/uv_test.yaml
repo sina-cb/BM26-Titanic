@@ -1,0 +1,10 @@
+schemaVersion: 1
+name: uv_test
+entries:
+  - id: e_uv_test_0_65_uv_only
+    pattern: 65_uv_only
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null

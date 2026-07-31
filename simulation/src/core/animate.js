@@ -17,10 +17,13 @@ import { scaleSimulationPreviewRgb } from "./sim_preview.js";
 import PatchManager from "../dmx/patch_manager.js";
 import { engineHttpUrl } from "./engine_endpoint.js";
 import { applyFixtureOutputOverrides, applyDmxEntryOutputGate } from "../dmx/dmx_output_overrides.js";
-import { blendRgbwau } from "./rgbwau_blend.js";
+import { blendEntryRgbwau } from "./rgbwau_blend.js";
 import { entryPaintsDirect } from "./render_paint_rule.js";
 import { ledOutputScale } from "./group_lock.js";
 import { buildGradientLut } from "./color_transition.js";
+import { createLowFpsAlarm, LOW_FPS_THRESHOLD, LOW_FPS_SUSTAIN_SECONDS } from "./low_fps_alarm.js";
+import { dotDrawnRadius, writeDotMatrix } from "./pixel_dot_geometry.js";
+import { adapterWarningText, adapterLogLine } from "./gpu_adapter.js";
 // sACN output — lazily initialized
 let sacnOutputClient = null;
 let sacnOutputEnabled = false;
@@ -113,12 +116,9 @@ window.updatePixelInstancedScale = function(newScale) {
   const n = _batchRenderList.length;
   for (let i = 0; i < n; i++) {
     const e = _batchRenderList[i];
-    const sizeMm = e.pixelSize || 14;
-    const worldRadius = sizeMm * 0.001 * newScale;
-    _pixelTransformObj.position.set(e.wx, e.wy, e.wz);
-    _pixelTransformObj.scale.setScalar(worldRadius);
-    _pixelTransformObj.updateMatrix();
-    _pixelInstancedMesh.setMatrixAt(i, _pixelTransformObj.matrix);
+    // DRAWN position + radius — never the physical x/y/z + pixelSize. See
+    // pixel_dot_geometry.js for why the distinction exists.
+    writeDotMatrix(_pixelInstancedMesh, i, e, dotDrawnRadius(e, newScale), _pixelTransformObj);
   }
   _pixelTransformObj.scale.setScalar(1); // reset for future use
   _pixelInstancedMesh.instanceMatrix.needsUpdate = true;
@@ -194,13 +194,9 @@ function _rebuildBatchCache() {
   const globalScale = params.globalPixelScale || 1.0;
   for (let i = 0; i < n; i++) {
      const e = list[i];
-     // Convert pixelSize (mm) to world units, apply global scale
-     const sizeMm = e.pixelSize || 14; // default 14mm if missing
-     const worldRadius = sizeMm * 0.001 * globalScale;
-     _pixelTransformObj.position.set(e.wx, e.wy, e.wz);
-     _pixelTransformObj.scale.setScalar(worldRadius);
-     _pixelTransformObj.updateMatrix();
-     _pixelInstancedMesh.setMatrixAt(i, _pixelTransformObj.matrix);
+     // DRAWN position + radius (pixel_dot_geometry.js) — never the physical
+     // x/y/z + pixelSize, which describe the real rig, not the drawing of it.
+     writeDotMatrix(_pixelInstancedMesh, i, e, dotDrawnRadius(e, globalScale), _pixelTransformObj);
      _pixelColorCache.setRGB(0, 0, 0); // start black
      _pixelInstancedMesh.setColorAt(i, _pixelColorCache);
   }
@@ -330,11 +326,18 @@ function _applyDmxOutputGate(list, headless) {
     // bulb/halo/cone match the dots. Patched entries never take this branch —
     // applyDmxFrame owns their visual, from the already-gated buffer.
     if (!headless && entry.apply && entryPaintsDirect(entry, patchesActive)) {
-      const [rn, gn, bn] = blendRgbwau(entry.r, entry.g, entry.b, entry.w, entry.a, entry.u);
+      const [rn, gn, bn] = blendEntryRgbwau(entry);
       entry.apply(rn, gn, bn);
     }
   }
 }
+
+// Sustained-low-FPS latch. A slow badge is easy to shrug off; ten straight
+// seconds under 20 FPS is a broken measurement environment, and the ONE fact
+// that explains it (which GPU is rendering) has to be in the same log line —
+// see report `20260725_38`, where a sustained 10 FPS was hunted through the
+// render path for a session and turned out to be the Intel iGPU. Fires once.
+const _lowFpsAlarm = createLowFpsAlarm(LOW_FPS_THRESHOLD, LOW_FPS_SUSTAIN_SECONDS);
 
 export function animate() {
   requestAnimationFrame(animate);
@@ -350,6 +353,19 @@ export function animate() {
       // Color bands match HUD theme: green ≥30 (good), amber 15–29 (ok), red <15 (poor).
       const quality = frameCount >= 30 ? "good" : frameCount >= 15 ? "ok" : "poor";
       if (fpsEl.dataset.quality !== quality) fpsEl.dataset.quality = quality;
+    }
+    if (_lowFpsAlarm.sample(frameCount)) {
+      // `window.__gpuAdapter` is set at boot by detectGpuAdapter(). Naming it
+      // here covers the case the banner cannot: the RIGHT (discrete) adapter,
+      // contended by something else — leftover probe windows, another sim tab.
+      const adapter = window.__gpuAdapter;
+      console.error(
+        `[LowFPS] ${frameCount} FPS — under ${LOW_FPS_THRESHOLD} FPS for ` +
+        `${LOW_FPS_SUSTAIN_SECONDS} consecutive seconds. ` +
+        `${adapterLogLine(adapter, window.__rendererMode)}. ` +
+        `${adapterWarningText(adapter) || 'The adapter looks correct — check for other windows ' +
+          'or apps contending for the GPU (close leftover probe browsers and extra sim tabs).'}`,
+      );
     }
     setFrameCount(0);
     setLastFpsTime(now);
@@ -394,6 +410,9 @@ export function animate() {
          const r = lut[off], g = lut[off + 1], b = lut[off + 2];
          entry.r = r; entry.g = g; entry.b = b;
          entry.w = 0; entry.a = 0; entry.u = 0; // standard colors
+         // Locally rendered lanes supersede any wire-derived strand preview
+         // cached by the sACN-in demap (see rgbwau_blend.blendEntryRgbwau).
+         if (entry._ledWirePreview) entry._ledWirePreview = null;
          // Direct-paint when unpatched OR an LED strand (LEDs have no wire
          // read-back — see render_paint_rule.js). Headless skips the visual write.
          if (entryPaintsDirect(entry, window._patchesActive) && entry.apply && !_headless) entry.apply(r, g, b);
@@ -428,13 +447,16 @@ export function animate() {
         // Capture raw colors logically for sACN mapping
         entry.r = R / 255; entry.g = G / 255; entry.b = B / 255;
         entry.w = W / 255; entry.a = A / 255; entry.u = U / 255;
+        // Locally rendered lanes supersede any wire-derived strand preview
+        // cached by the sACN-in demap (see rgbwau_blend.blendEntryRgbwau).
+        if (entry._ledWirePreview) entry._ledWirePreview = null;
 
         // Direct-paint when unpatched OR an LED strand (LEDs have no wire
         // read-back — see render_paint_rule.js). When a DMX entry is patched the
         // DMX router path repaints it from the universe buffer instead.
         // Headless skips the visual write (nothing renders); colors still stored above.
         if (entryPaintsDirect(entry, window._patchesActive) && entry.apply && !_headless) {
-          const [rn, gn, bn] = blendRgbwau(entry.r, entry.g, entry.b, entry.w, entry.a, entry.u);
+          const [rn, gn, bn] = blendEntryRgbwau(entry);
           entry.apply(rn, gn, bn);
         }
       }
@@ -451,6 +473,7 @@ export function animate() {
         const entry = _batchRenderList[i];
         entry.r = 0; entry.g = 0; entry.b = 0;
         entry.w = 0; entry.a = 0; entry.u = 0;
+        if (entry._ledWirePreview) entry._ledWirePreview = null;
         // Clear the visual too — LED strands included, so a patched strand goes
         // black when lighting is disabled instead of freezing (see render_paint_rule.js).
         if (entryPaintsDirect(entry, window._patchesActive) && entry.apply && !_headless) {
@@ -474,7 +497,11 @@ export function animate() {
       if (_batchCacheVersion !== _batchLastBuiltVersion) {
         _rebuildBatchCache();
       }
-      demapSacnToPixels(_batchRenderList, window.dmxRouter);
+      // The undriven-entry treatment answers to the SAME switch as the other
+      // two unpatched indicators below (_applyUnpatchedRedOverlay's shell tint
+      // and the instanced-dot flush): red when on, black when off. Read fresh
+      // every frame so flipping the toggle repaints on the next one.
+      demapSacnToPixels(_batchRenderList, window.dmxRouter, !!params.showUnpatchedRed);
       // LED master/group blackout AFTER the demap writes entry colors, BEFORE
       // the global flush + 2D tap read them.
       _applyLedOutputGate(_batchRenderList);
@@ -551,17 +578,16 @@ export function animate() {
          const isIsolated = activeView && !(((entry.vMask || 0) & activeView.bit) !== 0 || (activeView.groups && activeView.groups.includes(entry.group)));
 
          if (touchMatrices) {
-            const worldRadius = (entry.pixelSize || 14) * 0.001 * globalScale;
-            _pixelTransformObj.position.set(entry.wx, entry.wy, entry.wz);
-            _pixelTransformObj.scale.setScalar(isIsolated ? 0 : worldRadius);
-            _pixelTransformObj.updateMatrix();
-            _pixelInstancedMesh.setMatrixAt(i, _pixelTransformObj.matrix);
+            // DRAWN position + radius (pixel_dot_geometry.js); isolation still
+            // hides a non-member instance by zero-scaling its matrix.
+            const worldRadius = isIsolated ? 0 : dotDrawnRadius(entry, globalScale);
+            writeDotMatrix(_pixelInstancedMesh, i, entry, worldRadius, _pixelTransformObj);
          }
 
          if (!isIsolated) {
             if (!window._patchesActive) {
                // All-unpatched direct mode: show pattern colors
-               [rn, gn, bn] = blendRgbwau(entry.r, entry.g, entry.b, entry.w, entry.a, entry.u);
+               [rn, gn, bn] = blendEntryRgbwau(entry);
             } else if (!entry.patch || !entry.patch.universe || entry.patch.universe <= 0) {
                // Mixed mode: unpatched pixels stay black — unless the operator
                // has enabled the unpatched-red overlay (a sim-only diagnostic;
@@ -569,7 +595,7 @@ export function animate() {
                if (params.showUnpatchedRed) { rn = 0.8; gn = 0; bn = 0; }
                else { rn = 0; gn = 0; bn = 0; }
             } else {
-               [rn, gn, bn] = blendRgbwau(entry.r, entry.g, entry.b, entry.w, entry.a, entry.u);
+               [rn, gn, bn] = blendEntryRgbwau(entry);
             }
          }
         

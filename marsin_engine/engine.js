@@ -1573,9 +1573,18 @@ async function main() {
 
   // 7a. Smart Model Hot Reload
   let modelReloadTimer = null;
+  // TEARDOWN HYGIENE (report _30 step 10): the watcher handle used to be
+  // DISCARDED, so the engine always exited with a live fs.watch handle (plus
+  // its threadpool work) still open. The libuv abort the operator hit —
+  // `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`, src/win/async.c:94
+  // — can only be tripped WHILE handles are being torn down, and in a Node
+  // process with zero native addons there is no steady-state path to it. So the
+  // fix direction is to shrink what is still live at exit. Keep the handle and
+  // close it in shutdown().
+  let modelWatcher = null;
   const modelsDir = path.join(__dirname, 'models');
   if (fs.existsSync(modelsDir)) {
-    fs.watch(modelsDir, (eventType, filename) => {
+    modelWatcher = fs.watch(modelsDir, (eventType, filename) => {
       if (!filename || (!filename.endsWith(`${opts.modelName}.js`) && !filename.endsWith(`${opts.modelName}.effects.js`) && !filename.endsWith(`${opts.modelName}.viewmasks.js`))) return;
       if (modelReloadTimer) clearTimeout(modelReloadTimer);
       modelReloadTimer = setTimeout(async () => {
@@ -2401,6 +2410,13 @@ async function main() {
       try { lOsc.stop(); } catch (_) { /* ignore */ }
     }
     try { bpmSync.detach(); } catch (_) { /* ignore */ }
+    // Close the model hot-reload watcher and cancel its debounce (report _30
+    // step 10). Every live handle retired before exit is abort surface removed.
+    if (modelReloadTimer) { clearTimeout(modelReloadTimer); modelReloadTimer = null; }
+    if (modelWatcher) {
+      try { modelWatcher.close(); } catch (e) { console.warn(`  ⚠ model watcher close failed: ${e.message}`); }
+      modelWatcher = null;
+    }
     // Stop the in-engine Timeline tick (docs/38 §15) before tearing the
     // render loop / API down so no late cue fires into a half-shut engine.
     try { apiServer.stopTimeline && apiServer.stopTimeline(); } catch (_) { /* ignore */ }
@@ -2451,7 +2467,12 @@ async function main() {
   process.on('SIGTERM', () => shutdown());
 
   // Scene/model coordination hook (sim → engine, see POST /scene in
-  // api_server.js). Cross-scene model swaps change the pixel count and the
+  // api_server.js). TWO callers, one mechanism:
+  //   • POST /scene <other scene>  — cross-scene switch;
+  //   • POST /scene/reload <active scene> — deliberate SAME-scene restart that
+  //     applies a re-exported model the on-disk watcher refused (pixel-count
+  //     change → `modelSync.stale`). Same argv, same ports, one engine.
+  // Cross-scene model swaps change the pixel count and the
   // render loop / WASM buffers are sized once at boot, so an in-process swap
   // is impossible (the existing on-disk hot reloader refuses pixel-count
   // changes and goes STALE). The robust path is a clean restart with the new

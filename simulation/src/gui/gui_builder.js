@@ -26,10 +26,47 @@ import { setupControlDrawer } from "./control_drawer.js";
 import {
   traceRenameError, sweepGeneratedInstances, carryTraceGroupOverride,
 } from "./trace_group_rename.js";
+import { traceVisualsShouldShow } from "./trace_visual_gate.js";
 import { rebuildParLights, rebuildDmxFixtures } from "../core/fixtures.js";
 import { deselectAllFixtures, nextFixtureName, syncGuiFolders } from "../core/interaction.js";
 import { listTypes, getDefinition } from "../dmx/fixture_definition_registry.js";
+import {
+  chainSplitsError, emitInChainOrder, describeChainOrder,
+  fullReverseSplits, isFullReverse,
+} from "../dmx/generator_chain_order.js";
+import {
+  CHAIN_JUMP_COLOR, buildChainRuns, chainJumpSegments, chainLabelPlan, cometMix,
+} from "../dmx/chain_order_visual.js";
 import { clearMetadata, gatherAllConfigs } from "../dmx/auto_patcher.js";
+import {
+  markTraceRegenDirty, markStrandTransformDirty, takePendingRegens,
+} from "../dmx/trace_regen_scheduler.js";
+import {
+  traceAnchor, traceFocusPoint, traceUsesWorldSpacePath, anchorDelta,
+} from "../dmx/trace_anchor.js";
+import {
+  detectResnappedFixtures, resnapMessage,
+} from "../dmx/generator_hand_tweaks.js";
+import { showToast } from "./controller_map_editor.js";
+import { checkSubscribedUniversesBeforeSave } from "./subscribed_universes_prompt.js";
+import {
+  invalidateFixtureMappings, describeFixtureMappings,
+} from "../dmx/controller_registry.js";
+import {
+  generatedFixtureNames, renamePairs, carryViewMasks, duplicateNameError,
+  buildInvalidationReport,
+} from "../dmx/rename_invalidation.js";
+import {
+  collectSceneGroupNames, groupRenameError, buildGroupRenameReport,
+} from "../dmx/group_rename_guard.js";
+import {
+  findOrphanFixtures, orphanGroupSummary, isOrphanFixture, generatorGroupNames,
+  allSceneRecords, enumerateOrphanDependents, buildOrphanDeleteConfirm,
+  buildEnumerationRefusal, buildStaleOrphanRefusal, buildRemovalReport,
+} from "../dmx/orphan_fixtures.js";
+import {
+  renameGroupInPixelMapViews, removeFixtureFromPixelMapViews, pixelMapViewsSource,
+} from "./pixel_map/pixel_map_store.js";
 import { getProfileDef, getProfileRebuildKey } from "../core/profile_registry.js";
 import { MAX_SPOTLIGHT_POOL_SIZE, showSpotlightCountWarning } from "../core/light_pool.js";
 import { applySimulationSurfaceReflectanceToMaterial } from "../core/sim_preview.js";
@@ -37,6 +74,7 @@ import { DmxFixtureRuntime } from "../fixtures/dmx_fixture_runtime.js";
 import { isStaticHost, logStaticHostSkip } from "../core/static_host.js";
 import { ModelFixture } from "../fixtures/model_fixture.js";
 import { LedStrand } from "../fixtures/led_strand.js";
+import { LOCAL_HALO_SCALE_MIN, LOCAL_HALO_SCALE_MAX } from "../fixtures/led_halo.js";
 import { applyTeSignPlacement } from "../fixtures/te_sign_generator.js";
 import {
   isGroupLocked, parGroupMemberIndices, strandGroupMemberIndices, isTeSignConfigs,
@@ -45,6 +83,14 @@ import {
   LED_GENERATORS, uniqueGroupName, runLedGenerator,
 } from "../fixtures/led_generator_catalog.js";
 import { showModal } from "./scene_manager.js";
+// DISPLAY ORDER ONLY (operator, 2026-07-30: "in the menu for the instances and
+// generator lists for dmx and LED too — sort by name"). Every menu list below
+// renders through these helpers; the scene arrays they read (params.parLights,
+// params.traces, params.ledStrands, params.dmxFixtures) keep their own order, so
+// chain order, patch derivation and YAML serialization are byte-identical. The
+// ONE shared comparator — a second copy is how two "sorted by name" lists start
+// disagreeing, and a per-item localeCompare is the perf bug report _50 fixed.
+import { sortNamesNatural, sortByNameNatural } from "../core/natural_sort.js";
 import { updateFloodLights } from "../core/flood_lights.js";
 import { engineHttpUrl } from "../core/engine_endpoint.js";
 import { saveHttpUrl } from "../core/save_endpoint.js";
@@ -307,14 +353,76 @@ function setupGUI() {
   }
 
   // ─── Save / Auto-Save ───
-  function exportConfig() {
-    if (window._isAppBooting) return;
+  /**
+   * The full scene save: model + view-mask sidecar export, then POST the
+   * serialized YAML to the save server, then the post-save resyncs.
+   *
+   * AWAITABLE (slice S1, report 20260725_58 §6). Returns a promise that
+   * RESOLVES to `{ ok: boolean, reason?: string }` and NEVER rejects: every
+   * existing caller is fire-and-forget (debounceAutoSave, GUI buttons,
+   * controller_map_editor's 💾) and a rejecting promise would turn each of
+   * them into an unhandled rejection, while the callers that DO need to
+   * sequence on the save — the LED per-output push, which is only "done" once
+   * the mapping is on disk — need the failure as data they can render, not as
+   * an exception to swallow. `ok:false` is returned for EVERY path that leaves
+   * nothing new on disk (booting, mid-rebuild, model-export abort, static
+   * host, a non-200 from the save server), each with a verbatim reason.
+   *
+   * There is no `force` argument: exportConfig never consulted
+   * `params.autoSave` — that gate lives in debounceAutoSave. Calling this
+   * directly IS the forced save, and it does not arm the debounce.
+   *
+   * `options.interactive` (default TRUE) is the ONE knob: it says whether this
+   * save may put a dialog in front of the operator. Every operator-initiated
+   * save — the controller pane's 💾, the Lighting Controls 💾, the LED push's
+   * scene write — leaves it at the default, so ALL of them behave identically
+   * (one save path = one behavior). Only debounceAutoSave's 2 s timer passes
+   * `false`, because a modal that appears while the operator is orbiting the
+   * camera is worse than a warning he reads on his next explicit save.
+   *
+   * @param {{interactive?: boolean}} [options]
+   * @returns {Promise<{ok: boolean, reason?: string}>}
+   */
+  async function exportConfig(options = {}) {
+    const interactive = options.interactive !== false;
+    if (window._isAppBooting) {
+      return { ok: false, reason: 'the app is still booting — nothing was saved' };
+    }
     if (window._isRebuildingFixtures) {
       // Never silently drop a save: the rebuild path re-arms the
       // debounce when it finishes, but belt-and-braces retry here too —
       // a swallowed save is exactly how stale scenes shipped on-site.
       setTimeout(() => { if (window.debounceAutoSave) window.debounceAutoSave(true); }, 500);
-      return;
+      return { ok: false,
+        reason: 'fixtures are rebuilding — the save was deferred to the auto-save retry, ' +
+          'nothing is on disk yet' };
+    }
+
+    // ── 📡 Subscribed Universes gate (report 20260725_86) ───────────────
+    // BEFORE the first byte is written: the sACN-IN bridge builds its receiver
+    // accept-list at boot from `colorWave.sacn_universes`, and the `sacn`
+    // package DROPS packets on unsubscribed universes with no event at all —
+    // a field that has fallen behind the mapping is dark fixtures and a clean
+    // bill of health everywhere else (reports _58 §7.1 layer 6, _60). This
+    // recomputes the universes the configuration actually uses and, when the
+    // field is short, asks Yes / No / Cancel. 'cancel' must still mean
+    // "nothing on disk", so it runs ahead of saveModelJS().
+    let universeGate;
+    try {
+      universeGate = await checkSubscribedUniversesBeforeSave({ interactive });
+    } catch (err) {
+      // The required set could not be derived (no registry, malformed
+      // mapping). Saving anyway would write a scene whose subscription field
+      // we could not verify — the exact silent-dark shape this gate exists to
+      // close — so refuse loudly instead (codex P0: no fallbacks).
+      console.error('Subscribed-universes check failed — config save aborted:', err);
+      showSaveToast(`⚠ SAVE ABORTED — universe check failed: ${err.message}`, true);
+      return { ok: false,
+        reason: `subscribed-universes check failed — nothing saved: ${err.message}` };
+    }
+    if (!universeGate.proceed) {
+      showSaveToast('Save cancelled — nothing was written', true);
+      return { ok: false, reason: 'the operator cancelled at the 📡 Subscribed Universes prompt' };
     }
 
     // Export the pixel model + view-mask sidecar FIRST: saveModelJS
@@ -329,7 +437,7 @@ function setupGUI() {
     } catch (err) {
       console.error('Model/sidecar export failed — config save aborted:', err);
       showSaveToast(`⚠ EXPORT FAILED — NOTHING SAVED: ${err.message}`, true);
-      return;
+      return { ok: false, reason: `model/sidecar export failed — nothing saved: ${err.message}` };
     }
 
     reconstructYAML(configTree);
@@ -373,29 +481,36 @@ function setupGUI() {
     const sceneParam = window.__activeScene ? `?scene=${window.__activeScene}` : '';
     if (isStaticHost()) {
       logStaticHostSkip('save scene config (port 6970)');
-    } else {
-      fetch(saveHttpUrl(`/save${sceneParam}`), {
+      return { ok: false,
+        reason: 'static host — the save server (port 6970) is not reachable, nothing was written' };
+    }
+    try {
+      const res = await fetch(saveHttpUrl(`/save${sceneParam}`), {
         method: "POST",
         body: yamlStr,
-      })
-        .then((res) => {
-          if (!res.ok) throw new Error(`save server responded ${res.status}`);
-          console.log(`Config saved${window.__activeScene ? ` (scene: ${window.__activeScene})` : ''}`);
-          _setSceneDirty(false);
-          showSaveToast();
-          if (window.PatchManager) window.PatchManager.notifySacnBridge();
-          // Resync every fixture card's "Views:" chips with the
-          // just-persisted registry + membership state.
-          if (window.refreshMetadataPanels) window.refreshMetadataPanels();
-          if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
-        })
-        .catch((err) => {
-          // Stay dirty: the indicator keeps shouting until a save lands.
-          console.error("Failed to write config:", err);
-          showSaveToast('⚠ SAVE FAILED — changes NOT on disk', true);
-        });
+      });
+      if (!res.ok) throw new Error(`save server responded ${res.status}`);
+      console.log(`Config saved${window.__activeScene ? ` (scene: ${window.__activeScene})` : ''}`);
+      _setSceneDirty(false);
+      showSaveToast();
+      // Tell the bridge to re-read the patches.yaml we just wrote — this is
+      // what makes "a save alone is sufficient" true (report _58 §6). AWAITED
+      // and LOUD (slice S4): the save landing while the notify silently failed
+      // is the exact shape of the operator's dark-LED day — disk fresh, feed
+      // stale, every surface green. notifySacnBridgeLoud never rejects, so the
+      // catch below can still only mean "the save itself failed".
+      if (window.PatchManager) await window.PatchManager.notifySacnBridgeLoud();
+      // Resync every fixture card's "Views:" chips with the
+      // just-persisted registry + membership state.
+      if (window.refreshMetadataPanels) window.refreshMetadataPanels();
+      if (window.refreshViewMasksPanel) window.refreshViewMasksPanel();
+      return { ok: true };
+    } catch (err) {
+      // Stay dirty: the indicator keeps shouting until a save lands.
+      console.error("Failed to write config:", err);
+      showSaveToast('⚠ SAVE FAILED — changes NOT on disk', true);
+      return { ok: false, reason: err.message };
     }
-
   }
 
   function saveModelJS() {
@@ -422,6 +537,10 @@ function setupGUI() {
     clearTimeout(toast._timer);
     toast._timer = setTimeout(() => { toast.style.opacity = '0'; }, ok ? 2000 : 6000);
   }
+  // Published for the non-GUI modules that must shout at the operator through
+  // the same surface the save uses (slice S4: PatchManager's save/notify
+  // failures). Keep the signature `(message, isError)`.
+  window.showSaveToast = showSaveToast;
 
   // ─── Unsaved-changes tracking ───
   // Every mutation marks the scene dirty; only a confirmed 200 from the
@@ -508,20 +627,389 @@ function setupGUI() {
     flushPendingSaveBeacon();
   });
 
-  function _showAutoToast(msg) {
+  function _showAutoToast(msg, ttl = 3000) {
     let toast = document.getElementById('auto-patch-toast');
     if (!toast) {
       toast = document.createElement('div');
       toast.id = 'auto-patch-toast';
-      toast.style.cssText = 'position:fixed;top:48px;left:50%;transform:translateX(-50%);background:color-mix(in srgb, var(--tint) 15%, var(--surface));border:1px solid var(--tint);color:var(--tint);padding:8px 24px;border-radius:8px;font-family:var(--font-body);font-size:13px;pointer-events:none;z-index:999;opacity:0;transition:opacity 0.3s;';
+      // top:80px clears the multi-client contention banner
+      // (multi_client_warning.js: top:44px, z-index:1000). At the old 48px
+      // this toast sat 4px below a taller, higher-stacked element and was
+      // completely hidden whenever a second sim window was open — i.e. every
+      // time an agent probe or a second tab is around. A summary the operator
+      // cannot see is not a loud output (rename invalidation, report _47).
+      toast.style.cssText = 'position:fixed;top:80px;left:50%;transform:translateX(-50%);background:color-mix(in srgb, var(--tint) 15%, var(--surface));border:1px solid var(--tint);color:var(--tint);padding:8px 24px;border-radius:8px;font-family:var(--font-body);font-size:13px;pointer-events:none;z-index:1001;opacity:0;transition:opacity 0.3s;max-width:min(760px,70vw);text-align:center;line-height:1.35;';
       document.body.appendChild(toast);
     }
     toast.textContent = msg;
+    // Appear WITHOUT waiting on a compositor animation. The fade-in was set up
+    // in the same synchronous task as the insertion, so the transition could be
+    // left in flight and never ticked — measured live: inline opacity '1',
+    // COMPUTED opacity '0', still 0 after 2 s of rAF polling, and invisible in
+    // the screenshot (report _47). An operator summary that silently fails to
+    // render is the opposite of a loud output, so the show step is now
+    // transition-free; the fade-OUT is re-armed on the next frame.
+    toast.style.transition = 'none';
     toast.style.opacity = '1';
+    requestAnimationFrame(() => { toast.style.transition = 'opacity 0.3s'; });
     clearTimeout(toast._timer);
-    toast._timer = setTimeout(() => { toast.style.opacity = '0'; }, 3000);
+    toast._timer = setTimeout(() => { toast.style.opacity = '0'; }, ttl);
   }
   window.exportConfig = exportConfig;
+
+  // ── Rename hygiene: CHECK + INVALIDATE (operator ruling 2026-07-29) ──────
+  // The single implementation every rename path in this file calls. A rename
+  // enumerates everything the OLD names mapped, invalidates it, and reports
+  // it fixture by fixture:
+  //   • registry chain entries  → spliced out (fixtures become UNMAPPED)
+  //   • __globalPatchTree keys  → pruned (no old-name phantoms survive)
+  //   • derived patch fields on the live configs → cleared
+  //   • per-fixture viewMask    → CARRIED (display state, not mapping)
+  // Addresses are NEVER migrated to the new names: that opt-in affordance
+  // (plan 20260725_44 step 11b) is operator-gated and deliberately unbuilt.
+  //
+  // `pairs` are the positional old→new name pairs (`"<group> N"` → `"<group2>
+  // N"` for a group rename, a single pair for one fixture). `configsByName`
+  // resolves the NEW names to their live config objects; pass it only when
+  // the new configs already exist (a group rename calls this BEFORE the
+  // regenerate, so it passes null and the caller carries masks afterwards).
+  //
+  // Returns the report so the caller can assert on it.
+  //
+  // `reproject: false` is for callers that regenerate immediately afterwards
+  // (the group rename). It matters: `projectControllerMappings` re-mints a
+  // `__globalPatchTree` entry for EVERY live config (main.js), so reprojecting
+  // while the OLD-named fixtures are still in `params.parLights` resurrects
+  // the very phantoms we just pruned — caught live by
+  // `trace_rename_verify.cjs` (`noPatchTreePhantoms`). The regenerate's own
+  // projection, which runs after the sweep, is the correct one.
+  function invalidateMappingForRename(pairs, {
+    scope = 'fixture', configsByName = null, oldLabel = null, newLabel = null,
+    reproject = true,
+  } = {}) {
+    const oldNames = pairs.map((p) => p.from);
+    const oldMasks = new Map();
+    const patchTree = window.__globalPatchTree || {};
+    for (const name of oldNames) {
+      const rec = patchTree[name];
+      if (rec && rec.viewMask) oldMasks.set(name, rec.viewMask);
+    }
+    // Live configs still carrying the old names hold the authoritative mask
+    // (the patch tree only refreshes on a projection).
+    for (const config of gatherAllConfigs(params)) {
+      if (config && config.viewMask && oldNames.includes(config.name)) {
+        oldMasks.set(config.name, config.viewMask);
+      }
+    }
+
+    const registry = window.__controllerRegistry;
+    const chainRows = registry ? invalidateFixtureMappings(registry, oldNames) : [];
+    const patchRows = window.pruneGlobalPatchTreeKeys
+      ? window.pruneGlobalPatchTreeKeys(oldNames)
+      : [];
+    // Clear the derived patch fields off the renamed record itself — the
+    // single-fixture paths rename in place, so the config object survives
+    // with its old address still stamped on it. Leaving it would be a
+    // phantom the projection has no reason to touch (it only writes MAPPED
+    // fixtures), i.e. a stale address on an unmapped fixture (codex P0).
+    const invalidated = new Set(chainRows.map((r) => r.fixture));
+    const newNames = new Set(pairs.map((p) => p.to));
+    const records = [...gatherAllConfigs(params), ...(params.ledStrands || [])];
+    for (const record of records) {
+      if (!record || !newNames.has(record.name)) continue;
+      const pair = pairs.find((p) => p.to === record.name);
+      if (!pair || !invalidated.has(pair.from)) continue;
+      record.controllerIp = '';
+      record.dmxUniverse = 0;
+      record.dmxAddress = 0;
+      record.controllerId = 0;
+    }
+
+    const carriedViewMasks = configsByName
+      ? carryViewMasks(oldMasks, configsByName, pairs)
+      : [];
+    const report = buildInvalidationReport({
+      oldLabel: oldLabel || pairs[0].from,
+      newLabel: newLabel || pairs[0].to,
+      scope, chainRows, patchRows, carriedViewMasks,
+    });
+    for (const line of report.lines) console.warn(`[Rename] ${line}`);
+    _showAutoToast(report.summary, 9000);
+
+    if (reproject && window.__controllerRegistry && window.projectControllerMappings) {
+      window.projectControllerMappings(gatherAllConfigs(params));
+      // LED strand ids continue in the SHARED id space strictly above the DMX
+      // max, so the LED pass must run after the DMX pass at EVERY call site
+      // (main.js §"LED metadata") — including this one, or a renamed strand
+      // keeps a stale record.
+      if (window.projectLedStrandPatches) window.projectLedStrandPatches();
+    }
+    if (window.refreshControllerMapPanel) window.refreshControllerMapPanel();
+    // The caller carries these onto the NEW configs when they do not exist
+    // yet at invalidation time (group rename: the regenerate mints them).
+    report.oldViewMasks = oldMasks;
+    return report;
+  }
+
+  // 2D Pixel Map views reference groups BY NAME (plan 20260725_44 step 12).
+  // Every group rename re-points them, one loud line per rewritten selector,
+  // so a rename can never again silently empty a panel the way it dropped the
+  // right chimney ring out of the default Top-Down view (`_44` §3.6). Globs
+  // are operator intent and are NOT rewritten — the panel's own zero-match
+  // error surfaces any that stop matching.
+  function migratePixelMapGroupSelectors(oldName, newName) {
+    const changed = renameGroupInPixelMapViews(oldName, newName);
+    for (const row of changed) {
+      console.warn(`[Rename]   🗺 2D Pixel Map selector re-pointed: view '${row.view}' · ` +
+        `panel '${row.panel}' · ${row.where}[${row.index}] group "${oldName}" → "${newName}"`);
+    }
+    return changed;
+  }
+
+  // ══ ORPHANED GENERATED FIXTURES — flag + remove (report 20260725_76) ══════
+  // A fixture that CLAIMS a generator made it (`traceGenerated: true`) while no
+  // live trace owns its group is a GHOST: invisible to every generator
+  // workflow and, until this, undeletable through the UI. The rule itself is
+  // pure and tested (orphan_fixtures.js); everything here is the wiring —
+  // reading the live state, enumerating dependents, and doing the removal.
+
+  /**
+   * The scene slice the detector reads. BOTH buses: LED fixtures and DMX
+   * fixtures are both fixtures (operator, 2026-07-30), so an orphaned LED
+   * strand gets the same badge and the same delete flow as an orphaned PAR.
+   * (The LED-CLASS par fixtures — the TE Sign halves — already live in
+   * `parLights`; `ledStrands` is the separate strand record list.)
+   */
+  function orphanScene() {
+    return {
+      parLights: params.parLights || [],
+      ledStrands: params.ledStrands || [],
+      traces: params.traces || [],
+    };
+  }
+
+  /**
+   * name → exported pixel count, from the BOUND runtime fixtures. This is the
+   * engine-model dependency: the exporter emits every fixture that has pixels,
+   * mapped or not, so a live pixel count is exactly the footprint the last
+   * model export carries. Returns null when the runtime fixtures are not bound
+   * to the configs yet (a rebuild is in flight) — the caller then REFUSES
+   * rather than deleting with an unknown model footprint.
+   *
+   * Bound by CONFIG IDENTITY on both buses, never by index: an index lookup
+   * silently resolves to a different fixture whenever a slot is empty.
+   */
+  function orphanPixelCounts(rows) {
+    if (window._isRebuildingFixtures) return null;
+    const parRuntime = window.parFixtures;
+    const strandRuntime = window.ledStrandFixtures;
+    const counts = new Map();
+    for (const row of rows) {
+      const config = row.config;
+      if (!config || typeof config.name !== 'string') continue;
+      if (row.bus === 'led') {
+        if (!Array.isArray(strandRuntime)) return null;
+        const runtime = strandRuntime.find((f) => f && f.config === config);
+        if (!runtime) return null;
+        // A strand's exported pixel count is its declared `ledCount`
+        // (pixelblaze_model_exporter.js), not a runtime pixel array.
+        counts.set(config.name, Number(config.ledCount) || 0);
+        continue;
+      }
+      if (!Array.isArray(parRuntime)) return null;
+      const runtime = parRuntime.find((f) => f && f.config === config);
+      if (!runtime) return null;
+      counts.set(config.name, Array.isArray(runtime.pixels) ? runtime.pixels.length : 0);
+    }
+    return counts;
+  }
+
+  /**
+   * Remove a set of orphaned fixtures, in memory, after enumerating everything
+   * that depends on them (report 20260725_47's ethos: a destructive scene
+   * operation lists its dependents LOUDLY before it acts).
+   *
+   * Order matters and every step can refuse:
+   *   1. RE-DETECT. The rows were computed when the panel rendered; a
+   *      generator created or renamed since then may own them now. A fixture
+   *      that is no longer an orphan aborts the WHOLE operation, loudly — this
+   *      never falls back to "delete the ones that still qualify".
+   *   2. ENUMERATE. Controller-chain entries, patch-tree records, live/zeroed
+   *      patch fields, 2D Pixel Map selectors + move offsets + placements,
+   *      group membership, exported model pixels. Anything unreadable is a
+   *      blocker and the delete is refused.
+   *   3. CONFIRM, showing that enumeration.
+   *   4. MUTATE: splice the configs, unmap their chain entries, prune their
+   *      patch-tree keys, drop their 2D Pixel Map references, rebuild.
+   *
+   * Nothing is written to disk: `debounceAutoSave()` marks the scene dirty and
+   * the OPERATOR saves (the scene is his data).
+   */
+  function removeOrphanFixtures(candidates, scopeLabel) {
+    if (!Array.isArray(candidates) || candidates.length === 0) return false;
+
+    // ── 1. Re-detect against the live scene ──
+    const owners = generatorGroupNames(params.traces || []);
+    const reclaimed = candidates
+      .filter((row) => !isOrphanFixture(row.config, owners))
+      .map((row) => row.name || `(unnamed, index ${row.index})`);
+    if (reclaimed.length > 0) {
+      const msg = buildStaleOrphanRefusal(reclaimed);
+      console.error(`[Orphans] ${msg}`);
+      alert(msg);
+      return false;
+    }
+    // Indices move as soon as anything splices, so re-resolve every row against
+    // its OWN record array by config identity — never by remembered index. The
+    // row carries the array it came from (`records`), so DMX fixtures and LED
+    // strands take the identical path.
+    const rows = candidates.map((row) => {
+      const records = Array.isArray(row.records) ? row.records : (params.parLights || []);
+      return { ...row, records, index: records.indexOf(row.config) };
+    });
+    const lost = rows.filter((r) => r.index < 0).map((r) => r.name || '(unnamed)');
+    if (lost.length > 0) {
+      const msg = buildStaleOrphanRefusal(lost);
+      console.error(`[Orphans] ${msg}`);
+      alert(msg);
+      return false;
+    }
+
+    // ── 2. Enumerate dependents ──
+    const names = rows.map((r) => r.name).filter((n) => typeof n === 'string');
+    const registry = window.__controllerRegistry;
+    const pixelCounts = orphanPixelCounts(rows);
+    let enumeration;
+    try {
+      enumeration = enumerateOrphanDependents(rows, {
+        allRecords: allSceneRecords(orphanScene()),
+        patchTree: window.__globalPatchTree || {},
+        chainRows: registry ? describeFixtureMappings(registry, names) : [],
+        pixelMapViews: pixelMapViewsSource(),
+        pixelCounts,
+      });
+    } catch (err) {
+      const msg = buildEnumerationRefusal(scopeLabel, [err.message]);
+      console.error(`[Orphans] ${msg}`);
+      alert(msg);
+      return false;
+    }
+    if (enumeration.blockers.length > 0) {
+      const msg = buildEnumerationRefusal(scopeLabel, enumeration.blockers);
+      console.error(`[Orphans] ${msg}`);
+      alert(msg);
+      return false;
+    }
+
+    // ── 3. Confirm, showing the enumeration ──
+    if (!confirm(buildOrphanDeleteConfirm({ scopeLabel, enumeration }))) return false;
+
+    // ── 4. Mutate ──
+    pushUndo();
+    const doomed = new Set(rows.map((r) => r.config));
+    const removedConfigs = rows.map((r) => r.config);
+    // Splice each record out of its OWN array — `parLights` for DMX and
+    // LED-class par fixtures, `ledStrands` for strands. Rebuilt in place so
+    // every live reference to the array keeps pointing at the same object.
+    const touchedLed = rows.some((r) => r.bus === 'led');
+    // 2D Pixel Map FIRST: it is the only step that can still throw (a panel it
+    // would leave with an empty `select` — enumeration already ruled that out,
+    // but the views tree is the one dependent another surface could move under
+    // the confirm dialog). Doing it before the splice means a throw here leaves
+    // the scene completely untouched instead of half-deleted.
+    for (const name of names) removeFixtureFromPixelMapViews(name);
+    for (const records of new Set(rows.map((r) => r.records))) {
+      const kept = records.filter((c) => !doomed.has(c));
+      records.length = 0;
+      records.push(...kept);
+    }
+    if (window.controllerMappingFixturesRemoved) {
+      window.controllerMappingFixturesRemoved(removedConfigs);
+    }
+    if (window.pruneGlobalPatchTreeKeys) window.pruneGlobalPatchTreeKeys(names);
+    if (window.invalidateMarsinBatchCache) {
+      window.invalidateMarsinBatchCache('orphan_fixture_removal');
+    }
+    for (const line of buildRemovalReport({ scopeLabel, enumeration })) {
+      console.warn(`[Orphans] ${line}`);
+    }
+    _showAutoToast(`🗑 Removed ${enumeration.totals.fixtures} orphaned fixture(s) — ` +
+      `${enumeration.totals.modelPixels} model pixel(s) freed; RE-EXPORT the model and SAVE`,
+    9000);
+    if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+    if (window.renderParGUI) window.renderParGUI();
+    if (window.renderGeneratorGUI) window.renderGeneratorGUI();
+    rebuildParLights();
+    // Strand removals need the LED side rebuilt too — same flow, other bus.
+    if (touchedLed) {
+      if (window.rebuildLedStrands) window.rebuildLedStrands();
+      if (window.renderStrandGUI) window.renderStrandGUI();
+    }
+    if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+    transformControl.detach();
+    debounceAutoSave();
+    return true;
+  }
+  window.removeOrphanFixtures = removeOrphanFixtures;
+
+  // ── Rename hygiene helpers, part 2: the individual-fixture paths ─────────
+
+  /**
+   * LOUD REFUSAL for renaming a GENERATED fixture (plan 20260725_44 step 11).
+   *
+   * ⚠ IMPLEMENTED PENDING OPERATOR RATIFICATION (plan §5.4). To revert:
+   * delete this function and the `if (config.traceGenerated)` branch in the
+   * generated-fixture Name handler — nothing else depends on it.
+   *
+   * Why refuse instead of allowing it: `"<group> N"` is the contract every
+   * sticky-by-name store keys on (chain entries, patch tree, patches.yaml,
+   * engine sectionId/fixtureId, 2D placements), and the very next regenerate
+   * overwrites the hand-typed name anyway. Accepting the edit and quietly
+   * undoing it later would be a silent fallback — the codex forbids exactly
+   * that — so it is refused up front, and the message points at the two
+   * controls that DO change generated names.
+   */
+  function refuseGeneratedFixtureRename(name, groupName) {
+    return `⚠ "${name}" is generated by the "${groupName}" generator — its name cannot ` +
+      'be edited here.\n\n' +
+      'Generated fixtures are named "<group> N" in physical chain order, and every ' +
+      'sticky store (DMX chain entries, patch records, engine ids, 2D placements) keys ' +
+      'on that. The next Regenerate would overwrite anything typed here.\n\n' +
+      'To change these names: rename the GROUP on the generator card (Generators → ' +
+      `"${groupName}" → Name). To change which fixture is number N: use ⛓ Chain Order ` +
+      'on the same card.';
+  }
+
+  /**
+   * Rename ONE hand-placed / DMX-scene / strand fixture under the check +
+   * invalidate policy. Returns true when the rename was applied, false when it
+   * was refused (the control is reverted for the caller).
+   *
+   * Refuses duplicates outright: duplicate names collapse to a single record
+   * in the derived patches.yaml (save-server.js:210) and a doubly-mapped pair
+   * hard-fails the next scene load, so "repair it later" is not available.
+   */
+  function renameSingleFixture(config, oldName, newName, ctrl) {
+    const taken = [];
+    for (const other of gatherAllConfigs(params)) {
+      if (other && other !== config && typeof other.name === 'string') taken.push(other.name);
+    }
+    for (const strand of (params.ledStrands || [])) {
+      if (strand && strand !== config && typeof strand.name === 'string') taken.push(strand.name);
+    }
+    const dupErr = duplicateNameError(newName, taken);
+    if (dupErr) {
+      alert(dupErr);
+      config.name = oldName;
+      if (ctrl) ctrl.updateDisplay();
+      return false;
+    }
+    config.name = newName;
+    invalidateMappingForRename([{ from: oldName, to: newName }], {
+      scope: 'fixture', configsByName: new Map([[newName, config]]),
+    });
+    return true;
+  }
 
   let saveTimeout = null;
   function debounceAutoSave(force = false) {
@@ -531,7 +1019,13 @@ function setupGUI() {
     _setSceneDirty(true);
     if (!params.autoSave && !force) return;
     clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => { saveTimeout = null; exportConfig(); }, 2000);
+    // `interactive: false` — an auto-save may not raise a modal. A short
+    // 📡 Subscribed Universes field is reported as one console warning here and
+    // prompted for on the next explicit 💾 (report 20260725_86).
+    saveTimeout = setTimeout(() => {
+      saveTimeout = null;
+      exportConfig({ interactive: false });
+    }, 2000);
   }
   window.debounceAutoSave = debounceAutoSave;
 
@@ -645,9 +1139,24 @@ function setupGUI() {
     },
     globalHaloScale: (v) => {
       console.log('[GUI] globalHaloScale changed:', v);
+      // ONE global halo control, and it must reach EVERY bus live (operator,
+      // 2026-07-30: "please make sure that's a global for-all-fixtures
+      // parameter"). DMX pars/bars/vintage and LED-bus fixtures (TE Sign, TE
+      // LED Grid) live in parFixtures/dmxSceneFixtures and take updateScales.
       const allFixtures = [...(window.parFixtures || []), ...(window.dmxSceneFixtures || [])];
       allFixtures.forEach(f => {
         if (f && f.updateScales) f.updateScales(params.globalPixelScale || 1.0, v);
+      });
+      // LED strands are a SEPARATE list with a separate re-render entry point,
+      // and they were missing here — their halo radius is
+      // `ledHaloSize × globalHaloScale` (led_halo.ledHaloRadius), so it was
+      // frozen at whatever this slider read when the strand was built. Moving
+      // the knob changed every other fixture and left the strands behind; only
+      // the LED "Halo Size" slider (applyLedSizeToAll) ever re-rendered them.
+      // applyVisualSize() re-reads BOTH LED sizes, and the strand bulb does not
+      // consult globalPixelScale, so this cannot disturb strand pixel size.
+      (window.ledStrandFixtures || []).forEach(f => {
+        if (f && f.applyVisualSize) f.applyVisualSize();
       });
     },
     modelX: (v) => {
@@ -672,10 +1181,10 @@ function setupGUI() {
       window.parFixtures.forEach((f) => {
         f.setVisibility(v, params.conesEnabled !== false);
       });
-      // Force generators off when par lights are disabled
-      if (window.setTraceObjectsVisibility) {
-        window.setTraceObjectsVisibility(v && params.generatorsVisible);
-      }
+      // Force generators off when par lights are disabled — the gate reads
+      // params.parsEnabled (already written by the controller before this
+      // handler runs), so one call answers the whole question.
+      if (window.applyTraceVisualsVisibility) window.applyTraceVisualsVisibility();
     },
     conesEnabled: (v) => {
       window.parFixtures.forEach((f) => {
@@ -709,8 +1218,12 @@ function setupGUI() {
         window._guiControllers.spotlightSamplingBucketDistance.domElement.closest('.controller').style.display = v === 'closest_bucket' ? '' : 'none';
       }
     },
-    generatorsVisible: (v) => {
-      if (window.setTraceObjectsVisibility) window.setTraceObjectsVisibility(v);
+    generatorsVisible: () => {
+      // Visibility only. The "the operator chose this himself" mark is set on
+      // the CONTROL (see addControl + the Group Generator folder), never here —
+      // window.applyAllHandlers replays every handler on undo/redo and must not
+      // forge a choice he did not make.
+      if (window.applyTraceVisualsVisibility) window.applyTraceVisualsVisibility();
     },
     rendererMode: (v) => {
       if (!window._isAppBooting) {
@@ -831,6 +1344,13 @@ function setupGUI() {
       ground.visible = !isEditMode;
       starField.visible = !isEditMode;
       lights.ambient.intensity = isEditMode ? 2.5 : params.ambientIntensity;
+
+      // Generator/trace preview visuals are authoring furniture: on in the
+      // working profiles, off by default in the beauty ones (report
+      // 20260725_79 — their opaque dots read as coloured rings on the
+      // fixtures). Re-asked on every profile change; the operator's own
+      // "Show Generators" flip still overrides in either direction.
+      if (window.applyTraceVisualsVisibility) window.applyTraceVisualsVisibility();
     },
     showHelpers: (v) => {
       lights.helpers.forEach((h) => {
@@ -882,6 +1402,19 @@ function setupGUI() {
   }
 
   // ─── Generic Control Builder ───
+  // Hover text stating a control's REACH, for the ones whose label alone
+  // doesn't. Keyed by params key. See addControl below.
+  const CONTROL_SCOPE_TOOLTIPS = {
+    globalHaloScale:
+      'ALL fixtures — LED strands, TE Sign, DMX pars, bars and vintage. ' +
+      'Effective halo = (class base) × THIS × the fixture\'s own "Halo ×". ' +
+      'Not to be confused with "LED Halo Base" in the LED Strands panel, which is ' +
+      'the LED-bus base radius only.',
+    globalPixelScale:
+      'DMX fixtures (pars, bars, vintage) and the scene-wide pixel dots. ' +
+      'LED strands size their bulbs from "LED Pixel Size" in the LED Strands panel.',
+  };
+
   function addControl(folder, key, meta) {
     const isSpotlightLimitControl = key === "maxSpotlights";
     const controlMin = isSpotlightLimitControl ? 1 : meta.min;
@@ -912,6 +1445,14 @@ function setupGUI() {
       ctrl = folder.add(params, key).name(meta.label || key);
     }
 
+    // Scope tooltips for controls whose NAME does not make their reach obvious.
+    // The halo pair cost the operator two debugging rounds on 2026-07-30 (he
+    // was dragging the LED-bus base radius expecting a global). Defined here,
+    // in code, because scenes/common.yaml is operator-owned.
+    if (CONTROL_SCOPE_TOOLTIPS[key] && ctrl.domElement) {
+      ctrl.domElement.title = CONTROL_SCOPE_TOOLTIPS[key];
+    }
+
     if (handlers[key]) ctrl.onChange(handlers[key]);
 
     // The Max Spotlights slider crosses two user-facing GPU thresholds (100
@@ -924,6 +1465,18 @@ function setupGUI() {
           try { priorOnChange(v); } catch (err) { console.error(err); }
         }
         try { showSpotlightCountWarning(v); } catch (err) { console.error(err); }
+      });
+    }
+
+    // "Show Generators" moved BY THE OPERATOR is an explicit choice, and from
+    // then on it outranks the beauty-profile default in both directions
+    // (trace_visual_gate.js). Marked on the control rather than in the handler
+    // because window.applyAllHandlers replays handlers on undo/redo.
+    if (key === 'generatorsVisible') {
+      const priorOnChange = handlers[key];
+      ctrl.onChange((v) => {
+        params.traceVisualsOperatorChoice = true;
+        if (typeof priorOnChange === "function") priorOnChange(v);
       });
     }
 
@@ -1113,6 +1666,53 @@ function setupGUI() {
     }
   }
 
+  /**
+   * "Show Unpatched (Red)" — the one switch every unmapped-fixture indicator
+   * answers to (report 20260725_81): the fixture shell tint, the instanced
+   * pixel dot, and the undriven bulb/halo/cone repaint in the sACN-in demap.
+   *
+   * Built by this ONE function in TWO places (operator, 2026-07-30: *"don't
+   * move — clone it in the options too, but sync them to 1 value please, both
+   * places would be nice"*):
+   *   • Lighting Control → ⚙️ Options — because it is a scene-wide rendering
+   *     behaviour that covers the LED bus exactly as much as DMX ("it affects
+   *     the LEDs too"), and that is where he looked for it;
+   *   • the top of the fixtures panel — where it has always been, next to the
+   *     fixtures it marks.
+   *
+   * TWO VIEWS, ONE VALUE, and divergence is impossible by construction: both
+   * controllers are bound to the same `params.showUnpatchedRed` (one param, one
+   * persistence key, no mirror state), and both `.listen()` — the controller's
+   * own rAF poll calls `updateDisplay()` the moment the value changes, whoever
+   * changed it. That is the same mechanism that already keeps the Controller
+   * Mapping panel's "Unpatched Highlight" button in step, so this is the
+   * existing pattern, not a new one. Name, tooltip and onChange are defined
+   * once here so the two views cannot drift in behaviour either.
+   *
+   * Defined in code rather than `scenes/common.yaml` because that file is
+   * operator-owned (same reason as CONTROL_SCOPE_TOOLTIPS).
+   */
+  function addUnpatchedRedControl(folder) {
+    if (params.showUnpatchedRed === undefined) params.showUnpatchedRed = false;
+    if (folder.controllers.find((c) => c.property === 'showUnpatchedRed')) return;
+    const ctrl = folder
+      .add(params, "showUnpatchedRed")
+      .name("Show Unpatched (Red)")
+      .listen()
+      .onChange(() => {
+        if (window.refreshControllerMapPanel) window.refreshControllerMapPanel();
+      });
+    if (ctrl.domElement) {
+      ctrl.domElement.title =
+        'ALL fixtures, LED strands and DMX alike: paint anything with no patch ' +
+        'BRIGHT RED in the 3D view — shell, pixel dot, bulb and halo — so unmapped ' +
+        'holes are obvious. Off = they render black. Preview only; no DMX is ever ' +
+        'sent for an unpatched fixture. Live on the flip, no reload. Same switch as ' +
+        '"Unpatched Highlight" in the Controller Mapping panel.';
+    }
+    return ctrl;
+  }
+
   function buildOptionsSection(parentFolder, sectionNode) {
     const optionsFolder = parentFolder.addFolder(sectionNode._section.label);
     if (sectionNode._section.collapsed) optionsFolder.close();
@@ -1137,6 +1737,8 @@ function setupGUI() {
     if (!insertedPreviewControls) {
       addSpotlightPreviewOptionControls(optionsFolder);
     }
+
+    addUnpatchedRedControl(optionsFolder);
   }
 
   // ─── Recursive GUI Builder ───
@@ -1281,18 +1883,12 @@ function setupGUI() {
     if (handlers.conesEnabled) handlers.conesEnabled(params.conesEnabled);
     if (handlers.conesTransparent) handlers.conesTransparent(params.conesTransparent);
 
-    // Diagnostic overlay: tint fixtures with no DMX patch red in the 3D view
-    // so the operator can spot what still needs mapping. Sim-only — no DMX is
-    // sent. Synced with the matching toggle in the Controller Mapping panel
-    // (.listen() reflects changes made over there).
-    if (params.showUnpatchedRed === undefined) params.showUnpatchedRed = false;
-    parFolder
-      .add(params, "showUnpatchedRed")
-      .name("Show Unpatched (Red)")
-      .listen()
-      .onChange(() => {
-        if (window.refreshControllerMapPanel) window.refreshControllerMapPanel();
-      });
+    // "Show Unpatched (Red)" — view TWO of the same switch. View one is in
+    // Lighting Control → ⚙️ Options (it affects the LED bus as much as DMX);
+    // this one stays here, next to the fixtures it marks. Same param, same
+    // builder, both `.listen()` — see addUnpatchedRedControl for why they
+    // cannot diverge.
+    addUnpatchedRedControl(parFolder);
 
     const parListFolder = parFolder.addFolder("Light Instances");
 
@@ -1354,13 +1950,18 @@ function setupGUI() {
     function renderParGUI() {
       // Remember which groups were open before rebuild — from BOTH homes, since
       // LED-class groups (TE Sign) live under the "LED Fixtures" section folder.
+      // `_plainTitle` is the un-badged `"<group> (N)"` key. Group folders that
+      // carry an orphan badge render extra HTML in their title, and matching on
+      // the rendered title would lose their open state on every re-render
+      // (report 20260725_76). Folders without a badge set it to the same string
+      // they always used, so this is a no-op for them.
       const openGroups = new Set();
       parListFolder.folders.forEach((f) => {
-        if (!f._closed) openGroups.add(f._title);
+        if (!f._closed) openGroups.add(f._plainTitle || f._title);
       });
       if (window._ledFixtureInstancesFolder) {
         window._ledFixtureInstancesFolder.folders.forEach((f) => {
-          if (!f._closed) openGroups.add(f._title);
+          if (!f._closed) openGroups.add(f._plainTitle || f._title);
         });
       }
 
@@ -1429,6 +2030,16 @@ function setupGUI() {
 
       // Helper: propagate a property change to all other selected fixtures
       function propagateToSelected(sourceIndex, property, value) {
+        // 'name' is NOT propagatable (plan 20260725_44 step 11): stamping one
+        // name onto every selected fixture mass-produces duplicates, which
+        // collapse to a single patches.yaml record and hard-fail the next
+        // scene load. Throw rather than silently skip — a caller asking for
+        // this is a bug, and a quiet no-op would hide it (codex P0).
+        if (property === 'name') {
+          throw new Error('propagateToSelected: refusing to propagate \'name\' — ' +
+            'duplicate fixture names break patch derivation and scene load. ' +
+            'Rename fixtures one at a time.');
+        }
         if (!selectedFixtureIndices.has(sourceIndex)) return;
         for (const idx of selectedFixtureIndices) {
           if (idx === sourceIndex) continue;
@@ -1473,7 +2084,32 @@ function setupGUI() {
         return true;
       }
 
-      // Collect unique groups in order of appearance
+      // ── ORPHAN CENSUS (report 20260725_76) ──
+      // Generated fixtures whose generator no longer exists. Computed ONCE per
+      // render from the pure detector, then used to badge group folders and
+      // fixture cards and to arm the removal buttons. A scene whose generator
+      // list cannot be read THROWS in the detector — we do not scan, because a
+      // half-read owner set would paint live fixtures as orphans.
+      const orphanRows = findOrphanFixtures(orphanScene());
+      const orphanConfigs = new Set(orphanRows.map((r) => r.config));
+      const orphanRowsByGroup = new Map();
+      for (const row of orphanRows) {
+        if (!orphanRowsByGroup.has(row.group)) orphanRowsByGroup.set(row.group, []);
+        orphanRowsByGroup.get(row.group).push(row);
+      }
+      // Membership is counted ACROSS BUSES (a group can hold DMX fixtures,
+      // LED-class par fixtures and LED strands at once), so "all orphaned" is
+      // decided by the summary, never by this section's own item count.
+      const orphanSummaryByGroup = new Map(
+        orphanGroupSummary(orphanScene()).map((g) => [g.group, g]),
+      );
+      window.__orphanFixtureCount = orphanRows.length;
+
+      // Collect unique groups in order of appearance. `ordinal` is the member's
+      // position WITHIN its group in params.parLights order — the display list
+      // below is sorted by name, so the only two places that care about source
+      // position (the generated-fixture default name) read this instead of the
+      // loop counter.
       const groupOrder = [];
       const groupMap = new Map();
       params.parLights.forEach((config, index) => {
@@ -1482,14 +2118,22 @@ function setupGUI() {
           groupMap.set(g, []);
           groupOrder.push(g);
         }
-        groupMap.get(g).push({ config, index });
+        const bucket = groupMap.get(g);
+        bucket.push({ config, index, ordinal: bucket.length });
       });
 
       // Ensure at least one group exists
       if (groupOrder.length === 0) groupOrder.push('Default');
 
-      groupOrder.forEach((groupName) => {
-        const items = groupMap.get(groupName) || [];
+      // DISPLAY ORDER ONLY — group folders render sorted by name. `groupOrder`
+      // itself stays in appearance order because two non-display callers read
+      // it: the "delete group" reassignment target and nothing else may drift.
+      const displayGroupOrder = sortNamesNatural(groupOrder);
+
+      displayGroupOrder.forEach((groupName) => {
+        // Sorted VIEW of the group's members — `groupMap`'s own arrays (and
+        // params.parLights behind them) are never reordered.
+        const items = sortByNameNatural(groupMap.get(groupName) || [], (it) => it.config.name);
         // Route LED-class groups (every member rides the LED bus, e.g. the two
         // TE Sign halves) into the "LED Fixtures" section; DMX-bus groups stay
         // here. Everything below — per-fixture cards, group select, the group
@@ -1502,7 +2146,19 @@ function setupGUI() {
         const isLedClassGroup = items.length > 0 && items.every(({ config }) => isLedClassConfig(config));
         const ledHome = window._ledFixtureInstancesFolder || null;
         const targetFolder = (isLedClassGroup && ledHome) ? ledHome : parListFolder;
-        const groupFolder = targetFolder.addFolder(`${groupName} (${items.length})`);
+        // ORPHAN BADGE on the group header (report 20260725_76) — the operator
+        // must be able to SEE which groups are ghosts without expanding
+        // anything. `_plainTitle` keeps the open-state key un-badged.
+        const groupOrphans = orphanRowsByGroup.get(groupName) || [];
+        const groupSummary = orphanSummaryByGroup.get(groupName) || null;
+        const groupMemberCount = groupSummary ? groupSummary.memberCount : items.length;
+        const groupAllOrphans = !!(groupSummary && groupSummary.allOrphans);
+        const plainGroupTitle = `${groupName} (${items.length})`;
+        const orphanBadgeHtml = groupOrphans.length === 0 ? '' :
+          ` <span style="color:var(--error);font-weight:700;font-size:10px;">⚠ ${
+            groupAllOrphans ? 'ORPHANED' : `${groupOrphans.length} ORPHANED`}</span>`;
+        const groupFolder = targetFolder.addFolder(plainGroupTitle + orphanBadgeHtml);
+        groupFolder._plainTitle = plainGroupTitle;
         if (targetFolder === ledHome) window._parLedGroupFolders.push(groupFolder);
 
         // Check if this is a trace-generated group (read-only)
@@ -1567,18 +2223,82 @@ function setupGUI() {
 
           const genLabel = document.createElement('span');
           genLabel.style.cssText = 'color:var(--secondary);font-size:10px;font-style:italic;margin-left:4px;';
-          genLabel.textContent = '🔧 Generated';
+          genLabel.textContent = groupOrphans.length === 0 ? '🔧 Generated'
+            : (groupAllOrphans ? '⚠ Orphaned — no generator' : '⚠ Partly orphaned');
+          if (groupOrphans.length > 0) {
+            genLabel.style.cssText = 'color:var(--error);font-size:10px;font-weight:600;margin-left:4px;';
+          }
 
           traceRow.appendChild(visBtn);
           traceRow.appendChild(genLabel);
           const gc = groupFolder.domElement.querySelector('.children');
           if (gc) gc.prepend(traceRow);
 
+          // ── ORPHAN GROUP BANNER (report 20260725_76) ──
+          // Group-by-group removal. On a MIXED group this offers ONLY the
+          // orphan members and says so — the live members belong to somebody.
+          if (groupOrphans.length > 0 && gc) {
+            const orphanBar = document.createElement('div');
+            orphanBar.className = 'orphan-group-bar';
+            orphanBar.style.cssText = 'margin:2px 6px 4px;padding:4px 6px;border:1px solid ' +
+              'var(--error);border-radius:3px;background:color-mix(in srgb, var(--error) 12%, ' +
+              'var(--surface));display:flex;flex-direction:column;gap:3px;';
+            const why = document.createElement('div');
+            why.style.cssText = 'color:var(--error);font-size:9px;line-height:1.35;';
+            why.textContent = groupAllOrphans
+              ? `⚠ All ${groupOrphans.length} fixture(s) in this group claim a generator ` +
+                'made them, but no generator owns this group. They are invisible to every ' +
+                'generator workflow and still cost model pixels.'
+              : `⚠ ${groupOrphans.length} of ${groupMemberCount} fixture(s) in this group are ` +
+                'orphaned (they claim a generator that no longer exists). Only those are ' +
+                'offered for removal — the rest belong to a live generator.';
+            const orphanBtnRow = document.createElement('div');
+            orphanBtnRow.style.cssText = 'display:flex;gap:3px;';
+            const selOrphansBtn = document.createElement('button');
+            selOrphansBtn.textContent = `☑ Select ${groupOrphans.length}`;
+            selOrphansBtn.title = 'Select the orphaned fixtures in the 3D view';
+            selOrphansBtn.style.cssText = gBtnStyle2 + 'color:var(--secondary);';
+            selOrphansBtn.onclick = () => {
+              deselectAllFixtures();
+              for (const row of groupOrphans) {
+                const at = params.parLights.indexOf(row.config);
+                if (at < 0) continue;
+                selectedFixtureIndices.add(at);
+                if (window.parFixtures[at]) window.parFixtures[at].setSelected(true);
+              }
+              document.activeElement?.blur?.();
+            };
+            const delOrphansBtn = document.createElement('button');
+            delOrphansBtn.textContent = `🗑 Remove ${groupOrphans.length} orphan(s)`;
+            delOrphansBtn.title = 'Enumerate every dependent, then remove these orphaned ' +
+              'fixtures from the scene (in memory — you save)';
+            delOrphansBtn.style.cssText = gBtnStyle2 +
+              'background:color-mix(in srgb, var(--error) 20%, var(--surface));color:var(--error);' +
+              'font-weight:700;';
+            delOrphansBtn.onclick = () => {
+              removeOrphanFixtures(groupOrphans, groupAllOrphans
+                ? `the whole "${groupName}" group`
+                : `${groupOrphans.length} of ${groupMemberCount} fixtures in "${groupName}"`);
+            };
+            orphanBtnRow.appendChild(selOrphansBtn);
+            orphanBtnRow.appendChild(delOrphansBtn);
+            orphanBar.appendChild(why);
+            orphanBar.appendChild(orphanBtnRow);
+            gc.prepend(orphanBar);
+          }
+
           // Show individual generated fixtures with limited editing
-          items.forEach(({ config, index }, localIdx) => {
+          items.forEach(({ config, index, ordinal }) => {
             try {
-              if (!config.name) config.name = `Fixture ${localIdx + 1}`;
-              const folderTitle = `${config.name}`;
+              // `ordinal` (source position in the group), NOT the display index
+              // — the seeded name must not depend on how the list is sorted.
+              if (!config.name) config.name = `Fixture ${ordinal + 1}`;
+              // ORPHAN BADGE on the fixture row (report 20260725_76).
+              const isOrphanRow = orphanConfigs.has(config);
+              const genCardTitle = (name) => (isOrphanRow
+                ? `<span style="color:var(--error);font-weight:700;">⚠</span> ${name}`
+                : `${name}`);
+              const folderTitle = genCardTitle(config.name);
               const genFixFolder = groupFolder.addFolder(folderTitle);
               genFixFolder.domElement.classList.add('gui-card');
               genFixFolder.close();
@@ -1603,8 +2323,29 @@ function setupGUI() {
               }
 
               // Name (editable)
-              genFixFolder.add(config, 'name').name('Name').onFinishChange((v) => {
-                genFixFolder.title(v);
+              // Name. A GENERATED fixture's name is REFUSED (plan 20260725_44
+              // step 11) — see refuseGeneratedFixtureRename(). A hand-placed
+              // fixture that merely shares the card with generated siblings
+              // renames normally, through the check + invalidate policy.
+              let committedGenName = config.name;
+              const genNameCtrl = genFixFolder.add(config, 'name').name('Name');
+              genNameCtrl.onFinishChange((v) => {
+                const proposed = (v || '').trim();
+                if (proposed === committedGenName) {
+                  config.name = committedGenName;
+                  genNameCtrl.updateDisplay();
+                  return;
+                }
+                if (config.traceGenerated) {
+                  alert(refuseGeneratedFixtureRename(committedGenName, config.group));
+                  config.name = committedGenName;
+                  genNameCtrl.updateDisplay();
+                  genFixFolder.title(genCardTitle(committedGenName));
+                  return;
+                }
+                if (!renameSingleFixture(config, committedGenName, proposed, genNameCtrl)) return;
+                committedGenName = proposed;
+                genFixFolder.title(genCardTitle(proposed));
                 debounceAutoSave();
               });
 
@@ -1758,6 +2499,45 @@ function setupGUI() {
               if (meta && meta.inputs && meta.inputs.fixtureId) {
                 meta.inputs.fixtureId.title = 'Defaulted to Universe × 1000 + Address; editable.';
               }
+
+              // ── ONE-BY-ONE ORPHAN REMOVAL (report 20260725_76) ──
+              // This card deliberately has NO ✕ Remove for a live generated
+              // fixture — the generator owns it, and deleting one behind the
+              // generator's back would be undone by the next Regenerate. An
+              // ORPHAN has no generator to own it, which is exactly why it was
+              // undeletable before: this is the only control that can retire it.
+              if (isOrphanRow && genChildren) {
+                const orphanRow = document.createElement('div');
+                orphanRow.className = 'orphan-fixture-row';
+                orphanRow.style.cssText = 'display:flex;flex-direction:column;gap:3px;' +
+                  'padding:4px 8px 6px;';
+                const note = document.createElement('div');
+                note.style.cssText = 'color:var(--error);font-size:9px;line-height:1.35;';
+                note.textContent = `⚠ ORPHANED — this fixture says the "${config.group}" ` +
+                  'generator made it, but no such generator exists. Nothing regenerates, ' +
+                  'renames or chains it.';
+                const rmOrphanBtn = document.createElement('button');
+                rmOrphanBtn.textContent = '🗑 Remove this orphan';
+                rmOrphanBtn.title = 'Enumerate every dependent, then remove this fixture ' +
+                  'from the scene (in memory — you save)';
+                rmOrphanBtn.style.cssText = 'width:100%;padding:4px 8px;border:1px solid ' +
+                  'var(--error);border-radius:3px;background:color-mix(in srgb, var(--error) ' +
+                  '18%, var(--surface));color:var(--error);cursor:pointer;font-size:10px;' +
+                  'font-family:inherit;font-weight:700;';
+                rmOrphanBtn.onclick = () => {
+                  const row = orphanRows.find((r) => r.config === config);
+                  if (!row) {
+                    // The census said orphan when this card was built; it is not
+                    // in the census any more. Refuse — never re-derive here.
+                    alert(buildStaleOrphanRefusal([config.name || '(unnamed)']));
+                    return;
+                  }
+                  removeOrphanFixtures([row], `the single fixture "${config.name}"`);
+                };
+                orphanRow.appendChild(note);
+                orphanRow.appendChild(rmOrphanBtn);
+                genChildren.appendChild(orphanRow);
+              }
             } catch (err) {
               console.warn(`[GUI] Error creating generated fixture ${index} UI:`, err);
             }
@@ -1846,24 +2626,46 @@ function setupGUI() {
         row1.appendChild(lockBtn);
 
         // Row 2: Rename | + Light | ✕ Delete
+        // WRAPS (report _52). Measured live in the docked LED Fixtures panel:
+        // "✏ Rename" needs 67px of text and the three-way flex row gave it 51px,
+        // so the operator's only rename control rendered as "✏ Ren…" — present,
+        // but unreadable, which is why it read as missing. `LABEL_BTN` pins the
+        // two text buttons to their content width (`min-width:max-content` wins
+        // over gBtnStyle's `min-width:0`, later declaration) and the row wraps
+        // instead of clipping when the pane is narrow.
         const row2 = document.createElement('div');
-        row2.style.cssText = 'display:flex;gap:2px;';
+        row2.style.cssText = 'display:flex;gap:2px;flex-wrap:wrap;';
+        const LABEL_BTN = gBtnStyle + 'flex:0 1 auto;min-width:max-content;';
 
         const renameBtn = document.createElement('button');
         renameBtn.textContent = '✏ Rename';
-        renameBtn.style.cssText = gBtnStyle;
+        renameBtn.title = `Rename the group "${groupName}" (fixture names and their ` +
+          'DMX/sACN addresses are NOT touched)';
+        renameBtn.style.cssText = LABEL_BTN;
         renameBtn.onclick = () => {
           const newName = prompt('Rename group:', groupName);
           if (newName === null) return;
           const nn = newName.trim();
           if (!nn || nn === groupName) return;
-          // Fail loud (codex P0) on a reserved / colliding name — a merge would
-          // fuse two groups' overrides + view bits. "Ungrouped" is reserved for
-          // the LED-strand catch-all bucket (TE Sign + strands share one list).
-          if (nn === 'Ungrouped') { alert('"Ungrouped" is a reserved group name.'); return; }
-          if (groupOrder.includes(nn)) { alert(`A group named "${nn}" already exists.`); return; }
+          // Fail loud (codex P0) on an empty / reserved / colliding name — a merge
+          // would fuse two groups' overrides, view bits and pixel-map selectors.
+          // The guard is SCENE-WIDE (group_rename_guard.js, report _52): par
+          // groups, LED strand groups and generator groups share ONE namespace,
+          // and this control used to police `groupOrder` (par groups) only — so a
+          // par group could be renamed straight onto a live LED strand group's
+          // name and silently fuse their view bit.
+          const clash = groupRenameError(nn, {
+            currentName: groupName,
+            takenNames: collectSceneGroupNames(params),
+          });
+          if (clash) { alert(clash); return; }
+          // Undoable, like every other group mutation on this toolbar (+ Light,
+          // ✕ Delete, the LED-strand rename). This path had no pushUndo at all,
+          // so a mistyped rename was unrecoverable.
+          pushUndo();
+          let movedCount = 0;
           params.parLights.forEach((c) => {
-            if (c.group === groupName) c.group = nn;
+            if (c.group === groupName) { c.group = nn; movedCount += 1; }
           });
           // Carry the group master override across the rename (keyed by name).
           if (params.groupOverrides && params.groupOverrides[groupName]) {
@@ -1873,16 +2675,42 @@ function setupGUI() {
           // Carry the group's view-mask bit across the rename so
           // patterns compiled against MASK_* names stay stable.
           if (window.viewRegistryRenameGroup) window.viewRegistryRenameGroup(groupName, nn);
+          // 2D Pixel Map views name groups in their selectors — re-point them
+          // or this rename silently empties every panel that named the group
+          // (plan 20260725_44 step 12).
+          migratePixelMapGroupSelectors(groupName, nn);
+          // Batch entries cache `entry.group` and view isolation reads it
+          // (animate.js:580), so a group rename MUST invalidate the batch
+          // cache — the LED group rename already does (`led_group_rename`);
+          // this path did not, leaving isolation keyed on the dead name.
+          if (window.invalidateMarsinBatchCache) {
+            window.invalidateMarsinBatchCache('par_group_rename');
+          }
+          // Loud, itemised: what was carried, what was untouched, and the one
+          // consequence nothing else surfaces — the exported engine model still
+          // names the OLD group (the stale-model banner only watches pixel count).
+          buildGroupRenameReport({
+            oldName: groupName, newName: nn, memberCount: movedCount, kind: 'Par',
+          }).forEach((line) => console.warn(line));
+          _showAutoToast(`✏ Group "${groupName}" → "${nn}" (${movedCount} fixture(s)) — ` +
+            'addresses untouched; RE-EXPORT the engine model');
           if (window._setGuiRebuilding) window._setGuiRebuilding(true);
           renderParGUI();
           if (window._setGuiRebuilding) window._setGuiRebuilding(false);
           debounceAutoSave();
         };
 
-        // Fixture type selector + add button
+        // Fixture type selector + add button. Basis 110px: it is the only item on
+        // this row that can honestly shrink (a <select> shows its value, not a
+        // label), so when the pane is narrow this is what wraps to its own line
+        // and the two text buttons stay whole.
         const addWrap = document.createElement('div');
-        addWrap.style.cssText = 'display:flex;gap:2px;flex:1;';
+        addWrap.style.cssText = 'display:flex;gap:2px;flex:1 1 110px;min-width:0;';
         const typeSelect = document.createElement('select');
+        // NOT `min-width:0`: a <select> with a zero automatic minimum collapses
+        // to nothing on the wrapped row (measured — the type name disappeared and
+        // only the green "+" survived). Its intrinsic minimum is what keeps the
+        // fixture type readable; the row wraps around it instead.
         typeSelect.style.cssText = 'flex:1;padding:2px;border:none;border-radius:3px;background:var(--control-bg);color:var(--secondary);font-size:10px;font-family:inherit;cursor:pointer;';
         const availableTypes = listTypes();
         if (availableTypes.length === 0) availableTypes.push('UkingPar');
@@ -1927,7 +2755,8 @@ function setupGUI() {
 
         const delBtn = document.createElement('button');
         delBtn.textContent = '✕ Delete';
-        delBtn.style.cssText = gBtnStyle;
+        delBtn.title = `Dissolve the group "${groupName}" (its fixtures move to another group)`;
+        delBtn.style.cssText = LABEL_BTN;
         delBtn.onclick = () => {
           if (groupOrder.length <= 1) return;
           pushUndo();
@@ -2057,9 +2886,23 @@ function setupGUI() {
             });
           }
 
-          idxFolder.add(config, "name").name("Name").onFinishChange((v) => {
-            idxFolder.title(v);
-            propagateToSelected(index, 'name', v);
+          // Name — check + invalidate (plan 20260725_44 step 11). NOTE: 'name'
+          // is deliberately NOT propagated to the rest of the selection: it
+          // used to stamp the SAME name onto every selected fixture, which
+          // mass-produced duplicates that collapse to one patches.yaml record
+          // and hard-fail the next scene load.
+          let committedParName = config.name;
+          const parNameCtrl = idxFolder.add(config, "name").name("Name");
+          parNameCtrl.onFinishChange((v) => {
+            const proposed = (v || '').trim();
+            if (proposed === committedParName) {
+              config.name = committedParName;
+              parNameCtrl.updateDisplay();
+              return;
+            }
+            if (!renameSingleFixture(config, committedParName, proposed, parNameCtrl)) return;
+            committedParName = proposed;
+            idxFolder.title(proposed);
             debounceAutoSave();
           });
 
@@ -2094,6 +2937,24 @@ function setupGUI() {
             selectThisLight();
             window.syncLightFromConfig(index);
             propagateToSelected(index, 'penumbra', v);
+          });
+
+          // Local halo override — the third factor in
+          //   effective halo = class base × Global Halo Size × local
+          // (led_halo.js; operator 2026-07-30 "local is maybe a scale for the
+          // global"). Seeded to 1 when the folder is built — lil-gui needs the
+          // property to exist — exactly like diffusionAmount/screenPixelSize
+          // above; 1.0 is the no-op default, so seeding changes no pixel and
+          // only reaches disk on the operator's next save. syncLightFromConfig
+          // re-reads it, and propagateToSelected gives the bulk-set across a
+          // selection for free — the same mechanism every other numeric
+          // property in this panel uses.
+          if (config.haloScale === undefined) config.haloScale = 1;
+          idxFolder.add(config, "haloScale",
+            LOCAL_HALO_SCALE_MIN, LOCAL_HALO_SCALE_MAX, 0.05).name("Halo ×").onChange((v) => {
+            selectThisLight();
+            window.syncLightFromConfig(index);
+            propagateToSelected(index, 'haloScale', v);
           });
 
           // ── LED-only controls: diffusion (soft glow) + resize ──
@@ -2311,7 +3172,7 @@ function setupGUI() {
           defaultOpt.disabled = true;
           defaultOpt.selected = true;
           moveSelect.appendChild(defaultOpt);
-          groupOrder.forEach((g) => {
+          displayGroupOrder.forEach((g) => {
             if (g === groupName) return;
             const opt = document.createElement('option');
             opt.value = g;
@@ -2348,10 +3209,20 @@ function setupGUI() {
           addGroup: () => {
             const existingGroups = new Set(params.parLights.map(c => c.group || 'Default'));
             const name = prompt('New group name:', `Group ${existingGroups.size + 1}`);
-            if (!name) return;
+            if (name === null) return;
+            const nn = (name || '').trim();
+            // Same scene-wide guard the renames use (report _52). This seed had
+            // NO guard at all: an empty name produced a group literally called
+            // "", and a name colliding with a generator group silently converted
+            // the new fixture into a trace-generated one on the next scene load
+            // (config.js re-stamps `traceGenerated` on a groupName match).
+            const clash = groupRenameError(nn, {
+              currentName: null, takenNames: collectSceneGroupNames(params),
+            });
+            if (clash) { alert(clash); return; }
             pushUndo();
             params.parLights.push({
-              group: name,
+              group: nn,
               name: `Par Light ${params.parLights.length + 1}`,
               color: '#ffaa44', intensity: 5, angle: 20, penumbra: 0.5,
               x: 0, y: 1.5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
@@ -2382,32 +3253,28 @@ function setupGUI() {
         if (t.aimLine) t.aimLine.visible = visible;
         (t.handles || []).forEach(h => { h.visible = visible; });
       });
+      // The chain-order overlay is BUILT here and DISPOSED here — it is never
+      // left in the scene switched off. Hiding generators must cost nothing,
+      // not "cost traversal on invisible objects" (report 20260725_38).
+      refreshAllChainOrderViz();
     }
     window.setTraceObjectsVisibility = setTraceObjectsVisibility;
+
+    // Ask the gate and apply the answer. Every caller that used to compute
+    // visibility itself (`params.generatorsVisible !== false`, `v &&
+    // params.generatorsVisible`) goes through here instead, so the toggle, the
+    // par-lights master and the beauty-profile default can never disagree.
+    function applyTraceVisualsVisibility() {
+      setTraceObjectsVisibility(traceVisualsShouldShow(params));
+    }
+    window.applyTraceVisualsVisibility = applyTraceVisualsVisibility;
 
     // --- Trace 3D objects live here ---
     window.traceObjects = window.traceObjects || [];
 
-    function destroyTraceObjects() {
-      (window.traceObjects || []).forEach(t => {
-        if (t.group) scene.remove(t.group);
-        if (t.hitbox) {
-          scene.remove(t.hitbox);
-          const ioIdx = interactiveObjects.indexOf(t.hitbox);
-          if (ioIdx > -1) interactiveObjects.splice(ioIdx, 1);
-        }
-        (t.handles || []).forEach(h => {
-          scene.remove(h);
-          const ioIdx = interactiveObjects.indexOf(h);
-          if (ioIdx > -1) interactiveObjects.splice(ioIdx, 1);
-        });
-        (t.visuals || []).forEach(v => {
-          const ioIdx = interactiveObjects.indexOf(v);
-          if (ioIdx > -1) interactiveObjects.splice(ioIdx, 1);
-        });
-      });
-      window.traceObjects = [];
-    }
+    // destroyTraceObjects is declared once, next to rebuildTraceObjects below
+    // (hoisted, so it is in scope here). A second copy that once lived here
+    // shadowed nothing but confused editors — see report 20260725_43.
 
     function setTraceSelected(traceIndex, isSelected) {
       if (!window.traceObjects) return;
@@ -2431,19 +3298,13 @@ function setupGUI() {
       const tObj = window.traceObjects[idx];
       if (!tObj) return;
 
-      let targetX, targetY, targetZ;
-      if (trace.shape === 'circle') {
-        targetX = trace.x || 0;
-        targetY = trace.y || 5;
-        targetZ = trace.z || 0;
-      } else {
-        targetX = ((trace.startX || 0) + (trace.endX || 0)) / 2;
-        targetY = ((trace.startY || 5) + (trace.endY || 5)) / 2;
-        targetZ = ((trace.startZ || 0) + (trace.endZ || 0)) / 2;
-      }
+      // `traceFocusPoint` uses `??`, not `||` — a generator standing at y = 0
+      // is a real placement, and the camera must fly to it, not to y = 5.
+      const focus = traceFocusPoint(trace);
+      const targetX = focus.x, targetY = focus.y, targetZ = focus.z;
 
-      const p1 = new THREE.Vector3(trace.startX || 0, trace.startY || 5, trace.startZ || 0);
-      const p2 = new THREE.Vector3(trace.endX || 0, trace.endY || 5, trace.endZ || 0);
+      const p1 = new THREE.Vector3(trace.startX ?? 0, trace.startY ?? 5, trace.startZ ?? 0);
+      const p2 = new THREE.Vector3(trace.endX ?? 0, trace.endY ?? 5, trace.endZ ?? 0);
       const radius = trace.shape === 'circle' ? (trace.radius || 5) : p1.distanceTo(p2) / 2;
 
       const viewDist = Math.max(10, radius * 3);
@@ -2474,6 +3335,40 @@ function setupGUI() {
       requestAnimationFrame(step);
     }
     window.flyToTrace = flyToTrace;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ─── The generator anchor: ONE computation, live and reload ────────────
+    // ═══════════════════════════════════════════════════════════════════════
+    // Report 20260725_83. Everything that needs to know where a generator sits
+    // — its visual group, its drag hitbox, the fly-to camera and the fixture
+    // generation — asks these two helpers, and they ask `trace_anchor.js`,
+    // which reads the trace's own fields. Nothing reads the anchor back out of
+    // the scene graph any more, so a stale/absent THREE group can no longer
+    // place fixtures against yesterday's position, and a reload cannot land
+    // them anywhere the live edit did not.
+
+    /** World matrix of a circle trace's local path space, from the trace alone. */
+    function traceAnchorMatrix(trace) {
+      const a = traceAnchor(trace);
+      const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+        THREE.MathUtils.degToRad(a.rotX),
+        THREE.MathUtils.degToRad(a.rotY),
+        THREE.MathUtils.degToRad(a.rotZ), 'YXZ'));
+      return new THREE.Matrix4().compose(
+        new THREE.Vector3(a.x, a.y, a.z), quat, new THREE.Vector3(1, 1, 1));
+    }
+
+    /** Place a THREE object on a trace's anchor (visual group, hitbox). */
+    function applyTraceAnchor(object3d, trace) {
+      if (!object3d) return;
+      const a = traceAnchor(trace);
+      object3d.position.set(a.x, a.y, a.z);
+      object3d.setRotationFromEuler(new THREE.Euler(
+        THREE.MathUtils.degToRad(a.rotX),
+        THREE.MathUtils.degToRad(a.rotY),
+        THREE.MathUtils.degToRad(a.rotZ), 'YXZ'));
+      object3d.updateMatrixWorld(true);
+    }
 
     // Build the path geometry for a trace as a parametric arclength curve.
     // Returns { length, at(s), tangentAt(s) } where `s` is arclength in
@@ -2793,13 +3688,11 @@ function setupGUI() {
       } else {
         // ─── CIRCLE: center hitbox (existing approach) ───
         const grp = new THREE.Group();
-        grp.position.set(trace.x || 0, trace.y || 5, trace.z || 0);
-        const euler = new THREE.Euler(
-          THREE.MathUtils.degToRad(trace.rotX || 0),
-          THREE.MathUtils.degToRad(trace.rotY || 0),
-          THREE.MathUtils.degToRad(trace.rotZ || 0), 'YXZ'
-        );
-        grp.setRotationFromEuler(euler);
+        // ONE anchor computation (report 20260725_83). The y coordinate used to
+        // be OR-defaulted to 5, so a generator standing on the deck (y = 0) was
+        // rebuilt 5 m in the air on every reload — and the boot regeneration
+        // then placed its fixtures up there with it.
+        applyTraceAnchor(grp, trace);
 
         const visuals = [];
 
@@ -2845,8 +3738,9 @@ function setupGUI() {
         const hitboxMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, transparent: true, opacity: 0 });
         const hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
         hitbox.userData = { isTrace: true, traceIndex };
-        hitbox.position.copy(grp.position);
-        hitbox.quaternion.copy(grp.quaternion);
+        // Same anchor as the group — derived from the trace, not copied from a
+        // sibling object, so the two can never drift apart.
+        applyTraceAnchor(hitbox, trace);
         scene.add(hitbox);
         interactiveObjects.push(hitbox);
 
@@ -2880,9 +3774,446 @@ function setupGUI() {
       }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // ─── Chain-order overlay (⛓ what the cable actually does) ─────────────
+    // ═══════════════════════════════════════════════════════════════════════
+    // Draws `trace.chainSplits` in the 3D view: one coloured polyline per
+    // split walking the fixtures in DAISY-CHAIN order, a comet ramp + an
+    // arrowhead on every step for direction, a dashed grey hop where the cable
+    // jumps from one run to the next, and the post-renumber chain NUMBER over
+    // each light. The operator's 4→5 / 3→2 / 1 reads as three runs at a
+    // glance instead of as a table of indices. Plan: `chain_order_visual.js`
+    // (pure, unit-tested); this half is geometry only.
+    //
+    // ── PERF CONTRACT (memory: sim-perf-per-object-explosion) ──────────────
+    // Scene-graph OBJECT COUNT is what kills this sim, and report 20260725_38
+    // found trace visuals sitting in the scene invisible and still paying
+    // traversal. So these are BUILT ON SHOW and DISPOSED ON HIDE, never merely
+    // `visible = false`: with generators hidden (or the overlay toggled off)
+    // the chain costs exactly zero objects, zero geometries, zero draw calls.
+    // Per visible trace the cost is bounded and small:
+    //   1 LineSegments (all runs, vertex-coloured) + 1 dashed LineSegments
+    //   (only when there is more than one run) + 1 InstancedMesh (every
+    //   arrowhead, count−1 instances) + one label Sprite per fixture.
+    // = fixtures + 3 objects per visible trace. Nothing is per-PIXEL, and
+    // label textures/materials are cached across every trace and rebuild, so
+    // a splits edit allocates no textures at all.
+    const CHAIN_VIZ_LIFT = 0.38;          // world units the chain rides above the path
+    const CHAIN_VIZ_LABEL_LIFT = 0.95;    // labels sit above the chain line
+    const CHAIN_VIZ_LABEL_SCALE = 0.85;
+    const CHAIN_VIZ_ARROW_LENGTH = 0.44;
+    const CHAIN_VIZ_ARROW_RADIUS = 0.15;
+    const CHAIN_VIZ_LABEL_TEX_PX = 64;
+    const CHAIN_VIZ_UP = new THREE.Vector3(0, 1, 0);
+
+    // Label glyph textures + sprite materials, cached FOREVER and shared by
+    // every trace. Bounded by (chain numbers seen) × (palette size), i.e. tens
+    // of entries on the titanic scene — so a splits drag re-parents sprites
+    // instead of minting canvases. Never disposed: that is the point.
+    const _chainLabelTextures = new Map();  // "12"          → CanvasTexture
+    const _chainLabelMaterials = new Map(); // "12|#00e5ff"  → SpriteMaterial
+
+    function chainLabelTexture(text) {
+      const cached = _chainLabelTextures.get(text);
+      if (cached) return cached;
+      const size = CHAIN_VIZ_LABEL_TEX_PX;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      // White glyph on transparent, black outline. The sprite material tints
+      // it to the run colour — white multiplies to the colour, black stays
+      // black, so the outline keeps the number readable over any background.
+      const fontPx = Math.round(size * (text.length >= 3 ? 0.42 : text.length === 2 ? 0.56 : 0.72));
+      ctx.font = `bold ${fontPx}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = Math.max(3, Math.round(fontPx * 0.22));
+      ctx.strokeStyle = '#000000';
+      ctx.strokeText(text, size / 2, size / 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(text, size / 2, size / 2);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      _chainLabelTextures.set(text, texture);
+      return texture;
+    }
+
+    function chainLabelMaterial(text, colorHex) {
+      const key = `${text}|${colorHex}`;
+      const cached = _chainLabelMaterials.get(key);
+      if (cached) return cached;
+      const material = new THREE.SpriteMaterial({
+        map: chainLabelTexture(text),
+        color: new THREE.Color(colorHex),
+        transparent: true,
+        depthWrite: false,
+      });
+      _chainLabelMaterials.set(key, material);
+      return material;
+    }
+
+    // Should trace `tObj` be carrying a chain overlay right now? The gate is
+    // the SAME affordance the rest of the trace visuals use — the group's own
+    // visibility, which `setTraceObjectsVisibility` drives from the one gate in
+    // `trace_visual_gate.js` (`generatorsVisible`, `parsEnabled`, and the
+    // beauty-profile default) — plus the overlay's own toggle. One question,
+    // one answer, no second notion of "shown". So in a beauty profile the chain
+    // overlay follows Show Generators back on, exactly as it always has.
+    function chainVizShouldShow(tObj) {
+      if (!tObj || !tObj.group) return false;
+      if (params.chainOrderVisible === false) return false;
+      return tObj.group.visible === true;
+    }
+
+    function disposeChainOrderVisual(tObj) {
+      const viz = tObj && tObj.chainViz;
+      if (!viz) return;
+      viz.objects.forEach((o) => { if (o.parent) o.parent.remove(o); });
+      viz.geometries.forEach((g) => g.dispose());
+      // Only the per-trace materials — label materials are the shared cache.
+      viz.materials.forEach((m) => m.dispose());
+      tObj.chainViz = null;
+    }
+
+    // Identity of the CHAIN TOPOLOGY an overlay was built for. When this and
+    // the fixture count still match, a geometry change (a drag) only needs the
+    // existing objects moved; when either changes, the overlay is rebuilt.
+    function chainVizTopologyKey(splits) {
+      return Array.isArray(splits) ? JSON.stringify(splits) : 'path-order';
+    }
+
+    // Scratch vectors for the in-place position sync. Hoisted so a drag —
+    // which calls the sync on every pointer move — allocates nothing.
+    const _chainSyncA = new THREE.Vector3();
+    const _chainSyncB = new THREE.Vector3();
+    const _chainSyncMid = new THREE.Vector3();
+    const _chainSyncDir = new THREE.Vector3();
+    const _chainSyncQuat = new THREE.Quaternion();
+    const _chainSyncMtx = new THREE.Matrix4();
+    const _chainSyncScale = new THREE.Vector3(1, 1, 1);
+    const _chainSyncZero = new THREE.Vector3(0, 0, 0);
+
+    // Build the overlay for one trace into its visual group. Points come from
+    // `computeTracePoints`, exactly like the preview dots, so circle traces
+    // (whose points are group-local) and line/corner traces (world) both work
+    // with no special-casing: everything is parented to `tObj.group`.
+    function buildChainOrderVisual(trace, tObj) {
+      const pts = computeTracePoints(trace);
+      const count = pts.length;
+      if (count < 1) return;
+      // Invalid splits draw NOTHING. The generator refuses to build them and
+      // the card already shows the red `⚠ CHAIN SPLITS INVALID` badge; drawing
+      // a plausible-looking chain that will never be generated would be a lie.
+      if (chainSplitsError(trace.chainSplits, count) !== null) return;
+
+      const runs = buildChainRuns(trace.chainSplits, count);
+      const jumps = chainJumpSegments(runs);
+      const group = tObj.group;
+      const objects = [];
+      const geometries = [];
+      const materials = [];
+      let runLine = null;
+      let jumpLine = null;
+      let arrows = null;
+      const labels = [];
+
+      const pointAt = (pathPosition) =>
+        pts[pathPosition - 1].clone().addScaledVector(CHAIN_VIZ_UP, CHAIN_VIZ_LIFT);
+
+      // ── One flat list of cable steps: run-internal steps carry the run's
+      // colour and its comet ramp, jumps are dashed grey. Together they are
+      // the whole walk, so there are always exactly count−1 of them.
+      const runSteps = [];
+      const jumpSteps = [];
+      runs.forEach((run) => {
+        const positions = run.pathPositions;
+        for (let k = 0; k < positions.length - 1; k++) {
+          runSteps.push({
+            fromPathPosition: positions[k],
+            toPathPosition: positions[k + 1],
+            a: pointAt(positions[k]),
+            b: pointAt(positions[k + 1]),
+            colorHex: run.colorHex,
+            mixA: cometMix(k, positions.length),
+            mixB: cometMix(k + 1, positions.length),
+          });
+        }
+      });
+      jumps.forEach((jump) => {
+        jumpSteps.push({
+          fromPathPosition: jump.fromPathPosition,
+          toPathPosition: jump.toPathPosition,
+          a: pointAt(jump.fromPathPosition),
+          b: pointAt(jump.toPathPosition),
+          colorHex: CHAIN_JUMP_COLOR,
+          mixA: 1,
+          mixB: 1,
+        });
+      });
+
+      // ── The runs: ONE LineSegments for all of them, vertex-coloured. Each
+      // run fades from `COMET_MIN_MIX` at its first light to full at its last,
+      // so direction is legible even from an angle where an arrowhead
+      // foreshortens into a dot.
+      if (runSteps.length > 0) {
+        const positions = new Float32Array(runSteps.length * 6);
+        const colors = new Float32Array(runSteps.length * 6);
+        const rgb = new THREE.Color();
+        runSteps.forEach((step, s) => {
+          positions.set([step.a.x, step.a.y, step.a.z, step.b.x, step.b.y, step.b.z], s * 6);
+          rgb.set(step.colorHex);
+          colors.set([
+            rgb.r * step.mixA, rgb.g * step.mixA, rgb.b * step.mixA,
+            rgb.r * step.mixB, rgb.g * step.mixB, rgb.b * step.mixB,
+          ], s * 6);
+        });
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95 });
+        const line = new THREE.LineSegments(geo, mat);
+        group.add(line);
+        objects.push(line);
+        geometries.push(geo);
+        materials.push(mat);
+        runLine = line;
+      }
+
+      // ── The jumps: dashed grey, because the cable really does leave the
+      // drawn path here. Without them three colours look like three cables.
+      if (jumpSteps.length > 0) {
+        const jumpPoints = [];
+        jumpSteps.forEach((step) => { jumpPoints.push(step.a, step.b); });
+        const geo = new THREE.BufferGeometry().setFromPoints(jumpPoints);
+        const mat = new THREE.LineDashedMaterial({
+          color: new THREE.Color(CHAIN_JUMP_COLOR),
+          dashSize: 0.35, gapSize: 0.25, transparent: true, opacity: 0.7,
+        });
+        const line = new THREE.LineSegments(geo, mat);
+        line.computeLineDistances();
+        group.add(line);
+        objects.push(line);
+        geometries.push(geo);
+        materials.push(mat);
+        jumpLine = line;
+      }
+
+      // ── Arrowheads: every cable step, run steps and jumps alike, in ONE
+      // InstancedMesh. Per-instance colour carries the run colour (grey for a
+      // jump) — never one Mesh per arrow.
+      const arrowSteps = runSteps.concat(jumpSteps);
+      if (arrowSteps.length > 0) {
+        const geo = new THREE.ConeGeometry(CHAIN_VIZ_ARROW_RADIUS, CHAIN_VIZ_ARROW_LENGTH, 6);
+        const mat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.95 });
+        arrows = new THREE.InstancedMesh(geo, mat, arrowSteps.length);
+        const rgb = new THREE.Color();
+        arrowSteps.forEach((step, s) => {
+          arrows.setMatrixAt(s, chainArrowMatrix(step.a, step.b));
+          rgb.set(step.colorHex).multiplyScalar(step.mixB);
+          arrows.setColorAt(s, rgb);
+        });
+        arrows.instanceMatrix.needsUpdate = true;
+        if (arrows.instanceColor) arrows.instanceColor.needsUpdate = true;
+        group.add(arrows);
+        objects.push(arrows);
+        geometries.push(geo);
+        materials.push(mat);
+      }
+
+      // ── Chain numbers: the post-renumber fixture number over each light,
+      // tinted to its run so a number and its run are never ambiguous.
+      //
+      // INDEX ONLY — operator ruling, 2026-07-29: "I don't like the names on
+      // the generator guides too messy, just the index is enough". A build
+      // that floated the full `"<group> <n>"` fixture name here was measured
+      // at ~7.6× wider than tall per label, which crowds a par ring into
+      // unreadable overlap. The generator's own card is where the group name
+      // belongs; the guide stays a number.
+      chainLabelPlan(trace.chainSplits, count).forEach((label) => {
+        const sprite = new THREE.Sprite(chainLabelMaterial(String(label.number), label.colorHex));
+        sprite.position.copy(pts[label.pathPosition - 1])
+          .addScaledVector(CHAIN_VIZ_UP, CHAIN_VIZ_LABEL_LIFT);
+        sprite.scale.setScalar(CHAIN_VIZ_LABEL_SCALE);
+        sprite.userData.chainNumber = label.number;
+        group.add(sprite);
+        objects.push(sprite);
+        labels.push({ sprite, pathPosition: label.pathPosition });
+      });
+
+      // Marked so a scene census can prove the "nothing lingers when hidden"
+      // contract independently of this module's own bookkeeping.
+      objects.forEach((o) => { o.userData.isChainViz = true; });
+
+      tObj.chainViz = {
+        objects, geometries, materials,
+        // Everything `syncChainOrderVizPositions` needs to move the overlay
+        // without rebuilding it: the topology it was built for, and the step
+        // list in the SAME order as the line vertices and arrow instances.
+        count,
+        topologyKey: chainVizTopologyKey(trace.chainSplits),
+        runSteps, jumpSteps, runLine, jumpLine, arrows, labels,
+      };
+    }
+
+    // Pose one arrowhead at the midpoint of a→b, aimed along it. Returns the
+    // shared scratch matrix — copy it out if you need to keep it.
+    function chainArrowMatrix(a, b) {
+      _chainSyncDir.subVectors(b, a);
+      const length = _chainSyncDir.length();
+      _chainSyncMid.addVectors(a, b).multiplyScalar(0.5);
+      if (length < 1e-6) {
+        // Coincident points cannot define a direction. Collapse the arrow to
+        // zero scale rather than inventing one — an unaimed cone would read as
+        // a wiring direction that nobody declared.
+        _chainSyncMtx.compose(_chainSyncMid, _chainSyncQuat.identity(), _chainSyncZero);
+      } else {
+        _chainSyncDir.divideScalar(length);
+        _chainSyncQuat.setFromUnitVectors(CHAIN_VIZ_UP, _chainSyncDir);
+        _chainSyncMtx.compose(_chainSyncMid, _chainSyncQuat, _chainSyncScale);
+      }
+      return _chainSyncMtx;
+    }
+
+    // Move an existing overlay onto new fixture positions WITHOUT rebuilding
+    // it — the drag path. Nothing is allocated here: buffers are rewritten in
+    // place and the maths runs through the hoisted scratch vectors. Colours
+    // and numbers cannot change without the topology changing, so when the
+    // topology (or the count) has moved we hand off to a full rebuild.
+    function syncChainOrderVizPositions(traceIndex) {
+      const tObj = (window.traceObjects || [])[traceIndex];
+      const viz = tObj && tObj.chainViz;
+      if (!viz) { refreshChainOrderViz(traceIndex); return; }
+      const trace = params.traces[traceIndex];
+      if (!trace) { refreshChainOrderViz(traceIndex); return; }
+
+      const pts = computeTracePoints(trace);
+      if (pts.length !== viz.count ||
+          chainVizTopologyKey(trace.chainSplits) !== viz.topologyKey) {
+        refreshChainOrderViz(traceIndex);
+        return;
+      }
+
+      const readPoint = (target, pathPosition) =>
+        target.copy(pts[pathPosition - 1]).addScaledVector(CHAIN_VIZ_UP, CHAIN_VIZ_LIFT);
+
+      if (viz.runLine) {
+        const attr = viz.runLine.geometry.getAttribute('position');
+        viz.runSteps.forEach((step, s) => {
+          readPoint(_chainSyncA, step.fromPathPosition);
+          readPoint(_chainSyncB, step.toPathPosition);
+          attr.setXYZ(s * 2, _chainSyncA.x, _chainSyncA.y, _chainSyncA.z);
+          attr.setXYZ(s * 2 + 1, _chainSyncB.x, _chainSyncB.y, _chainSyncB.z);
+        });
+        attr.needsUpdate = true;
+        viz.runLine.geometry.computeBoundingSphere();
+      }
+
+      if (viz.jumpLine) {
+        const attr = viz.jumpLine.geometry.getAttribute('position');
+        viz.jumpSteps.forEach((step, s) => {
+          readPoint(_chainSyncA, step.fromPathPosition);
+          readPoint(_chainSyncB, step.toPathPosition);
+          attr.setXYZ(s * 2, _chainSyncA.x, _chainSyncA.y, _chainSyncA.z);
+          attr.setXYZ(s * 2 + 1, _chainSyncB.x, _chainSyncB.y, _chainSyncB.z);
+        });
+        attr.needsUpdate = true;
+        viz.jumpLine.geometry.computeBoundingSphere();
+        viz.jumpLine.computeLineDistances();
+      }
+
+      if (viz.arrows) {
+        const steps = viz.runSteps.concat(viz.jumpSteps);
+        steps.forEach((step, s) => {
+          readPoint(_chainSyncA, step.fromPathPosition);
+          readPoint(_chainSyncB, step.toPathPosition);
+          viz.arrows.setMatrixAt(s, chainArrowMatrix(_chainSyncA, _chainSyncB));
+        });
+        viz.arrows.instanceMatrix.needsUpdate = true;
+        viz.arrows.computeBoundingSphere();
+      }
+
+      viz.labels.forEach((label) => {
+        label.sprite.position.copy(pts[label.pathPosition - 1])
+          .addScaledVector(CHAIN_VIZ_UP, CHAIN_VIZ_LABEL_LIFT);
+      });
+    }
+
+    // A trace's visual group was thrown away and replaced (the line/corner
+    // handle drags do that on every pointer move). Re-parent the overlay onto
+    // the new group and move it, instead of paying a rebuild per frame.
+    function reparentChainOrderViz(traceIndex) {
+      const tObj = (window.traceObjects || [])[traceIndex];
+      const viz = tObj && tObj.chainViz;
+      if (!viz || !tObj.group) { refreshChainOrderViz(traceIndex); return; }
+      viz.objects.forEach((o) => tObj.group.add(o));
+      syncChainOrderVizPositions(traceIndex);
+    }
+
+    // The ONE entry point: drop whatever overlay a trace has and rebuild it if
+    // (and only if) it should be on screen. Every caller — visibility toggles,
+    // splits edits, ⇄ Swap, Regenerate, handle drags — goes through here, so
+    // the overlay can never lag the chain it describes.
+    function refreshChainOrderViz(traceIndex) {
+      const tObj = (window.traceObjects || [])[traceIndex];
+      if (!tObj) return;
+      disposeChainOrderVisual(tObj);
+      if (!chainVizShouldShow(tObj)) return;
+      const trace = params.traces[traceIndex];
+      if (!trace) return;
+      buildChainOrderVisual(trace, tObj);
+    }
+    window.refreshChainOrderViz = refreshChainOrderViz;
+
+    function refreshAllChainOrderViz() {
+      (window.traceObjects || []).forEach((_, i) => refreshChainOrderViz(i));
+    }
+    window.refreshAllChainOrderViz = refreshAllChainOrderViz;
+
+    // Which trace object is the transform gizmo currently holding? Returned as
+    // an INDEX + a role, never as the mesh itself, so it can survive a rebuild.
+    // Report 20260725_83: nothing detached the gizmo before, so after any
+    // `rebuildTraceObjects()` (a radius / arc / count / start / end edit, a
+    // generator add or delete, an undo) it stayed attached to a mesh that had
+    // been removed from the scene. Dragging that orphan wrote the trace fields
+    // while the live objects — and therefore the generated fixtures — stayed
+    // exactly where they were.
+    function captureTraceGizmoTarget() {
+      const held = transformControl && transformControl.object;
+      if (!held) return null;
+      const objects = window.traceObjects || [];
+      for (let i = 0; i < objects.length; i++) {
+        const tObj = objects[i];
+        if (!tObj) continue;
+        if (tObj.hitbox === held) return { traceIndex: i, handleType: null };
+        const handle = (tObj.handles || []).find((h) => h === held);
+        if (handle) {
+          return { traceIndex: i, handleType: handle.userData.handleType ?? null };
+        }
+      }
+      return null;
+    }
+
+    // Re-attach the gizmo to the rebuilt equivalent of what it held. A trace
+    // that no longer exists (deleted) leaves the gizmo detached — that is the
+    // truth, not a fallback.
+    function restoreTraceGizmoTarget(target) {
+      if (!target || !transformControl) return;
+      const tObj = (window.traceObjects || [])[target.traceIndex];
+      if (!tObj) return;
+      const next = target.handleType === null
+        ? tObj.hitbox
+        : (tObj.handles || []).find((h) => h.userData.handleType === target.handleType);
+      if (next) transformControl.attach(next);
+    }
+
     function destroyTraceObjects() {
       if (!window.traceObjects) window.traceObjects = [];
+      // Never leave the gizmo holding a mesh we are about to remove.
+      if (transformControl && captureTraceGizmoTarget()) transformControl.detach();
       window.traceObjects.forEach(tObj => {
+        disposeChainOrderVisual(tObj);
         if (tObj.group) scene.remove(tObj.group);
         if (tObj.hitbox) scene.remove(tObj.hitbox);
         if (tObj.aimLine && tObj.aimLine.parent === scene) scene.remove(tObj.aimLine);
@@ -2904,12 +4235,15 @@ function setupGUI() {
     }
 
     function rebuildTraceObjects() {
+      const gizmoTarget = captureTraceGizmoTarget();
       destroyTraceObjects();
       params.traces.forEach((trace, i) => {
         window.traceObjects.push(buildTraceObject(trace, i));
       });
-      // Apply initial visibility from config
-      setTraceObjectsVisibility(params.generatorsVisible !== false);
+      // Apply initial visibility: toggle + par master + beauty-profile default
+      applyTraceVisualsVisibility();
+      // The operator's selection survives the rebuild — on the LIVE mesh.
+      restoreTraceGizmoTarget(gizmoTarget);
     }
     window.rebuildTraceObjects = rebuildTraceObjects;
 
@@ -2917,22 +4251,31 @@ function setupGUI() {
       rebuildTraceObjects();
     }
 
-    function writeTraceTransformToConfig(traceIndex) {
-      const tObj = window.traceObjects[traceIndex];
-      if (!tObj) return;
-      const trace = params.traces[traceIndex];
-      const hitbox = tObj.hitbox;
-      trace.x = hitbox.position.x;
-      trace.y = hitbox.position.y;
-      trace.z = hitbox.position.z;
-      const euler = new THREE.Euler().setFromQuaternion(hitbox.quaternion, 'YXZ');
-      trace.rotX = THREE.MathUtils.radToDeg(euler.x);
-      trace.rotY = THREE.MathUtils.radToDeg(euler.y);
-      trace.rotZ = THREE.MathUtils.radToDeg(euler.z);
+    // ── Generator GEOMETRY fields (report 20260725_83) ────────────────────
+    // Radius, arc, and the line/corner start / corner / end coordinates all
+    // used to redraw the preview and stop there: the orange path moved, the
+    // generated fixtures did not, and the divergence only surfaced on the next
+    // reload (when boot regeneration finally applied the edit). They now go
+    // through the SAME cold-move contract as a gizmo drag — cheap preview on
+    // every tick, exactly ONE regeneration when the control is released.
+    function onTraceGeometryEdit(controller, traceIndex) {
+      return controller
+        .onChange(() => {
+          updateTracePreview(traceIndex);
+          const trace = params.traces[traceIndex];
+          if (trace && trace.generated) markTraceRegenDirty(traceIndex);
+          debounceAutoSave();
+        })
+        .onFinishChange(() => { window._flushPendingEditorRegens(); });
     }
 
-    // Clean trace transform handler — hitbox is at scene root,
-    // just copy its transform to the visual group
+    // `writeTraceTransformToConfig` used to live here: a SECOND, uncalled
+    // writer of trace.x/y/z/rot* that read the hitbox instead of the dragged
+    // object. Deleted with report 20260725_83 — the anchor has exactly one
+    // writer (`_onTraceTransformChange`) and one reader (`trace_anchor.js`).
+
+    // Trace transform handler — the dragged object writes the TRACE FIELDS,
+    // and every visual is re-derived from them (never object-to-object).
     window._onTraceTransformChange = function(obj) {
       if (!obj.userData.isTrace) return false;
       const tIdx = obj.userData.traceIndex;
@@ -2952,12 +4295,10 @@ function setupGUI() {
            if (trace.shape === 'line') {
               aimOrigin = pts.length > 0 ? pts[0] : new THREE.Vector3(trace.startX ?? 0, trace.startY ?? 5, trace.startZ ?? 0).lerp(new THREE.Vector3(trace.endX ?? 10, trace.endY ?? 5, trace.endZ ?? 0), 0.5);
            } else {
-              if (pts.length > 0) {
-                 const euler = new THREE.Euler(THREE.MathUtils.degToRad(trace.rotX || 0), THREE.MathUtils.degToRad(trace.rotY || 0), THREE.MathUtils.degToRad(trace.rotZ || 0), 'YXZ');
-                 aimOrigin.copy(pts[0]).applyEuler(euler).add(new THREE.Vector3(trace.x || 0, trace.y || 5, trace.z || 0));
-              } else {
-                 aimOrigin.copy(tObj.group ? tObj.group.position : new THREE.Vector3(trace.x || 0, trace.y || 5, trace.z || 0));
-              }
+              // Same anchor the fixtures are generated against.
+              const anchorMtx = traceAnchorMatrix(trace);
+              if (pts.length > 0) aimOrigin.copy(pts[0]).applyMatrix4(anchorMtx);
+              else aimOrigin.setFromMatrixPosition(anchorMtx);
            }
            tObj.aimLine.geometry.setFromPoints([aimOrigin, obj.position]);
            tObj.aimLine.computeLineDistances();
@@ -3050,15 +4391,19 @@ function setupGUI() {
             interactiveObjects.push(d);
           });
 
-          grp.visible = params.generatorsVisible !== false;
+          const traceVis = traceVisualsShouldShow(params);
+          grp.visible = traceVis;
           if (tObj.aimLine) {
             grp.add(tObj.aimLine);
-            tObj.aimLine.visible = params.generatorsVisible !== false;
+            tObj.aimLine.visible = traceVis;
           }
           scene.add(grp);
           tObj.group = grp;
           tObj.visuals = visuals;
           tObj.materials = { lineMat, dotMats };
+          // The overlay lived in the group that was just replaced — move it to
+          // the new one so the chain never lags the geometry it describes.
+          reparentChainOrderViz(tIdx);
         }
       } else if (obj.userData.handleType === 'start' || obj.userData.handleType === 'end') {
         // Line handle moved — compute delta and move aim handle too
@@ -3147,37 +4492,40 @@ function setupGUI() {
             interactiveObjects.push(d);
           });
 
-          grp.visible = params.generatorsVisible !== false;
+          const traceVis = traceVisualsShouldShow(params);
+          grp.visible = traceVis;
           if (tObj.aimLine) {
             grp.add(tObj.aimLine); // re-attach the preserved dash line to the new group
-            tObj.aimLine.visible = params.generatorsVisible !== false;
+            tObj.aimLine.visible = traceVis;
           }
           scene.add(grp);
           tObj.group = grp;
           tObj.visuals = visuals;
           tObj.materials = { lineMat, dotMats }; // Preserve material refs for highlighting
+          // Same as the corner path: the old group is gone, so move the
+          // overlay onto the new one.
+          reparentChainOrderViz(tIdx);
         }
       } else {
-        // Circle hitbox
+        // ─── CIRCLE anchor moved (the hitbox IS the generator) ─────────────
+        // ONE DIRECTION ONLY (report 20260725_83): the dragged object writes
+        // the TRACE FIELDS, and every visual is then re-derived FROM those
+        // fields. It used to copy the visual group's transform straight off the
+        // hitbox — object to object — which silently did nothing whenever the
+        // gizmo was still attached to a hitbox a `rebuildTraceObjects()` had
+        // already thrown away (any radius/arc/count edit does that, and nothing
+        // detached the gizmo). The trace fields moved, the group did not, and
+        // the fixtures were generated against the old anchor: "I moved the
+        // generator and the lights stayed put."
         const aimHandle = (tObj.handles || []).find(h => h.userData.handleType === 'aim');
 
-        if (tObj.aimLine && aimHandle) {
-           const pts = computeTracePoints(trace);
-           let aimOrigin = new THREE.Vector3();
-           if (pts.length > 0) {
-              const euler = new THREE.Euler(THREE.MathUtils.degToRad(trace.rotX || 0), THREE.MathUtils.degToRad(trace.rotY || 0), THREE.MathUtils.degToRad(trace.rotZ || 0), 'YXZ');
-              aimOrigin.copy(pts[0])
-                       .applyEuler(euler)
-                       .add(new THREE.Vector3(trace.x || 0, trace.y || 5, trace.z || 0));
-           } else {
-              aimOrigin.copy(obj.position);
-           }
-           tObj.aimLine.geometry.setFromPoints([aimOrigin, aimHandle.position]);
-           tObj.aimLine.computeLineDistances();
-        }
+        // Carry the aim target by the same translation, exactly as the line and
+        // corner handles already do — a moved ring keeps aiming the way the
+        // operator placed it instead of pointing back at where it used to be.
+        // Rotation-only changes produce a zero delta and move nothing.
+        const before = traceAnchor(trace);
+        const { dx, dy, dz } = anchorDelta(before, obj.position);
 
-        tObj.group.position.copy(tObj.hitbox.position);
-        tObj.group.quaternion.copy(tObj.hitbox.quaternion);
         trace.x = obj.position.x;
         trace.y = obj.position.y;
         trace.z = obj.position.z;
@@ -3185,14 +4533,77 @@ function setupGUI() {
         trace.rotX = THREE.MathUtils.radToDeg(euler.x);
         trace.rotY = THREE.MathUtils.radToDeg(euler.y);
         trace.rotZ = THREE.MathUtils.radToDeg(euler.z);
+
+        if (dx !== 0 || dy !== 0 || dz !== 0) {
+          trace.aimX = (trace.aimX || 0) + dx;
+          trace.aimY = (trace.aimY || 0) + dy;
+          trace.aimZ = (trace.aimZ || 0) + dz;
+          if (aimHandle) aimHandle.position.set(trace.aimX, trace.aimY, trace.aimZ);
+        }
+
+        // Visuals follow the FIELDS. `obj` may be a stale orphan; these are the
+        // live ones and they are now always on the anchor the fixtures use.
+        // The live hitbox is skipped when it IS the dragged object — it is
+        // already there, and the gizmo owns its quaternion for the rest of the
+        // drag.
+        applyTraceAnchor(tObj.group, trace);
+        if (tObj.hitbox !== obj) applyTraceAnchor(tObj.hitbox, trace);
+
+        if (tObj.aimLine && aimHandle) {
+           const pts = computeTracePoints(trace);
+           const aimOrigin = new THREE.Vector3();
+           const anchorMtx = traceAnchorMatrix(trace);
+           if (pts.length > 0) aimOrigin.copy(pts[0]).applyMatrix4(anchorMtx);
+           else aimOrigin.setFromMatrixPosition(anchorMtx);
+           tObj.aimLine.geometry.setFromPoints([aimOrigin, aimHandle.position]);
+           tObj.aimLine.computeLineDistances();
+        }
       }
       
+      // ── COLD MOVE (report 20260725_44 step 2) ──────────────────────────
+      // Everything above this line is the LIGHTWEIGHT editor feedback (trace
+      // fields, handles, polyline + preview dots, aim line, chain-order
+      // overlay) and keeps tracking the cursor every tick. The fixture
+      // regeneration below is the expensive half — generateGroupFromTrace →
+      // rebuildParLights destroys and re-creates every fixture mesh/material,
+      // and the next frame recompiles their shaders (measured ~2.4 s frame
+      // stall PER TICK, 0.4 FPS paced drag, report 20260725_44 §1). While the
+      // gizmo is dragging we only MARK the trace dirty; main.js's
+      // dragging-changed release seam regenerates exactly once.
+      // Operator-ratified semantics (plan §5.1): generated fixtures and the
+      // global dot overlay intentionally freeze mid-drag; the generator's own
+      // line/handles/dots track live.
+      // Outside a drag (undo, programmatic edits, GUI number fields) there is
+      // no release event to flush on, so regenerate immediately as before.
       if (trace.generated) {
-        generateGroupFromTrace(tIdx, true);
+        if (transformControl && transformControl.dragging) {
+          markTraceRegenDirty(tIdx);
+        } else {
+          generateGroupFromTrace(tIdx, true);
+        }
       }
 
-      debounceAutoSave();
+      // Autosave is deferred with the regenerate: a mid-drag save would write a
+      // scene whose generator has moved but whose fixtures have not (autoSave
+      // on + a 2 s pause mid-drag is enough to trip it). The release seam saves.
+      if (!(transformControl && transformControl.dragging)) debounceAutoSave();
       return true;
+    };
+
+    // ── Release seam doer (report 20260725_44 step 3) ─────────────────────
+    // Called by main.js when the transform gizmo is released. Does ALL the work
+    // the drag deferred, exactly once. `takePendingRegens()` clears the ledger,
+    // so the strand invalidation here is unconditional — the LED move-trail bug
+    // (report 20260725_2) was persistent stale batch coordinates after a drag,
+    // and this call is what can never be skipped again.
+    window._flushPendingEditorRegens = function() {
+      const pending = takePendingRegens();
+      for (const tIdx of pending.traces) generateGroupFromTrace(tIdx, true);
+      if (pending.strandTransform) {
+        if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('strand_transform');
+      }
+      if (pending.traces.length || pending.strandTransform) debounceAutoSave();
+      return { traces: pending.traces.length, strandTransform: pending.strandTransform };
     };
 
     // ─── Per-point drag (slide a light along its path) ────────────────────
@@ -3210,10 +4621,10 @@ function setupGUI() {
     // group world matrix; line paths are already world-space.
     function traceWorldAt(trace, tObj, path, s) {
       const local = path.at(s);
-      if (trace.shape === 'circle' && tObj && tObj.group) {
-        tObj.group.updateMatrixWorld(true);
-        return local.applyMatrix4(tObj.group.matrixWorld);
-      }
+      // Same anchor the fixtures are generated against (report 20260725_83) —
+      // reading `tObj.group.matrixWorld` here would make a point drag land
+      // against a stale group while the generation used the trace fields.
+      if (!traceUsesWorldSpacePath(trace)) return local.applyMatrix4(traceAnchorMatrix(trace));
       return local;
     }
 
@@ -3285,24 +4696,44 @@ function setupGUI() {
       // Live update: recompute dot positions + spacing gradient in place so
       // dragging feels fluid (no destroy/rebuild churn of the whole trace).
       refreshTraceDots(traceIndex);
-      if (trace.generated) generateGroupFromTrace(traceIndex, true);
+      // COLD MOVE (report 20260725_44 step 4): refreshTraceDots IS the
+      // lightweight feedback — the dot slides under the cursor. The fixture
+      // regeneration is deferred to _endTraceDotDrag. This drag is NOT a
+      // TransformControls drag (it has its own _dotDrag state and its own
+      // pointerup in interaction.js), so the dirty mark is unconditional here
+      // and the flush lives in the end handler below.
+      if (trace.generated) markTraceRegenDirty(traceIndex);
       return true;
     };
 
     window._endTraceDotDrag = function() {
       if (!_dotDrag) return;
       _dotDrag = null;
+      // The single deferred regenerate for this drag, BEFORE the autosave, so
+      // a save can never persist a trace whose fixtures have not caught up.
+      // Same doer as the gizmo release seam — one implementation, one contract.
+      window._flushPendingEditorRegens();
+      // The point-offset edit itself is a change even when the trace generates
+      // nothing, so the save mark is unconditional (the flush's own save call
+      // is debounced — a second one costs a clearTimeout).
       debounceAutoSave();
     };
 
     // Recompute the base (even, pre-offset) arclengths for a trace. Shared by
     // computeTracePoints and the drag math so the two never disagree.
+    // The number of lights a trace generates. COUNT is authoritative; this is
+    // the ONE place it is rounded/floored, so the base layout, the chain-order
+    // gate, the Lights guard and the card all agree on what "1..count" means.
+    function traceLightCount(trace) {
+      return Math.max(1, Math.round(trace.count ?? 8));
+    }
+
     function computeTraceBaseArclengths(trace, path) {
       // COUNT is authoritative: the user sets the number of lights directly
       // (fixture width is informational only — see the Lights control). This
       // is the single source of truth for the even base layout, shared by
       // computeTracePoints' offset post-processing so the two never diverge.
-      const count = Math.max(1, Math.round(trace.count ?? 8));
+      const count = traceLightCount(trace);
       const baseS = [];
       if (trace.shape === 'circle') {
         // A full 360° arc wraps (no seam endpoint); a partial arc is open.
@@ -3339,11 +4770,39 @@ function setupGUI() {
           if (dot.material) dot.material.color.set(colors[k]);
         }
       });
+      // Dragging a light along the path moves the chain with it — in place,
+      // so a per-pointer-move drag allocates nothing.
+      syncChainOrderVizPositions(traceIndex);
     }
 
     function generateGroupFromTrace(traceIndex, skipUndo = false, previousGroupName = null) {
       const trace = params.traces[traceIndex];
       if (!trace) return;
+
+      // ── Chain-order gate (design 20260725_41 §3.3 / §3.5) ─────────────────
+      // `trace.chainSplits` declares the PHYSICAL daisy-chain walk over the
+      // trace's path positions and must cover 1..count exactly once. Invalid
+      // splits REFUSE the (re)generate outright — before the undo push, before
+      // the sweep, before any mutation. Quietly falling back to path order
+      // would renumber a mapped group behind the operator's back, which is
+      // exactly the fallback the codex forbids.
+      const splitsError = chainSplitsError(trace.chainSplits, traceLightCount(trace));
+      if (splitsError) {
+        const label = trace.groupName || trace.name || `Trace ${traceIndex + 1}`;
+        if (window._isAppBooting) {
+          // Boot: skip THIS trace's regeneration and keep the fixture rows the
+          // scene file already carries. Nothing is invented, the rest of the
+          // scene still loads, and the generator card shows a red badge.
+          console.error(
+            `[chainSplits] Generator "${label}": ${splitsError} — regeneration SKIPPED. ` +
+            'The fixtures saved in the scene file are left exactly as they are. Fix the ' +
+            'splits under ⛓ Chain Order on the generator card, then Regenerate.');
+        } else {
+          alert(`⚠ Generator "${label}"\n\nChain Order splits are invalid:\n  ${splitsError}\n\n` +
+            'Nothing was generated. Fix or clear the splits (⛓ Chain Order) and try again.');
+        }
+        return;
+      }
 
       if (!skipUndo) pushUndo();
 
@@ -3364,15 +4823,35 @@ function setupGUI() {
       // Compute points
       const pts = computeTracePoints(trace);
       // Line AND corner produce world-space points (absolute coords).
-      // Only circle points are local to a transformed group.
-      const isWorldSpace = trace.shape === 'line' || trace.shape === 'corner';
-      const grp = window.traceObjects[traceIndex]?.group;
-      if (!isWorldSpace && grp) grp.updateMatrixWorld(true);
-      const worldMatrix = (!isWorldSpace && grp) ? grp.matrixWorld : null;
+      // Only circle points are local to the trace's anchor.
+      //
+      // ── ANCHOR: from the TRACE, never from the scene graph ──────────────
+      // Report 20260725_83. This used to fish the trace's visual THREE group
+      // out of `window.traceObjects` and use its world transform, with a silent
+      // `null` when the group was missing — which placed a circle's fixtures at
+      // the raw local ring coordinates, i.e. around the world origin. Worse,
+      // that group could be STALE (gizmo attached to a hitbox a rebuild had
+      // replaced), so the fixtures were generated against the generator's OLD
+      // position while the trace fields already held the new one — the live
+      // "lights don't follow" half of the bug, and the reason live and reload
+      // disagreed at all.
+      // `traceAnchorMatrix` is the same computation `buildTraceObject` places
+      // the visual group with, so the ring, the hitbox and the fixtures are one
+      // placement by construction, in this session and in every later one.
+      const isWorldSpace = traceUsesWorldSpacePath(trace);
+      const worldMatrix = isWorldSpace ? null : traceAnchorMatrix(trace);
 
       let lockedDeltaX = null;
       let lockedDeltaY = null;
       let lockedDeltaZ = null;
+
+      // Per-path-position fixture data, built in PATH order exactly as before.
+      // The aim math below is keyed by path position (`pts[0]`, `pts[last]`,
+      // the `i === 0` locked-delta latches, `pointOffsets`), so a light at
+      // position p aims identically no matter which chain number it ends up
+      // with. Only the ASSIGNMENT of numbers to positions is permuted, and
+      // that happens after this loop.
+      const pointData = new Array(pts.length);
 
       pts.forEach((pt, i) => {
         // Line points are already world-space; circle points need worldMatrix
@@ -3527,9 +5006,12 @@ function setupGUI() {
           }
         }
 
-        params.parLights.push({
+        pointData[i] = {
           group: groupName,
-          name: `${groupName} ${i + 1}`,
+          // Filled in at emission below — the number is CHAIN order, not path
+          // order. Declared here so the key order (and therefore the scene
+          // YAML) is byte-identical to the pre-splits emission.
+          name: '',
           fixtureType: trace.fixtureType || 'UkingPar',
           color: trace.lightColor || '#ffaa44',
           intensity: trace.lightIntensity || 10,
@@ -3541,10 +5023,36 @@ function setupGUI() {
           rotZ: rotZ + (trace.fixtureRotOffZ || 0),
           traceGenerated: true,
           controllerIp: trace.controllerIp || '',
-        });
+        };
       });
 
+      // ── Emit in CHAIN order ───────────────────────────────────────────────
+      // `order[j]` is the path position that receives fixture NUMBER j+1, so
+      // "<group> 1" is the first light on the cable. With no chainSplits the
+      // order is the identity [1..count] and this is byte-identical to the
+      // forward push it replaces. The NAME SET is unchanged either way, which
+      // is what keeps the survivor / sticky-address contract below intact.
+      const emitted = [...emitInChainOrder(pointData, trace.chainSplits, groupName)];
+      for (const record of emitted) {
+        params.parLights.push(record);
+      }
+
       trace.generated = true;
+
+      // ── HAND-TWEAK POLICY: RE-SNAP, LOUDLY (report 20260725_83 §4) ────────
+      // A trace-generated fixture has nowhere to keep a manual offset — the
+      // sweep above threw every one of them away and these records are brand
+      // new — so a hand nudge does not survive a regenerate, and never survived
+      // a reload either (boot regenerates every `generated: true` trace). The
+      // honest thing is to re-snap and SAY SO by name. `detectResnappedFixtures`
+      // stays silent unless the group moved as one rigid piece, which is the
+      // only case where a deviating fixture provably was hand-placed.
+      const resnapped = detectResnappedFixtures(previousGenerated, emitted);
+      if (resnapped.names.length > 0) {
+        const message = resnapMessage(groupName, resnapped.names);
+        console.warn(`[generator] ${message}`);
+        if (!window._isAppBooting) showToast(message, { ttl: 14000 });
+      }
 
       // Count shrink: fixtures whose names no longer exist were
       // deleted — drop their mapping entries (the hook reprojects
@@ -3588,6 +5096,69 @@ function setupGUI() {
       const existing = [...genFolder.folders];
       existing.forEach(f => f.destroy());
       window.traceGuiFolders = [];
+
+      // ── ORPHAN COUNT ON THE SECTION HEADER (report 20260725_76) ──
+      // The whole point of an orphan is that it has NO generator card here, so
+      // the generators section is where its absence is felt and where the count
+      // has to appear — otherwise the operator has to go hunting group by group
+      // (which is exactly how 12 ghosts survived unnoticed for a week).
+      const genOrphanGroups = orphanGroupSummary(orphanScene());
+      const genOrphanTotal = genOrphanGroups.reduce((n, g) => n + g.orphanCount, 0);
+      genFolder.title(genOrphanTotal === 0 ? '📐 Group Generator'
+        : '📐 Group Generator <span style="color:var(--error);font-weight:700;">' +
+          `⚠ ${genOrphanTotal} orphaned fixtures</span>`);
+      const genChildrenEl = genFolder.domElement.querySelector('.children');
+      if (genChildrenEl) {
+        genChildrenEl.querySelectorAll('.orphan-summary-bar').forEach((el) => el.remove());
+        if (genOrphanTotal > 0) {
+          const bar = document.createElement('div');
+          bar.className = 'orphan-summary-bar';
+          bar.style.cssText = 'margin:4px 6px;padding:5px 7px;border:1px solid var(--error);' +
+            'border-radius:3px;background:color-mix(in srgb, var(--error) 12%, var(--surface));' +
+            'display:flex;flex-direction:column;gap:4px;';
+          const head = document.createElement('div');
+          head.style.cssText = 'color:var(--error);font-size:10px;font-weight:700;';
+          head.textContent = `⚠ ${genOrphanTotal} orphaned fixture(s) — generated, ` +
+            'but no generator owns them';
+          bar.appendChild(head);
+          const why = document.createElement('div');
+          why.style.cssText = 'color:var(--secondary);font-size:9px;line-height:1.35;';
+          why.textContent = 'They have no card in this list, they never regenerate, and they ' +
+            'still cost engine-model pixels and hold their group name hostage. Remove them ' +
+            'here or from their group in Light Instances. Nothing is written until you save.';
+          bar.appendChild(why);
+          for (const g of genOrphanGroups) {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;gap:4px;align-items:center;';
+            const label = document.createElement('span');
+            label.style.cssText = 'flex:1;min-width:0;color:var(--text);font-size:10px;' +
+              'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+            label.textContent = g.allOrphans
+              ? `${g.group} — all ${g.orphanCount}`
+              : `${g.group} — ${g.orphanCount} of ${g.memberCount}`;
+            const btn = document.createElement('button');
+            btn.textContent = `🗑 Remove ${g.orphanCount}`;
+            btn.title = `Enumerate every dependent, then remove the ${g.orphanCount} ` +
+              `orphaned fixture(s) in "${g.group}"`;
+            btn.style.cssText = 'padding:3px 7px;border:1px solid var(--error);' +
+              'border-radius:3px;background:color-mix(in srgb, var(--error) 18%, ' +
+              'var(--surface));color:var(--error);cursor:pointer;font-size:10px;' +
+              'font-family:inherit;font-weight:700;white-space:nowrap;';
+            btn.onclick = () => {
+              removeOrphanFixtures(g.orphans, g.allOrphans
+                ? `the whole "${g.group}" group`
+                : `${g.orphanCount} of ${g.memberCount} fixtures in "${g.group}"`);
+            };
+            row.appendChild(label);
+            row.appendChild(btn);
+            bar.appendChild(row);
+          }
+          // Prepend: the "New Circle / Line / Corner" bar is prepended further
+          // down, so this lands directly beneath it — top of the section, above
+          // every generator card.
+          genChildrenEl.prepend(bar);
+        }
+      }
 
       // New Trace buttons
       const newBtnDiv = document.createElement('div');
@@ -3675,12 +5246,39 @@ function setupGUI() {
         genFolder.add(params, 'focusOnSelect').name('Focus on Select').onChange(() => { debounceAutoSave(); });
       }
 
+      // Default TRUE, as it always was — but in the beauty profiles
+      // (`emissive`/`full`) the gate keeps the visuals off until the operator
+      // moves this switch himself, because their preview dots read as coloured
+      // rings on the fixtures (report 20260725_79). Flipping it here is that
+      // explicit choice and shows them in any profile.
       if (params.generatorsVisible === undefined) params.generatorsVisible = true;
       const existingGenCtrl = genFolder.controllers.find(c => c.property === 'generatorsVisible');
       if (!existingGenCtrl) {
-        genFolder.add(params, 'generatorsVisible').name('Show Generators').listen().onChange((v) => {
-          if (window.setTraceObjectsVisibility) window.setTraceObjectsVisibility(v);
+        const genCtrl = genFolder.add(params, 'generatorsVisible').name('Show Generators').listen().onChange(() => {
+          params.traceVisualsOperatorChoice = true;
+          if (window.applyTraceVisualsVisibility) window.applyTraceVisualsVisibility();
           debounceAutoSave();
+        });
+        if (genCtrl.domElement) {
+          genCtrl.domElement.title =
+            'Generator trace visuals: wireframe paths, spacing preview dots, drag handles. ' +
+            'Authoring furniture — hidden by default in the Emissive / Full beauty profiles ' +
+            '(their dots sit on the fixtures and read as coloured rings). Turn it on here to ' +
+            'see them in any profile.';
+        }
+      }
+
+      // The ⛓ chain-order overlay rides on "Show Generators" but has its own
+      // switch, because it is the densest thing in the trace view: it adds one
+      // label sprite per fixture. Off → the overlay is disposed outright, not
+      // hidden (see the perf contract by `buildChainOrderVisual`). Runtime-only
+      // like `focusOnSelect`: `reconstructYAML` walks the scene's existing
+      // config tree, so this never appears in a scene file.
+      if (params.chainOrderVisible === undefined) params.chainOrderVisible = true;
+      const existingChainCtrl = genFolder.controllers.find(c => c.property === 'chainOrderVisible');
+      if (!existingChainCtrl) {
+        genFolder.add(params, 'chainOrderVisible').name('⛓ Show Chain Order').listen().onChange(() => {
+          if (window.refreshAllChainOrderViz) window.refreshAllChainOrderViz();
         });
       }
 
@@ -3726,8 +5324,18 @@ function setupGUI() {
       const traceGlyph = (shape) =>
         shape === 'circle' ? '○' : (shape === 'corner' ? '⌐' : '—');
 
-      // Trace sub-folders
-      params.traces.forEach((trace, i) => {
+      // Trace sub-folders.
+      // DISPLAY ORDER ONLY — the 📐 Group Generator cards render sorted by
+      // generator name, but `i` stays each trace's REAL index in params.traces.
+      // Everything below is index-keyed (window.traceGuiFolders[i],
+      // clickTraceFolder(i), setTraceSelected(i), flyToTrace(i), the chain-order
+      // lookups) and params.traces is what reconstructYAML serializes, so the
+      // array itself is never reordered.
+      const displayTraces = sortByNameNatural(
+        params.traces.map((trace, i) => ({ trace, i })),
+        (entry) => entry.trace.name || `Trace ${entry.i + 1}`,
+      );
+      displayTraces.forEach(({ trace, i }) => {
         // lil-gui returns the SAME folder if titles match, breaking all click listeners.
         // Append invisible zero-width spaces (\u200B) to guarantee every label is unique.
         const baseLabel = `${traceGlyph(trace.shape)} ${trace.name || `Trace ${i+1}`}`;
@@ -3771,19 +5379,83 @@ function setupGUI() {
             traceNameCtrl.updateDisplay();
             return;
           }
+          // GATE BEFORE MUTATION (plan 20260725_44 step 8). The regenerate
+          // below refuses invalid chainSplits — but the name / override /
+          // view-bit mutations used to happen FIRST, so a refused regenerate
+          // left the old-named fixtures stranded with no group master, no
+          // lock and no view bit, and `reconcileGroupBits` then re-minted a
+          // bit for the old name (MASK_* drift). Check the splits here, with
+          // ZERO mutations behind us, and revert the edit outright.
+          const splitsErr = chainSplitsError(trace.chainSplits, traceLightCount(trace));
+          if (splitsErr && trace.generated) {
+            alert(`⚠ Cannot rename "${oldGroupName}" → "${newName}"\n\n` +
+              `Chain Order splits are invalid:\n  ${splitsErr}\n\n` +
+              'Nothing was renamed. Fix or clear the splits (⛓ Chain Order) and try again.');
+            trace.name = committedTraceName;
+            traceNameCtrl.updateDisplay();
+            return;
+          }
+
+          // CHECK + INVALIDATE the mapping (operator ruling 2026-07-29, step
+          // 9). Today's behaviour unmaps everything anyway — as an ACCIDENT
+          // of the regenerate's casualty set — and reports it as "N deleted
+          // fixture(s) unmapped — channels freed", which is a lie: nothing
+          // was deleted. Here it becomes deliberate and accurate: every
+          // old-name chain entry and patch-tree key is enumerated and
+          // invalidated with one line per fixture, BEFORE the regenerate, so
+          // the regenerate's own casualty hook then finds nothing left to
+          // unmap and stays quiet.
+          const renamedPairs = params.parLights
+            .filter((l) => l.group === oldGroupName && l.traceGenerated)
+            .map((l) => ({
+              from: l.name,
+              to: typeof l.name === 'string' && l.name.startsWith(`${oldGroupName} `)
+                ? `${newName} ${l.name.slice(oldGroupName.length + 1)}`
+                : l.name,
+            }));
+          const renameReport = renamedPairs.length > 0
+            ? invalidateMappingForRename(renamedPairs, {
+              scope: 'group', oldLabel: oldGroupName, newLabel: newName,
+              // The regenerate below reprojects once the old-named fixtures
+              // are gone; reprojecting here would re-mint their patch-tree
+              // keys from the configs that still exist at this instant.
+              reproject: false,
+            })
+            : null;
+
           trace.name = newName;
           trace.groupName = newName;
           // Carry the group master override (enabled / brightness / lock) and the
           // view-mask bit across the rename so nothing is orphaned under the old
-          // name (mirrors the LED / par ✏ Rename plumbing, report _28).
+          // name (mirrors the LED / par ✏ Rename plumbing, report _28). These are
+          // DISPLAY state, not mapping — the ruling keeps them following the name.
           carryTraceGroupOverride(params.groupOverrides, oldGroupName, newName);
           if (window.viewRegistryRenameGroup) {
             window.viewRegistryRenameGroup(oldGroupName, newName);
           }
+          migratePixelMapGroupSelectors(oldGroupName, newName);
           tFolder.title(`${traceGlyph(trace.shape)} ${newName}`);
           // Regenerate under the new name, sweeping the OLD name too so its
           // previously generated instances are removed instead of orphaned.
           if (trace.generated) generateGroupFromTrace(i, true, oldGroupName);
+          // The new configs only exist after the regenerate — carry each
+          // fixture's per-fixture view membership onto them now (display
+          // state, one loud line each; addresses stay invalidated).
+          if (renameReport) {
+            const byName = new Map();
+            for (const config of gatherAllConfigs(params)) {
+              if (config && config.name) byName.set(config.name, config);
+            }
+            const carried = carryViewMasks(renameReport.oldViewMasks, byName, renamedPairs);
+            for (const row of carried) {
+              console.warn(`[Rename]   👁 view membership carried: "${row.from}" → ` +
+                `"${row.to}" (viewMask 0x${row.viewMask.toString(16)}) — display state, ` +
+                'not mapping');
+            }
+            if (carried.length > 0 && window.invalidateMarsinBatchCache) {
+              window.invalidateMarsinBatchCache('trace_group_rename');
+            }
+          }
           committedTraceName = newName;
           debounceAutoSave();
         });
@@ -3807,14 +5479,8 @@ function setupGUI() {
           if (trace.radius === undefined) trace.radius = 5.0;
           if (trace.arc === undefined) trace.arc = 360;
           
-          tFolder.add(trace, 'radius', 1, 50, 0.5).name('Radius').onChange(() => {
-            updateTracePreview(i);
-            debounceAutoSave();
-          });
-          tFolder.add(trace, 'arc', 10, 360, 5).name('Arc (°)').onChange(() => {
-            updateTracePreview(i);
-            debounceAutoSave();
-          });
+          onTraceGeometryEdit(tFolder.add(trace, 'radius', 1, 50, 0.5).name('Radius'), i);
+          onTraceGeometryEdit(tFolder.add(trace, 'arc', 10, 360, 5).name('Arc (°)'), i);
         } else if (trace.shape === 'corner') {
           // Corner: Start / Corner / End XYZ (mirrors the line's point folders)
           if (trace.startX === undefined) trace.startX = -5;
@@ -3829,19 +5495,19 @@ function setupGUI() {
 
           const startF = tFolder.addFolder('Start Point (green)');
           startF.close();
-          startF.add(trace, 'startX', -100, 100, 0.5).name('X').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
-          startF.add(trace, 'startY', -100, 100, 0.5).name('Y').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
-          startF.add(trace, 'startZ', -100, 100, 0.5).name('Z').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          onTraceGeometryEdit(startF.add(trace, 'startX', -100, 100, 0.5).name('X'), i);
+          onTraceGeometryEdit(startF.add(trace, 'startY', -100, 100, 0.5).name('Y'), i);
+          onTraceGeometryEdit(startF.add(trace, 'startZ', -100, 100, 0.5).name('Z'), i);
           const cornerF = tFolder.addFolder('Corner Point (blue)');
           cornerF.close();
-          cornerF.add(trace, 'cornerX', -100, 100, 0.5).name('X').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
-          cornerF.add(trace, 'cornerY', -100, 100, 0.5).name('Y').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
-          cornerF.add(trace, 'cornerZ', -100, 100, 0.5).name('Z').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          onTraceGeometryEdit(cornerF.add(trace, 'cornerX', -100, 100, 0.5).name('X'), i);
+          onTraceGeometryEdit(cornerF.add(trace, 'cornerY', -100, 100, 0.5).name('Y'), i);
+          onTraceGeometryEdit(cornerF.add(trace, 'cornerZ', -100, 100, 0.5).name('Z'), i);
           const endF = tFolder.addFolder('End Point (red)');
           endF.close();
-          endF.add(trace, 'endX', -100, 100, 0.5).name('X').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
-          endF.add(trace, 'endY', -100, 100, 0.5).name('Y').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
-          endF.add(trace, 'endZ', -100, 100, 0.5).name('Z').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          onTraceGeometryEdit(endF.add(trace, 'endX', -100, 100, 0.5).name('X'), i);
+          onTraceGeometryEdit(endF.add(trace, 'endY', -100, 100, 0.5).name('Y'), i);
+          onTraceGeometryEdit(endF.add(trace, 'endZ', -100, 100, 0.5).name('Z'), i);
         } else {
           // Line: Start/End XYZ
           if (trace.startX === undefined) trace.startX = -10;
@@ -3853,14 +5519,14 @@ function setupGUI() {
 
           const startF = tFolder.addFolder('Start Point (green)');
           startF.close();
-          startF.add(trace, 'startX', -100, 100, 0.5).name('X').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
-          startF.add(trace, 'startY', -100, 100, 0.5).name('Y').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
-          startF.add(trace, 'startZ', -100, 100, 0.5).name('Z').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          onTraceGeometryEdit(startF.add(trace, 'startX', -100, 100, 0.5).name('X'), i);
+          onTraceGeometryEdit(startF.add(trace, 'startY', -100, 100, 0.5).name('Y'), i);
+          onTraceGeometryEdit(startF.add(trace, 'startZ', -100, 100, 0.5).name('Z'), i);
           const endF = tFolder.addFolder('End Point (red)');
           endF.close();
-          endF.add(trace, 'endX', -100, 100, 0.5).name('X').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
-          endF.add(trace, 'endY', -100, 100, 0.5).name('Y').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
-          endF.add(trace, 'endZ', -100, 100, 0.5).name('Z').onChange(() => { updateTracePreview(i); debounceAutoSave(); });
+          onTraceGeometryEdit(endF.add(trace, 'endX', -100, 100, 0.5).name('X'), i);
+          onTraceGeometryEdit(endF.add(trace, 'endY', -100, 100, 0.5).name('Y'), i);
+          onTraceGeometryEdit(endF.add(trace, 'endZ', -100, 100, 0.5).name('Z'), i);
         }
 
         // Lights (count) — the user sets the number of lights directly.
@@ -3870,7 +5536,34 @@ function setupGUI() {
         const countInfo = { count: `${lightPts.length} lights` };
         const countCtrl = tFolder.add(countInfo, 'count').name('Preview').disable();
 
-        tFolder.add(trace, 'count', 1, 200, 1).name('Lights').onChange(() => {
+        // A trace carrying chainSplits has its light count PINNED by them: the
+        // splits describe a walk over 1..count, and stretching or truncating
+        // them to fit a new count would invent wiring the operator never
+        // described. So a count change that invalidates the splits is refused
+        // and the slider reverts — the splits are never silently dropped
+        // (design 20260725_41 §3.5).
+        let committedCount = traceLightCount(trace);
+        let countRefusalNotified = false;
+        const lightsCtrl = tFolder.add(trace, 'count', 1, 200, 1).name('Lights').onChange(() => {
+          const countErr = chainSplitsError(trace.chainSplits, traceLightCount(trace));
+          if (countErr) {
+            const wanted = traceLightCount(trace);
+            trace.count = committedCount;
+            lightsCtrl.updateDisplay();
+            if (!countRefusalNotified) {
+              countRefusalNotified = true;
+              // Re-arm on the next pointer release so a later edit still warns,
+              // without one alert per mouse-move during a slider drag.
+              window.addEventListener('pointerup',
+                () => { countRefusalNotified = false; }, { once: true });
+              alert(`⚠ Lights count locked by Chain Order\n\n` +
+                `This generator's chain splits cover 1..${committedCount}, but the count ` +
+                `would become ${wanted}:\n  ${countErr}\n\n` +
+                'Fix or clear the splits (⛓ Chain Order) first — they are kept, not dropped.');
+            }
+            return;
+          }
+          committedCount = traceLightCount(trace);
           const pts = computeTracePoints(trace);
           countInfo.count = `${pts.length} lights`;
           countCtrl.updateDisplay();
@@ -3898,6 +5591,302 @@ function setupGUI() {
         resetOffDiv.appendChild(resetOffBtn);
         const spacingChildren = tFolder.domElement.querySelector('.children');
         if (spacingChildren) spacingChildren.appendChild(resetOffDiv);
+
+        // ── ⛓ Chain Order (wiring) ────────────────────────────────────────
+        // Declares the PHYSICAL daisy-chain walk over the trace's path
+        // positions, as a list of inclusive {from,to} ranges that must cover
+        // 1..count exactly once. Fixture NUMBER then means chain position, so
+        // adding "<group> 1..N" to a port in plain numeric order IS wire
+        // order, and an already-mapped group re-lands its sticky-by-name
+        // addresses on the wiring-true lights after one Regenerate.
+        // Design report 20260725_41 §3 / §6.
+        const chainFolder = tFolder.addFolder('⛓ Chain Order (wiring)');
+        chainFolder.close();
+
+        const chainInfo = { order: '' };
+        const orderCtrl = chainFolder.add(chainInfo, 'order').name('Order').disable();
+
+        // DOM rows live in one wrapper so a structural rebuild can drop them
+        // all at once without disturbing the rest of the card.
+        let chainDomWrap = null;
+        // The card-level red badge (outside the collapsed folder) so a scene
+        // that booted with stale/hand-edited splits is visible without
+        // opening the sub-folder — the boot skip is a UI state, not just a
+        // console line (design §3.5, plan step 6).
+        const chainBadgeDiv = document.createElement('div');
+        chainBadgeDiv.style.cssText =
+          'padding:3px 8px;font-size:10px;line-height:1.35;font-weight:600;' +
+          'color:var(--error);display:none;';
+
+        const chainCount = () => traceLightCount(trace);
+        const mappedFixtureCount = () => {
+          const g = trace.groupName || trace.name;
+          return params.parLights.filter((l) =>
+            l.group === g && l.traceGenerated && (l.dmxUniverse > 0 || l.dmxAddress > 0)
+          ).length;
+        };
+
+        // Undo for split edits: the engine has already mutated the split by
+        // the time our handler runs, so push the PREVIOUS list as the undo
+        // target, then restore the new one (the trace-rename control uses the
+        // same committed-value trick).
+        let committedSplits = trace.chainSplits
+          ? JSON.parse(JSON.stringify(trace.chainSplits)) : null;
+        const pushUndoForSplits = () => {
+          const current = trace.chainSplits;
+          if (committedSplits) trace.chainSplits = JSON.parse(JSON.stringify(committedSplits));
+          else delete trace.chainSplits;
+          pushUndo();
+          if (current === undefined) delete trace.chainSplits;
+          else trace.chainSplits = current;
+        };
+        const commitSplits = () => {
+          committedSplits = trace.chainSplits
+            ? JSON.parse(JSON.stringify(trace.chainSplits)) : null;
+        };
+
+        // The §3.7 confirm. Renumbering changes WHAT A FIXTURE NUMBER MEANS,
+        // so it says that in as many words — the operator must not discover
+        // it by finding the wrong light lit. Returns false to abort.
+        const confirmRenumber = () => {
+          if (!trace.generated) return true;
+          const mapped = mappedFixtureCount();
+          if (mapped === 0) return true;
+          const g = trace.groupName || trace.name;
+          return confirm(
+            `⚠ Renumber "${g}" to the new chain order?\n\n` +
+            `${mapped} mapped fixture(s) KEEP their DMX addresses (addresses are sticky by ` +
+            'fixture name), but each name moves to a different light.\n\n' +
+            'EVERYTHING KEYED ON THE NAME STAYS PUT AND THEREFORE MOVES TO A DIFFERENT ' +
+            'PHYSICAL LIGHT:\n' +
+            `  • DMX addresses (controller chains + patches.yaml)\n` +
+            '  • engine model ids — sectionId / fixtureId\n' +
+            '  • saved 2D Pixel Map anchors (a fixture\'s hand-placed position in a view)\n\n' +
+            'After this, a fixture NUMBER means its position in the physical daisy chain, ' +
+            'NOT its position along the drawn path. The addresses, ids and 2D anchors stay ' +
+            'put; which physical light each of them belongs to changes.\n\nContinue?');
+        };
+
+        // Apply a splits change: valid + generated → regenerate (renumber);
+        // invalid → leave the card red and let Regenerate refuse loudly.
+        const applySplitsChange = () => {
+          refreshChainStatus();
+          if (chainSplitsError(trace.chainSplits, chainCount()) === null && trace.generated) {
+            generateGroupFromTrace(i, true);
+          }
+          debounceAutoSave();
+        };
+
+        function refreshChainStatus() {
+          const err = chainSplitsError(trace.chainSplits, chainCount());
+          // Every splits path lands here — a From/To stepper tick, + Add split,
+          // − Remove last, ⇄ Swap, and Regenerate through applySplitsChange —
+          // so this is the one place the 3D overlay has to be refreshed for it
+          // to track the card live. Invalid splits draw no chain at all; the
+          // red badge below is what the operator sees instead.
+          refreshChainOrderViz(i);
+          chainInfo.order = err ? '⚠ INVALID — see below' : describeChainOrder(trace.chainSplits, chainCount());
+          orderCtrl.updateDisplay();
+          chainBadgeDiv.textContent = err ? `⚠ CHAIN SPLITS INVALID — ${err}` : '';
+          chainBadgeDiv.style.display = err ? 'block' : 'none';
+          if (chainDomWrap && chainDomWrap.__noteDiv) {
+            const note = chainDomWrap.__noteDiv;
+            if (err) {
+              note.textContent = `⚠ ${err}`;
+              note.style.color = 'var(--error)';
+              note.style.display = 'block';
+            } else {
+              const mapped = trace.generated ? mappedFixtureCount() : 0;
+              if (mapped > 0) {
+                note.textContent =
+                  `⚠ ${mapped} mapped fixture(s) keep their addresses and RENUMBER on Regenerate`;
+                note.style.color = 'var(--caution)';
+                note.style.display = 'block';
+              } else {
+                note.textContent = '';
+                note.style.display = 'none';
+              }
+            }
+          }
+        }
+
+        function renderChainRows() {
+          // Drop the previous split controllers + DOM rows, keep the folder
+          // (and its open/closed state) so an edit never collapses the card.
+          [...chainFolder.folders].forEach((f) => f.destroy());
+          if (chainDomWrap && chainDomWrap.parentElement) {
+            chainDomWrap.parentElement.removeChild(chainDomWrap);
+          }
+          chainDomWrap = null;
+
+          const count = chainCount();
+          const splits = Array.isArray(trace.chainSplits) ? trace.chainSplits : null;
+
+          if (splits) {
+            splits.forEach((split, s) => {
+              const sf = chainFolder.addFolder(`Split ${s + 1}`);
+              sf.open();
+              const bind = (key) => {
+                sf.add(split, key, 1, count, 1).name(key === 'from' ? 'From' : 'To')
+                  .onChange(() => { refreshChainStatus(); })
+                  .onFinishChange(() => {
+                    if (chainSplitsError(trace.chainSplits, chainCount()) === null &&
+                        trace.generated && !confirmRenumber()) {
+                      // Aborted: put the previous list back, rows and all.
+                      trace.chainSplits = committedSplits
+                        ? JSON.parse(JSON.stringify(committedSplits)) : undefined;
+                      if (trace.chainSplits === undefined) delete trace.chainSplits;
+                      renderChainRows();
+                      refreshChainStatus();
+                      return;
+                    }
+                    pushUndoForSplits();
+                    commitSplits();
+                    applySplitsChange();
+                  });
+              };
+              bind('from');
+              bind('to');
+            });
+          }
+
+          // Buttons + note row.
+          const wrap = document.createElement('div');
+          const rowStyle = 'display:flex;gap:2px;padding:3px 6px;';
+          const cBtnStyle = 'flex:1;padding:4px 0;border:none;border-radius:3px;' +
+            'cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;' +
+            'background:var(--control-bg);color:var(--secondary);';
+          const disabledStyle = 'flex:1;padding:4px 0;border:none;border-radius:3px;' +
+            'cursor:not-allowed;font-size:11px;font-family:inherit;font-weight:600;' +
+            'background:var(--surface-container-low);color:var(--icon);';
+
+          const addRemoveRow = document.createElement('div');
+          addRemoveRow.style.cssText = rowStyle;
+
+          const addBtn = document.createElement('button');
+          addBtn.textContent = '+ Add split';
+          addBtn.title = 'Divide the last split in two (the chain keeps full coverage)';
+          addBtn.style.cssText = cBtnStyle;
+          addBtn.onclick = (e) => {
+            if (e) e.stopPropagation();
+            const n = chainCount();
+            const list = Array.isArray(trace.chainSplits)
+              ? trace.chainSplits
+              : [{ from: 1, to: n }];
+            const last = list[list.length - 1];
+            const span = Math.abs(last.to - last.from) + 1;
+            if (span < 2) {
+              // Splitting a single light would have to invent an overlap or a
+              // gap — refuse instead of writing an invalid list.
+              alert('⚠ Cannot add a split\n\nThe last split covers a single light, so there ' +
+                'is nothing left to divide. Edit the From / To values of the existing ' +
+                'splits instead.');
+              addBtn.blur();
+              return;
+            }
+            pushUndoForSplits();
+            const step = last.from <= last.to ? 1 : -1;
+            const firstSpan = Math.ceil(span / 2);
+            const boundary = last.from + (firstSpan - 1) * step;
+            const tail = { from: boundary + step, to: last.to };
+            trace.chainSplits = [...list.slice(0, -1), { from: last.from, to: boundary }, tail];
+            commitSplits();
+            renderChainRows();
+            applySplitsChange();
+            addBtn.blur();
+          };
+
+          const removeBtn = document.createElement('button');
+          removeBtn.textContent = '− Remove last';
+          removeBtn.title = splits && splits.length === 1
+            ? 'Clear the splits and go back to plain path order'
+            : 'Merge the last split back into the one before it';
+          removeBtn.style.cssText = splits ? cBtnStyle : disabledStyle;
+          removeBtn.disabled = !splits;
+          removeBtn.onclick = (e) => {
+            if (e) e.stopPropagation();
+            if (!Array.isArray(trace.chainSplits)) return;
+            pushUndoForSplits();
+            if (trace.chainSplits.length <= 1) {
+              // Back to the zero-clutter default. NEVER an empty array — that
+              // is an invalid declaration, not "no declaration" (§3.3).
+              delete trace.chainSplits;
+            } else {
+              const list = trace.chainSplits.map((s) => ({ from: s.from, to: s.to }));
+              const dropped = list.pop();
+              list[list.length - 1].to = dropped.to;
+              trace.chainSplits = list;
+            }
+            commitSplits();
+            renderChainRows();
+            applySplitsChange();
+            removeBtn.blur();
+          };
+
+          addRemoveRow.appendChild(addBtn);
+          addRemoveRow.appendChild(removeBtn);
+
+          const swapRow = document.createElement('div');
+          swapRow.style.cssText = 'padding:2px 6px;';
+          const swapBtn = document.createElement('button');
+          const reversed = isFullReverse(trace.chainSplits, count);
+          swapBtn.textContent = reversed ? '⇄ Restore path order' : '⇄ Swap start/end';
+          swapBtn.title = reversed
+            ? 'Clear the reverse and number the lights along the drawn path again'
+            : 'Wire enters at the RED end: number the lights backwards along the path';
+          swapBtn.style.cssText = 'width:100%;padding:4px 0;border:none;border-radius:3px;' +
+            'cursor:pointer;font-size:11px;font-family:inherit;font-weight:600;' +
+            (reversed
+              ? 'background:color-mix(in srgb, var(--caution) 15%, var(--surface));color:var(--caution);'
+              : 'background:var(--control-bg);color:var(--secondary);');
+          swapBtn.onclick = (e) => {
+            if (e) e.stopPropagation();
+            const n = chainCount();
+            const wasReversed = isFullReverse(trace.chainSplits, n);
+            // Swap is the single full-reverse split — the SAME mechanism as
+            // the splits below it, not a second code path (§3.6). Overwriting
+            // a hand-built split list is destructive, so ask first.
+            if (!wasReversed && Array.isArray(trace.chainSplits)) {
+              if (!confirm(`⚠ Replace this generator's ${trace.chainSplits.length} chain ` +
+                'split(s) with one full reverse?\n\nThe existing split ranges will be lost.')) {
+                swapBtn.blur();
+                return;
+              }
+            }
+            if (!confirmRenumber()) { swapBtn.blur(); return; }
+            pushUndoForSplits();
+            if (wasReversed) delete trace.chainSplits;
+            else trace.chainSplits = fullReverseSplits(n);
+            commitSplits();
+            renderChainRows();
+            applySplitsChange();
+            swapBtn.blur();
+          };
+          swapRow.appendChild(swapBtn);
+
+          const noteDiv = document.createElement('div');
+          noteDiv.style.cssText =
+            'padding:3px 8px;font-size:10px;line-height:1.35;font-weight:600;display:none;';
+
+          if (trace.locked) {
+            [addBtn, removeBtn, swapBtn].forEach((b) => {
+              b.disabled = true;
+              b.style.cssText = disabledStyle + 'width:100%;';
+            });
+          }
+
+          wrap.appendChild(addRemoveRow);
+          wrap.appendChild(swapRow);
+          wrap.appendChild(noteDiv);
+          wrap.__noteDiv = noteDiv;
+          const chainChildren = chainFolder.domElement.querySelector('.children');
+          if (chainChildren) chainChildren.appendChild(wrap);
+          chainDomWrap = wrap;
+        }
+
+        renderChainRows();
+        refreshChainStatus();
+        if (spacingChildren) spacingChildren.appendChild(chainBadgeDiv);
 
         // Aim mode
         if (trace.aimMode === undefined) trace.aimMode = 'lookAt';
@@ -4134,7 +6123,14 @@ function setupGUI() {
         children.forEach((f) => f.destroy());
         window.dmxGuiFolders = [];
 
-        params.dmxFixtures.forEach((config, index) => {
+        // DISPLAY ORDER ONLY — cards render sorted by name; `index` stays the
+        // fixture's real slot in params.dmxFixtures (window.dmxGuiFolders and
+        // window.dmxSceneFixtures are index-keyed, and the array is serialized).
+        const displayDmx = sortByNameNatural(
+          params.dmxFixtures.map((config, index) => ({ config, index })),
+          (entry) => entry.config.name || `DMX ${entry.index + 1}`,
+        );
+        displayDmx.forEach(({ config, index }) => {
           const idxFolder = dmxListFolder.addFolder(config.name || `DMX ${index + 1}`);
           idxFolder.domElement.classList.add('gui-card');
           idxFolder.close();
@@ -4155,8 +6151,20 @@ function setupGUI() {
             });
           }
 
-          idxFolder.add(config, "name").name("Name").onFinishChange((v) => {
-            idxFolder.title(v);
+          // Name — check + invalidate + duplicate guard (step 11), same policy
+          // as the par path above.
+          let committedDmxName = config.name;
+          const dmxNameCtrl = idxFolder.add(config, "name").name("Name");
+          dmxNameCtrl.onFinishChange((v) => {
+            const proposed = (v || '').trim();
+            if (proposed === committedDmxName) {
+              config.name = committedDmxName;
+              dmxNameCtrl.updateDisplay();
+              return;
+            }
+            if (!renameSingleFixture(config, committedDmxName, proposed, dmxNameCtrl)) return;
+            committedDmxName = proposed;
+            idxFolder.title(proposed);
             debounceAutoSave();
           });
 
@@ -4287,18 +6295,52 @@ function setupGUI() {
     });
 
     // ── Global LED visual size ── ONE bulb + halo radius (world units) applied
-    // to EVERY strand. Lives here (above the strand list) so it reads as a
-    // global control, not per-strand. onChange re-renders all strands live via
-    // each fixture's applyVisualSize(). Ranges are tuned tight around the
-    // current look (operator: pixel 0.08–0.25, halo 0.05–0.25).
+    // to EVERY LED fixture. Lives here (above the instance list) so it reads as
+    // a global control, not per-strand. onChange re-renders all LED fixtures
+    // live. Ranges are tuned tight around the current look (operator: pixel
+    // 0.08–0.25, halo 0.05–0.25).
     if (params.ledPixelSize === undefined) params.ledPixelSize = 0.08;
     if (params.ledHaloSize === undefined) params.ledHaloSize = 0.14;
     const applyLedSizeToAll = () => {
       (window.ledStrandFixtures || []).forEach(f => { if (f) f.applyVisualSize(); });
+      // LED-bus fixtures (TE Sign, TE LED Grid) ride the par/DMX transport, so
+      // they live in parFixtures/dmxSceneFixtures — NOT ledStrandFixtures. They
+      // are still LED fixtures and must track the same Halo Size setting, so
+      // push the rebuild to them too (updateScales re-reads params.ledHaloSize).
+      // Without this the sliders moved the strands and left the sign behind.
+      [...(window.parFixtures || []), ...(window.dmxSceneFixtures || [])].forEach(f => {
+        if (f && f._isLed && f.updateScales) {
+          f.updateScales(params.globalPixelScale || 1.0, params.globalHaloScale || 1.0);
+        }
+      });
       debounceAutoSave();
     };
-    strandFolder.add(params, 'ledPixelSize', 0.08, 0.25, 0.005).name('Pixel Size').onChange(applyLedSizeToAll);
-    strandFolder.add(params, 'ledHaloSize', 0.05, 0.25, 0.005).name('Halo Size').onChange(applyLedSizeToAll);
+    // Scope is spelled out in the labels + tooltips: this pair is LED-BUS ONLY
+    // (strands, TE Sign, TE LED Grid). "Halo Size" next to a global "Global
+    // Halo Size" read as the same control and cost the operator two debugging
+    // rounds on 2026-07-30 ("The halo size parameter only affects the TE sign
+    // lights…" → "sorry, I was using the LED halo size, not the global one in
+    // options"). Label/tooltip only — the three-factor model (20260725_77) and
+    // both knobs' behaviour are unchanged.
+    const ledPixelCtrl = strandFolder
+      .add(params, 'ledPixelSize', 0.08, 0.25, 0.005)
+      .name('LED Pixel Size (LED only)')
+      .onChange(applyLedSizeToAll);
+    const ledHaloCtrl = strandFolder
+      .add(params, 'ledHaloSize', 0.05, 0.25, 0.005)
+      .name('LED Halo Base (LED only)')
+      .onChange(applyLedSizeToAll);
+    if (ledPixelCtrl.domElement) {
+      ledPixelCtrl.domElement.title =
+        'Bulb radius for LED-BUS fixtures only (LED strands, TE Sign, TE LED Grid). ' +
+        'DMX pars/bars/vintage size their bulbs from their own model — use "Global Pixel Size".';
+    }
+    if (ledHaloCtrl.domElement) {
+      ledHaloCtrl.domElement.title =
+        'BASE halo radius for LED-BUS fixtures only (LED strands, TE Sign, TE LED Grid). ' +
+        'A DMX fixture\'s halo is a rim around its own bulb and ignores this by design. ' +
+        'Effective halo = this base × "Global Halo Size" (ALL fixtures) × the fixture\'s own "Halo ×".';
+    }
 
     window.ledStrandFixtures = [];
 
@@ -4339,6 +6381,18 @@ function setupGUI() {
       // — the ghost "trail" the operator sees after a 3D-handle move. The
       // Start/End sliders never showed it because they call rebuildLedStrands(),
       // which invalidates at L4324 (operator report 2026-07-25).
+      //
+      // COLD MOVE (report 20260725_44 step 5): the strand's OWN meshes keep
+      // tracking the cursor every tick (writeTransformToConfig + rebuildVisuals
+      // above). Only the global batch invalidation is deferred, because each
+      // one costs a full generatePixelMap + a new InstancedMesh (~20-25 ms).
+      // THE CONTRACT: release ALWAYS invalidates — the move-trail bug was
+      // *persistent* stale coordinates; a transient in-drag lag of the global
+      // dot overlay is the requested cold-move semantic, not the bug.
+      if (transformControl && transformControl.dragging) {
+        markStrandTransformDirty();
+        return true;
+      }
       if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('strand_transform');
       debounceAutoSave();
       return true;
@@ -4434,7 +6488,9 @@ function setupGUI() {
 
     const ledGenBtnStyle = 'flex:1 1 0;min-width:0;padding:4px 8px;border:1px solid var(--ghost-border);border-radius:3px;background:var(--control-bg);color:var(--text);cursor:pointer;font-size:11px;font-family:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;';
     const ledGenChildren = ledGenFolder.domElement.querySelector('.children');
-    LED_GENERATORS.forEach((entry) => {
+    // DISPLAY ORDER ONLY — the catalog is a frozen module constant; sort a copy
+    // by button label so this list obeys the same by-name rule as every other.
+    sortByNameNatural(LED_GENERATORS, (entry) => entry.label).forEach((entry) => {
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;gap:2px;padding:2px 8px 4px;';
       const btn = document.createElement('button');
@@ -4547,21 +6603,23 @@ function setupGUI() {
     };
     if (!window._openStrandGroups) window._openStrandGroups = new Set();
 
-    // Guard for a new/renamed LED group name. Returns an operator-facing error
-    // string when the name is empty, the reserved "Ungrouped" bucket, or collides
-    // with an existing named group; '' when the name is OK. `currentName` (the
-    // group being renamed) is exempt from the collision check. Fail loud (codex
-    // P0): a silent accept would orphan or merge two groups' lock+brightness state.
+    // Guard for a new/renamed LED group name — the ONE choke point for every
+    // strand-side name entry (➕ Add Group, ✏ Rename, "＋ New group…" on a
+    // strand's Move dropdown). Returns an operator-facing error string, or ''
+    // when the name is OK. `currentName` (the group being renamed) is exempt
+    // from the collision check.
+    //
+    // The namespace is SCENE-WIDE (group_rename_guard.js, report _52): this used
+    // to compare against strand groups only, so an LED group could be named onto
+    // a live par group (e.g. "TE Sign") — the two then render as two folders with
+    // the same title in this one list AND share a single view-mask bit and one
+    // set of 2D Pixel Map selectors, while their group masters stay in two
+    // different maps (ledGroupOverrides vs groupOverrides). Fail loud (codex P0).
     function _ledGroupNameClash(name, currentName) {
-      const nn = (name || '').trim();
-      if (!nn) return 'Group name cannot be empty.';
-      if (nn === UNGROUPED) return `"${UNGROUPED}" is reserved for strands with no group.`;
-      if (nn === currentName) return '';
-      const existing = new Set(
-        (params.ledStrands || []).map((s) => displayGroupOf(s)).filter((g) => g !== UNGROUPED),
-      );
-      if (existing.has(nn)) return `An LED group named "${nn}" already exists.`;
-      return '';
+      return groupRenameError(name, {
+        currentName: currentName === null || currentName === undefined ? null : currentName,
+        takenNames: collectSceneGroupNames(params),
+      }) || '';
     }
 
     // --- LED Strand GUI ---
@@ -4668,14 +6726,23 @@ function setupGUI() {
         return true;
       };
 
-      // Deterministic strand ordering (design D4): named groups in appearance
-      // order, then the Ungrouped bucket LAST (sign groups are pinned above all
-      // of these by _orderLedFixtureInstances after this render).
-      const orderedGroups = [...namedGroups];
+      // Deterministic strand ordering (design D4): named groups SORTED BY NAME
+      // (operator, 2026-07-30), then the Ungrouped bucket LAST — it is a display
+      // bucket, not a group, so it stays pinned to the bottom rather than
+      // sorting into the U's. Sign groups are pinned above all of these by
+      // _orderLedFixtureInstances after this render. DISPLAY ONLY:
+      // params.ledStrands keeps its own order.
+      const displayNamedGroups = sortNamesNatural(namedGroups);
+      const orderedGroups = [...displayNamedGroups];
       if (groupMap.has(UNGROUPED)) orderedGroups.push(UNGROUPED);
 
       orderedGroups.forEach((groupName) => {
-        const items = groupMap.get(groupName) || [];
+        // Sorted VIEW — groupMap's arrays (and params.ledStrands) stay put. Key
+        // on the SAME string the folder label shows, fallback included.
+        const items = sortByNameNatural(
+          groupMap.get(groupName) || [],
+          (it) => it.strand.name || `Strand ${it.index + 1}`,
+        );
         const isUngrouped = groupName === UNGROUPED;
         const gFolder = ledInstancesFolder.addFolder(`${groupName} (${items.length})`);
         window._ledStrandGroupFolders.push(gFolder);
@@ -4751,12 +6818,18 @@ function setupGUI() {
         gtbWrap.appendChild(row1);
 
         // Row 2 (named groups only): Rename | + Strand | Ungroup
+        // Wraps rather than clips — same fix as the par-group toolbar (report
+        // _52): in the docked pane a three-way flex row squeezed "✏ Rename"
+        // below its 67px of text, so it rendered as "✏ Ren…".
         if (!isUngrouped) {
           const row2 = document.createElement('div');
-          row2.style.cssText = 'display:flex;gap:2px;';
+          row2.style.cssText = 'display:flex;gap:2px;flex-wrap:wrap;';
+          const strandLabelBtn = gBtnStyle + 'flex:0 1 auto;min-width:max-content;';
           const renameBtn = document.createElement('button');
           renameBtn.textContent = '✏ Rename';
-          renameBtn.style.cssText = gBtnStyle;
+          renameBtn.title = `Rename the group "${groupName}" (strand names and their ` +
+            'sACN mapping are NOT touched)';
+          renameBtn.style.cssText = strandLabelBtn;
           renameBtn.onclick = () => {
             const newName = prompt('Rename LED group:', groupName);
             if (newName === null) return;
@@ -4764,10 +6837,14 @@ function setupGUI() {
             if (nn === groupName) return;
             // Fail loud (codex P0): empty / reserved / colliding names would
             // orphan or merge this group's lock+brightness state — reject them.
+            // The guard is scene-wide (see _ledGroupNameClash).
             const clash = _ledGroupNameClash(nn, groupName);
             if (clash) { alert(clash); return; }
             pushUndo();
-            params.ledStrands.forEach((s) => { if (displayGroupOf(s) === groupName) s.group = nn; });
+            let movedCount = 0;
+            params.ledStrands.forEach((s) => {
+              if (displayGroupOf(s) === groupName) { s.group = nn; movedCount += 1; }
+            });
             // Carry the per-group override bag (⏻ On / Brightness / 🔒 locked)
             // across the rename. It is keyed by group name in
             // params.ledGroupOverrides, so WITHOUT this move the rename would
@@ -4780,17 +6857,28 @@ function setupGUI() {
             // Carry the group's view-mask bit across the rename so patterns
             // compiled against MASK_* names stay stable (mirror of DMX rename).
             if (window.viewRegistryRenameGroup) window.viewRegistryRenameGroup(groupName, nn);
+            // 2D Pixel Map selectors name groups — re-point them (step 12).
+            migratePixelMapGroupSelectors(groupName, nn);
             if (window._openStrandGroups.has(groupName)) {
               window._openStrandGroups.delete(groupName);
               window._openStrandGroups.add(nn);
             }
             if (window.invalidateMarsinBatchCache) window.invalidateMarsinBatchCache('led_group_rename');
+            // Loud, itemised — same report the par-group rename prints: what was
+            // carried (display state), what was untouched (names + sACN mapping),
+            // and the one consequence nothing else surfaces — the exported engine
+            // model still names the OLD group.
+            buildGroupRenameReport({
+              oldName: groupName, newName: nn, memberCount: movedCount, kind: 'LED strand',
+            }).forEach((line) => console.warn(line));
+            _showAutoToast(`✏ Group "${groupName}" → "${nn}" (${movedCount} strand(s)) — ` +
+              'addresses untouched; RE-EXPORT the engine model');
             renderStrandGUI();
             debounceAutoSave();
           };
           const addStrandBtn = document.createElement('button');
           addStrandBtn.textContent = '+ Strand';
-          addStrandBtn.style.cssText = gBtnStyle + 'color:var(--ok);';
+          addStrandBtn.style.cssText = strandLabelBtn + 'color:var(--ok);';
           addStrandBtn.onclick = () => {
             pushUndo();
             params.ledStrands.push(_newStrandConfig(groupName));
@@ -4801,7 +6889,7 @@ function setupGUI() {
           };
           const delBtn = document.createElement('button');
           delBtn.textContent = '✕ Ungroup';
-          delBtn.style.cssText = gBtnStyle;
+          delBtn.style.cssText = strandLabelBtn;
           delBtn.title = 'Dissolve this group — its strands become Ungrouped (no strands deleted)';
           delBtn.onclick = () => {
             pushUndo();
@@ -4858,7 +6946,26 @@ function setupGUI() {
             });
           }
 
-          sFolder.add(strand, 'name').name('Name').onFinishChange(() => {
+          // Name — check + invalidate + duplicate guard (step 11). A strand
+          // rides the SAME name-keyed stores as a DMX fixture (chain entries,
+          // __globalPatchTree, the shared section/fixture id space), so it
+          // gets the identical policy: the renamed strand comes out unmapped.
+          let committedStrandName = strand.name;
+          const strandNameCtrl = sFolder.add(strand, 'name').name('Name');
+          strandNameCtrl.onFinishChange((v) => {
+            const proposed = (v || '').trim();
+            if (proposed === committedStrandName) {
+              strand.name = committedStrandName;
+              strandNameCtrl.updateDisplay();
+              return;
+            }
+            if (!renameSingleFixture(strand, committedStrandName, proposed, strandNameCtrl)) {
+              return;
+            }
+            committedStrandName = proposed;
+            if (window.invalidateMarsinBatchCache) {
+              window.invalidateMarsinBatchCache('strand_rename');
+            }
             renderStrandGUI();
             debounceAutoSave();
           });
@@ -4895,8 +7002,23 @@ function setupGUI() {
             debounceAutoSave();
           });
 
-          // Bulb + halo radius are a GLOBAL control (params.ledPixelSize /
-          // params.ledHaloSize) above the strand list — not per-strand.
+          // Bulb radius is a GLOBAL control (params.ledPixelSize) above the
+          // strand list — not per-strand. The halo BASE radius is global too
+          // (params.ledHaloSize × params.globalHaloScale); what IS per-strand
+          // is the local multiplier on top of it:
+          //   effective halo = ledHaloSize × Global Halo Size × local
+          // (led_halo.js). Seeded to 1 so lil-gui can bind it; 1.0 is the
+          // no-op default, so a strand nobody touches renders unchanged.
+          if (strand.haloScale === undefined) strand.haloScale = 1;
+          sFolder.add(strand, 'haloScale',
+            LOCAL_HALO_SCALE_MIN, LOCAL_HALO_SCALE_MAX, 0.05).name('Halo ×').onChange(() => {
+            // applyVisualSize() re-reads both LED sizes AND this local scale —
+            // the same entry point the global halo knob uses (20260725_75), so
+            // one strand updates live without rebuilding the whole list.
+            const f = (window.ledStrandFixtures || [])[i];
+            if (f && f.applyVisualSize) f.applyVisualSize();
+            debounceAutoSave();
+          });
 
           // Start/End position folders. Lock-aware: in a LOCKED strand group a
           // Start/End edit translates the WHOLE group rigidly along that axis
@@ -4946,7 +7068,7 @@ function setupGUI() {
             uOpt.value = '::ungroup::'; uOpt.textContent = 'Ungrouped';
             moveSelect.appendChild(uOpt);
           }
-          namedGroups.forEach((g) => {
+          displayNamedGroups.forEach((g) => {
             if (g === groupName) return;
             const opt = document.createElement('option');
             opt.value = g; opt.textContent = g;

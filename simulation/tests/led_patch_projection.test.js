@@ -43,7 +43,7 @@ test('bench golden: two 40px outputs → per-port U3 ch1–160 / U4 ch1–160', 
   assert.equal(violations.length, 0);
   assert.deepEqual(fields.get('lineA'), {
     controllerIp: '10.1.1.201', controllerId: 1, dmxUniverse: 3, dmxAddress: 1,
-    pixelCount: 40, outputIndex: 0,
+    pixelCount: 40, outputIndex: 0, portNum: 1,
     segments: [{ universe: 3, startChannel: 1, endChannel: 160, pixelCount: 40 }],
     endUniverse: 3, endChannel: 160,
   });
@@ -51,7 +51,7 @@ test('bench golden: two 40px outputs → per-port U3 ch1–160 / U4 ch1–160', 
   // universe (U4) channel 1 — NOT a continuation of lineA at U3:161.
   assert.deepEqual(fields.get('lineB'), {
     controllerIp: '10.1.1.201', controllerId: 1, dmxUniverse: 4, dmxAddress: 1,
-    pixelCount: 40, outputIndex: 1,
+    pixelCount: 40, outputIndex: 1, portNum: 2,
     segments: [{ universe: 4, startChannel: 1, endChannel: 160, pixelCount: 40 }],
     endUniverse: 4, endChannel: 160,
   });
@@ -80,7 +80,7 @@ test('a disabled/empty middle port contributes nothing and does not shift other 
   // neither consumes channels nor shifts lineC off its declared universe.
   assert.deepEqual(fields.get('lineC'), {
     controllerIp: '10.1.1.201', controllerId: 1, dmxUniverse: 5, dmxAddress: 1,
-    pixelCount: 40, outputIndex: 2,
+    pixelCount: 40, outputIndex: 2, portNum: 3,
     segments: [{ universe: 5, startChannel: 1, endChannel: 160, pixelCount: 40 }],
     endUniverse: 5, endChannel: 160,
   });
@@ -381,4 +381,57 @@ test('L1 claims: generic (unbound) START-only records are walked into segments',
 test('L1 claims: empty / missing inputs yield an empty map (no throw)', () => {
   assert.equal(computeLedUniverseClaims(null, null).size, 0);
   assert.equal(computeLedUniverseClaims(new Map()).size, 0);
+});
+
+// ── _71 (24): a CROSSED port → output mapping (report 20260725_70) ───────────
+// `outputIndex` is the PHYSICAL board output the port DECLARES; `portNum` is the
+// card row that owns the strand. They were the same number until the output
+// selector existed, and every operator-facing label must keep using the PORT.
+
+test('_71: a crossed mapping stamps the DECLARED output, while claims name the CARD port', () => {
+  const reg = boundRegistry([
+    { port: 1, output: 4, universe: 6, chain: ['lineA'] },   // P1 drives output 4
+    { port: 2, output: 1, universe: 7, chain: ['lineB'] },   // P2 drives output 1
+  ]);
+  const counts = new Map([['lineA', 40], ['lineB', 40]]);
+  const { fields, violations } = computeLedStrandPatches(reg, counts);
+  assert.deepEqual(violations, []);
+
+  assert.equal(fields.get('lineA').outputIndex, 3, 'output 4 → strands[3]');
+  assert.equal(fields.get('lineA').portNum, 1);
+  assert.equal(fields.get('lineB').outputIndex, 0);
+  assert.equal(fields.get('lineB').portNum, 2);
+
+  // The claim label must name the port the operator EDITS. Deriving it from
+  // `outputIndex + 1` named the wrong row in every claim (and in the push's
+  // collision refusal text) the moment a mapping crossed.
+  const claims = computeLedUniverseClaims(fields, new Map());
+  assert.equal(claims.get(6)[0].portNum, 1);
+  assert.equal(claims.get(7)[0].portNum, 2);
+});
+
+test('_71: two ports declaring ONE output load and are flagged by the chip checker', () => {
+  const reg = boundRegistry([
+    { port: 1, output: 2, universe: 6, chain: ['lineA'] },
+    { port: 3, output: 2, universe: 7, chain: ['lineB'] },
+  ]);
+  const counts = new Map([['lineA', 40], ['lineB', 40]]);
+  const chips = validateLedManualUniverses(reg, counts, new Map());
+  const dup = chips.find((w) => w.code === 'led_output_duplicate');
+  assert.ok(dup, 'a hand-edited duplicate must show red in the pane, not brick the boot');
+  assert.equal(dup.port, 1);
+  assert.match(dup.message, /ports P1 and P3 both drive output 2/);
+});
+
+test('_71: a stale park on an output a port drives is flagged (the next push drops it)', () => {
+  const reg = createControllerRegistry({
+    controllers: [{
+      id: 1, name: 'T201', ip: '10.1.1.201', type: CONTROLLER_TYPE_LED,
+      led: { order: 'RGBW', startAddr: 1 }, device: DEVICE,
+      ports: [{ port: 1, output: 3, universe: 6, chain: ['lineA'] }],
+      parkedOutputs: [{ output: 3, universe: 27 }],
+    }],
+  });
+  const chips = validateLedManualUniverses(reg, new Map([['lineA', 40]]), new Map());
+  assert.ok(chips.some((w) => w.code === 'led_parked_output_conflict'));
 });

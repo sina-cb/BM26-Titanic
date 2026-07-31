@@ -201,6 +201,50 @@ test('lanes lays one centered horizontal row per fixture, ordered by (group,name
   assert.ok(cxs[cxs.length - 1] - cxs[0] > 0, 'pixels spread horizontally along the row');
 });
 
+// A generated par group exactly as `emitInChainOrder` names it: `<group> <n>`,
+// one 1-pixel fixture per chain number.
+function generatedGroup(group, count, baseFixIndex = 0) {
+  return Array.from({ length: count }, (_, k) =>
+    entry('dmx', baseFixIndex + k, `${group} ${k + 1}`, 'UkingPar', group, k, 0, 0));
+}
+
+test('lanes order is NATURAL: "Group 10" sorts after "Group 9", not after "Group 1"', () => {
+  // The bug this pins (report 20260725_44 §2, D1): a plain `localeCompare`
+  // orders the rows 1, 10, 11, 12, 2, 3, … so the lanes view — the one view
+  // whose whole purpose is to read fixtures in order — disagreed with the
+  // chain order every other surface shows, for any group of ten or more.
+  const COUNT = 12;
+  const list = generatedGroup('Right SmokeStacks', COUNT);
+  const clusters = buildClusters(list);
+  const panel = { layout: 'lanes' };
+  const placements = seedPanel(panel, clusters, list, CANVAS.w, CANVAS.h);
+
+  assert.equal(placements.size, COUNT);
+  const topDown = [...placements.keys()]
+    .sort((a, b) => placements.get(a).y - placements.get(b).y);
+  assert.deepEqual(
+    topDown,
+    Array.from({ length: COUNT }, (_, k) => `Right SmokeStacks ${k + 1}`),
+    'rows must stack in chain order 1..12',
+  );
+});
+
+test('lanes groups stay grouped, and groups themselves sort naturally', () => {
+  // Two groups whose names differ only by a number: the group key gets the
+  // same natural comparison, and no group is ever interleaved with another.
+  const list = [
+    ...generatedGroup('Ring 10', 2, 0),
+    ...generatedGroup('Ring 2', 2, 100),
+  ];
+  const clusters = buildClusters(list);
+  const panel = { layout: 'lanes' };
+  const placements = seedPanel(panel, clusters, list, CANVAS.w, CANVAS.h);
+
+  const topDown = [...placements.keys()]
+    .sort((a, b) => placements.get(a).y - placements.get(b).y);
+  assert.deepEqual(topDown, ['Ring 2 1', 'Ring 2 2', 'Ring 10 1', 'Ring 10 2']);
+});
+
 // ── seedPanel/expandPanel spatial: default path still works ────────────────
 
 test('spatial seedPanel/expandPanel place every fixture and expand every pixel', () => {
@@ -219,4 +263,280 @@ test('spatial seedPanel/expandPanel place every fixture and expand every pixel',
     assert.ok(Number.isFinite(p.cx) && Number.isFinite(p.cy));
     assert.ok(p.sizeX > 0 && p.sizeY > 0);
   }
+});
+
+// ── rotate: quarter-turn of a TRUE projection ──────────────────────────────
+// The operator's TE-sign order (report 20260725_48): the sign hangs on a
+// vertical plane whose widest world axis is Y, so `planar`'s widest-first axis
+// pick drew world-up along screen-X and the logo read a quarter turn off.
+
+test('rotate: 90 turns a projected panel counter-clockwise, distances intact', () => {
+  // An L: a long arm along world x and a short arm along world z, so the shape
+  // has an unambiguous orientation to check.
+  const list = [
+    ...Array.from({ length: 7 }, (_, k) => entry('dmx', 0, 'Arm', 'ShehdsBar', 'L', k, 0, 0)),
+    ...Array.from({ length: 3 }, (_, k) => entry('dmx', 1, 'Stub', 'ShehdsBar', 'L', 0, 0, k + 1)),
+  ];
+  const clusters = buildClusters(list);
+  const base = { layout: 'spatial', projection: 'top' };
+  const plain = expandPanel(base, clusters, list, seedPanel(base, clusters, list, CANVAS.w, CANVAS.h));
+  const turned = expandPanel({ ...base, rotate: 90 }, clusters, list,
+    seedPanel(base, clusters, list, CANVAS.w, CANVAS.h));
+
+  assert.equal(turned.length, plain.length);
+  const span = (pts, k) => Math.max(...pts.map((p) => p[k])) - Math.min(...pts.map((p) => p[k]));
+  // The long arm was horizontal; after a quarter turn it is vertical.
+  assert.ok(span(plain, 'cx') > span(plain, 'cy'));
+  assert.ok(span(turned, 'cy') > span(turned, 'cx'));
+
+  // A quarter turn is rigid: EVERY pairwise distance is preserved (up to the
+  // panel's re-fit scale, which is one uniform factor for the whole panel).
+  const d = (pts, i, j) => Math.hypot(pts[i].cx - pts[j].cx, pts[i].cy - pts[j].cy);
+  const ratio = d(turned, 0, 1) / d(plain, 0, 1);
+  for (let i = 0; i < plain.length; i++) {
+    for (let j = i + 1; j < plain.length; j++) {
+      assert.ok(Math.abs(d(turned, i, j) / d(plain, i, j) - ratio) < 1e-6,
+        'rotation must be rigid — no pixel moves relative to another');
+    }
+  }
+
+  // Direction check: world +x pointed screen-RIGHT before, screen-UP after
+  // (counter-clockwise, as the operator asked — not clockwise).
+  const giOf = (pts, gi) => pts.find((p) => p.gi === gi);
+  const armStart = 0, armEnd = 6;
+  assert.ok(giOf(plain, armEnd).cx > giOf(plain, armStart).cx);
+  assert.ok(giOf(turned, armEnd).cy < giOf(turned, armStart).cy, '+x runs UP after 90° CCW');
+});
+
+test('rotate: 180 and 270 compose, 0 is the identity, junk throws', () => {
+  const list = Array.from({ length: 5 }, (_, k) =>
+    entry('dmx', 0, 'Run', 'ShehdsBar', 'R', k, 0, 0));
+  const clusters = buildClusters(list);
+  const base = { layout: 'spatial', projection: 'top' };
+  const pl = seedPanel(base, clusters, list, CANVAS.w, CANVAS.h);
+  const at = (deg) => expandPanel({ ...base, rotate: deg }, clusters, list, pl);
+  const key = (pts) => pts.map((p) => `${Math.round(p.cx * 100)},${Math.round(p.cy * 100)}`).join('|');
+
+  assert.equal(key(at(0)), key(expandPanel(base, clusters, list, pl)), '0 = identity');
+  // 180 reverses the run left→right; 270 is the mirror of 90 on the vertical axis.
+  assert.ok(at(180)[0].cx > at(180)[4].cx, '180 reverses the run');
+  assert.ok(at(270)[4].cy > at(270)[0].cy, '270 runs the other way to 90');
+  assert.throws(() => at(45), /panel rotate must be one of/);
+});
+
+// ── paint order: sparse fixtures last, so they survive a dense run ─────────
+
+test('a projected panel paints many-pixel runs FIRST and single-pixel fixtures LAST', () => {
+  // A par sitting exactly on a strand in the top-down projection — physically
+  // metres apart in Y, stacked only by the projection (the titanic chimney
+  // rings). Batch order puts the par first; paint order must put it last so the
+  // strand's ribbon does not swallow it (operator, report 20260725_48).
+  const list = [
+    entry('dmx', 0, 'Par 1', 'UkingPar', 'Ring', 2, 9, 0),
+    ...Array.from({ length: 12 }, (_, k) => entry('led', 1, 'Strand', '', 'Strand', k * 0.4, 15, 0)),
+    entry('dmx', 2, 'Par 2', 'UkingPar', 'Ring', 3, 9, 0),
+  ];
+  const clusters = buildClusters(list);
+  assert.deepEqual(clusters.map((c) => c.fixKey), ['Par 1', 'Strand', 'Par 2'],
+    'batch order really does interleave the pars around the strand');
+  const panel = { layout: 'spatial', projection: 'top' };
+  const pos = expandPanel(panel, clusters, list, seedPanel(panel, clusters, list, CANVAS.w, CANVAS.h));
+
+  const firstOf = (k) => pos.findIndex((p) => p.fixKey === k);
+  const lastOf = (k) => pos.length - 1 - [...pos].reverse().findIndex((p) => p.fixKey === k);
+  assert.ok(lastOf('Strand') < firstOf('Par 1'), 'the 12-pixel strand paints before the pars');
+  assert.ok(lastOf('Strand') < firstOf('Par 2'));
+  // Every pixel still emitted exactly once, still carrying its fixKey.
+  assert.equal(pos.length, 14);
+  assert.equal(pos.filter((p) => p.fixKey === 'Strand').length, 12);
+  assert.ok(pos.every((p) => typeof p.fixKey === 'string' && p.fixKey.length));
+});
+
+test('paint order is STABLE for equal pixel counts (no shuffling)', () => {
+  const list = [
+    ...bar(0, 'Bar A', 4, 0),
+    ...bar(1, 'Bar B', 4, 10),
+    ...bar(2, 'Bar C', 4, 20),
+  ];
+  const clusters = buildClusters(list);
+  const panel = { layout: 'spatial', projection: 'top' };
+  const pos = expandPanel(panel, clusters, list, seedPanel(panel, clusters, list, CANVAS.w, CANVAS.h));
+  const order = [...new Set(pos.map((p) => p.fixKey))];
+  assert.deepEqual(order, ['Bar A', 'Bar B', 'Bar C']);
+});
+
+// ── compress: collapse the dead bands between the ship's two halves ────────
+// OPERATOR-ORDERED departure from the true projection, Top-Down only (Sina,
+// 2026-07-30): "bring the 2 sides closer so they are seen easier together."
+// The contract is that it is a PIECEWISE TRANSLATION — within a side nothing
+// changes at all; only the empty space between sides shrinks.
+
+// Two clusters far apart on world x, each an internally structured run.
+function twoSides(gapWorld = 30) {
+  const list = [];
+  for (let k = 0; k < 5; k++) list.push(entry('dmx', 0, 'Left', 'ShehdsBar', 'L', k, 0, k * 0.5));
+  for (let k = 0; k < 5; k++) list.push(entry('dmx', 1, 'Right', 'ShehdsBar', 'R', gapWorld + k, 0, k * 0.5));
+  return list;
+}
+
+const COMPRESS = { minWorldGap: 5, gapWorld: 4 };
+const spatialTop = (extra) => ({ id: 'main', layout: 'spatial', projection: 'top', ...extra });
+
+function expandWith(list, panel) {
+  const clusters = buildClusters(list);
+  return expandPanel(panel, clusters, list,
+    seedPanel(panel, clusters, list, CANVAS.w, CANVAS.h), {});
+}
+
+test('compress: within-side geometry is EXACTLY preserved, only the gap shrinks', () => {
+  const list = twoSides(30);
+  const plain = expandWith(list, spatialTop());
+  const squashed = expandWith(list, spatialTop({ compress: COMPRESS }));
+  assert.equal(squashed.length, plain.length);
+
+  const d = (pts, i, j) => Math.hypot(pts[i].cx - pts[j].cx, pts[i].cy - pts[j].cy);
+  // Same-side pairs keep their shape: every within-side distance scales by ONE
+  // factor (the panel's re-fit), so all their ratios are identical.
+  const ratio = d(squashed, 0, 1) / d(plain, 0, 1);
+  for (const [a, b] of [[0, 2], [0, 4], [1, 3], [5, 6], [5, 9], [6, 8]]) {
+    assert.ok(Math.abs(d(squashed, a, b) / d(plain, a, b) - ratio) < 1e-6,
+      `within-side pair (${a},${b}) must keep its shape exactly`);
+  }
+  // …and the cross-side distance does NOT: that is the whole point.
+  assert.ok(d(squashed, 0, 5) / d(plain, 0, 5) < ratio * 0.8,
+    'the two sides must actually come closer together');
+  // Ordering never crosses over.
+  assert.ok(Math.max(...squashed.slice(0, 5).map((p) => p.cx))
+    < Math.min(...squashed.slice(5).map((p) => p.cx)));
+});
+
+test('compress: the collapsed gap is exactly gapWorld in the panel scale', () => {
+  const list = twoSides(30);
+  const pts = expandWith(list, spatialTop({ compress: COMPRESS }));
+  // Recover the panel scale from a pair whose WORLD distance we know: the left
+  // run's first and last pixels are 4 world units apart on x.
+  const left = pts.filter((p) => p.fixKey === 'Left').sort((a, b) => a.cx - b.cx);
+  const right = pts.filter((p) => p.fixKey === 'Right').sort((a, b) => a.cx - b.cx);
+  const scale = (left[4].cx - left[0].cx) / 4;
+  const gapDesign = right[0].cx - left[4].cx;
+  assert.ok(Math.abs(gapDesign / scale - COMPRESS.gapWorld) < 1e-6,
+    `collapsed gap should be ${COMPRESS.gapWorld} world units, got ${(gapDesign / scale).toFixed(4)}`);
+});
+
+test('compress: a gap NARROWER than minWorldGap is left alone', () => {
+  const list = twoSides(8); // islands 4 wide, so the empty band is only 4 units
+  const plain = expandWith(list, spatialTop());
+  const squashed = expandWith(list, spatialTop({ compress: COMPRESS }));
+  const key = (pts) => pts.map((p) => `${Math.round(p.cx * 100)},${Math.round(p.cy * 100)}`).join('|');
+  assert.equal(key(squashed), key(plain), 'nothing qualifies, so nothing moves');
+});
+
+test('compress: three bands collapse independently and keep left-to-right order', () => {
+  const list = [];
+  // Four islands at x 0, 40, 80, 120 — three 38-unit dead bands between them.
+  for (let g = 0; g < 4; g++) {
+    for (let k = 0; k < 3; k++) list.push(entry('dmx', g, `G${g}`, 'ShehdsBar', 'G', g * 40 + k, 0, 0));
+  }
+  const pts = expandWith(list, spatialTop({ compress: COMPRESS }));
+  const centres = [0, 1, 2, 3].map((g) => {
+    const own = pts.filter((p) => p.fixKey === `G${g}`);
+    return own.reduce((a, p) => a + p.cx, 0) / own.length;
+  });
+  for (let i = 1; i < 4; i++) assert.ok(centres[i] > centres[i - 1], 'islands keep their order');
+  const steps = [1, 2, 3].map((i) => centres[i] - centres[i - 1]);
+  for (const st of steps) {
+    assert.ok(Math.abs(st - steps[0]) < 1e-6,
+      'equal islands separated by equal collapsed bands stay evenly spaced');
+  }
+});
+
+test('compress: a panel with no dead band at all is untouched', () => {
+  const list = Array.from({ length: 8 }, (_, k) =>
+    entry('dmx', 0, 'Run', 'ShehdsBar', 'R', k, 0, 0));
+  const plain = expandWith(list, spatialTop());
+  const squashed = expandWith(list, spatialTop({ compress: COMPRESS }));
+  const key = (pts) => pts.map((p) => `${Math.round(p.cx * 100)},${Math.round(p.cy * 100)}`).join('|');
+  assert.equal(key(squashed), key(plain));
+});
+
+// ── expandPitch: a fixture's own LEDs, spread to a legible pitch ───────────
+// OPERATOR-ORDERED departure, Front view (Sina, 2026-07-30): "resize the
+// vintage pixels to 6 circles that are a bit bigger."
+
+// One 6-LED vintage fixture with a realistically tiny internal pitch, plus a
+// bar so the panel has something else to scale against.
+function vintageAndBar() {
+  const list = [];
+  for (let k = 0; k < 6; k++) {
+    list.push(entry('dmx', 0, 'Vint A', 'VintageLed', 'V', 10 + k * 0.05, 0, 5 + k * 0.09));
+  }
+  for (let k = 0; k < 4; k++) list.push(entry('dmx', 1, 'Bar A', 'ShehdsBar', 'B', k, 0, 0));
+  return list;
+}
+
+test('expandPitch: 6 LEDs spread to the declared pitch, centred where the fixture IS', () => {
+  const list = vintageAndBar();
+  const plain = expandWith(list, spatialTop());
+  const spread = expandWith(list, spatialTop({ expandPitch: { VintageLed: 0.6 } }));
+
+  const vintOf = (pts) => pts.filter((p) => p.fixKey === 'Vint A');
+  const barOf = (pts) => pts.filter((p) => p.fixKey === 'Bar A');
+  const centroid = (pts) => [pts.reduce((a, p) => a + p.cx, 0) / pts.length,
+    pts.reduce((a, p) => a + p.cy, 0) / pts.length];
+  assert.equal(vintOf(spread).length, 6, 'still exactly 6 LEDs — none invented, none lost');
+
+  // Each panel's ABSOLUTE scale, recovered from the bar: its 4 pixels span
+  // exactly 3 world units on x, and the bar itself is never stretched.
+  const bp = barOf(plain), bs = barOf(spread);
+  const scalePlain = (bp[3].cx - bp[0].cx) / 3;
+  const scale = (bs[3].cx - bs[0].cx) / 3;
+
+  // The fixture stays where it physically is: its offset from the bar, measured
+  // in WORLD units in each panel, is identical.
+  const [pcx, pcy] = centroid(vintOf(plain));
+  const [scx, scy] = centroid(vintOf(spread));
+  assert.ok(Math.abs((scx - bs[0].cx) / scale - (pcx - bp[0].cx) / scalePlain) < 1e-6,
+    'fixture centre unmoved (x)');
+  assert.ok(Math.abs((scy - bs[0].cy) / scale - (pcy - bp[0].cy) / scalePlain) < 1e-6,
+    'fixture centre unmoved (y)');
+
+  // Evenly spaced along ONE line at exactly the declared world pitch.
+  const own = vintOf(spread);
+  const step = [];
+  for (let i = 1; i < own.length; i++) {
+    step.push(Math.hypot(own[i].cx - own[i - 1].cx, own[i].cy - own[i - 1].cy));
+  }
+  for (const st of step) assert.ok(Math.abs(st - step[0]) < 1e-6, 'evenly spaced');
+  assert.ok(Math.abs(step[0] / scale / 0.6 - 1) < 1e-6,
+    `pitch should be 0.6 world units, got ${(step[0] / scale).toFixed(4)}`);
+  // And they really are further apart than before, in world terms — the point.
+  const pv = vintOf(plain);
+  const plainStep = Math.hypot(pv[1].cx - pv[0].cx, pv[1].cy - pv[0].cy) / scalePlain;
+  assert.ok(step[0] / scale > plainStep * 3,
+    `the smear must actually open up: ${(step[0] / scale).toFixed(3)} vs ${plainStep.toFixed(3)} world units`);
+});
+
+test('expandPitch: only the DECLARED fixture types move', () => {
+  const list = vintageAndBar();
+  const plain = expandWith(list, spatialTop());
+  const spread = expandWith(list, spatialTop({ expandPitch: { VintageLed: 0.6 } }));
+  const bp = plain.filter((p) => p.fixKey === 'Bar A');
+  const bs = spread.filter((p) => p.fixKey === 'Bar A');
+  // A bar has the same sub-pitch problem; stretching it would draw an
+  // 18-pitch-long bar and wreck the view, so it must be left exactly alone.
+  const scale = (bs[3].cx - bs[0].cx) / (bp[3].cx - bp[0].cx);
+  for (let i = 1; i < 4; i++) {
+    assert.ok(Math.abs((bs[i].cx - bs[0].cx) - (bp[i].cx - bp[0].cx) * scale) < 1e-6,
+      'the bar keeps its true internal spacing');
+  }
+});
+
+test('expandPitch: a single-pixel fixture has no axis and is left alone', () => {
+  const list = [
+    entry('dmx', 0, 'Par 1', 'UkingPar', 'P', 0, 0, 0),
+    ...Array.from({ length: 4 }, (_, k) => entry('dmx', 1, 'Bar A', 'ShehdsBar', 'B', k, 0, 0)),
+  ];
+  const pts = expandWith(list, spatialTop({ expandPitch: { UkingPar: 0.6 } }));
+  assert.equal(pts.filter((p) => p.fixKey === 'Par 1').length, 1);
+  assert.ok(pts.every((p) => Number.isFinite(p.cx) && Number.isFinite(p.cy)));
 });

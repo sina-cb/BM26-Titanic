@@ -137,6 +137,17 @@ const DERIVED = [
   { key: 'audioPhrasePhase',    label: 'Audio · Phrase Phase',    range: [0, 1],  hz: 15, osc: '/marsin/audio/phrasephase' },
   { key: 'audioPhraseBoundary', label: 'Audio · Phrase Boundary', range: [0, 1],  hz: 15, osc: '/marsin/audio/phraseboundary' },
   { key: 'audioDropCountdown',  label: 'Audio · Drop Countdown',  range: [0, 1],  hz: 30, osc: '/marsin/audio/dropcountdown' },
+  // party_detection (R1, report 20260725_10): the HARD party gate the show
+  // director trusts (`timeline.mood.key`), plus the five metrics it decides on
+  // — all previously computed and thrown away. They are published so the
+  // operator can WATCH the gate decide on GET /param-center and calibrate the
+  // `party:` thresholds on the playa in minutes.
+  { key: 'audioPartyStrong',    label: 'Audio · Party (strong)',  range: [0, 1],  hz: 5,  osc: '/marsin/audio/partystrong' },
+  { key: 'audioLoudness',       label: 'Audio · Loudness',        range: [0, 1],  hz: 10, osc: '/marsin/audio/loudness' },
+  { key: 'audioKickRate',       label: 'Audio · Kick Rate',       range: [0, 8],  hz: 5,  osc: '/marsin/audio/kickrate' },
+  { key: 'audioKickReg',        label: 'Audio · Kick Regularity', range: [0, 1],  hz: 5,  osc: '/marsin/audio/kickreg' },
+  { key: 'audioBpmLocked',      label: 'Audio · BPM Locked',      range: [0, 1],  hz: 5,  osc: '/marsin/audio/bpmlocked' },
+  { key: 'audioBpmConf',        label: 'Audio · BPM Conf',        range: [0, 1],  hz: 5,  osc: '/marsin/audio/bpmconf' },
 ];
 
 // analyzer_features (slot 3): per-band onset → spatial-chase pulses + sub-bass

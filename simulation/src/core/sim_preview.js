@@ -33,11 +33,15 @@ export function applySimulationSurfaceReflectanceToMaterial(material) {
 }
 
 /**
- * Mix an RGBWAU pixel down to RGB for preview, using the EXACT weights
- * the firmware applies in MarsinPixel::toRGBFallback
- * (MarsinLED/src/MarsinPixel.cpp), so what the sim shows on an LED strand
- * matches what the WS2812-RGBW driver would emit when it has no dedicated
- * W/A/U hardware:
+ * Generic RGBWAU → RGB preview mix for a fixture with no dedicated W/A/U
+ * hardware: white drives all three channels, amber and UV fold in on
+ * fixed weights.
+ *
+ * NOTE: LED STRANDS NO LONGER USE THIS. A strand's preview is derived
+ * from its actual wire bytes plus the LED controller's white processing
+ * and gamma (simulation/src/dmx/led_wire.js) — this blend advertised
+ * amber and UV content the strand hardware never receives. Kept for
+ * generic/no-hardware previews:
  *   outR = min(1, r + w + a*0.8 + u*0.1)
  *   outG = min(1, g + w + a*0.4)
  *   outB = min(1, b + w + u*0.5)

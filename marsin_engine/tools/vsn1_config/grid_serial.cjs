@@ -20,6 +20,13 @@
 
 const { SerialPort } = require('serialport');
 
+const {
+  toDeviceActionString,
+  toHumanActionString,
+  stripLineComments,
+  buildActionStringFromLua,
+} = require('./lua_action_string.cjs');
+
 // ── Constants (verified against grid-editor configuration.json + serialport.ts)
 const VSN1_VID = 0x303a; // Espressif / Intech ESP32-S3 native USB
 const VSN1_PID = 0x8123; // Grid ESP32 application PID (USB_VID_2 / USB_PID_2)
@@ -580,71 +587,11 @@ function waitForConfigAck(conn, timeoutMs, contextLabel) {
 }
 
 // ── Action-string building & validation ──────────────────────────────────────
-// The device stores single-line short-form strings wrapped `<?lua ... ?>`.
-// GridScript.humanize maps that to `<lua ... >`; shortify maps names back but
-// keeps the `<lua ... >` wrapper — so we restore `<?lua ... ?>` ourselves.
-// This exact transform round-trips all 45 factory page-0 action strings.
-function toDeviceActionString(gp, humanWrapped) {
-  const short = gp.GridScript.shortify(humanWrapped);
-  if (!short.startsWith('<lua ') || !short.endsWith('>')) {
-    throw new Error(
-      `shortify produced an unexpected wrapper (want "<lua ... >"): ` +
-        `${short.slice(0, 60)}...`,
-    );
-  }
-  return `<?lua ${short.slice(5, -1).trimEnd()} ?>`;
-}
-
-function toHumanActionString(gp, deviceShort) {
-  return gp.GridScript.humanize(deviceShort);
-}
-
-// Strip `--` line comments (to end of line) while keeping `--[[ ... ]]` block
-// comments (the protocol's action-block markers). Limitation: a literal "--"
-// inside a Lua string would be treated as a comment — our templates avoid
-// that, and the syntax check below fails loudly if stripping breaks the code.
-function stripLineComments(luaSource) {
-  return luaSource
-    .split('\n')
-    .map((line) => line.replace(/--(?!\[\[).*$/, '').trimEnd())
-    .join('\n');
-}
-
-// Compile a human-readable Lua FILE body into a device action string:
-// strip line comments -> minify -> require single line -> syntax check ->
-// wrap as a code-block action -> shortify -> device `<?lua ... ?>` form.
-// Fails loudly at every stage. Requires initLuaFormatter() already awaited.
-function buildActionStringFromLua(gp, luaSource, maxLength) {
-  const { GridScript } = gp;
-
-  const stripped = stripLineComments(luaSource);
-  const minified = GridScript.minifyScript(stripped).replace(/\n+/g, ' ').trim();
-  if (minified.length === 0) {
-    throw new Error('Lua source is empty after comment stripping + minification.');
-  }
-  if (/\n/.test(minified)) {
-    throw new Error('Minified Lua still contains newlines; action strings must be single-line.');
-  }
-  if (!GridScript.checkSyntax(minified)) {
-    throw new Error(
-      'Lua syntax check failed after minification. If your source has "--" ' +
-        'inside a string literal, remove it — line-comment stripping cannot ' +
-        'distinguish it.',
-    );
-  }
-
-  // Wrap as a single code-block action (the --[[@cb]] marker, as used by the
-  // factory config), then map to the short/device form.
-  const device = toDeviceActionString(gp, `<lua --[[@cb]] ${minified} >`);
-
-  if (device.length > maxLength) {
-    throw new Error(
-      `Action string is ${device.length} chars; device limit is ${maxLength} ` +
-        `(grid CONFIG_LENGTH). Shorten the Lua.`,
-    );
-  }
-  return device;
-}
+// The Lua→device action-string compiler lives in lua_action_string.cjs — a
+// PURE module with no serialport dependency, so the offline template
+// budget/line-ending regression test can exercise it without pulling a native
+// addon into the engine test runner. Re-exported below so every existing
+// caller keeps using gs.buildActionStringFromLua unchanged.
 
 // ── Pretty-printing for dry runs ──────────────────────────────────────────────
 function frameToHex(serialBytes) {

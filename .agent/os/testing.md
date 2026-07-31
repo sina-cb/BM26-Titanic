@@ -1,4 +1,4 @@
-# Testing — layout & naming law
+# Testing — layout & naming spec
 
 How tests are organized across the repo, so the suites stay legible and
 **every** test actually runs. Per-subsystem runbooks in `.agent/ops/*_auto_checks.md`

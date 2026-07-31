@@ -1,0 +1,73 @@
+schemaVersion: 1
+name: first_class_1912
+entries:
+  - id: e_first_class_1912_0_00_golden_hour_wash
+    pattern: 00_golden_hour_wash
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_1_07_shimmer
+    pattern: 07_shimmer
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_2_12_breathing
+    pattern: 12_breathing
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_3_13_sparkle
+    pattern: 13_sparkle
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_4_19_swaying_lattice_ballet
+    pattern: 19_swaying_lattice_ballet
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_5_20_parametric_sway_field
+    pattern: 20_parametric_sway_field
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_6_26_dom_dancers_chevron
+    pattern: 26_dom_dancers_chevron
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_7_43_golden_hour_pulse
+    pattern: 43_golden_hour_pulse
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_8_52_silk_ribbons
+    pattern: 52_silk_ribbons
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_first_class_1912_9_64_temple_warm_white
+    pattern: 64_temple_warm_white
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null

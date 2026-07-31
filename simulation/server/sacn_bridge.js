@@ -41,6 +41,15 @@ processPriority.elevateSelf(
   processPriority.normalizePriorityRequest(process.env.BM26_BRIDGE_PRIORITY, { fallback: 'high' }) || 'high',
   { label: 'BridgePriority', logger: (m) => console.log(`[sacn_bridge] ${m}`) });
 
+// The pure half of routing lives in lib/bridge_routing.cjs (unit-tested). It is
+// required HERE — above the boot-time universe derivation — because both the
+// boot scan and the runtime recompute read patches.yaml and the
+// `📡 Subscribed Universes` field through the SAME helpers: one implementation
+// of "what a patch record occupies" and one of "what the field means".
+const { computeEffectiveRoutes, engineOwnedPairs, routeKey, partitionRoutePairs,
+  applyUniverseSubscriptions, readPatchDeclarations,
+  parseSubscribedUniversesField } = require('../lib/bridge_routing.cjs');
+
 // ── Derive universes from ALL scene patches.yaml files ─────────────────
 function getAllPatchUniverses() {
   const universes = new Set([1, 2]); // always include 1+2 as baseline
@@ -52,12 +61,13 @@ function getAllPatchUniverses() {
       const patchesPath = path.join(scenesDir, entry.name, 'patches.yaml');
       if (!fs.existsSync(patchesPath)) continue;
       try {
-        const pConf = yaml.load(fs.readFileSync(patchesPath, 'utf8'));
-        if (pConf && pConf.patches) {
-          for (const patch of Object.values(pConf.patches)) {
-            const u = parseInt(patch.dmxUniverse, 10);
-            if (u > 0) universes.add(u);
-          }
+        // readPatchDeclarations, not a bare `dmxUniverse` read: an LED strand
+        // record spans every universe in its `segments[]`, and the boot floor
+        // must cover the spill exactly as the runtime diff does.
+        const read = readPatchDeclarations(yaml.load(fs.readFileSync(patchesPath, 'utf8')));
+        for (const u of read.universes) universes.add(u);
+        for (const a of read.anomalies) {
+          console.warn(`[sACN Bridge] ⚠ ${entry.name}/patches.yaml — '${a.source}' ${a.message}`);
         }
       } catch (e) {
         console.warn(`[sACN Bridge] Could not read ${entry.name}/patches.yaml:`, e.message);
@@ -71,11 +81,24 @@ function getAllPatchUniverses() {
   return sorted;
 }
 
-const patchUniverses = getAllPatchUniverses();
-let sacnOpts = { universes: patchUniverses, lockoutMs: 10000, highPriorityThreshold: 150, sourceStaleMs: 2000 };
-try {
-  const commonPath = path.join(SIM_ROOT, 'scenes', 'common.yaml');
+/** Unwrap the `{value, label}` GUI-control shape the scene YAML uses. */
+function unwrapConfigValue(v) {
+  return (typeof v === 'object' && v !== null && 'value' in v) ? v.value : v;
+}
+
+/**
+ * Read the `colorWave` settings block the bridge cares about, scene config
+ * overriding common.yaml. Called at BOOT for the receiver options and on EVERY
+ * recompute for the `📡 Subscribed Universes` field — a save rewrites
+ * scenes/common.yaml before the client's `setScene` notify arrives, so a
+ * re-read here is a FRESH read by construction (the save server's write is
+ * atomic + fsync'd and completes before it answers 200).
+ *
+ * Throws on an unreadable / malformed file — the callers decide how loud.
+ */
+function readColorWaveSection() {
   let s = null;
+  const commonPath = path.join(SIM_ROOT, 'scenes', 'common.yaml');
   if (fs.existsSync(commonPath)) {
     const commonConfig = yaml.load(fs.readFileSync(commonPath, 'utf8'));
     if (commonConfig && commonConfig.colorWave) s = commonConfig.colorWave;
@@ -84,19 +107,24 @@ try {
     const sceneConfig = yaml.load(fs.readFileSync(sceneConfigPath, 'utf8'));
     if (sceneConfig && sceneConfig.colorWave) s = sceneConfig.colorWave;
   }
+  return s;
+}
 
+const patchUniverses = getAllPatchUniverses();
+let sacnOpts = { universes: patchUniverses, lockoutMs: 10000, highPriorityThreshold: 150, sourceStaleMs: 2000 };
+try {
+  const s = readColorWaveSection();
   if (s) {
-    const val = (v) => (typeof v === 'object' && v !== null && 'value' in v) ? v.value : v;
-    const univOverride = val(s.sacn_universes);
+    const univOverride = unwrapConfigValue(s.sacn_universes);
     // Only override if explicitly set in config; otherwise use patch-derived list
     const universes = univOverride
-      ? String(univOverride).split(',').map(u => parseInt(u.trim(), 10)).filter(u => !isNaN(u))
+      ? parseSubscribedUniversesField(univOverride).universes
       : patchUniverses;
     sacnOpts = {
       universes,
-      lockoutMs: val(s.sacn_lockout_ms) || 10000,
-      highPriorityThreshold: val(s.sacn_high_priority) || 150,
-      sourceStaleMs: val(s.sacn_stale_ms) || 2000,
+      lockoutMs: unwrapConfigValue(s.sacn_lockout_ms) || 10000,
+      highPriorityThreshold: unwrapConfigValue(s.sacn_high_priority) || 150,
+      sourceStaleMs: unwrapConfigValue(s.sacn_stale_ms) || 2000,
     };
   }
 } catch (e) {
@@ -134,9 +162,8 @@ try { WebSocketServer = require('ws').Server; } catch (e) {
 // MINUS every (universe → host) pair the engine's declared controllers
 // deliver directly (from /status `outputRouting`) — relaying those would put
 // two interleaved sACN sources on one universe and flicker the fixtures.
-// Pure computation lives in lib/bridge_routing.cjs (unit-tested).
-const { computeEffectiveRoutes, engineOwnedPairs, routeKey } =
-  require('../lib/bridge_routing.cjs');
+// Pure computation lives in lib/bridge_routing.cjs (required at the top of this
+// file, above the boot-time universe derivation which uses the same helpers).
 
 const outgoingSenders = new Map();
 const RELAY_ERROR_LOG_INTERVAL_MS = 30000;
@@ -151,12 +178,83 @@ const _routeEntries = new Map();            // routeKey → sender entry
 let _lastExcludedSig = '';
 let _lastConflictSig = '';
 const _warnedMissingScenes = new Set();
+const _warnedRefusedRoutes = new Set();     // "scene|U→ip" — one named warning each
+const _warnedSubscriptionErrors = new Set(); // full message — one shout per failure
+const _warnedPatchAnomalies = new Set();    // "scene|fixture|message"
+const _warnedFieldIssues = new Set();       // full message — one shout per field problem
+
+/** Log a message at most once for the lifetime of the process. */
+function warnOnce(seen, message) {
+  if (seen.has(message)) return;
+  seen.add(message);
+  console.warn(`[sACN Bridge] ${message}`);
+  broadcastLog(message, 'warn');
+}
 
 /**
- * Read one scene's declared (universe → controllerIp) pairs from its
- * patches.yaml. Returns [] for a scene whose patches declare no controller
- * IPs (a legitimate zero — e.g. titanic today) and null for a missing /
- * unreadable file (logged loudly by the caller, once per scene).
+ * Re-read the `📡 Subscribed Universes` field (scenes/common.yaml →
+ * `colorWave.sacn_universes`, scene config overriding) on every recompute.
+ *
+ * WHY AT RUNTIME (report 20260725_87): the field is the operator's ONLY way to
+ * declare a universe that no patch record and no engine route can imply — an
+ * external console or a second machine on the wire. Reading it only at boot is
+ * what forced a launcher restart after the save-gate widened it: the file was
+ * fresh, the running receiver was not. The save writes common.yaml and THEN
+ * notifies the bridge (gui_builder.exportConfig awaits the 200 first), so the
+ * read below is always the just-saved value.
+ *
+ * This is a floor, never a ceiling: field universes are ADDED to the wanted set
+ * alongside the patch/engine-derived ones. The bridge never unsubscribes, so a
+ * universe removed from the field stays accepted until the next start — the
+ * same never-remove rule the save-side gate follows.
+ *
+ * @returns {{universes:number[], malformed:Array<{token:string, reason:string}>}|null}
+ *   null when the scene declares no field at all (the patch scan is the floor).
+ */
+function readSubscribedUniversesField() {
+  let s;
+  try {
+    s = readColorWaveSection();
+  } catch (e) {
+    warnOnce(_warnedFieldIssues,
+      `⚠ Could not re-read 📡 Subscribed Universes from the scene config: ${e.message}. ` +
+      'This recompute subscribes from the patch/engine-derived universes ONLY — a universe ' +
+      'that exists only in that field will not be received until the file parses again.');
+    return null;
+  }
+  if (!s) return null;
+  const raw = unwrapConfigValue(s.sacn_universes);
+  if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+  return parseSubscribedUniversesField(raw);
+}
+
+/**
+ * Read one scene's patch declarations: the (universe → controllerIp) relay
+ * pairs AND every universe the scene patches at all (a fixture with no
+ * controller IP still has to REACH THE BROWSERS, so the receiver must accept
+ * its universe — see the subscription block in recomputeRoutes).
+ *
+ * FRESH ON EVERY CALL: the file is re-read here, inside the function, with no
+ * cache anywhere. recomputeRoutes() calls this for every active scene, and a
+ * client's post-save `setScene` triggers a recompute — so the bridge always
+ * routes and subscribes from the patches.yaml the save server just wrote.
+ *
+ * An LED strand record occupies EVERY universe in its `segments[]`, not just
+ * `dmxUniverse`; lib/bridge_routing.cjs's readPatchDeclarations expands that
+ * (report 20260725_87 §gap A — the spill universes used to be invisible to both
+ * the relay and the subscription diff).
+ *
+ * Returns `{ routes, universes }` — `routes` is [] for a scene whose patches
+ * declare no controller IPs (a legitimate zero — e.g. titanic before the LED
+ * cards were bound) — and null for a missing / unreadable file (logged loudly
+ * by the caller, once per scene).
+ *
+ * Pairs the relay must NOT build (the `0.0.0.0` placeholder sentinel, a missing
+ * IP, broadcast, loopback) are classified by lib/bridge_routing.cjs and REFUSED
+ * with one named warning apiece — never dropped in silence. Report 20260725_33
+ * §2 makes this a hard requirement: the titanic scene can be patched against
+ * placeholder controllers long before the wiring is known, and an operator
+ * staring at dark hardware must be able to see WHY from the log.
  */
 function readSceneRoutePairs(sName) {
   const patchesYamlPath = path.join(SIM_ROOT, 'scenes', sName, 'patches.yaml');
@@ -168,22 +266,26 @@ function readSceneRoutePairs(sName) {
     console.warn(`[sACN Bridge] Could not parse ${sName}/patches.yaml for routing:`, e.message);
     return null;
   }
-  const pairs = [];
-  const seen = new Set();
-  if (pConf && pConf.patches) {
-    for (const patch of Object.values(pConf.patches)) {
-      const u = parseInt(patch.dmxUniverse, 10);
-      const ip = patch.controllerIp;
-      if (u > 0 && ip && ip !== '127.0.0.1' && ip !== '0.0.0.0' && String(ip).toLowerCase() !== 'localhost') {
-        const key = routeKey(u, ip);
-        if (!seen.has(key)) {
-          seen.add(key);
-          pairs.push({ universe: u, ip });
-        }
-      }
-    }
+  const { declared, universes, anomalies } = readPatchDeclarations(pConf);
+  for (const a of anomalies) {
+    warnOnce(_warnedPatchAnomalies,
+      `⚠ ${sName}/patches.yaml — record '${a.source}' ${a.message}`);
   }
-  return pairs;
+
+  const { routes, refusals } = partitionRoutePairs(declared);
+  for (const r of refusals) {
+    const key = `${sName}|${routeKey(r.universe, r.ip)}`;
+    if (_warnedRefusedRoutes.has(key)) continue;
+    _warnedRefusedRoutes.add(key);
+    const shown = r.sources.slice(0, 4).join(', ');
+    const more = r.sources.length > 4 ? ` +${r.sources.length - 4} more` : '';
+    const label = `U${r.universe} → '${r.ip}' [${r.status}]`;
+    console.warn(
+      `[sACN Bridge] ⚠ RELAY ROUTE REFUSED for scene '${sName}': ${label} — ${r.reason}. ` +
+      `Declared by: ${shown}${more}. No sender created; nothing is sent to this address.`);
+    broadcastLog(`⚠ Relay route REFUSED (${r.status}): ${label} in '${sName}'`, 'warn');
+  }
+  return { routes, universes };
 }
 
 /**
@@ -198,9 +300,10 @@ function recomputeRoutes(reason) {
   for (const s of clientScenes.values()) candidateScenes.add(s);
 
   const sceneRoutes = new Map();
+  const scenePatchUniverses = new Map();   // scene → every universe it patches
   for (const s of candidateScenes) {
-    const pairs = readSceneRoutePairs(s);
-    if (pairs === null) {
+    const read = readSceneRoutePairs(s);
+    if (read === null) {
       if (!_warnedMissingScenes.has(s)) {
         _warnedMissingScenes.add(s);
         console.warn(`[sACN Bridge] ⚠ No readable patches.yaml for scene '${s}' — it contributes no relay routes.`);
@@ -208,7 +311,8 @@ function recomputeRoutes(reason) {
       }
       continue;
     }
-    sceneRoutes.set(s, pairs);
+    sceneRoutes.set(s, read.routes);
+    scenePatchUniverses.set(s, read.universes);
   }
 
   const { routes, excluded, conflicts, activeScenes } = computeEffectiveRoutes({
@@ -227,6 +331,61 @@ function recomputeRoutes(reason) {
     for (const s of clientScenes.values()) { if (s === scene) { tags.push('client'); break; } }
     return tags.length ? `${scene}[${tags.join('+')}]` : scene;
   };
+
+  // ── Receiver subscription (report 20260725_58 §7.1, slice S3) ───────────
+  // BEFORE any sender is created: the `sacn` Receiver silently drops packets
+  // for universes it is not subscribed to, so a relay route on a universe the
+  // receiver never accepted is a route that looks live in every log and
+  // carries nothing. The boot list (patches scan, or the colorWave
+  // sacn_universes override) is only a starting point — a scene saved after
+  // boot can patch anything. Subscribe to the effective route set, to the
+  // engine-owned pairs we deliberately do NOT relay (they still have to reach
+  // the browsers), and to every universe the active scenes patch at all.
+  // Never unsubscribe: dropping multicast memberships to chase the exact set
+  // would churn IGMP for no benefit, and a stale subscription costs nothing.
+  //
+  // The `📡 Subscribed Universes` field joins the same union (report
+  // 20260725_87): it is RE-READ here rather than only at boot, so the save-time
+  // gate's widened list reaches the running receiver on the notify that
+  // immediately follows the save — no launcher restart.
+  const wantedUniverses = [];
+  for (const r of routes) {
+    wantedUniverses.push({ universe: r.universe, source: `relay route → ${r.ip}` });
+  }
+  for (const e of excluded) {
+    wantedUniverses.push({ universe: e.universe, source: `engine-owned route → ${e.ip}` });
+  }
+  for (const scene of activeScenes) {
+    for (const u of scenePatchUniverses.get(scene) || []) {
+      wantedUniverses.push({ universe: u, source: `scene '${scene}' patch` });
+    }
+  }
+  const field = readSubscribedUniversesField();
+  if (field) {
+    for (const u of field.universes) {
+      wantedUniverses.push({ universe: u, source: '📡 Subscribed Universes field' });
+    }
+    for (const m of field.malformed) {
+      warnOnce(_warnedFieldIssues,
+        `⚠ 📡 Subscribed Universes: token '${m.token}' — ${m.reason}. ` +
+        'Type each universe separated by commas (e.g. 1, 2, 3).');
+    }
+  }
+  applyUniverseSubscriptions({
+    receiver,
+    wanted: wantedUniverses,
+    reason,
+    onLog: (msg) => {
+      console.log(`[sACN Bridge] ${msg}`);
+      broadcastLog(msg, 'source');
+    },
+    onError: (msg) => {
+      if (_warnedSubscriptionErrors.has(msg)) return;
+      _warnedSubscriptionErrors.add(msg);
+      console.warn(`[sACN Bridge] ${msg}`);
+      broadcastLog(msg, 'warn');
+    },
+  });
 
   // Diff → close removed senders, create added ones.
   const nextKeys = new Set(routes.map(r => routeKey(r.universe, r.ip)));
@@ -427,19 +586,31 @@ let highPriorityActive = false;
 let highPriorityTimer = null;
 let packetCount = 0;
 let lastLogTime = 0;
-const MAX_UNIVERSE = sacnOpts.universes[sacnOpts.universes.length - 1] || 256;
-const _warnedUniverses = new Set();
 
+// Snapshot of what boot subscribed to. Must be taken BEFORE the first runtime
+// subscription: the `sacn` package keeps the very array we handed its
+// constructor and pushes into it, so `sacnOpts.universes` IS
+// `receiver.universes` from here on.
+const BOOT_UNIVERSES = new Set(sacnOpts.universes);
+const _seenRuntimeUniverses = new Set();
+
+// The old `universe > MAX_UNIVERSE` drop guard lived here and is RETIRED
+// (report 20260725_58 §7.1). It could never fire — the Receiver drops every
+// unsubscribed universe before the handler runs — and with runtime
+// subscription it turned actively harmful: MAX_UNIVERSE was frozen at the
+// boot list's largest entry, so the first frame on a newly subscribed U27
+// would have been dropped by the very guard meant to explain drops. What
+// replaces it is the positive signal: say so, once, when a universe that boot
+// did NOT know about starts delivering.
 receiver.on('packet', (packet) => {
   const priority = packet.priority || 100;
   const sourceKey = packet.sourceName || 'Unknown';
   const universe = packet.universe || 1;
 
-  if (universe > MAX_UNIVERSE && !_warnedUniverses.has(universe)) {
-    _warnedUniverses.add(universe);
-    console.warn(`[sACN Bridge] ⚠ Received data for Universe ${universe} from '${sourceKey}' — exceeds subscription range (1–${MAX_UNIVERSE}). Packet dropped.`);
-    broadcastLog(`⚠ Universe ${universe} exceeds subscription range (1–${MAX_UNIVERSE})`, 'warn');
-    return;
+  if (!BOOT_UNIVERSES.has(universe) && !_seenRuntimeUniverses.has(universe)) {
+    _seenRuntimeUniverses.add(universe);
+    console.log(`[sACN Bridge] ✅ First frame on U${universe} from '${sourceKey}' — runtime-subscribed after boot.`);
+    broadcastLog(`✅ First frame on U${universe} (runtime-subscribed)`, 'source');
   }
 
   if (priority >= HIGH_PRIORITY) {
@@ -554,7 +725,9 @@ function routeFrame(universe, priority, payload) {
 console.log('═'.repeat(56));
 console.log('  📡 sACN → WebSocket Bridge');
 console.log('─'.repeat(56));
-console.log(`  sACN Universes      : ${sacnOpts.universes.join(', ')}`);
+console.log(`  sACN Universes      : ${sacnOpts.universes.join(', ')} (boot)`);
+console.log('  Runtime Subscribe   : ON — relay routes + active scenes\' patched universes ' +
+  '(incl. LED spill) + the 📡 Subscribed Universes field, all RE-READ on every recompute');
 console.log(`  WebSocket Port      : ${SACN_PORT}`);
 console.log(`  Priority Threshold  : ≥${HIGH_PRIORITY}`);
 console.log(`  Lockout Duration    : ${LOCKOUT_MS / 1000}s`);

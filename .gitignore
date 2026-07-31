@@ -180,6 +180,12 @@ simulation/scenes/*/playlists/hil_*.yaml
 .claude/*
 !.claude/settings.json
 
+# Local-only short-term tracking reports (operator scheduling / dated
+# planning). Deliberately NEVER committed — schedule dates stay out of
+# the public repo (Sina 2026-07-28). Durable outcomes still go to the
+# tracked .agent/reports/ + master doc, without dates-as-commitments.
+.agent/reports_local/
+
 # Timeline companion runtime state (regenerated on boot)
 marsin_engine/states/*/timeline_state.yaml
 

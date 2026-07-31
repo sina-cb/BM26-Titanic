@@ -93,6 +93,9 @@ SYNC_EXCLUDE_DIRS = [
     'marsin_engine\\states',
     'simulation\\.scene_backups',
     '.agent_renders',
+    # Operator-private local planning notes (gitignored AND never shipped:
+    # they must exist on the laptop only - Sina 2026-07-28).
+    '.agent\\reports_local',
 ]
 # deploy_info.yaml is server-owned; machines.yaml is NOT in this repo (private -
 # $BM26_MACHINES) and is shipped explicitly by ship_manifest() AFTER the sync.

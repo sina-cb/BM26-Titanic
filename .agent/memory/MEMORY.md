@@ -20,3 +20,11 @@ Protocol (format, rules, when to write): [`../os/memory.md`](../os/memory.md).
   WebGPU perf dies by scene-graph object count: per-pixel meshes must be
   InstancedMesh; one color-write path = vivid, consistent LEDs; measure
   FPS with a fresh browser.
+- [sim-perf-gpu-adapter](sim_perf_gpu_adapter.md) — FPS collapse with a
+  CLEAN object census = the browser is on the Intel iGPU, not the 4090;
+  check the adapter (chrome://gpu / UNMASKED_RENDERER) before blaming
+  code; probes can pin an adapter via `--use-adapter-luid`.
+- [doc-inconsistency-standing-fix](doc_inconsistency_standing_fix.md) —
+  operator standing order 2026-07-30: doc contradicting verified
+  code/hardware behavior → fix + clean up on sight, sanctioned by
+  default (descriptive truth only; P0s still apply).

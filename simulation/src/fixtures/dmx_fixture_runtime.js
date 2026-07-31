@@ -14,6 +14,18 @@ import { params } from "../core/state.js";
 import { getProfileDef } from "../core/profile_registry.js";
 import { scaleSimulationPreviewRgb } from "../core/sim_preview.js";
 import { dmxOutputScale } from "../dmx/dmx_output_overrides.js";
+import {
+  clampHaloRadiusToPitch,
+  clampPixelRadiusToPitch,
+  createLedHaloMaterial,
+  dmxHaloRimMultiple,
+  HALO_RIM_FACTOR,
+  isLedBusFixture,
+  ledHaloRadius,
+  minPixelPitch,
+  resolveLocalHaloScale,
+} from "./led_halo.js";
+import { fixtureModelScale } from "./fixture_model_scale.js";
 
 // ── Shared geometries ────────────────────────────────────────────────────
 const defaultShellMat = new THREE.MeshBasicMaterial({ color: 0x333333 });
@@ -33,6 +45,10 @@ baseBeamGeo.rotateX(Math.PI / 2); // Point wide end towards -Z
 // radius; at pixel scale the (6,4) facets are invisible, so a low-poly unit
 // sphere is free FPS. Module constant — never disposed.
 const emitterSphereGeo = new THREE.SphereGeometry(1, 6, 4);
+
+// HALO_RIM_FACTOR (how much wider than its bulb a DMX halo is drawn at the
+// default setting) and dmxHaloRimMultiple() live in led_halo.js — the one halo
+// recipe module — and are imported above.
 
 // Module-level scratch reused by every instance matrix/color write, so building
 // or recoloring a fixture allocates nothing per pixel (mirrors led_strand's
@@ -161,7 +177,16 @@ export class DmxFixtureRuntime {
     // LED-bus fixtures (Ango 4 pixel panels/ropes) get resize + diffusion; a
     // DMX par/bar keeps its spotlight semantics (scale → cone angle, no glow
     // toggle). One flag switches both behaviours below.
-    this._isLed = !!(fixtureDef && fixtureDef.bus === 'led');
+    this._isLed = isLedBusFixture(fixtureDef);
+    // Render exaggeration for this fixture type (fixture_model_scale.js). A
+    // uniform multiplier on everything DRAWN — housing, hitbox, emitter
+    // positions, bulb/halo radii — so a physically tiny fixture reads at ship
+    // scale without any of its proportions changing. 1 for every type that is
+    // not listed there, which is byte-identical to no scaling at all. The
+    // PHYSICAL pixel positions (pixel.localPos) are deliberately NOT scaled:
+    // the Pixelblaze model exporter and the analytic light pool sample those,
+    // and an exported model must describe the real rig, not the drawing.
+    this._modelScale = fixtureModelScale(fixtureDef);
 
     const color = config.color || '#ffaa44';
     const intensity = config.intensity || 5;
@@ -173,11 +198,12 @@ export class DmxFixtureRuntime {
     this.scene.add(this.group);
 
     // ─── Parse fixture dimensions ────────────────────────────────────
+    // Drawn dimensions: physical millimetres × the type's render scale.
     let width = 0.15, height = 0.15, depth = 0.12;
     if (fixtureDef && fixtureDef.dimensions) {
-      width = (fixtureDef.dimensions.width || 100) * 0.001;
-      height = (fixtureDef.dimensions.height || 100) * 0.001;
-      depth = (fixtureDef.dimensions.depth || 100) * 0.001;
+      width = (fixtureDef.dimensions.width || 100) * 0.001 * this._modelScale;
+      height = (fixtureDef.dimensions.height || 100) * 0.001 * this._modelScale;
+      depth = (fixtureDef.dimensions.depth || 100) * 0.001 * this._modelScale;
     }
     this._fixtureWidth = width;
     this._fixtureHeight = height;
@@ -210,22 +236,26 @@ export class DmxFixtureRuntime {
       if (fixtureDef && fixtureDef.shell) {
         this.shellMat = defaultShellMat.clone();
         this.shellMat.color.set(fixtureDef.shell.color || '#111111');
+        // The housing is drawn at the type's render scale — the same uniform
+        // multiplier the pixels below get, so the body keeps its exact
+        // relationship to the heads it carries.
+        const mm = 0.001 * this._modelScale;
         let shellGeo;
         if (fixtureDef.shell.type === 'cylinder') {
           const d = fixtureDef.shell.dimensions;
-          const r = (d[0] / 2) * 0.001;
-          const h = d[2] * 0.001;
+          const r = (d[0] / 2) * mm;
+          const h = d[2] * mm;
           shellGeo = new THREE.CylinderGeometry(r, r, h, 16);
           shellGeo.rotateX(Math.PI / 2);
         } else {
           const d = fixtureDef.shell.dimensions;
-          shellGeo = new THREE.BoxGeometry(d[0] * 0.001, d[1] * 0.001, d[2] * 0.001);
+          shellGeo = new THREE.BoxGeometry(d[0] * mm, d[1] * mm, d[2] * mm);
         }
         this.shell = new THREE.Mesh(shellGeo, this.shellMat);
         if (fixtureDef.shell.offset) {
           const o = fixtureDef.shell.offset;
           // Negate Z to match the dot coordinate convention (-Z = forward/emitting direction)
-          this.shell.position.set(o[0] * 0.001, o[1] * 0.001, -o[2] * 0.001);
+          this.shell.position.set(o[0] * mm, o[1] * mm, -o[2] * mm);
         }
         this.group.add(this.shell);
       } else {
@@ -268,10 +298,11 @@ export class DmxFixtureRuntime {
     this._emitterRepresentative = emitterMode === 'fixture_representative';
     this._coneRepresentative = coneMode === 'fixture';
 
-    // Per-fixture instanced meshes (assigned below). haloInst is the DMX
-    // sphere-halo batch; LED-bus fixtures keep per-pixel Sprite halos (the
-    // frosted-diffuser look + per-fixture diffusion toggle), so haloInst stays
-    // null for them and each pixel carries its own p.halo Sprite.
+    // Per-fixture instanced meshes (assigned below). haloInst is the sphere-halo
+    // batch and EVERY fixture gets one — DMX par/bar and LED-bus alike. LED-bus
+    // fixtures ALSO carry per-pixel diffusion Sprites (p.halo), which are an
+    // opt-in frosted-diffuser layer ON TOP of the halo, not a replacement for it
+    // (they used to be the replacement — that is why the TE Sign had no halo).
     this.bulbInst = null;
     this.haloInst = null;
     this.coneInst = null;
@@ -279,8 +310,12 @@ export class DmxFixtureRuntime {
     this.haloMat = null;
     this.coneMat = null;
 
-    // ── Gather per-pixel data (localPos + sizes). localPos is ALWAYS needed
-    // (cones + light_pool sample it) even when no emitter renders.
+    // ── Gather per-pixel data (localPos + renderPos + sizes). localPos is
+    // ALWAYS needed (light_pool + the Pixelblaze exporter sample it) even when
+    // no emitter renders: it is the PHYSICAL position from the model YAML.
+    // renderPos is the position this pixel is DRAWN at — localPos × the type's
+    // render scale — and is what every emitter/cone matrix and the diffusor
+    // panel use. They are the same object-for-value at scale 1.
     if (hasPixelDef) {
       fixtureDef.pixels.forEach((pixelModel) => {
         let avgX = 0, avgY = 0, avgZ = 0;
@@ -296,13 +331,22 @@ export class DmxFixtureRuntime {
         let pixelSize = 0;
         if (typeof pixelModel.size === 'number') pixelSize = pixelModel.size;
         else if (Array.isArray(pixelModel.size)) pixelSize = Math.max(...pixelModel.size);
-        const bulbSize = Math.max(pixelSize * 0.001, 0.02);
+        // The render scale is applied AFTER the 0.02 minimum-visible-bulb
+        // floor, so "≥ N× bigger" is true of the size actually drawn: an 18 mm
+        // vintage head is floored to 0.02 and then drawn at 0.02 × N, not
+        // floored back down to 0.02 again.
+        const bulbSize = Math.max(pixelSize * 0.001, 0.02) * this._modelScale;
         this.pixels.push({
           model: pixelModel,
           localPos: new THREE.Vector3(avgX, avgY, avgZ),
+          renderPos: new THREE.Vector3(avgX, avgY, avgZ).multiplyScalar(this._modelScale),
           color: new THREE.Color(color),
           bulbSize,
-          haloSize: bulbSize * 1.8,
+          // Descriptive: the rim radius at unit settings. The radius actually
+          // DRAWN is computed in _rebuildBulbHaloMatrices as a rim multiple of
+          // the drawn bulb — a rim sized off a slider the bulb doesn't share is
+          // exactly how DMX halos ended up hidden inside their own cores.
+          haloSize: bulbSize * HALO_RIM_FACTOR,
           haloBaseSize: bulbSize * LED_GLOW_SPAN,
           halo: null, haloMat: null,
         });
@@ -314,18 +358,34 @@ export class DmxFixtureRuntime {
       this.pixels.push({
         model: null,
         localPos: new THREE.Vector3(0, 0, 0),
+        renderPos: new THREE.Vector3(0, 0, 0),
         color: new THREE.Color(color),
-        bulbSize: 0.5,
-        haloSize: 0.8,
-        haloBaseSize: 0.5 * LED_GLOW_SPAN,
+        bulbSize: 0.5 * this._modelScale,
+        haloSize: 0.8 * this._modelScale,
+        haloBaseSize: 0.5 * this._modelScale * LED_GLOW_SPAN,
         halo: null, haloMat: null,
       });
     }
 
     const pixelCount = this.pixels.length;
 
-    // ── Instanced bulb + sphere-halo. LED-bus fixtures use per-pixel Sprites
-    // for the halo (built below) instead of the sphere InstancedMesh.
+    // Spacing between this fixture's closest two pixels, in world units. A
+    // property of the MODEL, so it is measured once here and never re-measured
+    // when a size slider moves. It is the ceiling the bulb radius is bounded by
+    // (clampPixelRadiusToPitch) so "Global Pixel Size" can never grow the opaque
+    // cores until they fuse the fixture into one blob — the Vintage LED's six
+    // heads on a 75 mm pitch are the case that motivated it. 0 for a
+    // single-pixel fixture (a par head): nothing to fuse with, no ceiling.
+    //
+    // Measured on renderPos, i.e. the spacing as DRAWN: the ceiling bounds a
+    // drawn radius, so it must be expressed in the same (scaled) space or a
+    // render-exaggerated fixture would have its bigger bulbs clamped straight
+    // back to the unscaled ceiling. At render scale 1 this is the physical
+    // pitch, unchanged.
+    this._minPixelPitch = minPixelPitch(this.pixels.map((p) => p.renderPos));
+
+    // ── Instanced bulb + sphere-halo. EVERY fixture builds both; LED-bus
+    // fixtures additionally build the per-pixel diffusion Sprites.
     if (this._buildEmitters && pixelCount > 0) {
       // Material color stays white; the real per-pixel color rides in
       // instanceColor (white × instanceColor = the pixel color). depthTest:false
@@ -338,11 +398,24 @@ export class DmxFixtureRuntime {
       this.bulbInst.frustumCulled = false;
       this.group.add(this.bulbInst);
 
+      // Sphere halo: additive BackSide rim (led_halo.js — the same recipe an
+      // LED strand uses; material white so instanceColor carries the true
+      // per-pixel color). Built for EVERY fixture type, DMX and LED-bus alike:
+      // the halo is how a lit pixel reads at night, so no fixture class gets to
+      // opt out. One InstancedMesh regardless of pixel count (perf rule: never
+      // per-pixel objects).
+      this.haloMat = createLedHaloMaterial();
+      this.haloInst = new THREE.InstancedMesh(emitterSphereGeo, this.haloMat, pixelCount);
+      this.haloInst.frustumCulled = false;
+      this.group.add(this.haloInst);
+
       if (this._isLed) {
         // LED diffusion glow: camera-facing Sprites with the shared radial
-        // gradient (unchanged look). Kept per-pixel — Sprites don't instance,
-        // and the LED-bus pixel count is small. applyDiffusion() drives their
-        // visibility / scale / opacity per the per-fixture diffusion toggle.
+        // gradient (unchanged look), layered ON TOP of the halo above. Kept
+        // per-pixel — Sprites don't instance, and the LED-bus pixel count is
+        // small. applyDiffusion() drives their visibility / scale / opacity per
+        // the per-fixture diffusion toggle; with diffusion OFF the fixture still
+        // has its halo.
         this.pixels.forEach((p) => {
           const haloMat = new THREE.SpriteMaterial({
             map: getLedGlowTexture(), color, transparent: true,
@@ -350,21 +423,11 @@ export class DmxFixtureRuntime {
             blending: THREE.AdditiveBlending, depthWrite: false,
           });
           const halo = new THREE.Sprite(haloMat);
-          halo.position.copy(p.localPos);
+          halo.position.copy(p.renderPos);
           halo.scale.setScalar(p.haloBaseSize * (params.globalHaloScale || 1.0));
           this.group.add(halo);
           p.halo = halo; p.haloMat = haloMat;
         });
-      } else {
-        // DMX sphere halo: additive BackSide rim (legacy recipe, byte-for-byte;
-        // material white so instanceColor carries the true per-pixel color).
-        this.haloMat = new THREE.MeshBasicMaterial({
-          color: 0xffffff, transparent: true, opacity: 0.2,
-          blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
-        });
-        this.haloInst = new THREE.InstancedMesh(emitterSphereGeo, this.haloMat, pixelCount);
-        this.haloInst.frustumCulled = false;
-        this.group.add(this.haloInst);
       }
     }
 
@@ -403,10 +466,10 @@ export class DmxFixtureRuntime {
     // Pixel bounds in group-local space (works for grid / line / arbitrary map).
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, sumZ = 0, n = 0;
     for (const p of this.pixels) {
-      if (!p.localPos) continue;
-      minX = Math.min(minX, p.localPos.x); maxX = Math.max(maxX, p.localPos.x);
-      minY = Math.min(minY, p.localPos.y); maxY = Math.max(maxY, p.localPos.y);
-      sumZ += p.localPos.z; n++;
+      if (!p.renderPos) continue;
+      minX = Math.min(minX, p.renderPos.x); maxX = Math.max(maxX, p.renderPos.x);
+      minY = Math.min(minY, p.renderPos.y); maxY = Math.max(maxY, p.renderPos.y);
+      sumZ += p.renderPos.z; n++;
     }
     if (n === 0) return; // nothing to diffuse
 
@@ -477,13 +540,13 @@ export class DmxFixtureRuntime {
     // toward white so the surface reads as diffused pastel, not raw neon.
     ctx.globalCompositeOperation = 'lighter';
     for (const p of this.pixels) {
-      if (!p.localPos || !p.color) continue;
+      if (!p.renderPos || !p.color) continue;
       const c = p.color;
       const r = Math.round((c.r * (1 - SCREEN_MILK) + SCREEN_MILK) * 255);
       const g = Math.round((c.g * (1 - SCREEN_MILK) + SCREEN_MILK) * 255);
       const b = Math.round((c.b * (1 - SCREEN_MILK) + SCREEN_MILK) * 255);
-      const cx = (p.localPos.x - scr.originX) * pxPerMeter;
-      const cy = ch - (p.localPos.y - scr.originY) * pxPerMeter; // canvas Y is flipped
+      const cx = (p.renderPos.x - scr.originX) * pxPerMeter;
+      const cy = ch - (p.renderPos.y - scr.originY) * pxPerMeter; // canvas Y is flipped
       const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
       grad.addColorStop(0, `rgba(${r},${g},${b},${SCREEN_CORE_ALPHA})`);
       grad.addColorStop(0.6, `rgba(${r},${g},${b},${SCREEN_CORE_ALPHA * 0.35})`);
@@ -552,24 +615,79 @@ export class DmxFixtureRuntime {
   _rebuildBulbHaloMatrices(pixelScale = params.globalPixelScale || 1.0,
                            haloScale = params.globalHaloScale || 1.0) {
     const rep = this._emitterRepresentative;
+    // An LED-bus fixture sizes its halo from the GLOBAL LED halo settings
+    // (params.ledHaloSize × the global halo scale) — the SAME radius an LED
+    // strand gets — instead of from the pixel's physical size. A TE Sign puck is
+    // 12 mm, so the physical rule gave it a halo ~7× smaller than the strand
+    // beside it: technically present, visually absent. A DMX par/bar keeps the
+    // physical rule (its halo is a rim around a real fixture head).
+    // Per-fixture LOCAL halo multiplier — the third factor in
+    //   effective halo = class base × Global Halo Size × local
+    // (led_halo.js). Read from the config on every rebuild, so the GUI field
+    // and a propagated group edit both take effect on the next updateScales /
+    // syncFromConfig with no rebuild of the fixture. Absent ⇒ 1.0 ⇒ every
+    // pre-existing scene renders exactly as it did.
+    const localHalo = resolveLocalHaloScale(this.config, this.config.name);
+    const ledHalo = this._isLed ? ledHaloRadius(haloScale) * localHalo : 0;
     for (let i = 0; i < this.pixels.length; i++) {
       const p = this.pixels[i];
       // Representative collapses the fixture to a single big instance at the
       // group origin; pixel mode renders every pixel at its own position.
       const renders = rep ? i === 0 : true;
       const repScale = rep ? 6.0 : 1.0;
-      const px = rep ? 0 : p.localPos.x;
-      const py = rep ? 0 : p.localPos.y;
-      const pz = rep ? 0 : p.localPos.z;
+      const px = rep ? 0 : p.renderPos.x;
+      const py = rep ? 0 : p.renderPos.y;
+      const pz = rep ? 0 : p.renderPos.z;
+      // The radius the opaque core is ACTUALLY drawn at: settings-derived, then
+      // bounded by this fixture's own pixel spacing so the cores can never
+      // overlap into a fused blob (see clampPixelRadiusToPitch). Representative
+      // mode is exempt: it draws ONE deliberately oversized instance standing
+      // in for the whole fixture, so there is no neighbour to fuse with.
+      // Computed once — the halo below is a rim around THIS number, which is
+      // the only way a rim can be guaranteed to sit outside its own core.
+      const wantedBulb = p.bulbSize * repScale * pixelScale;
+      const bulbRadius = rep ? wantedBulb : clampPixelRadiusToPitch(wantedBulb, this._minPixelPitch);
       if (this.bulbInst) {
         _instDummy.position.set(px, py, pz);
-        _instDummy.scale.setScalar(renders ? p.bulbSize * repScale * pixelScale : 0);
+        _instDummy.scale.setScalar(renders ? bulbRadius : 0);
         _instDummy.updateMatrix();
         this.bulbInst.setMatrixAt(i, _instDummy.matrix);
       }
       if (this.haloInst) {
+        // LED-bus: the shared LED halo radius, untouched — "every LED fixture
+        // abides by the halo settings" (led_halo.js) owns that number and a
+        // sign's halos are MEANT to merge into one luminous sheet.
+        //
+        // DMX bus: a rim around the bulb as DRAWN, widened by the same one
+        // global halo control (dmxHaloRimMultiple — see led_halo.js for why it
+        // is a rim MULTIPLE and not a second radius). This is what makes "all
+        // DMX fixtures have the halo" true in the picture and not just in the
+        // scene graph: the multiple is >= 1 for any setting, so the rim can
+        // never sink inside the core the way `physicalBulb × 1.8 × haloScale`
+        // did whenever the pixel slider outran the halo slider.
+        //
+        // Bounded by the HALO's own pitch ceiling (clampHaloRadiusToPitch), not
+        // the opaque bulb's. Sharing the bulb's ceiling pinned the rim at
+        // exactly HALO_RIM_FACTOR the moment the bulb hit its own cap — which a
+        // multi-pixel fixture does at any normal pixel-size setting — so the
+        // global halo knob went dead above haloScale 1.0 on the vintage lights
+        // and the bars while the single-pixel pars kept moving (operator,
+        // 2026-07-30: "none of the DMX lights"). Additive rims are ALLOWED to
+        // overlap — the LED strands he points to as correct already do — so the
+        // halo ceiling is looser; it still stops a dense run smearing without
+        // limit.
+        // Three factors: the drawn bulb (class base) × the global rim multiple
+        // × this fixture's local scale. The pitch ceiling below is applied
+        // AFTER the local multiplier, so a local override can widen a rim but
+        // can never reopen the smear hole on a dense fixture.
+        const dmxHalo = bulbRadius * dmxHaloRimMultiple(haloScale) * localHalo;
+        const radius = this._isLed
+          ? ledHalo * repScale
+          : (rep
+            ? dmxHalo
+            : clampHaloRadiusToPitch(dmxHalo, this._minPixelPitch));
         _instDummy.position.set(px, py, pz);
-        _instDummy.scale.setScalar(renders ? p.haloSize * repScale * haloScale : 0);
+        _instDummy.scale.setScalar(renders ? radius : 0);
         _instDummy.updateMatrix();
         this.haloInst.setMatrixAt(i, _instDummy.matrix);
       }
@@ -591,7 +709,7 @@ export class DmxFixtureRuntime {
     for (let i = 0; i < this.pixels.length; i++) {
       const p = this.pixels[i];
       const renders = rep ? i === 0 : true;
-      _instDummy.position.copy(p.localPos);
+      _instDummy.position.copy(p.renderPos);
       _instDummy.quaternion.identity();
       _instDummy.scale.set(renders ? radius : 0, renders ? radius : 0, renders ? coneLen : 0);
       _instDummy.updateMatrix();
@@ -601,12 +719,12 @@ export class DmxFixtureRuntime {
   }
 
   // Per-fixture LED diffusion — a soft additive glow that lets neighbouring
-  // pixels bleed into each other (a frosted-diffuser look). It reuses the halo
-  // meshes each pixel already owns: ON enlarges + shows them so they overlap
-  // and blend; OFF hides them so the fixture renders as crisp dots with zero
-  // halo overdraw. Opt-in PER FIXTURE, so the GPU cost is isolated — a fixture
-  // that doesn't need it pays nothing, and each fixture's halos are independent
-  // (no shared/global buffer to serialize on). No-op for DMX fixtures.
+  // pixels bleed into each other (a frosted-diffuser look). It drives the
+  // per-pixel Sprites, which sit ON TOP of the fixture's instanced halo: ON
+  // enlarges + shows them so they overlap and blend; OFF hides them and the
+  // fixture still renders its halo like every other LED fixture. Opt-in PER
+  // FIXTURE, so the GPU cost is isolated — a fixture that doesn't need it pays
+  // nothing. No-op for DMX fixtures (they have no diffusion Sprites).
   applyDiffusion() {
     if (!this._isLed) return;
     const on = !!this.config.diffusion;
@@ -652,6 +770,15 @@ export class DmxFixtureRuntime {
         clampScale(this.config.scaleZ)
       );
     }
+    // Bulb + halo matrices are config-derived too — `config.haloScale` (the
+    // per-fixture local halo multiplier) is read in _rebuildBulbHaloMatrices.
+    // syncFromConfig IS the "this fixture's config changed, re-read it" entry
+    // point (it already refreshes cone matrices via updateVisualsFromHitbox),
+    // so the emitter radii have to be refreshed here as well or a local halo
+    // edit would sit in the config and never reach the screen. Discrete edit
+    // events only — the drag paths call updateVisualsFromHitbox directly, so
+    // this adds no per-frame work.
+    this._rebuildBulbHaloMatrices();
     this.updateVisualsFromHitbox();
   }
 

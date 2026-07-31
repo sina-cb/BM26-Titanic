@@ -244,5 +244,9 @@ export function render3D(index, x, y, z) {
   // Gated by briGain so the white highlight also tracks micLow (no audio-free add).
   var outW = clamp01((crest * 0.3 + glint * 0.6) * briGain);
 
-  rgbwau(clamp01(r), clamp01(g), clamp01(b), outW, 0.0, outU);
+  // LANE MATCH (w == a): the bare W emitter reads cold and the bare A emitter
+  // reads yellow — matched W+A is the ship's warm white, and it is what the LED
+  // strands already render (they fold amber into RGB). Convention:
+  // docs/MARSIN_ENGINE_PATTERNS.md -> "White handling: the w == a convention".
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), outW, outW, outU);
 }

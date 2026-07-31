@@ -84,6 +84,36 @@ looks:
     target:
       channel: deck
       id: null
+  ambient:
+    playlist: ambient
+    autopilot:
+      active: true
+      delay_s: 90
+      shuffle: true
+    palette: deep_sea
+    target:
+      channel: deck
+      id: null
+  party_high:
+    playlist: party_high
+    autopilot:
+      active: true
+      delay_s: 30
+      shuffle: true
+    palette: bass_drop
+    target:
+      channel: deck
+      id: null
+  party_low:
+    playlist: party_low
+    autopilot:
+      active: true
+      delay_s: 45
+      shuffle: true
+    palette: ultraviolet
+    target:
+      channel: deck
+      id: null
   temple:
     playlist: default
     palette: aurora
@@ -92,6 +122,11 @@ looks:
     target:
       channel: deck
       id: null
+defaultCue:
+  label: Ambient program
+  action:
+    type: look
+    look: ambient
 cues:
   - id: c_visibility_on
     label: Exterior up at golden hour
@@ -121,27 +156,20 @@ cues:
     kind: ambient
     days: all
   - id: c_mood_to_party
-    label: 'Follow the DJ: calm -> party'
+    label: 'Party session: sustained real music -> party_high'
     enabled: true
     catchUp: true
     trigger:
       type: mood
       from: calm
       to: party
-      minDwellSec: 20
-      cooldownSec: 300
-      whenPhase: party_night
+      minDwellSec: 120
+      cooldownSec: 120
     action:
-      type: playlist
-      name: default
-      target:
-        channel: deck
-        id: null
-      autopilot:
-        active: true
-        delay_s: 30
-        shuffle: true
+      type: look
+      look: party_high
     kind: mood
+    durationMin: 12
     days: all
   - id: c_sunrise
     label: Sunrise wind-down

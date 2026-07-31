@@ -97,6 +97,14 @@ const EXPECTED_AUDIO_ENTRIES = [
   { key: 'audioPhrasePhase', label: 'Audio · Phrase Phase', ...LIVE({ broadcastHz: 15, oscAddress: '/marsin/audio/phrasephase', sharedFnName: 'audioPhrasePhase' }) },
   { key: 'audioPhraseBoundary', label: 'Audio · Phrase Boundary', ...LIVE({ broadcastHz: 15, oscAddress: '/marsin/audio/phraseboundary', sharedFnName: 'audioPhraseBoundary' }) },
   { key: 'audioDropCountdown', label: 'Audio · Drop Countdown', ...LIVE({ broadcastHz: 30, oscAddress: '/marsin/audio/dropcountdown', sharedFnName: 'audioDropCountdown' }) },
+  // party_detection (R1, report 20260725_10): the hard party gate + the five
+  // metrics it decides on (previously computed and thrown away).
+  { key: 'audioPartyStrong', label: 'Audio · Party (strong)', ...LIVE({ broadcastHz: 5, oscAddress: '/marsin/audio/partystrong', sharedFnName: 'audioPartyStrong' }) },
+  { key: 'audioLoudness', label: 'Audio · Loudness', ...LIVE({ broadcastHz: 10, oscAddress: '/marsin/audio/loudness', sharedFnName: 'audioLoudness' }) },
+  { key: 'audioKickRate', label: 'Audio · Kick Rate', ...LIVE({ range: [0, 8], broadcastHz: 5, oscAddress: '/marsin/audio/kickrate', sharedFnName: 'audioKickRate' }) },
+  { key: 'audioKickReg', label: 'Audio · Kick Regularity', ...LIVE({ broadcastHz: 5, oscAddress: '/marsin/audio/kickreg', sharedFnName: 'audioKickReg' }) },
+  { key: 'audioBpmLocked', label: 'Audio · BPM Locked', ...LIVE({ broadcastHz: 5, oscAddress: '/marsin/audio/bpmlocked', sharedFnName: 'audioBpmLocked' }) },
+  { key: 'audioBpmConf', label: 'Audio · BPM Conf', ...LIVE({ broadcastHz: 5, oscAddress: '/marsin/audio/bpmconf', sharedFnName: 'audioBpmConf' }) },
   // analyzer_features (slot 3): per-band onset RAW mirrors + shaped pulses,
   // then sub-bass raw + chest-hit pulse. All live, [0,1], no OSC inbound.
   { key: 'micOnsetLowRaw', label: 'Mic · Onset Low (raw)', ...LIVE({ broadcastHz: 30, sharedFnName: 'micOnsetLowRaw' }) },

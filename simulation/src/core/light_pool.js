@@ -12,6 +12,7 @@ import * as THREE from 'three';
 import { scene, camera, modelRadius, renderer, params } from './state.js';
 import { getProfileDef } from './profile_registry.js';
 import { isEffectsOnlyFixture } from '../dmx/view_registry.js';
+import { emitsVisibleLight } from './analytic_light_gate.js';
 
 // ── Pool Configuration ──────────────────────────────────────────────────
 const _urlParams = new URLSearchParams(window.location.search);
@@ -40,6 +41,9 @@ const REQUESTED_POOL_SIZE = Number.isFinite(_requestedPoolSizeRaw)
 // ── Pool State ──────────────────────────────────────────────────────────
 let _pool = [];           // Array of { light: THREE.SpotLight, target: THREE.Object3D, active: bool }
 let _initialized = false;
+// How many pixels the last collect pass skipped as dark. Diagnostic only — it
+// is the number the 20260725_82 leak would have shown as wasted pool slots.
+let _lastSkippedDark = 0;
 let _effectivePoolSize = REQUESTED_POOL_SIZE;
 const _frustum = new THREE.Frustum();
 const _projScreenMatrix = new THREE.Matrix4();
@@ -423,6 +427,7 @@ export function initLightPool() {
  */
 function _collectLightRequests() {
   const requests = [];
+  let skippedDark = 0;
   const profile = params.lightingProfile || 'edit';
   const profileDef = getProfileDef(profile);
 
@@ -475,6 +480,11 @@ function _collectLightRequests() {
           config.color
         );
 
+        // A black pixel casts no light — it must not hold a pool slot that a
+        // pixel which IS emitting could use. Recomputed every frame, so the
+        // instant this pixel lights up it competes again on distance as before.
+        if (!emitsVisibleLight(liveColor)) { skippedDark++; continue; }
+
         requests.push({
           worldPos,
           worldDir,
@@ -497,6 +507,8 @@ function _collectLightRequests() {
         config.color
       );
 
+      if (!emitsVisibleLight(liveColor)) { skippedDark++; continue; }
+
       requests.push({
         worldPos,
         worldDir,
@@ -509,6 +521,7 @@ function _collectLightRequests() {
     }
   }
 
+  _lastSkippedDark = skippedDark;
   return requests;
 }
 
@@ -567,7 +580,7 @@ export function updateLightPool() {
     window._lightPoolAssignLog = true;
     const radius = modelRadius || 50;
     const iScale = getSpotlightIntensityScale(radius);
-    console.log(`[LightPool] Requests: total=${requests.length}, visible=${visible.length}, intensityScale=${iScale.toFixed(2)}, activeLimit=${getSafeActiveSpotlightLimit()}, masterExposure=${getSafeMasterExposure().toFixed(2)}`);
+    console.log(`[LightPool] Requests: total=${requests.length}, visible=${visible.length}, skippedDark=${_lastSkippedDark}, intensityScale=${iScale.toFixed(2)}, activeLimit=${getSafeActiveSpotlightLimit()}, masterExposure=${getSafeMasterExposure().toFixed(2)}`);
     if (requests.length > 0) {
       const r = requests[0];
       console.log(`[LightPool] Sample request: pos=(${r.worldPos.x.toFixed(1)},${r.worldPos.y.toFixed(1)},${r.worldPos.z.toFixed(1)}), intensity=${r.intensity}, color=rgb(${r.color.r.toFixed(2)},${r.color.g.toFixed(2)},${r.color.b.toFixed(2)})`);

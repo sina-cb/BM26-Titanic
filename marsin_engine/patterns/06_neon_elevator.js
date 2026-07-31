@@ -337,5 +337,11 @@ export function render3D(index, wx, wy, wz) {
   // original mezzanine impact, kept as a smaller accent under the vintage blinder.
   if (isPar && arrivalPulse > 0.0) outW = clamp01(arrivalPulse * kick * 0.6 * gain);
 
+  // LANE MATCH (w == a): the bare W emitter reads cold and the bare A emitter
+  // reads yellow — matched W+A is the ship's warm white, and it is what the LED
+  // strands already render (they fold amber into RGB). Convention:
+  // docs/MARSIN_ENGINE_PATTERNS.md -> "White handling: the w == a convention".
+  outA = outW;
+
   rgbwau(clamp01(r), clamp01(g), clamp01(b), outW, outA, 0.0);
 }

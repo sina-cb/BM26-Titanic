@@ -231,7 +231,11 @@ export function render3D(index, x, y, z) {
   // ── SIGNATURE BLINDER: vintage heads (fId 5-6) pop W hard on the big kick ──
   if (fixtureId == 5 || fixtureId == 6) {
     var wch = bigKick * (0.55 + 0.45 * lubdub);
-    rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(wch), 0.0, 0.0);
+  // LANE MATCH (w == a): the bare W emitter reads cold and the bare A emitter
+  // reads yellow — matched W+A is the ship's warm white, and it is what the LED
+  // strands already render (they fold amber into RGB). Convention:
+  // docs/MARSIN_ENGINE_PATTERNS.md -> "White handling: the w == a convention".
+    rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(wch), clamp01(wch), 0.0);
     return;
   }
 

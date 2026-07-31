@@ -45,6 +45,7 @@
 import { AudioAnalyzer } from '../audio/analyzer/audio_analyzer.js';
 import { fillFrame, SYNTHS } from '../audio/synth/test_synths.js';
 import { createWasmRuntime } from '../lib/marsin_wasm_runtime.js';
+import { buildFixtureTypeIds, fixtureTypeId, injectFixtureConstants } from '../lib/fixture_type_constants.js';
 import { pathToFileURL, fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
@@ -123,8 +124,29 @@ for (const f of REQUIRED_PIXEL_FIELDS) {
 const px = model.pixels; const N = px.length;
 const rt = await createWasmRuntime(N);
 rt.setCoords(px.map(p => ({ nx: p.nx, ny: p.ny, nz: p.nz })));
-rt.setPixelMeta(px.map(p => ({ controllerId: p.cId || 0, sectionId: p.sId || 0, fixtureId: p.fId || 0, viewMask: p.vMask || 0 })));
-const r = rt.compile(fs.readFileSync(patternPath, 'utf8'));
+// Meta lanes must match what model_loader.js packs for the LIVE engine, or a
+// pattern that branches on `fixtureType` / `pixelLocalIndex` renders one way
+// here and another way on the rig. fixtureTypeId comes from the SAME canonical
+// registry the engine uses (lib/fixture_type_constants.js).
+rt.setPixelMeta(px.map(p => ({
+  controllerId: p.cId || 0,
+  sectionId: p.sId || 0,
+  fixtureId: p.fId || 0,
+  viewMask: p.vMask || 0,
+  fixtureTypeId: fixtureTypeId(p.fixtureType),
+  pixelLocalIndex: p.localIndex || 0,
+  viewMaskHi: p.vMaskHi || 0,
+})));
+// FIX_* constant injection — the same pass wasm_host.compile() runs, so
+// `fixtureType == FIX_PAR` compiles offline exactly as it does live. An
+// unknown / not-present-on-this-model FIX_* throws (codex P0: loud, never a
+// silent no-match). MASK_* injection is NOT mirrored here — a MASK_*-using
+// pattern still fails to compile in the harness, loudly.
+let harnessSource;
+try {
+  harnessSource = injectFixtureConstants(fs.readFileSync(patternPath, 'utf8'), buildFixtureTypeIds(px));
+} catch (err) { console.log('COMPILE_FAIL: ' + err.message); process.exit(2); }
+const r = rt.compile(harnessSource);
 if (!r.ok) { console.log('COMPILE_FAIL: ' + r.error); process.exit(2); }
 console.log('COMPILE_OK');
 const exps = rt.getExports();

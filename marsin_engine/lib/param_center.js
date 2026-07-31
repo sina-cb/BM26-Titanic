@@ -569,6 +569,21 @@ export class ParamCenter {
     return !!this._registryByKey[key];
   }
 
+  /**
+   * The CPC revision at which `key` was last WRITTEN (0 = never written since
+   * boot). Every write bumps it — including a write of the SAME value — so a
+   * caller can tell "the producer is still publishing" from "the producer died
+   * and this value is frozen". That distinction is what the timeline's mood
+   * staleness guard is built on (a frozen `audioPartyStrong = 1` would otherwise
+   * pin the rig in party mode forever). Returns null for an unknown key.
+   * @param {string} key
+   * @returns {number|null}
+   */
+  getLastRevision(key) {
+    const slot = this._store[key];
+    return slot ? slot.lastRevision : null;
+  }
+
   /** Whether `key` was registered at runtime via registerDynamicLiveParam. */
   isDynamicLiveParam(key) {
     const e = this._registryByKey[key];

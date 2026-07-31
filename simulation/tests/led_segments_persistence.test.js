@@ -51,7 +51,10 @@ function boundLedRegistry(strandName, universe, ledCount, nextUniverse = univers
       type: CONTROLLER_TYPE_LED,
       device: { vendor: 'marsinled', controllerId: 'abc123' }, // makes it BOUND
       led: normalizeLedConfig({ order: 'RGBW' }, 'LED_CTRL'), // RGBW → stride 4
-      ports: [{ port: 1, universe, chain: [strandName] }],
+      // `output` = the physical board output this port drives (report
+      // 20260725_70). createControllerRegistry materializes it; this hand-built
+      // registry declares it explicitly (ledOutputIndexForPort refuses to guess).
+      ports: [{ port: 1, output: 1, universe, chain: [strandName] }],
     }],
   };
 }

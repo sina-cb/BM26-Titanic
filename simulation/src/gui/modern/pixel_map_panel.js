@@ -15,7 +15,7 @@
 
 import { html } from 'htm/preact';
 import { render } from 'preact';
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { effect } from '@preact/signals';
 
 import { params } from '../../core/state.js';
@@ -25,7 +25,11 @@ import {
   store, showPixelMap, registerPixelMapGlobals,
   loadViewsFromParams, startPixelMapDataPlane, buildMultiviewDeps,
   addBlankViewOp, duplicateViewOp, removeViewOp, renameViewOp,
+  setPanelOption, setViewTypeSize, resetViewToDefault, hasShippedDefault,
+  getViewFraming, clearViewFraming, clearViewOffsets, movedCount,
 } from '../pixel_map/pixel_map_store.js';
+import { findView, resolveView } from '../pixel_map/pixel_map_views.js';
+import { installPixelMapPersistence } from '../pixel_map/pixel_map_persist.js';
 
 const PANEL_ID = 'pixel-map-panel';
 
@@ -52,7 +56,7 @@ function StatusStrip() {
       <span class="pm-status-txt">${hover
         ? `${hover.name}  ${hover.hex}`
         : (store.mode.value === 'edit'
-            ? 'EDIT — click a fixture, drag to move · Q/E rotate · arrows nudge · shift multi-select · dbl-click panel to maximize'
+            ? 'EDIT — click select · shift+click add · RIGHT-click selects the GROUP (shift adds) · drag to move · arrows nudge · Esc clears'
             : 'VIEW — drag to pan · wheel to zoom · \\ / - split · Tab focus · [ ] cycle view · z zoom pane')}</span>
       <span class="pm-status-right">
         <span class="pm-zoom">${store.mode.value.toUpperCase()}</span>
@@ -61,9 +65,134 @@ function StatusStrip() {
   `;
 }
 
+// ── Per-view adjustment inspector (report 20260725_54) ─────────────────────
+// The shipped defaults are a STARTING POINT. This exposes the knobs the view
+// schema already validates — framing, panel rotate / gap compression / LED
+// pitch, per-view glyph sizes — so the operator reshapes a view himself instead
+// of asking an agent for each tweak. Every control writes through a validated
+// store op; anything illegal throws and lands in the toast, never half-applied.
+
+/** Fixture types currently drawn by a view, for the glyph-size rows. */
+function typesInView(viewId) {
+  const topo = store.list ? { clusters: store.clusters, list: store.list } : null;
+  if (!topo) return [];
+  const v = findView(store.views, viewId);
+  if (!v) return [];
+  const seen = new Set();
+  try {
+    const r = resolveView(v, topo.clusters, topo.list, { viewRegistry: store.viewRegistry });
+    for (const p of r.panels) for (const c of (p.clusters || [])) seen.add(c.fixtureType);
+  } catch { /* a broken view still shows its other controls */ }
+  return [...seen].sort();
+}
+
+function Row({ label, hint, children }) {
+  return html`
+    <div class="pm-adj-row">
+      <label class="pm-adj-label" title=${hint || ''}>${label}</label>
+      <div class="pm-adj-ctl">${children}</div>
+    </div>`;
+}
+
+function PanelAdjust({ view, panel, guard }) {
+  const rot = panel.rotate || 0;
+  const comp = panel.compress;
+  const pitch = panel.expandPitch || {};
+  const spatial = panel.layout === 'spatial';
+  const projected = spatial || panel.layout === 'planar';
+  return html`
+    <div class="pm-adj-panel">
+      <div class="pm-adj-panel-head">
+        <code>${panel.id}</code>
+        <span class="pm-adj-dim">${panel.label || ''} · ${panel.layout}${panel.projection ? ` · ${panel.projection}` : ''}</span>
+      </div>
+
+      ${projected && html`
+        <${Row} label="Rotate" hint="Quarter turns, counter-clockwise. Re-orients the whole projection; no pixel moves relative to another.">
+          <select onChange=${(e) => guard(() => setPanelOption(view.id, panel.id, 'rotate',
+              Number(e.target.value) === 0 ? undefined : Number(e.target.value)))}>
+            ${[0, 90, 180, 270].map((d) => html`<option value=${d} selected=${d === rot}>${d}°</option>`)}
+          </select>
+        <//>`}
+
+      ${spatial && html`
+        <${Row} label="Close the gaps" hint="Collapse empty bands wider than the threshold down to the gap size. Within a side, every distance is preserved exactly — only the space BETWEEN sides shrinks.">
+          <input type="checkbox" checked=${!!comp}
+                 onChange=${(e) => guard(() => setPanelOption(view.id, panel.id, 'compress',
+                    e.target.checked ? { minWorldGap: 5, gapWorld: 4 } : undefined))} />
+          ${comp && html`
+            <span class="pm-adj-inline">
+              gap <input class="pm-adj-num" type="number" step="0.5" min="0" max=${comp.minWorldGap - 0.1} value=${comp.gapWorld}
+                    onChange=${(e) => guard(() => setPanelOption(view.id, panel.id, 'compress',
+                      { ...comp, gapWorld: Number(e.target.value) }))} />
+              over <input class="pm-adj-num" type="number" step="1" min="0.5" value=${comp.minWorldGap}
+                    onChange=${(e) => guard(() => setPanelOption(view.id, panel.id, 'compress',
+                      { ...comp, minWorldGap: Number(e.target.value) }))} />
+              <span class="pm-adj-dim">world units</span>
+            </span>`}
+        <//>`}
+
+      ${spatial && Object.keys(pitch).length > 0 && Object.entries(pitch).map(([type, p]) => html`
+        <${Row} key=${type} label=${`${type} LED pitch`} hint="Spread a fixture's OWN LEDs to a legible spacing. The fixture stays where it physically is; only its internal spacing stretches.">
+          <input class="pm-adj-num" type="number" step="0.05" min="0.05" value=${p}
+                 onChange=${(e) => guard(() => setPanelOption(view.id, panel.id, 'expandPitch',
+                   { ...pitch, [type]: Number(e.target.value) }))} />
+          <span class="pm-adj-dim">world units</span>
+        <//>`)}
+    </div>`;
+}
+
+function ViewAdjust({ view, guard }) {
+  const framing = getViewFraming(view.id);
+  const types = typesInView(view.id);
+  const styles = view.typeStyles || {};
+  return html`
+    <div class="pm-adj">
+      <${Row} label="Moved fixtures" hint="Fixtures you have dragged in EDIT mode, away from where the projection puts them. Reset puts them all back.">
+        ${movedCount(view.id) > 0
+          ? html`<span class="pm-adj-dim">${movedCount(view.id)} moved</span>
+                 <button class="pm-mini" onClick=${() => guard(() => clearViewOffsets(view.id))}>Reset moves</button>`
+          : html`<span class="pm-adj-dim">none — EDIT mode, drag a fixture (right-click selects its group)</span>`}
+      <//>
+
+      <${Row} label="Framing" hint="Your pan/zoom for this view. Saved automatically as you drag and scroll; it comes back on reload.">
+        ${framing
+          ? html`<span class="pm-adj-dim">zoom ${framing.zoom.toFixed(2)}× · pan ${Math.round(framing.panX)}, ${Math.round(framing.panY)}</span>
+                 <button class="pm-mini" onClick=${() => guard(() => clearViewFraming(view.id))}>Reset framing</button>`
+          : html`<span class="pm-adj-dim">shipped fit (drag / wheel the pane to set your own)</span>`}
+      <//>
+
+      ${(view.panels || []).map((p) => html`<${PanelAdjust} key=${p.id} view=${view} panel=${p} guard=${guard} />`)}
+
+      ${types.length > 0 && html`
+        <div class="pm-adj-panel">
+          <div class="pm-adj-panel-head"><code>glyph sizes</code>
+            <span class="pm-adj-dim">design units, this view only</span></div>
+          ${types.map((t) => html`
+            <${Row} key=${t} label=${t}>
+              <input class="pm-adj-num" type="number" step="1" min="1" max="200"
+                     value=${(styles[t] && styles[t].sizeX) || ''}
+                     placeholder="default"
+                     onChange=${(e) => guard(() => setViewTypeSize(view.id, t,
+                       e.target.value === '' ? undefined : Number(e.target.value)))} />
+              ${styles[t] && html`<button class="pm-mini" onClick=${() => guard(() => setViewTypeSize(view.id, t, undefined))}>↺</button>`}
+            <//>`)}
+        </div>`}
+
+      <div class="pm-adj-foot">
+        ${hasShippedDefault(view.id)
+          ? html`<button class="pm-mini pm-del" title="Discard every adjustment and restore this view exactly as it shipped"
+                    onClick=${() => guard(() => resetViewToDefault(view.id))}>↺ Reset view to default</button>`
+          : html`<span class="pm-adj-dim">a view you made — no shipped default to reset to</span>`}
+        <span class="pm-adj-dim" style="margin-left:auto">auto-saved to pixel_map_views.yaml</span>
+      </div>
+    </div>`;
+}
+
 // ── Views manager overlay ──────────────────────────────────────────────────
 function ViewsManager() {
   store.viewsTick.value;              // subscribe so the list re-renders on change
+  const [open, setOpen] = useState(null);   // view id whose adjust panel is open
   if (!store.managerOpen.value) return null;
   const views = store.views ? store.views.views : [];
   let err = null;
@@ -79,16 +208,29 @@ function ViewsManager() {
         </div>
         <div class="pm-manager-list">
           ${views.map((v) => html`
-            <div class="pm-manager-row" key=${v.id}>
-              <input class="pm-manager-name" value=${v.label} title=${`id: ${v.id}`}
-                     onChange=${(e) => guard(() => renameViewOp(v.id, e.target.value))} />
-              <code class="pm-manager-id">${v.id}</code>
-              <button class="pm-mini" title="Duplicate" onClick=${() => guard(() => duplicateViewOp(v.id))}>Dup</button>
-              <button class="pm-mini pm-del" title="Delete" onClick=${() => guard(() => removeViewOp(v.id))}>Del</button>
+            <div key=${v.id}>
+              <div class="pm-manager-row">
+                <button class=${`pm-mini pm-adj-toggle${open === v.id ? ' active' : ''}`}
+                        title="Adjust this view — framing, rotation, gaps, glyph sizes"
+                        onClick=${() => setOpen(open === v.id ? null : v.id)}>${open === v.id ? '▾' : '▸'} Adjust</button>
+                <input class="pm-manager-name" value=${v.label} title=${`id: ${v.id}`}
+                       onChange=${(e) => guard(() => renameViewOp(v.id, e.target.value))} />
+                <code class="pm-manager-id">${v.id}</code>
+                <button class="pm-mini" title="Duplicate" onClick=${() => guard(() => duplicateViewOp(v.id))}>Dup</button>
+                <button class="pm-mini pm-del" title="Delete" onClick=${() => guard(() => removeViewOp(v.id))}>Del</button>
+              </div>
+              ${open === v.id && html`<${ViewAdjust} view=${v} guard=${guard} />`}
             </div>`)}
         </div>
         <div class="pm-manager-hint">
-          Selectors are edited in scene YAML (params.pixelMapViews). Rename changes the label; the id stays stable so bound panes keep resolving. Deleting a bound view leaves its pane showing "view removed — pick another".
+          <b>Adjust</b> opens this view's own settings — your pan/zoom, panel rotation, gap
+          compression, LED pitch and per-view glyph sizes. Everything you change — including
+          EDIT-mode moves — <b>auto-saves</b> to this scene's <code>pixel_map_views.yaml</code>
+          a moment after you change it; no scene Save needed, and nothing else gets saved with
+          it. <b>Reset view to default</b> puts a shipped
+          view back exactly as it came. Membership — which groups a view draws — is still edited
+          in that file. Rename changes the label; the id stays stable so
+          bound panes keep resolving. Deleting a bound view leaves its pane showing "view removed".
         </div>
       </div>
     </div>
@@ -162,6 +304,7 @@ function PixelMapPanel() {
 export function initPixelMapPanel() {
   registerPixelMapGlobals();
   loadViewsFromParams();       // build container + migrate legacy + seed defaults
+  installPixelMapPersistence();// arm the unload flush for the scoped auto-save
   startPixelMapDataPlane();    // one shared frame source + recluster bridge
 
   const host = document.createElement('div');

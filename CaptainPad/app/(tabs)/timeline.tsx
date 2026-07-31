@@ -29,7 +29,7 @@
  *   - With NO draft, the strip shows the live active-plan overview.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Linking } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { Palette } from '@/constants/theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
@@ -39,6 +39,7 @@ import { useTimeline } from '@/hooks/useTimeline';
 import {
   fetchPlaylists, getCachedColorPalettes,
   fetchDeckChannel, getAutopilot, fetchDeckColorAutopilot,
+  getApiBaseAsync,
 } from '@/utils/api';
 import {
   fetchTimelinePlans,
@@ -67,6 +68,14 @@ import {
 import {
   brcStarterPlan, blankPlan, clonePlan, duplicatePlan, makeCueId, hhmmTo12h, seedDefaultCue,
 } from '@/components/timeline/timelineTemplate';
+import {
+  fetchPartyConfig, setPartyConfig, describePartyStatus, describePartyRows,
+  describeEffectiveNote, stepPartyField, coalescePartyPatches, mergePartyPatch,
+  formatMinSec, formatMinutes, parsePartyConfig,
+  type PartyConfig, type PartyConfigPatch, type PartyNumericField,
+} from '@/utils/party_api';
+import { engineEvents, type EngineMessage } from '@/utils/engineEvents';
+import { companionUrlFromApiBase } from '@/utils/companion_url';
 
 const PREVIEW_DEBOUNCE_MS = 350;
 // EVENT LOG list cap (the engine ring holds up to 50; show the freshest 20).
@@ -924,6 +933,11 @@ export default function TimelineScreen() {
         </View>
 
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
+          {/* ── PARTY MODE — session HANDLING (gate · playlist · numbers).
+              First block in the scroll body: show handling belongs with the
+              show plan, and the hard gate must be reachable mid-show. ── */}
+          <PartyModeSection styles={styles} C={C} state={state} connected={connected} />
+
           {/* ── Festival span + sun-estimate tz (top of the maker page) ── */}
           {festivalView ? (
             <FestivalEditor
@@ -1175,6 +1189,469 @@ export default function TimelineScreen() {
 }
 
 // ── Banner ──
+// ── PARTY MODE (session HANDLING) ──────────────────────────────────────
+//
+// Division of concerns (operator, 2026-07-27): the Audio Companion configures
+// DETECTION (thresholds/params); THIS tab owns HANDLING — the hard gate, the
+// playlist a session triggers, and the session numbers. Show handling belongs
+// with the show plan, which is why the card lives here and not on Audio.
+//
+// Server truth is GET/PUT /party-config (utils/party_api.ts), persisted
+// engine-side. Codex P0: every edit is reconciled against the PUT response and
+// a rejection prints the engine's message VERBATIM — no silent revert.
+//
+// Editing model: stepper taps mutate a LOCAL pending value immediately (touch
+// feel) and a short debounce PUTs the settled value, so holding "+" through a
+// range doesn't fire ten writes. The row shows "· unsaved" while a commit is
+// pending and snaps to the server's number when it lands.
+
+const PARTY_COMMIT_DEBOUNCE_MS = 700;
+
+/** Row hint + an optional engine-effective note, as one line. */
+function joinHint(base: string, note: string | null): string {
+  return note ? `${base} · ${note}` : base;
+}
+
+/** ON/OFF pill used by the SESSION LENGTH + COOLDOWN rows. */
+function PartyRowToggle({
+  styles, C, on, disabled, onPress, label,
+}: {
+  styles: Styles;
+  C: Palette;
+  on: boolean;
+  disabled: boolean;
+  onPress: () => void;
+  label: string;
+}) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={disabled}
+      style={[
+        styles.partyToggle,
+        on
+          ? { backgroundColor: C.primary, borderColor: C.primary }
+          : { backgroundColor: C.surfaceContainerHigh, borderColor: C.ghostBorder },
+        disabled ? { opacity: 0.4 } : null,
+      ]}
+      accessibilityLabel={`${on ? 'Disable' : 'Enable'} ${label}`}
+    >
+      <Text style={[styles.partyToggleText, { color: on ? C.onPrimary : C.secondary }]}>
+        {on ? 'ON' : 'OFF'}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+function PartyStepperRow({
+  styles, C, label, hint, valueText, dirty, disabled, onStep, toggle, greyed,
+}: {
+  styles: Styles;
+  C: Palette;
+  label: string;
+  hint: string;
+  valueText: string;
+  dirty: boolean;
+  disabled: boolean;
+  onStep: (dir: -1 | 1) => void;
+  /** Optional per-row enable switch (SESSION LENGTH / COOLDOWN). */
+  toggle?: { on: boolean; disabled: boolean; onPress: () => void };
+  /** Row is inert (its feature is off) — dim it and hide the stepper. */
+  greyed?: boolean;
+}) {
+  return (
+    <View style={styles.partyFieldRow}>
+      <View style={{ flex: 1, minWidth: 140, opacity: greyed ? 0.5 : 1 }}>
+        <Text style={styles.partyFieldLabel}>{label}</Text>
+        <Text style={styles.partyFieldHint}>{hint}</Text>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        {toggle ? (
+          <PartyRowToggle
+            styles={styles}
+            C={C}
+            on={toggle.on}
+            disabled={toggle.disabled}
+            onPress={toggle.onPress}
+            label={label}
+          />
+        ) : null}
+        {greyed ? null : (
+          <>
+            <TouchableOpacity
+              onPress={() => onStep(-1)}
+              disabled={disabled}
+              style={[styles.partyStepBtn, disabled ? { opacity: 0.4 } : null]}
+              accessibilityLabel={`Decrease ${label}`}
+            >
+              <Text style={styles.partyStepBtnText}>−</Text>
+            </TouchableOpacity>
+            <Text style={[styles.partyFieldValue, dirty ? { color: C.secondary } : null]}>
+              {valueText}{dirty ? ' ·' : ''}
+            </Text>
+            <TouchableOpacity
+              onPress={() => onStep(1)}
+              disabled={disabled}
+              style={[styles.partyStepBtn, disabled ? { opacity: 0.4 } : null]}
+              accessibilityLabel={`Increase ${label}`}
+            >
+              <Text style={styles.partyStepBtnText}>+</Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function PartyModeSection({
+  styles, C, state, connected,
+}: {
+  styles: Styles;
+  C: Palette;
+  state: TimelineState | null;
+  connected: boolean;
+}) {
+  const [cfg, setCfg] = useState<PartyConfig | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  // ONE coalesced pending patch for every control on the card (toggles,
+  // playlist, steppers). Mashing a toggle or holding "+" collapses into a
+  // single debounced PUT whose body is the FINAL intent.
+  const [pending, setPending] = useState<PartyConfigPatch>({});
+  const [companionUrl, setCompanionUrl] = useState<string | null>(null);
+  // Clock for the live "ends in m:ss" / "cooling down m:ss" readouts.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+
+  const load = useCallback(async () => {
+    const r = await fetchPartyConfig();
+    if (r.ok && r.data) { setCfg(r.data); setLoadError(null); }
+    else { setCfg(null); setLoadError(r.error || 'unknown error'); }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => () => { if (commitTimer.current) clearTimeout(commitTimer.current); }, []);
+
+  // CROSS-SURFACE TRUTH: the engine broadcasts `partyConfig` on every PUT and
+  // replays it on /ws/control connect. Without this listener a change made from
+  // another surface (the companion PARTY tab, curl) left this card permanently
+  // contradicting itself — a DISABLED pill over an ENABLED toggle, with no way
+  // to fix it in-app. The payload is getPartyStatus() + availablePlaylists,
+  // exactly what parsePartyConfig validates (extra keys like `type` ignored).
+  useEffect(() => engineEvents.subscribe((msg: EngineMessage) => {
+    if (!msg || (msg as any).type !== 'partyConfig') return;
+    try { setCfg(parsePartyConfig(msg)); setLoadError(null); } catch (e: any) {
+      setLoadError(e?.message || 'partyConfig broadcast malformed');
+    }
+  }), []);
+
+  // The 5 s re-read runs while the card is MOUNTED — it is the only thing that
+  // discovers a session transition (the engine broadcasts partyConfig on PUTs,
+  // not on armed→in_session). It used to be gated on `livePhase`, i.e. on the
+  // very value it would refresh: the card could never learn it had entered a
+  // session, and once it landed on `disabled` it stopped polling forever. The
+  // card only exists while the Timeline tab renders, which IS the visible gate.
+  useEffect(() => {
+    const refresh = setInterval(() => { void load(); }, 5000);
+    return () => clearInterval(refresh);
+  }, [load]);
+
+  // The 1 s countdown clock stays gated: only a live phase has anything ticking.
+  const livePhase = cfg?.effectiveState === 'in_session' || cfg?.effectiveState === 'cooldown';
+  useEffect(() => {
+    if (!livePhase) return;
+    const tick = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [livePhase]);
+
+  // Deep-link target for "tuned in the Audio Companion" — same derivation the
+  // Audio tab's OPEN COMPANION button uses. Null (plain text, no link) if the
+  // base can't be parsed; we never link to a guessed address.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const base = await getApiBaseAsync();
+      if (!alive) return;
+      try { setCompanionUrl(companionUrlFromApiBase(base)); } catch { setCompanionUrl(null); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // Mirror a gate flip that arrived on the control bus (another surface, or
+  // the engine itself) so this card never shows a stale toggle.
+  const busEnabled = typeof state?.partyEnabled === 'boolean' ? state.partyEnabled : null;
+  useEffect(() => {
+    if (busEnabled === null) return;
+    setCfg((c) => (c && c.enabled !== busEnabled ? { ...c, enabled: busEnabled } : c));
+  }, [busEnabled]);
+
+  /**
+   * Send the accumulated patch. On success the RESPONSE replaces local state
+   * and the pending overlay clears. On failure (400 or an engine that went
+   * away mid-edit) the pending edits are KEPT so the operator doesn't lose
+   * their work — the error banner explains and offers RETRY.
+   */
+  const commit = useCallback(async () => {
+    const patch = pendingRef.current;
+    if (!Object.keys(patch).length) return;
+    setSaving(true);
+    setActionError(null);
+    const r = await setPartyConfig(patch);
+    if (r.ok && r.data) {
+      setCfg(r.data);
+      // Only drop the edits this PUT actually carried; anything the operator
+      // touched while it was in flight survives for the next commit.
+      setPending((p) => {
+        const next: PartyConfigPatch = { ...p };
+        for (const k of Object.keys(patch) as (keyof PartyConfigPatch)[]) {
+          if ((next as any)[k] === (patch as any)[k]) delete (next as any)[k];
+        }
+        return next;
+      });
+    } else {
+      setActionError(r.error || 'request rejected');
+    }
+    setSaving(false);
+  }, []);
+
+  /** Queue an edit: merge into the pending patch, restart the debounce. */
+  const queue = useCallback((patch: PartyConfigPatch) => {
+    setPending((p) => coalescePartyPatches([p, patch]));
+    if (commitTimer.current) clearTimeout(commitTimer.current);
+    commitTimer.current = setTimeout(() => { void commit(); }, PARTY_COMMIT_DEBOUNCE_MS);
+  }, [commit]);
+
+  const stepField = useCallback((field: PartyNumericField, dir: -1 | 1) => {
+    const base = cfg;
+    if (!base) return;
+    const current = (pendingRef.current[field] ?? base[field]) as number;
+    queue({ [field]: stepPartyField(field, current, dir) } as PartyConfigPatch);
+  }, [cfg, queue]);
+
+  // What the operator currently sees: server truth with pending edits on top.
+  const view = cfg ? mergePartyPatch(cfg, pending) : null;
+  const enabled = view ? view.enabled : null;
+  const hasPending = Object.keys(pending).length > 0;
+  const status = describePartyStatus({
+    enabled,
+    // /party-config is the AUTHORITY for every party field it reports; the
+    // control-bus timelineState only fills gaps a pre-addition engine leaves.
+    effectiveState: cfg?.effectiveState,
+    planActive: cfg?.planActive ?? state?.planActive ?? null,
+    inFestivalWindow: cfg?.inFestivalWindow ?? state?.inFestivalWindow ?? null,
+    party: state?.party,
+    currentMood: state?.currentMood,
+    sessionFollowsMusic: cfg?.sessionFollowsMusic,
+    sessionEndsAtMs: cfg?.sessionEndsAtMs,
+    cooldownRemainingSec: cfg?.cooldownRemainingSec ?? state?.partyCooldownRemainingSec,
+    nowMs,
+    engineOffline: !connected,
+  });
+  const statusColor =
+    status.tone === 'live' ? '#00a86b'
+    : status.tone === 'off' ? C.error
+    : status.tone === 'armed' ? C.primary
+    : status.tone === 'noplan' ? '#f5a623'
+    : status.tone === 'manual' ? '#f5a623'
+    : C.secondary;
+
+  const shown = (f: PartyNumericField): number => (view ? view[f] : 0);
+  // Row enable/grey states come from the engine's OWN fields (with any pending
+  // edit laid over them), and the cooldown-forced-off rule lives in ONE pure
+  // place, so the card can never show a combination the engine doesn't hold.
+  // Null until the config is loaded — the rows it drives don't render before then.
+  const rows = view ? describePartyRows(view) : null;
+
+  return (
+    <View style={styles.partyCard}>
+      <View style={styles.partyHeaderRow}>
+        <IconSymbol name="sparkles" size={20} color={C.primary} />
+        <View style={{ flex: 1, minWidth: 160 }}>
+          <Text style={styles.partyTitle}>PARTY MODE</Text>
+          <Text style={styles.partyDetail}>{status.detail}</Text>
+        </View>
+        <View style={[styles.pill, { borderColor: statusColor }]}>
+          <Text style={[styles.pillText, { color: statusColor }]}>{status.label}</Text>
+        </View>
+        <TouchableOpacity
+          onPress={() => { if (enabled !== null) queue({ enabled: !enabled }); }}
+          disabled={enabled === null || saving}
+          style={[
+            styles.controlButton,
+            enabled
+              ? { backgroundColor: C.primary }
+              : { backgroundColor: C.surfaceContainerHigh, borderColor: C.error, borderWidth: 1 },
+            (enabled === null || saving) ? { opacity: 0.6 } : null,
+          ]}
+          accessibilityLabel={enabled ? 'Disable party mode' : 'Enable party mode'}
+        >
+          <Text style={[styles.controlLabel, { color: enabled ? C.onPrimary : C.error }]}>
+            {saving ? 'SAVING…' : enabled === null ? 'UNAVAILABLE' : enabled ? 'ENABLED' : 'DISABLED'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {loadError ? (
+        <View style={styles.actionErrorBanner}>
+          <Text style={styles.actionErrorText}>{`Party config unavailable — ${loadError}`}</Text>
+          <TouchableOpacity onPress={() => void load()} style={[styles.miniBtn, { marginTop: 8, alignSelf: 'flex-start' }]}>
+            <Text style={styles.miniBtnText}>RETRY</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {actionError ? (
+        <View style={styles.actionErrorBanner}>
+          <Text style={styles.actionErrorText}>{`Rejected — ${actionError}`}</Text>
+          {hasPending ? (
+            <Text style={[styles.actionErrorText, { marginTop: 4 }]}>
+              Your edits are still here, unsaved. Fix the cause (or wait for the engine) and tap RETRY.
+            </Text>
+          ) : null}
+          <TouchableOpacity
+            onPress={() => { void commit(); }}
+            disabled={saving || !hasPending}
+            style={[styles.miniBtn, { marginTop: 8, alignSelf: 'flex-start' }, (saving || !hasPending) ? { opacity: 0.5 } : null]}
+          >
+            <Text style={styles.miniBtnText}>RETRY</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {view && rows ? (
+        <>
+          <Text style={styles.partySubLabel}>{`TRIGGER PLAYLIST (${view.availablePlaylists.length})`}</Text>
+          {view.availablePlaylists.length === 0 ? (
+            <Text style={styles.cueError}>
+              The engine reports no playlists — a party session would have nothing to run.
+            </Text>
+          ) : (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              {view.availablePlaylists.map((p) => {
+                const sel = p === view.playlist;
+                return (
+                  <TouchableOpacity
+                    key={p}
+                    onPress={() => { if (!sel) queue({ playlist: p }); }}
+                    style={[
+                      styles.partyChip,
+                      sel
+                        ? { backgroundColor: C.primary, borderColor: C.primary }
+                        : { backgroundColor: C.surfaceContainerLowest, borderColor: C.ghostBorder },
+                    ]}
+                  >
+                    <Text style={[styles.partyChipText, { color: sel ? C.onPrimary : C.text }]}>{p}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+
+          <Text style={styles.partySubLabel}>SESSION HANDLING</Text>
+
+          {/* SUSTAIN — the strong-detection guarantee. NO toggle, by design:
+              it is always in force. */}
+          <PartyStepperRow
+            styles={styles}
+            C={C}
+            label="SUSTAIN BEFORE TRIGGER"
+            hint="How long party audio must hold before a session starts."
+            valueText={formatMinSec(shown('minDwellSec'))}
+            dirty={pending.minDwellSec !== undefined}
+            disabled={saving}
+            onStep={(d) => stepField('minDwellSec', d)}
+          />
+
+          {/* SESSION LENGTH — toggle ON = fixed length. OFF = FOLLOW THE
+              MUSIC: the session simply ends when the party signal drops.
+              There is NO timeline-side release value to edit — the release IS
+              the companion's `offConfirmMs` detection param (one sustain, not
+              two stacked), so the OFF row is a HINT that points at the Audio
+              Companion, not an editor. */}
+          {rows.durationEnabled ? (
+            <PartyStepperRow
+              styles={styles}
+              C={C}
+              label="SESSION LENGTH"
+              hint={joinHint(
+                'How long a triggered party session runs.',
+                describeEffectiveNote(shown('durationMin'), cfg?.effectiveDurationMin, (n) => `${n} min`),
+              )}
+              valueText={`${shown('durationMin')} min`}
+              dirty={pending.durationMin !== undefined}
+              disabled={saving}
+              onStep={(d) => stepField('durationMin', d)}
+              toggle={{ on: true, disabled: saving, onPress: () => queue({ durationEnabled: false }) }}
+            />
+          ) : (
+            <View style={styles.partyFieldRow}>
+              <View style={{ flex: 1, minWidth: 140 }}>
+                <Text style={styles.partyFieldLabel}>SESSION LENGTH</Text>
+                <Text style={styles.partyFieldHint}>
+                  Follows the music — ends when the party signal drops (release sustain ={' '}
+                  <Text style={styles.partyMono}>offConfirmMs</Text>, tuned in the{' '}
+                  {companionUrl ? (
+                    <Text
+                      style={styles.partyLink}
+                      onPress={() => Linking.openURL(companionUrl)}
+                      accessibilityRole="link"
+                    >
+                      Audio Companion ↗
+                    </Text>
+                  ) : (
+                    <Text>Audio Companion</Text>
+                  )}
+                  ).
+                </Text>
+              </View>
+              <PartyRowToggle
+                styles={styles}
+                C={C}
+                on={false}
+                disabled={saving}
+                onPress={() => queue({ durationEnabled: true })}
+                label="SESSION LENGTH"
+              />
+            </View>
+          )}
+
+          {/* COOLDOWN — own toggle, but forced off + greyed while the session
+              follows the music (operator rule). Greying comes from
+              describePartyRows() over the engine's own fields, never from
+              local UI memory. */}
+          <PartyStepperRow
+            styles={styles}
+            C={C}
+            label="COOLDOWN"
+            hint={rows.cooldownHint ?? joinHint(
+              'Lockout after a session before another can trigger.',
+              describeEffectiveNote(shown('cooldownSec'), cfg?.effectiveCooldownSec, formatMinutes),
+            )}
+            valueText={formatMinutes(shown('cooldownSec'))}
+            dirty={pending.cooldownSec !== undefined}
+            disabled={saving}
+            greyed={!rows.cooldownEnabled}
+            onStep={(d) => stepField('cooldownSec', d)}
+            toggle={{
+              on: rows.cooldownEnabled,
+              disabled: saving || rows.cooldownToggleDisabled,
+              onPress: () => queue({ cooldownEnabled: !rows.cooldownEnabled }),
+            }}
+          />
+
+          <Text style={styles.helperLine}>
+            Disabling kills any running session immediately and blocks triggering (detection keeps running). Playlist and the numbers above take effect on the NEXT session.
+          </Text>
+        </>
+      ) : null}
+    </View>
+  );
+}
+
 function Banner({ styles, text, tone, C }: { styles: Styles; text: string; tone: 'error' | 'ok'; C?: Palette }) {
   if (tone === 'ok' && C) {
     return (
@@ -1417,5 +1894,47 @@ function makeStyles(C: Palette, globalStyles: GlobalStyles) {
       backgroundColor: C.errorContainer, borderColor: C.error, borderWidth: 1, borderRadius: 8, padding: 12, marginBottom: 12,
     },
     actionErrorText: { fontFamily: 'Inter_400Regular', color: C.error, fontSize: 12 },
+    // ── PARTY MODE card (session handling) ──
+    partyCard: {
+      borderRadius: 12, borderWidth: 1, borderColor: C.ghostBorder,
+      backgroundColor: C.surfaceContainerLowest, padding: 16, marginBottom: 14,
+    },
+    partyHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
+    partyTitle: {
+      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 14, color: C.text,
+      letterSpacing: 1.2, textTransform: 'uppercase',
+    },
+    partyDetail: { fontFamily: 'Inter_400Regular', fontSize: 12, color: C.secondary, marginTop: 2 },
+    partySubLabel: {
+      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 10, color: C.icon, letterSpacing: 1.2,
+      textTransform: 'uppercase', marginTop: 16, marginBottom: 8,
+    },
+    partyChip: {
+      paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8, borderWidth: 1,
+      minHeight: 40, justifyContent: 'center',
+    },
+    partyChipText: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, letterSpacing: 0.6 },
+    partyFieldRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+      paddingVertical: 8, borderTopWidth: 1, borderTopColor: C.ghostBorder,
+    },
+    partyFieldLabel: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.text, letterSpacing: 0.6 },
+    partyFieldHint: { fontFamily: 'Inter_400Regular', fontSize: 11, color: C.secondary, marginTop: 2 },
+    partyFieldValue: {
+      fontFamily: 'SpaceGrotesk_700Bold', fontSize: 15, color: C.text,
+      minWidth: 76, textAlign: 'center',
+    },
+    partyStepBtn: {
+      width: 44, height: 44, borderRadius: 8, borderWidth: 1, borderColor: C.ghostBorder,
+      backgroundColor: C.surfaceContainerHigh, alignItems: 'center', justifyContent: 'center',
+    },
+    partyStepBtnText: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 20, color: C.text },
+    partyToggle: {
+      minWidth: 56, minHeight: 44, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1,
+      alignItems: 'center', justifyContent: 'center',
+    },
+    partyToggleText: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, letterSpacing: 0.8 },
+    partyMono: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.text },
+    partyLink: { fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: C.primary },
   });
 }

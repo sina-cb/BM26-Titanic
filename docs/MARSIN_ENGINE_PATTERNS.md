@@ -232,6 +232,74 @@ MarsinEngine natively supports 6-channel **RGBWAU** color mixing (Red, Green, Bl
 
 ---
 
+## 5.1 White handling: the `w == a` convention
+
+> **HARD RULE.** Wherever a pattern emits white, the **W and A lanes must carry
+> the same exact value**. `w != a` is an authoring bug.
+
+```javascript
+rgbwau(0, 0, 0, 1, 1, 0)   // ✅ the ship's white — matched W + A
+rgbwau(0, 0, 0, 1, 0, 0)   // ❌ too cold on the rig
+rgbwau(0, 0, 0, 0, 1, 0)   // ❌ reads almost yellow
+```
+
+### Why
+
+The DMX pars carry **separate white and amber emitters**, and neither one is a
+usable white on its own:
+
+- **W alone renders TOO COLD** — a clinical, blue-ish white that fights the warm
+  palette the ship is built around and reads as "wrong" next to everything else.
+- **A alone renders almost YELLOW** — it is a saturated amber emitter, not a
+  warm white.
+- **W + A driven to the SAME value is the good warm white.** This is the
+  reference the whole show is tuned against: `rgbwau(0, 0, 0, 1, 1, 0)`.
+
+The convention also makes the two output paths **agree with each other**. The
+LED strands have no dedicated white or amber emitter, so the RGB fallback in §5
+folds amber back into RGB (`R + W + 0.8A`, `G + W + 0.4A`, `B + W`). Driving
+`a == w` warms the strand mix in exactly the direction the DMX pars go, so a
+white cue lands the same colour temperature on strands and pars. Drive W alone
+and the strands render a neutral white while the pars render a cold one — the
+same cue, two different whites, side by side on the ship.
+
+### What this means when authoring
+
+- **Never emit a pure-W or pure-A white.** Both are bugs, not looks. If you want
+  a cooler or warmer white, shape it on the **RGB lanes** (that is what the
+  `warmth` parameter does in the `60`–`64` white family) — do **not** reach for
+  it by unbalancing W against A.
+- **Amber is not a colour accent.** Do not use A as a standalone golden/fire hue
+  distinct from white. Build amber and gold looks on the RGB lanes; the A lane
+  belongs to the white system.
+- **The idiom** is either duplicating the white expression at the call site, or
+  assigning the amber lane from the white lane just before the emit:
+
+  ```javascript
+  // Either — duplicate at the call site:
+  rgbwau(clamp01(r), clamp01(g), clamp01(b), clamp01(w), clamp01(w), 0.0);
+
+  // Or — assign the lane, when amber has its own variable:
+  outA = outW;
+  rgbwau(r, g, b, outW, outA, outU);
+  ```
+
+- **`u` (UV/violet) is unaffected** by this rule and stays an independent lane.
+
+### Enforcement
+
+`marsin_engine/tests/patterns/white_amber_lane_match.test.js` auto-discovers
+every pattern that calls `rgbwau()`, renders it, and asserts the W and A bytes
+are identical on every pixel of every frame. A new pattern that forgets the
+convention fails there — no allowlist to update, no opt-out.
+
+Transition and channel-blend scripts (`patterns/transitions/`,
+`patterns/channel_blends/`) are **out of scope**: they composite two already-
+rendered pixel sources rather than authoring white, so their W and A lanes are
+whatever the inputs supplied.
+
+---
+
 ## 6. Hardware Metadata Reactivity
 
 Patterns can dynamically adapt their visuals depending on which physical fixture or section of the rig they are rendering. The engine automatically injects four metadata variables per pixel:
@@ -251,8 +319,8 @@ export function render3D(index, x, y, z) {
   var color = wave(x + tPhase);
   
   if (sectionId == 2) {
-    // Vintage bulbs: Rich amber glow
-    rgbwau(0, 0, 0, color, color * 0.4, 0);
+    // Vintage bulbs: warm white. W and A carry the SAME value — see §5.1.
+    rgbwau(0, 0, 0, color, color, 0);
   } else {
     // Pars/Bars: Palette color sweep
     var h = mix(cp1H, cp2H, color);

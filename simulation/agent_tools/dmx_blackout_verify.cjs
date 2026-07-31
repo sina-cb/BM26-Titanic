@@ -246,12 +246,13 @@ async function main() {
       return nz > -1 && nz < 1 && Math.abs(nx) <= 1 && Math.abs(ny) <= 1;
     };
     window.debounceAutoSave = () => {};
-    // Neutralise the sACN-bridge notify path. PatchManager.recompute →
-    // autoSubscribePatchUniverses → saveAndNotify → notifySacnBridge would send
-    // a `setScene` to the shared bridge on :6971 — a last-writer stomp on the
-    // operator's live routes (memory: sACN route ownership). A null socket makes
-    // it a console.warn inside THIS throwaway browser and nothing else. The shim
-    // keeps enable/disable callable (onLightingChange calls disable()).
+    // Neutralise the sACN-bridge notify path. Any `setScene` sent to the shared
+    // bridge on :6971 is a last-writer stomp on the operator's live routes
+    // (memory: sACN route ownership). Since slice S4 the auto-subscribe path no
+    // longer notifies at all (it only arms the stubbed debounce above), but a
+    // null socket keeps ANY other notify a console.warn inside THIS throwaway
+    // browser and nothing else. The shim keeps enable/disable callable
+    // (onLightingChange calls disable()).
     window.sacnInput = { _ws: null, enable() {}, disable() {} };
     // Deterministic paint source: gradient, engine OFF (a live pattern engine
     // repaints every entry with animated color and destroys the ratio math),

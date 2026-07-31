@@ -48,7 +48,7 @@ parLights:
   _section:
     label: 🔌 DMX Fixtures
     type: fixtureArray
-    collapsed: false
+    collapsed: true
   parsEnabled:
     value: true
     label: Master Enabled
@@ -71,19 +71,515 @@ parLights:
     max: 1
     step: 0.05
   maxSpotlights:
-    value: 60
+    value: 150
     label: Max Spotlights
     min: 1
     max: 200
     step: 1
   generatorsVisible:
-    value: false
+    value: true
     label: Show Generators
   fixtures:
-    - group: Left Center Auditorium
-      name: Left Center Auditorium 1
+    - group: TE Sign
+      name: TE Sign V3 A
+      fixtureType: TeSignV3A40
+      color: '#ffffff'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: -15.5
+      'y': 9.015212285754357
+      z: 8.511924730643457
+      rotX: 0
+      rotY: -90.00000000000001
+      rotZ: 0
+      traceGenerated: false
+      enabled: true
+      brightness: 100
+      diffusion: true
+      diffusionAmount: 1.5
+      scaleX: 1
+      scaleY: 1
+      scaleZ: 1
+      screen: false
+      screenPixelSize: 60
+      haloScale: 1
+    - group: TE Sign
+      name: TE Sign V3 B
+      fixtureType: TeSignV3B34
+      color: '#ffffff'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: -15.5
+      'y': 9.015212285754357
+      z: 8.511924730643457
+      rotX: 0
+      rotY: -90.00000000000001
+      rotZ: 0
+      traceGenerated: false
+      enabled: true
+      brightness: 100
+      diffusion: true
+      diffusionAmount: 1.5
+      scaleX: 1
+      scaleY: 1
+      scaleZ: 1
+      screen: false
+      screenPixelSize: 60
+      haloScale: 1
+    - group: TE Sign 2
+      name: TE Sign V3 A
+      fixtureType: TeSignV3A40
+      color: '#ffffff'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: 17.8972366666178
+      'y': 9.045087036989067
+      z: -4.253870138252133
+      rotX: 0
+      rotY: -55.60444326861339
+      rotZ: 0
+      scaleX: 1
+      scaleY: 1
+      scaleZ: 1
+      traceGenerated: false
+      enabled: true
+      brightness: 100
+      diffusion: true
+      diffusionAmount: 1.5
+      screen: false
+      screenPixelSize: 60
+      haloScale: 1
+    - group: TE Sign 2
+      name: TE Sign V3 B
+      fixtureType: TeSignV3B34
+      color: '#ffffff'
+      intensity: 5
+      angle: 20
+      penumbra: 0.5
+      x: 17.8972366666178
+      'y': 9.045087036989067
+      z: -4.253870138252133
+      rotX: 0
+      rotY: -55.60444326861339
+      rotZ: 0
+      scaleX: 1
+      scaleY: 1
+      scaleZ: 1
+      traceGenerated: false
+      enabled: true
+      brightness: 100
+      diffusion: true
+      diffusionAmount: 1.5
+      screen: false
+      screenPixelSize: 60
+      haloScale: 1
+    - group: Right Front Wall
+      name: Right Front Wall 1
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 24.616547722491507
+      'y': 8.48989820425977
+      z: -0.16285155329754364
+      rotX: -59.487132639253744
+      rotY: 127.42998852022396
+      rotZ: 90.67219748266783
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Front Wall
+      name: Right Front Wall 2
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 22.26228392467773
+      'y': 10.255545220585141
+      z: 1.6904518762922836
+      rotX: -59.487132639253744
+      rotY: 127.42998852022396
+      rotZ: 90.67219748266783
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Front Wall
+      name: Right Front Wall 3
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 26.970811520305283
+      'y': 6.724251187934399
+      z: -2.0161549828873686
+      rotX: -59.487132639253744
+      rotY: 127.42998852022396
+      rotZ: 90.67219748266783
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Front Wall
+      name: Right Front Wall 4
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 29.325075318119058
+      'y': 4.9586041716090286
+      z: -3.8694584124771945
+      rotX: -59.487132639253744
+      rotY: 127.42998852022396
+      rotZ: 90.67219748266783
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Front Wall
+      name: Right Front Wall 5
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 31.679339115932834
+      'y': 3.192957155283658
+      z: -5.722761842067021
+      rotX: -59.487132639253744
+      rotY: 127.42998852022396
+      rotZ: 90.67219748266783
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right SmokeStacks
+      name: Right SmokeStacks 1
       fixtureType: UkingPar
-      color: '#ff0000'
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 20.620477658700853
+      'y': 9.572232339387611
+      z: -8.702239412822163
+      rotX: 33.146060131251794
+      rotY: -66.03914157802649
+      rotZ: -21.892680594823304
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right SmokeStacks
+      name: Right SmokeStacks 2
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 20.892099251233443
+      'y': 8.495367736649353
+      z: -10.711881738332245
+      rotX: 42.52384866072329
+      rotY: -82.49638734489687
+      rotZ: -37.681943390789016
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right SmokeStacks
+      name: Right SmokeStacks 3
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 22.543046804868215
+      'y': 7.206920862888009
+      z: -11.6533458997766
+      rotX: 57.43129386283052
+      rotY: -91.9020630876706
+      rotZ: -59.048745319453296
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right SmokeStacks
+      name: Right SmokeStacks 4
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 24.6062176334526
+      'y': 6.461646422355761
+      z: -10.975134959869333
+      rotX: 72.6110208645865
+      rotY: -77.11085378084923
+      rotZ: -60.7051924386098
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right SmokeStacks
+      name: Right SmokeStacks 5
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 21.887294272342658
+      'y': 9.806701991658228
+      z: -6.801640142011151
+      rotX: 31.79178268237209
+      rotY: -46.995229517815055
+      rotZ: -14.115945334577063
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right SmokeStacks
+      name: Right SmokeStacks 6
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 23.950465100927044
+      'y': 9.061427551125979
+      z: -6.123429202103886
+      rotX: 39.21079112856336
+      rotY: -28.98368149847558
+      rotZ: -10.519978109204947
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right SmokeStacks
+      name: Right SmokeStacks 7
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 25.601412654561816
+      'y': 7.772980677364636
+      z: -7.06489336354824
+      rotX: 53.68491401116015
+      rotY: -16.6841054475255
+      rotZ: -8.4878858833326
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right SmokeStacks
+      name: Right SmokeStacks 8
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 21
+      angle: 30
+      penumbra: 0.5
+      x: 25.873034247094406
+      'y': 6.696116074626377
+      z: -9.074535689058322
+      rotX: 70.23892855905127
+      rotY: -23.539398076501005
+      rotZ: -16.673903185542237
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Front Rails
+      name: Right Front Rails 1
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 22.975568208956126
+      'y': 11.548924216774134
+      z: -2.0372472609126806
+      rotX: -23.069497239525358
+      rotY: -156.27461465798476
+      rotZ: 33.15415130529821
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Front Rails
+      name: Right Front Rails 2
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 25.347676719188158
+      'y': 9.794280775312966
+      z: -3.896089407852924
+      rotX: -23.069497239525358
+      rotY: -156.27461465798476
+      rotZ: 33.15415130529821
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Front Rails
+      name: Right Front Rails 3
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 27.71978522942019
+      'y': 8.039637333851797
+      z: -5.754931554793166
+      rotX: -23.069497239525358
+      rotY: -156.27461465798476
+      rotZ: 33.15415130529821
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Front Rails
+      name: Right Front Rails 4
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: 30.09189373965222
+      'y': 6.284993892390628
+      z: -7.613773701733408
+      rotX: -23.069497239525358
+      rotY: -156.27461465798476
+      rotZ: 33.15415130529821
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Auditorium
+      name: Right Auditorium 1
+      fixtureType: UkingPar
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 13.409044248777642
+      'y': 12.564682056392941
+      z: -6.77967720411976
+      rotX: -52.91136473298574
+      rotY: 128.3298139442604
+      rotZ: -179.7614697798204
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Auditorium
+      name: Right Auditorium 2
+      fixtureType: UkingPar
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 14.231411239664844
+      'y': 12.561366940066247
+      z: -5.746563990768625
+      rotX: -52.91136473298574
+      rotY: 128.3298139442604
+      rotZ: -179.7614697798204
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Auditorium
+      name: Right Auditorium 3
+      fixtureType: UkingPar
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 15.053778230552048
+      'y': 12.558051823739552
+      z: -4.7134507774174885
+      rotX: -52.91136473298574
+      rotY: 128.3298139442604
+      rotZ: -179.7614697798204
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Auditorium
+      name: Right Auditorium 4
+      fixtureType: UkingPar
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 15.876145221439252
+      'y': 12.554736707412857
+      z: -3.680337564066353
+      rotX: -52.91136473298574
+      rotY: 128.3298139442604
+      rotZ: -179.7614697798204
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Auditorium
+      name: Right Auditorium 5
+      fixtureType: UkingPar
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 19.165613184988064
+      'y': 12.541476242106077
+      z: 0.452115289338189
+      rotX: -52.91136473298574
+      rotY: 128.3298139442604
+      rotZ: -179.7614697798204
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Auditorium
+      name: Right Auditorium 6
+      fixtureType: UkingPar
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 18.34324619410086
+      'y': 12.544791358432771
+      z: -0.5809979240129461
+      rotX: -52.91136473298574
+      rotY: 128.3298139442604
+      rotZ: -179.7614697798204
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Auditorium
+      name: Right Auditorium 7
+      fixtureType: UkingPar
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 17.520879203213656
+      'y': 12.548106474759466
+      z: -1.6141111373640822
+      rotX: -52.91136473298574
+      rotY: 128.3298139442604
+      rotZ: -179.7614697798204
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Auditorium
+      name: Right Auditorium 8
+      fixtureType: UkingPar
+      color: '#37ff00'
+      intensity: 15
+      angle: 45
+      penumbra: 0.5
+      x: 16.698512212326456
+      'y': 12.55142159108616
+      z: -2.6472243507152173
+      rotX: -52.91136473298574
+      rotY: 128.3298139442604
+      rotZ: -179.7614697798204
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Auditorium
+      name: Left Auditorium 1
+      fixtureType: UkingPar
+      color: '#0062ff'
       intensity: 50
       angle: 60
       penumbra: 0.5
@@ -91,95 +587,63 @@ parLights:
       'y': 12.5
       z: 3.9607682357892084
       rotX: -58.2034465685919
-      rotY: -90.08364538458109
+      rotY: -90.08364538458108
       rotZ: 0
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Center Auditorium
-      name: Left Center Auditorium 2
+    - group: Left Auditorium
+      name: Left Auditorium 2
       fixtureType: UkingPar
-      color: '#ff0000'
+      color: '#0062ff'
       intensity: 50
       angle: 60
       penumbra: 0.5
-      x: -13.34184642659351
+      x: -13.341518123006733
       'y': 12.5
-      z: 5.534946853831619
+      z: 5.310064194111275
       rotX: -58.2034465685919
-      rotY: -90.08364538458109
+      rotY: -90.08364538458108
       rotZ: 0
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Center Auditorium
-      name: Left Center Auditorium 3
+    - group: Left Auditorium
+      name: Left Auditorium 3
       fixtureType: UkingPar
-      color: '#ff0000'
+      color: '#0062ff'
       intensity: 50
       angle: 60
       penumbra: 0.5
-      x: -13.344144551700943
+      x: -13.343487944527391
       'y': 12.5
-      z: 7.10912547187403
+      z: 6.659360152433342
       rotX: -58.2034465685919
-      rotY: -90.08364538458109
+      rotY: -90.08364538458108
       rotZ: 0
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Center Auditorium
-      name: Left Center Auditorium 4
+    - group: Left Auditorium
+      name: Left Auditorium 4
       fixtureType: UkingPar
-      color: '#ff0000'
+      color: '#0062ff'
       intensity: 50
       angle: 60
       penumbra: 0.5
-      x: -13.346442676808376
+      x: -13.345457766048048
       'y': 12.5
-      z: 8.68330408991644
+      z: 8.008656110755407
       rotX: -58.2034465685919
-      rotY: -90.08364538458109
+      rotY: -90.08364538458108
       rotZ: 0
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Center Auditorium
-      name: Left Center Auditorium 5
+    - group: Left Auditorium
+      name: Left Auditorium 5
       fixtureType: UkingPar
-      color: '#ff0000'
-      intensity: 50
-      angle: 60
-      penumbra: 0.5
-      x: -13.34874080191581
-      'y': 12.5
-      z: 10.257482707958852
-      rotX: -58.2034465685919
-      rotY: -90.08364538458109
-      rotZ: 0
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Center Auditorium
-      name: Left Center Auditorium 6
-      fixtureType: UkingPar
-      color: '#ff0000'
-      intensity: 50
-      angle: 60
-      penumbra: 0.5
-      x: -13.351038927023243
-      'y': 12.5
-      z: 11.831661326001264
-      rotX: -58.2034465685919
-      rotY: -90.08364538458109
-      rotZ: 0
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Center Auditorium
-      name: Left Center Auditorium 7
-      fixtureType: UkingPar
-      color: '#ff0000'
+      color: '#0062ff'
       intensity: 50
       angle: 60
       penumbra: 0.5
@@ -187,7 +651,55 @@ parLights:
       'y': 12.5
       z: 13.405839944043674
       rotX: -58.2034465685919
-      rotY: -90.08364538458109
+      rotY: -90.08364538458108
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Auditorium
+      name: Left Auditorium 6
+      fixtureType: UkingPar
+      color: '#0062ff'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.35136723061002
+      'y': 12.5
+      z: 12.056543985721607
+      rotX: -58.2034465685919
+      rotY: -90.08364538458108
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Auditorium
+      name: Left Auditorium 7
+      fixtureType: UkingPar
+      color: '#0062ff'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.349397409089361
+      'y': 12.5
+      z: 10.707248027399542
+      rotX: -58.2034465685919
+      rotY: -90.08364538458108
+      rotZ: 0
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Auditorium
+      name: Left Auditorium 8
+      fixtureType: UkingPar
+      color: '#0062ff'
+      intensity: 50
+      angle: 60
+      penumbra: 0.5
+      x: -13.347427587568705
+      'y': 12.5
+      z: 9.357952069077475
+      rotX: -58.2034465685919
+      rotY: -90.08364538458108
       rotZ: 0
       traceGenerated: true
       enabled: true
@@ -199,9 +711,9 @@ parLights:
       intensity: 18
       angle: 30
       penumbra: 0.5
-      x: -26.981612436904612
-      'y': 3.186745991141541
-      z: 1.1102287151812287
+      x: -17.90278276001147
+      'y': 8.260209634111238
+      z: 1.1363518107401709
       rotX: -60.23314912201408
       rotY: -77.87068304022095
       rotZ: 79.28773273379291
@@ -215,9 +727,9 @@ parLights:
       intensity: 18
       angle: 30
       penumbra: 0.5
-      x: -23.955335877940232
-      'y': 4.877900538798107
-      z: 1.1189364137008762
+      x: -14.876506201047087
+      'y': 9.951364181767804
+      z: 1.1450595092598184
       rotX: -60.23314912201408
       rotY: -77.87068304022095
       rotZ: 79.28773273379291
@@ -247,9 +759,9 @@ parLights:
       intensity: 18
       angle: 30
       penumbra: 0.5
-      x: -17.90278276001147
-      'y': 8.260209634111238
-      z: 1.1363518107401709
+      x: -23.955335877940232
+      'y': 4.877900538798107
+      z: 1.1189364137008762
       rotX: -60.23314912201408
       rotY: -77.87068304022095
       rotZ: 79.28773273379291
@@ -258,596 +770,6 @@ parLights:
       brightness: 100
     - group: Left Back Wall
       name: Left Back Wall 5
-      fixtureType: ShehdsBar
-      color: '#001eff'
-      intensity: 18
-      angle: 30
-      penumbra: 0.5
-      x: -14.876506201047087
-      'y': 9.951364181767804
-      z: 1.1450595092598184
-      rotX: -60.23314912201408
-      rotY: -77.87068304022095
-      rotZ: 79.28773273379291
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: TE Sign
-      name: TE Sign V3 A
-      fixtureType: TeSignV3A40
-      color: '#ffffff'
-      intensity: 5
-      angle: 20
-      penumbra: 0.5
-      x: -15.5
-      'y': 9.015212285754357
-      z: 8.511924730643457
-      rotX: 0
-      rotY: -90.00000000000001
-      rotZ: 0
-      traceGenerated: false
-      enabled: true
-      brightness: 100
-      diffusion: true
-      diffusionAmount: 1.5
-      scaleX: 1
-      scaleY: 1
-      scaleZ: 1
-      screen: false
-      screenPixelSize: 60
-    - group: TE Sign
-      name: TE Sign V3 B
-      fixtureType: TeSignV3B34
-      color: '#ffffff'
-      intensity: 5
-      angle: 20
-      penumbra: 0.5
-      x: -15.5
-      'y': 9.015212285754357
-      z: 8.511924730643457
-      rotX: 0
-      rotY: -90.00000000000001
-      rotZ: 0
-      traceGenerated: false
-      enabled: true
-      brightness: 100
-      diffusion: true
-      diffusionAmount: 1.5
-      scaleX: 1
-      scaleY: 1
-      scaleZ: 1
-      screen: false
-      screenPixelSize: 60
-    - group: Right Front Wall Generator
-      name: Right Front Wall Generator 1
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: 31.679339115932834
-      'y': 3.192957155283658
-      z: -5.722761842067021
-      rotX: -59.487132639253744
-      rotY: 127.42998852022396
-      rotZ: 90.67219748266783
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Front Wall Generator
-      name: Right Front Wall Generator 2
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: 29.325075318119058
-      'y': 4.9586041716090286
-      z: -3.8694584124771945
-      rotX: -59.487132639253744
-      rotY: 127.42998852022396
-      rotZ: 90.67219748266783
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Front Wall Generator
-      name: Right Front Wall Generator 3
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: 26.970811520305283
-      'y': 6.724251187934399
-      z: -2.0161549828873686
-      rotX: -59.487132639253744
-      rotY: 127.42998852022396
-      rotZ: 90.67219748266783
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Front Wall Generator
-      name: Right Front Wall Generator 4
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: 24.616547722491507
-      'y': 8.48989820425977
-      z: -0.16285155329754364
-      rotX: -59.487132639253744
-      rotY: 127.42998852022396
-      rotZ: 90.67219748266783
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Front Wall Generator
-      name: Right Front Wall Generator 5
-      fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
-      angle: 30
-      penumbra: 0.5
-      x: 22.26228392467773
-      'y': 10.255545220585141
-      z: 1.6904518762922836
-      rotX: -59.487132639253744
-      rotY: 127.42998852022396
-      rotZ: 90.67219748266783
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Top Chimney Generator
-      name: Right Top Chimney Generator 1
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: 25.96567931400758
-      'y': 6.985107542328527
-      z: -8.352568965470052
-      rotX: 65.06625088380783
-      rotY: -17.044438713931452
-      rotZ: -10.920082528299217
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Top Chimney Generator
-      name: Right Top Chimney Generator 2
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: 25.446411158438632
-      'y': 7.9497860924143655
-      z: -6.856758155619001
-      rotX: 51.47818458854239
-      rotY: -17.725286136762197
-      rotZ: -8.598145475158185
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Top Chimney Generator
-      name: Right Top Chimney Generator 3
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: 24.086949477883657
-      'y': 8.984894635153077
-      z: -6.13696072223727
-      rotX: 39.99030732378524
-      rotY: -27.919975945334425
-      rotZ: -10.337159830748263
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Top Chimney Generator
-      name: Right Top Chimney Generator 4
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: 22.406562427911602
-      'y': 9.69505688926385
-      z: -6.4681148198617375
-      rotX: 32.93601138960041
-      rotY: -41.92981153276394
-      rotZ: -12.924120974564937
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Top Chimney Generator
-      name: Right Top Chimney Generator 5
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: 21.04710074735663
-      'y': 9.809015011203604
-      z: -7.723730838713661
-      rotX: 31.418758258327543
-      rotY: -57.26422411694439
-      rotZ: -17.45969153907868
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Top Chimney Generator
-      name: Right Top Chimney Generator 6
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: 20.52783259178768
-      'y': 9.28324087168546
-      z: -9.424206136410433
-      rotX: 35.47570594065436
-      rotY: -71.98211544563993
-      rotZ: -26.158116617006065
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Top Chimney Generator
-      name: Right Top Chimney Generator 7
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: 21.047100747356627
-      'y': 8.318562321599623
-      z: -10.920016946261484
-      rotX: 44.26226204873759
-      rotY: -84.29943145330971
-      rotZ: -40.418834161170366
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Top Chimney Generator
-      name: Right Top Chimney Generator 8
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: 22.406562427911602
-      'y': 7.2834537788609115
-      z: -11.639814379643216
-      rotX: 56.338499391929055
-      rotY: -91.67362676832286
-      rotZ: -57.74290308303276
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Top Chimney Generator
-      name: Right Top Chimney Generator 9
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: 24.086949477883657
-      'y': 6.57329152475014
-      z: -11.308660282018748
-      rotX: 69.19893487279374
-      rotY: -86.00221846931665
-      rotZ: -65.50726479707653
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Top Chimney Generator
-      name: Right Top Chimney Generator 10
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: 25.44641115843863
-      'y': 6.459333402810385
-      z: -10.053044263166825
-      rotX: 74.74137801303029
-      rotY: -45.62350497604062
-      rotZ: -35.61759085525618
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Front Deck Generator
-      name: Right Front Deck Generator 1
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
-      penumbra: 0.5
-      x: 30.09189373965222
-      'y': 6.284993892390628
-      z: -7.613773701733408
-      rotX: -23.069497239525358
-      rotY: -156.27461465798476
-      rotZ: 33.15415130529821
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Front Deck Generator
-      name: Right Front Deck Generator 2
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
-      penumbra: 0.5
-      x: 27.71978522942019
-      'y': 8.039637333851797
-      z: -5.754931554793166
-      rotX: -23.069497239525358
-      rotY: -156.27461465798476
-      rotZ: 33.15415130529821
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Front Deck Generator
-      name: Right Front Deck Generator 3
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
-      penumbra: 0.5
-      x: 25.347676719188158
-      'y': 9.794280775312966
-      z: -3.896089407852924
-      rotX: -23.069497239525358
-      rotY: -156.27461465798476
-      rotZ: 33.15415130529821
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Front Deck Generator
-      name: Right Front Deck Generator 4
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
-      penumbra: 0.5
-      x: 22.975568208956126
-      'y': 11.548924216774134
-      z: -2.0372472609126806
-      rotX: -23.069497239525358
-      rotY: -156.27461465798476
-      rotZ: 33.15415130529821
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Center Auditorium Generator
-      name: Right Center Auditorium Generator 1
-      fixtureType: UkingPar
-      color: '#37ff00'
-      intensity: 15
-      angle: 45
-      penumbra: 0.5
-      x: 13.409044248777642
-      'y': 12.564682056392941
-      z: -6.77967720411976
-      rotX: -52.91136473298574
-      rotY: 128.3298139442604
-      rotZ: -179.7614697798204
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Center Auditorium Generator
-      name: Right Center Auditorium Generator 2
-      fixtureType: UkingPar
-      color: '#37ff00'
-      intensity: 15
-      angle: 45
-      penumbra: 0.5
-      x: 14.368472404812712
-      'y': 12.560814420678463
-      z: -5.574378455210102
-      rotX: -52.91136473298574
-      rotY: 128.3298139442604
-      rotZ: -179.7614697798204
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Center Auditorium Generator
-      name: Right Center Auditorium Generator 3
-      fixtureType: UkingPar
-      color: '#37ff00'
-      intensity: 15
-      angle: 45
-      penumbra: 0.5
-      x: 15.327900560847782
-      'y': 12.556946784963987
-      z: -4.369079706300443
-      rotX: -52.91136473298574
-      rotY: 128.3298139442604
-      rotZ: -179.7614697798204
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Center Auditorium Generator
-      name: Right Center Auditorium Generator 4
-      fixtureType: UkingPar
-      color: '#37ff00'
-      intensity: 15
-      angle: 45
-      penumbra: 0.5
-      x: 16.287328716882854
-      'y': 12.553079149249509
-      z: -3.1637809573907854
-      rotX: -52.91136473298574
-      rotY: 128.3298139442604
-      rotZ: -179.7614697798204
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Center Auditorium Generator
-      name: Right Center Auditorium Generator 5
-      fixtureType: UkingPar
-      color: '#37ff00'
-      intensity: 15
-      angle: 45
-      penumbra: 0.5
-      x: 17.246756872917924
-      'y': 12.549211513535031
-      z: -1.9584822084811275
-      rotX: -52.91136473298574
-      rotY: 128.3298139442604
-      rotZ: -179.7614697798204
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Center Auditorium Generator
-      name: Right Center Auditorium Generator 6
-      fixtureType: UkingPar
-      color: '#37ff00'
-      intensity: 15
-      angle: 45
-      penumbra: 0.5
-      x: 18.206185028952994
-      'y': 12.545343877820555
-      z: -0.7531834595714688
-      rotX: -52.91136473298574
-      rotY: 128.3298139442604
-      rotZ: -179.7614697798204
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Center Auditorium Generator
-      name: Right Center Auditorium Generator 7
-      fixtureType: UkingPar
-      color: '#37ff00'
-      intensity: 15
-      angle: 45
-      penumbra: 0.5
-      x: 19.165613184988064
-      'y': 12.541476242106077
-      z: 0.452115289338189
-      rotX: -52.91136473298574
-      rotY: 128.3298139442604
-      rotZ: -179.7614697798204
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Center Auditorium Generator
-      name: Left Center Auditorium Generator 1
-      fixtureType: UkingPar
-      color: '#ff0000'
-      intensity: 50
-      angle: 60
-      penumbra: 0.5
-      x: -13.339548301486076
-      'y': 12.5
-      z: 3.9607682357892084
-      rotX: -58.2034465685919
-      rotY: -90.08364538458108
-      rotZ: 0
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Center Auditorium Generator
-      name: Left Center Auditorium Generator 2
-      fixtureType: UkingPar
-      color: '#ff0000'
-      intensity: 50
-      angle: 60
-      penumbra: 0.5
-      x: -13.34184642659351
-      'y': 12.5
-      z: 5.534946853831619
-      rotX: -58.2034465685919
-      rotY: -90.08364538458108
-      rotZ: 0
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Center Auditorium Generator
-      name: Left Center Auditorium Generator 3
-      fixtureType: UkingPar
-      color: '#ff0000'
-      intensity: 50
-      angle: 60
-      penumbra: 0.5
-      x: -13.344144551700943
-      'y': 12.5
-      z: 7.10912547187403
-      rotX: -58.2034465685919
-      rotY: -90.08364538458108
-      rotZ: 0
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Center Auditorium Generator
-      name: Left Center Auditorium Generator 4
-      fixtureType: UkingPar
-      color: '#ff0000'
-      intensity: 50
-      angle: 60
-      penumbra: 0.5
-      x: -13.346442676808376
-      'y': 12.5
-      z: 8.68330408991644
-      rotX: -58.2034465685919
-      rotY: -90.08364538458108
-      rotZ: 0
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Center Auditorium Generator
-      name: Left Center Auditorium Generator 5
-      fixtureType: UkingPar
-      color: '#ff0000'
-      intensity: 50
-      angle: 60
-      penumbra: 0.5
-      x: -13.34874080191581
-      'y': 12.5
-      z: 10.257482707958852
-      rotX: -58.2034465685919
-      rotY: -90.08364538458108
-      rotZ: 0
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Center Auditorium Generator
-      name: Left Center Auditorium Generator 6
-      fixtureType: UkingPar
-      color: '#ff0000'
-      intensity: 50
-      angle: 60
-      penumbra: 0.5
-      x: -13.351038927023243
-      'y': 12.5
-      z: 11.831661326001264
-      rotX: -58.2034465685919
-      rotY: -90.08364538458108
-      rotZ: 0
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Center Auditorium Generator
-      name: Left Center Auditorium Generator 7
-      fixtureType: UkingPar
-      color: '#ff0000'
-      intensity: 50
-      angle: 60
-      penumbra: 0.5
-      x: -13.353337052130676
-      'y': 12.5
-      z: 13.405839944043674
-      rotX: -58.2034465685919
-      rotY: -90.08364538458108
-      rotZ: 0
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Back Wall Generator
-      name: Left Back Wall Generator 1
       fixtureType: ShehdsBar
       color: '#001eff'
       intensity: 18
@@ -862,120 +784,8 @@ parLights:
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Back Wall Generator
-      name: Left Back Wall Generator 2
-      fixtureType: ShehdsBar
-      color: '#001eff'
-      intensity: 18
-      angle: 30
-      penumbra: 0.5
-      x: -23.955335877940232
-      'y': 4.877900538798107
-      z: 1.1189364137008762
-      rotX: -60.23314912201408
-      rotY: -77.87068304022095
-      rotZ: 79.28773273379291
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Back Wall Generator
-      name: Left Back Wall Generator 3
-      fixtureType: ShehdsBar
-      color: '#001eff'
-      intensity: 18
-      angle: 30
-      penumbra: 0.5
-      x: -20.92905931897585
-      'y': 6.569055086454673
-      z: 1.1276441122205236
-      rotX: -60.23314912201408
-      rotY: -77.87068304022095
-      rotZ: 79.28773273379291
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Back Wall Generator
-      name: Left Back Wall Generator 4
-      fixtureType: ShehdsBar
-      color: '#001eff'
-      intensity: 18
-      angle: 30
-      penumbra: 0.5
-      x: -17.90278276001147
-      'y': 8.260209634111238
-      z: 1.1363518107401709
-      rotX: -60.23314912201408
-      rotY: -77.87068304022095
-      rotZ: 79.28773273379291
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Back Wall Generator
-      name: Left Back Wall Generator 5
-      fixtureType: ShehdsBar
-      color: '#001eff'
-      intensity: 18
-      angle: 30
-      penumbra: 0.5
-      x: -14.876506201047087
-      'y': 9.951364181767804
-      z: 1.1450595092598184
-      rotX: -60.23314912201408
-      rotY: -77.87068304022095
-      rotZ: 79.28773273379291
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Back Wall Generator
-      name: Right Back Wall Generator 1
-      fixtureType: ShehdsBar
-      color: '#001eff'
-      intensity: 18
-      angle: 30
-      penumbra: 0.5
-      x: 22.48111803418939
-      'y': 3.091973494418795
-      z: -17.599452631219364
-      rotX: -60.46870679441481
-      rotY: 124.89660280335734
-      rotZ: 92.74276245626504
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Back Wall Generator
-      name: Right Back Wall Generator 2
-      fixtureType: ShehdsBar
-      color: '#001eff'
-      intensity: 18
-      angle: 30
-      penumbra: 0.5
-      x: 20.103749371913235
-      'y': 4.79957920496498
-      z: -15.738831323767617
-      rotX: -60.46870679441481
-      rotY: 124.89660280335734
-      rotZ: 92.74276245626504
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Back Wall Generator
-      name: Right Back Wall Generator 3
-      fixtureType: ShehdsBar
-      color: '#001eff'
-      intensity: 18
-      angle: 30
-      penumbra: 0.5
-      x: 17.726380709637084
-      'y': 6.507184915511165
-      z: -13.878210016315869
-      rotX: -60.46870679441481
-      rotY: 124.89660280335734
-      rotZ: 92.74276245626504
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Right Back Wall Generator
-      name: Right Back Wall Generator 4
+    - group: Right Back Wall
+      name: Right Back Wall 1
       fixtureType: ShehdsBar
       color: '#001eff'
       intensity: 18
@@ -990,8 +800,8 @@ parLights:
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Right Back Wall Generator
-      name: Right Back Wall Generator 5
+    - group: Right Back Wall
+      name: Right Back Wall 2
       fixtureType: ShehdsBar
       color: '#001eff'
       intensity: 18
@@ -1006,56 +816,56 @@ parLights:
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Front Wall Generator
-      name: Left Front Wall Generator 1
+    - group: Right Back Wall
+      name: Right Back Wall 3
       fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
+      color: '#001eff'
+      intensity: 18
       angle: 30
       penumbra: 0.5
-      x: -27.51356600341995
-      'y': 3.065625978271977
-      z: 16.15465931141595
-      rotX: -59.71382995624983
-      rotY: -104.8347817673651
-      rotZ: 103.03517144805285
+      x: 17.726380709637084
+      'y': 6.507184915511165
+      z: -13.878210016315869
+      rotX: -60.46870679441481
+      rotY: 124.89660280335734
+      rotZ: 92.74276245626504
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Front Wall Generator
-      name: Left Front Wall Generator 2
+    - group: Right Back Wall
+      name: Right Back Wall 4
       fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
+      color: '#001eff'
+      intensity: 18
       angle: 30
       penumbra: 0.5
-      x: -24.356288906309494
-      'y': 4.846674763056066
-      z: 16.14509070227419
-      rotX: -59.71382995624983
-      rotY: -104.8347817673651
-      rotZ: 103.03517144805285
+      x: 20.103749371913235
+      'y': 4.79957920496498
+      z: -15.738831323767617
+      rotX: -60.46870679441481
+      rotY: 124.89660280335734
+      rotZ: 92.74276245626504
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Front Wall Generator
-      name: Left Front Wall Generator 3
+    - group: Right Back Wall
+      name: Right Back Wall 5
       fixtureType: ShehdsBar
-      color: '#ffaa44'
-      intensity: 10
+      color: '#001eff'
+      intensity: 18
       angle: 30
       penumbra: 0.5
-      x: -21.199011809199042
-      'y': 6.627723547840155
-      z: 16.135522093132426
-      rotX: -59.71382995624983
-      rotY: -104.8347817673651
-      rotZ: 103.03517144805285
+      x: 22.48111803418939
+      'y': 3.091973494418795
+      z: -17.599452631219364
+      rotX: -60.46870679441481
+      rotY: 124.89660280335734
+      rotZ: 92.74276245626504
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Front Wall Generator
-      name: Left Front Wall Generator 4
+    - group: Left Front Wall
+      name: Left Front Wall 1
       fixtureType: ShehdsBar
       color: '#ffaa44'
       intensity: 10
@@ -1070,8 +880,8 @@ parLights:
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Front Wall Generator
-      name: Left Front Wall Generator 5
+    - group: Left Front Wall
+      name: Left Front Wall 2
       fixtureType: ShehdsBar
       color: '#ffaa44'
       intensity: 10
@@ -1086,216 +896,184 @@ parLights:
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 1
+    - group: Left Front Wall
+      name: Left Front Wall 3
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -21.199011809199042
+      'y': 6.627723547840155
+      z: 16.135522093132426
+      rotX: -59.71382995624983
+      rotY: -104.8347817673651
+      rotZ: 103.03517144805285
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Front Wall
+      name: Left Front Wall 4
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -24.356288906309494
+      'y': 4.846674763056066
+      z: 16.14509070227419
+      rotX: -59.71382995624983
+      rotY: -104.8347817673651
+      rotZ: 103.03517144805285
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Front Wall
+      name: Left Front Wall 5
+      fixtureType: ShehdsBar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -27.51356600341995
+      'y': 3.065625978271977
+      z: 16.15465931141595
+      rotX: -59.71382995624983
+      rotY: -104.8347817673651
+      rotZ: 103.03517144805285
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left SmokeStack
+      name: Left SmokeStack 1
       fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
       penumbra: 0.5
-      x: -19.68599841880675
-      'y': 9.804457525532714
-      z: 8.61231073601136
-      rotX: 31.559080156917904
-      rotY: 90.33561859001496
-      rotZ: 31.73517520673026
+      x: -19.827135530908944
+      'y': 9.714094856955201
+      z: 9.640633511004042
+      rotX: 32.337269046689165
+      rotY: 82.10017407325442
+      rotZ: 28.3398549099709
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 2
+    - group: Left SmokeStack
+      name: Left SmokeStack 2
       fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
       penumbra: 0.5
-      x: -20.155530183342073
-      'y': 9.518302092411345
-      z: 10.383002434596523
-      rotX: 34.11118353666466
-      rotY: 75.69275091100872
-      rotZ: 26.814812103235987
+      x: -21.145173646543793
+      'y': 8.939362660858343
+      z: 11.353713628426116
+      rotX: 39.777656692216524
+      rotY: 64.9962872117339
+      rotZ: 25.955506298800945
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 3
+    - group: Left SmokeStack
+      name: Left SmokeStack 3
       fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
       penumbra: 0.5
-      x: -21.43835742534429
-      'y': 8.76915514439196
-      z: 11.492428961546901
-      rotX: 41.58059430253221
-      rotY: 62.68248915042685
-      rotZ: 26.038037090463877
+      x: -23.130769147728408
+      'y': 7.793717468614459
+      z: 11.484042204747766
+      rotX: 53.744828182274226
+      rotY: 53.34031839746261
+      rotZ: 28.559978955486265
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 4
+    - group: Left SmokeStack
+      name: Left SmokeStack 4
       fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
       penumbra: 0.5
-      x: -23.044483740062834
-      'y': 7.843165353049712
-      z: 11.516827091588201
-      rotX: 53.024546668458704
-      rotY: 53.639616539336366
-      rotZ: 28.309993039069422
+      x: -24.62078711925585
+      'y': 6.948262696172485
+      z: 9.955274527524544
+      rotX: 70.05143143309773
+      rotY: 60.634913294920246
+      rotZ: 44.572124562118745
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 5
+    - group: Left SmokeStack
+      name: Left SmokeStack 5
       fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
       penumbra: 0.5
-      x: -24.360423465500837
-      'y': 7.0940293454419185
-      z: 10.446877568306586
-      rotX: 66.3604973316225
-      rotY: 55.12884399742355
-      rotZ: 37.69245019613855
+      x: -19.948743653238083
+      'y': 9.664086443638585
+      z: 7.3483009518357
+      rotX: 32.871750683337694
+      rotY: 100.59644008082863
+      rotZ: 39.12051173889499
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 6
+    - group: Left SmokeStack
+      name: Left SmokeStack 6
       fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
       penumbra: 0.5
-      x: -24.883532353687183
-      'y': 6.807891614278355
-      z: 8.691264743348885
-      rotX: 74.6173413822195
-      rotY: 88.97903326672213
-      rotZ: 73.63526917929849
+      x: -21.438761624765526
+      'y': 8.81863167119661
+      z: 5.819533274612479
+      rotX: 41.32986367829916
+      rotY: 117.29906133889146
+      rotZ: 63.523733271126176
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 7
+    - group: Left SmokeStack
+      name: Left SmokeStack 7
       fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
       penumbra: 0.5
-      x: -24.41400058915186
-      'y': 7.094047047399724
-      z: 6.920573044763721
-      rotX: 66.87972873890881
-      rotY: 124.55441179068917
-      rotZ: 102.97539414347831
+      x: -23.42435712595014
+      'y': 7.672986478952726
+      z: 5.949861850934129
+      rotX: 56.06133529867749
+      rotY: 127.63636403017186
+      rotZ: 94.55516504803576
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 8
+    - group: Left SmokeStack
+      name: Left SmokeStack 8
       fixtureType: UkingPar
       color: '#ffaa44'
       intensity: 21
       angle: 30
       penumbra: 0.5
-      x: -23.131173347149645
-      'y': 7.843193995419109
-      z: 5.811146517813343
-      rotX: 53.48695619492759
-      rotY: 126.8012903024238
-      rotZ: 90.35930849607027
+      x: -24.74239524158499
+      'y': 6.898254282855868
+      z: 7.662941968356202
+      rotX: 71.90535569417763
+      rotY: 114.36762001215688
+      rotZ: 96.71867228146948
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 9
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: -21.5250470324311
-      'y': 8.769183786761356
-      z: 5.786748387772043
-      rotX: 41.87068378467061
-      rotY: 117.94224820822717
-      rotZ: 64.91083176634763
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Top Chimney Generator
-      name: Left Top Chimney Generator 10
-      fixtureType: UkingPar
-      color: '#ffaa44'
-      intensity: 21
-      angle: 30
-      penumbra: 0.5
-      x: -20.209107306993097
-      'y': 9.518319794369152
-      z: 6.856697911053658
-      rotX: 34.241591768025785
-      rotY: 104.97320780023594
-      rotZ: 43.726053773020155
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Front Deck Generator
-      name: Left Front Deck Generator 1
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
-      penumbra: 0.5
-      x: -26.996539336873344
-      'y': 6.1233150750920595
-      z: 13.80068646486837
-      rotX: -23.40524984943799
-      rotY: -165.14299385863916
-      rotZ: 147.24203857435182
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Front Deck Generator
-      name: Left Front Deck Generator 2
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
-      penumbra: 0.5
-      x: -23.814014580205022
-      'y': 7.94406946807146
-      z: 13.771806401091698
-      rotX: -23.40524984943799
-      rotY: -165.14299385863916
-      rotZ: 147.24203857435182
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Front Deck Generator
-      name: Left Front Deck Generator 3
-      fixtureType: VintageLed
-      color: '#f07100'
-      intensity: 22
-      angle: 50
-      penumbra: 0.5
-      x: -20.6314898235367
-      'y': 9.76482386105086
-      z: 13.742926337315026
-      rotX: -23.40524984943799
-      rotY: -165.14299385863916
-      rotZ: 147.24203857435182
-      traceGenerated: true
-      enabled: true
-      brightness: 100
-    - group: Left Front Deck Generator
-      name: Left Front Deck Generator 4
+    - group: Left Front Rails
+      name: Left Front Rails 1
       fixtureType: VintageLed
       color: '#f07100'
       intensity: 22
@@ -1310,56 +1088,56 @@ parLights:
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Right Back Deck Generator
-      name: Right Back Deck Generator 1
+    - group: Left Front Rails
+      name: Left Front Rails 2
       fixtureType: VintageLed
       color: '#f07100'
       intensity: 22
       angle: 50
       penumbra: 0.5
-      x: 23.542110475191183
-      'y': 6.3989015917332255
-      z: -15.321670473229617
-      rotX: -31.22393048608366
-      rotY: 58.33806838110173
-      rotZ: 143.96262760491908
+      x: -20.6314898235367
+      'y': 9.76482386105086
+      z: 13.742926337315026
+      rotX: -23.40524984943799
+      rotY: -165.14299385863916
+      rotZ: 147.24203857435182
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Right Back Deck Generator
-      name: Right Back Deck Generator 2
+    - group: Left Front Rails
+      name: Left Front Rails 3
       fixtureType: VintageLed
       color: '#f07100'
       intensity: 22
       angle: 50
       penumbra: 0.5
-      x: 21.083824868259374
-      'y': 8.206918093289028
-      z: -13.4234487680908
-      rotX: -31.22393048608366
-      rotY: 58.33806838110173
-      rotZ: 143.96262760491908
+      x: -23.814014580205022
+      'y': 7.94406946807146
+      z: 13.771806401091698
+      rotX: -23.40524984943799
+      rotY: -165.14299385863916
+      rotZ: 147.24203857435182
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Right Back Deck Generator
-      name: Right Back Deck Generator 3
+    - group: Left Front Rails
+      name: Left Front Rails 4
       fixtureType: VintageLed
       color: '#f07100'
       intensity: 22
       angle: 50
       penumbra: 0.5
-      x: 18.62553926132756
-      'y': 10.014934594844831
-      z: -11.525227062951986
-      rotX: -31.22393048608366
-      rotY: 58.33806838110173
-      rotZ: 143.96262760491908
+      x: -26.996539336873344
+      'y': 6.1233150750920595
+      z: 13.80068646486837
+      rotX: -23.40524984943799
+      rotY: -165.14299385863916
+      rotZ: 147.24203857435182
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Right Back Deck Generator
-      name: Right Back Deck Generator 4
+    - group: Right Back Rails
+      name: Right Back Rails 1
       fixtureType: VintageLed
       color: '#f07100'
       intensity: 22
@@ -1374,56 +1152,56 @@ parLights:
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Back Deck Generator
-      name: Left Back Deck Generator 1
+    - group: Right Back Rails
+      name: Right Back Rails 2
       fixtureType: VintageLed
       color: '#f07100'
       intensity: 22
       angle: 50
       penumbra: 0.5
-      x: -26.58160076911949
-      'y': 6.26502621158556
-      z: 3.4738953723776516
-      rotX: 146.81146877235534
-      rotY: 157.41292429654027
-      rotZ: 37.13499153486077
+      x: 18.62553926132756
+      'y': 10.014934594844831
+      z: -11.525227062951986
+      rotX: -31.22393048608366
+      rotY: 58.33806838110173
+      rotZ: 143.96262760491908
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Back Deck Generator
-      name: Left Back Deck Generator 2
+    - group: Right Back Rails
+      name: Right Back Rails 3
       fixtureType: VintageLed
       color: '#f07100'
       intensity: 22
       angle: 50
       penumbra: 0.5
-      x: -23.438120490091713
-      'y': 8.10529643723132
-      z: 3.477856231339029
-      rotX: 146.81146877235534
-      rotY: 157.41292429654027
-      rotZ: 37.13499153486077
+      x: 21.083824868259374
+      'y': 8.206918093289028
+      z: -13.4234487680908
+      rotX: -31.22393048608366
+      rotY: 58.33806838110173
+      rotZ: 143.96262760491908
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Back Deck Generator
-      name: Left Back Deck Generator 3
+    - group: Right Back Rails
+      name: Right Back Rails 4
       fixtureType: VintageLed
       color: '#f07100'
       intensity: 22
       angle: 50
       penumbra: 0.5
-      x: -20.294640211063935
-      'y': 9.94556666287708
-      z: 3.4818170903004066
-      rotX: 146.81146877235534
-      rotY: 157.41292429654027
-      rotZ: 37.13499153486077
+      x: 23.542110475191183
+      'y': 6.3989015917332255
+      z: -15.321670473229617
+      rotX: -31.22393048608366
+      rotY: 58.33806838110173
+      rotZ: 143.96262760491908
       traceGenerated: true
       enabled: true
       brightness: 100
-    - group: Left Back Deck Generator
-      name: Left Back Deck Generator 4
+    - group: Left Back Rails
+      name: Left Back Rails 1
       fixtureType: VintageLed
       color: '#f07100'
       intensity: 22
@@ -1432,14 +1210,190 @@ parLights:
       x: -17.151159932036162
       'y': 11.785836888522839
       z: 3.485777949261784
-      rotX: 146.81146877235534
-      rotY: 157.41292429654027
-      rotZ: 37.13499153486077
+      rotX: 163.20693317355943
+      rotY: 169.75179655804828
+      rotZ: 31.851636987088565
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Back Rails
+      name: Left Back Rails 2
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -20.294640211063935
+      'y': 9.94556666287708
+      z: 3.4818170903004066
+      rotX: 163.20693317355943
+      rotY: 169.75179655804828
+      rotZ: 31.851636987088565
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Back Rails
+      name: Left Back Rails 3
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -23.438120490091713
+      'y': 8.10529643723132
+      z: 3.477856231339029
+      rotX: 163.20693317355943
+      rotY: 169.75179655804828
+      rotZ: 31.851636987088565
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Back Rails
+      name: Left Back Rails 4
+      fixtureType: VintageLed
+      color: '#f07100'
+      intensity: 22
+      angle: 50
+      penumbra: 0.5
+      x: -26.58160076911949
+      'y': 6.26502621158556
+      z: 3.4738953723776516
+      rotX: 163.20693317355943
+      rotY: 169.75179655804828
+      rotZ: 31.851636987088565
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Small SmokeStack
+      name: Left Small SmokeStack 1
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -42.31804114458129
+      'y': 0.5
+      z: 8.623600599294598
+      rotX: 43.39693150206395
+      rotY: 91.51617841393006
+      rotZ: 44.44876410086048
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Small SmokeStack
+      name: Left Small SmokeStack 2
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -46.31804114458129
+      'y': 0.5
+      z: 12.623600599294598
+      rotX: 45.45313714348712
+      rotY: 2.6785929606459016
+      rotZ: 1.1221079410900563
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Small SmokeStack
+      name: Left Small SmokeStack 3
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -50.31804114458129
+      'y': 0.5
+      z: 8.623600599294598
+      rotX: 46.00205587753663
+      rotY: -91.66061600435381
+      rotZ: -47.20883259835222
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Left Small SmokeStack
+      name: Left Small SmokeStack 4
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: -46.31804114458129
+      'y': 0.5
+      z: 4.623600599294598
+      rotX: 43.8708037744279
+      rotY: 177.4654685597126
+      rotZ: 173.71168770742017
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Small SmokeStack
+      name: Right Small SmokeStack 1
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 45.01315204751784
+      'y': 0.24976533317669647
+      z: -26.379463406549938
+      rotX: 51.35134833809172
+      rotY: 147.0644627392933
+      rotZ: 116.82670576339218
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Small SmokeStack
+      name: Right Small SmokeStack 2
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 45.45408612229494
+      'y': 0.24976533317669647
+      z: -20.739820054200386
+      rotX: 59.25116367396329
+      rotY: 59.21157563066602
+      rotZ: 35.81392393624751
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Small SmokeStack
+      name: Right Small SmokeStack 3
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 39.814442769945394
+      'y': 0.24976533317669647
+      z: -20.29888597942329
+      rotX: 59.00574558936226
+      rotY: -50.6615542703347
+      rotZ: -29.988626032616924
+      traceGenerated: true
+      enabled: true
+      brightness: 100
+    - group: Right Small SmokeStack
+      name: Right Small SmokeStack 4
+      fixtureType: UkingPar
+      color: '#ffaa44'
+      intensity: 10
+      angle: 30
+      penumbra: 0.5
+      x: 39.3735086951683
+      'y': 0.24976533317669647
+      z: -25.93852933177284
+      rotX: 51.20018063904204
+      rotY: -137.72124306881562
+      rotZ: -102.19199439584348
       traceGenerated: true
       enabled: true
       brightness: 100
   traces: &ref_0
-    - name: Right Front Wall Generator
+    - name: Right Front Wall
       shape: line
       startX: 31.679339115932834
       startY: 3.192957155283658
@@ -1454,7 +1408,7 @@ parLights:
       lightColor: '#ffaa44'
       lightIntensity: 10
       lightAngle: 30
-      groupName: Right Front Wall Generator
+      groupName: Right Front Wall
       generated: true
       fixtureType: ShehdsBar
       fixtureRotOffX: 0
@@ -1463,16 +1417,23 @@ parLights:
       locked: false
       controllerIp: ''
       count: 5
-    - name: Right Top Chimney Generator
+      chainSplits:
+        - from: 4
+          to: 5
+        - from: 3
+          to: 2
+        - from: 1
+          to: 1
+    - name: Right SmokeStacks
       shape: circle
       radius: 3
       arc: 360
       x: 23.24675595289763
       'y': 8.134174207006994
       z: -8.888387550940243
-      rotX: -25
-      rotY: 0
-      rotZ: -25
+      rotX: 18.00406374886349
+      rotY: -165.72081987476227
+      rotZ: 30.267174090420646
       aimMode: lookAt
       aimX: 26.932933288524158
       aimY: 14.083250851184719
@@ -1480,7 +1441,7 @@ parLights:
       lightColor: '#ffaa44'
       lightIntensity: 21
       lightAngle: 30
-      groupName: Right Top Chimney Generator
+      groupName: Right SmokeStacks
       generated: true
       fixtureType: UkingPar
       fixtureRotOffX: 0
@@ -1488,8 +1449,13 @@ parLights:
       fixtureRotOffZ: 0
       locked: false
       controllerIp: ''
-      count: 10
-    - name: Right Front Deck Generator
+      count: 8
+      chainSplits:
+        - from: 1
+          to: 4
+        - from: 8
+          to: 5
+    - name: Right Front Rails
       shape: line
       startX: 30.09189373965222
       startY: 6.284993892390628
@@ -1504,7 +1470,7 @@ parLights:
       lightColor: '#f07100'
       lightIntensity: 22
       lightAngle: 50
-      groupName: Right Front Deck Generator
+      groupName: Right Front Rails
       generated: true
       fixtureType: VintageLed
       fixtureRotOffX: 0
@@ -1513,7 +1479,10 @@ parLights:
       locked: false
       controllerIp: ''
       count: 4
-    - name: Right Center Auditorium Generator
+      chainSplits:
+        - from: 4
+          to: 1
+    - name: Right Auditorium
       shape: line
       startX: 13.409044248777642
       startY: 12.564682056392941
@@ -1528,7 +1497,7 @@ parLights:
       lightColor: '#37ff00'
       lightIntensity: 15
       lightAngle: 45
-      groupName: Right Center Auditorium Generator
+      groupName: Right Auditorium
       generated: true
       fixtureType: UkingPar
       fixtureRotOffX: 0
@@ -1536,8 +1505,14 @@ parLights:
       fixtureRotOffZ: 0
       locked: false
       controllerIp: ''
-      count: 7
-    - name: Left Center Auditorium Generator
+      count: 8
+      pointOffsets: []
+      chainSplits:
+        - from: 1
+          to: 4
+        - from: 8
+          to: 5
+    - name: Left Auditorium
       shape: line
       startX: -13.339548301486076
       startY: 12.5
@@ -1549,10 +1524,10 @@ parLights:
       aimX: -9
       aimY: 5.5
       aimZ: 4
-      lightColor: '#ff0000'
+      lightColor: '#0062ff'
       lightIntensity: 50
       lightAngle: 60
-      groupName: Left Center Auditorium Generator
+      groupName: Left Auditorium
       generated: true
       fixtureType: UkingPar
       fixtureRotOffX: 0
@@ -1560,8 +1535,13 @@ parLights:
       fixtureRotOffZ: 0
       locked: false
       controllerIp: ''
-      count: 7
-    - name: Left Back Wall Generator
+      count: 8
+      chainSplits:
+        - from: 1
+          to: 4
+        - from: 8
+          to: 5
+    - name: Left Back Wall
       shape: line
       startX: -26.981612436904612
       startY: 3.186745991141541
@@ -1576,7 +1556,7 @@ parLights:
       lightColor: '#001eff'
       lightIntensity: 18
       lightAngle: 30
-      groupName: Left Back Wall Generator
+      groupName: Left Back Wall
       generated: true
       fixtureType: ShehdsBar
       fixtureRotOffX: 0
@@ -1585,7 +1565,14 @@ parLights:
       locked: false
       controllerIp: ''
       count: 5
-    - name: Right Back Wall Generator
+      chainSplits:
+        - from: 4
+          to: 5
+        - from: 3
+          to: 2
+        - from: 1
+          to: 1
+    - name: Right Back Wall
       shape: line
       startX: 22.48111803418939
       startY: 3.091973494418795
@@ -1600,7 +1587,7 @@ parLights:
       lightColor: '#001eff'
       lightIntensity: 18
       lightAngle: 30
-      groupName: Right Back Wall Generator
+      groupName: Right Back Wall
       generated: true
       fixtureType: ShehdsBar
       fixtureRotOffX: 0
@@ -1609,7 +1596,14 @@ parLights:
       locked: false
       controllerIp: ''
       count: 5
-    - name: Left Front Wall Generator
+      chainSplits:
+        - from: 4
+          to: 5
+        - from: 3
+          to: 2
+        - from: 1
+          to: 1
+    - name: Left Front Wall
       shape: line
       startX: -27.51356600341995
       startY: 3.065625978271977
@@ -1624,7 +1618,7 @@ parLights:
       lightColor: '#ffaa44'
       lightIntensity: 10
       lightAngle: 30
-      groupName: Left Front Wall Generator
+      groupName: Left Front Wall
       generated: true
       fixtureType: ShehdsBar
       fixtureRotOffX: 0
@@ -1633,16 +1627,23 @@ parLights:
       locked: false
       controllerIp: ''
       count: 5
-    - name: Left Top Chimney Generator
+      chainSplits:
+        - from: 4
+          to: 5
+        - from: 3
+          to: 2
+        - from: 1
+          to: 1
+    - name: Left SmokeStack
       shape: circle
       radius: 3
       arc: 360
       x: -22.284765386246967
       'y': 8.306174569905535
       z: 8.651787739680122
-      rotX: 0.0002875901438091924
-      rotY: 0.8704599574352223
-      rotZ: 29.96214097203359
+      rotX: 9.835442813164624
+      rotY: -16.63105909738592
+      rotZ: 28.444504179599
       aimMode: lookAt
       aimX: -26.932126807268464
       aimY: 14.255251214083259
@@ -1650,7 +1651,7 @@ parLights:
       lightColor: '#ffaa44'
       lightIntensity: 21
       lightAngle: 30
-      groupName: Left Top Chimney Generator
+      groupName: Left SmokeStack
       generated: true
       fixtureType: UkingPar
       fixtureRotOffX: 0
@@ -1658,8 +1659,13 @@ parLights:
       fixtureRotOffZ: 0
       locked: false
       controllerIp: ''
-      count: 10
-    - name: Left Front Deck Generator
+      count: 8
+      chainSplits:
+        - from: 1
+          to: 4
+        - from: 8
+          to: 5
+    - name: Left Front Rails
       shape: line
       startX: -26.996539336873344
       startY: 6.1233150750920595
@@ -1674,7 +1680,7 @@ parLights:
       lightColor: '#f07100'
       lightIntensity: 22
       lightAngle: 50
-      groupName: Left Front Deck Generator
+      groupName: Left Front Rails
       generated: true
       fixtureType: VintageLed
       fixtureRotOffX: 0
@@ -1683,7 +1689,10 @@ parLights:
       locked: false
       controllerIp: ''
       count: 4
-    - name: Right Back Deck Generator
+      chainSplits:
+        - from: 4
+          to: 1
+    - name: Right Back Rails
       shape: line
       startX: 23.542110475191183
       startY: 6.3989015917332255
@@ -1698,7 +1707,7 @@ parLights:
       lightColor: '#f07100'
       lightIntensity: 22
       lightAngle: 50
-      groupName: Right Back Deck Generator
+      groupName: Right Back Rails
       generated: true
       fixtureType: VintageLed
       fixtureRotOffX: 0
@@ -1707,7 +1716,10 @@ parLights:
       locked: false
       controllerIp: ''
       count: 4
-    - name: Left Back Deck Generator
+      chainSplits:
+        - from: 4
+          to: 1
+    - name: Left Back Rails
       shape: line
       startX: -26.58160076911949
       startY: 6.26502621158556
@@ -1716,13 +1728,13 @@ parLights:
       endY: 11.785836888522839
       endZ: 3.485777949261784
       aimMode: direction
-      aimX: -26.36434148364596
-      aimY: 5.425416209214692
-      aimZ: 2.4580583948630093
+      aimX: -27
+      aimY: 5
+      aimZ: 1
       lightColor: '#f07100'
       lightIntensity: 22
       lightAngle: 50
-      groupName: Left Back Deck Generator
+      groupName: Left Back Rails
       generated: true
       fixtureType: VintageLed
       fixtureRotOffX: 180
@@ -1731,6 +1743,61 @@ parLights:
       locked: false
       controllerIp: ''
       count: 4
+      chainSplits:
+        - from: 4
+          to: 1
+    - name: Left Small SmokeStack
+      shape: circle
+      radius: 4
+      arc: 360
+      count: 4
+      x: -46.31804114458129
+      'y': 0.5
+      z: 8.623600599294598
+      rotX: -0.0
+      rotY: 0
+      rotZ: 0
+      aimMode: lookAt
+      aimX: -46.5
+      aimY: 4.455642566522588
+      aimZ: 8.734290709830491
+      lightColor: '#ffaa44'
+      lightIntensity: 10
+      lightAngle: 30
+      groupName: Left Small SmokeStack
+      fixtureType: UkingPar
+      generated: true
+      controllerIp: ''
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
+    - name: Right Small SmokeStack
+      shape: circle
+      radius: 4
+      arc: 360
+      count: 4
+      x: 42.41379740873162
+      'y': 0.24976533317669647
+      z: -23.339174692986614
+      rotX: 0
+      rotY: 49.470561389101036
+      rotZ: 0
+      aimMode: lookAt
+      aimX: 42.5
+      aimY: 6.030016565262266
+      aimZ: -22.5
+      lightColor: '#ffaa44'
+      lightIntensity: 10
+      lightAngle: 30
+      groupName: Right Small SmokeStack
+      fixtureType: UkingPar
+      generated: true
+      controllerIp: ''
+      fixtureRotOffX: 0
+      fixtureRotOffY: 0
+      fixtureRotOffZ: 0
+      locked: false
 ledStrands:
   _section:
     label: 🔌 LED Fixtures
@@ -1750,10 +1817,11 @@ ledStrands:
       color: '#00ffaa'
       intensity: 1.7
       ledCount: 40
-      sectionId: 0
-      fixtureId: 0
+      sectionId: 18
+      fixtureId: 91
       viewMask: 0
       group: ''
+      haloScale: 1
     - name: Left_Back_Left
       startX: -31.5
       startY: 2
@@ -1764,10 +1832,11 @@ ledStrands:
       color: '#ff8800'
       intensity: 1
       ledCount: 40
-      sectionId: 0
-      fixtureId: 0
+      sectionId: 19
+      fixtureId: 92
       viewMask: 0
       group: ''
+      haloScale: 1
     - name: Left_Back_Right
       startX: -13.7
       startY: 12.5
@@ -1778,10 +1847,11 @@ ledStrands:
       color: '#ff8800'
       intensity: 1
       ledCount: 40
-      sectionId: 0
-      fixtureId: 0
+      sectionId: 20
+      fixtureId: 93
       viewMask: 0
       group: ''
+      haloScale: 1
     - name: Left_Front_Right
       startX: -13.5
       startY: 12.6
@@ -1792,10 +1862,11 @@ ledStrands:
       color: '#ff8800'
       intensity: 1
       ledCount: 40
-      sectionId: 0
-      fixtureId: 0
+      sectionId: 21
+      fixtureId: 94
       viewMask: 0
       group: ''
+      haloScale: 1
     - name: Right_Back_Left
       startX: 13.5
       startY: 12.6
@@ -1806,10 +1877,11 @@ ledStrands:
       color: '#ff8800'
       intensity: 1.1
       ledCount: 40
-      sectionId: 0
-      fixtureId: 0
+      sectionId: 22
+      fixtureId: 95
       viewMask: 0
       group: ''
+      haloScale: 1
     - name: Right_Back_Right
       startX: 27.6
       startY: 2.1
@@ -1820,10 +1892,11 @@ ledStrands:
       color: '#ff8800'
       intensity: 1
       ledCount: 40
-      sectionId: 0
-      fixtureId: 0
+      sectionId: 23
+      fixtureId: 96
       viewMask: 0
       group: ''
+      haloScale: 1
     - name: Right_Front_Right
       startX: 33.6
       startY: 2.1
@@ -1834,10 +1907,11 @@ ledStrands:
       color: '#ff8800'
       intensity: 1
       ledCount: 40
-      sectionId: 0
-      fixtureId: 0
+      sectionId: 24
+      fixtureId: 97
       viewMask: 0
       group: ''
+      haloScale: 1
     - name: Right_Front_Left
       startX: 19.5
       startY: 12.4
@@ -1848,16 +1922,18 @@ ledStrands:
       color: '#ff8800'
       intensity: 1
       ledCount: 40
-      sectionId: 0
-      fixtureId: 0
+      sectionId: 25
+      fixtureId: 98
       viewMask: 0
       group: ''
+      haloScale: 1
 traces: *ref_0
 groupOverrides:
-  Left Front Deck Generator:
-    enabled: true
-    brightness: 0
   TE Sign:
+    enabled: true
+    brightness: 100
+    locked: true
+  TE Sign 2:
     enabled: true
     brightness: 100
     locked: true

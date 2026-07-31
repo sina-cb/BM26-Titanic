@@ -48,7 +48,7 @@ parLights:
   _section:
     label: 🔌 DMX Fixtures
     type: fixtureArray
-    collapsed: false
+    collapsed: true
   parsEnabled:
     value: true
     label: Master Enabled
@@ -289,29 +289,29 @@ ledStrands:
     label: Master Enabled
   strands:
     - name: LED_0
-      startX: -5
-      startY: 1
-      startZ: 2.5
-      endX: 2.5
-      endY: 4
-      endZ: 2.5
+      startX: 2
+      startY: 3
+      startZ: -0.5
+      endX: -2
+      endY: 3
+      endZ: -0.5
       color: '#ff8800'
       intensity: 1
-      ledCount: 40
+      ledCount: 20
       sectionId: 5
       fixtureId: 11
       viewMask: 0
       group: ''
     - name: LED_1
-      startX: -3
-      startY: 5
-      startZ: 0
-      endX: 3
-      endY: 5
-      endZ: 0
+      startX: 2
+      startY: 4
+      startZ: 0.5
+      endX: -2
+      endY: 4
+      endZ: 0.5
       color: '#ff8800'
       intensity: 1
-      ledCount: 40
+      ledCount: 20
       group: ''
       sectionId: 6
       fixtureId: 12

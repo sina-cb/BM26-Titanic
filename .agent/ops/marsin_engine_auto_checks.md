@@ -53,6 +53,24 @@ Marsin Engine should expose these scripts in `marsin_engine/package.json`:
 The `check:syntax` script above is a minimum target. A stronger implementation
 should run `node --check` across all changed engine JS/MJS/CJS files.
 
+## Model Files Are Generated — Run The Parity Gate
+
+`marsin_engine/models/<scene>.js` and its `.effects.js` / `.viewmasks.js`
+sidecars are GENERATED from `simulation/scenes/<scene>/*.yaml` by the sim's
+browser exporter. Never hand-edit them. Any change to a model file (or to
+the scene it came from) must be proven consistent:
+
+```powershell
+cd simulation
+node tools/scene_model_parity.cjs <scene>
+```
+
+The engine itself validates only `groupBits` ↔ model groups at load, and it
+REFUSES a pixel-count change on hot reload — neither catches a stale model,
+a duplicate DMX address, or a section/fixture id collision. The validator
+does. Spec + modes (incl. `--strict`, the hardware gate):
+`.agent/ops/sim_auto_checks.md` → "Scene ↔ Model Parity Gate".
+
 ## HIL Setup
 
 The HIL tests are live integration tests. They require a running engine and will
@@ -180,4 +198,6 @@ A Marsin Engine change is done only when the final response includes:
 - `node engine.js --list`: pass
 - `node engine.js --pattern test_const --model test_bench --dry-run`: pass with no missing blend warning
 - HIL transition test: pass when mixer/blend behavior changed
+- `node simulation/tools/scene_model_parity.cjs <scene>`: pass, when any
+  `marsin_engine/models/*` file changed
 - Confirmation that tracked state files were not modified by HIL

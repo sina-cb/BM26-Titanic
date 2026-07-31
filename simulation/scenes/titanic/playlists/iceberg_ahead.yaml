@@ -1,0 +1,80 @@
+schemaVersion: 1
+name: iceberg_ahead
+entries:
+  - id: e_iceberg_ahead_0_02_phase_cathedral
+    pattern: 02_phase_cathedral
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_iceberg_ahead_1_08_ocean_liner
+    pattern: 08_ocean_liner
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_iceberg_ahead_2_14_lunar_current
+    pattern: 14_lunar_current
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_iceberg_ahead_3_16_ghost_tide_uv
+    pattern: 16_ghost_tide_uv
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_iceberg_ahead_4_18_deep_space_lattice
+    pattern: 18_deep_space_lattice
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_iceberg_ahead_5_32_caustic_shimmer
+    pattern: 32_caustic_shimmer
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_iceberg_ahead_6_39_tide_riser
+    pattern: 39_tide_riser
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_iceberg_ahead_7_47_quasicrystal_dunes
+    pattern: 47_quasicrystal_dunes
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_iceberg_ahead_8_58_lighthouse_solo
+    pattern: 58_lighthouse_solo
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_iceberg_ahead_9_62_white_shimmer
+    pattern: 62_white_shimmer
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_iceberg_ahead_10_63_white_chase
+    pattern: 63_white_chase
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null

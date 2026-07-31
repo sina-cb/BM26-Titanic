@@ -6,8 +6,15 @@
  *   node agent_render.js --open           Open the sim window (no captures, stays open)
  *   node agent_render.js --current        Capture the current view without moving the camera
  *   node agent_render.js --view front     Navigate to a specific view and capture
+ *   node agent_render.js --camera -24,9,8.5 --target -15.5,9,8.5 --label te_sign
+ *                                         Frame an ARBITRARY pose and capture
  *
  * Flags:
+ *   --camera x,y,z        Ad-hoc camera position (world units). Frames a detail
+ *                         with no preset behind it, so agents never have to write
+ *                         a throwaway preset into the operator-owned cameras.yaml.
+ *   --target x,y,z        Look-at / orbit target for --camera (required with it)
+ *   --label <slug>        Filename suffix for --camera captures (default 'camera')
  *   --keep-alive          Keep the browser window open after capturing
  *   --show-ui             Keep the menus/panels visible in captures (hidden by default)
  *   --viewport WxH        Screenshot resolution (default 1920x1080; use 1280x720 on
@@ -87,6 +94,34 @@ const RELOAD = args.includes('--reload');
 const RAYCAST_MODE = args.includes('--raycast');
 const VIEW_INDEX = args.indexOf('--view');
 const SINGLE_VIEW = VIEW_INDEX !== -1 ? args[VIEW_INDEX + 1] : null;
+
+// --camera x,y,z / --target x,y,z: an ad-hoc pose. Frames a detail (one fixture,
+// one seam) without adding a throwaway preset to the operator-owned
+// scenes/<scene>/cameras.yaml. Malformed input exits loudly (codex P0) rather
+// than capturing whatever the camera happened to be pointing at.
+function parseVec3(flag) {
+  const i = args.indexOf(flag);
+  if (i === -1) return null;
+  const raw = args[i + 1] || '';
+  const parts = raw.split(',').map((s) => Number(s.trim()));
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
+    console.error(`❌ Invalid ${flag} value '${raw}', expected x,y,z (e.g. -24,9,8.5).`);
+    process.exit(1);
+  }
+  return { x: parts[0], y: parts[1], z: parts[2] };
+}
+const CAMERA_POS = parseVec3('--camera');
+const CAMERA_TARGET = parseVec3('--target');
+if (CAMERA_POS && !CAMERA_TARGET) {
+  console.error('❌ --camera requires --target x,y,z.');
+  process.exit(1);
+}
+const LABEL_INDEX = args.indexOf('--label');
+const CAMERA_LABEL = LABEL_INDEX !== -1 ? String(args[LABEL_INDEX + 1] || '').trim() : '';
+if (LABEL_INDEX !== -1 && !/^[a-z0-9_]+$/i.test(CAMERA_LABEL)) {
+  console.error(`❌ Invalid --label '${CAMERA_LABEL}', expected [A-Za-z0-9_].`);
+  process.exit(1);
+}
 
 // --- Browser Management ---
 function saveEndpoint(wsEndpoint) {
@@ -395,8 +430,27 @@ async function main() {
   // For all capture modes, hide UI first (unless --show-ui keeps the menus)
   if (!SHOW_UI) await hideUI(page);
 
+  // === MODE: --camera x,y,z --target x,y,z (ad-hoc pose) ===
+  if (CAMERA_POS) {
+    const label = CAMERA_LABEL || 'camera';
+    console.log(`📸 Framing camera ${JSON.stringify(CAMERA_POS)} → ${JSON.stringify(CAMERA_TARGET)} and capturing...`);
+    const posed = await page.evaluate((pose) => {
+      if (typeof window.animateCameraToPose !== 'function') return false;
+      window.animateCameraToPose(pose.position, pose.target, 900);
+      return true;
+    }, { position: CAMERA_POS, target: CAMERA_TARGET });
+    if (!posed) {
+      console.error('❌ window.animateCameraToPose is missing — sim build is older than this tool.');
+      if (!isConnected) await browser.close();
+      process.exit(1);
+    }
+    await new Promise(r => setTimeout(r, CAMERA_SETTLE_MS));
+    const ts = Math.floor(Date.now() / 1000);
+    await captureScreenshot(page, `${ts}_${label}.png`);
+  }
+
   // === MODE: --current ===
-  if (CURRENT_ONLY) {
+  else if (CURRENT_ONLY) {
     console.log('📸 Capturing current view...');
     const ts = Math.floor(Date.now() / 1000);
     await captureScreenshot(page, `${ts}_current.png`);

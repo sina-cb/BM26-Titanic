@@ -1,0 +1,87 @@
+schemaVersion: 1
+name: deep_sea
+entries:
+  - id: e_deep_sea_0_08_ocean_liner
+    pattern: 08_ocean_liner
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_deep_sea_1_11_bioluminescence
+    pattern: 11_bioluminescence
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_deep_sea_2_16_ghost_tide_uv
+    pattern: 16_ghost_tide_uv
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_deep_sea_3_21_pelagic_manta_rays
+    pattern: 21_pelagic_manta_rays
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_deep_sea_4_22_abyssal_sway_garden
+    pattern: 22_abyssal_sway_garden
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_deep_sea_5_32_caustic_shimmer
+    pattern: 32_caustic_shimmer
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_deep_sea_6_39_tide_riser
+    pattern: 39_tide_riser
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_deep_sea_7_41_reaction_diffusion
+    pattern: 41_reaction_diffusion
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_deep_sea_8_44_biolume_swell
+    pattern: 44_biolume_swell
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_deep_sea_9_45_manta_drift
+    pattern: 45_manta_drift
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_deep_sea_10_46_abyssal_fronds
+    pattern: 46_abyssal_fronds
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_deep_sea_11_57_ink_diffuse
+    pattern: 57_ink_diffuse
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null

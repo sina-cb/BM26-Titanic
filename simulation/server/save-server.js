@@ -9,11 +9,14 @@ const {
   duplicateSceneDir,
 } = require('./scene_duplicate.cjs');
 
+const ledGamma = require('./led_gamma_service.cjs');
+
 const {
   writeFileAtomic,
   filesForSave,
   filesForCameras,
   filesForModel,
+  filesForPixelMapViews,
   snapshotBeforeWrite,
   listBackups,
   restoreBackup,
@@ -35,6 +38,11 @@ function resolveSceneConfigPath(sceneName) {
 function resolveSceneCamerasPath(sceneName) {
   const safeName = (sceneName || 'titanic').replace(/[^a-z0-9_-]/gi, '_');
   return path.join(SCENES_ROOT, safeName, 'cameras.yaml');
+}
+
+function resolveScenePixelMapViewsPath(sceneName) {
+  const safeName = (sceneName || 'titanic').replace(/[^a-z0-9_-]/gi, '_');
+  return path.join(SCENES_ROOT, safeName, 'pixel_map_views.yaml');
 }
 
 // Read port from config.yaml (fail-loud: no silent port guessing)
@@ -361,6 +369,49 @@ http.createServer((req, res) => {
         res.end('Error');
       }
     });
+  } else if (req.method === 'POST' && pathname === '/save-pixel-map-views') {
+    // The 2D Pixel Map's own layout sidecar (report 20260725_66): the views
+    // container — panels, hand-placed anchors, per-view framing and EDIT-mode
+    // offsets — as its own file, so the map can auto-save the operator's
+    // arrangement WITHOUT dragging a full scene save (fixtures, patches, model
+    // exports) along with it. Body is the JSON `{version, views[]}` tree; we
+    // dump it as YAML so it stays hand-readable and hand-editable like every
+    // other scene sidecar.
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      const outPath = resolveScenePixelMapViewsPath(sceneName);
+      console.log(`[SAVE SERVER] POST /save-pixel-map-views ` +
+        `(scene=${sceneName || 'default'}). Body: ${body.length} bytes`);
+      // Parse + validate FIRST, and reject (400) rather than writing anything:
+      // a truncated or malformed payload must never overwrite a good layout.
+      let tree;
+      try {
+        tree = JSON.parse(body);
+        if (!tree || typeof tree !== 'object' || Array.isArray(tree) || !Array.isArray(tree.views)) {
+          throw new Error('body must be a JSON object with a `views` array');
+        }
+      } catch (e) {
+        console.error(`[SAVE SERVER] ✋ Rejected pixel map views payload: ${e.message}`);
+        res.statusCode = 400;
+        res.end(`Error: ${e.message}`);
+        return;
+      }
+      try {
+        // Snapshot before overwrite (see /save). Throws → 500.
+        const backupScene = sceneName || 'titanic';
+        snapshotBeforeWrite(backupScene, filesForPixelMapViews(backupScene), 'save-pixel-map-views');
+
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        writeFileAtomic(outPath, yaml.dump(tree, { lineWidth: -1 }));
+        console.log(`[SAVE SERVER] ✅ Wrote ${outPath} (${tree.views.length} view(s))`);
+        res.end('Saved');
+      } catch (e) {
+        console.error(`[SAVE SERVER] Write error:`, e);
+        res.statusCode = 500;
+        res.end('Error');
+      }
+    });
   } else if (req.method === 'POST' && req.url === '/save-stl') {
     let body = '';
     req.on('data', chunk => body += chunk);
@@ -626,6 +677,55 @@ http.createServer((req, res) => {
         console.error(`[SAVE SERVER] Restore error:`, e);
         res.statusCode = e.statusCode || 500;
         res.end(`Error: ${e.message}`);
+      }
+    });
+  } else if (req.method === 'GET' && pathname === '/led/gamma') {
+    // Read ONE LED controller's current gamma curve straight off the hardware.
+    // The browser never talks to a controller directly — the sim server owns
+    // that hop (no cross-origin dependency, and the backup below needs a disk).
+    const ip = parsedUrl.searchParams.get('ip');
+    res.setHeader('Content-Type', 'application/json');
+    if (!ip) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ ok: false, kind: 'invalid', error: 'ip query parameter is required' }));
+      return;
+    }
+    ledGamma.readGamma(ip)
+      .then((info) => { res.end(JSON.stringify({ ok: true, ...info })); })
+      .catch((e) => {
+        console.error(`[SAVE SERVER] LED gamma read ${ip} failed: ${e.message}`);
+        res.statusCode = e.kind === 'invalid' ? 400 : 502;
+        res.end(JSON.stringify({ ok: false, ip, kind: e.kind || 'error', error: e.message }));
+      });
+  } else if (req.method === 'POST' && pathname === '/led/gamma-push') {
+    // Push a gamma curve to ONE LED controller: full-config backup →
+    // partial `{gamma}` write → reboot-aware read-back verify. One controller
+    // per request; the UI's fleet action calls this sequentially so every
+    // controller gets its own ok/failed/unreachable result (no silent partial
+    // success). Shared with agent_tools/led_gamma_push.cjs — one implementation.
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      res.setHeader('Content-Type', 'application/json');
+      let ip = null;
+      try {
+        const parsed = JSON.parse(body);
+        ip = parsed.ip;
+        const gamma = parsed.gamma;
+        ledGamma.pushGamma(ip, gamma, { onLog: (m) => console.log(`[SAVE SERVER][gamma] ${m}`) })
+          .then((result) => {
+            console.log(`[SAVE SERVER] ✅ gamma pushed to ${ip}: ` +
+              `${JSON.stringify(result.verified)} (${result.outcome})`);
+            res.end(JSON.stringify({ ok: true, ...result }));
+          })
+          .catch((e) => {
+            console.error(`[SAVE SERVER] ✋ gamma push ${ip} failed (${e.kind}): ${e.message}`);
+            res.statusCode = e.kind === 'invalid' ? 400 : 502;
+            res.end(JSON.stringify({ ok: false, ip, kind: e.kind || 'error', error: e.message }));
+          });
+      } catch (e) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ ok: false, ip, kind: 'invalid', error: e.message }));
       }
     });
   } else if (req.method === 'GET' && pathname === '/list-scenes') {

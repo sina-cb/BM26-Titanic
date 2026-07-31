@@ -25,6 +25,17 @@
  *     the view-mask bit carried, and trace.groupName tracking the fixtures
  *     (config.js re-stamp intact).
  *   GUARD — renaming onto an existing group name fails loud (alert) and reverts.
+ *   MAPPED — the operator ruling (2026-07-29, plan 20260725_44 steps 9-10 /
+ *     report 20260725_47): with a SYNTHETIC in-memory registry mapping the
+ *     probe's own fixtures, the rename CHECKS the mapping and INVALIDATES it
+ *     loudly — every old-name chain entry gone, NO new-name entry minted, the
+ *     old __globalPatchTree keys pruned, the renamed fixtures reprojecting as
+ *     honestly UNMAPPED (the parity validator's `unmapped_fixture`, never
+ *     `drift`), a fixture-by-fixture console report, and an accurate toast that
+ *     never says "channels freed". The synthetic registry + patch tree are
+ *     snapshotted and restored; nothing is ever saved.
+ *   REFUSAL — renaming a GENERATED fixture is refused loudly and reverted
+ *     (step 11, PENDING OPERATOR RATIFICATION).
  *
  * Usage:  node trace_rename_verify.cjs [--keep-alive]
  */
@@ -97,6 +108,11 @@ async function main() {
   console.log(`Loading ${SIM}`);
   await page.goto(SIM, { waitUntil: 'networkidle2', timeout: 60000 });
   await waitReady(page);
+
+  // Ops rule `_39`: record which GPU produced this run (no FPS claims here,
+  // but the adapter is what makes any browser observation reproducible).
+  const adapter = await page.evaluate(() => window.__gpuAdapter || null);
+  console.log(`GPU adapter: ${JSON.stringify(adapter)}`);
 
   // GUARDS 1+2 + pristine snapshot (incl. view registry groupBits).
   await page.evaluate(async (origin) => {
@@ -289,6 +305,220 @@ async function main() {
     && guard.renamedStillIntact === 4 && dialogs.length > dialogsBefore;
   console.log('\n[GUARD]', JSON.stringify(guard), `| alert fired? ${dialogs.length > dialogsBefore}`);
 
+  // ── MAPPED CASE (plan 20260725_44 step 13, operator ruling 2026-07-29) ─────
+  //    The rename that used to lose addresses silently. A SYNTHETIC in-memory
+  //    registry maps the probe's own 4 fixtures (never saved — the pristine
+  //    registry + patch tree are snapshotted and restored below), then the
+  //    rename runs through the REAL Name input. The contract:
+  //      • every OLD-name chain entry is gone,
+  //      • NO new-name entry was minted (no silent carry-over),
+  //      • the old __globalPatchTree keys are pruned (no phantoms),
+  //      • the new fixtures reproject as UNMAPPED ('' / 0 / 0) — the parity
+  //        validator's `unmapped_fixture`, never `drift`,
+  //      • the operator gets a fixture-by-fixture console report + an accurate
+  //        toast that never says "channels freed",
+  //      • zero save requests.
+  const renameLogs = [];
+  const onConsole = (m) => { if (/^\[Rename\]/.test(m.text())) renameLogs.push(m.text()); };
+  page.on('console', onConsole);
+
+  const MAPPED_OLD = RENAMED;            // the probe group is called this now
+  const MAPPED_NEW = 'ZZ Mapped Probe';
+
+  // Rebuild a clean generated set under MAPPED_OLD, then map it synthetically.
+  const mapSetup = await page.evaluate(async (origin, idx, group) => {
+    const p = window.__params;
+    p.parLights = p.parLights.filter((l) => !(l.traceGenerated && l.group === group));
+    p.traces[idx].groupName = group;
+    p.traces[idx].name = group;
+    p.traces[idx].generated = false;
+    window.renderGeneratorGUI();
+    if (window.openTraceFolder) window.openTraceFolder(idx);
+    const el = window.traceGuiFolders[idx].domElement;
+    [...el.querySelectorAll('button')].find((b) => /Generate/.test(b.textContent || '')).click();
+
+    const reg = await import(`${origin}/simulation/src/dmx/controller_registry.js`);
+    window.__pristineRegistry = JSON.parse(JSON.stringify(window.__controllerRegistry || null));
+    window.__pristinePatchTree = JSON.parse(JSON.stringify(window.__globalPatchTree || {}));
+    const registry = reg.createControllerRegistry(null);
+    const ctrl = reg.addController(registry, { name: 'ZZ Probe DMX', ip: '10.99.99.1' });
+    ctrl.ports[0].universe = 90;
+    for (let n = 1; n <= 4; n++) {
+      ctrl.ports[0].chain.push({ fixture: `${group} ${n}`, at: 1 + (n - 1) * 10 });
+    }
+    window.__controllerRegistry = registry;
+    const auto = await import(`${origin}/simulation/src/dmx/auto_patcher.js`);
+    window.projectControllerMappings(auto.gatherAllConfigs(p));
+    const mapped = p.parLights.filter((l) => l.group === group && l.traceGenerated);
+    return {
+      count: mapped.length,
+      addresses: mapped.map((l) => `${l.name}=U${l.dmxUniverse}:${l.dmxAddress}@${l.controllerIp}`),
+      patchKeys: Object.keys(window.__globalPatchTree || {}).filter((k) => k.startsWith(group)),
+    };
+  }, ORIGIN, traceIdx, MAPPED_OLD);
+  await sleep(400);
+  console.log(`\n[MAPPED setup] ${mapSetup.count} fixtures mapped:`, mapSetup.addresses.join('  '));
+
+  // Screenshot the mapped state (generator card + Controllers panel open).
+  await page.evaluate(() => { if (window.toggleControllerMapPanel) window.toggleControllerMapPanel(); });
+  await sleep(400);
+  await shot(page, 'mapped_before_rename');
+
+  const renameLogsBefore = renameLogs.length;
+  const mapped = await page.evaluate(async (idx, oldName, newName) => {
+    const el = window.traceGuiFolders[idx].domElement;
+    const nameCtrl = [...el.querySelectorAll('.controller')]
+      .find((c) => (c.querySelector('.name')?.textContent || '').trim() === 'Name');
+    const input = nameCtrl.querySelector('input');
+    input.focus();
+    input.value = newName;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('blur'));
+    await new Promise((r) => setTimeout(r, 400));
+
+    const p = window.__params;
+    const reg = window.__controllerRegistry;
+    const chainNames = [];
+    for (const c of reg.controllers) {
+      for (const port of c.ports) {
+        for (const e of port.chain) {
+          const n = typeof e === 'string' ? e : e.fixture;
+          if (n) chainNames.push(n);
+        }
+      }
+    }
+    const neu = p.parLights.filter((l) => l.group === newName && l.traceGenerated);
+    const tree = window.__globalPatchTree || {};
+    const toastEl = document.getElementById('auto-patch-toast');
+    return {
+      oldEntriesLeft: chainNames.filter((n) => n.startsWith(`${oldName} `)),
+      newEntriesMinted: chainNames.filter((n) => n.startsWith(`${newName} `)),
+      newCount: neu.length,
+      // "Unmapped, not drifted": every derived patch field is back to the
+      // unpatched sentinel the parity validator reads as `unmapped_fixture`.
+      allUnmapped: neu.every((l) => (l.controllerIp || '') === ''
+        && (l.dmxUniverse || 0) === 0 && (l.dmxAddress || 0) === 0
+        && (l.controllerId || 0) === 0),
+      residualAddresses: neu
+        .filter((l) => l.dmxUniverse || l.dmxAddress || l.controllerIp)
+        .map((l) => `${l.name}=U${l.dmxUniverse}:${l.dmxAddress}@${l.controllerIp}`),
+      oldPatchKeysLeft: Object.keys(tree).filter((k) => k.startsWith(`${oldName} `)),
+      newPatchKeysMapped: Object.keys(tree)
+        .filter((k) => k.startsWith(`${newName} `))
+        .filter((k) => tree[k].dmxUniverse || tree[k].dmxAddress || tree[k].controllerIp),
+      toast: toastEl ? toastEl.textContent : '',
+      toastEl: !!toastEl,
+    };
+  }, traceIdx, MAPPED_OLD, MAPPED_NEW);
+
+  // A summary the operator cannot SEE is not a loud output. Measured AFTER the
+  // fade-in settles: the regenerate blocks the main thread, so the CSS opacity
+  // transition only starts on the first frame after it, and an immediate read
+  // catches the animated value at 0. Poll instead of sampling once.
+  mapped.toastVisible = await page.evaluate(async () => {
+    const el = document.getElementById('auto-patch-toast');
+    if (!el) return { ok: false, why: 'no toast element' };
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && Number(getComputedStyle(el).opacity) < 0.95) {
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    // Real occlusion test: `pointer-events:none` makes elementFromPoint useless
+    // here, and the regression being pinned is specifically that this toast sat
+    // 4px under the multi-client contention banner (top:44px, z-index:1000).
+    const banner = [...document.body.children].find((n) => /sim windows connected/
+      .test(n.textContent || '') && getComputedStyle(n).position === 'fixed');
+    const bRect = banner ? banner.getBoundingClientRect() : null;
+    const overlapsBanner = !!bRect && r.top < bRect.bottom && r.bottom > bRect.top;
+    return {
+      ok: r.width > 0 && r.height > 0 && Number(cs.opacity) > 0.9
+        && cs.visibility === 'visible' && r.top >= 0 && r.bottom <= window.innerHeight
+        && !overlapsBanner,
+      rect: {
+        x: Math.round(r.left), y: Math.round(r.top),
+        width: Math.round(r.width), height: Math.round(r.height),
+        top: Math.round(r.top), bottom: Math.round(r.bottom),
+      },
+      bannerRect: bRect ? { top: Math.round(bRect.top), bottom: Math.round(bRect.bottom) } : null,
+      overlapsBanner, opacity: cs.opacity, zIndex: cs.zIndex,
+      color: cs.color, background: cs.backgroundColor, border: cs.borderColor,
+    };
+  });
+  // Decisive artifact: the toast rect, cropped. A geometry+opacity read can be
+  // right while the thing is still invisible (theme colors, compositing) — the
+  // crop is what proves the operator can READ it.
+  if (mapped.toastVisible.rect) {
+    const r = mapped.toastVisible.rect;
+    const p = path.join(OUT, `tracerename_${stamp()}_toast_crop.png`);
+    await page.screenshot({ path: p, clip: { x: r.x, y: r.y, width: r.width, height: r.height } });
+    console.log(`  📸 ${path.basename(p)} (toast crop)`);
+  }
+  await sleep(300);
+  await shot(page, 'mapped_after_rename_invalidated');
+
+  const report = renameLogs.slice(renameLogsBefore);
+  console.log('[MAPPED]', JSON.stringify({
+    oldEntriesLeft: mapped.oldEntriesLeft, newEntriesMinted: mapped.newEntriesMinted,
+    newCount: mapped.newCount, allUnmapped: mapped.allUnmapped,
+    residualAddresses: mapped.residualAddresses,
+    oldPatchKeysLeft: mapped.oldPatchKeysLeft, newPatchKeysMapped: mapped.newPatchKeysMapped,
+  }));
+  console.log(`[MAPPED] toast: "${mapped.toast}"`);
+  console.log('[MAPPED] operator-facing report:');
+  report.forEach((l) => console.log('   ', l));
+
+  const mappedConds = {
+    everyOldEntryInvalidated: mapped.oldEntriesLeft.length === 0,
+    noNewEntryMinted: mapped.newEntriesMinted.length === 0,
+    fixturesRegenerated: mapped.newCount === 4,
+    unmappedNotDrifted: mapped.allUnmapped && mapped.residualAddresses.length === 0,
+    noPatchTreePhantoms: mapped.oldPatchKeysLeft.length === 0,
+    newNamesNotSilentlyMapped: mapped.newPatchKeysMapped.length === 0,
+    // One loud line per fixture, plus header + re-map instruction.
+    reportNamesEveryFixture: [1, 2, 3, 4]
+      .every((n) => report.some((l) => l.includes(`"${MAPPED_OLD} ${n}"`))),
+    reportNamesTheController: report.some((l) => l.includes('10.99.99.1') && l.includes('U90')),
+    reportSaysInvalidated: report.some((l) => /INVALIDATED/.test(l)),
+    reportSaysRemap: report.some((l) => /Re-map these 4 fixture\(s\) deliberately/.test(l)),
+    toastAccurate: /invalidated the mapping of 4 fixture\(s\)/.test(mapped.toast)
+      && /UNMAPPED/.test(mapped.toast),
+    toastNotMisleading: !/channels freed/.test(mapped.toast) && !/deleted/.test(mapped.toast),
+    toastActuallyVisible: mapped.toastVisible.ok,
+  };
+  console.log('[MAPPED] toast visibility:', JSON.stringify(mapped.toastVisible));
+  console.log('[MAPPED] sub-conditions:', JSON.stringify(mappedConds));
+  const mappedOk = Object.values(mappedConds).every(Boolean);
+
+  // ── REFUSAL: renaming a GENERATED fixture is refused loudly (step 11). ─────
+  //    Flagged PENDING OPERATOR RATIFICATION in report 20260725_47.
+  const dialogsBeforeRefusal = dialogs.length;
+  const refusal = await page.evaluate(async (group) => {
+    const p = window.__params;
+    const idx = p.parLights.findIndex((l) => l.group === group && l.traceGenerated);
+    const folder = window.parGuiFolders && window.parGuiFolders[idx];
+    if (!folder) return { ok: false, reason: 'generated fixture card not found' };
+    const nameCtrl = [...folder.domElement.querySelectorAll('.controller')]
+      .find((c) => (c.querySelector('.name')?.textContent || '').trim() === 'Name');
+    const input = nameCtrl.querySelector('input');
+    const before = p.parLights[idx].name;
+    input.focus();
+    input.value = 'Hand Typed Name';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('blur'));
+    await new Promise((r) => setTimeout(r, 250));
+    return { ok: true, before, after: p.parLights[idx].name, inputValue: input.value };
+  }, MAPPED_NEW);
+  const refusalOk = refusal.ok && refusal.after === refusal.before
+    && refusal.inputValue === refusal.before && dialogs.length > dialogsBeforeRefusal;
+  const refusalMsg = dialogs[dialogs.length - 1] || '';
+  console.log('\n[REFUSAL]', JSON.stringify(refusal), `| alert fired? ${dialogs.length > dialogsBeforeRefusal}`);
+  console.log(`[REFUSAL] message points at: group-rename=${/rename the GROUP/i.test(refusalMsg)} ` +
+    `chain-order=${/Chain Order/.test(refusalMsg)}`);
+  await shot(page, 'generated_rename_refused');
+  await page.evaluate(() => { if (window.toggleControllerMapPanel) window.toggleControllerMapPanel(); });
+  page.off('console', onConsole);
+
   // ── Restore pristine (deterministic zero residue). ─────────────────────────
   const residue = await page.evaluate(() => {
     const p = window.__params;
@@ -296,6 +526,12 @@ async function main() {
     p.parLights = clone(window.__pristine.parLights);
     p.groupOverrides = clone(window.__pristine.groupOverrides);
     p.traces = clone(window.__pristine.traces);
+    if (window.__pristineRegistry !== undefined) {
+      window.__controllerRegistry = clone(window.__pristineRegistry);
+    }
+    if (window.__pristinePatchTree !== undefined) {
+      window.__globalPatchTree = clone(window.__pristinePatchTree);
+    }
     const reg = window.__viewRegistry || (window.__viewRegistry = { groupBits: {}, custom: [] });
     reg.groupBits = clone(window.__pristine.groupBits);
     if (window.rebuildParLights) window.rebuildParLights(true);
@@ -305,7 +541,9 @@ async function main() {
     return {
       parLightsMatch: eq(p.parLights, window.__pristine.parLights),
       tracesMatch: eq(p.traces, window.__pristine.traces),
-      noProbeGroups: !p.parLights.some((l) => l.group === 'ZZ Orphan Probe' || l.group === 'ZZ Renamed Probe'),
+      registryMatch: eq(window.__controllerRegistry, window.__pristineRegistry),
+      patchTreeMatch: eq(window.__globalPatchTree, window.__pristinePatchTree),
+      noProbeGroups: !p.parLights.some((l) => /^ZZ (Orphan|Renamed|Mapped) Probe$/.test(l.group)),
     };
   });
   console.log('\n[restore]', JSON.stringify(residue));
@@ -316,8 +554,12 @@ async function main() {
     'repro_old_bug_duplicates': reproOk,
     'fix_single_group_no_orphan': fixOk,
     'guard_collision_fails_loud_and_reverts': guardOk,
-    'restore_zero_residue': residue.parLightsMatch && residue.tracesMatch && residue.noProbeGroups,
+    'mapped_rename_checks_and_invalidates_loudly': mappedOk,
+    'generated_fixture_rename_refused_loudly': refusalOk,
+    'restore_zero_residue': residue.parLightsMatch && residue.tracesMatch
+      && residue.registryMatch && residue.patchTreeMatch && residue.noProbeGroups,
     'no_console_errors': noise.length === 0,
+    'zero_save_requests_attempted': abortedSaves === 0,
   };
   console.log('\n=== SUMMARY ===');
   Object.entries(results).forEach(([k, v]) => console.log(`  ${v ? '✅' : '❌'} ${k}`));

@@ -1,0 +1,38 @@
+schemaVersion: 1
+name: white_only
+entries:
+  - id: e_white_only_0_60_white_wash
+    pattern: 60_white_wash
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_1_61_white_breathe
+    pattern: 61_white_breathe
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_2_62_white_shimmer
+    pattern: 62_white_shimmer
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_3_63_white_chase
+    pattern: 63_white_chase
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
+  - id: e_white_only_4_64_temple_warm_white
+    pattern: 64_temple_warm_white
+    label: null
+    defaults: {}
+    modulations: []
+    midiMappings: []
+    notes: null
