@@ -2234,7 +2234,34 @@ test_bench mapping-defect pin gone red from his scene edits,
 clears with the owed re-export). Item 16 DONE. Report
 202607/20260725_87_no_restart_subscription.md. ALL AGENTS
 LANDED — nothing in flight.
-Next free report after reservations: `_88`.
+**COMMIT + PUSH (operator-ordered, 2026-07-30 18:53):**
+`3246deb2` "BM readiness wave" — ALL 441 changed files (185 M,
+244 new incl. reports _47–_87, engine states residue per
+operator's "all"), + follow-up commit removing a stray 0-byte
+`{}` tool-residue file; pushed to origin as NEW branch
+feat/bm_readiness. Security check: first run FAILED on 2 full
+IPs in the fresh _87 report → coordinator redacted to
+10.x.x.60 → PASSED (441 files). **OPERATOR RULING recorded:
+scene config files (scenes/**) are OK to carry controller IPs**
+(the checker already tolerates them; the redaction convention
+applies to .agent/ prose, not scene data).
+**`_88` reserved — master-doc compaction + archive (operator
+order 2026-07-30 end-of-day, IN FLIGHT, Opus):** "clean up the
+project file, compact it a bit, KEEP THE THREADS, get ready
+for new threads tomorrow; move the compacted data to a report
+in the .agent." **LANDED 2026-07-30.** Master doc 3,651 → 321 lines; archive
+20260725_88_master_doc_archive.md = 3,735 lines, byte-range
+verbatim moves (redactions preserved, no IP reintroduced),
+9 sections mirroring doc order, empty Log ready for tomorrow.
+Open items settled w/ original numbers: 2,3,5-14,15(=18+22
+merged one-push),17,19,21,23,25 + NEW 27 (Top-Down compression
+margin _84); decisions 5,6,7,9,10,12 open. VERIFIED RESOLVED
+(checked, not assumed): 1 — Bind WAS pressed (controllers.yaml
+carries device: controllerId testbench on LeftLeftRopes!), 4
+(ORPHAN_GROUPS=[]), 16, 20 (launcher restart served _66 route;
+pixel_map_views.yaml in b8b8bca5), 24, 26. Gitleaks direct
+scan of both files: no leaks. Coordinator committed after.
+Next free report after reservations: `_89`.
 **`_48` ADDENDUM 2 LANDED (2026-07-29) — 2D defaults name-drift
 repair (recurrence #3):** operator's 13-generator rename batch
 staled CHIMNEY_GROUPS[0] (→'Left SmokeStack') and
