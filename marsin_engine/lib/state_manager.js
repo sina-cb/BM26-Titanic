@@ -118,11 +118,29 @@ export class StateManager {
     return defaultState;
   }
 
-  save(filename, state) {
+  /**
+   * Persist `state` to `filename` in the flat `stateDir`, crash-safe.
+   *
+   * BEST-EFFORT vs STRICT (L5, report _120). The ~80 render-adjacent AUTO-SAVE
+   * triggers call this WITHOUT `strict` and MUST stay best-effort: a transient
+   * disk blip (EBUSY/disk-full) during an auto-save is logged and swallowed so a
+   * momentary write failure can never crash the engine (W1-1's process backstop
+   * exits(1) on any surviving throw — a dark ship). This warn-only default is
+   * the pre-existing behaviour, byte-unchanged.
+   *
+   * The EXPLICIT operator save (POST /settings/save-now) passes `{ strict:true }`
+   * so the write failure PROPAGATES: the CaptainPad "✓ SAVED" badge reads that
+   * endpoint's response, and a swallowed failure here made a failed write report
+   * 200 {saved:true} — the badge lied (red-team _115 L5). Strict re-throws so the
+   * save-now handler returns an honest non-200. `_writeFileAtomic` already
+   * re-throws on failure; strict simply declines to swallow it in this wrapper.
+   */
+  save(filename, state, { strict = false } = {}) {
     const filePath = path.join(this.stateDir, filename);
     try {
       this._writeFileAtomic(filePath, yaml.dump(state));
     } catch (e) {
+      if (strict) throw e;
       console.warn(`Failed to save state to ${filename}:`, e);
     }
   }
@@ -353,7 +371,7 @@ export class StateManager {
     }
   }
 
-  saveMixerState(mixer) {
+  saveMixerState(mixer, { strict = false } = {}) {
     // Mixer state file contains ONLY overlay channels. The deck channel
     // lives in deck_state.yaml — they are persisted separately, just as
     // they are owned separately at runtime. See the channel-split note
@@ -442,7 +460,7 @@ export class StateManager {
       // without this key loads to 'osc').
       tempoSourcePref: mixer.tempoSourcePref === 'tap' ? 'tap' : 'osc',
     };
-    this.save('mixer_state.yaml', state);
+    this.save('mixer_state.yaml', state, { strict });
   }
 
   /**
@@ -454,7 +472,7 @@ export class StateManager {
    *                         adding new YAML files for one-shot operator
    *                         settings.
    */
-  saveDeckState(mixer, extras = null) {
+  saveDeckState(mixer, extras = null, { strict = false } = {}) {
     const baseCh = typeof mixer.getDeckChannel === 'function'
       ? mixer.getDeckChannel()
       : mixer.getChannel(mixer.baseChannelId);
@@ -469,10 +487,10 @@ export class StateManager {
     if (extras && typeof extras === 'object') {
       Object.assign(state, extras);
     }
-    this.save('deck_state.yaml', state);
+    this.save('deck_state.yaml', state, { strict });
   }
 
-  saveGlobalsState(globalsState, paramCenter) {
+  saveGlobalsState(globalsState, paramCenter, { strict = false } = {}) {
     if (paramCenter) globalsState.params = paramCenter.getCanonicalState();
     // Strip session-scoped bypass-dimmer flags before write — they
     // must not survive restarts (see applyGlobalsState for rationale).
@@ -487,6 +505,6 @@ export class StateManager {
       }
       out.effects = filtered;
     }
-    this.save('globals_state.yaml', out);
+    this.save('globals_state.yaml', out, { strict });
   }
 }

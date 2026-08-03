@@ -13,12 +13,27 @@
  *      markers by kind). Live (GET /overview) until the operator edits, then
  *      a debounced preview of the DRAFT (POST /overview) so changes are seen
  *      across all days before saving.
- *   C. Day editor / maker — tap a day → vertical timeline; add/edit/delete
- *      cues via the themed CueEditorSheet (segmented/stepper/dropdown — no
- *      keyboard walls). Validation 400s surface inline, loudly.
+ *   C. DAY level (`DayView`) — tap a day to ZOOM IN: a full-screen day with
+ *      phase bands, the resolved "what actually plays" ribbon, the events, and
+ *      the same add/edit/delete via the themed CueEditorSheet (segmented/
+ *      stepper/dropdown — no keyboard walls). Validation 400s surface inline,
+ *      loudly. ◀ WEEK zooms back out.
  *   D. Cue list + controls — per-cue FIRE, the EVENT LOG (cue fires + plan
  *      lifecycle: activate/resume/autopilot/takeover/program),
  *      program/end.
+ *
+ * The ZOOM LADDER (report _94, operator ruling D1–D8 as recommended):
+ *
+ *     FESTIVAL ──tap a day──▶ DAY ──tap an event──▶ EVENT (the deck itself)
+ *      (the 8-day strip)     (this tab, level C)    LIVE  → PERFORM
+ *                                                   else  → TIME TRAVEL
+ *
+ * FESTIVAL and DAY are pure BROWSE levels — client-side navigation, zero engine
+ * effect, so reviewing the timeline can never touch the rig. EVENT is the only
+ * level that does, and it goes through the arbiter's EXISTING human layer (a
+ * scoped operator takeover). Leaving it is the existing resume() — which is why
+ * returning to THIS tab ends the zoom (D1), from the client that entered it.
+ * The mode banner itself is global: `components/timeline/ZoomBanner.tsx`.
  *
  * Draft / preview / save loop:
  *   - The draft plan is local state (loaded from GET /timeline/plans/:name,
@@ -30,12 +45,12 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Linking } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, router } from 'expo-router';
 import { Palette } from '@/constants/theme';
 import { useGlobalStyles, GlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { useTimeline } from '@/hooks/useTimeline';
+import { useTimeline, zoomEnteredHere } from '@/hooks/useTimeline';
 import {
   fetchPlaylists, getCachedColorPalettes,
   fetchDeckChannel, getAutopilot, fetchDeckColorAutopilot,
@@ -45,6 +60,7 @@ import {
   fetchTimelinePlans,
   fetchTimelinePlan,
   fetchTimelineOverview,
+  fetchTimelineResolve,
   previewTimelineOverview,
   saveTimelinePlan,
   deleteTimelinePlan,
@@ -52,6 +68,7 @@ import {
   TimelineCue,
   TimelineRecentFire,
   TimelineOverview,
+  TimelineResolve,
   OverviewCue,
   ShowPlan,
   PlanCue,
@@ -59,7 +76,8 @@ import {
   ActionPlaylist,
 } from '@/utils/timelineApi';
 import { DayOverviewStrip } from '@/components/timeline/DayOverviewStrip';
-import { DayEditor } from '@/components/timeline/DayEditor';
+import { DayView } from '@/components/timeline/DayView';
+import { EventSheet } from '@/components/timeline/EventSheet';
 import { CueEditorSheet } from '@/components/timeline/CueEditorSheet';
 import { PlanPickerSheet } from '@/components/timeline/PlanPickerSheet';
 import {
@@ -222,7 +240,10 @@ export default function TimelineScreen() {
   const C = usePalette();
   const globalStyles = useGlobalStyles();
   const styles = useMemo(() => makeStyles(C, globalStyles), [C, globalStyles]);
-  const { state, connected, error, setAutopilot, endProgram, fireCue, activatePlan } = useTimeline();
+  const {
+    state, connected, error, setAutopilot, endProgram, fireCue, activatePlan,
+    resume, performTakeover, travel,
+  } = useTimeline();
 
   // ── Server resources ──
   const [plans, setPlans] = useState<string[]>([]);
@@ -267,13 +288,25 @@ export default function TimelineScreen() {
   // Whether the cue list shows the SELECTED day's cues or ALL days. Default =
   // the selected day (per the brief).
   const [showAllDays, setShowAllDays] = useState(false);
-  // The day whose editor modal is OPEN (explicit EDIT DAY) — distinct from the
-  // selected/viewed day so a single tap selects without opening the editor.
-  const [editingDay, setEditingDay] = useState<number | null>(null);
+  // ── ZOOM LADDER (report _94 §1) ──────────────────────────────────────
+  //   FESTIVAL (the 8-day strip) ──tap a day──▶ DAY (full screen) ──tap an
+  //   event──▶ EVENT (the deck itself, under a mode banner).
+  // FESTIVAL and DAY are pure BROWSE levels — client-side only, zero engine
+  // effect. Reviewing the timeline never touches the rig. Only the EVENT rung
+  // does, and it goes through the arbiter's existing human layer.
+  const [zoomLevel, setZoomLevel] = useState<'festival' | 'day'>('festival');
   const [cueSheetOpen, setCueSheetOpen] = useState(false);
   const [editingCue, setEditingCue] = useState<PlanCue | null>(null);
   // The plan's DEFAULT CUE editor (reuses CueEditorSheet in 'defaultCue' mode).
   const [defaultCueSheetOpen, setDefaultCueSheetOpen] = useState(false);
+
+  // ── EVENT rung: the event sheet + its read-only resolver peek ──────────
+  const [eventCue, setEventCue] = useState<OverviewCue | null>(null);
+  const [eventResolve, setEventResolve] = useState<TimelineResolve | null>(null);
+  const [eventResolveError, setEventResolveError] = useState<string | null>(null);
+  const [eventResolvePending, setEventResolvePending] = useState(false);
+  const [eventBusy, setEventBusy] = useState(false);
+  const [eventActionError, setEventActionError] = useState<string | null>(null);
 
   // ── 1s ticker — drives the live NOW playhead (strip + day editor). ──
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -722,13 +755,8 @@ export default function TimelineScreen() {
     return { startDate: festival.startDate, days: festival.days, tz };
   }, [draft?.festival, draft?.location?.tz, overview?.festival, overview?.location?.tz]);
 
-  // The day-editor's overview object (the day whose modal is open).
-  const editingDayOverview = useMemo(() => {
-    if (editingDay === null || !overview) return null;
-    return overview.days.find((d) => d.index === editingDay) ?? null;
-  }, [editingDay, overview]);
-
-  // The SELECTED day's overview object (drives the filtered cue list).
+  // The SELECTED day's overview object — the DAY level renders this, and it
+  // also drives the filtered cue list at the FESTIVAL level.
   const selectedDayOverview = useMemo(() => {
     if (selectedDay === null || !overview) return null;
     return overview.days.find((d) => d.index === selectedDay) ?? null;
@@ -777,6 +805,100 @@ export default function TimelineScreen() {
     if (liveOverview?.days) for (const d of liveOverview.days) for (const c of d.cues) s.add(c.id);
     return s;
   }, [liveOverview]);
+
+  // ── ZOOM LADDER: navigation + the EVENT rung ──────────────────────────
+
+  // FESTIVAL → DAY. Pure client navigation; nothing is sent to the engine.
+  const openDay = useCallback((idx: number) => {
+    setSelectedDay(idx);
+    setShowAllDays(false);
+    setZoomLevel('day');
+  }, []);
+
+  const backToWeek = useCallback(() => setZoomLevel('festival'), []);
+
+  const stepDay = useCallback((delta: number) => {
+    if (!overview) return;
+    const idxs = overview.days.map((d) => d.index);
+    const cur = selectedDay ?? idxs[0];
+    const pos = idxs.indexOf(cur);
+    const next = idxs[pos + delta];
+    if (next !== undefined) setSelectedDay(next);
+  }, [overview, selectedDay]);
+
+  // DAY → EVENT. Opens the sheet and fires the READ-ONLY resolver peek
+  // (GET /timeline/resolve — zero side effects: nothing dispatched, no lease
+  // armed, no latch written). A 400 (out-of-window target, unresolvable cue) is
+  // surfaced verbatim in the sheet; we never fake a preview.
+  const openEvent = useCallback((cue: OverviewCue) => {
+    setEventCue(cue);
+    setEventResolve(null);
+    setEventResolveError(null);
+    setEventActionError(null);
+    setEventResolvePending(true);
+    const date = selectedDayOverview?.date;
+    fetchTimelineResolve({ cueId: cue.id, ...(date ? { date } : {}) }).then((r) => {
+      setEventResolvePending(false);
+      if (r.ok && r.data) { setEventResolve(r.data); setEventResolveError(null); }
+      else setEventResolveError(r.error || 'Could not resolve this moment');
+    });
+  }, [selectedDayOverview?.date]);
+
+  const closeEvent = useCallback(() => {
+    setEventCue(null);
+    setEventResolve(null);
+    setEventResolveError(null);
+    setEventActionError(null);
+  }, []);
+
+  // PERFORM — a SCOPED takeover of the LIVE event. The plan holds; a program
+  // that comes due is deferred (never dismissed) until the zoom exits. On
+  // success we land on the DECK tab under the green banner — the event level
+  // does not build a second deck UI, it reuses the real one.
+  const handlePerform = useCallback(async () => {
+    if (!eventCue) return;
+    setEventBusy(true);
+    const err = await performTakeover(eventCue.id);
+    setEventBusy(false);
+    if (err) { setEventActionError(err); return; }
+    closeEvent();
+    router.push('/');
+  }, [eventCue, performTakeover, closeEvent]);
+
+  // TIME TRAVEL — the deck carries the plan's resolved state at this event's
+  // instant, as a STATIC snapshot (D4). Works while the plan is DORMANT: that
+  // is exactly when the operator rehearses.
+  const handleTravel = useCallback(async () => {
+    if (!eventCue) return;
+    setEventBusy(true);
+    const date = selectedDayOverview?.date;
+    const err = await travel({ cueId: eventCue.id, ...(date ? { date } : {}) });
+    setEventBusy(false);
+    if (err) { setEventActionError(err); return; }
+    closeEvent();
+    router.push('/');
+  }, [eventCue, travel, closeEvent, selectedDayOverview?.date]);
+
+  // ── EXIT RULE D1: returning to the TIMELINE tab ends the zoom ──────────
+  //
+  // The operator's own words — "going back to the timeline tab is how to get out
+  // of the time travel feature". `resume()` → catchUp re-derives the owner for
+  // NOW, so the plan picks straight back up.
+  //
+  // Gated on zoomEnteredHere(): there is ONE engine zoom session, and a second
+  // pad merely browsing to its timeline tab must NEVER yank pad A's live
+  // performance. That pad exits through the banner's explicit EXIT instead.
+  //
+  // Deps are deliberately EMPTY so this fires once per FOCUS event and not every
+  // time the zoom state changes while the tab is already focused (which would
+  // resume the zoom the instant the operator armed it).
+  const zoomRef = useRef(state?.zoom ?? null);
+  useEffect(() => { zoomRef.current = state?.zoom ?? null; }, [state?.zoom]);
+  const resumeRef = useRef(resume);
+  useEffect(() => { resumeRef.current = resume; }, [resume]);
+  useFocusEffect(useCallback(() => {
+    if (zoomRef.current && zoomEnteredHere()) void resumeRef.current();
+  }, []));
 
   return (
     <View style={styles.container}>
@@ -932,6 +1054,31 @@ export default function TimelineScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* ── THE ZOOM LADDER, rung 2: DAY ──────────────────────────────
+            A full-screen day: phase bands, sun, the events, and the RESOLVED
+            ribbon of what actually plays. Pure browse — no engine calls. The
+            FESTIVAL body below is what you come back to via ◀ WEEK. */}
+        {zoomLevel === 'day' && selectedDayOverview ? (
+          <DayView
+            day={selectedDayOverview}
+            dayCount={overview ? overview.days.length : 0}
+            planCues={draft?.cues ?? []}
+            nowMinutes={selectedDayOverview.index === todayIndex ? nowMinutes : null}
+            // LIVE is a property of TODAY's occurrence, not of the cue id. The
+            // same cue appears on every day it applies to; marking Thursday's
+            // row live because today's instance is running would be a lie — and
+            // it would offer PERFORM from a day that isn't happening.
+            activeCueId={selectedDayOverview.index === todayIndex ? (state?.activeCue?.id ?? null) : null}
+            canEdit={!!draft}
+            onBackToWeek={backToWeek}
+            onPrevDay={() => stepDay(-1)}
+            onNextDay={() => stepDay(1)}
+            onOpenEvent={openEvent}
+            onEditCue={openEditCue}
+            onDeleteCue={handleDeleteCue}
+            onAddCue={openAddCue}
+          />
+        ) : (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
           {/* ── PARTY MODE — session HANDLING (gate · playlist · numbers).
               First block in the scroll body: show handling belongs with the
@@ -1002,26 +1149,18 @@ export default function TimelineScreen() {
               todayIndex={todayIndex}
               selectedIndex={selectedDay}
               nowMinutes={nowMinutes}
-              onSelectDay={(idx) => {
-                // Single tap: SELECT/VIEW the day (highlight + filter the cue
-                // list to it). This never opens the editor and never touches
-                // the draft, so viewing is non-destructive.
-                setSelectedDay(idx);
-                setShowAllDays(false);
-              }}
-              onEditDay={(idx) => {
-                // Explicit EDIT DAY: open the day editor. It needs a draft to
-                // edit; if we're viewing the live plan, load it into the draft
-                // first so edits mutate a copy. Only open if the load actually
-                // succeeded — a failed / festival-less load must not dangle.
-                setSelectedDay(idx);
-                if (!draft && state?.activePlan) {
-                  loadPlanIntoDraft(state.activePlan).then((ok) => { if (ok) setEditingDay(idx); });
-                } else if (draft) {
-                  setEditingDay(idx);
-                } else {
-                  setActionError('No active plan to edit — start from the BRC template via PLANS.');
-                }
+              onOpenDay={(idx) => {
+                // ZOOM IN: FESTIVAL → DAY. Pure client navigation — nothing is
+                // sent to the engine, so reviewing never touches the rig.
+                //
+                // The DAY level also EDITS (＋ CUE, per-row EDIT/delete), and
+                // editing mutates a DRAFT. The always-editing maker normally has
+                // the active plan loaded already; if it doesn't (and there IS an
+                // active plan) we pull it in so the edit affordances are live.
+                // A failed / festival-less load leaves the level read-only
+                // rather than dangling — the DayView hides its edit controls.
+                openDay(idx);
+                if (!draft && state?.activePlan) void loadPlanIntoDraft(state.activePlan);
               }}
             />
           ) : (
@@ -1126,6 +1265,7 @@ export default function TimelineScreen() {
             <Text style={styles.emptyHint}>Loading timeline…</Text>
           ) : null}
         </ScrollView>
+        )}
       </View>
 
       {/* ── Sheets ── */}
@@ -1143,16 +1283,38 @@ export default function TimelineScreen() {
         onClose={() => setPlanPickerOpen(false)}
       />
 
-      <DayEditor
-        visible={editingDay !== null && !!draft}
-        day={editingDayOverview}
-        plan={draft ?? brcStarterPlan()}
-        nowMinutes={editingDay !== null && editingDay === todayIndex ? nowMinutes : null}
-        onAddCue={openAddCue}
-        onEditCue={openEditCue}
-        onDeleteCue={handleDeleteCue}
-        onClose={() => setEditingDay(null)}
+      {/* ── THE ZOOM LADDER, rung 3: EVENT ──────────────────────────────
+          Tap an event at the DAY level → one sheet, one primary action, with
+          the branch chosen by the ENGINE's own state (is this cue the live deck
+          owner?). Both branches land on the DECK tab under a mode banner. */}
+      {eventCue ? (
+      <EventSheet
+        cue={eventCue}
+        dayDate={selectedDayOverview?.date ?? null}
+        // Same rule as the DAY rows: only TODAY's occurrence can be performed.
+        activeCueId={
+          selectedDayOverview && selectedDayOverview.index === todayIndex
+            ? (state?.activeCue?.id ?? null)
+            : null
+        }
+        planActive={state?.planActive}
+        inFestivalWindow={state?.inFestivalWindow}
+        resolve={eventResolve}
+        resolveError={eventResolveError}
+        resolvePending={eventResolvePending}
+        busy={eventBusy}
+        actionError={eventActionError}
+        canEdit={!!draft && (draft?.cues ?? []).some((c) => c.id === eventCue.id)}
+        onPerform={() => { void handlePerform(); }}
+        onTravel={() => { void handleTravel(); }}
+        onEdit={() => {
+          const planCue = (draft?.cues ?? []).find((c) => c.id === eventCue.id);
+          closeEvent();
+          if (planCue) openEditCue(planCue);
+        }}
+        onClose={closeEvent}
       />
+      ) : null}
 
       {draft ? (
         <CueEditorSheet
@@ -1161,7 +1323,7 @@ export default function TimelineScreen() {
           plan={draft}
           playlists={playlists}
           palettes={getCachedColorPalettes()}
-          dayIndex={editingDay ?? 0}
+          dayIndex={selectedDay ?? 0}
           onSave={handleSaveCue}
           onDelete={editingCue ? () => handleDeleteCue(editingCue.id) : null}
           onClose={() => { setCueSheetOpen(false); setEditingCue(null); }}

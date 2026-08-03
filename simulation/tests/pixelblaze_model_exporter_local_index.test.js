@@ -16,6 +16,7 @@ import { params } from '../src/core/state.js';
 import { generatePixelMap } from '../src/dmx/pixelblaze_model_exporter.js';
 import { createControllerRegistry, CONTROLLER_TYPE_LED } from '../src/dmx/controller_registry.js';
 import { projectLedStrandPixels } from '../src/dmx/led/led_patch_projection.js';
+import { initRegistry } from '../src/dmx/fixture_definition_registry.js';
 
 // A THREE.Group whose matrixWorld is identity so px.localPos passes through.
 function makeGroup() {
@@ -36,6 +37,10 @@ function resetWorld() {
   params.dmxFixtures = [];
   params.parLights = [];
   params.ledStrands = [];
+  // The fixture-definition registry is a module singleton and the exporter now
+  // reads the LED-bus flag off it — clear it so a case that registers an
+  // `bus: led` definition can never leak into a later one.
+  initRegistry({});
 }
 
 // ── DMX multi-pixel fixtures: localIndex is 0..N-1 within each fixture ─
@@ -226,11 +231,18 @@ test('device-bound: a strand assigned to NO controller output exports UNPATCHED,
   assert.deepEqual(strandPatches(pixels, 'lineA')[0], { universe: 3, addr: 1, footprint: 4, led: true });
 });
 
-test('UNBOUND LED controller is UNCHANGED: generic per-port keeps both strands at U3 ch1', () => {
+test('UNBOUND LED controller exports UNPATCHED — patches.yaml is the patch truth', () => {
   resetWorld();
-  // Same rig, but NO device binding. The generic per-port projection resets
-  // each port to the controller's base lane, so BOTH lines start at U3 ch1 —
-  // the pre-existing behavior, which must NOT change for unbound controllers.
+  // Same rig, but NO device binding. `patches.yaml` is written from
+  // computeLedStrandPatches ALONE (main.js projectLedStrandPatches), which
+  // covers device-BOUND controllers only — an unbound controller's strands get
+  // no record, so the sACN bridge (whose relay table is built from that file)
+  // routes nothing for them. The exporter used to hand these strands a generic
+  // per-port address anyway: the engine rendered pixels onto universes nothing
+  // forwarded, and the rope stayed dark with every surface green. The model now
+  // says exactly what patches.yaml says — no record, no address, a LOUD
+  // `unpatched: true` marker (codex P0: no silent dark). Bind the controller to
+  // its device to light it.
   window.__controllerRegistry = ledRegistry(
     [port(1, 3, 'lineA'), port(2, 4, 'lineB'), port(3, 5), port(4, 6)],
     { device: null });
@@ -238,33 +250,44 @@ test('UNBOUND LED controller is UNCHANGED: generic per-port keeps both strands a
   window.ledStrandFixtures = [{ setLedColorRGB() {} }, { setLedColorRGB() {} }];
 
   const { pixels } = generatePixelMap();
-  const a = strandPatches(pixels, 'lineA');
-  const b = strandPatches(pixels, 'lineB');
-  assert.deepEqual(a[0], { universe: 3, addr: 1, footprint: 4, led: true });
-  // Unbound: lineB RESTARTS at ch1 (generic per-port), does NOT continue at 161.
-  assert.deepEqual(b[0], { universe: 3, addr: 1, footprint: 4, led: true });
+  for (const name of ['lineA', 'lineB']) {
+    const px = pixels.filter((p) => p.group === name);
+    assert.equal(px.length, 40, `${name} still exports all its pixels`);
+    assert.ok(px.every((p) => p.patch === null && p.unpatched === true),
+      `${name} exports unpatched (patch null + unpatched marker)`);
+  }
+  assert.ok(strandPatches(pixels, 'lineA').every((p) => p === null));
+  assert.ok(strandPatches(pixels, 'lineB').every((p) => p === null));
 });
 
-// ── G3: UNBOUND per-pixel addressing routes through the SAME walker ────
+// ── G3: per-pixel addressing routes through the SAME walker ───────────
 //
-// The old unbound branch computed each pixel with a dense-byte formula
+// An older exporter branch computed each pixel with a dense-byte formula
 // (uniSpan = floor(startByte/512)) that ignored the tail bytes skipped at each
-// no-straddle universe wrap. It agreed with the walker ONLY when
-// (startAddr − 1) % stride == 0. The fix routes the unbound path through
-// projectLedStrandPixels — the same walker the device-bound path and
-// patches.yaml use — so both paths share ONE source of truth.
+// no-straddle universe wrap. Every exported pixel now comes from
+// projectLedStrandPixels — the same walker patches.yaml is written from — so
+// the model, the record and the firmware share ONE source of truth. The case
+// below is the spill: 200 px × stride 4 fills U3 to ch512 and rolls WHOLE to
+// U4 ch1.
+//
+// (The misaligned-start arithmetic that motivated G3 — startAddr ≢ 1 (mod
+// stride) — is no longer reachable THROUGH the exporter: only device-bound
+// controllers export addresses, and every per-output cursor starts at channel
+// 1. It stays pinned directly on the walker in
+// tests/led_patch_projection.test.js, 'L1 misaligned start'.)
 
-// A one-strand UNBOUND LED controller: base universe `baseUniverse`, start
-// channel `startAddr`, a single RGBW strand of `ledCount` pixels on port 1.
-function unboundStrandRegistry(baseUniverse, startAddr, ledCount) {
+// A one-strand device-BOUND LED controller: `baseUniverse` on output 1, a
+// single RGBW strand of `ledCount` pixels. Per-output firmware always starts a
+// port at channel 1 (docs/41 §3).
+function boundStrandRegistry(baseUniverse) {
   return createControllerRegistry({
     controllers: [{
-      id: 1, name: 'Tunbound', ip: '10.1.1.201', type: CONTROLLER_TYPE_LED,
-      led: { order: 'RGBW', baseUniverse, startAddr },
-      device: null,
+      id: 1, name: 'Tbound', ip: '10.1.1.201', type: CONTROLLER_TYPE_LED,
+      led: { order: 'RGBW', baseUniverse, startAddr: 1 },
+      device: { vendor: 'marsinled', controllerId: 'walker-fixture' },
       ports: [
-        { port: 1, universe: baseUniverse, chain: ['strand'] },
-        { port: 2, universe: baseUniverse + 1, chain: [] },
+        { port: 1, universe: baseUniverse, chain: ['strand'], output: 1 },
+        { port: 2, universe: baseUniverse + 1, chain: [], output: 2 },
       ],
     }],
   });
@@ -274,36 +297,29 @@ function ledStrandN(name, ledCount) {
   return { name, ledCount, startX: 0, startY: 0, startZ: 0, endX: 0, endY: 0, endZ: 4 };
 }
 
-test('G3 UNBOUND misaligned start: pixel 128 matches the walker (ch5), not the old formula (ch3)', () => {
+test('G3 an UNBOUND spilling strand exports no address at all, all 200 px marked unpatched', () => {
   resetWorld();
-  // stride 4, startAddr 3, 130 px. The plan's worked example: pixel 127 wraps
-  // to U4 ch1 in BOTH models, but pixel 128 lands at U4 ch5 per the walker vs
-  // U4 ch3 per the discarded dense-byte formula. (startAddr − 1) % 4 = 2 ≠ 0.
-  window.__controllerRegistry = unboundStrandRegistry(3, 3, 130);
-  params.ledStrands = [ledStrandN('strand', 130)];
+  // The same 200 px rig with NO device binding: nothing routes it, so nothing
+  // is addressed. The pixels still exist (geometry, groups, localIndex) — only
+  // the sACN placement is withheld, loudly.
+  const reg = boundStrandRegistry(3);
+  reg.controllers[0].device = null;
+  window.__controllerRegistry = reg;
+  params.ledStrands = [ledStrandN('strand', 200)];
   window.ledStrandFixtures = [{ setLedColorRGB() {} }];
 
   const { pixels } = generatePixelMap();
-  const patches = strandPatches(pixels, 'strand');
-  assert.equal(patches.length, 130);
-
-  // The exact divergence the fix closes.
-  assert.deepEqual(patches[127], { universe: 4, addr: 1, footprint: 4, led: true });
-  assert.deepEqual(patches[128], { universe: 4, addr: 5, footprint: 4, led: true });
-
-  // And EVERY pixel equals the canonical walker byte-for-byte.
-  const walk = projectLedStrandPixels(3, 3, 4, 130).pixels;
-  assert.deepEqual(
-    patches.map(p => ({ universe: p.universe, addr: p.addr })),
-    walk.map(w => ({ universe: w.universe, addr: w.addr })));
+  const px = pixels.filter((p) => p.group === 'strand');
+  assert.equal(px.length, 200);
+  assert.ok(px.every((p) => p.patch === null && p.unpatched === true));
 });
 
-test('G3 UNBOUND stride-aligned start (startAddr 1) is UNCHANGED and spills whole to U4', () => {
+test('G3 BOUND stride-aligned start (ch1) spills whole to U4 and equals the walker', () => {
   resetWorld();
   // 200 px @ U3 ch1, stride 4: pixels 0–127 fill U3 (ch1–512, no straddle),
-  // pixel 128 spills whole to U4 ch1. (startAddr − 1) % 4 = 0 → the old formula
-  // and the walker already agreed here, so this is the byte-identical case.
-  window.__controllerRegistry = unboundStrandRegistry(3, 1, 200);
+  // pixel 128 spills whole to U4 ch1 — the per-output firmware layout, taken
+  // straight from projectLedStrandPixels.
+  window.__controllerRegistry = boundStrandRegistry(3);
   params.ledStrands = [ledStrandN('strand', 200)];
   window.ledStrandFixtures = [{ setLedColorRGB() {} }];
 
@@ -400,4 +416,123 @@ test('simple single-light DMX fixture (fixture.light branch) exports sId without
   assert.ok(px, 'the simple single-light fixture exported a pixel (no throw)');
   assert.equal(px.sId, 7); // sId = light.sectionId || 0 (the resolveSectionId fix)
   assert.equal(px.fId, 3);
+});
+
+// ── LED PIXEL FIXTURES: `bus: led` makes a parLights fixture LED end-to-end ──
+//
+// Operator ruling 2026-07-31: *"the TE signs must be associated with MarsinLED
+// controllers in the controller mapping pane … make sure the TE sign fixtures
+// are clearly of type LED not DMX."* An LED pixel fixture keeps its baked
+// per-pixel geometry but is WIRED like a strand — one MarsinLED output, cursor
+// at (port universe, ch 1), stride bytes per pixel — so it exports
+// `type: 'led'` with the per-pixel LED walk, never a whole-fixture DMX
+// footprint. The classification is DATA: the definition's `bus`.
+
+const SIGN_TYPE = 'TeSignSix';
+
+/** A 6-pixel LED-bus fixture definition, registered like the real sign YAMLs. */
+function registerSignDefinition() {
+  initRegistry({
+    [SIGN_TYPE]: {
+      id: 'te_sign_six', name: 'TE Sign Six', fixture_type: SIGN_TYPE,
+      channel_mode: 18, bus: 'led', controller_family: 'ango_4',
+      pixels: Array.from({ length: 6 }, (_, i) => ({
+        id: `pixel_${i + 1}`, type: 'rgb', size: 12,
+        channels: { red: 3 * i + 1, green: 3 * i + 2, blue: 3 * i + 3 },
+        dots: [[i * 50, 0, 0]],
+      })),
+    },
+  });
+}
+
+/** The runtime fixture the exporter binds by config identity. */
+function signRuntime(config) {
+  const group = makeGroup();
+  return {
+    config,
+    group,
+    fixtureDef: { fixtureType: SIGN_TYPE, footprint: 18, bus: 'led' },
+    pixels: Array.from({ length: 6 }, (_, i) => ({
+      localPos: new THREE.Vector3(i * 0.05, 0, 0),
+      model: { id: `pixel_${i + 1}`, size: 12,
+        channels: { red: 3 * i + 1, green: 3 * i + 2, blue: 3 * i + 3 } },
+    })),
+    setPixelColorRGB() {},
+  };
+}
+
+function signConfig(name) {
+  return { name, fixtureType: SIGN_TYPE, group: 'TE Sign', x: 0, y: 0, z: 0 };
+}
+
+test('LED-bus fixture on a BOUND MarsinLED output exports type led + the per-pixel walk', () => {
+  resetWorld();
+  registerSignDefinition();
+  const cfg = signConfig('TE Sign V3 A');
+  params.parLights = [cfg];
+  window.parFixtures = [signRuntime(cfg)];
+  window.__controllerRegistry = ledRegistry([port(1, 3, 'TE Sign V3 A'), port(2, 4)]);
+
+  const { pixels } = generatePixelMap();
+  const sign = pixels.filter((p) => p.name.startsWith('TE Sign V3 A'));
+  assert.equal(sign.length, 6);
+  // TRANSPORT: LED, not DMX. This is the whole point of the reclassification.
+  assert.ok(sign.every((p) => p.type === 'led'));
+  // The fixtureType string is UNCHANGED — every selector that names it still
+  // resolves (report 20260725_48 addendum 2).
+  assert.ok(sign.every((p) => p.fixtureType === SIGN_TYPE));
+  // ADDRESSING: stride 4 (RGBW controller) per pixel from U3 ch1 — the strand
+  // walk, NOT one 18-channel DMX block.
+  assert.deepEqual(sign.map((p) => p.patch), [1, 5, 9, 13, 17, 21].map((addr) => (
+    { universe: 3, addr, footprint: 4, led: true })));
+  // CHANNELS: the CONTROLLER's order map, relative to each pixel's own address
+  // — never the definition's absolute 3i+1 block.
+  assert.ok(sign.every((p) => JSON.stringify(p.channels) === JSON.stringify({ r: 1, g: 2, b: 3, w: 4 })));
+  assert.ok(sign.every((p) => p.unpatched !== true));
+  // GEOMETRY is untouched: the baked per-pixel dots still place the logo.
+  assert.deepEqual(sign.map((p) => p.x), [0, 0.05, 0.1, 0.15, 0.2, 0.25]);
+  assert.deepEqual(sign.map((p) => p.localIndex), [0, 1, 2, 3, 4, 5]);
+});
+
+test('LED-bus fixture chained on NOTHING exports UNPATCHED, loudly — like a strand', () => {
+  resetWorld();
+  registerSignDefinition();
+  const cfg = signConfig('TE Sign V3 A');
+  params.parLights = [cfg];
+  window.parFixtures = [signRuntime(cfg)];
+  // An LED controller exists, but the sign is on none of its outputs.
+  window.__controllerRegistry = ledRegistry([port(1, 3), port(2, 4)]);
+
+  const { pixels } = generatePixelMap();
+  const sign = pixels.filter((p) => p.name.startsWith('TE Sign V3 A'));
+  assert.equal(sign.length, 6);
+  assert.ok(sign.every((p) => p.type === 'led'), 'still LED — the bus is the definition, not the wiring');
+  assert.ok(sign.every((p) => p.patch === null && p.unpatched === true));
+  assert.ok(sign.every((p) => p.channels === null));
+});
+
+test('a DMX-bus fixture is untouched by the LED-bus branch (regression)', () => {
+  resetWorld();
+  initRegistry({
+    Par1: { id: 'par1', name: 'Par', fixture_type: 'Par1', channel_mode: 3, bus: 'dmx',
+      pixels: [{ id: 'p1', channels: { red: 1, green: 2, blue: 3 } }] },
+  });
+  const cfg = { name: 'Par A', fixtureType: 'Par1', group: 'Pars', x: 0, y: 0, z: 0,
+    dmxUniverse: 7, dmxAddress: 21 };
+  params.parLights = [cfg];
+  window.parFixtures = [{
+    config: cfg, group: makeGroup(), fixtureDef: { fixtureType: 'Par1', footprint: 3 },
+    pixels: [{ localPos: new THREE.Vector3(0, 0, 0),
+      model: { id: 'p1', size: 12, channels: { red: 1, green: 2, blue: 3 } } }],
+    setPixelColorRGB() {},
+  }];
+  window.__controllerRegistry = null;
+
+  const { pixels } = generatePixelMap();
+  const par = pixels.filter((p) => p.name.startsWith('Par A'));
+  assert.equal(par.length, 1);
+  assert.equal(par[0].type, 'dmx');
+  assert.deepEqual(par[0].patch, { universe: 7, addr: 21, footprint: 3 });
+  assert.deepEqual(par[0].channels, { r: 1, g: 2, b: 3 });
+  assert.equal(par[0].unpatched, undefined);
 });

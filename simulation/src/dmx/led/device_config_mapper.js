@@ -240,8 +240,15 @@ function parkWindowText(planned) {
  *
  * REGISTRY-AWARE (slice S2, report 20260725_58 §4): "free" means free across the
  * WHOLE registry. `claimedUniverses` carries the universes owned by OTHER
- * controllers (`collectClaimedUniverses`); parks and repairs skip them, and an
- * EXPLICIT port universe that lands on one is a BLOCKING collision.
+ * controllers (`collectClaimedUniverses`); parks and repairs skip them.
+ *
+ * SHARED ADDRESSES (operator order 2026-07-31, report 20260725_102): an EXPLICIT
+ * port universe that lands on another controller's claim is NO LONGER a blocking
+ * collision — it is a `sharedUniverses` entry plus a ⚠ warning, and the actual
+ * resolution happens on the wire (src/dmx/address_merge.js: one unified packet
+ * per destination, higher controller IP overrides). Only claims the higher-IP
+ * rule cannot rank (same IP, or a claimant with no usable IP) are still hard
+ * errors, raised by address_merge.assertResolvableOverlaps on the push path.
  *
  * PURE (no I/O, no mutation): the sync chip and the push both call this, so both
  * see the same plan. Persisting a newly-allocated park is the PUSH's job.
@@ -263,12 +270,16 @@ function parkWindowText(planned) {
  *   enables: Array<{outputIndex: number, portNum: number, universe: number,
  *     count: number}>,
  *   warnings: string[],
+ *   sharedUniverses: Array<{outputIndex: number, port: number, universe: number,
+ *     owner: string, message: string}>,
  *   collisions: Array<{kind: string, outputIndex: (number|undefined),
  *     port: (number|undefined), universe: (number|undefined),
  *     owner: (string|undefined), message: string}>}}
  *   `universeByOutputIndex` covers EVERY output that will be enabled after the
  *   push (assigned + parked). `warnings` are loud but informational;
- *   `collisions` are BLOCKING — the caller refuses before any device write.
+ *   `sharedUniverses` are the ALLOWED overlaps (also mirrored into `warnings`,
+ *   so no caller can surface the plan without surfacing them); `collisions` are
+ *   BLOCKING — the caller refuses before any device write.
  */
 export function derivePerOutputPlan(controller, strandFixtures, deviceSnapshot, claimedUniverses) {
   if (!controller || typeof controller !== 'object') {
@@ -299,6 +310,7 @@ export function derivePerOutputPlan(controller, strandFixtures, deviceSnapshot, 
   const enables = [];
   const warnings = [];
   const collisions = [];
+  const sharedUniverses = [];   // allowed overlaps — WARNING, never a refusal
 
   // ── Port → output declarations, and the two structural refusals ────────────
   // A DUPLICATE output is loadable (the row's identity is intact, only the
@@ -350,15 +362,31 @@ export function derivePerOutputPlan(controller, strandFixtures, deviceSnapshot, 
       universeByOutputIndex[i] = universe;
       used.add(universe);
       if (claimedUniverses.has(universe)) {
+        // SHARED ADDRESS — a WARNING since the operator's 2026-07-31 order
+        // ("make controllers allow sending to the same address with a warning
+        // instead of an error"). This used to be a BLOCKING `universe_owned`
+        // collision that refused the whole push. Two boxes on one universe is a
+        // real rig shape (a splitter, a mirrored strand, a stand-in board), and
+        // what actually resolves it now lives in src/dmx/address_merge.js:
+        // frames are unified into ONE packet per (universe, destination) and the
+        // numerically higher controller IP overrides on contested channels.
+        //
+        // NOTE the asymmetry, and it is deliberate: an EXPLICIT operator-declared
+        // universe may now be shared, but the auto-assign paths below (repair,
+        // park) still SKIP every claimed universe. The sim never *chooses* to
+        // create a shared address — it only honours one the operator declared.
         const owner = claimOwner(claimedUniverses, universe);
-        collisions.push({
-          kind: 'universe_owned',
+        const share = {
           outputIndex: i,
           port: port.port,
           universe,
           owner,
-          message: `output ${i + 1} would take U${universe} — owned by ${owner}`,
-        });
+          message: `output ${i + 1} (port ${port.port}) shares U${universe} with ${owner} — ` +
+            'allowed: the frames are UNIFIED into one packet per destination and the higher ' +
+            'controller IP overrides on any contested channel',
+        };
+        sharedUniverses.push(share);
+        warnings.push(`⚠ ${share.message}`);
       }
     } else {
       repairNeeded.push(i);
@@ -493,6 +521,7 @@ export function derivePerOutputPlan(controller, strandFixtures, deviceSnapshot, 
     enableOutputIndices: enables.map((e) => e.outputIndex),
     enables,
     warnings,
+    sharedUniverses,
     collisions,
   };
 }

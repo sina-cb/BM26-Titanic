@@ -392,11 +392,13 @@ controllers:
     ports:
       - port: 1
         universe: 36
+        startAddress: 1
         chain:
           - Right_Front_Right
         output: 1
       - port: 2
         universe: 37
+        startAddress: 1
         chain:
           - Right_Back_Right
         output: 2

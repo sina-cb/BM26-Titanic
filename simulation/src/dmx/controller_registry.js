@@ -122,18 +122,52 @@ export const LED_WHITE_MODES = ['native', 'synth'];
 // allow-list — an unknown vendor in a loaded controllers.yaml is structural
 // corruption and hard-stops the boot (codex P0), never a silent migration. An
 // ABSENT device block is the legitimate "unbound controller" state.
+//
+// ── TWO GRADES OF BINDING (operator ruling 2026-07-31) ──────────────────────
+// "The discovery must be an OPTIONAL stage in the controller lifecycle and not
+// required — that allows me to put the IP I want and not have to start the
+// controller just yet, until next boot; on first boot and recognition of the
+// board you can get missing data if anything from the board itself."
+//
+//   unbound      no `device:` block at all. Strands project UNPATCHED — the
+//                honest state for a controller nobody has declared.
+//   PROVISIONAL  `device: { vendor, provisional: true }`. The operator typed
+//                the IP and the whole port/output/universe config with the
+//                board OFFLINE. Everything downstream treats it as bound —
+//                patches.yaml records, engine model lanes, bridge relay routes
+//                and subscribed universes all exist — so the chain is complete
+//                the moment the board powers on. It carries NO controllerId,
+//                because nobody has met the board: claiming a fingerprint we
+//                never read would be exactly the silent lie codex P0 bans.
+//   VERIFIED     `device: { vendor, controllerId, … }`. The fingerprint came
+//                off the hardware. Bind-by-controllerId (docs/41) applies to
+//                THIS grade only — a provisional card is matched by IP because
+//                its IP is the only thing the operator actually asserted.
+//
+// A provisional block may NOT carry `lastPush` / `lastGammaPush`: those are
+// receipts from a conversation with hardware, and a card that has had that
+// conversation is verified by definition (the push promotes it).
 export const LED_DEVICE_VENDOR_MARSINLED = 'marsinled';
 export const LED_DEVICE_VENDORS = [LED_DEVICE_VENDOR_MARSINLED];
 export const LED_DEVICE_PUSH_OUTCOMES = ['applied', 'needs-reboot'];
+export const LED_BINDING_PROVISIONAL = 'provisional';
+export const LED_BINDING_VERIFIED = 'verified';
 
 /**
  * Normalize a controller's `device:` binding block (or undefined) to a
  * complete, validated shape. Undefined/null → undefined (unbound — fine). Any
  * structural problem THROWS: an LED controller whose binding block is
  * malformed or names an unknown vendor must hard-stop the boot, exactly like a
- * malformed port (codex P0 — no silent migration). Returns
- *   { vendor, controllerId, deviceName?, boardId?,
- *     lastPush?: { at, outcome, firmwareSHA?, configHash? } }.
+ * malformed port (codex P0 — no silent migration). Returns either
+ *   VERIFIED:    { vendor, controllerId, deviceName?, boardId?,
+ *                  lastPush?: { at, outcome, firmwareSHA?, configHash? },
+ *                  lastGammaPush?: { … } }
+ *   PROVISIONAL: { vendor, provisional: true, deviceName?, boardId? }
+ * — see the grade note above. The two shapes are mutually exclusive by
+ * construction: `provisional: true` FORBIDS controllerId (nobody has read the
+ * board's fingerprint) and forbids both push receipts; the absence of
+ * `provisional` REQUIRES controllerId. Neither grade is derivable from the
+ * other without talking to hardware, so neither is ever silently synthesized.
  *
  * NOTE: the device MAC address is deliberately NEVER part of this shape. This
  * repo is public and a persisted MAC trips the gitleaks security gate
@@ -154,11 +188,39 @@ export function normalizeDeviceBlock(raw, controllerName) {
     throw new Error(`[Controllers] LED controller '${controllerName}': device.vendor ` +
       `'${vendor}' is not a recognized LED vendor (expected one of ${LED_DEVICE_VENDORS.join(', ')})`);
   }
-  if (typeof raw.controllerId !== 'string' || raw.controllerId.length === 0) {
-    throw new Error(`[Controllers] LED controller '${controllerName}': device.controllerId must ` +
-      'be a non-empty string (the device fingerprint)');
+  if (raw.provisional !== undefined && raw.provisional !== null
+    && typeof raw.provisional !== 'boolean') {
+    throw new Error(`[Controllers] LED controller '${controllerName}': device.provisional must ` +
+      'be a boolean (true = the operator declared this binding with the board offline)');
   }
-  const device = { vendor, controllerId: raw.controllerId };
+  const provisional = raw.provisional === true;
+  let device;
+  if (provisional) {
+    // A provisional binding has never met the board. Carrying a fingerprint it
+    // could not have read — or a push receipt from a conversation it never had
+    // — would make the file assert hardware truth nobody verified (codex P0).
+    if (raw.controllerId !== undefined && raw.controllerId !== null) {
+      throw new Error(`[Controllers] LED controller '${controllerName}': a PROVISIONAL device ` +
+        `binding must not carry device.controllerId (got '${raw.controllerId}') — the ` +
+        'fingerprint only exists once the board has been contacted. Drop `provisional: true` ' +
+        'to declare a verified binding.');
+    }
+    for (const receipt of ['lastPush', 'lastGammaPush']) {
+      if (raw[receipt] !== undefined && raw[receipt] !== null) {
+        throw new Error(`[Controllers] LED controller '${controllerName}': a PROVISIONAL device ` +
+          `binding must not carry device.${receipt} — a push receipt means the board was ` +
+          'contacted, which promotes the binding to verified.');
+      }
+    }
+    device = { vendor, provisional: true };
+  } else {
+    if (typeof raw.controllerId !== 'string' || raw.controllerId.length === 0) {
+      throw new Error(`[Controllers] LED controller '${controllerName}': device.controllerId must ` +
+        'be a non-empty string (the device fingerprint), or set `provisional: true` for a ' +
+        'binding declared before the board was ever contacted');
+    }
+    device = { vendor, controllerId: raw.controllerId };
+  }
   for (const opt of ['deviceName', 'boardId']) {
     if (raw[opt] !== undefined && raw[opt] !== null) {
       if (typeof raw[opt] !== 'string') {
@@ -790,9 +852,129 @@ export function setControllerType(controller, type) {
   return controller;
 }
 
-/** True when the LED controller is bound to a physical device (has a device block). */
+/**
+ * True when the LED controller carries a device binding of EITHER grade —
+ * provisional (operator-declared, board never contacted) or verified
+ * (fingerprint read off the hardware). This is deliberately the union: it is
+ * the predicate the PATCH CHAIN reads (computeLedStrandPatches → patches.yaml →
+ * bridge relay routes → engine model lanes), and the whole point of the
+ * provisional grade is that a declared controller patches end-to-end before its
+ * board ever powers on. Use `isVerifiedLedController` for anything that asserts
+ * hardware truth (push receipts, bind-by-controllerId dedup, sync chips).
+ */
 export function isBoundLedController(controller) {
   return isLedController(controller) && !!controller.device;
+}
+
+/** True when a raw device block is the PROVISIONAL grade (operator-declared). */
+export function isProvisionalDeviceBlock(device) {
+  return !!device && device.provisional === true;
+}
+
+/** True when the LED controller's binding is PROVISIONAL (board never contacted). */
+export function isProvisionalLedController(controller) {
+  return isLedController(controller) && isProvisionalDeviceBlock(controller.device);
+}
+
+/** True when the LED controller's binding is VERIFIED (fingerprint off the board). */
+export function isVerifiedLedController(controller) {
+  return isLedController(controller) && !!controller.device
+    && !isProvisionalDeviceBlock(controller.device);
+}
+
+/**
+ * The binding grade of an LED controller: `'verified'`, `'provisional'`, or
+ * null when it carries no device block at all (and for non-LED controllers).
+ */
+export function ledBindingGrade(controller) {
+  if (!isLedController(controller) || !controller.device) return null;
+  return isProvisionalDeviceBlock(controller.device)
+    ? LED_BINDING_PROVISIONAL
+    : LED_BINDING_VERIFIED;
+}
+
+/**
+ * Declare a PROVISIONAL binding on an LED controller: the operator has typed
+ * the IP and the port/output/universe config, and wants the whole chain patched
+ * NOW, with the board still boxed. No network I/O happens here and none is
+ * required (operator ruling 2026-07-31 — discovery is optional).
+ *
+ * REFUSES to downgrade a VERIFIED binding (codex P0 — throwing away a
+ * fingerprint the sim read off real hardware must be an explicit unbind, never
+ * a side effect of clicking "provisional"). Re-marking an already-provisional
+ * card is a no-op refresh of its optional expectation fields.
+ *
+ * `deviceName` / `boardId` are OPTIONAL operator EXPECTATIONS ("this should be
+ * the angio4 called Titanic-207"). They are compared against the board at first
+ * contact and any disagreement is surfaced loudly — they are never treated as
+ * truth.
+ */
+export function markControllerProvisional(controller, { deviceName, boardId } = {}) {
+  if (!isLedController(controller)) {
+    throw new Error(`[Controllers] markControllerProvisional: '${controller && controller.name}' ` +
+      'is not an LED controller — only LED controllers bind to a device');
+  }
+  if (isVerifiedLedController(controller)) {
+    throw new Error(`[Controllers] markControllerProvisional: '${controller.name}' is already ` +
+      `VERIFIED against device '${controller.device.controllerId}'. Unbind it first if you ` +
+      'really mean to discard that fingerprint — a verified binding is never silently downgraded.');
+  }
+  controller.device = normalizeDeviceBlock({
+    vendor: LED_DEVICE_VENDOR_MARSINLED,
+    provisional: true,
+    deviceName,
+    boardId,
+  }, controller.name);
+  return controller.device;
+}
+
+/**
+ * The controller (other than `exclude`) already VERIFIED against `controllerId`,
+ * or null. Bind-by-controllerId (docs/41) means one fingerprint belongs to
+ * exactly one card; promoting a second card onto it would give two cards one
+ * board and make every push fight.
+ */
+export function controllerBoundToDeviceId(registry, controllerId, exclude) {
+  if (!registry || !Array.isArray(registry.controllers) || !controllerId) return null;
+  return registry.controllers.find((c) => c !== exclude && isVerifiedLedController(c)
+    && c.device.controllerId === controllerId) || null;
+}
+
+/**
+ * PROMOTE a provisional binding to verified after first contact with the board:
+ * the identity read off the hardware replaces the placeholder grade. This is
+ * the ONLY automatic write in the lifecycle, and it only FILLS fields the
+ * provisional block left empty (controllerId, and deviceName/boardId when the
+ * operator stated no expectation) — it never rewrites the operator's typed
+ * port/output/universe config, and it never overrules a stated expectation.
+ * Contradictions are the caller's job to surface (provisional_binding.js
+ * `reconcileProvisionalContact` → the reconcile dialog); this function assumes
+ * that reconcile already PASSED.
+ *
+ * THROWS when the controller is not provisional, or when another card is
+ * already verified against the same fingerprint (codex P0 — never two cards on
+ * one board).
+ */
+export function promoteProvisionalBinding(controller, identity, { registry = null } = {}) {
+  if (!isProvisionalLedController(controller)) {
+    throw new Error(`[Controllers] promoteProvisionalBinding: '${controller && controller.name}' ` +
+      'does not carry a PROVISIONAL binding — only a provisional card is promoted');
+  }
+  const claimed = controllerBoundToDeviceId(registry, identity && identity.controllerId, controller);
+  if (claimed) {
+    throw new Error(`[Controllers] promoteProvisionalBinding: device '${identity.controllerId}' is ` +
+      `already bound to controller '${claimed.name}' — two cards cannot own one board. Re-check ` +
+      `the IP typed on '${controller.name}'.`);
+  }
+  const expected = controller.device;
+  return bindControllerDevice(controller, {
+    vendor: identity.vendor || LED_DEVICE_VENDOR_MARSINLED,
+    controllerId: identity.controllerId,
+    deviceName: identity.deviceName !== undefined && identity.deviceName !== null
+      ? identity.deviceName : expected.deviceName,
+    boardId: identity.boardId !== undefined && identity.boardId !== null
+      ? identity.boardId : expected.boardId,
+  });
 }
 
 /**
@@ -803,6 +985,10 @@ export function isBoundLedController(controller) {
  * scene remembers. THROWS on a non-LED controller or an invalid identity.
  * `identity.mac`, if present, is IGNORED — the MAC is never persisted (see
  * normalizeDeviceBlock).
+ *
+ * Always produces a VERIFIED block: the caller has spoken to the board. Called
+ * on a provisional card it promotes it (there are no receipts to carry over —
+ * a provisional block cannot hold any).
  */
 export function bindControllerDevice(controller, identity) {
   if (!isLedController(controller)) {
@@ -838,6 +1024,11 @@ export function recordDevicePush(controller, push) {
     throw new Error(`[Controllers] recordDevicePush: controller '${controller && controller.name}' ` +
       'is not bound to a device — bind it before recording a push');
   }
+  if (isProvisionalDeviceBlock(controller.device)) {
+    throw new Error(`[Controllers] recordDevicePush: controller '${controller.name}' still carries a ` +
+      'PROVISIONAL binding — a successful push means the board was contacted, so promote the ' +
+      'binding (promoteProvisionalBinding / bindControllerDevice) before recording the receipt');
+  }
   const lastPush = { at: push.at, outcome: push.outcome };
   if (push.firmwareSHA !== undefined && push.firmwareSHA !== null) lastPush.firmwareSHA = push.firmwareSHA;
   if (push.configHash !== undefined && push.configHash !== null) lastPush.configHash = push.configHash;
@@ -858,6 +1049,11 @@ export function recordDeviceGammaPush(controller, push) {
   if (!controller || !controller.device) {
     throw new Error(`[Controllers] recordDeviceGammaPush: controller ` +
       `'${controller && controller.name}' is not bound to a device — bind it before recording`);
+  }
+  if (isProvisionalDeviceBlock(controller.device)) {
+    throw new Error(`[Controllers] recordDeviceGammaPush: controller '${controller.name}' still ` +
+      'carries a PROVISIONAL binding — a gamma push means the board was contacted, so promote ' +
+      'the binding before recording the receipt');
   }
   const lastGammaPush = { at: push.at, outcome: push.outcome, gamma: push.gamma };
   if (push.firmwareSHA !== undefined && push.firmwareSHA !== null) {
@@ -2067,8 +2263,17 @@ export function computeProjection(registry, configsByName, pins) {
  * @param {Object} pins - global_effects pin table
  * @param {Array<Object>} ledStrands - params.ledStrands, READ ONLY here;
  *   the LED half of the shared section/fixture id space
+ * @param {Set<string>} [ledBusNames] - names of LED-BUS fixtures (a `parLights`
+ *   entry whose definition declares `bus: led` — the TE Sign V3 halves). Their
+ *   ADDRESS fields are owned by the LED per-output projection
+ *   (`led_patch_projection`, applied by main.js `projectLedStrandPatches`), so
+ *   this pass must not overwrite them with DMX zeros — the two passes would
+ *   fight and log drift on every boot. They DO stay in the metadata pass below:
+ *   an LED pixel fixture lives in `parLights` and keeps its place in that
+ *   section/fixture id space. Empty set = a scene with no LED-bus fixtures,
+ *   which is the same defined shape as `ledStrands: []`.
  */
-export function projectOntoConfigs(registry, configs, pins, ledStrands) {
+export function projectOntoConfigs(registry, configs, pins, ledStrands, ledBusNames = new Set()) {
   if (!Array.isArray(ledStrands)) {
     throw new Error(
       '[controller_registry] projectOntoConfigs: `ledStrands` is required and must be ' +
@@ -2097,6 +2302,10 @@ export function projectOntoConfigs(registry, configs, pins, ledStrands) {
   const drift = [];
 
   for (const [name, config] of configsByName) {
+    // LED-bus fixtures are addressed by the LED per-output projection, not by
+    // the DMX allocation model. Skipping the field write here is what keeps
+    // them out of the DMX chain entirely (they are still numbered below).
+    if (ledBusNames.has(name)) continue;
     const projected = fields.get(name) ||
       { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, controllerId: 0 };
     const before = {

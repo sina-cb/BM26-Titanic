@@ -23,7 +23,7 @@ import {
   createAutopilotProfile,
 } from './autopilot_profiles/profile_registry.js';
 import { StateManager, serializeChannel as serializeChannelForState } from './state_manager.js';
-import { sceneStateDir, resolvePlaylistsDir } from './state_paths.js';
+import { sceneStateDir, resolvePlaylistsDir, resolveTimelineDir } from './state_paths.js';
 import { SnapshotManager, SnapshotLoadError } from './snapshot_manager.js';
 import { ParamPresetManager, ParamPresetError } from './param_preset_manager.js';
 import { PlaylistManager, PlaylistLoadError } from './playlist_manager.js';
@@ -1222,9 +1222,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // pre-existing `saveGlobalsState(globalsState)` no-paramCenter calls);
   // sites that changed shared params (or want the freshest snapshot) pass
   // true. When autoSave is OFF this is a no-op — nothing hits disk.
-  function saveGlobals(withParams = false) {
+  function saveGlobals(withParams = false, strict = false) {
     if (!effectiveAutoSave()) return;
-    stateManager.saveGlobalsState(globalsState, withParams ? paramCenter : undefined);
+    stateManager.saveGlobalsState(globalsState, withParams ? paramCenter : undefined, { strict });
   }
 
   if (paramCenter) {
@@ -1713,14 +1713,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
   }
 
-  function saveAllState() {
+  // `strict` (L5, report _120) is FALSE for every auto-save caller (the ~80
+  // render-adjacent triggers) — those stay best-effort: a transient write
+  // failure is warn-only in StateManager.save() and never crashes the engine.
+  // ONLY the explicit operator save (POST /settings/save-now) passes strict:true
+  // so a failed write PROPAGATES and the endpoint returns an honest non-200
+  // instead of a lying 200 {saved:true}. Default false keeps every existing
+  // caller byte-identical.
+  function saveAllState(strict = false) {
     // AUTO-SAVE GATE (single choke for ~80 auto deck/mixer persistence
     // triggers). When OFF, zero bytes hit deck_state/mixer_state from any
     // automatic trigger; a restart reverts to the last save. Explicit
     // content-authoring routes never call saveAllState — they persist their
     // own files directly, so they keep working when auto-save is OFF.
     if (!effectiveAutoSave()) return;
-    stateManager.saveMixerState(mixer);
+    stateManager.saveMixerState(mixer, { strict });
     stateManager.saveDeckState(mixer, {
       transitionConfig: { ...deckTransitionConfig },
       // Deck dynamic view overrides: persist the overlay stack + the SHARED
@@ -1745,7 +1752,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         secondary: deckPlaylistSlots.secondary,
         splitRatio: deckPlaylistSlots.splitRatio,
       },
-    });
+    }, { strict });
   }
 
   // Confirm a DECK LOCAL-PARAM write was PERSISTED, so the deck's "✓ SAVED"
@@ -1945,6 +1952,47 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
    * handle, apply entry defaults, and let CPC have the last word. Updates
    * channel.playlist.activeEntryId + cursor.
    */
+  // ── I3 (report _116 / _112): broken-entry tracking for the autopilots ─────
+  // A playlist entry that EXISTS but won't COMPILE is NOT `_missing` (its file
+  // is present), so the pure picker treats it as usable, an autopilot loads it,
+  // the compile throws, the daemon logs + swallows — and because a failed load
+  // never advances `activeEntryId`, the SEQUENTIAL picker re-selects the very
+  // same broken entry every cycle, wedging the deck FOREVER on it (the live
+  // ChatGPT-authoring failure mode). We remember which (playlist, entry) failed
+  // to compile so `annotateBrokenEntries` can tag it `_broken` and the pure
+  // picker SKIPS it — surfacing WHICH entry is broken (loud, once) instead of
+  // silently looping. Cleared when that entry later loads CLEANLY (operator
+  // fixes the pattern and re-selects it).
+  const brokenAutoEntries = new Set();
+  const brokenAutoKey = (plName, entryId) => `${plName} ${entryId}`;
+  function markAutoEntryBroken(plName, entryId, reason) {
+    const key = brokenAutoKey(plName, entryId);
+    if (!brokenAutoEntries.has(key)) {
+      brokenAutoEntries.add(key);
+      console.warn(`  ⚠ [autopilot] entry '${entryId}' in playlist '${plName}' will not load ` +
+        `(${reason}) — SKIPPING it in auto-cycle so the deck advances past instead of wedging. ` +
+        `Fix the pattern and re-select the entry to clear.`);
+    }
+  }
+  // Tag a freshly-loaded playlist's entries with `_broken` so the pure picker
+  // (autopilot_pick.js) skips them. `playlistManager.load` re-parses from disk
+  // each call, so this must run AFTER every load and BEFORE every pick.
+  function annotateBrokenEntries(pl, plName) {
+    if (!pl || !Array.isArray(pl.entries)) return pl;
+    for (const e of pl.entries) {
+      if (brokenAutoEntries.has(brokenAutoKey(plName, e.id))) e._broken = true;
+    }
+    return pl;
+  }
+  // Whether a load failure is a DETERMINISTIC compile/missing error (mark the
+  // entry broken) vs a transient one (EBUSY swap-in-flight, a save hiccup — do
+  // NOT permanently skip). Compile errors repeat every attempt; skipping them is
+  // the fix. Transient errors must be retried, never latched.
+  function isDeterministicLoadFailure(err) {
+    if (!err || err.code === 'EBUSY') return false;
+    return /compile error|pattern (missing|not found)|entry not found/i.test(err.message || '');
+  }
+
   function loadPlaylistEntry(channel, playlistName, entryId, { stowOutgoing = true } = {}) {
     // ── SESSION PARAM RETENTION: stow the outgoing pattern (feature A) ──
     // Before we tear down the outgoing entry (line below wipes
@@ -2033,6 +2081,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       noteDeckLivePlaylist(playlistName);
     }
 
+    // I3: this entry just compiled + loaded CLEANLY, so clear any stale
+    // broken-flag (the operator fixed the pattern and re-selected it). The
+    // compile-before-commit above (lines guarding channel.handle) means a
+    // throw here never left the cursor pointing at a half-loaded entry.
+    brokenAutoEntries.delete(brokenAutoKey(playlistName, entryId));
+
     return { entry, index: idx, total: playlist.entries.length };
   }
 
@@ -2084,6 +2138,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       const ap = channel.playlist.autopilot;
       const pl = playlistManager.load(channel.playlist.name);
       if (!pl || pl.entries.length === 0) { channel._autoCycleLastAdvanceMs = now; continue; }
+      annotateBrokenEntries(pl, channel.playlist.name); // I3: skip known-broken entries
       const next = pickNextAutoCycleEntry(pl, ap, channel.playlist.activeEntryId, channel._autoGroup);
       if (!next) {
         // Held / no usable target — re-anchor so we re-check after delay_s,
@@ -2107,6 +2162,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         } catch (e) {
           // Fail LOUD; keep the current pattern (NOT a silent swallow).
           console.warn(`[AutoCycle] advance failed on channel ${channel.id} → ${targetId}: ${e.message}`);
+          // I3: a deterministic (compile/missing) failure marks the entry broken
+          // so the next pick SKIPS it instead of re-selecting it forever.
+          if (isDeterministicLoadFailure(e)) markAutoEntryBroken(plName, targetId, e.message);
         } finally {
           channel._autoCycleInFlight = false;
         }
@@ -2168,6 +2226,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       if (!overlay.playlist || !overlay.playlist.name) continue;
       const pl = playlistManager.load(overlay.playlist.name);
       if (!pl || pl.entries.length === 0) continue;
+      annotateBrokenEntries(pl, overlay.playlist.name); // I3: skip known-broken entries
       // Each overlay picks its OWN next entry from its OWN playlist + cursor,
       // honoring the SHARED shuffle flag (per-overlay content, shared timer).
       const next = pickNextAutoCycleEntry(pl, ap, overlay.playlist.activeEntryId, overlay._autoGroup);
@@ -2183,6 +2242,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         } catch (e) {
           // Fail LOUD; keep the current pattern (NOT a silent swallow).
           console.warn(`[DeckOverlayAutoCycle] advance failed on overlay ${overlay.id} → ${targetId}: ${e.message}`);
+          // I3: a deterministic (compile/missing) failure marks the entry broken
+          // so the next pick SKIPS it instead of re-selecting it forever.
+          if (isDeterministicLoadFailure(e)) markAutoEntryBroken(plName, targetId, e.message);
         } finally {
           overlay._autoCycleInFlight = false;
         }
@@ -4058,10 +4120,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     async () => {
       const baseCh = mixer.getDeckChannel();
       if (!baseCh || !baseCh.playlist || !baseCh.playlist.name) return;
+      // I3 (report _116 / _112): the entry this beat attempts, hoisted so the
+      // catch can mark it broken if the compile fails — otherwise the sequential
+      // picker re-selects the same broken entry every beat and the deck wedges.
+      let attemptedEntryId = null;
+      const daemonPlName = baseCh.playlist.name;
       try {
-        const pl = playlistManager.load(baseCh.playlist.name);
+        const pl = playlistManager.load(daemonPlName);
         if (!pl || pl.entries.length === 0) return;
-        const usable = pl.entries.filter(e => !e._missing);
+        annotateBrokenEntries(pl, daemonPlName); // skip entries already known-broken
+        const usable = pl.entries.filter(e => !e._missing && !e._broken);
         if (usable.length === 0) return;
 
         const cur = baseCh.playlist.activeEntryId;
@@ -4078,6 +4146,7 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         const nextEntry = activeAutopilotProfile.pickNextEntry(
           pl, baseCh.playlist.autopilot, cur, baseCh._autoGroup);
         if (!nextEntry) return;
+        attemptedEntryId = nextEntry.id;
         // Route through the deck-transition path: if the operator has
         // enabled transitions, the load runs as a smooth double-buffer
         // swap; otherwise it falls back to the instant load that
@@ -4103,6 +4172,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           console.warn('[Autopilot] tick skipped: swap already in flight');
         } else {
           console.warn('Autopilot playlist swap failed:', e.message);
+          // I3: a deterministic (compile/missing) failure marks the entry broken
+          // so the sequential picker SKIPS it next beat instead of wedging the
+          // deck on it forever (the live ChatGPT-authoring failure mode).
+          if (attemptedEntryId && isDeterministicLoadFailure(e)) {
+            markAutoEntryBroken(daemonPlName, attemptedEntryId, e.message);
+          }
         }
       }
     },
@@ -4568,9 +4643,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   let timelineService = null;
   if (timelineEnabled) {
     const sceneName = opts.modelName || 'default';
-    const timelineSceneDir = path.join(
-      patternsDir, '..', '..', 'simulation', 'scenes', sceneName, 'timeline',
-    );
+    // Resolved through state_paths so MARSIN_TIMELINE_DIR can redirect the
+    // SHOW PLAN library into a throwaway dir — the timeline e2e suite spawns
+    // real engines that create/save/activate plans, and those writes must
+    // never land in the operator's tracked `simulation/scenes/**` tree.
+    const timelineSceneDir = resolveTimelineDir(path.join(patternsDir, '..'), sceneName);
     timelineService = new TimelineService({
       scene: sceneName,
       sceneDir: timelineSceneDir,
@@ -5926,7 +6003,17 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.url === '/timeline/state' && req.method === 'GET') {
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
       try {
-        const payload = JSON.stringify(timelineService.getState());
+        const st = timelineService.getState();
+        // W1-3 handoff (report _116): surface the pattern-VM "never-black"
+        // verdict on /timeline/state so the launcher watchdog (W1-2) and
+        // CaptainPad see a dark-while-lit ship here too — a dead-but-armed
+        // timeline must not read healthy. `/status.renderHealth` already folds
+        // this into `.ok`; here it rides as a standalone additive field. Guarded
+        // so an older mixer without the method simply omits it (no fallback lie).
+        if (mixer && typeof mixer.getNeverBlackHealth === 'function') {
+          st.renderHealth = mixer.getNeverBlackHealth();
+        }
+        const payload = JSON.stringify(st);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(payload);
       } catch (e) {
@@ -5936,7 +6023,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // Multi-day overview of the ACTIVE plan for the UI (docs/38 §15.2).
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
       try {
-        const payload = JSON.stringify(buildOverview(timelineService.plan, Date.now()));
+        // J1 (report _116 / _113): memoised per (plan, calendar-day) so a repeated
+        // day-zoom open can no longer freeze the render/tick/sACN thread.
+        const payload = JSON.stringify(timelineService.getOverview(Date.now()));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(payload);
       } catch (e) {
@@ -6056,13 +6145,55 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // Operator-takeover lease ARM (docs/38 §16): CaptainPad signals the
       // operator grabbed manual control. mode→overridden, arm the lease.
       // Idempotent (re-calling refreshes expiry).
+      //
+      // ZOOM (report _94 §3.2): an OPTIONAL body { scope:'perform', cueId? }
+      // tags the lease as an EVENT ZOOM (adds `zoom` to the broadcast state and
+      // defers a pending program's auto-start). A BODYLESS call is the plain
+      // takeover, byte-identical to what shipped.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(data => {
+        try {
+          const r = timelineService.takeover(data);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(r));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.url === '/timeline/travel' && req.method === 'POST') {
+      // TIME TRAVEL (report _94 §3.3): enter a scoped takeover and put the
+      // plan's RESOLVED deck state at the target instant on the rig. Body:
+      //   { date:'YYYY-MM-DD', time:'HH:MM' } | { cueId, date? } | { step:'prev'|'next' }
+      // Static snapshot (D4) — the live clock is never warped and the real
+      // night's bookkeeping is untouched. Exit via POST /timeline/resume.
+      if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
+      readBody(async (data) => {
+        try {
+          const r = await timelineService.travel(data);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(r));
+        } catch (e) {
+          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+    } else if (req.url.startsWith('/timeline/resolve') && req.method === 'GET') {
+      // READ-ONLY resolver peek (report _94 §4.1/§4.2):
+      //   GET /timeline/resolve?date=YYYY-MM-DD&time=HH:MM
+      //   GET /timeline/resolve?cueId=<id>[&date=YYYY-MM-DD]
+      // Zero side effects — nothing is dispatched, no lease armed, no latch
+      // written. 400 on an unresolvable or out-of-festival-window target.
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
       try {
-        const r = timelineService.takeover();
+        const q = new URL(req.url, 'http://localhost').searchParams;
+        const spec = {};
+        for (const key of ['date', 'time', 'cueId']) {
+          if (q.has(key)) spec[key] = q.get(key);
+        }
+        const payload = JSON.stringify(timelineService.resolveAt(spec));
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(r));
+        res.end(payload);
       } catch (e) {
-        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
       }
     } else if (req.url === '/timeline/activity' && req.method === 'POST') {
       // Operator-activity ping (docs/38 §16): CaptainPad throttles to ~once/10s
@@ -9316,10 +9447,24 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       // current look" button for when auto-save is OFF. Writes the same files
       // the auto triggers would, so a subsequent restart restores this state.
       const wasAutoSave = engineSettings.autoSave;
+      // L5 (report _116 / _115 / _120): a failed state write must NOT report
+      // success — the CaptainPad "✓ SAVED" badge reads this response, so a 200
+      // {saved:true} on a disk-full/EBUSY write is a lie. We call the STRICT
+      // (strict:true) save path here so a write failure PROPAGATES and is caught
+      // below as an honest 500 {saved:false,error}. The shared-core swallow that
+      // was the remaining L5 root (StateManager.save() warn-only) is now a
+      // per-call choice: strict:true re-throws for THIS explicit operator save,
+      // while every auto-save trigger keeps the best-effort warn-only default so
+      // a transient disk blip never crashes the ship (W1-1 backstop).
       try {
         engineSettings.autoSave = true; // temporarily lift the gate for this write
-        saveAllState();
-        saveGlobals(true);
+        saveAllState(true);
+        saveGlobals(true, true);
+      } catch (e) {
+        console.error(`  ⛔ [save-now] state write FAILED — reporting non-200 (badge must not lie): ${e && e.message}`);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'error', saved: false, error: e && e.message }));
+        return;
       } finally {
         engineSettings.autoSave = wasAutoSave;
       }
@@ -9801,6 +9946,25 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     const wssForTopic = wssByTopic[topic];
     wssForTopic.handleUpgrade(req, socket, head, (ws) => {
+      // CRITICAL (report _116, _108 Family A — the dark-ship crash): attach a
+      // per-CONNECTION error handler BEFORE the connection event fires. The
+      // `ws` library emits 'error' on the SOCKET INSTANCE for every protocol /
+      // frame violation (invalid-UTF-8 text, reserved opcode, RSV1 with no
+      // extension, bad close code, oversize control frame). An EventEmitter
+      // 'error' with NO listener THROWS — and none of the four `/ws/*` sockets
+      // (nor the `/` alias) had one, so a single malformed frame became an
+      // uncaughtException that killed the whole engine → dark ship with no
+      // self-heal. A WiFi-corrupted frame does this with zero malice, and playa
+      // RF is hostile. Classified NON-FATAL: `ws` closes the offending socket
+      // itself, so every other client and the render/tick/sACN loops are
+      // untouched — we log at WARN and return (the `_99` bridge shape). The
+      // per-topic `wss.on('error')` registered above catches SERVER-level
+      // errors; this catches the per-socket ones it cannot see. Attaching here
+      // (before emit) covers all four topics AND the `/` alias in one place.
+      ws.on('error', (err) => {
+        console.warn(`  ⚠ [ws:${topic}] non-fatal per-connection error (frame/protocol) — ` +
+          `socket dropped, engine unaffected: ${err && err.message ? err.message : err}`);
+      });
       wssForTopic.emit('connection', ws, req);
     });
   });

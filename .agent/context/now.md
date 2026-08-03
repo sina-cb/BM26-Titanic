@@ -262,6 +262,44 @@ OPEN (tracked in session task list):
 
 ## Hot notes
 
+- **2026-07-31 — the TIMELINE ZOOM WAVE (S1–S5) IS CLOSED** (`_100`, report
+  `202607/20260725_100_timeline_zoom_e2e.md`). `_94` design → `_95` engine →
+  `_97` pad → `_98` bugfixes → `_100` e2e. The verification slice landed as a
+  committed suite in **`marsin_engine/tests/e2e/`** (17/17, ~2 min, inside
+  `npm test`) that spawns REAL engines and restarts them by killing them.
+- **2026-07-31 — SPAWNING A TEST ENGINE IS NOW SAFE BY CONSTRUCTION** (`_100`).
+  `--dest` does NOT black-hole sACN — the config's per-controller
+  `controllers:` block wins for the universes it claims (this cost `_97` 30 s
+  of live sACN on the real rig). **`MARSIN_CONFIG_FILE` now governs the
+  engine's BOOT read**, not just the autopilot write-back, so a harness hands
+  the engine a black-holed config instead of editing the tracked
+  `config.yaml`. New **`MARSIN_TIMELINE_DIR`** does the same for the show-plan
+  library (`POST /timeline/plans` can no longer reach `scenes/**`). Both are
+  ASSERTED on every boot by `tests/e2e/timeline_e2e_harness.mjs` — copy that
+  pattern for any new engine-spawning harness, and always import
+  `tests/helpers/setup_config_guard.mjs`.
+- **2026-07-31 — full engine suite baseline is now 8 failures, not 9**: the
+  `tests/io/status_output_routing.test.js` failure `_98` reported is GONE (it
+  was caused by `_97`'s temporary loopback controller host, since restored).
+  The remaining 8 are 5 × `audio_capture` + 1 × `osc_listener` (environmental),
+  1 × `effects_v2_mode_page_layout` (known full-run state pollution), 1 ×
+  `specialty_white_uv` (pre-existing playlist drift between the two scenes).
+- **2026-07-31 — sim servers UP, engine DOWN** (`_99`, `feat/bm_readiness`):
+  sim running via `cd simulation && npm start`, pinned `titanic` (:6969 HTTP,
+  :6970 save, :6971 sACN-IN, :6972 sACN-OUT, UDP 5568). :6966/:6967/:6968/:7167
+  are all free — the concurrent `_97`/`_98` threads released them.
+  `node launcher.js prod --scene titanic` was **refused by the permission
+  gate**; run it to finish the prod shape (it absorbs the sim servers, nothing
+  to stop first). It force-claims ports, so never start it while another agent
+  holds :6968 (`launcher.js:1025`, there is no `--no-force`).
+- **2026-07-31 — the sACN input bridge's `addMembership EINVAL` boot crash is
+  FIXED** (report `202607/20260725_99`). It was never a NIC problem: the bridge
+  subscribed universes synchronously at boot while the `sacn` Receiver's own
+  join loop is deferred to the socket's `listening` callback over the SAME
+  array, so the universe was joined twice = `EINVAL` on Windows, and there was
+  no `receiver.on('error')` to catch the package's re-emit. Trigger: any scene
+  patched to a universe the `📡 Subscribed Universes` field does not name.
+
 - **Show-server deployment DESIGNED (2026-07-17)**: `docs/43_show_server_deployment.md`
   — power-safe boot chain (BIOS AC-restore → autologon → scheduled task →
   `deploy/boot_server.ps1` supervisor → `launcher.js prod --scene <X> --no-launch`)

@@ -83,6 +83,20 @@ function isValidIp(ip) {
   return m.slice(1).every((octet) => Number(octet) <= 255);
 }
 
+/**
+ * An LED PIXEL FIXTURE: a `parLights` entry whose fixture DEFINITION declares
+ * `bus: led`. It carries baked per-pixel geometry (the TE Sign V3 halves' logo
+ * `dots`) but hangs off a MarsinLED output and is addressed per pixel, exactly
+ * like an LED strand — so everything below treats it as LED, never as a DMX
+ * fixture with a whole-fixture footprint.
+ *
+ * Re-stated from `src/dmx/led/led_fixture_kind.js` per this module's design
+ * rule (a gate that imports the code it audits agrees with that code's bugs).
+ */
+function isLedBusDef(def) {
+  return !!def && def.bus === 'led';
+}
+
 /** Effects fixtures export to `<scene>.effects.js`, NOT the pixel model.
  *  Mirrors pixelblaze_model_exporter.js:186. */
 function isEffectsFixtureType(fixtureType) {
@@ -279,7 +293,7 @@ function checkSceneModelParity(input) {
   const roster = buildExpectedRoster(state);
   checkCoverage(state, roster);
   const wiring = buildWiring(state);
-  checkPlaceholders(state, wiring);
+  checkPlaceholders(state, wiring, roster);
   checkWiringAndPatches(state, wiring);
   checkPatchTruth(state, roster, wiring);
   checkAddressHygiene(state, wiring);
@@ -465,19 +479,28 @@ function buildExpectedRoster(state) {
     }
     const defPixels = Array.isArray(def.pixels) ? def.pixels : [];
     if (defPixels.length > 0) {
+      // An LED PIXEL FIXTURE (definition `bus: led` — the TE Sign V3 halves)
+      // keeps its baked per-pixel geometry but is WIRED like a strand: one
+      // MarsinLED output, stride bytes per pixel. So it exports `type: 'led'`
+      // and its channels come from the owning controller's order map, not from
+      // the definition's absolute 3i+1 block (mirrors the exporter's LED-bus
+      // branch). Operator ruling 2026-07-31: the TE signs are LED, not DMX.
+      const ledBus = isLedBusDef(def);
       const first = pixels.length;
       defPixels.forEach((dp, j) => {
         pixels.push({
-          type: 'dmx',
+          type: ledBus ? 'led' : 'dmx',
           fixtureType: f.fixtureType,
           name: `${f.name} - ${dp.id}`,
           group: f.group || '',
           localIndex: j,
-          channels: standardizeChannels(dp.channels),
+          channels: ledBus ? undefined : standardizeChannels(dp.channels),
           owner: f.name,
         });
       });
-      owners.set(f.name, { kind: 'dmx', def, first, count: defPixels.length, config: f });
+      owners.set(f.name, {
+        kind: ledBus ? 'ledFixture' : 'dmx', def, first, count: defPixels.length, config: f,
+      });
       continue;
     }
     if (isEffectsFixtureType(f.fixtureType)) {
@@ -660,7 +683,7 @@ function buildWiring(state) {
 
 // ── 7. Placeholder policy (plan §2) ─────────────────────────────────────
 
-function checkPlaceholders(state, wiring) {
+function checkPlaceholders(state, wiring, roster) {
   for (const c of state.controllers) {
     const ordinal = wiring.ordinalOf.get(c);
     const where = `controllers.yaml controller #${ordinal} '${c.name}'`;
@@ -685,18 +708,30 @@ function checkPlaceholders(state, wiring) {
     }
   }
 
-  // Unpatched LED strand pixels carry the exporter's loud `unpatched: true`.
-  const unpatchedByStrand = new Map();
-  for (const px of state.modelPixels) {
-    if (px && px.unpatched) {
-      unpatchedByStrand.set(px.name, (unpatchedByStrand.get(px.name) || 0) + 1);
-    }
+  // Unpatched LED pixels carry the exporter's loud `unpatched: true`. Attribute
+  // them to their OWNER, not to `px.name`: a strand's pixels all share the
+  // strand name, but an LED PIXEL FIXTURE names each pixel `<fixture> - pixel_N`
+  // (its geometry is per-pixel), which would otherwise report one finding per
+  // LED instead of one per fixture.
+  const ownerAt = new Map();          // model index → owner name
+  for (const [ownerName, owner] of roster.owners) {
+    if (owner.first < 0) continue;
+    for (let k = 0; k < owner.count; k++) ownerAt.set(owner.first + k, ownerName);
   }
+  const unpatchedByStrand = new Map();
+  state.modelPixels.forEach((px, i) => {
+    if (px && px.unpatched) {
+      const key = ownerAt.get(i) || px.name;
+      unpatchedByStrand.set(key, (unpatchedByStrand.get(key) || 0) + 1);
+    }
+  });
   for (const [name, count] of unpatchedByStrand) {
+    const owner = roster.owners.get(name);
+    const label = owner && owner.kind === 'ledFixture' ? 'LED fixture' : 'strand';
     state.addPolicy(CHECKS.PLACEHOLDER, 'unpatched_marker', SEVERITY.INFO,
-      `strand '${name}'`,
-      `${count} model pixel(s) carry the exporter's \`unpatched: true\` marker — the strand is ` +
-      'bound to no LED controller and receives no sACN.');
+      `${label} '${name}'`,
+      `${count} model pixel(s) carry the exporter's \`unpatched: true\` marker — the ${label} ` +
+      'is bound to no LED controller output and receives no sACN.');
   }
 }
 
@@ -705,6 +740,9 @@ function checkPlaceholders(state, wiring) {
 /** Re-derive the patch record controllers.yaml implies, independently of
  *  the sim's projection. Returns null when the fixture cannot send. */
 function expectedRecordFor(state, wiring, fixture) {
+  // LED pixel fixtures are addressed by the LED per-output walk, never by the
+  // DMX allocation model — their record is checked in checkLedStrandPatch.
+  if (isLedBusDef(state.fixtureDefs[fixture.fixtureType])) return null;
   const wired = wiring.byName.get(fixture.name);
   if (!wired) return { patched: false, reason: 'not chained on any controller' };
   if (wired.dead) return { patched: false, reason: `controller '${wired.controller.name}' is unsendable` };
@@ -784,18 +822,26 @@ function checkWiringAndPatches(state, wiring) {
         'scene_config.yaml — drop the entry or fix the name.');
       continue;
     }
+    // LED-MAPPABLE = an LED strand OR an LED pixel fixture (definition
+    // `bus: led`). Both hang off a MarsinLED output and are addressed per
+    // pixel; neither belongs on a DMX gateway.
     const isStrand = state.strands.some((s) => s.name === name);
-    if (wired.isLed && !isStrand) {
+    const ledFixture = state.fixtures.some(
+      (f) => f.name === name && isLedBusDef(state.fixtureDefs[f.fixtureType]));
+    const ledMappable = isStrand || ledFixture;
+    if (wired.isLed && !ledMappable) {
       state.add(CHECKS.ADDRESS_HYGIENE, 'dmx_fixture_on_led_controller', SEVERITY.ERROR,
         wired.portWhere,
         `'${name}' is a DMX fixture but is chained on LED controller ` +
-        `'${wired.controller.name}' — LED chains carry strand names only.`);
+        `'${wired.controller.name}' — LED chains carry LED strands and LED pixel fixtures ` +
+        '(definition `bus: led`) only.');
     }
-    if (!wired.isLed && isStrand) {
+    if (!wired.isLed && ledMappable) {
       state.add(CHECKS.ADDRESS_HYGIENE, 'strand_on_dmx_controller', SEVERITY.ERROR,
         wired.portWhere,
-        `'${name}' is an LED strand but is chained on DMX controller ` +
-        `'${wired.controller.name}' — strands need an LED-type controller.`);
+        `'${name}' is ${isStrand ? 'an LED strand' : 'an LED pixel fixture (definition ' +
+        '`bus: led`)'} but is chained on DMX controller '${wired.controller.name}' — it is ` +
+        'addressed per pixel off a MarsinLED output and needs an LED-type controller.');
     }
   }
 
@@ -803,11 +849,15 @@ function checkWiringAndPatches(state, wiring) {
   // at all, which is exactly the "no data from sacn_in" symptom.
   for (const f of state.fixtures) {
     if (!wiring.byName.has(f.name)) {
+      const ledBus = isLedBusDef(state.fixtureDefs[f.fixtureType]);
       state.add(CHECKS.ADDRESS_HYGIENE, 'unmapped_fixture', SEVERITY.ERROR,
         `fixture '${f.name}' (group '${f.group || ''}')`,
         'is not chained on any controller in controllers.yaml — it has no universe/address, ' +
         'so the engine never transmits for it and the sim paints it undriven. Map it in the ' +
-        'Controller Mapping panel.');
+        'Controller Mapping panel' +
+        (ledBus ? ', on an LED-type (MarsinLED) controller output — this is an LED pixel ' +
+          'fixture (definition `bus: led`), so it appears in the LED half of the unmapped tray.'
+          : '.'));
     }
   }
   for (const s of state.strands) {
@@ -829,6 +879,10 @@ function checkWiringAndPatches(state, wiring) {
     }
   }
   for (const f of state.fixtures) {
+    // An LED pixel fixture follows the STRAND record contract: a record only
+    // when it is actually patched (save-server.js), so a missing one is the
+    // honest "not mapped yet", not staleness.
+    if (isLedBusDef(state.fixtureDefs[f.fixtureType])) continue;
     if (!state.records.has(f.name)) {
       state.add(CHECKS.DRIFT, 'missing_patch_record', SEVERITY.ERROR,
         `patches.yaml '${f.name}'`,
@@ -904,12 +958,19 @@ function checkPatchTruth(state, roster, wiring) {
   for (const s of state.strands) {
     checkLedStrandPatch(state, roster, wiring, s);
   }
+  // LED pixel fixtures ride the identical per-output walk and record shape.
+  for (const f of state.fixtures) {
+    if (isLedBusDef(state.fixtureDefs[f.fixtureType])) {
+      checkLedStrandPatch(state, roster, wiring, f);
+    }
+  }
 }
 
 function checkLedStrandPatch(state, roster, wiring, strand) {
   const owner = roster.owners.get(strand.name);
-  if (!owner || owner.kind !== 'led') return;
-  const where = `strand '${strand.name}'`;
+  if (!owner || (owner.kind !== 'led' && owner.kind !== 'ledFixture')) return;
+  const where = owner.kind === 'ledFixture'
+    ? `LED fixture '${strand.name}'` : `strand '${strand.name}'`;
   const record = state.records.get(strand.name);
   const wired = wiring.byName.get(strand.name);
   const pixels = [];
@@ -1262,9 +1323,13 @@ function checkMetadata(state, roster) {
         `model metadata ≠ patches.yaml: ${diffs.join('; ')}. The model is stale — re-export.`);
     }
   }
-  for (const s of state.strands) {
+  // Strands AND LED pixel fixtures keep their identity (sectionId / fixtureId /
+  // viewMask) on the STRUCTURAL tree, not in a patch record — an LED thing has
+  // a record only while it is patched, so its identity must survive being
+  // unmapped. Both are therefore checked against scene_config.yaml.
+  for (const s of [...state.strands, ...state.fixtures]) {
     const owner = roster.owners.get(s.name);
-    if (!owner || owner.kind !== 'led') continue;
+    if (!owner || (owner.kind !== 'led' && owner.kind !== 'ledFixture')) continue;
     const px = state.modelPixels[owner.first];
     if (!px) continue;
     const diffs = [];

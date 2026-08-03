@@ -821,6 +821,80 @@ export function validateShowPlan(plan) {
   return out;
 }
 
+// ── plan LINT (authoring diagnostics that are not schema errors) ─────────────
+
+/**
+ * FIX 4 (report `_98`) — the PROGRAM-LOOK DECK FREEZE.
+ *
+ * A `kind: program` cue is dispatched with `autopilotOff: true`: the service
+ * disarms the plan's baseline autopilot FIRST and then applies the cue's action
+ * (`timeline_service._dispatchArbitratedAction`). If that action carries no
+ * `autopilot` block of its own, NOTHING re-arms pattern cycling — the deck sits
+ * on a single pattern for the whole hold. Measured on the shipped plan (report
+ * `_93` §5.4): `c_sunrise` froze the boat on one pattern for 90 minutes; the
+ * burn-night and temple holds for 120 minutes each.
+ *
+ * That is an AUTHORING error, and the codex's no-fallback rule says it must be
+ * loud — the engine will not invent an autopilot block the author did not write.
+ * It is reported HERE, at validation time, instead of being discovered at 2am on
+ * the playa.
+ *
+ * It is a LINT, not a `throw`, and deliberately so: the operator's shipped
+ * `playa_default.yaml` trips it today (four looks), as does this file's own
+ * `defaultShowPlan()`. Throwing would refuse to LOAD the running show — trading
+ * a frozen pattern for a dark boat. The finding is surfaced loudly instead
+ * (`TimelineService` console.errors every finding on load and exposes them as
+ * `planWarnings` on `/timeline/state`), and the plan edit is the operator's.
+ *
+ * PURE: no IO, the plan is never mutated.
+ *
+ * @param {object} plan a NORMALIZED plan (the output of validateShowPlan)
+ * @returns {Array<{code:string, severity:'error', cueId:string, look:string|null,
+ *                  message:string}>} findings, empty when the plan is clean
+ */
+export function lintShowPlan(plan) {
+  const findings = [];
+  if (!isPlainObject(plan) || !Array.isArray(plan.cues)) return findings;
+  // With the plan-level baseline disabled the deck was never cycling in the
+  // first place, so a program look that does not cycle is not a regression.
+  if (plan.autopilot && plan.autopilot.enabled === false) return findings;
+  for (const cue of plan.cues) {
+    if (cue.kind !== 'program' || cue.enabled === false) continue;
+    const action = cue.action;
+    if (!action) continue;
+    let autopilot;
+    let target;
+    let lookName = null;
+    if (action.type === 'look') {
+      const look = plan.looks ? plan.looks[action.look] : undefined;
+      if (!look) continue;                       // validateShowPlan already rejects this
+      lookName = action.look;
+      autopilot = look.autopilot;
+      target = look.target;
+    } else if (action.type === 'playlist') {
+      autopilot = action.autopilot;
+      target = action.target;
+    } else {
+      continue;                                   // scene/globals/tasks/effect drive no deck content
+    }
+    const channel = target ? target.channel : 'deck';
+    if (channel !== 'deck' && channel !== 'all') continue;
+    if (autopilot !== undefined) continue;
+    findings.push({
+      code: 'program_action_no_autopilot',
+      severity: 'error',
+      cueId: cue.id,
+      look: lookName,
+      message: `cue "${cue.id}" (${cue.label || cue.id}) is kind:program and its `
+        + `${lookName ? `look "${lookName}"` : 'playlist action'} declares no "autopilot" block — `
+        + 'a program dispatch disarms the plan\'s baseline autopilot first, so the deck will '
+        + 'FREEZE on one pattern for the whole hold. Author an autopilot block '
+        + '({ active, delay_s, shuffle }) on it, or make the cue kind:ambient.',
+    });
+  }
+  return findings;
+}
+
 /**
  * Load a show plan from disk. A MISSING file is the only non-error path → the
  * built-in default plan. Any present-but-broken file THROWS (codex P0).

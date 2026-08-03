@@ -10,6 +10,7 @@ const {
 } = require('./scene_duplicate.cjs');
 
 const ledGamma = require('./led_gamma_service.cjs');
+const controllerProbe = require('./controller_probe_service.cjs');
 
 const {
   writeFileAtomic,
@@ -20,12 +21,33 @@ const {
   snapshotBeforeWrite,
   listBackups,
   restoreBackup,
+  deriveRoots,
 } = require('./scene_backup.cjs');
 
-// Resolve paths relative to the simulation root (parent of server/)
-const SIM_ROOT = path.join(__dirname, '..');
+// Resolve paths relative to the simulation root (parent of server/).
+//
+// SIM_SAVE_SERVER_ROOT is a TEST-ONLY override so the crash-proofing and
+// save-honesty regressions can point every write at a throwaway ~/tmp tree
+// instead of the real scenes/ (report 20260725_119, Wave 1). Unset in
+// production → identical to the original behavior; this is an explicit config
+// hook, not a silent fallback (codex P0): if it is set it is honoured exactly,
+// if it is absent the real root is used, and neither path guesses.
+const SIM_ROOT = process.env.SIM_SAVE_SERVER_ROOT || path.join(__dirname, '..');
 const ENGINE_ROOT = path.join(SIM_ROOT, '..', 'marsin_engine');
 const SCENES_ROOT = path.join(SIM_ROOT, 'scenes');
+
+// Backup roots derived from the (possibly overridden) SIM_ROOT so the pre-save
+// snapshots land beside the scene writes, in the temp tree during tests and in
+// the real .scene_backups/ in production. Passed explicitly to every
+// scene_backup call so nothing quietly writes to the default (real) tree.
+const BACKUP_ROOTS = deriveRoots(SIM_ROOT);
+
+// Upper bound on a /controllers/probe request body. A legitimate sweep of the
+// whole fleet is a few kilobytes of `{id, ip, type}` triples; anything past
+// this is either broken or hostile and is rejected with a 413 rather than
+// buffered unbounded (report 20260725_109 — the endpoint accepted an unbounded
+// targets[]).
+const PROBE_MAX_BODY_BYTES = 1 * 1024 * 1024;
 
 /**
  * Resolve scene-specific config path. If sceneName is omitted, defaults to 'titanic'.
@@ -45,9 +67,48 @@ function resolveScenePixelMapViewsPath(sceneName) {
   return path.join(SCENES_ROOT, safeName, 'pixel_map_views.yaml');
 }
 
-// Read port from config.yaml (fail-loud: no silent port guessing)
+// Read port from config.yaml (fail-loud: no silent port guessing).
+// SIM_SAVE_SERVER_PORT is a TEST-ONLY override so the regressions can bind a
+// random high port and NEVER the operator's :6970 (report 20260725_119). It
+// must parse to a valid finite port or we fail loudly rather than fall through
+// to a guessed default.
 const { loadSimPorts } = require('../lib/load_ports.cjs');
-const SAVE_PORT = loadSimPorts(path.join(SIM_ROOT, 'config.yaml')).save_port;
+let SAVE_PORT;
+if (process.env.SIM_SAVE_SERVER_PORT !== undefined) {
+  SAVE_PORT = Number(process.env.SIM_SAVE_SERVER_PORT);
+  if (!Number.isInteger(SAVE_PORT) || SAVE_PORT < 0 || SAVE_PORT > 65535) {
+    throw new Error(`SIM_SAVE_SERVER_PORT is not a valid port: ` +
+      `${JSON.stringify(process.env.SIM_SAVE_SERVER_PORT)}`);
+  }
+} else {
+  SAVE_PORT = loadSimPorts(path.join(__dirname, '..', 'config.yaml')).save_port;
+}
+
+// ─── Process-level crash backstop (report 20260725_119, Family A) ────────────
+// A bug that escapes a request handler (an unhandled socket 'error', a stray
+// async throw) would otherwise take the save server down with Node's default
+// bare stack trace — scene saves, backups, gamma and the controller probe all
+// die at once, and the pane's only symptom is a generic "restart the stack"
+// toast that points at the wrong cause. These backstops make any such crash
+// LOUD and NAMED. They deliberately do NOT swallow-and-continue: after an
+// uncaughtException the process state may be half-corrupt, so the codex "no
+// fallback, fail loud" rule says exit rather than run half-alive. Supervision /
+// auto-restart is the launcher's job (Wave 1 W1-2); the honest, non-silent
+// death here is the precondition for it. The primary probe-crash vector is
+// fixed at the source (validated inputs + a socket error handler registered
+// before anything that can throw); this net is for whatever we did not foresee.
+process.on('uncaughtException', (err) => {
+  console.error('[SAVE SERVER] ✋ FATAL uncaughtException — a bug reached the ' +
+    'process top level; exiting loudly rather than running half-alive:',
+  (err && err.stack) || err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[SAVE SERVER] ✋ FATAL unhandledRejection — a promise rejected ' +
+    'with no handler; exiting loudly rather than running half-alive:',
+  (reason && reason.stack) || reason);
+  process.exit(1);
+});
 
 // writeFileAtomic (atomic + durable tmp+fsync+rename write) now lives in
 // ./scene_backup.cjs as the single source of truth — the backup module and
@@ -179,7 +240,7 @@ http.createServer((req, res) => {
         // Throws on failure → caught below → 500 (codex P0: never write live
         // state without a backup).
         const backupScene = sceneName || 'titanic';
-        snapshotBeforeWrite(backupScene, filesForSave(backupScene), 'save');
+        snapshotBeforeWrite(backupScene, filesForSave(backupScene), 'save', BACKUP_ROOTS);
 
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
 
@@ -209,19 +270,68 @@ http.createServer((req, res) => {
 
         if (allFixtureArrays.length > 0 || ledStrandArray) {
           const patches = { patches: {} };
+          let ledFixtureRecords = 0;
           for (const fixtureArray of allFixtureArrays) {
             fixtureArray.forEach(fixture => {
               const name = fixture.name;
               if (name) {
-                patches.patches[name] = {
-                  controllerIp: fixture.controllerIp || '',
-                  dmxUniverse: fixture.dmxUniverse || 0,
-                  dmxAddress: fixture.dmxAddress || 0,
-                  controllerId: fixture.controllerId || 0,
-                  sectionId: fixture.sectionId || 0,
-                  fixtureId: fixture.fixtureId || 0,
-                  viewMask: fixture.viewMask || 0,
-                };
+                // An LED PIXEL FIXTURE (definition `bus: led`, marked by the
+                // client's LED projection — the TE Sign V3 halves) hangs off a
+                // MarsinLED output and is addressed per pixel, so it takes the
+                // STRAND record shape, not the whole-fixture DMX one. Like a
+                // strand, it gets a record only when it is actually patched;
+                // unpatched means no record at all, never a zeroed DMX row that
+                // would read as "a DMX fixture nobody addressed".
+                if (fixture.bus === 'led') {
+                  if ((fixture.dmxUniverse || 0) > 0) {
+                    patches.patches[name] = {
+                      controllerIp: fixture.controllerIp || '',
+                      controllerId: fixture.controllerId || 0,
+                      dmxUniverse: fixture.dmxUniverse || 0,
+                      dmxAddress: fixture.dmxAddress || 0,
+                      pixelCount: fixture.pixelCount || 0,
+                      outputIndex: (fixture.outputIndex === undefined ||
+                        fixture.outputIndex === null) ? -1 : fixture.outputIndex,
+                      endUniverse: fixture.endUniverse || 0,
+                      endChannel: fixture.endChannel || 0,
+                      segments: Array.isArray(fixture.segments)
+                        ? fixture.segments.map((s) => ({
+                          universe: s.universe, startChannel: s.startChannel,
+                          endChannel: s.endChannel, pixelCount: s.pixelCount,
+                        }))
+                        : [],
+                    };
+                    ledFixtureRecords += 1;
+                  }
+                  delete fixture.pixelCount;
+                  delete fixture.outputIndex;
+                  delete fixture.segments;
+                  delete fixture.endUniverse;
+                  delete fixture.endChannel;
+                  delete fixture.controllerIp;
+                  delete fixture.controllerId;
+                  delete fixture.dmxUniverse;
+                  delete fixture.dmxAddress;
+                  // `bus` is DERIVED from the fixture definition — it is the
+                  // signal for this branch, never authored scene state.
+                  delete fixture.bus;
+                  // sectionId / fixtureId / viewMask STAY on the structural
+                  // tree, exactly as an LED strand carries them: an LED thing
+                  // gets a patch record only once it is patched, so parking its
+                  // identity there would lose it the moment it is unmapped and
+                  // re-mint different ids on the next boot.
+                  return;
+                } else {
+                  patches.patches[name] = {
+                    controllerIp: fixture.controllerIp || '',
+                    dmxUniverse: fixture.dmxUniverse || 0,
+                    dmxAddress: fixture.dmxAddress || 0,
+                    controllerId: fixture.controllerId || 0,
+                    sectionId: fixture.sectionId || 0,
+                    fixtureId: fixture.fixtureId || 0,
+                    viewMask: fixture.viewMask || 0,
+                  };
+                }
                 // Clean structural tree
                 delete fixture.controllerIp;
                 delete fixture.dmxUniverse;
@@ -343,9 +453,14 @@ http.createServer((req, res) => {
         writeSceneManifest();
         res.end('Saved');
       } catch (e) {
+        // Save-honesty (report 20260725_119, Family F / L5): a write that fails
+        // (disk-full/EBUSY/EISDIR) MUST surface as a non-200 with the named
+        // error, never a 200 the UI reads as SAVED. writeFileAtomic and
+        // snapshotBeforeWrite both throw on failure, so any real write error
+        // lands here.
         console.error(`[SAVE SERVER] Write error:`, e);
         res.statusCode = 500;
-        res.end('Error');
+        res.end(`Error: ${e.message}`);
       }
     });
   } else if (req.method === 'POST' && pathname === '/save-cameras') {
@@ -357,16 +472,17 @@ http.createServer((req, res) => {
       try {
         // Snapshot before overwrite (see /save). Throws → 500.
         const backupScene = sceneName || 'titanic';
-        snapshotBeforeWrite(backupScene, filesForCameras(backupScene), 'save-cameras');
+        snapshotBeforeWrite(backupScene, filesForCameras(backupScene), 'save-cameras', BACKUP_ROOTS);
 
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
         fs.writeFileSync(outPath, body);
         console.log(`[SAVE SERVER] ✅ Wrote ${outPath}`);
         res.end('Saved');
       } catch (e) {
+        // Save-honesty: a failed write is a named 500, never a 200 (see /save).
         console.error(`[SAVE SERVER] Write error:`, e);
         res.statusCode = 500;
-        res.end('Error');
+        res.end(`Error: ${e.message}`);
       }
     });
   } else if (req.method === 'POST' && pathname === '/save-pixel-map-views') {
@@ -400,16 +516,17 @@ http.createServer((req, res) => {
       try {
         // Snapshot before overwrite (see /save). Throws → 500.
         const backupScene = sceneName || 'titanic';
-        snapshotBeforeWrite(backupScene, filesForPixelMapViews(backupScene), 'save-pixel-map-views');
+        snapshotBeforeWrite(backupScene, filesForPixelMapViews(backupScene), 'save-pixel-map-views', BACKUP_ROOTS);
 
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
         writeFileAtomic(outPath, yaml.dump(tree, { lineWidth: -1 }));
         console.log(`[SAVE SERVER] ✅ Wrote ${outPath} (${tree.views.length} view(s))`);
         res.end('Saved');
       } catch (e) {
+        // Save-honesty: a failed write is a named 500, never a 200 (see /save).
         console.error(`[SAVE SERVER] Write error:`, e);
         res.statusCode = 500;
-        res.end('Error');
+        res.end(`Error: ${e.message}`);
       }
     });
   } else if (req.method === 'POST' && req.url === '/save-stl') {
@@ -427,9 +544,10 @@ http.createServer((req, res) => {
         console.log(`[SAVE SERVER] Successfully wrote to ${outPath}`);
         res.end('Saved');
       } catch (e) {
+        // Save-honesty: a failed write is a named 500, never a 200 (see /save).
         console.error(`[SAVE SERVER] Write error:`, e);
         res.statusCode = 500;
-        res.end('Error');
+        res.end(`Error: ${e.message}`);
       }
     });
   } else if (req.method === 'POST' && req.url === '/save-pattern') {
@@ -512,7 +630,7 @@ http.createServer((req, res) => {
         // Snapshot the model file this write will overwrite BEFORE touching
         // it. The client fires model+effects+viewmasks in a burst, so these
         // three coalesce into one snapshot dir. Throws → 500.
-        snapshotBeforeWrite(safeScene, filesForModel(safeScene, type), 'save-model');
+        snapshotBeforeWrite(safeScene, filesForModel(safeScene, type), 'save-model', BACKUP_ROOTS);
 
         fs.mkdirSync(outDir, { recursive: true });
         const outPath = path.join(outDir, modelFilename);
@@ -646,7 +764,7 @@ http.createServer((req, res) => {
         return;
       }
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify(listBackups(sceneName)));
+      res.end(JSON.stringify(listBackups(sceneName, BACKUP_ROOTS)));
     } catch (e) {
       console.error(`[SAVE SERVER] Backups list error:`, e);
       res.statusCode = 500;
@@ -666,7 +784,7 @@ http.createServer((req, res) => {
         // restoreBackup snapshots the current live files first (pre-restore),
         // then atomically writes the backed-up bytes over them. It sets
         // err.statusCode (400 bad id / 404 unknown snapshot) for us to map.
-        const result = restoreBackup(sceneName, id);
+        const result = restoreBackup(sceneName, id, BACKUP_ROOTS);
         // A restore can add/remove scene files — keep the manifest live.
         writeSceneManifest();
         console.log(`[SAVE SERVER] ♻️  Restored ${sceneName} to ${id} ` +
@@ -727,6 +845,84 @@ http.createServer((req, res) => {
         res.statusCode = 400;
         res.end(JSON.stringify({ ok: false, ip, kind: 'invalid', error: e.message }));
       }
+    });
+  } else if (req.method === 'POST' && pathname === '/controllers/probe') {
+    // ONLINE / OFFLINE / UNKNOWN for every controller card in the pane.
+    // Server-side because the browser can neither open a TCP socket (DMX
+    // gateways) nor survive cross-origin on a device HTTP call. Fast + parallel
+    // + last-verdict cached, so the pane never blocks on the network.
+    // Body: { targets: [{id, name?, ip, type}], force?: bool, timeoutMs?: number }
+    //
+    // This endpoint is bound on 0.0.0.0 with CORS `*` and no auth, so anything
+    // on the show LAN — or any page open in the operator's browser — can hit
+    // it. It must therefore reject every hostile shape LOUDLY and NEVER crash
+    // (report 20260725_109 P1-1 killed the whole process from here). Three
+    // guards below, mirroring how the engine's REST surface held under attack:
+    // an oversized body is capped, a non-object body is a 400, and a bad
+    // `timeoutMs` is a 400 rather than a value that throws inside the socket.
+    let body = '';
+    let bodyTooBig = false;
+    req.on('data', (chunk) => {
+      if (bodyTooBig) return;
+      body += chunk;
+      if (body.length > PROBE_MAX_BODY_BYTES) {
+        // Stop accumulating and answer once. Destroying the request avoids
+        // buffering an unbounded payload from a hostile client.
+        bodyTooBig = true;
+        res.statusCode = 413;
+        res.end(JSON.stringify({ ok: false,
+          error: `request body exceeds ${PROBE_MAX_BODY_BYTES} bytes` }));
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      if (bodyTooBig) return;
+      res.setHeader('Content-Type', 'application/json');
+      let parsed;
+      try {
+        parsed = JSON.parse(body || '{}');
+      } catch (e) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ ok: false, error: `invalid JSON body: ${e.message}` }));
+        return;
+      }
+      // A non-object body (`null`, a number, a string, an array) would make the
+      // `parsed.targets` read below throw — and `JSON.parse("null")` returns
+      // `null`, which is the exact TypeError that would escape this async
+      // handler and reach the process backstop. Reject it as a 400 first.
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ ok: false, error: 'body must be a JSON object' }));
+        return;
+      }
+      if (!Array.isArray(parsed.targets)) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ ok: false, error: '`targets` must be a list of {id, ip, type}' }));
+        return;
+      }
+      // Validate the timeout BEFORE it can reach `socket.setTimeout` — a
+      // negative value there throws ERR_OUT_OF_RANGE on a still-connecting
+      // socket and killed the process (report 20260725_109 P1-1). Reject loud.
+      let timeoutMs;
+      try {
+        timeoutMs = controllerProbe.validateTimeoutMs(parsed.timeoutMs);
+      } catch (e) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+        return;
+      }
+      controllerProbe.probeControllers(parsed.targets, {
+        force: parsed.force === true,
+        timeoutMs,
+      }).then((out) => {
+        res.end(JSON.stringify({ ok: true, ...out }));
+      }).catch((e) => {
+        // probeControllers is documented never to reject; if it ever does, that
+        // is a bug in the prober and must be visible, not a silent empty sweep.
+        console.error(`[SAVE SERVER] ✋ controller probe sweep failed: ${e.stack || e.message}`);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      });
     });
   } else if (req.method === 'GET' && pathname === '/list-scenes') {
     // The simulation client now reads the static manifest directly, but we

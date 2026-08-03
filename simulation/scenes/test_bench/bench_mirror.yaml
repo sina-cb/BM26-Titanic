@@ -1,0 +1,114 @@
+# bench_mirror.yaml — the test bench as a STAND-IN for real titanic fixtures.
+#
+# Operator order, 2026-07-31: "set up test bench to show part of the titanic
+# scene for me — led bars, par lights and vintage lights! LED strings too."
+#
+# WHAT THIS DOES. While the ENGINE is running the `titanic` model, the sACN
+# bridge composes the frames below and unicasts them to the bench boxes, so each
+# bench fixture shows exactly the bytes a named titanic fixture is being sent.
+# Nothing on the hardware changes: no fixture is re-addressed, no DMX gateway
+# port is re-bound, no controller push is needed.
+#
+# WHY IT IS NEEDED. sACN reception is free — a second listener on a universe just
+# works. The DMX START ADDRESS is not: it lives in the physical fixture.
+#
+#   family              titanic addresses      bench addresses
+#   UkingPar   (fp 10)  1, 11, 21, 31          1, 11, 21, 31     ← ALIGNED
+#   VintageLed (fp 33)  1, 34, 67, 100         41, 74            ← no alignment
+#   ShehdsBar  (fp 119) 1, 120                 107, 226          ← no alignment
+#
+# The pars could have been done by pure config (point the bench's par port at a
+# titanic par universe). No titanic bar or vintage fixture ever starts at 107,
+# 226, 41 or 74, so those bytes must be MOVED. One mechanism for all three keeps
+# the bench box on the universes it already listens to (U2), which is why there
+# is nothing for the operator to reconfigure.
+#
+# THE SLICE — the ship's LEFT FRONT, so spatial patterns read correctly:
+#
+#   bench Par 1-4       ← Left Auditorium 5,6,7,8   (LeftFrontDeck, U6)
+#   bench Vintage Left  ← Left Front Rails 1        (LeftFrontDeck, U5)
+#   bench Vintage Right ← Left Front Rails 2        (LeftFrontDeck, U5)
+#   bench Bar Left      ← Left Front Wall 1         (LeftFrontWall,  U2)
+#   bench Bar Right     ← Left Front Wall 2         (LeftFrontWall,  U2)
+#   bench LED_0         ← Left_Front_Left  px 1-20  (LeftLeftRopes,  U30)
+#   bench LED_1         ← Left_Back_Left   px 1-20  (LeftLeftRopes,  U31)
+#
+# WHEN IT RUNS. All three must hold, or it is inert and says so in the bridge
+# log: `enabled: true` below; the ENGINE's active scene == `source_scene`; and
+# the `test_bench` scene is active (CLI `--scene test_bench`, or a bench window
+# open). The last one is the deployment guard — on the show server the launcher
+# is pinned to `titanic`, so this file rides along harmlessly and the ship's own
+# gateway on 10.1.1.10 keeps its ordinary relay.
+#
+# ONE WRITER PER (UNIVERSE, CONTROLLER). While active, the mirror OWNS every
+# `dest_universe → dest_host` pair below: the bridge suppresses its ordinary
+# relay for exactly those pairs and logs each one. Do not also drive them from a
+# sim window in sACN-OUT mode (priority 150 wins over the mirror at the box).
+#
+# TO TURN IT OFF: `enabled: false`. To aim it somewhere else: edit the slices —
+# every address here is the fixture's DMX start address, and every length is its
+# footprint. The bridge re-reads this file on every route recompute; no restart.
+
+version: 1
+enabled: true
+source_scene: titanic
+note: Bench stands in for the ship's left-front fixtures while the engine runs titanic.
+
+mirrors:
+  # ── Test Bench 1 (DMX gateway) — ports 1/2/3 all listen on U2 ─────────────
+  - dest_universe: 2
+    dest_host: 10.1.1.10
+    note: Bench DMX gateway — pars, vintage pair, bar pair, all from the left front.
+    slices:
+      - source_universe: 6
+        source_addr: 1
+        length: 40
+        dest_addr: 1
+        note: Left Auditorium 5-8 (UkingPar x4, fp 10) -> Par 1-4. Addresses already agree.
+      - source_universe: 5
+        source_addr: 1
+        length: 33
+        dest_addr: 41
+        note: Left Front Rails 1 (VintageLed, fp 33) -> Vintage Left @41.
+      - source_universe: 5
+        source_addr: 34
+        length: 33
+        dest_addr: 74
+        note: Left Front Rails 2 (VintageLed, fp 33) -> Vintage Right @74.
+      - source_universe: 2
+        source_addr: 1
+        length: 119
+        dest_addr: 107
+        note: Left Front Wall 1 (ShehdsBar, fp 119) -> Bar Left @107.
+      - source_universe: 2
+        source_addr: 120
+        length: 119
+        dest_addr: 226
+        note: Left Front Wall 2 (ShehdsBar, fp 119) -> Bar Right @226.
+
+  # ── Titanic_202 (MarsinLED) output 1 — bench strand LED_0, 20 px RGBW ─────
+  # The device receives per-output on {universe, startAddress: 1}, so there is
+  # no address to line up: the strand simply plays the first 20 pixels of the
+  # 40-pixel titanic rope. Mirroring into the bench's OWN universes (U10/U12)
+  # rather than re-pointing the device means no controller push and no loss of
+  # ordinary bench use.
+  - dest_universe: 10
+    dest_host: 10.1.1.60
+    note: Bench LED output 1.
+    slices:
+      - source_universe: 30
+        source_addr: 1
+        length: 80
+        dest_addr: 1
+        note: Left_Front_Left pixels 1-20 (RGBW, 4 ch/px) -> LED_0.
+
+  # ── Titanic_202 (MarsinLED) output 2 — bench strand LED_1, 20 px RGBW ─────
+  - dest_universe: 12
+    dest_host: 10.1.1.60
+    note: Bench LED output 2.
+    slices:
+      - source_universe: 31
+        source_addr: 1
+        length: 80
+        dest_addr: 1
+        note: Left_Back_Left pixels 1-20 (RGBW, 4 ch/px) -> LED_1.

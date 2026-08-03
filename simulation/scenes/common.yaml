@@ -165,7 +165,7 @@ colorWave:
     label: ⚡ Enable
     transient: true
   lightingMode:
-    value: sacn_in
+    value: pixelblaze
     label: Mode
     options:
       - gradient

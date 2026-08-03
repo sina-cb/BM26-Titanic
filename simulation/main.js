@@ -28,9 +28,12 @@ import { onPointerMove, onPointerDown, onKeyDown, onTransformChange, computeRigi
 import { animate } from "./src/core/animate.js";
 import { initRegistry } from "./src/dmx/fixture_definition_registry.js";
 import { createViewRegistry } from "./src/dmx/view_registry.js";
-import { createControllerRegistry, projectOntoConfigs, registryIsActive } from "./src/dmx/controller_registry.js";
-import { computeLedStrandPatches } from "./src/dmx/led/led_patch_projection.js";
+import { createControllerRegistry, projectOntoConfigs, registryIsActive, computeProjection, computeLedProjection } from "./src/dmx/controller_registry.js";
+import { computeLedStrandPatches, computeLedUniverseClaims } from "./src/dmx/led/led_patch_projection.js";
+import { collectAddressClaims, planUnifiedOutput, lostChannelIndex } from "./src/dmx/address_merge.js";
 import { assignLedStrandMetadata } from "./src/dmx/led/led_metadata.js";
+import { ledBusFixtures, ledMappableCounts } from "./src/dmx/led/led_fixture_kind.js";
+import { getDefinition } from "./src/dmx/fixture_definition_registry.js";
 import { gatherAllConfigs } from "./src/dmx/auto_patcher.js";
 import { UniverseRouter } from "./src/dmx/universe_router.js";
 import { hasPendingRegens } from "./src/dmx/trace_regen_scheduler.js";
@@ -372,8 +375,8 @@ Promise.all([
   fetch("dmx/fixtures/fog_te_machines/model_1.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/fog_chauvet_4d/model_2.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("dmx/fixtures/te_led_grid/model_120.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-  fetch("dmx/fixtures/te_sign_v3/model_a_120.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
-  fetch("dmx/fixtures/te_sign_v3/model_b_102.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch("dmx/fixtures/te_sign_v3/model_a_160.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch("dmx/fixtures/te_sign_v3/model_b_136.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch("config.yaml?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(_pixelMapViewsPath + "?t=" + Date.now()).then(r => r.ok ? r.text() : '').catch(() => ''),
 ]).then(async ([sceneYaml, commonYaml, patchesYaml, camerasYaml, viewsYaml, controllersYaml, ukingModelYaml, shehdsModelYaml, vintageModelYaml, teFogModelYaml, chauvetHazeModelYaml, teLedGridModelYaml, teSignV3AModelYaml, teSignV3BModelYaml, rootConfigYaml, pixelMapViewsYaml]) => {
@@ -494,10 +497,16 @@ Promise.all([
     // mints on top of them (report 20260725_4 secondary finding 1). Same
     // expression the LED pass uses below, so both see the same union.
     const ledStrands = Array.isArray(params.ledStrands) ? params.ledStrands : [];
-    const result = projectOntoConfigs(registry, configs, pins, ledStrands);
+    // LED-BUS fixtures (definition `bus: led` — the TE Sign V3 halves) are
+    // addressed by the LED per-output projection, so the DMX pass numbers them
+    // but must not write their address fields (or its patch-tree row): both are
+    // owned by projectLedStrandPatches, which runs strictly after this.
+    const ledBusNames = new Set(ledBusFixtures(configs, getDefinition).map((c) => c.name));
+    const result = projectOntoConfigs(registry, configs, pins, ledStrands, ledBusNames);
     if (window.__globalPatchTree) {
       for (const config of configs) {
         if (!config || !config.name) continue;
+        if (ledBusNames.has(config.name)) continue;
         window.__globalPatchTree[config.name] = {
           controllerIp: config.controllerIp || '',
           dmxUniverse: config.dmxUniverse || 0,
@@ -555,47 +564,68 @@ Promise.all([
   // global patch tree (so the save-server writes them into patches.yaml). A
   // strand not covered by a bound controller is returned to the unpatched
   // state — never a silent stale address (codex P0).
+  //
+  // BOTH LED-bus kinds go through here (operator correction 2026-07-31: *"the
+  // TE signs must be associated with MarsinLED controllers … make sure the TE
+  // sign fixtures are clearly of type LED not DMX"*): an LED **strand**
+  // (`params.ledStrands`) and an LED **pixel fixture** (a `parLights` entry
+  // whose definition declares `bus: led`, e.g. the TE Sign V3 halves). They
+  // are wired identically — one MarsinLED output, cursor at (port universe,
+  // ch 1), stride bytes per pixel — so they take the identical patch record.
+  // `ledMappableCounts` is the union; `computeLedStrandPatches` keys purely off
+  // that map and needed no change at all.
   window.projectLedStrandPatches = function () {
     const registry = window.__controllerRegistry;
     const strands = Array.isArray(params.ledStrands) ? params.ledStrands : [];
-    if (strands.length === 0) return { fields: new Map(), violations: [] };
-    const counts = new Map();
-    for (const s of strands) {
-      if (s && typeof s.name === 'string' && s.name.length > 0) counts.set(s.name, s.ledCount || 10);
+    const ledFixtures = ledBusFixtures(gatherAllConfigs(params), getDefinition);
+    if (strands.length === 0 && ledFixtures.length === 0) {
+      return { fields: new Map(), violations: [] };
     }
+    const counts = ledMappableCounts(strands, gatherAllConfigs(params), getDefinition);
     const result = (registry && registryIsActive(registry))
       ? computeLedStrandPatches(registry, counts)
       : { fields: new Map(), violations: [] };
     for (const v of result.violations) console.error(`[LED Patch] ✋ ${v.message}`);
-    for (const strand of strands) {
-      if (!strand || typeof strand.name !== 'string' || strand.name.length === 0) continue;
-      const rec = result.fields.get(strand.name);
+    // An LED pixel fixture rides the SAME record shape as a strand. Its
+    // section/fixture ids are NOT touched here — those still come from the DMX
+    // metadata pass (projectOntoConfigs), because the fixture lives in
+    // `parLights` and keeps its place in that id space.
+    // The save-server runs in Node and has no fixture-definition registry, so
+    // the LED-bus classification is stamped here as an explicit marker. It is
+    // DERIVED (from the definition's `bus: led`), so the save-server consumes
+    // it to pick the LED record shape and then STRIPS it — scene_config.yaml
+    // stays free of derived fields, exactly like the patch fields themselves.
+    for (const fixture of ledFixtures) fixture.bus = 'led';
+
+    for (const target of [...strands, ...ledFixtures]) {
+      if (!target || typeof target.name !== 'string' || target.name.length === 0) continue;
+      const rec = result.fields.get(target.name);
       if (rec) {
-        strand.controllerIp = rec.controllerIp;
-        strand.controllerId = rec.controllerId;
-        strand.dmxUniverse = rec.dmxUniverse;
-        strand.dmxAddress = rec.dmxAddress;
-        strand.pixelCount = rec.pixelCount;
-        strand.outputIndex = rec.outputIndex;
+        target.controllerIp = rec.controllerIp;
+        target.controllerId = rec.controllerId;
+        target.dmxUniverse = rec.dmxUniverse;
+        target.dmxAddress = rec.dmxAddress;
+        target.pixelCount = rec.pixelCount;
+        target.outputIndex = rec.outputIndex;
         // Per-segment DMX-parity view (G1): a strand spilling across universes
         // records every universe:channel run it occupies, not just its start.
-        strand.segments = rec.segments;
-        strand.endUniverse = rec.endUniverse;
-        strand.endChannel = rec.endChannel;
+        target.segments = rec.segments;
+        target.endUniverse = rec.endUniverse;
+        target.endChannel = rec.endChannel;
       } else {
         // Unpatched: clear any stale record so patches.yaml drops it.
-        strand.controllerIp = '';
-        strand.controllerId = 0;
-        strand.dmxUniverse = 0;
-        strand.dmxAddress = 0;
-        strand.pixelCount = 0;
-        strand.outputIndex = -1;
-        strand.segments = [];
-        strand.endUniverse = 0;
-        strand.endChannel = 0;
+        target.controllerIp = '';
+        target.controllerId = 0;
+        target.dmxUniverse = 0;
+        target.dmxAddress = 0;
+        target.pixelCount = 0;
+        target.outputIndex = -1;
+        target.segments = [];
+        target.endUniverse = 0;
+        target.endChannel = 0;
       }
       if (window.__globalPatchTree) {
-        window.__globalPatchTree[strand.name] = rec
+        window.__globalPatchTree[target.name] = rec
           ? { ...rec }
           : {
             controllerIp: '', controllerId: 0, dmxUniverse: 0, dmxAddress: 0,
@@ -621,8 +651,67 @@ Promise.all([
           `maxSectionId=${meta.maxSectionId}, maxFixtureId=${meta.maxFixtureId})`);
       }
     }
+
+    // ── SHARED ADDRESSES (operator order 2026-07-31, report 20260725_102) ──
+    // The LAST thing this pass does, because it needs BOTH projections final:
+    // which claims land on the same (universe, channel-range), who wins by the
+    // higher-IP rule, and which overlaps that rule cannot rank. Publishing it
+    // HERE (rather than in the Controllers pane) is deliberate — the pane may
+    // never be opened, and the override has to hold on the wire regardless.
+    //
+    // Two products:
+    //  • `__addressMergePlan`      — the whole plan, for the pane's ⚠ banner.
+    //  • `__addressSuppressionIndex` — claimKey → the absolute channels that
+    //    claim LOST, read by sacn_mapper's write path so a losing fixture never
+    //    writes a contested byte. Built once per projection, never per frame.
+    publishAddressMergePlan();
     return result;
   };
+
+  /**
+   * Recompute + publish the shared-address plan. FAIL LOUD: a broken claim set
+   * is a projection bug and must not be swallowed into "no overlaps", which
+   * would silently re-enable the racing writes this feature exists to stop.
+   */
+  function publishAddressMergePlan() {
+    const registry = window.__controllerRegistry;
+    if (!registry || !registryIsActive(registry)) {
+      window.__addressMergePlan = planUnifiedOutput([]);
+      window.__addressSuppressionIndex = new Map();
+      return;
+    }
+    const configs = gatherAllConfigs(params);
+    const configsByName = new Map();
+    for (const c of configs) {
+      if (c && typeof c.name === 'string' && c.name.length) configsByName.set(c.name, c);
+    }
+    const pins = (window.serverConfig && window.serverConfig.global_effects) || {};
+    const counts = ledMappableCounts(
+      Array.isArray(params.ledStrands) ? params.ledStrands : [], configs, getDefinition);
+    const bound = computeLedStrandPatches(registry, counts).fields;
+    const generic = computeLedProjection(registry, counts).fields;
+    const unbound = new Map();
+    for (const [name, rec] of generic) if (!bound.has(name)) unbound.set(name, rec);
+
+    const plan = planUnifiedOutput(collectAddressClaims({
+      dmxUniverseMaps: computeProjection(registry, configsByName, pins).universeMaps,
+      ledClaims: computeLedUniverseClaims(bound, unbound),
+      controllers: registry.controllers,
+    }));
+    window.__addressMergePlan = plan;
+    window.__addressSuppressionIndex = lostChannelIndex(plan);
+
+    // Loud on every transition, in the console AND once per distinct contest —
+    // an operator who never opens the Controllers pane still learns that two
+    // boxes share channels and which one is winning.
+    const sig = [...plan.overlaps.map((o) => o.message),
+      ...plan.ambiguities.map((a) => a.message)].join('\n');
+    if (sig !== window.__addressMergeSig) {
+      window.__addressMergeSig = sig;
+      for (const o of plan.overlaps) console.warn(`[AddressMerge] ⚠ ${o.message}`);
+      for (const a of plan.ambiguities) console.error(`[AddressMerge] ✋ ${a.message}`);
+    }
+  }
 
   // Load scene config
   try {
@@ -743,8 +832,8 @@ Promise.all([
     { raw: teFogModelYaml, file: 'fog_te_machines/model_1.yaml' },
     { raw: chauvetHazeModelYaml, file: 'fog_chauvet_4d/model_2.yaml' },
     { raw: teLedGridModelYaml, file: 'te_led_grid/model_120.yaml' },
-    { raw: teSignV3AModelYaml, file: 'te_sign_v3/model_a_120.yaml' },
-    { raw: teSignV3BModelYaml, file: 'te_sign_v3/model_b_102.yaml' }
+    { raw: teSignV3AModelYaml, file: 'te_sign_v3/model_a_160.yaml' },
+    { raw: teSignV3BModelYaml, file: 'te_sign_v3/model_b_136.yaml' }
   ].forEach(({ raw, file }) => {
     try {
       if (raw) {

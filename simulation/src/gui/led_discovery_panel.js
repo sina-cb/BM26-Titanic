@@ -32,8 +32,14 @@ import { projectLedStrandSegments } from '../dmx/led/led_patch_projection.js';
 import {
   isLedController,
   isBoundLedController,
+  isProvisionalLedController,
+  isVerifiedLedController,
   addLedControllerFromDevice,
   bindControllerDevice,
+  markControllerProvisional,
+  promoteProvisionalBinding,
+  controllerBoundToDeviceId,
+  unbindControllerDevice,
   recordDevicePush,
   ledOutputIndexForPort,
   setParkedUniverse,
@@ -44,6 +50,17 @@ import {
   noteUniverseUsed,
   isValidIp,
 } from '../dmx/controller_registry.js';
+import {
+  reconcileProvisionalContact,
+  describeProvisionalReconcile,
+  PROVISIONAL_HARD_BLOCKERS,
+} from '../dmx/led/provisional_binding.js';
+import { ledBindingBadgeModel, canMarkProvisional } from '../dmx/controller_status.js';
+import {
+  assertResolvableOverlaps,
+  overlapsForController,
+  describeOverlapsForController,
+} from '../dmx/address_merge.js';
 
 // ── Scene-scoped cache key (G7) ──────────────────────────────────────────────
 // nextControllerId RESTARTS at 1 in every scene (controller_registry.js
@@ -328,17 +345,81 @@ function ensurePortUniverses(ctx, controller) {
 /**
  * One sentence for a blocking plan refusal — the SAME text on the sync chip, the
  * refusal dialog's toast and the fleet push's per-controller detail, so the three
- * can never tell different stories. A pure universe-ownership clash keeps its
- * original "universe collision" lead (that IS what it is); anything else (a
- * duplicate output, an out-of-range output, an exhausted park window) leads with
- * the refusal itself, because calling those a "universe collision" would send the
- * operator hunting the wrong field.
+ * can never tell different stories.
+ *
+ * The old `universe_owned` lead ("universe collision") is GONE with the kind
+ * itself (operator order 2026-07-31): a shared universe is a warning now, and
+ * every collision that remains is structural — a duplicate output, an
+ * out-of-range output, an exhausted park window, a board with nothing enabled.
  */
 function describeCollisions(collisions) {
-  const kinds = new Set(collisions.map((c) => c.kind));
-  const lead = (kinds.size === 1 && kinds.has('universe_owned'))
-    ? 'universe collision' : 'push REFUSED';
-  return `${lead} — ${collisions.map((c) => c.message).join('; ')}`;
+  return `push REFUSED — ${collisions.map((c) => c.message).join('; ')}`;
+}
+
+/**
+ * One sentence for the ALLOWED overlaps on a plan — the shared-address warning
+ * text reused by the sync-chip tooltip, the confirm dialog and the fleet push's
+ * per-controller detail. Never a refusal: it always reads as "allowed, and here
+ * is who wins".
+ */
+function describeSharedUniverses(shared) {
+  return `⚠ shared address (allowed) — ${shared.map((s) => s.message).join('; ')}`;
+}
+
+/**
+ * The registry-wide shared-address plan, or null when the editor did not thread
+ * one in. Used for the CARD BANNER and for the pre-push ambiguity gate.
+ *
+ * Optional on purpose: `ctx.addressMergePlan` is supplied by
+ * controller_map_editor's ledCtx, but several unit-test contexts build a minimal
+ * ctx and must not be forced to fake a whole projection just to push. A missing
+ * plan means "no overlap information" — the pane simply shows no banner. It is
+ * NOT a silent fallback for a BROKEN plan: a provider that throws still throws.
+ */
+function addressMergePlanFor(ctx) {
+  if (typeof ctx.addressMergePlan !== 'function') return null;
+  const plan = ctx.addressMergePlan();
+  if (!plan) return null;
+  if (!Array.isArray(plan.overlaps) || !Array.isArray(plan.ambiguities)) {
+    throw new Error('[LedPanel] ctx.addressMergePlan() must return a planUnifiedOutput result ' +
+      '({destinations, overlaps, ambiguities, suppressions})');
+  }
+  return plan;
+}
+
+/**
+ * The BLOCKING half of the shared-address feature, in the same shape the rest of
+ * the push path already refuses on. An overlap the higher-IP rule cannot rank
+ * (two claims from the same IP, or a claimant with no usable IP) has no
+ * deterministic winner, so it is a hard error — the operator's rule covers
+ * IP-bearing conflicts only, and inventing a tie-break would be exactly the
+ * fallback codex P0 forbids.
+ *
+ * Only ambiguities this controller is PART OF block this controller's push: one
+ * card must not be held hostage by an unrelated pair elsewhere in the rig.
+ * `assertResolvableOverlaps` is still the single source of the refusal text.
+ */
+function unrankableCollisionsFor(ctx, controller) {
+  const plan = addressMergePlanFor(ctx);
+  if (!plan) return [];
+  const view = overlapsForController(plan, controller);
+  if (view.ambiguous.length === 0) return [];
+  let reason;
+  try {
+    assertResolvableOverlaps({ ambiguities: view.ambiguous });
+    return [];
+  } catch (err) {
+    reason = err.message;
+  }
+  return view.ambiguous.map((a) => ({
+    kind: 'unrankable_shared_address',
+    outputIndex: undefined,
+    port: undefined,
+    universe: a.universe,
+    owner: undefined,
+    message: a.message,
+    reason,
+  }));
 }
 
 function claimedUniversesFor(ctx, controller) {
@@ -465,14 +546,31 @@ export function openLedDiscoveryPanel(ctx, { controller = null } = {}) {
 
     const actions = el('div', 'led-disc-device-actions');
     if (existing) {
-      // Say WHICH state it is in: "added" (a card with this IP exists) is not
-      // "bound" (that card carries a device block). A hand-typed card matches by
-      // IP while still unbound — calling that a plain ✓ is what made the missing
-      // Bind button read as "the sim can't see my controller".
-      actions.appendChild(el('div', 'cm-fully-patched',
-        isBoundLedController(existing)
-          ? `✓ already added as '${existing.name}'`
-          : `✓ added as '${existing.name}' — NOT bound yet`));
+      // Say WHICH state it is in — three distinct ones now. "added" (a card with
+      // this IP exists) is not "provisional" (declared, patched, fingerprint
+      // still unknown) is not "verified" (fingerprint read off this board). A
+      // hand-typed card matches by IP while still unbound — calling that a plain
+      // ✓ is what made the missing Bind button read as "the sim can't see my
+      // controller".
+      if (isProvisionalLedController(existing)) {
+        actions.appendChild(el('div', 'cm-warn-chip',
+          `⚑ '${existing.name}' is PROVISIONAL at this IP — this scan is its FIRST CONTACT`));
+        // The scan already carries the board's identity: promote right here.
+        const promoteBtn = el('button', 'cm-btn', `Promote '${existing.name}' → verified`);
+        promoteBtn.title = 'Reconcile this board against the declared binding and, if they ' +
+          'agree, record its fingerprint. Any disagreement stops and shows you what differs.';
+        promoteBtn.onclick = () => {
+          const outcome = attemptFirstContactPromote(ctx, existing, device, { interactive: true });
+          if (outcome.promoted) done();
+          else ctx.refresh();
+        };
+        actions.appendChild(promoteBtn);
+      } else {
+        actions.appendChild(el('div', 'cm-fully-patched',
+          isBoundLedController(existing)
+            ? `✓ already added as '${existing.name}'`
+            : `✓ added as '${existing.name}' — NOT bound yet`));
+      }
     } else {
       const createBtn = el('button', 'cm-btn', '+ Create controller from device');
       createBtn.onclick = () => createFromDevice(ctx, device, done);
@@ -659,7 +757,11 @@ export function describeSyncChipTooltip(sync) {
 export function refreshSyncChips(ctx) {
   const registry = ctx.registry();
   if (!registry || !Array.isArray(registry.controllers)) return;
-  const bound = registry.controllers.filter(isBoundLedController);
+  // VERIFIED cards only. A provisional card has never spoken to a board, so
+  // there is no device to compare a plan against — its card shows the
+  // PROVISIONAL badge instead, and a sync chip there would invent a
+  // hardware-vs-plan verdict out of nothing.
+  const bound = registry.controllers.filter(isVerifiedLedController);
   for (const controller of bound) {
     if (!controller.device.lastPush) {
       setSyncState(ctx, controller.id, { state: 'never' });
@@ -706,6 +808,13 @@ export async function computeSyncState(ctx, controller) {
   const sacnOn = status.sacn && status.sacn.enabled;
   if (changes.length) return { state: 'drift', changes };
   if (!sacnOn) return { state: 'drift', detail: 'device sACN receiver is disabled', changes: [] };
+  // A SHARED universe does not make the device differ from the plan, so the chip
+  // stays IN-SYNC — that is exactly what it measures. It still carries the
+  // warning in its detail (and therefore its tooltip) so the fact is never only
+  // in the card banner (operator 2026-07-31: the UI must SHOW that it's a warning).
+  if (plan.sharedUniverses.length) {
+    return { state: 'in-sync', detail: describeSharedUniverses(plan.sharedUniverses) };
+  }
   return { state: 'in-sync' };
 }
 
@@ -720,13 +829,145 @@ export async function computeSyncState(ctx, controller) {
  * it, addendum #3). The Push button is disabled with a hint when the IP is
  * missing/invalid. Returns null for a non-LED controller.
  */
+/**
+ * The persistent ⚠ shared-address banner for ONE controller card, or null when
+ * this card contests nothing. PURE-ish: reads the registry-wide merge plan off
+ * ctx and returns a detached element, so a DOM-less unit test can call
+ * `sharedAddressBannerModel` (below) for the same content without a document.
+ *
+ * Two visual grades, and they are deliberately different:
+ *  - WARNING (amber) — a resolvable overlap. The push proceeds; the higher IP
+ *    wins on the contested channels and the banner says which.
+ *  - ERROR (red) — an overlap the higher-IP rule cannot rank (same IP, or a
+ *    claimant with no usable IP). That is still a hard stop (codex P0), and the
+ *    banner must not look like the amber case.
+ */
+export function sharedAddressBannerModel(plan, controller) {
+  if (!plan) return null;
+  const view = overlapsForController(plan, controller);
+  if (view.total === 0) return null;
+  const lines = describeOverlapsForController(view);
+  const blocking = view.ambiguous.length > 0;
+  const shareCount = view.wins.length + view.loses.length;
+  const parts = [];
+  if (shareCount) parts.push(`${shareCount} shared address${shareCount === 1 ? '' : 'es'}`);
+  if (view.ambiguous.length) {
+    parts.push(`${view.ambiguous.length} UNRESOLVABLE`);
+  }
+  return {
+    blocking,
+    lines,
+    headline: (blocking ? '✋ ' : '⚠ ') + parts.join(' · ') +
+      (blocking
+        ? ' — the higher-IP rule cannot rank these; the push is REFUSED until one address moves'
+        : ' — allowed: frames are unified into one packet per destination, higher IP overrides'),
+  };
+}
+
+function renderSharedAddressBanner(ctx, controller) {
+  const model = sharedAddressBannerModel(addressMergePlanFor(ctx), controller);
+  if (!model) return null;
+  const box = el('div', `led-shared-address ${model.blocking ? 'led-shared-address-error' : 'led-shared-address-warn'}`);
+  box.appendChild(el('div', 'led-shared-address-head', model.headline));
+  for (const line of model.lines) {
+    box.appendChild(el('div', 'led-shared-address-line', line));
+  }
+  box.title = model.blocking
+    ? 'Two claims land on the same channels and neither outranks the other, so there is no ' +
+      'deterministic winner. Give the claimant a real device IP, or move one address.'
+    : 'Sending to the same address is allowed. The sim composes ONE packet per (universe, ' +
+      'destination) and the numerically higher controller IP overrides on the contested ' +
+      'channels — nothing races on the wire.';
+  return box;
+}
+
 export function renderDeviceBindingSection(ctx, controller) {
   if (!isLedController(controller)) return null;
   const section = el('div', 'led-device-section');
-  const bound = isBoundLedController(controller);
+  const verified = isVerifiedLedController(controller);
+  const provisional = isProvisionalLedController(controller);
   const validIp = isValidIp(controller.ip);
 
-  if (bound) {
+  // Binding GRADE badge — always first, always visible, never a hidden flag
+  // (operator ruling 2026-07-31). A provisional card must announce itself: it
+  // patches the whole chain on the operator's word alone, and the pane is the
+  // only place that fact can be seen.
+  const badge = ledBindingBadgeModel(controller);
+  if (badge) {
+    const badgeChip = el('span', `led-binding-badge ${badge.cls}`, badge.label);
+    badgeChip.title = badge.title;
+    section.appendChild(badgeChip);
+  }
+
+  // SHARED-ADDRESS BANNER — persistent, right on the card, for as long as the
+  // overlap exists (operator 2026-07-31: *"the UI must show that that's a
+  // warning"*). Not a toast: a toast is gone in 8 seconds and the operator maps
+  // controllers for an hour. It names every claimant this card contests with,
+  // the exact (universe, channel-range), and who wins.
+  const banner = renderSharedAddressBanner(ctx, controller);
+  if (banner) section.appendChild(banner);
+
+  if (provisional) {
+    const dev = controller.device;
+    const declared = el('div', 'led-device-id led-device-provisional');
+    const expectations = [dev.deviceName, dev.boardId].filter(Boolean).join(' · ');
+    declared.textContent = `declared at ${controller.ip || 'no IP'}` +
+      (expectations ? ` — expecting ${expectations}` : '') + ' · fingerprint not read yet';
+    declared.title = 'The strands on this card ARE patched: patches.yaml, the engine model, the ' +
+      'bridge routes and the subscribed universes all exist. Only the board fingerprint is ' +
+      'missing, and it arrives on first contact.';
+    section.appendChild(declared);
+
+    const verifyBtn = el('button', 'cm-btn led-device-verify', '🔗 Verify against board now');
+    if (validIp) {
+      verifyBtn.title = `Contact ${controller.ip} now, read its identity, and PROMOTE this ` +
+        'binding to verified if the board agrees with what you declared. Any disagreement ' +
+        'stops and shows you exactly what differs — nothing is overwritten either way.';
+      verifyBtn.onclick = () => verifyProvisionalNow(ctx, controller);
+    } else {
+      verifyBtn.disabled = true;
+      verifyBtn.title = 'set a valid device IP first';
+    }
+    section.appendChild(verifyBtn);
+
+    const dropBtn = el('button', 'cm-btn led-device-drop-provisional', '✕ Drop provisional');
+    dropBtn.title = 'Remove the declared binding. The strands on this card return to UNPATCHED ' +
+      '— no patches.yaml records, no bridge routes, no model addresses.';
+    dropBtn.onclick = () => {
+      ctx.mutate(`Dropped the provisional binding on '${controller.name}'`, () => {
+        unbindControllerDevice(controller);
+      });
+      ctx.showToast(`'${controller.name}' is UNBOUND again — its strands project unpatched`,
+        { ttl: 8000 });
+    };
+    section.appendChild(dropBtn);
+  }
+
+  if (!verified && !provisional) {
+    // The OPTIONAL-DISCOVERY entry point (operator ruling 2026-07-31): declare
+    // the binding from the typed IP, with the board still boxed.
+    const gate = canMarkProvisional(controller);
+    const markBtn = el('button', 'cm-btn led-device-mark-provisional', '⚑ Patch without the board');
+    if (gate.allowed) {
+      markBtn.title = `Declare a PROVISIONAL binding at ${controller.ip}. Everything downstream ` +
+        'patches immediately — patches.yaml, the engine model lanes, the bridge relay routes and ' +
+        'the subscribed universes — so the chain is complete before the board powers on. On ' +
+        'first contact the sim reads the fingerprint off the board and promotes this card.';
+      markBtn.onclick = () => {
+        ctx.mutate(`Declared a provisional binding on '${controller.name}'`, () => {
+          markControllerProvisional(controller);
+        });
+        ctx.showToast(`⚑ '${controller.name}' is PROVISIONAL at ${controller.ip} — its strands ` +
+          'patch now; save the scene to write patches.yaml and route the bridge', { ttl: 11000 });
+      };
+    } else {
+      markBtn.disabled = true;
+      markBtn.title = `Cannot declare a provisional binding: ${gate.reason}`;
+    }
+    section.appendChild(markBtn);
+  }
+
+  if (verified) {
     const dev = controller.device;
     // MAC is NOT part of the persisted device block (never written to
     // controllers.yaml — public repo, gitleaks bm26-mac-address). Source it
@@ -769,14 +1010,151 @@ export function renderDeviceBindingSection(ctx, controller) {
   section.appendChild(pushBtn);
 
   const bindBtn = el('button', 'cm-btn led-device-rebind',
-    bound ? 'Re-bind…' : '🔍 Discover / bind device');
-  bindBtn.title = bound
+    verified ? 'Re-bind…' : '🔍 Discover / bind device');
+  bindBtn.title = verified
     ? 'Bind this controller to a different discovered device'
     : 'Find a MarsinLED on the network and bind it to this controller';
   bindBtn.onclick = () => openLedDiscoveryPanel(ctx, { controller });
   section.appendChild(bindBtn);
 
   return section;
+}
+
+// ── PROVISIONAL → VERIFIED: first contact, reconcile, promote ────────────────
+
+/**
+ * Operator-initiated first contact ("Verify against board now"). Reads the
+ * board, reconciles, and either promotes or opens the reconcile dialog. The
+ * ONLY device HTTP in this path is the read.
+ */
+async function verifyProvisionalNow(ctx, controller) {
+  let status;
+  let config = null;
+  try {
+    status = await getStatus(controller.ip);
+    config = await getConfig(controller.ip);
+  } catch (err) {
+    ctx.showToast(`✋ ${controller.ip} did not answer: ${err.message} — '${controller.name}' ` +
+      'stays PROVISIONAL (its strands remain patched)', { error: true, ttl: 9000 });
+    return;
+  }
+  const device = {
+    ip: controller.ip,
+    controllerId: status.controllerId,
+    boardId: status.boardId,
+    deviceName: (config && config.deviceName) || status.deviceName,
+    strands: status.strands,
+    mac: status.mac,
+    raw: status,
+  };
+  attemptFirstContactPromote(ctx, controller, device, { interactive: true });
+}
+
+/**
+ * FIRST CONTACT for a provisional card. Shared by the operator's "Verify now"
+ * button, the discovery panel's promote action, and the automatic status sweep
+ * (controller_map_editor) — one reconcile, one promote, one dialog, so all three
+ * entry points behave identically.
+ *
+ * Promotes ONLY on a clean reconcile. A contradiction leaves the card exactly as
+ * it was, on both sides of the wire, and raises the dialog (codex P0 — never
+ * auto-pick a side).
+ *
+ * @returns {{promoted: boolean, result: Object}}
+ */
+export function attemptFirstContactPromote(ctx, controller, device, { interactive = true } = {}) {
+  const registry = ctx.registry();
+  const result = reconcileProvisionalContact(controller, device, { registry });
+  if (result.ok) {
+    ctx.mutate(`Promoted '${controller.name}' to VERIFIED (${result.identity.controllerId})`, () => {
+      promoteProvisionalBinding(controller, result.identity, { registry });
+    });
+    setLiveMac(ctx, controller.id, device.mac); // display-only — never persisted
+    if (Array.isArray(device.strands)) setDeviceOutputs(ctx, controller.id, device.strands);
+    ctx.showToast(`✓ ${describeProvisionalReconcile(controller, result)}`, { ttl: 10000 });
+    console.log(`[LED Binding] ${describeProvisionalReconcile(controller, result)}`);
+    refreshSyncChips(ctx);
+    return { promoted: true, result };
+  }
+  console.warn(`[LED Binding] ✋ ${describeProvisionalReconcile(controller, result)}`);
+  for (const m of result.mismatches) console.warn(`[LED Binding]   • ${m.code}: ${m.message}`);
+  if (interactive) showProvisionalReconcileDialog(ctx, controller, result, device);
+  return { promoted: false, result };
+}
+
+/**
+ * The reconcile dialog — the loud stop when the board contradicts a declared
+ * binding. It states every disagreement with both sides spelled out, and offers
+ * the operator TWO explicit choices and no default:
+ *
+ *   "Keep provisional"  — change nothing. The card stays patched exactly as
+ *                         declared; go fix the card (or the IP) yourself.
+ *   "Promote anyway"    — accept the board's identity, knowingly. Disabled for
+ *                         the hard blockers (an unidentifiable box, or a
+ *                         fingerprint another card already owns), because
+ *                         promoting past those cannot produce a coherent scene.
+ *
+ * There is deliberately NO "make the board match the card" button here: that is
+ * a PUSH, it reboots hardware, and it has its own confirm dialog.
+ */
+export function showProvisionalReconcileDialog(ctx, controller, result, device) {
+  const overlay = el('div', 'vm-modal-overlay');
+  const card = el('div', 'vm-modal-card led-reconcile-card');
+  overlay.appendChild(card);
+  card.appendChild(el('div', 'vm-modal-title',
+    `⚠ '${controller.name}' — the board disagrees with the declared binding`));
+
+  card.appendChild(el('div', 'led-reconcile-lead',
+    `${controller.ip} answered, but it is not the board this card describes. NOTHING has been ` +
+    'changed — not on the card, not on the device. The strands stay patched exactly as you ' +
+    'declared them.'));
+
+  const list = el('div', 'led-reconcile-list');
+  for (const m of result.mismatches) {
+    const row = el('div', 'led-reconcile-row' +
+      (PROVISIONAL_HARD_BLOCKERS.includes(m.code) ? ' led-reconcile-blocker' : ''));
+    row.appendChild(el('div', 'led-reconcile-code', m.code));
+    row.appendChild(el('div', 'led-reconcile-msg', m.message));
+    row.appendChild(el('div', 'led-reconcile-diff',
+      `declared: ${m.expected}    ·    board: ${m.actual}`));
+    list.appendChild(row);
+  }
+  card.appendChild(list);
+
+  const actions = el('div', 'vm-modal-actions');
+  const keepBtn = el('button', 'vm-modal-btn vm-modal-btn-primary', 'Keep provisional (change nothing)');
+  const promoteBtn = el('button', 'vm-modal-btn', 'Promote anyway — accept the board identity');
+  if (result.hardBlocked) {
+    promoteBtn.disabled = true;
+    promoteBtn.title = 'Blocked: this box cannot be identified as a MarsinLED, or its ' +
+      'fingerprint already belongs to another controller card. Promoting past that cannot ' +
+      'produce a coherent scene.';
+  } else {
+    promoteBtn.title = `Record device '${result.identity.controllerId}'` +
+      `${result.identity.boardId ? ` (${result.identity.boardId})` : ''} on this card and mark ` +
+      'the binding VERIFIED. Your port/output/universe config is NOT touched — the ' +
+      'disagreements above remain, they just stop blocking the binding.';
+    promoteBtn.onclick = () => {
+      ctx.mutate(`Promoted '${controller.name}' despite ${result.mismatches.length} mismatch(es)`,
+        () => {
+          promoteProvisionalBinding(controller, result.identity, { registry: ctx.registry() });
+        });
+      if (device) setLiveMac(ctx, controller.id, device.mac);
+      ctx.showToast(`'${controller.name}' promoted to VERIFIED with ` +
+        `${result.mismatches.length} unresolved mismatch(es) — you accepted the board identity`,
+      { ttl: 11000 });
+      overlay.remove();
+      refreshSyncChips(ctx);
+    };
+  }
+  keepBtn.onclick = () => overlay.remove();
+  actions.appendChild(keepBtn);
+  actions.appendChild(promoteBtn);
+  card.appendChild(actions);
+
+  overlay.onkeydown = (e) => { if (e.key === 'Escape') overlay.remove(); };
+  document.body.appendChild(overlay);
+  keepBtn.focus();
 }
 
 // ── Push flow (per-output DMX is the ONLY supported push style) ──────────────
@@ -998,6 +1376,20 @@ async function pushPerOutputVerifyRecord(ctx, controller, plan, io, onStatus) {
       'and re-verify');
   }
 
+  // One fingerprint, one card (docs/41 bind-by-controllerId). This push is about
+  // to bind/promote THIS card onto the board it just wrote — refuse loudly if
+  // another card is already verified against the same device, rather than
+  // quietly creating two cards that will fight over one box on every push.
+  if (!isVerifiedLedController(controller)) {
+    const claimed = controllerBoundToDeviceId(ctx.registry(), verifyStatus.controllerId, controller);
+    if (claimed) {
+      throw new Error(`the device at ${controller.ip} identifies as ` +
+        `'${verifyStatus.controllerId}', which is ALREADY bound to controller '${claimed.name}' — ` +
+        `two cards cannot own one board. The write applied, but '${controller.name}' was NOT ` +
+        'bound; re-check the IP on both cards.');
+    }
+  }
+
   const configHash = await sha256Hex(JSON.stringify(plan.universeByOutputIndex));
   const firmwareSHA = verifyStatus.firmwareSHA;
   ctx.mutate(`Pushed per-output universes to '${controller.name}'`, () => {
@@ -1018,7 +1410,11 @@ async function pushPerOutputVerifyRecord(ctx, controller, plan, io, onStatus) {
     for (const entry of plan.assignments || []) clearParkedUniverse(controller, entry.outputIndex);
     // Pushing an UNBOUND card binds it: adopt the device identity from the
     // confirmed status so provenance + sync chips work from now on (addendum #3).
-    if (!controller.device) {
+    // A PROVISIONAL card is the same story one grade up — the push IS first
+    // contact, and it just read the fingerprint off the confirmed status, so the
+    // binding is promoted here rather than left claiming it never met the board
+    // (a provisional block may not carry a push receipt, by construction).
+    if (!isVerifiedLedController(controller)) {
       bindControllerDevice(controller, {
         vendor: LED_DEVICE_VENDOR_MARSINLED,
         controllerId: verifyStatus.controllerId,
@@ -1146,10 +1542,15 @@ export function describePushCompletion(steps, {
 }
 
 /**
- * BLOCKING refusal dialog for a per-output plan that would take a universe
- * another controller already owns (slice S2). No override path — the push never
- * happens; the operator edits the card's port universes and pushes again
- * (codex P0: fail loud, never a silent re-map of operator-declared state).
+ * BLOCKING refusal dialog for a per-output plan a merge cannot rescue. No
+ * override path — the push never happens; the operator edits the card and pushes
+ * again (codex P0: fail loud, never a silent re-map of operator-declared state).
+ *
+ * A SHARED universe is no longer one of these (operator order 2026-07-31) — it
+ * warns and proceeds. What still lands here: two port rows on ONE physical
+ * output, a port driving an output the board does not have, an exhausted park
+ * window, a board left with nothing enabled, and an overlap the higher-IP rule
+ * cannot rank (same IP / no usable IP).
  */
 function showPerOutputCollisionRefusal(ctx, controller, collisions) {
   const overlay = el('div', 'vm-modal-overlay');
@@ -1158,11 +1559,11 @@ function showPerOutputCollisionRefusal(ctx, controller, collisions) {
   card.appendChild(el('div', 'vm-modal-title',
     `✋ Push refused — invalid per-output plan on '${controller.name}'`));
   card.appendChild(el('div', 'led-push-warn',
-    'The device was NOT written. Each line below is a plan this card cannot push: an output that ' +
-    'would stream on a universe another controller already owns (two sources on one universe ' +
-    'fight, and the sim would route that universe to the wrong hardware), two port rows driving ' +
-    'ONE physical output, a port driving an output this board does not have, or no free universe ' +
-    'left to park an unmapped output on. Fix the card, then push again.'));
+    'The device was NOT written. Each line below is a plan this card cannot push: two port rows ' +
+    'driving ONE physical output, a port driving an output this board does not have, no free ' +
+    'universe left to park an unmapped output on, or two claims on the same channels that the ' +
+    'higher-IP rule cannot rank. (Sharing an address with another controller is ALLOWED — that ' +
+    'one is a warning, not this dialog.) Fix the card, then push again.'));
   const list = el('div', 'led-push-diff');
   for (const c of collisions) {
     list.appendChild(el('div', 'led-push-diff-line', `• ${c.message}`));
@@ -1190,15 +1591,23 @@ async function startPerOutputPush(ctx, controller, snapshot, status) {
     ctx.showToast(`✋ cannot derive per-output plan: ${err.message}`, { error: true, ttl: 10000 });
     return;
   }
-  // Pre-flight gate (slice S2, widened by report 20260725_70 §4) — runs BEFORE
-  // the device write so a push can never mint a cross-controller universe
-  // collision, a duplicate port→output association, an out-of-range output, or a
-  // park outside the firmware's window.
-  if (plan.collisions.length) {
-    setSyncState(ctx, controller.id, { state: 'drift', detail: describeCollisions(plan.collisions) });
-    showPerOutputCollisionRefusal(ctx, controller, plan.collisions);
+  // Pre-flight gate (slice S2, widened by report 20260725_70 §4 and again by
+  // _102) — runs BEFORE the device write so a push can never mint a duplicate
+  // port→output association, an out-of-range output, a park outside the
+  // firmware's window, or a shared address with no deterministic winner. A
+  // RESOLVABLE shared address is deliberately NOT here: it warns and proceeds.
+  const blocking = [...plan.collisions, ...unrankableCollisionsFor(ctx, controller)];
+  if (blocking.length) {
+    setSyncState(ctx, controller.id, { state: 'drift', detail: describeCollisions(blocking) });
+    showPerOutputCollisionRefusal(ctx, controller, blocking);
     ctx.refresh();
     return;
+  }
+
+  // Loud on the way past, even though it does not stop: the log line names the
+  // winner so a "why is that strand the wrong colour" question is one grep away.
+  if (plan.sharedUniverses.length) {
+    console.warn(`[LedPanel] ${describeSharedUniverses(plan.sharedUniverses)}`);
   }
 
   // Build the EXACT strands payload (RMW preview) and validate the APPLIED array
@@ -1231,6 +1640,22 @@ function showPerOutputPushConfirm(ctx, controller, plan, payload, status) {
     `WILL REBOOT (~11 s measured; the push waits up to ${REBOOT_WAIT_SECONDS} s for it to answer, ` +
     'and reads the mapping back before calling it done). Keep the sACN source streaming across ' +
     'the reboot.'));
+
+  // SHARED ADDRESSES — declared before anything else on the dialog, because it
+  // is the one thing on this plan that changes what OTHER hardware sees
+  // (operator 2026-07-31: the warning must be visible where he maps things AND
+  // in the push dialog). Never buried in the generic notes block below.
+  if (plan.sharedUniverses && plan.sharedUniverses.length) {
+    const shareBlock = el('div', 'led-push-warn led-shared-address led-shared-address-warn');
+    shareBlock.appendChild(el('div', 'led-shared-address-head',
+      `⚠ ${plan.sharedUniverses.length} SHARED ADDRESS${plan.sharedUniverses.length === 1 ? '' : 'ES'} ` +
+      '— allowed, and pushed as declared. The sim composes ONE packet per (universe, destination); ' +
+      'on any contested channel the numerically HIGHER controller IP overrides.'));
+    for (const s of plan.sharedUniverses) {
+      shareBlock.appendChild(el('div', 'led-shared-address-line', `• ${s.message}`));
+    }
+    card.appendChild(shareBlock);
+  }
 
   // Declared UP FRONT (slice S1): the save is part of the push, not a surprise.
   card.appendChild(el('div', 'led-push-warn led-push-saves-scene',
@@ -1422,26 +1847,33 @@ export async function pushAllLedControllers(ctx, io = DEFAULT_DEVICE_IO) {
       setDeviceOutputs(ctx, controller.id, snapshot.strands);
       const plan = derivePerOutputPlan(controller, ctx.strandLedCounts(), snapshot,
         claimedUniversesFor(ctx, controller));
-      // Registry-aware gate (slice S2, widened by report 20260725_70 §4) — a plan
-      // that would take another controller's universe, drive one output from two
-      // ports, address an output the board does not have, or park outside the
-      // firmware window is REFUSED before the device write, per controller.
-      if (plan.collisions.length) {
-        const detail = describeCollisions(plan.collisions);
+      // Registry-aware gate (slice S2, widened by 20260725_70 §4 and _102) — a
+      // plan that drives one output from two ports, addresses an output the board
+      // does not have, parks outside the firmware window, or carries a shared
+      // address with no deterministic winner is REFUSED before the device write,
+      // per controller. A RESOLVABLE shared address pushes, loudly.
+      const blocking = [...plan.collisions, ...unrankableCollisionsFor(ctx, controller)];
+      if (blocking.length) {
+        const detail = describeCollisions(blocking);
         setSyncState(ctx, controller.id, { state: 'drift', detail });
         results.push({ ...base, state: 'failed', detail });
         continue;
       }
+      const shareNote = plan.sharedUniverses.length
+        ? describeSharedUniverses(plan.sharedUniverses) : null;
+      if (shareNote) console.warn(`[LedPanel] '${controller.name}': ${shareNote}`);
       // FORCE: always push + reboot + verify, even when the device already
       // matches. Same three phase budgets and the same "a lost write reply is
       // settled by the read-back, not by a timeout" rule as the single push.
       const pushResult = await pushPerOutputVerifyRecord(ctx, controller, plan, io, null);
-      setSyncState(ctx, controller.id, { state: 'in-sync' });
-      results.push(pushResult.responseLost
-        ? { ...base, state: 'pushed',
-          detail: 'the write reply was lost (device rebooted before answering) — the read-back ' +
-            'confirms the mapping applied' }
-        : { ...base, state: 'pushed' });
+      setSyncState(ctx, controller.id,
+        shareNote ? { state: 'in-sync', detail: shareNote } : { state: 'in-sync' });
+      const lostNote = pushResult.responseLost
+        ? 'the write reply was lost (device rebooted before answering) — the read-back ' +
+          'confirms the mapping applied'
+        : null;
+      const detail = [lostNote, shareNote].filter(Boolean).join(' · ');
+      results.push(detail ? { ...base, state: 'pushed', detail } : { ...base, state: 'pushed' });
     } catch (err) {
       // Fail loud PER controller — record the state, keep going.
       setSyncState(ctx, controller.id, err.perOutputMismatch

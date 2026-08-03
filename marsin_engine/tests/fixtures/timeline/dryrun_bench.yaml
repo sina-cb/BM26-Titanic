@@ -1,0 +1,169 @@
+# dryrun_bench.yaml — the TEST fixture plan for tools/timeline_dryrun.mjs.
+#
+# WHY THIS FILE EXISTS: the operator's real plan
+# (simulation/scenes/titanic/timeline/playa_default.yaml) carries a `festival`
+# span, so it is DORMANT outside that span and drives nothing on the bench. A
+# plan with NO `festival` block is always in-window (timeline_service.js
+# `_inFestivalWindow`) — that is the engine's own documented test escape hatch
+# (.agent/ops/timeline_e2e_tests.md). This fixture is that escape hatch as a
+# committed, date-free file, so `--date` may be ANY calendar day.
+#
+# It deliberately MIRRORS the shipped titanic show's shape (same phases, same
+# cue kinds, same holds, same defaultCue) so a dry run against it reproduces the
+# structural findings of report `_91` without touching the operator's scene
+# files. It is NOT a copy to keep in sync: when the real show changes, this stays
+# a stable bench reference.
+#
+# Playlist names are REAL titanic playlists so the harness's playlist resolution
+# (missing-entry counts, autopilot pool size) reports true numbers.
+schemaVersion: 2
+name: dryrun_bench
+location:
+  lat: 40.7864
+  lon: -119.2065
+  tz: America/Los_Angeles
+  elevationM: 1190
+autopilot:
+  enabled: true
+  playlist: default
+  delay_s: 45
+  shuffle: true
+  target:
+    channel: deck
+    id: null
+  mood: true
+phases:
+  philharmonic:
+    start:
+      sun: sunset
+      offsetMin: -30
+    end:
+      sun: sunset
+      offsetMin: 60
+  party_night:
+    start:
+      sun: sunset
+      offsetMin: 120
+    end:
+      sun: sunrise
+      offsetMin: -60
+  sunrise_set:
+    start:
+      sun: sunrise
+      offsetMin: -30
+    end:
+      sun: sunrise
+      offsetMin: 90
+looks:
+  philharmonic:
+    playlist: default
+    autopilot:
+      active: true
+      delay_s: 90
+      shuffle: false
+    palette: sunset_coral
+    target:
+      channel: deck
+      id: null
+  party:
+    playlist: default
+    autopilot:
+      active: true
+      delay_s: 30
+      shuffle: true
+    palette: bass_drop
+    target:
+      channel: deck
+      id: null
+  party_high:
+    playlist: party_high
+    autopilot:
+      active: true
+      delay_s: 30
+      shuffle: true
+    palette: bass_drop
+    target:
+      channel: deck
+      id: null
+  sunrise:
+    playlist: default
+    palette: aurora
+    globals:
+      master: 0.6
+    target:
+      channel: deck
+      id: null
+  ambient:
+    playlist: ambient
+    autopilot:
+      active: true
+      delay_s: 90
+      shuffle: true
+    palette: deep_sea
+    target:
+      channel: deck
+      id: null
+defaultCue:
+  label: Ambient program
+  action:
+    type: look
+    look: ambient
+cues:
+  - id: c_visibility_on
+    label: Exterior up at golden hour
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunset
+      offsetMin: -45
+    action:
+      type: look
+      look: philharmonic
+    kind: program
+    hold:
+      min: 90
+    days: all
+  - id: c_party_start
+    label: Party night ramp
+    enabled: true
+    catchUp: true
+    trigger:
+      type: phase
+      phase: party_night
+    action:
+      type: look
+      look: party
+    kind: ambient
+    days: all
+  - id: c_mood_to_party
+    label: 'Party session: sustained real music -> party_high'
+    enabled: true
+    catchUp: true
+    trigger:
+      type: mood
+      from: calm
+      to: party
+      minDwellSec: 120
+      cooldownSec: 120
+    action:
+      type: look
+      look: party_high
+    kind: mood
+    durationMin: 12
+    days: all
+  - id: c_sunrise
+    label: Sunrise wind-down
+    enabled: true
+    catchUp: true
+    trigger:
+      type: sun
+      event: sunrise
+      offsetMin: -15
+    action:
+      type: look
+      look: sunrise
+    kind: program
+    hold:
+      min: 90
+    days: all

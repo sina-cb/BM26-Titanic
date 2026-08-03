@@ -97,6 +97,42 @@ export interface TimelinePendingProgram {
   expiresAtMs: number;
 }
 
+// ── EVENT ZOOM (report _95 §3.5) — the `zoom` field on /timeline/state and the
+// `timelineState` broadcast. Non-null ONLY while the operator holds a takeover
+// lease TAGGED with a scope:
+//   'perform' — the event is LIVE and the operator is performing it; the plan
+//               holds, and a program that comes due is DEFERRED (never
+//               dismissed) until the zoom exits.
+//   'travel'  — the event is not live; the deck carries the plan's RESOLVED
+//               state at `targetMs` as a STATIC snapshot (operator ruling D4).
+// The zoom rides ON the lease object engine-side, so every path that clears the
+// lease clears the zoom — it is structurally un-strandable. Runtime-only: an
+// engine restart boots the ship into the plan-at-now with `zoom: null`.
+export type TimelineZoomScope = 'perform' | 'travel';
+
+// A program cue that came due while the zoom is held. DEFERRED, not dismissed:
+// POST /timeline/program/enable still starts it now, and exiting the zoom fires
+// it via catchUp. Banner copy (pinned by _95 §3.6):
+//   "Show due: {label} — starts when you exit"
+export interface TimelineZoomPendingDeferred {
+  cueId: string;
+  label: string;
+  dueAtLocal: string | null;
+}
+
+export interface TimelineZoom {
+  scope: TimelineZoomScope;
+  cueId: string | null;
+  label: string | null;
+  /** Travel only — the resolved target instant (epoch ms). */
+  targetMs: number | null;
+  /** Travel only — the target as "HH:MM" in the plan tz. */
+  targetLocal: string | null;
+  /** Travel only — the target's calendar date "YYYY-MM-DD" in the plan tz. */
+  targetDate: string | null;
+  pendingDeferred: TimelineZoomPendingDeferred | null;
+}
+
 // armed = the plan drives the rig; overridden = an operator TEMPORARY TAKE OVER
 // is active (auto-resumes via its lease). PAUSE and HOLD were removed on
 // 2026-07-03 (takeover is the only manual interruption now).
@@ -172,6 +208,11 @@ export interface TimelineState {
   cues: TimelineCue[];
   recentFires: TimelineRecentFire[];
   wouldFire?: TimelineWouldFire[];
+  // EVENT ZOOM state (see TimelineZoom). Null when no scoped lease is held.
+  // OPTIONAL on the wire for the same reason `partyEnabled` is: an engine built
+  // before the zoom slice omits the key entirely. Readers must treat
+  // undefined exactly like null (no zoom) — never invent one.
+  zoom?: TimelineZoom | null;
   lastError: string | null;
 }
 
@@ -473,12 +514,64 @@ export interface OverviewCue {
   durationMin?: number;
 }
 
+// ── DAY ZOOM review data (report _95 §3.1) — ADDITIVE per-day fields on
+// GET/POST /timeline/overview. Both resolve against THAT DAY's own sun anchors,
+// so they shift day to day.
+
+// One phase band. Times are "HH:MM" in the plan tz, or null when the phase is
+// anchored to a sun event the day doesn't have (polar / missing).
+//
+// TWO CONTRACT NOTES THE UI MUST HONOR (_95 §3.1):
+//   • plan ORDER is meaningful — overlap resolves first-in-plan-order
+//     (triggers.js activePhase). NEVER sort this array.
+//   • a band whose `endLocal` < `startLocal` WRAPS MIDNIGHT (that is exactly
+//     how `party_night` works) and must be drawn as two pieces.
+export interface OverviewPhase {
+  name: string;
+  startLocal: string | null;
+  endLocal: string | null;
+}
+
+export type SegmentOwnerKind = 'cue' | 'defaultCue' | 'baseline';
+export type SegmentSource =
+  | 'cue'
+  | 'hold-expired-baseline'
+  | 'default-cue'
+  | 'autopilot-baseline';
+
+// One segment of the RESOLVED RIBBON — "what actually owns the deck and which
+// playlist plays" over a slice of the day, computed engine-side by the shared
+// pure resolver. The segments TILE [00:00, 24:00) with no gaps and no overlaps:
+// `segments[i].toMs === segments[i+1].fromMs`, the first `fromLocal` is "00:00"
+// and the last `toLocal` is the literal "24:00" (a 24h column needs 1440, not a
+// next-day "00:00").
+//
+// `source: 'hold-expired-baseline'` is the _91 G1 truth made VISIBLE: the cue
+// still owns the ownership latch but `plan.autopilot.playlist` is what plays
+// (and the palette is never reset). The ribbon renders that honestly — it does
+// not fix it, and it must not pretend the cue's own playlist is up.
+export interface OverviewSegment {
+  fromMs: number;
+  toMs: number;
+  fromLocal: string;
+  toLocal: string;
+  owner: { kind: SegmentOwnerKind; cueId: string | null; label: string };
+  playlist: string | null;
+  palette: string | null;
+  controller: 'program' | 'autopilot';
+  source: SegmentSource;
+}
+
 export interface OverviewDay {
   index: number;
   date: string;
   weekday: string;
   sun: OverviewSun;
   cues: OverviewCue[];
+  // Additive (_95 §3.1). OPTIONAL: an engine built before the zoom slice omits
+  // them. The DAY view says so loudly rather than drawing an empty ribbon.
+  phases?: OverviewPhase[];
+  segments?: OverviewSegment[];
 }
 
 export interface TimelineOverview {
@@ -561,8 +654,88 @@ export function fireTimelineCue(id: string): Promise<ApiResult<unknown>> {
 // the engine flips mode='overridden' / controller='manual' and arms a lease.
 // Idempotent — re-firing re-arms/refreshes the lease. No body; the engine
 // returns the standard {ok} / {ok:false,error} envelope (Codex P0: fail loud).
-export function postTimelineTakeover(): Promise<ApiResult<{ operatorLease?: TimelineOperatorLease }>> {
-  return timelineSend('POST', '/timeline/takeover');
+//
+// EVENT ZOOM (_95 §3.3): an OPTIONAL body { scope:'perform', cueId? } tags the
+// lease as a PERFORM zoom. A BODYLESS call is the plain takeover, byte-identical
+// to what shipped — and, importantly, a bodyless call made WHILE a scoped lease
+// is alive is a REFRESH that PRESERVES the scope, so the deck/mixer touch-
+// takeover hook can never silently downgrade a live performance. The documented
+// zoom exit is POST /timeline/resume.
+export interface TimelineTakeoverBody {
+  scope: 'perform';
+  cueId?: string;
+}
+
+export function postTimelineTakeover(
+  body?: TimelineTakeoverBody,
+): Promise<ApiResult<{ operatorLease?: TimelineOperatorLease; zoom?: TimelineZoom | null }>> {
+  return timelineSend('POST', '/timeline/takeover', body);
+}
+
+// ── EVENT ZOOM: resolve + travel (_95 §3.2 / §3.4) ──────────────────────
+
+// The read-only resolver's answer for one instant. Same shape the travel
+// response nests under `resolved`.
+export interface TimelineResolve {
+  atMs: number;
+  atLocal: string;
+  date: string;
+  tz: string;
+  inWindow: boolean;
+  festivalDayIndex: number | null;
+  phase: string | null;
+  owner: { kind: SegmentOwnerKind; cueId: string | null; label: string; cueKind?: CueKind } | null;
+  action: CueAction | null;
+  playlist: string | null;
+  palette: string | null;
+  windowUntilMs: number | null;
+  windowUntilLocal: string | null;
+  holdUntilMs: number | null;
+  holdUntilLocal: string | null;
+  fireMs: number | null;
+  fireLocal: string | null;
+  controller: 'manual' | 'program' | 'autopilot';
+  source: SegmentSource | 'dormant';
+  target: { date: string; time: string | null; atMs: number; cueId: string | null };
+}
+
+// GET /timeline/resolve — ZERO side effects (nothing dispatched, no lease
+// armed, no latch written). Used for the EVENT sheet's preview. 400 on a
+// malformed date/time, an unresolvable cueId, or an out-of-window target —
+// surfaced verbatim, never a silent fall back to "now".
+export function fetchTimelineResolve(
+  spec: { date?: string; time?: string; cueId?: string },
+): Promise<ApiResult<TimelineResolve>> {
+  const q = new URLSearchParams();
+  if (spec.date) q.set('date', spec.date);
+  if (spec.time) q.set('time', spec.time);
+  if (spec.cueId) q.set('cueId', spec.cueId);
+  return timelineGet<TimelineResolve>(`/timeline/resolve?${q.toString()}`);
+}
+
+// POST /timeline/travel — EXACTLY ONE of the three forms:
+//   { date, time }        an explicit instant
+//   { cueId, date? }      a cue's fire instant (date defaults to the current
+//                         travel day, else today in the plan tz)
+//   { step:'prev'|'next'} the neighbouring EVENT on the current travel day —
+//                         REQUIRES an active travel, and 400s past the first /
+//                         last event of the day (fail loud, never clamp).
+export type TimelineTravelSpec =
+  | { date: string; time: string }
+  | { cueId: string; date?: string }
+  | { step: 'prev' | 'next' };
+
+export interface TimelineTravelResult {
+  ok: true;
+  zoom: TimelineZoom;
+  resolved: TimelineResolve;
+  steps: string[];
+}
+
+export function postTimelineTravel(
+  spec: TimelineTravelSpec,
+): Promise<ApiResult<TimelineTravelResult>> {
+  return timelineSend<TimelineTravelResult>('POST', '/timeline/travel', spec);
 }
 
 // Refresh the takeover lease expiry to now+operatorLeaseSec IF a lease is held

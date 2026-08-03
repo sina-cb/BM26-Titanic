@@ -10,6 +10,7 @@ import { RigProvider } from '@/components/RigGlobals';
 import { ViewOverrideBanner } from '@/components/ViewOverrideBanner';
 import { EngineLockoutOverlay } from '@/components/EngineLockoutOverlay';
 import { PendingProgramOverlay } from '@/components/timeline/PendingProgramOverlay';
+import { ZoomBanner } from '@/components/timeline/ZoomBanner';
 
 function CustomSideBar({ state, descriptors, navigation }: any) {
   const palette = usePalette();
@@ -175,6 +176,12 @@ export default function TabLayout() {
             outside <Tabs> so it floats over every tab; box-none lets taps
             fall through to the deck/mixer underneath (see component header). */}
         <PendingProgramOverlay />
+        {/* EVENT ZOOM mode banner (green PERFORM / purple TIME TRAVEL). Also
+            outside <Tabs> so it floats over every surface — while a zoom is
+            held, "which clock is real" must be answerable from any tab. It
+            carries the DEFERRED-show notice, so PendingProgramOverlay stands
+            down under a zoom (see that component's zoom guard). */}
+        <ZoomBanner />
       </SafeAreaView>
     </RigProvider>
   );

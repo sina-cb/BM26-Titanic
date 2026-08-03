@@ -2261,7 +2261,1875 @@ carries device: controllerId testbench on LeftLeftRopes!), 4
 (ORPHAN_GROUPS=[]), 16, 20 (launcher restart served _66 route;
 pixel_map_views.yaml in b8b8bca5), 24, 26. Gitleaks direct
 scan of both files: no leaks. Coordinator committed after.
-Next free report after reservations: `_89`.
+**NEW DAY 2026-07-31 — operator declares titanic FULLY MAPPED,
+sim works, 2D vis good.** Live-mapping lockdown milestone reached;
+titanic scene/models remain operator-owned (zero agent writes)
+unless he says otherwise.
+**`_89` reserved — test bench = titanic stand-in (operator order
+2026-07-31, IN FLIGHT, Opus):** engine runs titanic model; bench
+hardware (.10 DMX: 4 pars + 2 vintage + 2 bars; .60 LED: 2
+strings) patched to mirror specific titanic fixtures so titanic
+patterns preview on the desk. Operator chose "stand-in for real
+titanic fixtures" over bench-at-titanic-coords or bench-as-is.
+Constraints briefed: titanic scene untouched, test_bench scene
+editable, NO device pushes (operator presses Push), zero new test
+failures. **LANDED 2026-07-31** —
+`202607/20260725_89_test_bench_titanic_standin.md`. MEASUREMENT
+first: only the PARS line up (titanic pars sit at 1/11/21/31 in 7
+universes, same as the bench); no titanic bar starts at 107/226 and
+no vintage at 41/74, in ANY universe — so pure config solves one
+third and the bytes must MOVE. Chose candidate 2, bridge-side:
+a **bench mirror** = per-destination slice list
+(`src universe/addr/len → dest addr`) composed into the universes
+the boxes ALREADY listen on, so **zero device pushes and zero
+gateway edits**. Slice = the ship's LEFT FRONT: Left Auditorium 5-8
+→ Par 1-4 (U6, identity copy), Left Front Rails 1/2 → Vintage L/R
+(U5), Left Front Wall 1/2 → Bar L/R (U2), Left_Front_Left /
+Left_Back_Left px 1-20 → LED_0/LED_1 (U30/U31 → bench U10/U12).
+All sources have real `titanic/patches.yaml` records (the 6
+record-less ropes would go dark on his next re-export). THREE
+activation preconditions, all required, none a fallback:
+`enabled:true` + ENGINE on `source_scene` + the spec's own scene
+active — the last is the DEPLOY GUARD (show server pins titanic ⇒
+inert, ship's gateway keeps its raw relay; falsified by harness).
+Mirror OWNS its dest pairs: relay suppressed before the sender
+diff, named log line each (one-writer law, `_15`). Proven by
+running the REAL bridge with fake `sacn`/`ws` — his stack never
+touched — composed bytes exact at every boundary, raw U2
+suppressed, and both inert scenarios restore normal behaviour.
+Sim suite 1452→1482 (+30), fail 10→10 byte-identical; new file
+30/30 incl. 6 LIVE-MAP tests that read the committed spec against
+the real scenes+models (whole-fixture boundaries, matching
+footprints, `pixelCount×4`, sources the model really sends, dests
+the bench really listens on). Files: `lib/bench_mirror.cjs`,
+`scenes/test_bench/bench_mirror.yaml`,
+`server/sacn_bridge.js` (+`sendVia()` extracted, shared),
+`tests/bench_mirror.test.js`,
+`agent_tools/bench_mirror_slice_capture.cjs` (camera derived FROM
+the map; 4 guards incl. aborting every non-GET to :6970 so the
+boot `saveModelJS()` cannot rewrite the operator-owned titanic
+export — `git status` confirms zero titanic/model writes).
+OPERATOR STEPS: (1) launcher restart to pick up the code; (2) run
+the sim pinned `--scene test_bench` with the engine on titanic;
+(3) watch the bench; (4) ONLY if the strands stay dark, one Push
+on the `Titanic_202` card in the **test_bench** scene to revert
+the box to U10/U12 (his titanic-scene push still reads
+`needs-reboot`). Off switch = any of: engine off titanic, sim
+pinned elsewhere, or `enabled:false`.
+**`_90` reserved — ChatGPT pattern-tuning prompt pack (operator
+order 2026-07-31, IN FLIGHT, Opus):** operator's chosen loop is
+"write a prompt for ChatGPT, I will pass it to them" (manual
+copy-paste, no repo access). Deliverable: paste-ready self-contained
+prompt doc — pattern format + API cheat-sheet, MFT/param-order
+conventions as hard rules, response contract, inline example
+patterns. Documentation-only mission; public-repo hygiene (no IPs,
+no dates). **LANDED 2026-07-31** —
+`202607/20260725_90_chatgpt_pattern_tuning_prompt.md`: how-to-use
+header (what to paste first, then per pattern = file + 2D-map
+screenshot + plain-words ask, then harness-verify the reply) plus a
+**482-line self-contained prompt**. Prompt covers: ship/rig context;
+the complete MarsinScript API (entry points, types, flat scope,
+reserved names incl. `fixtureType`, math/wave/noise/array/colour
+builtins, radians-vs-turns, 5000-instr limit, `pixelCount` literal
+144) with "if it is not listed it does not exist"; **9 hard rules** —
+R1 slider declaration order = MFT knob order (never reorder/rename/
+delete, `localSpeed` 1st, `direction` 2nd, ≤12 sliders, appends go
+last, NO pattern-level hue param since hue is per-channel), R2
+guarded direction dead-zone, R3 `localSpeed` must drive motion +
+BASE_RATE, R4 never black/never static, R5 `w == a`, R6 blend in RGB
+never HSV (helpers verbatim), R7 coords already 0..1, R8 no fallbacks
+(codex P0), R9 no invented API; titanic coordinate space (x = along
+ship, y = height, z diagonal/secondary) and `FIX_PAR / FIX_VINTAGE_6
+/ FIX_BAR_18 / FIX_RAW_LED` targeting with the absent-type compile
+error; style doctrine (contrast > brightness, keep the silhouette
+lit, two colours spanning the rig, incommensurate drift + large
+PHASE_WRAP, ambient defaults reachable to party by knob); the
+modulators-only audio model; and a **response contract** (COMPLETE
+file in ONE block, no diffs/ellipses, keep identity + header, short
+Changes list, ask-don't-guess, no refactors). Worked example
+`example_tide_beacon` was **compiled + measured on the real harness**
+from a scratch path (nothing added to `patterns/`): `COMPILE_OK`,
+full_track hueSpread 0.79 / peakMaxChan 247, silence darkFrac 0.00,
+modulated run `TOTAL_BRI ANIMATING` with micLow→sliderLevel
+corr=0.52 REACTIVE, micFlux→sliderRadius corr=0.86, hueSpread 0.97,
+peakMaxChan 255 — so `FIX_*` targeting, the guarded-direction idiom
+and the `w == a` emit are compiler-proven, not doc-transcribed.
+**OPEN NOTE for the R2 tuning session:** on the titanic model
+`sectionId` is NOT the test_bench 1/2/3 — it carries per-group
+numbers (3, 18–25, 401–414), so every legacy `sectionId == 2`
+vintage-blinder branch in `patterns/` does not select the vintage
+heads on the ship. The prompt steers NEW logic to `fixtureType` and
+forbids touching legacy `sectionId` branches unasked; migrating them
+is a separate operator-gated call (same root as `_32`'s "137 dead
+params"). Doc-only: zero engine/sim edits, no git ops.
+**2026-07-31 MILESTONE + FOCUS SHIFT:** operator started the
+ChatGPT tuning loop live (views first, then pattern tuning) off the
+`_90` prompt — `marsin_engine/patterns/**` is operator+ChatGPT
+territory now, agents hands-off unless a pattern is explicitly
+handed over. Declared new focus: **timeline & show planning**,
+coordinator working WITH the operator interactively ("let's you and
+me focus on timeline and planning and having fun with that").
+Show-plan substrate on file: `scenes/titanic/timeline/playa_default.yaml`
+(schemaVersion 2, sun-anchored phases philharmonic/party_night/
+sunrise_set, autopilot + per-phase looks), 13 playlists incl.
+burn_night/temple_white/tutu_tuesday/white_wednesday, 78 patterns.
+Reminder in force: any when-by/date planning goes ONLY to
+`.agent/reports_local/` (gitignored + deploy-excluded).
+**Show-behavior refinements recorded (operator, 2026-07-31, in
+master doc → Operator requirements):** party auto-trigger from
+AMBIENT only; short gated sessions; ambient dominant; VJed party
+night = automation stands down, likely no cue; playa-local time +
+postpone/shift affordance wanted; playlist filling/tuning =
+ChatGPT+operator territory (agents hands-off); current focus =
+infra + system testing.
+**`_91` reserved — show-infra audit + test plan (IN FLIGHT, Opus,
+read-only):** timeline mechanics (who consumes playa_default.yaml,
+phase/gap resolution, looks/autopilot/mood), theme-night switching,
+party-trigger chain vs the new refinements, playa-time/postpone
+support, pattern×playlist coverage matrix, timeline testability/
+dry-run harness. Deliverable: gap list (SUPPORTED/PARTIAL/MISSING
+per requirement) + ordered test plan; builds are separate threads.
+**LANDED 2026-07-31** — `202607/20260725_91_show_infra_audit.md`.
+Verdict in one line: **the MACHINERY is strong, the SHOW is not.**
+CONSUMERS: the engine is the SOLE reader of
+`scenes/<scene>/timeline/*.yaml` (`api_server.js:4571-4574`, gated on
+`config.yaml:96-105 timeline.enabled`); the sim reads nothing;
+CaptainPad only via REST (`utils/timelineApi.ts:492-573`); the state
+file's `activePlan` beats the config's (`timeline_service.js:353-364`).
+MECHANICS: sun anchors + tz + festival span are pure, DST-correct and
+clock-injected (`triggers.js:17-125`, `festival.js:7-9`,
+`sun.js`); midnight-wrapping phase windows work
+(`triggers.js:131-136`); precedence human > program > autopilot holds
+(`arbiter.js:67-199`); a due program under manual arms a 30 s pending
+lease; catchUp re-anchors a caught-up window to its true past fire
+time (`:1753-1757`); out of the festival span the plan goes fully
+DORMANT (`:1487-1490, 1515-1547, 1887-1898`) — **which is the state
+the rig is in right now** (`states/titanic/timeline_state.yaml`
+`controller: manual`), so NOTHING is observable on the bench without a
+run-time in-window fixture plan (recipe already in
+`ops/timeline_e2e_tests.md:35-38`). TWO ARC FINDINGS: (G1) a program's
+`hold` expiring NATURALLY re-establishes the autopilot BASELINE
+(playlist `default`) and never reaches the `ambient` defaultCue —
+`_applyAutopilotBaseline` (`:637-653`) does not clear
+`_deckWindowCueId`, so `_reconcileDefaultCue` early-returns at
+`:856-859`; only boot (`:1637-1654`), a durationMin elapse
+(`:889-905`) and operator END SHOW (`:2537-2564`) reach ambient. So
+the sunset+45 → sunset+120 gap runs `default` under sunset_coral.
+(G2) `c_party_start` is `kind: ambient` with NO durationMin and NO
+hold → it owns the deck from sunset+120 to sunrise−15, ~8 h of
+"look: party". **Ambient is the exception, not the rule — the inverse
+of the requirement.** Also: `philharmonic` and `sunrise_set` phases
+trigger NOTHING (decorative), and a phase has no EXIT action (rising
+edge only, `triggers.js:213-220`). LOOKS carry only
+`{playlist, autopilot, palette, globals, tasks, target}`
+(`show_plan.js:291-307`) — `hue`/`transition`/`overlays`/
+`colorAutopilot` exist only on `playlist` ACTIONS, so crossfades
+between phase looks need re-authoring as playlist cues. `master` in
+a look's globals routes to the DECK GRAND MASTER (`:588-603`).
+COVERAGE (68 top-level patterns × 13 playlists; `summer_camp/` etc.
+are NOT reachable — `playlist_manager.js:100-111` is non-recursive):
+**`default.yaml` names 45 patterns that do not exist at top level**
+(all `summer_camp` — `40_…`–`56_…`, `63/65_dome_…`, `70_…`–`85_…`,
+`96_…`, `100_…`, `110_…`–`117_…`); they load as `_missing`
+(`:187`), autopilot SKIPS them (`autopilot_pick.js:53, 102-106`) and
+the timeline only throws if ALL entries are missing
+(`api_server.js:4381-4385`) — so the baseline playlist is a silent
+27/72. **Only 14 of 203 entries scene-wide carry tuned `defaults`**
+(6 in `default`, 5 `white_wednesday`, 3 `temple_white`); ZERO carry
+a label or notes. **Reachable playlists: 3** (`default`, `ambient`,
+`party_high`); `party_low` only via `/party-config`; **9 unassigned**
+incl. BOTH fully tuned ones. Looks `burn_night`/`temple` load
+`default` not their namesake playlists; `daytime` + `party_low` are
+DEAD looks (no cue). Pattern orphans: 4, all deliberate
+(2 calib + 2 test). THEME NIGHTS: per-day targeting EXISTS and works
+(`cue.days` = 'all' | day indices | date strings,
+`festival.js:58-73`; used for `days:[6]` burn / `days:[7]` temple;
+CaptainPad DAYS picker `CueEditorSheet.tsx:243-347`) — **no per-day
+PLAN override and none needed**; the gap is content, not code (no
+Tue/Wed cue exists). PARTY CHAIN mapped end to end: companion
+detector params `config.yaml:106-117` (`ambientFloor 0.09`,
+`marginX 2.5`, `onSustainMs 20000`, `offConfirmMs 30000`, still
+UNCALIBRATED) → `audioPartyStrong` → MoodSource staleness guard
+(`staleSec 10`, forces CALM and surfaces `moodStale`) →
+`triggers.js:221-260` (arm/dwell/cooldown, `partyEnabled` gate at
+`:242` never burns the latch, `/party-config` timing REPLACES the
+plan's at `:246-250`) → `arbiter.js:174-180` → look `party_high` →
+`_notePartySessionEnd` (`:1352-1361`, ONE definition, six end paths,
+cooldown anchored at END + re-arm) → persisted
+`partyPlaylist party_high / dwell 120 s / duration 12 min /
+cooldown 120 s`. **"AMBIENT ONLY" IS A GAP:** the only gate is
+`controller === 'autopilot'` (`arbiter.js:177`) — a control-ownership
+test, not a what-is-on-the-deck test. It blocks takeover + autopilot-
+off + every `kind: program` hold, but NOT the `kind: ambient` party
+look (deliberate per `show_plan.js:929-932`), and **the on-disk cue
+DROPPED the `whenPhase: 'party_night'` the built-in template ships**
+(`show_plan.js:945` vs `playa_default.yaml:158-173`) — so a sustained
+loud stereo at 3 pm inside the festival window fires a session. The
+cheap fix is one authored line; the strong fix is gating on the
+ambient/default owner. **VJ STAND-DOWN IS A GAP as a MODE:** only the
+manual global `partyEnabled` (`:1155-1227`, disable ends a live
+session instantly and NEVER re-applies under a takeover, `:1392-1398`)
+or a hand-authored `days:`/`enabled:false` on the mood cue; nothing
+plan-driven, no reminder on the tab. PLAYA TIME: **SUPPORTED both
+sides** — engine all-tz (`triggers.js:17-74`), CaptainPad reads "now"
+in the PLAN tz explicitly so the tab is right off-playa
+(`timeline.tsx:84-112, 368-389`), tz picker with Pacific (BRC) first
+(`FestivalEditor.tsx:40-47`). **POSTPONE: MISSING** — PAUSE and HOLD
+were REMOVED 2026-07-03 (`timeline_state.js:126`,
+`arbiter.js:75-78`, `timeline_service.js:2392-2394`); today's only
+options are takeover (auto-resumes after 120 s), AUTO OFF (kills the
+whole plan), DISMISS a pending program, END SHOW, or hand-edit the
+cue offset and SAVE (which hot-reloads, `:2326-2344`). Recommended
+shape: a single persisted `planOffsetMin` applied in
+`resolveDayTimes`, with a loud "SHOW SHIFTED +N min" banner and
+one-tap reset. TESTABILITY: **317/317 timeline unit tests pass**
+(`node --test "tests/timeline/*.test.js"` — the bare-directory form
+FAILS on Windows); cores are `nowFn`-injected and the tests exploit
+it (`party_session_repeat.test.js:96-127` `setNow`/`_tick`), but that
+rig is copy-pasted per file with FAKE deps and never touches the real
+plan. **No dry-run tool** (`marsin_engine/tools/` has 20+ tools, none
+for the timeline), **no committed e2e runner** (the ops spec's own
+"Wanted: a scripted runner", `:131-139`, still open).
+`timeline_deck_release_default_cue.test.js` trips the Windows
+node:test IPC flake when run ALONE because it does not mute
+`console.log` (the party files do, `:31-33`) — 3-line fix.
+DOC DRIFT flagged (fix-on-sight order):
+`ops/timeline_e2e_tests.md:84` (S5) asserts `mode='paused'`, a mode
+that no longer exists. GAP LIST (16 rows) verdicts: SUPPORTED 6
+(short sessions, 2-min dwell, END-anchored cooldown, human-wins,
+playa time, fail-loud) · PARTIAL 4 (ambient-only, cross-playa
+rejection = uncalibrated, preplanned program, themed nights) ·
+MISSING 5 (ambient-dominant as shipped, VJ stand-down mode,
+postpone/shift, tuned playlists, fast-forward testability) · BLOCKED
+1 (bench-observable — dormant until an in-window fixture).
+**RECOMMENDED FIRST BUILD: `marsin_engine/tools/timeline_dryrun.mjs`**
+— loads the REAL plan, injects the clock + a scripted mood track,
+prints a minute-by-minute playa night (local time, phase, controller,
+cue fires + reasons, deck playlist, `wouldFire` suppressions) with
+recording fakes only: zero sACN, zero device traffic, no engine.
+4–6 h, and it turns every open show question into a 5-second answer.
+Ordered 4-phase test plan in `_91` §8 (Phase 0 unblock → Phase 1 read
+the show back → Phase 2 party on the bench → Phase 3 postpone →
+Phase 4 e2e runner + night rehearsal). READ-ONLY thread: zero code,
+scene, playlist or pattern writes; `patterns/**` and playlist
+contents measured only (ChatGPT+operator territory).
+**`_92`++ CORRECTION LANDED (2026-07-31, Opus) — SIGN PUCKS ARE **RGBW**,
+NOT RGB: "same lights as the ropes".** Operator: *"sign is also RGBW,
+same lights as the ropes."* RETRACTS the addendum's "set that output's
+order to RGB" instruction — CORRECT INSTRUCTION: **RGBW / stride 4, the
+same setting every rope output already runs.** AUDIT: **no byte-level
+bug existed.** For an LED-bus fixture stride + channel map come from the
+owning controller's `led.order` (sign exactly as strand):
+`led_fixture_kind.ledBusPixelCount` returns a PIXEL count never bytes;
+the exporter emits `footprint: ledProj.stride` + `channels` = the
+controller's order map; `computeLedProjection`/`computeLedStrandPatches`
+read `led.order`; the parity gate cross-checks model stride vs
+`ledStride(controller)`. So the wire would have been right on an RGBW
+output regardless. WHAT WAS WRONG = every number a HUMAN reads: the two
+definition YAMLs (`channel_mode: 120`/`102`, `type: "rgb"`, per-pixel
+`{red,green,blue}`), the channel count baked into their FILE NAMES, the
+`20260725_13` pattern-catalog row (`rgb`), and my A8 mapping
+instruction. FIXED: `gen_te_sign_fixture.js` gained
+`BYTES_PER_PIXEL = 4` + `PIXEL_FORMAT = 'rgbw'` threaded through
+footprint / per-pixel quad / controls block / summary line, and its
+emitted header now states BOTH the physical format AND that the
+run-time authority is the controller's `led.order`. Definitions
+regenerated + RENAMED so the name stops lying:
+`model_a_120.yaml` → **`model_a_160.yaml`** (`te_sign_v3_a_160`, 40 px
+× 4 = 160 ch), `model_b_102.yaml` → **`model_b_136.yaml`**
+(`te_sign_v3_b_136`, 34 px × 4 = 136 ch); per pixel `type: "rgbw"`,
+`channels: {red: 4i+1, green: 4i+2, blue: 4i+3, white: 4i+4}`.
+`main.js` 4 registration refs repointed — SEQUENCED new-files →
+repoint → delete-old so no page load could fetch a missing definition
+while the operator was testing at his desk. GEOMETRY BYTE-IDENTICAL
+(same 148 points, same wire order, same shared 0-1 normalisation
+k=1/2165.1). CORRECTED ARITHMETIC: side A 160 ch, side B 136 ch, one
+whole sign **296 ch** (was stated 222) — still one universe, 216 ch
+headroom. 2 NEW REGRESSION TESTS in `scene_model_parity.test.js`: sign
+defs declare RGBW at 4 B/px with an RGBW quad per pixel, and that
+stride == the stride every titanic LED controller runs — the generator
+cannot quietly go back to 3. SUITE 1590 tests / **8 fail = baseline 8,
+ZERO NEW**; PARITY **UNCHANGED at 4 `unmapped_fixture`** (still awaiting
+his mapping). NO server started/stopped/reloaded, NO scene file
+written, zero device HTTP; `_96` + `_100` boundaries untouched. Defs are
+fetched at page load → his CURRENT tab keeps the old ones; next hard
+reload picks up RGBW. Exported model UNAFFECTED (the LED path never read
+the definition channel map). Correction section appended to
+`202607/20260725_92_te_sign_patch_model_fix.md`.
+**`_92`+ ADDENDUM LANDED (2026-07-31, Opus) — TE SIGNS ARE **LED**, NOT
+DMX; the DMX placeholder is DELETED and both signs are mappable
+MarsinLED fixtures.** Operator correction: *"the TE signs must be
+associated with MarsinLED controllers in the controller mapping pane,
+please remove all TE sign controllers you added (I saw DMX ones,
+that's wrong!) … make sure the TE sign fixtures are clearly of type
+LED not DMX."* He is right — `_92` §1 parked them on a DMX placeholder
+gateway because that was the ONLY thing the mapping chain would let a
+`parLights` fixture attach to. REMOVED: the whole `TeSigns-PLACEHOLDER`
+controller (id 23, `0.0.0.0`, U38+U39; controllers 17→16,
+nextControllerId 24→23), all four sign patch records (patches.yaml now
+has ZERO `TE Sign` rows), universes 38/39 from `Subscribed Universes`,
+and the DMX whole-fixture patch on all 148 sign pixels. (Epitaph from
+the pre-removal boot log: the bridge REFUSED the placeholder route
+anyway — "U38 → '0.0.0.0' [sentinel] … No sender created".)
+ADDED — a new first-class kind, the **LED PIXEL FIXTURE**: a
+`parLights` fixture whose DEFINITION declares `bus: led` (the TE Sign
+V3 YAMLs have said so since 20260724_14). It keeps baked per-pixel
+`dots` geometry (the logo) but is wired EXACTLY like a strand — one
+MarsinLED output, cursor at (port universe, ch 1), stride B/px,
+no-straddle walk — so it takes the strand's per-pixel patch, the
+strand's record shape, and `type: 'led'` model pixels. THE HINGE: one
+new pure module `src/dmx/led/led_fixture_kind.js` whose
+`ledMappableCounts()` is the UNION of strands ∪ LED fixtures. Both LED
+projections (`computeLedProjection`, `computeLedStrandPatches`) already
+key PURELY off that name→count map, so **neither projection changed a
+line** — the reclassification is one call site per consumer:
+`main.js` projectLedStrandPatches (projects onto both, stamps the
+derived `bus:'led'` marker for the save-server) + projectControllerMappings
+(passes `ledBusNames`); `controller_registry.projectOntoConfigs` (new
+optional `ledBusNames` — LED-bus fixtures are still NUMBERED, keeping
+their place in the section/fixture id space, but their ADDRESS fields
+belong to the LED pass, else the two fight and log drift every boot);
+`pixelblaze_model_exporter` (lane table hoisted to
+`computeLedLaneFields()`, DMX loop grew an LED-bus branch);
+`controller_map_editor` (LED-bus names leave the DMX tray for the LED
+tray; `nameKind`→'strand' so `controllerAcceptsKind` accepts them on an
+LED card and REFUSES them on DMX); `save-server` (strand record shape,
+written only when patched); `lib/scene_model_parity.cjs` (roster
+`type:'led'`, LED walk patch truth, no `missing_patch_record`, identity
+vs scene_config). CLASSIFICATION IS DATA (`bus` off the definition),
+never a name list — so **the `fixtureType` strings NEVER CHANGED**
+(`TeSignV3A40`/`TeSignV3B34`): every `te_sign` selector still resolves
+and the `_48` addendum-2 one-panel-per-sign (group AND type) guarantee
+is intact. NOTE: `pixel_map_layout.LED_CLASS_FIXTURE_TYPES` (the
+2026-07-24 operator ruling that hardcoded the two type names precisely
+BECAUSE the transport said DMX) is now redundant — pixels report
+`type:'led'` themselves — but LEFT IN PLACE so pre-today models still
+classify; deleting it is a follow-up, not a drive-by.
+TWO LATENT BUGS CAUGHT: (1) IDENTITY LOST ON UNMAP — an LED thing has a
+patch record only WHILE patched, so parking sectionId/fixtureId there
+meant an unmapped sign lost its identity and re-minted different ids
+every boot (model drift forever). Fixed by following the strand
+contract: identity lives STRUCTURALLY in scene_config.yaml, seeded with
+the existing ids (TE Sign V3 A/B sId 3 fId 13/14; TE Sign 2 V3 A/B sId
+415 fId 2204/2205) so nothing renumbered; verified stable across a full
+save round-trip. (2) SPLIT OUTPUT GATE — a `type:'led'` pixel is scaled
+by `animate.js _applyLedOutputGate`, keyed on `displayGroup`, which the
+signs lacked; the LED Fixtures panel (gui_builder ALREADY lists every
+`bus: led` fixture there — "TE Sign (2)"/"TE Sign 2 (2)") would have
+moved their meshes while the raw entry, the 2D tap and the sACN map
+stayed bright — the exact split `20260724_40` closed for DMX.
+`displayGroup` now stamped on every LED-bus pixel (runtime-only).
+LIVE PROOF (operator away, service grant; SIM SERVERS ONLY — engine
+NEVER started, so zero sACN toward the rig; every `:6970` write aborted
+at the network layer): pane reads `CONTROLLERS (16)` /
+`DMX CONTROLLERS (12)`, no PLACEHOLDER, `dmxPlaceholders: []`,
+`signChainedAnywhere: []`, and the unmapped tray
+`UNMAPPED — 0 FIXTURE(S), 4 STRAND(S)` with the four 💡 TE Sign chips in
+the LED half (zero unmapped DMX fixtures — the signs are the only
+unmapped things in the ship). All four read back `bus:"led", u:0, a:0,
+cId:0, outputIndex:-1`. Both signs still render + light (wire-order
+chase, halves interlocking); the "4 patched fixture(s) missing
+Controller IP" banner is gone. Screenshots
+`.agent_renders/*_map_pane_te_sign_filtered.png`, `*_map_pane_led_signs.png`,
+`*_sign{1,2}_lit.png`.
+SUITE: sim **1571 tests, 8 fail = the documented baseline 8, ZERO NEW**
+(+12: 9 `led_fixture_kind.test.js` + 3 exporter LED-bus). Security PASS.
+PARITY DELIBERATELY RED — **4 errors, all `unmapped_fixture` on the four
+sign halves.** Removing the controller without a replacement (per the
+brief: provisional binding is `_96`'s thread) NECESSARILY re-opens them;
+softening `unmapped_fixture` to INFO would blind the gate to a genuinely
+dark fixture, which is the whole point of the validator family.
+Everything else spotless (coverage/patch-truth/drift/views clean;
+`placeholder_controller` finding GONE). ONE operator action closes it:
+chain the four halves on a MarsinLED output + Save → PASS. ⚠ set that
+output's order to **RGB** ← ⛔ **RETRACTED, see the `_92`++ CORRECTION
+above: the pucks are RGBW, same lights as the ropes — set the output to
+RGBW / stride 4** (stride comes from `controller.led.order` and the gate
+cross-checks it). `_96` FILE BOUNDARY NOT CROSSED
+(led_discovery_panel / marsinled_client / device_config_mapper
+untouched — the LED tray lives in controller_map_editor and the
+projections key off the count map). HANDOFF: `test_bench` still fails
+its 2 baseline parity tests — its own TE Sign halves now read LED too
+and its sign identity is still in patches.yaml under the old DMX
+contract; needs the same one-command re-save, LEFT ALONE (that scene is
+`_89`'s active area). ALSO: the sACN INPUT bridge crashes at boot on
+this box with `addMembership EINVAL` from the `sacn` package
+(multicast-join/NIC condition, unrelated, pre-existing) — it will bite
+the next person who starts the stack. Report: the ADDENDUM in
+`202607/20260725_92_te_sign_patch_model_fix.md`.
+**`_92` LANDED (2026-07-31, Opus) — TE SIGN PATCH + MODEL REBUILD;
+`scene_model_parity titanic` 21 errors → **0, RESULT PASS** (the
+titanic scene is FULLY PATCHED).** All 4 defects confirmed from the
+repo, all 4 fixed. (1) UNPATCHED: 148 sign px `patch: null`, no
+controller carried them → new `TeSigns-PLACEHOLDER` DMX controller
+(`0.0.0.0` sentinel + PLACEHOLDER marker per plan `_33` §O5), 2 ports:
+U38 sign 1, U39 sign 2, A@1 + B@121 (120+102=222 ch, one universe
+each); `📡 Subscribed Universes` widened by 38,39 (ADD-only) or the IN
+bridge drops them silently. ONE controller not two — a second
+`0.0.0.0` would trip `controller_duplicate_ip`. (2) DUPLICATE NAMES:
+both signs shipped `TE Sign V3 A/B`; sign 2 → `TE Sign 2 V3 A/B`,
+which also retires the `~2` fixKey the 2D map was inventing
+(`pixel_map_layout.js:123`) — its `pixel_map_views.yaml` offset keys
+rewritten. (3) sId 3 / fId 13-14 COLLISIONS were a SYMPTOM of (2):
+`projectOntoConfigs` (`controller_registry.js:2083`) keys
+`configsByName` by NAME, so sign 2 never entered the map. Rename alone
+→ projection minted sId **415**, fId **2204/2205**. NOTE pre-existing
+side effect: any sim save re-mints generated-fixture ids (DMX groups
+401-414 → 416-429) — not new, but re-check anything keyed on a raw
+section number. (4) THE SIX STRANDS, named: `Left_Front_Right`,
+`Left_Back_Right`, `Right_Front_Left`, `Right_Back_Left`,
+`Right_Front_Right`, `Right_Back_Right` = every strand on the three
+rope controllers with **no `device:` block** (`LeftRightRopes`,
+`RightLeftRopes`, `RightRightRopes`). ROOT CAUSE = two projections:
+`main.js:558` writes patches.yaml from `computeLedStrandPatches` ALONE
+(early-returns on `!isBoundLedController`, `led_patch_projection.js:169`)
+→ no record → no bridge relay route; the exporter
+(`pixelblaze_model_exporter.js:327`) seeded its lanes from the GENERIC
+`computeLedProjection` (ALL LED controllers) → gave them U32-U37
+anyway. Engine rendered, bridge forwarded nothing, six ropes dark with
+every surface green. FIX = **patches.yaml wins** (operator ruling):
+exporter lane table now built from the bound projection only; unbound
+strand → `patch: null` + `unpatched: true` + one loud console line.
+Rejected the other direction on purpose — it would have created relay
+routes to three real rope controllers and started forwarding live
+frames = device traffic this order forbade, while asserting a byte
+layout for unbound hardware. BLAST RADIUS = exactly those six: every
+LED controller in `studio`/`studiodj`/`test_bench` is device-bound, so
+no other model export changes a byte. MODEL REBUILD: the sign's pixel
+geometry lives ONLY in `simulation/dmx/fixtures/te_sign_v3/model_a_120
+.yaml` + `model_b_102.yaml` (everything Pixelblaze-shaped is derived);
+both regenerated by the NEW reusable
+`simulation/tools/gen_te_sign_fixture.js` (fail-loud on wire_order
+gaps / dup points / wrong counts / a panel on both sides; `--dry-run`).
+`gen_led_fixture.js map` deliberately NOT reused — it centres on the
+one file it is handed, i.e. per-side bbox, the exact failure this sign
+cannot survive. POINT SETS IDENTICAL old→new; the delta is **wire
+order only** (A: P9→P10→P1→P2→P3→P4→P11; B: P8→P7→P6→P5), i.e. which
+LED takes which channel. NORMALIZATION (operator-explicit, ONE shared
+factor over A ∪ B, anchored at the union lower-left): `k = 1/2165.1 mm
+= 4.618724e-4/mm` → side A `u 0…0.5388, v 0.3333…1.0`, side B
+`u 0.2694…0.7313, v 0…0.8000` — deliberately NOT 0…1 per side; that
+is what keeps the halves interlocking along the diagonal seam instead
+of stacking. Y is NOT inverted vs the CSV (both Y-up; only the
+translation to the shared full-sign centre 986.31/1254.76). `dots` stay
+in mm (runtime does ×0.001 → metres); the 0-1 pair rides each pixel as
+a `norm (u, v)` provenance comment. VERIFY: parity PASS with 8 honest
+INFO (1 bench, 1 placeholder controller, 6 unpatched strands — all
+promoted by `--strict`); sim suite 1482 tests **10 → 8 fail, ZERO
+new** — 2 titanic scene-drift pins went green (`--strict is stricter`
+self-healed; `0% electrically mapped` pin REWRITTEN to `fully mapped`,
+stronger not weaker), 3 exporter tests rewritten to the new contract
+(misaligned-start walker math still pinned at
+`led_patch_projection.test.js:251`, zero coverage lost), 8 remaining
+are the pre-existing stale-model family (5 bench_section_sync, 1
+pixel_map compression, 2 test_bench parity — test_bench files were
+never written). Engine suite 2391/8-env-fails unchanged; security
+check PASS. EYES ON: both signs lit with a wire-order chase (white =
+pixel 1 lands on the new CSV wire-1 points), halves assemble into one
+diamond with no seam tear and true relative scale; 2D `te_sign` view
+resolves ONE panel per sign (group AND type — the `_48` addendum-2
+regression is NOT back). RE-EXPORT ran through the sim's own save path
+(`window.exportConfig({interactive:false})`) — **no interactive
+operator step left**, and **no engine restart**: pixelCount unchanged
+at 964, engine hot-reloaded (`modelStale:false`). ZERO device HTTP
+pushes / sACN output enables. OPERATOR STEPS REMAINING (both need
+device conversations, both loud under `--strict`): (a) the sign
+controller's real IP → drop the PLACEHOLDER marker (split into two
+controllers if the signs land on two boxes); (b) bind the three rope
+controllers in the LED discovery panel → the six records + their model
+addresses appear together by construction. Report
+`202607/20260725_92_te_sign_patch_model_fix.md`.
+**`_92` original brief (operator order
+"immediately now" 2026-07-31, Opus):** four defects to
+verify+fix — 148 sign pixels unpatched in exported model; A/B
+module names duplicated across the two signs; both signs sectionId
+3 + fixtureId collisions; 6 LED strands patches.yaml vs generated
+model disagreement (patches.yaml = truth). Plus: regenerate the
+Pixelblaze-format TE sign model from fresh Fusion CSVs (side A 40
+pts, side B 34 pts, 74/sign — CSVs live in the external Echoes
+workspace), wire_order order, **one shared mm→0-1 scale across
+both sides** (operator-explicit). Titanic scene writes authorized
+by this order, scoped to these fixes; zero device traffic.
+**`_91` LANDED (2026-07-31, read-only):** machinery strong
+(317/317 timeline tests; sun/tz math pure + DST-correct;
+human>program>autopilot holds) but the SHOW is template-shaped:
+default.yaml 45/72 entries unreachable (summer_camp names,
+silently skipped by autopilot_pick), 66/72 untuned; 9/13 playlists
+referenced by nothing incl. BOTH fully-tuned ones; burn_night/
+temple looks load `default`; party look owns ~8h of the night
+(inverse of ambient-dominant); "fires from ambient only"
+UNENFORCED (arbiter gate is ownership-only; on-disk cue dropped
+whenPhase party_night → 3pm loud stereo fires); natural hold
+expiry lands on autopilot baseline not ambient (ownership latch
+not cleared); PAUSE/HOLD removed 2026-07-03 so no postpone; no
+dry-run tool; plan DORMANT off-festival. Gap list: 6 SUPPORTED /
+4 PARTIAL / 5 MISSING / 1 BLOCKED. Report
+202607/20260725_91_show_infra_audit.md.
+**`_93` reserved — timeline dry-run harness (IN FLIGHT, Opus):**
+build marsin_engine/tools/timeline_dryrun.mjs per _91's first-build
+rec — real loadShowPlan/TimelineService/arbiter with injected
+nowFn + scripted mood, simulated dates while plan dormant, fixture
+plan in test fixtures (zero scene writes), minute narrative +
+suppressed-wouldFire log + session lifecycle + summary table; plus
+2 fix-on-sight items (ops e2e doc stale mode='paused'; test
+console.log IPC flake). Logic bugs report-only.
+**`_93` LANDED (2026-07-31)** —
+`202607/20260725_93_timeline_dryrun_harness.md`. SHIPPED:
+`marsin_engine/tools/timeline_dryrun.mjs` +
+`tests/fixtures/timeline/dryrun_bench.yaml` +
+`tests/timeline/timeline_dryrun.test.js` (23 tests). Drives the
+REAL code end to end — loadShowPlan, TimelineService._tick() with
+injected nowFn + getMood, triggers.js, arbiter.js, sun/festival
+math, PlaylistManager.load, pickNextAutoCycleEntry — against
+recording fakes that mirror api_server's own contracts (an
+all-`_missing` playlist THROWS, same as live). OFFLINE: zero sACN,
+zero network, no engine; the plan is COPIED to ~/tmp before the
+service sees a directory, so `_loadSceneFiles`'s default-plan write
+physically cannot reach simulation/scenes/**; `--out` refused
+outside ~/tmp. DORMANCY solved twice: an out-of-window `--date`
+FAILS LOUD naming the festival window, and `--fixture` runs a
+committed DATE-FREE bench plan with NO `festival` block (the
+engine's own always-in-window escape hatch, timeline_service.js
+:1487-1490) that mirrors the shipped show's shape and points at
+real titanic playlists. FLAGS: --scene/--plan/--fixture,
+--date/--from/--days/--to/--step (all independent of today),
+--mood {quiet,loud_stereo_1500,night_sets,all_night} /
+--mood-file, --seed (reproducible shuffle), --party-config
+(through the REAL setPartyConfig), --allow-dormant,
+--events-only/--engine-log/--out, --list-moods/--help. OUTPUT:
+per-step playa-local time │ phase │ controller │ deck OWNER │
+playlist ▸ pattern │ autopilot │ palette │ party state, plus
+▶ FIRE (with WHY + kind/hold/window), ◆ lifecycle,
+✖ SUPPRESSED (with the arbiter rule that dropped it), ♪ PARTY
+transitions; summary = deck minutes by playlist/owner/controller/
+palette, fire + suppression counts, session outcomes, playlist
+health (usable/total, loads, ⚠ unreachable).
+**4 × 24 h runs at 1-min resolution.** CONFIRMS _91 on the real
+plan: hold-expiry lands on the autopilot BASELINE not the ambient
+defaultCue (G1); c_party_start owns the deck **8h40m** unbroken
+(G2); 40 min of daylight stereo fires **3** party sessions
+(15:02/15:16/15:30) — the missing `whenPhase`. SHARPENS: on a
+QUIET night the `ambient` playlist gets **0 minutes** (every deck
+cue is no-durationMin, so the defaultCue never regains the deck),
+and c_sunrise — not party — is the biggest owner at 12h35m
+(it holds the deck all day).
+**5 NEW BUGS, REPORT-ONLY (no timeline logic touched):**
+(1) **HIGH — a SUPPRESSED party fire consumes the arm latch +
+cooldown.** triggers.js:256-259 stamps moodLastFire and clears
+moodArmed BEFORE arbiter.js:174-180 decides to drop the fire;
+moodArmed re-arms only on a return to CALM (:230-233). Measured:
+burn night + continuous 21:00–05:00 music → ONE suppression at
+21:02 under c_burn_night's 120 m hold → **0 sessions all night**;
+same script on a normal day → **35**. getPartyStatus() still reads
+'armed' throughout (it only checks the cooldown stamp), so the
+CaptainPad PARTY card lies. Contrast triggers.js:242, where the
+partyEnabled gate deliberately continues BEFORE the bookkeeping
+("suppression does not consume the trigger") — same invariant,
+violated one layer up.
+(2) MED — timeline_service.js:1758-1761: `_catchUp` calls
+`_disarmBaselineAutopilot()` AFTER `_dispatchCue` applied the
+caught-up program's look, cancelling the look's own autopilot on
+the same deck target. The live path
+(_dispatchArbitratedAction:1582-1584) disarms FIRST. Any
+boot/scene-switch/savePlan/resume/lease-release inside a program
+hold freezes the deck on entry 1. Measured: ap OFF + one pattern
+for 90 m vs ap 90s seq rotating when the same cue fires live.
+(3) MED (latent) — arbiter.js:181-186: an `ambient` cue applies
+whenever controller !== 'manual', so it overwrites a running
+program's deck content while activeProgram (and its mood
+suppression) stays live. Measured: c_party_start replaces the
+burn_night look 30 min into its 120 m hold. Invisible today (both
+resolve to default+bass_drop) — wipes the burn show the moment
+_91's T1 look→playlist re-pointing lands.
+(4) AUTHORING — program looks with no `autopilot` block
+(sunrise/burn_night/temple/daytime) leave the deck frozen for the
+whole 90–120 m hold, because the program dispatch disarms the
+baseline and nothing re-arms.
+(5) ARC — the first party session permanently evicts the `party`
+look: c_party_start has no expiry but loses ownership to the mood
+cue, whose window-elapse hands the deck to defaultCue, and a phase
+trigger is rising-edge once per night. Two totally different
+nights (quiet: party 8h40m / ambient 0m; with music: ambient
+3h09m / party look gone after the first session).
+**FIX-ON-SIGHT (both done):** ops/timeline_e2e_tests.md S5
+rewritten (asserted mode='paused', deleted 2026-07-03; also drove
+a DISABLE PLAN button removed per PlanLockBanner.tsx:200-204) →
+now an AUTO OFF/re-arm cycle with real assertions; S1 + S10 +
+the level table cleaned in the same pass (S10 cited setMode/hold,
+both deleted) + a new DRY level and an "Offline dry-run" section.
+timeline_deck_release_default_cue.test.js now mutes console.log →
+**9/9 run ALONE**, Windows node:test IPC flake gone.
+**GATES:** timeline suite **317 → 340/340**; full npm test
+2387/2395 with **ZERO new failures** (8 = 5 audio_capture + 1
+osc_listener EACCES [both env, per now.md] + effects_v2_mode_page
+[47/47 alone — full-run pollution, now.md B12] + specialty_white_uv
+[operator playlist drift: titanic white_only.yaml now tuned,
+studiodj's copy not]); node --check clean; git diff --check clean;
+security_check --all → 6 findings, ALL pre-existing MACs in
+gitignored simulation/.scene_backups/, none in a touched file. Sim
+suite not run — nothing under simulation/ was touched. No git ops.
+**`_94` reserved — timeline zoom design (operator feature request
+2026-07-31, IN FLIGHT, FABLE — operator-named model, design-only):**
+(1) DAY ZOOM — calendar week/day view to review the timeline;
+(2) EVENT ZOOM — click event → if active: live "performance level"
+deck control the main cue cannot steal, cue resumes on zoom-out;
+if inactive: temporary TIME TRAVEL to that event to see/work the
+deck at that moment; exit = back to timeline tab. Design must map
+onto existing arbiter ownership (human>program>autopilot), be
+honest about the PAUSE/HOLD-removed + postpone-missing gaps
+(_91), prefer sharing _93's injected-clock machinery over a second
+path, respect one-writer law across CaptainPad clients, keep UI
+"simple and easy to understand". Deliverable: UX + state machine +
+API surface + operator decisions + ordered build slices.
+**`_94` DESIGN LANDED (2026-07-31)** —
+`202607/20260725_94_timeline_zoom_design.md`. Navigation ladder
+FESTIVAL (existing 8-day strip = week view) → DAY (DayEditor
+promoted full-screen + per-day phase bands + a RESOLVED
+"what-actually-plays" ribbon that shows _91's G1/G2 truths +
+reserved SHIFT-TONIGHT slot for the postpone build) → EVENT (the
+existing DECK tab under a mode banner — no second deck UI).
+Event zoom = SCOPED OPERATOR TAKEOVER on the existing arbiter
+human layer: `operatorLease.scope 'perform'|'travel'`, controller
+stays 'manual', no new ownership mechanism. PERFORM's one real
+change: a due program's pending lease (arbiter I2 auto-start,
+30 s — which today seizes control even from a takeover,
+arbiter.js:87-104,119) is DEFERRED (never dismissed) while a zoom
+lease is alive; ENABLE stays offered; exit fires it via catchUp.
+TIME TRAVEL: new pure `resolveDeckStateAt(plan, atMs)` extracted
+from `_catchUp`'s selection core (timeline_service.js:1719-1743),
+applied to the REAL deck through normal dispatch under the
+takeover; live-clock warp REJECTED (catchUp would latch firedToday
+for the simulated day and cancel the real night); _93's
+throwaway-service recipe (makeDryRunDeps) becomes the cross-check
+oracle in tests. Every exit (timeline-tab return from the entering
+client, EXIT button any client, presence-ping lease expiry 120 s,
+engine restart — zoom is runtime-only, autopilot OFF, plan
+save/activate) funnels through resume/catchUp: never-stuck
+invariant preserved; party mid-flight uses the EXISTING
+end-vs-rejoin rules (:1809-1855) unchanged. One-writer: one engine
+zoom session, both pads render the same broadcast banner, either
+may retarget. Engine surface (all additive): overview `phases` +
+`segments`, GET /timeline/resolve, takeover body {scope,cueId},
+POST /timeline/travel, `zoom` field on timelineState. OPEN
+DECISIONS D1–D8 (exit gesture, lease length, defer-vs-autostart,
+static-vs-ticking travel, resolver impl, two-pad policy, ribbon in
+v1, postpone slot) each with a recommendation. SLICES: S1 engine
+resolver+review data (4-6h) → S2 engine zoom scopes (6-8h) → S3
+pad day zoom (6-8h, needs S1 only) → S4 pad event zoom (6-8h,
+needs S2) → S5 e2e (3-4h); day zoom and event zoom can land in
+either order after S1. Zero code/scene writes; report + two
+ledgers only.
+**OPERATOR RULING (2026-07-31): `_94` design ACCEPTED, all
+decisions D1–D8 as the designer recommended ("do them") — incl.
+D3 defer-cue-until-zoom-exit, D4 static-snapshot time travel
+(never a live clock warp), D5 pure resolveDeckStateAt extraction.
+Build wave authorized: S1→S2 engine first, then S3/S4 pad slices,
+S5 e2e.**
+**`_95` reserved — zoom engine slices S1+S2 (IN FLIGHT, Opus):**
+pure resolver extraction (byte-identical _catchUp proof) +
+GET /timeline/resolve + overview phases/segments; takeover
+lease.scope perform/travel + POST /timeline/travel + zoom
+broadcast + D3 deferral. Warned off _93's files (dryrun tool +
+deck_release test). S3/S4 builders will work from the _95 report's
+API docs.
+**`_95` LANDED (2026-07-31)** —
+`202607/20260725_95_timeline_zoom_engine.md`. BOTH engine slices
+shipped. **S1:** new `marsin_engine/lib/timeline/resolve_deck_state.js`
+— the pure `resolveDeckStateAt({plan, atMs, sunEvents?})` lifted
+VERBATIM out of `_catchUp`'s selection core (ruling D5), plus
+`buildDaySegments`. No IO, no Date.now(), plan never mutated. It
+returns TWO deliberately distinct answers: `restored` = what catchUp
+re-applies (present even when the cue's durationMin window has
+elapsed), and `owner`/`playlist`/`palette`/`controller`/`source` =
+what actually drives the deck at T (a live program hold owns
+outright; an ELAPSED window yields to the defaultCue). `_catchUp`
+consumes `restored`. `buildOverview` gained additive per-day
+`phases` (plan-ordered, midnight-wrapping, null on polar anchors)
+and `segments` — the RESOLVED RIBBON, tiling 00:00→24:00 with no
+gaps (last `toLocal` is the literal "24:00"). New read-only
+`GET /timeline/resolve?date=&time=` (or `?cueId=`), 400 on
+malformed/unresolvable/out-of-window. **S2:** the operator lease
+gained `scope` ('perform'|'travel') — the zoom rides ON the lease
+object, so every existing lease-clear path clears the zoom and a
+zoom is structurally un-strandable (8 exits unit-tested: resume,
+expiry, autopilot OFF, savePlan, activatePlan, enableProgram,
+restart, window close). `POST /timeline/takeover` takes an OPTIONAL
+body `{scope:'perform', cueId?}`; bodyless = today's plain takeover,
+and a bodyless call under a live zoom is a REFRESH that PRESERVES
+the scope (the deck touch hook must not downgrade a performance).
+New `POST /timeline/travel` — `{date,time}` | `{cueId,date?}` |
+`{step:'prev'|'next'}` — enters a scoped takeover + applies the
+resolved snapshot through the NORMAL dispatch path; STATIC snapshot
+(D4), never a clock warp, and it writes NONE of the live plan's
+bookkeeping (no firedToday, no cooldown, no activeProgram, no deck
+window, no party session, no cue-fire ring entry — a `travel`
+lifecycle entry instead). New additive `zoom` field on
+`/timeline/state` + the `timelineState` broadcast, carrying
+`pendingDeferred` for the banner. **D3 deferral:** while a zoom
+lease is alive the service pushes `pendingProgram.expiresAtMs` out
+to the zoom lease's expiry — a SERVICE-level nudge BEFORE
+`arbitrate()`, so `arbiter.js` stays pure and completely unmodified.
+Deferred NEVER dismissed (no firedToday burned, ENABLE still starts
+it, exit fires it via catchUp); the event log says
+"Show deferred: X (starts when you exit the zoom)" under a zoom
+only. **A PLAIN takeover keeps the I2 30 s auto-start
+BYTE-IDENTICAL**, pinned in both directions. DESIGN GAP CLOSED: the
+dormancy gate would have torn down a travel zoom within 1 s, so
+`_goDormant` now preserves an UNEXPIRED travel lease (and nothing
+else) — **time travel works while the plan is asleep**, exactly the
+bench state today (`_91` #16); an expired one is dropped right
+there so it can never strand.
+**PROOF: the `_catchUp` refactor is BYTE-IDENTICAL** — a one-off
+harness imported `git show HEAD:…/timeline_service.js` beside the
+refactored module and ran both over 6 plan variants × 6 dates × 18
+times × 2 moods = **1116 boot+resume+savePlan scenarios**, diffing
+the ordered dep-call log, the whole persisted state, every deck
+latch, the event ring and the full getState payload: **0
+differences**. A permanent guard ships in-suite (a verbatim copy of
+the pre-refactor core vs the resolver over 208 comparisons), plus a
+LIVE-SERVICE ORACLE (D5's option (b) used as the test oracle: a
+throwaway service booted AT each instant with recording deps).
+GATES: timeline family 340 → **387/387**; full engine suite
+2434/2442 (8 pre-existing/environmental — audio-device, EACCES,
+playlist drift; three more files that fail under parallel load pass
+47/47, 4/4, 11/11 in isolation); **19/19 REST checks** against a
+REAL engine + the real `playa_default` with sACN black-holed;
+security PASS; sim suite not run (zero shared files touched).
+CAUTION for S5: spawning an engine outside `npm test` (without
+`tests/helpers/setup_config_guard.mjs`) persists deck autopilot
+state into `marsin_engine/config.yaml` — MARSIN_STATE_DIR does NOT
+isolate it. Mine did; inspected + restored, file clean.
+**2 PRE-EXISTING ENGINE TRUTHS FOUND, PINNED BY TESTS, NOT FIXED**
+(fixing either breaks the byte-identical mandate): **F1** —
+`_catchUp` dispatches the restored cue and THEN calls
+`_establishBaselineIfActive`, which reloads
+`plan.autopilot.playlist` ON TOP, so a boot/resume inside a
+NON-PROGRAM cue's live window lands the deck on the BASELINE
+playlist, not the cue's. Programs are immune (programCaughtUp skips
+the baseline step); a defaultCue owner is applied after it. Invisible
+on the shipped plan ONLY because every look already points at
+`default` — **it bites the moment `_91`'s T1 look→playlist
+re-pointing lands.** **F2** — `_91`'s G1 is now VISIBLE on the wire
+as `source:'hold-expired-baseline'`: on hold expiry the arbiter
+resumes autopilot and reloads the baseline playlist but never clears
+the ownership latch, so the cue keeps OWNING while the baseline
+plays under it and the palette is never reset. The ribbon reports
+that rather than the cue's own playlist.
+FOLLOW-UPS: S5 should reuse `_93`'s `makeDryRunDeps` as a heavier
+cross-check oracle over a full simulated night; the ribbon does NOT
+carry a night's owner across midnight (inherited catchUp day-latch,
+documented — a `lookBackDays` option is the fix if the operator
+finds it confusing); `GET /timeline/overview` is now ~10 pure
+resolver calls per day, so S3 must fetch on focus/change, not on a
+timer. **S3/S4 build from `_95` §3 (the API surface).**
+**OPERATOR RULING (2026-07-31): discovery is an OPTIONAL stage of
+the controller lifecycle, not required** — manual typed-IP
+provisional binding must produce the full honest chain (patches,
+model lanes, bridge routes) with the board offline; first contact
+fetches missing data from the board, promotes to verified
+(controllerId-keyed), mismatches fail loudly into a reconcile
+dialog. Root cause named: the six `_92` dark ropes were
+configured-but-never-bound because binding required live
+discovery. **Session constraint while he TE-sign-patches live: NO
+server starts/kills/reloads, no browser on his stack, no device
+HTTP — agents unit-test only.**
+**`_96` reserved — optional-discovery lifecycle + controller
+ONLINE/OFFLINE status (IN FLIGHT, Opus):** provisional→verified
+state machine; acceptance = the six ropes + the TE sign
+placeholder controller patch end-to-end before boards power on.
+SCOPE ADD (operator mid-flight): per-controller ONLINE/OFFLINE/
+UNKNOWN badge — server-side parallel non-blocking probes, per-type
+transport (MarsinLED = HTTP, never ICMP; DMX gateway probe to be
+determined), cached, UI never stalls; provisional+ONLINE =
+first-contact promote moment.
+**OPERATOR CORRECTION (2026-07-31, urgent): TE signs are LED, not
+DMX.** _92's TeSigns-PLACEHOLDER DMX controller (U38/U39) was
+wrong — remove it entirely; signs must be LED-family fixtures
+end-to-end (scene type, projection, exporter, 2D views) and appear
+as mappable LED fixtures in the controller mapping pane for
+MarsinLED association (like rope strands; 74 px/sign). No
+replacement controller — provisional binding (_96) covers that.
+_92 agent RESUMED with the correction (addendum to its report; no
+new number). De-conflict: _96 owns led_discovery_panel/
+marsinled_client/device_config_mapper — _92-resume barred from
+those. Live-session constraints in force (operator patching signs
+in the running stack; scene files re-read before every write).
+NOTE: correction was first mis-sent to the _89 bench agent —
+recalled with a stand-down message; bench agent confirmed ZERO
+actions taken (read-only identity check only), _89 work stands.
+**OPERATOR GRANT (2026-07-31, away from desk): agents may launch/
+control the titanic services as needed** — live verification ON
+for in-flight threads (_92 correction, _96). Still forbidden:
+device HTTP to real boards, sACN output-enables to hardware,
+operator's Expo :6967, second stacks off standard ports.
+**`_95` LANDED** (see its board row/report): resolver byte-identical
+(1116 scenarios, 0 diffs), timeline suite 387/387, 19/19 REST,
+travel-while-dormant works; F1 boot-baseline clobber + F2
+(G1-on-the-wire) pinned not fixed; partyConfig omitted from
+resolver (dead param, documented); _goDormant preserves unexpired
+travel lease (judgment call, documented). F1 still needs a Notion
+Backlog card (no Notion access in agent sessions — coordinator to
+raise with operator).
+**`_97` reserved — zoom pad slices S3+S4 (IN FLIGHT, Opus):** one
+agent builds day zoom (phase bands + resolved ribbon) AND event
+zoom (PERFORM/TIME TRAVEL banners, steppers, D3 pendingDeferred,
+exit table) in CaptainPad against _95 §3; verify on :7167 fresh
+dist + live engine (service grant); operator's :6967 Expo
+untouched.
+**`_98` LANDED (2026-07-31)** —
+`202607/20260725_98_timeline_bugfix_wave.md`. All seven fixes in,
+each with a BEFORE/AFTER `timeline_dryrun.mjs` transcript on the
+REAL `playa_default` at 1-min resolution, seed 1.
+**1 (HIGH) suppressed party fire consumed the arm latch +
+cooldown:** triggers.js is pure and books at EVALUATION time; the
+arbiter then dropped the fire and `moodArmed` re-arms only on a
+return to CALM. The SERVICE now snapshots `moodArmed`/
+`moodLastFire` before evaluateTick and ROLLS BACK every mood fire
+the arbiter dropped (`snapshotMoodBookkeeping`/`rollbackMoodFire`
+exported from triggers.js). **Burn night + 8 h music: 0 → 27
+sessions**, first one on the exact tick the hold ends. Side
+effect handled: the trigger now re-asks every tick, so `wouldFire`
+went EDGE-ONLY (one entry per continuous episode). `getPartyStatus`
+gained additive `triggerArmed`; **NO new `effectiveState` value** —
+CaptainPad's parsePartyConfig THROWS on unknown ones.
+**2 catchUp disarm order:** disarm now precedes the dispatch (the
+live path's order). Restart mid-hold `ap OFF`/one pattern →
+`ap 90s seq`/rotating.
+**3 ambient-over-program:** arbiter gate `controller !== 'manual'`
+→ `controller === 'autopilot' && !programStartedThisTick`. Burn
+show owner time 0h30m → 2h00m; the dropped phase cue is surfaced
+as a wouldFire. KNOWN CONSEQUENCE (reported, not fixed): a phase
+edge is rising-edge once/night, so a phase cue suppressed under a
+program never re-fires — on burn night the post-show hours are the
+ambient defaultCue with sessions rising out of it, which IS
+requirement 1+2.
+**4 program look with no autopilot block:** new pure
+`lintShowPlan` + `planWarnings` on `/timeline/state` +
+console.error on every load/activate/save. **Deliberately a LOUD
+LINT, not a throw** — a throw would refuse to LOAD the running
+show (and the engine's own defaultShowPlan). **VERDICT: the
+shipped plan TRIPS IT 3× and still loads** — `sunrise`,
+`burn_night`, `temple` each need a 3-line autopilot block.
+OPERATOR PLAN EDIT, not touched.
+**5 party-look eviction:** `kind: ambient` = the plan's background
+layer; a timed cue displacing an open-ended ambient owner is
+remembered and the owner is re-applied when the window elapses.
+Fails closed (still enabled + still ambient + phase still active
+for a phase trigger; a mood owner is NEVER restored — D4). Night
+with two DJ sets: c_party_start 0h40m → 7h04m, fires 1 → 9.
+**6 (`_95` F1) boot-baseline clobber:** `_establishBaselineIfActive
+(reason, {keepRestoredDeck})` takes the baseline's BOOKKEEPING only
+when catchUp restored a live-owning non-program cue. The
+`clobberedByBootBaseline` pin in the live-service oracle FLIPPED to
+assert-the-fix (no clobber term left).
+**7 G1:** `__resume_autopilot__` releases the ownership latch and
+hands the deck to the `defaultCue` in the same tick (one write, no
+baseline flash); catchUp does the boot half via new
+`restored.holdExpired`; the resolver yields, so
+`source:'hold-expired-baseline'` is NEVER EMITTED AGAIN (left in
+the documented union so S3/S4 need no type change). A plan with NO
+defaultCue keeps today's baseline behavior exactly. **Quiet night
+`ambient` 0h → 12h20m (51%)**, palette resets too.
+Timeline suite 387 → **407/407** (+8 lint, +12 precedence tests);
+full engine 2449/2459 — 8 pre-existing/environmental + 1
+parallel-load flake (`view_fader_ramp`, 4/4 alone) + 1 NOT OURS
+(§8.3). Security check: 6 findings, all the pre-existing gitignored
+`.scene_backups` MACs. Sim suite not run — nothing under
+`simulation/` touched.
+**`whenPhase` restoration in playa_default.yaml REMAINS
+OPERATOR-GATED** — his scene file, never written.
+⚠ **HEADS-UP — `marsin_engine/config.yaml` is dirty:** its declared
+Titanic controller `host` has been replaced with a loopback
+black-hole. `git status` was CLEAN on that file at `_98`'s session
+start, so it belongs to a CONCURRENT thread running a black-holed
+engine. `_98` deliberately did NOT revert it (restoring the real
+host while another agent boots an engine would put live sACN on the
+rig) but **it must be restored before any commit**. The autopilot
+residue in the same file (`playlist.active`/`delay_s`) WAS restored
+by `_98` — caused by running an engine-spawning test without
+`tests/helpers/setup_config_guard.mjs`.
+**`_92` ADDENDUM LANDED (2026-07-31) — TE signs → LED:** DMX
+placeholder controller removed entirely (controllers 17→16, zero
+TE Sign rows in patches.yaml, U38/39 dropped); new first-class LED
+pixel fixture kind (definition `bus: led`; hinge module
+led_fixture_kind.js, ledMappableCounts = strands ∪ LED fixtures —
+neither projection changed a line; fixtureType strings unchanged,
+_48 one-panel-per-sign intact). 2 latent bugs fixed in passing
+(unmap identity loss; missing displayGroup key on LED last-layer
+gate). Pane proof live: 4 💡 sign chips in LED tray, no
+PLACEHOLDER. Suite 1571/8-baseline-fails/zero new. **Parity
+deliberately RED: 4 unmapped_fixture on sign halves — closes when
+operator maps them to a MarsinLED output. COLOR ORDER: RGBW —
+operator correction 2026-07-31 "sign is also RGBW, same lights as
+the ropes"; the agent's RGB claim was wrong, RGBW-audit thread
+resumed on the _92 agent.** Sim stack left DOWN by the agent.
+HEADS-UP surfaced: sACN input bridge boot crash addMembership
+EINVAL (pre-existing).
+**`_97` LANDED (2026-07-31) — TIMELINE ZOOM PAD SLICES S3+S4:**
+report `202607/20260725_97_timeline_zoom_pad.md`. Built against the
+landed `_95` §3 API; **zero engine changes**.
+**S3 DAY ZOOM:** the ladder is real — FESTIVAL -> DAY -> EVENT, the
+two browse rungs make ZERO engine calls (reviewing can never touch
+the rig). Day cards ZOOM IN on tap (`OPEN DAY >`), retiring the old
+select-vs-EDIT-DAY split; `DayEditor.tsx` DELETED and promoted into
+the new full-screen `DayView.tsx` carrying everything it had
+(agenda, + CUE, per-row edit/delete into the existing
+CueEditorSheet — no new edit semantics) plus **phase bands** and the
+**resolved ribbon**. A band whose end precedes its start is drawn as
+TWO pieces across midnight (`party_night` 21:34->05:23) — as one
+inverted rectangle it renders NOTHING and a whole night reads empty;
+pinned by test. Ribbon rows carry a plain-language reason per
+`source`. The engine's calendar-day limit is printed on screen, not
+faked. Missing `phases`/`segments` = a loud red block, never an
+empty ribbon sold as a review. Theme badges on day cards; the
+`SHIFT TONIGHT` slot is reserved, dashed and labelled inert (D8).
+**S4 EVENT ZOOM:** one sheet, one action, branch chosen by the
+ENGINE (`activeCue`) **and scoped to TODAY's card** — a cue-id-only
+test offered "perform tomorrow's show", caught by the live pass.
+PERFORM withheld out of window (takeover refuses to arm; a button
+that can only 400 is a lie); TRAVEL stays available while the plan
+is DORMANT — the rehearsal case and the rig's state today. Global
+`ZoomBanner` mounted outside `<Tabs>` so it floats over EVERY tab:
+green PERFORMING / purple TIME TRAVELING with prev/next steppers,
+EXIT on every client, and the D3 line "Show due: ... — starts when
+you exit" + ENABLE. Presence pings (30 s, banner-scoped) keep a
+hands-off performance alive and die with the banner.
+`PendingProgramOverlay` now STANDS DOWN under a zoom — it would
+otherwise count down to an auto-start the engine has deferred.
+**GATES:** tsc clean, CaptainPad **914 pass / 6 skip / 0 fail**
+(+22 new pinned tests), lint clean on touched files, security PASS.
+**LIVE-PROVEN on a fresh `:7167` dist against a real engine** (the
+operator's `:6967` Expo never touched): day zoom on the dormant
+shipped plan, PERFORM over the deck, TIME TRAVEL over the deck, the
+deferred banner 4 min into a hands-off performance with the deck
+live underneath, stepper retargets 23:50->12:51->00:30, the boundary
+400 printed VERBATIM (`no prev event on ...`, never clamped), a
+second client rendering the banner without auto-exiting, and the
+whole D3 loop end to end — the deferred show was NOT dismissed: on
+lease release `_catchUp` fired it.
+**ONE REAL BUG found live, fixed, pinned:** the engine clears the
+zoom and broadcasts on its own 1 s tick, which beats our `resume()`
+response back — so the operator's own tab-return exit raised a
+"zoom ended" alarm at the person who just asked to leave. The exit
+claim is now staked BEFORE the request leaves.
+**HONEST SLIP (`_97` §4.4):** the first verification engine streamed
+sACN to the real LED controller for ~30 s because `--dest` does NOT
+override `config.yaml`'s per-controller `controllers:` block. Killed
+on sight; host black-holed for every later run; `config.yaml`
+snapshotted and RESTORED (this is what clears `_98`'s pre-commit
+gate below). Throwaway in-window probe plan deleted; the test_bench
+timeline dir `diff -r`s IDENTICAL to its pre-run snapshot. Engine +
+dist server shut DOWN at the end, so `_99`'s deferred
+`launcher.js prod` is unblocked from this side.
+**NOTE vs `_98`:** `_98` fixed G1 at the source, so
+`source:'hold-expired-baseline'` no longer appears on the wire; the
+pad keeps the amber branch (one branch, correct against a pre-`_98`
+engine, loud if it ever returns). `_97`'s screenshots predate `_98`
+— re-shoot when convenient, the render path is identical.
+**REMAINING: S5 (e2e)** — CLOSED by `_100` (below).
+
+**`_100` LANDED (2026-07-31) — TIMELINE ZOOM E2E (S5): THE S1-S5
+WAVE IS CLOSED.** Report
+`202607/20260725_100_timeline_zoom_e2e.md`.
+**WHAT IT IS:** `marsin_engine/tests/e2e/` — a committed suite
+(`timeline_e2e_harness.mjs` + `timeline_zoom_e2e.test.js`, **17/17
+green**, ~2 min, inside `npm test`) that drives a REAL `engine.js`
+subprocess over REAL HTTP and REAL `/ws/control` sockets and
+restarts it by really killing it. `tests/timeline/*` pins the
+LOGIC; this pins the WIRING.
+**THE TWO PATHS NOBODY HAD EXERCISED LIVE, NOW COVERED:**
+(X6) **engine restart mid-zoom, BOTH scopes** — process dies, the
+rebooted ship has no zoom / no lease / mode `armed` / plan back on
+the deck, and a **reconnecting pad reads the truth on its FIRST
+frame** (the connect replay) — that is what stops a stale PERFORM
+banner surviving a reboot. (X4) **plan save mid-zoom** — the
+maker's auto-save hot-reloads, drops the zoom, returns the deck to
+plan-at-now, and the pad learns it **from the broadcast**, having
+never asked.
+**EXIT TABLE: every row covered** except *festival window closing*,
+which is UNIT-only for a STRUCTURAL reason (every e2e route to it
+runs through savePlan/activate, themselves exits — the scenario
+would assert the wrong row). Its observable consequence — a PERFORM
+cannot exist out of window — IS covered (E3, dormant rehearsal).
+**TWO CLIENTS (T1):** B gets the banner on its replay; B *browsing*
+changes nothing (A's zoom lives); B retargets the ONE session and A
+renders the identical zoom; B's EXIT ends it for both.
+**`_97`'s EXIT RACE PINNED E2E (T2):** the cleared-zoom broadcast
+genuinely arrives BEFORE the `resume()` response — the pad's
+pre-staked exit claim answers a real ordering, not a hypothesis.
+**`_98` FIX 1 PROVED LIVE (P1):** a party fire during a PERFORM
+lease is suppressed, VISIBLE (`wouldFire`, edge-only — one entry
+per episode not per tick), and consumes NOTHING (latch intact,
+cooldown unstamped) — so the session fires the instant the operator
+hands back.
+**THE `--dest` TRAP IS CLOSED AT THE SOURCE.** The honest problem
+behind `_97`'s 30 s of live sACN was that **there was no way to
+neutralise the per-controller `controllers:` block** —
+`engine.js loadConfig()` read the tracked `config.yaml`
+unconditionally and `MARSIN_CONFIG_FILE` governed only the
+autopilot write-back. It now governs the BOOT read too (fail-loud
+on a set-but-missing path), so a harness writes a black-holed
+config instead of editing the operator's file — the exact edit
+`_98` had to flag as a commit blocker. New **`MARSIN_TIMELINE_DIR`**
+does the same for the show-plan library: a test engine can no
+longer write plans into `scenes/**` (both `_95` and `_97` had to
+hand-restore that tree). Both walls **asserted on every boot**:
+every `[sACN Out] Sender started` line, no Art-Net sender at all,
+and `/status.outputRouting.controllers == []`.
+**BUG FOUND + FIXED (B1, in `_95`'s S1 code):** `buildDaySegments`
+sampled only where cues START (fire times + phase edges), never
+where they HAND BACK (`durationMin` end, program hold end) — so a
+segment ran from a cue's fire time to the next unrelated boundary.
+On the shipped plan that reported a 90-min hold as owning past its
+end; on the fixture it mis-stated **2 h 10 m**, exactly the stretch
+`_98` FIX 7 gives ambient. **The surface built to make the plan
+honest was lying about the biggest thing `_98` changed.** Fixed by
+adding the hand-back instants to the sample set; pinned by 3 tests
+incl. a full ribbon-vs-resolver equivalence walk over 3 days, and
+guarded e2e on the operator's real `playa_default`.
+**GATES:** timeline 407 -> **410/410**; full engine 2470/2478 (the
+8 baseline, zero new — `_98`'s 9th, `status_output_routing`, is
+GONE now the controller host is restored); CaptainPad **914 =
+baseline** (untouched); security PASS (7 pre-existing findings,
+none in touched files); **`config.yaml` CLEAN — nothing to
+restore**; operator's sim stack on :6969-:6972 never approached
+(engines on random 7700-7899).
+**FIXTURE HYGIENE:** the in-window plan is built at RUN TIME with
+NO festival block, and picks its own fixed-offset `Etc/GMT+-N` tz
+so "now" is always ~17:00 plan-local — the resolver's day-latch is
+per calendar day in the PLAN's tz, so a fixture pinned to a real
+zone would quietly stop testing anything between local midnight
+and 03:30. Nothing dated is committed.
+**FINDINGS, REPORTED NOT FIXED:** (F1) the "runtime-only" zoom
+lease IS written to `timeline_state.yaml`, scope/cueId/label and
+all — only the boot `_catchUp` scrub stands between it and a ship
+that wakes up believing a human holds the deck. The scrub works
+(X6 proves it on a real restart, both scopes) and is now the thing
+pinned; making it structural means omitting `operatorLease` from
+the persisted shape (`timeline_state.js`, outside S5 scope).
+(F2) entering ANY takeover — plain OR PERFORM — stands the deck's
+pattern autopilot down, so the look stops cycling while you perform
+under it. Follows from `_98` FIX 6 marking the restored cue's deck
+baseline-driven; NOT zoom-specific (E1b measures both and they are
+identical). Operator ruling, not a defect.
+**OPS DOC UPDATED:** `.agent/ops/timeline_e2e_tests.md` — the
+"wanted: a scripted runner" section is now the LANDED engine
+runner + its three-wall safety contract; the DOM/puppeteer half is
+restated as still wanted, with the engine harness as its model.
+**`_99` LANDED (2026-07-31) — sACN input-bridge `addMembership
+EINVAL` boot crash:** report
+`202607/20260725_99_sacn_bridge_einval_fix.md`.
+**ROOT CAUSE — NOT the NIC.** A direct probe joins 5 multicast
+groups successfully on this box three ways (iface unset,
+`0.0.0.0`, the adapter's own address); one Wi-Fi adapter, one
+private /24, healthy. The bug is **ours and it is an ordering
+race**: `new Receiver({universes})` keeps OUR array
+(`this.universes = universes`) and runs its join loop from the
+socket's `listening` callback — a tick later, **iterating that
+live array**. `sacn_bridge.js` then ran `recomputeRoutes('boot')`
+SYNCHRONOUSLY, and `addUniverse(u)` joins `u` NOW **and pushes it
+into the same array** → the deferred loop joined it a SECOND time
+→ duplicate `IP_ADD_MEMBERSHIP` = `EINVAL` on Windows. The package
+re-emits that as `receiver.emit('error')`; the bridge had ONLY a
+`packet` listener, and an EventEmitter `'error'` with no handler
+**throws** → dead before one frame. The repro is damning: the
+bridge's own log printed `added:[38], failed:[]` — SUCCESS — and
+the process died a tick later.
+**TRIGGER = DATA, not the box:** any universe in the boot union
+absent from the boot subscription list. When the `📡 Subscribed
+Universes` field is set it **REPLACES** the patch-derived list
+outright (`sacn_bridge.js:129-131`), so **a scene patched to a
+universe the field does not name crashes the bridge at boot**.
+`_92` passed through exactly that on U38/U39; **`_92` §A8 step 1
+(attach the TE signs to a MarsinLED output) re-creates it** —
+which is why this had to be fixed structurally, not by widening
+a field.
+**FIX (4 parts, no fallbacks):** (1) **boot gate** — nothing
+subscribes until the receive socket is listening; the held reason
+is replayed IN FULL one tick later and every deferral prints a
+line (ordering, not suppression); ordering is guaranteed because
+`socket.bind(port, cb)` registers the package's loop as a
+`'listening'` listener inside the constructor and ours registers
+after. (2) **classified `receiver.on('error')`** — an
+`addMembership` failure is loud + isolated, naming the interface,
+stating UNICAST still arrives while MULTICAST does not, and
+pointing at the config lever (the same contract
+`applyUniverseSubscriptions` already documents for the RUNTIME
+path — the two halves now agree); **every other socket error is
+FATAL** (`exit 1`, "refusing to run half-alive"). (3)
+**self-policing invariant** at `listening`: `receiver.universes`
+must equal the boot list, else hard exit naming the racing
+universes + "fix the ordering, do not retry" — a future refactor
+fails at startup with the diagnosis pre-written. (4)
+**deterministic + logged interface selection** — the boot log now
+always states which interface the joins use plus the full IPv4
+inventory, warns when several NICs are up (OS choice = coin flip)
+or none is (the brief's original hypothesis, now a NAMED
+diagnosis); optional `sacn_interface` in `simulation/config.yaml`
+pins it and **throws with an inventory** on a mismatch or an
+ambiguous adapter — never a silent NIC switch. Unset = the
+shipped behavior, printed as such.
+**FILES:** new `simulation/lib/sacn_receiver_boot.cjs` (all four
+decisions, pure) + new `simulation/tests/sacn_receiver_boot.test.js`
+(19); `server/sacn_bridge.js`, `lib/load_ports.cjs`,
+`config.yaml`. `_89`'s uncommitted bench-mirror work in
+`sacn_bridge.js` untouched (the gate is one line at the top of
+`recomputeRoutes`).
+**PROOF:** divergence re-created against the REAL bridge (field
+narrowed to 1-27 while titanic patches U30/U31) → held →
+listening → `runtime-subscribed U30/U31`, no EINVAL, no exit;
+`common.yaml` restored **byte-clean** (0 lines vs HEAD). Sim
+**1590 / 8 fail = the documented baseline 8, zero new** (+19,
+incl. 2 LIVE receivers pinning both orderings on throwaway ports).
+security_check: 6 findings, all pre-existing MACs in gitignored
+`.scene_backups/studiodj/**`, none in touched files.
+**STACK LEFT UP:** sim servers `npm start` pinned `titanic` —
+:6969/:6970/:6971/:6972 + UDP 5568 (same pid as :6971), re-verified
+alive at hand-off by port + pid + live HTTP/WS probe. While the
+engine was still up the input bridge was measured receiving
+**1168 pkt/5 s from `MarsinEngine`** on U1/U2/U10/U12 via a
+read-only monitor WS probe (no `setScene`, so no relay route
+added). **`launcher.js prod` was REFUSED by the permission gate**
+(blocked-by-classifier) on the one attempt, and NOT worked around
+— that, not a judgement call, is why the prod shape is
+incomplete. It had also been held off earlier for a real reason
+worth remembering: `launcher.js:1025` force-claims ports for
+`prod` by default and would have killed `_97`/`_98`'s engine on
+`:6968` (`/status` = `test_bench`, `25_heartbeat`); there is no
+`--no-force`, and `--no-kill` still collides on the engine port.
+**:6966/:6967/:6968/:7167 are ALL DOWN now** — the concurrent
+threads released them; the bridge logged the transition correctly
+(`⚠ Engine on :6968 unreachable — engine-scene routes and
+dual-source suppression are OFF until it returns` + 3 `Route
+removed`). Operator finishes with one command:
+`node launcher.js prod --scene titanic` (it absorbs the running
+sim servers; nothing to stop first). **Before he does:**
+`marsin_engine/config.yaml` is now CLEAN vs HEAD with a REAL
+`10.x.x.NN` Titanic host — the loopback black-hole in the
+pre-commit gate below is already restored, so a `prod` start puts
+engine frames on the wire toward that controller.
+**NOT MINE:** `_99` never started the engine and never wrote
+`marsin_engine/config.yaml` — the loopback black-hole host in the
+pre-commit gate below belongs to the other engine-running thread.
+**FOLLOW-UPS FILED (backlog):** (a) the `📡 Subscribed Universes`
+field REPLACES rather than widens the boot list — a field edit can
+still silently narrow what boot joins (belongs to `_87`'s
+save-time gate); (b) `launcher.js prod` has no `--no-force`, so
+the show profile can only start by killing whatever holds its
+ports — unusable beside a concurrent agent or a hand-started
+engine.
+**⚠ PRE-COMMIT GATE (coordinator, 2026-07-31) — RESOLVED by `_97`:**
+`marsin_engine/config.yaml`'s LOOPBACK BLACK-HOLE host for the
+Titanic controller was **`_97`'s**, set deliberately after its
+first verification engine streamed sACN to the real controller for
+~30 s (`--dest` does NOT override the per-controller `controllers:`
+block — see `_97` §4.4). `_97` snapshotted the file before the run
+and **RESTORED it at the end**; `git status` shows
+`marsin_engine/config.yaml` unmodified and the real host back in
+place. `_98` was right not to revert it mid-run. Re-run
+`status_output_routing.test.js` — its failure was this file.
+**OPERATOR EDITS OWED (from _98's lint, his scene file):** the
+shipped playa_default trips the new no-autopilot-block lint 3× —
+`sunrise`, `burn_night`, `temple` looks each need a 3-line
+autopilot block (else the deck freezes on one pattern for those
+holds); plus the standing whenPhase party_night restoration.
+**`_100` reserved — timeline zoom e2e S5 (IN FLIGHT, Opus, wave
+closer):** every exit-table row incl. the two never-live-tested
+(engine restart mid-zoom, plan save mid-zoom), two-client
+scenarios, party-vs-zoom interplay, post-_98 conformance smoke;
+sACN black-holed via controllers-block neutralization (never
+--dest, the _97 trap); operator's up-and-pinned sim stack left
+alone, throwaway ports only. Closes S1–S5.
+**`_101` LANDED (coordinator, 2026-07-31) — operator test
+checklist:** stable snapshot report of the whole wave's do-this→
+see-that checks (also live with tick-boxes atop the master doc),
+RGBW correction baked in. Operator orders in force: coordinator
+BABYSITS the _100 e2e run + the _92 RGBW audit; REMIND the
+operator on his return to pick up the checklist (top items: map
+the signs RGBW, rope provisional bindings, yaml edits).
+**`_92` CORRECTION #2 LANDED (2026-07-31) — RGBW audit:** wire
+level was already correct (stride/order comes from the owning
+output's led.order at runtime); all HUMAN-readable artifacts were
+wrong and are fixed — definitions regenerated `type: rgbw` 4 B/px
+and RENAMED model_a_160/model_b_136, generator pins
+BYTES_PER_PIXEL=4, catalog row fixed, old "set RGB" instruction
+struck through in place with dated corrections (never rewritten).
+One sign = 296 ch (not 222), still one universe. Parity unchanged
+(4 unmapped awaiting operator mapping); suite 1592/8-baseline/zero
+new. FINAL MAPPING INSTRUCTION: chain the 4 halves on a MarsinLED
+output running RGBW/stride 4 (same as rope outputs) and save.
+**`_102` LANDED (2026-07-31) — same-address merge with warning**
+(`20260725_102_same_address_merge.md`, Opus). Operator feature order
++ emphasis "but the UI must show that that's a warning".
+THE SWEEP FOUND EXACTLY ONE HARD REFUSAL: `derivePerOutputPlan`'s
+`universe_owned` collision (device_config_mapper.js), which blocked
+the single push, the fleet push AND the sync chip. Now a
+`sharedUniverses[]` entry mirrored into `warnings[]`. The other
+three overlap sites (validateLedManualUniverses,
+computeProjection's per-universe sweep, the bridge's cross-scene
+conflict) were ALREADY warnings — unchanged.
+MERGE RULE (one-liner): overlapping claims are allowed; each
+(universe, destination IP) gets exactly ONE packet, and on any
+contested channel the numerically HIGHER controller IP overrides.
+IP compare is octet-wise NUMERIC (`a*2**24`, never `a<<24` — a
+signed shift ranks every ≥128.x below every 10.x); string ordering
+gets `.9` vs `.10` backwards, which is why. Contested
+region = the INTERSECTION only. Global-effect gang-fire pins exempt.
+NEW PURE MODULE `simulation/src/dmx/address_merge.js`.
+UI (4 surfaces): PERSISTENT amber card banner in the mapping pane
+(NOT a toast — he maps for an hour), naming both claimants + exact
+(U, ch a–b) + winner; push dialog `⚠ N SHARED ADDRESSES` block
+placed FIRST; sync chip stays in-sync but carries the warning in
+its tooltip; `[AddressMerge]` console + fleet-push detail. Blocking
+grade is a visually distinct RED banner (test pins the two
+headlines/colours can never be equal).
+RUNTIME: override is order-INDEPENDENT — the loser is handed the
+absolute channels it must not write (index built once per
+projection in main.js `publishAddressMergePlan`, resolved once per
+pixel in sacn_mapper, keyed by IP), incl. the par master-dimmer
+force-write.
+ASYMMETRY KEPT: an EXPLICIT operator universe may be shared;
+auto-assign (repair, park) still SKIPS every claimed universe — the
+sim never chooses to create a shared address.
+`_89` INTERPLAY: composes WITH it. Mirror unifies at the BRIDGE
+(owns dest pairs, suppresses raw relay); this unifies at the SIM.
+sacn_bridge.js / bench_mirror.cjs / bridge_routing.cjs UNTOUCHED —
+the uncommitted `_89`/`_99` work is intact.
+GATES: sim 1592 → 1645 (+53), fail 8 → 8 baseline byte-identical;
+security PASS (one self-inflicted finding fixed: real routable
+a real routable IP, first octet 128, in a test → RFC 5737
+TEST-NET-2). LIVE 13/13 +
+4 screenshots (`~/tmp/shared_address/`, `2_shared_address_warning.png`
+is the operator's required evidence) via new
+`agent_tools/shared_address_verify.cjs` — sACN OUT socket blocked
+AND asserted at framesSent=0, zero device HTTP, zero scene writes
+(in-memory injection with RFC 5737 IPs, removed after; last shot
+shows the pane restored).
+⚠ **TWO OPERATOR DECISIONS OPEN** (report §4): a SAME-IP overlap and
+a NO-IP/placeholder-IP overlap remain HARD ERRORS with named
+reasons — his rule ranks IP-BEARING claimants only, and a tie-break
+would be a fallback he did not ask for. A rule for either must come
+from him.
+⚠ **RESIDUE REPORTED (report §9):** the probe's FIRST runs (before
+the save-server guard) re-exported `marsin_engine/models/test_bench.js`
+— main.js calls saveModelJS() on page boot. NOT a regression: the diff
+is the timestamp + the 76 TE-sign pixels flipping dmx→led/unpatched,
+i.e. the `_92` correction landing in the export; suite byte-identical
+before/after. LEFT IN PLACE (never `git checkout` to hide a test side
+effect). Probe now aborts every non-GET to :6970 (the `_89` GUARD-3
+recipe) — re-verified: 4 writes aborted, 14/14 checks, model
+byte-identical. SEPARATE, NOT MINE: `simulation/scenes/common.yaml`
+`colorWave.lightingMode: sacn_in → pixelblaze` (mtime 45 min before my
+first probe run) — flagged for the operator's commit-time judgement.
+⚠ **MEMORY AMENDMENT PENDING** (report §7, coordinator to apply):
+`sacn-route-ownership`'s flat "one writer per (universe,controller)
+is the law" now needs TWO enforcers — the bridge's suppression AND
+the sim's merge; the sim preserves the invariant by MERGING, not by
+refusing. Proposed wording is in the report.
+**`_102` LANDED (2026-07-31):** only ONE hard refusal existed
+(derivePerOutputPlan universe_owned) → now sharedUniverses[] +
+warnings[]; merge = one packet per (universe, dest IP), higher
+controller IP wins contested channels (octet-wise NUMERIC —
+signed-shift and string compares both rank wrong); UI = persistent
+amber banner on the card + ⚠ block FIRST in push dialog + sync-chip
+tooltip (screenshots in ~/tmp/shared_address/). Same-IP and
+no-usable-IP conflicts stay HARD ERRORS (2 operator decisions if
+auto-resolution wanted). Suite 1645/8-baseline/zero new; 14/14
+live checks, sACN OUT asserted zero frames. Bench mirror files
+untouched. **Coordinator applied the _102 §7 one-writer amendment
+to the sacn-route-ownership memory.** Residue notes: test_bench
+model re-export left in place (it's the _92 correction landing —
+legit); scenes/common.yaml lightingMode sacn_in→pixelblaze is
+UNCOMMITTED and NOT agent-made (mtime predates the probe —
+presumed operator; flag to him before any commit).
+**ALL WAVE THREADS LANDED — day total _89–_102 (13 + 2
+corrections).**
+**ADVERSARIAL RED-TEAM SWEEP (operator order 2026-07-31 "break it
+in the name of bulletproofing"): 6 Opus agents launched, report-
+only, ~/tmp repros, non-overlapping attack surfaces —**
+`_103` timeline/arbiter/party · `_104` zoom/lease/exit-machine ·
+`_105` sACN bridge/routing/bench-mirror/merge · `_106` controller
+lifecycle/provisional/status/push · `_107` fixtures/patch/exporter/
+parity/2D · `_108` engine API + CaptainPad contract. All under
+test-harness hygiene: throwaway engines random high ports, config
+black-holed via MARSIN_CONFIG_FILE, MARSIN_TIMELINE_DIR, operator
+stack (:6969-72) + :6967 untouched, zero device HTTP, zero sACN to
+hardware. Coordinator to synthesize findings + triage into fix
+threads on landing. **RED-TEAM SWEEP COMPLETE + SYNTHESIZED (`_111`, coordinator,
+2026-07-31).** 8 reports in: `_103` timeline(1H/1M/5L), `_104`
+zoom(1H/2M/2L), `_105` bridge(1H/3M/3L), `_106` controller(2H/3M/
+3L), `_107` fixtures(2H/2M/2L), `_108` API(**1 CRITICAL**/1M/4L) —
+the six commissioned — plus **UNCOMMISSIONED** `_109` controllers/
+merge(4P1/7P2/10P3) and `_110` sim-UI(4P1/6P2/6P3) (agent IDs not
+in the launched six; self-numbered _104/_106 then bumped; verified
+safe — suite byte-identical, no source/scene/git writes of their
+own, localhost-only; presumed parallel operator batch; flagged not
+absorbed). **THE CRITICAL: a malformed WS frame kills the engine
+→ dark ship, no restart (_108).** Findings cluster into 7 families
+(synthesis _111 §): A dark-ship/unhandled-error-kills-process
+(★ has the CRITICAL + _109 P1-1 save-server crash + launcher
+no-restart), B parity green-but-wrong (_107 ×2 + _105 boot
+universe — OPERATOR-FACING, green ≠ routable/correct-stride,
+interim guidance given), C _102 merge edges (_109 gap-wins-dark +
+auto-assign-share + _105 mirror double-write), D provisional UI
+(_106 ×2 dead ip guard + dialog stack + _109 probe wedge), E zoom
+pad exit-latch leak (_104), F sim save race + innerHTML XSS (_110
+×4), G party re-fire thrash (_103). Engine cores HELD (REST hard,
+never-stuck held, _99/_98/_102-core intact). **Fix plan: 3 waves,
+family=thread, ALL operator-gated (none launched).** W1 dark-ship
+(launch first), W2 parity+party+merge, W3 provisional+zoom+save/XSS.
+**Coordinator redacted 5 example IPs in _105 → report-IP commit
+blocker CLEARED; tree carries only 6 pre-existing gitignored
+.scene_backups MACs (not a --staged blocker).**
+**RED-TEAM 2ND-PASS ADDENDUM (a THIRD uncommissioned adversary,
+landed after the _111 synthesis) — _105 SECOND PASS via the
+real-Packet method:** 5 P1/8 P2/8 P3, 18 net-new. **NEW FAMILY H —
+DMX value-path fidelity (the reframe):** H1 (P1 LIVE) the sim
+renders a 39% ship — the bridge sends browsers the sacn PERCENT
+payload (value/2.55) that the browser reads as raw DMX
+(sacn_bridge.js:1002 vs sacn_input_source.js:212): engine 255 →
+browser 100, ~39% cap / 101 grey levels; relay to HW byte-exact,
+only the browser wrong → every sim visual judgment made today was
+read off a 39% instrument (under-reads brightness, so real output
+is BRIGHTER than it looked, not dimmer). ADJACENT (LIVE, engine
+output, wants an owner before rig tuning): raw-DMX producers
+×2.55-and-clamp (sacn_output.js:80, sacn_output_bridge.js:141) →
+DMX 100 → wire 255, top ~60% of every fader saturated on the RIG.
+H2 (P1 LIVE) one hardcoded DEFAULT_CID project-wide → two same-CID
+sources drop 39/40 frames = THE _15 flicker mechanism. H3 (P1 LIVE)
+priority lockout is GLOBAL not per-universe (one prio-150 frame
+halts all relay 10s). H4 dup boot-fatal universe; F2 re-confirm
+mirror dual-write. Boot gate HELD under the deeper attack.
+Coordinator re-checked: the _105 IP redaction SURVIVED the
+concurrent append; _105 still report-IP-clean. **Family H → Wave 2,
+leads it (governs both the instrument the show is judged on AND the
+rig's emitted levels). _111 addendum updated.**
+NOTE: uncommissioned adversaries now number FOUR (_109, _110, the
+_105 second-pass, _112 pattern-VM) — a parallel operator batch;
+each verified safe + flagged, findings triaged like the six.
+**_112 PATTERN-VM (2 P0/5 P1/5 P2/8 P3) — NEW FAMILY I,
+pattern-VM never-black + content-path safety, ★ hits the live
+ChatGPT loop:** I1 (P0 LIVE) NaN in any rgbwau()/hsv() arg blacks
+the whole pixel and is absorbing (no runtime R4 enforcement
+anywhere); I2 (P0 LIVE) beforeRender budget overrun truncates
+SILENTLY → whole ship black from a clean-compiling pattern (house
+precompute-before-palette idiom triggers it; wasm ABI can't report
+it); I3 (P1 LIVE) a playlist entry that exists-but-won't-compile
+permanently wedges sequential autopilot = EXACTLY the ChatGPT
+loop's failure mode (compile before activeEntryId write; daemon
+swallows throw; picker re-selects forever); dup entry ids wedge
+cursor 0 silently; I4 (P1) the _90 audit harness ALWAYS exits 0 —
+a 100%-black pattern + a post-window sleeper both pass all 4 bars,
+so it can't catch I1/I2 (harden before trusting on more ChatGPT
+output); 4-mixer hostile pattern = 114% frame budget, no guard
+(shipped patterns fine). Held: forbidden constructs reject loud,
+no cross-VM corruption, zero leak 2400 cycles/72k frames.
+**SWEEP TOP TIER IS NOW 1 CRITICAL + 2 P0, ALL "DARK SHIP" →
+Family I joins Family A in WAVE 1.** _111 updated with both addenda.
+**_113 RIBBON/STATE (FIFTH uncommissioned adversary; 2 P0/2 P1/3
+P2/5 P3) — NEW FAMILY J, both P0 dark-ship:** J1 (P0 LIVE)
+GET/POST /timeline/overview builds the _95 day ribbon SYNCHRONOUSLY
+on the HTTP thread O(days×cues²) — 512 cues (the schema cap) = 296s
+frozen engine, render loop+sACN+tick share it, no restart; **this
+is the endpoint DAY ZOOM calls**, so a grown plan can freeze the
+ship on open (fix: paginate/async/cache off-thread). J2 (P0 LIVE)
+corrupt timeline_state.yaml kills the timeline silently —
+loadTimelineState validates only the 5 party fields, a bad
+firedToday/moodArmed throws every tick (caught) → plan drives
+nothing all night, engine looks healthy (fix: fail-closed validate
+every persisted field). J3 (P1) ribbon vs live tick disagree on
+same-fire-time cues (resolver picks first, tick ends on last → a
+reboot flips the deck); hold.min-unbounded. Held: SIGTERM-mid-zoom
+clean both scopes, no proto pollution, caps enforced, 12-round
+storm armed/lastError null. **TOP TIER NOW 1 CRITICAL + 4 P0, ALL
+DARK SHIP (WS-crash _108; NaN-black + beforeRender-black _112;
+overview-freeze + corrupt-state-death _113) = a SYSTEMIC class:
+several single-thread-block/silent-death vectors, launcher
+supervises none. WAVE 1 = one hardening campaign (per-socket +
+process backstops + LAUNCHER WATCHDOG for freezes + fail-closed
+state validation + R4 runtime enforcer + _90 harness hardening):
+nothing silently blacks/freezes the ship, and if it does it
+restarts.** _111 updated with the J addendum. Uncommissioned
+adversaries now FIVE.
+**COORDINATOR RENUMBER (2026-07-31):** the CaptainPad red-team
+(SIXTH uncommissioned adversary) wrote its report as
+`20260725_107_redteam_captainpad.md`, colliding with the earlier
+`_107_redteam_fixtures.md`. Coordinator moved it to
+`20260725_114_redteam_captainpad.md` (older fixtures `_107` kept —
+already referenced in _111 + ledger), fixed its internal
+self-refs (title, §7 board-row) and this tracker's filename
+pointer. Findings folded into _111 as the CaptainPad addendum
+(Family E + new K1). **K1 (P1 LIVE): CaptainPad has NO React error
+boundary anywhere — one unknown transition.mode
+(timelineTemplate.ts:185 unguarded map lookup) white-screens the
+ENTIRE pad = control-surface dark-ship analog; leads Wave 3 or
+promote to Wave 2.** K2 confirms the Family-E exit-latch leak from
+the pad side (live A/B); K3 banner asserts live lease after link
+death; K4 empty segments = blank "completed" review; K5 stepper
+makes pad B claim the zoom → ends pad A's (D1 violation). No P0.
+CaptainPad vitest 914 pass baseline. Uncommissioned adversaries
+now SIX.
+**COORDINATOR RENUMBER #2 (2026-07-31):** the chaos/never-stuck
+red-team (SEVENTH uncommissioned adversary) also wrote `_114`,
+colliding with the just-renumbered CaptainPad `_114`. Coordinator
+moved it to `20260725_115_redteam_chaos.md`, fixed its internal
+refs + this tracker's pointer. **L1 (P0 LIVE): start.js is blind to
+the death of every child server (save/sACN-in/sACN-out) — launcher
+supervises start.js not its children, `launcher.js status` probes
+only :6969/:6968, deploy.py verify passes → RIG DARK, ALL
+DASHBOARDS GREEN until a human looks at the lights.** This is the
+supervision-gap proof under Family A: the Wave-1 watchdog must
+health-check every child + verify frames flow, not just that 2
+ports answer. L2 (P1 LIVE) backward wall-clock step permanently
+strands the party cue (no last>now clamp; playa RTC drift/AC-restore
+real). L3 (P1) RE-CONFIRMS _113 J2 corrupt-state dead-but-armed
+(now 2× independent → fail-closed state validation double-confirmed).
+L4 (P2 LIVE) IPv4/IPv6 port shadowing defeats checkPortFree (::
+bind reports FREE while IPv4 squatter serves clients). L5 (P1)
+failed state write returns 200 {saved:true} (SAVED badge lies,
+Family F). L6 (P1) -f kills stack before arg-validate. Held:
+_writeFileAtomic crash-safe (8 kill-9, 0 torn), 330ms boot,
+runtime-state scrubbed, bridge survived 4 engine deaths.
+**REVISED TOP TIER: 1 CRITICAL + 5 P0, ALL DARK SHIP. Wave-1
+watchdog reframed: actively health-check every child + verify
+frames flow (green dashboards lie); + last>now clamp + fail-closed
+state validation (2× confirmed) + save-write honesty + port
+override for testability.** Uncommissioned adversaries now SEVEN.
+_111 updated with the chaos addendum.
+**WAVE 1 LAUNCHED (operator "go" 2026-07-31) — dark-ship hardening
+campaign, 4 Opus threads, DISJOINT file ownership (parallel-safe),
+each flips a red-team repro into a GREEN regression test, all
+source-editing (first fix wave — still commit-gated on operator):**
+`_116` W1-1 engine crash-proofing — OWNS marsin_engine/{engine.js,
+lib/api_server.js, lib/timeline/*}: WS per-socket error handlers
+(the _108 CRITICAL) + process backstops + overview off-thread (J1)
++ fail-closed timeline_state validation (J2/L3) + content-path
+compile-before-commit/skip-broken/dedup-id (I3) + backward-clock
+clamp (L2) + engine save-honesty (L5).
+`_117` W1-2 launcher watchdog — OWNS simulation/{start.js,
+launcher.js}: real child supervision + freeze detection + honest
+status (L1 capstone) + IPv4/IPv6 port-shadow fix (L4) +
+arg-before-kill (L6) + port override for testability (P2-6).
+`_118` W1-3 pattern-VM never-black — OWNS VM/wasm host +
+pattern_audio_harness.mjs: runtime R4 enforcer (I1 NaN-black) +
+beforeRender-overrun surfacing (I2) + harden the _90 audit harness
+(I4, protects the LIVE ChatGPT loop). Hands a health hook to W1-1.
+`_119` W1-4 save-server/probe crash-proofing — OWNS
+simulation/server/{save-server.js, controller_probe_service.cjs}:
+probe-crash fix (_109 P1-1) + absolute probe deadline (P1-3) +
+save-honesty (L5) + non-crashing body validation.
+Handoffs noted: W1-3 never-black signal → W1-1 /status; W1-2
+watchdog consumes W1-1 honest /status + the bridge frame-flow
+monitor. Coordinator integrates + verifies suite on landing;
+Waves 2 (parity/party/merge/DMX-value-fidelity incl. H1 39%-sim +
+×2.55 saturation) and 3 (provisional/zoom/save-UI/XSS/pad
+error-boundary K1) still queued, operator-gated.
+**WAVE 1 COMPLETE + COORDINATOR-INTEGRATED (2026-07-31). All 4
+threads landed, ALL top-tier findings CLOSED (1 CRITICAL + 5 P0):**
+_119 W1-4 (probe crash survived, save-honesty, +12 tests) · _117
+W1-2 (real child supervision + freeze detection + honest status =
+capstone L1 closed; port-shadow, arg-before-kill, port-override;
++6 tests) · _118 W1-3 (runtime R4 never-black enforcer floors
+output + trips renderHealth on NaN/beforeRender-overrun; _90
+harness --gate FAILs black/latch/over-budget; +16 tests; wired to
+/status) · _116 W1-1 (WS-frame CRITICAL per-socket handler +
+process backstops + overview 296s→347ms + fail-closed state
+validation + autopilot-wedge skip/dedup + backward-clock clamp +
+save-honesty; timeline 410→431; wired W1-3 never-black into
+/timeline/state). **COORDINATOR INTEGRATION VERIFICATION (full
+suites, all 4 threads present together): engine 2518/2510/8, sim
+1663/1655/8 — BOTH at the known baseline 8 (engine=audio/osc/
+effects-v2-pollution/playlist-drift env; sim=stale-model +
+compression + _92 TE-sign-awaits-mapping parity), ZERO new from
+Wave 1. Tree commit-clean: no report-IP blockers, config.yaml
+clean, only 6 pre-existing gitignored .scene_backups MACs.** The
+TE-sign strand_metadata_drift in titanic parity is the _92 RGBW
+transitional state awaiting operator sign-mapping (NOT a Wave 1
+regression — Wave 1 touched no fixtures/models/scenes/parity).
+WAVE-1 FOLLOW-UPS (not blockers): (a) W1-1 spawned bg task for
+StateManager.save() in lib/state_manager.js swallowing atomic-write
+errors (shared core, needs a strict explicit-save path); (b) W1-2
+wants a census-neutral /health on both sACN bridges + a frame/output
+indicator on engine /status for CONTINUOUS (not on-demand)
+frame-flow supervision; (c) _115 P2-3 status/stop refuse on corrupt
+lock — unowned. OPERATOR ACTIONS: add `--gate` to the _90 ChatGPT
+harness recipe (W1-3); map the TE signs RGBW (clears the parity
+drift). WAVES 2 (parity blind spots + party thrash + merge edges +
+DMX value-fidelity H1 39%-sim + ×2.55 saturation) and 3
+(provisional + zoom exit-latch + sim save/XSS + pad error-boundary
+K1) STILL QUEUED, operator-gated. Day's work (from be58eea7) is
+large + commit-clean, awaiting operator's commit word.
+**`_120` reserved — Wave-1 follow-up: strict save-now path (L5
+root, operator-ordered 2026-07-31, IN FLIGHT, Opus):** the W1-1
+handoff — state_manager.js `save()` (~:121) SWALLOWS atomic-write
+errors (only _writeFileAtomic re-throws), so POST /settings/save-now
+persists deck/mixer/globals and still returns 200 {saved:true} on
+disk-full/EBUSY → CaptainPad SAVED badge lies (_115 L5). Fix per
+operator spec: add a STRICT save path (saveStrict/options flag
+threaded through saveMixerState/Deck/Globals) used ONLY by explicit
+save-now → honest non-200; the ~80 AUTO-SAVE triggers stay
+best-effort/warn-only UNCHANGED (else a transient blip hits W1-1's
+exit(1) backstop = dark ship). Regression test: read-only/file-as-dir
+stateDir → save-now non-200 while auto-save stays silent. Timeline
+path already honest. Shared-core file (why W1-1 deferred it); Wave 1
+fully landed so no collision.
+Next free report after reservations: `_121`.
+**`_112` RED-TEAM LANDED (2026-07-31, Opus, report-only) — PATTERN VM +
+playlist/autopilot content path** (7th red-team surface, commissioned
+after the six; brief said `_108`, taken → `_112`). Motivation: the
+operator now feeds ChatGPT-authored patterns into the engine (`_90`).
+**20 findings: 2×P0, 5×P1, 5×P2, 8×P3.** THE TWO P0s ARE BOTH
+DARK-SHIP-BY-SILENCE, family A: (1) a **NaN in any one arg to
+`rgbwau()`/`hsv()` blacks the WHOLE pixel** — all 6 channels — and NaN
+is absorbing in persistent state, so one bad frame blacks the pattern
+forever; (2) **`beforeRender` shares the ~5000-instr budget and blowing
+it TRUNCATES the function silently** (no red, no error, no log) — put a
+heavy loop before the house `_hsv2rgb1/2()` palette resolve and the rig
+renders FULLY BLACK from a clean compile. **Nothing in `marsin_engine/`
+enforces R4 "never fully black" at runtime** (grep: one offline print in
+`pattern_audio_harness.mjs:313`; `getRenderHealth()` covers blend errors
+only). P1s: a playlist entry that EXISTS but won't COMPILE permanently
+wedges the sequential deck autopilot (proven live, 8 ticks, no client
+signal — the ChatGPT loop's exact failure mode); **duplicate entry ids
+wedge the deck at cursor 0 with ZERO log** (`save()` rejects dups,
+`load()` doesn't); an ≥8M-element `array()` grows the WASM heap and
+**detaches the cached `coordView`/`metaView`**, making `setCoords` /
+`setPixelMeta` / `applySizeScale` permanent SILENT no-ops (dead SIZE
+fader, frozen fixture meta, unrecoverable without restart); a corrupt
+`config.yaml` makes the **Autopilot ctor truncate it 3866→59 bytes**
+(3 empty catches, `autopilot.js:86,93` + `engine.js:139`); and the
+**`_90` audit harness always exits 0** — a 100%-black pattern passes,
+and a sleeper that latches black after the audited window clears all
+four documented bars. P2s: no frame-budget guard (**4 channels of a
+hostile-but-LEGAL pattern = 28.6 ms = 114% of the 25 ms budget**;
+shipped 68 mean 0.75 ms / worst 5.67 ms on titanic); over-budget
+`render3D` = **whole rig SOLID RED, silently**, at only ~300 loop
+iterations; the precompile/ping-pong **warm slot reuses a handle by
+pattern NAME without re-reading the file** + no patternsDir watcher
+(stale code after a ChatGPT save); all-missing-under-live-assignment
+stops the autopilot with **no log at all**; `array(n)` uncapped (1.5 GB,
+silent lost writes). HELD: reserved names + every forbidden construct
+reject loudly; **no cross-VM memory corruption**; limiter is cheap;
+playlist hot-rewrite recovers cleanly; corrupt playlist YAML is loud +
+deck holds (not black); all-missing ASSIGN 400s; 1000-entry playlist a
+non-event; zero leak over 2400 compile/destroy + 72k frames. Feeds
+family A (the two P0s + the F3/F4 wedges) and adds a new family:
+**content-path silence**. Repros `~/tmp/redteam_vm/` (17 harnesses).
+HYGIENE: zero source/suite edits, **zero writes to
+`marsin_engine/patterns/**`** (poison entry = the shipped
+`patterns/examples/inview_demo.js`, which won't compile on test_bench);
+engines on 7950-7999, `assertBlackHoled()` on every boot;
+`marsin_engine/config.yaml` byte-identical to HEAD before + after;
+**engine suite re-run at close: 2482/2474 pass, 8 fail = the documented
+environmental baseline, no new failures**; no git ops. **Notion board row NOT filed — no Notion MCP tools available in
+this session; operator to enable the connection.**
+**`_103` RED-TEAM LANDED (2026-07-31, Opus, report-only) — timeline /
+arbiter / party-session lifecycle (triggers, arbiter precedence,
+festival/sun/tz math, cue/look/phase resolution, plan lint, sustain/
+session/cooldown/arm-latch):** 1 HIGH, 1 MED, 5 LOW, no CRITICAL.
+Weaponised the `_93` dry-run harness (offline, writes only
+`~/tmp/timeline_dryrun/`); no engine spawned, no source touched,
+`config.yaml` CLEAN vs HEAD (absent from git status before + after),
+no `:6967`/`:6969-:6972`/device/sACN. Repros `~/tmp/redteam_timeline/`
+(pathological plans + `flip.json`/`flap.json` mood tracks +
+`FINDING_refire_storm.txt`). **The trigger/arbiter/festival/sun cores
+HELD** — DST fall-back de-dupes the repeated 01:30, polar/degenerate
+sun fails safe to the defaultCue, overlapping `durationMin` windows
+rejected at load, festival day-gating exact + out-of-window refuses
+loud, missing playlists fail loud (non-fatal, bootError persists),
+zero-cue/identical-time plans deterministic, the edge-storm dwell
+defence works at default dwell, and the `_98` arm-latch fix confirmed
+on burn night (27 sessions after the 2 h burn hold). **H1 (HIGH —
+deck-thrash): the mood→party cue has NO "I already own the deck"
+idempotency guard.** A detector that dips-and-returns (any music with
+quiet gaps ≥ the audio companion's `offConfirmMs`, default 30 s)
+RE-ARMS the cue on the calm dip (`triggers.js:284`), and at the
+SHIPPED dwell (20 s) the next loud return re-fires it while its own
+session is still live — arbiter passes it (`controller==='autopilot'`,
+no ownership check, `arbiter.js:174`), `_applyAction` re-runs the whole
+look, and `timelineLoadPlaylistOnDeck` (`api_server.js:4372`) ALWAYS
+loads the FIRST entry with a transition swap (no "already loaded"
+short-circuit) → **the exterior snaps back to party-pattern-1 with a
+transition on every music gap, all party night** (harness: realistic
+3-on/2-off flap → 60 re-fires, 1 honest window-elapse in 5 h; 1-min
+flip + minDwell 0 → 180 re-fires, 1 elapse in 6 h). **M1 (MED — silent
+cadence loss, same root): each re-fire re-stamps `_deckWindowUntilMs =
+now + durationMin`** (`timeline_service.js:845`; the :824 guard only
+protects the session-END bookkeeping), so a "12-min session + 2-min
+cooldown" collapses into ONE endless session while music keeps
+returning — the operator's cadence + cooldown never run,
+`sessionEndsAtMs` slides forever. **LOW: `mood` cue `from===to`
+validates but is a silent dead cue; a program `hold.until` an
+already-past anchor → ~zero hold (logged revert, intent lost); two
+same-time PROGRAMS both dispatch (deck double-write) and the earlier
+HOLD is silently discarded (`validateNoOverlap` checks `durationMin`
+only, never `hold`); DST spring-forward fires a gap-hour cue an hour
+late (N/A to BM dates); the dry-run harness mis-counts the
+`party-config` lifecycle line as a session end.** Coordinator: H1
+first (idempotent re-fire no-op while the party cue already owns the
+live window + a same-playlist short-circuit in
+`timelineLoadPlaylistOnDeck`) — it visibly resets the exterior on the
+mission-critical party night; M1 rides the same fix (don't re-stamp
+the window on a re-fire).
+**`_108` RED-TEAM LANDED (2026-07-31, Opus, report-only) — engine
+HTTP/WS API contract + CaptainPad client:** 1 CRITICAL, 1 MED, 4
+LOW. Every engine black-holed via the `_100` harness + asserted; no
+source touched, zero device HTTP, zero sACN to hardware, operator
+stack untouched, `config.yaml` CLEAN. Repros `~/tmp/redteam_api/`
+(`probe.mjs`, `ws_crash.mjs`). **CRITICAL (engine-crash, the `_99`
+sibling): ONE malformed WebSocket frame crashes the whole engine.**
+None of the four `/ws/*` `WebSocketServer`s (nor the `/` alias)
+attach a per-connection `ws.on('error')` — only `wssInst.on('error')`
++ `server.on('error')`. An invalid-UTF-8 text frame (also reserved
+opcode / oversize control frame / bad close code / RSV1) makes `ws`
+emit `'error'` on the socket instance with no listener → uncaught
+throw → `process.exit`; no `uncaughtException` handler anywhere.
+Proven live on `/ws/control` AND `/ws/params`. **Ship-dark, no
+self-heal:** `launcher.js:623` does NOT restart a crashed engine — it
+`teardown(1)`s the whole stack. No malice needed (a WiFi-corrupted
+frame does it). Fix: classified non-fatal per-socket `ws.on('error')`
+on all four servers (`_99` shape) + per-topic frame-violation test.
+**MED (enum-drift): `effectiveState` is a hard engine↔pad coupling** —
+`parsePartyConfig` throws on any value outside the 6 known; no live
+drift today (producer closed to 6; all 3 pad consumers wrap the
+throw) but a future 7th engine state puts every older pad's PARTY
+card into a permanent error banner on a healthy engine (the `_98`
+§8.3 fragility). Fix: pass unknown value through, derive in
+`describePartyStatus` default branch; throw only on type. **LOW:**
+`POST /timeline/takeover` coerces a non-object body → silent plain
+takeover (200 not 400, fallback shape); concurrent
+takeover(perform)+travel both 200 (last-writer, momentary response
+lie, broadcast reconciles); `/timeline/resolve` over-long query → 431
+empty non-JSON body; resolve routes by `startsWith`. **HELD:** the
+REST surface is genuinely hard — hundreds of malformed/OOR/unicode/
+traversal/`__proto__`/huge payloads → clean verbatim 400s, no 500 on
+input, no unhandled rejection, no silent clamp; `festival.days`
+bounded [1,31] (no buildOverview wedge); WS `message` handler
+try/caught; reconnection storm + garbage/oversize text frames
+survived. Coordinator: fix #1 (per-socket ws error handler) is the
+one that keeps the ship lit.
+**`_107` RED-TEAM LANDED (2026-07-31, Opus, report-only) —
+fixture / model / patch layer (LED-vs-DMX classification, exporter,
+`scene_model_parity`, orphans, TE-sign RGBW generator, 2D pixel-map
+defaults):** 2 HIGH, 2 MED, 2 LOW, no CRITICAL. Harnesses
+`~/tmp/redteam_fixtures/` (fabricated inputs to the pure parity lib +
+`gen_te_sign_fixture.js --dry-run`); **zero source edits, zero writes
+to `scenes/**`/`models/**`/`dmx/fixtures/**`**, no stack run, parity
+CLI read-only. Both HIGHs are in `scene_model_parity`'s LED lane —
+blind to two silent classes its DMX lane already catches. **HIGH-1
+(silent-mispatch, the `_92` RGB↔RGBW class RE-OPENED): an RGBW TE
+sign chained on a MarsinLED output set `order: RGB` exports stride-3,
+white-less pixels and passes `--strict` CLEAN** — parity discards the
+LED-bus fixture DEFINITION's declared physical format
+(`channels: ledBus ? undefined`; no `channel_mode` cross-check) and
+trusts the controller order as sole truth, firing only when model &
+controller disagree (control: RGBW→0 err, RGB self-consistent→0 err,
+RGB-vs-stride4→2 err). **HIGH-2 (silent-DARK, patched-but-unroutable):
+a strand/LED-bus fixture chained on an UNBOUND LED controller (no
+`device:` block) with a stale patched record+model passes clean** —
+parity never reads `controller.device`, has no LED analogue of DMX's
+`patch_record_disagrees_with_chains`, so a rope a fresh export would
+render DARK reads green. **MED-1: `checkAddressHygiene` models an
+LED-bus fixture as one `def.footprint` DMX block (ignores
+`record.segments`)** → a spilling LED-bus fixture false-positives
+`patch_address_out_of_range` (while `checkLedStrandPatch` calls the
+same walk correct) AND its spill-universe occupancy is never claimed
+(real collision missed); harmless for the 160/136-ch single-universe
+signs, latent for the extensible LED-bus kind. **MED-2: `ledStride()`
+accepts a sub-minimum stride the sim's `normalizeLedConfig` hard-throws
+on** → misleading `strand_stride_mismatch` on a config that never
+boots. LOW: te_sign `SHARED_PANEL` msg repeats per occurrence +
+role-annotation mislabel (comment-only); LED-bus footprint never
+cross-checked (root hook for HIGH-1). **HELD:** `gen_te_sign_fixture.js`
+(every malformed CSV fails loud — bad header, dup/gap wire, wrong
+count, empty, dup coord, shared panel; all-same-coord caught before
+the divide-by-zero normalization path); `orphan_fixtures.js` (strict
+`=== true`, ownership `groupName||name`, throws on unreadable lists,
+no guessing); parity's DMX lane + pure re-statement; `_48` name-drift +
+`TE Sign 2` swallow (via `pixel_map_view_defaults.test.js`, SHIPPED
+defaults only — not a persisted `pixel_map_views.yaml`). Report
+`20260725_107_redteam_fixtures.md`. Coordinator: HIGH-2 first (one fix
+— re-derive LED binding grade + an LED `patch_record_disagrees_with_chains`
+— closes the silent-dark rope class the gate exists to prevent).
+**`_105` RED-TEAM LANDED (2026-07-31, Opus, report-only) —
+sACN bridge/routing/subscription/bench-mirror/merge:** 1 HIGH,
+3 MED, 3 LOW, no CRITICAL. Pure-module harness
+`~/tmp/redteam_bridge/harness.mjs` 41/41; no source touched, no
+socket/Sender, **zero sACN frame toward hardware**, zero device
+HTTP. **HIGH (boot-crash): a universe >63999 in the LIVE hand-edited
+`📡 Subscribed Universes` field (common.yaml is `1..37` today) — or a
+bad patches.yaml dmxUniverse — bypasses the boot accept-list
+(`parseSubscribedUniversesField` + `patchRecordUniverses` have NO
+E1.31 ceiling), reaches `new Receiver`, `multicastGroup()` throws
+RangeError, `classifyReceiverError` → FATAL → whole input bridge
+`process.exit(1)` at boot.** Runtime diff path buckets the same
+value as invalid and survives — boot/runtime disagree, so a bad save
+is fine until the NEXT restart (misleading "socket FAILED" msg). MED:
+truncated `segments[]` silently drops a spill universe (no anomaly —
+`_87` class deeper); bench `mirrorTargets` never subtracted from
+`engineState.owned` + `dest_host` unvalidated vs real controllers
+(latent double-write); `composeUnifiedFrame` doesn't self-guard
+same-IP contests. LOW: leading-zero-octet decimal/octal divergence;
+boot gate replays only last deferred reason; multi-NIC = OS coin-flip
+by design (pin `sacn_interface`). HELD: `_99` boot gate + double-join
+invariant (3+ universes, interleaved), route-diff flap-freedom, merge
+intersection off-by-one both edges, runtime range + per-universe
+isolation, bench validation/gating, field-parser parity. Report
+`20260725_105_redteam_bridge.md`. Recommended first fix: one-line
+ceiling guard in the two boot-list builders (closes HIGH).
+**`_106` RED-TEAM LANDED (2026-07-31, Opus, report-only) —
+controller lifecycle/provisional/status/push:** 2 HIGH, 3 MED, 3
+LOW, no CRITICAL. Pure repros in ~/tmp/redteam_controller/ against
+the REAL modules with injected transports; NO device HTTP, NO sACN
+to hardware, NO scene writes, operator stack untouched.
+**HIGH-1 (promotion-corruption): the `ip_mismatch` reconcile guard
+is DEAD CODE on the provisional path** — every promote path builds
+`device.ip` FROM `controller.ip` (provisional cards match by IP
+only), so `device.ip !== controller.ip` never fires. A typo'd or
+DHCP-shuffled IP AUTO-VERIFIES the card against whatever MarsinLED
+answers there; only an OPTIONAL boardId/deviceName expectation can
+catch it. **HIGH-2 (quirk→corruption): the default-ON auto-sweep
+re-raises the reconcile dialog every ~20 s** for an online-but-
+contradicted provisional card (no "dialog already open" de-dup) →
+unbounded stacking; after the operator promotes via one, the stale
+dialogs' "Promote anyway" calls promoteProvisionalBinding on a now-
+verified card → THROWS uncaught inside ctx.mutate. **MED-1
+(status-lie/half-state): a push whose scene-SAVE fails settles to a
+GREEN "In sync" chip** (warning tooltip-only), and the next
+refreshSyncChips recompute (device≡plan → bare {state:'in-sync'})
+drops even that — disk stale, LEDs dark, surface green. MED-2:
+first contact promotes off a CACHED fingerprint (cache key type:ip,
+5 s TTL) → same-IP hot-swap binds to the previous board. MED-3:
+ECONNREFUSED/RST always → ONLINE (reject-firewall / any host / DHCP
+squatter reads green; drop-firewall on the same dead box reads
+OFFLINE); LED partial-200 + unrecognized host share the green dot.
+LOW: reconcile silently skips controller_id_claimed when registry
+omitted; push notifies the bridge TWICE (exportConfig loud + push
+quiet); 1.2 s status deadline flaps cold boards (discovery budget
+is 6.5-8 s). HELD cleanly: two provisionals one IP (2nd hard-
+blocks), partial-answer refusal, lost-write read-back arbitration,
+G8 liveness. Report `20260725_106_redteam_controller.md`.
+Recommended first fixes: gate unattended provisional promote on a
+stated expectation OR a confirm (HIGH-1); per-card dialog de-dup +
+stale-dialog no-op (HIGH-2).
+**`_109` RED-TEAM LANDED (2026-07-31, Opus, report-only) — controller
+lifecycle / merge / push pre-flight (commissioned as `_104`; sibling
+took that number):** 4 P1, 7 P2, 10 P3, no P0. Repros
+`~/tmp/redteam_controllers/` (6 scripts); pure modules + loopback
+stubs on ports 7750-7763 only — **zero device HTTP, zero sACN, zero
+scene writes, zero source edits**; operator stack untouched. Sim
+suite re-run after: **1645/1637/8 = baseline, byte-identical**.
+**P1-1 (process kill): `POST /controllers/probe` with a negative
+`timeoutMs` EXITS the save-server process** — `save-server.js:806`
+forwards it unbounded, `controller_probe_service.cjs:101`
+`socket.setTimeout()` throws ERR_OUT_OF_RANGE *before* `:105`
+registers `on('error')`, so the still-connecting socket emits an
+unhandled `error`. Server binds `0.0.0.0`, CORS `*`, JSON.parse
+ignores Content-Type ⇒ CORS-simple, no preflight, no auth, no
+`uncaughtException` handler. Rig stays lit (separate process) but
+saves/backups/gamma/probe die, and the pane blames a stale save
+server. **P1-2 (dark lights): a DMX *gap* claim can WIN the
+higher-IP contest and mute a real strand** —
+`address_merge.js:466` skips only `c.effect`, never the nameless
+gap claims from `controller_registry.js:2017`; a gap writes no
+bytes, so the contested channels go DARK under an "allowed /
+unified" banner. **P1-3: the "1.2 s probe ceiling" is an IDLE
+timeout, not a deadline** — a slow-drip host held a probe 10 414 ms
+(measured), pinning a pool slot and `probeSweeping`, which blocks
+EVERY later sweep (`controller_map_editor.js:1011`). P1-4 = the
+same dialog storm `_106` HIGH-2 found first (credited; see report
+§Overlap). **P2-8: the `_102` "auto-assign never creates a share"
+invariant is VIOLATED** — `collectClaimedUniverses:140` skips
+non-LED controllers, so a DMX port with an empty chain declares a
+universe that projects no occupancy and is invisible to the claim
+index; the LED park/repair then takes it. P2-5/6 + P3-15/16/20: one
+root — `ipToNumber` folds numerically while every KEY (destination
+map, suppression index, banner attribution, provisional match,
+probe cache) compares raw strings ⇒ `0.0.0.00` bypasses BOTH the
+sentinel gate and the unrankable hard error and ranks as the lowest
+address; one box spelled two ways mints TWO destinations (two
+racing packets, no warning). P2-7: `derivePerOutputPlan` models
+neither the ≤16 span nor duplicate universes across declared
+outputs, so `U2+U500` / two ports on `U7` pass the pre-flight clean
+and die in `validatePerOutputPlan` after the confirm. P2-9 refines
+`_106` HIGH-1 (verdict never re-validated against the card's
+CURRENT ip). P2-10: no response-size cap (48 MB absorbed). P2-11:
+no pixel-count ceiling — 100 000 px written into the ENABLE
+`count`, both validators silent. P3s: `used.delete(port.universe)`
+wrong-variable leak, repair ignores `cardUniverses`, claim-blind
+`autoAssignPerOutputUniverses` (0 prod callers), unbounded
+`probeCache`, `markControllerProvisional` has no IP check,
+`duplicate_output` not named by reconcile. **HELD:** intersection
+math exact at ch 1/512/1-ch/containment/identical/3-way and
+order-independent; master-dimmer force-write correctly gated
+through `pokeChannel`; the provisional/verified schema refused
+every smuggling attempt; bind-by-controllerId dedup; the
+drop-provisional-mid-sweep race; parks never create a share;
+`unknown` never renders as `offline`. Report
+`20260725_109_redteam_controllers.md`. Recommended first fixes:
+listener-before-setTimeout + bound `timeoutMs` at the route
+(closes P1-1); canonicalise the IP ONCE and key everything off it
+(closes 5 findings). Operator decisions handed back: may a gap win
+a contested channel; is a non-canonical `0.0.0.0` a placeholder or
+an address; should the reconcile dialog get "don't ask again".
+**`_110` RED-TEAM LANDED (2026-07-31, Opus, report-only) — sim GUI +
+persistence layer (commissioned as `_106`; siblings had taken
+`_106`–`_109`):** 4 P1, 6 P2, 6 P3, no P0. Repros
+`~/tmp/redteam_simui/run_all.mjs` (pure modules) + two headless-Chrome
+DOM probes on a BLANK page — **zero source edits, zero suite edits, zero
+`scenes/**` writes, no sim/browser on :6969-72, no save-server POST, no
+device HTTP, no sACN**. Sim suite after: **1645/1637/8 = baseline,
+byte-identical**. **P1-1: "Save cancelled — nothing was written" is
+FALSE** — `exportConfig` has no re-entrancy guard and never disarms
+`saveTimeout`, so the 2 s auto-save runs to completion *through* the open
+📡 Subscribed Universes dialog, writes all five scene files and clears
+the UNSAVED-CHANGES chip (`gui_builder.js:386-514` + `:1015-1029`;
+traced repro). The `_86` "Cancel means nothing on disk" contract holds
+for one call, not for the process; `pixel_map_persist.js:151` already has
+the right `inFlight` chain. **P1-2: `Folder.title()` is `innerHTML`**
+(`marsin_gui.js:237`) and takes operator-typed fixture/group/trace names
+raw — `A<B` truncates the header, `Left <Back> Wall` renders `Left  Wall`,
+and an attached title ran `onerror` script (`window.__PWNED === 1`
+measured): UI lies about the name every name-keyed store is keyed on, and
+a shared `scene_config.yaml` is code-exec on the show machine. **P1-3:
+every sim shortcut fires UNDER every `vm-modal-overlay`** —
+`interaction.js:544` guards only `isSceneModalOpen()`, and the overlay
+blocks pointer events only, so `Delete`/`D`/`Ctrl+Z` mutate the scene the
+open confirm is describing (capture-phase ordering measured). **P1-4: the
+SAVE path has no multi-client guard at all** — `save-server.js` has no
+ETag/version/lock, and `common.yaml` is written to `SCENES_ROOT`
+**ignoring `?scene=`** (`:385`), so a second window silently un-applies
+the `_86` subscription widening; `multi_client_warning.js` says in its own
+header it is a warning surface only. P2s: the `beforeunload` beacon is a
+full save that skips BOTH the universes gate and `saveModelJS()`; orphan
+ownership is byte-exact while `group_rename_guard` trims, so a trailing
+space or an NFD name paints a LIVE group `⚠ ORPHANED` with `🗑 Remove N`
+armed; the browser field parser enforces MIN but not MAX and never-remove
+then re-writes a `>63999` token into `common.yaml` forever (browser half
+of `_105` H1); the pixel-map sidecar has ONE writer so group rename +
+orphan removal leave `pixel_map_views.yaml` stale indefinitely (`_66` §8
+confirmed open, now also on the `_76` delete path);
+`controllerGamma: {}` passes `normalizeLedWireConfig` but makes
+`gammaCurvePath` THROW mid-render and kill the LED card; the controller
+pane runs a FULL projection per card (measured 2.24 ms × 50 cards × 2 =
+~226 ms/render) with O(N²) warning text (1225 overlaps / 235 KB / 49
+banner rows on one card at N=50) — truthful but not responsive at 50.
+**HELD:** the gamma NaN/Infinity keyboard vector the brief hypothesised is
+CLOSED by `_64`/`_65` (range sliders + `parseGammaField` refuses ''/NaN/
+Infinity/out-of-range/Arabic-Indic digits); the `1-24` range trap
+surfaces; the universes dialog is `textContent`-safe; `removeFixtureFromViews`
+refuses to empty a panel; the orphan detector's `=== true` strictness and
+fail-loud scan; `_102`'s two warning grades never collide at 50-way
+pile-up. Report `20260725_110_redteam_sim_ui.md`. Recommended first fixes:
+one in-flight promise + `clearTimeout(saveTimeout)` in `exportConfig`
+(closes P1-1 and the redundant double-save); `textContent` on the folder
+title path (closes P1-2); add the `vm-modal-overlay` family to
+`interaction.js`'s modal guard (closes P1-3). Operator decisions handed
+back: multi-window save policy (refuse / warn / merge) and whether
+`common.yaml` should stay global. **Board row NOT filed — no Notion MCP
+tool is exposed in that session; per CLAUDE.md no repo task file was
+created. Sina to enable the Notion MCP connection, then one `Backlog`
+card pointing at `_110`.**
 **`_48` ADDENDUM 2 LANDED (2026-07-29) — 2D defaults name-drift
 repair (recurrence #3):** operator's 13-generator rename batch
 staled CHIMNEY_GROUPS[0] (→'Left SmokeStack') and
@@ -3382,6 +5250,67 @@ operator confirms post-reboot "flicker is gone gone, performance is
 great." H2 closed. Writer-#2 (H1) remains latent → option-(ii)/
 Phase 1 fix still on the table (decision #12).
 
+**LANDED 2026-07-31 — `_96` OPTIONAL-DISCOVERY LIFECYCLE + CONTROLLER
+STATUS (Opus, `20260725_96_optional_discovery_lifecycle.md`):** closes the
+ROOT CAUSE behind `_92` §4 (six rope strands dark for weeks because the only
+path to a `device:` binding was a live discovery conversation).
+
+- **Lifecycle `unbound → PROVISIONAL → VERIFIED`.** Operator ruling: *"the
+  discovery must be an optional stage in the controller lifecycle and not
+  required."* A PROVISIONAL block is `device: {vendor, provisional: true}` —
+  **no controllerId, no push receipts**; the schema throws on either, and the
+  absence of `provisional` still REQUIRES a controllerId, so the two shapes
+  are mutually exclusive by construction. Bind-by-controllerId doctrine is
+  intact: it governs VERIFIED bindings; a provisional card is IP-matched only
+  to find its own first contact, then promoted.
+- **A provisional card patches EVERYTHING** — patches.yaml records, engine
+  model lanes (`patch:` not `unpatched: true`), bridge relay routes,
+  subscribed universes — **byte-identical to a verified card**, and
+  **promotion moves nothing**. Both pinned by test. Mechanism: no new branch
+  anywhere; `isBoundLedController` is now the UNION of the two grades and every
+  layer inherits it. Truly unbound cards keep the `_92` unpatched contract.
+- **First contact = reconcile, never a side-pick.** Six codes
+  (`device_not_recognized`, `controller_id_claimed`, `ip_mismatch`,
+  `per_output_unsupported`, `board_output_count`, `board_id_mismatch`,
+  `device_name_mismatch`); the first two are HARD BLOCKERS. A contradiction
+  changes nothing on either side and raises a dialog with two explicit
+  choices. Universes/enables/pixel counts are deliberately NOT contradictions
+  — that is push drift and the sync chip owns it.
+- **`0.0.0.0` composes**: the sentinel REFUSES a provisional binding (type the
+  real IP first); a hand-written sentinel+provisional card still patches with
+  the sentinel visible in every record. Conversion path pinned.
+- **ONLINE/OFFLINE/UNKNOWN** (operator scope addition, same thread):
+  server-side `POST /controllers/probe`, per-type probes — LED = HTTP
+  `/api/status` (**MarsinLED never answers ICMP**, so ping would call the whole
+  fleet dead), DMX = TCP connect ladder where a **refused** connection PROVES
+  the host is up (sACN/Art-Net sinks answer nothing; ArtPoll would mis-report
+  every sACN gateway). `unknown` is a first-class state and is never rendered
+  as offline. Bounded pool (16) + 1.2 s ceiling + box-keyed cache; the pane
+  never awaits a probe. An LED probe reply IS the fingerprint, so the sweep is
+  the "next boot / recognition" trigger — provisional + ONLINE + fingerprint →
+  the same promote path.
+- **Numbers:** 76 new tests (33 lifecycle / 23 probe incl. real loopback
+  sockets + RFC 5737 offline / 20 status model). Sim 1482 → **1559, fail 9 =
+  the 8 documented baseline + `_92`'s in-flight TE-sign parity finding**
+  (proved theirs: the failing message text exists 6× in the worktree
+  `lib/scene_model_parity.cjs` and 0× at HEAD, and that test's whole
+  dependency set is untouched by `_96`). Engine suite not run — no shared
+  engine code. security_check PASS.
+- **Live:** 18/18 in-browser checks + 7 inspected screenshots
+  (`~/tmp/provisional_status/`), operator's stack REUSED not bounced, sACN OUT
+  stubbed closed and every off-host fetch refused pre-boot — **1 off-host
+  request attempted, REFUSED, and it was the pane's own pre-existing sync-chip
+  read**. New tool `agent_tools/provisional_status_verify.cjs`.
+- **Fixed in passing:** `lib/bench_section.cjs` mirrored a device block but
+  dropped `provisional`, which would have produced a verified block with no
+  controllerId — a file the registry loader refuses outright.
+- **Concurrency with `_92`:** both waves edited `controller_map_editor.js` in
+  disjoint regions (theirs LED-bus fixture classification, mine the status dot
+  + sweep); merged file imports clean, suite re-run after. Zero scene writes.
+- **OPERATOR ACTION (dossier #28):** restart the stack once (page + the new
+  save-server route), then on the three rope controllers press **⚑ Patch
+  without the board** and Save.
+
 ## Queued
 
 - **2D-vis feedback round 1 (HELD — operator is testing; batch with his
@@ -3753,7 +5682,7 @@ Phase 1 fix still on the table (decision #12).
   need admin DPC capture. Engine time-loop REFUTED. Adds 3 latent
   hazards `_15` missed: global-not-per-universe bridge arbitration
   (`sacn_bridge.js:415`), `reuseAddr:true` on Receiver (:410), missing
-  `127.0.0.1` skip in `animate.js:564`. Minimal fix = option (ii)/
+  loopback skip in `animate.js:564`. Minimal fix = option (ii)/
   Phase 1 of `_19` (guarding animate.js alone is too naive — it carries
   operator overrides). Interim: ONE sim window during bench, shed
   non-stack GPU load. Note: both controllers TCP-unreachable during
@@ -3856,3 +5785,564 @@ live-verified 2→3→2. Bridge now pid 30416 (census build).
 **Small confirmations:** CaptainPad namedViews picker keep/drop verdict;
 lag-on-GPU-laptop calibration; sim stack restarted onto MAC-fix code
 (marks the now.md commit blocker resolved).
+
+---
+
+**`_104` LANDED (2026-07-31) — RED-TEAM: TIMELINE ZOOM (report-only).**
+Report `202607/20260725_104_redteam_zoom.md`. Adversarial audit of the
+S1–S5 zoom wave (`_94`/`_95`/`_97`/`_100`) — day/event zoom, time travel,
+the operator lease + scopes, the exit state machine. **1 HIGH, 2 MED, 2 LOW;
+no CRITICAL.**
+**THE ENGINE INVARIANT HELD** — no zoom the rig cannot leave. Verified each
+guard: `resume()` nulls the lease + `mode='armed'` BEFORE catchUp and catches
+its throws (`timeline_service.js:2974-2982`); the tick releases an expired
+lease and self-heals both orphan shapes (`:2146-2166`); the boot scrub
+(`:1901`,`:1908`) runs synchronously before the first broadcast so no observer
+sees a stale lease; `_goDormant` keeps only an UNEXPIRED travel lease and drops
+an expired one (`:1666-1675`); every malformed `POST /timeline/travel` 400s in
+`_resolveTarget` before any mutation.
+**A1 (HIGH — silent-fallback / pad-lying):** `_zoomExitRequested` is a
+module-level exit-claim set UNCONDITIONALLY by `_resume()` (`useTimeline.ts:171`),
+which is ALSO the plain-takeover RESUME NOW (`resumeNow: resume`, deck +
+PlanLockBanner). It is only ever cleared by `clearZoomClaims()` on a zoom→null
+transition (`ZoomBanner.tsx:88`). A plain takeover has no zoom → the flag leaks
+TRUE → the next real PERFORM/TRAVEL zoom the ENGINE ends (lease expiry, restart,
+AUTO OFF, maker save) is read as `ours:true` → `shouldAnnounceZoomEnd` returns
+false → the "Zoom ended — the plan resumed" toast + auto-nav is SUPPRESSED and
+the operator is silently stranded on a deck they no longer own. Inverts the
+exact `_97` §3.4 protection; the unit test covers only the pure decision fn, not
+the leaky latch feeding `ours`. Fix: stake the claim only when a zoom is held,
+and clear it whenever resume resolves.
+**A2 (MED — latent stuck-state):** confirms `_100` F1 — `saveTimelineState`
+dumps the whole `state`, so the scoped lease (scope/cueId/label/target) IS
+written to `timeline_state.yaml`; only the one-line boot scrub stops a rebooted
+ship waking with a ghost PERFORM banner. Latent (scrub verified), not live.
+Make it structural by omitting `operatorLease`/`pendingProgram` from the
+serialized shape.
+**A3 (MED — pad-lying):** the D3 "⚠ Show due: X — starts when you exit" banner
+keeps promising a show that `_catchUp` SILENTLY SKIPS once you linger past the
+cue's hold window (`programLive` false); EXIT (skips) and ENABLE (fresh hold,
+plays) then diverge under identical copy.
+**A4/A5 (LOW):** engine validates a PERFORM `cueId` only for existence, not that
+it is the live `activeCue` (spoofable banner label — pad guards are the only
+enforcement); travel steppers use strict `>`/`<` so two co-timed cues can never
+both be reached.
+**HYGIENE:** report-only, no source/suite edits, no engine spawned →
+`marsin_engine/config.yaml` CLEAN vs HEAD (verified before + after); no
+`:6967`/`:6969-:6972` stack or device touched; no git ops; scratch
+`~/tmp/redteam_zoom/`.
+
+**`_105` RED-TEAM SECOND PASS LANDED (2026-07-31, Opus, report-only) — sACN
+bridge, driven as a REAL PROCESS:** two agents were pointed at the bridge
+concurrently; the first pass (pure-module, above) is preserved and my pass is
+APPENDED to `20260725_105_redteam_bridge.md`, overlaps named (my F1=their H1,
+F2=M2, F16=L2; their M1/M3/L1 are theirs alone). **5 P1, 8 P2, 8 P3, no P0.**
+Method: the real `sacn_bridge.js` loaded with faithful fake `sacn`/`ws` (exact
+deferred-join ordering, real `multicastGroup`, real Windows duplicate-join
+EINVAL, recording Senders), scene tree from an in-memory VFS, faked `/status`,
+`process.exit` recorded; inbound frames are REAL `Packet`s parsed from REAL wire
+buffers — which is what surfaced the unit bugs a fabricated-payload harness
+cannot see. **P1-F3 (LIVE): the DMX frame `routeFrame()` broadcasts to browsers
+is the `sacn` package's PERCENT payload (`objectify` = `value/2.55`, 2dp, zeros
+omitted) copied into a Uint8Array the browser reads as raw DMX — the sim's
+sACN-IN preview renders the ship at ≤39% with 101 grey levels; the relay path
+round-trips losslessly, only the browser branch (sacn_bridge.js:1002-1008) is
+wrong.** **P1-F4 (LIVE): ONE CID for the whole project** — nothing ever passes
+`cid`, so every Sender ships the package's hardcoded `DEFAULT_CID`; two same-CID
+sources on one universe drop **39 of 40 frames** at our own receiver (measured)
+and are indistinguishable to real gateways = the missing mechanism behind the
+`_15` flicker; live the moment a second stack instance exists on the LAN
+(laptop + interior1). **P1-F5 (LIVE): the priority lockout is GLOBAL** — one
+prio-≥150 frame on one universe stops the relay of EVERY universe for 10 s.
+P1-F1/F2 confirmed end-to-end (exit(1) observed; mirror+engine frames observed
+leaving, with the engine-suppression line printing the OPPOSITE reassurance).
+P2: `PacketCorruption`/`PacketOutOfOrder` unlistened (49 silent drops incl. start
+codes 0xDD/0xCC); `reuseAddr:true` lets a SECOND input bridge bind 5568 with no
+error (one gets the engine's unicast, the other relays nothing while logging
+health); bench-mirror Uint8Array truncation (202/256 DMX values wrong, DMX 1-2 →
+0); multicast/broadcast/free-text admitted as relay destinations (a
+`239.255.0.N` typo is a self-feeding loop); mirror suppression silent unless
+`mirrorSig` changes; a failed join is never retried and its warning is dedup'd
+forever; cross-spec duplicate mirror destination (sender from the last spec,
+payload from the first); unparseable common.yaml warns once then silently
+narrows forever. P3: comment-only sidecar edit and every engine flap blank the
+composed buffers; the ✅ join-count line reports the boot-list size not successes;
+invariant blind to a duplicate INSIDE the boot list; same-priority source flap =
+one WS broadcast per packet; no `setScene` debounce; priority-0 promoted to 100;
+`sourceName` ANSI into the launcher terminal. **ADJACENT (outside the bridge,
+flagged not investigated): every raw-DMX producer feeds the package's PERCENT
+API** — `marsin_engine/lib/sacn_output.js:80` and
+`simulation/server/sacn_output_bridge.js:141` build `payload[ch+1] = <0..255>`
+and `Packet.buffer` multiplies by 2.55 and clamps → **DMX 100 → wire 255,
+everything above flat at full, 256 levels → 101**; `useRawDmxValues` set nowhere,
+no patch-package override. Wants an owner before the rig is tuned. HELD: the
+`_99` boot gate itself (no third ordering found that yields a wrong route set or
+an uncaught double join through it), the relay's byte-exact DMX round-trip,
+sequence rollover, the bench-mirror spec parser's every declared refusal,
+`isMirrorActive`'s three preconditions, route ownership under client storms.
+**HYGIENE:** report-only, no source/suite edits, no scene writes, no git ops;
+sim suite re-run **1645/1637 pass/8 fail = the documented baseline, identical
+failing list**; `git status -- simulation` unchanged; no port bound on 5568, no
+multicast join, zero packets toward the rig, zero device HTTP, the operator's
+:6967/:6969-:6972 stack never approached; loopback-only probes on 45590/45599;
+scratch `~/tmp/redteam_bridge/` (rig.js + p01 + s01-s09).
+
+---
+
+**2026-07-31 (`_113`) — RED-TEAM: TIMELINE REVIEW/ZOOM MACHINERY (report-only).**
+Report `202607/20260725_113_redteam_timeline_ribbon_state.md`, repros
+`~/tmp/redteam_timeline/{a_pure_probes,b_state_and_plans,c_engine_probes,d_followups}.mjs`.
+Surface deliberately complementary to `_103` (triggers/arbiter/party) and `_104`
+(pad zoom state machine): the day ribbon + `/timeline/overview`,
+`resolveDeckStateAt`, `_resolveTarget`/`travel`/`resolveAt`,
+`validateShowPlan`/`lintShowPlan`, `loadTimelineState`.
+**2 P0, 2 P1, 3 P2, 5 P3.**
+**P0-F1 (stuck/DARK show, the headline):** `GET` **and** `POST
+/timeline/overview` build the day ribbon SYNCHRONOUSLY on the HTTP thread in
+O(days x cues^2) — `buildDaySegments` (`resolve_deck_state.js:331`) calls
+`resolveDeckStateAt` per sample point, and each of those re-runs
+`applicableCues` + `resolveDayTimes` over the WHOLE cue list, constructing two
+`Intl.DateTimeFormat` per clock cue. Measured on a REAL engine (:7717): 64 cues
+x 8 days = **2.8 s frozen**, 128 = **11.4 s** (a concurrent `GET /status` was
+ECONNRESET), 256 = **58 s**, **512 — the schema's own cap — = 296 s**. The 40 fps
+render loop, the sACN sender and the timeline tick share that event loop, so the
+exterior goes dark and no client can reach the engine; the PROCESS stays alive,
+so no supervisor restarts it. Needs no auth and no saved plan — one maker
+preview of a big draft does it. The 512 cap predates the ribbon
+(`show_plan.js:799` justifies itself with "a 10k-cue POST froze /status ~32s";
+the ribbon makes 512 cues cost 9x that). Fix: memoise `dayTimes` per day (the
+ribbon already computes it once at :345 and discards it) and cache the two
+`Intl.DateTimeFormat` objects in `clockToEpochMs` — either alone is ~100x — then
+pin it with a perf regression test against a stated budget.
+**P0-F2 (silent dead timeline):** `loadTimelineState` (`timeline_state.js:200`)
+validates ONLY the five party fields. A corrupted `firedToday: yes`,
+`moodArmed: 5`, or a scalar document loads clean and then throws at boot or on
+EVERY tick (`Cannot create property 'c_x' on string 'yes'`). Because the tick is
+`this._tick().catch(...)` (`:382`) that becomes one `console.warn` per tick
+forever while the WHOLE plan — clock, sun, defaultCue, party — drives nothing all
+night and the engine looks healthy. This is precisely the D11 failure mode the
+party guard was added to stop, on every field the guard does not cover. Fix:
+extend the guard to the whole persisted shape (`mode` in {armed, overridden};
+`firedToday`/`moodArmed`/`moodLastFire` plain objects; lease/program fields null
+or objects; the document itself a plain object) and reject loud at boot.
+**P1-F3 (two answers, one plan):** two cues at the SAME fire time — the pure
+resolver picks the FIRST in plan order (`resolve_deck_state.js:152`, strict `>`),
+the live tick pushes actions in fire order so the deck ends on the LAST. The day
+ribbon, `GET /timeline/resolve`, `POST /timeline/travel` and boot `_catchUp`
+therefore all name the opposite cue from a continuously-running engine — and
+rebooting flips the deck. `validateNoOverlap` cannot see it (no `durationMin`).
+Sharpens `_103` L3, which recorded only the live half.
+**P1-F4 (stuck show):** `hold.min` has no upper bound. `{min: 1e12}` (or a
+fat-fingered `9000` = 6 1/4 days) validates and the program owns the deck for the
+rest of the festival, suppressing every later ambient/mood cue; `{min: .inf}`
+also validates and serialises to `untilMs: null`, indistinguishable on the wire
+from an open-ended hold. Verified over 7 simulated days.
+**P2 x3:** `_resolveTarget` (`timeline_service.js:2713`) shape-checks the travel/
+resolve target date with a bare regex and never round-trips it — `2026-07-00`
+returns **200**, silently resolved as `2026-06-30`, with the impossible date
+echoed back as `target.date` and reused as `currentDate` by every later `step`
+(`show_plan.js assertDate` does this correctly 30 lines away) · `validateNoOverlap`
+(`show_plan.js:731`) keys windows by festival-day INDEX, so a `durationMin`
+window that CROSSES MIDNIGHT is never compared against the next day's cues (23:00
++180 min and 00:30+30 min both load and genuinely overlap) — narrows `_103`'s
+"overlapping deck windows are rejected at load" to within-a-day only · nothing
+validates that a look's `playlist` or `palette` EXISTS: `POST /timeline/plans`
+200, `plan/activate` 200, `planWarnings: []`, and the typo only surfaces as a
+`cueErrors` entry at fire time — narrows `_103`'s "missing playlists fail loud"
+to the runtime; the AUTHORING path (where a human would see it) is silent, and
+`lintShowPlan` is exactly where it belongs.
+**P3 x5:** the ribbon draws a 23 h / 25 h DST day into a column labelled
+`00:00 -> 24:00` (tiling + contiguity verified correct, the scale is ~4 % off
+both ways; `_103` L4 covers the cue-fires-late half) · `sun.offsetMin` is
+unbounded, so a cue can fire on a DIFFERENT calendar day than the ribbon draws it
+on · `_assertPlanName` accepts a 500-character name · `POST /timeline/resume` is
+not authoritative against a concurrent `takeover` (40 racing pairs left a live
+PERFORM zoom; self-heals at lease expiry, and CaptainPad's touch-takeover hook
+makes it a real gesture — pairs with `_104` A1) · `mode` in the state file is
+never validated (`mode: banana` and a truncated `mode: arm` both run and go out
+on `/timeline/state`).
+**WHAT HELD:** no prototype pollution (`__proto__`/`constructor` keys rejected by
+`assertSlug`, `Object.prototype` untouched) · the 512-cue cap (513 -> named
+throw) and the 1 MB body cap (5 MB label -> 413) · a REAL `SIGTERM` mid-zoom at
+BOTH scopes wakes `mode: armed`, `zoom: null`, `controller: autopilot` — the boot
+scrub works, and the lease bytes ARE on disk exactly as `_100` F1 / `_104` A2 say
+· stepping past the plan edges 400s and never clamps; a bad `step` 400s · polar /
+missing sun events never crash the resolver or ribbon · 33 of 43 hostile plan
+mutants produced a NAMED error · a 12-round concurrent
+travel||perform||savePlan||activity storm left `mode: armed`, `zoom: null`,
+`lastError: null`, deck back under the plan.
+**HYGIENE:** report-only — no source edits, no edits to any existing test/suite,
+no writes to `scenes/**`/`patterns/**`/playlists/plans, no git ops beyond reads.
+Timeline family **410/410 pass, 0 fail before AND after**.
+`marsin_engine/config.yaml` absent from `git status` (CLEAN vs HEAD) both times;
+`simulation/scenes/*/timeline` and `*/playlists` clean. Every spawned engine ran
+the `test_bench` model with `MARSIN_CONFIG_FILE` (`controllers: []`,
+`sacn.destinations: ['127.0.0.9']`) + `MARSIN_STATE_DIR`/`MARSIN_PLAYLISTS_DIR`/
+`MARSIN_TIMELINE_DIR` temp dirs, with the harness's three walls ASSERTED on every
+boot (sender lines, no Art-Net, empty `outputRouting.controllers`). Port **7717**
+only (inside the assigned 7700-7749); 5568 never bound, no multicast, zero device
+HTTP; the operator's :6967 and :6969-:6972 stack never approached.
+
+**Landed 2026-07-31 - RED TEAM: CaptainPad zoom ladder (Opus,
+`20260725_114_redteam_captainpad.md`):** adversarial pass over `_97`'s zoom
+ladder against `_95` §3, hunting the gap `_100` §3.3 names ("the pad's
+toast/navigation remains unit-pinned pending the DOM runner"). Method: a
+scripted hostile engine (REST + `/ws/control` + a `/__ctl` drive channel) on
+:7901 in front of a FRESH `web:build` dist on :7900, `localStorage.API_BASE` set
+before boot, console muted pre-navigation; plus the shipped `zoom_logic.ts` /
+`timelineTemplate.ts` imported and probed directly. 17 scenarios, 5 P1 / 6 P2 /
+6 P3, no P0; **five P1s reproduced LIVE in a browser with screenshots**.
+**P1-F3: one unknown `transition.mode` white-screens the ENTIRE pad**
+(`timelineTemplate.ts:185`, `DECK_TRANSITION_MODE_LABEL[mode].toLowerCase()`,
+unguarded, called from render in DayView/EventSheet/DayOverviewStrip) - and
+**CaptainPad has NO React error boundary anywhere**, so any render throw takes
+every tab, the ZoomBanner and the plan-lock banner with it. **P1-F1: one press of
+the deck/mixer RESUME NOW permanently disarms the "zoom ended" alarm** -
+`_zoomExitRequested` (useTimeline.ts:171/259) is a module global never cleared on
+the success path, and its only clearer (ZoomBanner.tsx:88) runs solely on an
+OBSERVED zoom non-null->null transition, which a zoom-less resume never produces;
+proven live with a clean A/B control (R2b notice fires, R2/R2m it does not), so
+an engine restart mid-zoom silently strands the operator on a deck they no longer
+own - exactly the pad half of `_100` X6. **P1-F2: the zoom banner keeps asserting
+a live lease after the link dies** - `useTimeline` retains the last state forever
+on disconnect and the banner never reads `connected`; 20 s after the socket died
+AND the engine released the lease the pad still reads "TIME TRAVELING ... viewing
+the plan, not tonight" with a green ENGINE dot, two rows above a party card
+correctly saying ENGINE OFFLINE. **P1-F4: an EMPTY ribbon passes as a completed
+review** - `DayView.tsx:239` tests `Array.isArray`, which `[]` satisfies, so the
+loud red block is suppressed and the RESOLVED column renders blank (and
+`ribbonRows` silently DROPS non-tiling segments, 3 of 5 in the probe).
+**P1-F5: a stepper press makes pad B claim it entered the zoom** (`_travel` sets
+`_zoomEnteredHere` on every success), so B's next tab-return ends pad A's zoom -
+the exact D1 violation the gate exists to prevent; `_100` T1 tested B browsing,
+not B retargeting THEN browsing. ENUM-ADDITIVE BRICK CLASS (the `_98` dodge):
+the strict validator is the SAFE one - an unknown `PartyEffectiveState` throws in
+`parsePartyConfig`, is caught, and degrades to a loud card error; the hazards are
+the unguarded map lookup (F3, crash) and the binary if/else over a widening union
+(`zoom.scope` -> silent TIME TRAVELING with steppers that can only 400, F6).
+Meanwhile `timelineState` - deck lock, plan banner, cue list, zoom - is admitted
+on `typeof mode === 'string'` alone (F7). HELD: EXIT under a 500 (verbatim +
+retryable), 8-press stepper hammering at a plan edge (engine 400 verbatim, never
+clamped), 4000-char labels (clipped, no page widening), 0-cue and 60-cue days,
+6x tab hammering during a zoom (one resume, no storm), `shouldAnnounceZoomEnd`
+itself (correct across its truth table - the bug is who sets its inputs).
+**HYGIENE:** report-only, ZERO source/suite edits, no git ops, no engine spawned,
+no sACN/device traffic of any kind, operator's :6967 and the 6967-6972/5568 band
+never approached (ports 7900/7901 only); CaptainPad vitest re-run **42 files /
+914 pass / 6 skip / 0 fail = exactly the `_97`/`_100` baseline**; scratch
+`~/tmp/redteam_pad/`. **Notion board row NOT filed - no Notion MCP tool in this
+session; the row text is written out in the report §7 for whoever has the
+connection.**
+
+
+**Landed 2026-07-31 - RED TEAM `_114` CHAOS / "never stuck" across process
+boundaries (Opus, `20260725_115_redteam_chaos.md`; filed as `_114` because a
+sibling took `_109`): 15 findings - P0 x1, P1 x5, P2 x6, P3 x3, plus a full
+RECOVERY MATRIX (component x kill-instant).**
+**P0-1 (dark rig, all surfaces GREEN):** `kill -9` on the save server, the sACN
+INPUT bridge or the sACN OUTPUT bridge leaves `start.js` alive - it logs one line
+each (`start.js:86-94`) and never restarts or exits. The launcher supervises
+`start.js`, not its children (`launcher.js:1051-1057`, one-shot `waitForTcp`),
+and `cmdStatus` probes only :6969 + :6968 (`launcher.js:928-931`). Verified all
+three: rig dark, `restart_count` unmoved, `deploy.py verify` would pass,
+`launcher.js status` prints OK. Needs a human who notices the lights are off.
+**P1 x5:** a BACKWARD wall-clock step permanently strands the party cue -
+`triggers.js:306`/`:308-309` compare `now - moodSince` / `now - moodLastFire`
+against PERSISTED absolute epoch stamps with no `last > now` clamp, so a 6 h or
+1 day step back means the party NEVER fires again (30 s of loud music on
+`ambient`, `mode: armed`, `lastError: null`); an identical crash without the jump
+resumes in 1.2 s, and a dead-RTC/1970 boot also resumes - the failure is
+backward-only . a corrupt `timeline_state.yaml` kills the timeline dead while
+`GET /timeline/state` returns 200 `mode: "armed"`, `lastError: null`
+(`api_server.js:10400-10409` catches the boot throw into one `console.error`,
+contradicting its own comment) . 20/20 corrupt-state-file variants boot
+"successfully" and SILENTLY reset the saved show to defaults, and a file that
+parses to a SCALAR becomes the state object (`globals.blackout: undefined`,
+timeline `mode: undefined`) - `state_manager.js:109-119` . a state write that
+FAILS (unwritable dir = disk-full/read-only, or a Windows file lock = EBUSY)
+still returns `200 {"saved":true}` while the disk keeps the old value
+(`state_manager.js:121-128`) - the CaptainPad SAVED badge lies . `-f` force-
+takeover force-kills the running stack at `launcher.js:1001` BEFORE `validate()`
+at `:1002`, so a scene typo takes the show down and then exits 2 (proven with the
+non-destructive half).
+**P2 x6:** IPv4/IPv6 port shadowing - `checkPortFree` (`launcher.js:465-475`)
+binds `::` with a bare `probe.listen(port)` and REPORTS FREE while an IPv4-only
+process squats the port; the sim server then co-binds, logs "listening", and
+every IPv4 client (127.0.0.1 / localhost / the LAN) reaches the SQUATTER, which
+`waitForTcp` (`:884-886`, 127.0.0.1) then greenlights - only the netstat-based
+`killStaleListeners` catches it, and `--no-kill` skips that . "the engine never
+came up" is announced to NOBODY (`sacn_bridge.js:195` inits `reachable:false`,
+`:676-678` short-circuits an unchanged signature) - flapping is reported
+perfectly, a cold boot with a dead engine is silent . `launcher.js status`/`stop`
+REFUSE on the exact corrupt lock `_99` taught `start` to recover from
+(`readLock` throw uncaught at `:922`/`:948`) . a ZERO-BYTE `patches.yaml` yields
+zero relay routes silently (a malformed one is diagnosed beautifully) .
+single-instance TOCTOU: the lock is unlinked at `:383` and rewritten at `:1032`
+with `killStaleListeners` + `assertPortsFree` (5 s retry/port) in between
+[ANALYSIS] . TESTABILITY: NO port override exists anywhere in the sim stack or
+the launcher (`load_ports.cjs` reads only `simulation/config.yaml`; the audio
+companion's :6966 is hardcoded in `COMPANIONS`), so launcher profile behaviour
+cannot be exercised without seizing the operator's live ports - which is why the
+two launcher lines above are ANALYSIS and why this thread had to run a private
+COPY of `simulation/`.
+**P3 x3:** kill-9 mid-save leaks `.<name>.<pid>.<n>.tmp` into the TRACKED states
+dir forever (not gitignored, no boot sweep) . `saveTimelineState`
+(`timeline_state.js:238-245`) has no `fsync` and a fixed `.tmp` name, weaker than
+every other state write . `assertSacnUdpAvailable` swallows all inspection errors
+and continues (`launcher.js:507-516`).
+**WHAT HELD:** `_writeFileAtomic` is genuinely crash-safe - 8 kill-9 instants
+incl. inside a save and inside a snapshot write produced ZERO torn files .
+engine cold boot ~330 ms . runtime-only timeline state (`zoom`, `activeProgram`,
+`pendingProgram`, `operatorLease`) is really scrubbed on boot after a SIGKILL,
+independently reproducing `_100` F1 / `_104` A2 . party resumes in 1.2 s when the
+clock behaves . `loadTimelineState` fails loud and names the field (D11) .
+the sACN bridge survived 4 engine deaths with no drop, edge-triggered named
+warnings, `broadcastLog` to the UI, no stacked polls . `load_ports.cjs` is a
+model fail-loud reader . `launcher.js stop` re-checks command lines before
+killing recorded children (PID-reuse safe).
+**HYGIENE:** report-only - no source edits, no suite edits, no scene writes, no
+git ops beyond reads; everything under `~/tmp/redteam_chaos/`. ~60 engines on
+7601-7641, all `MARSIN_CONFIG_FILE` black-holed (`controllers: []`,
+`127.0.0.9`) + `MARSIN_STATE_DIR`/`MARSIN_PLAYLISTS_DIR`/`MARSIN_TIMELINE_DIR`,
+three walls ASSERTED every boot, model `test_bench` only. Sim components have no
+port override, so a PRIVATE COPY of `simulation/` ran on 7669-7672 + UDP 7568
+with every scene controller IP rewritten to RFC 5737 `192.0.2.x` (0 remaining
+`10.1.1.*`); UDP 5568 never bound. Launcher: only `status`/`stop` against a lock
+in a fake `USERPROFILE`; NO profile ever launched. Operator's stack verified
+byte-identical before/after - 6969/35692, 6970/17308, 6971/38388, 6972/50272,
+UDP 5568/38388, nothing started, stopped or killed. **Notion board row NOT filed
+- no Notion MCP tool in this session; the row text is written out in the report
+S6 for whoever has the connection.**
+
+**Landed 2026-07-31 — WAVE 1 `_119` W1-4: sim save-server & controller-probe
+crash-proofing + save honesty (Opus, `20260725_119_wave1_saveserver_hardening.md`).**
+First Wave-1 FIX thread to land (source-editing; commit-gated on operator).
+Owns exclusively `simulation/server/save-server.js` +
+`controller_probe_service.cjs` — no marsin_engine/, start.js, launcher.js,
+scenes or patterns touched. **`_109` P1-1 (Family A) CLOSED + SURVIVED,
+proven end-to-end:** the exact `POST /controllers/probe {timeoutMs:-1}` that
+killed the whole save-server (scene saves/backups/gamma/probe all die) now
+answers a loud **400** and the process stays alive + fully functional (real
+server spawned on a random high port + throwaway `~/tmp` root). Root cause was
+`socket.setTimeout(-1)` throwing ERR_OUT_OF_RANGE on a still-connecting socket
+BEFORE its `error` listener existed → the later socket error was unhandled →
+`process.exit`. **Fixes:** (1) route validates `timeoutMs` (finite, `>0`,
+`≤60 s`) → 400 before it can reach the socket; `tcpProbe` now attaches
+`on('error')` BEFORE `setTimeout` and catches the throw → honest UNKNOWN;
+process-level `uncaughtException`/`unhandledRejection` backstops that log NAMED
+and exit (no half-alive run — auto-restart is W1-2's job). (2) P1-3 — the
+"1.2 s ceiling" was an IDLE timeout a slow-drip host held 10.4 s and wedged
+every later sweep; added an ABSOLUTE per-probe deadline (TCP + HTTP) + a 256 KB
+response cap. (3) `_115` L5 save-honesty — every save-server write path now
+surfaces a NAMED non-200 on failure (was a bare `Error`); proven a failed disk
+write answers `500 Error: …`, never `200 Saved`. (4) endpoint hardening — 1 MB
+body cap (413), non-object body (incl. the `null`→TypeError→kill vector) → 400,
+garbage → 400. **Suite: 1645/8 → 1657/8 — +12 green tests, ZERO new failures**
+(the 8 are the known baseline, byte-identical). New tracked tests:
+`save_server_hardening.test.js` (spawns the real server) + probe module tests
+(crash-proofing, absolute deadline, overflow cap). Repro
+`~/tmp/redteam_controller/04_probe_crash_repro.mjs` all green. Test-only env
+hooks `SIM_SAVE_SERVER_PORT`/`SIM_SAVE_SERVER_ROOT` default to production paths
+when unset (explicit config, not a fallback). **HYGIENE:** zero device HTTP
+(loopback + RFC 5737 `192.0.2.x` only), zero sACN, operator :6970/:6967/
+:6969-72 never touched, `marsin_engine/config.yaml` CLEAN, no git ops (landed
+on the uncommitted `feat/bm_readiness` tree).
+
+**Landed 2026-07-31 — WAVE 1 `_117` W1-2: launcher supervision & watchdog — the
+`_115` L1/P0 capstone (Opus, `20260725_117_wave1_launcher_watchdog.md`).** Owns
+exclusively `simulation/start.js` + `launcher.js` (+ one additive fail-loud line
+in `simulation/lib/load_ports.cjs` — the only path the port override reaches the
+child servers I don't own). **L1 CLOSED — "dark ship, green dashboard, nothing
+restarts" is over.** Root cause: `start.js` only `console.log`'d a child's exit
+(no restart, no teardown) and `launcher status` probed only :6969/:6968, so
+`kill -9` on the save server or EITHER sACN bridge left the rig dark with every
+surface ✅. **Supervision model:** `start.js` is now a real supervisor — each of
+the 4 children (http/save + both bridges) is watched; DEATH (crash/`kill -9`)
+AND FREEZE (3 consecutive missed 10 s health probes on a live process) →
+bounded restart (5/60 s rolling) → past budget, **loud escalation** (`exit(1)`
+so the launcher's teardown fires + the show-server supervisor relaunches) rather
+than an endless restart-loop fallback (codex P0). `launcher status` now
+health-probes EVERY child — save (`/list-scenes`), sACN-in, sACN-out — plus
+engine; the two `ws` bridges use an **`expect:'any'`** criterion because a `ws`
+server answers a plain GET with **426** (proves the event loop is alive) and a
+bare GET fires NO `connection` event, so it never pollutes the input bridge's
+sim-window contention census. Frame-flow: `status` briefly reads the input
+bridge's `N packets/5s from '<src>'` broadcast → prints `⚠ … 0 packets/5s — the
+rig may be DARK` when the port answers but nothing flows (never green on a dark
+rig). **L4:** `checkPortFree` bind-probes BOTH families (IPv4 `0.0.0.0` + IPv6
+`::`), so an IPv4-only squatter is caught (bare `listen(::)` reported FREE —
+repro'd then fixed). **L6:** `validate()` moved BEFORE `assertSingleInstance()`
+(the `-f`/`prod` force-takeover), so a scene/pattern typo fails loudly WITHOUT
+first killing the running stack. **P2-6:** new **`BM26_SIM_CONFIG`** override
+(fail-loud, same contract as `MARSIN_CONFIG_FILE`) points launcher + start.js +
+save-server + both bridges (via `load_ports.cjs`) at an alternate port map;
+`main()`/boot in both files guarded behind `require.main === module` and pure
+helpers exported. **Suite: 1645/8 → 1663/8 — +6 new W1-2 tests, ZERO new
+failures** (the 8 are the known baseline, byte-identical set;
+`launcher_supervision.test.js`). Live-proven: real `kill -9` on a supervised
+child → detected + restarted (fresh pid, `exited unexpectedly` logged); sACN-out
+kill → `launcher status` line **❌ not green**; frame-flow warned of a dark rig.
+**HYGIENE:** ran entirely on throwaway 786x/787x + UDP 7568 via the override;
+operator :6969-:6972 byte-identical before/after (same PIDs 35692/17308/38388/
+50272), UDP 5568 never bound, throwaway-port orphans (kill-tree races) swept to
+0; `config.yaml`/`scenes/**`/engine untouched; no git ops (uncommitted
+`feat/bm_readiness`). **WANTS (flagged, out of my two files): a census-neutral
+plain-HTTP `/health` on both sACN bridges (`{packetsPerSec, activeSource,
+universes}`) + a frame/output indicator on W1-1's engine `/status`** would let
+the watchdog verify frames CONTINUOUSLY (today death/freeze is continuous,
+frame-flow is an on-demand `status` advisory because connecting to the input
+bridge's WS counts as a sim window in its census). `_115` P2-3 (status/stop
+refuse on a corrupt lock) is unowned — small follow-up.
+
+**Landed 2026-07-31 — WAVE 1 `_118` W1-3: pattern-VM "never black" enforcement +
+`_90` audit-harness hardening (Opus, `20260725_118_wave1_pattern_never_black.md`).**
+Family I (`_112` I1/I2/I4) — sits on the LIVE ChatGPT pattern loop. Owns
+exclusively `lib/pattern_mixer.js` + `tools/pattern_audio_harness.mjs` (no
+`engine.js`/`api_server.js`/`timeline/*`/`simulation/`/`scenes/**`/`patterns/**`
+touched — verified). **THE NEVER-BLACK MODEL:** the vendored WASM absorbs a NaN
+(I1: a NaN in ANY one arg to `rgbwau()`/`hsv()` blacks the whole pixel, and is
+absorbing in persistent state — `acc = acc + 0/0` → black forever) or a
+`beforeRender` budget overrun (I2: truncates SILENTLY mid-execution, so the
+mandatory palette resolve never runs → whole ship black from a clean-compiling
+pattern) into a black composite with ZERO signal; and because the NaN is cast to
+`0` inside the WASM before JS sees a byte, per-channel NaN sanitising is
+UNREACHABLE — so enforcement is on the CONSEQUENCE. **New runtime R4 enforcer
+`_enforceNeverBlack()` in `PatternMixer.renderAll6ch()`** (the exact buffer
+engine.js reads out to sACN, after `applyMaster`): counts consecutive
+fully-black frames while `_isExpectingLight()` (master>0 AND a deck/mixer
+contributor enabled with effFader>0, honouring the deck↔mixer view crossfade —
+so a LEGIT operator blackout: master 0 / faders down / muted is NEVER flagged);
+at `NEVER_BLACK_TRIP_FRAMES`=8 (0.2 s @ 40 fps) it sets `renderHealth.darkness.
+tripped`, logs LOUDLY once naming the deck pattern, and writes a dim uniform RGB
+floor (`NEVER_BLACK_FLOOR_VALUE`=10/255) — floor engages ONLY after the loud
+flag, never silent; auto-recovers (clears + green) when light returns. Also a
+`_isBufferSolidRed()` → `darkness.solidRed` for the VM's over-budget signature
+(`_112` F9). `getRenderHealth().ok` now folds `darkness` in (`ok = no
+blendErrors && !tripped && !solidRed`). **PROVEN END-TO-END THROUGH THE REAL
+WASM** (`tests/mixer/never_black_vm_e2e.test.mjs`): a single-NaN-arg `rgbwau`, an
+absorbing persistent-state NaN, and a 6000-iter-precompute `beforeRender`
+overrun all COMPILE CLEAN and trip the enforcer (`ok=false`,`floorActive=true`);
+a healthy pattern stays green. **I2 HONEST FINDING:** `marsin_begin_frame` is
+compiled `void` — empirically confirmed (cwrap `number` binding → `undefined`;
+`marsin_get_error()` empty after a truncated frame) — and there is no C source
+in-repo to re-vendor the `.wasm`, so a direct "report the truncation" ABI
+channel is IMPOSSIBLE. The mission-critical black outcome is caught by the
+enforcer; a wrong-but-non-black truncation (`_112` E2) is caught only offline by
+the hardened harness. If the WASM is ever re-vendored, make `marsin_begin_frame`
+return a truncation flag and surface it in `renderHealth`. **I4 — THE `_90`
+HARNESS CAN NOW FAIL** (`tools/pattern_audio_harness.mjs`): a `--gate` mode that
+exits 3 with a NAMED reason on **DARK** (>`--max-dark-frac`, default 0.5, of the
+window essentially black — fails `evil_black`), **BLACK_LATCH** (renders a
+`--gate-frames` window, default 600 = 15 s, PAST the captured clip so a sleeper
+that latches black after the audited window is caught — fails `evil_sleeper`),
+and **OVER_BUDGET** (MEAN VM render time > `--budget-ms`/`--mix-channels`,
+default 25/4 = 6.25 ms per-channel; MEAN not worst → machine-stable). Times ONLY
+the VM work (`beginFrame`+`renderAll6ch`). The `GATE_PASS`/`GATE_FAIL` verdict
+ALWAYS prints; **only `--gate` changes the exit code**, so existing clip/gif
+tooling (`gen_pattern_gifs.mjs` via `execFileSync`) is unaffected. **OPERATOR
+ACTION: add `--gate` to the `_90` recipe's two harness runs** to make the loop's
+verdict binding. **Shipped patterns stay GREEN** on titanic under `--gate` (the
+report's worst, `26_dom_dancers_chevron` 5.67 ms, → GATE_PASS at mean 4.56 ms;
+`10_chasers`/`40_lissajous_weave`/`01_cylon_sweep`/`00_golden_hour_wash` all
+PASS). **SUITE:** +16 new green tests (7 `never_black_enforcer` fake-host + 4
+`never_black_vm_e2e` real-WASM + 5 `tools/harness_gate` subprocess); mixer suite
+475/475; **ZERO new failures from this thread** — full run 2520/2510/**10 fail**
+= the 8 known baseline (5× audio_capture no-device, osc EADDRINUSE, effects_v2
+full-run pollution, specialty_white_uv drift) + 2 sibling
+`tests/timeline/overview_perf.test.js` J1 perf tests that **PASS in isolation**
+(338 ms, under budget) and flake only under full-run order/load, in a file with
+zero coupling to this work. **HANDOFF to W1-1:** never-black is ALREADY on
+`/status` — `api_server.js:4790` reads `mixer.getRenderHealth()`, which now folds
+`darkness` into `ok`, so `/status.renderHealth.ok` flips false the moment the
+ship goes dark-while-lit, NO engine edit needed; a standalone
+`mixer.getNeverBlackHealth()` → `{lit, black, blackStreak, tripped, floorActive,
+solidRed, pattern, sinceFrame, message}` is provided for a `/timeline/state`
+field + the launcher watchdog's frame-flow check. **HYGIENE:** source edits
+confined to the two owned files (+231/-9 pattern_mixer, +127/-9 harness) + 3 new
+test files; `git diff --stat -- config.yaml patterns/` EMPTY before+after; all
+hostile artefacts in test temp dirs / gitignored `~/tmp`; public-repo safe; zero
+device HTTP, zero sACN, operator stack untouched, no git ops.
+
+---
+
+## W1-1 — engine HTTP/WS/timeline crash-proofing (`_116`, LANDED)
+
+Wave-1 dark-ship hardening on the three exclusively-owned files (`engine.js`,
+`lib/api_server.js`, `lib/timeline/*.js`) + `lib/autopilot_pick.js` (handed to
+I3). **7 fixes, each with a red-team repro flipped to a GREEN committed test.**
+Report: `.agent/reports/202607/20260725_116_wave1_engine_hardening.md`.
+
+- **CRITICAL (`_108`, Family A) — malformed WS frame kills the engine:** added a
+  classified non-fatal per-CONNECTION `ws.on('error')` in the upgrade router
+  (one point covers all four `/ws/*` topics + the `/` alias), the `_99` shape.
+- **Process backstops (`_108`/`_109`):** module-scope `uncaughtException` /
+  `unhandledRejection` in `engine.js` — log loudly + `exit(1)` with a named
+  reason (never run half-alive; W1-2 watchdog restarts the clean non-75 exit).
+- **J1 (`_113`, P0) — `/timeline/overview` freeze (296 s):** Intl formatters
+  cached per tz (`triggers.js`), per-day `dayTimes` injected into the per-sample
+  resolver (`resolve_deck_state.js`), + a per-(plan,day) memo on
+  `TimelineService.getOverview`. 500 cues × 8 days now **~347 ms** (~850×).
+- **J2/L3 (`_113`+`_115`, P0, 2×-confirmed) — corrupt state silently dead:**
+  `loadTimelineState` now validates the ENTIRE persisted shape (maps + values,
+  numerics, `mode` enum, a non-object doc), THROWS naming file+field → `start()`
+  refuses to half-run (the existing party-field contract, extended).
+- **I3 (`_112`, P1) — non-compiling entry wedges the sequential autopilot:**
+  picker excludes `_broken` + de-dupes ids (`autopilot_pick.js`); all three
+  advance sites flag a deterministic compile failure as broken + skip it,
+  surfacing which (loud), cleared on a clean load.
+- **L2 (`_115`, P1) — backward wall-clock step strands the party cue:** clamp
+  future-dated `moodSince`/`moodLastFire` down to `now` in `evaluateTick`
+  (`triggers.js`) → self-healing re-arm.
+- **L5 (`_115`, P1) — failed write returns 200 {saved:true}:** timeline-state
+  writes already throw (honest); `POST /settings/save-now` wrapped → honest 500.
+  **HANDOFF/spawn_task:** `StateManager.save()` (`lib/state_manager.js`, shared
+  core outside the lane) swallows the atomic-write error → deck/mixer/globals
+  save-now can still lie; a STRICT explicit-save path is the follow-up.
+- **W1-3 handoff wired:** `/timeline/state` now carries `renderHealth`
+  (`mixer.getNeverBlackHealth()`), guarded/additive, so a dark-while-lit ship
+  reads unhealthy there too (W1-2 watchdog + CaptainPad).
+
+**GATES:** timeline family **410/410**; full engine **2520/8** = the known
+environmental baseline (audio-capture no-device, osc EADDRINUSE lifecycle,
+mixer view-fader, pattern/scene parity, effects layout — **none import a W1-1
+module; zero new failures**). New tests: `tests/e2e/ws_frame_crashproof.test.js`
++ 5 `tests/timeline/*` (clock_backstep_clamp, timeline_state_validation,
+autopilot_broken_entry, overview_perf, save_write_honesty). `config.yaml` CLEAN
+vs HEAD; every spawned engine black-holed via `MARSIN_CONFIG_FILE`; zero device
+HTTP, zero sACN, operator stack untouched; no git ops.
+
+---
+
+## W1-1 follow-up — L5 strict save-now (`_120`, LANDED)
+
+The W1-1 L5 handoff (`_116` fix 7): `StateManager.save()` (`lib/state_manager.js`,
+shared engine core outside W1-1's 3-file lane) SWALLOWED the atomic-write error
+with only a `console.warn`, so `POST /settings/save-now`'s deck/mixer/globals
+branch could still report a lying 200 `{saved:true}` on a failed write — the
+CaptainPad "✓ SAVED" badge reads that response (red-team `_115` L5). Report:
+`.agent/reports/202607/20260725_120_wave1_strict_save_now.md`.
+
+- **STRICT / BEST-EFFORT split at the save seam.** `save()` grows an options
+  `{ strict = false }`: default warn-only (unchanged), `strict:true` re-throws.
+  `saveMixerState`/`saveDeckState`/`saveGlobalsState` thread the flag through.
+  In `api_server.js`, `saveAllState(strict=false)` + `saveGlobals(withParams,
+  strict=false)` thread it; save-now calls `saveAllState(true)` +
+  `saveGlobals(true,true)` so its existing (W1-1) try/catch now catches a real
+  throw → honest 500 `{saved:false,error}`. The ~80 AUTO-SAVE callers pass
+  nothing → best-effort, byte-unchanged (a transient disk blip never reaches
+  W1-1's `exit(1)` backstop → no dark ship).
+- **AUTO-SAVE behaviour is BYTE-UNCHANGED** (default-arg only; the existing
+  `state_atomicity.test.js` "failed write is swallowed" invariant still passes).
+- **The L5 lie is now an honest non-200.**
+
+**GATES:** full engine **2524/8** — the 8 are the SAME known environmental
+baseline (audio-capture framing ×2, OSC lifecycle/EADDRINUSE ×4, effects_v2
+layout ×1, specialty-playlist parity ×1; **none touch `state_manager.js` /
+`api_server.js` save paths — zero new failures**). +8 new tests, all GREEN:
+`tests/state/strict_save.test.js` (7, deterministic strict/best-effort seam) +
+`tests/e2e/save_now_honesty_e2e.test.js` (1, real engine subprocess: save-now →
+non-200 on a broken dir while a `/global-blackout` auto-save over the SAME dir
+stays 200 and the engine survives; timeline disabled to isolate the path;
+imports `setup_config_guard.mjs`). `config.yaml` CLEAN vs HEAD; spawned engine
+black-holed via `MARSIN_CONFIG_FILE`, state redirected via `MARSIN_STATE_DIR`;
+zero device HTTP, zero sACN, operator stack untouched; no git ops.

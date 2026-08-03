@@ -15,6 +15,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const yaml = require('js-yaml');
 
@@ -30,6 +31,10 @@ const { loadSimPorts } = require('../lib/load_ports.cjs');
 const _simPorts = loadSimPorts(path.join(SIM_ROOT, 'config.yaml'));
 const SACN_PORT = _simPorts.sacn_port;
 const SACN_UDP_PORT = _simPorts.sacn_udp_port;
+// Optional: the local IPv4 address (or adapter name) every multicast join is
+// pinned to. Absent = the OS picks, which is what shipped before and is logged
+// as such at boot. See lib/sacn_receiver_boot.cjs.
+const SACN_INTERFACE = _simPorts.sacn_interface;
 
 // ── Realtime priority (self-elevation) ──────────────────────────────────
 // This bridge relays every DMX frame; a starved relay freezes the rig just
@@ -49,6 +54,21 @@ processPriority.elevateSelf(
 const { computeEffectiveRoutes, engineOwnedPairs, routeKey, partitionRoutePairs,
   applyUniverseSubscriptions, readPatchDeclarations,
   parseSubscribedUniversesField } = require('../lib/bridge_routing.cjs');
+
+// Bench stand-in re-addressing (operator order 2026-07-31). Pure half in
+// lib/bench_mirror.cjs; this file owns the file reads, the senders and the logs.
+const { parseBenchMirrorSpec, isMirrorActive, mirrorSourceUniverses, mirrorDestPairs,
+  createMirrorState, spliceMirrorFrame, mirrorPayload,
+  describeMirror } = require('../lib/bench_mirror.cjs');
+
+// Boot-time correctness of the RECEIVE socket: which interface it joins
+// multicast on, when it may be subscribed to, and what a socket error means
+// (report 20260725_99 — the `addMembership EINVAL` boot crash).
+const { resolveMulticastInterface, createBootGate, classifyReceiverError,
+  checkBootSubscriptionInvariant } = require('../lib/sacn_receiver_boot.cjs');
+
+/** Sidecar filename a scene uses to declare itself a stand-in for another. */
+const BENCH_MIRROR_FILE = 'bench_mirror.yaml';
 
 // ── Derive universes from ALL scene patches.yaml files ─────────────────
 function getAllPatchUniverses() {
@@ -182,6 +202,27 @@ const _warnedRefusedRoutes = new Set();     // "scene|U→ip" — one named warn
 const _warnedSubscriptionErrors = new Set(); // full message — one shout per failure
 const _warnedPatchAnomalies = new Set();    // "scene|fixture|message"
 const _warnedFieldIssues = new Set();       // full message — one shout per field problem
+const _warnedMirrorSpecs = new Set();       // "scene|message" — one shout per broken spec
+
+// Held shut until the sACN receive socket is listening (see recomputeRoutes).
+const _bootGate = createBootGate({
+  onDefer: (reason) => console.log(
+    `[sACN Bridge] Route recompute ('${reason}') held until the sACN socket is listening — ` +
+    'multicast joins must not race the receiver\'s own boot join loop.'),
+});
+
+// ── Bench stand-in mirrors ──────────────────────────────────────────────
+// `_activeMirrors` is [{ scene, spec, state }] for every scene whose
+// bench_mirror.yaml is enabled AND whose preconditions hold right now. State
+// (the composed 512-byte buffers) is REUSED across recomputes while the spec is
+// byte-identical, so a route recompute never blanks a bench frame mid-show.
+let _activeMirrors = [];
+const _mirrorEntries = new Map();           // destKey → sender entry (same shape as a relay)
+let _mirrorStates = new Map();              // scene → { sig, state }
+let _lastMirrorSig = '';
+const _mirrorDirty = new Set();             // destKeys awaiting a flush
+const _mirrorPriority = new Map();          // destKey → priority of the last contributing frame
+let _mirrorFlushScheduled = false;
 
 /** Log a message at most once for the lifetime of the process. */
 function warnOnce(seen, message) {
@@ -289,12 +330,62 @@ function readSceneRoutePairs(sName) {
 }
 
 /**
+ * Read every scene's `bench_mirror.yaml` sidecar, fresh, with no cache — same
+ * doctrine as readSceneRoutePairs (report 20260725_87): the operator edits the
+ * map and the next recompute picks it up, no launcher restart.
+ *
+ * A spec that does not parse is REFUSED with one named warning and contributes
+ * nothing. It is never partially applied: a half-right re-address map is wrong
+ * fixtures with a green log, which is the failure mode the whole module exists
+ * to avoid.
+ *
+ * @returns {Array<{scene:string, spec:Object, raw:string}>}
+ */
+function readBenchMirrorSpecs() {
+  const out = [];
+  const scenesDir = path.join(SIM_ROOT, 'scenes');
+  let entries;
+  try {
+    entries = fs.readdirSync(scenesDir, { withFileTypes: true });
+  } catch (e) {
+    warnOnce(_warnedMirrorSpecs, `⚠ Could not scan scenes for ${BENCH_MIRROR_FILE}: ${e.message}`);
+    return out;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const specPath = path.join(scenesDir, entry.name, BENCH_MIRROR_FILE);
+    if (!fs.existsSync(specPath)) continue;
+    let raw;
+    try {
+      raw = fs.readFileSync(specPath, 'utf8');
+      out.push({ scene: entry.name, spec: parseBenchMirrorSpec(yaml.load(raw), `${entry.name}/${BENCH_MIRROR_FILE}`), raw });
+    } catch (e) {
+      warnOnce(_warnedMirrorSpecs,
+        `⚠ BENCH MIRROR REFUSED — ${entry.name}/${BENCH_MIRROR_FILE}: ${e.message} ` +
+        'Nothing is mirrored from this scene until the file is fixed.');
+    }
+  }
+  return out;
+}
+
+/**
  * Recompute the effective route set and diff it onto the live senders.
  * Called on: boot, client setScene, client disconnect, engine poll change.
  * Every route add/remove/suppression is logged AND broadcast to the sim's
  * monitor panel — on playa someone WILL wonder why a universe isn't relayed.
  */
 function recomputeRoutes(reason) {
+  // ── Boot gate (report 20260725_99) ──────────────────────────────────────
+  // A recompute SUBSCRIBES universes, and a subscription before the receive
+  // socket is listening is joined twice — once by us, once by the `sacn`
+  // package's own boot join loop, which runs in the socket's `listening`
+  // callback over the SAME array `addUniverse` pushes into. A duplicate
+  // IP_ADD_MEMBERSHIP is `addMembership EINVAL` on Windows, which the package
+  // re-emits as an 'error' event: that is what killed the input bridge at boot.
+  // Ordering, not suppression — `_bootGate.open()` replays the held reason the
+  // instant the socket is up, and the deferral is logged.
+  if (!_bootGate.guard(reason)) return;
+
   const candidateScenes = new Set([pinnedScene]);
   if (engineState.scene) candidateScenes.add(engineState.scene);
   for (const s of clientScenes.values()) candidateScenes.add(s);
@@ -315,13 +406,45 @@ function recomputeRoutes(reason) {
     scenePatchUniverses.set(s, read.universes);
   }
 
-  const { routes, excluded, conflicts, activeScenes } = computeEffectiveRoutes({
+  const { routes, excluded, conflicts: rawConflicts, activeScenes } = computeEffectiveRoutes({
     sceneRoutes,
     pinnedScene,
     engineScene: engineState.scene,
     clientScenes: clientScenes.values(),
     engineOwned: engineState.owned,
   });
+
+  // ── Bench stand-in mirrors (operator order 2026-07-31) ─────────────────
+  // Resolved BEFORE the subscription block and the sender diff: an active
+  // mirror adds SOURCE universes the receiver must accept, and OWNS its
+  // destination (universe → host) pairs, whose ordinary relay must be
+  // suppressed (one writer per pair — report 20260724_15).
+  const activeSceneSet = new Set(activeScenes);
+  const nextMirrors = [];
+  const nextMirrorStates = new Map();
+  for (const found of readBenchMirrorSpecs()) {
+    if (!isMirrorActive(found.spec, engineState.scene, activeSceneSet.has(found.scene))) continue;
+    // Reuse the composed buffers while the map is byte-identical, so a route
+    // recompute never blanks a bench frame mid-show.
+    const prev = _mirrorStates.get(found.scene);
+    const state = (prev && prev.sig === found.raw) ? prev.state : createMirrorState(found.spec);
+    nextMirrorStates.set(found.scene, { sig: found.raw, state });
+    nextMirrors.push({ scene: found.scene, spec: found.spec, state });
+  }
+  _activeMirrors = nextMirrors;
+  _mirrorStates = nextMirrorStates;
+
+  const mirrorOwned = new Set();
+  const mirrorTargets = new Map();          // destKey → { universe, ip, scene }
+  for (const m of _activeMirrors) {
+    for (const pair of mirrorDestPairs(m.spec)) {
+      const key = routeKey(pair.universe, pair.ip);
+      mirrorOwned.add(key);
+      mirrorTargets.set(key, { universe: pair.universe, ip: pair.ip, scene: m.scene });
+    }
+  }
+  const mirrorSuppressed = routes.filter(r => mirrorOwned.has(routeKey(r.universe, r.ip)));
+  const relayRoutes = routes.filter(r => !mirrorOwned.has(routeKey(r.universe, r.ip)));
 
   // Annotate scene provenance for the logs: "test_bench[engine]".
   const provenance = (scene) => {
@@ -349,8 +472,13 @@ function recomputeRoutes(reason) {
   // gate's widened list reaches the running receiver on the notify that
   // immediately follows the save — no launcher restart.
   const wantedUniverses = [];
-  for (const r of routes) {
+  for (const r of relayRoutes) {
     wantedUniverses.push({ universe: r.universe, source: `relay route → ${r.ip}` });
+  }
+  for (const m of _activeMirrors) {
+    for (const u of mirrorSourceUniverses(m.spec)) {
+      wantedUniverses.push({ universe: u, source: `bench mirror source (scene '${m.scene}')` });
+    }
   }
   for (const e of excluded) {
     wantedUniverses.push({ universe: e.universe, source: `engine-owned route → ${e.ip}` });
@@ -388,7 +516,7 @@ function recomputeRoutes(reason) {
   });
 
   // Diff → close removed senders, create added ones.
-  const nextKeys = new Set(routes.map(r => routeKey(r.universe, r.ip)));
+  const nextKeys = new Set(relayRoutes.map(r => routeKey(r.universe, r.ip)));
   for (const [key, entry] of _routeEntries) {
     if (!nextKeys.has(key)) {
       try { entry.sender.close(); } catch (e) {}
@@ -397,7 +525,7 @@ function recomputeRoutes(reason) {
       broadcastLog(`Relay route removed: U${entry.universe} → ${entry.ip}`, 'warn');
     }
   }
-  for (const r of routes) {
+  for (const r of relayRoutes) {
     const key = routeKey(r.universe, r.ip);
     if (_routeEntries.has(key)) continue;
     const sender = new Sender({
@@ -419,11 +547,64 @@ function recomputeRoutes(reason) {
     broadcastLog(`Relay route created: U${r.universe} → ${r.ip}`, 'source');
   }
 
-  // Rebuild the universe-indexed view routeFrame reads.
+  // Rebuild the universe-indexed view routeFrame reads. Mirror destinations are
+  // deliberately ABSENT from it: an inbound frame on U2 must NOT be forwarded
+  // raw to a box the mirror is composing for.
   outgoingSenders.clear();
   for (const entry of _routeEntries.values()) {
     if (!outgoingSenders.has(entry.universe)) outgoingSenders.set(entry.universe, new Map());
     outgoingSenders.get(entry.universe).set(entry.ip, entry);
+  }
+
+  // Mirror senders, diffed the same way and kept in their own map.
+  for (const [key, entry] of _mirrorEntries) {
+    if (mirrorTargets.has(key)) continue;
+    try { entry.sender.close(); } catch (e) {}
+    _mirrorEntries.delete(key);
+    _mirrorDirty.delete(key);
+    console.log(`[sACN Bridge] Bench mirror sender removed: U${entry.universe} → ${entry.ip} (${reason})`);
+  }
+  for (const [key, target] of mirrorTargets) {
+    if (_mirrorEntries.has(key)) continue;
+    _mirrorEntries.set(key, {
+      sender: new Sender({
+        universe: target.universe,
+        useUnicastDestination: target.ip,
+        port: SACN_UDP_PORT,
+      }),
+      universe: target.universe,
+      ip: target.ip,
+      lastErrorMsg: null,
+      lastErrorLoggedAt: 0,
+      errorsSinceLog: 0,
+    });
+  }
+
+  // Mirror activation/deactivation is a big behavioural switch — say exactly
+  // what changed, on every transition, to the console AND the monitor panel.
+  const mirrorSig = _activeMirrors
+    .map(m => `${m.scene}:${describeMirror(m.spec).join('|')}`).sort().join(';');
+  if (mirrorSig !== _lastMirrorSig) {
+    _lastMirrorSig = mirrorSig;
+    if (_activeMirrors.length === 0) {
+      console.log('[sACN Bridge] 🪞 Bench mirror INACTIVE — no scene is standing in for another ' +
+        `(engine scene '${engineState.scene}', active scenes: ${activeScenes.join(', ') || 'none'}).`);
+      broadcastLog('🪞 Bench mirror inactive', 'source');
+    }
+    for (const m of _activeMirrors) {
+      console.log(`[sACN Bridge] 🪞 BENCH MIRROR ACTIVE — scene '${m.scene}' is showing ` +
+        `'${m.spec.sourceScene}' fixtures. ${m.spec.note}`);
+      for (const line of describeMirror(m.spec)) {
+        console.log(`[sACN Bridge] 🪞   composes ${line}`);
+      }
+      broadcastLog(`🪞 Bench mirror ACTIVE — '${m.scene}' shows '${m.spec.sourceScene}'`, 'source');
+    }
+    for (const s of mirrorSuppressed) {
+      console.log(`[sACN Bridge] 🚫 Relay suppressed: U${s.universe} → ${s.ip} — the BENCH MIRROR ` +
+        'composes this universe for that controller; relaying the raw frame too would put two ' +
+        `writers on it. (declared by scenes: ${s.scenes.join(', ')})`);
+      broadcastLog(`Relay suppressed U${s.universe} → ${s.ip}: bench mirror owns it`, 'warn');
+    }
   }
 
   // Engine-owned suppressions: say WHAT was excluded and WHY, on every change.
@@ -442,6 +623,16 @@ function recomputeRoutes(reason) {
   // Cross-scene conflicts: same universe → different controllers. All are
   // relayed (each scene's declaration is explicit intent) but this is almost
   // always two rigs' scenes active at once — shout about it.
+  // A pair the mirror owns is no longer relayed, so it cannot contend for its
+  // universe — drop it from the conflict report rather than warning about a
+  // collision that suppression already resolved.
+  const relayedIps = new Map();
+  for (const r of relayRoutes) {
+    if (!relayedIps.has(r.universe)) relayedIps.set(r.universe, new Set());
+    relayedIps.get(r.universe).add(r.ip);
+  }
+  const conflicts = rawConflicts.filter(c => (relayedIps.get(c.universe) || new Set()).size > 1);
+
   const conflictSig = conflicts.map(c => `${c.universe}:${c.ips.join('|')}`).join(',');
   if (conflictSig !== _lastConflictSig) {
     _lastConflictSig = conflictSig;
@@ -576,7 +767,23 @@ wss.on('connection', (ws) => {
 });
 
 // ── sACN Receiver ──────────────────────────────────────────────────────
-const receiver = new Receiver({ universes: sacnOpts.universes, port: SACN_UDP_PORT, reuseAddr: true });
+// The interface is resolved BEFORE the socket exists so a bad `sacn_interface`
+// is a startup error with an inventory of the box, not a mystery EINVAL later.
+const _sacnIface = resolveMulticastInterface({
+  requested: SACN_INTERFACE,
+  interfaces: os.networkInterfaces(),
+});
+for (const line of _sacnIface.report) console.log(`[sACN Bridge] ${line}`);
+const IFACE_LABEL = _sacnIface.iface || 'OS default';
+
+const receiver = new Receiver({
+  universes: sacnOpts.universes,
+  port: SACN_UDP_PORT,
+  reuseAddr: true,
+  // undefined = unchanged behavior (the OS routes the join); a configured
+  // address pins every IP_ADD_MEMBERSHIP to that NIC.
+  iface: _sacnIface.iface,
+});
 
 const LOCKOUT_MS = sacnOpts.lockoutMs;
 const HIGH_PRIORITY = sacnOpts.highPriorityThreshold;
@@ -593,6 +800,42 @@ let lastLogTime = 0;
 // `receiver.universes` from here on.
 const BOOT_UNIVERSES = new Set(sacnOpts.universes);
 const _seenRuntimeUniverses = new Set();
+
+// ── Receive-socket lifecycle (report 20260725_99) ──────────────────────────
+// The `sacn` package reports every constructor-time `addMembership` failure as
+// an 'error' event. With no listener, Node THROWS — which is how one bad
+// multicast group used to kill the whole input bridge with a bare stack trace.
+// Both outcomes below are loud; only a socket-level failure is fatal, matching
+// the per-universe isolation `applyUniverseSubscriptions` already applies at
+// runtime.
+receiver.on('error', (err) => {
+  const { fatal, message } = classifyReceiverError(err, IFACE_LABEL);
+  if (!fatal) {
+    console.error(`[sACN Bridge] ${message}`);
+    broadcastLog(message, 'warn');
+    return;
+  }
+  console.error(`[sACN Bridge] ❌ ${message}`);
+  process.exit(1);
+});
+
+// The gate opens only after the package's own join loop has run. Node fires
+// `listening` listeners in registration order and `socket.bind(port, cb)`
+// registered that loop first, so by the time this runs every boot group is
+// joined and `addUniverse` can no longer collide with it.
+receiver.socket.on('listening', () => {
+  const invariant = checkBootSubscriptionInvariant(BOOT_UNIVERSES, receiver.universes);
+  if (!invariant.ok) {
+    console.error(`[sACN Bridge] ❌ ${invariant.message}`);
+    process.exit(1);
+  }
+  const replay = _bootGate.open();
+  console.log(`[sACN Bridge] ✅ Receive socket listening on :${SACN_UDP_PORT} — ` +
+    `${BOOT_UNIVERSES.size} multicast group(s) joined on ${IFACE_LABEL}.`);
+  broadcastLog(`sACN input listening on :${SACN_UDP_PORT} — ${BOOT_UNIVERSES.size} universe(s) ` +
+    `joined on ${IFACE_LABEL}`, 'source');
+  if (replay) recomputeRoutes(replay);
+});
 
 // The old `universe > MAX_UNIVERSE` drop guard lived here and is RETIRED
 // (report 20260725_58 §7.1). It could never fire — the Receiver drops every
@@ -663,45 +906,95 @@ function broadcastLog(msg, type) {
   });
 }
 
+/**
+ * Send one composed/relayed frame through a sender entry, with the per-target
+ * error dedup both the relay and the bench mirror rely on: log on first
+ * occurrence and on transition, then suppress identical errors and emit a
+ * single heartbeat per RELAY_ERROR_LOG_INTERVAL_MS until the target recovers.
+ * Without it an offline controller produces one `EHOSTDOWN` line per inbound
+ * frame (≈30+/s).
+ */
+function sendVia(entry, payload, priority, label) {
+  entry.sender.send({ payload, sourceName: 'MarsinRelay Engine', priority })
+    .then(() => {
+      if (entry.lastErrorMsg) {
+        const burst = entry.errorsSinceLog;
+        const tail = burst > 0 ? ` (after ${burst} suppressed errors)` : '';
+        console.log(`[sACN Bridge] ✅ Recovered ${label} U${entry.universe}→${entry.ip}${tail}`);
+        entry.lastErrorMsg = null;
+        entry.lastErrorLoggedAt = 0;
+        entry.errorsSinceLog = 0;
+      }
+    })
+    .catch(err => {
+      const now = Date.now();
+      const msg = err.message;
+      if (msg !== entry.lastErrorMsg) {
+        const transition = entry.lastErrorMsg ? ` (was: ${entry.lastErrorMsg})` : '';
+        console.error(`[sACN Bridge] ⚠ ${label} error U${entry.universe}→${entry.ip}: ${msg}${transition}`);
+        entry.lastErrorMsg = msg;
+        entry.lastErrorLoggedAt = now;
+        entry.errorsSinceLog = 0;
+      } else if (now - entry.lastErrorLoggedAt >= RELAY_ERROR_LOG_INTERVAL_MS) {
+        const suppressed = entry.errorsSinceLog;
+        console.error(`[sACN Bridge] ⚠ ${label} still failing U${entry.universe}→${entry.ip}: ${msg} ` +
+          `(${suppressed} suppressed in last ${Math.round((now - entry.lastErrorLoggedAt) / 1000)}s)`);
+        entry.lastErrorLoggedAt = now;
+        entry.errorsSinceLog = 0;
+      } else {
+        entry.errorsSinceLog++;
+      }
+    });
+}
+
+/**
+ * Feed one inbound frame to every active bench mirror and coalesce the sends.
+ *
+ * A composed destination is fed by SEVERAL source universes that arrive as
+ * separate datagrams. Sending on each splice would emit the destination once per
+ * source (3× per engine frame for the bench's U2) and put partially-updated
+ * frames on the wire. `setImmediate` runs after the poll phase that delivered
+ * this burst of datagrams, so one engine frame becomes one composed send.
+ */
+function mirrorInbound(universe, priority, payload) {
+  if (_activeMirrors.length === 0) return;
+  for (const m of _activeMirrors) {
+    for (const key of spliceMirrorFrame(m.state, universe, payload)) {
+      _mirrorDirty.add(key);
+      // The composed frame goes out at the priority of the source that last fed
+      // it — never a number this file invents.
+      _mirrorPriority.set(key, priority);
+    }
+  }
+  if (_mirrorDirty.size === 0 || _mirrorFlushScheduled) return;
+  _mirrorFlushScheduled = true;
+  setImmediate(flushMirrors);
+}
+
+/** Emit every composed destination that changed since the last flush. */
+function flushMirrors() {
+  _mirrorFlushScheduled = false;
+  const keys = [..._mirrorDirty];
+  _mirrorDirty.clear();
+  for (const key of keys) {
+    const entry = _mirrorEntries.get(key);
+    if (!entry) continue;               // sender retired between splice and flush
+    const owner = _activeMirrors.find(m => m.state.buffers.has(key));
+    if (!owner) continue;               // mirror deactivated between splice and flush
+    sendVia(entry, mirrorPayload(owner.state, key), _mirrorPriority.get(key), 'Bench mirror');
+  }
+}
+
 function routeFrame(universe, priority, payload) {
+  // 0. Bench stand-in: compose this frame into any destination it feeds. Runs
+  //    on the same admitted frames the relay does, so an sACN priority override
+  //    silences the mirror exactly as it silences the relay.
+  mirrorInbound(universe, priority, payload);
+
   // 1. Relay to physical sACN devices directly
   const ipTargets = outgoingSenders.get(universe);
   if (ipTargets) {
-    for (const entry of ipTargets.values()) {
-      entry.sender.send({ payload, sourceName: 'MarsinRelay Engine', priority })
-        .then(() => {
-          // Healthy send. If we were in a failure streak, log recovery once
-          // (with the suppressed-error count) and reset dedup state.
-          if (entry.lastErrorMsg) {
-            const burst = entry.errorsSinceLog;
-            const tail = burst > 0 ? ` (after ${burst} suppressed errors)` : '';
-            console.log(`[sACN Bridge] ✅ Recovered U${entry.universe}→${entry.ip}${tail}`);
-            entry.lastErrorMsg = null;
-            entry.lastErrorLoggedAt = 0;
-            entry.errorsSinceLog = 0;
-          }
-        })
-        .catch(err => {
-          const now = Date.now();
-          const msg = err.message;
-          if (msg !== entry.lastErrorMsg) {
-            const transition = entry.lastErrorMsg
-              ? ` (was: ${entry.lastErrorMsg})`
-              : '';
-            console.error(`[sACN Bridge] ⚠ Relay error U${entry.universe}→${entry.ip}: ${msg}${transition}`);
-            entry.lastErrorMsg = msg;
-            entry.lastErrorLoggedAt = now;
-            entry.errorsSinceLog = 0;
-          } else if (now - entry.lastErrorLoggedAt >= RELAY_ERROR_LOG_INTERVAL_MS) {
-            const suppressed = entry.errorsSinceLog;
-            console.error(`[sACN Bridge] ⚠ Still failing U${entry.universe}→${entry.ip}: ${msg} (${suppressed} suppressed in last ${Math.round((now - entry.lastErrorLoggedAt) / 1000)}s)`);
-            entry.lastErrorLoggedAt = now;
-            entry.errorsSinceLog = 0;
-          } else {
-            entry.errorsSinceLog++;
-          }
-        });
-    }
+    for (const entry of ipTargets.values()) sendVia(entry, payload, priority, 'Relay');
   }
 
   // 2. Broadcast to Browser WebSocket clients
@@ -740,6 +1033,12 @@ console.log('═'.repeat(56));
 // Runs LAST so `wss` / `broadcastLog` exist for the transition broadcasts.
 // Initial set = the CLI pin's routes; the engine poll and client scene tags
 // join the union as they arrive.
+//
+// This call is HELD by the boot gate and replayed from the receive socket's
+// `listening` handler (report 20260725_99): subscribing a universe before the
+// `sacn` package's own join loop has run makes that loop join it twice, and a
+// duplicate IP_ADD_MEMBERSHIP is `addMembership EINVAL` on Windows — the crash
+// that used to kill this process at startup.
 recomputeRoutes('boot');
 pollEngineStatus();
 const _enginePollTimer = setInterval(pollEngineStatus, ENGINE_POLL_MS);

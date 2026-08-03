@@ -25,6 +25,14 @@
  * A strand is "patched" exactly when it appears in the returned map; unbound
  * or unassigned strands are simply absent (the caller turns that into a LOUD
  * unpatched marker, never a silent skip — codex P0).
+ *
+ * BINDING GRADE (operator ruling 2026-07-31, report 20260725_96): "bound" here
+ * is `isBoundLedController`, the UNION of VERIFIED (fingerprint read off the
+ * board) and PROVISIONAL (the operator typed the IP and the port/output config
+ * with the board offline). Both project real addresses — discovery is an
+ * OPTIONAL stage of the controller lifecycle, so a declared controller patches
+ * end-to-end before its board ever powers on. The grade changes what the sim
+ * CLAIMS about hardware, never how the bytes are laid out.
  */
 
 import {

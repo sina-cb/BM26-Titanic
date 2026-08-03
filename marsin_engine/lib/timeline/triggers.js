@@ -9,15 +9,30 @@
 
 const MS_PER_MIN = 60000;
 
+// ── Intl.DateTimeFormat cache (report _116 / _113 J1 — the overview freeze) ──
+// Constructing an Intl.DateTimeFormat is EXPENSIVE, and the day-ribbon overview
+// built thousands of them — `resolveDayTimes` makes one (two) per clock cue, and
+// the ribbon re-ran `resolveDayTimes` per sample point per day → O(days×cues²)
+// formatter constructions, which froze the whole engine (render loop, sACN out,
+// tick all share the thread) for up to 296 s at the schema's 512-cue cap. These
+// formatters depend ONLY on (locale, tz), so cache and reuse them. `.format()` /
+// `.formatToParts()` on a cached instance is cheap; only construction was slow.
+const _fmtCache = new Map();
+function cachedFormatter(cacheKey, factory) {
+  let fmt = _fmtCache.get(cacheKey);
+  if (!fmt) { fmt = factory(); _fmtCache.set(cacheKey, fmt); }
+  return fmt;
+}
+
 // ── local-time helpers (tz-aware, injected `now`) ─────────────────────────────
 
 /**
  * The 'YYYY-MM-DD' calendar day of `nowMs` in IANA timezone `tz`.
  */
 export function dayKeyFor(nowMs, tz) {
-  const fmt = new Intl.DateTimeFormat('en-CA', {
+  const fmt = cachedFormatter(`daykey:${tz}`, () => new Intl.DateTimeFormat('en-CA', {
     timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
-  });
+  }));
   // en-CA yields "YYYY-MM-DD".
   return fmt.format(new Date(nowMs));
 }
@@ -28,11 +43,11 @@ export function dayKeyFor(nowMs, tz) {
  * wall-clock fields — robust across DST without a tz database.
  */
 function tzOffsetMinutes(nowMs, tz) {
-  const fmt = new Intl.DateTimeFormat('en-US', {
+  const fmt = cachedFormatter(`offset:${tz}`, () => new Intl.DateTimeFormat('en-US', {
     timeZone: tz, hour12: false,
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
-  });
+  }));
   const parts = fmt.formatToParts(new Date(nowMs));
   const get = (type) => Number(parts.find((p) => p.type === type).value);
   let hour = get('hour');
@@ -147,6 +162,60 @@ export function activePhase({ plan, now, dayTimes }) {
   return null;
 }
 
+// ── mood fire bookkeeping (the arm latch + the cooldown stamp) ────────────────
+
+/**
+ * Snapshot the MOOD FIRE bookkeeping (`moodArmed` latch + `moodLastFire`
+ * cooldown stamp) so a fire that is DROPPED downstream can be un-booked.
+ *
+ * Why this exists (report `_98` fix 1): `evaluateTick` is PURE — it cannot know
+ * whether the arbiter will actually let a mood fire drive the lights, so it
+ * stamps the cooldown and burns the one-fire-per-arrival latch at EVALUATION
+ * time. When the arbiter then drops the fire (a program owns the deck, or the
+ * operator has taken over) the trigger was consumed by a show that never
+ * played, and `moodArmed` only re-arms on a return to CALM — so a single
+ * suppressed attempt killed party for the rest of a sustained set.
+ *
+ * The invariant this restores is the one the operator's PARTY OVERRIDE gate
+ * already states in the mood branch below: suppression suppresses the SHOW, it
+ * does not consume the trigger. The SERVICE (the only layer that knows what
+ * actually played) snapshots before the evaluation and rolls back after the
+ * arbitration.
+ *
+ * @param {object} state runtime state
+ * @returns {{moodArmed:object, moodLastFire:object}} a shallow copy of both maps
+ */
+export function snapshotMoodBookkeeping(state) {
+  const s = state || {};
+  return {
+    moodArmed: { ...(s.moodArmed || {}) },
+    moodLastFire: { ...(s.moodLastFire || {}) },
+  };
+}
+
+/**
+ * Undo the mood FIRE bookkeeping for ONE cue, restoring both maps to the
+ * snapshot taken before `evaluateTick` ran. Mutates `state` in place (the
+ * caller owns the post-arbitration clone). A key that did not exist in the
+ * snapshot is DELETED, not set to undefined, so the persisted state never grows
+ * a phantom entry.
+ *
+ * @param {object} state    post-evaluation runtime state (mutated)
+ * @param {string} cueId
+ * @param {{moodArmed:object, moodLastFire:object}} snapshot from snapshotMoodBookkeeping
+ * @returns {object} the same state
+ */
+export function rollbackMoodFire(state, cueId, snapshot) {
+  for (const field of ['moodArmed', 'moodLastFire']) {
+    const map = state[field];
+    if (!map) continue;
+    const before = snapshot[field] || {};
+    if (Object.prototype.hasOwnProperty.call(before, cueId)) map[cueId] = before[cueId];
+    else delete map[cueId];
+  }
+  return state;
+}
+
 // ── the tick ──────────────────────────────────────────────────────────────────
 
 function cloneState(state) {
@@ -181,6 +250,23 @@ export function evaluateTick({
   if (!next.firedToday) next.firedToday = {};
   if (!next.moodLastFire) next.moodLastFire = {};
   if (!next.moodArmed) next.moodArmed = {};
+
+  // ── L2 (report _116 / _115): backward wall-clock step clamp ──────────────
+  // The mood dwell + cooldown gates below compare `now` against ABSOLUTE epoch
+  // stamps persisted in state (`moodSince`, `moodLastFire[id]`). The playa has
+  // no internet, so an RTC drift or a BIOS AC-restore boot can step the wall
+  // clock BACKWARD — after which those stamps sit in the FUTURE relative to
+  // `now`, `now - stamp` goes NEGATIVE, and dwell/cooldown can never satisfy:
+  // the party cue is permanently stranded for the whole duration of the jump
+  // (forward/1970 boots self-heal; only backward steps wedge). Clamp any stamp
+  // that is ahead of `now` down to `now` — negative elapsed = "just happened" /
+  // re-derive — so dwell restarts cleanly and cooldown restarts cleanly, and a
+  // backward step becomes a self-healing re-arm instead of a dead cue.
+  if (typeof next.moodSince === 'number' && next.moodSince > now) next.moodSince = now;
+  for (const id of Object.keys(next.moodLastFire)) {
+    const stamp = next.moodLastFire[id];
+    if (typeof stamp === 'number' && stamp > now) next.moodLastFire[id] = now;
+  }
 
   // Day roll-over: reset the once-per-day latch when the calendar day changes.
   const dayKey = dayKeyFor(now, tz);

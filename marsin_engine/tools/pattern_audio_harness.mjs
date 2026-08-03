@@ -41,6 +41,26 @@
  *   --model   rig model in models/<name>.js (default test_bench). FAILS LOUDLY
  *             if the file is missing or its pixels[] lack the required fields —
  *             never silently falls back to test_bench (codex P0).
+ *
+ *   ── GATE (redteam _112 F7/I4) — makes the verdict TRUSTWORTHY ──
+ *   --gate    Enforce the pass/fail bars: exit 3 (non-zero) with a NAMED reason
+ *             when the pattern FAILS. The GATE_PASS/GATE_FAIL verdict always
+ *             PRINTS; --gate only changes the EXIT CODE, so existing clip/gif
+ *             tooling that spawns this harness is unaffected. USE --gate in the
+ *             `_90` ChatGPT loop. Bars:
+ *               DARK        — > --max-dark-frac of the gate window renders
+ *                             essentially black (peak channel < 8). A 100%-black
+ *                             pattern fails (violates R4 "never fully black").
+ *               BLACK_LATCH — lit early then latches black later (a "sleeper"
+ *                             that behaves for the audited window). Caught by
+ *                             rendering >= --gate-frames past the clip.
+ *               OVER_BUDGET — MEAN VM render time > (--budget-ms / --mix-channels)
+ *                             per-channel budget. Shipped patterns stay green.
+ *             GATE_WARN DIM (peak < 200) is advisory, never a failure.
+ *   --gate-frames    min frames rendered for the latch check (default 600 = 15 s)
+ *   --budget-ms      whole-mix frame budget (default 25 = 40 fps)
+ *   --mix-channels   channels sharing the budget (default 4) → per-channel bar
+ *   --max-dark-frac  black-frame fraction that fails DARK (default 0.5)
  */
 import { AudioAnalyzer } from '../audio/analyzer/audio_analyzer.js';
 import { fillFrame, SYNTHS } from '../audio/synth/test_synths.js';
@@ -246,13 +266,38 @@ if (storedFrames * N > maxCells) {
 const keepIdx = []; for (let i = 0; i < N; i++) if (i % pixelStride === 0) keepIdx.push(i);
 
 const meta = keepIdx.map(i => { const p = px[i]; return { i: p.i, fId: p.fId || 0, sId: p.sId || 0, nx: p.nx, ny: p.ny, nz: p.nz }; });
-const frameData = []; const totals = []; const sigLog = []; const everLit = new Array(N).fill(false);
-let internalT = 0;
-for (let step = 0; step < internalSteps; step++) {
-  advanceAudio();
-  // Apply each modulation as the engine's OVERRIDE: slider = lerp(min, max,
-  // curve(signal)). Bare tokens default to min=0,max=1,linear => identity (the
-  // legacy slider := signal behaviour).
+
+// ── I4 GATE accounting (redteam _112 F7) ──────────────────────────────────────
+// The harness used to ALWAYS exit 0 with no failing bar: a 100%-black pattern
+// passed, and a "sleeper" that renders perfectly for the audited window then
+// latches black afterwards cleared every documented bar (evil_black.js /
+// evil_sleeper.js). That made the operator's only gate on ChatGPT-authored
+// patterns untrustworthy. We now:
+//   • time ONLY the VM work (beginFrame + renderAll6ch) per frame — the same
+//     "pattern render only" quantity the perf audit measured;
+//   • render a GUARANTEED-LONG window (>= --gate-frames) so a post-window
+//     black-latch is caught even when --frames is short;
+//   • track a per-frame "essentially black" flag (peak channel < DARK_CHAN);
+//   • print a GATE_PASS / GATE_FAIL verdict with a NAMED reason, and under
+//     --gate set a non-zero exit code so automation can trust it.
+// Shipped patterns (mean 0.75 ms / worst 5.67 ms on titanic, always lit) stay
+// green: darkFrac ~0, no latch, mean well under the per-channel budget.
+const gate = A.gate !== undefined && A.gate !== 'false';   // --gate → non-zero exit on FAIL
+const budgetMs = (A['budget-ms'] !== undefined && A['budget-ms'] !== 'true') ? parseFloat(A['budget-ms']) : 25;
+const mixChannels = (A['mix-channels'] !== undefined && A['mix-channels'] !== 'true') ? parseInt(A['mix-channels'], 10) : 4;
+const maxDarkFrac = (A['max-dark-frac'] !== undefined && A['max-dark-frac'] !== 'true') ? parseFloat(A['max-dark-frac']) : 0.5;
+if (!(budgetMs > 0) || !(mixChannels > 0) || !(maxDarkFrac >= 0 && maxDarkFrac <= 1)) {
+  console.log('GATEARG_FAIL: --budget-ms>0, --mix-channels>0, --max-dark-frac in [0,1]'); process.exit(2); }
+// Render at least this many frames so a sleeper latching after the audited
+// window is caught. evil_sleeper latches at frame 200; 600 (15 s @ 40 fps) is
+// comfortably past any plausible audit window a pattern could sleep through.
+const gateFramesTarget = Math.max(internalSteps, (A['gate-frames'] !== undefined && A['gate-frames'] !== 'true') ? parseInt(A['gate-frames'], 10) : 600);
+const DARK_CHAN = 8;              // a frame whose peak channel is below this is "essentially black"
+const frameDark = [];            // per-gate-frame black flag (main window + tail)
+let gatePeak = 0, sumFrameMs = 0, worstFrameMs = 0, timedFrames = 0;
+
+// Apply this step's --mod OVERRIDEs (shared by the main + tail render loops).
+function applyStepMods() {
   for (const m of mods) { const id = idOf(m.target); if (id != null) {
     const s = sig[SIG_FIELD[m.sig]];
     // clamp01 to match the deployed engine's OVERRIDE (lib/modulation_engine.js),
@@ -261,15 +306,45 @@ for (let step = 0; step < internalSteps; step++) {
     const v01 = m.min + (m.max - m.min) * m.curve(s);
     rt.setControl(id, v01 < 0 ? 0 : (v01 > 1 ? 1 : v01));
   } }
+}
+// Render one frame, TIMING only the VM work; fold to rgb; roll gate accounting
+// (peak, per-frame black flag, frame time excluding a 2-frame warmup).
+function renderGateFrame() {
+  const t0 = process.hrtime.bigint();
   rt.beginFrame(internalT * DT);
-  const rgb = fold(rt.renderAll6ch());
+  const raw6 = rt.renderAll6ch();
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  const rgb = fold(raw6);
   internalT++;
+  let frameMax = 0;
+  for (let i = 0; i < N; i++) { const c = rgb[i]; if (c[0] > frameMax) frameMax = c[0]; if (c[1] > frameMax) frameMax = c[1]; if (c[2] > frameMax) frameMax = c[2]; }
+  if (frameMax > gatePeak) gatePeak = frameMax;
+  frameDark.push(frameMax < DARK_CHAN);
+  if (frameDark.length > 2) { sumFrameMs += ms; if (ms > worstFrameMs) worstFrameMs = ms; timedFrames++; }
+  return rgb;
+}
+
+const frameData = []; const totals = []; const sigLog = []; const everLit = new Array(N).fill(false);
+let internalT = 0;
+for (let step = 0; step < internalSteps; step++) {
+  advanceAudio();
+  applyStepMods();
+  const rgb = renderGateFrame();
   // brightness/lit accounting runs over the full pixel set every internal step.
   let tot = 0; for (let i = 0; i < N; i++) { const s = rgb[i][0] + rgb[i][1] + rgb[i][2]; tot += s; if (s > 8) everLit[i] = true; }
   if (step % emitEvery === 0 && frameData.length < storedFrames) {
     frameData.push(keepIdx.map(i => rgb[i]));          // store only the kept (strided) pixels
     totals.push(tot); sigLog.push({ ...sig });
   }
+}
+// Extended latch window — keep stepping (audio + VM clock continue) past the
+// captured clip so a pattern that latches black AFTER the audited window is
+// caught. No clip storage, just gate accounting.
+for (let step = internalSteps; step < gateFramesTarget; step++) {
+  advanceAudio();
+  applyStepMods();
+  const rgb = renderGateFrame();
+  for (let i = 0; i < N; i++) { const s = rgb[i][0] + rgb[i][1] + rgb[i][2]; if (s > 8) everLit[i] = true; }
 }
 const frames = frameData.length;
 
@@ -318,5 +393,41 @@ function corr(xs, ys) { const mx = xs.reduce((a, b) => a + b, 0) / xs.length, my
 for (const m of mods) { const xs = sigLog.map(s => s[SIG_FIELD[m.sig]]);
   const c = corr(xs, totals);
   console.log(`AUDIO_REACT ${m.sig}->${m.target}: corr(signal,brightness)=${c.toFixed(2)} signalRange=${Math.min(...xs).toFixed(2)}..${Math.max(...xs).toFixed(2)} ${Math.abs(c) > 0.35 ? '(REACTIVE)' : '(weak/indirect)'}`); }
+
+// ── I4 GATE verdict (redteam _112 F7) ─────────────────────────────────────────
+// Evaluate the failing bars over the full gate window (main clip + tail):
+//   BLACK_LATCH — lit early, latches black later (the sleeper);
+//   DARK        — mostly/fully black across the window (evil_black);
+//   OVER_BUDGET — mean VM render time over the per-channel frame budget.
+// GATE_WARN DIM is advisory (peak < 200). Under --gate a FAIL sets exit 3 so
+// automation (and the operator's `_90` loop) can trust the verdict; without
+// --gate the verdict still PRINTS but the exit code is unchanged, so existing
+// clip/gif tooling that spawns the harness is not broken.
+const gateFrames = frameDark.length;
+const darkCount = frameDark.reduce((a, b) => a + (b ? 1 : 0), 0);
+const gateDarkFrac = gateFrames ? darkCount / gateFrames : 1;
+const third = Math.max(1, Math.floor(gateFrames / 3));
+const headDark = frameDark.slice(0, third).reduce((a, b) => a + (b ? 1 : 0), 0) / third;
+const tailDark = frameDark.slice(gateFrames - third).reduce((a, b) => a + (b ? 1 : 0), 0) / third;
+const meanFrameMs = timedFrames ? sumFrameMs / timedFrames : 0;
+const perChannelBudget = budgetMs / mixChannels;
+console.log(`GATE window=${gateFrames}f darkFrac=${gateDarkFrac.toFixed(2)} headDark=${headDark.toFixed(2)} tailDark=${tailDark.toFixed(2)} peak=${gatePeak} meanMs=${meanFrameMs.toFixed(2)} worstMs=${worstFrameMs.toFixed(2)} budget/ch=${perChannelBudget.toFixed(2)}ms`);
+const gateReasons = [];
+if (headDark < 0.2 && tailDark > 0.8) {
+  gateReasons.push(`BLACK_LATCH: lit early (head ${(headDark * 100) | 0}% dark) then latches black (tail ${(tailDark * 100) | 0}% dark) over ${gateFrames} frames`);
+} else if (gateDarkFrac > maxDarkFrac) {
+  gateReasons.push(`DARK: ${(gateDarkFrac * 100) | 0}% of ${gateFrames} frames render essentially black (peak channel < ${DARK_CHAN}) — violates R4 "never fully black"`);
+}
+if (meanFrameMs > perChannelBudget) {
+  gateReasons.push(`OVER_BUDGET: mean ${meanFrameMs.toFixed(2)} ms/frame > ${perChannelBudget.toFixed(2)} ms per-channel budget (${budgetMs} ms / ${mixChannels} mixer channels); worst ${worstFrameMs.toFixed(2)} ms`);
+}
+if (gatePeak < 200) console.log(`GATE_WARN DIM: peak ${gatePeak} < 200 (lift toward 255)`);
+if (gateReasons.length) {
+  console.log('GATE_FAIL ' + gateReasons.join(' | '));
+  if (gate) process.exitCode = 3;   // named non-zero only under --gate
+} else {
+  console.log('GATE_PASS');
+}
+
 console.log('OUT=' + out);
 rt.destroy();

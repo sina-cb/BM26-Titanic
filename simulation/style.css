@@ -3585,6 +3585,110 @@ body.edit-mode-active #engine-params-panel {
   border-color: color-mix(in srgb, var(--text) 20%, transparent);
 }
 
+/* ── Binding GRADE badge (provisional vs verified) ─────────────────────────
+   A provisional card patches the whole chain on the operator's word alone, so
+   the badge is deliberately loud and always the first thing in the device
+   section — never a hidden flag (operator ruling 2026-07-31). */
+.led-binding-badge {
+  flex: 1 1 100%;
+  display: inline-block;
+  align-self: flex-start;
+  border-radius: 8px;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border: 1px solid transparent;
+}
+
+.cm-binding-provisional {
+  color: var(--warning, #e0a030);
+  background: color-mix(in srgb, var(--warning, #e0a030) 16%, transparent);
+  border-color: color-mix(in srgb, var(--warning, #e0a030) 55%, transparent);
+  border-style: dashed;
+}
+
+.cm-binding-verified {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+}
+
+.led-device-provisional {
+  color: var(--warning, #e0a030);
+}
+
+/* ── Reachability dot (ONLINE / OFFLINE / UNKNOWN / CHECKING) ───────────────
+   `unknown` is muted, NOT red: it means "we did not ask", which is a different
+   statement from "we asked and nothing came back". */
+.cm-status-dot {
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: help;
+  user-select: none;
+}
+
+.cm-status-online { color: var(--ok); }
+.cm-status-offline { color: var(--error); }
+.cm-status-unknown { color: color-mix(in srgb, var(--text) 35%, transparent); }
+.cm-status-checking { color: var(--secondary); }
+
+.cm-status-auto-on {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+
+/* ── Provisional reconcile dialog ───────────────────────────────────────── */
+.led-reconcile-card {
+  min-width: 480px;
+  max-width: 680px;
+  max-height: 84vh;
+  overflow-y: auto;
+}
+
+.led-reconcile-lead {
+  font-size: 10px;
+  color: var(--secondary);
+  margin: 6px 0 10px;
+  line-height: 1.5;
+}
+
+.led-reconcile-row {
+  border-left: 3px solid color-mix(in srgb, var(--warning, #e0a030) 70%, transparent);
+  padding: 5px 0 5px 8px;
+  margin-bottom: 8px;
+}
+
+.led-reconcile-blocker {
+  border-left-color: var(--error);
+}
+
+.led-reconcile-code {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  color: var(--warning, #e0a030);
+  letter-spacing: 0.04em;
+}
+
+.led-reconcile-blocker .led-reconcile-code {
+  color: var(--error);
+}
+
+.led-reconcile-msg {
+  font-size: 10px;
+  line-height: 1.45;
+  margin: 2px 0;
+}
+
+.led-reconcile-diff {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  color: var(--secondary);
+}
+
 /* Discovery modal. */
 .led-disc-card,
 .led-push-card {
@@ -4071,4 +4175,48 @@ body.edit-mode-active #engine-params-panel {
 #controller-map-panel.cm-split-docked .cm-footer .vm-btn.vm-save {
   font-size: 12px;
   padding: 6px;
+}
+
+/* ── SHARED ADDRESS banner (operator order 2026-07-31, report 20260725_102) ──
+   Two controllers may send to the same (universe, channel). It is a WARNING,
+   not an error, and it must be VISIBLE on the controller card for as long as it
+   exists — the operator maps for an hour and a toast lasts 8 seconds.
+
+   Deliberately distinct from BOTH neighbours it sits between: amber-with-a-left-
+   rule (not the plain amber `.led-push-warn` fill, so it reads as a standing
+   state rather than a one-off dialog note), and never red — red is reserved for
+   the blocking `-error` grade below, which is an overlap the higher-IP rule
+   cannot rank and which still refuses the push. */
+.led-shared-address {
+  border-radius: 6px;
+  font-size: 9.5px;
+  line-height: 1.45;
+  padding: 5px 8px;
+  margin: 6px 0;
+}
+
+.led-shared-address-warn {
+  color: var(--warning, #e0a030);
+  background: color-mix(in srgb, var(--warning, #e0a030) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #e0a030) 34%, transparent);
+  border-left: 3px solid var(--warning, #e0a030);
+}
+
+.led-shared-address-error {
+  color: var(--danger, #e05050);
+  background: color-mix(in srgb, var(--danger, #e05050) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger, #e05050) 44%, transparent);
+  border-left: 3px solid var(--danger, #e05050);
+}
+
+.led-shared-address-head {
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+.led-shared-address-line {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 1px 0 1px 8px;
+  opacity: 0.92;
 }

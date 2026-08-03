@@ -55,6 +55,10 @@ import {
   clearAllPatches,
 } from '../dmx/controller_registry.js';
 import { gatherAllConfigs, isGlobalEffect, getFootprint } from '../dmx/auto_patcher.js';
+import {
+  collectAddressClaims,
+  planUnifiedOutput,
+} from '../dmx/address_merge.js';
 import { showCustomConfirm } from './view_masks_editor.js';
 import { pinForCornerResize } from './panel_layout.js';
 import {
@@ -65,7 +69,16 @@ import {
   outputSelectorOptions,
   getDeviceOutputs,
   startPushAll,
+  attemptFirstContactPromote,
 } from './led_discovery_panel.js';
+import {
+  controllerProbeTargets,
+  controllerStatusModel,
+  mergeProbeResults,
+  shouldAttemptFirstContact,
+} from '../dmx/controller_status.js';
+import { saveHttpUrl } from '../core/save_endpoint.js';
+import { isStaticHost, logStaticHostSkip } from '../core/static_host.js';
 import {
   renderGammaSection,
   startFleetGammaPush,
@@ -77,6 +90,8 @@ import {
   validateLedManualUniverses,
 } from '../dmx/led/led_patch_projection.js';
 import { collectClaimedUniverses } from '../dmx/led/device_config_mapper.js';
+import { ledBusFixtures, ledMappableCounts } from '../dmx/led/led_fixture_kind.js';
+import { getDefinition } from '../dmx/fixture_definition_registry.js';
 
 // ── Panel state ─────────────────────────────────────────────────────────
 
@@ -192,18 +207,26 @@ function fixtureList() {
   return (params.dmxFixtures && params.dmxFixtures.length > 0) ? params.dmxFixtures : params.parLights;
 }
 
-/** LED strands (the tray source for LED-type controllers). */
+/** LED strands (half of the tray source for LED-type controllers). */
 function strandList() {
   return Array.isArray(params.ledStrands) ? params.ledStrands : [];
 }
 
-/** Map<strandName, ledCount> for the LED projection (addresses preview). */
+/**
+ * LED PIXEL FIXTURES — the other half. A `parLights` entry whose fixture
+ * DEFINITION declares `bus: led` (the TE Sign V3 halves) hangs off a MarsinLED
+ * output exactly like a strand; only its pixel COORDINATES differ (baked `dots`
+ * instead of a start→end line). Operator correction 2026-07-31: *"the TE signs
+ * must be associated with MarsinLED controllers in the controller mapping
+ * pane."* They therefore live in the LED tray, not the DMX one.
+ */
+function ledBusFixtureList() {
+  return ledBusFixtures(allConfigs(), getDefinition);
+}
+
+/** Map<name, pixelCount> for the LED projection — strands AND LED fixtures. */
 function strandLedCounts() {
-  const m = new Map();
-  for (const s of strandList()) {
-    if (s && typeof s.name === 'string' && s.name.length > 0) m.set(s.name, s.ledCount || 10);
-  }
-  return m;
+  return ledMappableCounts(strandList(), allConfigs(), getDefinition);
 }
 
 /**
@@ -280,6 +303,7 @@ function ledCtx() {
     mutate,
     strandLedCounts,
     claimedUniverses: claimedUniversesFor,
+    addressMergePlan: addressMergePlanNow,
     refresh: renderIfOpen,
     showToast,
     activeScene: () => window.__activeScene || 'default',
@@ -301,6 +325,28 @@ function claimedUniversesFor(controller) {
     ledClaims: ledUniverseClaims(),
     controllers: reg.controllers,
   });
+}
+
+/**
+ * The registry-wide SHARED-ADDRESS plan (operator order 2026-07-31, report
+ * 20260725_102): which claims land on the same (universe, channel-range), who
+ * wins by the higher-IP rule, and which overlaps that rule cannot rank.
+ *
+ * Computed FRESH from the SAME two projections `claimedUniversesFor` uses, so
+ * the pane's warning banner, the push dialog and the wire-side merge can never
+ * tell three different stories. Threaded into the LED panel via ledCtx and
+ * published on `window.__addressMergePlan` for the render/output path
+ * (src/dmx/sacn_mapper.js reads the suppression index off it).
+ */
+function addressMergePlanNow() {
+  const reg = registry();
+  if (!registryIsActive(reg)) return planUnifiedOutput([]);
+  const proj = computeProjection(reg, configsByName(), pins());
+  return planUnifiedOutput(collectAddressClaims({
+    dmxUniverseMaps: proj.universeMaps,
+    ledClaims: ledUniverseClaims(),
+    controllers: reg.controllers,
+  }));
 }
 
 function configsByName() {
@@ -578,28 +624,42 @@ function makeAllocator(universe) {
 // caches the result for the lifetime of one render (see renderTray) so typing
 // in the filter box never re-derives or re-sorts anything.
 function unmappedNames() {
-  return unmappedNamesByKind(registry(), allConfigs().map(c => c.name), [])
+  // LED-bus fixtures are deliberately absent: they are LED-mappable, so they
+  // belong to the LED tray below. Leaving them here is what let a TE sign be
+  // chained onto a DMX gateway in the first place.
+  const ledBus = ledMappableNameSet();
+  return unmappedNamesByKind(
+    registry(), allConfigs().map(c => c.name).filter((n) => !ledBus.has(n)), [])
     .fixtures.sort(compareNatural);
 }
 
-/** Unmapped LED-strand names (the tray source when picking onto LED). */
+/** Unmapped LED-mappable names — strands AND LED pixel fixtures. */
 function unmappedStrandNames() {
-  return unmappedNamesByKind(registry(), [], strandList().map(s => s && s.name))
+  const ledNames = [
+    ...strandList().map(s => s && s.name),
+    ...ledBusFixtureList().map(c => c && c.name),
+  ];
+  return unmappedNamesByKind(registry(), [], ledNames)
     .strands.sort(compareNatural);
 }
 
-/** The set of LED-strand names in the scene (for strict type gating). */
-function strandNameSet() {
+/** Every LED-MAPPABLE name in the scene (for strict type gating). */
+function ledMappableNameSet() {
   const set = new Set();
   for (const s of strandList()) {
     if (s && typeof s.name === 'string' && s.name.length > 0) set.add(s.name);
   }
+  for (const c of ledBusFixtureList()) {
+    if (c && typeof c.name === 'string' && c.name.length > 0) set.add(c.name);
+  }
   return set;
 }
 
-/** Kind ('strand'|'fixture'|'unknown') of a mappable name, for cross-type guards. */
+/** Kind ('strand'|'fixture') of a mappable name, for cross-type guards.
+ *  'strand' here means LED-MAPPABLE — an LED strand or an LED pixel fixture;
+ *  `controllerAcceptsKind` reads it as "belongs on an LED controller". */
 function nameKind(name) {
-  return strandNameSet().has(name) ? 'strand' : 'fixture';
+  return ledMappableNameSet().has(name) ? 'strand' : 'fixture';
 }
 
 function violationsFor(violations, controller, port) {
@@ -881,6 +941,147 @@ function render() {
   syncSelectionUi();
 }
 
+// ── Controller reachability (ONLINE / OFFLINE / UNKNOWN) ────────────────
+// Operator request 2026-07-31: "nice to have an ONLINE/OFFLINE status for all
+// DMX and LED controllers … make it fast and parallel to not cause delays in
+// the UI."
+//
+// The probing itself is SERVER-SIDE (server/controller_probe_service.cjs, route
+// POST /controllers/probe): the browser cannot open a TCP socket to a DMX
+// gateway, and per-type probes are the whole point (MarsinLED boards do not
+// answer ICMP; sACN/Art-Net receivers answer nothing at all on the data path).
+//
+// The pane NEVER awaits a probe to paint. It renders from `probeResults`
+// immediately — a card with no verdict yet shows ⋯/◌, never a guessed dot —
+// and repaints when the sweep resolves. A sweep in flight is not restarted.
+const probeResults = new Map();  // controller id → probe result
+let probeSweeping = false;
+let probeTimer = null;
+
+// Auto-sweep while the pane is open. Persisted per machine; ON by default so
+// the dots are simply true without anyone asking, OFF for a machine that must
+// not touch the network (agent sessions, a bench with someone else's gear on
+// the same subnet).
+const PROBE_AUTO_KEY = 'bm26.map.controllerStatusAuto';
+const PROBE_INTERVAL_MS = 20000;
+
+function readProbeAutoPref() {
+  try {
+    const raw = localStorage.getItem(PROBE_AUTO_KEY);
+    return raw === null ? true : raw === '1';
+  } catch (err) {
+    // A blocked localStorage is not a reason to guess the operator's intent in
+    // a direction that puts packets on the wire.
+    console.error('[Controllers] read controller-status auto pref', err);
+    return false;
+  }
+}
+let probeAuto = readProbeAutoPref();
+
+/**
+ * Fold a `/controllers/probe` response into the pane and repaint.
+ *
+ * Exported because it is the single ingestion point for probe verdicts: the
+ * sweep below calls it, and so can a caller that already has results in hand.
+ * FIRST CONTACT lives here too — a PROVISIONAL LED card that just came back
+ * ONLINE carrying a board fingerprint is exactly the "next boot / recognition"
+ * moment the lifecycle promotes on, and it must behave identically no matter
+ * which entry point observed it.
+ */
+export function applyControllerProbeResults(response) {
+  const reg = registry();
+  const knownIds = new Set((reg && reg.controllers ? reg.controllers : []).map((c) => c.id));
+  mergeProbeResults(probeResults, response, knownIds);
+
+  for (const controller of (reg && reg.controllers) || []) {
+    const probe = probeResults.get(controller.id);
+    if (!shouldAttemptFirstContact(controller, probe)) continue;
+    // Promotes on a clean reconcile; otherwise leaves the card untouched and
+    // raises the reconcile dialog. Never auto-picks a side (codex P0).
+    attemptFirstContactPromote(ledCtx(), controller, probe.device, { interactive: true });
+  }
+  renderIfOpen();
+}
+
+/**
+ * One reachability sweep over every controller in the registry. Fire-and-repaint:
+ * nothing in the pane awaits it.
+ */
+export function refreshControllerStatuses({ force = false } = {}) {
+  if (probeSweeping) return Promise.resolve(null);
+  const targets = controllerProbeTargets(registry());
+  if (targets.length === 0) return Promise.resolve(null);
+  if (isStaticHost()) {
+    logStaticHostSkip('controller status probes (port 6970)');
+    return Promise.resolve(null);
+  }
+  probeSweeping = true;
+  renderIfOpen();
+  return fetch(saveHttpUrl('/controllers/probe'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ targets, force }),
+  })
+    .then((res) => res.json())
+    .then((body) => {
+      if (!body || body.ok !== true) {
+        throw new Error((body && body.error) || 'probe sweep returned no result');
+      }
+      probeSweeping = false;
+      applyControllerProbeResults(body);
+      return body;
+    })
+    .catch((err) => {
+      probeSweeping = false;
+      // A failed SWEEP is not an offline controller. Say what actually broke and
+      // leave every dot where it was — inventing OFFLINE from our own fetch
+      // failure is exactly the lie the third state exists to prevent.
+      console.error(`[Controllers] ✋ status sweep failed: ${err.message} — every dot keeps its ` +
+        'previous verdict (a failed sweep says nothing about the boards)');
+      // …and STOP the auto-sweep. The overwhelmingly common cause is a save
+      // server older than this page (the /controllers/probe route arrived with
+      // report 20260725_96), and re-failing every 20 s would bury the one line
+      // that explains it under a wall of identical toasts. One loud stop, with
+      // the fix in it; "Check status" re-arms it by hand. The stop is SESSION
+      // scoped on purpose — it is not written to the auto pref, so a reload
+      // after the restart tries again without the operator hunting for a toggle.
+      if (probeAuto) {
+        probeAuto = false;
+        syncProbeTimer();
+        showToast(`✋ controller status sweep failed: ${err.message}. Auto-status is now OFF — if ` +
+          'the sim stack was started before this feature landed, restart it so the save server ' +
+          'serves /controllers/probe, then press "Check status".', { error: true, ttl: 15000 });
+      } else {
+        showToast(`✋ controller status sweep failed: ${err.message}`, { error: true, ttl: 8000 });
+      }
+      renderIfOpen();
+      return null;
+    });
+}
+
+/** Start/stop the auto-sweep to match `probeAuto` and whether the pane is open. */
+function syncProbeTimer() {
+  const shouldRun = probeAuto && !!panelEl && !panelEl.classList.contains('hidden');
+  if (shouldRun && probeTimer === null) {
+    probeTimer = setInterval(() => refreshControllerStatuses(), PROBE_INTERVAL_MS);
+    refreshControllerStatuses();
+  } else if (!shouldRun && probeTimer !== null) {
+    clearInterval(probeTimer);
+    probeTimer = null;
+  }
+}
+
+function toggleProbeAuto() {
+  probeAuto = !probeAuto;
+  try {
+    localStorage.setItem(PROBE_AUTO_KEY, probeAuto ? '1' : '0');
+  } catch (err) {
+    console.error('[Controllers] persist controller-status auto pref', err);
+  }
+  syncProbeTimer();
+  renderIfOpen();
+}
+
 // ── Controllers section head + hide/show ────────────────────────────────
 // The toggle is DISPLAY ONLY: it flips one class on #cm-body and repaints one
 // button. It never rebuilds the pane, never recomputes a projection and never
@@ -901,6 +1102,29 @@ function renderControllersSectionHead(controllerCount) {
   title.className = 'cm-section-title';
   title.textContent = `Controllers (${controllerCount})`;
   head.appendChild(title);
+
+  // ── Reachability controls ────────────────────────────────────────────
+  const statusBtn = document.createElement('button');
+  statusBtn.className = 'cm-btn cm-status-sweep';
+  statusBtn.textContent = probeSweeping ? '🛰 checking…' : '🛰 Check status';
+  statusBtn.disabled = probeSweeping;
+  statusBtn.title = 'Probe every controller now (parallel, ~1 s ceiling each) and refresh the ' +
+    'ONLINE / OFFLINE / UNKNOWN dots.\n\n' +
+    'LED cards are probed over HTTP GET /api/status (MarsinLED boards do not answer ICMP); ' +
+    'DMX gateways by TCP connect, where even a refused connection proves the box is on the ' +
+    'network.\n\nReachability only — it does NOT prove sACN frames are arriving.';
+  statusBtn.onclick = () => refreshControllerStatuses({ force: true });
+  head.appendChild(statusBtn);
+
+  const autoBtn = document.createElement('button');
+  autoBtn.className = 'cm-btn cm-status-auto' + (probeAuto ? ' cm-status-auto-on' : '');
+  autoBtn.textContent = probeAuto ? 'auto ✓' : 'auto ✕';
+  autoBtn.title = probeAuto
+    ? `Auto-sweep is ON — every ${Math.round(PROBE_INTERVAL_MS / 1000)} s while this pane is ` +
+      'open. Click to stop probing the network.'
+    : 'Auto-sweep is OFF — dots only update when you press "Check status". Click to re-enable.';
+  autoBtn.onclick = toggleProbeAuto;
+  head.appendChild(autoBtn);
 
   return head;
 }
@@ -1141,11 +1365,23 @@ function renderController(controller, proj) {
   // four text buttons ate the row and the name collapsed to ~5 characters on
   // a docked pane. Row 1 gives the name everything except the chevron and the
   // IP box; row 2 owns the type / transport / +port / delete buttons.
+  // Reachability dot — one per card, right next to the IP it describes.
+  // Renders from the last verdict only; with no verdict it says UNKNOWN (or
+  // CHECKING mid-sweep) and never a guess.
+  const status = controllerStatusModel(controller, probeResults.get(controller.id) || null,
+    { sweeping: probeSweeping });
+  const statusDot = document.createElement('span');
+  statusDot.className = `cm-status-dot ${status.cls}`;
+  statusDot.textContent = status.dot;
+  statusDot.title = `${status.label}\n\n${status.title}`;
+  statusDot.dataset.cmStatus = status.state;
+
   const idRow = document.createElement('div');
   idRow.className = 'cm-controller-head-row cm-controller-id-row';
   idRow.appendChild(toggleBtn);
   idRow.appendChild(nameInp);
   idRow.appendChild(ipInp);
+  idRow.appendChild(statusDot);
 
   const actionRow = document.createElement('div');
   actionRow.className = 'cm-controller-head-row cm-controller-action-row';
@@ -2614,5 +2850,10 @@ export function setupControllerMapEditor() {
     } else {
       dismissToast();
     }
+    // Reachability sweeps run only while the pane is on screen — closing it
+    // stops every probe (and reopening takes a fresh one).
+    syncProbeTimer();
   };
+  // The pane can boot already open (its hidden class is persisted layout state).
+  syncProbeTimer();
 }

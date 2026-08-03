@@ -18,6 +18,9 @@ const MAPPING = {
   'paperplane.fill': 'send',
   'chevron.left.forwardslash.chevron.right': 'code',
   'chevron.right': 'chevron-right',
+  // Timeline zoom ladder (_94): the DAY view's "◀ WEEK" zoom-out affordance.
+  // Unmapped SF names render a blank 0×0 glyph on web, so map it explicitly.
+  'chevron.left': 'chevron-left',
   // Playlist reorder (slot 5, May 2026): up/down nudges on each entry row.
   'chevron.up': 'keyboard-arrow-up',
   'chevron.down': 'keyboard-arrow-down',

@@ -104,7 +104,33 @@ function repackMetaIfDirty(wasmHost, pixels) {
   wasmHost.metaDirty = false;
 }
 
+// MARSIN_CONFIG_FILE is the ONE seam that says where the engine's config lives.
+// It already governed the autopilot WRITE-BACK (lib/autopilot.js,
+// lib/color_autopilot.js — see tests/helpers/setup_config_guard.mjs); as of
+// report _100 it governs this BOOT READ too, so the seam means one coherent
+// thing: "this file is the engine's config.yaml".
+//
+// Why that matters (the `_97` §4.4 trap, which cost 30 s of live sACN on the
+// real rig): `--dest <ip>` overrides `sacn.destinations` ONLY. The per-controller
+// `controllers:` block carries its OWN host and wins for the universes it claims,
+// so an engine spawned with `--dest 127.0.0.9` still streams to the declared
+// hardware. Before this change there was NO way to neutralise that block short of
+// hand-editing the tracked config.yaml. Now a harness writes a black-holed copy
+// and points MARSIN_CONFIG_FILE at it.
+//
+// An override that is set but missing/unreadable THROWS (codex P0: a silent
+// fallback to the real config here is exactly the accident this prevents).
 function loadConfig() {
+  const override = process.env.MARSIN_CONFIG_FILE;
+  if (override !== undefined) {
+    if (!override || !path.isAbsolute(override)) {
+      throw new Error(`MARSIN_CONFIG_FILE must be an absolute path when set, got: ${JSON.stringify(override)}`);
+    }
+    if (!fs.existsSync(override)) {
+      throw new Error(`MARSIN_CONFIG_FILE points at a file that does not exist: ${override}`);
+    }
+    return yaml.load(fs.readFileSync(override, 'utf8')) || {};
+  }
   try {
     const configPath = path.join(__dirname, 'config.yaml');
     if (fs.existsSync(configPath)) {
@@ -1047,6 +1073,36 @@ function createRenderLoop(mixer, model, dmxRouter, universeIds, sacnOut, fps, in
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────
+// ── Process-level crash backstops (report _116, Family A — _108 / _109) ─────
+// Design intent (codex P0): "never die silently, and never run half-alive."
+// Node's DEFAULT on an uncaught exception or an unhandled promise rejection is
+// to crash the process — but REGISTERING a handler SUPPRESSES that default, so
+// each handler below MUST decide loudly and exit. A handler that merely logged
+// and returned would leave the engine limping in an undefined state (the exact
+// fallback the codex forbids). We log the full error with a NAMED reason and
+// exit(1); a clean non-75 exit is what the launcher watchdog (W1-2) restarts,
+// turning any surviving crash vector into a ~1 s blink rather than a dark ship.
+//
+// These are the LAST RESORT for a genuinely unexpected throw/rejection. The
+// _108 CRITICAL (a malformed WS frame) is fixed at the socket level in
+// api_server.js (per-connection `ws.on('error')`) and never reaches here — that
+// is the primary fix; this is the net beneath it. Registered at module scope so
+// a throw during boot (before main's own `.catch`) is still caught + diagnosed.
+process.on('uncaughtException', (err, origin) => {
+  console.error(`\n  ⛔ ENGINE FATAL — uncaughtException (${origin}): ` +
+    `${err && err.stack ? err.stack : err}`);
+  console.error('  ⛔ Exiting(1) with diagnosis rather than running half-alive — ' +
+    'supervisor should restart. (No fallback masking; see report _116.)');
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  const detail = reason && reason.stack ? reason.stack : reason;
+  console.error(`\n  ⛔ ENGINE FATAL — unhandledRejection: ${detail}`);
+  console.error('  ⛔ Exiting(1) with diagnosis rather than running half-alive — ' +
+    'supervisor should restart. (No fallback masking; see report _116.)');
+  process.exit(1);
+});
+
 async function main() {
   const opts = parseArgs();
   const engineConfig = loadConfig();

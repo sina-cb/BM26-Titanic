@@ -29,7 +29,7 @@ structureDetector:
   enabled: true
   dropEdgeMode: windowed
 capture:
-  device: audio=Microphone (Amazon USB Streaming Mic)
+  device: test
   deviceLabel: null
   deviceId: null
   inputFormat: null

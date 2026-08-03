@@ -9,6 +9,7 @@ import {
   ledWireBytes,
   ledPreviewRgbFromBytes,
 } from './led_wire.js';
+import { lostRangesFor, channelIsLost } from './address_merge.js';
 
 /**
  * Native strobe channel suppression — see docs/28_global_effect_macros.md §2.1.
@@ -208,12 +209,58 @@ function paintUndrivenEntry(entry, red) {
 }
 
 /**
+ * The 1-based absolute channels a pixel's controller LOST to a higher-IP
+ * claimant on this universe, or null when nothing is contested (the normal
+ * case). See src/dmx/address_merge.js for the rule; the index is rebuilt once
+ * per projection by main.js `publishAddressMergePlan`, never per frame.
+ *
+ * The lookup is per ENTRY, not per channel, so an uncontested rig pays exactly
+ * one Map miss per pixel and zero per byte.
+ */
+function lostChannelsFor(entry, lostIndex) {
+  if (!lostIndex) return null;
+  const cfg = entry.fixtureConfig;
+  const ip = cfg && typeof cfg.controllerIp === 'string' ? cfg.controllerIp : null;
+  if (!ip) return null;
+  return lostRangesFor(lostIndex, entry.patch.universe, ip);
+}
+
+/**
+ * Write one byte into the universe buffer unless this claimant LOST that channel
+ * to a higher-IP one. `lost` is null for every uncontested fixture — which is
+ * all of them on a normal rig — so the check is a single null test per byte.
+ *
+ * @param {Uint8Array} buf  - the universe's 512-byte frame
+ * @param {number} index0   - 0-based buffer index (channel − 1)
+ * @param {number} value    - byte
+ * @param {Array|null} lost - lostRangesFor() result for this entry
+ */
+function pokeChannel(buf, index0, value, lost) {
+  if (lost !== null && channelIsLost(lost, index0 + 1)) return;
+  buf[index0] = value;
+}
+
+/**
  * Maps simulation pixel colors into outgoing DMX frame buffers (for Pixelblaze and Gradient modes)
+ *
+ * SHARED ADDRESSES (operator order 2026-07-31, report 20260725_102): several
+ * claimants are allowed to land on the same (universe, channel). The universe
+ * buffer is ALREADY the unification point — one buffer per universe, and
+ * animate.js emits exactly one packet per (universe, destination IP) from it, so
+ * two claimants can never race two packets. What this function adds is the
+ * DETERMINISTIC part: a claimant that lost a channel to a numerically higher
+ * controller IP does not write that channel at all, so the merged result no
+ * longer depends on the render list's order. `window.__addressSuppressionIndex`
+ * carries the (universe → losing IP → ranges) map main.js publishes on every
+ * projection.
+ *
  * @param {Object} list - The batch render list containing pixels
  * @param {Object} dmxRouter - The router containing DMX universes
  */
 export function mapPixelsToSacn(list, dmxRouter) {
   if (!list || !dmxRouter) return;
+  const lostIndex = (typeof window !== 'undefined' && window.__addressSuppressionIndex &&
+    window.__addressSuppressionIndex.size) ? window.__addressSuppressionIndex : null;
   for (let i = 0; i < list.length; i++) {
     const entry = list[i];
     if (!entry.patch) continue;
@@ -229,8 +276,11 @@ export function mapPixelsToSacn(list, dmxRouter) {
     }
     
     const addr = entry.patch.addr - 1; // 0-indexed buffer
+    // The channels this fixture's controller LOST to a higher-IP claimant on
+    // this universe (null = nothing contested, the normal case).
+    const lost = lostChannelsFor(entry, lostIndex);
     let ch = entry.channels;
-    
+
     // Polyfill if the model serialized channels as a flat number (e.g., 3 for RGB)
     // Legacy model.js exports `channels: 3` and `type: 'par'` for Par lights.
     if (typeof ch === 'number') {
@@ -250,7 +300,7 @@ export function mapPixelsToSacn(list, dmxRouter) {
     
     // Auto-set the master dimmers to 100%
     if (entry.type === 'par' || entry.fixtureType === 'UkingPar' || entry.fixtureType === 'VintageLed' || entry.fixtureType === 'ShehdsBar') {
-      buf[addr + 0] = 255;
+      pokeChannel(buf, addr + 0, 255, lost);
     }
     // Wait! Do not force global RGBWAUV dimmers to 255, as it blasts the fixture to full white.
     // Individual pixels are addressed starting at channel 12, so globals (6-11) should stay 0.
@@ -277,16 +327,16 @@ export function mapPixelsToSacn(list, dmxRouter) {
       const bytes = ledWireBytes(entry.r, entry.g, entry.b, entry.w, entry.a, cfg,
         entry.whiteMode === 'synth' ? 'synth' : 'native');
       if (ch.w !== undefined) {
-        buf[addr + ch.r - 1] = bytes.r;
-        buf[addr + ch.g - 1] = bytes.g;
-        buf[addr + ch.b - 1] = bytes.b;
-        buf[addr + ch.w - 1] = bytes.w;
+        pokeChannel(buf, addr + ch.r - 1, bytes.r, lost);
+        pokeChannel(buf, addr + ch.g - 1, bytes.g, lost);
+        pokeChannel(buf, addr + ch.b - 1, bytes.b, lost);
+        pokeChannel(buf, addr + ch.w - 1, bytes.w, lost);
       } else {
         // RGB-only strand (no white emitter): the whole composite rides in
         // RGB. Still amber-folded and still clip-free by construction.
-        buf[addr + ch.r - 1] = bytes.r + bytes.w;
-        buf[addr + ch.g - 1] = bytes.g + bytes.w;
-        buf[addr + ch.b - 1] = bytes.b + bytes.w;
+        pokeChannel(buf, addr + ch.r - 1, bytes.r + bytes.w, lost);
+        pokeChannel(buf, addr + ch.g - 1, bytes.g + bytes.w, lost);
+        pokeChannel(buf, addr + ch.b - 1, bytes.b + bytes.w, lost);
       }
       // Preview honesty: the strand's on-screen colour comes from these
       // exact wire bytes, run back through the controller's white
@@ -298,9 +348,9 @@ export function mapPixelsToSacn(list, dmxRouter) {
     }
 
     if (ch.r !== undefined && ch.g !== undefined && ch.b !== undefined) {
-      buf[addr + ch.r - 1] = Math.max(0, Math.min(255, entry.r * 255)) || 0;
-      buf[addr + ch.g - 1] = Math.max(0, Math.min(255, entry.g * 255)) || 0;
-      buf[addr + ch.b - 1] = Math.max(0, Math.min(255, entry.b * 255)) || 0;
+      pokeChannel(buf, addr + ch.r - 1, Math.max(0, Math.min(255, entry.r * 255)) || 0, lost);
+      pokeChannel(buf, addr + ch.g - 1, Math.max(0, Math.min(255, entry.g * 255)) || 0, lost);
+      pokeChannel(buf, addr + ch.b - 1, Math.max(0, Math.min(255, entry.b * 255)) || 0, lost);
 
       // ── White lane policy (DMX fixtures) ───────────────────────────
       // DMX fixtures host-synthesize white as min(R,G,B) when the pattern
@@ -308,16 +358,25 @@ export function mapPixelsToSacn(list, dmxRouter) {
       // (LED strands never reach here — see the strand branch above.)
       if (ch.w !== undefined) {
         if (entry.w !== undefined && entry.w > 0) {
-          buf[addr + ch.w - 1] = Math.max(0, Math.min(255, entry.w * 255));
+          pokeChannel(buf, addr + ch.w - 1, Math.max(0, Math.min(255, entry.w * 255)), lost);
         } else {
-          buf[addr + ch.w - 1] = Math.min(buf[addr + ch.r - 1], buf[addr + ch.g - 1], buf[addr + ch.b - 1]);
+          // Synthesized from the RGB bytes AS THEY NOW STAND in the buffer —
+          // which, on a contested channel, are the WINNER's bytes. That is the
+          // honest white for a shared address: the white lane follows the colour
+          // the fixture will actually emit, not what this claimant proposed.
+          pokeChannel(buf, addr + ch.w - 1,
+            Math.min(buf[addr + ch.r - 1], buf[addr + ch.g - 1], buf[addr + ch.b - 1]), lost);
         }
       }
-      if (ch.a !== undefined && entry.a !== undefined) buf[addr + ch.a - 1] = Math.max(0, Math.min(255, entry.a * 255));
-      if (ch.u !== undefined && entry.u !== undefined) buf[addr + ch.u - 1] = Math.max(0, Math.min(255, entry.u * 255));
+      if (ch.a !== undefined && entry.a !== undefined) {
+        pokeChannel(buf, addr + ch.a - 1, Math.max(0, Math.min(255, entry.a * 255)), lost);
+      }
+      if (ch.u !== undefined && entry.u !== undefined) {
+        pokeChannel(buf, addr + ch.u - 1, Math.max(0, Math.min(255, entry.u * 255)), lost);
+      }
     } else if (ch.w !== undefined) {
       const luma = entry.w !== undefined ? entry.w * 255 : ((entry.r * 255 * 0.299) + (entry.g * 255 * 0.587) + (entry.b * 255 * 0.114));
-      buf[addr + ch.w - 1] = Math.max(0, Math.min(255, Math.round(luma))) || 0;
+      pokeChannel(buf, addr + ch.w - 1, Math.max(0, Math.min(255, Math.round(luma))) || 0, lost);
     }
   }
 }

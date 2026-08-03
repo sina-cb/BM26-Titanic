@@ -55,7 +55,16 @@ const ROOT = __dirname;
 const SIM_DIR = path.join(ROOT, 'simulation');
 const ENGINE_DIR = path.join(ROOT, 'marsin_engine');
 const CAPTAINPAD_DIR = path.join(ROOT, 'CaptainPad');
-const SIM_CONFIG_PATH = path.join(SIM_DIR, 'config.yaml');
+// PORT OVERRIDE (report 20260725_115 P2-6): BM26_SIM_CONFIG points the whole
+// stack — this launcher AND every sim child (start.js, save-server, both sACN
+// bridges, via lib/load_ports.cjs) — at an alternate port map, so launcher
+// profile behaviour (double-launch, launch-during-shutdown, the TOCTOU lock
+// window, IPv4/IPv6 port shadowing) can be exercised on throwaway ports without
+// seizing the operator's live :6969-:6972 / UDP 5568. Unset = shipped behavior.
+// Fail-loud: readPorts() throws if the pointed-at file is missing/unreadable —
+// no fallback to the real config. The child processes inherit this env, so they
+// read the same file. Keep it consistent with lib/load_ports.cjs.
+const SIM_CONFIG_PATH = process.env.BM26_SIM_CONFIG || path.join(SIM_DIR, 'config.yaml');
 
 // Runtime state lives in ~/tmp per the project temp-file convention.
 const LOCK_DIR = path.join(os.homedir(), 'tmp');
@@ -462,16 +471,35 @@ function killStaleListeners(ports, force = false) {
   }
 }
 
-function checkPortFree(port) {
+// Bind-probe a single address family. Resolves false if the port is held on
+// that address (a squatter), true if we could bind it (or the family isn't
+// available on this box — nothing can squat a family that doesn't exist).
+function bindProbe(port, host) {
   return new Promise((resolve, reject) => {
     const probe = net.createServer();
     probe.once('error', (err) => {
-      if (err.code === 'EADDRINUSE') resolve(false);
+      if (err.code === 'EADDRINUSE' || err.code === 'EACCES') resolve(false);
+      else if (err.code === 'EADDRNOTAVAIL' || err.code === 'EAFNOSUPPORT') resolve(true);
       else reject(err);
     });
     probe.once('listening', () => probe.close(() => resolve(true)));
-    probe.listen(port);
+    probe.listen(port, host);
   });
+}
+
+// Report 20260725_115 L4/P2-1: a bare `probe.listen(port)` binds ONLY `::` and
+// reports the port FREE while an IPv4-only squatter (a process on 0.0.0.0:P or
+// 127.0.0.1:P) still holds it. The sim then co-binds and every IPv4 client —
+// 127.0.0.1, localhost, and every LAN client — reaches the IMPOSTOR, while
+// waitForTcp (127.0.0.1) happily greenlights it. Check BOTH families the sim
+// actually binds and clients actually use (IPv4 0.0.0.0 AND IPv6 ::); the port
+// is free only if NEITHER is held. Sequential, so the two probes never conflict
+// with each other on a dual-stack box.
+async function checkPortFree(port) {
+  const v4Free = await bindProbe(port, '0.0.0.0');
+  if (!v4Free) return false;
+  const v6Free = await bindProbe(port, '::');
+  return v6Free;
 }
 
 async function assertPortsFree(ports) {
@@ -918,6 +946,79 @@ async function cmdSetup() {
   log('launcher', '   Now run: node launcher.js dev   (or prod / dev-lite)');
 }
 
+// Build the full per-CHILD health-check list. Report 20260725_115 L1/P0: the old
+// status probed ONLY sim-http (:6969) and engine (:6968), so `kill -9` on the
+// save server or EITHER sACN bridge left `status` printing ✅ over a dark rig.
+// We now probe EVERY child start.js owns — save (:6970), sACN-in (:6971),
+// sACN-out (:6972) — plus the engine. `expect:'ok'` wants a 2xx/3xx; the two
+// bridges are `ws` servers whose plain-GET answer is 426, so `expect:'any'`
+// treats ANY HTTP response as alive (a frozen event loop answers neither).
+function healthCheckList(ports, profile) {
+  const checks = [
+    { name: 'sim http', url: `http://127.0.0.1:${ports.http_port}/simulation/`, expect: 'ok' },
+    { name: 'save', url: `http://127.0.0.1:${ports.save_port}/list-scenes`, expect: 'ok' },
+    { name: 'sacn-in', url: `http://127.0.0.1:${ports.sacn_port}/`, expect: 'any' },
+    { name: 'sacn-out', url: `http://127.0.0.1:${ports.sacn_output_port}/`, expect: 'any' },
+    { name: 'engine', url: `http://127.0.0.1:${ports.marsin_engine_port}/status`, expect: 'ok' },
+  ];
+  if (profile && PROFILES[profile] && PROFILES[profile].processes.includes('captainpad')) {
+    checks.push({ name: 'captainpad', url: `http://127.0.0.1:${ports.captainpad_web_port}/`, expect: 'ok' });
+  }
+  return checks;
+}
+
+async function runHealthChecks(checks) {
+  const results = [];
+  for (const check of checks) {
+    const status = await httpStatus(check.url);
+    const up = check.expect === 'any'
+      ? status !== null
+      : (status !== null && status >= 200 && status < 400);
+    results.push({ ...check, status, up });
+  }
+  return results;
+}
+
+// FRAME-FLOW verification (report 20260725_115, fix #2 — "never report green on a
+// dark rig"). A bridge answering its liveness probe proves the port is alive; it
+// does NOT prove sACN frames are actually flowing. The input bridge already
+// broadcasts a "N packets/5s from '<source>'" monitor line to WS clients, so we
+// briefly connect as one and read it. Two honest caveats, documented here rather
+// than hidden: (1) this reuses the sim's own `ws` — if it can't be loaded the
+// check degrades to "unavailable" (an optional diagnostic, never a core
+// fallback); (2) connecting to the INPUT bridge counts as a sim-client in its
+// multi-window census, so while a real sim window is open this on-demand probe
+// may momentarily flash the bridge's "2 windows" contention warning. It is used
+// ONLY in the operator-initiated `status` command, never in a continuous loop.
+function readFrameFlow(port, windowMs = 6000) {
+  let WebSocket;
+  try {
+    WebSocket = require(path.join(SIM_DIR, 'node_modules', 'ws'));
+  } catch (err) {
+    return Promise.resolve({ available: false, reason: `ws not loadable (${err.code || err.message})` });
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (result) => {
+      if (settled) return;
+      settled = true;
+      try { ws.close(); } catch { /* already closing */ }
+      resolve(result);
+    };
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    const timer = setTimeout(() => done({ available: true, packets: 0, source: null }), windowMs);
+    ws.on('message', (raw) => {
+      try {
+        const data = JSON.parse(raw.toString());
+        const m = data && typeof data.msg === 'string' &&
+          data.msg.match(/(\d+)\s+packets\/5s\s+from\s+'([^']*)'/);
+        if (m) { clearTimeout(timer); done({ available: true, packets: Number(m[1]), source: m[2] }); }
+      } catch { /* non-JSON monitor chatter — ignore */ }
+    });
+    ws.on('error', (err) => { clearTimeout(timer); done({ available: false, reason: err.code || err.message }); });
+  });
+}
+
 async function cmdStatus() {
   const lock = readLock();
   if (!lock) {
@@ -927,19 +1028,25 @@ async function cmdStatus() {
   const alive = pidAlive(lock.pid);
   console.log(`Launcher: pid ${lock.pid} (${alive ? 'running' : 'DEAD — stale lock'}) · profile '${lock.profile}' · scene '${lock.scene}' · started ${lock.startedAt}`);
   const ports = readPorts();
-  const checks = [
-    ['sim', `http://127.0.0.1:${ports.http_port}/simulation/`],
-    ['engine', `http://127.0.0.1:${ports.marsin_engine_port}/status`],
-  ];
-  if (PROFILES[lock.profile] && PROFILES[lock.profile].processes.includes('captainpad')) {
-    checks.push(['captainpad', `http://127.0.0.1:${ports.captainpad_web_port}/`]);
-  }
+  const results = await runHealthChecks(healthCheckList(ports, lock.profile));
   let allUp = true;
-  for (const [name, url] of checks) {
-    const status = await httpStatus(url);
-    const up = status !== null && status >= 200 && status < 400;
-    allUp = allUp && up;
-    console.log(`  ${up ? '✅' : '❌'} ${name.padEnd(10)} ${url}${up ? '' : ' (no response)'}`);
+  for (const r of results) {
+    allUp = allUp && r.up;
+    const detail = r.up ? '' : (r.status === null ? ' (no response)' : ` (HTTP ${r.status})`);
+    console.log(`  ${r.up ? '✅' : '❌'} ${r.name.padEnd(10)} ${r.url}${detail}`);
+  }
+
+  // Frame-flow — is the ship actually lit, or do the ports just answer?
+  const sacnInUp = results.find((r) => r.name === 'sacn-in')?.up;
+  if (sacnInUp) {
+    const flow = await readFrameFlow(ports.sacn_port);
+    if (!flow.available) {
+      console.log(`  ◌ frames     could not read frame-flow (${flow.reason})`);
+    } else if (flow.packets > 0) {
+      console.log(`  ✅ frames     ~${flow.packets} sACN packets/5s from '${flow.source || 'unknown'}' — the rig is being driven`);
+    } else {
+      console.log('  ⚠ frames     sACN input bridge is UP but received 0 packets/5s — the rig may be DARK (is the engine sending?)');
+    }
   }
   process.exit(alive && allUp ? 0 : 1);
 }
@@ -998,8 +1105,14 @@ async function main() {
   const profileDef = PROFILES[opts.command];
   const ports = readPorts();
 
-  await assertSingleInstance(opts.force);
+  // Report 20260725_115 L6/P1-5: VALIDATE BEFORE assertSingleInstance. The
+  // single-instance check, with -f (and `prod` force-claims by default),
+  // force-KILLS the running stack. Validation must run first so a scene/pattern
+  // typo fails loudly WITHOUT first taking the live show down and then exiting.
+  // validate() is a pure existence check (no ports, no side effects), so it is
+  // always safe to run before we touch anything.
   validate(opts, profileDef);
+  await assertSingleInstance(opts.force);
 
   // Build the sim URL straight from the profile config + the common params,
   // so the auto-opened browser tab always carries this profile's settings.
@@ -1178,9 +1291,19 @@ async function main() {
   log('launcher', '────────────────────────────────────────────────────────');
 }
 
-main().catch((err) => {
-  if (!shuttingDown) {
-    logError(err.message);
-    teardown(1);
-  }
-});
+// Run as a CLI only when invoked directly. Guarding main() behind require.main
+// lets tests import the pure helpers (report _115 P2-6 testability goal) without
+// launching the stack.
+if (require.main === module) {
+  main().catch((err) => {
+    if (!shuttingDown) {
+      logError(err.message);
+      teardown(1);
+    }
+  });
+}
+
+module.exports = {
+  bindProbe, checkPortFree, readPorts,
+  healthCheckList, runHealthChecks, readFrameFlow,
+};

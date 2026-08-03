@@ -739,19 +739,60 @@ test('real scene test_bench: every remaining error is a known open mapping defec
   assert.deepEqual(unexpected, []);
 });
 
-test('real scene titanic: the model is fresh and complete, and 0% electrically mapped', async () => {
+test('real scene titanic: the model is fresh and complete; only the LED signs await mapping', async () => {
   const result = await runRealScene('titanic');
   const dirty = result.findings.filter(
     (f) => f.severity === 'error' && MUST_BE_CLEAN.includes(f.check));
   assert.deepEqual(dirty, [],
-    'the titanic model is a current, complete export — the gap is electrical, not structural');
+    'the titanic model is a current, complete export — coverage/patch-truth/views/drift clean');
 
-  // The whole story, mechanically: nothing is mapped, so nothing transmits.
-  const unmappedFixtures = result.findings.filter((f) => f.code === 'unmapped_fixture');
-  const unmappedStrands = result.findings.filter((f) => f.code === 'unmapped_strand');
-  assert.equal(unmappedFixtures.length, result.stats.sceneFixtures);
-  assert.equal(unmappedStrands.length, result.stats.sceneStrands);
-  assert.equal(result.ok, false, 'titanic must FAIL the gate until it is mapped');
+  // Every DMX fixture and every strand is authored onto a controller. The FOUR
+  // TE-sign halves are deliberately NOT: the operator removed the DMX
+  // placeholder they were parked on (2026-07-31 — *"the TE signs must be
+  // associated with MarsinLED controllers … I saw DMX ones, that's wrong!"*)
+  // and will attach them to a MarsinLED output himself. They are LED PIXEL
+  // FIXTURES now, present and attachable in the LED half of the unmapped tray.
+  // The gate stays RED until he does — an unmapped fixture is an error by
+  // design, and softening that would hide a genuinely dark fixture.
+  const unmapped = result.findings.filter((f) => f.code === 'unmapped_fixture')
+    .map((f) => f.where).sort();
+  assert.deepEqual(unmapped, [
+    "fixture 'TE Sign 2 V3 A' (group 'TE Sign 2')",
+    "fixture 'TE Sign 2 V3 B' (group 'TE Sign 2')",
+    "fixture 'TE Sign V3 A' (group 'TE Sign')",
+    "fixture 'TE Sign V3 B' (group 'TE Sign')",
+  ]);
+  assert.deepEqual(result.findings.filter((f) => f.code === 'unmapped_strand'), []);
+  assert.equal(result.stats.errors, 4,
+    'the ONLY open errors are the four unmapped TE-sign halves');
+
+  // What is left is HONEST, recorded state: the four unmapped LED signs and the
+  // six strands on the three unbound rope controllers. All INFO here, all
+  // errors under --strict (the hardware gate).
+  const policy = result.findings.filter((f) => f.strictOnly).map((f) => f.code).sort();
+  assert.deepEqual(policy, new Array(10).fill('unpatched_marker'));
+  // No `0.0.0.0` placeholder controller survives — the DMX one is gone.
+  assert.deepEqual(result.findings.filter((f) => f.code === 'placeholder_controller'), []);
+});
+
+test('real scene titanic: the TE signs are LED, not DMX, everywhere the model can say so', async () => {
+  const loaded = await loadScene('titanic');
+  const signPixels = loaded.model.pixels.filter((p) => /^TeSignV3/.test(p.fixtureType || ''));
+  assert.equal(signPixels.length, 148, 'two signs × (40 + 34) px');
+  // The reclassification, mechanically: LED transport, no DMX footprint, and
+  // the loud unpatched marker while no MarsinLED output owns them.
+  assert.ok(signPixels.every((p) => p.type === 'led'), 'every sign pixel is type led');
+  assert.ok(signPixels.every((p) => p.patch === null), 'no address until mapped');
+  assert.ok(signPixels.every((p) => p.unpatched === true), 'loud unpatched marker');
+  // The fixtureType strings are UNCHANGED, so every selector that names them
+  // (pixel_map_view_defaults TE_SIGN_TYPES, the scene pixel_map_views panels)
+  // still resolves — report 20260725_48 addendum 2 stays intact.
+  const types = new Set(signPixels.map((p) => p.fixtureType));
+  assert.deepEqual([...types].sort(), ['TeSignV3A40', 'TeSignV3B34']);
+  // And no sign record survives in patches.yaml: an LED thing gets a record
+  // only once it is patched (the strand contract).
+  const records = Object.keys(loaded.patches.patches || {});
+  assert.deepEqual(records.filter((n) => /TE Sign/.test(n)), []);
 });
 
 test('real scene titanic: --strict is stricter than the default gate', async () => {
@@ -760,4 +801,52 @@ test('real scene titanic: --strict is stricter than the default gate', async () 
   const strict = checkSceneModelParity({ ...loaded, ...REAL_SCENE_SETUP, strict: true });
   assert.ok(strict.stats.errors > loose.stats.errors,
     'every unpatched strand must be promoted to an error by the hardware gate');
+});
+
+// ── The TE sign pucks are RGBW — the SAME LEDs as the rope strands ───────
+//
+// Operator, 2026-07-31: *"sign is also RGBW, same lights as the ropes."* The
+// definitions shipped as RGB (3 bytes/px) from their DMX-era authoring. At run
+// time the owning MarsinLED output's `led.order` is what the exporter and
+// patches.yaml actually read — for a sign exactly as for a strand — so a wrong
+// declaration here never reached the wire, but it is the number a human reads
+// when sizing a universe, and it is what `channel_mode` reports. Pinned so the
+// generator can never quietly regress to 3 bytes.
+test('TE sign definitions declare RGBW, 4 bytes per pixel, like every rope output', () => {
+  const defs = loadFixtureDefs();
+  const expected = { TeSignV3A40: 40, TeSignV3B34: 34 };
+  for (const [type, pixelCount] of Object.entries(expected)) {
+    const def = defs[type];
+    assert.ok(def, `${type} must be registered`);
+    assert.equal(def.bus, 'led', `${type} rides the LED bus`);
+    assert.equal(def.pixels.length, pixelCount);
+    assert.equal(def.footprint, pixelCount * 4,
+      `${type} is ${pixelCount} px × 4 bytes (RGBW), not × 3`);
+    def.pixels.forEach((px, i) => {
+      assert.deepEqual(px.channels, {
+        red: 4 * i + 1, green: 4 * i + 2, blue: 4 * i + 3, white: 4 * i + 4,
+      }, `${type} pixel_${i + 1} is an RGBW quad`);
+    });
+  }
+  // One whole sign (both halves on one MarsinLED output) is 296 ch — still
+  // inside a single 512-channel universe.
+  assert.equal(defs.TeSignV3A40.footprint + defs.TeSignV3B34.footprint, 296);
+  assert.ok(296 <= 512);
+});
+
+test('the sign stride equals the stride every titanic LED controller runs', async () => {
+  const defs = loadFixtureDefs();
+  const { controllers } = await loadScene('titanic');
+  const ledControllers = (controllers.controllers || [])
+    .filter((c) => String(c.type).toUpperCase() === 'LED');
+  assert.ok(ledControllers.length > 0, 'titanic has LED controllers');
+  // Every rope output is RGBW/stride 4; the signs hang off the same kind of
+  // output, so their per-pixel byte count must match — that is the whole
+  // content of "same lights as the ropes".
+  for (const c of ledControllers) {
+    assert.equal((c.led || {}).order, 'RGBW', `${c.name} runs RGBW`);
+    assert.equal((c.led || {}).stride, 4, `${c.name} strides 4 bytes/px`);
+  }
+  assert.equal(defs.TeSignV3A40.footprint / defs.TeSignV3A40.pixels.length, 4);
+  assert.equal(defs.TeSignV3B34.footprint / defs.TeSignV3B34.pixels.length, 4);
 });

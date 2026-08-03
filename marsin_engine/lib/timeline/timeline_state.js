@@ -192,6 +192,89 @@ export function defaultTimelineState() {
 }
 
 /**
+ * A plain (non-null, non-array) object.
+ */
+function isPlainObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+/**
+ * Validate the FULL persisted shape of a loaded timeline state (J2/L3, reports
+ * _113 / _115 / _116 — DOUBLE-CONFIRMED). Before this, `loadTimelineState`
+ * validated ONLY the 5 party fields (via `partyConfigOf`); a corrupt
+ * `firedToday: yes` / `moodArmed: 5` / a top-level SCALAR document loaded CLEAN
+ * and then threw on EVERY tick (`Cannot create property … on string 'yes'`) —
+ * so the whole timeline (clock/sun cues, default-cue reconcile, everything)
+ * drove NOTHING all night while `/timeline/state` still reported
+ * `mode:"armed", lastError:null`: a silent dead ship. This validates every
+ * field the runtime reads, THROWS naming the offending field (codex P0 — fail
+ * loudly, no fallback), and — like a broken YAML two frames up — the caller
+ * (`_loadSceneFiles`) surfaces it so `start()` refuses to half-run instead of
+ * ticking a corpse. Only fields that are PRESENT are checked (a partial/older
+ * state file migrates via the defaults); a present field of the wrong type is
+ * corruption, never a fallback default.
+ *
+ * @param {object} s a parsed (plain-object) state document
+ */
+function validateTimelineStateShape(s) {
+  // Property-assigned MAPS: the runtime does `state.firedToday[id] = …` etc, so
+  // a scalar/array here crashes the tick. Value types are validated too (the
+  // engine only ever writes the documented value type into each).
+  const mapFields = {
+    firedToday: (v) => typeof v === 'string',       // cueId → dayKey string
+    moodLastFire: (v) => typeof v === 'number' && Number.isFinite(v), // cueId → epoch ms
+    moodArmed: (v) => typeof v === 'boolean',       // cueId → armed latch
+  };
+  for (const [field, valOk] of Object.entries(mapFields)) {
+    const m = s[field];
+    if (m === undefined || m === null) continue;
+    if (!isPlainObject(m)) {
+      throw new Error(`${field} must be a mapping (object) of cueId → value, got ${JSON.stringify(m)}`);
+    }
+    for (const [k, v] of Object.entries(m)) {
+      if (!valOk(v)) {
+        throw new Error(`${field}['${k}'] has an invalid value ${JSON.stringify(v)}`);
+      }
+    }
+  }
+  // Numeric fields used in arithmetic (`now - moodSince`, dwell/cooldown).
+  for (const field of ['moodSince', 'lastFiredAtMs']) {
+    const v = s[field];
+    if (v === undefined || v === null) continue;
+    if (typeof v !== 'number' || !Number.isFinite(v)) {
+      throw new Error(`${field} must be a finite number, got ${JSON.stringify(v)}`);
+    }
+  }
+  // String-or-null identifiers.
+  for (const field of ['activePlan', 'currentPhase', 'currentMood', 'lastFiredCueId', 'dayKey']) {
+    const v = s[field];
+    if (v === undefined || v === null) continue;
+    if (typeof v !== 'string') {
+      throw new Error(`${field} must be a string, got ${JSON.stringify(v)}`);
+    }
+  }
+  // Booleans.
+  if (s.autopilotEnabled !== undefined && s.autopilotEnabled !== null
+    && typeof s.autopilotEnabled !== 'boolean') {
+    throw new Error(`autopilotEnabled must be a boolean, got ${JSON.stringify(s.autopilotEnabled)}`);
+  }
+  // `mode` ∈ {armed, overridden} (see the enum note above defaultTimelineState).
+  // A bad/truncated mode ('banana', 'arm') otherwise runs and goes out on the
+  // wire (report _113 P3).
+  if (s.mode !== undefined && s.mode !== null && s.mode !== 'armed' && s.mode !== 'overridden') {
+    throw new Error(`mode must be 'armed' or 'overridden', got ${JSON.stringify(s.mode)}`);
+  }
+  // Object-or-null lease/program leaves.
+  for (const field of ['activeProgram', 'pendingProgram', 'operatorLease']) {
+    const v = s[field];
+    if (v === undefined || v === null) continue;
+    if (!isPlainObject(v)) {
+      throw new Error(`${field} must be an object or null, got ${JSON.stringify(v)}`);
+    }
+  }
+}
+
+/**
  * Load runtime state from <stateDir>/timeline_state.yaml. A missing file →
  * a fresh default state. A present-but-broken file THROWS (codex P0).
  *
@@ -213,13 +296,24 @@ export function loadTimelineState(stateDir) {
     throw new Error(`timeline state parse failed (${filePath}): ${err.message}`);
   }
   if (parsed === null || parsed === undefined) return defaultTimelineState();
-  // D11: validate the PERSISTED party fields ONCE, here, and refuse to load a
-  // corrupt file — exactly what a broken YAML already does two lines up. Before
+  // D11 + J2/L3: validate the PERSISTED state ONCE, here, and refuse to load a
+  // corrupt file — exactly what a broken YAML already does two frames up. Before
   // this, a hand-edited `partyEnabled: "no"` parsed fine and then threw inside
   // EVERY tick (86 k unthrottled log lines/day) while the WHOLE timeline — clock
   // cues, sun cues, default-cue reconcile — was dead and the engine looked
-  // healthy. One loud error at boot naming the file and the field instead.
+  // healthy. The party fields were the ONLY ones checked; a bad `firedToday`,
+  // `moodArmed`, or a top-level SCALAR document had the same silent-dead effect
+  // on the fields the party guard doesn't cover (reports _113 J2 / _115 L3).
+  // Now the ENTIRE persisted shape is validated (validateTimelineStateShape),
+  // and a top-level scalar/array is rejected up front (`partyConfigOf` treats a
+  // scalar as `{}` and would pass it). One loud error at boot naming the file
+  // and the field instead of a night of silent darkness.
+  if (!isPlainObject(parsed)) {
+    throw new Error(`timeline state invalid (${filePath}): document must be a mapping (object), ` +
+      `got ${Array.isArray(parsed) ? 'an array' : typeof parsed}`);
+  }
   try {
+    validateTimelineStateShape(parsed);
     partyConfigOf(parsed);
   } catch (err) {
     throw new Error(`timeline state invalid (${filePath}): ${err.message}`);

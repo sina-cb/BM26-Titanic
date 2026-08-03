@@ -8,11 +8,17 @@
 // `controllers:` routing examples and appending a `colorAutopilot:` block.
 //
 // Both modules resolve their persistence path from MARSIN_CONFIG_FILE (falling
-// back to the real config.yaml when unset). Here we point that env var at a
-// scratch COPY of config.yaml, so: (a) the engine still boots from real
-// settings, and (b) every autopilot save lands in the scratch file. Spawned
+// back to the real config.yaml when unset), and since report _100 so does
+// engine.js's own boot read. Here we point that env var at a scratch COPY of
+// config.yaml, so: (a) the engine boots from settings byte-identical to the
+// real ones, and (b) every autopilot save lands in the scratch file. Spawned
 // engine subprocesses inherit the env var (they inherit process.env), so this
 // one hook covers the whole suite — no per-test wiring.
+//
+// A harness that needs DIFFERENT settings (the timeline e2e suite writes a
+// black-holed `controllers:`/`sacn.destinations` config so its engines can
+// never reach the rig) sets MARSIN_CONFIG_FILE itself, or hands the child its
+// own value — this hook honours an override that is already set.
 //
 // Idempotent: honours an override the caller already set.
 import fs from 'node:fs';

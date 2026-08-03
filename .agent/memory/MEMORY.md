@@ -24,6 +24,11 @@ Protocol (format, rules, when to write): [`../os/memory.md`](../os/memory.md).
   CLEAN object census = the browser is on the Intel iGPU, not the 4090;
   check the adapter (chrome://gpu / UNMASKED_RENDERER) before blaming
   code; probes can pin an adapter via `--use-adapter-luid`.
+- [spawning-a-test-engine](spawning_a_test_engine.md) — `--dest` does NOT
+  black-hole sACN (the `controllers:` block wins, and the default destination
+  is the operator's own sim bridge); use `MARSIN_CONFIG_FILE` with a
+  black-holed config + `MARSIN_STATE_DIR`/`MARSIN_PLAYLISTS_DIR`/
+  `MARSIN_TIMELINE_DIR`, and ASSERT the sender lines before trusting it.
 - [doc-inconsistency-standing-fix](doc_inconsistency_standing_fix.md) —
   operator standing order 2026-07-30: doc contradicting verified
   code/hardware behavior → fix + clean up on sight, sanctioned by

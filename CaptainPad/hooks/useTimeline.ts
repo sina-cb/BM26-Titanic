@@ -32,7 +32,9 @@ import {
   fireTimelineCue,
   postTimelineTakeover,
   postTimelineActivity,
+  postTimelineTravel,
   TimelineState,
+  TimelineTravelSpec,
 } from '@/utils/timelineApi';
 
 export interface TimelineHookState {
@@ -57,6 +59,17 @@ export interface TimelineActions {
   takeover: () => Promise<boolean>;
   /** Refresh the takeover lease (no-op when none held). Throttle the caller. */
   activity: () => Promise<boolean>;
+  /**
+   * EVENT ZOOM · PERFORM (_95 §3.3): a SCOPED takeover of the LIVE event —
+   * the plan holds, and a program that comes due is deferred until exit.
+   * Returns the engine's error verbatim on failure (null on success).
+   */
+  performTakeover: (cueId: string) => Promise<string | null>;
+  /**
+   * EVENT ZOOM · TIME TRAVEL (_95 §3.4): enter (or retarget) a travel zoom.
+   * Returns the engine's error verbatim on failure (null on success).
+   */
+  travel: (spec: TimelineTravelSpec) => Promise<string | null>;
 }
 
 export type UseTimelineResult = TimelineHookState & TimelineActions;
@@ -150,11 +163,25 @@ async function _setAutopilot(enabled: boolean): Promise<boolean> {
 }
 
 async function _resume(): Promise<boolean> {
+  // Claim the exit BEFORE the request goes out. The engine clears the zoom and
+  // broadcasts the new `timelineState` on its own 1 s tick, which routinely
+  // beats our REST response back to the app — without this claim the ZoomBanner
+  // reads that broadcast as "the zoom ended and it wasn't me" and raises the
+  // engine-restart alarm at an operator who just asked to leave.
+  _zoomExitRequested = true;
   const r = await resumeTimeline();
   if (!r.ok) {
+    // The zoom is still live: drop the claim so the real "it ended without you"
+    // signal still works, and keep our entered-here claim so the tab-return
+    // gesture (and the banner's EXIT) can try again.
+    _zoomExitRequested = false;
     _emit({ ..._cached, error: r.error || 'Failed to resume' });
     return false;
   }
+  // The single exit for a plain takeover, PERFORM and TRAVEL alike — the engine
+  // clears the zoom with the lease. Drop our "we entered it" claim too, so a
+  // later tab return can't fire a second, pointless resume.
+  _zoomEnteredHere = false;
   await _reseedAfterAction();
   return true;
 }
@@ -211,6 +238,68 @@ async function _takeover(): Promise<boolean> {
   return true;
 }
 
+// ── EVENT ZOOM: "did THIS client enter the zoom?" ────────────────────────
+//
+// D1 (operator ruling): returning to the TIMELINE tab exits the zoom — but ONLY
+// from the client that entered it. There is ONE engine zoom session and both
+// pads render the same banner off the same broadcast; if a second pad's ordinary
+// tab-browsing fired resume(), it would yank pad A's live performance. So the
+// tab-return exit is gated on this module-level flag, and every OTHER client
+// exits through the banner's explicit EXIT button.
+//
+// Module-level (not React state) for the same reason the cache above is: the
+// timeline tab unmounts on every tab switch and this must survive that.
+let _zoomEnteredHere = false;
+
+// "WE asked for this exit." Set the instant a resume() is issued from ANY
+// surface (the banner's EXIT, the timeline-tab return) and read by the banner
+// to tell an operator-requested exit apart from one the engine imposed —
+// lease expiry, engine restart, autopilot OFF, a maker auto-save. Only the
+// latter deserves the "zoom ended" notice.
+let _zoomExitRequested = false;
+
+/** True when THIS client is the one that entered the live zoom. */
+export function zoomEnteredHere(): boolean {
+  return _zoomEnteredHere;
+}
+
+/** True when this client asked for the zoom to end (see `_zoomExitRequested`). */
+export function zoomExitRequested(): boolean {
+  return _zoomExitRequested;
+}
+
+/** Clear both zoom claims — called once the engine's `zoom` is observed null. */
+export function clearZoomClaims(): void {
+  _zoomEnteredHere = false;
+  _zoomExitRequested = false;
+}
+
+async function _performTakeover(cueId: string): Promise<string | null> {
+  const r = await postTimelineTakeover({ scope: 'perform', cueId });
+  if (!r.ok) {
+    const msg = r.error || 'Failed to take the deck';
+    _emit({ ..._cached, error: msg });
+    return msg;
+  }
+  _zoomEnteredHere = true;
+  await _reseedAfterAction();
+  return null;
+}
+
+async function _travel(spec: TimelineTravelSpec): Promise<string | null> {
+  const r = await postTimelineTravel(spec);
+  if (!r.ok) {
+    // Codex P0: the engine's 400 is the message — "no prev event on 2026-09-04",
+    // "target … is outside the festival window". Never soften it, never clamp.
+    const msg = r.error || 'Failed to time travel';
+    _emit({ ..._cached, error: msg });
+    return msg;
+  }
+  _zoomEnteredHere = true;
+  await _reseedAfterAction();
+  return null;
+}
+
 async function _activity(): Promise<boolean> {
   // A harmless no-op engine-side when no lease is held; only refreshes the
   // expiry while overridden. We do NOT re-seed here — activity pings are
@@ -246,7 +335,33 @@ export function useTimeline(): UseTimelineResult {
     fireCue: _fireCue,
     takeover: _takeover,
     activity: _activity,
+    performTakeover: _performTakeover,
+    travel: _travel,
   };
+}
+
+// ── EVENT ZOOM presence pings (_94 §3.2 "presence, not touch") ───────────
+//
+// A performer may watch the rig hands-off for minutes. The plain takeover's
+// touch-driven pings (useOperatorTakeover below) would let the 120 s lease lapse
+// mid-performance, so while the ZOOM BANNER is mounted and a zoom is held we
+// ping /timeline/activity on a fixed interval instead.
+//
+// This is deliberately NOT a "never expire" hack: the pings stop the moment the
+// banner unmounts (app backgrounded on web = the page is gone, iPad dead, WiFi
+// gone), the lease expires, and the plan auto-resumes. The "never stuck"
+// invariant survives every failure mode.
+const ZOOM_PRESENCE_PING_MS = 30_000;
+
+export function useZoomPresence(active: boolean): void {
+  useEffect(() => {
+    if (!active) return;
+    // Ping immediately on entry so a lease armed just before a slow render
+    // still gets its first refresh promptly, then every 30 s.
+    void _activity();
+    const t = setInterval(() => { void _activity(); }, ZOOM_PRESENCE_PING_MS);
+    return () => clearInterval(t);
+  }, [active]);
 }
 
 // ── Operator-takeover interaction hook (DECK/MIXER) ──────────────────────

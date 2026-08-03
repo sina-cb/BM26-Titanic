@@ -86,6 +86,7 @@ parLights:
       rotX: 0
       rotY: 0
       rotZ: 0
+      haloScale: 1
     - group: LeftSmokeStack
       name: LeftSmokeStack 1
       fixtureType: UkingPar
@@ -509,6 +510,7 @@ ledStrands:
       sectionId: 1
       fixtureId: 1
       viewMask: 0
+      haloScale: 1
     - name: Right
       startX: -3
       startY: 5
@@ -523,6 +525,7 @@ ledStrands:
       sectionId: 2
       fixtureId: 2
       viewMask: 0
+      haloScale: 1
 traces:
   - name: LeftSmokeStack
     shape: circle

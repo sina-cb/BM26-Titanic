@@ -490,17 +490,26 @@ test('S2: the LIVE repro — the PARK skips a universe another controller owns',
   assert.match(warnings[0], /output 3 has no controller port row — PARKED on U24/);
 });
 
-test('S2: an EXPLICIT port universe on another controller is a BLOCKING collision', () => {
+// Operator order 2026-07-31 (report 20260725_102) REPLACED the old
+// `universe_owned` BLOCKING collision with a shared-address WARNING. What
+// changed is only the verdict: the same overlap is still detected, still named,
+// and still surfaced everywhere the plan is shown — it just no longer refuses
+// the push, because the wire-side merge (src/dmx/address_merge.js) resolves it.
+test('S2: an EXPLICIT port universe on another controller is a SHARED-ADDRESS WARNING', () => {
   const registry = liveReproRegistry({ ledPort2Universe: 23 });   // operator typed U23
   const card = registry.controllers[1];
-  const { collisions } =
+  const { collisions, sharedUniverses, warnings } =
     derivePerOutputPlan(card, STRAND_COUNTS, config60(), claimsFor(registry, card));
 
-  assert.equal(collisions.length, 1);
-  assert.equal(collisions[0].outputIndex, 1);
-  assert.equal(collisions[0].port, 2);
-  assert.equal(collisions[0].universe, 23);
-  assert.equal(collisions[0].message, 'output 2 would take U23 — owned by LeftFrontDeck port 1');
+  assert.equal(collisions.length, 0, 'a shared universe must NOT block the push any more');
+  assert.equal(sharedUniverses.length, 1);
+  assert.equal(sharedUniverses[0].outputIndex, 1);
+  assert.equal(sharedUniverses[0].port, 2);
+  assert.equal(sharedUniverses[0].universe, 23);
+  assert.match(sharedUniverses[0].message, /shares U23 with LeftFrontDeck port 1/);
+  assert.match(sharedUniverses[0].message, /higher controller IP overrides/);
+  // Mirrored into `warnings` so no surface can show the plan and hide the share.
+  assert.ok(warnings.some((w) => /⚠ .*shares U23 with LeftFrontDeck port 1/.test(w)));
 });
 
 test('S2: the park walks PAST a run of claimed universes', () => {
@@ -566,17 +575,17 @@ function makeGateIo(calls) {
   };
 }
 
-test('S2: pushAllLedControllers REFUSES a colliding card — the device is never written', async () => {
+test('_102: pushAllLedControllers PUSHES a shared-universe card, loudly', async () => {
   const registry = liveReproRegistry({ ledPort2Universe: 23 });
   const calls = [];
   const results = await pushAllLedControllers(makeGateCtx(registry), makeGateIo(calls));
 
   // Only the LED card is a push target (the DMX controller is not an LED card).
   assert.equal(results.length, 1);
-  assert.equal(results[0].state, 'failed');
-  assert.match(results[0].detail,
-    /universe collision — output 2 would take U23 — owned by LeftFrontDeck port 1/);
-  assert.equal(calls.includes('push:10.0.0.60'), false, 'a refused plan must not reach the device');
+  assert.equal(results[0].state, 'pushed', 'a shared address no longer refuses the push');
+  assert.match(results[0].detail, /shared address \(allowed\)/);
+  assert.match(results[0].detail, /shares U23 with LeftFrontDeck port 1/);
+  assert.ok(calls.includes('push:10.0.0.60'), 'the device IS written — the share is a warning');
 });
 
 test('S2: a registry-free card still pushes (the gate only blocks real collisions)', async () => {
@@ -616,13 +625,15 @@ test('S2: the sync chip does NOT false-drift — same claims ⇒ same plan as th
   });
 });
 
-test('S2: the sync chip reports a colliding plan as drift (chip agrees with the refusal)', async () => {
+test('_102: the sync chip stays IN-SYNC on a shared universe but CARRIES the warning', async () => {
   const registry = liveReproRegistry({ ledPort2Universe: 23 });
   const card = registry.controllers[1];
+  // The plan a push WOULD write: P1→U21, P2→U23 (the shared one), and the third
+  // board output PARKED on U22 — the lowest universe free across the registry.
   const confirmed = [
     { index: 0, universe: 21, startAddress: 1, enabled: true },
     { index: 1, universe: 23, startAddress: 1, enabled: true },
-    { index: 2, universe: 24, startAddress: 1, enabled: true },
+    { index: 2, universe: 22, startAddress: 1, enabled: true },
   ];
   await withFetch(async (url) => {
     if (url === 'http://10.0.0.60/api/config') return jsonResponse(config60());
@@ -630,10 +641,12 @@ test('S2: the sync chip reports a colliding plan as drift (chip agrees with the 
     throw new Error(`unexpected fetch ${url}`);
   }, async () => {
     const state = await computeSyncState(makeGateCtx(registry), card);
-    // The device MATCHES the plan, but the plan is one a push would refuse —
-    // reporting in-sync would let the chip and the push disagree.
-    assert.equal(state.state, 'drift');
-    assert.match(state.detail, /universe collision — output 2 would take U23/);
+    // The device MATCHES the plan, and a shared address no longer makes the plan
+    // unpushable — so the chip agrees with the push by saying in-sync. The
+    // warning still rides in the detail (and therefore the chip tooltip).
+    assert.equal(state.state, 'in-sync');
+    assert.match(state.detail, /shared address \(allowed\)/);
+    assert.match(state.detail, /shares U23 with LeftFrontDeck port 1/);
   });
 });
 

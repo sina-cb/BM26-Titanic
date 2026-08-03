@@ -110,7 +110,7 @@ The `u` lane is a violet/purple emitter, present on two fixture types only.**
 | `UkingPar` | `rgbwau` | **yes** | DMX ch 7 = **"Purple"** — `simulation/dmx/fixtures/uking_rgbwau_par_light/channels_10.yaml` | 4 / 41 |
 | `ShehdsBar` | `rgbwau` | **yes** | 6th sub-channel per pixel; `pixel_order: [Red, Green, Blue, White, Amber, Violet]` — `shehds_18_18w_led_bar/channels_119.yaml` | 36 / 450 |
 | `VintageLed` | `rgbw` | no | RGBW only, no amber, no violet | 12 / 96 |
-| `TeSignV3A40` / `TeSignV3B34` | `rgb` | no | pure RGB pixel fixture (`te_sign_v3/model_a_120.yaml`) | 74 / 74 |
+| `TeSignV3A40` / `TeSignV3B34` | `rgbw` | no | RGBW puck fixture on a MarsinLED output — the SAME LEDs as the rope strands (`te_sign_v3/model_a_160.yaml`); corrected from `rgb` 2026-07-31 per operator | 74 / 74 |
 | raw LED strands | `rgbw` (test_bench) / none (titanic) | no | Ango-4 pixel controller | 80 / 320 |
 
 **UV-capable share of the show rig (titanic): 491 of 981 pixels (50 %).**

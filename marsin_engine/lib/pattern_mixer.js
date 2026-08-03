@@ -537,7 +537,61 @@ export class PatternMixer {
     this.renderHealth = {
       blendErrors: {},        // blendName -> { message, sinceFrame, count }
       loggedBlendErrors: {},  // blendName -> true once we've logged it
+      // ── R4 "NEVER FULLY BLACK" runtime enforcer (redteam _112 I1/I2) ────
+      // The vendored WASM VM absorbs a hostile pattern into a black or solid
+      // -red composite SILENTLY: a NaN in ANY arg to rgbwau()/hsv() blacks
+      // the whole pixel and is absorbing in persistent state (I1); a
+      // beforeRender that overruns the ~5000-instruction budget truncates
+      // mid-execution with NO return channel (the marsin_begin_frame ABI is
+      // bound void and the compiled WASM genuinely returns nothing — verified
+      // empirically, and there is no C source in-repo to re-vendor), so the
+      // mandatory palette resolve never runs and the ship renders black from a
+      // pattern that COMPILED CLEAN (I2). Neither had ANY runtime signal.
+      //
+      // Because the NaN is already cast to 0 inside the WASM before JS ever
+      // sees a byte, per-channel NaN sanitising is unreachable at this layer —
+      // the enforceable, mission-aligned invariant is on the CONSEQUENCE: the
+      // composite that feeds sACN must never be fully black while the mix is
+      // configured to emit light. This structure tracks that:
+      //
+      //   darkness: {
+      //     black,        // this frame fully black while light was expected
+      //     blackStreak,  // consecutive such frames
+      //     tripped,      // streak >= NEVER_BLACK_TRIP_FRAMES (LOUD)
+      //     floorActive,  // last-resort non-black floor applied this frame
+      //     solidRed,     // this frame is uniformly (255,0,0) — VM over-budget
+      //     pattern,      // active deck pattern name at the trip
+      //     sinceFrame,   // frame the current dark streak began
+      //     message,      // human-readable trip reason
+      //   }
+      //
+      // getRenderHealth().ok folds this in, so /status.renderHealth.ok already
+      // goes false the moment the ship goes dark-while-lit — no engine wiring
+      // required. Logged LOUDLY once per trip, never per frame.
+      darkness: {
+        black: false,
+        blackStreak: 0,
+        tripped: false,
+        floorActive: false,
+        solidRed: false,
+        pattern: null,
+        sinceFrame: null,
+        message: null,
+      },
+      loggedDarkness: false,   // true once we've logged the current never-black trip
+      loggedSolidRed: false,   // true once we've logged the current solid-red run
     };
+    // Tunables for the never-black enforcer. TRIP is deliberately a short
+    // streak (0.2 s @ 40 fps): a legitimate hard cut / crossfade passes THROUGH
+    // colour, never an all-zero frame, and an operator blackout (master 0 or
+    // all faders down) is gated out by _isExpectingLight(), so the ONLY way to
+    // accumulate an all-zero-while-lit streak is the bug. Short enough to
+    // protect the mission, long enough to ignore a 1-frame transient. The floor
+    // engages at the same point so the ship is never dark for more than the trip
+    // window. The floor value is a dim uniform RGB glow (clearly degraded, but
+    // VISIBLE-at-night per the P0 mission).
+    this.NEVER_BLACK_TRIP_FRAMES = 8;
+    this.NEVER_BLACK_FLOOR_VALUE = 10;
     this._frameCounter = 0;
 
     // Group-transition machinery — when a triggerMixerTransition arrives
@@ -629,11 +683,176 @@ export class PatternMixer {
     const blendErrors = Object.entries(this.renderHealth.blendErrors).map(
       ([name, info]) => ({ blend: name, ...info }),
     );
+    const d = this.renderHealth.darkness;
+    // `ok` is false whenever ANY blend is degraded OR the never-black enforcer
+    // has tripped OR the frame is solid-red (VM over-budget). All three are
+    // "the rig is showing something wrong right now" and must fail a smoke
+    // check identically — /status.renderHealth.ok is the single green light.
+    const ok = blendErrors.length === 0 && !d.tripped && !d.solidRed;
     return {
-      ok: blendErrors.length === 0,
+      ok,
       frame: this._frameCounter,
       blendErrors,
+      darkness: {
+        black: d.black,
+        blackStreak: d.blackStreak,
+        tripped: d.tripped,
+        floorActive: d.floorActive,
+        solidRed: d.solidRed,
+        pattern: d.pattern,
+        sinceFrame: d.sinceFrame,
+        message: d.message,
+      },
     };
+  }
+
+  // Dedicated never-black snapshot (redteam _112 I1/I2 handoff for W1-1). Same
+  // `darkness` object getRenderHealth() folds into `ok`, exposed standalone so a
+  // caller that wants ONLY the never-black verdict (e.g. a top-level
+  // /timeline/state field, or the launcher watchdog) doesn't have to reach
+  // through blendErrors. `lit` is the inverse convenience flag.
+  getNeverBlackHealth() {
+    const d = this.renderHealth.darkness;
+    return {
+      lit: !d.tripped,
+      black: d.black,
+      blackStreak: d.blackStreak,
+      tripped: d.tripped,
+      floorActive: d.floorActive,
+      solidRed: d.solidRed,
+      pattern: d.pattern,
+      sinceFrame: d.sinceFrame,
+      message: d.message,
+    };
+  }
+
+  // Is the mix CONFIGURED to emit light this frame? True when the grand master
+  // is up AND at least one contributor (deck or a mixer overlay) is enabled with
+  // an effective fader above zero, accounting for the deck↔mixer view crossfade.
+  // Used to gate the never-black enforcer so a LEGITIMATE operator blackout
+  // (master 0 / all faders down / everything muted) is never flagged as a fault
+  // — only "should be lit but is fully black" trips.
+  _isExpectingLight(soloActive) {
+    if (!(this.master > 0)) return false;
+    // Deck side contributes unless the view is fully crossfaded to the mixer.
+    if (this.viewFader < 0.999 && this.deckChannel && this.deckChannel.enabled) {
+      const fMax = (typeof this.deckChannel.faderMax === 'number' && Number.isFinite(this.deckChannel.faderMax))
+        ? this.deckChannel.faderMax : 1.0;
+      const f = Math.min(this.deckChannel.fader, fMax);
+      if (f > 0) return true;
+    }
+    // Mixer side contributes unless the view is fully crossfaded to the deck.
+    if (this.viewFader > 0.001) {
+      const solo = soloActive === undefined ? this.soloedChannelIds.size > 0 : soloActive;
+      for (let i = 0; i < this.mixerChannels.length; i++) {
+        if (this._effFader(this.mixerChannels[i], solo) > 0) return true;
+      }
+    }
+    return false;
+  }
+
+  // True when every byte of a 6ch RGBWAU buffer is 0 (the whole rig dark).
+  _isBufferBlack(buf) {
+    for (let i = 0; i < buf.length; i++) if (buf[i] !== 0) return false;
+    return true;
+  }
+
+  // True when every pixel is exactly (255,0,0,0,0,0) — the vendored VM's
+  // signature for a render3D that overran the per-pixel instruction budget
+  // (redteam _112 F9). Cheap: bail on the first pixel that doesn't match.
+  _isBufferSolidRed(buf) {
+    const n = this.pixelCount;
+    if (n === 0) return false;
+    for (let p = 0; p < n; p++) {
+      const k = p * 6;
+      if (buf[k] !== 255 || buf[k + 1] !== 0 || buf[k + 2] !== 0
+          || buf[k + 3] !== 0 || buf[k + 4] !== 0 || buf[k + 5] !== 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // The enforcer proper — runs once per composited frame from renderAll6ch().
+  // Records darkness state, logs LOUDLY once per trip, and applies a dim
+  // last-resort floor so a persistently-black-while-lit frame is never shipped
+  // fully dark. NO fallback silence: the floor only ever engages AFTER the loud
+  // trip flag is set, so a floored frame is always accompanied by a health
+  // error naming the offending deck pattern.
+  _enforceNeverBlack() {
+    const d = this.renderHealth.darkness;
+    const expectLight = this._isExpectingLight();
+    const solidRed = this._isBufferSolidRed(this.outputBuffer);
+    const black = expectLight && !solidRed && this._isBufferBlack(this.outputBuffer);
+
+    d.solidRed = solidRed;
+    d.black = black;
+    d.floorActive = false;
+
+    if (black) {
+      if (d.blackStreak === 0) d.sinceFrame = this._frameCounter;
+      d.blackStreak += 1;
+    } else {
+      // A non-black (or not-expected-light) frame clears the streak and any
+      // active trip — the ship recovered, so /status goes green again.
+      if (d.tripped) {
+        console.error(
+          `[Mixer] RENDER-HEALTH RECOVERED: composite no longer fully black ` +
+          `(was dark for ${d.blackStreak} frames since frame ${d.sinceFrame}).`,
+        );
+      }
+      d.blackStreak = 0;
+      d.tripped = false;
+      d.sinceFrame = null;
+      d.pattern = null;
+      d.message = null;
+      this.renderHealth.loggedDarkness = false;
+    }
+
+    if (d.blackStreak >= this.NEVER_BLACK_TRIP_FRAMES) {
+      d.tripped = true;
+      d.pattern = this.deckChannel ? this.deckChannel.pattern : null;
+      d.message =
+        `Composite fully BLACK for ${d.blackStreak} consecutive frames while ` +
+        `the mix is lit (deck pattern '${d.pattern || '(none)'}'). A NaN in a ` +
+        `colour builtin or a beforeRender budget overrun is the usual cause. ` +
+        `Applying a dim last-resort floor (${this.NEVER_BLACK_FLOOR_VALUE}/255).`;
+      if (!this.renderHealth.loggedDarkness) {
+        this.renderHealth.loggedDarkness = true;
+        console.error(
+          `[Mixer] RENDER-HEALTH NEVER-BLACK TRIPPED: ${d.message} ` +
+          `Visible on /status as renderHealth.ok=false. This log fires ONCE ` +
+          `per trip, not per frame.`,
+        );
+      }
+      // Last-resort non-black floor — the P0 mission is visibility at night, so
+      // a persistently-black exterior gets a dim uniform glow rather than being
+      // shipped dark. RGB only (W/A/UV left at 0); loud flag already set.
+      const fv = this.NEVER_BLACK_FLOOR_VALUE;
+      const out = this.outputBuffer;
+      for (let p = 0; p < this.pixelCount; p++) {
+        const k = p * 6;
+        out[k] = fv; out[k + 1] = fv; out[k + 2] = fv;
+      }
+      d.floorActive = true;
+    }
+
+    // Solid-red is tracked with its OWN once-per-run log flag (independent of
+    // the never-black trip): the rig is SHOWING solid red, the VM's silent
+    // over-budget signature. ok=false already reflects it.
+    if (solidRed) {
+      if (!this.renderHealth.loggedSolidRed) {
+        this.renderHealth.loggedSolidRed = true;
+        console.error(
+          `[Mixer] RENDER-HEALTH SOLID-RED: every pixel is (255,0,0) — the deck ` +
+          `pattern '${this.deckChannel ? this.deckChannel.pattern : '(none)'}' is ` +
+          `over the per-pixel instruction budget. Visible on /status as ` +
+          `renderHealth.ok=false. This log fires ONCE per run, not per frame.`,
+        );
+      }
+    } else {
+      this.renderHealth.loggedSolidRed = false;
+    }
   }
 
   // Scan the blend + transition pattern directories once and compile every
@@ -3137,6 +3356,16 @@ export class PatternMixer {
     if (this.master < 1.0) {
       this.applyMaster(this.outputBuffer, this.master);
     }
+
+    // ── R4 "NEVER FULLY BLACK" runtime enforcer (redteam _112 I1/I2) ──────
+    // The composite is finished (deck ⊕ overlays ⊕ mixer, crossfaded, master
+    // applied) — this is EXACTLY the buffer engine.js reads out to sACN, so it
+    // is the one true place to prove the mission-critical invariant "the ship
+    // is not dark while it is supposed to be lit". See the renderHealth.darkness
+    // note in the constructor for why enforcement lives on the consequence
+    // (fully-black output) rather than on the (unreachable, silently-absorbed)
+    // NaN / beforeRender-truncation root causes.
+    this._enforceNeverBlack();
 
     // Capture master vis (final output). Master is always cheap (the
     // outputBuffer already exists), but we still gate on wantVis so

@@ -359,14 +359,18 @@ function deriveBenchSection({ source, sourceScene = 'test_bench', prefix = BENCH
         : prefixed(prefix, entry))),
     }, PORT_KEY_ORDER));
 
-    // device: keep the binding, drop the push receipt (volatile).
+    // device: keep the binding, drop the push receipt (volatile). `provisional`
+    // is part of the BINDING, not a receipt — dropping it would turn an
+    // operator-declared (fingerprint-less) block into a verified block with no
+    // controllerId, which the registry loader refuses outright.
     let device;
     if (isPlainObject(c.device)) {
       device = orderKeys({
         vendor: c.device.vendor,
+        provisional: c.device.provisional === true ? true : undefined,
         controllerId: c.device.controllerId,
         boardId: c.device.boardId,
-      }, ['vendor', 'controllerId', 'boardId']);
+      }, ['vendor', 'provisional', 'controllerId', 'boardId']);
     }
 
     return orderKeys({
@@ -556,9 +560,11 @@ function extractBenchSection({ sceneConfig, controllers, prefix = BENCH_PREFIX, 
     device: isPlainObject(c.device)
       ? orderKeys({
         vendor: c.device.vendor,
+        // See the mirror above: `provisional` is binding grade, not a receipt.
+        provisional: c.device.provisional === true ? true : undefined,
         controllerId: c.device.controllerId,
         boardId: c.device.boardId,
-      }, ['vendor', 'controllerId', 'boardId'])
+      }, ['vendor', 'provisional', 'controllerId', 'boardId'])
       : undefined,
   }, CONTROLLER_KEY_ORDER)).sort((a, b) => a.name.localeCompare(b.name));
 
