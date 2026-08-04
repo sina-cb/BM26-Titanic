@@ -71,7 +71,7 @@ parLights:
     max: 1
     step: 0.05
   maxSpotlights:
-    value: 150
+    value: 60
     label: Max Spotlights
     min: 1
     max: 200
@@ -91,11 +91,11 @@ parLights:
       angle: 20
       penumbra: 0.5
       x: -15.5
-      'y': 9.015212285754357
-      z: 8.511924730643457
-      rotX: 0
-      rotY: -90.00000000000001
-      rotZ: 0
+      'y': 8.92028205765197
+      z: 8.5
+      rotX: 3.975693351829396e-16
+      rotY: -89.99999999999999
+      rotZ: 5
       traceGenerated: false
       enabled: true
       brightness: 100
@@ -107,6 +107,7 @@ parLights:
       screen: false
       screenPixelSize: 60
       haloScale: 1
+      portNum: 1
     - group: TE Sign
       name: TE Sign V3 B
       sectionId: 3
@@ -118,11 +119,11 @@ parLights:
       angle: 20
       penumbra: 0.5
       x: -15.5
-      'y': 9.015212285754357
-      z: 8.511924730643457
-      rotX: 0
-      rotY: -90.00000000000001
-      rotZ: 0
+      'y': 8.92028205765197
+      z: 8.5
+      rotX: 3.975693351829396e-16
+      rotY: -89.99999999999999
+      rotZ: 5
       traceGenerated: false
       enabled: true
       brightness: 100
@@ -134,6 +135,7 @@ parLights:
       screen: false
       screenPixelSize: 60
       haloScale: 1
+      portNum: 2
     - group: TE Sign 2
       name: TE Sign 2 V3 A
       sectionId: 415
@@ -161,6 +163,7 @@ parLights:
       screen: false
       screenPixelSize: 60
       haloScale: 1
+      portNum: 1
     - group: TE Sign 2
       name: TE Sign 2 V3 B
       sectionId: 415
@@ -188,6 +191,7 @@ parLights:
       screen: false
       screenPixelSize: 60
       haloScale: 1
+      portNum: 2
     - group: Right Front Wall
       name: Right Front Wall 1
       fixtureType: ShehdsBar
@@ -342,9 +346,9 @@ parLights:
       x: 21.887294272342658
       'y': 9.806701991658228
       z: -6.801640142011151
-      rotX: 31.791782682372098
+      rotX: 31.79178268237209
       rotY: -46.995229517815055
-      rotZ: -14.115945334577065
+      rotZ: -14.115945334577063
       traceGenerated: true
       enabled: true
       brightness: 100
@@ -375,7 +379,7 @@ parLights:
       'y': 7.772980677364636
       z: -7.06489336354824
       rotX: 53.68491401116015
-      rotY: -16.684105447525504
+      rotY: -16.6841054475255
       rotZ: -8.4878858833326
       traceGenerated: true
       enabled: true
@@ -599,7 +603,7 @@ parLights:
       'y': 12.5
       z: 3.9607682357892084
       rotX: -58.2034465685919
-      rotY: -90.08364538458109
+      rotY: -90.08364538458108
       rotZ: 0
       traceGenerated: true
       enabled: true
@@ -615,7 +619,7 @@ parLights:
       'y': 12.5
       z: 5.310064194111275
       rotX: -58.2034465685919
-      rotY: -90.08364538458109
+      rotY: -90.08364538458108
       rotZ: 0
       traceGenerated: true
       enabled: true
@@ -631,7 +635,7 @@ parLights:
       'y': 12.5
       z: 6.659360152433342
       rotX: -58.2034465685919
-      rotY: -90.08364538458109
+      rotY: -90.08364538458108
       rotZ: 0
       traceGenerated: true
       enabled: true
@@ -647,7 +651,7 @@ parLights:
       'y': 12.5
       z: 8.008656110755407
       rotX: -58.2034465685919
-      rotY: -90.08364538458109
+      rotY: -90.08364538458108
       rotZ: 0
       traceGenerated: true
       enabled: true
@@ -663,7 +667,7 @@ parLights:
       'y': 12.5
       z: 13.405839944043674
       rotX: -58.2034465685919
-      rotY: -90.08364538458109
+      rotY: -90.08364538458108
       rotZ: 0
       traceGenerated: true
       enabled: true
@@ -679,7 +683,7 @@ parLights:
       'y': 12.5
       z: 12.056543985721607
       rotX: -58.2034465685919
-      rotY: -90.08364538458109
+      rotY: -90.08364538458108
       rotZ: 0
       traceGenerated: true
       enabled: true
@@ -695,7 +699,7 @@ parLights:
       'y': 12.5
       z: 10.707248027399542
       rotX: -58.2034465685919
-      rotY: -90.08364538458109
+      rotY: -90.08364538458108
       rotZ: 0
       traceGenerated: true
       enabled: true
@@ -711,7 +715,7 @@ parLights:
       'y': 12.5
       z: 9.357952069077475
       rotX: -58.2034465685919
-      rotY: -90.08364538458109
+      rotY: -90.08364538458108
       rotZ: 0
       traceGenerated: true
       enabled: true
@@ -1030,8 +1034,8 @@ parLights:
       x: -19.948743653238083
       'y': 9.664086443638585
       z: 7.3483009518357
-      rotX: 32.87175068333769
-      rotY: 100.59644008082864
+      rotX: 32.871750683337694
+      rotY: 100.59644008082863
       rotZ: 39.12051173889499
       traceGenerated: true
       enabled: true
@@ -1063,8 +1067,8 @@ parLights:
       'y': 7.672986478952726
       z: 5.949861850934129
       rotX: 56.06133529867749
-      rotY: 127.63636403017189
-      rotZ: 94.55516504803578
+      rotY: 127.63636403017186
+      rotZ: 94.55516504803576
       traceGenerated: true
       enabled: true
       brightness: 100
@@ -1079,7 +1083,7 @@ parLights:
       'y': 6.898254282855868
       z: 7.662941968356202
       rotX: 71.90535569417763
-      rotY: 114.36762001215689
+      rotY: 114.36762001215688
       rotZ: 96.71867228146948
       traceGenerated: true
       enabled: true
@@ -1287,7 +1291,7 @@ parLights:
       'y': 0.5
       z: 8.623600599294598
       rotX: 43.39693150206395
-      rotY: 91.51617841393008
+      rotY: 91.51617841393006
       rotZ: 44.44876410086048
       traceGenerated: true
       enabled: true
@@ -1319,7 +1323,7 @@ parLights:
       'y': 0.5
       z: 8.623600599294598
       rotX: 46.00205587753663
-      rotY: -91.66061600435383
+      rotY: -91.66061600435381
       rotZ: -47.20883259835222
       traceGenerated: true
       enabled: true
@@ -1366,7 +1370,7 @@ parLights:
       x: 45.45408612229494
       'y': 0.24976533317669647
       z: -20.739820054200386
-      rotX: 59.251163673963276
+      rotX: 59.25116367396329
       rotY: 59.21157563066602
       rotZ: 35.81392393624751
       traceGenerated: true
@@ -1383,7 +1387,7 @@ parLights:
       'y': 0.24976533317669647
       z: -20.29888597942329
       rotX: 59.00574558936226
-      rotY: -50.66155427033469
+      rotY: -50.6615542703347
       rotZ: -29.988626032616924
       traceGenerated: true
       enabled: true
@@ -1399,7 +1403,7 @@ parLights:
       'y': 0.24976533317669647
       z: -25.93852933177284
       rotX: 51.20018063904204
-      rotY: -137.7212430688156
+      rotY: -137.72124306881562
       rotZ: -102.19199439584348
       traceGenerated: true
       enabled: true

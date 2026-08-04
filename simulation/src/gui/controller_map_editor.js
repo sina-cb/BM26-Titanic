@@ -109,6 +109,13 @@ let lastLedClaims = new Map(); // latest computeLedUniverseClaims (LED occupancy
 // sim's per-port projection; renderLedPort reads the map its controller needs.
 let lastLedBoundFields = new Map();
 let lastLedGenericFields = new Map();
+// LED PROJECTION violations from the same compute (report 20260725_123). These
+// used to be dropped on the floor here — `computeRenderProjection` kept only
+// `.fields`, so `led_no_destination_ip` / `led_unknown_strand` /
+// `led_unallocated_base` / `led_universe_overflow` were console-only while the
+// pane's own header could still read "✓ fully patched" over them. They now ride
+// into the header count and the banner beside the DMX ones.
+let lastLedViolations = [];
 // Camera focus on chip click (G5 reverse link). Persisted per-machine; when on,
 // clicking a chip flies the 3D camera to frame that fixture/strand. A power-user
 // pinning the map while orbiting turns it off. Default on.
@@ -678,6 +685,86 @@ function ledWarningsFor(controllerId, portNum) {
     w.controllerId === controllerId && (portNum === null ? w.port === 0 : w.port === portNum));
 }
 
+/** Every fixture/strand name chained anywhere on this controller, in port order. */
+export function chainedNamesOn(controller) {
+  const names = [];
+  for (const port of controller.ports || []) {
+    for (const entry of port.chain || []) {
+      const name = entryFixtureName(entry);
+      if (name !== null) names.push(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * TRUE when this LED card carries chains but no usable destination IP — the one
+ * state that is genuinely broken under the 2026-08-03 ruling. Its fixtures ARE
+ * patched (records, model lanes, lit in the sim); there is simply no address to
+ * unicast sACN to, so no bridge relay route can exist and the real strip stays
+ * dark. Mirrors `led_no_destination_ip` in the projection.
+ */
+export function isChainedLedWithoutDestination(controller) {
+  return isLedController(controller) && chainedNamesOn(controller).length > 0 &&
+    !isValidIp(controller.ip);
+}
+
+/**
+ * The per-card "no destination" banner (report 20260725_123). The one remaining
+ * way to chain fixtures and still ship them dark, so it is the one loud card
+ * state — kept to two short lines (operator: keep the messages short).
+ */
+function renderNoDestinationBanner(controller) {
+  const names = chainedNamesOn(controller);
+  const box = document.createElement('div');
+  box.className = 'cm-nodest-banner';
+
+  const head = document.createElement('div');
+  head.className = 'cm-nodest-banner-head';
+  head.textContent = `✋ No IP — nothing can be routed to '${controller.name}'`;
+  box.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'cm-nodest-banner-body';
+  body.textContent = `${names.length} chained fixture(s) patch and render. Type the IP above.`;
+  box.appendChild(body);
+  return box;
+}
+
+/**
+ * The "No Controller" placeholder card (operator addendum 2026-08-03): the
+ * nothing-attached state must be a THING in the pane, not an absence. Quiet and
+ * informational — it is an entry point, not an alarm; the tray below still lists
+ * the actual names.
+ */
+function renderNoControllerCard(unmapped, unmappedStrands) {
+  const card = document.createElement('div');
+  // Deliberately NOT `.cm-controller`: four agent_tools enumerate that class to
+  // read the REAL controller cards (name/IP/dot/badge per card), and a
+  // placeholder in that list reads as a card with null everything. It carries
+  // the card LOOK via the stylesheet instead.
+  card.className = 'cm-none-card';
+
+  const head = document.createElement('div');
+  head.className = 'cm-none-head';
+  head.textContent = `🚫 No Controller · ${unmapped.length} fixture(s) · ` +
+    `${unmappedStrands.length} strand(s)`;
+  card.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'cm-none-body';
+  body.textContent = 'Not on any controller — they patch nothing.';
+  card.appendChild(body);
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'cm-btn cm-none-add';
+  addBtn.textContent = '+ Add Controller';
+  addBtn.title = 'Create a controller, then attach these from the tray below.';
+  addBtn.onclick = showAddControllerModal;
+  card.appendChild(addBtn);
+  return card;
+}
+
 // ── Rendering ───────────────────────────────────────────────────────────
 
 let panelEl = null;
@@ -703,7 +790,9 @@ function computeRenderProjection() {
   lastProj = proj; // makeAllocator rides universeEnds off this
   if (registryIsActive(reg)) {
     const counts = strandLedCounts();
-    lastLedBoundFields = computeLedStrandPatches(reg, counts).fields;
+    const ledPatches = computeLedStrandPatches(reg, counts);
+    lastLedBoundFields = ledPatches.fields;
+    lastLedViolations = ledPatches.violations;
     lastLedGenericFields = computeLedProjection(reg, counts).fields;
     const unbound = new Map();
     for (const [name, rec] of lastLedGenericFields) {
@@ -714,10 +803,63 @@ function computeRenderProjection() {
   } else {
     lastLedBoundFields = new Map();
     lastLedGenericFields = new Map();
+    lastLedViolations = [];
     lastLedClaims = new Map();
     lastLedWarnings = [];
   }
   return proj;
+}
+
+/**
+ * Every BLOCKING violation this render must shout about — DMX projection
+ * violations AND LED projection violations, one list (report 20260725_123).
+ * The header count and the scene-wide banner both read this, so "✓ fully
+ * patched" is unreachable while any LED card is misprojecting — including the
+ * `led_unbound_chained` case where a chained card has no device binding and
+ * projects nothing at all.
+ *
+ * NOT merged into `proj.violations` itself: that object is `lastProj`, which
+ * `makeAllocator` and the per-port `violationsFor` chips read as the DMX
+ * projection. LED violations carry no `port`, so they belong to the card/scene
+ * level, not a port row.
+ */
+function allViolations(proj) {
+  return [...proj.violations, ...lastLedViolations];
+}
+
+/**
+ * The pane's headline verdict — the operator's ONE "am I done?" signal (docs/33).
+ * PURE so it can be pinned directly (report 20260725_123): the whole class of bug
+ * `_121` found is this predicate reading green over a real dark state, and a
+ * predicate nobody can unit-test is a predicate that drifts back.
+ *
+ * `violationCount` spans BOTH projections — the pane used to drop every LED one,
+ * so an LED card that could not be routed at all left the header reading green.
+ * An unbound-but-chained card raises NO violation (it patches and routes like any
+ * other), so the header stays quiet for it: only real blockers turn it.
+ *
+ * @param {boolean} active - the scene has a live registry.
+ * @param {number} unmappedTotal - unmapped DMX fixtures + LED names.
+ * @param {number} violationCount - DMX + LED projection violations.
+ * @returns {{ text: string, cls: string, fullyPatched: boolean }}
+ */
+export function headerStatusModel(active, unmappedTotal, violationCount) {
+  if (!active) return { text: '', cls: 'cm-header-status', fullyPatched: false };
+  if (unmappedTotal > 0) {
+    return {
+      text: `Unmapped: ${unmappedTotal} ⚠`,
+      cls: 'cm-header-status cm-warn',
+      fullyPatched: false,
+    };
+  }
+  if (violationCount > 0) {
+    return {
+      text: `${violationCount} violation(s) ⚠`,
+      cls: 'cm-header-status cm-warn',
+      fullyPatched: false,
+    };
+  }
+  return { text: '✓ fully patched', cls: 'cm-header-status cm-ok', fullyPatched: true };
 }
 
 /**
@@ -774,29 +916,22 @@ function render() {
   bodyEl.replaceChildren();
 
   // Header status: the operator's "fully patched" signal (docs/33). LED
-  // strands are fixtures too — an unbound LED line must count as unmapped, so
-  // the panel never reads "fully patched" while a strand is still unpatched.
-  if (!registryIsActive(reg)) {
-    headerStatusEl.textContent = '';
-    headerStatusEl.className = 'cm-header-status';
-  } else if (unmappedTotal > 0) {
-    headerStatusEl.textContent = `Unmapped: ${unmappedTotal} ⚠`;
-    headerStatusEl.className = 'cm-header-status cm-warn';
-  } else if (proj.violations.length > 0) {
-    headerStatusEl.textContent = `${proj.violations.length} violation(s) ⚠`;
-    headerStatusEl.className = 'cm-header-status cm-warn';
-  } else {
-    headerStatusEl.textContent = '✓ fully patched';
-    headerStatusEl.className = 'cm-header-status cm-ok';
-  }
+  // strands are fixtures too — a strand on no controller counts as unmapped, so
+  // the panel never reads "fully patched" while one is still unpatched. The
+  // count spans BOTH projections (report 20260725_123): LED violations used to
+  // be dropped entirely, so an unroutable LED card left the header green.
+  const violations = allViolations(proj);
+  const headerStatus = headerStatusModel(registryIsActive(reg), unmappedTotal, violations.length);
+  headerStatusEl.textContent = headerStatus.text;
+  headerStatusEl.className = headerStatus.cls;
 
   // Violations banner (all of them, scene-wide — fail loudly). Pinned
   // above the scroll region, capped + scrollable itself so a pile of
   // violations can't push the controls off screen.
-  if (proj.violations.length > 0) {
+  if (violations.length > 0) {
     const banner = document.createElement('div');
     banner.className = 'cm-banner';
-    banner.textContent = proj.violations.map(v => `✋ ${v.message}`).join('\n');
+    banner.textContent = violations.map(v => `✋ ${v.message}`).join('\n');
     bodyEl.appendChild(banner);
   }
 
@@ -891,6 +1026,9 @@ function render() {
   const ledControllers = reg.controllers.filter(c => isLedController(c));
   main.appendChild(renderControllerGroup('DMX', 'DMX Controllers', dmxControllers, proj));
   main.appendChild(renderControllerGroup('LED', `${LED_TYPE_LABEL} Controllers`, ledControllers, proj));
+  // …and the third state: attached to NOTHING. Rendered as its own quiet card so
+  // it is visible and actionable in the same place as the real cards.
+  if (unmappedTotal > 0) main.appendChild(renderNoControllerCard(unmapped, unmappedStrands));
   bodyEl.appendChild(main);
   main.scrollTop = prevMainScroll; // restore scroll after the rebuild (see above)
 
@@ -1397,6 +1535,14 @@ function renderController(controller, proj) {
   head.appendChild(actionRow);
   card.appendChild(head);
 
+  // The card-level "NO DESTINATION IP" banner comes FIRST, above every other chip
+  // and above the collapsed summary — a collapsed card must still shout it
+  // (report 20260725_123).
+  if (isChainedLedWithoutDestination(controller)) {
+    card.classList.add('cm-controller-nodest');
+    card.appendChild(renderNoDestinationBanner(controller));
+  }
+
   for (const v of violationsFor(proj.violations, controller, null)) {
     const chip = document.createElement('span');
     chip.className = 'cm-error-chip';
@@ -1743,12 +1889,11 @@ function renderLedPort(controller, port, proj) {
   }
 
   if (!portCollapsed) {
-    // Per-strand address preview. A DEVICE-BOUND controller renders with the
-    // firmware's contiguous linear layout (led_patch_projection) so the chips
-    // agree with the hardware; an unbound controller uses the sim's generic
-    // per-port projection (computeLedProjection).
-    const bound = isBoundLedController(controller);
-    const ledProj = bound ? lastLedBoundFields : lastLedGenericFields;
+    // Per-strand addresses, from the ONE per-output patch projection
+    // (led_patch_projection) every LED card now uses — bound or not (operator
+    // ruling 2026-08-03, report 20260725_123). There is no second "preview"
+    // layout any more: what the chip shows IS what patches.yaml, the engine model
+    // and the wire carry, so the chips cannot drift from the patch again.
     const chain = document.createElement('div');
     chain.className = 'cm-chain';
     for (const entry of port.chain) {
@@ -1761,7 +1906,7 @@ function renderLedPort(controller, port, proj) {
       // patch this chip's highlight without a full re-render.
       chip.dataset.cmFixture = name;
       chip.dataset.cmKind = 'strand';
-      const p = ledProj.get(name);
+      const p = lastLedBoundFields.get(name);
       const info = strandSegmentsFor(p);
       // Multi-universe strands render the full span (U6:1 → U7:288); a strand
       // inside one universe keeps the U6:1–160 form (G5).

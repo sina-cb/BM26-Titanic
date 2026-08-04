@@ -32,6 +32,7 @@ import { GlobalEffectsController } from './lib/global_effects_controller.js';
 import { GlobalEffectSlotManager, DEFAULT_SLOT_CONFIG, validateSlotsConfig } from './lib/global_effect_slot_manager.js';
 import { ParamCenter } from './lib/param_center.js';
 import { OscListener } from './lib/osc_listener.js';
+import { FireSyncListener } from './lib/fire_sync_listener.js';
 import { AudioCapture } from './audio/capture/audio_capture.js';
 import { AudioAnalyzer } from './audio/analyzer/audio_analyzer.js';
 import { BpmSpeedSync } from './lib/bpm_speed_sync.js';
@@ -2443,6 +2444,39 @@ async function main() {
   // engine restart and causes the EADDRINUSE the operator saw).
   const getOscListener = () => oscState.listener;
 
+  // 7e. FIRE → LIGHTS SYNC listener (BM26-Stoker). Binds last, like OSC, and is
+  // equally non-fatal: a bad config or a busy port disables fire sync and
+  // nothing else. It receives the fire controllers' relay-edge datagrams
+  // (relayed by the Stoker control panel) and drives a global effect through the
+  // SAME /global-effect route CaptainPad uses. Strictly one-way — nothing here
+  // can command or influence fire. See lib/fire_sync_listener.js.
+  const fireSyncState = { listener: null, config: { ...(engineConfig.fire_sync || {}) } };
+  engineCore.fireSyncState = fireSyncState;
+  if (fireSyncState.config.enabled) {
+    try {
+      const fsl = new FireSyncListener({
+        port:        fireSyncState.config.port,
+        host:        fireSyncState.config.host || '0.0.0.0',
+        effect:      fireSyncState.config.effect,
+        triggerMask: fireSyncState.config.triggerMask,
+        minOnMs:     fireSyncState.config.minOnMs,
+        apiHost:     fireSyncState.config.apiHost || '127.0.0.1',
+        apiPort:     (engineConfig.server && engineConfig.server.port) || 6968,
+        onStats:     (s) => broadcastStatsRef.publish(s),
+      });
+      await fsl.startAsync();
+      fireSyncState.listener = fsl;
+      console.log(`  🔥 fire-sync listening on ${fsl.host}:${fsl.port} → ` +
+        `${fsl.effect} (mask 0x${fsl.triggerMask.toString(16)}, min-ON ${fsl.minOnMs} ms)`);
+    } catch (err) {
+      // Loud and explicit — never a silent "the lights just don't flash tonight".
+      console.error(`  ⚠️  fire-sync DISABLED: ${err && err.message}`);
+      fireSyncState.listener = null;
+    }
+  } else {
+    console.log('  🔥 fire-sync disabled (config.yaml: fire_sync.enabled: false)');
+  }
+
   // 8. Graceful shutdown
   //
   // `afterClose` lets a caller (the scene-switch path) run AFTER every
@@ -2464,6 +2498,12 @@ async function main() {
     const lOsc = getOscListener();
     if (lOsc) {
       try { lOsc.stop(); } catch (_) { /* ignore */ }
+    }
+    // Fire-sync UDP socket, same reasoning: release it before exit so a
+    // replacement engine can re-bind :7703 without an EADDRINUSE race.
+    if (fireSyncState.listener) {
+      try { fireSyncState.listener.stop(); } catch (_) { /* ignore */ }
+      fireSyncState.listener = null;
     }
     try { bpmSync.detach(); } catch (_) { /* ignore */ }
     // Close the model hot-reload watcher and cancel its debounce (report _30

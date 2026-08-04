@@ -33,6 +33,11 @@ export class SacnInputSource {
     this._frameCount = 0;
     this._lastLogTime = 0;
     this._lastSourceName = '';
+    // Pending `getRoutes` queries (report 20260725_127): reqId → {resolve,
+    // reject, timer}. The bridge echoes the reqId on its `{type:'routes'}`
+    // reply so concurrent queries cannot steal each other's answer.
+    this._routeWaiters = new Map();
+    this._routeReqSeq = 0;
 
     // Stats
     this.stats = {
@@ -91,6 +96,45 @@ export class SacnInputSource {
    */
   get connected() {
     return this._connected;
+  }
+
+  /**
+   * Read the bridge's ACTIVE route table back (report 20260725_127): sends
+   * `{type:'getRoutes', reqId}` and resolves with the bridge's
+   * `{type:'routes', routes, engineOwned, mirrorOwned, activeScenes}` reply.
+   *
+   * REJECTS loudly when the socket is down, the send fails, or the bridge does
+   * not answer within `timeoutMs` — the caller (the LED push's third check)
+   * must render that as a failed measurement, never assume routes followed.
+   *
+   * Sent on the SAME socket `setScene` notifies travel, so a query issued
+   * after a notify is answered from the post-recompute table (WS ordering).
+   *
+   * @param {number} [timeoutMs]
+   * @returns {Promise<Object>} the bridge's routes reply, verbatim.
+   */
+  queryRoutes(timeoutMs = 2000) {
+    if (!this._ws || this._ws.readyState !== 1) {
+      return Promise.reject(new Error(
+        'sACN bridge WebSocket not connected — the route table cannot be read'));
+    }
+    this._routeReqSeq += 1;
+    const reqId = `routes-${this._routeReqSeq}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this._routeWaiters.delete(reqId);
+        reject(new Error(`the sACN bridge did not answer the route-table query within ` +
+          `${timeoutMs} ms — is it running current code? Restart the launcher.`));
+      }, timeoutMs);
+      this._routeWaiters.set(reqId, { resolve, reject, timer });
+      try {
+        this._ws.send(JSON.stringify({ type: 'getRoutes', reqId }));
+      } catch (e) {
+        clearTimeout(timer);
+        this._routeWaiters.delete(reqId);
+        reject(new Error(`could not send the route-table query to the sACN bridge: ${e.message}`));
+      }
+    });
   }
 
   // ── Internal ─────────────────────────────────────────────────────────
@@ -152,6 +196,15 @@ export class SacnInputSource {
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = null;
     }
+    // A socket that goes away takes its unanswered route queries with it —
+    // reject them NOW so the push's read-back fails fast and loud instead of
+    // sitting out its full timeout against a dead connection.
+    for (const waiter of this._routeWaiters.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error(
+        'sACN bridge WebSocket closed before the route-table reply arrived'));
+    }
+    this._routeWaiters.clear();
     if (this._ws) {
       this._ws.onopen = null;
       this._ws.onmessage = null;
@@ -200,6 +253,13 @@ export class SacnInputSource {
         // hazard (GPU contention + duplicate sACN writers, report
         // 20260724_15). Surface the HUD banner in THIS window too.
         handleClientCensus(parsed.count);
+      } else if (parsed.type === 'routes') {
+        const waiter = this._routeWaiters.get(parsed.reqId);
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          this._routeWaiters.delete(parsed.reqId);
+          waiter.resolve(parsed);
+        }
       }
     } catch (e) { /* ignore non-JSON */ }
   }

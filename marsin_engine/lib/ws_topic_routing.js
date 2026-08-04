@@ -175,6 +175,12 @@ const TOPIC_BY_TYPE = Object.freeze({
   bumpRejected:                TOPICS.CONTROL,
   audioStatus:                 TOPICS.CONTROL,
   oscStats:                    TOPICS.CONTROL,
+  // BM26-Stoker fire → lights sync (lib/fire_sync_listener.js). Low volume by
+  // construction: emitted only when the effect state actually changes, which the
+  // listener's min-ON coalescing caps at a few per second even under a strobing
+  // poofer effect. Operator-facing health ("is fire sync alive?"), so
+  // /ws/control next to oscStats.
+  fireSyncStats:               TOPICS.CONTROL,
   stats:                       TOPICS.CONTROL,
   // docs/30: sparse drop-detected event from the audio structure
   // detector. ~once per 60 s of music, UI-relevant (scene-swap / macro

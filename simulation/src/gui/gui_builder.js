@@ -56,6 +56,7 @@ import {
   generatedFixtureNames, renamePairs, carryViewMasks, duplicateNameError,
   buildInvalidationReport,
 } from "../dmx/rename_invalidation.js";
+import { fixtureInView, fixtureMaskField } from "../dmx/view_registry.js";
 import {
   collectSceneGroupNames, groupRenameError, buildGroupRenameReport,
 } from "../dmx/group_rename_guard.js";
@@ -126,7 +127,10 @@ function appendMetadataPanelV2(parentChildrenEl, config, opts) {
   if (config.controllerId === undefined) config.controllerId = 0;
   if (config.sectionId === undefined) config.sectionId = 0;
   if (config.fixtureId === undefined) config.fixtureId = 0;
+  // Both view words — `viewMaskHi` (word 1) is where the allocator puts new
+  // custom views, so it is as much a first-class fixture field as `viewMask`.
   if (config.viewMask === undefined) config.viewMask = 0;
+  if (config.viewMaskHi === undefined) config.viewMaskHi = 0;
 
   const onChange = (opts && opts.onChange) || (() => {
     if (typeof window !== 'undefined' && window.debounceAutoSave) window.debounceAutoSave();
@@ -193,7 +197,8 @@ function appendMetadataPanelV2(parentChildrenEl, config, opts) {
   // the Views panel (Assign/Unassign sel., group chips) — a stray
   // click in a fixture card must never silently rewrite a view.
   // Membership is the EFFECTIVE one the engine resolves: the fixture's
-  // own viewMask bit OR its group being attached to the view.
+  // own bit IN THE VIEW'S WORD (`viewMask` / `viewMaskHi`) OR its group
+  // being attached to the view.
   function renderViewChips() {
     chipsContainer.innerHTML = '';
     const reg = window.__viewRegistry || { custom: [] };
@@ -206,7 +211,7 @@ function appendMetadataPanelV2(parentChildrenEl, config, opts) {
       return;
     }
     views.forEach(view => {
-      const byBit = ((config.viewMask || 0) & view.bit) !== 0;
+      const byBit = fixtureInView(config, view);
       const byGroup = Array.isArray(view.groups) && view.groups.includes(config.group);
       const active = byBit || byGroup;
       const chip = document.createElement('span');
@@ -688,18 +693,24 @@ function setupGUI() {
     reproject = true,
   } = {}) {
     const oldNames = pairs.map((p) => p.from);
+    // name → { viewMask, viewMaskHi }: BOTH view words travel a rename. New
+    // custom views are allocated into word 1 first, so snapshotting only
+    // `viewMask` would drop the newest memberships on every group rename.
     const oldMasks = new Map();
+    const snapshot = (src, name) => {
+      const lo = src.viewMask || 0;
+      const hi = src.viewMaskHi || 0;
+      if (lo || hi) oldMasks.set(name, { viewMask: lo, viewMaskHi: hi });
+    };
     const patchTree = window.__globalPatchTree || {};
     for (const name of oldNames) {
       const rec = patchTree[name];
-      if (rec && rec.viewMask) oldMasks.set(name, rec.viewMask);
+      if (rec) snapshot(rec, name);
     }
     // Live configs still carrying the old names hold the authoritative mask
     // (the patch tree only refreshes on a projection).
     for (const config of gatherAllConfigs(params)) {
-      if (config && config.viewMask && oldNames.includes(config.name)) {
-        oldMasks.set(config.name, config.viewMask);
-      }
+      if (config && oldNames.includes(config.name)) snapshot(config, config.name);
     }
 
     const registry = window.__controllerRegistry;
@@ -2007,6 +2018,7 @@ function setupGUI() {
               window.__globalPatchTree[c.name].controllerId = 0;
               window.__globalPatchTree[c.name].fixtureId = 0;
               window.__globalPatchTree[c.name].viewMask = 0;
+              window.__globalPatchTree[c.name].viewMaskHi = 0;
             }
           }
         }
@@ -2414,6 +2426,7 @@ function setupGUI() {
               if (config.sectionId === undefined) config.sectionId = 0;
               if (config.fixtureId === undefined) config.fixtureId = Math.min(65535, config.dmxUniverse * 1000 + config.dmxAddress);
               if (config.viewMask === undefined) config.viewMask = 0;
+              if (config.viewMaskHi === undefined) config.viewMaskHi = 0;
 
               // `meta` is set after the metadata panel is appended below; the
               // forward reference is resolved at autoFixtureId() call-time.
@@ -2742,7 +2755,7 @@ function setupGUI() {
             enabled: true, brightness: 100,
             x: 0, y: 1.5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
             dmxUniverse: 0, dmxAddress: 0, controllerIp: '',
-            controllerId: 0, sectionId: 0, fixtureId: 0, viewMask: 0,
+            controllerId: 0, sectionId: 0, fixtureId: 0, viewMask: 0, viewMaskHi: 0,
           });
           if (window._setGuiRebuilding) window._setGuiRebuilding(true);
           renderParGUI();
@@ -2802,6 +2815,7 @@ function setupGUI() {
           if (config.sectionId === undefined) config.sectionId = 0;
           if (config.fixtureId === undefined) config.fixtureId = 0;
           if (config.viewMask === undefined) config.viewMask = 0;
+          if (config.viewMaskHi === undefined) config.viewMaskHi = 0;
 
           const idxFolder = groupFolder.addFolder(config.name);
           idxFolder.domElement.classList.add('gui-card');
@@ -3226,7 +3240,7 @@ function setupGUI() {
               name: `Par Light ${params.parLights.length + 1}`,
               color: '#ffaa44', intensity: 5, angle: 20, penumbra: 0.5,
               x: 0, y: 1.5, z: 0, rotX: 0, rotY: 0, rotZ: 0,
-              controllerId: 0, sectionId: 0, fixtureId: 0, viewMask: 0,
+              controllerId: 0, sectionId: 0, fixtureId: 0, viewMask: 0, viewMaskHi: 0,
             });
             if (window._setGuiRebuilding) window._setGuiRebuilding(true);
             renderParGUI();
@@ -5449,8 +5463,8 @@ function setupGUI() {
             const carried = carryViewMasks(renameReport.oldViewMasks, byName, renamedPairs);
             for (const row of carried) {
               console.warn(`[Rename]   👁 view membership carried: "${row.from}" → ` +
-                `"${row.to}" (viewMask 0x${row.viewMask.toString(16)}) — display state, ` +
-                'not mapping');
+                `"${row.to}" (viewMask 0x${(row.viewMask || 0).toString(16)}, viewMaskHi ` +
+                `0x${(row.viewMaskHi || 0).toString(16)}) — display state, not mapping`);
             }
             if (carried.length > 0 && window.invalidateMarsinBatchCache) {
               window.invalidateMarsinBatchCache('trace_group_rename');
@@ -6655,7 +6669,7 @@ function setupGUI() {
         intensity: 1.0,
         ledCount: 10,
         group: group || '',
-        controllerId: 0, sectionId: 0, fixtureId: 0, viewMask: 0,
+        controllerId: 0, sectionId: 0, fixtureId: 0, viewMask: 0, viewMaskHi: 0,
       };
     }
 

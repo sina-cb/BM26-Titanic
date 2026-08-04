@@ -153,10 +153,14 @@ test('prunePatchTreeEntries NEVER copies values to the new names', () => {
 });
 
 test('prunePatchTreeEntries reports an unpatched record honestly', () => {
-  const tree = { 'Par 9': { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, viewMask: 8 } };
+  const tree = {
+    'Par 9': { controllerIp: '', dmxUniverse: 0, dmxAddress: 0, viewMask: 8, viewMaskHi: 0x400 },
+  };
   const [row] = prunePatchTreeEntries(tree, ['Par 9']);
   assert.equal(row.wasMapped, false);
   assert.equal(row.viewMask, 8);
+  // BOTH view words are reported — a word-1 membership is as real as a word-0 one.
+  assert.equal(row.viewMaskHi, 0x400);
 });
 
 test('prunePatchTreeEntries tolerates a missing tree and missing keys', () => {
@@ -167,7 +171,7 @@ test('prunePatchTreeEntries tolerates a missing tree and missing keys', () => {
 test('mapping vs display field split is explicit', () => {
   assert.deepEqual(MAPPING_PATCH_FIELDS,
     ['controllerIp', 'dmxUniverse', 'dmxAddress', 'controllerId', 'sectionId', 'fixtureId']);
-  assert.deepEqual(DISPLAY_PATCH_FIELDS, ['viewMask']);
+  assert.deepEqual(DISPLAY_PATCH_FIELDS, ['viewMask', 'viewMaskHi']);
   for (const f of DISPLAY_PATCH_FIELDS) {
     assert.equal(MAPPING_PATCH_FIELDS.includes(f), false, `${f} cannot be both`);
   }
@@ -177,8 +181,11 @@ test('mapping vs display field split is explicit', () => {
 
 test('carryViewMasks moves view membership onto the new names', () => {
   const pairs = renamePairs('Old Ring', 'New Ring', 3);
-  const masks = new Map([['Old Ring 1', 4], ['Old Ring 3', 16]]);
-  const configs = new Map(pairs.map((p) => [p.to, { name: p.to, viewMask: 0 }]));
+  const masks = new Map([
+    ['Old Ring 1', { viewMask: 4, viewMaskHi: 0 }],
+    ['Old Ring 3', { viewMask: 16, viewMaskHi: 0 }],
+  ]);
+  const configs = new Map(pairs.map((p) => [p.to, { name: p.to, viewMask: 0, viewMaskHi: 0 }]));
   const carried = carryViewMasks(masks, configs, pairs);
   assert.deepEqual(carried.map((c) => c.to), ['New Ring 1', 'New Ring 3']);
   assert.equal(configs.get('New Ring 1').viewMask, 4);
@@ -186,9 +193,31 @@ test('carryViewMasks moves view membership onto the new names', () => {
   assert.equal(configs.get('New Ring 3').viewMask, 16);
 });
 
+// The word-1 case is the one that matters now: `addCustomView` allocates word 1
+// FIRST, so the views an operator most recently created are exactly the ones a
+// word-0-only carry would silently empty on a group rename.
+test('carryViewMasks carries the HIGH view word too (word-1 custom views)', () => {
+  const pairs = renamePairs('Old Ring', 'New Ring', 2);
+  const masks = new Map([
+    ['Old Ring 1', { viewMask: 0, viewMaskHi: 0x400 }],
+    ['Old Ring 2', { viewMask: 8, viewMaskHi: 0x1000 }],
+  ]);
+  const configs = new Map(pairs.map((p) => [p.to, { name: p.to, viewMask: 0, viewMaskHi: 0 }]));
+  const carried = carryViewMasks(masks, configs, pairs);
+  assert.deepEqual(carried.map((c) => c.to), ['New Ring 1', 'New Ring 2']);
+  // A hi-word-ONLY membership carries even though its word-0 mask is zero.
+  assert.equal(configs.get('New Ring 1').viewMask, 0);
+  assert.equal(configs.get('New Ring 1').viewMaskHi, 0x400);
+  assert.equal(configs.get('New Ring 2').viewMask, 8);
+  assert.equal(configs.get('New Ring 2').viewMaskHi, 0x1000);
+  assert.deepEqual(carried[0], { from: 'Old Ring 1', to: 'New Ring 1', viewMask: 0, viewMaskHi: 0x400 });
+});
+
 test('carryViewMasks skips zero masks and missing configs (no invented state)', () => {
   const pairs = renamePairs('A', 'B', 2);
-  const carried = carryViewMasks({ 'A 1': 0, 'A 2': 2 }, new Map(), pairs);
+  const carried = carryViewMasks(
+    { 'A 1': { viewMask: 0, viewMaskHi: 0 }, 'A 2': { viewMask: 2, viewMaskHi: 0 } },
+    new Map(), pairs);
   assert.deepEqual(carried, []);
 });
 
@@ -310,11 +339,13 @@ test('a rename that only pruned phantoms says exactly that', () => {
 test('view-membership carries are reported as DISPLAY state, not mapping', () => {
   const { lines } = buildInvalidationReport({
     oldLabel: 'A', newLabel: 'B',
-    carriedViewMasks: [{ from: 'A 1', to: 'B 1', viewMask: 4 }],
+    carriedViewMasks: [{ from: 'A 1', to: 'B 1', viewMask: 4, viewMaskHi: 0x400 }],
   });
   const line = lines.find((l) => l.includes('view membership'));
   assert.ok(line);
   assert.match(line, /display state, not mapping/);
+  // Both words are named, so a word-1-only carry never reads as a no-op.
+  assert.match(line, /viewMask 0x4, viewMaskHi 0x400/);
 });
 
 // ── The opt-in migrate escape hatch stays UNWIRED (gate §5 Q4) ─────────────

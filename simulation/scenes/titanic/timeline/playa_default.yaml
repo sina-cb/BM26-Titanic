@@ -122,11 +122,6 @@ looks:
     target:
       channel: deck
       id: null
-defaultCue:
-  label: Ambient program
-  action:
-    type: look
-    look: ambient
 cues:
   - id: c_visibility_on
     label: Exterior up at golden hour
@@ -180,11 +175,15 @@ cues:
       event: sunrise
       offsetMin: -15
     action:
-      type: look
-      look: sunrise
+      type: playlist
+      name: white_only
+      target:
+        channel: deck
+        id: null
     kind: program
     hold:
       min: 90
+    durationMin: 60
     days: all
   - id: c_burn_night
     label: Burn night spectacle
@@ -218,3 +217,8 @@ cues:
       min: 120
     days:
       - 7
+defaultCue:
+  label: Ambient program
+  action:
+    type: look
+    look: ambient

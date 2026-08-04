@@ -9,6 +9,7 @@ import {
 } from "./state.js";
 import { getSacnOutput } from "../dmx/sacn_output_client.js";
 import { generatePixelMap } from "../dmx/pixelblaze_model_exporter.js";
+import { pixelInView } from "../dmx/view_registry.js";
 import { isStaticHost, logStaticHostSkip } from "./static_host.js";
 import { demapSacnToPixels, mapPixelsToSacn } from "../dmx/sacn_mapper.js";
 import { getProfileDef } from "./profile_registry.js";
@@ -575,7 +576,11 @@ export function animate() {
 
          let rn = 0, gn = 0, bn = 0;
 
-         const isIsolated = activeView && !(((entry.vMask || 0) & activeView.bit) !== 0 || (activeView.groups && activeView.groups.includes(entry.group)));
+         // Word-aware bit test: `pixelInView` reads `vMask` for a word-0 view
+         // and `vMaskHi` for a word-1 one (the exporter carries both onto
+         // every entry). A flat `entry.vMask` test isolated the wrong dots
+         // for any word-1 view.
+         const isIsolated = activeView && !(pixelInView(entry, activeView) || (activeView.groups && activeView.groups.includes(entry.group)));
 
          if (touchMatrices) {
             // DRAWN position + radius (pixel_dot_geometry.js); isolation still

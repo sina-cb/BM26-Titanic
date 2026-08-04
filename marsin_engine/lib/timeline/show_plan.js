@@ -467,10 +467,13 @@ function validateAction(action, label, lookNames) {
         }
         out.hue = ((action.hue % 360) + 360) % 360;
       }
-      // globals: rig-wide CPC knobs (SPEED/SIZE/bpmSpeedSync) applied when the
+      // globals: rig-wide CPC knobs (SPEED/bpmSpeedSync) applied when the
       // cue fires, via the SAME setParams path a look's `globals` uses. Gated
       // to a deck target for consistency with the other authored knobs (the
-      // maker is deck-only). Reuses validateGlobalsMap (Number or {h,s,v}).
+      // maker is deck-only). Reuses validateGlobalsMap (Number or {h,s,v}) —
+      // the map stays GENERIC, so a hand-authored key (e.g. the legacy
+      // cue-level `size`, removed from the maker 2026-08-03) still validates
+      // and applies; the maker just never emits it anymore.
       if (action.globals !== undefined) {
         if (out.target.channel !== 'deck') {
           throw new Error(`${label}.globals is only valid for a deck target`);

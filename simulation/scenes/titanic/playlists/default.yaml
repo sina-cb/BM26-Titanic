@@ -21,7 +21,7 @@ entries:
     pattern: 01_cylon_sweep
     label: null
     defaults:
-      sliderLocalSpeed: 0.21
+      sliderLocalSpeed: 0.45
       sliderDirection: 0.77
       sliderLevel: 0.2
       sliderKick: 0.5

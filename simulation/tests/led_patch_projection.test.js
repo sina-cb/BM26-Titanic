@@ -110,11 +110,21 @@ test('multiple strands chained on one output pack contiguously', () => {
   assert.equal(fields.get('b').outputIndex, 0);
 });
 
-test('an UNBOUND LED controller yields NO strand records', () => {
-  const reg = boundRegistry([p(1, 3, 'lineA')], { device: null });
+test('an UNBOUND LED controller patches identically to a bound one (ruling 2026-08-03)', () => {
+  const bound = computeLedStrandPatches(boundRegistry([p(1, 3, 'lineA')]),
+    new Map([['lineA', 40]]));
+  const unbound = computeLedStrandPatches(boundRegistry([p(1, 3, 'lineA')], { device: null }),
+    new Map([['lineA', 40]]));
+  assert.deepEqual(unbound.violations, []);
+  assert.deepEqual(unbound.fields.get('lineA'), bound.fields.get('lineA'),
+    'binding grade is a hardware CLAIM, never part of the byte layout');
+});
+
+test('an UNBOUND LED controller with EMPTY chains projects nothing, silently', () => {
+  const reg = boundRegistry([p(1, 3), p(2, 4)], { device: null });
   const { fields, violations } = computeLedStrandPatches(reg, new Map([['lineA', 40]]));
   assert.equal(fields.size, 0);
-  assert.equal(violations.length, 0);
+  assert.deepEqual(violations, []);
 });
 
 test('an output with an out-of-range universe → violation, its strands unpatched', () => {
@@ -203,11 +213,16 @@ test('unknown strand ledCount → loud violation, that strand unpatched', () => 
   assert.equal(fields.get('lineB').dmxAddress, 1);
 });
 
-test('a bad-IP bound controller still projects but with an empty controllerIp', () => {
+test('a bad-IP controller still projects but with an empty controllerIp', () => {
   const reg = boundRegistry([p(1, 3, 'lineA')], { ip: 'not-an-ip' });
   const { fields, violations } = computeLedStrandPatches(reg, new Map([['lineA', 40]]));
   assert.equal(fields.get('lineA').controllerIp, '');
-  assert.ok(violations.some((v) => v.code === 'led_bad_ip'));
+  assert.ok(violations.some((v) => v.code === 'led_no_destination_ip'));
+});
+
+test('a bad IP on a card with NO chains is silent (nothing needs a destination)', () => {
+  const reg = boundRegistry([p(1, 3)], { ip: 'not-an-ip' });
+  assert.deepEqual(computeLedStrandPatches(reg, new Map()).violations, []);
 });
 
 // ── Slice L1: projectLedStrandSegments (DMX-parity multi-universe view) ───────

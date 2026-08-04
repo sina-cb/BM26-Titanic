@@ -2586,6 +2586,79 @@ body.edit-mode-active #engine-params-panel {
   background: color-mix(in srgb, var(--text) 2%, transparent);
 }
 
+/* CHAINED WITH NO DESTINATION IP (report 20260725_123, operator ruling
+   2026-08-03). Chaining is the patch, so an unbound card is styled exactly like
+   a bound one — nothing here says "not patched". The ONE remaining way to chain
+   fixtures and still ship them dark is having no address to unicast sACN to, and
+   that gets the red treatment the pane's other blocking states use. */
+.cm-controller.cm-controller-nodest {
+  border-color: color-mix(in srgb, var(--error) 55%, transparent);
+}
+
+.cm-nodest-banner {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 45%, transparent);
+  border-radius: 6px;
+  padding: 5px 8px;
+  margin: 4px 0 6px;
+}
+
+.cm-nodest-banner-head {
+  color: var(--error);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.cm-nodest-banner-body {
+  color: color-mix(in srgb, var(--error) 70%, var(--text));
+  font-size: 8.5px;
+  line-height: 1.45;
+  margin: 3px 0 0;
+}
+
+/* "No Controller" placeholder card (operator addendum 2026-08-03): the
+   nothing-attached state, shown as a card so it can be seen and acted on.
+   Deliberately the quietest card in the pane — dashed ghost border, secondary
+   text, no warning colour. It is informational, not an alarm.
+   It borrows `.cm-controller`'s geometry but NOT its class: the agent_tools that
+   enumerate `.cm-controller` must keep reading only real controller cards. */
+.cm-none-card {
+  border: 1px dashed var(--ghost-border);
+  border-radius: 8px;
+  padding: 6px;
+  margin-bottom: 8px;
+}
+
+.cm-none-head {
+  color: var(--secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.cm-none-body {
+  color: var(--secondary);
+  font-size: 8.5px;
+  margin: 2px 0 5px;
+}
+
+/* The one quiet cue on an unbound-but-chained card: patched and routed, board
+   simply unchecked (operator addendum 2026-08-03 — "just make sure it's not too
+   noisy"). Muted secondary text, no warning colour: this is a note, not a
+   defect, and it must not compete with the real blocking states above. */
+.led-device-tag {
+  display: inline-block;
+  border: 1px solid var(--ghost-border);
+  border-radius: 6px;
+  font-size: 8.5px;
+  padding: 1px 6px;
+  color: var(--secondary);
+}
+
+.led-device-tag.led-device-unverified {
+  font-style: italic;
+}
+
 /* Controller card header — TWO rows (operator request). Row 1 is identity
    (chevron + name + IP), row 2 is actions (type / transport / +port …
    delete). One row starved the name box: .cm-name is the only flexible item

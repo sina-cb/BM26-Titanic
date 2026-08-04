@@ -398,10 +398,13 @@ export interface ActionPlaylist {
   // Global HUE SHIFT (degrees, 0–360) applied when the cue fires. DECK-ONLY:
   // the engine rejects `hue` on a non-deck target. Absent = leave hue as-is.
   hue?: number;
-  // Global CPC knobs applied when the cue fires (DECK-ONLY): SPEED / SIZE
-  // (0..1) and bpmSpeedSync (0|1, the SYNC toggle). Rig-wide — they route
-  // through the same setParams path a look's `globals` uses. Absent = leave
-  // globals as-is.
+  // Global CPC knobs applied when the cue fires (DECK-ONLY): SPEED (0..1) and
+  // bpmSpeedSync (0|1, the SYNC toggle). Rig-wide — they route through the
+  // same setParams path a look's `globals` uses. Absent = leave globals as-is.
+  // `size` is LEGACY (operator removed cue-level size 2026-08-03): still typed
+  // so an old saved plan reads in cleanly, but the editor sheds it on load and
+  // never re-emits it (cue_edit_logic.stripCueSizeGlobal). The DECK-level size
+  // global is a separate, real control and is unaffected.
   globals?: { speed?: number; size?: number; bpmSpeedSync?: number };
 }
 export interface ActionGlobals { type: 'globals'; set: Record<string, unknown> }

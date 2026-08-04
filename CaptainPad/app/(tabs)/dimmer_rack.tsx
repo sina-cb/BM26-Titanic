@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useContext, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, AppState, Modal, ScrollView } from 'react-native';
+import React, { useState, useEffect, useContext, useCallback, useRef } from 'react';
+import { View, Text, TouchableOpacity, ActivityIndicator, AppState, Modal, Platform, ScrollView, useWindowDimensions } from 'react-native';
 import { useGlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -12,6 +12,7 @@ import {
 } from '@/utils/api';
 import { RigContext } from '@/components/RigGlobals';
 import { engineEvents } from '@/utils/engineEvents';
+import { wheelToHorizontalDelta } from '@/utils/wheel_scroll_logic';
 
 const BypassCheckbox = ({ effectId, label }: { effectId: string, label: string }) => {
   const C = usePalette();
@@ -200,6 +201,11 @@ function GroupFixedColorModal({ group, override, onClose }: {
 export default function DimmerRackScreen() {
   const globalStyles = useGlobalStyles();
   const C = usePalette();
+  // Same orientation idiom as CPCControls / the mixer: portrait when the
+  // window is taller than wide. Portrait stacks the fader row two-high
+  // (operator request 2026-08-03), halving the horizontal scroll distance.
+  const { width, height } = useWindowDimensions();
+  const isPortrait = width < height;
   const { blackout: isBlackout, toggleBlackout } = useContext(RigContext);
   const [dimmerStates, setDimmerStates] = useState<Record<string, number>>({});
   const [groups, setGroups] = useState<Record<string, number>>({});
@@ -220,6 +226,59 @@ export default function DimmerRackScreen() {
   const [fcGroups, setFcGroups] = useState<string[]>([]);
   const [fcOverrides, setFcOverrides] = useState<Record<string, GroupFixedColorOverride>>({});
   const [fcEditing, setFcEditing] = useState<string | null>(null);
+
+  // True while a fader handle is being dragged. Gates the fader row's
+  // horizontal ScrollView (scrollEnabled={!faderDragging}) so the scroll
+  // container can never steal a knob drag mid-gesture. The fader already
+  // capture-claims its responder (same pattern as the mixer's channel
+  // strips), but iOS's native scroll view ignores
+  // onShouldBlockNativeResponder, so this belt-and-braces gate is what
+  // makes the drag rock-solid on the iPad.
+  const [faderDragging, setFaderDragging] = useState(false);
+  // Mirror of `faderDragging` for the web wheel listener below — a DOM
+  // event handler installed once per row-mount would otherwise close over
+  // a stale state value.
+  const faderDraggingRef = useRef(false);
+  const onFaderDragStart = useCallback(() => {
+    faderDraggingRef.current = true;
+    setFaderDragging(true);
+  }, []);
+  const onFaderDragEnd = useCallback(() => {
+    faderDraggingRef.current = false;
+    setFaderDragging(false);
+  }, []);
+
+  // ── Desktop-web wheel-to-horizontal scroll (report _130) ─────────────
+  // RN-web renders the fader row as a horizontal-overflow div. Desktop
+  // mice only produce VERTICAL wheel deltas, which browsers drop on a
+  // horizontal-only scroller — on a computer the row simply never moved
+  // (repro: scrollLeft pinned at 0 under deltaY wheel). This web-only
+  // listener translates deltaY-dominant wheel events into scrollLeft.
+  // Trackpad two-finger horizontal pans and Chrome's shift+wheel arrive
+  // as deltaX-dominant events and keep their native handling
+  // (wheelToHorizontalDelta returns null → no preventDefault).
+  const faderScrollRef = useRef<ScrollView | null>(null);
+  const faderRowMounted = loadState === 'ready' && Object.keys(groups).length > 0;
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !faderRowMounted) return;
+    const scrollView = faderScrollRef.current;
+    if (!scrollView) throw new Error('dimmer rack: fader ScrollView ref not set on web');
+    // RN-web's ScrollView exposes its scroll container DOM element here;
+    // absent on native, hence the platform gate above (fail loudly if the
+    // web implementation ever drops it — no silent no-scroll fallback).
+    const node = (scrollView as any).getScrollableNode() as HTMLElement;
+    if (!node) throw new Error('dimmer rack: fader ScrollView has no scrollable DOM node');
+    const onWheel = (e: WheelEvent) => {
+      if (faderDraggingRef.current) return; // knob drag owns the pointer
+      if (node.scrollWidth <= node.clientWidth) return; // row fits — let the page keep the wheel
+      const delta = wheelToHorizontalDelta(e, node.clientWidth);
+      if (delta === null) return; // deltaX-dominant: native horizontal scroll handles it
+      e.preventDefault(); // consume it — don't also scroll the page
+      node.scrollLeft += delta;
+    };
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return () => node.removeEventListener('wheel', onWheel);
+  }, [faderRowMounted]);
 
   const refreshFixedColors = useCallback(async () => {
     const res = await fetchGroupFixedColors();
@@ -297,6 +356,15 @@ export default function DimmerRackScreen() {
   for (const [name, sectionId] of groupEntries) {
     if (!sectionIdToNames[sectionId]) sectionIdToNames[sectionId] = [];
     sectionIdToNames[sectionId].push(name);
+  }
+
+  // Column-wise flow for the fader ScrollView: landscape keeps the single
+  // row (1 fader per column); portrait stacks 2 faders per column so the
+  // same horizontal scroll reveals twice the groups per screenful.
+  const perColumn = isPortrait ? 2 : 1;
+  const faderColumns: [string, number][][] = [];
+  for (let i = 0; i < groupEntries.length; i += perColumn) {
+    faderColumns.push(groupEntries.slice(i, i + perColumn));
   }
 
   return (
@@ -423,9 +491,38 @@ export default function DimmerRackScreen() {
           </View>
         )}
 
+        {/* The titanic scene has 24 dimmer groups (~112px per fader column
+            ≈ 2700px of row) — far wider than an iPad. The old flexWrap row
+            wrapped into rows that the fixed-height card clipped, so faders
+            past the fold were unreachable. One horizontal ScrollView fixes
+            that for any group count: when the row fits, flexGrow +
+            space-around spreads the faders exactly like before; when it
+            overflows, it left-aligns and scrolls, with the partially
+            visible fader at the card edge as the natural "more off-screen"
+            affordance (no extra chrome). Knob drags never fight the
+            scroll: faders capture-claim their responder AND faderDragging
+            hard-disables the scroll for the duration of the drag.
+            Orientation (operator request 2026-08-03): landscape is the
+            single row; portrait stacks the row two-high — faders flow
+            column-wise inside the SAME horizontal ScrollView, so one
+            swipe reveals two rows' worth of groups. */}
         {loadState === 'ready' && groupEntries.length > 0 && (
-          <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', flexWrap: 'wrap', gap: 32 }}>
-            {groupEntries.map(([name, sectionId]) => {
+          <ScrollView
+            ref={faderScrollRef}
+            horizontal
+            scrollEnabled={!faderDragging}
+            // Web (desktop) gets the native scrollbar as a visible, grabbable
+            // affordance — mice have no other way to see/drag the overflow.
+            // Native touch keeps the indicator hidden exactly as verified in
+            // _122 (the peeking fader at the card edge is the affordance).
+            showsHorizontalScrollIndicator={Platform.OS === 'web'}
+            contentContainerStyle={{ flexGrow: 1, flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', gap: 32, paddingHorizontal: 8 }}
+          >
+            {faderColumns.map((column) => (
+              // A column keys off its top fader's group name — column
+              // membership is a pure function of entry order + orientation.
+              <View key={column[0][0]} style={{ flexDirection: 'column', alignItems: 'center', gap: 24 }}>
+                {column.map(([name, sectionId]) => {
               const siblings = (sectionIdToNames[sectionId] || []).filter((n) => n !== name);
               const isLinked = siblings.length > 0;
               return (
@@ -453,6 +550,8 @@ export default function DimmerRackScreen() {
                     min={0}
                     max={1.0}
                     onChange={handleDimmerChange}
+                    onDragStart={onFaderDragStart}
+                    onDragEnd={onFaderDragEnd}
                   />
                   {isLinked && (
                     <View style={{ marginTop: 8, alignItems: 'center', maxWidth: 140 }}>
@@ -469,8 +568,10 @@ export default function DimmerRackScreen() {
                   )}
                 </View>
               );
-            })}
-          </View>
+                })}
+              </View>
+            ))}
+          </ScrollView>
         )}
       </View>
 

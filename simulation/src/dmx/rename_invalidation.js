@@ -10,9 +10,12 @@
  * anywhere — not in the registry chains, not in `window.__globalPatchTree`.
  *
  * What the ruling does NOT invalidate is *display* state: the group master
- * override, the group's view-mask bit and a fixture's per-fixture `viewMask`
- * are view membership, not mapping, so they follow the rename (each with its
- * own log line, so the operator sees the distinction).
+ * override, the group's view-mask bit and a fixture's per-fixture view masks
+ * (`viewMask` word 0 + `viewMaskHi` word 1) are view membership, not mapping,
+ * so they follow the rename (each with its own log line, so the operator sees
+ * the distinction). BOTH words travel — new custom views are allocated into
+ * word 1 first, so carrying only `viewMask` would silently empty the views an
+ * operator most recently created.
  *
  * This module is pure — no DOM, no THREE, no `window`. The registry side of
  * the work lives in `controller_registry.js`
@@ -27,7 +30,7 @@
 export const MAPPING_PATCH_FIELDS = [
   'controllerIp', 'dmxUniverse', 'dmxAddress', 'controllerId', 'sectionId', 'fixtureId',
 ];
-export const DISPLAY_PATCH_FIELDS = ['viewMask'];
+export const DISPLAY_PATCH_FIELDS = ['viewMask', 'viewMaskHi'];
 
 /**
  * The generated fixture names a group of `count` lights carries — the
@@ -69,7 +72,7 @@ export function renamePairs(oldGroupName, newGroupName, count) {
  *
  * @returns {Array<{name: string, controllerIp: string, dmxUniverse: number,
  *   dmxAddress: number, controllerId: number, sectionId: number, fixtureId: number,
- *   viewMask: number, wasMapped: boolean}>}
+ *   viewMask: number, viewMaskHi: number, wasMapped: boolean}>}
  */
 export function prunePatchTreeEntries(patchTree, names) {
   const pruned = [];
@@ -86,6 +89,7 @@ export function prunePatchTreeEntries(patchTree, names) {
       sectionId: rec.sectionId || 0,
       fixtureId: rec.fixtureId || 0,
       viewMask: rec.viewMask || 0,
+      viewMaskHi: rec.viewMaskHi || 0,
       wasMapped: !!(rec.controllerIp || rec.dmxUniverse || rec.dmxAddress),
     });
     delete patchTree[name];
@@ -94,15 +98,19 @@ export function prunePatchTreeEntries(patchTree, names) {
 }
 
 /**
- * Carry per-fixture `viewMask` across a rename. View membership is display
- * state, not mapping (ruling), so it follows the name the way the group
- * master override and the group view bit already do.
+ * Carry per-fixture view masks across a rename — BOTH words. View membership
+ * is display state, not mapping (ruling), so it follows the name the way the
+ * group master override and the group view bit already do.
  *
- * Reads the OLD masks from `oldMasks` (a name → mask lookup the caller
- * snapshots BEFORE the patch tree is pruned) and stamps them onto the new
- * configs. Returns one row per non-zero mask actually carried.
+ * Reads the OLD masks from `oldMasks` (a name → `{viewMask, viewMaskHi}`
+ * lookup the caller snapshots BEFORE the patch tree is pruned) and stamps
+ * them onto the new configs. Both words are required in the entry — word 1 is
+ * where the view allocator puts NEW custom views, so a word-0-only carry
+ * would drop exactly the memberships an operator just made.
  *
- * @param {Map<string, number>|object} oldMasks
+ * Returns one row per entry that actually carried a non-zero word.
+ *
+ * @param {Map<string, {viewMask: number, viewMaskHi: number}>|object} oldMasks
  * @param {Map<string, object>} configsByName live configs, keyed by their NEW names
  * @param {Array<{from: string, to: string}>} pairs
  */
@@ -110,12 +118,16 @@ export function carryViewMasks(oldMasks, configsByName, pairs) {
   const get = (k) => (oldMasks instanceof Map ? oldMasks.get(k) : (oldMasks || {})[k]);
   const carried = [];
   for (const { from, to } of pairs) {
-    const mask = get(from) || 0;
-    if (!mask) continue;
+    const entry = get(from);
+    if (!entry) continue;
+    const viewMask = entry.viewMask || 0;
+    const viewMaskHi = entry.viewMaskHi || 0;
+    if (!viewMask && !viewMaskHi) continue;
     const config = configsByName.get(to);
     if (!config) continue;
-    config.viewMask = mask;
-    carried.push({ from, to, viewMask: mask });
+    config.viewMask = viewMask;
+    config.viewMaskHi = viewMaskHi;
+    carried.push({ from, to, viewMask, viewMaskHi });
   }
   return carried;
 }
@@ -194,8 +206,11 @@ export function buildInvalidationReport({
   for (const row of chainRows) lines.push(formatMappingLine(row));
   for (const row of patchRows) lines.push(formatPatchLine(row));
   for (const row of carriedViewMasks) {
+    // Both words are named so the operator can tell WHICH views moved; a
+    // word-1-only membership used to print "viewMask 0x0" and read as a no-op.
     lines.push(`  👁 view membership carried: "${row.from}" → "${row.to}" ` +
-      `(viewMask 0x${row.viewMask.toString(16)}) — display state, not mapping`);
+      `(viewMask 0x${(row.viewMask || 0).toString(16)}, ` +
+      `viewMaskHi 0x${(row.viewMaskHi || 0).toString(16)}) — display state, not mapping`);
   }
   for (const note of carriedDisplayNotes) lines.push(`  👁 ${note}`);
   if (invalidatedCount > 0) {

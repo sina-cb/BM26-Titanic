@@ -855,12 +855,15 @@ export function setControllerType(controller, type) {
 /**
  * True when the LED controller carries a device binding of EITHER grade —
  * provisional (operator-declared, board never contacted) or verified
- * (fingerprint read off the hardware). This is deliberately the union: it is
- * the predicate the PATCH CHAIN reads (computeLedStrandPatches → patches.yaml →
- * bridge relay routes → engine model lanes), and the whole point of the
- * provisional grade is that a declared controller patches end-to-end before its
- * board ever powers on. Use `isVerifiedLedController` for anything that asserts
- * hardware truth (push receipts, bind-by-controllerId dedup, sync chips).
+ * (fingerprint read off the hardware).
+ *
+ * This is NOT the patch gate. Operator ruling 2026-08-03 (report 20260725_123):
+ * *"unbound should not cause the lights to go off or unpatched red."* Chaining a
+ * fixture onto a port IS the patch — `computeLedStrandPatches` projects every LED
+ * card that carries chains, and a typed IP is the routing destination. Binding is
+ * about HARDWARE CLAIMS only: first-contact reconcile, promote-on-agreement,
+ * push/gamma receipts, bind-by-controllerId dedup. Use `isVerifiedLedController`
+ * for anything that asserts the board has actually been read.
  */
 export function isBoundLedController(controller) {
   return isLedController(controller) && !!controller.device;
@@ -1913,8 +1916,15 @@ export function computeProjection(registry, configsByName, pins) {
   const ipOwners = new Map();
   for (const controller of registry.controllers) {
     if (!isValidIp(controller.ip)) {
-      addViolation('bad_ip', `Controller '${controller.name}' has a malformed or missing IP ` +
-        `('${controller.ip}') — its fixtures project unpatched`, controller, null);
+      // An LED card owns this finding itself — `led_no_destination_ip`
+      // (led_patch_projection), which states the truth for it under the
+      // 2026-08-03 ruling: its chained fixtures DO patch and render, they simply
+      // cannot be routed. Saying "its fixtures project unpatched" here as well
+      // was both a duplicate and, for LED cards, false.
+      if (!isLedController(controller)) {
+        addViolation('bad_ip', `Controller '${controller.name}' has a malformed or missing IP ` +
+          `('${controller.ip}') — its fixtures project unpatched`, controller, null);
+      }
       badControllers.add(controller);
       continue;
     }

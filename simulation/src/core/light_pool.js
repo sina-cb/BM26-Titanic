@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import { scene, camera, modelRadius, renderer, params } from './state.js';
 import { getProfileDef } from './profile_registry.js';
-import { isEffectsOnlyFixture } from '../dmx/view_registry.js';
+import { isEffectsOnlyFixture, fixtureInView } from '../dmx/view_registry.js';
 import { emitsVisibleLight } from './analytic_light_gate.js';
 
 // ── Pool Configuration ──────────────────────────────────────────────────
@@ -445,7 +445,9 @@ function _collectLightRequests() {
     const isFog = isEffectsOnlyFixture(fixture.config);
 
     if (activeView && !isFog) {
-      const isBitMember = ((fixture.config.viewMask || 0) & activeView.bit) !== 0;
+      // Word-aware: the bit is read from the view's own mask field
+      // (`viewMask` for word 0, `viewMaskHi` for word 1) — see view_registry.
+      const isBitMember = fixtureInView(fixture.config, activeView);
       const isGroupMember = activeView.groups && activeView.groups.includes(fixture.config.group);
       if (!isBitMember && !isGroupMember) continue;
     } else {

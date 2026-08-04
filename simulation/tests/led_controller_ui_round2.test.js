@@ -301,13 +301,23 @@ test('S1: pushAllLedControllers is DEVICE-LAYER ONLY — it never saves or notif
   assert.equal(calls.includes('notifyBridge'), false);
 });
 
-test('S1: the fleet completion saves once, THEN notifies, and reads as one sentence', async () => {
+test('S1: the fleet completion saves once, notifies, then READS the routes back — one sentence', async () => {
   const calls = [];
+  let seenExpectations = null;
   const steps = await persistAndNotifyAfterPush({
     persistScene: async () => { calls.push('persistScene'); return { ok: true }; },
     notifyBridge: async () => { calls.push('notifyBridge'); return { ok: true }; },
-  });
-  assert.deepEqual(calls, ['persistScene', 'notifyBridge']);
+    confirmBridgeRoutes: async (expectations) => {
+      calls.push('confirmRoutes');
+      seenExpectations = expectations;
+      return { ok: true, detail: 'U3→10.0.0.1, U4→10.0.0.2' };
+    },
+  }, [
+    { ip: '10.0.0.1', controllerName: 'a', expected: [3], parkedAbsent: [] },
+    { ip: '10.0.0.2', controllerName: 'b', expected: [4], parkedAbsent: [] },
+  ]);
+  assert.deepEqual(calls, ['persistScene', 'notifyBridge', 'confirmRoutes']);
+  assert.equal(seenExpectations.length, 2, 'the read-back covers the WHOLE fleet');
 
   const outcome = describePushCompletion(steps, {
     lead: 'done — 2 pushed · 0 skipped · 0 failed',
@@ -316,7 +326,37 @@ test('S1: the fleet completion saves once, THEN notifies, and reads as one sente
   assert.equal(outcome.ok, true);
   assert.equal(outcome.text,
     'done — 2 pushed · 0 skipped · 0 failed · ✓ scene saved (patches projected) · ' +
-    '✓ bridge notified — routes follow');
+    '✓ bridge routes confirmed (U3→10.0.0.1, U4→10.0.0.2)');
+});
+
+test('_127: a fleet where NOTHING pushed confirms nothing — explicitly, not silently', async () => {
+  const calls = [];
+  const steps = await persistAndNotifyAfterPush({
+    persistScene: async () => ({ ok: true }),
+    notifyBridge: async () => ({ ok: true }),
+    confirmBridgeRoutes: async () => { calls.push('confirmRoutes'); return { ok: true, detail: 'x' }; },
+  }, []);
+  assert.equal(calls.length, 0, 'no expectation — the bridge is not queried');
+  const outcome = describePushCompletion(steps, { lead: 'done — 0 pushed · 2 skipped · 0 failed' });
+  assert.equal(outcome.ok, true);
+  assert.match(outcome.text, /✓ bridge notified — nothing was pushed, no routes to confirm/);
+});
+
+test('_127: pushed fleet results CARRY their route expectation for the one completion', async () => {
+  const reg = createControllerRegistry({
+    controllers: [ledCard(1, '10.0.0.1', 3, 'sA', true), ledCard(2, '10.0.0.2', 4, 'sB', true)],
+  });
+  const counts = new Map([['sA', 40], ['sB', 40]]);
+  const devices = {
+    '10.0.0.1': { config: deviceConfig(), status: deviceStatus('titanic_1') },
+    '10.0.0.2': { config: deviceConfig(), status: deviceStatus('titanic_2') },
+  };
+  const results = await pushAllLedControllers(makeCtx(reg, counts), makeMockIo(devices, []));
+  assert.deepEqual(results.map((r) => r.state), ['pushed', 'pushed']);
+  assert.deepEqual(results[0].expectation.expected, [3]);
+  assert.equal(results[0].expectation.ip, '10.0.0.1');
+  assert.deepEqual(results[1].expectation.expected, [4]);
+  assert.equal(results[1].expectation.ip, '10.0.0.2');
 });
 
 test('S1: a fleet whose save fails says the devices WERE written and never notifies', async () => {

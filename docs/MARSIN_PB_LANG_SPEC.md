@@ -1,12 +1,33 @@
 # MarsinScript Language Specification
 
-**Version**: 2.2
-**Last Updated**: 2026-06-14
+**Version**: 2.3
 **Status**: Authoritative for the current Marsin compiler, VM, firmware runtime, simulator, and WASM surface. Where implementation caveats still exist, they are called out explicitly.
 
-> **2.2 changes** (probed empirically against the WASM VM at `marsin_engine/lib/marsin_wasm_runtime.js`):
+Companion document: [`MARSIN_ENGINE_PATTERNS.md`](MARSIN_ENGINE_PATTERNS.md) —
+engine contracts, parameter conventions, colour policy, and authoring recipes.
+Where the two overlap (timing, metadata, trails, blends) they are reconciled;
+this file owns the *language*, that file owns the *engine and the show*.
+
+> **2.3 changes** (probed empirically against the vendored WASM VM via
+> `marsin_engine/lib/marsin_wasm_runtime.js`, offline):
+> - **§2.4 / §5.2 metadata ABI corrected** — seven lanes, not four. Adds
+>   `fixtureType`, `pixelLocalIndex`, `viewMaskHi`, plus the compiler's
+>   restriction on `viewMaskHi` and the removal of the "always handle
+>   `sectionId == 0` with a coordinate fallback" advice (it is a fallback, and
+>   fallbacks are banned — codex P0).
+> - **§5.2.1 `inView("Name")`** documented as the preferred semantic-targeting
+>   intrinsic, with its loud-failure contract.
+> - **§9.3 `delta` corrected** — it *does* track the `elapsed` handed to
+>   `begin_frame`, and is therefore global-speed-scaled. The old "fixed nominal
+>   ≈15.7 per frame, independent of elapsed" claim was wrong. The real
+>   initialization quirk is documented instead.
+> - **§9.5 trails** — model-portability rules; stop recommending a hard-coded
+>   test-bench pixel count.
+> - **§13.4 channel-blend list corrected** to the three modes the API actually
+>   accepts, plus the transition-script contract.
+>
+> **2.2 changes**:
 > - **§6.1 trig corrected to radians** (the old "turns" note was stale — live patterns multiply by `PI2`, and `sin(PI/2) == 1` was confirmed).
-> - **§9.3 `delta`** annotated with the measured per-frame value.
 > - New **§9.4 Frame-to-frame state persistence** and **§9.5 Simulating trails (frame feedback)** — how to carry state between frames to build trails.
 
 MarsinScript has two separate script environments:
@@ -78,15 +99,15 @@ outW = m
 
 This means `rgb(1, 1, 1)` prefers the white element on RGBW hardware, which matches the Pixelblaze approach.
 
-Current Marsin phase-1 note:
+Notes:
 
-- Firmware output is still RGB-only.
-- The browser live visualizer is still RGB-only.
 - Marsin-specific `rgbwau()` exists for direct multi-emitter control, but it is **not** Pixelblaze-compatible.
+- Some *legacy* surfaces (RGB-only strip firmware, the RGB-only WASM exports) carry three channels and approximate the rest — see §1.4.
+- The BM26 show rig is **not** one of those surfaces. See §1.5.
 
-### 1.4 RGB fallback behavior on RGB-only hardware
+### 1.4 The RGB approximation — a PREVIEW path, not the physical output path
 
-On RGB-only hardware (all current installations), the firmware calls `MarsinPixel::toRGBFallback()` to convert 6-channel output to 3-channel:
+Where a surface carries only three channels, six-lane output is approximated:
 
 ```text
 outR = min(255, R + W + A×0.8 + U×0.1)
@@ -94,16 +115,31 @@ outG = min(255, G + W + A×0.4)
 outB = min(255, B + W + U×0.5)
 ```
 
-**No visual regression for existing patterns:** For scripts that only use `rgb()` or `hsv()`, the W/A/U channels are always 0. The formula reduces to `outR = R`, `outG = G`, `outB = B` — **bit-identical** to the pre-RGBWAU engine output.
+- **No visual regression for `rgb()`/`hsv()` scripts:** W/A/U are always 0, so the formula reduces to `outR = R`, `outG = G`, `outB = B` — bit-identical to the pre-RGBWAU engine output.
+- **For `rgbwau()` content:** W adds equally to R/G/B (a brightness boost), A contributes 80% R + 40% G (warm orange tint), U contributes 10% R + 50% B (deep violet tint).
 
-**For `rgbwau()` patterns on RGB hardware:** The WAU channels are additively mixed into visible RGB using perceptual approximations:
-- **White (W)** adds equally to R, G, B → appears as a brightness boost.
-- **Amber (A)** contributes 80% R, 40% G → warm orange tint.
-- **UV (U)** contributes 10% R, 50% B → deep violet tint.
+> **Do not reason about the Titanic's physical output from these equations.**
+> They describe the three-channel *preview / legacy* path only. The real chain
+> is in §1.5.
 
-This means a pattern like `rgbwau(1, 0, 0, 0.5, 0, 0)` will appear as a warm pinkish-red on RGB hardware (red + white mix), which is the closest visual approximation to a dedicated red LED + white LED fixture.
+### 1.5 What the BM26 rig actually emits
 
-When native RGBWAU fixtures are supported in a future phase, the firmware will output all 6 channels directly without fallback.
+Two distinct output paths, both real, neither one the §1.4 approximation:
+
+| Path | Fixtures | Emitters | Behaviour |
+|---|---|---|---|
+| **DMX** | Shehds 18-px bars, UKing pars | R G B **W A U** | R/G/B/W/A/U bytes are written to the fixture's mapped channels as authored. Where the profile has no A or U channel, that lane has no destination. When a pattern emitted no explicit W, the mapper synthesizes `W = min(R,G,B)`. |
+| **DMX** | Vintage 6-head rails | R G B **W** | as above, no amber/UV destination |
+| **LED strand** | rope/strand runs, TE signs | R G B **W** | `led_wire.js`: the **amber lane is folded into RGB** with weights `[0.9, 0.6, 0.0]`; the **UV lane is dropped** (no UV emitter); the whole RGBW quad is then jointly pre-scaled by one shared factor so no channel's `RGB + W` composite can clip — hue and colour/white balance survive exactly, the picture just dims. Gamma lives **only** on the LED controller. |
+
+Authorities: [`simulation/src/dmx/sacn_mapper.js`](../simulation/src/dmx/sacn_mapper.js)
+and [`simulation/src/dmx/led_wire.js`](../simulation/src/dmx/led_wire.js).
+Per-instrument counts and roles are in
+[`MARSIN_ENGINE_PATTERNS.md`](MARSIN_ENGINE_PATTERNS.md) §6.3 and
+[`COLOR_THEORY.md`](COLOR_THEORY.md) §2.
+
+**Strands and TE signs DO have white emitters** (`led.order: RGBW`,
+`whiteMode: native`). What they lack is amber and UV.
 
 ---
 
@@ -180,33 +216,31 @@ Practical consequences:
 
 ### 2.4 Reserved identifiers
 
-These names are reserved and may not be assigned to or declared as variables:
+These names are reserved and may not be assigned to or declared as variables
+(verified by compile probe against the vendored WASM — declaring any of them
+raises `Cannot declare reserved name '<name>'`):
 
-- `t`
-- `i`
-- `index`
-- `x`
-- `y`
-- `z`
-- `pixelCount`
-- `PI`
-- `PI2`
-- `true`
-- `false`
-- `controllerId`
-- `sectionId`
-- `fixtureId`
-- `viewMask`
+- `t`, `i`, `index`, `x`, `y`, `z`, `pixelCount`
+- `PI`, `PI2`, `true`, `false`
+- `controllerId`, `sectionId`, `fixtureId`, `viewMask`
+- `fixtureType`, `pixelLocalIndex`, `viewMaskHi`
+
+Also effectively reserved in practice: `h`, `f`, `p`, `q`, `r`, `g`, `b` are
+builtin slots and cannot be declared at all in some positions — the palette
+helpers in `MARSIN_ENGINE_PATTERNS.md` §9.2 use a `*v` suffix (`hv`, `iv`,
+`fv`, `pv`, `qv`, `tv`) for exactly this reason.
 
 Built-in render parameters:
 
 - `index` or `i`: current pixel index
-- `x`, `y`, `z`: current pixel coordinates
-- `t`: VM time in seconds
-- `controllerId`: numeric controller ID from model metadata (0 if no metadata)
-- `sectionId`: numeric section ID from model metadata (0 if no metadata)
-- `fixtureId`: numeric fixture ID from model metadata (0 if no metadata)
-- `viewMask`: bitmask of views this pixel belongs to (0 if no metadata)
+- `x`, `y`, `z`: current pixel coordinates, normalized `0..1`
+- `t`: VM time in seconds — exactly the `elapsed` the host passed to
+  `begin_frame` (§9.3)
+- the seven metadata builtins: see §5.2
+
+Names that are **not** builtins (compile as `Undefined var`): `fixtureTypeId`
+(the ABI lane name; the *language* name is `fixtureType`) and `pixelIndex`
+(use `index` / `i`).
 
 ### 2.5 Top-level init
 
@@ -333,64 +367,130 @@ Operator precedence, highest to lowest:
 
 Important current implementation note:
 
-- `pixelCount` is **currently compiled as a literal `144`** by the compiler, not the true runtime pixel count.
+- `pixelCount` is **compiled as a literal `144`** by the compiler, not the true runtime pixel count. Confirmed by offline probe: VMs created for 4, 144 and 964 pixels all report ~144 to the pattern.
 - Existing patterns use it heavily, but this is a known implementation limitation.
-- If you need portable behavior today, prefer deriving normalized position from `x` where possible instead of relying on `pixelCount`.
+- Prefer deriving normalized position from `x`/`y`/`z` instead of relying on `pixelCount`. Where you genuinely need a model-sized array, use an explicit constant and mark the pattern model-specific (§9.5).
 
 ### 5.2 Model metadata variables (Marsin extension)
 
-These built-in variables expose per-pixel metadata from v2 model files. They are **read-only** and populated by the firmware render loop at each pixel.
+These built-in variables expose per-pixel metadata. They are **read-only** and
+populated per pixel by the render loop from a flat Int32 buffer whose lane
+layout is a cross-repo **ABI contract** — the single source of truth is
+[`marsin_engine/lib/meta_abi.js`](../marsin_engine/lib/meta_abi.js). The stride
+is **7 int32 per pixel** (Tier C, live since 2026-06-19).
 
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `controllerId` | uint16 | 0 | Numeric ID of the controller rendering this pixel |
-| `sectionId` | uint16 | 0 | Numeric ID of the section (e.g., left/center/right) |
-| `fixtureId` | uint16 | 0 | Numeric ID of the fixture (e.g., shop_sign, test_bench) |
-| `viewMask` | uint16 | 0 | Bitmask of views this pixel belongs to |
+| Lane | Language name | Description |
+|---:|---|---|
+| 0 | `controllerId` | numeric ID of the controller rendering this pixel |
+| 1 | `sectionId` | **model-specific** numeric section ID |
+| 2 | `fixtureId` | **model-specific** numeric fixture ID |
+| 3 | `viewMask` | low view word — views 0..30, bit `1 << view` |
+| 4 | `fixtureType` | canonical `FIX_*` fixture-type id (ABI lane name: `fixtureTypeId`) |
+| 5 | `pixelLocalIndex` | 0-based index of this pixel within its fixture |
+| 6 | `viewMaskHi` | high view word — views 31..61, bit `1 << (view − 31)` |
 
-All four variables are `0` when:
-- The model is a v1 flat or v1 keyed model (no metadata)
-- The caller does not supply metadata (e.g., MarsinLED browser UI simulation fallback)
+A value is `0` when the model or caller supplies no metadata for that lane
+(v1 flat / v1 keyed models, or a host that packs no meta buffer).
 
-Patterns should **always** handle the `0` (no metadata) case as a fallback:
+#### `viewMaskHi` is restricted by the compiler
 
-```javascript
-if (sectionId == 0) {
-  // v1 fallback — use coordinate thresholds
-  if (x < 0.33) {
-    hsv(0.0, 1, 1);  // Red
-  } else if (x < 0.67) {
-    hsv(0.33, 1, 1);  // Green
-  } else {
-    hsv(0.66, 1, 1);  // Blue
-  }
-} else {
-  // v2 metadata path — use section ID
-  if (sectionId == 1) {
-    hsv(0.0, 1, 1);   // Red
-  } else if (sectionId == 2) {
-    hsv(0.33, 1, 1);  // Green
-  } else if (sectionId == 3) {
-    hsv(0.66, 1, 1);  // Blue
-  }
-}
+`viewMaskHi` may **only** appear in the membership form. Anything else is a
+compile error, verbatim:
+
+```text
+viewMaskHi may only be used as '(viewMaskHi & MASK)' — it cannot be stored,
+compared, shifted, or used in arithmetic
 ```
 
-#### viewMask usage
+The mask must be a compile-time single-bit **literal**, not a `var`. The
+`inView()` intrinsic and the `MASK_*` injector both emit exactly that form, so
+in practice you never write it by hand.
 
-`viewMask` is a bitmask. Use bitwise AND to check membership:
+#### `viewMask` usage
+
+`viewMask` is a bitmask; test membership with bitwise AND. Prefer the named
+`MASK_*` constants the host injects from the loaded model over magic numbers,
+and prefer `inView()` (§5.2.1) over both:
 
 ```javascript
-var VIEW_ALL = 1;
-var VIEW_LEFT = 2;
-var VIEW_CENTER = 4;
-var VIEW_RIGHT = 8;
-
-if (viewMask & VIEW_LEFT) {
-  // This pixel is visible in the "left" view
+if (viewMask & MASK_LEFT_FRONT_WALL) {
   hsv(0.0, 1, 1);
 }
 ```
+
+`MASK_*` names are injected only where referenced; a `MASK_*` the model cannot
+satisfy is a **loud compile-stage error**, never a silent zero. A pattern that
+declares its own `var MASK_X = ...` wins.
+
+#### Section and fixture IDs are model-specific
+
+There is **no global section taxonomy.** `test_bench` uses `1 = Pars,
+2 = Vintage, 3 = Bars`; the Titanic uses values like `514` and `515`. A pattern
+that branches on a raw `sectionId` literal is bound to one model, and must say
+so in its header. Targeting by *view name* (§5.2.1) or by *fixture capability*
+(§5.2.2) is portable; targeting by raw section id is not.
+
+#### No metadata fallbacks
+
+Earlier revisions of this spec told patterns to "always handle the `0` (no
+metadata) case" by falling back to coordinate thresholds. **That guidance is
+withdrawn** — it is a fallback behaviour, and fallbacks are banned (codex P0:
+fail loudly). A model that should carry metadata and does not is a model bug to
+be surfaced, not papered over in every pattern. If a pattern is genuinely
+designed to work with no metadata at all, drive it from `x`/`y`/`z` only and
+never read the metadata builtins.
+
+### 5.2.1 `inView("Authored View Name")` — the preferred semantic target
+
+`inView()` is a **compile-time intrinsic**
+([`marsin_engine/lib/in_view_intrinsic.js`](../marsin_engine/lib/in_view_intrinsic.js)),
+folded before the MarsinScript compiler ever runs:
+
+```javascript
+if (inView("Hull Canvas")) { /* ... */ }
+```
+
+folds to `((viewMask & <bit>) != 0)` for a low-word view, or
+`((viewMaskHi & <literal>) != 0)` for a high-word one — so the author never has
+to know which word a view lives in, nor manage `MASK_*` names by hand.
+
+Contract:
+
+- Resolution is by the view's **authored name** — the same string the scene's
+  view registry and `/model/view-selection-options` use — so names with spaces
+  work verbatim.
+- **An unknown view name is a hard compile error** listing the model's known
+  views. It never folds to a silent constant-false test.
+- A **bit-free** (host-only) view is **promoted on demand**: the host allocates
+  a free `(word, bit)` from the two-word 62-bit budget, sets it on the view's
+  member pixels, and re-packs the meta buffer. No promoter wired, or budget
+  exhausted, throws loudly.
+- Two `inView()` calls on the same name promote exactly once (one bit).
+- A commented-out `inView("X")` neither folds nor fails the compile.
+
+The view registry itself is the scene's `views.yaml`, exported alongside the
+model to `marsin_engine/models/<scene>.viewmasks.js`; the engine validates the
+sidecar against the loaded model and fails loudly on drift. (Do not confuse
+`views.yaml` — the engine's semantic/base view-mask registry — with
+`pixel_map_views.yaml`, which is a simulator 2D display-layout sidecar and has
+no effect on what a pattern can target.)
+
+### 5.2.2 Fixture-type constants (`FIX_*`)
+
+`fixtureType` is the one per-pixel property that stays stable across models
+(`fixtureId`, `group` and `viewMask` all reshuffle). Use it where the real
+distinction is *fixture capability*:
+
+```javascript
+if (fixtureType == FIX_PAR) { /* single-pixel wash source */ }
+```
+
+Canonical roles (`marsin_engine/lib/fixture_type_constants.js`; ids are
+append-only and never renumbered): `FIX_RAW_LED` = 1, `FIX_PAR` = 2,
+`FIX_VINTAGE_6` = 3, `FIX_BAR_18` = 4, `FIX_HAZE` = 5, `FIX_FOG` = 6. Id `0` is
+`UNTYPED` and is **not** a fallback target. Only the roles actually present on
+the loaded model are emitted, so a `FIX_*` the model does not carry **fails the
+compile**.
 
 ### 5.3 Constants
 
@@ -439,7 +539,7 @@ Trig note:
 - To turn a normalized `0..1` phase (a "turn") into an angle, multiply by `PI2`:
   `sin(x * PI2)`, `atan2(z, x) / PI2` to go back. This is why every production pattern uses `PI2`.
 - The `wave(x)` / `triangle(x)` / `square(x, duty)` helpers are the exception — their input is still
-  a normalized `0..1` phase (see §6.2). See also `docs/MARSIN_ENGINE_PATTERNS.md` §4.
+  a normalized `0..1` phase (see §6.2). See also [`MARSIN_ENGINE_PATTERNS.md`](MARSIN_ENGINE_PATTERNS.md) §5.
 
 ### 6.2 Time, waveforms, mixing, and randomness
 
@@ -527,9 +627,9 @@ hsv(time(0.1) + x, 1, 1)
 rgbwau(0, 0, 0, 1, 0.3, 0)
 ```
 
-### 6.x Future: Built-in palette accessors (`paletteRgb1` / `paletteRgb2`)
+### 6.6 Future: built-in palette accessors (`paletteRgb1` / `paletteRgb2`)
 
-> **Status:** proposed. Not yet implemented in `MarsinCompiler` or the WASM VM. Tracked because every production pattern today re-implements the same logic by hand — see `docs/MARSIN_ENGINE_PATTERNS.md` §7.
+> **Status:** proposed. Not yet implemented in `MarsinCompiler` or the WASM VM. Tracked because every production pattern today re-implements the same logic by hand — see [`MARSIN_ENGINE_PATTERNS.md`](MARSIN_ENGINE_PATTERNS.md) §9.
 
 #### Motivation
 
@@ -586,7 +686,7 @@ That's a ~60-line reduction per pattern and removes an entire class of "I forgot
 
 #### Until then…
 
-Every production pattern uses the pattern-local `_hsv2rgb1` / `_hsv2rgb2` idiom documented in `docs/MARSIN_ENGINE_PATTERNS.md` §7.
+Every production pattern uses the pattern-local `_hsv2rgb1` / `_hsv2rgb2` idiom documented in [`MARSIN_ENGINE_PATTERNS.md`](MARSIN_ENGINE_PATTERNS.md) §9.2.
 
 ---
 
@@ -607,9 +707,10 @@ rgb(1, 1, 1)
 
 On a future RGBW transport, that should map to white-channel output via white extraction. On current Marsin RGB-only transports, it appears as equal RGB white.
 
-### 6.5.2 Current Marsin RGBWAU fallback
+### 6.5.2 The RGB approximation (three-channel surfaces only)
 
-When a script uses `rgbwau()` on an RGB-only output, Marsin currently falls back by approximating W/A/U into visible RGB:
+When `rgbwau()` content reaches a surface that carries only three channels,
+W/A/U are approximated into visible RGB:
 
 ```text
 displayR = clamp(r + w + amber * 0.8 + uv * 0.1, 0, 255)
@@ -617,22 +718,25 @@ displayG = clamp(g + w + amber * 0.4, 0, 255)
 displayB = clamp(b + w + uv * 0.5, 0, 255)
 ```
 
-This is a Marsin preview and RGB-fallback heuristic. It is **not** the Pixelblaze RGBW white-extraction rule.
+This is a Marsin **preview / legacy-surface heuristic**. It is **not** the
+Pixelblaze RGBW white-extraction rule, and it is **not** how the BM26 rig
+emits light — see §1.5.
 
-### 6.5.3 Current output surfaces
+### 6.5.3 Where `MarsinPixel` actually goes
 
-How `MarsinPixel` is surfaced today:
+| Surface | Channels | Note |
+|---|---|---|
+| BM26 DMX fixtures (bars, pars, vintage rails) | full RGBWAU where the profile has the channels | authored bytes, no approximation |
+| BM26 LED strands + TE signs | RGBW on the wire | amber folded into RGB, UV dropped, clip-proof joint pre-scale (`led_wire.js`) |
+| Simulator preview | RGB for display | DMX fixtures use the additive blend; strand pixels are previewed through the **actual wire bytes** run back through the controller's own white extraction + gamma, so screen == strand |
+| Legacy RGB strip firmware | RGB only | §6.5.2 approximation |
+| WASM compatibility exports (`marsin_render_pixel`, `marsin_render_all`) | RGB only | |
+| WASM 6-channel exports (`marsin_render_all_with_meta_6ch`, `marsin_render_blend_6ch`) | full RGBWAU | what the engine uses |
 
-- **Firmware LED output**: current RGB strip drivers consume RGB only; `rgbwau()` content is approximated via the RGB fallback adapter.
-- **Firmware browser visualizer**: still transports `pixelCount * 3` RGB bytes only; it can display white visually as equal RGB but does not carry a distinct white channel.
-- **Simulator**: emits full `RGBWAU` data and previews it through the RGB fallback heuristic.
-- **WASM compatibility exports**: `marsin_render_pixel()` and `marsin_render_all()` expose RGB only.
-- **WASM 6-channel exports**: `marsin_render_pixel_6ch()` and `marsin_render_all_6ch()` expose full `RGBWAU`.
-
-Practical implication:
-
-- If you write Marsin-extension patterns with `rgbwau()`, use a 6-channel-aware surface when you need the actual `w/a/u` channels.
-- Legacy RGB-only WASM consumers see only RGB.
+Practical implication: the engine drives the **6-channel** exports, so
+`rgbwau()` content reaches the rig with its lanes intact — subject to each
+fixture family's actual emitters (§1.5). Only legacy RGB-only consumers see the
+approximation.
 
 ---
 
@@ -717,34 +821,69 @@ If a pixel exceeds that limit:
 - `hsv()` wraps hue and clamps saturation/value to `0..1`
 - NaN in color output paths resolves to black
 
-### 9.3 `delta` behavior
+### 9.3 The clock: `begin_frame(elapsed)`, `t`, `time(scale)`, and `delta`
 
-Conceptual contract:
+**Contract.** The host drives one call to `marsin_begin_frame(handle,
+elapsedSeconds)` per frame. Everything a pattern can know about time derives
+from that one number.
 
-- `beforeRender(delta)` expects `delta` in milliseconds
+| Symbol | Value |
+|---|---|
+| `t` | exactly the `elapsedSeconds` passed to `begin_frame`, in seconds |
+| `time(scale)` | a `0..1` sawtooth off that same clock, period `65.536 × scale` seconds |
+| `delta` | `(elapsed_now − elapsed_prev) × 1000`, in **milliseconds** — with the initialization quirk below |
 
-Current implementation notes:
+Measured offline against the vendored WASM
+(`marsin_engine/lib/marsin_wasm_runtime.js` + `marsin_pb/wasm`), driving
+`begin_frame` with controlled sequences and reading the values back out through
+a pixel byte:
 
-- firmware `MarsinScript` populates `delta`
-- simulator populates `delta` through global injection
-- the native checker and current WASM `begin_frame` path do not currently guarantee a real `delta` argument
+| `elapsed` sequence (s) | `delta` per frame (ms) |
+|---|---|
+| `0, 0.025, 0.05, 0.075, 0.1` | `16, 16, 25, 25, 25` |
+| `0, 0.01, 0.03, 0.13, 0.14, 0.14, 0.20` | `16, 16, 20, 100, 10, 0, 60` |
+| `1.0, 1.2, 1.4, 1.6` | `16, 200, 200, 200` |
+| `0, 0, 0, 0` | `16, 16, 16, 16` |
 
-Measured behavior (current engine + WASM path, June 2026):
+| `elapsed` | `t` | `time(0.1)` (of 1.0) |
+|---:|---:|---:|
+| 0 | 0 | 0.00 |
+| 1 | 1 | 0.15 |
+| 3.2768 | 3.2768 | 0.50 |
+| 6.5536 | 6.5536 | 1.00 (wraps) |
+| 100 | 100 | — |
 
-- In `marsin_wasm_runtime.js` / `wasm_host.js`, `beforeRender(delta)` receives a **fixed nominal
-  step of ≈ 15.7 per frame** — it does **not** vary with the `elapsed` argument passed to
-  `begin_frame`, and it is not true wall-clock milliseconds.
-- The engine's global **SPEED** fader scales the `elapsed` clock that drives `time()` — **not**
-  `delta`. So motion built on `time()` follows the global SPEED knob; motion built on raw `delta`
-  accumulation follows only your pattern's own `localSpeed` trim.
-- The codebase convention is `dt = delta / 1310.72 * localMult` to get a small per-frame phase
-  increment for accumulators (see `docs/MARSIN_ENGINE_PATTERNS.md` §2.1).
+**What this establishes:**
 
-Portable guidance:
+1. **`delta` is a real millisecond step derived from `elapsed`.** The previous
+   revision's claim that it is a fixed nominal ≈15.7 independent of `elapsed`
+   is **wrong** and is withdrawn.
+2. **Initialization quirk.** The VM's previous-time slot starts at `0`, and `0`
+   also serves as the "no previous frame" sentinel. So `delta` is a nominal
+   **`16.0` ms** on the first frame, *and* on any frame whose predecessor's
+   `elapsed` was exactly `0`. A pattern started from a zero clock therefore sees
+   `16, 16, <real>, <real>, …`. Do not derive a frame rate from the first
+   frames.
+3. **A repeated `elapsed` yields `delta == 0`**, not the nominal. Accumulators
+   must tolerate a zero step.
+4. **Global SPEED scales `delta` too.** The BM26 engine passes an
+   already-speed-scaled clock into `begin_frame` (`engine.js` accumulates
+   `patternClockSeconds += wallDelta * globalSpeedMultiplier()`), so `t`,
+   `time()` **and** `delta` are all pre-scaled by the operator's SPEED fader.
+   The previous "SPEED scales `time()`, not `delta`" note is **wrong** and is
+   withdrawn. A pattern must therefore **not** apply a second global multiplier
+   — see [`MARSIN_ENGINE_PATTERNS.md`](MARSIN_ENGINE_PATTERNS.md) §3.
 
-- prefer `time(scale)` and persistent state for portable, SPEED-responsive animation timing
-- use `delta` accumulation for rates you want pinned to a pattern-local trim, independent of global SPEED
-- treat `delta` as runtime-dependent unless you control the execution surface
+Guidance:
+
+- Either style works and both follow global SPEED. `time(scale)` is stateless
+  and self-wrapping; `delta` accumulation gives you an independent phase you can
+  trim, gate, or reverse.
+- The codebase convention is `dt = delta / <loopMs> * localMult` — e.g.
+  `delta / 1310.72` for a 1.31 s loop, `delta / 65536.0` for a 65.5 s one.
+- Treat `delta` as host-dependent only when you do **not** control the
+  execution surface (a foreign firmware build, the native checker). On the BM26
+  engine it is well-defined, as above.
 
 ### 9.4 Frame-to-frame state persistence
 
@@ -767,6 +906,11 @@ repeated `begin_frame` + render calls. `begin_frame` does **not** wipe script me
 
 "Trail" / "ghost" / "motion-blur" effects all reduce to: **carry brightness from the previous frame
 forward, decayed.** There are three ways to do it; pick by what you need.
+
+> **Model portability first.** Options (A) and (C) hold no per-pixel state and
+> run unchanged on every model. Option (B) needs a model-sized array and is
+> therefore **model-specific by construction** — reach for it only when the
+> effect genuinely requires independent per-pixel memory.
 
 **(A) Scalar decay envelope** — *parametric trails*: "an event happened, now fade it out."
 Persist one scalar, set it to `1.0` on the event, multiply/subtract it down every frame. Cheap;
@@ -792,8 +936,10 @@ brightness buffer; decay every cell each frame and inject new energy at the sour
 read `buf[index]` per pixel.
 
 ```javascript
-// pixelCount bakes to a literal (~144) in the current VM, so size to YOUR model with a constant.
-var N = 144;            // <-- set to your model's real pixel count
+// pixelCount bakes to a literal (~144) in the current VM, so the size must be
+// an explicit constant — which makes this pattern MODEL-SPECIFIC. Say so.
+// MODEL-SPECIFIC: titanic = 964 mapped pixels; test_bench differs.
+var N = 964;
 var buf = array(N);     // allocated ONCE at top-level init — never allocate in render
 var head = 0.0;
 
@@ -811,7 +957,14 @@ Rules for (B):
 - Allocate the buffer in **top-level init**, not in `render` (render runs with allocation disabled,
   §7) and not per-frame in `beforeRender`.
 - **Do not rely on `pixelCount`** for buffer size or head index — it compiles to a literal `144`
-  (§5.1) regardless of the real model. Use an explicit `N` for both `array(N)` and the index math.
+  (§5.1) regardless of the real model. Verified by probe: a VM created for 4, 144 and 964 pixels
+  all report ~144 to the pattern.
+- **Do not treat any hard-coded count as portable, including `144`.** `144` is a test-bench-era
+  number; the Titanic has **964** mapped pixels. State the model the constant is for, in a comment,
+  next to the constant.
+- Prefer a formulation that needs no model-sized array at all: a moving head plus a spatial falloff
+  (`smoothstep(head + len, head, x)`) evaluated in `render3D` gives a comet tail that is
+  resolution-independent and portable.
 - The decay loop is `O(N)` once per frame (fine); the per-pixel read must stay under the
   5000-instruction budget (§9.1).
 - Decay closer to `1.0` = longer tail. Expose it as a `slider*` so operators can tune tail length.
@@ -820,7 +973,7 @@ Rules for (B):
 (`marsin_engine/effects/feedbackTrails.js`) owns an RGBWAU trail buffer of the **composited
 output** and mixes it back each frame (`decay`, `injection`, `mix`, `colorBleed`, `blendMode`). Use
 it to ghost *any* pattern — including ones that manage no state of their own — toggled live by the
-operator.
+operator. It is model-agnostic, so it is the right first choice for whole-frame feedback.
 
 > **Boundary — what you cannot do:** a pattern **cannot read its own previous rendered pixel
 > output**. There is no `prevPixel` / last-frame color fed into `render`. "Feedback" *inside* a
@@ -859,8 +1012,16 @@ For portable, low-surprise MarsinScript:
 2. Use `beforeRender` for frame-level updates and `render` for per-pixel output.
 3. Use `rgb()` and `hsv()` for Pixelblaze-compatible scripts.
 4. Use `rgbwau()` only when you intentionally target Marsin-specific multi-emitter behavior.
-5. Prefer `x`, `y`, and `z` over `pixelCount` when you need normalized spatial behavior.
+5. Prefer `x`, `y`, and `z` over `pixelCount` when you need normalized spatial behavior — `pixelCount` is a literal `144` on every model (§5.1).
 6. Keep helper functions numeric; do final color emission in the render path.
+7. Drive motion from the clock (`t`, `time(scale)`, or accumulated `delta`), never from a frame counter — your `beforeRender` can run invisibly in a transition's background buffer (§13.1).
+8. Do not apply a global speed multiplier of your own: the host's clock is already speed-scaled (§9.3).
+9. Target topology by view name, not by a raw section literal (§5.2.1), and add no metadata fallbacks (§5.2).
+
+For the engine-side and show-side contracts that sit on top of this language —
+parameter philosophy, the `w == a` white invariant, audio policy, and the
+verification harnesses — see
+[`MARSIN_ENGINE_PATTERNS.md`](MARSIN_ENGINE_PATTERNS.md).
 
 ---
 
@@ -990,6 +1151,15 @@ The v2 format adds schema identification, metadata lookup tables, and per-contro
 
 The `defaultMeta` tuple is `[controllerId, sectionId, fixtureId, viewMask]`. These values are pushed to the `controllerId`, `sectionId`, `fixtureId`, and `viewMask` built-in variables during rendering.
 
+> **This four-value tuple is the FIRMWARE model-artifact format, not the host
+> meta ABI.** The BM26 Node host does not consume these JSON artifacts; it packs
+> a **seven-lane** per-pixel buffer (`fixtureType`, `pixelLocalIndex` and
+> `viewMaskHi` in addition to the four above) for the WASM `*_with_meta` render
+> exports — see §5.2 and
+> [`marsin_engine/lib/meta_abi.js`](../marsin_engine/lib/meta_abi.js). A pixel
+> loaded from a v2 firmware artifact simply has `0` in the three lanes the
+> artifact cannot express.
+
 Points can also carry per-point metadata overrides as 7-element arrays:
 
 ```json
@@ -1037,29 +1207,33 @@ The deployment tooling (`model_splitter`, `mass_deploy.py`) reads metadata from 
 
 > **Legacy support:** If a model returns only a flat array `[controllerId, x, y, z]` without metadata, the tooling falls back to reading metadata from `deployment.yaml` if present. This is deprecated — new models should embed their own metadata.
 
-Example pattern using metadata:
+Example pattern targeting model topology — **by view name**, which is portable
+and fails loudly on a typo (§5.2.1):
 
 ```javascript
-// Section constants (match deployment.yaml metadata tables)
-var SECTION_LEFT = 1;
-var SECTION_CENTER = 2;
-var SECTION_RIGHT = 3;
+var phase = 0.0;
+
+export function beforeRender(delta) { phase = time(0.05); }
 
 export function render3D(index, x, y, z) {
-  var t = time(0.05);
-
-  if (sectionId == 0) {
-    // v1 fallback: no metadata available
-    hsv(t + x, 1, 1);
-  } else if (sectionId == SECTION_LEFT) {
-    hsv(0.0, 1, wave(t + y));   // Red pulsing
-  } else if (sectionId == SECTION_CENTER) {
-    hsv(0.33, 1, wave(t + y));  // Green pulsing
-  } else if (sectionId == SECTION_RIGHT) {
-    hsv(0.66, 1, wave(t + y));  // Blue pulsing
+  if (inView("Left Front Wall")) {
+    hsv(0.00, 1, wave(phase + y));
+  } else if (inView("Right Front Wall")) {
+    hsv(0.33, 1, wave(phase + y));
+  } else {
+    hsv(0.66, 1, wave(phase + y));
   }
 }
 ```
+
+> **Do not write `sectionId == 2  // Vintage`.** Section ids are numbers a
+> particular model happens to assign; they are not a portable taxonomy, and
+> there is no global meaning for any of them. `test_bench` uses `1/2/3`; the
+> Titanic uses values in the hundreds. Branching on a raw section literal binds
+> the pattern to one model — which is allowed, but must be stated in the
+> pattern header. Where the real distinction is fixture *capability*, use
+> `fixtureType == FIX_*` (§5.2.2) instead. And do not add a `sectionId == 0`
+> coordinate fallback: that is a fallback behaviour (§5.2, codex P0).
 
 ### 12.6 Capabilities
 
@@ -1129,6 +1303,30 @@ In a transition script, you have access to standard geometry (`x`, `y`, `z`, `in
 
 A transition script's job is to read these built-ins, calculate the mix, and output the final pixel color via `rgbwau()`.
 
+#### The transition / channel-blend contract
+
+Every script in `patterns/transitions/` and `patterns/channel_blends/` must
+satisfy all six:
+
+1. **Exact outgoing endpoint at `progress == 0`** — output equals the `from*`
+   input exactly. Anything else pops the instant a fader leaves rest.
+2. **Exact incoming endpoint at `progress == 1`** — output equals the `to*`
+   input exactly. A channel at full fader must render its pattern, not an
+   approximation of it.
+3. **Bounded output** — every lane stays within `0..1`; an additive mode's
+   clamp must be a designed ceiling, not an accident.
+4. **Identical compositing math for W and A** — whatever expression produces
+   the W output must produce the A output with the A inputs substituted, so two
+   matched inputs (`fromW == fromA`, `toW == toA`) stay matched on the way out.
+   This is what preserves the show's `w == a` white invariant through the mixer
+   (see [`MARSIN_ENGINE_PATTERNS.md`](MARSIN_ENGINE_PATTERNS.md) §6.2) and why
+   blend scripts are exempt from the pattern lane-match test.
+5. **No per-pixel allocation** — `render` runs with allocation disabled (§7),
+   and three scripts share the per-pixel instruction budget (§13.3).
+6. **Truthful direction for spatial transitions** — a wipe named `wipe_left`
+   travels left; a `direction`/`feather` control must measurably change the
+   thing it names.
+
 #### Example: Spatial X-Wipe
 
 You can use the spatial coordinates to create geometric transitions. Here is a wipe that sweeps across the `x` axis with a feathered edge:
@@ -1146,7 +1344,7 @@ export function render(index, x, y, z) {
     mix(fromG, toG, edge),
     mix(fromB, toB, edge),
     mix(fromW, toW, edge),
-    mix(fromA, toA, edge),
+    mix(fromA, toA, edge),   // SAME expression as W — matched inputs stay matched
     mix(fromU, toU, edge)
   );
 }
@@ -1199,20 +1397,30 @@ In this context, the transition built-ins are bound differently:
 | `fromR/G/B/W/A/U` | Outgoing pattern's pixel output | Accumulated mix-so-far (previous channels) |
 | `toR/G/B/W/A/U` | Incoming pattern's pixel output | This channel's rendered pixel output |
 
-This means `blend_crossfade.js` with `progress = fader` performs a standard opacity fade. `blend_screen.js` with `progress = fader` blends the channel's output using screen compositing at the fader's intensity. The scripts are identical — only the engine's binding of `progress` changes.
+So `blend_screen.js` with `progress = fader` blends the channel's output using screen compositing at the fader's intensity. The scripts are identical — only the engine's binding of `progress` changes.
 
-Channel blend scripts are stored in `/patterns/channel_blends/*.js`. The mixer references them by filename (e.g., `blend_screen`). Available blends:
+**Resolution and the valid set.** The mixer resolves a blend name by looking in
+`patterns/channel_blends/<name>.js` first, then `patterns/transitions/<name>.js`
+(`lib/pattern_mixer.js` `_compileBlend`); a name found in neither is reported
+loudly and the channel composites through the degraded host-side path. The API
+accepts exactly **three steady channel-blend modes**
+(`VALID_CHANNEL_BLEND_MODES` in `lib/api_server.js`), plus any `trans_*` name
+used transiently while a fade is in flight — anything else is rejected with a
+400:
 
 | Script | Behavior |
 |---|---|
-| `blend_crossfade` | Linear interpolation (equivalent to `normal` in traditional compositors) |
-| `blend_screen` | `1 - (1-from)(1-to)` — additive without clipping |
-| `blend_add` | `from + to * progress` — pure additive (can clip) |
-| `blend_over` | Alpha-over compositing using `progress` as opacity |
-| `blend_wipe_left` | Spatial left-to-right wipe with feathered edge |
-| `blend_dissolve` | Per-pixel random dissolve |
-| `blend_iris` | Radial center-outward iris wipe |
-| `blend_flash` | White flash burst at midpoint |
+| `blend_screen` | `1 - (1-from)(1-to)` — additive without clipping (the default channel mode) |
+| `blend_add` | pure additive, scaled by `progress` (can clip) |
+| `blend_over` | alpha-over compositing using `progress` as opacity |
+
+Scripted transitions live in `patterns/transitions/` as `trans_*` — currently
+`trans_color_burst`, `trans_crossfade`, `trans_diagonal_wipe`,
+`trans_diamond_wipe`, `trans_dissolve`, `trans_flash`, `trans_iris`,
+`trans_iris_close`, `trans_morse_blink`, `trans_ripple_in`,
+`trans_split_horizontal`, `trans_split_vertical`, `trans_wave_sweep`,
+`trans_wipe_down`, `trans_wipe_left`, `trans_wipe_right`. Read the directory
+rather than this list when it matters — the set changes.
 
 ---
 
@@ -1223,7 +1431,7 @@ MarsinScript, as implemented today, is:
 - a numeric VM language with arrays and user-defined numeric helper functions
 - Pixelblaze-compatible at the core color-language level through `rgb()` and `hsv()`
 - Marsin-extended through `rgbwau()` and the internal `MarsinPixel` RGBWAU model
-- Marsin-extended through `controllerId`, `sectionId`, `fixtureId`, `viewMask` metadata variables
+- Marsin-extended through the seven metadata builtins — `controllerId`, `sectionId`, `fixtureId`, `viewMask`, `fixtureType`, `pixelLocalIndex`, `viewMaskHi` — and the compile-time `inView()` / `MASK_*` / `FIX_*` injections layered over them
 - Marsin-extended through transition built-ins (`progress`, `fromR/G/B/W/A/U`, `toR/G/B/W/A/U`)
 - intentionally separated from hardware transport details
 
@@ -1236,17 +1444,25 @@ If a script needs to stay Pixelblaze-like, keep to:
 
 If a script needs Marsin-specific multi-emitter control, use:
 
-- `rgbwau()`
+- `rgbwau()` — and keep the W and A lanes matched wherever it emits logical white (`MARSIN_ENGINE_PATTERNS.md` §6.2)
 
-If a script needs Marsin-specific per-controller or per-section behavior, use:
+If a script needs Marsin-specific topology-aware behavior:
 
-- `controllerId`, `sectionId`, `fixtureId`, `viewMask`
-- Always include a `== 0` fallback for v1 model compatibility
+- **prefer `inView("Authored View Name")`** — portable across models, resolves
+  both view words, fails the compile loudly on an unknown name
+- use `fixtureType == FIX_*` where the real distinction is fixture capability
+- use raw `controllerId` / `sectionId` / `fixtureId` only for deliberately
+  single-model work, and say so in the pattern header
+- **do not add a `== 0` metadata fallback.** The old "always include a `== 0`
+  fallback for v1 model compatibility" advice is withdrawn — it is a fallback
+  behaviour (codex P0), and it is what let 137 parameters sit dead on the ship
+  while looking healthy on the test bench
 
 If a script is a transition/blend script, use:
 
 - `progress`, `fromR/G/B/W/A/U`, `toR/G/B/W/A/U`
 - Output via `rgbwau()` for full channel support
+- Satisfy all six contract points in §13.2
 
 Both Marsin extensions are Marsin-only, not cross-compatible with Pixelblaze proper.
 

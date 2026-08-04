@@ -76,6 +76,11 @@ const MAX_MILLIAMPS_MAX = 65535;
 const DEVICE_NAME_MAX = 32;
 const COLOR_ORDER_RE = /^[RGBWA]{3,5}$/;
 
+// The firmware's own deviceName rule (docs/41 §4.2, and the exact `detail` the
+// device returns): 1–32 chars, letters/digits/-._ only. NO spaces.
+export const DEVICE_NAME_RE = new RegExp(`^[A-Za-z0-9._-]{1,${DEVICE_NAME_MAX}}$`);
+export const DEVICE_NAME_RULE_TEXT = `1-${DEVICE_NAME_MAX} chars, letters/digits/-._ only`;
+
 // Per-output DMX (firmware capabilitiesExt.perOutputDmx). A MarsinLED that
 // advertises it can carry a distinct sACN universe per strand — the sim assigns
 // one universe per enabled output with dmxStartAddress ALWAYS 1 (the operator's
@@ -89,6 +94,12 @@ const DMX_HOLD_TIMEOUT_MS = 3000;       // hold-then-blackout while a source str
 // Keys the sim's patch flow must NEVER write (docs/41 §4.1, plan P1). A push
 // payload carrying any of these is a bug — refuse it loudly rather than risk
 // re-homing the network or renaming the device from the sim.
+//
+// ONE declared exception, and it is not a rename: `pushPerOutputUniverses` adds
+// `deviceName` when the device's STORED name is invalid, because such a board
+// rejects every config write until it is fixed (see the deviceName section
+// below). It never goes through `validatePushPayload`, and every other path —
+// `pushConfig` included — still refuses the key outright.
 const DENIED_PUSH_KEYS = [
   'wifi', 'deviceName', 'boardType', 'boardTypes', 'swarm',
   'networkMode', 'enableMesh', 'controllerId',
@@ -407,6 +418,80 @@ export function validatePushPayload(partial) {
   }
 }
 
+// ── deviceName: the field the firmware re-validates on EVERY apply ──────────
+//
+// ROOT CAUSE (live, 2026-08-03, report 20260725_124). `ConfigManager::update`
+// merges the partial body into the STORED config and then validates the WHOLE
+// merged document. A device whose stored `deviceName` is invalid — the bench
+// board at 10.x.x.60 stores `""` — therefore rejects EVERY `POST /api/config`
+// with `field=deviceName`, including bodies that never mention the field. Proof:
+// a no-op gamma write (`{"gamma":{"r":1,"g":1,"b":1,"w":1}}`, the values the
+// device already held) came back
+// `400 {"error":"config apply failed","field":"deviceName",
+//       "detail":"1-32 chars, letters/digits/-._ only"}`.
+//
+// So the push CANNOT leave the field alone on such a board: not writing it is
+// not "leaving the device as it is", it is "no config can ever be written
+// again". The sim repairs it with the operator's OWN controller-card name,
+// VERBATIM — there is no sanitizing, truncating or substituting (that would be
+// the silent mangle the codex forbids). Either the card name is already a legal
+// device name and gets written as-is, or the push refuses and says exactly what
+// to rename. `deviceName` stays in DENIED_PUSH_KEYS for every other path: this
+// is a repair of an unwritable device, never a rename of a working one.
+
+/** True iff `name` satisfies the firmware's deviceName rule (1–32, [A-Za-z0-9._-]). */
+export function isValidDeviceName(name) {
+  return typeof name === 'string' && DEVICE_NAME_RE.test(name);
+}
+
+/**
+ * Decide whether a push must also repair the device's stored `deviceName`.
+ *
+ * PURE (no I/O) — this is the payload-construction seam, so it is unit-testable
+ * without a device.
+ *
+ *  - stored name VALID → `null`: the push writes no `deviceName` at all
+ *    (preserve what the box holds — the sim never renames a working device).
+ *  - stored name ABSENT from `GET /api/config` → `null`: a firmware that does
+ *    not report the field is not one we can reason about, and inventing a name
+ *    for it would be a rename nobody asked for.
+ *  - stored name PRESENT and INVALID → `{from, to, message}`: the device is
+ *    unwritable until it is fixed, so the push carries `deviceName =
+ *    controllerName` **verbatim**, declared in the confirm dialog.
+ *  - stored name PRESENT and INVALID, and the card name cannot be used as-is →
+ *    THROWS naming exactly what to rename (no fallback, codex P0).
+ *
+ * @param {{ip: string, storedName: *, controllerName: *}} params
+ * @returns {{from: string, to: string, message: string}|null}
+ */
+export function deviceNameRepairForPush({ ip, storedName, controllerName } = {}) {
+  if (storedName === undefined) return null;   // firmware does not report the field
+  if (isValidDeviceName(storedName)) return null;
+  const stored = JSON.stringify(storedName);
+  const why = `[MarsinLED] ${ip} stores an INVALID deviceName ${stored} — the firmware ` +
+    're-validates the WHOLE config on every apply, so it rejects EVERY POST /api/config with ' +
+    `field=deviceName (${DEVICE_NAME_RULE_TEXT}) until that name is fixed, even for a body that ` +
+    'never mentions it. ';
+  if (controllerName === undefined || controllerName === null || controllerName === '') {
+    throw new Error(`${why}The push repairs it with this controller card's name, but no card name ` +
+      'was supplied — name the controller, or set the device name once in its own web UI ' +
+      `(http://${ip}/#config), then push again.`);
+  }
+  if (!isValidDeviceName(controllerName)) {
+    throw new Error(`${why}The push repairs it with this controller card's name, but ` +
+      `'${controllerName}' is not a legal device name either (${DEVICE_NAME_RULE_TEXT} — no ` +
+      'spaces). RENAME THE CONTROLLER CARD to a legal name and push again, or set the device ' +
+      `name once in the device's own web UI (http://${ip}/#config).`);
+  }
+  return {
+    from: storedName,
+    to: controllerName,
+    message: `the device's stored deviceName ${stored} is invalid, which makes the firmware ` +
+      `reject every config write — this push also sets deviceName to '${controllerName}' ` +
+      "(this card's name, verbatim) so the write can land",
+  };
+}
+
 // ── Write ────────────────────────────────────────────────────────────────────
 
 /**
@@ -713,7 +798,11 @@ export function applyPerOutputPlan(strands, plan) {
  *     ALL-OR-NONE / only-enabled-carry-a-universe / span / no-overlap rules are
  *     checked against what the device will actually hold. Validating the
  *     pre-push array could not express an enable and would refuse a legal plan.
- *  4. POST { strands, dmx:{enabled:true, protocol:0, timeoutMs:3000} }.
+ *  4. POST { strands, dmx:{enabled:true, protocol:0, timeoutMs:3000} } — plus
+ *     `deviceName` IFF the device's stored name is invalid and therefore makes
+ *     the firmware reject every write (`deviceNameRepairForPush`; the repaired
+ *     value is `plan.controllerName` verbatim, and an unusable card name is a
+ *     loud refusal BEFORE the POST, not a mangled name).
  *
  * The device REBOOTS on success ({outcome:"needs-reboot", reboot:true}); the
  * caller runs `awaitReboot` then `readPerOutput(getStatus)`.
@@ -755,6 +844,14 @@ export async function pushPerOutputUniverses(ip, { plan, opts = {} } = {}) {
     strands,
     dmx: { enabled: true, protocol: PER_OUTPUT_PROTOCOL_SACN, timeoutMs: DMX_HOLD_TIMEOUT_MS },
   };
+  // A device carrying an invalid stored deviceName rejects THIS body too (the
+  // firmware validates the merged config, not the patch) — repair it with the
+  // card's own name, or refuse loudly. `plan.controllerName` comes from
+  // derivePerOutputPlan; the UI declares the repair in the confirm dialog.
+  const nameRepair = deviceNameRepairForPush({
+    ip, storedName: config.deviceName, controllerName: plan.controllerName,
+  });
+  if (nameRepair) body.deviceName = nameRepair.to;
   try {
     return await postConfigBody(ip, body, writeTimeoutMs);
   } catch (err) {

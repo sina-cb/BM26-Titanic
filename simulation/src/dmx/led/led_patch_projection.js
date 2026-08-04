@@ -22,17 +22,24 @@
  * `projectLedStrandSegments` remain the ONE source of truth for the byte layout
  * WITHIN a single output.
  *
- * A strand is "patched" exactly when it appears in the returned map; unbound
- * or unassigned strands are simply absent (the caller turns that into a LOUD
- * unpatched marker, never a silent skip — codex P0).
+ * A strand is "patched" exactly when it appears in the returned map; unassigned
+ * strands are simply absent (the caller turns that into a LOUD unpatched marker,
+ * never a silent skip — codex P0).
  *
- * BINDING GRADE (operator ruling 2026-07-31, report 20260725_96): "bound" here
- * is `isBoundLedController`, the UNION of VERIFIED (fingerprint read off the
- * board) and PROVISIONAL (the operator typed the IP and the port/output config
- * with the board offline). Both project real addresses — discovery is an
- * OPTIONAL stage of the controller lifecycle, so a declared controller patches
- * end-to-end before its board ever powers on. The grade changes what the sim
- * CLAIMS about hardware, never how the bytes are laid out.
+ * CHAINING IS THE PATCH (operator ruling 2026-08-03, report 20260725_123):
+ * *"unbound should not cause the lights to go off or unpatched red."* Every LED
+ * controller that carries chain entries projects real addresses — the device
+ * BINDING GRADE (`isBoundLedController`: VERIFIED = fingerprint read off the
+ * board, PROVISIONAL = operator-declared) is NOT a gate here and never was meant
+ * to be. It changes only what the sim CLAIMS about hardware (first-contact
+ * reconcile, push receipts), never whether the bytes are laid out.
+ *
+ * The typed IP is the sACN DESTINATION, and the only thing that is load-bearing
+ * for the wire: a chained card without one still patches, still lights the sim,
+ * still exports model lanes — and raises `led_no_destination_ip`, because no
+ * relay route can exist. Routing to an operator-typed but unverified address is
+ * his accepted risk (ruling 2026-08-03, relaxing report 20260725_92 §4) — that
+ * was the entire point of making discovery optional.
  */
 
 import {
@@ -40,7 +47,6 @@ import {
   MAX_UNIVERSE,
   entryFixtureName,
   isLedController,
-  isBoundLedController,
   isValidIp,
   ledOutputIndexForPort,
   ledStrideForOrder,
@@ -138,11 +144,11 @@ export function projectLedStrandSegments(universe, channel, stride, count) {
 }
 
 /**
- * Project every DEVICE-BOUND LED controller's strands onto the firmware's
- * PER-OUTPUT sACN layout: each controller port IS an independent device output
- * whose cursor STARTS at (port.universe, channel 1). Strands chained on one
- * port pack contiguously (spilling by whole pixels); an empty/disabled port
- * contributes nothing.
+ * Project every LED controller's chained strands onto the firmware's PER-OUTPUT
+ * sACN layout: each controller port IS an independent device output whose cursor
+ * STARTS at (port.universe, channel 1). Strands chained on one port pack
+ * contiguously (spilling by whole pixels); an empty/disabled port contributes
+ * nothing. Device binding is NOT a gate — see the module header.
  *
  * @param {Object} registry - the controller registry.
  * @param {Map<string, number>|Object} strandLedCounts - strand name → ledCount.
@@ -153,7 +159,10 @@ export function projectLedStrandSegments(universe, channel, stride, count) {
  *     endChannel: number, pixelCount: number}>,
  *   endUniverse: number, endChannel: number }>,
  *   violations: Array<{ code: string, controllerId: number, message: string }> }}
- *   `controllerId` is the controller's 1-based PANEL ORDINAL (docs/33
+ *   `violations` are keyed by the controller's REGISTRY id (what the pane's
+ *   `violationsFor` matches on), and include `led_no_destination_ip` — a card
+ *   with chains and no usable IP: patched everywhere, routable nowhere.
+ *   `controllerId` on a FIELD record is the controller's 1-based PANEL ORDINAL (docs/33
  *   decision 20), matching computeProjection/computeLedProjection.
  *   `dmxUniverse`/`dmxAddress` are the strand's START — for the FIRST strand on
  *   an output that is (port.universe, 1); `segments`/`endUniverse`/`endChannel`
@@ -171,22 +180,30 @@ export function computeLedStrandPatches(registry, strandLedCounts) {
     : new Map(Object.entries(strandLedCounts || {}));
 
   registry.controllers.forEach((controller, index) => {
-    // ONLY device-bound LED controllers use the per-output device layout. Unbound
-    // LED controllers keep the sim's generic per-port projection
-    // (computeLedProjection) — they have no hardware to agree with.
-    if (!isLedController(controller) || !isBoundLedController(controller)) return;
+    // EVERY LED controller that carries chains projects — binding grade is not a
+    // gate here (operator ruling 2026-08-03, report 20260725_123). Chaining a
+    // fixture onto a port IS the patch; the typed IP is only the destination.
+    if (!isLedController(controller)) return;
 
     const led = controller.led || normalizeLedConfig(null, controller.name);
     const ordinal = index + 1;
     const ipOk = isValidIp(controller.ip);
     const stride = ledStrideForOrder(led.order, led.stride);
 
-    if (!ipOk) {
+    const chainedCount = (controller.ports || []).reduce(
+      (n, port) => n + (port.chain || []).filter((e) => entryFixtureName(e) !== null).length, 0);
+
+    // The ONE thing a typed IP is load-bearing for: the sACN DESTINATION. Without
+    // it the strands still patch (records, engine model lanes, lit in the sim) —
+    // there is simply nowhere on the wire to send them, and THAT is the loud
+    // finding. Silent on a card with no chains: nothing is dark there yet.
+    if (!ipOk && chainedCount > 0) {
       violations.push({
-        code: 'led_bad_ip',
+        code: 'led_no_destination_ip',
         controllerId: controller.id,
-        message: `Bound LED controller '${controller.name}' has a malformed or missing IP ` +
-          `('${controller.ip}') — its strands project unpatched`,
+        message: `LED controller '${controller.name}': ${chainedCount} chained fixture(s) patch ` +
+          `and render, but its IP ('${controller.ip}') is unusable — nothing can be routed to ` +
+          'them. Type the IP.',
       });
     }
 
@@ -404,7 +421,9 @@ export function validateLedManualUniverses(registry, strandCounts, dmxUniverseMa
   // Duplicate declared universes across a controller's enabled (strand-carrying)
   // outputs — a real per-output collision (both stream from channel 1).
   for (const controller of registry.controllers) {
-    if (!isLedController(controller) || !isBoundLedController(controller)) continue;
+    // Every LED card, bound or not (ruling 2026-08-03): they all project now, so
+    // they can all collide with themselves.
+    if (!isLedController(controller)) continue;
     const byUniverse = new Map(); // universe → [portNum, …]
     for (const port of controller.ports || []) {
       const carriesStrand = (port.chain || []).some((e) => entryFixtureName(e) !== null);

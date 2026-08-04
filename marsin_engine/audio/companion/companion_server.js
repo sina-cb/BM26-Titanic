@@ -70,6 +70,11 @@ import {
   percentile, calibrationSuggestions,
 } from './party_tuning.js';
 import { loadMicProfiles, saveMicProfiles, validateProfile, uniqueProfileId } from './mic_profiles.js';
+import {
+  NOISE_BANDS, formatGateSummary, resolveGateReadBack,
+  verifyGateApply, formatApplyMessage,
+} from './noise_floor.js';
+import { formatGainSummary, runGainApply } from './input_gain.js';
 import { audioRegistryEntries } from '../postproc/audio_signals.js';
 import { emitDerivedBpm, BPM_OSC_ADDRESS } from './bpm_emit.js';
 import { BpmSmoother } from '../../lib/bpm_smoother.js';
@@ -654,6 +659,11 @@ function applyInputGain(v) {
   inputGain = g;
   applyEffectiveGain();
 }
+// The `inputGain` WS frame: the value PLUS the always-visible one-line readout
+// the MIC TUNE page prints under the gain calibration. Built server-side (like
+// `gatesMsg`) so the number on screen is the server's own truth and is correct
+// after an app reload, which re-seeds it from `hello`.
+function gainMsg() { return { value: inputGain, summary: formatGainSummary(inputGain) }; }
 function applySmooth(v) {
   sourceSmoothHz = Math.max(0, Math.min(22050, +v));
   analyzer.reconfigure({ bands: { ...analyzer.bands, sourceSmoothHz }, kick: analyzer.kick });
@@ -682,6 +692,186 @@ function applyBandGate(band, v) {
 }
 // The current gate state as the client/CaptainPad see it (null → "uses global").
 function gateState() { return { noiseGate, lowGate, midGate, highGate }; }
+// The `gates` WS frame: the raw state PLUS the always-visible one-line summary
+// the MIC TUNE page prints next to the calibrate control (operator request
+// 2026-08-03 — the noise floor must be readable at a glance, not only in the
+// moment of an apply). Built server-side so the number on screen is always the
+// server's own truth (and correct after an app reload, which re-seeds `hello`).
+function gatesMsg() { return { ...gateState(), summary: formatGateSummary(gateState()) }; }
+
+// ── noise-floor APPLY read-back (operator request 2026-08-03) ────────────────
+// The last apply's outcome, kept so a reloaded UI can still show what happened
+// (values themselves always come from `gates`; this is the "how did it go" chip).
+let lastNoiseApply = null;
+
+/**
+ * Apply a band-gate bundle and REPORT what actually landed.
+ *
+ * Order: apply locally (analysis never blocks on the engine) → PATCH the engine
+ * and AWAIT it → read the authoritative post-apply state back → verify it
+ * against what was asked → tell the operator, once, in one line. A rejected
+ * PATCH or a read-back that disagrees is reported as a FAILURE (codex P0: no
+ * silent success-looking state).
+ *
+ * @param {import('ws').WebSocket} ws  the operator's socket (gets the result)
+ * @param {{low?:number, mid?:number, high?:number, noiseGate?:number}} gates
+ * @param {{persistProfile?:boolean}} [opts]  also snapshot into the active profile
+ */
+async function applyNoiseFloor(ws, gates, opts = {}) {
+  const requested = {};
+  const partial = { bands: {} };
+  for (const b of NOISE_BANDS) {
+    if (!Number.isFinite(gates[b])) continue;
+    const v = Math.max(0, Math.min(0.999, +gates[b]));
+    applyBandGate(b, v);
+    requested[b] = v;
+    partial.bands[`${b}Gate`] = v;
+  }
+  if (Number.isFinite(gates.noiseGate)) {
+    const v = Math.max(0, Math.min(0.999, +gates.noiseGate));
+    applyNoiseGate(v); partial.bands.noiseGate = v;
+  }
+  if (Object.keys(partial.bands).length === 0) {
+    throw new Error('applyNoiseFloor: no finite gate values in the bundle');
+  }
+  broadcast({ type: 'gates', ...gatesMsg() });
+
+  let patchResult = null;
+  let error = null;
+  if (engineLink && engineLink.connected) {
+    try {
+      patchResult = await engineLink.patch(partial);
+    } catch (e) {
+      error = `engine PATCH failed: ${e && e.message}`;
+    }
+  }
+  // Reconcile local state to whatever the read-back says (the engine may clamp
+  // or normalize, and a REFUSED write leaves it on its own gates — resolveGate-
+  // ReadBack re-reads it once in that case) so the sliders + summary show the
+  // real numbers, not ours.
+  const read = await resolveGateReadBack({
+    patchResult, error, engineLink, readAnalyzerBands: () => analyzer.bands,
+  });
+  error = read.error;
+  if (read.gates) {
+    noiseGate = read.gates.noiseGate;
+    lowGate = read.gates.lowGate; midGate = read.gates.midGate; highGate = read.gates.highGate;
+    applyGates();
+    broadcast({ type: 'gates', ...gatesMsg() });
+  }
+  const verdict = (!error && read.effective)
+    ? verifyGateApply({ requested, applied: read.effective })
+    : { ok: false, mismatches: [] };
+  const ok = !error && verdict.ok;
+  // Snapshot into the active profile ONLY once the read-back proved the gates
+  // landed — a profile must never record a value the pipeline refused. A
+  // missing profile is its own (separate) failure: the FLOOR still got set, so
+  // it is reported as a flash, not as a failed apply.
+  let savedTo = null;
+  if (ok && opts.persistProfile) {
+    const prof = findProfile(activeProfileId);
+    if (!prof) {
+      ws.send(JSON.stringify({ type: 'flash', text: 'no active profile to save into', error: true }));
+    } else {
+      prof.gates = { noiseGate, lowGate, midGate, highGate };
+      prof.inputGain = inputGain;
+      persistProfiles(); broadcastProfiles();
+      savedTo = prof.name;
+    }
+  }
+  const result = {
+    type: 'noiseApplyResult',
+    ok,
+    source: read.source,
+    engineConnected: !!(engineLink && engineLink.connected),
+    gates: read.effective,
+    savedTo,
+    text: formatApplyMessage({
+      ok, source: read.source, applied: read.effective,
+      mismatches: verdict.mismatches, error,
+    }),
+  };
+  lastNoiseApply = result;
+  const payload = JSON.stringify(result);
+  if (ws && ws.readyState === ws.OPEN) ws.send(payload);
+  else broadcast(result);
+}
+
+// ── input-gain APPLY read-back (follow-up to report 20260725_129 §4) ─────────
+// The gain calibration's "✓ Apply gain" used to fire a plain setInputGain and
+// forget about it: a PATCH the engine rejected looked EXACTLY like a success.
+// Same treatment as the noise floor — apply, await, read back, verify, report.
+let lastGainApply = null;
+
+/**
+ * The gain the live analyzer is ACTUALLY running, for the read-back when there
+ * is no engine to be authoritative.
+ *
+ * The `mode === 'test'` branch is NOT a fallback: the synthetic test source
+ * deliberately renders at unity (see effectiveInputGain — a full-scale
+ * generator gets no mic preamp), so the analyzer's own `bands.inputGain` is 1
+ * by design there and the MIC PREAMP state is the value that was applied,
+ * persisted and shown. For mic/file the two are the same number, and reading
+ * the analyzer proves the reconfigure actually landed.
+ *
+ * @returns {number}
+ */
+function liveAnalyzerGain() {
+  return mode === 'test' ? inputGain : analyzer.bands.inputGain;
+}
+
+/**
+ * Apply an input gain and REPORT what actually landed.
+ *
+ * The ORDER (validate → apply locally → await the PATCH → read the
+ * authoritative post-apply gain back → reconcile → verify → one line) lives in
+ * input_gain.js's `runGainApply` so it is unit-testable without a socket; this
+ * wrapper supplies the side effects and turns the verdict into the WS result.
+ * A rejected PATCH or a read-back that disagrees is reported as a FAILURE
+ * (codex P0: no silent success-looking state).
+ *
+ * @param {import('ws').WebSocket} ws  the operator's socket (gets the result)
+ * @param {number} value  the requested linear preamp multiplier
+ * @param {{persistProfile?:boolean}} [opts]  also snapshot into the active profile
+ */
+async function applyGainVerified(ws, value, opts = {}) {
+  const outcome = await runGainApply({
+    requested: value,
+    applyLocal: (g) => { applyInputGain(g); broadcast({ type: 'inputGain', ...gainMsg() }); },
+    engineLink,
+    readAnalyzerGain: liveAnalyzerGain,
+  });
+  const ok = outcome.ok;
+  // Snapshot into the active profile ONLY once the read-back proved the gain
+  // landed — a profile must never record a value the pipeline refused. A
+  // missing profile is its own (separate) failure: the GAIN still got set, so
+  // it is reported as a flash, not as a failed apply.
+  let savedTo = null;
+  if (ok && opts.persistProfile) {
+    const prof = findProfile(activeProfileId);
+    if (!prof) {
+      ws.send(JSON.stringify({ type: 'flash', text: 'no active profile to save into', error: true }));
+    } else {
+      prof.inputGain = inputGain;
+      prof.gates = { noiseGate, lowGate, midGate, highGate };
+      persistProfiles(); broadcastProfiles();
+      savedTo = prof.name;
+    }
+  }
+  const result = {
+    type: 'gainApplyResult',
+    ok,
+    source: outcome.source,
+    engineConnected: !!(engineLink && engineLink.connected),
+    gain: outcome.gain,
+    savedTo,
+    text: outcome.text,
+  };
+  lastGainApply = result;
+  const payload = JSON.stringify(result);
+  if (ws && ws.readyState === ws.OPEN) ws.send(payload);
+  else broadcast(result);
+}
 
 // ── MIC TUNE calibration profiles (report 20260621_8) ────────────────────────
 // Named venue/condition states (gates + gain) the operator can create, calibrate
@@ -710,8 +900,8 @@ function applyProfile(prof) {
   lowGate = prof.gates.lowGate; midGate = prof.gates.midGate; highGate = prof.gates.highGate;
   applyInputGain(prof.inputGain);   // sets analyzer gain locally
   applyGates();                     // re-applies the gate set locally
-  broadcast({ type: 'gates', ...gateState() });
-  broadcast({ type: 'inputGain', value: inputGain });
+  broadcast({ type: 'gates', ...gatesMsg() });
+  broadcast({ type: 'inputGain', ...gainMsg() });
   // Write the whole bundle through to the engine (single source of truth).
   const partial = { bands: {
     noiseGate, inputGain,
@@ -759,7 +949,7 @@ function applyEngineSharedTuning(config) {
   if (bands) {
     if (Number.isFinite(bands.inputGain) && bands.inputGain !== inputGain) {
       applyInputGain(bands.inputGain);
-      broadcast({ type: 'inputGain', value: inputGain });
+      broadcast({ type: 'inputGain', ...gainMsg() });
     }
     if (Number.isFinite(bands.sourceSmoothHz) && bands.sourceSmoothHz !== sourceSmoothHz) {
       applySmooth(bands.sourceSmoothHz);
@@ -773,7 +963,7 @@ function applyEngineSharedTuning(config) {
     if (Number.isFinite(bands.lowGate)  && bands.lowGate  !== lowGate)  { lowGate  = bands.lowGate;  gateChanged = true; }
     if (Number.isFinite(bands.midGate)  && bands.midGate  !== midGate)  { midGate  = bands.midGate;  gateChanged = true; }
     if (Number.isFinite(bands.highGate) && bands.highGate !== highGate) { highGate = bands.highGate; gateChanged = true; }
-    if (gateChanged) { applyGates(); broadcast({ type: 'gates', ...gateState() }); }
+    if (gateChanged) { applyGates(); broadcast({ type: 'gates', ...gatesMsg() }); }
   }
   const cap = config.capture && typeof config.capture === 'object' ? config.capture : null;
   if (cap && cap.device !== undefined) applyEngineCaptureDevice(cap.device);
@@ -1675,7 +1865,7 @@ function handleMessage(ws, raw) {
     // SharedTuning; if the engine is down we still applied locally.
     const v = m.value;
     writeThroughShared(
-      () => { applyInputGain(v); broadcast({ type: 'inputGain', value: inputGain }); },
+      () => { applyInputGain(v); broadcast({ type: 'inputGain', ...gainMsg() }); },
       { bands: { inputGain: Math.max(0, Math.min(64, +v)) } },
     );
   }
@@ -1686,12 +1876,22 @@ function handleMessage(ws, raw) {
       { bands: { sourceSmoothHz: Math.max(0, Math.min(22050, +v)) } },
     );
   }
+  else if (m.type === 'applyInputGain') {
+    // The gain calibration's ✓ Apply gain (and the design page's compact
+    // Apply): a ONE-SHOT operator apply, unlike the continuously-dragged
+    // slider's setInputGain. It writes through, AWAITS the engine, READS THE
+    // RESULT BACK and reports it, so the operator sees the gain that actually
+    // landed instead of a silent maybe (report 20260725_131).
+    applyGainVerified(ws, m.value).catch((e) => {
+      ws.send(JSON.stringify({ type: 'flash', text: `input gain apply: ${e && e.message}`, error: true }));
+    });
+  }
   else if (m.type === 'calibrate') startCalibration();
   // ── MIC TUNE: noise gates (on-playa, report 20260621_5) ────────────────────
   else if (m.type === 'setNoiseGate') {
     const v = m.value;
     writeThroughShared(
-      () => { applyNoiseGate(v); broadcast({ type: 'gates', ...gateState() }); },
+      () => { applyNoiseGate(v); broadcast({ type: 'gates', ...gatesMsg() }); },
       { bands: { noiseGate: Math.max(0, Math.min(0.999, +v)) } },
     );
   }
@@ -1701,7 +1901,7 @@ function handleMessage(ws, raw) {
     const clear = m.value === null;
     const v = clear ? noiseGate : Math.max(0, Math.min(0.999, +m.value));
     writeThroughShared(
-      () => { applyBandGate(m.band, clear ? null : v); broadcast({ type: 'gates', ...gateState() }); },
+      () => { applyBandGate(m.band, clear ? null : v); broadcast({ type: 'gates', ...gatesMsg() }); },
       { bands: { [`${m.band}Gate`]: v } },
     );
   }
@@ -1854,22 +2054,13 @@ function handleMessage(ws, raw) {
   }
   else if (m.type === 'applyNoiseGates' && m.gates && typeof m.gates === 'object') {
     // Apply a full recommended/preset gate bundle in one shot (the automatic
-    // path). Each provided band is written through; absent bands are left as-is.
-    const g = m.gates;
-    const partial = { bands: {} };
-    for (const b of ['low', 'mid', 'high']) {
-      if (Number.isFinite(g[b])) {
-        const v = Math.max(0, Math.min(0.999, +g[b]));
-        applyBandGate(b, v);
-        partial.bands[`${b}Gate`] = v;
-      }
-    }
-    if (Number.isFinite(g.noiseGate)) {
-      const v = Math.max(0, Math.min(0.999, +g.noiseGate));
-      applyNoiseGate(v); partial.bands.noiseGate = v;
-    }
-    broadcast({ type: 'gates', ...gateState() });
-    writeThroughShared(() => {}, partial);
+    // path — the noise-floor calibration's ✓ Apply). Each provided band is
+    // written through; absent bands are left as-is. applyNoiseFloor then READS
+    // THE RESULT BACK from the engine (or the analyzer when the engine is down)
+    // and reports it, so the operator sees the number that actually landed.
+    applyNoiseFloor(ws, m.gates).catch((e) => {
+      ws.send(JSON.stringify({ type: 'flash', text: `noise floor apply: ${e && e.message}`, error: true }));
+    });
   }
   // ── MIC TUNE PROFILES (report 20260621_8) ──────────────────────────────────
   else if (m.type === 'applyProfile') {
@@ -1904,27 +2095,40 @@ function handleMessage(ws, raw) {
   else if (m.type === 'saveActiveProfile') {
     const prof = findProfile(activeProfileId);
     if (!prof) { ws.send(JSON.stringify({ type: 'flash', text: 'no active profile to save into', error: true })); }
-    else {
-      // Optionally apply incoming gates first (e.g. the noise-floor calibration
-      // result), live + write-through, THEN snapshot the current state into the
-      // active profile and persist. This is "calibrate INTO a profile".
-      if (m.gates && typeof m.gates === 'object') {
-        const partial = { bands: {} };
-        for (const b of ['low', 'mid', 'high']) {
-          const k = `${b}Gate`;
-          if (m.gates[k] !== undefined) {
-            const v = m.gates[k] === null ? null : Math.max(0, Math.min(0.999, +m.gates[k]));
-            applyBandGate(b, v);
-            partial.bands[k] = v === null ? noiseGate : v;
-          }
+    else if (m.gates && typeof m.gates === 'object') {
+      // "Calibrate INTO a profile" (the calibration's 💾 Save): apply the
+      // recommended gates, READ THE RESULT BACK, and only snapshot the profile
+      // when the read-back proves the gates actually landed — a profile must
+      // never record a value the pipeline refused (codex P0).
+      const bundle = {};
+      for (const b of NOISE_BANDS) {
+        const v = m.gates[`${b}Gate`];
+        if (v === undefined) continue;
+        if (!Number.isFinite(v)) {
+          ws.send(JSON.stringify({
+            type: 'flash', error: true,
+            text: `saveActiveProfile: ${b}Gate must be a finite gate value (got ${JSON.stringify(v)})`,
+          }));
+          return;
         }
-        if (Number.isFinite(m.gates.noiseGate)) {
-          const v = Math.max(0, Math.min(0.999, +m.gates.noiseGate));
-          applyNoiseGate(v); partial.bands.noiseGate = v;
-        }
-        broadcast({ type: 'gates', ...gateState() });
-        writeThroughShared(() => {}, partial);
+        bundle[b] = v;
       }
+      if (Number.isFinite(m.gates.noiseGate)) bundle.noiseGate = m.gates.noiseGate;
+      applyNoiseFloor(ws, bundle, { persistProfile: true }).catch((e) => {
+        ws.send(JSON.stringify({ type: 'flash', text: `noise floor save: ${e && e.message}`, error: true }));
+      });
+    }
+    else if (m.inputGain !== undefined) {
+      // "Calibrate the GAIN into a profile": same contract as the gate bundle
+      // above — apply, READ THE RESULT BACK, and only snapshot the profile once
+      // the read-back proves the gain landed (codex P0: a profile must never
+      // record a value the pipeline refused).
+      applyGainVerified(ws, m.inputGain, { persistProfile: true }).catch((e) => {
+        ws.send(JSON.stringify({ type: 'flash', text: `input gain save: ${e && e.message}`, error: true }));
+      });
+    }
+    else {
+      // Plain "save what's live now" — no gate bundle to apply or verify.
       prof.gates = { noiseGate, lowGate, midGate, highGate };
       prof.inputGain = inputGain;
       persistProfiles(); broadcastProfiles();
@@ -2167,8 +2371,18 @@ wss.on('connection', (ws) => {
     source, inputGain, sourceSmoothHz, mode, datasetsDir: DATASETS_DIR,
     device: configDevice,
     // Current noise-gate state for the MIC TUNE page (global + per-band; null
-    // per-band → uses the global gate).
+    // per-band → uses the global gate). `gatesSummary` is the always-visible
+    // one-liner next to the calibrate control, so a RELOADED app still shows
+    // what the noise floor is set to; `lastNoiseApply` re-paints the outcome of
+    // the most recent apply for this server session.
     gates: gateState(),
+    gatesSummary: formatGateSummary(gateState()),
+    lastNoiseApply,
+    // Same pair for the INPUT GAIN (report 20260725_131): the always-visible
+    // readout under the gain calibration, and the outcome of the most recent
+    // gain apply for this server session (a FAILURE must survive a reload).
+    gainSummary: formatGainSummary(inputGain),
+    lastGainApply,
     // MIC TUNE calibration profiles + the active one.
     profiles: micProfiles, activeProfileId,
     // Engine SHARED-tuning link state so the UI can show whether gain /

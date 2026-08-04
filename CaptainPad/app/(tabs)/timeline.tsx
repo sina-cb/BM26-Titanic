@@ -69,6 +69,7 @@ import {
   TimelineRecentFire,
   TimelineOverview,
   TimelineResolve,
+  TimelineTravelSpec,
   OverviewCue,
   ShowPlan,
   PlanCue,
@@ -302,6 +303,10 @@ export default function TimelineScreen() {
 
   // ── EVENT rung: the event sheet + its read-only resolver peek ──────────
   const [eventCue, setEventCue] = useState<OverviewCue | null>(null);
+  // A bare CALENDAR tap (empty time between cues) — the MOMENT variant of the
+  // event sheet (operator ruling 2026-08-03). Exactly one of eventCue /
+  // eventMoment is ever set.
+  const [eventMoment, setEventMoment] = useState<{ date: string; time: string } | null>(null);
   const [eventResolve, setEventResolve] = useState<TimelineResolve | null>(null);
   const [eventResolveError, setEventResolveError] = useState<string | null>(null);
   const [eventResolvePending, setEventResolvePending] = useState(false);
@@ -832,6 +837,7 @@ export default function TimelineScreen() {
   // surfaced verbatim in the sheet; we never fake a preview.
   const openEvent = useCallback((cue: OverviewCue) => {
     setEventCue(cue);
+    setEventMoment(null);
     setEventResolve(null);
     setEventResolveError(null);
     setEventActionError(null);
@@ -844,8 +850,29 @@ export default function TimelineScreen() {
     });
   }, [selectedDayOverview?.date]);
 
+  // CALENDAR → MOMENT. A tap on EMPTY calendar time opens the same sheet in
+  // MOMENT mode, peeking the resolver at that bare instant ({date, time} —
+  // the same arbitrary-timestamp surface the travel steppers ride on). Still
+  // read-only: the rig moves only on the sheet's TIME TRAVEL button.
+  const openMoment = useCallback((time: string) => {
+    const date = selectedDayOverview?.date;
+    if (!date) return; // no resolvable day under the tap — open nothing
+    setEventCue(null);
+    setEventMoment({ date, time });
+    setEventResolve(null);
+    setEventResolveError(null);
+    setEventActionError(null);
+    setEventResolvePending(true);
+    fetchTimelineResolve({ date, time }).then((r) => {
+      setEventResolvePending(false);
+      if (r.ok && r.data) { setEventResolve(r.data); setEventResolveError(null); }
+      else setEventResolveError(r.error || 'Could not resolve this moment');
+    });
+  }, [selectedDayOverview?.date]);
+
   const closeEvent = useCallback(() => {
     setEventCue(null);
+    setEventMoment(null);
     setEventResolve(null);
     setEventResolveError(null);
     setEventActionError(null);
@@ -865,19 +892,27 @@ export default function TimelineScreen() {
     router.push('/');
   }, [eventCue, performTakeover, closeEvent]);
 
-  // TIME TRAVEL — the deck carries the plan's resolved state at this event's
-  // instant, as a STATIC snapshot (D4). Works while the plan is DORMANT: that
-  // is exactly when the operator rehearses.
+  // TIME TRAVEL — the deck carries the plan's resolved state at the target
+  // instant, as a STATIC snapshot (D4): a CUE's fire instant, or a bare
+  // MOMENT tapped on the calendar ({date, time}). Works while the plan is
+  // DORMANT: that is exactly when the operator rehearses.
   const handleTravel = useCallback(async () => {
-    if (!eventCue) return;
+    let spec: TimelineTravelSpec;
+    if (eventCue) {
+      const date = selectedDayOverview?.date;
+      spec = { cueId: eventCue.id, ...(date ? { date } : {}) };
+    } else if (eventMoment) {
+      spec = { date: eventMoment.date, time: eventMoment.time };
+    } else {
+      return;
+    }
     setEventBusy(true);
-    const date = selectedDayOverview?.date;
-    const err = await travel({ cueId: eventCue.id, ...(date ? { date } : {}) });
+    const err = await travel(spec);
     setEventBusy(false);
     if (err) { setEventActionError(err); return; }
     closeEvent();
     router.push('/');
-  }, [eventCue, travel, closeEvent, selectedDayOverview?.date]);
+  }, [eventCue, eventMoment, travel, closeEvent, selectedDayOverview?.date]);
 
   // ── EXIT RULE D1: returning to the TIMELINE tab ends the zoom ──────────
   //
@@ -1074,6 +1109,7 @@ export default function TimelineScreen() {
             onPrevDay={() => stepDay(-1)}
             onNextDay={() => stepDay(1)}
             onOpenEvent={openEvent}
+            onOpenMoment={openMoment}
             onEditCue={openEditCue}
             onDeleteCue={handleDeleteCue}
             onAddCue={openAddCue}
@@ -1284,12 +1320,15 @@ export default function TimelineScreen() {
       />
 
       {/* ── THE ZOOM LADDER, rung 3: EVENT ──────────────────────────────
-          Tap an event at the DAY level → one sheet, one primary action, with
-          the branch chosen by the ENGINE's own state (is this cue the live deck
-          owner?). Both branches land on the DECK tab under a mode banner. */}
-      {eventCue ? (
+          Tap an event (agenda row OR calendar block) at the DAY level → one
+          sheet, one primary action, with the branch chosen by the ENGINE's own
+          state (is this cue the live deck owner?). A bare CALENDAR tap on empty
+          time opens the same sheet in MOMENT mode (time travel only). Both
+          branches land on the DECK tab under a mode banner. */}
+      {eventCue || eventMoment ? (
       <EventSheet
         cue={eventCue}
+        moment={eventMoment}
         dayDate={selectedDayOverview?.date ?? null}
         // Same rule as the DAY rows: only TODAY's occurrence can be performed.
         activeCueId={
@@ -1304,10 +1343,11 @@ export default function TimelineScreen() {
         resolvePending={eventResolvePending}
         busy={eventBusy}
         actionError={eventActionError}
-        canEdit={!!draft && (draft?.cues ?? []).some((c) => c.id === eventCue.id)}
+        canEdit={!!draft && !!eventCue && (draft?.cues ?? []).some((c) => c.id === eventCue.id)}
         onPerform={() => { void handlePerform(); }}
         onTravel={() => { void handleTravel(); }}
         onEdit={() => {
+          if (!eventCue) return; // MOMENT mode has no cue to edit
           const planCue = (draft?.cues ?? []).find((c) => c.id === eventCue.id);
           closeEvent();
           if (planCue) openEditCue(planCue);

@@ -1,457 +1,697 @@
 ---
-description: The end-to-end recipe for building a high-def, sound-reactive MarsinScript show pattern for the Titanic — from idea, to controls, to audio mapping, to colour, to offline verification with the harness + LED widget, to reviewing it on your phone in the gallery. Read this before writing or redoing any pattern in marsin_engine/patterns/.
+description: The step-by-step procedure for authoring a production MarsinScript pattern for the Titanic — from the artistic idea, to an honest control set, to view-based targeting, timing, colour and portability, to the offline verification gates and the phone gallery. Read this before writing or reworking anything in marsin_engine/patterns/.
 ---
 
-# 🎛️ High-Def Pattern Generation — full pipeline
+# 🎛️ Pattern Generation — the authoring pipeline
 
-This is the canonical, step-by-step recipe for producing a **production-grade**
-lighting pattern: high-definition, genuinely **sound-reactive**, strict two-colour,
-never dead-static, never dead-black. It pairs with:
+This is the **procedure**. The **contracts** live in
+[`docs/MARSIN_ENGINE_PATTERNS.md`](../../docs/MARSIN_ENGINE_PATTERNS.md) —
+read it first, and do not let this skill contradict it. If the two ever
+disagree, the guide wins and this file is the bug.
 
-- `.agent/skills/visualize_patterns_widget.md` — the LED widget anatomy.
-- `docs/MARSIN_ENGINE_PATTERNS.md` — the language/parameter/colour contracts (§2,3,4,7,8,9).
-- `docs/MARSIN_PB_LANG_SPEC.md` — MarsinScript reference (§2.4 reserved names, §6 builtins).
-- The template pattern `marsin_engine/patterns/27_swipe.js` (copy its shape + `_hsv2rgb` helpers).
+| Read | For |
+|---|---|
+| [`docs/MARSIN_ENGINE_PATTERNS.md`](../../docs/MARSIN_ENGINE_PATTERNS.md) | §0 hard contracts, §1 parameter philosophy, §3 timing, §6 colour/output, §7 metadata + views, §8 audio, §9 palette, §11 portability |
+| [`docs/MARSIN_PB_LANG_SPEC.md`](../../docs/MARSIN_PB_LANG_SPEC.md) | grammar, builtins, reserved names (§2.4), clock semantics (§9.3) |
+| [`docs/COLOR_THEORY.md`](../../docs/COLOR_THEORY.md) | the five instruments, what each can emit, palette composition on the physical ship |
+| [`.agent/skills/pattern_gallery.md`](pattern_gallery.md) · [`.agent/skills/visualize_patterns_widget.md`](visualize_patterns_widget.md) | phone review, widget anatomy |
 
-Everything below is **offline** — no engine boot, no ports, no mic. You drive a
-deterministic synth → the **real** engine DSP → a modulation map → the MarsinVM →
-a capture you can assert on and render.
+Everything in the verification loop is **offline** — no engine boot, no ports,
+no mic. You drive the vendored WASM VM (and, for audio, a deterministic synth
+through the real engine DSP) in-process.
 
----
-
-## 0. The four production bars (every pattern must clear all four)
-
-A pattern is not done until the offline harness shows:
-
-1. **Audio-reactive (first-class).** The PRIMARY continuous mapping measures
-   `corr >= 0.5` (REACTIVE), AND a 2nd signal visibly drives a *different* visual
-   dimension. Modulators-only — **never read audio globals natively** (codex P0).
-2. **Two colours.** `cp1` and `cp2` are distinct hues and the geometry uses BOTH
-   across the rig. Harness `hueSpread >= 0.10`.
-3. **Non-repeating math.** Incommensurate / irrational ratios so motion never
-   visibly loops. The core equation is documented in the header.
-4. **High-def + bright.** Crisp cores, true-black-ish negative space,
-   `peakMaxChan >= 200` at a musical peak. **Never fully black in silence** —
-   keep a small clock-driven base (mission-critical visibility).
-
-Plus two always-on invariants:
-- **`localSpeed` must drive motion** (see §6) — declaring it is not enough.
-- **Silence-safe** — renders a calm, non-black, non-crashing base on `--synth silence`.
-
-### Consistency ground rules (apply to EVERY pattern in the set)
-These are non-negotiable across the whole `patterns/` library — old and new —
-so the show feels coherent. A pattern (or an upgrade of an existing one) is not
-done until all hold:
-
-1. **`localSpeed` is the first control and is genuinely effective** — motion
-   visibly speeds up / slows down across its range (§6); it is never declared
-   but unused.
-2. **Direction is not always forward.** Provide a guarded `direction` control
-   AND give the pattern *autonomous direction variation* — some patterns
-   **occasionally auto-switch direction on their own** (clock-driven, on an
-   incommensurate cadence, so the rig doesn't flip in lockstep). Motion should
-   feel organic, not one-way-forever.
-3. **High-def** — follow the four bars above (crisp cores, true-black-ish
-   negative space, `peakMaxChan >= 200`, two colours spanning the rig).
-4. **Never static at zero audio.** With no modulation and all controls at
-   default the pattern still animates from the clock alone.
-5. **The `direction` parameter must never freeze the pattern** at any value —
-   guard the slider-centre dead-zone (§6) so it changes heading, never stalls.
-6. **Validate in the gallery.** Publish every pattern (skill `13`) and iterate
-   on the harness gates until the clip is strong; the operator does the final
-   on-phone visual pass.
-7. **Expose clearly audio-reactive knobs** — at minimum a movement **radius**
-   (how far elements travel / how much they scale) and a brightness **kick**
-   (kick-driven brightness pop), plus 1–2 more natural to the pattern, each an
-   identity `slider*` designed to be modulated (§3, §5).
-
-When *upgrading* an existing pattern, keep its identity (concept, palette feel,
-name) — modernize it to these rules, don't rewrite it into something new.
+**Use the guide's three tiers when you read anything below.** *HARD CONTRACT*
+= the engine/compiler/ABI/CI enforces it. *PRODUCTION CONVENTION* = an operator
+decision about how this show is authored. *OPTIONAL CAPABILITY* = a technique
+you may reach for. Never describe a preference as a runtime rule.
 
 ---
 
-## 1. Idea — start from what we love
+## 0. What this skill no longer tells you to do
 
-The operator's taste: **HD, sound-reactive reinterpretations of the 00–25 core
-set**, with the **golden-hour vintage-blinder** technique and the
-**bioluminescence** feel. So begin one of two ways:
+An earlier revision of this file mandated a fixed control "anatomy" —
+`direction` + autonomous reversal + a movement `radius` + a brightness `kick`
+on **every** pattern — plus true black, two colours spanning the rig,
+`peakMaxChan >= 200`, and constant beat behaviour. It also taught fixture
+targeting as bench-numbered `sectionId == 1|2|3` — which is wrong on the ship.
 
-- **Reinterpret a 00–25 pattern.** Read the source (e.g. `11_bioluminescence`,
-  `00_golden_hour_wash`, `21_pelagic_manta_rays`), keep its identity, and make it
-  HD + audio-reactive. Most show patterns should be these.
-- **A clean concept** (Lissajous, reaction-diffusion, quasicrystal, phyllotaxis…)
-  — fine in moderation, but still must clear the four bars.
+Both are **overruled**:
 
-Write a one-line concept + the core (non-repeating) math you'll use, and which
-audio signal drives which visual dimension, BEFORE coding. Put that in the header.
+- The parameter truth sweep measured **170 DEAD, 39 WRONG and 25 WEAK controls
+  out of 817**, and the largest clusters were exactly the generically-mandated
+  ones
+  ([`_32`](../reports/202607/20260725_32_pattern_param_truth_sweep.md)). The
+  replacement policy is `MARSIN_ENGINE_PATTERNS.md` §1, written by
+  [`_133`](../reports/202607/20260725_133_docs_contract_truth.md) and
+  re-verified by [`_135`](../reports/202607/20260725_135_wave_verification.md).
+- `sectionId` is **model-specific and is not a portable taxonomy**. `1/2/3` is
+  a `test_bench` accident; the ship uses values like `514`/`515`. A pattern
+  gated on the bench numbering executes none of that branch on the Titanic —
+  that is where a large share of the dead knobs came from. The replacement is
+  `inView("Authored View Name")` (`MARSIN_ENGINE_PATTERNS.md` §7.2–7.3.1,
+  view set landed by
+  [`_134`](../reports/202607/20260725_134_titanic_semantic_views.md) /
+  [`_137`](../reports/202607/20260725_137_view_allocator_word_policy.md)).
 
-**Signature techniques to reach for**
-- **Vintage blinders** (`00_golden_hour_wash`): the vintage heads
-  (`sectionId == 2`, fixtureId 5–6, the upper Y heads) act as audience blinders —
-  on the kick, drive the **W (white) channel hard** on those fixtures via
-  `rgbwau(...)`. Great on heartbeat / elevator / golden-hour patterns.
-- **Bioluminescence** (`11`): slow `cp1` ambient swell + sharp pow-shaped `cp2`
-  crests + a gentle additive UV glow.
-
----
-
-## 2. The rig + coordinate model (test_bench, ports to the real rig)
-
-`render3D(index, x, y, z)` receives **normalized coords — x, y, z ∈ [0,1]**
-(verified). Do NOT re-normalize (no `(x+1.264)/3.125`, no `y/6.5` — that was a real
-regression that rendered `02`/`22` dead-black). Use the coords directly (clamp 0..1)
-for spatial gradients.
-
-Fixture identity comes from **`sectionId`** (and `fixtureId`):
-
-| sectionId | fixtures | fixtureId | axis | count |
-|---|---|---|---|---|
-| 1 | Pars | 1–4 | X | 4 |
-| 2 | Vintage (upper heads — blinders) | 5–6 | Y | 12 |
-| 3 | Bars | 7–8 | X | 36 |
-
-Branch on `sectionId` for per-fixture behaviour (NOT on raw `y` thresholds).
-Cover the whole rig. `var N = 52;` for any feedback/history buffer — **never**
-`pixelCount` (it compiles to a literal 144).
+**"High-definition" is a craft bar, not a look.** It means: every control does
+what its name says, the motion never visibly re-locks, the geometry reads at
+distance on the instrument you put it on, and nothing about the file lies. It
+does **not** mandate true black, a constant beat, or party brightness — the
+show is ambient-dominant most of the night, and a quiet wash is allowed to be
+soft, dim and slow (`MARSIN_ENGINE_PATTERNS.md` §1.6).
 
 ---
 
-## 3. Parameters (local controls) — design the knobs
+## 1. Step 1 — write the idea down before you write code
 
-- **First control is always `localSpeed`** (UI order = declaration order):
-  ```javascript
-  export var localSpeed = 0.5;
-  export function sliderLocalSpeed(v) { localSpeed = v; }
-  ```
-- Then **2–3 audio-intended `slider*` controls**, each a *distinct* visual
-  dimension. Use the **identity-slider convention** so defaults apply and the
-  offline harness can drive them:
-  ```javascript
-  export var shimmer = 0.35;                       // var name = control
-  export function sliderShimmer(v) { shimmer = v; } // slider = "slider" + Shimmer
-  ```
-  Store `v` **directly** (don't transform before storing — no `foo = 0.1 + v*0.8`);
-  scale inside `render3D`. Declaration order of `slider*` = UI order in CaptainPad.
-- **Colour pickers** (always present, strict palette):
-  ```javascript
-  export var cp1H = 0.52, cp1S = 1.0, cp1V = 1.0;
-  export var cp2H = 0.10, cp2S = 1.0, cp2V = 1.0;
-  export function colorPalette1(h, s, v) { cp1H = h; cp1S = s; cp1V = v; }
-  export function colorPalette2(h, s, v) { cp2H = h; cp2S = s; cp2V = v; }
-  ```
+In the file header, in prose, state:
 
-Reserved names you must NEVER declare/assign: `i t h f p q r g b x y z index
-pixelCount PI PI2 controllerId sectionId fixtureId viewMask true false`. Exception:
-`r/g/b` are OK as locals inside `render3D` (the 27_swipe idiom), never inside the
-`_hsv2rgb` helpers. Safe locals: `kk`, `hv/iv/fv/pv/qv/tv`, `bri`, `nx`, `ny`.
+1. **The concept in one line.** What is the viewer looking at?
+2. **Which instrument(s) carry it** — Hull Canvas, Silhouette, Jewelry, Organs,
+   Identity (§3 below). "The whole ship" is a legitimate answer; "I did not
+   think about it" is not.
+3. **The core motion math**, including the incommensurate ratios that keep it
+   from looping (√2 ≈ 1.41421, √3 ≈ 1.73205, φ ≈ 1.61803, golden angle ≈
+   2.39996, distinct primes). No plain integer periods.
+4. **The handles the look actually has** — the shortlist you will turn into
+   controls in Step 2, and which of them (if any) a modulation should drive.
+5. **Where it sits in the show** — ambient bed, or a moment. Its defaults must
+   land there with nothing mapped.
+
+Reworking an existing pattern? **Keep its identity** — concept, palette feel,
+name — and modernise it to the current contracts. Do not rewrite it into
+something else.
 
 ---
 
-## 4. Signals — what the music gives you
+## 2. Step 2 — choose the controls (this is where patterns go wrong)
 
-The analyzer exposes five modulation sources (see
-`marsin_engine/audio/analyzer/` and the synth bank):
+The governing rule is `MARSIN_ENGINE_PATTERNS.md` §1.1: **every control a
+pattern declares must be truthful, perceptible, independently useful, and
+meaningfully effective across its whole range.** A control's name is a promise.
+If you cannot keep the promise, delete the control.
 
-| Signal | Meaning | Good for |
-|---|---|---|
-| `micLow` | low band / bass energy (continuous) | overall brightness / scale (the usual PRIMARY) |
-| `micMid` | mid band (continuous) | geometry reshape, secondary detail |
-| `micHigh` | high band / hats (continuous) | sparkle / fine detail / colour shimmer |
-| `micKick` | kick transient (0..1 spikes) | discrete events (blinder pop, ring, flash, step) |
-| `micFlux` | spectral flux / build (continuous) | risers / build-ups / expansions |
+### 2.1 `localSpeed` — always, and always first
 
-**Test synths** (`marsin_engine/audio/synth/test_synths.js`) exercise these
-deterministically: `tone kick_4floor bassline hats chord_stab riser edm_drop
-full_track sine_sweep white_noise silence`. Pick the synth that best exercises
-your PRIMARY signal:
-- highs → `hats`; kick events → `kick_4floor`; bass → `bassline`;
-  build/flux → `riser` / `edm_drop`; everything together → `full_track`;
-  baseline / silence-safety → `silence`.
-
----
-
-## 5. Audio mapping (modulators-only) — wire signals to controls
-
-- **NEVER** read `micLow`/etc. directly in the pattern. The engine/harness pushes
-  the signal into your `slider*` setter via a modulation map. Document the intent
-  in the header:
-  ```text
-  AUDIO (modulators-only — never read CPC audio globals natively):
-      MODULATE sliderShimmer (shimmer) <- micHigh
-      MODULATE sliderRipple  (ripple)  <- micKick
-  ```
-- **Choose the mapping so the bars pass:**
-  - PRIMARY = a *continuous band → overall brightness* coupling, `corr >= 0.5`.
-    `micLow → brightness` is the reliable default. Make the whole rig's brightness
-    rise/fall with it (a level-driven gain that does NOT wobble with your own
-    animation phase — wobble kills the correlation).
-  - 2nd dimension = a *different* visual axis: `micHigh → sparkle/detail`,
-    `micKick → a discrete event`, `micFlux → a build`. These intentionally have
-    low brightness-correlation (they're not the brightness budget) — that's fine,
-    the harness only requires they drive a different dimension.
-  - Kick-gated patterns (shockwave, strobe, chevron, heartbeat) anchor their
-    PRIMARY corr on `kick_4floor` (where `micLow` actually varies); `full_track`'s
-    low band is near-constant so corr reads lower there — validate on the right synth.
-- **If a slider drives the PRIMARY corr only when other sliders are also
-  modulated** (e.g. a kick mod changes the brightness budget), validate with the
-  FULL intended `--mod` set, and note in the header that all mappings must be wired.
-
----
-
-## 6. Speed — `localSpeed` must actually move things (and you get global speed free)
-
-The engine advances the VM clock by `wallDelta * globalSpeedMultiplier()` and hands
-the pattern that already-scaled clock (`engine.js` `globalSpeedMultiplier` /
-`beginFrame(elapsed)`). So **`t`, `time(scale)`, and `beforeRender`'s `delta` are
-all pre-scaled by the global SPEED fader.** Therefore:
-
-- Drive **autonomous, continuous motion** from the clock (`t` / `time()` / `delta`)
-  so the pattern animates with **no audio mapped and all controls at default** —
-  never dead-static, never audio-only-motion.
-- Scale that motion's rate by `localSpeed` (canonical idiom):
-  ```javascript
-  export function beforeRender(delta) {
-    var localMultiplier = pow(2.0, (localSpeed - 0.5) * 4.0); // 0.5->1x, 1->4x, 0->0.25x
-    phase = (phase + (delta / 65536.0) * localMultiplier) % 1.0;   // delta-driven, OR
-    // tPhase = time(BASE_SCALE / localMultiplier);                 // time()-driven
-    _hsv2rgb1(); _hsv2rgb2();
-  }
-  ```
-- Keep a non-zero base rate so the pattern still creeps at `localSpeed = 0` if that
-  matters; for **direction** controls, never let the effective sign sit at exactly 0
-  (slider-center freeze) — guard it:
-  ```javascript
-  export function sliderDirection(v) {
-    var d = (v * 2.0) - 1.0;
-    if (d >= 0.0 && d < 0.06) d = 0.06; else if (d < 0.0 && d > -0.06) d = -0.06;
-    globalDir = d;
-  }
-  ```
-- **Autonomous direction variation (ground rule #2).** Don't run forever in one
-  heading. Layer a slow clock-driven sign over the manual `direction`, and on
-  *some* patterns let it **occasionally auto-switch** on an incommensurate
-  cadence so the rig never flips in lockstep. The manual control biases it; the
-  pattern still varies on its own at default:
-  ```javascript
-  // autoFlip drifts on an irrational period; sign() flips heading occasionally.
-  autoFlip = autoFlip + dt * localMultiplier * 0.013;   // ~slow, prime-ish rate
-  if (autoFlip >= 10000.0) autoFlip = autoFlip - 10000.0;
-  var autoDir = wave(autoFlip * 1.6180339) < 0.5 ? -1.0 : 1.0; // golden-ratio cadence
-  var heading = globalDir * autoDir;                    // manual bias × autonomous flip
-  ```
-  Vary the rate/cadence per pattern (different irrational multipliers) so they
-  feel individual. Never let `heading` resolve to exactly 0 (ground rule #5).
-
----
-
-## 7. Non-repeating math (and avoiding discontinuities)
-
-- Use incommensurate/irrational ratios so the look never re-locks:
-  `√2 ≈ 1.41421`, `√3 ≈ 1.73205`, `φ ≈ 1.61803`, golden-angle `≈ 2.39996`,
-  distinct primes. No plain integer periods.
-- **Wrap accumulating phases at a LARGE multiple of their period**, never at `1.0`
-  (or `2π`) if anything multiplies that phase by a non-integer factor. Wrapping a
-  phase to `0..1` and then using `phase * 0.5` somewhere jumps half a cycle at each
-  wrap → a visible seam/flash (this was the `34_moire_interference` bug). Pattern:
-  ```javascript
-  var PHASE_WRAP = 10000.0; // turns; far from any in-frame use
-  driftA = driftA + dt * localSpeed * MAX_RATE;
-  if (driftA >= PHASE_WRAP) driftA = driftA - PHASE_WRAP;
-  ```
-  Give each consumer its own accumulator rather than scaling a shared wrapped phase.
-
----
-
-## 8. Colour — strict cp1↔cp2, high contrast, blinders
-
-- Copy `_hsv2rgb1()` / `_hsv2rgb2()` verbatim from `27_swipe.js`; call both in
-  `beforeRender`. Blend **in RGB space** (`pr1/pg1/pb1 → pr2/pg2/pb2`), never in
-  HSV (HSV interpolation traverses non-palette hues).
-- Make `cp1` and `cp2` **distinct hues** and span both across the rig
-  (blend by position/value, or assign cp1/cp2 to two physical elements/parities).
-  Target `hueSpread >= 0.10`. Analogous palettes (warm golden-hour red→gold, or
-  blue→green underwater) sit near 0.10 by nature — that's acceptable for those
-  concepts; lean on W/UV for extra contrast there.
-- **Vintage blinder**: `if (sectionId == 2) { ...drive W hard on the kick... }`
-  via `rgbwau(r,g,b, w, a, u)`. Clamp every channel 0..1.
-- Keep a **small additive non-black floor** so silence is calm-but-visible.
-
-### 8.1 White control (the W channel + vintage blinders)
-The fixtures have a dedicated **white emitter** (the `w` arg of `rgbwau`). White
-is its own design dimension — not just `min(r,g,b)`. Reference patterns:
-`00_golden_hour_wash` (kick-driven vintage-blinder W) and `11_bioluminescence`
-(gentle white cores under colour). Aim for **~30% of the library to use white**,
-with the strongest effect being the **vintage heads as audience blinders**.
-
-- **Emit white explicitly**: `rgbwau(r, g, b, w, a, u)` with `w` computed
-  separately from the RGB colour. Plain `rgb()` leaves W=0 (white emitter off);
-  if `entry.w` is undefined the mapper backfills `W = min(r,g,b)` — so to *control*
-  white you must set `w` yourself. Clamp `w` to 0..1.
-- **Vintage blinder is the headline use**: drive `w` hard on `sectionId == 2`
-  (the upper vintage heads, fixtureId 5–6), gated by the kick, so the audience
-  gets a white punch on the beat. Keep the pars/bars (sections 1/3) coloured and
-  let the vintage heads carry the white bite. A small always-on warm-white keep
-  on the vintage heads is fine (golden-hour feel); the *pop* is audio-driven.
-- **A white pattern still obeys the ground rules**: white is additive on top of
-  the strict `cp1`/`cp2` geometry — it must not flatten the two-colour spread
-  (don't wash the whole rig white) and must not break silence-safety or the
-  no-static rule.
-
-**`white_*` control conventions** (identity sliders, §3; declare what the
-pattern needs, modulate the audio-reactive ones, §5):
-
-| Control | Meaning | Typical audio source |
-|---|---|---|
-| `whiteLevel` | overall white amount / base keep (raise/lower the white) | `micLow` or static |
-| `whiteKick` | kick-driven white *pop* (blinder bite on the beat) | `micKick` |
-| `whiteWarmth` | tint of the white toward warm (amber `a`) vs cool/UV (`u`) | static or `micMid` |
-| `blinderBite` | how hard/snappy the vintage-head blinder hits (attack/decay) | `micKick` / static |
-| `whiteSpread` | how far the white reaches across the rig / which sections | `micFlux` or static |
-
-Pick a sensible subset per pattern (most need `whiteLevel` + `whiteKick`; a true
-blinder pattern adds `blinderBite`/`whiteWarmth`). Store `v` directly, scale
-inside `render3D`. Document the white mapping in the header like any other:
-```text
-WHITE (modulators-only):
-    MODULATE sliderWhiteKick (whiteKick) <- micKick   // vintage-head blinder pop
-    MODULATE sliderWhiteLevel(whiteLevel)<- micLow    // overall white keep
+```javascript
+export var localSpeed = 0.5;
+export function sliderLocalSpeed(v) { localSpeed = v; }
 ```
-Validate white the same way as colour: it must read on the gallery clip
-(white pixels are visibly whiter than the palette) and, on `--buffer rig`, the
-vintage heads' W channel must actually rise on the kick — judge it on the
-`rig`/DMX bytes, not just the dark vis UI.
+
+Truthful means motion visibly accelerates and decelerates across the range.
+Declaring it and not scaling a rate by it is a bug, not a stylistic choice.
+
+### 2.2 `direction` — only when the concept has one, and then second
+
+Direction exists **only when the visual concept has real directional motion**.
+A breath, a symmetric bloom, an omni-directional shimmer has no direction —
+giving it one manufactures a dead knob. When it exists it is the **second**
+local control (memory fact `pattern-param-order` applies *when direction
+exists*), its endpoints must visibly produce opposite motion, and it must not
+freeze at slider centre:
+
+```javascript
+export var heading = 0.5;
+export function sliderDirection(v) {
+  var d = (v * 2.0) - 1.0;
+  if (d >= 0.0 && d < 0.06) d = 0.06;          // never exactly 0 at centre
+  else if (d < 0.0 && d > -0.06) d = -0.06;
+  heading = d;
+}
+```
+
+Autonomous direction reversal is an **OPTIONAL CAPABILITY**, not a requirement.
+Layering an auto-flip over a manual `direction` is precisely what made
+`01_cylon_sweep`'s direction unobservable. If you use auto-reversal, either do
+not also expose `direction`, or keep the manual control dominant enough that
+its endpoints still measurably reverse travel.
+
+### 2.3 Everything else earns its place
+
+There is **no** required `radius`, `kick`, `brightness`, `width` or `trail`.
+Ask what *this* look has handles for, expose those, name them for what they do,
+and stop.
+
+- **Never invent a control to fill a MIDI knob.** An empty knob is fine; a
+  lying knob is not. A pattern with three honest controls uses three knobs.
+- Handles worth exposing *when the look has them*: position, width/size,
+  energy, persistence, palette position, count
+  (`MARSIN_ENGINE_PATTERNS.md` §12.4).
+- **Identity-slider shape** — store the raw `0..1` value, scale at the use
+  site. That keeps the declared default meaningful and lets the offline truth
+  harness sweep it:
+
+```javascript
+export var shimmer = 0.35;
+export function sliderShimmer(v) { shimmer = v; }
+```
+
+- A control meant to be driven by a **transient** may legitimately be
+  edge-triggered and do nothing while *held*. Say so in the header — the truth
+  harness has a pulse probe for exactly that case.
+
+### 2.4 Ordering and the knob surface
+
+**HARD CONTRACT:** globals are declared before locals, and **declaration order
+of the `slider*` functions is the physical MIDI knob order**
+([`docs/34_captainpad_midi.md`](../../docs/34_captainpad_midi.md)). Never
+reorder, rename or delete an existing slider export on a rework — that moves
+the operator's hands. Append if you must add one, and say so.
+
+Practical limits (memory facts `mft-bank-usage`, `pattern-param-order`): bank 1
+row 0 is the engine globals (speed + sync, hue), leaving **12 knobs** for local
+sliders. **A pattern never declares a hue parameter** — hue is applied per
+channel by the engine.
 
 ---
 
-## 9. Verify — the offline harness loop (this is the gate)
+## 3. Step 3 — targeting: name the part of the ship
 
-From `marsin_engine/` (Node deps already installed; if a fresh checkout, `npm i`):
+**Use `inView("Authored View Name")`.** It is a compile-time intrinsic
+(`marsin_engine/lib/in_view_intrinsic.js`): it resolves the authored name to
+the exact membership test, picks the right view word for you, and an **unknown
+name is a hard compile error** listing the model's known views. It never folds
+to a silent constant-false test, and you never write bit arithmetic.
+
+```javascript
+export function render3D(index, x, y, z) {
+  if (inView("Stacks")) { rgb(1.0, 0.55, 0.10); }   // funnels stay gold
+  else { rgb(0.0, 0.35, 0.45); }
+}
+```
+
+**Do not build a coordinate or metadata fallback around it** — that is a codex
+P0 violation and it lets a broken model render *something* instead of failing
+where you can see it.
+
+### 3.1 The five instruments partition the ship
+
+Verified by [`_135`](../reports/202607/20260725_135_wave_verification.md): the
+five instrument views are **mutually exclusive and exhaustive** — they cover all
+24 base groups with zero overlap and sum to exactly **964 pixels**. That is what
+makes a per-instrument `if / else if` chain *provably* complete: nothing unlit,
+nothing double-assigned.
+
+| Instrument view | Px | Hardware | Emitters |
+|---|---:|---|---|
+| `Hull Canvas` | 360 | 20 × 18-px LED bar, four wall groups | RGB + W + Amber + UV |
+| `Silhouette` | 320 | 8 rope/strand runs of 40 | RGBW |
+| `Jewelry` | 96 | 16 × Vintage 6-head rail | RGBW |
+| `Organs` | 40 | 40 single-pixel pars (stacks + auditoriums) | RGB + W + Amber + UV |
+| `Identity` | 148 | 2 × 74-px TE sign | RGBW |
+
+Halves and subdivisions, all real view names: `Left Hull` · `Right Hull` ·
+`Left Silhouette` · `Right Silhouette` · `Left Jewelry` · `Right Jewelry` ·
+`Left Organs` · `Right Organs` · `Stacks` (24, the funnels only) ·
+`Left Stacks` · `Right Stacks` · `Auditoriums` (16).
+
+`Organs` = `Stacks` + `Auditoriums`. Reach for `Stacks` when you mean the
+funnels; `Organs` when you mean every par.
+
+The **24 finer base groups**, exact spelling:
+
+`Right Front Wall` · `Left Front Wall` · `Right Back Wall` · `Left Back Wall` ·
+`Right Front Rails` · `Left Front Rails` · `Right Back Rails` ·
+`Left Back Rails` · `Right Auditorium` · `Left Auditorium` ·
+`Left SmokeStack` · `Right SmokeStacks` · `Left Small SmokeStack` ·
+`Right Small SmokeStack` · `Left_Front_Left` · `Left_Back_Left` ·
+`Left_Back_Right` · `Left_Front_Right` · `Right_Back_Left` ·
+`Right_Back_Right` · `Right_Front_Right` · `Right_Front_Left` · `TE Sign` ·
+`TE Sign 2`
+
+**Copy the names, do not retype them from memory.** `inView()` matches
+literally and the spelling is irregular: **`Right SmokeStacks` is plural** while
+`Left SmokeStack` is singular; the rope strand groups use **underscores**
+(`Left_Front_Left`); the signs are `TE Sign` / `TE Sign 2`; `Left Auditorium` /
+`Right Auditorium` are singular *base groups* while the composite is
+`Auditoriums`. Source of truth for all 41 names:
+`MARSIN_ENGINE_PATTERNS.md` §7.3.1 →
+[`simulation/scenes/titanic/views.yaml`](../../simulation/scenes/titanic/views.yaml).
+
+Names that do **not** exist (each a hard compile error, not an empty
+selection): `All Bars`, `All Ropes`, `All Vintage Lights`, `All TE Signs`,
+`Left Identity`, `Right Identity`.
+
+### 3.2 Never hard-code a view's bit or word
+
+A composite's `(word, bit)` is an allocator decision that changes when the
+scene is re-saved — `Hull Canvas` has already moved once. `inView()`
+recompiles correctly; a hand-written mask silently tests the wrong pixels.
+
+### 3.3 `fixtureType` when the distinction is capability, not place
+
+```javascript
+export function render3D(index, x, y, z) {
+  if (fixtureType == FIX_PAR) { rgb(1.0, 0.6, 0.2); }  // one big wash source
+  else { rgb(0.1, 0.1, 0.3); }
+}
+```
+
+`FIX_RAW_LED` (1) · `FIX_PAR` (2) · `FIX_VINTAGE_6` (3) · `FIX_BAR_18` (4) ·
+`FIX_HAZE` (5) · `FIX_FOG` (6), from
+`marsin_engine/lib/fixture_type_constants.js`. A `FIX_*` the loaded model
+cannot satisfy **fails the compile**. Choose: `inView("…")` for *where on the
+ship*, `FIX_*` for *what kind of light this is*.
+
+Raw `sectionId` / `fixtureId` are for a pattern that is explicitly and only for
+one model — and the header must say so. Do not present them as portable.
+
+---
+
+## 4. Step 4 — timing
+
+**HARD CONTRACT: the engine owns the global speed clock.** `t`, `time(scale)`
+and `beforeRender`'s `delta` all arrive **already scaled** by the operator's
+SPEED fader (`engine.js` accumulates `patternClockSeconds += wallDelta *
+globalSpeedMultiplier()`). A pattern applies **only** its own `localSpeed`
+trim. There is no `speed` variable to read — `speed` and `size` are
+engine-owned and are never injected.
+
+```javascript
+export var localSpeed = 0.5;
+export function sliderLocalSpeed(v) { localSpeed = v; }
+
+var BASE_RATE = 0.08;          // still creeps at localSpeed = 0
+var SPAN_RATE = 0.45;
+var PHASE_WRAP = 10000.0;      // wrap far from any in-frame fractional use
+var travel = 0.0;
+
+export function beforeRender(delta) {
+  var dt = delta / 1000.0;     // seconds; delta is ms and may be 0
+  if (dt < 0.0) dt = 0.0;
+  if (dt > 0.1) dt = 0.1;      // tolerate a stalled frame
+  var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);   // 0→0.25× 0.5→1× 1→4×
+  travel = travel + dt * (BASE_RATE + SPAN_RATE * localMult);
+  if (travel >= PHASE_WRAP) travel = travel - PHASE_WRAP;
+}
+```
+
+Delta behaviour, measured (`MARSIN_PB_LANG_SPEC.md` §9.3):
+
+- `delta = (elapsed_now − elapsed_prev) × 1000` ms — a real step, and
+  global-speed-scaled like everything else.
+- **First-frames quirk:** the VM's previous-time slot starts at `0` and `0`
+  doubles as the "no previous frame" sentinel, so a freshly loaded pattern sees
+  **`16, 16, <real>, <real>, …`**. Never derive a frame rate from frame 1.
+- A repeated `elapsed` yields `delta == 0`. Accumulators must tolerate a zero
+  step.
+- The house divisors are `delta / 1310.72` (a 1.31 s loop) and
+  `delta / 65536.0` (65.5 s). `time(scale)` is the stateless alternative,
+  period `65.536 × scale` s.
+- **Wrap accumulating phases at a large multiple of their period, never at
+  `1.0`.** Wrapping to `0..1` and then multiplying that phase by a non-integer
+  factor jumps mid-cycle and flashes — that was the real `34_moire_interference`
+  bug. Give each consumer its own accumulator.
+- Never drive animation from a frame counter: during a transition your
+  `beforeRender` may run invisibly in a background buffer.
+
+---
+
+## 5. Step 5 — colour and output
+
+### 5.1 Palette: convert once, lerp in RGB
+
+Copy the `_hsv2rgb1()` / `_hsv2rgb2()` helpers verbatim from
+`MARSIN_ENGINE_PATTERNS.md` §9.2 (or from an existing pattern such as
+`marsin_engine/patterns/27_swipe.js`), call both in `beforeRender`, and lerp
+`pr1/pg1/pb1 → pr2/pg2/pb2` per pixel. **Never interpolate in HSV** — hue
+interpolation walks around the wheel and emits colours the operator never
+picked. Reserved single-letter names mean the helpers must use the `hv/iv/fv/
+pv/qv/tv` locals; `r`/`g`/`b` are fine as locals inside `render3D` only.
+
+Legitimate opt-outs: per-instrument palette *positions* (§5.3), additive W/UV
+lifts on dedicated emitters, and single-endpoint/monochrome concepts — say so
+in the header.
+
+### 5.2 `w == a` whenever white is emitted (HARD CONTRACT)
+
+The RGBWAU pars and bars carry **separate white and amber emitters**, and
+neither is a usable white alone. W and A driven to the same value is the warm
+white the whole show is tuned against.
+
+```javascript
+var outW = 0.0;
+export function render3D(index, x, y, z) {
+  outW = 0.4;
+  rgbwau(0.2, 0.1, 0.0, outW, outW, 0.0);   // W == A: the ship's warm white
+}
+```
+
+- Shape cooler/warmer whites **on the RGB lanes**, never by unbalancing W
+  against A.
+- **Amber is not a separate authoring accent lane** under this project's
+  convention — build gold and fire on RGB. `u` (UV) is independent.
+- Assign the amber lane *from* the white expression; never staple
+  `a = clamp01(w)` on at the end, or you overwrite whatever a control was
+  driving (that is why `13_sparkle / sliderAmberGlint` measures DEAD).
+- Enforced over every `rgbwau()` pattern by
+  `marsin_engine/tests/patterns/white_amber_lane_match.test.js` — no allowlist.
+- `rgb()` / `hsv()` leave W/A/U at zero; the sACN mapper then synthesizes
+  `W = min(R,G,B)` for DMX fixtures. **To control white you must emit it.**
+
+### 5.3 Per-instrument capability — what actually exists where
+
+| Path | Instruments | Behaviour |
+|---|---|---|
+| RGBWAU DMX | `Hull Canvas` (bars), `Organs` (pars) | W, A and U reach real emitters |
+| RGBW wire | `Silhouette`, `Identity` (and the Jewelry rail pixels) | **amber folded into RGB**, **UV dropped**, whole RGBW quad jointly pre-scaled so nothing clips |
+
+So a look carried by UV **does not exist** on the Silhouette or the signs. If
+UV or amber is carrying the idea, put it on the bars and pars and give the RGBW
+instruments something else.
+
+### 5.4 The colour-theory checklist (guidance, not engine rules)
+
+From [`docs/COLOR_THEORY.md`](../../docs/COLOR_THEORY.md) — run a look past
+this before you call it done:
+
+1. **Wash the wood warm; put saturation in the pixels.** The exterior is
+   stained wood: warm light is amplified, pure blue wash is eaten and reads
+   muddy and patchy. Saturated blues/purples belong on the direct-view
+   instruments (`Silhouette`, `Jewelry`, `Identity`) where nothing distorts
+   them. Want cool on wood? Teal/cyan, not pure blue. Deep red is the one
+   non-warm hue that survives the yellow stain.
+2. **Stacks stay warm** — gold/amber funnels are the highest-visibility
+   combination the ship has, and keeping them warm inside a cool look reads as
+   intentional. `inView("Stacks")` makes it one line. **Operator ruling: this
+   is artistic guidance, not an enforced rule** — and note `Organs` drags the
+   auditoriums along, so target `Stacks` when you mean the funnels.
+3. **One palette does not mean one colour.** Same two endpoints, different
+   palette *position*, luminance, saturation and motion per instrument. Pick
+   `blend` from `inView(...)` / `fixtureType` instead of from a continuous
+   gradient:
+
+```javascript
+var pr1 = 1.0, pg1 = 0.4, pb1 = 0.0;
+var pr2 = 0.0, pg2 = 0.5, pb2 = 0.9;
+var sweep = 0.5, hit = 0.8, signLevel = 0.7;
+
+export function render3D(index, x, y, z) {
+  var blend = 0.5;
+  var v = 1.0;
+  if      (inView("Hull Canvas")) { blend = sweep; v = 0.6; }
+  else if (inView("Silhouette"))  { blend = 0.0;   v = 1.0; }
+  else if (inView("Jewelry"))     { blend = 1.0;   v = 0.25; }
+  else if (inView("Organs"))      { blend = 1.0;   v = hit; }
+  else if (inView("Identity"))    { blend = 1.0;   v = signLevel; }
+  rgb((pr1 + (pr2 - pr1) * blend) * v,
+      (pg1 + (pg2 - pg1) * blend) * v,
+      (pb1 + (pb2 - pb1) * blend) * v);
+}
+```
+
+4. **Dark paint is free negative space.** Don't spend wash intensity on it.
+5. **Identity punctuates, it does not compete.** A sign that always animates is
+   a sign nobody reads.
+6. **Keep the Silhouette lit** if the pattern is an exterior show piece — that
+   outline is what makes the ship recognisable at distance. This is a
+   *judgement*, not a floor the engine checks.
+
+---
+
+## 6. Step 6 — portability
+
+- **`pixelCount` compiles to the literal `144`.** Never size a buffer or an
+  index with it.
+- **Do not hard-code a bench pixel count either.** `test_bench` is 52 px, the
+  Titanic is 964. Prefer formulations that need no model-sized array at all:
+
+| Instead of | Use |
+|---|---|
+| per-pixel history buffer | a **scalar decay envelope** gated by position |
+| per-pixel comet tail | a moving head + `smoothstep(head + len, head, x)` — spatial, resolution-independent |
+| ghosting an arbitrary pattern | the **`feedbackTrails` global effect** (`marsin_engine/effects/feedbackTrails.js`) — whole-frame feedback, no pattern code |
+
+```javascript
+export var localSpeed = 0.5;
+export function sliderLocalSpeed(v) { localSpeed = v; }
+export var fade = 0.5;
+export function sliderFade(v) { fade = v; }
+
+var clock = 0.0, env = 0.0, lastPhase = 0.0;
+
+export function beforeRender(delta) {
+  var localMult = pow(2.0, (localSpeed - 0.5) * 4.0);   // localSpeed ONLY
+  var dt = (delta / 1310.72) * localMult;
+  clock = clock + dt * 0.5;
+  var phase = clock % 1.0;
+  if (phase < lastPhase) env = 1.0;                     // fire on each wrap
+  lastPhase = phase;
+  env = env - dt * (1.5 + fade * 4.0);
+  if (env < 0.0) env = 0.0;
+}
+
+export function render3D(index, x, y, z) {
+  var head = clock % 1.0;
+  hsv(0.08, 1.0, env * smoothstep(head + 0.1, head, x));   // no array, portable
+}
+```
+
+- If the effect genuinely needs independent per-pixel memory, allocate in
+  top-level init only, and **label the array model-specific** in a comment
+  naming the model and its pixel count.
+- State is per-VM-instance and **resets on (re)compile** — a load, a live edit,
+  a deck swap, a transition instantiating a fresh buffer. Never assume a trail
+  survives a pattern change.
+- Coordinates arrive **normalized `0..1`**. Do not re-normalize them; that has
+  rendered whole patterns black.
+- Keep the per-pixel path light: **5000 instructions per pixel**, and an
+  overrun renders that pixel solid red. Do `O(N)` work in `beforeRender`.
+
+---
+
+## 7. Step 7 — audio, if the pattern has a handle for it
+
+**HARD CONTRACT: patterns never read live audio.** There is no `micLow` to
+declare — the engine refuses to bind the live audio family into pattern
+globals. Audio reaches a pattern only as a **modulation onto an ordinary
+`slider*`**, so the same file is a calm idle at rest and a tightly locked
+instrument once mapped, with no code change.
+
+Audio reactivity is **not required per pattern**. A pattern with no
+modulation-worthy handle simply has none.
+
+When it does, declare the mapping in the header as an **`AUDIO_MODULATION_V1`
+block** — the parseable format the offline tooling auto-discovers
+(`marsin_engine/tools/audio_mod_spec.mjs`). One mapping per line, strict:
+
+```text
+AUDIO_MODULATION_V1:
+  sliderSwell   <- micLow  range 0.30..0.95 curve linear   # PRIMARY brightness
+  sliderSparkle <- micHigh range 0.00..0.80 curve pow2     # fine detail
+  sliderKick    <- micFlux range 0.00..0.90 curve linear   # build → bloom
+Static (unmapped) params: localSpeed, uvGlow, base, colorPalette1/2.
+```
+
+- `slider<Name> <- mic<Sig> range <a>..<b> curve <linear|pow2|ease>  # note`.
+- Signals for this block: `micLow` · `micMid` · `micHigh` · `micKick` ·
+  `micFlux`. A line that looks like a mapping but is malformed is a **hard
+  error** — never a silently dropped mapping.
+- The deployed engine applies each as an OVERRIDE: `param = lerp(min, max,
+  curve(signal))`. The block is what `tools/gallery/gen_variations.mjs` turns
+  into the harness `--mod` string, so the offline sound clip matches the rig.
+- Richer second-tier signals (structure, tempo grid, derived cues) exist and
+  are listed in `MARSIN_ENGINE_PATTERNS.md` §8; drive them offline with
+  `tools/pattern_derived_harness.mjs`.
+- Give every mapped slider a **resting default that already looks good with
+  nothing mapped**.
+
+---
+
+## 8. Step 8 — verify offline (the gates)
+
+Run these from `marsin_engine/`. None of them opens a socket or binds a port,
+so they are safe while the operator's stack holds 6966–6972 and 5568.
+
+### 8.1 Parameter truth — the gate for the §2 policy
+
+This is the tool that decides whether your controls are honest. It loads the
+pattern into the engine's own WASM VM **with the full view table, `MASK_*` and
+`FIX_*` injection**, sweeps every declared `slider*`, measures what actually
+changed in the rendered light, and checks it against what the name claims.
+Verdicts: `TRUE` · `DEAD` · `WRONG` · `WEAK` · `UNKNOWN_CLAIM`.
 
 ```bash
 cd marsin_engine
-node tools/pattern_audio_harness.mjs \
-  --pattern patterns/NN_name.js \
-  --synth full_track --frames 96 \
-  --mod micLow:sliderLevel,micHigh:sliderDetail,micKick:sliderEvent \
+node tools/param_truth/run_param_truth.mjs --pattern NN_name --model titanic \
+  --out ~/tmp/param_truth_NN
+node tools/param_truth/sweep_all.mjs                    # the whole library
+```
+
+- `--model` defaults to `titanic`. Add `--cross-model test_bench` to catch
+  targeting that only works on one rig.
+- **Always pass `--out` to a scratch path.** The default writes into the source
+  tree at `marsin_engine/tools/param_truth/param_truth_results.{json,md}`,
+  which is not gitignored — a targeted run would otherwise overwrite the
+  library-wide sweep result.
+- A `DEAD`/`WRONG` verdict on a control you declared is a bug in the pattern,
+  not in the harness. Fix the control or delete it.
+
+### 8.2 Audio harness + the gate
+
+```bash
+cd marsin_engine
+node tools/pattern_audio_harness.mjs --pattern patterns/NN_name.js \
+  --model titanic --synth full_track --frames 96 --gate \
+  --mod micLow:sliderSwell:0.30:0.95:linear,micHigh:sliderSparkle:0.00:0.80:pow2 \
   --out ~/tmp/genkit/out/NN_name.json
 ```
 
-Read these lines and tune the `.js` until all pass:
+**Pass `--gate` on every gate run** (operator instruction, and the `_90`
+ChatGPT loop depends on it): the verdict always prints, but only `--gate` makes
+a failure a non-zero exit (3) that automation can trust. Named failures:
 
-- `COMPILE_OK` (else fix the language error printed).
-- `QUALITY hueSpread=.. darkFrac=.. brightFrac=.. peakMaxChan=..` →
-  need `hueSpread >= 0.10`, `peakMaxChan >= 200`, sensible dark/bright for the concept.
-- `AUDIO_REACT <sig>-><slider>: corr=.. (REACTIVE|weak)` → PRIMARY `corr >= 0.5`.
-- `TOTAL_BRI .. (ANIMATING|LOW-VARIATION)` — note: spatial motion can be real even
-  when *total* brightness is flat; trust the code, but confirm motion exists.
+| Reason | Meaning |
+|---|---|
+| `DARK` | more than `--max-dark-frac` (default 0.5) of the window renders essentially black |
+| `BLACK_LATCH` | lit early, then latches black later — the "sleeper" case, caught by rendering `--gate-frames` (default 600 ≈ 15 s) past the clip |
+| `OVER_BUDGET` | mean VM render time exceeds `--budget-ms / --mix-channels` (default 25 ms / 4 channels) |
 
-Also run **silence** (calm, non-black, no crash) and the synth that best exercises
-each signal:
+`GATE_WARN DIM` (peak < 200) is **advisory** — appropriate to ignore on a
+deliberately soft ambient pattern.
+
+Other lines it prints, and how to read them:
+
+- `COMPILE_OK` / `COMPILE_FAIL: <language error>` — read the error, it is exact.
+- `QUALITY hueSpread=… darkFrac=… brightFrac=… peakMaxChan=…` — **diagnostics,
+  not universal bars.** `hueSpread` flags a two-colour spread above 0.06;
+  `peakMaxChan >= 200` is the tool's "not dim" heuristic. Judge them against
+  *your* concept: an analogous palette or a quiet ambient wash legitimately
+  sits low on both.
+- `AUDIO_REACT <sig>-><slider>: corr(signal,brightness)=…` — labels
+  `(REACTIVE)` above |0.35|. A slider that reshapes geometry rather than
+  brightness will read low here **and still be correct**; that is a property of
+  the metric, not a defect.
+- `TOTAL_BRI … (ANIMATING|LOW-VARIATION)` — spatial motion is real even when
+  *total* brightness is flat.
+- `LIT_BY_SECTION` — a per-`sId` diagnostic of the loaded model. It is a
+  debugging aid only; do not turn it into targeting.
+
+Also run **silence** (calm, non-crashing baseline) and the synth that best
+exercises your primary signal — `hats` for highs, `kick_4floor` for kick
+events, `bassline` for lows, `riser`/`edm_drop` for builds, `full_track` for
+everything:
 
 ```bash
-node tools/pattern_audio_harness.mjs --pattern patterns/NN_name.js --synth silence --frames 96
-node tools/pattern_audio_harness.mjs --pattern patterns/NN_name.js --synth kick_4floor --frames 96 --mod micKick:sliderEvent
+node tools/pattern_audio_harness.mjs --pattern patterns/NN_name.js \
+  --model titanic --synth silence --frames 96 --gate
 ```
 
-**Discontinuity check** (catch seams/flashes the bars miss): capture 240 silent
-frames and compare per-frame mean abs delta — a spike ≫ the median = a seam (fix per §7).
+> **Known tooling gap — measured, not assumed.** `pattern_audio_harness.mjs`
+> injects `FIX_*` but **not** the view table or `MASK_*`, so a pattern that
+> calls `inView("…")` fails there with
+> `COMPILE_FAIL: … strings cannot be used as a function argument`. Anything
+> built on it inherits that: `tools/gallery/gen_variations.mjs`, and the
+> offline clip path in §9. Until the harness mirrors
+> `WasmHost.compile()`'s injection, an `inView()`-targeted pattern is gated by
+> **§8.1 param truth** (which is full engine parity) plus §8.4, and its clip
+> comes from a live capture (`tools/capture_vis.mjs`, engine required —
+> operator-run). Do **not** work around this by rewriting `inView()` targeting
+> into coordinates or `sectionId`; that is the very regression this skill
+> exists to stop.
 
----
+### 8.3 Derived-signal harness
 
-## 10. Widget — render the real per-pixel output
+For second-tier signals (structure, phrase, countdown, onsets), driven through
+the real detector chain and auto-discovering your `AUDIO_MODULATION_V1` block:
+
+```bash
+node tools/pattern_derived_harness.mjs --pattern patterns/NN_name.js \
+  --model titanic --synth edm_drop --frames 240
+```
+
+### 8.4 CI tests
 
 ```bash
 cd marsin_engine
-node tools/make_vis_clip.mjs --in ~/tmp/genkit/out/NN_name.json --out ~/tmp/genkit/out/NN_name.html --fps 14
+node --test tests/patterns/white_amber_lane_match.test.js   # the w == a invariant
+node --test tests/patterns/specialty_white_uv.test.js tests/patterns/param_truth_smoke.test.js
 ```
 
-This is the LED-strip clip (Pause + Speed), grouped by section, physical order —
-the same look as CaptainPad DECK MAIN. See skill `08` for the widget anatomy.
-(Inline `show_widget` works in the desktop/terminal client; if it ever doesn't,
-use the gallery below.)
+### 8.5 Discontinuity check
 
-**~10 s clips + physical map view.** Record real-time clips with the harness'
-`--seconds 10` (default `--out-fps 20` → 200 frames; big rigs auto-downsample
-with a printed `DOWNSAMPLED:` line). For the titanic and other rigs, `make_vis_clip`
-defaults (`--layout auto`) to a **top-down physical map** — each pixel a glowing
-dot at its real coordinate — instead of strips; `--view top|front` sets the
-plane. See skill `13` / the gallery README for the flags.
+Capture a few hundred silent frames and compare the per-frame mean absolute
+delta: a spike far above the median is a seam or flash. Fix it by re-checking
+your phase wrapping (§4).
 
 ---
 
-## 11. Gallery — review it on your phone (offline, over Tailscale)
+## 9. Step 9 — clips and phone review
 
-The gallery is a **standalone offline tool** (`marsin_engine/tools/gallery/`), NOT
-wired to the launcher — start it separately.
-
-**Publish** a pattern (preferred form builds the clip for you; pass `--layout` /
-`--view` to control the map projection, e.g. a titanic top-down clip):
 ```bash
 cd marsin_engine
+node tools/make_vis_clip.mjs --in ~/tmp/genkit/out/NN_name.json \
+  --out ~/tmp/genkit/out/NN_name.html --fps 14 [--layout strip|map|auto] [--view top|front|auto]
+```
+
+`--layout auto` gives a **strip** for `test_bench` and a **top-down physical
+map** — one glowing dot per pixel at its real coordinate — for the Titanic and
+other large rigs. Real-time clips: `--seconds 10` on the harness (default
+`--out-fps 20`); big rigs auto-downsample with a printed `DOWNSAMPLED:` line,
+never a silent truncation.
+
+Publish for phone review (full detail in
+[`.agent/skills/pattern_gallery.md`](pattern_gallery.md)):
+
+```bash
 node tools/gallery/publish.mjs --name NN_name --capture ~/tmp/genkit/out/NN_name.json
-# -> writes tools/gallery/widgets/NN_name.html, prints /w/NN_name
-# titanic top-down physical map (auto-selected for non-test_bench rigs):
 node tools/gallery/publish.mjs --name NN_name --model titanic \
-  --capture ~/tmp/genkit/out/NN_name__titanic.json   # [--view top|front] [--layout strip|map]
+  --capture ~/tmp/genkit/out/NN_name__titanic.json      # [--view top|front] [--layout strip|map]
+node tools/gallery/server.mjs                            # port from gallery_config.json
 ```
 
-**Start** the server (once; it re-reads the widgets dir per request, so re-publish
-without restarting):
-```bash
-cd marsin_engine
-node tools/gallery/server.mjs            # port from gallery_config.json (6965), binds 0.0.0.0
-```
-It prints the candidate URLs; on the **phone** (Tailscale up) open
-`http://<your-tailscale-ip>:6965/`, use the search box, tap the pattern name, and
-watch the visualization. (`/` = index, `/w/<name>` = the clip, `/api/list` = JSON.)
-
-So the loop is: *"I just made `NN_name`"* → `publish.mjs --name NN_name` →
-operator opens the gallery on the phone → selects `NN_name` → sees it live.
-
-See skill `pattern_gallery.md` and `marsin_engine/tools/gallery/README.md`
-for full details.
+`gen_variations.mjs` produces the paired **static** (`--synth silence`) and
+**sound** (driven by your `AUDIO_MODULATION_V1` block) clips the gallery offers
+as variations. The operator does the final on-phone visual pass.
 
 ---
 
-## 12. Register, test, commit
+## 10. Step 10 — register
 
-1. Add the file to `marsin_engine/patterns/manifest.json` (keep numbers distinct).
-2. Keep the suite green: `cd marsin_engine && node --test tests/companion_*.test.js`.
-3. Spot-check it loads in the real engine, then restore runtime residue:
-   ```bash
-   cd marsin_engine
-   node engine.js --pattern NN_name --model test_bench --dry-run
-   git restore marsin_engine/states/ simulation/   # after any engine boot
-   ```
-4. Commit to the working branch (currently `feat/highdef_patterns`) with the repo
-   footers. Don't open a PR unless asked.
+1. Add the file stem to `marsin_engine/patterns/manifest.json` (keep numbers
+   distinct). Examples under `patterns/examples/` stay unregistered.
+2. Re-run §8.4 and keep the suite green.
+3. **No git operations** unless the operator asks.
+4. After any live engine boot the engine writes runtime state into tracked
+   `marsin_engine/states/` files. That residue is expected — **report it, do
+   not silently revert it.**
 
 ---
 
-## 13. Doing it at scale — the sub-agent fleet
+## 11. Doing it at scale — the sub-agent fleet
 
-For a batch (redo N + create M), fan out **one pattern per sub-agent**, several at a
-time (the operator has allowed up to 10 concurrent). Each sub-agent: reads the
-template + its source pattern + the docs, writes/edits ONE pattern file, iterates the
-§9 harness loop until all four bars pass, builds the clip, and returns the final
-QUALITY + AUDIO_REACT lines + the exact `--mod` string. The orchestrator must:
+For a batch, fan out **one pattern per sub-agent**. Each sub-agent reads the
+guide + this skill + its source pattern, writes/edits ONE file, iterates §8
+until its controls measure `TRUE` and the gate passes, and returns the exact
+verdict lines plus the `--mod` string it used.
 
-- Keep `manifest.json`, git, and commits **central** (sub-agents never touch them) —
-  avoids write races.
-- **Independently re-run the harness** on each returned pattern (don't trust
-  self-reports) on the synth where its bars are claimed.
+The orchestrator must:
+
+- Keep `manifest.json` and all git operations **central** — sub-agents never
+  touch them, which avoids write races.
+- **Independently re-run §8.1 and §8.2 on every returned pattern.** Do not
+  trust self-reports.
 - Publish each accepted pattern to the gallery for operator review.
 
 ---
 
-## 14. Gotchas (learned the hard way)
+## 12. Gotchas (learned the hard way)
 
-- `render3D` coords are **0..1**; re-normalizing renders patterns black/dim.
-- `pixelCount` is a literal 144 — size buffers with `var N = 52;`.
-- The standalone host applies declared `export var` defaults via the harness; prefer
-  identity sliders so the default lands where you expect.
-- A wrapped-then-scaled phase causes a periodic seam — wrap at a large multiple (§7).
-- The LIVE engine applies a GLOBAL palette that overrides per-pattern cp1/cp2, so
-  "use two colours" means the *geometry* must span both ends regardless of the hues.
-- After any engine boot: `git restore marsin_engine/states/ simulation/`.
-- `localSpeed` present but unused, or motion only from audio, = a bug (dead-static).
+- `render3D` coords are already `0..1`; re-normalizing renders patterns black.
+- `pixelCount` is a literal `144`. `test_bench` is 52 px, the Titanic 964.
+- A phase wrapped at `1.0` and then scaled by a fraction flashes once per wrap.
+- The LIVE engine applies a **global palette** that overrides per-pattern
+  `cp1`/`cp2` — so "use two colours" means the *geometry* must span both
+  endpoints regardless of the hues you defaulted.
+- `localSpeed` declared but unused, or motion that only exists when audio is
+  mapped, is a bug.
+- `sectionId` numbering is **not** portable — see §3. Existing patterns that
+  branch on it are single-model until someone migrates them; say so rather than
+  pretending otherwise.
+- Reserved identifiers cannot be declared: `t i index x y z pixelCount PI PI2
+  true false controllerId sectionId fixtureId fixtureType viewMask
+  pixelLocalIndex viewMaskHi`. `viewMaskHi` may only ever appear as
+  `(viewMaskHi & MASK)` — which is what `inView()` emits for you.
+- Trig is **radians**; `wave` / `triangle` / `square` take a `0..1` turn.
+- Never wrap an import, a fallback, or a "safe default" around a failure. This
+  repo fails loudly on purpose (codex P0).

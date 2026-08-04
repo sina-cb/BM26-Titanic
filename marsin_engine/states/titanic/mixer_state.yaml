@@ -1,5 +1,36 @@
 master: 1
-channels: []
+channels:
+  - id: ch_1785801995942_0
+    name: New Layer
+    pattern: 11_bioluminescence
+    mode: blend_screen
+    fader: 1
+    enabled: true
+    locked: false
+    faderLocked: false
+    transitionMode: trans_crossfade
+    transitionTime: 1
+    localControls: {}
+    playlist:
+      name: default
+      activeEntryId: e_default_20_11_bioluminescence
+      cursor: 20
+      autopilot:
+        active: false
+        delay_s: 30
+        shuffle: false
+    viewSelection:
+      type: all
+      target: null
+      invert: false
+    faderMax: 1
+    color: null
+    mixGroupId: null
+    soloSafe: false
+    hue: 0
+    followsTempo: false
+    followLeaderId: null
+    followScale: 1
 mixGroups: []
-tempoBpm: 143
-tempoSourcePref: osc
+tempoBpm: 120
+tempoSourcePref: tap

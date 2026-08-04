@@ -743,8 +743,11 @@ export class TimelineService {
         // is in play. Applies the DECK CHANNEL's per-channel hue alongside
         // the deck swap (per-channel only — no global shifter).
         if (action.hue !== undefined && onDeck) await this._applyHue(action.hue, steps);
-        // globals (SPEED/SIZE/bpmSpeedSync) — validated DECK-ONLY (show_plan.js).
-        // Routes through _writeGlobals → setParams, exactly like a look's globals.
+        // globals (SPEED/bpmSpeedSync; the map is generic — a legacy
+        // hand-authored `size` still passes through) — validated DECK-ONLY
+        // (show_plan.js). Routes through _writeGlobals → setParams, exactly
+        // like a look's globals. The maker stopped emitting cue-level `size`
+        // (operator ruling 2026-08-03).
         if (action.globals && onDeck) await this._writeGlobals(action.globals, steps, 'cue globals');
         // The plan is driving the DECK → pin engine output to the deck (docs/38
         // §16.9). Reuses the existing viewOverride machinery via the injected dep.

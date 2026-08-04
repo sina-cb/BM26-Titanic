@@ -501,7 +501,41 @@ function applyUniverseSubscriptions({ receiver, wanted, reason, onLog, onError }
   return { added, failed, invalid };
 }
 
+// ── Route-table introspection (report 20260725_127) ─────────────────────────
+//
+// The per-output push's third check reads the bridge's ACTIVE route table back
+// instead of trusting its own `setScene` notify. The bridge answers a
+// `{type:'getRoutes'}` WS message with this snapshot, built from its LIVE
+// sender maps — not from what a recompute intended, but from what exists. Pure
+// so the wire shape is pinned by unit tests; the bridge passes its maps in.
+
+/**
+ * @param {Object} args
+ * @param {*}    args.reqId        echoed verbatim so the client can correlate.
+ * @param {Map}  args.routeEntries the bridge's live relay senders
+ *                                 (routeKey → {universe, ip, sender…}).
+ * @param {Map}  args.mirrorEntries live bench-mirror senders (same entry shape).
+ * @param {Array<{universe:number, ip:string}>} args.excluded engine-owned pairs
+ *        the bridge deliberately does NOT relay (last recompute's exclusions).
+ * @param {Iterable<string>} args.activeScenes last recompute's active scenes.
+ * @returns {{type:'routes', reqId:*, routes:Array, engineOwned:Array,
+ *            mirrorOwned:Array, activeScenes:string[]}}
+ */
+function buildRouteTableSnapshot({ reqId, routeEntries, mirrorEntries, excluded, activeScenes }) {
+  const byPair = (a, b) => (a.universe - b.universe) || a.ip.localeCompare(b.ip);
+  const toPair = (e) => ({ universe: e.universe, ip: e.ip });
+  return {
+    type: 'routes',
+    reqId: reqId === undefined ? null : reqId,
+    routes: [...routeEntries.values()].map(toPair).sort(byPair),
+    engineOwned: [...(excluded || [])].map(toPair).sort(byPair),
+    mirrorOwned: [...mirrorEntries.values()].map(toPair).sort(byPair),
+    activeScenes: [...(activeScenes || [])].map(String),
+  };
+}
+
 module.exports = {
+  buildRouteTableSnapshot,
   computeEffectiveRoutes,
   computeUniverseSubscriptionDiff,
   applyUniverseSubscriptions,

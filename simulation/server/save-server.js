@@ -330,6 +330,16 @@ http.createServer((req, res) => {
                     sectionId: fixture.sectionId || 0,
                     fixtureId: fixture.fixtureId || 0,
                     viewMask: fixture.viewMask || 0,
+                    // `viewMaskHi` — the Tier-C HIGH view word (word 1), which
+                    // is where the view allocator puts new custom views, so a
+                    // fixture-clicked view's membership lives HERE, not in
+                    // `viewMask`. Written only when non-zero: the reader's
+                    // declared default is 0 (view_registry `fixtureInView`), so
+                    // an absent key is the value it already assumed, and a
+                    // scene with no word-1 per-fixture view re-saves a
+                    // byte-identical patches.yaml.
+                    ...((fixture.viewMaskHi || 0) !== 0
+                      ? { viewMaskHi: fixture.viewMaskHi } : {}),
                   };
                 }
                 // Clean structural tree
@@ -340,6 +350,10 @@ http.createServer((req, res) => {
                 delete fixture.sectionId;
                 delete fixture.fixtureId;
                 delete fixture.viewMask;
+                // Unconditional, exactly like `viewMask` above: the field
+                // belongs to the patch record, and a zero left behind on the
+                // structural tree would be a second, silently diverging copy.
+                delete fixture.viewMaskHi;
               }
             });
           }
@@ -830,7 +844,14 @@ http.createServer((req, res) => {
         const parsed = JSON.parse(body);
         ip = parsed.ip;
         const gamma = parsed.gamma;
-        ledGamma.pushGamma(ip, gamma, { onLog: (m) => console.log(`[SAVE SERVER][gamma] ${m}`) })
+        // controllerName rides along for ONE purpose: repairing an invalid
+        // STORED deviceName (docs/41 §4.1.1) — a board in that state rejects
+        // every write, gamma included. Verbatim repair or loud refusal,
+        // decided in led_gamma_service.gammaPushBody.
+        ledGamma.pushGamma(ip, gamma, {
+          controllerName: parsed.controllerName,
+          onLog: (m) => console.log(`[SAVE SERVER][gamma] ${m}`),
+        })
           .then((result) => {
             console.log(`[SAVE SERVER] ✅ gamma pushed to ${ip}: ` +
               `${JSON.stringify(result.verified)} (${result.outcome})`);

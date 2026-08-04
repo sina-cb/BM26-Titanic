@@ -380,10 +380,10 @@ params:
       lastOrigin: init
       lastRevision: 73
 dimmers:
-  '1': 0.1696428571428571
-  '2': 0.2410714285714286
-  '3': 0.1875
-  '5': 1
-  '6': 1
+  ParLights: 0.1696428571428571
+  VintageLights: 0.2410714285714286
+  BarLights: 0.1875
+  LED_0: 1
+  LED_1: 1
 controlLock: null
 invert: false

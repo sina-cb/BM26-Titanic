@@ -408,6 +408,47 @@ VERIFIED values into `controllers.yaml`
 `simulation/agent_tools/led_gamma_push.cjs` (same shared implementation,
 `simulation/server/led_gamma_service.cjs`).
 
+### 4.1.1 `deviceName` — the field EVERY write is validated against
+
+`ConfigManager::update` merges the partial body into the **stored** config and
+then validates the **whole merged document**. So a device whose *stored*
+`deviceName` is invalid rejects **every** `POST /api/config` — including bodies
+that never mention the field:
+
+```text
+400 {"error":"config apply failed","field":"deviceName",
+     "detail":"1-32 chars, letters/digits/-._ only"}
+```
+
+Verified live 2026-08-03 on the `10.x.x.60` board, which shipped with
+`deviceName: ""`: a **no-op gamma write** (`{"gamma":{"r":1,"g":1,"b":1,"w":1}}`
+— the values it already held) earned the identical 400. Report
+`20260725_124_marsinled_push_devicename.md`.
+
+Consequence for the push: on such a board, *not* writing `deviceName` is not
+"leave the device alone", it is "no config can ever be written". So
+`pushPerOutputUniverses` adds **one** key beyond `strands` + `dmx`, and only
+then: it writes `deviceName` = **the controller card's name, verbatim**
+(`deviceNameRepairForPush`, `marsinled_client.js`). No sanitizing, no
+truncation, no substitution — if the card's name is not itself a legal device
+name the push **refuses before the POST** and names the rename to make. A board
+whose stored name is already valid is never renamed, and a `GET /api/config`
+that does not carry the field at all is left alone. The repair is declared in
+the push confirm dialog on its own heading (it also changes the device's
+mDNS/AP name) and appears in the payload preview. Every other path —
+`pushConfig` included — still refuses `deviceName` outright (`DENIED_PUSH_KEYS`).
+
+The **gamma push carries the identical repair** (report
+`20260725_126_gamma_push_devicename.md`): `led_gamma_service.cjs` consumes the
+client's `deviceNameRepairForPush` directly (Node `require(esm)` — one
+implementation, no drifting copy) and, when the stored name is invalid, adds
+`deviceName` = the controller card's name verbatim to the `{gamma}` body, or
+refuses before the POST naming the rename. The UI sends the card name with
+every `POST /led/gamma-push`; the CLI takes `--device-name <card name>`. If a
+gamma write is still rejected with `field=deviceName` on a body that never
+carried the field, the error now explains this §4.1.1 quirk instead of
+parroting the device's misleading message.
+
 ### 4.2 Validation bounds (reject before sending)
 
 - `strands`: 1–16 entries; **≥1 enabled**; unique `pinData` across strands;
@@ -481,16 +522,28 @@ read-back verify it runs, in order:
    follow)" — because it saves the whole scene, not just the mapping;
 2. **the bridge notify** — a `setScene` over the sACN WS, chained on the save's
    completion (never on a timer), which makes the bridge re-read `patches.yaml`
-   and recompute its relay routes.
+   and recompute its relay routes;
+3. **the bridge route read-back** (report `20260725_127`) — the bridge's ACTIVE
+   route table is read back over the same WS (`{type:'getRoutes'}` →
+   `{type:'routes'}`, answered from the live sender maps), and the third check
+   renders ✓ only when every expected `(universe → controller IP)` pair exists
+   — spill universes included — and every PARKED universe is ABSENT for this
+   controller. A pair the ENGINE delivers directly counts as confirmed
+   `[engine-direct]` (the one-writer arbitration working); a pair the BENCH
+   MIRROR owns is a named one-writer conflict, never a ✓.
 
 Each step is reported in the dialog: `✓ device written + verified · ✓ scene
-saved (patches projected) · ✓ bridge notified — routes follow`. **Any step
-failing is red and names the stale layer** — "the device WAS written (cannot be
-rolled back); the sACN feed was NOT updated: `<scene save|bridge notify>` — LEDs
-will not follow until a successful save." The device write is deliberately NOT
+saved (patches projected) · ✓ bridge routes confirmed (U30,U31→10.1.1.60)`.
+**Any step failing is red and names the stale layer** — "the device WAS written
+(cannot be rolled back); the sACN feed was NOT updated: `<scene save|bridge
+notify>` — LEDs will not follow until a successful save", and a failed
+read-back names exactly the missing/extra routes ("✋ bridge routes NOT
+confirmed: missing U31→10.1.1.60 …"). The device write is deliberately NOT
 rolled back (that would be a hidden fallback plus a second reboot); a failed save
 also suppresses the notify, because telling the bridge to re-read an unchanged
-file only makes a stale feed look fresh. **Push all** runs one save + one notify
+file only makes a stale feed look fresh, and a failed notify suppresses the
+read-back (it would measure the old world). **Push all** runs one save + one
+notify + one read-back over the union of every pushed controller's routes
 after the last controller, not one per device.
 
 **A save alone is sufficient for mapping-only changes.** Both 💾 buttons — the

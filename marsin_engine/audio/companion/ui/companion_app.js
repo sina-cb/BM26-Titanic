@@ -42,6 +42,15 @@ const S = {
   devices: [],
   device: '',
   inputGain: 1.0,
+  // Server-built one-liner of the input gain actually in force ("×2.50").
+  // Re-sent with every `inputGain` frame + on hello, so the MIC TUNE page can
+  // always show what the gain IS — including right after an app reload
+  // (report 20260725_131, same contract as `gatesSummary`).
+  gainSummary: '',
+  // Outcome of the last input-gain apply (server read-back, not a local echo).
+  // { ok, text, source, stale } — a SUCCESS line is transient, a FAILURE line
+  // stays until the next apply so it can't be missed.
+  gainApply: null,
   sourceSmoothHz: 12000,
   engineLinkConnected: false,   // SHARED-tuning sync to the engine is live
   cal: { phase: 'idle', result: null },
@@ -82,8 +91,18 @@ const S = {
   // per-band → uses the global gate), live band levels for the meters, and the
   // noise-floor auto-calibration phase/result.
   gates: { noiseGate: 0.04, lowGate: null, midGate: null, highGate: null },
+  // Server-built one-liner of the gates actually in force ("low … · mid … ·
+  // high … · global …"). Re-sent with every `gates` frame + on hello, so the
+  // MIC TUNE page can always show what the noise floor IS — including right
+  // after an app reload (operator request 2026-08-03).
+  gatesSummary: '',
   liveBands: { low: 0, mid: 0, high: 0 },
   noiseCal: { phase: 'idle', result: null },
+  // Outcome of the last noise-floor apply (server read-back, not a local echo).
+  // { ok, text, source, stale } — a SUCCESS line is transient (clears itself
+  // after APPLY_CONFIRM_MS, per the operator's "keep it quiet" directive); a
+  // FAILURE line stays until the next apply so it can't be missed.
+  noiseApply: null,
   micBuilt: false,
   // MIC TUNE calibration profiles (named venue/condition states) + the active one.
   profiles: [],
@@ -188,6 +207,18 @@ function connect() {
       if (m.inputGain != null) S.inputGain = m.inputGain;
       if (m.sourceSmoothHz != null) S.sourceSmoothHz = m.sourceSmoothHz;
       if (m.gates) S.gates = { ...S.gates, ...m.gates };
+      if (m.gatesSummary) S.gatesSummary = m.gatesSummary;
+      // A FAILED last apply survives the reload (the operator still needs to
+      // know it didn't land); a successful one doesn't re-announce itself —
+      // the always-visible gate summary already states the truth.
+      S.noiseApply = (m.lastNoiseApply && !m.lastNoiseApply.ok)
+        ? { ...m.lastNoiseApply, stale: true } : null;
+      if (m.gainSummary) S.gainSummary = m.gainSummary;
+      // Same rule for the gain apply: a FAILED one survives the reload, a
+      // successful one doesn't re-announce itself (the always-visible readout
+      // under the gain card already states the truth).
+      S.gainApply = (m.lastGainApply && !m.lastGainApply.ok)
+        ? { ...m.lastGainApply, stale: true } : null;
       if (Array.isArray(m.profiles)) { S.profiles = m.profiles; S.activeProfileId = m.activeProfileId || null; }
       if (m.engineLink) S.engineLinkConnected = !!m.engineLink.connected;
       // PARTY page seed (report 20260725_19).
@@ -249,8 +280,10 @@ function connect() {
       frameQueue.length = 0;
       if (m.status && m.status.error) flash((m.status.needsDevice ? 'pick an input device — ' : 'source: ') + m.status.error, true);
     } else if (m.type === 'inputGain') {
-      S.inputGain = m.value; buildGainBar();
-      if (S.page === 'mic') refreshMicControls();
+      S.inputGain = m.value;
+      if (m.summary) S.gainSummary = m.summary;
+      buildGainBar();
+      if (S.page === 'mic') { refreshMicControls(); renderGainApplyState(); }
     } else if (m.type === 'smooth') {
       S.sourceSmoothHz = m.value; if (S.selected === 'input') renderChain();
     } else if (m.type === 'engineLink') {
@@ -276,7 +309,25 @@ function connect() {
       if (S.page === 'mic') renderGainCal();
     } else if (m.type === 'gates') {
       S.gates = { noiseGate: m.noiseGate, lowGate: m.lowGate, midGate: m.midGate, highGate: m.highGate };
-      if (S.page === 'mic') refreshMicControls();
+      if (m.summary) S.gatesSummary = m.summary;
+      if (S.page === 'mic') { refreshMicControls(); renderNoiseFloorState(); }
+    } else if (m.type === 'noiseApplyResult') {
+      // The APPLY confirmation (server read-back of what the engine/analyzer
+      // now actually holds). Success auto-clears; failure stays put.
+      S.noiseApply = { ...m, stale: false };
+      clearTimeout(noiseApplyT);
+      if (m.ok) noiseApplyT = setTimeout(() => { S.noiseApply = null; renderNoiseFloorState(); }, APPLY_CONFIRM_MS);
+      renderNoiseFloorState();
+    } else if (m.type === 'gainApplyResult') {
+      // The gain APPLY confirmation (server read-back of what the engine/
+      // analyzer now actually holds). Success auto-clears; failure stays put.
+      S.gainApply = { ...m, stale: false };
+      clearTimeout(gainApplyT);
+      if (m.ok) gainApplyT = setTimeout(() => { S.gainApply = null; renderGainApplyState(); }, APPLY_CONFIRM_MS);
+      renderGainApplyState();
+      // The DESIGN page's compact gain bar has no line of its own — the same
+      // apply can be triggered from there, so surface the outcome as a flash.
+      if (S.page !== 'mic') flash(m.text, !m.ok);
     } else if (m.type === 'profiles') {
       S.profiles = m.profiles || []; S.activeProfileId = m.activeId || null;
       if (S.page === 'mic') renderProfiles();
@@ -1011,9 +1062,11 @@ function renderCal() {
     const txt = el('span', null, `peak <b>${r.peak.toFixed(2)}</b> · ${r.verdict} · suggest <b>×${r.recommendedGain.toFixed(1)}</b> `);
     res.appendChild(txt);
     if (Math.abs(r.recommendedGain - r.currentGain) > 0.05) {
+      // VERIFIED apply, same as the MIC TUNE card's ✓ Apply gain: the flash
+      // comes from the server's READ-BACK (gainApplyResult), never from an
+      // optimistic echo of the number we just sent (report 20260725_131).
       const apply = el('button', 'cal-apply', 'Apply'); apply.onclick = () => {
-        S.inputGain = r.recommendedGain; send({ type: 'setInputGain', value: r.recommendedGain });
-        buildGainBar(); flash('gain → ×' + r.recommendedGain.toFixed(1));
+        send({ type: 'applyInputGain', value: r.recommendedGain });
       };
       res.appendChild(apply);
     }
@@ -1310,6 +1363,13 @@ function bindOscRowEvents(tbody) {
 // ── MIC TUNE page (report 20260621_5) ───────────────────────────────────────
 const METER_MAX = 0.6;   // meter + slider full-scale (so the gate line aligns)
 const BANDS3 = ['low', 'mid', 'high'];
+// How long a ✓ apply confirmation stays up (noise floor AND input gain).
+// Operator directive: keep it QUIET — a few seconds, then gone. The persistent
+// summary line under each card carries the value from then on, so nothing is
+// lost when this clears. FAILURES never auto-clear.
+const APPLY_CONFIRM_MS = 5000;
+let noiseApplyT = null;
+let gainApplyT = null;
 // Effective gate for a band = its per-band override, or the global gate.
 function effGate(band) {
   const v = S.gates[band + 'Gate'];
@@ -1339,7 +1399,18 @@ function buildMicPage() {
     };
     $('gaincal-apply').onclick = () => {
       const r = S.cal.result; if (!r) return;
-      send({ type: 'setInputGain', value: r.recommendedGain });
+      // VERIFIED apply (report 20260725_131): the server writes through, awaits
+      // the engine, reads the resulting gain back and answers with what really
+      // landed — not the fire-and-forget setInputGain the slider uses.
+      send({ type: 'applyInputGain', value: r.recommendedGain });
+    };
+    $('gaincal-save').onclick = () => {
+      const r = S.cal.result; if (!r) return;
+      // Calibrate the GAIN INTO the active profile — the mirror of the noise
+      // card's 💾 Save (report 20260725_132). The server routes it through the
+      // SAME verified apply and only snapshots the profile once the read-back
+      // proves the gain landed, so the ✓/✗ line answers this button too.
+      send({ type: 'saveActiveProfile', inputGain: r.recommendedGain });
     };
     // Profiles: add (saves current gates+gain under a name).
     const nameInp = $('mp-name');
@@ -1363,8 +1434,51 @@ function buildMicPage() {
   }
   refreshMicControls();
   renderNoiseCal();
+  renderNoiseFloorState();
   renderGainCal();
+  renderGainApplyState();
   renderProfiles();
+}
+
+// The two feedback lines under the noise-floor calibration (operator request
+// 2026-08-03 — "applying it shows nothing"):
+//   • #noisecal-current — ALWAYS there: the gates actually in force, as the
+//     SERVER reports them (`gates.summary`, re-seeded on hello → survives a
+//     reload). This is the "what is my noise floor set to?" readout.
+//   • #noisecal-applied — the transient one-line apply confirmation carrying
+//     the server's READ-BACK numbers, or a loud failure line that stays until
+//     the next apply.
+function renderNoiseFloorState() {
+  const cur = $('noisecal-current');
+  if (!cur) return;
+  cur.textContent = S.gatesSummary ? `noise floor now: ${S.gatesSummary}` : 'noise floor: —';
+  const line = $('noisecal-applied');
+  const a = S.noiseApply;
+  let text = a ? a.text : '';
+  if (a && a.savedTo) text += ` · saved to "${a.savedTo}"`;
+  if (a && a.stale) text += ' (last apply)';
+  line.textContent = text;
+  line.className = 'mac-applied' + (a ? (a.ok ? ' ok' : ' err') : '');
+}
+
+// The same two lines under the GAIN calibration (report 20260725_131):
+//   • #gaincal-current — ALWAYS there: the input gain actually in force, as the
+//     SERVER reports it (`inputGain.summary`, re-seeded on hello → survives a
+//     reload). This is the "what is my gain set to?" readout.
+//   • #gaincal-applied — the transient one-line apply confirmation carrying the
+//     server's READ-BACK value, or a loud failure line that stays until the
+//     next apply.
+function renderGainApplyState() {
+  const cur = $('gaincal-current');
+  if (!cur) return;
+  cur.textContent = S.gainSummary ? `input gain now: ${S.gainSummary}` : 'input gain: —';
+  const line = $('gaincal-applied');
+  const a = S.gainApply;
+  let text = a ? a.text : '';
+  if (a && a.savedTo) text += ` · saved to "${a.savedTo}"`;
+  if (a && a.stale) text += ' (last apply)';
+  line.textContent = text;
+  line.className = 'mac-applied' + (a ? (a.ok ? ' ok' : ' err') : '');
 }
 
 // Render the profile chips + the active-profile detail row.
@@ -1394,9 +1508,12 @@ function renderProfiles() {
       det.innerHTML = '<span class="mp-active-vals">no profile selected</span>';
     }
   }
-  // Keep the calibration "Save to <profile>" button label current.
+  // Keep both calibrations' "Save to <profile>" button labels current.
+  const label = active ? `"${active.name}"` : 'profile';
   const sn = $('noisecal-save-name');
-  if (sn) sn.textContent = active ? `"${active.name}"` : 'profile';
+  if (sn) sn.textContent = label;
+  const gsn = $('gaincal-save-name');
+  if (gsn) gsn.textContent = label;
 }
 
 // Reflect S.gates / S.inputGain into the sliders + labels + gate lines.

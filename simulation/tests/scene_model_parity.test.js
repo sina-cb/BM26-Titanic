@@ -739,38 +739,25 @@ test('real scene test_bench: every remaining error is a known open mapping defec
   assert.deepEqual(unexpected, []);
 });
 
-test('real scene titanic: the model is fresh and complete; only the LED signs await mapping', async () => {
+test('real scene titanic: the model is fresh and complete, and the exterior is fully patched', async () => {
   const result = await runRealScene('titanic');
   const dirty = result.findings.filter(
     (f) => f.severity === 'error' && MUST_BE_CLEAN.includes(f.check));
   assert.deepEqual(dirty, [],
     'the titanic model is a current, complete export — coverage/patch-truth/views/drift clean');
 
-  // Every DMX fixture and every strand is authored onto a controller. The FOUR
-  // TE-sign halves are deliberately NOT: the operator removed the DMX
-  // placeholder they were parked on (2026-07-31 — *"the TE signs must be
-  // associated with MarsinLED controllers … I saw DMX ones, that's wrong!"*)
-  // and will attach them to a MarsinLED output himself. They are LED PIXEL
-  // FIXTURES now, present and attachable in the LED half of the unmapped tray.
-  // The gate stays RED until he does — an unmapped fixture is an error by
-  // design, and softening that would hide a genuinely dark fixture.
-  const unmapped = result.findings.filter((f) => f.code === 'unmapped_fixture')
-    .map((f) => f.where).sort();
-  assert.deepEqual(unmapped, [
-    "fixture 'TE Sign 2 V3 A' (group 'TE Sign 2')",
-    "fixture 'TE Sign 2 V3 B' (group 'TE Sign 2')",
-    "fixture 'TE Sign V3 A' (group 'TE Sign')",
-    "fixture 'TE Sign V3 B' (group 'TE Sign')",
-  ]);
+  // Every DMX fixture, every strand and both TE signs are authored onto a
+  // controller AND patched. The four sign halves were the last hold-outs: the
+  // operator moved them off the DMX placeholder onto MarsinLED outputs
+  // (2026-07-31 — *"the TE signs must be associated with MarsinLED controllers
+  // … I saw DMX ones, that's wrong!"*) and, per the 2026-08-03 ruling (report
+  // 20260725_123), chaining them onto an LED port with a typed IP IS the patch.
+  assert.deepEqual(result.findings.filter((f) => f.code === 'unmapped_fixture'), []);
   assert.deepEqual(result.findings.filter((f) => f.code === 'unmapped_strand'), []);
-  assert.equal(result.stats.errors, 4,
-    'the ONLY open errors are the four unmapped TE-sign halves');
+  assert.equal(result.stats.errors, 0, 'the titanic gate is GREEN');
 
-  // What is left is HONEST, recorded state: the four unmapped LED signs and the
-  // six strands on the three unbound rope controllers. All INFO here, all
-  // errors under --strict (the hardware gate).
-  const policy = result.findings.filter((f) => f.strictOnly).map((f) => f.code).sort();
-  assert.deepEqual(policy, new Array(10).fill('unpatched_marker'));
+  // Nothing is left carrying the unpatched marker — no strand, no sign half.
+  assert.deepEqual(result.findings.filter((f) => f.code === 'unpatched_marker'), []);
   // No `0.0.0.0` placeholder controller survives — the DMX one is gone.
   assert.deepEqual(result.findings.filter((f) => f.code === 'placeholder_controller'), []);
 });
@@ -779,28 +766,33 @@ test('real scene titanic: the TE signs are LED, not DMX, everywhere the model ca
   const loaded = await loadScene('titanic');
   const signPixels = loaded.model.pixels.filter((p) => /^TeSignV3/.test(p.fixtureType || ''));
   assert.equal(signPixels.length, 148, 'two signs × (40 + 34) px');
-  // The reclassification, mechanically: LED transport, no DMX footprint, and
-  // the loud unpatched marker while no MarsinLED output owns them.
+  // The reclassification, mechanically: LED transport and — since they are
+  // chained onto MarsinLED outputs — real per-output addresses.
   assert.ok(signPixels.every((p) => p.type === 'led'), 'every sign pixel is type led');
-  assert.ok(signPixels.every((p) => p.patch === null), 'no address until mapped');
-  assert.ok(signPixels.every((p) => p.unpatched === true), 'loud unpatched marker');
+  assert.ok(signPixels.every((p) => p.patch !== null), 'chained onto an LED output ⇒ addressed');
+  assert.ok(signPixels.every((p) => p.unpatched !== true), 'and no unpatched marker survives');
   // The fixtureType strings are UNCHANGED, so every selector that names them
   // (pixel_map_view_defaults TE_SIGN_TYPES, the scene pixel_map_views panels)
   // still resolves — report 20260725_48 addendum 2 stays intact.
   const types = new Set(signPixels.map((p) => p.fixtureType));
   assert.deepEqual([...types].sort(), ['TeSignV3A40', 'TeSignV3B34']);
-  // And no sign record survives in patches.yaml: an LED thing gets a record
-  // only once it is patched (the strand contract).
+  // …and patches.yaml carries the matching records: the model never claims an
+  // address the scene's patch truth does not also record.
   const records = Object.keys(loaded.patches.patches || {});
-  assert.deepEqual(records.filter((n) => /TE Sign/.test(n)), []);
+  assert.deepEqual(records.filter((n) => /TE Sign/.test(n)).sort(),
+    ['TE Sign 2 V3 A', 'TE Sign 2 V3 B', 'TE Sign V3 A', 'TE Sign V3 B']);
 });
 
-test('real scene titanic: --strict is stricter than the default gate', async () => {
+test('real scene titanic: --strict promotes every policy finding, and invents none', async () => {
   const loaded = await loadScene('titanic');
   const loose = checkSceneModelParity({ ...loaded, ...REAL_SCENE_SETUP });
   const strict = checkSceneModelParity({ ...loaded, ...REAL_SCENE_SETUP, strict: true });
-  assert.ok(strict.stats.errors > loose.stats.errors,
-    'every unpatched strand must be promoted to an error by the hardware gate');
+  // The hardware gate turns every `strictOnly` finding into an error and adds
+  // nothing else. With the exterior fully patched there are none left, so the
+  // two verdicts coincide — the contract still holds, and re-darkening anything
+  // makes strict diverge again.
+  const policy = loose.findings.filter((f) => f.strictOnly).length;
+  assert.equal(strict.stats.errors, loose.stats.errors + policy);
 });
 
 // ── The TE sign pucks are RGBW — the SAME LEDs as the rope strands ───────

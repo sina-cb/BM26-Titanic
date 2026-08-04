@@ -1,5 +1,5 @@
-nextControllerId: 23
-nextUniverse: 834
+nextControllerId: 25
+nextUniverse: 842
 controllers:
   - id: 3
     name: LeftFrontWall
@@ -55,10 +55,13 @@ controllers:
       controllerId: testbench
       boardId: angio4-old
       lastPush:
-        at: '2026-07-30T18:12:12.408Z'
-        outcome: needs-reboot
-        firmwareSHA: 6940e3a3df17
-        configHash: 6e13a0c32f6aff761907117eaa7dd29b57cc89d048587615a7e10f3b0f2bbe65
+        at: '2026-08-03T21:28:07.602Z'
+        outcome: applied
+        firmwareSHA: f94b27b39f9f
+        configHash: 230e6a8e7d7d047d17e9a796d29929d3c9765a306a4513a043b2b7d1a719f095
+    parkedOutputs:
+      - output: 3
+        universe: 42
   - id: 5
     name: LeftFrontDeck
     ip: 10.1.1.11
@@ -192,6 +195,10 @@ controllers:
       order: RGBW
       stride: 4
       whiteMode: native
+    device:
+      vendor: marsinled
+      controllerId: leftside_stack_a
+      boardId: angio4-new
   - id: 14
     name: LeftSmallSmokeStack
     ip: 10.1.1.15
@@ -233,6 +240,9 @@ controllers:
       order: RGBW
       stride: 4
       whiteMode: native
+    device:
+      vendor: marsinled
+      provisional: true
   - id: 16
     name: RightFrontWall
     ip: 10.1.1.16
@@ -420,3 +430,61 @@ controllers:
           b: 1
           w: 1
         controllerWhite: fold_extract
+    device:
+      vendor: marsinled
+      provisional: true
+  - id: 23
+    name: LeftTeSign
+    ip: 10.1.1.64
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 38
+        chain:
+          - fixture: TE Sign V3 A
+            at: 1
+        output: 1
+      - port: 2
+        universe: 39
+        chain:
+          - fixture: TE Sign V3 B
+            at: 1
+        output: 2
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+    device:
+      vendor: marsinled
+      provisional: true
+  - id: 24
+    name: RightTESign
+    ip: 10.1.1.65
+    type: LED
+    protocol: sACN
+    ports:
+      - port: 1
+        universe: 40
+        chain:
+          - fixture: TE Sign 2 V3 A
+            at: 1
+        output: 1
+      - port: 2
+        universe: 41
+        chain:
+          - fixture: TE Sign 2 V3 B
+            at: 1
+        output: 2
+    led:
+      baseUniverse: 0
+      startAddr: 1
+      order: RGBW
+      stride: 4
+      whiteMode: native
+    device:
+      vendor: marsinled
+      controllerId: rightside_stack_a
+      boardId: angio4-new

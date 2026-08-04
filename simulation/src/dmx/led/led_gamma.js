@@ -309,11 +309,15 @@ export function commitGammaPush(controller, result) {
 
 // ── Transport (browser → sim save-server → controller) ──────────────────────
 
-async function postGamma(ip, gamma) {
+async function postGamma(ip, gamma, controllerName) {
+  // controllerName is the card's name, sent for exactly one server-side use:
+  // repairing an invalid STORED deviceName (docs/41 §4.1.1) — a board in that
+  // state rejects EVERY config write, gamma included. Verbatim or refused,
+  // never sanitized (led_gamma_service.gammaPushBody).
   const res = await fetch(saveHttpUrl('/led/gamma-push'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ip, gamma }),
+    body: JSON.stringify({ ip, gamma, controllerName }),
   });
   let payload = null;
   try { payload = await res.json(); } catch { /* handled below */ }
@@ -367,7 +371,7 @@ export async function pushGammaToController(controller, transport, commit) {
   }
   let result;
   try {
-    result = await transport.pushGamma(controller.ip, gamma);
+    result = await transport.pushGamma(controller.ip, gamma, controller.name);
   } catch (err) {
     return {
       ...base,

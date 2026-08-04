@@ -175,7 +175,7 @@ function serializeBlock(block) {
     '# change this block, change the bench scene and re-run the tool. Hand edits',
     '# are caught by the parity gate and REFUSED.',
     '#',
-    '# Deliberately absent: sectionId / fixtureId / viewMask / controllerId and',
+    '# Deliberately absent: sectionId / fixtureId / viewMask / viewMaskHi / controllerId and',
     '# controller ids (re-derived by the TARGET registry) and device.lastPush',
     '# (volatile push receipt).',
     '',

@@ -14,6 +14,8 @@ import {
   validatePerOutputPlan,
   applyPerOutputPlan,
   pushPerOutputUniverses,
+  deviceNameRepairForPush,
+  isValidDeviceName,
 } from '../src/dmx/led/marsinled_client.js';
 import {
   derivePerOutputPlan,
@@ -329,6 +331,127 @@ test('pushPerOutputUniverses — GET config, RMW, POST text/plain (202 out1→U3
     ],
     dmx: { enabled: true, protocol: 0, timeoutMs: 3000 },
   });
+});
+
+// ── deviceName repair (report 20260725_124) ─────────────────────────────────
+//
+// THE BUG, live 2026-08-03: pushing per-output universes to the bench board at
+// 10.x.x.60 failed with `config apply failed (field=deviceName) — 1-32 chars,
+// letters/digits/-._ only`, even though the POST body contained ONLY `strands`
+// and `dmx`. Root cause: the board stores `deviceName: ""` and the firmware
+// re-validates the WHOLE merged config on every apply, so it rejects every
+// write — a no-op gamma write to the same box returned the identical 400.
+// These cases pin the payload-construction seam (no device needed).
+
+test('_124: isValidDeviceName — the firmware rule, verbatim', () => {
+  assert.equal(isValidDeviceName('LeftLeftRopes'), true);
+  assert.equal(isValidDeviceName('Titanic-201'), true);
+  assert.equal(isValidDeviceName('a.b_c-1'), true);
+  assert.equal(isValidDeviceName(''), false);             // ← the live failure
+  assert.equal(isValidDeviceName('Left Left Ropes'), false);  // spaces are illegal
+  assert.equal(isValidDeviceName('x'.repeat(33)), false);     // >32
+  assert.equal(isValidDeviceName('x'.repeat(32)), true);
+  assert.equal(isValidDeviceName(undefined), false);
+  assert.equal(isValidDeviceName(null), false);
+});
+
+test('_124: deviceNameRepairForPush — a VALID stored name is left alone', () => {
+  assert.equal(deviceNameRepairForPush({
+    ip: '10.0.0.60', storedName: 'LeftLeftFront', controllerName: 'LeftLeftRopes',
+  }), null);
+});
+
+test('_124: deviceNameRepairForPush — an ABSENT field is never invented', () => {
+  assert.equal(deviceNameRepairForPush({
+    ip: '10.0.0.60', storedName: undefined, controllerName: 'LeftLeftRopes',
+  }), null);
+});
+
+test('_124: deviceNameRepairForPush — an EMPTY stored name is repaired with the card name', () => {
+  const repair = deviceNameRepairForPush({
+    ip: '10.0.0.60', storedName: '', controllerName: 'LeftLeftRopes',
+  });
+  assert.equal(repair.from, '');
+  assert.equal(repair.to, 'LeftLeftRopes');   // VERBATIM — never sanitized
+  assert.match(repair.message, /reject every config write/);
+});
+
+test('_124: deviceNameRepairForPush — an unusable card name FAILS LOUD, naming the rename', () => {
+  assert.throws(() => deviceNameRepairForPush({
+    ip: '10.0.0.60', storedName: '', controllerName: 'Left Left Ropes',
+  }), (err) => {
+    assert.match(err.message, /RENAME THE CONTROLLER CARD/);
+    assert.match(err.message, /'Left Left Ropes' is not a legal device name/);
+    assert.match(err.message, /1-32 chars, letters\/digits\/-\._ only/);
+    return true;
+  });
+  // …and it never silently substitutes a sanitized name.
+  assert.throws(() => deviceNameRepairForPush({
+    ip: '10.0.0.60', storedName: '', controllerName: 'x'.repeat(33),
+  }), /RENAME THE CONTROLLER CARD/);
+  assert.throws(() => deviceNameRepairForPush({
+    ip: '10.0.0.60', storedName: '', controllerName: undefined,
+  }), /no card name was supplied/);
+});
+
+test('_124: derivePerOutputPlan carries the card name (the push repairs deviceName with it)', () => {
+  const plan = derivePerOutputPlan(ledController({ name: 'LeftLeftRopes' }),
+    { line_A: 40, line_B: 40 }, config202(), NO_CLAIMS);
+  assert.equal(plan.controllerName, 'LeftLeftRopes');
+});
+
+test('_124: pushPerOutputUniverses — an empty stored deviceName is REPAIRED in the POST body',
+  async () => {
+    let posted = null;
+    const cfg = config202();
+    cfg.deviceName = '';                       // ← exactly what the live board stores
+    await withFetch(async (url, opts) => {
+      if (opts && opts.method === 'POST') {
+        posted = JSON.parse(opts.body);
+        return jsonResponse({ status: 'ok', outcome: 'needs-reboot', reboot: true });
+      }
+      return jsonResponse(cfg);
+    }, async () => {
+      await pushPerOutputUniverses('10.1.1.202', {
+        plan: planOf({ 0: 3, 1: 4 }, { controllerName: 'LeftLeftRopes' }),
+      });
+    });
+    assert.equal(posted.deviceName, 'LeftLeftRopes');
+    // The rest of the body is untouched by the repair.
+    assert.deepEqual(posted.dmx, { enabled: true, protocol: 0, timeoutMs: 3000 });
+    assert.equal(posted.strands.length, 4);
+    assert.equal(posted.strands[0].dmxUniverse, 3);
+  });
+
+test('_124: pushPerOutputUniverses — a VALID stored name is never rewritten', async () => {
+  let posted = null;
+  await withFetch(async (url, opts) => {
+    if (opts && opts.method === 'POST') {
+      posted = JSON.parse(opts.body);
+      return jsonResponse({ status: 'ok', outcome: 'needs-reboot', reboot: true });
+    }
+    return jsonResponse(config202());          // deviceName 'Titanic-202'
+  }, async () => {
+    await pushPerOutputUniverses('10.1.1.202', {
+      plan: planOf({ 0: 3, 1: 4 }, { controllerName: 'SomeOtherName' }),
+    });
+  });
+  assert.equal('deviceName' in posted, false);
+});
+
+test('_124: pushPerOutputUniverses — an unrepairable name refuses BEFORE the POST', async () => {
+  let postCalls = 0;
+  const cfg = config202();
+  cfg.deviceName = '';
+  await withFetch(async (url, opts) => {
+    if (opts && opts.method === 'POST') { postCalls += 1; return jsonResponse({}); }
+    return jsonResponse(cfg);
+  }, async () => {
+    await assert.rejects(() => pushPerOutputUniverses('10.1.1.202', {
+      plan: planOf({ 0: 3, 1: 4 }, { controllerName: 'Left Left Ropes' }),
+    }), /RENAME THE CONTROLLER CARD/);
+  });
+  assert.equal(postCalls, 0);        // the device is never written on a refusal
 });
 
 test('pushPerOutputUniverses — a bad plan is rejected BEFORE the POST', async () => {
@@ -691,7 +814,11 @@ function makeS1Ctx(registry, toasts) {
  * values those steps resolve with (or a function to call — used to answer with
  * nothing, or to throw).
  */
-function makeS1Io(calls, { save = { ok: true }, notify = { ok: true }, failPush = false } = {}) {
+function makeS1Io(calls, {
+  save = { ok: true }, notify = { ok: true },
+  confirm = { ok: true, detail: 'U21,U22→10.0.0.60' },
+  failPush = false,
+} = {}) {
   const answer = (v) => (typeof v === 'function' ? v() : v);
   return {
     pushPerOutputUniverses: async (_ip, { plan }) => {
@@ -710,6 +837,11 @@ function makeS1Io(calls, { save = { ok: true }, notify = { ok: true }, failPush 
     getConfig: async () => { calls.push('getConfig'); return config60(); },
     persistScene: async () => { calls.push('persistScene'); return answer(save); },
     notifyBridge: async () => { calls.push('notifyBridge'); return answer(notify); },
+    confirmBridgeRoutes: async (expectations) => {
+      calls.push('confirmRoutes');
+      calls.lastExpectations = expectations;
+      return answer(confirm);
+    },
   };
 }
 
@@ -747,13 +879,20 @@ test('S1: a successful push persists THEN notifies, and reports all three steps'
   const iPush = calls.indexOf('push');
   const iSave = calls.indexOf('persistScene');
   const iNotify = calls.indexOf('notifyBridge');
+  const iConfirm = calls.indexOf('confirmRoutes');
   assert.ok(iPush >= 0 && iSave > iPush, 'the save runs after the device write');
   assert.ok(iNotify > iSave, 'the bridge is notified only after the save resolves');
+  assert.ok(iConfirm > iNotify, 'the route table is read back only after the notify resolved');
   assert.equal(calls.filter((c) => c === 'persistScene').length, 1, 'exactly one save');
+
+  // _127: the expectation handed to the read-back is the plan's own routes.
+  assert.equal(calls.lastExpectations.length, 1);
+  assert.deepEqual(calls.lastExpectations[0].expected, [21, 22]);
+  assert.equal(calls.lastExpectations[0].ip, '10.0.0.60');
 
   assert.equal(ui.statusLine.textContent,
     '✓ device written + verified · ✓ scene saved (patches projected) · ' +
-    '✓ bridge notified — routes follow');
+    '✓ bridge routes confirmed (U21,U22→10.0.0.60)');
   assert.equal(ui.statusLine.className, 'led-push-status led-push-ok');
   assert.equal(ui.cancelBtn.textContent, 'Done');
   assert.equal(toasts[0].error, false);
@@ -769,6 +908,8 @@ test('S1: a 500 from the save server is RED, names the stale layer, and never no
 
   assert.equal(calls.includes('notifyBridge'), false,
     'notifying after a failed save would only re-read the STALE patches.yaml');
+  assert.equal(calls.includes('confirmRoutes'), false,
+    'nothing to read back — the bridge was never notified');
   assert.equal(ui.statusLine.className, 'led-push-status led-push-error');
   assert.match(ui.statusLine.textContent, /✋ scene NOT saved: save server responded 500/);
   assert.match(ui.statusLine.textContent,
@@ -806,6 +947,8 @@ test('S1: a failed bridge notify is RED — a disconnected WS is a failure, not 
     }), ui);
 
   assert.ok(calls.includes('persistScene'));
+  assert.equal(calls.includes('confirmRoutes'), false,
+    'a failed notify must not be followed by a route read-back that measures the old world');
   assert.equal(ui.statusLine.className, 'led-push-status led-push-error');
   assert.match(ui.statusLine.textContent, /✓ scene saved \(patches projected\)/);
   assert.match(ui.statusLine.textContent,
@@ -861,23 +1004,97 @@ test('S1: a throwing save step is captured verbatim (never a silent skip)', asyn
   assert.equal(steps.notify, null, 'a save that threw must not be followed by a notify');
 });
 
+// ── _127: the third step is a route-table READ, and it cannot be dodged ─────
+
+test('_127: omitting the route expectation FAILS the confirm — no unmeasured ✓ by omission', async () => {
+  const steps = await persistAndNotifyAfterPush({
+    persistScene: async () => ({ ok: true }),
+    notifyBridge: async () => ({ ok: true }),
+    confirmBridgeRoutes: async () => ({ ok: true, detail: 'U21→10.0.0.60' }),
+  });
+  assert.equal(steps.save.ok, true);
+  assert.equal(steps.notify.ok, true);
+  assert.equal(steps.confirm.ok, false);
+  assert.match(steps.confirm.reason, /stated no route expectation/);
+});
+
+test('_127: an io bag without confirmBridgeRoutes() is a loud confirm failure', async () => {
+  const steps = await persistAndNotifyAfterPush({
+    persistScene: async () => ({ ok: true }),
+    notifyBridge: async () => ({ ok: true }),
+  }, [{ ip: '10.0.0.60', expected: [21], parkedAbsent: [] }]);
+  assert.equal(steps.confirm.ok, false);
+  assert.match(steps.confirm.reason, /no confirmBridgeRoutes\(\)/);
+});
+
+test('_127: a confirm that answers ok WITHOUT naming routes is refused', async () => {
+  const steps = await persistAndNotifyAfterPush({
+    persistScene: async () => ({ ok: true }),
+    notifyBridge: async () => ({ ok: true }),
+    confirmBridgeRoutes: async () => ({ ok: true }),
+  }, [{ ip: '10.0.0.60', expected: [21], parkedAbsent: [] }]);
+  assert.equal(steps.confirm.ok, false);
+  assert.match(steps.confirm.reason, /without naming the confirmed routes/);
+});
+
+test('_127: the EXPLICIT empty expectation list is the only skip, and says so', async () => {
+  const calls = [];
+  const steps = await persistAndNotifyAfterPush({
+    persistScene: async () => ({ ok: true }),
+    notifyBridge: async () => ({ ok: true }),
+    confirmBridgeRoutes: async () => { calls.push('confirmRoutes'); return { ok: true, detail: 'x' }; },
+  }, []);
+  assert.deepEqual(steps.confirm, { ok: true, skipped: true });
+  assert.equal(calls.length, 0, 'nothing pushed — nothing queried');
+});
+
 test('S1: describePushCompletion — the exact operator-facing sentences', () => {
-  const ok = describePushCompletion({ save: { ok: true }, notify: { ok: true } });
+  const ok = describePushCompletion({ save: { ok: true }, notify: { ok: true },
+    confirm: { ok: true, detail: 'U21,U22→10.0.0.60' } });
   assert.equal(ok.ok, true);
   assert.equal(ok.failedStep, null);
   assert.equal(ok.text,
     '✓ device written + verified · ✓ scene saved (patches projected) · ' +
-    '✓ bridge notified — routes follow');
+    '✓ bridge routes confirmed (U21,U22→10.0.0.60)');
 
-  const noSave = describePushCompletion({ save: { ok: false, reason: 'boom' }, notify: null });
+  const noSave = describePushCompletion(
+    { save: { ok: false, reason: 'boom' }, notify: null, confirm: null });
   assert.equal(noSave.ok, false);
   assert.equal(noSave.failedStep, 'scene save');
   assert.match(noSave.text, /⏸ bridge not notified \(the save failed first\)/);
 
   const noNotify = describePushCompletion(
-    { save: { ok: true }, notify: { ok: false, reason: 'no WS' } });
+    { save: { ok: true }, notify: { ok: false, reason: 'no WS' }, confirm: null });
   assert.equal(noNotify.failedStep, 'bridge notify');
   assert.match(noNotify.text, /the sACN feed was NOT updated: bridge notify/);
+});
+
+test('_127: describePushCompletion — a failed route read-back is ✋, named, never a ✓', () => {
+  const mismatch = describePushCompletion({ save: { ok: true }, notify: { ok: true },
+    confirm: { ok: false, reason: 'missing U31→10.1.1.60 — bridge relays 1 route(s) after ' +
+      '5 read(s); check the sACN bridge log' } });
+  assert.equal(mismatch.ok, false);
+  assert.equal(mismatch.failedStep, 'bridge route read-back');
+  assert.match(mismatch.text, /✋ bridge routes NOT confirmed: missing U31→10\.1\.1\.60/);
+  assert.match(mismatch.text, /the sACN feed is NOT CONFIRMED: bridge route read-back/);
+  assert.match(mismatch.text, /check the sACN bridge log\./);
+  assert.equal(mismatch.text.includes('✓ bridge'), false, 'no ✓ over an unproven route table');
+});
+
+test('_127: a notify with NO confirm step renders ✋ — the unmeasured ✓ is gone for good', () => {
+  const unmeasured = describePushCompletion({ save: { ok: true }, notify: { ok: true } });
+  assert.equal(unmeasured.ok, false);
+  assert.equal(unmeasured.failedStep, 'bridge route read-back');
+  assert.match(unmeasured.text,
+    /✋ bridge routes NOT confirmed: the route table was never read back/);
+});
+
+test('_127: an EXPLICIT empty expectation (fleet, nothing pushed) says so — not a fake route ✓', () => {
+  const skipped = describePushCompletion({ save: { ok: true }, notify: { ok: true },
+    confirm: { ok: true, skipped: true } }, { lead: 'done — 0 pushed · 2 skipped · 0 failed' });
+  assert.equal(skipped.ok, true);
+  assert.match(skipped.text, /✓ bridge notified — nothing was pushed, no routes to confirm/);
+  assert.equal(skipped.text.includes('routes confirmed'), false);
 });
 
 // ── Slice S5 — the sync chip says what it measures ──────────────────────────
@@ -946,6 +1163,7 @@ function lostReplyError(ms = 12000) {
  */
 function makeLostReplyIo(calls, {
   comesBack = true, readBackPlan = null, save = { ok: true }, notify = { ok: true },
+  confirm = { ok: true, detail: 'U21,U22→10.0.0.60' },
 } = {}) {
   return {
     pushPerOutputUniverses: async (_ip, { plan }) => {
@@ -973,6 +1191,7 @@ function makeLostReplyIo(calls, {
     getConfig: async () => { calls.push('getConfig'); return config60(); },
     persistScene: async () => { calls.push('persistScene'); return save; },
     notifyBridge: async () => { calls.push('notifyBridge'); return notify; },
+    confirmBridgeRoutes: async () => { calls.push('confirmRoutes'); return confirm; },
   };
 }
 
@@ -1005,11 +1224,11 @@ test('_69: a LOST write reply is settled by the read-back, never declared a fail
   // The timeout does NOT end the push: it falls into the same reboot wait, then
   // reads the device back — and the read-back says the write applied.
   assert.deepEqual(calls.filter((c) => c !== 'getConfig'),
-    ['push', 'awaitReboot', 'getStatus', 'persistScene', 'notifyBridge']);
+    ['push', 'awaitReboot', 'getStatus', 'persistScene', 'notifyBridge', 'confirmRoutes']);
   assert.match(ui.statusLine.textContent, /the write reply was LOST/);
   assert.match(ui.statusLine.textContent, /the read-back confirms the mapping applied/);
   assert.match(ui.statusLine.textContent, /✓ scene saved \(patches projected\)/);
-  assert.match(ui.statusLine.textContent, /✓ bridge notified/);
+  assert.match(ui.statusLine.textContent, /✓ bridge routes confirmed/);
   assert.equal(ui.statusLine.className, 'led-push-status led-push-ok');
   assert.equal(ui.cancelBtn.textContent, 'Done');
   assert.equal(toasts[0].error, false);
@@ -1470,6 +1689,11 @@ function makeVerifyIo(calls, { readBack = null, lostReply = false } = {}) {
     getConfig: async () => { calls.push('getConfig'); return config60(); },
     persistScene: async () => { calls.push('persistScene'); return { ok: true }; },
     notifyBridge: async () => { calls.push('notifyBridge'); return { ok: true }; },
+    confirmBridgeRoutes: async (expectations) => {
+      calls.push('confirmRoutes');
+      calls.lastExpectations = expectations;
+      return { ok: true, detail: 'U21,U22→10.0.0.60' };
+    },
   };
 }
 
@@ -1501,7 +1725,10 @@ test('_71 (18): a matching read-back over assigned + parked completes, and PERSI
   const calls = [];
   await runPerOutputPush(ctx, card, PARKED_PLAN, makeVerifyIo(calls), makeS1Ui());
   assert.deepEqual(calls.filter((c) => c !== 'getConfig'),
-    ['push', 'awaitReboot', 'getStatus', 'persistScene', 'notifyBridge']);
+    ['push', 'awaitReboot', 'getStatus', 'persistScene', 'notifyBridge', 'confirmRoutes']);
+  // _127: the parked universe rides the expectation as a MUST-BE-ABSENT claim.
+  assert.deepEqual(calls.lastExpectations[0].expected, [21, 22]);
+  assert.deepEqual(calls.lastExpectations[0].parkedAbsent, [24]);
   // STICKY: the park is written onto the card so the next derive reuses it.
   assert.equal(parkedUniverseFor(card, 2), 24);
   assert.deepEqual(card.parkedOutputs, [{ output: 3, universe: 24 }]);

@@ -9,7 +9,11 @@
  *   2. GET /api/config   — the FULL persisted config
  *   3. write a timestamped backup of that full config to
  *      ~/tmp/led_controller_configs_backup/
- *   4. POST /api/config with a PARTIAL body carrying ONLY `{ gamma }`
+ *   4. POST /api/config with a PARTIAL body carrying ONLY `{ gamma }` — plus
+ *      `deviceName` in exactly ONE case: when the STORED name is invalid the
+ *      firmware rejects every write (docs/41 §4.1.1), so the push repairs it
+ *      with the controller card's name VERBATIM or refuses before the POST
+ *      (`gammaPushBody` below — same doctrine as the per-output push)
  *   5. honour the reply (`applied` vs `needs-reboot`) — wait out a reboot
  *   6. GET /api/config again and VERIFY the read-back matches, or throw
  *
@@ -34,6 +38,17 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
+
+// The deviceName doctrine (docs/41 §4.1.1, report _124) has ONE implementation
+// and it lives in the LED client: `deviceNameRepairForPush` + DEVICE_NAME_RE.
+// That file is a browser ES module and this one is CommonJS — Node's native
+// `require(esm)` (>= 22.12; this project runs 24.x) bridges the boundary
+// synchronously, so the server consumes the client's decision function
+// directly instead of keeping a copy that could drift. On an older Node this
+// require crashes RIGHT HERE at startup — the correct loud failure (codex P0).
+const {
+  deviceNameRepairForPush,
+} = require('../src/dmx/led/marsinled_client.js');
 
 const GAMMA_CHANNELS = ['r', 'g', 'b', 'w'];
 const DEFAULT_GAMMA = Object.freeze({ r: 2.2, g: 2.2, b: 2.2, w: 1.0 });
@@ -130,6 +145,66 @@ function parseGammaSpec(spec) {
   return validateGamma({ r: parts[0], g: parts[1], b: parts[2], w: parts[3] });
 }
 
+// ── deviceName repair (docs/41 §4.1.1, reports _124/_126) ───────────────────
+//
+// MarsinLED's ConfigManager::update merges a partial POST body into the STORED
+// config and validates the WHOLE merged document. A board whose stored
+// deviceName is invalid (e.g. the `""` it ships with) therefore rejects EVERY
+// `POST /api/config` with `field=deviceName` — including a pure `{gamma}` body
+// that never mentions the field. (_124 proved it live: a no-op gamma write to
+// the 10.x.x.60 board earned that exact 400.) So the gamma push carries the
+// same repair as the per-output push: when the stored name is invalid, write
+// the controller card's name VERBATIM alongside the gamma, or refuse loudly
+// naming the exact rename. No sanitizing, no fallback (codex P0).
+
+/**
+ * Build the POST /api/config body for a gamma push — the payload-construction
+ * seam. PURE (no I/O), so it is unit-testable without a device.
+ *
+ *  - stored name valid or absent → `{gamma}` only (a working device is never
+ *    renamed, and an unreported field is never invented);
+ *  - stored name present and invalid → `{gamma, deviceName}` with the card's
+ *    name verbatim, plus the repair record for the caller to declare;
+ *  - stored name invalid and `controllerName` unusable → THROWS (kind
+ *    'invalid') naming exactly what to rename.
+ *
+ * @param {{ip: string, gamma: Object, storedDeviceName: *, controllerName: *}} params
+ * @returns {{body: Object, nameRepair: {from: string, to: string, message: string}|null}}
+ */
+function gammaPushBody({ ip, gamma, storedDeviceName, controllerName }) {
+  let nameRepair;
+  try {
+    nameRepair = deviceNameRepairForPush({ ip, storedName: storedDeviceName, controllerName });
+  } catch (err) {
+    throw gammaError('invalid', `${err.message} (docs/41 §4.1.1 — until that name is fixed the ` +
+      'board rejects every config write, so the gamma push refuses before touching it. From the ' +
+      "CLI, pass the controller card's name with --device-name.)");
+  }
+  if (!nameRepair) return { body: { gamma }, nameRepair: null };
+  return { body: { gamma, deviceName: nameRepair.to }, nameRepair };
+}
+
+/**
+ * Turn a device 400 into the error the operator can act on. PURE.
+ *
+ * The one trap this defuses: a `field=deviceName` rejection of a body that
+ * never carried `deviceName` is the §4.1.1 merge-validation quirk — the
+ * board's STORED name is invalid — not a gamma problem. Without the note the
+ * operator chases a deviceName ghost through a gamma payload (_124, live).
+ */
+function gammaRejectionError(host, replyJson, body) {
+  const mergeQuirk = replyJson.field === 'deviceName' && body.deviceName === undefined;
+  return gammaError('rejected', `${host} rejected the gamma write: ` +
+    `${replyJson.error || 'validation failed'}` +
+    (replyJson.field ? ` (field=${replyJson.field})` : '') +
+    (replyJson.detail ? ` — ${replyJson.detail}` : '') +
+    (mergeQuirk ? ' — NOTE: this body never mentioned deviceName. The firmware re-validates the ' +
+      "WHOLE stored config on every apply (docs/41 §4.1.1), so this board's STORED deviceName " +
+      'is invalid and it rejects every write until that name is fixed (its own web UI, or a ' +
+      'push carrying a legal name).' : ''),
+    { deviceError: replyJson });
+}
+
 /**
  * Round a read-back curve to 4 decimals. The controller stores the exponents as
  * float32, so a written 2.2 reads back as 2.200000048 — representation noise,
@@ -206,9 +281,13 @@ async function readGamma(host) {
  *
  * @param {string} host - controller IP (HTTP only; these devices ignore ICMP)
  * @param {Object} rawTarget - {r,g,b,w}
- * @param {{onLog?: Function, rebootWaitMs?: number}} [opts]
+ * @param {{onLog?: Function, rebootWaitMs?: number, controllerName?: string}} [opts]
+ *   `controllerName` is the bound controller card's name. It is used for ONE
+ *   thing: repairing an invalid STORED deviceName (docs/41 §4.1.1) — verbatim
+ *   or not at all. A board whose stored name is valid is never renamed.
  * @returns {Promise<Object>} {ip, controllerId, deviceName, boardId, firmwareSHA,
- *   before, target, verified, outcome, reboot, backupPath, changed}
+ *   before, target, verified, outcome, reboot, backupPath, changed,
+ *   deviceNameRepaired}
  * @throws Error with `.kind` ∈ 'invalid'|'unreachable'|'rejected'|'verify-mismatch'
  */
 async function pushGamma(host, rawTarget, opts = {}) {
@@ -230,13 +309,20 @@ async function pushGamma(host, rawTarget, opts = {}) {
   const backupPath = writeBackup(host, name, before);
   log(`   💾 full config backed up → ${backupPath}`);
 
+  // §4.1.1: an invalid STORED deviceName makes the board reject every write —
+  // repair it (card name verbatim) or refuse loudly BEFORE the POST.
+  const { body, nameRepair } = gammaPushBody({
+    ip: host,
+    gamma: target,
+    storedDeviceName: before.deviceName,
+    controllerName: opts.controllerName,
+  });
+  if (nameRepair) log(`   ⚠ ${nameRepair.message}`);
+
   log(`   ➡  pushing gamma ${JSON.stringify(target)}`);
-  const res = await request(host, 'POST', '/api/config', { gamma: target });
+  const res = await request(host, 'POST', '/api/config', body);
   if (res.status === 400) {
-    throw gammaError('rejected', `${host} rejected the gamma write: ` +
-      `${res.json.error || 'validation failed'}` +
-      (res.json.field ? ` (field=${res.json.field})` : '') +
-      (res.json.detail ? ` — ${res.json.detail}` : ''), { deviceError: res.json });
+    throw gammaRejectionError(host, res.json, body);
   }
   if (res.status !== 200) {
     throw gammaError('rejected', `${host}: POST /api/config returned HTTP ${res.status}: ` +
@@ -259,12 +345,20 @@ async function pushGamma(host, rawTarget, opts = {}) {
       `${host}: read-back MISMATCH — wanted ${JSON.stringify(target)}, ` +
       `controller reports ${JSON.stringify(verified)}`, { verified, target, backupPath });
   }
+  if (nameRepair && after.deviceName !== nameRepair.to) {
+    throw gammaError('verify-mismatch',
+      `${host}: deviceName repair did not land — wrote '${nameRepair.to}', ` +
+      `controller reports ${JSON.stringify(after.deviceName)}`, { nameRepair, backupPath });
+  }
   log(`   ✅ verified on hardware: ${JSON.stringify(verified)}`);
+  if (nameRepair) {
+    log(`   ✅ deviceName repaired: ${JSON.stringify(nameRepair.from)} → '${nameRepair.to}'`);
+  }
 
   return {
     ip: host,
     controllerId: status.controllerId || null,
-    deviceName: before.deviceName || status.deviceName || null,
+    deviceName: after.deviceName || status.deviceName || null,
     boardId: status.boardId || null,
     firmwareSHA: status.firmwareSHA || null,
     before: currentGamma,
@@ -274,6 +368,7 @@ async function pushGamma(host, rawTarget, opts = {}) {
     reboot,
     backupPath,
     changed: !gammaEquals(currentGamma, target),
+    deviceNameRepaired: nameRepair ? { from: nameRepair.from, to: nameRepair.to } : null,
   };
 }
 
@@ -285,6 +380,8 @@ module.exports = {
   OFF_GAMMA,
   backupDir,
   gammaEquals,
+  gammaPushBody,
+  gammaRejectionError,
   parseGammaSpec,
   roundGamma,
   pushGamma,

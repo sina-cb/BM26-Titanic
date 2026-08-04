@@ -1317,6 +1317,11 @@ function checkMetadata(state, roster) {
     if ((px.sId || 0) !== (record.sectionId || 0)) diffs.push(`sId ${px.sId} ≠ ${record.sectionId || 0}`);
     if ((px.fId || 0) !== (record.fixtureId || 0)) diffs.push(`fId ${px.fId} ≠ ${record.fixtureId || 0}`);
     if ((px.vMask || 0) !== (record.viewMask || 0)) diffs.push(`vMask ${px.vMask} ≠ ${record.viewMask || 0}`);
+    // BOTH view words: a word-1 per-fixture view lives in viewMaskHi/vMaskHi,
+    // so a stale high word is exactly as dead as a stale low one.
+    if ((px.vMaskHi || 0) !== (record.viewMaskHi || 0)) {
+      diffs.push(`vMaskHi ${px.vMaskHi || 0} ≠ ${record.viewMaskHi || 0}`);
+    }
     if (diffs.length > 0) {
       state.add(CHECKS.DRIFT, 'metadata_drift', SEVERITY.ERROR,
         `fixture '${f.name}'`,
@@ -1324,7 +1329,7 @@ function checkMetadata(state, roster) {
     }
   }
   // Strands AND LED pixel fixtures keep their identity (sectionId / fixtureId /
-  // viewMask) on the STRUCTURAL tree, not in a patch record — an LED thing has
+  // viewMask + viewMaskHi) on the STRUCTURAL tree, not in a patch record — an LED thing has
   // a record only while it is patched, so its identity must survive being
   // unmapped. Both are therefore checked against scene_config.yaml.
   for (const s of [...state.strands, ...state.fixtures]) {
@@ -1336,6 +1341,9 @@ function checkMetadata(state, roster) {
     if ((px.sId || 0) !== (s.sectionId || 0)) diffs.push(`sId ${px.sId} ≠ ${s.sectionId || 0}`);
     if ((px.fId || 0) !== (s.fixtureId || 0)) diffs.push(`fId ${px.fId} ≠ ${s.fixtureId || 0}`);
     if ((px.vMask || 0) !== (s.viewMask || 0)) diffs.push(`vMask ${px.vMask} ≠ ${s.viewMask || 0}`);
+    if ((px.vMaskHi || 0) !== (s.viewMaskHi || 0)) {
+      diffs.push(`vMaskHi ${px.vMaskHi || 0} ≠ ${s.viewMaskHi || 0}`);
+    }
     if (diffs.length > 0) {
       state.add(CHECKS.DRIFT, 'strand_metadata_drift', SEVERITY.ERROR,
         `strand '${s.name}'`,

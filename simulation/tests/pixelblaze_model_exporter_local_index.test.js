@@ -231,18 +231,15 @@ test('device-bound: a strand assigned to NO controller output exports UNPATCHED,
   assert.deepEqual(strandPatches(pixels, 'lineA')[0], { universe: 3, addr: 1, footprint: 4, led: true });
 });
 
-test('UNBOUND LED controller exports UNPATCHED — patches.yaml is the patch truth', () => {
+test('UNBOUND LED controller exports PATCHED — chaining is the patch (ruling 2026-08-03)', () => {
   resetWorld();
-  // Same rig, but NO device binding. `patches.yaml` is written from
-  // computeLedStrandPatches ALONE (main.js projectLedStrandPatches), which
-  // covers device-BOUND controllers only — an unbound controller's strands get
-  // no record, so the sACN bridge (whose relay table is built from that file)
-  // routes nothing for them. The exporter used to hand these strands a generic
-  // per-port address anyway: the engine rendered pixels onto universes nothing
-  // forwarded, and the rope stayed dark with every surface green. The model now
-  // says exactly what patches.yaml says — no record, no address, a LOUD
-  // `unpatched: true` marker (codex P0: no silent dark). Bind the controller to
-  // its device to light it.
+  // Same rig, but NO device binding. Operator ruling 2026-08-03 (report
+  // 20260725_123): *"unbound should not cause the lights to go off or unpatched
+  // red."* Chaining a strand onto a port IS the patch; the typed IP is only the
+  // sACN destination. So the model exports the SAME device-linear addresses
+  // patches.yaml records and the bridge relays — the binding grade never enters
+  // the byte layout. (Binding still governs hardware CLAIMS: first-contact
+  // reconcile, push receipts.)
   window.__controllerRegistry = ledRegistry(
     [port(1, 3, 'lineA'), port(2, 4, 'lineB'), port(3, 5), port(4, 6)],
     { device: null });
@@ -253,11 +250,31 @@ test('UNBOUND LED controller exports UNPATCHED — patches.yaml is the patch tru
   for (const name of ['lineA', 'lineB']) {
     const px = pixels.filter((p) => p.group === name);
     assert.equal(px.length, 40, `${name} still exports all its pixels`);
-    assert.ok(px.every((p) => p.patch === null && p.unpatched === true),
-      `${name} exports unpatched (patch null + unpatched marker)`);
+    assert.ok(px.every((p) => p.patch !== null && p.unpatched !== true),
+      `${name} carries a real patch and NO unpatched marker`);
   }
-  assert.ok(strandPatches(pixels, 'lineA').every((p) => p === null));
-  assert.ok(strandPatches(pixels, 'lineB').every((p) => p === null));
+  // Per-output firmware layout, identical to the bound case above.
+  assert.deepEqual(strandPatches(pixels, 'lineA')[0],
+    { universe: 3, addr: 1, footprint: 4, led: true });
+  assert.deepEqual(strandPatches(pixels, 'lineB')[0],
+    { universe: 4, addr: 1, footprint: 4, led: true });
+});
+
+test('a strand chained NOWHERE still exports UNPATCHED (the only dark state left)', () => {
+  resetWorld();
+  // The honest unpatched marker survives — it just means what it says now: this
+  // strand is on no controller port at all.
+  window.__controllerRegistry = ledRegistry(
+    [port(1, 3, 'lineA'), port(2, 4), port(3, 5), port(4, 6)], { device: null });
+  params.ledStrands = [ledLine('lineA', -1), ledLine('orphan', 1)];
+  window.ledStrandFixtures = [{ setLedColorRGB() {} }, { setLedColorRGB() {} }];
+
+  const { pixels } = generatePixelMap();
+  const orphan = pixels.filter((p) => p.group === 'orphan');
+  assert.equal(orphan.length, 40);
+  assert.ok(orphan.every((p) => p.patch === null && p.unpatched === true));
+  assert.deepEqual(strandPatches(pixels, 'lineA')[0],
+    { universe: 3, addr: 1, footprint: 4, led: true });
 });
 
 // ── G3: per-pixel addressing routes through the SAME walker ───────────
@@ -297,11 +314,11 @@ function ledStrandN(name, ledCount) {
   return { name, ledCount, startX: 0, startY: 0, startZ: 0, endX: 0, endY: 0, endZ: 4 };
 }
 
-test('G3 an UNBOUND spilling strand exports no address at all, all 200 px marked unpatched', () => {
+test('G3 an UNBOUND spilling strand walks the SAME spill as the bound one', () => {
   resetWorld();
-  // The same 200 px rig with NO device binding: nothing routes it, so nothing
-  // is addressed. The pixels still exist (geometry, groups, localIndex) — only
-  // the sACN placement is withheld, loudly.
+  // The same 200 px rig with NO device binding. Ruling 2026-08-03: the binding
+  // grade is not part of the byte layout, so this must be byte-identical to the
+  // bound case below — same walker, same universe roll at ch512.
   const reg = boundStrandRegistry(3);
   reg.controllers[0].device = null;
   window.__controllerRegistry = reg;
@@ -311,7 +328,13 @@ test('G3 an UNBOUND spilling strand exports no address at all, all 200 px marked
   const { pixels } = generatePixelMap();
   const px = pixels.filter((p) => p.group === 'strand');
   assert.equal(px.length, 200);
-  assert.ok(px.every((p) => p.patch === null && p.unpatched === true));
+  assert.ok(px.every((p) => p.patch !== null && p.unpatched !== true));
+  const patches = strandPatches(pixels, 'strand');
+  assert.deepEqual(patches[127], { universe: 3, addr: 509, footprint: 4, led: true });
+  assert.deepEqual(patches[128], { universe: 4, addr: 1, footprint: 4, led: true });
+  const walk = projectLedStrandPixels(3, 1, 4, 200).pixels;
+  assert.deepEqual(patches.map((p) => ({ universe: p.universe, addr: p.addr })),
+    walk.map((w) => ({ universe: w.universe, addr: w.addr })));
 });
 
 test('G3 BOUND stride-aligned start (ch1) spills whole to U4 and equals the walker', () => {

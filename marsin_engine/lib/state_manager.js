@@ -281,6 +281,83 @@ export class StateManager {
   }
 
   /**
+   * One-time forward migration (2026-08, dimmer stable keys): persisted
+   * per-group dimmer state used to be keyed by NUMERIC section id. Section
+   * ids are minted by the simulation's controller registry ("next free id"
+   * per group, floored over the DMX ∪ LED union) and are RE-MINTED whenever
+   * the operator regenerates the scene/model — which orphaned every saved
+   * brightness (the Dimmer Rack fell back to its 1.0 default). Group NAMES
+   * are the stable identity across regenerations, so dimmer state is keyed
+   * by group name from now on.
+   *
+   * `groupToSectionId` is the CURRENT model's { groupName: sectionId } map
+   * (api_server builds it from model.pixels — same source as
+   * GET /dimmer-groups). Rules (codex P0 — loud, never lossy):
+   *
+   *  - a numeric key whose id maps to a current group is rewritten to that
+   *    group's name;
+   *  - if the name key ALREADY exists (file half-migrated), the name-keyed
+   *    value wins — it is the newer format — and the numeric duplicate is
+   *    dropped with a warning;
+   *  - a numeric key that maps to NO current group is an ORPHAN: warned
+   *    loudly, preserved in the file untouched (never silently deleted or
+   *    defaulted);
+   *  - a name key unknown to the current model (group renamed/removed in
+   *    the scene) is likewise warned and preserved untouched.
+   *
+   * Mutates `globalsState.dimmers` in place; the next globals save persists
+   * the migrated shape (same precedent as the legacy hueShift discard in
+   * loadGlobalsState — no forced write, so the auto-save gate is honored).
+   * Idempotent: a second run over migrated state changes nothing.
+   * Returns { migrated, orphaned } for logging/tests.
+   */
+  migrateDimmersToGroupKeys(globalsState, groupToSectionId) {
+    const result = { migrated: 0, orphaned: [] };
+    const dimmers = globalsState && globalsState.dimmers;
+    if (!dimmers || typeof dimmers !== 'object') return result;
+    const groups = groupToSectionId || {};
+    const idToGroup = new Map();
+    for (const [name, sId] of Object.entries(groups)) {
+      if (!idToGroup.has(sId)) idToGroup.set(sId, name);
+    }
+    for (const key of Object.keys(dimmers)) {
+      if (Object.prototype.hasOwnProperty.call(groups, key)) continue; // already name-keyed
+      if (/^\d+$/.test(key)) {
+        const name = idToGroup.get(parseInt(key, 10));
+        if (name === undefined) {
+          result.orphaned.push(key);
+          continue;
+        }
+        if (Object.prototype.hasOwnProperty.call(dimmers, name)) {
+          console.warn(
+            `[StateManager] dimmers migration: legacy id key '${key}' duplicates group ` +
+            `'${name}' — keeping the name-keyed value ${dimmers[name]}, dropping legacy ${dimmers[key]}.`);
+        } else {
+          dimmers[name] = dimmers[key];
+          result.migrated += 1;
+        }
+        delete dimmers[key];
+      } else {
+        result.orphaned.push(key);
+      }
+    }
+    if (result.migrated > 0) {
+      console.log(
+        `[StateManager] dimmer state migrated to stable group-name keys: ` +
+        `${result.migrated} entr${result.migrated === 1 ? 'y' : 'ies'} rewritten ` +
+        '(persists on the next globals save).');
+    }
+    if (result.orphaned.length > 0) {
+      console.warn(
+        `[StateManager] dimmers: ${result.orphaned.length} orphaned key(s) match no group in the ` +
+        `loaded model — [${result.orphaned.join(', ')}]. Likely saved against an older model ` +
+        'generation (section ids re-minted / group renamed). Preserved on disk untouched; those ' +
+        'groups run at the 1.0 default until set again.');
+    }
+    return result;
+  }
+
+  /**
    * Global Effect Macro slot bindings (docs/28 §4.3).
    * Returns `null` when the file is missing so the caller can fall
    * back to the in-memory default config. Returning `null` rather
@@ -320,7 +397,8 @@ export class StateManager {
     });
   }
 
-  applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController) {
+  applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController,
+                    groupToSectionId = null) {
     if (paramCenter && globalsState.params) {
       // The saved canonical state is { revision, sourceLock, params: { speed: { value }, ... } }
       const paramData = globalsState.params.params || globalsState.params;
@@ -348,8 +426,25 @@ export class StateManager {
       }
     }
     if (intensityController && globalsState.dimmers) {
-      for (const [sId, bright] of Object.entries(globalsState.dimmers)) {
-        intensityController.setSectionBrightness(parseInt(sId, 10), bright);
+      // Dimmer state is keyed by STABLE GROUP NAME (see
+      // migrateDimmersToGroupKeys); resolve each name to the CURRENT model's
+      // section id via `groupToSectionId`. Numeric keys are legacy section
+      // ids (pre-migration file, or an old snapshot restored through this
+      // same path) — applied verbatim, exactly the pre-fix behaviour: inert
+      // when no pixel carries the id. A NAME key with no current mapping
+      // (group renamed/removed, or the caller passed no map) is warned and
+      // skipped — never silently guessed.
+      const groups = groupToSectionId || {};
+      for (const [key, bright] of Object.entries(globalsState.dimmers)) {
+        if (Object.prototype.hasOwnProperty.call(groups, key)) {
+          intensityController.setSectionBrightness(groups[key], bright);
+        } else if (/^\d+$/.test(key)) {
+          intensityController.setSectionBrightness(parseInt(key, 10), bright);
+        } else {
+          console.warn(
+            `[StateManager] dimmers: group '${key}' is not in the loaded model — ` +
+            `brightness ${bright} not applied (state preserved on disk).`);
+        }
       }
     }
     // NOTE: the legacy global `hueShift` is NOT restored — the global hue

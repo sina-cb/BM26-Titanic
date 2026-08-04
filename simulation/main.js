@@ -514,7 +514,12 @@ Promise.all([
           controllerId: config.controllerId || 0,
           sectionId: config.sectionId || 0,
           fixtureId: config.fixtureId || 0,
+          // BOTH view words — word 1 (`viewMaskHi`) is where new custom views
+          // are allocated, so a patch-tree row that carried only `viewMask`
+          // would drop a fixture-clicked view's membership on every rename
+          // (the rename snapshot reads this tree).
           viewMask: config.viewMask || 0,
+          viewMaskHi: config.viewMaskHi || 0,
         };
       }
     }

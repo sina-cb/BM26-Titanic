@@ -223,6 +223,12 @@
             <button id="noisecal-apply" class="primary">✓ Apply</button>
             <button id="noisecal-save" class="primary">💾 Save to <span id="noisecal-save-name">profile</span></button>
           </div>
+          <!-- Apply feedback (operator request 2026-08-03). The transient line
+               carries the SERVER'S READ-BACK of what actually landed (a
+               failure stays until the next apply); the line under it is the
+               always-there readout of the gates currently in force. -->
+          <div id="noisecal-applied" class="mac-applied"></div>
+          <div id="noisecal-current" class="mac-current">noise floor: —</div>
         </div>
       </div>
       <div class="mic-auto-card gain">
@@ -237,7 +243,15 @@
           <div id="gaincal-result" class="mac-result" style="display:none">
             <span class="mac-rec">peak <b id="gc-peak">—</b> · <b id="gc-verdict">—</b> · recommend ×<b id="gc-rec">—</b></span>
             <button id="gaincal-apply" class="primary">✓ Apply gain</button>
+            <button id="gaincal-save" class="primary">💾 Save to <span id="gaincal-save-name">profile</span></button>
           </div>
+          <!-- Apply feedback (report 20260725_131), identical contract to the
+               noise-floor card above: the transient line carries the SERVER'S
+               READ-BACK of the gain that actually landed (a failure stays until
+               the next apply); the line under it is the always-there readout of
+               the gain currently in force. -->
+          <div id="gaincal-applied" class="mac-applied"></div>
+          <div id="gaincal-current" class="mac-current">input gain: —</div>
         </div>
       </div>
     </div>

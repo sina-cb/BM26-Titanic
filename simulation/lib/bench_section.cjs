@@ -34,7 +34,7 @@
  *
  *   VOLATILE / DERIVED — stripped entirely, never copied:
  *     - `device.lastPush` (a timestamped push receipt: changes on every push),
- *     - `sectionId` / `fixtureId` / `viewMask` / `controllerId` — re-derived by
+ *     - `sectionId` / `fixtureId` / `viewMask` / `viewMaskHi` / `controllerId` — re-derived by
  *       the registry inside the TARGET scene. Copying the bench's numbering into
  *       titanic would import bench id collisions wholesale (see the sId/fId
  *       union bug, report 20260725_33 §1.3),
@@ -63,10 +63,21 @@ const DEFAULT_DOCK = { x: 45, y: 0, z: 0 };
 /** Placeholder controller sentinel (report §2, "fail-loud placeholder rules"). */
 const SENTINEL_IP = '0.0.0.0';
 
-/** Re-derived by the target registry — never carried across. */
-const DERIVED_METADATA_FIELDS = ['sectionId', 'fixtureId', 'viewMask', 'controllerId'];
+/**
+ * Re-derived by the target registry — never carried across. BOTH per-fixture
+ * view words are stripped: `viewMaskHi` (word 1) is where new custom views are
+ * allocated, so carrying it would import the bench's view membership into
+ * titanic under whatever unrelated view owns that bit there.
+ */
+const DERIVED_METADATA_FIELDS = [
+  'sectionId', 'fixtureId', 'viewMask', 'viewMaskHi', 'controllerId',
+];
 
-/** The exporter throws past 31 view bits (view_registry.js). */
+/**
+ * Usable bits in ONE view word (view_registry.js `SLOTS_PER_WORD`). Base
+ * group bits are confined to word 0, so this is the ceiling the exporter
+ * throws against when a scene gains a group.
+ */
 const MAX_VIEW_BITS = 31;
 
 const SEVERITY_REFUSE = 'refuse';
@@ -634,19 +645,45 @@ function checkTargetCompatibility({ block, target, prefix = BENCH_PREFIX }) {
     }
   }
 
-  // T3 — view-bit budget: the exporter throws past 31 bits.
+  // T3 — view-bit budget. The two view words are INDEPENDENT 31-bit spaces
+  // (`viewMask` / `viewMaskHi`, view_registry.js). Base group bits can only
+  // live in word 0, and every name this block adds is a group bit, so the
+  // budget that can actually refuse an apply is word-0 pressure alone.
+  // Counting word-1 custom views against it (the pre-fix behaviour)
+  // overstates the load and can refuse an apply that fits.
   const targetBits = (target.views?.views?.groupBits) || {};
   const targetBitNames = new Set(Object.keys(targetBits));
-  const customCount = ((target.views?.views?.custom) || []).length;
+  const targetCustom = (target.views?.views?.custom) || [];
+  // A `custom:` list entry that is not an object (a bare `- ` in views.yaml
+  // parses to null) has no word to charge. Attributing it to word 0 would
+  // silently inflate the group budget and could refuse a legal apply, and
+  // silently dropping it would hide a malformed scene file. `views.yaml` is
+  // the group→bit contract, so a malformed entry is REFUSED by name and
+  // charged to neither word — the budget arithmetic stays honest and the
+  // real defect is what the operator reads (codex P0: no silent fixup).
+  const malformed = targetCustom.filter((v) => !v || typeof v !== 'object' ||
+    (v.word !== undefined && v.word !== 0 && v.word !== 1));
+  for (const v of malformed) {
+    findings.push(finding(SEVERITY_REFUSE, 'TGT_VIEW_ENTRY_MALFORMED', 'views.yaml',
+      `target views.yaml has a custom-view entry the view registry would reject ` +
+      `(${JSON.stringify(v)}) — its view word is unknown, so the view-bit budget below ` +
+      `cannot be trusted. Fix views.yaml before applying the bench block.`));
+  }
+  const wellFormed = targetCustom.filter((v) => !malformed.includes(v));
+  const word0Customs = wellFormed.filter((v) => v.word !== 1).length;
+  const word1Customs = wellFormed.length - word0Customs;
   const newBitNames = block.viewBitNames.filter((n) => !targetBitNames.has(n));
-  const projectedBits = targetBitNames.size + customCount + newBitNames.length;
+  const projectedBits = targetBitNames.size + word0Customs + newBitNames.length;
+  const word1Note = `word 1 holds ${word1Customs} custom bit(s), independent of this budget`;
   if (projectedBits > MAX_VIEW_BITS) {
     findings.push(finding(SEVERITY_REFUSE, 'TGT_VIEW_BIT_BUDGET', 'views.yaml',
-      `applying needs ${newBitNames.length} new view bits on top of ${targetBitNames.size} group + ` +
-      `${customCount} custom bits = ${projectedBits}, over the ${MAX_VIEW_BITS}-bit ceiling`));
+      `applying needs ${newBitNames.length} new group bits on top of ${targetBitNames.size} group + ` +
+      `${word0Customs} word-0 custom bits = ${projectedBits}, over the ${MAX_VIEW_BITS}-bit word-0 ` +
+      `ceiling (${word1Note})`));
   } else {
     findings.push(finding(SEVERITY_INFO, 'TGT_VIEW_BIT_HEADROOM', 'views.yaml',
-      `${projectedBits}/${MAX_VIEW_BITS} view bits after apply (${MAX_VIEW_BITS - projectedBits} spare)`));
+      `${projectedBits}/${MAX_VIEW_BITS} word-0 view bits after apply ` +
+      `(${MAX_VIEW_BITS - projectedBits} spare; ${word1Note})`));
   }
 
   // T4 — placeholder sentinels: loud by default, fatal under --strict.

@@ -45,13 +45,13 @@ channel:
       v1: 0
       v2: 0
   playlist:
-    name: first_class_1912
-    activeEntryId: e_first_class_1912_0_00_golden_hour_wash
-    cursor: 4
+    name: default
+    activeEntryId: e_default_0_00_golden_hour_wash
+    cursor: 2
     autopilot:
       active: false
-      delay_s: 30
-      shuffle: false
+      delay_s: 90
+      shuffle: true
   viewSelection:
     type: all
     target: null
@@ -78,6 +78,6 @@ overlayAutopilot:
   groupSize: 3
   groupDwell: 6
 playlistSlots:
-  primary: first_class_1912
+  primary: default
   secondary: null
   splitRatio: 0.5

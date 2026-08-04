@@ -23,27 +23,26 @@ import { fixtureModelScale } from "../fixtures/fixture_model_scale.js";
  * `computeLedStrandPatches` is the DEVICE-linear model (the per-output cursor)
  * — the firmware's real byte layout, and exactly what patches.yaml records.
  *
- * The DEVICE-bound projection decides WHICH things are patched and at WHAT
+ * The DEVICE-linear projection decides WHICH things are patched and at WHAT
  * address; the generic lane supplies only the firmware semantics (order,
  * stride, whiteMode, wire) read from the SAME `controller.led`.
  *
- * "DEVICE-BOUND" is the UNION of both binding GRADES (controller_registry.js
- * `isBoundLedController`): a VERIFIED card (fingerprint read off the board) and
- * a PROVISIONAL one (the operator typed the IP and the port/output config with
- * the board still boxed) both export real addresses. That is the point of the
- * provisional grade — the operator declares the chain once and patches.yaml,
- * this model, the bridge relay routes and the subscribed universes all exist
- * before the hardware ever powers on (operator ruling 2026-07-31, report
- * 20260725_96). Only a controller carrying NO device block at all is unpatched.
+ * WHAT IS PATCHED = WHAT IS CHAINED (operator ruling 2026-08-03, report
+ * 20260725_123: *"unbound should not cause the lights to go off or unpatched
+ * red."*). `computeLedStrandPatches` projects every LED card carrying chain
+ * entries, at any binding grade — VERIFIED, PROVISIONAL, or none at all. Device
+ * binding is about hardware CLAIMS (first-contact reconcile, push receipts), not
+ * about addresses. Only a strand/fixture that is chained NOWHERE exports
+ * UNPATCHED.
  *
- * Anything on an UNBOUND LED controller exports UNPATCHED. `patches.yaml` is
- * the scene's patch truth and it is written from `computeLedStrandPatches`
- * ALONE (main.js `projectLedStrandPatches`, which drops the record for any
- * strand/fixture no bound controller covers), and the sACN bridge builds its
- * relay table from that same file. Exporting a generic-lane address for such a
- * thing made the model claim universes nothing routes: the engine renders
- * pixels, the bridge forwards nothing, and the rope is dark with every surface
- * green — the exact silent-dark shape codex P0 bans. It is also what the
+ * `patches.yaml` is the scene's patch truth and it is written from
+ * `computeLedStrandPatches` ALONE (main.js `projectLedStrandPatches`), and the
+ * sACN bridge builds its relay table from that same file, keying the destination
+ * off each record's controller IP. So the model, patches.yaml and the relay table
+ * agree by construction; a chained card with NO IP patches and renders here while
+ * the bridge honestly refuses to invent a destination (`led_no_destination_ip`).
+ * Exporting an address for something chained nowhere would make the model claim
+ * universes nothing routes — the silent-dark shape codex P0 bans, and what the
  * scene↔model parity gate reports as `strand_model_patched_without_record` +
  * `strand_missing_unpatched_marker` (plan 20260725_33 §4).
  *
@@ -256,7 +255,14 @@ export function generatePixelMap() {
               // physical order, so a sweep keyed on localIndex runs ALONG the
               // bar. See marsin_engine/lib/pixel_local_index.js (consumer).
               localIndex: j,
+              // BOTH view words. `vMask`/`vMaskHi` mirror the config's
+              // `viewMask`/`viewMaskHi` — a custom view resolves its
+              // per-fixture members out of the field of its OWN word
+              // (view_registry `pixelMaskField`), and word 1 is where the
+              // allocator puts new custom views. Carrying only vMask made
+              // every word-1 fixture-clicked view export EMPTY.
               vMask: light.viewMask || 0,
+              vMaskHi: light.viewMaskHi || 0,
               _prePatched: true,
               patch: patchObj,
               // An LED-bus pixel's channels are the CONTROLLER's order map
@@ -360,7 +366,9 @@ export function generatePixelMap() {
             // localIndex: a simple/single-pixel DMX fixture is its own fixture
             // with exactly one pixel, so its within-fixture ordinal is 0.
             localIndex: 0,
+            // Both view words — see the multi-pixel push above.
             vMask: light.viewMask || 0,
+            vMaskHi: light.viewMaskHi || 0,
             _prePatched: true, // We polyfill dynamically, so they are practically patched
             patch: patchObj,
             channels: (fType.includes('Fog') || fType === 'ChauvetHaze4D' || fType.includes('Horn') || fType.includes('Fire')) ? null : (standardizeChannels(fixture.fixtureDef && fixture.fixtureDef.channels ? fixture.fixtureDef.channels : null) || chFallback),
@@ -550,7 +558,9 @@ export function generatePixelMap() {
           // localIndex runs ALONG the strand in true pixel order. The engine
           // consumes this directly instead of re-deriving from (group,fId).
           localIndex: j,
+          // Both view words — see the DMX push above.
           vMask: strand.viewMask || 0,
+          vMaskHi: strand.viewMaskHi || 0,
           patch: pxPatch,
           channels: pxChannels,
           whiteMode: proj ? proj.whiteMode : 'native',
@@ -651,7 +661,15 @@ export function saveModelJS() {
     // (DMX: per-fixture pixel order; LED: per-strand pixel order). The
     // engine prefers it over its (group,fId) heuristic; a NEW export always
     // carries it on every pixel, so it is serialized unconditionally.
-    lines.push(`  { i: ${i}, type: '${p.type}', fixtureType: '${p.fixtureType || ''}', name: '${p.name}', group: '${p.group}', x: ${p.x}, y: ${p.y}, z: ${p.z}, nx: ${p.nx}, ny: ${p.ny}, nz: ${p.nz}, cId: ${p.cId || 0}, sId: ${p.sId || 0}, fId: ${p.fId || 0}, localIndex: ${p.localIndex || 0}, vMask: ${p.vMask || 0}, patch: ${patchStr}, channels: ${chStr}${extra} },`);
+    //
+    // `vMaskHi` (the Tier-C high view word, views 31..61 — engine lane 6) is
+    // serialized ONLY when the pixel actually carries word-1 membership. The
+    // engine's declared default is `px.vMaskHi ?? 0` (engine.js), so an
+    // absent field is the zero it already assumed, and a scene with no
+    // word-1 per-fixture view exports a byte-identical model to before —
+    // the same rule `ledWire` / `unpatched` follow above.
+    const hiStr = (p.vMaskHi || 0) !== 0 ? `, vMaskHi: ${p.vMaskHi}` : '';
+    lines.push(`  { i: ${i}, type: '${p.type}', fixtureType: '${p.fixtureType || ''}', name: '${p.name}', group: '${p.group}', x: ${p.x}, y: ${p.y}, z: ${p.z}, nx: ${p.nx}, ny: ${p.ny}, nz: ${p.nz}, cId: ${p.cId || 0}, sId: ${p.sId || 0}, fId: ${p.fId || 0}, localIndex: ${p.localIndex || 0}, vMask: ${p.vMask || 0}${hiStr}, patch: ${patchStr}, channels: ${chStr}${extra} },`);
   });
 
   lines.push('];');

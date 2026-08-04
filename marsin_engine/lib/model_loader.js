@@ -72,8 +72,23 @@ function isPowerOfTwoBit(bit) {
 }
 
 // Reserve explicit preset bits, mirroring engine.js validation.
-function reserveExplicitBits(declaredViewMasks) {
+//
+// Tier-C: word 0 (`viewMask`) and word 1 (`viewMaskHi`) are INDEPENDENT bit
+// spaces — a word-1 preset pinned to 0x10 does NOT collide with a word-0
+// group or preset also using 0x10. So the reservation is tracked PER WORD,
+// exactly as engine.js does. Collapsing the two into one flat mask made
+// every word-1 preset bit look like a word-0 collision and wedged the
+// loader on titanic (10 views pinned into word 1 at 0x1..0x200).
+//
+// @returns {{reservedMask: number, reservedMaskHi: number}} word-0 / word-1
+//          reservations. Group-bit assignment consults ONLY `reservedMask`
+//          (groups live in word 0).
+//
+// Exported (with assignGroupBits) so the word-space contract is directly
+// testable — see tests/mixer/model_loader_word_aware.test.js.
+export function reserveExplicitBits(declaredViewMasks) {
   let reservedMask = 0;
+  let reservedMaskHi = 0;
   const seen = new Set();
   for (const entry of declaredViewMasks) {
     if (!entry || typeof entry.name !== 'string' || entry.name.length === 0) {
@@ -81,25 +96,44 @@ function reserveExplicitBits(declaredViewMasks) {
     }
     if (seen.has(entry.name)) throw new Error(`Duplicate viewMasks entry name '${entry.name}'`);
     seen.add(entry.name);
+    if (entry.word !== undefined && entry.word !== 0 && entry.word !== 1) {
+      throw new Error(`viewMasks entry '${entry.name}': word must be 0 or 1, got ${entry.word}`);
+    }
+    const word = entry.word === 1 ? 1 : 0;
+    if (word === 1 && entry.bit === undefined) {
+      throw new Error(`viewMasks entry '${entry.name}' declares word:1 (viewMaskHi) and therefore ` +
+        `needs an explicit single-bit value`);
+    }
     if (entry.bit !== undefined) {
       if (!isPowerOfTwoBit(entry.bit)) {
         throw new Error(`viewMasks entry '${entry.name}': bit must be a power of two ≤ 0x40000000`);
       }
-      if ((reservedMask & entry.bit) !== 0) {
-        throw new Error(`viewMasks entry '${entry.name}' reuses bit 0x${entry.bit.toString(16)}`);
+      if (word === 1) {
+        if ((reservedMaskHi & entry.bit) !== 0) {
+          throw new Error(`viewMasks entry '${entry.name}' reuses viewMaskHi bit ` +
+            `0x${entry.bit.toString(16)}`);
+        }
+        reservedMaskHi |= entry.bit;
+      } else {
+        if ((reservedMask & entry.bit) !== 0) {
+          throw new Error(`viewMasks entry '${entry.name}' reuses bit 0x${entry.bit.toString(16)}`);
+        }
+        reservedMask |= entry.bit;
       }
-      reservedMask |= entry.bit;
     }
   }
-  return reservedMask;
+  return { reservedMask, reservedMaskHi };
 }
 
-function assignGroupBits(mod, declaredGroupBits, reservedMask) {
+// `reservedMask` is the WORD-0 reservation only — group bits live in word 0,
+// so a word-1 preset bit must never constrain them.
+export function assignGroupBits(mod, declaredGroupBits, reservedMask) {
   const modelGroups = [];
   for (const px of mod.pixels) {
     if (!px) continue;
     px.vMask = px.vMask ?? 0;
     px.viewMask = px.viewMask ?? 0;
+    px.vMaskHi = px.vMaskHi ?? 0; // Tier-C high view word (views 31..61)
     if (typeof px.group === 'string' && px.group.length > 0 && !modelGroups.includes(px.group)) {
       modelGroups.push(px.group);
     }
@@ -215,7 +249,9 @@ export async function loadModelForGauge(modelName, transform = null) {
   const mod = await importModel(modelName);
   const { declaredViewMasks, declaredGroupBits } = await importViewMaskSidecar(modelName, mod);
 
-  const reservedMask = reserveExplicitBits(declaredViewMasks);
+  // Word-0 and word-1 reservations are independent bit spaces; group bits
+  // live in word 0, so only `reservedMask` constrains them.
+  const { reservedMask } = reserveExplicitBits(declaredViewMasks);
   const groupBits = assignGroupBits(mod, declaredGroupBits, reservedMask);
   mergeGroupBits(mod, groupBits);
 

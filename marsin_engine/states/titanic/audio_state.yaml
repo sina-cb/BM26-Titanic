@@ -14,8 +14,11 @@ bands:
   attackMs: 6
   releaseMs: 180
   noiseGate: 0.04
-  inputGain: 1
+  inputGain: 1.48
   sourceSmoothHz: 12000
+  lowGate: 0.04
+  midGate: 0.04
+  highGate: 0.04
 kick:
   minHz: 50
   maxHz: 110

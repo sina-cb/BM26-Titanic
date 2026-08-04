@@ -179,7 +179,7 @@ test('createControllerRegistry: a verified block still grades verified', () => {
 test('markControllerProvisional: declares the binding with no network at all', () => {
   const reg = createControllerRegistry(ropeControllerTree());
   const c = reg.controllers[0];
-  assert.equal(isBoundLedController(c), false);
+  assert.equal(isBoundLedController(c), false, 'unbound — which no longer means unpatched');
   const dev = markControllerProvisional(c);
   assert.equal(dev.provisional, true);
   assert.equal(isProvisionalLedController(c), true);
@@ -234,11 +234,65 @@ test('THE FEATURE: a PROVISIONAL card projects the same strand patches as a VERI
     { u: 37, a: 1 });
 });
 
-test('THE FEATURE: an UNBOUND card still projects NOTHING (the honest dark state)', () => {
+test('THE 2026-08-03 RULING: an UNBOUND card patches EXACTLY like a bound one', () => {
+  // Operator ruling 2026-08-03 (report 20260725_123): *"unbound should not cause
+  // the lights to go off or unpatched red."* Chaining is the patch; the typed IP
+  // is the destination. This SUPERSEDES `_92` §4 and `_121`'s fix direction —
+  // routing to an operator-typed but unverified address is his accepted risk,
+  // which is the whole point of optional discovery.
   const unbound = createControllerRegistry(ropeControllerTree());
-  const { fields } = computeLedStrandPatches(unbound, ROPE_COUNTS);
-  assert.equal(fields.size, 0,
-    'without a device block of EITHER grade the strands stay unpatched — report 20260725_92');
+  const provisional = createControllerRegistry(
+    ropeControllerTree({ device: { vendor: 'marsinled', provisional: true } }));
+
+  const unboundResult = computeLedStrandPatches(unbound, ROPE_COUNTS);
+  const provFields = computeLedStrandPatches(provisional, ROPE_COUNTS).fields;
+
+  assert.equal(unboundResult.fields.size, 2);
+  assert.deepEqual(unboundResult.violations, [], 'a chained card with an IP is not a defect');
+  for (const [name, rec] of unboundResult.fields) {
+    assert.deepEqual(rec, provFields.get(name),
+      `'${name}' must patch byte-for-byte identically at ANY binding grade`);
+  }
+  assert.equal(unboundResult.fields.get('Right_Front_Right').controllerIp, '10.9.9.207',
+    'the typed IP IS the routing destination — that is what makes the relay route exist');
+});
+
+test('a chained card with NO usable IP still patches, and says why nothing routes', () => {
+  const reg = createControllerRegistry(ropeControllerTree({ ip: '' }));
+  const { fields, violations } = computeLedStrandPatches(reg, ROPE_COUNTS);
+  assert.equal(fields.size, 2, 'patches + model + sim are unaffected by a missing IP');
+  assert.equal(fields.get('Right_Front_Right').controllerIp, '',
+    'and the empty destination is honest — the bridge refuses to invent one');
+  const v = violations.find((x) => x.code === 'led_no_destination_ip');
+  assert.ok(v, 'no destination is the ONE loud LED state left');
+  assert.equal(v.controllerId, reg.controllers[0].id);
+  assert.match(v.message, /RightRightRopes/);
+  assert.match(v.message, /2 chained fixture\(s\)/);
+});
+
+test('an EMPTY card with no IP is silent (nothing chained, nothing to route)', () => {
+  const tree = ropeControllerTree({ ip: '' });
+  for (const port of tree.controllers[0].ports) port.chain = [];
+  const { fields, violations } = computeLedStrandPatches(createControllerRegistry(tree), ROPE_COUNTS);
+  assert.equal(fields.size, 0);
+  assert.deepEqual(violations, [], 'a blank card is a work-in-progress, not a defect');
+});
+
+test('the ⚑ path the operator actually used still works, and moves NO address', () => {
+  // Operator addendum 2026-08-03: he pressed "⚑ Patch without the board" on his
+  // five cards and it worked. Regression-protect that path: declaring the claim
+  // must be address-neutral now that patching no longer depends on it.
+  const reg = createControllerRegistry(ropeControllerTree());
+  const before = computeLedStrandPatches(reg, ROPE_COUNTS).fields;
+  assert.equal(canMarkProvisional(reg.controllers[0]).allowed, true);
+  markControllerProvisional(reg.controllers[0]);
+  assert.equal(isProvisionalLedController(reg.controllers[0]), true);
+  const after = computeLedStrandPatches(reg, ROPE_COUNTS);
+  assert.deepEqual(after.violations, []);
+  assert.equal(after.fields.size, before.size);
+  for (const [name, rec] of after.fields) {
+    assert.deepEqual(rec, before.get(name), `'${name}' must not move when the board is claimed`);
+  }
 });
 
 test('THE FEATURE: the engine model exports real addresses for a PROVISIONAL card', () => {
@@ -485,14 +539,18 @@ test('placeholder + provisional COMPOSE: a hand-written 0.0.0.0 card still patch
 
 // ── 7. Unbinding returns to the honest dark state ───────────────────────────
 
-test('dropping a provisional binding returns the strands to UNPATCHED', () => {
+test('dropping a provisional binding withdraws the CLAIM, never the patches', () => {
+  // Ruling 2026-08-03: binding governs hardware claims, not addresses.
   const reg = createControllerRegistry(
     ropeControllerTree({ device: { vendor: 'marsinled', provisional: true } }));
   const c = reg.controllers[0];
-  assert.equal(computeLedStrandPatches(reg, ROPE_COUNTS).fields.size, 2);
+  const before = computeLedStrandPatches(reg, ROPE_COUNTS).fields;
+  assert.equal(before.size, 2);
   unbindControllerDevice(c);
-  assert.equal(computeLedStrandPatches(reg, ROPE_COUNTS).fields.size, 0);
-  assert.equal(ledBindingGrade(c), null);
+  const after = computeLedStrandPatches(reg, ROPE_COUNTS).fields;
+  assert.equal(ledBindingGrade(c), null, 'the grade is gone');
+  assert.equal(after.size, 2, 'the patches are not');
+  for (const [name, rec] of after) assert.deepEqual(rec, before.get(name));
 });
 
 test('bindControllerDevice on a provisional card promotes it (the push path)', () => {

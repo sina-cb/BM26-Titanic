@@ -6346,3 +6346,1263 @@ stays 200 and the engine survives; timeline disabled to isolate the path;
 imports `setup_config_guard.mjs`). `config.yaml` CLEAN vs HEAD; spawned engine
 black-holed via `MARSIN_CONFIG_FILE`, state redirected via `MARSIN_STATE_DIR`;
 zero device HTTP, zero sACN, operator stack untouched; no git ops.
+
+---
+
+## Unpatched-tray false-red investigation (`_121`, DIAGNOSED — fix pending)
+
+Operator report: TE signs + 3 rope pairs "patched" yet still red/unpatched.
+Report: `.agent/reports/202607/20260725_121_unpatched_tray_false_red.md`.
+
+**VERDICT — not auto-discovery, not the tray.** The five controllers
+(`LeftTeSign`, `RightTESign`, `LeftRightRopes`, `RightLeftRopes`,
+`RightRightRopes`) are chained + saved correctly but **UNBOUND** (no `device:`
+block — the `_96` "⚑ Patch without the board" step was never taken).
+`computeLedStrandPatches` skips unbound cards (`led_patch_projection.js:177`),
+so all 10 fixtures/strands project zeroed patches → red on every unpatched
+surface — while the mapping pane header reads **"✓ fully patched"** (predicate
+ignores binding grade, `controller_map_editor.js:782-791`) and unbound port
+rows show concrete generic-preview addresses styled like real patches
+(`:1750-1751`). Proven by headless repro on the scene files + read-only live
+DOM probe (tray = 0 chips; `__globalPatchTree` zeroed for the ten) + parity
+gate (10 × `unpatched_marker` INFO). MAJOR side-finding: pane drops ALL LED
+projection violations (`computeRenderProjection` keeps `.fields` only, `:706`).
+
+**Operator unblock (no code):** press ⚑ Patch without the board on each of the
+5 cards, then Save — provisional grade patches everything end-to-end (`_96`).
+**Fix plan (handoff → simulation_expert):** (1) emit `led_unbound_chained`
+violation in `computeLedStrandPatches`; (2) merge LED violations into the
+pane's banner/header count; (3) style unbound cards' chips as PREVIEW + banner;
+(4) tooltip/copy on the ⚑ button. No fallbacks: never project generic patches
+into patches.yaml for unbound cards (`_92` §4 rejection stands).
+Zero source edits, zero device HTTP, zero sACN, no git ops.
+
+---
+
+## Dimmer Rack horizontal scroll (`_122`, DONE — uncommitted)
+
+Operator report: titanic's 24 dimmer groups overflow the rack UI (flexWrap
+row clipped by the fixed-height card). Report:
+`.agent/reports/202607/20260725_122_dimmer_rack_hscroll.md`.
+
+**Fix:** `CaptainPad/app/(tabs)/dimmer_rack.tsx` only (+29/-2) — fader row is
+now a horizontal `ScrollView` (`:447-455`); fits→space-around spread as
+before, overflows→scrolls with the partial fader at the card edge as the
+natural affordance (no chrome). Gesture conflict handled two-layer per the
+mixer precedent: NauticalFader capture-claims its PanResponder AND new
+`faderDragging` state (`:231`, wired via existing onDragStart/onDragEnd
+`:481-482`) hard-disables `scrollEnabled` during any knob drag (iOS ignores
+`onShouldBlockNativeResponder`). Verified on fresh :7167 dist vs live titanic
+engine, puppeteer iPad-touch viewport: overflow 2680/952, both ends
+screenshotted (`.agent_renders/dimmer_rack_scroll_{left,right}.png`), mouse +
+touch diagonal knob drags move value with scrollLeft frozen, gap touch-swipe
+scrolls 0→340, horizontal swipe ON knob captured (no scroll, no value).
+Engine dimmer writes restored to exact originals (`fullyRestored: true`).
+Gates: tsc 0, vitest 914 pass/6 skip (= baseline), dimmer_rack lint clean
+(4 pre-existing GlobalEffectMacros hook errors flagged, untouched), web:build
+0. Operator Expo :6967 untouched; no git ops.
+
+**Addendum (same day, operator follow-up):** orientation-responsive grid —
+landscape 1 row (unchanged), portrait 2 rows column-wise inside the SAME
+horizontal ScrollView (`perColumn = isPortrait ? 2 : 1`, CPCControls'
+`useWindowDimensions` idiom), scroll distance halved (2680→1340). All _122
+gesture guarantees re-verified in portrait 820x1180 (knob drags move value
+with scroll frozen, gap swipe scrolls 0→344, no vertical leak); screenshots
+`.agent_renders/dimmer_rack_{landscape,portrait}_{left,right}.png`. Gates
+re-run: tsc 0, vitest 914/6 (= baseline), lint clean, web:build 0; engine
+drags restored (`fullyRestored: true`). Live-stack finding flagged in the
+report addendum: running engine's model now maps wall/stack/rail groups to
+section ids 500+ while `/dimmers` persists only old 486-498 keys → those
+faders show the `?? 1.0` default (engine-side drift, NOT a UI bug; repo's
+titanic.js still produces 486-499).
+
+---
+
+## Chaining IS the patch (`_123`, DONE — uncommitted) — lands `_121`, reverses its direction
+
+Report: `.agent/reports/202607/20260725_123_unbound_led_loud_ux.md`.
+
+**OPERATOR RULING 2026-08-03 (verbatim):** *"unbound should not cause the lights
+to go off or unpatched red."* Addenda: *"the warning and patch without board
+button is okay. Just make sure it's not too noisy."* / *"keep the messages short
+to avoid making the UI super noisy."* Plus: he pressed ⚑ on his five cards and it
+WORKED (so that path is regression-protected, not reworked), and a **"No
+Controller"** card must exist for fixtures attached to nothing.
+
+**This SUPERSEDES `_121`'s Fix-plan direction and RELAXES `_92` §4.** `_121`
+diagnosed correctly but proposed keeping unbound-with-chains dark and shouting
+louder. The dark state WAS the bug. Routing to an operator-typed, board-unverified
+IP is his accepted risk — the point of optional discovery (`_96`, whose
+promote/reconcile machinery is untouched and still fully green).
+
+**Landed:** `computeLedStrandPatches` dropped its `isBoundLedController` gate
+(`led_patch_projection.js:183`) — every chained LED card projects at any grade;
+`led_bad_ip` → **`led_no_destination_ip`**, chained-only, the ONE loud LED state
+(`:197`). `validateLedManualUniverses` de-gated (`:441`); `isBoundLedController`
+doc re-scoped to hardware claims (`controller_registry.js:855`); DMX-side
+`bad_ip` no longer fires on LED cards (`:1917`, it duplicated + contradicted);
+exporter doc rewritten (`pixelblaze_model_exporter.js:15`). **Pane:** LED
+violations no longer discarded (`controller_map_editor.js:763`, `allViolations`
+`:825`) — the `_121` MAJOR; header extracted as pure exported `headerStatusModel`
+`:848`; `renderLedPort` reads ONE projection, no grade branch, no preview chips
+`:1856`. **UI (quiet):** one muted `⚑ board unverified` tag on unbound+chained+IP
+(`led_discovery_panel.js:955`, NOT `.led-binding-badge`); red `.cm-nodest-banner`
+ONLY for chained+no-IP (`:718/:1404`); ⚑ keeps its label + `.led-device-mark-
+provisional` class, tooltip re-aimed to "convenience"; NEW `.cm-none-card`
+"🚫 No Controller" placeholder (`:739`, deliberately not `.cm-controller` —
+4 agent_tools enumerate that selector).
+
+**Gates:** sim `npm test` 1687 · 1679 pass · **8 fail = baseline subset, 0 new**
+(baseline was 1663/9; the 9th, `real scene titanic: model fresh and complete`, is
+now FIXED). `agent_tools/provisional_status_verify.cjs` **ALL 18 CHECKS PASSED**
+(⚑ → PROVISIONAL → patched → contradiction refused → promoted VERIFIED).
+`tools/scene_model_parity.cjs titanic` **PASS, 0 err / 0 warn / 1 info** (was 11
+info incl. 10 × `unpatched_marker`). New `tests/chained_led_patches.test.js` (15);
+inverted pins in `provisional_binding` / `led_patch_projection` /
+`pixelblaze_model_exporter_local_index` / `scene_model_parity`.
+
+**Evidence:** code-level before/after on TEST FIXTURES (`~/tmp/bm26_123/repro.mjs`
+— before 0/10 patched + green header = the lie; after 10/10 patched + 10 routed;
+no-IP variant 10/10 patched + 5 loud violations); read-only pane screenshots
+`~/tmp/bm26_123/shots/` with every `:6970` save and `:6972` socket aborted at the
+network layer. **Operator scene NEVER mutated** (his cards were already ⚑-bound;
+mtimes verified unchanged). Note: he saved titanic mid-session (13:32) — the
+device blocks + patches.yaml records in the working tree are HIS, not this wave's.
+**Fix 0 of `_121` (press ⚑ on the 5 cards) is DONE by the operator** and is now
+also unnecessary for patching. No git ops.
+
+## MarsinLED push rejected on `deviceName` (`_124`, DONE — uncommitted, LANDED LIVE)
+
+Operator bug, live 2026-08-03: every ⬆ Push to `LeftLeftRopes` (`10.x.x.60`)
+died with `config apply failed (field=deviceName) — 1-32 chars,
+letters/digits/-._ only`, while the confirm dialog's payload preview contained
+only `strands` + `dmx` and no `deviceName` at all.
+
+**Root cause — the firmware, not the sim.** `ConfigManager::update` merges the
+partial body into the STORED config and validates the WHOLE merged document.
+That board stores `deviceName: ""`, which fails its own rule, so it rejects
+EVERY `POST /api/config` regardless of body. Proven with a **no-op gamma write**
+(`{"gamma":{"r":1,"g":1,"b":1,"w":1}}` — the values it already held): identical
+`field=deviceName` 400. The sim's body really was `{strands, dmx}` — one
+construction site (`marsinled_client.js` `pushPerOutputUniverses` → `postConfigBody`),
+`deviceName` in `DENIED_PUSH_KEYS` since day one. Nothing was hidden-merging.
+
+**Landed:** new pure seam `deviceNameRepairForPush({ip, storedName,
+controllerName})` (`marsinled_client.js:467`, with `DEVICE_NAME_RE` /
+`isValidDeviceName`) — stored name valid → write nothing (never rename a working
+box); field absent → invent nothing; stored name INVALID → write the CARD's name
+**verbatim** (no sanitizer, no truncation); card name unusable → **THROW naming
+the rename**, before any POST. Wired into `pushPerOutputUniverses:829`;
+`derivePerOutputPlan` now returns `controllerName` (`device_config_mapper.js`);
+`startPerOutputPush` pre-flights the same decision so an unusable name refuses
+before the dialog opens, adds `deviceName` to the payload PREVIEW, and declares
+it in its own dialog block ("⚠ This push also sets the device's NAME to …", it
+is also the mDNS/AP name). `DENIED_PUSH_KEYS` keeps the key for every other
+path. docs/41 gained **§4.1.1** recording the firmware behaviour + the proof.
+
+**Gates:** `tests/per_output_push.test.js` +8 `_124` cases at the
+payload-construction seam (valid stored name untouched · absent field never
+invented · `""` repaired verbatim · unusable name → zero POSTs + rename text ·
+plan carries `controllerName`) → **79 pass / 0 fail**. Sim `npm test` 1696 ·
+**1688 pass · 8 fail = pre-existing scene-content baseline** (TE Sign V3 strand
+metadata drift, titanic view-bit/CLI), none in the LED path. `security_check
+--all`: 6 findings, all pre-existing MACs in `.scene_backups/studiodj/`.
+
+**LIVE:** ran the real fixed client against the board (scratch script, not in
+the tree) with the card's own plan → `{"outcome":"needs-reboot"}`, reboot,
+read-back `perOutput = [{0,U30,start1,on},{1,U31,start1,on},{2,U42,start1,on}]`,
+`deviceName "LeftLeftRopes"`, `dmx {enabled:true, protocol:0, timeoutMs:3000}`,
+output 4 untouched/disabled. **The push the operator could not get through is
+now on the hardware.** Device layer only — the sim-side files were already
+correct on disk; his own ⬆ Push is still worth re-running (it persists the U42
+park as `parkedOutputs` and does the scene save + bridge notify) and is now an
+ordinary idempotent push. **Follow-up:** `server/led_gamma_service.cjs` has the
+same exposure on any board with an invalid stored name. No git ops.
+
+## GAMMA push learns the deviceName repair (`_126`, DONE — uncommitted)
+
+Follow-up landing the `_124` §5 item: `server/led_gamma_service.cjs` POSTed a
+bare `{gamma}`, so a board with an invalid STORED `deviceName` (fresh boards
+ship `""`) failed every gamma push with the device's misleading
+`field=deviceName` 400 — that no-op gamma write was literally `_124`'s proof
+probe. No live device touched this wave; fixed at the payload-construction
+seam.
+
+**Landed:** the `.cjs` service consumes the client's ONE implementation
+directly — Node native `require(esm)` of `marsinled_client.js` (verified on
+this box's Node 24; older Node crashes loudly at startup, codex P0). New pure
+seam `gammaPushBody({ip, gamma, storedDeviceName, controllerName})`: valid or
+absent stored name → `{gamma}` only; invalid stored name → `{gamma,
+deviceName: <card name VERBATIM>}`; unusable card name → THROW kind `invalid`
+before the POST, naming the rename (+ docs/41 §4.1.1 pointer, `--device-name`
+hint). New pure `gammaRejectionError`: a `field=deviceName` 400 on a nameless
+body is explained as the §4.1.1 merge-validation quirk instead of parroted —
+only for that exact trap. `pushGamma` verifies the repaired name in the
+read-back (miss = `verify-mismatch`) and returns `deviceNameRepaired`.
+Plumbing: save-server `/led/gamma-push` passes `controllerName`;
+`led_gamma.js` transport sends `controller.name`; CLI `led_gamma_push.cjs`
+gained `--device-name`. docs/41 §4.1.1 records the gamma repair + sharing.
+
+**Gates:** new `tests/led_gamma_push_devicename.test.js` (7 `_126` cases —
+incl. require/import OBJECT-IDENTITY of `deviceNameRepairForPush` /
+`DEVICE_NAME_RE`, so regex parity is identity not resemblance) +
+`led_gamma.test.js` pins the card-name plumbing. Targeted run 115/115. Sim
+`npm test` **1703 · 1695 pass · 8 fail = the same pre-existing scene-content
+baseline** as `_123`/`_124` (TE Sign V3 strand drift, titanic view-bit/CLI) —
+no new failures. Report `20260725_126_gamma_push_devicename.md`. Remaining
+follow-up unchanged: discovery could surface an invalid stored name as a loud
+card state. No git ops.
+
+
+## Bridge route READ-BACK — the push's third check is measured (`_127`, DONE — uncommitted)
+
+Operator order: the chain works physically; make `✓ bridge notified — routes
+follow` a real measurement matching the device write's read-back discipline.
+
+**Landed:** the bridge (WS :6971 — it has no HTTP surface; the WS IS its
+surface) answers a READ-ONLY `{type:'getRoutes'}` with its LIVE route table
+(`{type:'routes', routes[], engineOwned[], mirrorOwned[], activeScenes[]}`,
+pure wire shape `buildRouteTableSnapshot` in `lib/bridge_routing.cjs`).
+Same-socket FIFO after the `setScene` notify = the reply is always the
+post-save table. New `src/dmx/led/bridge_route_confirm.js` (pure seams):
+`buildRouteExpectation` — stated BEFORE the device write; enabled outputs +
+enable transitions, SPILL universes via the same `projectLedStrandSegments`
+walk the patch projection uses, PARKED universes as must-be-ABSENT claims
+scoped to this IP; `assessRouteReadback` — relay pair = confirmed,
+engine-owned = confirmed `[engine-direct]` (one-writer arbitration working),
+bench-mirror-owned = named one-writer CONFLICT, parked-routed = failure;
+`confirmBridgeRoutes` — bounded 5×400 ms poll, broken transport fails
+IMMEDIATELY. `SacnInputSource.queryRoutes` (reqId-correlated, 2 s timeout,
+rejected on teardown). `persistAndNotifyAfterPush(io, expectations)` step 3;
+omitting the expectation FAILS the confirm (no unmeasured ✓ by omission);
+`[]` = explicit fleet nothing-pushed skip. Status line: `✓ bridge routes
+confirmed (U30,U31→10.x.x.60)` / `✋ … missing U31→… — bridge relays N
+route(s) after 5 read(s); check the sACN bridge log`. Push-all reads back the
+UNION of pushed controllers' expectations. docs/41 §4.5 updated.
+
+**Gates:** new `tests/bridge_route_readback.test.js` (18 cases incl. a
+stub-bridge INTEGRATION over a real WebSocket answering with the REAL snapshot
+builder); `per_output_push` / `led_controller_ui_round2` flows updated.
+Targeted 169/169. Sim `npm test` **1736 · 1728 pass · 8 fail = the same
+pre-existing scene-content baseline** as `_124`/`_126` — no new failures.
+Report `20260725_127_bridge_route_readback.md`. **Operator note:** the show
+machine's bridge must be RESTARTED (launcher) before the third check can pass;
+until then it fails loudly with 'restart the launcher', which is the correct
+claim. No live stack touched; no git ops.
+
+
+## Calendar time-travel entry · cue `size` gone · HOLD out of the cue UI (`_128`, DONE — uncommitted)
+
+Operator tasks 2026-08-03 + mid-flight ruling ("remove hold from the cue UI
+to avoid confusion, but keep it for the party").
+
+**Landed (CaptainPad):** the DAY calendar chart is a zoom entry point — cue
+blocks/markers are touchables opening the SAME EventSheet (engine picks
+perform vs travel, unchanged), and EMPTY calendar time opens the new MOMENT
+mode (purple header, resolver peek, TIME TRAVEL HERE only). Empty-slot was
+IMPLEMENTED, not deferred: `POST /timeline/travel {date,time}` + resolve
+already existed — zero new engine surface. 15-min tap snap
+(`chartTapToLocal`), 24:00 pull-back, null-on-bad-geometry. WEB LANDMINE
+pinned in the report: RN-web gives `locationY` only to RESPONDER events —
+Pressable presses carry none on web; the fix is the DayTimePicker
+PanResponder-underlay idiom (decor layers pointerEvents:none). Cue `size`:
+engine verified FIRST — cue `globals` is a fully generic CPC map
+(validateGlobalsMap → _writeGlobals → setParams), NO size-specific plumbing,
+so NOT the stop case; SIZE slider deleted, ON-seed now
+`{speed:0.5,bpmSpeedSync:0}`, legacy size shed at load AND emit
+(`cue_edit_logic.stripCueSizeGlobal`), never re-emitted; deck-level size
+untouched; playa_default.yaml carries no size. HOLD: whole UI section gone;
+`cue_edit_logic.assembleCue` spreads the original cue and never touches
+`hold` — {min} and {until} forms round-trip byte-identical (pinned by
+tests); new cues emit no hold. Engine diff = two comments.
+
+**Gates:** tsc clean; CaptainPad vitest **931 pass / 6 skipped** (baseline
+914/6 → +17, zero new failures); engine timeline tests 431/431. Live proof
+on a fresh :7167 dist vs real engine (playa_default armed-dormant): block
+tap → event sheet, noon tap → moment sheet, travel → purple TIME TRAVELING
+banner, D1 tab-return → REST `zoom:null`, cue editor GLOBALS = speed+sync
+only with no HOLD between DURATION and DAYS. Report
+`20260725_128_calendar_timetravel_cue_size.md`. Harness in
+`~/tmp/bm26_s128_calendar_tt/`. Servers relaunched for verify (a CC restart
+had killed :7167 + :6968) and shut down after; :6967 never touched. No git
+ops.
+
+## Dimmer rack: desktop-mouse horizontal scroll (`_130`, DONE — uncommitted)
+
+Operator bug 2026-08-03: the `_122` fader-row ScrollView was touch-only in
+practice — on a computer the row was frozen. Repro on a pre-fix :7167 dist
+(desktop viewport, real CDP mouse events): plain vertical wheel DEAD
+(browsers drop deltaY on a horizontal-only scroller), scrollbar hidden
+(`scrollbar-width:none`), gap click-drag dead; only shift+wheel/trackpad
+deltaX worked.
+
+**Landed (CaptainPad):** new pure `utils/wheel_scroll_logic.ts`
+(`wheelToHorizontalDelta` — deltaY-dominant → horizontal px, pixel/line×40/
+page×width; deltaX-dominant/tie/empty → null = native keeps it) + 8-case
+test. `dimmer_rack.tsx`: web-only effect attaches a non-passive `wheel`
+listener to `getScrollableNode()` (throws loudly if missing — no silent
+fallback); preventDefault + `scrollLeft += delta` only for deltaY-dominant
+events; `faderDraggingRef` mirrors the `_122` gate so mid-knob-drag wheels
+are ignored (DOM listener can't read state); scrollbar now shown on web
+only (`showsHorizontalScrollIndicator={Platform.OS==='web'}`) — native
+touch keeps it hidden. NO gap click-drag panning (would sit on the faders'
+capture-claimed PanResponder; wheel+scrollbar cover desktop).
+
+**Gates:** tsc clean; vitest **939 pass / 6 skipped** (= `_128` baseline
+931 + 8 new, zero new failures); eslint clean on touched files; web:build
+pass. Live proof BOTH platforms on fresh :7167 dist: desktop wheel 0→720→
+back, deltaX native 480, knob mouse drag 1.00→0.43 with scrollLeft frozen +
+mid-drag wheel ignored; iPad touch re-verified all `_122` checks (landscape
+1 row, portrait 2 rows tops 576/831, gap swipes 379/406, knob touch drags
+never scroll). Engine dimmers diffed + restored (`fullyRestored:true`).
+Report `20260725_130_dimmer_rack_desktop_scroll.md`. Note: morning engine
+on :6968 was found dead; fresh `--model titanic` engine + :7167 dist server
+left running for the operator; :6967 never touched. No git ops.
+
+## Audio Companion: noise-floor calibration APPLY feedback (`_129`, DONE — uncommitted)
+
+Operator bug 2026-08-03: running NOISE LEVEL CALIBRATION and applying it gave
+NO UI feedback — nothing showed the noise level was actually set. Root cause
+found in `marsin_engine/audio/companion/companion_server.js`: the
+`applyNoiseGates` handler applied the gates locally, broadcast `gates` (three
+sliders nudged) and fired `writeThroughShared` — a **fire-and-forget** PATCH
+`/audio/config`. Nothing confirmed the value, and a 400 from the engine left
+the UI looking exactly like a success. ("Noise floor" here = the per-band
+noise gates lowGate/midGate/highGate in [0,0.999], not dB.)
+
+**Landed (companion):** new pure `audio/companion/noise_floor.js`
+(`normalizeGateBundle` — engine/analyzer `bands` → gate state, per-band null =
+inherit, missing/non-finite THROWS; `effectiveGates`; `formatGateSummary`;
+`verifyGateApply` requested-vs-read-back @5e-4; `formatApplyMessage`, which
+refuses to render an incoherent outcome). `companion_server.js` gains
+`applyNoiseFloor(ws, gates, opts)`: apply locally → **await** the engine
+PATCH → **read back the authoritative post-apply state** (engine's own
+post-PATCH config; the live analyzer's `bands` only when there is no engine,
+reported as *local only*) → reconcile sliders to the read-back → verify →
+emit `noiseApplyResult`. Failed PATCH / throwing read-back / changed value
+⇒ `ok:false` + a loud line; no success-looking state. `gatesMsg()` puts a
+server-built `summary` on every `gates` broadcast and on `hello`
+(`gatesSummary` + `lastNoiseApply`). The calibration's 💾 Save path now runs
+through the same verified apply and only snapshots the profile when the
+read-back proves the gates landed.
+
+**UI (`ui/*`):** two quiet lines under the calibrate card — `#noisecal-applied`
+(`✓ noise floor set (engine) — low 0.061 · mid 0.043 · high 0.180`, auto-clears
+after 5 s; a FAILURE stays until the next apply; appends `· saved to "<prof>"`)
+and `#noisecal-current` (always there: `noise floor now: … · global 0.040`,
+from server truth, so a reload still shows it). On reload a past failure is
+re-shown `(last apply)`; a past success is not re-announced.
+
+**Gates:** 17 new tests in `tests/companion/companion_noise_floor.test.js`, all
+green; companion+audio dirs 663 pass / 5 fail (all `audio_capture.test.js`
+"pinned Windows mic" env); full engine suite **2549 tests, 2540 pass, 9 fail**
+— the 5 plus effects_v2_mode_page_layout, osc_listener EADDRINUSE,
+status_output_routing, specialty_white_uv byte-identity: environmental /
+pre-existing (operator's live stack holds :6968 + the OSC port), none in
+audio/companion. `git diff --check` + `node --check` clean. Screenshot proof
+(set / failure / after-reload) in `~/tmp/noise_cal_shots/*.png`, rendered from
+the real UI files with copy produced by the real formatter — the operator's
+live companion :6966 and engine :6968 were NOT touched and no gate was written
+to the running engine. Report `20260725_129_audio_noise_cal_feedback.md`.
+Follow-up noted: the GAIN calibration's Apply still uses the old
+fire-and-forget path. No git ops.
+
+## Audio Companion: input-gain calibration APPLY feedback (`_131`, DONE — uncommitted)
+
+`_129` §4 follow-up: `▶ Calibrate gain → ✓ Apply gain` still fired the
+fire-and-forget `setInputGain`, so a rejected apply looked exactly like a
+success and no value was ever confirmed. Same treatment, same patterns.
+
+**Landed (companion):** new pure `audio/companion/apply_readback.js` — the
+shared read-back provenance vocabulary (`SOURCE_LABEL` engine / *local only*,
+`sourceLabel()` throws on an unknown source); `noise_floor.js` now imports it
+instead of keeping its own copy (its copy + thrown messages unchanged, `_129`'s
+17 tests untouched). New pure `audio/companion/input_gain.js`:
+`normalizeGainRequest` (out-of-range/non-numeric REFUSED, nothing written),
+`normalizeInputGain` (read-back; missing/non-finite/outside [0,64] THROWS),
+`formatGainSummary` (`×3.70`, 2 dp so a clamp shows), `verifyGainApply` @5e-3,
+`formatGainApplyMessage` (refuses incoherent outcomes), and **`runGainApply`**
+— the apply PATH with every side effect injected, so the ORDER is unit-tested
+and the server runs that exact code (no mirror to drift). Order: validate →
+apply locally → **await** the PATCH → **authoritative read-back** → reconcile
+→ verify → one line. One improvement over `_129`: when the engine is up and
+REFUSES the write, the path re-reads the engine's own config once and
+reconciles to it, so a red "NOT set" can't sit above a readout showing the
+number nothing upstream accepted (both failures reported if the re-read also
+fails). `companion_server.js`: `applyGainVerified` + `liveAnalyzerGain` (test
+source runs at unity by design → read the mic-preamp state there), new WS
+message `applyInputGain` (sliders keep the cheap `setInputGain`), `gainMsg()`
+puts a server-built `summary` on every `inputGain` broadcast + `hello`
+(`gainSummary` + `lastGainApply`), and `saveActiveProfile` accepts an
+`inputGain` routed through the verified apply with `persistProfile` — a profile
+can only record a gain the read-back proved landed.
+
+**UI (`ui/*`):** two quiet lines under the Calibrate-gain card, mirroring the
+noise card (same classes, no CSS change) — `#gaincal-applied` (`✓ input gain
+set (engine) — ×3.70`, auto-clears after 5 s; a FAILURE persists until the next
+apply; appends `· saved to "<prof>"`) and `#gaincal-current` (always there:
+`input gain now: ×3.70`, server truth, correct after a reload). Past failure
+re-shown `(last apply)` on reload, past success not re-announced.
+`NOISE_APPLY_MS` → `APPLY_CONFIRM_MS` (one 5 s lifetime for both cards). The
+DESIGN page's compact `Apply` uses the verified message too and flashes the
+server's read-back text; its old optimistic `flash('gain → ×…')` (which lied on
+a failed apply) is gone.
+
+**Gates:** 30 new tests in `tests/companion/companion_input_gain.test.js`, all
+green (with `_129`'s: 45 pass / 0 fail); full engine suite **2582 tests, 2573
+pass, 9 fail** — the exact `_129` baseline failure set (audio_capture ×5,
+effects_v2_mode_page_layout, osc_listener EADDRINUSE, status_output_routing,
+specialty_white_uv), all environmental, **no new failures**, none in
+audio/companion. `git diff --check` + `node --check` clean. Screenshot proof
+(ok / failed PATCH / engine-clamped mismatch / after-reload) in
+`~/tmp/gain_apply_shots/*.png`, rendered from the real UI files with copy
+produced by the real `runGainApply`, served on **:31941** (agent slot range) —
+the operator's live stack (:6966/:6968/…) was NOT touched and no gain was
+written to the running engine. Report
+`20260725_131_audio_gain_apply_feedback.md`. Follow-up noted: give the
+noise-floor path the same refused-write re-read; the gain card has no
+"Save to profile" button yet (server side is in place + tested). No git ops.
+
+## Audio Companion MIC TUNE polish: refused-write re-read + gain save button (`_132`, DONE — uncommitted)
+
+Operator accepted `_131`'s two noted follow-ups as a wave.
+
+**(1) Noise floor — refused-write re-read.** `_129`'s `readBackGates` fell
+through to the ANALYZER when the engine REJECTED the PATCH — but the analyzer
+holds the optimistic local apply, so the card showed a red `✗ noise floor NOT
+set` directly above `noise floor now: low 0.061 · mid 0.043 · high 0.180`: the
+exact gates the engine had just refused. Fixed by moving the read-back decision
+into a new pure, awaited `resolveGateReadBack` in `audio/companion/
+noise_floor.js` (same reason `_131` extracted `runGainApply` — testable without
+a socket; `applyNoiseFloor`'s structure and every WS frame it emits are
+unchanged, `companion_server.js` just imports it and takes `error` from it).
+Rules: engine took the write → its post-PATCH body (unchanged); engine REFUSED
+→ **re-read `/audio/config` ONCE** and reconcile sliders + summary to the
+engine's own gates, verdict still `ok:false` (the re-read fixes what is SHOWN,
+never the outcome); re-read also fails → error becomes `…; engine re-read
+failed: <why>` (both reported, nothing swallowed); `fetchConfig` → null (the
+503 "audio not initialized") or no engine → analyzer read-back, original error
+intact; untrusted read-back → `gates:null` + `read-back failed: …`, never a
+number. One authoritative read, not a retry (pinned by a call-counting test +
+one proving a SUCCESSFUL write is never re-read).
+
+**(2) Gain card — the missing 💾 Save to `<profile>`.** `_131` wired
+`saveActiveProfile` to accept `inputGain` through the verified apply but shipped
+no control. Added mirroring the noise card exactly: `#gaincal-save` as the
+second button in the same `.mac-result` row as `✓ Apply gain` (same classes,
+same copy shape, no CSS change), click sends `{saveActiveProfile, inputGain:
+recommendedGain}`, and `renderProfiles` now keeps BOTH save buttons' labels
+current from one string. The existing `gainApplyResult` line covers it:
+`✓ input gain set (engine) — ×3.70 · saved to "Quiet room"`; a refused write
+still writes nothing into the profile.
+
+**Gates:** 8 new tests appended as §5 of
+`tests/companion/companion_noise_floor.test.js` — **`_129`'s 17 all still pass
+UNMODIFIED, no pinned expectation had to change**; noise_floor + input_gain
+together **55 pass / 0 fail**; full engine suite **2590 tests, 2581 pass, 9
+fail** — the same environmental baseline set (audio_capture ×5,
+effects_v2_mode_page_layout, osc_listener EADDRINUSE, status_output_routing,
+specialty_white_uv), **no new failures**, none in audio/companion.
+`git diff --check` + `node --check` clean. Screenshot proof in
+`~/tmp/companion_polish_shots/*.png` (`noise_refused_write.png` — red NOT-set
+line above the re-read `0.040` gates; `gain_save_button.png`;
+`gain_saved_to_profile.png`), real UI files driven by the real
+`resolveGateReadBack`/`formatApplyMessage`/`runGainApply`, served on **:31942**
+(agent slot range) — the operator's live stack (:6966/:6968/…) NOT touched,
+nothing written to the running engine. The two cards are now behaviourally
+identical (authority rules, refused-write reconcile, transient-✓ /
+persistent-✗, reload-safe readout, verified save-to-profile). Report
+`20260725_132_audio_companion_polish.md`. No git ops.
+
+## Dimmer state survives model renumbering: stable group-name keys (`_125`, DONE — uncommitted)
+
+**The `_122` live-stack finding, fixed at the root.** Persisted dimmer
+brightness (`globals_state.yaml → dimmers`) was keyed by NUMERIC section id;
+section ids are minted operator-side by the sim's controller registry
+(`controller_registry.js` ~:2339 — per-group "next free id" above the DMX ∪ LED
+max, re-minted on scene rework) and exported into `models/titanic.js`. The
+operator's regeneration moved the wall/stack/rail groups 486-498 → 500-513, so
+every saved value went orphan and the Dimmer Rack fell back to `?? 1.0`.
+Expected operator churn — the fix makes state survive it.
+
+**Landed:** dimmer state is now keyed by STABLE GROUP NAME (the identity that
+survives regeneration; `groupFixedColors` set the precedent).
+`StateManager.migrateDimmersToGroupKeys(globalsState, groupToSectionId)` runs
+at engine load (api_server, right after `loadGlobalsState`): numeric keys
+mapping to a current group are rewritten to the name; duplicates (half-migrated
+file) keep the name-keyed value with a loud drop-warning; ORPHANS (id/name
+matching no current group) get ONE clear warning naming every key and are
+preserved on disk untouched — never deleted, never silently defaulted.
+Idempotent; persists on the next globals save (hueShift-discard precedent, so
+the autoSave gate is honored). `applyGlobalsState` gained an optional
+`groupToSectionId` param: names resolve to the CURRENT model's ids; numeric
+keys still apply verbatim (old id-keyed snapshots restore exactly as before).
+WIRE UNCHANGED — CaptainPad untouched: `GET /dimmer-groups` identical (now via
+the shared `modelDimmerGroups()` table), `GET /dimmers` still `{sId: v}`
+(names resolved to current ids, orphans passed through verbatim),
+`POST /section-brightness` still takes `sectionId` but persists under the
+owning group's name and 400s LOUDLY on an id no group maps to (codex P0 — an
+unmappable key could never be read back). Pre-existing orphans in the live
+titanic file (1-2, 4-17, 189, 486-498) stay preserved+warned; old `titanic.js`
+in git history holds their id→group map if hand-recovery is ever wanted.
+
+**Gates:** new `tests/state/dimmer_state_stable_keys.test.js` **7/7** (legacy
+file migrates · idempotent · renumbered model keeps values by name across
+save/load · orphans warn loudly + survive the round-trip byte-identical ·
+duplicate drop is loud · legacy numeric snapshot path unchanged · unknown name
+skipped never guessed). Black-holed e2e vs the REAL titanic model (three-wall
+harness pattern: `controllers: []` + dest 127.0.0.9 via MARSIN_CONFIG_FILE,
+temp MARSIN_STATE_DIR/_PLAYLISTS_DIR/_TIMELINE_DIR, walls asserted from
+/status): boot migrated 2 entries + warned `[189, 486, 487]`, wire ids
+correct, POST persisted `"Right Front Wall": 0.33` by name, unknown id → 400,
+on-disk file name-keyed with orphans byte-identical — PASS. Full engine suite
+**2534 / 2526 pass / 8 fail** — all 8 in the known environmental families
+(audio_capture ×5, effects_v2_mode_page_layout, osc EADDRINUSE from the live
+stack, specialty_white_uv drift), **zero new failures**. `node --check`,
+`git diff --check`, `--list`, `--dry-run` all pass. Operator's live
+`states/titanic/` untouched (fixture copies only). **Follow-ups filed in the
+report:** `viewSelection.target` (deck/mixer/snapshots/playlists) persists raw
+section/fixture ids — same renumbering fragility; pre-fix snapshots carry
+id-keyed `globals.dimmers` (restore unchanged, migratable later). Report
+`20260725_125_dimmer_state_stable_keys.md`. No git ops.
+
+---
+
+## _133 — Documentation contract truth (Sub-agent A) — LANDED
+
+**Scope:** three docs only — `docs/COLOR_THEORY.md`,
+`docs/MARSIN_ENGINE_PATTERNS.md`, `docs/MARSIN_PB_LANG_SPEC.md`. No code, no
+scene, no model, no config. `views.yaml` + `titanic.viewmasks.js` read-only
+(Sub-agent B owns those).
+
+**Landed:** the three documents now agree with the engine, the vendored WASM,
+the finished Titanic mapping, and the operator's creative decisions.
+
+*Parameter philosophy replaced.* The old "every pattern must expose direction +
+autonomous reversal + radius + kick + two colours + true black + party
+brightness" rules are gone — the parameter truth sweep (`_32`) measured 170
+DEAD / 39 WRONG / 25 WEAK of 817, clustered on exactly those mandates. New
+binding rule: every production pattern has a **truthful `localSpeed` as the
+FIRST local control**; **direction exists only when the concept has meaningful
+directional motion**, and is then the SECOND control with visibly opposite
+endpoints and no centre freeze; **no other generic slider is required**; every
+declared control must be truthful, perceptible, independently useful and
+effective across its range; **do not invent controls to fill MIDI knobs**.
+Autonomous reversal demoted to optional. Global-before-local order and
+declaration-order = MIDI-knob-order preserved. Audio stays modulators-only.
+Every statement is now tagged **HARD CONTRACT** / **PRODUCTION CONVENTION** /
+**OPTIONAL CAPABILITY**, with an explicit ban on describing an artistic
+preference as a runtime requirement.
+
+*Timing corrected.* The double global-speed multiplication (`globalMult =
+pow(2, (speed-0.5)*4)` inside `beforeRender`) is removed, as is the instruction
+to `export var speed` — `speed`/`size` are `engineOwned` and never injected
+(`param_center.js`). Documented truth: the engine accumulates
+`patternClockSeconds += wallDelta * globalSpeedMultiplier()` and passes it to
+`mixer.beginFrame`; `pattern_channel.beginFrame` differences and accumulates
+without re-applying it; patterns apply **only** `localSpeed`.
+
+*WASM `delta` re-measured by OFFLINE probe* (in-process VM, no engine, no
+socket, no port). The old "fixed nominal ≈15.7, independent of `elapsed`" claim
+is **false**: `delta = (elapsed_now − elapsed_prev) × 1000` ms, so it IS
+global-speed-scaled (the old "SPEED scales `time()` not `delta`" gotcha is also
+withdrawn). Real quirk documented: `0` doubles as the "no previous frame"
+sentinel, so `delta` is a nominal **16.0 ms** on frame 1 and on any frame
+following an `elapsed == 0` — a freshly loaded pattern sees `16, 16, real,
+real…`; a repeated `elapsed` yields `0`, not the nominal. `t` == the passed
+elapsed exactly; `time(0.1)` wraps at 6.5536 s; `pixelCount` is a literal 144
+at 4 / 144 / 964 runtime pixels.
+
+*Metadata + views corrected.* Four-variable ABI → the real **7 lanes**
+(`controllerId, sectionId, fixtureId, viewMask, fixtureTypeId,
+pixelLocalIndex, viewMaskHi`, `meta_abi.js`). Compile-probed the language
+surface: `fixtureType` (not `fixtureTypeId`) and `pixelLocalIndex` are
+builtins, `pixelIndex` is not, and `viewMaskHi` is compiler-restricted to
+`(viewMaskHi & <literal>)`. `sectionId == 2 // Vintage` examples removed —
+titanic sections are model-specific (514, 515…), which is what made 137 knobs
+dead on the ship. Taught: prefer `inView("Authored View Name")` (folds both
+words, hard compile error on unknown name, on-demand bit promotion), `FIX_*`
+where fixture capability is the real distinction, raw ids only for declared
+single-model work. The "always include a `sectionId == 0` fallback" advice is
+**withdrawn** in both docs (codex P0). `views.yaml` (engine semantic masks) vs
+`pixel_map_views.yaml` (simulator 2D layout) explicitly disambiguated.
+
+*Colour + hardware corrected.* `w == a` invariant preserved and restated (RGB
+shapes warmth, UV independent, amber not a separate accent lane). Hardware
+updated to the finished ship — **964 px**: Hull Canvas 360 Shehds bar px / 4
+wall groups · Silhouette 320 RGBW rope px / 8 strands · Jewelry 96 RGBW Vintage
+rail px · Organs 40 RGBWAU Uking pars (24 stacks + 16 auditoriums) · Identity
+2 × 74-px RGBW TE signs = 148. All five reconcile exactly against
+patches/controllers/scene_config + the fixture models. **Corrected: strands and
+TE signs DO have white emitters** (RGBW, `whiteMode: native`); what they lack is
+amber and UV. Real output paths documented (RGBWAU DMX for bars/pars; strands
+fold amber into RGB, drop UV, joint clip-proof pre-scale, gamma only on the
+controller) and the `R + W + 0.8A + 0.1U` equations demoted to a **preview /
+legacy** path, not the physical chain.
+
+*COLOR_THEORY rewritten around the five instruments* with concise artistic
+roles (Canvas = gradients/water/large motion · Silhouette = far-field outline,
+cool saturation, travel · Jewelry = warm filigree, restrained · Organs =
+heartbeat, halos, punches · Identity = deliberate punctuation, not constant
+competition). "Wash the wood warm; put saturation in the pixels" kept as the
+core rule. **"Four giant golden beacons" corrected to two main stack structures
+plus two smaller stack beacons.** Warm stacks explicitly remain artistic
+guidance, not an engine rule. New §7: one palette ≠ one colour — same global
+endpoints, different palette position / luminance / saturation / motion per
+instrument.
+
+*Transitions, trails, portability.* Six-point blend contract written into both
+docs (exact endpoints at 0 and 1, bounded output, identical W/A math so matched
+inputs stay matched, no per-pixel allocation, truthful spatial direction).
+Stale blend table replaced with the three modes the API actually accepts
+(`blend_screen`, `blend_add`, `blend_over`) plus transient `trans_*`. Trails:
+stop presenting a hard-coded pixel count as portable — prefer scalar/spatial
+formulations or the `feedbackTrails` global effect; a model-sized array must be
+marked model-specific.
+
+*Stale material.* Two `file:///Users/ssolaimanpour/...` links → relative;
+`.agent/01_skills/...` → `.agent/skills/...`; the 13-pattern static inventory
+removed; `docs/36/40/41` shorthand → real links.
+
+**Gates:** zero `file:///`, zero `.agent/01_skills`, zero portable-section-id or
+double-speed claims (only deliberate "this was wrong" callouts). **Every
+relative link target verified to exist** by script; every referenced code path
+verified present. No real IPs, no MACs, no future dates.
+`python scripts/security_check.py --all` → **no finding in any of the three
+files**. **No git op, no deploy, no npm install, no live engine boot, no
+default port touched** — the delta probe ran the WASM VM in-process with no
+transport, from the session scratchpad.
+
+**Open:** (1) **PENDING-B** — `MARSIN_ENGINE_PATTERNS.md` §7.3 lists the 24
+current titanic group names behind an HTML comment marker; reconcile after B
+lands. (2) **`.agent/skills/highdef_pattern_generation.md` still mandates the
+old universal parameters and hard-codes `sectionId 1/2/3` for the ship** — it
+was out of write scope and now contradicts the corrected docs; fix it or it
+keeps regenerating dead knobs. (3) `lib/pattern_channel.js` L25 comment lists a
+non-existent `blend_crossfade` channel mode. (4)
+`marsin_engine/effects/feedbackTrails.js` (plus `blastWhite/colorWash/dropHit/
+uvBlast/vintageWhite`) are camelCase filenames violating the snake_case rule —
+linked under their real names, reported not renamed. Report
+`20260725_133_docs_contract_truth.md`.
+
+## Titanic semantic engine views: 17 composite views (`_134`, DONE — uncommitted)
+
+**The titanic scene had 24 base group bits and `custom: []` — no artistic
+handles at all.** Landed the semantic vocabulary, generated through the
+repository's CANONICAL chain (`simulation/src/dmx/view_registry.js`:
+`createViewRegistry` → `reconcileGroupBits` (asserted no-op `+0 −0`) →
+`addCustomView` → `buildViewmasksSidecarJS`, plus save-server's own
+`yaml.dump({views},{lineWidth:-1})` writer) driven OFFLINE — no sim browser, no
+server, no ports. Two files only: `simulation/scenes/titanic/views.yaml` (line
+27 `custom: []` → 17 views; the 24 `groupBits:` lines byte-for-byte untouched)
+and `marsin_engine/models/titanic.viewmasks.js` (17 `viewMasks[]` + the
+`// Updated:` stamp; `groupBits` block byte-for-byte untouched). `patches.yaml`,
+`controllers.yaml`, `scene_config.yaml`, `pixel_map_views.yaml`, `titanic.js`,
+`titanic.effects.js` and every pattern/playlist untouched.
+
+**The 17 (word / bit / pixels):** word 0 — `Hull Canvas` 0x40000 **360** ·
+`Left Hull` 0x80000 **180** · `Right Hull` 0x1000000 **180** · `Silhouette`
+0x2000000 **320** · `Left Silhouette` 0x10000000 **160** · `Right Silhouette`
+0x20000000 **160** · `Jewelry` 0x40000000 **96**; word 1 (`viewMaskHi`) —
+`Left Jewelry` 0x1 **48** · `Right Jewelry` 0x2 **48** · `Organs` 0x4 **40** ·
+`Left Organs` 0x8 **20** · `Right Organs` 0x10 **20** · `Identity` 0x20 **148**
+· `Stacks` 0x40 **24** · `Left Stacks` 0x80 **12** · `Right Stacks` 0x100 **12**
+· `Auditoriums` 0x200 **16**. Counts MEASURED from the exported model via the
+real `lib/mask_registry.js`, all 17 matching spec. Deliberately NOT created:
+`All Bars`/`All Ropes`/`All Vintage Lights`/`All TE Signs` (exact-membership
+aliases of Hull Canvas / Jewelry / Silhouette / Identity), `Left|Right
+Auditorium` (already base group views), `Left|Right Identity` (TE Sign /
+TE Sign 2 already select independently). Patterns reach them by name —
+`inView("Left Hull")` — so no pattern needs to know the word.
+
+**Gates:** offline harness **21/21 PASS** using the REAL `view_word.js`
+`ViewBitAllocator`, `mask_registry.js`, `view_mask_constants.js`,
+`in_view_intrinsic.js` and the **vendored WASM host** — groupBits byte-stable vs
+HEAD · 41 MASK_* constants with zero collisions · every (word,bit) unique ·
+no word-0 custom bit on a group bit · no two views with identical member sets ·
+inView folds correctly in BOTH words (hi-word as an inlined literal, no `var`)
+· and a per-view VM compile+render over all 964 pixels with **ZERO misses and
+ZERO leaks on all 17**. `scene_model_parity.cjs titanic` and `--strict` both
+**PASS 0/0**. Sim suite **1736 / 1728 pass / 8 fail** = the exact known
+baseline; the four view/bench-touching failures were verified against the
+pre-change state (replaying `checkTargetCompatibility` with `custom` truncated
+to 0 still gave the 6 `TGT_UNIVERSE_RESERVED` refusals and `31/31 (0 spare)`)
+— all four were ALREADY red. Engine mixer/view suite **475/475**; full engine
+suite **2588 / 2580 pass / 8 fail**, all known environmental (audio_capture ×5,
+effects_v2_mode_page_layout, OSC EADDRINUSE from the live stack,
+specialty_white_uv playlist drift from another agent's uncommitted edits) —
+**zero new failures**. No git ops, no deploy, no install, no hand-booted
+engine; operator's live stack kept every port.
+
+**Open (filed, NOT fixed — outside write scope):** (1) **word 0 is now
+saturated** (`0x7fffffff`, `nextFreeBit → 0`) because the canonical
+`nextFreeSlot` fills word 0 first; base group bits MUST be word 0, so adding a
+new fixture group to the titanic scene now throws at export
+(`[Views] Out of view-mask bits while assigning group '…'`). Word 1 still has 21
+free slots — the fix is an allocator policy change in `view_registry.js`
+(prefer word 1 for custom views / reserve group headroom), then re-export. It
+was already tight: the bench-block projection read `31/31 (0 spare)` with ZERO
+customs. (2) **`marsin_engine/lib/model_loader.js` is word-blind** —
+`reserveExplicitBits` accumulates ONE flat `reservedMask` ignoring `word`, so
+`loadModelForGauge('titanic')` now throws `groupBits['Left Back Wall'] reuses
+bit 0x10` (word-1 `0x10` vs word-0 group `0x10` — not a real collision).
+`engine.js` does this correctly with `reservedMask`/`reservedMaskHi`, so the
+engine/sim/CaptainPad/sACN path is UNAFFECTED; blast radius is
+`tools/perf_gauge.mjs` + `tools/param_truth/render_context.js` on titanic, and
+no test loads titanic through it. (3) **`simulation/lib/bench_section.cjs` T3
+view-bit budget is word-blind** — counts word-1 customs against the 31-bit
+word-0 ceiling (`24 + 17 + 7 = 48` where true word-0 pressure is 38); the
+refusal's conclusion is right, its arithmetic isn't, and it only surfaces
+inside two already-red tests. Report
+`20260725_134_titanic_semantic_views.md`.
+
+**_133 addendum — PENDING-B reconciled (after _134).** Re-read the FINAL
+`views.yaml` + regenerated `titanic.viewmasks.js` and treated the FILES as
+authority, not the hand-off note. B's 17 custom views confirmed by independently
+re-summing member-group pixel counts from `models/titanic.js`: Hull Canvas 360 ·
+Left/Right Hull 180+180 · Silhouette 320 · Left/Right Silhouette 160+160 ·
+Jewelry 96 · Left/Right Jewelry 48+48 · Organs 40 · Left/Right Organs 20+20 ·
+Identity 148 · Stacks 24 · Left/Right Stacks 12+12 · Auditoriums 16 — **all 17
+match**, model total 964, all 24 base groups populated. Rebuilt the engine's
+`viewTable` (41 names) and ran the REAL `buildMaskConstants()` (41 `MASK_*`, **no
+sanitized-name collision** — would have failed every compile) and the REAL
+`injectInViewIntrinsic()` over all 41: **31 fold low-word, 10 high-word, 0
+failures**, every high-word fold an inlined literal per Tier-C. All six forbidden
+aliases (`All Bars`, `All Ropes`, `All Vintage Lights`, `All TE Signs`,
+`Left/Right Identity`) hard-error as intended; `Left/Right Auditorium` remain
+base groups. **New finding:** the five instrument views are **mutually exclusive
+and exhaustive** — they partition all 24 base groups with zero overlap and sum to
+exactly 964, which makes a per-instrument `if/else if` chain provably complete.
+Docs: `PENDING-B` marker removed; new **§7.3.1** in `MARSIN_ENGINE_PATTERNS.md`
+(17 composites with counts + 24 base groups + word placement + a "names that do
+NOT exist" list + a spelling-irregularity warning — `Right SmokeStacks` plural vs
+`Left SmokeStack` singular, underscored strand groups, singular `Left/Right
+Auditorium` vs composite `Auditoriums`, since `inView()` matches literally);
+`COLOR_THEORY.md` §2 gained a View-name column plus halves/subdivisions, §4 now
+points at `Stacks` for the funnels (warning that `Organs` also covers the
+auditoriums), §7 gained a worked `inView()` palette-distribution example.
+Re-verified: every concrete `inView("…")` string in all three docs resolves
+against the real viewTable (only generic placeholders and the do-not-exist list
+don't, by design); all 17 + 24 names present; all relative links resolve;
+security check clean; **no git op, no deploy, no install, no live boot, no port
+bound.**
+
+## _136 — `model_loader.js` made word-aware (fixes `_134` §5.2) — LANDED
+
+**Scope:** `marsin_engine/lib/model_loader.js` + one new test file. No engine.js,
+no model, no sidecar, no scene, no config. Report
+[`20260725_136_model_loader_word_aware.md`](../reports/202607/20260725_136_model_loader_word_aware.md).
+
+**Landed:** the VM-only loader behind `tools/perf_gauge.mjs` and
+`tools/param_truth/render_context.js` is no longer blind to the Tier-C view
+**word**. `reserveExplicitBits()` accumulated ONE flat `reservedMask` across every
+`viewMasks` entry and `assignGroupBits()` validated the declared `groupBits`
+table against it — so once `_134` pinned 10 semantic views into word 1 at bits
+`0x1..0x200`, each one read as a phantom collision with a legitimate word-0 group
+bit. Repro `loadModelForGauge('titanic')`: **before** `THROW: groupBits['Left
+Back Wall'] reuses bit 0x10`; **after** `OK viewMasks: 17 pixels: 964 · word1
+views: 10 · 284 px with viewMaskHi set`. `engine.js` was always correct
+(`reservedMask`/`reservedMaskHi`, groupBits validated against word 0 only) — the
+two loaders had drifted, so the engine/sim/CaptainPad/sACN path was never
+affected.
+
+`reserveExplicitBits()` now returns `{reservedMask, reservedMaskHi}` and reserves
+into the entry's own word; `assignGroupBits()` consults the **word-0** reservation
+only. **No check was weakened** — a genuine same-word reuse still throws loudly
+(`reuses bit 0x…` / `reuses viewMaskHi bit 0x…`), and two engine.js validations
+`model_loader` lacked were brought over (a `word` outside `{0,1}` throws instead
+of silently coercing to 0; a `word:1` entry with no explicit bit throws). Also
+initialises `px.vMaskHi ?? 0` per `engine.js:417`. `reserveExplicitBits` /
+`assignGroupBits` are now exported so the word-space contract is testable without
+writing throwaway model files into the source tree (`MODELS_DIR` is fixed).
+
+**Test:** new `tests/mixer/model_loader_word_aware.test.js` — **14/14 pass**. It
+is the FIRST test to load a real multi-word model through `model_loader` (the
+gap that kept every suite green while the loader was broken:
+`view_mask_hi_host` uses a synthetic model, `param_truth_smoke` uses
+`test_bench`). Covers: titanic loads with 24 groups + 17 views (**41 named
+masks**); a guard asserting titanic still CONTAINS a word-1 bit equal to a word-0
+group bit, so the suite goes red if a re-export removes the condition under test;
+word-1 presets land in `viewMaskHi` with zero leak into `viewMask`; repeated
+loads idempotent; and — the "do not weaken it" half — genuine word-0 and word-1
+collisions, duplicate names, `0x80000000`, `word:2`, bit-less `word:1`, and a
+declared-`groupBits` clash with a word-0 preset bit all still throw.
+
+**Blast radius verified offline** (scratchpad harness; no engine process, no
+socket, no port, and **no perf baseline written**): `perf_gauge.mjs`'s
+`measurePair()` load path replayed verbatim — titanic loads 964 px / 24 groups /
+17 views / **41 `MASK_*` constants** (matches `_134` §3.1), `01_cylon_sweep`
+compiles and renders a frame lighting 964/964 px; and
+`createRenderContext('titanic')` returns a full context.
+
+**Gate:** `cd marsin_engine && npm test` → **2601 tests / 2593 pass / 8 fail** —
+**zero new failures**, all 8 the known environmental families (audio_capture ×5,
+`effects_v2_mode_page_layout`, OSC `EADDRINUSE` from the operator's live stack,
+specialty/themed playlist drift from another agent's uncommitted edits). Every
+mixer/view/mask test passed. **No git op, no deploy, no install, no hand-booted
+engine, no port bound**; operator's launcher stack (6966-6972, 5568, 8081, 10000)
+kept every port; other agents' uncommitted work untouched.
+
+**Still open (NOT this thread):** `_134` §5.1 (word 0 saturated — sim-side
+`view_registry.js` `nextFreeSlot` spends scarce word-0 slots on custom views, so
+adding a new titanic fixture group throws at export) and §5.3
+(`simulation/lib/bench_section.cjs` T3 counts word-1 customs against the word-0
+31-bit ceiling). Both are sim-side; only the engine-side loader (§5.2) is fixed.
+
+---
+
+## _137 — View allocator word policy + word-aware bench budget (fixes `_134` §5.1 + §5.3) — LANDED
+
+**Scope:** `simulation/src/dmx/view_registry.js`, `simulation/src/gui/view_masks_editor.js`,
+`simulation/lib/bench_section.cjs`, `simulation/tests/bench_section_sync.test.js`, plus a
+**generated** re-export of `scenes/titanic/views.yaml` + `marsin_engine/models/titanic.viewmasks.js`.
+No engine.js, no model geometry, no controllers/patches, no config. Report
+[`20260725_137_view_allocator_word_policy.md`](../reports/202607/20260725_137_view_allocator_word_policy.md).
+
+**Landed — §5.1, the allocator policy.** Base group bits can ONLY live in view word 0
+(`reconcileGroupBits` → `nextFreeBit`; mirrored in `engine.js` `assignGroupBits`); custom views
+work in EITHER word because they resolve by NAME at model load. Word 0 was therefore the
+single-consumer-constrained resource — and `nextFreeSlot()` walked `word 0 → word 1`, handing every
+new view a word-0 bit while word 1 sat empty. On titanic (24 groups + 17 views) word 0 hit
+`0x7fffffff`, `nextFreeBit → 0`, and `reconcileGroupBits(reg, [...existing, 'New Group'])` **threw**
+`[Views] Out of view-mask bits …` with 21 word-1 slots free. New policy:
+`CUSTOM_VIEW_WORD_ORDER = [1, 0]` — `nextFreeSlot(registry, wordOrder)` fills **word 1 first** and
+spills into word 0 only when word 1 is full. Chosen over a reserved word-0 headroom margin because a
+margin needs a magic constant correct for no scene and would still let views eat word 0 while word 1
+is empty; preference ordering is scene-independent, keeps the full 62-slot capacity, and still
+throws at 62 (P0, no silent degradation). Verified: empty scene → `{word:1,bit:1}`; 32 views → 31 in
+word 1 + 1 spilled to word 0; 63rd throws. **Existing pinned assignments never renumber** —
+`createViewRegistry` preserves every `(word, bit)`, proven by regenerating all three scenes offline:
+`titanic / studio_top_loft / test_bench` sidecars all `reproduces=true` vs tracked (stamp excluded).
+`studio_top_loft` + `test_bench` were **not** rewritten (byte-stable, ample headroom in both words).
+New API `setCustomViewSlot(reg, view, word, bit)` (the canonical cross-word relocation;
+`setCustomViewBit` delegates, contract unchanged) **refuses** to move a per-fixture-membership view
+across words — fixtures carry a word-0 `viewMask` only, so its membership would have nowhere to
+live. Views panel readout made word-aware via new `freeSlotCounts()`: `GROUP VIEWS (auto) — 24 · 7
+new group(s) fit` / `CUSTOM VIEWS — 17 · 21 slot(s) free (14 in word 1, 7 spill into the group
+word)` — the old flat number was word-0-only and mislabelled as the view budget. [**Corrected
+2026-08-03** per `_135` D3: this block first quoted `28 slot(s) free`; the code
+(`view_masks_editor.js:336` = `free.word1 + free.word0` = 14 + 7) always rendered **21**. Report
+typo only, no code change — see `_137` report §7.]
+
+**Landed — §5.3, the bench budget.** `bench_section.cjs` T3 summed
+`groupBits + custom.length + newBitNames` against a flat 31-bit ceiling, charging word-1 views to
+the word-0 budget: `applying needs 7 new view bits on top of 24 group + 17 custom bits = 48, over
+the 31-bit ceiling`. The `48` was never a real quantity. Every name a bench block adds is a GROUP
+name → word 0 only, so word-0 pressure is the only budget that can refuse. Now:
+`31/31 word-0 view bits after apply (0 spare; word 1 holds 17 custom bit(s), independent of this
+budget)`. `MAX_VIEW_BITS` doc corrected to *per word*.
+
+**Test decision (documented):** `view-bit headroom is REPORTED` asserted `/30\/31 view bits/` and was
+**already red at baseline** (message read `48`; in fact no `TGT_VIEW_BIT_HEADROOM` finding existed at
+all because T3 was refusing) — the `30` was stale from a titanic with one fewer group. Expectation
+updated to the honest `31/31 word-0 view bits after apply (0 spare` + a non-pinned
+`word 1 holds \d+ custom bit(s)` match, and renamed "…fills the word-0 ceiling exactly". **Known-red
+→ green, by design.** One test ADDED: *word-1 composite views are NOT charged to the word-0 budget*
+(20 extra word-1 views must move the word-0 number by zero bits). The still-red `:271` "titanic can
+accept the block today" shrank from **7 refusals to 6** — the spurious `TGT_VIEW_BIT_BUDGET` is gone,
+the six genuine `TGT_UNIVERSE_RESERVED` (U10/U12 on `10.x.x.13/.14`) remain and are a separate open
+electrical defect.
+
+**titanic migration — DONE, zero behavioural risk.** The policy fix cannot unsaturate titanic on its
+own (`_134`'s 7 word-0 composites are already pinned), so a one-time explicit migration ran through
+the canonical chain. Audited every possible holder of a raw `(word,bit)` FIRST: all 17 composites are
+group-based (zero `pixelIndices`); all 76 `patches.yaml` + 12 `scene_config.yaml` records are
+`viewMask: 0`; engine states store `viewSelection: {type,target,invert}` by name; CaptainPad uses
+`{type:'viewMask', target:<name>}` throughout; patterns use `inView()`/`MASK_*` (only raw literal
+outside `summer_camp/` is `patterns/test/rpm_fixtures_tune_v2.js` `viewMask & 1`, a **group** bit);
+timelines/playlists/`pixel_map_views` carry no mask data; sim 3D isolation
+(`light_pool.js:448`, `animate.js:578`) matches on `activeView.groups` for group-based views. A
+repo-wide search for the composite names hits exactly two files — both regenerated together. Moved:
+`Hull Canvas 0x40000→w1 0x400`, `Left Hull 0x80000→0x800`, `Right Hull 0x1000000→0x1000`,
+`Silhouette 0x2000000→0x2000`, `Left Silhouette 0x10000000→0x4000`,
+`Right Silhouette 0x20000000→0x8000`, `Jewelry 0x40000000→0x10000`. The 10 pre-existing word-1 views
+kept their exact bits; all 24 `groupBits` byte-identical. `pre: word0 31/31, word1 10/31` →
+`post: word0 24/31 (7 new group(s) fit), word1 17/31 (14 free)`. Diff footprint: `views.yaml` 14
+lines, sidecar 7 lines + stamp. Driven offline via
+`createViewRegistry → setCustomViewSlot ×7 → buildViewmasksSidecarJS + yaml.dump({views},{lineWidth:-1})`;
+the script **refuses to run** unless the tracked sidecar is first proven byte-reproducible from the
+tracked `views.yaml` (never regenerate onto drift) and asserts groupBits/names/order/membership
+invariance afterwards.
+
+**Verification.** `_134`-style zero-miss/zero-leak harness replicating `engine.js:504-522` against the
+real 964-px model: **17/17 views, identical pixel membership before/after, zero miss, zero leak,
+1844 tagged pixels**. `engine.js --model titanic --dry-run` (state/playlist dirs redirected to
+scratch; dry-run binds no port, runs no loop) loads 17 presets and the `Pattern constants` line
+(41 `MASK_*`) is **byte-identical before and after** — pattern code sees no change. `_136`'s
+now-word-aware `loadModelForGauge('titanic')` → `pixels 964 views 17`. Original repro now:
+`nextFreeBit 0x40000` … `OK added ['New Group'] bit 0x40000`.
+
+**Gates.** `scene_model_parity.cjs titanic` **PASS** (0 err / 0 warn / 1 info);
+`--strict` **PASS** (0 err / 0 warn / 1 info); `simulation` `npm test` →
+**1737 tests / 1730 pass / 7 fail** vs baseline **1736 / 1728 / 8** — **zero new failures**, +1 new
+test, −1 failure (the headroom test flipped green per the decision above); remaining 7 are exactly
+the baseline set minus that one. Engine subsets offline: mixer **489/489** (incl. `auto_views`,
+`in_view_intrinsic`, `pattern_mixer_masking`, `view_fader_ramp`, `view_mask_constants`,
+`view_mask_hi_host`), integration **59/59**, effects+tools+patterns 537 → 535 pass / 2 fail, both
+**pre-existing and non-view**: `effects_v2_mode_page_layout` is a node test-runner IPC
+deserialization error under parallel load (**47/47 when run alone**) and the specialty playlist
+byte-identity failure is genuine divergence in two **unmodified** tracked
+`scenes/*/playlists/white_only.yaml` files — the same two families `_136` recorded. **No git op, no
+deploy, no install, no live save-server, no port bound**; operator's launcher stack
+(6966-6972, 5568, 8081, 10000) untouched; other agents' uncommitted work preserved.
+
+**Filed, NOT fixed (new):** (a) `vMaskHi` never reaches exported pixels —
+`pixelblaze_model_exporter.js` writes only `vMask`, while `buildViewmasksSidecarJS` reads `vMaskHi`
+for word-1 views, so a word-1 view with **per-fixture** membership always exports empty (skipped with
+a warn). Latent today (all composites are group-based, and `setCustomViewSlot` now refuses the
+relocation case) but `addCustomView` allocates word 1 first, so the next fixture-clicked view will
+hit it; the same word-blindness sits in the sim's 3D isolation paths. (b) titanic word 0 is now
+24/31 and the `TB ` bench block needs exactly the remaining 7 — `31/31 (0 spare)`. It fits with no
+margin; one more fixture group in either scene and the apply refuses.
+
+---
+
+## _135 — Read-only wave verification (`_133` / `_134` / `_136` / `_137`) — LANDED (2 corrections owed)
+
+**Scope:** verification only. **Zero edits to any verified file** — the 3 docs, `views.yaml`,
+`titanic.viewmasks.js`, `model_loader.js`, `view_registry.js`, `bench_section.cjs` and
+`view_masks_editor.js` were all **read-only**; discrepancies are enumerated for the coordinator, not
+fixed. Writes: this block + report
+[`20260725_135_wave_verification.md`](../reports/202607/20260725_135_wave_verification.md).
+
+**Verdict: 8 of 10 checks PASS. The code + mapping half of the wave is sound and internally
+consistent. Two corrections are owed before commit.**
+
+**D1 — `docs/MARSIN_ENGINE_PATTERNS.md` §7.3.1 lines 626-632 is now FALSE.** The "Word placement"
+paragraph still says *"the 24 base groups and the first seven composites (`Hull Canvas` … `Jewelry`)
+live in the low word … the remaining ten composites (`Left Jewelry` … `Auditoriums`) live in the high
+word"*. That was `_133` §8 reconciled against the `_134` state; `_137` then migrated **all seven**
+word-0 composites into word 1. Measured on the final files: **`word0=0 word1=17`** — every composite
+is high-word, the 24 low-word folds are base groups **only**, and `Hull Canvas` (the named example)
+moved `w0 0x40000 → w1 0x400`, making the sentence exactly backwards. Fix: "the 24 base groups live
+in the low word; **all 17 composite views live in the high word**", pointing at
+`CUSTOM_VIEW_WORD_ORDER`. **This is the only substantive doc falsehood in the wave** — `COLOR_THEORY.md`
+makes no word/bit claim at all, and the lang spec's L387/L390/L453-455 describe the generic two-word
+scheme (verbatim agreement with `lib/view_word.js` L9-10), never titanic's assignment.
+
+**D2 — P0 privacy, COMMIT-BLOCKING.** `python scripts/security_check.py --all` → 8 findings; 6 are
+pre-existing untracked `simulation/.scene_backups/studiodj/**`, but **2 are this wave's own**:
+`_137`'s report line 185 and **this tracker's line 7201** (`bm26-report-ip`) — the same sentence
+naming the U10/U12 refusals spells out two literal `10.x.x.x` controller IPs. The repo is PUBLIC and
+the tracker is git-tracked, so `.githooks/pre-commit` + the PreToolUse gate **will refuse the next
+commit**. Fix: drop the octets in both places (keep "U10/U12"). Fix this FIRST.
+
+**D3/D4/D5 — minor, no behavioural impact.** (D3) `_137` §1.4 and its tracker block quote
+`CUSTOM VIEWS — 17 · 28 slot(s) free (14 in word 1, 7 …)`; `view_masks_editor.js` L336 computes
+`free.word1 + free.word0` = **21**, and 14+7≠28 — code correct, report string wrong. (D4)
+`view_registry.js` L224-225 still throws *"a scene supports at most 31 distinct group/view bits"*;
+a scene supports 62, and 31 is the word-0/group ceiling — `_137` fixed this wording class in
+`bench_section.cjs` and `addCustomView` but missed this one. (D5) `bench_section.cjs` L650
+`(v && v.word) !== 1` charges a malformed/null custom entry to word 0 (defensive nit only;
+`createViewRegistry` rejects malformed entries upstream).
+
+**Verified clean (checks 1, 3-10).** 47/47 offline harness checks, exit 0: `groupBits` blocks
+**byte-identical to HEAD** in both files (25 YAML lines + the sidecar block); `views.yaml custom[]`
+mirrors the sidecar exactly (name/bit/word/groups/**order**); all 17 memberships and counts
+recomputed from `titanic.js` and matching (Hull Canvas 360 · L/R Hull 180 · Silhouette 320 ·
+L/R Silhouette 160 · Jewelry 96 · L/R Jewelry 48 · Organs 40 · L/R Organs 20 · Identity 148 ·
+Stacks 24 · L/R Stacks 12 · Auditoriums 16); 17 distinct word-1 bits, all safe powers of two;
+word0 `0xcf3ffff` = groups only, 24/31 used (7 group slots free), word1 17/31 (14 free); the five
+instrument views **partition** all 24 base groups and sum to 964. `inView()` folded for **all 41
+names** through the real `injectInViewIntrinsic()` against an `engine.js` L628-633-shaped viewTable —
+**low=24 hi=17, 0 failures**, each emitted literal asserted **equal to the authored bit in the
+authored word**; `buildMaskConstants` → **41** `MASK_*`, no sanitized collision; all 6 forbidden
+aliases hard-error. Doc names match authored names exactly (24 base + 17 composite, spelling
+irregularities `Right SmokeStacks`/`Left SmokeStack`, underscored strands, `TE Sign 2`,
+singular `Left/Right Auditorium` vs composite `Auditoriums` all confirmed); every `inView("…")` string
+in the 3 docs resolves (0 unknown, 0 case/spell mismatch, remainder are deliberate placeholders); the
+`views.yaml` vs `pixel_map_views.yaml` distinction is correctly stated in both places that mention it.
+Parameter policy clean: no universal `radius`/`kick` mandate survives (only the "this replaces…" and
+"there is **no** required…" callouts), `localSpeed` mandatory + FIRST, `direction` optional + SECOND,
+autonomous reversal demoted to OPTIONAL CAPABILITY, zero examples double-apply global speed
+(`globalMult` appears only in the "**Removed:**" callout), `w == a` HARD CONTRACT with its enforcing
+test file present, audio modulators-only with `isLiveAudioSharedFnName`/`engineOwned` present. Docs
+security: 0 `file:///`, 0 `.agent/01_skills`, 0 IPv4, 0 MAC, **54/54** relative links resolve.
+`_136` cross-check: `loadModelForGauge('titanic')` → **pixels 964, views 17, groupBits 24**, all 964
+pixels carry a `viewMaskHi` bit, **zero hi-word leak into word 0**.
+
+**Gates.** `scene_model_parity.cjs titanic` **PASS** (0 err / 0 warn / 1 info); `--strict` **PASS**
+(same). `tests/mixer/model_loader_word_aware.test.js` **14/14**. Engine mixer subset **489/489**
+(matches `_137` exactly). `simulation/tests/bench_section_sync.test.js` 43 → 39 pass / **4 fail** =
+exactly `_137` §4's known-red items 1-4 (dock geometry + U10/U12 collisions + the two dependent CLI
+tests); `_137`'s three word-aware assertions — *headroom is REPORTED … fills the word-0 ceiling
+exactly*, *word-1 composites are NOT charged*, *REFUSES … word-0 export ceiling* — all **green**.
+Other sim view tests (`pixel_map_views`, `te_sign_grouping_parity`, `unpatched_red_two_views`,
+`bench_mirror`) **92/92**. `node --check` passes on all four changed JS/CJS files. **Zero new
+failures**; no full-suite rerun needed.
+
+**Safety.** No git mutation (two read-only inspections disclosed: `git show HEAD:<file>` for the
+byte-identity proof, `git ls-files --error-unmatch` to determine tracked-ness for D2). No deploy, no
+install, no live engine boot, no sim/save server, **no port bound** — every harness ran in-process on
+the pure library modules + vendored WASM. Operator's launcher stack (6966-6972, 5568, 8081, 10000)
+untouched. All scratch files in the session scratchpad; nothing written into the source tree; other
+agents' uncommitted work preserved.
+
+**Correction order for the coordinator:** D2 (unblocks commit) → D1 (the doc falsehood) → D3 →
+D4/D5 (optional).
+
+**_133 correction (2026-08-04) — word placement, post-_137.** The `_135`
+verifier caught one substantive falsehood in `MARSIN_ENGINE_PATTERNS.md` §7.3.1:
+my "Word placement" paragraph said the 24 base groups **plus the first seven
+composites** (`Hull Canvas` … `Jewelry`) were low-word. True against `_134`,
+invalidated by `_137`, which migrated all seven to word 1 (`Hull Canvas`
+w0 `0x40000` → w1 `0x400`). Re-measured against the final files (both agree, all
+17 entries `word: 1`) and re-folded all 41 names through the real
+`injectInViewIntrinsic()`: **24 low-word (base groups only), 17 high-word (every
+composite), 0 failures.** Corrected to "the 24 base groups live in the low word;
+all 17 composite views live in the high word", now attributed to
+`CUSTOM_VIEW_WORD_ORDER = [1, 0]` (`simulation/src/dmx/view_registry.js` —
+customs prefer word 1 because base group bits are hard-pinned to word 0 and are
+the only consumer that cannot move), with the `Hull Canvas` migration cited as
+the concrete reason never to hard-code a composite's word/bit. Swept all three
+docs: **this was the only view→word/bit pin**; remaining mentions are generic
+language descriptions, `COLOR_THEORY.md` makes no word/bit claims, and the lang
+spec's Tier-C table is a general ABI statement. All other §7.3.1 facts
+re-verified unchanged (964 px · 17 counts · 41 names · no `MASK_*` collision ·
+forbidden aliases absent · five-view partition exclusive+exhaustive); links and
+every concrete `inView("…")` name re-checked. No git op, no deploy, no install,
+no live boot, no port bound.
+
+---
+
+## _137 addendum — `_135` verifier D3/D4/D5 corrected (2026-08-03)
+
+**D3 (report typo, no code change).** `_137` §1.4 and the `_137` tracker block quoted the Views
+panel as `CUSTOM VIEWS — 17 · 28 slot(s) free (14 in word 1, 7 …)`. `view_masks_editor.js:336`
+computes `free.word1 + free.word0` = 14 + 7 = **21**; the code was always right. Report §1.4 now
+carries the wrong line struck through above the corrected one plus a dated correction note, and the
+`_137` block above is corrected in place with the same note.
+
+**D4 (diagnostic wording, no behaviour change).** `view_registry.js` `reconcileGroupBits` still threw
+*"a scene supports at most 31 distinct group/view bits"* — false since Tier-C (a scene supports
+**62**; 31 is the **word-0** ceiling, the only word groups can use). Same wording class already
+fixed in `bench_section.cjs` and `addCustomView`; this throw site was missed. Now names the word-0
+ceiling, the 62-slot scene total, and the remedy ("move a custom view to word 1 or remove an unused
+group" — i.e. the `_137` §3 migration). Throw condition (`nextFreeBit === 0`) unchanged.
+
+**D5 (defensive gap — decision documented).** `bench_section.cjs` T3's `(v && v.word) !== 1` charged
+a `null` custom entry (a bare `- ` in views.yaml) and a bogus-`word` entry to **word 0**, inflating
+the group budget and potentially refusing a legal apply on junk input. Chose **refuse by name,
+charge to neither word** over both alternatives: silently dropping hides a malformed scene file, and
+charging word 0 invents a number (P0 — no silent fixup). A hard `throw` was rejected because this
+module's contract is named findings + non-zero exit, not a CLI stack trace. New
+`TGT_VIEW_ENTRY_MALFORMED` REFUSE names the offending entry; the budget line stays honest beside it.
+"Malformed" mirrors `createViewRegistry` for the fields T3 reads (non-object entry, or `word`
+present and not 0/1). New test *REFUSES a malformed custom-view entry, and charges it to NEITHER
+word* injects `null` + `{name:'bad', word:7}` into the real titanic views and asserts 2 refusals plus
+a `TGT_VIEW_BIT_HEADROOM` message **string-identical** to the clean run. No shipped scene contains
+such an entry — no real-scene finding changes.
+
+**Gates re-run.** `scene_model_parity.cjs titanic` **PASS** (0/0/1) and `--strict` **PASS** (0/0/1);
+`bench_section_sync` 44 tests / 40 pass / **4 fail (the same 4 pre-existing reds)`;
+`bench_section_sync + pixel_map_views + te_sign_grouping_parity` 101 / 97 / 4 (same 4); full
+`simulation` `npm test` **1738 / 1731 pass / 7 fail** (was 1737 / 1730 / 7; baseline 1736 / 1728 / 8)
+— **zero new failures**, suite gained exactly the one D5 test, the 7 reds unchanged. Engine subsets
+not re-run: D3 is prose, D4 is a sim-only throw string, D5 is sim-only preflight code, and no
+engine-consumed artifact (`views.yaml`, `*.viewmasks.js`) was touched by these three fixes.
+
+**D2 redactions left intact** — the coordinator's `10.x.x.13`/`.14` redactions on this tracker and in
+the `_137` report are deliberate; the octets are not restored. No git op, no deploy, no install, no
+live server, no port bound.
+
+---
+
+## _139 — `highdef_pattern_generation` skill rewritten to the post-`_133`/`_135` pattern policy (2026-08-03)
+
+**Closes the last artifact teaching the overruled policy.** `_133` §6 item 2 and `_135` check 5 both
+named `.agent/skills/highdef_pattern_generation.md` as the remaining offender: it is the pattern
+**generator** skill (and the `_90` ChatGPT loop's workflow source), so until rewritten it kept
+regenerating dead knobs and non-portable targeting. Rewritten 458 → 697 lines, procedural
+(ten steps + scale + gotchas), linking to `docs/MARSIN_ENGINE_PATTERNS.md` rather than restating it,
+and carrying the guide's HARD CONTRACT / PRODUCTION CONVENTION / OPTIONAL CAPABILITY tiers.
+
+**Overruled and removed:** the "four production bars" as universal requirements (audio-reactive
+PRIMARY, two-colour `hueSpread >= 0.10`, `peakMaxChan >= 200`, true-black negative space) →
+`MARSIN_ENGINE_PATTERNS.md` §1.6 de-mandates all of them; the "consistency ground rules" mandating
+`direction` + autonomous auto-reversal + a movement `radius` + a brightness `kick` on **every**
+pattern → §1.3/§1.4 (direction conditional and second **when present**, auto-reversal demoted to
+OPTIONAL, "no required radius/kick … do not invent controls to fill MIDI knobs"); the §2 rig table
+hard-coding `sectionId 1=Pars/2=Vintage/3=Bars` plus "branch on sectionId" and the
+`if (sectionId == 2)` vintage-blinder idiom → §7.2 (model-specific, never portable; the ship uses
+514/515) and §7.3.1 (`inView()`); `whiteWarmth` tinting white toward amber → §6.2 `w == a` (amber is
+not an independent accent lane, warmth is shaped on RGB); `var N = 52` → §11.2 (bench number; ship is
+964; prefer scalar/spatial formulations or the `feedbackTrails` global effect); the old "global speed
+free" narrative → §3 (engine owns the clock, `localSpeed` trim only, `speed`/`size` engine-owned).
+Also dropped the "`git restore marsin_engine/states/ simulation/` after any boot" instruction — it
+contradicts the repo's no-hiding-side-effects rule; residue is now "report it, don't revert it".
+
+**Now taught:** truthful `localSpeed` first always; `direction` only when the concept has real
+directional motion, then second, endpoints visibly opposite, dead-zone guarded; every other control
+earned from the artistic idea; declaration order = MIDI knob order (12 knobs, hue never declared).
+Targeting is `inView("Authored View Name")` only — five instruments with counts/emitters, halves,
+`Stacks`/`Auditoriums`, **all 24 base group names verbatim** with the spelling-irregularity warning
+(`Right SmokeStacks` plural, underscored strand groups, `TE Sign`/`TE Sign 2`, singular
+`Left/Right Auditorium` vs composite `Auditoriums`), the six forbidden aliases, never hard-code a
+view's word/bit, `FIX_*` for capability, and the exclusive+exhaustive five-instrument partition as
+what makes a per-instrument `if/else if` chain provably complete. Timing carries the measured delta
+contract incl. the `16, 16, <real>, <real>` first-frames quirk, zero-step tolerance and large-multiple
+phase wrapping. Colour carries RGB-space palette lerp, `w == a` with "assign amber *from* white, never
+staple it on", the per-instrument capability split (RGBWAU DMX bars/pars vs RGBW wire ropes/vintage
+pixels/signs with amber folded and UV dropped), and a six-item COLOR_THEORY checklist
+(wash-warm/saturate-pixels; stacks-stay-warm **as operator-ruled guidance, not an engine rule**;
+one-palette-many-positions; dark paint as free negative space; Identity punctuates; keep the
+Silhouette lit as judgement). Portability: `pixelCount` is a literal 144, no bench counts either,
+model-sized arrays labelled model-specific. Audio is the real parseable `AUDIO_MODULATION_V1` block.
+**"High-definition" reframed as a craft bar** (controls that don't lie, motion that never re-locks,
+geometry that reads on its instrument) — explicitly NOT a mandate for true black, constant beat or
+party brightness, with the ambient-dominant show philosophy stated.
+
+**Retained after re-verification against current code** (not against the old text): harness flags and
+the range-aware `--mod` grammar; **`--gate` on every gate run** (exit 3 only under `--gate`; named
+`DARK`/`BLACK_LATCH`/`OVER_BUDGET`; defaults 600 frames / 25 ms / 4 channels / 0.5 dark-frac;
+`GATE_WARN DIM` advisory); the printed line set; `make_vis_clip`/`publish`/`server` flags and the
+gallery port from `gallery_config.json`; `--seconds` real-time clips and the loud `DOWNSAMPLED:`
+line; manifest registration; the sub-agent fleet discipline. **Two stale thresholds corrected:** the
+tool labels `(REACTIVE)` above |0.35| (not 0.5) and two-colour above `hueSpread` 0.06 (not 0.10) —
+both now presented as tool heuristics, not bars. New material: `tools/param_truth/` as the parameter
+gate (with an `--out`-to-scratch warning, since the default writes the non-gitignored library-wide
+result), `pattern_derived_harness.mjs`, `gen_variations.mjs` static/sound pairing.
+
+**Verification (offline, in-process, `verify_139.mjs` in the scratchpad).** Compiled every fenced
+`javascript` block through the **real** `WasmHost` on the 964-px titanic context (`loadModelForGauge`
++ `buildMaskConstants` + `setViewTable` + bit-free promoter — the same path `engine.js` uses):
+**9/9 compile.** Every concrete `inView("…")` resolves against the 41-name table; **all 24 base group
+names appear verbatim**; 41 backticked view names all authored (the 6 non-views are the deliberate
+"do not exist" aliases); all 29 referenced paths exist; zero `sectionId == N` taxonomy (1 guarded
+historical mention, none in code); zero double-speed; zero `file:///`; zero legacy `.agent/01_skills`;
+zero IPv4; `w == a` on every `rgbwau()` example; both harness invocations carry `--gate`.
+**ALL CHECKS PASSED.** Negative control: `inView("All Bars")` hard-errors as documented.
+`security_check.py --all` → 6 findings, **all pre-existing, all in untracked
+`simulation/.scene_backups/studiodj/**`**; zero in the skill, the report or this tracker.
+
+**Finding — real tooling gap, documented not papered over.** `tools/pattern_audio_harness.mjs`
+**cannot compile an `inView()` pattern**: measured `COMPILE_FAIL: Line 4: strings cannot be used as a
+function argument`. It drives `marsin_wasm_runtime.js` directly and applies only
+`injectFixtureConstants()`, whereas `WasmHost.compile()` runs
+`injectInViewIntrinsic()` → `injectMaskConstants()` → `injectFixtureConstants()`. Everything built on
+it inherits the gap, incl. `tools/gallery/gen_variations.mjs` and the offline titanic clip path. The
+skill §8.2 carries an explicit measured note: an `inView()`-targeted pattern is gated by param-truth
+(full engine parity) + the CI tests, its clip comes from a live capture, and the note **forbids**
+rewriting `inView()` targeting back into coordinates/`sectionId`. Recommended fix (not made — shared
+tool, out of scope): mirror the three injection passes in the harness; `render_context.js` is the
+working reference. Filed as a follow-up.
+
+**Compliance.** Writes confined to the skill, report `_139`, and this block. **No git command of any
+kind** (tracking status established from `.gitignore`, and the skill says "not gitignored" rather than
+asserting more than was measured). No live engine boot, no port bound, no deploy, no install — every
+harness ran in-process against the vendored WASM; the one `run_param_truth.mjs` invocation
+(`27_swipe --model titanic`) wrote to the scratchpad, not to `param_truth_results.*`. All scratch
+files stayed in the session scratchpad. Other agents' uncommitted work untouched.
+
+## _138 — `vMaskHi` reaches exported pixels (fixes `_137` §6.1) — LANDED
+
+**Scope:** `simulation/` only — `src/dmx/view_registry.js`,
+`src/dmx/pixelblaze_model_exporter.js`, `src/gui/view_masks_editor.js`,
+`src/core/{light_pool,animate}.js`, `src/gui/gui_builder.js`,
+`src/dmx/{rename_invalidation,auto_patcher}.js`, `server/save-server.js`, `main.js`,
+`lib/{scene_model_parity,bench_section}.cjs`, `tools/bench_section_sync.cjs`, plus
+`tests/view_mask_hi_export.test.js` (new) and `tests/rename_invalidation.test.js`.
+**No engine source, no generated scene/model/sidecar file, nothing hand-edited.** Report
+[`20260725_138_vmaskhi_pixel_export.md`](../reports/202607/20260725_138_vmaskhi_pixel_export.md).
+
+**Where the word was dropped.** The click→engine chain has five links; only #1 and #4/#5 were
+word-aware. **#2** — the Views panel's Assign/Unassign/delete/count wrote `f.viewMask`
+unconditionally, ignoring `view.word`. **#3** — the exporter wrote `vMask: light.viewMask || 0` and
+had **no `vMaskHi` field at all**; there was no `viewMaskHi` on a fixture config anywhere in the sim.
+So `buildViewmasksSidecarJS` — which correctly reads `vMaskHi` for a word-1 view — found zero members
+on every pixel and skipped the view with a `console.warn`. Both links had to be fixed: the exporter
+alone would still have been fed the wrong field, the panel alone would have had nowhere to write.
+**Two failure modes, not one:** (a) empty export, and (b) **aliasing** — a word-1 bit landing in
+`viewMask` collides with a live **base group bit** (titanic w1 `0x1`/`0x2`/`0x4` are all word-0 group
+bits), so a fixture clicked into `Left Jewelry` would have silently joined the group view
+`Right Front Wall` in 3D isolation and in the per-fixture chip row. (b) is why "carry the bit anyway"
+was not an option.
+
+**The fix.** `view_registry.js` now owns the word→field contract as the ONLY place the fields are
+named: `FIXTURE_MASK_FIELDS = ['viewMask','viewMaskHi']`, `PIXEL_MASK_FIELDS = ['vMask','vMaskHi']`,
+`viewWord` exported, plus `fixtureMaskField` / `pixelMaskField` / `fixtureInView` / `pixelInView` /
+`setFixtureInView`. The exporter carries `vMaskHi` on all three pixel-push sites (multi-pixel DMX,
+simple DMX, LED strand). **Serialization is conditional** — `vMaskHi:` is emitted only when non-zero,
+because `engine.js:418` declares the default `px.vMaskHi ?? 0`, so an absent field IS that zero and a
+scene without word-1 per-fixture membership exports a byte-identical model (same rule `ledWire` /
+`unpatched` already follow). Panel, `light_pool.js:448` and `animate.js`'s instanced-dot isolation all
+go through the predicates. **Persistence was mandatory or the fix is cosmetic:** patch record +
+structural-tree strip (`save-server.js`), `__globalPatchTree` rows (`main.js`), config defaults +
+chips + rename snapshot (`gui_builder.js`), both `clearMetadata`/`clearAllPatches` paths
+(`auto_patcher.js`), `DISPLAY_PATCH_FIELDS` + `prunePatchTreeEntries` + **`carryViewMasks` (breaking
+contract change: `name → {viewMask, viewMaskHi}`)** (`rename_invalidation.js`), the `vMaskHi`
+freshness check (`scene_model_parity.cjs`), and `viewMaskHi` added to `DERIVED_METADATA_FIELDS` so a
+ported bench block cannot import word-1 membership into titanic. The polymorphic
+number-or-object shortcut for `carryViewMasks` was rejected — it would have made word-0 callers
+silently correct and word-1 callers silently lossy.
+
+**Two latent second-order bugs fixed in passing.** The Views panel matched the active preview view by
+`__activePreviewView.bit === view.bit`; with two independent bit spaces two views can share a bit
+VALUE, so that lit up — and could have cleared — the wrong card. Both sites now match by view
+**identity**.
+
+**`setCustomViewSlot` refusal — LIFTED.** `_137` §1.3's *"has per-fixture membership and cannot move
+to word N — fixture masks only exist in word 0"* existed **only** because fixtures could not carry
+`vMaskHi`. They can now, so the premise is gone. It is not simply deleted: auditing found a second,
+real hazard — the function mutates the registry only, so a caller who relocates across words and
+forgets to migrate the bits triggers **both** failure modes at once (empty export + a stranded
+aliasing bit). So the move is made **atomic** instead: `setCustomViewSlot(registry, view, newWord,
+newBit, fixtures = null)` **requires** `fixtures` for any cross-word move (throws, naming both fields
+and the remedy, with nothing partially applied) and performs the migration itself after the
+destination-word collision check. Same-word moves are unchanged; `setCustomViewBit` still delegates
+and its panel caller still migrates from the returned old bit. Net: the capability the old message
+denied is available; only the genuinely unsafe call shape is still refused.
+
+**Group-based views verified unaffected (the brief's "state it").** `buildViewmasksSidecarJS` branches
+on `view.groups.length > 0` **before** any mask field is touched and emits `groups: [...]`; no fixture
+or pixel mask is read on that path. The engine tags membership from group names and merges into the
+lane `word` selects. Word-agnostic by construction — which is exactly why `_137`'s 17 titanic
+composites survived their cross-word migration. Pinned by test in both words.
+
+**Regression test — `tests/view_mask_hi_export.test.js`, 13/13 pass**, offline, `_134`'s
+zero-miss/zero-leak shape, driving the real `generatePixelMap` / `saveModelJS` /
+`buildViewmasksSidecarJS`. Three bars (A 3px + B 2px in `Bars`, C 2px in `Rail`). The headline case:
+a view created by `addCustomView` (which lands in word 1 naturally), operator clicks A + C, bit goes
+to `viewMaskHi` and `viewMask` is never created, sidecar EMITS `bit: 0x0001, word: 1, pixelIndices:`
+(it was skipped entirely before), resolved set `[0,1,2,5,6]` matched **three** ways — expected-by-name,
+the sidecar's emitted indices, and `pixelInView`. Plus a leak guard (Bar B carries the SAME bit VALUE
+in `viewMask` and must not appear), the **word-0 control** (pre-Tier-C `{name,bit}` view: high word
+never touched, sidecar keeps the legacy no-`word:` form, and the serialized model contains the string
+`vMaskHi` **nowhere at all**), model-text placement (`vMask: 0, vMaskHi: 1, patch:` on exactly the
+members), the four `setCustomViewSlot` cases, and the group-based-view case.
+
+**Re-export sanity — all three scenes byte-stable.** `grep -c pixelIndices` over the three tracked
+sidecars → **0 / 0 / 0**: no tracked scene has a per-fixture view at all, and titanic's 17 word-1
+views are all group-based. Regenerated all three offline through `createViewRegistry(views.yaml)` →
+`reconcileGroupBits(listPixelGroups(pixels))` → `buildViewmasksSidecarJS` against the real models and
+diffed ignoring only the `// Updated:` stamp: `sidecar-reproduces=true` for titanic (17 views,
+word1=17), studio_top_loft (2) and test_bench (5). Additionally **not one pixel in any tracked scene
+carries a non-zero `vMask` either**, so the conditional emission leaves the three model files and
+every `patches.yaml` / `scene_config.yaml` byte-identical too.
+
+**Gates.** `scene_model_parity.cjs titanic` **PASS** (0/0/1 info) · `--strict` **PASS** (0/0/1) ·
+`simulation` `npm test` **1752 / 1745 pass / 7 fail** (baseline `_137` §7: 1738 / 1731 / 7 — the suite
+grew by exactly 14: the 13-test new file plus one added `carryViewMasks` word-1 test, and
+1738 + 14 = 1752) · engine `tests/mixer/model_loader_word_aware.test.js` **14/14** · engine view/mask
+mixer subset (`auto_views`, `in_view_intrinsic`, `pattern_mixer_masking`, `view_fader_ramp`,
+`view_mask_constants`, `view_mask_hi_host`) **109/109**. **Zero new failures**; the 7 reds are the same
+7 by name as `_137` §4/§7. Worth naming: reds 6-7 (`real scene test_bench: …`) still fail on
+`sId 7 ≠ 0; fId 13 ≠ 0` for the two `TE Sign V3` strands — **the new `vMaskHi` parity check adds no
+finding to any real scene.**
+
+**Findings filed, not fixed.** (1) A view with BOTH groups and clicked fixtures **silently drops the
+fixtures**: the sidecar `continue`s on the groups branch, yet the panel's Assign writes the bit anyway
+and the count advertises `"N fixture(s) + M group(s)"`. Pre-existing, both words; the fix is a
+decision (union them, or refuse mixing in the panel). (2) `patches.yaml` emits `viewMaskHi` only when
+non-zero, asymmetric with `viewMask` — deliberate, it is what keeps every scene byte-identical on the
+next save. (3) `pixel_map_views.js` `resolveViewGroups` resolves a custom view to `v.groups` only, so
+a `view:` selector naming a per-fixture view matches no cluster — pre-existing and word-agnostic, but
+newly reachable now that word-1 per-fixture views work.
+
+**Compliance.** Writes confined to the 14 source/test files, report `_138`, and this block.
+**No git command of any kind** beyond read-only `git status --porcelain` / `git diff --numstat` to
+confirm other agents' uncommitted work was untouched. No sim boot, no engine boot, no server, no port
+bound, no deploy, no install — every check ran in-process via `node --test` or a scratchpad ES module.
+**No generated file written or hand-edited** (the re-export sanity script compares in memory and
+writes nothing). All scratch files stayed in the session scratchpad.

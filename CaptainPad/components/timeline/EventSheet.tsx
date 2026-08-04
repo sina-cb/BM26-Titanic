@@ -14,6 +14,13 @@
  * The context block is fed by the read-only `GET /timeline/resolve` peek, which
  * has ZERO side effects. Its 400s (out-of-window target, unresolvable cue) are
  * surfaced VERBATIM — the sheet never invents a preview.
+ *
+ * MOMENT mode (operator ruling 2026-08-03): the sheet also opens for a bare
+ * calendar tap — an EMPTY time between cues (`moment` set, `cue` null). The
+ * only action there is TIME TRAVEL to that instant; the resolver peek shows
+ * who would own the deck at it (the plan default cue, a still-holding cue, or
+ * the baseline). PERFORM never applies to a bare instant, and there is no cue
+ * to edit.
  */
 import React, { useMemo } from 'react';
 import { View, Text, TouchableOpacity, Modal, StyleSheet, ScrollView } from 'react-native';
@@ -30,16 +37,21 @@ const GREEN = '#00a86b';
 const PURPLE = '#8b5cf6';
 
 export function EventSheet({
-  cue, dayDate, activeCueId, planActive, inFestivalWindow,
+  cue, moment, dayDate, activeCueId, planActive, inFestivalWindow,
   resolve, resolveError, resolvePending, busy, actionError, canEdit,
   onPerform, onTravel, onEdit, onClose,
 }: {
   /**
-   * The event being zoomed into (resolved overview cue). The host mounts this
-   * component ONLY while an event is selected — there is no "no event" state to
-   * render, and nothing lingers after the sheet is dismissed.
+   * The event being zoomed into (resolved overview cue), or null in MOMENT
+   * mode. The host mounts this component ONLY while an event OR a moment is
+   * selected — there is no "nothing selected" state to render.
    */
-  cue: OverviewCue;
+  cue: OverviewCue | null;
+  /**
+   * MOMENT mode: a bare calendar instant (empty time between cues) on `date`
+   * at `time` ("HH:MM", plan tz). Exactly one of `cue` / `moment` is set.
+   */
+  moment: { date: string; time: string } | null;
   /** The calendar date (plan tz) of the day this event was tapped on. */
   dayDate: string | null;
   /** The cue the engine says owns the deck right now. */
@@ -64,6 +76,14 @@ export function EventSheet({
   const C = usePalette();
   const styles = useMemo(() => makeStyles(C), [C]);
 
+  // Codex P0: an empty sheet would be a silent lie — the host must give it
+  // exactly one thing to zoom into.
+  if (!cue && !moment) {
+    throw new Error('EventSheet: mounted with neither a cue nor a moment');
+  }
+
+  // MOMENT mode is always a travel: PERFORM belongs to the LIVE cue, and a
+  // bare instant is by definition not a cue.
   const mode: EventZoomMode = cue
     ? eventZoomMode({ cueId: cue.id, activeCueId })
     : 'travel';
@@ -91,14 +111,25 @@ export function EventSheet({
       <View style={styles.backdrop}>
         <View style={styles.sheet}>
           <ScrollView showsVerticalScrollIndicator={false}>
-            {/* ── Header ── */}
+            {/* ── Header — a cue, or a bare MOMENT on the calendar ── */}
             <View style={styles.header}>
-              <View style={[styles.kindDot, { backgroundColor: kindColor(cue.kind, C) }]} />
+              <View style={[styles.kindDot, { backgroundColor: cue ? kindColor(cue.kind, C) : PURPLE }]} />
               <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.title} numberOfLines={1}>{cue.label || cue.id}</Text>
-                <Text style={styles.subtitle} numberOfLines={1}>
-                  {`${KIND_LABEL[cue.kind]} · ${triggerSummary(cue.trigger)} · ${hhmmTo12h(cue.atLocal, 'no fixed time')}`}
-                </Text>
+                {cue ? (
+                  <>
+                    <Text style={styles.title} numberOfLines={1}>{cue.label || cue.id}</Text>
+                    <Text style={styles.subtitle} numberOfLines={1}>
+                      {`${KIND_LABEL[cue.kind]} · ${triggerSummary(cue.trigger)} · ${hhmmTo12h(cue.atLocal, 'no fixed time')}`}
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.title} numberOfLines={1}>{hhmmTo12h(moment!.time)}</Text>
+                    <Text style={styles.subtitle} numberOfLines={1}>
+                      {`open time on ${moment!.date} — no cue here`}
+                    </Text>
+                  </>
+                )}
               </View>
               {mode === 'perform' ? (
                 <View style={[styles.liveChip, { borderColor: GREEN }]}>
@@ -107,18 +138,22 @@ export function EventSheet({
               ) : null}
             </View>
 
-            {/* ── Context: the plan's own words + the resolver's answer ── */}
-            <View style={styles.contextCard}>
-              <Text style={styles.contextRow} numberOfLines={2}>
-                {`action · ${actionSummary(cue.action)}`}
-              </Text>
-              {dayDate ? <Text style={styles.contextRow}>{`day · ${dayDate}`}</Text> : null}
-              {typeof cue.durationMin === 'number' && cue.durationMin > 0 ? (
-                <Text style={styles.contextRow}>{`owns the deck · ${cue.durationMin} min`}</Text>
-              ) : (
-                <Text style={styles.contextRow}>owns the deck · until the next cue</Text>
-              )}
-            </View>
+            {/* ── Context: the plan's own words + the resolver's answer.
+                A bare moment has no cue words — the resolver block below is
+                its whole story. ── */}
+            {cue ? (
+              <View style={styles.contextCard}>
+                <Text style={styles.contextRow} numberOfLines={2}>
+                  {`action · ${actionSummary(cue.action)}`}
+                </Text>
+                {dayDate ? <Text style={styles.contextRow}>{`day · ${dayDate}`}</Text> : null}
+                {typeof cue.durationMin === 'number' && cue.durationMin > 0 ? (
+                  <Text style={styles.contextRow}>{`owns the deck · ${cue.durationMin} min`}</Text>
+                ) : (
+                  <Text style={styles.contextRow}>owns the deck · until the next cue</Text>
+                )}
+              </View>
+            ) : null}
 
             <Text style={styles.sectionLabel}>WHAT PLAYS AT THIS MOMENT</Text>
             {resolvePending ? (
@@ -185,7 +220,7 @@ export function EventSheet({
             ) : null}
 
             <View style={styles.footerRow}>
-              {canEdit ? (
+              {canEdit && cue ? (
                 <TouchableOpacity onPress={onEdit} style={styles.ghostBtn} accessibilityLabel="Edit this cue">
                   <Text style={styles.ghostBtnText}>✎ EDIT CUE</Text>
                 </TouchableOpacity>

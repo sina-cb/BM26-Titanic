@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   localToMinutes,
+  chartTapToLocal,
   phaseBands,
   allPhaseBands,
   ribbonRows,
@@ -27,6 +28,7 @@ import {
   canPerform,
   shouldAnnounceZoomEnd,
   DAY_MINUTES,
+  TRAVEL_TAP_SNAP_MIN,
 } from './zoom_logic';
 
 // Minimal wire fixtures — shaped exactly like the engine's own output.
@@ -64,6 +66,47 @@ describe('localToMinutes', () => {
     expect(localToMinutes('sunset')).toBeNull();
     expect(localToMinutes(null)).toBeNull();
     expect(localToMinutes(undefined)).toBeNull();
+  });
+});
+
+describe('chartTapToLocal — the bare-calendar TIME TRAVEL entry (2026-08-03)', () => {
+  // The DAY chart is 720 px for 1440 min: 1 px = 2 min.
+  const H = 720;
+
+  it('maps a tap to the snapped HH:MM at that height', () => {
+    expect(chartTapToLocal(0, H)).toBe('00:00');
+    expect(chartTapToLocal(360, H)).toBe('12:00');
+    // 21:07 (y=633.5 → 1267 min) snaps to the NEAREST 15-min notch → 21:00.
+    expect(chartTapToLocal(633.5, H)).toBe('21:00');
+  });
+
+  it('clamps outside-the-chart geometry into the day', () => {
+    expect(chartTapToLocal(-30, H)).toBe('00:00');
+    // Past the bottom clamps to the LAST snappable instant, not "24:00" —
+    // that string is the ribbon's terminator, never a travel target.
+    expect(chartTapToLocal(H + 50, H)).toBe(`23:${60 - TRAVEL_TAP_SNAP_MIN}`);
+  });
+
+  it('pulls a snap that lands ON midnight back one notch', () => {
+    // 23:56 (y=718) rounds up to 1440 → must come back to 23:45, not 24:00.
+    expect(chartTapToLocal(718, H)).toBe('23:45');
+  });
+
+  it('returns null on unusable geometry rather than guessing a time', () => {
+    expect(chartTapToLocal(Number.NaN, H)).toBeNull();
+    expect(chartTapToLocal(100, 0)).toBeNull();
+    expect(chartTapToLocal(100, Number.NaN)).toBeNull();
+    expect(chartTapToLocal(100, H, 0)).toBeNull();
+  });
+
+  it('round-trips through localToMinutes (always a parseable target)', () => {
+    for (const y of [0, 1, 137, 359.5, 707, 719, 720]) {
+      const t = chartTapToLocal(y, H)!;
+      const mins = localToMinutes(t);
+      expect(mins).not.toBeNull();
+      expect(mins! % TRAVEL_TAP_SNAP_MIN).toBe(0);
+      expect(mins!).toBeLessThan(DAY_MINUTES);
+    }
   });
 });
 

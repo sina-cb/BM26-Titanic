@@ -37,6 +37,37 @@ export function localToMinutes(v: string | null | undefined): number | null {
   return hh * 60 + mm;
 }
 
+/**
+ * Snap for a bare-calendar tap (minutes). At day scale (~30 px/hour) a finger
+ * is worth ±5 min anyway; a 15-minute grid is the honest resolution, and it
+ * matches how the operator thinks about "that empty slot before sunset".
+ */
+export const TRAVEL_TAP_SNAP_MIN = 15;
+
+/**
+ * Convert a tap on the 24 h day chart into a time-travel target "HH:MM".
+ *
+ * `y` is the chart-relative tap offset, `height` the chart's pixel height.
+ * The ratio is clamped into the day and snapped to TRAVEL_TAP_SNAP_MIN. A snap
+ * that lands on 24:00 is pulled back one notch — "24:00" is the ribbon's
+ * TERMINATOR, not a targetable instant. Returns null (caller opens nothing)
+ * when the geometry is unusable — never a guessed time.
+ */
+export function chartTapToLocal(
+  y: number,
+  height: number,
+  snapMin: number = TRAVEL_TAP_SNAP_MIN,
+): string | null {
+  if (!Number.isFinite(y) || !Number.isFinite(height) || height <= 0) return null;
+  if (!Number.isFinite(snapMin) || snapMin <= 0) return null;
+  const ratio = Math.min(1, Math.max(0, y / height));
+  let mins = Math.round((ratio * DAY_MINUTES) / snapMin) * snapMin;
+  if (mins >= DAY_MINUTES) mins = DAY_MINUTES - snapMin;
+  const hh = String(Math.floor(mins / 60)).padStart(2, '0');
+  const mm = String(mins % 60).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
 // ── Phase bands ─────────────────────────────────────────────────────────
 
 export interface PhaseBand {

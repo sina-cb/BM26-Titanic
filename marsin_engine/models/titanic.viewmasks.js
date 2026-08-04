@@ -1,6 +1,6 @@
 // Auto-generated view-mask sidecar for the titanic model — do not edit manually.
 // Source of truth: the simulation scene (Views panel → scenes/titanic/views.yaml).
-// Updated: 2026-07-31T19:33:39.273Z
+// Updated: 2026-08-04T02:02:53.455Z
 //
 // `groupBits` pins the base group → bit contract pattern code compiles
 // against; the engine validates it against the loaded model and fails
@@ -34,4 +34,21 @@ export const groupBits = {
 };
 
 export const viewMasks = [
+  { name: 'Hull Canvas', bit: 0x0400, word: 1, groups: ['Left Front Wall', 'Left Back Wall', 'Right Front Wall', 'Right Back Wall'] },
+  { name: 'Left Hull', bit: 0x0800, word: 1, groups: ['Left Front Wall', 'Left Back Wall'] },
+  { name: 'Right Hull', bit: 0x1000, word: 1, groups: ['Right Front Wall', 'Right Back Wall'] },
+  { name: 'Silhouette', bit: 0x2000, word: 1, groups: ['Left_Front_Left', 'Left_Front_Right', 'Left_Back_Left', 'Left_Back_Right', 'Right_Front_Left', 'Right_Front_Right', 'Right_Back_Left', 'Right_Back_Right'] },
+  { name: 'Left Silhouette', bit: 0x4000, word: 1, groups: ['Left_Front_Left', 'Left_Front_Right', 'Left_Back_Left', 'Left_Back_Right'] },
+  { name: 'Right Silhouette', bit: 0x8000, word: 1, groups: ['Right_Front_Left', 'Right_Front_Right', 'Right_Back_Left', 'Right_Back_Right'] },
+  { name: 'Jewelry', bit: 0x10000, word: 1, groups: ['Left Front Rails', 'Left Back Rails', 'Right Front Rails', 'Right Back Rails'] },
+  { name: 'Left Jewelry', bit: 0x0001, word: 1, groups: ['Left Front Rails', 'Left Back Rails'] },
+  { name: 'Right Jewelry', bit: 0x0002, word: 1, groups: ['Right Front Rails', 'Right Back Rails'] },
+  { name: 'Organs', bit: 0x0004, word: 1, groups: ['Left SmokeStack', 'Left Small SmokeStack', 'Right SmokeStacks', 'Right Small SmokeStack', 'Left Auditorium', 'Right Auditorium'] },
+  { name: 'Left Organs', bit: 0x0008, word: 1, groups: ['Left SmokeStack', 'Left Small SmokeStack', 'Left Auditorium'] },
+  { name: 'Right Organs', bit: 0x0010, word: 1, groups: ['Right SmokeStacks', 'Right Small SmokeStack', 'Right Auditorium'] },
+  { name: 'Identity', bit: 0x0020, word: 1, groups: ['TE Sign', 'TE Sign 2'] },
+  { name: 'Stacks', bit: 0x0040, word: 1, groups: ['Left SmokeStack', 'Left Small SmokeStack', 'Right SmokeStacks', 'Right Small SmokeStack'] },
+  { name: 'Left Stacks', bit: 0x0080, word: 1, groups: ['Left SmokeStack', 'Left Small SmokeStack'] },
+  { name: 'Right Stacks', bit: 0x0100, word: 1, groups: ['Right SmokeStacks', 'Right Small SmokeStack'] },
+  { name: 'Auditoriums', bit: 0x0200, word: 1, groups: ['Left Auditorium', 'Right Auditorium'] },
 ];

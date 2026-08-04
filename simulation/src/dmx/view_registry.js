@@ -17,16 +17,36 @@
  * assignments stable across saves, assigns the lowest free bit to new
  * groups, and drops groups that left the scene. Custom views hold an
  * explicit single bit (reserved against group assignment) and define
- * membership by group names and/or per-fixture viewMask bits (the
- * fixture's `viewMask` field in patches.yaml carries custom-view bits).
+ * membership by group names and/or per-fixture view-mask bits.
+ *
+ * PER-FIXTURE MEMBERSHIP IS TWO-WORD. A fixture/strand config carries one
+ * mask field PER VIEW WORD — `viewMask` (word 0) and `viewMaskHi` (word 1) —
+ * and a view's bit is only ever read from/written to the field of its OWN
+ * word. The exporter mirrors the pair onto every pixel as `vMask` / `vMaskHi`
+ * (the lane names `engine.js` and the WASM meta ABI use), so a word-1 view
+ * populated by clicking fixtures resolves exactly like a word-0 one.
+ * `fixtureMaskField` / `pixelMaskField` are the ONLY places that mapping is
+ * written down — never index the fields by hand.
  *
  * vMask is Int32 across the WASM boundary — bit 30 (0x40000000) is the
  * highest safe bit, 31 bits per word. Tier-C (ABI 20260619_1) adds a
  * SECOND view word `viewMaskHi`, lifting the ceiling 31 → 62: views 0..30
  * live in word 0 (`viewMask`, bit 1<<view), views 31..61 in word 1
- * (`viewMaskHi`, bit 1<<(view-31)). Base group bits stay word 0 (the
- * legacy contract); custom views fill word 0 first then spill into word 1.
- * Running out of all 62 slots throws (no fallbacks — codex P0).
+ * (`viewMaskHi`, bit 1<<(view-31)).
+ *
+ * ALLOCATION POLICY (word 0 is reserved for base groups). Base group bits
+ * can ONLY live in word 0 — that is a hard constraint here
+ * (`reconcileGroupBits` → `nextFreeBit`) and mirrored in the engine's
+ * `assignGroupBits`. Custom views work identically in either word (they
+ * resolve by NAME at model load), so word 0 is the scarce single-consumer
+ * resource and word 1 is the abundant one. `nextFreeSlot` therefore fills
+ * word 1 FIRST for custom views and only spills into word 0 once word 1 is
+ * full — the total capacity stays 62 while base groups keep maximum
+ * headroom. Running out of all 62 slots throws (no fallbacks — codex P0).
+ *
+ * Allocation policy applies to NEW slots only: every already-pinned
+ * (word, bit) in views.yaml is preserved verbatim by `createViewRegistry`,
+ * so changing the policy never renumbers an existing scene.
  */
 
 export const MAX_BIT = 0x40000000;
@@ -34,6 +54,15 @@ export const MAX_BIT = 0x40000000;
 // Two-word scheme: 31 usable bits per word (bits 0..30), 62 total.
 export const SLOTS_PER_WORD = 31;
 export const MAX_VIEW_SLOTS = SLOTS_PER_WORD * 2; // 62
+
+/**
+ * Word-preference order for NEW custom-view allocations. Word 1 first:
+ * base groups are hard-pinned to word 0, custom views are word-agnostic,
+ * so spending word 0 on a view starves the only consumer that cannot go
+ * anywhere else. Word 0 stays in the list as the spill target so total
+ * capacity is still MAX_VIEW_SLOTS.
+ */
+export const CUSTOM_VIEW_WORD_ORDER = [1, 0];
 
 /**
  * Effects-only fixture types (foggers/hazers/horns/fire) never become
@@ -96,8 +125,52 @@ export function createViewRegistry(viewsTree) {
 }
 
 /** The view word a custom view lives in (default 0 — legacy). */
-function viewWord(v) {
+export function viewWord(v) {
   return v && v.word === 1 ? 1 : 0;
+}
+
+/**
+ * The two per-word mask fields, indexed BY WORD. Fixture/strand configs use
+ * the long names (they ride views.yaml-adjacent scene state: patches.yaml for
+ * DMX fixtures, scene_config.yaml for LED things); exported pixels use the
+ * abbreviated lane names the engine and the WASM meta ABI read.
+ */
+export const FIXTURE_MASK_FIELDS = ['viewMask', 'viewMaskHi'];
+export const PIXEL_MASK_FIELDS = ['vMask', 'vMaskHi'];
+
+/** Config field carrying per-fixture membership for `view`'s word. */
+export function fixtureMaskField(view) {
+  return FIXTURE_MASK_FIELDS[viewWord(view)];
+}
+
+/** Exported-pixel field carrying per-fixture membership for `view`'s word. */
+export function pixelMaskField(view) {
+  return PIXEL_MASK_FIELDS[viewWord(view)];
+}
+
+/**
+ * True when a fixture/strand config carries `view`'s bit — read from the
+ * view's OWN word. Word 0 and word 1 are independent bit spaces, so testing
+ * a word-1 view against `viewMask` would both miss its real members and
+ * falsely match whatever group bit happens to share the value.
+ */
+export function fixtureInView(config, view) {
+  if (!config || !view) return false;
+  return ((config[fixtureMaskField(view)] || 0) & view.bit) !== 0;
+}
+
+/** Same test against an EXPORTED PIXEL (`vMask` / `vMaskHi`). */
+export function pixelInView(pixel, view) {
+  if (!pixel || !view) return false;
+  return ((pixel[pixelMaskField(view)] || 0) & view.bit) !== 0;
+}
+
+/** Add (`member`) or remove `view`'s bit on a config, in the view's word. */
+export function setFixtureInView(config, view, member) {
+  if (!config || !view) return;
+  const field = fixtureMaskField(view);
+  const cur = config[field] || 0;
+  config[field] = member ? (cur | view.bit) : (cur & ~view.bit);
 }
 
 /**
@@ -128,19 +201,42 @@ export function nextFreeBit(registry) {
 }
 
 /**
- * Lowest free (word, bit) slot across BOTH words — fills word 0 (legacy
- * `viewMask`) before word 1 (`viewMaskHi`) so the first 31 views stay
- * byte-identical to the single-word layout. Returns null when all 62
- * slots are taken (caller throws loudly).
+ * Lowest free (word, bit) slot for a NEW custom view, walking the words in
+ * `CUSTOM_VIEW_WORD_ORDER` — word 1 (`viewMaskHi`) first, word 0 (legacy
+ * `viewMask`) only as the spill target. Word 0 is the sole home of base
+ * group bits, so leaving it to the groups is what keeps a scene able to
+ * grow fixtures. Returns null when all 62 slots are taken (caller throws
+ * loudly — codex P0, no silent degradation).
+ *
+ * @param {object} registry view registry
+ * @param {number[]} wordOrder words to try, in preference order
+ * @returns {{word: number, bit: number}|null}
  */
-export function nextFreeSlot(registry) {
-  for (let word = 0; word <= 1; word++) {
+export function nextFreeSlot(registry, wordOrder = CUSTOM_VIEW_WORD_ORDER) {
+  for (const word of wordOrder) {
     const used = usedBitsMask(registry, word);
     for (let bit = 1; bit <= MAX_BIT; bit *= 2) {
       if ((used & bit) === 0) return { word, bit };
     }
   }
   return null;
+}
+
+/**
+ * Free-slot counts per word, for operator-facing budget readouts. Word 0's
+ * free count IS the base-group headroom (how many new fixture groups the
+ * scene can still take); word 1's is custom-view headroom.
+ */
+export function freeSlotCounts(registry) {
+  const countFree = (word) => {
+    const used = usedBitsMask(registry, word);
+    let free = 0;
+    for (let bit = 1; bit <= MAX_BIT; bit *= 2) {
+      if ((used & bit) === 0) free++;
+    }
+    return free;
+  };
+  return { word0: countFree(0), word1: countFree(1) };
 }
 
 /**
@@ -178,7 +274,10 @@ export function reconcileGroupBits(registry, groups) {
     const bit = nextFreeBit(registry);
     if (bit === 0) {
       throw new Error(`[Views] Out of view-mask bits while assigning group '${g}' — ` +
-        `a scene supports at most 31 distinct group/view bits`);
+        `base group bits live in word 0 only, which holds at most ${SLOTS_PER_WORD} bits and is ` +
+        `full. (The scene as a whole supports ${MAX_VIEW_SLOTS} slots; the rest are word-1 ` +
+        `custom-view slots, which groups cannot use.) Free a word-0 bit by moving a custom view ` +
+        `to word 1 or by removing an unused group.`);
     }
     registry.groupBits[g] = bit;
     added.push(g);
@@ -264,10 +363,11 @@ export function validateViewName(registry, name, excludeView = null) {
 }
 
 /**
- * Create a custom view with the lowest free (word, bit) slot, filling
- * word 0 (`viewMask`) before word 1 (`viewMaskHi`). Throws on an invalid
- * or colliding name and on slot exhaustion (all 62 taken) — a view that
- * can't get a slot must not be half-created.
+ * Create a custom view with the lowest free (word, bit) slot under the
+ * group-headroom policy: word 1 (`viewMaskHi`) first, word 0 (`viewMask`)
+ * only once word 1 is full. Throws on an invalid or colliding name and on
+ * slot exhaustion (all 62 taken) — a view that can't get a slot must not
+ * be half-created.
  */
 export function addCustomView(registry, name) {
   const trimmed = String(name || '').trim();
@@ -284,22 +384,78 @@ export function addCustomView(registry, name) {
 }
 
 /**
- * Change a custom view's bit. Validates power-of-two and collisions.
- * Returns the old bit so the caller can migrate per-fixture masks.
+ * Relocate a custom view to an explicit (word, bit) slot — the canonical
+ * way to free word-0 group headroom by moving views into `viewMaskHi`.
+ *
+ * CROSS-WORD MOVES MIGRATE PER-FIXTURE MEMBERSHIP, ATOMICALLY. Since fixture
+ * configs carry BOTH words (`viewMask` + `viewMaskHi`), a per-fixture view is
+ * no longer stuck in word 0 — but its bits must move WITH it or the scene
+ * corrupts two ways at once: the view exports empty from its new word, and
+ * the bit left behind in the old word aliases whatever group/view owns that
+ * value there (in word 0 that is a base group bit, so the orphaned fixture
+ * would silently join that group's view). So `fixtures` — the scene's
+ * complete fixture + strand config list — is REQUIRED for every cross-word
+ * move and the migration happens inside this call. Omitting it throws; it is
+ * never assumed empty (codex P0 — no silent skip).
+ *
+ * Same-word moves do NOT touch fixtures: the bit changes but the word does
+ * not, and `setCustomViewBit`'s callers already migrate from the returned
+ * old bit. That contract is unchanged.
+ *
+ * @param {object} registry view registry
+ * @param {object} view the custom view to relocate
+ * @param {number} newWord 0 or 1
+ * @param {number} newBit power-of-two bit within `newWord`
+ * @param {Array<object>|null} fixtures every fixture/strand config in the
+ *   scene — required when `newWord` differs from the view's current word
+ * @returns {{word: number, bit: number}} the previous slot
  */
-export function setCustomViewBit(registry, view, newBit) {
+export function setCustomViewSlot(registry, view, newWord, newBit, fixtures = null) {
+  if (newWord !== 0 && newWord !== 1) {
+    throw new Error(`[Views] View word must be 0 or 1, got ${newWord}`);
+  }
   if (!isPowerOfTwoBit(newBit)) {
     throw new Error(`[Views] Bit must be a power of two between 0x1 and 0x${MAX_BIT.toString(16)}`);
   }
+  const oldWord = viewWord(view);
   const oldBit = view.bit;
-  if (newBit === oldBit) return oldBit;
-  // Collision is checked WITHIN the view's own word (word 0 and word 1 are
-  // independent bit spaces).
-  if ((usedBitsMask(registry, viewWord(view)) & ~oldBit & newBit) !== 0) {
-    throw new Error(`[Views] Bit 0x${newBit.toString(16)} is already taken by another group or view`);
+  if (newWord === oldWord && newBit === oldBit) return { word: oldWord, bit: oldBit };
+  const crossWord = newWord !== oldWord;
+  if (crossWord && !Array.isArray(fixtures)) {
+    throw new Error(`[Views] Moving view '${view.name}' from word ${oldWord} to word ${newWord} ` +
+      `must migrate its per-fixture membership between the '${FIXTURE_MASK_FIELDS[oldWord]}' and ` +
+      `'${FIXTURE_MASK_FIELDS[newWord]}' fields — pass the scene's fixture + strand config list as ` +
+      `the 5th argument. Refusing to move the view and strand its members.`);
   }
+  // Collision is checked WITHIN the destination word (word 0 and word 1 are
+  // independent bit spaces); the view's own current bit only excuses a
+  // collision when it is staying in the same word.
+  const selfBit = crossWord ? 0 : oldBit;
+  if ((usedBitsMask(registry, newWord) & ~selfBit & newBit) !== 0) {
+    throw new Error(`[Views] Bit 0x${newBit.toString(16)} is already taken by another group or view ` +
+      `in word ${newWord}`);
+  }
+  if (crossWord) {
+    const oldField = FIXTURE_MASK_FIELDS[oldWord];
+    const newField = FIXTURE_MASK_FIELDS[newWord];
+    for (const config of fixtures) {
+      if (!config || ((config[oldField] || 0) & oldBit) === 0) continue;
+      config[oldField] = (config[oldField] || 0) & ~oldBit;
+      config[newField] = (config[newField] || 0) | newBit;
+    }
+  }
+  view.word = newWord;
   view.bit = newBit;
-  return oldBit;
+  return { word: oldWord, bit: oldBit };
+}
+
+/**
+ * Change a custom view's bit within its current word. Validates
+ * power-of-two and collisions. Returns the old bit so the caller can
+ * migrate per-fixture masks.
+ */
+export function setCustomViewBit(registry, view, newBit) {
+  return setCustomViewSlot(registry, view, viewWord(view), newBit).bit;
 }
 
 export function removeCustomView(registry, view) {
@@ -363,10 +519,12 @@ export function buildViewmasksSidecarJS(registry, pixels, sceneName) {
       lines.push(`  { name: '${safeName}', bit: 0x${view.bit.toString(16).padStart(4, '0')}${wordField}, groups: [${groupList}] },`);
       continue;
     }
+    // Per-fixture membership: read the pixel field of the view's OWN word
+    // (`vMask` for word 0, `vMaskHi` for word 1). The exporter carries both
+    // words onto every pixel, so a word-1 view finds its clicked fixtures.
     const memberIndices = [];
-    const memberField = view.word === 1 ? 'vMaskHi' : 'vMask';
     (pixels || []).forEach((p, i) => {
-      if (p && ((p[memberField] || 0) & view.bit) !== 0) memberIndices.push(i);
+      if (pixelInView(p, view)) memberIndices.push(i);
     });
     if (memberIndices.length === 0) {
       console.warn(`[Views] Custom view '${view.name}' has no members — skipped in sidecar export. ` +

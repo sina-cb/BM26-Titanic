@@ -150,11 +150,39 @@ git branch -D dev/<slug>        # only if abandoned
 
 ## 5. Port allocation
 
+### The operator's stack owns the default ports
+
+The operator launches the whole system himself with the launcher, from the
+repo root:
+
+```bash
+node launcher.js dev --scene titanic     # his standard dev launch
+node launcher.js prod --scene titanic    # prod variant
+```
+
+This is **his** stack. It starts (and supervises) the engine, simulation
+HTTP/save/sACN bridges, and related services on the default ports in the
+table below. Agents must treat every port and service the launcher starts
+as operator-owned:
+
+- **Never start a server on a default port** — if a test needs an engine or
+  sim server, run it on your slot's `31xxx` range (below) with a black-holed
+  config (`MARSIN_CONFIG_FILE`, `tests/helpers/setup_config_guard.mjs`).
+- **Never kill, restart, or "adopt" a service on a default port.** If the
+  operator's stack looks dead, report it — do not relaunch it for him
+  unless he asks. (He may also grant temporary service control for a
+  session; that grant expires with the session.)
+- Read-only probes of his running services are allowed where a task calls
+  for it; close probe browsers and abort writes at the network layer.
+- Instigators/coordinators: put this stay-away rule in every sub-agent
+  brief that might launch or touch services.
+
 The instigator assigns each sub-agent a **slot index** `0..6`. The slot's
 base port is `31000 + slot * 100`. Every server the sub-agent starts MUST
 use a port derived from its base.
 
-Default project ports (DO NOT use these in a worktree if another process,
+Default project ports (owned by the operator's launcher stack — DO NOT
+bind, kill, or restart these from a worktree or test; another process,
 including the operator's main checkout, may already be using them):
 
 | Service | Default | Source |

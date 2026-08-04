@@ -262,7 +262,8 @@ function parkWindowText(planned) {
  * @param {Set<number>|Map<number,string>} claimedUniverses - universes owned by
  *   OTHER controllers (Map values are owner labels used in the refusal text).
  *   REQUIRED — deriving without it is exactly the defect this gate closes.
- * @returns {{universeByOutputIndex: Object<number,number>,
+ * @returns {{controllerName: string,
+ *   universeByOutputIndex: Object<number,number>,
  *   assignments: Array<{outputIndex: number, portNum: number, universe: number,
  *     pixelCount: number}>,
  *   parked: Array<{outputIndex: number, universe: number, reused: boolean}>,
@@ -515,6 +516,12 @@ export function derivePerOutputPlan(controller, strandFixtures, deviceSnapshot, 
   }
 
   return {
+    // The CARD's name travels with the plan because the push may have to write
+    // it as the device's `deviceName`: a board whose stored name is invalid
+    // rejects every config write until it is repaired (report 20260725_124,
+    // `deviceNameRepairForPush`). It is carried verbatim — the repair either
+    // uses it as-is or refuses.
+    controllerName: controller.name,
     universeByOutputIndex,
     assignments,
     parked,

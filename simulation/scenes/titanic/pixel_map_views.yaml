@@ -33,9 +33,9 @@ views:
         sizeX: 14
         sizeY: 14
     framing:
-      zoom: 0.8928571428571429
-      panX: 27.74128807501802
-      panY: -26.05614750960177
+      zoom: 1.0000000000000009
+      panX: -107.3153758974994
+      panY: 42.39272223835354
     offsets:
       Right_Back_Left:
         dx: 16

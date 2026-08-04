@@ -29,6 +29,14 @@
  *   node led_gamma_push.cjs --host 10.1.1.60 --gamma 2.0,2.0,2.0,1.0
  *   node led_gamma_push.cjs --host 10.1.1.60 --revert         # back to 1,1,1,1 (off)
  *   node led_gamma_push.cjs --host 10.1.1.60 --restore <backup.json>
+ *   node led_gamma_push.cjs --host 10.1.1.60 --device-name LeftLeftRopes
+ *
+ * --device-name is the controller CARD's name and exists for one reason: a
+ * board whose STORED deviceName is invalid (fresh boards ship with "") rejects
+ * EVERY config write with field=deviceName — gamma included (docs/41 §4.1.1).
+ * The push then repairs the name with this value VERBATIM, or refuses loudly
+ * if it is not itself a legal device name. A board whose stored name is valid
+ * is never renamed, whatever this flag says.
  *
  * Prefer the sim UI for anything fleet-wide: the Controllers panel has
  * per-controller gamma fields, a per-card PUSH GAMMA, and a "Push gamma to ALL"
@@ -85,8 +93,10 @@ function die(msg) {
     target = DEFAULT_GAMMA;
   }
 
-  const result = await pushGamma(host, target, { onLog: (m) => console.log(m) })
-    .catch((e) => die(e.message));
+  const result = await pushGamma(host, target, {
+    onLog: (m) => console.log(m),
+    controllerName: arg('--device-name') || undefined,
+  }).catch((e) => die(e.message));
 
   console.log('\nNow mirror it for the sim preview (scenes/<scene>/controllers.yaml, LED controller):');
   console.log('  led:\n    wire:\n      controllerGamma: ' +

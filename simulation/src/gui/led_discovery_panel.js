@@ -22,6 +22,7 @@ import {
   pushPerOutputUniverses,
   validatePerOutputPlan,
   applyPerOutputPlan,
+  deviceNameRepairForPush,
   PER_OUTPUT_WRITE_TIMEOUT_MS,
   REBOOT_WAIT_TIMEOUT_MS,
 } from '../dmx/led/marsinled_client.js';
@@ -29,6 +30,10 @@ import {
   derivePerOutputPlan,
 } from '../dmx/led/device_config_mapper.js';
 import { projectLedStrandSegments } from '../dmx/led/led_patch_projection.js';
+import {
+  buildRouteExpectation,
+  confirmBridgeRoutes,
+} from '../dmx/led/bridge_route_confirm.js';
 import {
   isLedController,
   isBoundLedController,
@@ -42,6 +47,7 @@ import {
   unbindControllerDevice,
   recordDevicePush,
   ledOutputIndexForPort,
+  entryFixtureName,
   setParkedUniverse,
   clearParkedUniverse,
   LED_DEVICE_VENDOR_MARSINLED,
@@ -246,6 +252,21 @@ const DEFAULT_DEVICE_IO = {
         'cannot be told to reload its routes');
     }
     return window.PatchManager.notifySacnBridge();
+  },
+  // ── _127: the third check is a MEASUREMENT ────────────────────────────────
+  // "✓ bridge notified — routes follow" trusted the notify; this reads the
+  // bridge's ACTIVE route table back over the same WS the notify travelled and
+  // renders ✓ only when the expected (universe → controller IP) pairs exist —
+  // and the parked ones do NOT. Injectable like the other steps.
+  confirmBridgeRoutes: (expectations) => {
+    if (!window.sacnInput || typeof window.sacnInput.queryRoutes !== 'function') {
+      throw new Error('window.sacnInput.queryRoutes is not installed — the bridge route table ' +
+        'cannot be read back');
+    }
+    return confirmBridgeRoutes({
+      expectations,
+      readRoutes: () => window.sacnInput.queryRoutes(),
+    });
   },
 };
 
@@ -913,9 +934,8 @@ export function renderDeviceBindingSection(ctx, controller) {
     const expectations = [dev.deviceName, dev.boardId].filter(Boolean).join(' · ');
     declared.textContent = `declared at ${controller.ip || 'no IP'}` +
       (expectations ? ` — expecting ${expectations}` : '') + ' · fingerprint not read yet';
-    declared.title = 'The strands on this card ARE patched: patches.yaml, the engine model, the ' +
-      'bridge routes and the subscribed universes all exist. Only the board fingerprint is ' +
-      'missing, and it arrives on first contact.';
+    declared.title = 'Patched and routed. Only the board fingerprint is missing — it arrives on ' +
+      'first contact.';
     section.appendChild(declared);
 
     const verifyBtn = el('button', 'cm-btn led-device-verify', '🔗 Verify against board now');
@@ -931,34 +951,52 @@ export function renderDeviceBindingSection(ctx, controller) {
     section.appendChild(verifyBtn);
 
     const dropBtn = el('button', 'cm-btn led-device-drop-provisional', '✕ Drop provisional');
-    dropBtn.title = 'Remove the declared binding. The strands on this card return to UNPATCHED ' +
-      '— no patches.yaml records, no bridge routes, no model addresses.';
+    dropBtn.title = 'Withdraw the board claim. Patching is unaffected — only the first-contact ' +
+      'identity check goes away.';
     dropBtn.onclick = () => {
       ctx.mutate(`Dropped the provisional binding on '${controller.name}'`, () => {
         unbindControllerDevice(controller);
       });
-      ctx.showToast(`'${controller.name}' is UNBOUND again — its strands project unpatched`,
+      ctx.showToast(`'${controller.name}' no longer claims a board — its strands stay patched`,
         { ttl: 8000 });
     };
     section.appendChild(dropBtn);
   }
 
   if (!verified && !provisional) {
-    // The OPTIONAL-DISCOVERY entry point (operator ruling 2026-07-31): declare
-    // the binding from the typed IP, with the board still boxed.
+    // An UNBOUND card that carries chains IS PATCHED (operator ruling
+    // 2026-08-03, report 20260725_123): chaining is the patch and the typed IP is
+    // the destination. ONE quiet tag says the only thing that is actually
+    // outstanding — nobody has checked the board (operator addendum 2026-08-03:
+    // *"the warning and patch without board button is okay. Just make sure it's
+    // not too noisy."*). No banner, no red, nothing repeated per port row. The
+    // chained-with-NO-IP case is the loud one and the card-level banner owns it.
+    const chainedCount = (controller.ports || []).reduce(
+      (n, p) => n + (p.chain || []).filter((e) => entryFixtureName(e) !== null).length, 0);
+    if (chainedCount > 0 && validIp) {
+      // NOT `.led-binding-badge` — an unbound card still carries no grade badge
+      // (report `_96` §6.2, and agent_tools/provisional_status_verify.cjs pins it).
+      const tag = el('span', 'led-device-tag led-device-unverified', '⚑ board unverified');
+      tag.title = `Patched and routed to ${controller.ip}. The board itself has not been read ` +
+        'yet — first contact checks it.';
+      section.appendChild(tag);
+    }
+
+    // The OPTIONAL-DISCOVERY entry point (operator ruling 2026-07-31). Under the
+    // 2026-08-03 ruling it is a CONVENIENCE, never a prerequisite: it records the
+    // claim now so first contact can promote/reconcile against it instead of
+    // meeting an unclaimed card. Patching happens with or without it. Kept under
+    // the operator's own name for it, with the tooltip carrying the meaning.
     const gate = canMarkProvisional(controller);
     const markBtn = el('button', 'cm-btn led-device-mark-provisional', '⚑ Patch without the board');
     if (gate.allowed) {
-      markBtn.title = `Declare a PROVISIONAL binding at ${controller.ip}. Everything downstream ` +
-        'patches immediately — patches.yaml, the engine model lanes, the bridge relay routes and ' +
-        'the subscribed universes — so the chain is complete before the board powers on. On ' +
-        'first contact the sim reads the fingerprint off the board and promotes this card.';
+      markBtn.title = `Optional — already patched. Claims the board at ${controller.ip} so first ` +
+        'contact verifies it instead of adopting whatever answers.';
       markBtn.onclick = () => {
         ctx.mutate(`Declared a provisional binding on '${controller.name}'`, () => {
           markControllerProvisional(controller);
         });
-        ctx.showToast(`⚑ '${controller.name}' is PROVISIONAL at ${controller.ip} — its strands ` +
-          'patch now; save the scene to write patches.yaml and route the bridge', { ttl: 11000 });
+        ctx.showToast(`⚑ '${controller.name}' claims the board at ${controller.ip}`, { ttl: 7000 });
       };
     } else {
       markBtn.disabled = true;
@@ -1451,7 +1489,11 @@ function describeDeviceStep(pushResult) {
 // their failure (that would be a hidden fallback and a second reboot) — the
 // dialog says so instead.
 
-const PUSH_STEP_LABELS = { save: 'scene save', notify: 'bridge notify' };
+const PUSH_STEP_LABELS = {
+  save: 'scene save',
+  notify: 'bridge notify',
+  confirm: 'bridge route read-back',
+};
 
 /**
  * Coerce a step's return value into `{ok, reason}`. A step that answers with
@@ -1467,19 +1509,29 @@ function normalizeStepResult(result, step) {
 }
 
 /**
- * Persist the scene (patches.yaml + controllers.yaml + the engine model) and
- * THEN notify the sACN bridge so it re-reads the routes. The notify is chained on
- * the save's resolution — never on a timer — because a bridge told to reload
- * before the save lands re-reads the STALE patches.yaml.
+ * Persist the scene (patches.yaml + controllers.yaml + the engine model),
+ * THEN notify the sACN bridge so it re-reads the routes, THEN read the
+ * bridge's ACTIVE route table back and check it against what this push must
+ * have produced (report 20260725_127). Each step is chained on the previous
+ * one's resolution — never on a timer — because a bridge told to reload
+ * before the save lands re-reads the STALE patches.yaml, and a route table
+ * read before the notify measures the old world.
  *
- * Never throws. Returns `{ save: {ok, reason?}, notify: {ok, reason?}|null }`;
- * `notify` stays null when the save failed (notifying after a failed save would
- * only make the bridge re-read the old file and look like progress).
+ * Never throws. Returns `{ save, notify, confirm }`, each `{ok, reason?}`
+ * (confirm additionally carries `detail` naming the confirmed routes, or
+ * `skipped: true` when `routeExpectations` is the EXPLICIT empty list — a
+ * push-all where nothing was pushed). `notify`/`confirm` stay null when an
+ * earlier step failed. Omitting `routeExpectations` entirely is a confirm
+ * FAILURE, not a skip — no caller gets an unmeasured ✓ by forgetting to state
+ * what it expects.
  *
- * @param {Object} io - the injectable io bag (persistScene / notifyBridge).
+ * @param {Object} io - the injectable io bag
+ *        (persistScene / notifyBridge / confirmBridgeRoutes).
+ * @param {Array} routeExpectations - buildRouteExpectation results for every
+ *        controller this push wrote; [] only when nothing was pushed.
  */
-export async function persistAndNotifyAfterPush(io) {
-  const steps = { save: null, notify: null };
+export async function persistAndNotifyAfterPush(io, routeExpectations) {
+  const steps = { save: null, notify: null, confirm: null };
   try {
     if (typeof io.persistScene !== 'function') {
       throw new Error('the push io bag has no persistScene() — the mapping cannot reach disk');
@@ -1498,6 +1550,35 @@ export async function persistAndNotifyAfterPush(io) {
   } catch (err) {
     steps.notify = { ok: false, reason: err.message };
   }
+  if (!steps.notify.ok) return steps;
+  try {
+    if (!Array.isArray(routeExpectations)) {
+      throw new Error('the push stated no route expectation — refusing to render an unmeasured ' +
+        '✓ (pass [] only when nothing was pushed)');
+    }
+    if (routeExpectations.length === 0) {
+      steps.confirm = { ok: true, skipped: true };
+    } else {
+      if (typeof io.confirmBridgeRoutes !== 'function') {
+        throw new Error('the push io bag has no confirmBridgeRoutes() — the bridge route table ' +
+          'cannot be read back');
+      }
+      const result = await io.confirmBridgeRoutes(routeExpectations);
+      if (!result || typeof result.ok !== 'boolean') {
+        throw new Error('the bridge route read-back returned no {ok} result — refusing to ' +
+          'assume the routes landed');
+      }
+      if (result.ok && !(typeof result.detail === 'string' && result.detail.length > 0)) {
+        throw new Error('the bridge route read-back reported ok without naming the confirmed ' +
+          'routes — refusing an unnamed ✓');
+      }
+      steps.confirm = result.ok
+        ? { ok: true, detail: result.detail }
+        : { ok: false, reason: result.reason || 'no reason reported' };
+    }
+  } catch (err) {
+    steps.confirm = { ok: false, reason: err.message };
+  }
   return steps;
 }
 
@@ -1506,8 +1587,11 @@ export async function persistAndNotifyAfterPush(io) {
  * the tests all read the same sentence.
  *
  * Success: `✓ device written + verified · ✓ scene saved (patches projected) ·
- * ✓ bridge notified — routes follow`. Any failure names the stale layer and
- * states that the device write stands.
+ * ✓ bridge routes confirmed (U30,U31→10.1.1.60)`. The third check is a READ of
+ * the bridge's active route table (report 20260725_127), never a trusted
+ * notify: a `steps.confirm` that is missing or failed renders ✋ with the
+ * missing/extra routes named. Any failure names the stale layer and states
+ * that the device write stands.
  *
  * @returns {{ok: boolean, failedStep: string|null, text: string}}
  */
@@ -1525,20 +1609,33 @@ export function describePushCompletion(steps, {
   }
   if (!steps.save.ok) {
     parts.push('⏸ bridge not notified (the save failed first)');
-  } else if (steps.notify.ok) {
-    parts.push('✓ bridge notified — routes follow');
-  } else {
+  } else if (!steps.notify.ok) {
     parts.push(`✋ bridge NOT notified: ${steps.notify.reason}`);
     failedStep = PUSH_STEP_LABELS.notify;
+  } else if (!steps.confirm) {
+    // The notify landed but nothing measured the routes. Rendering the old
+    // "routes follow" here would be exactly the unmeasured ✓ this check ended.
+    parts.push('✋ bridge routes NOT confirmed: the route table was never read back');
+    failedStep = PUSH_STEP_LABELS.confirm;
+  } else if (steps.confirm.ok) {
+    parts.push(steps.confirm.skipped
+      ? '✓ bridge notified — nothing was pushed, no routes to confirm'
+      : `✓ bridge routes confirmed (${steps.confirm.detail})`);
+  } else {
+    parts.push(`✋ bridge routes NOT confirmed: ${steps.confirm.reason}`);
+    failedStep = PUSH_STEP_LABELS.confirm;
   }
   const text = parts.join(' · ');
   if (!failedStep) return { ok: true, failedStep: null, text };
-  return {
-    ok: false,
-    failedStep,
-    text: `${text} — ${deviceNote}; the sACN feed was NOT updated: ${failedStep} — ` +
-      'LEDs will not follow until a successful save.',
-  };
+  // A failed CONFIRM is a different claim from a failed save/notify: the file
+  // and the notify landed, but the bridge's measured state does not show this
+  // push — so say "not confirmed", not "not updated", and point at the bridge.
+  const tail = failedStep === PUSH_STEP_LABELS.confirm
+    ? `the sACN feed is NOT CONFIRMED: ${failedStep} — LEDs may not follow; check the sACN ` +
+      'bridge log.'
+    : `the sACN feed was NOT updated: ${failedStep} — LEDs will not follow until a successful ` +
+      'save.';
+  return { ok: false, failedStep, text: `${text} — ${deviceNote}; ${tail}` };
 }
 
 /**
@@ -1625,10 +1722,27 @@ async function startPerOutputPush(ctx, controller, snapshot, status) {
     strands: payloadStrands,
     dmx: { enabled: true, protocol: 0, timeoutMs: 3000 },
   };
-  showPerOutputPushConfirm(ctx, controller, plan, payload, status);
+  // A device whose STORED deviceName is invalid rejects every config write, so
+  // the push has to repair it with this card's name — or refuse now, before the
+  // operator confirms a write that cannot land (report 20260725_124). The same
+  // decision runs inside pushPerOutputUniverses; computing it here keeps the
+  // payload PREVIEW honest (it must show every key the POST will carry).
+  let nameRepair;
+  try {
+    nameRepair = deviceNameRepairForPush({
+      ip: controller.ip, storedName: snapshot.deviceName, controllerName: plan.controllerName,
+    });
+  } catch (err) {
+    ctx.showToast(`✋ per-output push refused: ${err.message}`, { error: true, ttl: 20000 });
+    setSyncState(ctx, controller.id, { state: 'drift', detail: err.message });
+    ctx.refresh();
+    return;
+  }
+  if (nameRepair) payload.deviceName = nameRepair.to;
+  showPerOutputPushConfirm(ctx, controller, plan, payload, status, nameRepair);
 }
 
-function showPerOutputPushConfirm(ctx, controller, plan, payload, status) {
+function showPerOutputPushConfirm(ctx, controller, plan, payload, status, nameRepair) {
   const overlay = el('div', 'vm-modal-overlay');
   const card = el('div', 'vm-modal-card led-push-card');
   overlay.appendChild(card);
@@ -1661,7 +1775,7 @@ function showPerOutputPushConfirm(ctx, controller, plan, payload, status) {
   card.appendChild(el('div', 'led-push-warn led-push-saves-scene',
     'Push writes the device AND saves the scene (mapping must land on disk for the sACN feed to ' +
     'follow). The whole scene is saved — the same save the 💾 buttons run — then the sACN bridge ' +
-    'is told to reload its routes.'));
+    'is told to reload its routes and its route table is READ BACK to confirm they exist.'));
 
   // (2) Per-output mapping — one line per output a CARD PORT drives, naming the
   // port so a crossed mapping is impossible to misread.
@@ -1705,6 +1819,22 @@ function showPerOutputPushConfirm(ctx, controller, plan, payload, status) {
         `(port ${e.portNum} drives it, ${e.count} px, U${e.universe})`));
     }
     card.appendChild(enableBlock);
+  }
+
+  // (4b) The deviceName repair — declared on its own, because it is the one key
+  // outside strands/dmx this push may write, and it CHANGES THE DEVICE'S NAME
+  // (and its mDNS/AP SSID). It only appears when the board's stored name is
+  // invalid, i.e. when the board would otherwise reject the write outright.
+  if (nameRepair) {
+    const nameBlock = el('div', 'led-push-warn led-push-enables');
+    nameBlock.appendChild(el('div', 'led-push-enables-head',
+      `⚠ This push also sets the device's NAME to '${nameRepair.to}'`));
+    nameBlock.appendChild(el('div', 'led-push-enables-line',
+      `the board stores deviceName ${JSON.stringify(nameRepair.from)}, which its own firmware ` +
+      'rejects — and it re-validates the whole config on every apply, so NO config write can ' +
+      'land until the name is legal. The push writes this card\'s name verbatim (it is never ' +
+      'sanitized); it also becomes the device\'s mDNS/AP name.'));
+    card.appendChild(nameBlock);
   }
 
   // (5) Warnings — re-parks, repaired universes, count mismatches.
@@ -1755,6 +1885,24 @@ export async function runPerOutputPush(ctx, controller, plan, io, ui) {
     statusLine.className = 'led-push-status' + (cls ? ` ${cls}` : '');
   };
 
+  // _127: state what this push must produce on the bridge BEFORE the device is
+  // written — a plan whose route expectation cannot even be built must refuse
+  // here, not discover it after an irreversible write.
+  let routeExpectation;
+  try {
+    routeExpectation = buildRouteExpectation({
+      plan,
+      ip: controller.ip,
+      stride: (controller.led && controller.led.stride) || 4,
+    });
+  } catch (err) {
+    setStatus(`✋ push refused — cannot state the bridge route expectation: ${err.message}`,
+      'led-push-error');
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = 'Close';
+    return;
+  }
+
   let pushResult;
   try {
     pushResult = await pushPerOutputVerifyRecord(ctx, controller, plan, io,
@@ -1776,20 +1924,26 @@ export async function runPerOutputPush(ctx, controller, plan, io, ui) {
   // patches.yaml + the engine model, then tell the bridge to re-read it.
   const deviceStep = describeDeviceStep(pushResult);
   setStatus(`${deviceStep} · saving the scene (mapping → patches.yaml)…`);
-  const steps = await persistAndNotifyAfterPush(io);
+  const steps = await persistAndNotifyAfterPush(io, [routeExpectation]);
   const outcome = describePushCompletion(steps, { lead: deviceStep });
   setStatus(outcome.text, outcome.ok ? 'led-push-ok' : 'led-push-error');
   // The chip measures device ≡ plan, which IS true here — but say so honestly
   // when the feed behind it is stale.
+  const failedReason = !outcome.ok
+    ? (!steps.save.ok ? steps.save.reason
+      : steps.notify && !steps.notify.ok ? steps.notify.reason
+        : steps.confirm && !steps.confirm.ok ? steps.confirm.reason
+          : 'the route table was never read back')
+    : null;
   setSyncState(ctx, controller.id, outcome.ok
     ? { state: 'in-sync' }
     : { state: 'in-sync',
       detail: `device ≡ plan, but the sACN feed is STALE — ${outcome.failedStep} failed: ` +
-        `${(steps.notify && !steps.notify.ok ? steps.notify.reason : steps.save.reason)}` });
+        `${failedReason}` });
   cancelBtn.disabled = false;
   cancelBtn.textContent = outcome.ok ? 'Done' : 'Close';
   ctx.showToast(outcome.ok
-    ? `✓ '${controller.name}': device confirmed, scene saved, bridge notified` +
+    ? `✓ '${controller.name}': device confirmed, scene saved, bridge routes confirmed` +
       (pushResult.responseLost ? ' (the write reply was lost — the read-back confirmed it)' : '')
     : `✋ '${controller.name}': the device WAS written but the sACN feed was NOT updated ` +
       `(${outcome.failedStep} failed) — LEDs will not follow until a successful save`,
@@ -1862,6 +2016,14 @@ export async function pushAllLedControllers(ctx, io = DEFAULT_DEVICE_IO) {
       const shareNote = plan.sharedUniverses.length
         ? describeSharedUniverses(plan.sharedUniverses) : null;
       if (shareNote) console.warn(`[LedPanel] '${controller.name}': ${shareNote}`);
+      // _127: the route expectation is stated BEFORE the write (same rule as
+      // the single push) and rides on the result, so startPushAll's ONE
+      // completion can read the bridge's route table back for the whole fleet.
+      const expectation = buildRouteExpectation({
+        plan,
+        ip: controller.ip,
+        stride: (controller.led && controller.led.stride) || 4,
+      });
       // FORCE: always push + reboot + verify, even when the device already
       // matches. Same three phase budgets and the same "a lost write reply is
       // settled by the read-back, not by a timeout" rule as the single push.
@@ -1873,7 +2035,9 @@ export async function pushAllLedControllers(ctx, io = DEFAULT_DEVICE_IO) {
           'confirms the mapping applied'
         : null;
       const detail = [lostNote, shareNote].filter(Boolean).join(' · ');
-      results.push(detail ? { ...base, state: 'pushed', detail } : { ...base, state: 'pushed' });
+      results.push(detail
+        ? { ...base, state: 'pushed', detail, expectation }
+        : { ...base, state: 'pushed', expectation });
     } catch (err) {
       // Fail loud PER controller — record the state, keep going.
       setSyncState(ctx, controller.id, err.perOutputMismatch
@@ -1947,8 +2111,14 @@ export function startPushAll(ctx) {
       (failed.length ? `: ${failed.map((f) => `${f.name} (${f.detail})`).join('; ')}` : '');
     // ONE completion for the whole sequence (slice S1): the per-controller
     // failures are already reported above; this is the feed side of the loop.
+    // The route read-back (_127) checks the UNION of every pushed controller's
+    // expectation; a fleet where nothing pushed passes [] — an explicit
+    // "nothing to confirm", never a silent skip.
     statusLine.textContent = `${summary} · saving the scene (mapping → patches.yaml)…`;
-    const steps = await persistAndNotifyAfterPush(DEFAULT_DEVICE_IO);
+    const expectations = results
+      .filter((r) => r.state === 'pushed' && r.expectation)
+      .map((r) => r.expectation);
+    const steps = await persistAndNotifyAfterPush(DEFAULT_DEVICE_IO, expectations);
     const outcome = describePushCompletion(steps, {
       lead: summary,
       deviceNote: 'the device(s) WERE written (cannot be rolled back)',
@@ -1959,7 +2129,7 @@ export function startPushAll(ctx) {
     cancelBtn.disabled = false;
     cancelBtn.textContent = 'Close';
     ctx.showToast(outcome.ok
-      ? `Push all: ${pushed} pushed, ${failed.length} failed · scene saved, bridge notified`
+      ? `Push all: ${pushed} pushed, ${failed.length} failed · scene saved, bridge routes confirmed`
       : `Push all: ${pushed} pushed, ${failed.length} failed · ✋ the sACN feed was NOT updated ` +
         `(${outcome.failedStep} failed)`,
     { error: failed.length > 0 || !outcome.ok, ttl: outcome.ok ? 9000 : 14000 });

@@ -783,6 +783,27 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     }
     return [...seen].sort();
   }
+
+  /**
+   * { groupName: sectionId } for the loaded model — first pixel per group
+   * wins, exactly the map GET /dimmer-groups has always served. This is
+   * the single translation table between the WIRE format (numeric section
+   * ids, unchanged for CaptainPad) and the PERSISTED dimmer state, which
+   * is keyed by stable group name (section ids are re-minted every time
+   * the operator regenerates the scene/model — names survive; see
+   * StateManager.migrateDimmersToGroupKeys).
+   */
+  function modelDimmerGroups() {
+    const groups = {};
+    if (model && Array.isArray(model.pixels)) {
+      for (const px of model.pixels) {
+        if (px.group && px.sId > 0 && !groups[px.group]) {
+          groups[px.group] = px.sId;
+        }
+      }
+    }
+    return groups;
+  }
   // Monotonic suffix for new-channel ids — guards against two POSTs in
   // the same millisecond producing the same `ch_<Date.now()>` id.
   let channelIdCounter = 0;
@@ -1079,6 +1100,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   let mixerState = stateManager.loadMixerState();
   let deckState = stateManager.loadDeckState();
   let globalsState = stateManager.loadGlobalsState();
+  // One-time forward migration: legacy numeric-section-id dimmer keys →
+  // stable group-name keys, resolved against the CURRENT model. Orphans
+  // (ids/names no current group matches) are warned loudly and preserved
+  // untouched; the migrated shape hits disk on the next globals save.
+  stateManager.migrateDimmersToGroupKeys(globalsState, modelDimmerGroups());
 
   // ── Engine-wide settings (auto-save toggle) ──────────────────────────
   // `autoSave` (default TRUE) is the single choke that gates EVERY
@@ -1234,7 +1260,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   }
 
   try {
-    stateManager.applyGlobalsState(globalsState, paramCenter, intensityController, globalEffectsController);
+    stateManager.applyGlobalsState(
+      globalsState, paramCenter, intensityController, globalEffectsController,
+      modelDimmerGroups());
   } catch (err) {
     console.warn('Failed to apply loaded state:', err);
   }
@@ -5250,20 +5278,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.end(JSON.stringify({ status: 'ok', id: data.id }));
       });
     } else if (req.method === 'GET' && req.url === '/dimmer-groups') {
-      // Build group→sectionId map from model pixels
-      const groups = {};
-      if (model && model.pixels) {
-        for (const px of model.pixels) {
-          if (px.group && px.sId > 0 && !groups[px.group]) {
-            groups[px.group] = px.sId;
-          }
-        }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(modelDimmerGroups()));
+    } else if (req.method === 'GET' && req.url === '/dimmers') {
+      // WIRE format stays { sectionId: brightness } for CaptainPad; the
+      // PERSISTED state is keyed by stable group name. Resolve each name to
+      // the CURRENT model's section id. Unresolvable keys (orphans from an
+      // older model generation) pass through verbatim — clients only look
+      // up ids served by /dimmer-groups, so they are inert, and hiding them
+      // would misrepresent the persisted state.
+      const dimmerGroups = modelDimmerGroups();
+      const wire = {};
+      for (const [key, val] of Object.entries(globalsState.dimmers || {})) {
+        const sId = dimmerGroups[key];
+        wire[sId !== undefined ? sId : key] = val;
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(groups));
-    } else if (req.method === 'GET' && req.url === '/dimmers') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(globalsState.dimmers || {}));
+      res.end(JSON.stringify(wire));
 
     // ── Group fixed colors (docs/32) ─────────────────────────────────
     // Per-group color locks driven by the CaptainPad Dimmer Rack.
@@ -5326,12 +5357,29 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         if (data.sectionId === undefined || data.brightness === undefined) {
            res.writeHead(400); return res.end(JSON.stringify({ error: 'sectionId and brightness required' }));
         }
-        if (intensityController) intensityController.setSectionBrightness(data.sectionId, data.brightness);
+        // Wire keeps the numeric sectionId; persistence is keyed by the
+        // owning group's STABLE NAME (section ids are re-minted whenever
+        // the operator regenerates the model — names survive). An id no
+        // group in the loaded model maps to is rejected loudly (codex P0):
+        // accepting it would persist a key that can never be read back.
+        const sId = Number(data.sectionId);
+        const dimmerGroups = modelDimmerGroups();
+        let groupName = null;
+        for (const [name, id] of Object.entries(dimmerGroups)) {
+          if (id === sId) { groupName = name; break; }
+        }
+        if (groupName === null) {
+          res.writeHead(400);
+          return res.end(JSON.stringify({
+            error: `unknown sectionId ${data.sectionId} — no group in the loaded model maps to it (see GET /dimmer-groups)`,
+          }));
+        }
+        if (intensityController) intensityController.setSectionBrightness(sId, data.brightness);
         if (!globalsState.dimmers) globalsState.dimmers = {};
-        globalsState.dimmers[data.sectionId] = data.brightness;
+        globalsState.dimmers[groupName] = data.brightness;
         saveGlobals(false);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', sectionId: data.sectionId, brightness: data.brightness }));
+        res.end(JSON.stringify({ status: 'ok', sectionId: sId, group: groupName, brightness: data.brightness }));
       });
     } else if (req.method === 'POST' && req.url === '/global-blackout') {
       readBody(data => {
@@ -9641,7 +9689,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         pendingDeckFlush.clear();
         recallLook(look);
         stateManager.applyGlobalsState(
-          look.globals, paramCenter, intensityController, globalEffectsController);
+          look.globals, paramCenter, intensityController, globalEffectsController,
+          modelDimmerGroups());
         performanceMode.active = false;
         performanceMode.enteredAt = null;
         forcePersist();

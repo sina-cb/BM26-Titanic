@@ -227,8 +227,8 @@ function okTransport(verified, extra = {}) {
   const calls = [];
   return {
     calls,
-    pushGamma: async (ip, gamma) => {
-      calls.push({ ip, gamma });
+    pushGamma: async (ip, gamma, controllerName) => {
+      calls.push({ ip, gamma, controllerName });
       return {
         ip, verified, outcome: 'applied', reboot: false,
         controllerId: 'bench_1', deviceName: 'Bench-1', boardId: 'angio4-old',
@@ -259,7 +259,10 @@ test('pushGammaToController sends the mirror curve and commits the verified read
     (c, result) => { committed = c; commitGammaPush(c, result); });
 
   assert.equal(res.state, 'ok');
-  assert.deepEqual(transport.calls[0], { ip: '10.0.0.5', gamma: { r: 2.2, g: 2.3, b: 2.2, w: 1 } });
+  // The card's name rides along for exactly one server-side use: repairing an
+  // invalid STORED deviceName (docs/41 §4.1.1, report _126).
+  assert.deepEqual(transport.calls[0],
+    { ip: '10.0.0.5', gamma: { r: 2.2, g: 2.3, b: 2.2, w: 1 }, controllerName: 'LED A' });
   assert.equal(committed, controller);
   assert.deepEqual(res.verified, { r: 2.2, g: 2.3, b: 2.2, w: 1 });
   assert.deepEqual(controller.device.lastGammaPush.gamma, { r: 2.2, g: 2.3, b: 2.2, w: 1 });

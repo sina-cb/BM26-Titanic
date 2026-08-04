@@ -41,6 +41,14 @@ osc:
   gainMax: 2
   allowedSenders: []
   bindings: {}
+fire_sync:
+  enabled: true
+  port: 7703
+  host: 0.0.0.0
+  effect: vintageWhite
+  triggerMask: 0x07
+  minOnMs: 150
+  apiHost: 127.0.0.1
 audio:
   enabled: false
   capture:

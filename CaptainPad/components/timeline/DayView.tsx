@@ -4,7 +4,11 @@
  *   FESTIVAL (8-day strip) ──tap a day──▶ DAY ──tap an event──▶ EVENT (the deck)
  *
  * This is a pure BROWSE level: it makes ZERO engine calls of its own, so
- * reviewing the timeline can never touch the rig. It replaces the old DayEditor
+ * reviewing the timeline can never touch the rig. The CALENDAR itself is a
+ * zoom entry point (operator ruling 2026-08-03): tapping a cue block/marker
+ * opens the EVENT sheet for that cue, and tapping EMPTY time opens the MOMENT
+ * sheet (time travel to that instant) — both still just open a sheet; the rig
+ * moves only on the sheet's explicit button. It replaces the old DayEditor
  * modal — same job (a day's vertical timeline, add/edit/delete a cue) promoted
  * to a full-screen level and enriched with the two things a REVIEW needs that
  * the maker never had:
@@ -28,8 +32,8 @@
  * 02:00 today. We render that honestly rather than faking continuity — the
  * header says so in one line.
  */
-import React, { useMemo } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import React, { useMemo, useRef } from 'react';
+import { View, Text, TouchableOpacity, PanResponder, ScrollView, StyleSheet } from 'react-native';
 import { Palette } from '@/constants/theme';
 import { usePalette } from '@/hooks/use-theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -39,7 +43,7 @@ import {
   triggerSummary, actionSummary,
 } from './timelineTemplate';
 import {
-  allPhaseBands, ribbonRows, ribbonSourceNote, DAY_MINUTES,
+  allPhaseBands, ribbonRows, ribbonSourceNote, chartTapToLocal, DAY_MINUTES,
   type RibbonRow,
 } from './zoom_logic';
 
@@ -108,10 +112,14 @@ function RibbonColumn({
 // ── The day chart (hours · sun · phase bands · cues · NOW) ──────────────
 
 function DayChart({
-  day, nowMinutes, C, styles,
+  day, nowMinutes, onOpenEvent, onOpenMoment, C, styles,
 }: {
   day: OverviewDay;
   nowMinutes: number | null;
+  /** Tap a cue BLOCK / MARKER on the calendar → the EVENT sheet for that cue. */
+  onOpenEvent: (cue: OverviewCue) => void;
+  /** Tap EMPTY calendar time → the MOMENT sheet (time travel to that instant). */
+  onOpenMoment: (time: string) => void;
   C: Palette;
   styles: Styles;
 }) {
@@ -120,12 +128,44 @@ function DayChart({
   const sunriseMin = hhmmToMinutes(day.sun.sunrise);
   const sunsetMin = hhmmToMinutes(day.sun.sunset);
 
+  // The calendar itself is a TIME-TRAVEL entry point. Tap capture is the
+  // DayTimePicker idiom — a PanResponder (RN-web only normalizes
+  // locationX/locationY for RESPONDER events; a Pressable's press event
+  // carries none on web) on an absolute-fill underlay, with every decorative
+  // layer (daylight, hour grid, phase bands, NOW) pointerEvents:none so the
+  // grant's locationY is chart-relative. Cue blocks/markers render ABOVE the
+  // underlay as their own touchables and win the tap for their cue. The
+  // responder is created ONCE, so its closure reads the live handler through
+  // a ref (the fader idiom). A tap whose geometry can't be read maps to null
+  // and opens NOTHING (no guessed time, ever); a real drag (> 8 px) is not a
+  // tap and opens nothing either.
+  const openMomentRef = useRef(onOpenMoment);
+  openMomentRef.current = onOpenMoment;
+  const grantYRef = useRef(0);
+  const momentResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderGrant: (evt) => { grantYRef.current = evt.nativeEvent.locationY; },
+      onPanResponderRelease: (_evt, gs) => {
+        if (Math.abs(gs.dx) > 8 || Math.abs(gs.dy) > 8) return; // drag, not a tap
+        const t = chartTapToLocal(grantYRef.current, CHART_HEIGHT);
+        if (t !== null) openMomentRef.current(t);
+      },
+    }),
+  ).current;
+
   return (
     <View style={styles.chart}>
+      <View
+        style={StyleSheet.absoluteFill}
+        accessibilityLabel="Day calendar — tap a cue block to zoom into it, or an empty time to time travel there"
+        {...momentResponder.panHandlers}
+      />
       {/* Daylight shade (sunrise → sunset) — the backdrop every sun-anchored
           time is read against. */}
       {sunriseMin !== null && sunsetMin !== null && sunsetMin > sunriseMin ? (
         <View
+          pointerEvents="none"
           style={[
             styles.daylight,
             {
@@ -139,13 +179,14 @@ function DayChart({
 
       {/* Hour grid + labels. */}
       {Array.from({ length: 24 / HOUR_LABEL_STEP + 1 }, (_, i) => i * HOUR_LABEL_STEP).map((h) => (
-        <View key={`h${h}`} style={[styles.hourLine, { top: yFor(h * 60), backgroundColor: C.ghostBorder }]}>
+        <View key={`h${h}`} pointerEvents="none" style={[styles.hourLine, { top: yFor(h * 60), backgroundColor: C.ghostBorder }]}>
           <Text style={styles.hourLabel}>{minutesTo12h(h * 60 === DAY_MINUTES ? 0 : h * 60)}</Text>
         </View>
       ))}
 
       {/* PHASE BANDS — plan order is the draw order; a midnight-wrapping band
-          arrives here already split into its two pieces. */}
+          arrives here already split into its two pieces. Bands are DECOR for
+          tap purposes: a tap inside one is an empty-time tap at that instant. */}
       {bands.map((b, i) => {
         const tint = PHASE_TINTS[b.order % PHASE_TINTS.length];
         const top = yFor(b.fromMin);
@@ -153,6 +194,7 @@ function DayChart({
         return (
           <View
             key={`ph:${b.name}:${i}`}
+            pointerEvents="none"
             style={[styles.phaseBand, { top, height: h, borderColor: tint, backgroundColor: `${tint}22` }]}
           >
             <Text style={[styles.phaseName, { color: tint }]} numberOfLines={1}>
@@ -163,7 +205,9 @@ function DayChart({
       })}
 
       {/* Cue BLOCKS (durationMin > 0) and point MARKERS — the same visual
-          grammar the FESTIVAL strip uses, at day scale. */}
+          grammar the FESTIVAL strip uses, at day scale. Both are TAP TARGETS
+          now: tapping one zooms into that cue (the same EVENT sheet the agenda
+          rows open — perform if live, time travel otherwise). */}
       {day.cues.map((cue, i) => {
         const startMins = hhmmToMinutes(cue.atLocal);
         if (startMins === null) return null;
@@ -171,16 +215,34 @@ function DayChart({
         const top = yFor(startMins);
         if (typeof cue.durationMin === 'number' && cue.durationMin > 0) {
           const h = Math.max(4, yFor(Math.min(DAY_MINUTES, startMins + cue.durationMin)) - top);
-          return <View key={`${cue.id}:blk:${i}`} style={[styles.cueBlock, { top, height: h, backgroundColor: col }]} />;
+          return (
+            <TouchableOpacity
+              key={`${cue.id}:blk:${i}`}
+              onPress={() => onOpenEvent(cue)}
+              activeOpacity={0.7}
+              hitSlop={{ top: 4, bottom: 4, left: 6, right: 6 }}
+              accessibilityLabel={`Zoom into ${cue.label || cue.id}`}
+              style={[styles.cueBlock, { top, height: h, backgroundColor: col }]}
+            />
+          );
         }
-        return <View key={`${cue.id}:mk:${i}`} style={[styles.cueMarker, { top: top - 5, backgroundColor: col, borderColor: C.surfaceContainerLowest }]} />;
+        return (
+          <TouchableOpacity
+            key={`${cue.id}:mk:${i}`}
+            onPress={() => onOpenEvent(cue)}
+            activeOpacity={0.7}
+            hitSlop={{ top: 8, bottom: 8, left: 10, right: 10 }}
+            accessibilityLabel={`Zoom into ${cue.label || cue.id}`}
+            style={[styles.cueMarker, { top: top - 5, backgroundColor: col, borderColor: C.surfaceContainerLowest }]}
+          />
+        );
       })}
 
       {/* NOW playhead — today only. */}
       {nowMinutes !== null ? (
         <>
-          <View style={[styles.nowLine, { top: yFor(nowMinutes), backgroundColor: C.error }]} />
-          <View style={[styles.nowDot, { top: yFor(nowMinutes) - 4, backgroundColor: C.error }]} />
+          <View pointerEvents="none" style={[styles.nowLine, { top: yFor(nowMinutes), backgroundColor: C.error }]} />
+          <View pointerEvents="none" style={[styles.nowDot, { top: yFor(nowMinutes) - 4, backgroundColor: C.error }]} />
         </>
       ) : null}
     </View>
@@ -191,7 +253,7 @@ function DayChart({
 
 export function DayView({
   day, dayCount, planCues, nowMinutes, activeCueId, canEdit,
-  onBackToWeek, onPrevDay, onNextDay, onOpenEvent, onEditCue, onDeleteCue, onAddCue,
+  onBackToWeek, onPrevDay, onNextDay, onOpenEvent, onOpenMoment, onEditCue, onDeleteCue, onAddCue,
 }: {
   /** Resolved overview for this day. */
   day: OverviewDay;
@@ -208,8 +270,15 @@ export function DayView({
   onBackToWeek: () => void;
   onPrevDay: () => void;
   onNextDay: () => void;
-  /** Tap an event → the EVENT sheet (PERFORM / TIME TRAVEL / Edit). */
+  /** Tap an event (agenda row OR calendar block) → the EVENT sheet. */
   onOpenEvent: (cue: OverviewCue) => void;
+  /**
+   * Tap EMPTY calendar time → the MOMENT sheet: time travel to that instant
+   * ("HH:MM" on this day), resolved via the same read-only peek the event
+   * sheet uses. Still browse-safe: the tap only opens a sheet — the rig moves
+   * only on the sheet's explicit TIME TRAVEL button.
+   */
+  onOpenMoment: (time: string) => void;
   onEditCue: (cue: PlanCue) => void;
   onDeleteCue: (cueId: string) => void;
   onAddCue: () => void;
@@ -292,7 +361,7 @@ export function DayView({
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
         {/* ── The chart + the resolved ribbon, side by side on one 24 h scale ── */}
         <View style={styles.columnHeaderRow}>
-          <Text style={[styles.columnHeader, { flex: 1 }]}>PLANNED · phases, sun & events</Text>
+          <Text style={[styles.columnHeader, { flex: 1 }]}>PLANNED · tap a block or an empty time to zoom</Text>
           <Text style={[styles.columnHeader, { width: 260 }]}>RESOLVED · what actually plays</Text>
         </View>
 
@@ -304,7 +373,14 @@ export function DayView({
         )}
 
         <View style={styles.chartRow}>
-          <DayChart day={day} nowMinutes={nowMinutes} C={C} styles={styles} />
+          <DayChart
+            day={day}
+            nowMinutes={nowMinutes}
+            onOpenEvent={onOpenEvent}
+            onOpenMoment={onOpenMoment}
+            C={C}
+            styles={styles}
+          />
           <RibbonColumn rows={rows} C={C} styles={styles} />
         </View>
 

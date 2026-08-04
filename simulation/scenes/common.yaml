@@ -165,7 +165,7 @@ colorWave:
     label: ⚡ Enable
     transient: true
   lightingMode:
-    value: pixelblaze
+    value: sacn_in
     label: Mode
     options:
       - gradient
@@ -189,7 +189,7 @@ colorWave:
     value: true
     label: 📡 Bridge Enabled
   sacn_universes:
-    value: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35, 36, 37
+    value: 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42
     label: 📡 Subscribed Universes
   sacn_lockout_ms:
     value: 1000
@@ -218,10 +218,10 @@ config:
     label: Auto-Save on Change
 _camera:
   position:
-    x: 58.207
-    'y': 41.6937
-    z: 66.6833
+    x: -9.4312
+    'y': 17.8317
+    z: 67.2111
   target:
-    x: 17.5522
-    'y': 3.2799
-    z: -10.2378
+    x: -2
+    'y': 8
+    z: -5.3414

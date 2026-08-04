@@ -18,7 +18,16 @@ entries:
   - id: e_ambient_2_07_shimmer
     pattern: 07_shimmer
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.5
+      sliderLevel: 0.5
+      sliderDetail: 0.5
+      sliderRadius: 0.5
+      sliderKick: 0.5
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0.5
+      sliderWhiteWarmth: 0.5
     modulations: []
     midiMappings: []
     notes: null
@@ -81,7 +90,15 @@ entries:
   - id: e_ambient_11_20_parametric_sway_field
     pattern: 20_parametric_sway_field
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.71
+      sliderDirection: 0.5
+      sliderLevel: 0.5
+      sliderKick: 0.5
+      sliderRadius: 0.5
+      sliderDetail: 0.5
+      sliderFocus: 0.5
+      sliderTrailBlend: 0.5
     modulations: []
     midiMappings: []
     notes: null

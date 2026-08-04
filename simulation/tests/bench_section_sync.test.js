@@ -274,17 +274,59 @@ test('the real titanic scene can accept the block today (no collisions)', () => 
   assert.deepEqual(refusals(findings), []);
 });
 
-test('view-bit headroom is REPORTED — titanic is close to the 31-bit ceiling', () => {
+// The budget is PER WORD (report _137 §2). `viewMask` (word 0) and
+// `viewMaskHi` (word 1) are independent 31-bit spaces; base group bits — and
+// therefore every bit this block adds — can only live in word 0. Charging
+// word-1 composite views to the word-0 budget (the pre-_137 behaviour) both
+// overstated the number and could refuse an apply that actually fits.
+test('view-bit headroom is REPORTED — titanic fills the word-0 ceiling exactly', () => {
   const { block } = deriveBenchSection({ source: realBench() });
   const findings = checkTargetCompatibility({ block, target: realTitanic() });
   const headroom = findings.find((f) => f.code === 'TGT_VIEW_BIT_HEADROOM');
   assert.ok(headroom, 'the budget must always be reported, not only when it breaks');
-  assert.match(headroom.message, /30\/31 view bits/);
+  // 24 titanic group bits + 0 word-0 composites + 7 `TB ` group bits = 31/31.
+  assert.match(headroom.message, /31\/31 word-0 view bits after apply \(0 spare/);
+  // Word 1 is reported, never charged.
+  assert.match(headroom.message, /word 1 holds \d+ custom bit\(s\), independent of this budget/);
 });
 
-test('REFUSES: view-bit budget would exceed the 31-bit export ceiling', () => {
+test('word-1 composite views are NOT charged to the word-0 budget', () => {
   const { block } = deriveBenchSection({ source: realBench() });
   const target = realTitanic();
+  const word0Only = checkTargetCompatibility({ block, target })
+    .find((f) => f.code === 'TGT_VIEW_BIT_HEADROOM');
+  // Twenty more word-1 views must not move the word-0 number by one bit.
+  target.views.views.custom = [
+    ...target.views.views.custom,
+    ...Array.from({ length: 20 }, (_, i) => ({ name: `hi_${i}`, bit: 1 << (i + 17), word: 1 })),
+  ];
+  const withHiViews = checkTargetCompatibility({ block, target })
+    .find((f) => f.code === 'TGT_VIEW_BIT_HEADROOM');
+  assert.ok(withHiViews, 'adding word-1 views must not turn the budget into a refusal');
+  assert.match(withHiViews.message, /31\/31 word-0 view bits after apply \(0 spare/);
+  assert.match(word0Only.message, /31\/31 word-0 view bits after apply \(0 spare/);
+});
+
+test('REFUSES a malformed custom-view entry, and charges it to NEITHER word', () => {
+  const { block } = deriveBenchSection({ source: realBench() });
+  const clean = checkTargetCompatibility({ block, target: realTitanic() })
+    .find((f) => f.code === 'TGT_VIEW_BIT_HEADROOM');
+  const target = realTitanic();
+  // A bare `- ` in views.yaml parses to null; a bogus `word` is equally
+  // unattributable. Both must be named, not silently counted as word 0.
+  target.views.views.custom = [...target.views.views.custom, null, { name: 'bad', word: 7 }];
+  const findings = checkTargetCompatibility({ block, target });
+  assert.equal(findings.filter((f) => f.code === 'TGT_VIEW_ENTRY_MALFORMED').length, 2);
+  const dirty = findings.find((f) => f.code === 'TGT_VIEW_BIT_HEADROOM');
+  assert.ok(dirty, 'the budget is still reported alongside the refusal');
+  assert.equal(dirty.message, clean.message, 'malformed entries must not move either word count');
+});
+
+test('REFUSES: view-bit budget would exceed the 31-bit word-0 export ceiling', () => {
+  const { block } = deriveBenchSection({ source: realBench() });
+  const target = realTitanic();
+  // No `word` key ⇒ word 0 (the back-compat default in view_registry.js), so
+  // these DO compete with the group bits.
   target.views.views.custom = Array.from({ length: 6 }, (_, i) => ({ name: `audit_${i}` }));
   const findings = checkTargetCompatibility({ block, target });
   assert.ok(codes(findings).includes('TGT_VIEW_BIT_BUDGET'));

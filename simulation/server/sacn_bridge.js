@@ -53,7 +53,7 @@ processPriority.elevateSelf(
 // of "what a patch record occupies" and one of "what the field means".
 const { computeEffectiveRoutes, engineOwnedPairs, routeKey, partitionRoutePairs,
   applyUniverseSubscriptions, readPatchDeclarations,
-  parseSubscribedUniversesField } = require('../lib/bridge_routing.cjs');
+  parseSubscribedUniversesField, buildRouteTableSnapshot } = require('../lib/bridge_routing.cjs');
 
 // Bench stand-in re-addressing (operator order 2026-07-31). Pure half in
 // lib/bench_mirror.cjs; this file owns the file reads, the senders and the logs.
@@ -195,6 +195,12 @@ const clientScenes = new Map();             // ws → scene tag (set by setScene
 let engineState = { reachable: false, scene: null, owned: new Set() };
 
 const _routeEntries = new Map();            // routeKey → sender entry
+// Last recompute's engine-owned exclusions + active scenes, kept for the
+// read-only `getRoutes` introspection (report 20260725_127): the push's third
+// check reads them back to tell "route missing" from "engine delivers it
+// directly" — the designed one-writer arbitration, not a failure.
+let _lastExcluded = [];
+let _lastActiveScenes = [];
 let _lastExcludedSig = '';
 let _lastConflictSig = '';
 const _warnedMissingScenes = new Set();
@@ -413,6 +419,8 @@ function recomputeRoutes(reason) {
     clientScenes: clientScenes.values(),
     engineOwned: engineState.owned,
   });
+  _lastExcluded = excluded;
+  _lastActiveScenes = activeScenes;
 
   // ── Bench stand-in mirrors (operator order 2026-07-31) ─────────────────
   // Resolved BEFORE the subscription block and the sender diff: an active
@@ -751,6 +759,27 @@ wss.on('connection', (ws) => {
         clientScenes.set(ws, String(data.scene));
         console.log(`[sACN Bridge] Client tagged scene '${data.scene}'${prev && prev !== data.scene ? ` (was '${prev}')` : ''}`);
         recomputeRoutes(`client scene '${data.scene}'`);
+      } else if (data.type === 'getRoutes') {
+        // READ-ONLY route-table introspection (report 20260725_127): the LED
+        // push's third check confirms its routes here instead of trusting its
+        // own notify. Answered from the LIVE sender maps, to THIS client only.
+        // Same-socket FIFO: a query sent after `setScene` on this socket is
+        // handled after that recompute, so the reply is never the pre-save
+        // table. No state is touched. The outer catch exists to ignore
+        // non-JSON frames; a FAILED reply here must not vanish into it — the
+        // client would time out with no trace of why.
+        try {
+          ws.send(JSON.stringify(buildRouteTableSnapshot({
+            reqId: data.reqId,
+            routeEntries: _routeEntries,
+            mirrorEntries: _mirrorEntries,
+            excluded: _lastExcluded,
+            activeScenes: _lastActiveScenes,
+          })));
+        } catch (err) {
+          console.warn(`[sACN Bridge] ⚠ getRoutes reply failed: ${err.message} — the querying ` +
+            'client will time out its route read-back.');
+        }
       }
     } catch(e) {}
   });
