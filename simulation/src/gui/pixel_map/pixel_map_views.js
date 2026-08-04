@@ -611,7 +611,12 @@ export function migrateLegacyPixelMap2d(container, legacy) {
  * The set of group names a `view:` selector resolves to via the scene's
  * view_registry: a base group name resolves to itself; a custom-view name
  * resolves to that view's member groups. Returns null when the name is
- * unknown (caller turns that into a loud per-panel error). Throws only when a
+ * unknown, and the string 'per-fixture' when the view exists but has NO
+ * group membership — its members live in per-fixture mask bits (fixture
+ * configs), which cluster selection cannot see, so silently resolving it to
+ * the empty set would drop it from a selector union without a trace (the
+ * exact silent-partial-loss codex P0 forbids). The caller turns both
+ * non-Set results into a loud per-panel error. Throws only when a
  * `view:` selector is used with no registry supplied (a wiring bug).
  */
 function resolveViewGroups(viewName, registry) {
@@ -623,7 +628,10 @@ function resolveViewGroups(viewName, registry) {
     return new Set([viewName]);
   }
   const custom = (registry.custom || []).find((v) => v.name === viewName);
-  if (custom) return new Set(custom.groups || []);
+  if (custom) {
+    const groups = new Set(custom.groups || []);
+    return groups.size > 0 ? groups : 'per-fixture';
+  }
   return null; // unknown view name
 }
 
@@ -651,28 +659,45 @@ function selectorMatches(sel, cluster, viewGroupCache) {
 function buildViewGroupCache(panel, registry) {
   const cache = new Map();
   const unknown = [];
+  const perFixture = [];
   const scan = (selectors) => {
     for (const sel of selectors || []) {
       if (typeof sel.view !== 'string') continue;
-      if (cache.has(sel.view) || unknown.includes(sel.view)) continue;
+      if (cache.has(sel.view) || unknown.includes(sel.view) ||
+          perFixture.includes(sel.view)) continue;
       const groups = resolveViewGroups(sel.view, registry);
       if (groups === null) unknown.push(sel.view);
+      else if (groups === 'per-fixture') perFixture.push(sel.view);
       else cache.set(sel.view, groups);
     }
   };
   scan(panel.select);
   scan(panel.exclude);
-  return { cache, unknown };
+  return { cache, unknown, perFixture };
 }
 
 function resolvePanel(panel, clusters, registry) {
-  const { cache, unknown } = buildViewGroupCache(panel, registry);
+  const { cache, unknown, perFixture } = buildViewGroupCache(panel, registry);
   if (unknown.length) {
     return {
       def: panel,
       clusters: [],
       error: `Panel '${panel.id}': selector references unknown view(s) ` +
         `${unknown.map((n) => `'${n}'`).join(', ')} in the view registry`,
+    };
+  }
+  if (perFixture.length) {
+    // A group-less custom view keeps its members in per-fixture mask bits,
+    // which these group-based cluster selectors cannot resolve. Erroring the
+    // whole panel is deliberate: in a selector UNION the view would otherwise
+    // contribute silently nothing (partial loss with no trace).
+    return {
+      def: panel,
+      clusters: [],
+      error: `Panel '${panel.id}': view(s) ` +
+        `${perFixture.map((n) => `'${n}'`).join(', ')} have per-fixture (clicked-fixture) ` +
+        'membership, which 2D Pixel Map `view:` selectors cannot resolve — attach groups ' +
+        'to the view, or select the fixtures here by name/group instead',
     };
   }
   const exclude = panel.exclude || [];

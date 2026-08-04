@@ -46,7 +46,7 @@ import { validateShowPlan as validateTimelineShowPlan } from './timeline/show_pl
 import { MoodSource } from './timeline/mood_source.js';
 import { parsePatternDefaults } from './pattern_defaults.js';
 import { UndoStack, UNDO_MAX } from './undo_stack.js';
-import { DECK_OVERLAY_MAX } from './pattern_mixer.js';
+import { DECK_OVERLAY_MAX, compileViewSelectionMask } from './pattern_mixer.js';
 import { SessionParamCache } from './session_param_cache.js';
 
 /**
@@ -532,6 +532,53 @@ function buildDeckFallback(saved, failedPattern, reason, defaultPattern, build) 
     channel,
     degraded: { failedPattern: failedPattern == null ? null : failedPattern, reason, fellBackTo: defaultPattern },
   };
+}
+
+/**
+ * Restore-time view-selection sanitizer (codex P0 — the DECK MUST BOOT).
+ *
+ * A saved channel's `viewSelection` can name a view that no longer exists:
+ * the operator deleted or renamed it in the sim, re-exported the model, and
+ * the engine restarted. `setDeckChannel`/`addMixerChannel` compile the mask
+ * eagerly and THROW on an unknown name — correct for the live API (the
+ * operator gets an error and the channel keeps its old selection), but at
+ * RESTORE time there is no old selection to keep, and for the deck the throw
+ * used to escalate all the way to `_deckRestoreFatal`: the pattern fallback
+ * rebuilt with the SAME stale viewSelection, failed again, and the engine
+ * REFUSED TO BOOT over a deleted view name. A dark ship because a view was
+ * renamed is exactly the failure class this rig cannot have on playa.
+ *
+ * So: compile the candidate HERE, against the live mixer's model tables. If
+ * it resolves, return it verbatim. If it does not, log the loud degrade
+ * (naming the channel, the stale selection and the remedy — same voice as
+ * `setModelViewMasks`'s hot-reload path) and return the full-rig selection
+ * so the channel still renders. Never silent: the error text carries the
+ * compile failure verbatim.
+ *
+ * @param {object} mixer   the live PatternMixer (pixels/viewMasks/maskRegistry)
+ * @param {object|null} viewSelection the saved selection (may be null)
+ * @param {string} role    'deck' | 'mixer' | 'deckOverlay' (log wording only)
+ * @param {string} channelId
+ * @returns {{type: string, target: *, invert: boolean}} a selection that compiles
+ */
+export function sanitizeRestoredViewSelection(mixer, viewSelection, role, channelId) {
+  const candidate = viewSelection || { type: 'all', target: null, invert: false };
+  try {
+    compileViewSelectionMask({
+      pixels: mixer.pixels,
+      pixelCount: mixer.pixelCount,
+      viewSelection: candidate,
+      viewMasks: mixer.viewMasks,
+      maskRegistry: mixer.maskRegistry,
+    });
+    return candidate;
+  } catch (e) {
+    console.error(`[Restore] ${role} channel '${channelId}': saved view selection ` +
+      `${JSON.stringify(candidate)} no longer resolves against this model (${e.message}) — ` +
+      `restoring the channel with the FULL RIG (type 'all') so it still renders. ` +
+      `Re-pick the view in CaptainPad.`);
+    return { type: 'all', target: null, invert: false };
+  }
 }
 
 /**
@@ -1828,8 +1875,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
 
   /**
    * Capture current channel state as the entry.defaults of the playlist's
-   * currently active entry. Persists to disk. EXPLICIT operator action only —
-   * never wired to a control-write path.
+   * currently active entry. Persists to disk.
+   *
+   * TWO callers, and one of them is AUTOMATIC:
+   *   1. EXPLICIT operator capture routes — `POST /deck/playlist/capture` and
+   *      `POST /mixer/channel/<id>/playlist/capture`.
+   *   2. AUTOMATIC deck capture-on-entry-switch — `captureOrDeferOutgoingDeckEntry`
+   *      calls this on every deck entry switch when auto-save is ON, the channel
+   *      is the deck, and there is an active entry. No operator "save" action is
+   *      required; merely switching entries persists the outgoing one (item 2 of
+   *      the note above — the "night of deck tuning lost on switch" fix).
+   *
+   * The automatic path is gated on `channel._paramsTouchedSinceLoad`, which is
+   * set ONLY by the operator control-write routes (legacy `/control`,
+   * `POST /deck/channel/control`, WS `setControl`) — autopilot, applyEntryDefaults
+   * and seeded pattern defaults do not set it. So the capture is never wired to a
+   * control-write DIRECTLY, but a control-write does arm it, and the next entry
+   * switch then writes the playlist file without further operator intent.
    */
   function captureActiveEntryDefaults(channel) {
     if (!channel.playlist || !channel.playlist.name || !channel.playlist.activeEntryId) {
@@ -2699,9 +2761,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
       transitionTime: saved.transitionTime || 1.0,
       // Restore view-selection so a mask-restricted channel survives
       // engine restart. setDeckChannel / addMixerChannel will compile
-      // the mask immediately via recompileChannelMask (no extra call
-      // needed here).
-      viewSelection: saved.viewSelection || { type: 'all', target: null, invert: false },
+      // the mask immediately via recompileChannelMask — which THROWS on
+      // a view deleted/renamed since the state was saved, so the saved
+      // selection is sanitized first: a stale name degrades LOUDLY to
+      // the full rig instead of killing the restore (for the deck that
+      // throw used to escalate to _deckRestoreFatal — a refused BOOT
+      // over a renamed view). See sanitizeRestoredViewSelection.
+      viewSelection: sanitizeRestoredViewSelection(
+        mixer, saved.viewSelection, role, saved.id),
       // F-C / F-D restore. An old state file without these fields restores
       // to the documented schema defaults (faderMax 1.0 = no clamp,
       // color null). The PatternChannel constructor clamps/types both.

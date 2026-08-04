@@ -250,6 +250,25 @@ test('view: selector naming an unknown registry view → loud panel error, not a
   assert.match(p.error, /unknown view.*'Nope'/);
 });
 
+test('view: selector naming a PER-FIXTURE (group-less) view → loud precise error', () => {
+  // Views-bulletproofing sweep (report 20260725_141): a group-less custom
+  // view keeps its members in per-fixture mask bits, which cluster selectors
+  // cannot see. It used to resolve to the EMPTY set — a zero-match error for
+  // a lone selector, but silently NOTHING inside a selector union (partial
+  // loss with no trace). Now the panel errors and names the real cause.
+  const p = onePanel(selView('v', [{ view: 'Empty View' }]), CL, { viewRegistry: stubRegistry() });
+  assert.equal(p.clusters.length, 0);
+  assert.match(p.error, /'Empty View'.*per-fixture/);
+  assert.match(p.error, /attach groups/);
+});
+
+test('a per-fixture view inside a selector UNION errors too (no silent partial loss)', () => {
+  const p = onePanel(selView('v', [{ view: 'Bars' }, { view: 'Empty View' }]), CL,
+    { viewRegistry: stubRegistry() });
+  assert.equal(p.clusters.length, 0, 'the union must not silently shrink to the resolvable half');
+  assert.match(p.error, /per-fixture/);
+});
+
 // ─── Zero-match is loud + renderable, never a silent blank ─────────────────
 
 test('zero-match selector yields an error string and empty clusters (codex P0)', () => {

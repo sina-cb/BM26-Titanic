@@ -133,6 +133,45 @@ export function carryViewMasks(oldMasks, configsByName, pairs) {
 }
 
 /**
+ * Snapshot the per-fixture view masks a rename will carry — BOTH words,
+ * with the LIVE CONFIG authoritative over the patch tree.
+ *
+ * The patch tree (`window.__globalPatchTree`) only refreshes its mask copy
+ * on a controller projection, so between a Views-panel unassign and the next
+ * projection it holds a STALE non-zero mask. The old inline snapshot only
+ * recorded non-zero values ("`if (lo || hi) set`"), which made a live zero
+ * indistinguishable from "no data" — the stale patch-tree row won, and a
+ * rename silently RESURRECTED a membership the operator had just removed.
+ * Here the live config, when present, always has the last word: zeros
+ * DELETE the seeded patch-tree entry.
+ *
+ * @param {object|null} patchTree name → patch record (may carry viewMask/viewMaskHi)
+ * @param {Iterable<object>} liveConfigs live fixture/strand configs (name-bearing)
+ * @param {string[]} names the OLD names the rename touches
+ * @returns {Map<string, {viewMask: number, viewMaskHi: number}>} non-zero entries only
+ */
+export function snapshotViewMasks(patchTree, liveConfigs, names) {
+  const nameSet = new Set(names);
+  const out = new Map();
+  const tree = (patchTree && typeof patchTree === 'object') ? patchTree : {};
+  for (const name of nameSet) {
+    if (!Object.prototype.hasOwnProperty.call(tree, name)) continue;
+    const rec = tree[name] || {};
+    const lo = rec.viewMask || 0;
+    const hi = rec.viewMaskHi || 0;
+    if (lo || hi) out.set(name, { viewMask: lo, viewMaskHi: hi });
+  }
+  for (const config of liveConfigs || []) {
+    if (!config || !nameSet.has(config.name)) continue;
+    const lo = config.viewMask || 0;
+    const hi = config.viewMaskHi || 0;
+    if (lo || hi) out.set(config.name, { viewMask: lo, viewMaskHi: hi });
+    else out.delete(config.name); // live zero beats a stale patch-tree copy
+  }
+  return out;
+}
+
+/**
  * Duplicate-name guard. Duplicate fixture names collapse to ONE record in
  * the derived patches.yaml (save-server.js:210) and a doubly-mapped pair
  * hard-fails the next scene load, so a duplicate must be refused at the

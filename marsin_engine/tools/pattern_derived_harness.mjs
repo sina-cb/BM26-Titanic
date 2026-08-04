@@ -34,15 +34,30 @@
  *
  *   --pattern  pattern file (required).
  *   --synth    one of audio/synth/test_synths.js SYNTHS (default full_track).
- *   --model    rig model in models/<name>.js (default test_bench). FAILS LOUDLY
- *              if missing or its pixels[] lack required fields (codex P0: no
- *              silent fallback to test_bench).
+ *   --model    rig model in models/<name>.js (default test_bench), loaded
+ *              through the ENGINE's own `loadModelForGauge()` so the group
+ *              bits, the `<model>.viewmasks.js` sidecar presets and the
+ *              two-word viewMask/viewMaskHi packing are byte-identical to the
+ *              live runtime. FAILS LOUDLY if the file is missing, the model
+ *              does not resolve, or its pixels[] lack required fields (codex
+ *              P0: no silent fallback to test_bench).
  *   --frames   render frames at the internal 40 fps DT (default 240 ≈ 6 s).
  *   --mod      override the auto-discovered map: comma list of
  *              <derivedKey>:<sliderExport>[:<min>:<max>]. Default range 0..1.
  *   --set      static control presets (export=value), comma list.
  *   --bpm      override synth bpm.
  *   --out      write a brightness+signal trace JSON here (default ~/tmp/derived_vis.json).
+ *
+ * ── TARGETING PARITY (report _142, mirroring _140) ──────────────────────────
+ * The pattern is compiled through `lib/wasm_host.js` `WasmHost.compile()`, the
+ * SAME entry point the engine uses, so all THREE source-injection passes run
+ * here in the engine's order: `inView("Authored Name")` folding → `MASK_*`
+ * constants → `FIX_*` constants. An `inView()`/`MASK_*`/`FIX_*`-targeted
+ * pattern therefore compiles and renders offline exactly as it does on the rig,
+ * and an unknown view name is a LOUD COMPILE_FAIL naming the view (never a
+ * silent constant-false test). The per-pixel meta comes from the loader's
+ * `buildMetaArray()`, i.e. the full 7-field ABI — so `fixtureType`,
+ * `pixelLocalIndex` and the high view word (`viewMaskHi`) read true here.
  *
  * Exit 0 on success. Any compile / model / synth / mapping failure prints a
  * *_FAIL line and exits 2 (fail loud).
@@ -52,8 +67,11 @@ import { AudioStructureDetector } from '../audio/detector/audio_structure_detect
 import { DerivedSignals } from '../audio/signals/derived_signals.js';
 import { ParamCenter } from '../lib/param_center.js';
 import { fillFrame, SYNTHS } from '../audio/synth/test_synths.js';
-import { createWasmRuntime } from '../lib/marsin_wasm_runtime.js';
-import { pathToFileURL, fileURLToPath } from 'url';
+import { WasmHost } from '../lib/wasm_host.js';
+import { buildMetaArray, loadModelForGauge } from '../lib/model_loader.js';
+import { buildMaskConstants } from '../lib/view_mask_constants.js';
+import { createBitFreeViewPromoter } from '../lib/in_view_intrinsic.js';
+import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
 
@@ -157,40 +175,90 @@ const analyzer = new AudioAnalyzer({
 let lastHopMs = 0;
 
 // ── model + VM ────────────────────────────────────────────────────────────────
+// Load models/<modelName>.js through the ENGINE's loader (lib/model_loader.js),
+// not a bare `import` of the model file: the raw module carries UNRESOLVED
+// pixels (vMask = 0, no vMaskHi, no sidecar presets), so a view-targeted
+// pattern would render against an empty view world here and a populated one on
+// the rig. loadModelForGauge reproduces engine.js's group-bit assignment, the
+// <model>.viewmasks.js sidecar merge, the two-word viewMask/viewMaskHi packing
+// AND the full 7-field meta ABI (fixtureTypeId + pixelLocalIndex lanes, which
+// the old 4-lane hand-pack here silently zeroed). FAIL LOUDLY if the file is
+// missing, the model does not resolve, or its pixels[] lack the fields
+// meta/coords need — never silently use test_bench (codex P0).
 const modelPath = path.join(ENGINE_DIR, 'models', modelName + '.js');
 if (!fs.existsSync(modelPath)) { console.log('MODEL_FAIL: no model file ' + modelPath); process.exit(2); }
-const model = await import(pathToFileURL(modelPath).href);
-if (!Array.isArray(model.pixels) || model.pixels.length === 0) { console.log('MODEL_FAIL: ' + modelName + '.js exports no non-empty pixels[]'); process.exit(2); }
+let loaded;
+try {
+  loaded = await loadModelForGauge(modelName);
+} catch (err) { console.log('MODEL_FAIL: ' + modelName + ' failed to load: ' + err.message); process.exit(2); }
+if (!Array.isArray(loaded.pixels) || loaded.pixels.length === 0) { console.log('MODEL_FAIL: ' + modelName + '.js exports no non-empty pixels[]'); process.exit(2); }
 const REQUIRED_PIXEL_FIELDS = ['i', 'fId', 'sId', 'nx', 'ny', 'nz'];
 for (const f of REQUIRED_PIXEL_FIELDS) {
-  if (model.pixels[0][f] === undefined) { console.log('MODEL_FAIL: ' + modelName + '.js pixels[] missing required field "' + f + '"'); process.exit(2); }
+  if (loaded.pixels[0][f] === undefined) { console.log('MODEL_FAIL: ' + modelName + '.js pixels[] missing required field "' + f + '"'); process.exit(2); }
 }
-const px = model.pixels; const N = px.length;
-const rt = await createWasmRuntime(N);
-rt.setCoords(px.map(p => ({ nx: p.nx, ny: p.ny, nz: p.nz })));
-rt.setPixelMeta(px.map(p => ({ controllerId: p.cId || 0, sectionId: p.sId || 0, fixtureId: p.fId || 0, viewMask: p.vMask || 0 })));
-const cr = rt.compile(src);
+const px = loaded.pixels; const N = px.length;
+// The render loop indexes px[0..N); the host packs coords+meta for `pixelCount`.
+// A model whose declared pixelCount disagrees with its pixels[] length would
+// render a different pixel set here than on the rig — loud, not reconciled.
+if (loaded.pixelCount !== N) {
+  console.log('MODEL_FAIL: ' + modelName + ' declares pixelCount ' + loaded.pixelCount
+    + ' but exports ' + N + ' pixels'); process.exit(2); }
+
+// AUTHORED-name -> { bit, word } table for the `inView("Name")` intrinsic,
+// assembled exactly as engine.js does at load: base groups live in word 0,
+// each resolved view-mask preset at its authored word.
+const viewTable = {};
+for (const [group, bit] of Object.entries(loaded.groupBits)) viewTable[group] = { bit, word: 0 };
+for (const vm of loaded.viewMasks) {
+  viewTable[vm.name] = { bit: Number.isInteger(vm.bit) ? vm.bit : 0, word: vm.word === 1 ? 1 : 0 };
+}
+
+// Drive the REAL host (lib/wasm_host.js), the same class the engine compiles
+// through, so `WasmHost.compile()` applies all three source-injection passes in
+// the engine's order: inView() folding -> MASK_* -> FIX_*. The old path
+// (lib/marsin_wasm_runtime.js via createWasmRuntime) has NO injection stage at
+// all, so inView/MASK_*/FIX_* patterns were un-runnable here.
+const host = new WasmHost();
+await host.init(N);
+host.setCoords(px.map(p => ({ nx: p.nx, ny: p.ny, nz: p.nz })));
+host.setPixelMeta(loaded.metaArray);
+host.setMaskConstants(buildMaskConstants({ groupBits: loaded.groupBits, viewMasks: loaded.viewMasks }));
+host.setFixtureConstants(loaded.fixtureConstants);
+host.setViewTable(viewTable);
+// Bit-free (Tier-A) views carry no in-VM bit; `inView()` promotes one on demand
+// and sets it on the member pixels. Without this the promoter is absent and
+// such a view is a loud compile error rather than a silent constant test — the
+// engine wires the same promoter (codex P0).
+host.setBitFreeViewPromoter(createBitFreeViewPromoter(
+  { pixels: px, viewMasks: loaded.viewMasks }, host));
+
+const cr = host.compile(src);
 if (!cr.ok) { console.log('COMPILE_FAIL: ' + cr.error); process.exit(2); }
+const handle = cr.handle;
+// A compile that promoted a bit-free view mutated px in place, so the meta
+// array packed above is stale — re-pack before the first render (mirrors
+// engine.js repackMetaIfDirty).
+if (host.metaDirty) { host.setPixelMeta(buildMetaArray(px)); host.metaDirty = false; }
 console.log('COMPILE_OK');
-const exps = rt.getExports();
+const exps = host.getExports(handle);
 const idOf = name => { const e = exps.find(e => e.name === name); return e ? e.id : null; };
 
 // Apply the pattern's declared export-var defaults (palette + identity sliders),
 // matching pattern_audio_harness.mjs so the palette is not black at rest.
 const defs = {}; const reDef = /export\s+var\s+([A-Za-z_]\w*)\s*=\s*(-?\d+(?:\.\d+)?)/g; let dm;
 while ((dm = reDef.exec(src))) defs[dm[1]] = parseFloat(dm[2]);
-function applyPalette(fn, h, s, v) { const id = idOf(fn); if (id == null) return; rt.setControl(id, h, s, v); }
+function applyPalette(fn, h, s, v) { const id = idOf(fn); if (id == null) return; host.setControl(handle, id, h, s, v); }
 if (idOf('colorPalette1') != null) applyPalette('colorPalette1', defs.cp1H ?? 0, defs.cp1S ?? 1, defs.cp1V ?? 1);
 if (idOf('colorPalette2') != null) applyPalette('colorPalette2', defs.cp2H ?? 0, defs.cp2S ?? 1, defs.cp2V ?? 1);
 for (const e of exps) {
   if (e.name.startsWith('slider')) {
     const varName = e.name.slice(6, 7).toLowerCase() + e.name.slice(7);
-    if (defs[varName] != null) rt.setControl(e.id, defs[varName]);
+    if (defs[varName] != null) host.setControl(handle, e.id, defs[varName]);
   }
 }
 for (const mod of mods) if (idOf(mod.target) == null) console.log('WARN: --mod target export not found on pattern: ' + mod.target);
 if (A.set && A.set !== 'true') for (const kv of A.set.split(',')) { const [k, v] = kv.split('='); const id = idOf(k);
-  if (id == null) { console.log('WARN: no export ' + k); continue; } rt.setControl(id, parseFloat(v)); }
+  if (id == null) { console.log('WARN: no export ' + k); continue; } host.setControl(handle, id, parseFloat(v)); }
 
 console.log('DERIVED_MAP ' + mods.map(m => `${m.key}->${m.target}[${m.min}..${m.max}]`).join(' '));
 
@@ -232,11 +300,11 @@ for (let f = 0; f < frames; f++) {
       const span = (m.max - m.min) || 1;
       const keyNorm = clamp01((raw - m.min) / span);
       const v = m.min + (m.max - m.min) * keyNorm;
-      rt.setControl(id, clamp01(v));
+      host.setControl(handle, id, clamp01(v));
     }
   }
-  rt.beginFrame(f * DT);
-  const rgb = fold(rt.renderAll6ch());
+  host.beginFrame(handle, f * DT);
+  const rgb = fold(host.renderAll6ch(handle));
   let tot = 0;
   for (let i = 0; i < N; i++) { const s = rgb[i][0] + rgb[i][1] + rgb[i][2]; tot += s;
     if (rgb[i][0] > peakChan) peakChan = rgb[i][0]; if (rgb[i][1] > peakChan) peakChan = rgb[i][1]; if (rgb[i][2] > peakChan) peakChan = rgb[i][2]; }
@@ -268,4 +336,5 @@ for (const m of mods) {
   console.log(`DERIVED_REACT ${m.key}->${m.target}: corr(signal,brightness)=${c.toFixed(2)} signalRange=${s.mn.toFixed(2)}..${s.mx.toFixed(2)} mean=${s.mean.toFixed(2)} [${fired}] ${Math.abs(c) > 0.35 ? '(REACTIVE)' : (s.mx <= s.mn + 1e-6 ? '(signal never moved — pick a synth that drives it)' : '(weak/indirect)')}`);
 }
 console.log('OUT=' + out);
-rt.destroy();
+host.destroy(handle);
+host.shutdown();

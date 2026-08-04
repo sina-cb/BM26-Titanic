@@ -38,9 +38,22 @@
  *             and/or pixels are strided for the clip — PRINTED loudly, never a
  *             silent truncation. test_bench (52 px) keeps full fidelity.
  *   --bpm     override synth bpm
- *   --model   rig model in models/<name>.js (default test_bench). FAILS LOUDLY
- *             if the file is missing or its pixels[] lack the required fields —
+ *   --model   rig model in models/<name>.js (default test_bench), loaded
+ *             through the ENGINE's own `loadModelForGauge()` so the group
+ *             bits, the `<model>.viewmasks.js` sidecar presets and the
+ *             two-word viewMask/viewMaskHi packing are byte-identical to the
+ *             live runtime. FAILS LOUDLY if the file is missing, the model
+ *             does not resolve, or its pixels[] lack the required fields —
  *             never silently falls back to test_bench (codex P0).
+ *
+ *   ── TARGETING PARITY (report _140) ──────────────────────────────────────
+ *   The pattern is compiled through `lib/wasm_host.js` `WasmHost.compile()`,
+ *   the SAME entry point the engine uses, so all THREE source-injection
+ *   passes run here in the same order: `inView("Authored Name")` folding →
+ *   `MASK_*` constants → `FIX_*` constants. An `inView()`/`MASK_*`-targeted
+ *   pattern therefore compiles and renders offline exactly as it does on the
+ *   rig, and an unknown view name is a LOUD COMPILE_FAIL naming the view
+ *   (never a silent constant-false test).
  *
  *   ── GATE (redteam _112 F7/I4) — makes the verdict TRUSTWORTHY ──
  *   --gate    Enforce the pass/fail bars: exit 3 (non-zero) with a NAMED reason
@@ -64,9 +77,11 @@
  */
 import { AudioAnalyzer } from '../audio/analyzer/audio_analyzer.js';
 import { fillFrame, SYNTHS } from '../audio/synth/test_synths.js';
-import { createWasmRuntime } from '../lib/marsin_wasm_runtime.js';
-import { buildFixtureTypeIds, fixtureTypeId, injectFixtureConstants } from '../lib/fixture_type_constants.js';
-import { pathToFileURL, fileURLToPath } from 'url';
+import { WasmHost } from '../lib/wasm_host.js';
+import { buildMetaArray, loadModelForGauge } from '../lib/model_loader.js';
+import { buildMaskConstants } from '../lib/view_mask_constants.js';
+import { createBitFreeViewPromoter } from '../lib/in_view_intrinsic.js';
+import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
 
@@ -130,46 +145,74 @@ if (A.mod) for (const m of A.mod.split(',')) {
 }
 
 // ── model + VM ───────────────────────────────────────────────────────────────
-// Load models/<modelName>.js. FAIL LOUDLY if the file is missing or its
-// pixels[] lack the fields meta/coords need — never silently use test_bench.
+// Load models/<modelName>.js through the ENGINE's loader (lib/model_loader.js),
+// not a bare `import` of the model file: the raw module carries UNRESOLVED
+// pixels (vMask = 0, no sidecar presets), so a view-targeted pattern would
+// render against an empty view world here and a populated one on the rig.
+// loadModelForGauge reproduces engine.js's group-bit assignment, the
+// <model>.viewmasks.js sidecar merge and the two-word viewMask/viewMaskHi
+// packing. FAIL LOUDLY if the file is missing, the model does not resolve, or
+// its pixels[] lack the fields meta/coords need — never silently use test_bench.
 const modelPath = path.join(ENGINE_DIR, 'models', modelName + '.js');
 if (!fs.existsSync(modelPath)) { console.log('MODEL_FAIL: no model file ' + modelPath); process.exit(2); }
-const model = await import(pathToFileURL(modelPath).href);
-if (!Array.isArray(model.pixels) || model.pixels.length === 0) {
+let loaded;
+try {
+  loaded = await loadModelForGauge(modelName);
+} catch (err) { console.log('MODEL_FAIL: ' + modelName + ' failed to load: ' + err.message); process.exit(2); }
+if (!Array.isArray(loaded.pixels) || loaded.pixels.length === 0) {
   console.log('MODEL_FAIL: ' + modelName + '.js exports no non-empty pixels[]'); process.exit(2); }
 const REQUIRED_PIXEL_FIELDS = ['i', 'fId', 'sId', 'nx', 'ny', 'nz'];
 for (const f of REQUIRED_PIXEL_FIELDS) {
-  if (model.pixels[0][f] === undefined) {
+  if (loaded.pixels[0][f] === undefined) {
     console.log('MODEL_FAIL: ' + modelName + '.js pixels[] missing required field "' + f + '"'); process.exit(2); } }
-const px = model.pixels; const N = px.length;
-const rt = await createWasmRuntime(N);
-rt.setCoords(px.map(p => ({ nx: p.nx, ny: p.ny, nz: p.nz })));
-// Meta lanes must match what model_loader.js packs for the LIVE engine, or a
-// pattern that branches on `fixtureType` / `pixelLocalIndex` renders one way
-// here and another way on the rig. fixtureTypeId comes from the SAME canonical
-// registry the engine uses (lib/fixture_type_constants.js).
-rt.setPixelMeta(px.map(p => ({
-  controllerId: p.cId || 0,
-  sectionId: p.sId || 0,
-  fixtureId: p.fId || 0,
-  viewMask: p.vMask || 0,
-  fixtureTypeId: fixtureTypeId(p.fixtureType),
-  pixelLocalIndex: p.localIndex || 0,
-  viewMaskHi: p.vMaskHi || 0,
-})));
-// FIX_* constant injection — the same pass wasm_host.compile() runs, so
-// `fixtureType == FIX_PAR` compiles offline exactly as it does live. An
-// unknown / not-present-on-this-model FIX_* throws (codex P0: loud, never a
-// silent no-match). MASK_* injection is NOT mirrored here — a MASK_*-using
-// pattern still fails to compile in the harness, loudly.
-let harnessSource;
-try {
-  harnessSource = injectFixtureConstants(fs.readFileSync(patternPath, 'utf8'), buildFixtureTypeIds(px));
-} catch (err) { console.log('COMPILE_FAIL: ' + err.message); process.exit(2); }
-const r = rt.compile(harnessSource);
+const px = loaded.pixels; const N = px.length;
+// The clip/gate loops index px[0..N); the host packs coords+meta for
+// `pixelCount`. A model whose declared pixelCount disagrees with its pixels[]
+// length would render a different pixel set here than on the rig — loud, not
+// silently reconciled.
+if (loaded.pixelCount !== N) {
+  console.log('MODEL_FAIL: ' + modelName + ' declares pixelCount ' + loaded.pixelCount
+    + ' but exports ' + N + ' pixels'); process.exit(2); }
+
+// AUTHORED-name -> { bit, word } table for the `inView("Name")` intrinsic,
+// assembled exactly as engine.js does at load: base groups live in word 0,
+// each resolved view-mask preset at its authored word.
+const viewTable = {};
+for (const [group, bit] of Object.entries(loaded.groupBits)) viewTable[group] = { bit, word: 0 };
+for (const vm of loaded.viewMasks) {
+  viewTable[vm.name] = { bit: Number.isInteger(vm.bit) ? vm.bit : 0, word: vm.word === 1 ? 1 : 0 };
+}
+
+// Drive the REAL host (lib/wasm_host.js), the same class the engine compiles
+// through, so `WasmHost.compile()` applies all three source-injection passes
+// in the engine's order: inView() folding -> MASK_* -> FIX_*.
+const host = new WasmHost();
+await host.init(N);
+host.setCoords(px.map(p => ({ nx: p.nx, ny: p.ny, nz: p.nz })));
+host.setPixelMeta(loaded.metaArray);
+host.setMaskConstants(buildMaskConstants({ groupBits: loaded.groupBits, viewMasks: loaded.viewMasks }));
+host.setFixtureConstants(loaded.fixtureConstants);
+host.setViewTable(viewTable);
+// Bit-free (Tier-A) views carry no in-VM bit; `inView()` promotes one on
+// demand and sets it on the member pixels. Without this the promoter is
+// absent and such a view is a loud compile error rather than a silent
+// constant test — the engine wires the same promoter (codex P0).
+host.setBitFreeViewPromoter(createBitFreeViewPromoter(
+  { pixels: px, viewMasks: loaded.viewMasks }, host));
+
+// Named, loud missing-pattern failure. (Before the WasmHost switch this was an
+// accidental byproduct of the injector try/catch; a raw ENOENT stack trace is
+// not a diagnosis.)
+if (!fs.existsSync(patternPath)) { console.log('PATTERN_FAIL: no pattern file ' + patternPath); process.exit(2); }
+const r = host.compile(fs.readFileSync(patternPath, 'utf8'));
 if (!r.ok) { console.log('COMPILE_FAIL: ' + r.error); process.exit(2); }
+const handle = r.handle;
+// A compile that promoted a bit-free view mutated px in place, so the meta
+// array packed above is stale — re-pack before the first render (mirrors
+// engine.js repackMetaIfDirty).
+if (host.metaDirty) { host.setPixelMeta(buildMetaArray(px)); host.metaDirty = false; }
 console.log('COMPILE_OK');
-const exps = rt.getExports();
+const exps = host.getExports(handle);
 const idOf = name => { const e = exps.find(e => e.name === name); return e ? e.id : null; };
 
 // Apply the pattern's DECLARED export-var defaults (the standalone VM inits all
@@ -180,15 +223,15 @@ const idOf = name => { const e = exps.find(e => e.name === name); return e ? e.i
 const src = fs.readFileSync(patternPath, 'utf8');
 const defs = {}; const re = /export\s+var\s+([A-Za-z_]\w*)\s*=\s*(-?\d+(?:\.\d+)?)/g; let mm;
 while ((mm = re.exec(src))) defs[mm[1]] = parseFloat(mm[2]);
-function applyPalette(fn, h, s, v) { const id = idOf(fn); if (id == null) return; rt.setControl(id, h, s, v); }
+function applyPalette(fn, h, s, v) { const id = idOf(fn); if (id == null) return; host.setControl(handle, id, h, s, v); }
 if (idOf('colorPalette1') != null) applyPalette('colorPalette1', defs.cp1H ?? 0, defs.cp1S ?? 1, defs.cp1V ?? 1);
 if (idOf('colorPalette2') != null) applyPalette('colorPalette2', defs.cp2H ?? 0, defs.cp2S ?? 1, defs.cp2V ?? 1);
 for (const e of exps) { if (e.name.startsWith('slider')) { const varName = e.name.slice(6, 7).toLowerCase() + e.name.slice(7);
-  if (defs[varName] != null) rt.setControl(e.id, defs[varName]); } }
+  if (defs[varName] != null) host.setControl(handle, e.id, defs[varName]); } }
 
 for (const m of mods) if (idOf(m.target) == null) console.log('WARN: --mod target export not found: ' + m.target);
 if (A.set) for (const kv of A.set.split(',')) { const [k, v] = kv.split('='); const id = idOf(k);
-  if (id == null) { console.log('WARN: no export ' + k); continue; } rt.setControl(id, parseFloat(v)); }
+  if (id == null) { console.log('WARN: no export ' + k); continue; } host.setControl(handle, id, parseFloat(v)); }
 
 // ── real analyzer fed by the synth ───────────────────────────────────────────
 let clock = 0; const sig = { low: 0, mid: 0, high: 0, kick: 0, flux: 0 };
@@ -304,15 +347,15 @@ function applyStepMods() {
     // so an inverted (min>max) or over-range mapping renders the SAME offline as
     // on the rig — never a quietly different result.
     const v01 = m.min + (m.max - m.min) * m.curve(s);
-    rt.setControl(id, v01 < 0 ? 0 : (v01 > 1 ? 1 : v01));
+    host.setControl(handle, id, v01 < 0 ? 0 : (v01 > 1 ? 1 : v01));
   } }
 }
 // Render one frame, TIMING only the VM work; fold to rgb; roll gate accounting
 // (peak, per-frame black flag, frame time excluding a 2-frame warmup).
 function renderGateFrame() {
   const t0 = process.hrtime.bigint();
-  rt.beginFrame(internalT * DT);
-  const raw6 = rt.renderAll6ch();
+  host.beginFrame(handle, internalT * DT);
+  const raw6 = host.renderAll6ch(handle);
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   const rgb = fold(raw6);
   internalT++;
@@ -430,4 +473,5 @@ if (gateReasons.length) {
 }
 
 console.log('OUT=' + out);
-rt.destroy();
+host.destroy(handle);
+host.shutdown();

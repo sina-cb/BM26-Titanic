@@ -577,18 +577,29 @@ node tools/pattern_audio_harness.mjs --pattern patterns/NN_name.js \
   --model titanic --synth silence --frames 96 --gate
 ```
 
-> **Known tooling gap — measured, not assumed.** `pattern_audio_harness.mjs`
-> injects `FIX_*` but **not** the view table or `MASK_*`, so a pattern that
-> calls `inView("…")` fails there with
-> `COMPILE_FAIL: … strings cannot be used as a function argument`. Anything
-> built on it inherits that: `tools/gallery/gen_variations.mjs`, and the
-> offline clip path in §9. Until the harness mirrors
-> `WasmHost.compile()`'s injection, an `inView()`-targeted pattern is gated by
-> **§8.1 param truth** (which is full engine parity) plus §8.4, and its clip
-> comes from a live capture (`tools/capture_vis.mjs`, engine required —
-> operator-run). Do **not** work around this by rewriting `inView()` targeting
-> into coordinates or `sectionId`; that is the very regression this skill
-> exists to stop.
+> **Targeting parity — measured, not assumed (report `_140`).** The harness
+> now loads the model through the engine's own `loadModelForGauge()` and
+> compiles through `WasmHost.compile()`, so all three source-injection passes
+> run here in the engine's order: `inView("Authored Name")` folding →
+> `MASK_*` → `FIX_*`. An `inView()`-targeted pattern therefore compiles,
+> renders and gates offline, and everything built on the harness inherits it —
+> `tools/gallery/gen_variations.mjs` (it spawns the harness, no change of its
+> own) and the §9 offline clip path.
+>
+> Measured on `--model titanic`: a probe branching on `inView("Hull Canvas")`
+> and `inView("Stacks")` lights **360** and **24** pixels respectively, with
+> **zero** overlap — matching the model's own view membership (both views live
+> in the high word, `viewMaskHi`). An unknown name is a loud
+> `COMPILE_FAIL: Pattern references unknown view(s) via inView(): <name>.
+> Known views for this model: …` at exit 2 — never a silent constant-false
+> test. Pinned by
+> `tests/tools/harness_inview_injection.test.mjs`.
+>
+> This replaces the earlier "harness cannot compile inView patterns" note.
+> §8.1 param truth is still the gate for control honesty; it is no longer the
+> *only* engine-parity tool. Never work around targeting by rewriting
+> `inView()` into coordinates or `sectionId` — that is the regression this
+> skill exists to stop.
 
 ### 8.3 Derived-signal harness
 
@@ -599,6 +610,31 @@ the real detector chain and auto-discovering your `AUDIO_MODULATION_V1` block:
 node tools/pattern_derived_harness.mjs --pattern patterns/NN_name.js \
   --model titanic --synth edm_drop --frames 240
 ```
+
+> **Targeting parity — measured, not assumed (report `_142`).** This harness
+> now loads the model through the engine's own `loadModelForGauge()` and
+> compiles through `WasmHost.compile()`, exactly like §8.2's audio harness, so
+> the same three source-injection passes run in the engine's order:
+> `inView("Authored Name")` folding → `MASK_*` → `FIX_*`. The per-pixel meta is
+> the loader's full 7-lane ABI, so `fixtureType`, `pixelLocalIndex` and the
+> high view word (`viewMaskHi` — where all 17 titanic composite views live)
+> read true here.
+>
+> Measured on `--model titanic`: `inView("Hull Canvas")` lights **360** pixels,
+> `inView("Stacks")` **24**, and the union **384** — disjoint, matching the
+> model's own view membership. `viewMaskHi & MASK_STACKS` → 24.
+> `fixtureType == FIX_PAR` → **40**, `pixelLocalIndex == 0` → **88** (one per
+> fixture), both matching the loader. An unknown view name is a loud
+> `COMPILE_FAIL: Pattern references unknown view(s) via inView(): <name>.
+> Known views for this model: …` at exit 2, and a model that exists but does
+> not resolve is a named `MODEL_FAIL` at exit 2 — never a silent render. Pinned
+> by `tests/tools/derived_harness_inview_injection.test.mjs`.
+>
+> Before this the harness bare-imported the raw model (every pixel `vMask: 0`,
+> no sidecar presets) and drove `lib/marsin_wasm_runtime.js`, which has no
+> injection stage at all: `inView()` died with *"strings cannot be used as a
+> function argument"*, `MASK_*`/`FIX_*` were `Undefined var`, and the 4-lane
+> meta pack made `pixelLocalIndex == 0` match **all 964** pixels instead of 88.
 
 ### 8.4 CI tests
 

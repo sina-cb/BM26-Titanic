@@ -416,7 +416,11 @@ export function enumerateOrphanDependents(rows, sources) {
         controllerId: Number(config.controllerId) || 0,
         sectionId: Number(config.sectionId) || 0,
         fixtureId: Number(config.fixtureId) || 0,
+        // BOTH view words — new custom views land in word 1 (`viewMaskHi`),
+        // so an enumeration that reported only `viewMask` would show a
+        // fixture-clicked membership as 0 in the delete confirmation.
         viewMask: Number(config.viewMask) || 0,
+        viewMaskHi: Number(config.viewMaskHi) || 0,
       },
       patchTreeEntry: treeEntry
         ? {
@@ -426,6 +430,7 @@ export function enumerateOrphanDependents(rows, sources) {
           sectionId: Number(treeEntry.sectionId) || 0,
           fixtureId: Number(treeEntry.fixtureId) || 0,
           viewMask: Number(treeEntry.viewMask) || 0,
+          viewMaskHi: Number(treeEntry.viewMaskHi) || 0,
         }
         : null,
       chains,

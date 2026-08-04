@@ -298,6 +298,9 @@ const ghostRows = (s) => findOrphanFixtures(s)
 
 test('enumeration itemises patch, patch tree, pixel map, group and model pixels', () => {
   const s = scene();
+  // Give the first ghost a WORD-1 membership so the enumeration proves it
+  // reports the high word with a real value, not just a zero default.
+  s.parLights.find((f) => f.name === 'Left Center Auditorium 1').viewMaskHi = 0x800;
   const rows = ghostRows(s);
   const e = enumerateOrphanDependents(rows, sources(s));
   assert.equal(e.blockers.length, 0);
@@ -307,6 +310,11 @@ test('enumeration itemises patch, patch tree, pixel map, group and model pixels'
   assert.equal(first.name, 'Left Center Auditorium 1');
   assert.equal(first.patch.live, false, 'the real ghosts carry ZEROED patches');
   assert.equal(first.patch.sectionId, 1);
+  // BOTH view words ride the enumeration (views-bulletproofing sweep _141):
+  // new custom views land in word 1, so a delete confirmation that read only
+  // `viewMask` under-reported a fixture-clicked membership as 0.
+  assert.equal(first.patch.viewMaskHi, 0x800);
+  assert.equal(typeof first.patchTreeEntry.viewMaskHi, 'number');
   assert.notEqual(first.patchTreeEntry, null);
   assert.equal(first.pixelMap.selectors.length, 1);
   assert.deepEqual(first.pixelMap.offsets, ['top_down']);

@@ -5,11 +5,8 @@ entries:
     pattern: 64_temple_warm_white
     label: null
     defaults:
-      sliderLocalSpeed: 0.75
-      sliderDirection: 1
+      sliderLocalSpeed: 0.18
       sliderLevel: 0.5
-      sliderKick: 0
-      sliderRadius: 0.45
       sliderCeiling: 0.32
       sliderWarmth: 0.92
       sliderWhiteLevel: 0.7
@@ -22,14 +19,11 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.15
-      sliderDirection: 0.5
-      sliderLevel: 0.13
-      sliderKick: 0.5
-      sliderRadius: 0.5
+      sliderLevel: 0.34
       sliderDepth: 0.3
+      sliderWarmth: 0.9
       sliderWhiteLevel: 0.7
       sliderWhiteKick: 0.02
-      sliderWarmth: 0.9
     modulations: []
     midiMappings: []
     notes: null

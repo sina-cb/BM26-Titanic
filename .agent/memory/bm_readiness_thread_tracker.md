@@ -7606,3 +7606,392 @@ confirm other agents' uncommitted work was untouched. No sim boot, no engine boo
 bound, no deploy, no install — every check ran in-process via `node --test` or a scratchpad ES module.
 **No generated file written or hand-edited** (the re-export sanity script compares in memory and
 writes nothing). All scratch files stayed in the session scratchpad.
+
+---
+
+## _140 — offline audio harness mirrors `WasmHost`'s three injection passes (`inView()` unblocked) (2026-08-03)
+
+**Report:** `.agent/reports/202607/20260725_140_harness_inview_injection.md` · branch `feat/bm_readiness`.
+
+**Problem (filed by `_139` §5, reproduced).** `tools/pattern_audio_harness.mjs` could not compile a
+pattern that calls `inView("Authored View Name")` — the documented targeting layer
+(`docs/MARSIN_ENGINE_PATTERNS.md` §7.3, `.agent/skills/highdef_pattern_generation.md` §3). Measured
+pre-fix: `COMPILE_FAIL: Line 9: strings cannot be used as a function argument`, exit 2. So an
+`inView()`-targeted pattern could not run the harness, the `--gate` check, or the offline clip
+pipeline, and `tools/gallery/gen_variations.mjs` (which spawns the harness) could not produce
+titanic static/sound clips for one.
+
+**Root cause — TWO faults, not one.** (1) `inView()` is not a VM builtin; it is a compile-time SOURCE
+fold in `lib/in_view_intrinsic.js`. The harness drove `lib/marsin_wasm_runtime.js` (no injection stage
+at all) and hand-applied only `injectFixtureConstants`, so the literal string reached the MarsinScript
+compiler, which correctly rejected it. The real path, `lib/wasm_host.js` `compile()`, runs three passes
+in order: `injectInViewIntrinsic` → `injectMaskConstants` → `injectFixtureConstants`. (2) **Not named in
+the ticket and the more dangerous half:** the harness loaded the model with a bare
+`import(models/<name>.js)`. The raw module is UNRESOLVED — every pixel `vMask: 0`, no `vMaskHi`, no
+`<model>.viewmasks.js` sidecar merge (verified: titanic sample pixel `"vMask":0`). Bolting the fold on
+alone would have folded every view test against a bit no pixel carries — a silent all-false render,
+the exact codex-P0 failure the intrinsic exists to prevent. Both had to be fixed together.
+
+**Fix (design decision owned per the brief): switch the harness to `loadModelForGauge()` + the real
+`WasmHost`,** not a hand-built view table from the sidecar. Rationale — parity with the least
+duplicated logic: `WasmHost.compile()` IS the engine's compile entry point, so the three passes and
+their ORDER cannot drift, and `loadModelForGauge()` is the same word-aware loader (`_136`/`_138`)
+that `tools/param_truth/render_context.js` and `tools/perf_gauge.mjs` already use. The view table is
+assembled exactly as `engine.js` does (groups at word 0, presets at their authored word), the
+bit-free-view promoter is wired, and a promotion re-packs meta post-compile (mirrors `engine.js`
+`repackMetaIfDirty`). The hand-rolled meta pack (which used `p.localIndex || 0` instead of the
+engine's `derivePixelLocalIndices`) is gone.
+
+**Files (six).** `marsin_engine/tools/pattern_audio_harness.mjs` (the fix) ·
+`marsin_engine/lib/model_loader.js` (pure extraction: the inline `metaArray` map became exported
+`buildMetaArray(pixels)`, so the harness re-packs without a second copy of the ABI) ·
+`marsin_engine/tests/tools/harness_inview_injection.test.mjs` (new, 3 tests) ·
+`.agent/skills/highdef_pattern_generation.md` §8.2 (the "Known tooling gap" note replaced with the
+measured reality) · report `_140` · this block.
+
+**Loud-failure surface kept and EXTENDED, no fallbacks.** Unknown view →
+`COMPILE_FAIL: Pattern references unknown view(s) via inView(): <name>. Known views for this model: …`
+exit 2. New named failures: model fails to resolve → `MODEL_FAIL: <model> failed to load: <reason>`;
+declared `pixelCount` ≠ `pixels.length` → `MODEL_FAIL` (was silently reconciled); missing pattern file
+→ `PATTERN_FAIL: no pattern file <path>` (was an incidental ENOENT inside the old injector try/catch).
+The one added `try/catch` wraps `await loadModelForGauge(...)` only, to honour the documented
+`MODEL_FAIL` + exit-2 contract; no import is wrapped, nothing swallowed.
+
+**Measured verification.**
+1. **`inView()` renders the right pixels.** Probe on titanic, `inView("Hull Canvas")`→red /
+   `inView("Stacks")`→green: `COMPILE_OK`, `LIT=384/964`, and frame 0 classifies as **red=360,
+   green=24, off=580, mixed=0, overlap=0** — an exact match to the model truth read back through the
+   loader (`Hull Canvas word=1 bit=0x400 members=360` · `Stacks word=1 bit=0x40 members=24` ·
+   intersection 0). Both views resolve from the HIGH word, so the word-aware path is the one exercised.
+2. **Negative control fails loudly** — unknown name, full known-view list, exit 2 (above).
+3. **Existing patterns byte-identical.** Same argv before/after, MD5 of the full capture JSON:
+   `27_swipe`@test_bench `8eb3e221…` = `8eb3e221…` · `27_swipe`@titanic `2839bb30…` = `2839bb30…` ·
+   `44_biolume_swell`@test_bench `2c4cc4e2…` = `2c4cc4e2…` · `44_biolume_swell`@titanic `b213c4a9…` =
+   `b213c4a9…` — **4/4 IDENTICAL**. All summary lines identical; only `meanMs`/`worstMs` move
+   (`27_swipe`@titanic `0.72 → 0.83` ms, ~7× under the 6.25 ms/channel budget — `WasmHost.renderAll6ch`
+   mallocs per call where the old wrapper reused a buffer). `GATE_PASS` on all four, before and after.
+4. **`--gate` intact, including on `inView`**: inView probe `GATE_PASS` exit 0 · a black inView pattern
+   `GATE_FAIL DARK: 100% of 600 frames …` exit 3 · `27_swipe`@test_bench `GATE_PASS` exit 0.
+5. **Suites: zero new failures.** `tests/mixer/**` **489/489** · `tests/tools/*.test.mjs` **8/8**
+   (5 pre-existing gate tests + 3 new) · `tests/patterns/**` **94/95**, the single red being
+   `specialty_white_uv.test.js › both scenes carry byte-identical copies of every specialty/themed
+   playlist` — **pre-existing and unrelated**: it diffs scene playlist YAML, and
+   `test_bench/white_only.yaml` has per-entry slider `defaults:` that titanic's lacks; mtimes
+   **2026-07-28** / **2026-07-27**, both predating this session.
+6. **`gen_variations.mjs` inherits — deliberately NOT modified.** Its only coupling is
+   `execFileSync('node', [HARNESS, …])` and the fix changes no flag, output line or exit contract.
+   Proven both legs: the exact STATIC argv it builds, run against an `inView` pattern
+   (`--seconds 10 --out-fps 14 --synth silence` → `GATE_PASS`), and a real end-to-end
+   `--pattern 27 --model titanic` run (harness → publish → widget, exit 0). `tools/gallery/widgets/`
+   is TRACKED, so the one generated widget was deleted and the directory diffed back to its original
+   6 entries — **restored clean**, no tracked widget overwritten. Honest caveat: no shipped numbered
+   pattern uses `inView()` yet, so the default sweep exercises the new path only once one lands.
+
+**Security check.** `python scripts/security_check.py --all` → **6 findings = the stated baseline**,
+all `bm26-mac-address` in UNTRACKED `simulation/.scene_backups/studiodj/**`. Zero new.
+
+**Left open / refused.** (1) **`tools/pattern_derived_harness.mjs` has the SAME gap, worse** — §8.3 of
+the same skill, runs on titanic, still bare-imports the raw model, uses `createWasmRuntime`, applies
+**no** injection pass at all (not even `FIX_*`), and packs only 4 meta lanes (omits `fixtureTypeId`,
+`pixelLocalIndex`, `viewMaskHi`). Any `inView`/`MASK_*`/`FIX_*`/`pixelLocalIndex` pattern is broken or
+mis-rendered there. **Filed, not fixed** — out of the brief's scope and it needs its own verification
+pass over the derived-signal chain. (2) The bit-free (Tier-A) promotion path is wired but **not
+measured** (no tracked model exposes a bit-free view to this path) — claimed as a correctness guard
+only. (3) The `specialty_white_uv` playlist-parity red. (4) **No git operation of any kind.**
+
+**Compliance.** Writes confined to the six files above. No engine boot, no sim boot, no server, no port
+bound, no deploy, no install — ports 6966–6972, 5568, 8081, 10000 untouched; every check ran in-process
+or as an offline subprocess against the vendored WASM. Scratch stayed in `~/tmp/_140` and the session
+scratchpad. Other agents' uncommitted work untouched.
+
+---
+
+## `_141` — Views bulletproofing: adversarial sweep of the two-word views system (LANDED)
+
+**Report:** `.agent/reports/202607/20260725_141_views_bulletproofing.md`. Investigator/debugger
+thread on the `_134`→`_138` views work. Everything in-process; no operator port touched (the one
+server-shaped suite uses the save-server's own `_119` random-high-port + temp-root test hooks).
+
+**FOUND-BROKEN-FIXED (each with regression tests; 33 new tests total):**
+1. **P0 — a deleted/renamed view REFUSED THE ENGINE BOOT.** deck_state.yaml's saved
+   `viewSelection` naming a view no longer in the model threw inside `setDeckChannel`; the deck
+   pattern fallback rebuilt with the SAME stale selection, failed again, escalated to
+   `_deckRestoreFatal` → "refusing to boot a dark deck". Reproduced in-process, then fixed:
+   `sanitizeRestoredViewSelection` (api_server.js, exported) pre-compiles the saved selection at
+   restore time and degrades a stale one LOUDLY to `{type:'all'}` — deck boots lit, mixer/deck
+   overlays survive instead of being dropped. Live-API atomic-throw contract untouched (pinned).
+2. **Mixed groups+fixtures view silently dropped the clicked fixtures at export** (`_138` §8.1).
+   Panel count + both 3D isolation paths show the UNION; the sidecar exported groups-only. Now
+   exports the union as pixelIndices (loud warn) when clicks add pixels beyond the groups;
+   redundant clicks keep the byte-stable groups form. All 3 tracked sidecars byte-stable.
+3. **`setCustomViewSlot` silently ignored `fixtures` on same-word moves** (caught by fuzz:
+   orphan bit stranded on every member). Membership now follows the view whenever the list is
+   passed; no-list legacy contract unchanged; panel double-migration proven a no-op.
+4. **Rename resurrected a just-removed membership.** The snapshot kept stale non-zero patch-tree
+   masks over live zeros (unassign → rename before the next projection). New pure
+   `snapshotViewMasks` in rename_invalidation.js — live config authoritative, zeros included.
+5. **2D Pixel Map `view:` selector on a per-fixture view** (`_138` §8.3): silent empty-set (worst
+   inside selector unions) → precise loud per-panel error, unions included. No tracked scene uses
+   `view:` selectors (grep-verified).
+6. Hardening: orphan-delete enumeration carries `viewMaskHi`; mask_registry bit-only branch
+   word-aware.
+
+**FOUND-CLEAN:** allocator exhaustion (62→63 throws, 0x80000000 refused everywhere, no sign-bit
+path), cross-word move atomicity on refusal, delete/recreate + group-rename + scene-regen churn
+(membership never keys off mutable ids), patches.yaml `viewMaskHi` asymmetry proven safe against
+the REAL save-server (stale key disappears, byte-stable re-saves) — `_138` §8.2 CLOSED, engine
+load errors all loud, 1500-op fuzz invariant-clean post-fix.
+
+**FILED (documented limits):** sim in-browser preview WASM packs 4 meta lanes (no `vMaskHi`) — a
+word-1 in-VM pattern can't resolve in the LOCAL preview path (engine + sACN-in mirror correct);
+legacy integer-bit `viewSelection` targets are word-0-only by shape (all modern callers use
+names); full per-fixture resolution in the 2D map needs configs in the resolve contract.
+
+**Gates.** Sidecar regen byte-stable ×3 · parity titanic PASS + PASS(--strict) · sim `npm test`
+**1773/1766/7** (baseline 1752 + exactly the 21 new tests; same 7 known reds by name) · engine
+`npm test` **2625/2617/8** (known environmental families only; +24 incl. this thread's 7) ·
+mixer subset 492/492 · state subset 100/100. **Zero new failures anywhere.**
+
+**Security check:** `--all` → **6 findings = stated baseline** (untracked
+`simulation/.scene_backups/studiodj/**` MACs). Zero new.
+
+**Compliance.** Write set: 7 source files + 5 test files + report + this block. No git ops, no
+deploy, no install, ports 6966–6972/5568/8081/10000 untouched; `_140`'s files untouched.
+
+---
+
+## `_143` — Playlist parity drift: the `specialty_white_uv` byte-identity red (DEFERRED TO OPERATOR)
+
+**Nothing was modified** — not the scene files, not the test. Read-only thread; the red stays red
+**on purpose**. Report `20260725_143_playlist_parity_drift.md`.
+
+**The red.** `specialty_white_uv.test.js › both scenes carry byte-identical copies of every
+specialty/themed playlist`. Measured baseline: `tests/patterns/**` → **95 / 94 pass / 1 fail**,
+that test the only red, failing on `white_only` — the stated baseline CONFIRMED, not assumed.
+
+**Drift is wider than reported and runs BOTH ways.** The test's loop aborts on the first mismatch,
+hiding the rest. Full sweep of 15 bench playlists: **`white_only`, `temple_white`, `white_wednesday`**
+drifted (bench captures; the latter two OVERWROTE titanic's authored values) — exactly the three
+WHITE lists, one bench session's footprint (mtimes 2026-07-28 14:37 / 15:12 / 16:01 vs titanic's
+untouched 07-27 16:32). **`ambient` drifted the OPPOSITE direction** (titanic has captures, bench
+`{}`) and `default` diverged on both sides — neither is covered by the test. 8 lists identical.
+Both files were **born already drifted**: `git log --follow` gives exactly one commit each
+(`3246deb2`, which added them); working tree currently CLEAN vs HEAD for every playlist path.
+
+**Mechanism identified exactly.** `api_server.js:1738` `captureOrDeferOutgoingDeckEntry` →
+`:1881 captureActiveEntryDefaults` → `:1894 writeEntryDefaults`, payload from
+`playlist_manager.js:392 captureDefaults`. (a) The write is **AUTOMATIC on deck entry switch** — the
+in-code *"night of deck tuning lost on switch"* fix; **no save action required**. (b) The values ARE
+**genuine operator knob movements** — the gate `_paramsTouchedSinceLoad` is set ONLY by the operator
+control-write routes (`markDeckParamsTouched`, `:1669`); autopilot / `applyEntryDefaults` / seeded
+defaults never set it. (c) `captureDefaults` snapshots **ALL** local exports in **declaration
+order**, which is why the bench files carry the full slider set and show **reordered keys**
+(`temple_white`/`61`: `sliderWarmth` moved to the end) — signatures hand-editing cannot produce.
+Values cross-checked against declared `export var` defaults: varied, non-round, deliberate
+(`63`: `whiteLevel 0.60→0.93`, `level 0.07`, `whiteKick 0.86`; `64`: `localSpeed 0.25→0.83`).
+`62_white_shimmer` stayed `{}` — never touched, so no capture fired.
+
+**Show impact: NONE — test-only.** `state_paths.js:74 resolvePlaylistsDir` keys on model name, so
+`--model titanic` can never read the bench copy. Independently, `_91`'s audit lists all three white
+lists as **"unassigned"** — no look or cue references them on either scene.
+
+**Why deferred (the brief's high bar, not met either way).** NOT clearly residue: real knob
+movements. NOT clearly wanted state: they overwrote values `_13` §5.1 documents as *"authored and
+measured … the operator's intent for them is explicit"*, and contradict the lists' stated character
+(`temple_white` = *"dim warm white, **slow**"*, yet `64`'s speed went 0.18 → 0.75). NOT a ratified
+design position: cross-scene sync **does not exist** — the curator kickoff queues *"(5) playlist
+clone/parity tool"* and *"(6) … + cross-scene copy"* as UNBUILT. What is unrecoverable from the repo
+is whether the 07-28 bench fingers were Sina's or an agent's (curator scope includes
+`scenes/*/playlists/` + driving the live engine). That is the crux → operator's call.
+`_91` also rules playlist contents *"ChatGPT+operator territory"*.
+
+**LIVE HAZARD:** the operator's stack is on **titanic** right now — `titanic/ambient.yaml` (17:06)
+and `default.yaml` (18:07) carry today's mtimes. Hand-patching titanic playlists under a live engine
+would race its own writes.
+
+**QUESTION FOR SINA (one line).** *On 2026-07-28 a bench deck session auto-captured knob positions
+into `test_bench`'s `white_only` / `temple_white` / `white_wednesday`, overwriting the authored
+"temple = slow/dim" values (e.g. `temple_white`/`64` speed 0.18 → 0.75) — real tuning pass to keep,
+or audition residue?* **Recommendation if no strong feeling:** revert the three bench files to the
+authored `_13` §5.1 values (parity restored, test green) — those are documented as measured and
+intentional, the captures contradict the lists' character, and the bench scene never runs the show.
+If the bench pass WAS his tuning, the mirror image (propagate bench → titanic) is correct.
+
+**Durable follow-up (needs the same ruling).** This test WILL re-red the next time anyone tunes the
+deck on either scene — it pins an invariant nothing maintains over files the engine mutates by
+design (already left alone by `_129`, `_140`, `_141`). Lasting fix is either the queued clone/parity
+tool, or relaxing the assertion to **structural** parity (same entry ids/patterns/order) with
+`defaults` per-scene. Not done here.
+
+**FILED, not fixed.** (1) **Stale docstring** — `captureActiveEntryDefaults`
+(`api_server.js:1876-1880`) claims *"EXPLICIT operator action only — never wired to a control-write
+path"*; it IS wired to one via capture-on-switch, misleading exactly the reader chasing this bug.
+(2) `ambient` + `default` drift identically and are **not** covered by the parity test — any ruling
+should cover them.
+
+**Security check:** `--all` → **6 findings = stated baseline** (untracked
+`simulation/.scene_backups/studiodj/**` MACs). Zero new.
+
+**Compliance.** Write set: report + this block, nothing else. **No git operations of any kind**
+(only `git log`/`show`/`status`). No engine/sim boot, no server, no port bound, no deploy, no
+install; ports 6966–6972/5568/8081/10000 untouched. Scratch in `~/tmp/_143_baseline.txt` + session
+scratchpad. `_142`'s paths (`marsin_engine/tools/`, `tests/tools/`) untouched.
+
+---
+
+## `_142` — derived-signal harness: model resolution + `WasmHost`'s three injection passes (2026-08-03)
+
+**Report:** `.agent/reports/202607/20260725_142_derived_harness_injection.md` · branch
+`feat/bm_readiness`.
+
+**Problem (filed by `_140` §6.1, reproduced).** `tools/pattern_derived_harness.mjs` carried the same
+gap `_140` fixed in the audio harness, and worse. `.agent/skills/highdef_pattern_generation.md` §8.3
+tells pattern agents to run it on `--model titanic`, so it was reachable from the documented workflow.
+
+**Root cause — THREE faults in one block.** (1) bare `import(models/<name>.js)` → unresolved model,
+every pixel `vMask: 0`, no `vMaskHi`, no `<model>.viewmasks.js` merge. (2) `createWasmRuntime`
+(`lib/marsin_wasm_runtime.js`) hands source straight to `_compile` — **no** injection stage, and this
+harness hand-applied *nothing*, not even `FIX_*` (the audio harness at least did that one). Measured
+against that runtime: `inView(...)` → `Line 3: strings cannot be used as a function argument`;
+`MASK_STACKS` → `Undefined var`; `FIX_PAR` → `Undefined var`. (3) **The dangerous one, because it
+COMPILES:** a 4-lane meta pack (`controllerId/sectionId/fixtureId/viewMask`) against the 7-field ABI,
+so `fixtureTypeId`, `pixelLocalIndex` and `viewMaskHi` were all zero. A `pixelLocalIndex == 0` probe
+lit **964 / 964** titanic pixels (model truth: **88**) at exit 0 — a wrong render with a green exit
+code, and with `viewMaskHi` absent all 17 titanic composite views were empty.
+
+**Fix — same design decision as `_140`, deliberately:** `loadModelForGauge()` + the real `WasmHost`,
+not a hand-mirrored pass list. `WasmHost.compile()` IS the engine's compile entry point, so pass ORDER
+(`injectInViewIntrinsic` → `injectMaskConstants` → `injectFixtureConstants`) cannot drift; the meta
+comes from `loaded.metaArray`, so the ABI is not copied a third time. View table assembled as
+`engine.js` does (groups word 0, presets at their authored word); `createBitFreeViewPromoter` wired;
+`if (host.metaDirty) setPixelMeta(buildMetaArray(px))` after compile; `rt.*` → `host.*(handle, …)`;
+teardown `destroy(handle)` + `shutdown()`. **`lib/model_loader.js` needed NO change** — `_140` had
+already exported `buildMetaArray(pixels)`, which is exactly what this harness needed.
+
+**Loud-failure surface (no fallbacks):** new `MODEL_FAIL: <model> failed to load: <reason>` (measured:
+`titanic.effects` → *"must export a pixels array"*, exit 2) and new `pixelCount ≠ pixels.length`
+guard; unknown `inView` → `COMPILE_FAIL: Pattern references unknown view(s) via inView(): No Such
+View. Known views for this model: …`, exit 2. Missing model / missing pattern already loud, unchanged.
+One `try/catch`, around `loadModelForGauge` only; no import wrapped.
+
+**Measured.** *(a) No behaviour change on existing work* — 2 patterns × 2 models + a real
+derived-key run (`audioClimax`/`audioRiserScore`, 200 f) × 2 models: **all 6 trace JSONs AND all 6
+full stdouts byte-identical** before/after (only the echoed `--out` path differed, by construction).
+This harness prints no timing fields, so nothing had to be excluded (unlike `_140`). *(b) `inView`* @
+titanic: `Hull Canvas` → 360 px, `Stacks` → 24 px, union → 384 = exact sum ⇒ disjoint; matches
+`loadModelForGauge` (`Hull Canvas` word 1 bit 0x400 = 360, `Stacks` word 1 bit 0x40 = 24, overlap 0)
+— the HIGH word is the path exercised. `viewMaskHi & MASK_STACKS` → 24. *(c) meta lanes:*
+`fixtureType == FIX_PAR` → **40** (truth 40), `pixelLocalIndex == 0` → **88** (truth 88; was 964).
+*(d) negative control:* unknown view → named `COMPILE_FAIL` + full known-view list, exit 2.
+*(e) suites:* `tests/tools/*.test.mjs` **12/12** (`_140` baseline 8 + my 4); `tests/mixer` **492/492**;
+`tests/patterns` **94/95** — the one red is `_143`'s `specialty_white_uv` playlist-parity drift
+(`simulation/scenes/**` YAML, `_141`/`_143` territory), untouched.
+
+**Callers: none in code.** `grep -rl pattern_derived_harness` → 9 files = the harness + 8 `.agent/`
+docs/reports/plans. Nothing spawns it (unlike the audio harness ← `gen_variations.mjs`). Flags,
+printed line formats and exit-code contract all unchanged, so any later caller inherits the fix.
+
+**Docs.** `.agent/skills/highdef_pattern_generation.md` **§8.3** gains a measured targeting-parity
+block (the numbers above + the loud-failure contract + the pinning test + what the old behaviour
+actually was). It had carried no limitation note, so nothing was retracted. **§8.2 not touched**
+(already correct per `_140`).
+
+**New test.** `marsin_engine/tests/tools/derived_harness_inview_injection.test.mjs` — 4 tests beside
+`harness_inview_injection.test.mjs`; every expected count read from `loadModelForGauge` at runtime so
+it stays honest if titanic is re-authored. Probes light their target set full-red so
+`totalBri / 255` = member count (this harness's trace stores totals, not per-pixel colour).
+
+**FILED, not fixed.** (1) `dev_test_bench` is now a loud `MODEL_FAIL` here (`groupBits out of sync —
+stale: [ParLights, VintageLights, BarLights, LED_0]`) where the bare import used to "work" with
+`vMask: 0`. That is the **correct** outcome and is **pre-existing for every `loadModelForGauge`
+tool** — the audio harness (post-`_140`) rejects it identically. It is a dead dev model referenced by
+nothing but its own sidecar. (2) The bit-free (Tier-A) promotion path and the `pixelCount` mismatch
+guard are wired but **unreachable on tracked models** — correctness guards, claimed as such, same
+caveat as `_140` §6.2.
+
+**Security check:** `--all` → **6 findings = stated baseline** (untracked
+`simulation/.scene_backups/studiodj/**` MACs). Zero new.
+
+**Compliance.** Write set: the harness, the new test, skill §8.3, report, this block — nothing else.
+**No git operations of any kind** (read-only `git status --porcelain` to prove no generated residue).
+No engine/sim boot, no server, no port bound, no deploy, no install; ports 6966–6972/5568/8081/10000
+untouched. Nothing under `simulation/` read or written (`_141`'s territory). Scratch in `~/tmp/_142/`.
+
+## `_144` — Bench white playlists: audition residue REVERTED (executes the operator ruling on `_143`) — LANDED
+
+**Report:** `.agent/reports/202607/20260725_144_bench_white_residue_revert.md` (2026-08-03).
+
+**The ruling.** `_143` proved the mechanism and the provenance of the drift but **deferred the
+taste call** to Sina: keeper tuning, or audition residue? **Sina ruled: audition residue —
+revert the bench files.** That is `_143` §7's stated recommendation branch. This thread executes
+it and nothing more; the mirror-image option (propagate bench → titanic) is NOT taken.
+
+**Changed — exactly four files.** `simulation/scenes/test_bench/playlists/{white_only,
+temple_white,white_wednesday}.yaml` reverted to their `titanic` counterparts' exact bytes, plus a
+**comment-only** docstring fix in `marsin_engine/lib/api_server.js`. **Not touched, deliberately:**
+`ambient.yaml` / `default.yaml` on either scene (drifted too — `_143` §2/§8.2 — but outside the
+ruling, and the operator's LIVE engine is writing the titanic copies right now, so hand-editing
+would race it), and **nothing under `simulation/scenes/titanic/playlists/` was written at all**.
+
+**Method.** `_143` §3(c) found the captures carry a signature hand-editing can't cleanly undo —
+the full export set where the authored files carried a sparse curated subset, and keys reordered
+into export-declaration order (`temple_white`/`61`: `sliderWarmth` moved to the end). So parity was
+taken from the authoritative side: each bench file written from its titanic copy's exact bytes (LF,
+trailing newline, key order). Titanic was first cross-read against `_13` §5.1 and **still carries
+the authored values** on all three lists — so "byte-identical to titanic" and "the `_13` §5.1
+authored values" are the same target; no conflict to resolve. **No git checkout/restore/stash of
+any kind** — file contents written directly, per the brief.
+
+**What comes back:** `temple_white`/`64` `sliderLocalSpeed` **0.75 → 0.18** (the list is documented
+*"dim warm white, slow"*) and the capture's `sliderRadius 0.45` gone; `temple_white`/`61`
+`sliderLevel` **0.13 → 0.34**; `white_wednesday`/`61` loses the capture's `sliderLocalSpeed 0.89`;
+`white_only` back to `defaults: {}` ×5 (it is the raw family audition list by design). File sizes
+1777/1137/1453 B → **841/994/1328 B**.
+
+**Show impact: none** — `resolvePlaylistsDir` means a `--model titanic` engine can never read the
+bench copy (`_143` §4), and `_91` lists all three playlists as unassigned to any look or cue.
+
+**Measured — byte parity across ALL 9 lists the test covers, not just the 3 touched.** SHA-256,
+`test_bench` vs `titanic`: `white_only dd31a8c0…`, `uv_test 6af99401…`, `tutu_tuesday bd0ecfd3…`,
+`white_wednesday c9c41bc5…`, `iceberg_ahead f3f09a73…`, `first_class_1912 cad496ab…`,
+`deep_sea 0d2885e5…`, `burn_night e5b15b36…`, `temple_white 0f42b1b0…` — **9/9 IDENTICAL**. This
+retires `_143`'s "the loop aborts on the first mismatch" hazard directly: the assertion sees no
+second mismatch because there is none, verified independently of the test. `fc /b` on the three
+touched files → *"no differences encountered"* ×3.
+
+**Measured — suite.** `cd marsin_engine && node --import ./tests/helpers/setup_config_guard.mjs
+--test "tests/patterns/**/*.test.js"` → **`tests 95 · pass 95 · fail 0`**. `_143`'s baseline was
+`95 / 94 / 1`, the single red being the byte-identity parity test. Delta is exactly +1 pass / −1
+fail; no other test changed state. Zero `marsin_engine/states/` residue (30-min mtime sweep).
+
+**Docstring fix (`_143` §8.1, filed→fixed).** `captureActiveEntryDefaults` claimed *"EXPLICIT
+operator action only — never wired to a control-write path"* — **false**. Corrected to the real
+contract, read off the three call sites (`1746`, `9400`, `9905`): (1) explicit routes
+`POST /deck/playlist/capture` + `POST /mixer/channel/<id>/playlist/capture`; (2) **AUTOMATIC** deck
+capture-on-entry-switch via `captureOrDeferOutgoingDeckEntry` (`:1738`) on *every* deck entry
+switch when auto-save is ON. Gated on `channel._paramsTouchedSinceLoad`, set only by the operator
+control-write routes — so a control-write **arms** the capture and the next entry switch writes the
+playlist file without further operator intent. **Comment-only:** the edit sits inside a `/** … */`
+block, `node --check lib/api_server.js` clean, no executable line in the hunk;
+`tests/mixer/channel_param_isolation.test.js:221` greps only for `function
+captureActiveEntryDefaults` (untouched) and nothing asserts the comment text.
+
+**STILL OPEN — do not read this as solved.** (1) The test pins a cross-scene invariant **nothing
+maintains**; it will re-red the next time anyone tunes the deck on either scene. Lasting fix is
+still one of: build the queued playlist clone/parity tool (curator items 5+6), or relax the
+assertion to **structural** parity (same entry ids/patterns/order) and let `defaults` be per-scene
+by design — both need an operator ruling. (2) `ambient` + `default` drift (bidirectional, not
+covered by the test) remains unaddressed and out of scope for this ruling.
+
+**Security check:** `--all` → **6 findings = stated baseline** (untracked
+`simulation/.scene_backups/studiodj/**` MACs). Zero new.
+
+**Compliance.** Write set: the three bench YAMLs, the `api_server.js` docstring, the report, this
+block — nothing else. **No git operations of any kind** (read-only `git diff --stat` /
+`git config --get` / `git check-attr` to prove the change surface). No engine/sim boot, no server,
+no port bound, no deploy, no install; the operator's live stack (6966–6972, 5568, 8081, 10000, on
+the titanic scene) untouched. `_142`'s paths untouched. Scratch in the session scratchpad.
+
+**Commit note:** `core.autocrlf=true` here with no `.gitattributes` rule for `*.yaml`, so git warns
+*"LF will be replaced by CRLF"* on the three reverted files. Harmless for parity (both scenes
+normalize identically; the index stores LF on both sides) — just don't mistake it for a real diff.

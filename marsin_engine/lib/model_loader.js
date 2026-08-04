@@ -238,6 +238,32 @@ function resolvePresets(mod, declaredViewMasks, groupBits, alloc) {
 }
 
 /**
+ * Pack resolved model pixels into the host meta array (the ABI lane order
+ * WasmHost.setPixelMeta writes into WASM). Mirrors engine.js buildMetaArray.
+ *
+ * Exported because a caller may need to RE-pack after `inView()` promoted a
+ * bit-free view: the promoter sets the new bit on the pixel objects, so the
+ * meta array built before the compile is stale (see WasmHost.metaDirty).
+ * Re-deriving the lane layout at the call site would be a second copy of the
+ * ABI — one that could silently drift.
+ *
+ * @param {Array<object>} pixels resolved model pixels (post group/preset merge)
+ * @returns {Array<object>} meta array parallel to `pixels`
+ */
+export function buildMetaArray(pixels) {
+  const localIndices = derivePixelLocalIndices(pixels);
+  return pixels.map((px, i) => ({
+    controllerId: px.cId || 0,
+    sectionId: px.sId || 0,
+    fixtureId: px.fId || 0,
+    viewMask: px.vMask || 0,
+    fixtureTypeId: fixtureTypeId(px.fixtureType),
+    pixelLocalIndex: localIndices[i],
+    viewMaskHi: px.vMaskHi || 0, // lane 6 — Tier-C high view word (views 31..61)
+  }));
+}
+
+/**
  * Apply a model transform between group/preset resolution and meta
  * assembly. Phase 2 (fixture types) plugs its Tier-A bit merge in here
  * so model_loader stays free of feature-specific imports.
@@ -283,16 +309,7 @@ export async function loadModelForGauge(modelName, transform = null) {
     transform({ mod, groupBits, viewMasks, fixtureConstants });
   }
 
-  const localIndices = derivePixelLocalIndices(mod.pixels);
-  const metaArray = mod.pixels.map((px, i) => ({
-    controllerId: px.cId || 0,
-    sectionId: px.sId || 0,
-    fixtureId: px.fId || 0,
-    viewMask: px.vMask || 0,
-    fixtureTypeId: fixtureTypeId(px.fixtureType),
-    pixelLocalIndex: localIndices[i],
-    viewMaskHi: px.vMaskHi || 0, // lane 6 — Tier-C high view word (views 31..61)
-  }));
+  const metaArray = buildMetaArray(mod.pixels);
 
   return {
     pixelCount: mod.pixelCount ?? mod.pixels.length,

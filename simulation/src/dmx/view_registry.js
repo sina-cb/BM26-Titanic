@@ -398,9 +398,13 @@ export function addCustomView(registry, name) {
  * move and the migration happens inside this call. Omitting it throws; it is
  * never assumed empty (codex P0 — no silent skip).
  *
- * Same-word moves do NOT touch fixtures: the bit changes but the word does
- * not, and `setCustomViewBit`'s callers already migrate from the returned
- * old bit. That contract is unchanged.
+ * Same-word moves migrate too WHEN `fixtures` is provided: the bit changes
+ * within the view's own field on every member. Passing the list and having
+ * it silently ignored was the trap this rule replaces — a caller that hands
+ * over the fixtures always gets the membership moved, whatever the move.
+ * Without `fixtures`, a same-word move keeps the legacy contract (the
+ * caller migrates from the returned old bit, as the Views panel does via
+ * `setCustomViewBit`).
  *
  * @param {object} registry view registry
  * @param {object} view the custom view to relocate
@@ -435,7 +439,12 @@ export function setCustomViewSlot(registry, view, newWord, newBit, fixtures = nu
     throw new Error(`[Views] Bit 0x${newBit.toString(16)} is already taken by another group or view ` +
       `in word ${newWord}`);
   }
-  if (crossWord) {
+  if (Array.isArray(fixtures)) {
+    // Membership follows the view whenever the caller hands us the configs —
+    // cross-word between the two fields, same-word within the one field. The
+    // old shape ACCEPTED `fixtures` on a same-word move and silently ignored
+    // it, stranding every member on the old bit (an orphan bit that reads as
+    // "not a member" and can collide with the bit's next owner).
     const oldField = FIXTURE_MASK_FIELDS[oldWord];
     const newField = FIXTURE_MASK_FIELDS[newWord];
     for (const config of fixtures) {
@@ -475,7 +484,11 @@ function jsStr(s) {
  * Render the engine sidecar (`<scene>.viewmasks.js`) from the registry
  * and the exported pixels. Custom views are emitted with their explicit
  * bit and membership: `groups` when the view is group-based, otherwise
- * the pixel indices whose vMask carries the bit. Views with no members
+ * the pixel indices whose mask (in the view's own word) carries the bit.
+ * A MIXED view (groups attached AND fixtures clicked beyond them) emits
+ * the UNION as pixelIndices — the panel and both 3D isolation paths
+ * already show the union, so exporting groups-only would silently drop
+ * the clicked fixtures. Views with no members
  * at all are skipped (the engine rejects empty presets) and logged.
  * THROWS when a view references a group absent from `groupBits` (i.e.
  * a group with no pixels in this export) — the engine would refuse the
@@ -515,8 +528,31 @@ export function buildViewmasksSidecarJS(registry, pixels, sceneName) {
             `Remove the group from the view in the Views panel, or restore fixtures to that group.`);
         }
       }
-      const groupList = view.groups.map(g => `'${jsStr(g)}'`).join(', ');
-      lines.push(`  { name: '${safeName}', bit: 0x${view.bit.toString(16).padStart(4, '0')}${wordField}, groups: [${groupList}] },`);
+      // MIXED membership (groups attached AND fixtures clicked): the engine's
+      // sidecar schema is exactly-one-of groups/pixelIndices, so the old code
+      // emitted the groups form and SILENTLY DROPPED every clicked fixture —
+      // while the panel's member count and both 3D isolation paths all show
+      // the union. Emit the union as pixelIndices so the export matches what
+      // the operator sees. When the clicked fixtures add nothing beyond the
+      // groups, keep the groups form (byte-stable for every existing scene,
+      // and group-name membership survives pixel renumbering better).
+      const groupSet = new Set(view.groups);
+      const extraFixtureMembers = (pixels || [])
+        .some((p, i) => p && !groupSet.has(p.group) && pixelInView(p, view));
+      if (!extraFixtureMembers) {
+        const groupList = view.groups.map(g => `'${jsStr(g)}'`).join(', ');
+        lines.push(`  { name: '${safeName}', bit: 0x${view.bit.toString(16).padStart(4, '0')}${wordField}, groups: [${groupList}] },`);
+        continue;
+      }
+      const unionIndices = [];
+      (pixels || []).forEach((p, i) => {
+        if (p && (groupSet.has(p.group) || pixelInView(p, view))) unionIndices.push(i);
+      });
+      console.warn(`[Views] Custom view '${view.name}' mixes group membership ` +
+        `(${view.groups.join(', ')}) with clicked fixtures — exporting the UNION as ` +
+        `${unionIndices.length} pixel indices (the groups-only form would silently drop ` +
+        'the clicked fixtures).');
+      lines.push(`  { name: '${safeName}', bit: 0x${view.bit.toString(16).padStart(4, '0')}${wordField}, pixelIndices: [${unionIndices.join(', ')}] },`);
       continue;
     }
     // Per-fixture membership: read the pixel field of the view's OWN word

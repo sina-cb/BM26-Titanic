@@ -54,7 +54,7 @@ import {
 } from "../dmx/controller_registry.js";
 import {
   generatedFixtureNames, renamePairs, carryViewMasks, duplicateNameError,
-  buildInvalidationReport,
+  buildInvalidationReport, snapshotViewMasks,
 } from "../dmx/rename_invalidation.js";
 import { fixtureInView, fixtureMaskField } from "../dmx/view_registry.js";
 import {
@@ -693,25 +693,14 @@ function setupGUI() {
     reproject = true,
   } = {}) {
     const oldNames = pairs.map((p) => p.from);
-    // name → { viewMask, viewMaskHi }: BOTH view words travel a rename. New
-    // custom views are allocated into word 1 first, so snapshotting only
-    // `viewMask` would drop the newest memberships on every group rename.
-    const oldMasks = new Map();
-    const snapshot = (src, name) => {
-      const lo = src.viewMask || 0;
-      const hi = src.viewMaskHi || 0;
-      if (lo || hi) oldMasks.set(name, { viewMask: lo, viewMaskHi: hi });
-    };
-    const patchTree = window.__globalPatchTree || {};
-    for (const name of oldNames) {
-      const rec = patchTree[name];
-      if (rec) snapshot(rec, name);
-    }
-    // Live configs still carrying the old names hold the authoritative mask
-    // (the patch tree only refreshes on a projection).
-    for (const config of gatherAllConfigs(params)) {
-      if (config && oldNames.includes(config.name)) snapshot(config, config.name);
-    }
+    // name → { viewMask, viewMaskHi }: BOTH view words travel a rename, and
+    // the LIVE CONFIG is authoritative over the patch tree — including with
+    // ZEROS. The patch tree only refreshes on a projection, so after a
+    // Views-panel unassign its copy is stale; the old inline snapshot let
+    // that stale non-zero win and the rename resurrected the membership.
+    // (snapshotViewMasks in rename_invalidation.js — pure + unit-tested.)
+    const oldMasks = snapshotViewMasks(
+      window.__globalPatchTree || {}, gatherAllConfigs(params), oldNames);
 
     const registry = window.__controllerRegistry;
     const chainRows = registry ? invalidateFixtureMappings(registry, oldNames) : [];

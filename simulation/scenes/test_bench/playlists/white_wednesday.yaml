@@ -16,14 +16,9 @@ entries:
     pattern: 61_white_breathe
     label: null
     defaults:
-      sliderLocalSpeed: 0.89
-      sliderDirection: 1
       sliderLevel: 1
-      sliderKick: 0
-      sliderRadius: 0.5
       sliderDepth: 0.4
       sliderWhiteLevel: 0.55
-      sliderWhiteKick: 0.2
       sliderWarmth: 0.12
     modulations: []
     midiMappings: []
