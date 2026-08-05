@@ -1247,8 +1247,9 @@ export async function fetchViewSelectionOptions(): Promise<ApiResult<{
   viewMasks: { name: string; bit: number; inUse: boolean }[];
   // The FULL Tier-A named-view catalog the engine's MaskRegistry interns:
   // base groups (kind:'group'), composites (kind:'composite'), and every
-  // derived auto-view (kind:'pixelSet' — PORT/STARBOARD, WALLS/DECKS/CHIMNEYS,
-  // @PAR/@BAR/…, BAND_*, `_BOTH` pairs, CTRL_<n>). `bit` is the in-VM viewMask
+  // derived auto-view (kind:'pixelSet' — LEFT/RIGHT/FRONT/BACK, the scene's
+  // structural bands if any survive dedup, Strands / TE Signs / @PAR / @BAR /
+  // @VINTAGE, CTRL_<n>). `bit` is the in-VM viewMask
   // bit (0 for bit-less Tier-A views); `memberCount` is the live pixel count.
   // Consumed by the shared ViewSelectionPicker (report 20260724_8). Optional
   // in the type so a stale engine that omits it is detectable — the picker

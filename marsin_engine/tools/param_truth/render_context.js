@@ -3,9 +3,10 @@
 //
 // This is deliberately the SAME machinery the live engine uses, not a second
 // loader: `loadModelForGauge()` (lib/model_loader.js) builds the pixel/meta
-// tables, `buildMaskConstants()` (lib/view_mask_constants.js) and the
-// `inView()` view table are assembled exactly as engine.js does at load, and
-// the pattern is compiled through `WasmHost.compile()`. Nothing here opens a
+// tables, `buildMaskConstants()` (lib/view_mask_constants.js) builds the
+// MASK_* table, the `inView()` view catalog comes from the shared
+// `lib/view_catalog.js` primitives engine.js itself calls, and the pattern is
+// compiled through `WasmHost.compile()`. Nothing here opens a
 // socket, reads config.yaml, or touches the show ports — the sweep must be
 // runnable while the operator's live stack is up.
 //
@@ -22,6 +23,7 @@ import { fileURLToPath } from 'url';
 
 import { WasmHost } from '../../lib/wasm_host.js';
 import { loadModelForGauge } from '../../lib/model_loader.js';
+import { buildViewCatalog } from '../../lib/view_catalog.js';
 import { buildMaskConstants } from '../../lib/view_mask_constants.js';
 import { createBitFreeViewPromoter } from '../../lib/in_view_intrinsic.js';
 import { parsePatternDefaults } from '../../lib/pattern_defaults.js';
@@ -52,21 +54,24 @@ export const FRAME_DT = 0.025;
  */
 export async function createRenderContext(modelName) {
   const loaded = await loadModelForGauge(modelName);
+
+  // The `inView()` catalog is assembled by the SHARED lib/view_catalog.js
+  // primitives engine.js itself calls, so the Tier-A auto-views (LEFT /
+  // RIGHT / FRONT / BACK / Strands / TE Signs / @BAR / CTRL_n …) are
+  // present offline exactly as on the rig. loadModelForGauge() alone does not
+  // derive them, and a hand-built table here held 31 of titanic's 58 names —
+  // a documented view was a COMPILE_FAIL in this sweep while it compiled on
+  // the rig (reports 20260804_146 §4, 20260804_147). This runs BEFORE
+  // buildMaskConstants because the auto-views ride the same viewMasks array;
+  // they are all bit-free (bit: 0) and buildMaskConstants deliberately skips
+  // those, so the MASK_* table is unchanged by the append.
+  const { viewTable, autoViews } = buildViewCatalog(loaded);
+  for (const w of autoViews.warnings) console.warn(`[Model] auto-view: ${w}`);
+
   const maskConstants = buildMaskConstants({
     groupBits: loaded.groupBits,
     viewMasks: loaded.viewMasks,
   });
-
-  const viewTable = {};
-  for (const [group, bit] of Object.entries(loaded.groupBits)) {
-    viewTable[group] = { bit, word: 0 };
-  }
-  for (const vm of loaded.viewMasks) {
-    viewTable[vm.name] = {
-      bit: Number.isInteger(vm.bit) ? vm.bit : 0,
-      word: vm.word === 1 ? 1 : 0,
-    };
-  }
 
   const host = new WasmHost();
   await host.init(loaded.pixelCount);
@@ -75,8 +80,12 @@ export async function createRenderContext(modelName) {
   host.setMaskConstants(maskConstants);
   host.setFixtureConstants(loaded.fixtureConstants);
   host.setViewTable(viewTable);
+  // `groupBits` is passed for the same reason engine.js passes its whole
+  // model: the promoter seeds its allocator with every bit already claimed,
+  // and a promotion that skipped the base group bits could hand a bit-free
+  // view a bit a group already owns.
   host.setBitFreeViewPromoter(createBitFreeViewPromoter(
-    { pixels: loaded.pixels, viewMasks: loaded.viewMasks }, host));
+    { pixels: loaded.pixels, viewMasks: loaded.viewMasks, groupBits: loaded.groupBits }, host));
 
   const coords = loaded.pixels.map(p => ({ nx: p.nx, ny: p.ny, nz: p.nz }));
   const scratch = new Uint8Array(loaded.pixelCount * 6);

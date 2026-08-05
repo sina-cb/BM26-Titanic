@@ -1,10 +1,13 @@
 // ViewSelectionPicker.tsx — the shared, sectioned + searchable view picker
 // used by BOTH the mixer channel strip and the deck-overlay stack (BM
 // readiness W1). It surfaces the engine's full `namedViews` auto-view catalog
-// (~60 entries on a regenerated titanic model: PORT/STARBOARD, WALLS/DECKS/
-// CHIMNEYS, @PAR/@BAR/…, BAND_*, `_BOTH` pairs, CTRL_<n>, plus base groups &
-// composites) — previously invisible on the iPad because CaptainPad ignored
-// the field.
+// (58 entries on the titanic model: LEFT/RIGHT/FRONT/BACK, Strands /
+// TE Signs / @PAR / @BAR / @VINTAGE, CTRL_<n>, plus the 24 base groups &
+// 7 semantic composites) — previously invisible on the iPad because
+// CaptainPad ignored the field. Titanic offers no STRUCTURE rows: its
+// WALLS/AUDITORIUM were exact duplicates of `Hull Canvas`/`Auditoriums` and
+// were retired by operator ruling (report 20260804_148); other scenes can
+// still send structural views, so the section is still rendered.
 //
 // Designed for gloved, sunlit playa use: big (≥52px) touch rows, high-contrast
 // active state, family section headers, and a search box for the long catalog.

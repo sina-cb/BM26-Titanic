@@ -54,19 +54,19 @@ test('buildMaskConstants: bit-free (Tier-A, bit:0) views are excluded — no sil
   const constants = buildMaskConstants({
     groupBits: { 'TowerBars': 0x40 },
     viewMasks: [
-      { name: 'PORT', bit: 0 },        // Tier-A auto-view: membership-only, no bit
-      { name: 'BAND_LOW', bit: 0 },
+      { name: 'LEFT', bit: 0 },        // Tier-A auto-view: membership-only, no bit
+      { name: 'Strands', bit: 0 },
       { name: 'RedwoodPARs', bit: 0x80, word: 0 }, // bit-bearing → kept
     ],
   });
-  assert.equal('MASK_PORT' in constants, false);
-  assert.equal('MASK_BAND_LOW' in constants, false);
+  assert.equal('MASK_LEFT' in constants, false);
+  assert.equal('MASK_STRANDS' in constants, false);
   assert.equal(constants.MASK_REDWOOD_PARS, 0x80);
   // A pattern referencing a bit-free view via MASK_ must fail LOUDLY (steering
-  // to inView()), never inject `var MASK_PORT = 0;` (always-false silent zero).
+  // to inView()), never inject `var MASK_LEFT = 0;` (always-false silent zero).
   assert.throws(
-    () => injectMaskConstants('export function render3D(i){ if (viewMask & MASK_PORT) rgb(1,0,0); }', constants),
-    /MASK_PORT/,
+    () => injectMaskConstants('export function render3D(i){ if (viewMask & MASK_LEFT) rgb(1,0,0); }', constants),
+    /MASK_LEFT/,
   );
 });
 

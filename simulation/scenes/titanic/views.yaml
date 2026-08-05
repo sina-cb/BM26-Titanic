@@ -33,18 +33,6 @@ views:
         - Left Back Wall
         - Right Front Wall
         - Right Back Wall
-    - name: Left Hull
-      bit: 2048
-      word: 1
-      groups:
-        - Left Front Wall
-        - Left Back Wall
-    - name: Right Hull
-      bit: 4096
-      word: 1
-      groups:
-        - Right Front Wall
-        - Right Back Wall
     - name: Silhouette
       bit: 8192
       word: 1
@@ -57,40 +45,12 @@ views:
         - Right_Front_Right
         - Right_Back_Left
         - Right_Back_Right
-    - name: Left Silhouette
-      bit: 16384
-      word: 1
-      groups:
-        - Left_Front_Left
-        - Left_Front_Right
-        - Left_Back_Left
-        - Left_Back_Right
-    - name: Right Silhouette
-      bit: 32768
-      word: 1
-      groups:
-        - Right_Front_Left
-        - Right_Front_Right
-        - Right_Back_Left
-        - Right_Back_Right
     - name: Jewelry
       bit: 65536
       word: 1
       groups:
         - Left Front Rails
         - Left Back Rails
-        - Right Front Rails
-        - Right Back Rails
-    - name: Left Jewelry
-      bit: 1
-      word: 1
-      groups:
-        - Left Front Rails
-        - Left Back Rails
-    - name: Right Jewelry
-      bit: 2
-      word: 1
-      groups:
         - Right Front Rails
         - Right Back Rails
     - name: Organs
@@ -102,20 +62,6 @@ views:
         - Right SmokeStacks
         - Right Small SmokeStack
         - Left Auditorium
-        - Right Auditorium
-    - name: Left Organs
-      bit: 8
-      word: 1
-      groups:
-        - Left SmokeStack
-        - Left Small SmokeStack
-        - Left Auditorium
-    - name: Right Organs
-      bit: 16
-      word: 1
-      groups:
-        - Right SmokeStacks
-        - Right Small SmokeStack
         - Right Auditorium
     - name: Identity
       bit: 32
@@ -129,18 +75,6 @@ views:
       groups:
         - Left SmokeStack
         - Left Small SmokeStack
-        - Right SmokeStacks
-        - Right Small SmokeStack
-    - name: Left Stacks
-      bit: 128
-      word: 1
-      groups:
-        - Left SmokeStack
-        - Left Small SmokeStack
-    - name: Right Stacks
-      bit: 256
-      word: 1
-      groups:
         - Right SmokeStacks
         - Right Small SmokeStack
     - name: Auditoriums

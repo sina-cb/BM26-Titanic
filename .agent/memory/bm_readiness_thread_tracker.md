@@ -7995,3 +7995,372 @@ the titanic scene) untouched. `_142`'s paths untouched. Scratch in the session s
 **Commit note:** `core.autocrlf=true` here with no `.gitattributes` rule for `*.yaml`, so git warns
 *"LF will be replaced by CRLF"* on the three reverted files. Harmless for parity (both scenes
 normalize identically; the index stores LF on both sides) — just don't mistake it for a real diff.
+
+## `_145` — Mixer view catalog cleanup: 7 composites, exhaustive LEFT/RIGHT halves (LANDED)
+
+Report: `.agent/reports/202608/20260804_145_mixer_view_catalog_cleanup.md` (new
+month dir `202608`). Executes the operator's catalog ruling end to end.
+
+**What the picker looked like before:** ~70 selectable names. `LEFT`/`RIGHT` were
+LED-strand-scoped (234 px each, not halves); the ship's real sides were
+`PORT`/`STARBOARD` (408 each, DMX-only); ends were `FORE`/`AFT`; plus three
+`BAND_*` height slices, ten `<base>_BOTH` pairs, and ten `Left */Right *`
+half-instrument composites.
+
+**What landed.** `views.yaml` 17 custom → **7** (66 deletions, **0 insertions**;
+the 24 `groupBits:` lines byte-for-byte untouched), sidecar regenerated through
+the canonical chain (`createViewRegistry` → `removeCustomView` →
+`reconcileGroupBits` asserted `+0 −0` → `buildViewmasksSidecarJS`), with a
+guard that refuses to write if either `groupBits` block changes a byte. The
+seven keep their **exact** `(word, bit)`: `Hull Canvas` w1 `0x400` **360** ·
+`Silhouette` w1 `0x2000` **320** · `Jewelry` w1 `0x10000` **96** · `Organs` w1
+`0x4` **40** · `Identity` w1 `0x20` **148** · `Stacks` w1 `0x40` **24** ·
+`Auditoriums` w1 `0x200` **16**.
+
+`lib/auto_views.js` rewritten: **`LEFT` 482 / `RIGHT` 482** are now exhaustive
+whole-ship halves assigned from **world X** (physical truth), cross-checked
+against the `Left_`/`Right_` group token — a disagreement **throws at model
+load**. `FORE`/`AFT` → **`FRONT` 388 / `BACK` 388**. `PORT`/`STARBOARD`,
+`BAND_LOW/MID/HIGH` and the entire `<base>_BOTH` family **deleted** (families
+removed from the return shape, not emptied). `@RAW` → **`Strands` 320**; new
+**`TE Signs` 148** on an appended `FIX_TE_SIGN` (**id 7**, `TeSignV3A40` +
+`TeSignV3B34` — append-only, nothing renumbered; those 148 px were UNTYPED
+before, so the change is purely additive). Final catalog: **60 names** = 24
+groups + 7 composites + 4 sides/ends + 2 structural (`WALLS` 360,
+`AUDITORIUM` 16) + 5 fixture types + 18 `CTRL_`.
+
+**Measured, from the regenerated sidecar — not from my own construction.**
+LEFT ∩ RIGHT = 0, LEFT ∪ RIGHT = 964. Per half: 180 wall + 160 rope + 48 rail +
+12 stack + 8 auditorium + 74 sign = **482**. `Strands` ∩ `TE Signs` = ∅. All 12
+removed composite names + `FORE`/`AFT`/`PORT`/`STARBOARD`/`BAND_*`/`@RAW`/
+`*_BOTH` resolve to **nothing**, and `inView()` on each raises the loud
+`unknown view(s) via inView(): <name>` compile error. Zero bit collisions in
+either word; groupBits ↔ model in sync both ways.
+
+**Suites.** `simulation npm test` **1773 / 1766 / 7** — the exact stated
+baseline, zero new; and the `view-bit headroom is REPORTED` test that was RED in
+`_134` is now **GREEN** (dropping 10 composites gave word 0 its headroom back) —
+a recovered failure, not a new one. `marsin_engine npm test` **2643 / 2636 / 7**;
+the +16 test delta is authored here by name (9 new `titanic_view_catalog.test.js`,
++7 net `auto_views.test.js`), and all 7 fails are the known environmental
+families (5× audio_capture, effects_v2 layout, OSC EADDRINUSE from the
+operator's live stack) — the 8th baseline red (playlist byte-identity) is gone,
+retired by `_144`. Targeted: `tests/mixer/**` **510/510**, `tests/patterns/*` +
+`tests/tools/*` **107/107**, CaptainPad picker **32/32**. Parity
+`node tools/scene_model_parity.cjs titanic` and `--strict` → **PASS, 0 errors, 0
+warnings, 1 info** (the pre-existing no-bench-block note). `security_check.py
+--all` → **6 = baseline** (untracked `.scene_backups/studiodj/**` MACs).
+
+**OPERATOR DECISION NEEDED — the view is `TE Signs`, not `TE Sign`.** The brief
+asked for `TE Sign` = 148 px. That name is **structurally unavailable**: it is
+already a base group (the port sign, **74 px**), one of the 24 bits the same
+brief requires byte-preserved, and `MaskRegistry` is a flat namespace whose
+`buildMaskRegistry` **silently skips** a preset whose name a group owns — the
+view would simply not have existed, with no error. Registered as **`TE Signs`**
+(plural = both signs), and the generator now **refuses loudly** on such a clash
+instead of skipping it. Every specified count is met (148 px, both signs,
+disjoint from `Strands`); only the spelling differs by one letter. Getting the
+literal `TE Sign` requires renaming the base groups (e.g. `TE Sign L`/`R`),
+which re-exports `titanic.js` and breaks `MASK_TE_SIGN` — out of scope here.
+One-line change in `TYPE_VIEW_NAMES` (`lib/auto_views.js`) whenever you rule.
+
+**Flagged, kept as instructed — byte-identical aliases.** Verified pixel-for-
+pixel, not by count: `WALLS` ≡ `Hull Canvas` ≡ `@BAR` (360) and `AUDITORIUM` ≡
+`Auditoriums` (16). Per the brief neither was removed without your call.
+(`Strands` ≡ `Silhouette` and `TE Signs` ≡ `Identity` are *deliberate* — operator
+handle vs semantic instrument; the `CTRL_n` ≡ single-group aliases are
+structural.)
+
+**No centreline contradictions — nothing fudged.** All 964 pixels have non-zero
+world X; no fixture, base group or controller straddles the centreline, and
+every `Left_`/`Right_` token agrees with its geometry. The 482/482 fell out of
+the model as-is. On other scenes the generator stays honest rather than
+exhaustive: an `x = 0` pixel with no side token joins **neither** half and is
+reported by index in a loud warning (`studiodj` has 4) — never pushed to a side.
+
+**Docs updated to the new truth:** `MARSIN_ENGINE_PATTERNS.md` §7.3.1 rewritten
+(**seven**, not seventeen) plus a new **§7.3.2** documenting the derived
+auto-views; `COLOR_THEORY.md` §2/§4; `MARSIN_PB_LANG_SPEC.md` (`FIX_TE_SIGN`);
+`.agent/skills/highdef_pattern_generation.md` §3.1 (seven composites, `LEFT`/
+`RIGHT` for halves, explicit removed-name list, **exact spelling mandatory**).
+Patterns are still told to use the semantic `Identity` when they mean both signs
+artistically. `inview_demo.js` re-pointed off `PORT`.
+
+**Compliance.** Write set: `views.yaml`, the sidecar, `auto_views.js`,
+`strand_views.js`, `fixture_type_constants.js`, `in_view_intrinsic.js`,
+`engine.js` (comment), `inview_demo.js`, 5 engine test files + 1 new, 4
+CaptainPad files, 3 docs, 1 skill, the report, this block — nothing else. **No
+git operations of any kind** (read-only `git status` / `git diff --stat` to prove
+the change surface). No engine/sim boot, no port bound by this thread, no deploy,
+no install; the operator's live stack (6966–6972, 5568, 8081, 10000) kept every
+port. `marsin_engine/states/titanic/mixer_state.yaml` residue predates this
+thread and is left exactly as found — reported, never reverted. Scratch in the
+session scratchpad. Note: this thread was killed mid-run by an expired auth
+token and resumed; state was re-established from disk, not from memory.
+
+## `_146` — Adversarial verification of `_145`'s catalog cleanup (VERIFIED, 2 discrepancies)
+
+Independent **read-only** verifier. Truth re-derived from the repo first, own
+probes, `_145`'s report read last. Report:
+`.agent/reports/202608/20260804_146_catalog_cleanup_verification.md`.
+
+**Verdict: CONFIRMED.** All 12 operator-acceptance lines hold on the substance.
+`LEFT` **482** / `RIGHT` **482**, ∩ = 0, ∪ = **964/964**, zero warnings — each
+half 180 wall + 160 rope + 48 rail + 12 stack + 8 auditorium + **74 sign** = 482,
+one TE sign per side. `FRONT`/`BACK` 388 each resolve; `FORE`/`AFT`/`PORT`/
+`STARBOARD`/`BAND_*` return `null`; **zero** `*_BOTH` names. `Strands` **320** ∩
+`TE Signs` **148** = 0. The seven composites carry their exact prior counts and
+`(word,bit)` slots; the ten L/R variants are gone from both `views.yaml`
+(66 del / **0 ins**) and the sidecar, `groupBits` byte-identical to HEAD in both.
+24 word-0 bits + 7 word-1 bits, **zero** collisions, no stale sidecar entries.
+`FIX_*` 1–6 unrenumbered at HEAD, `FIX_TE_SIGN` **7** appended over pixels that
+were `UNTYPED` (0) — strictly additive. Docs (`MARSIN_ENGINE_PATTERNS` §7.3.1 +
+new §7.3.2, `COLOR_THEORY`, `MARSIN_PB_LANG_SPEC`, `highdef_pattern_generation`)
+say seven composites, `LEFT`/`RIGHT` for halves, removed aliases hard-fail, exact
+spelling mandatory — every §7.3.2 figure matches my registry dump, and `17
+composite`/`41 names` scan returns **zero**. `security_check --all` = **6**, all
+untracked `.scene_backups/studiodj/**`. Judgement calls **(a)** the `TE Sign`
+base-group collision is real and the generator now **throws** on an
+operator-named clash (`@`-prefixed still skips, as designed), **(b)** `WALLS` ≡
+`Hull Canvas` ≡ `@BAR` (360) and `AUDITORIUM` ≡ `Auditoriums` (16) byte-identical
+by two independent routes, **(c)** zero `x == 0` pixels, **25.99-unit clear gap**
+across the centreline, zero straddling group/fixture/controller, zero
+token/geometry disagreements — nothing fudged.
+
+**`inView()` proven through the REAL compile path.** `WasmHost.compile()` with
+the engine-parity viewTable (groups + presets + auto-views) + the bit-free
+promoter, fresh host per name: 22 removed names each `COMPILE_FAIL` **naming the
+view** (10 L/R composites, `PORT`, `STARBOARD`, `FORE`, `AFT`, `BAND_*`, three
+`_BOTH` forms, `RAW`, `@RAW`); positive controls `Hull Canvas`, `Silhouette`,
+`LEFT`, `RIGHT`, `Strands`, `TE Signs` all compile.
+
+**Suites re-run.** `scene_model_parity titanic` and `--strict` → **PASS 0/0/1
+info**. `simulation npm test` **1773 / 1766 / 7** — exact baseline, all 7 known
+scene-content. `marsin_engine npm test` **2643 / 2635 / 8**; the 8th is
+`fire_sync_listener` *ON/OFF edge* which **passes 14/14 re-run alone** — a
+timing flake, so the stable figure is `_145`'s 7. Zero view-related failures.
+View-specific mixer files **101/101**, `tests/patterns/*` + `tests/tools/*`
+**107/107**, CaptainPad picker **32/32**. (The `tests/mixer/**` glob run in
+isolation shows 5 `deck_entry_autocapture`/pre-show **409** failures that pass
+inside the full run — order/state dependence against the operator's live stack,
+not a `_145` regression.) `mixer_state.yaml` residue is byte-identical before and
+after my runs — reported, never reverted.
+
+**Discrepancy 1 — test-count delta attribution (cosmetic).** `_145` reconciles
+2643 as "+16 on a 2627 baseline (9 new + **7** net in `auto_views.test.js`)".
+`git show HEAD:` gives `auto_views.test.js` **15** tests, not 13, so the net is
+**+5** and the whole delta is **+14** → the true pre-`_145` baseline is **2629**.
+Totals are right; the arithmetic is off by 2. No functional impact.
+
+**Discrepancy 2 — the stale sweep missed two tracked files.** `_145` §4.6 claims
+*"the only other `PORT` hits in the repo are `control_podium/**/deploy.py` SSH
+port credentials"*. Not accurate: `marsin_engine/tools/param_truth/param_truth_results.md`
+(line 37) and `param_truth_results.json` both record `inView(): PORT` from
+`examples/inview_demo` — doubly stale now (the demo says `LEFT`, and the recorded
+"Known views" list names a superseded titanic model with `* Generator` groups).
+Low severity (generated snapshots, regenerated by the next param-truth sweep),
+but it is a real stale reference inside the sweep scope. `_145`'s quoted grep
+pattern has no bare `PORT` term, which likely explains the miss. Everything else
+in the sweep dirs is either documenting the removal or asserting it.
+
+**Separate finding, PRE-EXISTING (not `_145`'s doing) — the offline harnesses
+cannot resolve the auto-views.** `tools/pattern_audio_harness.mjs`,
+`tools/pattern_derived_harness.mjs` and `tools/param_truth/render_context.js`
+build their `inView()` table from `loadModelForGauge()` only, which never calls
+`deriveAutoViews` — so the offline table holds **31** names where the engine
+holds **60**. Measured on titanic: `inView("Hull Canvas")` → `COMPILE_OK
+LIT=360/964`, but `inView("LEFT")` → `COMPILE_FAIL: unknown view(s) … LEFT`.
+This is newly consequential because the rewritten docs now steer authors to
+`LEFT`/`RIGHT`/`Strands`/`TE Signs`: a pattern that gate-tests offline will fail
+on a view that is valid on the rig. Fix is one `deriveAutoViews` call in each of
+the three tools. **Worth a follow-up card.**
+
+**Not verifiable.** `_145`'s "78/78" scratchpad harness (its scratchpad is gone;
+equivalent facts re-derived here, and the permanent 9-test replacement is green);
+the exact pre-`_145` engine baseline (needs a git checkout, out of scope); and
+the "generated, not hand-authored" provenance of `views.yaml`/the sidecar (not
+observable after the fact — but the end state is consistent and parity-clean).
+
+**Compliance.** Write set: this block + the `_146` report only. **No source,
+test, doc, scene or model file touched. No git operation of any kind** —
+read-only `git status` / `git diff` / `git show HEAD:<file>` for comparison only.
+No engine/sim boot, no port bound; the operator's stack kept 6966–6972, 5568,
+8081, 10000 throughout. Probes in the session scratchpad.
+
+---
+
+**Landed 2026-08-04 — `_147` harness↔engine `inView()` CATALOG parity (Opus,
+[`../reports/202608/20260804_147_harness_autoview_parity.md`](../reports/202608/20260804_147_harness_autoview_parity.md)):**
+closes the gap `_146` filed. Offline tools held **31** of titanic's **60**
+view names; now **60 = 60**, byte-equal to the engine's.
+
+**Design: ONE shared helper, and `engine.js` uses it itself** — the mirror
+fallback was declined (a fourth hand-copy is exactly the drift `_140`/`_142`
+killed). New `marsin_engine/lib/view_catalog.js`: `appendAutoViews()` (seeds
+`existingMaskNames` from groups + presets, calls `deriveAutoViews`, pushes in
+order) + `buildViewTable()` (groups word 0, presets/auto-views at their
+`{bit,word}`, bit-free at `bit:0`) + `buildViewCatalog()` = the two in order.
+`engine.js` calls the two primitives (logging sits between them); the three
+tools call the composed one. Repo-wide, `viewTable[...]` construction and
+`deriveAutoViews` now have exactly ONE production caller each — that file.
+`deriveAutoViews` logic and the view catalog itself: untouched.
+
+**engine.js behaviour PROVEN unchanged.** Its inline sequence (lines 560-575 +
+622-634) was copied verbatim to scratch BEFORE the edit and its full viewTable,
+auto-view names/count, family summary, warnings, post-append `viewMasks` list
+and `MASK_*` names dumped per model; JSON-compared after: `titanic 60 / test_bench
+20 / studio_top_loft 13` all **IDENTICAL**. (`buildMaskConstants` skips `bit:0`
+entries by design, so appending bit-free auto-views cannot move the MASK_ table
+— measured.)
+
+**Second bug fixed in passing:** all three tools wired
+`createBitFreeViewPromoter({pixels, viewMasks})` **without `groupBits`** where
+engine.js passes its whole model — a promoted Tier-A view could have drawn a bit
+a base group owns. Unreachable before (nothing offline was promotable), reachable
+the moment the auto-views land. All three now pass `groupBits`.
+
+**Measured, both harnesses, titanic.** Audio (lit-pixel counts):
+`LEFT` **482**, `RIGHT` **482** (∩ = 0, ∪ = 964), `Strands` **320**,
+`TE Signs` **148** (∩ Strands = 0), `FRONT` **388**, positive control
+`Hull Canvas` **360** unchanged. Derived (`TOTAL_BRI/255`): 482 / 482 / 320 /
+148 / 388 / 360 — same six, exact. `render_context.js`:
+`run_param_truth --pattern examples/inview_demo` → **compile errors 0** (it was
+the sweep's only compile error). Negative control still loud: unknown name →
+`COMPILE_FAIL` naming it, exit 2, known-views list now **60 names** (was 31),
+byte-identical from both harnesses.
+
+**Byte-stability.** 2 patterns × 2 models × each harness: all 8 capture/trace
+JSONs **IDENTICAL** (the four audio MD5s are the same values `_140` recorded —
+baseline intact across three threads). Derived stdout differs only in the echoed
+`--out` path (`_142`'s documented delta); audio stdout only in `--out` +
+`meanMs`/`worstMs`. ONE deliberate new output: `deriveAutoViews` warnings now
+print via `console.warn` → **stderr** (titanic 0 bytes, test_bench 184 = the two
+straddling-controller warnings the engine also prints), so stdout stays
+byte-stable and `gen_variations` (`stdio:'inherit'`, parses nothing) is untouched.
+
+**Tests.** `tests/tools` **23/23** (baseline 12, +11 mine: +2 audio, +1 derived,
++8 new `view_catalog_parity.test.mjs` — including a reference transcription of
+engine.js's sequence that deliberately does NOT route through the helper, both
+harnesses' real known-view lists, the param_truth context, and a loud
+double-append refusal). `tests/mixer/**` **510/510** (exact baseline).
+`tests/patterns/*` **95/95** (the `specialty_white_uv` red `_140`/`_142` carried
+is gone — another thread's fix, not mine). `npm test` run 1 **2657/2650/7**, run 2
+**2654/2647/7**: the total is NOT deterministic here (two identical runs differed
+by 3, from file-level aborts like `effects_v2_mode_page_layout`); run 2's
+**2654 = 2643 + 11** closes exactly on my delta, and I touched no test outside
+`tests/tools`. The **7 fails are identical in both runs** and are the documented
+environmental set (5× `audio_capture`, `effects_v2_mode_page_layout` file-level,
+OSC `EADDRINUSE`); `fire_sync_listener` did NOT flake. Zero view-related failures.
+`mixer_state.yaml` residue byte-identical before/after (`36c7f448…`) — reported,
+never reverted. `security_check.py --all` → **6**, the exact pre-existing
+`.scene_backups/studiodj/**` baseline.
+
+**`_146` cleanup item done.** `tools/param_truth/param_truth_results.{md,json}`
+regenerated through `sweep_all.mjs` (offline, sharded, no socket, 161.7 s):
+header `964 px` (was 981), `compile errors 0` (was 1), `grep -c PORT` → **0**,
+`grep -c Generator` → **0**. Census moved (`WRONG 39→47, DEAD 170→112,
+TRUE 548→579`) — an honest re-measurement against the current model, not a
+regression; `param_truth_smoke` pins no census and is green.
+
+**Also:** `.agent/skills/highdef_pattern_generation.md` §8.2/§8.3 gained measured
+catalog-parity notes. `docs/MARSIN_ENGINE_PATTERNS.md` needed none (it carried no
+stale harness claim). The bit-free PROMOTION path `_140` §6.2 / `_142` §6.1 had to
+caveat as unmeasured is now exercised on every derived probe — caveat retired.
+`marsin_engine/tests/mixer/model_loader_word_aware.test.js` shows modified and is
+**`_145`'s, not mine** (the session-start status snapshot omitted it) — flagged so
+it is not misattributed.
+
+**Compliance.** No git operation of any kind. No engine/sim boot, no server, no
+port bound; the operator's stack kept 6966–6972, 5568, 8081, 10000. Scratch in
+`~/tmp/_147`.
+
+---
+
+**Landed 2026-08-04 — `_148` structural view dedup: `WALLS` / `AUDITORIUM`
+retired (Opus,
+[`../reports/202608/20260804_148_structural_view_dedup.md`](../reports/202608/20260804_148_structural_view_dedup.md)):**
+executes the operator's ruling on the decisions `_145` §5 filed and `_146` §3
+confirmed. Titanic's catalog **60 → 58**.
+
+**Ruling 1 — `TE Signs` stands, no code change.** Swept `docs/`,
+`.agent/skills/`, `patterns/examples/`, `CaptainPad/`, the engine libs: `TE Sign`
+/ `TE Sign 2` appear ONLY as the two 74-px base groups, `TE Signs` (148) is the
+fixture-type view everywhere, and nothing promises a literal `TE Sign`
+selectable. No stragglers; the base group is NOT renamed.
+
+**Rulings 2+3 — one rule, in the shared path.** Implemented once in
+`lib/view_catalog.js` `appendAutoViews()` (the function `engine.js` calls and the
+three tools' `buildViewCatalog()` composes), so engine↔harness parity stays
+STRUCTURAL. `deriveAutoViews` logic untouched — it stays a pure derivation; the
+"is this derived name redundant against the authored catalog" decision belongs at
+registration. Membership resolved by the SAME two rules `buildMaskRegistry` uses,
+so byte-identical here == byte-identical `members[]` there.
+
+**Scoped to the STRUCTURAL family, and that is a measured refusal of the global
+rule** — the operator's own ruling 2 keeps `@BAR`, which is byte-identical to
+`Hull Canvas`. A global rule would also retire: typed `@BAR`/`@PAR`/`@VINTAGE`/
+`Strands`/`TE Signs` on titanic (plus @-views on all five other scenes), **ten of
+eighteen** `CTRL_n` on titanic (`CTRL_1`≡`Left Front Wall`, …), and studiodj's
+`FRONT` (≡ group `Front`). Structural band names are the one family that is a
+pure generated token with no operator provenance. Rule is still membership-driven
+and scene-agnostic — fires wherever a structural band has an authored twin.
+
+**Per-scene, measured not assumed** (auto-views before → after):
+titanic **29 → 27** (`WALLS` 360 ≡ authored `Hull Canvas`; `AUDITORIUM` 16 ≡
+`Auditoriums`); test_bench 9→9 · studio_top_loft 5→5 · studiodj 11→11 ·
+studio 9→9 · summer_camp_dome 6→6 · summer_camp_logsville 10→10 — **titanic is
+the only scene in the repo carrying a structural auto-view at all.** New parity
+test pins test_bench + studio_top_loft against an un-deduped `deriveAutoViews`
+run so a future scene edit cannot silently shrink them.
+
+**Never silent (codex P0).** Each drop is appended to the returned `warnings`
+array — which all FOUR callers already print to **stderr** — naming the view, its
+px count and its surviving twin. Routing through `warnings` rather than a new
+field means a future caller cannot swallow it by omission. Structured
+`deduped:[{name,family,twin,pixels}]` also returned, for tests.
+
+**Verified.** Engine sequence in-process (no boot) vs shared catalog:
+**58 = 58 deep-equal**, names AND `{bit,word}`. `WALLS`/`AUDITORIUM` DO NOT
+RESOLVE and `inView()` on either is a loud `COMPILE_FAIL` naming it; `Hull Canvas`
+**360** and `Auditoriums` **16** still fold. Both offline harnesses agree:
+audio LIT `Hull Canvas` 360 · `Auditoriums` 16 · `LEFT` **482** · `RIGHT` **482** ·
+`Strands` **320** · `TE Signs` **148** · `FRONT` **388** (unchanged), and the two
+retired names exit 2; derived `TOTAL_BRI/255` gives the identical seven.
+`run_param_truth --pattern examples/inview_demo` → **compile errors 0**.
+
+**Byte-stability.** 2 patterns × 2 models × both harnesses: all **8 MD5s
+IDENTICAL** to `_147`'s (and the four audio ones to `_140`'s) — baseline intact
+across four threads. stdout unchanged (grep for `auto-view`/`WALLS`/
+`byte-identical` over every captured stdout → nothing); titanic **stderr 0 → 404 B**
+(the two notices), test_bench stderr unchanged at 184 B. `gen_variations`
+(`stdio:'inherit'`, parses nothing) untouched.
+
+**Tests.** `tests/tools` **25/25** (23 +2 mine) · `tests/mixer/**` **511/511**
+(510 +1 mine) · `tests/patterns` **95/95** (exact) · `simulation && npm test`
+**1773/1766/7** (exact baseline) · `scene_model_parity titanic` and `--strict`
+**PASS** (0/0/1 info) · CaptainPad picker **32/32**. `marsin_engine && npm test`
+run 1 **2656/2649/7**, run 2 **2660/2653/7** — run 2 = `_147`'s 2657 + my 3, and
+run 1 sits inside the ±3 file-abort variance `_147` documented; the **7 fails are
+identical in both runs** and are the documented environmental set (5×
+`audio_capture`, `effects_v2_mode_page_layout` file-level, OSC `EADDRINUSE`).
+Zero view-related failures. `mixer_state.yaml` residue byte-identical before/after
+(`36c7f448…`) — reported, never reverted. `security_check.py --all` → **6**, the
+exact pre-existing untracked `.scene_backups/studiodj/**` baseline.
+`node --check` clean on all nine touched JS/MJS files.
+
+**Docs/UI.** `docs/MARSIN_ENGINE_PATTERNS.md` §7.3.2 loses both rows, gains a
+"there are no structural views on titanic" paragraph and both names in "Names
+that do NOT exist"; `@BAR` documented as fixture-capability targeting.
+`.agent/skills/highdef_pattern_generation.md` §3.1 + §8.2/§8.3 (`60 → 58`).
+`docs/COLOR_THEORY.md` needed NO change (verified — it references only the
+surviving `Auditoriums`). CaptainPad comments only: **the STRUCTURE family stays
+in the classifier** because another scene may still send one. No model or scene
+artifact regenerated — `groupBits` and the 7 composites are byte-untouched.
+
+**Left for the operator:** ten `CTRL_n` views remain byte-identical to a single
+base group (kept — a controller is the strike/debug unit); `dev_test_bench` still
+fails to load on a pre-existing, unrelated stale-`groupBits` error.
+
+**Compliance.** No git operation of any kind. No engine/sim boot, no server, no
+port bound; the operator's stack kept 6966–6972, 5568, 8081, 10000. Scratch in
+`~/tmp/_148`.

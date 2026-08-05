@@ -5,9 +5,10 @@
 // Context (report 20260724_7 §T1): the engine's
 // GET /model/view-selection-options returns a `namedViews` array — every mask
 // the MaskRegistry interns (base pixel groups + composites + the whole Tier-A
-// auto-view catalog: PORT/STARBOARD, WALLS/DECKS/CHIMNEYS, @PAR/@BAR/…,
-// BAND_*, `<base>_BOTH` pairs, CTRL_<n>) with its kind + live memberCount.
-// CaptainPad previously ignored the field entirely, so ~60 views were
+// auto-view catalog: LEFT/RIGHT/FRONT/BACK, WALLS/DECKS/CHIMNEYS/AUDITORIUM,
+// Strands / TE Signs / @PAR / @BAR / @VINTAGE, CTRL_<n>) with its kind + live
+// memberCount.
+// CaptainPad previously ignored the field entirely, so ~58 views were
 // invisible on the iPad. This module parses that array, classifies each entry
 // into an operator-readable family, builds the sectioned/filtered picker
 // model, and resolves the viewSelection each entry applies as.
@@ -40,9 +41,7 @@ export interface ViewSelectionValue {
 export type ViewFamilyKey =
   | 'sides'
   | 'structure'
-  | 'bands'
   | 'types'
-  | 'pairs'
   | 'controllers'
   | 'groups'
   | 'composites'
@@ -51,9 +50,7 @@ export type ViewFamilyKey =
 export const VIEW_FAMILY_ORDER: ViewFamilyKey[] = [
   'sides',
   'structure',
-  'bands',
   'types',
-  'pairs',
   'controllers',
   'groups',
   'composites',
@@ -64,9 +61,7 @@ export const VIEW_FAMILY_ORDER: ViewFamilyKey[] = [
 export const VIEW_FAMILY_TITLES: Record<ViewFamilyKey, string> = {
   sides: 'SIDES & ENDS',
   structure: 'STRUCTURE',
-  bands: 'HEIGHT BANDS',
   types: 'FIXTURE TYPES',
-  pairs: 'PAIRS (BOTH SIDES)',
   controllers: 'CONTROLLERS',
   groups: 'GROUPS',
   composites: 'COMPOSITES',
@@ -75,10 +70,27 @@ export const VIEW_FAMILY_TITLES: Record<ViewFamilyKey, string> = {
 
 // ── Name buckets ─────────────────────────────────────────────────────────────
 // The auto-view generator (marsin_engine/lib/auto_views.js) mints these exact
-// whole-ship names; PORT/STARBOARD/FORE/AFT + the LED LEFT/RIGHT composites are
-// the ship's sides & ends, and WALLS/DECKS/CHIMNEYS/AUDITORIUM its structure.
-const SIDE_NAMES = new Set(['PORT', 'STARBOARD', 'FORE', 'AFT', 'LEFT', 'RIGHT', 'BOW', 'STERN']);
+// whole-ship names; LEFT/RIGHT (exhaustive halves) + FRONT/BACK are the ship's
+// sides & ends, and WALLS/DECKS/CHIMNEYS/AUDITORIUM its structure.
+//
+// The HEIGHT BANDS (BAND_*) and PAIRS (`<base>_BOTH`) families were removed
+// from the generator by operator ruling (report 20260804_145), along with
+// PORT/STARBOARD and FORE/AFT — no section exists for them any more. An older
+// engine that still emits those names lands them in OTHER VIEWS, which is the
+// honest answer (they are not a family this build knows).
+//
+// STRUCTURE is scene-dependent. On TITANIC the engine sends none: `WALLS`
+// was byte-identical to the authored `Hull Canvas` and `AUDITORIUM` to
+// `Auditoriums`, so both were retired at registration by operator ruling
+// (report 20260804_148) — the picker shows the authored names instead, and
+// the STRUCTURE section simply has no entries there. A scene whose
+// structural band has no byte-identical authored twin still sends it, so the
+// family stays.
+const SIDE_NAMES = new Set(['LEFT', 'RIGHT', 'FRONT', 'BACK']);
 const STRUCTURE_NAMES = new Set(['WALLS', 'DECKS', 'CHIMNEYS', 'AUDITORIUM']);
+// Fixture-type views whose operator-facing name has no '@' prefix. Mirrors
+// TYPE_VIEW_NAMES in marsin_engine/lib/auto_views.js — keep the two in sync.
+const TYPE_NAMES = new Set(['Strands', 'TE Signs']);
 
 // ── Validation ───────────────────────────────────────────────────────────────
 
@@ -100,14 +112,12 @@ export function isValidNamedView(v: unknown): v is NamedView {
 // ── Classification ───────────────────────────────────────────────────────────
 
 // Bucket a named view into a display family. Name patterns win over `kind` so
-// an auto-view pixelSet like BAND_LOW / @PAR / CTRL_1 lands in its semantic
+// an auto-view pixelSet like Strands / @PAR / CTRL_1 lands in its semantic
 // family; the remaining group/composite masks fall back on `kind`.
 export function classifyNamedView(view: NamedView): ViewFamilyKey {
   const name = view.name;
   if (/^CTRL_/.test(name)) return 'controllers';
-  if (name.startsWith('@')) return 'types';
-  if (/^BAND_/.test(name)) return 'bands';
-  if (/_BOTH$/.test(name)) return 'pairs';
+  if (name.startsWith('@') || TYPE_NAMES.has(name)) return 'types';
   if (SIDE_NAMES.has(name)) return 'sides';
   if (STRUCTURE_NAMES.has(name)) return 'structure';
   if (view.kind === 'group') return 'groups';
@@ -168,14 +178,14 @@ export interface ViewPickerModel {
   query: string;
 }
 
-// Stable, predictable ordering within a section. HEIGHT BANDS get an explicit
-// LOW→MID→HIGH order (alphabetical would read HIGH/LOW/MID); everything else is
-// alphabetical.
-const BAND_RANK: Record<string, number> = { BAND_LOW: 0, BAND_MID: 1, BAND_HIGH: 2 };
+// Stable, predictable ordering within a section. SIDES & ENDS get an explicit
+// LEFT→RIGHT→FRONT→BACK order (alphabetical would read BACK/FRONT/LEFT/RIGHT
+// and split the two natural pairs); everything else is alphabetical.
+const SIDE_RANK: Record<string, number> = { LEFT: 0, RIGHT: 1, FRONT: 2, BACK: 3 };
 
 function compareNamedViews(a: NamedView, b: NamedView): number {
-  const ra = BAND_RANK[a.name];
-  const rb = BAND_RANK[b.name];
+  const ra = SIDE_RANK[a.name];
+  const rb = SIDE_RANK[b.name];
   if (ra !== undefined && rb !== undefined) return ra - rb;
   return a.name.localeCompare(b.name);
 }

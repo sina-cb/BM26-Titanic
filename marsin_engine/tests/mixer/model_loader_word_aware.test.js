@@ -4,7 +4,7 @@
 // tools/param_truth/render_context.js. It used to accumulate ONE flat
 // `reservedMask` across every viewMasks entry, ignoring each entry's
 // `word`. Word 0 (`viewMask`) and word 1 (`viewMaskHi`) are INDEPENDENT
-// bit spaces (lib/view_word.js), so once titanic pinned 10 semantic views
+// bit spaces (lib/view_word.js), so once titanic pinned its semantic views
 // into word 1 at bits 0x1..0x200 the loader reported a phantom collision:
 //
 //   THROW: groupBits['Left Back Wall'] reuses bit 0x10
@@ -31,10 +31,13 @@ test('model_loader: the REAL titanic model loads (word-1 presets are not word-0 
 
   const groupNames = Object.keys(model.groupBits);
   assert.equal(groupNames.length, 24, 'titanic declares 24 base group bits');
-  assert.equal(model.viewMasks.length, 17, 'titanic declares 17 custom view presets');
-  // The named-mask vocabulary the sidecar contributes: 24 base + 17 custom.
-  assert.ok(groupNames.length + model.viewMasks.length >= 41,
-    `expected >= 41 named masks, got ${groupNames.length + model.viewMasks.length}`);
+  // Seven semantic composites since the catalog cleanup (report _145) —
+  // the ten Left */Right * variants were removed in favour of the
+  // exhaustive LEFT/RIGHT auto-views.
+  assert.equal(model.viewMasks.length, 7, 'titanic declares 7 custom view presets');
+  // The named-mask vocabulary the sidecar contributes: 24 base + 7 custom.
+  assert.equal(groupNames.length + model.viewMasks.length, 31,
+    `expected 31 sidecar-declared named masks, got ${groupNames.length + model.viewMasks.length}`);
   assert.equal(model.pixelCount, model.pixels.length);
   assert.equal(model.metaArray.length, model.pixels.length);
 });

@@ -2,7 +2,7 @@ master: 1
 channels:
   - id: ch_1785801995942_0
     name: New Layer
-    pattern: 11_bioluminescence
+    pattern: 00_golden_hour_wash
     mode: blend_screen
     fader: 1
     enabled: true
@@ -13,15 +13,15 @@ channels:
     localControls: {}
     playlist:
       name: default
-      activeEntryId: e_default_20_11_bioluminescence
-      cursor: 20
+      activeEntryId: e_default_0_00_golden_hour_wash
+      cursor: 0
       autopilot:
         active: false
         delay_s: 30
         shuffle: false
     viewSelection:
-      type: all
-      target: null
+      type: viewMask
+      target: Stacks
       invert: false
     faderMax: 1
     color: null

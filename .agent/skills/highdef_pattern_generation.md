@@ -200,13 +200,44 @@ nothing double-assigned.
 | `Organs` | 40 | 40 single-pixel pars (stacks + auditoriums) | RGB + W + Amber + UV |
 | `Identity` | 148 | 2 × 74-px TE sign | RGBW |
 
-Halves and subdivisions, all real view names: `Left Hull` · `Right Hull` ·
-`Left Silhouette` · `Right Silhouette` · `Left Jewelry` · `Right Jewelry` ·
-`Left Organs` · `Right Organs` · `Stacks` (24, the funnels only) ·
-`Left Stacks` · `Right Stacks` · `Auditoriums` (16).
+Those five plus `Stacks` (24, the funnels only) and `Auditoriums` (16) are the
+**seven** authored semantic composites — the complete list. `Organs` =
+`Stacks` + `Auditoriums`. Reach for `Stacks` when you mean the funnels;
+`Organs` when you mean every par.
 
-`Organs` = `Stacks` + `Auditoriums`. Reach for `Stacks` when you mean the
-funnels; `Organs` when you mean every par.
+**Halves: use `LEFT` and `RIGHT`.** They are exhaustive whole-ship halves —
+**482 px each**, disjoint, union 964 — assigned from each pixel's world X, and
+each half carries its own wall bars, rope strands, Vintage rails, stacks,
+auditorium pars and one TE sign. Half of one instrument is a conjunction:
+`if (inView("Silhouette") && inView("LEFT"))`.
+
+The ends are **`FRONT`** and **`BACK`** (388 px each).
+
+**These names no longer exist and are hard compile errors** naming the view —
+never an empty selection, never a fallback: `Left Hull` · `Right Hull` ·
+`Left Silhouette` · `Right Silhouette` · `Left Jewelry` · `Right Jewelry` ·
+`Left Organs` · `Right Organs` · `Left Stacks` · `Right Stacks` ·
+`Left Identity` · `Right Identity` · `PORT` · `STARBOARD` · `FORE` · `AFT` ·
+`BAND_LOW` · `BAND_MID` · `BAND_HIGH` · every `<base>_BOTH` name · `@RAW` ·
+`WALLS` · `AUDITORIUM`.
+**Exact spelling is mandatory** — `inView()` matches the authored string
+verbatim.
+
+Derived (bit-free) views you can also target by name: `LEFT` · `RIGHT` ·
+`FRONT` · `BACK` · `Strands` (320, the rope runs) · `TE Signs` (148, both
+signs) · `@BAR` (360) · `@PAR` (40) · `@VINTAGE` (96) · `CTRL_1`…`CTRL_18`.
+When you mean both signs **artistically**, keep using the semantic
+`Identity` — `TE Signs` is the operator/mixer targeting handle for the same
+148 pixels (as `Strands` is for `Silhouette`'s 320, and `@BAR` is
+fixture-**capability** targeting over `Hull Canvas`'s 360).
+
+**Titanic has no structural views.** The generator's
+`WALLS`/`DECKS`/`CHIMNEYS`/`AUDITORIUM` family came out byte-identical to
+authored composites here — `WALLS` ≡ `Hull Canvas` (360), `AUDITORIUM` ≡
+`Auditoriums` (16) — so both were removed by operator ruling (report
+`_148`) and the authored names are canonical. `DECKS`/`CHIMNEYS` never
+existed on titanic (no `Deck`/`Chimney` group token). On a scene whose
+structural band has no byte-identical authored twin the derived view stays.
 
 The **24 finer base groups**, exact spelling:
 
@@ -224,13 +255,16 @@ literally and the spelling is irregular: **`Right SmokeStacks` is plural** while
 `Left SmokeStack` is singular; the rope strand groups use **underscores**
 (`Left_Front_Left`); the signs are `TE Sign` / `TE Sign 2`; `Left Auditorium` /
 `Right Auditorium` are singular *base groups* while the composite is
-`Auditoriums`. Source of truth for all 41 names:
-`MARSIN_ENGINE_PATTERNS.md` §7.3.1 →
-[`simulation/scenes/titanic/views.yaml`](../../simulation/scenes/titanic/views.yaml).
+`Auditoriums`. Source of truth for the 31 authored names (24 base groups +
+7 composites): `MARSIN_ENGINE_PATTERNS.md` §7.3.1 →
+[`simulation/scenes/titanic/views.yaml`](../../simulation/scenes/titanic/views.yaml);
+for the derived ones, §7.3.2 →
+[`marsin_engine/lib/auto_views.js`](../../marsin_engine/lib/auto_views.js).
 
-Names that do **not** exist (each a hard compile error, not an empty
-selection): `All Bars`, `All Ropes`, `All Vintage Lights`, `All TE Signs`,
-`Left Identity`, `Right Identity`.
+Names that do **not** exist (each a hard compile error naming the view, not an
+empty selection): `All Bars`, `All Ropes`, `All Vintage Lights`,
+`All TE Signs`, `Left Identity`, `Right Identity` — plus everything in the
+removed list above.
 
 ### 3.2 Never hard-code a view's bit or word
 
@@ -248,7 +282,7 @@ export function render3D(index, x, y, z) {
 ```
 
 `FIX_RAW_LED` (1) · `FIX_PAR` (2) · `FIX_VINTAGE_6` (3) · `FIX_BAR_18` (4) ·
-`FIX_HAZE` (5) · `FIX_FOG` (6), from
+`FIX_HAZE` (5) · `FIX_FOG` (6) · `FIX_TE_SIGN` (7), from
 `marsin_engine/lib/fixture_type_constants.js`. A `FIX_*` the loaded model
 cannot satisfy **fails the compile**. Choose: `inView("…")` for *where on the
 ship*, `FIX_*` for *what kind of light this is*.
@@ -595,6 +629,16 @@ node tools/pattern_audio_harness.mjs --pattern patterns/NN_name.js \
 > test. Pinned by
 > `tests/tools/harness_inview_injection.test.mjs`.
 >
+> **Catalog parity (report `_147`).** The table those names resolve against is
+> now built by the shared `lib/view_catalog.js` primitives `engine.js` itself
+> calls, so the DERIVED (Tier-A) auto-views of §3.1 are here too — titanic
+> resolves **58** names offline, not the 31 a hand-built table used to hold.
+> Measured through this harness on `--model titanic`: `inView("LEFT")` **482**,
+> `inView("RIGHT")` **482** (disjoint, union 964), `inView("FRONT")` **388**,
+> `inView("Strands")` **320**, `inView("TE Signs")` **148**,
+> `inView("Hull Canvas")` **360**. Before `_147` every one of those derived
+> names was a `COMPILE_FAIL` offline while compiling fine on the rig.
+>
 > This replaces the earlier "harness cannot compile inView patterns" note.
 > §8.1 param truth is still the gate for control honesty; it is no longer the
 > *only* engine-parity tool. Never work around targeting by rewriting
@@ -617,7 +661,7 @@ node tools/pattern_derived_harness.mjs --pattern patterns/NN_name.js \
 > the same three source-injection passes run in the engine's order:
 > `inView("Authored Name")` folding → `MASK_*` → `FIX_*`. The per-pixel meta is
 > the loader's full 7-lane ABI, so `fixtureType`, `pixelLocalIndex` and the
-> high view word (`viewMaskHi` — where all 17 titanic composite views live)
+> high view word (`viewMaskHi` — where all seven titanic composite views live)
 > read true here.
 >
 > Measured on `--model titanic`: `inView("Hull Canvas")` lights **360** pixels,
@@ -629,6 +673,13 @@ node tools/pattern_derived_harness.mjs --pattern patterns/NN_name.js \
 > Known views for this model: …` at exit 2, and a model that exists but does
 > not resolve is a named `MODEL_FAIL` at exit 2 — never a silent render. Pinned
 > by `tests/tools/derived_harness_inview_injection.test.mjs`.
+>
+> **Catalog parity (report `_147`).** Same shared `lib/view_catalog.js` table as
+> §8.2, so the DERIVED auto-views resolve here too — titanic **58** names.
+> Measured through this harness (`TOTAL_BRI / 255` = member count):
+> `inView("LEFT")` **482**, `inView("RIGHT")` **482**, `inView("FRONT")` **388**,
+> `inView("Strands")` **320**, `inView("TE Signs")` **148**,
+> `inView("Hull Canvas")` **360**.
 >
 > Before this the harness bare-imported the raw model (every pixel `vMask: 0`,
 > no sidecar presets) and drove `lib/marsin_wasm_runtime.js`, which has no

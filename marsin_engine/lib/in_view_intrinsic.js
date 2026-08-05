@@ -1,6 +1,6 @@
 // in_view_intrinsic.js — compile-time `inView("Name")` membership fold.
 //
-// A pattern author may write `inView("PORT")` (or `inView('Bow')`) to test
+// A pattern author may write `inView("LEFT")` (or `inView('Hull Canvas')`) to test
 // whether the pixel currently being rendered belongs to a named in-VM
 // view, without hand-managing the MASK_* constant convention or knowing
 // which word (viewMask / viewMaskHi) the view's bit lives in. This module

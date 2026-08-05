@@ -25,8 +25,8 @@ import { WasmHost } from '../../lib/wasm_host.js';
 // ── Low-word fold ──────────────────────────────────────────────────
 
 test('inView: low-word view folds to ((viewMask & <bit>) != 0)', () => {
-  const table = { PORT: { bit: 0x100, word: 0 } };
-  const out = injectInViewIntrinsic('if (inView("PORT")) { rgb(1,0,0); }', table);
+  const table = { LEFT: { bit: 0x100, word: 0 } };
+  const out = injectInViewIntrinsic('if (inView("LEFT")) { rgb(1,0,0); }', table);
   assert.match(out, /\(\(viewMask & 256\) != 0\)/);
   assert.doesNotMatch(out, /viewMaskHi/);
   assert.doesNotMatch(out, /inView/); // the call site is fully folded away
@@ -58,11 +58,11 @@ test('inView: high-word view folds to ((viewMaskHi & <inlined literal>) != 0)', 
 // ── Unknown name -> loud throw listing known views ─────────────────
 
 test('inView: unknown name throws loudly and lists known views', () => {
-  const table = { PORT: { bit: 1, word: 0 }, STARBOARD: { bit: 2, word: 0 } };
+  const table = { LEFT: { bit: 1, word: 0 }, RIGHT: { bit: 2, word: 0 } };
   assert.throws(
-    () => injectInViewIntrinsic('inView("BOW");', table),
-    (err) => /unknown view\(s\) via inView\(\): BOW/.test(err.message) &&
-             /PORT/.test(err.message) && /STARBOARD/.test(err.message)
+    () => injectInViewIntrinsic('inView("PORT");', table),
+    (err) => /unknown view\(s\) via inView\(\): PORT/.test(err.message) &&
+             /LEFT/.test(err.message) && /RIGHT/.test(err.message)
   );
 });
 
@@ -77,31 +77,31 @@ test('inView: empty table — any name is unknown (none known)', () => {
 
 test('inView: source with no inView() call is returned byte-identical', () => {
   const src = 'export function render(i){ rgb(1,0,0); }';
-  assert.equal(injectInViewIntrinsic(src, { PORT: { bit: 1, word: 0 } }), src);
+  assert.equal(injectInViewIntrinsic(src, { LEFT: { bit: 1, word: 0 } }), src);
 });
 
 test('inView: a commented-out inView() neither folds nor fails', () => {
   const src = '// inView("UNKNOWN") in a comment\nrgb(0,0,0);';
   // UNKNOWN is not a real call site (comment-stripped before scan), so no
   // throw and the comment text is left intact.
-  const out = injectInViewIntrinsic(src, { PORT: { bit: 1, word: 0 } });
+  const out = injectInViewIntrinsic(src, { LEFT: { bit: 1, word: 0 } });
   assert.equal(out, src);
 });
 
 // ── Bit-free view: loud without a promoter ─────────────────────────
 
 test('inView: bit-free view with NO promoter throws loudly (never silent)', () => {
-  const table = { PORT: { bit: 0, word: 0 } }; // Tier-A, no in-VM bit
+  const table = { LEFT: { bit: 0, word: 0 } }; // Tier-A, no in-VM bit
   assert.throws(
-    () => injectInViewIntrinsic('inView("PORT");', table, null),
+    () => injectInViewIntrinsic('inView("LEFT");', table, null),
     /bit-free \(host-only\) view with no in-VM bit/
   );
 });
 
 test('inView: a promoter returning an invalid bit is rejected (no silent fold)', () => {
-  const table = { PORT: { bit: 0, word: 0 } };
+  const table = { LEFT: { bit: 0, word: 0 } };
   assert.throws(
-    () => injectInViewIntrinsic('inView("PORT");', table, () => ({ bit: 0, word: 0 })),
+    () => injectInViewIntrinsic('inView("LEFT");', table, () => ({ bit: 0, word: 0 })),
     /invalid \{bit, word\}/
   );
 });
@@ -109,10 +109,10 @@ test('inView: a promoter returning an invalid bit is rejected (no silent fold)',
 // ── Bit-free view: folds via promoter; promoter resolves once ──────
 
 test('inView: bit-free view folds via the promoter, promoting exactly once', () => {
-  const table = { PORT: { bit: 0, word: 0 } };
+  const table = { LEFT: { bit: 0, word: 0 } };
   let calls = 0;
   const promote = (name) => { calls++; return { bit: 0x80, word: 0 }; };
-  const out = injectInViewIntrinsic('a = inView("PORT"); b = inView("PORT");', table, promote);
+  const out = injectInViewIntrinsic('a = inView("LEFT"); b = inView("LEFT");', table, promote);
   assert.equal(calls, 1, 'a view referenced twice must promote exactly once');
   assert.match(out, /a = \(\(viewMask & 128\) != 0\);/);
   assert.match(out, /b = \(\(viewMask & 128\) != 0\);/);
@@ -191,8 +191,8 @@ test('createBitFreeViewPromoter: a name with no member entry throws (cannot loca
 // ── END-TO-END through the VENDORED WASM ───────────────────────────
 
 test('e2e: inView() selects EXACTLY the low-word view through the vendored WASM', async () => {
-  // 5 pixels. Low-word view PORT = bit 0x100 on pixels [0,1]. The demo
-  // pattern lights inView("PORT") red; everything else off.
+  // 5 pixels. Low-word view LEFT = bit 0x100 on pixels [0,1]. The demo
+  // pattern lights inView("LEFT") red; everything else off.
   const host = new WasmHost();
   await host.init(5);
   try {
@@ -202,10 +202,10 @@ test('e2e: inView() selects EXACTLY the low-word view through the vendored WASM'
       { viewMask: BIT }, { viewMask: BIT },
       { viewMask: 0 }, { viewMask: 0 }, { viewMask: 0 },
     ]);
-    host.setViewTable({ PORT: { bit: BIT, word: 0 } });
+    host.setViewTable({ LEFT: { bit: BIT, word: 0 } });
 
     const src = 'export function render3D(index, x, y, z) {\n' +
-      '  if (inView("PORT")) { rgb(1,0,0); } else { rgb(0,0,0); }\n}';
+      '  if (inView("LEFT")) { rgb(1,0,0); } else { rgb(0,0,0); }\n}';
     const compiled = host.compile(src);
     assert.equal(compiled.ok, true, compiled.error);
     host.beginFrame(compiled.handle, 0);

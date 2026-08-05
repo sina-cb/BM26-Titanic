@@ -571,39 +571,40 @@ Source of truth:
 exported to
 [`marsin_engine/models/titanic.viewmasks.js`](../marsin_engine/models/titanic.viewmasks.js),
 which the engine validates against the loaded model and fails loudly on drift.
-**41 names** are `inView()`-able: 17 composite views plus the 24 base groups.
-Names below are exact — `inView()` matches the authored string verbatim.
+**31 names** are `inView()`-able from the scene registry: **7** composite views
+plus the 24 base groups — and on top of those the engine derives the bit-free
+auto-views in §7.3.2, which `inView()` resolves the same way. Names below are
+exact — `inView()` matches the authored string verbatim.
 
-**The 17 composite views** — this is the layer to reach for first, because it
+**The seven composite views** — this is the layer to reach for first, because it
 is the one that maps onto the five instruments in
 [`COLOR_THEORY.md`](COLOR_THEORY.md) §2:
 
 | View | Pixels | Covers |
 |---|---:|---|
 | `Hull Canvas` | 360 | all four wall groups |
-| `Left Hull` | 180 | Left Front + Left Back Wall |
-| `Right Hull` | 180 | Right Front + Right Back Wall |
 | `Silhouette` | 320 | all eight rope strands |
-| `Left Silhouette` | 160 | the four left strands |
-| `Right Silhouette` | 160 | the four right strands |
 | `Jewelry` | 96 | all four Vintage rail groups |
-| `Left Jewelry` | 48 | Left Front + Left Back Rails |
-| `Right Jewelry` | 48 | Right Front + Right Back Rails |
 | `Organs` | 40 | all pars — stacks **and** auditoriums |
-| `Left Organs` | 20 | left stacks + Left Auditorium |
-| `Right Organs` | 20 | right stacks + Right Auditorium |
 | `Identity` | 148 | both TE signs |
 | `Stacks` | 24 | the four stack structures only |
-| `Left Stacks` | 12 | Left SmokeStack + Left Small SmokeStack |
-| `Right Stacks` | 12 | Right SmokeStacks + Right Small SmokeStack |
 | `Auditoriums` | 16 | Left + Right Auditorium |
 
-Counts verified by summing the model's per-group pixel membership; they total
-the ship exactly (360 + 320 + 96 + 40 + 148 = 964).
+Counts verified by summing the model's per-group pixel membership; the five
+instruments total the ship exactly (360 + 320 + 96 + 40 + 148 = 964).
 
 Note that `Organs` (40) = `Stacks` (24) + `Auditoriums` (16) — so `Organs` is
 the whole par instrument, and `Stacks` is the stacks-only subset. Reach for
 `Stacks` when you mean the funnels; `Organs` when you mean every par.
+
+**There are no `Left *` / `Right *` composites.** The ten of them
+(`Left Hull`, `Right Hull`, `Left Silhouette`, `Right Silhouette`,
+`Left Jewelry`, `Right Jewelry`, `Left Organs`, `Right Organs`, `Left Stacks`,
+`Right Stacks`) were **removed** by operator ruling (report `_145`). When you
+mean a half of the ship, use the exhaustive **`LEFT`** / **`RIGHT`** views
+below — they cover 482 pixels each, every instrument included. Combine them
+with an instrument view when you want a half of one instrument:
+`if (inView("Silhouette") && inView("LEFT"))`.
 
 **The 24 base group views** (finer-grained, unchanged by this revision):
 
@@ -625,8 +626,8 @@ the sign groups are `TE Sign` and `TE Sign 2`, and `Left Auditorium` /
 
 **Word placement** (an implementation detail you should not need, but which
 explains the generated code): **the 24 base groups live in the low word** and
-fold to `((viewMask & <bit>) != 0)`; **all 17 composite views live in the high
-word** and fold to `((viewMaskHi & <literal>) != 0)`.
+fold to `((viewMask & <bit>) != 0)`; **all seven composite views live in the
+high word** and fold to `((viewMaskHi & <literal>) != 0)`.
 
 That split is the allocator's policy, not a coincidence:
 `CUSTOM_VIEW_WORD_ORDER = [1, 0]` in
@@ -644,10 +645,27 @@ for instance, has already moved from word 0 bit `0x40000` to word 1 bit
 `0x400`. Any pattern that had hard-coded the old value would now be silently
 testing the wrong pixels; `inView("Hull Canvas")` simply recompiles correctly.
 
-**Names that do NOT exist** — these are hard compile errors, not empty
-selections: `All Bars`, `All Ropes`, `All Vintage Lights`, `All TE Signs`,
-`Left Identity`, `Right Identity`. Use `Hull Canvas`, `Silhouette`, `Jewelry`,
-`Identity` and the `Left */Right *` forms instead.
+**Names that do NOT exist** — these are hard compile errors naming the view,
+not empty selections:
+
+- `All Bars`, `All Ropes`, `All Vintage Lights`, `All TE Signs` → use
+  `Hull Canvas`, `Silhouette` (or `Strands`), `Jewelry`, `Identity` (or
+  `TE Signs`).
+- `Left Hull`, `Right Hull`, `Left Silhouette`, `Right Silhouette`,
+  `Left Jewelry`, `Right Jewelry`, `Left Organs`, `Right Organs`,
+  `Left Stacks`, `Right Stacks`, `Left Identity`, `Right Identity` → use
+  `LEFT` / `RIGHT` (optionally `&&` an instrument view).
+- `PORT`, `STARBOARD` → `LEFT`, `RIGHT`.
+- `FORE`, `AFT` → `FRONT`, `BACK`.
+- `BAND_LOW`, `BAND_MID`, `BAND_HIGH`, every `<base>_BOTH` name, `@RAW` →
+  removed outright (report `_145`); `@RAW`'s pixels are now `Strands`.
+- `WALLS`, `AUDITORIUM` → removed (report `_148`) as exact duplicates of the
+  authored `Hull Canvas` / `Auditoriums`; use those. `DECKS` and `CHIMNEYS`
+  never existed on titanic.
+
+**Exact spelling is mandatory.** `inView()` matches the authored string
+verbatim — case, spaces, underscores and all. A near-miss is a compile error,
+which is the point: there is no fuzzy match and no fallback view.
 
 > **Do not confuse the two view files.**
 > [`simulation/scenes/titanic/views.yaml`](../simulation/scenes/titanic/views.yaml)
@@ -656,6 +674,54 @@ selections: `All Bars`, `All Ropes`, `All Vintage Lights`, `All TE Signs`,
 > `simulation/scenes/titanic/pixel_map_views.yaml` is a **simulator display
 > layout** sidecar (2D operator pixel-map arrangements). It has no bearing on
 > `inView()` or on what a pattern can target.
+
+### 7.3.2 The derived auto-views on `titanic`
+
+These are minted by
+[`marsin_engine/lib/auto_views.js`](../marsin_engine/lib/auto_views.js) at model
+load from metadata the model already carries, so they can never go stale
+against the pixels. They are **Tier-A**: pure per-pixel membership, no
+`viewMask` bit spent, promoted to a bit on demand the first time an `inView()`
+touches one. They are the same list CaptainPad's view picker shows.
+
+| View | Pixels | Derived from |
+|---|---:|---|
+| `LEFT` | 482 | world **X < 0** — the whole port half, every instrument |
+| `RIGHT` | 482 | world **X > 0** — the whole starboard half |
+| `FRONT` | 388 | groups carrying a `Front` token |
+| `BACK` | 388 | groups carrying a `Back` token |
+| `Strands` | 320 | fixture role `FIX_RAW_LED` — the eight rope runs |
+| `TE Signs` | 148 | fixture role `FIX_TE_SIGN` — both signs |
+| `@BAR` | 360 | fixture role `FIX_BAR_18` |
+| `@PAR` | 40 | fixture role `FIX_PAR` |
+| `@VINTAGE` | 96 | fixture role `FIX_VINTAGE_6` |
+| `CTRL_1` … `CTRL_18` | varies | one per LED/DMX controller, for strike + debug |
+
+`LEFT` and `RIGHT` are **exhaustive and disjoint**: 482 + 482 = 964, every
+pixel in exactly one half, each half carrying its own wall bars, rope strands,
+Vintage rails, stacks, auditorium pars and one TE sign. The side comes from the
+pixel's world X — physical truth — and a `Left_`/`Right_` group token that
+disagrees with the geometry makes the model **throw at load**, never quietly
+pick a side.
+
+**`Strands` and `TE Signs` are operator/mixer targeting handles**, keyed on the
+fixture role rather than the scene's group names. When you mean both signs
+**artistically**, keep writing `inView("Identity")` — that is the semantic
+instrument view, and it is the one `COLOR_THEORY.md` §2 is written against.
+`Strands` and `Silhouette` cover the same 320 pixels for the same reason.
+`@BAR` is the same idea one level down: fixture-**capability** targeting (every
+18-cell bar), which happens to be the same 360 pixels as `Hull Canvas` today.
+
+**There are no structural views on `titanic`.** The generator's
+`WALLS`/`DECKS`/`CHIMNEYS`/`AUDITORIUM` family derives from a group-name token,
+and on this ship `WALLS` came out byte-identical to the authored `Hull Canvas`
+and `AUDITORIUM` byte-identical to `Auditoriums` — two picker rows and two
+spellings for one pixel set. Both were **removed** by operator ruling (report
+`_148`); `inView("WALLS")` and `inView("AUDITORIUM")` are now hard compile
+errors. Use **`Hull Canvas`** and **`Auditoriums`**. (`DECKS`/`CHIMNEYS` never
+existed here — titanic carries no `Deck`/`Chimney` group token.) The rule is
+membership-driven, not titanic-specific: a scene whose structural band has no
+byte-identical authored twin still gets the derived view.
 
 ### 7.4 Fixture-type constants (`FIX_*`) — when capability is the real distinction
 
@@ -669,7 +735,8 @@ if (fixtureType == FIX_PAR) { /* one big single-pixel wash source */ }
 
 Canonical roles (`lib/fixture_type_constants.js`, ids are append-only and never
 renumbered): `FIX_RAW_LED` (1), `FIX_PAR` (2), `FIX_VINTAGE_6` (3),
-`FIX_BAR_18` (4), `FIX_HAZE` (5), `FIX_FOG` (6). Only the types **present on
+`FIX_BAR_18` (4), `FIX_HAZE` (5), `FIX_FOG` (6), `FIX_TE_SIGN` (7 — both sign
+panel variants, one role). Only the types **present on
 the loaded model** are emitted, so a `FIX_*` reference the model cannot satisfy
 **fails the compile** rather than silently matching nothing.
 

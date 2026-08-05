@@ -53,7 +53,7 @@ import { handleAudioCliFlags } from './audio/capture/audio_mic_chooser.js';
 import { buildMaskConstants } from './lib/view_mask_constants.js';
 import { buildFixtureTypeIds, fixtureTypeId } from './lib/fixture_type_constants.js';
 import { ViewBitAllocator, isPowerOfTwoBit as isWordBit, MAX_WORD_BIT } from './lib/view_word.js';
-import { deriveAutoViews } from './lib/auto_views.js';
+import { appendAutoViews, buildViewTable } from './lib/view_catalog.js';
 import { createBitFreeViewPromoter } from './lib/in_view_intrinsic.js';
 import { derivePixelLocalIndices } from './lib/pixel_local_index.js';
 import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
@@ -547,24 +547,25 @@ async function loadModel(modelName, bustCache = false) {
   }
 
   // ── Auto views (Tier-A, ZERO bit cost) — whole-ship view catalog ────
-  // Generalizes the old strand-view derivation (report 20260619_1 §5):
-  // per-strand groups + LED LEFT/RIGHT (unchanged), PLUS whole-ship
-  // PORT/STARBOARD/FORE/AFT, structural WALLS/DECKS/CHIMNEYS/AUDITORIUM,
-  // typed @PAR/@BAR/@VINTAGE/@RAW, vertical BAND_LOW/MID/HIGH, symmetric
-  // <base>_BOTH composites, and per-controller CTRL_<cId> (once patched).
+  // Generalizes the old strand-view derivation (report 20260619_1 §5),
+  // trimmed to the operator's catalog (report 20260804_145): exhaustive
+  // whole-ship LEFT/RIGHT halves + FRONT/BACK ends, per-strand groups,
+  // structural WALLS/DECKS/CHIMNEYS/AUDITORIUM, typed Strands / TE Signs /
+  // @PAR / @BAR / @VINTAGE, and per-controller CTRL_<cId> (once patched).
   // Every entry rides the SAME viewMasks array the mixer's MaskRegistry
   // consumes, but with bit:0 — pure per-pixel membership, NO viewMask bit
   // consumed, so they never pressure titanic's already-heavy 28/31
   // group-bit budget. Names already owned by a base group / declared
-  // preset are skipped (the base group already provides that view).
-  const existingMaskNames = new Set([
-    ...Object.keys(groupBits),
-    ...viewMasks.map(vm => vm.name),
-  ]);
-  const autoViews = deriveAutoViews(mod.pixels, existingMaskNames);
+  // preset are skipped (the base group already provides that view), and a
+  // STRUCTURAL band whose pixels exactly equal an authored view's is retired
+  // in favour of the authored name — on titanic that is WALLS ≡ `Hull Canvas`
+  // and AUDITORIUM ≡ `Auditoriums` (operator ruling, report 20260804_148).
+  // The append sequence itself lives in lib/view_catalog.js so the offline
+  // harnesses build a BYTE-EQUIVALENT catalog from the same code instead of
+  // a hand-mirrored copy that can drift (report 20260804_147).
+  const autoViews = appendAutoViews(mod.pixels, viewMasks, groupBits);
   for (const w of autoViews.warnings) console.warn(`[Model] auto-view: ${w}`);
   if (autoViews.entries.length > 0) {
-    for (const e of autoViews.entries) viewMasks.push(e);
     const fam = autoViews.families;
     const summary = Object.entries(fam)
       .filter(([, names]) => names.length > 0)
@@ -624,14 +625,9 @@ async function loadModel(modelName, bustCache = false) {
   // unknown name fails loudly and a bit-free (Tier-A) view is recognized as
   // PROMOTABLE (bit:0) rather than unknown. Base groups are word-0 views;
   // presets/auto-views carry their own bit+word. A later view name wins on a
-  // (legitimately impossible — names are unique) collision.
-  const viewTable = {};
-  for (const [group, bit] of Object.entries(groupBits)) {
-    viewTable[group] = { bit, word: 0 };
-  }
-  for (const vm of viewMasks) {
-    viewTable[vm.name] = { bit: Number.isInteger(vm.bit) ? vm.bit : 0, word: vm.word === 1 ? 1 : 0 };
-  }
+  // (legitimately impossible — names are unique) collision. Built by the
+  // shared lib/view_catalog.js primitive the offline harnesses also use.
+  const viewTable = buildViewTable({ groupBits, viewMasks });
 
   return {
     pixelCount: mod.pixelCount, pixels: mod.pixels, specialEffects, viewMasks, groupBits,

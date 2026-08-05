@@ -13,11 +13,16 @@
 // loadModelForGauge(), so all three injection passes run in the engine's order
 // (inView folding -> MASK_* -> FIX_*) against the engine's own view table.
 //
-// These tests pin the three things that must not silently regress:
+// These tests pin the four things that must not silently regress:
 //   1. an inView() pattern COMPILES and renders the view's real pixel set,
 //   2. two disjoint views stay disjoint (the fold reads the right word/bit),
 //   3. an unknown view name is a LOUD compile failure naming the view
-//      (codex P0 — never a silent constant-false test).
+//      (codex P0 — never a silent constant-false test),
+//   4. the Tier-A AUTO-views (`LEFT`, `Strands`, …) resolve here too — they
+//      come from `deriveAutoViews`, which `loadModelForGauge()` does not call,
+//      so the harness gets them from the shared lib/view_catalog.js the engine
+//      itself uses (report _147). Before that they were a COMPILE_FAIL offline
+//      and a valid view on the rig — for names the docs actively recommend.
 //
 // Run: cd marsin_engine && node --test tests/tools/harness_inview_injection.test.mjs
 import test from 'node:test';
@@ -117,6 +122,54 @@ test('an inView() pattern still runs the --gate verdict', () => {
   assert.equal(r.code, 0);
 });
 
+// ── Tier-A auto-views (report _147) ────────────────────────────────────────
+// `LEFT` (a whole-ship half, membership by pixelIndices) and `Strands` (a
+// typed view over the LED strands) are DERIVED — they exist only after
+// deriveAutoViews runs, and they carry bit:0 until inView() promotes one on
+// demand. Expected counts are read from the shared catalog at runtime so the
+// numbers stay honest if titanic is re-authored.
+const AUTO_VIEWS = ['LEFT', 'Strands'];
+
+/** Member count of a bit-free auto-view, from the shared catalog's entry. */
+async function autoViewMemberCount(modelName, viewName) {
+  const { loadModelForGauge } = await import('../../lib/model_loader.js');
+  const { buildViewCatalog } = await import('../../lib/view_catalog.js');
+  const loaded = await loadModelForGauge(modelName);
+  buildViewCatalog(loaded);
+  const vm = loaded.viewMasks.find((v) => v.name === viewName);
+  assert.ok(vm, `model ${modelName} has no view named "${viewName}"`);
+  assert.equal(vm._autoView, true, `"${viewName}" must be a derived (Tier-A) auto-view`);
+  if (Array.isArray(vm.pixelIndices)) return vm.pixelIndices.length;
+  const groups = new Set(vm.groups);
+  return loaded.pixels.filter((p) => p && groups.has(p.group)).length;
+}
+
+for (const viewName of AUTO_VIEWS) {
+  test(`the derived auto-view "${viewName}" resolves offline and lights its members`, async () => {
+    const expected = await autoViewMemberCount('titanic', viewName);
+    assert.ok(expected > 0, `"${viewName}" must have members`);
+
+    const p = writePattern('auto_view_probe.js', `
+export function render3D(index, x, y, z) {
+  if (inView("${viewName}")) { rgb(1, 0, 0); } else { rgb(0, 0, 0); }
+}
+`);
+    const capture = path.join(TMP, 'auto_view_probe.json');
+    const r = runHarness(['--pattern', p, '--model', 'titanic', '--synth', 'silence',
+      '--frames', '4', '--gate-frames', '4', '--out', capture]);
+    assert.match(r.out, /COMPILE_OK/,
+      `inView("${viewName}") must compile offline — the auto-views are part of the ` +
+      `engine's catalog; got:\n${r.out}`);
+    assert.equal(r.code, 0);
+
+    const frame = JSON.parse(fs.readFileSync(capture, 'utf8')).frames[0];
+    const lit = frame.filter(([red, green, blue]) => red > 200 && green < 8 && blue < 8).length;
+    const anyLight = frame.filter(([red, green, blue]) => red >= 8 || green >= 8 || blue >= 8).length;
+    assert.equal(lit, expected, `inView("${viewName}") must light exactly its ${expected} members`);
+    assert.equal(anyLight, expected, 'no pixel outside the view may light');
+  });
+}
+
 test('an UNKNOWN inView() name is a loud COMPILE_FAIL naming the view', () => {
   const p = writePattern('inview_unknown.js', UNKNOWN_VIEW_PATTERN);
   const r = runHarness(['--pattern', p, '--model', 'titanic', '--synth', 'silence',
@@ -124,6 +177,12 @@ test('an UNKNOWN inView() name is a loud COMPILE_FAIL naming the view', () => {
   assert.match(r.out, /COMPILE_FAIL: Pattern references unknown view\(s\) via inView\(\): No Such View/,
     `an unknown view must fail loudly and name itself; got:\n${r.out}`);
   assert.match(r.out, /Known views for this model:/, 'the error must list the known views');
+  // The known-view list must be the FULL catalog, auto-views included — a
+  // truncated list is how the offline/engine parity gap hid for so long.
+  for (const viewName of AUTO_VIEWS) {
+    assert.ok(r.out.includes(viewName),
+      `the known-views list must name the derived view "${viewName}"; got:\n${r.out}`);
+  }
   assert.equal(r.code, 2, 'unknown view must be a non-zero (2) exit, never a silent render');
 });
 

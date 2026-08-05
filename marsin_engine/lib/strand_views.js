@@ -16,6 +16,14 @@
 // Left/Right derivation uses the GROUP-NAME PREFIX (robust to model
 // re-centring), with an x-sign fallback ONLY for strands lacking the
 // Left_/Right_ convention — and that fallback is logged loudly.
+//
+// NOTE (report 20260804_145): `lib/auto_views.js` now claims LEFT / RIGHT
+// for the EXHAUSTIVE whole-ship halves before composing this module, so on
+// a whole-ship model the strand-scoped composites below never register.
+// The side derivation — and therefore its x-sign fallback warning — is
+// SKIPPED entirely in that case: telling the operator to rename a group so
+// a composite that is not being built becomes robust is false advice, not
+// a diagnostic.
 
 // A strand is a pixel exported with type 'led' (FIX_RAW_LED). We key off
 // that so DMX fixture groups never leak into LEFT/RIGHT.
@@ -54,6 +62,13 @@ export function deriveStrandViews(pixels, existingMaskNames = new Set()) {
   const leftGroups = new Set();
   const rightGroups = new Set();
 
+  // Only derive sides when at least one composite can still register —
+  // otherwise the work (and its loud rename advice) describes a view that
+  // will not exist.
+  const wantLeft = !existingMaskNames.has('LEFT');
+  const wantRight = !existingMaskNames.has('RIGHT');
+  const deriveSides = wantLeft || wantRight;
+
   for (let i = 0; i < pixels.length; i++) {
     const px = pixels[i];
     if (!isStrandPixel(px)) continue;
@@ -62,6 +77,7 @@ export function deriveStrandViews(pixels, existingMaskNames = new Set()) {
       seenGroup.add(group);
       strandGroups.push(group);
     }
+    if (!deriveSides) continue;
     // Side: group-name prefix first; x-sign fallback (loud) otherwise.
     let side = sideFromGroupName(group);
     if (side === null) {

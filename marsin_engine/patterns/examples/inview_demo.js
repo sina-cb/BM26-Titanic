@@ -16,7 +16,8 @@
 
   This example lights the named view solid red and everything else off, so
   it renders to EXACTLY that view's pixels. Swap the literal below for any
-  view your model carries (e.g. "PORT", "@BAR", "BAND_LOW", "WALLS").
+  view your model carries (e.g. "LEFT", "FRONT", "@BAR", "Strands",
+  "Hull Canvas").
 
   NOTE: this is an EXAMPLE, not a playlist pattern — it is deliberately not
   registered in patterns/manifest.json. Point it at a view your loaded model
@@ -24,7 +25,7 @@
 */
 
 export function render3D(index, x, y, z) {
-  if (inView("PORT")) {
+  if (inView("LEFT")) {
     rgb(1, 0, 0);   // member of the named view → solid red
   } else {
     rgb(0, 0, 0);   // everything else → off

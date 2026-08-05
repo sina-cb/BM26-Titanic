@@ -487,7 +487,8 @@ if (fixtureType == FIX_PAR) { /* single-pixel wash source */ }
 
 Canonical roles (`marsin_engine/lib/fixture_type_constants.js`; ids are
 append-only and never renumbered): `FIX_RAW_LED` = 1, `FIX_PAR` = 2,
-`FIX_VINTAGE_6` = 3, `FIX_BAR_18` = 4, `FIX_HAZE` = 5, `FIX_FOG` = 6. Id `0` is
+`FIX_VINTAGE_6` = 3, `FIX_BAR_18` = 4, `FIX_HAZE` = 5, `FIX_FOG` = 6,
+`FIX_TE_SIGN` = 7. Id `0` is
 `UNTYPED` and is **not** a fallback target. Only the roles actually present on
 the loaded model are emitted, so a `FIX_*` the model does not carry **fails the
 compile**.

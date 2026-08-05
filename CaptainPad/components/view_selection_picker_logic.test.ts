@@ -5,6 +5,16 @@
 // search filtering, and the fail-loud `missing` flag when the engine payload
 // omits `namedViews`. Pure logic, no react-native — runs under vitest's
 // `components/**/*.test.ts` glob.
+//
+// Catalog vocabulary follows report 20260804_145: LEFT/RIGHT are the
+// exhaustive whole-ship halves, FRONT/BACK the ends, `Strands` / `TE Signs` /
+// `@PAR` / `@BAR` / `@VINTAGE` the fixture types. PORT/STARBOARD, FORE/AFT,
+// BAND_* and `<base>_BOTH` no longer exist anywhere in the catalog.
+//
+// The STRUCTURE cases below are CLASSIFIER tests over a synthetic payload —
+// they pin that a `WALLS`/`CHIMNEYS` row lands in STRUCTURE if an engine
+// sends one. Titanic itself sends none: report 20260804_148 retired its
+// WALLS/AUDITORIUM as exact duplicates of `Hull Canvas`/`Auditoriums`.
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -20,27 +30,25 @@ import {
 } from './view_selection_picker_logic';
 
 // A trimmed stand-in for a titanic-scale namedViews payload. Mirrors the real
-// GET /model/view-selection-options shape (verified live against test_bench):
-// base groups (kind:'group'), composites (kind:'composite'), and the Tier-A
-// auto-view pixelSets (kind:'pixelSet', bit:0).
+// GET /model/view-selection-options shape: base groups (kind:'group'),
+// composites (kind:'composite'), and the Tier-A auto-view pixelSets
+// (kind:'pixelSet', bit:0).
 function makeNamedViews(): NamedView[] {
   return [
     { name: 'ParLights', kind: 'group', bit: 1, memberCount: 4 },
     { name: 'Left_Front_Wall', kind: 'group', bit: 2, memberCount: 40 },
     { name: 'Right_Front_Wall', kind: 'group', bit: 4, memberCount: 40 },
     { name: 'ParsBars', kind: 'composite', bit: 8, memberCount: 40 },
-    { name: 'PORT', kind: 'pixelSet', bit: 0, memberCount: 560 },
-    { name: 'STARBOARD', kind: 'pixelSet', bit: 0, memberCount: 560 },
-    { name: 'LEFT', kind: 'pixelSet', bit: 0, memberCount: 35 },
-    { name: 'RIGHT', kind: 'pixelSet', bit: 0, memberCount: 45 },
-    { name: 'WALLS', kind: 'pixelSet', bit: 0, memberCount: 320 },
-    { name: 'CHIMNEYS', kind: 'pixelSet', bit: 0, memberCount: 80 },
+    { name: 'LEFT', kind: 'pixelSet', bit: 0, memberCount: 482 },
+    { name: 'RIGHT', kind: 'pixelSet', bit: 0, memberCount: 482 },
+    { name: 'FRONT', kind: 'pixelSet', bit: 0, memberCount: 388 },
+    { name: 'BACK', kind: 'pixelSet', bit: 0, memberCount: 388 },
+    { name: 'WALLS', kind: 'composite', bit: 0, memberCount: 320 },
+    { name: 'CHIMNEYS', kind: 'composite', bit: 0, memberCount: 80 },
     { name: '@PAR', kind: 'pixelSet', bit: 0, memberCount: 4 },
     { name: '@BAR', kind: 'pixelSet', bit: 0, memberCount: 36 },
-    { name: 'BAND_LOW', kind: 'pixelSet', bit: 0, memberCount: 52 },
-    { name: 'BAND_MID', kind: 'pixelSet', bit: 0, memberCount: 40 },
-    { name: 'BAND_HIGH', kind: 'pixelSet', bit: 0, memberCount: 40 },
-    { name: 'Front_Wall_BOTH', kind: 'composite', bit: 0, memberCount: 80 },
+    { name: 'Strands', kind: 'pixelSet', bit: 0, memberCount: 320 },
+    { name: 'TE Signs', kind: 'pixelSet', bit: 0, memberCount: 148 },
     { name: 'CTRL_1', kind: 'pixelSet', bit: 0, memberCount: 52 },
     { name: 'CTRL_2', kind: 'pixelSet', bit: 0, memberCount: 80 },
   ];
@@ -48,7 +56,7 @@ function makeNamedViews(): NamedView[] {
 
 describe('isValidNamedView', () => {
   it('accepts a well-formed entry', () => {
-    expect(isValidNamedView({ name: 'PORT', kind: 'pixelSet', bit: 0, memberCount: 10 })).toBe(true);
+    expect(isValidNamedView({ name: 'LEFT', kind: 'pixelSet', bit: 0, memberCount: 10 })).toBe(true);
   });
 
   it('rejects entries missing a name, kind, or numeric fields', () => {
@@ -57,7 +65,7 @@ describe('isValidNamedView', () => {
     expect(isValidNamedView({ name: 'X', kind: 'group', bit: 'nope', memberCount: 1 })).toBe(false);
     expect(isValidNamedView({ name: 'X', kind: 'group', bit: 0, memberCount: null })).toBe(false);
     expect(isValidNamedView(null)).toBe(false);
-    expect(isValidNamedView('PORT')).toBe(false);
+    expect(isValidNamedView('LEFT')).toBe(false);
   });
 });
 
@@ -66,12 +74,14 @@ describe('classifyNamedView', () => {
     // [name, kind, expectedFamily]
     ['CTRL_5', 'pixelSet', 'controllers'],
     ['@VINTAGE', 'pixelSet', 'types'],
-    ['BAND_HIGH', 'pixelSet', 'bands'],
-    ['Front_Wall_BOTH', 'composite', 'pairs'],
-    ['PORT', 'pixelSet', 'sides'],
+    ['Strands', 'pixelSet', 'types'],
+    ['TE Signs', 'pixelSet', 'types'],
     ['LEFT', 'pixelSet', 'sides'],
-    ['WALLS', 'pixelSet', 'structure'],
-    ['AUDITORIUM', 'pixelSet', 'structure'],
+    ['RIGHT', 'pixelSet', 'sides'],
+    ['FRONT', 'pixelSet', 'sides'],
+    ['BACK', 'pixelSet', 'sides'],
+    ['WALLS', 'composite', 'structure'],
+    ['AUDITORIUM', 'composite', 'structure'],
     ['Left_Front_Wall', 'group', 'groups'],
     ['ParsBars', 'composite', 'composites'],
     ['weird', 'pixelSet', 'other'],
@@ -80,8 +90,14 @@ describe('classifyNamedView', () => {
     expect(classifyNamedView({ name, kind, bit: 0, memberCount: 1 })).toBe(fam);
   });
 
-  it('name pattern beats kind (a composite named _BOTH is a pair, not a composite)', () => {
-    expect(classifyNamedView({ name: 'X_BOTH', kind: 'composite', bit: 0, memberCount: 1 })).toBe('pairs');
+  it('name pattern beats kind (a composite named WALLS is structure, not a composite)', () => {
+    expect(classifyNamedView({ name: 'WALLS', kind: 'composite', bit: 0, memberCount: 1 })).toBe('structure');
+  });
+
+  it('retired families have no section — a stale name from an old engine lands in OTHER', () => {
+    for (const stale of ['PORT', 'STARBOARD', 'FORE', 'AFT', 'BAND_LOW', 'Front_Wall_BOTH']) {
+      expect(classifyNamedView({ name: stale, kind: 'pixelSet', bit: 0, memberCount: 1 })).toBe('other');
+    }
   });
 });
 
@@ -92,8 +108,8 @@ describe('viewSelectionForNamedView', () => {
   });
 
   it('routes composites/pixelSets through type:viewMask by name', () => {
-    expect(viewSelectionForNamedView({ name: 'PORT', kind: 'pixelSet', bit: 0, memberCount: 5 }))
-      .toEqual({ type: 'viewMask', target: 'PORT', invert: false });
+    expect(viewSelectionForNamedView({ name: 'LEFT', kind: 'pixelSet', bit: 0, memberCount: 5 }))
+      .toEqual({ type: 'viewMask', target: 'LEFT', invert: false });
     expect(viewSelectionForNamedView({ name: 'ParsBars', kind: 'composite', bit: 8, memberCount: 40 }))
       .toEqual({ type: 'viewMask', target: 'ParsBars', invert: false });
   });
@@ -101,7 +117,7 @@ describe('viewSelectionForNamedView', () => {
 
 describe('isNamedViewActive', () => {
   const group: NamedView = { name: 'Left_Front_Wall', kind: 'group', bit: 2, memberCount: 40 };
-  const auto: NamedView = { name: 'PORT', kind: 'pixelSet', bit: 0, memberCount: 5 };
+  const auto: NamedView = { name: 'LEFT', kind: 'pixelSet', bit: 0, memberCount: 5 };
 
   it('matches a group only via type:group', () => {
     expect(isNamedViewActive(group, { type: 'group', target: 'Left_Front_Wall' })).toBe(true);
@@ -109,13 +125,13 @@ describe('isNamedViewActive', () => {
   });
 
   it('matches an auto-view only via type:viewMask', () => {
-    expect(isNamedViewActive(auto, { type: 'viewMask', target: 'PORT' })).toBe(true);
-    expect(isNamedViewActive(auto, { type: 'group', target: 'PORT' })).toBe(false);
+    expect(isNamedViewActive(auto, { type: 'viewMask', target: 'LEFT' })).toBe(true);
+    expect(isNamedViewActive(auto, { type: 'group', target: 'LEFT' })).toBe(false);
   });
 
   it('is false for null / mismatched target', () => {
     expect(isNamedViewActive(auto, null)).toBe(false);
-    expect(isNamedViewActive(auto, { type: 'viewMask', target: 'STARBOARD' })).toBe(false);
+    expect(isNamedViewActive(auto, { type: 'viewMask', target: 'RIGHT' })).toBe(false);
   });
 });
 
@@ -126,7 +142,7 @@ describe('isAllActive', () => {
     expect(isAllActive({ type: 'all', target: null })).toBe(true);
   });
   it('is false for a real selection', () => {
-    expect(isAllActive({ type: 'viewMask', target: 'PORT' })).toBe(false);
+    expect(isAllActive({ type: 'viewMask', target: 'LEFT' })).toBe(false);
   });
 });
 
@@ -139,32 +155,36 @@ describe('buildViewPickerSections', () => {
     expect(keys).toEqual([...VIEW_FAMILY_ORDER].filter((k) => keys.includes(k)));
     expect(keys).toContain('sides');
     expect(keys).toContain('structure');
-    expect(keys).toContain('bands');
     expect(keys).toContain('types');
-    expect(keys).toContain('pairs');
     expect(keys).toContain('controllers');
     expect(keys).toContain('groups');
     expect(keys).toContain('composites');
-    expect(model.totalCount).toBe(18);
-    expect(model.totalUnfiltered).toBe(18);
+    expect(model.totalCount).toBe(16);
+    expect(model.totalUnfiltered).toBe(16);
   });
 
-  it('orders HEIGHT BANDS LOW→MID→HIGH, not alphabetically', () => {
+  it('orders SIDES & ENDS LEFT→RIGHT→FRONT→BACK, not alphabetically', () => {
     const model = buildViewPickerSections(makeNamedViews());
-    const bands = model.sections.find((s) => s.key === 'bands')!;
-    expect(bands.entries.map((e) => e.name)).toEqual(['BAND_LOW', 'BAND_MID', 'BAND_HIGH']);
+    const sides = model.sections.find((s) => s.key === 'sides')!;
+    expect(sides.entries.map((e) => e.name)).toEqual(['LEFT', 'RIGHT', 'FRONT', 'BACK']);
+  });
+
+  it('groups the un-prefixed fixture-type views with the @-prefixed ones', () => {
+    const model = buildViewPickerSections(makeNamedViews());
+    const types = model.sections.find((s) => s.key === 'types')!;
+    expect(types.entries.map((e) => e.name)).toEqual(['@BAR', '@PAR', 'Strands', 'TE Signs']);
   });
 
   it('filters by case-insensitive substring and keeps totalUnfiltered', () => {
-    const model = buildViewPickerSections(makeNamedViews(), { query: 'band' });
-    expect(model.totalCount).toBe(3);
-    expect(model.totalUnfiltered).toBe(18);
-    expect(model.sections.map((s) => s.key)).toEqual(['bands']);
+    const model = buildViewPickerSections(makeNamedViews(), { query: 'ctrl' });
+    expect(model.totalCount).toBe(2);
+    expect(model.totalUnfiltered).toBe(16);
+    expect(model.sections.map((s) => s.key)).toEqual(['controllers']);
   });
 
   it('drops malformed entries', () => {
     const dirty = [
-      { name: 'PORT', kind: 'pixelSet', bit: 0, memberCount: 5 },
+      { name: 'LEFT', kind: 'pixelSet', bit: 0, memberCount: 5 },
       { name: '', kind: 'group', bit: 0, memberCount: 1 },
       { foo: 'bar' },
     ] as unknown as NamedView[];
@@ -183,7 +203,7 @@ describe('buildViewPickerSections', () => {
 
 describe('namedViewMemberLabel', () => {
   it('renders a pixel count when the mask has members', () => {
-    expect(namedViewMemberLabel({ name: 'LEFT', kind: 'pixelSet', bit: 0, memberCount: 35 })).toBe('35 px');
+    expect(namedViewMemberLabel({ name: 'LEFT', kind: 'pixelSet', bit: 0, memberCount: 482 })).toBe('482 px');
   });
   it('renders EMPTY for a zero-member (dead) view', () => {
     expect(namedViewMemberLabel({ name: 'DEAD', kind: 'pixelSet', bit: 0, memberCount: 0 })).toBe('EMPTY');

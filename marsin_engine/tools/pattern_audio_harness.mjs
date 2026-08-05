@@ -55,6 +55,12 @@
  *   rig, and an unknown view name is a LOUD COMPILE_FAIL naming the view
  *   (never a silent constant-false test).
  *
+ *   The view CATALOG the fold resolves against is assembled by the shared
+ *   `lib/view_catalog.js` primitives engine.js itself calls (report _147), so
+ *   the Tier-A auto-views are present here too: `inView("LEFT")`,
+ *   `inView("Strands")`, `inView("CTRL_7")` resolve offline exactly as on the
+ *   rig (titanic: 58 names, not the 31 a hand-built table used to hold).
+ *
  *   ── GATE (redteam _112 F7/I4) — makes the verdict TRUSTWORTHY ──
  *   --gate    Enforce the pass/fail bars: exit 3 (non-zero) with a NAMED reason
  *             when the pattern FAILS. The GATE_PASS/GATE_FAIL verdict always
@@ -79,6 +85,7 @@ import { AudioAnalyzer } from '../audio/analyzer/audio_analyzer.js';
 import { fillFrame, SYNTHS } from '../audio/synth/test_synths.js';
 import { WasmHost } from '../lib/wasm_host.js';
 import { buildMetaArray, loadModelForGauge } from '../lib/model_loader.js';
+import { buildViewCatalog } from '../lib/view_catalog.js';
 import { buildMaskConstants } from '../lib/view_mask_constants.js';
 import { createBitFreeViewPromoter } from '../lib/in_view_intrinsic.js';
 import { fileURLToPath } from 'url';
@@ -174,14 +181,21 @@ if (loaded.pixelCount !== N) {
   console.log('MODEL_FAIL: ' + modelName + ' declares pixelCount ' + loaded.pixelCount
     + ' but exports ' + N + ' pixels'); process.exit(2); }
 
-// AUTHORED-name -> { bit, word } table for the `inView("Name")` intrinsic,
-// assembled exactly as engine.js does at load: base groups live in word 0,
-// each resolved view-mask preset at its authored word.
-const viewTable = {};
-for (const [group, bit] of Object.entries(loaded.groupBits)) viewTable[group] = { bit, word: 0 };
-for (const vm of loaded.viewMasks) {
-  viewTable[vm.name] = { bit: Number.isInteger(vm.bit) ? vm.bit : 0, word: vm.word === 1 ? 1 : 0 };
-}
+// AUTHORED-name -> { bit, word } table for the `inView("Name")` intrinsic.
+// Built by the SHARED lib/view_catalog.js primitives engine.js itself calls,
+// so the offline table is byte-equivalent to the rig's: the Tier-A auto-views
+// (LEFT / RIGHT / FRONT / BACK / Strands / TE Signs / @BAR / CTRL_n …)
+// are appended to loaded.viewMasks first, then base groups land at word 0 and
+// every resolved preset/auto-view at its authored word. loadModelForGauge()
+// alone does NOT derive the auto-views, so hand-building the table here held
+// 31 of titanic's 58 names and made a documented view a COMPILE_FAIL offline
+// while it compiled on the rig (reports 20260804_146 §4, 20260804_147).
+const { viewTable, autoViews } = buildViewCatalog(loaded);
+// Auto-view warnings (non-exhaustive halves, a controller straddling the
+// centreline, a structural view retired as a duplicate of an authored one)
+// are the engine's own; surface them on stderr with the engine's wording
+// rather than dropping them — stdout stays byte-stable for callers.
+for (const w of autoViews.warnings) console.warn('[Model] auto-view: ' + w);
 
 // Drive the REAL host (lib/wasm_host.js), the same class the engine compiles
 // through, so `WasmHost.compile()` applies all three source-injection passes
@@ -197,8 +211,12 @@ host.setViewTable(viewTable);
 // demand and sets it on the member pixels. Without this the promoter is
 // absent and such a view is a loud compile error rather than a silent
 // constant test — the engine wires the same promoter (codex P0).
+// `groupBits` is passed for the same reason engine.js passes its whole model:
+// the promoter seeds its allocator with every bit already claimed, and a
+// promotion that skipped the base group bits could hand a bit-free view a bit
+// a group already owns.
 host.setBitFreeViewPromoter(createBitFreeViewPromoter(
-  { pixels: px, viewMasks: loaded.viewMasks }, host));
+  { pixels: px, viewMasks: loaded.viewMasks, groupBits: loaded.groupBits }, host));
 
 // Named, loud missing-pattern failure. (Before the WasmHost switch this was an
 // accidental byproduct of the injector try/catch; a raw ENOENT stack trace is

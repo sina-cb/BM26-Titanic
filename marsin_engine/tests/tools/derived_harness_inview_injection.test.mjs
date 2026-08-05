@@ -17,6 +17,13 @@
 // (inView folding -> MASK_* -> FIX_*) against the engine's own view table and
 // the full 7-field meta ABI.
 //
+// Report _147 closed the remaining half of the same class of gap: the view
+// CATALOG. `loadModelForGauge()` never calls `deriveAutoViews`, so the
+// hand-built table here held 31 of titanic's 60 names and `inView("LEFT")` —
+// a name the docs actively recommend — was a COMPILE_FAIL offline while it
+// compiled on the rig. The catalog now comes from the shared
+// `lib/view_catalog.js` primitives engine.js itself calls.
+//
 // The derived harness's trace JSON stores per-frame TOTAL brightness, not
 // per-pixel colour, so these tests probe with patterns that light a target set
 // full-red and nothing else: totalBri / 255 is then exactly the member count.
@@ -31,6 +38,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadModelForGauge } from '../../lib/model_loader.js';
+import { buildViewCatalog } from '../../lib/view_catalog.js';
 
 const ENGINE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const HARNESS = path.join(ENGINE_DIR, 'tools', 'pattern_derived_harness.mjs');
@@ -78,13 +86,33 @@ function runProbe(name, src) {
   return { code: r.status, out, litPixels };
 }
 
+// Tier-A auto-views (report _147): DERIVED names that exist only after
+// `deriveAutoViews` runs. `loadModelForGauge()` does not call it, so the
+// harness gets them from the shared lib/view_catalog.js the engine itself
+// uses. `LEFT` is a whole-ship half (pixelIndices membership), `Strands` a
+// typed view over the LED strands.
+const AUTO_VIEWS = ['LEFT', 'Strands'];
+
 let loaded;
-test.before(async () => { loaded = await loadModelForGauge(MODEL); });
+test.before(async () => {
+  loaded = await loadModelForGauge(MODEL);
+  // Append the auto-views exactly as the harness (and the engine) does, so
+  // this test's expectations come from the same catalog the harness compiles
+  // against — not a second, hand-maintained idea of what titanic carries.
+  buildViewCatalog(loaded);
+});
 
 /** Member count of a named view, straight from the engine's loader. */
 function viewMemberCount(viewName) {
   const vm = loaded.viewMasks.find((v) => v.name === viewName);
   assert.ok(vm, `model ${MODEL} has no view named "${viewName}"`);
+  // A bit-free (Tier-A) auto-view carries bit:0 until inView() promotes it, so
+  // its membership is read from the entry itself, not from a viewMask lane.
+  if (vm.bit === 0) {
+    if (Array.isArray(vm.pixelIndices)) return vm.pixelIndices.length;
+    const groups = new Set(vm.groups);
+    return loaded.pixels.filter((p) => p && groups.has(p.group)).length;
+  }
   const lane = vm.word === 1 ? 'viewMaskHi' : 'viewMask';
   return loaded.metaArray.filter((m) => (m[lane] & vm.bit) !== 0).length;
 }
@@ -138,11 +166,32 @@ test('MASK_* and FIX_* constants resolve, and the 7-lane meta ABI reads true', (
   assert.equal(local.litPixels, firstPixels, 'the pixelLocalIndex builtin must read the packed lane');
 });
 
+test('the derived Tier-A auto-views resolve offline and light exactly their members', () => {
+  for (const viewName of AUTO_VIEWS) {
+    const expected = viewMemberCount(viewName);
+    assert.ok(expected > 0, `"${viewName}" must have members`);
+    const r = runProbe(`probe_auto_${viewName.replace(/\W/g, '_')}.js`,
+      probe(`inView("${viewName}")`));
+    assert.match(r.out, /COMPILE_OK/,
+      `inView("${viewName}") must compile offline — the auto-views are part of the ` +
+      `engine's catalog; got:\n${r.out}`);
+    assert.equal(r.code, 0);
+    assert.equal(r.litPixels, expected,
+      `inView("${viewName}") must light exactly its ${expected} members`);
+  }
+});
+
 test('an UNKNOWN inView() name is a loud COMPILE_FAIL naming the view', () => {
   const r = runProbe('probe_unknown_view.js', probe('inView("No Such View")'));
   assert.match(r.out, /COMPILE_FAIL: Pattern references unknown view\(s\) via inView\(\): No Such View/,
     `an unknown view must fail loudly and name itself; got:\n${r.out}`);
   assert.match(r.out, /Known views for this model:/, 'the error must list the known views');
+  // The known-view list must be the FULL catalog, auto-views included — a
+  // truncated list is how the offline/engine parity gap hid for so long.
+  for (const viewName of AUTO_VIEWS) {
+    assert.ok(r.out.includes(viewName),
+      `the known-views list must name the derived view "${viewName}"; got:\n${r.out}`);
+  }
   assert.equal(r.code, 2, 'unknown view must be a non-zero (2) exit, never a silent render');
 });
 

@@ -42,13 +42,15 @@ five instruments with different reach, different emitters, and different jobs.
 | **Identity** | 148 | 2 independently controlled TE signs, 74 px each | RGBW | `Identity` |
 
 **Each instrument is a real, named engine view.** A pattern targets one with
-`inView("Hull Canvas")` — no bit arithmetic, no section ids. Every instrument
-also has left/right halves (`Left Hull` / `Right Hull`, `Left Silhouette` /
-`Right Silhouette`, `Left Jewelry` / `Right Jewelry`, `Left Organs` /
-`Right Organs`), and the Organs subdivide further into `Stacks` (24 px, the
-funnels only), `Left Stacks` / `Right Stacks` (12 each), and `Auditoriums`
-(16 px). The full 41-name list — 17 composites plus the 24 finer base groups —
-is in [`MARSIN_ENGINE_PATTERNS.md`](MARSIN_ENGINE_PATTERNS.md) §7.3.1.
+`inView("Hull Canvas")` — no bit arithmetic, no section ids. The Organs
+subdivide into `Stacks` (24 px, the funnels only) and `Auditoriums` (16 px);
+those seven names are the whole authored composite set. For a **half** of the
+ship, use the exhaustive `LEFT` / `RIGHT` views (482 px each, every instrument
+included) — `inView("Silhouette") && inView("LEFT")` is the left half of the
+silhouette. The per-instrument `Left *` / `Right *` composites were removed
+(report `_145`) and are now hard compile errors. Full catalog — 7 composites,
+24 base groups, and the derived auto-views — in
+[`MARSIN_ENGINE_PATTERNS.md`](MARSIN_ENGINE_PATTERNS.md) §7.3.1–§7.3.2.
 
 Sources: [`simulation/scenes/titanic/views.yaml`](../simulation/scenes/titanic/views.yaml),
 [`simulation/scenes/titanic/patches.yaml`](../simulation/scenes/titanic/patches.yaml),
@@ -144,10 +146,10 @@ structures). Not four identical giant funnels — two large, two small.
   along tends to read as intentional and expensive — a blue wash turns the most
   prominent feature olive-brown at exactly the moment everything else looks
   good.
-- The stacks exist as their own engine views — **`Stacks`** (all 24 px),
-  `Left Stacks` / `Right Stacks` (12 each), and the four finer base groups
-  (`Left SmokeStack`, `Right SmokeStacks`, `Left Small SmokeStack`,
-  `Right Small SmokeStack`). So a "stacks stay warm" constraint *is* trivially
+- The stacks exist as their own engine views — **`Stacks`** (all 24 px) and the
+  four finer base groups (`Left SmokeStack`, `Right SmokeStacks`,
+  `Left Small SmokeStack`, `Right Small SmokeStack`); for one side, combine
+  `Stacks` with `LEFT` / `RIGHT`. So a "stacks stay warm" constraint *is* trivially
   implementable engine-side — `inView("Stacks")` is one line. **Operator
   ruling: keep this as artistic guidance, not an enforced engine rule.**
 - Note that `Organs` covers the pars on the **auditoriums too**. If you want
