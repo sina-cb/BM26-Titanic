@@ -33,3 +33,14 @@ Protocol (format, rules, when to write): [`../os/memory.md`](../os/memory.md).
   operator standing order 2026-07-30: doc contradicting verified
   code/hardware behavior → fix + clean up on sight, sanctioned by
   default (descriptive truth only; P0s still apply).
+- [titanic-x-axis-dead-zone](titanic_x_axis_dead_zone.md) — the titanic model
+  has NO pixels across 25% of its X extent (nx 0.40-0.65), so brightness swept
+  along X swings the rig for non-audio reasons and measures weakly reactive;
+  Y and Z are fine.
+- [captainpad-dev-server-traps](captainpad_dev_server_traps.md) — aborting an
+  in-flight request to the Expo dev server tears down the WHOLE stack, and
+  Metro serves stale bundles so UI edits stay invisible until a launcher
+  restart (the SSR html will not reveal it).
+- [ws-viz-is-a-downsampled-preview](ws_viz_is_a_downsampled_preview.md) — the
+  engine's /ws/viz rig buffer is 100 px of a 964 px rig; it cannot test palette
+  purity or fine spatial detail. Use the offline harness.

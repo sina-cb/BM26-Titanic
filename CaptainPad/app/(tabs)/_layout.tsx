@@ -164,6 +164,21 @@ export default function TabLayout() {
               tabBarIconName: 'gear',
             } as any}
           />
+          {/* Manual touch surface: colour pad + tempo/brightness/3D. Declared
+              LAST so the existing rail order is untouched — this is exactly
+              where the route already sat as an undeclared file route; the
+              entry only supplies the label and icon it was missing.
+              `tabBarIconName` MUST be a key of the MAPPING table in
+              components/ui/icon-symbol.tsx: tsc resolves that import to the
+              .ios.tsx variant (broad SF-Symbols union), so an unmapped name
+              type-checks and then renders BLANK on web/Android. */}
+          <Tabs.Screen
+            name="touch_control"
+            options={{
+              title: 'Touch Control',
+              tabBarIconName: 'square.grid.2x2',
+            } as any}
+          />
         </Tabs>
         {/* Sticky overlay; lives outside the Tabs so it survives tab
             switches and renders on top of every screen. The lockout
