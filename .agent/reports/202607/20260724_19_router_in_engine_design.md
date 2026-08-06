@@ -157,6 +157,15 @@ New engine stage + API, mirroring `simulation/src/dmx/dmx_output_overrides.js`:
 
 ### 2.4 Sim tabs become pure viewers
 
+> **SUPERSEDED IN PART (operator ruling 2026-08-05, report `_171`).** The rule
+> below — *"whoever generates the data writes the hardware; viewers never
+> write"* — was adopted, but its **browser-generator carve-out was NOT**. The
+> operator ruled that the browser must never transmit to hardware, full stop.
+> `src/dmx/sacn_output_client.js` is deleted, `animate.js` has no transmit path,
+> and `server/sacn_output_bridge.js` holds no sACN sender. Bench work with no
+> engine no longer drives fixtures from the browser; "Hold to Fog" was rehoused
+> onto the engine's `POST /fog`. Read the paragraph below as history.
+
 In `sacn_in` mode, delete the browser hardware-relay branch
 (`animate.js` "relay ALL universes" path). The tab keeps: WS frames in →
 dmxRouter → pixels for display, plus a local *preview* application of the

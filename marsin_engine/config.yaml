@@ -4,14 +4,6 @@ sacn:
   destinations:
     - 127.0.0.1
   multicast: false
-controllers:
-  - name: Titanic-202
-    host: 10.1.1.202
-    protocol: sACN
-    universes:
-      - 10
-      - 12
-    alsoFlat: true
 engine:
   fps: 40
   priority: high

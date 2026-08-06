@@ -17,6 +17,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { isolatedCompanionEnv, assertEngineLinkDown } from '../helpers/companion_isolation.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(__dirname, '..', '..', 'audio', 'companion', 'companion_server.js');
@@ -63,15 +64,28 @@ async function waitForServer(port, timeoutMs = 8000) {
 
 test('the broadcast frame carries the NEW derived signal keys (live, test source)', async () => {
   const port = 31930 + Math.floor(Math.random() * 25);
+  // ISOLATION (report _173): a spawned companion reads the ENGINE config to
+  // find the engine to live-sync against and the OSC target. Un-isolated, both
+  // resolve to the operator's live stack and `setMode` below PATCHes
+  // `capture.device: test` into the running show. Black-hole them.
+  const isolation = isolatedCompanionEnv('companion_new_signals');
   const proc = spawn('node', [SERVER, '--port', String(port)], {
     cwd: path.join(__dirname, '..', '..'),
     stdio: ['ignore', 'ignore', 'ignore'],
+    env: isolation.env,
   });
   try {
     await waitForServer(port);
     const { WebSocket } = await import('ws');
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const helloSeen = new Promise((resolve) => {
+      ws.on('message', (buf) => {
+        const m = JSON.parse(buf.toString());
+        if (m.type === 'hello') resolve(m);
+      });
+    });
     await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+    assertEngineLinkDown(await helloSeen, assert.ok);
     // Force TEST source so analysis runs headless (no mic device in CI).
     ws.send(JSON.stringify({ type: 'setMode', mode: 'test' }));
 
@@ -109,6 +123,7 @@ test('the broadcast frame carries the NEW derived signal keys (live, test source
     }
   } finally {
     proc.kill('SIGKILL');
+    isolation.cleanup();
   }
 });
 

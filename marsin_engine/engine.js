@@ -60,7 +60,8 @@ import { resolveFfmpegPath } from './lib/ffmpeg_resolver.js';
 import { sceneStateDir, stateOverridesActive } from './lib/state_paths.js';
 import { mapPixelsToSacn, suppressNativeStrobes } from '../simulation/src/dmx/sacn_mapper.js';
 import { UniverseRouter } from '../simulation/src/dmx/universe_router.js';
-import { createOutputDispatch } from './lib/output_dispatch.js';
+import { createSacnOutput } from './lib/sacn_output.js';
+import { assertNoDirectHardwareRoutes } from './lib/output_config_guard.js';
 import http from 'http';
 import { WebSocketServer } from 'ws';
 import path from 'path';
@@ -112,12 +113,12 @@ function repackMetaIfDirty(wasmHost, pixels) {
 // thing: "this file is the engine's config.yaml".
 //
 // Why that matters (the `_97` §4.4 trap, which cost 30 s of live sACN on the
-// real rig): `--dest <ip>` overrides `sacn.destinations` ONLY. The per-controller
-// `controllers:` block carries its OWN host and wins for the universes it claims,
-// so an engine spawned with `--dest 127.0.0.9` still streams to the declared
-// hardware. Before this change there was NO way to neutralise that block short of
-// hand-editing the tracked config.yaml. Now a harness writes a black-holed copy
-// and points MARSIN_CONFIG_FILE at it.
+// real rig): `--dest <ip>` overrides `sacn.destinations`, and a harness that
+// needs the engine to reach nothing at all writes a black-holed config copy and
+// points MARSIN_CONFIG_FILE at it. There is no longer any second, unoverridable
+// output path for it to miss — the per-controller `controllers:` block that used
+// to carry its own hardware host is REMOVED and refused at boot
+// (lib/output_config_guard.js).
 //
 // An override that is set but missing/unreadable THROWS (codex P0: a silent
 // fallback to the real config here is exactly the accident this prevents).
@@ -147,6 +148,12 @@ function loadConfig() {
 function parseArgs() {
   const args = process.argv.slice(2);
   const config = loadConfig();
+  // The engine has ONE output path: sACN to `sacn.destinations`, where the
+  // simulation's input bridge is the single router to every controller. A config
+  // that still declares the removed direct-to-hardware `controllers:` block is a
+  // BOOT FAILURE, not something to ignore (codex P0). See
+  // lib/output_config_guard.js for the whole reasoning.
+  assertNoDirectHardwareRoutes(config, process.env.MARSIN_CONFIG_FILE || 'config.yaml');
   const cSacn = config.sacn || {};
   const cEngine = config.engine || {};
   const cServer = config.server || {};
@@ -160,11 +167,6 @@ function parseArgs() {
     list: false,
     destinations: cSacn.destinations || (cSacn.destination ? [cSacn.destination] : ['127.0.0.1']),
     sourceName: cSacn.sourceName || 'MarsinEngine',
-    // Per-controller output routing (sACN vs Art-Net). Optional: with no
-    // `controllers:` block every universe streams sACN to `destinations`
-    // (the long-standing default). A declared controller picks its
-    // transport + host; see lib/output_dispatch.js.
-    controllers: Array.isArray(config.controllers) ? config.controllers : null,
     // Fail loud (below) if neither config nor --port supplies a valid port —
     // never silently guess one.
     port: Number.isInteger(cServer.port) ? cServer.port : null,
@@ -1410,14 +1412,12 @@ async function main() {
     process.exit(0);
   }
 
-  // 6. Create network output (sACN and/or Art-Net, routed per controller)
-  // `sacnOut` keeps its name — the dispatch exposes the identical sender
-  // interface (start/stop/sendFrame/addUniverse/frameCount) so every call
-  // site below is unchanged. With no `controllers:` config block this is a
-  // single flat-destinations sACN sender, byte-identical to before.
-  const sacnOut = createOutputDispatch({
+  // 6. Create network output — ONE sACN sender to `sacn.destinations`.
+  // There is no per-controller transport and no direct-to-hardware route: the
+  // simulation's input bridge receives this stream on 127.0.0.1 and is the
+  // single router to every physical controller (lib/output_config_guard.js).
+  const sacnOut = createSacnOutput({
     universes: universeIds,
-    controllers: opts.controllers,
     priority: opts.priority,
     destinations: opts.destinations,
     sourceName: opts.sourceName,
@@ -1478,13 +1478,13 @@ async function main() {
 
   const engineCore = {
     mixer, wasmHost, paramRouter, paramCenter, model, audioState,
-    // The composite output dispatch. api_server surfaces its declared
-    // per-controller routing on GET /status (`outputRouting`) so the sim's
-    // sACN bridge can EXCLUDE any (universe → host) pair this engine already
-    // delivers directly — without this, the bridge relayed the engine's own
-    // loopback frames back to declared controllers and the hardware received
-    // two interleaved sACN sources on one universe (physical flicker,
-    // 2026-07-24 root cause).
+    // The sACN sender. api_server still answers GET /status with an
+    // `outputRouting` field, and its answer is now permanently
+    // `{ controllers: [] }` — this engine declares NO direct-to-hardware route,
+    // by construction. The sim's bridge polls that field to prove there is no
+    // second writer it cannot see; keeping it present (rather than dropping it)
+    // is what lets the bridge tell "no direct routes" from "engine too old to
+    // say", which it must refuse on.
     sacnOut,
     globalEffectSlotManager,
     modulationController,
@@ -2557,6 +2557,16 @@ async function main() {
 
   process.on('SIGINT', () => shutdown());
   process.on('SIGTERM', () => shutdown());
+
+  // In-band graceful stop (POST /shutdown — see api_server.js). On Windows a
+  // supervisor CANNOT deliver a real SIGTERM: `taskkill /T /F` is
+  // TerminateProcess, and node's process.kill() emulates signals the same way,
+  // so `launcher.js stop` had no way to reach the handler above. The blackout
+  // frame below therefore never went out and the rig held its last live frame
+  // while the ops docs promised "lights OFF" (report 20260805_160 T1).
+  // This hook is that reach — the SAME shutdown(), the SAME single blackout
+  // path, nothing duplicated. It is re-entrancy-guarded by `shuttingDown`.
+  engineCore.requestShutdown = () => shutdown();
 
   // Scene/model coordination hook (sim → engine, see POST /scene in
   // api_server.js). TWO callers, one mechanism:

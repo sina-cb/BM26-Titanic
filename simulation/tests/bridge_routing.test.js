@@ -153,15 +153,23 @@ test('same pair declared by two scenes dedupes into one route with both scenes c
   assert.deepEqual(conflicts, []);
 });
 
-test('engineOwnedPairs parses the /status outputRouting shape', () => {
+// The ENGINE-DIRECT mechanism this parser exists for was REMOVED from our own
+// engine (operator ruling 2026-08-05, marsin_engine/lib/output_config_guard.js):
+// it now reports `outputRouting: { controllers: [] }`, permanently. The parser
+// STAYS, and stays tested, because "the engine declares no direct routes" must
+// be PROVEN from /status on every poll rather than assumed — the bench mirror's
+// R-21 refuses to arm on a non-empty owned set, and that refusal is only
+// meaningful if a non-empty payload is still parsed correctly. The hosts below
+// are synthetic placeholders, NOT a demonstration of a supported config.
+test('engineOwnedPairs parses a non-empty /status outputRouting shape', () => {
   const owned = engineOwnedPairs({
     controllers: [
-      { name: 'Titanic-202', host: '10.1.1.202', protocol: 'sACN', alsoFlat: true, universes: [10, 12] },
-      { name: 'Art-1', host: '10.1.1.77', protocol: 'artnet', universes: [4] },
+      { name: 'synthetic-a', host: '10.9.9.202', universes: [10, 12] },
+      { name: 'synthetic-b', host: '10.9.9.77', universes: [4] },
     ],
   });
   assert.deepEqual([...owned].sort(), [
-    routeKey(10, '10.1.1.202'), routeKey(12, '10.1.1.202'), routeKey(4, '10.1.1.77'),
+    routeKey(10, '10.9.9.202'), routeKey(12, '10.9.9.202'), routeKey(4, '10.9.9.77'),
   ].sort());
 });
 

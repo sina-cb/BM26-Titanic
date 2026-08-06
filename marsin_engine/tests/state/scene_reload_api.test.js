@@ -7,8 +7,9 @@
 //   • the API port is an OS-ASSIGNED free port (bind :0, read it, release it),
 //     never the show ports 6966-6972;
 //   • `--dest 127.0.0.9` black-holes sACN, so no frame can reach the live sim
-//     bridge on 127.0.0.1:5568 (the scene used patches no universe that the
-//     config.yaml `controllers:` block routes to hardware);
+//     bridge on 127.0.0.1:5568. That is the WHOLE output path now: the engine's
+//     per-controller direct-to-hardware routing is removed and refused at boot
+//     (lib/output_config_guard.js), so `--dest` can no longer be bypassed;
 //   • MARSIN_STATE_DIR / MARSIN_PLAYLISTS_DIR redirect every state write into
 //     throwaway temp dirs (tracked states/ tree is snapshot-compared below).
 //

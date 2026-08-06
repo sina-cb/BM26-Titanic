@@ -3,7 +3,7 @@ name: bm26_show_readiness
 status: active
 owner: Sina (lead artist) — coordinator agent acts as readiness manager
 created: 2026-07-27
-updated: 2026-07-31
+updated: 2026-08-05
 ---
 
 # BM26 Show Readiness — Master Program
@@ -32,7 +32,40 @@ moved **verbatim** to the archive report
 [`../reports/202607/20260725_88_master_doc_archive.md`](../reports/202607/20260725_88_master_doc_archive.md)
 (`_88`). Section pointers below name the archive section.
 
-## Threads — what's going on right now (2026-07-31)
+## Threads — what's going on right now (2026-08-05)
+
+> **CURRENT STATE (2026-08-05):** the `_121`–`_148` waves are COMMITTED and
+> pushed (`70bc617b`, `d6234cf9`, `948447e9` on `feat/bm_readiness`). The
+> `_149`–`_173` wave is LANDED IN THE WORKING TREE, **uncommitted** — held for
+> the operator's physical smoke + separate commit authorization. Operator
+> actions open: restart launcher+engine+CaptainPad dist; **retune brightness**
+> (raw-DMX fix makes the ship read darker at the same sliders — MASTER slider
+> is the tool); bench-mirror re-smoke (`_156` §9); ×2.55 A/B (`_170` §6); fog
+> button on a fog-equipped scene; pick the mic once in CaptainPad AUDIO.
+> Full leftover/backlog table: `_172` §b. Ops detail: the tracker (canonical).
+
+**✅ LANDED 2026-08-04/05 (working tree, uncommitted):**
+
+| # | Thread | State |
+|---|---|---|
+| `_149` | **Golden Hour read-only pilot dossier** — full control/instrument audit; 3 of 10 controls dead, 46 s loop, proposal + 4 open artistic decisions | Artifacts in `~/tmp/golden_hour_dossier/` only (read-only constraint; no repo report). Control cleanup policy-authorized, implementation NOT yet |
+| `_150`–`_152` | **Bench mirror runtime mode (v2)** — audit → implement → adversarial review ×2 cycles; process-memory arm, socket-scoped auto-disarm, blackout-hold invariant | Superseded by v3 below; the falsification-hardened regressions carry forward |
+| `_153`/`_154` | **Physical-failure root cause** (bench showed random colors): the sACN-IN sim tab was a priority-150 second writer through the separate :6972 output bridge; fixture profiles verified compatible 344/344 — mapping was never wrong. Flicker addendum: per-poll-phase compose tearing + same-CID sequence beats | Both CONFIRMED-OFFLINE with byte evidence; fixes landed in `_156`/`_170`/`_171` |
+| `_155` | **Selectable-mapping design (Fable)** — v3 sidecar = slots only; all plumbing resolved from scene data at ARM; same-fixtureType compatibility; armed = bench-only (operator ruling) | Design + amendments implemented by `_156` |
+| `_156`/`_158` | **Bench mirror v3** — ARM/DISARM + fixture picker in the Controllers-view header; armed = ship dark, bench is the ONLY physical output; per-slot "none" = held dark; cadence fix (1 whole frame per engine frame, no tearing); loud STUCK/sequence-offset diagnosis; adversarial review cycles closed (gate proof → later retired by `_171`) | READY FOR PHYSICAL SMOKE — **operator re-smoke required** (first pass was pre-fix build) |
+| `_157` | **sACN stack review (Fable)** — 12 defects ranked: ×2.55 percent clip (fixed `_170`), shared CID 98/100 drop, dead arbitration, silent receiver drops, unauthenticated surfaces | Fix plan §11; S-D5/S-D3/S-D4/S-D8/D10 still unpicked (backlog) |
+| `_159` | **Disarmed-path inertness review** — mirror OFF = routing byte-identical to pre-mirror code; 16 hostile sidecars can't perturb relay; no arm/gate survives restart; 2am recovery ladder proven | **INERT-CONFIRMED, zero defects** — the operator's core worry does not reproduce |
+| `_160` | **Titanic scene playa review** — scene data + route table CLEAN (38 universes → 18 controllers, 0 anomalies, parity strict PASS, headless-proven); 3 operational blockers found | stop-freeze FIXED (`_169`); dim boot state = operator-ruled intentional (retune via MASTER after `_170`); ×2.55 FIXED (`_170`); sim-tab writer FIXED (`_171`). Open: 45/72 dead playlist entries, `capture.device` (fix `_173` + one operator pick), LED board pushes, live checks list |
+| `_161`–`_166` | **Test-coverage campaign** — 2 Fable gap catalogs (32 specs) → 2 Sonnet implementers (+258 tests, sim 2007 / engine ~2796, zero new failures) → 2 Opus reviews with mutation testing (57 mutations, 54 kills) | Both ACCEPT-WITH-FIXES; small test-debt list in `_172` §b. Sonnet distrust NOT borne out (1 vacuous test in 258) |
+| `_167` | **Engine HTTP crash fix** — one bad GET killed the whole engine (unauthenticated LAN); same-shape audit fixed **19 routes** incl. `/mixer/param-presets` | Fixed + 16 regressions; applies at engine restart |
+| `_168` | **CaptainPad MASTER dimmer slider** — one slider drives all 24 groups (absolute; readout = mean); same per-section POST path; loud on failure | Landed, screenshot-verified on :7167 dist; is THE retune tool post-`_170` |
+| `_169` | **`stop` blacks out before killing** — engine `/shutdown` route + launcher bounded-wait; loud `BLACKOUT NOT CONFIRMED` if unprovable | Landed; applies at next stack start |
+| `_170` | **Raw-DMX wire fix** — the ×2.55 percent-payload clip is gone on every lane (engine/relay/mirror), 256/256 identity proven ×3 | **SHIP READS DARKER at the same sliders — retune required.** Bench A/B recipe in §6 |
+| `_171` | **Browser out of the routing path** (operator architecture ruling) — sACN-IN tab transmit deleted (kills the tab-switch freeze + second-writer collision); fog rehoused to engine `POST /fog` deadman; :6972 forward path + gate machinery deleted (one-writer now structural) | Landed; fog needs one physical test on a fog-equipped scene (titanic patches none) |
+| `_172` | **Wave oversight sweep (Fable)** — cross-report contradictions, unclosed loops, final numbers | **No issues in landed code**; leftover table §b is the backlog of record; `dirty_probe.yaml` residue deleted by coordinator |
+| `_173` | **Audio companion state fix** — test-spawned companions were connecting to the LIVE engine and persisting `device: test` (hardcoded config path ignored the isolation seam); fixed + tests isolated to a never-routed address | Landed. **Operator: pick the USB mic once in CaptainPad → AUDIO → SETTINGS; it sticks from then on** |
+
+## Threads — previous wave (2026-07-31)
 
 > Operator-requested quick-glance board. The coordinator maintains it
 > on every launch/landing/ruling; one line per thread, detail in the
@@ -420,6 +453,31 @@ Most recent only — the full list is archive `_88` §8.
 Every dated entry from 2026-07-27 through 2026-07-30 is archived verbatim in
 `_88` §9. **New entries append here, newest first.**
 
+- **2026-08-05 — the `_149`–`_173` wave LANDED (uncommitted), the bench-mirror
+  arc closed, and the wire became honest.** Chronicle: bench mirror rebuilt as a
+  runtime mode with a fixture picker in the Controllers header (`_150`–`_158`);
+  its first physical test FAILED (random colors) → root cause was the sACN-IN
+  sim tab itself transmitting at priority 150 (`_153`/`_154`), which also
+  explained the operator's long-standing tab-switch freeze → operator ruled the
+  browser OUT of the routing path entirely (`_171`: transmit deleted, fog moved
+  to an engine deadman endpoint, gate machinery retired as structurally
+  unnecessary) and armed = bench-only (ship dark). Collaterally: the ×2.55
+  percent-payload clip fixed on every sACN lane (`_170` — **the ship now reads
+  darker at the same sliders; retune via `_168`'s new CaptainPad MASTER
+  slider**), `stop` now blacks out before killing (`_169`), one bad HTTP GET
+  can no longer kill the engine — 19 routes fixed (`_167`), the audio
+  companion's test-signal reversion traced to test-spawned companions talking
+  to the LIVE engine and fixed (`_173`), and the engine's direct-unicast
+  exception (`Titanic-202`) was removed mechanism-and-all with a loud boot
+  refusal (`_156`, operator: "no breadcrumbs"). Safety reviews: disarmed-path
+  INERT-CONFIRMED (`_159`), titanic scene data + route table clean (`_160`),
+  +258 tests via the Fable-catalog → Sonnet-implement → Opus-mutation-review
+  pipeline (`_161`–`_166`), Fable oversight sweep found no code issues and owns
+  the backlog table (`_172` §b). Commits this period: `70bc617b`, `d6234cf9`,
+  `948447e9` (the `_121`–`_148` waves). **Everything since is uncommitted,
+  held for the operator's physical smoke + separate commit authorization.**
+  Operator checklist: restart stack → retune → bench re-smoke (`_156` §9) →
+  A/B (`_170` §6) → fog test → mic pick. Detail: tracker blocks `_149`–`_173`.
 - **2026-07-31 — `_120` WAVE 1 W1-1 follow-up LANDED (fix): L5 strict
   save-now.** Report `20260725_120_wave1_strict_save_now.md`. Closes the `_116`
   fix-7 handoff — the last piece of red-team `_115` L5. Scope owned exclusively:

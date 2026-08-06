@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useContext, useCallback, useMemo, useRef } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, AppState, Modal, Platform, ScrollView, useWindowDimensions } from 'react-native';
 import { useGlobalStyles } from '@/styles/globalStyles';
 import { usePalette } from '@/hooks/use-theme';
@@ -13,6 +13,9 @@ import {
 import { RigContext } from '@/components/RigGlobals';
 import { engineEvents } from '@/utils/engineEvents';
 import { wheelToHorizontalDelta } from '@/utils/wheel_scroll_logic';
+import {
+  uniqueSectionIds, masterLevel, applyMasterLevel, createCoalescedSender,
+} from '@/utils/master_dimmer_logic';
 
 const BypassCheckbox = ({ effectId, label }: { effectId: string, label: string }) => {
   const C = usePalette();
@@ -341,9 +344,51 @@ export default function DimmerRackScreen() {
     return () => sub.remove();
   }, [refreshGroups, refreshFixedColors]);
   
-  const handleDimmerChange = (id: number, val: number) => {
+  // The rack owns every section's level now (it used to fire-and-forget the
+  // POST and let each fader keep its own private value). Keeping the level
+  // here is what lets the MASTER fader below both READ the rig's true state
+  // and PUSH a new one down into the individual faders.
+  const handleDimmerChange = useCallback((id: number, val: number) => {
+    setDimmerStates(prev => ({ ...prev, [String(id)]: val }));
     setSectionBrightness(id, val);
-  };
+  }, []);
+
+  // ── MASTER fader (operator request 2026-08-05) ────────────────────────
+  // One slider that drives every group at once. It writes through the exact
+  // same path as an individual fader — one POST /section-brightness per
+  // section — just fanned out; no new engine API, so a master move persists
+  // and behaves identically to moving all 24 faders by hand.
+  const sectionIds = useMemo(() => uniqueSectionIds(groups), [groups]);
+  // Read live inside the sender/handler closures, which are built once.
+  const sectionIdsRef = useRef<number[]>(sectionIds);
+  sectionIdsRef.current = sectionIds;
+  const [masterError, setMasterError] = useState('');
+
+  const masterSender = useRef(createCoalescedSender(
+    async (level: number) => {
+      const ids = sectionIdsRef.current;
+      if (ids.length === 0) return 'no dimmer groups loaded';
+      const results = await Promise.all(ids.map(id => setSectionBrightness(id, level)));
+      const failed = results.filter(r => !r.ok);
+      if (failed.length === 0) return null;
+      // Loud, same signal the individual faders' api helper logs — but the
+      // master is a batch, so the count matters as much as the reason.
+      return `${failed.length}/${ids.length} groups failed — ${failed[0].error || 'unknown error'}`;
+    },
+    (err: string | null) => setMasterError(err || ''),
+  )).current;
+
+  const handleMasterChange = useCallback((level: number) => {
+    // Optimistic locally so all 24 knobs track the finger at 60fps; the
+    // engine writes are coalesced (latest-wins) behind them.
+    setDimmerStates(prev => applyMasterLevel(prev, sectionIdsRef.current, level));
+    masterSender.request(level);
+  }, [masterSender]);
+
+  // What MASTER displays: the mean of the section levels (see
+  // master_dimmer_logic). Equals the commanded value right after a master
+  // move; drifts to the true average once an individual fader diverges.
+  const masterValue = masterLevel(dimmerStates, sectionIds);
 
   const groupEntries = Object.entries(groups);
 
@@ -488,6 +533,45 @@ export default function DimmerRackScreen() {
             <Text style={{ fontFamily: 'Inter_400Regular', fontSize: 14, color: C.secondary, textAlign: 'center', opacity: 0.7, maxWidth: 400 }}>
               Auto-patch your fixtures in the simulation to generate section groups, then re-export the model.
             </Text>
+          </View>
+        )}
+
+        {/* MASTER — one absolute slider over every group (operator request
+            2026-08-05). Deliberately shaped UNLIKE the group faders: a wide
+            horizontal bar in the accent colour, pinned at the top of the
+            rack, above the row it commands. Moving it sets every section to
+            the same value; the group faders below follow it live. Its
+            readout is the MEAN of the sections, so after an individual
+            fader diverges the bar shows where the rig actually sits rather
+            than a stale "last commanded" number. */}
+        {loadState === 'ready' && groupEntries.length > 0 && (
+          <View style={{ marginBottom: 28, paddingHorizontal: 8 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={{ paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12, backgroundColor: C.primary }}>
+                  <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 11, color: '#000', letterSpacing: 2 }}>
+                    MASTER
+                  </Text>
+                </View>
+                <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 12, color: C.secondary, letterSpacing: 1.5 }}>
+                  {`ALL ${sectionIds.length} GROUPS`}
+                </Text>
+              </View>
+              <Text style={{ fontFamily: 'SpaceGrotesk_700Bold', fontSize: 22, color: C.text }}>
+                {`${Math.round(masterValue * 100)}%`}
+              </Text>
+            </View>
+            <HorizontalFader
+              value={masterValue}
+              onChange={handleMasterChange}
+              trackStyle={{ height: 36, backgroundColor: C.surfaceContainerHigh, borderRadius: 18, borderWidth: 1, borderColor: C.primary }}
+              fillStyle={{ position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: C.primary, borderRadius: 18 }}
+            />
+            {masterError ? (
+              <Text style={{ fontFamily: 'Inter_600SemiBold', fontSize: 12, color: C.error, marginTop: 6 }} numberOfLines={2}>
+                {masterError}
+              </Text>
+            ) : null}
           </View>
         )}
 

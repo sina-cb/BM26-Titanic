@@ -18,6 +18,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { isolatedCompanionEnv, assertEngineLinkDown } from '../helpers/companion_isolation.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(__dirname, '..', '..', 'audio', 'companion', 'companion_server.js');
@@ -53,9 +54,17 @@ async function waitForServer(port, timeoutMs = 8000) {
 // Boot the real companion server (test source mode by default in standalone),
 // switch it to TEST over WS so the OSC stream flows without a mic, and run `fn`.
 async function withCompanion(port, fn) {
+  // ISOLATION (report _173): a spawned companion resolves its engine link and
+  // OSC target from the ENGINE config, which points at the operator's live
+  // stack. Un-isolated, the `setMode` below PATCHes `capture.device: test` into
+  // the running show and the OSC stream lands on the live engine. Black-hole
+  // both, and boot on the synthetic source so the operator's mic is never
+  // opened.
+  const isolation = isolatedCompanionEnv('companion_osc_accounting');
   const proc = spawn('node', [SERVER, '--port', String(port)], {
     cwd: path.join(__dirname, '..', '..'),
     stdio: ['ignore', 'ignore', 'ignore'],
+    env: isolation.env,
   });
   try {
     await waitForServer(port);
@@ -63,7 +72,14 @@ async function withCompanion(port, fn) {
     // the companion in mic mode, which has no device in CI).
     const { WebSocket } = await import('ws');
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const helloSeen = new Promise((resolve) => {
+      ws.on('message', (buf) => {
+        const m = JSON.parse(buf.toString());
+        if (m.type === 'hello') resolve(m);
+      });
+    });
     await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+    assertEngineLinkDown(await helloSeen, assert.ok);
     ws.send(JSON.stringify({ type: 'setMode', mode: 'test' }));
     // Let a few analyzer hops + accounting ticks happen.
     await new Promise(r => setTimeout(r, 1500));
@@ -71,6 +87,7 @@ async function withCompanion(port, fn) {
     ws.close();
   } finally {
     proc.kill('SIGKILL');
+    isolation.cleanup();
   }
 }
 

@@ -16,35 +16,67 @@ interface Props {
   onDragEnd?: () => void;
 }
 
-export function NauticalFader({ id, label, initialValue = 0, min = 0, max = 1, suffix = '', isColor = false, onChange, onDragStart, onDragEnd }: Props) {
+function NauticalFaderImpl({ id, label, initialValue = 0, min = 0, max = 1, suffix = '', isColor = false, onChange, onDragStart, onDragEnd }: Props) {
   const palette = usePalette();
   const globalStyles = useGlobalStyles();
   const [value, setValue] = useState(initialValue);
 
-  // Sync state if backend feeds new loaded boundaries
-  useEffect(() => {
-    setValue(initialValue);
-  }, [initialValue]);
-  
   // Strict physical tracking bounds
-  const trackHeight = 160; 
-  const handleHeight = 48; 
+  const trackHeight = 160;
+  const handleHeight = 48;
   const maxTravel = trackHeight - handleHeight;
 
   const panY = useRef(new Animated.Value(0)).current;
 
+  // True between grant and release/terminate — external syncs must never
+  // yank the knob out from under the operator's finger (same idiom as
+  // HorizontalFader's draggingRef).
+  const draggingRef = useRef(false);
+
+  // Sync BOTH the readout and the knob position from the owner's value.
+  // The readout alone used to be synced here while the knob was positioned
+  // once on mount, so a value pushed from outside (the MASTER fader) moved
+  // the number and left the handle behind. Safe to write panY directly: a
+  // finished drag flattens its offset back to 0, and a live drag is gated
+  // by draggingRef above.
   useEffect(() => {
+    if (draggingRef.current) return;
+    setValue(initialValue);
     const ratio = (initialValue - min) / (max - min);
     panY.setValue(maxTravel * (1 - ratio));
-  }, []);
+  }, [initialValue, min, max, maxTravel, panY]);
+
+  // The PanResponder is built ONCE (useRef), so its handlers would capture
+  // the FIRST-render callbacks forever. Read them through refs refreshed on
+  // every render — same stale-closure fix HorizontalFader documents.
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const onDragStartRef = useRef(onDragStart);
+  onDragStartRef.current = onDragStart;
+  const onDragEndRef = useRef(onDragEnd);
+  onDragEndRef.current = onDragEnd;
 
   const lastSendTime = useRef(0);
   const updateEngine = (val: number, force: boolean = false) => {
     const now = Date.now();
     if (force || now - lastSendTime.current > 100) {
-      onChange(id, val);
+      onChangeRef.current(id, val);
       lastSendTime.current = now;
     }
+  };
+
+  /** End-of-drag settle: flatten the offset, publish the final value, and
+   *  reopen the fader to external (MASTER) syncs. Shared by release and
+   *  terminate so both paths leave identical state behind. */
+  const settleDrag = () => {
+    panY.flattenOffset();
+    const finalY = (panY as any)._value;
+    const ratio = 1 - (finalY / maxTravel);
+    const engineValue = min + ratio * (max - min);
+    setValue(engineValue);
+    updateEngine(engineValue, true);
+    draggingRef.current = false;
+    if (onDragEndRef.current) onDragEndRef.current();
   };
 
   const panResponder = useRef(
@@ -56,7 +88,8 @@ export function NauticalFader({ id, label, initialValue = 0, min = 0, max = 1, s
       onPanResponderTerminationRequest: () => false,
       onShouldBlockNativeResponder: () => true,
       onPanResponderGrant: () => {
-        if (onDragStart) onDragStart();
+        draggingRef.current = true;
+        if (onDragStartRef.current) onDragStartRef.current();
         panY.extractOffset();
       },
       onPanResponderMove: (evt, gestureState) => {
@@ -80,13 +113,14 @@ export function NauticalFader({ id, label, initialValue = 0, min = 0, max = 1, s
         updateEngine(engineValue);
       },
       onPanResponderRelease: () => {
-        panY.flattenOffset();
-        const finalY = (panY as any)._value;
-        const ratio = 1 - (finalY / maxTravel);
-        const engineValue = min + ratio * (max - min);
-        setValue(engineValue);
-        updateEngine(engineValue, true);
-        if (onDragEnd) onDragEnd();
+        settleDrag();
+      },
+      // A cancelled gesture (browser pointercancel, focus loss) never fires
+      // Release. Without this, draggingRef would stick ON — the fader would
+      // stop accepting MASTER pushes for the rest of the session — and the
+      // rack's scroll-gate would stay disabled. Mirror Release exactly.
+      onPanResponderTerminate: () => {
+        settleDrag();
       },
     })
   ).current;
@@ -133,3 +167,11 @@ export function NauticalFader({ id, label, initialValue = 0, min = 0, max = 1, s
     </View>
   );
 }
+
+/**
+ * Memoised: the Dimmer Rack now owns every fader's level in state, so a
+ * single fader move (or a MASTER sweep) re-renders the rack ~10×/s. With
+ * stable callbacks from the rack, memo keeps that to the faders whose value
+ * actually changed instead of all 24.
+ */
+export const NauticalFader = React.memo(NauticalFaderImpl);

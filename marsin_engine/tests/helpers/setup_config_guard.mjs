@@ -4,8 +4,8 @@
 // (lib/color_autopilot.js) persist their runtime state by dumping the ENTIRE
 // parsed config.yaml back to disk (js-yaml strips every comment). A test that
 // spawns the real engine and activates autopilot would therefore rewrite the
-// tracked, comment-bearing marsin_engine/config.yaml — wiping the documented
-// `controllers:` routing examples and appending a `colorAutopilot:` block.
+// tracked, comment-bearing marsin_engine/config.yaml — wiping its documentation
+// and appending a `colorAutopilot:` block.
 //
 // Both modules resolve their persistence path from MARSIN_CONFIG_FILE (falling
 // back to the real config.yaml when unset), and since report _100 so does
@@ -16,9 +16,9 @@
 // one hook covers the whole suite — no per-test wiring.
 //
 // A harness that needs DIFFERENT settings (the timeline e2e suite writes a
-// black-holed `controllers:`/`sacn.destinations` config so its engines can
-// never reach the rig) sets MARSIN_CONFIG_FILE itself, or hands the child its
-// own value — this hook honours an override that is already set.
+// black-holed `sacn.destinations` config so its engines can never reach the
+// rig) sets MARSIN_CONFIG_FILE itself, or hands the child its own value — this
+// hook honours an override that is already set.
 //
 // Idempotent: honours an override the caller already set.
 import fs from 'node:fs';

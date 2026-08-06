@@ -390,6 +390,41 @@ const autoGroupFields = (ap) => ({
 export const DECK_TRANSITION_MIN_MS = 50;
 export const DECK_TRANSITION_MAX_MS = 30000;
 
+/**
+ * Send a JSON error response that can NEVER write headers twice.
+ *
+ * A route handler that has already committed its response (writeHead ran,
+ * and then something after it threw) cannot legally send a status line
+ * again. Calling `res.writeHead` a second time throws Node's
+ * `ERR_HTTP_HEADERS_SENT` from INSIDE the catch handler — where there is
+ * nothing left to catch it. It propagates to engine.js's
+ * `process.on('uncaughtException')`, which (correctly, by its own design)
+ * logs ENGINE FATAL and `process.exit(1)`. The rig goes dark.
+ *
+ * That is how `GET /pattern-dirs/<invalid-slug>` killed the whole engine
+ * with one unauthenticated request (report `_164` §3). The real fix is
+ * per-route: compute the body BEFORE committing headers. This responder is
+ * the second half — it makes the catch arm itself incapable of turning a
+ * handled error into a process kill, WITHOUT swallowing anything: when the
+ * response is already committed we still fail loudly on stderr (named error,
+ * named intended status) and close the socket, so the operator sees the real
+ * fault and the show stays lit.
+ *
+ * `headers` is passed straight through to `writeHead`; omit it to match a
+ * bare `res.writeHead(status)` exactly.
+ */
+export function sendJsonError(res, status, payload, headers) {
+  if (res.headersSent) {
+    console.error(`  ⛔ [api] handler threw AFTER response headers were sent — ` +
+      `intended ${status} ${JSON.stringify(payload)}. Response truncated; ` +
+      `engine kept alive (a second writeHead here would kill the process).`);
+    if (!res.writableEnded) res.end();
+    return;
+  }
+  res.writeHead(status, headers);
+  res.end(JSON.stringify(payload));
+}
+
 function listPatterns(patternsDir) {
   if (!fs.existsSync(patternsDir)) return [];
   return fs.readdirSync(patternsDir)
@@ -402,6 +437,15 @@ function listPatterns(patternsDir) {
 // characters. Subdir patterns reference as `<dir>/<name>` which the
 // playlist VALID_PATTERN regex already accepts.
 const VALID_PATTERN_DIR = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+/**
+ * `POST /fog` deadman bounds. The default is a little over twice the client's
+ * refresh interval, so one dropped request does not stutter the fog; the
+ * ceiling is what stops a caller asking the engine to run a fogger unattended
+ * for minutes — the endpoint is a hold, not a timer.
+ */
+const FOG_DEFAULT_HOLD_MS = 1500;
+const FOG_MAX_HOLD_MS = 10000;
 
 // Synthetic directory name for the top-level patterns/ folder. The "load
 // directory" picker surfaces it as `default` so an operator can pull every
@@ -1320,6 +1364,39 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
   // If validation throws (e.g. old yaml references a removed effect),
   // we leave the defaults in place and log — never silently fall back.
   const globalEffectSlotManager = engineCore.globalEffectSlotManager || null;
+
+  // ── Fog deadman (report 20260805_171) ──────────────────────────────
+  // `POST /fog` holds the fogger for a bounded window and switches it off
+  // itself when the client stops refreshing. See the endpoint for why a latch
+  // is the wrong shape for a fog machine.
+  let _fogDeadman = null;
+  const clearFogDeadman = () => {
+    if (_fogDeadman === null) return;
+    clearTimeout(_fogDeadman);
+    _fogDeadman = null;
+  };
+  const setFogState = (state, holdMs) => {
+    clearFogDeadman();
+    globalEffectsController.setEffect('fogger', state);
+    if (!globalsState.effects) globalsState.effects = {};
+    globalsState.effects.fogger = state;
+    saveGlobals(false);
+    if (!state) return;
+    _fogDeadman = setTimeout(() => {
+      _fogDeadman = null;
+      // Loud: fog that stops because nobody said "keep going" is a client that
+      // went away mid-hold, and the operator should know the rig did that by
+      // itself rather than wonder why the fog stopped.
+      console.warn(`  ⚠ [fog] deadman expired after ${holdMs} ms with no refresh — ` +
+        'fogger OFF. The client holding it stopped talking (tab closed, reload, ' +
+        'or network drop).');
+      globalEffectsController.setEffect('fogger', false);
+      if (!globalsState.effects) globalsState.effects = {};
+      globalsState.effects.fogger = false;
+      saveGlobals(false);
+    }, holdMs);
+    if (_fogDeadman.unref) _fogDeadman.unref();
+  };
   // ── VSN1 MIDI-layout deploy hook (effects_v2_midi_layout, Track E) ────
   // The engine is the source of truth for the 32-slot layout. When an effect
   // is ADDED or REMOVED from a slot (assign/clear/rename/recolor/reorder or a
@@ -4911,12 +4988,23 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     } else if (req.method === 'GET' && req.url.match(/^\/pattern-dirs\/[^\/]+$/)) {
       // List the patterns inside one sub-directory as `<dir>/<name>`
       // slugs ready to drop into playlist entries.
+      //
+      // COMPUTE THE BODY BEFORE COMMITTING HEADERS. `listPatternsInDir`
+      // REFUSES (throws) any slug failing VALID_PATTERN_DIR — a traversal
+      // probe (`..%2F..`), an uppercase name, anything with a dot or a
+      // space. `decodeURIComponent` likewise throws on malformed percent
+      // escapes (`%ZZ`). Both are ordinary hostile/sloppy input on an
+      // unauthenticated LAN, and both MUST produce a loud, named 400 —
+      // never a silent default, and never a second writeHead on an
+      // already-committed 200 (that throws ERR_HTTP_HEADERS_SENT inside
+      // the catch and kills the entire engine process; report `_164` §3).
       try {
         const dir = decodeURIComponent(req.url.split('/')[2]);
+        const body = JSON.stringify(listPatternsInDir(patternsDir, dir));
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(listPatternsInDir(patternsDir, dir)));
+        res.end(body);
       } catch (e) {
-        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        sendJsonError(res, 400, { error: e.message });
       }
     } else if (req.method === 'GET' && req.url === '/channel-blends') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -4978,18 +5066,21 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           active: performanceMode.active,
           enteredAt: performanceMode.enteredAt,
         },
-        // OUTPUT ROUTING introspection (2026-07-24 flicker root cause): the
-        // per-controller routes this engine delivers ITSELF (declared in
-        // config.yaml `controllers:`). The sim's sACN bridge polls this and
-        // suppresses its own hardware relay for every (universe → host) pair
-        // listed here — otherwise the controller receives the same universe
-        // from two sACN sources (engine-direct + bridge relay of the
-        // engine's alsoFlat loopback stream) and the lights flicker.
-        // Shape: { controllers: [{ name, host, protocol, alsoFlat,
-        // universes: [..] }] } — null only if the dispatch is absent.
-        outputRouting: (engineCore.sacnOut && engineCore.sacnOut._routing)
-          ? { controllers: engineCore.sacnOut._routing.routes }
-          : null,
+        // OUTPUT ROUTING introspection. This engine delivers NOTHING directly
+        // to hardware: the per-controller `controllers:` block that used to
+        // unicast declared universes straight to a box is REMOVED and refused
+        // at boot (lib/output_config_guard.js). All engine output is sACN to
+        // `sacn.destinations`, where the simulation's input bridge is the
+        // single router.
+        //
+        // The field STAYS, permanently empty, because its absence means
+        // something different: the sim's bridge treats a missing
+        // `outputRouting` as "this engine is too old to say what it delivers
+        // itself", which makes one-writer unprovable and is a hard refusal
+        // (bench-mirror R-8). An explicit empty list is the positive proof that
+        // there is no second writer the bridge cannot see.
+        // Shape: { controllers: [] } — always, by construction.
+        outputRouting: { controllers: [] },
       }));
     } else if (req.method === 'GET' && req.url === '/exports') {
       // Legacy endpoint, return exports of base channel
@@ -5264,10 +5355,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // Defer the restart a tick so the HTTP response fully flushes.
           setTimeout(() => engineCore.requestSceneSwitch(scene), 50);
         } catch (err) {
-          try {
-            res.writeHead(500);
-            res.end(JSON.stringify({ error: String(err && err.message || err) }));
-          } catch (_) { /* response already sent */ }
+          // Was a nested try that SWALLOWED the second-writeHead throw.
+          // sendJsonError does the same job without the swallow: it checks
+          // headersSent and reports the real fault on stderr.
+          sendJsonError(res, 500, { error: String(err && err.message || err) });
         }
       });
     } else if (req.method === 'POST' && req.url === '/scene/reload') {
@@ -5316,10 +5407,9 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           // Defer a tick so the HTTP response fully flushes.
           setTimeout(() => engineCore.requestSceneSwitch(activeScene), 50);
         } catch (err) {
-          try {
-            res.writeHead(500);
-            res.end(JSON.stringify({ error: String(err && err.message || err) }));
-          } catch (_) { /* response already sent */ }
+          // Was a nested try that SWALLOWED the second-writeHead throw.
+          // sendJsonError does the same job without the swallow.
+          sendJsonError(res, 500, { error: String(err && err.message || err) });
         }
       });
     } else if (req.method === 'POST' && req.url === '/control') {
@@ -5460,6 +5550,41 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', blackoutActive: data.state }));
       });
+    } else if (req.method === 'POST' && req.url === '/shutdown') {
+      // Operator STOP path (report 20260805_160 T1, fixed in _169). The
+      // launcher force-kills the whole process tree on Windows
+      // (`taskkill /T /F`), so the engine's SIGTERM handler — the ONLY thing
+      // that emits the shutdown blackout frame (engine.js §8) — never ran and
+      // the rig froze on its last live frame. This is the in-band request that
+      // runs that exact same shutdown path BEFORE the kill.
+      //
+      // Two deliberate properties:
+      //   • NOT gated by rejectIfPerformanceMode — a stop during a live show is
+      //     exactly when the blackout matters (safety, like /global-blackout).
+      //   • Persists NOTHING. /global-blackout would write
+      //     globalsState.blackout: true, which state_manager restores at boot —
+      //     i.e. the next start would come up dark. This path only exits.
+      readBody(data => {
+        if (data.confirm !== true) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'shutdown requires {"confirm": true} — refusing an unconfirmed stop',
+            code: 'CONFIRM_REQUIRED',
+          }));
+        }
+        if (typeof engineCore.requestShutdown !== 'function') {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({
+            error: 'engine does not support in-band shutdown (no requestShutdown hook)',
+            code: 'NO_SHUTDOWN_HOOK',
+          }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', shuttingDown: true, blackout: true }));
+        // Defer a tick so the response fully flushes before shutdown() closes
+        // the API socket — same pattern as POST /scene.
+        setTimeout(() => engineCore.requestShutdown(), 50);
+      });
     } else if (req.method === 'POST' && req.url === '/global-effect') {
       readBody(data => {
         if (data.effect === undefined || data.state === undefined) {
@@ -5471,6 +5596,56 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         saveGlobals(false);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ status: 'ok', effect: data.effect, state: data.state }));
+      });
+
+    // ── POST /fog — the sim's "Hold to Fog" button, with a DEADMAN ────
+    //
+    // WHY THIS EXISTS AND `/global-effect` DOES NOT SUFFICE (report 20260805_171).
+    // The sim used to fire fog by writing DMX from the BROWSER: the button
+    // submitted straight into the browser-local `dmxRouter` and the browser
+    // transmitted to the controller. That path is gone — the browser is not the
+    // router — so the button now asks the ENGINE, and the fog channels are
+    // written by `GlobalEffectsController.applyDmx()` on the normal
+    // engine → bridge → controller route like everything else.
+    //
+    // The old browser path had one accidental virtue worth keeping: it was a
+    // DEADMAN. Fog flowed only while the browser kept sending, so a closed tab,
+    // a crashed renderer or a yanked network cable stopped the fog. Plain
+    // `/global-effect {effect:'fogger'}` is a LATCH — it would leave a fog
+    // machine running until someone noticed. On a fogger that is a real-world
+    // problem, not a style preference, so this endpoint holds the effect only
+    // for `holdMs` and turns it off itself if the client stops refreshing.
+    //
+    // The client re-POSTs while the button is held and POSTs `state:false` on
+    // release; either way the engine ends up off.
+    } else if (req.method === 'POST' && req.url === '/fog') {
+      readBody(data => {
+        if (typeof data.state !== 'boolean') {
+          return sendJsonError(res, 400, {
+            error: 'state must be a boolean (true = fog on and refresh the hold, false = off)',
+          });
+        }
+        let holdMs = FOG_DEFAULT_HOLD_MS;
+        if (data.holdMs !== undefined) {
+          if (!Number.isInteger(data.holdMs) || data.holdMs <= 0 || data.holdMs > FOG_MAX_HOLD_MS) {
+            return sendJsonError(res, 400, {
+              error: `holdMs must be an integer 1..${FOG_MAX_HOLD_MS} ms — it is a DEADMAN ` +
+                'window, not a duration to run unattended',
+            });
+          }
+          holdMs = data.holdMs;
+        }
+        if (!globalEffectsController) {
+          return sendJsonError(res, 503, {
+            error: 'no global effects controller — this engine cannot drive fog',
+          });
+        }
+
+        setFogState(data.state, holdMs);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'ok', state: data.state, holdMs: data.state ? holdMs : null,
+        }));
       });
 
     // ── Global Effect Macros (docs/28 §5) ────────────────────────────
@@ -5669,10 +5844,12 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           globalEffectSlotManager.setSlots(data.slots, { emitLayout: true });
           persistGlobalEffectSlots();
           broadcastWs({ type: 'globalEffectSlots', slots: globalEffectSlotManager.getSlots() });
+          // Body BEFORE headers (see sendJsonError's header comment).
+          const body = JSON.stringify({ slots: globalEffectSlotManager.getSlots() });
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ slots: globalEffectSlotManager.getSlots() }));
+          res.end(body);
         } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          sendJsonError(res, 400, { error: e.message });
         }
       });
     } else if (req.method === 'POST' && req.url === '/global-effect-macros/panic-stop') {
@@ -5986,14 +6163,16 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           slots: globalEffectSlotManager.getStatus(),
           controller: globalEffectsController.getStatus(),
         });
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+        // Body BEFORE headers (see sendJsonError's header comment).
+        const body = JSON.stringify({
           status: 'ok',
           slotId, action,
           controller: globalEffectsController.getStatus(),
-        }));
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(body);
       } catch (e) {
-        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        sendJsonError(res, 400, { error: e.message });
       }
 
     // ── Scheduled tasks (docs/31_scheduled_tasks.md) ────────────────
@@ -6085,10 +6264,14 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         // in_session | cooldown) so no client paints ARMED while the plan
         // isn't running or a human holds the deck. Additive to the contract.
         const cfg = timelineService.getPartyStatus();
+        // Body BEFORE headers: listAvailablePlaylists() reads the playlist
+        // directory and can throw. Committing the 200 first would make the
+        // catch's writeHead a second writeHead — a process kill, not a 500.
+        const body = JSON.stringify({ ...cfg, availablePlaylists: timelineService.listAvailablePlaylists() });
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ...cfg, availablePlaylists: timelineService.listAvailablePlaylists() }));
+        res.end(body);
       } catch (e) {
-        res.writeHead(500); res.end(JSON.stringify({ error: e.message }));
+        sendJsonError(res, 500, { error: e.message });
       }
     } else if (req.url === '/party-config' && req.method === 'PUT') {
       if (!timelineService) { res.writeHead(503); return res.end(JSON.stringify({ error: 'timeline disabled' })); }
@@ -7053,17 +7236,20 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
     // mixer.getChannel — disjoint from the snapshot routes above. See docs/39.
     else if (req.method === 'GET' && req.url === '/mixer/param-presets') {
       try {
+        // Body BEFORE headers: listParamPresets() reads every preset file's
+        // header and THROWS on a corrupt one (that is the intended loud
+        // behavior). Committing the 200 first turned that throw into a
+        // second writeHead in the catch — i.e. a dead engine, not a 400.
+        const body = JSON.stringify({ paramPresets: paramPresetManager.listParamPresets() });
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ paramPresets: paramPresetManager.listParamPresets() }));
+        res.end(body);
       } catch (e) {
         // A corrupt preset file surfaces here (listParamPresets reads each
         // header) — fail loud rather than hiding the bad preset from the list.
         if (e instanceof ParamPresetError) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          return res.end(JSON.stringify({ error: e.message, code: e.code }));
+          return sendJsonError(res, 400, { error: e.message, code: e.code }, { 'Content-Type': 'application/json' });
         }
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: e.message }));
+        sendJsonError(res, 400, { error: e.message }, { 'Content-Type': 'application/json' });
       }
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/param-presets$/)) {
       if (rejectIfPerformanceMode(res)) return;
@@ -8071,18 +8257,19 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         }
         try {
           const next = oscState.restart(patch);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
+          // Body BEFORE headers (see sendJsonError's header comment).
+          const body = JSON.stringify({
             enabled: !!next.enabled,
             port: next.port ?? null,
             host: next.host ?? null,
             allowedSenders: next.allowedSenders || [],
             bindingsCount: Object.keys(next.bindings || {}).length,
             running: !!oscState.listener,
-          }));
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(body);
         } catch (err) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: err.message }));
+          sendJsonError(res, 400, { error: err.message }, { 'Content-Type': 'application/json' });
         }
       });
     }
@@ -8446,7 +8633,10 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           broadcastWs({ type: 'playlistLibrary', names: playlistManager.list() });
           broadcastWs({ type: 'playlistSaved', name: saved.name, playlist: saved });
         } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          // Respond-then-broadcast route: a throw from the broadcasts above
+          // arrives with headers already sent. sendJsonError refuses to
+          // writeHead twice (which would kill the process).
+          sendJsonError(res, 400, { error: e.message });
         }
       });
     } else if (req.method === 'DELETE' && req.url.match(/^\/playlists\/[^\/]+$/)) {
@@ -8464,7 +8654,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastWs({ type: 'playlistLibrary', names: playlistManager.list() });
         broadcastWs({ type: 'playlistDeleted', name });
       } catch (e) {
-        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        // Respond-then-broadcast route — never writeHead twice.
+        sendJsonError(res, 400, { error: e.message });
       }
     }
     // ── PLAYLIST MODULATIONS (Phase 1A) ──────────────────────────────────
@@ -8933,7 +9124,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           broadcastChannelPlaylistData(overlay);
           broadcastDeckState();
         } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          // Respond-then-broadcast route — never writeHead twice.
+          sendJsonError(res, 400, { error: e.message });
         }
       });
     }
@@ -8955,7 +9147,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: overlay.playlist, pattern: overlay.pattern }));
           broadcastDeckState();
         } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          // Respond-then-broadcast route — never writeHead twice.
+          sendJsonError(res, 400, { error: e.message });
         }
       });
     }
@@ -9250,7 +9443,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           broadcastWs({ type: 'pattern', name: baseCh.pattern });
           broadcastMixerState();
         } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          // Respond-then-broadcast route — never writeHead twice.
+          sendJsonError(res, 400, { error: e.message });
         }
       });
     } else if (req.method === 'GET' && req.url === '/deck/playlist/slots') {
@@ -9418,7 +9612,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         broadcastWs({ type: 'playlistEntryCaptured', channelId: baseCh.id, playlist: baseCh.playlist.name, entryId: baseCh.playlist.activeEntryId, defaults: captured });
         broadcastMixerState();
       } catch (e) {
-        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        // Respond-then-broadcast route — never writeHead twice.
+        sendJsonError(res, 400, { error: e.message });
       }
     } else if (req.method === 'POST' && req.url === '/deck/playlist/autopilot') {
       readBody(data => {
@@ -9837,7 +10032,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           broadcastChannelPlaylistData(ch);
           broadcastMixerState();
         } catch (e) {
-          res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+          // Respond-then-broadcast route — never writeHead twice.
+          sendJsonError(res, 400, { error: e.message });
         }
       });
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist\/entry$/)) {
@@ -9863,12 +10059,11 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
           res.writeHead(200); res.end(JSON.stringify({ status: 'ok', playlist: ch.playlist, pattern: ch.pattern }));
           broadcastMixerState();
         } catch (e) {
+          // Respond-then-broadcast route — never writeHead twice.
           if (e && e.code === 'EBUSY') {
-            res.writeHead(409); res.end(JSON.stringify({
-              error: 'transition in progress', code: 'EBUSY',
-            }));
+            sendJsonError(res, 409, { error: 'transition in progress', code: 'EBUSY' });
           } else {
-            res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+            sendJsonError(res, 400, { error: e.message });
           }
         }
       });
@@ -9929,7 +10124,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         });
         broadcastMixerState();
       } catch (e) {
-        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        // Respond-then-broadcast route — never writeHead twice.
+        sendJsonError(res, 400, { error: e.message });
       }
     } else if (req.method === 'POST' && req.url.match(/^\/mixer\/channels\/[^\/]+\/playlist\/discard$/)) {
       // Discard in-memory edits and snap the channel back to the saved
@@ -9976,7 +10172,8 @@ export function startApiServer(opts, engineCore, patternsDir, publishStatsRef, i
         res.writeHead(200); res.end(JSON.stringify({ status: 'ok', defaults: entry.defaults || {} }));
         broadcastMixerState();
       } catch (e) {
-        res.writeHead(400); res.end(JSON.stringify({ error: e.message }));
+        // Respond-then-broadcast route — never writeHead twice.
+        sendJsonError(res, 400, { error: e.message });
       }
     } else {
       res.writeHead(404); res.end('Not Found');

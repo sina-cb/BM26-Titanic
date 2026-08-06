@@ -50,11 +50,13 @@ controllers:
         startAddress: 1
         chain:
           - LED_0
+        output: 1
       - port: 2
         universe: 12
         startAddress: 1
         chain:
           - LED_1
+        output: 2
     led:
       baseUniverse: 0
       startAddr: 1
@@ -78,7 +80,10 @@ controllers:
       controllerId: titanic_202
       boardId: angio4-old
       lastPush:
-        at: '2026-07-10T23:02:37.377Z'
-        outcome: applied
-        firmwareSHA: 647928678d7b
-        configHash: 9111e00c807864bf231bb60ca7e22c03247e25a0a0f99efa8f36ac9c3f750c30
+        at: '2026-08-05T07:00:59.053Z'
+        outcome: needs-reboot
+        firmwareSHA: f94b27b39f9f
+        configHash: 0ea7d8a09fc0805e5197c4d762247830d4db908a85c7b31bb7e8082209fe6c91
+    parkedOutputs:
+      - output: 3
+        universe: 11

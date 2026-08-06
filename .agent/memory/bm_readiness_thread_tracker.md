@@ -8364,3 +8364,2838 @@ fails to load on a pre-existing, unrelated stale-`groupBits` error.
 **Compliance.** No git operation of any kind. No engine/sim boot, no server, no
 port bound; the operator's stack kept 6966–6972, 5568, 8081, 10000. Scratch in
 `~/tmp/_148`.
+
+**Landed 2026-08-04 — `_150` bench-mirror AUDIT (read-only) feeding a runtime
+"BENCH MIRROR" mode (Opus,
+[`../reports/202608/20260804_150_bench_mirror_audit.md`](../reports/202608/20260804_150_bench_mirror_audit.md)):**
+factual audit only — no source/test/doc/scene edit, no git op, no process
+started, no port bound, zero packets toward hardware.
+
+**Mapping verified EXACT.** All seven slices in
+`simulation/scenes/test_bench/bench_mirror.yaml` match the operator's spec byte
+for byte (U6→U2@1, U5→U2@41/74, U2→U2@107/226, U30→U10, U31→U12). **No
+discrepancy.**
+
+**Why the second tab exists.** `isMirrorActive`'s THIRD precondition
+(`bench_mirror.cjs:234-238`, called at `sacn_bridge.js:434`) requires the
+sidecar's OWN scene to be in the bridge's active set = union(pin, engine scene,
+client tags). Engine must be on `titanic` (precondition 2) and the launcher pins
+`titanic`, so the only remaining path is a browser tagging itself `test_bench`
+(`sacn_bridge.js:751`) — a second tab, which itself trips the multi-client
+contention warning and is the writer-#2 (prio-150) hazard. **Smallest correct
+change: swap precondition 3 for an explicit process-scoped `armed` flag; keep 1
+and 2 verbatim. One call site.** Precondition 3 IS the `_89` §4.3 deployment
+guard, so the mode must supply its own: OFF at every process start, explicit
+gesture, unmistakable banner, loud auto-disarm.
+
+**Ownership measured.** Suppression already runs before the sender diff
+(`sacn_bridge.js:454-455`, pinned by `bench_mirror.test.js:379-387`).
+`U2 → 10.x.x.10` IS a live titanic relay route today (`titanic/patches.yaml:402-411`)
+so suppressing it is load-bearing; `U10/U12 → 10.x.x.60` are NOT claimed with
+only titanic active (no-op today, needed for churn). `U30/U31 → .60` stays
+relayed while armed — same box, four universes.
+
+**`_105` findings still OPEN and in scope:** **M2/F2** — `mirrorTargets`
+(`sacn_bridge.js:445-453`) never subtracts `engineState.owned`, and the
+engine-suppression line at `:623` then lies; fix = refuse at ARM + suppress and
+auto-disarm at recompute, and refuse when `ownedUnavailable`. Do NOT "validate
+dest_host against real controllers" — `10.x.x.10` is a real ship controller by
+design. **F10** — the `🚫 … BENCH MIRROR` suppression loop is inside the
+`mirrorSig` gate (`:593-616`); give it its own signature like `excludedSig`
+(`:619`). Adjacent: **F12** cross-file duplicate destinations, **F14** raw-bytes
+state key, **F8** percent→Uint8Array quantisation (`useRawDmxValues` grep-proven
+absent from all project source).
+
+**Disarm is NOT clean today.** `Sender.close()` is socket teardown only
+(`node_modules/sacn/dist/sender.js:81-86`) and the package hardcodes
+`this.options = 0` (`packet.js:79`) so E1.31 `stream_terminated` is unreachable.
+`.10`/U2 is refed instantly by the restored relay (with RAW titanic U2 = lit
+wrong fixtures, pre-existing); `.60`/U10+U12 are unfed and hold last look until
+the device's own `dmx.timeoutMs` (docs/41:194,364-368 — value never set by this
+repo, `0` = hold forever). **Design requires an explicit 3× all-zero frame per
+owned destination, awaited BEFORE the sender close** (`sendVia` at `:946` must
+return its promise).
+
+**HARDWARE TRAP (operator).** `10.x.x.60` is bound in BOTH scenes on one
+`boardId: angio4-old`: titanic `LeftLeftRopes` U30/U31 `controllerId: testbench`
+lastPush `2026-08-03` **applied**; test_bench `Titanic_202` U10/U12
+`controllerId: titanic_202` lastPush `2026-08-05` **needs-reboot**. Unless
+rebooted since, the board is still on U30/U31 → armed, the strands would be lit
+by the RAW relay, not the mirror — a green-looking false positive. Fix is
+`_89` §6 step 4 (Push the test_bench card once, let it reboot). Also: two
+controllerIds for one board contradicts `marsinled-controller-onboarding`.
+
+**Surface (operator's instinct confirmed, one correction).** ARM/DISARM belongs
+in the sACN IN monitor (`sacn_monitor_panel.js:157-186`, BLACKOUT recipe at
+`:208-219`) — the only UI already talking to the bridge. BUT that panel only
+shows when the engine mode is `sacn_in` and enabled (`gui_builder.js:1601`,
+`pattern_editor.js:804`), so **status must be a panel-independent HUD banner**
+modelled on `multi_client_warning.js:28-68`. Protocol: two new :6971 messages
+(`benchMirrorArm`/`Disarm`) + a `benchMirrorStatus` broadcast on transition AND
+on every new connection (the census pattern, `:726-746`) so a reloaded tab
+cannot show a stale/absent banner. `_127`'s snapshot fields must not be renamed
+(`bridge_route_confirm.js:167-172` throws); a mirror-owned pair correctly FAILS
+an LED push's third check (`:214-217`) — say so in the banner, don't soften it.
+
+**Tests.** No test ever executes `sacn_bridge.js` — bridge wiring is
+source-string regex (`bench_mirror.test.js:379-395`). Port-free precedents: pure
+modules, plus the `WebSocketServer({port: 0})` stub-bridge integration at
+`bridge_route_readback.test.js:412-460`. New coverage lands in a new
+`tests/bench_mirror_arm.test.js` against a PURE `evaluateArmRequest()`, plus
+extensions to those two files.
+
+**Open operator questions:** (1) socket- vs process-scoped arm / auto-disarm on
+last client disconnect? (2) refuse to arm with >1 sim window, or warn? (3) has
+`.60` been rebooted since the `needs-reboot` receipt? (4) should raw
+`U30/U31 → .60` also be suppressed while armed (widening "owned" from pair to
+host)? (5) which `controllerId` is canonical for `angio4-old`?
+
+**Landed 2026-08-04 — `_151` BENCH MIRROR runtime mode, built on `_150`'s design
+(Opus, `.agent/reports/202608/20260804_151_bench_mirror_runtime_mode.md`):** the
+temporary session-scoped "Titanic → physical test bench" preview ships on the
+EXISTING system — engine stays `titanic`, visible sim stays `titanic`, **no
+second tab**. `isMirrorActive`'s precondition 3 is now an explicit **armed flag**
+(`bench_mirror.cjs`), preconditions 1+2 verbatim; `sacn_bridge.js` passes
+`_mirrorArm !== null && _mirrorArm.scene === found.scene`.
+
+**Operator rulings executed.** (1) **Socket-scoped** arm — `_mirrorArm.ws`; the
+arming window's close/reload disarms with the full blackout; explicit DISARM
+button too; process memory only, DISARMED at every bridge start (pinned by a test
+that scans every `_mirrorArm` line for persistence calls). (2) **Multi-window
+warns, does not refuse** — the warning names the prio-150 writer-#2 hazard.
+(3) **Host-level suppression is DECLARED, not guessed**: the sidecar moved to
+**v2** with a REQUIRED per-mirror `suppress_host` (+ REQUIRED top-level `label`
+for the banner). Measured reason: titanic routes **U2/U3/U4 → .10** and
+**U30/U31 → .60**, so a uniform host rule would silence the ship gateway's U3/U4
+and a uniform pair rule leaves `_150` §9's false positive open. `.60` =
+`suppress_host: true` (whole box), `.10` = `false` (pair only). **The mapping
+itself is byte-identical** — all seven slices unchanged; `_89`'s live-map tests
+pass untouched. (4) The `.60` board-state check is **documented, not run**
+(`GET /api/config` → `strands[].dmxUniverse` 10/12 vs 30/31, plus
+`/api/status.sacn.lastUniverse`); report §9.4.
+
+**`_105` fixes landed:** **M2/F2** — `engineState.owned` subtracted from
+`mirrorTargets`, refused at ARM (pair AND any universe on a wholly-owned host),
+auto-disarm at recompute, refused when `ownedUnavailable`. M2's
+"dest_host must be a bench controller" deliberately NOT implemented (would kill
+the intentional mapping). **F10** — suppression logs on `suppressedSig`, outside
+the `mirrorSig` gate. **F12** — cross-sidecar destination/host overlap refused at
+ARM. **F14** — mirror-state reuse keyed on `JSON.stringify(spec)`, not raw bytes.
+
+**Clean disarm:** 3× all-zero 512-ch frames per owned destination, **awaited
+before** the senders close (`sendVia` now returns its promise; `_mirrorDisarming`
+holds mirror senders open so no other recompute can close them mid-blackout), on
+every path — DISARM / socket drop / degrade / SIGINT+SIGTERM. Then one recompute
+restores the relay in the same pass, so the DMX gateway is never unfed.
+
+**Surface:** ARM/DISARM + a `Bench Mirror` stat row in the sACN IN monitor
+(`sacn-in-bench-mirror-btn`); pure decision half in new
+`src/gui/bench_mirror_control.js` (separate file — the panel's htm/preact deps
+are browser-vendored and unimportable from Node tests). Panel-independent HUD in
+new `src/gui/bench_mirror_banner.js`: **"🪞 BENCH MIRROR ACTIVE — TITANIC LEFT
+FRONT · owns U2→…10, U10→…60, U12→…60 · owns all of …60 · ordinary relay
+suppressed"**. Two new `:6971` messages (`benchMirrorArm`/`benchMirrorDisarm`,
+reqId-correlated) + `benchMirrorStatus` broadcast on every transition AND to
+every new connection. `_127`'s snapshot shape untouched.
+
+**ARM proves ownership rather than intending it:** after the recompute it
+re-reads the LIVE sender maps through `buildRouteTableSnapshot` and auto-disarms
+if any owned pair is not exclusively mirror-owned, or a relay sender survives on
+a wholly-owned host.
+
+**Tests: `npm test` 1826 / 1820 pass / 6 fail** vs a baseline **measured on this
+tree** of 1773 / 1767 / 6 — **+53, zero new failures, byte-identical failing
+list**. (The brief quoted 1773/1766/**7**; this tree measured 6 BEFORE any edit —
+the working tree carries the operator's own uncommitted scene/model edits from
+00:0x–00:38 today.) New `tests/bench_mirror_arm.test.js` (35) loads the **REAL
+`sacn_bridge.js`** with `sacn`/`ws`/`process_priority` faked and `fetch` stubbed
+— **zero ports bound, zero packets, no address literals** (they are read from the
+sidecar) — and proves: fresh bridge DISARMED; refused ARM sends nothing and
+changes no route; armed ⇒ mirror is the ONLY writer, `.60` keeps only the
+composed universes, `.10` keeps U3/U4; raw frames never reach an owned
+destination; status reaches a tab that connects AFTER the arm; DISARM = exactly
+3 zero frames/universe then relay resumes; socket-drop and engine-scene-change
+auto-disarms. `bench_mirror.test.js` 30 → 48. `security_check.py --all` = the 6
+pre-existing gitignored `.scene_backups/studiodj/**` MACs, unchanged.
+
+**Operator caveat (unchanged, now honest):** the strands need the authored
+U10/U12 config applied+rebooted before they respond. Because `.60` is now owned
+whole, **dark strands mean "the board is not on U10/U12"** instead of the old
+green-looking false positive where the raw U30/U31 relay lit them. Fix = Push the
+`Titanic_202` card once in the test_bench controller pane (a device write,
+operator-only). Also still open: two `controllerId`s (`testbench` vs
+`titanic_202`) for one `boardId: angio4-old`.
+
+**Not done / refused:** no controller push, no re-addressing, no firmware op, no
+engine restart, no live packet test, no server started, no port bound, no git
+operation. `_105` F8 (percent→byte quantisation), F3/F4/F5, F19 left open. A
+host-suppressed pair reads as `missing U30→…60` in the `_127` push read-back
+rather than "the mirror owns it"; adding a `mirrorSuppressedHosts` field would
+improve the sentence and was left out to avoid widening that contract here.
+
+**Reviewed 2026-08-04 — `_152` adversarial routing + test review of `_151`
+(Opus, READ-ONLY,
+`.agent/reports/202608/20260804_152_bench_mirror_adversarial_review.md`):**
+verdict **FIX-FIRST — 1 moderate defect on the operator's advertised disarm
+gesture**; 8 of 9 attack surfaces CONFIRMED. Zero code edits, zero git writes
+(`show`/`diff`/`status` only), no port bound, no packet, no engine/sim/bridge
+started.
+
+**CONFIRMED as claimed:** mapping byte-identical vs `git show HEAD` (all 7
+slices, every addr/length; only `version`/`label`/`suppress_host`/comments
+differ) with `suppress_host` matching the ruling (`.60` true, `.10` false) and
+v1 refused **at parse** with the migration quoted into the ARM refusal; armed
+defaults OFF (module-scope `let _mirrorArm = null`, no persistence on any
+`_mirrorArm` line, **no client-side auto-rearm** — reconnect sends only
+`setScene`); all 11 ARM refusals named + fail-loud, and the post-recompute
+ownership **proof** via `buildRouteTableSnapshot` is real (an ARM behind a closed
+boot gate auto-disarms loudly rather than assuming); status built fresh every
+call, pushed on connect + every transition, no staleness; one-writer holds in
+**steady-state armed** (relay diff runs on the post-suppression set; client-tag
+and engine-owned paths both covered; arm-time gap is straight-line sync);
+`_105` **M2 subtraction present WITHOUT the dest-host validation half** (only
+`classifyRouteIp`, so the intentional cross-scene mapping survives) and **F10
+`suppressedSig` outside the `mirrorSig` gate**, plus F12/F14. Non-interference
+verified by mtime: `_151`'s 9 files 08:43–09:10; every other modified scene/model
+file 00:10–00:22 (operator's own session); titanic `controllers.yaml`/
+`patches.yaml` untouched. `security_check.py --all` = the 6 baseline gitignored
+`.scene_backups/studiodj/**` MACs; **no IP literal** in any changed source file.
+
+**Test counts reproduce exactly** (runner is `node --test`, not jest):
+`bench_mirror_arm.test.js` **35/35**, `bench_mirror.test.js` **48/48**, full sim
+suite **1826 / 1820 pass / 6 fail** with a byte-identical failing list. The rig
+is genuine — `Module._load` patched before the require, so the REAL
+`sacn_bridge.js`, real recompute, real handlers execute; zero ports, zero
+packets, no address literals.
+
+**DEFECTS.** **D1 (MODERATE, blocks) `sacn_bridge.js:943-946`** — the ws-close
+handler calls `recomputeRoutes()` **synchronously while `disarmBenchMirror` is
+suspended mid-blackout**. `_mirrorDisarming` guards mirror-sender *closing*
+(`:668`) but **not relay-sender creation** (`:627-647`), so an ordinary relay
+sender is opened on an owned pair and a **raw frame is emitted between blackout
+frames 1 and 2** on `U2 → 10.x.x.10` — two live writers, reproduced
+deterministically offline. Blast radius is small (only that pair collides; the
+wholly-owned `.60` blackout lands on U10/U12 vs restored U30/U31, so no frozen
+frame) but it breaks the categorical "no second writer" requirement on the very
+gesture `_151` §9.2 advertises ("just close the sim window"). Fix: skip the plain
+recompute when this socket's disconnect already started the disarm — the disarm's
+own recompute (`:1237`) restores the relay and `clientScenes.delete(ws)` (`:935`)
+already ran. **D2 (MINOR) `sacn_bridge.js:1256-1266`** — no `_mirrorDisarming`
+guard on the ARM path, so an ARM landing inside the blackout is accepted
+(bypassing the "a re-arm must go through the blackout" refusal) and the bridge
+prints `BENCH MIRROR DISARMED … released` **while ARMED**, with the DISARM's own
+reply carrying `armed:true`; reproduced once `FakeSender` resolves on a later
+event-loop turn as real `dgram.send` does. Low reachability (a few ms; the
+unauthenticated `:6971` surface is the practical vector). **D3 (cosmetic)** —
+`_151` §2/§8 document `let _lastArmStatus = null;`; **no such identifier exists**
+(status is always rebuilt fresh, which is better). **D4 (test gap, and the reason
+D1 was missed)** — `FakeClient` never sends `setScene`, so `clientScenes` is
+always empty and the close handler's `recomputeRoutes` at `:946` **never runs in
+any test**; the socket-drop test exercises a flow the real browser never takes.
+**D5** — SIGINT/SIGTERM blackout, the runtime `ownedUnavailable` degrade and F12
+end-to-end are untested; Tier-2 tests are order-dependent on one shared bridge.
+
+**Owed to `_151`/next implementer:** D1 fix + comment correction at `:938-942`;
+D2 refusal; `setScene` in the test rig's `connect()` plus an overlap assertion;
+strike `_lastArmStatus` from the `_151` report. None of it touches the sidecar,
+either scene's controllers/patches, or any engine model.
+
+**AMENDMENT to `_151` (2026-08-04) — `_152` FIX-FIRST defects CLOSED (Opus,
+report §11 appended in place):** all five items addressed; no renumbering, same
+slice, sidecar/scenes/engine-models still untouched and the mapping still
+byte-identical.
+
+**D1 (blocking) FIXED with a general invariant, not the suggested per-caller
+branch.** The review's fix (skip the plain recompute in the ws-close handler)
+closes only that path; `recomputeRoutes` is also reachable during the release
+window from a client `setScene` (`sacn_bridge.js:887`) and from the 3 s engine
+poll (`:781`). So the hold is stated where relay senders are DECIDED:
+`partitionMirrorSuppression` gained an optional `hold` and a third suppression
+reason `why:'blackout'` (`bench_mirror.cjs:356-411`); `_blackoutHold` is raised in
+`disarmBenchMirror`'s SYNCHRONOUS prologue before the first `await`
+(`sacn_bridge.js:1259-1263`, from the live `_mirrorEntries` + wholly-owned hosts)
+and dropped in the same `finally` that clears `_mirrorDisarming` (`:1289-1293`);
+the single call site passes it (`:541`) — pinned by a test asserting
+`hold: _blackoutHold` appears EXACTLY ONCE, so every recompute path is covered by
+construction. Suppression log gained the blackout sentence (`:738-752`); the
+misleading ws-close comment corrected (`:938-948`).
+
+**Reproduced-then-killed.** With `hold` forced null the new regression fails with
+`U2 → 10.x.x.10: a RAW frame was emitted between the first and last blackout
+frame — two live writers on one (universe, controller) during the release
+window`; restored, it passes. Same falsification run for D2's guard.
+
+**D2 FIXED** — `evaluateArmRequest` takes `blackoutInFlight` and refuses FIRST,
+before every other check (`bench_mirror.cjs:454-476`); bridge passes
+`_mirrorDisarming` (`:1315`). Test asserts the refusal AND that `🪞 BENCH MIRROR
+ARMED` never appears between `DISARMING` and `DISARMED`.
+
+**D4 FIXED — three harness defects, each of which alone hid the race:**
+`connect()` now sends `setScene` like the real browser (so `clientScenes` is
+non-empty and the close handler's recompute actually runs); `FakeSender.send`
+resolves on a later event-loop turn as `dgram.send` does (so the window exists at
+all); and `captureConsole`/`releaseConsole` are now REFERENCE-COUNTED — they
+nest, and an inner release was silently dropping every later log line, masking a
+real assertion. Added an ordered cross-sender `open`/`send`/`close` event log
+(the only way to express "a raw frame BETWEEN two blackout frames"); completion
+is now read from the bridge's own status broadcast rather than "is a sender open
+on that pair" (mirror and relay senders share one key — ambiguous both ways); and
+the reviewer's noted vacuity in "a refused ARM sends nothing" is closed.
+
+**D3 FIXED** — `_lastArmStatus` struck from `_151` §2/§8 and replaced with the
+actual rebuild-fresh mechanism (+ `_blackoutHold`/`_blackoutSettled`).
+
+**D5 partly closed.** Runtime `ownedUnavailable` degrade now covered end-to-end.
+SIGINT/SIGTERM mid-blackout edge FIXED IN CODE (`:1479-1487` awaits
+`_blackoutSettled`; previously it saw `_mirrorArm===null`, said "was not armed"
+and exited, killing the blackout) but **accepted as untested** — stubbing
+`process.exit` in the shared bridge risks hanging the runner. **Accepted gaps:**
+F12 end-to-end (needs a second scene dir with a sidecar), and Tier-2 order
+dependence (one bridge per module cache) — though the Tier-2 cases now wait on
+the bridge's own completion signals instead of fixed settle counts.
+
+**Tests: `npm test` 1833 / 1827 pass / 6 fail** (+7 over `_151`'s 1826), same six
+pre-existing failures, byte-identical list. `bench_mirror.test.js` 48 → 52,
+`bench_mirror_arm.test.js` 35 → 38. `security_check.py --all` = the same 6
+gitignored `.scene_backups/studiodj/**` findings. `git diff --check` clean. Still
+zero ports bound, zero packets, no engine boot, no git operation; the operator's
+uncommitted files (mtimes 00:0x–00:38) untouched.
+
+**`_152` AMENDMENT (2026-08-04) — re-verification of the D1–D5 fixes: SHIP**
+(Opus, READ-ONLY; report §5 appended in place, `_152` not renumbered): all five
+closures **CONFIRMED**, D1 and D2 **falsified independently** without touching
+production code. Verdict upgraded **FIX-FIRST → SHIP**.
+
+**D1 CONFIRMED, and the owner's general invariant is better than the per-caller
+skip I proposed** — my fix closed only the ws-close path; `setScene` (`:887`) and
+the 3 s engine poll (`:781`) reach `recomputeRoutes` in the same window.
+Verified: `partitionMirrorSuppression` has **exactly one** call site feeding the
+sender diff (`sacn_bridge.js:541`, with `hold: _blackoutHold`) — the only other
+production call is inside `evaluateArmRequest` (`bench_mirror.cjs:575`), which
+computes warnings and creates no sender, so holdless is correct there; the hold is
+raised at `:1253` **before every suspension point** (the `_blackoutSettled` IIFE
+at `:1266` runs its first send round synchronously; the outer function first
+suspends at `:1277`), so no interleaving window exists; it is dropped in the same
+`finally` as `_mirrorDisarming` (`:1278-1282`), so a rejected blackout still
+releases it; and the hold set (live `_mirrorEntries` + `was.hosts`) is not stale —
+an engine-claimed destination has no mirror sender, gets no zeros, needs no hold.
+
+**Falsification, both directions, zero source edits:** a `--require` preload
+intercepting `lib/bench_mirror.cjs` and forcing the exported
+`partitionMirrorSuppression` to `hold: null` makes the repo's D1 regression fail
+with `U2 → 10.x.x.10: a RAW frame was emitted between the first and last blackout
+frame`; unpatched it passes. Same for D2 with `blackoutInFlight` forced false.
+**My own §1 repro — a separately written harness — now reports "No raw frame
+overlapped the blackout" against the fixed tree.** Their regression is
+non-vacuous: it pumps live traffic on all three owned universes and asserts on an
+ordered cross-sender `open`/`send`/`close` window, plus that raw frames really
+flowed and resumed.
+
+**D2 CONFIRMED** — refuses FIRST, before even the empty-scene guard
+(`bench_mirror.cjs:463-474`), correct since a blackout is a property of the bridge
+not the request. **D4 CONFIRMED** — `setScene` sent, `FakeSender.send` resolves on
+a later turn, capture/release reference-counted; the third was the owner's own
+find and was real. **D3 CONFIRMED** — `_lastArmStatus` gone. **D5** — runtime
+`ownedUnavailable` degrade covered end-to-end; the SIGINT/SIGTERM mid-blackout
+edge I raised is **fixed in code** (`:1496`, `:1502-1511` await `_blackoutSettled`);
+untested / F12 e2e / Tier-2 ordering accepted, correctly labelled.
+
+**RESIDUAL-1 (non-blocking, `sacn_bridge.js:1253-1276`):** the hold is raised at
+`:1253` but the `try` guaranteeing its release opens at `:1276`; `console.log` and
+`broadcastLog` sit in between, and `ws.send()` can throw on a socket in transition
+— precisely the socket-close disarm path. A throw there leaks `_blackoutHold`
+**permanently**, suppressing the ordinary relay on those pairs (unfed gateway)
+until process restart. Narrow (`readyState === 1` guard; `ws` removes closed
+sockets first) and the async IIFE at `:1266` is NOT a risk (a sync throw in an
+async body becomes a rejected promise the `finally` handles). One-line fix: open
+the `try` immediately after the hold is raised.
+
+**Counts observed = counts claimed:** `bench_mirror.test.js` **52/52**,
+`bench_mirror_arm.test.js` **38/38**, full suite **1833 / 1827 / 6** with the same
+six pre-existing failures, `security_check.py --all` **6** baseline gitignored
+`.scene_backups/studiodj/**`. **No scope creep** — only `bench_mirror.cjs`,
+`sacn_bridge.js` and the two test files changed since the first pass; sidecar
+mapping still **byte-identical to HEAD** (re-verified programmatically),
+`suppress_host` unchanged, titanic `controllers.yaml`/`patches.yaml` untouched,
+operator's files still at 00:10–00:22. Zero falsification residue in the tree
+(both preloads intercept at module load from the scratchpad). Still read-only: no
+port, no packet, no engine boot, no git write.
+
+**AMENDMENT 2 to `_151` — `_152` RESIDUAL-1 CLOSED (report §11):** the `try`
+guarding `_blackoutHold` now opens immediately after the hold is raised, not just
+around the `await` (`sacn_bridge.js:1290-1327`), so a throw from the prologue's
+`console.log`/`broadcastLog` — `ws.send()` throws on a socket in transition,
+exactly the socket-close disarm path — can no longer leak the hold and suppress
+the bench gateway's relay until process restart. The three fire-and-forget call
+sites moved from a bare `void` to `disarmInBackground` (`:1361-1369`), because a
+rejected disarm would otherwise be an unhandled rejection (process-fatal in
+current Node) on the very path releasing the hardware; a test pins that no
+`void disarmBenchMirror(` remains. Regression added (a client whose `send` throws
+only on the `BENCH MIRROR disarming` line): fails without the fix with "the
+gateway pair must be relayed again — a leaked blackout hold would suppress it
+forever", passes with it. **Tests: `bench_mirror.test.js` 52/52,
+`bench_mirror_arm.test.js` 39/39, full suite 1834 / 1828 / 6** — same six
+pre-existing failures; `security_check.py --all` = the same 6 gitignored
+`.scene_backups/studiodj/**` findings. **Incident:** a scripted edit truncated
+`sacn_bridge.js` to 0 bytes (Python `write_text` truncates before encoding; an
+emoji escape raised `UnicodeEncodeError`). Rebuilt from `git show HEAD:` (a READ
+— no git state mutated) plus re-application of every `_151`/`_152` edit; verified
+by 91/91 bench-mirror tests incl. ~35 source-shape pins, an unchanged full-suite
+result, and a byte-identical replay of the report's verbatim arm/disarm log
+block. No other file affected; operator's uncommitted files untouched.
+
+**`_155` BENCH MIRROR v3 DESIGN — selectable source mapping at ARM + control
+relocation to the Controllers header (Fable, DESIGN-ONLY; report
+`.agent/reports/202608/20260805_155_bench_mirror_selectable_mapping_design.md`):**
+zero production edits, zero git writes, zero ports/packets. Independent of the
+two in-flight random-colors investigations by construction. **Core inversion:**
+the sidecar goes v3 and stops carrying slices/addresses/IPs entirely — it
+declares SLOTS (bench fixture NAMES + `default_source`) and suppression policy
+by CONTROLLER NAME; every universe/address/footprint/host/slice is resolved
+FRESH from scene data (controllers/patches/scene_config + the one fixture
+registry) at ARM time in a new pure `lib/bench_mirror_resolve.cjs`, then
+materialized into the SAME internal spec shape, re-validated by the SAME
+structural validator, and handed to the UNCHANGED `_151` pipeline
+(evaluateArmRequest 1–11, ownership proof, blackout hold, 3× zero-frame disarm
+— all carried verbatim; refusal catalog grows R-12…R-20, every one naming the
+offending slot/choice). **Compatibility = same `fixtureType` string, both ends
+through the one registry** (⇒ identical personality/footprint/channel map by
+construction; whole-fixture slices re-proven at arm, untouched dest channels
+zero) — NO channel-map translation, refused deliberately: a hand-kept second
+map is exactly the semantic-mismatch class behind the failed physical test.
+LED strands add identical pixel format (order/stride/white) + srcPx≥destPx
+prefix copy (warned); typed LED fixtures (future TE sign slot — schema stanza
+ready, activates when the bench sign is patched) require exact px equality.
+Residual named, not hidden: data cannot see a fixture's PHYSICAL personality
+switch. Same source → two slots allowed (fan-out); overlapping dest impossible
+by construction AND re-refused at runtime; all-`none` controller stays owned
+and dark (operator Q2). Selection: complete map or absent=defaults, partial
+refused; last-used remembered in bridge PROCESS MEMORY only (never disk —
+selection ≠ arm; deployment guard intact). Protocol: new `benchMirrorOptions`
+(picker data, advisory — ARM re-resolves from disk, no TOCTOU trust);
+`benchMirrorArm` + optional `selection`; status gains `selection` +
+`blackoutInFlight`, pushed to new connections. UI: ARM/DISARM moves to the
+🎛 Controllers header (8 exact states incl. LINK DOWN / DISARMING lockout /
+refusal text beside the control; never silently picks among 0/>1 sidecars);
+ARM opens a compact picker, defaults/last-used pre-selected, one-click
+confirm, per-slot `— none (held dark) —`; armed Controllers cards badge owned
+destinations + `← titanic source` per fixture; sACN monitor demoted to
+read-only stat row + logs, button REMOVED (no duplicates); banner gains the
+slot census. Test plan T-1…T-8 incl. byte-level per-slot deterministic-frame
+tests and a default-equivalence pin (computed defaults ≡ frozen v2 seven-slice
+table) against the 1834/1828/6 baseline. Implementation sliced S1–S5 for one
+owner (~250 resolver + ~120 bridge + ~220 UI + sidecar rewrite). **Open
+operator questions (3):** region presets in the picker now or later; all-`none`
+controller owned-dark (designed) vs released; process-memory last-used
+(designed) vs defaults-every-time.
+
+## `_154` — BENCH MIRROR fixture-profile + address semantic verification (INVESTIGATION, READ-ONLY)
+
+**Report:** `.agent/reports/202608/20260805_154_bench_mirror_fixture_profile_verification.md`
+**Trigger:** BENCH MIRROR failed its first PHYSICAL test — after ARM the bench
+fixtures showed apparently random output/colors. The byte pipeline was proven by
+`_150`/`_151`/`_152`; nobody had ever proven SEMANTIC compatibility of source and
+destination fixtures. Read-only: no source/test/scene edit, no git write, no port
+bound, no packet, no device HTTP, no ARM.
+
+**VERDICT: the fixture profiles are NOT the bug. All 344 destination channels on
+the bench DMX gateway check out — 0 mismatches.** Source fixture type,
+personality, channel function, footprint and start-address offset agree exactly
+on all five DMX slices; both LED slices agree on stride (4), order (RGBW), white
+lane (`native`), start address (1) and wire math. Verified mechanically from the
+live scene YAMLs + the three fixture personality YAMLs + the generated engine
+model `marsin_engine/models/titanic.js` (which is what actually emits the bytes,
+and which agrees with `scenes/titanic/patches.yaml`).
+
+**SOURCE TRUTH:** U6 = four `UkingPar` 10-ch at 1/11/21/31 (Left Auditorium 5-8);
+U5 ch1-66 = two `VintageLed` 33-ch at 1/34 (Left Front Rails 1/2); U2 ch1-238 =
+two `ShehdsBar` 119-ch at 1/120 (Left Front Wall 1/2); U30/U31 = 40-px RGBW ropes
+(footprint 4/px, addrs 1,5,…,157) so 80 ch is exactly 20 whole pixels.
+**DEST TRUTH:** bench U2 ch1-344 tiled contiguously by 4 `UkingPar` + 2
+`VintageLed` + 2 `ShehdsBar`, no gaps, no overlaps, nothing after ch344; haze/fog
+are on **U1** and untouched. **The "stale titanic re-patch" hypothesis is
+DISPROVEN** — `titanic/patches.yaml` and `controllers.yaml` are unmodified vs
+`HEAD` and still match the sidecar's assumptions. **The "RGB-packed source
+reinterpreted as RGBW" hypothesis is DISPROVEN** — the ropes are RGBW×4 in the
+model, no stride shift possible.
+
+**SMOKING GUN — M1: the sim window is a priority-150 writer to the same
+controllers, and it wins.** `simulation/src/core/animate.js:696-724`: in
+`sacn_in` mode the `continue` guard is bypassed
+(`!isEffect && lightingMode !== 'sacn_in' && !isMappingOutput`) so the tab
+unicasts EVERY patched `(universe, controllerIp)` of the loaded scene to the real
+controller at **priority 150** — including `U2 → 10.x.x.10` and
+`U30/U31 → 10.x.x.60`. The mirror goes out at the SOURCE frame's priority
+(`sacn_bridge.js:1427-1436`), i.e. the engine's **100**
+(`marsin_engine/config.yaml sacn.priority: 100`). 150 > 100. And in `sacn_in`
+mode the sim never rewrites its router from pixels (`mapPixelsToSacn` is in the
+`else if (mappingEnabled)` branch, `animate.js:497-519`), so what it retransmits
+is the **raw received titanic frame, byte-accurate**. **This is structural, not
+bad luck: the ARM button lives in the sACN IN monitor, which is rendered ONLY
+when the mode IS `sacn_in`** — the operator cannot arm the mirror without being in
+the exact mode that makes the sim outrank it. Nothing in `animate.js`,
+`sacn_output_client.js` or `sacn_output_bridge.js` mentions the bench mirror
+(grep: zero hits).
+
+**Byte-level evidence that this IS "random".** Raw titanic U2 =
+ch1=255, ch2-11=0, ch12-119 = LFW1's 18 px × RGBWAV, ch120=255, ch121-130=0,
+ch131-238 = LFW2, ch239+ = 0. Landing that at bench addresses puts ANIMATED PIXEL
+COLOUR on: Par 2 strobe (ch18 = LFW1 px2 Red) and **Par 2 Function-selection**
+(ch19 = px2 Green, which jumps between manual / colour-macro / jump / gradate /
+pulse / sound-active); Par 3 strobe+funcsel (ch28/29 = px3 Amber/Violet); Par 4
+strobe+funcsel (ch38/39 = px5 Blue/White); **Vintage Left Total Strobe** (ch42 =
+px6 Red) and **Main/Aux Light Effect** macros (ch52/54 = px7 Amber / px8 Red,
+which run the fixture's own built-in chases); Vintage Right the same at
+ch75/85/87; **Bar Left Strobe + Function** (ch108/109 = px17 Red/Green, which
+drops the bar into auto mode); Bar Right the same at ch227/228. Pars 1 and 2 read
+master-dimmer bytes of 0 and go dark. That is an exact match for the reported
+symptom.
+
+**Aggravator:** the same mechanism sends raw `U30/U31 → 10.x.x.60` at 150, which
+**defeats `suppress_host: true` from OUTSIDE the bridge** — so `_151` section 9.3's
+promise ("dark strands mean the board is not on U10/U12") does not hold and must
+be retracted until M1 is fixed.
+
+**M2 — the relay path produces IDENTICAL garbage**, so a failed/absent/auto-
+disarmed ARM is visually indistinguishable from "armed but outranked". Any retest
+must read the bridge's own `BENCH MIRROR ACTIVE` / `Relay suppressed` lines
+before trusting the fixtures.
+
+**M3 — `_105` F8 measured exactly:** round-trip through the `sacn` package's 2-dp
+percent lane leaves **54 of 256 byte values exact, worst error −3, and DMX 1 and 2
+collapse to 0** (0→0, 3→3, 26→26, 64→64, 128→127, 153→153, 200→199, 230→229,
+254→252, 255→255). Not a "random colour" mechanism, but it MUST be baked into the
+truth-test expectations or the tests fail for the wrong reason.
+
+**M5 — cosmetic only, do not chase:** bench strands show 20 of 40 rope px (`_89`
+by design); `controllerGamma` 1.0 (titanic default, no `wire:` block) vs 2.2
+(bench explicit) is **preview-only and never reaches the wire**
+(`ledCompositeTarget`/`ledCompositeToBytes` don't read it); `_105` F3's 39 %
+browser preview does not affect the retransmitted bytes (re-scaled ×2.55 on exit).
+
+**UNPROVABLE (6 items, each with the exact physical check):** the four bench
+pars' 10-ch vs 6-ch personality; the vintage heads' 33 vs 15-ch mode; the bars'
+119 vs 108/12-ch mode; the physical DMX start addresses; whether the `.60` board
+is on U10/U12 (`GET /api/config` → `strands[].dmxUniverse`, plus `/api/status`
+`sacn.lastUniverse` — both reads, still NOT run); and whether the bench DMX
+gateway even implements E1.31 priority arbitration (if it doesn't, M1 produces a
+flickering merge rather than a clean 150-wins — worse). **Strong shortcut: if the
+bench renders its own `test_bench` scene correctly, four of those six are proven
+by construction**, because the bench-side channel maps are byte-identical to the
+titanic-side ones.
+
+**Working tree vs `HEAD`:** `titanic/patches.yaml` + `controllers.yaml`
+UNMODIFIED. `test_bench/patches.yaml` dropped two never-patched TE-Sign entries
+(`universe 0`); `test_bench/controllers.yaml` gained `output: 1/2` + `parkedOutputs`
+and — the one change that matters — **`Titanic_202` lastPush flipped `applied`
+(older) → `needs-reboot` (this session)**, i.e. the bench LED binding was
+re-pushed and is unconfirmed. `scene_config.yaml` churn is positions/haloScale,
+no `fixtureType` changed. Sidecar mapping still byte-identical to `HEAD`.
+
+**Test gap found:** the live-map test `tests/bench_mirror.test.js:490` asserts
+"lands on a bench fixture of the SAME footprint" — **footprint only**. Two
+different 33-channel fixtures would pass. Types do match today, but the assertion
+does not prove what its name implies; tighten it to compare `fixtureType`.
+
+**Deliverable for the implementation owner:** the report carries the full
+deterministic truth-test expectation table (constant red / green / blue /
+RGB-white / native-white+amber / blackout, mapping expected source bytes to
+expected mirrored bytes after M3 to expected physical appearance) per fixture
+family, plus the regression assertions that catch M1 directly (`VintageLed`
+rel2/rel12/rel14 and `ShehdsBar` rel2/rel3/rel6-11 must be 0 in EVERY look), and
+the note that **NATIVE WHITE is the decisive LED test** (20 px of `(0,0,0,255)`
+lands on channels 4,8,…,80; a stride bug lights the next pixel's red instead).
+
+**Recommended fix order:** (1) while armed, the sim's output loop must skip every
+mirror-owned `(universe, ip)` and every wholly-owned host — the bridge already
+broadcasts `destinations[]`/`hosts[]` in `benchMirrorStatus`, so the data is
+already at the client; (2) fix the ARM warning (`bench_mirror.cjs:602-607`) to
+fire at `clientCount >= 1` and to say `sacn_in`, not "sACN-OUT"; (3) retract
+`_151` section 9.3 until (1) lands; (4) tighten the footprint-only live-map test;
+(5) encode F8 into the truth tests rather than working around it. Every truth
+test in the report's section 8 is meaningless until (1) lands.
+
+**`_153` — BENCH MIRROR first physical test failed: packet/routing investigation**
+(investigator, Opus, READ-ONLY; report
+`.agent/reports/202608/20260805_153_bench_mirror_packet_routing_investigation.md`).
+Zero source/test/scene edits, zero git writes, no port bound, no packet, no
+device HTTP, nothing armed — every measurement in-process against faked sockets,
+scratch in `~/tmp/bench_mirror_debug_153/`. **Independently converges with `_154`
+on the primary cause** (my F1 = their M1), from the routing side rather than the
+fixture side, and adds four findings they did not cover plus one correction to
+theirs.
+
+**F1 CONFIRMED-OFFLINE — the sim window is a second, higher-priority writer the
+mirror cannot suppress.** `animate.js:682-727`: when `lightingMode === 'sacn_in'`
+the per-fixture skip at `:709` is unreachable, so every patched DMX fixture is
+grouped by `(universe, controllerIp)` and sent at a **hard-coded priority 150**
+(`:713`) through `sacn_output_client.js:81-122` to `ws://localhost:6972` to
+`sacn_output_bridge.js:63-73`. That is a **separate process** (`start.js:105-108`
+vs `:116`); the mirror's ownership machinery lives only inside `sacn_bridge.js`,
+and `benchMirror` has **zero** grep hits in `animate.js` or
+`sacn_output_client.js`. The sim runs `titanic`, so its pairs include
+`U2 -> 10.x.x.10` — the mirror's owned pair — carrying raw `Left Front Wall 1/2`
+(`ShehdsBar` fp119) bytes. Measured: the mirror leaves at **priority 100** on all
+three owned destinations, every frame (it inherits the source frame's priority,
+`sacn_bridge.js:1432-1434`; engine `sacn.priority: 100`). 150 > 100.
+**Structural, not bad luck: the ARM control only renders when the mode IS
+`sacn_in`** (`showSacnInMonitor(mode === 'sacn_in' && enabled)`), and `_151` §9.1
+step 3 tells the operator to be there.
+
+**CORRECTION to `_154` M1's "aggravator".** `_154` says the same mechanism also
+sends raw `U30/U31 -> 10.x.x.60` at 150 and so defeats `suppress_host` from
+outside the bridge. **The DMX half is right; the LED half is not.** LED strands
+are not in `params.parLights` (`patch_manager.js:57`), and `sendUniverse` has
+exactly one caller fed only from `params.parLights` — verified against the live
+scene: walking `titanic/scene_config.yaml` gives `parLights.fixtures` count 80
+with `has Left_Front_Left = false`, and the strands under `strands:` map to
+`params.ledStrands` (`config.js:129-135`). **The browser has no path that
+transmits a strand universe**, so `suppress_host: true` still holds and `_151`
+§9.3's "dark strands mean the board is not on U10/U12" survives — subject only to
+F4 and F10 below. Do not retract §9.3 on the LED ground.
+
+**F1b CONFIRMED-OFFLINE — NEW, project-wide, biggest byte-level defect found: the
+ENGINE's DMX values are multiplied by 2.55 and clipped at 100.**
+`marsin_engine/lib/sacn_output.js:76-79` puts the DMX router's **0-255** buffer
+(`sacn_mapper.js:351-353` writes `min(255, entry.r*255)`; `engine.js:61` imports
+that module) into the `sacn` package's `payload`, which the package treats as
+**percent**: `packet.js:138` `inRange(payload[ch] * 2.55)` unless
+`useRawDmxValues` — and **no project source ever sets it** (both vendored copies
+`sacn@4.6.2`). Measured with the real `Packet`: `1->3, 2->5, 50->127, 99->252,
+100->255, 101->255, 128->255, 200->255, 255->255`. **Everything the engine renders
+above DMX 100 leaves the box as 255**, and the information is gone before the
+bridge — relay and mirror both faithfully forward an already-clipped value.
+`(255,120,60)` reaches the fixture as `(255,255,153)`. This is the **hardware-side
+half of `_105` F3** (the 39 % browser preview is the same unit confusion seen from
+the receiving end, `sacn_mapper.js:124-131`); F3's wire consequence has never been
+written down. It hits ship and bench identically, so it is NOT the differential
+cause of "did not match the corresponding titanic fixtures" — but it is a live
+answer to "colours that did not match [what the pattern intended]" and it dwarfs
+`_105` F8. **Sequencing: land F1 first and retest the mirror; F1b changes what
+every fixture does and would make that retest unreadable.**
+
+**F2 CONFIRMED-OFFLINE — one CID for the whole project.**
+`node_modules/sacn/dist/constants.js:22-26` `DEFAULT_CID` = ASCII
+`kyleHenselDefaul`; grep finds no project source passing `cid:`. Captured on the
+wire from my harness: `6b796c6548656e73656c44656661756c` on every frame. Each
+`Sender` keeps its own sequence counter from 0 (`sender.js:29`, `:60`), so two of
+our processes on one universe look like **ONE source** with two interleaved
+counters and a priority field alternating 100/150 — and E1.31 §6.7.2 discards
+`seq_new - seq_last` in `[-20,0]`. **So F1 produces flicker/garbage even on a
+gateway that ignores priority entirely.** Two independent mechanisms, one symptom.
+(`_105` F4, unfixed, now load-bearing.)
+
+**F3 CONFIRMED-OFFLINE — the bridge's source arbitration is switched OFF by
+config.** `scenes/common.yaml:200-202` `sacn_high_priority: 100` and the engine
+sends at 100, so `sacn_bridge.js:1073` `priority >= HIGH_PRIORITY` is true for
+every frame and the `else` branch — the only place a lower-priority source is
+silenced — is dead code. Measured: an inbound U2 at priority 150 is composed AND
+emitted, at outbound priority 150. The comment at `:1457-1459` ("an sACN priority
+override silences the mirror exactly as it silences the relay") is **false in this
+configuration**.
+
+**F4 NEEDS-LIVE-CAPTURE — the engine unicasts U10/U12 to `10.x.x.202`, and
+ownership is compared by ADDRESS while hardware is a BOARD.**
+`marsin_engine/config.yaml:7-13` declares `Titanic-202` host `10.x.x.202`
+universes `[10,12]`, no `alsoFlat`, so `output_dispatch.js:137-149` routes them
+**only** there. In the titanic model U10 = `Left Back Wall 3/4` (`ShehdsBar`),
+U12 = `Left SmokeStack 1-4`. The mirror composes U10/U12 to `10.x.x.60`, the box
+the `test_bench` scene calls `Titanic_202` / `boardId: angio4-old`. If `.202` and
+`.60` are the same board, the strands get engine bar/smokestack bytes AND mirror
+rope bytes on the same universes under the same CID — and
+`evaluateArmRequest`'s clash check cannot see it, because `10 -> 10.x.x.202` is
+not `10 -> 10.x.x.60` and the host check tests `key.endsWith('->10.x.x.60')`.
+**Adjacent, independent of the mirror:** because U10/U12 never reach the flat
+`127.0.0.1` destination, the bridge's `U10 -> 10.x.x.13` and `U12 -> 10.x.x.14`
+relay routes (created every boot — seen in my capture) carry **no frames at all**,
+i.e. the ship's Left Back Wall 3/4 and Left SmokeStacks are dark.
+
+**REFUTED-OFFLINE, with byte tables (so the fix hunt does not waste time here).**
+Harness `~/tmp/bench_mirror_debug_153/capture.cjs` loads the REAL
+`server/sacn_bridge.js` with `sacn`/`ws`/`process_priority` faked, and — unlike
+the repo's own rig — **encodes every send through the real `sacn` `Packet`**, so
+the captured bytes are the bytes `dgram` would have sent (CID, sequence, priority,
+512 slots); source frames are round-tripped through a real encode/decode so the
+bridge sees a true percent payload. Results: **(F5)** armed, 5 consecutive frames
+give `U2->10.x.x.10`, `U10->10.x.x.60`, `U12->10.x.x.60` each 5 frames, **1 CID, 1
+sourceName, sequence strictly monotonic, priority 100, zero stray frames to the
+wholly-owned host, no raw U2 anywhere** — bridge-side suppression is complete and
+`_152`'s steady-state conclusion reproduces exactly. **(F6)** `boundaries.cjs`
+(pure module, per-channel-unique markers): 344 + 80 + 80 mapped channels,
+**0 mismatches, 0 unmapped-non-zero**, every slice edge exact
+(`1..40 from U6 1..40`, `41..73 from U5 1..33`, `74..106 from U5 34..66`,
+`107..225 from U2 1..119`, `226..344 from U2 120..238`), ch345-512
+deterministically zero, dropped channel gives 0, null payload gives 0.
+**Partial source:** a U6-only arrival emits a composed frame whose
+not-yet-arrived region is **zero, never stale**. **Cadence:** one engine frame
+(5 datagrams) gives exactly one composed send per destination (the `setImmediate`
+coalescing works). **(F8)** source-universe truth: the engine's generated
+`models/titanic.js` places `Left Auditorium 5/8` at U6 addr 1/31 fp10,
+`Left Front Rails 1/2` at U5 addr 1/34 fp33, `Left Front Wall 1/2` at U2 addr
+1/120 fp119, `Left_Front_Left`/`Left_Back_Left` at U30/U31 addr 1 — an exact match
+for the sidecar; `titanic/controllers.yaml` and `patches.yaml` are UNMODIFIED vs
+`HEAD`; the operator's morning edits touched nothing that moves a mirrored
+address; `node --test tests/bench_mirror{,_arm}.test.js` = **91/91**.
+**(F7)** `_105` F8 measured: the loss is the fractional part of a 0..100 percent
+value truncated into a `Uint8Array` (`bench_mirror.cjs:704`), about 2.55 DMX steps
+(mirror `2->3, 4->8, 6->13` vs relay `2->5, 4->10, 6->15`); consistent with
+`_154`'s worst -3 over the full range. Real, small, cannot look random.
+
+**Writer enumeration closed:** ordinary relay (suppressed, measured), stale sender
+surviving arm (no — closed and re-created in one recompute pass, sequence from 0),
+second sim tab (possible, but it is just another instance of F1), a second `:6971`
+bridge (port bound once), multicast (**no project sender multicasts** — every
+`new Sender(...)` passes `useUnicastDestination`; the Receiver joins groups for
+reception only; a third-party multicast source is **NEEDS-LIVE-CAPTURE**),
+CaptainPad/podium/`marsin_pb` (no sACN sender anywhere).
+
+**Live-capture procedure is written out for operator approval and NOT run**
+(report §7): (A) passive `tshark -f "udp port 5568"` with `e131.cid`,
+`e131.priority`, `e131.seq_number`, `e131.source_name` columns — two source names
+(`MarsinRelay Engine` prio 100 and `BM26-Simulation` prio 150) on
+`ip.dst == 10.x.x.10 / universe 2` confirms F1, an identical CID on both confirms
+F2; **(B) the decisive one-gesture counter-test — with the mirror ARMED, switch
+the sim's lighting-engine mode away from `sACN IN`. The arm survives (process
+state; the panel gate only hides the control, the HUD banner is
+panel-independent) but the 150-priority stream stops within a frame. If the bench
+snaps to the correct mirrored look, F1 is proven live.** (C) two GETs on the `.60`
+board for `strands[].dmxUniverse` + `sacn.lastUniverse`; (D) `arp`/`ping`/capture
+on `.202` and a board-identity comparison against `.60`; (E) hex-dump a titanic
+universe and check whether mid-brightness channels all read `0xFF` (F1b).
+
+**Fix ordering this report recommends:** (1) F1 — the one-writer law must reach
+the browser's output loop or `:6972`; the bridge already broadcasts
+`destinations[]`/`hosts[]` in `benchMirrorStatus`, and note that the ARM control's
+placement inside the offending mode is itself part of the defect; (2) F2 —
+per-process CID, so a two-writer situation is diagnosable instead of silently
+merged; (3) F3 — raise `sacn_high_priority` above the engine's 100 so the
+arbitration exists at all; (4) F4 — ownership must be board-identity-aware, and
+the engine's `controllers:` block still names `.202`; (5) **F1b/F7 as their own
+later slice** — flipping `useRawDmxValues` must happen on every sender WITH the
+receive-side `objectify` compensation removed in the same change, or the rig goes
+2.55x dark instead of 2.55x bright.
+
+**`_155` AMENDMENT — operator rulings + `_154`/`_153` folded into the design in
+place (report §15; §§3/6/7/8/9/13 marked, not rewritten; design-only, zero
+production edits/git writes/ports/packets):** (1) **Suppression model replaced —
+ARMED = BENCH IS THE ONLY PHYSICAL OUTPUT** (operator ruling): relay set is EMPTY
+while armed for every active scene; `suppress_host` and the sidecar `controllers:`
+section are DELETED; `partitionMirrorSuppression` degenerates to armed-or-hold ⇒
+suppress-all, keeping the `_152` D1 single-call-site invariant with simpler
+semantics; disarm restores the ENTIRE relay set in the existing post-blackout
+recompute. Ship goes deterministically DARK on arm — 3× zeros to every suspended
+relay destination through the retiring senders, awaited (frozen-last-look is a
+surprise in both directions; `blackoutInFlight` now covers both directions,
+symmetric D2). (2) **Sim-writer root cause (`_154` M1 / `_153` F1) covered by a
+SERVER-SIDE GATE at :6972** — the output bridge is its own process, so the gate
+lives there: one additive JSON control message (gate/ungate + ack + drop count),
+commanded by sacn_bridge over a loopback control link, gate held only while that
+link asserts armed (link drop ⇒ auto-ungate loudly — no stuck-dark ship after a
+crash); ARM awaits the gate ACK before any composition and REFUSES without it
+(R-23: one-writer must be PROVEN, not assumed); client-side transmit stop is a
+belt, never the enforcement (stale tabs/second windows/races all funnel through
+:6972). Per-mode writer truth table recorded — in sacn_in the tab's hard-coded 150
+outranks the bridge's 100 today, pre-existing writer-#2 now on record. (3)
+**Scene-parametric source** (operator: "or any other scenes"): source scene =
+engine's active scene, `source_scene` dropped from v3, no scene picker; R-22a/b/c
+refusals (self-mirror, zero compatible candidates, default unresolvable in the
+current scene — defaults path refuses, picker is the way in); last-used keyed by
+(bench, source) scene pair, process memory confirmed. **No presets** — simplest
+per-slot picker. (4) **R-21 (subsumes R-9/R-10): ARM refuses while the engine
+reports ANY direct controller destination** — `_153` F4 proves address≠board, so
+engine-direct routes make "bench only" unprovable; consequence flagged: today's
+engine `Titanic-202` block blocks arming until removed (open Q1). (5) **Priority
+escalation above 150 REJECTED** (masks the two-writer bug class, F2's shared CID
+corrupts regardless, F3's dead arbitration re-emits 150 at 150); mirror emits at
+FIXED declared 100 instead of inheriting; **distinct stable CID per sender role
+REQUIRED for mirror vs :6972** (project-wide CID split + sacn_high_priority raise
+flagged as separate small slices). (6) Secondary folds: live test :490 upgraded
+footprint→fixtureType equality; wire-truth tables model the ×2.55-clip (F1b) —
+physical constants restricted to 0/255, F1b fix is its own later slice per
+`_153` sequencing; smoke passes on bridge/gate LOG LINES, never eyeballs
+("armed-but-outranked" is visually identical to "inactive"); `_153`'s LED-half
+retraction honored (nothing designed against browser strand transmit). New tests
+T-9 (gate) + T-10 (global suppression); refusal numbering stable (R-17 retired,
+R-7 repurposed). **Open operator questions now 2:** remove the engine
+`Titanic-202` block (or grow a runtime park) so R-21 can pass; confirm
+ship-dark-on-arm vs frozen-last-look.
+
+**`_153` AMENDMENT — flicker addendum (report §10, appended in place; `_153` not renumbered).**
+Second live test ("sane colors, but flickering like hell") investigated offline against
+md5-pinned tree (`sacn_bridge.js` 79393bb4, compose path lines 1418-1455 md5 9235188038e8 —
+both UNCHANGED throughout; `bench_mirror.cjs` changed under the run at 12:18:59 to `_156`'s
+v3 `slots` schema, disclosed not worked around; the three compose functions verified
+byte-identical in both builds, so the measurements hold for v2 and v3).
+**H1 SPLIT: "partial-source ZEROS" REFUTED-OFFLINE (0 % zero regions in 200 measured engine
+frames) — buffers persist, so a partial compose emits STALE, never black. "Variable compose
+cadence with sub-frame tearing" CONFIRMED-OFFLINE**: `mirrorInbound` coalesces over ONE POLL
+PHASE, not one engine frame, and there is no frame sync of any kind (the `sacn` package
+hardcodes `syncUniverse = 0`). Measured over 40 engine frames per pattern: `U2 → 10.x.x.10`
+(5 slices, 3 sources) goes **1.00 → 2.00 → 3.00 composed sends per engine frame** as arrivals
+split across 1/2/3 poll phases, with **50 % → 67 % of emitted frames carrying a region from
+the PREVIOUS engine frame**; `U10`/`U12 → 10.x.x.60` (1 slice, 1 source) stay **1.00 per frame,
+100 % fully fresh, 0 % torn in EVERY pattern**. **That asymmetry — multi-source destinations
+tear, single-source destinations cannot — matches the operator's "DMX definitely flickering,
+LEDs not noticed" exactly.** **H5 (new) CONFIRMED-OFFLINE:** buffer reuse keyed on
+`JSON.stringify(spec)` (`sacn_bridge.js:519`) means any parsed-field sidecar edit or any
+re-arm drops the buffers — measured **304 of 344 mapped channels BLACK on the first composed
+frame**, and the sidecar is re-read on every recompute, so `_156`'s live edits flash the
+bench. **H2 NEEDS-LIVE-CAPTURE and H1 makes it worse:** `animate.js` is unmodified at HEAD so
+the priority-150 stream is still in the code; per E1.31 §6.7.2 two same-CID streams flicker
+for **214/256 ≈ 83.6 %** of sequence offsets, and the mirror's *variable* 1-3 sends/frame vs
+the sim's 1 makes the offset **drift 0-2 per frame, sweeping all 256 values every 1.6-6.4 s** —
+a multi-second beat cycling sane / garbage / 80 Hz alternation, which fits "sane colors,
+flickering like hell" better than a steady 150-priority win. **H3 KILLED** (sequence restart
+costs exactly one packet: `0 − 173` is outside the `[−20,0]` discard window, and the `sacn`
+receiver updates `lastSequence` before throwing). **H4 real but subsumed** by the H1 fix
+(≈120 pkt/s on U2 vs a gateway's ~44 Hz DMX rate).
+**FIX SPEC for `_156` (v3), report §10.4:** add `requiredSources: Map<destKey, Set<universe>>`
+to `createMirrorState`, and `_mirrorSeen: Map<destKey, Set<universe>>` beside `_mirrorDirty`
+in the bridge; `flushMirrors` emits a destination **only when its seen-set covers its
+required-set**, then clears it — an incomplete key stays dirty and stays scheduled. Restores
+exactly 1.00 fully-fresh send per destination per engine frame in all arrival patterns, drops
+the gateway packet rate 120→40/s (closes H4), and **removes H5's black flash for free** (a
+fresh state never emits until complete). **No timeout-emit fallback** (codex P0) — instead a
+watchdog that after ~250 ms incomplete logs ONCE per destination naming the missing universes.
+**Does NOT fix F1**: the sim's priority-150 stream is untouched; the cadence fix only stops the
+H2 offset drifting. **URGENT operational (report §10.0.1):** `_156`'s v3 parser landed while
+the on-disk sidecar is still v2, so `parseBenchMirrorSpec` now throws *"unknown key
+'source_scene'"* on the live file — `readBenchMirrorSpecs()` runs on every recompute, so any
+bridge restart onto this tree refuses ARM and auto-disarms a live arm. **Land the file and the
+parser together**; this is the likeliest cause of "the bench lights are now dark". Read-only
+throughout: no source/test/scene edit, no git write, no port, no packet, nothing armed.
+
+## `_157` — sACN stack review: full wire-layer defect list + Opus fix plan (REVIEW-ONLY, Fable)
+
+Operator-requested wire-layer review (engine sACN out, vendored `sacn@4.6.2`,
+both bridges @HEAD `948447e9` because `_156` is editing them in-tree, sim
+client/input paths, configs, CaptainPad/podium sweep). Zero edits, zero git
+writes, zero ports/packets; all measurements via real library code with `dgram`
+faked (`~/tmp/sacn_review_157/probe.cjs`, 9 probe groups, ALL PASS). Report:
+`.agent/reports/202608/20260805_157_sacn_stack_review.md`.
+
+**Verified/deepened:** F1b CONFIRMED + blast radius mapped lane-by-lane — engine
+(`sacn_output.js:75-79`) AND `:6972` output bridge (`:139-148` @HEAD) both feed
+raw 0-255 into the package's PERCENT payload (50→127, ≥101→255); relay lane
+round-trips exactly (all 256 values); browser WS lane carries 0-100
+percent-bytes (the `_105` F3 39% preview is the same unit bug); the sim's
+150-priority `sacn_in` stream is a double-quantised copy (±3) of already-clipped
+data. Exact fix specified: `useRawDmxValues` on all 4 sender sites +
+`payloadAsBuffer` on the bridge receive path + WS raw bytes + mapper
+compensation removal + mirror raw compose, ONE slice, own operator gate,
+after the mirror retest. F2 CONFIRMED + quantified AT OUR OWN RECEIVER: the
+package keys sequence state by CID+universe and drops |Δseq|>20 — two same-CID
+writers interleaved = **98/100 packets dropped** (measured); CID fix must pass
+EXACTLY 16 bytes (`Packet` splices `[...cid]` unchecked — short CID shifts the
+whole frame). F3 CONFIRMED + deepened: threshold 100 ≤ engine 100 kills the else
+branch AND the GUI slider min is 100 (cannot express a working value) AND —
+**new** — arbitration state is GLOBAL across universes (`sacn_bridge.js:820-822`
+@HEAD): raising the threshold without per-universe scoping lets ONE ≥threshold
+source on one universe silence the ENTIRE rig through the bridge. Fix = per-
+universe arbitration map + threshold 120 + slider/value raise together.
+
+**F4 PARTIALLY REFUTED:** HEAD `marsin_engine/config.yaml:14` has
+`alsoFlat: true` on the Titanic-202 block **since c6eaa733 (July 15)** — `_153`
+quoted lines 1-13 and missed it. U10/U12 DO reach loopback; the bridge relays
+them to the ship boxes (titanic patches: U10→10.x.x.13, U12→10.x.x.14; pair-
+keyed exclusion doesn't match .202). "Ship U10/U12 dark" is wrong at HEAD, and
+`_155` A9-1's "currently receiving nothing at all" is overstated — removing the
+block only kills the redundant .202 direct stream (R-21 still requires it; the
+.202-may-be-a-live-board two-writer risk still NEEDS-LIVE-CAPTURE).
+
+**NEW findings:** (D5) the `sacn` Receiver silently discards out-of-order AND
+corrupt packets via `PacketOutOfOrder`/`PacketCorruption` events **no project
+code listens for** — fail-loud P0 violation, would have named the bench-night
+corruption in the log; tiny fix, land first. (D7) injection surfaces: receiver
+joins ~40 multicast groups with no source filter and threshold 100 admits any
+default-priority stranger → relayed UNICAST to hardware (amplifier); `:6972` WS
+is an unauthenticated any-DMX-to-any-IP proxy for the LAN. (D8) NO 'error'
+listener on any Sender dgram socket (package registers none, project none) —
+an emitted socket error (Windows UDP ECONNRESET class) kills engine/bridge;
+live-check procedure written. (D9) every sender re-create restarts sequence at
+0 → compliant controllers discard up to ~0.5 s (route churn, `:6972` 15 s reap,
+mirror arm/disarm). (D10) Stream_Terminated is never settable; engine SHUTDOWN
+blackout is sent 1× vs the stale-universe path's own 3× rule — one lost
+datagram = rig frozen bright at exit. (D11) unicast senders skip universe
+validation entirely (0 and 64000 accepted, >65535 aliases). (D12) falsy-default
+conflations + browser port-guess fallbacks.
+
+**Non-findings (sound):** bridge_routing.cjs (admission/exclusion/range gates),
+no project sender multicasts, reuseAddr discipline holds, boot-join race fix
+holds, relay byte fidelity exact, throughput trivial, no sACN in CaptainPad/
+podium/marsin_pb, outputRouting introspection matches consumption.
+
+**Fix plan sliced for Opus (report §11):** S-D5 loud-drop listeners (first,
+tiny) → S-D3 per-role 16-byte CIDs → S-D4 per-universe arbitration + threshold
+→ S-D6 remove Titanic-202 block (operator, with corrected §6 stakes) → S-D1 raw
+DMX end-to-end (OWN OPERATOR GATE, ship-wide look change, not in the mirror-
+retest window) → hardening batch (D8/D10/D11/D12) → D7 ops/config + playa
+tshark sweep. Nothing urgent enough to interrupt the bench-mirror work: D2's
+fix is `_156`'s in-flight gate, and D1 must deliberately wait for the retest.
+S-D5/S-D3 should ride immediately after `_156` merges (same-file conflicts).
+
+## `_156` — BENCH MIRROR v3: selectable mapping, bench-only output, the :6972 gate, the cadence fix, and the removal of the engine's direct-unicast exception — LANDED (unmerged, NOT physically confirmed)
+
+**Report:** `.agent/reports/202608/20260805_156_bench_mirror_v3_implementation.md`.
+Implements `_155` as amended by its §15, plus `_153` §10 (flicker) and `_157`
+D2/D6/§11. No git ops, no operator port bound, no packet toward a controller, no
+device HTTP, no engine restart, nothing armed — every verification is in-process
+against faked sockets.
+
+**Sidecar v3 (`scenes/test_bench/bench_mirror.yaml`):** declares SLOTS
+(`slot` / `bench_fixture` / `default_source`) and NOTHING else — no universe, no
+address, no slice length, no IP, no `source_scene`, no `suppress_host`; a test
+asserts no dotted quad and no plumbing key survives outside comments. v1/v2 refused
+at parse with the migration quoted (R-20). **New pure `lib/bench_mirror_resolve.cjs`**
+resolves every slot at ARM from live `patches`/`controllers`/`scene_config` + the
+ONE fixture registry (`dmx/fixtures/<family>/model_*.yaml`), materializes the same
+internal spec the `_151` pipeline already consumed, and re-runs it through the same
+structural validator (`validateMirrorTree`, split out of the v2 parser).
+**Compatibility is by IDENTITY not shape** — same `fixtureType` string, so both ends
+resolve through one definition (this is `_154` §7's footprint→fixtureType upgrade,
+now at runtime not just CI); `led_strand` keeps the `srcPx >= destPx` prefix
+allowance (warned), `led_fixture` demands equality (a sign is a shape). Source
+scene is **whatever the engine is running** (scene-parametric, R-22a/b/c).
+**T-5 default-equivalence pin passes:** the computed default mapping's
+(destU,destHost,destCh) -> (srcU,srcCh) function over all 504 channels is identical
+to the frozen v2 seven-slice table, hard-coded in the test.
+
+**ARMED = BENCH IS THE ONLY PHYSICAL OUTPUT.** `partitionMirrorSuppression`
+degenerates to armed-or-hold ⇒ suppress ALL, keeping the `_152` D1 single-call-site
+invariant (exact-count assertion still pins `hold: _blackoutHold` at exactly one
+site). ARM: `_relaySuspended` raised in the same synchronous turn as the arm (so no
+raw frame interleaves with the zeros — D1 pointing the other way),
+`_relayCloseHeld` holds the retiring relay senders open, **3x all-zero frames to
+every suspended relay route, awaited, THEN the recompute closes them** — the ship
+goes deterministically DARK, not frozen. The ownership proof now also requires that
+**no relay sender survived at all**. DISARM restores the FULL relay set.
+
+**Root cause closed (`_153` F1 / `_154` M1): the :6972 gate.** `sacn_output_bridge.js`
+gains one additive JSON control message (`benchMirrorGate` -> `benchMirrorGateAck`
+with a drop count); while gated it drops every 519-byte DMX frame **but still
+answers control messages** (`_157` D2a — the control handler runs BEFORE the drop
+check, pinned by a source-ordering test), and it **releases the gate loudly when its
+control link drops** so a crashed input bridge can never strand the rig dark. The
+input bridge holds a loopback WS control link, **awaits the ack before any
+suppression or composition, and REFUSES without it (R-23)**; a link drop while armed
+auto-disarms loudly. Client-side transmit stop in `animate.js` is a belt, never the
+lock. `_157` D2b's settle-after-DISARM (recreated senders restart sequence at 0) is
+written into the smoke procedure as expected-brief / not-sustained.
+
+**Flicker closed (`_153` §10).** `createMirrorState` now returns
+`requiredSources: Map<destKey,Set<universe>>`; the bridge keeps `_mirrorSeen` beside
+`_mirrorDirty` and **emits a destination only when seen covers required**, then
+clears — one composed frame per destination per ENGINE frame instead of one per
+libuv poll phase. **No timeout-emit fallback** (codex P0): a stalled source stops
+that destination and a ~250 ms watchdog names the missing universes. H5 (state-reset
+black flash) dies for free — nothing is emitted until every source has arrived
+fresh. Tests: 1.00 composed send/frame under per-poll-phase adversarial jitter,
+tearing 0, single-source unaffected, watchdog fires and NAMES the universe, nothing
+before the first complete frame. Also: mirror emits at a **fixed declared priority
+100** (never inherits — closes the F3 corollary; escalation above 150 stays
+rejected) with a **distinct stable 16-byte CID** (md5 of `bm26:bridge-mirror`;
+`_157` D3's exact-16-bytes requirement asserted).
+
+**UI relocation.** ARM/DISARM moved to the **Controllers view header** as its own
+signal-driven Preact root (`cm-bench-mirror-host`), available regardless of lighting
+mode — the old sACN-monitor placement was part of the defect, since that panel only
+renders in `sacn_in`, the very mode that made every window a priority-150 writer.
+All 8 `_155` §8.2 states implemented with exact text and the refusal rendered BESIDE
+the control; new `bench_mirror_picker.js` (pure state + Preact modal, lastUsed >
+default pre-selection, `none` everywhere, zero-candidate rows, `x2` fan-out badge,
+refusals verbatim with no confirm). The sACN IN monitor is **read-only** — a test
+greps it for `armBenchMirror`/`runBenchMirrorAction`/the old button id and requires
+zero hits. Banner leads with `ALL SHIP OUTPUT SUSPENDED — BENCH ONLY`.
+`_lastSelection` remembered in **bridge process memory only**, keyed
+(bench, source) scene, with the persistence grep pin extended to it.
+
+**Operator ruling 4 + addendum — the engine's direct-unicast exception is GONE, not
+just unused.** Deleted: the `controllers:` block from `marsin_engine/config.yaml`,
+`lib/output_dispatch.js` (292 ln), `lib/artnet_output.js` (221 ln),
+`tests/io/output_dispatch.test.js` (24 tests), `tests/io/artnet_output.test.js`
+(11 tests). `engine.js` builds `createSacnOutput` directly. **Made
+unrepresentable:** new `lib/output_config_guard.js` — a config still declaring
+`controllers:` (**even empty**) or a stray top-level `alsoFlat:`/`protocol:` makes
+the engine **refuse to boot** by name, stating that all sACN to hardware flows
+through the bridge. `/status.outputRouting` STAYS, permanently `{controllers: []}`,
+because its ABSENCE means "engine too old to say" and is a hard bridge-side refusal
+(R-8). **Breadcrumbs scrubbed with every reference listed in report §7.3:**
+`docs/41` §5/§6/§7 (which literally instructed adding a `controllers:` entry with
+`alsoFlat: true`), `lib/bridge_routing.cjs` header, `.agent/ops/engine_model_refresh.md`,
+`.agent/memory/spawning_a_test_engine.md` (whole premise rewritten), the
+`bm_readiness_mapping` dossier (history kept, standing correction added),
+`tests/bridge_routing.test.js`'s `engineOwnedPairs` fixture (parser RETAINED and
+tested — R-21 is only meaningful if a non-empty payload still parses), and the four
+engine test/harness files that wrote or asserted `controllers: []`. **`_157` D6
+correction adopted:** the removed block carried `alsoFlat: true`, so U10/U12 already
+reach loopback — the "Left Back Wall 3/4 + SmokeStacks may go dark" caveat is WRONG
+and is struck; removal is strictly safe.
+
+**R-21 (subsumes R-9/R-10):** ARM refuses while `engineState.owned` is non-empty,
+naming the routes — kept as the structural guard even though ruling 4 makes it
+vacuous today, and it also auto-disarms if the engine ever starts delivering
+directly mid-session.
+
+**Verification.** Sim `npm test` **1875 / 1869 / 6** against a measured pre-change
+baseline of **1834 / 1828 / 6** — **+41 tests, zero new failures, byte-identical
+failing list**. Focused: `bench_mirror.test.js` 49/49, `bench_mirror_resolve.test.js`
+32/32 (new), `bench_mirror_arm.test.js` 51/51. The arm rig now loads **BOTH real
+bridge modules** and wires a faked loopback WS between them, so the gate is
+exercised across the real two-process boundary — zero ports, zero packets, every
+send in an array, teardown asserts the class identities. Every `_152` regression
+(D1 no-raw-frame-between-blackouts, D2 refuse-mid-blackout, RESIDUAL-1 no-hold-leak,
+D5 runtime degrades) carried forward unweakened. Engine `npm test` **2631 / 2624 /
+7** vs baseline **2657 / 2650 / 7** — same seven environmental fails; the -26 is
+35 tests removed with the mechanism minus 10 added. `security_check.py --all` — the
+same 6 pre-existing gitignored `.scene_backups/studiodj/**` findings.
+**Guard proving itself, recorded:** before the e2e-harness rewrite the engine suite
+went to 26 failures — every spawning case — because `timeline_e2e_harness.mjs` wrote
+`cfg.controllers = []` and the new boot guard correctly refuses an empty key too.
+The harness now DELETES it.
+
+**Working-tree honesty:** mtimes+sizes of all 39 pre-existing files recorded before
+the first edit and re-measured after — **every operator scene/model/pattern/playlist
+file is byte-identical**. Two exceptions reported, not reverted: running
+`marsin_engine`'s suite rewrote `states/titanic/{audio,globals}_state.yaml` (spawned
+engines; AGENTS.md records this as expected residue), and the tracker + `_153` grew
+from other agents' work.
+
+**Deviations from `_155`, justified in report §11:** no per-controller-card badges
+in the 3004-line legacy Controllers body (header + banner carry the truth); R-11
+compares COMPUTED destination pairs via `otherClaims` (v3 has no declared
+destinations to compare); operator DISARM is refused during the ARM blackout while
+internal auto-disarms await it (refusing an auto-disarm would leave the bridge armed
+with nobody to press the button); `validateMirrorTree` allows empty `slices`
+because an all-`none` destination composing zeros is the §6.1 ruling.
+
+**NOT SHIP.** Physical confirmation is the operator's gate. Report §9 is the smoke
+procedure and it passes on **bridge/gate LOG LINES, never eyeballs** (`_154` M2 —
+"inactive" and "armed but outranked" look identical). `_153` pin folded in: the
+"sane for a few seconds then degrades" sequence-beat was the OLD build's signature;
+after this slice **any recurrence means a second writer survived and the smoke has
+FAILED**. Ready for the adversarial reviewer. `_157`'s S-D5/S-D3/S-D4/S-D1 remain
+explicitly out of scope and should ride after this merges.
+
+**Landed 2026-08-05 — `_158` adversarial review of the `_156` BENCH MIRROR v3
+rebuild (Opus, READ-ONLY + 3 parallel sub-reviewers,
+`.agent/reports/202608/20260805_158_bench_mirror_v3_adversarial_review.md`):**
+verdict **FIX-FIRST — 1 blocking defect on the gate, the very thing the rebuild
+exists to be.** Ground truth re-established from disk in full; nothing from `_152`
+carried over as still-valid. Zero source/test edits, zero git writes, no port
+bound, no packet, no engine against the real config, nothing armed.
+
+**D-158-1 (BLOCKING) `sacn_bridge.js:1478`** — `onGateLinkLost` early-returns on
+`blackoutInFlight()` (`:320` = `_mirrorDisarming || _armBlackoutInFlight`).
+`armBenchMirror` raises `_armBlackoutInFlight` synchronously (`:1848`) and holds it
+across the AWAITED 3-frame ship-dark blackout (`finally` at `:1886`), so a gate-link
+loss inside that window is **swallowed**: `_gateLink` nulled, **no auto-disarm**, and
+the post-recompute ownership proof (`:1901-1946`) verifies senders but **never the
+gate**. The arm completes reporting `armed:true` / "ALL SHIP OUTPUT SUSPENDED — BENCH
+ONLY" while the output bridge has released its gate — and a **priority-150 sim frame
+reaches the ship gateway again**, i.e. `_153` F1 silently restored, permanently (no
+recovery while armed). **Reproduced** offline with both real bridges in-process
+(`bm158_gate_window.mjs`): killed the link on the first blackout zero frame →
+`armed:true`, `refusal:NONE`, `auto-disarm:false`, 1 prio-150 frame delivered. Also
+defeats `_156` §9.3, which routes "bench shows garbage" to *"suspect the fixture's
+personality/menu"* and has no row for an `UNGATED` line after arming. **Fix:** add
+the gate to the ownership proof (closes the class), and/or a sticky
+`_gateLostDuringBlackout` acted on in the `finally`.
+
+**D-158-2 (MEDIUM)** — an all-`none` destination is **never emitted** (zero slices ⇒
+never in `bySource` ⇒ never dirty), so the box **holds its last look**. `_155` §6.1
+rules it "composes all-zero frames … dark where unselected", and `_156` §11
+deviation 4 cites that ruling — so deviation 4 is a **weakening**, not a deviation.
+Measured: `U10→…60 total=0` frames while `U2`/`U12` got 12 each. **One click away** —
+U10/U12 carry one slot each — and it lands on the `.60` box whose binding is already
+the open question, so a frozen strand would be misread as `needs-reboot`.
+
+**D-158-3 (MEDIUM)** — the cadence gate (`:1995-2001`) tests source **presence**, not
+frame identity. All of `_156` §6's explicit claims CONFIRMED by independent
+byte-level measurement (1.00 sends/dest/engine-frame, **0 torn** across five
+adversarial poll-phase splits; no timeout-emit fallback anywhere; watchdog logs and
+never sends; H5 dead; fixed prio 100 under rogue 150/200; CID 16 B). BUT one lost
+source datagram under split phases desynchronises **permanently and silently**:
+1.00 sends/frame, 40/344 channels one engine frame stale forever, **0 log lines** —
+the destination *is* completing. Their tests assert counts, never byte freshness.
+Symptom is a steady WRONG REGION, not flicker, so `_156` §9.3's "flicker ⇒ second
+writer" rule would miss it.
+
+**Also:** **D-158-4** R-11 (`bench_mirror.cjs:554-563`) has **no intersection test** —
+refuses if ANY other enabled sidecar resolves, naming its pairs as if they collided
+(disjoint `U99 → 10.x.x.99` refused with "the same destination(s)"); fails safe,
+latent while one sidecar exists. **D-158-5** the v1/v2 **migration text is
+unreachable** — `requireKnownKeys` (`:142`) fires before the version check (`:144`),
+so a real v1/v2 file dies on "unknown key 'source_scene'"; refusal still loud+named,
+but R-20's UX claim is false and their test only exercises an impossible v3-shaped
+tree. **D-158-6** "unrepresentable" is **QUALIFIED**: the guard is strong (31 cases;
+`key in config` catches even empty/null/false) but `sacn.destinations` still streams
+straight to a box, bypassing the bridge, while `/status.outputRouting` positively
+asserts `{controllers: []}` — the removed mechanism's failure mode under another key,
+invisible to R-8/R-21. **D-158-7** the "no plumbing" sidecar test is **defeatable** (a
+YAML line-continuation puts an intact dotted quad in a value; renamed keys; hex/
+decimal IPs) — the property is really held by `SPEC_KEYS`/`SLOT_KEYS` + the resolver
+ignoring `note`/`label`, so it is test theatre, not a safety hole. **D-158-8**
+`:1995` `|| new Set()` degrades a missing `requiredSources` to "complete ⇒ emit" — a
+P0-shaped fallback on the emission path, currently unreachable.
+
+**CONFIRMED under attack:** R-23 refuses both with no output bridge and with a
+FOREIGN link holding the gate (the `gated:true`+`refusal` ack is correctly checked at
+`:1509`); a refused ARM sends 0 frames and 0 ship zeros; control channel not deafened
+while gated (`:168` precedes `:175`); both crash directions fail safe; **single
+suppression call site** (`:706`, exact-count pinned); the ARM-side D1 class closed by
+a STRONGER mechanism than the hold (`_relaySuspended` gates the send itself at
+`:2038`) — measured **0 raw frames between the ARM's first and last zero**, 0
+post-arm sends to non-bench destinations, second window mid-arm harmless; DISARM
+restores the FULL relay (verified functionally — sender-key tracking is ambiguous
+because mirror and relay share a key) and **ungates last**; resolve-layer
+compatibility is genuinely `fixtureType` IDENTITY (33-ch imposter refused); TOCTOU
+re-resolves from disk and auto-disarms on fingerprint change (caveat: event-driven,
+not polled); **the default-equivalence pin verified INDEPENDENTLY from
+`git show HEAD:` + `_154`'s byte tables — 504/504 channels, 0 diffs, both against
+their frozen table and against the resolver**; zero actionable ARM left in the sACN
+monitor (full read, not their grep); 8 header states exact; **all three `_152`
+regressions still have teeth** (falsified D1 via `hold:null`, D2 via
+`blackoutInFlight:false`; RESIDUAL-1 fixed in code at `:1678` and non-vacuous);
+armed-OFF with **no persistence on `_mirrorArm` OR `_lastSelection`**; engine
+deletions clean with **zero dangling refs**; `/status.outputRouting` a hardcoded
+literal (`api_server.js:4995`).
+
+**Counts observed:** sim **1875/1869/6** ✓ (same six pre-existing); focused
+**49/32/51** ✓; engine **2631/2624/7** on one run but **2634/2627/7** on another —
+the total is **nondeterministic ±3** (a file-level crash in
+`effects_v2_mode_page_layout.test.js`), failing list byte-identical either way;
+`security_check.py --all` **6** baseline. **Report corrections owed (D-158-9/10):**
+§8.2 has a duplicated paragraph saying 9 then 8 cases (true = **9**); the "−35 +10,
+residual ±1 subtest accounting" arithmetic is **wrong** (zero subtests exist; real
+net −25; residual is the ±3 run noise) though its conclusion holds; §7.3 is 12 rows
+over **10** unique files, not 11; pervasive line-number drift; and two missed
+breadcrumbs in `.agent/plans/20260709_0` and `20260710_1` (imperative `alsoFlat:` /
+`controllers:` instructions) — same standing-correction header used on
+`bm_readiness_mapping.md` would close them.
+
+**Operator files untouched** — every canonical scene/model/pattern/playlist file
+still carries the `00:06`–`00:22` mtimes recorded in `_152`; titanic
+`controllers.yaml`/`patches.yaml` unmodified. **Disclosed:**
+`states/titanic/{deck,globals}_state.yaml` residue is the documented-expected
+engine-suite output, and **part of it is mine** — this review ran the engine suite
+twice. `_156` §8.4 names `{audio,globals}`; observed is `{deck,globals}`+`mixer`.
+
+**NOT SHIP and not mine to grant** — the operator's physical confirmation is the hard
+gate. Status after this review: **FIX-FIRST**, then READY-FOR-PHYSICAL-SMOKE once
+D-158-1 is closed (D-158-2 and the §9.3 diagnostic rows strongly recommended first,
+since both would otherwise be misread during the smoke itself).
+
+### `_156` AMENDMENT — post-`_158` fixes (FIX-FIRST verdict closed, all three falsified)
+
+`_158`'s adversarial review returned **FIX-FIRST**: one blocking defect and two
+that had to be closed before touching hardware, plus seven minors. All fixed in
+the same `_156` slice; report `_156` gains **§13**. Each of the three is
+**falsifiable** — a scratchpad preload rewrites the module source at compile time
+to neutralise exactly one fix and its regression then fails; no source was edited
+and reverted, so no falsification residue exists in the tree.
+
+**D-158-1 (BLOCKING) — the gate failed OPEN during the ARM blackout, silently.**
+`onGateLinkLost` early-returned on `blackoutInFlight()`, and `armBenchMirror`
+holds `_armBlackoutInFlight` across its AWAITED ship-dark blackout — so a control
+link lost in that window recorded nothing, fired no auto-disarm, and was never
+re-checked, because the ownership proof verified senders but **never the gate**.
+The arm completed reporting `armed:true` while the output bridge had already
+released its gate: the exact `_153` F1 priority-150 second writer restored
+silently, with the banner reading BENCH ONLY. `_158` measured one prio-150 frame
+reaching the ship gateway. **FIXED** with both halves the reviewer offered:
+sticky `_gateLostWhileArmed` (`sacn_bridge.js:1405`, recorded BEFORE the blackout
+branch at `:1473-1503`, cleared only at arm start `:1912` and disarm completion
+`:1777` — never by a reconnect, because a healed link does not un-send escaped
+frames), plus new `proveOutputGateHeld()` (`:1534`: no sticky loss AND a live
+link AND the output bridge re-acknowledging the gate NOW) consumed by the
+ownership proof at `:2002`. A gate failure now takes the same path a surviving
+relay sender does — auto-disarm through the normal blackout, so a failed arm can
+never strand the ship suspended. Regression reproduces `_158`'s scenario exactly
+(warm-up arm proves the bridge CAN arm, then the link is killed on the FIRST
+ship-blackout zero frame via a one-shot send hook, ONE arm attempt deliberately —
+a retry helper would just re-arm over a healed link).
+
+**D-158-2 (MEDIUM) — "none (held dark)" left the box FROZEN.** A slice-less
+destination never entered `bySource`, was never dirtied and was never emitted, so
+the box held its last look — `_155` §6.1 rules "composes all-zero frames … dark
+where unselected", and `_156` §11 deviation 4 cited that ruling while not
+implementing it (a weakening, not a deviation; the report now says so). **FIXED**
+(`bench_mirror.cjs:672-712`): a slice-less destination's `requiredSources` is
+every source universe the whole mapping reads, plus zero-length `bySource`
+entries that write nothing and exist only to make it reachable — so a dark box is
+refreshed on the mapping's own engine frame, at exactly the lit rate, never on a
+bare poll phase. Regression asserts continuous full-512 all-zero frames at the
+SAME count as the lit gateway.
+
+**D-158-3 (MEDIUM) — the cadence gate tested PRESENCE, not frame identity.** With
+sources split across poll phases, one lost datagram shifted the gather boundary
+permanently: 1.00 sends/frame, every count-based assertion green, one region one
+engine frame stale FOREVER, zero log output — and the symptom is a STEADY WRONG
+REGION, not flicker, so §9.3 would have sent the operator to the fixture menus.
+**FIXED using the frame identity E1.31 already carries**: the engine's senders
+advance in lockstep, so every universe of one frame carries the same sequence.
+`routeFrame`/`mirrorInbound` now carry `packet.sequence` through;
+`_mirrorRegionSeq` (`:2090`) records which engine frame each REGION of the
+composed buffer holds (never cleared — the buffer is not cleared either); the
+emit condition (`:2181`) is all-present AND all-sequences-equal. Exact, no
+baseline, no calibration, self-healing in one frame. A MISSING source keeps the
+250 ms watchdog (normal mid-frame); regions DISAGREEING about which frame they
+are is never normal and logs immediately (throttled, with a running count),
+naming every region with its frame — `regions carry DIFFERENT engine frames
+(U6#41 U5#41 U2#40)` — and naming the symptom, `STEADY WRONG COLOUR, not
+flicker`. No fallback emission of guessed data anywhere on that path. **A rig
+correction came with it and matters:** the old `engineFrame()` helper fed some
+universes twice per "frame" and each `inbound` advanced its own counter —
+modelling a stream no receiver ever sees. The rig now models the engine (one
+shared sequence per frame, explicit `dropDatagram()` for "sent, then eaten by the
+wire"), and several cadence assertions were corrected to the stronger rule.
+
+**Minors, all fixed.** **D-158-4**: R-11 had no intersection test and printed a
+false sentence; moved to pure `evaluateClaimOverlap` (`bench_mirror.cjs:607`)
+called after resolution (`sacn_bridge.js:1904`), naming ONLY colliding pairs,
+tested for disjoint/same-universe-different-host/same-host-different-universe/
+self/mixed. **D-158-5**: the version check now runs before `requireKnownKeys`
+(`:142-152`), so the v1/v2 migration text is reachable for the files it was
+written for. **D-158-7**: the no-plumbing test walks the PARSED tree (keys at any
+depth, values against dotted-quad / hex-packed / dash-separated forms) plus a
+direct assertion against the exported `SPEC_KEYS`/`SLOT_KEYS` — the real
+guarantee — with a second test feeding each evasion to the parser and requiring a
+named refusal. **D-158-8**: the `|| new Set()` permissive default is gone; a
+missing `requiredSources` entry now shouts `BENCH MIRROR INVARIANT VIOLATED` and
+auto-disarms, and all per-destination bookkeeping moved behind one
+`forgetMirrorGather()` used by the retire, flush and disarm paths. **D-158-6**:
+report now states honestly that "unrepresentable" is true of the removed
+MECHANISM and its key, not of the capability — `sacn.destinations` still exists
+by design (it is how the engine reaches the bridge) and `/status.outputRouting`
+asserts only "no per-controller route", which is the precise claim. **D-158-9**:
+duplicate paragraph removed, arithmetic corrected (static net −25, not "±1
+subtest"), the engine total quoted as a RANGE because a file-level crash makes it
+nondeterministic, line numbers refreshed, "11 files" → 10. **D-158-10**: the two
+`.agent/plans/` breadcrumbs now carry the same non-destructive standing-correction
+header as the dossier.
+
+**Smoke procedure hardened** (`_156` §9.3, per the reviewer's note): three new
+diagnostic rows ahead of everything else — an `UNGATED` line appearing after
+arming (smoke INVALID), a STEADY wrong colour (read the `frame NOT WHOLE` line;
+**do not go to the fixture menus**), and a FROZEN bench fixture (a `none` slot
+must be dark, not held). All three states would otherwise have been misread.
+
+**Falsification, reproduced-then-killed.** D1 neutralised ⇒ *"an arm that cannot
+prove the sim output path is gated must NOT report success — true !== false"*.
+D2 neutralised ⇒ *"a held-dark destination must keep being SENT, not go silent —
+got 0 frames"*. D3 neutralised ⇒ *"a partial engine frame must NOT be emitted —
+4 !== 0"*. Unmodified, all pass.
+
+**Counts after the fixes:** `bench_mirror.test.js` **52/52**,
+`bench_mirror_resolve.test.js` **32/32**, `bench_mirror_arm.test.js` **54/54**;
+full sim `npm test` **1881 / 1875 / 6** (same six, byte-identical; **+47 tests /
+zero new failures** against the original 1834 / 1828 / 6 baseline); engine
+`npm test` **2633 / 2626 / 7** (same seven; the total is nondeterministic in the
+range 2631–2634 because `effects_v2_mode_page_layout.test.js` crashes at file
+level — recorded as a range, not chased). `security_check.py --all` **6**,
+unchanged. No new test file carries a real controller address (re-verified: 0).
+
+**Working-tree residue, disclosed:** `marsin_engine/states/titanic/*_state.yaml`
+and `simulation/scenes/titanic/playlists/default.yaml` carry fresh mtimes. Running
+the engine suite spawns real engines, and the operator's live stack runs from this
+tree; AGENTS.md records that class as expected residue to report, not revert.
+**None of it is an edit of mine** — no `states/`, `playlists/` or scene file was
+opened by this slice, and every canonical mapping file
+(`controllers.yaml` / `patches.yaml` / `scene_config.yaml`, both scenes) is
+byte-identical to the pre-session snapshot.
+
+**Still NOT SHIP** — the operator's physical confirmation remains the hard gate.
+Ready for `_158`'s re-verification pass and for the §9 smoke.
+
+## `_161` — SIM test-gap discovery: 16-gap catalog with implementable specs (READ-ONLY, Fable, operator-requested)
+
+**Report:** `.agent/reports/202608/20260805_161_sim_test_gap_catalog.md`. Partner `_162`
+owns the engine side. Zero production edits, zero git ops, no operator port bound; one
+full sim-suite run measured **1881/1875/6** — the same six pre-existing failures.
+
+**Method:** mapped all 105 test files to their surfaces (require + path-reference scan),
+then walked `sacn_bridge.js`, `sacn_output_bridge.js`, `sacn_input_source.js`,
+`sacn_output_client.js`, `universe_router/frame_buffer`, save-server endpoints, scene
+data, and the GUI pure-state modules for untested branches.
+
+**Top gaps (rank order):** (1) receiver priority-arbitration/lockout state machine —
+zero tests, incl. the `_157` D4 global-across-universes trap, unpinned; (2) bridge WS
+client lifecycle (`setScene` tag glue, disconnect recompute, census broadcast) — the
+2026-07-24 freeze class is tested only in its pure half; (3) engine-poll transitions
+(reachable flips, scene change, `outputRouting` loss, wrong-service answer, poll
+re-entrancy); (4) :6972 DATA path (519-B parse, sender pool, 15 s reap = D9 sequence
+reset, error-dedup ladder) — only the GATE is tested; (5) 515-B browser protocol has no
+round-trip parity test and carries the `priority||200` D12 conflation; (6)
+`UniverseRouter`/`UniverseFrameBuffer` — the merge core that feeds both the display AND
+the `sacn_in` hardware relay has ZERO tests; (7) bridge shutdown ordering (disarmed
+fast-exit, signal-during-blackout, double-signal); (8) save-server endpoints
+(`/delete-pattern` traversal, create/delete-scene, restore-backup HTTP glue,
+`||'titanic'` silent default); (9) all-scenes structural lint (6 of 8 scene dirs
+unvalidated; `summer_camp_dome/patches.yaml.original` residue); (10)
+`sendUniverse` 519-B construction (`priority||100` pin, silent IP-octet coercion).
+Plus six S-sized: `load_ports` refusals, animate.js belt wiring, monitor-panel pure
+logic, boot-invariant exit glue, static-host gates, sidecar warn dedup
+(`[_159-overlap?]`).
+
+**Every D12/D4-class characterization is specced as a NAMED PIN** to be flipped by the
+`_157` fixes — never a silent blessing of a fallback. Non-gaps table in the report so
+effort isn't re-spent (bench mirror, routing math, readback, boot lib, backups lib,
+launcher, views/pixel-map are all adequately covered). Prerequisite for implementers:
+extract the `bench_mirror_arm.test.js:518-770` fake-module harness into
+`tests/helpers/bridge_harness.mjs` (test-code-only refactor). One item needs an operator
+ruling eventually: a `BM26_SIM_SCENES_ROOT` test hook (production edit) to test broken
+sidecars without writing into `scenes/`.
+
+**`_158` AMENDMENT (2026-08-05) — re-verification of the `_156` post-review fixes:
+READY FOR PHYSICAL SMOKE (re-smoke REQUIRED)** (Opus, READ-ONLY; report §5 appended
+in place, `_158` not renumbered). Ground truth re-established from disk first
+(`bench_mirror.cjs` 14:05, `sacn_bridge.js` 13:58, tests 13:09–14:09, `_156` 14:14,
+both `.agent/plans/` 14:05). Verdict upgraded **FIX-FIRST → READY FOR PHYSICAL
+SMOKE**; three residuals, none blocking.
+
+**D-158-1 (was blocking) CLOSED and falsified.** Sticky `_gateLostWhileArmed`
+recorded BEFORE the blackout branch (`sacn_bridge.js:1497`), deferral shouted;
+cleared at exactly two sites — arm start (`:1912`) and disarm completion (`:1777`),
+grep-confirmed no third — so **a reconnect cannot clear it**, because
+`proveOutputGateHeld` (`:1534`) tests the sticky FIRST (`:1535`), before the live-link
+check and the fresh re-ack; the proof consumes it (`:2002`) so a gate failure takes
+the normal auto-disarm-through-blackout path and a failed arm cannot strand the
+relay suspended. **Falsified** by rewriting `sacn_bridge.js` in memory at compile
+time from a scratchpad preload (`Module.prototype._compile`), deleting only
+`if (gateFailure !== null) unproven.push(gateFailure);` → their regression fails with
+*"an arm that cannot prove the sim output path is gated must NOT report success"*;
+unpatched it passes. **All four attack variants safe:** reconnect-clears-sticky NO
+(structural + empirical); **post-proof gate loss** ⇒ auto-disarm fires, ship relayed
+again (5 destinations fed), re-arm after heal succeeds; re-ack race sound (honest at
+that instant, escaped frames are exactly what the sticky covers); **no recursion** on
+the auto-disarm path (`:1479` returns on `_mirrorArm === null`).
+
+**D-158-2 CLOSED for the principal case** — `led_0: none` ⇒ that destination gets 6
+frames over 6 engine frames, **all-zero, all 512 channels**, exactly the lit
+destinations' rate. **D-158-3 CLOSED** — wraparound is a non-event (seq
+253,254,255,0,1,2 in lockstep ⇒ **6/6 emitted**); immediate desync log naming every
+region + frame + the `STEADY WRONG COLOUR, not flicker` symptom; no fallback
+emission. **Minors all CLOSED:** D-158-4 `evaluateClaimOverlap` does a REAL
+intersection and names only collisions; D-158-5 the **actual committed HEAD v1
+sidecar** now yields `version must be 3 (got 1)` WITH the migration text; D-158-7 now
+walks the PARSED tree and asserts the real guarantee (`SPEC_KEYS`/`SLOT_KEYS`)
+directly; D-158-8 `INVARIANT VIOLATED` + auto-disarm + one `forgetMirrorGather()`
+across retire/flush/disarm (`:863`, `:2099`, `:2140`, `:2157`); D-158-9 report
+corrections in; D-158-10 both `.agent/plans/` files carry the standing-correction
+header with history left intact.
+
+**NEW RESIDUALS (none blocking).** **R-158-A (MEDIUM)** — the all-sequences-equal
+rule assumes every engine universe shares one sACN sequence per frame. Each `sacn`
+`Sender` owns its counter (`sender.js:28,60`), so lockstep is EMERGENT, not
+guaranteed: it **holds from a clean boot** (`engine.js:951-955` builds `dmxBuffers`
+from every `universeIds` entry each frame) but the **model-reload path breaks it
+permanently** — `engine.js:1726 addUniverse` makes a Sender at sequence 0 while
+siblings are at N, and `engine.js:1758 sendFrame({[staleU]:…})` advances ONE universe
+3× for a universe the code says may be *"revived on a later reload"*. Reproduced: U5
+at a fixed −7 offset ⇒ the multi-source gateway emitted **0 of 10** engine frames
+(single-source LED dest unaffected, 10/10). Fail-loud and correct per P0 (better
+silent than torn), but **unrecoverable without an engine restart** and the log blames
+*"a source datagram was lost or a source is lagging"*, misdirecting to network loss.
+**R-158-B (LOW/MED)** — D-158-2 not fixed for TOTAL-none: all 10 slots `none` ⇒
+`requiredSources` empty everywhere ⇒ **0 frames to every destination**, every box
+frozen, arm still accepted. **R-158-C (LOW, test-only)** — the plumbing value scan
+skips non-strings, so a packed numeric address in an allowed key (`note: 168364348`,
+which decodes to a 10.9.9.x documentation-range quad) passes all three assertions; not a safety hole (`note`/`label` are never
+read by the resolver) and the test now asserts the schema, which is the real
+guarantee.
+
+**Counts observed:** focused **52 / 32 / 54** ✓; sim **1881 / 1875 / 6** ✓ same six
+pre-existing; `security_check.py --all` **6** ✓; **zero real controller IPs** in all
+four new/rewritten test files ✓. Engine: **2632 tests / 2621 pass / 11 fail** — total
+inside the claimed 2631–2634 range, but **11 not 7**, and the four extra
+(`SIGKILL mid-performance`, `enter captures pre-show snapshot`, `exit KEEP persists`,
+`dirty deck tuning surfaces`) are all in `tests/mixer/performance_mode.test.js`,
+which spawns engines, binds ports and asserts on `states/**` — **re-run in isolation
+it is 11/11 green**. They are contention artifacts of the four concurrent agents
+(and my own earlier engine run), NOT a regression; the documented seven are all
+present and unchanged. An engine count taken while other agents run should not be
+treated as a gate.
+
+**RE-SMOKE IS REQUIRED.** The operator's earlier physical pass was against the
+PRE-fix build, and these fixes change three things on exactly the paths a smoke
+exercises: the emit condition is strictly stricter (a rig that previously emitted
+torn frames can now legitimately emit NOTHING — that is R-158-A), the arm path gained
+a hard gate proof + re-ack (an arm that previously succeeded can now refuse), and
+held-dark destinations now transmit. Recommend two rows added to `_156` §9.3 before
+running it: *bench dark + `frame NOT WHOLE … regions carry DIFFERENT engine frames`*
+⇒ sequence desync, **restart the engine** (not packet loss, not a fixture menu); and
+*an `UNGATED` line after arming* ⇒ the gate was lost, stop. Zero falsification
+residue — every neutralisation this pass was a compile-time source rewrite from the
+scratchpad, never an edit to a tracked file. **SHIP remains the operator's call and
+no agent's.**
+
+## `_162` — Engine-side test-gap catalog: offline-testable surfaces, specs for the Sonnet wave (DISCOVERY, READ-ONLY)
+
+Operator-requested (Fable): find every meaningful UNTESTED-but-offline-testable
+surface on the ENGINE side + cross-process boundaries; `_161` owns the sim side.
+Zero production edits, zero git ops, no ports, no packets, no suites run. Report:
+`.agent/reports/202608/20260805_162_engine_test_gap_catalog.md` — 16 gap entries
+with implementable TEST SPECS, 8 regression specs pinned to `_157` fix slices,
+6 survey defect notes, explicit non-gaps.
+
+**Top gaps:** (1) `lib/sacn_output.js` — the engine's ONLY output path — has ZERO
+tests; spec G-1 pins wire truth in-process via fake `dgram` + the vendored
+package's own `Packet` parser (one datagram per (universe,dest) per frame,
+start/stop gating, 1-indexing, zero-channel-goes-to-zero-on-the-wire, sequence,
+close). (2) `mapPixelsToSacn` OUTGOING packing (`sacn_mapper.js:260`) untested in
+the direction the engine uses — every DMX byte the rig emits; G-2 gives exact
+byte expectations for the par/polyfill/white-synth/LED branches;
+`suppressNativeStrobes` also has zero tests (G-11). (3) no permanent
+engine↔bridge in-process contract rig (G-4 — `_157`/`_158` proved the fake-socket
+technique then left it in scratch; spec includes relay fidelity, engineOwnedPairs
+exclusion, pacing, and homes the D3/D4 receiver-side regressions). (4) only
+`titanic` has model-load tests — `test_bench` and 7 others unlinted (G-3:
+all-models load + patch-table lint + pinned overlap counts). (5) no HTTP
+malformed/hostile sweep on the unauthenticated API (G-5: per-route bad JSON, 413
+cap, traversal set, process-alive assertion). (6) corrupt state YAML behavior
+UNPINNED — `state_manager.load()` silently limps to defaults (G-6 + NEEDS-RULING
+on a `/status.stateRestoreDegraded` flag). Plus config boot matrix (G-8),
+WS connect-replay + picker-catalog contracts against what CaptainPad actually
+parses (G-9/G-10), shutdown ordering + 1× blackout pin (G-7, flips to 3× with
+S-D10), meta-ABI stride (G-12), applyDmx channels (G-13), save-pattern compile
+gate over HTTP (G-15), ffmpeg_resolver (G-16).
+
+**Regression specs R-D1/D3/D4/D5/D8/D10/D11/D12** written to land WITH their
+`_157` slices, marked blocked — they pin the fixes, not today's broken behavior.
+R-D4's file is bridge-side: flagged for `_161` coordination, as is G-4's home
+(`simulation/tests/engine_bridge_contract.test.js`).
+
+**Survey defect notes for the fix wave (not test-as-spec):** N-1 silent state-limp
+(P0 tension); N-2 DEAD config keys live in repo `config.yaml` today —
+`sacn.multicast`, the whole top-level `playlist:` block, likely
+`web_client.enabled` — the exact silently-ignored-key class the output guard
+exists to kill; N-3 `playlist.delay_s: '90'` is a string in a numeric field
+(harmless only because the key is dead); N-4 `loadConfig()` default path
+catch-warns-continues, so with `--port` an unreadable config.yaml runs the engine
+with the ENTIRE config silently ignored (override path throws; default should
+too); N-5 `path.basename` on direct pattern-set routes mangles legal `dir/name`
+slugs (playlist path accepts them — the two disagree); N-6 `sendFrame` silently
+skips universes with no sender.
+
+**Non-gaps verified:** OSC/fire_sync malformed input, WS crash-proofing, playlist
+malformed-loud, state WRITE atomicity, mixer core (~40 files), two-word views,
+output guard, VM compile errors, throttle, audio/companion/timeline breadth.
+Suite-count discipline: every spec asserts its own file's counts — engine total
+is nondeterministic ±3 (known). No hardware claim made; nothing here gates SHIP.
+
+**Landed 2026-08-05 — `_159` DISARMED-PATH SAFETY REVIEW of BENCH MIRROR v3
+(Opus, READ-ONLY, `.agent/reports/202608/20260805_159_disarmed_path_safety_review.md`):**
+verdict **INERT-CONFIRMED on every disarmed surface reachable offline — no
+defect.** The operator's stated worry ("messing up the routing and actual light
+communications for the titanic scene or any other scene") does not reproduce.
+Zero source/test/scene edits, zero git writes, no port bound, no packet, no
+engine started, nothing armed. Snapshot: `sacn_bridge.js` 13:58 / `bench_mirror.cjs`
+14:05 / `sacn_output_bridge.js` 12:49 — **post-`_158`** (D-158-1/2/3/4/5/8 all
+present in the code read); re-checked at the end, nothing changed underneath.
+
+**The counterfactual that makes "zero delta" provable:** `lib/bridge_routing.cjs`
+diff vs HEAD is **comments only**, so `computeEffectiveRoutes` IS the pre-mirror
+routing core, unmodified. Harness (both real bridges in-process, faked sockets,
+`~/tmp/disarmed_review_159/`) compared the LIVE relay sender set against that
+function at **15/15** steps of a full battery — boot, one window, client tags
+across every scene on disk (`studio`/`test_bench`/`titanic`/`studiodj`/`led202`),
+a second window, engine scene moves (with real 3.4 s waits for the bridge's own
+poll), engine claims and releases a titanic pair, window close — **all equal.
+0 mirror senders ever created. 0 connections to :6972 ever opened.** Relay byte
+path identity-checked: the payload object handed to the sender IS the inbound
+object, priority in = priority out (100 and 150), `sourceName` unchanged, **no
+CID override on relay frames**. `active requests: 0`; **no mirror-owned timer
+exists** (all six timers enumerated; the stall watchdog and misalign counter live
+inside `flushMirrors`, scheduled only below `mirrorInbound`'s early return).
+Exhaustive 14-row touch-point table in §2.1. **v3 is strictly LIGHTER than HEAD
+on the disarmed path** — v2 called `readBenchMirrorSpecs()` on EVERY recompute;
+v3 only when armed (0.295 ms measured, now only on connect/transition).
+
+**Hostile sidecars: 16 trees via an `fs` OVERLAY (operator tree never written) —
+relay unaffected in all 16, no crash, refusal only in `status.specErrors` /
+`available` / the ARM text.** absent · unparseable · the real committed HEAD v1 ·
+v2-shaped · empty · `null` · a list · unknown key · valid-but-unresolvable ·
+**broken sidecar in all 8 scenes at once** · **valid sidecar in all 8 at once** ·
+1 MB of comments · 5000 slots · BOM/NUL. ARM attempted for `test_bench`/`titanic`/
+`studio`/nonexistent/`null` in every case: **every refusal = 0 frames, 0 gate
+links, named reason.** Only `test_bench` carries a sidecar (all 8 scene dirs
+enumerated). D-158-5 confirmed fixed in passing (a real v1 file now dies on the
+VERSION check with the migration paragraph present).
+
+**Containment:** `gateHolder` is module-scope with **no write path anywhere in the
+output bridge** — proved dynamically by cache-dropping and re-requiring it:
+**a fresh instance cannot start gated**. Gate dies with its link (verified both
+directions). A **foreign** gate holder drops sim frames but the input bridge's
+relay keeps running. The input bridge **never dials :6972 while disarmed**
+(`ensureGateLink` has exactly three callers, all arm/disarm/prove). SIGINT while
+disarmed takes the `_mirrorArm === null` branch and exits with **no blackout to
+any relay route** (read-verified, not executed). **Arm→disarm round trip leaves
+ZERO residue**: relay sender set byte-identical to pre-arm, 0 open mirror senders,
+gate link closed, output bridge forwarding again, status object string-identical,
+post-cycle scene battery still equal to the pre-mirror core. **ARM pressed with
+the output bridge DEAD** refuses at R-23 in 15 ms with 0 frames and an untouched
+relay that keeps relaying — the playa scenario that would otherwise dark the ship.
+
+**Engine side (offline, guard called directly; no engine booted):** real
+`config.yaml` passes and declares no `controllers:`; `destinations: [127.0.0.1]`;
+reintroducing the key — or `controllers: []`/`null`, top-level `alsoFlat:`/
+`protocol:` — refuses to boot; both deleted modules gone with no dangling refs
+(only `ws_topic_routing` hits); `/status.outputRouting` the literal
+`{controllers: []}`; **R-21 vacuous but armed** (a non-empty payload still parses
+to 2 pairs). Guard suite 9/9. **Verified independently from the live route table
+(not from `_157`'s prose): ship U10/U12 relay to `10.x.x.13`/`10.x.x.14`, so the
+ship is unaffected by the removal** — but `10.x.x.202` appears in NO scene file,
+so if that board is real it is now unfed and was never zeroed (**OBS-6, one live
+look owed**).
+
+**Seven observations, no defects:** OBS-1 new SIGINT handler exits 0 instead of
+by signal (launcher restarts on any exit — inert); **OBS-2 `MIRROR_CID` hashes
+MD5 at module load — the one disarmed-path line that CAN throw (FIPS Node), on
+the ship's boot path**; OBS-3 sidecar I/O on the connect path (0.295 ms, ~8 ms
+pathological); OBS-4 `:6972` accepts a gate from any unauthenticated client
+(pre-existing `_157` D7 — ship unaffected, sim's own path dies until restart);
+OBS-5 the `animate.js` belt trusts a pushed status (bounded three ways, and it is
+explicitly not the enforcement); OBS-6 above; OBS-7 `window.sacnInput.armBenchMirror`
+is a page global. **Residual-risk list and the 2 am RECOVERY INVARIANT are in the
+report §5/§6: DISARM → close the arming window → kill the input bridge (comes back
+DISARMED, full relay rebuilt from the `--scene` pin before any client connects) →
+restart launcher → power-cycle. Every rung works; nothing persists an arm or a
+gate.** Not self-recovering: the bench boxes' last look after a kill-mid-arm, and
+`10.x.x.202`.
+
+**Counts:** sim **1881 / 1875 / 6** ✓ same six pre-existing; focused four
+(`bench_mirror`, `_resolve`, `_arm`, `bridge_routing`) **181 / 181 / 0** ✓; engine
+`output_config_guard` **9 / 9 / 0** ✓. Engine full suite deliberately NOT run (it
+spawns engines; `_158` already contributed that residue twice), and
+`status_output_routing.test.js` skipped for the same reason. `security_check.py
+--all` is **12 at the moment I write this**, not the `_158` baseline of 6: the 6
+gitignored `.scene_backups/**` + **6 NEW `bm26-report-ip` findings in TRACKED docs
+this wave wrote** — `_161`'s report ×4, `_158`'s report ×1, this tracker ×1 (all
+synthetic/example addresses in prose). A seventh was mine and **I removed it**.
+The number moves while several agents write concurrently; **whoever commits this
+branch must clear the tracked-doc findings or the pre-commit gate blocks.**
+
+**UNPROVABLE OFFLINE (exact live checks in report §4):** wire-level byte identity
+of the disarmed relay (one capture: relay CID must be the package default, NOT
+the mirror CID; priority 100; one source per universe); SIGINT emitting nothing;
+the launcher's real restart timing; what `10.x.x.202` physically is; whether the
+show box's Node is FIPS (OBS-2).
+
+**Landed 2026-08-05 — `_160` full review of the TITANIC SCENE as it runs on playa,
+bench mirror DISARMED (Opus, READ-ONLY + 3 parallel sub-reviewers,
+`.agent/reports/202608/20260805_160_titanic_scene_playa_review.md`):**
+verdict **NOT READY FOR PLAYA — 3 BLOCKERs, 6 HIGH**, none of them in the mapping.
+Zero production edits, zero git writes, no port bound, no packet sent, no engine
+booted against the real config, nothing armed. `_159` owns mirror-inertness; not
+duplicated here. `_156` was still writing this tree (modified 30 -> 51, untracked
+6 -> 18 mid-review) but **the titanic scene files were never touched**, which is why
+every measurement is stable.
+
+**The mapping is CLEAN and that is the larger half.**
+`scene_model_parity titanic --strict` **PASS, exit 0, 0 err / 0 warn / 1 info**
+(the info is "no `TB ` bench block" = plan step 6 unapplied). 80 DMX fixtures +
+8 LED strands + 18 controllers -> 964 model pixels, scene implies 964, **0 unpatched,
+0 pixels without a patch block**. **VERIFIED ROUTE TABLE: 38 universes -> 18
+controllers, U2-27 + U30-41.** Derived offline through the REAL
+`bridge_routing.readPatchDeclarations` -> `partitionRoutePairs`: 38 routes, 0 refusals,
+0 anomalies, **0 universes routed to >1 IP**. Independently parsing all 964 model
+pixels gives emitted universes {2..27,30..41} — **identical set**, so **no engine
+universe lacks a route and no route lacks a feed**. controllers.yaml ports == route
+universes with matching IPs; the one `parkedOutputs` (LeftLeftRopes o3, U42) correctly
+has no record and no route; max channel used 238, **no channel claimed twice**;
+the Subscribed Universes field (`common.yaml:192`) is a superset; `sacn_bridge.js:27`
+pins `--scene` to **titanic by default**, so routes exist without engine or browser.
+**D6 / the U10-U12 dark-fixture story is CLOSED and verified closed**: config.yaml
+is `destinations: [127.0.0.1]` with no `controllers:`, `/status.outputRouting` is a
+hardcoded `{controllers: []}`, `engineOwnedPairs` returns EMPTY, subtracts nothing.
+
+**BLOCKER T1 (NEW) — `stop` freezes the ship, it does not turn it off.**
+`show_server_ops.md:30/:63/:75` and `deploy/README.md:19,364` promise "lights OFF …
+before generator work". `launcher.js:1074` -> `forceKillTree` -> `:438-448`
+`taskkill /PID /T /F`. `/F` = TerminateProcess, so **the engine's SIGTERM blackout
+(`engine.js:2521-2549`, verified present and correct) NEVER RUNS**, and the relay dies
+in the same tree so nothing could carry one. The rig holds its last frame until an
+**unknown** device-side timeout — the repo says so itself (`sacn_bridge.js:2301-2303`).
+Workaround: drive an explicit blackout and confirm it BY EYE, then `stop`, then cut
+PSU power. Also re-confirmed `_157` D10: even the graceful blackout is sent **1x**
+while `engine.js:1753-1759` documents 3x.
+
+**BLOCKER T2 (NEW) — the persisted show state boots the WHOLE ship at 2.7-17.9 %.**
+`states/titanic/globals_state.yaml` `dimmers:` names **all 24** titanic groups, every
+one in 0.0268-0.1786. At HEAD only 3 name keys existed and all 3 were **`1`**. Restored
+silently at boot: `state_paths.js:1-33` (this tree IS the operator's show state,
+authoritative unless `MARSIN_STATE_DIR`) + `state_manager.js:428-448` (a resolving NAME
+key logs NOTHING; only unresolvable names warn). Checked and ruled out the legacy
+numeric keys: `'1'..'17'/'189'/'486'..'498'` are applied verbatim via the `/^\d+$/`
+branch but titanic's real section ids are {3,18-25,415,514-527} — **zero
+intersection, all inert**. Values quantise to n/112 = hand-set slider positions.
+**This is the most direct failure against the codex's one mission-critical goal and
+nothing in the stack says a word.**
+
+**BLOCKER T3 — D1's x2.55 clip, and the NEW finding that it is MASKING T2.**
+Reproduced independently in-process against the real vendored `Packet` (no socket):
+`0 1 2 5 10 20 26 40 50 64 80 99 100 101 128 … 255` -> `0 3 5 13 26 51 66 102 127 163
+204 252 255 255 255 … 255`; CID = `6b796c6548656e73656c44656661756c`
+("kyleHenselDefaul"). **NEW, and it changes `_157`'s picture:** the x2.55 gain is the
+only thing lifting T2's dimmers to a visible level (Right Front Wall 2.7 % -> DMX 7 ->
+wire 18 = 7 %; Left Back Wall 16.1 % -> DMX 41 -> wire **105** = 41 %). **Flipping
+`useRawDmxValues` without fixing T2 first takes the wire byte down to the DMX column —
+the rig goes 2.55x DARKER.** The D1 slice and the dimmer reset MUST land in one
+operator gate, dimmers first. `_157`'s severity ranking is not disputed.
+
+**HIGH T4 — a `sacn_in` sim tab is a second writer on all 38 universes, under the
+engine's own CID.** `animate.js:703-736`: admits every patched fixture (`:721`),
+hard-codes **priority 150** (`:726`), ~60 fps vs the engine's 40, straight through
+`:6972` to the real box. Mirror DISARMED means `benchMirrorArmed` is false at `:702`, so
+`_156`'s gate is not asserted. Relay senders set **no `cid:`** (`sacn_bridge.js:819-825`);
+so do the output bridge's (`sacn_output_bridge.js:94-104`) — same CID+universe as the
+engine, which is `_157` P4's measured **98/100 drop**. The ops docs actively tell the
+operator to open the sim. Workaround: watch in ANY mode other than `sacn_in` with
+mapping off (titanic has no effects fixtures, so the tab is then inert); one tab, never two.
+**HIGH T5 (NEW)** — that tab then **holds its last frame forever** if the engine or
+bridge dies (`universe_frame_buffer.js:68-77` explicit hold-last-frame; the 2 s
+staleness in `universe_router.js:116-161` gates MERGING, never EMITTING) — a dead show
+that looks alive, at a priority that outranks the relay.
+**HIGH T6 (NEW, pre-existing at HEAD)** — `playlists/default.yaml`: **45 of 72 entries**
+name patterns that do not exist (they live in `patterns/summer_camp/`; `patternExists`
+resolves against the ROOT dir, `playlist_manager.js:100-111`). Degrades safely
+(`:187` `_missing`, `autopilot_pick.js:63` skips) but the timeline's daytime,
+philharmonic, party, sunrise, burn_night AND temple looks all point at
+`default`, so the show runs on **27 usable entries**. Every OTHER titanic playlist is
+clean (131/131 refs resolve).
+**HIGH T7 (NEW, pre-existing at HEAD)** — `states/titanic/audio_state.yaml` carries
+`capture.device: test`, the exact value `state_paths.js:1-15` names as a prior outage
+cause. **test_bench was fixed in this very tree and titanic was not.** No mic at boot,
+so every audio modulation and the timeline's `mood: true` autopilot are dead.
+**HIGH T8 (NEW)** — LED fleet: **3 of 6 controllers are `provisional`** (boards nobody
+has met: .62/.63/.64), and `LeftLeftRopes` (.60, carrying 80 px of silhouette) is bound
+to `controllerId: testbench` / `boardId: angio4-old` with a 2026-08-03 `lastPush`.
+`provisional` is a documented intentional grade (`controller_registry.js:125-150`) so
+this is NOT a data defect — it is the size of the live-hardware gap.
+**HIGH T9** — tracked code top-level-imports untracked files (`engine.js:64` ->
+`output_config_guard.js`; `sacn_bridge.js:68`; `sacn_input_source.js:18`;
+`controller_map_panel.js:42-43`) with `artnet_output.js`/`output_dispatch.js` deleted
+but unstaged — `_156`'s slice must land as ONE unit; no deploy from this tree first.
+
+**Per-defect playa ruling asked for by the operator (`_157` D1/D3/D4/D5/D7/D8): all
+CONFIRMED, three are WORSE in titanic context.** D1 worse in **sequencing** (masks T2).
+D3 worse in **reachability** — latent in theory, one operator click away in practice,
+and the click is the one the ops docs recommend. D5 worse **in combination** — it is
+why T4 will present on the night as "the ship is behaving weirdly" with a clean log;
+cheapest fix in the list, should land FIRST. D7 **widened**: beyond `:6972`
+(`WebSocketServer({port})`, all interfaces, no auth) and unfiltered multicast, ALSO
+`osc: {host: 0.0.0.0, port: 10000, allowedSenders: []}` — `osc_listener.js:542` only
+filters when the allowlist is NON-EMPTY, so any LAN device can drive every CPC param —
+and `start.js:89` serves the **repo root** on `:6969` with `--cors`. Note for ops:
+**the titanic show does not need `:6972` at all** (light flows engine -> loopback ->
+relay -> controllers; `:6972` is browser-to-hardware only). D4 and D8 confirmed unchanged.
+
+**Views/mixer CLEAN, no blocker.** Measured on the real model: **exactly 58** catalog
+names, `viewTable` and `MaskRegistry` agree exactly (0 one-sided) = 24 groups + 7
+word-1 composites + 27 auto-views. **Zero dead/zero-pixel selectors** (min 4 px);
+zero bit collisions (word-0 0xcf3ffff / 24 bits, word-1 0x12664 / 7 bits; 31 of 62
+slots used); LEFT + RIGHT = 964 exhaustive and disjoint; `views.yaml` and
+`titanic.viewmasks.js` byte-equivalent. **`CTRL_n` selects the correct physical box for
+all 18** — `cId` is the panel ORDINAL (`pixelblaze_model_exporter.js:247`,
+`controller_registry.js:1903-1912`, decision 20), verified 18/18 by universe join,
+sum 964. **No wrong-box bug.** The persisted `mixer_state` `target: RIGHT` IS a real
+catalog name (482 px). MEDIUM fallout: the ordinal is **not countable** in the panel it
+is named after (DMX cards then LED cards, so wrong for 14/18; no card shows its ordinal;
+the pad shows `CTRL_9 · 80 px` with no name), and **12 of 18 CTRL_n numbers are a
+DIFFERENT controller's stable `id:`**.
+
+**Offline readiness CLEAN.** No show-time external fetch anywhere (sim, engine,
+CaptainPad dist); every importmap entry and `<link>` in `index.html:11-32` resolves to
+a present vendored file (three.webgpu/tsl, js-yaml, chroma, preact, htm, signals, both
+font CSS + all 6 woff2) — **zero missing**; gstatic hits in `CaptainPad/dist` are dead
+metadata; `node_modules` ships with the deploy; no NTP/DNS/telemetry/license path.
+Two non-prod exceptions recorded: CaptainPad's `npx serve` (not a dependency — would
+hit the registry offline) and `useServerDiscovery.ts:129` -> `api.ipify.org` on WEB
+builds only. **Partial-stack matrix measured**: engine-before-bridge = **silent** full
+dark (prevented by `launcher.js:1168`); `:6972` down = **no show impact**;
+**no browser open at all = light still reaches the controllers** (`routeFrame` relays
+BEFORE the `wss.clients.size===0` return, `sacn_bridge.js:2241-2249`; routes seed from
+the pin at `:625`) — **the show does NOT require a browser tab**; bridge crash ~1 s;
+engine crash = whole-stack teardown + 10 s cold boot with **no blackout**. MEDIUM:
+headless prod emits **zero** frame-flow evidence (`:1302-1309` gates on `clientCount>0`);
+any child exit tears everything down; a FROZEN bridge takes up to **~42 s** to detect.
+
+**Residue.** Titanic scene files clean vs HEAD except UI-viewport residue
+(`pixel_map_views.yaml` framing only; `common.yaml` default camera moved wide to
+close-in, which affects every scene's `agent_render` presets). Real residue is in engine
+state: T2 + `mixer_state` "New Layer" enabled at fader 1 blend_screen masked
+Stacks -> **RIGHT** + `deck_state` `00_golden_hour_wash` -> **`13_sparkle`** (cursor
+2 -> 22, localControls replaced) + `default.yaml` entry 0 `sliderLevel: 0.12` vs the
+pattern's own **0.62** (`00_golden_hour_wash.js:21,29`; studiodj got 0.62). No conflict
+markers, no added TODO/debugger/.only/.skip anywhere. **No cross-scene playlist
+leakage** — the other four scenes' diffs are a coherent slider rename matching the new
+pattern exports, and the prior "playlist residue revert" has NOT reappeared. Also LOW:
+`RightRightRopes` is the only LED controller with an explicit `led.wire` block and it is
+**byte-identical to `LED_WIRE_DEFAULTS`** (measured: only its 80 px carry `ledWire:`) —
+a no-op today, a left/right silhouette split waiting for anyone who edits the defaults;
+FRONT + BACK = 776, not 964 (188 px in neither, by design);
+`pixel_map_views.yaml:19` excludes a group that exists nowhere (inert);
+`timeline/playa_default.yaml:9` carries a **future date in a tracked file**
+(`festival.startDate`) — needs an operator ruling, not a silent fix.
+
+**Counts.** Sim `npm test` **1881 / 1875 / 6** vs `_158`'s **1875/1869/6** — **+6 tests,
+ZERO new failures**; all six pre-existing (5 = `bench_section_sync` refusing because the
+bench block reserves U10/U12 that titanic already occupies = plan step 6 unapplied, the
+same thing the parity info line says; 1 = `pixel_map_view_defaults` "smallest collapsed
+band 5.20 too close to the 5-unit threshold" on the live scene). `security_check.py --all`
+**6**, exact baseline. **Engine `npm test` DELIBERATELY NOT RUN** — it rewrites
+`states/titanic/*.yaml`, the exact artifact T2/T7/T14 are about; running it would have
+destroyed the evidence.
+
+**READY/NOT-READY.** Scene data **READY** (strict gate passes; no defect found in the
+titanic mapping). Wire path **READY IN SHAPE, NOT IN FIDELITY** — topology right, one
+writer, one router, exclusion proven empty rather than assumed; what travels down it is
+wrong. Operations **NOT READY** — T1 alone disqualifies any night where a human touches
+the rig. Fix order: T2 -> T5 + D5 listeners -> T1 -> T7/T6/T14/T15 -> land `_156` ->
+**T3+T2 together, never D1 alone** -> D2 gate / D4 per-universe / network isolation / D8.
+**Live checks offline cannot replace:** (1) each controller's E1.31 data-loss behaviour
+and timeout in seconds — **T1's severity turns entirely on this number** and nothing in
+the repo determines it; (2) power/verify/push the 3 provisional LED boards; (3) settle
+10.x.x.60's identity (ship board or the bench `angio4-old`); (4) D1 before/after capture
+per `_153` section 7E with the dimmers fixed first; (5) the tshark multicast sweep
+(`_153` section 7A step 5, still open); (6) D8's occurrence on this OS/Node; (7) frame-flow
+proof in headless prod; (8) the 38-sender relay under real link churn. **Nothing here is
+a SHIP grant — the operator's physical confirmation remains the hard gate.**
+
+**`_159` addendum (disclosed):** `sacn_bridge.js` was **rewritten under me at
+14:32** (116 732 → 122 881 B) after my measurements. **All five harnesses were
+re-run against the new file and all still pass** (H1 15/15, 0 mirror senders,
+0 gate links; H2 all 16 hostile trees; H3/H5/H6 green), and the disarmed-path
+delta was re-read. The one addition that touches this review is a **NEW TIMER**,
+`_darkTickTimer` (`setDarkTick`, `:2134-2152`), a 40 fps ticker for the
+all-`none` held-dark mapping (evidently the fix for `_160`'s R-158-B). It is
+**mirror-only and cannot run while disarmed**: both call sites are
+`recomputeRoutes:691` (`_activeMirrors.some(...)` — false whenever the array is
+empty, i.e. always while disarmed) and `disarmBenchMirror:1747`
+(`setDarkTick(false)`); the body early-returns on `_activeMirrors.length === 0`
+and the handle is `unref`'d. Verdict **unchanged: INERT-CONFIRMED**. `file:line`
+citations in the report are against the 13:58 snapshot unless the disclosure box
+says otherwise.
+
+### `_156` AMENDMENT 2 — post-`_158` §5 residuals closed (R-158-A/B/C), all falsified
+
+`_158`'s re-verification returned **READY FOR PHYSICAL SMOKE** with D-158-1/2/3
+and every minor CONFIRMED closed (its independent falsification of the gate fix
+was clean, and its three gate attack variants — reconnect clearing the sticky,
+loss after the proof, re-ack race — all came back safe by construction). Three
+residuals were raised, none blocking; two would have actively misled a bench
+session, so all three are fixed in `_156`. Report gains **§14**.
+
+**R-158-A (MEDIUM) — a permanent sequence offset read as a lost datagram.** The
+all-sequences-equal rule assumes one shared sequence per engine frame, and that
+lockstep is EMERGENT, not guaranteed: each `sacn` Sender owns its counter from 0,
+and the engine's model-reload path creates a Sender mid-run (`engine.js:1726`) and
+advances one universe three times (`:1758`). `_158` reproduced a permanent −7
+offset — the multi-source gateway emitted 0 of 10 frames while single-source LED
+destinations kept running (correct fail-loud per P0, but unrecoverable without an
+engine restart) and the log said *"a source datagram was lost"*, sending the
+operator to hunt network loss. **Bridge-side diagnosis fix only — nothing in
+`marsin_engine/` touched; engine-side sequence semantics belong to the `_157`
+slices.** New `offsetSignature()` computes wrap-aware SIGNED lag (seven behind
+reads `-7`, not `249`). **The discriminator is the MINIMUM lag each source reaches
+while the window is open, not a repeated signature** — offsets swing within a
+single frame as its datagrams land one at a time, so consecutive readings are
+never identical (that was the first attempt and it never fired); a source merely
+one frame late touches 0 at some point in the cycle, a permanently offset one
+never does. After 6 flushes without an emission, any source whose minimum lag is
+still non-zero is FIXED, and the new diagnosis jumps the throttle window because
+it contradicts the line printed before it. Message names the offset (`U5 at -7`),
+rules out the wrong remedy (`This is NOT network loss and it will NOT recover on
+its own`), names the cause class (`engine MODEL RELOAD`) and states the remedy
+(`**RESTART THE ENGINE**`). Regression is `_158`'s repro verbatim, plus a second
+half asserting a ONE-OFF loss still reads as a lost datagram — otherwise the new
+message would merely replace the old misdirection.
+
+**R-158-B (LOW/MED) — a total-`none` arm froze every box.** D-158-2 gave a
+slice-less destination `requiredSources` = every source the mapping reads; with
+EVERY slot `none` the mapping reads nothing, so that set was empty everywhere and
+nothing ticked — 0 frames, every bench box holding its last look, arm accepted.
+**Chose emit-zeros over refusing the arm**, per the ruling text ("unselected =
+actively held dark") and because "own the whole bench and hold it dark" is a
+legitimate mid-session gesture. A destination with an empty `required` set now
+emits unconditionally (it can be neither whole nor torn — the frame is all-zero by
+construction), and a mapping with no source universes anywhere starts a
+`DARK_TICK_MS = 25` (40 fps, the engine's own frame rate) ticker that marks its
+destinations dirty. `unref`'d, started only for that degenerate shape
+(`recomputeRoutes`, `_activeMirrors.some(m => m.state.bySource.size === 0)`),
+stopped at disarm. **Not a timeout-emit fallback**: nothing is guessed and no
+source is waited on. Regression arms all-`none`, feeds NO inbound traffic at all,
+asserts ≥4 full-512 all-zero frames per owned destination, then asserts the ticker
+does not outlive the disarm and the ship relay is restored.
+
+**R-158-C (LOW, test-only) — a numerically encoded address evaded the scan.**
+Closed both ways, the structural one being the point: the value scan now flags any
+integer that byte-unpacks into `10.0.0.0/8`, **and** a new assertion parses the
+committed sidecar twice — once clean, once with `note`/`label` poisoned with a
+packed address, a dotted quad and a hex literal — and requires an identical
+`slot`/`bench_fixture`/`default_source` set, the only fields the resolver reads.
+An address smuggled into free text cannot become a route in ANY encoding: a
+property, not a pattern list.
+
+**Smoke procedure.** §9 now opens with a prominent **RE-SMOKE IS REQUIRED**
+notice naming the three behavioural changes since the operator's first pass (the
+arm path gained a gate proof; the emit condition is stricter; held-dark
+destinations now transmit) — a pass on the old build tells you nothing about this
+one. §9.3 gained the two rows `_158` specified: an `UNGATED` line after arming ⇒
+**STOP THE SMOKE** (and a successful arm reporting that is a defect, not a
+hardware problem), and **bench dark while the LED strands still run** ⇒ read the
+`BENCH MIRROR STUCK` line and restart the engine (that asymmetry IS the
+signature, since single-source destinations are structurally immune). The
+frozen-fixture row now states flatly that while armed nothing on the bench should
+ever freeze.
+
+**Falsification** (same in-memory compile-time interception, no file touched):
+RA neutralised ⇒ *"a persistent constant offset must be reported as its own state,
+not as a lost datagram"*; RB neutralised ⇒ *"U2 → 10.x.x.10 must keep receiving
+frames with no engine input at all — got 0. Silence here means the box holds its
+last look."* Unmodified, both pass.
+
+**Counts.** `bench_mirror.test.js` **52/52**, `bench_mirror_resolve.test.js`
+**32/32**, `bench_mirror_arm.test.js` **56/56**; full sim `npm test`
+**1883 / 1877 / 6** (same six, byte-identical; **+49 tests / zero new failures**
+against the original 1834 / 1828 / 6 baseline); engine `npm test`
+**2640 / 2633 / 7** (same seven). `security_check.py --all` **6**, unchanged. No
+new test file carries a real controller address (0).
+
+**Engine-suite contention, recorded correctly.** `_158` measured four extra
+failures in `tests/mixer/performance_mode.test.js` that appear ONLY when
+concurrent agents are running — it spawns real engines and competes for
+resources. **In isolation on this tree it is 11 / 11 / 0**
+(`node --import ./tests/helpers/setup_config_guard.mjs --test tests/mixer/performance_mode.test.js`).
+A run showing it red is measuring machine contention, not this branch. The engine
+TOTAL also drifts run to run (2631–2640 observed) because
+`tests/effects/effects_v2_mode_page_layout.test.js` crashes at file level — the
+failing LIST is the stable quantity, not the count.
+
+**Still NOT SHIP** — the operator's physical confirmation remains the hard gate,
+and a **re-smoke is required** because the earlier pass ran against the pre-fix
+build.
+
+## `_163` — SIM test-gap implementation: harness extraction + 14/16 catalog gaps
+
+**Agent:** test implementer `_163` (Sonnet 5, operator-assigned) · **Branch:**
+`feat/bm_readiness`. **Report:** `.agent/reports/202608/20260805_163_sim_test_implementation.md`.
+Implements report `_161`'s catalog. **TEST CODE ONLY** — zero production edits, zero git
+ops, no operator port bound, no real controller IP in any new test.
+
+**Prerequisite done first:** extracted the H-A fake-module bridge harness from
+`bench_mirror_arm.test.js:518–847` into `tests/helpers/bridge_harness.mjs`
+(`createBridgeHarness()`, call once per test file) and refactored
+`bench_mirror_arm.test.js` to consume it — **zero assertions changed**, verified
+**56/56 before and after** (the file had already grown 54→56 under a concurrent
+agent mid-session; re-read immediately before editing, matched against the CURRENT
+content, not a stale one).
+
+**Implemented (14 of 16 gaps + prerequisite), 120 new tests (119 pass, 1 `todo`):**
+G1 arbitration/lockout (9, `sacn_bridge_arbitration.test.js`) — found the catalog's
+OWN priority-0 example was wrong for the live config: `sacn_high_priority=100` means
+the inflated `priority||100` conflation hits the `>=` threshold EXACTLY, so priority-0
+triggers an OVERRIDE, not "routes as low" as `_161` assumed. G3 client lifecycle (7).
+G4 engine-poll (11, real wall-clock waits — `pollEngineStatus` has no
+`module.exports` at all, so it cannot be called directly; ~40s file runtime is the
+real cost of that). G2 output-bridge datapath (8, incl. a real 21s wait for the 15s
+stale-sender reap — confirms `_157` D9's sequence-reset timing exactly). G6
+sacn_input_source frames + G15 half (8). G5 UniverseRouter/FrameBuffer (10, fake
+clock). G10 shutdown ordering (9 across 3 files — `_shuttingDown` never resets, so
+disarmed/armed/mid-blackout-race each needed their own fresh harness; grabbed the
+input bridge's specific `process.listeners('SIGINT')[1]` to invoke directly rather
+than `process.emit`, which would also fire the output bridge's own independent
+SIGINT handler). G7 save-server endpoints (10, **reduced scope**: skipped
+`/save-pattern`/`/delete-pattern`/`/list-patterns` because `SIM_SAVE_SERVER_ROOT`
+does NOT redirect `ENGINE_ROOT` — those endpoints resolve to `<OS temp
+dir>/marsin_engine`, one level above the per-test unique dir and SHARED across every
+run on the machine; flagged as a test-hook isolation gap, not routed around).
+G8 scene lint (21 + 1 `todo`, **reduced scope**: skipped the DMX-address-overlap
+check — the real rule lives inside `checkSceneModelParity` and needs fixture/3D-model
+resolution most of the 6 non-gated scenes don't have; a fresh reimplementation
+risked a second, subtly-different "what a patch occupies" algorithm). G12
+sacn_output_client + G15 half (6). G9 load_ports (5). G11 animate.js wiring (5,
+source-text). G14 boot-invariant/error exits (5). G13 monitor-panel pure logic (5,
+weak source-text guard — module imports `htm/preact`, not node-resolvable; option
+(a) from the spec, not (b)).
+
+**Skipped: G16** (broken-sidecar warn dedup) — needs either writing into the real
+`scenes/` tree (forbidden) or a `BM26_SIM_SCENES_ROOT` production hook (its own
+reviewed slice), exactly as `_161` predicted. Left for `_159` or a follow-up.
+
+**Residue tripwire (G8) is a `test.todo`, not a normal assertion** — it correctly
+fails today. Surfacing per AGENTS.md rather than deleting:
+**`simulation/scenes/summer_camp_dome/patches.yaml.original` still exists** (first
+flagged `_161`) — operator: please delete or archive it, `robocopy /MIR` ships it to
+the show server.
+
+**Production-bug list for the Opus reviewer** (none fixed, all pinned/documented —
+full detail + line numbers in the report): (1) priority-0 → OVERRIDE on live config,
+sharper than `_161` catalogued [D12]; (2) global-not-per-universe lockout [D4]; (3)
+three more silent-remap conflations across `sacn_input_source.js`/`sacn_output_client.js`
+[D12 x3]; (4) the 15s stale-reap sequence-reset timing, now pinned exactly [D9];
+(5) `/save-cameras` silently defaults to/creates `scenes/titanic/` with no `?scene=`
+[P0-tension]; (6) the `SIM_SAVE_SERVER_ROOT`/`ENGINE_ROOT` test-hook isolation gap
+(new finding, save-server); (7) the `patches.yaml.original` residue (data, not code).
+
+**Counts.** Baseline before this session's new tests: **1883 / 1877 / 6** (same six
+`_161`/`_158` already recorded). Harness refactor alone: still **1883/1877/6**,
+byte-identical failing names. **Final: 2003 / 1996 / 6 / 1 todo** — same six
+failures, **+120 tests, zero new failures.** `security_check.py --all`: **6**
+findings, all pre-existing in gitignored `.scene_backups/studiodj/**` — **zero new**.
+No new test binds a real port, sends a real packet, or carries a real controller IP
+literal.
+
+**Files:** new — `tests/helpers/bridge_harness.mjs` + 16 new `tests/*.test.js` files
+(see report §5 for the full list). Modified — `tests/bench_mirror_arm.test.js`
+(harness-consumption only). **Not touched** — every production file; the tracked-file
+diff this session produced is exactly those two categories (verified via `git
+status`). The heavy concurrent tree churn visible in `git status` during this
+session (marsin_engine/*, several other simulation/* files, a new
+`scenes/titanic/playlists/dirty_probe.yaml`) belongs to other agents working in
+parallel — not this task.
+
+**Handoff:** `_162` owns the engine-side catalog (`_162` report) and the one shared
+boundary (G8's playlist→pattern resolution, deliberately left to them). The G7/G8
+scope reductions and the G16 skip are each a candidate follow-up slice; none are
+blocking. Still **NOT SHIP** — unchanged from `_158`/`_159`'s standing verdict; this
+slice is test coverage only and does not itself move that needle.
+
+## `_164` — Engine-side test-gap implementation: 11 of 16 gaps + a critical crash pin
+
+**Agent:** test implementer `_164` (Sonnet 5, operator-assigned) · **Branch:**
+`feat/bm_readiness`. **Report:** `.agent/reports/202608/20260805_164_engine_test_implementation.md`.
+Implements `_162`'s catalog. **TEST CODE ONLY** — zero production edits, zero git
+ops, no operator port bound, no real controller IP literal, no packets to hardware.
+Sibling `_163` implemented the SIM catalog (`_161`) concurrently; `_163`'s
+`simulation/tests/helpers/bridge_harness.mjs` already existed by the time this
+session reached G-4 and was reused as-is (no `_163`-owned file touched).
+
+**Baseline:** engine `npm test` **2631 / 2624 / 7** (inside the documented
+2631-2634 range; the 7 are the known audio_capture/effects_v2/osc_listener set).
+
+**Implemented (12 catalog entries, 138 new engine tests + 5 new sim tests, all
+green):** G-1 sACN wire truth (9, `tests/io/sacn_output_wire.test.js` - the
+vendored sacn lib's payload-to-wire path multiplies by 2.55, so only {0,255} are
+pinned exactly; intermediate values are R-D1's job). G-2 + G-11 mapPixelsToSacn
+packing + native-strobe suppression (22, `tests/io/sacn_mapper_pack.test.js` -
+found the mono-luma branch ROUNDS via `Math.round`, so the catalog's own
+127-truncation assumption was wrong; real value is 128, pinned as such). G-3
+all-models load+lint (34, `tests/mixer/all_models_load_lint.test.js` - **found
+`dev_test_bench` cannot boot at all**: its `.viewmasks.js` sidecar declares
+group names absent from the 0-pixel model; verified against the REAL engine
+CLI, pinned as a named characterization, not fixed). G-4 engine-bridge
+byte-fidelity rig (5, `simulation/tests/engine_bridge_contract.test.js` - reused
+`_163`'s harness; drives the REAL `marsin_engine/lib/sacn_output.js` Sender
+through a dgram patch, parses real wire bytes with the vendored `Packet` class,
+feeds them into the bridge's REAL receiver path; empirically confirmed Node's
+ESM-importing-CJS `sacn` import does NOT route through the harness's
+`Module._load` patch, so the engine side stays real while the bridge side
+stays faked - exactly the "real sender vs real receiver" the catalog asked
+for). G-5 + G-15 HTTP malformed sweep + save-pattern compile honesty (36 + 1,
+`tests/e2e/http_malformed_sweep.test.js` - see CRITICAL finding below). G-6
+corrupt state YAML (6, `tests/state/state_corrupt_load.test.js`). G-7 shutdown
+ordering (3, `tests/e2e/shutdown_ordering.test.js`, **scope cut**: both the
+stale-universe-reload half and the live-signal half turned structural - see
+report section 5). G-8 config boot matrix (8, `tests/state/config_boot_matrix.test.js`
+- **found `_162`'s own N-2 survey note wrong**: the top-level `playlist:`
+config block is NOT dead, `lib/autopilot.js` reads/writes it via its own
+independent load cycle on the same file). G-9 WS connect-replay (5,
+`tests/e2e/ws_connect_replay.test.js` - found `/ws/params` replays ONLY
+`sharedParams`, never `paramSchema`, contra the catalog draft). G-10 picker
+catalog contract (4, `tests/e2e/picker_catalog_contract.test.js` - found there
+is NO word/bit discriminator on `namedViews` entries anywhere in the wire
+contract; Tier-A resolves entirely by name, by design). G-12 meta-ABI stride
+(6, `tests/mixer/meta_abi_stride.test.js` - found the `LANE_*` named constants
+in `meta_abi.js` are imported NOWHERE; both real pack loops hardcode their own
+offsets, a real drift-detection gap now closed by this pin). G-16
+ffmpeg_resolver (4, `tests/audio/ffmpeg_resolver.test.js` - found a REAL
+silent-fallback-chain P0 violation: an explicit misconfigured path is silently
+discarded, not refused; NEEDS-RULING pinned).
+
+**CRITICAL production bug found mid-implementation, pinned in its own file:**
+`GET /pattern-dirs/<invalid-slug>` (e.g. the catalog's own G-5 traversal
+example, `..%2F..`, or plain `Default` with a capital D) **crashes the ENTIRE
+ENGINE PROCESS** - `api_server.js:4911-4920` sends `res.writeHead(200)`
+speculatively BEFORE `listPatternsInDir()` (which throws on any slug failing
+`VALID_PATTERN_DIR`) runs; the catch block's `res.writeHead(400)` is a SECOND
+header-send on an already-sent response, throwing `ERR_HTTP_HEADERS_SENT` with
+nothing left to catch it, reaching `engine.js`'s `uncaughtException` handler
+which (correctly, per its own design) `process.exit(1)`s. Reproduced
+deterministically 7/7 in isolation. One unauthenticated GET request, no state
+required, kills the exterior lighting. Pinned in its OWN isolated
+spawn/teardown (`tests/e2e/pattern_dirs_crash_pin.test.js`) so it cannot
+cascade into other tests; the main sweep deliberately avoids sending this exact
+input to its shared harness. **Recommend this as the #1 priority for the next
+fix wave**, ahead of the already-tracked D-series items.
+
+**Skipped - time budget, not blocked:** G-13 (applyDmx channels) - not
+implemented this pass; a straightforward follow-up pickup. **Correctly left
+alone (blocked on `_157` fix slices, not this agent's call):** R-D1/D3/D4/D5/
+D8/D10/D11/D12.
+
+**Other findings folded in from `_162`'s N-1..N-6 survey, with test evidence:**
+N-1 (state-restore-degraded, no `/status` flag) confirmed + pinned with a
+NEEDS-RULING test. N-2/N-3 **corrected** (playlist block is live, not dead -
+see above; the `delay_s` string is harmless because `autopilot.js` already
+`parseInt`s it, not because the key is dead). N-5 (`path.basename` mangles
+`dir/name` slugs on direct pattern routes) confirmed + pinned. N-4/N-6 not
+independently re-verified this pass (flagged, not re-tested).
+
+**Counts.** Engine final: **2772 / 2765 / 7** - same 7 failure names as
+baseline, byte-identical, **zero new failures**. `performance_mode.test.js`
+verified green in isolation (11/11) per the documented contention caveat, not
+chased. Sim (touched via G-4's new file only): one full run, **2008 / 2001 / 6**
+- same 6 pre-existing failures, **zero new**. `security_check.py --all`:
+**7 findings, not 6** - the documented 6 (gitignored `.scene_backups/studiodj/**`)
+are unchanged; the 7th is a real MAC address literal in
+`.agent/reports/202608/20260805_163_sim_test_implementation.md:113` - **written
+by `_163`, not this session** (untracked file at scan time), in a TRACKED
+(non-gitignored) report, which is worse than the gitignored `.scene_backups`
+class since it would actually be committed. Flagged for `_163`/the reviewer to
+redact; not this session's file, not touched. This session's own additions
+contribute **zero** new findings.
+
+**Files:** new - `marsin_engine/tests/io/{sacn_output_wire,sacn_mapper_pack}.test.js`,
+`marsin_engine/tests/mixer/{all_models_load_lint,meta_abi_stride}.test.js`,
+`marsin_engine/tests/state/{state_corrupt_load,config_boot_matrix}.test.js`,
+`marsin_engine/tests/e2e/{http_malformed_sweep,pattern_dirs_crash_pin,
+ws_connect_replay,picker_catalog_contract,shutdown_ordering}.test.js`,
+`marsin_engine/tests/audio/ffmpeg_resolver.test.js`,
+`simulation/tests/engine_bridge_contract.test.js`. **Not touched:** every
+production file, `bridge_harness.mjs` (read-only reuse), every `_163`-owned file.
+
+**Handoff:** the `GET /pattern-dirs` crash (above) is the standout priority.
+G-16's fallback-chain ruling and N-1's state-restore-degraded ruling both need
+an operator/reviewer decision. `dev_test_bench`'s boot failure needs a fix or
+the model needs marking scratch-only. G-13 open for a follow-up slice.
+R-D1/D3/D4/D5/D8/D10/D11/D12 remain correctly blocked on `_157`. Still **NOT
+SHIP** - unchanged standing verdict; this slice is test coverage only.
+
+## `_165` — Opus review of `_163`'s SIM test wave (VERDICT: ACCEPT-WITH-FIXES)
+
+**Agent:** reviewer `_165` (Opus, operator-assigned) · **Branch:** `feat/bm_readiness`.
+**Report:** `.agent/reports/202608/20260805_165_sim_test_review.md`. Reviews `_163`'s
+implementation of `_161`'s 16-gap catalog: 16 new test files, the extracted
+`tests/helpers/bridge_harness.mjs`, and the `bench_mirror_arm.test.js` refactor.
+**READ-ONLY on production code AND on `_163`'s test files** — zero edits, zero git ops,
+no operator port bound, no packet sent. All mutations were applied **in memory only**
+via a `--import`/`--require` source-rewriting preload (`~/tmp/review_165/`); no file on
+disk was modified.
+
+**VERDICT: ACCEPT-WITH-FIXES.** The operator's stated distrust of Sonnet work is not
+borne out here. **Zero vacuous tests found.**
+
+**Mutation testing — 30 mutations across 12 production files, 30 kills.** Each mutation
+neutralises one production expression and re-runs the owning test file. Every safety-
+critical claim in the wave has real teeth: arbitration (`priority||100`, `universe||1`,
+the global-lockout branch, the lockout timer — 4/4), engine poll (`_enginePollBusy`, the
+`service` gate — 2/2), shutdown ordering (armed-blackout gate, `_shuttingDown` latch,
+the mid-blackout branch — 3/3), output-bridge datapath (pool key, 519-length gate,
+`STALE_SENDER_MS` — 3/3), boot invariant/error fork (2/2), the browser-side D12 pins
+(3/3), the router stale boundary, client-lifecycle tagging/cleanup (2/2), the
+`/save-cameras` titanic default, and all three source-text pins.
+
+**Harness-extraction safety — the `_152`/`_158` regressions still fail when their fixes
+are neutralised, THROUGH the new harness.** `_152 D1` dies when `if (_mirrorDisarming)
+continue;` is removed; `_152 D2` / `_152 RESIDUAL-1` / `_155 A3` die when
+`blackoutInFlight()` stops reporting the disarm blackout; `_158 R-158-A` dies when the
+fixed-offset diagnosis is forced false. `bench_mirror_arm.test.js` is **56/56** in
+isolation, same names; the destructure at `:502-508` re-binds exactly the names the
+inline block declared. **Extraction is safe; zero assertions lost.**
+
+**Suite integrity reproduced exactly.** `cd simulation && npm test`: **2003 / 1996 / 6 /
+1 todo**, the same six pre-existing failures byte-identical. `bench_mirror_arm.test.js`
+alone 56/56. `security_check.py --all`: **6**, all gitignored `.scene_backups/studiodj/**`.
+**No flake:** the five timing-sensitive files (engine poll, output datapath, both armed
+shutdown files, arbitration) each ran **3x clean in isolation**. IP hygiene independently
+re-verified: every live controller is `10.1.1.x`, every test literal is
+`10.0.0.x`/`10.1.0.x`/`10.1.2.x`/`10.9.9.x` — **zero overlap**.
+
+**PIN discipline: 12 pins, ZERO blessings.** Every characterization names its defect ID,
+cites its report, and states the post-fix expectation; every test NAME states the defect
+("**not** preserved as 0", "**silently** coerced … **not a refusal**") or is explicitly
+labelled a characterization.
+
+**Production-bug verification — all 7 of `_163`'s claims CONFIRMED, zero wrong.** Two are
+UNDERSTATED and matter for the fix wave: (1) the priority-0→OVERRIDE defect cannot be
+configured away downward — `sacn_high_priority`'s slider `min` is also **100**; (5) the
+`|| 'titanic'` silent default is at **FIVE** call sites in `save-server.js`
+(`:56`, `:60`, `:66`, plus `:242`/`:488`/`:532` `backupScene`), so a scene-less write
+also files its BACKUP under titanic — not the two `_163` listed. **Highest-value
+finding for the operator: the `SIM_SAVE_SERVER_ROOT` → `ENGINE_ROOT` isolation gap**
+(`save-server.js:35-36`) — confirmed with direct evidence (a spawn logged
+`Regenerated <OS temp>/marsin_engine/patterns/manifest.json`); a one-line production fix
+unblocks the whole pattern-endpoint test surface.
+
+**Four defects, all non-blocking, all test-code or report-wording:**
+**D-165-1** G2's error ladder is half-implemented and the reduction was NOT disclosed —
+mutation evidence: neutralising the entire 30 s heartbeat branch
+(`sacn_output_bridge.js:223-229`) leaves the file **8/8 green**, and blanking the
+`(after N suppressed errors)` recovery tail also leaves it 8/8. `errorsSinceLog` is
+asserted nowhere. **D-165-2** G15's port-guess half is missing while the report says
+"folded in **as specced**" — the four config-fetch port fallbacks
+(`sacn_input_source.js:477,492`, `sacn_output_client.js:221,231`) are unpinned by any
+test in the repo. **D-165-3** G8's stated blocker is overstated: `checkSceneModelParity`
+takes `input.model` **optionally** (`scene_model_parity.cjs:280,285`) and the overlap
+rule doesn't read `modelPixels`, so the real validator COULD have been invoked on the six
+scenes with findings filtered — the concern was right, the impossibility was not.
+**D-165-4** G7's rationale wording is inaccurate: `save-server.js:218` calls
+`writePatternManifest()` unconditionally at boot, so the file already writes to shared OS
+temp on every run (as does the pre-existing `save_server_hardening.test.js`).
+
+**G16 skip ENDORSED.** Blocker verified real: `SIM_ROOT = path.join(__dirname,'..')`
+(`sacn_bridge.js:23`) with no env hook, `readBenchMirrorSpecs` unexported (the file has
+**zero** `module.exports` — which also confirms `_163`'s claim that `pollEngineStatus`
+cannot be called directly). The spec's weak fallback would have been genuinely vacuous
+(`warnOnce` never fires on a valid tree), so skipping beat writing a zero-teeth test.
+
+**Correction for the record, clearing `_163`:** `_164`'s tracker block reports a **7th**
+`security_check.py` finding — "a real MAC address literal in
+`20260805_163_sim_test_implementation.md:113`, written by `_163`". **This does not
+reproduce.** Two `--all` runs this session both returned **6**, and a MAC-shaped grep over
+`_163`'s report returns nothing. Either it was misattributed or it was already redacted;
+either way `_163`'s report is clean on the current tree.
+
+**Cleared as NOT defects:** no try/catch swallows an assertion (all four `try {` blocks are
+`try/finally` restores); no truthy-on-object assertions; no missing `await` before an
+assertion; no assertion on a value the test told its own mock to produce; order-dependence
+is deliberate and documented in the three files that have it.
+
+**Handoff:** the four D-165 items are follow-up slices, none blocking. Priority for the
+`_157` fix wave, in order: the `ENGINE_ROOT` hook (one line, unblocks G7's remainder),
+`/save-cameras`'s five-call-site titanic default, then the D12 conflation family.
+Operator action still outstanding from `_163`: delete or archive
+`simulation/scenes/summer_camp_dome/patches.yaml.original`. Still **NOT SHIP** — unchanged
+standing verdict; this review adds confidence in the test wave, not hardware confirmation.
+
+## `_166` — Opus review of the ENGINE test wave (`_164` vs `_162`) — ACCEPT-WITH-FIXES
+
+**Agent:** reviewer `_166` (Opus, operator-assigned: "Sonnet agents wrote them, Opus
+agents review them") · **Branch:** `feat/bm_readiness`. **Report:**
+`.agent/reports/202608/20260805_166_engine_test_review.md`. Sibling `_165` reviewed the
+SIM wave concurrently; this review covers `marsin_engine/tests/**` (12 new files) plus
+the G-4 contract rig that lives sim-side. **READ-ONLY on production code and on `_164`'s
+test files** — zero edits, zero git ops, no operator port bound, no packets, scratch in
+`~/tmp/review_166/`.
+
+**VERDICT: ACCEPT-WITH-FIXES.** The wave is real coverage, not decoration.
+
+**Mutation testing — 27 mutations, all applied IN MEMORY** via an ESM `load` hook
+(`--import` + `MUT_SPEC`), never a byte changed on disk; every rule throws if its target
+string is absent, so a "surviving" test can never be an unapplied mutation. **24 killed,
+1 survived (a genuinely vacuous test), 2 inconclusive by tooling/target.** Killed
+mutations covered: the off-by-one in sACN payload packing (kills 3 wire tests + the G-4
+relay test), the `_started` gate, `addUniverse` idempotency, socket close, packet
+sourceName/priority, the master-dimmer force, the strobe dedupe, the `EndyshowBar`
+strobe-channel table, the `state_manager` warn and default, the 413 cap, the bad-JSON
+error string, the `Not Found` body (one space), the "No API port" refusal, the
+output-config guard message, `cSacn.priority || 100`, a forced bad patch addr (6 models
+incl. titanic + test_bench), a forced cross-fixture overlap, and the meta-lane pack
+offset.
+
+**The CRITICAL claim is CONFIRMED, three ways.** (1) A from-scratch Node rig on an
+ephemeral loopback port carrying only the branch's 6 lines + the real
+`VALID_PATTERN_DIR` regex: every failing slug raises an uncaught
+`ERR_HTTP_HEADERS_SENT` and the request never completes. (2) The real spawned engine
+prints `ENGINE FATAL — uncaughtException … ERR_HTTP_HEADERS_SENT` and exits. (3)
+**Mutation M13 fixes the bug in memory (build the JSON body BEFORE `writeHead(200)`) and
+the pin goes RED** — so the pin is a genuine tripwire and the root cause is isolated to
+exactly that ordering. **Severity refined:** it does kill the PROCESS, but
+`deploy/boot_server.ps1` relaunches after `RestartDelaySeconds = 10` on a non-75 exit —
+supervised, one request buys a ~10 s + boot blackout and a REPEATED request buys a
+permanent crash-loop; launched by hand (`npm start`, every bench/agent run) there is no
+supervisor and the ship stays dark. **Trigger class:** any `GET /pattern-dirs/<seg>`
+whose decoded segment isn't `default` and fails `/^[a-z0-9][a-z0-9_-]{0,63}$/` — any
+uppercase letter, space, dot, leading `_`/`-`, odd character, or >64 chars.
+`/pattern-dirs/Default` is enough. Unauthenticated, no body, no state — and because it is
+a plain GET, **any web page open in a browser on the playa LAN can fire it cross-origin**
+(no preflight, response never needs to be readable). A malformed percent-escape (`%zz`)
+does NOT crash — `decodeURIComponent` throws before `writeHead`, so the catch works;
+the bug is strictly the post-`writeHead` throw. **Isolation of the pin is CORRECT:**
+`node --test` runs each file in its own child process and the harness takes its own
+random 7100-7399 port, so the deliberately-killed engine cannot cascade — verified in
+isolation and inside the full suite.
+
+**Defects (report-only, not fixed):** **D-1 VACUOUS** —
+`sacn_mapper_pack.test.js:332` (out-of-bounds strobe channel) asserts only
+`doesNotThrow`; deleting the production bound check leaves all 22 tests green, because an
+out-of-range `Uint8Array` write silently no-ops in JS — the assertion is unfalsifiable.
+**D-2 POLICY** — `simulation/tests/engine_bridge_contract.test.js:91` hardcodes a REAL
+controller IP (also at `:51`, `:86`), contradicting `_164`'s own "no real controller IP
+literal in any new test" claim; already tracked in scene YAML so not a new disclosure and
+`security_check` doesn't flag it, but derive it from the scene data the harness already
+loads. **D-5 SPEC WEAKENING** — `http_malformed_sweep.test.js:115`'s
+`ACCEPTS_NONOBJECT_AS_NOOP` is a skip-list not a pin (only `status < 500` is asserted for
+5 routes), so the "minor consistency defect" `_164` reports is not actually pinned
+anywhere. **D-6 BRITTLENESS** — `config_boot_matrix.test.js:206-229` asserts the live
+`marsin_engine/config.yaml`'s VALUES; a legitimate operator config edit turns the suite
+red for no safety benefit. **D-7** `shutdown_ordering.test.js` is 3 source-text greps
+against `engine.js` (cuts honestly reasoned, but G-7's real assertions stay unproven —
+keep G-7 open; a `POST /shutdown` route would unblock it and R-D10). Plus D-3/D-4/D-8
+(low/cosmetic). **No VACUOUS files; no pin blesses a bug as correct** — pin discipline
+across the crash, ffmpeg P0, `dev_test_bench`, `LANE_*`, `/ws/params` and the two
+`blocked-on S-D10/S-D12` markers is CORRECT in every case.
+
+**Production-bug claims: zero wrong.** Independently confirmed — the crash; N-1 silent
+state limp; N-2 correction (`playlist:` block IS live: `autopilot.js:11,69,83,90-108,155`
+loads/saves `config.playlist` through its own cycle and `api_server.js:7` constructs it —
+**`_164` is right, `_162` §6 N-2/N-3 needs a correction note**); `sacn.multicast` and
+`web_client.enabled` dead (grep); N-5 `path.basename` at `api_server.js:5077`;
+`dev_test_bench` cannot boot (ran the real engine: exit 1, groupBits sidecar stale on
+ParLights/VintageLights/BarLights/LED_0); `resolveFfmpegPath('/does/not/exist/ffmpeg')`
+returns the vendored `ffmpeg-static` binary, identical to passing `null` — P0 violation
+CONFIRMED; `LANE_*` dead everywhere but `meta_abi.js`; `/ws/params` replays only
+`sharedParams` (`api_server.js:10596-10607`); no word discriminator on `namedViews`. One
+`_164` comment is drifted: `config_boot_matrix.test.js:216` claims `web_client.port` /
+`build_dir` ARE consumed — engine-side they are not. **G-13's skip was cheap to avoid** —
+`applyDmx` is a plain sync method and `global_effect_blackout.test.js` already stands up
+the fixture; "time budget" undersells it. First pickup of the follow-up slice.
+
+**Counts (all re-run by me).** Engine: **2769 / 2762 / 7** — failing LIST byte-matches
+baseline (5x `audio_capture`, 1x `effects_v2_mode_page_layout` file-level, 1x
+`osc_listener` EADDRINUSE→EACCES), **zero new failures**. `performance_mode.test.js`
+isolated: **11/11**. `pattern_dirs_crash_pin.test.js` isolated: **1/1** with the FATAL
+observed. Sim: **2008 / 2001 / 6** — the 6 pre-existing, none from G-4.
+`security_check.py --all`: **6 findings, not 7** — all in gitignored
+`simulation/.scene_backups/studiodj/**`; `_163`'s report MAC has been cleaned, so
+`_164`'s "7" was accurate at its write time and is now stale. Engine-suite state-yaml
+residue present and documented-expected.
+
+**Handoff, in priority order:** (1) **fix `GET /pattern-dirs/<invalid-slug>`** — three
+lines, plus an audit of every other `writeHead`-before-work site in `api_server.js`;
+(2) rulings needed: the ffmpeg explicit-path-discard P0 question and the
+`/status.stateRestoreDegraded` question; (3) `dev_test_bench` — fix the sidecar or mark
+the model scratch-only; (4) test-side fixes D-1/D-2/D-5/D-6; (5) G-13 (cheap) and G-7
+(needs a shutdown route) stay open, R-D1/D3/D4/D5/D8/D10/D11/D12 correctly still blocked
+on `_157`; (6) add the N-2/N-3 correction note to `_162` (I did not edit their file).
+Still **NOT SHIP** — unchanged standing verdict; this review raises confidence in the
+test wave and surfaces one remotely-triggerable engine-kill, not hardware confirmation.
+
+**`_166` ADDENDUM (written at review close) — the fix landed mid-review; the crash pin
+is now RED.** While this review was running, a concurrent agent landed the
+`/pattern-dirs` fix into the working tree: `marsin_engine/lib/api_server.js` now carries
+a `COMPUTE THE BODY BEFORE COMMITTING HEADERS` block on that route plus a new
+`sendJsonError` responder whose header cites `_164` §3. `git diff -U0 --
+marsin_engine/lib/api_server.js | grep -c pattern-dirs` went from **0** (early in this
+review) to **1**. Re-ran the pin just now: `tests/e2e/pattern_dirs_crash_pin.test.js` is
+**1 / 0 pass / 1 fail**, failing after 10.3 s on `engine did not exit within timeout` —
+the exact failure mode mutation M13 predicted, which independently re-confirms both the
+root cause and that the pin is a genuine tripwire. **Every count in the `_166` block
+above was taken BEFORE that fix landed and is accurate as of that moment;** post-fix the
+engine suite is expected to read **2769 / 2761 / 8**. **Now-urgent follow-up:** rewrite
+the crash pin exactly as its own header instructs — flip it from "the engine must die" to
+"the request is handled without dying" (4xx with `Invalid pattern directory`, then `GET
+/status` still 200), keep the root-cause comment as history, and add the two non-crashing
+edges this review characterized (a malformed percent-escape `%ZZ`, which always went
+through the catch correctly, and the legal `default` / sub-directory slugs). Whoever owns
+the fix slice owns the rewrite; until it lands the engine suite carries a spurious 8th
+failure. Nothing else in the `_166` verdict changes.
+
+## `_168` — CaptainPad Dimmer Rack: MASTER fader (drive all 24 group dimmers at once)
+
+**Agent:** feature `_168` (Opus) · **Branch:** `feat/bm_readiness`.
+**Report:** `.agent/reports/202608/20260805_168_captainpad_master_dimmer.md`.
+Operator request, verbatim: *"can you add a single slider in the dimmer rack on captain
+pad to controll allllll sliders at the same time as convenience so I can control them all
+if needed"*.
+
+**What shipped.** One MASTER slider pinned at the top of the Dimmer Rack card, above the
+group-fader row it commands. Full-width HORIZONTAL bar in the accent colour with a
+`MASTER` pill + `ALL <n> GROUPS` caption + `%` readout — deliberately unlike the vertical
+"nautical" group knobs so it can't be mistaken for one.
+
+**Semantics (documented, no hidden modes).** **Absolute:** the master writes its value
+verbatim to every section — no ratio/scaling mode, because the rack has no such concept
+anywhere else. **Readout = MEAN of the section levels:** right after a master move that
+equals the commanded value; once an individual fader diverges the bar shows the true
+average rather than a stale "last commanded" number. **Same command path as an individual
+fader:** one `POST /section-brightness` per section, fanned out — so it persists into
+`globals_state.yaml` by stable group name exactly like a hand-moved fader. **`marsin_engine`
+was NOT touched — zero new engine API.** Works in SECTION-ID space (aliased group names
+sharing one section are written once and weighted once).
+
+**Backpressure, not a fixed throttle.** 24 groups × a drag's values would queue hundreds of
+POSTs behind the browser's 6-per-host cap and land the STALE ones last. The sender keeps
+only the LATEST requested level while a batch is in flight. Measured on a 12-step drag:
+**8 batches of exactly 24 writes**, last batch = the release value.
+
+**Fail loudly.** A failed write paints a red `24/24 groups failed — <reason>` line under
+the bar (verified by blackholing the POST route mid-session). Engine-down at load keeps
+the rack's existing "Engine offline / RETRY" state with no master rendered.
+
+**Files.** New: `CaptainPad/utils/master_dimmer_logic.ts` (pure, RN-free:
+`uniqueSectionIds` / `masterLevel` / `applyMasterLevel` / `createCoalescedSender`) +
+`CaptainPad/utils/master_dimmer_logic.test.ts` (17 cases). Changed:
+`CaptainPad/app/(tabs)/dimmer_rack.tsx` (master strip; the rack now OWNS every section
+level in `dimmerStates` instead of fire-and-forgetting the POST) and
+`CaptainPad/components/NauticalFader.tsx` (external-value sync now moves the KNOB, not
+just the number — it was positioned once on mount; `draggingRef` guard; new
+`onPanResponderTerminate` mirroring release, which also fixes a pre-existing stuck-drag
+hazard on a cancelled gesture; live callback refs; `React.memo`).
+
+**Verification** — throwaway mock engine on **:6990** + fresh `expo export` dist served on
+**:7167**; never Metro (stale-bundle memory), never the operator's `:6967`/`:6968`, no
+operator port bound. Screenshots (`~/tmp/feat_168/shots_clean/`): load @ **70%** = exact
+mean of the seeded levels; master dragged to 25% → **all 24** faders at `0.25` with knobs
+moved, mock `GET /dimmers` confirms sections 1–24 all `0.25`; one fader then dragged to
+`0.82` → master reads **27%** (the new mean); engine-down red banner; iPad-portrait
+two-high stack intact.
+
+**Counts.** vitest **45 files / 960 passed / 6 skipped, 0 failures** (baseline 44 / 943 / 6
+→ +1 file, +17 tests, **zero new failures**). `tsc --noEmit` **clean**. `expo lint` **21
+problems (4 errors, 17 warnings) — all pre-existing**, none in any touched file.
+`security_check.py --all` **6 findings = baseline** (gitignored `.scene_backups/studiodj/**`
+MACs), zero new. Only page error is `Minified React error #418` (hydration), which
+reproduces identically on untouched `/config` and `/audio` — pre-existing, app-wide.
+`CaptainPad/dist/` was rebuilt for verification (gitignored, untracked). No git ops.
+
+**Open follow-up (not needed for the request):** the mean readout doesn't live-track dimmer
+changes made OUTSIDE the rack (MIDI, a second CaptainPad) until the screen refetches on
+foreground — the rack has never had a dimmer WS mirror; a `dimmers` broadcast on
+`/ws/control` would close it.
+
+---
+
+## `_167` — FIX: `GET /pattern-dirs/<invalid-slug>` no longer kills the engine
+
+**Agent:** fix `_167` (Opus) · branch `feat/bm_readiness` · report
+`.agent/reports/202608/20260805_167_engine_http_crash_fix.md`. Operator-authorized fix
+of `_164` §3 — the one-request, unauthenticated, no-state-required remote engine kill.
+
+**Root cause, confirmed exactly as `_164` and `_166` described it.** The
+`/pattern-dirs/<dir>` route committed response headers (`writeHead(200)`) BEFORE
+evaluating `listPatternsInDir(...)`, which correctly THROWS on any slug failing
+`VALID_PATTERN_DIR` (`/^[a-z0-9][a-z0-9_-]{0,63}$/`). The catch arm's second
+`writeHead(400)` then raised `ERR_HTTP_HEADERS_SENT` from inside the catch, uncaught →
+`engine.js`'s `uncaughtException` → `ENGINE FATAL` → `process.exit(1)`.
+
+**Fix, two halves, both in `marsin_engine/lib/api_server.js`.** (a) The route now
+computes the JSON body BEFORE `writeHead`, so a refused slug yields a **loud, named
+400** while the response is still uncommitted. (b) New module-scope export
+`sendJsonError(res, status, payload, headers)` checks `res.headersSent` and refuses to
+`writeHead` twice under any circumstance — it does NOT swallow: it names the error and
+the intended status on stderr, then closes the socket. `headers` passes straight
+through, so `sendJsonError(res, 400, x)` is byte-identical to the bare
+`res.writeHead(400)` it replaces. **No global `uncaughtException`/`clientError` net was
+added** (P0: no fallback behaviors) — grep-verified that no `server.on('clientError')`
+exists; `engine.js`'s handler is untouched and its own comment already states the
+"fix at the source, this is only the net beneath" doctrine (`_108` precedent).
+
+**Same-shape audit (brace-matching scanner, `~/tmp/fix_167/scan_shape*.mjs`).** 97
+try/catch blocks in `api_server.js` have a catch that calls `res.writeHead`. 56 never
+commit headers before a throwable. **19 are the exact crash shape (a real function call
+evaluated after headers are committed) — 18 FIXED, 1 false positive.** The 18: the
+`/pattern-dirs` bug itself, plus `POST /scene`, `POST /scene/reload` (both of which had
+a nested try that SWALLOWED the second-writeHead throw — replaced, no more swallow),
+`PATCH /global-effect-slots`, `POST /global-effect-slots/<id>/<action>`,
+`GET /party-config`, `GET /mixer/param-presets`, `PATCH /osc/config`, `POST /playlists`,
+`DELETE /playlists/<name>`, `POST /deck/overlays/<id>/playlist[/entry]`,
+`POST /deck/playlist`, `POST /deck/playlist/capture`,
+`POST /mixer/channels/<id>/playlist[/entry|/capture|/discard]`. **`GET
+/mixer/param-presets` is the notable second find** — its own comment claimed a corrupt
+preset file would "fail loud"; it actually killed the engine. False positive: the
+`/scheduled-tasks/<id>` outer try, whose `writeHead` lives in an async `readBody`
+callback that cannot run before the outer catch. **23 tier-2 blocks listed NOT fixed** —
+only property reads on already-resolved values run after headers there, not reachable
+by malformed input; converting them is the follow-up that would make the class
+structurally impossible.
+
+**Pin test flipped**, exactly as `_166`'s addendum demanded.
+`tests/e2e/pattern_dirs_crash_pin.test.js` went 1 test (assert the engine dies) → **16**
+(assert it survives): 10 hostile slugs (`..%2F..`, `%2e%2e%2f%2e%2e`, `Default`,
+embedded space, embedded dot, leading `_`, leading `-`, 65-char, `%ZZ`, `%00`) each
+asserting 400 + a NAMED reason + `proc.exitCode === null` + a live `/status`; happy-path
+(`/pattern-dirs` lists `default`, `/pattern-dirs/default` returns a non-empty array);
+end-of-sweep liveness; and 4 unit tests driving `sendJsonError` directly, including the
+branch where `writeHead` would throw. Filename kept so `_164`/`_166` references resolve;
+its own isolated spawn/teardown kept so a regression stays contained.
+
+**Counts.** `pattern_dirs_crash_pin.test.js` isolated: **16 / 16**.
+`http_malformed_sweep.test.js` (G-5) isolated: **36 / 36**. Full engine suite:
+**2789 / 2782 / 7** — failing LIST byte-matches baseline (5x `audio_capture`, 1x
+`effects_v2_mode_page_layout` file-level, 1x `osc_listener` EADDRINUSE→EACCES), **zero
+new failures**; `performance_mode.test.js` passed in this run. Total rose from `_164`'s
+2772 because this file went 1 → 16 and concurrent agents added their own.
+`security_check.py --all`: **6 findings = baseline** (gitignored
+`.scene_backups/studiodj/**`), zero in any file I touched. No git ops. Engine-suite
+state-yaml residue present and documented-expected.
+
+**Concurrency disclosure.** `api_server.js` was edited by at least two other agents
+while I worked (a `/shutdown` route from the `_169` slice, an `outputRouting` change
+from the bench-mirror work). Their hunks are in the tree alongside mine and were NOT
+reverted; the full-suite number therefore measures the combined tree, and the two
+isolated runs are the clean evidence for this fix.
+
+**Operator note.** The fix applies at your NEXT engine restart. The engine currently
+running on your box still has the crashing route in memory — until it is restarted,
+`GET /pattern-dirs/Default` against THAT process still kills it. Nothing here touched
+your live engine.
+
+**Follow-up left open:** convert the remaining 23 tier-2 catch arms to `sendJsonError`
+to make the double-`writeHead` process-kill class structurally impossible in this file.
+
+## `_171` — "the browser is not the router": the `sacn_in` viewer write REMOVED; the rest BLOCKED on an operator decision
+
+**Report:** `.agent/reports/202608/20260805_171_browser_router_removal.md`. Operator ruling: *"do
+the browser not being the router"* — engine → sim SERVER (the router) → controllers, browser never
+transmits; plus the tab-switch freeze. No git ops, no port bound, no packet, no process started,
+nothing armed, no scene/pattern/playlist/engine file edited. Scratch `~/tmp/fix_171/`.
+
+**LANDED — a viewer can no longer write.** One file, `src/core/animate.js`. The output block's skip
+condition read `if (!isEffect && lightingMode !== 'sacn_in' && !isMappingOutput) continue;` — i.e.
+it OUTPUT whenever the mode WAS `sacn_in`. Inverted: `const browserIsDataSource = lightingMode !==
+'sacn_in'` now feeds `isMappingOutput`, and the skip is `if (!isEffect && !isMappingOutput)`.
+**Both halves were needed**: `isMappingOutput` previously read only `profile.mappingEnabled`, which
+is true for `emissive` / `full` / `pixel_mapping` / `2d_pixels`, so deleting the mode clause alone
+would have left an `emissive` viewer transmitting anyway. **Every scene ships `lightingMode:
+sacn_in`** (`scenes/common.yaml:167`, no scene overrides), so this is the configuration the operator
+actually runs.
+
+**This is the operator's freeze.** A `sacn_in` tab re-sent every patched universe at hard-coded
+priority 150 — outranking the bridge's 100, under the same default CID, which `_157` P4 measured at
+98/100 packets dropped — on the BROWSER's clock, so background-tab throttling stalled the loop and
+the tab kept painting the rig with one frozen frame while the show was dead (`_160` T4/T5, predicted
+by `_19` §4). No writer, no throttling path to the wire. **For titanic it is total**: the scene
+patches no Fog/Haze/Horn/Fire fixture, so a titanic viewer tab in any profile now emits nothing.
+
+**Closes:** `_160` **T4** and **T5** (for the ship), `_159` **OBS-5** (the browser belt no longer
+stands between a viewer and the wire in `sacn_in`; the mode exclusion does, and it reads no pushed
+state). **NOT closed:** `_159` **OBS-4** (unauthenticated `:6972` gate command) — it dies with the
+gate, and the gate cannot die until the decision below.
+
+**STOPPED, per the brief's own instruction** (*"if you find [a legitimate feature depending on
+browser→hardware transmit in non-`sacn_in` modes], STOP and report the conflict instead of breaking
+it"*). **I found one, and it is a live interactive control:** `gui_builder.js:2814-2845` builds a
+**"💨 Hold to Fog"** button per `TEFogMachine`/`ChauvetHaze4D` that submits DMX straight into the
+browser-local router (`submitFrame('fog_ui', 250, …)`). `window.dmxRouter` is browser-local; the ONLY
+path from there to a physical fog machine is the `animate.js` loop → `:6972`. No engine call, no
+server endpoint. Delete the browser transmit path and that button silently stops firing fog — it
+still depresses, still logs, nothing happens. Second, weaker case: `_19` §2.4 explicitly preserves
+browser-generator bench output (`pixelblaze`/gradient, engine not running) as "single writer by
+definition" — but `_19` is an **unimplemented design** (its own §2.4 called for deleting the
+`sacn_in` branch, which was still present until today), so it is a proposal, not evidence of use.
+
+**Therefore NOT done:** the browser transmit path still exists for effects and browser-generator
+modes; `:6972` still forwards; **no gate code was touched** — under the landed shape the gate stays
+load-bearing, because a fog or bench-generator tab can still write while ARMED, so R-23 /
+`proveOutputGateHeld` remain necessary. Every `_152`/`_158` regression keeps its teeth; no gate
+coverage was removed or weakened.
+
+**DECISION NEEDED (report §3/§4):** may "Hold to Fog" and bench-generator output be killed?
+Option **A** = as landed (both work, gate stays, OBS-4 open). Option **B** = kill browser transmit
+entirely (both die, gate deleted, ARM proof asserts structural absence, OBS-4 closed). Option **C**
+= B but move fog to an engine endpoint (capability survives, architecture intact) — **my
+recommendation** if the browser is to be fully out of the wire. Report §5 scopes the B/C follow-up
+to the line, including the trap that the sACN OUT panel's **BLACKOUT button is not a `:6972`
+control** (it POSTs the engine's `/global-blackout` on `:6968`) and must be rehoused, not deleted.
+
+**Docs/comments scrubbed** (report §6): `animate.js:680-685` block header, `:719` *"relay ALL
+universes to controllers (simulation acts as bridge)"*, `:495` *"the simulation acts as a
+bridge/visualizer"*, and the belt comment at `:690-698`. A test now pins that `simulation acts as
+bridge` appears **nowhere** in `animate.js` — it was load-bearing misinformation and the sentence a
+future reader would restore the behaviour from. Deliberately NOT scrubbed: the `_153`/`_154`
+quotations of the old code inside historical investigation reports, and `_19` §2.4 itself (the
+design under dispute — rewriting it while the question is open would falsify the record).
+`show_server_ops.md`'s *"open the sim view and confirm the lights are animating"* is now safe as
+written for titanic.
+
+**Tests.** `tests/animate_output_wiring.test.js` reworked 6 → **10**, all passing: the mode
+exclusion at the source; that a mapping-enabled PROFILE alone is not enough; that the skip condition
+no longer mentions `sacn_in`; that `simulation acts as bridge` is gone; that the throttle freeze is
+named where the fix lives; and that Hold-to-Fog still has its carve-out with a pointer to the
+conflict section. Full sim suite **2020 / 2013 / 6** against a measured pre-change baseline of
+**2008 / 2001 / 6** — same six, byte-identical, **zero new failures** (+12 = my +4 and `_170`'s +8).
+Focused mirror suites **140 / 140 / 0**. `security_check.py --all` **6**, unchanged.
+
+**Concurrency artefact, recorded so it is not mistaken for a regression.** My first post-change run
+showed **11** failures. None were mine: 2 were `_170`'s own R-D1 tests mid-landing, and 3 were my
+mirror source-shape assertions invalidated **textually** by `_170`'s edit. I verified before
+touching anything that they had **preserved** `cid: MIRROR_CID` (adding `useRawDmxValues: true`
+beside it) and **preserved** `packet.sequence` as `routeFrame`'s 4th argument (changing only
+`packet.payload` → `rawDmxPayload(packet)`), so the D-158-3 mechanism was intact throughout.
+`_170` then re-based those three assertions themselves and the settled tree is 2020/2013/6. I
+changed nothing of theirs. **Note for `_170`:** under option B/C the output bridge's payload-unit
+fix becomes moot, because the forwarding path it scales would no longer exist — sequence that work
+after this decision.
+
+## `_169` — `stop` now blacks the rig out before the force-kill (T1 FIXED)
+
+**Agent:** fix `_169` (Opus) · **Branch:** `feat/bm_readiness` · **Report:**
+`.agent/reports/202608/20260805_169_stop_blackout_fix.md`. Operator-authorized and
+explicitly optional ("the stop to black out is optional but nice to have → fix if
+minimal work"). Fixes **T1** of `_160`. No git ops, no scene/pattern/playlist edits, no
+operator port bound, no live process signalled. Scratch `~/tmp/fix_169/`.
+
+**The defect.** `launcher.js stop` force-kills the tree (`taskkill /PID <pid> /T /F` =
+`TerminateProcess`), so the engine's SIGTERM handler — the ONLY emitter of the shutdown
+blackout (`engine.js` §8) — never ran and every controller held its **last live frame**
+until its own unknown E1.31 timeout, while four docs promise "lights OFF … before
+generator work". Unfixable launcher-side alone: Windows has no graceful signal (the
+launcher's OWN teardown also force-kills its children), and the engine had **no in-band
+shutdown route** — `POST /scene` / `/scene/reload` reach `shutdown()` but always restart.
+
+**The fix — reach the EXISTING blackout, don't build a second one.**
+`engine.js:2569` `engineCore.requestShutdown = () => shutdown()` (one hook onto the same
+re-entrancy-guarded `shutdown()` the signal handlers call). `api_server.js:5511`
+`POST /shutdown` — requires `{"confirm": true}` (400 `CONFIRM_REQUIRED`), 500
+`NO_SHUTDOWN_HOOK` if unwired, else 200 then `setTimeout(…, 50)` → the hook
+(respond-then-act, the `POST /scene` pattern). `launcher.js:1070-1129`
+`blackoutEngineBeforeKill(lock, deps)` + calls at `:1140` (stale-lock branch) and `:1154`
+**immediately before** `forceKillTree(lock.pid)`.
+
+**Why not the existing `POST /global-blackout`** (which would have been a zero-engine-change
+fix): it writes `globalsState.blackout = true` + `saveGlobals()`, and
+`state_manager.js:413` **restores that flag at boot** — `stop` would have made the next
+`start` boot the ship DARK. `/shutdown` persists nothing.
+
+**Bounded and loud.** POST, then poll `pidAlive(lock.children.engine)` every 200 ms for a
+bounded **3 s**. Confirmed ⇒ one stdout line. **Five** unconfirmed outcomes, every one
+carrying `BLACKOUT NOT CONFIRMED — rig may still be lit. Confirm darkness by eye before
+any electrical work.`: no `engine` child in the lock, engine pid already gone, port map
+unreadable, POST rejected, engine still alive after the budget. **The kill ALWAYS
+follows** — the function never throws and never returns past the kill; `stop` still
+always stops. The already-gone guard also means `stop` can never POST `/shutdown` into
+whatever OTHER engine happens to answer `:6968` when its own engine is dead.
+
+**Two deliberate properties:** `/shutdown` is **not** gated by `rejectIfPerformanceMode`
+(a stop during a live show is exactly when the blackout matters — it sits with the other
+safety routes), and it **requires an explicit confirm**. Recorded, not swallowed: the
+engine API already accepts `/global-blackout` from anyone who can reach `:6968`, so this
+adds no new auth class, but it does add a *stop-the-show* verb to that surface.
+
+**Two integration fixes the loud path needed.** `deploy/deploy.py` `stop_stack()`
+captures `launcher stop`'s output and only prints it on failure — an unconfirmed blackout
+on rc 0 would have been **invisible in the show path**; it now echoes any
+`BLACKOUT NOT CONFIRMED` line. `.agent/ops/show_server_ops.md` §stop now states how OFF
+happens and what the warning means (treat the rig as LIT, kill the PSUs).
+
+**Tests.** NEW `marsin_engine/tests/state/shutdown_api.test.js` (**2/2**): a REAL engine on
+an **OS-assigned free port** (asserted not in `{5568, 6966-6972}`), `--dest 127.0.0.9`
+black-holing sACN, temp state/playlists, scene `summer_camp_dome` — unconfirmed POST ⇒
+400 + still serving; confirmed ⇒ 200, **exits 0 on its own**, stdout shows `⏹ Stopping...`
+AND `✅ Shutdown complete` (printed from `finish()`, which only runs after
+`sacnOut.sendFrame(blackBuffers)` settles). Observed: `Sender stopped after 15 frames` vs
+`14 frames rendered` — **the 15th frame IS the blackout**. NEW: 6 tests appended to
+`simulation/tests/launcher_supervision.test.js` (file **12/12**), all in-process with
+injected deps — confirmed path (stderr **empty**, no crying wolf), request-failed, the
+**bounded** wait (injected clock: 1 precheck + exactly 15 polls, then loud), already-dead
+engine (**zero POSTs**), no engine in lock, and a source-level **ORDER pin** that the
+blackout precedes `forceKillTree` (the defect was pure ordering).
+
+**Counts.** Engine `npm test` **2790 / 2783 / 7** — failing LIST byte-matches baseline
+(5× `audio_capture`, 1× `effects_v2_mode_page_layout` file-level, 1× `osc_listener`
+EADDRINUSE→EACCES), **zero new failures**. Sim `npm test` **2021 / 2014 / 6** vs baseline **2008 / 2001 / 6** — the same 6
+pre-existing failures, **zero new**; `launcher_supervision.test.js` isolated **12/12**.
+`security_check.py --all` **6** = the gitignored `.scene_backups/studiodj/**` baseline,
+zero from my files.
+
+**Concurrency disclosure.** Several other agents were editing this same working tree
+during this session (`output_dispatch`/`artnet_output` removal, `sacn_bridge.js`,
+`sacn_output_bridge.js`, `animate.js`, CaptainPad); `engine.js` and `api_server.js` carry
+their hunks alongside mine. An earlier sim run this session showed **13** failures — 7
+extra, in `animate_output_wiring` / `engine_bridge_contract` / the two `sacn_bridge_*`
+files, **none of which import any file `_169` touched**; they cleared on the re-run and
+track those in-flight edits plus a live engine answering `:6968` at that moment.
+
+**Operator note.** The fix applies at the **next** stack start — the engine currently
+running on your box has no `/shutdown` route in memory, so a `stop` against it will print
+`BLACKOUT NOT CONFIRMED` (accurately: that engine cannot be asked to go dark) and then
+kill as before. Nothing here touched your live stack.
+
+**Follow-ups left open.** (1) `_157` D10 / `_160` §2: even a graceful shutdown sends the
+blackout **once** while the engine's stale-universe path uses a 3× repeat
+(`engine.js:1753-1759`) — one lost datagram on exit still = frozen bright. Cheap fix,
+pinned today by `shutdown_ordering.test.js`'s "exactly ONE ... (blocked-on S-D10: flips
+to 3x)". (2) `_166`'s G-7 gap ("needs a shutdown route") is now **unblocked**.
+(3) `startChild`'s exit handler logs `engine exited unexpectedly … Tearing down` during a
+deliberate stop — cosmetic, deliberately left (brief forbade other launcher changes).
+
+---
+
+## `_170` — RAW DMX on the wire (S-D1): the ×2.55 percent clip is DEAD
+
+**Agent:** fix `_170` (Opus, operator-authorised "do #4") · **Branch:** `feat/bm_readiness`.
+**Report:** `.agent/reports/202608/20260805_170_raw_dmx_wire_fix.md`. Fixes `_157` **D1**
+= `_153` **F1b + F7** = `_105` **F3 + F8** — one root cause, four symptoms, one slice.
+**No git ops. No operator process touched, no port bound, no packet emitted.**
+
+**The defect.** The vendored `sacn@4.6.2` treats `Sender.send({payload})` as a **0..100
+PERCENT** field (`packet.js:138` — `inRange(payload[ch] * 2.55)` unless `useRawDmxValues`)
+and `objectify` divides wire bytes by 2.55 on receive. **No project source ever set the
+flag, and every project source wrote raw 0-255 DMX into that field.** Measured with the
+real `Packet`: `0->0 1->3 32->82 50->127 100->255 101->255 200->255 255->255` — **exact
+round-trips 2 of 256**, on the engine lane AND the mirror lane. Everything the engine
+rendered above DMX 100 left as FULL, so colour was crushed toward white on every
+controller on the ship; the browser got 0-100 "DMX" (the 39 % preview, `_105` F3); and the
+mirror truncated those percent floats into a `Uint8Array` (F7's ~100 levels) on top.
+
+**The fix.** (1) All **four** senders declare `useRawDmxValues: true` in
+`defaultPacketOptions` — engine `sacn_output.js`, `sacn_output_bridge.js`'s pool, the input
+bridge's **relay** senders, the **mirror** senders (beside `MIRROR_CID`). (2) The receive
+path reads `packet.payloadAsBuffer` via a new `rawDmxPayload(packet)` in `sacn_bridge.js`,
+never `packet.payload` (that getter IS the percent view), so relay resend + mirror splice +
+WS broadcast all carry raw bytes. (3) The browser needed **no change** — `sacn_mapper.js`'s
+`/255` was always right arithmetic fed the wrong unit; a repo grep confirms **zero** `2.55`
+compensations existed anywhere, so there was none to remove. (4) The mirror needed no
+arithmetic change either: integers instead of floats into its `Uint8Array` kills F7 with
+the unit. **Shape deliberately unchanged** — `rawDmxPayload` keeps `objectify`'s sparse
+(zero-omitting) shape so ONLY the unit moves.
+
+**The `_157` pitfall was real and is heeded.** Handing `payloadAsBuffer` back as `payload`
+objectifies it to percent and then writes that percent AS the byte: measured
+`1->0 64->25 128->50 200->78 255->100` — **2.55× DARK**. `rawDmxPayload` returns a plain
+1-indexed object of raw numbers; an executable **PITFALL GUARD** test pins it.
+`payloadAsBuffer === null` is structurally unreachable from the wire and is treated as an
+invariant violation (`❌` + `process.exit(1)`, like `checkBootSubscriptionInvariant`) —
+**not** a throw, because the vendored `Receiver` wraps `emit('packet')` in try/catch and
+would swallow it.
+
+**PROOF — all 256 values, three lanes, ZERO distortion.** Every wire byte produced and read
+with the package's OWN `Packet` class (the `_157`/`_164` technique), never a hardcoded
+offset. **A** engine→wire **256/256**. **B** wire→`payloadAsBuffer`→`rawDmxPayload`→relay
+resend→wire **256/256** (the relay's exact round-trip `_157` P8 measured under the old
+units is preserved under the new ones). **C** raw→`spliceMirrorFrame`→`mirrorPayload`→
+mirror sender→wire **256/256**. Was 2/256 on A and C. Position independence asserted too
+(first/middle/last channel).
+
+**Test flips: 6 pins flipped, 5 new tests, 2 truth tables extended past {0,255}.**
+Flipped: `sacn_output_wire.test.js` header ("KNOWN QUIRK, pinned not fixed / blocked on
+R-D1" → "NOW FIXED", `_155` A5's {0,255} rule retired), its `_155` A5 value test, its
+1-indexing `notEqual(…,0)` → `equal(…,42)`; `engine_bridge_contract.test.js`'s "relays as
+the sacn-percentage-scale equivalent" → "as RAW DMX 255"; `bench_mirror.test.js`'s `_155`
+A4 CID source pin (now requires `useRawDmxValues: true`) and its `_153` §10 / `_158`
+D-158-3 pin (now requires `routeFrame(…, rawDmxPayload(packet), …)`). New: the full R-D1
+0..255 table in the engine, a `defaultPacketOptions`-placement mechanism guard, the R-D1
+end-to-end 256-value PROOF + PITFALL GUARD in `engine_bridge_contract`, and the 256-value
+**armed mirror** compose+wire proof in `bench_mirror_arm`. `bench_mirror_resolve` gained
+mid-range truth tables per fixture family (PAR: 32/64/128/200 on each of R/G/B/W + a
+10-ch ramp; STRAND: same per RGBW pixel lane + a 16-ch ramp), retiring the `_155` A5 /
+`_156` "0 and 255 only" restriction in prose. Held UNCHANGED on purpose: the ALL-ZERO
+"empty payload" pin (sparse shape preserved). Harness: `inbound()` builds the raw
+512-byte buffer (same `{channel: 0..255}` API, now fails loudly outside 0-255) and
+`FakeSender` records `useRawDmxValues`; three direct `emit('packet')` sites updated.
+
+**Suites — zero new failures.** Sim baseline **2008/2001/6 fail/1 todo** → after
+**2024/2017/6/1**, failing LIST byte-identical (same 6, same files, same lines; G8's
+`summer_camp_dome/patches.yaml.original` still outstanding for the operator). Engine
+baseline **2784/2776/8 fail** → after **2793/2786/7**, the 7 a strict SUBSET of the 8.
+`security_check.py --all`: **6**, all gitignored `.scene_backups/studiodj/**` — baseline.
+**Tree moved under this session** (concurrent `_167`/`_168`/`_169` + bridge-routing/scene
+edits), which is why totals rose by more than this slice's own +5 sim / +2 engine tests.
+**Contention caveat:** the strobe case (failed baseline, passed after), `EADDRINUSE`, and
+`pattern_dirs_crash_pin` are timing-sensitive; the engine list is stable only up to those.
+
+**OPERATOR — bench A/B, before you restart anything.** Full recipe in the report §6.
+Short: on the **currently running** stack (old code still in memory) ARM the bench mirror
+for `test_bench`←`titanic`, select **`test_const`** with **Color 1 = deep amber/orange,
+S=1, V=1** (hue ≈ 0.05-0.08 — R at 255, G mid-range, B at 0; the one look that puts a
+channel at each extreme AND one exactly where the percent scale did its worst), note every
+slider position, photograph the pars and the strand with locked exposure. Optional
+10-second desk check: drive one par to **50 %** and read its channel — **before it reads
+255, after ~128**. Then disarm, **restart the engine AND the launcher** (the fix is in the
+engine and in BOTH bridges), re-arm, reselect the identical settings, photograph again.
+Use only a pattern with no `AUDIO_MODULATION_V1` block — `test_const`, `rainbow`, or
+`27_swipe` frozen at `localSpeed = 0` — everything else moves with the room and the A/B is
+unreadable. Expect: **blacks and full white unchanged; the amber is finally amber instead
+of yellow/near-white (the saturation recovery is more visible than the dimming); and
+everything that is not 0 or 255 is dimmer.**
+
+**WARNING — the whole SHIP will read darker at the same slider positions.** The old wire
+was a crude, colour-destroying 2.55× brightness boost, and the rig has been running on it
+since sACN output existed. Output at a given rendered value falls to: DMX 25→39 %,
+50→39 %, 100→39 %, 150→59 %, 200→78 %, 255 unchanged. **The retune tool is the dimmer
+rack** (and the new master slider, `_168`, once it lands) — and the retune must happen
+AFTER this fix, because every level set on the old wire was set against a boost and a
+saturation ceiling. Per `_153`'s sequencing note this slice is its own operator gate and
+must NOT share a window with a bench-mirror retest.
+
+**Not touched:** `launcher.js`, `marsin_engine/lib/api_server.js`, `CaptainPad/**`
+(concurrent agents), every scene/pattern/playlist file, every browser source.
+**Still NOT SHIP** — unchanged standing verdict; this kills the largest byte-level defect
+in the sACN stack but confirms nothing on hardware, and it makes an operator-visible look
+change that has not yet been seen on the physical rig.
+
+---
+
+## `_171` AMENDMENT — Option C landed: the browser transmit path is DELETED, fog rehoused on the engine, the gate retired
+
+**Report:** `.agent/reports/202608/20260805_171_browser_router_removal.md` §9 (the
+first-pass sections are preserved — the amendment is only legible against the conflict
+they record). Operator chose **Option C** on the decision `_171` was blocked on.
+
+**The conflict, resolved.** The blocker was that two things genuinely used the browser's
+transmit path: the sim's **"💨 Hold to Fog"** button and bench-generator output. Fog moved
+to the engine; bench-generator output was retired.
+
+**`POST /fog`** (`marsin_engine/lib/api_server.js`) — `{state:boolean, holdMs?:1..10000}`
+→ 200 `{status,state,holdMs}` / 400 named-field refusal / 503 no effects controller.
+Deliberately **not** `/global-effect {effect:'fogger'}`, which already exists: that is a
+**latch**, and the browser path being deleted was by accident a **deadman** — fog flowed
+only while the browser kept sending, so a closed tab stopped it. A latch would leave a fog
+machine running until somebody noticed. `/fog` holds for `holdMs` and switches itself off;
+the button re-POSTs every 600 ms against a 1500 ms hold. The 3D preview stayed local
+(`_uiFogOverride`), so the button still feels instant — preview is this window's opinion,
+hardware is the engine's.
+
+**What died:** `src/dmx/sacn_output_client.js` (deleted); the `animate.js` output block,
+import and vars; the output bridge's entire sender pool, forward path **and its `sacn`
+import**; the `benchMirrorGate` protocol at both ends; `tests/sacn_output_client_frames.test.js`.
+**`:6972` survives as a refusal tripwire** — a stale cached bundle still opens that socket,
+and unbound it would fail silently and look like "the sim just isn't driving anything".
+It now names itself once per 30 s per client with cause (`STALE BUNDLE`) and remedy
+(hard-reload). `start.js`, `config.yaml`, `load_ports.cjs` and the ten `agent_tools`
+`:6972` guards stay truthful and untouched. The sACN OUT panel became **`🔌 Engine
+Blackout`** — its BLACKOUT button was never a `:6972` control (it POSTs `/global-blackout`
+on `:6968`); `sacn-out-blackout-btn`, `window.triggerSacnBlackout` and the `SacnOutMonitor`
+alias are preserved verbatim.
+
+**Gate outcome: retired, not disabled.** `R-23`, `proveOutputGateHeld`, `setOutputGate`,
+`ensureGateLink`, `_gateLostWhileArmed`, the `ws` client import — all gone from both
+processes. The ARM's ownership proof keeps every relay clause and drops only the gate one.
+**Structural absence is the stronger guarantee**: a gated stream is a live capability held
+shut, and `_158` **D-158-1** was exactly the cost of that (a gate lost inside the ship-dark
+blackout produced an arm reporting success while the ship was reachable at priority 150).
+That defect is now **unrepresentable**, and its regression is retired with the property it
+defended named and rehoused. **Closes `_159` OBS-4** — there is no gate command to accept
+on `:6972`, authenticated or not.
+
+**Coverage inverted, not deleted.** Every retired test names its replacement in place.
+New `simulation/tests/browser_transmit_absence.test.js` (11) asserts the absences over the
+source; the data-path suite became a refusal spec; `G10` now proves a frame reaches
+**nothing**. The **tab-throttle freeze is untestable by construction** and that is recorded
+as a passing test rather than left as a gap.
+
+**`_170` interaction — their fix is NOT lost, that lane is.** `useRawDmxValues` had landed
+on the forward path I deleted, but it survives untouched everywhere it still matters:
+engine→wire (`marsin_engine/lib/sacn_output.js`), bridge relay→wire and mirror→wire
+(`sacn_bridge.js`). Their `R-D1` round-trip proofs run against the surviving lanes and are
+green. No `_170` test was reworked or weakened.
+
+**Suites.** Sim **2007 / 2000 / 6** — the *same 6* pre-existing failures name for name,
+zero new. The 17-test drop is retired machinery against **+11** new absence tests; net
+coverage up, because absence needs fewer assertions than a data path. Focused mirror +
+absence + refusal + armed-shutdown **154 / 154 / 0**. Engine **2797 / 2789 / 8**, all 8
+accounted for and none mine: 5 × `audio_capture` are an **environment** precondition on
+this box (`Windows audio capture requires a pinned device`; file unmodified since
+`c6eaa733`, fails identically alone), and `fire_sync_listener` (2) +
+`effects_v2_mode_page_layout` (1) are **contention artefacts, green in isolation** —
+`performance_mode` **11 / 11 in isolation**. `fog_endpoint` **8 / 8** against a real engine
+on an OS-assigned free port on `studiodj` (titanic patches no fog fixture, so it could not
+prove this). `security_check.py --all` **6**, unchanged baseline, all inside gitignored
+`.scene_backups/`.
+
+**Constraints honoured:** no git operations, operator's live stack never touched (no
+service started on an operator port, engine never restarted), no scene/pattern/playlist
+edit, nothing left armed, scratch in `~/tmp/fix_171/`.
+
+**Still NOT SHIP** — unchanged standing verdict. This removes an entire class of writer
+and closes the tab-freeze failure mode, but the fog rehousing has **not been seen on a
+physical fog machine**, and the bench-mirror physical smoke `_158` called for is still
+outstanding. Docs scrubbed: `profile_registry.js`, `sacn_monitor_panel.js`, and a standing
+**SUPERSEDED IN PART** header on `20260724_19_router_in_engine_design.md` §2.4 (its rule
+was adopted, its browser-generator carve-out was not; original text left intact below it).
+
+---
+
+**`_172` — WAVE OVERSIGHT SWEEP (`_153`–`_171`): cross-cutting check, verdict ISSUES —
+none in the landed code.** Report `.agent/reports/202608/20260805_172_wave_oversight_sweep.md`.
+Read-only; fresh solo suite runs reproduce the settled baselines exactly — sim
+**2007/2000/6/1 todo** (the documented six, name for name), engine **2796/2789/7** (the
+documented list: 5× audio_capture, osc EADDRINUSE→EACCES, effects_v2 file-level; an
+earlier `pattern_dirs_crash_pin` red was this sweep's own three-suites-in-parallel
+contention, green solo), `security_check --all` **6** (gitignored `.scene_backups`
+baseline). **Late-wave interactions all verified clean:** `_167`+`_169`+`_171` co-exist in
+`api_server.js` (`sendJsonError` :416, `/shutdown` :5553, `/fog` :5621, `engine.js:2569`
+hook); `_170`'s `useRawDmxValues` survives on all three living lanes after `_171`'s
+deletion; zero dangling refs to `sacn_output_client`/the gate (comments + absence tests
+only); every claimed new file exists. `_161`/`_162` catalog smell check: every factual
+error was caught downstream; no implemented test rests on a wrong premise. **Top issues:**
+(1) **T2 still open and D1 landed alone** — titanic `globals_state.yaml` dimmers still
+~0.03–0.32; `_160` said "never D1 alone"; next boot is near-dark until the operator
+retunes (dimmer rack + `_168` master). (2) **NEW residue:**
+`simulation/scenes/titanic/playlists/dirty_probe.yaml` — written by
+`performance_mode.test.js` via a spawned engine into the TRACKED titanic scene; not caught
+by the `*.original`-only residue tripwire; would ship via robocopy. Delete + widen
+tripwire + isolate that test's playlist root. (3) `_162` §6 N-2 stale "playlist block
+dead" claim never annotated (`_166` §9 asked; autopilot.js consumes it). (4) `_166` D-2
+real-IP literal still in `engine_bridge_contract.test.js:99`. (5) `_157` S-D5/S-D4/S-D3/
+S-D8 hardening slices unpicked (S-D5 cheapest, `_160` says land first). Full 30-item
+leftover table in the report §(b): blocker-class = T2 retune + bench-mirror/`_170` physical
+A/B; H = T6/T7/T8/T9 (tree still uncommitted, `output_config_guard.js` untracked but
+imported); rulings owed = ffmpeg fallback + N-1 stateRestoreDegraded; test debt =
+D-165-1..4, D-166-1/2/5/6, `_167` tier-2 ×23, G-13, G16, `patches.yaml.original`.
+**Standing verdict NOT SHIP unchanged.** Zero production edits; scratch
+`~/tmp/sweep_172/`.
+
+---
+
+**`_173` — AUDIO COMPANION KEEPS REVERTING TO THE TEST SIGNAL: root cause found +
+fixed.** Report `.agent/reports/202608/20260805_173_audio_companion_state_fix.md`.
+Operator: *"it keeps going back to the test signals … I want it to remember our
+last settings."*
+
+**Root cause — the engine test suite PATCHes the operator's live show.**
+`audio/companion/companion_server.js` resolved `ENGINE_CONFIG_PATH` from a
+**hardcoded** `../../config.yaml` and did **not** honour `MARSIN_CONFIG_FILE`, so
+every spawned companion resolved `companion.engine` → `127.0.0.1:6968` and
+`companion.osc` → `127.0.0.1:10000` — the live stack. The two suites that boot the
+real companion (`tests/companion/companion_osc_accounting.test.js:67`,
+`…/companion_new_signals.test.js:76`) both send `{type:'setMode',mode:'test'}`,
+which write-throughs as `PATCH /audio/config {"capture":{"device":"test"}}`. The
+engine persists that into `states/<scene>/audio_state.yaml` and rebroadcasts
+`audioConfig`, flipping the operator's real Companion to the synthetic generator
+mid-session and on every boot thereafter. **Reproduced end-to-end** against a fake
+engine (`~/tmp/fix_173/repro_clobber.mjs`) — the PATCH is logged verbatim. Git
+agrees: titanic `capture.device` went `audio=Microphone (Amazon USB Streaming
+Mic)` (`3246deb2`) → `test` (`7d2cb6d7`, committed) → `''` (now). Second-order
+damage: with the source on `test`, `applyEngineCaptureDevice` never populates
+`configDevice`, so the Companion's "Mic / Line" button writes **`''`** — which
+`audio_capture.js:145` **throws** on for win32 (`device_not_configured`). Hence
+the loop: test → click mic → deaf → back to test.
+**Not the engine:** `engine.js` has no `'test'` device path and no silent
+mic→test fallback (no P0 violation). **Not the state-dir redirect:** every
+`engine.js`-spawning suite already goes through `spawn_engine.mjs` /
+`MARSIN_STATE_DIR`; HIL is gated to `test_bench`. The Companion was the only gap.
+
+**Fix (4 files, minimal).** `companion_server.js`: `ENGINE_CONFIG_PATH` resolves
+through `MARSIN_CONFIG_FILE` — unset ⇒ tracked config (operator path
+byte-identical), set-but-relative/empty ⇒ **throws at boot** (no silent fallback).
+New `tests/helpers/companion_isolation.mjs`: `isolatedCompanionEnv()` writes a
+scratch config with `companion.engine.host`/`companion.osc.host` → **the RFC 5737 TEST-NET-1 black-hole address**
+(RFC 5737, never routed) and `companion.source: test` (so a spawned companion also
+never opens the operator's mic); `assertEngineLinkDown()` fails the suite if the
+link is up. Both companion suites now spawn with that env and assert the link is
+DOWN **before** sending `setMode`. **`127.0.0.9` is NOT a black hole** — the
+assertion caught it: the engine binds `0.0.0.0`, which accepts every local
+address and all of `127/8` is local.
+
+**Operator step (once, live, no restart):** CaptainPad → AUDIO → SETTINGS →
+device picker → *Microphone (Amazon USB Streaming Mic)*. `titanic` currently holds
+`capture.device: ''` (unstartable on Windows); the engine is running so it was
+deliberately NOT hand-edited. `test_bench` already holds the real device.
+
+**Suites.** Engine **2796 / 2789 / 7** — the `_172` baseline name for name (5 ×
+`audio_capture` win32 env, `osc_listener` EADDRINUSE→EACCES, `effects_v2_mode_
+page_layout` file-level); zero new. Focused companion pair **5 / 5 / 0**.
+`security_check --all` **6** (gitignored `.scene_backups` baseline). Sim not run —
+no `simulation/` file touched. Post-run residue = my 4 files only; no state file
+gained a `capture.device: test`.
+
+**Disclosed:** the repro + the first assertion-failing run each leaked a few
+seconds of synthetic audio OSC at the live engine (runtime-only, overwritten at
+~86 Hz) and the repro opened the USB mic for ~2 s — the same leak both suites have
+caused on every run, now closed. No `capture.device` PATCH ever reached the live
+engine.
+
+**Follow-ups (not done):** (1) **`--dest 127.0.0.9` is likely not a black hole
+either** — the sim's sACN receiver `socket.bind(port, cb)` with no address
+(`simulation/node_modules/sacn/dist/receiver.js:43`) binds `0.0.0.0`; every
+spawned test engine may be feeding the live bridge. Measure, re-point at
+the TEST-NET-1 black hole, update `.agent/memory/spawning_a_test_engine.md`. (2) `capture.device`
+conflates source-mode with mic identity — selecting `test` destroys the mic
+string; a separate `capture.source` would make it un-losable (schema change,
+deliberately deferred). (3) `config.yaml companion.source: mic` +
+`audio.capture.device: null` makes a cold-start Companion (engine down) die loudly
+on win32. Constraints honoured: no git ops, live engine never touched, no state /
+scene / pattern / playlist edit; scratch `~/tmp/fix_173/`.

@@ -85,7 +85,26 @@ const UI_DIR = path.join(__dirname, 'ui');
 // The ENGINE's config.yaml — read at boot for the shared tuning, and the file
 // the PARTY tab's PERSIST writes its `party:` thresholds back into (surgically:
 // see party_tuning.js, comments must survive).
-const ENGINE_CONFIG_PATH = path.join(__dirname, '..', '..', 'config.yaml');
+//
+// `MARSIN_CONFIG_FILE` overrides it — the SAME seam engine.js and the autopilots
+// resolve their config through (tests/helpers/setup_config_guard.mjs sets it).
+// Without this the Companion was pinned to the TRACKED config.yaml no matter who
+// spawned it, so a test-spawned Companion resolved `companion.engine` →
+// 127.0.0.1:6968 and `companion.osc` → 127.0.0.1:10000 — the OPERATOR'S LIVE
+// ENGINE — and its first `setMode` write-through PATCHed `capture.device: test`
+// straight into the running show (incident: report _173; the operator's audio
+// source kept snapping back to the synthetic test generator whenever the engine
+// suite ran). A set-but-relative/empty value THROWS: a misconfigured override
+// silently falling back to the real config is exactly the pollution this
+// resolution exists to prevent (codex P0 — no fallback).
+const ENGINE_CONFIG_PATH = (() => {
+  const override = process.env.MARSIN_CONFIG_FILE;
+  if (override === undefined) return path.join(__dirname, '..', '..', 'config.yaml');
+  if (!override || !path.isAbsolute(override)) {
+    throw new Error(`MARSIN_CONFIG_FILE must be an absolute path when set, got: ${JSON.stringify(override)}`);
+  }
+  return override;
+})();
 
 // FFT must track config.yaml audio.fftSize so the companion's analysis + derived
 // signals (genre / note / dom / sub) match the engine's exactly. (The spectrum

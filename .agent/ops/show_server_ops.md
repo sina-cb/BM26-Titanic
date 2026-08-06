@@ -61,6 +61,13 @@ python deploy\deploy.py start  --machine <name> [--no-verify]      # bring it ba
   refuses to go down is the same `confirm_stack_stopped` fail path (nonzero
   exit naming the orphaned port). Use it before generator/power work — the
   lights stay OFF until `start`, a reboot, or the next deploy.
+  **How OFF happens (report `_169`):** `launcher.js stop` asks the engine to run
+  its own graceful shutdown first (`POST /shutdown`), which sends the blackout
+  frame, and only then force-kills the tree. If the stop prints
+  **`BLACKOUT NOT CONFIRMED`**, the blackout could not be verified — treat the
+  rig as **LIT**, confirm darkness by eye, and kill the controller PSUs before
+  touching anything electrical. `stop` is a confirmed blackout, never an
+  electrical isolation guarantee.
 - **start** brings it back: captures the server clock, fires `schtasks /Run`
   (the stack runs in titanic's logged-on session, never the SSH one), then
   runs the same `verify_prod` flow against the machine's manifest scene.

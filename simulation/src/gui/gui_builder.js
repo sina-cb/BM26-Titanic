@@ -2815,47 +2815,44 @@ function setupGUI() {
             const holdBtn = document.createElement('button');
             holdBtn.textContent = '💨 Hold to Fog';
             holdBtn.style.cssText = 'width:calc(100% - 16px);margin:4px 8px;padding:4px;border:none;border-radius:3px;background:color-mix(in srgb, var(--error) 15%, var(--surface));color:var(--error);cursor:pointer;font-size:10px;font-weight:bold;';
+            // ── Hold to Fog — the ENGINE fires it (report 20260805_171) ──
+            //
+            // This used to write DMX into the browser-local router and rely on
+            // the browser transmitting to the controller. The browser is not the
+            // router: it POSTs `/fog`, and the engine writes the fog channels on
+            // the normal engine → bridge → controller route.
+            //
+            // `/fog` is a DEADMAN, not a latch: the engine holds the fogger only
+            // for `holdMs` and switches it off itself if we stop refreshing. That
+            // preserves the one virtue the old browser path had by accident — a
+            // closed tab or a dead renderer stopped the fog — which on a fog
+            // machine is a real-world safety property, not a style choice. So a
+            // held button re-POSTs on an interval, and release POSTs `false`.
+            const FOG_REFRESH_MS = 600;
+            const FOG_HOLD_MS = 1500;      // > 2× the refresh, so one dropped POST does not stutter
+            let fogRefreshTimer = null;
+            const postFog = (state) => {
+              if (isStaticHost()) {
+                logStaticHostSkip('engine /fog (port 6968)');
+                return;
+              }
+              fetch(engineHttpUrl('/fog'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ state: !!state, holdMs: FOG_HOLD_MS }),
+              }).catch(() => {}); // engine may not be running; the deadman covers us
+            };
             const toggleFog = (state) => {
-              console.log(`[GUI] toggleFog(${state}) called`);
+              // Local PREVIEW only — the 3D fog puff. No DMX leaves this window.
               [...(window.parFixtures || []), ...(window.dmxSceneFixtures || [])].forEach(f => {
                 if (f && f.config && (f.config.fixtureType === 'TEFogMachine' || f.config.fixtureType === 'ChauvetHaze4D' || f.config.type === 'TEFogMachine' || f.config.type === 'ChauvetHaze4D')) {
                   f._uiFogOverride = state;
-                  // When stopping, immediately flush zeros into the router buffer
-                  if (!state && window.dmxRouter) {
-                    const u = f.config.dmxUniverse;
-                    const addr = f.config.dmxAddress;
-                    if (u && u > 0 && addr && addr > 0) {
-                      const fType = f.config.type || f.config.fixtureType;
-                      const zeros = fType === 'ChauvetHaze4D' ? new Uint8Array([0, 0]) : new Uint8Array([0]);
-                      window.dmxRouter.submitFrame('fog_ui', 250, u, zeros, addr);
-                    }
-                  }
                 }
               });
-              // Delay source removal so processFrame merges the zeros first
-              if (!state && window.dmxRouter) {
-                setTimeout(() => {
-                  if (window.dmxRouter) {
-                    // Remove all per-fixture fog sources
-                    [...(window.parFixtures || []), ...(window.dmxSceneFixtures || [])].forEach(f => {
-                      if (f && f._fogSourceId) window.dmxRouter.removeSource(f._fogSourceId);
-                    });
-                  }
-                }, 200);
-              }
 
-              // Call the central Engine API (best-effort, engine may not be running).
-              // On a static host the API is unreachable and the fetch is mixed-content
-              // blocked, so skip it instead of letting the browser log the failure.
-              if (isStaticHost()) {
-                logStaticHostSkip('engine /global-effect (port 6968)');
-              } else {
-                fetch(engineHttpUrl('/global-effect'), {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ effect: 'fogger', state: !!state })
-                }).catch(() => {}); // silently ignore if engine not running
-              }
+              if (fogRefreshTimer) { clearInterval(fogRefreshTimer); fogRefreshTimer = null; }
+              postFog(state);
+              if (state) fogRefreshTimer = setInterval(() => postFog(true), FOG_REFRESH_MS);
             };
             const startFog = (e) => { e.preventDefault(); toggleFog(true); };
             const stopFog = () => toggleFog(false);

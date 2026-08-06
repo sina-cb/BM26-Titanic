@@ -8,6 +8,16 @@ updated: 2026-07-24
 
 # BM Readiness — Ship Mapping, Mapping UI, Views & Overlays
 
+> **Standing correction (2026-08-05, operator ruling).** Several dated log
+> entries below name `marsin_engine/lib/output_dispatch.js` and the engine's
+> per-controller `controllers:` / `alsoFlat` routing. Those entries are an
+> accurate record of work that happened; the mechanism they describe is **GONE**.
+> The engine now has exactly one output path — sACN to `sacn.destinations` —
+> and the sim's input bridge is the single router to every controller. A config
+> that still declares `controllers:` makes the engine refuse to boot by name
+> (`marsin_engine/lib/output_config_guard.js`). Do not treat any log entry below
+> as a description of an available option.
+
 ## Goal
 
 Get the Titanic fully premapped before the burn, with the map proven against

@@ -5,57 +5,75 @@ entries:
     pattern: 00_golden_hour_wash
     label: null
     defaults:
-      sliderLocalSpeed: 0.44
-      sliderDirection: 1
-      sliderLevel: 0.5
-      sliderKick: 0
-      sliderRadius: 0.5
-      sliderWarmth: 0.5
-      sliderWhiteLevel: 0.45
-      sliderWhiteKick: 0.2
-      sliderWhiteWarmth: 0.25
+      sliderLocalSpeed: 0.3
+      sliderLevel: 0.62
+      sliderGrain: 0.36
+      sliderEmberSwell: 0.28
+      sliderJewelryWhite: 0.56
+      sliderJewelryFlash: 0
     modulations:
-      - id: mod_sliderLocalSpeed_micMid
+      - id: mod_sliderLevel_micLow
         type: continuous
         enabled: true
         source:
           scope: cpc
-          key: micMid
+          key: micLow
         target:
           scope: pattern
-          parameter: sliderLocalSpeed
-        mode: offset
-        polarity: bipolar
-        range:
-          - -0.6
-          - 0.6
-        curve: easeOut
-      - id: mod_sliderKick_micDomEnergy1
-        type: continuous
-        enabled: true
-        source:
-          scope: cpc
-          key: micDomEnergy1
-        target:
-          scope: pattern
-          parameter: sliderKick
+          parameter: sliderLevel
         mode: offset
         polarity: unipolar
         range:
           - 0
-          - 0.35
-        curve: linear
+          - 0.5
+        curve: easeOut
+      - id: mod_sliderEmberSwell_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderEmberSwell
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.87
+        curve: easeOut
+      - id: mod_sliderJewelryFlash_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderJewelryFlash
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 1
+        curve: easeIn
     midiMappings: []
     notes: null
   - id: e_default_1_01_cylon_sweep
     pattern: 01_cylon_sweep
     label: null
     defaults:
-      sliderLocalSpeed: 0.68
-      sliderBeamWidth: 0.18
+      sliderLocalSpeed: 0.76
+      sliderDirection: 0.67
+      sliderLevel: 0.5
+      sliderKick: 0.5
+      sliderRadius: 0.5
+      sliderTrail: 0.5
+      sliderEyeWidth: 0.5
       sliderBackgroundGlow: 0.54
-      sliderDirection: 0.53
-      sliderAudioBrightness: 0
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0.3
+      sliderBlinderBite: 0.5
     modulations:
       - id: mod_sliderDirection_micLow
         type: continuous

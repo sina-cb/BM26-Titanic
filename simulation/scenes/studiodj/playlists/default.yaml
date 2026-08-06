@@ -6,14 +6,11 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.25
-      sliderDirection: 1
-      sliderLevel: 0.5
-      sliderKick: 0
-      sliderRadius: 0.5
-      sliderWarmth: 0.5
-      sliderWhiteLevel: 0.45
-      sliderWhiteKick: 0.2
-      sliderWhiteWarmth: 0.25
+      sliderLevel: 0.62
+      sliderGrain: 0.36
+      sliderEmberSwell: 0.28
+      sliderJewelryWhite: 0.42
+      sliderJewelryFlash: 0
     modulations: []
     midiMappings: []
     notes: null

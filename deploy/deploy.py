@@ -432,6 +432,13 @@ def stop_stack(entry: dict) -> bool:
     meaning = ('stopped' if stop_proc.returncode == 0
                else 'no lock found OR stop timed out - the port check below is authoritative')
     print(f'  launcher stop -> rc {stop_proc.returncode} ({meaning})')
+    # `launcher stop` now asks the engine to send its shutdown blackout BEFORE the
+    # force-kill (report _169 / _160 T1). On rc 0 we otherwise SWALLOW its output,
+    # so an unconfirmed blackout - the one case where the rig may still be lit -
+    # would be invisible exactly where the operator is about to work on hardware.
+    for line in f'{stop_proc.stdout}\n{stop_proc.stderr}'.splitlines():
+        if 'BLACKOUT NOT CONFIRMED' in line:
+            print(f'  {line.strip()}')
     confirm_stack_stopped(entry)
     return end_proc.returncode != 0 and stop_proc.returncode == 1
 

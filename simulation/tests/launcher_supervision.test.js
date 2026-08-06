@@ -197,3 +197,110 @@ test('start.js restarts a real child killed with -9 (L1 end-to-end)', async () =
     await sleep(500);
   }
 });
+
+// ── _169: `stop` must black the rig out BEFORE the force-kill ────────────
+// Report 20260805_160 T1: `stop` force-kills the process tree (Windows
+// `taskkill /T /F`), so the engine's SIGTERM handler — the only emitter of the
+// shutdown blackout frame — never ran and the rig held its last live frame,
+// while the ops docs promise "lights OFF". The fix asks the engine in band
+// (POST /shutdown), waits a BOUNDED time for it to exit, and always proceeds
+// to the kill; an unconfirmed blackout must be LOUD.
+//
+// Every test here is in-process with injected deps: no port is bound, no
+// process is signalled, the operator's stack is untouched.
+const FAKE_PORTS = { marsin_engine_port: 7868 };
+const FAKE_LOCK = { pid: 424242, children: { engine: 434343, sim: 454545 } };
+
+async function captureStderr(fn) {
+  const chunks = [];
+  const original = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk) => { chunks.push(String(chunk)); return true; };
+  try {
+    const result = await fn();
+    return { result, stderr: chunks.join('') };
+  } finally {
+    process.stderr.write = original;
+  }
+}
+
+test('blackout CONFIRMED: engine accepts POST /shutdown and exits → no loud warning', async () => {
+  const posted = [];
+  let aliveCalls = 0;
+  const { result, stderr } = await captureStderr(() => launcher.blackoutEngineBeforeKill(FAKE_LOCK, {
+    ports: FAKE_PORTS,
+    post: (url, body) => { posted.push([url, body]); return Promise.resolve(200); },
+    pidAlive: () => (++aliveCalls < 3),      // exits on the 3rd poll
+    sleep: () => Promise.resolve(),
+  }));
+  assert.deepEqual(result, { confirmed: true, reason: 'engine exited' });
+  assert.deepEqual(posted, [['http://127.0.0.1:7868/shutdown', { confirm: true }]],
+    'the blackout is requested through the engine\'s own shutdown path, with an explicit confirm');
+  assert.equal(stderr, '', 'a confirmed blackout must not cry wolf');
+});
+
+test('blackout NOT confirmed when the engine refuses/ignores the request — and it is LOUD', async () => {
+  const { result, stderr } = await captureStderr(() => launcher.blackoutEngineBeforeKill(FAKE_LOCK, {
+    ports: FAKE_PORTS,
+    post: () => Promise.reject(new Error('connect ECONNREFUSED 127.0.0.1:7868')),
+    pidAlive: () => true,
+    sleep: () => Promise.resolve(),
+  }));
+  assert.deepEqual(result, { confirmed: false, reason: 'request failed' });
+  assert.match(stderr, /BLACKOUT NOT CONFIRMED/, 'the operator must be told the rig may still be lit');
+  assert.match(stderr, /ECONNREFUSED/, 'the underlying reason is not swallowed');
+});
+
+test('the wait is BOUNDED: an engine that never exits fails loudly instead of hanging', async () => {
+  let clock = 1_000_000;
+  let polls = 0;
+  const { result, stderr } = await captureStderr(() => launcher.blackoutEngineBeforeKill(FAKE_LOCK, {
+    ports: FAKE_PORTS,
+    timeoutMs: 3000,
+    post: () => Promise.resolve(200),
+    pidAlive: () => { polls++; return true; },
+    sleep: (ms) => { clock += ms; return Promise.resolve(); },
+    now: () => clock,
+  }));
+  assert.deepEqual(result, { confirmed: false, reason: 'engine still alive' });
+  assert.equal(polls, 16, '1 liveness precheck + 15 polls (3000 ms budget / 200 ms) — the loop terminates on the budget');
+  assert.match(stderr, /BLACKOUT NOT CONFIRMED/);
+});
+
+test('an already-dead engine is NOT asked — stop must never shut down an engine it does not own', async () => {
+  let posts = 0;
+  const { result, stderr } = await captureStderr(() => launcher.blackoutEngineBeforeKill(FAKE_LOCK, {
+    ports: FAKE_PORTS,
+    post: () => { posts++; return Promise.resolve(200); },
+    pidAlive: () => false,
+    sleep: () => Promise.resolve(),
+  }));
+  assert.deepEqual(result, { confirmed: false, reason: 'engine already gone' });
+  assert.equal(posts, 0,
+    'with our engine dead, a POST to :6968 would hit whatever OTHER engine answers that port');
+  assert.match(stderr, /already gone/);
+  assert.match(stderr, /BLACKOUT NOT CONFIRMED/, 'a rig that lost its engine without a blackout may still be lit');
+});
+
+test('no engine child in the lock: nothing is requested, and it is LOUD (every profile runs an engine)', async () => {
+  let posts = 0;
+  const { result, stderr } = await captureStderr(() => launcher.blackoutEngineBeforeKill(
+    { pid: 1, children: { sim: 2 } },
+    { ports: FAKE_PORTS, post: () => { posts++; return Promise.resolve(200); }, sleep: () => Promise.resolve() },
+  ));
+  assert.deepEqual(result, { confirmed: false, reason: 'no engine pid in lock' });
+  assert.equal(posts, 0, 'no blackout request without a known engine');
+  assert.match(stderr, /BLACKOUT NOT CONFIRMED/);
+});
+
+test('ORDER: cmdStop requests the blackout BEFORE it force-kills the tree', () => {
+  // The defect was pure ordering, so pin the ordering. Source-level because
+  // cmdStop's kill path cannot be exercised without killing a real process.
+  const src = fs.readFileSync(path.join(ROOT, 'launcher.js'), 'utf8');
+  const stopIdx = src.indexOf('Stopping launcher pid');
+  assert.ok(stopIdx > 0, 'found the live-stack stop path');
+  const blackoutIdx = src.indexOf('await blackoutEngineBeforeKill(lock);', stopIdx);
+  const killIdx = src.indexOf('forceKillTree(lock.pid)', stopIdx);
+  assert.ok(blackoutIdx > 0 && killIdx > 0, 'both steps are present in the live-stack stop path');
+  assert.ok(blackoutIdx < killIdx,
+    'the blackout request must precede the force-kill — a taskkill /F first is exactly defect T1');
+});

@@ -5,16 +5,58 @@ entries:
     pattern: 00_golden_hour_wash
     label: null
     defaults:
-      sliderLocalSpeed: 0.5
-      sliderDirection: 0.66
-      sliderLevel: 0.5
-      sliderKick: 0
-      sliderRadius: 0.5
-      sliderWarmth: 0.5
-      sliderWhiteLevel: 0.45
-      sliderWhiteKick: 0.2
-      sliderWhiteWarmth: 0.25
-    modulations: []
+      sliderLocalSpeed: 0.19
+      sliderLevel: 0.12
+      sliderGrain: 0.36
+      sliderEmberSwell: 0.08
+      sliderJewelryWhite: 0.56
+      sliderJewelryFlash: 0
+    modulations:
+      - id: mod_sliderLevel_micLow
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micLow
+        target:
+          scope: pattern
+          parameter: sliderLevel
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.5
+        curve: easeOut
+      - id: mod_sliderEmberSwell_micFlux
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micFlux
+        target:
+          scope: pattern
+          parameter: sliderEmberSwell
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.87
+        curve: easeOut
+      - id: mod_sliderJewelryFlash_micKick
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micKick
+        target:
+          scope: pattern
+          parameter: sliderJewelryFlash
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
     midiMappings: []
     notes: null
   - id: e_default_1_01_cylon_sweep
@@ -39,7 +81,7 @@ entries:
     pattern: 02_phase_cathedral
     label: null
     defaults:
-      sliderLocalSpeed: 0.36
+      sliderLocalSpeed: 0.76
       sliderDirection: 0.58
       sliderLevel: 0.5
       sliderKick: 0
@@ -121,7 +163,16 @@ entries:
   - id: e_default_9_09_cyclone
     pattern: 09_cyclone
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.22
+      sliderDirection: 0.22
+      sliderLevel: 0.5
+      sliderKick: 0.5
+      sliderRadius: 0.5
+      sliderDensity: 0.5
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0.5
+      sliderBlinderBite: 0.5
     modulations: []
     midiMappings: []
     notes: null
@@ -212,7 +263,22 @@ entries:
   - id: e_default_22_13_sparkle
     pattern: 13_sparkle
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.3
+      sliderDirection: 0.5
+      sliderLevel: 1
+      sliderKick: 0
+      sliderRadius: 0.5
+      sliderDensity: 0.5
+      sliderSparkleIntensity: 0.7
+      sliderSparkleSize: 0.5
+      sliderBackgroundLevel: 0.3
+      sliderWhiteGlint: 0.5
+      sliderAmberGlint: 0.3
+      sliderUvGlint: 0.3
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0
+      sliderWhiteWarmth: 0.5
     modulations: []
     midiMappings: []
     notes: null

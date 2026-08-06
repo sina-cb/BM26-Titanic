@@ -6,7 +6,7 @@ entries:
     label: null
     defaults:
       sliderLocalSpeed: 0.46
-      sliderNoiseScale: 0.93
+      sliderGrain: 0.93
     modulations: []
     notes: null
   - id: e_default_1_01_cylon_sweep

@@ -84,11 +84,15 @@ test('E0 · the engine this suite spawns cannot reach the rig (the `_97` --dest 
     const status = await (await fetch(h.base() + '/status')).json();
     await h.assertBlackHoled(status);
 
-    // The config the engine actually booted from — the seam `--dest` could not
-    // reach. `controllers: []` is the whole point: with a declared controller,
-    // its own host wins for the universes it claims and `--dest` is decoration.
+    // The config the engine actually booted from. A declared `controllers:`
+    // block used to carry its own host and win for the universes it claimed,
+    // making `--dest` decoration (the `_97` §4.4 trap). That mechanism is
+    // REMOVED: the key must be ABSENT — its mere presence is a boot refusal
+    // (marsin_engine/lib/output_config_guard.js) — and the black hole in
+    // `sacn.destinations` is then the whole wall.
     const cfg = fs.readFileSync(h.configFile, 'utf8');
-    assert.match(cfg, /controllers: \[\]/, 'the controllers block was not emptied');
+    assert.doesNotMatch(cfg, /^controllers:/m,
+      'the removed direct-to-hardware key must not appear in a spawned engine config');
     assert.ok(cfg.includes(BLACKHOLE_HOST), 'the black-hole destination is not in the config');
 
     // And the tracked scene tree is unreachable: the plan library is a temp dir.

@@ -14,6 +14,7 @@
  */
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -55,11 +56,15 @@ const { computeEffectiveRoutes, engineOwnedPairs, routeKey, partitionRoutePairs,
   applyUniverseSubscriptions, readPatchDeclarations,
   parseSubscribedUniversesField, buildRouteTableSnapshot } = require('../lib/bridge_routing.cjs');
 
-// Bench stand-in re-addressing (operator order 2026-07-31). Pure half in
-// lib/bench_mirror.cjs; this file owns the file reads, the senders and the logs.
+// Bench stand-in re-addressing (operator order 2026-07-31). Pure halves in
+// lib/bench_mirror.cjs (schema, activation, suppression, arm judgement) and
+// lib/bench_mirror_resolve.cjs (ARM-time resolution of the v3 sidecar into the
+// internal spec); this file owns the file reads, the senders and the logs.
 const { parseBenchMirrorSpec, isMirrorActive, mirrorSourceUniverses, mirrorDestPairs,
+  partitionMirrorSuppression, evaluateArmRequest, evaluateClaimOverlap, evaluateArmedHealth,
   createMirrorState, spliceMirrorFrame, mirrorPayload,
-  describeMirror } = require('../lib/bench_mirror.cjs');
+  describeMirror, DMX_CHANNELS } = require('../lib/bench_mirror.cjs');
+const { resolveBenchMirror, loadFixtureRegistry } = require('../lib/bench_mirror_resolve.cjs');
 
 // Boot-time correctness of the RECEIVE socket: which interface it joins
 // multicast on, when it may be subscribed to, and what a socket error means
@@ -157,7 +162,9 @@ try { ({ Receiver, Sender } = require('sacn')); } catch (e) {
   console.error('[sACN Bridge] sacn package not installed. Run: npm install sacn');
   process.exit(1);
 }
-try { WebSocketServer = require('ws').Server; } catch (e) {
+try {
+  WebSocketServer = require('ws').Server;
+} catch (e) {
   console.error('[sACN Bridge] ws package not installed. Run: npm install ws');
   process.exit(1);
 }
@@ -201,6 +208,10 @@ const _routeEntries = new Map();            // routeKey → sender entry
 // directly" — the designed one-writer arbitration, not a failure.
 let _lastExcluded = [];
 let _lastActiveScenes = [];
+// The ordinary relay set as of the last recompute. Read by the ARM evaluation
+// so its warnings can name exactly which live routes arming is about to
+// suppress — measured, not predicted from the scene files a second time.
+let _lastRelayRoutes = [];
 let _lastExcludedSig = '';
 let _lastConflictSig = '';
 const _warnedMissingScenes = new Set();
@@ -226,9 +237,163 @@ let _activeMirrors = [];
 const _mirrorEntries = new Map();           // destKey → sender entry (same shape as a relay)
 let _mirrorStates = new Map();              // scene → { sig, state }
 let _lastMirrorSig = '';
+let _lastSuppressedSig = '';                // _105 F10: its OWN signature, not the mirror set's
 const _mirrorDirty = new Set();             // destKeys awaiting a flush
-const _mirrorPriority = new Map();          // destKey → priority of the last contributing frame
 let _mirrorFlushScheduled = false;
+
+// ── Mirror wire identity (report 20260805_155 §15.A4) ──────────────────────
+//
+// PRIORITY IS FIXED AND DECLARED, never inherited from the source frame. The
+// old behaviour re-emitted a composed frame at whatever priority last fed it,
+// so a rogue priority-150 inbound would have left the mirror AT 150 — priority
+// games riding a dead arbitration path (`_153` F3). Escalation above 150 was
+// rejected outright by the operator: it MASKS a second writer instead of
+// refusing it, which is the exact bug class this slice exists to close. The
+// second writer is handled structurally — no browser can transmit at all — and
+// by refusals, not by shouting louder on the wire.
+const MIRROR_PRIORITY = 100;
+
+// A DISTINCT, STABLE CID. Every sACN sender in this project ships the `sacn`
+// package's hardcoded DEFAULT_CID, so any two writers on one universe look like
+// ONE E1.31 source with two interleaved sequence counters — receivers then
+// discard packets semi-randomly under E1.31 §6.7.2 REGARDLESS of priority
+// (`_153` F2, measured). Giving the mirror its own CID turns any residual
+// two-writer situation into deterministic multi-source arbitration and makes a
+// wire capture attributable. Derived from a fixed namespace string so it is the
+// same 16 bytes on every machine and every boot — a random CID per process would
+// look like a new source after every restart.
+const MIRROR_CID = crypto.createHash('md5').update('bm26:bridge-mirror').digest();
+
+// ── BENCH MIRROR arm (report 20260804_151) ─────────────────────────────────
+// The runtime mode switch. PROCESS MEMORY ONLY — never read from or written to
+// disk, so every bridge start and every launcher start comes up DISARMED and the
+// checked-in sidecar can never activate hardware by itself. Same discipline as
+// the engine's PERFORMANCE MODE (marsin_engine/lib/api_server.js /status).
+//
+// SOCKET-SCOPED (operator ruling 2026-08-04): `ws` is the sim window that armed
+// it. That window's disconnect — a close, a reload, a crashed tab — disarms
+// cleanly, so the hardware can never stay re-addressed with nobody watching.
+let _mirrorArm = null;          // null | { scene, sourceScene, label, selection, spec, slots,
+//                                          destinations, armedAt, ws }
+let _mirrorDisarming = false;   // a DISARM blackout is in flight: do NOT close mirror senders
+
+// ── ARMED = THE BENCH IS THE ONLY PHYSICAL OUTPUT (operator ruling) ────────
+//
+// While armed, ALL ordinary relay to ALL controllers of every active scene is
+// suspended. The ship must go DETERMINISTICALLY DARK rather than frozen: a DMX
+// gateway has no timeout and the MarsinLED `dmx.timeoutMs` is unwritten by this
+// repo (0 = hold forever, `_150` §9), so simply ceasing to send would leave the
+// ship holding its last look — which reads as alive to a passerby and as a bug
+// to the operator. So ARM sends 3× all-zero frames through the RETIRING relay
+// senders and awaits them before they are closed: the exact mirror image of the
+// disarm blackout.
+//
+// `_relaySuspended` stops `routeFrame` relaying raw frames the instant the arm
+// begins, before any await — otherwise raw frames would interleave with the
+// zeros on the same pairs, which is the D1 defect pointing the other way.
+// `_relayCloseHeld` keeps those senders OPEN for the duration, the same way
+// `_mirrorDisarming` keeps the mirror senders open through the disarm blackout.
+let _relaySuspended = false;
+let _relayCloseHeld = false;
+let _armBlackoutInFlight = false;
+
+// What an in-flight blackout has NOT finished handing back (report 20260804_152
+// D1). `disarmBenchMirror` is async: it clears `_mirrorArm` synchronously and
+// then SUSPENDS at its first `await`. Any recompute that lands in that window —
+// a client's `setScene`, a client disconnect, an engine-poll change — sees no
+// arm, suppresses nothing, and re-creates ordinary relay senders on pairs the
+// blackout is still writing zeros to: two live writers on one
+// (universe, controller), which is precisely the law `_15` established. Holding
+// the release through `partitionMirrorSuppression` closes EVERY such path at the
+// single point where relay senders are decided, not one caller at a time.
+let _blackoutHold = null;       // null | { scene:string }
+let _blackoutSettled = null;    // null | Promise — resolves when the zero frames have landed
+
+/** A blackout in EITHER direction (arm's ship-dark, or disarm's bench release). */
+function blackoutInFlight() {
+  return _mirrorDisarming || _armBlackoutInFlight;
+}
+
+// Last-used selection, keyed by `${benchScene}|${sourceScene}` (report
+// 20260805_155 §10). PROCESS MEMORY ONLY, like the arm itself: a remembered
+// SELECTION cannot light anything (arming still needs the gesture plus every
+// check), but persisting it to disk would create a second mutable source of
+// truth beside the sidecar that `robocopy /MIR` would ship and that could rot
+// against the scene. A fresh boot falls back to the sidecar's defaults, which is
+// the correct "state of the world after a restart" answer everywhere else here.
+const _lastSelection = new Map();
+
+/**
+ * The inbound frame's RAW DMX bytes, as the 1-indexed `{channel: value}` object
+ * every downstream consumer in this file takes.
+ *
+ * WHY THIS EXISTS (report 20260805_170 — `_157` D1, `_153` F1b/F7). The `sacn`
+ * package's `packet.payload` getter is a PERCENT view: it runs `objectify`,
+ * which divides every wire byte by 2.55 and rounds to 2 dp. Feeding that to the
+ * relay, the bench mirror and the browser WebSocket is what made this bridge
+ * carry 0-100 "DMX" values — the sim's 39 % preview and the mirror's ~100-level
+ * quantisation are both that one unit error, seen from two sides.
+ * `payloadAsBuffer` is the same slice untouched, so this is the whole fix on
+ * the receive side: read the raw bytes, and let every sender declare
+ * `useRawDmxValues` so nothing rescales them again.
+ *
+ * DO NOT "simplify" this by handing `packet.payloadAsBuffer` straight to
+ * `Sender.send({ payload })`. `Packet`'s own getter objectifies a Buffer
+ * payload back to PERCENT, and `useRawDmxValues` would then write that percent
+ * number as the wire byte — 2.55× DARK on every resend (`_157` §1, proved
+ * again in this slice's report). The payload handed to a sender must always be
+ * a plain 1-indexed object of raw 0-255 numbers.
+ *
+ * SHAPE IS UNCHANGED ON PURPOSE — only the UNIT moves. Zero channels are
+ * omitted exactly as `objectify` omitted them, so every downstream consumer
+ * sees the same sparse object it always did: the relay's outgoing frame still
+ * zero-fills all 512 slots itself (`packet.js` `empty(512)`, pinned by
+ * `marsin_engine/tests/io/sacn_output_wire.test.js`), the mirror's splice
+ * already writes 0 for an absent channel, and the WebSocket frame starts from a
+ * zeroed `Uint8Array`. Densifying here would have been a second, unrelated
+ * behaviour change riding along with the unit fix.
+ *
+ * A frame shorter than 512 slots (legal E1.31: `propertyValueCount` < 513) is
+ * carried at its own length; the absent tail reads as 0 downstream, exactly as
+ * before.
+ */
+function rawDmxPayload(packet) {
+  const buf = packet.payloadAsBuffer;
+  if (!buf) {
+    // STRUCTURALLY UNREACHABLE from the wire: `Packet` only returns null here
+    // when it was built from an options object, and `Receiver` always builds
+    // from the received Buffer. So this is a programming error, not a state to
+    // accommodate — and there is no honest guess available (an empty frame
+    // would black the rig out, a percent fallback would reintroduce D1). The
+    // same invariant treatment `checkBootSubscriptionInvariant` gets at boot.
+    // NOTE: throwing here would be SWALLOWED — the vendored Receiver wraps its
+    // `emit('packet')` in try/catch and re-emits as `PacketOutOfOrder`, which
+    // nothing listens to.
+    console.error('[sACN Bridge] ❌ Inbound packet carries no raw DMX buffer — the receive path ' +
+      'is not reading real E1.31 frames and the bridge will not guess their values.');
+    process.exit(1);
+  }
+  const payload = {};
+  const slots = Math.min(buf.length, DMX_CHANNELS);
+  for (let i = 0; i < slots; i += 1) if (buf[i] !== 0) payload[i + 1] = buf[i];
+  return payload;
+}
+
+/** E1.31 blackout payload: a full 512-channel frame of zeros. */
+function zeroDmxPayload() {
+  const payload = {};
+  for (let i = 1; i <= DMX_CHANNELS; i += 1) payload[i] = 0;
+  return payload;
+}
+
+// Blackout frames go out at the same declared priority the traffic they are
+// retiring carried: the mirror's own fixed 100, and 100 for the relay (the
+// engine's configured `sacn.priority`). A stated constant, not a guess about
+// what a box last saw.
+const BLACKOUT_DEFAULT_PRIORITY = 100;
+
+/** How many all-zero frames a retiring source sends. */
+const BLACKOUT_FRAMES = 3;
 
 /** Log a message at most once for the lifetime of the process. */
 function warnOnce(seen, message) {
@@ -345,17 +510,24 @@ function readSceneRoutePairs(sName) {
  * fixtures with a green log, which is the failure mode the whole module exists
  * to avoid.
  *
- * @returns {Array<{scene:string, spec:Object, raw:string}>}
+ * The parse FAILURES are returned alongside the successes, not merely logged:
+ * an ARM naming a scene whose sidecar is broken must be refused with THAT
+ * message, and a live arm whose sidecar stops parsing must auto-disarm with it
+ * (report 20260804_151). `warnOnce` still keeps the log from repeating.
+ *
+ * @returns {{found:Array<{scene:string, spec:Object, raw:string}>,
+ *            errors:Array<{scene:string, message:string}>}}
  */
 function readBenchMirrorSpecs() {
-  const out = [];
+  const found = [];
+  const errors = [];
   const scenesDir = path.join(SIM_ROOT, 'scenes');
   let entries;
   try {
     entries = fs.readdirSync(scenesDir, { withFileTypes: true });
   } catch (e) {
     warnOnce(_warnedMirrorSpecs, `⚠ Could not scan scenes for ${BENCH_MIRROR_FILE}: ${e.message}`);
-    return out;
+    return { found, errors };
   }
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
@@ -364,14 +536,79 @@ function readBenchMirrorSpecs() {
     let raw;
     try {
       raw = fs.readFileSync(specPath, 'utf8');
-      out.push({ scene: entry.name, spec: parseBenchMirrorSpec(yaml.load(raw), `${entry.name}/${BENCH_MIRROR_FILE}`), raw });
+      found.push({ scene: entry.name, spec: parseBenchMirrorSpec(yaml.load(raw), `${entry.name}/${BENCH_MIRROR_FILE}`), raw });
     } catch (e) {
+      errors.push({ scene: entry.name, message: e.message });
       warnOnce(_warnedMirrorSpecs,
         `⚠ BENCH MIRROR REFUSED — ${entry.name}/${BENCH_MIRROR_FILE}: ${e.message} ` +
         'Nothing is mirrored from this scene until the file is fixed.');
     }
   }
+  return { found, errors };
+}
+
+/**
+ * Read one scene's three declaration files as parsed trees, FRESH, no cache —
+ * the same doctrine as `readSceneRoutePairs` / `readBenchMirrorSpecs`. These are
+ * what the bench-mirror resolver turns into universes, addresses and slices, so
+ * a scene edit is picked up by the next ARM with no restart.
+ *
+ * @returns {{controllers:Object, patches:Object, sceneConfig:Object}|null}
+ *          null when the scene directory does not carry all three.
+ */
+function readSceneTrees(sName) {
+  const dir = path.join(SIM_ROOT, 'scenes', sName);
+  const out = {};
+  for (const [key, file] of [['controllers', 'controllers.yaml'], ['patches', 'patches.yaml'],
+    ['sceneConfig', 'scene_config.yaml']]) {
+    const p = path.join(dir, file);
+    if (!fs.existsSync(p)) return null;
+    out[key] = yaml.load(fs.readFileSync(p, 'utf8'));
+  }
   return out;
+}
+
+/**
+ * Resolve one sidecar against a source scene. Wraps the pure resolver with the
+ * file reads it deliberately does not do, and turns a missing scene into a named
+ * refusal rather than a crash.
+ *
+ * @returns {{ok:boolean, refusal:(string|null), warnings:string[], slots:Array,
+ *            spec:(Object|null)}}
+ */
+function resolveMirrorFor(benchSceneName, spec, sourceSceneName, selection) {
+  const benchScene = readSceneTrees(benchSceneName);
+  if (benchScene === null) {
+    return { ok: false, warnings: [], slots: [], spec: null,
+      refusal: `ARM refused [R-16]: scene '${benchSceneName}' does not carry all three of ` +
+        'controllers.yaml / patches.yaml / scene_config.yaml, so its bench slots cannot be ' +
+        'resolved.' };
+  }
+  const sourceScene = readSceneTrees(sourceSceneName);
+  if (sourceScene === null) {
+    return { ok: false, warnings: [], slots: [], spec: null,
+      refusal: `ARM refused [R-22b]: the engine's scene '${sourceSceneName}' does not carry all ` +
+        'three of controllers.yaml / patches.yaml / scene_config.yaml, so there is nothing ' +
+        'provable to mirror from it.' };
+  }
+  let registry;
+  try {
+    registry = loadFixtureRegistry(path.join(SIM_ROOT, 'dmx', 'fixtures'));
+  } catch (e) {
+    return { ok: false, warnings: [], slots: [], spec: null,
+      refusal: `ARM refused [R-16]: the fixture definition registry could not be read — ` +
+        `${e.message}` };
+  }
+  try {
+    return resolveBenchMirror({
+      spec, benchSceneName, benchScene, sourceSceneName, sourceScene, registry, selection,
+    });
+  } catch (e) {
+    // A throw out of a PURE resolver is a defect, not an operator error — but it
+    // must still be a refusal, never a half-armed bridge.
+    return { ok: false, warnings: [], slots: [], spec: null,
+      refusal: `ARM refused [R-19]: the mapping resolver threw — ${e.message}. Nothing was armed.` };
+  }
 }
 
 /**
@@ -391,6 +628,49 @@ function recomputeRoutes(reason) {
   // Ordering, not suppression — `_bootGate.open()` replays the held reason the
   // instant the socket is up, and the deferral is logged.
   if (!_bootGate.guard(reason)) return;
+
+  // ── Armed-state health, evaluated BEFORE anything else this pass ─────────
+  // A live arm that has become illegitimate (engine moved, sidecar broke, the
+  // engine claimed a mirrored pair) must not survive one more frame. The
+  // disarm is ASYNC because it must blackout the owned destinations before
+  // their senders close, so this pass bails out and the disarm's own recompute
+  // finishes the job. `_mirrorArm` is cleared synchronously inside
+  // disarmBenchMirror, so that recompute cannot re-enter this branch.
+  if (_mirrorArm && !blackoutInFlight()) {
+    const { found: healthSpecs, errors: healthErrors } = readBenchMirrorSpecs();
+    let degrade = evaluateArmedHealth({
+      scene: _mirrorArm.scene,
+      sourceScene: _mirrorArm.sourceScene,
+      specs: healthSpecs,
+      specErrors: healthErrors,
+      engineState,
+    });
+    if (!degrade) {
+      // RE-RESOLVE from disk and compare. The armed mapping is FROZEN at the
+      // arm; a scene or sidecar edit that changes what it would resolve to must
+      // NOT hot-reshape live hardware — that is a fallback behaviour in
+      // disguise. Auto-disarm loudly and let the operator re-arm to pick the
+      // change up (report 20260805_155 §9).
+      const sidecar = healthSpecs.find(s => s.scene === _mirrorArm.scene);
+      const again = sidecar
+        ? resolveMirrorFor(_mirrorArm.scene, sidecar.spec, _mirrorArm.sourceScene,
+          _mirrorArm.selection)
+        : null;
+      if (again && !again.ok) {
+        degrade = `the armed mapping no longer resolves against the scene — ${again.refusal}`;
+      } else if (again && mirrorFingerprint(again.spec) !== _mirrorArm.fingerprint) {
+        degrade = 'the armed mapping no longer matches the scene (a scene or sidecar edit ' +
+          'changed what it resolves to) — re-arm to pick up the change';
+      }
+    }
+    if (degrade) {
+      console.warn(`[sACN Bridge] ⚠ 🪞 BENCH MIRROR AUTO-DISARM — ${degrade}. ` +
+        'Blacking out the owned destinations and handing them back to the ordinary relay.');
+      broadcastLog(`⚠ 🪞 BENCH MIRROR auto-disarmed — ${degrade}`, 'warn');
+      disarmInBackground(degrade, 'auto');
+      return;
+    }
+  }
 
   const candidateScenes = new Set([pinnedScene]);
   if (engineState.scene) candidateScenes.add(engineState.scene);
@@ -427,32 +707,77 @@ function recomputeRoutes(reason) {
   // mirror adds SOURCE universes the receiver must accept, and OWNS its
   // destination (universe → host) pairs, whose ordinary relay must be
   // suppressed (one writer per pair — report 20260724_15).
-  const activeSceneSet = new Set(activeScenes);
+  // Activation precondition 3 is now the ARMED FLAG, not "is this spec's own
+  // scene in the active set" — the substitution that removes the second-tab
+  // requirement (report 20260804_151 §12.2). Preconditions 1 and 2 are verbatim.
+  //
+  // The active mirror is the COMPUTED spec frozen at ARM — not something
+  // re-derived here. The health check above has already proven, this same pass,
+  // that re-resolving from disk still yields exactly this mapping; anything else
+  // has auto-disarmed. So there is one mirror at most, and its bytes cannot
+  // change shape underneath a live composition.
   const nextMirrors = [];
   const nextMirrorStates = new Map();
-  for (const found of readBenchMirrorSpecs()) {
-    if (!isMirrorActive(found.spec, engineState.scene, activeSceneSet.has(found.scene))) continue;
-    // Reuse the composed buffers while the map is byte-identical, so a route
-    // recompute never blanks a bench frame mid-show.
-    const prev = _mirrorStates.get(found.scene);
-    const state = (prev && prev.sig === found.raw) ? prev.state : createMirrorState(found.spec);
-    nextMirrorStates.set(found.scene, { sig: found.raw, state });
-    nextMirrors.push({ scene: found.scene, spec: found.spec, state });
+  if (_mirrorArm !== null) {
+    const armedSpec = _mirrorArm.spec;
+    if (isMirrorActive(armedSpec, engineState.scene, true)) {
+      // Reuse the composed buffers while the map is SEMANTICALLY identical, so a
+      // route recompute never blanks a bench frame mid-show. Keyed on the parsed
+      // spec, not the raw bytes: a comment-only edit used to blank the next
+      // composed frame (_105 F14). With the seen-covers-required emission gate
+      // below, even a genuine state reset can no longer emit a partly-black
+      // frame (`_153` H5) — nothing goes out until every source has arrived.
+      const sig = mirrorFingerprint(armedSpec);
+      const prev = _mirrorStates.get(_mirrorArm.scene);
+      const state = (prev && prev.sig === sig) ? prev.state : createMirrorState(armedSpec);
+      nextMirrorStates.set(_mirrorArm.scene, { sig, state });
+      nextMirrors.push({ scene: _mirrorArm.scene, spec: armedSpec, state });
+    }
   }
   _activeMirrors = nextMirrors;
   _mirrorStates = nextMirrorStates;
+  // A mapping that reads NO source universe (every slot `none`) has no engine
+  // frame to ride, so its held-dark destinations are ticked by a timer instead.
+  setDarkTick(_activeMirrors.some(m => m.state.bySource.size === 0));
 
-  const mirrorOwned = new Set();
+  // ── _105 M2/F2: the ENGINE outranks the mirror ──────────────────────────
+  // `mirrorTargets` used to be built from mirrorDestPairs ALONE, so a pair the
+  // engine delivers itself got a mirror Sender anyway and the engine-owned
+  // suppression line one screen below became actively false. Subtract it here,
+  // name every subtraction, and — because a mirror that cannot own its
+  // destinations is not the mode the operator armed — auto-disarm.
+  //
+  // `hold` is an in-flight blackout (report 20260804_152 D1): while it is
+  // non-null the ordinary relay may not take anything back, no matter WHICH
+  // caller triggered this recompute. It is cleared when the zero frames have
+  // landed, and the disarm's own post-blackout recompute then creates the relay
+  // senders. Under the bench-only ruling this partition ALSO empties the relay
+  // set outright whenever a mirror is active: armed = the bench is the only
+  // physical output.
+  const {
+    relay: relayRoutes, suppressed: mirrorSuppressed, targets: allTargets,
+  } = partitionMirrorSuppression({ routes, mirrors: _activeMirrors, hold: _blackoutHold });
   const mirrorTargets = new Map();          // destKey → { universe, ip, scene }
-  for (const m of _activeMirrors) {
-    for (const pair of mirrorDestPairs(m.spec)) {
-      const key = routeKey(pair.universe, pair.ip);
-      mirrorOwned.add(key);
-      mirrorTargets.set(key, { universe: pair.universe, ip: pair.ip, scene: m.scene });
+  const mirrorEngineClash = [];
+  for (const [key, target] of allTargets) {
+    if (engineState.owned.has(key)) { mirrorEngineClash.push(target); continue; }
+    mirrorTargets.set(key, target);
+  }
+  if (mirrorEngineClash.length > 0) {
+    const named = mirrorEngineClash.map(t => `U${t.universe} → ${t.ip}`).join(', ');
+    console.warn(`[sACN Bridge] ⚠ 🪞 BENCH MIRROR destination(s) ${named} are ENGINE-OWNED — ` +
+      'no mirror sender is created for them; the engine is the single writer.');
+    broadcastLog(`⚠ 🪞 Bench mirror destination engine-owned: ${named}`, 'warn');
+    if (_mirrorArm && !blackoutInFlight()) {
+      const why = `the engine took ownership of ${named}`;
+      console.warn(`[sACN Bridge] ⚠ 🪞 BENCH MIRROR AUTO-DISARM — ${why}.`);
+      broadcastLog(`⚠ 🪞 BENCH MIRROR auto-disarmed — ${why}`, 'warn');
+      disarmInBackground(why, 'auto');
+      return;
     }
   }
-  const mirrorSuppressed = routes.filter(r => mirrorOwned.has(routeKey(r.universe, r.ip)));
-  const relayRoutes = routes.filter(r => !mirrorOwned.has(routeKey(r.universe, r.ip)));
+
+  _lastRelayRoutes = relayRoutes;
 
   // Annotate scene provenance for the logs: "test_bench[engine]".
   const provenance = (scene) => {
@@ -527,6 +852,14 @@ function recomputeRoutes(reason) {
   const nextKeys = new Set(relayRoutes.map(r => routeKey(r.universe, r.ip)));
   for (const [key, entry] of _routeEntries) {
     if (!nextKeys.has(key)) {
+      // NEVER while the ARM's ship-dark blackout is in flight: those 3 all-zero
+      // frames ARE the termination mechanism (the `sacn` package hardcodes
+      // options=0, so E1.31's stream_terminated bit is unreachable and
+      // `Sender.close()` is socket teardown only). Closing the socket out from
+      // under them would leave the ship holding its last look until an unknown
+      // device-side timeout — the exact frozen-ship outcome the zeros exist to
+      // prevent. The arm's own post-blackout recompute closes them.
+      if (_relayCloseHeld) continue;
       try { entry.sender.close(); } catch (e) {}
       _routeEntries.delete(key);
       console.log(`[sACN Bridge] Route removed: U${entry.universe} → ${entry.ip} (${reason})`);
@@ -542,6 +875,13 @@ function recomputeRoutes(reason) {
       // Destination port only — reuseAddr would bind this sender to *:5568
       // and steal datagrams from our own Receiver (task 010).
       port: SACN_UDP_PORT,
+      // RAW DMX ON THE WIRE (report 20260805_170, `_157` D1 / `_153` F1b).
+      // Without this the package treats `payload[ch]` as a 0..100 PERCENT and
+      // writes `inRange(value * 2.55)`, so every relayed byte ≥ 101 left as
+      // 255. `defaultPacketOptions` is spread first inside `Sender.send()` and
+      // `sendVia` never passes the flag, so it survives on every frame —
+      // including the blackout zeros.
+      defaultPacketOptions: { useRawDmxValues: true },
     });
     _routeEntries.set(key, {
       sender,
@@ -565,11 +905,22 @@ function recomputeRoutes(reason) {
   }
 
   // Mirror senders, diffed the same way and kept in their own map.
+  //
+  // NEVER while a blackout is in flight: `Sender.close()` in the `sacn` package
+  // is socket teardown only (no stream_terminated bit — the package hardcodes
+  // options=0), so the 3 all-zero frames ARE the termination mechanism, and
+  // closing the socket out from under them would leave the box holding its last
+  // composed look until an unknown device-side dmx.timeoutMs. The disarm runs
+  // its own recompute after the blackout resolves, and that pass closes them.
   for (const [key, entry] of _mirrorEntries) {
     if (mirrorTargets.has(key)) continue;
+    if (_mirrorDisarming) continue;
     try { entry.sender.close(); } catch (e) {}
     _mirrorEntries.delete(key);
-    _mirrorDirty.delete(key);
+    // Every per-gather map, not just `_mirrorDirty` (report 20260805_158
+    // D-158-8): the disarm path already clears all of them, and an asymmetry
+    // here is stale state waiting for a future caller to find.
+    forgetMirrorGather(key);
     console.log(`[sACN Bridge] Bench mirror sender removed: U${entry.universe} → ${entry.ip} (${reason})`);
   }
   for (const [key, target] of mirrorTargets) {
@@ -579,6 +930,14 @@ function recomputeRoutes(reason) {
         universe: target.universe,
         useUnicastDestination: target.ip,
         port: SACN_UDP_PORT,
+        // A DISTINCT, STABLE CID so the mirror is a different E1.31 SOURCE from
+        // the output bridge and the relay (`_153` F2), and RAW DMX values on
+        // the wire (report 20260805_170) — the composed buffer already holds
+        // 0-255 DMX bytes, so without the flag the package would rescale them
+        // by 2.55 and clip. `defaultPacketOptions` is spread first inside
+        // Sender.send(), and `sendVia` never passes either key, so both survive
+        // on every frame.
+        defaultPacketOptions: { cid: MIRROR_CID, useRawDmxValues: true },
       }),
       universe: target.universe,
       ip: target.ip,
@@ -600,18 +959,49 @@ function recomputeRoutes(reason) {
       broadcastLog('🪞 Bench mirror inactive', 'source');
     }
     for (const m of _activeMirrors) {
-      console.log(`[sACN Bridge] 🪞 BENCH MIRROR ACTIVE — scene '${m.scene}' is showing ` +
-        `'${m.spec.sourceScene}' fixtures. ${m.spec.note}`);
+      console.log(`[sACN Bridge] 🪞 BENCH MIRROR ACTIVE — ${m.spec.label.toUpperCase()}: scene ` +
+        `'${m.scene}' is showing '${m.spec.sourceScene}' fixtures. ${m.spec.note}`);
+      for (const slot of (_mirrorArm ? _mirrorArm.slots : [])) {
+        console.log(`[sACN Bridge] 🪞   ${slot.slot.padEnd(14)} ← ` +
+          `${(slot.source || 'none').padEnd(22)} (${slot.summary})`);
+      }
       for (const line of describeMirror(m.spec)) {
         console.log(`[sACN Bridge] 🪞   composes ${line}`);
       }
       broadcastLog(`🪞 Bench mirror ACTIVE — '${m.scene}' shows '${m.spec.sourceScene}'`, 'source');
     }
-    for (const s of mirrorSuppressed) {
-      console.log(`[sACN Bridge] 🚫 Relay suppressed: U${s.universe} → ${s.ip} — the BENCH MIRROR ` +
-        'composes this universe for that controller; relaying the raw frame too would put two ' +
-        `writers on it. (declared by scenes: ${s.scenes.join(', ')})`);
-      broadcastLog(`Relay suppressed U${s.universe} → ${s.ip}: bench mirror owns it`, 'warn');
+  }
+
+  // ── _105 F10: suppression logs on ITS OWN signature ─────────────────────
+  // This loop used to live inside the `mirrorSig` gate, so `mirrorSuppressed`
+  // — recomputed every pass — was printed only when the MIRROR SET changed. A
+  // relay route that changed hands under scene churn did so in silence. Same
+  // shape as `excludedSig` below: derived from exactly what it prints.
+  //
+  // Under the bench-only ruling this is now the WHOLE relay set, so it is
+  // summarised rather than printed one line per route — a 40-route ship would
+  // otherwise bury the arm transition it is explaining.
+  const suppressedSig = mirrorSuppressed
+    .map(s => `${s.why}:${routeKey(s.universe, s.ip)}`).sort().join(',');
+  if (suppressedSig !== _lastSuppressedSig) {
+    _lastSuppressedSig = suppressedSig;
+    if (mirrorSuppressed.length > 0) {
+      const why = mirrorSuppressed[0].why;
+      const named = mirrorSuppressed.map(s => `U${s.universe} → ${s.ip}`).join(', ');
+      const hosts = new Set(mirrorSuppressed.map(s => s.ip)).size;
+      if (why === 'armed') {
+        console.log(`[sACN Bridge] ⛔ ALL ordinary relay SUSPENDED (${mirrorSuppressed.length} ` +
+          `route(s) across ${hosts} controller(s), zeroed 3×) — the bench is the only physical ` +
+          `output while armed. Suspended: ${named}`);
+        broadcastLog(`⛔ ALL ship relay SUSPENDED (${mirrorSuppressed.length} routes) — ` +
+          'bench mirror armed', 'warn');
+      } else {
+        console.log(`[sACN Bridge] 🚫 Relay held (${mirrorSuppressed.length} route(s)) — a BENCH ` +
+          'MIRROR blackout is still in flight; the relay may not take anything back until the ' +
+          'last all-zero frame has gone, or two writers would share a (universe, controller). ' +
+          'Handed back the moment the blackout completes.');
+        broadcastLog('🚫 Relay held — bench mirror blackout in flight', 'warn');
+      }
     }
   }
 
@@ -744,6 +1134,16 @@ wss.on('connection', (ws) => {
   clientCount++;
   broadcastLog(`Browser connected (${clientCount} client(s))`, 'source');
   broadcastClientCensus();
+  // A reloaded tab must never show stale BENCH MIRROR state: push the status to
+  // EVERY new connection, exactly like the client census. Without this a page
+  // reload during an armed session shows no banner while the hardware is still
+  // re-addressed (report 20260804_150 §7).
+  try {
+    ws.send(JSON.stringify(benchMirrorStatus({ reason: 'status on connect' })));
+  } catch (err) {
+    console.warn(`[sACN Bridge] ⚠ Could not send the bench-mirror status to a new client: ` +
+      `${err.message} — that window will show no BENCH MIRROR banner until the next transition.`);
+  }
 
   ws.on('message', (msg) => {
     try {
@@ -780,6 +1180,41 @@ wss.on('connection', (ws) => {
           console.warn(`[sACN Bridge] ⚠ getRoutes reply failed: ${err.message} — the querying ` +
             'client will time out its route read-back.');
         }
+      } else if (data.type === 'benchMirrorOptions') {
+        // ADVISORY picker data (report 20260805_155 §7.1): every slot, its
+        // compatible candidates from the ENGINE's current scene, the sidecar
+        // default and the last-used choice. Computed FRESH on every request and
+        // trusted by nothing — the ARM re-resolves from disk in the same pass
+        // that arms, so a scene edit between "picker opened" and "ARM clicked"
+        // is caught there rather than assumed away here.
+        try {
+          ws.send(JSON.stringify(benchMirrorOptions(
+            typeof data.scene === 'string' ? data.scene : null,
+            data.reqId === undefined ? null : data.reqId)));
+        } catch (err) {
+          console.warn(`[sACN Bridge] ⚠ benchMirrorOptions reply failed: ${err.message} — the ` +
+            'picker will time out.');
+        }
+      } else if (data.type === 'benchMirrorArm' || data.type === 'benchMirrorDisarm') {
+        // The BENCH MIRROR runtime mode (reports 20260804_151, 20260805_155).
+        // REPLY, never throw: a refusal thrown here would vanish into the outer
+        // catch and the operator would see a button that did nothing.
+        const run = data.type === 'benchMirrorArm'
+          ? armBenchMirror(typeof data.scene === 'string' ? data.scene : null,
+            (data.selection === undefined || data.selection === null) ? null : data.selection, ws)
+          : disarmOnOperatorRequest();
+        run.then((status) => {
+          if (ws.readyState !== 1) return;
+          ws.send(JSON.stringify({ ...status, reqId: data.reqId === undefined ? null : data.reqId }));
+        }).catch((err) => {
+          console.error(`[sACN Bridge] ❌ 🪞 ${data.type} failed: ${err.message}`);
+          broadcastLog(`❌ 🪞 ${data.type} failed: ${err.message}`, 'warn');
+          if (ws.readyState !== 1) return;
+          ws.send(JSON.stringify(benchMirrorStatus({
+            reqId: data.reqId === undefined ? null : data.reqId,
+            refusal: `${data.type} failed: ${err.message}`,
+          })));
+        });
       }
     } catch(e) {}
   });
@@ -790,6 +1225,20 @@ wss.on('connection', (ws) => {
     clientScenes.delete(ws);
     broadcastLog(`Browser disconnected (${clientCount} client(s))`, 'warn');
     broadcastClientCensus();
+    // The arm is SOCKET-SCOPED (operator ruling 2026-08-04): the window that
+    // armed it going away — closed, reloaded, crashed — releases the hardware
+    // cleanly.
+    //
+    // The scene-removal recompute below STILL RUNS in that case, and that is
+    // safe only because of the blackout hold (`_blackoutHold`, report
+    // 20260804_152 D1): `disarmBenchMirror` raises it synchronously before its
+    // first `await`, so this pass suppresses every destination the blackout has
+    // not finished releasing instead of re-creating an ordinary relay sender on
+    // top of the zero frames. `clientScenes.delete(ws)` above has already run, so
+    // both this pass and the disarm's own post-blackout pass see the departure.
+    if (_mirrorArm && _mirrorArm.ws === ws) {
+      disarmInBackground('the sim window that armed it disconnected', 'disconnect');
+    }
     if (scene) recomputeRoutes(`client of scene '${scene}' disconnected`);
   });
   ws.on('error', (err) => console.error('[sACN Bridge] WS error:', err.message));
@@ -899,7 +1348,9 @@ receiver.on('packet', (packet) => {
       highPriorityActive = false;
       activeSource = null;
     }, LOCKOUT_MS);
-    routeFrame(universe, priority, packet.payload);
+    // RAW DMX bytes, never `packet.payload` (that getter is a PERCENT view) —
+    // see rawDmxPayload's header, report 20260805_170.
+    routeFrame(universe, priority, rawDmxPayload(packet), packet.sequence);
   } else {
     if (!highPriorityActive) {
       if (activeSource !== sourceKey) {
@@ -907,7 +1358,9 @@ receiver.on('packet', (packet) => {
         broadcastLog(msg, 'source');
         activeSource = sourceKey;
       }
-      routeFrame(universe, priority, packet.payload);
+      // RAW DMX bytes, never `packet.payload` (that getter is a PERCENT view) —
+    // see rawDmxPayload's header, report 20260805_170.
+    routeFrame(universe, priority, rawDmxPayload(packet), packet.sequence);
     }
   }
 
@@ -942,9 +1395,15 @@ function broadcastLog(msg, type) {
  * single heartbeat per RELAY_ERROR_LOG_INTERVAL_MS until the target recovers.
  * Without it an offline controller produces one `EHOSTDOWN` line per inbound
  * frame (≈30+/s).
+ *
+ * RETURNS the settled promise (it never rejects — the catch below is terminal)
+ * so the bench-mirror disarm can AWAIT its blackout frames before the senders
+ * are closed. On the relay's hot path the return value is ignored.
+ *
+ * @returns {Promise<void>}
  */
 function sendVia(entry, payload, priority, label) {
-  entry.sender.send({ payload, sourceName: 'MarsinRelay Engine', priority })
+  return entry.sender.send({ payload, sourceName: 'MarsinRelay Engine', priority })
     .then(() => {
       if (entry.lastErrorMsg) {
         const burst = entry.errorsSinceLog;
@@ -975,24 +1434,586 @@ function sendVia(entry, payload, priority, label) {
       }
     });
 }
+// ── BENCH MIRROR: arm, disarm, status, gate (reports 20260804_151, 20260805_155)
+//
+// The mode is a TEMPORARY, session-scoped stand-in: the engine stays on the ship
+// scene it is running, the visible sim stays where it is, and while armed the
+// BENCH IS THE ONLY PHYSICAL OUTPUT — the ordinary relay is suspended and the
+// browser can transmit to hardware at all. Nothing here writes to disk.
+
+/** A stable fingerprint of a COMPUTED mapping, for reuse + drift detection. */
+function mirrorFingerprint(spec) {
+  return JSON.stringify(spec.mirrors);
+}
+
+// ── ONE-WRITER IS NOW STRUCTURAL, NOT GATED (report 20260805_171) ──────────
+//
+// There used to be a control link to the sim's output bridge on :6972, and the
+// ARM refused (R-23) unless that process acknowledged a gate command. Its only
+// purpose was to silence the BROWSER's own priority-150 stream for the duration
+// of an arm — the second writer that defeated the mirror's first physical test.
+//
+// That stream no longer exists. Operator ruling 2026-08-05: the browser is not
+// the router. `src/dmx/sacn_output_client.js` is deleted, `animate.js` has no
+// transmit path, and `server/sacn_output_bridge.js` holds no sACN sender at all
+// — it can only refuse. So there is nothing left to gate, and the arm no longer
+// has to prove a stream is being held shut: it is proving the absence of a
+// capability, which is the stronger statement and needs no runtime handshake.
+//
+// What that absence is verified BY is source-level structure, in
+// `tests/browser_transmit_absence.test.js` — the guarantee is that no code path
+// exists, so the thing to check is the code, not a live ack.
+
+/** Broadcast the current arm status to every connected client. */
+function broadcastBenchMirrorStatus(extra) {
+  const status = benchMirrorStatus(extra);
+  if (wss.clients.size === 0) return status;
+  const json = JSON.stringify(status);
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1) client.send(json);
+  });
+  return status;
+}
 
 /**
- * Feed one inbound frame to every active bench mirror and coalesce the sends.
- *
- * A composed destination is fed by SEVERAL source universes that arrive as
- * separate datagrams. Sending on each splice would emit the destination once per
- * source (3× per engine frame for the bench's U2) and put partially-updated
- * frames on the wire. `setImmediate` runs after the poll phase that delivered
- * this burst of datagrams, so one engine frame becomes one composed send.
+ * The wire shape both the reply and the broadcast use. `reqId` is added by the
+ * reply path only. Built FRESH from live state on every call — there is no
+ * cached status object, so a broadcast can never describe a bridge that has
+ * since moved on. Real IPs are included ON PURPOSE: this is runtime state on
+ * the operator's own screen, not a tracked document, and "armed" without naming
+ * the boxes that changed hands is not actionable.
  */
-function mirrorInbound(universe, priority, payload) {
+function benchMirrorStatus(extra) {
+  const { found, errors } = readBenchMirrorSpecs();
+  const available = found
+    .filter(f => f.spec.enabled === true)
+    .map(f => ({ scene: f.scene, label: f.spec.label, slots: f.spec.slots.length }));
+  const base = {
+    type: 'benchMirrorStatus',
+    armed: _mirrorArm !== null,
+    // Drives every DISARMING… UI state. Broadcast at blackout START as well as
+    // at completion, in BOTH directions (arm's ship-dark and disarm's release),
+    // so no window offers a button the bridge would refuse.
+    blackoutInFlight: blackoutInFlight(),
+    scene: _mirrorArm ? _mirrorArm.scene : null,
+    sourceScene: _mirrorArm ? _mirrorArm.sourceScene : null,
+    label: _mirrorArm ? _mirrorArm.label : null,
+    destinations: _mirrorArm ? _mirrorArm.destinations : [],
+    selection: _mirrorArm ? _mirrorArm.slots.map(s => ({
+      slot: s.slot, benchFixture: s.benchFixture, source: s.source, summary: s.summary,
+    })) : [],
+    suspendedRoutes: _mirrorArm ? _mirrorArm.suspendedRoutes : 0,
+    warnings: [],
+    refusal: null,
+    reason: null,
+    available,
+    specErrors: errors.map(e => ({ scene: e.scene, message: e.message })),
+    clientCount,
+  };
+  return { ...base, ...(extra || {}) };
+}
+
+/**
+ * ADVISORY picker data for one scene: every slot, its compatible candidates from
+ * the ENGINE's current scene, the sidecar default and the last-used choice.
+ *
+ * Trusted by NOTHING. The ARM re-resolves everything from disk in the same pass
+ * that arms, so a scene edit between "picker opened" and "ARM clicked" is caught
+ * there by name rather than assumed away here.
+ */
+function benchMirrorOptions(scene, reqId) {
+  const base = {
+    type: 'benchMirrorOptions', reqId, scene, ok: false, refusal: null,
+    label: null, sourceScene: engineState.scene, slots: [],
+  };
+  if (typeof scene !== 'string' || scene.trim() === '') {
+    return { ...base, refusal: 'no scene named — the bridge never picks one for you' };
+  }
+  const { found, errors } = readBenchMirrorSpecs();
+  const broken = errors.find(e => e.scene === scene);
+  if (broken) {
+    return { ...base, refusal: `${scene}/bench_mirror.yaml does not parse — ${broken.message}` };
+  }
+  const sidecar = found.find(f => f.scene === scene);
+  if (!sidecar) return { ...base, refusal: `scene '${scene}' declares no bench_mirror.yaml` };
+  base.label = sidecar.spec.label;
+  if (engineState.reachable !== true || typeof engineState.scene !== 'string'
+      || engineState.scene === '') {
+    return { ...base, refusal: 'the engine is unreachable or reports no active scene, so there ' +
+      'is no source scene to choose fixtures from' };
+  }
+  const resolution = resolveMirrorFor(scene, sidecar.spec, engineState.scene, null);
+  // A refused DEFAULTS resolution is not a refusal for the picker: choosing
+  // explicitly is exactly the way in. Re-resolve with an all-`none` selection so
+  // the candidate lists are still computed.
+  const withNone = resolution.ok ? resolution : resolveMirrorFor(scene, sidecar.spec,
+    engineState.scene, Object.fromEntries(sidecar.spec.slots.map(s => [s.slot, null])));
+  if (!withNone.ok) return { ...base, refusal: withNone.refusal };
+
+  const remembered = _lastSelection.get(`${scene}|${engineState.scene}`) || null;
+  return {
+    ...base,
+    ok: true,
+    slots: withNone.slots.map(s => ({
+      slot: s.slot,
+      benchFixture: s.benchFixture,
+      kind: s.kind,
+      fixtureType: s.fixtureType,
+      footprintCh: s.footprintCh,
+      pixelCount: s.pixelCount,
+      dest: s.dest,
+      // A default that does not resolve in THIS source scene is reported as
+      // null rather than silently swapped — the picker shows nothing
+      // pre-selected and the operator chooses.
+      defaultSource: s.candidates.some(c => c.name === s.defaultSource) ? s.defaultSource : null,
+      lastUsed: (remembered && s.slot in remembered) ? remembered[s.slot] : null,
+      candidates: s.candidates,
+    })),
+  };
+}
+
+/**
+ * Blackout + release. THE ORDER IS THE FEATURE.
+ *
+ * 1. clear the flag and the active mirrors SYNCHRONOUSLY, and RAISE THE BLACKOUT
+ *    HOLD, so nothing composes another frame while this runs and no recompute
+ *    that lands mid-blackout — from any caller — can hand a still-blacking-out
+ *    destination back to the ordinary relay (report 20260804_152 D1);
+ * 2. send BLACKOUT_FRAMES all-zero 512-channel frames to every owned bench
+ *    destination and AWAIT them. This is mandatory: the `sacn` package cannot
+ *    set E1.31's stream_terminated bit and `Sender.close()` only closes the
+ *    socket, so without it the LED box's outputs hold their last composed look
+ *    until an unknown device-side `dmx.timeoutMs` (0 = forever);
+ * 3. drop the hold, THEN recompute — which closes the mirror senders and
+ *    restores the ENTIRE relay set in the same pass, so the ship starts being
+ *    fed live frames again immediately (no zeros needed on that side);
+ * 4. UNGATE :6972, so the sim's own output path resumes.
+ *
+ * @param {string} reason human sentence, printed and broadcast
+ * @param {'operator'|'auto'|'disconnect'|'shutdown'} how
+ * @returns {Promise<Object>} the post-disarm status
+ */
+async function disarmBenchMirror(reason, how) {
+  // A disarm that lands while the ARM's ship-dark blackout is still going out
+  // must not race it. Internal callers WAIT (an auto-disarm that refused would
+  // leave the bridge armed with nobody to press the button); the operator's own
+  // DISARM is refused instead, symmetric with `_152` D2's ARM refusal.
+  if (_armBlackoutInFlight) {
+    await Promise.resolve(_blackoutSettled).catch(() => {});
+  }
+  if (_mirrorArm === null) {
+    return broadcastBenchMirrorStatus({ reason: `already disarmed (${reason})` });
+  }
+  const was = _mirrorArm;
+  const entries = [..._mirrorEntries.values()];
+  _mirrorArm = null;
+  _mirrorDisarming = true;
+  // Raised BEFORE the first await, in the same synchronous turn that clears the
+  // arm — otherwise a recompute in between sees neither the arm nor the hold.
+  _blackoutHold = { scene: was.scene };
+  _activeMirrors = [];
+  _mirrorDirty.clear();
+  _mirrorRegionSeq.clear();
+  _mirrorEmitSeq.clear();
+  _mirrorIncompleteSince.clear();
+  _mirrorStallWarned.clear();
+  _mirrorMisaligned.clear();
+  setDarkTick(false);
+
+  // The `try` opens HERE — immediately after the hold is raised — not just
+  // around the await (report 20260804_152 RESIDUAL-1). The two log calls below
+  // can throw: `broadcastLog` walks `wss.clients` and `ws.send()` throws on a
+  // socket in transition, which is exactly the state of the socket-close disarm
+  // path. A throw between the raise and the `finally` would leak `_blackoutHold`
+  // FOREVER — the ordinary relay would stay suppressed until the process
+  // restarted, leaving every controller unfed. Everything after the raise is
+  // inside the guard.
+  try {
+    const named = entries.map(e => `U${e.universe} → ${e.ip}`).join(', ') || 'none';
+    console.log(`[sACN Bridge] 🪞 BENCH MIRROR DISARMING (${how}) — ${reason}. Sending ` +
+      `${BLACKOUT_FRAMES}× all-zero frames to ${named} before releasing the senders.`);
+    broadcastLog(`🪞 BENCH MIRROR disarming — ${reason}`, 'warn');
+    broadcastBenchMirrorStatus({ reason: `disarming: ${reason}` });
+
+    // An async IIFE never throws synchronously — a throw inside it becomes a
+    // rejection of `_blackoutSettled`, which the await below turns into a throw
+    // this same `finally` covers.
+    _blackoutSettled = (async () => {
+      for (let i = 0; i < BLACKOUT_FRAMES; i += 1) {
+        await Promise.all(entries.map((entry) => sendVia(
+          entry, zeroDmxPayload(), MIRROR_PRIORITY, 'Bench mirror blackout')));
+      }
+    })();
+    await _blackoutSettled;
+  } finally {
+    _mirrorDisarming = false;
+    _blackoutHold = null;
+    _blackoutSettled = null;
+    _relaySuspended = false;
+  }
+
+  recomputeRoutes(`bench mirror disarmed (${how}): ${reason}`);
+
+  console.log(`[sACN Bridge] 🪞 BENCH MIRROR DISARMED — ${was.scene} → ${was.sourceScene} ` +
+    'released. The FULL ordinary relay is back: every ship controller is being fed live frames ' +
+    'again, and the bench gateway is fed RAW ' + `${was.sourceScene} bytes (lit, wrong fixtures — ` +
+    'that is the ordinary single-scene shape, not a mirror bug). Senders recreated on a disarm ' +
+    'restart their E1.31 sequence at 0, so a brief settle at the boxes is expected; a sustained ' +
+    'one is not.');
+  broadcastLog('🪞 BENCH MIRROR DISARMED — full ordinary relay restored', 'source');
+  return broadcastBenchMirrorStatus({ reason });
+}
+
+/**
+ * The operator's own DISARM. Refused while the ARM's ship-dark blackout is still
+ * in flight — symmetric with `_152` D2's ARM refusal, and the reason the UI
+ * disables the button on `blackoutInFlight`.
+ */
+function disarmOnOperatorRequest() {
+  if (_armBlackoutInFlight) {
+    const refusal = 'DISARM refused: the ARM\'s ship-dark blackout is still in flight — its ' +
+      'all-zero frames have not finished going out. Wait for the ARMED line and disarm again.';
+    console.warn(`[sACN Bridge] ⚠ 🪞 ${refusal}`);
+    broadcastLog(`⚠ 🪞 ${refusal}`, 'warn');
+    return Promise.resolve(benchMirrorStatus({ refusal }));
+  }
+  return disarmBenchMirror('the operator pressed DISARM', 'operator');
+}
+
+/**
+ * Fire-and-forget a disarm from a synchronous caller.
+ *
+ * `disarmBenchMirror` CAN reject — `broadcastLog` walks the client set and
+ * `ws.send()` throws on a socket in transition (report 20260804_152
+ * RESIDUAL-1). A bare `void` on the promise would make that an UNHANDLED
+ * rejection, which modern Node turns into a process exit: the bridge would die
+ * on the very path that is trying to release the hardware cleanly. The blackout
+ * hold is already released by the disarm's own `finally`, and the caller's own
+ * recompute restores the relay — so the correct behaviour here is to SHOUT,
+ * never to swallow.
+ */
+function disarmInBackground(reason, how) {
+  disarmBenchMirror(reason, how).catch((err) => {
+    console.error(`[sACN Bridge] ❌ 🪞 BENCH MIRROR disarm (${how}) FAILED: ${err.message}. ` +
+      'The blackout hold has been released and the ordinary relay resumes, so nothing is left ' +
+      'unfed — but the all-zero frames may not all have gone out. If a mirrored destination is ' +
+      'holding a frozen look, re-arm and disarm again.');
+  });
+}
+
+/**
+ * Arm for `scene`, or refuse with a named reason. Never throws — a refusal that
+ * escaped into the WS handler's outer catch would leave the operator with a
+ * button that did nothing and no trace of why.
+ *
+ * ORDER (report 20260805_155 §15.A2): state checks → resolution → GATE :6972 and
+ * await its ack → suspend + zero the ship → recompute → ownership proof.
+ *
+ * @param {string} scene
+ * @param {Object|null} selection { slotId: sourceName|null }, or null = defaults
+ * @param {Object} ws the socket making the request — the arm is scoped to it
+ * @returns {Promise<Object>} status (with `refusal` set when refused)
+ */
+async function armBenchMirror(scene, selection, ws) {
+  const { found, errors } = readBenchMirrorSpecs();
+
+  // Destination pairs OTHER enabled sidecars resolve onto, so R-11 compares
+  // computed claims rather than declared text. Best effort: a sidecar that does
+  // not resolve cannot be armed either, so it cannot become a second writer.
+  const otherClaims = [];
+  if (engineState.reachable === true && typeof engineState.scene === 'string') {
+    for (const other of found) {
+      if (other.scene === scene || other.spec.enabled !== true) continue;
+      const r = resolveMirrorFor(other.scene, other.spec, engineState.scene, null);
+      if (r.ok) otherClaims.push({ scene: other.scene, pairs: mirrorDestPairs(r.spec) });
+    }
+  }
+
+  const verdict = evaluateArmRequest({
+    scene,
+    specs: found,
+    specErrors: errors,
+    engineState,
+    activeArm: _mirrorArm,
+    // _152 D2: a blackout in flight has already nulled `_mirrorArm`, so the
+    // "already armed — disarm first" branch cannot see it. This is what keeps a
+    // re-arm going THROUGH the blackout rather than around it. Covers BOTH
+    // directions now — the arm's ship-dark blackout as well as a disarm's.
+    blackoutInFlight: blackoutInFlight(),
+    otherClaims,
+    relayRoutes: _lastRelayRoutes,
+    clientCount,
+  });
+  const refuseArm = (refusal, warnings) => {
+    console.warn(`[sACN Bridge] ⚠ 🪞 ${refusal}`);
+    broadcastLog(`⚠ 🪞 ${refusal}`, 'warn');
+    return benchMirrorStatus({ refusal, warnings: warnings || [] });
+  };
+  if (!verdict.ok) return refuseArm(verdict.refusal, verdict.warnings);
+
+  // ── Resolution: R-12 … R-19, R-22b/c ──────────────────────────────────────
+  const sidecar = found.find(f => f.scene === scene);
+  const resolution = resolveMirrorFor(scene, sidecar.spec, verdict.sourceScene, selection);
+  if (!resolution.ok) return refuseArm(resolution.refusal, verdict.warnings);
+  const computed = resolution.spec;
+  const destinations = mirrorDestPairs(computed);
+  const warnings = [...verdict.warnings, ...resolution.warnings];
+
+  // ── R-11: a REAL intersection, now that our own pairs exist ───────────────
+  const overlap = evaluateClaimOverlap({ scene, destinations, otherClaims });
+  if (overlap) return refuseArm(overlap, warnings);
+
+  // ── Ship goes DARK, deterministically, before the mirror takes over ───────
+  // `_relaySuspended` stops raw relaying in the SAME synchronous turn the arm is
+  // recorded, so no raw frame can interleave with the zeros. `_relayCloseHeld`
+  // keeps the retiring senders open until the zeros have landed.
+  const retiring = [..._routeEntries.values()];
+  _relaySuspended = true;
+  _relayCloseHeld = true;
+  _armBlackoutInFlight = true;
+  _mirrorArm = {
+    scene,
+    sourceScene: verdict.sourceScene,
+    label: verdict.label,
+    selection: selection === null ? null : { ...selection },
+    spec: computed,
+    fingerprint: mirrorFingerprint(computed),
+    slots: resolution.slots,
+    destinations,
+    suspendedRoutes: retiring.length,
+    armedAt: new Date().toISOString(),
+    ws,
+  };
+
+  try {
+    console.log(`[sACN Bridge] 🪞 BENCH MIRROR ARMED — ${verdict.label.toUpperCase()} ` +
+      `('${verdict.sourceScene}' → '${scene}'). Owned destinations: ` +
+      `${destinations.map(d => `U${d.universe} → ${d.ip}`).join(', ')}.`);
+    for (const slot of resolution.slots) {
+      console.log(`[sACN Bridge] 🪞   ${slot.slot.padEnd(14)} ← ` +
+        `${(slot.source || 'none').padEnd(22)} (${slot.summary})`);
+    }
+    for (const w of warnings) console.warn(`[sACN Bridge] ⚠ 🪞   ${w}`);
+    broadcastLog(`🪞 BENCH MIRROR ARMED — ${verdict.label}`, 'warn');
+    broadcastBenchMirrorStatus({ reason: `arming: zeroing ${retiring.length} ship route(s)` });
+
+    console.log(`[sACN Bridge] ⛔ SHIP GOING DARK — ${BLACKOUT_FRAMES}× all-zero frames to ` +
+      `${retiring.length} suspended relay route(s) before their senders close. Dark, not frozen: ` +
+      'a gateway has no timeout and the LED boxes may hold their last look forever, which reads ' +
+      'as alive to a passerby and as a bug to you.');
+    _blackoutSettled = (async () => {
+      for (let i = 0; i < BLACKOUT_FRAMES; i += 1) {
+        await Promise.all(retiring.map((entry) => sendVia(
+          entry, zeroDmxPayload(), BLACKOUT_DEFAULT_PRIORITY, 'Ship blackout')));
+      }
+    })();
+    await _blackoutSettled;
+  } finally {
+    _armBlackoutInFlight = false;
+    _relayCloseHeld = false;
+    _blackoutSettled = null;
+  }
+
+  recomputeRoutes(`bench mirror armed for '${scene}'`);
+
+  // ── PROOF, not intent (report 20260804_150 §12.4) ───────────────────────
+  // Re-read the LIVE sender maps through the same snapshot the LED push's
+  // read-back uses: every owned pair must be a mirror sender and must appear in
+  // neither the relay table nor the engine-owned set, and NO ordinary relay
+  // sender may survive at all (bench-only). If it cannot be PROVEN, disarm.
+  //
+  // "The bench is the only physical output" used to have two halves — the
+  // bridge's own relay set, and the sim's :6972 path — and D-158-1 was a gate
+  // lost inside the ship-dark blackout producing an arm that reported success
+  // while the ship was reachable again at priority 150. The second half is now
+  // STRUCTURAL: no browser can transmit, so there is no gate to lose and no
+  // window in which to lose it. What remains to prove here is the relay set,
+  // which is what this snapshot has always measured.
+  const snapshot = buildRouteTableSnapshot({
+    reqId: null,
+    routeEntries: _routeEntries,
+    mirrorEntries: _mirrorEntries,
+    excluded: _lastExcluded,
+    activeScenes: _lastActiveScenes,
+  });
+  const mirrorSet = new Set(snapshot.mirrorOwned.map(p => routeKey(p.universe, p.ip)));
+  const relaySet = new Set(snapshot.routes.map(p => routeKey(p.universe, p.ip)));
+  const engineSet = new Set(snapshot.engineOwned.map(p => routeKey(p.universe, p.ip)));
+  const unproven = [];
+  for (const d of destinations) {
+    const key = routeKey(d.universe, d.ip);
+    if (!mirrorSet.has(key)) unproven.push(`${key} has no mirror sender`);
+    if (relaySet.has(key)) unproven.push(`${key} is ALSO an ordinary relay route`);
+    if (engineSet.has(key)) unproven.push(`${key} is ALSO engine-owned`);
+  }
+  if (relaySet.size > 0) {
+    unproven.push(`${relaySet.size} ordinary relay route(s) survived the arm ` +
+      `(${[...relaySet].slice(0, 6).join(', ')}${relaySet.size > 6 ? ', …' : ''}) — while armed ` +
+      'the bench must be the ONLY physical output');
+  }
+  if (unproven.length > 0) {
+    const why = `ownership could not be proven after the recompute: ${unproven.join('; ')}`;
+    console.error(`[sACN Bridge] ❌ 🪞 BENCH MIRROR ARM FAILED — ${why}.`);
+    broadcastLog(`❌ 🪞 BENCH MIRROR arm failed — ${why}`, 'warn');
+    const after = await disarmBenchMirror(why, 'auto');
+    return { ...after, refusal: `ARM refused: ${why}`, warnings };
+  }
+
+  // Remember the selection for the next picker open — PROCESS MEMORY ONLY.
+  _lastSelection.set(`${scene}|${verdict.sourceScene}`,
+    Object.fromEntries(resolution.slots.map(s => [s.slot, s.source])));
+
+  return broadcastBenchMirrorStatus({
+    warnings,
+    reason: `armed by an operator gesture at ${_mirrorArm.armedAt}`,
+  });
+}
+
+// ── Composition cadence: ONE composed frame per destination per ENGINE FRAME ─
+//
+// THE DEFECT THIS CLOSES (report 20260805_153 §10). The old flush coalesced over
+// one libuv POLL PHASE, not one engine frame. The engine's five source datagrams
+// do not reliably land in a single poll phase, so a destination composed from
+// three of them emitted 1 to 3 times per engine frame, and 50-67 % of those
+// frames carried a region belonging to the PREVIOUS frame — sub-frame TEARING.
+// Worse, the varying emission rate made the sequence offset against any other
+// writer on the same universe drift through all 256 values every few seconds, so
+// an E1.31 receiver's out-of-order discard turned it into multi-second beats of
+// sane-then-garbage. Single-source destinations were structurally immune, which
+// is exactly why the DMX gateway flickered and the LED strands did not.
+//
+// THE RULE: a destination is emitted only when EVERY source universe its slices
+// read has contributed since the last emission, AND every one of those
+// contributions belongs to the SAME gather. No timeout-emit fallback (codex P0):
+// a stalled source stops that destination's emission and is REPORTED by name,
+// rather than being papered over with a half-fresh frame.
+//
+// FRAME IDENTITY, not merely presence (report 20260805_158 D-158-3). The
+// presence-only gate answered "have all my sources arrived?" but never "did they
+// all arrive for the SAME engine frame?". Lose one source datagram while the
+// engine's datagrams are split across poll phases — the exact arrival pattern
+// this rule exists for — and the gather boundary shifts by one source
+// permanently: the destination completes every frame, emits 1.00 times per
+// frame, passes every count-based assertion, and carries one region that is one
+// engine frame stale FOREVER, with zero log output. That symptom is a STEADY
+// WRONG REGION, not flicker, so the smoke procedure's "flicker => second writer"
+// rule would not catch it either.
+//
+// The fix needs a real frame identity, and E1.31 already carries one: the
+// per-universe SEQUENCE NUMBER. The engine's senders are created together and
+// each advances once per universe per frame, so within one engine frame every
+// universe carries the SAME sequence — and a lost datagram does not shift that,
+// it simply leaves one region holding an older sequence until the next frame
+// arrives.
+//
+// THE RULE, therefore, in one line: a destination is emitted when every source
+// it reads has contributed AND all their contributions carry the SAME sequence.
+//
+// That is exact, needs no baseline and no calibration, and self-heals: in the
+// lost-datagram case the region that missed a frame simply keeps its older
+// sequence, the destination is not emitted for that frame, and the very next
+// frame realigns every region. Compare the old presence-only gate, which
+// completed the gather on the FIRST arrival of the next frame and emitted it
+// with two regions still one frame behind — 1.00 sends/frame, every count-based
+// assertion green, one region permanently stale, and zero log output.
+//
+// NOTHING IS EMITTED WHILE MISALIGNED, and misalignment is REPORTED by the same
+// watchdog that reports a missing source (codex P0: no fallback emission of
+// guessed data). The symptom this protects against is a STEADY WRONG REGION,
+// not flicker, so it would not be caught by the smoke procedure's
+// "flicker => second writer" rule — which is exactly why it has to be
+// impossible to miss in the log instead.
+// destKey → Map<source universe, the sACN sequence of the datagram whose bytes
+// currently occupy that region of the composed buffer>. Never cleared while the
+// destination lives: it describes the BUFFER, and the buffer is not cleared
+// either.
+const _mirrorRegionSeq = new Map();
+const _mirrorEmitSeq = new Map();          // destKey → the aligned sequence last emitted
+const _mirrorIncompleteSince = new Map();  // destKey → ms timestamp of first incompleteness
+const _mirrorStallWarned = new Map();      // destKey → the last-warned signature
+const _mirrorMisaligned = new Map();       // destKey → { count, lastLoggedAt, sig, runLength }
+const MIRROR_STALL_WARN_MS = 250;
+const MIRROR_MISALIGN_LOG_INTERVAL_MS = 2000;
+/**
+ * How many flushes a destination may go without emitting before its lag is
+ * judged PERMANENT rather than transient.
+ *
+ * The two states look identical for one frame and completely different after
+ * several: a lost datagram is a one-frame skew, and the destination realigns and
+ * EMITS within a frame or two — which clears this window. A sender that started
+ * its sequence later is a CONSTANT skew that never erases, so the destination
+ * never emits and the window keeps growing. They have opposite remedies —
+ * "check the network" versus "restart the engine" — so telling the operator the
+ * wrong one costs a bench session.
+ *
+ * The discriminator is the MINIMUM lag each source reaches while the window is
+ * open. Offsets swing within a single frame as its datagrams arrive one by one,
+ * so consecutive readings are never identical; but a source that is merely a
+ * frame behind touches 0 at some point in the cycle, and a permanently offset
+ * one never does.
+ */
+const MIRROR_FIXED_OFFSET_FLUSHES = 6;
+
+/**
+ * A held-dark mapping (EVERY slot `none`) reads no source universe at all, so
+ * there is no inbound frame to ride and nothing would ever tick. The operator
+ * ruling is that an unselected destination is ACTIVELY held dark — composed as
+ * zeros — not merely unwritten, and "unwritten" on a DMX gateway or a MarsinLED
+ * box means the last look is held indefinitely.
+ *
+ * So in that one degenerate shape the flush is driven by a timer instead, at the
+ * engine's frame rate. This is NOT a timeout-emit fallback: nothing is guessed
+ * and no source is waited on — the frame is all-zero by construction, which is
+ * the whole content of the operator's instruction.
+ */
+const DARK_TICK_MS = 25;                   // 40 fps, the engine's frame rate
+let _darkTickTimer = null;
+/** E1.31 sequence numbers are a single byte and wrap. */
+const SACN_SEQUENCE_MODULUS = 256;
+
+/**
+ * Start/stop the held-dark ticker. Started only for a mapping with NO source
+ * universes anywhere; every other shape rides the engine's own frames.
+ */
+function setDarkTick(active) {
+  if (active && _darkTickTimer === null) {
+    _darkTickTimer = setInterval(() => {
+      if (_activeMirrors.length === 0) return;
+      for (const m of _activeMirrors) {
+        for (const t of m.state.targets) _mirrorDirty.add(t.key);
+      }
+      if (_mirrorDirty.size === 0 || _mirrorFlushScheduled) return;
+      _mirrorFlushScheduled = true;
+      setImmediate(flushMirrors);
+    }, DARK_TICK_MS);
+    if (_darkTickTimer.unref) _darkTickTimer.unref();
+    return;
+  }
+  if (!active && _darkTickTimer !== null) {
+    clearInterval(_darkTickTimer);
+    _darkTickTimer = null;
+  }
+}
+
+/** Forget every per-gather bookkeeping entry for one destination. */
+function forgetMirrorGather(key) {
+  _mirrorDirty.delete(key);
+  _mirrorRegionSeq.delete(key);
+  _mirrorEmitSeq.delete(key);
+  _mirrorIncompleteSince.delete(key);
+  _mirrorStallWarned.delete(key);
+  _mirrorMisaligned.delete(key);
+}
+
+function mirrorInbound(universe, payload, sequence) {
   if (_activeMirrors.length === 0) return;
   for (const m of _activeMirrors) {
     for (const key of spliceMirrorFrame(m.state, universe, payload)) {
       _mirrorDirty.add(key);
-      // The composed frame goes out at the priority of the source that last fed
-      // it — never a number this file invents.
-      _mirrorPriority.set(key, priority);
+      if (!_mirrorRegionSeq.has(key)) _mirrorRegionSeq.set(key, new Map());
+      // This region of the composed buffer now holds THIS datagram's bytes, so
+      // it carries THIS sequence. That is the whole bookkeeping.
+      _mirrorRegionSeq.get(key).set(universe, sequence);
     }
   }
   if (_mirrorDirty.size === 0 || _mirrorFlushScheduled) return;
@@ -1000,33 +2021,230 @@ function mirrorInbound(universe, priority, payload) {
   setImmediate(flushMirrors);
 }
 
-/** Emit every composed destination that changed since the last flush. */
+/**
+ * The per-source sequence offsets of a misaligned destination, relative to its
+ * most advanced source, as a stable signature plus an operator-readable form.
+ *
+ * Signed and wrap-aware: E1.31 sequences are one byte, so a source seven frames
+ * behind reads as -7 rather than 249.
+ *
+ * @returns {{sig:string, human:string}}
+ */
+function offsetSignature(required, regionSeq) {
+  const universes = [...required].sort((a, b) => a - b);
+  const raw = universes.map(u => regionSeq.get(u));
+  const max = Math.max(...raw);
+  const parts = universes.map((u, i) => {
+    let d = ((raw[i] - max) % SACN_SEQUENCE_MODULUS + SACN_SEQUENCE_MODULUS)
+      % SACN_SEQUENCE_MODULUS;
+    if (d > SACN_SEQUENCE_MODULUS / 2) d -= SACN_SEQUENCE_MODULUS;
+    return { u, d };
+  });
+  return {
+    byUniverse: parts.map(x => [x.u, x.d]),
+    human: parts.filter(x => x.d !== 0).map(x => `U${x.u} at ${x.d}`).join(', ')
+      || 'no offset',
+  };
+}
+
+/**
+ * Emit every composed destination whose buffer currently holds ONE WHOLE engine
+ * frame — every source present, every region carrying the same sequence.
+ *
+ * A destination that is not whole stays dirty and is NOT rescheduled here: it
+ * can only become whole when another source arrives, and that arrival schedules
+ * the next flush. Rescheduling from here would spin the event loop.
+ */
 function flushMirrors() {
   _mirrorFlushScheduled = false;
   const keys = [..._mirrorDirty];
-  _mirrorDirty.clear();
+  const now = Date.now();
   for (const key of keys) {
     const entry = _mirrorEntries.get(key);
-    if (!entry) continue;               // sender retired between splice and flush
     const owner = _activeMirrors.find(m => m.state.buffers.has(key));
-    if (!owner) continue;               // mirror deactivated between splice and flush
-    sendVia(entry, mirrorPayload(owner.state, key), _mirrorPriority.get(key), 'Bench mirror');
+    if (!entry || !owner) {          // sender retired / mirror deactivated mid-flight
+      forgetMirrorGather(key);
+      continue;
+    }
+    // NO `|| new Set()` FALLBACK HERE (report 20260805_158 D-158-8). An absent
+    // `requiredSources` entry would have degraded to "nothing required =>
+    // complete => emit unconditionally" — a silent permissive default on the one
+    // path that decides whether a half-fresh frame goes out, which is the exact
+    // shape the codex forbids. `buffers` and `requiredSources` are filled in the
+    // same loop and `owner` is found via `buffers.has(key)`, so a miss is an
+    // invariant violation, not a state to accommodate: shout and disarm.
+    const required = owner.state.requiredSources.get(key);
+    if (!required) {
+      const why = `the composed destination ${key} has a buffer but no requiredSources entry ` +
+        '— the mirror state is internally inconsistent and the bridge will not guess whether ' +
+        'a frame is whole';
+      console.error(`[sACN Bridge] ❌ 🪞 BENCH MIRROR INVARIANT VIOLATED — ${why}.`);
+      broadcastLog(`❌ 🪞 BENCH MIRROR invariant violated — ${why}`, 'warn');
+      forgetMirrorGather(key);
+      disarmInBackground(why, 'auto');
+      return;
+    }
+
+    // ── The held-dark degenerate shape (report 20260805_158 R-158-B) ───────
+    // A mapping whose every slot is `none` reads NO source universe, so there is
+    // no frame to be whole or torn: every tick is a fresh, correct, all-zero
+    // frame. Emitting unconditionally here is the operator ruling, not a
+    // fallback — the alternative is every bench box holding its last look while
+    // the bridge reports the destinations as owned, which is precisely the
+    // frozen-not-dark outcome the whole ship-dark design argues against.
+    if (required.size === 0) {
+      _mirrorIncompleteSince.delete(key);
+      _mirrorStallWarned.delete(key);
+      _mirrorMisaligned.delete(key);
+      _mirrorDirty.delete(key);
+      sendVia(entry, mirrorPayload(owner.state, key), MIRROR_PRIORITY, 'Bench mirror (held dark)');
+      continue;
+    }
+
+    const regionSeq = _mirrorRegionSeq.get(key) || new Map();
+    const missing = [];
+    const seqs = [];
+    for (const u of required) {
+      if (!regionSeq.has(u)) missing.push(u);
+      else seqs.push(regionSeq.get(u));
+    }
+    const aligned = seqs.length > 0 && seqs.every(v => v === seqs[0]);
+
+    if (missing.length > 0) {
+      // A source that has not arrived yet is NORMAL for the few milliseconds
+      // between an engine frame's datagrams. It only becomes news if it lasts.
+      if (!_mirrorIncompleteSince.has(key)) _mirrorIncompleteSince.set(key, now);
+      const waited = now - _mirrorIncompleteSince.get(key);
+      const sig = missing.sort((a, b) => a - b).join(',');
+      if (waited >= MIRROR_STALL_WARN_MS && _mirrorStallWarned.get(key) !== sig) {
+        _mirrorStallWarned.set(key, sig);
+        const msg = `⚠ 🪞 BENCH MIRROR source stalled — ${key} has been waiting ` +
+          `${Math.round(waited)} ms for U${missing.join(', U')}. That destination is NOT being ` +
+          'sent: a composed frame is emitted only when every source it reads has arrived, and ' +
+          'emitting a half-fresh frame instead would be the tearing this rule exists to stop. ' +
+          'Check that the engine is still sending those universes.';
+        console.warn(`[sACN Bridge] ${msg}`);
+        broadcastLog(msg, 'warn');
+      }
+      continue;                      // stays dirty; the next arrival re-schedules
+    }
+
+    if (!aligned) {
+      // EVERY source is present and they disagree about which engine frame this
+      // is. Unlike a missing source, that is NEVER normal, so it is logged
+      // IMMEDIATELY rather than after a settling window, throttled only so a
+      // sustained fault cannot flood. Nothing is emitted: a mixed frame would
+      // leave those fixtures on a STEADY WRONG COLOUR, which looks nothing like
+      // flicker and would be misread as a fixture-menu problem.
+      //
+      // TWO CAUSES, OPPOSITE REMEDIES (report 20260805_158 R-158-A). A lost
+      // datagram is a ONE-FRAME skew the next frame erases. A source whose sACN
+      // sender started its sequence later — which an engine model reload does,
+      // permanently — is a CONSTANT skew that never erases and never recovers on
+      // its own. Telling the operator "a datagram was lost" in the second case
+      // sends them hunting the network while the fix is a restart, so the two are
+      // distinguished by the only thing that separates them: whether the offset
+      // between the sources is the SAME on consecutive flushes.
+      const offsets = offsetSignature(required, regionSeq);
+      const prev = _mirrorMisaligned.get(key);
+      const minLag = prev ? prev.minLag : new Map();
+      for (const [u, d] of offsets.byUniverse) {
+        const lag = Math.abs(d);
+        if (!minLag.has(u) || lag < minLag.get(u)) minLag.set(u, lag);
+      }
+      const state = {
+        count: (prev ? prev.count : 0) + 1,
+        lastLoggedAt: prev ? prev.lastLoggedAt : 0,
+        flushes: (prev ? prev.flushes : 0) + 1,
+        minLag,
+        announcedFixed: prev ? prev.announcedFixed : false,
+      };
+      _mirrorMisaligned.set(key, state);
+
+      // Persistently behind = never reached 0 across the whole window. A source
+      // that is merely one frame late touches 0 as its datagram lands; one whose
+      // sender is offset never does.
+      const stuckUniverses = state.flushes >= MIRROR_FIXED_OFFSET_FLUSHES
+        ? [...minLag.entries()].filter(([, lag]) => lag > 0)
+        : [];
+      const fixed = stuckUniverses.length > 0;
+      // A newly-detected fixed offset must not wait out the throttle window: it
+      // is a different diagnosis, and the previous line said the wrong thing.
+      const firstFixed = fixed && !state.announcedFixed;
+      if (firstFixed) state.announcedFixed = true;
+      if (state.count === 1 || firstFixed
+          || now - state.lastLoggedAt >= MIRROR_MISALIGN_LOG_INTERVAL_MS) {
+        state.lastLoggedAt = now;
+        const regions = [...required].map(u => `U${u}#${regionSeq.get(u)}`).join(' ');
+        const named = stuckUniverses.map(([u, lag]) => `U${u} at -${lag}`).join(', ');
+        const msg = fixed
+          ? `❌ 🪞 BENCH MIRROR STUCK — ${key}: its sources are at a FIXED sequence offset ` +
+            `(${named}) — that source has not caught up once in ${state.flushes} flushes. This ` +
+            'is NOT network loss and it will NOT recover on its own: a universe whose sACN ' +
+            'sender was created later starts its sequence at 0 and stays permanently offset ' +
+            'from its siblings, which is what an engine MODEL RELOAD does. ' +
+            '**RESTART THE ENGINE** to realign the senders, then re-arm. This destination is ' +
+            `sending NOTHING until then (regions: ${regions}).`
+          : `⚠ 🪞 BENCH MIRROR frame NOT WHOLE — ${key}: its regions carry DIFFERENT engine ` +
+            `frames (${regions}). A source datagram was lost or a source is lagging ` +
+            `(${state.count} frame(s) so far). That frame was NOT sent — a mixed one would leave ` +
+            'those fixtures showing a STEADY WRONG COLOUR, not flicker. A one-off realigns on ' +
+            'the next frame; if this keeps counting up, the mirror is dropping engine frames.';
+        console.warn(`[sACN Bridge] ${msg}`);
+        broadcastLog(msg, 'warn');
+      }
+      continue;                      // stays dirty; the next arrival re-schedules
+    }
+
+    _mirrorIncompleteSince.delete(key);
+    _mirrorStallWarned.delete(key);
+    _mirrorMisaligned.delete(key);
+    _mirrorDirty.delete(key);
+    // Nothing new to say: the buffer has not moved on since the last emission.
+    if (_mirrorEmitSeq.get(key) === seqs[0]) continue;
+    _mirrorEmitSeq.set(key, seqs[0]);
+    sendVia(entry, mirrorPayload(owner.state, key), MIRROR_PRIORITY, 'Bench mirror');
   }
 }
 
-function routeFrame(universe, priority, payload) {
-  // 0. Bench stand-in: compose this frame into any destination it feeds. Runs
-  //    on the same admitted frames the relay does, so an sACN priority override
-  //    silences the mirror exactly as it silences the relay.
-  mirrorInbound(universe, priority, payload);
+/**
+ * Fan one inbound frame out to the mirror, the relay and the browser.
+ *
+ * `payload` is RAW DMX: a 1-indexed `{channel: 0..255}` object from
+ * `rawDmxPayload`. Every consumer below assumes that unit — the relay resends
+ * it through senders that declare `useRawDmxValues`, the mirror splices it into
+ * `Uint8Array` buffers (no truncation now that the values are integers, which
+ * is `_153` F7 gone), and the WebSocket frame carries true DMX bytes so the
+ * browser's `sacn_mapper.js` `/255` finally means what it says (`_105` F3).
+ * Report 20260805_170.
+ */
+function routeFrame(universe, priority, payload, sequence) {
+  // 0. Bench stand-in: compose this frame into any destination it feeds. The
+  //    composed frame goes out at the mirror's OWN fixed priority, never the
+  //    inbound one — see MIRROR_PRIORITY. The inbound E1.31 SEQUENCE travels
+  //    with it: it is the only frame identity on the wire, and the composition
+  //    gate needs it to tell "all my sources are here" from "all my sources are
+  //    here FOR THE SAME FRAME".
+  mirrorInbound(universe, payload, sequence);
 
-  // 1. Relay to physical sACN devices directly
-  const ipTargets = outgoingSenders.get(universe);
-  if (ipTargets) {
-    for (const entry of ipTargets.values()) sendVia(entry, payload, priority, 'Relay');
+  // 1. Relay to physical sACN devices directly.
+  //    `_relaySuspended` is raised in the SAME synchronous turn the arm is
+  //    recorded, before the ship-dark zeros go out. Without it a raw frame could
+  //    interleave with those zeros on a pair that is being retired — the `_152`
+  //    D1 defect pointing the other way. While armed `outgoingSenders` is empty
+  //    anyway; this closes the window before that is true.
+  if (!_relaySuspended) {
+    const ipTargets = outgoingSenders.get(universe);
+    if (ipTargets) {
+      for (const entry of ipTargets.values()) sendVia(entry, payload, priority, 'Relay');
+    }
   }
 
-  // 2. Broadcast to Browser WebSocket clients
+  // 2. Broadcast to Browser WebSocket clients — TRUE DMX BYTES (0-255). The
+  //    browser's `sacn_input_source.js` hands these straight to the DMX router
+  //    and `sacn_mapper.js` divides by 255; before report 20260805_170 the
+  //    values here were the package's 0-100 percent view, which is exactly the
+  //    39 % preview ceiling logged as `_105` F3.
   if (wss.clients.size === 0) return;
   const dmx = new Uint8Array(512);
   if (payload) {
@@ -1056,6 +2274,11 @@ console.log(`  Lockout Duration    : ${LOCKOUT_MS / 1000}s`);
 console.log(`  Source Stale        : ${sacnOpts.sourceStaleMs}ms`);
 console.log(`  Pinned Scene        : ${pinnedScene} (--scene)`);
 console.log(`  Engine Poll         : http://127.0.0.1:${ENGINE_PORT}/status every ${ENGINE_POLL_MS}ms`);
+console.log('  Bench Mirror        : DISARMED (runtime mode, process memory only — arm it from ' +
+  'the sim\'s 🎛 Controllers view header; every start comes up disarmed)');
+console.log('  Bench Mirror Scope  : while ARMED the bench is the ONLY physical output — all ' +
+  'ordinary relay is suspended and zeroed. No browser can transmit to hardware at all ' +
+  '(report 20260805_171), so the mirror is the single writer by construction');
 console.log('═'.repeat(56));
 
 // ── Boot the relay route table ──────────────────────────────────────────
@@ -1072,3 +2295,39 @@ recomputeRoutes('boot');
 pollEngineStatus();
 const _enginePollTimer = setInterval(pollEngineStatus, ENGINE_POLL_MS);
 if (_enginePollTimer.unref) _enginePollTimer.unref();
+
+// ── Shutdown while armed (report 20260804_151) ─────────────────────────────
+// A bridge that dies mid-mirror leaves the composed frame frozen on the box
+// until an unknown device-side dmx.timeoutMs. Take the same blackout path the
+// operator's DISARM takes, then exit — bounded, because a hung socket must not
+// turn Ctrl-C into a process that will not die.
+const SHUTDOWN_BLACKOUT_TIMEOUT_MS = 1500;
+let _shuttingDown = false;
+function shutdown(signal) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  if (_mirrorArm === null && !blackoutInFlight()) {
+    console.log(`[sACN Bridge] ${signal} — exiting (bench mirror was not armed).`);
+    process.exit(0);
+  }
+  const done = () => process.exit(0);
+  setTimeout(done, SHUTDOWN_BLACKOUT_TIMEOUT_MS).unref();
+  // A signal that lands DURING a blackout must not kill it (report 20260804_152
+  // D5): `_mirrorArm` is already null by then, so without this branch the bridge
+  // would report "was not armed" and exit with one or two zero frames unsent —
+  // exactly the frozen-frame outcome the blackout exists to prevent.
+  if (_mirrorArm === null) {
+    console.log(`[sACN Bridge] ${signal} while a BENCH MIRROR blackout is in flight — waiting ` +
+      'for its all-zero frames to land before exit.');
+    Promise.resolve(_blackoutSettled).then(done).catch(done);
+    return;
+  }
+  console.log(`[sACN Bridge] ${signal} while the BENCH MIRROR is ARMED — blacking out the owned ` +
+    'destinations before exit.');
+  disarmBenchMirror(`the bridge received ${signal}`, 'shutdown').then(done).catch((err) => {
+    console.error(`[sACN Bridge] ⚠ blackout on ${signal} failed: ${err.message} — exiting anyway.`);
+    done();
+  });
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

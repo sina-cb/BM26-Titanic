@@ -10,15 +10,18 @@
  *
  * ── SAFETY: THREE INDEPENDENT WALLS, EVERY ONE ASSERTED, NOT ASSUMED ───────
  *
- *  1. sACN can never reach hardware. `--dest` is NOT enough — that is the
- *     `_97` §4.4 trap that put 30 s of live sACN on the real rig: the config's
- *     per-controller `controllers:` block carries its OWN host and wins for the
- *     universes it claims. So this harness WRITES a black-holed config
- *     (`controllers: []` + `sacn.destinations: [127.0.0.9]`) and points the
- *     engine at it with MARSIN_CONFIG_FILE, then ASSERTS on the way up that
- *     (a) every `[sACN Out] Sender started` line names only the black hole,
- *     (b) there is no Art-Net sender at all, and
- *     (c) `GET /status.outputRouting.controllers` is empty.
+ *  1. sACN can never reach hardware. `--dest` alone was NOT enough while the
+ *     engine still supported a per-controller `controllers:` block that carried
+ *     its OWN host and won for the universes it claimed — the `_97` §4.4 trap
+ *     that put 30 s of live sACN on the real rig. That mechanism is REMOVED
+ *     (operator ruling 2026-08-05): the engine has one output path, and a config
+ *     that still declares `controllers:` makes it refuse to boot
+ *     (`lib/output_config_guard.js`). This harness therefore writes a config
+ *     with the key ABSENT (not merely emptied — an empty key is itself refused)
+ *     plus `sacn.destinations: [127.0.0.9]`, points the engine at it with
+ *     MARSIN_CONFIG_FILE, and ASSERTS on the way up that
+ *     (a) every `[sACN Out] Sender started` line names only the black hole, and
+ *     (b) `GET /status.outputRouting.controllers` is empty.
  *     `assertBlackHoled()` throws before any scenario runs.
  *
  *  2. Engine state can never touch the tracked tree. MARSIN_STATE_DIR,
@@ -100,9 +103,13 @@ export function writeBlackHoledConfig(dir, timelinePatch = {}) {
   const real = yaml.load(fs.readFileSync(path.join(ENGINE_DIR, 'config.yaml'), 'utf8')) || {};
   const cfg = JSON.parse(JSON.stringify(real));
 
-  // WALL 1 — output. Both halves, because either one alone is a lie.
+  // WALL 1 — output. The engine has exactly one output path now, so the black
+  // hole in `sacn.destinations` IS the whole wall. The `controllers:` key is
+  // DELETED rather than emptied: the engine refuses to boot on its mere
+  // presence, so an empty one would not be a safer config, it would be an
+  // unbootable one.
   cfg.sacn = { ...(cfg.sacn || {}), destinations: [BLACKHOLE_HOST], multicast: false };
-  cfg.controllers = [];
+  delete cfg.controllers;
 
   // WALL 3 — no listeners, no device traffic, no port squatting.
   cfg.osc = { ...(cfg.osc || {}), enabled: false };
@@ -113,8 +120,9 @@ export function writeBlackHoledConfig(dir, timelinePatch = {}) {
   cfg.timeline = { ...(cfg.timeline || {}), enabled: true, ...timelinePatch };
 
   // Belt and braces: refuse to write a config that could still reach a device.
-  if (!Array.isArray(cfg.controllers) || cfg.controllers.length !== 0) {
-    throw new Error('e2e config guard: `controllers` must be emptied before spawning an engine');
+  if ('controllers' in cfg) {
+    throw new Error('e2e config guard: `controllers` must be ABSENT before spawning an engine — ' +
+      'the direct-to-hardware mechanism is removed and the engine refuses to boot on the key');
   }
   for (const d of cfg.sacn.destinations) {
     if (d !== BLACKHOLE_HOST) {
@@ -378,8 +386,6 @@ export function createTimelineE2E(o) {
           `sACN sender points at ${host}, not the black hole — refusing to run (the _97 trap)`);
       }
     }
-    assert.ok(!stdout.includes('[Art-Net Out] Sender started'),
-      'an Art-Net sender was started — the controllers block was not neutralised');
     assert.deepEqual(status.outputRouting, { controllers: [] },
       `per-controller routing is non-empty: ${JSON.stringify(status.outputRouting)}`);
   }

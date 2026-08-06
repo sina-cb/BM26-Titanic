@@ -15,6 +15,7 @@
 
 import { isStaticHost, logStaticHostSkip } from '../core/static_host.js';
 import { handleClientCensus } from '../gui/multi_client_warning.js';
+import { handleBenchMirrorStatus } from '../gui/bench_mirror_banner.js';
 
 const RECONNECT_DELAY_MS = 3000;
 const SACN_SOURCE_ID = 'sacn_in';
@@ -38,6 +39,16 @@ export class SacnInputSource {
     // reply so concurrent queries cannot steal each other's answer.
     this._routeWaiters = new Map();
     this._routeReqSeq = 0;
+    // Pending `benchMirrorArm` / `benchMirrorDisarm` requests (report
+    // 20260804_151), correlated by reqId on the same principle as the route
+    // queries: the bridge also BROADCASTS `benchMirrorStatus` on every
+    // transition and to every new connection, and a broadcast (no reqId) must
+    // never resolve somebody's pending arm.
+    this._benchMirrorWaiters = new Map();
+    // Picker data (`benchMirrorOptions`) rides its own waiter map: it is a
+    // different reply TYPE, and a status broadcast must never resolve it.
+    this._benchMirrorOptionWaiters = new Map();
+    this._benchMirrorReqSeq = 0;
 
     // Stats
     this.stats = {
@@ -55,6 +66,10 @@ export class SacnInputSource {
       // reconnects, so the stall clock must restart from here or the
       // monitor cries STALLED in the reconnect→first-frame gap.
       connectedAt: 0,
+      // Last BENCH MIRROR status the bridge pushed. null = unknown (never
+      // received, or the socket is down) — the monitor and the banner must
+      // render "unknown" rather than assert a stale disarmed/armed.
+      benchMirror: null,
     };
   }
 
@@ -137,7 +152,100 @@ export class SacnInputSource {
     });
   }
 
+  /**
+   * ARM the bench mirror for `scene` (report 20260804_151) — the runtime
+   * "Titanic → physical test bench" preview. The engine and the visible sim
+   * stay where they are; only the bridge's outbound addressing changes, and
+   * only for the pairs the scene's `bench_mirror.yaml` declares.
+   *
+   * Resolves with the bridge's `benchMirrorStatus`. A REFUSAL resolves too,
+   * with `refusal` set — refusing is an answer, not a transport failure.
+   * REJECTS only when the transport itself fails (socket down, send threw, no
+   * reply inside `timeoutMs`).
+   *
+   * @param {string} scene the scene whose bench_mirror.yaml to arm
+   * @param {number} [timeoutMs]
+   * @returns {Promise<Object>}
+   */
+  armBenchMirror(scene, selection = null, timeoutMs = 5000) {
+    return this._benchMirrorRequest({ type: 'benchMirrorArm', scene, selection }, timeoutMs);
+  }
+
+  /**
+   * Ask the bridge for the picker's data: every bench slot, the compatible
+   * fixtures of the scene the ENGINE is currently running, the sidecar default
+   * and the last-used choice.
+   *
+   * ADVISORY ONLY. The ARM re-resolves the whole mapping from disk in the same
+   * pass that arms, so nothing here is trusted — a scene edit between "picker
+   * opened" and "ARM clicked" is refused there by name.
+   *
+   * Resolves with the bridge's `benchMirrorOptions` reply (which may itself
+   * carry `ok:false` + a refusal — that is an answer, not a transport failure).
+   *
+   * @param {string} scene
+   * @param {number} [timeoutMs]
+   * @returns {Promise<Object>}
+   */
+  queryBenchMirrorOptions(scene, timeoutMs = 5000) {
+    if (!this._ws || this._ws.readyState !== 1) {
+      return Promise.reject(new Error(
+        'sACN bridge WebSocket not connected — the bench-mirror options cannot be read'));
+    }
+    this._benchMirrorReqSeq += 1;
+    const reqId = `bench-mirror-options-${this._benchMirrorReqSeq}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this._benchMirrorOptionWaiters.delete(reqId);
+        reject(new Error(`the sACN bridge did not answer benchMirrorOptions within ` +
+          `${timeoutMs} ms — is it running current code? Restart the launcher.`));
+      }, timeoutMs);
+      this._benchMirrorOptionWaiters.set(reqId, { resolve, reject, timer });
+      try {
+        this._ws.send(JSON.stringify({ type: 'benchMirrorOptions', scene, reqId }));
+      } catch (e) {
+        clearTimeout(timer);
+        this._benchMirrorOptionWaiters.delete(reqId);
+        reject(new Error(`could not send benchMirrorOptions to the sACN bridge: ${e.message}`));
+      }
+    });
+  }
+
+  /**
+   * DISARM: the bridge blacks out every owned destination (3 all-zero frames,
+   * awaited) and then hands the routes back to the ordinary relay.
+   * @param {number} [timeoutMs]
+   * @returns {Promise<Object>}
+   */
+  disarmBenchMirror(timeoutMs = 5000) {
+    return this._benchMirrorRequest({ type: 'benchMirrorDisarm' }, timeoutMs);
+  }
+
   // ── Internal ─────────────────────────────────────────────────────────
+
+  _benchMirrorRequest(message, timeoutMs) {
+    if (!this._ws || this._ws.readyState !== 1) {
+      return Promise.reject(new Error(
+        'sACN bridge WebSocket not connected — the bench mirror cannot be armed or disarmed'));
+    }
+    this._benchMirrorReqSeq += 1;
+    const reqId = `bench-mirror-${this._benchMirrorReqSeq}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this._benchMirrorWaiters.delete(reqId);
+        reject(new Error(`the sACN bridge did not answer ${message.type} within ${timeoutMs} ms ` +
+          '— is it running current code? Restart the launcher.'));
+      }, timeoutMs);
+      this._benchMirrorWaiters.set(reqId, { resolve, reject, timer });
+      try {
+        this._ws.send(JSON.stringify({ ...message, reqId }));
+      } catch (e) {
+        clearTimeout(timer);
+        this._benchMirrorWaiters.delete(reqId);
+        reject(new Error(`could not send ${message.type} to the sACN bridge: ${e.message}`));
+      }
+    });
+  }
 
   _connect() {
     if (!this._enabled) return;
@@ -172,6 +280,11 @@ export class SacnInputSource {
         // Census unknown while disconnected — hide the multi-client banner
         // rather than display stale information (it re-arms on reconnect).
         handleClientCensus(null);
+        // Same for the BENCH MIRROR banner. A socket drop is ALSO a disarm at
+        // the bridge (the arm is scoped to this socket), so hiding is the
+        // truthful render either way; the bridge re-pushes status on reconnect.
+        this.stats.benchMirror = null;
+        handleBenchMirrorStatus(null);
         if (this._enabled) {
           if (window.sacnLog) window.sacnLog('Disconnected — reconnecting...', 'warn');
           this._reconnectTimer = setTimeout(() => this._connect(), RECONNECT_DELAY_MS);
@@ -205,6 +318,18 @@ export class SacnInputSource {
         'sACN bridge WebSocket closed before the route-table reply arrived'));
     }
     this._routeWaiters.clear();
+    for (const waiter of this._benchMirrorWaiters.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error(
+        'sACN bridge WebSocket closed before the bench-mirror reply arrived'));
+    }
+    this._benchMirrorWaiters.clear();
+    for (const waiter of this._benchMirrorOptionWaiters.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error(
+        'sACN bridge WebSocket closed before the bench-mirror options arrived'));
+    }
+    this._benchMirrorOptionWaiters.clear();
     if (this._ws) {
       this._ws.onopen = null;
       this._ws.onmessage = null;
@@ -258,6 +383,26 @@ export class SacnInputSource {
         if (waiter) {
           clearTimeout(waiter.timer);
           this._routeWaiters.delete(parsed.reqId);
+          waiter.resolve(parsed);
+        }
+      } else if (parsed.type === 'benchMirrorStatus') {
+        // Broadcast on every transition AND to every new connection, so a
+        // reloaded tab can never show stale state. The banner is driven from
+        // EVERY status, whether or not it answers a request of ours; the
+        // waiter is resolved only when the reqId matches one we issued.
+        this.stats.benchMirror = parsed;
+        handleBenchMirrorStatus(parsed);
+        const waiter = this._benchMirrorWaiters.get(parsed.reqId);
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          this._benchMirrorWaiters.delete(parsed.reqId);
+          waiter.resolve(parsed);
+        }
+      } else if (parsed.type === 'benchMirrorOptions') {
+        const waiter = this._benchMirrorOptionWaiters.get(parsed.reqId);
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          this._benchMirrorOptionWaiters.delete(parsed.reqId);
           waiter.resolve(parsed);
         }
       }

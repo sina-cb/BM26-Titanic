@@ -4,15 +4,22 @@
 
 ## The trap
 
-`node engine.js --dest 127.0.0.9` overrides **`sacn.destinations` only**. A
-`controllers:` entry in the config carries its **own host** and wins for every
-universe it claims (`lib/output_dispatch.js` partitions universes by
-declaration before any destination is consulted). An engine spawned with
-`--dest` therefore still streams sACN to the declared hardware. This put
-~30 seconds of live output on the real Titanic rig.
+`node engine.js --dest 127.0.0.9` overrides **`sacn.destinations` only**.
 
-`config.sacn.destinations` also defaults to `127.0.0.1` — which is the
-operator's own sim bridge on UDP 5568. "Loopback" is not "nowhere".
+Historically the config could also carry a `controllers:` block that unicast
+declared universes **straight to hardware**, ignoring `--dest` entirely — which
+put ~30 seconds of live output on the real Titanic rig. **That mechanism is
+REMOVED** (operator ruling 2026-08-05): the engine has exactly one output path,
+sACN to `sacn.destinations`, and the sim's input bridge is the single router to
+every controller. A config that still declares `controllers:` (or a stray
+`alsoFlat:` / `protocol:`) makes the engine **refuse to boot** by name —
+`marsin_engine/lib/output_config_guard.js`. Never reintroduce it; direct
+engine→hardware routes are what made one-writer-per-(universe, controller)
+unprovable.
+
+The remaining trap is smaller but still real: `config.sacn.destinations`
+defaults to `127.0.0.1` — which is the operator's own sim bridge on UDP 5568,
+and the bridge relays onward to the rig. "Loopback" is not "nowhere".
 
 ## What actually works
 

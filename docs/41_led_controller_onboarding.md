@@ -603,13 +603,15 @@ To make the **real engine** drive these LEDs and show them in the sim:
    from the scene — regenerate so the 80 LED pixels appear with
    `patch:{universe, addr, footprint}`, each output's pixels on **its own**
    universe.
-3. **Engine routing** `marsin_engine/config.yaml` — add a `controllers:` entry
-   routing the LED universes to `10.1.1.201` (`protocol: sACN`). Universes not
-   listed keep streaming to the flat `sacn.destinations` (the sim bridge), so
-   the sim still visualises them. To light hardware **and** show the same
-   strands in the sim, set `alsoFlat: true` on that controller entry — the
-   opt-in dual-send (`marsin_engine/lib/output_dispatch.js`; report
-   `20260709_2_engine_dual_send.md`). This resolves the old §7 open question.
+3. **Engine routing** — nothing to do. The engine has ONE output path: sACN to
+   the flat `sacn.destinations` (127.0.0.1), where the **sim's input bridge is
+   the single router** to every controller. It picks the LED universes up from
+   the scene's `controllers.yaml` / `patches.yaml` on its next route recompute,
+   so the strands light AND the sim visualises them with no engine config
+   change. Engine-side direct-to-hardware routes are **forbidden** and refused
+   at boot (`marsin_engine/lib/output_config_guard.js`): a stream the bridge
+   never sees cannot be suspended, gated or accounted for, so
+   one-writer-per-(universe, controller) stops being provable.
 4. **Controller** — push §4 config (strands + dmx) via the sim's patch action.
    The push also saves the scene and notifies the bridge, so steps 1–2 land on
    disk and the relay routes follow in the same action (§4.5).
@@ -643,7 +645,7 @@ Slices are mostly file-disjoint:
 - **Slice C — Scene/model/patch plumbing.** LED strand fixtures in
   `scene_config.yaml`, LED controller in `controllers.yaml`, `patches.yaml`
   wiring, the linear-layout patch computation shared with the engine model
-  regeneration, and the `marsin_engine/config.yaml` `controllers:` routing.
+  regeneration. (No engine config change: the bridge routes every universe.)
   Owns the scene files + model export; integration test that a patched LED
   controller produces contiguous engine-model pixels on universe U.
 
@@ -657,10 +659,12 @@ report under `.agent/reports/`.
 
 **Resolved**
 
-- ~~**Dual-destination for LED universes**~~ — answered: a per-controller
-  opt-in. `alsoFlat: true` on the `marsin_engine/config.yaml` controller entry
-  fans its universes to the hardware **and** the flat sim-bridge destinations
-  (§5.3; report `20260709_2_engine_dual_send.md`).
+- ~~**Dual-destination for LED universes**~~ — moot. The engine no longer has a
+  per-controller output path at all: it streams every universe to the flat
+  `sacn.destinations` and the sim's input bridge relays to the hardware, so
+  "hardware AND sim" is the only shape there is. The old opt-in dual-send
+  (`alsoFlat:`) and the whole `controllers:` block are REMOVED and refused at
+  boot — see `marsin_engine/lib/output_config_guard.js`.
 
 **Open**
 

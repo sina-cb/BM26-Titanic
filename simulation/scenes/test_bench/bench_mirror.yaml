@@ -1,13 +1,12 @@
-# bench_mirror.yaml — the test bench as a STAND-IN for real titanic fixtures.
+# bench_mirror.yaml — the test bench as a STAND-IN for real ship fixtures. v3.
 #
 # Operator order, 2026-07-31: "set up test bench to show part of the titanic
 # scene for me — led bars, par lights and vintage lights! LED strings too."
 #
-# WHAT THIS DOES. While the ENGINE is running the `titanic` model, the sACN
-# bridge composes the frames below and unicasts them to the bench boxes, so each
-# bench fixture shows exactly the bytes a named titanic fixture is being sent.
-# Nothing on the hardware changes: no fixture is re-addressed, no DMX gateway
-# port is re-bound, no controller push is needed.
+# WHAT THIS DOES. While the ENGINE is running a ship scene, the sACN bridge
+# composes frames for the bench boxes so each bench fixture shows exactly the
+# bytes a chosen ship fixture is being sent. Nothing on the hardware changes: no
+# fixture is re-addressed, no DMX gateway port is re-bound, no controller push.
 #
 # WHY IT IS NEEDED. sACN reception is free — a second listener on a universe just
 # works. The DMX START ADDRESS is not: it lives in the physical fixture.
@@ -17,98 +16,80 @@
 #   VintageLed (fp 33)  1, 34, 67, 100         41, 74            ← no alignment
 #   ShehdsBar  (fp 119) 1, 120                 107, 226          ← no alignment
 #
-# The pars could have been done by pure config (point the bench's par port at a
-# titanic par universe). No titanic bar or vintage fixture ever starts at 107,
-# 226, 41 or 74, so those bytes must be MOVED. One mechanism for all three keeps
-# the bench box on the universes it already listens to (U2), which is why there
-# is nothing for the operator to reconfigure.
+# So those bytes must be MOVED. One mechanism for all three keeps the bench boxes
+# on the universes they already listen to, which is why there is nothing for the
+# operator to reconfigure.
 #
-# THE SLICE — the ship's LEFT FRONT, so spatial patterns read correctly:
+# ── WHAT THIS FILE DOES *NOT* CONTAIN (v3, report 20260805_155) ──────────────
 #
-#   bench Par 1-4       ← Left Auditorium 5,6,7,8   (LeftFrontDeck, U6)
-#   bench Vintage Left  ← Left Front Rails 1        (LeftFrontDeck, U5)
-#   bench Vintage Right ← Left Front Rails 2        (LeftFrontDeck, U5)
-#   bench Bar Left      ← Left Front Wall 1         (LeftFrontWall,  U2)
-#   bench Bar Right     ← Left Front Wall 2         (LeftFrontWall,  U2)
-#   bench LED_0         ← Left_Front_Left  px 1-20  (LeftLeftRopes,  U30)
-#   bench LED_1         ← Left_Back_Left   px 1-20  (LeftLeftRopes,  U31)
+# No universes. No DMX addresses. No slice lengths. No controller IPs. No source
+# scene. No suppression policy. v1/v2 carried all of that by hand, duplicated out
+# of the scene files, and every duplicated number could rot independently — the
+# failure mode being pixel data landing in a fixture's control channels, i.e.
+# "random colours with a green log".
 #
-# WHEN IT RUNS. All three must hold, or it is inert and says so in the bridge
-# log: `enabled: true` below; the ENGINE's active scene == `source_scene`; and
-# the `test_bench` scene is active (CLI `--scene test_bench`, or a bench window
-# open). The last one is the deployment guard — on the show server the launcher
-# is pinned to `titanic`, so this file rides along harmlessly and the ship's own
-# gateway on 10.1.1.10 keeps its ordinary relay.
+# v3 declares only SLOTS: which BENCH fixture each slot is, and which SOURCE
+# fixture feeds it by default. At ARM time the bridge resolves every address,
+# universe, footprint, host and slice FRESH from
+# `controllers.yaml` + `patches.yaml` + `scene_config.yaml` + the fixture
+# definitions in `simulation/dmx/fixtures/`. If a link is missing it REFUSES by
+# name. There is no address to typo because there is no address to author.
 #
-# ONE WRITER PER (UNIVERSE, CONTROLLER). While active, the mirror OWNS every
-# `dest_universe → dest_host` pair below: the bridge suppresses its ordinary
-# relay for exactly those pairs and logs each one. Do not also drive them from a
-# sim window in sACN-OUT mode (priority 150 wins over the mirror at the box).
+# ── WHICH SHIP SCENE? WHICHEVER THE ENGINE IS RUNNING ────────────────────────
 #
-# TO TURN IT OFF: `enabled: false`. To aim it somewhere else: edit the slices —
-# every address here is the fixture's DMX start address, and every length is its
-# footprint. The bridge re-reads this file on every route recompute; no restart.
+# The source scene is dynamic (operator ruling 2026-08-05). `default_source`
+# names below resolve against the engine's ACTIVE scene at arm time. Against a
+# scene that does not carry those fixtures the defaults path REFUSES by name —
+# open the picker and choose per slot instead. The bridge never substitutes
+# `none` for a default it cannot resolve; that would be a silent fallback.
+#
+# ── WHEN IT RUNS ────────────────────────────────────────────────────────────
+#
+# `enabled: true` below, AND the bridge is ARMED for this scene from the 🎛
+# Controllers view header (🪞 BENCH MIRROR · ARM), AND the engine stays on the
+# scene the mapping was computed against. Arming is process memory only — never
+# written anywhere, and every bridge/launcher start comes up DISARMED. That is
+# the deployment guard: this file can ride a `robocopy /MIR` onto the show server
+# and can never light anything by itself.
+#
+# ── ARMED = THE BENCH IS THE ONLY PHYSICAL OUTPUT ───────────────────────────
+#
+# Operator ruling 2026-08-05: while armed, ALL ordinary relay to ALL controllers
+# of every active scene is SUSPENDED and zeroed 3× on the way out — the ship goes
+# deterministically DARK, not frozen — and the sim's own priority-150 output path
+# is GATED at the output bridge, with the arm refusing unless that gate is
+# acknowledged. The bench destinations below are then the only sACN leaving the
+# system. DISARM restores the full relay set.
+#
+# TO TURN IT OFF: DISARM in the Controllers header (or close the sim window that
+# armed it — the arm is scoped to that socket). `enabled: false` switches it off
+# in the file. To aim it somewhere else: use the picker; to change what the
+# picker starts from, edit `default_source` below. The bridge re-reads this file
+# on every route recompute; no restart.
 
-version: 1
+version: 3
 enabled: true
-source_scene: titanic
-note: Bench stands in for the ship's left-front fixtures while the engine runs titanic.
+label: Test bench stand-in
+note: Bench fixtures stand in for ship fixtures while the engine runs a ship scene.
 
-mirrors:
-  # ── Test Bench 1 (DMX gateway) — ports 1/2/3 all listen on U2 ─────────────
-  - dest_universe: 2
-    dest_host: 10.1.1.10
-    note: Bench DMX gateway — pars, vintage pair, bar pair, all from the left front.
-    slices:
-      - source_universe: 6
-        source_addr: 1
-        length: 40
-        dest_addr: 1
-        note: Left Auditorium 5-8 (UkingPar x4, fp 10) -> Par 1-4. Addresses already agree.
-      - source_universe: 5
-        source_addr: 1
-        length: 33
-        dest_addr: 41
-        note: Left Front Rails 1 (VintageLed, fp 33) -> Vintage Left @41.
-      - source_universe: 5
-        source_addr: 34
-        length: 33
-        dest_addr: 74
-        note: Left Front Rails 2 (VintageLed, fp 33) -> Vintage Right @74.
-      - source_universe: 2
-        source_addr: 1
-        length: 119
-        dest_addr: 107
-        note: Left Front Wall 1 (ShehdsBar, fp 119) -> Bar Left @107.
-      - source_universe: 2
-        source_addr: 120
-        length: 119
-        dest_addr: 226
-        note: Left Front Wall 2 (ShehdsBar, fp 119) -> Bar Right @226.
+slots:
+  # ── Test Bench 1 (DMX gateway) — pars, vintage pair, bar pair ─────────────
+  # Defaults are the ship's LEFT FRONT, so spatial patterns read correctly.
+  - { slot: par_1,         bench_fixture: Par 1,         default_source: Left Auditorium 5 }
+  - { slot: par_2,         bench_fixture: Par 2,         default_source: Left Auditorium 6 }
+  - { slot: par_3,         bench_fixture: Par 3,         default_source: Left Auditorium 7 }
+  - { slot: par_4,         bench_fixture: Par 4,         default_source: Left Auditorium 8 }
+  - { slot: vintage_left,  bench_fixture: Vintage Left,  default_source: Left Front Rails 1 }
+  - { slot: vintage_right, bench_fixture: Vintage Right, default_source: Left Front Rails 2 }
+  - { slot: bar_left,      bench_fixture: Bar Left,      default_source: Left Front Wall 1 }
+  - { slot: bar_right,     bench_fixture: Bar Right,     default_source: Left Front Wall 2 }
 
-  # ── Titanic_202 (MarsinLED) output 1 — bench strand LED_0, 20 px RGBW ─────
-  # The device receives per-output on {universe, startAddress: 1}, so there is
-  # no address to line up: the strand simply plays the first 20 pixels of the
-  # 40-pixel titanic rope. Mirroring into the bench's OWN universes (U10/U12)
-  # rather than re-pointing the device means no controller push and no loss of
-  # ordinary bench use.
-  - dest_universe: 10
-    dest_host: 10.1.1.60
-    note: Bench LED output 1.
-    slices:
-      - source_universe: 30
-        source_addr: 1
-        length: 80
-        dest_addr: 1
-        note: Left_Front_Left pixels 1-20 (RGBW, 4 ch/px) -> LED_0.
+  # ── Titanic_202 (MarsinLED) — the two bench strands, 20 px RGBW each ──────
+  # The ship ropes are 40 px; a strand slot copies the first 20 (warned at ARM).
+  - { slot: led_0,         bench_fixture: LED_0,         default_source: Left_Front_Left }
+  - { slot: led_1,         bench_fixture: LED_1,         default_source: Left_Back_Left }
 
-  # ── Titanic_202 (MarsinLED) output 2 — bench strand LED_1, 20 px RGBW ─────
-  - dest_universe: 12
-    dest_host: 10.1.1.60
-    note: Bench LED output 2.
-    slices:
-      - source_universe: 31
-        source_addr: 1
-        length: 80
-        dest_addr: 1
-        note: Left_Back_Left pixels 1-20 (RGBW, 4 ch/px) -> LED_1.
+  # FUTURE TE SIGN SLOT — activate by patching the bench sign and uncommenting.
+  # A typed LED fixture is a SHAPE: source and destination pixel counts must be
+  # EQUAL, unlike a plain strand.
+  # - { slot: te_sign_a,   bench_fixture: TE Sign V3 A,  default_source: TE Sign V3 A }

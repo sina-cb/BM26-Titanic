@@ -7,7 +7,6 @@ import {
   lightingEnabled, lightingMode, engineReady, engineEnabled,
   scene, selectedFixtureIndices, selectedDmxIndices
 } from "./state.js";
-import { getSacnOutput } from "../dmx/sacn_output_client.js";
 import { generatePixelMap } from "../dmx/pixelblaze_model_exporter.js";
 import { pixelInView } from "../dmx/view_registry.js";
 import { isStaticHost, logStaticHostSkip } from "./static_host.js";
@@ -26,8 +25,6 @@ import { createLowFpsAlarm, LOW_FPS_THRESHOLD, LOW_FPS_SUSTAIN_SECONDS } from ".
 import { dotDrawnRadius, writeDotMatrix } from "./pixel_dot_geometry.js";
 import { adapterWarningText, adapterLogLine } from "./gpu_adapter.js";
 // sACN output — lazily initialized
-let sacnOutputClient = null;
-let sacnOutputEnabled = false;
 
 // ─── Per-frame pixel observers (2D Pixel Map, future taps) ────────────────
 // Listeners fire once per rendered frame AFTER every color source has written
@@ -492,8 +489,10 @@ export function animate() {
 
     const mappingEnabled = getProfileDef(params.lightingProfile).mappingEnabled;
 
-    // In sacn_in mode, demap only if lighting is enabled — the simulation acts as a bridge/visualizer
-    // regardless of which lighting profile is active
+    // In sacn_in mode, demap only if lighting is enabled — the simulation is a
+    // VISUALIZER here, never a bridge: the sim SERVER routes to the controllers
+    // and this window only paints what it receives, regardless of which lighting
+    // profile is active.
     if (lightingEnabled && lightingMode === 'sacn_in') {
       if (_batchCacheVersion !== _batchLastBuiltVersion) {
         _rebuildBatchCache();
@@ -677,54 +676,25 @@ export function animate() {
     };
   }
 
-  // ─── sACN Output: send DMX to real controllers via bridge ───
-  // Completely disable sACN outbound transmission if in readonly observer mode (e.g. iPad WebView)
-  if (window.dmxRouter && params.parLights && !window.__readonlyMode) {
-    // Lazily enable output client
-    if (!sacnOutputEnabled) {
-      sacnOutputClient = getSacnOutput();
-      sacnOutputClient.enable();
-      sacnOutputEnabled = true;
-    }
-
-    if (sacnOutputClient && sacnOutputClient.connected) {
-      // Group fixtures by universe:controllerIp using deduplicated Map
-      const outputGroups = new Map(); // 'universe:ip' → { universe, ip, priority }
-
-      const isMappingOutput = !window._sacnBlackoutActivated && getProfileDef(params.lightingProfile).mappingEnabled;
-
-      for (const config of params.parLights) {
-        if (!config) continue;
-        const u = config.dmxUniverse;
-        const addr = config.dmxAddress;
-        const ip = config.controllerIp;
-        if (!u || u <= 0 || !addr || addr <= 0 || !ip || ip === '0.0.0.0') continue;
-
-        const fType = config.fixtureType || config.type || '';
-        const isEffect = fType.includes('Fog') || fType === 'ChauvetHaze4D' || fType.includes('Horn') || fType.includes('Fire') || fType.includes('Haze');
-
-        // In sacn_in mode: relay ALL universes to controllers (simulation acts as bridge)
-        // In other modes: only output when mapping is active
-        // Global effects: ALWAYS output
-        if (!isEffect && lightingMode !== 'sacn_in' && !isMappingOutput) continue;
-
-        const key = `${u}:${ip}`;
-        if (!outputGroups.has(key)) {
-          outputGroups.set(key, { universe: u, ip, priority: 150 });
-        }
-      }
-
-      // For each unique universe:ip pair, send the full universe buffer exactly ONCE
-      for (const [, group] of outputGroups) {
-        const fullFrame = window.dmxRouter.getFullFrame(group.universe);
-        if (fullFrame) {
-          sacnOutputClient.sendUniverse(group.universe, group.ip, group.priority, fullFrame);
-        }
-      }
-
-
-    }
-  }
+  // ─── sACN Output: GONE. The browser is not the router. ───
+  //
+  // Operator ruling 2026-08-05: engine → sim SERVER → controllers. This window
+  // renders, monitors and controls; it does not put packets on the wire, and
+  // there is no code here that could. What used to live at this point was a
+  // per-frame loop that unicast every patched universe to its real controller
+  // at priority 150 through :6972 (`_160` T4/T5) — a second writer on the
+  // browser's own clock, so background-tab throttling froze the rig on one
+  // stale frame while the show looked alive.
+  //
+  // The two things that legitimately needed it were rehoused, not dropped:
+  //   • "Hold to Fog" now POSTs the engine's `/fog` (gui_builder.js), which
+  //     writes the fog channels on the normal engine → bridge route;
+  //   • browser-generator bench output (gradient / pixelblaze driving fixtures
+  //     with no engine) was retired with the operator's Option C.
+  //
+  // Do not reintroduce a transmit path here. `server/sacn_output_bridge.js`
+  // refuses DMX by construction — it holds no sender — so a re-added client
+  // would be silently ineffective and loudly logged, not quietly working.
 
   // ─── SpotLight Pool Orchestrator ───
   // Assigns the 10 closest-to-camera pixels to the pre-allocated SpotLight pool.

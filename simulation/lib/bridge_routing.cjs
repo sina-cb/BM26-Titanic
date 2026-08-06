@@ -10,12 +10,16 @@
  *      the test_bench hardware relay; every test_bench viewer re-enabled it.
  *      The bench lights froze/resumed with plain browser activity.
  *
- *   2. FLICKER — when the engine declares a controller itself
- *      (marsin_engine/config.yaml `controllers:` + `alsoFlat: true`), the
- *      bridge ALSO relayed the engine's own loopback frames back to that
- *      controller: two interleaved sACN sources on one universe (independent
+ *   2. FLICKER — an engine that ALSO unicast a universe straight to its
+ *      controller left the bridge relaying the engine's own loopback frames to
+ *      that same box: two interleaved sACN sources on one universe (independent
  *      sequence numbers, equal priority) — the firmware counts seqErrors and
- *      the lights flicker.
+ *      the lights flicker. That engine-side mechanism is now REMOVED and
+ *      refused at boot (marsin_engine/lib/output_config_guard.js): all sACN to
+ *      hardware flows through this bridge, which is the single router. The
+ *      subtraction below therefore has nothing to subtract in this rig — it
+ *      stays because "the engine declares no direct routes" must be PROVEN from
+ *      /status on every poll, not assumed.
  *
  * The relay route set is now a PURE FUNCTION of:
  *   - the CLI-pinned scene (`--scene`, deploy-time intent — may be null),

@@ -1051,6 +1051,83 @@ async function cmdStatus() {
   process.exit(alive && allUp ? 0 : 1);
 }
 
+// ── `stop` → blackout BEFORE the kill (report 20260805_160 T1) ──────────
+// `stop` force-kills the launcher's whole process tree; on Windows that is
+// `taskkill /T /F` (TerminateProcess), so the engine never ran its SIGTERM
+// handler and never sent its shutdown blackout frame (marsin_engine/engine.js
+// §8) — every controller held its LAST LIVE FRAME until its own E1.31 timeout,
+// while `.agent/ops/show_server_ops.md` and `deploy/README.md` promise
+// "lights OFF … before generator work".
+//
+// So: ask the engine, in band, to run that same shutdown FIRST
+// (POST /shutdown → engine's `requestShutdown` hook → the one existing blackout
+// path → exit), and wait a bounded time for its process to be gone. Nothing is
+// duplicated here and nothing is persisted (POST /global-blackout would write
+// globalsState.blackout, which the next boot restores — i.e. a dark start).
+//
+// The kill ALWAYS follows: stop must always stop. An unconfirmed blackout is
+// reported LOUDLY rather than swallowed.
+const BLACKOUT_CONFIRM_MS = 3000;
+const BLACKOUT_CHILD_TAG = 'engine';   // must match startChild('engine', …)
+const BLACKOUT_UNCONFIRMED_MSG =
+  'BLACKOUT NOT CONFIRMED — rig may still be lit. Confirm darkness by eye before any electrical work.';
+
+// `deps` exists so the decision logic, the bounded wait and the loud message are
+// testable in-process without a live stack (no ports bound, no process signalled).
+async function blackoutEngineBeforeKill(lock, deps = {}) {
+  const post = deps.post || httpPostJson;
+  const isAlive = deps.pidAlive || pidAlive;
+  const nap = deps.sleep || sleep;
+  const clock = deps.now || Date.now;
+  const budgetMs = deps.timeoutMs === undefined ? BLACKOUT_CONFIRM_MS : deps.timeoutMs;
+
+  const enginePid = (lock.children || {})[BLACKOUT_CHILD_TAG];
+  if (!enginePid) {
+    // Every profile runs an engine, so a lock without one is an anomaly, not a
+    // configuration we quietly accept.
+    logError(`No '${BLACKOUT_CHILD_TAG}' child recorded in the lock — nothing to ask for a blackout. ${BLACKOUT_UNCONFIRMED_MSG}`);
+    return { confirmed: false, reason: 'no engine pid in lock' };
+  }
+
+  if (!isAlive(enginePid)) {
+    // Nothing to ask, and nothing may ask on its behalf: POSTing to :6968 with
+    // our own engine already dead would shut down whatever OTHER engine happens
+    // to answer that port. State the consequence instead.
+    logError(`Engine (pid ${enginePid}) is already gone — no blackout can be sent now. If it died without one, ${BLACKOUT_UNCONFIRMED_MSG}`);
+    return { confirmed: false, reason: 'engine already gone' };
+  }
+
+  let ports;
+  try {
+    ports = deps.ports || readPorts();
+  } catch (err) {
+    // Loud degradation, never silent: without the port map we cannot reach the
+    // engine — but we must still complete the kill below.
+    logError(`Cannot read the port map (${err.message}) — cannot request the blackout. ${BLACKOUT_UNCONFIRMED_MSG}`);
+    return { confirmed: false, reason: 'port map unreadable' };
+  }
+
+  const url = `http://127.0.0.1:${ports.marsin_engine_port}/shutdown`;
+  const outcome = await post(url, { confirm: true }).then(
+    (status) => ({ status }), (err) => ({ error: err.message }));
+  if (outcome.error) {
+    logError(`Engine refused/ignored the blackout request (POST ${url}: ${outcome.error}). ${BLACKOUT_UNCONFIRMED_MSG}`);
+    return { confirmed: false, reason: 'request failed' };
+  }
+
+  console.log(`Blackout requested (POST ${url}) — waiting up to ${budgetMs / 1000}s for the engine to go dark and exit…`);
+  const deadline = clock() + budgetMs;
+  while (clock() < deadline) {
+    if (!isAlive(enginePid)) {
+      console.log('✅ Engine sent its blackout frame and exited — the rig is dark.');
+      return { confirmed: true, reason: 'engine exited' };
+    }
+    await nap(200);
+  }
+  logError(`Engine (pid ${enginePid}) was still alive ${budgetMs / 1000}s after accepting the blackout request. ${BLACKOUT_UNCONFIRMED_MSG}`);
+  return { confirmed: false, reason: 'engine still alive' };
+}
+
 async function cmdStop() {
   const lock = readLock();
   if (!lock) {
@@ -1059,6 +1136,8 @@ async function cmdStop() {
   }
   if (!lockLauncherAlive(lock)) {
     console.log(`Launcher pid ${lock.pid} is not a live launcher — cleaning up stale lock.`);
+    // The launcher is gone but an orphaned engine can still be driving the rig.
+    await blackoutEngineBeforeKill(lock);
     for (const [tag, pid] of Object.entries(lock.children || {})) {
       // Only kill a recorded child if it's still alive AND its command line
       // looks like ours — guards against PID reuse killing an innocent process.
@@ -1071,6 +1150,8 @@ async function cmdStop() {
     return;
   }
   console.log(`Stopping launcher pid ${lock.pid} (profile '${lock.profile}')…`);
+  // Lights OFF first — the force-kill below can never do it (see above).
+  await blackoutEngineBeforeKill(lock);
   if (IS_WIN) forceKillTree(lock.pid);
   else process.kill(lock.pid, 'SIGTERM');
   const deadline = Date.now() + STOP_GRACE_MS + 7000;
@@ -1306,4 +1387,5 @@ if (require.main === module) {
 module.exports = {
   bindProbe, checkPortFree, readPorts,
   healthCheckList, runHealthChecks, readFrameFlow,
+  blackoutEngineBeforeKill, BLACKOUT_CONFIRM_MS, BLACKOUT_UNCONFIRMED_MSG,
 };

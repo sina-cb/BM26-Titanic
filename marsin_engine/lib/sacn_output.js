@@ -52,6 +52,16 @@ export function createSacnOutput({
         defaultPacketOptions: {
           sourceName,
           priority,
+          // RAW DMX ON THE WIRE (report 20260805_170 — `_157` D1 / `_153` F1b).
+          // `sendFrame` below writes the DMX router's 0-255 bytes straight into
+          // `payload`, but the `sacn` package reads that field as a 0..100
+          // PERCENT and emits `inRange(value * 2.55)` unless this flag is set —
+          // so before this, EVERY value the engine rendered above DMX 100 left
+          // as 255 and colour was crushed toward white on every controller.
+          // `defaultPacketOptions` is spread first inside `Sender.send()`
+          // (sender.js:56) and `sendFrame` never passes the flag, so it applies
+          // to every frame, including the shutdown blackout.
+          useRawDmxValues: true,
         },
       }) });
     }

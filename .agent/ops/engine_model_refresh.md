@@ -27,9 +27,9 @@ change genuinely cannot be swapped in-process. That refusal is correct
 behaviour, not a bug — it is why a deliberate restart exists.
 
 > Stale note corrected (2026-07-28): "restart after any Save that changes
-> universes" is **wrong**. Universe changes hot-reload fine (G10 fix,
-> `output_dispatch.js` create-sender-on-demand). The real restart trigger is a
-> **pixel-count change**.
+> universes" is **wrong**. Universe changes hot-reload fine — the sACN sender
+> creates a universe on demand (`lib/sacn_output.js` `addUniverse`). The real
+> restart trigger is a **pixel-count change**.
 
 ---
 
