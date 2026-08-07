@@ -108,6 +108,7 @@ parLights:
       screenPixelSize: 60
       haloScale: 1
       portNum: 1
+      viewMaskHi: 0
     - group: TE Sign
       name: TE Sign V3 B
       sectionId: 3
@@ -136,6 +137,7 @@ parLights:
       screenPixelSize: 60
       haloScale: 1
       portNum: 2
+      viewMaskHi: 0
     - group: TE Sign 2
       name: TE Sign 2 V3 A
       sectionId: 415
@@ -164,6 +166,7 @@ parLights:
       screenPixelSize: 60
       haloScale: 1
       portNum: 1
+      viewMaskHi: 0
     - group: TE Sign 2
       name: TE Sign 2 V3 B
       sectionId: 415
@@ -192,6 +195,7 @@ parLights:
       screenPixelSize: 60
       haloScale: 1
       portNum: 2
+      viewMaskHi: 0
     - group: Right Front Wall
       name: Right Front Wall 1
       fixtureType: ShehdsBar
@@ -1838,6 +1842,7 @@ ledStrands:
       viewMask: 0
       group: ''
       haloScale: 1
+      viewMaskHi: 0
     - name: Left_Back_Left
       startX: -31.5
       startY: 2
@@ -1853,6 +1858,7 @@ ledStrands:
       viewMask: 0
       group: ''
       haloScale: 1
+      viewMaskHi: 0
     - name: Left_Back_Right
       startX: -13.7
       startY: 12.5
@@ -1868,6 +1874,7 @@ ledStrands:
       viewMask: 0
       group: ''
       haloScale: 1
+      viewMaskHi: 0
     - name: Left_Front_Right
       startX: -13.5
       startY: 12.6
@@ -1883,6 +1890,7 @@ ledStrands:
       viewMask: 0
       group: ''
       haloScale: 1
+      viewMaskHi: 0
     - name: Right_Back_Left
       startX: 13.5
       startY: 12.6
@@ -1898,6 +1906,7 @@ ledStrands:
       viewMask: 0
       group: ''
       haloScale: 1
+      viewMaskHi: 0
     - name: Right_Back_Right
       startX: 27.6
       startY: 2.1
@@ -1913,6 +1922,7 @@ ledStrands:
       viewMask: 0
       group: ''
       haloScale: 1
+      viewMaskHi: 0
     - name: Right_Front_Right
       startX: 33.6
       startY: 2.1
@@ -1928,6 +1938,7 @@ ledStrands:
       viewMask: 0
       group: ''
       haloScale: 1
+      viewMaskHi: 0
     - name: Right_Front_Left
       startX: 19.5
       startY: 12.4
@@ -1943,6 +1954,7 @@ ledStrands:
       viewMask: 0
       group: ''
       haloScale: 1
+      viewMaskHi: 0
 traces: *ref_0
 groupOverrides:
   TE Sign:

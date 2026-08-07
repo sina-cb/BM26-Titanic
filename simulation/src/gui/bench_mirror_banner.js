@@ -43,6 +43,15 @@ export function bannerStateForStatus(status) {
   const selection = Array.isArray(status.selection) ? status.selection : [];
   const mapped = selection.filter((s) => s.source).length;
   const dark = selection.length - mapped;
+  // Which slots are running END FOR END (design 20260806_174 §3.5). Named here
+  // because it is not derivable from anything else on screen, and a bench that
+  // is deliberately mirrored backwards looks exactly like a bench that is
+  // accidentally mirrored backwards. Only shown when it is true of something —
+  // an always-present "0 REVERSED" is noise on the one banner that must stay
+  // readable at a glance.
+  const reversed = selection.filter((s) => s.source && s.reverse === true)
+    .map((s) => s.slot);
+  const order = reversed.length > 0 ? ` · ⇄ REVERSED: ${reversed.join(', ')}` : '';
   const source = typeof status.sourceScene === 'string' && status.sourceScene
     ? ` ← ${status.sourceScene}` : '';
   return {
@@ -51,7 +60,7 @@ export function bannerStateForStatus(status) {
     // operator who reads only the first clause must still learn that the ship
     // stopped receiving data.
     text: `🪞 BENCH MIRROR ACTIVE — ${label}${source} · ALL SHIP OUTPUT SUSPENDED — BENCH ONLY · ` +
-      `${mapped} slot(s) mapped, ${dark} dark · owns ${owned || 'nothing'}`,
+      `${mapped} slot(s) mapped, ${dark} dark${order} · owns ${owned || 'nothing'}`,
   };
 }
 

@@ -40,7 +40,8 @@ import { html } from 'htm/preact';
 import { signal } from '@preact/signals';
 
 import { benchMirrorControlState } from '../bench_mirror_control.js';
-import { benchMirrorPickerState, pickerDefaults, pickerLastUsed } from '../bench_mirror_picker.js';
+import { benchMirrorPickerState, pickerDefaults, pickerSetSource,
+  pickerSetReverse } from '../bench_mirror_picker.js';
 
 const BENCH_MIRROR_POLL_MS = 500;
 
@@ -83,9 +84,11 @@ function confirmPicker(state, scene) {
   const source = window.sacnInput;
   if (!source) return;
   pickerBusy.value = true;
-  // The COMPLETE selection map goes on the wire — every slot explicitly, with
-  // `null` for the ones held dark. A partial map is refused by the bridge (R-13)
-  // precisely so "absence" can never be read as a choice.
+  // The COMPLETE selection map goes on the wire — every slot explicitly, as
+  // `{source, reverse}`, with `source: null` for the ones held dark. A partial
+  // map is refused by the bridge (R-13) precisely so "absence" can never be read
+  // as a choice, and the old flat `slot: name` shape is refused by name (R-24)
+  // so an absent `reverse` can never be guessed as `false`.
   source.armBenchMirror(scene, state.selection).then((status) => {
     if (status && status.refusal) {
       pickerError.value = status.refusal;
@@ -113,7 +116,10 @@ function runDisarm() {
 function BenchMirrorPicker({ scene }) {
   const state = benchMirrorPickerState(pickerOptions.value, pickerDraft.value);
   const setSlot = (slot, value) => {
-    pickerDraft.value = { ...state.selection, [slot]: value === '' ? null : value };
+    pickerDraft.value = pickerSetSource(state.selection, slot, value);
+  };
+  const setReverse = (row, value) => {
+    pickerDraft.value = pickerSetReverse(state.selection, row.slot, value, row.reverseApplicable);
   };
   return html`
     <div id="bench-mirror-picker" style=${'position:fixed;top:12%;left:50%;' +
@@ -130,8 +136,12 @@ function BenchMirrorPicker({ scene }) {
              style="color:var(--error);white-space:pre-wrap;margin-bottom:10px;">
           ✋ ${state.refusal}
         </div>` : null}
+      ${state.warnings.map((w) => html`
+        <div class="bench-mirror-picker-warning"
+             style="color:var(--error);white-space:pre-wrap;margin-bottom:8px;">⚠ ${w}</div>`)}
       ${state.rows.map((row) => html`
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
+        <div style="margin-bottom:5px;">
+        <div style="display:flex;align-items:center;gap:8px;">
           <span style="width:96px;color:var(--secondary);">${row.slot}</span>
           <span style="width:104px;">${row.benchFixture}</span>
           <span style="width:104px;color:var(--secondary);">${row.profile}</span>
@@ -141,9 +151,28 @@ function BenchMirrorPicker({ scene }) {
             ${row.choices.map((c) => html`
               <option value=${c.value === null ? '' : c.value}>${c.label}</option>`)}
           </select>
+          ${row.reverseApplicable ? html`
+            <button class="pe-btn bench-mirror-reverse-toggle"
+                    id=${`bench-mirror-reverse-${row.slot}`}
+                    title=${row.reverseTitle}
+                    style=${'padding:2px 8px;min-width:96px;' + (row.reverse
+                      ? 'background:var(--error);color:var(--surface-container-lowest);' +
+                        'border:1px solid var(--error);'
+                      : 'border:1px solid var(--secondary);')}
+                    onClick=${() => setReverse(row, !row.reverse)}>
+              ${row.reverse ? '⇄ REVERSED' : '→ NORMAL'}
+            </button>` : html`
+            <span style="min-width:96px;color:var(--secondary);opacity:0.5;text-align:center;"
+                  title=${row.reverseTitle}>—</span>`}
           ${row.duplicate ? html`<span title="this source also feeds another slot — allowed"
             style="color:var(--primary);">×2</span>` : null}
           ${row.empty ? html`<span style="color:var(--error);" title=${row.emptyNote}>✋</span>` : null}
+        </div>
+        ${row.staleNote ? html`
+          <div class="bench-mirror-picker-stale"
+               style="margin-left:104px;color:var(--error);font-size:11px;white-space:pre-wrap;">
+            ⚠ ${row.staleNote}
+          </div>` : null}
         </div>`)}
       ${pickerError.value ? html`
         <div style="color:var(--error);white-space:pre-wrap;margin:10px 0;">
@@ -151,8 +180,13 @@ function BenchMirrorPicker({ scene }) {
         </div>` : null}
       <div style="display:flex;justify-content:space-between;margin-top:12px;gap:8px;">
         <div>
-          <button class="pe-btn" onClick=${() => { pickerDraft.value = pickerDefaults(pickerOptions.value); }}>↺ defaults</button>
-          <button class="pe-btn" onClick=${() => { pickerDraft.value = pickerLastUsed(pickerOptions.value); }}>last used</button>
+          <button class="pe-btn" id="bench-mirror-picker-defaults"
+                  title=${'Forget the remembered selection for this session: every slot back to ' +
+                    'the sidecar\'s default_source and NORMAL pixel order. Staging only — the ' +
+                    'remembered file is replaced by the next successful ARM.'}
+                  onClick=${() => { pickerDraft.value = pickerDefaults(pickerOptions.value); }}>
+            ↺ scene defaults
+          </button>
         </div>
         <div>
           <button class="pe-btn" onClick=${closePicker}>Cancel</button>

@@ -11199,3 +11199,356 @@ deliberately deferred). (3) `config.yaml companion.source: mic` +
 `audio.capture.device: null` makes a cold-start Companion (engine down) die loudly
 on win32. Constraints honoured: no git ops, live engine never touched, no state /
 scene / pattern / playlist edit; scratch `~/tmp/fix_173/`.
+
+## `_174` — pixel order design: scene flag (A) + bench-mirror reverse (B) — CONTRACT, no code
+
+**Report:** `.agent/reports/202608/20260806_174_pixel_order_design.md` (2026-08-06). Fable design
+agent, READ-ONLY on all source; deliverable is the implementation contract for the Opus slices.
+Anchors re-verified at 86f6ee4d.
+
+**Mechanism A (generator-group members):** top-level name-keyed `pixelOrder:` map in
+`scene_config.yaml`, the exact `groupOverrides` idiom (`src/core/config.js` L163 intercept +
+prune-on-persist) — the external brief's on-fixture storage is regeneration-wiped every boot.
+Enum `normal|reversed` lowercase, invalid throws at export (aborts the whole save via the existing
+saveModelJS-first gate). Grow preserves (name-keyed); shrink clears explicitly + warns at the
+`regenCasualties` site; rename carries via a `carryTraceGroupOverride` twin. **Swap start/end
+ruling: name-stuck** (the confirmRenumber precedent — one rule: everything keyed on the name stays
+put), dialog copy gains the pixel-order bullet + names currently-REVERSED members. Exporter seam:
+wire association only — DMX pixels read `channels` from slot P(j); **LED-bus pixels read
+`ledWalk[P(j)]`** (channels there are the identical order map — permuting them is a silent no-op
+the brief missed). localIndex stays spatial j; sim preview unchanged (the flag exists to make
+hardware match the sim); engine untouched.
+
+**Mechanism B (bench mirror):** NEW machine-owned `scenes/test_bench/bench_mirror_state.yaml`
+(`state_version: 1`, `selections.<sourceScene>.slots.<slot>: {source, reverse}`), written
+atomically by the bridge on ARM success only. `bench_mirror.yaml` stays **v3 verbatim — no
+migration** (a v4 rewrite would destroy the sidecar's operator comments and violate the
+"declare only what cannot be derived" contract). `_lastSelection` DELETED; the _155 §10
+process-memory-only guard test (`tests/bench_mirror.test.js:588-595`) is REWRITTEN to the new
+invariant by operator order — the state file carries no arm bit and no plumbing keys, arming stays
+process memory. Loud stale validation at picker-open + ARM; selection schema becomes
+`{source, reverse}` per slot, old shape refused by name. `computeSlices` gains definition-driven
+reverse: DMX per-role permutation with control channels identity (registry extended to per-pixel
+channel maps), strands first-N-window-then-reverse, never last-N; w/a never swapped.
+
+**Composition:** dest wire block k carries `(S_src ∘ M)(k)`; `S_dst` never enters the mirrored
+path (the mirror is wire→wire and the resolver never reads any `pixelOrder` store — enforced by
+test). Slot toggle `M = G_src ∘ G_dst` = the RELATIVE as-built orientation, independent of scene
+flags. 8-row matrix in the report; rows with `S_dst` flipped must be byte-identical (the
+no-double-apply proof).
+
+**Slices for Opus:** 1 = Mechanism A (sim only), 2 = Mechanism B + composition, 3 = regression +
+isolation (SHA256 byte-identity of `simulation/scenes/**` across test runs, injected scratch
+roots under `~/tmp`, writer refuses real-scene paths in test context; failing-LIST comparison
+against sim 2007/2000/6+1todo and engine ~2796/7-known). Per-slice file lists + 12-point matrix in
+the report §5. Nothing armed, no port touched, operator residue untouched.
+
+## `_175` — pixel order impl (slice 1): Mechanism A, sim only
+
+**Report:** `.agent/reports/202608/20260806_175_pixel_order_impl.md` (2026-08-06). Opus
+implementation agent, contract = `_174` §2 + §5.1. Engine untouched, bench mirror untouched.
+
+**Built:** top-level name-keyed `pixelOrder:` map in `scene_config.yaml` on the `groupOverrides`
+idiom (`src/core/config.js` load intercept + prune-on-persist; the key is DELETED when nothing is
+reversed, so an all-NORMAL scene stays byte-clean). New pure module
+`src/dmx/pixel_order_store.js` owns the whole rule — strict `normal|reversed` enum (anything else
+throws, quoting fixture + value + the fix), `wireSlot`/`reverseIndex`, store validation, rename
+carry, casualty clear, prune. Exporter seam in `pixelblaze_model_exporter.js` permutes the WIRE
+ASSOCIATION only: DMX pixels read `channels` from slot P(j), LED-bus pixels read `ledWalk[P(j)]`
+(finding F-6); geometry, `localIndex`, `pixelSize`, name and the sim `apply` all stay at slot j —
+preview keeps showing model intent, engine needs nothing. Single-pixel entries refuse at export
+(both the N=1 branch and the simple `fixture.light` branch), which aborts the whole save through
+the existing saveModelJS-first gate. `gui_builder`: `Px →` / `Px ⇄ REVERSED` toggle on
+generator-group members whose DEFINITION has >1 pixel, shrink/group-delete clear-and-warn through
+ONE helper (console + toast ttl 14000, pattern-71 re-verify line), rename carry before the
+regenerate, `confirmRenumber` gains the pixel-order bullet + `Currently REVERSED: …`, boot + save
+validation passes, and a `🧹 Clear stale pixel-order entries (N)` gesture (confirm + names, never
+automatic).
+
+**Deviations (documented in the report §2):** carry helper lives in `pixel_order_store.js` not
+`trace_group_rename.js` (the `_174` file lists disagree with each other); boot validation runs in
+`gui_builder` right after the trace auto-regenerate rather than `main.js` (that loop lives in the
+setupGUI closure); prune keeps a non-enum hand edit verbatim instead of deleting it; the POST
+`/save` round trip is proven structurally (client YAML round trip + a source assertion that the
+save server strips only per-fixture keys) because binding a port was off-limits — **slice 3 should
+run the real HTTP round trip**; the two new GUI affordances were not visually verified (no sim
+allowed to start).
+
+**Tests:** +60 new, all passing (`pixel_order_store` 27, `pixel_order_export` 15,
+`pixel_order_lifecycle` 18). Sim suite 2007→2067 tests (2007+60 ✅), pass 2000→2034, fail 6→32,
+todo 1. **Failing-LIST comparison:** no baseline failure vanished, and all 26 new failures are in
+`bench_mirror*.test.js` — agent `_176`'s Mechanism B product files were mid-implementation in the
+shared tree; nothing in slice 1 is imported by them. **Byte-identity proof:** SHA256 manifest of
+all 45 files under `scenes/test_bench/**` + `scenes/titanic/**` identical before and after both
+suite runs (`8b59ea79…`); the new tests build fixtures in memory and stub `fetch`, so they write
+nothing anywhere. No processes started, no ports bound, no git ops, no ARM/sACN/hardware, operator
+residue untouched; scratch in `~/tmp/fix_175/`.
+
+## `_176` — mirror slot reverse impl (slice 2): Mechanism B + composition
+
+**Report:** `.agent/reports/202608/20260806_176_mirror_reverse_impl.md` (2026-08-06). Opus
+implementation agent, contract = `_174` §3 + §4 + §5.2. Engine untouched;
+`scenes/test_bench/bench_mirror.yaml` byte-for-byte untouched (zero migration, v3 stays v3).
+
+**Built:** new pure `simulation/lib/bench_mirror_state.cjs` — `state_version: 1`,
+`selections.<sourceScene>.slots.<slot>: {source, reverse}`, unknown-key refusal at every level,
+version checked before the key sweep, strict boolean `reverse`, deterministic serialization,
+ATOMIC tmp+fsync+rename writer that refuses any target outside its injected scenes root.
+`_lastSelection` DELETED from the bridge (identifier gone); one store, read FRESH at every
+picker-open, written at ARM SUCCESS ONLY from a single call site sequenced after the ownership
+proof. Picker-open validates every stored entry against the CURRENT source scene: unparseable file
+→ payload warning + zero selections; unknown slot id → warning, never applied; stale source →
+per-row `staleReason` quoting the stored name with NOTHING pre-filled (file untouched until the
+next ARM); stored `reverse` on a non-reversible destination → reported and dropped. Selections
+keyed by source scene, so a `titanic` mapping is structurally unreachable under another scene.
+Resolver: registry extended with validated per-pixel channel maps; `computeSlices(dest, src,
+{reverse})` permutes WHOLE per-pixel channel maps role-for-role from the fixture definition with
+unclaimed control channels IDENTITY-copied (ShehdsBar 119ch → 19 runs, Vintage 33ch → 14 runs with
+`value` 3..8↔8..3 and rgb head-swapped r→r/g→g/b→b); LED strands take the FIRST-N window then
+reverse it (never last-N), whole stride blocks only. New refusals R-24 (selection shape — the old
+flat shape refused by name, no dual-shape parser), R-25 (fewer than 2 pixels — refuse, never
+ignore), R-26 (definition not provably permutable, naming the model file). WS schema swapped to
+`{source, reverse}` per slot; armed status/arm log/`summarizeSlot`/HUD banner all report pixel
+order. Picker: per-row `⇄ REVERSED`/`→ NORMAL` toggle on multi-pixel rows only, badge on every
+applicable row, persisted value shown on reopen, stale rows show what was remembered next to why it
+was not applied, `↺ scene defaults` (explicit reset to sidecar defaults + NORMAL, staging-only).
+Composition: the mirror is wire→wire and the resolver never reads any scene pixel-order store —
+enforced by a source-grep contract test over four product files.
+
+**RULING REVERSAL:** the `_155` §10 process-memory-only guard is REVERSED by operator order. Its
+test was REWRITTEN, not relaxed: `_lastSelection` asserted gone, the armed flag still never
+persists, and the real invariant ("a deployed file cannot arm hardware") is now asserted at the
+SCHEMA level — no admitted key could hold `armed`/`enabled`/universe/address/host/priority — which
+is strictly stronger than the old one-variable text scan.
+
+**Deviations (report §2):** D1 a definition that fails per-pixel validation records `pixels: null` +
+named reason + boot warn instead of throwing out of `loadFixtureRegistry` (a throw would make one
+defective model file un-armable for the WHOLE rig, contradicting the design's own "NORMAL path
+unaffected"; the refusal is preserved in full as R-26 at ARM). D2 payload carries `storedSource`
+(validated) alongside `stored` (raw). D3 the `last used` picker button removed — with persistence
+it duplicated the dialog's default state. D4 the test seam is `BM26_BENCH_MIRROR_STATE_ROOT`, read
+once at bridge load.
+
+**Tests:** bench-mirror spec files 134 → **184, all passing** (bench_mirror 53, arm 57, resolve 34,
+new `bench_mirror_reverse` 21, new `bench_mirror_state` 19). Wall 1→Bar Left and Wall 2→Bar Right
+proved against the REAL generated models (bar localIndex 0→17 runs toward decreasing x, wall toward
+increasing x; NORMAL walks the ship backwards, REVERSED aligns), plus byte-level Vintage and strand
+proofs, the first-20-not-last-20 counterexample, and R-24/25/26. Sim suite 2007/2000/6+1todo →
+**2117/2110/6+1todo**; **failing LIST identical to baseline** (5× bench_section_sync,
+pixel_map_view_defaults, scene_data_lint) — the +110 is this slice's +50 plus `_175`'s +60 in the
+shared tree. Engine suite deliberately not run (slice 3 owns cross-suite).
+
+**Byte-identity proof:** SHA256 manifest of EVERY file under `simulation/scenes/**` identical
+before and after a full suite run, and the 45-file `test_bench`+`titanic` manifest
+(`1750907985b469cb…`) identical to its pre-change value; no `bench_mirror_state.yaml` exists
+anywhere under `simulation/scenes/` afterwards. Tests write only to `~/tmp/fix_176/**` via an
+injected root, and `writeBenchMirrorState` independently REFUSES any `node --test` process aiming
+at the repo's real scenes directory (asserted directly). No processes started, no ports bound, no
+git ops, no ARM/sACN/hardware; operator residue (studiodj, calibration playlists,
+`marsin_engine/**`) untouched.
+
+## `_177` — regression + isolation (slice 3)
+
+**Report:** `.agent/reports/202608/20260806_177_regression_isolation.md` (2026-08-06). Opus
+validation agent, contract = `_174` §4 + §5.3 + §5.4. **No product code touched** — two test files
+added. Nothing armed, no operator port bound, no live process touched, no git op, no hardware.
+
+**§4 matrix closed EMPIRICALLY, both mechanisms in one tree.** New
+`simulation/tests/pixel_order_composition.test.js` (31 tests) pushes one identifiable colour ramp
+through the REAL chain — `generatePixelMap` on the real fixture definition at the real scene patch,
+then the real `resolveBenchMirror`/`computeSlices`/`createMirrorState`/`mirrorPayload` — for every
+`S_src × M × S_dst` combination, on **two fixture types**: ShehdsBar (18 contiguous 6-ch blocks) and
+VintageLed (six heads on NON-CONTIGUOUS lanes). All 16 rows pass lane for lane: dest wire block `k`
+carries `c((S_src ∘ M)(k))`, and every row also asserts the fixture's control channels are
+IDENTITY-copied. **Rows 5-8 (no double apply) are asserted twice** — the resolved mirror TREE is
+deep-equal with and without the bench flag, and the composed PAYLOAD is deep-equal. Made
+non-vacuous by three companions: the `S_dst` flip provably moves the bench's OWN exported model
+(end-for-end) while the mirrored wire does not move; both scene trees flagged still resolve to a
+byte-identical spec; and exactly ONE value of `M` aligns the wire for each `S_src`, with the aligned
+one differing between them (`M = G_s ∘ G_d` with `G` fixed). The ramp has no fixed points under `R`
+(N=18, N=6 both even), so a double application could not hide behind an identity. LED slots are
+out of scope by construction — raw strands are outside Mechanism A (design §2.9).
+
+**`_176`'s LIVE-tier precondition:** already present inside the two async pairing tests and correct
+for all four fixtures. Added a standalone always-run guard naming `Bar Left`/`Bar Right`/
+`Left Front Wall 1`/`2` in one place, so a flag on any of them fails with "recompute that tier and
+re-verify with pattern 71" instead of an arithmetic mismatch deep in a pairing assertion.
+
+**Real HTTP `/save` round trip: DONE.** `save-server.js` has BOTH hooks injectable
+(`SIM_SAVE_SERVER_PORT`, `SIM_SAVE_SERVER_ROOT`), so new
+`simulation/tests/pixel_order_save_roundtrip.test.js` (4 tests) runs a real save-server child on an
+**OS-assigned ephemeral port** (with an explicit refusal if the OS ever hands back an operator port)
+and a scratch root under `~/tmp/fix_177/`. `pixelOrder` survives POST `/save` key for key and value
+for value while the save demonstrably rewrites the tree around it (DMX keys split out into
+`patches.yaml`); names with spaces/digits survive verbatim and in order; the store never leaks into
+`patches.yaml`; an empty store stays empty and a save with no store never invents one. Closes
+`_175` deviation 5 and `_176` open item 5.
+
+**Suites, by failing LIST.** Sim 2117/2110/6+1todo → **2152/2145/6+1todo** with the +35 new; failing
+list byte-identical to baseline (5× bench_section_sync, pixel_map_view_defaults, scene_data_lint
+todo). Engine **2802/2794/8** — the 7 known environmental fails (5× audio_capture win32,
+osc_listener EADDRINUSE, effects_v2_mode_page_layout file-level) plus ONE new NAME,
+`tests/patterns/calibration_patterns.test.js:86`, which is **operator residue, not a regression**:
+that test file is UNTRACKED and it asserts the two UNTRACKED
+`scenes/{titanic,test_bench}/playlists/calibration.yaml` are byte-identical — they diverge (3244 B
+vs 3156 B) and all three files carry pre-session mtimes. `performance_mode` did not fail (no
+isolation re-run needed). Parity green and named: sim scene_model/te_sign_grouping/led_halo 80/80,
+engine led_dmx_parity + view_catalog_parity 34/34.
+
+**Isolation proofs.** SHA256 manifests taken before ANY run and after ALL runs (sim baseline →
+engine → sim full with new tests → new suites → parity): `simulation/scenes/**` 81 files
+`95b2ad8df8c2b9d1…` before **and** after; `marsin_engine/states/**` 40 files `c1f44c9a6e886e8f…`
+before **and** after; both diffs empty. No `bench_mirror_state.yaml` and no `*.tmp-*` under
+`simulation/scenes/` afterwards. The test-write guard was **exercised independently** in a
+standalone `node --test` probe: a write aimed at the repo's real scenes dir is REFUSED naming
+`NODE_TEST_CONTEXT`, with no file and no tmp left behind; `../../escape` is refused; and a scratch
+write succeeds and reads back exactly, so the refusals are the guard working rather than the writer
+being broken. **Port audit of every new/changed test file: nothing binds an operator port** — the
+bench harness fakes `sacn`/`ws` (nothing bound at all), `pixel_order_export`'s `save_port: 6970` is
+inert mock data behind a stubbed `fetch` (the throwing case asserts ZERO POSTs), and the round-trip
+test is the only binder, on an ephemeral port.
+
+**Static sweeps.** `pixelOrder`/`pixel_order` grep re-run by hand over a WIDER set than the
+contract's four — resolver, mirror, state, bridge **plus** picker, banner and controller_map_panel:
+**0 hits everywhere**. Every `catch` and default added by both slices read in context: all loud
+(console.error + toast / alert / `⚠ Px INVALID` / `(unreadable — …)` / bridge warnings array); the
+ARM state-write failure deliberately does not unwind the arm and says so in three channels.
+Absence-is-normal and absence-is-empty are DEFINED defaults with design precedent, and a YAML
+`Fixture:` with no value parses to `null`, which is refused rather than coerced. No dotted-quad IPs
+and no future dates in any `.agent/**` prose this wave produced.
+
+**Findings reported, NOT decided (operator ruling needed).** **F-177-1:** a stale remembered picker
+row falls back to the SIDECAR DEFAULT, while design §3.3 and `_176` §1.3 both say it pre-fills
+NOTHING — `_176`'s own test pins the current behaviour in as many words. Low physical risk (the
+default is a declared checked-in mapping, the row carries a visible stale note, arming still needs
+an explicit confirm), but the wording and the code disagree. **F-177-2:** a malformed top-level
+`pixelOrder:` SCALAR is silently ignored at scene load and deleted at the next save — that is
+exactly the `groupOverrides`/`pixelMap2d` idiom the design mandated, so fixing it unilaterally would
+be a redesign of a shared pattern; a one-line "key present but not a plain object" error would close
+it for all three maps at once. **Pre-existing, not from this wave:**
+`tests/launcher_supervision.test.js`'s L1 case runs a real `start.js` (throwaway 786x/787x ports,
+never the operator's) against the REAL `SIM_ROOT`, so its save server regenerates
+`scenes/manifest.json` and `marsin_engine/patterns/manifest.json` in the tracked tree — both writes
+verified CONTENT-IDEMPOTENT (the scenes one is inside the byte-identity proof; the pattern one was
+confirmed equal to what `listPatterns()` regenerates today), so only two mtimes moved. The same
+`SIM_SAVE_SERVER_ROOT` hook every other save-server test uses would close it.
+
+**Left for the operator smoke:** visual check of the Mechanism A toggle + 🧹 button and of the
+Mechanism B picker toggle/badge/stale note/`↺ scene defaults` (pure state fully unit-tested, DOM
+rendering unverified — starting the sim was off-limits); first PHYSICAL test of a REVERSED slot =
+Wall 1 → Bar Left with calibration pattern 71; remember a Mechanism A flag lands on hardware only
+at the engine's NEXT MODEL RELOAD (the sim preview keeps showing model intent, by design); rulings
+on F-177-1 and F-177-2; and a decision on which of the two diverging calibration playlists is
+right. Scratch in `~/tmp/fix_177/`.
+
+## _178 — wave adversarial review
+
+**Date:** 2026-08-06 · **Agent:** _178 (Fable, adversarial review) · **Report:**
+`.agent/reports/202608/20260806_178_wave_review.md`
+
+**Verdict: SHIP — the pixel-order wave is cleared for operator physical testing.** Reviewed with
+intent to falsify: read every new/changed product file, independently RECOMPUTED the reverse maps
+from the real fixture definitions (probe in `~/tmp/fix_178/`, read-only), re-ran the four new
+suites (98/98, zero binds), and re-derived the orientation claims from the generated models rather
+than trusting the reports.
+
+**Permutation math: CONFIRMED both mechanisms.** ShehdsBar dest head 17 (ch 114-119) ← source head
+0 (ch 12-17) role-for-role, controls 1-11 identity, bijection+involution, 19 slices covering the
+footprint exactly once with slice arithmetic equal to the channel map; Vintage non-contiguous
+lanes head-wise with controls 1,2,9-15 identity (14 slices); LED first-N-window-THEN-reverse
+proven against an explicit last-N counterexample; Mechanism A permutes only the wire association
+(channels / ledWalk) with geometry/localIndex/apply pinned at slot j.
+
+**One NEW defect, LOW: D-178-1** — a HAND-EDITED stale `pixelOrder` entry (the only origin the
+eager casualty-clearing leaves) silently becomes a live REVERSED flag when a later grow/rename
+mints a fixture with exactly that name; no warning at the collision moment. Needs an ignored
+standing stale-warning + an exact name collision; pattern 71 catches it physically. Follow-up:
+warn in `generateGroupFromTrace` when a newly-created member name already carries a store entry.
+
+**Persistence: CLEAN.** tmp+fsync+rename is atomic on win32 (MoveFileEx replace — proven by the
+suite on this machine); a crash can only orphan a harmless `.tmp-<pid>`; parse/version/unknown-key
+refusals all reachable and surfaced at picker-open + ARM; scene keying structural (picker reads
+engineState.scene, write keys the proven verdict.sourceScene, ARM never reads the file); the key
+sets cannot express an arm bit. Safety: git status = wave files + protected residue EXACTLY,
+bench_mirror.yaml untouched, no stray state/tmp files, port audit holds.
+
+**Three ruling recommendations:** F-177-1 KEEP the implementation (stale row degrades to the
+declared sidecar default, identical to a never-remembered row) and amend the design wording;
+F-177-2 adopt the one-line "top-level key present but not a plain object" console.error for all
+three maps as a small follow-up (not a hold); launcher_supervision — file the
+`SIM_SAVE_SERVER_ROOT` follow-up card, no urgency.
+
+**Bar defaults (the ChatGPT item): YES — both bars REVERSED** for the titanic default pairs: both
+bench bars run localIndex 0→17 toward decreasing x, both walls toward increasing x (re-derived
+from the generated models; vintage/par pairs are aligned and stay NORMAL). The operator gets the
+default by toggling ⇄ REVERSED on bar_left + bar_right in the picker at the FIRST ARM — that ARM's
+success writes `bench_mirror_state.yaml` and every later picker-open under titanic prefills it.
+First physical check: Wall 1 → Bar Left under calibration pattern 71.
+
+## _179 — malformed pixelOrder made visible (coordinator fix)
+
+**Date:** 2026-08-06 · **Agent:** coordinator (small-edit scope) · **Scope:** F-177-2 operator ruling
+
+Operator ruled on F-177-2: "show a warning in the sim for that." Implemented directly (small
+coordinator edit, no sub-agent): `src/core/config.js` extractParams now catches a top-level
+`pixelOrder:` that is not a plain map (scalar, array, null) — records it on
+`params.pixelOrderMalformed` + console.error; a valid map is unaffected and an Array is now
+also refused (previously lifted and left to the validator). `src/gui/gui_builder.js`
+reportPixelOrderStore surfaces it as a sim toast (ttl 14000); during boot the toast is
+DEFERRED 2.5s past the boot window instead of being dropped (boot suppresses toasts), so the
+warning is visible on scene load, and again at every save. The key is still ignored and
+dropped on next save — now loudly. groupOverrides/ledGroupOverrides/pixelMap2d intercepts NOT
+touched (the _178 "all three maps" suggestion stays a follow-up; scope held to the operator's
+ruling ahead of their physical test).
+
+**Files:** simulation/src/core/config.js, simulation/src/gui/gui_builder.js,
+simulation/tests/pixel_order_store.test.js (+1 pinning test: scalar + array flagged loudly,
+never lifted; valid map never trips the flag).
+
+**Suites:** five pixel_order/composition suites 96/96 (was 95/95, +1 new). Full sim suite not
+re-run (delta confined to the tested intercept + a browser-only report function; _177 baseline
+stands). Standalone probe under the session scratchpad confirmed scalar/array/valid-map paths.
+
+**Constraints:** no git ops, no live processes, no ports, no ARM/sACN; scenes/states untouched.
+
+## _181 — coordinate range story
+
+**Date:** 2026-08-06 · **Agent:** Fable debug (read-only) · **Report:** .agent/reports/202608/20260806_181_coordinate_range_story.md
+
+Operator observed calibration planes (patterns 66/67/68) only find titanic pixels between
+0 and ~0.5 on all three axes. NOT a model/exporter/pattern bug: both shipped models span the
+full 0..1 on nx/ny/nz (measured: titanic 964 px, test_bench 166 px, all axes exactly 0→1;
+exporter does per-axis min/max normalization at pixelblaze_model_exporter.js:639-654). Cause
+is the engine-owned global SIZE fader: wasm_host.js applySizeScale divides live coords by
+mult = 0.25·16^size (engine.js:763-770, identity at 0.5), and the titanic scene state has a
+persisted size: 0.773 (globals_state.yaml) → mult ≈ 2.13 → coords span 0→0.469 ≈ the observed
+0.5. test_bench state sits at size 0.5 (identity), which is why the bench calibrated clean.
+Verdict: by design (show feature), calibration-workflow footgun. Consequence for authors:
+render3D coords span [0 .. 1/sizeMult], sizeMult ∈ [0.25, 4] — never hard-code 0..1 edges;
+per-axis stretch also distorts distances (titanic x covers ~96 world units, y ~14.7). Fix
+options described only (procedure "SIZE=0.5 before calibrating" is the cheapest). No changes
+made; probe under ~/tmp/fix_181/.
+
+## _180 — par halo leak debug
+
+**Date:** 2026-08-06 · **Agent:** Fable debug · **Report:** .agent/reports/202608/20260806_180_par_halo_leak.md
+
+Operator: par that should be OFF is dark on hardware, SpotLight off, but a halo still glows
+in the sim (sacn_in, titanic, intermittent). Root cause chain found + FIXED: the ⚡ Enable
+OFF handler (gui_builder.js) paints every par its config color (#ffaa44, full brightness,
+outputGain ignored) straight onto bulb+halo+cone+p.color, out-of-band of the batch entries;
+the animate.js lighting-disabled clear loop leaves entry fields byte-identical to the black
+undriven treatment; on re-enable, paintUndrivenEntry's steady-state fast path
+(sacn_mapper.js:200) sees marker+matching fields and skips entry.apply FOREVER — any
+unpatched/frame-less par keeps a lit amber halo while the light pool gates independently
+(halo without spotlight, exactly the report). Fix: the OFF reset now calls
+invalidateMarsinBatchCache('lighting_disabled_reset'); rebuilt entries arrive unmarked, next
+demap pass repaints. Pinned by simulation/tests/par_halo_undriven_repaint.test.js (fast path
+real / fresh clone repaints / source contract on the handler).
+
+**Suites:** new 3/3; sacn_mapper+halo suites 32/32; full sim 2148/2156 — the 7 fails are
+pre-existing scene residue (patches.yaml.original Jul 5, live-modified scenes/**), untouched
+by this diff. Residual hypotheses if leak recurs (H2 frozen universe buffer in
+universe_router processFrame — per-source staleness only, one shared source id; H3 demap
+W/A/U-no-dimmer vs applyDmxFrame dimmer-RGB-only asymmetry) + 5-min live discrimination
+recipe in the report. No processes/ports touched; scenes/states untouched.

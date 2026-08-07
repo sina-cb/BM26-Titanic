@@ -3,6 +3,7 @@
  * Reads/writes the flat `params` object from the nested YAML structure.
  */
 import { params } from "./state.js";
+import { prunePixelOrder } from "../dmx/pixel_order_store.js";
 
 // Euclidean distance between two {x,y,z} points (plain math — no THREE here,
 // config.js loads before the 3D scene exists).
@@ -177,6 +178,29 @@ export function extractParams(node, parentKey = null) {
       params.pixelMap2d = node[key];
       continue;
     }
+    // Per-fixture PIXEL ORDER (normal | reversed), keyed by fixture NAME — the
+    // one identity a generator-generated fixture has. A plain map
+    // ({ [fixtureName]: 'reversed' }), NOT a control sub-section, so intercept
+    // it before the generic { value } recursion below mangles it. It lives at
+    // the top level (not on the fixture literals) precisely so it SURVIVES the
+    // destroy-and-recreate of every regeneration — the groupOverrides idiom.
+    // See src/dmx/pixel_order_store.js.
+    if (key === "pixelOrder") {
+      if (node[key] && typeof node[key] === "object" && !Array.isArray(node[key])) {
+        params.pixelOrder = node[key];
+      } else {
+        // Malformed hand edit (scalar, array, or null). No fallback
+        // interpretation: the key is ignored, remembered so the GUI validation
+        // pass can surface it as a visible warning, and dropped on next save.
+        params.pixelOrderMalformed = JSON.stringify(node[key]);
+        console.error(
+          `[pixelOrder] scene_config.yaml top-level "pixelOrder:" must be a map ` +
+          `of {"<fixture name>": reversed} — got ${JSON.stringify(node[key])}. ` +
+          `The key is IGNORED and will be dropped on the next save.`,
+        );
+      }
+      continue;
+    }
 
     const entry = node[key];
     if (entry && typeof entry === "object" && !Array.isArray(entry)) {
@@ -226,6 +250,16 @@ export function reconstructYAML(node, parentKey = null) {
     } else {
       delete node.pixelMap2d;
     }
+    // Pixel order: only non-default (`reversed`) entries persist. A scene with
+    // nothing reversed keeps the key out of the file entirely — absence IS the
+    // normal state, so an all-NORMAL scene saves byte-identically to before this
+    // feature existed.
+    const pixelOrderClean = prunePixelOrder(params.pixelOrder);
+    if (Object.keys(pixelOrderClean).length > 0) {
+      if (!node.pixelOrder) node.pixelOrder = {};
+    } else {
+      delete node.pixelOrder;
+    }
   }
   for (const key of Object.keys(node)) {
     if (key === "_section") continue;
@@ -274,6 +308,10 @@ export function reconstructYAML(node, parentKey = null) {
     }
     if (key === "pixelMap2d") {
       node[key] = prunePixelMap2d(params.pixelMap2d) || {};
+      continue;
+    }
+    if (key === "pixelOrder") {
+      node[key] = prunePixelOrder(params.pixelOrder);
       continue;
     }
 

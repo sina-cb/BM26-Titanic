@@ -27,6 +27,10 @@ import {
   traceRenameError, sweepGeneratedInstances, carryTraceGroupOverride,
 } from "./trace_group_rename.js";
 import { traceVisualsShouldShow } from "./trace_visual_gate.js";
+import {
+  PIXEL_ORDER_REVERSED, isReversed, carryPixelOrderEntries, clearCasualtyPixelOrder,
+  casualtyClearMessage, reversedMembers, validatePixelOrderStore,
+} from "../dmx/pixel_order_store.js";
 import { rebuildParLights, rebuildDmxFixtures } from "../core/fixtures.js";
 import { deselectAllFixtures, nextFixtureName, syncGuiFolders } from "../core/interaction.js";
 import { listTypes, getDefinition } from "../dmx/fixture_definition_registry.js";
@@ -290,6 +294,115 @@ function registerPatchRowRefresh(config, { root, uniInput, addrInput, ipInput, u
   return panel;
 }
 
+/**
+ * The ONE clear-and-warn path for pixel-order flags whose fixture just went away
+ * (generator count shrink, group delete, any other sweep casualty). Design
+ * 20260806_174 §2.3: never silently keep the entry — it would resurrect onto a
+ * brand-new physical light if the group regrows — and never silently drop it:
+ * the console line + toast ARE the operator notice.
+ *
+ * @param {string} groupLabel   the group the casualties belonged to
+ * @param {string[]} casualtyNames names of the removed fixtures
+ * @returns {string[]} the flags that were cleared (empty = nothing to say)
+ */
+function clearPixelOrderCasualties(groupLabel, casualtyNames) {
+  const cleared = clearCasualtyPixelOrder(params.pixelOrder, casualtyNames);
+  if (cleared.length === 0) return [];
+  const names = cleared.map((c) => c.name);
+  const message = casualtyClearMessage(groupLabel, names);
+  console.warn(`[pixelOrder] ${message}`);
+  if (!window._isAppBooting) showToast(message, { ttl: 14000 });
+  return names;
+}
+
+/**
+ * Every DMX/par fixture the pixel-order store can legally key on, with the pixel
+ * count of its DEFINITION — the input to validatePixelOrderStore. A fixture type
+ * with no registered definition contributes a `null` count: unknown is not
+ * "single pixel", so it can neither be flagged stale nor refused as a par here
+ * (the exporter is the authority on real pixel counts).
+ *
+ * @returns {Array<{name: string, pixelCount: number|null}>}
+ */
+function pixelOrderFixtureCensus() {
+  const list = (params.dmxFixtures && params.dmxFixtures.length > 0)
+    ? params.dmxFixtures : params.parLights;
+  const out = [];
+  for (const light of list || []) {
+    if (!light || !light.name) continue;
+    const def = getDefinition(light.type || light.fixtureType || '');
+    out.push({
+      name: light.name,
+      pixelCount: def && Array.isArray(def.pixels) ? def.pixels.length : null,
+    });
+  }
+  return out;
+}
+
+/**
+ * The pixel-order entries that name no fixture in this scene — QUIET (the panel
+ * re-renders constantly and must not spam the console). Must only be called once
+ * the trace auto-regeneration has run, or every generated fixture looks missing.
+ * An invalid value / single-pixel entry throws out of the validator; here that
+ * is reported once as an error and treated as "nothing to GC", never as a
+ * reason to hide the panel.
+ *
+ * @returns {string[]}
+ */
+function pixelOrderStaleNames() {
+  try {
+    const result = validatePixelOrderStore(params.pixelOrder, pixelOrderFixtureCensus());
+    return result.stale;
+  } catch (err) {
+    console.error(`[pixelOrder] ${err.message}`);
+    return [];
+  }
+}
+
+/**
+ * The LOUD validation pass (design §2.7): at boot — strictly after the trace
+ * auto-regenerate — and at every save. Stale entries are reported and LEFT
+ * ALONE (removal is the explicit 🧹 gesture); an invalid value or an entry on a
+ * single-pixel fixture is reported as an error + toast without crashing the boot
+ * render, and the save's model export refuses it again, there, fatally.
+ *
+ * @param {string} context  where this pass ran, for the log line
+ * @returns {string[]} stale entry names
+ */
+function reportPixelOrderStore(context) {
+  // A malformed top-level `pixelOrder:` (scalar/array/null hand edit) never
+  // reaches params.pixelOrder — config.js records it instead. Surface it HERE
+  // as a visible sim warning; during boot the toast is deferred past the
+  // boot window (boot suppresses toasts) instead of being dropped.
+  if (params.pixelOrderMalformed !== undefined) {
+    const malformedMsg = `scene_config.yaml "pixelOrder:" is malformed (got ` +
+      `${params.pixelOrderMalformed}) — expected a map of {"<fixture name>": reversed}. ` +
+      `It is IGNORED and will be dropped on the next save.`;
+    console.error(`[pixelOrder] (${context}) ${malformedMsg}`);
+    const toastMalformed = () => showToast(`⚠ ${malformedMsg}`, { ttl: 14000 });
+    if (window._isAppBooting) setTimeout(toastMalformed, 2500);
+    else toastMalformed();
+  }
+  let result;
+  try {
+    result = validatePixelOrderStore(params.pixelOrder, pixelOrderFixtureCensus());
+  } catch (err) {
+    console.error(`[pixelOrder] (${context}) ${err.message}`);
+    if (!window._isAppBooting) showToast(`⚠ ${err.message}`, { ttl: 14000 });
+    return [];
+  }
+  if (result.stale.length > 0) {
+    console.warn(`[pixelOrder] (${context}) ${result.stale.length} stale entry/entries name ` +
+      `no fixture in this scene: ${result.stale.join(', ')} — they do nothing. Use ` +
+      '"🧹 Clear stale pixel-order entries" in the fixtures panel to remove them.');
+    if (!window._isAppBooting) {
+      showToast(`⚠ ${result.stale.length} stale pixel-order entry/entries (see console) — ` +
+        'clear them with 🧹 in the fixtures panel.', { ttl: 9000 });
+    }
+  }
+  return result.stale;
+}
+
 export
 function setupGUI() {
   const gui = new GUI({ title: "🔦 Lighting Controls", width: 300 });
@@ -429,6 +542,12 @@ function setupGUI() {
       showSaveToast('Save cancelled — nothing was written', true);
       return { ok: false, reason: 'the operator cancelled at the 📡 Subscribed Universes prompt' };
     }
+
+    // Pixel-order store: report stale entries on every save (design §2.7).
+    // Purely informational — stale entries are inert and never block a save. An
+    // INVALID value is a different matter: saveModelJS below throws on it and
+    // aborts the whole save, which is the loud refusal the design asks for.
+    reportPixelOrderStore('save');
 
     // Export the pixel model + view-mask sidecar FIRST: saveModelJS
     // reconciles the view registry against the freshly exported pixels,
@@ -1630,6 +1749,20 @@ function setupGUI() {
               }
             }
           });
+          // The reset above paints fixture meshes (bulb + halo + cone + p.color)
+          // BEHIND the batch entries' backs. The sACN-in demap's undriven fast
+          // path (sacn_mapper.js paintUndrivenEntry) skips entry.apply() while
+          // an entry stays marked `_sacnUndriven` with the treatment fields
+          // intact — it assumes entry fields mirror the fixture's paint. This
+          // out-of-band repaint breaks that assumption: without invalidation,
+          // an unpatched/frame-less par kept a full-brightness config-color
+          // HALO forever after lighting was re-enabled, while its SpotLight
+          // stayed dark (operator report 2026-08-06, par halo leak). Rebuilding
+          // the batch cache clones fresh entries (no `_sacnUndriven` marker),
+          // so the next demap pass repaints every undriven fixture black/red.
+          if (window.invalidateMarsinBatchCache) {
+            window.invalidateMarsinBatchCache('lighting_disabled_reset');
+          }
         }
         updateModeVisibility();
         if (window.onLightingChange) window.onLightingChange();
@@ -2018,6 +2151,36 @@ function setupGUI() {
         _showAutoToast(`✓ Cleared metadata on ${cleared} fixture(s)`);
       };
       autoPatchWrap.appendChild(clearMetaBtn);
+
+      // ── 🧹 Stale pixel-order entries (design §2.7) ──────────────────────
+      // A `pixelOrder` entry that names no fixture in this scene is INERT, so it
+      // is never auto-deleted (a legitimate manual deletion must not brick the
+      // save) and never silently ignored either: it is reported at boot/save and
+      // removed only by this explicit gesture, which lists the names first.
+      const staleOrder = pixelOrderStaleNames();
+      if (staleOrder.length > 0) {
+        const staleBtn = document.createElement('button');
+        staleBtn.textContent = `🧹 Clear stale pixel-order entries (${staleOrder.length})`;
+        staleBtn.title = 'These pixel-order flags name no fixture in this scene and do ' +
+          'nothing. Removing them only tidies scene_config.yaml.';
+        staleBtn.style.cssText = apBtnBase +
+          'background:color-mix(in srgb, var(--caution) 15%, var(--surface));color:var(--caution);';
+        staleBtn.onclick = () => {
+          if (!confirm(`Remove ${staleOrder.length} stale pixel-order entry/entries?\n\n` +
+            `${staleOrder.map((n) => `  • ${n}`).join('\n')}\n\n` +
+            'They name no fixture in this scene, so nothing changes on the wire.')) return;
+          pushUndo();
+          for (const name of staleOrder) delete params.pixelOrder[name];
+          console.warn(`[pixelOrder] Cleared ${staleOrder.length} stale entry/entries: ` +
+            `${staleOrder.join(', ')}`);
+          debounceAutoSave();
+          if (window._setGuiRebuilding) window._setGuiRebuilding(true);
+          renderParGUI();
+          if (window._setGuiRebuilding) window._setGuiRebuilding(false);
+        };
+        autoPatchWrap.appendChild(staleBtn);
+      }
+
       const plChildren = parListFolder.domElement.querySelector('.children');
       if (plChildren) plChildren.prepend(autoPatchWrap);
 
@@ -2494,6 +2657,71 @@ function setupGUI() {
               });
 
               if (genChildren) genChildren.appendChild(patchDiv);
+
+              // ── ⇄ PIXEL ORDER (design 20260806_174 §2.8) ──────────────────
+              // Rendered ONLY for a fixture whose DEFINITION has more than one
+              // pixel: a par has nothing to reverse, and the store refuses an
+              // entry on one at export. The flag is scene state keyed by the
+              // fixture NAME (params.pixelOrder), so it survives every
+              // regeneration; it lands on hardware at the engine's NEXT model
+              // reload, which the toast says in as many words — the 3D preview
+              // deliberately keeps showing model intent (§2.6).
+              const defPixelCount = (fDef && Array.isArray(fDef.pixels)) ? fDef.pixels.length : 0;
+              if (genChildren && defPixelCount > 1) {
+                if (!params.pixelOrder) params.pixelOrder = {};
+                const pxOrderRow = document.createElement('div');
+                pxOrderRow.className = 'pixel-order-row';
+                pxOrderRow.style.cssText = 'padding:0 8px 6px;';
+                const pxOrderBtn = document.createElement('button');
+                pxOrderBtn.title = 'Pixel order on the wire. REVERSED = this fixture is wired ' +
+                  'opposite to the model. Verify with calibration pattern 71.';
+                const paintPxOrderBtn = () => {
+                  // A hand-authored invalid value must not be swallowed by the
+                  // button paint — say so on the control itself.
+                  let reversed = false;
+                  let invalid = null;
+                  try {
+                    reversed = isReversed(params.pixelOrder, config.name);
+                  } catch (err) {
+                    invalid = err.message;
+                  }
+                  pxOrderBtn.textContent = invalid ? '⚠ Px INVALID'
+                    : (reversed ? 'Px ⇄ REVERSED' : 'Px →');
+                  if (invalid) pxOrderBtn.title = invalid;
+                  pxOrderBtn.style.cssText = 'width:100%;padding:4px 0;border:none;' +
+                    'border-radius:3px;cursor:pointer;font-size:10px;font-family:inherit;' +
+                    'font-weight:600;' + (invalid
+                      ? 'background:color-mix(in srgb, var(--error) 18%, var(--surface));' +
+                        'color:var(--error);'
+                      : (reversed
+                        ? 'background:color-mix(in srgb, var(--caution) 15%, var(--surface));' +
+                          'color:var(--caution);'
+                        : 'background:var(--control-bg);color:var(--secondary);'));
+                };
+                paintPxOrderBtn();
+                pxOrderBtn.onclick = () => {
+                  let reversed;
+                  try {
+                    reversed = isReversed(params.pixelOrder, config.name);
+                  } catch (err) {
+                    // The stored value is neither 'normal' nor 'reversed'. Fix
+                    // it by hand in scene_config.yaml — the toggle refuses to
+                    // guess which of the two the operator meant.
+                    alert(err.message);
+                    return;
+                  }
+                  if (reversed) delete params.pixelOrder[config.name];
+                  else params.pixelOrder[config.name] = PIXEL_ORDER_REVERSED;
+                  paintPxOrderBtn();
+                  debounceAutoSave();
+                  showToast(`Pixel order saved (${config.name}: ${reversed ? 'NORMAL' : 'REVERSED'}) ` +
+                    '— engine model re-exported. Reload the model/pattern on the engine to see ' +
+                    'it on hardware.', { ttl: 9000 });
+                  pxOrderBtn.blur();
+                };
+                pxOrderRow.appendChild(pxOrderBtn);
+                genChildren.appendChild(pxOrderRow);
+              }
 
               meta = appendMetadataPanelV2(genChildren, config, { onChange: debounceAutoSave });
               // Trace-generated fixtures auto-default fixtureId from DMX patch
@@ -5063,6 +5291,11 @@ function setupGUI() {
       if (window.controllerMappingFixturesRemoved) {
         window.controllerMappingFixturesRemoved(regenCasualties);
       }
+      // Pixel-order flags of the fixtures that just went away: cleared HERE and
+      // said out loud (design §2.3). A GROW is untouched by this — the surviving
+      // names keep their entries and the new members simply have none, so a flip
+      // on "<group> 3" survives 4→5 for free.
+      clearPixelOrderCasualties(groupName, regenCasualties.map((c) => c.name));
       // Survivors are NEW config objects with the old names — re-run
       // the projection so they regain their derived patch fields
       // before the first render. (Redundant when the hook above found
@@ -5430,6 +5663,16 @@ function setupGUI() {
           // name (mirrors the LED / par ✏ Rename plumbing, report _28). These are
           // DISPLAY state, not mapping — the ruling keeps them following the name.
           carryTraceGroupOverride(params.groupOverrides, oldGroupName, newName);
+          // Pixel-order flags follow the rename the same way: `<old> N` →
+          // `<new> N`. Done BEFORE the regenerate below so the regenerate's own
+          // casualty sweep (every old-named fixture) finds nothing left to clear
+          // — a rename must never look like a shrink to the flag store.
+          const carriedPixelOrder = carryPixelOrderEntries(
+            params.pixelOrder, oldGroupName, newName, traceLightCount(trace));
+          for (const row of carriedPixelOrder) {
+            console.warn(`[Rename]   ⇄ pixel-order flag carried: "${row.from}" → "${row.to}" ` +
+              `(${row.value}) — display state keyed on the name, not mapping`);
+          }
           if (window.viewRegistryRenameGroup) {
             window.viewRegistryRenameGroup(oldGroupName, newName);
           }
@@ -5653,6 +5896,23 @@ function setupGUI() {
           const mapped = mappedFixtureCount();
           if (mapped === 0) return true;
           const g = trace.groupName || trace.name;
+          // Pixel-order flags are name-keyed too, so they stay put exactly like
+          // the addresses and ids — one rule, not two (design §2.5). Name the
+          // currently-REVERSED members so the operator knows a physical
+          // re-verify (calibration pattern 71) is due on those lights.
+          const memberNames = params.parLights
+            .filter((l) => l.group === g && l.traceGenerated)
+            .map((l) => l.name);
+          let reversedNames = [];
+          try {
+            reversedNames = reversedMembers(params.pixelOrder, memberNames);
+          } catch (err) {
+            // An invalid stored value: say so here rather than quietly omitting
+            // the line the operator is about to make a decision on.
+            reversedNames = [`(unreadable — ${err.message})`];
+          }
+          const reversedLine = reversedNames.length > 0
+            ? `\nCurrently REVERSED: ${reversedNames.join(', ')}.\n` : '';
           return confirm(
             `⚠ Renumber "${g}" to the new chain order?\n\n` +
             `${mapped} mapped fixture(s) KEEP their DMX addresses (addresses are sticky by ` +
@@ -5661,7 +5921,8 @@ function setupGUI() {
             'PHYSICAL LIGHT:\n' +
             `  • DMX addresses (controller chains + patches.yaml)\n` +
             '  • engine model ids — sectionId / fixtureId\n' +
-            '  • saved 2D Pixel Map anchors (a fixture\'s hand-placed position in a view)\n\n' +
+            '  • saved 2D Pixel Map anchors (a fixture\'s hand-placed position in a view)\n' +
+            '  • pixel-order flags (NORMAL/REVERSED)\n' + reversedLine + '\n' +
             'After this, a fixture NUMBER means its position in the physical daisy chain, ' +
             'NOT its position along the drawn path. The addresses, ids and 2D anchors stay ' +
             'put; which physical light each of them belongs to changes.\n\nContinue?');
@@ -6019,6 +6280,9 @@ function setupGUI() {
             if (window.controllerMappingFixturesRemoved) {
               window.controllerMappingFixturesRemoved(removedConfigs);
             }
+            // Same clear-and-warn helper the regeneration casualty path uses —
+            // one code path, one message shape (design §2.3).
+            clearPixelOrderCasualties(groupName, removedConfigs.map((c) => c.name));
           }
           params.traces.splice(i, 1);
           if (window._setGuiRebuilding) window._setGuiRebuilding(true);
@@ -6048,6 +6312,11 @@ function setupGUI() {
         generateGroupFromTrace(i);
       }
     });
+
+    // Pixel-order validation runs HERE — strictly after the auto-regenerate
+    // above, or every generated fixture would look missing and the whole store
+    // would be reported stale (design §2.7).
+    reportPixelOrderStore('boot');
 
     window.renderParGUI = renderParGUI;
     renderParGUI();

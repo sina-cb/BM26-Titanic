@@ -1,0 +1,93 @@
+schemaVersion: 1
+name: calibration
+entries:
+  - id: e_calibration_0_66_calibration_x_plane
+    pattern: 66_calibration_x_plane
+    label: 01 — X Plane (left/right)
+    defaults:
+      sliderPosition: 0.49
+      sliderWidth: 0.12
+      sliderBackground: 0.25
+    modulations: []
+    midiMappings: []
+    notes: >-
+      Move Position from 0 to 1. Red should travel through the model from one X
+      side to the other; cyan keeps every mapped pixel faintly visible.
+  - id: e_calibration_1_67_calibration_y_plane
+    pattern: 67_calibration_y_plane
+    label: 02 — Y Plane (low/high)
+    defaults:
+      sliderPosition: 0.3
+      sliderWidth: 0.25
+      sliderBackground: 0.2
+    modulations: []
+    midiMappings: []
+    notes: >-
+      Move Position from 0 to 1. Green should travel through the model from low
+      Y to high Y; magenta keeps every mapped pixel faintly visible.
+  - id: e_calibration_2_68_calibration_z_plane
+    pattern: 68_calibration_z_plane
+    label: 03 — Z Plane (depth)
+    defaults:
+      sliderPosition: 0.12
+      sliderWidth: 0.2
+      sliderBackground: 0.2
+    modulations: []
+    midiMappings: []
+    notes: >-
+      Move Position from 0 to 1. Blue should travel through model depth; warm
+      gold keeps every mapped pixel faintly visible.
+  - id: e_calibration_3_69_calibration_coordinate_rgb
+    pattern: 69_calibration_coordinate_rgb
+    label: 04 — XYZ Coordinate RGB
+    defaults:
+      sliderLevel: 0.51
+      sliderFloor: 0.05
+    modulations: []
+    midiMappings: []
+    notes: >-
+      Static coordinate truth map: red = X, green = Y, blue = Z. Nearby pixels
+      should have nearby colors; sudden color breaks expose misplaced geometry.
+  - id: e_calibration_4_70_calibration_fixture_types
+    pattern: 70_calibration_fixture_types
+    label: 05 — Fixture Types
+    defaults:
+      sliderLevel: 0.8
+    modulations: []
+    midiMappings: []
+    notes: >-
+      Strands cyan, pars green, Vintage gold, bars red, haze blue, fog violet,
+      TE signs magenta; white means unknown fixture metadata.
+  - id: e_calibration_5_71_calibration_fixture_pixel_order
+    pattern: 71_calibration_fixture_pixel_order
+    label: 06 — Fixture Pixel Order
+    defaults:
+      sliderPosition: 0
+      sliderBackground: 0.03
+    modulations: []
+    midiMappings: []
+    notes: >-
+      Selected local pixel is white, previous is red, next is green. Sweep
+      Position to find reversed, broken, or misordered fixture pixels.
+  - id: e_calibration_6_72_calibration_controller_focus
+    pattern: 72_calibration_controller_focus
+    label: 07 — Controller Focus
+    defaults:
+      sliderController: 0
+      sliderBackground: 0.05
+    modulations: []
+    midiMappings: []
+    notes: >-
+      Sweep Controller through CTRL_1 to CTRL_18. The selected controller is
+      white; missing controller metadata is magenta.
+  - id: e_calibration_7_73_calibration_emitter_channels
+    pattern: 73_calibration_emitter_channels
+    label: 08 — Emitter Channels
+    defaults:
+      sliderChannel: 0
+      sliderLevel: 0.8
+    modulations: []
+    midiMappings: []
+    notes: >-
+      Channel selects red, green, blue, matched W+A white, UV, then RGB white.
+      Use this to verify emitter capability and channel order.

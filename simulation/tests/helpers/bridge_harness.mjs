@@ -25,6 +25,7 @@
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import Module from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -73,11 +74,45 @@ export const ALL_SOURCES = [...new Set(liveResolution.spec.mirrors
 export { routeKey, yaml, liveScene };
 
 /**
+ * A FRESH, per-process scratch scenes root for the bridge's remembered
+ * bench-mirror selections (design 20260806_174 §5.3).
+ *
+ * WHY THIS EXISTS. A successful ARM writes `bench_mirror_state.yaml` into the
+ * bench scene's directory. Left unredirected, every arm test in this suite would
+ * rewrite a TRACKED file under `simulation/scenes/`, destroying the SHA256
+ * before/after proof that the suite does not touch real scene data — and
+ * dirtying the operator's working tree on every `npm test`.
+ *
+ * Belt AND braces: this redirect is the belt, and `writeBenchMirrorState`
+ * independently REFUSES any `node --test` process aiming at the repo's real
+ * scenes directory (the braces), so a future harness that forgets this gets a
+ * loud refusal rather than a quiet write.
+ *
+ * Keyed by pid because `node --test` gives every spec FILE its own process; two
+ * files therefore never share a state file.
+ */
+function freshStateRoot() {
+  const root = path.join(os.homedir(), 'tmp', 'fix_176', 'bridge_state', String(process.pid));
+  fs.rmSync(root, { recursive: true, force: true });
+  // Only the scenes that can be armed need a directory; the writer refuses to
+  // create one, deliberately (it is a sibling of an existing scene, never a new
+  // scene).
+  fs.mkdirSync(path.join(root, 'test_bench'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'titanic'), { recursive: true });
+  return root;
+}
+
+/**
  * Build one bridge harness: patches `sacn`/`ws`, requires the two REAL bridge
  * modules, opens the boot gate, and returns every utility a spec needs to
  * drive them. Call ONCE per test file.
  */
 export function createBridgeHarness() {
+  // MUST be set before the bridge module is required — it resolves the root
+  // once, at load, so there is exactly one root per process and no way for a
+  // later test to move it out from under a live arm.
+  const benchStateRoot = freshStateRoot();
+  process.env.BM26_BENCH_MIRROR_STATE_ROOT = benchStateRoot;
   /** Every frame either bridge tried to put on the wire, by sender. */
   const sends = [];
   const senders = [];
@@ -454,6 +489,8 @@ export function createBridgeHarness() {
     // ── Fixed live data (module-level exports, re-surfaced for convenience) ──
     SIM_ROOT, yaml, routeKey, liveSidecar, liveResolution, LIVE_DESTS, GATEWAY, STRAND, ALL_SOURCES,
     simPorts,
+    /** Where this process's bridge writes its remembered selections. */
+    benchStateRoot,
 
     // ── Fake classes + registries ──
     FakeSender, FakeEmitter, FakeReceiver, FakeClient, FakeWebSocketServer, FakeWebSocketClient,

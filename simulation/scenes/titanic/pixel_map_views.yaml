@@ -212,9 +212,9 @@ views:
         sizeX: 16
         sizeY: 16
     framing:
-      zoom: 0.7971938775510204
-      panX: -167.93539540816334
-      panY: 32.708877551020294
+      zoom: 1.0000000000000002
+      panX: -34.62856924606206
+      panY: 69.22014457966179
     offsets:
       Left Front Wall 5:
         dx: -40

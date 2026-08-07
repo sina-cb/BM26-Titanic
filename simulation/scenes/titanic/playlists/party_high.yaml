@@ -11,7 +11,13 @@ entries:
   - id: e_party_high_1_03_dual_axis_crush
     pattern: 03_dual_axis_crush
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.5
+      sliderDirection: 0.14
+      sliderLevel: 0.09
+      sliderKick: 0.13
+      sliderRadius: 0.5
+      sliderBeamWidth: 0.5
     modulations: []
     midiMappings: []
     notes: null
@@ -25,7 +31,16 @@ entries:
   - id: e_party_high_3_09_cyclone
     pattern: 09_cyclone
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.05
+      sliderDirection: 0.11
+      sliderLevel: 0.2
+      sliderKick: 0.5
+      sliderRadius: 0.5
+      sliderDensity: 0.5
+      sliderWhiteLevel: 0.5
+      sliderWhiteKick: 0.5
+      sliderBlinderBite: 0.5
     modulations: []
     midiMappings: []
     notes: null
@@ -39,14 +54,24 @@ entries:
   - id: e_party_high_5_28_spectrum_bloom
     pattern: 28_spectrum_bloom
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.79
+      sliderLow: 0.13
+      sliderMid: 0.11
+      sliderHigh: 0.5
+      sliderFloor: 0.5
     modulations: []
     midiMappings: []
     notes: null
   - id: e_party_high_6_29_kick_shockwave
     pattern: 29_kick_shockwave
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.09
+      sliderKick: 0.12
+      sliderLevel: 0.35
+      sliderDecay: 0.07
+      sliderRingWidth: 0.13
     modulations: []
     midiMappings: []
     notes: null
@@ -74,22 +99,49 @@ entries:
   - id: e_party_high_10_48_heartbeat_drive
     pattern: 48_heartbeat_drive
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.29
+      sliderKick: 0.16
+      sliderLow: 0.14
     modulations: []
     midiMappings: []
     notes: null
   - id: e_party_high_11_49_cylon_crush
     pattern: 49_cylon_crush
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.54
+      sliderLevel: 0.1
+      sliderKick: 0.16
+      sliderTrail: 0.05
     modulations: []
     midiMappings: []
     notes: null
   - id: e_party_high_12_50_phase_cathedral_hd
     pattern: 50_phase_cathedral_hd
     label: null
-    defaults: {}
-    modulations: []
+    defaults:
+      sliderLocalSpeed: 0.66
+      sliderNodeContrast: 0.75
+      sliderPhaseShift: 0.78
+      sliderKickLock: 0.13
+      sliderSharpBase: 0.13
+    modulations:
+      - id: mod_sliderSharpBase_micDomEnergy1
+        type: continuous
+        enabled: true
+        source:
+          scope: cpc
+          key: micDomEnergy1
+        target:
+          scope: pattern
+          parameter: sliderSharpBase
+        mode: offset
+        polarity: unipolar
+        range:
+          - 0
+          - 0.35
+        curve: linear
     midiMappings: []
     notes: null
   - id: e_party_high_13_51_confetti_cyclone

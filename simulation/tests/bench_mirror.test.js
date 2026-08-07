@@ -31,6 +31,7 @@ const {
   createMirrorState, spliceMirrorFrame, mirrorPayload, describeMirror,
   BENCH_MIRROR_VERSION, DMX_CHANNELS, SPEC_KEYS, SLOT_KEYS,
 } = require('../lib/bench_mirror.cjs');
+const { STATE_KEYS, SELECTION_KEYS, SLOT_STATE_KEYS } = require('../lib/bench_mirror_state.cjs');
 
 const SIM_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LIVE_SPEC_PATH = path.join(SIM_ROOT, 'scenes', 'test_bench', 'bench_mirror.yaml');
@@ -585,13 +586,61 @@ test('_151: the armed flag is process memory only — never read from or written
   }
 });
 
-test('_155 §10: the remembered SELECTION is process memory only too', () => {
+// ── _176 §3.4: a DELIBERATE ruling reversal, with its guard rewritten ──────
+//
+// `_155` §10 ruled that the remembered SELECTION stays in process memory, and
+// the test that used to live here asserted `_lastSelection` never touched disk.
+// Operator order (design report 20260806_174) reverses that: selections now
+// persist to a machine-owned `bench_mirror_state.yaml`.
+//
+// The rewrite below is NOT "the old guard, relaxed". The invariant the old test
+// was really protecting — A CHECKED-IN OR DEPLOYED FILE CAN NEVER ARM HARDWARE —
+// is asserted here MORE strongly than before, because it is now a property of
+// the schema rather than of a `Map`: the state file's admitted key sets cannot
+// express an arm bit, an address, a universe or a host, so there is no file
+// content that could activate anything. What did become permissible is exactly
+// one thing: writing a (source, reverse) pair per slot, through one guarded
+// atomic writer, on ARM success only.
+
+test('_176 §3.4: `_lastSelection` is GONE — the state file is the only store', () => {
   const src = bridgeSrc();
-  assert.match(src, /^const _lastSelection = new Map\(\);/m);
-  for (const m of src.matchAll(/^.*_lastSelection.*$/gm)) {
-    assert.doesNotMatch(m[0], /writeFile|readFile|localStorage|sessionStorage|process\.env/,
-      `the remembered selection must never leave process memory: ${m[0].trim()}`);
+  assert.doesNotMatch(src, /_lastSelection/,
+    'two stores would drift; the process-memory one was deleted, not kept alongside the file');
+  assert.match(src, /readBenchMirrorState\(BENCH_MIRROR_STATE_ROOT, scene\)/,
+    'the picker reads the file FRESH — there is no cache to go stale');
+});
+
+test('_176 §3.4: the state SCHEMA cannot express an arm bit or any plumbing', () => {
+  // The `_151` test above still proves the armed flag itself never persists.
+  // THIS is the new half: even a hand-written or deployed state file cannot
+  // activate hardware, because no admitted key could hold a route. Same
+  // technique the sidecar's SLOT_KEYS assertion uses — the schema IS the
+  // guarantee, so the test asserts the schema rather than scanning text.
+  const forbidden = ['armed', 'enabled', 'universe', 'address', 'addr', 'ip', 'host',
+    'priority', 'controller'];
+  for (const key of [...STATE_KEYS, ...SELECTION_KEYS, ...SLOT_STATE_KEYS]) {
+    assert.ok(!forbidden.includes(key.toLowerCase()),
+      `the state schema must not admit '${key}' — a state file must not be able to arm anything`);
   }
+  assert.deepEqual([...STATE_KEYS].sort(), ['selections', 'state_version']);
+  assert.deepEqual([...SELECTION_KEYS].sort(), ['slots']);
+  assert.deepEqual([...SLOT_STATE_KEYS].sort(), ['reverse', 'source']);
+});
+
+test('_176 §3.2: the bridge writes state through the ONE guarded writer, on ARM success', () => {
+  const src = bridgeSrc();
+  assert.equal((src.match(/writeBenchMirrorState\(/g) || []).length, 1,
+    'exactly ONE call site — no second, unguarded write path');
+  const armIdx = src.indexOf('async function armBenchMirror');
+  const provenIdx = src.indexOf('if (unproven.length > 0) {', armIdx);
+  const writeIdx = src.indexOf('writeBenchMirrorState(BENCH_MIRROR_STATE_ROOT', armIdx);
+  assert.ok(armIdx > 0 && provenIdx > armIdx && writeIdx > provenIdx,
+    'the write happens AFTER the ownership proof — a selection is only remembered once it is ' +
+    'proven to have actually taken the hardware');
+  assert.doesNotMatch(src, /writeBenchMirrorState\([^)]*\)[\s\S]{0,200}benchMirrorOptions/,
+    'picker browsing never writes');
+  assert.match(src, /const BENCH_MIRROR_STATE_ROOT =/,
+    'one root, resolved once at load — a live arm cannot have it moved under it');
 });
 
 test('_151: the blackout precedes the sender close, and senders are held during it', () => {

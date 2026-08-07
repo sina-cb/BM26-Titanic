@@ -4,7 +4,13 @@ entries:
   - id: e_ambient_0_00_golden_hour_wash
     pattern: 00_golden_hour_wash
     label: null
-    defaults: {}
+    defaults:
+      sliderLocalSpeed: 0.72
+      sliderLevel: 0.73
+      sliderGrain: 0.36
+      sliderEmberSwell: 0.28
+      sliderJewelryWhite: 0.56
+      sliderJewelryFlash: 0
     modulations: []
     midiMappings: []
     notes: null

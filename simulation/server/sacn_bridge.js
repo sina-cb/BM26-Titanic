@@ -65,6 +65,10 @@ const { parseBenchMirrorSpec, isMirrorActive, mirrorSourceUniverses, mirrorDestP
   createMirrorState, spliceMirrorFrame, mirrorPayload,
   describeMirror, DMX_CHANNELS } = require('../lib/bench_mirror.cjs');
 const { resolveBenchMirror, loadFixtureRegistry } = require('../lib/bench_mirror_resolve.cjs');
+// The MACHINE-OWNED remembered picker state (design report 20260806_174 §3).
+// Pure parse + a guarded atomic writer; this file supplies the ONE root.
+const { readBenchMirrorState, writeBenchMirrorState, setSceneSelection,
+  sceneSelection, BENCH_MIRROR_STATE_FILE } = require('../lib/bench_mirror_state.cjs');
 
 // Boot-time correctness of the RECEIVE socket: which interface it joins
 // multicast on, when it may be subscribed to, and what a socket error means
@@ -314,14 +318,36 @@ function blackoutInFlight() {
   return _mirrorDisarming || _armBlackoutInFlight;
 }
 
-// Last-used selection, keyed by `${benchScene}|${sourceScene}` (report
-// 20260805_155 §10). PROCESS MEMORY ONLY, like the arm itself: a remembered
-// SELECTION cannot light anything (arming still needs the gesture plus every
-// check), but persisting it to disk would create a second mutable source of
-// truth beside the sidecar that `robocopy /MIR` would ship and that could rot
-// against the scene. A fresh boot falls back to the sidecar's defaults, which is
-// the correct "state of the world after a restart" answer everywhere else here.
-const _lastSelection = new Map();
+// ── Remembered SELECTIONS now live on disk (design 20260806_174 §3.2) ──────
+//
+// THIS REVERSES `_155` §10 BY OPERATOR ORDER, and the reversal is deliberate
+// rather than an oversight, so the old rationale is answered rather than
+// deleted. `_155` kept the last-used selection in process memory because a file
+// could rot against the scene and could ride a `robocopy /MIR` onto the show
+// server. Both objections are now met head-on:
+//
+//   - ROT IS DETECTED, LOUDLY, and never silently applied: every stored entry is
+//     re-validated against the CURRENT source scene at picker-open (a stale row
+//     is reported by name and pre-fills nothing) and again at ARM (where a
+//     stored-but-stale name dies on R-14 exactly like a hand-typed one).
+//   - A DEPLOYED COPY CANNOT LIGHT ANYTHING: the state schema has no key that
+//     could hold an arm bit, a universe, an address or a host, so the file can
+//     only ever pre-fill a picker. ARMING IS STILL PROCESS MEMORY (`_mirrorArm`
+//     above), still an operator gesture, still cleared on every start.
+//
+// There is exactly ONE store: the file. A process-memory cache beside it would
+// drift, so there is none and the file is read FRESH at every picker-open.
+//
+// ONE ROOT, INJECTED ONCE. `BM26_BENCH_MIRROR_STATE_ROOT` is the test seam — the
+// suite points it at a scratch directory so no test can ever write into the
+// repo's tracked `simulation/scenes/**`. It is not a fallback chain: unset means
+// the production location, and the writer independently REFUSES a `node --test`
+// process that aims at the real scenes directory (see `assertWritableTarget`).
+const BENCH_MIRROR_STATE_ROOT =
+  (typeof process.env.BM26_BENCH_MIRROR_STATE_ROOT === 'string'
+    && process.env.BM26_BENCH_MIRROR_STATE_ROOT.trim() !== '')
+    ? path.resolve(process.env.BM26_BENCH_MIRROR_STATE_ROOT.trim())
+    : path.join(SIM_ROOT, 'scenes');
 
 /**
  * The inbound frame's RAW DMX bytes, as the 1-indexed `{channel: value}` object
@@ -1183,7 +1209,7 @@ wss.on('connection', (ws) => {
       } else if (data.type === 'benchMirrorOptions') {
         // ADVISORY picker data (report 20260805_155 §7.1): every slot, its
         // compatible candidates from the ENGINE's current scene, the sidecar
-        // default and the last-used choice. Computed FRESH on every request and
+        // default and the REMEMBERED source + pixel order. Computed FRESH on every request and
         // trusted by nothing — the ARM re-resolves from disk in the same pass
         // that arms, so a scene edit between "picker opened" and "ARM clicked"
         // is caught there rather than assumed away here.
@@ -1438,8 +1464,15 @@ function sendVia(entry, payload, priority, label) {
 //
 // The mode is a TEMPORARY, session-scoped stand-in: the engine stays on the ship
 // scene it is running, the visible sim stays where it is, and while armed the
-// BENCH IS THE ONLY PHYSICAL OUTPUT — the ordinary relay is suspended and the
-// browser can transmit to hardware at all. Nothing here writes to disk.
+// BENCH IS THE ONLY PHYSICAL OUTPUT — the ordinary relay is suspended and no
+// browser can transmit to hardware at all.
+//
+// EXACTLY ONE THING HERE WRITES TO DISK (design 20260806_174 §3.2): a successful
+// ARM records the selection it just proved into
+// `<benchScene>/bench_mirror_state.yaml`, atomically, through
+// `writeBenchMirrorState` and nothing else. THE ARMED FLAG STILL NEVER
+// PERSISTS — it is `_mirrorArm`, process memory, cleared on every start — and
+// the state schema cannot express one.
 
 /** A stable fingerprint of a COMPUTED mapping, for reuse + drift detection. */
 function mirrorFingerprint(spec) {
@@ -1499,8 +1532,11 @@ function benchMirrorStatus(extra) {
     sourceScene: _mirrorArm ? _mirrorArm.sourceScene : null,
     label: _mirrorArm ? _mirrorArm.label : null,
     destinations: _mirrorArm ? _mirrorArm.destinations : [],
+    // `reverse` rides the armed status because "which way round is this fixture
+    // running" is not derivable from anything else on the operator's screen.
     selection: _mirrorArm ? _mirrorArm.slots.map(s => ({
       slot: s.slot, benchFixture: s.benchFixture, source: s.source, summary: s.summary,
+      reverse: s.reverse === true, reverseApplicable: s.reverseApplicable === true,
     })) : [],
     suspendedRoutes: _mirrorArm ? _mirrorArm.suspendedRoutes : 0,
     warnings: [],
@@ -1515,16 +1551,27 @@ function benchMirrorStatus(extra) {
 
 /**
  * ADVISORY picker data for one scene: every slot, its compatible candidates from
- * the ENGINE's current scene, the sidecar default and the last-used choice.
+ * the ENGINE's current scene, the sidecar default and the REMEMBERED choice
+ * (source + pixel order) read fresh from `bench_mirror_state.yaml`.
  *
  * Trusted by NOTHING. The ARM re-resolves everything from disk in the same pass
  * that arms, so a scene edit between "picker opened" and "ARM clicked" is caught
  * there by name rather than assumed away here.
+ *
+ * STORED STATE IS VALIDATED HERE, LOUDLY (design 20260806_174 §3.3). Selections
+ * are keyed by the ENGINE'S CURRENT SCENE, which is what makes a `titanic`
+ * mapping structurally unable to surface under any other scene's session. Per
+ * entry: a slot id the sidecar no longer declares becomes a payload warning and
+ * is never applied; a source that no longer resolves becomes a per-row
+ * `staleReason` quoting the stored name, with NOTHING pre-filled; a stored
+ * `reverse: true` on a destination that cannot be reversed is reported and
+ * dropped. The file is never edited by a read — it stands until the next
+ * successful ARM overwrites its scene key.
  */
 function benchMirrorOptions(scene, reqId) {
   const base = {
     type: 'benchMirrorOptions', reqId, scene, ok: false, refusal: null,
-    label: null, sourceScene: engineState.scene, slots: [],
+    label: null, sourceScene: engineState.scene, slots: [], warnings: [],
   };
   if (typeof scene !== 'string' || scene.trim() === '') {
     return { ...base, refusal: 'no scene named — the bridge never picks one for you' };
@@ -1547,28 +1594,75 @@ function benchMirrorOptions(scene, reqId) {
   // explicitly is exactly the way in. Re-resolve with an all-`none` selection so
   // the candidate lists are still computed.
   const withNone = resolution.ok ? resolution : resolveMirrorFor(scene, sidecar.spec,
-    engineState.scene, Object.fromEntries(sidecar.spec.slots.map(s => [s.slot, null])));
+    engineState.scene, Object.fromEntries(sidecar.spec.slots.map(
+      s => [s.slot, { source: null, reverse: false }])));
   if (!withNone.ok) return { ...base, refusal: withNone.refusal };
 
-  const remembered = _lastSelection.get(`${scene}|${engineState.scene}`) || null;
+  // ── The remembered selection, read FRESH and validated per entry ──────────
+  const stored = readBenchMirrorState(BENCH_MIRROR_STATE_ROOT, scene);
+  const warnings = [];
+  if (stored.error !== null) warnings.push(stored.error);
+  const rememberedSlots = sceneSelection(stored.state, engineState.scene);
+  const declaredIds = new Set(withNone.slots.map(s => s.slot));
+  for (const id of Object.keys(rememberedSlots)) {
+    if (declaredIds.has(id)) continue;
+    warnings.push(`${scene}/${BENCH_MIRROR_STATE_FILE} remembers a slot '${id}' that ` +
+      `${scene}/bench_mirror.yaml no longer declares — ignored, never applied. The next ` +
+      'successful ARM rewrites this scene key and drops it.');
+  }
+
   return {
     ...base,
     ok: true,
-    slots: withNone.slots.map(s => ({
-      slot: s.slot,
-      benchFixture: s.benchFixture,
-      kind: s.kind,
-      fixtureType: s.fixtureType,
-      footprintCh: s.footprintCh,
-      pixelCount: s.pixelCount,
-      dest: s.dest,
+    warnings,
+    slots: withNone.slots.map((s) => {
       // A default that does not resolve in THIS source scene is reported as
       // null rather than silently swapped — the picker shows nothing
       // pre-selected and the operator chooses.
-      defaultSource: s.candidates.some(c => c.name === s.defaultSource) ? s.defaultSource : null,
-      lastUsed: (remembered && s.slot in remembered) ? remembered[s.slot] : null,
-      candidates: s.candidates,
-    })),
+      const defaultSource = s.candidates.some(c => c.name === s.defaultSource)
+        ? s.defaultSource : null;
+      const entry = Object.prototype.hasOwnProperty.call(rememberedSlots, s.slot)
+        ? rememberedSlots[s.slot] : null;
+      let storedSource = null;
+      let reverse = false;
+      let staleReason = null;
+      if (entry !== null) {
+        if (entry.source !== null && !s.candidates.some(c => c.name === entry.source)) {
+          staleReason = `stored source '${entry.source}' no longer resolves against ` +
+            `'${engineState.scene}' for this slot — it is not among its ${s.candidates.length} ` +
+            'compatible candidate(s). Nothing was pre-filled; pick again. (The stored value is ' +
+            'kept until the next successful ARM.)';
+        } else {
+          storedSource = entry.source;
+          reverse = entry.reverse;
+        }
+        if (reverse === true && s.reverseApplicable !== true) {
+          staleReason = `stored reverse: true, but '${s.benchFixture}' cannot be reversed ` +
+            '(a single-pixel fixture, or a definition whose per-pixel channel maps do not ' +
+            'validate). REVERSED was not pre-filled.';
+          reverse = false;
+        }
+      }
+      return {
+        slot: s.slot,
+        benchFixture: s.benchFixture,
+        kind: s.kind,
+        fixtureType: s.fixtureType,
+        footprintCh: s.footprintCh,
+        pixelCount: s.pixelCount,
+        dest: s.dest,
+        defaultSource,
+        // The VALIDATED prefill pair. `stored` is the RAW entry as the file
+        // holds it, so a stale row can show the operator what was remembered
+        // next to the reason it was not applied.
+        storedSource,
+        reverse,
+        reverseApplicable: s.reverseApplicable,
+        stored: entry === null ? null : { source: entry.source, reverse: entry.reverse },
+        staleReason,
+        candidates: s.candidates,
+      };
+    }),
   };
 }
 
@@ -1710,7 +1804,9 @@ function disarmInBackground(reason, how) {
  * await its ack → suspend + zero the ship → recompute → ownership proof.
  *
  * @param {string} scene
- * @param {Object|null} selection { slotId: sourceName|null }, or null = defaults
+ * @param {Object|null} selection `{ slotId: {source: string|null, reverse: boolean} }`, or null =
+ *        the sidecar defaults with every slot NORMAL. The pre-`_176` flat shape
+ *        is REFUSED by name in the resolver (R-24) — no dual-shape parser.
  * @param {Object} ws the socket making the request — the arm is scoped to it
  * @returns {Promise<Object>} status (with `refusal` set when refused)
  */
@@ -1791,7 +1887,8 @@ async function armBenchMirror(scene, selection, ws) {
       `${destinations.map(d => `U${d.universe} → ${d.ip}`).join(', ')}.`);
     for (const slot of resolution.slots) {
       console.log(`[sACN Bridge] 🪞   ${slot.slot.padEnd(14)} ← ` +
-        `${(slot.source || 'none').padEnd(22)} (${slot.summary})`);
+        `${(slot.source || 'none').padEnd(22)} ` +
+        `${(slot.reverse ? 'REVERSED' : 'NORMAL  ')} (${slot.summary})`);
     }
     for (const w of warnings) console.warn(`[sACN Bridge] ⚠ 🪞   ${w}`);
     broadcastLog(`🪞 BENCH MIRROR ARMED — ${verdict.label}`, 'warn');
@@ -1859,9 +1956,39 @@ async function armBenchMirror(scene, selection, ws) {
     return { ...after, refusal: `ARM refused: ${why}`, warnings };
   }
 
-  // Remember the selection for the next picker open — PROCESS MEMORY ONLY.
-  _lastSelection.set(`${scene}|${verdict.sourceScene}`,
-    Object.fromEntries(resolution.slots.map(s => [s.slot, s.source])));
+  // ── Remember the selection: the ONE state-file write in this bridge ───────
+  //
+  // ON ARM SUCCESS ONLY — this is the single moment a selection is PROVEN
+  // resolvable against the live scenes AND proven to own its hardware. Picker
+  // browsing writes nothing, so a file on disk always describes something that
+  // actually ran.
+  //
+  // A write failure does NOT unwind the arm: the hardware has already changed
+  // hands and the composed frames are already going out, so throwing here would
+  // trade a remembered selection for a live mirror. It is reported instead — in
+  // the log, in the monitor and in the returned status's warnings — never
+  // swallowed.
+  try {
+    const existing = readBenchMirrorState(BENCH_MIRROR_STATE_ROOT, scene);
+    if (existing.error !== null) {
+      console.warn(`[sACN Bridge] ⚠ 🪞 ${existing.error} This ARM is REWRITING the file from ` +
+        'the selection that just armed.');
+      warnings.push(existing.error);
+    }
+    const next = setSceneSelection(existing.state, verdict.sourceScene,
+      Object.fromEntries(resolution.slots.map(s => [s.slot,
+        { source: s.source, reverse: s.reverse === true }])));
+    const written = writeBenchMirrorState(BENCH_MIRROR_STATE_ROOT, scene, next);
+    console.log(`[sACN Bridge] 🪞 selection remembered under selections.${verdict.sourceScene} ` +
+      `→ ${written.path} (${written.bytes} B, atomic). It pre-fills the picker next time and ` +
+      'cannot arm anything by itself.');
+  } catch (e) {
+    const why = `the selection could NOT be remembered — ${e.message} The mirror is armed and ` +
+      'running; only the picker pre-fill is lost.';
+    console.error(`[sACN Bridge] ❌ 🪞 ${why}`);
+    broadcastLog(`❌ 🪞 ${why}`, 'warn');
+    warnings.push(why);
+  }
 
   return broadcastBenchMirrorStatus({
     warnings,

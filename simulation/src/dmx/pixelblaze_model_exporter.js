@@ -8,6 +8,9 @@ import { computeLedStrandPatches, projectLedStrandPixels } from "./led/led_patch
 import { groupKeyForStrand } from "./led/led_metadata.js";
 import { isLedBusFixture, ledMappableCounts } from "./led/led_fixture_kind.js";
 import { getDefinition } from "./fixture_definition_registry.js";
+import {
+  isReversed, wireSlot, pixelOrderSinglePixelRefusal,
+} from "./pixel_order_store.js";
 import { ledDisplayGroup, scaleRgbForLedOutput } from "../core/group_lock.js";
 import { saveHttpUrl } from "../core/save_endpoint.js";
 import { fixtureModelScale } from "../fixtures/fixture_model_scale.js";
@@ -184,7 +187,28 @@ export function generatePixelMap() {
           }
         }
 
+        // ── PIXEL ORDER (Mechanism A, design 20260806_174 §2.6) ────────────
+        // The scene's name-keyed `pixelOrder` store says whether THIS fixture is
+        // wired opposite to the model. When it is, the exporter permutes ONLY
+        // the WIRE ASSOCIATION — the DMX `channels` map for a DMX pixel, the
+        // `ledWalk` patch entry for an LED-bus pixel (its channels are the
+        // controller's order map, identical on every pixel, so permuting THEM
+        // would reverse nothing). Geometry, `localIndex`, `pixelSize`, the name
+        // suffix and the sim's `apply` all stay at the model slot `j`: patterns
+        // stay spatial and the 3D preview keeps showing MODEL INTENT, which is
+        // the point — the flag exists to make the hardware match the sim.
+        // An invalid enum value throws out of isReversed and, because
+        // exportConfig() runs saveModelJS() FIRST, aborts the whole save.
+        const pixelCount = fixture.pixels.length;
+        const pixelsReversed = isReversed(params.pixelOrder, light.name);
+        if (pixelsReversed && pixelCount < 2) {
+          throw new Error(pixelOrderSinglePixelRefusal(light.name, pixelCount));
+        }
+
         fixture.pixels.forEach((px, j) => {
+          // The slot this pixel's WIRE bytes come from: j when NORMAL,
+          // N-1-j when REVERSED.
+          const wireJ = wireSlot(pixelsReversed, j, pixelCount);
           // TWO positions, deliberately. `worldPos` is the PHYSICAL one (from
           // px.localPos) — it is what the engine model, the sACN patching and
           // the analytic light pool sample, and an exported model must describe
@@ -214,7 +238,7 @@ export function generatePixelMap() {
               ? (LED_CHANNEL_ORDERS[ledProj.order] || LED_CHANNEL_ORDERS.RGBW) : null;
             const patchObj = ledBus
               ? (ledWalk
-                ? { universe: ledWalk[j].universe, addr: ledWalk[j].addr,
+                ? { universe: ledWalk[wireJ].universe, addr: ledWalk[wireJ].addr,
                   footprint: ledProj.stride, led: true }
                 : null)
               : ((u && u > 0 && addr && addr > 0) ? { universe: u, addr: addr, footprint: fp } : null);
@@ -269,9 +293,18 @@ export function generatePixelMap() {
               // (relative to that pixel's own address), never the definition's
               // absolute 3i+1/3i+2/3i+3 block — the firmware streams stride
               // bytes per pixel.
+              // A DMX pixel's wire association IS its channel map, so a
+              // REVERSED fixture reads it from slot `wireJ`. The whole per-pixel
+              // map moves as ONE unit — RGBWAU blocks stay intact, w/a are never
+              // swapped, and a definition's non-contiguous per-head lanes
+              // (Vintage `value` 3..8 + `rgb` 16..33) permute head-wise for
+              // free. Channels no pixel claims (dimmer/strobe/aux/macros) are
+              // not touched here at all — they are not per-pixel data.
               channels: ledBus
                 ? (ledOrderMap ? { ...ledOrderMap } : null)
-                : standardizeChannels(px.model && px.model.channels ? px.model.channels : null),
+                : standardizeChannels(
+                  fixture.pixels[wireJ].model && fixture.pixels[wireJ].model.channels
+                    ? fixture.pixels[wireJ].model.channels : null),
               ...(ledBus ? {
                 whiteMode: ledProj ? ledProj.whiteMode : 'native',
                 ledWire: (ledProj && ledProj.wire) ? ledProj.wire : null,
@@ -314,7 +347,14 @@ export function generatePixelMap() {
 
 
       } else if (fixture && fixture.light) {
-        // Simple fixture
+        // Simple fixture — ONE emitter, so a pixel-order flag on it is
+        // meaningless. The UI never offers the control here (single-pixel
+        // definitions render no toggle), so an entry can only be a hand edit:
+        // refuse the export rather than silently exporting an identity
+        // permutation that would hide the mistake (codex P0).
+        if (isReversed(params.pixelOrder, light.name)) {
+          throw new Error(pixelOrderSinglePixelRefusal(light.name, 1));
+        }
         const worldPos = new THREE.Vector3();
         if (fixture.group) {
            if (fixture.hitbox) fixture.hitbox.updateMatrixWorld(true);

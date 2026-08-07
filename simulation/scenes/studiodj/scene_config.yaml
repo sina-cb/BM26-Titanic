@@ -511,6 +511,7 @@ ledStrands:
       fixtureId: 1
       viewMask: 0
       haloScale: 1
+      viewMaskHi: 0
     - name: Right
       startX: -3
       startY: 5
@@ -526,6 +527,7 @@ ledStrands:
       fixtureId: 2
       viewMask: 0
       haloScale: 1
+      viewMaskHi: 0
 traces:
   - name: LeftSmokeStack
     shape: circle

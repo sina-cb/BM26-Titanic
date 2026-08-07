@@ -122,6 +122,17 @@ const SPEC = parseBenchMirrorSpec({
   ],
 }, 'synthetic');
 
+/**
+ * Build the `{ slot: {source, reverse} }` selection shape from a flat map.
+ *
+ * The shape is deliberately explicit everywhere below rather than defaulted by
+ * this helper alone: `sel({par_1: 'Ship Par A'}, {par_1: true})` says "Par A,
+ * REVERSED" and `sel({par_1: null})` says "held dark, NORMAL". The old flat
+ * shape is a REFUSAL now (R-24), asserted directly in its own test.
+ */
+const sel = (flat, rev = {}) => Object.fromEntries(Object.entries(flat)
+  .map(([slot, source]) => [slot, { source, reverse: rev[slot] === true }]));
+
 function resolve(over = {}) {
   return resolveBenchMirror({
     spec: SPEC,
@@ -216,7 +227,7 @@ test('_155 R-18: one fixture name with two fixtureTypes refuses — the bridge w
 });
 
 test('_155 R-12: a selection naming an unknown slot refuses and lists the real ones', () => {
-  const out = resolve({ selection: { par_1: 'Ship Par A', led_0: null, ghost: null } });
+  const out = resolve({ selection: sel({ par_1: 'Ship Par A', led_0: null, ghost: null }) });
   assert.equal(out.ok, false);
   assert.match(out.refusal, /ARM refused \[R-12\]/);
   assert.match(out.refusal, /names slot 'ghost'/);
@@ -224,7 +235,7 @@ test('_155 R-12: a selection naming an unknown slot refuses and lists the real o
 });
 
 test('_155 R-13: an incomplete selection refuses — `none` is a choice, absence is not', () => {
-  const out = resolve({ selection: { par_1: 'Ship Par A' } });
+  const out = resolve({ selection: sel({ par_1: 'Ship Par A' }) });
   assert.equal(out.ok, false);
   assert.match(out.refusal, /ARM refused \[R-13\]/);
   assert.match(out.refusal, /missing slot\(s\) led_0/);
@@ -232,7 +243,7 @@ test('_155 R-13: an incomplete selection refuses — `none` is a choice, absence
 });
 
 test('_155 R-14: a selection naming an unpatched source refuses', () => {
-  const out = resolve({ selection: { par_1: 'Ship Par Z', led_0: null } });
+  const out = resolve({ selection: sel({ par_1: 'Ship Par Z', led_0: null }) });
   assert.equal(out.ok, false);
   assert.match(out.refusal, /ARM refused \[R-14\]/);
   assert.match(out.refusal, /names 'Ship Par Z', which the 'titanic' scene does not patch/);
@@ -240,21 +251,21 @@ test('_155 R-14: a selection naming an unpatched source refuses', () => {
 
 test('_155 R-15: every compatibility rule refuses individually, naming the rule', () => {
   // fixtureType mismatch (a 20-ch bar into a 10-ch par slot).
-  const t = resolve({ selection: { par_1: 'Ship Bar', led_0: null } });
+  const t = resolve({ selection: sel({ par_1: 'Ship Bar', led_0: null }) });
   assert.equal(t.ok, false);
   assert.match(t.refusal, /ARM refused \[R-15\]/);
   assert.match(t.refusal, /profiles must be identical; the bridge does not translate channel maps/);
   assert.match(t.refusal, /\[rule: fixtureType\]/);
 
   // kind mismatch (a strand into a DMX slot).
-  const k = resolve({ selection: { par_1: 'Ship Rope', led_0: null } });
+  const k = resolve({ selection: sel({ par_1: 'Ship Rope', led_0: null }) });
   assert.equal(k.ok, false);
   assert.match(k.refusal, /\[rule: kind\]/);
 
   // pixel format mismatch.
   const src = sourceScene();
   src.controllers.controllers[1].led = { ...LED_BLOCK, order: 'GRBW' };
-  const f = resolve({ sourceScene: src, selection: { par_1: 'Ship Par A', led_0: 'Ship Rope' } });
+  const f = resolve({ sourceScene: src, selection: sel({ par_1: 'Ship Par A', led_0: 'Ship Rope' }) });
   assert.equal(f.ok, false);
   assert.match(f.refusal, /\[rule: pixelFormat\]/);
   assert.match(f.refusal, /pixel bytes are only copied between identical formats/);
@@ -264,7 +275,7 @@ test('_155 R-15: every compatibility rule refuses individually, naming the rule'
   short.patches.patches['Ship Rope'].pixelCount = 2;
   short.patches.patches['Ship Rope'].segments = [
     { universe: 30, startChannel: 1, endChannel: 8, pixelCount: 2 }];
-  const s = resolve({ sourceScene: short, selection: { par_1: 'Ship Par A', led_0: 'Ship Rope' } });
+  const s = resolve({ sourceScene: short, selection: sel({ par_1: 'Ship Par A', led_0: 'Ship Rope' }) });
   assert.equal(s.ok, false);
   assert.match(s.refusal, /\[rule: pixelCount\]/);
   assert.match(s.refusal, /cannot be shorter than its destination/);
@@ -346,13 +357,13 @@ test('_155 R-22c: a default that does not resolve in THIS scene refuses — neve
   assert.match(out.refusal, /slot 'led_0' defaults to 'Ship Rope'/);
   assert.match(out.refusal, /the bridge will not substitute 'none' for you/);
   // …and the PICKER path still works: choosing explicitly is the way in.
-  const picked = resolve({ sourceScene: src, selection: { par_1: 'Ship Par A', led_0: null } });
+  const picked = resolve({ sourceScene: src, selection: sel({ par_1: 'Ship Par A', led_0: null }) });
   assert.equal(picked.ok, true, picked.refusal || '');
   assert.equal(picked.slots[1].source, null);
 });
 
 test('_155 §6.1: a `none` slot keeps its destination, owned and composed dark', () => {
-  const out = resolve({ selection: { par_1: null, led_0: null } });
+  const out = resolve({ selection: sel({ par_1: null, led_0: null }) });
   assert.equal(out.ok, true, out.refusal || '');
   assert.deepEqual(out.spec.mirrors.map(m => m.slices.length), [0, 0]);
   assert.deepEqual(out.spec.mirrors.map(m => `${m.destUniverse}→${m.destHost}`),
@@ -567,7 +578,7 @@ test('byte level: a strand slot copies whole RGBW pixels and drops the tail', ()
 });
 
 test('byte level: a `none` slot composes all zeros, and never carries the other slot\'s bytes', () => {
-  const out = resolve({ selection: { par_1: 'Ship Par A', led_0: null } });
+  const out = resolve({ selection: sel({ par_1: 'Ship Par A', led_0: null }) });
   const state = createMirrorState(out.spec);
   spliceMirrorFrame(state, 6, frame(1, 10, () => 255));
   spliceMirrorFrame(state, 30, frame(1, 40, () => 255));
@@ -602,8 +613,8 @@ test('byte level: fan-out delivers byte-identical frames to both slots', () => {
 });
 
 test('byte level: the chosen source is the one that lands (two candidates, distinct data)', () => {
-  const a = resolve({ selection: { par_1: 'Ship Par A', led_0: null } });
-  const b = resolve({ selection: { par_1: 'Ship Par B', led_0: null } });
+  const a = resolve({ selection: sel({ par_1: 'Ship Par A', led_0: null }) });
+  const b = resolve({ selection: sel({ par_1: 'Ship Par B', led_0: null }) });
   const sa = createMirrorState(a.spec);
   const sb = createMirrorState(b.spec);
   // Par A is at U6/1, Par B at U6/11. One frame, two different regions.

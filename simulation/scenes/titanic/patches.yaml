@@ -60,608 +60,608 @@ patches:
     dmxUniverse: 15
     dmxAddress: 1
     controllerId: 10
-    sectionId: 514
-    fixtureId: 2738
+    sectionId: 528
+    fixtureId: 2814
     viewMask: 0
   Right Front Wall 2:
     controllerIp: 10.1.1.16
     dmxUniverse: 15
     dmxAddress: 120
     controllerId: 10
-    sectionId: 514
-    fixtureId: 2739
+    sectionId: 528
+    fixtureId: 2815
     viewMask: 0
   Right Front Wall 3:
     controllerIp: 10.1.1.16
     dmxUniverse: 16
     dmxAddress: 1
     controllerId: 10
-    sectionId: 514
-    fixtureId: 2740
+    sectionId: 528
+    fixtureId: 2816
     viewMask: 0
   Right Front Wall 4:
     controllerIp: 10.1.1.16
     dmxUniverse: 16
     dmxAddress: 120
     controllerId: 10
-    sectionId: 514
-    fixtureId: 2741
+    sectionId: 528
+    fixtureId: 2817
     viewMask: 0
   Right Front Wall 5:
     controllerIp: 10.1.1.16
     dmxUniverse: 17
     dmxAddress: 1
     controllerId: 10
-    sectionId: 514
-    fixtureId: 2742
+    sectionId: 528
+    fixtureId: 2818
     viewMask: 0
   Right SmokeStacks 1:
     controllerIp: 10.1.1.20
     dmxUniverse: 25
     dmxAddress: 1
     controllerId: 14
-    sectionId: 515
-    fixtureId: 2743
+    sectionId: 529
+    fixtureId: 2819
     viewMask: 0
   Right SmokeStacks 2:
     controllerIp: 10.1.1.20
     dmxUniverse: 25
     dmxAddress: 11
     controllerId: 14
-    sectionId: 515
-    fixtureId: 2744
+    sectionId: 529
+    fixtureId: 2820
     viewMask: 0
   Right SmokeStacks 3:
     controllerIp: 10.1.1.20
     dmxUniverse: 25
     dmxAddress: 21
     controllerId: 14
-    sectionId: 515
-    fixtureId: 2745
+    sectionId: 529
+    fixtureId: 2821
     viewMask: 0
   Right SmokeStacks 4:
     controllerIp: 10.1.1.20
     dmxUniverse: 25
     dmxAddress: 31
     controllerId: 14
-    sectionId: 515
-    fixtureId: 2746
+    sectionId: 529
+    fixtureId: 2822
     viewMask: 0
   Right SmokeStacks 5:
     controllerIp: 10.1.1.20
     dmxUniverse: 26
     dmxAddress: 1
     controllerId: 14
-    sectionId: 515
-    fixtureId: 2747
+    sectionId: 529
+    fixtureId: 2823
     viewMask: 0
   Right SmokeStacks 6:
     controllerIp: 10.1.1.20
     dmxUniverse: 26
     dmxAddress: 11
     controllerId: 14
-    sectionId: 515
-    fixtureId: 2748
+    sectionId: 529
+    fixtureId: 2824
     viewMask: 0
   Right SmokeStacks 7:
     controllerIp: 10.1.1.20
     dmxUniverse: 26
     dmxAddress: 21
     controllerId: 14
-    sectionId: 515
-    fixtureId: 2749
+    sectionId: 529
+    fixtureId: 2825
     viewMask: 0
   Right SmokeStacks 8:
     controllerIp: 10.1.1.20
     dmxUniverse: 26
     dmxAddress: 31
     controllerId: 14
-    sectionId: 515
-    fixtureId: 2750
+    sectionId: 529
+    fixtureId: 2826
     viewMask: 0
   Right Front Rails 1:
     controllerIp: 10.1.1.17
     dmxUniverse: 18
     dmxAddress: 1
     controllerId: 11
-    sectionId: 516
-    fixtureId: 2751
+    sectionId: 530
+    fixtureId: 2827
     viewMask: 0
   Right Front Rails 2:
     controllerIp: 10.1.1.17
     dmxUniverse: 18
     dmxAddress: 34
     controllerId: 11
-    sectionId: 516
-    fixtureId: 2752
+    sectionId: 530
+    fixtureId: 2828
     viewMask: 0
   Right Front Rails 3:
     controllerIp: 10.1.1.17
     dmxUniverse: 18
     dmxAddress: 67
     controllerId: 11
-    sectionId: 516
-    fixtureId: 2753
+    sectionId: 530
+    fixtureId: 2829
     viewMask: 0
   Right Front Rails 4:
     controllerIp: 10.1.1.17
     dmxUniverse: 18
     dmxAddress: 100
     controllerId: 11
-    sectionId: 516
-    fixtureId: 2754
+    sectionId: 530
+    fixtureId: 2830
     viewMask: 0
   Right Auditorium 1:
     controllerIp: 10.1.1.18
     dmxUniverse: 21
     dmxAddress: 1
     controllerId: 12
-    sectionId: 517
-    fixtureId: 2755
+    sectionId: 531
+    fixtureId: 2831
     viewMask: 0
   Right Auditorium 2:
     controllerIp: 10.1.1.18
     dmxUniverse: 21
     dmxAddress: 11
     controllerId: 12
-    sectionId: 517
-    fixtureId: 2756
+    sectionId: 531
+    fixtureId: 2832
     viewMask: 0
   Right Auditorium 3:
     controllerIp: 10.1.1.18
     dmxUniverse: 21
     dmxAddress: 21
     controllerId: 12
-    sectionId: 517
-    fixtureId: 2757
+    sectionId: 531
+    fixtureId: 2833
     viewMask: 0
   Right Auditorium 4:
     controllerIp: 10.1.1.18
     dmxUniverse: 21
     dmxAddress: 31
     controllerId: 12
-    sectionId: 517
-    fixtureId: 2758
+    sectionId: 531
+    fixtureId: 2834
     viewMask: 0
   Right Auditorium 5:
     controllerIp: 10.1.1.17
     dmxUniverse: 19
     dmxAddress: 1
     controllerId: 11
-    sectionId: 517
-    fixtureId: 2759
+    sectionId: 531
+    fixtureId: 2835
     viewMask: 0
   Right Auditorium 6:
     controllerIp: 10.1.1.17
     dmxUniverse: 19
     dmxAddress: 11
     controllerId: 11
-    sectionId: 517
-    fixtureId: 2760
+    sectionId: 531
+    fixtureId: 2836
     viewMask: 0
   Right Auditorium 7:
     controllerIp: 10.1.1.17
     dmxUniverse: 19
     dmxAddress: 21
     controllerId: 11
-    sectionId: 517
-    fixtureId: 2761
+    sectionId: 531
+    fixtureId: 2837
     viewMask: 0
   Right Auditorium 8:
     controllerIp: 10.1.1.17
     dmxUniverse: 19
     dmxAddress: 31
     controllerId: 11
-    sectionId: 517
-    fixtureId: 2762
+    sectionId: 531
+    fixtureId: 2838
     viewMask: 0
   Left Auditorium 1:
     controllerIp: 10.1.1.12
     dmxUniverse: 8
     dmxAddress: 1
     controllerId: 4
-    sectionId: 518
-    fixtureId: 2763
+    sectionId: 532
+    fixtureId: 2839
     viewMask: 0
   Left Auditorium 2:
     controllerIp: 10.1.1.12
     dmxUniverse: 8
     dmxAddress: 11
     controllerId: 4
-    sectionId: 518
-    fixtureId: 2764
+    sectionId: 532
+    fixtureId: 2840
     viewMask: 0
   Left Auditorium 3:
     controllerIp: 10.1.1.12
     dmxUniverse: 8
     dmxAddress: 21
     controllerId: 4
-    sectionId: 518
-    fixtureId: 2765
+    sectionId: 532
+    fixtureId: 2841
     viewMask: 0
   Left Auditorium 4:
     controllerIp: 10.1.1.12
     dmxUniverse: 8
     dmxAddress: 31
     controllerId: 4
-    sectionId: 518
-    fixtureId: 2766
+    sectionId: 532
+    fixtureId: 2842
     viewMask: 0
   Left Auditorium 5:
     controllerIp: 10.1.1.11
     dmxUniverse: 6
     dmxAddress: 1
     controllerId: 3
-    sectionId: 518
-    fixtureId: 2767
+    sectionId: 532
+    fixtureId: 2843
     viewMask: 0
   Left Auditorium 6:
     controllerIp: 10.1.1.11
     dmxUniverse: 6
     dmxAddress: 11
     controllerId: 3
-    sectionId: 518
-    fixtureId: 2768
+    sectionId: 532
+    fixtureId: 2844
     viewMask: 0
   Left Auditorium 7:
     controllerIp: 10.1.1.11
     dmxUniverse: 6
     dmxAddress: 21
     controllerId: 3
-    sectionId: 518
-    fixtureId: 2769
+    sectionId: 532
+    fixtureId: 2845
     viewMask: 0
   Left Auditorium 8:
     controllerIp: 10.1.1.11
     dmxUniverse: 6
     dmxAddress: 31
     controllerId: 3
-    sectionId: 518
-    fixtureId: 2770
+    sectionId: 532
+    fixtureId: 2846
     viewMask: 0
   Left Back Wall 1:
     controllerIp: 10.1.1.13
     dmxUniverse: 9
     dmxAddress: 1
     controllerId: 5
-    sectionId: 519
-    fixtureId: 2771
+    sectionId: 533
+    fixtureId: 2847
     viewMask: 0
   Left Back Wall 2:
     controllerIp: 10.1.1.13
     dmxUniverse: 9
     dmxAddress: 120
     controllerId: 5
-    sectionId: 519
-    fixtureId: 2772
+    sectionId: 533
+    fixtureId: 2848
     viewMask: 0
   Left Back Wall 3:
     controllerIp: 10.1.1.13
     dmxUniverse: 10
     dmxAddress: 1
     controllerId: 5
-    sectionId: 519
-    fixtureId: 2773
+    sectionId: 533
+    fixtureId: 2849
     viewMask: 0
   Left Back Wall 4:
     controllerIp: 10.1.1.13
     dmxUniverse: 10
     dmxAddress: 120
     controllerId: 5
-    sectionId: 519
-    fixtureId: 2774
+    sectionId: 533
+    fixtureId: 2850
     viewMask: 0
   Left Back Wall 5:
     controllerIp: 10.1.1.13
     dmxUniverse: 11
     dmxAddress: 1
     controllerId: 5
-    sectionId: 519
-    fixtureId: 2775
+    sectionId: 533
+    fixtureId: 2851
     viewMask: 0
   Right Back Wall 1:
     controllerIp: 10.1.1.19
     dmxUniverse: 22
     dmxAddress: 1
     controllerId: 13
-    sectionId: 520
-    fixtureId: 2776
+    sectionId: 534
+    fixtureId: 2852
     viewMask: 0
   Right Back Wall 2:
     controllerIp: 10.1.1.19
     dmxUniverse: 22
     dmxAddress: 120
     controllerId: 13
-    sectionId: 520
-    fixtureId: 2777
+    sectionId: 534
+    fixtureId: 2853
     viewMask: 0
   Right Back Wall 3:
     controllerIp: 10.1.1.19
     dmxUniverse: 23
     dmxAddress: 1
     controllerId: 13
-    sectionId: 520
-    fixtureId: 2778
+    sectionId: 534
+    fixtureId: 2854
     viewMask: 0
   Right Back Wall 4:
     controllerIp: 10.1.1.19
     dmxUniverse: 23
     dmxAddress: 120
     controllerId: 13
-    sectionId: 520
-    fixtureId: 2779
+    sectionId: 534
+    fixtureId: 2855
     viewMask: 0
   Right Back Wall 5:
     controllerIp: 10.1.1.19
     dmxUniverse: 24
     dmxAddress: 1
     controllerId: 13
-    sectionId: 520
-    fixtureId: 2780
+    sectionId: 534
+    fixtureId: 2856
     viewMask: 0
   Left Front Wall 1:
     controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 1
     controllerId: 1
-    sectionId: 521
-    fixtureId: 2781
+    sectionId: 535
+    fixtureId: 2857
     viewMask: 0
   Left Front Wall 2:
     controllerIp: 10.1.1.10
     dmxUniverse: 2
     dmxAddress: 120
     controllerId: 1
-    sectionId: 521
-    fixtureId: 2782
+    sectionId: 535
+    fixtureId: 2858
     viewMask: 0
   Left Front Wall 3:
     controllerIp: 10.1.1.10
     dmxUniverse: 3
     dmxAddress: 1
     controllerId: 1
-    sectionId: 521
-    fixtureId: 2783
+    sectionId: 535
+    fixtureId: 2859
     viewMask: 0
   Left Front Wall 4:
     controllerIp: 10.1.1.10
     dmxUniverse: 3
     dmxAddress: 120
     controllerId: 1
-    sectionId: 521
-    fixtureId: 2784
+    sectionId: 535
+    fixtureId: 2860
     viewMask: 0
   Left Front Wall 5:
     controllerIp: 10.1.1.10
     dmxUniverse: 4
     dmxAddress: 1
     controllerId: 1
-    sectionId: 521
-    fixtureId: 2785
+    sectionId: 535
+    fixtureId: 2861
     viewMask: 0
   Left SmokeStack 1:
     controllerIp: 10.1.1.14
     dmxUniverse: 12
     dmxAddress: 1
     controllerId: 6
-    sectionId: 522
-    fixtureId: 2786
+    sectionId: 536
+    fixtureId: 2862
     viewMask: 0
   Left SmokeStack 2:
     controllerIp: 10.1.1.14
     dmxUniverse: 12
     dmxAddress: 11
     controllerId: 6
-    sectionId: 522
-    fixtureId: 2787
+    sectionId: 536
+    fixtureId: 2863
     viewMask: 0
   Left SmokeStack 3:
     controllerIp: 10.1.1.14
     dmxUniverse: 12
     dmxAddress: 21
     controllerId: 6
-    sectionId: 522
-    fixtureId: 2788
+    sectionId: 536
+    fixtureId: 2864
     viewMask: 0
   Left SmokeStack 4:
     controllerIp: 10.1.1.14
     dmxUniverse: 12
     dmxAddress: 31
     controllerId: 6
-    sectionId: 522
-    fixtureId: 2789
+    sectionId: 536
+    fixtureId: 2865
     viewMask: 0
   Left SmokeStack 5:
     controllerIp: 10.1.1.14
     dmxUniverse: 13
     dmxAddress: 1
     controllerId: 6
-    sectionId: 522
-    fixtureId: 2790
+    sectionId: 536
+    fixtureId: 2866
     viewMask: 0
   Left SmokeStack 6:
     controllerIp: 10.1.1.14
     dmxUniverse: 13
     dmxAddress: 11
     controllerId: 6
-    sectionId: 522
-    fixtureId: 2791
+    sectionId: 536
+    fixtureId: 2867
     viewMask: 0
   Left SmokeStack 7:
     controllerIp: 10.1.1.14
     dmxUniverse: 13
     dmxAddress: 21
     controllerId: 6
-    sectionId: 522
-    fixtureId: 2792
+    sectionId: 536
+    fixtureId: 2868
     viewMask: 0
   Left SmokeStack 8:
     controllerIp: 10.1.1.14
     dmxUniverse: 13
     dmxAddress: 31
     controllerId: 6
-    sectionId: 522
-    fixtureId: 2793
+    sectionId: 536
+    fixtureId: 2869
     viewMask: 0
   Left Front Rails 1:
     controllerIp: 10.1.1.11
     dmxUniverse: 5
     dmxAddress: 1
     controllerId: 3
-    sectionId: 523
-    fixtureId: 2794
+    sectionId: 537
+    fixtureId: 2870
     viewMask: 0
   Left Front Rails 2:
     controllerIp: 10.1.1.11
     dmxUniverse: 5
     dmxAddress: 34
     controllerId: 3
-    sectionId: 523
-    fixtureId: 2795
+    sectionId: 537
+    fixtureId: 2871
     viewMask: 0
   Left Front Rails 3:
     controllerIp: 10.1.1.11
     dmxUniverse: 5
     dmxAddress: 67
     controllerId: 3
-    sectionId: 523
-    fixtureId: 2796
+    sectionId: 537
+    fixtureId: 2872
     viewMask: 0
   Left Front Rails 4:
     controllerIp: 10.1.1.11
     dmxUniverse: 5
     dmxAddress: 100
     controllerId: 3
-    sectionId: 523
-    fixtureId: 2797
+    sectionId: 537
+    fixtureId: 2873
     viewMask: 0
   Right Back Rails 1:
     controllerIp: 10.1.1.18
     dmxUniverse: 20
     dmxAddress: 1
     controllerId: 12
-    sectionId: 524
-    fixtureId: 2798
+    sectionId: 538
+    fixtureId: 2874
     viewMask: 0
   Right Back Rails 2:
     controllerIp: 10.1.1.18
     dmxUniverse: 20
     dmxAddress: 34
     controllerId: 12
-    sectionId: 524
-    fixtureId: 2799
+    sectionId: 538
+    fixtureId: 2875
     viewMask: 0
   Right Back Rails 3:
     controllerIp: 10.1.1.18
     dmxUniverse: 20
     dmxAddress: 67
     controllerId: 12
-    sectionId: 524
-    fixtureId: 2800
+    sectionId: 538
+    fixtureId: 2876
     viewMask: 0
   Right Back Rails 4:
     controllerIp: 10.1.1.18
     dmxUniverse: 20
     dmxAddress: 100
     controllerId: 12
-    sectionId: 524
-    fixtureId: 2801
+    sectionId: 538
+    fixtureId: 2877
     viewMask: 0
   Left Back Rails 1:
     controllerIp: 10.1.1.12
     dmxUniverse: 7
     dmxAddress: 1
     controllerId: 4
-    sectionId: 525
-    fixtureId: 2802
+    sectionId: 539
+    fixtureId: 2878
     viewMask: 0
   Left Back Rails 2:
     controllerIp: 10.1.1.12
     dmxUniverse: 7
     dmxAddress: 34
     controllerId: 4
-    sectionId: 525
-    fixtureId: 2803
+    sectionId: 539
+    fixtureId: 2879
     viewMask: 0
   Left Back Rails 3:
     controllerIp: 10.1.1.12
     dmxUniverse: 7
     dmxAddress: 67
     controllerId: 4
-    sectionId: 525
-    fixtureId: 2804
+    sectionId: 539
+    fixtureId: 2880
     viewMask: 0
   Left Back Rails 4:
     controllerIp: 10.1.1.12
     dmxUniverse: 7
     dmxAddress: 100
     controllerId: 4
-    sectionId: 525
-    fixtureId: 2805
+    sectionId: 539
+    fixtureId: 2881
     viewMask: 0
   Left Small SmokeStack 1:
     controllerIp: 10.1.1.15
     dmxUniverse: 14
     dmxAddress: 1
     controllerId: 8
-    sectionId: 526
-    fixtureId: 2806
+    sectionId: 540
+    fixtureId: 2882
     viewMask: 0
   Left Small SmokeStack 2:
     controllerIp: 10.1.1.15
     dmxUniverse: 14
     dmxAddress: 11
     controllerId: 8
-    sectionId: 526
-    fixtureId: 2807
+    sectionId: 540
+    fixtureId: 2883
     viewMask: 0
   Left Small SmokeStack 3:
     controllerIp: 10.1.1.15
     dmxUniverse: 14
     dmxAddress: 21
     controllerId: 8
-    sectionId: 526
-    fixtureId: 2808
+    sectionId: 540
+    fixtureId: 2884
     viewMask: 0
   Left Small SmokeStack 4:
     controllerIp: 10.1.1.15
     dmxUniverse: 14
     dmxAddress: 31
     controllerId: 8
-    sectionId: 526
-    fixtureId: 2809
+    sectionId: 540
+    fixtureId: 2885
     viewMask: 0
   Right Small SmokeStack 1:
     controllerIp: 10.1.1.21
     dmxUniverse: 27
     dmxAddress: 1
     controllerId: 15
-    sectionId: 527
-    fixtureId: 2810
+    sectionId: 541
+    fixtureId: 2886
     viewMask: 0
   Right Small SmokeStack 2:
     controllerIp: 10.1.1.21
     dmxUniverse: 27
     dmxAddress: 11
     controllerId: 15
-    sectionId: 527
-    fixtureId: 2811
+    sectionId: 541
+    fixtureId: 2887
     viewMask: 0
   Right Small SmokeStack 3:
     controllerIp: 10.1.1.21
     dmxUniverse: 27
     dmxAddress: 21
     controllerId: 15
-    sectionId: 527
-    fixtureId: 2812
+    sectionId: 541
+    fixtureId: 2888
     viewMask: 0
   Right Small SmokeStack 4:
     controllerIp: 10.1.1.21
     dmxUniverse: 27
     dmxAddress: 31
     controllerId: 15
-    sectionId: 527
-    fixtureId: 2813
+    sectionId: 541
+    fixtureId: 2889
     viewMask: 0
   Left_Front_Left:
     controllerIp: 10.1.1.60

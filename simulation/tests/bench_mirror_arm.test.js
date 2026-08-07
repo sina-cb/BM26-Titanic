@@ -37,7 +37,7 @@ import { createRequire } from 'node:module';
 
 import { bannerStateForStatus } from '../src/gui/bench_mirror_banner.js';
 import { benchMirrorControlState } from '../src/gui/bench_mirror_control.js';
-import { benchMirrorPickerState, pickerDefaults, pickerLastUsed }
+import { benchMirrorPickerState, pickerDefaults, pickerSetSource, pickerSetReverse }
   from '../src/gui/bench_mirror_picker.js';
 // The fake-module H-A bridge harness (report 20260805_161 prerequisite):
 // extracted from this very file so it stops being copy-pasted a third time.
@@ -348,10 +348,36 @@ test('_155 A2: the armed banner leads with ALL SHIP OUTPUT SUSPENDED', () => {
   assert.match(state.text, /BENCH MIRROR ACTIVE — TEST BENCH STAND-IN ← titanic/);
   assert.match(state.text, /ALL SHIP OUTPUT SUSPENDED — BENCH ONLY/);
   assert.match(state.text, /10 slot\(s\) mapped, 0 dark/);
+  assert.doesNotMatch(state.text, /REVERSED/,
+    'an all-NORMAL arm says nothing about pixel order — the banner must stay readable');
   for (const d of LIVE_DESTS) {
     assert.ok(state.text.includes(`U${d.universe}→${d.ip}`),
       `the banner must name U${d.universe}→${d.ip}`);
   }
+});
+
+test('_176 §3.5: the armed banner NAMES the slots that are running end for end', () => {
+  const state = bannerStateForStatus({
+    armed: true,
+    label: liveSidecar.label,
+    scene: 'test_bench',
+    sourceScene: 'titanic',
+    destinations: LIVE_DESTS,
+    selection: liveResolution.slots.map(s => ({
+      slot: s.slot, source: s.source,
+      reverse: s.slot === 'bar_left' || s.slot === 'bar_right',
+    })),
+  });
+  assert.match(state.text, /⇄ REVERSED: bar_left, bar_right/,
+    'a deliberately backwards bench looks exactly like an accidentally backwards one — the ' +
+    'banner is where that distinction has to live');
+  // A held-dark slot is never counted as reversed: there is nothing running.
+  const dark = bannerStateForStatus({
+    armed: true, label: liveSidecar.label, scene: 'test_bench', sourceScene: 'titanic',
+    destinations: LIVE_DESTS,
+    selection: [{ slot: 'bar_left', source: null, reverse: true }],
+  });
+  assert.doesNotMatch(dark.text, /REVERSED/);
 });
 
 test('_155 §8.2: all eight header-control states render their exact text', () => {
@@ -444,52 +470,149 @@ test('_155 §8.5: no actionable ARM control remains in the sACN IN monitor', () 
     'the header must send the COMPLETE selection map');
 });
 
-test('_155 §8.3: the picker pre-selects lastUsed > default, and offers `none` everywhere', () => {
-  const options = {
+/** The `benchMirrorOptions` payload shape, as the bridge now sends it. */
+function pickerOptions() {
+  return {
     ok: true, scene: 'test_bench', sourceScene: 'titanic', label: 'Test bench stand-in',
+    warnings: [],
     slots: [
       { slot: 'par_1', benchFixture: 'Par 1', kind: 'dmx', fixtureType: 'UkingPar',
         footprintCh: 10, pixelCount: null, dest: { universe: 2, addr: 1 },
-        defaultSource: 'Left Auditorium 5', lastUsed: 'Left Auditorium 6',
+        defaultSource: 'Left Auditorium 5',
+        storedSource: 'Left Auditorium 6', reverse: false, reverseApplicable: false,
+        stored: { source: 'Left Auditorium 6', reverse: false }, staleReason: null,
         candidates: [
           { name: 'Left Auditorium 5', universe: 6, addr: 1, note: '' },
           { name: 'Left Auditorium 6', universe: 6, addr: 11, note: '' },
         ] },
       { slot: 'par_2', benchFixture: 'Par 2', kind: 'dmx', fixtureType: 'UkingPar',
         footprintCh: 10, pixelCount: null, dest: { universe: 2, addr: 11 },
-        defaultSource: 'Left Auditorium 7', lastUsed: null,
+        defaultSource: 'Left Auditorium 7',
+        storedSource: null, reverse: false, reverseApplicable: false,
+        stored: null, staleReason: null,
         candidates: [{ name: 'Left Auditorium 7', universe: 6, addr: 21, note: '' }] },
+      { slot: 'bar_left', benchFixture: 'Bar Left', kind: 'dmx', fixtureType: 'ShehdsBar',
+        footprintCh: 119, pixelCount: null, dest: { universe: 2, addr: 107 },
+        defaultSource: 'Left Front Wall 1',
+        storedSource: 'Left Front Wall 1', reverse: true, reverseApplicable: true,
+        stored: { source: 'Left Front Wall 1', reverse: true }, staleReason: null,
+        candidates: [{ name: 'Left Front Wall 1', universe: 6, addr: 1, note: '' }] },
       { slot: 'sign', benchFixture: 'TE Sign', kind: 'led_fixture', fixtureType: 'TeSignV3A40',
         footprintCh: 160, pixelCount: 40, dest: { universe: 38, addr: 1 },
-        defaultSource: null, lastUsed: null, candidates: [] },
+        defaultSource: null,
+        storedSource: null, reverse: false, reverseApplicable: true,
+        stored: null, staleReason: null, candidates: [] },
     ],
   };
+}
+
+test('_176 §3.6: the picker pre-selects STORED > default and carries pixel order', () => {
+  const options = pickerOptions();
   const s = benchMirrorPickerState(options, null);
   assert.equal(s.ok, true);
-  assert.equal(s.selection.par_1, 'Left Auditorium 6', 'lastUsed beats the sidecar default');
-  assert.equal(s.selection.par_2, 'Left Auditorium 7', 'default when there is no lastUsed');
-  assert.equal(s.selection.sign, null, 'a zero-candidate slot pre-selects nothing');
-  assert.equal(s.rows[2].empty, true);
-  assert.match(s.rows[2].emptyNote, /no compatible fixture in 'titanic'/);
+  assert.deepEqual(s.selection.par_1, { source: 'Left Auditorium 6', reverse: false },
+    'the remembered source beats the sidecar default');
+  assert.deepEqual(s.selection.par_2, { source: 'Left Auditorium 7', reverse: false },
+    'the default applies when nothing is remembered');
+  assert.deepEqual(s.selection.bar_left, { source: 'Left Front Wall 1', reverse: true },
+    'a remembered REVERSED slot comes back REVERSED — that is the whole point of persisting');
+  assert.deepEqual(s.selection.sign, { source: null, reverse: false },
+    'a zero-candidate slot pre-selects nothing');
+  assert.equal(s.rows[3].empty, true);
+  assert.match(s.rows[3].emptyNote, /no compatible fixture in 'titanic'/);
   for (const row of s.rows) {
     assert.equal(row.choices[0].value, null, '`none` is always the first choice');
     assert.match(row.choices[0].label, /none \(held dark\)/);
   }
   assert.match(s.subtitle, /titanic → test_bench/);
-  assert.match(s.confirmLabel, /2\/3 slots/);
+  assert.match(s.confirmLabel, /3\/4 slots/);
+
+  // The visible badge, on every applicable row, in both states.
+  assert.equal(s.rows[2].reverseLabel, 'REVERSED');
+  assert.equal(s.rows[3].reverseLabel, 'NORMAL');
+  assert.equal(s.rows[0].reverseApplicable, false, 'a par row offers no toggle at all');
+  assert.equal(s.rows[0].reverseLabel, '', 'and shows no order badge either');
+  assert.match(s.rows[0].reverseTitle, /single pixel/);
 
   // A draft overrides the pre-selection, and duplicates are badged not refused.
-  const dup = benchMirrorPickerState(options,
-    { par_1: 'Left Auditorium 7', par_2: 'Left Auditorium 7', sign: null });
+  const dup = benchMirrorPickerState(options, {
+    par_1: { source: 'Left Auditorium 7', reverse: false },
+    par_2: { source: 'Left Auditorium 7', reverse: false },
+    bar_left: { source: null, reverse: false },
+    sign: { source: null, reverse: false },
+  });
   assert.equal(dup.rows[0].duplicate, true);
   assert.equal(dup.rows[1].duplicate, true);
   assert.equal(dup.canConfirm, true, 'fan-out is legal — dest pairs stay disjoint');
+});
 
-  // The reset buttons.
-  assert.deepEqual(pickerDefaults(options),
-    { par_1: 'Left Auditorium 5', par_2: 'Left Auditorium 7', sign: null });
-  assert.deepEqual(pickerLastUsed(options),
-    { par_1: 'Left Auditorium 6', par_2: null, sign: null });
+test('_176 §3.6: pars can never be reversed, from any direction', () => {
+  const options = pickerOptions();
+  // 1 — a DRAFT that claims a par is reversed is dropped, not rendered.
+  const drafted = benchMirrorPickerState(options, {
+    par_1: { source: 'Left Auditorium 5', reverse: true },
+    par_2: { source: null, reverse: false },
+    bar_left: { source: null, reverse: false },
+    sign: { source: null, reverse: false },
+  });
+  assert.equal(drafted.selection.par_1.reverse, false,
+    'a non-applicable row cannot carry a reverse into the ARM message');
+  // 2 — a STORED reverse on a par (a hand-edited state file) is likewise dropped.
+  const stored = pickerOptions();
+  stored.slots[0].reverse = true;
+  assert.equal(benchMirrorPickerState(stored, null).selection.par_1.reverse, false);
+  // 3 — the setter itself refuses to move a non-applicable row.
+  const base = drafted.selection;
+  assert.equal(pickerSetReverse(base, 'par_1', true, false), base,
+    'pickerSetReverse is a no-op on a non-applicable row — same object back');
+  const flipped = pickerSetReverse(base, 'bar_left', true, true);
+  assert.deepEqual(flipped.bar_left, { source: null, reverse: true });
+  assert.deepEqual(base.bar_left, { source: null, reverse: false }, 'and it is pure');
+});
+
+test('_176 §3.6: the setters keep the OTHER half of each entry', () => {
+  const selection = {
+    a: { source: 'X', reverse: true },
+    b: { source: null, reverse: false },
+  };
+  assert.deepEqual(pickerSetSource(selection, 'a', 'Y'), {
+    a: { source: 'Y', reverse: true }, b: { source: null, reverse: false },
+  }, 'changing the source must not silently normalize the pixel order');
+  assert.deepEqual(pickerSetSource(selection, 'a', '').a, { source: null, reverse: true },
+    'the empty `<select>` value is the `none` choice');
+  assert.deepEqual(pickerSetReverse(selection, 'a', false, true).a, { source: 'X', reverse: false },
+    'flipping the order must not drop the source');
+});
+
+test('_176 §3.6: `↺ scene defaults` restores the sidecar defaults AND NORMAL', () => {
+  const options = pickerOptions();
+  assert.deepEqual(pickerDefaults(options), {
+    par_1: { source: 'Left Auditorium 5', reverse: false },
+    par_2: { source: 'Left Auditorium 7', reverse: false },
+    bar_left: { source: 'Left Front Wall 1', reverse: false },
+    sign: { source: null, reverse: false },
+  });
+  // It is a STAGING gesture: applied as a draft it survives a re-render, and the
+  // remembered REVERSED on bar_left is gone from the selection that would arm.
+  const s = benchMirrorPickerState(options, pickerDefaults(options));
+  assert.equal(s.selection.bar_left.reverse, false);
+  assert.equal(s.rows[2].reverseLabel, 'NORMAL');
+});
+
+test('_176 §3.3: a stale remembered entry is SHOWN, not applied', () => {
+  const options = pickerOptions();
+  options.slots[2].storedSource = null;
+  options.slots[2].staleReason = "stored source 'Left Front Wall 9' no longer resolves against " +
+    "'titanic' for this slot";
+  options.slots[2].stored = { source: 'Left Front Wall 9', reverse: true };
+  const s = benchMirrorPickerState(options, null);
+  assert.deepEqual(s.selection.bar_left, { source: 'Left Front Wall 1', reverse: false },
+    'nothing stale is applied: the row falls back to the sidecar default, NORMAL');
+  assert.match(s.rows[2].staleNote, /remembered: Left Front Wall 9 · REVERSED/);
+  assert.match(s.rows[2].staleNote, /no longer resolves/);
+  // Payload-level warnings (an unknown slot id in the file) reach the operator.
+  options.warnings = ["bench_mirror_state.yaml remembers a slot 'ghost' that … no longer declares"];
+  assert.deepEqual(benchMirrorPickerState(options, null).warnings, options.warnings);
 });
 
 test('_155 §8.3: a refused options reply renders VERBATIM with no confirm button', () => {
@@ -552,7 +675,14 @@ test('_155 §7.1: benchMirrorOptions returns every slot with its live candidates
   const byId = new Map(options.slots.map(s => [s.slot, s]));
   assert.equal(byId.get('par_1').defaultSource, 'Left Auditorium 5');
   assert.ok(byId.get('par_1').candidates.length >= 40);
-  assert.equal(byId.get('par_1').lastUsed, null, 'a fresh process remembers nothing');
+  assert.equal(byId.get('par_1').storedSource, null,
+    'a fresh scratch state root remembers nothing');
+  assert.equal(byId.get('par_1').stored, null);
+  assert.equal(byId.get('par_1').reverse, false);
+  assert.equal(byId.get('par_1').reverseApplicable, false, 'a par is never reversible');
+  assert.equal(byId.get('bar_left').reverseApplicable, true,
+    'an 18-pixel bar is — that is what the toggle is for');
+  assert.deepEqual(options.warnings, []);
   // The picker renders it without further help.
   const picker = benchMirrorPickerState(options, null);
   assert.equal(picker.ok, true);
@@ -889,13 +1019,107 @@ test('_155: DISARM blacks out the bench and restores the FULL relay', async () =
   assert.ok(logs.some(l => /BENCH MIRROR DISARMED/.test(l)));
 });
 
-test('_155 §10: the selection is remembered in process memory and offered as lastUsed', async () => {
+test('_176 §3.2: the ARM wrote the selection to disk, and the picker reads it back', async () => {
+  // The previous test armed with the sidecar DEFAULTS and then disarmed. The
+  // file must now hold exactly that, keyed by the SOURCE scene, and the picker
+  // must offer it back — this is the whole of `_176`'s reversal of `_155` §10,
+  // end to end through the real bridge.
+  const stateFile = path.join(H.benchStateRoot, 'test_bench', 'bench_mirror_state.yaml');
+  assert.ok(fs.existsSync(stateFile),
+    'a successful ARM writes the remembered selection; a refused one never does');
+  const onDisk = yaml.load(fs.readFileSync(stateFile, 'utf8'));
+  assert.equal(onDisk.state_version, 1);
+  assert.deepEqual(Object.keys(onDisk.selections), ['titanic'],
+    'selections are keyed by the SOURCE scene — that is what stops one scene leaking into another');
+  assert.deepEqual(onDisk.selections.titanic.slots.par_1,
+    { source: 'Left Auditorium 5', reverse: false });
+  assert.equal(Object.keys(onDisk.selections.titanic.slots).length, liveSidecar.slots.length,
+    'every slot is written explicitly — absence is not a choice here either');
+  // NOTHING in the file can arm anything.
+  const text = fs.readFileSync(stateFile, 'utf8');
+  for (const forbidden of ['armed', 'enabled', 'universe', 'dmxAddress', 'controllerIp']) {
+    assert.doesNotMatch(text, new RegExp(`^\\s*${forbidden}\\s*:`, 'm'),
+      `a state file must not be able to carry '${forbidden}'`);
+  }
+
   const ws = connect();
   const options = await optionsFrom(ws);
   assert.equal(options.ok, true, options.refusal || '');
   const par1 = options.slots.find(s => s.slot === 'par_1');
-  assert.equal(par1.lastUsed, 'Left Auditorium 5',
-    'the previous arm\'s choice is offered back — from memory, never from disk');
+  assert.equal(par1.storedSource, 'Left Auditorium 5',
+    'the previous arm\'s choice is offered back — now from disk, validated against this scene');
+  assert.deepEqual(par1.stored, { source: 'Left Auditorium 5', reverse: false });
+  assert.equal(par1.staleReason, null);
+});
+
+test('_176 §3.2: a selection remembered for one SOURCE scene never surfaces under another',
+  async () => {
+    const stateFile = path.join(H.benchStateRoot, 'test_bench', 'bench_mirror_state.yaml');
+    const before = fs.readFileSync(stateFile, 'utf8');
+    // Hand-plant a selection for a DIFFERENT source scene, then ask the picker
+    // while the engine is on `titanic`.
+    const tree = yaml.load(before);
+    tree.selections.some_other_ship = { slots: { par_1: { source: 'Nope 1', reverse: true } } };
+    fs.writeFileSync(stateFile, yaml.dump(tree), 'utf8');
+    try {
+      const ws = connect();
+      const options = await optionsFrom(ws);
+      const par1 = options.slots.find(s => s.slot === 'par_1');
+      assert.equal(par1.storedSource, 'Left Auditorium 5',
+        "the titanic entry is what a titanic session sees");
+      assert.deepEqual(par1.stored, { source: 'Left Auditorium 5', reverse: false },
+        'the other scene\'s entry is structurally unreachable — it is under a different key');
+      assert.deepEqual(options.warnings, [],
+        'and it is not even a warning: a selection for another scene is simply not this session');
+    } finally {
+      fs.writeFileSync(stateFile, before, 'utf8');
+    }
+  });
+
+test('_176 §3.3: a stale stored source is reported by name and pre-fills NOTHING', async () => {
+  const stateFile = path.join(H.benchStateRoot, 'test_bench', 'bench_mirror_state.yaml');
+  const before = fs.readFileSync(stateFile, 'utf8');
+  const tree = yaml.load(before);
+  tree.selections.titanic.slots.par_1 = { source: 'Left Auditorium 999', reverse: false };
+  tree.selections.titanic.slots.ghost_slot = { source: 'Left Auditorium 5', reverse: false };
+  fs.writeFileSync(stateFile, yaml.dump(tree), 'utf8');
+  try {
+    const ws = connect();
+    const options = await optionsFrom(ws);
+    const par1 = options.slots.find(s => s.slot === 'par_1');
+    assert.equal(par1.storedSource, null, 'nothing stale is ever pre-filled');
+    assert.deepEqual(par1.stored, { source: 'Left Auditorium 999', reverse: false },
+      'but the operator is shown what WAS remembered');
+    assert.match(par1.staleReason, /stored source 'Left Auditorium 999' no longer resolves/);
+    assert.match(par1.staleReason, /kept until the next successful ARM/);
+    assert.ok(options.warnings.some(w => /remembers a slot 'ghost_slot'/.test(w)),
+      'a slot id the sidecar no longer declares is a payload warning, never applied');
+    // The file is NOT edited by a read.
+    assert.equal(fs.readFileSync(stateFile, 'utf8'), yaml.dump(tree),
+      'picker-open never writes — only a successful ARM does');
+  } finally {
+    fs.writeFileSync(stateFile, before, 'utf8');
+  }
+});
+
+test('_176 §3.2: an unreadable state file is reported, and does not block arming', async () => {
+  const stateFile = path.join(H.benchStateRoot, 'test_bench', 'bench_mirror_state.yaml');
+  const before = fs.readFileSync(stateFile, 'utf8');
+  fs.writeFileSync(stateFile, 'state_version: 7\nselections: {}\n', 'utf8');
+  try {
+    const ws = connect();
+    const options = await optionsFrom(ws);
+    assert.equal(options.ok, true, 'a rotten state file must not break the picker');
+    assert.ok(options.warnings.some(w => /is unreadable/.test(w)),
+      'it is reported verbatim…');
+    assert.ok(options.warnings.some(w => /state_version must be 1/.test(w)),
+      '…with the parse message, so the operator can fix or delete it');
+    for (const slot of options.slots) {
+      assert.equal(slot.stored, null, 'and NOTHING is remembered from it');
+    }
+  } finally {
+    fs.writeFileSync(stateFile, before, 'utf8');
+  }
 });
 
 test('_151 bridge: after disarm, raw frames reach the boxes again and nothing composes', async () => {
@@ -917,7 +1141,7 @@ test('_155: ARM with an explicit selection composes the CHOSEN source, not the d
       && c.universe === par1.candidates.find(x => x.name === par1.defaultSource).universe);
     assert.ok(other, 'the picker must offer more than one par');
     const selection = Object.fromEntries(options.slots.map(s => [s.slot,
-      s.slot === 'par_1' ? other.name : s.defaultSource]));
+      { source: s.slot === 'par_1' ? other.name : s.defaultSource, reverse: false }]));
 
     captureConsole();
     const reply = await armFrom(ws, 'test_bench', selection);
@@ -948,7 +1172,8 @@ test('_155: ARM with an explicit selection composes the CHOSEN source, not the d
 
 test('_155 R-13: an incomplete selection is refused end-to-end, naming the slots', async () => {
   const ws = connect();
-  const reply = await armFrom(ws, 'test_bench', { par_1: 'Left Auditorium 5' });
+  const reply = await armFrom(ws, 'test_bench',
+    { par_1: { source: 'Left Auditorium 5', reverse: false } });
   assert.equal(reply.armed, false);
   assert.match(reply.refusal, /ARM refused \[R-13\]/);
   assert.match(reply.refusal, /missing slot\(s\)/);
@@ -958,8 +1183,11 @@ test('_155 R-13: an incomplete selection is refused end-to-end, naming the slots
 test('_155 R-15: an incompatible choice is refused end-to-end, naming slot AND rule', async () => {
   const ws = connect();
   const options = await optionsFrom(ws);
-  const selection = Object.fromEntries(options.slots.map(s => [s.slot, s.defaultSource]));
-  selection.bar_left = options.slots.find(s => s.slot === 'par_1').defaultSource;   // a par
+  const selection = Object.fromEntries(options.slots.map(s => [s.slot,
+    { source: s.defaultSource, reverse: false }]));
+  // a par into the bar slot
+  selection.bar_left = { source: options.slots.find(s => s.slot === 'par_1').defaultSource,
+    reverse: false };
   const reply = await armFrom(ws, 'test_bench', selection);
   assert.equal(reply.armed, false);
   assert.match(reply.refusal, /ARM refused \[R-15\]/);
