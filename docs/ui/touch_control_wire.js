@@ -380,21 +380,37 @@
        engine has to already know it was armed, or nothing recovers the ship. */
     armRefused = false;
     armAckPending = true;
-    sendControl({ type: 'touchControlArmed', ownerId: OWNER, armed: true });
+    var declared = sendControl({ type: 'touchControlArmed', ownerId: OWNER, armed: true });
+    /* NO SOCKET, NO TAKEOVER (audit H4). sendControl returns false when the
+       control socket is down, and this used to be ignored — the panel then
+       seized the whole rig with no deadman watching it AND bypassed the
+       second-desk refusal, which only arrives over that same socket. Fail
+       closed: abort the arm, put the surface back to DISARMED, say why. */
+    if (!declared) {
+      armAckPending = false;
+      forceDisarmedUi();
+      fail('arm', 'ABORTED — the control link to the engine is down, so no deadman ' +
+        'could watch this panel. Re-arm once the link is back.');
+      return Promise.resolve(null);
+    }
     /* WAIT FOR THE LEASE TO BE ACKNOWLEDGED BEFORE TOUCHING THE RIG.
        This used to be fire-and-forget: the panel dimmed the ship and began the
        takeover without ever confirming the engine had registered a deadman, so
        a dropped message meant a rig under manual control with nothing watching
-       it. It is also where a REFUSAL arrives when another panel holds the desk.
-       Bounded, because a missing ack must not wedge the arm — if the engine
-       does not answer we report it and carry on with no deadman rather than
-       leaving the operator with a dead button. */
+       it. It is also where a REFUSAL arrives when another panel holds the desk. */
     return waitForArmAck(1500)
       .then(function () {
         if (armRefused) throw new Error('arm refused by the engine');
         if (armAckPending) {
-          fail('arm', 'the engine did not acknowledge the deadman lease — ' +
-            'proceeding, but nothing is watching this panel');
+          /* NO ACK, NO TAKEOVER (audit H4). This used to log "proceeding, but
+             nothing is watching this panel" and take the rig anyway — an armed
+             desk with no deadman is exactly the unlit-ship failure the whole
+             lease exists to prevent. Codex: fail closed. */
+          armAckPending = false;
+          forceDisarmedUi();
+          fail('arm', 'ABORTED — the engine did not acknowledge the deadman lease ' +
+            'within 1.5 s. Nothing would be watching this panel; re-arm to retry.');
+          return null;
         }
         return takeControlBody();
       });
@@ -622,12 +638,42 @@
   }
 
   var armEl = document.getElementById('arm');
+  /* ONE CHAIN AT A TIME (audit H12). A double-tap used to run takeControl and
+     releaseControl CONCURRENTLY — the second tap flipped the class and started
+     the opposite chain while the first was mid-flight, so the handback raced
+     the takeover for the same locks. While a chain runs, further taps are
+     refused and the button is put back to the direction already in flight. */
+  var armChainBusy = false;
+  var armChainTarget = false;
+  function setArmedUi(t) {
+    /* Mirror of forceDisarmedUi, both directions — the page's own handler owns
+       these five surfaces, so a refused tap must restore all five. */
+    state.armed = t;
+    if (armEl) {
+      armEl.classList.toggle('is-armed', t);
+      armEl.setAttribute('aria-checked', String(t));
+    }
+    var st = document.getElementById('armState');
+    if (st) st.textContent = t ? 'ARMED' : 'DISARMED';
+    var lk = document.getElementById('armLock');
+    if (lk) lk.textContent = t ? '🔓' : '🔒';
+    var sh = document.getElementById('shell');
+    if (sh) sh.classList.toggle('disarmed', !t);
+    setStatus();
+  }
   if (armEl) {
     armEl.addEventListener('click', function () {
       /* Read the class the page's own handler just set, so the wire follows
          the UI rather than keeping a second, drifting copy of the truth. */
       setTimeout(function () {
+        if (armChainBusy) {
+          setArmedUi(armChainTarget);
+          fail('arm', 'an arm/disarm is already in progress — wait for it to finish');
+          return;
+        }
+        armChainBusy = true;
         state.armed = armEl.classList.contains('is-armed');
+        armChainTarget = state.armed;
         setStatus();
         /* BOUNDED. takeControl() has been observed never settling, and every
            assertion below hangs off it - so the panel said ARMED and sent
@@ -719,7 +765,12 @@
                 })
                 .then(function () { return armFadeTo(1, ARM_FADE_MS); });
             });
-        });
+        })
+          /* The chain is over either way — the next tap may start a new one.
+             Both paths, because a rejection anywhere above must not leave the
+             button permanently refused (audit H12). */
+          .then(function () { armChainBusy = false; },
+                function () { armChainBusy = false; });
       }, 0);
     });
   }
@@ -3018,6 +3069,28 @@
     try { controlWs.send(JSON.stringify(msg)); return true; } catch (e) { return false; }
   }
 
+  /* SURFACE AN EXTERNAL BLACKOUT WHILE ARMED (audit medium; operator ruling
+     pending — the default is SURFACE, not block). /global-blackout and a
+     master fade to 0 are deliberately open to every surface, so another
+     client CAN dark the rig under an armed panel — but the panel showing
+     ARMED over a black ship with no explanation is the part that must not
+     happen. The armed panel's own master never goes below the 5% floor, so
+     anything under 4% here was not this surface. */
+  setInterval(function () {
+    if (!state.armed) return;
+    req('GET', '/mixer').then(function (m) {
+      if (!m) return;
+      var master = (m.master !== undefined) ? m.master : (m.mixer || {}).master;
+      if (m.blackout === true) {
+        fail('watch', 'BLACKOUT was engaged by ANOTHER surface while this panel is armed — ' +
+          'the ship is dark. Disarm+re-arm asserts it off, or use /mixer/panic.');
+      } else if (typeof master === 'number' && master < 0.04) {
+        fail('watch', 'the grand master was driven to ' + Math.round(master * 100) +
+          '% by another surface while this panel is armed');
+      }
+    }).catch(function () { /* transient — the deadman owns link-loss reporting */ });
+  }, 4000);
+
   function openControlSocket() {
     var url = 'ws://' + location.hostname + ':6968/ws/control';
     var ws;
@@ -3025,11 +3098,34 @@
     controlWs = ws;
     ws.addEventListener('open', function () {
       sendControl({ type: 'touchControlHello', ownerId: OWNER });
-      /* RE-ASSERT ON EVERY (RE)CONNECT. The engine restarts more often than the
-         panel does, and a reconnected socket the engine knows nothing about
-         would leave an armed panel with NO deadman watching it — the exact
-         hole this exists to close. Re-declaring is idempotent. */
-      if (state.armed) sendControl({ type: 'touchControlArmed', ownerId: OWNER, armed: true });
+      /* RESYNC, DON'T JUST RE-ASSERT (audit H2). Re-declaring only the lease
+         after a reconnect acked a deadman for a panel whose TAKEOVER might be
+         gone: after an engine restart or a deadman revert, the source lock is
+         open and the autopilot is running — an armed panel over an automatic
+         show, each fighting the other. So: confirm the takeover still stands
+         (the six-key lease survives an ordinary WS blip); if it does not,
+         force DISARMED and tell the operator to re-arm. Deliberately NOT an
+         automatic re-takeover: an unattended iPad reconnecting in a pocket
+         must not re-seize the rig. */
+      if (state.armed) {
+        req('GET', '/param-center').then(function (pc) {
+          var lock = pc && pc.sourceLock;
+          var held = !!(lock && (lock.mode === 'global'
+            || (lock.mode === 'per-param' && Object.keys(lock.leases || {}).length > 0)));
+          if (!held) {
+            forceDisarmedUi();
+            fail('arm', 'the engine lost this panel\'s takeover while the link was down ' +
+              '(restart or revert) — the automatic show is driving. Re-arm to take control.');
+            return;
+          }
+          sendControl({ type: 'touchControlArmed', ownerId: OWNER, armed: true });
+        }).catch(function () {
+          /* Cannot confirm the takeover — an armed surface over an unknown rig
+             is the lie the audit flagged. Fail closed. */
+          forceDisarmedUi();
+          fail('arm', 'could not confirm the takeover after reconnect — DISARMED (fail closed)');
+        });
+      }
     });
     ws.addEventListener('message', function (ev) {
       var m;
@@ -3038,6 +3134,18 @@
       if (m.type === 'touchControlArmedAck') {
         armAckPending = false;
         clearError();
+      } else if (m.type === 'armRevert') {
+        /* THE ENGINE TOOK THE SHOW BACK (audit H2). Deadman, crash-boot policy
+           or lease sweep — whichever fired, the source lock is open and the
+           autopilot is driving. This broadcast used to be dropped on the
+           floor, so the panel sat there reading ARMED, every control lit, over
+           a show it no longer controlled. The panel must never outrank the
+           engine's own account of who is driving. */
+        if (state.armed) {
+          forceDisarmedUi();
+          fail('arm', 'the engine REVERTED to the automatic show' +
+            (m.why ? ' — ' + m.why : '') + '. This panel is disarmed; re-arm to take control.');
+        }
       } else if (m.type === 'touchControlArmedRejected') {
         /* ONE DESK AT A TIME. Another panel already holds the rig, so this one
            must not proceed to take it — two surfaces fighting over one source
